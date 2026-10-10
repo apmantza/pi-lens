@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BiomeClient } from "../../clients/biome-client.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 const tmpDirs: string[] = [];
@@ -40,6 +41,10 @@ function setupMonorepo(): {
 }
 
 describe("BiomeClient — per-cwd binary resolution (#121)", () => {
+	// This suite plants per-cwd project binaries on purpose; the trust gate is
+	// witnessed in `project-local-bin-trust.test.ts`.
+	beforeEach(() => setProjectTrustState("trusted"));
+
 	it("resolves the sub-package's biome when cwd points there, not process.cwd()'s", async () => {
 		const { workspaceRoot, subPackageRoot, subBiomeBin } = setupMonorepo();
 		// Anchor process.cwd() at the workspace root, which has NO biome.

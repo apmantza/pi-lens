@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { logSessionStart } from "../../../sessionstart-logger.js";
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
 import { getGlobalPiLensDir } from "../../../file-utils.js";
+import { getProjectTrustState } from "../../../project-trust.js";
 import {
 	createGenerationSource,
 	type GenerationHandle,
@@ -45,6 +46,7 @@ import {
 	findLocalBinAt,
 	findLocalBinsUpwards,
 	findLocalBinUpwards,
+	localBinPath,
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
@@ -492,10 +494,12 @@ export function createVenvFinder(
 	verificationArgs: string[] = ["--version"],
 ): (cwd: string) => Promise<VenvResolution> {
 	return async (cwd: string): Promise<VenvResolution> => {
-		const venvBin = findLocalBinAt(command, cwd, {
-			windowsExt,
-			binDirs: VENV_BIN_DIRS,
-		});
+		const venvBin = localBinPath(
+			findLocalBinAt(command, cwd, {
+				windowsExt,
+				binDirs: VENV_BIN_DIRS,
+			}),
+		);
 		if (venvBin) return { path: venvBin, rung: "venv" };
 
 		// Managed-dir install (~/.pi-lens/tools/node_modules/.bin/<command>) — the
@@ -597,6 +601,11 @@ export async function getManagedToolEnvironment(
 		env = { ...process.env };
 	}
 	if (!cwd) return env;
+	// A project-local bin dir on PATH can execute the project's own shim for the
+	// managed tool's dependencies, so it carries the same trust gate as the
+	// direct lookups (#4268). Global and managed tools still run; only the path
+	// augmentation that reaches INTO the project is withheld.
+	if (getProjectTrustState() !== "trusted") return env;
 	const separator = process.platform === "win32" ? ";" : ":";
 	const currentPath = env.PATH || env.Path || process.env.PATH || "";
 	const localBin = path.join(cwd, "node_modules", ".bin");
@@ -1612,10 +1621,13 @@ export function resolveNodeToolCommand(
 	toolName: string,
 	windowsExt = ".cmd",
 ): string {
-	const isWin = process.platform === "win32";
-	const binName = isWin ? `${toolName}${windowsExt}` : toolName;
-	const local = path.join(cwd, "node_modules", ".bin", binName);
-	if (fs.existsSync(local)) return local;
+	// THE shared construction seam (#4268 HIGH-1): this used to build
+	// `<cwd>/node_modules/.bin/<tool>` itself and return it under ANY trust
+	// state, so every runner reaching it executed the project's shim. Routing
+	// through the trust-gated lookup means an untrusted project falls through to
+	// the bare name (a global/PATH binary), never the project's own.
+	const local = localBinPath(findLocalBinAt(toolName, cwd, { windowsExt }));
+	if (local) return local;
 	return toolName;
 }
 
@@ -1640,10 +1652,12 @@ export function resolveVendorToolCommand(
 	windowsExt = ".bat",
 ): string | null {
 	return (
-		findLocalBinUpwards(toolName, cwd, {
-			windowsExt,
-			binDirs: VENDOR_BIN_DIRS,
-		}) ?? null
+		localBinPath(
+			findLocalBinUpwards(toolName, cwd, {
+				windowsExt,
+				binDirs: VENDOR_BIN_DIRS,
+			}),
+		) ?? null
 	);
 }
 
@@ -1995,12 +2009,20 @@ function buildSgLocalBins(): SgLocalBinCandidate[] {
 			binaryCandidates,
 			_thisDir,
 			ownInstallWalkOptions,
-		).map((binPath) => ({ path: binPath, source: "own-install" as const })),
+		).flatMap((binPath): SgLocalBinCandidate[] =>
+			typeof binPath === "string"
+				? [{ path: binPath, source: "own-install" as const }]
+				: [],
+		),
 		...findLocalBinsUpwards(
 			binaryCandidates,
 			process.cwd(),
 			projectWalkOptions,
-		).map((binPath) => ({ path: binPath, source: "project" as const })),
+		).flatMap((binPath): SgLocalBinCandidate[] =>
+			typeof binPath === "string"
+				? [{ path: binPath, source: "project" as const }]
+				: [],
+		),
 	];
 	for (const candidate of binaryCandidates) {
 		const managedBin = path.join(
@@ -2239,12 +2261,10 @@ export async function resolveLocalFirstAsync(
 	cwd: string,
 	windowsExt = ".cmd",
 ): Promise<{ cmd: string; args: string[] }> {
-	const isWin = process.platform === "win32";
-	const binName = isWin ? `${toolName}${windowsExt}` : toolName;
-
-	// 1. Local node_modules/.bin (project-installed)
-	const local = path.join(cwd, "node_modules", ".bin", binName);
-	if (fs.existsSync(local)) return { cmd: local, args: [] };
+	// 1. Local node_modules/.bin (project-installed) — through the trust-gated
+	//    shared lookup, never a private join (#4268 HIGH-1).
+	const local = localBinPath(findLocalBinAt(toolName, cwd, { windowsExt }));
+	if (local) return { cmd: local, args: [] };
 
 	// 2. Global bin dir of ANY installed manager (npm/pnpm/yarn/bun) — direct
 	//    file lookup, so it finds tools installed via `pnpm add -g` / `bun add -g`

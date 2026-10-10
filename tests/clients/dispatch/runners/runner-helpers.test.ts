@@ -22,7 +22,13 @@ import {
 } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
 import type { DispatchContext } from "../../../../clients/dispatch/types.js";
 import { findGlobalBinary } from "../../../../clients/package-manager.js";
+import { setProjectTrustState } from "../../../../clients/project-trust.js";
 import { setupTestEnvironment } from "../../test-utils.js";
+
+// This sweep plants project-local rungs on purpose; the trust gate itself is
+// exercised by the dedicated witnesses (`package-manager.test.ts`), so the
+// resolution suites run trusted.
+beforeEach(() => setProjectTrustState("trusted"));
 
 const { logSessionStartSpy, logLatencySpy } = vi.hoisted(() => ({
 	logSessionStartSpy: vi.fn(),

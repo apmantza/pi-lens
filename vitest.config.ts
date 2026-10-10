@@ -470,6 +470,10 @@ export const wallClockBudgetInclude = [
 	// the fully serialized, dead-last phase.
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
 	"tests/clients/metrics-history-stderr.test.ts",
+	// #4268 MED-8: a real `npx` child is the observation (the spawned process's
+	// own environment), so it runs in the quiet serialized phase (flake-shape
+	// admission).
+	"tests/clients/npx-child-env-isolation.test.ts",
 	// #2886 round 2: the /lens-perf occupancy row keeps its real-clock
 	// sampler assertion (a yield count is O(input) and cannot see per-chunk
 	// block growth), so the file runs here, fully serialized (flake-shape

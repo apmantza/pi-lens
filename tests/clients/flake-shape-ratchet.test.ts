@@ -476,7 +476,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:real-harness/tools-enabled.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the provider wire roster is produced by a real pi host loading the built extension; an in-process double cannot certify tools.<name>.enabled",
+			"the provider wire roster and session-start log are produced by a real pi host loading the built extension; an in-process double cannot certify tools.<name>.enabled (#1416)",
 	},
 	// #3870: the detector tests drive the analyzer's real CLI entry point as a
 	// real node subprocess over redacted fixture logs; an in-process call could

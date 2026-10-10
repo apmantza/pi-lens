@@ -34,8 +34,12 @@ vi.mock(
 const originalVenv = process.env.VIRTUAL_ENV;
 const originalConda = process.env.CONDA_PREFIX;
 
-beforeEach(() => {
+beforeEach(async () => {
 	vi.resetModules();
+	// The suite plants a project `.venv` on purpose; the trust gate itself is
+	// witnessed in `tests/clients/project-local-bin-trust.test.ts`.
+	const trust = await import("../../../../clients/project-trust.js");
+	trust.setProjectTrustState("trusted");
 	safeSpawnAsync.mockReset();
 	getClientForFile.mockClear();
 	isAvailableAsync.mockClear();

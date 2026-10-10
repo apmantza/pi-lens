@@ -16,6 +16,8 @@ import {
 	type WorkspaceMemberGlobDialect,
 } from "./path-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { logExtension } from "./extension-log.js";
+import { getProjectTrustState } from "./project-trust.js";
 
 export type PythonEnvironmentSource =
 	| "virtual-env"
@@ -179,6 +181,13 @@ function isUvWorkspaceMember(
  * machine. A linked-worktree run (`allowAmbient: false`) takes one only when
  * its root lies inside the requested project root.
  */
+/** Project-config-sourced environments, refused unless the project is trusted. */
+const PROJECT_SOURCED_PYTHON_SOURCES = new Set<PythonEnvironmentSource>([
+	"project-dot-venv",
+	"project-venv",
+	"uv-workspace",
+]);
+
 const AMBIENT_ENVIRONMENT_VARIABLES = {
 	"uv-project-environment": "UV_PROJECT_ENVIRONMENT",
 	"virtual-env": "VIRTUAL_ENV",
@@ -281,6 +290,33 @@ export async function detectPythonEnvironment(
 			!isWithinProjectRoot(candidate.root)
 		)
 			continue;
+		// A project-sourced interpreter (`.venv`, a uv workspace venv) is a
+		// project-local executable and carries the same trust gate as every other
+		// one (#4268 acceptance 1, MED-6): unknown/untrusted falls through to a
+		// global interpreter, while an explicitly exported `VIRTUAL_ENV`,
+		// `CONDA_PREFIX` or `UV_PROJECT_ENVIRONMENT` remains the user's own
+		// choice. Explicit untrusted always refuses.
+		if (
+			PROJECT_SOURCED_PYTHON_SOURCES.has(candidate.source) &&
+			getProjectTrustState() !== "trusted"
+		) {
+			if (
+				recordDegradationOnce({
+					kind: "trust-refusal",
+					subject: `python-environment:${candidate.root}`,
+					reason: `project Python environment refused: pi project trust is ${getProjectTrustState()}`,
+				})
+			) {
+				logExtension({
+					subsystem: "project-trust",
+					level: "warn",
+					message:
+						"project Python environment refused: mark the project trusted in pi or upgrade pi",
+					metadata: { source: candidate.source },
+				});
+			}
+			continue;
+		}
 		const binDir = path.join(
 			candidate.root,
 			process.platform === "win32" ? "Scripts" : "bin",

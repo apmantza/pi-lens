@@ -70,7 +70,7 @@ const BASE_BODY = [
 	"clients/read-guard.ts.",
 	"",
 	"## Class sweep",
-	"Swept the read-guard seam.",
+	"Defect shape: a mapped runtime file changed without its model. Search: `rg -n read-guard formal`. Verdict: none outside this fixture.",
 	"",
 	"## Observability",
 	"No new failure path; no record added.",

@@ -23,6 +23,15 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 	which: vi.fn(async () => null),
 }));
 
+// This suite pins the unavailable-vs-failed classification through the real
+// resolvers; it runs trusted so planted project rungs are reachable (the
+// fresh import each test takes means a latched state would not survive
+// `vi.resetModules`).
+vi.mock("../../clients/project-trust.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/project-trust.js")>()),
+	getProjectTrustState: () => "trusted",
+}));
+
 const WHICH_COMMANDS = new Set(["where", "which"]);
 const isWhichProbe = (call: unknown[]) => WHICH_COMMANDS.has(call[0] as string);
 /** Every real format spawn (i.e. not a `where`/`which` availability probe). */

@@ -14,6 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "./test-utils.js";
 import { waitFor } from "./interleaving-kit.js";
 import { gatedPromise } from "../support/fault-injection.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../clients/project-trust.js";
 
 vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
@@ -27,6 +31,7 @@ import {
 	detectNodePackageManager,
 	execArgs,
 	findGlobalBinary,
+	findLocalBinAt,
 	findNodeToolBinary,
 	formatRunScript,
 	globalInstallArgs,
@@ -113,6 +118,7 @@ function setPlatform(platform: NodeJS.Platform): void {
 }
 
 beforeEach(() => {
+	setProjectTrustState("trusted");
 	_resetPackageManagerCache();
 	vi.mocked(safeSpawnAsync).mockReset();
 	queryResponder = null;
@@ -120,6 +126,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	resetProjectTrust();
 	if (savedPlatform) {
 		Object.defineProperty(process, "platform", savedPlatform);
 		savedPlatform = undefined;
@@ -669,6 +676,32 @@ describe("findGlobalBinary", () => {
 });
 
 describe("findNodeToolBinary", () => {
+	it("refuses a project-local binary when trust is unknown or untrusted", () => {
+		const root = tmpDir();
+		const bin = path.join(root, "node_modules", ".bin", "eslint");
+		fs.mkdirSync(path.dirname(bin), { recursive: true });
+		fs.writeFileSync(bin, "#!/bin/sh\n");
+
+		for (const trust of ["unknown", "untrusted"] as const) {
+			setProjectTrustState(trust);
+			const result = findLocalBinAt("eslint", root);
+			expect(result).toMatchObject({
+				kind: "refused-by-trust",
+				trust,
+				tool: "eslint",
+			});
+		}
+	});
+
+	it("allows a project-local binary when trust is trusted", () => {
+		const root = tmpDir();
+		const bin = path.join(root, "node_modules", ".bin", "eslint");
+		fs.mkdirSync(path.dirname(bin), { recursive: true });
+		fs.writeFileSync(bin, "#!/bin/sh\n");
+		setProjectTrustState("trusted");
+		expect(findLocalBinAt("eslint", root)).toBe(bin);
+	});
+
 	it("prefers a local node_modules/.bin, walking up from cwd", async () => {
 		setPlatform("linux");
 		onlyAvailable(); // no global manager — proves the local hit wins

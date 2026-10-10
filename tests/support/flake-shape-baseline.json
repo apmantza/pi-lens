@@ -69,7 +69,7 @@
 		"real-harness/scenario-1.test.ts": 1,
 		"real-harness/scenario-2.test.ts": 3,
 		"real-harness/scenario-3.test.ts": 1,
-		"real-harness/tools-enabled.test.ts": 6,
+		"real-harness/tools-enabled.test.ts": 8,
 		"scripts/analyze-config-resolution-smell.test.ts": 2,
 		"scripts/analyze-pi-lens-logs-detectors.test.ts": 2,
 		"scripts/analyze-pi-lens-logs.test.ts": 2,

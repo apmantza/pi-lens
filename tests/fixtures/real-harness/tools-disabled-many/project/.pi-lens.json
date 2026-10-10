@@ -1,0 +1,21 @@
+{
+	"tools": {
+		"ast_grep_search": { "enabled": false },
+		"ast_grep_replace": { "enabled": false },
+		"ast_grep_outline": { "enabled": false },
+		"lsp_navigation": { "enabled": false },
+		"lens_diagnostics": { "enabled": false },
+		"lens_diagnostic_mark": { "enabled": false },
+		"symbol_search": { "enabled": false },
+		"module_report": { "enabled": false },
+		"project_report": { "enabled": false },
+		"read_symbol": { "enabled": false },
+		"read_enclosing": { "enabled": false },
+		"effective_config": { "enabled": false },
+		"analyze": { "enabled": false },
+		"health": { "enabled": false },
+		"latency": { "enabled": false },
+		"project_scan": { "enabled": false },
+		"rebuild": { "enabled": false }
+	}
+}

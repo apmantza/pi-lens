@@ -39,6 +39,16 @@ vi.mock("../../../../clients/file-utils.js", async (importOriginal) => ({
 	getGlobalPiLensDir: () => piLensDirHolder.dir,
 }));
 
+// This suite witnesses the managed-release rung against a project venv; it
+// runs trusted (the fresh import each test takes means a latched state would
+// not survive `vi.resetModules`).
+vi.mock("../../../../clients/project-trust.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/project-trust.js")
+	>()),
+	getProjectTrustState: () => "trusted",
+}));
+
 vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../../../clients/latency-logger.js")

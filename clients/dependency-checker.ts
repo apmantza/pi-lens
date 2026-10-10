@@ -19,6 +19,7 @@ import { findNodeToolBinary } from "./package-manager.js";
 import { isFullyQualified } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { compareOrdinal } from "./string-utils.js";
+import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import {
 	createAvailabilityChecker,
 	discoverManagedTool,
@@ -108,7 +109,17 @@ function parseMadgeCycles(
 	baseDir: string,
 	projectRoot: string,
 ): { circular: CircularDep[]; circularFiles: Set<string> } {
-	const parsed = JSON.parse(stdout || "[]");
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout || "[]");
+	} catch (err) {
+		// Both callers classify a malformed report in their own try/catch. The
+		// context here keeps malformed madge output from reading as "no cycles"
+		// (#2154) while naming what failed to parse.
+		throw new Error(
+			`madge report is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+		);
+	}
 	const cycles: string[][] = Array.isArray(parsed) ? parsed : [];
 	const circular: CircularDep[] = [];
 	const circularFiles = new Set<string>();
@@ -776,7 +787,10 @@ export class DependencyChecker {
 				[...prefix, ...buildMadgeArgs(normalized, projectRoot)],
 				{
 					timeout: 15000,
+					// A cache-only npx fallback must not read the project's `.npmrc`
+					// (#4268 acceptance 3); a resolved madge keeps the project cwd.
 					cwd: projectRoot,
+					...(cmd === "npx" ? getIsolatedNpxSpawnOptions() : {}),
 				},
 			);
 
@@ -1116,7 +1130,10 @@ export class DependencyChecker {
 				[...prefix, ...buildMadgeArgs(projectRoot, projectRoot)],
 				{
 					timeout: 30000,
+					// A cache-only npx fallback must not read the project's `.npmrc`
+					// (#4268 acceptance 3); a resolved madge keeps the project cwd.
 					cwd: projectRoot,
+					...(cmd === "npx" ? getIsolatedNpxSpawnOptions() : {}),
 				},
 			);
 

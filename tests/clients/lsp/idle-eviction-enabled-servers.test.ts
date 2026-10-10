@@ -33,6 +33,10 @@ import {
 	selectFixtureForServer,
 } from "../../../scripts/lib/lsp-idle-eviction-probe.mjs";
 import { LSP_FIXTURES } from "../../../scripts/smoke-tools.mjs";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../../clients/project-trust.js";
 
 const createLSPClient = vi.fn();
 
@@ -168,6 +172,7 @@ describe("declared-transparent servers evict through the real registry (#3952)",
 	let spawned: ClientDouble[] = [];
 
 	beforeEach(() => {
+		setProjectTrustState("trusted");
 		nextPid = 0;
 		spawned = [];
 		createLSPClient.mockReset();
@@ -181,6 +186,7 @@ describe("declared-transparent servers evict through the real registry (#3952)",
 	});
 
 	afterEach(() => {
+		resetProjectTrust();
 		vi.restoreAllMocks();
 		vi.useRealTimers();
 		delete process.env.PI_LENS_LSP_IDLE_EVICT_MS;

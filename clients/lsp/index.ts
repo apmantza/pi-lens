@@ -117,6 +117,7 @@ import {
 	loadReverseDependencyIndexFromSnapshot,
 } from "../reverse-deps.js";
 import { isSameOrWithin, type LSPServerInfo } from "./server.js";
+import { refuseUntrustedLspExecution } from "./launch.js";
 import {
 	enforceLspRootCeiling,
 	getServerById,
@@ -4614,6 +4615,21 @@ export class LSPService {
 		filePath: string,
 		allowInstall: boolean,
 	): Promise<SpawnedServer | undefined> {
+		try {
+			if (server.executesProjectCode === true) {
+				refuseUntrustedLspExecution({
+					kind: "project-code-server",
+					serverId: server.id,
+					root,
+				});
+			}
+		} catch (error) {
+			logSessionStart(
+				`lsp spawn ${server.id}: refused — ${error instanceof Error ? error.message : String(error)}`,
+			);
+			this.noteSpawnVerdict(key, "failed");
+			return undefined;
+		}
 		// Admission is normally performed by compileLspRegistry. Keep this
 		// service-side backstop for uncompiled test/host entries so a raw server
 		// object cannot bypass the registry's trust decision.

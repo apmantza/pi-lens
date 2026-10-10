@@ -33,7 +33,7 @@ import {
 } from "../../scripts/check-pr-body.mjs";
 import { blankCommentsAndStrings } from "../../scripts/check-pr-body.mjs";
 
-const body = `## Why\nThe body gate makes review intent explicit.\n\n## Notes for the reviewer\nNone.\n\n## Change outline\n- caller\n  + changed symbol\n    + callee\n\n## Summary\nOpening context.\n\n## Tests\nTargeted tests pass.\n\n## Blast radius\nNo runtime module touched.\n\n## Class sweep\nWhole-tree grep completed.\n\n## Observability\nThe advisory check run is the record.`;
+const body = `## Why\nThe body gate makes review intent explicit.\n\n## Notes for the reviewer\nNone.\n\n## Change outline\n- caller\n  + changed symbol\n    + callee\n\n## Summary\nOpening context.\n\n## Tests\nTargeted tests pass.\n\n## Blast radius\nNo runtime module touched.\n\n## Class sweep\nDefect shape: a body section answered with generic text. Search: \`rg -n "whole-tree grep" scripts\`. Verdict: none outside this fixture.\n\n## Observability\nThe advisory check run is the record.`;
 // A synthetic runtime file: `rows` is the whole post-image and `added` lists
 // the 1-based post-image lines the diff adds. The harvest reads `rows`, so a
 // test that needs the block-comment opener passes real rows — a bare hunk
@@ -184,7 +184,7 @@ function fetchForEvent(bodyText: string, files: unknown) {
 	});
 }
 const flattenedBody =
-	"## Summary Await the first lifecycle run's asynchronous word-index snapshot promotion before reseeding the current-format snapshot for the fallback run. ## Tests - Native master flake justification for the count barrier: 2/10 forced runs reproduced the promotion race. - Fixed lifecycle test: 5/5 tests passed. ### Test assessment - tests/clients/word-index-lifecycle.test.ts uniquely pins the ordering guard. ## Blast radius This change is test-only. ## Class sweep The async-persist lifecycle race is fully covered. ## Observability The test observes existing project snapshot records.";
+	"## Summary Await the first lifecycle run's asynchronous word-index snapshot promotion before reseeding the current-format snapshot for the fallback run. ## Tests - Native master flake justification for the count barrier: 2/10 forced runs reproduced the promotion race. - Fixed lifecycle test: 5/5 tests passed. ### Test assessment - tests/clients/word-index-lifecycle.test.ts uniquely pins the ordering guard. ## Blast radius This change is test-only. ## Class sweep Defect shape: async-persist lifecycle race. Search `rg -n async-persist clients`. Verdict: none outside this fixture. ## Observability The test observes existing project snapshot records.";
 const multiRoundFlattenedBody =
 	"## Summary Preserve the repair context across multiple review rounds. ## Tests - The repair fixture exercises distinct numbered fix rounds. ### Test assessment - tests/scripts/check-pr-body.test.ts uniquely pins numbered fix-round repair. ## Fix round 1 The first review round records the initial correction. ## Fix round 2 The second review round records the follow-up correction. ## Blast radius This change is test-only. ## Class sweep Numbered fix rounds remain distinct during repair. ## Observability The repaired body is validated by the existing body lint.";
 const motivatingFlattenedBodies = [
@@ -435,6 +435,22 @@ describe("Markdown claim units", () => {
 				kind: "sentence",
 				text: "E.g. keep this sentence together... Then finish.",
 			},
+		]);
+	});
+
+	it("starts a sentence after a code span or numeric token", () => {
+		expect(
+			splitMarkdownUnits(
+				"The first sentence ends here. `tests/x.test.ts` already parses that source.\nA second sentence ends here. 4.4.2 is the pinned version.",
+			),
+		).toEqual([
+			{ kind: "sentence", text: "The first sentence ends here." },
+			{
+				kind: "sentence",
+				text: "`tests/x.test.ts` already parses that source.",
+			},
+			{ kind: "sentence", text: "A second sentence ends here." },
+			{ kind: "sentence", text: "4.4.2 is the pinned version." },
 		]);
 	});
 
@@ -969,7 +985,7 @@ describe("test-reference positive recognition (#3013)", () => {
 });
 
 const escapedNewlineFlattenedBody =
-	"## Summary\\nRestore real newlines for the escaped-newline flattening class (#2145).\\n\\n## Tests\\nAdds fixtures pinning literal backslash-n repair outside fences.\\n\\n## Blast radius\\nLimited to the body-lint script.\\n\\n## Class sweep\\nEscaped-newline flattening is the sibling of the space-flattening class already handled.\\n\\n## Observability\\nA notice logs the repaired PR number.";
+	"## Summary\\nRestore real newlines for the escaped-newline flattening class (#2145).\\n\\n## Tests\\nAdds fixtures pinning literal backslash-n repair outside fences.\\n\\n## Blast radius\\nLimited to the body-lint script.\\n\\n## Class sweep\\nDefect shape: escaped-newline flattening. Search `rg -n backslash-n scripts`. Verdict: sibling of the space-flattening class.\\n\\n## Observability\\nA notice logs the repaired PR number.";
 
 const escapedNewlineWithFence =
 	'## Summary\\nRestore real newlines outside fences only (#2145).\\n\\n## Tests\\n```json\\n{"note": "line1\\nline2"}\\n```\\nThe JSON example above documents a genuine escaped newline.\\n\\n## Blast radius\\nLimited to the body-lint script.\\n\\n## Class sweep\\nFence content must never be rewritten during escaped-newline repair.\\n\\n## Observability\\nA notice logs the repaired PR number.';
@@ -5092,5 +5108,59 @@ describe("Workflow run unaffected declaration is verified (#3085 round 2)", () =
 			rows(["    steps:", "      - run: echo changed"], false),
 		);
 		expect(errorsFor(declared)).not.toContain("Changed workflow");
+	});
+});
+
+// #4273 F6: the class-sweep rule is composed into `lintPullRequestEvent`, the
+// CI entry point, not only `lintLocalPrBody`/`lintClassSweep`. Without a case
+// through the event seam, deleting that wire leaves the suite green.
+describe("class sweep reaches the CI event entry (#4273 F6)", () => {
+	let previousCwd: string;
+	let fixtureCwd: string;
+	const classSweepBody = (name: string) =>
+		readFileSync(
+			join(repositoryRoot, "tests", "fixtures", "ci-pr-bodies", name),
+			"utf8",
+		);
+	beforeEach(() => {
+		previousCwd = process.cwd();
+		fixtureCwd = createOriginMasterFixture();
+		process.chdir(fixtureCwd);
+		vi.stubEnv("GITHUB_TOKEN", "t");
+		vi.stubEnv("GITHUB_API_URL", "https://api.example");
+		vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+	});
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		process.chdir(previousCwd);
+		rmSync(fixtureCwd, { recursive: true, force: true });
+	});
+
+	it("refuses the #4248 changed-file sweep on the live body", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const live = classSweepBody("pr-4248-body.md");
+			await lintPullRequestEvent(fetchForEvent(live, []), {
+				pull_request: { number: 4248, body: live },
+			});
+			expect(errors.mock.calls.flat().join("\n")).toContain('"## Class sweep"');
+		} finally {
+			errors.mockRestore();
+		}
+	});
+
+	it("does not class-sweep-refuse the #4245 named shape, search, and verdict", async () => {
+		const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+		try {
+			const live = classSweepBody("pr-4245-body.md");
+			await lintPullRequestEvent(fetchForEvent(live, []), {
+				pull_request: { number: 4245, body: live },
+			});
+			expect(errors.mock.calls.flat().join("\n")).not.toContain(
+				'"## Class sweep"',
+			);
+		} finally {
+			errors.mockRestore();
+		}
 	});
 });

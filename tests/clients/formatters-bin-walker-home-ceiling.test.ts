@@ -28,7 +28,8 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import {
 	findLocalBinsUpwards,
 	findLocalBinUpwards,
@@ -38,6 +39,8 @@ import {
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 
 const isWin = process.platform === "win32";
+
+beforeEach(() => setProjectTrustState("trusted"));
 
 interface WalkerCase {
 	name: string;

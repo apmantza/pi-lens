@@ -89,6 +89,9 @@ jobs:
           node-version: "22"
 
       - name: Validate PR body structure
+        env:
+          # Existing bodies need a cleanup window before prose becomes blocking.
+          PI_LENS_PROSE_GRACE: "1"
         run: node scripts/check-pr-body.mjs
 
   close-keyword-lint:

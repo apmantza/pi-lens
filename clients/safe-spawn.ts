@@ -344,6 +344,16 @@ export interface SafeSpawnOptions {
 	deadlineAt?: number;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
+	/**
+	 * Drop every inherited `npm_config_*` variable (case-insensitive) from the
+	 * child environment AFTER the ambient merge (#4268). An `env` override
+	 * alone cannot remove a variable, because {@link getSpawnEnvironment}
+	 * merges `process.env` underneath it; this flag is the deletion the
+	 * override cannot express. Used by the cache-only package-runner seam so a
+	 * project's `.npmrc` and the shell's npm config never reach `npx`/`bunx`.
+	 * Never mutates `process.env`.
+	 */
+	stripNpmConfig?: boolean;
 	signal?: AbortSignal;
 	/**
 	 * Opt out of the ambient turn abort signal (which is otherwise the default).
@@ -1292,10 +1302,22 @@ function resolveWindowsCommand(
 
 function getSpawnEnvironment(
 	overrides: NodeJS.ProcessEnv | undefined,
+	stripNpmConfig: boolean | undefined,
 ): NodeJS.ProcessEnv {
-	return process.platform === "win32"
-		? mergeWindowsEnvironment(process.env, overrides)
-		: { ...process.env, ...overrides };
+	const merged =
+		process.platform === "win32"
+			? mergeWindowsEnvironment(process.env, overrides)
+			: { ...process.env, ...overrides };
+	if (!stripNpmConfig) return merged;
+	// A copy loop rather than `Object.fromEntries(…filter(…))`: `filter` is a
+	// retired glossary identifier and a new use would move the census. This runs
+	// only on the flagged cache-only package-runner spawns, never the hot
+	// default path.
+	const stripped: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(merged)) {
+		if (!/^npm_config_/i.test(key)) stripped[key] = value;
+	}
+	return stripped;
 }
 
 /**
@@ -1717,7 +1739,7 @@ export async function safeSpawnAsync(
 		//   - unresolvable → synthesize an ENOENT-shaped error instead of
 		//     letting cmd.exe report "not recognized" from inside a shell.
 		const isWindows = process.platform === "win32";
-		const spawnEnv = getSpawnEnvironment(options?.env);
+		const spawnEnv = getSpawnEnvironment(options?.env, options?.stripNpmConfig);
 		// The cwd handed to the CHILD process doesn't need OUR validation —
 		// Windows resolves it natively, exactly as it did before #817 ever
 		// touched this file. A drive-relative cwd (`D:work`) without a
@@ -2598,7 +2620,7 @@ export function safeSpawn(
 	args: string[],
 	options?: SafeSpawnOptions,
 ): SpawnResult {
-	const spawnEnv = getSpawnEnvironment(options?.env);
+	const spawnEnv = getSpawnEnvironment(options?.env, options?.stripNpmConfig);
 	if (process.platform === "win32") {
 		// See the matching comment in safeSpawnAsync: the child's cwd doesn't
 		// need OUR validation (Windows resolves it natively), so an unprovable

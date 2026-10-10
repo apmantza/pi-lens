@@ -13,6 +13,9 @@
  * module hop keeps every existing double production-faithful.
  */
 
+import * as fs from "node:fs";
+import { join } from "node:path";
+import { getGlobalPiLensDir } from "./file-utils.js";
 import type { SafeSpawnOptions, SpawnResult } from "./safe-spawn.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
@@ -21,6 +24,31 @@ import { safeSpawnAsync } from "./safe-spawn.js";
  * {@link probeToolAsync}.
  */
 export type ProbeSpawnOptions = Omit<SafeSpawnOptions, "cwd">;
+
+/**
+ * ONE seam for a cache-only package-runner (npx/bunx/pnpm-dlx) fallback:
+ * a pi-lens-owned cwd, created before use, plus `stripNpmConfig` so the
+ * project's `.npmrc` and the shell's npm config are never read (#4193, #4268
+ * acceptance 3). PR #4233 introduces the same helper; this is the one
+ * construction site both call. Every npx fallback in the repo passes the
+ * result to its child options; config-sensitive tools that must run with the
+ * project cwd (formatters reading `.prettierignore`) resolve the package to a
+ * binary here first and then spawn that binary with the project cwd, so the
+ * neutral cwd never costs them config discovery.
+ *
+ * `stripNpmConfig` rather than an `env` copy is deliberate: the spawn seam
+ * merges `process.env` underneath any `env` override, so removing a key from
+ * the override cannot remove it from the child (`getSpawnEnvironment`; MED-8).
+ * The flag makes the seam delete the `npm_config_*` keys after the merge.
+ */
+export function getIsolatedNpxSpawnOptions(): Pick<
+	SafeSpawnOptions,
+	"cwd" | "stripNpmConfig"
+> {
+	const cwd = join(getGlobalPiLensDir(), "tools");
+	fs.mkdirSync(cwd, { recursive: true });
+	return { cwd, stripNpmConfig: true };
+}
 
 /**
  * Run a tool's own presence/version invocation — `<tool> --version`, `cl`,

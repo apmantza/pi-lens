@@ -414,7 +414,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 ];
 const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
-		"clients/safe-spawn.ts#safeSpawn:ad6fe3ed~0cd6d898",
+		"clients/safe-spawn.ts#safeSpawn:ad6fe3ed~119c1ce6",
 		"the synchronous safe-spawn path derives its cwd from its own compatibility options, not the dispatch resolveToolCwd seam",
 	],
 	[
@@ -434,7 +434,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"launchLSP forwards its caller-provided cwd through trySpawn",
 	],
 	[
-		"clients/biome-client.ts#BiomeClient.spawnBiomeAsync:29a3826f~29a3826f",
+		"clients/biome-client.ts#BiomeClient.spawnBiomeAsync:710974ec~dbf27697",
 		"cwd is spawnBiomeAsync's own `cwd` parameter; the checked sites are its two call sites in this file",
 	],
 	[
@@ -446,7 +446,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes `projectRoot` = path.resolve(cwd || process.cwd()) from checkFile's own API argument; DependencyChecker is called from the pipeline, not from dispatch",
 	],
 	[
-		"clients/dependency-checker.ts#DependencyChecker.runMadgeSpawn:7a8cc482~218c0256",
+		"clients/dependency-checker.ts#DependencyChecker.runMadgeSpawn:a505f960~218c0256",
 		"cwd is runMadgeSpawn's own `projectRoot` parameter — madge resolves tsconfig/webpack config from the project root, not from the edited file",
 	],
 	[
@@ -458,7 +458,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"whole-project scan: passes the same `projectRoot` local into runScanProject",
 	],
 	[
-		"clients/dependency-checker.ts#DependencyChecker.runScanProject:c4180627~218c0256",
+		"clients/dependency-checker.ts#DependencyChecker.runScanProject:0fe846f1~218c0256",
 		"cwd is runScanProject's own `projectRoot` parameter",
 	],
 	[
@@ -618,7 +618,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
 	],
 	[
-		"clients/jscpd-client.ts#JscpdClient.runScan:9700ad53~dbf27697",
+		"clients/jscpd-client.ts#JscpdClient.runScan:b6c89033~dbf27697",
 		"cwd is runScan's own `cwd` parameter, and `readProjectJscpdConfig(cwd)` decides the flags from the same directory",
 	],
 	[
@@ -670,7 +670,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"analysePipeline (runPipeline's body since #3506) forwards its own `cwd` parameter into runAutofix",
 	],
 	[
-		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~446d128f",
+		"clients/safe-spawn.ts#safeSpawnAsync:f7eca8ca~b4dc9aa5",
 		"this IS the spawn seam: `spawnCwd` is the cwd its own caller passed in options, so the origin rule applies to the callers, not here",
 	],
 	[

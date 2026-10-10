@@ -111,6 +111,7 @@ import {
 } from "../../clients/degradation-ledger.js";
 import { _resetInstanceRegistryEnabledForTests } from "../../clients/instance-registry.js";
 import { KnipClient } from "../../clients/knip-client.js";
+import { setProjectTrustState } from "../../clients/project-trust.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleTurnEnd } from "../../clients/runtime-turn.js";
 import { peekTestFindings } from "../../clients/runtime-context.js";
@@ -298,6 +299,10 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+	// Every case plants a worktree-local runner install (`.venv`, or
+	// `node_modules/.bin/vitest`) and exercises which checkout owns it, not the
+	// trust gate; the gate itself is witnessed in `package-manager.test.ts`.
+	setProjectTrustState("trusted");
 	resetBoundedTelemetry();
 	resetDegradationLedger();
 	clearLatencyLog();

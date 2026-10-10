@@ -8,7 +8,7 @@
  */
 
 import * as path from "node:path";
-import { findLocalBinUpwards } from "../../package-manager.js";
+import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
@@ -87,7 +87,7 @@ export type OxlintNoFilesDecision =
  * never be this project's own Vite+ install (#2514).
  */
 function resolveLocalVp(cwd: string): string | null {
-	return findLocalBinUpwards("vp", cwd) ?? null;
+	return localBinPath(findLocalBinUpwards("vp", cwd)) ?? null;
 }
 
 async function resolveVitePlusCommand(cwd: string): Promise<string | null> {
