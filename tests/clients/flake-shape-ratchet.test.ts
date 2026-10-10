@@ -434,7 +434,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:real-harness/outside-root.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the real pi host must deliver the out-of-root advisory and degradation record through the process boundary, including the second edit and owned-path exemptions",
+			"the real pi host must deliver the out-of-root advisory and degradation record through the process boundary, including the second edit and owned-path exemptions; #4292 also kills a real startup jscpd scan with caller TMPDIR overrides to prove scanner-root cleanup",
 	},
 	"real-process-spawn:real-harness/provider-compatibility.test.ts": {
 		detector: "real-process-spawn",

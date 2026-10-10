@@ -14,7 +14,6 @@ import { createSubsystemLogger } from "./extension-log.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import * as fs from "node:fs";
 import { mkdtempSync } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
 	getExcludedDirGlobs,
@@ -31,6 +30,7 @@ import {
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
@@ -355,30 +355,34 @@ export class JscpdClient {
 		// #3600: stamp the read time at the top of the run body, before the scan
 		// reads any file a widget row's freshness is judged against.
 		const scannedAt = new Date().toISOString();
-		const outDir = mkdtempSync(`${os.tmpdir()}${path.sep}pi-lens-jscpd-`);
-
-		// Build ignore pattern from shared exclusions + scanner-specific patterns.
-		const baseIgnores = [
-			...getExcludedDirGlobs(),
-			...getProjectIgnoreGlobs(cwd),
-			"**/*.md",
-			"**/*.txt",
-			"**/*.json",
-			"**/*.yaml",
-			"**/*.yml",
-			"**/*.toml",
-			"**/*.lock",
-			"**/*.test.*",
-			"**/*.spec.*",
-			"**/*.poc.test.*",
-			"**/__tests__/**",
-			"**/tests/**",
-		];
-		if (isTsProject) {
-			baseIgnores.push("**/*.js", "**/*.jsx");
-		}
+		const outDir = mkdtempSync(
+			path.join(scannerReportParentDir(), "pi-lens-jscpd-"),
+		);
 
 		try {
+			// Build ignore pattern from shared exclusions + scanner-specific patterns.
+			// Keep setup inside this guard: the report directory already exists, and
+			// setup can read project-controlled ignore files (#4133).
+			const baseIgnores = [
+				...getExcludedDirGlobs(),
+				...getProjectIgnoreGlobs(cwd),
+				"**/*.md",
+				"**/*.txt",
+				"**/*.json",
+				"**/*.yaml",
+				"**/*.yml",
+				"**/*.toml",
+				"**/*.lock",
+				"**/*.test.*",
+				"**/*.spec.*",
+				"**/*.poc.test.*",
+				"**/__tests__/**",
+				"**/tests/**",
+			];
+			if (isTsProject) {
+				baseIgnores.push("**/*.js", "**/*.jsx");
+			}
+
 			// Prefer a local/global-installed jscpd (any manager) over npx (#375).
 			const bin = await findNodeToolBinary("jscpd", cwd);
 			const { cmd, prefix } = bin

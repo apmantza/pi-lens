@@ -53,13 +53,13 @@
 
 import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { resolveOpengrepConfig } from "./opengrep-config.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { getScratchTreeDirNames } from "./scratch-tree-policy.js";
 import { realpathOrResolve } from "./path-utils.js";
+import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 
@@ -164,7 +164,9 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 		const scannedAt = new Date().toISOString();
 		const bin = this.binaryPath ?? "opengrep";
 		const resolved = OpengrepClient.resolveConfig(cwd);
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "pi-lens-opengrep-"));
+		const outDir = mkdtempSync(
+			path.join(scannerReportParentDir(), "pi-lens-opengrep-"),
+		);
 		const reportPath = path.join(outDir, "opengrep-report.json");
 		try {
 			const result = await safeSpawnAsync(

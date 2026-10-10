@@ -47,6 +47,15 @@ export class McpHarness {
 	private buffer = "";
 	private readonly workspaceDir: string;
 	private readonly isolationDir: string;
+	/**
+	 * #4133: every scanner's report directory lives under the process tmpdir and
+	 * is removed in a `finally`; a child SIGKILLed mid-scan leaves it behind.
+	 * This scanner-only root is inside {@link isolationDir}, so the child's
+	 * orphaned report directory is swept by {@link dispose} while the child's
+	 * whole TMPDIR stays shared with the parent (the IPC socket and the turn-end
+	 * status file depend on that).
+	 */
+	private readonly scannerTempDir: string;
 	private pending = new Map<number, (msg: Record<string, unknown>) => void>();
 	private defaultTimeoutMs: number;
 
@@ -67,6 +76,8 @@ export class McpHarness {
 		this.isolationDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-mcp-isolation-"),
 		);
+		this.scannerTempDir = path.join(this.isolationDir, "scanner-tmp");
+		fs.mkdirSync(this.scannerTempDir, { recursive: true });
 		const env = {
 			...process.env,
 			PILENS_DATA_DIR:
@@ -74,6 +85,8 @@ export class McpHarness {
 			PI_LENS_HOME:
 				options.env?.PI_LENS_HOME ?? path.join(this.isolationDir, "home"),
 			...options.env,
+			PI_LENS_TEST_SCANNER_TMPDIR: this.scannerTempDir,
+			PI_LENS_TEST_SCANNER_HARNESS: "1",
 		};
 		if (
 			path.resolve(env.PILENS_DATA_DIR) ===
@@ -107,6 +120,11 @@ export class McpHarness {
 				nl = this.buffer.indexOf("\n");
 			}
 		});
+	}
+
+	/** The harness-owned root the child's scanner report directories land in. */
+	scannerReportRoot(): string {
+		return this.scannerTempDir;
 	}
 
 	request(

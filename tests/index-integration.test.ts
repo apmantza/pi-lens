@@ -7,7 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
 import { getEffectiveLspIdleResetMs } from "../clients/runtime-turn.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
-import { removeTempDirSync } from "./clients/test-utils.js";
+import {
+	drainResidentJscpdScans,
+	removeTempDirSync,
+} from "./clients/test-utils.js";
 import { makeLspServiceDouble } from "./support/lsp-service-double.js";
 import {
 	aliveServerHolder,
@@ -164,7 +167,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 // Cases install their own doubles for these modules with vi.doMock;
 // resetModules does not clear the mock registry, so drop them after each case
 // in every describe below (#2883).
-afterEach(() => {
+afterEach(async () => {
 	vi.doUnmock("../clients/bootstrap.js");
 	vi.doUnmock("../clients/bus-events-logger.js");
 	vi.doUnmock("../clients/cache-observability.js");
@@ -178,6 +181,11 @@ afterEach(() => {
 	vi.doUnmock("../clients/runtime-agent-end.js");
 	vi.doUnmock("../clients/runtime-turn.js");
 	vi.doUnmock("../clients/session-scope.js");
+	// #4133: a jscpd scan started by the real bootstrap is fire-and-forget; wait
+	// for it before this test's fixture roots and the worker's tmp root are
+	// removed, so a kill cannot strand its report directory. Runs after every
+	// `vi.doUnmock` above, so the real module answers the peek.
+	await drainResidentJscpdScans();
 });
 
 /**

@@ -57,7 +57,6 @@
 
 import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { mkdtempSync } from "node:fs";
 import {
@@ -66,6 +65,7 @@ import {
 } from "./git-tracked-ignore.js";
 import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 import {
 	getSecretsLaneAllowlistPaths,
@@ -399,7 +399,9 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 	private async runScan(cwd: string): Promise<GitleaksResult> {
 		const scannedAt = new Date().toISOString();
 		const bin = this.binaryPath ?? "gitleaks";
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "pi-lens-gitleaks-"));
+		const outDir = mkdtempSync(
+			path.join(scannerReportParentDir(), "pi-lens-gitleaks-"),
+		);
 		const reportPath = path.join(outDir, "gitleaks-report.json");
 		try {
 			const configPath = writeScopedGitleaksConfig(outDir, cwd);
