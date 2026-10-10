@@ -193,6 +193,9 @@ function startRealPi(
 	const sessionDir = path.join(home, "sessions");
 	const childTmp = path.join(home, "tmp");
 	mkdirSync(childTmp, { recursive: true });
+	// #4292: callers may replace TMPDIR for adoption tests, but scanner
+	// reports belong to this child, including when siblings share a home.
+	const scannerTempDir = claimScratchDir(home, "scanner-tmp");
 	if (persistedSession) mkdirSync(sessionDir, { recursive: true });
 	// pi's agent dir (`PI_CODING_AGENT_DIR`) under the removable home, so a
 	// scenario can turn on a built-in tool pi keeps off by default (codemode).
@@ -219,6 +222,8 @@ function startRealPi(
 		ANTHROPIC_API_KEY: "sk-ant-real-harness-dummy",
 		...(agentSettings && { PI_CODING_AGENT_DIR: agentDir }),
 		...env,
+		PI_LENS_TEST_SCANNER_TMPDIR: scannerTempDir,
+		PI_LENS_TEST_SCANNER_HARNESS: "1",
 	});
 	let child!: ChildProcessWithoutNullStreams;
 	const events: RpcMessage[] = [];
@@ -367,6 +372,7 @@ function startRealPi(
 				.map((line) => JSON.parse(line) as JsonObject),
 		async close() {
 			await stopChild(true);
+			removeTempDirSync(scannerTempDir);
 			// A caller-supplied project (and home) outlives this child by
 			// construction — a concurrent sibling session is still reading it.
 			if (!projectOverride) removeTempDirSync(project);

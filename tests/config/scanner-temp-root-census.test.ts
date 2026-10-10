@@ -6,8 +6,8 @@
  * removed in a `finally`. Killing the child before that `finally` (the MCP
  * harness `dispose()` SIGKILLs its tree) strands the directory. Every harness
  * that spawns a child must therefore either hand the child an owned scanner
- * temp root (`PI_LENS_TEST_SCANNER_TMPDIR`, or a whole-child `TMPDIR` under a
- * root the harness removes) or be named in {@link ADMISSIONS} with a reason.
+ * temp root (`PI_LENS_TEST_SCANNER_TMPDIR` after caller env, with the
+ * scanner-only harness marker) or be named in {@link ADMISSIONS} with a reason.
  *
  * Population: every non-test `*.ts` under `tests/support/` plus every
  * `tests/<dir>/harness*.ts`. Enumerated with:
@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { Lang, parse } from "@ast-grep/napi";
 import {
 	assertNonEmptyScan,
 	auditRegistry,
@@ -41,11 +42,36 @@ const TESTS_ROOT = path.join(REPO_ROOT, "tests");
 /** A real child-process spawn (not `spawnSync`, not `server.spawn`). */
 const SPAWN_CALL = /(?<![\w.$])spawn\s*\(/;
 
-/**
- * Evidence a harness owns the child's scanner temp root: the shared scanner
- * seam, or a whole-child `TMPDIR` the harness creates and removes.
- */
-const OWNED_ROOT_TOKEN = /\bPI_LENS_TEST_SCANNER_TMPDIR\b|\bTMPDIR\b/;
+/** Static governance checks the env object rather than token presence:
+ * arbitrary future harnesses cannot be run by a fixed runtime witness. */
+function hasOwnedScannerRoot(raw: string): boolean {
+	return parse(Lang.TypeScript, raw)
+		.root()
+		.findAll({ rule: { kind: "object" } })
+		.some((object) => {
+			const properties = object.children();
+			const lastSpread = properties
+				.map((prop) => prop.kind())
+				.lastIndexOf("spread_element");
+			const root = properties.findIndex(
+				(prop) =>
+					prop.field("key")?.text().replace(/["']/g, "") ===
+					"PI_LENS_TEST_SCANNER_TMPDIR",
+			);
+			const marker = properties.findIndex(
+				(prop) =>
+					prop.field("key")?.text().replace(/["']/g, "") ===
+					"PI_LENS_TEST_SCANNER_HARNESS",
+			);
+			return (
+				root > lastSpread &&
+				marker > lastSpread &&
+				(properties[root].field("value")?.kind() === "identifier" ||
+					properties[root].field("value")?.kind() === "member_expression") &&
+				properties[marker].field("value")?.text().replace(/["']/g, "") === "1"
+			);
+		});
+}
 
 /**
  * The two spawn-bearing harnesses today, pinned so a new spawn harness must
@@ -101,8 +127,8 @@ function runCensus(): Census {
 		if (!SPAWN_CALL.test(stripSource(raw))) continue;
 		const rel = relativePosix(REPO_ROOT, abs);
 		spawnHarnesses.push(rel);
-		// Strings KEPT here: the env var name is itself the evidence.
-		if (OWNED_ROOT_TOKEN.test(stripSource(raw, { strings: "keep" }))) {
+		// Parse executable assignments; comments and unrelated strings cannot own a root.
+		if (hasOwnedScannerRoot(raw)) {
 			ownedRoot.push(rel);
 		}
 	}
@@ -114,6 +140,27 @@ function runCensus(): Census {
 }
 
 describe("#4133 scanner temp-root harness census", () => {
+	// #4292 r5: TMPDIR presence admitted outside-root's replaceable root.
+	it("rejects replaceable roots and prose ownership", () => {
+		for (const source of [
+			"const env = { TMPDIR: childTmp, ...options.env };",
+			'const env = { PI_LENS_TEST_SCANNER_TMPDIR: root, ...options.env, PI_LENS_TEST_SCANNER_HARNESS: "1" };',
+			'const env = { PI_LENS_TEST_SCANNER_HARNESS: "1", ...options.env, PI_LENS_TEST_SCANNER_TMPDIR: root };',
+			'const env = { ...options.env, PI_LENS_TEST_SCANNER_TMPDIR: root, PI_LENS_TEST_SCANNER_HARNESS: "0" };',
+			'const env = { PI_LENS_TEST_SCANNER_TMPDIR: root, PI_LENS_TEST_SCANNER_HARNESS: "1", ...options.env };',
+			'const env = { ...options.env, PI_LENS_TEST_SCANNER_TMPDIR: options.env.root ?? root, PI_LENS_TEST_SCANNER_HARNESS: "1" };',
+			'// PI_LENS_TEST_SCANNER_TMPDIR: root\nconst text = "PI_LENS_TEST_SCANNER_HARNESS";',
+		])
+			expect(hasOwnedScannerRoot(source)).toBe(false);
+	});
+
+	it("recognises final owned assignments with quoted env keys", () => {
+		expect(
+			hasOwnedScannerRoot(
+				'const env = { ...caller, "PI_LENS_TEST_SCANNER_TMPDIR": ownedRoot, "PI_LENS_TEST_SCANNER_HARNESS": "1" };',
+			),
+		).toBe(true);
+	});
 	const { spawnHarnesses, ownedRoot, scanned } = runCensus();
 
 	it("finds the spawn-harness population (a dead census is not clean)", () => {
@@ -133,7 +180,7 @@ describe("#4133 scanner temp-root harness census", () => {
 			minScanned: 50,
 			remediation:
 				"point the child at an owned scanner root (PI_LENS_TEST_SCANNER_TMPDIR, " +
-				"or a TMPDIR under a root the harness removes) or add a reasoned admission.",
+				"after caller env, with PI_LENS_TEST_SCANNER_HARNESS=1) or add a reasoned admission.",
 		});
 		expect(audit.problems).toEqual([]);
 		// The live coverage: both pi-lens-spawning harnesses own their root.

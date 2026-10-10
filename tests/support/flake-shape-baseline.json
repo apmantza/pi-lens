@@ -63,7 +63,7 @@
 		"real-harness/fixture-shape.test.ts": 1,
 		"real-harness/lifecycle.test.ts": 3,
 		"real-harness/negative.test.ts": 2,
-		"real-harness/outside-root.test.ts": 1,
+		"real-harness/outside-root.test.ts": 2,
 		"real-harness/provider-compatibility.test.ts": 5,
 		"real-harness/read-guard-moves.test.ts": 11,
 		"real-harness/scenario-1.test.ts": 1,

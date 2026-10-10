@@ -80,13 +80,13 @@ export class McpHarness {
 		fs.mkdirSync(this.scannerTempDir, { recursive: true });
 		const env = {
 			...process.env,
-			PI_LENS_TEST_SCANNER_TMPDIR:
-				options.env?.PI_LENS_TEST_SCANNER_TMPDIR ?? this.scannerTempDir,
 			PILENS_DATA_DIR:
 				options.env?.PILENS_DATA_DIR ?? path.join(this.isolationDir, "data"),
 			PI_LENS_HOME:
 				options.env?.PI_LENS_HOME ?? path.join(this.isolationDir, "home"),
 			...options.env,
+			PI_LENS_TEST_SCANNER_TMPDIR: this.scannerTempDir,
+			PI_LENS_TEST_SCANNER_HARNESS: "1",
 		};
 		if (
 			path.resolve(env.PILENS_DATA_DIR) ===

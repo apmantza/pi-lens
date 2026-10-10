@@ -16,17 +16,17 @@
  * time like the other lazy env seams; an empty value falls back to the
  * tmpdir.
  *
- * The override is honoured only in test mode (`isTestMode()`). Production
- * always uses `os.tmpdir()`, so a leaked `PI_LENS_TEST_SCANNER_TMPDIR` cannot
- * relocate a real scan's report directory; the harness child inherits vitest's
- * `VITEST` marker, so its override still resolves (#4292 round 4).
+ * Test workers and explicitly marked scanner harness children may use the
+ * override. The scanner-only harness marker is independent of logging test
+ * mode: real-pi needs live logs and clears VITEST (#4292 round 5).
  */
 
 import * as os from "node:os";
 import { isTestMode } from "./env-utils.js";
 
 export function scannerReportParentDir(): string {
-	if (!isTestMode()) return os.tmpdir();
+	if (!isTestMode() && process.env.PI_LENS_TEST_SCANNER_HARNESS !== "1")
+		return os.tmpdir();
 	const override = process.env.PI_LENS_TEST_SCANNER_TMPDIR?.trim();
 	return override && override.length > 0 ? override : os.tmpdir();
 }

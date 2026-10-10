@@ -155,6 +155,9 @@ describe("mcp harness scanner report root (#4133)", () => {
 				cwd: fixture,
 				env: {
 					SCANNER_FAKE_MARKER: marker,
+					PI_LENS_TEST_MODE: "0",
+					PI_LENS_TEST_SCANNER_HARNESS: "0",
+					PI_LENS_TEST_SCANNER_TMPDIR: tmpDir,
 					PI_LENS_HOME: home,
 					PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
 				},
