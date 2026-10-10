@@ -3440,6 +3440,10 @@ export const LeanServer = createInteractiveServer({
 	// Documented (#3750): `lake serve` analyses a file only when a Lake project
 	// roots it; a root-fallback empty answer is unconfirmed, not clean.
 	requiresProjectRoot: true,
+	// `lake serve` loads and interprets the project's `lakefile.lean` and its
+	// imported build scripts, so it executes project-owned code: refuse it until
+	// the host grants project trust (#4269).
+	executesProjectCode: true,
 	command: "lake",
 	args: ["serve"],
 });
