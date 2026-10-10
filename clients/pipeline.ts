@@ -68,6 +68,7 @@ import {
 import type { FormatService } from "./format-service.js";
 import type { GenerationHandle } from "./generation-guard.js";
 import { resolveAnalysisRoot, type AnalysisRootMode } from "./analysis-root.js";
+import { emitBounded } from "./bounded-telemetry.js";
 import { logLatency } from "./latency-logger.js";
 import type { PostAutofixNotice } from "./post-autofix-notice.js";
 import { emitLensAnalysisComplete } from "./lens-events.js";
@@ -941,13 +942,16 @@ export async function runAutofix(
 	skipReason?: string;
 }> {
 	if (resolveAnalysisRoot(filePath, sessionRoot) === "adopted") {
-		logLatency({
-			type: "phase",
-			filePath,
-			phase: "adopted_root_writer_skipped",
-			durationMs: 0,
-			metadata: { writer: "autofix" },
-		});
+		emitBounded(
+			"adopted_root_writer_skipped",
+			`${filePath}:autofix`,
+			{
+				filePath,
+				durationMs: 0,
+				metadata: { writer: "autofix" },
+			},
+			{ ledgerKind: "adopted-root-writer-skipped", risingEdgePer: "identity" },
+		);
 		return {
 			fixedCount: 0,
 			autofixTools: [],
@@ -1651,13 +1655,16 @@ export async function runFormatPhase(
 		sessionRoot !== undefined &&
 		resolveAnalysisRoot(filePath, sessionRoot) === "adopted";
 	if (adopted)
-		logLatency({
-			type: "phase",
-			filePath,
-			phase: "adopted_root_writer_skipped",
-			durationMs: 0,
-			metadata: { writer: "format" },
-		});
+		emitBounded(
+			"adopted_root_writer_skipped",
+			`${filePath}:format`,
+			{
+				filePath,
+				durationMs: 0,
+				metadata: { writer: "format" },
+			},
+			{ ledgerKind: "adopted-root-writer-skipped", risingEdgePer: "identity" },
+		);
 	if (!adopted) {
 		const formatService = getFormatService();
 		try {

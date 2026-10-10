@@ -7,6 +7,7 @@
  * - Config file finders
  */
 
+import { emitBounded } from "../../../bounded-telemetry.js";
 import { resolveAnalysisRootPath } from "../../../analysis-root.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -525,13 +526,19 @@ export function resolveAdoptedRootCommand(
 					isUnderDir(selected, root),
 			)
 		) {
-			logLatency({
-				type: "phase",
-				filePath: ctx.filePath,
-				phase: "adopted_root_binary_refused",
-				durationMs: 0,
-				metadata: { command, binary },
-			});
+			emitBounded(
+				"adopted_root_binary_refused",
+				`${ctx.filePath}:${command}:${binary}`,
+				{
+					filePath: ctx.filePath,
+					durationMs: 0,
+					metadata: { command, binary },
+				},
+				{
+					ledgerKind: "adopted-root-binary-refused",
+					risingEdgePer: "identity",
+				},
+			);
 			return null;
 		}
 		return binary;

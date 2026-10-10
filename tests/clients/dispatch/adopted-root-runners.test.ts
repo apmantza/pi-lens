@@ -552,6 +552,67 @@ describe("#4242 adopted-root runner allowlist", () => {
 		},
 	);
 
+	// #4309 r2 pre-push: repeat policy refusals count without repeated log rows.
+	it("bounds repeated adopted binary and writer decisions in the real sink", async () => {
+		const fixture = adoptedFixture();
+		try {
+			vi.stubEnv("PI_LENS_TEST_MODE", "0");
+			vi.stubEnv("PATH", fixture.adoptedRoot);
+			const binary = path.join(
+				fixture.adoptedRoot,
+				process.platform === "win32" ? "php.exe" : "php",
+			);
+			fs.writeFileSync(binary, "#!/bin/sh\n");
+			fs.chmodSync(binary, 0o755);
+			const registry = new RunnerRegistry();
+			registry.register(
+				(await import("../../../clients/dispatch/runners/php-lint.js")).default,
+			);
+			for (let attempt = 0; attempt < 2; attempt++) {
+				await dispatchForFile(
+					makeCtx(fixture.file, fixture.sessionRoot),
+					[{ mode: "all", runnerIds: ["php-lint"] }],
+					registry,
+				);
+				await runAutofix(
+					fixture.file,
+					fixture.sessionRoot,
+					() => false,
+					() => {},
+					{
+						biomeClient: new BiomeClient(),
+						ruffClient: new RuffClient(),
+						fixedThisTurn: new Set(),
+					},
+				);
+				await runFormatPhase(
+					fixture.file,
+					() => new FormatService("bounded-adopted-r2"),
+					() => {},
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					fixture.sessionRoot,
+				);
+			}
+			expect(
+				await decisionRows(fixture.file, "adopted_root_binary_refused"),
+			).toHaveLength(1);
+			const writers = await decisionRows(
+				fixture.file,
+				"adopted_root_writer_skipped",
+			);
+			expect(writers).toHaveLength(2);
+			expect(writers.map((row) => row.metadata.writer).sort()).toEqual([
+				"autofix",
+				"format",
+			]);
+		} finally {
+			fixture.cleanup();
+		}
+	});
+
 	// #4309 F4: flush and read the production NDJSON sink, never a logger mock.
 	it("records admitted and refused runner ids with an accurate empty-plan field", async () => {
 		const fixture = adoptedFixture();

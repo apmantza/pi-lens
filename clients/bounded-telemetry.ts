@@ -53,6 +53,9 @@ import { type LatencyEntry, logLatency } from "./latency-logger.js";
  * must not also be written by a raw `logLatency` call somewhere else.
  */
 export const BOUNDED_TELEMETRY_PHASES = [
+	/** #4309: adopted executable/writer policy decisions, counted per identity. */
+	"adopted_root_binary_refused",
+	"adopted_root_writer_skipped",
 	/** #2890: a duplicate pi RPC session_start was admitted but suppressed. */
 	"session_start_duplicate_suppressed",
 	/**
