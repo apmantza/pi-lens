@@ -12,6 +12,22 @@ function loadWorkflow(): any {
 }
 
 describe("nightly LSP capability refresh contract (#4277)", () => {
+	it("builds the in-place compiled twins before the census, after the promotion edit (#4302)", () => {
+		const workflow = loadWorkflow();
+		const smoke = workflow.jobs["tool-smoke"];
+		const indexOf = (id: string) =>
+			smoke.steps.findIndex((step: any) => step.id === id);
+		// Only the in-place `npm run build`; `npm run build:dist` also matches a
+		// substring check but emits dist/, which is not what vitest loads.
+		const buildIndex = smoke.steps.findIndex(
+			(step: any) => String(step.run).trim() === "npm run build",
+		);
+
+		expect(buildIndex).toBeGreaterThan(indexOf("idle_promote"));
+		expect(buildIndex).toBeLessThan(indexOf("lsp_census"));
+		expect(smoke.steps[buildIndex]["continue-on-error"]).toBeUndefined();
+	});
+
 	it("runs every matrix census before the refresh PR step", () => {
 		const workflow = loadWorkflow();
 		const smoke = workflow.jobs["tool-smoke"];
