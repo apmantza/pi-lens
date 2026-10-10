@@ -224,6 +224,11 @@ runner's own notes say which mode lifts it). Run Vitest as
 tree-sitter grammar prefetch hangs offline, verify through direct probes of the
 built code and say so; the orchestrator re-runs the files outside the sandbox.
 
+A worker may call a red "sandbox" only with the same test names red on
+`origin/master` in the same worktree, under the same env vars (including
+`GITHUB_ACTIONS` when the test reads it). The plegma git guard reds hundreds
+of fixture tests, and a real red hidden among them reaches CI (#4308).
+
 ## Follow-ups
 
 Fold a review follow-up into the same PR when it shares the seam or files, is
