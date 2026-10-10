@@ -29,6 +29,7 @@ describe("LSP project-code trust census", () => {
 			"cmake",
 			"vue",
 			"svelte",
+			"tinymist",
 		]);
 		const actual = new Set(
 			LSP_SERVERS.filter((server) => server.executesProjectCode).map(

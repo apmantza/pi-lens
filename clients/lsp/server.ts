@@ -36,6 +36,7 @@ import {
 	direntsHaveMarkerGlobMatch,
 	isAtOrAboveHomeDir,
 	isFullyQualified,
+	isUnderDir,
 	isWindowsPath,
 	matchesWorkspaceMemberPattern,
 	normalizeEphemeralMapKey,
@@ -92,7 +93,11 @@ import {
 	isCommandAvailableAsync,
 	safeSpawnAsync,
 } from "../safe-spawn.js";
-import { type LSPProcess, launchLSP } from "./launch.js";
+import {
+	type LSPProcess,
+	admitProjectSuppliedTsserver,
+	launchLSP,
+} from "./launch.js";
 import { ephemeralStagingRoot } from "../ephemeral-root.js";
 import { createLombokJdtlsArgs } from "./lombok.js";
 import { resolveJavaRuntimeEnv } from "./jvm-runtime.js";
@@ -2139,7 +2144,17 @@ async function findTsserverPath(
 		"lib",
 		"tsserver.js",
 	);
-	if (ancestorHit) return ancestorHit;
+	if (ancestorHit) {
+		// #4296: the ancestor walk is the project's own node_modules lineage, so
+		// the hit is project-supplied. Under any trust but `trusted` it is declined
+		// through the shared trust seam; fall through to managed TypeScript.
+		const admittedAncestor = admitProjectSuppliedTsserver(
+			ancestorHit,
+			root,
+			true,
+		);
+		if (admittedAncestor) return admittedAncestor;
+	}
 	const cwdCandidate = path.join(
 		process.cwd(),
 		"node_modules",
@@ -2149,7 +2164,14 @@ async function findTsserverPath(
 	);
 	try {
 		await fs.access(cwdCandidate);
-		return cwdCandidate;
+		// Only a candidate outside the project is pi-lens-adjacent; one inside it
+		// is project-supplied and follows the same gate.
+		const admittedCwd = admitProjectSuppliedTsserver(
+			cwdCandidate,
+			root,
+			isUnderDir(cwdCandidate, root),
+		);
+		if (admittedCwd) return admittedCwd;
 	} catch {
 		/* not found */
 	}
@@ -2611,7 +2633,13 @@ export const TypeScriptServer: LSPServerInfo = {
 			);
 			try {
 				await fs.access(localCandidate);
-				tsserverPath = localCandidate;
+				// #4296: a wrapper-relative candidate is project-supplied when it sits
+				// inside the LSP root (a project-local wrapper); gate it like the walk.
+				tsserverPath = admitProjectSuppliedTsserver(
+					localCandidate,
+					root,
+					isUnderDir(localCandidate, root),
+				);
 			} catch {
 				/* not found */
 			}
@@ -3627,6 +3655,7 @@ export const GleamServer: LSPServerInfo = {
 
 export const TinymistServer: LSPServerInfo = {
 	id: "tinymist",
+	executesProjectCode: true,
 	idleEviction: "unmeasured",
 	role: "language",
 	name: "Tinymist",

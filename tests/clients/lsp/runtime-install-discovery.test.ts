@@ -11,7 +11,10 @@ import { removeTempDirSync } from "../test-utils.js";
 // runtime-install WIRING via the candidate list and server shape (#241).
 const { launchLSP } = vi.hoisted(() => ({ launchLSP: vi.fn() }));
 const { logLatency } = vi.hoisted(() => ({ logLatency: vi.fn() }));
-vi.mock("../../../clients/lsp/launch.js", () => ({ launchLSP }));
+vi.mock("../../../clients/lsp/launch.js", () => ({
+	launchLSP,
+	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+}));
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<
 		typeof import("../../../clients/latency-logger.js")

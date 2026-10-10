@@ -407,19 +407,20 @@ type LspExecutionTrustRequest =
 			command: string;
 			resolvedCommand: string;
 			cwd: string;
+			/**
+			 * Whether `resolvedCommand` is project-supplied. Defaults to the shared
+			 * installed-binary classifier (#4268). The tsserver argument (#4296) is
+			 * under `node_modules/typescript`, which that classifier does not cover,
+			 * so its caller states the provenance explicitly.
+			 */
+			projectLocal?: boolean;
 	  };
 
-/** Refuse project-code servers and project-local binaries through one trust seam. */
-export function refuseUntrustedLspExecution(
+/** Record one bounded trust refusal through the shared lsp-registry seam. */
+function recordUntrustedLspExecution(
 	request: LspExecutionTrustRequest,
+	trust: ReturnType<typeof getProjectTrustState>,
 ): void {
-	const trust = getProjectTrustState();
-	const needsTrust =
-		request.kind === "project-code-server"
-			? trust !== "trusted"
-			: trust === "unknown";
-	if (!needsTrust) return;
-
 	const generation = getDegradationLedgerGeneration();
 	const subject =
 		request.kind === "project-code-server"
@@ -435,10 +436,9 @@ export function refuseUntrustedLspExecution(
 				}
 			: {
 					field: request.kind,
-					resolved: isProjectLocalLspBinary(
-						request.resolvedCommand,
-						request.cwd,
-					),
+					resolved:
+						request.projectLocal ??
+						isProjectLocalLspBinary(request.resolvedCommand, request.cwd),
 					trust,
 				};
 	recordDegradationOnce({
@@ -460,11 +460,58 @@ export function refuseUntrustedLspExecution(
 			metadata: { field: request.kind },
 		});
 	}
+}
+
+/** Refuse project-code servers and project-local binaries through one trust seam. */
+export function refuseUntrustedLspExecution(
+	request: LspExecutionTrustRequest,
+): void {
+	const trust = getProjectTrustState();
+	const needsTrust =
+		request.kind === "project-code-server"
+			? trust !== "trusted"
+			: trust === "unknown";
+	if (!needsTrust) return;
+
+	recordUntrustedLspExecution(request, trust);
 	throw new SpawnFailureError(
 		"spawn-failed",
 		`LSP ${request.kind === "project-code-server" ? "project-code server" : "project-local binary"} refused: project trust is ${trust}`,
 		new Error(`project trust is ${trust}`),
 	);
+}
+
+/**
+ * #4296: the classic TypeScript wrapper forks the file named by
+ * `TSSERVER_PATH` / `initialization.tsserver.path`, so a project-supplied
+ * `tsserver.js` is code the wrapper executes. The launcher-only project-local
+ * gate (#4268) classifies the wrapper, never this argument. Under any trust but
+ * `trusted`, decline a project-supplied path through the same
+ * project-local-binary notice (one bounded record and one extension warning per
+ * session) so the caller falls back to pi-lens-managed TypeScript.
+ *
+ * `projectSupplied` is the caller's provenance verdict: the ancestor-walk hit
+ * and an in-project `process.cwd()` candidate are project-supplied; a
+ * pi-lens-managed or global path is not.
+ */
+export function admitProjectSuppliedTsserver(
+	tsserverPath: string,
+	cwd: string,
+	projectSupplied: boolean,
+): string | undefined {
+	const trust = getProjectTrustState();
+	if (!projectSupplied || trust === "trusted") return tsserverPath;
+	recordUntrustedLspExecution(
+		{
+			kind: "project-local-binary",
+			command: tsserverPath,
+			resolvedCommand: tsserverPath,
+			cwd,
+			projectLocal: true,
+		},
+		trust,
+	);
+	return undefined;
 }
 
 /**

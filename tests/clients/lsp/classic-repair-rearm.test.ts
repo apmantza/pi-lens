@@ -31,6 +31,7 @@ vi.mock("../../../clients/installer/index.js", () => ({
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
 	refuseUntrustedLspExecution: vi.fn(),
+	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({

@@ -15,7 +15,10 @@ vi.mock("../../../clients/installer/index.js", () => ({
 	getToolEnvironment,
 	findManagedToolBinary: vi.fn(async () => undefined),
 }));
-vi.mock("../../../clients/lsp/launch.js", () => ({ launchLSP }));
+vi.mock("../../../clients/lsp/launch.js", () => ({
+	launchLSP,
+	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+}));
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<
 		typeof import("../../../clients/latency-logger.js")
