@@ -22,6 +22,12 @@ import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 const PHP_LINT_EXIT_CODES = { ran: [1, 255] } as const;
 
 const php = createAvailabilityChecker("php", ".exe");
+// #4242: an adopted root never runs a project-local interpreter, whatever the
+// session trust. This checker skips the project-local `.venv` rung, so a
+// `<adoptedRoot>/.venv/bin/php` is neither probed nor executed.
+const phpAdoptedRoot = createAvailabilityChecker("php", ".exe", ["--version"], {
+	allowProjectLocal: false,
+});
 
 function parsePhpLintOutput(
 	raw: string,
@@ -71,11 +77,12 @@ const phpLintRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "php-lint");
-		if (!(await php.isAvailableAsync(cwd))) {
+		const checker = ctx.analysisRootMode === "adopted" ? phpAdoptedRoot : php;
+		if (!(await checker.isAvailableAsync(cwd))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const cmd = php.getCommand(cwd);
+		const cmd = checker.getCommand(cwd);
 		if (!cmd) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}

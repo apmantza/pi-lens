@@ -495,15 +495,23 @@ export function createVenvFinder(
 	command: string,
 	windowsExt = "",
 	verificationArgs: string[] = ["--version"],
+	/**
+	 * Adopted-root policy (#4242): when `false`, the project-local `.venv` rung is
+	 * skipped entirely, so a project-local interpreter is neither probed nor run.
+	 * The default (`true`) preserves every session-root caller unchanged.
+	 */
+	allowProjectLocal = true,
 ): (cwd: string) => Promise<VenvResolution> {
 	return async (cwd: string): Promise<VenvResolution> => {
-		const venvBin = localBinPath(
-			findLocalBinAt(command, cwd, {
-				windowsExt,
-				binDirs: VENV_BIN_DIRS,
-			}),
-		);
-		if (venvBin) return { path: venvBin, rung: "venv" };
+		if (allowProjectLocal) {
+			const venvBin = localBinPath(
+				findLocalBinAt(command, cwd, {
+					windowsExt,
+					binDirs: VENV_BIN_DIRS,
+				}),
+			);
+			if (venvBin) return { path: venvBin, rung: "venv" };
+		}
 
 		// Managed-dir install (~/.pi-lens/tools/node_modules/.bin/<command>) — the
 		// same shim `ensureTool()` installs npm-strategy tools into. Checked BEFORE
@@ -583,6 +591,11 @@ export interface AvailabilityCheckerOptions {
 	environment?: (cwd: string) => Promise<NodeJS.ProcessEnv>;
 	/** Compatibility for legacy probes whose test doubles carry no failure kind. */
 	unclassifiedFailureOutcome?: AvailabilityOutcome;
+	/**
+	 * Adopted-root policy (#4242): `false` resolves only managed or PATH binaries,
+	 * never a project-local `.venv` one. Omitted keeps the session default.
+	 */
+	allowProjectLocal?: boolean;
 }
 
 /**
@@ -1057,7 +1070,12 @@ export function createAvailabilityChecker(
 	let checkerGeneration = availabilityGeneration.current();
 	let checkerFlightGeneration = 0;
 
-	const findCommand = createVenvFinder(command, windowsExt, versionArgs);
+	const findCommand = createVenvFinder(
+		command,
+		windowsExt,
+		versionArgs,
+		options.allowProjectLocal !== false,
+	);
 
 	function ensureCurrentGeneration(): void {
 		if (checkerGeneration === availabilityGeneration.current()) return;
