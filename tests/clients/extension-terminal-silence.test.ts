@@ -34,8 +34,16 @@ const SCANNED_FILES = ["index.ts", "i18n.ts"];
 /**
  * `clients/extension-log.ts` OWNS the console reroute — it is the one module
  * allowed to name console methods, because patching them is its job.
+ *
+ * `clients/jscpd-client.ts` is a TEMPORARY investigation admission: an
+ * `PI_LENS_TEST_JSCPD_TRACE`-gated `[jscpd-trace]` stderr line records the
+ * report dir's create/remove so the CI tmp-hygiene leak can be attributed.
+ * Remove this row with the investigation branch (see READ_CI.md).
  */
-const ALLOWED_FILES = new Set(["clients/extension-log.ts"]);
+const ALLOWED_FILES = new Set([
+	"clients/extension-log.ts",
+	"clients/jscpd-client.ts",
+]);
 
 const CONSOLE_CALL =
 	/\bconsole\s*\.\s*(log|info|warn|error|debug|trace|dir|table)\s*\(/g;

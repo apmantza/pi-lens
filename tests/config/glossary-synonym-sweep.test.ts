@@ -935,7 +935,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.resolve(target)`, as its sibling records in this file spell it.
 		"clients/instance-registry-lock.ts": 9,
 		"clients/instance-registry.ts": 2,
-		"clients/jscpd-client.ts": 8,
+		// 8 -> 9: temporary investigation instrumentation adds one `path.basename`
+		// use in jscpdTrace (see READ_CI.md); remove with the investigation branch.
+		"clients/jscpd-client.ts": 9,
 		"clients/json-cache-read.ts": 4,
 		"clients/knip-client.ts": 26,
 		"clients/language-profile.ts": 14,

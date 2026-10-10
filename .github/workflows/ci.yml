@@ -520,6 +520,14 @@ jobs:
           # in `git status` and is cleaned up with the rest of the job's scratch
           # space regardless of how the job ends.
           PI_LENS_MEM_WATCH_SAMPLE_FILE: ${{ runner.temp }}/pi-lens-mem-watch-samples.log
+          # Throwaway instrumentation for the jscpd report-dir leak
+          # investigation: every real scan records its temp-dir create/remove
+          # here, so the leaked basename in the hygiene owner's assertion can be
+          # matched to the worker/file that created it. Children inherit both
+          # vars, so an MCP or real-pi child appends to the same file. Remove
+          # with the investigation branch.
+          PI_LENS_TEST_JSCPD_TRACE: '1'
+          PI_LENS_TEST_JSCPD_TRACE_FILE: ${{ runner.temp }}/jscpd-trace.log
         # #2042: the wrapper changes nothing about what runs and forwards the
         # child's exit code unchanged. It prints the host's memory low-water
         # mark and a verdict line, so the next `Killed npm test` / exit 137 —
@@ -540,6 +548,21 @@ jobs:
           PI_LENS_TEST_TIMEOUT_SCALE: '3'
           PI_LENS_TEST_NO_LOCK: '1'
         run: npm test -- tests/config/tmp-fixture-hygiene.test.ts
+
+      # Throwaway instrumentation for the jscpd report-dir leak investigation:
+      # surface every create/remove line the sharded run recorded, even when the
+      # hygiene owner reds (the very case this run must explain). Remove with the
+      # investigation branch.
+      - name: Dump jscpd tmp-dir trace
+        if: always()
+        run: |
+          f="${{ runner.temp }}/jscpd-trace.log"
+          if [ -f "$f" ]; then
+            echo "===== jscpd-trace ====="
+            cat "$f"
+          else
+            echo "jscpd-trace: no output (PI_LENS_TEST_JSCPD_TRACE was set on Run tests)"
+          fi
 
       # Listener input for #3215. The default reporter remains explicit above,
       # so this adds a file reporter in the same invocation and preserves the

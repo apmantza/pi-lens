@@ -72,6 +72,35 @@ const EMPTY_RESULT: JscpdResult = {
 
 const SCAN_TIMEOUT_MS = 30_000;
 
+/**
+ * Throwaway CI instrumentation (investigation branch): record the jscpd report
+ * directory's create and remove events when `PI_LENS_TEST_JSCPD_TRACE === "1"`,
+ * and do nothing otherwise. A leaked directory is the one with a create line and
+ * no remove line. Writes one `[jscpd-trace]` stderr line per event and, when
+ * `PI_LENS_TEST_JSCPD_TRACE_FILE` names a path, appends the same line there so a
+ * child process whose stderr the parent never drains (the MCP and real-pi
+ * harnesses) is still visible. Never throws into the scan.
+ */
+function jscpdTrace(phase: "create" | "removed", outDir: string): void {
+	if (process.env.PI_LENS_TEST_JSCPD_TRACE !== "1") return;
+	try {
+		const worker = (globalThis as { __vitest_worker__?: { filepath?: string } })
+			.__vitest_worker__;
+		const stack = (new Error().stack ?? "").split("\n").slice(1, 9).join(" | ");
+		const line =
+			`[jscpd-trace] ${phase} ${path.basename(outDir)}` +
+			` pid=${process.pid} ppid=${process.ppid}` +
+			` argv=${JSON.stringify(process.argv.slice(1, 3))}` +
+			` test=${worker?.filepath ?? "unknown"}` +
+			` stack=${stack}`;
+		process.stderr.write(`${line}\n`);
+		const traceFile = process.env.PI_LENS_TEST_JSCPD_TRACE_FILE;
+		if (traceFile) fs.appendFileSync(traceFile, `${line}\n`);
+	} catch {
+		// Instrumentation must never affect the scan.
+	}
+}
+
 /** jscpd's own config-file names, in its discovery order, checked at `cwd` only
  * (jscpd does not walk up). */
 const JSCPD_CONFIG_FILENAMES = [".jscpd.json", "jscpd.json"];
@@ -356,6 +385,7 @@ export class JscpdClient {
 		// reads any file a widget row's freshness is judged against.
 		const scannedAt = new Date().toISOString();
 		const outDir = mkdtempSync(`${os.tmpdir()}${path.sep}pi-lens-jscpd-`);
+		jscpdTrace("create", outDir);
 
 		// Build ignore pattern from shared exclusions + scanner-specific patterns.
 		const baseIgnores = [
@@ -482,11 +512,14 @@ export class JscpdClient {
 			this.log(`Scan error: ${err.message}`);
 			return { ...EMPTY_RESULT };
 		} finally {
+			let removed = false;
 			try {
 				fs.rmSync(outDir, { recursive: true, force: true });
+				removed = true;
 			} catch (err) {
 				void err;
 			}
+			if (removed) jscpdTrace("removed", outDir);
 		}
 	}
 

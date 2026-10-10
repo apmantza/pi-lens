@@ -163,6 +163,12 @@ export const EXEMPT_RAW_WRITE_FILES: Readonly<Record<string, string>> = {
 		"append-only NDJSON history file (appendCodeQualityWarningsHistory) that pi-lens never reads back itself — write-only observability for external tooling, so a torn trailing line has no functional read path to mislead",
 	"actionable-warnings.ts":
 		"append-only NDJSON history file (getActionableWarningsHistoryPath's writer), same write-only shape as code-quality-warnings.ts — no reader in this codebase to mislead",
+	// TEMPORARY investigation admission for the jscpd report-dir leak trace
+	// (see READ_CI.md): the single raw write is `fs.appendFileSync(traceFile,
+	// …)` behind `PI_LENS_TEST_JSCPD_TRACE === '1'`, a write-only CI trace with
+	// no reader in this codebase. Remove this row with the investigation branch.
+	"jscpd-client.ts":
+		"env-gated PI_LENS_TEST_JSCPD_TRACE append to a throwaway CI trace file (append-only, write-only observability, no production reader); temporary investigation instrumentation",
 
 	// --- Per-invocation scratch files: written and consumed synchronously
 	// within the SAME command/spawn, never re-read across a session boundary,
