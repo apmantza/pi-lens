@@ -1,0 +1,13 @@
+{
+	"tools": {
+		"symbol_search": {
+			"enabled": false
+		},
+		"module_report": {
+			"enabled": false
+		},
+		"read_enclosing": {
+			"enabled": false
+		}
+	}
+}

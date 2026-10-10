@@ -442,6 +442,41 @@ describe("global pi-lens config", () => {
 		expect(resolvePiLensFlag("no-lens-context", false, {})).toBe(false);
 	});
 
+	it("parses contextInjection.requirePreExistingFixes (#2967)", () => {
+		const home = makeTempHome();
+		const configPath = writeConfig(
+			home,
+			JSON.stringify({ contextInjection: { requirePreExistingFixes: false } }),
+		);
+		expect(loadPiLensGlobalConfig(configPath)).toEqual({
+			contextInjection: { requirePreExistingFixes: false },
+		});
+
+		// The sibling `enabled` key is parsed by the flag registry, not this
+		// hand-parser; the two must coexist in one section.
+		const bothHome = makeTempHome();
+		const bothPath = writeConfig(
+			bothHome,
+			JSON.stringify({
+				contextInjection: { enabled: false, requirePreExistingFixes: true },
+			}),
+		);
+		expect(loadPiLensGlobalConfig(bothPath)).toEqual({
+			contextInjection: { enabled: false, requirePreExistingFixes: true },
+		});
+
+		// Absent leaves the field to the reader's default (true).
+		const absentHome = makeTempHome();
+		const absentPath = writeConfig(
+			absentHome,
+			JSON.stringify({ contextInjection: { enabled: true } }),
+		);
+		expect(
+			loadPiLensGlobalConfig(absentPath)?.contextInjection
+				?.requirePreExistingFixes,
+		).toBeUndefined();
+	});
+
 	it("defaults context injection to enabled when unset", () => {
 		const home = makeTempHome();
 		const configPath = writeConfig(home, JSON.stringify({ widget: {} }));
@@ -760,6 +795,32 @@ describe("global pi-lens config", () => {
 			);
 			loadPiLensGlobalConfig(silentPath);
 			expect(warnedFor("format.mode")).toBe(false);
+		});
+
+		it("warns once on a present-but-invalid contextInjection.requirePreExistingFixes; absent stays silent", () => {
+			const home = makeTempHome();
+			const badPath = writeConfig(
+				home,
+				JSON.stringify({ contextInjection: { requirePreExistingFixes: "no" } }),
+			);
+			expect(loadPiLensGlobalConfig(badPath)).toEqual({
+				contextInjection: { requirePreExistingFixes: undefined },
+			});
+			expect(console.error).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"contextInjection.requirePreExistingFixes must be a boolean",
+				),
+			);
+
+			// Absent key stays silent (false-positive guard).
+			(console.error as ReturnType<typeof vi.fn>).mockClear();
+			const silentHome = makeTempHome();
+			const silentPath = writeConfig(
+				silentHome,
+				JSON.stringify({ contextInjection: { enabled: true } }),
+			);
+			loadPiLensGlobalConfig(silentPath);
+			expect(warnedFor("requirePreExistingFixes")).toBe(false);
 		});
 
 		it("warns once on a present-but-invalid dispatch.runnerTimeoutFloorMs; absent stays silent", () => {

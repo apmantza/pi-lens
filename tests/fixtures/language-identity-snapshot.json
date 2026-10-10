@@ -700,6 +700,16 @@
 			"reviewGraphGrammar": "kotlin",
 			"moduleReportGrammar": "kotlin"
 		},
+		".lean": {
+			"kind": "lean",
+			"kindLanguageId": "lean",
+			"lspId": "lean",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
 		".less": {
 			"kind": "css",
 			"kindLanguageId": "css",

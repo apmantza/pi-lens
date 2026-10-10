@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { TOOL_REGISTRY } from "../../clients/tool-config.js";
+import { removeTempDirSync } from "../clients/test-utils.js";
 import { withRealPi } from "../support/real-pi-harness.js";
 
 const realPiAvailable =
@@ -27,6 +31,21 @@ function latestTools(pi: {
 }): WireTool[] {
 	const tools = pi.providerObservations().at(-1)?.tools;
 	return (Array.isArray(tools) ? tools : []) as WireTool[];
+}
+
+/**
+ * Every user-role text the scripted provider saw. #2967: the session-start
+ * orientation reaches the model through the `context` hook as an injected
+ * user message, so it is observable here without a fake seam.
+ */
+function orientationText(pi: {
+	providerObservations(): ReadonlyArray<Record<string, unknown>>;
+}): string {
+	return pi
+		.providerObservations()
+		.flatMap((row) => (Array.isArray(row.userMessages) ? row.userMessages : []))
+		.filter((message): message is string => typeof message === "string")
+		.join("\n");
 }
 
 // flake-shape: real-process-spawn — these assertions require pi to load the built extension and report the provider payload across the process boundary
@@ -138,6 +157,92 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 			},
 		);
 	});
+
+	it("renders the session-start orientation from the enabled tool set (#2967)", async () => {
+		await withRealPi(
+			{
+				fixture: "tools-guidance",
+				script: "script.json",
+				env: { PI_LENS_TEST_MODE: "0" },
+			},
+			async (pi) => {
+				// A second start in this process runs full mode, which is where the
+				// orientation is published (the first start protects TUI latency).
+				await pi.newSession();
+				await pi.prompt("read the session-start orientation");
+				await pi.awaitAssistantTurn();
+				const text = orientationText(pi);
+				expect(text).toContain("pi-lens active");
+				// Every disabled tool is never mentioned ...
+				expect(text).not.toMatch(/\bsymbol_search\b/);
+				expect(text).not.toMatch(/\bmodule_report\b/);
+				expect(text).not.toMatch(/\bread_enclosing\b/);
+				// ... while the tool that stayed enabled is still advertised.
+				expect(text).toContain("read_symbol");
+				expect(text).toContain("lens_diagnostics");
+			},
+		);
+	}, 60_000);
+
+	it("keeps the orientation byte-stable for the default config (#2967)", async () => {
+		await withRealPi(
+			{
+				fixture: "scenario-1",
+				script: "script.json",
+				env: { PI_LENS_TEST_MODE: "0" },
+			},
+			async (pi) => {
+				await pi.newSession();
+				await pi.prompt("read the session-start orientation");
+				await pi.awaitAssistantTurn();
+				const text = orientationText(pi);
+				expect(text).toContain(
+					"symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.",
+				);
+				expect(text).toContain(
+					"blocking errors (including pre-existing) show inline and must be fixed.",
+				);
+			},
+		);
+	}, 60_000);
+
+	it("scopes the config-driven fix demand from the global config on the wire (#2967)", async () => {
+		// The key is global-only, so it reaches the child through the global
+		// config override, not a project `.pi-lens.json`. This is the load ->
+		// handleSessionStart -> orientation path the pure renderer test cannot
+		// connect.
+		const configRoot = mkdtempSync(join(tmpdir(), "pi-lens-2967-scoped-"));
+		const configPath = join(configRoot, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({ contextInjection: { requirePreExistingFixes: false } }),
+		);
+		try {
+			await withRealPi(
+				{
+					fixture: "scenario-1",
+					script: "script.json",
+					env: {
+						PI_LENS_TEST_MODE: "0",
+						PI_LENS_CONFIG_PATH: configPath,
+					},
+				},
+				async (pi) => {
+					await pi.newSession();
+					await pi.prompt("read the scoped session-start orientation");
+					await pi.awaitAssistantTurn();
+					const text = orientationText(pi);
+					expect(text).toContain("pi-lens active");
+					expect(text).toContain(
+						"blocking errors you introduce must be fixed; pre-existing ones are only reported.",
+					);
+					expect(text).not.toContain("including pre-existing");
+				},
+			);
+		} finally {
+			removeTempDirSync(configRoot);
+		}
+	}, 60_000);
 
 	it("does not emit a disabled-tools note for the default config", async () => {
 		await withRealPi(

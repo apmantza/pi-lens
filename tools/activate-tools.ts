@@ -58,18 +58,26 @@ export function createActivateToolsTool(
 ) {
 	const lazyNames = lazyTools.map((t) => t.name);
 	const lazyNameSet = new Set(lazyNames);
+	// #2967: the example must name a tool this build actually exposes. Derive it
+	// from `lazyNames` (already the enabled-only registry projection) instead of
+	// a hard-coded `lsp_navigation`; a disabled example would otherwise advertise
+	// a name the model cannot activate — the issue's own symptom. With no enabled
+	// situational tool the example is dropped rather than left stale.
+	const exampleName = lazyNames[0];
 
 	return {
 		name: "pi_lens_activate_tools" as const,
 		label: "Activate pi-lens Tools",
-		description:
-			'Activate registered situational tools for the next turn. Example: `{tools: ["lsp_navigation"]}`.',
+		description: exampleName
+			? `Activate registered situational tools for the next turn. Example: \`{tools: ["${exampleName}"]}\`.`
+			: "Activate registered situational tools for the next turn.",
 		promptSnippet: "Activate a situational tool",
 		parameters: Type.Object({
 			tools: Type.Array(Type.String({ enum: lazyNames }), {
 				minItems: 1,
-				description:
-					"Names of situational tools to activate, e.g. `lsp_navigation`.",
+				description: exampleName
+					? `Names of situational tools to activate, e.g. \`${exampleName}\`.`
+					: "Names of situational tools to activate.",
 			}),
 		}),
 		async execute(

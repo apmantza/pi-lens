@@ -71,6 +71,7 @@ export const LANGUAGE_POLICY: Record<FileKind, LanguagePolicy> = {
 	fsharp: { lspCapable: true },
 	java: { lspCapable: true },
 	kotlin: { lspCapable: true, startup: { defaults: ["ktlint"] } },
+	lean: { lspCapable: true },
 	swift: { lspCapable: true },
 	dart: { lspCapable: true },
 	lua: { lspCapable: true },
@@ -190,6 +191,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		runnerIds: ["lsp", "ktlint"],
 		filterKinds: ["kotlin"],
 	},
+	lean: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["lean"] },
 	swift: {
 		mode: "all",
 		runnerIds: ["lsp", "swiftlint"],

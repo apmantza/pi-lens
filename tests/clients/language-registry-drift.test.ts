@@ -669,6 +669,13 @@ describe("SCAN_LANGUAGE_PRIORITY (#2434 fold)", () => {
 		{ goldenKeys: [".prisma"], ids: ["prisma"] },
 	];
 
+	// Languages added after the historical LANG_EXTENSIONS capture are pinned
+	// separately rather than rewriting that baseline.
+	const ADDITIONAL_FAMILIES: Array<{
+		ids: LanguageId[];
+		extensions: string[];
+	}> = [{ ids: ["lean"], extensions: [".lean"] }];
+
 	it("covers exactly the golden table's keys, once each", () => {
 		const covered = FAMILIES.flatMap((family) => family.goldenKeys).sort();
 		expect(covered).toEqual([...golden.order].sort());
@@ -716,9 +723,10 @@ describe("SCAN_LANGUAGE_PRIORITY (#2434 fold)", () => {
 	});
 
 	it("SCAN_LANGUAGE_PRIORITY is exactly the families, family order AND intra-family id order both pinned", () => {
-		expect(SCAN_LANGUAGE_PRIORITY).toEqual(
-			FAMILIES.map((family) => family.ids),
-		);
+		expect(SCAN_LANGUAGE_PRIORITY).toEqual([
+			...FAMILIES.map((family) => family.ids),
+			...ADDITIONAL_FAMILIES.map((family) => family.ids),
+		]);
 	});
 
 	it("each family's projected extension set equals the golden value plus only its documented extras", () => {
@@ -732,6 +740,14 @@ describe("SCAN_LANGUAGE_PRIORITY (#2434 fold)", () => {
 				projected,
 				`family ${family.ids.join("+")} (golden ${family.goldenKeys.join("/")})`,
 			).toEqual(expected);
+		}
+	});
+
+	it("pins post-baseline language scan families to their registry extensions", () => {
+		for (const family of ADDITIONAL_FAMILIES) {
+			expect(
+				family.ids.flatMap((id) => extensionsForLanguage(id)).sort(),
+			).toEqual([...family.extensions].sort());
 		}
 	});
 
