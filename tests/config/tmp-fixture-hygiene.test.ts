@@ -1784,5 +1784,29 @@ describe("tmp-fixture-hygiene", () => {
 				fs.rmSync(dir, { recursive: true, force: true });
 			}
 		});
+
+		it("reads one creator per entry, keeps the first on a duplicate line, and is empty when absent", () => {
+			const file = path.join(
+				TMP_HYGIENE_HOME,
+				`tmp-hygiene-creators-probe-${process.pid}.log`,
+			);
+			fs.writeFileSync(
+				file,
+				"pi-lens-a\tfirst.test.ts\npi-lens-a\tsecond.test.ts\npi-lens-b\tthird.test.ts\n",
+			);
+			try {
+				expect([...tmpHygieneCreators(file).entries()].sort()).toEqual([
+					["pi-lens-a", "first.test.ts"],
+					["pi-lens-b", "third.test.ts"],
+				]);
+			} finally {
+				fs.rmSync(file, { force: true });
+			}
+			expect(
+				tmpHygieneCreators(
+					path.join(TMP_HYGIENE_HOME, "no-such-creators-record.log"),
+				).size,
+			).toBe(0);
+		});
 	});
 });
