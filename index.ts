@@ -2646,6 +2646,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 						handlerEnteredAt,
 						globalConfig,
 						projectConfig: loadPiLensProjectConfig(runtime.projectRoot),
+						// #2967: the session-start orientation renders from the set the
+						// registration predicate actually loaded, never a constant.
+						disabledToolNames,
 						// #2129: this call site is only reached for "primary"/
 						// "sequential-replacement" — a declined start returned above.
 						sessionStartClassification: sessionStartDecision.classification,

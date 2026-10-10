@@ -175,4 +175,35 @@ describe("pi_lens_activate_tools", () => {
 			added: ["ast_grep_search"],
 		});
 	});
+
+	it("derives the activation example from the enabled catalog (#2967)", () => {
+		// CATALOG is the enabled-only projection index.ts passes; with every
+		// entry enabled the example is the first one, never a hard-coded name.
+		const full = createActivateToolsTool({}, CATALOG);
+		expect(full.description).toContain("ast_grep_search");
+		expect(full.description).not.toContain("lsp_navigation");
+		const fullParamDescription = (
+			full.parameters as unknown as {
+				properties: { tools: { description: string } };
+			}
+		).properties.tools.description;
+		expect(fullParamDescription).toContain("ast_grep_search");
+
+		// The #2967 symptom: the example tool is disabled, so it must not be
+		// named even though other situational tools survive.
+		const withoutExample = createActivateToolsTool(
+			{},
+			CATALOG.filter((tool) => tool.name !== "ast_grep_search"),
+		);
+		expect(withoutExample.description).toContain("ast_grep_replace");
+		expect(withoutExample.description).not.toMatch(/\bast_grep_search\b/);
+		expect(withoutExample.description).not.toMatch(/\blsp_navigation\b/);
+	});
+
+	it("drops the example when the enabled catalog is empty (#2967)", () => {
+		const tool = createActivateToolsTool({}, []);
+		expect(tool.description).toBe(
+			"Activate registered situational tools for the next turn.",
+		);
+	});
 });

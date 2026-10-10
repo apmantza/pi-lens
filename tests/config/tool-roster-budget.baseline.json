@@ -1,8 +1,8 @@
 {
 	"pi": {
-		"budget": 20442,
-		"descriptionTotal": 3337,
-		"schemaTotal": 15246,
+		"budget": 20444,
+		"descriptionTotal": 3338,
+		"schemaTotal": 15247,
 		"tools": {
 			"ast_grep_outline": {
 				"description": 269,
@@ -37,8 +37,8 @@
 				"schema": 1295
 			},
 			"pi_lens_activate_tools": {
-				"description": 96,
-				"schema": 301
+				"description": 97,
+				"schema": 302
 			},
 			"project_report": {
 				"description": 364,
