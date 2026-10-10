@@ -12,7 +12,10 @@ vi.mock("../../../clients/extension-log.js", async (importOriginal) => ({
 	logExtension,
 }));
 const launchLSP = vi.fn(async () => ({}));
-vi.mock("../../../clients/lsp/launch.js", () => ({ launchLSP }));
+vi.mock("../../../clients/lsp/launch.js", () => ({
+	launchLSP,
+	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
+}));
 
 const dirs: string[] = [];
 const originalPiLensHome = process.env.PI_LENS_HOME;

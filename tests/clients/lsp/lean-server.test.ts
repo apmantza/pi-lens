@@ -4,7 +4,10 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { launchLSP } = vi.hoisted(() => ({ launchLSP: vi.fn() }));
-vi.mock("../../../clients/lsp/launch.js", () => ({ launchLSP }));
+vi.mock("../../../clients/lsp/launch.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/lsp/launch.js")>()),
+	launchLSP,
+}));
 
 import { LeanServer, LSP_SERVERS } from "../../../clients/lsp/server.js";
 import { removeTempDirSync } from "../test-utils.js";

@@ -30,6 +30,7 @@ vi.mock("../../../clients/installer/index.js", () => ({
 
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 
 // Suppress sync disk I/O from logLatency — prevents timeout under full-suite load
@@ -1145,6 +1146,11 @@ describe("lsp server policy", () => {
 		fs.mkdirSync(tsserverDir, { recursive: true });
 		const tsserverPath = path.join(tsserverDir, "tsserver.js");
 		fs.writeFileSync(tsserverPath, "// fake tsserver\n");
+		// #4299: the real wrapper requires a package version for an explicit compiler.
+		fs.writeFileSync(
+			path.join(tsserverDir, "..", "package.json"),
+			JSON.stringify({ name: "typescript", version: "5.9.3" }),
+		);
 
 		const nestedRoot = path.join(tmp, "cypress");
 		fs.mkdirSync(nestedRoot, { recursive: true });
@@ -1224,15 +1230,10 @@ describe("lsp server policy", () => {
 		const first = await TypeScriptServer.spawn(tree.tmp);
 		const second = await TypeScriptServer.spawn(tree.tmp);
 
-		expect(first?.initialization).toBeUndefined();
-		expect(second?.initialization).toBeUndefined();
-		expect(launchLSP).toHaveBeenCalledWith(
-			tree.lspPath,
-			["--stdio"],
-			expect.objectContaining({
-				env: expect.objectContaining({ TSSERVER_PATH: undefined }),
-			}),
-		);
+		// #4299: an unsuccessful repair cannot authorize implicit workspace fallback.
+		expect(first).toBeUndefined();
+		expect(second).toBeUndefined();
+		expect(launchLSP).not.toHaveBeenCalled();
 		expect(
 			ensureTool.mock.calls.filter(
 				(call) => call[0] === "typescript" && call[1]?.forceReinstall === true,

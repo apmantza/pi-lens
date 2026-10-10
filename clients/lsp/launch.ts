@@ -7,6 +7,7 @@
  * - Package manager execution
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
 	type ChildProcess,
 	execFileSync,
@@ -394,6 +395,17 @@ function findBinaryOnPath(
 	return undefined;
 }
 
+// #4299 R2-F1: every launcher in one service spawn inherits its file's
+// analysis-root permission, including async discovery and repair continuations.
+const lspProjectCodePermission = new AsyncLocalStorage<boolean>();
+
+export function withLspProjectCodePermission<T>(
+	allowed: boolean,
+	spawn: () => Promise<T>,
+): Promise<T> {
+	return lspProjectCodePermission.run(allowed, spawn);
+}
+
 let unknownProjectLocalNoticeGeneration = -1;
 
 type LspExecutionTrustRequest =
@@ -407,19 +419,15 @@ type LspExecutionTrustRequest =
 			command: string;
 			resolvedCommand: string;
 			cwd: string;
+			/** Effective compiler refusal, including foreign-root ownership. */
+			reason?: string;
 	  };
 
-/** Refuse project-code servers and project-local binaries through one trust seam. */
-export function refuseUntrustedLspExecution(
+/** Record one bounded trust refusal through the shared lsp-registry seam. */
+function recordUntrustedLspExecution(
 	request: LspExecutionTrustRequest,
+	trust: ReturnType<typeof getProjectTrustState>,
 ): void {
-	const trust = getProjectTrustState();
-	const needsTrust =
-		request.kind === "project-code-server"
-			? trust !== "trusted"
-			: trust === "unknown";
-	if (!needsTrust) return;
-
 	const generation = getDegradationLedgerGeneration();
 	const subject =
 		request.kind === "project-code-server"
@@ -435,16 +443,14 @@ export function refuseUntrustedLspExecution(
 				}
 			: {
 					field: request.kind,
-					resolved: isProjectLocalLspBinary(
-						request.resolvedCommand,
-						request.cwd,
-					),
 					trust,
 				};
 	recordDegradationOnce({
 		kind: "lsp-registry-decision",
 		subject,
-		reason: `LSP execution refused: ${request.kind} and project trust is ${trust}`,
+		reason:
+			(request.kind === "project-local-binary" ? request.reason : undefined) ??
+			`LSP execution refused: ${request.kind} and project trust is ${trust}`,
 		metadata,
 	});
 	if (unknownProjectLocalNoticeGeneration !== generation) {
@@ -460,11 +466,64 @@ export function refuseUntrustedLspExecution(
 			metadata: { field: request.kind },
 		});
 	}
+}
+
+/** Refuse project-code servers and project-local binaries through one trust seam. */
+export function refuseUntrustedLspExecution(
+	request: LspExecutionTrustRequest,
+): void {
+	const trust = getProjectTrustState();
+	const needsTrust =
+		request.kind === "project-code-server"
+			? trust !== "trusted"
+			: !admitProjectSuppliedTsserver(
+					request.resolvedCommand,
+					request.cwd,
+					true,
+				);
+	if (!needsTrust) return;
+
+	if (request.kind === "project-code-server")
+		recordUntrustedLspExecution(request, trust);
 	throw new SpawnFailureError(
 		"spawn-failed",
 		`LSP ${request.kind === "project-code-server" ? "project-code server" : "project-local binary"} refused: project trust is ${trust}`,
 		new Error(`project trust is ${trust}`),
 	);
+}
+
+/**
+ * #4296/#4299: admit the effective classic/native compiler or local launcher,
+ * never an unset hint that lets the
+ * wrapper resolve workspace code. Project code also requires session ownership;
+ * pi's trusted answer does not authorize an adopted project's compiler.
+ */
+export function admitProjectSuppliedTsserver(
+	tsserverPath: string | undefined,
+	cwd: string,
+	projectSupplied: boolean,
+	// Outside a spawn scope there is no root permission to read, so deny (#4296 R3-F1).
+	projectCodeAllowed = lspProjectCodePermission.getStore() ?? false,
+): string | undefined {
+	const trust = getProjectTrustState();
+	if (
+		tsserverPath &&
+		(!projectSupplied || (projectCodeAllowed && trust === "trusted"))
+	)
+		return tsserverPath;
+	recordUntrustedLspExecution(
+		{
+			kind: "project-local-binary",
+			command: tsserverPath ?? "tsserver.js",
+			resolvedCommand: tsserverPath ?? "tsserver.js",
+			cwd,
+			reason: tsserverPath
+				? "LSP execution refused: project compiler requires trusted session ownership"
+				: "LSP execution refused: no admitted absolute TypeScript compiler",
+		},
+		trust,
+	);
+	return undefined;
 }
 
 /**
@@ -732,12 +791,9 @@ export async function launchLSP(
 
 	// Built-in server commands have no config provenance to carry into the
 	// registry. Once PATH resolution selects a project-local installed binary,
-	// unknown host trust must still fail closed (#4248 R2-1). Global and managed
+	// trusted session ownership is required (#4248 R2-1, #4299 R2-F1). Global and managed
 	// fallbacks remain compatible because they resolve outside the project root.
-	if (
-		getProjectTrustState() === "unknown" &&
-		isProjectLocalLspBinary(spawnCommand, cwd)
-	) {
+	if (isProjectLocalLspBinary(spawnCommand, cwd)) {
 		refuseUntrustedLspExecution({
 			kind: "project-local-binary",
 			command,
