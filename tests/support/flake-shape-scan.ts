@@ -689,45 +689,72 @@ const SUPPORT_POPULATION_DETECTORS: readonly DetectorName[] = [
 	"never-settling-wait",
 ];
 
-let countsCache: Record<DetectorName, Record<string, number>> | undefined;
+let countsPromise:
+	| Promise<Record<DetectorName, Record<string, number>>>
+	| undefined;
+
+/**
+ * One macrotask turn. `@ast-grep/napi` releases a dropped tree's native
+ * memory from a finalizer that only runs once the event loop turns, so a
+ * synchronous pass over the ~1,400-file population holds every transient
+ * tree it parsed until the case ends (#3565; the same `setImmediate` turn
+ * `vi-mock-export-sweep.test.ts` and `project-trust-seam-ratchet.test.ts`
+ * already take). #4292 grew the population past the per-worker budget and
+ * this file peaked at 2,049 MB against 2,048 MB; one turn per file brings
+ * it back under the budget with byte-identical counts.
+ */
+function yieldToNapiFinalizer(): Promise<void> {
+	return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function buildCounts(): Promise<
+	Record<DetectorName, Record<string, number>>
+> {
+	const counts = Object.fromEntries(
+		DETECTOR_NAMES.map((name) => [name, {}]),
+	) as Record<DetectorName, Record<string, number>>;
+	const scanFile = (
+		absolute: string,
+		detectors: readonly DetectorName[],
+	): void => {
+		const file = testsRelative(absolute);
+		if (SCAN_INFRASTRUCTURE.has(file)) return;
+		// readWalkedFile: a path that vanished between the walk and the read
+		// is out of the population, not a finding (#3082).
+		const source = readWalkedFile(absolute);
+		if (source === undefined) return;
+		const context = scanContext(source);
+		for (const name of detectors) {
+			const hits = DETECTORS[name](file, source, context);
+			if (hits.length > 0) counts[name][file] = hits.length;
+		}
+	};
+	for (const absolute of testSourceFiles()) {
+		scanFile(absolute, DETECTOR_NAMES);
+		await yieldToNapiFinalizer();
+	}
+	// #2563: the support population — non-test helpers under tests/support/.
+	for (const absolute of supportHelperFiles()) {
+		scanFile(absolute, SUPPORT_POPULATION_DETECTORS);
+		await yieldToNapiFinalizer();
+	}
+	return counts;
+}
 
 /**
  * file → hit count, for every `tests/**\/*.test.ts` file and every non-test
  * `tests/support/**\/*.ts` helper (#2563) the detector flags.
+ *
+ * Async so the per-file event-loop turn ({@link yieldToNapiFinalizer}) can
+ * release each parsed tree's native memory while the population is walked;
+ * the counts are unchanged, only the peak RSS. The first call builds the
+ * shared promise, every later call awaits it.
  */
-export function countsByDetector(
+export async function countsByDetector(
 	detector: DetectorName,
-): Record<string, number> {
-	if (countsCache === undefined) {
-		const counts = Object.fromEntries(
-			DETECTOR_NAMES.map((name) => [name, {}]),
-		) as Record<DetectorName, Record<string, number>>;
-		const scanFile = (
-			absolute: string,
-			detectors: readonly DetectorName[],
-		): void => {
-			const file = testsRelative(absolute);
-			if (SCAN_INFRASTRUCTURE.has(file)) return;
-			// readWalkedFile: a path that vanished between the walk and the read
-			// is out of the population, not a finding (#3082).
-			const source = readWalkedFile(absolute);
-			if (source === undefined) return;
-			const context = scanContext(source);
-			for (const name of detectors) {
-				const hits = DETECTORS[name](file, source, context);
-				if (hits.length > 0) counts[name][file] = hits.length;
-			}
-		};
-		for (const absolute of testSourceFiles()) {
-			scanFile(absolute, DETECTOR_NAMES);
-		}
-		// #2563: the support population — non-test helpers under tests/support/.
-		for (const absolute of supportHelperFiles()) {
-			scanFile(absolute, SUPPORT_POPULATION_DETECTORS);
-		}
-		countsCache = counts;
-	}
-	return countsCache[detector];
+): Promise<Record<string, number>> {
+	countsPromise ??= buildCounts();
+	return (await countsPromise)[detector];
 }
 
 // ── Admission gate ──────────────────────────────────────────────────────────
