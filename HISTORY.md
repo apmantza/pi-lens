@@ -118,6 +118,23 @@ worktree, `--dryRunOnly` for reproductions (fixer and reviewer Probe hygiene
 sections, #3180); and the release-bump PR title format (release-qa skill's
 pre-bump dry-roll step, the 4.2.0 retitle).
 
+## 2026-10-10 — jscpd temp-dir leak retro (merge-policy row "causal premise from a hand-back")
+
+`JscpdClient.runScan` removes its `pi-lens-jscpd-*` report directory in a
+`finally`. A process killed before that point leaks the directory, and
+`tmp-fixture-hygiene` then reds unrelated PRs (#4122, #4285). #4133 found the
+leak through the real-pi harness. #4136's first round added a scan-setup guard
+(bee5dd747). Its second round reverted that guard as unrelated (12c3a0449) and
+isolated only the real-pi child's `TMPDIR`. Its class sweep read `none:`, so
+two members stayed open: the MCP harness child, which inherits the runner
+`TMPDIR` (reproduced), and the startup jscpd scan that real-bootstrap tests
+never drain (the leading CI suspect). #4292 was first framed as restoring a
+guard "a later merge dropped". The guard never reached master, and the
+investigation had refuted it as the CI cause. The premise came from a hand-back
+and nobody bisected it. Detection gaps went to #2912 (the hygiene owner names
+the filename prefix, not the creating test) and into #4292 (a census of
+child-spawning test harnesses).
+
 ## 2026-10-10 — review intake names the defect shape (AGENTS.md "Orchestration and delegated work")
 
 Why it exists: three findings in one session were routed as instances when
