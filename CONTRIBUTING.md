@@ -294,7 +294,7 @@ Ast-grep rules live in `rules/ast-grep-rules/rules/` (and vendored CodeRabbit ru
 1. Write a YAML rule file. See `docs/custom-rules.md` and the `pi-lens-write-ast-grep-rule` skill (`skills/pi-lens-write-ast-grep-rule/SKILL.md`).
 2. Every shipped rule must have a corresponding `<id>-test.yml` fixture in `rules/ast-grep-rules/rule-tests/`.
 3. Add the rule to `rules/ast-grep-rules/.sgconfig.yml` if it's not picked up automatically by `ruleDirs`.
-4. Run `npx ast-grep test -c rules/ast-grep-rules/.sgconfig.yml --skip-snapshot-tests` locally.
+4. Run `npx --no --package @ast-grep/cli -- ast-grep test -c rules/ast-grep-rules/.sgconfig.yml --skip-snapshot-tests` locally.
 5. If the rule is security/critical, consider adding it to `rules/rule-catalog.json`.
 6. Add a behavioral or validity test if the existing guards don't cover it.
 

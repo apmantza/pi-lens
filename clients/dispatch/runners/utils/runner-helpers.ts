@@ -52,7 +52,10 @@ import {
 } from "../../../package-manager.js";
 import { logLatency } from "../../../latency-logger.js";
 import { safeSpawnAsync } from "../../../safe-spawn.js";
-import { probeToolAsync } from "../../../tool-probe.js";
+import {
+	getIsolatedNpxSpawnOptions,
+	probeToolAsync,
+} from "../../../tool-probe.js";
 import { compareOrdinal } from "../../../string-utils.js";
 import {
 	getToolCommandSpec,
@@ -1928,9 +1931,15 @@ async function probeAstGrepCommandAsync(
 	let check: Awaited<ReturnType<typeof safeSpawnAsync>>;
 	let hostStallMs: number;
 	try {
-		check = await probeToolAsync(cmd, [...argsPrefix, "--version"], {
-			timeout: 5000,
-		});
+		check =
+			cmd === "npx"
+				? await safeSpawnAsync(cmd, [...argsPrefix, "--version"], {
+						...getIsolatedNpxSpawnOptions(),
+						timeout: 5000,
+					})
+				: await probeToolAsync(cmd, [...argsPrefix, "--version"], {
+						timeout: 5000,
+					});
 	} finally {
 		hostStallMs = sampler.stop();
 		sgSweepHostStallMs += hostStallMs;
@@ -2097,10 +2106,19 @@ export async function isSgAvailableAsync(): Promise<boolean> {
 			}
 		}
 
-		// 3. npx --no (cache-only, no silent download).
-		if (await probeAstGrepCommandAsync("npx", ["--no", "--", "ast-grep"])) {
+		// 3. npx --no (cache-only, no silent download). Name the package explicitly
+		// because the executable name alone resolves the unrelated ast-grep package.
+		if (
+			await probeAstGrepCommandAsync("npx", [
+				"--no",
+				"--package",
+				"@ast-grep/cli",
+				"--",
+				"ast-grep",
+			])
+		) {
 			sgCmd = "npx";
-			sgCmdArgs = ["--no", "--", "ast-grep"];
+			sgCmdArgs = ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"];
 			noteSgAvailable(startedAt, { source: "npx" });
 			return true;
 		}
@@ -2238,7 +2256,9 @@ export function getSgCommand(): { cmd: string; args: string[] } {
 	ensureCurrentSgGeneration();
 	return {
 		cmd: sgCmd ?? "npx",
-		args: sgCmdArgs.length ? sgCmdArgs : ["--no", "--", "ast-grep"],
+		args: sgCmdArgs.length
+			? sgCmdArgs
+			: ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"],
 	};
 }
 

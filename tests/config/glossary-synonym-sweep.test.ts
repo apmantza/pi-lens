@@ -1091,7 +1091,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/word-index.ts": 51,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
-		"tools/ast-grep-outline.ts": 8,
+		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution
+		// onto the shared `resolveHostToolPath` seam, so ast-grep-outline.ts drops
+		// its own `path` import and two `path.*` calls.
+		"tools/ast-grep-outline.ts": 5,
 		"tools/ast-grep-search.ts": 2,
 		"tools/effective-config.ts": 2,
 		"tools/lens-diagnostic-mark.ts": 6,
