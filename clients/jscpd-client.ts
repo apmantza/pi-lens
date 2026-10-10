@@ -357,30 +357,28 @@ export class JscpdClient {
 		const scannedAt = new Date().toISOString();
 		const outDir = mkdtempSync(`${os.tmpdir()}${path.sep}pi-lens-jscpd-`);
 
-		try {
-			// Build ignore pattern from shared exclusions + scanner-specific patterns.
-			// Keep setup inside this guard: the report directory already exists, and
-			// setup can read project-controlled ignore files (#4133).
-			const baseIgnores = [
-				...getExcludedDirGlobs(),
-				...getProjectIgnoreGlobs(cwd),
-				"**/*.md",
-				"**/*.txt",
-				"**/*.json",
-				"**/*.yaml",
-				"**/*.yml",
-				"**/*.toml",
-				"**/*.lock",
-				"**/*.test.*",
-				"**/*.spec.*",
-				"**/*.poc.test.*",
-				"**/__tests__/**",
-				"**/tests/**",
-			];
-			if (isTsProject) {
-				baseIgnores.push("**/*.js", "**/*.jsx");
-			}
+		// Build ignore pattern from shared exclusions + scanner-specific patterns.
+		const baseIgnores = [
+			...getExcludedDirGlobs(),
+			...getProjectIgnoreGlobs(cwd),
+			"**/*.md",
+			"**/*.txt",
+			"**/*.json",
+			"**/*.yaml",
+			"**/*.yml",
+			"**/*.toml",
+			"**/*.lock",
+			"**/*.test.*",
+			"**/*.spec.*",
+			"**/*.poc.test.*",
+			"**/__tests__/**",
+			"**/tests/**",
+		];
+		if (isTsProject) {
+			baseIgnores.push("**/*.js", "**/*.jsx");
+		}
 
+		try {
 			// Prefer a local/global-installed jscpd (any manager) over npx (#375).
 			const bin = await findNodeToolBinary("jscpd", cwd);
 			const { cmd, prefix } = bin
