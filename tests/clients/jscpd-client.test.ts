@@ -716,9 +716,11 @@ describe("jscpd-client in-flight ABA release (#1968)", () => {
 /**
  * #4133: `runScan` creates its report directory before any project-controlled
  * file is read. The ignore-pattern setup reads the project's `.gitignore` and
- * lens config, so it must sit inside the cleanup guard: a throw there must
- * still remove the directory. #4192's merge reverted this guard and dropped
- * its regression; this re-pins both.
+ * lens config, so it sits inside the cleanup guard: a throw there must still
+ * remove the directory. The guard is defence-in-depth — `getProjectIgnoreGlobs`
+ * already swallows IO and parse errors — and covers a future throwing read. It
+ * was reverted in-branch (`12c3a0449`) before PR #4136 merged, and its
+ * regression was dropped with it; this re-pins both.
  */
 describe("jscpd-client scan setup cleanup (#4133)", () => {
 	it("removes the report directory when scan setup throws", async () => {
@@ -753,6 +755,46 @@ describe("jscpd-client scan setup cleanup (#4133)", () => {
 			);
 		} finally {
 			ignoreGlobs.mockRestore();
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
+		}
+	});
+
+	it("creates the report directory under PI_LENS_TEST_JSCPD_TMPDIR when set", async () => {
+		// #4133: a harness that owns a jscpd-only root points the report
+		// directory there, so a process killed before the scan's `finally` leaves
+		// its orphan inside a root the harness sweeps instead of the shared
+		// tmpdir.
+		const { JscpdClient } = await import("../../clients/jscpd-client.js");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-report-scan-");
+		const { tmpDir: reportRoot } = setupTestEnvironment(
+			"pi-lens-jscpd-report-root-",
+		);
+		const previous = process.env.PI_LENS_TEST_JSCPD_TMPDIR;
+		process.env.PI_LENS_TEST_JSCPD_TMPDIR = reportRoot;
+		trackedRmSync.mockClear();
+		try {
+			const client = new JscpdClient(false) as unknown as {
+				scan: (
+					cwd: string,
+					minLines: number,
+					minTokens: number,
+					isTsProject: boolean,
+				) => Promise<{ success: boolean }>;
+				ensureAvailable: () => Promise<boolean>;
+				hasSourceFilesRecursive: (dir: string) => boolean;
+			};
+			vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+			vi.spyOn(client, "hasSourceFilesRecursive").mockReturnValue(true);
+
+			await client.scan(tmpDir, 5, 50, false);
+
+			expect(trackedRmSync).toHaveBeenCalledWith(
+				expect.stringContaining(`${reportRoot}${path.sep}pi-lens-jscpd-`),
+				{ recursive: true, force: true },
+			);
+		} finally {
+			if (previous === undefined) delete process.env.PI_LENS_TEST_JSCPD_TMPDIR;
+			else process.env.PI_LENS_TEST_JSCPD_TMPDIR = previous;
 			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
 		}
 	});

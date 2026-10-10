@@ -167,6 +167,24 @@ export async function drainBackgroundWritesForTests(): Promise<void> {
 }
 
 /**
+ * Drain in-flight jscpd scans started by the resident analyzer bootstrap before
+ * a test removes its fixture roots (#4133). A session-start jscpd scan is
+ * fire-and-forget; if the test file ends while one is still running, Vitest
+ * SIGTERMs the worker before the scan's `finally` removes its report directory
+ * and the `pi-lens-jscpd-*` entry is stranded in the shared tmpdir. The
+ * `JscpdClient.shutdown()` barrier (#3338) waits for it. `peek` resolves the
+ * already-loaded client without forcing a load, and the method is optional so a
+ * stub bootstrap double is a no-op rather than a crash.
+ */
+export async function drainResidentJscpdScans(): Promise<void> {
+	const { peekBootstrapClients } = await import("../../clients/bootstrap.js");
+	const client = peekBootstrapClients()?.jscpdClient as
+		| { shutdown?: () => Promise<void> }
+		| undefined;
+	await client?.shutdown?.();
+}
+
+/**
  * Drain deferred fixture producers before the final cleanup pass. Keeping
  * roots tracked until the last tick preserves the hygiene sweep's handle.
  * The known background writers are drained first unless `drainWrites` is

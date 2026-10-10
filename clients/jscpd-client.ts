@@ -76,6 +76,21 @@ const SCAN_TIMEOUT_MS = 30_000;
 const JSCPD_CONFIG_FILENAMES = [".jscpd.json", "jscpd.json"];
 
 /**
+ * Parent directory for the scan's `pi-lens-jscpd-*` report directory.
+ *
+ * `os.tmpdir()` normally. A harness that spawns a child which can be SIGKILLed
+ * before `runScan`'s `finally` runs sets `PI_LENS_TEST_JSCPD_TMPDIR` to a directory
+ * it owns: the orphaned report directory then lands inside that owned root and
+ * the harness's own teardown removes it, instead of stranding a
+ * `pi-lens-jscpd-*` entry in the shared tmpdir (#4133). Read at call time like
+ * the other lazy env seams; an empty value falls back to the tmpdir.
+ */
+function jscpdReportParentDir(): string {
+	const override = process.env.PI_LENS_TEST_JSCPD_TMPDIR?.trim();
+	return override && override.length > 0 ? override : os.tmpdir();
+}
+
+/**
  * The project's own jscpd config, or `null` when it ships none: a
  * `.jscpd.json`/`jscpd.json` file, or a `package.json` `jscpd` field. jscpd
  * discovers either unaided, but `--min-lines`/`--min-tokens`/`--ignore` on the
@@ -354,7 +369,9 @@ export class JscpdClient {
 		// #3600: stamp the read time at the top of the run body, before the scan
 		// reads any file a widget row's freshness is judged against.
 		const scannedAt = new Date().toISOString();
-		const outDir = mkdtempSync(`${os.tmpdir()}${path.sep}pi-lens-jscpd-`);
+		const outDir = mkdtempSync(
+			path.join(jscpdReportParentDir(), "pi-lens-jscpd-"),
+		);
 
 		try {
 			// Build ignore pattern from shared exclusions + scanner-specific patterns.
