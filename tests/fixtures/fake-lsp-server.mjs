@@ -696,6 +696,33 @@ function handle(raw) {
 	// capability gate is proved over the wire and not only in the negotiation
 	// unit. Off by default.
 	if (data.method === "textDocument/didSave") {
+		// #3405: a save-triggered server's WHOLE diagnose pass runs here and
+		// nowhere else (Expert recompiles the Mix project on didSave and on
+		// nothing else). `FAKE_LSP_PUBLISH_ON_SAVE=1` reproduces that shape: the
+		// fixture publishes a diagnostic only from this branch, so a real-init
+		// test reads the production consequence — the diagnostics a save-only
+		// server answers are reachable through pi-lens exactly when the save is.
+		if (process.env.FAKE_LSP_PUBLISH_ON_SAVE === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: {
+					uri: data.params?.textDocument?.uri,
+					diagnostics: [
+						{
+							severity: 1,
+							source: "fake-save",
+							code: "P3405",
+							message: "diagnostic published only after didSave",
+							range: {
+								start: { line: 0, character: 0 },
+								end: { line: 0, character: 1 },
+							},
+						},
+					],
+				},
+			});
+		}
 		if (process.env.FAKE_LSP_ECHO_DID_SAVE) {
 			send({
 				jsonrpc: "2.0",
