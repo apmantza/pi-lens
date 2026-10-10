@@ -206,7 +206,7 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 		);
 	}, 60_000);
 
-	it("scopes the pre-existing-fix demand from the global config on the wire (#2967)", async () => {
+	it("scopes the config-driven fix demand from the global config on the wire (#2967)", async () => {
 		// The key is global-only, so it reaches the child through the global
 		// config override, not a project `.pi-lens.json`. This is the load ->
 		// handleSessionStart -> orientation path the pure renderer test cannot
