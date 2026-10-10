@@ -16,6 +16,69 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.4.2] - 2026-10-10
+
+### Added
+
+- **pi-lens now fails closed on unknown project trust** — Under pi, when pi cannot confirm the project is trusted, pi-lens refuses to run project code and emits one notice per session. It withholds project-local tool binaries while keeping global and managed fallbacks available (#4268). It refuses built-in language servers that execute project code before discovery or installation (#4269). Project-sourced LSP commands, environment, initialization options, and local binaries require trust as well (#2372). The TypeScript server skips the project's own `tsserver.js` and native TypeScript 7 `tsc`, falling back to pi-lens-managed TypeScript instead (#4296). MCP and other non-pi hosts do not consult pi trust; their calling client owns workspace trust, so project tools stay available there (#4300).
+
+- **Built-in Lean 4 language support (refs #4119)** — `.lean` files are recognized and sent to the Lean language server using the `lean` LSP language id. In Lake projects, pi-lens launches `lake serve` from the detected project root, so Lake and elan honor the project's toolchain and environment. pi-lens does not install or manage Lean; install Lean and Lake separately and ensure `lake` is on `PATH`.
+
+- **Path-scoped rule policy** — Add `rules.<id>.ignorePaths` to skip a rule on matching project-relative paths and reclaim scan work (#4226).
+
+- **Analyse marked out-of-root edits as adopted projects.** An edit in a separate project gets LSP diagnostics from global servers, while project-local tools, linters and session bookkeeping stay isolated (refs #4242).
+
+- **`/lens-health` now reports the effective pi-lens tool surface**, including disabled tools and the host-managed bundled-skill boundary.
+
+### Changed
+
+- **Stale test-runner verdicts state their edit gap and re-queue a run.** When an async verdict is delivered for a file the agent has edited since the run started, the message names the file and how many edits behind it is and queues a re-run for the current version instead of presenting the old verdict as current.
+
+### Fixed
+
+- **The session-start orientation names only the tools pi-lens registered** (refs #2967). A tool disabled with `tools.<name>.enabled: false` is no longer advertised, and the `pi_lens_activate_tools` example is drawn from the enabled situational set. The orientation's pre-existing-error demand is configurable with `contextInjection.requirePreExistingFixes` (default unchanged).
+
+- **Expired session hand-offs now preserve activated tools** instead of dropping them when a successor is interrupted before startup (closes #4236). Test-only successor pending-window overrides are restricted to Vitest child processes.
+
+- **Duplicate pi session starts are ignored safely.** pi-lens now drops repeated `session_start` events at entry while preserving distinct reload, new, resume, and fork starts, and drains NDJSON logs before graceful shutdown (refs #2891).
+
+- **TypeScript no longer reports clean from its empty pre-index publish.**
+
+- **Require a BuildKit rule from the official Docker smoke server** (closes #3939) — The nightly smoke now uses the upstream rule-bearing fixture and discloses runners without `docker buildx` instead of accepting an empty diagnostic baseline. Credit: qiyangfan.
+
+- **Bridge reads survive a `/reload` on the TypeScript-source extension load.** A third-party read recorded after `/reload` (`pi -e index.ts`) now licenses the next edit instead of being falsely blocked with "Edit without read", without allowing a concurrent or stale activation to retarget the bridge (refs #4169, #4258).
+
+- **Ast-grep fallbacks use the official CLI package from an isolated cwd (#4193)** — Structural rule replacements, path searches, and CLI probes name `@ast-grep/cli` when direct binary resolution fails and run from a pi-lens-owned tools directory, so a project's `.npmrc` never reaches `npx`; relative `paths` resolve against the project before dispatch.
+
+- **Windows LSP auto-install now repairs missing shell commands.** Exit-code-1 startup failures are classified as missing tools only when the command or shim target is absent.
+
+- **Unicode-normalized edits now keep their raw target span** (closes #4265) — Full-width punctuation, smart quotes, dashes, and special spaces no longer produce a false “edit target not found” block.
+
+- **Subagent turn-end isolation** — a concurrent subagent no longer consumes the primary session's pending project analysis worklist or deferred findings. (refs #3613)
+
+### Internal
+
+<details>
+<summary>8 internal changes: tests, CI, tooling, and refactors</summary>
+
+- Pin the test home used by the skills package-filter coverage so host-installed skills cannot affect its results.
+
+- Require every PR `## Class sweep` to name the defect shape, quote the search that defines its population, and give a verdict, or say `none: <reason>` (#4273).
+
+- The nightly tool-smoke LSP capability census builds the in-place compiled twins immediately before it runs, so vitest no longer aborts on the stale-build guard (refs #4302).
+
+- Pre-push and lane-check now rebuild a missing or stale bundled `dist/` dependency before governance suites (#4239).
+
+- Restore the nightly LSP smoke harness's trusted-project host boundary so project-local server fixtures exercise their intended launch paths.
+
+- Added the grouped experimental `LspCapabilities` facade over `LSPService` and migrated production LSP callers behind it without changing behavior.
+
+- Centralize analysis-root classification and thread adopted-root no-op gates through root-keyed tool-result writers (refs #4242).
+
+- Pinned workflow download redirects to HTTPS and made late formatter resync ownership explicit for the Sonar quality gate.
+
+</details>
+
 ## [4.4.1] - 2026-10-09
 
 ### Added
