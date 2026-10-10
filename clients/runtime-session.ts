@@ -2086,7 +2086,7 @@ export function renderSessionStartGuidance(
 		"📌 pi-lens active — automated checks run on every edit/write; " +
 		(requirePreExistingFixes
 			? "blocking errors (including pre-existing) show inline and must be fixed."
-			: "blocking errors from your edits show inline and must be fixed; pre-existing ones are reported but not required.");
+			: "blocking errors you introduce must be fixed; pre-existing ones are only reported.");
 
 	const bullets: string[] = [];
 	if (isEnabled("lens_diagnostics")) {

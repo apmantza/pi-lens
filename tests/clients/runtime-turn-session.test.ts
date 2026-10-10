@@ -1396,10 +1396,96 @@ describe("context injection framing", () => {
 		}).join("\n");
 		expect(scoped).not.toContain("including pre-existing");
 		expect(scoped).toContain(
-			"pre-existing ones are reported but not required.",
+			"blocking errors you introduce must be fixed; pre-existing ones are only reported.",
 		);
 		// The default is the shipped wording.
 		expect(renderSessionStartGuidance().join("\n")).toBe(shipped);
+	});
+
+	it("keeps the scoped orientation inside the shipped prose budget (#2967)", () => {
+		// 750 is the shipped budget (asserted for the default above). The scoped
+		// branch is tightened to FIT it rather than raising the bound, so the
+		// config-only variant cannot quietly outgrow the default.
+		expect(
+			renderSessionStartGuidance({ requirePreExistingFixes: false }).join("\n")
+				.length,
+		).toBeLessThan(750);
+	});
+
+	it("still advertises read_enclosing when it is the only enabled read-substitute (#2967)", () => {
+		const text = renderSessionStartGuidance({
+			disabledToolNames: ["symbol_search", "module_report", "read_symbol"],
+		}).join("\n");
+		// The read_enclosing-only arm composes its own funnel unit; without it the
+		// whole bullet would vanish even though a read substitute is enabled.
+		expect(text).toContain("read_enclosing");
+		expect(text).not.toMatch(/\bread_symbol\b/);
+		expect(text).not.toMatch(/\bsymbol_search\b/);
+		expect(text).not.toMatch(/\bmodule_report\b/);
+	});
+
+	it("emits no empty read-substitute bullet when all four are disabled (#2967)", () => {
+		const text = renderSessionStartGuidance({
+			disabledToolNames: [
+				"symbol_search",
+				"module_report",
+				"read_symbol",
+				"read_enclosing",
+			],
+		}).join("\n");
+		expect(text).not.toContain("undefined");
+		expect(text).not.toContain("→");
+		expect(text).not.toMatch(/\bsymbol_search\b/);
+		expect(text).not.toMatch(/\bread_symbol\b/);
+		// Neighbouring bullets survive.
+		expect(text).toContain("lens_diagnostics");
+	});
+
+	it("emits no situational bullet when all three members are disabled (#2967)", () => {
+		const text = renderSessionStartGuidance({
+			disabledToolNames: [
+				"lsp_navigation",
+				"ast_grep_search",
+				"ast_grep_replace",
+			],
+		}).join("\n");
+		expect(text).not.toContain("Situational");
+		expect(text).not.toMatch(/\blsp_navigation\b/);
+		expect(text).not.toMatch(/\bast_grep_search\b/);
+		expect(text).not.toMatch(/\bast_grep_replace\b/);
+		expect(text).toContain("read_symbol");
+	});
+
+	it("omits the tool-list heading when every bullet's tool is disabled (#2967)", () => {
+		const text = renderSessionStartGuidance({
+			disabledToolNames: [
+				"lens_diagnostics",
+				"symbol_search",
+				"module_report",
+				"read_symbol",
+				"read_enclosing",
+				"lsp_navigation",
+				"ast_grep_search",
+				"ast_grep_replace",
+			],
+		}).join("\n");
+		// The header line still stands; only the empty list is dropped.
+		expect(text).toContain("📌 pi-lens active");
+		expect(text).not.toContain("Key tools");
+	});
+
+	it("pins the shipped all-enabled orientation literal byte-for-byte (#2967)", () => {
+		// The pre-#2967 module constant, quoted verbatim from master: the renderer
+		// must reproduce it exactly when nothing is disabled (`const` equality
+		// with its own render is not evidence).
+		const expected =
+			"📌 pi-lens active — automated checks run on every edit/write; blocking errors (including pre-existing) show inline and must be fixed.\n" +
+			"Key tools (see each tool's own description for args):\n" +
+			"• lens_diagnostics — source=session reads cache; empty cache ≠ clean; use source=lsp scope=paths for changed files with absent or stale findings (aggregate hosts: lens(action=diagnostics)).\n" +
+			"• symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.\n" +
+			"• Situational (activate via pi_lens_activate_tools): lsp_navigation, ast_grep_search, ast_grep_replace. Use ast_grep_search with dump=true to inspect AST nodes.";
+		expect(SESSION_START_GUIDANCE).toEqual([expected]);
+		expect(renderSessionStartGuidance()).toEqual([expected]);
 	});
 });
 

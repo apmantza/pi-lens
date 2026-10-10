@@ -1,7 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { TOOL_REGISTRY } from "../../clients/tool-config.js";
+import { removeTempDirSync } from "../clients/test-utils.js";
 import { withRealPi } from "../support/real-pi-harness.js";
 
 const realPiAvailable =
@@ -200,6 +204,44 @@ describe.skipIf(!realPiAvailable)("real pi RPC: tools.<name>.enabled", () => {
 				);
 			},
 		);
+	}, 60_000);
+
+	it("scopes the pre-existing-fix demand from the global config on the wire (#2967)", async () => {
+		// The key is global-only, so it reaches the child through the global
+		// config override, not a project `.pi-lens.json`. This is the load ->
+		// handleSessionStart -> orientation path the pure renderer test cannot
+		// connect.
+		const configRoot = mkdtempSync(join(tmpdir(), "pi-lens-2967-scoped-"));
+		const configPath = join(configRoot, "config.json");
+		writeFileSync(
+			configPath,
+			JSON.stringify({ contextInjection: { requirePreExistingFixes: false } }),
+		);
+		try {
+			await withRealPi(
+				{
+					fixture: "scenario-1",
+					script: "script.json",
+					env: {
+						PI_LENS_TEST_MODE: "0",
+						PI_LENS_CONFIG_PATH: configPath,
+					},
+				},
+				async (pi) => {
+					await pi.newSession();
+					await pi.prompt("read the scoped session-start orientation");
+					await pi.awaitAssistantTurn();
+					const text = orientationText(pi);
+					expect(text).toContain("pi-lens active");
+					expect(text).toContain(
+						"blocking errors you introduce must be fixed; pre-existing ones are only reported.",
+					);
+					expect(text).not.toContain("including pre-existing");
+				},
+			);
+		} finally {
+			removeTempDirSync(configRoot);
+		}
 	}, 60_000);
 
 	it("does not emit a disabled-tools note for the default config", async () => {
