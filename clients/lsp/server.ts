@@ -2679,7 +2679,11 @@ export const TypeScriptServer: LSPServerInfo = {
 		}
 		if (tsserverPath) source = "managed";
 
-		// Use absolute path and proper environment
+		// The installed wrapper selects its child from the
+		// `initialization.tsserver.path` returned below; the legacy
+		// `TSSERVER_PATH` variable is set too, but this wrapper version does not
+		// read it. Both name the same admitted path, so neither an older wrapper
+		// that reads the variable nor this one can fork a different compiler.
 		const env = await getToolEnvironment();
 		const proc = await launchLSP(lspPath, ["--stdio"], {
 			cwd: root,

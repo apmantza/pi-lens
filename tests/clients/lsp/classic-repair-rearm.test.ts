@@ -28,7 +28,8 @@ vi.mock("../../../clients/installer/index.js", () => ({
 	findManagedToolBinary: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../../clients/lsp/launch.js", () => ({
+vi.mock("../../../clients/lsp/launch.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/lsp/launch.js")>()),
 	launchLSP,
 	refuseUntrustedLspExecution: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,

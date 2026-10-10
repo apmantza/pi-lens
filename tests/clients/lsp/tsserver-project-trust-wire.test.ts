@@ -26,12 +26,14 @@ import {
 	getDegradationSummary,
 } from "../../../clients/degradation-ledger.js";
 
-const { compiler, wrapper, selectedRoot, initOverride } = vi.hoisted(() => ({
-	compiler: { value: "tsc" as string | undefined },
-	wrapper: { value: "" },
-	selectedRoot: { value: "" },
-	initOverride: { value: undefined as Record<string, unknown> | undefined },
-}));
+const { compiler, wrapper, selectedRoot, initOverride, selectedServer } =
+	vi.hoisted(() => ({
+		compiler: { value: "tsc" as string | undefined },
+		wrapper: { value: "" },
+		selectedRoot: { value: "" },
+		selectedServer: { value: "typescript" },
+		initOverride: { value: undefined as Record<string, unknown> | undefined },
+	}));
 // Installation/discovery is the external tool boundary. The launcher, wrapper,
 // trust, service, client, root ownership and degradation store remain real.
 vi.mock("../../../clients/installer/index.js", async (importOriginal) => ({
@@ -52,10 +54,12 @@ vi.mock("../../../clients/lsp/config.js", async (importOriginal) => ({
 			? { initializationOptions: initOverride.value }
 			: undefined,
 	getServersForFileWithConfig: () => [
-		{ ...TypeScriptServer, root: async () => selectedRoot.value },
+		{
+			...getServerById(selectedServer.value)!,
+			root: async () => selectedRoot.value,
+		},
 	],
 }));
-const TypeScriptServer = getServerById("typescript")!;
 const require = createRequire(import.meta.url);
 const realWrapper = require.resolve("typescript-language-server/lib/cli.mjs");
 const originalCwd = process.cwd();
@@ -170,6 +174,7 @@ beforeEach(() => {
 	wrapper.value = realWrapper;
 	compiler.value = "tsc";
 	initOverride.value = undefined;
+	selectedServer.value = "typescript";
 	resetLSPConfigStateForTests();
 	resetDegradationLedger();
 	resetLspLaunchAvailabilityGeneration();
@@ -334,6 +339,36 @@ describe("real wrapper effective compiler trust (#4299)", () => {
 					]),
 				);
 			}
+		},
+	);
+	it.each([false, true])(
+		"HTML registry launcher inherits root permission (adopted=%s) (#4299 R2-F1)",
+		async (adopted) => {
+			const session = path.join(tmp, "session");
+			project(session);
+			const root = adopted ? path.join(tmp, "adopted") : session;
+			project(root);
+			const file = path.join(root, "index.html");
+			fs.writeFileSync(file, "<p>hello</p>");
+			const hostile = nativeCompilerTree(root, "html-launcher");
+			const suffix = process.platform === "win32" ? ".cmd" : "";
+			const command = path.join(
+				root,
+				"node_modules",
+				".bin",
+				`vscode-html-language-server${suffix}`,
+			);
+			fs.copyFileSync(`${hostile.tsc}${suffix}`, command);
+			fs.chmodSync(command, 0o755);
+			selectedServer.value = "html";
+			expect(resolveAnalysisRoot(file, session)).toBe(
+				adopted ? "adopted" : "session",
+			);
+			process.chdir(session);
+			setProjectTrustState("trusted");
+			const spawned = await attach(session, root, file);
+			if (!adopted) expect(spawned).toBeDefined();
+			expect(fs.existsSync(hostile.marker)).toBe(!adopted);
 		},
 	);
 	it("forces an absolute managed compiler through the real wrapper under unknown trust", async () => {

@@ -1,6 +1,8 @@
 /**
- * #4296: the classic TypeScript wrapper forks the file named by `TSSERVER_PATH`
- * and `initialization.tsserver.path`. `findTsserverPath` used to prefer the
+ * #4296: the classic TypeScript wrapper forks the compiler named by
+ * `initialization.tsserver.path`, which pi-lens supplies. pi-lens also sets the
+ * legacy `TSSERVER_PATH` environment variable, but the installed 5.3.0 wrapper
+ * reads only the initialization option. `findTsserverPath` used to prefer the
  * project's own `node_modules/typescript/lib/tsserver.js` under EVERY trust
  * state, so a cloned repository could ship arbitrary code that pi-lens forked
  * under `unknown` trust (the launcher-only #4268 gate classifies the wrapper,
@@ -9,10 +11,11 @@
  *
  * Real seams only: `setProjectTrustState`/`resetProjectTrust` (the host trust
  * seam) and the production `TypeScriptServer.spawn` / `LSPService`. The child
- * launcher (`clients/lsp/launch.js`) is doubled so the selected `TSSERVER_PATH`
- * can be executed as a tiny marker script instead of a real language server —
- * the double models the wrapper's fork and nothing here claims the real
- * binaries speak the protocol.
+ * launcher (`clients/lsp/launch.js`) is doubled so the selected compiler can be
+ * executed as a tiny marker script instead of a real language server — the
+ * double reads the launch-time `TSSERVER_PATH` that pi-lens sets to the same
+ * admitted path the real wrapper receives as `initialization.tsserver.path`, and
+ * nothing here claims the real binaries speak the protocol.
  */
 import { createRequire } from "node:module";
 import * as fs from "node:fs";
@@ -55,8 +58,8 @@ vi.mock("../../../clients/lsp/config.js", async (importOriginal) => ({
 const dirs: string[] = [];
 const originalCwd = process.cwd();
 
-/** A JS one-liner the doubled launcher executes, proving which
- * `TSSERVER_PATH` the production spawn handed to the wrapper. */
+/** A JS one-liner the doubled launcher executes, proving which admitted
+ * compiler the production spawn handed to the wrapper. */
 function markerScript(markerPath: string, label: string): string {
 	return `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, ${JSON.stringify(label)});\n`;
 }
@@ -150,10 +153,12 @@ beforeEach(() => {
 	getToolEnvironmentMock.mockClear();
 	logExtensionMock.mockClear();
 	getServersForFileWithConfigMock.mockReset();
-	// Model the classic wrapper's fork: execute the selected TSSERVER_PATH so the
-	// marker file records which file pi-lens handed over. The fixture is a
-	// CommonJS script, so the double loads it in-process; a real language-server
-	// child belongs in the lsp-spawn-heavy lane.
+	// Model the classic wrapper's fork: execute the admitted path pi-lens put on
+	// the launch environment. The installed 5.3.0 wrapper actually resolves its
+	// child from `initialization.tsserver.path`; `tsserverPathOf` asserts that
+	// returned option, and production sets both from the same admitted path. The
+	// fixture is a CommonJS script, so the double loads it in-process; a real
+	// language-server child belongs in the lsp-spawn-heavy lane.
 	launchLSPMock.mockImplementation(async (_command, _args, options) => {
 		let tsserver = (
 			options as { env?: Record<string, string | undefined> } | undefined
