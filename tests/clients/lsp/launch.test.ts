@@ -98,8 +98,10 @@ describe("lsp launch", () => {
 			expect(results[0].status).toBe("rejected");
 			expect(results[1].status).toBe("fulfilled");
 			expect(spawnMock).toHaveBeenCalledTimes(1);
-			await launch(); // leaving either scope restores normal trusted ownership
-			expect(spawnMock).toHaveBeenCalledTimes(2);
+			// Outside any scope there is no root permission, so a project-local
+			// launcher is refused even under trusted trust (#4296 R3-F1).
+			await expect(launch()).rejects.toThrow();
+			expect(spawnMock).toHaveBeenCalledTimes(1);
 		} finally {
 			resetProjectTrust();
 			removeTempDirSync(root);
