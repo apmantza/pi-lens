@@ -228,13 +228,34 @@ describe("project tsserver.js trust gate (#4296)", () => {
 			await import("../../../clients/project-trust.js");
 		setProjectTrustState("trusted");
 		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const { withLspProjectCodePermission } =
+			await import("../../../clients/lsp/launch.js");
+
+		// LSPService wraps every spawn in a permission scope; outside one the
+		// default denies project code (#4296 R3-F1), so drive the session-root case.
+		const spawned = await withLspProjectCodePermission(true, () =>
+			TypeScriptServer.spawn(tree.root, { allowInstall: false }),
+		);
+
+		expect(tsserverPathOf(spawned)).toBe(tree.hostileTsserver);
+		expect(fs.existsSync(tree.hostileMarker)).toBe(true);
+	});
+
+	// Guards #4296 R3-F1: the permission store once defaulted to allow outside a
+	// spawn scope, so any future spawn path that missed the scope ran project code.
+	it("does not run the project's tsserver.js outside a spawn scope, even under trusted trust", async () => {
+		const tree = buildTsTree("trusted");
+		const { setProjectTrustState } =
+			await import("../../../clients/project-trust.js");
+		setProjectTrustState("trusted");
+		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
 
 		const spawned = await TypeScriptServer.spawn(tree.root, {
 			allowInstall: false,
 		});
 
-		expect(tsserverPathOf(spawned)).toBe(tree.hostileTsserver);
-		expect(fs.existsSync(tree.hostileMarker)).toBe(true);
+		expect(tsserverPathOf(spawned)).not.toBe(tree.hostileTsserver);
+		expect(fs.existsSync(tree.hostileMarker)).toBe(false);
 	});
 
 	it("skips the project's tsserver.js under untrusted trust", async () => {

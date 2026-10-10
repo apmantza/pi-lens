@@ -502,7 +502,8 @@ export function admitProjectSuppliedTsserver(
 	tsserverPath: string | undefined,
 	cwd: string,
 	projectSupplied: boolean,
-	projectCodeAllowed = lspProjectCodePermission.getStore() ?? true,
+	// Outside a spawn scope there is no root permission to read, so deny (#4296 R3-F1).
+	projectCodeAllowed = lspProjectCodePermission.getStore() ?? false,
 ): string | undefined {
 	const trust = getProjectTrustState();
 	if (
