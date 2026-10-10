@@ -170,6 +170,8 @@ const PREDICATE_NEEDLES = [
 ] as const;
 
 describe("#1488 — one auxiliary-role predicate, one vocabulary", () => {
+	// A whole-tree scan: the default 5 s timed out twice on the loaded Windows
+	// advisory runner (#4233, #4307), like the other sweeps that set 30 s.
 	it("finds no inlined role predicate outside the seam", () => {
 		const files = population();
 		assertNonEmptyScan(
@@ -190,7 +192,7 @@ describe("#1488 — one auxiliary-role predicate, one vocabulary", () => {
 				"second exhaustive classification reappeared. Ask isAuxiliary() from " +
 				"clients/lsp/server-traits.ts or declare the union there (#1488).",
 		).toEqual([]);
-	});
+	}, 30_000);
 
 	it("detects every spelling of an inlined predicate, including unlisted ones", () => {
 		const POSITIVE_CONTROLS = [
