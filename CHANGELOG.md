@@ -16,6 +16,31 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.4.3] - 2026-10-11
+
+### Added
+
+- **Adopted out-of-root projects now get global, config-free per-file linters** — when an edit lands in a marked project outside the session root, pi-lens admits only the explicit admission list of dispatch runners that read no project config and cannot execute project code (`php-lint`, `fish-indent`), and only from global or pi-lens-managed binaries; the advisory now says the LSP plus these per-file linters run. Executable paths inside the adopted or session root are refused, including PATH entries and symlink targets. Formatting, autofix, other dispatch runners, whole-project scanners, and automatic tests stay off (refs #4242).
+
+### Fixed
+
+- **LSP warms again in the published package (closes #4314)** — 4.4.2 loaded the LSP stack through a computed `import()` that esbuild could not inline, so every session logged `LSP warm failed: Cannot find module './lsp/capabilities.js'` and the LSP-backed tools went dead. The import is a literal again, and a packaging test now fails the build if any shipped file dynamic-imports something the tarball does not carry.
+
+### Internal
+
+<details>
+<summary>4 internal changes: tests, CI, tooling, and refactors</summary>
+
+- **tmp-hygiene attributes a leaked root to the test file that created it** — the tmp-root interposer records one creator per entry, the serialized owner's failure message names that file beside the prefix owner, and an entry with no observed creator is labelled `created outside the test process, or the creators record was unreadable` instead of taking a prefix owner's blame. (#2912)
+
+- Add an end-to-end witness that a save-only LSP server's diagnostics reach pi-lens exactly when `textDocument/didSave` is sent: the fake stdio server publishes only from its `didSave` branch (`FAKE_LSP_PUBLISH_ON_SAVE`), and a real `createLSPClient` reads the seeded diagnostic after a save touch and none without one (refs #3405).
+
+- Keep a killed scanner scan's report directory inside a harness-owned root: one shared seam (`PI_LENS_TEST_SCANNER_TMPDIR`, `clients/scanner-temp-root.ts`) now parents jscpd, gitleaks, opengrep, and trivy report directories, and the MCP and real-pi test harnesses apply owned scanner roots after caller environment overrides, so even a TMPDIR-overriding child SIGKILLed mid-scan no longer strands a `pi-lens-<scanner>-*` entry in the shared tmpdir and reds `tmp-fixture-hygiene` (refs #4133). The scan-setup cleanup guard is retained as defence-in-depth.
+
+- Flake-shape ratchet: yield the event loop between files so `@ast-grep/napi` releases each parsed tree's native memory, cutting the test file's peak RSS from ~2,049 MB (over the 2,048 MB per-worker budget) to ~313 MB (refs #4292).
+
+</details>
+
 ## [4.4.2] - 2026-10-10
 
 ### Added
