@@ -2,12 +2,11 @@
 import { createLazyImport } from "./lazy-import.js";
 
 type LspModule = typeof import("./lsp/capabilities.js");
-// Keep this import behind the async loader's boundary. `lsp/index.ts` imports
-// warm-attach, while capabilities imports the completed LSP implementation;
-// exposing the literal to the static graph recreates that initialization cycle.
-const LSP_CAPABILITIES_MODULE = ["./lsp", "capabilities.js"].join("/");
+// The specifier must stay a string literal: esbuild inlines only literal
+// dynamic imports, and the published package has no dist/lsp/ tree for a
+// computed one to load (#4314). tests/packaging.test.ts pins this on the bundle.
 const lazyLsp = createLazyImport<LspModule>(
-	() => import(LSP_CAPABILITIES_MODULE),
+	() => import("./lsp/capabilities.js"),
 );
 
 export function warmLspService(): Promise<LspModule> {

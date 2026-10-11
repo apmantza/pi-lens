@@ -21,6 +21,10 @@ module.exports = {
 				path: "^(?:\\./)?clients/",
 				circular: true,
 				dependencyTypesNot: ["dynamic-import"],
+				// A dynamic import anywhere in the cycle breaks the static
+				// initialization loop; `dependencyTypesNot` above sees only the
+				// cycle's first edge (#4314: lsp-lazy's literal import).
+				viaOnly: { dependencyTypesNot: ["dynamic-import"] },
 			},
 		},
 		{
