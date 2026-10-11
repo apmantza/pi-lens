@@ -10,6 +10,7 @@ import {
 	LAZY_NATIVE_PACKAGES,
 } from "../scripts/lib/host-provided-deps.mjs";
 import yaml from "../clients/deps/js-yaml.js";
+import { stripSource } from "./support/sweep-kit.js";
 import { USER_PROFILE_PATH_RE } from "./support/user-profile-path-pattern.js";
 
 // These tests pin the published-package contract: pi-lens ships a precompiled
@@ -601,6 +602,68 @@ describe("bundled dist entry shape (#335)", () => {
 		);
 		expect(matches).toEqual([]);
 	});
+
+	// #4314: 4.4.2 shipped `import(["./lsp", "capabilities.js"].join("/"))`.
+	// esbuild cannot inline a computed specifier, so the bundle loaded
+	// dist/lsp/capabilities.js at runtime, a file no build has ever produced,
+	// and LSP warm failed in every session. Every dynamic import in a shipped
+	// file must be a literal that resolves inside the tarball, or an absolute
+	// pathToFileURL(...) load of a native/wasm package.
+	it.runIf(built)(
+		"every dynamic import in a shipped file resolves inside the tarball",
+		() => {
+			const distRoot = path.join(root, "dist");
+			const globToRegExp = (glob: string) =>
+				new RegExp(
+					`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")}$`,
+				);
+			const shippedPatterns = (pkg.files ?? [])
+				.filter((f) => f.startsWith("dist/"))
+				.map((f) => f.slice("dist/".length));
+			const isShipped = (rel: string) =>
+				shippedPatterns.some((p) =>
+					p.endsWith("/") ? rel.startsWith(p) : globToRegExp(p).test(rel),
+				);
+			const shippedJs = (
+				fs.readdirSync(distRoot, { recursive: true }) as string[]
+			)
+				.map((f) => f.split(path.sep).join("/"))
+				.filter((rel) => rel.endsWith(".js") && isShipped(rel));
+			expect(shippedJs).toContain("index.js");
+
+			const problems: string[] = [];
+			for (const rel of shippedJs) {
+				// Comments blanked (bundled doc comments say "a dynamic `import()`");
+				// string contents kept, because the specifier is the evidence.
+				const code = stripSource(
+					fs.readFileSync(path.join(distRoot, rel), "utf8"),
+					{ strings: "keep" },
+				);
+				for (const m of code.matchAll(/\bimport\(\s*([^)]{0,80})/g)) {
+					const arg = m[1] ?? "";
+					const literal = /^(["'`])([^"'`]*)\1/.exec(arg);
+					if (!literal) {
+						if (!/^pathToFileURL\d*\(/.test(arg)) {
+							problems.push(`${rel}: computed import(${arg.slice(0, 40)})`);
+						}
+						continue;
+					}
+					const spec = literal[2] ?? "";
+					if (!spec.startsWith(".")) continue;
+					const target = path.posix.normalize(
+						path.posix.join(path.posix.dirname(rel), spec),
+					);
+					if (
+						!isShipped(target) ||
+						!fs.existsSync(path.join(distRoot, target))
+					) {
+						problems.push(`${rel}: import("${spec}") is not in the tarball`);
+					}
+				}
+			}
+			expect(problems).toEqual([]);
+		},
+	);
 });
 
 describe("tsconfig.dist.json", () => {

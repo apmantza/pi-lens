@@ -138,6 +138,13 @@ describe("dependency boundary governance", () => {
 		// `instance-reaper`) once the shorter one was gone — not new coupling.
 		// `file-utils.js` is still on that remaining cycle, which is why the
 		// resolver must stay off it. Reduction stays tracked in #2125.
+		//
+		// #4314: 12 -> 5, ZERO entries added. no-client-cycles now skips any
+		// cycle that a dynamic import closes (`viaOnly.dependencyTypesNot`),
+		// which the rule's first-edge-only `dependencyTypesNot` always meant. All
+		// seven dropped entries carry a dynamic-import edge; two were already
+		// stale. This is what lets clients/lsp-lazy.ts keep the literal
+		// `import("./lsp/capabilities.js")` that esbuild has to see.
 		const baseline = parseJson5(
 			readFileSync(
 				resolve(repoRoot, ".dependency-cruiser-known-violations.json"),
@@ -145,6 +152,6 @@ describe("dependency boundary governance", () => {
 			),
 		) as unknown[];
 
-		expect(baseline).toHaveLength(12);
+		expect(baseline).toHaveLength(5);
 	}, 30_000);
 });
