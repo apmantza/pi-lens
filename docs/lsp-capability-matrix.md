@@ -170,15 +170,15 @@ carries the named admission until then.
 | typescript | typescript-language-server | push-only | silent | empty-first | 3 | dev+ci |
 | markdown | marksman | push-only | silent | direct | 3 | ci |
 | lua | lua-language-server | push-only | silent | direct | 3 | dev+ci |
-| python | pyright | push-only | publishes-versioned | direct | 2 | dev+ci |
+| python | pyright | push-only | publishes-versioned | unknown | 2 | dev+ci |
 | jedi | jedi-language-server (alt of python) | push-only | publishes-versioned | direct | 2 | ci |
-| yaml | yaml-language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
-| shell | bash-language-server | push-only | publishes-versioned | direct | 2 | dev+ci |
-| dockerfile | docker-langserver | push-only | publishes-unversioned | direct | 2* | dev+ci |
+| yaml | yaml-language-server | push-only | publishes-unversioned | unknown | 2* | dev+ci |
+| shell | bash-language-server | push-only | publishes-versioned | unknown | 2 | dev+ci |
+| dockerfile | docker-langserver | push-only | publishes-unversioned | unknown | 2* | dev+ci |
 | dockerfile-official | docker-language-server (official) | push-only | publishes-versioned | direct | 2 | dev+ci |
 | toml | taplo | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | terraform | terraform-ls | push-only | publishes-unversioned | empty-first | 2* | dev+ci |
-| prisma | @prisma/language-server | push-only | publishes-unversioned | direct | 2* | dev+ci |
+| prisma | @prisma/language-server | push-only | publishes-unversioned | unknown | 2* | dev+ci |
 | php | intelephense | push-only | publishes-unversioned | empty-first | 2* | dev+ci |
 | zig | zls | push-only | publishes-unversioned | direct | 2* | dev+ci |
 | vue | @vue/language-server | push-only | unknown | unknown | 2/3? | dev+ci |
@@ -274,7 +274,7 @@ Telemetry only — never a CI gate. Compares each probed server's observed
 marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
-- **[marked-not-silent]** wait-policy/strategies.ts marks "typescript" silentOnClean:true but this run observed publishes-unversioned — the marker may be stale (too pessimistic; cascade is skipping a wait the server would have resolved with a real publish)
+_None observed as of the last probe run._
 
 ## Capability matrix refresh state (nightly-generated)
 
@@ -283,5 +283,5 @@ date-based `direct` expiry (#3401) and consecutive-night `idle-eviction`
 counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"typescript":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1}},"first-publish":{"clojure":{"firstMissed":"2026-10-11"},"dart":{"firstMissed":"2026-10-11"},"dockerfile":{"firstMissed":"2026-10-10"},"prisma":{"firstMissed":"2026-10-10"},"python":{"firstMissed":"2026-10-10"},"shell":{"firstMissed":"2026-10-10"},"yaml":{"firstMissed":"2026-10-10"},"zig":{"firstMissed":"2026-10-11"}}}
+{"first-publish":{"clojure":{"firstMissed":"2026-10-11"},"dart":{"firstMissed":"2026-10-11"},"zig":{"firstMissed":"2026-10-11"}}}
 ```
