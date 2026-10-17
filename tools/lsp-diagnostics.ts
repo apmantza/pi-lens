@@ -67,7 +67,7 @@ import { classifyCascadeWaitTier } from "../clients/lsp/wait-policy/index.js";
 import { attemptTsserverSyncDiagnostics } from "../clients/lsp/tsserver-sync.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import { demoteInferredProjectDiagnostics } from "../clients/lsp/inferred-project.js";
-import { normalizeMapKey } from "../clients/path-utils.js";
+import { normalizeMapKey, resolveHostToolPath } from "../clients/path-utils.js";
 import {
 	countRetainedSuppressedRows,
 	isBlocking,
@@ -468,6 +468,9 @@ export function createLspDiagnosticsTool(
 				concurrency?: number;
 				waitMs?: number;
 				serverScope?: string;
+				// #4577 R2-2: internal provenance, set only by
+				// `tools/lens-diagnostics.ts` when it injects its own cwd default.
+				pathAlreadyResolved?: boolean;
 			};
 			const severity = (typedParams.severity ?? "all") as string;
 			const cwd = ctx.cwd ?? process.cwd();
@@ -534,17 +537,15 @@ export function createLspDiagnosticsTool(
 				// scalar `path` route's own bounded walk (#3965) — reaching the
 				// per-file collector verbatim counted a `failed` outcome for the
 				// directory and silently dropped its whole subtree.
-				// #3160/#3182: `path.resolve(cwd, entry)` folds dot segments (and
-				// separators) structurally — it ignores `cwd` whenever `entry` is
-				// already absolute, so the old `path.isAbsolute` ternary is
-				// redundant. `normalizeMapKey` then adopts on-disk CASING where the
-				// path exists — an agent-typed, possibly mis-cased `paths` entry
-				// must key `reconcileScanDiagnostics`'s widget-state write the same
-				// way a canonical writer (clients/pipeline.ts's ctx.filePath) or the
-				// #3160-fixed lens_diagnostic_mark reader would. `path.resolve`
-				// stays required for the relative→absolute step: `normalizeMapKey`
-				// folds dot segments itself since #3184, but never resolves against
-				// `cwd` (a cwd fold there broke every monorepo, #2490).
+				// #4577 M2: each entry is a host-supplied tool path, so the
+				// relative→absolute step is the shared host resolver
+				// (`resolveHostToolPath`: `~`/`~/`, `file://`, `@` prefix, unicode
+				// spaces), which also ignores `cwd` whenever the entry is already
+				// absolute. `normalizeMapKey` still needs it — it never resolves
+				// against `cwd` (a cwd fold there broke every monorepo, #2490) — and
+				// then adopts on-disk CASING so an agent-typed, possibly mis-cased
+				// entry keys `reconcileScanDiagnostics`'s widget-state write the same
+				// way a canonical writer (clients/pipeline.ts's ctx.filePath) does.
 				const expanded = await expandPathsToFiles(cwd, rawPaths);
 				if (expanded.files.length === 0) {
 					// A requested directory with no eligible file (empty, unreadable,
@@ -601,7 +602,25 @@ export function createLspDiagnosticsTool(
 			// `reconcileScanDiagnostics`, whose `normalizeEphemeralMapKey` key
 			// derivation folds neither dot segments nor casing. Same expression as
 			// :444 so both modes of this tool write under ONE key per file.
-			const absPath = normalizeMapKey(path.resolve(cwd, rawPath));
+			// #4577 M2: the entry is a host-supplied tool path like any other, so it
+			// resolves through the shared host resolver (`~`/`~/` expansion,
+			// `file://`, `@` prefix, unicode spaces). `normalizeMapKey` then adopts
+			// on-disk CASING where the path exists — an agent-typed, possibly
+			// mis-cased `path` entry must key `reconcileScanDiagnostics`'s
+			// widget-state write the same way a canonical writer
+			// (clients/pipeline.ts's ctx.filePath) does. A bare `path.resolve(cwd,
+			// rawPath)` pinned `~/x` under the session cwd, a path that cannot
+			// exist (#4576).
+			// #4577 R2-2: an internally generated default (`scope=workspace`'s
+			// injected cwd) is already an absolute identity, so it skips the
+			// resolver: folding its bytes named a sibling that does not exist and
+			// failed the whole scan. `normalizeMapKey` still applies — it folds no
+			// unicode spaces, only separators, dot segments and on-disk casing.
+			const absPath = normalizeMapKey(
+				typedParams.pathAlreadyResolved === true
+					? rawPath
+					: resolveHostToolPath(rawPath, cwd),
+			);
 
 			let stat: fs.Stats;
 			try {
@@ -2451,7 +2470,7 @@ async function expandPathsToFiles(
 	const directories: string[] = [];
 	const seenFileKeys = new Set<string>();
 	for (const entry of rawPaths) {
-		const abs = normalizeMapKey(path.resolve(cwd, entry));
+		const abs = normalizeMapKey(resolveHostToolPath(entry, cwd));
 		let stat: fs.Stats | undefined;
 		try {
 			stat = fs.statSync(abs);

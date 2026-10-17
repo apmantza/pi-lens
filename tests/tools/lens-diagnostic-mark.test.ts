@@ -17,6 +17,7 @@ import {
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
 import {
 	createCaseAliasFixture,
+	pinTestHome,
 	removeTempDirSync,
 } from "../clients/test-utils.js";
 
@@ -507,5 +508,42 @@ describe("lens_diagnostic_mark's suppress record names its call (#4187 R4-1)", (
 		);
 		expect(result.isError).toBeFalsy();
 		expect(recordedEntries).toEqual([]);
+	});
+});
+
+/**
+ * #4577 M2: `path` is a host-supplied tool path, so it resolves through the
+ * shared host resolver. A bare `path.resolve(cwd, filePath)` turned `~/x` into
+ * `<cwd>/~/x`, the read at the top of the tool failed, and the disposition was
+ * refused for a file that exists.
+ */
+describe("lens_diagnostic_mark path resolution (#4577 M2)", () => {
+	it("resolves a ~ path to $HOME, not under the cwd", async () => {
+		const home = path.join(tmpDir, "home");
+		const homeFile = path.join(home, "proj", "tilde.ts");
+		fs.mkdirSync(path.dirname(homeFile), { recursive: true });
+		fs.writeFileSync(homeFile, "const a = 1;\nconst target = bad();\n");
+		const restoreHome = pinTestHome(home);
+		try {
+			expect(os.homedir()).toBe(home);
+			const result = await run({
+				filePath: "~/proj/tilde.ts",
+				line: 2,
+				message: "bad call",
+				rule: "no-bad",
+				tool: "eslint",
+				disposition: "suppress",
+			});
+			expect(result.isError).toBeFalsy();
+			// The comment landed in the HOME file the agent named: the pre-fix
+			// join edited `<cwd>/~/proj/tilde.ts`, which does not exist, so the
+			// tool refused the disposition entirely.
+			expect(fs.readFileSync(homeFile, "utf-8")).toContain(
+				"// pi-lens-ignore: no-bad",
+			);
+			expect(fs.existsSync(path.join(tmpDir, "~"))).toBe(false);
+		} finally {
+			restoreHome();
+		}
 	});
 });

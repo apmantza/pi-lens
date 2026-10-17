@@ -41,7 +41,12 @@ import {
 	getProjectDataDir,
 	getProjectIgnoreMatcher,
 } from "../../clients/file-utils.js";
-import { normalizeFilePath } from "../../clients/path-utils.js";
+import {
+	normalizeFilePath,
+	resolveHostToolPath,
+} from "../../clients/path-utils.js";
+import { pinTestHome } from "./test-utils.js";
+import { runPipeline } from "../../clients/pipeline.js";
 import { resolveAnalysisRoot } from "../../clients/analysis-root.js";
 import {
 	getVerifiedPathAttributionGuessCount,
@@ -5835,6 +5840,225 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 			} else {
 				process.env.PILENS_DATA_DIR = previousDataDir;
 			}
+			env.cleanup();
+		}
+	});
+});
+
+/**
+ * #4576: `~` on a host-supplied tool path. The tool_call seam
+ * (`resolveToolCallFilePath` -> `resolveHostToolPath`) expands it, but the
+ * tool_result seam used a bare `path.resolve`, so `~/proj/a.ts` became
+ * `<projectRoot>/~/proj/a.ts` — a path that never existed — and that phantom
+ * reached runner dispatch (biome `internalError/io`, then a synthetic
+ * `coverage-unavailable` notice for a file the agent never touched).
+ *
+ * HOME/USERPROFILE are pinned to a directory below the test tmp root so
+ * `os.homedir()` points there: the real maintainer home is never read or
+ * written.
+ */
+describe("host tool path resolution on the tool_result side (#4576)", () => {
+	function callDeps(runtime: RuntimeCoordinator, event: unknown) {
+		return {
+			event,
+			ctx: { cwd: runtime.projectRoot },
+			lensEnabled: true,
+			getFlag: (name: string) => name === "no-lsp" || name === "no-complexity",
+			dbg: () => {},
+			runtime,
+			cacheManager: new CacheManager(false),
+			ensureLSPConfigInitialized: async () => {},
+			updateLspStatus: () => {},
+			resetLSPService: () => {},
+		} as never;
+	}
+	function resultDeps(runtime: RuntimeCoordinator, event: unknown) {
+		return {
+			event,
+			getFlag: (name: string) => name === "no-lsp" || name === "no-complexity",
+			dbg: () => {},
+			runtime,
+			cacheManager: new CacheManager(false),
+			biomeClient: {},
+			ruffClient: {},
+			metricsClient: {},
+			resetLSPService: () => {},
+			readGuard: runtime.readGuard,
+			agentBehaviorRecord: () => [],
+			formatBehaviorWarnings: () => "",
+		} as never;
+	}
+	async function writeThroughRealSeams(
+		runtime: RuntimeCoordinator,
+		toolCallId: string,
+		spelling: string,
+	) {
+		const input = { path: spelling, content: "export const value = 1;\n" };
+		await runHandlerExpectingNoThrow(() =>
+			handleToolCall(
+				callDeps(runtime, { toolName: "write", toolCallId, input }),
+			),
+		);
+		await handleToolResult(
+			resultDeps(runtime, {
+				toolName: "write",
+				toolCallId,
+				input,
+				content: [{ type: "text", text: "ok" }],
+			}),
+		);
+	}
+	/** The `filePath` every runner dispatch was handed, in call order. */
+	function dispatchedPaths(): string[] {
+		return vi
+			.mocked(runPipeline)
+			.mock.calls.map(([ctx]) => (ctx as { filePath?: string }).filePath ?? "");
+	}
+
+	it("dispatches the expanded home path, never the phantom <root>/~/ path", async () => {
+		const env = setupTestEnvironment("pi-lens-4576-tilde-");
+		// The fixture HOME sits under the checkout, not under os.tmpdir():
+		// `isPiOwnedTempPath` treats every `<tmp>/pi-*` root as pi-lens
+		// internal, and pi-lens would then skip the file for a reason unrelated
+		// to the path this test pins. `process.cwd()` is the repo root, which
+		// the mkdtemp-parent census exempts.
+		const homeRoot = fs.mkdtempSync(
+			path.join(process.cwd(), ".probe-4576-home-"),
+		);
+		const home = path.join(homeRoot, "home");
+		const projectRoot = path.join(env.tmpDir, "workspace");
+		const realFile = path.join(home, "proj", "src", "tilde.ts");
+		fs.mkdirSync(path.dirname(realFile), { recursive: true });
+		fs.mkdirSync(projectRoot, { recursive: true });
+		fs.writeFileSync(path.join(home, "proj", "package.json"), "{}\n");
+		fs.writeFileSync(realFile, "export const value = 1;\n");
+		const restoreHome = pinTestHome(home);
+		const runPipelineMock = vi.mocked(runPipeline);
+		runPipelineMock.mockReset();
+		runPipelineMock.mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		} as never);
+		try {
+			// The pin is live before the handler runs: a stale HOME would make
+			// every assertion below pass against the wrong directory.
+			expect(os.homedir()).toBe(home);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = projectRoot;
+			const phantom = path.join(projectRoot, "~", "proj", "src", "tilde.ts");
+
+			await writeThroughRealSeams(
+				runtime,
+				"call-4576-tilde",
+				"~/proj/src/tilde.ts",
+			);
+
+			expect(dispatchedPaths()[0]).toBe(realFile);
+			// The phantom path is where the pre-fix resolver landed. No runner
+			// may ever be dispatched for it: it is what produced the ghost
+			// biome `internalError/io` and the synthetic coverage notice.
+			expect(dispatchedPaths()).not.toContain(phantom);
+			expect(
+				dispatchedPaths().some((p) => p.includes(`${path.sep}~${path.sep}`)),
+			).toBe(false);
+		} finally {
+			restoreHome();
+			removeTempDirSync(homeRoot);
+			env.cleanup();
+		}
+	});
+
+	// #4577 N1: `~/x` is the spelling whose behaviour CHANGED, and the case
+	// above drives it end to end. `~user/x` did NOT change (pi expands only `~`
+	// and `~/`, and the pre-fix ternary also resolved a named-user tilde
+	// against the base), so this is an agreement witness, not a regression
+	// test: it reds if the two seams ever diverge again, which is the whole
+	// defect #4576 fixed.
+	it("leaves a ~user path resolved against the base, as the tool_call seam does", async () => {
+		const env = setupTestEnvironment("pi-lens-4577-resolver-");
+		const home = path.join(env.tmpDir, "home");
+		const projectRoot = path.join(env.tmpDir, "workspace");
+		const userFile = path.join(projectRoot, "~user", "proj", "a.ts");
+		fs.mkdirSync(home, { recursive: true });
+		fs.mkdirSync(path.dirname(userFile), { recursive: true });
+		fs.writeFileSync(userFile, "export const a = 1;\n");
+		const restoreHome = pinTestHome(home);
+		const runPipelineMock = vi.mocked(runPipeline);
+		runPipelineMock.mockReset();
+		runPipelineMock.mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		} as never);
+		try {
+			expect(os.homedir()).toBe(home);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = projectRoot;
+			await writeThroughRealSeams(runtime, "call-4577-user", "~user/proj/a.ts");
+			expect(dispatchedPaths()[0]).toBe(userFile);
+		} finally {
+			restoreHome();
+			env.cleanup();
+		}
+	});
+
+	// PIN, not a regression test: a bare `~` resolves to the home DIRECTORY, so
+	// no write result can target it and the handler has no effect to observe.
+	// The pin keeps the resolver's third spelling from drifting silently.
+	it("pins ~ resolving to the home directory itself", () => {
+		const env = setupTestEnvironment("pi-lens-4577-resolver-");
+		const home = path.join(env.tmpDir, "home");
+		const cwd = path.join(env.tmpDir, "workspace");
+		fs.mkdirSync(home, { recursive: true });
+		fs.mkdirSync(cwd, { recursive: true });
+		const restoreHome = pinTestHome(home);
+		try {
+			expect(os.homedir()).toBe(home);
+			expect(resolveHostToolPath("~", cwd)).toBe(home);
+		} finally {
+			restoreHome();
+			env.cleanup();
+		}
+	});
+
+	// #4577 (Greptile P1): a bash-derived synthetic write's path came FROM disk,
+	// so its bytes are the identity. Re-resolving it through the host-tool
+	// resolver folded U+202F to a space and dispatched `src/a b.ts` — a file that
+	// does not exist — for a write that landed at `src/a\u202Fb.ts`. The
+	// recovery caller states the provenance (`_pathAlreadyResolved`); nothing
+	// re-detects it downstream.
+	it("dispatches a recovered write's byte-exact path, never the folded spelling", async () => {
+		const env = setupTestEnvironment("pi-lens-4577-recovered-");
+		const projectRoot = path.join(env.tmpDir, "workspace");
+		const writtenFile = path.join(projectRoot, "src", "a\u202Fb.ts");
+		const foldedFile = path.join(projectRoot, "src", "a b.ts");
+		fs.mkdirSync(path.dirname(writtenFile), { recursive: true });
+		fs.writeFileSync(writtenFile, "export const a = 1;\n");
+		const runPipelineMock = vi.mocked(runPipeline);
+		runPipelineMock.mockReset();
+		runPipelineMock.mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		} as never);
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = projectRoot;
+			await handleToolResult(
+				resultDeps(runtime, {
+					toolName: "bash",
+					toolCallId: "call-4577-recovered",
+					input: { command: "tee 'src/a\u202Fb.ts'" },
+					content: [{ type: "text", text: "export const a = 1;" }],
+				}),
+			);
+			expect(dispatchedPaths()).toContain(writtenFile);
+			expect(dispatchedPaths()).not.toContain(foldedFile);
+		} finally {
 			env.cleanup();
 		}
 	});

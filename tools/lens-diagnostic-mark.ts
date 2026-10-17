@@ -51,7 +51,7 @@ import {
 } from "../clients/diagnostic-dispositions.js";
 import { insertSuppressComment } from "../clients/dispatch/suppress-writer.js";
 import { getMutationBridge } from "../clients/mutation-bridge.js";
-import { normalizeMapKey } from "../clients/path-utils.js";
+import { normalizeMapKey, resolveHostToolPath } from "../clients/path-utils.js";
 import { resolveLensToolName } from "../clients/tool-config.js";
 import type { LineageHandle } from "../clients/session-scope.js";
 import {
@@ -325,9 +325,11 @@ export function createLensDiagnosticMarkTool(
 				};
 			}
 
-			const absPath = path.isAbsolute(filePathArg)
-				? filePathArg
-				: path.resolve(cwd, filePathArg);
+			// #4577 M2: `path` is a host-supplied tool path, so it resolves through
+			// the shared host resolver (`~`/`~/` expansion, `file://`, `@` prefix,
+			// unicode spaces). The bare join pinned `~/x` under the cwd and then
+			// failed to read a file that does exist (#4576).
+			const absPath = resolveHostToolPath(filePathArg, cwd);
 
 			let content: string;
 			try {

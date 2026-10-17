@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { removeTempDirSync } from "../clients/test-utils.js";
+import { pinTestHome, removeTempDirSync } from "../clients/test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { CacheManager } from "../../clients/cache-manager.js";
 import {
@@ -1862,5 +1862,46 @@ describe("lsp_navigation workspaceDiagnostics delivery gate (#1634)", () => {
 				toolName: "lsp_navigation",
 			}),
 		);
+	});
+});
+
+/**
+ * #4577 M2: `path` is a host-supplied tool path, so it resolves through the
+ * shared host resolver. A bare `path.resolve(ctx.cwd, path)` turned `~/x` into
+ * `<cwd>/~/x`, so the server was asked about a document nothing had opened.
+ * The `rename_file` destination (`newFilePath`) keeps its bare join: it is a
+ * mutation target, filed as #4578.
+ */
+describe("lsp_navigation path resolution (#4577 M2)", () => {
+	it("resolves a ~ path to $HOME, not under the cwd", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-nav-tilde-"));
+		const home = path.join(root, "home");
+		const filePath = path.join(home, "proj", "refs.ts");
+		fs.mkdirSync(path.dirname(filePath), { recursive: true });
+		fs.writeFileSync(filePath, "const a = normalizeMapKey('x');\n");
+		const restoreHome = pinTestHome(home);
+		try {
+			expect(os.homedir()).toBe(home);
+			const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+			await tool.execute(
+				"refs-tilde",
+				{
+					operation: "references",
+					path: "~/proj/refs.ts",
+					line: 1,
+					character: 12,
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: path.join(home, "proj") },
+			);
+			const references = (
+				mocked.service as { references: ReturnType<typeof vi.fn> }
+			).references;
+			expect(references.mock.calls[0]?.[0]).toBe(filePath);
+		} finally {
+			restoreHome();
+			removeTempDirSync(root);
+		}
 	});
 });

@@ -347,6 +347,28 @@ export function createTempFile(
 	return filePath;
 }
 
+/**
+ * Point `os.homedir()` at `home` for the rest of the test and return the undo.
+ *
+ * `homedir()` reads `HOME` (Windows: `USERPROFILE`) on every call, so pinning
+ * both is what makes a `~` path expand inside a temp root instead of the
+ * maintainer's real home. The caller restores in a `finally`: a failing
+ * assertion must not leave the process pointed at a temp directory that the
+ * next test then reads.
+ */
+export function pinTestHome(home: string): () => void {
+	const previousHome = process.env.HOME;
+	const previousUserProfile = process.env.USERPROFILE;
+	process.env.HOME = home;
+	process.env.USERPROFILE = home;
+	return () => {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
+	};
+}
+
 /** How a connect to a Unix socket path ends: `connected` when a server
  *  listens there, otherwise the errno code (a stale socket or a regular file
  *  refuses with `ECONNREFUSED`). */

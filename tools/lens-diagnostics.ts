@@ -53,6 +53,7 @@ import {
 	normalizeFilePath,
 	normalizeMapKey,
 	realpathOrResolve,
+	resolveHostToolPath,
 } from "../clients/path-utils.js";
 import { getLSPService } from "../clients/lsp/capabilities.js";
 import { retireInlineBlockerAndResyncGuard } from "../clients/git-guard.js";
@@ -604,6 +605,15 @@ export function createLensDiagnosticsTool(
 					Array.isArray(lspParams.paths) && lspParams.paths.length > 0;
 				if (scope === "workspace" && !hasExplicitPath && !hasExplicitPaths) {
 					lspParams.path = cwd;
+					// #4577 R2-2: this path is pi-lens's own, not the model's. It comes
+					// from `ctx.cwd` already absolute, so the probe must NOT put it
+					// through the host-argument stages again: a cwd holding a
+					// host-unicode space (a no-break space in a directory name) was
+					// folded to its U+0020 sibling, and the whole workspace scan then
+					// failed with `Path not found`. The flag states the provenance at
+					// the injection point, exactly as `_pathAlreadyResolved` does for
+					// a recovered write on the `tool_result` seam.
+					lspParams.pathAlreadyResolved = true;
 				}
 				const lspStart = Date.now();
 				const result = (await lspProbe.execute(
@@ -1444,9 +1454,11 @@ function resolvePathsScope(
 			(entry): entry is string =>
 				typeof entry === "string" && entry.trim().length > 0,
 		)
-		.map((entry) =>
-			path.resolve(path.isAbsolute(entry) ? entry : path.resolve(cwd, entry)),
-		);
+		// #4576: `paths` is a host-supplied tool input like any other, so it
+		// goes through the same resolver (`~`, `file://`, `@` prefix, unicode
+		// spaces) instead of a bare `path.resolve` that pinned a literal `~`
+		// under the session cwd.
+		.map((entry) => resolveHostToolPath(entry, cwd));
 
 	const missing: string[] = [];
 	const fileEntries: string[] = [];

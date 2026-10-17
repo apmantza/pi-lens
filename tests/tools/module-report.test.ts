@@ -1,10 +1,17 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	createModuleReportTool,
 	createReadEnclosingTool,
 	createReadSymbolTool,
 } from "../../tools/module-report.js";
-import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
+import {
+	createTempFile,
+	pinTestHome,
+	setupTestEnvironment,
+} from "../clients/test-utils.js";
 
 // module_report is read-only (no graph build, no LSP — #256), so these tool
 // tests need no LSP-disabling guard.
@@ -546,6 +553,54 @@ describe("read_symbol tool", () => {
 			expect(disambiguatedDetails.kind).toBe("function");
 			expect(disambiguatedDetails.ambiguous).toBeUndefined();
 		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+/**
+ * #4577 M2: a `path` argument is a host-supplied tool path. `resolveFile` used
+ * a bare `path.resolve(cwd, path)`, so `~/x` became `<cwd>/~/x` — a path that
+ * cannot exist — and the report answered for a file nothing had written. All
+ * three tools of this module share that one resolver.
+ */
+describe("module_report path resolution (#4577 M2)", () => {
+	it("resolves a ~ path to $HOME, not under the cwd", async () => {
+		const env = setupTestEnvironment("pi-lens-modreport-tilde-");
+		const home = path.join(env.tmpDir, "home");
+		const homeFile = createTempFile(
+			home,
+			path.join("proj", "sample.ts"),
+			"export function fromHome(a: number): number {\n  return a;\n}\n",
+		);
+		const restoreHome = pinTestHome(home);
+		try {
+			expect(os.homedir()).toBe(home);
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"1",
+				{ path: "~/proj/sample.ts" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			// The report exists only if the tool opened the home file: the
+			// pre-fix join pointed at `<cwd>/~/proj/sample.ts`, which is absent.
+			expect(result.isError).toBe(false);
+			const report = JSON.parse(String(result.content[0]?.text));
+			expect(report.available).toBe(true);
+			expect(report.lineCount).toBe(
+				fs.readFileSync(homeFile, "utf-8").split("\n").length,
+			);
+			expect(report.api.map((entry: { name: string }) => entry.name)).toContain(
+				"fromHome",
+			);
+			// Display path is project-relative: the home directory really sits
+			// under the project root here, and the pre-fix spelling would have
+			// carried the literal `~` component instead.
+			expect(report.path).toBe("home/proj/sample.ts");
+		} finally {
+			restoreHome();
 			env.cleanup();
 		}
 	});

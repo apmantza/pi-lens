@@ -20,11 +20,17 @@ import {
 	renderCompactModuleReport,
 } from "../clients/module-report.js";
 import { baseName, compactRenderResult } from "./render-compact.js";
+import { resolveHostToolPath } from "../clients/path-utils.js";
 
+/**
+ * A `path` argument is a host-supplied tool path, so it resolves through the
+ * shared host resolver: `~` and `~/` expand to the home directory, a
+ * `file://` URL and an `@` file-mention prefix resolve to the file they name,
+ * and unicode spaces fold (#4577 M2). A bare join left `~/x` under the cwd, a
+ * path that cannot exist.
+ */
 function resolveFile(filePath: string, cwd: string | undefined): string {
-	return path.isAbsolute(filePath)
-		? filePath
-		: path.resolve(cwd || ".", filePath);
+	return resolveHostToolPath(filePath, cwd || ".");
 }
 
 function errorMessage(err: unknown): string {

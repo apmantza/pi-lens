@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -84,6 +85,38 @@ describe("ast_grep_search tool", () => {
 					"foo($X)",
 					"typescript",
 					[env.tmpDir],
+					expect.anything(),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// #4577 R2-2: the defaulted target is the session cwd — pi-lens's own
+		// path, not one the model typed — so it must reach the child byte-exact.
+		// The host resolver folded a cwd holding U+00A0 into its U+0020 sibling,
+		// and the child then failed with `No such file or directory` instead of
+		// scanning the workspace.
+		it("passes the session cwd byte-exact when no paths are given (#4577 R2-2)", async () => {
+			const env = setupTestEnvironment("pi-lens-sg-search-nbsp-");
+			try {
+				const cwd = path.join(env.tmpDir, "proj\u00A0x");
+				fs.mkdirSync(cwd);
+				const search = vi
+					.fn()
+					.mockResolvedValue({ matches: [], totalMatches: 0 });
+				const tool = createAstGrepSearchTool(makeClient({ search }));
+				await tool.execute(
+					"rel-nbsp",
+					{ pattern: "foo($X)", lang: "typescript" },
+					new AbortController().signal,
+					null,
+					{ cwd },
+				);
+				expect(search).toHaveBeenCalledWith(
+					"foo($X)",
+					"typescript",
+					[cwd],
 					expect.anything(),
 				);
 			} finally {
