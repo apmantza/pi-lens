@@ -745,6 +745,16 @@ describe("targeted advisory workflow contract (#3215)", () => {
 		expect(selector).toContain("cap exceeded");
 	});
 
+	// #4437: run 38618401454 failed "Run targeted tests" on a fixed 3000 ms
+	// waitFor while only the shuffle step below set the timeout scale.
+	it("scales the interleaving kit's wall budgets on the targeted run (#4437)", () => {
+		const job = readWorkflow().jobs["targeted-tests-advisory"];
+		const step = job?.steps?.find(
+			(other) => other.name === "Run targeted tests",
+		);
+		expect(step?.env).toMatchObject({ PI_LENS_TEST_TIMEOUT_SCALE: "3" });
+	});
+
 	// #4397 recurrence: a PR's new test file that depends on case order passes
 	// in CI's file order and reds on a reorder or a shard split (#4390, #4391).
 	// The step below is the only thing that reorders it before merge, so a

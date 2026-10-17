@@ -371,6 +371,10 @@ jobs:
       - name: Run targeted tests
         # --include-ci-only admits the real-spawn suites that exceed the local
         # pre-push budget (#3426 H3432-1); this job is their CI row.
+        env:
+          # The interleaving kit's waitFor budget scales by this (#4437); the
+          # shuffle step below sets it, this step did not.
+          PI_LENS_TEST_TIMEOUT_SCALE: '3'
         run: node scripts/pre-push-targeted-tests.mjs --skip-build --include-ci-only
 
       # #4397: a test file that depends on case order or on a sibling file
