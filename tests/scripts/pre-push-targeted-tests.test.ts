@@ -451,6 +451,7 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/config/tmp-fixture-hygiene.test.ts",
 			"tests/config/vacuous-skip-coverage.test.ts",
 			"tests/support/host-event-shape-scan.test.ts",
+			"tests/support/source-walkers-vanished-dir.test.ts",
 		];
 		// Pin live scanner shapes behind the independent buckets: direct
 		// production walk, delegated tests/support walk, and the production walk

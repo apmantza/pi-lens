@@ -205,6 +205,8 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	"tests/config/tmp-fixture-hygiene.test.ts",
 	"tests/config/vacuous-skip-coverage.test.ts",
 	"tests/support/host-event-shape-scan.test.ts",
+	// #4104: the tests-tree and win32 walkers' vanished-directory tolerance.
+	"tests/support/source-walkers-vanished-dir.test.ts",
 ];
 
 export function changesTestTreeFile(file) {

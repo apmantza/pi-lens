@@ -123,6 +123,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Lang, parse } from "@ast-grep/napi";
 import { BoundedSet } from "../../clients/bounded-cache.js";
+import {
+	RUNTIME_SCRATCH_DIRS,
+	walkFiles,
+} from "../../scripts/lib/walk-files.mjs";
 import { lineContentHash } from "../../clients/read-guard.js";
 import { toPosix } from "../../clients/path-utils.js";
 import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
@@ -1122,20 +1126,10 @@ export function firstCommentMatch(
 }
 
 /**
- * Directories {@link listSourceFiles} never descends into: runtime scratch and
- * third-party trees that hold no repo source and that sibling processes
- * create and delete while a sweep walks. Named recurrence (#4097): the
- * bounded-container guard walked the repo root, `.probe-home/` included, and
- * died with ENOENT when a sibling vitest worker removed its
- * `worker-home-*` mid-walk. Matched by directory name at any depth below the
- * walk root (the root itself is always walked).
+ * Directories {@link listSourceFiles} never descends into (#4097); the set
+ * lives with the shared walker in `scripts/lib/walk-files.mjs`.
  */
-export const RUNTIME_SCRATCH_DIRS: ReadonlySet<string> = new Set([
-	".git",
-	".probe-home",
-	".claude",
-	"node_modules",
-]);
+export { RUNTIME_SCRATCH_DIRS };
 
 export interface ListSourceFilesOptions {
 	/** File extensions to include, with the dot. Default `[".ts"]`. */
@@ -1161,33 +1155,17 @@ export function listSourceFiles(
 	const extensions = options.extensions ?? [".ts"];
 	const skipDeclarations = options.skipDeclarations ?? true;
 	const skipTests = options.skipTests ?? false;
-	const walk = (dir: string): string[] => {
-		let entries: fs.Dirent[];
-		try {
-			entries = fs.readdirSync(dir, { withFileTypes: true });
-		} catch (error) {
-			// A directory listed by its parent but gone before its own listing
-			// (#4097) is out of the population, like a vanished file (#3082).
-			// The root itself must exist: a missing root is the caller's bug.
-			if (dir === root || (error as NodeJS.ErrnoException).code !== "ENOENT") {
-				throw error;
-			}
-			recordVanishedPath(dir, "its descent");
-			return [];
-		}
-		return entries.flatMap((entry) => {
-			const entryPath = path.join(dir, entry.name);
-			if (entry.isDirectory()) {
-				return RUNTIME_SCRATCH_DIRS.has(entry.name) ? [] : walk(entryPath);
-			}
-			if (!extensions.some((ext) => entry.name.endsWith(ext))) return [];
-			if (skipDeclarations && /\.d\.[cm]?ts$/.test(entry.name)) return [];
-			if (skipTests && /\.test\.[cm]?[jt]s$/.test(entry.name)) return [];
-			if (options.exclude?.(relativePosix(root, entryPath))) return [];
-			return [entryPath];
-		});
-	};
-	return walk(root).sort();
+	// A directory gone before its own listing (#4097) is out of the
+	// population, like a vanished file (#3082).
+	return walkFiles(
+		root,
+		(entry, entryPath) =>
+			extensions.some((ext) => entry.name.endsWith(ext)) &&
+			!(skipDeclarations && /\.d\.[cm]?ts$/.test(entry.name)) &&
+			!(skipTests && /\.test\.[cm]?[jt]s$/.test(entry.name)) &&
+			!options.exclude?.(relativePosix(root, entryPath)),
+		(dir) => recordVanishedPath(dir, "its descent"),
+	);
 }
 
 /** `root`-relative posix path for an absolute path. */

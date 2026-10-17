@@ -28,7 +28,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { clientSourceFiles, repoRoot } from "../support/atomic-write-scan.js";
+import { repoRoot } from "../support/atomic-write-scan.js";
+import { clientSourceFiles } from "../support/session-state-scan.js";
 import {
 	assertNonEmptyScan,
 	codeMatches,

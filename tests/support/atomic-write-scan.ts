@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toPosix } from "../../clients/path-utils.js";
+import { clientSourceFiles } from "./session-state-scan.js";
 import { escapeRegExp } from "./sweep-kit.js";
 
 export const repoRoot = path.resolve(
@@ -205,18 +206,6 @@ export const EXEMPT_RAW_WRITE_FILES: Readonly<Record<string, string>> = {
 	"lsp/edits.ts":
 		"writes the user's own source file(s) via applyEdit, same class as partial-edit-apply.ts",
 };
-
-/** Every `.ts` file under `clients/`, minus `.d.ts` and test fixtures. */
-export function clientSourceFiles(dir = CLIENTS_ROOT): string[] {
-	return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-		const entryPath = path.join(dir, entry.name);
-		if (entry.isDirectory()) return clientSourceFiles(entryPath);
-		if (!/\.ts$/.test(entry.name)) return [];
-		if (/\.d\.ts$/.test(entry.name)) return [];
-		if (entry.name.endsWith(".test.ts")) return [];
-		return [entryPath];
-	});
-}
 
 /**
  * Extracts the TARGET (first) argument's source text for a call whose

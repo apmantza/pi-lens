@@ -27,7 +27,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toPosix } from "../../clients/path-utils.js";
-import { readWalkedFile } from "./sweep-kit.js";
+import { listSourceFiles, readWalkedFile } from "./sweep-kit.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -102,19 +102,14 @@ export function importSpecifiers(source: string): string[] {
 
 /** Every `.ts` file under `tests/`, minus the fixture trees vitest excludes. */
 export function testSourceFiles(dir = path.join(repoRoot, "tests")): string[] {
-	return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-		const entryPath = path.join(dir, entry.name);
-		const relative = toPosix(path.relative(repoRoot, entryPath));
+	return listSourceFiles(dir, {
+		extensions: [".ts", ".mts"],
+		skipDeclarations: false,
 		// Mirrors vitest.config.ts's sharedExclude: fixture projects and the
 		// live suite's copied-out temp projects are inputs, not repo tests.
-		if (
-			relative === "tests/fixtures" ||
-			relative.startsWith("tests/native-ts7-live-")
-		) {
-			return [];
-		}
-		if (entry.isDirectory()) return testSourceFiles(entryPath);
-		return /\.(?:ts|mts)$/.test(entry.name) ? [entryPath] : [];
+		exclude: (relative) =>
+			relative.startsWith("fixtures/") ||
+			relative.startsWith("native-ts7-live-"),
 	});
 }
 
