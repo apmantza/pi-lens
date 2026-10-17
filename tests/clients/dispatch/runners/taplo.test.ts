@@ -13,7 +13,10 @@ const safeSpawn = vi.fn((..._args: unknown[]) => ({
 const safeSpawnAsync = vi.fn((...args: Parameters<typeof safeSpawn>) =>
 	Promise.resolve(safeSpawn(...args)),
 );
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawn,
 	safeSpawnAsync,
 }));
@@ -155,7 +158,8 @@ describe("taplo runner", () => {
 			fs.mkdirSync(binDir, { recursive: true });
 			const shimName = process.platform === "win32" ? "taplo.cmd" : "taplo";
 			const shim = path.join(binDir, shimName);
-			fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n");
+			// #4530 r7: command acceptance requires the executable bit on POSIX.
+			fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 			// A clean taplo run: exit 0, nothing on stdout, only tracing on
 			// stderr. The literal here used to be `{"errors":[]}`, a JSON
 			// envelope taplo has never emitted (#1937).

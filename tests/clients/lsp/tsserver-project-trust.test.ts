@@ -477,11 +477,14 @@ interface PathTscTree {
 
 /** An npm-global style compiler: `<root>/bin/tsc` symlinks into
  * `<root>/lib/node_modules/typescript/bin/tsc`. `withTsserver: false` models a
- * compiler whose package ships no classic `lib/tsserver.js` (TypeScript 7). */
+ * compiler whose package ships no classic `lib/tsserver.js` (TypeScript 7).
+ * `insideProject` places that global tree under the project root itself, which
+ * is what an adopted root's own PATH entry holds (#4566 round 11). */
 function buildPathTscTree(
 	label: string,
 	withTsserver = true,
 	version = "5.9.3",
+	insideProject = false,
 ): PathTscTree {
 	const tmp = fs.mkdtempSync(
 		path.join(os.tmpdir(), `pi-lens-bare-tsc-${label}-`),
@@ -499,7 +502,7 @@ function buildPathTscTree(
 	);
 	fs.writeFileSync(wrapper, "#!/usr/bin/env node\n");
 
-	const globalRoot = path.join(tmp, "global");
+	const globalRoot = path.join(insideProject ? project : tmp, "global");
 	const pkg = path.join(globalRoot, "lib", "node_modules", "typescript");
 	fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
 	fs.mkdirSync(path.join(pkg, "lib"), { recursive: true });
@@ -618,45 +621,210 @@ describe.skipIf(process.platform === "win32")(
 			expect(warnMessages()).toEqual([]);
 		});
 
-		it("names the missing compiler, not trust, when tsc is on no PATH entry", async () => {
-			const tree = buildPathTscTree("missing");
-			process.chdir(tree.project);
-			// tsc stays unresolvable: the fixture bin dir is deliberately not on PATH.
-			process.env.PATH = path.join(os.tmpdir(), "pi-lens-no-such-bin");
+		it.each(["trusted", "unknown"] as const)(
+			"names the missing compiler, not trust, when tsc is on no PATH entry (%s)",
+			async (trust) => {
+				const tree = buildPathTscTree("missing");
+				process.chdir(tree.project);
+				// tsc stays unresolvable: the fixture bin dir is deliberately not on PATH.
+				process.env.PATH = path.join(os.tmpdir(), "pi-lens-no-such-bin");
+				const { setProjectTrustState } =
+					await import("../../../clients/project-trust.js");
+				setProjectTrustState(trust);
+				const ledger = await import("../../../clients/degradation-ledger.js");
+				const { TypeScriptServer } =
+					await import("../../../clients/lsp/server.js");
+
+				const spawned = await TypeScriptServer.spawn(tree.project, {
+					allowInstall: false,
+				});
+				// A spawn for another root in the same generation records its own
+				// ledger subject but must not repeat the warn.
+				const nested = path.join(tree.project, "sub");
+				fs.mkdirSync(nested);
+				await TypeScriptServer.spawn(nested, { allowInstall: false });
+
+				expect(spawned).toBeUndefined();
+				expect(launchLSPMock).not.toHaveBeenCalled();
+				const warns = warnMessages();
+				expect(warns).toHaveLength(1);
+				expect(warns[0]).toMatch(/no absolute TypeScript compiler/);
+				expect(warns[0]).not.toMatch(TRUST_WORDING);
+				const rows = ledger
+					.getDegradationSummary()
+					.filter((entry) => entry.kind === "lsp-registry-decision");
+				expect(rows).toHaveLength(1);
+				expect(rows[0]?.count).toBe(2);
+				expect(rows[0]?.latestReasons[0]?.reason).toMatch(
+					/no absolute TypeScript compiler/,
+				);
+				expect(rows[0]?.latestReasons[0]?.subject).toMatch(
+					/^typescript-compiler:/,
+				);
+			},
+		);
+
+		// #4566 round 11: the bare-compiler lookup scopes PATH to the root being
+		// served, not `process.cwd()`. An adopted root outside the session kept its
+		// own PATH entry, so a compiler that root planted resolved and was then
+		// recorded as a project compiler refused for trust, for a probe that never
+		// asked about that root. Recurrence guarded: a trust question answered
+		// against the wrong root.
+		it("does not resolve a compiler from a PATH entry inside an adopted root", async () => {
+			const tree = buildPathTscTree("adopted-root", true, "5.9.3", true);
+			// The session stays outside `tree.project`: this root is adopted.
+			const finder = (originalPath ?? "")
+				.split(path.delimiter)
+				.find((dir) => dir && fs.existsSync(path.join(dir, "which")));
+			if (!finder) throw new Error("which is not on PATH");
+			process.env.PATH = [tree.pathBin, finder].join(path.delimiter);
+			const ledger = await import("../../../clients/degradation-ledger.js");
+			ledger.resetDegradationLedger();
 			const { setProjectTrustState } =
 				await import("../../../clients/project-trust.js");
-			setProjectTrustState("trusted");
-			const ledger = await import("../../../clients/degradation-ledger.js");
+			setProjectTrustState("unknown");
 			const { TypeScriptServer } =
 				await import("../../../clients/lsp/server.js");
 
 			const spawned = await TypeScriptServer.spawn(tree.project, {
 				allowInstall: false,
 			});
-			// A spawn for another root in the same generation records its own
-			// ledger subject but must not repeat the warn.
-			const nested = path.join(tree.project, "sub");
-			fs.mkdirSync(nested);
-			await TypeScriptServer.spawn(nested, { allowInstall: false });
 
 			expect(spawned).toBeUndefined();
 			expect(launchLSPMock).not.toHaveBeenCalled();
-			const warns = warnMessages();
-			expect(warns).toHaveLength(1);
-			expect(warns[0]).toMatch(/no absolute TypeScript compiler/);
-			expect(warns[0]).not.toMatch(TRUST_WORDING);
+			// Nothing observed a compiler, so nothing claims one was refused.
+			expect(
+				warnMessages().filter((message) =>
+					/project-local LSP binary refused/.test(message),
+				),
+			).toEqual([]);
+			// The only ledger word is the honest one: no compiler resolved. A refusal
+			// row would claim this root's compiler was seen and vetoed.
 			const rows = ledger
 				.getDegradationSummary()
 				.filter((entry) => entry.kind === "lsp-registry-decision");
 			expect(rows).toHaveLength(1);
-			expect(rows[0]?.count).toBe(2);
-			expect(rows[0]?.latestReasons[0]?.reason).toMatch(
-				/no absolute TypeScript compiler/,
-			);
 			expect(rows[0]?.latestReasons[0]?.subject).toMatch(
 				/^typescript-compiler:/,
 			);
+			expect(rows[0]?.latestReasons[0]?.reason).toMatch(
+				/no absolute TypeScript compiler/,
+			);
 		});
+
+		// #4530 F3 round 5: refusing an unrelated PATH directory is not evidence
+		// that a compiler was refused. Cover every family in the state table.
+		it.each(
+			(["trusted", "unknown"] as const).flatMap((trust) =>
+				(["project only", "outside only", "both", "nowhere"] as const).flatMap(
+					(placement) =>
+						[false, true].map((extra) => ({ trust, placement, extra })),
+				),
+			),
+		)(
+			"compiler notice table: $trust / $placement / unrelated-tools=$extra",
+			async ({ trust, placement, extra }) => {
+				const tree = buildPathTscTree("notice-table");
+				process.chdir(tree.project);
+				const projectBin = path.join(tree.project, "compiler-tools");
+				const unrelated = path.join(tree.project, "unrelated-tools");
+				const finderBin = path.join(path.dirname(tree.project), "finder-bin");
+				fs.mkdirSync(finderBin);
+				fs.symlinkSync("/usr/bin/which", path.join(finderBin, "which"));
+				fs.mkdirSync(projectBin);
+				fs.mkdirSync(unrelated);
+				const projectCompiler =
+					placement === "project only" || placement === "both";
+				const outsideCompiler =
+					placement === "outside only" || placement === "both";
+				if (projectCompiler)
+					fs.symlinkSync(
+						path.join(tree.pathBin, "tsc"),
+						path.join(projectBin, "tsc"),
+					);
+				process.env.PATH = [
+					...(projectCompiler ? [projectBin] : []),
+					...(outsideCompiler ? [tree.pathBin] : []),
+					...(extra ? [unrelated] : []),
+					...(placement !== "nowhere" ? [finderBin] : []),
+					// Avoid the empty PATH entry (cwd) in the no-entry cell.
+					...(placement === "nowhere" && extra
+						? []
+						: [path.join(path.dirname(tree.project), "missing-bin")]),
+				].join(path.delimiter);
+				const { setProjectTrustState } =
+					await import("../../../clients/project-trust.js");
+				setProjectTrustState(trust);
+				const { TypeScriptServer } =
+					await import("../../../clients/lsp/server.js");
+				const spawned = await TypeScriptServer.spawn(tree.project, {
+					allowInstall: false,
+				});
+				const launches =
+					outsideCompiler || (trust === "trusted" && projectCompiler);
+				expect(launchLSPMock).toHaveBeenCalledTimes(launches ? 1 : 0);
+				if (launches) expect(tsserverPathOf(spawned)).toBe(tree.tsserver);
+				else expect(spawned).toBeUndefined();
+				const warnings = warnMessages();
+				const refusals =
+					trust === "unknown" ? Number(projectCompiler) + Number(extra) : 0;
+				// #4530 r8: the notice is once per session even when several project
+				// entries are refused; the exact set stays on the ledger row below.
+				expect(
+					warnings.filter((message) => TRUST_WORDING.test(message)),
+				).toHaveLength(refusals > 0 ? 1 : 0);
+				const resolution =
+					!launches && !(trust === "unknown" && projectCompiler);
+				expect(
+					warnings.filter((message) => /install typescript/.test(message)),
+				).toHaveLength(resolution ? 1 : 0);
+				const ledger = await import("../../../clients/degradation-ledger.js");
+				const rows = ledger.getDegradationSummary();
+				expect(
+					rows.find((row) => row.kind === "trust-refusal")?.count ?? 0,
+				).toBe(refusals);
+				expect(
+					rows.find((row) => row.kind === "lsp-registry-decision")?.count ?? 0,
+				).toBe(launches ? 0 : 1);
+			},
+		);
+
+		// #4530 F4: filesystem presence must not hide advice for rejected commands.
+		it.each(["directory", "non-executable"] as const)(
+			"retains both notices for a refused %s tsc candidate",
+			async (kind) => {
+				const tree = buildPathTscTree("rejected-candidate");
+				process.chdir(tree.project);
+				const refused = path.join(tree.project, "refused-tools");
+				fs.mkdirSync(refused);
+				const candidate = path.join(refused, "tsc");
+				if (kind === "directory") fs.mkdirSync(candidate);
+				else fs.writeFileSync(candidate, "#!/bin/sh\n", { mode: 0o644 });
+				process.env.PATH = refused;
+				const { setProjectTrustState } =
+					await import("../../../clients/project-trust.js");
+				setProjectTrustState("unknown");
+				const { TypeScriptServer } =
+					await import("../../../clients/lsp/server.js");
+				expect(
+					await TypeScriptServer.spawn(tree.project, { allowInstall: false }),
+				).toBeUndefined();
+				expect(launchLSPMock).not.toHaveBeenCalled();
+				const warnings = warnMessages();
+				expect(
+					warnings.filter((message) => TRUST_WORDING.test(message)),
+				).toHaveLength(1);
+				expect(
+					warnings.filter((message) => /install typescript/.test(message)),
+				).toHaveLength(1);
+				const ledger = await import("../../../clients/degradation-ledger.js");
+				const rows = ledger.getDegradationSummary();
+				expect(rows.find((row) => row.kind === "trust-refusal")?.count).toBe(1);
+				expect(
+					rows.find((row) => row.kind === "lsp-registry-decision")?.count,
+				).toBe(1);
+			},
+		);
 
 		it("names the compiler, not trust, when the PATH tsc ships no tsserver.js", async () => {
 			const tree = buildPathTscTree("no-tsserver", false);
@@ -831,10 +999,10 @@ describe.skipIf(process.platform === "win32")(
 			expect(tsserverPathOf(spawned)).toBe(tree.tsserver);
 		});
 
-		it("still treats a bare tsc that resolves into the project as project code (unknown trust)", async () => {
+		it("excludes a project PATH compiler before discovery and records the refusal (unknown trust)", async () => {
 			const tree = buildPathTscTree("project-bin");
-			// A PATH entry inside the project tree must keep its project provenance
-			// after the bare name is resolved. The compiler sits outside the
+			// A PATH entry inside the project tree is excluded before the bare
+			// name is resolved. The compiler sits outside the
 			// `node_modules/typescript` ancestor walk so only the PATH route finds it.
 			const projectPkg = path.join(
 				tree.project,
@@ -878,12 +1046,100 @@ describe.skipIf(process.platform === "win32")(
 
 			expect(spawned).toBeUndefined();
 			expect(launchLSPMock).not.toHaveBeenCalled();
-			// One notice per generation (#4414 F1): the genuine trust refusal is not
-			// followed by the "no compiler resolved" notice, which would blame
-			// resolution for a compiler pi found and refused.
+			// #4530 scopes PATH before discovery: #4414 still forbids using the
+			// project compiler as a global. The trust notice must suppress the
+			// misleading resolution notice (#4530 F3).
 			expect(warnMessages()).toEqual([
-				"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+				"lookup dir inside the project ignored: mark the project trusted in pi or upgrade pi",
 			]);
+			const ledger = await import("../../../clients/degradation-ledger.js");
+			expect(ledger.getDegradationSummary()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ kind: "trust-refusal" }),
+					expect.objectContaining({
+						kind: "lsp-registry-decision",
+						latestReasons: expect.arrayContaining([
+							expect.objectContaining({
+								subject: expect.stringMatching(/^typescript-compiler:/),
+							}),
+						]),
+					}),
+				]),
+			);
+		});
+
+		it("emits one trust notice for several refused PATH entries (husky's relative entry)", async () => {
+			const tree = buildPathTscTree("multi-refusal");
+			// The project compiler sits outside the `node_modules/typescript`
+			// ancestor walk, so only a refused PATH route can find it. Husky's
+			// `.husky/_/h` prepends the relative `node_modules/.bin`, a second
+			// entry that reaches the same untrusted project: both are refused and
+			// each records a ledger row, but the notice must stay one.
+			const projectPkg = path.join(
+				tree.project,
+				"tools",
+				"node_modules",
+				"typescript",
+			);
+			fs.mkdirSync(path.join(projectPkg, "bin"), { recursive: true });
+			fs.mkdirSync(path.join(projectPkg, "lib"), { recursive: true });
+			fs.mkdirSync(path.join(tree.project, "tools", "bin"), {
+				recursive: true,
+			});
+			fs.writeFileSync(
+				path.join(projectPkg, "package.json"),
+				`${JSON.stringify({ name: "typescript", version: "5.9.3" })}\n`,
+			);
+			fs.writeFileSync(
+				path.join(projectPkg, "bin", "tsc"),
+				"#!/usr/bin/env node\n",
+			);
+			fs.chmodSync(path.join(projectPkg, "bin", "tsc"), 0o755);
+			fs.writeFileSync(
+				path.join(projectPkg, "lib", "tsserver.js"),
+				"// project code\n",
+			);
+			fs.symlinkSync(
+				path.join("..", "node_modules", "typescript", "bin", "tsc"),
+				path.join(tree.project, "tools", "bin", "tsc"),
+			);
+			const finderBin = path.join(path.dirname(tree.project), "finder-bin");
+			fs.mkdirSync(finderBin);
+			fs.symlinkSync("/usr/bin/which", path.join(finderBin, "which"));
+			process.chdir(tree.project);
+			process.env.PATH = [
+				path.join(tree.project, "tools", "bin"),
+				"node_modules/.bin",
+				finderBin,
+			].join(path.delimiter);
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState("unknown");
+			const { TypeScriptServer } =
+				await import("../../../clients/lsp/server.js");
+
+			const spawned = await TypeScriptServer.spawn(tree.project, {
+				allowInstall: false,
+			});
+
+			expect(spawned).toBeUndefined();
+			expect(launchLSPMock).not.toHaveBeenCalled();
+			expect(
+				warnMessages().filter((message) => TRUST_WORDING.test(message)),
+			).toEqual([
+				"lookup dir inside the project ignored: mark the project trusted in pi or upgrade pi",
+			]);
+			const ledger = await import("../../../clients/degradation-ledger.js");
+			const trustRow = ledger
+				.getDegradationSummary()
+				.find((row) => row.kind === "trust-refusal");
+			expect(trustRow?.count).toBe(2);
+			expect(trustRow?.latestReasons.map((entry) => entry.subject)).toEqual(
+				expect.arrayContaining([
+					"project-path-entry:node_modules/.bin",
+					`project-path-entry:${path.join(tree.project, "tools", "bin")}`,
+				]),
+			);
 		});
 	},
 );

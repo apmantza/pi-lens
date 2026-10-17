@@ -37,7 +37,8 @@ function installLocalStylua(root: string): string {
 		binDir,
 		process.platform === "win32" ? "stylua.cmd" : "stylua",
 	);
-	fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n");
+	// #4530 r7: command acceptance requires the executable bit on POSIX.
+	fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 	return shim;
 }
 

@@ -21,7 +21,7 @@ import type { AnalysedRootSignal } from "./analysed-root.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync, isAcceptedCommandFile } from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
 import {
 	firstOutputLine,
@@ -355,7 +355,7 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 			.map((d) => path.join(d, `govulncheck${ext}`));
 		for (const candidate of candidates) {
 			try {
-				if (fs.existsSync(candidate)) {
+				if (isAcceptedCommandFile(candidate)) {
 					this.binaryPath = candidate;
 					this.available = true;
 					this.log(`govulncheck auto-installed at ${candidate}`);

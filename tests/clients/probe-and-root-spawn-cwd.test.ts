@@ -301,7 +301,8 @@ describe("#2894 root seam: a hand-derived package root resolves through resolveT
 		for (const dir of [root, pkgRoot]) {
 			const bin = path.join(dir, "node_modules", ".bin");
 			fs.mkdirSync(bin, { recursive: true });
-			fs.writeFileSync(path.join(bin, "biome"), "");
+			// #4530 r7: command acceptance requires the executable bit on POSIX.
+			fs.writeFileSync(path.join(bin, "biome"), "", { mode: 0o755 });
 			fs.writeFileSync(path.join(bin, "biome.cmd"), "");
 		}
 		const { BiomeClient } = await import("../../clients/biome-client.js");

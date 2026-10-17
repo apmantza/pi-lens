@@ -51,7 +51,11 @@ import {
 	getToolPath,
 } from "../installer/index.js";
 import * as installer from "../installer/index.js";
-import { commandSearchReachesProject } from "../package-manager.js";
+import {
+	commandSearchReachesProject,
+	normalizeSearchPath,
+	trustScopedSpawnEnv,
+} from "../package-manager.js";
 import {
 	classifyProbeFailure,
 	describeInstallAttempt,
@@ -1327,7 +1331,7 @@ export async function resolveAndLaunch(
 	// Step 4 — language-native runtime install (go install, gem install, …)
 	const runtimeInstall = trustRefused ? undefined : spec.runtimeInstall;
 	const runtimeAvailable = runtimeInstall
-		? await isOnPath(runtimeInstall.runtimeCommand)
+		? await isOnPath(runtimeInstall.runtimeCommand, spec.cwd)
 		: false;
 	if (staleLaunch(generation, `${toolLabel}:runtimeAvailability`)) {
 		return undefined;
@@ -1399,7 +1403,7 @@ async function resolveAndLaunchBundle(
 	// hang; just probe). No runtime → graceful skip (coverage notice).
 	let runtime: string | undefined;
 	for (const candidate of spec.runtimeCandidates) {
-		if (await isOnPath(candidate)) {
+		if (await isOnPath(candidate, spec.cwd)) {
 			runtime = candidate;
 			break;
 		}
@@ -1997,11 +2001,30 @@ export const createRootDetector = NearestRoot;
  * Async (was a blocking `spawnSync("where"/"which")`): runs on the spawn
  * fall-through path (Step 4, runtime-install gate). The shared
  * `isCommandAvailableAsync` spawns the same finder via `safeSpawnAsync` with a
- * 5s timeout, so a stalled finder can no longer freeze the loop. Semantics are
- * preserved: true iff the finder exits 0.
+ * 5s timeout and a trust-scoped environment, so a stalled finder cannot freeze
+ * the loop and a project-local finder cannot answer under unknown trust. The
+ * scope is the root being served, not `process.cwd()`: an adopted root outside
+ * the session would otherwise keep the project's own PATH entries (#4530
+ * round 11).
+ * Returns true iff the finder exits 0.
  */
-function isOnPath(command: string): Promise<boolean> {
-	return isCommandAvailableAsync(command);
+function isOnPath(command: string, root?: string): Promise<boolean> {
+	return isCommandAvailableAsync(command, trustScopedSpawnEnv(root));
+}
+
+/**
+ * #4530: spawn options for a language-runtime install. Global binary lookups
+ * honour project trust: while the project is not trusted the runtime resolves
+ * through the trust-scoped PATH and runs from HOME, so project configuration
+ * does not steer it.
+ */
+function runtimeInstallSpawnOptions() {
+	const env = trustScopedSpawnEnv();
+	return {
+		timeout: 180000,
+		ignoreAmbientSignal: true,
+		...(env && { env, cwd: os.homedir() }),
+	};
 }
 
 /**
@@ -2017,7 +2040,7 @@ export async function tryGoInstallGopls(): Promise<boolean> {
 	const result = await safeSpawnAsync(
 		isWindows ? "go.exe" : "go",
 		["install", "golang.org/x/tools/gopls@latest"],
-		{ timeout: 180000, ignoreAmbientSignal: true },
+		runtimeInstallSpawnOptions(),
 	);
 	return !result.error && result.status === 0;
 }
@@ -2027,7 +2050,7 @@ export async function tryDotnetToolInstall(tool: string): Promise<boolean> {
 	const result = await safeSpawnAsync(
 		"dotnet",
 		["tool", "install", "--tool-path", PI_LENS_BIN_DIR, tool],
-		{ timeout: 180000, ignoreAmbientSignal: true },
+		runtimeInstallSpawnOptions(),
 	);
 	if (!result.error && result.status === 0) return true;
 
@@ -2043,7 +2066,7 @@ export async function tryDotnetToolInstall(tool: string): Promise<boolean> {
 	const updateResult = await safeSpawnAsync(
 		"dotnet",
 		["tool", "update", "--tool-path", PI_LENS_BIN_DIR, tool],
-		{ timeout: 180000, ignoreAmbientSignal: true },
+		runtimeInstallSpawnOptions(),
 	);
 	return !updateResult.error && updateResult.status === 0;
 }
@@ -2205,9 +2228,10 @@ async function hasTypescriptPackageDir(tscPath: string): Promise<boolean> {
  */
 async function absoluteCommandPath(
 	command: string | undefined,
+	root?: string,
 ): Promise<string | undefined> {
 	if (!command || path.isAbsolute(command)) return command;
-	const found = await findCommandAsync(command);
+	const found = await findCommandAsync(command, trustScopedSpawnEnv(root));
 	return found ? realpath(found).catch(() => undefined) : undefined;
 }
 
@@ -2313,6 +2337,7 @@ async function findTsserverPath(
 	// read below see the same absolute path a managed or npm-global hit has.
 	const discoveredTsc = await absoluteCommandPath(
 		await ensureTool("typescript", { allowInstall: installAllowed }),
+		root,
 	);
 	const discoveredTsserver = await tsserverForTsc(discoveredTsc);
 	if (
@@ -2348,6 +2373,7 @@ async function findTsserverPath(
 			allowInstall: true,
 			forceReinstall: true,
 		}),
+		root,
 	);
 	return tsserverForTsc(repairedTsc);
 }
@@ -2495,14 +2521,17 @@ export async function tryGemInstall(gem: string): Promise<boolean> {
 	const result = await safeSpawnAsync(
 		"gem",
 		["install", gem, "--bindir", binDir, "--no-document"],
-		{ timeout: 180000, ignoreAmbientSignal: true },
+		runtimeInstallSpawnOptions(),
 	);
 	const ok = !result.error && result.status === 0;
 	// Add binDir to PATH so subsequent lookups find the installed gem
 	if (ok) {
 		const sep = process.platform === "win32" ? ";" : ":";
 		if (!process.env.PATH?.includes(binDir)) {
-			process.env.PATH = `${binDir}${sep}${process.env.PATH ?? ""}`;
+			process.env.PATH = normalizeSearchPath(
+				[binDir, process.env.PATH ?? ""],
+				sep,
+			);
 		}
 	}
 	return ok;

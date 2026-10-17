@@ -29,7 +29,8 @@
     "turn-end-late-scan",
     "lsp-ephemeral-data-dir",
     "blocker-pending",
-    "cascade-delivery"
+    "cascade-delivery",
+    "package-manager-trust"
   ],
   "map": {
     "clients/read-guard.ts": [
@@ -400,6 +401,9 @@
     ],
     "clients/file-utils.ts": [
       "lsp-ephemeral-data-dir"
+    ],
+    "clients/package-manager.ts": [
+      "package-manager-trust"
     ]
   },
   "notes": {

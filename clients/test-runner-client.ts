@@ -3497,7 +3497,7 @@ export class TestRunnerClient {
 		}
 
 		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx (#375).
-		const globalBin = await findGlobalBinary(binName);
+		const globalBin = await findGlobalBinary(binName, ".cmd", cwd);
 		if (globalBin) {
 			return {
 				command: globalBin,

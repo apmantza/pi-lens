@@ -984,7 +984,7 @@ export const biomeFormatter: FormatterInfo = {
 		if (local) return [local, ...args, filePath];
 		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before we
 		// auto-install — catches a `pnpm add -g @biomejs/biome` PATH misses (#375).
-		const global = await findGlobalBinary("biome");
+		const global = await findGlobalBinary("biome", ".cmd", cwd);
 		if (global) return [global, ...args, filePath];
 		const toolId = getAutoInstallToolIdForFormatter("biome");
 		if (!toolId) return null;
@@ -1030,7 +1030,7 @@ export const prettierFormatter: FormatterInfo = {
 		const local = await findInNodeModules("prettier", cwd);
 		if (local) return [local, ...args, filePath];
 		// Global bin of any manager (npm/pnpm/yarn/bun) before auto-install (#375).
-		const global = await findGlobalBinary("prettier");
+		const global = await findGlobalBinary("prettier", ".cmd", cwd);
 		if (global) return [global, ...args, filePath];
 		return resolveManagedSmartDefaultCommand("prettier", filePath, args);
 	},

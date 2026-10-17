@@ -242,6 +242,83 @@ describe("lsp launch", () => {
 		},
 	);
 
+	// #4530 r7: finder output is evidence, not command-file acceptance.
+	it("skips a directory returned by the command finder", async () => {
+		const dir = setupTestEnvironment("pi-lens-launch-").tmpDir;
+		const invalid = path.join(dir, "directory");
+		// Windows shell-wraps an extensionless command (`computeNeedsShell`), so a
+		// spawn there receives a quoted command string instead of the path. The
+		// fixture carries a PATHEXT executable suffix so the assertion below
+		// observes the selected path itself. `.cmd` would enter the script-target
+		// check instead, and its target cannot be parsed under unknown trust.
+		const valid = path.join(
+			dir,
+			process.platform === "win32" ? "valid.exe" : "valid",
+		);
+		fs.mkdirSync(invalid);
+		fs.writeFileSync(valid, "#!/bin/sh\n", { mode: 0o755 });
+		const spawnMock = vi.fn(
+			(_command: string, _args: string[]) => new MockChildProcess(9876),
+		);
+		vi.doMock("node:child_process", () => ({
+			execFileSync: vi.fn(() => `${invalid}\n${valid}\n`),
+			spawn: spawnMock,
+		}));
+		const { launchLSP } = await import("../../../clients/lsp/launch.js");
+		// #4566 F1: finder acceptance is exercised outside the untrusted project.
+		const project = path.join(dir, "project");
+		fs.mkdirSync(project);
+		await launchLSP("fixture-server", [], { cwd: project });
+		expect(spawnMock.mock.calls.map(([command]) => command)).toContain(valid);
+		expect(spawnMock.mock.calls.map(([command]) => command)).not.toContain(
+			invalid,
+		);
+	});
+
+	// #4530 r7: npm PS1 bypasses may select only files; scripts need no X_OK.
+	it.each(["cmd-directory", "script-directory", "script-file"])(
+		"validates PS1 bypass targets: %s",
+		async (kind) => {
+			const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+			Object.defineProperty(process, "platform", { value: "win32" });
+			try {
+				vi.resetModules();
+				const dir = setupTestEnvironment("pi-lens-ps1-").tmpDir;
+				const ps1 = path.join(dir, "bin", "test.ps1");
+				const cmd = path.join(dir, "bin", "test.cmd");
+				const script = path.join(dir, "pkg", "cli.js");
+				fs.mkdirSync(path.dirname(ps1), { recursive: true });
+				fs.mkdirSync(path.dirname(script), { recursive: true });
+				fs.writeFileSync(ps1, '"$basedir/../pkg/cli.js"');
+				if (kind === "script-directory") fs.mkdirSync(script);
+				else fs.writeFileSync(script, "fixture", { mode: 0o644 });
+				if (kind === "cmd-directory") fs.mkdirSync(cmd);
+				const spawnMock = vi.fn(
+					(_command: string, _args: string[], _options: unknown) =>
+						new MockChildProcess(5678),
+				);
+				vi.doMock("node:child_process", () => ({
+					execFileSync: vi.fn(() => ""),
+					spawn: spawnMock,
+				}));
+				const { launchLSP } = await import("../../../clients/lsp/launch.js");
+				await launchLSP(ps1, ["start"], { cwd: dir });
+				const commands = spawnMock.mock.calls.map(([command]) => command);
+				expect(commands).not.toContain(cmd);
+				if (kind === "script-directory")
+					expect(commands).not.toContain(process.execPath);
+				else
+					expect(spawnMock.mock.calls).toContainEqual([
+						process.execPath,
+						[script, "start"],
+						expect.anything(),
+					]);
+			} finally {
+				Object.defineProperty(process, "platform", descriptor);
+			}
+		},
+	);
+
 	describe("isCmdShimValid", () => {
 		it("returns true when the shim target exists", async () => {
 			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;

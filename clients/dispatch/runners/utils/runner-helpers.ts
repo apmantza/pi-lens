@@ -51,12 +51,14 @@ import {
 	findLocalBinsUpwards,
 	findLocalBinUpwards,
 	localBinPath,
+	normalizeSearchPath,
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
 import { logLatency } from "../../../latency-logger.js";
 import {
 	safeSpawnAsync,
+	isAcceptedCommandFile,
 	resolveWindowsCommandForEnvironment,
 } from "../../../safe-spawn.js";
 import {
@@ -486,7 +488,7 @@ export function resolveAdoptedRootCommand(
 	// candidates and PATH without probing either before containment.
 	const candidates = managedNodeToolCandidates(command);
 	let selected = candidates.find(
-		(candidate) => candidate && fs.existsSync(candidate),
+		(candidate) => candidate && isAcceptedCommandFile(candidate),
 	);
 	if (!selected) {
 		if (process.platform === "win32") {
@@ -709,7 +711,7 @@ export async function getManagedToolEnvironment(
 	const separator = process.platform === "win32" ? ";" : ":";
 	const currentPath = env.PATH || env.Path || process.env.PATH || "";
 	const localBin = path.join(cwd, "node_modules", ".bin");
-	const augmentedPath = `${localBin}${separator}${currentPath}`;
+	const augmentedPath = normalizeSearchPath([localBin, currentPath], separator);
 	return {
 		...env,
 		PATH: augmentedPath,
@@ -2142,7 +2144,7 @@ function buildSgLocalBins(): SgLocalBinCandidate[] {
 			".bin",
 			candidate,
 		);
-		if (fs.existsSync(managedBin)) {
+		if (isAcceptedCommandFile(managedBin)) {
 			bins.push({ path: managedBin, source: "own-install" });
 		}
 	}
@@ -2392,7 +2394,7 @@ export async function resolveLocalFirstAsync(
 	//    file lookup, so it finds tools installed via `pnpm add -g` / `bun add -g`
 	//    (whose bin dirs are often off PATH) and survives PATH staleness after an
 	//    `install -g`. No spawn.
-	const globalBin = await findGlobalBinary(toolName, windowsExt);
+	const globalBin = await findGlobalBinary(toolName, windowsExt, cwd);
 	if (globalBin) return { cmd: globalBin, args: [] };
 
 	// 3. Global PATH (already installed system-wide, on PATH)

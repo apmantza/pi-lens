@@ -48,7 +48,8 @@ vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
 	findNodeToolBinary,
 }));
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync: vi.fn(async () => ({
 		error: undefined,
 		status: 0,

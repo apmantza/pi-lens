@@ -17,6 +17,7 @@ import {
 } from "./path-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
+import { normalizeSearchPath } from "./package-manager.js";
 import { getProjectTrustState } from "./project-trust.js";
 
 export type PythonEnvironmentSource =
@@ -360,9 +361,10 @@ export function augmentPythonEnvironment(
 
 	const inheritedPath =
 		baseEnvironment.PATH ?? baseEnvironment.Path ?? baseEnvironment.path ?? "";
-	const augmentedPath = inheritedPath
-		? `${environment.binDir}${path.delimiter}${inheritedPath}`
-		: environment.binDir;
+	const augmentedPath = normalizeSearchPath([
+		environment.binDir,
+		inheritedPath,
+	]);
 	const childEnvironment: NodeJS.ProcessEnv = {
 		...baseEnvironment,
 		PATH: augmentedPath,

@@ -292,11 +292,11 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`go install golang.org/x/vuln/cmd/govulncheck@latest` — installs into the Go tool directory, not into the project",
 	],
 	[
-		"clients/installer/index.ts#verifyToolBinary:96ec5ee1",
+		"clients/installer/index.ts#verifyToolBinary:21f85a36",
 		"`<execPath> <verificationArgs>` verification that an installed managed binary runs at all",
 	],
 	[
-		"clients/installer/index.ts#getPythonUserBaseCandidates:3fead921",
+		"clients/installer/index.ts#getPythonUserBaseCandidates:80bf7a4c",
 		"`python -m site --user-base` — a Python installation query, unrelated to any project",
 	],
 	[
@@ -312,11 +312,11 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`unzip -q -o <archive> -d <tmpDir>` extraction inside the global pi-lens bin directory",
 	],
 	[
-		"clients/installer/index.ts#installPipTool:3042a73f",
+		"clients/installer/index.ts#installPipTool:4ee1108e",
 		"`python -m site --user-base` after a pip install, to find where the binary landed",
 	],
 	[
-		"clients/installer/index.ts#installGemTool:94a5faab",
+		"clients/installer/index.ts#installGemTool:04641342",
 		"`gem install <package> --no-document` into the global gem path",
 	],
 	[
@@ -324,32 +324,32 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied. Same #2894 verdict as dead-code-client: the input is a directory, and `resolveToolCwd` dirnames its `file` argument",
 	],
 	[
-		"clients/lsp/jvm-runtime.ts#runJavaProbe:41cf49b2",
+		"clients/lsp/jvm-runtime.ts#runJavaProbe:e3a30dc8",
 		"`which java` / `where java` PATH lookup for the JVM language servers",
 	],
 	[
-		"clients/lsp/server.ts#tryGoInstallGopls:a28791c7",
-		"`go install golang.org/x/tools/gopls@latest` — installs into the Go tool directory",
+		"clients/lsp/server.ts#tryGoInstallGopls:9a3ebec4",
+		"`go install golang.org/x/tools/gopls@latest` — installs into the Go tool directory; under an untrusted project it runs from HOME (#4530)",
 	],
 	[
-		"clients/lsp/server.ts#tryDotnetToolInstall:408e7057",
-		"`dotnet tool install --tool-path <pi-lens bin>` — installs into pi-lens's own bin directory",
+		"clients/lsp/server.ts#tryDotnetToolInstall:d0e10ff4",
+		"`dotnet tool install --tool-path <pi-lens bin>` — installs into pi-lens's own bin directory; under an untrusted project it runs from HOME (#4530)",
 	],
 	[
-		"clients/lsp/server.ts#tryDotnetToolInstall:f9b474e8",
-		"`dotnet tool update --tool-path <pi-lens bin>` — the update half of the same install",
+		"clients/lsp/server.ts#tryDotnetToolInstall:af993561",
+		"`dotnet tool update --tool-path <pi-lens bin>` — the update half of the same install; under an untrusted project it runs from HOME (#4530)",
 	],
 	[
-		"clients/lsp/server.ts#tryGemInstall:b2e61c88",
-		"`gem install <gem> --bindir <pi-lens bin>` — installs into pi-lens's own bin directory",
+		"clients/lsp/server.ts#tryGemInstall:8f099841",
+		"`gem install <gem> --bindir <pi-lens bin>` — installs into pi-lens's own bin directory; under an untrusted project it runs from HOME (#4530)",
 	],
 	[
 		"clients/mcp/review.ts#analyzeFileFresh:3ac7e2fe",
 		"forks the review worker with `process.execPath`; the project it must analyse is passed explicitly as the `--cwd=<dir>` argv flag, so the child's own directory is not the channel",
 	],
 	[
-		"clients/package-manager.ts#probeGlobalBinDirs:bf156997",
-		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin` — global install-location queries",
+		"clients/package-manager.ts#probeGlobalBinDirs:13b21687",
+		"`npm config get prefix` / `pnpm bin -g` / `yarn global bin` — global install-location queries; under an untrusted project the query runs from HOME (#4530)",
 	],
 	[
 		"clients/safe-spawn.ts#safeSpawnAsync.killTree:77f62fd4",
@@ -360,11 +360,11 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"safeSpawnBatch forwards each command's own `options` object unchanged, so the cwd belongs to whoever built that batch entry",
 	],
 	[
-		"clients/safe-spawn.ts#isCommandAvailableAsync:45a177c3",
+		"clients/safe-spawn.ts#isCommandAvailableAsync:26e8bdbb",
 		"`which`/`where <command>` PATH lookup (async form)",
 	],
 	[
-		"clients/safe-spawn.ts#findCommandAsync:45a177c3",
+		"clients/safe-spawn.ts#findCommandAsync:26e8bdbb",
 		"`which`/`where <command>` PATH lookup that returns the resolved path",
 	],
 	[
@@ -610,7 +610,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is runScan's own `cwd` parameter; `govulncheck -mode=source ./...` is relative to it by design",
 	],
 	[
-		"clients/installer/index.ts#runCommand:bed06f4a~dbf27697",
+		"clients/installer/index.ts#runCommand:9e63618c~dbf27697",
 		"cwd is runCommand's own `cwd` parameter; its three call sites in this file are the checked ones",
 	],
 	[
@@ -618,11 +618,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is TOOLS_DIR, the managed-tool install directory this archive is being extracted into",
 	],
 	[
-		"clients/installer/index.ts#installNpmTool.runInstallAttempt:166c7cea~a938e107",
+		"clients/installer/index.ts#installNpmTool.runInstallAttempt:fc29ee07~a938e107",
 		"cwd is TOOLS_DIR: the npm install runs in the managed-tool directory, never in the user's project",
 	],
 	[
-		"clients/installer/managed-tool-refresh.ts#performNpmRefresh:0b3e9872~abe0cd3c",
+		"clients/installer/managed-tool-refresh.ts#performNpmRefresh:ece7e29d~abe0cd3c",
 		"cwd is `toolsDir`, the managed-tool install directory being refreshed",
 	],
 	[

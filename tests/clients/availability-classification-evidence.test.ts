@@ -29,7 +29,8 @@ const { safeSpawnAsync, logLatencySpy, ensureTool, getInstallAttempt } =
 		getInstallAttempt: vi.fn(),
 	}));
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 }));
@@ -416,7 +417,8 @@ describe("govulncheck's compensating available rows (#1606)", () => {
 		const gobin = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-gobin-"));
 		const ext = process.platform === "win32" ? ".exe" : "";
 		const binaryPath = path.join(gobin, `govulncheck${ext}`);
-		fs.writeFileSync(binaryPath, "");
+		// #4530 r7: command acceptance requires the executable bit on POSIX.
+		fs.writeFileSync(binaryPath, "", { mode: 0o755 });
 		const prevGobin = process.env.GOBIN;
 		process.env.GOBIN = gobin;
 		try {

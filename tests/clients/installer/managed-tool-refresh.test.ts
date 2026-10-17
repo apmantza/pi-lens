@@ -537,6 +537,49 @@ describe("update command", () => {
 	});
 });
 
+describe("update command trust (#4530)", () => {
+	// The package manager is the process boundary here, so the case reads the
+	// environment the update is started with: under an untrusted project its
+	// PATH, which resolves the manager, holds no project entry.
+	function updateEnvPath(): string[] | undefined {
+		const index = verifyCalls.mock.calls.findIndex(([, args]) =>
+			(args as string[]).includes("update"),
+		);
+		const options = verifyOptions.mock.calls[index]?.[0] as
+			| { env?: NodeJS.ProcessEnv }
+			| undefined;
+		return options?.env?.PATH?.split(path.delimiter);
+	}
+
+	it("resolves the package manager outside an untrusted project", async () => {
+		installFixture("knip", "6.4.1");
+		stubSpawn("ok", {});
+		const outside = path.dirname(process.execPath);
+		vi.stubEnv(
+			"PATH",
+			[path.join(process.cwd(), "node_modules", ".bin"), outside].join(
+				path.delimiter,
+			),
+		);
+		setProjectTrustState("unknown");
+
+		await runManagedToolRefresh(NOW);
+
+		expect(updateEnvPath()).toEqual([outside]);
+	});
+
+	it("keeps the caller's environment for a trusted project", async () => {
+		installFixture("knip", "6.4.1");
+		stubSpawn("ok", {});
+		setProjectTrustState("trusted");
+
+		await runManagedToolRefresh(NOW);
+
+		expect(updateCalls()).toHaveLength(1);
+		expect(updateEnvPath()).toBeUndefined();
+	});
+});
+
 describe("session budget", () => {
 	it("declines a second refresh inside the same session", async () => {
 		installFixture("knip", "6.4.1");

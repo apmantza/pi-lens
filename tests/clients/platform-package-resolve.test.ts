@@ -58,6 +58,17 @@ describe("resolvePlatformPackageBinary", () => {
 		},
 	);
 
+	// #4530 r7: an existing package directory is not a native command.
+	it("rejects a directory in a platform package's binary list", () => {
+		const native = tool("ast-grep");
+		expect(
+			resolvePlatformPackageBinary({
+				...native,
+				platformPackage: { ...native.platformPackage!, binaries: ["."] },
+			}),
+		).toBeUndefined();
+	});
+
 	it("returns undefined for a tool without a platformPackage spec", () => {
 		expect(resolvePlatformPackageBinary(tool("knip"))).toBeUndefined();
 	});

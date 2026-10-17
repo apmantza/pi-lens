@@ -22,7 +22,8 @@ import {
 import { setupTestEnvironment } from "./test-utils.js";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync: vi.fn(async () => ({
 		error: null,
 		status: 0,
@@ -63,7 +64,8 @@ function installProjectKnip(root: string, version = "6.32.2"): string {
 		binDir,
 		process.platform === "win32" ? "knip.cmd" : "knip",
 	);
-	fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n");
+	// #4530 r7: command acceptance requires the executable bit on POSIX.
+	fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 	const pkgDir = path.join(root, "node_modules", "knip");
 	fs.mkdirSync(pkgDir, { recursive: true });
 	fs.writeFileSync(

@@ -44,7 +44,11 @@ const GLOBAL_BIN_2 =
 		? String.raw`C:\fake-global\bin\madge`
 		: "/usr/bin/madge";
 
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
 vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../clients/package-manager.js")

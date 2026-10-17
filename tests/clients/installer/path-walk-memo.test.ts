@@ -14,10 +14,16 @@ import {
 	resetPathWalkMemo,
 } from "../../../clients/installer/index.js";
 
+import {
+	setProjectTrustState,
+	resetProjectTrust,
+} from "../../../clients/project-trust.js";
+
 const savedPath = process.env.PATH;
 
 describe("bare-command PATH availability memo", () => {
 	beforeEach(() => {
+		setProjectTrustState("trusted");
 		process.env.PATH = "memo-path";
 		resetPathWalkMemo();
 		statSyncMock.mockReset();
@@ -25,6 +31,7 @@ describe("bare-command PATH availability memo", () => {
 	});
 
 	afterEach(() => {
+		resetProjectTrust();
 		if (savedPath === undefined) delete process.env.PATH;
 		else process.env.PATH = savedPath;
 		resetPathWalkMemo();

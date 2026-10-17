@@ -678,6 +678,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// an `Array.prototype.filter` call, not a delivery filter.
 		"clients/opaque-mutation-scan.ts": 1,
 		"clients/opengrep-client.ts": 2,
+		// #4566 round 9: the shared search-path join and the scoped-PATH
+		// assignment, two `Array.prototype.filter` calls, not a delivery filter.
+		"clients/package-manager.ts": 2,
 		"clients/path-utils.ts": 1,
 		"clients/persistent-reverify.ts": 4,
 		// 4 -> 6 (#4484): `liveBlockers.filter` and `recordBlockers.filter` split the
@@ -865,7 +868,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/bash-file-access.ts": 9,
 		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
 		// shared `findLocalBinAt` trust seam, one construction site for the shim.
-		"clients/biome-client.ts": 7,
+		"clients/biome-client.ts": 6,
 		"clients/blocker-freshness.ts": 4,
 		// 5 -> 6 (#3594): the remembered-holder skip's degradation `subject`,
 		// `path.resolve(dir)`, mirroring `withGenerationLockSync`'s own (#3578).
@@ -989,7 +992,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/gzip-stage-write.ts": 2,
 		"clients/inline-blocker-dispositions.ts": 2,
 		"clients/install-diagnostics.ts": 11,
-		"clients/installer/index.ts": 107,
+		// 107 -> 106 (#4530): two inline PATH-env reads fold into ambientPath().
+		"clients/installer/index.ts": 106,
 		"clients/installer/managed-tool-refresh.ts": 4,
 		"clients/instance-reaper.ts": 4,
 		// 8 -> 9 (#3498): the own-hold skip's degradation `subject`,
@@ -1023,11 +1027,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// with `path.basename`, a filesystem path.
 		"clients/lsp/implicit-scope.ts": 8,
 		"clients/lsp/inferred-project.ts": 3,
-		"clients/lsp/jvm-runtime.ts": 19,
+		// 19 -> 18 (#4566 r9): the JAVA PATH join moved to the shared
+		// search-path seam, which owns the `path.delimiter` default.
+		"clients/lsp/jvm-runtime.ts": 18,
 		"clients/lsp/language.ts": 3,
 		// 30 -> 31 (#4248): the project-local binary refusal records the
 		// resolved command basename through the existing path vocabulary.
-		"clients/lsp/launch.ts": 31,
+		"clients/lsp/launch.ts": 33,
 		"clients/lsp/lombok.ts": 14,
 		// #4299: 121 -> 124; OS path namespace calls for canonical compiler
 		// validation replace the wrapper-relative guess. No path-key owner changes.
@@ -1065,7 +1071,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/opengrep-config.ts": 3,
 		// 21 -> 23 (#4515 r2): commandSearchReachesProject splits PATH on
 		// `path.delimiter` and tests each entry with `path.isAbsolute`.
-		"clients/package-manager.ts": 23,
+		// 23 -> 25 (#4530): the trust-scoped PATH filter splits and joins on
+		// `path.delimiter`.
+		// 25 -> 26 (#4566 r9): the shared search-path join defaults its
+		// separator to `path.delimiter`.
+		"clients/package-manager.ts": 29,
 		"clients/package-root.ts": 5,
 		"clients/path-keyed-map.ts": 11,
 		// 30 -> 34: findNearestMarkerRootDetailed (#3691) adds its own marker/root
@@ -1095,7 +1105,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 18 -> 22 (#3871 r2, r3): ambient-environment containment uses four
 		// path operations at the shared Python resolver seam; r3 restored the
 		// `path.isAbsolute` leg that rejects another Windows drive (V1).
-		"clients/python-environment.ts": 22,
+		"clients/python-environment.ts": 21,
 		"clients/read-guard-logger.ts": 3,
 		"clients/recent-touches.ts": 5,
 		"clients/reverse-deps.ts": 8,

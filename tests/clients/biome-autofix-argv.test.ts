@@ -9,7 +9,11 @@ const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
 const ensureTool = vi.fn();
 
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
 vi.mock("../../clients/installer/index.js", () => ({ ensureTool }));
 
 // Regression guard for #1247 review P1/P2: the biome autofix surface must
@@ -46,7 +50,8 @@ describe("BiomeClient.fixFileAsync — autofix argv order + cwd (#1247 review)",
 			// and starts in the neutral pi-lens-owned cwd (#4268 acceptance 3).
 			const tmpBin = path.join(tmpDir, "node_modules", ".bin");
 			fs.mkdirSync(tmpBin, { recursive: true });
-			fs.writeFileSync(path.join(tmpBin, "biome"), "");
+			// #4530 r7: command acceptance requires the executable bit on POSIX.
+			fs.writeFileSync(path.join(tmpBin, "biome"), "", { mode: 0o755 });
 			fs.writeFileSync(path.join(tmpBin, "biome.cmd"), "");
 
 			const { BiomeClient } = await import("../../clients/biome-client.js");
@@ -92,7 +97,8 @@ describe("BiomeClient.fixFileAsync — autofix argv order + cwd (#1247 review)",
 			fs.writeFileSync(filePath, "const x = 1;\n");
 			const pkgBin = path.join(packageDir, "node_modules", ".bin");
 			fs.mkdirSync(pkgBin, { recursive: true });
-			fs.writeFileSync(path.join(pkgBin, "biome"), "");
+			// #4530 r7: command acceptance requires the executable bit on POSIX.
+			fs.writeFileSync(path.join(pkgBin, "biome"), "", { mode: 0o755 });
 			fs.writeFileSync(path.join(pkgBin, "biome.cmd"), "");
 
 			const { BiomeClient } = await import("../../clients/biome-client.js");

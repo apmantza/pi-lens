@@ -25,7 +25,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "../test-utils.js";
 
 const safeSpawnAsync = vi.fn();
-vi.mock("../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	which: vi.fn(async () => null),
@@ -159,6 +160,15 @@ describe("formatter exit-code posture (#1337)", () => {
 	it("passes --no-errors-on-unmatched on every biome command path", async () => {
 		const { biomeFormatter } = await loadFormatters();
 		expect(biomeFormatter.command).toContain("--no-errors-on-unmatched");
+		// The planted biome below is project code, which the local branch resolves
+		// only for a trusted project (#4248). Untrusted, the lookup fell through to
+		// the installer's PATH rung, and passed only while the checkout's own biome
+		// sat on an npm-run PATH; that rung now ignores PATH dirs inside an
+		// untrusted session project (#4530). Same module instance as formatters
+		// after resetModules, so imported here.
+		const { resetProjectTrust, setProjectTrustState } =
+			await import("../../../clients/project-trust.js");
+		setProjectTrustState("trusted");
 
 		const env = setupTestEnvironment("pi-lens-biome-unmatched-");
 		try {
@@ -171,7 +181,8 @@ describe("formatter exit-code posture (#1337)", () => {
 			const binDir = path.join(env.tmpDir, "node_modules", ".bin");
 			fs.mkdirSync(binDir, { recursive: true });
 			for (const name of ["biome", "biome.cmd"]) {
-				fs.writeFileSync(path.join(binDir, name), "");
+				// #4530 r7: command acceptance requires the executable bit on POSIX.
+				fs.writeFileSync(path.join(binDir, name), "", { mode: 0o755 });
 			}
 
 			const resolved = await biomeFormatter.resolveCommand?.(
@@ -187,6 +198,7 @@ describe("formatter exit-code posture (#1337)", () => {
 				args.indexOf(filePath),
 			);
 		} finally {
+			resetProjectTrust();
 			env.cleanup();
 		}
 	});

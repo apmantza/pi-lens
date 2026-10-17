@@ -276,14 +276,22 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 		vi.useRealTimers();
 	});
 
-	it("refuses an unknown-trust project-local built-in binary through launchLSP", async () => {
+	it("keeps an unknown-trust project-local built-in binary out of launchLSP's PATH lookup", async () => {
+		// #4248 put the project's bin dir first on PATH and refused the binary it
+		// resolved. #4530: the lookup itself now skips a project dir under
+		// unknown trust, records it, and the binary never runs.
 		const project = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-project-local-lsp-"),
 		);
 		const binDir = path.join(project, "node_modules", ".bin");
 		fs.mkdirSync(binDir, { recursive: true });
-		const binary = path.join(binDir, "python");
-		fs.writeFileSync(binary, "#!/bin/sh\n");
+		const marker = path.join(project, "executed.marker");
+		const command = "pi-lens-4248-fixture-python";
+		const binary = path.join(binDir, command);
+		fs.writeFileSync(
+			binary,
+			`#!/bin/sh\necho ran > ${JSON.stringify(marker)}\n`,
+		);
 		fs.chmodSync(binary, 0o755);
 		const { trust, service, spawn } = await setup();
 		const { launchLSP } = await import("../../../clients/lsp/launch.js");
@@ -294,7 +302,7 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 				extensions: [".py"],
 				root: async () => project,
 				spawn: async (root: string) => {
-					await launchLSP("python", [], {
+					await launchLSP(command, [], {
 						cwd: root,
 						env: {
 							PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
@@ -309,19 +317,15 @@ describe("LSPService project-trust gate (#1334 S5)", () => {
 		);
 		expect(client).toBeUndefined();
 		expect(spawn).not.toHaveBeenCalled();
+		expect(fs.existsSync(marker)).toBe(false);
 		expect(
 			logExtension.mock.calls.filter(
 				([entry]) =>
 					entry.message ===
-					"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
+						"lookup dir inside the project ignored: mark the project trusted in pi or upgrade pi" &&
+					entry.metadata?.entry === binDir,
 			),
 		).toHaveLength(1);
-		expect(logExtension).toHaveBeenCalledWith(
-			expect.objectContaining({
-				message:
-					"project-local LSP binary refused: mark the project trusted in pi or upgrade pi",
-			}),
-		);
 		trust.resetProjectTrust();
 		fs.rmSync(project, { recursive: true, force: true });
 	});

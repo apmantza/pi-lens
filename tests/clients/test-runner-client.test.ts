@@ -23,12 +23,13 @@ import { setProjectTrustState } from "../../clients/project-trust.js";
 // Only the resolveExec matrix below (#1098) needs this mocked; every other
 // test in this file never reaches a `findGlobalBinary` call.
 const findGlobalBinary =
-	vi.fn<(command: string) => Promise<string | undefined>>();
+	vi.fn<typeof import("../../clients/package-manager.js").findGlobalBinary>();
 vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../clients/package-manager.js")
 	>()),
-	findGlobalBinary: (command: string) => findGlobalBinary(command),
+	findGlobalBinary: (...args: Parameters<typeof findGlobalBinary>) =>
+		findGlobalBinary(...args),
 }));
 
 const cleanups: Array<() => void> = [];
@@ -3410,7 +3411,8 @@ describe("resolveExec argv preservation matrix (#1098)", () => {
 					);
 				}
 				fs.mkdirSync(path.dirname(localBinPath), { recursive: true });
-				fs.writeFileSync(localBinPath, "");
+				// #4530 r7: command acceptance requires the executable bit on POSIX.
+				fs.writeFileSync(localBinPath, "", { mode: 0o755 });
 
 				const testFile = path.join(
 					tmpDir,
@@ -3505,7 +3507,8 @@ describe("resolveExec argv preservation matrix (#1098)", () => {
 			`cargo${binSuffix()}`,
 		);
 		fs.mkdirSync(path.dirname(localBinPath), { recursive: true });
-		fs.writeFileSync(localBinPath, "");
+		// #4530 r7: command acceptance requires the executable bit on POSIX.
+		fs.writeFileSync(localBinPath, "", { mode: 0o755 });
 
 		const testFile = path.join(tmpDir, "src", "lib.rs");
 
@@ -3538,7 +3541,7 @@ describe("resolveExec argv preservation matrix (#1098)", () => {
 				// "exec" is a real bundle subcommand, not the binary name — must
 				// survive intact so `bundle exec rspec <file>` reaches bundle.
 				expect(resolved.args).toEqual(["exec", "rspec", testFile]);
-				expect(findGlobalBinary).toHaveBeenCalledWith("bundle");
+				expect(findGlobalBinary).toHaveBeenCalledWith("bundle", ".cmd", tmpDir);
 			});
 	});
 });

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getGlobalPiLensDir } from "../../clients/file-utils.js";
 import { BiomeClient } from "../../clients/biome-client.js";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 import { removeTempDirSync } from "./test-utils.js";
@@ -44,6 +45,29 @@ describe("BiomeClient — per-cwd binary resolution (#121)", () => {
 	// This suite plants per-cwd project binaries on purpose; the trust gate is
 	// witnessed in `project-local-bin-trust.test.ts`.
 	beforeEach(() => setProjectTrustState("trusted"));
+
+	// #4530 r7: managed directories must not become the cached formatter command.
+	it("rejects a managed Biome directory", async () => {
+		const { workspaceRoot } = setupMonorepo();
+		const candidate = path.join(
+			getGlobalPiLensDir(),
+			"tools",
+			"node_modules",
+			".bin",
+			process.platform === "win32" ? "biome.cmd" : "biome",
+		);
+		fs.mkdirSync(candidate, { recursive: true });
+		try {
+			const result = await (
+				new BiomeClient() as unknown as {
+					getBiomeBinary(cwd: string): Promise<{ cmd: string }>;
+				}
+			).getBiomeBinary(workspaceRoot);
+			expect(result.cmd).not.toBe(candidate);
+		} finally {
+			fs.rmdirSync(candidate);
+		}
+	});
 
 	it("resolves the sub-package's biome when cwd points there, not process.cwd()'s", async () => {
 		const { workspaceRoot, subPackageRoot, subBiomeBin } = setupMonorepo();

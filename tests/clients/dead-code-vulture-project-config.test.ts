@@ -27,7 +27,10 @@ const safeSpawnAsync = vi.fn(
 		stderr: string;
 	}> => ({ error: null, status: 0, stdout: "", stderr: "" }),
 );
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 
 describe("PythonDeadCodeClient (vulture) — project-first resolution (#1731)", () => {
 	const tmpDirs: string[] = [];
@@ -61,7 +64,8 @@ describe("PythonDeadCodeClient (vulture) — project-first resolution (#1731)", 
 			: path.join(env.tmpDir, ".venv", "bin");
 		fs.mkdirSync(venvBin, { recursive: true });
 		const venvVulture = path.join(venvBin, isWin ? "vulture.exe" : "vulture");
-		fs.writeFileSync(venvVulture, "");
+		// #4530 r7: command acceptance requires the executable bit on POSIX.
+		fs.writeFileSync(venvVulture, "", { mode: 0o755 });
 
 		const { PythonDeadCodeClient } =
 			await import("../../clients/dead-code-client.js");

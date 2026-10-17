@@ -1304,8 +1304,13 @@ describe("standalone host trust startup (#4300)", () => {
 			const home = path.join(project, "home");
 			const bin = path.join(project, "node_modules", ".bin");
 			fs.mkdirSync(bin, { recursive: true });
-			fs.writeFileSync(path.join(bin, "oxlint"), "");
-			fs.writeFileSync(path.join(bin, "oxlint.cmd"), "");
+			// Executable stubs: command discovery accepts only a regular file that
+			// is executable on POSIX (#4530), so an empty mode-0644 stub is refused
+			// and the lookup falls back to the bare name.
+			fs.writeFileSync(path.join(bin, "oxlint"), "#!/bin/sh\n", {
+				mode: 0o755,
+			});
+			fs.writeFileSync(path.join(bin, "oxlint.cmd"), "", { mode: 0o755 });
 			try {
 				await runBin(
 					args,

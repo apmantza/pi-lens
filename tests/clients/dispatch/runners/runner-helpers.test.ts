@@ -62,7 +62,10 @@ const toolBinResolutions = () =>
 		.map((call) => call[0])
 		.filter((entry) => entry?.phase === "tool_bin_resolved");
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
 	safeSpawnAsync: vi.fn(async () => ({ stdout: "", stderr: "", status: 1 })),
 }));
@@ -125,7 +128,7 @@ describe("runner-helpers availability checker", () => {
 				"eslint.cmd",
 			);
 			fs.mkdirSync(path.dirname(localUnix), { recursive: true });
-			fs.writeFileSync(localUnix, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(localUnix, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 			fs.writeFileSync(localWin, "@echo off\n");
 
 			const resolved = resolveNodeToolCommand(env.tmpDir, "eslint");
@@ -187,7 +190,7 @@ describe("runner-helpers availability checker", () => {
 			const vendorWin = path.join(env.tmpDir, "vendor", "bin", "phpstan.bat");
 			fs.mkdirSync(path.dirname(vendorUnix), { recursive: true });
 			fs.mkdirSync(nested, { recursive: true });
-			fs.writeFileSync(vendorUnix, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(vendorUnix, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 			fs.writeFileSync(vendorWin, "@echo off\n");
 
 			const resolved = resolveVendorToolCommand(nested, "phpstan", ".bat");
@@ -214,7 +217,9 @@ describe("runner-helpers availability checker", () => {
 			fs.mkdirSync(nested, { recursive: true });
 			const homeVendorBin = path.join(fakeHome, "vendor", "bin");
 			fs.mkdirSync(homeVendorBin, { recursive: true });
-			fs.writeFileSync(path.join(homeVendorBin, "phpstan"), "#!/bin/sh\n");
+			fs.writeFileSync(path.join(homeVendorBin, "phpstan"), "#!/bin/sh\n", {
+				mode: 0o755,
+			});
 			fs.writeFileSync(path.join(homeVendorBin, "phpstan.bat"), "@echo off\n");
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
@@ -379,7 +384,7 @@ describe("runner-helpers availability checker", () => {
 				".bin",
 				"markdownlint-cli2",
 			);
-			fs.writeFileSync(managedBinary, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(managedBinary, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 			const installerMod =
 				await import("../../../../clients/installer/index.js");
 			await createVenvFinder("markdownlint-cli2", ".cmd", ["--no-globs", "-"])(
@@ -571,7 +576,8 @@ describe("runner-helpers availability checker", () => {
 			const planted = ["ast-grep", "ast-grep.cmd", "ast-grep.exe", "sg"].map(
 				(name) => path.join(homeBinDir, name),
 			);
-			for (const bin of planted) fs.writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+			for (const bin of planted)
+				fs.writeFileSync(bin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
@@ -644,7 +650,7 @@ describe("runner-helpers availability checker", () => {
 			fs.mkdirSync(homeBinDir, { recursive: true });
 			const ext = process.platform === "win32" ? ".cmd" : "";
 			const homeShim = path.join(homeBinDir, `ast-grep${ext}`);
-			fs.writeFileSync(homeShim, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(homeShim, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
@@ -702,7 +708,7 @@ describe("runner-helpers availability checker", () => {
 			fs.mkdirSync(projectBinDir, { recursive: true });
 			const ext = process.platform === "win32" ? ".cmd" : "";
 			const projectBin = path.join(projectBinDir, `ast-grep${ext}`);
-			fs.writeFileSync(projectBin, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(projectBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			process.chdir(cwdEnv.tmpDir);
 			resetDispatchAvailabilityState();
@@ -1147,7 +1153,9 @@ describe("runner-helpers availability checker", () => {
 			const binName = isWin ? "prisma.cmd" : "prisma";
 			const local = path.join(env.tmpDir, "node_modules", ".bin", binName);
 			fs.mkdirSync(path.dirname(local), { recursive: true });
-			fs.writeFileSync(local, isWin ? "@echo off\n" : "#!/bin/sh\n");
+			fs.writeFileSync(local, isWin ? "@echo off\n" : "#!/bin/sh\n", {
+				mode: 0o755,
+			});
 
 			const resolved = await resolveLocalFirstAsync("prisma", env.tmpDir);
 			expect(resolved).toEqual({ cmd: local, args: [] });
@@ -1168,7 +1176,11 @@ describe("runner-helpers availability checker", () => {
 
 			const resolved = await resolveLocalFirstAsync("prisma", env.tmpDir);
 			expect(resolved).toEqual({ cmd: globalPath, args: [] });
-			expect(findGlobalBinary).toHaveBeenCalledWith("prisma", ".cmd");
+			expect(findGlobalBinary).toHaveBeenCalledWith(
+				"prisma",
+				".cmd",
+				env.tmpDir,
+			);
 			// Found via direct file lookup — the PATH `--version` spawn is skipped.
 			expect(safeSpawnMod.safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
@@ -1217,7 +1229,7 @@ describe("runner-helpers availability checker", () => {
 			const ruffBWin = path.join(dirB.tmpDir, ".venv", "Scripts", "ruff.exe");
 			fs.mkdirSync(path.dirname(ruffBUnix), { recursive: true });
 			fs.mkdirSync(path.dirname(ruffBWin), { recursive: true });
-			fs.writeFileSync(ruffBUnix, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(ruffBUnix, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 			fs.writeFileSync(ruffBWin, "@echo off\n");
 
 			const checker = createAvailabilityChecker("ruff", ".exe");
@@ -1258,7 +1270,7 @@ describe("runner-helpers availability checker", () => {
 		try {
 			const toolPath = path.join(env.tmpDir, ".venv", "bin", "ruff");
 			fs.mkdirSync(path.dirname(toolPath), { recursive: true });
-			fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			// Every spawn consumer runs shell:false (safe-spawn #817), so a
 			// quote-wrapped path is a literal filename that ENOENTs on every
@@ -1308,7 +1320,7 @@ describe("createVenvFinder: managed tools dir (#1638)", () => {
 						)
 					: path.join(env.tmpDir, "tools", "node_modules", ".bin", "pyright");
 			fs.mkdirSync(path.dirname(managedBin), { recursive: true });
-			fs.writeFileSync(managedBin, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(managedBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			// No cwd venv exists, so pre-fix this falls straight to the bare
 			// command name — a PATH lookup that misses for a managed-dir-only
@@ -1349,7 +1361,7 @@ describe("createVenvFinder: managed tools dir (#1638)", () => {
 							"managedtool",
 						);
 			fs.mkdirSync(path.dirname(managedBin), { recursive: true });
-			fs.writeFileSync(managedBin, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(managedBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
 			vi.mocked(safeSpawnMod.safeSpawnAsync).mockReset();
@@ -1374,7 +1386,7 @@ describe("createVenvFinder: managed tools dir (#1638)", () => {
 		try {
 			const venvBin = path.join(env.tmpDir, ".venv", "bin", "ruff");
 			fs.mkdirSync(path.dirname(venvBin), { recursive: true });
-			fs.writeFileSync(venvBin, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(venvBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			const resolved = await createVenvFinder("ruff")(env.tmpDir);
 			expect(resolved).toEqual({ path: venvBin, rung: "venv" });
@@ -1406,7 +1418,7 @@ describe("createVenvFinder: managed tools dir (#1638)", () => {
 					? path.join(repoRoot, ".venv", "Scripts", "ruff.exe")
 					: path.join(repoRoot, ".venv", "bin", "ruff");
 			fs.mkdirSync(path.dirname(venvBin), { recursive: true });
-			fs.writeFileSync(venvBin, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(venvBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 
 			expect(await createVenvFinder("ruff", ".exe")(pkg)).toEqual({
 				path: "ruff",
@@ -1434,7 +1446,7 @@ describe("createVenvFinder: managed tools dir (#1638)", () => {
 					? path.join(fakeHome, ".venv", "Scripts", "homeonlytool.exe")
 					: path.join(fakeHome, ".venv", "bin", "homeonlytool");
 			fs.mkdirSync(path.dirname(homeVenvBin), { recursive: true });
-			fs.writeFileSync(homeVenvBin, "#!/bin/sh\nexit 0\n");
+			fs.writeFileSync(homeVenvBin, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 			process.env.HOME = fakeHome;
 			process.env.USERPROFILE = fakeHome;
 
@@ -2056,7 +2068,7 @@ describe("managed shim resolution verifies the binary (#1657)", () => {
 				? path.join(homeDir, "tools", "node_modules", ".bin", `${tool}.cmd`)
 				: path.join(homeDir, "tools", "node_modules", ".bin", tool);
 		fs.mkdirSync(path.dirname(shim), { recursive: true });
-		fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n");
+		fs.writeFileSync(shim, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
 		return shim;
 	}
 

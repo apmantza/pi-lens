@@ -1,10 +1,18 @@
+import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setupTestEnvironment } from "./test-utils.js";
+
+const tmp = setupTestEnvironment("pi-lens-ruff-dedupe-");
 
 const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
 const ensureTool = vi.fn();
 
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+	safeSpawn,
+}));
 vi.mock("../../clients/installer/index.js", () => ({
 	// #2140: the probe resolver asks the installer for a release-managed
 	// binary (`~/.pi-lens/bin`) before falling back to PATH. Undefined is
@@ -97,7 +105,10 @@ describe("RuffClient.ensureAvailable() — in-flight dedupe (#120)", () => {
 		ensureTool.mockResolvedValue(managed);
 		const { RuffClient } = await import("../../clients/ruff-client.js");
 		const client = new RuffClient();
-		const file = `${process.cwd()}\\ruff-managed-test.py`;
+		// #4566 round 11: the fixture file lives in this file's own tmp root. A
+		// backslash-joined `${process.cwd()}\<name>` is a filename character on
+		// POSIX, so it wrote a sibling of the worktree.
+		const file = path.join(tmp.tmpDir, "ruff-managed-test.py");
 		const fs = await import("node:fs");
 		fs.writeFileSync(file, "x = 1\n");
 		try {

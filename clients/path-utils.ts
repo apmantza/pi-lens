@@ -884,8 +884,21 @@ export function homeRelativePath(
 }
 
 export function isUnderDir(child: string, parent: string): boolean {
-	const normChild = normalizeFilePath(child);
-	const normParent = normalizeFilePath(parent);
+	return isUnderCanonicalDir(
+		normalizeFilePath(child),
+		normalizeFilePath(parent),
+	);
+}
+
+/**
+ * {@link isUnderDir} for two spellings already passed through
+ * `normalizeFilePath`, so a caller testing many children against a few
+ * parents canonicalizes each path once (#4530).
+ */
+export function isUnderCanonicalDir(
+	normChild: string,
+	normParent: string,
+): boolean {
 	// Ensure parent ends with / for prefix matching
 	const parentPrefix = normParent.endsWith("/") ? normParent : `${normParent}/`;
 	return normChild === normParent || normChild.startsWith(parentPrefix);

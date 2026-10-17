@@ -7,7 +7,10 @@ import { setupTestEnvironment } from "./test-utils.js";
 // before/after file diffing on top of the real autofix policy (which reads
 // .eslintrc from disk).
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
-vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
+	safeSpawnAsync,
+}));
 
 import { runAutofix } from "../../clients/pipeline.js";
 

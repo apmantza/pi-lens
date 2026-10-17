@@ -22,6 +22,10 @@ import {
 	startHostStallSampler,
 } from "../dispatch/runners/utils/availability-policy.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
+import {
+	normalizeSearchPath,
+	trustScopedSpawnEnv,
+} from "../package-manager.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 
 const JAVA_EXE = process.platform === "win32" ? "java.exe" : "java";
@@ -240,6 +244,7 @@ async function runJavaProbe(): Promise<boolean | undefined> {
 	try {
 		result = await safeSpawnAsync(finder, ["java"], {
 			timeout: JAVA_PROBE_TIMEOUT_MS,
+			env: trustScopedSpawnEnv() ?? process.env,
 		});
 	} finally {
 		hostStallMs = sampler.stop();
@@ -316,7 +321,7 @@ export async function resolveJavaRuntimeEnv(): Promise<
 		_cachedEnv = {
 			value: {
 				JAVA_HOME: home,
-				PATH: binDir + path.delimiter + currentPath,
+				PATH: normalizeSearchPath([binDir, currentPath]),
 			},
 		};
 		return _cachedEnv.value;

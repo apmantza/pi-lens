@@ -59,7 +59,8 @@ function decisionsFor(tool: string): Array<Record<string, unknown>> {
 		);
 }
 
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawn,
 	safeSpawnAsync,
 	isCommandAvailableAsync: vi.fn(async () => false),

@@ -2319,6 +2319,15 @@
 					]
 				}
 			]
+		},
+		"package-manager-trust": {
+			"pins": {
+				"PackageManagerRootKey": {
+					"value": "TRUE",
+					"test": "tests/clients/global-binary-trust-4530.test.ts",
+					"title": "isolates availability by the caller root (#4566 F2)"
+				}
+			}
 		}
 	}
 }

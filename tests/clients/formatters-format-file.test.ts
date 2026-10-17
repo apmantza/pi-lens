@@ -4,7 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const safeSpawnAsync = vi.fn();
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	which: vi.fn(async () => "/usr/bin/terragrunt"),
@@ -87,9 +88,11 @@ describe("formatFile", () => {
 				fs.mkdirSync(path.join(env.tmpDir, "node_modules", ".bin"), {
 					recursive: true,
 				});
+				// #4530 r7: command acceptance requires the executable bit on POSIX.
 				fs.writeFileSync(
 					path.join(env.tmpDir, "node_modules", ".bin", name),
 					"",
+					{ mode: 0o755 },
 				);
 				fs.writeFileSync(path.join(env.tmpDir, ".gitignore"), "ignored.md\n");
 				fs.writeFileSync(

@@ -72,6 +72,8 @@ const HAND_ROLLED_GENERATION_GUARDS: Readonly<Record<string, string>> = {
 		"the unknown-trust notice compares the degradation ledger's session generation only to re-arm a bounded log latch; the ledger owns the counter and reset, so replacing this scalar comparison with a second GenerationSource would duplicate session identity rather than guard a stale write",
 	"lsp/launch.ts":
 		"the unknown-trust project-local binary notice compares the degradation ledger's session generation only to re-arm a bounded launch warning; the ledger owns the counter and reset, so a second GenerationSource would duplicate the same session identity",
+	"package-manager.ts":
+		"the trust-scoped PATH refusal notice compares the degradation ledger's session generation only to re-arm a bounded once-per-session warn; the ledger owns the counter and reset, so a second GenerationSource would duplicate the same session identity rather than guard a stale write. Clear-on-transition, the same shape as lsp/config.ts's unknown-trust notice",
 	"review-graph/builder.ts":
 		"the workspace-cache epoch this primitive was modelled on, plus checkpoint and persist generations that gate post-await promotions (see the `_persistGenerations.get(key) !== result.generation` guard). A GenerationMap candidate; migrating a file this size is real work, not a rider on #1754's proof-of-two",
 	"project-snapshot.ts":

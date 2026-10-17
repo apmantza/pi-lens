@@ -51,7 +51,7 @@ function plantNodeBin(dir: string, name: string): string {
 	const bin = path.join(dir, "node_modules", ".bin");
 	fs.mkdirSync(bin, { recursive: true });
 	const target = path.join(bin, name);
-	fs.writeFileSync(target, "");
+	fs.writeFileSync(target, "", { mode: 0o755 });
 	fs.writeFileSync(`${target}.cmd`, "");
 	return target;
 }

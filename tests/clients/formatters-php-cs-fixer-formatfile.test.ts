@@ -12,7 +12,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const safeSpawnAsync = vi.fn();
-vi.mock("../../clients/safe-spawn.js", () => ({
+vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	which: vi.fn(async () => null),
@@ -54,7 +55,10 @@ describe("formatFile — php-cs-fixer ancestor config carriage (#2472)", () => {
 			);
 			const vendorBin = vendorBinPath(env.tmpDir);
 			fs.mkdirSync(path.dirname(vendorBin), { recursive: true });
-			fs.writeFileSync(vendorBin, isWin ? "@echo off\r\n" : "#!/bin/sh\n");
+			// #4530 r7: command acceptance requires the executable bit on POSIX.
+			fs.writeFileSync(vendorBin, isWin ? "@echo off\r\n" : "#!/bin/sh\n", {
+				mode: 0o755,
+			});
 			const filePath = path.join(env.tmpDir, "src", "App", "Controller.php");
 			fs.mkdirSync(path.dirname(filePath), { recursive: true });
 			fs.writeFileSync(filePath, "<?php\nclass Controller {}\n");

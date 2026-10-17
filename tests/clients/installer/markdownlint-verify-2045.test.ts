@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
 const sessionLog = vi.hoisted(() => vi.fn());
@@ -40,6 +40,17 @@ function result(overrides: Record<string, unknown> = {}) {
 }
 
 describe("managed markdownlint verification (#2045)", () => {
+	// The exact ledger rows below are about verification output. A test run
+	// started through npm puts the checkout's bin dirs on PATH, which the
+	// trust-scoped verification records as ignored (#4530), so the file pins a
+	// PATH outside the checkout.
+	beforeEach(() => {
+		vi.stubEnv("PATH", path.dirname(process.execPath));
+	});
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
 	it("uses the captured bounded stdin command", () => {
 		const tool = TOOLS.find((entry) => entry.id === "markdownlint");
 		expect(tool?.checkArgs).toEqual(["--no-globs", "-"]);

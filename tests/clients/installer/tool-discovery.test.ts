@@ -282,8 +282,15 @@ const EXE = process.platform === "win32" ? ".exe" : "";
  * what the probe of it answers.
  */
 const pathDirs: string[] = [];
+// node:os is mocked above (tmpdir is "/tmp"); the PATH fixtures live in the
+// run's real tmpdir.
+const realOs = await vi.importActual<typeof import("node:os")>("node:os");
 function pathDirWith(command: string): string {
-	const dir = realFs.mkdtempSync(path.join(process.cwd(), ".tmp-path-cand-"));
+	// Outside the checkout (#4530): the dir stands in for a global PATH entry,
+	// and the installer ignores PATH dirs inside an untrusted session project.
+	const dir = realFs.mkdtempSync(
+		path.join(realOs.tmpdir(), "pi-lens-path-cand-"),
+	);
 	pathDirs.push(dir);
 	realFs.writeFileSync(path.join(dir, command), "#!/bin/sh\nexit 1\n", {
 		mode: 0o750,

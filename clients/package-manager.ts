@@ -15,6 +15,7 @@
  */
 
 import * as fs from "node:fs";
+import { BoundedFifoMap } from "./bounded-cache.js";
 import * as os from "node:os";
 import * as path from "node:path";
 import { resolve as resolvePath } from "node:path";
@@ -26,16 +27,31 @@ import {
 	logAvailabilityDecision,
 	startHostStallSampler,
 } from "./dispatch/runners/utils/availability-policy.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import {
+	safeSpawnAsync,
+	getPathExts,
+	isAcceptedCommandFile,
+} from "./safe-spawn.js";
 import { probeToolAsync } from "./tool-probe.js";
 import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
 import {
 	createGenerationSource,
 	type GenerationHandle,
 } from "./generation-guard.js";
-import { isAtOrAboveHomeDir, isUnderDir, walkUpDirs } from "./path-utils.js";
+import {
+	isAtOrAboveHomeDir,
+	isUnderCanonicalDir,
+	isUnderDir,
+	normalizeFilePath,
+	pathsEqual,
+	realpathOrResolve,
+	walkUpDirs,
+} from "./path-utils.js";
 import { getProjectTrustState } from "./project-trust.js";
-import { recordDegradationOnce } from "./degradation-ledger.js";
+import {
+	getDegradationLedgerGeneration,
+	recordDegradationOnce,
+} from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
 
 export type NodePackageManager = "npm" | "pnpm" | "yarn" | "bun";
@@ -135,26 +151,56 @@ const PROBE_TIMEOUT_MS = 5_000;
  * only a genuine absence (`where`/`which` exits non-zero, or ENOENT) latches;
  * a timeout, abort or host stall expires on a cooldown and is re-probed.
  */
-const availabilityLatches = new Map<NodePackageManager, AvailabilityLatch>();
+/**
+ * #4530 round 9: the availability of a package manager now depends on project
+ * trust (a manager reachable only through an untrusted project's PATH is not
+ * available), so the latch and the in-flight probe are keyed by the trust
+ * scope as well as the manager. `turn_start` re-adopts the host's answer, and a
+ * flip reads the other scope's keys — empty, so the next lookup re-probes —
+ * instead of serving a verdict the other trust state produced.
+ */
+function trustScope(): "trusted" | "scoped" {
+	return getProjectTrustState() === "trusted" ? "trusted" : "scoped";
+}
 
-function getLatch(pm: NodePackageManager): AvailabilityLatch {
-	let latch = availabilityLatches.get(pm);
+function availabilityKey(pm: NodePackageManager, cwd: string): string {
+	return `${trustScope()}:${normalizeFilePath(cwd)}:${pm}`;
+}
+
+const availabilityLatches = new BoundedFifoMap<string, AvailabilityLatch>(8);
+
+function getLatch(key: string): AvailabilityLatch {
+	let latch = availabilityLatches.get(key);
 	if (!latch) {
 		latch = createAvailabilityLatch();
-		availabilityLatches.set(pm, latch);
+		availabilityLatches.set(key, latch);
 	}
 	return latch;
 }
 
-async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
-	const latch = getLatch(pm);
+/**
+ * Whether `pm` can run. `key` is captured by the caller (with the manager that
+ * goes with it) so a trust flip during an awaited probe cannot make a later
+ * stage read a latch it did not start under (defect shapes 19 and 58).
+ */
+async function probeAvailability(
+	pm: NodePackageManager,
+	key: string,
+	cwd: string,
+): Promise<boolean> {
+	const latch = getLatch(key);
 	const startedAt = Date.now();
 	const finder = onWindows() ? "where" : "which";
 	const sampler = startHostStallSampler();
 	let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
 	let hostStallMs: number;
 	try {
-		result = await probeToolAsync(finder, [pm], { timeout: PROBE_TIMEOUT_MS });
+		// #4530: the lookup resolves through the trust-scoped PATH.
+		const env = trustScopedSpawnEnv(cwd);
+		result = await probeToolAsync(finder, [pm], {
+			timeout: PROBE_TIMEOUT_MS,
+			...(env && { env }),
+		});
 	} finally {
 		hostStallMs = sampler.stop();
 	}
@@ -216,9 +262,11 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
  */
 function isAvailable(
 	pm: NodePackageManager,
+	cwd: string,
 	onTransient?: () => void,
 ): Promise<boolean> {
-	const latch = getLatch(pm);
+	const key = availabilityKey(pm, cwd);
+	const latch = getLatch(key);
 
 	const reportIfTransient = (result: boolean): boolean => {
 		if (!result && isTransientDecision({ outcome: latch.getOutcome() })) {
@@ -232,8 +280,8 @@ function isAvailable(
 
 	// A verdict can now expire, so concurrent callers arriving just after a
 	// cooldown must share ONE probe rather than each spawning their own.
-	const shared = packageManagerProbeFlights.run(`package-manager:${pm}`, () =>
-		probeAvailability(pm),
+	const shared = packageManagerProbeFlights.run(key, () =>
+		probeAvailability(pm, key, cwd),
 	);
 	return shared.promise.then(reportIfTransient);
 }
@@ -274,11 +322,11 @@ export async function resolveNodePackageManager(
 	cwd: string = process.cwd(),
 ): Promise<NodePackageManager> {
 	const declared = detectNodePackageManager(cwd);
-	if (declared && (await isAvailable(declared))) {
+	if (declared && (await isAvailable(declared, cwd))) {
 		return declared;
 	}
 	for (const pm of PREFERENCE) {
-		if (await isAvailable(pm)) return pm;
+		if (await isAvailable(pm, cwd)) return pm;
 	}
 	return "npm";
 }
@@ -357,36 +405,43 @@ export function updateArgs(
  * a session reset cannot repopulate the fresh memo. Reset clears the flight
  * map separately, so later callers cannot share the pre-reset probe.
  */
-const globalBinDirCache = new Map<NodePackageManager, string[]>();
+// Keyed by trust scope too (#4530): a scoped query answers differently.
+const globalBinDirCache = new BoundedFifoMap<string, string[]>(8);
 const packageManagerCacheGeneration = createGenerationSource(
 	"package-manager-global-bin",
 );
 const globalBinDirProbeFlights = createAvailabilityProbeFlight<string[]>();
 
 /** Directories where a given manager installs global binaries. */
-async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
-	const cached = globalBinDirCache.get(pm);
+async function globalBinDirsFor(
+	pm: NodePackageManager,
+	cwd: string,
+): Promise<string[]> {
+	const key = availabilityKey(pm, cwd);
+	const cached = globalBinDirCache.get(key);
 	if (cached) return cached;
 	const generation = packageManagerCacheGeneration.capture();
 
 	// Concurrent callers (dispatch runs several tools per edit) must share ONE
 	// probe rather than each spawning their own `npm config get prefix` (#1602).
-	const shared = globalBinDirProbeFlights.run(pm, () =>
-		probeGlobalBinDirs(pm, generation),
+	const shared = globalBinDirProbeFlights.run(key, () =>
+		probeGlobalBinDirs(pm, key, generation, cwd),
 	);
 	return shared.promise;
 }
 
 async function probeGlobalBinDirs(
 	pm: NodePackageManager,
+	key: string,
 	generation: GenerationHandle,
+	cwd: string,
 ): Promise<string[]> {
 	if (pm === "bun") {
 		// bun has no per-call query cost — the global bin dir is deterministic.
 		const base = process.env.BUN_INSTALL || path.join(os.homedir(), ".bun");
 		const dirs = [path.join(base, "bin")];
-		generation.guardedWrite(pm, () => {
-			globalBinDirCache.set(pm, dirs);
+		generation.guardedWrite(key, () => {
+			globalBinDirCache.set(key, dirs);
 		});
 		return dirs;
 	}
@@ -397,7 +452,14 @@ async function probeGlobalBinDirs(
 			: pm === "pnpm"
 				? ["bin", "-g"]
 				: ["global", "bin"]; // yarn
-	const res = await safeSpawnAsync(pmBinary(pm), query, { timeout: 5000 });
+	// #4530: under an untrusted project the query resolves through the
+	// trust-scoped PATH and runs from HOME, so project configuration cannot
+	// redirect a global lookup.
+	const env = trustScopedSpawnEnv(cwd);
+	const res = await safeSpawnAsync(pmBinary(pm), query, {
+		timeout: 5000,
+		...(env && { env, cwd: os.homedir() }),
+	});
 	if (res.status !== 0 || res.error) return [];
 	const out = res.stdout.trim();
 	if (!out) return [];
@@ -406,8 +468,8 @@ async function probeGlobalBinDirs(
 	// on Windows. pnpm/yarn already print the bin dir directly.
 	const dirs =
 		pm === "npm" ? [onWindows() ? out : path.join(out, "bin")] : [out];
-	generation.guardedWrite(pm, () => {
-		globalBinDirCache.set(pm, dirs);
+	generation.guardedWrite(key, () => {
+		globalBinDirCache.set(key, dirs);
 	});
 	return dirs;
 }
@@ -425,15 +487,19 @@ async function probeGlobalBinDirs(
  */
 export async function allAvailableGlobalBinDirs(
 	onTransient?: () => void,
+	cwd: string = process.cwd(),
 ): Promise<string[]> {
 	const dirs: string[] = [];
 	const seen = new Set<string>();
 	for (const pm of PREFERENCE) {
-		if (!(await isAvailable(pm, onTransient))) continue;
-		for (const dir of await globalBinDirsFor(pm)) {
+		if (!(await isAvailable(pm, cwd, onTransient))) continue;
+		for (const dir of await globalBinDirsFor(pm, cwd)) {
 			const normalized = path.resolve(dir);
 			if (seen.has(normalized)) continue;
 			seen.add(normalized);
+			// #4530: a global bin dir that reaches an untrusted project is no
+			// global one.
+			if (trustScopedPath(normalized, cwd) !== normalized) continue;
 			dirs.push(normalized);
 		}
 	}
@@ -449,20 +515,32 @@ export async function allAvailableGlobalBinDirs(
  * probe: it finds tools installed via `pnpm add -g` / `bun add -g` (whose bin
  * dirs are often not on PATH) and survives the PATH-cache staleness that follows
  * an `install -g`. On Windows it checks the `.cmd` shim, then `.exe`, then the
- * bare name; on Unix just the bare name.
+ * remaining PATHEXT suffixes and bare name; on Unix just the bare name.
  */
 export async function findGlobalBinary(
 	command: string,
 	windowsExt = ".cmd",
+	cwd: string = process.cwd(),
 ): Promise<string | undefined> {
 	const candidates = onWindows()
-		? [`${command}${windowsExt}`, `${command}.exe`, command]
+		? [...new Set([windowsExt, ".exe", ...getPathExts(process.env), ""])].map(
+				(ext) => `${command}${ext}`,
+			)
 		: [command];
 	try {
-		for (const binDir of await allAvailableGlobalBinDirs()) {
+		for (const binDir of await allAvailableGlobalBinDirs(undefined, cwd)) {
 			for (const name of candidates) {
 				const full = path.join(binDir, name);
-				if (fs.existsSync(full)) return full;
+				if (!isAcceptedCommandFile(full)) continue;
+				// #4530 round 9: the directory is outside the project, but the file
+				// it holds can still be a link into it (an npm-linked language
+				// server, say), and `isAcceptedCommandFile` follows that link. The
+				// trust verdict therefore belongs to the target, not the directory.
+				if (commandResolvesIntoProject(full, cwd)) {
+					refuseGlobalCommandTarget(full);
+					continue;
+				}
+				return full;
 			}
 		}
 	} catch {
@@ -554,40 +632,241 @@ function refuseLocalBin(tool: string, root: string): LocalBinTrustRefusal {
 	return { kind: "refused-by-trust", tool, root: resolvedRoot, trust };
 }
 
+/** Every project-local bin dir of `cwd` and its ancestors below HOME. */
+function* projectLocalBinDirs(cwd: string): Generator<string> {
+	for (const ancestor of walkUpDirs(cwd)) {
+		if (isAtOrAboveHomeDir(ancestor, os.homedir())) return;
+		for (const binDir of PROJECT_LOCAL_BIN_DIRS)
+			yield path.join(ancestor, binDir);
+	}
+}
+
 /** Keep trust classification beside the resolver's canonical directory set. */
 export function isProjectLocalBinPath(
 	resolvedCommand: string,
 	cwd: string,
 ): boolean {
-	for (const ancestor of walkUpDirs(cwd)) {
-		if (isAtOrAboveHomeDir(ancestor, os.homedir())) break;
-		if (
-			PROJECT_LOCAL_BIN_DIRS.some((binDir) =>
-				isUnderDir(resolvedCommand, path.join(ancestor, binDir)),
-			)
-		)
-			return true;
+	for (const binDir of projectLocalBinDirs(cwd)) {
+		if (isUnderDir(resolvedCommand, binDir)) return true;
 	}
 	return false;
 }
 
 /**
- * #4515: whether a bare command spawned with this process's PATH can resolve
- * into the project at `cwd`. An entry counts when it is a project-local bin dir
- * (the classifier above), lies at or under `cwd`, or is relative: a relative
- * entry follows each spawn's cwd, and on POSIX an empty entry is the cwd.
+ * #4515: a test for whether one PATH entry (or a global bin dir) can resolve
+ * a bare command into the project at `cwd`. It counts when it is a
+ * project-local bin dir of `cwd` or an ancestor, lies at or under `cwd`, or is
+ * relative: a relative entry follows each spawn's cwd, and on POSIX an empty
+ * entry is the cwd. A `cwd` at or above HOME is no project, the ceiling the
+ * project-local walk already stops at (#4530), so HOME's own tool dirs stay
+ * usable there. Each directory is filesystem-resolved once per test, not per entry.
  */
-export function commandSearchReachesProject(cwd: string): boolean {
+function projectReach(cwd: string): (entry: string) => boolean {
 	const posix = process.platform !== "win32";
-	return (process.env.PATH ?? "")
-		.split(path.delimiter)
-		.some((entry) =>
-			entry === ""
-				? posix
-				: !path.isAbsolute(entry) ||
-					isUnderDir(entry, cwd) ||
-					isProjectLocalBinPath(entry, cwd),
+	const dirs = [
+		...(isAtOrAboveHomeDir(cwd, os.homedir()) ? [] : [cwd]),
+		...projectLocalBinDirs(cwd),
+	].map((dir) => normalizeFilePath(realpathOrResolve(dir)));
+	return (entry) => {
+		if (entry === "") return posix;
+		if (!path.isAbsolute(entry)) return true;
+		const canonical = normalizeFilePath(realpathOrResolve(entry));
+		return dirs.some((dir) => isUnderCanonicalDir(canonical, dir));
+	};
+}
+
+/** #4515: whether a bare command spawned with this process's PATH can resolve into `cwd`. */
+export function commandSearchReachesProject(cwd: string): boolean {
+	return (process.env.PATH ?? "").split(path.delimiter).some(projectReach(cwd));
+}
+
+/**
+ * #4530 round 9: whether a RESOLVED command's real target lies in the project
+ * pi has not trusted. A trust check on the directory that holds the command
+ * answers a different question: a global bin dir outside the project (or an
+ * outside PATH entry) can hold a link into it — an npm-linked language server
+ * is the ordinary case — and the resolver follows that link when it spawns.
+ * The target is what runs, so the target is what the trust gate judges
+ * (#4566 round 9).
+ */
+export function commandResolvesIntoProject(
+	resolvedCommand: string,
+	cwd: string = process.cwd(),
+): boolean {
+	if (getProjectTrustState() === "trusted") return false;
+	const target = normalizeFilePath(realpathOrResolve(resolvedCommand));
+	const reaches = projectReach(cwd);
+	if (reaches(target)) return true;
+	// #4566 F3: npm Windows shims are regular files, not symlinks. Their
+	// script is the executable target; unknown script text cannot vouch for it.
+	if (!/\.(?:cmd|ps1)$/i.test(resolvedCommand)) return false;
+	try {
+		const content = fs.readFileSync(resolvedCommand, "utf8");
+		const match =
+			/["'](?:%~dp0|%dp0%|\$basedir)[/\\]([^"'\r\n]+\.(?:mjs|cjs|js))["']/i.exec(
+				content,
+			)?.[1];
+		if (!match) return true;
+		const script = path.resolve(
+			path.dirname(resolvedCommand),
+			match.replace(/[/\\]/g, path.sep),
 		);
+		return reaches(normalizeFilePath(realpathOrResolve(script)));
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * One bounded record per (target, session) for a global command that resolves
+ * into the project; the link's own spelling is kept in the metadata so the
+ * global directory that holds it stays identifiable.
+ */
+function refuseGlobalCommandTarget(resolvedCommand: string): void {
+	const trust = getProjectTrustState() as "untrusted" | "unknown";
+	const target = normalizeFilePath(realpathOrResolve(resolvedCommand));
+	if (
+		recordDegradationOnce({
+			kind: "trust-refusal",
+			subject: `global-command-target:${target}`,
+			reason: `global command target could not be admitted outside the project: pi project trust is ${trust}`,
+		})
+	) {
+		logExtension({
+			subsystem: "project-trust",
+			level: "warn",
+			message:
+				"global command target could not be admitted outside the project: mark the project trusted in pi or upgrade pi",
+			metadata: { command: resolvedCommand, target, trust },
+		});
+	}
+}
+
+/**
+ * #4530: the user-facing PATH-refusal notice is once per session, not once per
+ * refused entry. Several entries can reach the same project (an absolute
+ * `node_modules/.bin` and husky's relative one), and each warns with the same
+ * sentence, so the message names no entry and repeating it adds no signal. The
+ * `trust-refusal` ledger row below stays per entry, so the exact set is still
+ * observable. Keyed on the degradation generation, which `session_start`
+ * bumps, the same re-arm `unknownProjectLocalNoticeGeneration` uses.
+ */
+let trustScopedPathNoticeGeneration = -1;
+
+/**
+ * #4530: `pathValue` without the entries that reach the session project
+ * (`process.cwd()`) or `cwd`, while pi has not trusted the project; a trusted
+ * project gets `pathValue` back unchanged. pi-lens's own lookups, and the
+ * tools they start, resolve names through this PATH, so a binary inside the
+ * project never answers for a global one. Each ignored entry is recorded once
+ * per session; the notice is emitted once per session. `refusedEntries`, when
+ * supplied, receives those path spellings.
+ */
+export function trustScopedPath(
+	pathValue: string,
+	cwd: string = process.cwd(),
+	refusedEntries?: string[],
+): string {
+	const trust = getProjectTrustState();
+	if (trust === "trusted") return pathValue;
+	const generation = getDegradationLedgerGeneration();
+	const session = process.cwd();
+	const reaches = [session, ...(pathsEqual(cwd, session) ? [] : [cwd])].map(
+		projectReach,
+	);
+	const kept: string[] = [];
+	for (const entry of pathValue.split(path.delimiter)) {
+		if (!reaches.some((reach) => reach(entry))) {
+			kept.push(entry);
+			continue;
+		}
+		refusedEntries?.push(entry);
+		recordDegradationOnce({
+			kind: "trust-refusal",
+			subject: `project-path-entry:${entry}`,
+			reason: `lookup dir inside the project ignored: pi project trust is ${trust}`,
+		});
+		if (trustScopedPathNoticeGeneration !== generation) {
+			trustScopedPathNoticeGeneration = generation;
+			logExtension({
+				subsystem: "project-trust",
+				level: "warn",
+				message:
+					"lookup dir inside the project ignored: mark the project trusted in pi or upgrade pi",
+				metadata: { entry, trust },
+			});
+		}
+	}
+	return kept.join(path.delimiter);
+}
+
+/**
+ * #4530 round 9: a PATH value built from `parts`, never carrying a
+ * zero-length entry. POSIX makes the kernel search the child's own working
+ * directory for a zero-length PATH and for a zero-length entry between
+ * separators, so a value pi-lens composes must not contain one — a trust-scoped
+ * PATH that lost every entry is the case that made this visible (measured on
+ * Linux: `PATH=""` ran `./pnpm-shim` from the cwd, a removed PATH did not).
+ * The ONE seam every composer in the tree joins through, so the rule cannot
+ * drift per call site.
+ */
+export function normalizeSearchPath(
+	parts: readonly string[],
+	separator: string = path.delimiter,
+): string {
+	return parts
+		.flatMap((part) => part.split(separator))
+		.filter((entry) => entry !== "")
+		.join(separator);
+}
+
+/**
+ * #4530 round 9: put `pathValue`, scoped by {@link trustScopedPath}, onto a
+ * child's environment, or REMOVE the key when every entry was refused.
+ *
+ * A scoped result can be empty — every entry reached the project — and an empty
+ * PATH is not "no directories": it hands project code back the lookup the trust
+ * gate just took away (see {@link normalizeSearchPath}). A child with no PATH
+ * falls back to the system default search path, which never contains the cwd.
+ */
+export function setTrustScopedPath(
+	env: NodeJS.ProcessEnv,
+	pathValue: string,
+	cwd: string = process.cwd(),
+): void {
+	const scoped = trustScopedPath(pathValue, cwd);
+	// POSIX has one lookup key. Windows spellings name the same variable.
+	const spellings = new Set(
+		onWindows()
+			? Object.keys(env).filter((key) => key.toLowerCase() === "path")
+			: ["PATH"],
+	);
+	if (scoped !== "") spellings.add("PATH");
+	for (const key of spellings) {
+		if (scoped === "") delete env[key];
+		else env[key] = scoped;
+	}
+	if (scoped !== "" && process.platform === "win32") env.Path = scoped;
+}
+
+/**
+ * #4530: the environment for a spawn pi-lens makes on its own behalf, with
+ * every PATH spelling scoped by {@link trustScopedPath}, or `undefined` when
+ * the project is trusted and the caller keeps its environment.
+ */
+export function trustScopedSpawnEnv(
+	cwd: string = process.cwd(),
+): NodeJS.ProcessEnv | undefined {
+	if (getProjectTrustState() === "trusted") return undefined;
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	const spelling = onWindows()
+		? Object.keys(env).find((key) => key.toLowerCase() === "path")
+		: env.PATH === undefined
+			? undefined
+			: "PATH";
+	// An env without the platform PATH key inherits the system default search path.
+	if (spelling !== undefined) setTrustScopedPath(env, env[spelling] ?? "", cwd);
+	return env;
 }
 
 /** Tuning for {@link findLocalBinUpwards}. */
@@ -635,7 +914,7 @@ export interface LocalBinWalkOptions {
 }
 
 /**
- * THE project-local tool-bin walk: yields every `<binDir>/<tool>` that exists
+ * THE project-local tool-bin walk: yields every accepted `<binDir>/<tool>`
  * in `startDir` or one of its ancestors, nearest first, stopping at the HOME
  * ceiling (never the fs root — see below).
  *
@@ -685,7 +964,7 @@ function expandCandidateNames(
 		: [...tools];
 }
 
-/** Every `<dir>/<binDir>/<name>` that exists, for exactly `dir` — no walk. */
+/** Every accepted `<dir>/<binDir>/<name>`, for exactly `dir` — no walk. */
 function* matchesInDir(
 	dir: string,
 	names: readonly string[],
@@ -694,7 +973,7 @@ function* matchesInDir(
 	for (const name of names) {
 		for (const binDir of binDirs) {
 			const full = path.join(dir, binDir, name);
-			if (fs.existsSync(full)) yield full;
+			if (isAcceptedCommandFile(full)) yield full;
 		}
 	}
 }
@@ -852,6 +1131,6 @@ export async function findNodeToolBinary(
 ): Promise<string | undefined> {
 	return (
 		localBinPath(findLocalBinUpwards(tool, cwd, { windowsExt })) ??
-		(await findGlobalBinary(tool, windowsExt))
+		(await findGlobalBinary(tool, windowsExt, cwd))
 	);
 }

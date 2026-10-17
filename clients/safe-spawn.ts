@@ -1142,13 +1142,25 @@ function cacheWindowsCommandResult(
 	windowsCommandCache.set(key, { resolved, checkedAt: Date.now() });
 }
 
-function getPathExts(env: NodeJS.ProcessEnv): string[] {
+export function getPathExts(env: NodeJS.ProcessEnv): string[] {
 	const raw =
 		getWindowsEnvironmentValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
 	return raw
 		.split(";")
 		.map((ext) => ext.trim().toLowerCase())
 		.filter(Boolean);
+}
+
+/** Filesystem-only command acceptance; stat follows links and rejects dangling ones. */
+export function isAcceptedCommandFile(candidate: string): boolean {
+	if (!statIsFile(candidate)) return false;
+	if (process.platform === "win32") return true;
+	try {
+		fs.accessSync(candidate, fs.constants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function statIsFile(candidate: string): boolean {
@@ -2585,24 +2597,34 @@ export async function safeSpawnBatch(
 }
 
 /**
- * Check if a command is available in PATH (async version)
+ * Check if a command is available in PATH (async version).
+ * Callers may supply their own scoped environment for both finder and lookup.
  */
 export async function isCommandAvailableAsync(
 	command: string,
+	env?: NodeJS.ProcessEnv,
 ): Promise<boolean> {
 	const finder = process.platform === "win32" ? "where" : "which";
-	const result = await safeSpawnAsync(finder, [command], { timeout: 5000 });
+	const result = await safeSpawnAsync(finder, [command], {
+		timeout: 5000,
+		env: env ?? process.env,
+	});
 	return result.status === 0 && !result.error;
 }
 
 /**
- * Find the full path to a command (async version)
+ * Find the full path to a command (async version).
+ * Callers may supply their own scoped environment for both finder and lookup.
  */
 export async function findCommandAsync(
 	command: string,
+	env?: NodeJS.ProcessEnv,
 ): Promise<string | null> {
 	const finder = process.platform === "win32" ? "where" : "which";
-	const result = await safeSpawnAsync(finder, [command], { timeout: 5000 });
+	const result = await safeSpawnAsync(finder, [command], {
+		timeout: 5000,
+		env: env ?? process.env,
+	});
 
 	if (result.status !== 0 || result.error) return null;
 

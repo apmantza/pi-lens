@@ -21,7 +21,13 @@ import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { getGlobalPiLensLogDir } from "../probe-home-state.js";
 import { isFullyQualified } from "../path-utils.js";
-import { findGlobalBinary, isProjectLocalBinPath } from "../package-manager.js";
+import {
+	findGlobalBinary,
+	commandResolvesIntoProject,
+	isProjectLocalBinPath,
+	setTrustScopedPath,
+	trustScopedPath,
+} from "../package-manager.js";
 import {
 	getDegradationLedgerGeneration,
 	recordDegradationOnce,
@@ -32,6 +38,8 @@ import { OWNER_TAG_ENV, ownerTagForChildren } from "../process-snapshot.js";
 import { redactSecrets } from "../redact/secrets.js";
 import {
 	classifySpawnFailure,
+	getPathExts,
+	isAcceptedCommandFile,
 	holdOwnChildPid,
 	isOwnLiveChild,
 	resolveWindowsCommandForEnvironment,
@@ -332,7 +340,7 @@ function bypassPs1OnWindows(
 ): { command: string; args: string[]; needsShell: boolean } | undefined {
 	// 1. Prefer the .cmd sibling — cmd.exe handles it without execution policy issues
 	const cmdPath = `${ps1Path.slice(0, -4)}.cmd`;
-	if (fs.existsSync(cmdPath)) {
+	if (isAcceptedCommandFile(cmdPath)) {
 		return { command: cmdPath, args, needsShell: true };
 	}
 
@@ -348,7 +356,8 @@ function bypassPs1OnWindows(
 		if (match) {
 			const relPath = match[1].replace(/[/\\]/g, path.sep);
 			const jsPath = path.resolve(path.dirname(ps1Path), "..", relPath);
-			if (fs.existsSync(jsPath)) {
+			// This bypass runs only on Windows, where command acceptance is file-only.
+			if (isAcceptedCommandFile(jsPath)) {
 				return {
 					command: process.execPath,
 					args: [jsPath, ...args],
@@ -385,7 +394,7 @@ function findBinaryOnPath(
 			.map((line) => line.trim())
 			.filter(Boolean);
 		for (const candidate of result) {
-			if (fs.existsSync(candidate)) {
+			if (isAcceptedCommandFile(candidate)) {
 				return candidate;
 			}
 		}
@@ -550,6 +559,22 @@ function recordUnresolvedTypeScriptCompiler(
 			"LSP not started: no absolute TypeScript compiler (tsserver.js) was resolved",
 		metadata: { field: "typescript-compiler", trust },
 	});
+	// #4530 F3: only a refused compiler candidate explains the miss. An
+	// unrelated refused directory must not hide installation advice. Inspect
+	// filenames only; never execute a finder against the ambient PATH.
+	const refusedEntries: string[] = [];
+	trustScopedPath(resolvePathValue(process.env), cwd, refusedEntries);
+	const compilerNames = isWindows
+		? ["tsc", ...getPathExts(process.env).map((ext) => `tsc${ext}`)]
+		: ["tsc"];
+	if (
+		refusedEntries.some((entry) =>
+			compilerNames.some((name) =>
+				isAcceptedCommandFile(path.resolve(entry, name)),
+			),
+		)
+	)
+		return;
 	if (unknownProjectLocalNoticeGeneration === generation) return;
 	unknownProjectLocalNoticeGeneration = generation;
 	logExtension({
@@ -771,18 +796,23 @@ export async function launchLSP(
 ): Promise<LSPProcess> {
 	const cwd = String(options.cwd ?? process.cwd());
 	const mergedEnv = { ...process.env, ...options.env };
-	const augmentedPath = await buildAugmentedPath(resolvePathValue(mergedEnv));
+	// #4530: while the project is not trusted, nothing this launch resolves
+	// through PATH (the lookup below, or the server's own) comes from a PATH
+	// entry inside the project. #4530 round 9: when every entry is refused the
+	// PATH key is removed rather than set to "", because an empty PATH makes
+	// the kernel search the server's cwd — the project.
+	const env: NodeJS.ProcessEnv = { ...mergedEnv };
+	setTrustScopedPath(
+		env,
+		await buildAugmentedPath(resolvePathValue(mergedEnv)),
+		cwd,
+	);
 	// #3539: the child names this process's incarnation, so the orphan
 	// backstop can tell whose it is after this process dies and the child is
 	// reparented. With no tag of our own the child gets none (#3986): the
 	// host's inherited PI_LENS_OWNER may name a dead foreign owner, and an
 	// untagged server is spared where a wrongly tagged one is reaped.
 	const ownerTag = await ownerTagForChildren({ timeoutMs: OWNER_TAG_READ_MS });
-	const env: NodeJS.ProcessEnv = {
-		...mergedEnv,
-		PATH: augmentedPath,
-		...(isWindows ? { Path: augmentedPath } : {}),
-	};
 	if (ownerTag === undefined) delete env[OWNER_TAG_ENV];
 	else env[OWNER_TAG_ENV] = ownerTag;
 
@@ -816,7 +846,7 @@ export async function launchLSP(
 		!command.includes(path.sep) &&
 		!command.includes("/")
 	) {
-		const globalBinPath = await findGlobalBinary(command);
+		const globalBinPath = await findGlobalBinary(command, ".cmd", cwd);
 		if (globalBinPath) {
 			spawnCommand = globalBinPath;
 			// Recompute needsShell for the resolved global path
@@ -828,7 +858,24 @@ export async function launchLSP(
 	// registry. Once PATH resolution selects a project-local installed binary,
 	// trusted session ownership is required (#4248 R2-1, #4299 R2-F1). Global and managed
 	// fallbacks remain compatible because they resolve outside the project root.
-	if (isProjectLocalLspBinary(spawnCommand, cwd)) {
+	// #4530 round 9: they resolve outside the project only if their real target
+	// does — an outside PATH entry or global bin dir can hold a link into the
+	// project's dependency tree (an npm-linked language server is the ordinary
+	// case), and the verdict belongs to the binary that runs, not the path that
+	// names it. An explicitly passed absolute command keeps its own contract: the
+	// registry's project-executable gate judges that one.
+	// #4530 round 11: judge that target only when a resolver named one. An
+	// uninstalled bare name stays the bare name, and resolving it against the
+	// project turns a missing tool into a trust refusal (which also skips the
+	// managed install); absence is not project reach.
+	if (
+		isProjectLocalLspBinary(spawnCommand, cwd) ||
+		(!isFullyQualified(command) &&
+			!command.includes(path.sep) &&
+			!command.includes("/") &&
+			spawnCommand !== command &&
+			commandResolvesIntoProject(spawnCommand, cwd))
+	) {
 		refuseUntrustedLspExecution({
 			kind: "project-local-binary",
 			command,
@@ -885,7 +932,7 @@ export async function launchLSP(
 			!command.includes(path.sep) &&
 			!command.includes("/")
 		) {
-			const globalBinPath = await findGlobalBinary(command);
+			const globalBinPath = await findGlobalBinary(command, ".cmd", cwd);
 			if (globalBinPath && globalBinPath !== spawnCommand) {
 				// Recompute needsShell for the resolved global path
 				const needsShellGlobal = computeNeedsShell(globalBinPath);

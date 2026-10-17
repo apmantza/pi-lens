@@ -31,15 +31,17 @@ const decisions = () =>
 		.filter((entry) => entry?.phase === "availability_decision");
 
 // `jvm-runtime.ts` probes `java` through `safeSpawnAsync` directly (#1538),
-// mirroring the #1496 package-manager fix — mock at that boundary. Also
-// reimplement `isCommandAvailableAsync` (not `importOriginal`'d — the real
-// function's internal `safeSpawnAsync` call is bound to its OWN module's
-// unmocked binding, so importing it would bypass this mock and hit the real
-// system PATH). Pre-fix `jvm-runtime.ts` probes through `isCommandAvailableAsync`;
-// post-fix code calls `safeSpawnAsync` directly — routing both through the
-// same hoisted mock lets one test file exercise both at the same boundary and
-// prove the pre-fix code fails on its own logic, not a missing export.
-vi.mock("../../../clients/safe-spawn.js", () => ({
+// mirroring the #1496 package-manager fix — mock at that boundary. Spread the
+// real module for the pure filesystem helpers (`getPathExts`,
+// `isAcceptedCommandFile`), but still OVERRIDE `isCommandAvailableAsync`: its
+// internal `safeSpawnAsync` call is bound to its OWN module's unmocked binding,
+// so importing it would bypass this mock and hit the real system PATH. Pre-fix
+// `jvm-runtime.ts` probes through `isCommandAvailableAsync`; post-fix code
+// calls `safeSpawnAsync` directly — routing both through the same hoisted mock
+// lets one test file exercise both at the same boundary and prove the pre-fix
+// code fails on its own logic, not a missing export.
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 	isCommandAvailableAsync: async (command: string) => {

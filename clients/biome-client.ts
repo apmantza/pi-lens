@@ -18,7 +18,11 @@ import {
 	findLocalBinAt,
 	localBinPath,
 } from "./package-manager.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import {
+	safeSpawnAsync,
+	getPathExts,
+	isAcceptedCommandFile,
+} from "./safe-spawn.js";
 import { getIsolatedNpxSpawnOptions, probeToolAsync } from "./tool-probe.js";
 import { createSingleFlight } from "./single-flight.js";
 import { biomeConfigArgs } from "./tool-policy.js";
@@ -158,17 +162,19 @@ export class BiomeClient {
 		// so we avoid the ~1.5s `npx @biomejs/biome --version` fallback when the
 		// tool is already installed but not in the project's node_modules.
 		const managedCandidates = isWin
-			? [path.join(piLensBin, "biome.cmd"), path.join(piLensBin, "biome")]
+			? [...new Set([".cmd", ...getPathExts(process.env), ""])].map((ext) =>
+					path.join(piLensBin, `biome${ext}`),
+				)
 			: [path.join(piLensBin, "biome")];
 		for (const p of managedCandidates) {
-			if (fs.existsSync(p)) {
+			if (isAcceptedCommandFile(p)) {
 				this.localBinaryByCwd.set(resolveCwd, p);
 				return { cmd: p, args: [] };
 			}
 		}
 		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx —
 		// catches `pnpm add -g @biomejs/biome` installs that PATH misses (#375).
-		const global = await findGlobalBinary("biome");
+		const global = await findGlobalBinary("biome", ".cmd", resolveCwd);
 		if (global) {
 			this.localBinaryByCwd.set(resolveCwd, global);
 			return { cmd: global, args: [] };

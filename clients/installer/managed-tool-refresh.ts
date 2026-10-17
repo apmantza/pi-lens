@@ -53,6 +53,7 @@ import { commitDurableStoreAsync } from "../durable-store.js";
 import {
 	pmBinary,
 	resolveNodePackageManager,
+	trustScopedSpawnEnv,
 	updateArgs,
 } from "../package-manager.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
@@ -690,7 +691,10 @@ async function performNpmRefresh(
 	];
 
 	const startedAt = Date.now();
+	// #4530: the package manager resolves through the trust-scoped PATH.
+	const env = trustScopedSpawnEnv();
 	const spawned = await safeSpawnAsync(command, args, {
+		...(env && { env }),
 		cwd: toolsDir,
 		timeout: refreshTimeoutMs(),
 		ignoreAmbientSignal: true,
