@@ -520,18 +520,11 @@ export async function readGitHead(root: string): Promise<string | undefined> {
  * the checkout `root` is in, in `root`'s own spelling (git's own toplevel is
  * a real path). Read from files; `root` itself when that cannot answer.
  *
- * The file walk stops at the first `.git` it finds, but git skips a `.git`
- * directory with no HEAD and keeps looking. Such a top is not git's, so it
- * answers `root` (a stray `/tmp/.git` once sent every path to `/tmp`).
+ * The walk skips a `.git` directory with no HEAD as git does (a stray
+ * `/tmp/.git` once sent every path to `/tmp`).
  */
 function gitPathBase(root: string): string {
-	const top = resolveGitCheckout(root)?.spelledRoot;
-	if (!top) return root;
-	const dotGit = path.join(top, ".git");
-	// A `.git` file (a linked worktree) names a git dir the walk checked.
-	const linked =
-		fs.statSync(dotGit, { throwIfNoEntry: false })?.isFile() === true;
-	return linked || fs.existsSync(path.join(dotGit, "HEAD")) ? top : root;
+	return resolveGitCheckout(root)?.spelledRoot ?? root;
 }
 
 /**

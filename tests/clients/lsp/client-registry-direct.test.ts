@@ -220,6 +220,7 @@ function linkedWorktreeFixture() {
 	const gitDir = path.join(repo, ".git", "worktrees", "wt");
 	fs.mkdirSync(gitDir, { recursive: true });
 	fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+	fs.writeFileSync(path.join(repo, ".git", "HEAD"), "ref: refs/heads/main\n");
 	fs.writeFileSync(path.join(repo, "package.json"), "{}\n");
 	fs.mkdirSync(other, { recursive: true });
 	fs.writeFileSync(path.join(other, "package.json"), "{}\n");

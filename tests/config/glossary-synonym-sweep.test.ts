@@ -1058,9 +1058,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/observed-mutation.ts": 6,
 		// 6 -> 7 (#4493): listGitHeadDelta resolves git's relative names with
 		// the OS `path` namespace; the keys still go through normalizeMapKey.
-		// 7 -> 9 (#4493 r2): gitPathBase joins the `.git` entry and its HEAD
-		// with the same namespace to check the walk found a repository.
-		"clients/opaque-mutation-scan.ts": 9,
+		"clients/opaque-mutation-scan.ts": 7,
 		"clients/opengrep-client.ts": 8,
 		"clients/opengrep-config.ts": 3,
 		// 21 -> 23 (#4515 r2): commandSearchReachesProject splits PATH on
@@ -1105,7 +1103,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// import-resolvers.ts `fileAnswerNames`, shared with the LSP cache.
 		"clients/review-graph/builder.ts": 33,
 		"clients/review-graph/format.ts": 4,
-		"clients/review-graph/git-identity.ts": 10,
+		// 10 -> 11 (#4508): the walk joins the `.git` entry and its HEAD.
+		"clients/review-graph/git-identity.ts": 11,
 		// 61 -> 64 (#4346 final lane): `fileAnswerNames`, moved from builder.ts.
 		"clients/review-graph/import-resolvers.ts": 64,
 		"clients/review-graph/tsconfig-paths.ts": 35,
