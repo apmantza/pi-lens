@@ -1627,6 +1627,19 @@
 			]
 		},
 		"session-lifecycle": {
+			"pins": {
+				"TeardownAtLastMember": {
+					"value": "TRUE",
+					"test": "tests/index-4554-last-member-teardown.test.ts",
+					"title": "runs the shared teardown once when the last session to leave is a secondary",
+					"also": [
+						{
+							"test": "tests/index-4554-last-member-teardown.test.ts",
+							"title": "runs the shared teardown when the primary is the last session to leave"
+						}
+					]
+				}
+			},
 			"notCodeChoice": [
 				{
 					"reason": "Scenario bound or actor set: it sizes the state space or picks which actors, inputs and steps TLC explores; no code branch reads it.",

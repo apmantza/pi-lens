@@ -537,8 +537,10 @@ interface HandoffCell {
 	left: WeakMap<object, number>;
 }
 
-/** A session manager is a WeakMap key only when it is an object. */
-function asManager(sessionManager: unknown): object | undefined {
+/** A session manager is a WeakMap key only when it is an object. Exported for
+ *  callers in the host adapter that must name the same domain type rather than
+ *  carry it as `unknown` (#4554). */
+export function asManager(sessionManager: unknown): object | undefined {
 	return typeof sessionManager === "object" && sessionManager !== null
 		? sessionManager
 		: undefined;

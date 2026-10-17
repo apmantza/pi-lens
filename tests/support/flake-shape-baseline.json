@@ -1252,6 +1252,7 @@
 		"index-3917-orphan-sweep-scope.test.ts::clients/runtime-session": 1,
 		"index-4483-first-write-seed-witness.test.ts::clients/lsp/capabilities": 1,
 		"index-4484-unfixed-blocker-witness.test.ts::clients/lsp/capabilities": 1,
+		"index-4554-last-member-teardown.test.ts::clients/lsp/capabilities": 1,
 		"index-drain-refresh-straddle.test.ts::clients/bootstrap": 1,
 		"index-drain-refresh-straddle.test.ts::clients/observed-mutation": 1,
 		"index-drain-refresh-straddle.test.ts::clients/runtime-agent-end": 1,

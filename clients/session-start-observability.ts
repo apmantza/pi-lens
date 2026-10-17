@@ -123,3 +123,33 @@ export function resetConcurrentSessionBindRollupCounts(): void {
 	counts["secondary-root"] = 0;
 	counts.unclassified = 0;
 }
+
+/**
+ * #4554: one row when an activation's shared session teardown runs on behalf
+ * of a session classified `concurrent-secondary` — the activation's LAST live
+ * member, in an activation that also ran a full session_start for a sibling.
+ *
+ * WHY THIS RECORD EXISTS. Every other row the shared branch leaves describes
+ * the PRIMARY's infra (`session_end_bus_rollup`, the fence and bind rollups,
+ * the cache summary), so a reader of `latency.log` would otherwise see a full
+ * teardown attributed to a session whose own role said secondary and have no
+ * way to tell the correct case (the last member of a multi-session activation)
+ * from the defect it replaced (#4554: the stored role made EVERY shutdown take
+ * the local-only branch). Emitted at most once per activation, from
+ * `index.ts`'s `session_shutdown` handler, and only on that path.
+ */
+export function logSharedTeardownForSecondarySession(args: {
+	sessionId: string | undefined;
+	cwd: string;
+}): void {
+	logLatency({
+		type: "phase",
+		filePath: args.cwd,
+		phase: "session_teardown_last_member",
+		durationMs: 0,
+		metadata: {
+			sessionId: args.sessionId,
+			classification: "secondary",
+		},
+	});
+}

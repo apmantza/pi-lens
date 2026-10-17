@@ -128,6 +128,8 @@ const ACTIVATION_STATE: Readonly<Record<string, string>> = {
 	ownedSecondaryRoot:
 		"the root this declined activation asked to hold under its own holder id, released by its own shutdown (#3849)",
 	ownedSessionRole: "this activation's primary or secondary role (#1996)",
+	ownsSharedInfra:
+		"whether this activation took the process's shared infra at a full session_start, so its last member's leave owns the shared teardown (#4554)",
 	renderInvalidator: "this activation's widget repaint callback",
 	scope: "this activation's session scope (#3611)",
 	startInFlight:

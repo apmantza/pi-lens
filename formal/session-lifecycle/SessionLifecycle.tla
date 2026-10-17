@@ -132,6 +132,20 @@
 (*   "keylessFailSafe"   #3855 r2's J6, a rejected alternative: a key-less *)
 (*                       gap start with the named reason passes for a      *)
 (*                       ticket name                                       *)
+(*   "teardownAtLastMember" #4554: the shared session teardown (the whole  *)
+(*                       registry entry, and the LSP service generation    *)
+(*                       with its fleet) runs at the activation's LAST     *)
+(*                       live member's leave, not at every primary         *)
+(*                       shutdown. Without it a primary shutdown tears     *)
+(*                       down while a sibling it started is still live     *)
+(*                       (Mut4554TeardownAtPrimary), and a secondary's     *)
+(*                       leave never tears down at all. The member is      *)
+(*                       spelled as the module definition                  *)
+(*                       `TeardownAtLastMember` and read through `Has`:    *)
+(*                       formal/switch-pins.json classifies constants and  *)
+(*                       module definitions (#4393, AGENTS.md shape 68),   *)
+(*                       and a member of the deferred set constant         *)
+(*                       `FixParts` could not be pinned.                   *)
 (*                                                                         *)
 (* Lane M4 (#3803) adds the coordinator's other session-scoped stores and  *)
 (* their writers (section "M4"), each part a merged fix or a rejected      *)
@@ -190,7 +204,16 @@ CONSTANTS
     Fence(_),       \* store -> "branch" | "session" | "service" | "none"
     SecPolicy(_)    \* store -> "own" | "shared"
 
-Has(p) == p \in FixParts
+\* #4554: the member above is the one part that is a module definition rather
+\* than a FixParts member, so the pin registry can classify it (`pins` in
+\* formal/switch-pins.json). Every mechanism read stays here, the model's one
+\* mechanism reader; a config that also listed it in FixParts would change
+\* nothing.
+TeardownAtLastMember == TRUE
+
+Has(p) ==
+    IF p = "teardownAtLastMember" THEN TeardownAtLastMember
+    ELSE p \in FixParts
 
 -----------------------------------------------------------------------------
 (* The policy tables (design section 4, maintainer decisions D1-D8, S2).   *)
@@ -486,6 +509,42 @@ Draw ==
 
 HostOk == pend.k = "none" /\ forking = "no" /\ primary # 0 /\ steps < MaxSteps
 
+\* #4554: the shared session teardown — the registry entry, and the LSP
+\* service generation with the fleet that belonged to it (`resetLSPService`).
+TearDownNow ==
+    /\ entry' = {}
+    /\ IF LspOn /\ Policy("LS", "shutdown") = "reset"
+       THEN svc' = svc + 1 /\ fleet' = {}
+       ELSE UNCHANGED <<svc, fleet>>
+
+\* The scopes a leave still leaves live: every live scope it does not end, so
+\* `EndsLast` says whether it ends the activation's last live member. `ended`
+\* is the set of scopes the leave retires.
+\*
+\* #4554: this model has no activation identity, so "member" is the process's
+\* live scopes. The code's membership is per activation (index.ts
+\* `liveSessionMembers`), which tears down EARLIER than this in one corner (a
+\* primary leaving while a separate activation's declined secondary still
+\* runs), and #473's `ownsSharedInfra` keeps a pure secondary's leave local
+\* only, which this model cannot see either. Both directions are recorded in
+\* formal/session-lifecycle/README.md.
+LiveAfter(ended) == {t \in Tickets : st[t] = "live" /\ t \notin ended}
+EndsLast(ended) == LiveAfter(ended) = {}
+
+\* The teardown decision at a leave. Before #4554 a primary's shutdown tore
+\* down unconditionally, with a live sibling behind it, and a secondary's
+\* leave (SecEnd, SecDown) never did; with the member on both answer for the
+\* last live member.
+TearsDownAtPrimary(ended) ==
+    IF TeardownAtLastMember THEN EndsLast(ended) ELSE TRUE
+TearsDownAtSecondary(ended) ==
+    TeardownAtLastMember /\ EndsLast(ended)
+\* Ghost: a shared teardown that ran while a member was still live. The
+\* member makes it unreachable from RetireTo; Mut4554TeardownAtPrimary
+\* reinstates the schedule that reaches it.
+EarlyTeardown(ended) ==
+    IF TearsDownAtPrimary(ended) /\ ~EndsLast(ended) THEN {"earlyTeardown"} ELSE {}
+
 \* Whether scope s began on its predecessor's pi session manager: pi keeps
 \* the manager on /reload and on an in-memory /fork or /clone, and makes a
 \* new one for /new, resume, a persisted fork, pi --fork and a subagent.
@@ -598,15 +657,19 @@ RetireOk(k) ==
 \* it, keyed by the start reason and the successor's file (pi's
 \* targetSessionFile, or the session's own file on /reload); /new, resume
 \* and quit leave the slot as it is. The sidecar is saved, the scope retires
-\* with pi's reason, the root is deregistered, the LSP service reset, and the
-\* primary registration released (#3662: every reason but quit leaves the
-\* successor pending). `quit` ends the process: in-flight work dies.
+\* with pi's reason, and, at the activation's LAST live leave, the root is
+\* deregistered and the LSP service reset (#4554: `TearsDownAtPrimary`; before
+\* it, at every primary shutdown); the primary registration is released
+\* (#3662: every reason but quit leaves the successor pending). `quit` ends
+\* the process: in-flight work dies, and the leave ends every live scope, so it
+\* always tears down.
 RetireTo(k, tgt, tag) ==
     /\ LET p == primary
            quit == k = "quit"
            stash == Has("handoffAtShutdown") /\ SR(k) \in SlotReasons
            succ == IF k = "reload" THEN sess[p] ELSE tgt
            ends(t) == t = p \/ (quit /\ st[t] = "live")
+           ended == {t \in Tickets : ends(t)}
        IN
        /\ st' = [t \in Tickets |-> IF ends(t) THEN "retired" ELSE st[t]]
        /\ why' = [t \in Tickets |-> IF ends(t) THEN k ELSE why[t]]
@@ -619,10 +682,9 @@ RetireTo(k, tgt, tag) ==
                   ELSE slot
        /\ side' = [side EXCEPT ![sess[p]] = cell[p]]
        /\ sideAct' = [sideAct EXCEPT ![sess[p]] = act[p]]
-       /\ entry' = entry \ {p}
-       /\ IF LspOn /\ Policy("LS", "shutdown") = "reset"
-          THEN svc' = svc + 1 /\ fleet' = {}
-          ELSE UNCHANGED <<svc, fleet>>
+       /\ IF TearsDownAtPrimary(ended)
+          THEN TearDownNow
+          ELSE UNCHANGED <<entry, svc, fleet>>
        /\ wr' = IF quit
                 THEN [x \in FlightIds |->
                         IF wr[x].pc = "flight" THEN [wr[x] EXCEPT !.pc = "dead"]
@@ -632,7 +694,7 @@ RetireTo(k, tgt, tag) ==
                     key |-> NamedKey(k, p, succ), exp |-> FALSE]
        /\ forking' = "no"
        /\ steps' = steps + 1
-       /\ used' = used \cup {tag}
+       /\ used' = used \cup {tag} \cup EarlyTeardown(ended)
     /\ UNCHANGED <<role, sess, ep, last, nxt, branch, cell, imp, lin, taken,
                    intent, reg, turn, begun, turns, procTurn, evalTurn, wgTok,
                    wgDone, lastTok, prevMax, ownDrop, recorded, resets, dupDone,
@@ -1071,7 +1133,10 @@ SecBind(k) ==
                    prevMax, ownDrop, recorded, dupDone, landed, reads, predOf,
                    lzV, adV, notes, spend, userDeclined, fwd, preScope>>
 
-\* A subagent's session_shutdown: its scope retires and its own cells go.
+\* A subagent's session_shutdown: its scope retires and its own cells go. It
+\* runs the shared teardown only when it ends the activation's last live member
+\* (#4554, `TearsDownAtSecondary`): a sibling still running keeps the registry
+\* entry and the LSP fleet.
 SecEnd ==
     /\ "SecEnd" \in Transitions /\ steps < MaxSteps
     /\ \E s \in Tickets :
@@ -1079,10 +1144,13 @@ SecEnd ==
           /\ st' = [st EXCEPT ![s] = "retired"]
           /\ why' = [why EXCEPT ![s] = "secEnd"]
           /\ cell' = [cell EXCEPT ![s] = {}]
+          /\ IF TearsDownAtSecondary({s})
+             THEN TearDownNow
+             ELSE UNCHANGED <<entry, svc, fleet>>
     /\ steps' = steps + 1
     /\ UNCHANGED <<role, sess, ep, primary, last, nxt, pend, forking, branch,
-                   imp, lin, slot, taken, side, sideAct, wr, entry,
-                   intent, reg, svc, fleet, turn, begun, turns, procTurn,
+                   imp, lin, slot, taken, side, sideAct, wr,
+                   intent, reg, turn, begun, turns, procTurn,
                    evalTurn, wgTok, wgDone, lastTok, prevMax, ownDrop, recorded,
                    resets, dupDone, landed, reads, predOf, lzV, adV, used>>
 
@@ -1096,7 +1164,8 @@ SecEnd ==
 \* (a /reload or in-memory /fork, which keep pi's manager) its ticket. An
 \* in-memory /new is linked to nothing and leaves no note (R1). The start may
 \* never come (pi's reload() emits no session_start to a session without host
-\* bindings), and the note then stays (F3).
+\* bindings), and the note then stays (F3). It runs the shared teardown only
+\* when it ends the activation's last live member (#4554), as SecEnd does.
 SecDown(k) ==
     /\ \/ k = "reload" /\ "SecReload" \in Transitions /\ "secReload" \notin used
        \/ k = "fork" /\ "SecFork" \in Transitions /\ "secFork" \notin used
@@ -1121,12 +1190,15 @@ SecDown(k) ==
              /\ cell' = [cell EXCEPT ![s] = {}]
              /\ notes' = IF noted THEN notes \cup {key} ELSE notes
              /\ spend' = [k |-> k, from |-> s, file |-> f, key |-> key]
+             /\ IF TearsDownAtSecondary({s})
+                THEN TearDownNow
+                ELSE UNCHANGED <<entry, svc, fleet>>
     /\ steps' = steps + 1
     /\ used' = used \cup {CASE k = "reload" -> "secReload"
                               [] k = "fork" -> "secFork" [] OTHER -> "secNew"}
     /\ UNCHANGED <<role, sess, ep, primary, last, nxt, pend, forking, branch,
-                   imp, lin, slot, taken, side, sideAct, wr, entry, intent,
-                   reg, svc, fleet, turn, begun, turns, procTurn, evalTurn,
+                   imp, lin, slot, taken, side, sideAct, wr, intent,
+                   reg, turn, begun, turns, procTurn, evalTurn,
                    wgTok, wgDone, lastTok, prevMax, ownDrop, recorded, resets,
                    dupDone, landed, reads, predOf, lzV, adV, subBorn,
                    userDeclined, fwd, preScope>>
@@ -1913,6 +1985,12 @@ OrderMonotone == lastTok = 0 \/ prevMax < lastTok
 
 \* #2890: one session_start mutation pass per scope.
 OneResetPerScope == \A t \in Tickets : resets[t] <= 1
+
+\* #4554: the shared session teardown (the registry entry, the LSP service
+\* generation with its fleet) runs at the activation's last live member's
+\* leave, never while a member still runs. Before the member it ran at every
+\* primary shutdown, with a live sibling behind it (Mut4554TeardownAtPrimary).
+NoEarlyTeardown == "earlyTeardown" \notin used
 
 \* A live scope's cell holds only facts of its own conversation lineage, on
 \* its current branch (proposed in the S9 review). The invariants above take

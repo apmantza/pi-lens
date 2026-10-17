@@ -353,6 +353,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the language-server process is the boundary; the capability adapter is where every host witness stands in for it",
 		},
+	// 2026-10-17 (#4554): the assertion is on the module-level
+	// `resetLSPService` CALL the shared teardown makes, and the shared service
+	// double does not expose that call as a spy; no server process is spawned.
+	"in-process-mock:index-4554-last-member-teardown.test.ts::clients/lsp/capabilities":
+		{
+			detector: "in-process-mock",
+			reason:
+				"the assertion is on the module-level resetLSPService call the shared teardown makes, which the shared service double does not expose as a spy; the stand-in spawns no language server",
+		},
 	"never-settling-wait:scripts/mutate-fixture.test.ts": {
 		detector: "never-settling-wait",
 		reason:

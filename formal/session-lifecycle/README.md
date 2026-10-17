@@ -283,6 +283,51 @@ as `beginTurn` does (`turnSession`, `clients/runtime-coordinator.ts`): a
 turn is the coordinator's own only when its session's id is the pinned
 one.
 
+## The last-member shared teardown (#4554)
+
+One activation can serve several live sessions. pi re-runs the extension
+factory per session, but a host (and pi's own in-process handling) can also
+deliver several `session_start` events to one activation: M, then S1, S2…,
+same root, M live. M is `primary`, each S a declined `concurrent-secondary`.
+
+`TeardownAtLastMember` (a module definition, not a `FixParts` member, so
+`formal/switch-pins.json` can pin it; `Has` maps the member name onto it)
+says the process's shared teardown — the whole registry entry, and the LSP
+service generation with the fleet that belonged to it (`resetLSPService`) —
+runs at the activation's **last live member's** leave. `TearsDownAtPrimary`
+(RetireTo) and `TearsDownAtSecondary` (SecEnd, SecDown) both answer with it,
+and `TearDownNow` carries the two effects.
+
+With it off, the pre-fix schedule is reachable and `Mut4554TeardownAtPrimary`
+reaches it: M's `/new` tears down while S1 is live, retiring the registry
+entry and the LSP generation its sibling still drives (`used` gains the
+`earlyTeardown` ghost that `NoEarlyTeardown` reads). A secondary's leave
+tears down nothing at all in that schedule. With it on, `Merged`,
+`MergedLastMemberTeardown`, `Current` and `Fix` carry it and
+`NoEarlyTeardown` holds: a non-last leave runs no teardown, the last one does
+(whichever role it is), `quit` ends every live scope so it tears down, and a
+single-member activation is unchanged.
+
+Two abstractions, both directions:
+
+- **The activation is not modelled.** `st` is one process's scopes, so
+  "member" here is the process's live scopes. The code's membership is per
+  activation (`liveSessionMembers`, `index.ts`), which tears down EARLIER in
+  one corner this model does not have: a primary whose activation has one
+  member leaves while a separate activation's declined secondary still runs.
+- **#473's `ownsSharedInfra` is not modelled either.** A pure secondary
+  activation (every start declined) keeps a local-only teardown in the code;
+  here a secondary's last leave tears down. Both directions are conservative
+  for the invariants: they change when `svc`, `fleet` and `entry` move, never
+  whether a member's own state is another's.
+- **The registry entry is one root.** Only a full start registers in this
+  model, so `entry` holds at most the live primary's root, and the whole-entry
+  removal a teardown performs is indistinguishable from the scoped removal a
+  non-last leave performs (`deregisterInstanceRoot`, `#3849`). The witness for
+  the fix is therefore the LSP generation plus `NoEarlyTeardown`, not `entry`.
+- `InterruptAt` (the #3881/#4113 windows) models no registry or LSP work, so
+  it does not tear down under the member either.
+
 ## M4: the coordinator's other stores
 
 `resetForSession` (`clients/runtime-coordinator.ts`) clears about forty
@@ -416,6 +461,7 @@ and removing M1's loses the cap.
 | `NoCrossSessionAdoption` | Every slot take is by a start whose conversation continues the writer's (the same file on `/reload`, a copy on `/fork`), so no start adopts another session's state through the slot (#3803 hypothesis 3). |
 | `OrderMonotone` | A write-order token drawn later outranks every earlier one, across `/reload` and entry-module evaluations. |
 | `OneResetPerScope` | One `session_start` mutation pass per scope. |
+| `NoEarlyTeardown` | The shared session teardown (the registry entry, the LSP generation with its fleet) never runs while a member is still live: it belongs to the last live member's leave (#4554). A ghost, `used \cup {"earlyTeardown"}`, is set by a teardown that ran with a sibling live. |
 | `NoForeignFact` | A live scope's cell holds only facts of its own conversation lineage, on its current branch. |
 | `NoForeignActivation` | A live scope holds only activations of its own conversation lineage. |
 | `NoLostActivation` | A live scope of a primary's conversation, primary or secondary (a demoted real successor is a secondary), holds every activation the conversation made (`/tree` keeps them, D7). |
@@ -466,6 +512,8 @@ counterexample.
 | `Merged` | merged master: every transition but a subagent's turn and its own replacement, the primary's read-guard writer | pass | 11116 |
 | `MergedStores` | merged master: activations and advisories across every transition that moves them, with a subagent | pass | 65248 |
 | `MergedTurns` | merged master with turns (#3613): a subagent's turns and the primary's turns, `/new`, resume, `/fork`, `/reload` and `/tree`, the primary's read-guard writer | pass | 23024 |
+| `MergedLastMemberTeardown` | #4554: one activation serving M and its siblings, the shared teardown at the LAST live member's leave (M's `/new` with S1 live leaves the entry and the LSP generation alone; S1's leave tears down), with quit, resume and a subagent's own `/reload` | pass | 78 |
+| `Mut4554TeardownAtPrimary` | pre-#4554: the shared teardown at every primary shutdown, with a live sibling behind it | violated `NoEarlyTeardown` | 6 |
 | `H3StartThrows` | #3613 F1 fix: `MergedTurns` with every start throwing after its reset, and the pin before the await | pass | 23024 |
 | `H3FileBacked` | merged slot: a subagent's own `/reload` or `/fork` in the primary's gap, file-backed sessions | pass | 597 |
 | `H3FileLess` | the same, file-less sessions, with #3819's fix | pass | 597 |
@@ -554,6 +602,7 @@ counterexample.
 | `Pre3759StateWUncaptured` | pre-S3: the same writers resolve the module-level runtime when they land | `violated NoCrossSessionState` | 362 |
 | `DebounceCaptureAtTimer` | pre-S3, row 16: the debounce re-entry captures the session at timer time | `violated NoCrossSessionState` | 122 |
 | `MutStateWBranchFence` | the S3 writers fenced at branch level: a `/tree` drops a live scope's own record | `violated NoOwnDrop` | 54 |
+| `Mut4554TeardownAtPrimary` | #4554 | pre-#4554: the shared teardown at every primary shutdown (the stored, last-write-wins role decided it), `TeardownAtLastMember = FALSE` | One activation serves M and S1 (`SecStart`); M's `/new` empties the registry entry and bumps the LSP service generation, and S1 is left a live flight on a service generation its sibling retired. |
 | `ParkMerged` | #4112 and #4161: the park keyed by the parking turn's session, fenced by the coordinator's scope, cleared at session start; a subagent takes none of the primary's | pass | 323 |
 | `Pre4112ParkNoSessionKey` | pre-#4112 round 2: a lane keyed by its name alone, so a subagent's run takes the primary's parked item | `violated ParkedStaysInScope` | 65 |
 | `Mut4112ParkNoResetClear` | the park map survives `resetForSession`: `/reload` keeps the stable key and the successor shows the predecessor's item | `violated ParkedStaysInScope` | 138 |

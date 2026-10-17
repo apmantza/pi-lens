@@ -73,6 +73,7 @@ import {
 } from "./clients/read-guard-branch.js";
 import {
 	adoptHandoff,
+	asManager,
 	beginScope,
 	discardHandoff,
 	forwardHandoff,
@@ -355,6 +356,7 @@ import { logSessionStart } from "./clients/sessionstart-logger.js";
 import {
 	emitConcurrentSessionBindRollupAtSessionEnd,
 	logConcurrentSessionBind,
+	logSharedTeardownForSecondarySession,
 	resetConcurrentSessionBindRollupCounts,
 } from "./clients/session-start-observability.js";
 import { normalizeToolDefinition } from "./clients/tool-definition.js";
@@ -800,6 +802,76 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// eviction or an add that found no entry cannot free another holder's root.
 	const secondaryRootHolder = `secondary:${randomUUID()}`;
 	let ownedSecondaryRoot: string | undefined;
+	// #4554: ONE activation can serve SEVERAL live sessions. pi re-runs this
+	// factory per session, but a host (and pi's own in-process handling) can also
+	// deliver several `session_start` events to one activation: M, then S1, S2…,
+	// same root and M live, so M is `primary` and each S is a declined
+	// `concurrent-secondary`. `ownedSessionRole` above is last-write-wins, so a
+	// secondary's start overwrote the primary's role and EVERY later shutdown —
+	// M's included — took the local-only branch: `cancelLSPIdleReset`,
+	// `resetLSPService`, `deregisterInstance` and `releasePrimarySession` never
+	// ran for the process, which kept its `instances.json` entry and its stale
+	// primary registration. Membership, not the stored role, decides the shared
+	// teardown: it runs once, when the LAST member this activation started
+	// leaves.
+	const liveSessionMembers: Array<{
+		sessionId: string | undefined;
+		role: "primary" | "concurrent-secondary";
+	}> = [];
+	// True once this activation ran a FULL session_start, i.e. once it took the
+	// process's shared infra (LSP fleet, registry entry, primary registration).
+	// An activation whose every start was declined is a pure secondary and keeps
+	// its local-only teardown exactly as before (#473).
+	let ownsSharedInfra = false;
+	const enterLiveSession = (
+		sessionId: string | undefined,
+		role: "primary" | "concurrent-secondary",
+	): void => {
+		// A session re-announcing its own id in one activation is one member, not
+		// two: its single shutdown must still be able to be the last leave.
+		const known = liveSessionMembers.find(
+			(member) => sessionId !== undefined && member.sessionId === sessionId,
+		);
+		if (known) {
+			known.role = role;
+			return;
+		}
+		liveSessionMembers.push({ sessionId, role });
+	};
+	/**
+	 * End this leave's membership, answering whether it was the activation's
+	 * LAST live member and which role THAT member's own start recorded.
+	 *
+	 * The member's own record, not `ownedSessionRole`, is what a leave is
+	 * labelled with: that closure field is overwritten by every later start, so
+	 * after a sibling's start it named the sibling rather than this session
+	 * (#4554).
+	 *
+	 * An unmatched leave — a shutdown whose id is unreadable, or one whose start
+	 * this activation never recorded — cannot prove a live sibling, so it answers
+	 * `isLast: true` with no role, and the caller falls back to the shared
+	 * classifier: skipping the teardown is the #472 orphan class (a leaked LSP
+	 * fleet and registry entry), and this module's fail-safe direction has always
+	 * been to tear down on uncertainty.
+	 */
+	const leaveLiveSession = (
+		sessionId: string | undefined,
+	): {
+		isLast: boolean;
+		role: "primary" | "concurrent-secondary" | undefined;
+	} => {
+		const memberIndex = liveSessionMembers.findIndex(
+			(member) => member.sessionId === sessionId,
+		);
+		const member =
+			memberIndex >= 0
+				? liveSessionMembers.splice(memberIndex, 1)[0]
+				: undefined;
+		return {
+			isLast: memberIndex < 0 || liveSessionMembers.length === 0,
+			role: member?.role,
+		};
+	};
 	// #3611: the session scope THIS activation serves, set once at its
 	// session_start and retired at its session_shutdown. Activation equals
 	// session (pi re-runs this factory on every transition except /tree).
@@ -1994,10 +2066,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 		}
 	};
 	// #3819: a file-less hand-off slot's ticket is bound to pi's session
-	// manager. A stale ctx throws on the read.
-	const getSessionManager = (ctx: unknown): unknown => {
+	// manager. A stale ctx throws on the read. The domain type is the one
+	// `clients/session-scope.ts` owns: only an object can key the slot's
+	// WeakMap, and every consumer narrows with the same `asManager`.
+	const getSessionManager = (ctx: unknown): object | undefined => {
 		try {
-			return (ctx as { sessionManager?: unknown }).sessionManager;
+			return asManager((ctx as { sessionManager?: unknown }).sessionManager);
 		} catch {
 			return undefined;
 		}
@@ -2406,6 +2480,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 					ownedSessionRole = sessionStartDecision.runFullSessionStart
 						? "primary"
 						: "concurrent-secondary";
+					// #4554: every start of this activation is one live member, declined
+					// or not; the full start is also what makes the shared teardown this
+					// activation's to run.
+					if (sessionStartDecision.runFullSessionStart) ownsSharedInfra = true;
+					enterLiveSession(stableSessionId, ownedSessionRole);
 					if (!sessionStartDecision.runFullSessionStart) {
 						dbg(
 							`session_start: ${sessionStartDecision.classification} detected (count=${sessionStartDecision.secondaryCount}, sameRoot=${sessionStartDecision.sameRoot}) — skipping handleSessionStart`,
@@ -3938,12 +4017,35 @@ function activateExtension(hostPi: ExtensionAPI) {
 				return undefined;
 			}
 		})();
-		const shutdownClassification = classifyOwnedSessionShutdown(
-			ctx,
-			stableSessionId,
-			shutdownCwd,
-		);
-		if (shutdownClassification === "secondary") {
+		// #4554: the membership answers which session this leave is, and the shared
+		// teardown belongs to the LAST one, whatever role each was classified as.
+		// The stored role said `secondary` for every member here, so the primary's
+		// own shutdown skipped it and nothing ever released the process's shared
+		// infra.
+		const leave = leaveLiveSession(stableSessionId);
+		const isLastLiveMember = leave.isLast;
+		// The member's own recorded role wins: the one this activation's start
+		// classified IT as, not the last start's. The classifier's answer stands
+		// for a leave this activation never recorded (a gap shutdown, #4106).
+		const shutdownClassification: "primary" | "secondary" =
+			leave.role === undefined
+				? classifyOwnedSessionShutdown(ctx, stableSessionId, shutdownCwd)
+				: leave.role === "primary"
+					? "primary"
+					: "secondary";
+		const runsSharedTeardown =
+			isLastLiveMember &&
+			// A pure-secondary activation owns none of it; its local-only teardown
+			// is the whole of its answer (#473).
+			(ownsSharedInfra || shutdownClassification === "primary");
+		if (!runsSharedTeardown) {
+			// `primary` here means this session really was the primary — it left
+			// while a sibling it never tore down was still live — so its own cache
+			// records are labelled for what it was, never as a secondary's.
+			const localRole =
+				shutdownClassification === "secondary"
+					? "concurrent-secondary"
+					: "primary";
 			if (stableSessionId !== undefined && shutdownCwd !== undefined) {
 				cacheManager.clearTurnState(
 					shutdownCwd,
@@ -3954,14 +4056,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 					stableSessionId,
 				);
 			}
-			emitCacheUsageSummaryAtSessionEnd(
-				stableSessionId,
-				"concurrent-secondary",
-			);
-			clearCachePrefixSession(stableSessionId, "concurrent-secondary");
+			emitCacheUsageSummaryAtSessionEnd(stableSessionId, localRole);
+			clearCachePrefixSession(stableSessionId, localRole);
 			// #3613: its per-turn records end with it.
 			runtime.forgetTurnSession(stableSessionId);
-			decrementSecondarySessionCount();
+			// The counter counts LIVE secondaries; a primary leaving first is not a
+			// secondary departure.
+			if (shutdownClassification === "secondary")
+				decrementSecondarySessionCount();
 			// #2130: scoped deregistration. A secondary's shutdown must never run
 			// `deregisterInstance()` — the process lives on and the primary still
 			// owns the entry. End only THIS activation's own hold (#3849): the
@@ -3976,7 +4078,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// start above rather than racing ahead of it and leaving the temp
 			// root behind. Fire and forget is still correct — the tail owns the
 			// ordering, and teardown must not block on a registry write.
-			if (ownedSecondaryRoot !== undefined) {
+			if (
+				ownedSecondaryRoot !== undefined &&
+				shutdownClassification === "secondary"
+			) {
 				void deregisterInstanceRoot(
 					ownedSecondaryRoot,
 					secondaryRootHolder,
@@ -3984,15 +4089,28 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// best-effort bookkeeping — never fail teardown
 				});
 			}
-			// #3611: only this secondary's own scope retires.
-			retireOwnScope(
-				(event as { reason?: string } | undefined)?.reason,
-				stableSessionId,
-			);
+			// #3611/#4554: the activation's scope retires when its last member
+			// leaves — a non-last leave leaves it current for the members behind it.
+			if (isLastLiveMember)
+				retireOwnScope(
+					(event as { reason?: string } | undefined)?.reason,
+					stableSessionId,
+				);
 			dbg(
-				"session_shutdown: concurrent secondary — skipping shared-infra teardown",
+				shutdownClassification === "secondary"
+					? "session_shutdown: concurrent secondary — skipping shared-infra teardown"
+					: "session_shutdown: not the last live session — skipping shared-infra teardown",
 			);
 			return;
+		}
+		if (shutdownClassification === "secondary") {
+			// #4554: the last member is a session classified secondary, so the
+			// shared teardown runs on its behalf. One bounded record names that
+			// (the shared branch's own records describe the PRIMARY's infra).
+			logSharedTeardownForSecondarySession({
+				sessionId: stableSessionId,
+				cwd: shutdownCwd ?? runtime.projectRoot,
+			});
 		}
 		const shutdownEvent = event as
 			| { reason?: string; targetSessionFile?: string }
@@ -4251,7 +4369,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	const appendToUserPromptContent = (
 		content: string | unknown[],
 		injectedText: string,
-	): unknown => {
+	): string | unknown[] => {
 		if (typeof content === "string") {
 			return content.length > 0
 				? `${content}\n\n${injectedText}`
