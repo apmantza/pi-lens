@@ -1215,21 +1215,41 @@
 					"value": "TRUE",
 					"test": "tests/clients/head-move-resync-4493.test.ts",
 					"title": "records undrained when %s replies overtake queued changes"
+				},
+				"ContentGate": {
+					"value": "\"sent\"",
+					"test": "tests/clients/lsp/touch-debounce-content-gate.test.ts",
+					"title": "leaves the server's bytes alone when only the elapsed window has passed",
+					"also": [
+						{
+							"test": "tests/clients/lsp/touch-debounce-content-gate.test.ts",
+							"title": "pushes a document again after it was closed and reopened"
+						}
+					],
+					"narrowedBy": {
+						"\"window\"": {
+							"configs": [
+								"GateWindowRepush"
+							],
+							"reason": "GateWindowRepush runs the pre-#4532 window gate on identical bytes offered again after the window, to pin that this schedule is NOT a safety violation (a redundant didChange leaves server = disk). It is the one config that runs a non-as-built gate on purpose; every other pass config is the sent-content gate."
+						}
+					}
 				}
 			},
 			"notCodeChoice": [
 				{
 					"reason": "Scenario bound or actor set: it sizes the state space or picks which actors, inputs and steps TLC explores; no code branch reads it.",
 					"constants": [
-						"Writes",
 						"Cascade",
 						"EqualLength",
+						"InitRec",
 						"LossyFp",
-						"RecentA",
+						"MaxMoves",
+						"MidClose",
 						"MidSweeps",
 						"PriorInFlight",
-						"MaxMoves",
-						"InitRec"
+						"RecentA",
+						"Writes"
 					]
 				},
 				{

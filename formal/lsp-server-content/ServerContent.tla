@@ -17,6 +17,20 @@
 (*    length+first48+last48 fingerprint), then notify.open, then after the *)
 (*    write lands markTouched and recordFullyCoveredSync(startedAt). A     *)
 (*    fully skipped touch records nothing;                                 *)
+(*  - shouldSkipNotify's EVIDENCE, selected by ContentGate (#4532 gap 9):  *)
+(*    "sent" is the client's own record of the payload it last sent        *)
+(*    (`getSentContent`, written by client.ts `recordSentContent` in the    *)
+(*    SEND's continuation - after the wire write, before the waiters        *)
+(*    resolve), compared with the touch's content EXACTLY; the elapsed      *)
+(*    window is not read, and a document with no record (never opened, or   *)
+(*    closed since) is always pushed. "window" is the pre-#4532 gate (the   *)
+(*    1500 ms window plus the whole-text fingerprint), which is today only  *)
+(*    the fallback for a client that cannot report a record. "lossy" is a   *)
+(*    mutant: the record compared by fingerprint alone.                     *)
+(*  - closeDocument (client.ts, #3477): a queue ENTRY, so it waits for a    *)
+(*    send in flight; it drops the client's content record and the server's *)
+(*    document. `recent` and the drift record survive it, which is what the *)
+(*    pre-fix gate could still skip a reopen against;                       *)
 (*  - the per-path notify queue (lsp/client.ts enqueueDocumentNotify) an   *)
 (*    unstarted entry is REPLACED by the last enqueued one (its waiters    *)
 (*    ride along); the runner sends one entry at a time. The check and the *)
@@ -40,7 +54,12 @@ CONSTANTS
     LossyFp,      \* TRUE: versions differ only in the middle of a >96-char file,
                   \* so the length+first48+last48 fingerprint cannot tell them apart
     Debounce,     \* TRUE: shouldSkipNotify is active (TOUCH_DEBOUNCE_MS > 0)
+    ContentGate,  \* which evidence a skip reads: "sent" (the client's record of the
+                  \* payload it last sent, exact content, #4532 gap 9), "window" (the
+                  \* pre-#4532 gate: inside the window AND the same fingerprint), or
+                  \* "lossy" (a mutant: the record compared by fingerprint only)
     RecentA,      \* TRUE: a touch of the initial content landed within the debounce window
+    MidClose,     \* TRUE: a didClose may land while another actor can still touch N
     MidSweeps,    \* sweep passes allowed while other actors are still active
     SweepKey,     \* "both" (the code), "size", "mtime": which half of the drift key is compared
     PriorInFlight, \* TRUE: an earlier notify of N (content A) is still being written when the model starts
@@ -62,6 +81,8 @@ VARIABLES
     clock,
     disk, mtime,          \* bytes on disk and their mtime
     server,               \* content the server holds (what was last sent)
+    sentRec,              \* the client's record of the payload it last sent for N
+                          \* (getSentContent), or "none" when it holds no record
     lastSentSeq,          \* read stamp of the content last sent
     staleSend,            \* a send replaced content read later than the content sent
     pc, content, readAt, startAt, enqAt,
@@ -70,16 +91,16 @@ VARIABLES
     recent,               \* debounce entry for scope primary: [fp, fresh]
     sweep, sweepMtime, sweepContent, sweepsLeft, clean
 
-vars == <<clock, disk, mtime, server, lastSentSeq, staleSend, pc, content, readAt,
-          startAt, enqAt, pending, running, record, recent, sweep, sweepMtime,
-          sweepContent, sweepsLeft, clean>>
+vars == <<clock, disk, mtime, server, sentRec, lastSentSeq, staleSend, pc, content,
+          readAt, startAt, enqAt, pending, running, record, recent, sweep,
+          sweepMtime, sweepContent, sweepsLeft, clean>>
 
 Init ==
     /\ clock = 0
     /\ disk = "A" /\ mtime = 0
-    /\ server = "A" /\ lastSentSeq = 0 /\ staleSend = FALSE
+    /\ server = "A" /\ sentRec = "A" /\ lastSentSeq = 0 /\ staleSend = FALSE
     /\ pc = [p \in Procs |->
-               CASE p = "w1" -> "write"
+               CASE p = "w1" -> (IF Writes >= 1 THEN "write" ELSE "off")
                  [] p = "w2" -> (IF Writes = 2 THEN "write" ELSE "off")
                  [] p = "cas" -> (IF Cascade THEN "read" ELSE "off")
                  [] OTHER -> "off"]
@@ -101,7 +122,7 @@ Write(p) ==
     /\ pc[p] = "write"
     /\ Tick /\ disk' = WriteOf[p] /\ mtime' = clock + 1
     /\ pc' = [pc EXCEPT ![p] = "read"]
-    /\ UNCHANGED <<enqAt, server, lastSentSeq, staleSend, content, readAt, startAt, pending,
+    /\ UNCHANGED <<enqAt, server, sentRec, lastSentSeq, staleSend, content, readAt, startAt, pending,
                    running, record, recent, sweep, sweepMtime, sweepContent, sweepsLeft, clean>>
 
 \* Pipeline readFileSync / cascade `await readFile`: capture disk.
@@ -111,7 +132,7 @@ Read(p) ==
     /\ content' = [content EXCEPT ![p] = disk]
     /\ readAt' = [readAt EXCEPT ![p] = clock + 1]
     /\ pc' = [pc EXCEPT ![p] = "start"]
-    /\ UNCHANGED <<enqAt, disk, mtime, server, lastSentSeq, staleSend, startAt, pending, running,
+    /\ UNCHANGED <<enqAt, disk, mtime, server, sentRec, lastSentSeq, staleSend, startAt, pending, running,
                    record, recent, sweep, sweepMtime, sweepContent, sweepsLeft, clean>>
 
 \* touchFile begins: startedAt (the drift record's syncedAt) is taken here.
@@ -120,17 +141,35 @@ Start(p) ==
     /\ Tick
     /\ startAt' = [startAt EXCEPT ![p] = clock + 1]
     /\ pc' = [pc EXCEPT ![p] = "check"]
-    /\ UNCHANGED <<enqAt, disk, mtime, server, lastSentSeq, staleSend, content, readAt, pending,
+    /\ UNCHANGED <<enqAt, disk, mtime, server, sentRec, lastSentSeq, staleSend, content, readAt, pending,
                    running, record, recent, sweep, sweepMtime, sweepContent, sweepsLeft, clean>>
 
-\* shouldSkipTouch / notifySkippedServerIds: a debounce hit sends and records nothing.
+(***************************************************************************)
+(* The gate's evidence, one branch per ContentGate value. "sent" is the    *)
+(* code after #4532 gap 9 (lsp/index.ts shouldSkipNotify): the client's    *)
+(* record of the payload it last sent for N, compared with this touch's    *)
+(* content EXACTLY. It never consults the elapsed window, so a touch whose *)
+(* own work outlived the window no longer re-pushes bytes the server       *)
+(* already holds, and a record a didClose dropped no longer suppresses the *)
+(* reopen. "window" is the pre-#4532 gate, which the code still runs for a *)
+(* client that cannot report a record. "lossy" is a mutant.                *)
+(***************************************************************************)
+SkipEvidence(p) ==
+    CASE ContentGate = "sent" ->
+           sentRec # "none" /\ sentRec = content[p]
+      [] ContentGate = "window" ->
+           recent.fresh /\ recent.fp = Fp(content[p])
+      [] ContentGate = "lossy" ->
+           sentRec # "none" /\ Fp(sentRec) = Fp(content[p])
+
+\* shouldSkipTouch / notifySkippedServerIds: a skip sends and records nothing.
 \* The drift resync uses scope "all", a different debounce key: never skipped here.
 Check(p) ==
     /\ pc[p] = "check"
     /\ pc' = [pc EXCEPT ![p] =
-                IF Debounce /\ p # "res" /\ recent.fresh /\ recent.fp = Fp(content[p])
+                IF Debounce /\ p # "res" /\ SkipEvidence(p)
                   THEN "done" ELSE "enqueue"]
-    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, lastSentSeq, staleSend, content, readAt,
+    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, sentRec, lastSentSeq, staleSend, content, readAt,
                    startAt, pending, running, record, recent, sweep, sweepMtime,
                    sweepContent, sweepsLeft, clean>>
 
@@ -148,7 +187,7 @@ Enqueue(p) ==
                       content |-> IF keepOld THEN pending.content ELSE content[p],
                       seq     |-> IF keepOld THEN pending.seq ELSE readAt[p]]
     /\ pc' = [pc EXCEPT ![p] = "wait"]
-    /\ UNCHANGED <<disk, mtime, server, lastSentSeq, staleSend, content, readAt,
+    /\ UNCHANGED <<disk, mtime, server, sentRec, lastSentSeq, staleSend, content, readAt,
                    startAt, running, record, recent, sweep, sweepMtime, sweepContent,
                    sweepsLeft, clean>>
 
@@ -156,7 +195,7 @@ Enqueue(p) ==
 TakeAndSend ==
     /\ running' = pending /\ pending' = NoEntry
     /\ IF FixDrop /\ pending.seq < lastSentSeq
-         THEN UNCHANGED <<server, lastSentSeq, staleSend>>
+         THEN UNCHANGED <<server, sentRec, lastSentSeq, staleSend>>
          ELSE /\ server' = pending.content
               /\ lastSentSeq' = pending.seq
               /\ staleSend' = (staleSend \/ (pending.seq < lastSentSeq /\ pending.content # server))
@@ -166,7 +205,7 @@ RunStart ==
     /\ running = NoEntry /\ pending # NoEntry
     /\ TakeAndSend
     /\ UNCHANGED <<clock, disk, mtime, pc, content, readAt, startAt, enqAt, record, recent,
-                   sweep, sweepMtime, sweepContent, sweepsLeft, clean>>
+                   sentRec, sweep, sweepMtime, sweepContent, sweepsLeft, clean>>
 
 \* The in-flight send resolves: its waiters are resolved, and the runner's
 \* for(;;) loop takes the next unstarted entry in the same tick (client.ts).
@@ -176,9 +215,41 @@ RunFinish ==
     /\ IF pending # NoEntry
          THEN TakeAndSend
          ELSE /\ running' = NoEntry
-              /\ UNCHANGED <<pending, server, lastSentSeq, staleSend>>
+              /\ UNCHANGED <<pending, server, sentRec, lastSentSeq, staleSend>>
     /\ UNCHANGED <<clock, disk, mtime, content, readAt, startAt, enqAt, record, recent,
-                   sweep, sweepMtime, sweepContent, sweepsLeft, clean>>
+                   sentRec, sweep, sweepMtime, sweepContent, sweepsLeft, clean>>
+
+\* recordSentContent runs in the SEND's own continuation (client.ts
+\* enqueueDocumentNotify: `await next.run(...)`, and the run records after its
+\* wire write lands, before its waiters resolve), so the record lags the wire
+\* write by one await. The gate reads that record, never the wire, so the
+\* schedules below are checked with the lag present.
+Record ==
+    /\ running # NoEntry
+    /\ sentRec' = running.content
+    /\ UNCHANGED <<clock, disk, mtime, server, lastSentSeq, staleSend, pc, content,
+                   readAt, startAt, enqAt, pending, running, record, recent, sweep,
+                   sweepMtime, sweepContent, sweepsLeft, clean>>
+
+(***************************************************************************)
+(* #3477: a didClose for N. In the code it is a queue entry, so this action *)
+(* stands only for the order that queue guarantees: nothing pending and    *)
+(* nothing in flight. It drops the client's content record and the         *)
+(* server's document. `recent` and the drift record survive it, so the     *)
+(* pre-fix window gate can still skip the reopen and leave the server      *)
+(* holding nothing at all for a file on disk. Modelled only while another  *)
+(* actor can still touch N (MidClose), so every close is followed by the   *)
+(* attempt the fix is about; a close no touch ever follows is not a defect *)
+(* of the gate.                                                            *)
+(***************************************************************************)
+CloseDoc ==
+    /\ MidClose
+    /\ pending = NoEntry /\ running = NoEntry /\ server # "none"
+    /\ \E p \in {"w1", "w2", "cas"} : pc[p] \in {"read", "start", "check"}
+    /\ server' = "none" /\ sentRec' = "none"
+    /\ UNCHANGED <<clock, disk, mtime, lastSentSeq, staleSend, pc, content, readAt,
+                   startAt, enqAt, pending, running, record, recent, sweep,
+                   sweepMtime, sweepContent, sweepsLeft, clean>>
 
 \* touchFile after its write landed: markTouched (primary scope) and the drift
 \* record stamped with its OWN content at its START time.
@@ -188,7 +259,7 @@ Finish(p) ==
     /\ record' = [size |-> Size(content[p]), fp |-> Fp(content[p]), at |-> startAt[p]]
     /\ recent' = IF p = "res" THEN recent ELSE [fp |-> Fp(content[p]), fresh |-> TRUE]
     /\ pc' = [pc EXCEPT ![p] = "done"]
-    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, lastSentSeq, staleSend, content, readAt,
+    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, sentRec, lastSentSeq, staleSend, content, readAt,
                    startAt, pending, running, sweep, sweepMtime, sweepContent,
                    sweepsLeft, clean>>
 
@@ -196,7 +267,7 @@ Finish(p) ==
 Expire ==
     /\ recent.fresh
     /\ recent' = [recent EXCEPT !.fresh = FALSE]
-    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, lastSentSeq, staleSend, pc, content, readAt,
+    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, sentRec, lastSentSeq, staleSend, pc, content, readAt,
                    startAt, pending, running, record, sweep, sweepMtime, sweepContent,
                    sweepsLeft, clean>>
 
@@ -216,7 +287,7 @@ SweepStat ==
             THEN /\ sweep' = "read" /\ sweepMtime' = mtime /\ clean' = FALSE
             ELSE /\ clean' = OthersDone /\ UNCHANGED <<sweep, sweepMtime>>
     /\ sweepsLeft' = IF OthersDone THEN sweepsLeft ELSE sweepsLeft - 1
-    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, lastSentSeq, staleSend, pc, content, readAt,
+    /\ UNCHANGED <<enqAt, clock, disk, mtime, server, sentRec, lastSentSeq, staleSend, pc, content, readAt,
                    startAt, pending, running, record, recent, sweepContent>>
 
 \* The candidate is read; unchanged fingerprint re-stamps, otherwise resync.
@@ -233,7 +304,7 @@ SweepRead ==
               /\ readAt' = [readAt EXCEPT !["res"] = clock + 1]
               /\ pc' = [pc EXCEPT !["res"] = "start"]
               /\ UNCHANGED record
-    /\ UNCHANGED <<enqAt, disk, mtime, server, lastSentSeq, staleSend, startAt, pending, running,
+    /\ UNCHANGED <<enqAt, disk, mtime, server, sentRec, lastSentSeq, staleSend, startAt, pending, running,
                    recent, sweepMtime, sweepsLeft, clean>>
 
 \* After the resync touch: stamp authoritatively if the record advanced to it.
@@ -245,14 +316,14 @@ SweepSettle ==
                          at |-> Max(clock + 1, sweepMtime)]
                    ELSE record
     /\ sweep' = "idle"
-    /\ UNCHANGED <<enqAt, disk, mtime, server, lastSentSeq, staleSend, pc, content, readAt,
+    /\ UNCHANGED <<enqAt, disk, mtime, server, sentRec, lastSentSeq, staleSend, pc, content, readAt,
                    startAt, pending, running, recent, sweepMtime, sweepContent,
                    sweepsLeft, clean>>
 
 Next ==
     \/ \E p \in Writers : Write(p)
     \/ \E p \in Procs : Read(p) \/ Start(p) \/ Check(p) \/ Enqueue(p) \/ Finish(p)
-    \/ RunStart \/ RunFinish \/ Expire
+    \/ RunStart \/ RunFinish \/ Expire \/ Record \/ CloseDoc
     \/ SweepStat \/ SweepRead \/ SweepSettle
 
 Spec == Init /\ [][Next]_vars
@@ -263,7 +334,9 @@ Spec == Init /\ [][Next]_vars
 \* found nothing to do.
 Quiescent == OthersDone /\ sweep = "idle" /\ pc["res"] \in {"off", "done"} /\ clean
 
-\* Once quiescent, the server holds exactly what is on disk.
+\* Once quiescent, the server holds exactly what is on disk. Under MidClose
+\* this also covers a document the server no longer has at all: a close that
+\* the gate never reopens leaves server = "none" against a file on disk.
 ServerMatchesDisk == Quiescent => server = disk
 
 \* Per-send: the runner never replaces content with DIFFERENT content read earlier.

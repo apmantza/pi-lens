@@ -1570,6 +1570,7 @@ export class LSPService {
 	private shouldSkipTouch(
 		filePath: string,
 		contentFingerprint: () => string,
+		sentContentHash: string,
 		waitForDiagnostics: boolean,
 		spawned: readonly SpawnedServer[],
 	): boolean {
@@ -1582,6 +1583,7 @@ export class LSPService {
 			this.shouldSkipNotify(
 				filePath,
 				contentFingerprint,
+				sentContentHash,
 				entry.info.id,
 				entry.client,
 			),
@@ -1590,8 +1592,8 @@ export class LSPService {
 
 	/**
 	 * Should the didOpen/didChange notify be skipped while keeping the
-	 * waitForDiagnostics step? True when the same content was already pushed
-	 * recently. Skipping the notify avoids the diagnostic-cache clear that
+	 * waitForDiagnostics step? True when the server already holds exactly these
+	 * bytes. Skipping the notify avoids the diagnostic-cache clear that
 	 * notify.open does, so the LSP doesn't restart computation it already
 	 * finished for the first push.
 	 *
@@ -1601,12 +1603,22 @@ export class LSPService {
 	 * second call's notify clears in-progress diagnostics and the LSP has to
 	 * start over — observed as multi-second waits on slow TS projects.
 	 *
+	 * The evidence is the CLIENT's own record of the payload it last sent
+	 * (`getSentContent`), never elapsed time (#4532 gap 9): a touch whose own
+	 * work outlives the window re-pushed the identical bytes, and a `didChange`
+	 * on unchanged content clears the server's diagnostics and restarts
+	 * computation it had already finished. A client with no record for the
+	 * document (never opened, closed since, or a replacement instance) holds
+	 * nothing, so it is always pushed. A client that cannot report a record at
+	 * all falls back to the elapsed-window + fingerprint heuristic.
+	 *
 	 * Decided PER SERVER (#743): a sibling's stalled write must not cost this
 	 * server its debounce. See {@link recentTouches}.
 	 */
 	private shouldSkipNotify(
 		filePath: string,
 		contentFingerprint: () => string,
+		sentContentHash: string,
 		serverId: string,
 		client: LSPClientInfo,
 	): boolean {
@@ -1615,8 +1627,6 @@ export class LSPService {
 			this.recentTouchKey(filePath, serverId),
 		);
 		if (!previous) return false;
-		const now = Date.now();
-		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
 		// #3501: another client instance (a respawn, a replacement after an
 		// eviction) was never sent this content, whatever its predecessor held.
 		if (previous.client.deref() !== client) return false;
@@ -1631,6 +1641,17 @@ export class LSPService {
 		) {
 			return false;
 		}
+		const sentContent = client.getSentContent?.(filePath);
+		if (client.getSentContent !== undefined) {
+			// A document this client does not track (never opened, closed since, or a
+			// replacement instance with no record yet) is not held at all, whatever
+			// the window says: push it.
+			return sentContent !== undefined && sentContent.hash === sentContentHash;
+		}
+		// No record to read: a client double, or a future client shape that cannot
+		// say what it holds. Only then does the window decide.
+		const now = Date.now();
+		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
 		return previous.fingerprint === contentFingerprint();
 	}
 
@@ -4174,6 +4195,7 @@ export class LSPService {
 				this.shouldSkipTouch(
 					filePath,
 					contentFingerprint,
+					contentHash,
 					diagnosticsMode !== "none",
 					spawned,
 				)
@@ -4223,6 +4245,7 @@ export class LSPService {
 						this.shouldSkipNotify(
 							filePath,
 							contentFingerprint,
+							contentHash,
 							entry.info.id,
 							entry.client,
 						),

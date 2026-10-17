@@ -24,10 +24,15 @@ below).
   `touchFile` with what it read (tier-aware, then a full wait).
 - **`LSPService.touchFile`** (`lsp/index.ts`):
   - `startedAt` is taken when the call starts;
-  - there is a per-server debounce check (`shouldSkipNotify`), with a
-    1500 ms window and a whole-content fingerprint
-    (`fingerprintDocumentContent`, `document-drift.ts`; before #3480 it
-    was length plus the first 48 and last 48 chars);
+  - there is a per-server debounce check (`shouldSkipNotify`), whose
+    evidence `ContentGate` selects: `"sent"` is the code after #4532 gap 9
+    (the client's own record of the payload it last sent,
+    `getSentContent`, written by `recordSentContent` in the send's
+    continuation), `"window"` is the pre-#4532 gate (a 1500 ms window plus
+    a whole-content fingerprint, `fingerprintDocumentContent`,
+    `document-drift.ts`; before #3480 the fingerprint was length plus the
+    first 48 and last 48 chars) and is today only the fallback for a client
+    that cannot report a record, and `"lossy"` is a mutant;
   - then `notify.open`;
   - after the write lands, `markTouched` runs, and then
     `recordFullyCoveredSync(startedAt)`. A touch that skips the
@@ -80,6 +85,12 @@ equal.
 | `MutFixNoCoalesce` | violated ServerMatchesDisk | violated | 49,710 | 2.4 |
 | `MutCascadeResizedMtimeKey` | violated ServerMatchesDisk | violated | 47,644 | 2.4 |
 | `ArtifactCascadeResizedAnyLanding` | violated ServerMatchesDisk | violated | 47,565 | 2.4 |
+| `GateSentOneWrite` | pass | pass | 740,162 | |
+| `GateSentLossyFp` | pass | pass | 23,224 | |
+| `GateSentReopen` | pass | pass | 72 | |
+| `GateWindowReopen` | violated ServerMatchesDisk (the pre-#4532 gate) | violated | 36 | |
+| `GateWindowRepush` | pass (the pre-fix gate; not a safety defect) | pass | 705,511 | |
+| `MutGateLossyFp` | violated ServerMatchesDisk (the new guard by fingerprint) | violated | 2,047 | |
 
 ## Traces
 
@@ -223,6 +234,67 @@ read. `DebounceFullFp` and the flipped `DebounceLossyFp` pass.
   touch or workspace diagnostics call fires its heartbeat.
 - `floor(mtime)` ties within one millisecond are not modelled. They would
   widen the blind window.
+- `Writes = 0` (no agent write) is a scenario bound the reopen configs use:
+  a close-then-reopen of unchanged bytes is the schedule the gate's
+  no-record branch exists for.
+- `CloseDoc` requires an empty queue, which is the order the notify queue
+  itself guarantees. The model keeps `lastSentSeq` across a close, while
+  `closeDocument` deletes `sentReadStamps`; a stale read that survives a
+  close and is then re-sent is #3477's schedule, not this gate's, and the
+  reopen configs use `Writes = 0` so it cannot arise there.
+- The per-server `recentTouches` entry is always present after the first
+  landed touch; the code's 800-entry trim can remove one, which makes the
+  gate push (the safe direction).
+- The gate's record write lag is modelled (`Record`), but the send's own
+  wire write and its record are the only two ordering steps: a second
+  touch landing between them re-pushes identical bytes. Both gates do this
+  and it is pre-existing; the model does not assert a cache state, so it
+  does not red on it.
+
+## The sent-content gate (#4532 gap 9)
+
+`shouldSkipNotify` used to answer "the server already holds these bytes" from
+elapsed time: a skip needed the previous push to be inside the 1500 ms window,
+and only then compared fingerprints. A touch whose own work outlived the window
+(an auxiliary spawn, a paced scanner write) therefore re-pushed byte-identical
+content, and a `didChange` on unchanged bytes clears the server's cached
+diagnostics and restarts work it had already finished (#4527 measured the
+equivalent re-push as a 2335 ms cold `lsp_diagnostics_timeout` on clangd). It
+was also wrong in the other direction: a document closed and reopened inside
+the window was skipped, because the window was consulted before the record.
+
+The gate now reads the client's own record of the payload it last sent
+(`getSentContent`) and compares it with the touch's content exactly. The model
+carries that record as `sentRec`, written by `Record` in the send's own
+continuation — after the wire write, before the waiters resolve — so every
+schedule below is checked with the record lagging the wire by one await. A
+document with no record (never opened, or closed since) is always pushed, which
+`CloseDoc` (#3477 `closeDocument`: a queue entry, so the model applies it only
+with the queue idle) makes reachable.
+
+Configs: `GateSentOneWrite` (one write, the cascade reader, an earlier notify in
+flight), `GateSentLossyFp` (the same-length middle-only edit, the arm the
+fingerprint gate lost) and `GateSentReopen` (the close-then-reopen direction)
+run the as-built gate and pass. `GateWindowReopen` is red on the same reopen
+schedule under the pre-#4532 gate: `recent` survives a `didClose`, so the reopen
+is skipped and the server is left with no document at all for a file on disk.
+`MutGateLossyFp` is the new guard mutated to compare the record by fingerprint
+rather than by content, and is red.
+
+Two things the model says plainly:
+
+- The re-push direction is an efficiency claim, not a safety one. A redundant
+  `didChange` leaves `server = disk`, so `GateWindowRepush` passes: the model
+  cannot red it, and `tests/clients/lsp/touch-debounce-content-gate.test.ts`
+  carries that half by tracing the wire.
+- Mutating the gate back to `recent.fresh` cannot red either: skipping less
+  never installs stale bytes, so no invariant here can catch it. The
+  fingerprint comparison is the mutation that reds (`MutGateLossyFp`).
+
+`MutFixNoCoalesce` now runs under `ContentGate = "window"`: under the
+sent-content gate a stale touch whose bytes are the ones already sent is
+skipped before it can replace a pending entry, so #3481's coalescing half is no
+longer load-bearing in this model for that schedule.
 
 ## HeadMoveResync: held documents across a HEAD move (#4493)
 
