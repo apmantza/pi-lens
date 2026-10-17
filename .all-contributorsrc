@@ -1796,7 +1796,8 @@
       "avatar_url": "https://avatars.githubusercontent.com/u/35022264?v=4",
       "profile": "https://github.com/EightDoor",
       "contributions": [
-        "code"
+        "code",
+        "bug"
       ]
     },
     {
@@ -1888,6 +1889,70 @@
       "contributions": [
         "bug",
         "ideas"
+      ]
+    },
+    {
+      "login": "loishi",
+      "name": "Loishi",
+      "avatar_url": "https://avatars.githubusercontent.com/u/59756145?v=4",
+      "profile": "https://github.com/loishi",
+      "contributions": [
+        "code",
+        "bug"
+      ]
+    },
+    {
+      "login": "gkgoat1",
+      "name": "gkgoat",
+      "avatar_url": "https://avatars.githubusercontent.com/u/65402989?v=4",
+      "profile": "https://github.com/gkgoat1",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "timges",
+      "name": "Tim Gesemann",
+      "avatar_url": "https://avatars.githubusercontent.com/u/13063135?v=4",
+      "profile": "https://github.com/timges",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "SamYue1",
+      "name": "SamYue",
+      "avatar_url": "https://avatars.githubusercontent.com/u/30651023?v=4",
+      "profile": "https://github.com/SamYue1",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "VladimirGVP",
+      "name": "VladimirGVP",
+      "avatar_url": "https://avatars.githubusercontent.com/u/322008768?v=4",
+      "profile": "https://github.com/VladimirGVP",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "bear0328",
+      "name": "bear0328",
+      "avatar_url": "https://avatars.githubusercontent.com/u/32119214?v=4",
+      "profile": "https://github.com/bear0328",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "beardrux",
+      "name": "beardrux",
+      "avatar_url": "https://avatars.githubusercontent.com/u/310295749?v=4",
+      "profile": "https://github.com/beardrux",
+      "contributions": [
+        "bug"
       ]
     }
   ]
