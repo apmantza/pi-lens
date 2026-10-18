@@ -137,6 +137,7 @@ const ACTIVATION_STATE: Readonly<Record<string, string>> = {
 	turnStartScope:
 		"the session scope captured at turn_start so a sibling session cannot change the identity used by this turn's delayed delivery (#3613)",
 	widgetMountFailureLogged: "a once-per-activation log latch for the mount",
+	widgetStatus: "the status publisher this activation mounted its widget as",
 };
 
 /**

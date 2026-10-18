@@ -2344,3 +2344,61 @@ describe("ui.compactWidget mount seam (#3959)", () => {
 		}
 	});
 });
+
+describe("ui.widgetStatus mount seam", () => {
+	let mountSeq = 0;
+
+	async function startSession(theme: object) {
+		_resetSessionLifecycleForTests();
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-widget-status-");
+		const savedHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = tmpDir;
+		try {
+			const pi = createPiMock({ "lens-widget-status": true });
+			extension(pi.asExtensionAPI());
+			const ctx = makeCtx({
+				cwd: process.cwd(),
+				sessionId: `widget-status-mount-${++mountSeq}`,
+			});
+			(ctx.ui as { theme: object }).theme = theme;
+			await pi.emit("session_start", { reason: "startup" }, ctx);
+			return ctx;
+		} finally {
+			if (savedHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = savedHome;
+			cleanup();
+		}
+	}
+
+	it("publishes the widget's lines as statuses instead of mounting a component", async () => {
+		try {
+			const ctx = await startSession({ fg: (_color: string, s: string) => s });
+			const filePath = path.join(process.cwd(), "widget-status-mount.ts");
+			recordDiagnostics(filePath, [
+				{ severity: "error", message: "detail", line: 1, rule: "r" },
+			]);
+
+			const widgetStatuses = ctx.statusCalls.filter((call) =>
+				call.key.startsWith("pi-lens-widget-"),
+			);
+			expect(widgetStatuses.at(-1)?.key).toMatch(/^pi-lens-widget-\d\d$/);
+			expect(widgetStatuses.map((call) => call.text).join("\n")).toContain(
+				"pi-lens",
+			);
+			expect(
+				ctx.widgetCalls.some(
+					(call) => call.key === "pi-lens" && call.content !== undefined,
+				),
+			).toBe(false);
+		} finally {
+			clearWidgetState();
+		}
+	});
+
+	it("falls back to the belowEditor component when the host has no theme", async () => {
+		const ctx = await startSession({});
+
+		const mount = ctx.widgetCalls.find((call) => call.key === "pi-lens");
+		expect(mount?.content).toBeTypeOf("function");
+	});
+});
