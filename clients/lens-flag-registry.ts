@@ -256,6 +256,11 @@ export const LENS_FLAGS: readonly LensFlagSpec[] = [
 		"Opt-in (#3959): render the pi-lens widget as ONE summary line (languages + error/warning totals) instead of also stacking file rows, the suppressed count and blocker details below it. Default off. Also via ui.compactWidget=true in ~/.pi-lens/config.json.",
 		"ui.compactWidget",
 	),
+	globalOptInFlag(
+		"lens-widget-status",
+		"Opt-in: publish the pi-lens widget's lines as footer statuses (pi-lens-widget-00, -01, …) instead of a belowEditor component, so a footer that draws statuses can share its rows with them. Default off. Also via ui.widgetStatus=true in ~/.pi-lens/config.json.",
+		"ui.widgetStatus",
+	),
 	{
 		name: "no-lazy-tools",
 		description:

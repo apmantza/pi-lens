@@ -98,5 +98,6 @@
   "./clients/user-notify.js",
   "./clients/vanished-instance-marker.js",
   "./clients/warm-attach.js",
-  "./clients/widget-state.js"
+  "./clients/widget-state.js",
+  "./clients/widget-status.js"
 ]

@@ -64,6 +64,11 @@ import {
 	setRenderCallback,
 	wireWidgetDispositionSubscriber,
 } from "./clients/widget-state.js";
+import {
+	createWidgetStatusPublisher,
+	WIDGET_STATUS_WIDTH,
+	type WidgetStatusPublisher,
+} from "./clients/widget-status.js";
 import { selectLspStatus } from "./clients/lsp-status.js";
 import {
 	branchToolResultIds,
@@ -1329,7 +1334,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 		tui: LensWidgetTui,
 		theme: LensWidgetTheme,
 	) => LensWidgetComponent;
-	type LensWidgetUi = { setWidget?: unknown };
+	type LensWidgetUi = {
+		setWidget?: unknown;
+		setStatus?: unknown;
+		theme?: unknown;
+	};
+	type LensWidgetSetStatus = (key: string, text: string | undefined) => void;
+	let widgetStatus: WidgetStatusPublisher | undefined;
 	type LensWidgetSetWidget = (
 		id: string,
 		widget: LensWidgetFactory | undefined,
@@ -1351,6 +1362,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 		if (!supportsTuiWidget(mode)) {
 			dbg(`widget mount ${modeSuppressionNote(mode)}`);
 			return false;
+		}
+		if (
+			getLensFlag("lens-widget-status") === true &&
+			mountLensWidgetStatus(ui)
+		) {
+			return true;
 		}
 		if (typeof ui?.setWidget !== "function") {
 			if (!widgetMountFailureLogged) {
@@ -1391,9 +1408,42 @@ function activateExtension(hostPi: ExtensionAPI) {
 		return true;
 	}
 
+	// Falls back to the belowEditor component on a host without statuses.
+	function mountLensWidgetStatus(ui: LensWidgetUi | undefined): boolean {
+		const theme = ui?.theme as Partial<LensWidgetTheme> | undefined;
+		if (
+			typeof ui?.setStatus !== "function" ||
+			typeof theme?.fg !== "function"
+		) {
+			return false;
+		}
+		const compactWidget = getLensFlag("lens-compact-widget") === true;
+		widgetStatus?.clear();
+		const publisher = createWidgetStatusPublisher(
+			ui.setStatus as LensWidgetSetStatus,
+			() => {
+				scheduleStaleReconcile();
+				return renderWidget(WIDGET_STATUS_WIDTH, theme as LensWidgetTheme, {
+					compact: compactWidget,
+				});
+			},
+		);
+		widgetStatus = publisher;
+		setRenderCallback(() => publisher.publish());
+		publisher.publish();
+		mountedLensWidgetUi = ui;
+		return true;
+	}
+
 	function unmountLensWidget(ui: LensWidgetUi | undefined): boolean {
 		renderInvalidator = undefined;
 		setRenderCallback(() => {});
+		if (widgetStatus !== undefined) {
+			widgetStatus.clear();
+			widgetStatus = undefined;
+			mountedLensWidgetUi = undefined;
+			return true;
+		}
 		if (typeof ui?.setWidget !== "function") return false;
 		const setWidget = ui.setWidget as LensWidgetSetWidget;
 		setWidget("pi-lens", undefined);
