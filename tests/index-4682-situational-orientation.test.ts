@@ -31,7 +31,7 @@ import {
 const fixture = piSessionFixture();
 
 const READY = fauxAssistantMessage(fauxText("ready"));
-/** The five lazy tools; the bullet names three of them (#4682 "Two related"). */
+/** The five lazy tools; the bullet must name every enabled one (#4682). */
 const LAZY_TOOLS = [
 	"ast_grep_search",
 	"ast_grep_replace",
@@ -125,6 +125,12 @@ function situationalClause(request: unknown): string | undefined {
 	return match?.[1];
 }
 
+/** The tool names the situational bullet lists, as the model was sent them. */
+function situationalNames(request: unknown): string[] {
+	const match = /Situational \([^)]*\): ([^.]*)\./.exec(requestText(request));
+	return match ? match[1].split(", ") : [];
+}
+
 describe("the situational orientation is true under every tools.lazy posture (#4682)", () => {
 	it.each(POSTURES)(
 		"$name: the bullet's clause is the one posture-independent literal",
@@ -161,6 +167,10 @@ describe("the situational orientation is true under every tools.lazy posture (#4
 					// every tool is listed and nothing needs activating. The literal is
 					// the same under every posture.
 					expect(situationalClause(first)).toBe(CLAUSE);
+					// Every enabled lazy tool is named, whatever the posture (#4682 F1).
+					expect([...situationalNames(first)].sort()).toEqual(
+						[...LAZY_TOOLS].sort(),
+					);
 					expect(requestText(first)).not.toContain(
 						"Situational (activate via pi_lens_activate_tools)",
 					);

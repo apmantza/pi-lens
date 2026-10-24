@@ -24,6 +24,7 @@ import {
 	getLatencyLogPath,
 } from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { TOOL_REGISTRY } from "../../clients/tool-config.js";
 import {
 	renderSessionStartGuidance,
 	SESSION_START_GUIDANCE,
@@ -1344,7 +1345,9 @@ describe("context injection framing", () => {
 		expect(text).toMatch(/aggregate hosts: lens\(action=diagnostics\)/);
 
 		// Stay lean: the orientation is a nudge, not re-documentation of every arg.
-		expect(text.length).toBeLessThan(750);
+		// 800 (was 750): the situational bullet names the full lazy set (#4682),
+		// about 40 characters more than the three-name list it replaced.
+		expect(text.length).toBeLessThan(800);
 	});
 
 	it("renders no tool the loaded set disabled (#2967)", () => {
@@ -1403,13 +1406,13 @@ describe("context injection framing", () => {
 	});
 
 	it("keeps the scoped orientation inside the shipped prose budget (#2967)", () => {
-		// 750 is the shipped budget (asserted for the default above). The scoped
-		// branch is tightened to FIT it rather than raising the bound, so the
-		// config-only variant cannot quietly outgrow the default.
+		// 800 is the shipped budget (asserted for the default above, raised from
+		// 750 for the full lazy set in the situational bullet, #4682). The scoped
+		// variant may not outgrow the default: it stays inside the same bound.
 		expect(
 			renderSessionStartGuidance({ requirePreExistingFixes: false }).join("\n")
 				.length,
-		).toBeLessThan(750);
+		).toBeLessThan(800);
 	});
 
 	it("still advertises read_enclosing when it is the only enabled read-substitute (#2967)", () => {
@@ -1447,6 +1450,8 @@ describe("context injection framing", () => {
 				"lsp_navigation",
 				"ast_grep_search",
 				"ast_grep_replace",
+				"ast_grep_outline",
+				"lens_diagnostic_mark",
 			],
 		}).join("\n");
 		expect(text).not.toContain("Situational");
@@ -1454,6 +1459,47 @@ describe("context injection framing", () => {
 		expect(text).not.toMatch(/\bast_grep_search\b/);
 		expect(text).not.toMatch(/\bast_grep_replace\b/);
 		expect(text).toContain("read_symbol");
+	});
+
+	// #4682: the situational bullet names every enabled situational tool, derived
+	// from the registry that also feeds the lazy catalog. Recurrence: the bullet
+	// hand-listed 3 of the 5 lazy tools and dropped ast_grep_outline and
+	// lens_diagnostic_mark, so the model never heard of them from the orientation.
+	const situationalBulletNames = (text: string): string[] => {
+		const match = /Situational \([^)]*\): ([^.]*)\./.exec(text);
+		return match ? match[1].split(", ") : [];
+	};
+	it("names all five enabled situational tools (#4682)", () => {
+		const names = situationalBulletNames(
+			renderSessionStartGuidance().join("\n"),
+		);
+		expect([...names].sort()).toEqual([
+			"ast_grep_outline",
+			"ast_grep_replace",
+			"ast_grep_search",
+			"lens_diagnostic_mark",
+			"lsp_navigation",
+		]);
+	});
+	it("never names a situational tool disabled by tools.<name>.enabled (#4682)", () => {
+		const text = renderSessionStartGuidance({
+			disabledToolNames: ["lens_diagnostic_mark"],
+		}).join("\n");
+		expect(situationalBulletNames(text)).not.toContain("lens_diagnostic_mark");
+		expect(situationalBulletNames(text)).toContain("ast_grep_outline");
+		expect(text).not.toMatch(/\blens_diagnostic_mark\b/);
+	});
+	it("drift guard: the bullet names the registry's situational set filtered by enabled (#4682)", () => {
+		const registrySituational = TOOL_REGISTRY.filter(
+			(entry) => "situational" in entry && entry.situational === true,
+		).map((entry) => entry.name);
+		const disabled = ["ast_grep_outline"];
+		const text = renderSessionStartGuidance({
+			disabledToolNames: disabled,
+		}).join("\n");
+		expect([...situationalBulletNames(text)].sort()).toEqual(
+			registrySituational.filter((name) => !disabled.includes(name)).sort(),
+		);
 	});
 
 	it("omits the tool-list heading when every bullet's tool is disabled (#2967)", () => {
@@ -1467,6 +1513,8 @@ describe("context injection framing", () => {
 				"lsp_navigation",
 				"ast_grep_search",
 				"ast_grep_replace",
+				"ast_grep_outline",
+				"lens_diagnostic_mark",
 			],
 		}).join("\n");
 		// The header line still stands; only the empty list is dropped.
@@ -1483,7 +1531,7 @@ describe("context injection framing", () => {
 			"Key tools (see each tool's own description for args):\n" +
 			"• lens_diagnostics — source=session reads cache; empty cache ≠ clean; use source=lsp scope=paths for changed files with absent or stale findings (aggregate hosts: lens(action=diagnostics)).\n" +
 			"• symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.\n" +
-			"• Situational (activate via pi_lens_activate_tools if unlisted): lsp_navigation, ast_grep_search, ast_grep_replace. Use ast_grep_search dump=true to inspect AST.";
+			"• Situational (activate via pi_lens_activate_tools if unlisted): ast_grep_search, ast_grep_replace, ast_grep_outline, lsp_navigation, lens_diagnostic_mark. Use ast_grep_search dump=true to inspect AST.";
 		expect(SESSION_START_GUIDANCE).toEqual([expected]);
 		expect(renderSessionStartGuidance()).toEqual([expected]);
 	});

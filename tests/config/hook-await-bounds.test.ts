@@ -1988,7 +1988,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"request; no pi hook budget applies.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#callTool:73e6f55a~b6e340bc": {
+	"mcp/server.ts#callTool:73e6f55a~f86001c7": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:

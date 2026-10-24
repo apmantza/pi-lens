@@ -506,6 +506,16 @@ file-scoped worklist and receives no project-wide scanner output.
     `tests/clients/prompt-cache-prefix-writers.test.ts` (one tier-2 cell per
     writer: registration, session-start plan, activation, injection).
 
+83. **Tool-state prose blind to a posture:** model-facing text (orientation,
+    tool descriptions, nudges) that names a tool as active, inactive, available
+    or needing activation must hold under every posture the renderer cannot see:
+    each `tools.<name>.enabled` value, each `tools.lazy` value (true, false,
+    auto) and each host (pi, MCP, which can call only the tools it has a name
+    for). Derive the named set from the registry, never a hand list. Screen:
+    render the prose under each posture combination and each host, and assert
+    every clause is true (#4293, #4294 enabled axis; #4682 lazy axis and the
+    hand list that dropped two tools).
+
 </important>
 
 <important if="a runner outcome or tool execution">

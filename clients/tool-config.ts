@@ -221,6 +221,27 @@ export function translateGuidanceToolNames(
 ): string {
 	if (host === "pi") return content;
 	let text = content;
+	// #4682 (maintainer decision 2026-10-24, #2535 F3): the situational bullet
+	// names only MCP-callable tools. A pi-only row (no mcpName) is dropped from
+	// its list, and the bullet goes when none of its names survives. Derived
+	// from the registry's mcpName field, never a hand list.
+	const piOnly: string[] = [];
+	for (const entry of TOOL_REGISTRY) {
+		if (typeof entry.piName === "string" && typeof entry.mcpName !== "string") {
+			piOnly.push(entry.piName);
+		}
+	}
+	text = text.replace(
+		/\n?• Situational \(([^)]*)\): ([^.]*)\.( Use [^\n]*)?/,
+		(_match, clause: string, list: string, hint: string | undefined) => {
+			const kept: string[] = [];
+			for (const name of list.split(", ")) {
+				if (!piOnly.includes(name)) kept.push(name);
+			}
+			if (kept.length === 0) return "";
+			return `\n• Situational (${clause}): ${kept.join(", ")}.${hint ?? ""}`;
+		},
+	);
 	const byLength = [...TOOL_REGISTRY].sort(
 		(a, b) => (b.piName?.length ?? 0) - (a.piName?.length ?? 0),
 	);

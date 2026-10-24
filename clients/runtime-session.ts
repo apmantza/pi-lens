@@ -119,6 +119,7 @@ import {
 	subagentLightModeNotice,
 } from "./subagent-mode.js";
 import { TrivyClient, type TrivyResult } from "./trivy-client.js";
+import { TOOL_REGISTRY } from "./tool-config.js";
 import { isWarmAttached } from "./warm-attach.js";
 import { setSessionLanguages } from "./widget-state.js";
 import { logWordIndex } from "./word-index-logger.js";
@@ -2240,13 +2241,13 @@ function readSubstituteGuidance(
 function situationalGuidance(
 	isEnabled: (name: string) => boolean,
 ): string | undefined {
+	// #4682: the same registry rows that feed the lazy catalog (index.ts
+	// LAZY_TOOL_CATALOG), so a situational tool added to TOOL_REGISTRY is named
+	// without a second edit.
 	const active: string[] = [];
-	for (const name of [
-		"lsp_navigation",
-		"ast_grep_search",
-		"ast_grep_replace",
-	]) {
-		if (isEnabled(name)) active.push(name);
+	for (const entry of TOOL_REGISTRY) {
+		if (!(entry as { situational?: true }).situational) continue;
+		if (isEnabled(entry.name)) active.push(entry.name);
 	}
 	if (active.length === 0) return undefined;
 	// #4682: one clause, true under every tools.lazy posture. With lazy=false

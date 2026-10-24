@@ -8,6 +8,7 @@ import {
 	createAstGrepSearchTool,
 } from "../../tools/ast-grep-search.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
+import { TOOL_REGISTRY } from "../../clients/tool-config.js";
 
 function makeClient(
 	overrides: Partial<Parameters<typeof createAstGrepSearchTool>[0]> = {},
@@ -1108,6 +1109,53 @@ describe("ast_grep_search tool", () => {
 		});
 	});
 
+	// #4682 shape 83 / PR #4809 F3: the no-match hint recommends sibling tools,
+	// so it must name what the delivery host can actually call. Recurrence: an
+	// MCP caller was told to use symbol_search, module_report, lsp_navigation and
+	// ast_grep_search — none of which MCP has a name for (real-entry probe: four
+	// pi names, zero pilens_* names in the hint).
+	it("renders the no-match hint with MCP tool names on the MCP host (#4682 F3)", async () => {
+		const tool = createAstGrepSearchTool(makeClient());
+		const result = await tool.execute(
+			"no-match-mcp",
+			{ pattern: "foo($X)", lang: "typescript" },
+			new AbortController().signal,
+			null,
+			{ cwd: ".", host: "mcp" },
+		);
+		const text = String(result.content[0].text);
+		for (const name of [
+			"pilens_symbol_search",
+			"pilens_module_report",
+			"pilens_lsp_navigation",
+			"pilens_ast_grep_search",
+		]) {
+			expect(text, name).toContain(name);
+		}
+		// No bare pi name survives (the lookbehind excludes the pilens_ prefix).
+		for (const entry of TOOL_REGISTRY) {
+			if (typeof entry.piName !== "string") continue;
+			expect(text, entry.piName).not.toMatch(
+				new RegExp(`(?<![A-Za-z0-9_])${entry.piName}(?![A-Za-z0-9_])`),
+			);
+		}
+	});
+
+	it("keeps the pi tool names in the no-match hint on the pi host (#4682 F3)", async () => {
+		const tool = createAstGrepSearchTool(makeClient());
+		const result = await tool.execute(
+			"no-match-pi",
+			{ pattern: "foo($X)", lang: "typescript" },
+			new AbortController().signal,
+			null,
+			{ cwd: ".", host: "pi" },
+		);
+		const text = String(result.content[0].text);
+		expect(text).toContain("symbol_search");
+		expect(text).toContain("module_report");
+		expect(text).not.toContain("pilens_");
+	});
+
 	it("runs dump mode through the search handler with the shared result contract", async () => {
 		const dumpAst = vi
 			.fn()
@@ -1152,6 +1200,31 @@ describe("ast_grep_search tool", () => {
 			const text = String(result.content[0].text);
 			expect(text).toContain("error: a value is required");
 			expect(text).toContain("Hint:");
+		});
+
+		it("renders the error hint with the MCP tool name and leaves raw stderr alone (#4682 F3)", async () => {
+			const tool = createAstGrepSearchTool(
+				makeClient({
+					search: vi.fn().mockResolvedValue({
+						matches: [],
+						error: "error: raw ast_grep_search text from sg",
+					}),
+				}),
+			);
+			const result = await tool.execute(
+				"e3",
+				{ pattern: "foo($X)", lang: "typescript" },
+				new AbortController().signal,
+				null,
+				{ cwd: ".", host: "mcp" },
+			);
+			expect(result.isError).toBe(true);
+			const text = String(result.content[0].text);
+			// The tool's own prose follows the host...
+			expect(text).toContain("pilens_ast_grep_search with dump=true");
+			// ...while the quoted stderr stays byte-identical: rewriting it would
+			// corrupt the very bytes the model is diagnosing.
+			expect(text).toContain("Error: error: raw ast_grep_search text from sg");
 		});
 
 		it("does not double up when the error is already curated (multiple AST nodes)", async () => {

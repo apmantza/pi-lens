@@ -42,10 +42,10 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 
 	it("keeps every numbered defect shape exactly once", () => {
 		const numbers = shapeNumbers(agentsText());
-		expect(numbers).toHaveLength(82);
-		expect(new Set(numbers).size).toBe(82);
+		expect(numbers).toHaveLength(83);
+		expect(new Set(numbers).size).toBe(83);
 		expect(numbers.sort((a, b) => a - b)).toEqual(
-			Array.from({ length: 82 }, (_, index) => index + 1),
+			Array.from({ length: 83 }, (_, index) => index + 1),
 		);
 	});
 
@@ -54,7 +54,7 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		const counterfeit = agentsText()
 			.replace(/^1\. \*\*.*$/m, "")
 			.concat("\n<!--\n1. **Counterfeit shape:** hidden comment\n-->\n");
-		expect(shapeNumbers(counterfeit)).toHaveLength(81);
+		expect(shapeNumbers(counterfeit)).toHaveLength(82);
 		expect(shapeNumbers(counterfeit)).not.toContain(1);
 	});
 
@@ -76,7 +76,10 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		// raise, 120 -> 121: shape 66 names the issue that drives its
 		// `in-process-mock` census down (#4709), because a census without its
 		// tracker names nothing a reader can act on.
-		expect(issueRefs(agentsText())).toBeLessThanOrEqual(121);
+		// The 2026-10-24 maintainer decision on #4682 adds the fourth raise, 121 ->
+		// 124: shape 83 names its three instance issues (#4293, #4294, #4682), the
+		// wording the maintainer set for the lazy axis.
+		expect(issueRefs(agentsText())).toBeLessThanOrEqual(124);
 	});
 
 	it("counts a reference and not a heading anchor", () => {

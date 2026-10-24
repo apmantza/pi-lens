@@ -1,5 +1,14 @@
 # HISTORY
 
+## 2026-10-24 — tool-state prose blind to a posture (shape 83)
+
+The session-start orientation named three of the five lazy tools (the hand list
+in `situationalGuidance` dropped `ast_grep_outline` and `lens_diagnostic_mark`),
+and its clause was wrong under `tools.lazy: false` (#4293, #4294 for the enabled
+axis; #4682 for the lazy axis). The clause is fixed in #4730; the tool list is
+derived from the registry. The MCP translation drops the pi-only rows (no
+mcpName) from the bullet (#2535 F3). Shape 83 is the catalog entry for the class.
+
 ## 2026-10-23 — one home variable pinned, the rest left at the real home (shape 82)
 
 `tests/support/vitest-setup.ts` pinned `PI_LENS_HOME` per worker (#525, #3721)

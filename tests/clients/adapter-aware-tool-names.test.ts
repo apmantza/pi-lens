@@ -8,11 +8,15 @@ import { formatCodeQualityWarningsAdvisory } from "../../clients/code-quality-wa
 import {
 	TOOL_REGISTRY,
 	resolveLensToolName,
+	translateGuidanceToolNames,
 } from "../../clients/tool-config.js";
 import { generatedSkipNotice } from "../../clients/lens-engine.js";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { consumeSessionStartGuidance } from "../../clients/runtime-context.js";
-import { SESSION_START_GUIDANCE } from "../../clients/runtime-session.js";
+import {
+	renderSessionStartGuidance,
+	SESSION_START_GUIDANCE,
+} from "../../clients/runtime-session.js";
 import { stripSource } from "../support/sweep-kit.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -300,6 +304,78 @@ describe("#2535 adapter-aware agent tool names", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+
+	// #4682 (maintainer decision 2026-10-24, the #2535 F3 rule): the orientation
+	// names only tools the MCP host can call. Recurrence: ast_grep_outline and
+	// lens_diagnostic_mark have no mcpName, and the one stored record named them
+	// to MCP agents ("Situational (call directly): ..., ast_grep_outline, ...").
+	it("MCP-translated session-start guidance names no pi-only tool (#4682)", () => {
+		const mcp = translateGuidanceToolNames(
+			SESSION_START_GUIDANCE.join("\n"),
+			"mcp",
+		);
+		for (const entry of TOOL_REGISTRY) {
+			if (typeof entry.piName !== "string") continue;
+			if (typeof entry.mcpName === "string") continue;
+			expect(mcp, entry.piName).not.toMatch(
+				new RegExp(`(?<![A-Za-z0-9_])${entry.piName}(?![A-Za-z0-9_])`),
+			);
+		}
+	});
+
+	// #4682 F1 (PR #4809 review): the bullet-drop branch decides what an MCP
+	// model reads, so both directions are pinned. Recurrence: `kept.length === 0`
+	// mutated to `< 0` shipped `• Situational (call directly): .` with every test
+	// green.
+	it("MCP guidance drops the situational bullet when every enabled row is pi-only (#4682 F1)", () => {
+		const situational = TOOL_REGISTRY.filter(
+			(entry) => "situational" in entry && entry.situational === true,
+		);
+		const mcpCallable = situational
+			.filter((entry) => typeof entry.mcpName === "string")
+			.map((entry) => entry.name);
+		const piOnly = situational.filter(
+			(entry) => typeof entry.mcpName !== "string",
+		);
+		// The posture exists only while the registry holds both arms, so a
+		// registry edit that removes one arm reds here instead of silently
+		// leaving the branch untested.
+		expect(mcpCallable.length).toBeGreaterThan(0);
+		expect(piOnly.length).toBeGreaterThan(0);
+		const rendered = renderSessionStartGuidance({
+			disabledToolNames: mcpCallable,
+		}).join("\n");
+		expect(rendered).toContain("Situational");
+		const mcp = translateGuidanceToolNames(rendered, "mcp");
+		expect(mcp).not.toContain("Situational");
+		expect(mcp).not.toMatch(/^\s*•\s*\.?\s*$/m);
+		// The kept path rebuilds the bullet, and the ast-grep hint it carries is
+		// translated with the names around it.
+		const kept = translateGuidanceToolNames(
+			renderSessionStartGuidance().join("\n"),
+			"mcp",
+		);
+		expect(kept).toContain("• Situational (call directly):");
+		expect(kept).toContain("Use pilens_ast_grep_search dump=true");
+	});
+
+	// #4682 shape 83 (F3): the MCP ast-grep route must tell the tool which host
+	// renders its answer. A runtime probe of the route costs a real ast-grep
+	// binary, so this pins the call shape the same way the project-scan notice
+	// pin above does; tests/tools/ast-grep-search.test.ts drives the render.
+	it("mcp/server.ts passes the MCP host into the ast-grep search route (#4682 F3)", () => {
+		const source = stripSource(fs.readFileSync("mcp/server.ts", "utf8"), {
+			strings: "keep",
+		});
+		const routeStart = source.indexOf('name === "pilens_ast_grep_search"');
+		expect(routeStart).toBeGreaterThanOrEqual(0);
+		const routeEnd = source.indexOf(
+			'name === "pilens_lsp_navigation"',
+			routeStart,
+		);
+		expect(routeEnd).toBeGreaterThan(routeStart);
+		expect(source.slice(routeStart, routeEnd)).toContain('host: "mcp"');
 	});
 
 	it("mcp/session.ts consumes session-start guidance for the MCP host", () => {
