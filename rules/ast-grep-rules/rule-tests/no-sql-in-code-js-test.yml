@@ -8,7 +8,77 @@ valid:
   - 'db.query("UPDATE users SET x = 1")'
   - 'db.query("SELECT * FROM users WHERE id = ?", [id])'
   - 'db.query("SELECT * FROM " + "users")'
+  - 'db.execute("SELECT * FROM users")'
+  - 'db.execute("SELECT * FROM users WHERE id = ?", [id])'
+  - 'db.execute("SELECT * FROM " + "users")'
+  - 'db.execute(sql`SELECT * FROM users WHERE id = ${id}`)'
+  - 'runner.execute("delete " + id)'
+  - 'queue.execute(`update ${id}`)'
+  - 'command.execute("update " + name)'
+  - 'task.execute("updated " + name)'
+  - 'db.execute("id = " + id, "DELETE FROM t")'
+  - 'ui.execute("Please select an item from " + list)'
+  - 'ui.execute("Item " + n + " selected from list")'
+  - 'job.execute("update " + id, { set: true })'
+  - 'menu.execute("select " + item, { from: x })'
+  - 'job.execute("selected from " + source)'
+  - 'ui.execute("Within the select list " + id)'
+  - 'ui.execute("Item " + n + " select from list")'
+  # \N is not an escape; JavaScript reads it as N.
+  - 'runner.execute("\NSELECT * FROM " + source)'
+  - 'runner.execute("-- note\NSELECT * FROM " + source)'
+  # A template with no substitution is constant SQL.
+  - 'db.execute(`SELECT * FROM users`)'
+  # The first argument must open with a quote or backtick.
+  - 'db.execute(update + " SET x = 1")'
+  # An escaped tab does not end a -- comment.
+  - 'db.execute("-- c\tSELECT * FROM t WHERE id = " + id)'
 invalid:
   - 'db.query("SELECT * FROM users WHERE id = " + id)'
   - 'db.query("DELETE FROM sessions WHERE token = " + token, [])'
   - 'db.query(`SELECT * FROM users WHERE id = ${id}`)'
+  - 'db.execute("SELECT * FROM users WHERE id = " + id)'
+  - 'db.execute("DELETE FROM sessions WHERE token = " + token, [])'
+  - 'db.execute(`SELECT * FROM users WHERE id = ${id}`)'
+  - 'db.execute("UPDATE users SET name = ''" + n + "''")'
+  - 'db.execute("DELETE FROM t WHERE id = " + id)'
+  - 'db.execute("SELECT*FROM t WHERE id=" + id)'
+  - 'db.execute(`SELECT pg_sleep(${n})`)'
+  - 'db.execute("INSERT INTO t (a) VALUES (''" + a + "'')")'
+  - |-
+    db.execute(`
+      SELECT *
+      FROM users
+      WHERE id = ${id}
+    `)
+  - 'db.execute("CREATE OR REPLACE VIEW v AS SELECT * FROM " + t)'
+  - 'db.execute("DROP TABLE " + table)'
+  - 'db.execute("ALTER TABLE " + table + " ADD COLUMN x int")'
+  - 'db.execute("GRANT SELECT ON " + table + " TO app")'
+  - 'db.execute("REVOKE ALL ON " + table + " FROM app")'
+  - 'db.execute("WITH u AS (SELECT * FROM users) SELECT * FROM u WHERE id = " + id)'
+  - 'db.execute("MERGE INTO t USING s ON t.id = " + id)'
+  - 'db.execute("TRUNCATE TABLE " + table)'
+  - 'db.execute("REPLACE INTO t VALUES (" + v + ")")'
+  - 'db.execute("/* by id */ SELECT * FROM t WHERE id = " + id)'
+  - |-
+    db.execute(`-- one user
+    SELECT * FROM users WHERE id = ${id}`)
+  - "db.execute('SELECT * FROM t WHERE id = ' + id)"
+  - 'db?.execute("SELECT * FROM t WHERE id = " + id)'
+  - 'db?.execute("DELETE FROM t WHERE id = " + id, [])'
+  # Escape sequences as written in source, not real whitespace.
+  - 'db.execute("\nSELECT * FROM users WHERE id = " + id)'
+  - 'db.execute("\tDELETE FROM t WHERE id = " + id)'
+  - 'db.execute("\r\nUPDATE users SET a = " + a)'
+  - 'db.execute("-- user lookup\nSELECT * FROM users WHERE id = " + id)'
+  - 'db.execute("-- c\rSELECT * FROM t WHERE id = " + id)'
+  # A comment before the first argument is a named child of `arguments`.
+  - |-
+    db.execute(
+      // by id
+      `SELECT * FROM users WHERE id = ${id}`)
+  - 'db.execute(/* by id */ "SELECT * FROM users WHERE id = " + id)'
+  # Not SQL, but it matches the sibling's `SELECT ... ${` arm;
+  # ts_sql_injection_sink flags the same template.
+  - 'queue.execute(`select ${id}`)'

@@ -34,16 +34,74 @@ note: |
   field: left/right, kind: string` check on both operands. A
   literal-plus-variable concatenation (the actual injection shape)
   still flags.
+
+  2026-10-24 (#1828): `$DB.execute(...)` is the same sink as
+  `$DB.query(...)` (mysql2 and oracledb both take
+  `execute(sql, params)`), so it gets 1-arg and `, $$$REST` arms, plus
+  their `?.` forms, under the same `$SQL` constraint. `execute` is also
+  a common task, command and job method name, and the keyword `has` on
+  the `query` arms matches a keyword anywhere in the call: the
+  callee-name false-positive class #2909 fixed in the tree-sitter
+  `sql-injection` rule. So the `execute` arms use that fix's prefix test
+  instead (`ts_sql_injection_sink` in clients/tree-sitter-client.ts).
+  The first argument's text (the first child of `arguments` that is not
+  a comment) must start with a quote or backtick, then optional
+  whitespace and SQL comments, then a statement from the sibling's
+  alternation. Three edits diverge from the sibling's text
+  (clients/tree-sitter-client.ts:4703): a `\b` after `SELECT` and after
+  `WITH`, so `"selected from "` and `"Within the select list "` do not
+  open a statement; the skip also accepts exactly the `\n`, `\r` and
+  `\t` escapes as written in source, case-sensitively so that `\N` does
+  not count, which catches `"\nSELECT ..."`; and a `--` comment also
+  ends at an escaped `\n` or `\r`, as Postgres ends one at either, so
+  `"-- c\nSELECT ..."` is caught (the comment may also run on to a later
+  escape). The sibling has the same gaps; fixing it there is a
+  follow-up, not part of this change. The rest of the skip and the
+  alternation is copied unchanged. The test reads the first argument
+  only, as the sibling reads only the template, so a later
+  `{ set: ... }` or `from` cannot complete an `UPDATE` or `SELECT`. This
+  removes the #2909 class, where a keyword anywhere in the call counted,
+  but statement-shaped English still flags (`"delete from " + cacheKey`,
+  `"select " + label + " from the list"`): the alternation accepts it,
+  and the rule has no receiver test. The `query` arms keep their keyword
+  check as it was. The sibling's other test is out of reach for an
+  ast-grep rule: when the prefix test fails, it still flags a template
+  whose receiver it follows through same-file declarations to an import
+  from a known SQL package, so that is a second way to flag, not a
+  filter. Not caught through `execute`: a statement split between its
+  first two tokens (`"DELETE " + "FROM t ..."`), SQL text that opens
+  with `${...}`, a parenthesized argument or one that starts with a
+  variable, whitespace written as `\u000a`, `\x0a` or a backslash line
+  continuation, a FROM-less SELECT built by concatenation
+  (`"SELECT pg_sleep(" + n + ")"`), and statements the alternation does
+  not list (`INSERT IGNORE INTO`, `INSERT OR REPLACE INTO`).
 rule:
-  all:
-    - any:
-        - pattern: $DB.query($SQL)
-        - pattern: $DB.query($SQL, $$$REST)
-    - has:
-        stopBy: end
-        regex: >-
-          (?i)(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|DROP TABLE|ALTER
-          TABLE)
+  any:
+    - all:
+        - any:
+            - pattern: $DB.query($SQL)
+            - pattern: $DB.query($SQL, $$$REST)
+        - has:
+            stopBy: end
+            regex: >-
+              (?i)(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|DROP TABLE|ALTER
+              TABLE)
+    - all:
+        - any:
+            - pattern: $DB.execute($SQL)
+            - pattern: $DB.execute($SQL, $$$REST)
+            - pattern: $DB?.execute($SQL)
+            - pattern: $DB?.execute($SQL, $$$REST)
+        - has:
+            field: arguments
+            has:
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: comment
+              regex: >-
+                (?i)^["'`](?:\s|(?-i:\\[nrt])|/\*[\s\S]*?\*/|--[^\n]*(?:\n|(?-i:\\[nr])|$))*(?:SELECT\b[\s\S]*(?:\bFROM\b|\$\{)|INSERT\s+INTO\b|UPDATE\s+[\s\S]*\bSET\b|DELETE\s+FROM\b|CREATE\s+(?:OR\s+REPLACE\s+|TEMP(?:ORARY)?\s+|UNIQUE\s+|MATERIALIZED\s+)*(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER|FUNCTION|PROCEDURE|SEQUENCE|TYPE|EXTENSION)\b|DROP\s+(?:OR\s+REPLACE\s+|TEMP(?:ORARY)?\s+|UNIQUE\s+|MATERIALIZED\s+)*(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER|FUNCTION|PROCEDURE|SEQUENCE|TYPE|EXTENSION)\b|ALTER\s+(?:OR\s+REPLACE\s+|TEMP(?:ORARY)?\s+|UNIQUE\s+|MATERIALIZED\s+)*(?:TABLE|INDEX|VIEW|SCHEMA|DATABASE|TRIGGER|FUNCTION|PROCEDURE|SEQUENCE|TYPE|EXTENSION)\b|GRANT\b|REVOKE\b|WITH\b[\s\S]*\bSELECT\b|MERGE\s+INTO\b|TRUNCATE\s+TABLE\b|REPLACE\s+INTO\b)
 constraints:
   SQL:
     any:
