@@ -6412,17 +6412,45 @@ export async function runReadOnlyServerCommand(
 			reason: `command "${command}" is not advertised by the ${state.serverId} server`,
 		};
 	}
+	// #4801: a timed-out probe is abandoned for good, so it is cancelled on the
+	// wire and released locally. Without the signal the request stayed pending
+	// for as long as the server stayed silent, kept the connection busy, and
+	// kept `ClientRegistry` from ever evicting the client.
+	const abandon = new AbortController();
+	const request = safeSendRequest<unknown>(
+		state.connection,
+		"workspace/executeCommand",
+		{ command, arguments: args ?? [] },
+		abandon.signal,
+		undefined,
+		true,
+	);
 	try {
-		const result = await withTimeout(
-			safeSendRequest<unknown>(state.connection, "workspace/executeCommand", {
-				command,
-				arguments: args ?? [],
-			}),
-			timeoutMs,
-		);
+		const result = await withTimeout(request, timeoutMs);
 		return { executed: true, result };
 	} catch (err) {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
+			abandon.abort();
+			// The abort only SCHEDULES the release: it cancels the token (the wire
+			// `$/cancelRequest`) and resolves the sentinel that wins the race, and
+			// the count itself drops in `safeSendRequest`'s `finally`. Awaiting the
+			// raced request here is what makes "the client is idle when the caller
+			// resumes" a guarantee instead of a property of the current `async`
+			// hop count: without it one behaviour-preserving hop removal leaves
+			// `isBusy()` true for a tick after the caller sees the timeout. It is
+			// bounded — the abort is exactly what settles the race, so this cannot
+			// wait on the server.
+			await request;
+			// #4801: a regression of the release is otherwise invisible in
+			// production. The request ceiling is not the caller-deadline abandon
+			// `warm-attach-membership-probe-abandoned` records, and the caller only
+			// sees a `timed out after ...ms` reason either way. One row per server
+			// per session: a wedged server is probed once per attach.
+			recordDegradationOnce({
+				kind: "lsp-readonly-command-released",
+				subject: state.serverId,
+				reason: `${command} timed out after ${timeoutMs}ms; the request was cancelled and released locally`,
+			});
 			return {
 				executed: false,
 				reason: `workspace/executeCommand timed out after ${timeoutMs}ms`,
@@ -7715,6 +7743,9 @@ async function safeSendNotification(
 
 const activeRequestsByConnection = new WeakMap<MessageConnection, number>();
 
+/** Sentinel `safeSendRequest` races against a reply when `releaseOnAbort` is set. */
+const RELEASED_ON_ABORT = Symbol("released-on-abort");
+
 /** A request pi-lens sent on this connection is still unanswered. */
 export function isConnectionBusy(connection: MessageConnection): boolean {
 	return (activeRequestsByConnection.get(connection) ?? 0) > 0;
@@ -7731,15 +7762,33 @@ async function safeSendRequest<T>(
 	// Item 1). The rejection that follows is swallowed (treated as `undefined`).
 	signal?: AbortSignal,
 	settlement?: { cancelled: boolean },
+	// #4801: vscode-jsonrpc settles a cancelled request only when the server
+	// answers it, so a server that ignores `$/cancelRequest` (a wedged one)
+	// holds the busy count for good. A caller that has already given up on the
+	// answer and wants the connection counted idle again passes true: abort then
+	// also settles this call locally, right after the cancel is sent. Off by
+	// default because the pull-diagnostic and navigation callers keep the
+	// request pending on purpose, to watch for the late answer.
+	releaseOnAbort = false,
 ): Promise<T | undefined> {
 	// Already abandoned before we even sent — don't bother the server.
 	if (signal?.aborted) return undefined;
 
 	let tokenSource: InstanceType<typeof CancellationTokenSource> | undefined;
 	let onAbort: (() => void) | undefined;
+	let released: Promise<typeof RELEASED_ON_ABORT> | undefined;
+	let release: (() => void) | undefined;
 	if (signal) {
 		tokenSource = new CancellationTokenSource();
-		onAbort = () => tokenSource?.cancel();
+		if (releaseOnAbort) {
+			released = new Promise((resolve) => {
+				release = () => resolve(RELEASED_ON_ABORT);
+			});
+		}
+		onAbort = () => {
+			tokenSource?.cancel();
+			release?.();
+		};
 		signal.addEventListener("abort", onAbort, { once: true });
 	}
 
@@ -7765,7 +7814,10 @@ async function safeSendRequest<T>(
 		const MAX_ATTEMPTS = 2;
 		for (let attempt = 1; ; attempt++) {
 			try {
-				return (await send()) as T;
+				if (!released) return (await send()) as T;
+				const reply = await Promise.race([send(), released]);
+				if (reply === RELEASED_ON_ABORT) return undefined;
+				return reply as T;
 			} catch (err) {
 				if (isCancellationError(err)) {
 					if (settlement) settlement.cancelled = true;

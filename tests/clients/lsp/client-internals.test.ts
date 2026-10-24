@@ -951,6 +951,9 @@ describe("handleNotifyOpen", () => {
 						{ file: TEST_FILE, needFileNameList: false },
 					],
 				},
+				// #4801: the probe carries a cancellation token, so a timeout can
+				// send `$/cancelRequest`.
+				expect.anything(),
 			);
 		});
 	});
@@ -983,6 +986,7 @@ describe("handleNotifyOpen", () => {
 			expect(state.connection.sendRequest).toHaveBeenCalledWith(
 				"workspace/executeCommand",
 				expect.objectContaining({ command: "typescript.tsserverRequest" }),
+				expect.anything(),
 			);
 		});
 
@@ -1037,6 +1041,7 @@ describe("handleNotifyOpen", () => {
 			expect(state.connection.sendRequest).toHaveBeenCalledWith(
 				"workspace/executeCommand",
 				expect.objectContaining({ command: "typescript.tsserverRequest" }),
+				expect.anything(),
 			);
 		});
 
