@@ -22,7 +22,11 @@ import {
 } from "./degradation-ledger.js";
 import { minimatch } from "./deps/minimatch.js";
 import { createSubsystemLogger } from "./extension-log.js";
-import { detectFileKind, type FileKind } from "./file-kinds.js";
+import {
+	detectFileKind,
+	DOTNET_CSHARP_ROOT_MARKERS,
+	type FileKind,
+} from "./file-kinds.js";
 import { detectFileRole } from "./file-role.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import {
@@ -37,6 +41,7 @@ import {
 	detectPythonEnvironment,
 } from "./python-environment.js";
 import {
+	direntsHaveMarkerGlobMatch,
 	findNearestMarkerRootDetailed,
 	type MarkerRootResult,
 	isRealGitMarker,
@@ -552,7 +557,8 @@ export const RUNNERS: Record<string, RunnerConfig> = {
 	},
 	dotnet: {
 		kinds: ["csharp", "fsharp"],
-		configFiles: ["*.csproj", "*.sln"],
+		// #4806: the .NET marker seam, not a private copy of it.
+		configFiles: [...DOTNET_CSHARP_ROOT_MARKERS],
 		command: "dotnet",
 		args: (_testFile, _cwd) => ["test", "--no-build"],
 		parseJson: false,
@@ -1175,12 +1181,13 @@ export class TestRunnerClient {
 			if (eligible && !eligible.has(name)) continue;
 			const config = RUNNERS[name];
 			const found = config.configFiles.some((cf) => {
-				// Handle glob patterns like *.csproj
+				// Handle glob patterns like *.csproj (#4806: the shared marker matcher,
+				// anchored and files-only, not a private unanchored RegExp)
 				if (cf.includes("*")) {
 					try {
-						const files = fs.readdirSync(cwd);
-						return files.some((f) =>
-							new RegExp(cf.replace(/\*/g, ".*")).test(f),
+						return direntsHaveMarkerGlobMatch(
+							fs.readdirSync(cwd, { withFileTypes: true }),
+							cf,
 						);
 					} catch {
 						return false;

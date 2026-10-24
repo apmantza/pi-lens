@@ -1,5 +1,18 @@
 # HISTORY
 
+## 2026-10-24 — a rule re-derived beside its owner (shape 83)
+
+#4803 fixed csharp-ls aborting in a folder with no .NET project (#4806) and, in
+its review rounds, kept finding the project-file rule copied beside its owner:
+the contributor's first draft tested the directory with its own regex
+(`dirHasDotnetProjectFile`; a directory named `App.csproj` counted), and two
+siblings still carried their own copy of the rule. `dispatch/runners/dotnet-build.ts` picked its target with a regex pair, and
+`test-runner-client.ts` listed `*.csproj` / `*.sln` and matched them with an
+unanchored `RegExp` built from the glob, so `Foo.csproj.bak` and a `Decoy.csproj`
+directory claimed a runner. Both now read `DOTNET_CSHARP_ROOT_MARKERS` and
+`direntsHaveMarkerGlobMatch`. Earlier members of the same shape: the marker
+list hand-copied before #895 and the glob options hand-copied before #201.
+
 ## 2026-10-23 — one home variable pinned, the rest left at the real home (shape 82)
 
 `tests/support/vitest-setup.ts` pinned `PI_LENS_HOME` per worker (#525, #3721)

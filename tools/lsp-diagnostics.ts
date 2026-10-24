@@ -132,6 +132,8 @@ type LspHealthLike = {
 type PrimaryUnavailableTally = {
 	count: number;
 	cause: PrimaryUnavailableCause | undefined;
+	/** #4806: the root verdicts of those files, which name why no server ran. */
+	rootFallbackReasons: readonly string[];
 };
 
 type BatchOptions = {
@@ -1699,7 +1701,9 @@ async function collectFileDiagnosticResult(
 	// #3750: a clean verdict from a server whose root fell back is unconfirmed.
 	// Before the aux-gap demotion below so the primary's reason is the one named.
 	const rootFallback =
-		confirmation === "clean" ? await primaryRootFallback(file, cwd) : undefined;
+		confirmation === "clean" || primaryUnavailable !== undefined
+			? await primaryRootFallback(file, cwd)
+			: undefined;
 	if (rootFallback) confirmation = "unconfirmed";
 	// #1470/#1493: an auxiliary that never reported — cut off by the aux grace timer,
 	// or silent with nothing published for this content — contributed no evidence
@@ -1944,7 +1948,7 @@ async function runFileDiagnostics(
 	// #3750: a clean verdict from a server whose root fell back is unconfirmed.
 	// Before the aux-gap narrowing below so the primary's reason is the one named.
 	const rootFallback =
-		confirmation === "clean"
+		confirmation === "clean" || primaryUnavailable !== undefined
 			? await primaryRootFallback(absPath, cwd)
 			: undefined;
 	if (rootFallback) confirmation = "unconfirmed";
@@ -2024,7 +2028,13 @@ async function runFileDiagnostics(
 	const primaryLine = (() => {
 		// #4322: the language server never answered, so neither "timed out" nor
 		// "silent-on-clean" describes it.
-		if (primaryUnavailable !== undefined) return primaryUnavailable;
+		// #4806: no client ran, so the root verdict is the durable cause (a
+		// project-less directory), which the start-problem wording cannot name.
+		if (primaryUnavailable !== undefined) {
+			return rootFallback
+				? `${primaryUnavailable} ${describeRootFallback(rootFallback, false)}.`
+				: primaryUnavailable;
+		}
 		if (diagnosticsUnsupportedServerIds.length > 0) {
 			return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: navigation-only — diagnostics unsupported (no pull provider or publish evidence).`;
 		}
@@ -2158,7 +2168,10 @@ async function runFileDiagnostics(
 			...(skipReason !== undefined && { skipReason }),
 			...(primaryUnavailable !== undefined && { primaryUnavailable }),
 			...(rootFallback && {
-				rootFallbackReason: describeRootFallback(rootFallback),
+				rootFallbackReason: describeRootFallback(
+					rootFallback,
+					primaryUnavailable === undefined,
+				),
 			}),
 			// #1470: which servers this result does NOT speak for. Absent when it
 			// speaks for all of them.
@@ -2193,6 +2206,7 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 	let timedOut = 0;
 	let primaryUnavailable = 0;
 	const primaryUnavailableCauses: PrimaryUnavailableCause[] = [];
+	const primaryUnavailableRootReasons = new Set<string>();
 	const rootFallbackReasons = new Set<string>();
 	let navigationOnly = 0;
 	let tooLarge = 0;
@@ -2218,7 +2232,15 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 					primaryUnavailableCauses.push(result.primaryUnavailableCause);
 			}
 			if (result.rootFallback) {
-				rootFallbackReasons.add(describeRootFallback(result.rootFallback));
+				// #4806: a file no server answered names its root verdict with the
+				// unavailable files, not with the files a hosted server answered.
+				if (result.primaryUnavailable !== undefined) {
+					primaryUnavailableRootReasons.add(
+						describeRootFallback(result.rootFallback, false),
+					);
+				} else {
+					rootFallbackReasons.add(describeRootFallback(result.rootFallback));
+				}
 			}
 		} else if (classifyBatchFileOutcome(result) === "clean") {
 			// Unsupported, unavailable and failed files were never checked.
@@ -2232,6 +2254,7 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 		primaryUnavailable: {
 			count: primaryUnavailable,
 			cause: combinePrimaryUnavailableCauses(primaryUnavailableCauses),
+			rootFallbackReasons: [...primaryUnavailableRootReasons],
 		},
 		rootFallbackReasons: [...rootFallbackReasons],
 		navigationOnly,
@@ -2331,14 +2354,21 @@ function unconfirmedReasonClause(
 	unconfirmed: number,
 	timedOut: number,
 	rootFallbackReasons: readonly string[] = [],
-	primaryUnavailable: PrimaryUnavailableTally = { count: 0, cause: undefined },
+	primaryUnavailable: PrimaryUnavailableTally = {
+		count: 0,
+		cause: undefined,
+		rootFallbackReasons: [],
+	},
 ): string {
 	// #4322: a fourth, disjoint reason — no language server answered at all.
 	// The rest of the unconfirmed files keep their own explanation.
 	if (primaryUnavailable.count > 0) {
 		const head =
 			`${primaryUnavailable.count} with no language server answer ` +
-			`(${PRIMARY_UNAVAILABLE_CAUSE[primaryUnavailable.cause ?? "unstarted"]})`;
+			`(${PRIMARY_UNAVAILABLE_CAUSE[primaryUnavailable.cause ?? "unstarted"]})` +
+			(primaryUnavailable.rootFallbackReasons.length > 0
+				? `: ${primaryUnavailable.rootFallbackReasons.join("; ")}`
+				: "");
 		const rest = unconfirmed - primaryUnavailable.count;
 		return rest > 0
 			? `${head}; the other ${rest}: ${unconfirmedReasonClause(rest, timedOut, rootFallbackReasons)}`

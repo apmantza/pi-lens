@@ -201,15 +201,23 @@ export const LEAN_ROOT_MARKERS: readonly string[] = [
  * .NET project/solution root-marker globs (refs #895). Single source of truth
  * consumed by BOTH root-resolution subsystems — language-profile.ts
  * (PROJECT_MARKERS_BY_KIND / ROOT_MARKERS_BY_KIND) and lsp/server.ts
- * (CSharpServer / OmniSharpServer / FSharpServer root detectors) — following
- * the KIND_EXTENSIONS pattern: never hand-copy these lists at a call site.
+ * (CSharpServer / OmniSharpServer / FSharpServer root detectors), plus the
+ * dotnet test runner's detection and `dotnet-build`'s target pick (#4806) —
+ * following the KIND_EXTENSIONS pattern: never hand-copy these lists, or a
+ * private glob matcher for them, at a call site.
  * tests/clients/dotnet-root-markers.test.ts asserts both subsystems recognize
  * every marker here, so a call site drifting from this list fails CI.
  */
-export const DOTNET_CSHARP_ROOT_MARKERS: readonly string[] = [
-	"*.csproj",
+// The split a consumer that must prefer a solution over a lone project reads
+// (`dispatch/runners/dotnet-build.ts`); the root markers are the two together.
+export const DOTNET_CSHARP_PROJECT_MARKERS: readonly string[] = ["*.csproj"];
+export const DOTNET_CSHARP_SOLUTION_MARKERS: readonly string[] = [
 	"*.sln",
 	"*.slnx",
+];
+export const DOTNET_CSHARP_ROOT_MARKERS: readonly string[] = [
+	...DOTNET_CSHARP_PROJECT_MARKERS,
+	...DOTNET_CSHARP_SOLUTION_MARKERS,
 ];
 export const DOTNET_FSHARP_ROOT_MARKERS: readonly string[] = [
 	"*.fsproj",

@@ -245,7 +245,12 @@ describe("#3750 an empty result under a server-root fallback", () => {
 
 	it("applies to every server that requires a project, not only rust (csharp-ls)", async () => {
 		answerWith("empty");
+		// A project one level BELOW the file's directory: csharp-ls searches its
+		// cwd recursively, so pi-lens starts it at the fallback root (#4806 F4)
+		// and the #3750 demotion applies to its empty answer.
 		const dir = workspace();
+		fs.mkdirSync(path.join(dir, "sub"));
+		fs.writeFileSync(path.join(dir, "sub", "App.csproj"), "<Project />\n");
 		const file = source(dir, "Orphan.cs");
 
 		const { text } = await runTool(dir, { path: file });
@@ -253,8 +258,99 @@ describe("#3750 an empty result under a server-root fallback", () => {
 		expect(text).toContain(
 			"Primary LSP (csharp): unconfirmed — csharp-ls: no project root found for this file",
 		);
+		// A hosted server was not declined by the bounded search (#4806 N3).
+		expect(text).not.toContain("bounded search");
 		expect(text).not.toContain("confirmed clean");
 	});
+
+	// Recurrence guarded (#4806 N3): a project deeper than the 128-directory search
+	// bound declines, and the sentence "no project root found" then asserted an
+	// absence the bounded search could not support; the declined reason names the
+	// bound (on this path only: the rust case above must not carry it).
+	// Recurrence guarded (#4806 F1): csharp-ls aborts without a project file, so
+	// the registry declines the spawn at a project-less fallback root. No client
+	// then answers, and the primary line said only "could not be started, or was
+	// still starting" (a transient start problem) while the #3750 root verdict
+	// that names the durable cause never reached the model.
+	it("names the missing project when csharp-ls is declined at a project-less root", async () => {
+		answerWith("empty");
+		const dir = workspace();
+		const file = source(dir, "Orphan.cs");
+
+		const { text, details } = await runTool(dir, { path: file });
+
+		expect(text).toMatch(
+			/Primary LSP \(csharp[^)]*\): not available — no language server answered for this file/,
+		);
+		expect(text).toContain(
+			"csharp-ls: no project root found for this file (looked for *.csproj / *.sln / *.slnx, including a bounded search of 128 directories below it).",
+		);
+		expect(text).not.toContain("confirmed clean");
+		expect(text).not.toContain("started at the file's directory");
+		expect(details.unconfirmed).toBe(true);
+		expect(details.rootFallbackReason).toBe(
+			"csharp-ls: no project root found for this file (looked for *.csproj / *.sln / *.slnx, including a bounded search of 128 directories below it)",
+		);
+		// The decline is the registry's policy record, not a spawn failure.
+		const declined = getDegradationSummary().find(
+			(group) => group.kind === "lsp-root-declined",
+		);
+		expect(declined?.latestReasons[0]?.subject).toContain("csharp:");
+	});
+
+	// Recurrence guarded (#4806 N2): the root verdict on an unavailable primary
+	// was wired for every `requiresProjectRoot` server but pinned only for
+	// csharp-ls, so narrowing either arm of the widening to csharp stayed green.
+	// Here rust-analyzer's command is a path that does not exist (no client ever
+	// runs), and the file has no Cargo.toml: the model must read the durable cause
+	// (no project), not only the transient "could not be started".
+	it("names the missing project when a rust-analyzer that cannot start is asked about a project-less file (single file and batch)", async () => {
+		answerWith("empty");
+		const savedInstall = process.env.PI_LENS_DISABLE_LSP_INSTALL;
+		process.env.PI_LENS_DISABLE_LSP_INSTALL = "1";
+		try {
+			const dir = workspace();
+			fs.mkdirSync(path.join(dir, ".pi-lens"));
+			fs.writeFileSync(
+				path.join(dir, ".pi-lens", "lsp.json"),
+				JSON.stringify({
+					serverOverrides: {
+						rust: { command: [path.join(dir, "missing", "rust-analyzer")] },
+					},
+				}),
+			);
+			const first = source(dir, "one.rs");
+			const second = source(dir, "two.rs");
+
+			const single = await runTool(dir, { path: first });
+
+			expect(single.text).toMatch(
+				/Primary LSP \(rust\): not available — no language server answered for this file/,
+			);
+			expect(single.text).toContain(
+				"rust-analyzer: no project root found for this file (looked for Cargo.toml / Cargo.lock).",
+			);
+			expect(single.text).not.toContain("started at the file's directory");
+			// The bounded csharp-ls search is not rust-analyzer's decision.
+			expect(single.text).not.toContain("bounded search");
+			expect(single.details.unconfirmed).toBe(true);
+			expect(single.details.rootFallbackReason).toBe(
+				"rust-analyzer: no project root found for this file (looked for Cargo.toml / Cargo.lock)",
+			);
+
+			const batch = await runTool(dir, { paths: [first, second] });
+
+			expect(batch.text).toContain("0 files confirmed clean, 2 unconfirmed");
+			expect(batch.text).toContain(
+				"2 with no language server answer (it could not be started, or was still starting): rust-analyzer: no project root found for this file (looked for Cargo.toml / Cargo.lock). NOT the same as 0 diagnostics.",
+			);
+			expect(batch.text).not.toContain("bounded search");
+		} finally {
+			if (savedInstall === undefined)
+				delete process.env.PI_LENS_DISABLE_LSP_INSTALL;
+			else process.env.PI_LENS_DISABLE_LSP_INSTALL = savedInstall;
+		}
+	}, 30_000);
 
 	// Recurrence guarded: #3750 round 1 demoted all 11 undefined-root servers, so a
 	// healthy Lua repo (`.luarc.json` is optional; lua-language-server analyses
@@ -361,8 +457,10 @@ describe("#3750 an empty result under a server-root fallback", () => {
 		const { text } = await runTool(root, { paths: [rust, csharp] });
 
 		expect(text).toContain("0 files confirmed clean, 2 unconfirmed");
+		// The declined csharp-ls file names its root verdict with the files no
+		// server answered; the rust file keeps the hosted-server wording.
 		expect(text).toContain(
-			"may not have analysed it; csharp-ls: no project root found for this file",
+			"1 with no language server answer (it could not be started, or was still starting): csharp-ls: no project root found for this file (looked for *.csproj / *.sln / *.slnx, including a bounded search of 128 directories below it); the other 1: rust-analyzer: no project root found for this file (looked for Cargo.toml / Cargo.lock); the server was started at the file's directory and may not have analysed it",
 		);
 		expect(text).toContain("NOT the same as 0 diagnostics.");
 	});

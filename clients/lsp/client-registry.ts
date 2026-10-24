@@ -51,6 +51,7 @@ import {
 } from "./launch.js";
 import {
 	declinesLooseFileRoot,
+	declinesProjectlessRoot,
 	enforceLspRootCeiling,
 	getServerById,
 	hasProjectBoundaryMarker,
@@ -1408,6 +1409,19 @@ export class ClientRegistry {
 			logSessionStart(
 				`lsp spawn ${server.id}: refused — ${projectTrustDenialReason()}`,
 			);
+			this.noteSpawnVerdict(key, "declined");
+			return undefined;
+		}
+		// #4806: a server whose process aborts without a project file below its
+		// root (csharp-ls, SIGABRT) is declined BEFORE any process starts, on the
+		// policy path like `declinesLooseFileRoot`: no `spawn_failed`, no failure
+		// ladder, no breaker, and one record per (server, root) per session.
+		if (await declinesProjectlessRoot(server, root)) {
+			recordDegradationOnce({
+				kind: "lsp-root-declined",
+				subject: key,
+				reason: `LSP spawn declined for ${server.id}: no project file at or below ${root}`,
+			});
 			this.noteSpawnVerdict(key, "declined");
 			return undefined;
 		}

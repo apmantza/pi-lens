@@ -1,7 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { pathsEqual } from "../../path-utils.js";
+import {
+	DOTNET_CSHARP_PROJECT_MARKERS,
+	DOTNET_CSHARP_SOLUTION_MARKERS,
+} from "../../file-kinds.js";
+import { direntsHaveMarkerGlobMatch, pathsEqual } from "../../path-utils.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -16,10 +20,19 @@ import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 const dotnet = createAvailabilityChecker("dotnet", ".exe");
 
 function findProjectTarget(cwd: string): string | undefined {
-	const entries = fs.readdirSync(cwd);
-	const solution = entries.find((entry) => /\.(sln|slnx)$/i.test(entry));
-	if (solution) return solution;
-	return entries.find((entry) => /\.(csproj)$/i.test(entry));
+	const entries = fs.readdirSync(cwd, { withFileTypes: true });
+	// #4806: the marker seam decides what counts as a solution or a project (a
+	// directory named like one does not). A solution outranks a lone project.
+	for (const patterns of [
+		DOTNET_CSHARP_SOLUTION_MARKERS,
+		DOTNET_CSHARP_PROJECT_MARKERS,
+	]) {
+		const hit = entries.find((entry) =>
+			patterns.some((pattern) => direntsHaveMarkerGlobMatch([entry], pattern)),
+		);
+		if (hit) return hit.name;
+	}
+	return undefined;
 }
 
 interface DotnetDiagnosticLine {

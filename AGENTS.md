@@ -629,6 +629,19 @@ file-scoped worklist and receives no project-wide scanner output.
     one root provably covers them. Census: not countable yet. Instance and
     dates: `HISTORY.md`.
 
+83. **Rule re-derived beside its owner:** a consumer rebuilds a rule that a
+    shared seam already owns (a marker list, a glob-to-RegExp matcher, a case
+    fold) instead of calling the owner, so the copy drifts from it on
+    spelling, anchoring, case and file-versus-directory. The copy is always
+    plausible beside the owner, and a fix of one consumer leaves its siblings.
+    Screen: before writing a marker, pattern, bound or normaliser, grep the
+    tree for its literal and for the matcher that applies it; does a module
+    already own it, and does this caller route through that module? Then list
+    the other callers that hold their own copy and fold them or say why not.
+    Census: not countable yet. Enforcer: none: judgment-only. A scan cannot
+    tell a copied rule from a coincidental literal without reading what the
+    value feeds. Instances and dates: `HISTORY.md`.
+
 </important>
 
 <important if="a test double, ratchet or sweep">

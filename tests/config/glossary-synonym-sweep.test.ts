@@ -1126,7 +1126,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// real paths through `realpathOrResolve`, so both uses are gone.
 		// #4728: 125 -> 123; the fallback walk starts at the candidate itself,
 		// removing the early-return resolve and the parent-directory lookup.
-		"clients/lsp/server.ts": 123,
+		// 123 -> 124 (#4806): the bounded project-file search joins each
+		// subdirectory with `path.join`, a filesystem path call.
+		"clients/lsp/server.ts": 124,
 		"clients/lsp/session-roots.ts": 8,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).

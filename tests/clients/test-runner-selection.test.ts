@@ -378,6 +378,46 @@ describe("#2870 runner selection is per file kind", () => {
 		expect(isExcludedTestTarget(javaTarget!.testFile, project)).toBe(true);
 	});
 
+	// Recurrence guarded (#4806, shape "rule re-derived beside its owner"): the
+	// dotnet runner kept its own marker list (`*.csproj`, `*.sln`) and its own
+	// glob-to-RegExp matcher beside the .NET marker seam
+	// (`DOTNET_CSHARP_ROOT_MARKERS`, `direntsHaveMarkerGlobMatch`). The copy
+	// missed `*.slnx` and matched an UNANCHORED pattern, so a solution-less
+	// `.slnx` repo had no runner while a `Foo.csproj.bak` file or a directory
+	// named `Decoy.csproj` claimed one.
+	describe("the dotnet runner reads the .NET marker seam (#4806)", () => {
+		function detected(root: string, files: string[], dirs: string[] = []) {
+			for (const file of files) write(root, file);
+			for (const dir of dirs) fs.mkdirSync(path.join(root, dir));
+			const source = write(root, "Program.cs", "class P {}\n");
+			return new TestRunnerClient(false).detectRunner(root, source)?.runner;
+		}
+
+		it("detects dotnet from a project file", () => {
+			expect(detected(makeRoot("pi-lens-4806-csproj-"), ["App.csproj"])).toBe(
+				"dotnet",
+			);
+		});
+
+		it("detects dotnet from a .slnx-only solution", () => {
+			expect(detected(makeRoot("pi-lens-4806-slnx-"), ["App.slnx"])).toBe(
+				"dotnet",
+			);
+		});
+
+		it("does not take a file that merely contains a project name", () => {
+			expect(
+				detected(makeRoot("pi-lens-4806-bak-"), ["Foo.csproj.bak"]),
+			).toBeUndefined();
+		});
+
+		it("does not take a directory named like a project file", () => {
+			expect(
+				detected(makeRoot("pi-lens-4806-dir-"), [], ["Decoy.csproj"]),
+			).toBeUndefined();
+		});
+	});
+
 	it("keeps every RUNNERS entry's kinds declared and known", () => {
 		// The kind gate is only as complete as the table: an entry with no
 		// `kinds` would be unreachable for every file, and one naming a kind

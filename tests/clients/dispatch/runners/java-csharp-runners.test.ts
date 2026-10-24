@@ -107,6 +107,56 @@ describe("java/csharp fallback runners", () => {
 		}
 	});
 
+	// Recurrence guarded (#4806): the runner picked its build target with its own
+	// `/\.(sln|slnx)$/i` and `/\.(csproj)$/i` tests, beside the .NET marker seam
+	// (`DOTNET_CSHARP_ROOT_MARKERS`, files only). A directory named like a project
+	// file was handed to `dotnet build` as the target.
+	describe("dotnet build target comes from the .NET marker seam", () => {
+		async function buildTarget(
+			files: string[],
+			dirs: string[] = [],
+		): Promise<string | undefined> {
+			const env = setupTestEnvironment("pi-lens-dotnet-target-");
+			try {
+				for (const file of files)
+					// pi-lens-ignore: ts-path-traversal — test-owned temp directory from setupTestEnvironment
+					fs.writeFileSync(path.join(env.tmpDir, file), "<Project />\n");
+				for (const dir of dirs)
+					// pi-lens-ignore: ts-path-traversal — test-owned temp directory from setupTestEnvironment
+					fs.mkdirSync(path.join(env.tmpDir, dir));
+				const filePath = path.join(env.tmpDir, "Program.cs");
+				// One build per call: the mock's call list spans the whole case.
+				safeSpawn.mockClear();
+				safeSpawn.mockReturnValue({
+					error: null,
+					status: 0,
+					stdout: "",
+					stderr: "",
+				});
+				const runner = (
+					await import("../../../../clients/dispatch/runners/dotnet-build.js")
+				).default;
+				await runner.run(createCtx("csharp", filePath, env.tmpDir) as never);
+				const build = safeSpawn.mock.calls.find(
+					(call) => call[0] === "dotnet" && call[1]?.[0] === "build",
+				);
+				return build?.[1]?.[1];
+			} finally {
+				env.cleanup();
+			}
+		}
+
+		it("prefers a solution over a project, .slnx included", async () => {
+			expect(await buildTarget(["App.csproj", "App.slnx"])).toBe("App.slnx");
+			expect(await buildTarget(["App.csproj", "App.sln"])).toBe("App.sln");
+			expect(await buildTarget(["App.csproj"])).toBe("App.csproj");
+		});
+
+		it("skips a directory named like a project file", async () => {
+			expect(await buildTarget([], ["Decoy.csproj"])).toBeUndefined();
+		});
+	});
+
 	it("parses cxx compiler diagnostics for the edited file", async () => {
 		const env = setupTestEnvironment("pi-lens-cpp-runner-");
 		try {
