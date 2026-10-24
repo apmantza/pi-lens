@@ -51,6 +51,14 @@ schema slice does not change server launch behavior.
 }
 ```
 
+`initializationOptions` take the shape the server itself reads. rust-analyzer
+reads them flat (`check`, `cargo`), as above. pyright and basedpyright read
+only their pulled settings, so nest the override under the section they ask
+for: `{ "python": { "analysis": { "typeCheckingMode": "strict" } } }`. pi-lens
+answers each
+`workspace/configuration` request from that section of the merged options and
+returns `{}` for a section the options do not carry.
+
 An override may also provide an experimental launcher `command` and `env`.
 The built-in server ID and strategy remain in force; only the launcher is
 replaced, and project-sourced launcher fields follow the same pi trust gate.

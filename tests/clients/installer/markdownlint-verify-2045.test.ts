@@ -1,3 +1,4 @@
+// real-home: read-only path probe for the maintainer's managed markdownlint-cli2 (`~/.pi-lens/tools/node_modules/.bin`); the pinned home has no managed tools tree, so the real-CLI case skips on the one host that has it.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,6 +18,7 @@ import {
 	resetDegradationLedger,
 } from "../../../clients/degradation-ledger.js";
 import { TOOLS, verifyToolBinary } from "../../../clients/installer/index.js";
+import { REAL_HOME } from "../../support/vitest-setup.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const fixture = fs.readFileSync(
@@ -330,9 +332,12 @@ function resolveMarkdownlintBinary(): string | undefined {
 		process.platform === "win32"
 			? "markdownlint-cli2.cmd"
 			: "markdownlint-cli2";
+	// The harness pins HOME per worker (#4789), so the managed candidate reads the
+	// real home through `REAL_HOME`, a named read-only opt-out in
+	// `tests/support/real-home-readers.ts`.
 	const candidates = [
 		path.join(
-			os.homedir(),
+			REAL_HOME,
 			".pi-lens",
 			"tools",
 			"node_modules",

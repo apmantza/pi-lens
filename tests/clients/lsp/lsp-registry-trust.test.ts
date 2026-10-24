@@ -282,5 +282,8 @@ describe("compiled LSP registry trust boundary (#2372)", () => {
 		expect(byId.get("typescript")).toBe(getServerById("typescript"));
 		expect(byId.get("rust")).not.toBe(getServerById("rust"));
 		expect(byId.get("rust")?.spawn).not.toBe(getServerById("rust")?.spawn);
+		// #4758/#4808 F4: the copy keeps the declaration, so a user `command`
+		// override still answers rust-analyzer's `rust-analyzer` pull.
+		expect(byId.get("rust")?.settingsSection).toBe("rust-analyzer");
 	});
 });

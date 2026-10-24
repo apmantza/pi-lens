@@ -619,12 +619,38 @@ function send(msg) {
 	process.stdout.write(encode(msg));
 }
 
+// #4758: the settings a client delivers, read off the wire. With
+// FAKE_LSP_TRACE_CONFIG=1 the trace file gets one line each for the
+// initializationOptions, a didChangeConfiguration payload, and (when
+// FAKE_LSP_PULL_SECTIONS is a JSON array of section names) the client's answer
+// to a `workspace/configuration` request the server sends after `initialized`.
+const CONFIG_PULL_ID = "fake-config-pull";
+function traceConfig(what) {
+	if (process.env.FAKE_LSP_TRACE_CONFIG !== "1") return;
+	if (!process.env.FAKE_LSP_TRACE_FILE) return;
+	try {
+		fs.appendFileSync(process.env.FAKE_LSP_TRACE_FILE, `${what}\n`);
+	} catch {}
+}
+
 function handle(raw) {
 	let data;
 	try {
 		data = JSON.parse(raw);
 	} catch {
 		return;
+	}
+	if (data.id === CONFIG_PULL_ID && data.method === undefined) {
+		traceConfig(`config-pull-answer ${JSON.stringify(data.result ?? null)}`);
+		return;
+	}
+	if (data.method === "initialize") {
+		traceConfig(
+			`init-options ${JSON.stringify(data.params?.initializationOptions ?? null)}`,
+		);
+	}
+	if (data.method === "workspace/didChangeConfiguration") {
+		traceConfig(`config-push ${JSON.stringify(data.params?.settings ?? null)}`);
 	}
 	if (process.env.FAKE_LSP_TRACE_FILE) {
 		const trace = (what) => {
@@ -885,6 +911,18 @@ function handle(raw) {
 
 	// Ignore notifications without id
 	if (data.method === "initialized") {
+		if (process.env.FAKE_LSP_PULL_SECTIONS) {
+			send({
+				jsonrpc: "2.0",
+				id: CONFIG_PULL_ID,
+				method: "workspace/configuration",
+				params: {
+					items: JSON.parse(process.env.FAKE_LSP_PULL_SECTIONS).map(
+						(section) => ({ section }),
+					),
+				},
+			});
+		}
 		if (SHOW_MESSAGES.length > 0 && !SHOW_MESSAGES_AFTER_FIRST_PUBLISH) {
 			scheduleShowMessages();
 		}

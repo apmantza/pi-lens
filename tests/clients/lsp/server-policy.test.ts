@@ -1843,6 +1843,71 @@ describe("lsp server policy", () => {
 		}
 	});
 
+	// #4758 recurrence: the project's interpreter and the open-files mode sat
+	// top level in the blob, where pyright never reads them; it pulls the
+	// `python` and `python.analysis` sections and was answered `{}`. Resolved
+	// through the same function the client's `workspace/configuration` handler
+	// calls, so the key's SECTION is what is asserted, not its mere presence.
+	it("hands pyright its interpreter under the python section it pulls (#4758)", async () => {
+		const { PythonServer } = await import("../../../clients/lsp/server.js");
+		const { resolveConfigurationSection } =
+			await import("../../../clients/lsp/client.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-pyright-4758-"));
+		dirs.push(tmp);
+
+		const binDir = path.join(
+			tmp,
+			".venv",
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const pythonPath = path.join(
+			binDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		const pyrightPath = path.join(
+			binDir,
+			process.platform === "win32"
+				? "pyright-langserver.exe"
+				: "pyright-langserver",
+		);
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
+		fs.writeFileSync(pyrightPath, "#!/usr/bin/env python\n");
+		vi.stubEnv("VIRTUAL_ENV", undefined);
+		vi.stubEnv("CONDA_PREFIX", undefined);
+		vi.stubEnv("UV_PROJECT_ENVIRONMENT", undefined);
+
+		launchLSP.mockImplementation(async (command: string) => {
+			if (command === pyrightPath) {
+				return {
+					process: { killed: false } as never,
+					stdin: {} as never,
+					stdout: {} as never,
+					stderr: {} as never,
+					pid: 5682,
+				};
+			}
+			throw toolNotFound(`unexpected command: ${command}`);
+		});
+
+		try {
+			const spawned = await PythonServer.spawn(tmp, { allowInstall: false });
+
+			expect(spawned).toBeDefined();
+			expect(
+				resolveConfigurationSection(spawned?.initialization, "python"),
+			).toEqual({
+				pythonPath,
+				analysis: { diagnosticMode: "openFilesOnly" },
+			});
+			expect(
+				resolveConfigurationSection(spawned?.initialization, "python.analysis"),
+			).toEqual({ diagnosticMode: "openFilesOnly" });
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("prefers a locally-found pyright over ty (opt-in fallback never wins when pyright is available)", async () => {
 		const { PythonServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(

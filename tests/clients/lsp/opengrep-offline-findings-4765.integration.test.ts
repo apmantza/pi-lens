@@ -1,3 +1,4 @@
+// real-home: read-only path probe for the maintainer's managed opengrep (`~/.pi-lens/bin/opengrep`); the pinned home has no managed tools tree, so without the real home the file skips on the one host that has opengrep.
 /**
  * #4765 acceptance, over a real Opengrep: after a successful refresh the spawn
  * produces findings with the network cut, and with no pack at all an offline
@@ -24,7 +25,8 @@
  *
  * Skipped, with a named reason, when no `opengrep` binary exists: the unit lanes
  * install no managed tools. Set `PI_LENS_TEST_OPENGREP_BIN` to point at one;
- * otherwise `opengrep` on PATH, then `~/.pi-lens/bin/opengrep`, is used.
+ * otherwise `opengrep` on PATH, then the real home's `~/.pi-lens/bin/opengrep`
+ * (through `REAL_HOME`), is used.
  */
 import * as fs from "node:fs";
 import * as http from "node:http";
@@ -71,20 +73,26 @@ import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
+import { REAL_HOME } from "../../support/vitest-setup.js";
 import { withEnv } from "../../support/with-env.js";
 import { waitFor } from "../interleaving-kit.js";
 import { pinFixtureHome, removeTempDirSync } from "../test-utils.js";
 
 const EXE = process.platform === "win32" ? "opengrep.exe" : "opengrep";
 
-/** Resolved before any case pins HOME, so the real managed copy is still found. */
+/**
+ * Resolved once at module load. The harness pins HOME per worker (#4789), so the
+ * managed candidate reads the real home through `REAL_HOME`, a named read-only
+ * opt-out in `tests/support/real-home-readers.ts`; this file's own PI_LENS_HOME
+ * stub moves the install dir, never the maintainer's bin dir.
+ */
 function findOpengrepBinary(): string | undefined {
 	const candidates: string[] = [];
 	if (process.env.PI_LENS_TEST_OPENGREP_BIN)
 		candidates.push(process.env.PI_LENS_TEST_OPENGREP_BIN);
 	for (const dir of (process.env.PATH ?? "").split(path.delimiter))
 		if (dir) candidates.push(path.join(dir, EXE));
-	candidates.push(path.join(os.homedir(), ".pi-lens", "bin", EXE));
+	candidates.push(path.join(REAL_HOME, ".pi-lens", "bin", EXE));
 	return candidates.find((file) => {
 		try {
 			fs.accessSync(file, fs.constants.X_OK);

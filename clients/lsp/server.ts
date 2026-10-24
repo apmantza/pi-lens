@@ -701,6 +701,21 @@ export interface LSPServerInfo {
 	 * Cascade can read its passive snapshot instead of actively touching neighbors.
 	 */
 	autoPropagateDiagnostics?: boolean;
+	/**
+	 * The configuration section (one name) that this server's `initialization`
+	 * blob IS the contents of, for a server that PULLS its settings under that
+	 * name. rust-analyzer applies `initializationOptions` flat at startup and
+	 * then pulls the `rust-analyzer` section; with no mapping that pull is
+	 * answered `{}` (#4758), and an empty client config is a no-op it skips, so
+	 * today the mapping only makes the pull answer repeat what startup already
+	 * applied. The effect of the pull answer is unmeasured (#4512). The client
+	 * answers the section from the blob (user `serverOverrides` included) and
+	 * leaves `initializationOptions` unwrapped. A server whose settings already
+	 * sit under their section names inside the blob (pyright:
+	 * {@link pyrightInitialization}) omits it. It sits on the server, not the
+	 * spawn result, so a user `command` override that replaces `spawn` keeps it.
+	 */
+	settingsSection?: string;
 	spawn(
 		root: string,
 		options?: LSPSpawnOptions,
@@ -2920,6 +2935,32 @@ export const DenoServer: LSPServerInfo = {
 	},
 };
 
+/**
+ * The settings pi-lens hands pyright and basedpyright, keyed by the sections
+ * those servers PULL (`python`, `python.analysis`, `pyright`).
+ *
+ * pyright reads `initializationOptions` only for `disablePullDiagnostics`, so a
+ * bare `pythonPath` or `openFilesOnly` key was never applied (#4758). Each
+ * setting sits under the section pyright asks for, and the client's
+ * `workspace/configuration` handler answers that request from this tree; the
+ * same tree is the `workspace/didChangeConfiguration` payload.
+ *
+ * `diagnosticMode: "openFilesOnly"` analyses only open files rather than the
+ * full workspace. It avoids the 5–14 s cold-start on large projects caused by
+ * workspace-wide analysis on startup. Deep type checking is still available via
+ * the standalone pyright CLI runner that runs in parallel.
+ */
+export function pyrightInitialization(
+	pythonPath?: string,
+): Record<string, unknown> {
+	return {
+		python: {
+			...(pythonPath ? { pythonPath } : {}),
+			analysis: { diagnosticMode: "openFilesOnly" },
+		},
+	};
+}
+
 export const PythonServer: LSPServerInfo = {
 	id: "python",
 	idleEviction: "transparent",
@@ -2942,15 +2983,6 @@ export const PythonServer: LSPServerInfo = {
 		const toolEnvironment = await getToolEnvironment();
 		const env = augmentPythonEnvironment(toolEnvironment, pythonEnvironment);
 		let source: "direct" | "managed" | "package-manager" = "direct";
-
-		// openFilesOnly: true — analyse only open files rather than the full workspace.
-		// Avoids the 5–14 s cold-start on large projects caused by workspace-wide
-		// analysis on startup. Deep type checking is still available via the standalone
-		// pyright CLI runner that runs in parallel.
-		const pyrightInit = (pythonPath?: string): Record<string, unknown> => ({
-			...(pythonPath ? { pythonPath } : {}),
-			openFilesOnly: true,
-		});
 
 		// Project ownership outranks checker preference: exhaust explicit project
 		// candidates before a bare command can resolve to pi-lens's managed bin or
@@ -2980,7 +3012,7 @@ export const PythonServer: LSPServerInfo = {
 			return {
 				process: projectPyright.process,
 				source: projectPyright.source,
-				initialization: pyrightInit(pythonEnvironment?.pythonPath),
+				initialization: pyrightInitialization(pythonEnvironment?.pythonPath),
 			};
 		}
 
@@ -3017,7 +3049,7 @@ export const PythonServer: LSPServerInfo = {
 			return {
 				process: pathPyright.process,
 				source: pathPyright.source,
-				initialization: pyrightInit(pythonEnvironment?.pythonPath),
+				initialization: pyrightInitialization(pythonEnvironment?.pythonPath),
 			};
 		}
 
@@ -3061,7 +3093,7 @@ export const PythonServer: LSPServerInfo = {
 		return {
 			process: resolved.process,
 			source,
-			initialization: pyrightInit(pythonEnvironment?.pythonPath),
+			initialization: pyrightInitialization(pythonEnvironment?.pythonPath),
 		};
 	},
 };
@@ -3401,6 +3433,7 @@ export const RustServer: LSPServerInfo = {
 	// Measured (#3750): rust-analyzer answers an empty result for a detached file.
 	requiresProjectRoot: true,
 	name: "rust-analyzer",
+	settingsSection: "rust-analyzer",
 	executesProjectCode: true,
 	extensions: KIND_EXTENSIONS["rust"],
 	// No FileDirRoot fallback (#201): rust-analyzer is a heavy workspace server

@@ -6634,6 +6634,9 @@ export async function createLSPClient(options: {
 	 *  single-variant server or not yet reported; consumers must treat that as
 	 *  the classic/default behavior (fail-safe). */
 	launchVariant?: "classic" | "native-ts7";
+	/** See `LSPServerInfo.settingsSection` (server.ts): the section name
+	 *  under which `initialization` answers `workspace/configuration`. */
+	settingsSection?: string;
 	/** The declared role ({@link LspServerRole}); an auxiliary's failed config
 	 *  gates its empty publications (#4764). Absent behaves as non-auxiliary. */
 	role?: LspServerRole;
@@ -6649,6 +6652,7 @@ export async function createLSPClient(options: {
 		initialization,
 		initializeTimeoutMs = INITIALIZE_TIMEOUT_MS,
 		launchVariant,
+		settingsSection,
 		role,
 		onDiagnosticsPublished,
 	} = options;
@@ -6890,7 +6894,17 @@ export async function createLSPClient(options: {
 			noteWorkspaceFileCreated(state.serverId, state.root, uris.map(uriToPath)),
 	);
 
-	setupIncomingHandlers(state, initialization, onDiagnosticsPublished);
+	// #4758: `initializationOptions` stays the server's own startup shape, while
+	// the settings tree (what a `workspace/configuration` pull is answered from,
+	// and the `didChangeConfiguration` payload) puts that blob under the section
+	// the server asks for. rust-analyzer's startup options ARE its
+	// `rust-analyzer` section, so the pull answer restates them instead of
+	// sending `{}`.
+	const settings =
+		settingsSection && initialization
+			? { [settingsSection]: initialization }
+			: initialization;
+	setupIncomingHandlers(state, settings, onDiagnosticsPublished);
 	connection.listen();
 	setupConnectionLifecycle(state, recentStderr);
 
@@ -7045,9 +7059,9 @@ export async function createLSPClient(options: {
 	state.staticDiagnosticsMode = state.workspaceDiagnosticsSupport.mode;
 
 	await safeSendNotification(connection, "initialized", {});
-	if (initialization) {
+	if (settings) {
 		await safeSendNotification(connection, "workspace/didChangeConfiguration", {
-			settings: initialization,
+			settings,
 		});
 	}
 
