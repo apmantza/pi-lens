@@ -135,6 +135,7 @@
 		"scripts/seed-matrix-from-bot-branch-real-git.test.ts": 1,
 		"scripts/setup-git-hooks.test.ts": 4,
 		"scripts/smoke-tools-lsp-fixture-registration.test.ts": 2,
+		"scripts/smoke-tools-swift-xcode-fixture.test.ts": 2,
 		"scripts/sonar-master-gate.test.ts": 1,
 		"scripts/stryker-diff.test.ts": 9,
 		"scripts/stryker-nightly.test.ts": 3,

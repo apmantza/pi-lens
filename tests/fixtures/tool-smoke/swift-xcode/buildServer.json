@@ -1,0 +1,7 @@
+{
+	"name": "swift-xcode fixture build server",
+	"version": "1",
+	"bspVersion": "2.0",
+	"languages": ["swift"],
+	"argv": ["bsp-server.mjs"]
+}
