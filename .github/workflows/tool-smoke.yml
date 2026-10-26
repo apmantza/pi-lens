@@ -300,7 +300,7 @@ jobs:
       # tflint/terraform-ls/rust-analyzer) are fetched by the harness's own
       # --install; ubuntu-latest ships rustup/cargo so rust-analyzer can load.
       # yamllint disable-line rule:line-length
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -314,7 +314,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1
+      - uses: ruby/setup-ruby@26e5b7d197ebf60545ee9667bcbace0be11ccaec # v1
         continue-on-error: true
         with:
           ruby-version: '3.3'
