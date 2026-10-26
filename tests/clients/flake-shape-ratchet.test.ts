@@ -1165,14 +1165,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the fixture-ordering defect lives in the CLI's own module-load order; no in-process call is the script under test",
 	},
-	// 2026-10-26 (#4880): the stand-in build server's BSP framing over a real
-	// child's stdio is the contract sourcekit-lsp's client depends on; an
-	// in-process call cannot produce the pipe or the Content-Length framing.
-	"real-process-spawn:scripts/smoke-tools-swift-xcode-fixture.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"BSP framing over a real child's stdio is what sourcekit-lsp's build-server client speaks; an in-process call cannot reproduce the pipe",
-	},
 	"real-process-spawn:scripts/sonar-master-gate.test.ts": {
 		detector: "real-process-spawn",
 		reason:
