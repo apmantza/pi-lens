@@ -997,6 +997,27 @@ const LSP_FIXTURES = [
 		tools: ["sourcekit-lsp"],
 	},
 	{
+		// #4880: an Xcode-layout project — `buildServer.json` (the BSP config
+		// xcode-build-server writes) and no `Package.swift` — so this is the one
+		// row whose root comes from a marker other than the project file. The
+		// fixture's build server serves the module's compiler arguments, so the
+		// cross-file use in ContentView.swift resolves ONLY when pi-lens roots the
+		// client at the project: pre-#4857 it rooted at the file's own directory,
+		// the marker was invisible, and sourcekit-lsp fell back to compiling that
+		// file alone ("Cannot find 'Greeting' in scope"). `expectNoMessageMatch`
+		// binds the pass to that absence, since the gate marker below is present
+		// either way. The row reports ⚠ while sourcekit-lsp has no installer entry
+		// (#241), like the `swift` row above it.
+		lang: "swift-xcode",
+		lspGate: true,
+		lspGateMarker: 'let gateSeed: Int = "not a number"',
+		dir: "tests/fixtures/tool-smoke/swift-xcode",
+		file: "Sources/App/ContentView.swift",
+		serverHint: "sourcekit-lsp (Xcode buildServer.json)",
+		tools: ["sourcekit-lsp"],
+		expectNoMessageMatch: "cannot find",
+	},
+	{
 		lang: "dart",
 		lspGate: true,
 		lspGateMarker: "int x = 'not a number';",
@@ -3332,13 +3353,17 @@ async function runLspHandshake({ langs, install, verbose, minPass = null }) {
 					continue;
 				}
 				if (fx.expectNoMessageMatch) {
+					// Not a Lombok-only assertion (#4880): a fixture can also pin the
+					// ABSENCE of a diagnostic it exists to rule out — the Xcode-layout
+					// Swift row's cross-file "Cannot find". The pass line names the
+					// pattern instead of one fixture's prose, so it stays true for both.
 					const re = new RegExp(fx.expectNoMessageMatch, "i");
 					const matched = touchedDiags.filter((d) => re.test(d.message || ""));
 					push(
 						matched.length === 0 ? "pass" : "fail",
 						matched.length === 0
-							? `handshook — Lombok-generated symbols resolved (${diags} diagnostic${diags === 1 ? "" : "s"})`
-							: `Lombok unresolved diagnostic(s): ${matched.map((d) => d.message).join("; ")}`,
+							? `handshook — no diagnostic matched /${fx.expectNoMessageMatch}/ (${diags} diagnostic${diags === 1 ? "" : "s"})`
+							: `${matched.length} diagnostic(s) matched /${fx.expectNoMessageMatch}/: ${matched.map((d) => d.message).join("; ")}`,
 						diags,
 					);
 					continue;
