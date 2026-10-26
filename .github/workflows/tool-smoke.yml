@@ -374,6 +374,19 @@ jobs:
           echo "$dest/bin" >> "$GITHUB_PATH"
           "$dest/bin/docker-language-server" --version
 
+      # #4880: the runner image ships a Swift toolchain under $SWIFT_PATH
+      # (/usr/share/swift/usr/bin) but links only swift and swiftc into
+      # /usr/local/bin, so sourcekit-lsp read as unavailable and both Swift
+      # rows went unmeasured. Put the toolchain bin on PATH and fail when the
+      # server is missing, so an image change reds here instead of skipping.
+      - name: Put the runner's Swift toolchain (sourcekit-lsp) on PATH
+        run: |
+          set -euo pipefail
+          swift_bin="${SWIFT_PATH:-/usr/share/swift/usr/bin}"
+          test -x "$swift_bin/sourcekit-lsp" || { echo "sourcekit-lsp not found in $swift_bin" >&2; exit 1; }
+          echo "$swift_bin" >> "$GITHUB_PATH"
+          "$swift_bin/swift" --version
+
       # #4358: restore the managed tool tree (the npm tools and release
       # binaries every `--install` step below shares through PI_LENS_HOME)
       # instead of re-downloading it nightly. The key is the installer
