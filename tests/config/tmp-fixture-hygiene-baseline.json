@@ -1,6 +1,5 @@
 [
   {"prefix":"pi-lens-test-","owner":"tests/clients/test-utils.ts","reason":"The shared setupTestEnvironment helper creates process-owned test roots that still escape individual callers; the helper lifecycle remains tracked under #2912."},
-  {"prefix":"pi-lens-2518-idx-home-","owner":"tests/index-integration.test.ts","reason":"The CI-only index home is created by the integration population and remains admitted while its worker lifecycle is investigated under #2912."},
   {"prefix":"pi-lens-dispatch-reset-","owner":"tests/clients/runtime-session-dispatch-reset.test.ts","reason":"The dispatch-reset integration fixture can outlive its worker under concurrent teardown and remains admitted under #2912."},
   {"prefix":"pi-lens-index-int-","owner":"tests/index-integration.test.ts","reason":"The index integration population can outlive its worker under concurrent teardown and remains admitted under #2912."},
   {"prefix":"pi-lens-module-call-graph-","owner":"tests/clients/module-report-call-graph.test.ts","reason":"The language matrix creates one process-owned project per supported call-graph fixture and remains admitted under #2912."},
