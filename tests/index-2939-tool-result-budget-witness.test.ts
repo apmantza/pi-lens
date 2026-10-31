@@ -44,6 +44,8 @@ const handlerGate = vi.hoisted(() => ({
 	hold: undefined as Promise<void> | undefined,
 	notices: [] as string[],
 	work: undefined as Promise<unknown> | undefined,
+	/** #5108 G2: how long the analyzer bootstrap load takes (fake clock). */
+	bootMs: 0,
 }));
 vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 	const actual =
@@ -75,13 +77,40 @@ vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
-	return bootstrapSeamMock(async () => ({
-		biomeClient: { isAvailable: () => false },
-		ruffClient: { isAvailable: () => false },
-		metricsClient: { reset: () => {} },
-		// #5108 F1: the cases below start sessions, whose start resets it.
-		knipClient: { resetSessionState: () => {} },
-	}));
+	return bootstrapSeamMock(async () => {
+		if (handlerGate.bootMs > 0)
+			await new Promise((resolve) => setTimeout(resolve, handlerGate.bootMs));
+		// #5108: the cases below start sessions, which read the full client set
+		// (the shape `tests/index-3620-sweep-scope-fence.test.ts` uses).
+		return {
+			metricsClient: { reset: () => {} },
+			todoScanner: {},
+			biomeClient: { isAvailable: () => false },
+			ruffClient: { isAvailable: () => false },
+			knipClient: {
+				isAvailable: () => false,
+				resetSessionState: () => {},
+				analyze: async () => ({
+					success: false,
+					summary: "unavailable",
+					issues: [],
+				}),
+			},
+			jscpdClient: { isAvailable: () => false },
+			depChecker: { isAvailable: () => false },
+			testRunnerClient: { detectRunner: () => null },
+			goClient: { isGoAvailableAsync: async () => false },
+			rustClient: { isAvailableAsync: async () => false },
+			agentBehaviorClient: {
+				recordToolCall: () => {},
+				formatWarnings: () => "",
+			},
+			complexityClient: {
+				isSupportedFile: () => false,
+				analyzeFile: () => null,
+			},
+		};
+	});
 });
 
 import {
@@ -108,6 +137,7 @@ beforeEach(() => {
 	handlerGate.hold = undefined;
 	handlerGate.notices = [];
 	handlerGate.work = undefined;
+	handlerGate.bootMs = 0;
 	handlerGate.ambientAfterYield = "unset";
 	resetDegradationLedger();
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2939-budget-"));
@@ -348,5 +378,64 @@ describe("#5108 F1: a late advisory reaches the session whose tool result it was
 		// Any later drain prunes the queue first, so an entry with no scope
 		// throws there; the real store is read directly, as every drain does.
 		expect(() => consumeAgentNudge()).not.toThrow();
+	});
+
+	// #5108 G2 (Greptile on #5114): the host's own bound, the registration
+	// wrapper's, starts at hook entry, before the edit path's bootstrap await;
+	// the handler's inner bound started after it. A 2 s bootstrap and 9 s of
+	// handling let the host give up at 10 s while the inner wait still settled,
+	// so the late advisory was skipped and the withheld blocker never shown.
+	it("queues the disclosure when the host's bound gave up before a slow bootstrap's handler settled", async () => {
+		_resetSessionLifecycleForTests();
+		_resetAgentNudgeForTests();
+		handlerGate.hang = false;
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		const ctx = () => makeCtx({ cwd: tmpDir, sessionId: "pi-5108-g2" });
+		await pi.emit("session_start", makeSessionStartEvent(), ctx());
+
+		vi.useFakeTimers();
+		handlerGate.bootMs = 2_000;
+		// Settles 9 s after the handler starts, which is after the bootstrap.
+		handlerGate.hold = new Promise<void>((resolve) => {
+			setTimeout(resolve, 11_000);
+		});
+		handlerGate.notices = [
+			"\u26a0 1 blocking finding in slow.ts withheld: test",
+		];
+		// A recognised write makes it edit-class: the bootstrap is awaited.
+		const settled = pi.emit(
+			"tool_result",
+			{
+				toolName: "bash",
+				toolCallId: "sh-5108-g2",
+				input: {
+					command: `cat > ${path.join(tmpDir, "known.ts")} <<'EOF'\nconst a = 1;\nEOF`,
+				},
+				content: [{ type: "text", text: "done" }],
+			},
+			ctx(),
+		);
+		await vi.advanceTimersByTimeAsync(10_000);
+		await settled;
+		// The host stopped waiting at its own 10 s bound.
+		expect(Object.keys(exceeded())).toContain(
+			"tool_result_edit:registered-handler",
+		);
+		await vi.advanceTimersByTimeAsync(1_000);
+		await handlerGate.work;
+		vi.useRealTimers();
+
+		const injected = (await pi.emit(
+			"context_with_system",
+			makeContextWithSystemEvent([{ role: "user", content: "go" }]),
+			ctx(),
+		)) as { messages?: Array<{ content: unknown }> } | undefined;
+		const text = JSON.stringify(
+			(injected?.messages ?? []).map((m) => m.content),
+		);
+		expect(text).toContain("slow.ts withheld");
+		expect(text).toContain("abandoned");
+		await pi.emit("session_shutdown", { reason: "quit" }, ctx());
 	});
 });

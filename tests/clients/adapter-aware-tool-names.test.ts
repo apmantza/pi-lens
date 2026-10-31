@@ -5,6 +5,7 @@ import {
 	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
 import { formatCodeQualityWarningsAdvisory } from "../../clients/code-quality-warnings.js";
+import { formatWithheldBlockerLine } from "../../clients/pipeline.js";
 import {
 	TOOL_REGISTRY,
 	resolveLensToolName,
@@ -79,6 +80,17 @@ describe("#2535 adapter-aware agent tool names", () => {
 			"mcp",
 		);
 		expect(text).toContain("Use pilens_diagnostics with mode=delta");
+	});
+
+	// #5108 (Greptile on #5114): the withheld-blocker line hard-coded the pi
+	// name, so an MCP agent would be sent to a tool it cannot call.
+	it("the withheld-blocker line names the diagnostics tool of its host", () => {
+		expect(formatWithheldBlockerLine(1, "a.ts", "pi")).toContain(
+			"lens_diagnostics mode=all",
+		);
+		const mcp = formatWithheldBlockerLine(2, "a.ts", "mcp");
+		expect(mcp).toContain("pilens_diagnostics mode=all lists them");
+		expect(mcp).not.toMatch(/(?<!pi)lens_diagnostics/);
 	});
 
 	it("the grep guard accepts routed strings and rejects the nearest direct string", () => {

@@ -3173,6 +3173,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// Real-time feedback on file writes/edits
 	// biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
 	const onToolResult = async (event: any, ctx: any) => {
+		// #5108 G2: the registration wrapper's bound, the one the host's answer
+		// rides on, is armed as this handler returns its promise, so its
+		// deadline counts from here, not from after the bootstrap await below.
+		const hookEntryMs = Date.now();
 		rememberOwnEventCtx(ctx);
 		if (!lensEnabled) return;
 		updateRuntimeIdentityFromCtx(ctx);
@@ -3301,8 +3305,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// pipeline and an Escape mid-edit no longer kills its child processes
 			// (#2897 round 2 V2; #2939 round 2 restored it after measuring the
 			// deletion observable).
+			// #5108 G2: the wait ends on the host's own deadline, so
+			// `handlerSettled` is false exactly when the host got no result.
 			const result = await bounded(work, {
-				ms: budgetMs,
+				ms: Math.max(0, budgetMs - (Date.now() - hookEntryMs)),
 				signal: ctx.signal,
 				hook: editClass ? "tool_result_edit" : "tool_result_read_only",
 				label: "handleToolResult",

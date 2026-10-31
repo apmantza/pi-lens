@@ -12,6 +12,7 @@
  *   7. Cascade diagnostics (other files with errors, LSP only)
  */
 
+import { resolveLensToolName, type LensToolHost } from "./tool-config.js";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { PiLensFlagSource } from "./lens-config.js";
@@ -1786,8 +1787,17 @@ function formatStillUnfixedLine(
  * withheld verdict never reads as the all-clear (defect shape 10). It states a
  * fact and names where the findings are; it asks for no edit.
  */
-function formatWithheldBlockerLine(count: number, display: string): string {
-	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt. lens_diagnostics mode=all lists ${count === 1 ? "it" : "them"}.`;
+export function formatWithheldBlockerLine(
+	count: number,
+	display: string,
+	host: LensToolHost = "pi",
+): string {
+	// #2535 F3: a host with no such tool gets no pointer, never a dead name.
+	const diagnosticsTool = resolveLensToolName("lens_diagnostics", host);
+	const pointer = diagnosticsTool
+		? ` ${diagnosticsTool} mode=all lists ${count === 1 ? "it" : "them"}.`
+		: "";
+	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt.${pointer}`;
 }
 
 /**
