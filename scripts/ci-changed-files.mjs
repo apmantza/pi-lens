@@ -140,9 +140,14 @@ export const HOT_PATH_PATHS = [
  * package.json ships, the scripts the job's own steps run against the packed
  * tarball, the installer, and the two workflows that hold the jobs.
  * tests/scripts/ci-changed-files.test.ts derives the expected set from
- * package.json, so a lifecycle helper that falls off this list reds there. Same entry grammar as HOT_PATH_PATHS. `bin/**` is the
- * issue's name for the launcher directory; pi-lens ships its `bin` entries from
- * dist/ today, so the entry matches nothing yet.
+ * package.json, so a lifecycle helper that falls off this list reds there, with
+ * four blind spots: a bare side-effect `import "..."`, `createRequire` or
+ * `require`, a `.cjs` lifecycle script, and data read through `fs` or
+ * `new URL` (so `scripts/grammars.lock.json` is listed by hand). A new helper
+ * reached only that way must be added here and to that test. Same entry
+ * grammar as HOT_PATH_PATHS. `bin/**` is the issue's name for the launcher
+ * directory; pi-lens ships its `bin` entries from dist/ today, so the entry
+ * matches nothing yet.
  */
 export const INSTALL_PATHS = [
 	"package.json",

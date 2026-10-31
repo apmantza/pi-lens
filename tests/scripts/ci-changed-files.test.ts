@@ -327,6 +327,11 @@ describe("classifyChangedFiles: the Install test lane (#5112)", () => {
 				"tsconfig.build.json",
 				"scripts/strip-dev-deps-for-pack.mjs",
 				"scripts/bundle-dist.mjs",
+				// One file per derivation arm that no other arm reaches (#5117 verify
+				// V2): the package.json `files` arm and the tsconfig `include` arm.
+				// Dropping either arm leaves the roster test green without these.
+				"scripts/analyze-pi-lens-logs.mjs",
+				"scripts/lib/process-scan.mjs",
 			])
 				expect(roster.has(file), file).toBe(true);
 			expect(roster.size).toBeGreaterThan(15);
