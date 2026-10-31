@@ -529,7 +529,10 @@ success. A docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
 nothing else, classified by `scripts/ci-changed-files.mjs`; every doubt runs the
 full suite) skips only those heavy advisory jobs: the Unit shards and every
 other test job always run, because a docs edit can red tests outside tests/config
-(`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). `TLA+ models`
+(`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
+is the three `Install test` legs: outside `INSTALL_PATHS` in that script
+they report success without installing, and `Strict install` and the macOS APFS
+step run on non-pull_request events only. `TLA+ models`
 model-checks only when `formal/` (or its checker or ci.yml) changed. A REQUIRED
 job never skips at job level: ci-verdict and the merge train demand a literal
 `success`, so `TLA+ models` starts and skips its steps.
@@ -942,10 +945,18 @@ Bare-Node scripts import only `.js`/`.mjs`; type stripping is not assumed.
 
 Every agent `Bash` call under Claude Code runs through
 `scripts/hooks/guard-bash.mjs` (`PreToolUse`), which denies with its reason:
-`git stash`; `git reset --soft`/`--hard`; double-force `git worktree remove`,
-or any remove over a symlinked `node_modules` or over a path it cannot resolve
+`git stash` in any form but the read-only `git stash list` and `git stash show`
+(an admit list: a bare command with no `-c` or other global option than
+`-C <dir>`, no env var, and only display flags; push, save, pop, apply, drop,
+clear, create, store, branch, bare `git stash` and any spelling it cannot
+classify stay denied); `git reset --soft`/`--hard`; double-force
+`git worktree remove`, or any remove over a symlinked `node_modules` or over a
+path it cannot resolve
 statically (`$(…)`, `~user`, an unset `$VAR`, a glob; #3988), where `~`, `$HOME`
-and relative paths (against a preceding `cd`/`git -C`) are resolved first; a
+and relative paths (against a preceding `cd`/`git -C`) are resolved first (every
+such refusal names `node scripts/worktree-remove.mjs <path> [--force]`, which
+unlinks a `node_modules` symlink, refuses a real `node_modules` directory or a
+non-worktree, then runs `git worktree remove`); a
 mutating `npm` verb (`ci`, `install`, `update`, `prune`, …, or `npx npm@… ci`)
 where `node_modules` is a symlink out of the project, `--dry-run` or not, and a
 delete through such a link (`rm -rf node_modules/`, `node_modules/*`, `find

@@ -277,7 +277,6 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	["git rebase --continue", "rebase"],
 	["git rebase --skip", "rebase"],
 	["git stash", "stash"],
-	["git stash list", "stash"],
 	["git stash pop", "stash"],
 	["git stash apply", "stash"],
 	["git stash drop", "stash"],
@@ -496,6 +495,12 @@ const ALLOW_CASES: string[] = [
 	"node scripts/pr-worktree.mjs open 9001 --head --name review-1",
 	"node scripts/pr-worktree.mjs open 9001 --merge",
 	"node scripts/pr-worktree.mjs close /home/dev/Desktop/pi-lens-worktrees/review-1",
+	// #5111: the one worktree-removal helper the refusals name.
+	// a process substitution AFTER the subcommand is classified normally
+	"git diff <(true) <(true)",
+	"git -C . diff --no-index <(echo a) <(echo b)",
+	"node scripts/worktree-remove.mjs /home/dev/wt/lane-1",
+	"node scripts/worktree-remove.mjs /home/dev/wt/lane-1 --force",
 	"npx vitest run tests/clients/foo.test.ts",
 	"npm test",
 	"npm run build",
@@ -882,8 +887,10 @@ describe("scripts/hooks/guard-bash.mjs -- git worktree remove node_modules symli
 			const result = runHook(`git worktree remove ${tree}`);
 			expect(result.status).toBe(2);
 			expect(result.stderr.toLowerCase()).toContain("worktree");
-			// The note names the fix (acceptance #1).
-			expect(result.stderr).toContain(`rm <tree>/node_modules`);
+			// The note names the fix (acceptance #1; the one helper, #5111).
+			expect(result.stderr).toContain(
+				"node scripts/worktree-remove.mjs <path>",
+			);
 		} finally {
 			rmSync(tree, { recursive: true, force: true });
 			rmSync(shared, { recursive: true, force: true });
@@ -899,7 +906,9 @@ describe("scripts/hooks/guard-bash.mjs -- git worktree remove node_modules symli
 		try {
 			const result = runHook(`git worktree remove ${tree}`);
 			expect(result.status).toBe(2);
-			expect(result.stderr).toContain("rm <tree>/node_modules");
+			expect(result.stderr).toContain(
+				"node scripts/worktree-remove.mjs <path>",
+			);
 		} finally {
 			rmSync(tree, { recursive: true, force: true });
 			rmSync(shared, { recursive: true, force: true });
@@ -6610,5 +6619,164 @@ describe("scripts/hooks/guard-bash.mjs -- writes under /tmp (#4348)", () => {
 		"echo a > /private/tmp/x",
 	])("limit: %j is not judged", (command) => {
 		expect(deny(command)).toBeNull();
+	});
+});
+
+// #5111: `git stash` is an ADMIT list, not a deny list. Recurrence: 41 of 43
+// stash refusals in 14 days of transcripts (#3995 slice B) were the read-only
+// `git stash list`. Only `list` and `show` (with read-only flags and, for
+// `show`, one `stash@{N}`) pass; every other form, including a spelling the
+// scan cannot classify, stays denied (principles: gates fail closed).
+const STASH_ADMITTED: string[] = [
+	"git stash list",
+	"git stash show",
+	"git stash list --oneline",
+	"git stash list --stat",
+	"git stash list --format=%gd:%s",
+	'git stash list --pretty="%gd %s"',
+	"git stash show --stat",
+	"git stash show -p",
+	"git stash show --name-only stash@{1}",
+	"git stash show stash@{0}",
+	"git stash show 2",
+	"git -C /home/dev/wt stash list",
+	"git -C /home/dev/a -C b stash show",
+	"git -C ~/wt stash list",
+	"git -C ../wt-1.2_x@y stash show",
+	"git stash list | head -5",
+	"git stash list 2>&1",
+	"git stash list 2>/dev/null",
+	"git stash show -p >/dev/null 2>&1",
+	"git stash list --format=%gd; git status",
+	"git stash list && git status",
+	"cd /home/dev/wt && git stash list",
+	"git stash 'list'",
+	'git "stash" list',
+];
+
+const STASH_STILL_DENIED: string[] = [
+	// every writing subcommand, and the bare form (= push)
+	"git stash",
+	"git stash push",
+	"git stash push -m list",
+	"git stash save wip",
+	"git stash pop",
+	"git stash apply",
+	"git stash drop",
+	"git stash clear",
+	"git stash create",
+	"git stash store abc123",
+	"git stash branch newbranch",
+	"git stash -u",
+	"git stash -m list",
+	"git stash --include-untracked",
+	// spellings of list/show git does not take as the subcommand
+	"git stash li",
+	"git stash LIST",
+	"git stash list-all",
+	// extra operands and flags outside the admitted set
+	"git stash list drop",
+	"git stash list stash@{0}",
+	"git stash list --output=/home/dev/x",
+	"git stash list -- drop",
+	"git stash show drop",
+	"git stash show -p drop",
+	"git stash show stash@{0} drop",
+	"git stash show stash@{0} stash@{1}",
+	"git stash show --ext-diff",
+	"git stash show --output=/home/dev/x",
+	"git stash show --format=$X",
+	"git stash show --format=$(echo %gd)",
+	"git stash list --format='%gd' '--output=/home/dev/x'",
+	"git stash list > /home/dev/out",
+	"git stash list 2>/home/dev/out",
+	"git stash list >/dev/nullx",
+	"git stash list >>/dev/null",
+	"git stash 2>&1 list",
+	// global options before the subcommand (-c config, aliases, git-dir)
+	"git -c core.pager=sh stash list",
+	"git -c alias.stash=push stash list",
+	"git --git-dir=/home/dev/g stash list",
+	"git --no-pager stash list",
+	"git --exec-path=/home/dev/x stash show",
+	"git -C /home/dev/wt -c user.name=a stash list",
+	// PR #5115 Greptile G1: the -C VALUE is part of the words bash hands git, so
+	// a value the scan cannot read as one plain path is a refusal (bash runs
+	// `git -C . stash save stash list` for the first row).
+	'git -C $(printf ". stash save") stash list',
+	"git -C `echo .` stash list",
+	'git -C "$X" stash list',
+	"git -C $X stash list",
+	"git -C ${X} stash list",
+	"git -C '. stash save' stash list",
+	"git -C a\\ b stash list",
+	"git -C {.,.} stash list",
+	"git -C * stash list",
+	"git -C ? stash list",
+	"git -C [a] stash list",
+	"git -C -c stash list",
+	"git -c a=$(echo x) stash list",
+	// PR #5115 verify r4: the lexer splits a segment at `<(`/`>(`, so the words
+	// after a process substitution before the subcommand are never classified
+	// (bash runs `git -C /dev/fd/63 stash drop`). A git segment that ends
+	// before its subcommand on a dangling `<`/`>` is refused.
+	"git -C <(true) stash drop",
+	"git -C >(true) stash drop",
+	"git <(true) stash drop",
+	"git -C . <(true) stash pop",
+	// env, inline or exported earlier in the command
+	"FOO=1 git stash list",
+	"GIT_EXTERNAL_DIFF=/home/dev/x git stash show -p",
+	"export GIT_PAGER=sh; git stash list",
+	"env GIT_PAGER=sh git stash list",
+	// substitutions and expansions the scan cannot resolve
+	"git stash $(echo drop)",
+	"git stash `echo drop`",
+	'git stash "$(echo drop)"',
+	"git stash $(:) list",
+	"git stash list $(echo drop)",
+	"git stash list `echo drop`",
+	"git stash list $X",
+	"git stash $X",
+	"git stash {list,drop}",
+	"git stash l*",
+	"git stash show $'\\x64rop'",
+	// quoted spellings that resolve to something else
+	'git "stash" drop',
+	"git stash 'drop'",
+	'git stash "pu""sh"',
+	'git stash "list drop"',
+	// a writing stash chained after an admitted one
+	"git stash list && git stash drop",
+	"git stash list; git stash pop",
+	"git stash list | git stash apply",
+	"echo $(git stash drop)",
+];
+
+describe("scripts/hooks/guard-bash.mjs -- stash admit list (#5111)", () => {
+	it.each(STASH_ADMITTED)("admits %j", (command) => {
+		const result = hookVerdict(command);
+		expect(result.stderr).toBe("");
+		expect(result.status).toBe(0);
+	});
+
+	it.each(STASH_STILL_DENIED)("still denies %j", (command) => {
+		const result = hookVerdict(command);
+		expect(result.stderr).toBe(`${RULE_MESSAGES.stash}\n`);
+		expect(result.status).toBe(2);
+	});
+
+	// #5111: every worktree-remove refusal names the helper, so an agent no
+	// longer answers with an `rm` and a retry (215 refusals in 14 days).
+	it.each(["worktreeSymlink", "worktreeUnresolved", "worktreeForce"] as const)(
+		"%s refusal names scripts/worktree-remove.mjs",
+		(rule) => {
+			expect(RULE_MESSAGES[rule]).toContain("scripts/worktree-remove.mjs");
+		},
+	);
+
+	it("names the admitted read-only forms in the refusal", () => {
+		expect(RULE_MESSAGES.stash).toContain("git stash list");
+		expect(RULE_MESSAGES.stash).toContain("git stash show");
 	});
 });

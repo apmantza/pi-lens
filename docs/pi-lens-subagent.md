@@ -81,8 +81,11 @@ the brief gives.
   checkout the shell happens to sit in, and agent shells reset their working
   directory between calls. Never edit the main checkout: other lanes and the
   orchestrator read it, and its branch must not move under them.
-- **Teardown.** `rm` a symlinked `node_modules` before `git worktree remove`
-  (`ls -ld node_modules` first; unlink the link, never `rm -r` it). Removing the worktree over the link follows it
+- **Teardown.** Run `node scripts/worktree-remove.mjs <path>`: it unlinks a
+  symlinked `node_modules`, refuses a real directory, then runs `git worktree
+  remove` (#5111). By hand: `rm` a symlinked `node_modules` before `git
+  worktree remove` (`ls -ld node_modules` first; unlink the link, never `rm -r`
+  it). Removing the worktree over the link follows it
   and deletes the main checkout's install (#3173; the hook denies the removal
   and `AGENTS.md` "Commands and gates" says how `pr-worktree.mjs close` does
   it). A real `node_modules` directory is removed only after confirming the

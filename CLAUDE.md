@@ -9,9 +9,9 @@ precedes that read.
 
 - `npm run build` before any test run; tests execute the compiled twins
   (`npm run build:dist` too for the census files that read `dist/`).
-- `scripts/hooks/guard-bash.mjs` (`PreToolUse`) denies `git stash`, hook
-  bypasses, and the rest of AGENTS.md "Contributing". Fix the command; never
-  route around it.
+- `scripts/hooks/guard-bash.mjs` (`PreToolUse`) denies writing `git stash`
+  forms (`git stash list` / `show` pass), hook bypasses, and the rest of
+  AGENTS.md "Contributing". Fix the command; never route around it.
 - Role contracts are `docs/pi-lens-*.md`, the only home of role rules;
   `.claude/agents/` holds thin Claude wrappers, `.claude/skills/` the retro
   procedure, and `docs/pi-lens-merge-policy.md` the merge policy.
