@@ -26,6 +26,15 @@ Branch protection matches a required check by name and app, not by event, and
 `scripts/ci-verdict.mjs` gates a branch-protection name whatever event its run
 came from (#4090), so those rows count.
 
+On a bot-opened PR the dispatch runs are the PR's whole CI, so `ci-verdict`
+also gates every non-`(advisory)` check from a `workflow_dispatch` run on its
+head, such as `Dependency boundaries` and `Production install build`, exactly
+as it gates a `pull_request` run. It reads the PR author (the `gh` `is_bot`
+flag, an `app/` or `[bot]` login; the REST user type `Bot`). #4090's advisory
+rule stays for dispatch runs on a human PR, for a bare-SHA target (no author to
+read), and for `schedule`, `workflow_run` and `repository_dispatch` runs on any
+PR.
+
 The dispatch step runs when the PR was `created` or `updated` (an unchanged
 branch keeps the checks of its last head). It is not `continue-on-error`: a PR
 that opened without checks reds the job. When the GitHub App token (#4512)
@@ -67,6 +76,12 @@ registered in that test as a non-opener with its reason.
   except the PR-only CodeQL job (`security-events: write`), whose job-level
   `if` requires a `pull_request` event and so never starts on a dispatch
   (`scripts/dispatch-safety.mjs` reads that conjunct as a guard).
+- **Step order.** Both dispatch steps close the `tool-smoke-prs` job and run
+  under `!cancelled()`. A failed `gh workflow run` must not skip the
+  auto-merge disarm failsafe or the promotion PR (every other step there runs
+  under an implicit `success()`), and one failed dispatch must not skip the
+  other. `tests/config/bot-pr-ci-start.test.ts` refuses a step after the first
+  dispatch and a dispatch before its opener.
 - **Not covered.** A dispatched run is not a `pull_request` run: it tests the
   branch head, not the merge with master, and the PR-only advisory jobs (the
   changelog fast-fail, targeted tests, CodeQL, the PR body lint) do not run.
