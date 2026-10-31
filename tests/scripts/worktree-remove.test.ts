@@ -12,21 +12,32 @@
  * halves are "unlink only the link, never its target" (#3173, #2704) and
  * "refuse a real node_modules directory" (never `rm -rf`).
  */
+import { spawnSync } from "node:child_process";
 import {
 	existsSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readlinkSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { run } from "../../scripts/worktree-remove.mjs";
 import { gitExecFileSync } from "../support/git-fixture-env.js";
+
+const SCRIPT = join(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"..",
+	"scripts",
+	"worktree-remove.mjs",
+);
 
 const roots: string[] = [];
 
@@ -138,6 +149,40 @@ describe("scripts/worktree-remove.mjs (#5111)", () => {
 		expect(readFileSync(join(f.shared, "sentinel.txt"), "utf8")).toBe(
 			"shared install\n",
 		);
+	});
+
+	// Recurrence: PR #5115 review F2 -- the unlink ran before git could refuse a
+	// dirty or locked tree, so a refused remove left the lane without its
+	// node_modules link. A refused remove must leave the tree as it found it.
+	it("leaves the node_modules symlink in place when git refuses a dirty tree", () => {
+		const f = makeFixture(false);
+		symlinkSync(f.shared, join(f.linked, "node_modules"));
+		writeFileSync(join(f.linked, "dirty.txt"), "uncommitted\n");
+		const r = remove([f.linked], f.main);
+		expect(r.code).toBe(1);
+		expect(registered(f, f.linked)).toBe(true);
+		expect(lstatSync(join(f.linked, "node_modules")).isSymbolicLink()).toBe(
+			true,
+		);
+		expect(readlinkSync(join(f.linked, "node_modules"))).toBe(f.shared);
+	});
+
+	it("leaves the node_modules symlink in place when git refuses a locked tree", () => {
+		const f = makeFixture(false);
+		symlinkSync(f.shared, join(f.linked, "node_modules"));
+		gitIn(f.main, ["worktree", "lock", f.linked]);
+		const r = remove([f.linked], f.main);
+		expect(r.code).toBe(1);
+		expect(registered(f, f.linked)).toBe(true);
+		expect(readlinkSync(join(f.linked, "node_modules"))).toBe(f.shared);
+	});
+
+	// Recurrence: PR #5115 review F3 -- deleting `if (ENTRY) main()` left every
+	// in-process test green while the CLI exited 0 and did nothing.
+	it("runs as a CLI: no argument prints usage and exits 2", () => {
+		const r = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8" });
+		expect(r.status).toBe(2);
+		expect(r.stderr).toContain("usage: node scripts/worktree-remove.mjs");
 	});
 
 	it("refuses a real node_modules directory and removes nothing", () => {
