@@ -22,8 +22,8 @@
  *
  * Every refusal of this script's own happens before anything is unlinked.
  * Git's refusals (a dirty or locked tree) come after the unlink, so the link
- * is re-created with its original target when `git worktree remove` fails and
- * the tree still exists (PR #5115 review F2). The decision on
+ * is re-created with its original target when `git worktree remove` fails
+ * (PR #5115 review F2). The decision on
  * `node_modules` reuses {@link classifyNodeModules}, the same classifier
  * `pr-worktree.mjs close` uses; `close` stays separate because it adds the
  * review-root, clean-tree and branch rails this script does not want.
@@ -136,7 +136,7 @@ export function run({
 	} catch (error) {
 		stderr(`failed to remove worktree ${target}: ${error.message}`);
 		// A refused remove (dirty or locked tree) leaves the tree as found.
-		if (linkTarget !== null && fs.existsSync(target)) {
+		if (linkTarget !== null) {
 			try {
 				fs.symlinkSync(linkTarget, nodeModules);
 			} catch (restoreError) {
