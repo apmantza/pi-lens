@@ -5,8 +5,8 @@
  *   node scripts/ci-changed-files.mjs --event <github event name> \
  *     [--repo <owner/repo> --pr <number>]
  *
- * The `changes` job of ci.yml and the `scope` job of install-smoke.yml. Writes
- * three step outputs:
+ * The `changes` job of ci.yml, the `scope` job of install-smoke.yml and the
+ * first step of hot-path-latency.yml. Writes four step outputs:
  *
  *   code=true|false    false ONLY for a pull_request whose every changed path
  *                      is on the strict docs allowlist below: the heavy advisory
@@ -19,12 +19,20 @@
  *                      true runs every pi-load cell and the LSP handshake on
  *                      the pull request, false keeps the one pnpm-global cell.
  *                      ci.yml ignores it.
+ *   hotpath=true|false true when the diff touches HOT_PATH_PATHS (#4363).
+ *                      hot-path-latency.yml reads it: false makes the run pass
+ *                      without timing, so the lane can be a required check
+ *                      (a path-filtered required workflow leaves a docs-only
+ *                      PR at "Expected" forever). Only the pull_request
+ *                      trigger is classified here; the workflow's own
+ *                      `on.push.paths` is the push-side filter, pinned equal
+ *                      to HOT_PATH_PATHS by tests/config/hot-path-latency-workflow.test.ts.
  *
  * Direction of every doubt is FULL SUITE (AGENTS.md shape 48): a non-PR event
  * (push to master, merge_group), an unreadable file list,
  * an empty list, a list at GitHub's 3000-file cap, or any path this file does
  * not recognise as docs all give code=true, and the same doubts give
- * smoke=true. The script exits 0 in each of
+ * smoke=true and hotpath=true. The script exits 0 in each of
  * those cases; only bad arguments exit 2.
  */
 
@@ -96,6 +104,28 @@ export const PR_SMOKE_PATHS = [
 	".github/workflows/install-smoke.yml",
 ];
 
+/**
+ * The paths hot-path-latency.yml times (#4363): what session_start, dispatch
+ * and the diagnostics-cache replay read, the sampler and gate script, and the
+ * workflow itself. An entry is a file, a `dir/**` prefix, or a file name with
+ * `*` standing for any run of characters inside one path segment
+ * (`tsconfig*.json`). GitHub's `on.push.paths` cannot read this list, so the
+ * workflow repeats it for the push trigger and
+ * tests/config/hot-path-latency-workflow.test.ts pins the two equal.
+ */
+export const HOT_PATH_PATHS = [
+	"clients/**",
+	"tools/**",
+	"rules/**",
+	"index.ts",
+	"vendor/**",
+	"tsconfig*.json",
+	"scripts/hot-path-sample.mjs",
+	"scripts/check-hot-path-latency.mjs",
+	"scripts/lib/latency-stats.mjs",
+	".github/workflows/hot-path-latency.yml",
+];
+
 /** Paths that run or define the TLA+ models. */
 const FORMAL_TRIGGERS = [
 	(path) => path.startsWith("formal/"),
@@ -115,20 +145,30 @@ function isDocsPath(path) {
 	return DOCS_ALLOWLIST.some((matches) => matches(path));
 }
 
-/** A `dir/**` entry matches by prefix, any other entry exactly. */
-function matchesSmokePath(path) {
+/**
+ * A `dir/**` entry matches by prefix, a name with `*` by one path segment
+ * (`*` never crosses a `/`), any other entry exactly.
+ *
+ * @param {string} path
+ * @param {readonly string[]} list
+ */
+function matchesPathList(path, list) {
 	if (path.split("/").includes("..")) return false;
-	return PR_SMOKE_PATHS.some((entry) =>
-		entry.endsWith("/**")
-			? path.startsWith(entry.slice(0, -2))
-			: path === entry,
-	);
+	return list.some((entry) => {
+		if (entry.endsWith("/**")) return path.startsWith(entry.slice(0, -2));
+		if (!entry.includes("*")) return path === entry;
+		const pattern = entry
+			.split("*")
+			.map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+			.join("[^/]*");
+		return new RegExp(`^${pattern}$`).test(path);
+	});
 }
 
 /**
  * @param {string[]} paths every path the diff touches (a rename contributes
  *   both its old and new path)
- * @returns {{ code: boolean, formal: boolean, smoke: boolean, reason: string }}
+ * @returns {{ code: boolean, formal: boolean, smoke: boolean, hotpath: boolean, reason: string }}
  */
 export function classifyChangedFiles(paths) {
 	if (!Array.isArray(paths) || paths.length === 0)
@@ -136,6 +176,7 @@ export function classifyChangedFiles(paths) {
 			code: true,
 			formal: true,
 			smoke: true,
+			hotpath: true,
 			reason: "no changed files listed",
 		};
 	if (paths.length >= PR_FILES_API_CAP)
@@ -143,9 +184,11 @@ export function classifyChangedFiles(paths) {
 			code: true,
 			formal: true,
 			smoke: true,
+			hotpath: true,
 			reason: `${paths.length} files reaches the API listing cap`,
 		};
-	const smoke = paths.some(matchesSmokePath);
+	const smoke = paths.some((path) => matchesPathList(path, PR_SMOKE_PATHS));
+	const hotpath = paths.some((path) => matchesPathList(path, HOT_PATH_PATHS));
 	const nonDocs = paths.filter((path) => !isDocsPath(path));
 	const formal = paths.some((path) =>
 		FORMAL_TRIGGERS.some((matches) => matches(path)),
@@ -155,12 +198,14 @@ export function classifyChangedFiles(paths) {
 			code: true,
 			formal,
 			smoke,
+			hotpath,
 			reason: `code paths in the diff: ${nonDocs.slice(0, 3).join(", ")}${nonDocs.length > 3 ? `, +${nonDocs.length - 3} more` : ""}`,
 		};
 	return {
 		code: false,
 		formal,
 		smoke,
+		hotpath,
 		reason: `docs-only diff (${paths.length} files)`,
 	};
 }
@@ -265,6 +310,7 @@ export function run(argv, io = {}) {
 			code: true,
 			formal: true,
 			smoke: true,
+			hotpath: true,
 			reason: `${options.event} runs the full suite`,
 		};
 	} else {
@@ -276,16 +322,17 @@ export function run(argv, io = {}) {
 				code: true,
 				formal: true,
 				smoke: true,
+				hotpath: true,
 				reason: `changed files unreadable (${message.split("\n")[0]})`,
 			};
 		}
 	}
-	const line = `changes: code=${result.code} formal=${result.formal} smoke=${result.smoke} -- ${result.reason}`;
+	const line = `changes: code=${result.code} formal=${result.formal} smoke=${result.smoke} hotpath=${result.hotpath} -- ${result.reason}`;
 	log(line);
 	if (env.GITHUB_OUTPUT)
 		fs.appendFileSync(
 			env.GITHUB_OUTPUT,
-			`code=${result.code}\nformal=${result.formal}\nsmoke=${result.smoke}\n`,
+			`code=${result.code}\nformal=${result.formal}\nsmoke=${result.smoke}\nhotpath=${result.hotpath}\n`,
 		);
 	if (env.GITHUB_STEP_SUMMARY)
 		fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);

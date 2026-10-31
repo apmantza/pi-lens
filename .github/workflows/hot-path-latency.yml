@@ -13,24 +13,41 @@ name: Hot-path latency
 # this lane only a reviewer re-running a probe caught #4344 round 1 (replay
 # 6 ms to 321 ms).
 #
-# ADVISORY. The check name ends in "(advisory)", so ci-verdict and the check
-# list read a red as a note, and the job does not use continue-on-error, so the
-# run conclusion stays truthful. Flip it to a required check only after 10
-# consecutive master push runs conclude success with no false red:
+# ADVISORY until flipped. The check name ends in "(advisory)", so ci-verdict
+# and the check list read a red as a note, and the job does not use
+# continue-on-error, so the run conclusion stays truthful. The maintainer
+# decided on 2026-10-31 to flip it to a required check (#4363); the flip bar
+# was 10 consecutive master push runs that conclude success with no false red:
 #
 #   gh run list --workflow hot-path-latency.yml --branch master --event push \
 #     --limit 10 --json conclusion --jq 'all(.[]; .conclusion == "success")'
 #
 # Prints true when the last 10 master runs were all green. Only master pushes
-# that touch the paths below run, so the streak counts those. A red master run
-# is read by hand: a real regression and a false red both reset the count, and
-# a false red is a threshold bug to fix before the flip.
+# that touch the push paths below run, so the streak counts those. A red master
+# run is read by hand: a real regression and a false red both reset the count,
+# and a false red is a threshold bug.
+#
+# ALWAYS REPORTS. A required check from a path-filtered workflow stays
+# "Expected" forever on a PR the filter skips, so the pull_request trigger has
+# no `paths:`. The job always starts, and its first step asks
+# scripts/ci-changed-files.mjs (the seam ci.yml's `changes` and install-smoke's
+# `scope` use) whether the diff touches HOT_PATH_PATHS. When it does not, every
+# timing step is skipped and the job passes in seconds with the line "no
+# hot-path files changed". The job is never skipped at job level: a skipped job
+# reports `skipped`, and ci-verdict demands a literal `success` on a required
+# row (#2618). The check name `Hot-path latency (advisory)` is the required
+# context; renaming the job renames the context. A master push keeps its
+# `paths:` filter (a required check applies to pull requests, and the streak
+# above counts runs that timed). GitHub's `on.push.paths` cannot read the
+# script's list, so it is repeated there and pinned equal by
+# tests/config/hot-path-latency-workflow.test.ts.
 #
 # COST. About 3 minutes of one ubuntu-latest runner (2m36s on the first run,
 # #4389): install, two tsc builds, 2 x 16 one-process samples of about 4 s on a
-# hosted runner; the #4905 row adds 0.35-1.1 s per sample. It runs only when a path the hot paths read changes (the
-# filters below). It uses no Actions cache (setup-node `cache:` is off on
-# purpose): the repository sits at its 10 GB cache cap (#4358) and a cache
+# hosted runner; the #4905 row adds 0.35-1.1 s per sample. It times only when a
+# path the hot paths read changes (HOT_PATH_PATHS); any other pull request
+# costs a checkout and one script. It uses no Actions cache (setup-node
+# `cache:` is off on purpose): the repository sits at its 10 GB cache cap (#4358) and a cache
 # write here would evict a CI entry.
 #
 # LIMIT. Both trees run on the head's node_modules, so a dependency bump is not
@@ -40,17 +57,6 @@ name: Hot-path latency
 on:
   pull_request:
     branches: [master]
-    paths:
-      - "clients/**"
-      - "tools/**"
-      - "rules/**"
-      - "index.ts"
-      - "vendor/**"
-      - "tsconfig*.json"
-      - "scripts/hot-path-sample.mjs"
-      - "scripts/check-hot-path-latency.mjs"
-      - "scripts/lib/latency-stats.mjs"
-      - ".github/workflows/hot-path-latency.yml"
   push:
     branches: [master]
     paths:
@@ -64,6 +70,13 @@ on:
       - "scripts/check-hot-path-latency.mjs"
       - "scripts/lib/latency-stats.mjs"
       - ".github/workflows/hot-path-latency.yml"
+  # #3754: a required check must also report on the merge queue's
+  # `gh-readonly-queue/...` commit (tests/config/merge-queue-workflows.test.ts),
+  # and #5066's bot-PR dispatch census derives its targets from this trigger.
+  # scripts/ci-changed-files.mjs reads a merge_group event as hotpath=true, so a
+  # queued PR is timed.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch: {}
 
 permissions: {}
@@ -86,6 +99,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -96,15 +110,38 @@ jobs:
         with:
           node-version: "22"
 
+      # hotpath is `true` for a push, a manual run and every doubt (an
+      # unreadable or empty file list, the API cap); only a pull request whose
+      # every changed path is off HOT_PATH_PATHS reads `false`. The steps below
+      # test `!= 'false'`, so an empty output times the lane, and a crashed
+      # classify step reds the job instead of passing it.
+      - name: Classify the changed files
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/ci-changed-files.mjs --event "$EVENT_NAME" --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER"
+
+      - name: No hot-path files changed
+        if: steps.scope.outputs.hotpath == 'false'
+        run: |
+          line="no hot-path files changed: nothing to time, passing"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Install dependencies
+        if: steps.scope.outputs.hotpath != 'false'
         run: npm ci --no-audit --no-fund --ignore-scripts
 
       - name: Build head
+        if: steps.scope.outputs.hotpath != 'false'
         run: npm run build
 
       # HEAD^1 is master's tip for a pull request (the merge ref's first parent)
       # and the previous commit for a push or a manual run.
       - name: Build base
+        if: steps.scope.outputs.hotpath != 'false'
         run: |
           set -eu
           base_sha=$(git rev-parse HEAD^1)
@@ -115,6 +152,7 @@ jobs:
           npm run build
 
       - name: Time the hot paths on base and head
+        if: steps.scope.outputs.hotpath != 'false'
         run: |
           node scripts/check-hot-path-latency.mjs \
             --base "$RUNNER_TEMP/base" --head "$PWD" --runs 15 \

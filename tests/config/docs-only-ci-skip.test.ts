@@ -40,7 +40,7 @@ const asList = (needs: Job["needs"]) =>
 
 type Ctx = {
 	event: string;
-	changes: { code: string; formal: string; smoke?: string };
+	changes: { code: string; formal: string; smoke?: string; hotpath?: string };
 	results: Record<string, string>;
 	outputs: Record<string, Record<string, string>>;
 	matrixOs?: string;
@@ -149,7 +149,7 @@ function simulate(
 							.split("\n")
 							.map((l) => l.split("=")),
 					)
-		) as { code: string; formal: string; smoke?: string };
+		) as { code: string; formal: string; smoke?: string; hotpath?: string };
 		const results: Record<string, string> = changesFails
 			? { changes: "failure" }
 			: {};
@@ -251,7 +251,12 @@ const TEST_JOBS = [
 describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () => {
 	it("skips the heavy advisory jobs for a docs-only diff and runs every test job", () => {
 		const { changes, results } = simulate("pull_request", DOCS_ONLY);
-		expect(changes).toEqual({ code: "false", formal: "false", smoke: "false" });
+		expect(changes).toEqual({
+			code: "false",
+			formal: "false",
+			smoke: "false",
+			hotpath: "false",
+		});
 		for (const id of HEAVY_ADVISORY) expect(results[id], id).toBe("skipped");
 		for (const id of [
 			"changes",
@@ -330,7 +335,12 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 		"runs the full suite for a %s event even for a docs-only file list",
 		(event) => {
 			const { changes, results } = simulate(event, DOCS_ONLY);
-			expect(changes).toEqual({ code: "true", formal: "true", smoke: "true" });
+			expect(changes).toEqual({
+				code: "true",
+				formal: "true",
+				smoke: "true",
+				hotpath: "true",
+			});
 			for (const id of [
 				...TEST_JOBS.filter((id) => id !== "targeted-tests-advisory"),
 				"heavy-gate",
