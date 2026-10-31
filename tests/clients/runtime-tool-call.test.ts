@@ -51,15 +51,29 @@ vi.mock("../../clients/bootstrap.js", async () => {
 	}));
 });
 
-// #2402: the partial-apply afterWrite routes through handleToolResult, whose
+// #2402/#5120: a partial apply's tool_result runs handleToolResult, whose
 // dispatch pipeline is a real subprocess surface. The mock keeps the test at
 // the contract seam (post-edit analysis succeeded/failed) without spawning
-// formatters or runners; runPipeline's isError is exactly what the afterWrite
-// callback reads to classify postEditStatus.
+// formatters or runners; runPipeline's isError is exactly what the
+// tool_result reads to classify postEditStatus.
 const runPipelineMock = vi.hoisted(() => vi.fn());
 vi.mock("../../clients/pipeline.js", () => ({
 	runPipeline: runPipelineMock,
 }));
+
+// The read-guard log is a file sink that test mode silences; capture its rows
+// at the emit seam, passing every other export through.
+const readGuardRows = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/read-guard-logger.js")>();
+	return {
+		...actual,
+		logReadGuardEvent: (entry: Record<string, unknown>) => {
+			readGuardRows.push(entry);
+		},
+	};
+});
 
 function mockPipelineSucceeds(output = ""): void {
 	runPipelineMock.mockResolvedValue({
@@ -816,6 +830,35 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			expect(fs.readFileSync(filePath, "utf8")).toBe(
 				"const total = a+b;\nconst tail = 1;\n",
 			);
+
+			// #2402: the applied record is keyed by the pair the agent sent, not
+			// the span bytes the host received, so resending the same batch is
+			// recognised as applied rather than reported as an oldText miss.
+			const retry = await runHandlerExpectingNoThrow(() =>
+				handleToolCall(
+					baseDeps({
+						runtime,
+						ctx: { cwd: env.tmpDir },
+						event: {
+							toolName: "edit",
+							toolCallId: "call-normalized-retry",
+							input: {
+								path: filePath,
+								edits: [
+									{
+										oldText: "const total = a-b;",
+										newText: "const total = a+b;",
+									},
+									{ oldText: "const missing = true;", newText: "noop" },
+								],
+							},
+						},
+					}),
+				),
+			);
+			const reason = (retry as { reason: string }).reason;
+			expect(reason).toContain("edits[0] was already applied");
+			expect(reason).not.toMatch(/edits\[0\]\.oldText/);
 		} finally {
 			env.cleanup();
 		}
@@ -1086,6 +1129,54 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			expect(fs.readFileSync(filePath, "utf-8")).toBe(
 				"const a = 1;\nconst b = 20;\n",
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("logs the batch summary over the agent's batch, with the edits that applied", async () => {
+		// The executed batch is renumbered (the subset's edits[0] is the agent's
+		// edits[1] here); the committed summary must still name the original
+		// batch and the original index.
+		const env = setupTestEnvironment("pi-lens-5120-summary-");
+		try {
+			mockPipelineSucceeds();
+			const filePath = createTempFile(
+				env.tmpDir,
+				"src/summary.ts",
+				"const a = 1;\nconst b = 2;\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			readWhole(runtime, filePath);
+			readGuardRows.length = 0;
+
+			await partialApply(env, runtime, {
+				toolName: "edit",
+				toolCallId: "call-summary",
+				input: {
+					path: filePath,
+					edits: [
+						{ oldText: "function gone() {}", newText: "noop" },
+						{ oldText: "const b = 2;", newText: "const b = 20;" },
+					],
+				},
+			});
+
+			const committed = readGuardRows
+				.filter((row) => row.event === "edit_batch_summary")
+				.map(
+					(row) =>
+						(row.metadata as { editBatchSummary: Record<string, unknown> })
+							.editBatchSummary,
+				)
+				.filter((summary) => summary.commitStatus === "committed");
+			expect(committed).toHaveLength(1);
+			expect(committed[0]).toMatchObject({
+				requestedTotal: 2,
+				appliedIndexes: [1],
+				appliedTotal: 1,
+			});
 		} finally {
 			env.cleanup();
 		}

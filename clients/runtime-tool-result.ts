@@ -1876,9 +1876,8 @@ async function dispatchPipelineAnalysis(args: {
 					resolvedTotal: requestedEditTotal,
 				}),
 				appliedIndexes,
-				appliedTotal: partialApply
-					? partialApply.applied.length
-					: requestedEditTotal,
+				// The executed batch is exactly the applied edits.
+				appliedTotal: requestedEditTotal,
 				participantIds: pipelineTelemetry.participantIds,
 				participantTotal: pipelineTelemetry.participantTotal,
 				commitStatus: "committed",
@@ -2118,9 +2117,9 @@ function composePartialApplyResult(
 	event: ToolResultDeps["event"],
 	result: ToolResultReturn,
 ): ToolResultReturn {
-	const hostRefused =
-		event.isError === true ||
-		(event.details as { isError?: unknown } | undefined)?.isError === true;
+	// pi's edit tool reports a refusal by throwing, which pi turns into an
+	// error result.
+	const hostRefused = event.isError === true;
 	const content = result ? result.content : event.content;
 	const structuredContent = result
 		? result.structuredContent

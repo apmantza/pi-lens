@@ -1670,59 +1670,56 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				// later tool_call handler sees what will be written and can refuse
 				// it; the tool_result tells the agent what applied. A call with no
 				// id cannot reach its tool_result, so it blocks like a native batch.
-				if (
-					partiallyApplicable &&
-					partiallyApplicable.length > 0 &&
-					toolCallId !== undefined
-				) {
-					const input = (event as { input?: unknown }).input as {
-						edits?: unknown;
-					};
-					input.edits = partiallyApplicable.map((edit) => ({
-						oldText: edit.appliedSpanText,
-						newText: edit.newText ?? "",
-					}));
-					// The subset is now an ordinary edit: the checks below judge it,
-					// and the in-flight expectation names what it will write.
-					guardLines = getTouchedLinesForGuard(event, ...guardArgs);
-					if (!guardLines.preflightError) {
-						runtime.markToolCallPartialApply(toolCallId, {
-							applied: partiallyApplicable.map((edit) => ({
-								oldText: edit.oldText,
-								newText: edit.newText,
-								originalIndex: edit.originalIndex,
-							})),
-							preflightError,
-							...(preflightDetails && { preflightDetails }),
-							...(alreadyAppliedEdits && { alreadyAppliedEdits }),
-							...(editBatchSummary && { summary: editBatchSummary }),
-						});
-						noteAgentCallStart(
-							toolCallId,
-							filePath,
-							expectationFromToolInput(input, "edit"),
-						);
-						logToolReadGuardEvent({
-							event: "edit_partial_apply",
-							sessionId: callSessionId,
-							filePath,
-							metadata: {
-								appliedCount: partiallyApplicable.length,
-								appliedIndices: formatBoundedEditIndexes(
-									boundedEditIndexes(
-										partiallyApplicable.map((edit) => edit.originalIndex),
-									),
-								),
-								requestedTotal: requestedEditTotal,
-								rewrittenForHostEdit: true,
-							},
-						});
-					}
-				}
-				if (guardLines.preflightError) {
+				// `partiallyApplicable` is never empty: the preflight returns it only
+				// when an edit passed.
+				if (!partiallyApplicable || toolCallId === undefined) {
 					if (!editBatchSummary) logBlockedEditSummary("preflight");
 					return { block: true, reason: preflightError };
 				}
+				const input = (event as { input?: unknown }).input as {
+					edits?: unknown;
+				};
+				input.edits = partiallyApplicable.map((edit) => ({
+					oldText: edit.appliedSpanText,
+					newText: edit.newText ?? "",
+				}));
+				// The subset is now an ordinary edit: the checks below judge it,
+				// and the in-flight expectation names what it will write. Each
+				// `oldText` is the exact bytes of a span that matched once, so it
+				// re-resolves; were it not to, the host edit refuses the batch
+				// whole and the tool_result reports "Batch not applied".
+				guardLines = getTouchedLinesForGuard(event, ...guardArgs);
+				runtime.markToolCallPartialApply(toolCallId, {
+					applied: partiallyApplicable.map((edit) => ({
+						oldText: edit.oldText,
+						newText: edit.newText,
+						originalIndex: edit.originalIndex,
+					})),
+					preflightError,
+					...(preflightDetails && { preflightDetails }),
+					...(alreadyAppliedEdits && { alreadyAppliedEdits }),
+					...(editBatchSummary && { summary: editBatchSummary }),
+				});
+				noteAgentCallStart(
+					toolCallId,
+					filePath,
+					expectationFromToolInput(input, "edit"),
+				);
+				logToolReadGuardEvent({
+					event: "edit_partial_apply",
+					sessionId: callSessionId,
+					filePath,
+					metadata: {
+						appliedCount: partiallyApplicable.length,
+						appliedIndices: formatBoundedEditIndexes(
+							boundedEditIndexes(
+								partiallyApplicable.map((edit) => edit.originalIndex),
+							),
+						),
+						requestedTotal: requestedEditTotal,
+						rewrittenForHostEdit: true,
+					},
+				});
 			}
 			const { touchedLines, editRanges, contentMatchValidated } = guardLines;
 			logToolReadGuardEvent({
