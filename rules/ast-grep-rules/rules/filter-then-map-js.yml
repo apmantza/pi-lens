@@ -1,0 +1,12 @@
+id: filter-then-map-js
+language: JavaScript
+severity: hint
+message: "use flatMap or one loop; keep callback order, indexes and filter semantics"
+metadata:
+  category: performance
+note: |
+  JavaScript twin of `filter-then-map`. Flags every adjacent `filter(f).map(g)`,
+  identity filters included, because no JavaScript identity-filter rule exists.
+  JavaScript has no type predicates, so the type-guard exclusion is not needed.
+rule:
+  pattern: "$ARR.filter($F).map($G)"

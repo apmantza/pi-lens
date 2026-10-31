@@ -1,0 +1,28 @@
+id: filter-then-map
+language: TypeScript
+severity: hint
+message: "use flatMap or one loop; keep callback order, indexes and filter semantics"
+metadata:
+  category: performance
+note: |
+  `filter(f).map(g)` walks the array twice and builds a throwaway array in
+  between. `flatMap`, or one loop, does both in one pass. Eager versus lazy is
+  partly taste, so this is a hint and never blocks.
+
+  Not flagged: an identity filter (`filter(x => x)`, `filter(Boolean)`), which
+  `ts-redundant-filter-map` owns at warning; and a type-guard filter (an
+  `x is T` predicate), which narrows the element type for the map.
+
+  The shape follows dmmulroy/anti-slop's `no-array-filter-map` (MIT). The text
+  here is written for this catalog, not copied.
+rule:
+  pattern: "$ARR.filter($F).map($G)"
+  not:
+    any:
+      - pattern: "$ARR.filter(($X) => $X).map($G)"
+      - pattern: "$ARR.filter($X => $X).map($G)"
+      - pattern: "$ARR.filter(Boolean).map($G)"
+      - pattern: "$ARR.filter(($X): $X is $T => $$$BODY).map($G)"
+      - pattern: "$ARR.filter(($X: $TY): $X is $T => $$$BODY).map($G)"
+      - pattern: "$ARR.filter(function ($X): $X is $T { $$$BODY }).map($G)"
+      - pattern: "$ARR.filter(async ($X): $X is $T => $$$BODY).map($G)"

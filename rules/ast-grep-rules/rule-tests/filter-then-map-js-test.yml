@@ -1,0 +1,12 @@
+id: filter-then-map-js
+valid:
+  - 'arr.filter(fn)'
+  - 'arr.map(fn)'
+  - 'arr.flatMap(fn)'
+  # Not adjacent: the chain is not filter() directly followed by map().
+  - 'arr.filter(onlyPositive).slice(0).map(double)'
+invalid:
+  - 'arr.filter(onlyPositive).map(double)'
+  # JavaScript has no identity-filter warning rule, so the hint covers it too.
+  - 'arr.filter(x => x).map(fn)'
+  - 'arr.filter((x) => x > 0).map(double)'
