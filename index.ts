@@ -3739,6 +3739,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 			},
 			currentSessionId,
 			sessionRole,
+			// #5108 F5: the drain's agent advisory is for this session, resolved
+			// as its `context` drain resolves it (the tool_result rule).
+			advisoryScope:
+				scopeOfSession(currentSessionId)?.capture() ??
+				runtime.captureSessionGeneration(),
 		});
 		if (ctx.ui?.setStatus && ctx.ui.theme) {
 			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);

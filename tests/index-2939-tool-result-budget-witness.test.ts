@@ -79,7 +79,7 @@ vi.mock("../clients/bootstrap.js", async () => {
 		biomeClient: { isAvailable: () => false },
 		ruffClient: { isAvailable: () => false },
 		metricsClient: { reset: () => {} },
-		// #5108 F1: the case below starts sessions, whose start resets it.
+		// #5108 F1: the cases below start sessions, whose start resets it.
 		knipClient: { resetSessionState: () => {} },
 	}));
 });
@@ -88,7 +88,10 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../clients/degradation-ledger.js";
-import { _resetAgentNudgeForTests } from "../clients/agent-nudge.js";
+import {
+	_resetAgentNudgeForTests,
+	consumeAgentNudge,
+} from "../clients/agent-nudge.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import extension from "../index.js";
 import {
@@ -307,5 +310,43 @@ describe("#5108 F1: a late advisory reaches the session whose tool result it was
 		expect(secondary).toContain("second.ts withheld");
 		expect(secondary).toContain("abandoned");
 		expect(primary).not.toContain("second.ts");
+	});
+
+	// The fallback for a call no session start has recorded yet: the late
+	// advisory has no callee default, and an entry with no scope makes every
+	// later drain throw (#5114 verify r2, m4).
+	it("queues a late advisory from before the first session start without breaking the next drain", async () => {
+		_resetSessionLifecycleForTests();
+		_resetAgentNudgeForTests();
+		handlerGate.hang = false;
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		let release: () => void = () => {};
+		handlerGate.hold = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		handlerGate.notices = [
+			"\u26a0 1 blocking finding in early.ts withheld: test",
+		];
+		vi.useFakeTimers();
+		const settled = pi.emit(
+			"tool_result",
+			{
+				toolName: "bash",
+				toolCallId: "sh-5108-early",
+				input: { command: "true" },
+				content: [{ type: "text", text: "done" }],
+			},
+			makeCtx({ cwd: tmpDir, sessionId: "pi-5108-early" }),
+		);
+		await vi.advanceTimersByTimeAsync(500);
+		await settled;
+		vi.useRealTimers();
+		release();
+		await handlerGate.work;
+
+		// Any later drain prunes the queue first, so an entry with no scope
+		// throws there; the real store is read directly, as every drain does.
+		expect(() => consumeAgentNudge()).not.toThrow();
 	});
 });
