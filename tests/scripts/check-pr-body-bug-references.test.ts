@@ -23,13 +23,16 @@ const base = (summary: string, tail = "") =>
 		"The body gate records the detection lesson.",
 		"",
 		"## Notes for the reviewer",
-		"None.",
+		"- None.",
 		"",
 		"## Change outline",
 		"- scripts/check-pr-body.mjs",
 		"",
 		"## Summary",
 		summary,
+		"",
+		"## Proof and checks",
+		"The proof sections follow.",
 		"",
 		"## Tests",
 		"Targeted tests pass.",
@@ -39,6 +42,7 @@ const base = (summary: string, tail = "") =>
 		"",
 		"## Class sweep",
 		'Defect shape: a gate keyed on the keyword. Search: `rg -n "bugClosing" scripts`. Verdict: stay specific.',
+		"Alignment: none: this fixture touches no family.",
 		"",
 		"## Fold check",
 		"none: the search listed no candidate",
@@ -56,7 +60,7 @@ const refsOnly = base("Fixes the reader. Refs #4321 for the rest.");
 const title4924 =
 	"fix: sweep held-document drift before lsp answers (refs #4532)";
 const body4924 = base(
-	"- Part (a) of #4532 gap 13 only: files pi (the language server) already holds. Files pi does NOT hold (part (b)) are a separate lane; `clients/out-of-band-changes.ts` is untouched.",
+	"Part (a) of #4532 gap 13 only: files pi (the language server) already holds. Files pi does NOT hold (part (b)) are a separate lane; `clients/out-of-band-changes.ts` is untouched.",
 );
 const noGit = (() => "") as never;
 

@@ -19,11 +19,14 @@ acceptance surface quoted from that run's log. Any self-bound inside the lane
 must sit below the job cap by a stated margin so the loud-failure path is
 reachable.
 
-Every PR body starts with `## Why`, `## Notes for the reviewer`, and
-`## Change outline`, followed by the existing `## Summary`, `## Tests`,
-`## Blast radius`, `## Class sweep`, `## Observability`, and `## Fold check`
-sections. The change outline is the changed symbol's caller/callee tree with
-`+`/`-` on moved lines; include only structural views that changed.
+Every PR body has `## Summary` (at most three sentences),
+`## Notes for the reviewer` (at most five bullets), `## Change outline`, and
+`## Proof and checks`, which holds `### Tests`, `### Class sweep`,
+`### Observability`, and `### Fold check`, plus the conditional sections the
+template lists. The change outline is the changed symbol's caller/callee tree
+with `+`/`-` on moved lines; include only structural views that changed.
+`scripts/check-pr-body.mjs` caps visible text at 5000 characters and each code
+fence at 20 lines (#5003).
 
 ## The loop, per PR
 
@@ -209,7 +212,7 @@ issue filed without one is a triage defect, not a shortcut.
 **Merge bar (user, 2026-10-18).** A PR merges when no HIGH finding is open and
 every gating check is green on the exact head. Each MEDIUM or LOW finding
 either folds into the same PR or becomes an accepted residual: the PR body
-lists it under `## Accepted residuals`, named `p3` with its severity and live
+lists it under `### Accepted residuals`, named `p3` with its severity and live
 population (for example `p3 (MEDIUM, live 0): <the gap>`), so the gap keeps a
 priority without an issue.
 A residual never becomes a follow-up issue. File an issue only for p2 or
@@ -221,7 +224,7 @@ reopen the round.
 **Known gaps (user, 2026-10-19).** An open p3 issue is an accepted known gap,
 not backlog. The orchestrator closes it as not planned with the `known-gap`
 label and lists it under its seam on the pinned tracker #4626. When a PR
-merges, its `## Accepted residuals` lines join the same tracker under their
+merges, its `### Accepted residuals` lines join the same tracker under their
 seam. A known gap reopens as p2 when it turns material: a live wrong result,
 data loss, a hang, or a leak with no bound.
 
@@ -318,7 +321,7 @@ operator's private notes, so a different orchestrator can run the same train.
   | a change that touches identifier uses of a glossary-retired synonym | run `tests/config/glossary-synonym-sweep.test.ts` on the head AND on the merge with `origin/master`, then re-pin in the PR from the sweep's own `UNPINNED`/`STALE` output — #3279, #3283, #3284, #3288 |
   | a new `vi.mock` in a test file | run `tests/config/vi-mock-export-sweep.test.ts`; whole-module mocks of a production module must spread `importOriginal` — PR #3268's CI red, fixed by trailing commit `621d61c5c` |
   | a changelog fragment | front matter `section: <Section>` plus `audience: user` or `audience: internal` and exactly one top-level entry; new user entries open with a bold lead of at most 100 characters (refs excluded), never `CHANGELOG.md`, validated by `node scripts/check-changelog-fragments.mjs` — PR #3268 r1 shipped `category:` and a paragraph |
-  | a PR body | the header gate: exactly one-sentence `## Why`, `## Notes for the reviewer`, `## Change outline`, plus Summary / Tests with `### Test assessment` / Blast radius / Class sweep / Fold check / Observability; run `node scripts/check-pr-body.mjs --lint-local` before pushing — three PRs this week needed orchestrator body edits |
+  | a PR body | the header gate: `## Summary`, `## Notes for the reviewer`, `## Change outline`, plus Tests / Class sweep / Fold check / Observability, inside the caps; run `node scripts/check-pr-body.mjs --lint-local` before pushing — three PRs this week needed orchestrator body edits |
   | a whole-tree docs restructure of `AGENTS.md` | every governance test that reads `AGENTS.md`, with markers on their own lines — PR #3265 r1 |
   | a raw poll in a test | the flake-shape ratchet; the fix is the governed wait, never a header admission — #2781 r1 |
   | a new, renamed or deleted rule file under `rules/` | `npm run docs:rule-catalogs` and commit the generated catalog; `tests/scripts/rule-catalogs.test.ts` is a strict consumer of every rule file, not of rule ids — #3214 r1 |
@@ -560,7 +563,7 @@ operator's private notes, so a different orchestrator can run the same train.
   DETECTION lesson in one line: which verification layer caught it and which
   layer SHOULD have caught it earlier and at what cost. The accepted layer
   words are the `DETECTION_LAYERS` list exported by `scripts/check-pr-body.mjs`,
-  which the `## Detection` body check reads; the prose does not restate them.
+  which the `### Detection` body check reads; the prose does not restate them.
   `nightly` may carry its workflow as `nightly:<workflow>`. A PR that only
   references a `bug` or `nightly-drift` issue, in its body or its title, owes
   the section too (#4968: the 2026-10-29 audit found 24 bug-linked PRs merged
@@ -855,7 +858,7 @@ Each row cost a lane at least once; the prose above carries the record.
 | Pushing to a PR branch while a fix round is queued against its old head | Merging master into #4594 staled the queued round's lease; the worker pushed a diverged copy to its handle branch (plegma #723). The orchestrator's push-verify refuses while a round still publishes to that branch. |
 | Resuming a reviewer without naming the deliverable | The resumed verifies of #4575 and #4593 inherited report names that did not match the brief, so the hand-back missed the report. Every resumed round names its `deliverables` explicitly. |
 | Calling an issue "blocked on a release" without reproducing it on master | #4554 waited on a release; 58 runs on master did not reproduce it, and it closed crediting #4563. Reproduce on master before naming a blocker. |
-| Bolding a residual bullet (`- **p3 (LOW, live 0):**`) under `## Accepted residuals` | The tracker parser read only a bare `p3`, so #4832's three residuals were recorded as "none" (2026-10-25). `known-gap-add.sh` now reads the bold form, pinned by its test case (g) |
+| Bolding a residual bullet (`- **p3 (LOW, live 0):**`) under `### Accepted residuals` | The tracker parser read only a bare `p3`, so #4832's three residuals were recorded as "none" (2026-10-25). `known-gap-add.sh` now reads the bold form, pinned by its test case (g) |
 | Planning a tracker layout before measuring the platform's limits | An 11-issue pinned split was proposed and dispatched; GitHub pins 3 issues per repository, and the assumed 65k body cap was already exceeded by #4626 at 91k (2026-10-25). Measure the limit first, then plan |
 | Pasting the `claude-lane.sh` header into a brief | The header began `Worktree (created, ...):`, the brief guard wants `Worktree:`, and two dispatches were refused (2026-10-25). The header now starts with `Worktree:`, pinned by `test-claude-lane-header.sh` |
 | Linting a PR body in the main checkout | The main checkout sits on another branch, so citations resolved against the wrong tree; three edits needed a hand-built head tree (2026-10-25). `pr-body.sh edit` without `--tree` now builds a temp tree at the PR head |

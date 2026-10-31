@@ -251,7 +251,7 @@ Fold a review follow-up into the same PR when it shares the seam or files, is
 about one commit, and needs no maintainer decision. Contract-only folds (body,
 comments, wording) are trailing commits; small code folds carry a red-first
 test and are routed per principles §3 "Round routing". A MEDIUM or LOW that
-does not fold is an accepted residual: list it under `## Accepted residuals`,
+does not fold is an accepted residual: list it under `### Accepted residuals`,
 named `p3` with its severity and live population, and file nothing. File only p2 or
 higher work that cannot ride the PR (a HIGH outside its scope, or a MEDIUM
 with a live population), as one consolidated issue per PR. The merge bar is in

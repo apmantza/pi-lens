@@ -1253,7 +1253,7 @@ Diagnostics have one model-facing surface, `lens_diagnostics`; `source` selects 
 - **Map blast radius for every code PR.** Before and after editing, use `module_report` on each touched production module with `blastRadius: true`; inspect `callbacks[]`, closures, `usedBy`, entry points, and risk flags, then use `read_symbol`/`read_enclosing` for relevant bodies. The PR must state affected dependents, callbacks/entry points, and the verification plan—or explicitly record that the blast radius is empty/unavailable and why. Re-run this map after conflict resolution or architectural changes. If the change touches a hot path (per-spawn, per-file, per-render), MEASURE the cost delta and state the number. Silent per-call taxes ship otherwise: #1673 added 100 ms to every spawn across 118 call sites, #1687 multiplied a per-file budget, and #1701 cost 14x on the background scan. Every one was caught by a reviewer's measurement. None was stated by its author. `module_report` is a navigable structural/dependent view, not a complete function-level call graph; for call-graph work reuse `clients/call-graph.ts` or LSP incoming/outgoing-call navigation instead of inferring completeness from `usedBy` or `blastRadius`.
 - **Describe every test in the PR body.** The PR body (or a review-prompt appendix) carries a section naming each NEW test file/case and each EDIT of an existing test, with one line on what it pins and why it exists — a regression proof, a contract seam, an occupancy budget. A reviewer who cannot see what changed about the tests cannot review the change: silently swapping a real coordinator for a fake runtime inside an existing test is exactly the edit this section exists to expose.
 
-**PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` also checks runtime diff observability when its local range is available, so reviewers still judge the answers.
+**PR body structure is advisory-linted.** Keep `Summary`, `Tests`, `Blast radius`, `Class sweep`, and `Observability` populated — plus `Test assessment` whenever the PR touches `tests/` (see "Test assessment and removal" under Test requirements); `scripts/check-pr-body.mjs` also checks runtime diff observability when its local range is available, so reviewers still judge the answers. *(2026-10-31, #5003: the gate now reads the template's `Summary`, `Notes for the reviewer`, `Change outline` and `Proof and checks`, with `Tests`, `Class sweep`, `Observability` and `Fold check` inside the last; `Blast radius` is conditional and `Test assessment` is retired. The paragraph above stays as the 2026-09 record.)*
 
 **Draw the blast radius as a call-tree diff (optional, text only; 2026-09-06).** Prose blast radius keeps missing callers. When a change touches a shared seam, the `Blast radius` section may carry a call-tree diff: the changed symbol, its callers above, its callees below, with `+`/`-` on the lines that moved (`resyncLspFile` / `  touchFile` / `+ getAuxiliaryClientsForFile`). A fix round that changes ordering or control flow shows the before/after as a flow diff of the same shape. The reviewer verifies the tree against grep, which is what the reviewer playbook's neighbourhood rule asks for. Never HTML, Mermaid, or diagrams for their own sake — the smallest text view that makes the reviewer's check mechanical.
 
@@ -5007,16 +5007,22 @@ Eleven screens. The first six were distilled from nine adversarially reviewed PR
 
 ### Test assessment and removal (value discipline)
 
+> 2026-10-31, #5003: the PR template no longer has a `### Test assessment`
+> clause and the lint no longer gates it. The per-file proof lives in
+> `### Tests` (a red-first transcript or a `Control:` line). The removal rules
+> below still bind.
+
 The screens above catch tests that are broken; this section addresses tests
 that are merely worthless — redundant sibling pins, characterization tests
 that outlived their purpose, load-heavy files pinning one behavior three
 ways. That weight is what the suite pays for in runtime, OOM pressure, and
 contention flakes.
 
-- **Every PR that touches a test file carries a Test assessment** (the PR
-  template's `### Test assessment` clause): per touched test FILE, one line
-  on what behavior it uniquely pins, plus any test the PR makes redundant.
-  Scope is the touched files only — never the whole suite.
+- **Retired 2026-10-31 (#5003): the PR template's `### Test assessment`
+  clause.** Until then every PR that touched a test file carried one line per
+  touched test FILE on what behavior it uniquely pins, plus any test the PR
+  made redundant. The proof now lives in `### Tests`. Scope stays the touched
+  files only — never the whole suite.
 - **Removal requires proof, not judgment.** A test may be removed only when
   a NAMED surviving test reds on the same mutations the removed test would
   have redded on. Run the mutations and quote the surviving red. "Low value"
@@ -5029,7 +5035,7 @@ contention flakes.
   re-asserts a sibling's exact assertions on the same fixture is weight with
   no guard behind it. Fixers are EXPECTED to delete these while working in a
   file — quote the mutation sweep that shows nothing reds, list each deleted
-  case in `Test assessment`, and move on. Deferring an obvious deletion to
+  case in `### Tests`, and move on. Deferring an obvious deletion to
   the ledger is the failure mode, not the safe choice (maintainer, 2026-09-03).
 - **Removal candidates you identify but do not delete go to the corpus
   value ledger issue** (deferral hygiene: the candidate is recorded with the
@@ -5380,17 +5386,20 @@ A fix on `clients/lsp/`, the read guard, tool registration, or session lifecycle
   row↔probe tie test cannot see a row that never passes (#2893).
 - Before handoff, run `npm run preflight` last and paste its table in
   `PR_BODY.md` — a handoff without it is incomplete.
-- One set of template headings per PR. A fix round APPENDS `## Round N` and
-  edits the existing `## Observability` / `## Tests` sections in place; it
+- One set of template headings per PR. A fix round edits the existing
+  sections in place and never appends a `## Round N` section (#5026); it
   never adds a second `## Observability` (the lint reads the first one, and a
   stale first section was the most common `PR body` red on 2026-09-10). Lint
   the FULL body you will publish (`gh pr view <n> --json body -q .body` plus
   your round), against the real `origin/master...HEAD` diff (fetch first),
   not a hand-shaped diff.
 - `PR_BODY.md` passes `node scripts/check-pr-body.mjs --lint-local PR_BODY.md`
-  before handoff. The gate requires the headings `## Summary`, `## Tests`,
-  `## Blast radius`, `## Class sweep`, `## Observability`, and
-  `## Test assessment` whenever the diff touches `tests/`; Observability
+  before handoff. The gate requires the headings `## Summary`,
+  `## Notes for the reviewer`, `## Change outline` and `## Proof and checks`,
+  and inside the last `### Tests`, `### Class sweep`, `### Observability` and
+  `### Fold check` (2026-10-31, #5003; before that the gate required
+  `## Blast radius` and, for a diff touching `tests/`, `## Test assessment`);
+  Observability
   names a record literal that appears in the runtime diff, and may say
   exactly "No new failure path; no record added." only when the diff adds no
   failure path (no new catch, fallback or degradation branch). Record: on

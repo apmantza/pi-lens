@@ -4,7 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
 	blankMarkdownRegions,
 	markdownBlockComments,
+	markdownChildren,
 	markdownHeadings,
+	markdownTokens,
 } from "../../scripts/lib/markdown-lexer.mjs";
 import {
 	assertNonEmptyScan,
@@ -285,5 +287,41 @@ describe("blankMarkdownRegions (#4717)", () => {
 	it("blanks nothing when the mode names nothing", () => {
 		const text = "## A\n<!-- c -->\n`x`\n```\ny\n```";
 		expect(blankMarkdownRegions(text, {})).toBe(text);
+	});
+});
+
+describe("the top-level token walk the PR-body budgets read (#5026)", () => {
+	// Recurrence it prevents: the budgets assign a token to a section by its
+	// first line. A token whose line drifted (CRLF, a multi-line token before
+	// it) would count a section's text under the wrong heading, and a budget
+	// that does not see a list's items or a table's cells would charge nothing
+	// for them.
+	it("places each top-level token on its first line, CRLF included", () => {
+		const text =
+			"# A\r\npara\r\nmore\r\n\r\n- x\r\n- y\r\n\r\n```\r\nc\r\n```\r\n";
+		expect(
+			markdownTokens(text).map(({ token, line }) => [token.type, line]),
+		).toEqual([
+			["heading", 0],
+			["paragraph", 1],
+			["space", 2],
+			["list", 4],
+			["space", 5],
+			["code", 7],
+		]);
+	});
+
+	it("opens a list's items and a table's cells as children", () => {
+		const [list, , table] = markdownTokens(
+			"- a\n- b\n\n| h |\n| - |\n| c |",
+		).map(({ token }) => token);
+		expect(markdownChildren(list).map((item) => item.type)).toEqual([
+			"list_item",
+			"list_item",
+		]);
+		expect(markdownChildren(table).map((cell) => cell.text)).toEqual([
+			"h",
+			"c",
+		]);
 	});
 });

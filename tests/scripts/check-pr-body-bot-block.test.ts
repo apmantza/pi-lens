@@ -44,13 +44,16 @@ const compact = (fold: string[]) =>
 		"The body gate records the fold decision.",
 		"",
 		"## Notes for the reviewer",
-		"None.",
+		"- None.",
 		"",
 		"## Change outline",
 		"- scripts/check-pr-body.mjs",
 		"",
 		"## Summary",
 		"The lint reads the fold check section.",
+		"",
+		"## Proof and checks",
+		"The proof sections follow.",
 		"",
 		"## Tests",
 		"Targeted tests pass.",
@@ -60,6 +63,7 @@ const compact = (fold: string[]) =>
 		"",
 		"## Class sweep",
 		'Defect shape: a documented rule with no gate. Search: `rg -n "fold check" scripts`. Verdict: folded onto the body lint.',
+		"Alignment: none: this fixture touches no family.",
 		"",
 		"## Observability",
 		"No new failure path; no record added.",
@@ -129,11 +133,20 @@ describe("a bot block appended to the body never counts (#4774)", () => {
 	setup();
 
 	// What a real-body case may still print: the test-reference error that the
-	// empty corpus earns the body's `tests/...` citations, and nothing else.
+	// empty corpus earns the body's `tests/...` citations, the caps and the section
+	// shapes (`Proof and checks`, Summary, Notes) a body written
+	// before #5003 does not meet, and nothing else.
 	const unexpected = (printed: string) =>
 		printed
 			.split("\n")
-			.filter((line) => line.trim() && !line.startsWith(TEST_REFERENCE));
+			.filter(
+				(line) =>
+					line.trim() &&
+					!line.startsWith(TEST_REFERENCE) &&
+					!/^PR body (?:is \d+ visible|has a \d+-line|has a code line|has \d+ code lines|is missing "## Proof and checks"|"Class sweep" needs exactly one line|"## Summary" must hold|"## Notes for the reviewer" allows)/.test(
+						line,
+					),
+			);
 
 	// Acceptance 1 and 2. Recurrence: PR 4767 at 7f7ee1127, whose body ends with
 	// Greptile's block quoting `(refs #43...`.

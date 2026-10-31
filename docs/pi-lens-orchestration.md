@@ -31,9 +31,12 @@ per-PR loop itself is `docs/pi-lens-merge-policy.md`.
   each candidate as folded into this PR (one `Closes #…` per folded issue) or
   not folded, with the reason (two hazards in one review, a maintainer decision,
   a blocked dependency, a different seam). The brief carries the candidate list
-  and its decisions, and the PR body records them under `## Fold check`.
+  and its decisions, and the PR body records them under `### Fold check`.
   Planning precedes filing: a new issue is the answer for p2+ work no lane can
   carry, never for a p3 the lane could fold (history: `HISTORY.md`, 2026-10-20).
+- A PR body's `### Class sweep` ends with one `Alignment:` line naming the
+  families of `docs/alignment-families.md` the change touches, or `none:
+  <reason>`; the body lint refuses a body without it.
 - The per-PR loop (review, verify, auto-merge on green), round routing, the
   merge gate and the Common mistakes table live in `docs/pi-lens-merge-policy.md`.
 - Read CI with `node scripts/ci-verdict.mjs <pr|sha>` (exact head, all pages).

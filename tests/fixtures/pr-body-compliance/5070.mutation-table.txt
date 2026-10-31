@@ -1,0 +1,17 @@
+| File | Mutation | Red |
+| --- | --- | --- |
+| `clients/dispatch/integration.ts` | empty-run gate `eligibleNeighbors.length === 0 &&` removed | `1 failed | 217 passed (218)`: a run that already has a neighbour does not carry the marker for an unplaced one |
+| `clients/dispatch/integration.ts` | existing-marker guard `&& !impact.indeterminate` removed | `1 failed | 217 passed (218)`: keeps a graph_degraded marker when a name-only referrer is also unplaced (#5055) |
+| `clients/dispatch/integration.ts` | leaf admission `unplaced.length > 0` to `true` | `12 failed`: the six healthy-leaf cases plus six existing no_neighbors cases |
+| `clients/dispatch/integration.ts` | primary-edit admission filter removed | `2 failed | 216 passed (218)`: edited in the same turn, own recursion |
+| `clients/dispatch/integration.ts` | named-file cap `UNPLACED_REFERRER_NAMED` 3 to 99 | `1 failed | 217 passed (218)`: names up to three unplaced files and counts the rest |
+| `clients/dispatch/integration.ts` | `unplacedReferrerCount: unplaced.length` removed | `7 failed`: the per-kind ambiguity cases |
+| `clients/review-graph/builder.ts` | references placeholder id `${UNRESOLVED_NAME_NODE_PREFIX}${refName}` to `other:${refName}` | `4 failed | 14 passed (18)`: python, ruby, rust and cxx ambiguity cases |
+| `clients/review-graph/query.ts` | `nameOnlyReferrers.length > 0 &&` to `false &&` | `8 failed`: the six ambiguity cases plus count and narrowing |
+| `clients/review-graph/query.ts` | lookup widened from the changed symbols to every symbol in the file | `1 failed | 217 passed (218)`: the impact query names referrers only of the changed symbols |
+| `clients/review-graph/query.ts` | `...changedSymbols,` removed from the looked-up names | `2 failed | 26 passed (28)`: the rename and delete cells, `expected undefined to deeply equal [ Array(1) ]` |
+| `clients/dispatch/integration.ts` | referrer filter `nodeFs.existsSync(f)` to `true` | `1 failed | 27 passed (28)`: `does not name a dependent that was removed outside pi on the seq fast path`, `expected 'indeterminate' to be 'no_neighbors'` |
+| `clients/runtime-turn.ts` | graph bucket stops excluding the reason | `1 failed | 217 passed (218)`: words an unresolved_reference run as its own cause and logs its reason (#5055) |
+| `clients/runtime-turn.ts` | `holdAdvisory(referenceAdvisory, ...)` removed | `2 failed | 216 passed (218)`: partially cut and fully cut `unresolved_reference` cap cells |
+| `clients/runtime-turn.ts` | log drops `unplacedReferrerCount` | `1 failed | 217 passed (218)`: words an unresolved_reference run as its own cause and logs its reason (#5055) |
+| `clients/runtime-turn.ts` | lead repeats the cause | `1 failed | 217 passed (218)`: words an unresolved_reference run as its own cause and logs its reason (#5055) |

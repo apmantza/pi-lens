@@ -17,6 +17,9 @@ import {
 // (`POST /markdown`, recorded 2026-10-21), an oracle independent of the code,
 // except where a row says the lint departs from it by decision.
 //
+// #5026: the host text of a row that opens a raw-HTML block, a fence or a nested
+// heading sits under `## Detail`, because the Summary admits plain paragraphs.
+//
 // #4717 F2: a row must fail on the code that carried the defect it names, so
 // `I3` and `I5` place the closing `-->` after `## Tests`: a closer inside the
 // Summary paragraph satisfied the reviewed head's comment scan too, and the
@@ -30,7 +33,6 @@ import {
 const SECTIONS = [
 	"Summary",
 	"Tests",
-	"Blast radius",
 	"Class sweep",
 	"Observability",
 	"Fold check",
@@ -40,10 +42,13 @@ const HEAD = [
 	"The body gate reads the sections a reader sees.",
 	"",
 	"## Notes for the reviewer",
-	"None.",
+	"- None.",
 	"",
 	"## Change outline",
 	"- scripts/check-pr-body.mjs",
+	"",
+	"## Proof and checks",
+	"The proof sections follow.",
 	"",
 	"## Summary",
 ].join("\n");
@@ -53,6 +58,7 @@ const TAIL = [
 	"",
 	"## Class sweep",
 	'Defect shape: x. Search: `rg -n "x" scripts`. Verdict: folded onto the lexer.',
+	"Alignment: none: this fixture touches no family.",
 	"",
 	"## Observability",
 	"No new failure path; no record added.",
@@ -63,12 +69,7 @@ const TAIL = [
 const body = (middle: string) => `${HEAD}\n${middle}\n\n${TAIL}`;
 const crlf = (text: string) => text.replace(/\r?\n/g, "\r\n");
 const TESTS = "## Tests\nTargeted tests pass.";
-const AFTER_SUMMARY = [
-	"Blast radius",
-	"Class sweep",
-	"Observability",
-	"Fold check",
-];
+const AFTER_SUMMARY = ["Class sweep", "Observability", "Fold check"];
 const stub = (): string => "";
 
 const missing = (errors: string[]) =>
@@ -95,7 +96,7 @@ const cases: Array<[string, string, string[]]> = [
 	],
 	[
 		"B5 a 4-space opener continuing a paragraph is text",
-		body("Text.\n    <!--\n## Tests\nx\n-->"),
+		body("Text. More text.\n    <!--\n## Tests\nx\n-->"),
 		[],
 	],
 	[
@@ -105,7 +106,7 @@ const cases: Array<[string, string, string[]]> = [
 	],
 	[
 		"B7 an abrupt <!--> at a line start hides nothing after it",
-		body(`Text.\n\n<!-->\n${TESTS}`),
+		body(`Text.\n\n## Detail\n<!-->\n${TESTS}`),
 		[],
 	],
 	[
@@ -194,7 +195,7 @@ const cases: Array<[string, string, string[]]> = [
 	],
 	[
 		"G1 a fence holding <!--",
-		body(`Text.\n\n\`\`\`\n<!--\n\`\`\`\n\n${TESTS}`),
+		body(`Text.\n\n## Detail\n\`\`\`\n<!--\n\`\`\`\n\n${TESTS}`),
 		[],
 	],
 	[
@@ -231,7 +232,7 @@ const cases: Array<[string, string, string[]]> = [
 	[
 		"T6 a <details> block with blank lines keeps ## Tests",
 		body(
-			"Text.\n\n<details>\n<summary>s</summary>\n\n## Tests\nx\n\n</details>",
+			"Text.\n\n## Detail\n<details>\n<summary>s</summary>\n\n## Tests\nx\n\n</details>",
 		),
 		[],
 	],
@@ -257,7 +258,7 @@ const cases: Array<[string, string, string[]]> = [
 	// is the Tests section although GitHub renders no <h2>.
 	[
 		"S8 an H4 heading is the section (#1844)",
-		body("Text.\n\n#### Tests\nx"),
+		body("Text.\n\n## Detail\n#### Tests\nx"),
 		[],
 	],
 	// #4717 N6: GitHub passes the raw `<!--` through, so a comment a list

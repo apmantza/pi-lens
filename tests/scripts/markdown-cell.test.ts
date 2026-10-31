@@ -1,13 +1,19 @@
 // #4490: CodeQL js/incomplete-sanitization (alerts #65/#66) on the census issue
-// body. A test name or error holding `\|` was escaped to `\\|`, which GFM reads
-// as an escaped backslash, so the pipe split the table row. The shared escaper
-// must keep the row's cell count: the row below has three pipes, the same as a
-// row whose cells hold no pipe.
+// body. A test name or error holding `\|` was escaped to `\\|`. A reader that
+// counts backslashes (marked) reads that as an escaped backslash and splits the
+// row; GitHub keeps one cell but drops the backslash (#5026 r5 probe). The
+// shared escaper must keep the row's cell count for either reader: the row below
+// has three pipes, the same as a row whose cells hold no pipe.
 import { describe, expect, it } from "vitest";
-import { escapeMarkdownCell } from "../../scripts/lib/markdown-cell.mjs";
+import {
+	escapeMarkdownCell,
+	splitMarkdownRow,
+} from "../../scripts/lib/markdown-cell.mjs";
 
-// GFM cell boundaries: a backslash escapes the character after it, and a pipe
-// that is not escaped separates cells.
+// Cell boundaries as a backslash-counting reader (marked) sees them: a
+// backslash escapes the character after it, and any other pipe separates cells.
+// GitHub is laxer (no pipe after a backslash splits), so this is the stricter
+// count.
 function unescapedPipes(row: string): number {
 	let count = 0;
 	for (let i = 0; i < row.length; i++) {
@@ -40,5 +46,56 @@ describe("escapeMarkdownCell", () => {
 		// is escaped (`a\\\|b`). Pipe-then-backslash would give `a\\|b`,
 		// which GFM splits.
 		expect(escapeMarkdownCell("a\\|b")).toBe("a\\\\\\|b");
+	});
+});
+
+// #5070: the reading side. Pairs with the escaper above; the cases are the
+// ones the five split("|") sites of check-pr-body.mjs got wrong.
+const SPLIT_CASES = [
+	["borders are not cells", "| a | b |", ["a", "b"]],
+	["borderless rows split too", "a | b", ["a", "b"]],
+	["an escaped pipe stays in its cell", "| a \\| b | c |", ["a \\| b", "c"]],
+	["a code span does not protect a pipe", "| `x | y` | z |", ["`x", "y`", "z"]],
+	// #5026 r4 verify N3: `gh api markdown -f mode=gfm` keeps `x \\| y` and
+	// `x \\\| y` in one cell and splits `p\\ | q`: on GitHub a pipe right after
+	// any backslash never splits, whatever the backslash count.
+	[
+		"a pipe after two backslashes stays in its cell",
+		"| a \\\\| b |",
+		["a \\\\| b"],
+	],
+	[
+		"a pipe after three backslashes stays in its cell",
+		"| a \\\\\\| b |",
+		["a \\\\\\| b"],
+	],
+	[
+		"a backslash before a space does not protect the pipe",
+		"| p\\\\ | q |",
+		["p\\\\", "q"],
+	],
+	["an empty middle cell is kept", "| a | | c |", ["a", "", "c"]],
+	["surrounding space is trimmed", "  |  a  |  b  |  ", ["a", "b"]],
+] as const;
+
+describe("splitMarkdownRow", () => {
+	it.each(SPLIT_CASES)("%s", (_name, row, cells) => {
+		expect(splitMarkdownRow(row)).toEqual(cells);
+	});
+
+	// Recurrence: a cell escaped for a generated table must come back as one
+	// cell, whatever it holds.
+	it("reads back one cell for any value escapeMarkdownCell wrote", () => {
+		for (const value of [
+			"a|b",
+			"a\\|b",
+			"\\",
+			"x\\\\|y",
+			"`1 failed | 2 passed`",
+		]) {
+			expect(
+				splitMarkdownRow(`| ${escapeMarkdownCell(value)} | z |`),
+			).toHaveLength(2);
+		}
 	});
 });
