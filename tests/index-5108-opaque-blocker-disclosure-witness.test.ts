@@ -167,12 +167,15 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 				responses: [
 					step(scriptWrite("opaque.ts", BLOCKING_FILE), "writing"),
 					step(commitAttempt(), "committing"),
-					endTurn("done"),
+					endTurn("turn 1 done"),
+					step(fauxToolCall("lens_diagnostics", { mode: "all" }), "listing"),
+					endTurn("turn 2 done"),
 				],
 			});
 			await handle.prompt("write the file with a script");
 
 			await Promise.all(gate.pending);
+			await handle.prompt("list the findings");
 			const write = gate.results.find((r) => r.command.includes("opaque.ts"));
 			const [, commit] = toolResults(handle.requests.at(-1) ?? [], "bash");
 			expect(fs.readFileSync(path.join(repo, "opaque.ts"), "utf8")).toBe(
@@ -185,11 +188,20 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 			// sometimes joins it (`BLOCKING_FILE`).
 			expect(write?.text).toMatch(/[12] blocking findings? in opaque\.ts/);
 			expect(write?.text).toContain("withheld");
+			expect(write?.text).toContain("lens_diagnostics mode=all");
 			expect(write?.text).not.toMatch(/clean/);
 			// Unauthored bytes never latch the commit gate (#3226, #4137): the
 			// disclosure is not a blocker record.
 			expect(commit?.text).not.toContain(GATE_BLOCK);
 			expect(commit?.text).toContain(RAN_MARKER);
+			const [listed] = toolResults(
+				handle.requests.at(-1) ?? [],
+				"lens_diagnostics",
+			);
+			// The pointer holds: the withheld finding is in the session cache the
+			// disclosure names.
+			expect(listed?.text).toContain("opaque.ts");
+			expect(listed?.text).toContain("[debugger-statement]");
 			expect(handle.errors).toEqual([]);
 		},
 	);

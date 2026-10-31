@@ -1787,7 +1787,7 @@ function formatStillUnfixedLine(
  * fact and names where the findings are; it asks for no edit.
  */
 function formatWithheldBlockerLine(count: number, display: string): string {
-	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt. lens_diagnostics lists ${count === 1 ? "it" : "them"}.`;
+	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt. lens_diagnostics mode=all lists ${count === 1 ? "it" : "them"}.`;
 }
 
 /**

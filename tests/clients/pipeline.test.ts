@@ -2507,7 +2507,7 @@ describe("Pipeline", () => {
 			);
 
 			expect(result.output).toContain("2 blocking findings in two.ts withheld");
-			expect(result.output).toContain("lens_diagnostics lists them");
+			expect(result.output).toContain("lens_diagnostics mode=all lists them");
 		});
 
 		it("keeps the all-clear for a run that held no blocker", async () => {
