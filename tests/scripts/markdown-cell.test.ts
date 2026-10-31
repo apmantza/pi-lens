@@ -4,7 +4,10 @@
 // must keep the row's cell count: the row below has three pipes, the same as a
 // row whose cells hold no pipe.
 import { describe, expect, it } from "vitest";
-import { escapeMarkdownCell } from "../../scripts/lib/markdown-cell.mjs";
+import {
+	escapeMarkdownCell,
+	splitMarkdownRow,
+} from "../../scripts/lib/markdown-cell.mjs";
 
 // GFM cell boundaries: a backslash escapes the character after it, and a pipe
 // that is not escaped separates cells.
@@ -40,5 +43,43 @@ describe("escapeMarkdownCell", () => {
 		// is escaped (`a\\\|b`). Pipe-then-backslash would give `a\\|b`,
 		// which GFM splits.
 		expect(escapeMarkdownCell("a\\|b")).toBe("a\\\\\\|b");
+	});
+});
+
+// #5070: the reading side. Pairs with the escaper above; the cases are the
+// ones the five split("|") sites of check-pr-body.mjs got wrong.
+const SPLIT_CASES = [
+	["borders are not cells", "| a | b |", ["a", "b"]],
+	["borderless rows split too", "a | b", ["a", "b"]],
+	["an escaped pipe stays in its cell", "| a \\| b | c |", ["a \\| b", "c"]],
+	["a code span does not protect a pipe", "| `x | y` | z |", ["`x", "y`", "z"]],
+	[
+		"an escaped backslash does not escape the pipe",
+		"| a \\\\| b |",
+		["a \\\\", "b"],
+	],
+	["an empty middle cell is kept", "| a | | c |", ["a", "", "c"]],
+	["surrounding space is trimmed", "  |  a  |  b  |  ", ["a", "b"]],
+] as const;
+
+describe("splitMarkdownRow", () => {
+	it.each(SPLIT_CASES)("%s", (_name, row, cells) => {
+		expect(splitMarkdownRow(row)).toEqual(cells);
+	});
+
+	// Recurrence: a cell escaped for a generated table must come back as one
+	// cell, whatever it holds.
+	it("reads back one cell for any value escapeMarkdownCell wrote", () => {
+		for (const value of [
+			"a|b",
+			"a\\|b",
+			"\\",
+			"x\\\\|y",
+			"`1 failed | 2 passed`",
+		]) {
+			expect(
+				splitMarkdownRow(`| ${escapeMarkdownCell(value)} | z |`),
+			).toHaveLength(2);
+		}
 	});
 });

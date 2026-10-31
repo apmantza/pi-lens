@@ -107,11 +107,12 @@ wrappers that point there and hold only harness-specific lines.
 
 The principles govern building, testing, and closes-versus-refs. pi-lens adds:
 
-- Issues and PRs lead with the outcome, then evidence, root cause (or a labeled
+- Issues lead with the outcome, then evidence, root cause (or a labeled
   hypothesis), acceptance criteria, non-goals, failure semantics, test matrix,
-  observability, and class-sweep coverage. The issue reference goes in the PR
-  title; the closing keyword goes in the body, because GitHub ignores it in a
-  title.
+  observability, and class-sweep coverage. A PR body leads with a short summary
+  and stays short: proof is transcripts and mutation rows, not narrative. The
+  issue reference goes in the PR title; the closing keyword goes in the body,
+  because GitHub ignores it in a title.
 - Mutation acceptance has one PR layer (#4005): every
   new guard, branch, filter, cap, or fallback, and the behaviour behind every
   relaxed or rewritten assertion, has bounded compile-valid hand-mutation
@@ -876,9 +877,10 @@ consistent. Use sentence-case headings, Oxford commas, and no em-dash chains.
 
 Issue bodies lead with evidence, then root cause, acceptance criteria,
 observability, and cross-links. Every issue has one type label and at least one
-`area:` label, plus exactly one `priority:` label. Every PR includes `Summary`,
-`Tests`, `Blast radius`, `Class sweep`, `Observability`, and `Fold check`; test
-changes also include `Test assessment`.
+`area:` label, plus exactly one `priority:` label. A PR body follows
+`.github/PULL_REQUEST_TEMPLATE.md`: `Summary`, `Notes for the reviewer`,
+`Change outline`, and `Proof and checks`, within the caps
+`scripts/check-pr-body.mjs` enforces.
 
 Observability is part of correctness. Name the record, sink, ledger, or test
 that proves a change. If no telemetry is appropriate, state why. Keep records

@@ -15,3 +15,15 @@ export interface MarkdownHeading {
 }
 export function markdownHeadings(text: string): MarkdownHeading[];
 export function markdownBlockComments(text: string): number[];
+export interface MarkdownToken {
+	type: string;
+	raw: string;
+	text?: string;
+	tokens?: MarkdownToken[];
+	items?: MarkdownToken[];
+	[key: string]: unknown;
+}
+export function markdownChildren(token: MarkdownToken): MarkdownToken[];
+export function markdownTokens(
+	text: string,
+): Array<{ token: MarkdownToken; line: number }>;

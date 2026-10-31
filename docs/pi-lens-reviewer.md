@@ -145,21 +145,21 @@ real seam. Check that every gate the diff adds is exercised through that path.
   the exception to the one-spot-check cap above.
 - Repeat the pattern and population sweeps. Check blast radius, bounded
   observability, changelog, commit, and PR-body requirements.
-- Re-run the PR's `## Class sweep` search yourself and widen it when the
+- Re-run the PR's `### Class sweep` search yourself and widen it when the
   named shape is broader than the touched seam (#4273, #4268).
-- Read the `## Fold check` against the open issues and pull requests the PR's
+- Read the `### Fold check` against the open issues and pull requests the PR's
   mechanism has: the lint checks the form (candidate, decision, reason), not
   that every candidate was found, so decide whether the section's search was
   wide enough and whether each `not folded` reason holds (#4711). Open each
   candidate's diff (`gh pr diff <n>`) or the files its issue names: a
   `not folded` line is a finding when the candidate edits the same hunk or
   symbol, or owns a rule this PR re-derives, and a member your own search finds
-  that the `## Class sweep` missed is a finding too. The gates check form only
+  that the `### Class sweep` missed is a finding too. The gates check form only
   and the author writes these lines, so this read is the only judgment they
   get. Recurrence: #4713 wrote "shares no clients/ file" beside #4712, and the
   review then re-derived a `clients/analysis-root.ts` rule #4712 edits, while
   the class sweep missed a single-scan-root member.
-- On a bug-closing PR, check the `## Detection` lesson: the layer named under
+- On a bug-closing PR, check the `### Detection` lesson: the layer named under
   `Should have been caught by:` must be one that would actually have caught
   the bug, and `Gap:` must be a real issue, test, or reason (#4288). Judge
   `Shape:` and `Enforcer:` too: the lint checks the catalog number and that the

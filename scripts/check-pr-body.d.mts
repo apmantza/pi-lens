@@ -22,7 +22,6 @@ export declare function normalizePrBodyForChecking(
 export declare function lintPrBody(
 	body?: string,
 	options?: {
-		requireTestAssessment?: boolean;
 		workingTree?: boolean;
 		diff?: string;
 		cwd?: string;
@@ -127,10 +126,6 @@ export declare function testCorpus(options?: {
 	workingTree?: boolean;
 	git?: (args: string[], options?: Record<string, unknown>) => string;
 }): { paths: Set<string>; titles: Set<string> };
-export declare function localTouchesTests(
-	cwd?: string,
-	git?: (args: string[], options?: Record<string, unknown>) => string,
-): boolean;
 export declare function lintLocalPrBody(
 	body: string,
 	cwd?: string,
@@ -182,10 +177,6 @@ export declare function resolveLivePrBody(
 	payloadPr: { number: number; body?: string | null },
 	fetchImpl?: typeof fetch,
 ): Promise<{ body: string; normalized: boolean }>;
-export declare function resolveTouchesTests(
-	payloadPr: { number: number },
-	fetchImpl?: typeof fetch,
-): Promise<boolean | null>;
 export declare function lintPullRequestEvent(
 	fetchImpl?: typeof fetch,
 	event?: {

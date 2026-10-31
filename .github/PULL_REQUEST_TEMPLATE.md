@@ -1,10 +1,12 @@
-## Why
+## Summary
 
-Exactly one sentence explaining the user or maintainer outcome.
+At most three sentences: what changed, who notices, and the risk.
+
+Closes #NNN only when every acceptance criterion is met. Otherwise Refs #NNN, and comment on the issue naming what remains. The PR title carries the same reference.
 
 ## Notes for the reviewer
 
-- Key review constraint, risk, or decision.
+- At most five bullets: decisions and risks only. Proof goes below.
 
 ## Change outline
 
@@ -14,157 +16,46 @@ Exactly one sentence explaining the user or maintainer outcome.
     + callee below
 ```
 
-## Summary
+## Proof and checks
 
-Describe what this PR changes, why it changes it, and any non-obvious design
-decision or gotcha. Name the issue and explain whether every acceptance
-criterion is complete.
+### Tests
 
-Closes #NNN — only when every acceptance criterion is met. Otherwise Refs
-#NNN AND comment on the issue naming exactly what remains (deferral hygiene).
-The reference must ALSO be in the PR title — the title becomes the
-merge-commit subject.
+One red-first transcript per changed test file, cut to the failing lines (at most 20), or a line `Control: <file>: <reason>`. Skip the narrative. Update this section after each review round; do not append rounds.
 
-Citations: every code fact uses ``path:line``; an offered fenced quote is
-checked against the cited source line. Test ids in tables are real `it(` titles;
-pre-existing-red claims carry the
-`origin/master` transcript.
+### Mutations
 
-## Behavior equivalence
+One table row per new guard or relaxed assertion: the file, the mutation, the result as a backticked `1 failed`, and the failing test's title in backticks. Delete this section when the diff adds none.
 
-Refactor PRs must include a table with `Site`, `Before`, and `After` columns and
-at least one real old-versus-new predicate row.
+### Class sweep
 
-## Type of change
+`Shape: #N`, the search command in backticks, then `folds onto ...` or `stays distributed because ...`. Use `none: <reason>` only for a diff with no runtime code.
 
-- [ ] Bug fix
-- [ ] New feature (net-new capability)
-- [ ] Enhancement (improvement to existing capability)
-- [ ] Documentation
+Alignment: <family names, comma-separated> | none: <reason>
 
-## Area
+### Observability
 
-- [ ] area:lsp
-- [ ] area:dispatch
-- [ ] area:installer
-- [ ] area:diagnostics
-- [ ] area:read-guard
-- [ ] area:project-intelligence
-- [ ] area:perf
-- [ ] area:observability
-- [ ] area:session
-- [ ] area:config
-- [ ] area:security
-- [ ] area:tests
+The record this diff adds, `covered by existing record <kind> at <file>:<line>`, `none: <reason>`, or `No new failure path; no record added.`
 
-## Checklist
+### Fold check
 
-- [ ] I have read [CONTRIBUTING.md](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md)
-- [ ] The change has tests (happy path, edge cases, regression test for bugs)
-- [ ] Targeted test files for the touched seams pass locally after `npm run build`; the full suite is CI's job.
-- [ ] Every NEW regression test is proven RED on pre-fix code; the red output is quoted in this PR
-- [ ] New guards/branches/filters/caps/fallbacks have compile-valid hand-mutation proof (AGENTS.md, one PR mutation layer)
-- [ ] PR title carries the conventional prefix and the issue ref
-- [ ] `npm run lint` passes
-- [ ] `npm run build:dist` succeeds if I changed code under `clients/`, `commands/`, `tools/`, or `index.ts`
-- [ ] `package-lock.json` is in sync with `package.json` (regenerate with the exact npm pin in `package.json`'s `packageManager` field)
-- [ ] `AGENTS.md` is updated if this PR changes behavior, commands, conventions, or invariants documented there
-- [ ] `.changelog/<branch-or-slug>-<short-desc>.md` has one valid entry **in this PR** for any user-facing change (Added/Changed/Deprecated/Removed/Fixed/Security), with `audience: user` or `audience: internal` — see [.changelog/README.md](../.changelog/README.md); internal-only test/refactor PRs may skip it
-- [ ] Commit subject includes the issue number: `(closes #NNN)` or `(refs #NNN)`
+One line per open issue or PR against this mechanism: `#N folded: <reason>`, `#N not folded: <reason>`, or `#N sequenced: <reason>`. Use `none: <reason>` when the search found none.
 
-## Tests
+### Conditional sections
 
-Name each NEW test file/case and each EDIT of an existing test, with one line
-on what it pins and why it exists (regression proof / contract seam /
-occupancy budget). If no tests changed, say so explicitly. Prove new
-regression tests RED on pre-fix code and quote the output.
+Delete this heading and every section below that does not apply. `npm run preflight` names any it requires.
 
-Where it is not obvious, name which of AGENTS.md's ten test-authoring screens each new test satisfies (parallel path, invisible skip, wrong-layer pin, ambient-inspection double, env leakage, loose bound, all-mocks, not-throw, implementation mirror, snapshot-as-behavior).
+### Blast radius
 
-### Test assessment
+Only when the change reaches outside the touched module or hits a hot path: the dependents from `module_report`, and the measured cost.
 
-For each test FILE this PR touches: one line on what behavior that file
-uniquely pins, and any test in it this PR makes redundant. Name removal
-candidates. A test may be REMOVED only when a named surviving test reds on
-the same mutations — demonstrate the redundancy, never assert it. Removal
-candidates you do not delete here go to the corpus value ledger issue.
+### Behavior equivalence
 
-## Detection
+Refactor PRs: a table with `Site`, `Before`, and `After` columns.
 
-Optional unless this PR closes or references (`Refs`, any close keyword, or a `#N` in the title) an issue labelled `bug` or `nightly-drift`; the check reads the label of every `#N` such a line or the title names: name `Caught by:` (one layer word from `DETECTION_LAYERS` in `scripts/check-pr-body.mjs`, among them `TLA+`, `mutation`, `pre-push` and `lint/type check`; `nightly:<workflow>` names the workflow; a PR that owes the section may not answer `unknown`, `n/a`, `tbd` or `?` in any free-text line), `Should have been caught by:` (a layer or `this layer`), and `Gap:` (`#NNN`, `exists: <path of a test already on master>`, or `none: <reason>`; a test this PR adds does not count); it also names `Shape:` (`#N`, a `docs/defect-shapes.md` number, or `new: <name>`) and `Enforcer:` (the tree-wide test path on master that scans the shape's whole population, `#N` for an issue to build one, or `none: judgment-only, <reason>`; with `Shape: #N` the path must be one catalog entry N names).
+### Accepted residuals
 
-## Accepted residuals
+One line per review finding left open: `p3 (<severity>, live <n>): <the gap>`.
 
-Optional. List each review finding of MEDIUM or below that this PR leaves open as `p3 (<severity>, live <n>): <the gap>`, where live is the number of sites in the tree that hit it today. These are accepted under the merge bar in `docs/pi-lens-merge-policy.md` "Filing issues" and are not filed as issues. Write `None.` when nothing is left open.
+### Detection
 
-## Blast radius
-
-State affected dependents for each touched production module (from
-`module_report` with `blastRadius: true`), callbacks/entry points, and the
-verification plan. If a hot path is touched (per-spawn / per-file /
-per-render), state the measured cost delta. Record "empty/unavailable"
-explicitly with why.
-
-## Observability
-
-Each new failure path or decision branch (adopt/reset/skip, fence, classify,
-select) names its record as sink plus kind, or says `none: <reason>`. The
-`PR body` check accepts exactly four forms here, nothing else:
-
-1. the literal record kind this diff ADDS in runtime code (a `kind: "..."`
-   passed to `recordDegradationOnce` / `incrementDegradationCount` / a
-   `logLatency` phase) — the literal must appear in the added lines;
-2. `covered by existing record \`<kind>\` at \`<runtime file>:<line>\`` when
-   the new failure path is observed by a record an existing seam already
-   emits (the cited line must sit within 20 lines of that literal, in a
-   runtime file, no `..` in the path);
-3. `none: <reason>` — a reason of at least three words that is not the
-   template's `<reason>` or placeholder words, valid ONLY when the diff adds
-   no `catch`, `throw`, `return null` or degradation branch in runtime code.
-   When the diff adds a decision branch on a seam, the `none:` lines must
-   name each flagged file by basename (#3875);
-4. the exact sentence `No new failure path; no record added.` — valid ONLY
-   when the diff adds no `catch`, `throw`, `return null` or degradation
-   branch, AND no `if` / `else` / `switch` / `case` in a runtime file mapped
-   by `formal/coverage-map.json` (the session, lifecycle and delivery seams).
-
-"name the gap" / "not applicable" are refused. One `## Observability`
-section per PR: fix rounds append under `## Round N` and never repeat this
-heading — the check reads the FIRST section and a stale first section is
-the usual red.
-
-## Class sweep
-
-The `PR body` check requires one of two forms here:
-
-1. a named shape (`Shape:`, `Defect shape:`, a numbered `Defect shape <n>`, `Defect class:`, or `Class:`), the quoted search
-   command that defines the population (`rg`, `grep`, `git grep`, `ugrep`,
-   `ast-grep run`, or `sg run` in backticks or a fence), and a verdict: a
-   per-member line (an arrow, a coverage note, or a markdown table row) or a
-   fold/stay statement (`folds onto ...`, `stays distributed because ...`).
-   The sweep covers the WHOLE tree — `clients/`, `tools/`, `mcp/`, `scripts/`,
-   `index.ts`, never `clients/` alone. Cite the defect-shape catalog
-   (`docs/defect-shapes.md`).
-   "Class of size 1" requires the grep that proves it. End a population sweep
-   with a consolidation verdict: fold the family onto one seam (issue ref) or
-   state why it stays distributed.
-2. `none: <reason>` — a reason of at least three words, for a diff with no
-   shape (documentation, renames). It is refused when the diff changes runtime
-   code (`clients/**`, `index.ts`, or a `scripts/**/*.mjs` module the package
-   ships): a runtime diff with no named shape is usually an unfound population.
-
-A section that only lists the files this PR changed is refused: that is a
-change list, not a tree-wide sweep (#4248, #4273).
-
-## Fold check
-
-The fold check ran before this lane was written (`docs/pi-lens-orchestration.md`):
-every open issue and pull request against this change's mechanism got a
-decision. One line per candidate, `#N` first:
-`#N folded: <reason>`, `#N not folded: <reason>`, or `#N sequenced: <reason>`;
-a `folded` line also carries its `Closes #N`. When the search found no
-candidate, write `none: <reason>`. `scripts/check-pr-body.mjs` refuses a section
-with neither form, a decision word with no reason after it, a decision spelling
-other than these three, a line that names a candidate without deciding it,
-`none:` beside a candidate line, and a `folded` candidate the body never
-closes (#4711, #4717).
+Required when this PR names an issue labelled `bug` or `nightly-drift`: `Caught by:`, `Should have been caught by:`, `Gap:`, `Shape:` (`#N` or `new: <name>`), and `Enforcer:` (a test path, `#N`, or `none: judgment-only, <reason>`).

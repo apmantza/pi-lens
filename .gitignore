@@ -99,6 +99,8 @@ migrate-*.js
 !docs/pi-lens-warden.md
 # #4361: the agent contract's moved text lives in these files.
 !docs/defect-shapes.md
+# #5026: scripts/check-pr-body.mjs reads the alignment family names from here.
+!docs/alignment-families.md
 !docs/invariants/*.md
 !docs/pi-lens-orchestration.md
 !docs/pi-lens-release.md

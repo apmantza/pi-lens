@@ -14,8 +14,11 @@ import {
 import {
 	blankMarkdownRegions,
 	markdownBlockComments,
+	markdownChildren,
 	markdownHeadings,
+	markdownTokens,
 } from "./lib/markdown-lexer.mjs";
+import { splitMarkdownRow } from "./lib/markdown-cell.mjs";
 import { githubGet, parseOwnerRepoFromGitRemote } from "./lib/github-rest.mjs";
 import {
 	changedHookAnchors,
@@ -50,15 +53,33 @@ const TEMPLATE_FILE = resolve(
 // tests build carry no `formal/` tree, and a diff path is repo-relative.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REQUIRED_SECTIONS = [
-	"Why",
+	"Summary",
 	"Notes for the reviewer",
 	"Change outline",
+	"Proof and checks",
 	"Tests",
-	"Blast radius",
 	"Class sweep",
 	"Observability",
 	"Fold check",
 ];
+// The one list of alignment families (#5026). The script keeps no copy: the
+// names are parsed from this file's table on every lint.
+const ALIGNMENT_FAMILIES_PATH = "docs/alignment-families.md";
+const ALIGNMENT_NONE_MIN_REASON = 12;
+// #5003: what a reader scrolls past. Code holds the required transcripts, so
+// it stays out of the character count and is capped by its own lines, width
+// and body-wide total instead. Every cap reads the lexer's token tree
+// (`lintBodyBudgets`); none is a scan for a spelling.
+const SUMMARY_MAX_SENTENCES = 3;
+const SUMMARY_MAX_CHARS = 600;
+const REVIEWER_NOTES_MAX_BULLETS = 5;
+const VISIBLE_BODY_MAX_CHARS = 5000;
+const CODE_MAX_LINES = 20;
+// A chosen bound, not a pinned measurement: the last 80 merged bodies put the
+// p90 of their widest code line at 391 columns, so 400 admits a long test path
+// and its title (verify r2 on #5026; 240 refused 28 of the 80).
+const CODE_MAX_WIDTH = 400;
+const CODE_TOTAL_MAX_LINES = 100;
 // The PR footer the template requires (.github/PULL_REQUEST_TEMPLATE.md).
 const GENERATED_FOOTER =
 	/^🤖 Generated with \[Claude Code\]\(https:\/\/claude\.com\/claude-code\)$/;
@@ -73,6 +94,7 @@ const REPAIR_HEADINGS = [
 	"Why",
 	"Notes for the reviewer",
 	"Change outline",
+	"Proof and checks",
 	"Summary",
 	"Tests",
 	"Test assessment",
@@ -90,6 +112,7 @@ const CORRUPTED_HEADING_TAILS = [
 	"hy",
 	"otes for the reviewer",
 	"hange outline",
+	"roof and checks",
 	"ummary",
 	"ests",
 	"est assessment",
@@ -104,11 +127,13 @@ const CORRUPTED_IDENTIFIER_TAILS = ["etchOpenPullRequests", "px"];
 // Fleet census from the review of 11 bodies: ## OBSERVABILITY x5,
 // ## what changed x6, ## verification x7, and ## Summary x1. “What changed”
 // (with or without “and why”) satisfies Summary; “Verification” satisfies
-// Tests. Heading matching is deliberately case-insensitive.
+// Tests. Heading matching is deliberately case-insensitive. #5003: `Why` folded
+// into `Summary` and still reads as it, so an open body keeps its structure.
 const SECTION_SYNONYMS = new Map([
-	["why", "why"],
+	["why", "summary"],
 	["notes for the reviewer", "notes for the reviewer"],
 	["change outline", "change outline"],
+	["proof and checks", "proof and checks"],
 	["summary", "summary"],
 	["problem", "summary"],
 	["what changed", "summary"],
@@ -134,8 +159,9 @@ const SECTION_SYNONYMS = new Map([
 ]);
 const REVIEW_HEADER_REPAIR_PREFIX =
 	"## Why\nLegacy body normalized for the required review contract.\n\n" +
-	"## Notes for the reviewer\nNone.\n\n" +
-	"## Change outline\n- existing body structure\n";
+	"## Notes for the reviewer\n- None.\n\n" +
+	"## Change outline\n- existing body structure\n\n" +
+	"## Proof and checks\nThe sections below hold the proof.\n";
 
 function sectionMessage(name, detail) {
 	return `PR body ${detail} "## ${name}". See ${TEMPLATE_PATH}.`;
@@ -1586,14 +1612,13 @@ function lintTestReferences(body, options = {}) {
 	};
 	const lines = visibleBody.split(/\r?\n/);
 	let tableHeaders = null;
-	const tableCells = (line) => line.split("|").map((cell) => cell.trim());
 	const isValidSeparator = (line, headers) => {
 		if (!headers) return false;
 		if (!/^\s*\|.*\|\s*$/.test(line)) return false;
-		const cells = tableCells(line);
+		const cells = splitMarkdownRow(line);
 		return (
 			cells.length === headers.length &&
-			cells.slice(1, -1).every((cell) => /^:?-{3,}:?$/.test(cell))
+			cells.every((cell) => /^:?-{3,}:?$/.test(cell))
 		);
 	};
 	for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
@@ -1604,30 +1629,33 @@ function lintTestReferences(body, options = {}) {
 		if (
 			table &&
 			lineIndex + 1 < lines.length &&
-			isValidSeparator(lines[lineIndex + 1], tableCells(line))
+			isValidSeparator(lines[lineIndex + 1], splitMarkdownRow(line))
 		) {
-			tableHeaders = tableCells(line);
+			tableHeaders = splitMarkdownRow(line);
 			continue;
 		}
 		const inTable = table && tableHeaders !== null;
 		if (inTable && isValidSeparator(line, tableHeaders)) continue;
-		for (const match of line.matchAll(/`([^`]+)`/g)) {
-			const cellIndex = inTable
-				? line.slice(0, match.index).split("|").length - 1
-				: -1;
-			const inTestColumn = Boolean(
-				// Word-boundary match (#3013): a bare "id" substring qualified
-				// every "Evidence" column as a test column, so claim-matrix
-				// evidence cells holding commands and code read as missing test
-				// references. A column names tests only when it says so as a
-				// word ("Test", "Test id", "Case").
-				inTable &&
-				/\b(?:test|probe|case|witness|id)\b/i.test(
-					tableHeaders[cellIndex] ?? "",
-				),
-			);
-			addToken(match[1], inTestColumn || (table && !inTable), inTestColumn);
-		}
+		// A table row is read cell by cell, the way GitHub splits it: a code
+		// span cannot hold an unescaped pipe, so it never spans two cells.
+		const segments = inTable
+			? splitMarkdownRow(line).map((cell, index) => [cell, index])
+			: [[line, -1]];
+		for (const [segment, cellIndex] of segments)
+			for (const match of segment.matchAll(/`([^`]+)`/g)) {
+				const inTestColumn = Boolean(
+					// Word-boundary match (#3013): a bare "id" substring qualified
+					// every "Evidence" column as a test column, so claim-matrix
+					// evidence cells holding commands and code read as missing test
+					// references. A column names tests only when it says so as a
+					// word ("Test", "Test id", "Case").
+					inTable &&
+					/\b(?:test|probe|case|witness|id)\b/i.test(
+						tableHeaders[cellIndex] ?? "",
+					),
+				);
+				addToken(match[1], inTestColumn || (table && !inTable), inTestColumn);
+			}
 		for (const match of line.matchAll(/\bit\(\s*(["'])(.*?)\1\s*\)/g))
 			if (isBullet || !inTable) addToken(match[0]);
 	}
@@ -3124,6 +3152,9 @@ function isPlaceholderAnswer(value) {
 	return /^unknown\b/.test(text) || /^(?:n\/a|tbd|\?+)$/.test(text);
 }
 
+const TABLE_SHAPE_MESSAGE = (expected, actual, row) =>
+	`PR body table row has ${actual} cell${actual === 1 ? "" : "s"} but its header has ${expected}: ${row.trim().slice(0, 80)}. GitHub splits a row at every pipe that is not written \\| (a backticked pipe too), so the row renders wrong. Escape the pipe as \\| or reword the cell.`;
+
 const BEHAVIOR_EQUIVALENCE_MESSAGE =
 	'PR body "## Behavior equivalence" must contain a markdown table with Site, Before, and After columns and at least one non-placeholder data row.';
 
@@ -3136,13 +3167,39 @@ function isBehaviorEquivalencePlaceholder(value) {
 	);
 }
 
-function behaviorTableCells(line) {
-	if (!/^\s*\|.*\|\s*$/.test(line)) return null;
-	return line
-		.trim()
-		.slice(1, -1)
-		.split("|")
-		.map((cell) => cell.trim());
+// A pipe-table row's cells, or null when the line is not a bordered table row.
+function tableRowCells(line) {
+	return /^\s*\|.*\|\s*$/.test(line) ? splitMarkdownRow(line) : null;
+}
+
+// A row whose cell count differs from its header's renders wrong on GitHub: an
+// unescaped pipe inside a backticked cell splits it, so the Red cell of a
+// mutation row showed a stray "`1 failed" and lost the rest (#5070 merged with
+// 12 of 15 such rows, and no lint looked). A short row is padded and a long
+// one truncated by the renderer, so either is a cell the reader never sees.
+function lintTableShape(body) {
+	const lines = sourceWithoutFencedBlocks(body).split(/\r?\n/);
+	const errors = [];
+	for (let index = 0; index + 1 < lines.length; index += 1) {
+		const headers = tableRowCells(lines[index]);
+		const separator = tableRowCells(lines[index + 1]);
+		if (
+			!headers ||
+			!separator ||
+			separator.length !== headers.length ||
+			!separator.every((cell) => /^:?-{3,}:?$/.test(cell))
+		)
+			continue;
+		for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
+			const row = tableRowCells(lines[rowIndex]);
+			if (!row) break;
+			if (row.length !== headers.length)
+				errors.push(
+					TABLE_SHAPE_MESSAGE(headers.length, row.length, lines[rowIndex]),
+				);
+		}
+	}
+	return errors;
 }
 
 function lintBehaviorEquivalence(body, headings, title) {
@@ -3161,7 +3218,7 @@ function lintBehaviorEquivalence(body, headings, title) {
 		nextHeading?.index ?? lines.length,
 	);
 	for (let index = 0; index + 1 < tableLines.length; index += 1) {
-		const headers = behaviorTableCells(tableLines[index]);
+		const headers = tableRowCells(tableLines[index]);
 		if (!headers) continue;
 		const normalizedHeaders = headers.map((header) => header.toLowerCase());
 		const site = normalizedHeaders.indexOf("site");
@@ -3182,7 +3239,7 @@ function lintBehaviorEquivalence(body, headings, title) {
 			rowIndex < tableLines.length;
 			rowIndex += 1
 		) {
-			const row = behaviorTableCells(tableLines[rowIndex]);
+			const row = tableRowCells(tableLines[rowIndex]);
 			if (!row) break;
 			if (row.length < headers.length) continue;
 			if (
@@ -3969,11 +4026,7 @@ function controlsNameFile(rows, file) {
 	return rows.some((row) => {
 		if (!namesFile(row, file)) return false;
 		if (/^\s*\|/.test(row)) {
-			const cells = row
-				.split("|")
-				.slice(1, -1)
-				.map((cell) => cell.trim())
-				.filter(Boolean);
+			const cells = splitMarkdownRow(row).filter(Boolean);
 			return cells.length >= 2 && wordCount(cells.join(" ")) >= 2;
 		}
 		return /(?:—|:|because)\s+[A-Za-z0-9].+/.test(row);
@@ -4072,10 +4125,7 @@ function mutationTableRows(visibleRows, headingByLine) {
 		if (!mutationSection || !row.trim()) continue;
 		if (/^\s*\|/.test(row)) {
 			if (/^\s*\|[\s:|-]+\|?\s*$/.test(row)) continue;
-			const cells = row
-				.split("|")
-				.slice(1, -1)
-				.map((cell) => cell.trim());
+			const cells = splitMarkdownRow(row);
 			const label = (cells.at(-1) ?? "").replace(/`/g, "").trim();
 			rows.push({
 				text: row,
@@ -4365,6 +4415,232 @@ function lintDiffCompliance(body, options) {
 	return errors;
 }
 
+// ASCII whitespace only: a no-break space renders as space the reader scrolls past.
+const collapsedLength = (text) =>
+	String(text ?? "").replace(/[ \t\r\n]+/g, " ").length;
+// A link destination is not rendered text, so only what exceeds an ordinary URL is charged.
+const LINK_DESTINATION_ALLOWANCE = 200;
+
+/**
+ * What the body costs a reader, from the lexer's tokens (#5003, #5026). Known
+ * kinds are charged for the text they render: prose and code spans count as
+ * visible characters, and a `code` token is measured on its own (lines, widest
+ * line, total). Fail closed: a token kind this function does not list, raw
+ * HTML (a tag, a comment, a `<details>` block), a reference definition, an
+ * image, a hard line break and a rule are charged for their whole `raw`, never
+ * for nothing; a link also pays for a long destination and its title. A container whose
+ * children the lexer did not place is charged the same way.
+ */
+function tallyTokens(tokens, tally) {
+	for (const token of tokens) {
+		switch (token.type) {
+			case "space":
+				break;
+			case "code": {
+				const rows = token.raw.replace(/\n+$/, "").split("\n");
+				tally.code.push({
+					lines: token.text === "" ? 0 : token.text.split("\n").length,
+					width: Math.max(...rows.map((row) => row.length)),
+				});
+				break;
+			}
+			case "codespan":
+			case "escape":
+				tally.chars += collapsedLength(token.text);
+				break;
+			case "text":
+			case "paragraph":
+			case "heading":
+			case "blockquote":
+			case "list":
+			case "list_item":
+			case "table":
+			case "strong":
+			case "em":
+			case "del":
+			case "link": {
+				const kids = markdownChildren(token);
+				if (kids.length) tallyTokens(kids, tally);
+				else tally.chars += collapsedLength(token.raw);
+				if (token.type === "link")
+					tally.chars +=
+						Math.max(
+							0,
+							String(token.href ?? "").length - LINK_DESTINATION_ALLOWANCE,
+						) + collapsedLength(token.title);
+				break;
+			}
+			default:
+				tally.chars += collapsedLength(token.raw);
+		}
+	}
+	return tally;
+}
+
+/** A Summary paragraph as the reader reads it: code spans kept, raw HTML and images dropped. */
+function summaryText(tokens) {
+	return tokens
+		.map((token) => {
+			if (token.type === "codespan") return token.raw;
+			if (token.type === "br") return " ";
+			if (token.type === "html" || token.type === "image") return "";
+			const kids = markdownChildren(token);
+			return kids.length ? summaryText(kids) : (token.text ?? token.raw ?? "");
+		})
+		.join("");
+}
+
+/**
+ * Does a Summary section hold what the template admits: paragraphs only, one
+ * to SUMMARY_MAX_SENTENCES sentences, at most SUMMARY_MAX_CHARS characters?
+ * Every other token kind refuses (a list, a table, code, raw HTML, a nested
+ * heading). The sentence count keeps its abbreviation tolerance (#3262): a
+ * sentence that starts in lower case counts with the one before it, so the
+ * character cap, not the count, is what bounds a Summary written that way.
+ */
+function summaryAdmitted(tokens) {
+	if (
+		!tokens.every(
+			(token) => token.type === "paragraph" || token.type === "space",
+		)
+	)
+		return false;
+	const sentences = countSentenceTerminators(
+		tokens.map((token) => summaryText(token.tokens ?? [])),
+	);
+	return (
+		sentences >= 1 &&
+		sentences <= SUMMARY_MAX_SENTENCES &&
+		tallyTokens(tokens, { chars: 0, code: [] }).chars <= SUMMARY_MAX_CHARS
+	);
+}
+
+/**
+ * Does the reviewer-notes section hold what the template admits: exactly one
+ * list of at most REVIEWER_NOTES_MAX_BULLETS items, each holding text or
+ * paragraphs and a task checkbox, nothing nested? Every other token kind
+ * refuses, so a spelling nobody listed (a paragraph, `1)`, an indent, a quote,
+ * a pipe-less table) is refused too.
+ */
+function notesAdmitted(tokens) {
+	const content = tokens.filter((token) => token.type !== "space");
+	if (content.length === 0) return true;
+	const [list] = content;
+	return (
+		content.length === 1 &&
+		list.type === "list" &&
+		list.items.length <= REVIEWER_NOTES_MAX_BULLETS &&
+		list.items.every((item) =>
+			item.tokens.every((token) =>
+				["text", "paragraph", "space", "checkbox"].includes(token.type),
+			),
+		)
+	);
+}
+
+/**
+ * The family names of `docs/alignment-families.md`: the text before the first
+ * colon in the Family column of its table. A file with no such table throws,
+ * so a gate that cannot read the list never reads a body as clean.
+ */
+function alignmentFamilies() {
+	const table = markdownTokens(
+		readFileSync(resolve(REPO_ROOT, ALIGNMENT_FAMILIES_PATH), "utf8"),
+	)
+		.map(({ token }) => token)
+		.find((token) => token.type === "table");
+	const names = (table?.rows ?? []).map((row) =>
+		String(row[1]?.text ?? "")
+			.split(":")[0]
+			.trim(),
+	);
+	if (
+		table?.header[1]?.text !== "Family" ||
+		names.length === 0 ||
+		names.some((name) => !name || name.includes(","))
+	)
+		throw new Error(
+			`${ALIGNMENT_FAMILIES_PATH} holds no readable family table`,
+		);
+	return names;
+}
+
+/**
+ * `### Class sweep` carries exactly one `Alignment:` line (#5026): the family
+ * names the change touches, comma-separated and spelled as in
+ * `docs/alignment-families.md`, or `none: <reason>` with a reason of at least
+ * ALIGNMENT_NONE_MIN_REASON characters. Fail closed: anything else refuses,
+ * a bare `none` and the template's own placeholder included.
+ */
+function lintAlignmentLine(sweepLines) {
+	const found = sweepLines
+		.map((line) => /^Alignment:(.*)$/.exec(line.trim())?.[1])
+		.filter((value) => value !== undefined);
+	const names = alignmentFamilies();
+	const message = `PR body "Class sweep" needs exactly one line "Alignment: <family names, comma-separated>" or "Alignment: none: <reason of ${ALIGNMENT_NONE_MIN_REASON}+ characters>". Families: ${names.join("; ")}. See ${ALIGNMENT_FAMILIES_PATH}.`;
+	if (found.length !== 1) return [message];
+	const value = found[0].trim();
+	if (value.startsWith("none:"))
+		return value.slice(5).trim().length >= ALIGNMENT_NONE_MIN_REASON
+			? []
+			: [message];
+	const listed = value.split(",").map((name) => name.trim());
+	return listed.every((name) => names.includes(name)) ? [] : [message];
+}
+
+function lintBodyBudgets(body) {
+	const errors = [];
+	const blocks = markdownTokens(body);
+	const tally = tallyTokens(
+		blocks.map(({ token }) => token),
+		{ chars: 0, code: [] },
+	);
+	if (tally.chars > VISIBLE_BODY_MAX_CHARS)
+		errors.push(
+			`PR body is ${tally.chars} visible characters, over the ${VISIBLE_BODY_MAX_CHARS} cap. Cut narrative and tables; see ${TEMPLATE_PATH}.`,
+		);
+	const longest = Math.max(0, ...tally.code.map(({ lines }) => lines));
+	if (longest > CODE_MAX_LINES)
+		errors.push(
+			`PR body has a ${longest}-line code fence or block, over the ${CODE_MAX_LINES} cap. Quote only the failing lines; see ${TEMPLATE_PATH}.`,
+		);
+	const widest = Math.max(0, ...tally.code.map(({ width }) => width));
+	if (widest > CODE_MAX_WIDTH)
+		errors.push(
+			`PR body has a code line of ${widest} characters, over the ${CODE_MAX_WIDTH} cap. Cut it to the failing part; see ${TEMPLATE_PATH}.`,
+		);
+	const total = tally.code.reduce((sum, { lines }) => sum + lines, 0);
+	if (total > CODE_TOTAL_MAX_LINES)
+		errors.push(
+			`PR body has ${total} code lines in all, over the ${CODE_TOTAL_MAX_LINES} cap. Give each changed test file its failing lines only; see ${TEMPLATE_PATH}.`,
+		);
+	const headings = bodyHeadings(body);
+	const tokensOf = (heading) => {
+		const end =
+			headings.find(
+				(candidate) =>
+					candidate.index > heading.index && candidate.level <= heading.level,
+			)?.index ?? Number.POSITIVE_INFINITY;
+		return blocks
+			.filter(({ line }) => line >= heading.contentIndex && line < end)
+			.map(({ token }) => token);
+	};
+	for (const heading of headings)
+		if (hasSection(heading, "summary") && !summaryAdmitted(tokensOf(heading)))
+			errors.push(
+				`PR body "## ${heading.name}" must hold plain paragraphs of one to ${SUMMARY_MAX_SENTENCES} sentences and at most ${SUMMARY_MAX_CHARS} characters, with no list, table, code or HTML. See ${TEMPLATE_PATH}.`,
+			);
+	for (const heading of headings)
+		if (
+			hasSection(heading, "notes for the reviewer") &&
+			!notesAdmitted(tokensOf(heading))
+		)
+			errors.push(
+				`PR body "## Notes for the reviewer" allows at most ${REVIEWER_NOTES_MAX_BULLETS} bullets in one flat list and nothing else. Move proof under "## Proof and checks"; see ${TEMPLATE_PATH}.`,
+			);
+	return errors;
+}
+
 export function lintPrBody(body = "", options = {}) {
 	// The same lexer headings and section text `sectionContent` reads (#4717):
 	// a section GitHub hides in a comment or a raw-HTML block is a missing
@@ -4375,24 +4651,23 @@ export function lintPrBody(body = "", options = {}) {
 	const placeholders = templatePlaceholderLines();
 	const structure = headingLines(body, headings).name;
 	const errors = options.diff ? lintDiffCompliance(body, options) : [];
-	const summary = headings.find((heading) => hasSection(heading, "summary"));
+	const lead = headings.find((heading) => hasSection(heading, "summary"));
 	const firstHeading = headings[0]?.index ?? lines.length;
 	const nextSectionHeading = (heading) =>
 		headings.find(
 			(candidate) =>
 				candidate.index > heading.index && candidate.level <= heading.level,
 		);
-	const summaryEnd = summary
-		? (nextSectionHeading(summary)?.index ?? lines.length)
-		: 0;
+	const leadEnd = lead ? (nextSectionHeading(lead)?.index ?? lines.length) : 0;
 	if (
-		(!summary ||
+		!options.workingTree &&
+		(!lead ||
 			!hasRealContent(
-				lines.slice(summary.contentIndex, summaryEnd),
+				lines.slice(lead.contentIndex, leadEnd),
 				"summary",
 				placeholders,
 				structure,
-				summary.contentIndex,
+				lead.contentIndex,
 			)) &&
 		!hasRealContent(
 			lines.slice(0, firstHeading),
@@ -4404,18 +4679,13 @@ export function lintPrBody(body = "", options = {}) {
 		errors.push(`PR body is missing a Summary section. See ${TEMPLATE_PATH}.`);
 	}
 
-	// Value discipline (HISTORY.md "Test assessment and removal (value discipline)"): a PR that
-	// touches tests/ must say, per touched file, what it uniquely pins and
-	// what became redundant. Conditional because docs/production-only PRs owe
-	// nothing here.
 	// The exported structural linter is also used by focused tests and historical
 	// repair fixtures. The repository-facing local gate is the contract that
-	// requires the new header trio; keeping that switch explicit avoids changing
-	// the meaning of lower-level parser tests.
+	// requires the header sections and the caps; keeping that switch explicit
+	// avoids changing the meaning of lower-level parser tests.
 	const requiredSections = options.workingTree
 		? [...REQUIRED_SECTIONS]
-		: ["Tests", "Blast radius", "Class sweep", "Observability"];
-	if (options.requireTestAssessment) requiredSections.push("Test assessment");
+		: ["Tests", "Class sweep", "Observability"];
 	// #4288: only a bug-closing PR owes the detection retrospective. The
 	// tri-state resolution lives at the callers; `true` is the only value that
 	// requires the section, so an unreadable label never blocks.
@@ -4447,18 +4717,20 @@ export function lintPrBody(body = "", options = {}) {
 				sectionMessage(name, "has no content before the next heading"),
 			);
 	}
-	const why = headings.find((heading) => hasSection(heading, "why"));
-	if (why) {
-		const nextHeading = nextSectionHeading(why);
-		const whyLines = rawLines.slice(
-			why.contentIndex,
-			nextHeading?.index ?? lines.length,
+	if (options.workingTree) {
+		errors.push(...lintBodyBudgets(body));
+		errors.push(...lintTableShape(body));
+		const sweep = headings.find((heading) =>
+			hasSection(heading, "class sweep"),
 		);
-		if (countSentenceTerminators(whyLines) !== 1)
+		if (sweep)
 			errors.push(
-				'PR body "## Why" must contain exactly one sentence. See ' +
-					TEMPLATE_PATH +
-					".",
+				...lintAlignmentLine(
+					lines.slice(
+						sweep.contentIndex,
+						nextSectionHeading(sweep)?.index ?? lines.length,
+					),
+				),
 			);
 	}
 	if (options.bugClosing)
@@ -4531,45 +4803,6 @@ export async function resolveLivePrBody(
 			`::warning::Could not fetch the live PR body; using the event payload instead (${error instanceof Error ? error.message : error}).`,
 		);
 		return normalizePrBodyForChecking(payloadPr.body ?? "", payloadPr.number);
-	}
-}
-
-/**
- * True when the PR touches any file under tests/. Advisory best-effort: one
- * page of 100 files covers this repo's PR sizes; on any failure (including a
- * PR larger than the page, detected via the Link header) return null so the
- * caller SKIPS the conditional check rather than guessing — a lint that can
- * misfire on fetch trouble teaches people to ignore it.
- */
-export async function resolveTouchesTests(
-	payloadPr,
-	fetchImpl = globalThis.fetch,
-) {
-	try {
-		const response = await githubGet(
-			`/pulls/${payloadPr.number}/files?per_page=100`,
-			fetchImpl,
-		);
-		if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
-		if (/rel="next"/.test(response.headers.get("link") ?? ""))
-			throw new Error(
-				"PR exceeds one file page; skipping the conditional check",
-			);
-		const files = await response.json();
-		if (!Array.isArray(files))
-			throw new Error("GitHub API returned no file list");
-		return files.some(
-			(file) =>
-				(file.filename ?? "").startsWith("tests/") ||
-				// A rename OUT of tests/ reports only the new path in filename; a
-				// removal PR is exactly what the assessment exists to catch.
-				(file.previous_filename ?? "").startsWith("tests/"),
-		);
-	} catch (error) {
-		console.warn(
-			`::warning::Could not resolve the PR file list; skipping the Test assessment check (${error instanceof Error ? error.message : error}).`,
-		);
-		return null;
 	}
 }
 
@@ -4755,13 +4988,7 @@ function eventPayload() {
 	}
 }
 
-/**
- * The full live lint: resolve body and file list, then lint. The tri-state
- * from resolveTouchesTests is consumed HERE: only an affirmative true
- * requires the Test assessment section — null (fetch trouble) and false
- * (no tests/ files) both skip it, so a flaky fetch can never misfire the
- * check (#2124 review F2 pinned this consumption).
- */
+/** The full live lint: resolve the body and the diff, then lint. */
 export async function lintPullRequestEvent(
 	fetchImpl = globalThis.fetch,
 	event = eventPayload(),
@@ -4780,8 +5007,6 @@ export async function lintPullRequestEvent(
 	// title stands in only when the live fetch fell back (#4976).
 	const title = live.title ?? pullRequest.title;
 	const body = authorText(fullBody);
-	const requireTestAssessment =
-		(await resolveTouchesTests(pullRequest, fetchImpl)) === true;
 	// #4288: a bug-closing PR owes a detection retrospective. The label read is
 	// best-effort; an unreadable label warns and skips the requirement.
 	let bugClosing = null;
@@ -4811,7 +5036,6 @@ export async function lintPullRequestEvent(
 		throw new Error(`diff unavailable: ${reason}`);
 	}
 	const result = lintPrBody(body, {
-		requireTestAssessment,
 		bugClosing: bugClosing === true || bugReferenced === true,
 		existsOnBase: baseFileReader(),
 		shapeCatalog: shapeCatalogReader(),
@@ -5017,29 +5241,6 @@ export function lintWorkflowRunEvidence(
 	return [...errors, ...unreadable];
 }
 
-export function localTouchesTests(cwd = process.cwd(), git = gitExecFileSync) {
-	let names;
-	try {
-		names = git(["diff", "--name-only", "origin/master...HEAD"], {
-			cwd,
-			encoding: "utf8",
-		});
-	} catch {
-		try {
-			names = git(["diff", "--name-only", "HEAD~1"], {
-				cwd,
-				encoding: "utf8",
-			});
-		} catch {
-			// #2904 round 2 recurrence: shallow or single-commit repositories may
-			// have neither range; require assessment because assuming no test changes
-			// would weaken the lint.
-			return true;
-		}
-	}
-	return names.split(/\r?\n/).some((name) => name.startsWith("tests/"));
-}
-
 /**
  * True when the checkout has no `origin/master` at all (a shallow or uncloned
  * base). The diff cannot be read there for a reason the #4404 hint names, and
@@ -5106,7 +5307,6 @@ export function lintLocalPrBody(
 	const existsOnBase = baseFileReader(cwd, git);
 	const shapeCatalog = shapeCatalogReader(cwd, git);
 	const result = lintPrBody(body, {
-		requireTestAssessment: localTouchesTests(cwd, git),
 		bugClosing: bugClosing === true || bugReferenced === true,
 		existsOnBase,
 		shapeCatalog,
