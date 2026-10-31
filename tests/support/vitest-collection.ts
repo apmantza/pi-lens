@@ -25,7 +25,7 @@ import vitestConfig from "../../vitest.config.ts";
 interface Matcher {
 	paths: Set<string>;
 	directories: string[];
-	globs: RegExp[];
+	globs: Minimatch[];
 }
 
 interface ProjectGlobs {
@@ -41,10 +41,10 @@ function compile(
 ): Matcher {
 	const paths = new Set<string>();
 	const directories: string[] = [];
-	const globs: RegExp[] = [];
+	const globs: Minimatch[] = [];
 	for (const pattern of patterns) {
 		const glob = GLOB_CHARACTER.test(pattern)
-			? new Minimatch(pattern, { dot: true }).makeRe()
+			? new Minimatch(pattern, { dot: true })
 			: false;
 		if (glob) globs.push(glob);
 		else {
@@ -59,7 +59,7 @@ function compile(
 const matches = (matcher: Matcher, relativePath: string): boolean =>
 	matcher.paths.has(relativePath) ||
 	matcher.directories.some((directory) => relativePath.startsWith(directory)) ||
-	matcher.globs.some((glob) => glob.test(relativePath));
+	matcher.globs.some((glob) => glob.match(relativePath));
 
 /** The `test` block of a vitest config, as far as collection reads it. */
 export interface VitestTestBlock {

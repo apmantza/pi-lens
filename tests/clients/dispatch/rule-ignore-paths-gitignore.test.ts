@@ -306,3 +306,23 @@ describe("ruleIgnoredForPath on a policy map built from bare strings (#5029)", (
 		expect(verdict(patterns, "src/c.ts")).toBe(false);
 	});
 });
+
+describe("a zero-width extglob entry on a directory walk (#5129)", () => {
+	// Recurrence: minimatch 10 matched the trailing-slash directory candidate
+	// (`legacy/`) against a zero-width extglob such as `?(x)`, so the entry hid
+	// every directory from the walkers that call `isIgnored(dir, true)`
+	// (source-walker, pipeline, workspace-modules); minimatch 11 (the
+	// GHSA-g3hv-75wg-m249 bump) leaves an empty path portion to an empty
+	// pattern portion. Git reads `?(x)` as one character then `(x)`, which
+	// names none of these directories.
+	it.each(["?(x)", "*(x)"])("%s hides no directory", (entry) => {
+		fs.mkdirSync(path.join(repo, "legacy", "sub"), { recursive: true });
+		writeConfig(repo, { ignore: [entry] });
+		const matcher = getProjectIgnoreMatcher(repo);
+
+		expect(matcher.isIgnored(path.join(repo, "legacy"), true)).toBe(false);
+		expect(matcher.isIgnored(path.join(repo, "legacy", "sub"), true)).toBe(
+			false,
+		);
+	});
+});
