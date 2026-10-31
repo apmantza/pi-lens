@@ -33,8 +33,8 @@ import { describe, expect, it, vi } from "vitest";
  */
 const gate = vi.hoisted(() => ({
 	holdMs: 0,
-	/** A handler that finishes at once having collected this notice. */
-	fastNotice: undefined as string | undefined,
+	/** A handler that, after `holdMs`, finishes having collected these notices. */
+	fakeNotices: undefined as string[] | undefined,
 	pending: [] as Promise<void>[],
 	results: [] as Array<{ command: string; text: string }>,
 }));
@@ -47,9 +47,16 @@ vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 			deps: Parameters<typeof actual.handleToolResult>[0],
 		) => {
 			if (deps.event.toolName !== "bash") return actual.handleToolResult(deps);
-			if (gate.fastNotice !== undefined) {
-				deps.withheldNotices?.push(gate.fastNotice);
-				return undefined;
+			if (gate.fakeNotices !== undefined) {
+				const notices = gate.fakeNotices;
+				const fake = (async () => {
+					if (gate.holdMs > 0)
+						await new Promise((resolve) => setTimeout(resolve, gate.holdMs));
+					deps.withheldNotices?.push(...notices);
+					return undefined;
+				})();
+				gate.pending.push(fake);
+				return fake;
 			}
 			const work = (async () => {
 				if (gate.holdMs > 0)
@@ -284,7 +291,9 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 			// The tool result already carried the disclosure: a second copy at the
 			// next context call would be noise.
 			gate.results.length = 0;
-			gate.fastNotice = "\u26a0 1 blocking finding in fast.ts withheld: test";
+			gate.fakeNotices = [
+				"\u26a0 1 blocking finding in fast.ts withheld: test",
+			];
 			try {
 				const repo = initRepo("in-bound");
 				const rowsBefore = await lateAdvisoryRows();
@@ -306,7 +315,7 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 				expect(everyText(handle.requests)).not.toContain("fast.ts withheld");
 				expect(handle.errors).toEqual([]);
 			} finally {
-				gate.fastNotice = undefined;
+				gate.fakeNotices = undefined;
 			}
 		},
 	);
@@ -345,6 +354,45 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 				expect(handle.errors).toEqual([]);
 			} finally {
 				gate.holdMs = 0;
+			}
+		},
+	);
+	it(
+		"bounds the queued advisory to five notices and counts the rest",
+		{ timeout: 60_000 },
+		async () => {
+			// A script that writes many files must not queue an unbounded message.
+			gate.results.length = 0;
+			gate.holdMs = 700;
+			gate.fakeNotices = Array.from(
+				{ length: 7 },
+				(_, i) => `\u26a0 1 blocking finding in file${i}.ts withheld: test`,
+			);
+			try {
+				const repo = initRepo("capped");
+				const handle = await startPiSession({
+					root: fixture.root,
+					cwd: repo,
+					flags: new Map(GUARDED_FLAGS),
+					inlineFactory: async () => (await import("../index.js")).default,
+					responses: [
+						step(scriptWrite("many.ts", CLEAN_FILE), "writing"),
+						endTurn("turn 1 done"),
+						endTurn("turn 2 done"),
+					],
+				});
+				await handle.prompt("write the files with a script");
+				await Promise.all(gate.pending);
+				await handle.prompt("anything else?");
+
+				const surface = everyText(handle.requests);
+				expect(surface).toContain("file4.ts withheld");
+				expect(surface).not.toContain("file5.ts withheld");
+				expect(surface).toContain("+2 more");
+				expect(handle.errors).toEqual([]);
+			} finally {
+				gate.holdMs = 0;
+				gate.fakeNotices = undefined;
 			}
 		},
 	);
