@@ -724,7 +724,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_symbol_search",
 		description:
-			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before pilens_module_report.",
+			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before pilens_module_report. Read a listed line with offset=<line>, limit=1.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -1324,13 +1324,16 @@ async function callTool(
 		// #5104: one renderer owns the text (clients/lens-engine.ts). Passing no
 		// structured payload keeps renderToolText from appending a fenced JSON
 		// copy of the same hits; the ranked table is the answer.
+		const stalenessNote = graphStalenessNote(
+			result.snapshotGeneratedAt,
+			"Project snapshot",
+		);
 		return toolText(
 			renderCompactSymbolSearch(result, {
 				cwd,
-				stalenessNote: graphStalenessNote(
-					result.snapshotGeneratedAt,
-					"Project snapshot",
-				),
+				// exactOptionalPropertyTypes: an absent note is an absent key.
+				...(stalenessNote ? { stalenessNote } : {}),
+				reportTool: "pilens_module_report",
 			}),
 		);
 	}

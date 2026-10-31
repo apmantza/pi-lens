@@ -27,7 +27,11 @@ import {
 	triggerBackgroundWordIndexBuild,
 	_resetWordIndexBuildGuardForTests,
 } from "../../clients/word-index.js";
-import { symbolSearch } from "../../clients/lens-engine.js";
+import {
+	renderCompactSymbolSearch,
+	symbolSearch,
+	type SymbolSearchResult,
+} from "../../clients/lens-engine.js";
 import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
@@ -291,7 +295,7 @@ describe("symbol_search tool", () => {
 			expect(ranked).toHaveLength(1);
 			expect(ranked[0]?.file).toBe("src/auth.ts"); // relative to cwd, not repeated/absolute
 			expect(ranked[0]?.detail).toMatch(/^score \d+\.\d{2}, \d+ hit\(s\)/);
-			expect(text).toContain("line ");
+			expect(ranked[0]?.line).toBeGreaterThan(0);
 		} finally {
 			env.cleanup();
 		}
@@ -453,6 +457,9 @@ describe("symbol_search tool", () => {
 				expect(rankedFiles(text).sort()).toEqual(
 					["scripts/authenticate.py", "src/auth/login.ts"].sort(),
 				);
+				// The footer names the TOP-ranked hit, through the pi tool spelling.
+				expect(text).toContain(`Next: module_report ${rankedFiles(text)[0]}`);
+				expect(text).not.toContain("pilens_module_report");
 			} finally {
 				env.cleanup();
 			}
@@ -742,7 +749,11 @@ describe("symbol_search tool", () => {
 				);
 				const text = String(result.content[0]?.text);
 				expectOneTable(text);
-				expect(rows(text).length).toBeGreaterThan(0);
+				const ranked = rows(text);
+				expect(ranked.length).toBeGreaterThan(0);
+				for (const hit of ranked) {
+					expect(hit.detail).not.toMatch(/fanIn|complexity/);
+				}
 				// The read-only accessor must not have built/cached a graph as a
 				// side effect of this call.
 				expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
@@ -794,10 +805,113 @@ describe("symbol_search tool", () => {
 				expectOneTable(text);
 				const ranked = rows(text);
 				expect(ranked.length).toBeGreaterThan(0);
-				expect(ranked[0]?.detail).toMatch(/hit\(s\)/);
+				expect(ranked[0]?.detail).toMatch(/, fanIn \d+/);
 			} finally {
 				env.cleanup();
 			}
+		});
+	});
+
+	// #5104 commit 2: one row shape, and a footer that names the top-ranked hit.
+	// The renderer is driven directly so the annotations are exact — the review
+	// graph annotates every hit it sees, so a tool-level fixture cannot produce
+	// "one annotated hit".
+	describe("renderCompactSymbolSearch row and footer shape (#5104)", () => {
+		const cwd = path.resolve("pi-lens-symbolsearch-golden");
+		const hit = (
+			relPath: string,
+			line: number,
+			score: number,
+			hits: number,
+			annotations?: { fanIn: number; complexity?: number },
+		) => ({
+			file: path.join(cwd, ...relPath.split("/")),
+			score,
+			hits,
+			startLine: line,
+			endLine: line,
+			...(annotations ? { annotations } : {}),
+		});
+		const result = (
+			results: ReturnType<typeof hit>[],
+			truncated = false,
+		): SymbolSearchResult => ({
+			available: true,
+			query: "authenticate user",
+			results,
+			coverage: { files: 12, truncated },
+		});
+		const first = path.relative(
+			cwd,
+			hit("src/auth/login.ts", 12, 0.82, 3).file,
+		);
+		const second = path.relative(
+			cwd,
+			hit("scripts/authenticate.py", 3, 0.51, 2).file,
+		);
+
+		it("renders the exact 2-hit golden with one annotated hit", () => {
+			const text = renderCompactSymbolSearch(
+				result([
+					hit("src/auth/login.ts", 12, 0.82, 3, { fanIn: 4, complexity: 7 }),
+					hit("scripts/authenticate.py", 3, 0.51, 2),
+				]),
+				{ cwd },
+			);
+			expect(text).toBe(
+				[
+					'Top 2 file(s) for "authenticate user":',
+					`  1. ${first} 12 (score 0.82, 3 hit(s), fanIn 4, complexity 7)`,
+					`  2. ${second} 3 (score 0.51, 2 hit(s))`,
+					"",
+					"Index covers 12 files.",
+					`Next: module_report ${first}`,
+				].join("\n"),
+			);
+		});
+
+		it("names the adapter's own outline tool in the next-step line", () => {
+			const results = [
+				hit("src/auth/login.ts", 12, 0.82, 3),
+				hit("scripts/authenticate.py", 3, 0.51, 2),
+			];
+			const pi = renderCompactSymbolSearch(result(results), { cwd });
+			const mcp = renderCompactSymbolSearch(result(results), {
+				cwd,
+				reportTool: "pilens_module_report",
+			});
+			expect(pi).toContain(`Next: module_report ${first}`);
+			expect(mcp).toContain(`Next: pilens_module_report ${first}`);
+			expect(mcp).not.toMatch(/^Next: module_report /m);
+		});
+
+		it("renders fanIn 0, which means no known importers", () => {
+			const text = renderCompactSymbolSearch(
+				result([hit("src/auth/login.ts", 12, 0.5, 1, { fanIn: 0 })]),
+				{ cwd },
+			);
+			expect(text).toContain("(score 0.50, 1 hit(s), fanIn 0)");
+		});
+
+		it("renders a complexity of 0 rather than dropping a present annotation", () => {
+			const text = renderCompactSymbolSearch(
+				result([
+					hit("src/auth/login.ts", 12, 0.5, 1, { fanIn: 2, complexity: 0 }),
+				]),
+				{ cwd },
+			);
+			expect(text).toContain("(score 0.50, 1 hit(s), fanIn 2, complexity 0)");
+		});
+
+		it("prints coverage before the next step, and no next step on an empty answer", () => {
+			const capped = renderCompactSymbolSearch(result([], true), { cwd });
+			expect(capped).toBe(
+				[
+					'No files matched "authenticate user".',
+					"",
+					"Index covers 12 files (capped — results may be incomplete).",
+				].join("\n"),
+			);
 		});
 	});
 });

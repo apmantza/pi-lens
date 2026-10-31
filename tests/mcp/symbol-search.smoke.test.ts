@@ -136,7 +136,10 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		expect(text).not.toContain("```");
 		expect(text).toContain("Index covers 1 files.");
 		expect(rankedFiles(text)).toEqual(["auth.ts"]);
-		expect(text).toMatch(/^ {2}\d+\. auth\.ts /m);
+		expect(text).toMatch(/^ {2}\d+\. auth\.ts \d+ \(score /m);
+		// The footer names the top-ranked hit through the MCP tool spelling.
+		expect(text).toContain("Next: pilens_module_report auth.ts");
+		expect(text).not.toMatch(/^Next: module_report /m);
 	}, 30_000);
 
 	it("returns available:false with an actionable hint when no index exists for cwd", async () => {
