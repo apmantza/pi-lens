@@ -239,4 +239,36 @@ describe("prose rules warn, structural rules still fail (#5110)", () => {
 		expect(result.valid).toBe(false);
 		expect(result.errors.join(" ")).toContain('is missing "## Observability"');
 	});
+	it("still fails a title-case heading through the lint (#5110)", () => {
+		// Recurrence it prevents: the lint stops pushing prose errors, so the one
+		// prose rule that still blocks (title-case headings) passes silently.
+		// Only checkProse read it before this pin.
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+		const text = body("The fixture is short.").replace(
+			"## Notes for the reviewer",
+			"## Notes For The Reviewer",
+		);
+		const result = lintPrBody(text, { workingTree: true });
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("PR body prose heading-case");
+	});
+
+	it("demotes a title-case heading in grace mode, and only headings (#5110)", () => {
+		// Recurrence it prevents: grace mode (PI_LENS_PROSE_GRACE, --prose-grace)
+		// stops reaching the heading rule, or it demotes a structural error too.
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const titleCase = body("The fixture is short.").replace(
+			"## Notes for the reviewer",
+			"## Notes For The Reviewer",
+		);
+		expect(
+			lintPrBody(titleCase, { workingTree: true, proseMode: "warn" }),
+		).toEqual({ valid: true, errors: [] });
+		const printed = warn.mock.calls.map(([line]) => String(line)).join("\n");
+		expect(printed).toContain("PR body prose warning: heading-case");
+		expect(
+			lintPrBody(body(forty, false), { workingTree: true, proseMode: "warn" })
+				.valid,
+		).toBe(false);
+	});
 });
