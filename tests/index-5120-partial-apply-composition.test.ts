@@ -167,6 +167,97 @@ describe("#5120: a partial apply reaches every pre-write guard", () => {
 		);
 	});
 
+	it("tells a later call that reuses a blocked partial apply's id nothing about that apply", async () => {
+		// RECURRENCE GUARDED: #5125 r1 F1. A later guard blocked the rewritten
+		// call, so pi emitted no tool_result for it, and the next call with the
+		// same id (Mistral's index ids) was told "1 edit committed" and failed.
+		const l = lane("reused-id", "strict");
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: l.cwd,
+			extraExtensions: { after: [l.guard] },
+			responses: [
+				step(readTarget("src/target.ts"), "reading"),
+				step(
+					fauxToolCall(
+						"edit",
+						{
+							path: "src/target.ts",
+							edits: [
+								{ oldText: MATCHED_OLD, newText: GOVERNED },
+								{ oldText: UNMATCHED_OLD, newText: "x = 1" },
+							],
+						},
+						{ id: "dup1" },
+					),
+					"editing",
+				),
+				step(
+					fauxToolCall("bash", { command: "echo hello" }, { id: "dup1" }),
+					"listing",
+				),
+				endTurn("done"),
+			],
+		});
+		await handle.prompt("edit it");
+
+		expect(fs.readFileSync(l.target, "utf8")).toBe(ORIGINAL);
+		expect(editResults(handle)[0]?.text).toContain(
+			"GUARD: governed text refused",
+		);
+		const [bash] = toolResults(handle.requests.at(-1) ?? [], "bash");
+		expect(bash?.isError).toBe(false);
+		expect(bash?.text).not.toContain("PARTIAL APPLY");
+		expect(bash?.text).toContain("hello");
+		await handle.dispose();
+	});
+
+	it("still reports the misses when a later handler rewrites the matched subset in place", async () => {
+		// RECURRENCE GUARDED: #5125 r1 F1's structural remedy. Pairing the
+		// result to the call by comparing its edits with the rewrite drops the
+		// partial apply when a later handler edits them, and the agent is never
+		// told edits[1] missed. The call's own input object pairs it.
+		const dir = path.join(fixture.root, "rewrite-in-place");
+		const cwd = path.join(dir, "proj");
+		const target = path.join(cwd, "src", "target.ts");
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.writeFileSync(target, ORIGINAL);
+		const rewriter = path.join(dir, "rewriter.mjs");
+		fs.writeFileSync(
+			rewriter,
+			[
+				`export default function (pi) {`,
+				`	pi.on("tool_call", (event) => {`,
+				`		if (event.toolName !== "edit") return;`,
+				`		for (const e of event.input.edits ?? []) e.newText = "export const initial = 99;";`,
+				`	});`,
+				`}`,
+				``,
+			].join("\n"),
+		);
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd,
+			extraExtensions: { after: [rewriter] },
+			responses: [
+				step(readTarget("src/target.ts"), "reading"),
+				step(batch(ALLOWED), "editing"),
+				endTurn("done"),
+			],
+		});
+		await handle.prompt("edit it");
+
+		expect(fs.readFileSync(target, "utf8")).toBe(
+			"export const initial = 99;\n",
+		);
+		const [result] = editResults(handle);
+		expect(result?.isError).toBe(true);
+		expect(result?.text).toContain(
+			`edits[1].oldText ("${UNMATCHED_OLD}") was not found`,
+		);
+		await handle.dispose();
+	});
+
 	it("leaves the file unchanged when a strict guard loaded before pi-lens refuses the batch", async () => {
 		// The reverse order: the guard refuses the batch it cannot preview, so
 		// pi never reaches pi-lens.

@@ -2174,17 +2174,13 @@ export async function handleToolResult(
 	deps: ToolResultDeps,
 ): Promise<ToolResultReturn> {
 	// #5120: a call whose tool_call rewrote a partly matching batch to its
-	// matched subset is taken here, before the attribution take below. The
-	// handler runs it as the edit it is, and the partial-apply message wraps
-	// its result. A re-entry (the debounce) already carries it.
+	// matched subset is found here by its own input object. The handler runs
+	// it as the edit it is, and the partial-apply message wraps its result. A
+	// re-entry (the debounce) already carries it.
 	if (deps._partialApply === undefined) {
-		const callId = resolveToolCallCorrelationId(deps.event);
-		const partialApply =
-			callId !== undefined
-				? (
-						deps.runtime as Partial<RuntimeCoordinator>
-					).toolCallPartialApply?.call(deps.runtime, callId)
-				: undefined;
+		const partialApply = (
+			deps.runtime as Partial<RuntimeCoordinator>
+		).toolCallPartialApply?.call(deps.runtime, deps.event.input);
 		if (partialApply)
 			return composePartialApplyResult(
 				partialApply,

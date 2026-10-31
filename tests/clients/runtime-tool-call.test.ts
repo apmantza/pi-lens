@@ -122,7 +122,6 @@ function baseDeps(
 		cacheManager: new CacheManager(false),
 		ensureLSPConfigInitialized: async () => {},
 		updateLspStatus: () => {},
-		resetLSPService: () => {},
 		...overrides,
 	} as Parameters<typeof handleToolCall>[0];
 }
@@ -825,6 +824,63 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 		}
 	});
 
+	it("reports PARTIAL APPLY when tool_call throws after rewriting the batch", async () => {
+		// RECURRENCE GUARDED: #5125 r1 F2. The pending was recorded after the
+		// rewrite and the guard re-run; a throw between them reached the outer
+		// catch, which lets the call run, so the host edit wrote the subset and
+		// the agent was never told edits[1] missed. The input's setter stores
+		// the rewrite and then throws, standing in for any throw after it.
+		const env = setupTestEnvironment("pi-lens-5125-mark-first-");
+		try {
+			mockPipelineSucceeds();
+			const filePath = createTempFile(
+				env.tmpDir,
+				"src/first.ts",
+				"import { A } from 'm';\nconst tail = 1;\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			readWhole(runtime, filePath);
+			const plain = mixedBatchEvent(filePath);
+			const event = {
+				...plain,
+				input: new Proxy(plain.input, {
+					set(target, key, value) {
+						Reflect.set(target, key, value);
+						if (key === "edits") throw new Error("after the rewrite");
+						return true;
+					},
+				}),
+			};
+
+			// The outer catch absorbs the throw on purpose, so this call cannot
+			// go through `runHandlerExpectingNoThrow`.
+			const call = await handleToolCall(
+				baseDeps({ runtime, ctx: { cwd: env.tmpDir }, event }),
+			);
+			const host = await hostEdit(env.tmpDir, event);
+			const result = await toolResult(runtime, event, host);
+			const text = (result?.content ?? [])
+				.map((part) => part.text ?? "")
+				.join("\n");
+
+			expect(call).toBeUndefined();
+			expect(
+				getDegradationSummary().find(
+					(entry) => entry.kind === "tool-call-handler-throw",
+				)?.latestReasons[0]?.reason,
+			).toBe("after the rewrite");
+			expect(host.isError).toBe(false);
+			expect(text).toMatch(
+				/^⚠️ PARTIAL APPLY — 1 edit committed \(edits\[0\]\)/,
+			);
+			expect(text).toContain('edits[1].oldText ("function gone() {}")');
+		} finally {
+			resetDegradationLedger();
+			env.cleanup();
+		}
+	});
+
 	it("hands the host edit the raw span a normalization tier matched", async () => {
 		// #1053: the bytes replaced are the span the preflight approved, never a
 		// re-search of the agent's normalized text: the file has an en dash and
@@ -1019,34 +1075,43 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 		}
 	});
 
-	it("blocks a mixed batch with the whole verdict when the call has no id", async () => {
-		// No id, no tool_result to report the partial apply in: the batch fails
-		// whole, as the host edit would fail it, and the input is left alone.
+	it("reports PARTIAL APPLY for a call with no id, found by its own input", async () => {
+		// The pending is keyed by the call's input object, not its id (#5125
+		// r1 F1), so a call with no id reaches its tool_result like any other.
 		const env = setupTestEnvironment("pi-lens-5120-no-id-");
 		try {
-			const original = "import { A } from 'm';\nconst tail = 1;\n";
-			const filePath = createTempFile(env.tmpDir, "src/no-id.ts", original);
+			mockPipelineSucceeds();
+			const filePath = createTempFile(
+				env.tmpDir,
+				"src/no-id.ts",
+				"import { A } from 'm';\nconst tail = 1;\n",
+			);
 			const runtime = new RuntimeCoordinator();
 			runtime.projectRoot = env.tmpDir;
 			readWhole(runtime, filePath);
 			const { toolCallId: _id, ...event } = mixedBatchEvent(filePath);
 
-			const call = await runHandlerExpectingNoThrow(() =>
-				handleToolCall(baseDeps({ runtime, ctx: { cwd: env.tmpDir }, event })),
-			);
+			const { call, text } = await partialApply(env, runtime, {
+				...event,
+				toolCallId: undefined as unknown as string,
+			});
 
-			expect(call).toMatchObject({ block: true });
-			expect((call as { reason: string }).reason).toMatch(/^🔄 RETRYABLE/);
-			expect(event.input.edits).toHaveLength(2);
-			expect(fs.readFileSync(filePath, "utf-8")).toBe(original);
+			expect(call).toBeUndefined();
+			expect(text).toMatch(
+				/^⚠️ PARTIAL APPLY — 1 edit committed \(edits\[0\]\)/,
+			);
+			expect(fs.readFileSync(filePath, "utf-8")).toBe(
+				"import { A } from 'm';\nimport { B } from 'm';\nconst tail = 1;\n",
+			);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("drops the partial apply with the call when pi-lens's own read guard refuses the subset", async () => {
+	it("refuses the rewritten subset of an unread file with pi-lens's own read guard", async () => {
 		// The rewritten subset is an ordinary edit, so pi-lens's own checks
-		// judge it; a refusal there leaves no record for a later tool_result.
+		// judge it. pi emits no tool_result for a blocked call, and a later call
+		// carries other input, so the pending it left is never read.
 		const env = setupTestEnvironment("pi-lens-5120-own-block-");
 		try {
 			const filePath = createTempFile(
@@ -1066,7 +1131,6 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			expect((call as { reason: string }).reason).toContain(
 				"Edit without read",
 			);
-			expect(runtime.toolCallPartialApply("call-unread")).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}

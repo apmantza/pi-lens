@@ -513,14 +513,6 @@ export interface ToolCallAttribution {
 	 * (`ReadGuard.fileTimeMoved`), so its write must not re-stamp it.
 	 */
 	fileTimeStale?: true;
-	/**
-	 * #5120: this call's `edits` were rewritten to the matched subset of a
-	 * partly matching batch, for the host edit to write. Its `tool_result`
-	 * reads it ({@link RuntimeCoordinator.toolCallPartialApply}) to tell the
-	 * agent what applied. A call a later handler blocks gets no
-	 * `tool_result`; the entry then goes with the attribution's own bound.
-	 */
-	partialApply?: PartialApplyPending;
 	/** `Date.now()` when recorded — see `TOOL_CALL_ATTRIBUTION_TTL_MS`. */
 	recordedAt: number;
 }
@@ -761,6 +753,16 @@ export class RuntimeCoordinator {
 	private readonly _readWidenings = new BoundedLruCache<string, ReadWidening>(
 		TOOL_CALL_ATTRIBUTION_CAPACITY,
 	);
+	/**
+	 * #5120: a call whose `edits` were rewritten to the matched subset of a
+	 * partly matching batch, keyed by that call's own `event.input`. pi hands
+	 * both hooks one `args` object per call (a fresh clone), so only that
+	 * call's `tool_result` finds the record: a call a later handler blocked
+	 * or an abort ended gets no `tool_result`, and a later call reusing its id
+	 * carries other `args`. The entry dies with its `args`; no id, TTL or
+	 * session reset is involved.
+	 */
+	private readonly _partialApplies = new WeakMap<object, PartialApplyPending>();
 	private readonly _lspReadWarmState = new Map<
 		string,
 		{ status: "warming" | "ready"; ts: number }
@@ -3018,22 +3020,17 @@ export class RuntimeCoordinator {
 		if (attribution) attribution.fileTimeStale = true;
 	}
 
-	/** #5120: see {@link ToolCallAttribution.partialApply}. */
-	markToolCallPartialApply(
-		toolCallId: string,
-		pending: PartialApplyPending,
-	): void {
-		const attribution = this._toolCallAttributions.get(toolCallId);
-		if (attribution) attribution.partialApply = pending;
+	/** #5120: see {@link RuntimeCoordinator._partialApplies}. */
+	markToolCallPartialApply(input: object, pending: PartialApplyPending): void {
+		this._partialApplies.set(input, pending);
 	}
 
 	/**
-	 * #5120: a call's partial apply, read at its `tool_result`. It goes with
-	 * the attribution, which that `tool_result` takes
-	 * ({@link takeToolCallAttribution}).
+	 * #5120: the partial apply of the call whose `tool_result` carries
+	 * `input`. A non-object key is a miss: `WeakMap.get` answers undefined.
 	 */
-	toolCallPartialApply(toolCallId: string): PartialApplyPending | undefined {
-		return this._toolCallAttributions.get(toolCallId)?.partialApply;
+	toolCallPartialApply(input: unknown): PartialApplyPending | undefined {
+		return this._partialApplies.get(input as object);
 	}
 
 	/**
