@@ -590,6 +590,22 @@ describe("abort-listener release sweep (shape 4)", () => {
 			]);
 		});
 
+		// #5077 review r2 (shape 69): the prefilter screens a whole source, so this
+		// plant holds no other listener spelling. Only the escaped-subscript clause of
+		// the prefilter admits it, so removing that clause reds here.
+		it("an escaped subscript assignment with no other listener spelling", () => {
+			const sites = refused(
+				[
+					"export function hexed(signal: AbortSignal, f: () => void) {",
+					'  signal["\\x6fnabort"] = f;',
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#hexed events-abort",
+			]);
+		});
+
 		// #5077 review r2 (shape 69): a unicode escape in an identifier decodes to the
 		// name, but the raw property text is not the name the scan reads.
 		it("an escaped identifier naming the listener method or the abort property", () => {
