@@ -400,34 +400,32 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	// Recurrence: silently linting by an unresolved spawn hid the one path where
 	// a project fix setting can still write. No package beside the command is
 	// one row, once, and the command runs with its own argv (never --fix).
-	it.skipIf(process.platform === "win32")(
-		"spawns the command as it was and records one markdownlint-api-unavailable row when no package sits beside it",
-		async () => {
-			const shim = path.join(root, "bin", "markdownlint-cli2");
-			fs.mkdirSync(path.dirname(shim), { recursive: true });
-			fs.writeFileSync(shim, '#!/bin/sh\necho "argv:$*"\nexit 0\n', {
-				mode: 0o755,
+	it("spawns the command as it was and records one markdownlint-api-unavailable row when no package sits beside it", async (ctx) => {
+		if (process.platform === "win32") ctx.skip();
+		const shim = path.join(root, "bin", "markdownlint-cli2");
+		fs.mkdirSync(path.dirname(shim), { recursive: true });
+		fs.writeFileSync(shim, '#!/bin/sh\necho "argv:$*"\nexit 0\n', {
+			mode: 0o755,
+		});
+
+		for (let i = 0; i < 2; i += 1) {
+			const result = await runMarkdownlintApi({
+				command: shim,
+				cwd: root,
+				args: ["--config", "core.json", "doc.md"],
+				timeoutMs: 15000,
 			});
+			expect(result.stdout).toBe("argv:--config core.json doc.md\n");
+			expect(result.stdout).not.toContain("--fix");
+		}
 
-			for (let i = 0; i < 2; i += 1) {
-				const result = await runMarkdownlintApi({
-					command: shim,
-					cwd: root,
-					args: ["--config", "core.json", "doc.md"],
-					timeoutMs: 15000,
-				});
-				expect(result.stdout).toBe("argv:--config core.json doc.md\n");
-				expect(result.stdout).not.toContain("--fix");
-			}
-
-			const rows = getDegradationSummary().filter(
-				(group) => group.kind === "markdownlint-api-unavailable",
-			);
-			expect(rows).toHaveLength(1);
-			expect(rows[0]?.count).toBe(1);
-			expect(rows[0]?.latestReasons[0]?.subject).toBe(shim);
-		},
-	);
+		const rows = getDegradationSummary().filter(
+			(group) => group.kind === "markdownlint-api-unavailable",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.count).toBe(1);
+		expect(rows[0]?.latestReasons[0]?.subject).toBe(shim);
+	});
 });
 
 describe.skipIf(process.platform === "win32")(
