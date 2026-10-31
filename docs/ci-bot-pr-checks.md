@@ -38,7 +38,9 @@ PR.
 The dispatch step runs when the PR was `created` or `updated` (an unchanged
 branch keeps the checks of its last head). It is not `continue-on-error`: a PR
 that opened without checks reds the job. When the GitHub App token (#4512)
-opened the PR, CI already started and the dispatch is skipped.
+opened the PR, CI already started and the dispatch is skipped. The census
+admits that skip only for an opener whose `token` is the App token (the
+docs-refresh opener); any other opener dispatches.
 
 ## Which workflows open PRs
 
@@ -89,7 +91,14 @@ registered in that test as a non-opener with its reason.
   implicit `success()`, and only dispatch steps mean `!cancelled()`. It
   refuses every other form, a step after the first dispatch, a dispatch
   before its PR step, and a dispatch step whose run is anything but
-  `set -euo pipefail` and one `gh workflow run` per target.
+  `set -euo pipefail` and one `gh workflow run` per target. The census
+  evaluates none of these keys: `shell` on the dispatch step,
+  `defaults.run.shell` on its job or the workflow, `GH_HOST`, `BASH_ENV`,
+  workflow-level `env`, YAML merge keys, `working-directory`,
+  `timeout-minutes: 0`, a job-level `if:`, and a dispatch step's `env` beyond
+  `GH_TOKEN`. They are admitted unread. No workflow sets one today (live
+  population 0), so a change that does is not caught until the census reads
+  that key.
 - **Not covered.** A dispatched run is not a `pull_request` run: it tests the
   branch head, not the merge with master, and the PR-only advisory jobs (the
   changelog fast-fail, targeted tests, CodeQL, the PR body lint) do not run.
