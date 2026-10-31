@@ -485,6 +485,22 @@ describe("abort-listener release sweep (shape 4)", () => {
 			]);
 		});
 
+		// #5077 verify r1 V7: the first-literal arm (`emitter.on("abort", f)`) had no
+		// plant, so neutering it stayed green. The second-literal arm is the
+		// `once(signal, "abort")` wait above.
+		it("an emitter's own on with the abort event as its first literal", () => {
+			const sites = refused(
+				[
+					"export function viaEmitter(emitter: NodeJS.EventEmitter, f: () => void) {",
+					'  emitter.on("abort", f);',
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#viaEmitter events-abort",
+			]);
+		});
+
 		it("an emitter's own on/once with a literal event that is not abort", () => {
 			// Not noise: the rule is fail-closed on the UNREADABLE, so a plain
 			// literal event of another name stays out of the population.
