@@ -13,9 +13,9 @@
 //    every docs pull request again;
 //  - the three required context names changing with the job's name template;
 //  - the cut reaching master: Install test, Strict install and strictness are
-//    pull_request cuts only, so a master push, the merge queue and the nightly
-//    schedule must still run them in full (a dropped `schedule:` or an
-//    over-wide `if:` leaves them with no run at all);
+//    pull_request cuts only, so a master push, the merge queue and a dispatch
+//    must still run them in full (an over-wide `if:` leaves them with no run
+//    at all; the nightly schedule was dropped for cost, #5112);
 //  - the greeting job starting a runner for every author (1,446 min for an
 //    action that posts to a first-time author only).
 import { readFileSync } from "node:fs";
@@ -42,7 +42,6 @@ type Job = {
 };
 type Workflow = {
 	on: Record<string, unknown> & {
-		schedule?: Array<{ cron: string }>;
 		merge_group?: { types: string[] };
 	};
 	jobs: Record<string, Job>;
@@ -121,9 +120,9 @@ describe("Install test always reports and installs only on install paths (#5112)
 	});
 });
 
-describe("the cuts leave master, the merge queue and the nightly run intact (#5112)", () => {
+describe("the cuts leave master, the merge queue and dispatches intact (#5112)", () => {
 	// Recurrence: the pull_request cut applied as `if: github.event_name ==
-	// 'push'`, which would drop merge_group, workflow_dispatch and schedule.
+	// 'push'`, which would drop merge_group and workflow_dispatch.
 	const evaluate = (expr: string, event: string) =>
 		Boolean(
 			new Function(
@@ -139,12 +138,7 @@ describe("the cuts leave master, the merge queue and the nightly run intact (#51
 		(_f, id, workflow) => {
 			const expr = workflow.jobs[id].if as string;
 			expect(evaluate(expr, "pull_request")).toBe(false);
-			for (const event of [
-				"push",
-				"merge_group",
-				"workflow_dispatch",
-				"schedule",
-			])
+			for (const event of ["push", "merge_group", "workflow_dispatch"])
 				expect(evaluate(expr, event), event).toBe(true);
 		},
 	);
@@ -152,15 +146,12 @@ describe("the cuts leave master, the merge queue and the nightly run intact (#51
 	it.each([
 		["ci.yml", ci],
 		["lint.yml", lint],
-	] as const)("%s runs on a nightly schedule on master", (_f, workflow) => {
-		expect(workflow.on.schedule).toHaveLength(1);
-		// five fields, a daily run (day-of-month, month and weekday are `*`)
-		expect(workflow.on.schedule?.[0].cron).toMatch(
-			/^\d{1,2} \d{1,2} \* \* \*$/,
-		);
-		// The required check still reports on the queue's commit.
-		expect(workflow.on.merge_group).toEqual({ types: ["checks_requested"] });
-	});
+	] as const)(
+		"%s still reports on the merge queue's commit",
+		(_f, workflow) => {
+			expect(workflow.on.merge_group).toEqual({ types: ["checks_requested"] });
+		},
+	);
 });
 
 describe("the greeting job starts only for a first-time author (#5112)", () => {

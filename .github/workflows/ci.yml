@@ -18,14 +18,6 @@ on:
   # reports the same required check names on the branch head and takes the
   # push-shaped full-suite path (docs/ci-bot-pr-checks.md).
   workflow_dispatch:
-  # #5112: a nightly run of the whole workflow on master's tip, 03:30 UTC. A
-  # pull request runs `Install test (<os>)` only when it touches an install
-  # path and `Strict install` never, and a master push is the only other full
-  # run; this one catches registry and runner-image drift on a day nothing
-  # merged. A `schedule` run takes the push-shaped full-suite path in
-  # scripts/ci-changed-files.mjs (any non-pull_request event).
-  schedule:
-    - cron: "30 3 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -93,7 +85,7 @@ jobs:
   # minutes, #3995 slice A) and a pull request that changes the manifests or
   # the lockfile still runs the same strict install through install-smoke.yml's
   # `npm-strict` job (package.json and package-lock.json are in its paths).
-  # Master pushes, the merge queue, dispatches and the nightly schedule keep it.
+  # Master pushes, the merge queue and dispatches keep it.
   strict-install-cold-cache:
     name: Strict install (cold npm cache) (fast-fail)
     if: github.event_name != 'pull_request'
@@ -1221,7 +1213,7 @@ jobs:
     # changed". The job is never skipped at job level: a skipped job reports
     # `skipped`, and ci-verdict demands a literal `success` on a required row
     # (#2618), the way hot-path-latency.yml reports. A master push, the merge
-    # queue, a dispatch and the nightly `schedule` run every step: the script
+    # queue and a dispatch run every step: the script
     # reads any non-pull_request event as install=true, and so does an
     # unreadable or empty file list (shape 48, doubt installs).
     permissions:
@@ -1304,8 +1296,8 @@ jobs:
       # evaluated-floors registry admits a comparison of the event name. The
       # anchors test is advisory and added a macOS build and a Vitest run to a
       # leg a docs-only pull request now ends after the classify step; master
-      # pushes, the merge queue and the nightly schedule keep it, so a
-      # case-insensitive regression still reds before the next release.
+      # pushes and the merge queue keep it, so a case-insensitive regression
+      # still reds before the merge.
       - name: APFS anchors evaluated floor
         if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.os == 'macos-latest' }}
         shell: bash

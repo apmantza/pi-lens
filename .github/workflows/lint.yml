@@ -20,11 +20,6 @@ on:
   # #5062: dispatched on a bot-opened PR's branch, where GITHUB_TOKEN starts no
   # `pull_request` run (docs/ci-bot-pr-checks.md).
   workflow_dispatch:
-  # #5112: a nightly run on master's tip, 03:50 UTC, so the `strictness` job
-  # (off the pull_request trigger below) still runs on a day nothing merged.
-  # A `schedule` run is push-shaped: every job here runs.
-  schedule:
-    - cron: "50 3 * * *"
 
 concurrency:
   group: lint-${{ github.ref }}
@@ -384,7 +379,7 @@ jobs:
     # #5112: not a pull_request job. It reported 0 real catches in 30 days (2,106
     # runner minutes, #3995 slice A) and only republishes counts that
     # strictness-ratchet.test.ts already pins on every pull request. Master
-    # pushes, the merge queue, dispatches and the nightly schedule keep it.
+    # pushes, the merge queue and dispatches keep it.
     if: github.event_name != 'pull_request'
     continue-on-error: true
     runs-on: ubuntu-latest

@@ -313,7 +313,7 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 	// pull request installs only when it touches an install path. The opposite
 	// defect is the one this guards: a leg that SKIPS at job level (a required row
 	// the verdict demands as a literal success, #2618), or that installs on a
-	// master push, the merge queue or the nightly schedule with no path ever read.
+	// master push, the merge queue or a dispatch with no path ever read.
 	// Docs are no longer an install path even though `docs/` ships in `files`.
 	describe("Install test legs (#5112)", () => {
 		const total = (CI["install-test"].steps ?? []).length;
@@ -360,9 +360,9 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			}
 		});
 
-		// Recurrence: master, the merge queue, a dispatch and the nightly schedule
+		// Recurrence: master, the merge queue, a dispatch
 		// losing the install to the classifier. Any non-pull_request event installs.
-		it.each(["push", "merge_group", "workflow_dispatch", "schedule"])(
+		it.each(["push", "merge_group", "workflow_dispatch"])(
 			"runs every step on a %s event even for a docs-only file list",
 			(event) => {
 				const { job, legs } = run(event, DOCS_ONLY);
