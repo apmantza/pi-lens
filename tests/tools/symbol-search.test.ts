@@ -31,6 +31,43 @@ import { symbolSearch } from "../../clients/lens-engine.js";
 import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
+/** One rendered ranked row: `  1. <path>[ <line>] (score ...)`. */
+const ROW = /^ {2}\d+\. (.*) \((score .*)\)$/;
+
+function rows(
+	text: string,
+): Array<{ file: string; line?: number; detail: string }> {
+	return text.split("\n").flatMap((line) => {
+		const match = ROW.exec(line);
+		if (match === null) return [];
+		// The line number sits before the detail parenthetical; a path that ends
+		// in digits is not a row number (the repo's fixtures never end that way).
+		const pre = match[1];
+		const cut = pre.lastIndexOf(" ");
+		const tail = cut === -1 ? "" : pre.slice(cut + 1);
+		const numbered = /^\d+$/.test(tail);
+		return [
+			{
+				file: toPosix(numbered ? pre.slice(0, cut) : pre),
+				...(numbered ? { line: Number(tail) } : {}),
+				detail: match[2],
+			},
+		];
+	});
+}
+
+function rankedFiles(text: string): string[] {
+	return rows(text).map((row) => row.file);
+}
+
+/** #5104: the ranked table is the whole answer on both surfaces — no JSON tail
+ * on pi, no fenced block on MCP. A brace or a fence means a duplicate came
+ * back, and a reader that stops at the table silently accepts it. */
+function expectOneTable(text: string): void {
+	expect(text).not.toContain("{");
+	expect(text).not.toContain("```");
+}
+
 afterEach(() => {
 	_resetWordIndexBuildGuardForTests();
 	_resetWarmWordIndexCacheForTests();
@@ -76,6 +113,7 @@ describe("symbol_search tool", () => {
 			expect(String(result.content[0]?.text)).toContain(
 				"Index covers 1 files (capped — results may be incomplete).",
 			);
+			expectOneTable(String(result.content[0]?.text));
 			expect(result.details).toMatchObject({
 				available: true,
 				count: 0,
@@ -210,7 +248,7 @@ describe("symbol_search tool", () => {
 		}
 	}, 10_000);
 
-	it("warm path: returns ranked results with startLine/endLine, no per-hit read block, path relative to cwd", async () => {
+	it("warm path: renders one ranked row per hit, line number included, path relative to cwd", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-warm-");
 		try {
 			const authFile = createTempFile(
@@ -248,29 +286,12 @@ describe("symbol_search tool", () => {
 			expect(result.details).toMatchObject({ available: true, count: 1 });
 
 			const text = String(result.content[0]?.text);
-			const jsonStart = text.indexOf("{");
-			const payload = JSON.parse(text.slice(jsonStart)) as {
-				available: boolean;
-				query: string;
-				results: Array<{
-					file: string;
-					score: number;
-					hits: number;
-					startLine: number;
-					endLine: number;
-					read?: unknown;
-					lines?: unknown;
-				}>;
-			};
-			expect(payload.available).toBe(true);
-			expect(payload.results).toHaveLength(1);
-			const hit = payload.results[0];
-			expect(hit.file.replace(/\\/g, "/")).toBe("src/auth.ts"); // relative to cwd, not repeated/absolute
-			expect(hit.startLine).toBeGreaterThan(0);
-			expect(hit.endLine).toBe(hit.startLine); // single-line span (no fabricated full-file range)
-			// #517 conformity: no per-hit `read` block, no raw `lines[]` array on the wire.
-			expect(hit.read).toBeUndefined();
-			expect(hit.lines).toBeUndefined();
+			expectOneTable(text);
+			const ranked = rows(text);
+			expect(ranked).toHaveLength(1);
+			expect(ranked[0]?.file).toBe("src/auth.ts"); // relative to cwd, not repeated/absolute
+			expect(ranked[0]?.detail).toMatch(/^score \d+\.\d{2}, \d+ hit\(s\)/);
+			expect(text).toContain("line ");
 		} finally {
 			env.cleanup();
 		}
@@ -304,6 +325,9 @@ describe("symbol_search tool", () => {
 			);
 			expect(result.isError).toBeFalsy();
 			expect(result.details).toMatchObject({ available: true, count: 0 });
+			expect(String(result.content[0]?.text)).toContain(
+				'No files matched "kubernetes helm chart".',
+			);
 		} finally {
 			env.cleanup();
 		}
@@ -349,12 +373,10 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{ file: string }>;
-				};
-				expect(
-					payload.results.map((r) => r.file.replace(/\\/g, "/")).sort(),
-				).toEqual(["scripts/authenticate.py", "src/auth/login.ts"].sort());
+				expectOneTable(text);
+				expect(rankedFiles(text).sort()).toEqual(
+					["scripts/authenticate.py", "src/auth/login.ts"].sort(),
+				);
 			} finally {
 				env.cleanup();
 			}
@@ -373,13 +395,8 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{ file: string }>;
-				};
-				expect(payload.results).toHaveLength(1);
-				expect(payload.results[0].file.replace(/\\/g, "/")).toBe(
-					"scripts/authenticate.py",
-				);
+				expectOneTable(text);
+				expect(rankedFiles(text)).toEqual(["scripts/authenticate.py"]);
 			} finally {
 				env.cleanup();
 			}
@@ -398,13 +415,8 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{ file: string }>;
-				};
-				expect(payload.results).toHaveLength(1);
-				expect(payload.results[0].file.replace(/\\/g, "/")).toBe(
-					"src/auth/login.ts",
-				);
+				expectOneTable(text);
+				expect(rankedFiles(text)).toEqual(["src/auth/login.ts"]);
 				// #5013 F3: the same glob spelled with a backslash scopes to the same
 				// files, because the pattern is folded through `toPosix` before
 				// minimatch sees it. An unfolded `src\auth` matches nothing, and the
@@ -416,27 +428,18 @@ describe("symbol_search tool", () => {
 					null,
 					{ cwd: env.tmpDir },
 				);
-				const backslashText = String(backslash.content[0]?.text);
-				const backslashStart = backslashText.indexOf("{");
-				const backslashFiles =
-					backslashStart === -1
-						? []
-						: (
-								JSON.parse(backslashText.slice(backslashStart)) as {
-									results: Array<{ file: string }>;
-								}
-							).results.map((hit) => toPosix(hit.file));
-				expect(backslashFiles).toEqual(["src/auth/login.ts"]);
+				expect(rankedFiles(String(backslash.content[0]?.text))).toEqual([
+					"src/auth/login.ts",
+				]);
 			} finally {
 				env.cleanup();
 			}
 		});
 
-		it("attaches a suggestedNext module_report hint per hit", async () => {
-			const env = setupTestEnvironment("pi-lens-symbolsearch-suggestednext-");
+		it("renders one table with no per-hit JSON hint (#5104)", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-onetable-");
 			try {
-				const { tsFile } = makeFixture(env);
-				void tsFile;
+				makeFixture(env);
 				const tool = createSymbolSearchTool(() => env.tmpDir);
 				const result = await tool.execute(
 					"1",
@@ -446,19 +449,10 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{
-						file: string;
-						suggestedNext?: { tool: string; path: string };
-					}>;
-				};
-				expect(payload.results.length).toBeGreaterThan(0);
-				for (const hit of payload.results) {
-					expect(hit.suggestedNext).toEqual({
-						tool: "module_report",
-						path: hit.file,
-					});
-				}
+				expectOneTable(text);
+				expect(rankedFiles(text).sort()).toEqual(
+					["scripts/authenticate.py", "src/auth/login.ts"].sort(),
+				);
 			} finally {
 				env.cleanup();
 			}
@@ -482,11 +476,7 @@ describe("symbol_search tool", () => {
 						null,
 						{ cwd: env.tmpDir },
 					);
-					const text = String(result.content[0]?.text);
-					const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-						results: Array<{ file: string }>;
-					};
-					return payload.results.map((hit) => toPosix(hit.file));
+					return rankedFiles(String(result.content[0]?.text));
 				};
 				const expected = ["src/auth/login.ts"];
 				expect(await hitsFor(["src"]), "src").toEqual(expected);
@@ -529,14 +519,7 @@ describe("symbol_search tool", () => {
 							{ cwd: workspace },
 						);
 						const text = String(result.content[0]?.text);
-						const start = text.indexOf("{");
-						return start === -1
-							? []
-							: (
-									JSON.parse(text.slice(start)) as {
-										results: Array<{ file: string }>;
-									}
-								).results.map((hit) => toPosix(hit.file));
+						return rankedFiles(text);
 					};
 					const expected = ["src/auth/login.ts"];
 					expect(await hitsFor(["src"]), "src").toEqual(expected);
@@ -650,13 +633,8 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{ file: string }>;
-				};
-				expect(payload.results).toHaveLength(1);
-				expect(payload.results[0].file.replace(/\\/g, "/")).toBe(
-					"scripts/authenticate.py",
-				);
+				expectOneTable(text);
+				expect(rankedFiles(text)).toEqual(["scripts/authenticate.py"]);
 			} finally {
 				env.cleanup();
 			}
@@ -675,13 +653,8 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{ file: string }>;
-				};
-				expect(payload.results).toHaveLength(1);
-				expect(payload.results[0].file.replace(/\\/g, "/")).toBe(
-					"src/auth/login.ts",
-				);
+				expectOneTable(text);
+				expect(rankedFiles(text)).toEqual(["src/auth/login.ts"]);
 			} finally {
 				env.cleanup();
 			}
@@ -729,12 +702,10 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{ file: string }>;
-				};
-				expect(
-					payload.results.map((r) => r.file.replace(/\\/g, "/")).sort(),
-				).toEqual(["scripts/authenticate.py", "src/auth/login.ts"].sort());
+				expectOneTable(text);
+				expect(rankedFiles(text).sort()).toEqual(
+					["scripts/authenticate.py", "src/auth/login.ts"].sort(),
+				);
 			} finally {
 				env.cleanup();
 			}
@@ -770,13 +741,8 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{ annotations?: unknown }>;
-				};
-				expect(payload.results.length).toBeGreaterThan(0);
-				for (const hit of payload.results) {
-					expect(hit.annotations).toBeUndefined();
-				}
+				expectOneTable(text);
+				expect(rows(text).length).toBeGreaterThan(0);
 				// The read-only accessor must not have built/cached a graph as a
 				// side effect of this call.
 				expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
@@ -825,15 +791,10 @@ describe("symbol_search tool", () => {
 					{ cwd: env.tmpDir },
 				);
 				const text = String(result.content[0]?.text);
-				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
-					results: Array<{
-						annotations?: { fanIn: number; complexity?: number };
-					}>;
-				};
-				expect(payload.results.length).toBeGreaterThan(0);
-				const hit = payload.results[0];
-				expect(hit.annotations).toBeDefined();
-				expect(typeof hit.annotations?.fanIn).toBe("number");
+				expectOneTable(text);
+				const ranked = rows(text);
+				expect(ranked.length).toBeGreaterThan(0);
+				expect(ranked[0]?.detail).toMatch(/hit\(s\)/);
 			} finally {
 				env.cleanup();
 			}

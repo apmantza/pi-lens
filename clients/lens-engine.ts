@@ -606,6 +606,56 @@ export async function symbolSearch(
 	};
 }
 
+/** Options for `renderCompactSymbolSearch`. */
+export interface CompactSymbolSearchOptions {
+	/** Directory every hit path is printed relative to. */
+	cwd: string;
+	/** MCP-only staleness note (`graphStalenessNote` in `mcp/server.ts`). */
+	stalenessNote?: string;
+}
+
+/** The index-coverage sentence both `symbol_search` surfaces print. A capped
+ * index says so: an incomplete answer must not read as a complete one. */
+function coverageLine(
+	coverage: SymbolSearchResult["coverage"],
+): string | undefined {
+	if (!coverage) return undefined;
+	return `Index covers ${coverage.files} files${coverage.truncated ? " (capped — results may be incomplete)" : ""}.`;
+}
+
+/**
+ * The one renderer for `symbol_search`'s model-facing text (#5104): a header,
+ * one row per ranked hit (path relative to `cwd`), and a footer carrying the
+ * index coverage and, on MCP, the snapshot staleness note. The pi tool and the
+ * MCP mirror both call this, so the surfaces cannot drift and neither appends
+ * a JSON payload — the ranked table IS the answer. The empty-result path
+ * renders through the same footer, so a capped index stays visible there too.
+ */
+export function renderCompactSymbolSearch(
+	result: SymbolSearchResult,
+	options: CompactSymbolSearchOptions,
+): string {
+	const hits = result.results;
+	const sections = [
+		hits.length > 0
+			? [
+					`Top ${hits.length} file(s) for "${result.query}":`,
+					...hits.map(
+						(hit, index) =>
+							`  ${index + 1}. ${path.relative(options.cwd, hit.file)} ` +
+							`(score ${hit.score.toFixed(2)}, ${hit.hits} hit(s), line ${hit.startLine})`,
+					),
+				].join("\n")
+			: `No files matched "${result.query}".`,
+	];
+	const footer: string[] = [];
+	const coverage = coverageLine(result.coverage);
+	if (coverage) footer.push(coverage);
+	if (options.stalenessNote) footer.push(options.stalenessNote);
+	if (footer.length > 0) sections.push(footer.join("\n"));
+	return sections.join("\n\n");
+}
+
 // symbolImpact was removed (#304 follow-up): the transitive blast radius is now
 // served by module_report's `blastRadius` option (clients/module-report.ts), which
 // calls computeTransitiveImpact (review-graph/query.ts) directly over the cached

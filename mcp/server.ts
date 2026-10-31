@@ -66,6 +66,7 @@ import {
 	recentLatency,
 	renderCompactModuleReport,
 	renderCompactProjectReport,
+	renderCompactSymbolSearch,
 	renderLspBrokenStatusLines,
 	resolveRebuildScript,
 	resourceFootprint,
@@ -1313,84 +1314,24 @@ async function callTool(
 				: undefined;
 		const paths = pathsRead.entries.length > 0 ? pathsRead.entries : undefined;
 		const lang = typeof args.lang === "string" ? args.lang : undefined;
-		const {
-			available,
-			results,
-			hint,
-			unavailableReason,
-			coverage,
-			snapshotGeneratedAt,
-		} = await symbolSearch(query, cwd, limit, { paths, lang });
-		if (!available) {
+		const result = await symbolSearch(query, cwd, limit, { paths, lang });
+		if (!result.available) {
 			return toolText(
-				hint ??
+				result.hint ??
 					"No word index for this workspace yet — run pilens_session_start first.",
-				{ available: false, query, hint, unavailableReason },
-				true,
 			);
 		}
-		const stalenessNote = graphStalenessNote(
-			snapshotGeneratedAt,
-			"Project snapshot",
-		);
-		if (results.length === 0) {
-			return toolText(
-				`No files matched "${query}".` +
-					(coverage
-						? `\nIndex covers ${coverage.files} files${coverage.truncated ? " (capped — results may be incomplete)" : ""}.`
-						: "") +
-					(stalenessNote ? `\n\n${stalenessNote}` : ""),
-				{
-					available: true,
-					query,
-					results: [],
-					coverage,
-					...(stalenessNote ? { staleness: stalenessNote } : {}),
-				},
-				true,
-			);
-		}
-		const lines = [
-			`Top ${results.length} file(s) for "${query}":`,
-			...results.map(
-				(result, i) =>
-					`  ${i + 1}. ${path.relative(cwd, result.file)} ` +
-					`(score ${result.score.toFixed(2)}, ${result.hits} hit(s), ` +
-					`line ${result.startLine})`,
-			),
-			...(stalenessNote ? ["", stalenessNote] : []),
-			...(coverage
-				? [
-						`Index covers ${coverage.files} files${coverage.truncated ? " (capped — results may be incomplete)" : ""}.`,
-					]
-				: []),
-		];
-		// Compact (unindented) JSON — matches the module_report / read_symbol
-		// convention (#517): an agent parses this payload, it doesn't read it
-		// formatted. Path is relative-to-cwd once per hit, no repeated per-hit
-		// `read` block — startLine/endLine already derive offset/limit.
+		// #5104: one renderer owns the text (clients/lens-engine.ts). Passing no
+		// structured payload keeps renderToolText from appending a fenced JSON
+		// copy of the same hits; the ranked table is the answer.
 		return toolText(
-			lines.join("\n"),
-			{
-				query,
-				coverage,
-				results: results.map((result) => {
-					const relFile = path.relative(cwd, result.file);
-					return {
-						file: relFile,
-						score: result.score,
-						hits: result.hits,
-						startLine: result.startLine,
-						endLine: result.endLine,
-						...(result.annotations ? { annotations: result.annotations } : {}),
-						// #771: machine-actionable discovery-funnel hint, mirroring the
-						// pi-tool-surface's suggestedNext (tools/symbol-search.ts).
-						suggestedNext: { tool: "pilens_module_report", path: relFile },
-					};
-				}),
-				...(stalenessNote ? { staleness: stalenessNote } : {}),
-			},
-			true,
+			renderCompactSymbolSearch(result, {
+				cwd,
+				stalenessNote: graphStalenessNote(
+					result.snapshotGeneratedAt,
+					"Project snapshot",
+				),
+			}),
 		);
 	}
 
@@ -1939,10 +1880,9 @@ const WARN_ONLY_STALE_TOOLS = new Set([
 
 /**
  * Appends the warm-code-stale advisory to a tool result's text (and a
- * `warmCodeStale: true` marker line) without disturbing its JSON payload
- * shape — callers already parse the fenced JSON block by locating braces
- * (see module_report/symbol_search callers), so appending plain text after it
- * is safe.
+ * `warmCodeStale: true` marker line) after whatever the tool rendered. The
+ * tool's own text stays byte-identical, so the advisory only ever reads last
+ * (no surface parses a fenced payload any more, #5104).
  */
 function withStaleWarning<
 	T extends { content: { type: "text"; text: string }[] },
