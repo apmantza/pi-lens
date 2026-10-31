@@ -18,15 +18,31 @@
  *
  * ## What is admitted, and what is refused
  *
- * Fail closed. A code token `addEventListener` (a call, an alias, a destructured
- * binding, a bracket-string access), a `.onabort` property, or an `events.once`
- * or `events.on` call whose event is `"abort"` is a SITE. A site is admitted only
- * when it is a registered key in `ADMITTED_SITES` with its reason, and a
- * registered site that claims a release also holds a `removeEventListener` token
- * in its outermost enclosing function. Everything else refuses, including a site
- * whose release is named only in a comment. The set of registered sites is held
- * to equality in both directions, so a site that moved or vanished reds as STALE
- * instead of silently re-admitting a deleted release.
+ * Fail closed. A SITE is any of: a code token `addEventListener`,
+ * `addAbortListener` or `.onabort` (a call, an alias, a destructured binding, a
+ * bracket-string access); a computed call whose method name is not a plain
+ * string literal (`signal["add" + "EventListener"](...)`, a template with a
+ * substitution); or an `once`/`on` call whose event is `"abort"` or is not a
+ * string literal (a constant, a template, a spread). Only a plain literal event
+ * of another name, and `x[Symbol.iterator]()`, are read as not-a-site. A site is
+ * admitted only when it is a registered key in `ADMITTED_SITES` with its reason,
+ * and a registered site that claims a release also holds a
+ * `removeEventListener` token in its outermost enclosing function. Everything
+ * else refuses, including a site whose release is named only in a comment. The
+ * set of registered sites is held to equality in both directions, so a site that
+ * moved or vanished reds as STALE instead of silently re-admitting a deleted
+ * release.
+ *
+ * ## Accepted gap (p3)
+ *
+ * A spelling that never names the listener method or the event in the scanned
+ * file still passes: an aliased import (`import { once as waitFor } from
+ * "node:events"`, then `waitFor(signal, "abort")`), a method fetched by
+ * `Reflect.get(signal, "add" + "EventListener")`, and a listener attached in a
+ * file outside `clients/`, `mcp/`, `tools/` and `index.ts`. The scan cannot read
+ * an indirection that crosses a binding; closing it means keying on the
+ * `AbortSignal` type, which this file does not have. No live site is missed
+ * today (`rg` over the shipped trees is clean).
  *
  * Structure comes from the parsed tree, never from text: a comment or a string
  * that spells the token is not a site and cannot excuse one.
@@ -63,8 +79,12 @@ const FUNCTION_KINDS = new Set([
 	"method_definition",
 ]);
 
-/** Tokens that attach a listener to an `EventTarget`, as code or as a string. */
-const ADD_TOKENS = new Set(["addEventListener", "onabort"]);
+/**
+ * Tokens that attach a listener to an abort signal, as code or as a string:
+ * `addEventListener`, the `onabort` property and `addAbortListener`
+ * (`node:events`, documented for this very job).
+ */
+const ADD_TOKENS = new Set(["addEventListener", "onabort", "addAbortListener"]);
 
 interface AbortListenerSite {
 	/** `<file>#<enclosing symbol> <token>`, `#n` on a repeat; stable under line churn. */
@@ -104,32 +124,83 @@ function holdsCodeToken(scope: SgNode, token: string): boolean {
 	return found;
 }
 
-/** An `events.once(signal, "abort")` / `events.on(signal, "abort")` call. */
-function isEventsAbortCall(node: SgNode): boolean {
+const EVENT_METHODS = new Set(["once", "on"]);
+
+/** A string literal with no substitution (a template with `${}` is not one). */
+function isPlainString(node: SgNode | undefined): boolean {
+	return node?.kind() === "string";
+}
+
+/** The text between a string literal's quotes. */
+function stringValue(node: SgNode): string {
+	return node.text().slice(1, -1);
+}
+
+/**
+ * The callee's method name, or `undefined` when it is not a plain name: a
+ * computed callee (`x[expr](...)`) whose index is not a string literal.
+ */
+function calleeName(fn: SgNode | undefined): string | undefined {
+	if (!fn) return undefined;
+	if (fn.kind() === "member_expression") return fn.field("property")?.text();
+	if (fn.kind() === "subscript_expression") {
+		const index = fn.field("index");
+		return isPlainString(index) ? stringValue(index) : undefined;
+	}
+	return fn.text();
+}
+
+/**
+ * A call that can attach a listener under a name or event the scan cannot read.
+ * Fail closed: it is a site unless BOTH the method name and the event are plain
+ * string literals that name something other than the abort event.
+ *   - a computed callee whose index is not a string literal (`s["add" + "X"](...)`,
+ *     a template with a substitution), whatever the call passes;
+ *   - an `once`/`on` call whose event is not a string literal, or is `"abort"`.
+ *     The event is the first argument of an emitter's own `.on("evt", fn)` and
+ *     the second of `events.once(target, "evt")`, so a literal first argument
+ *     names the event and a non-literal one sends us to the second.
+ */
+function isUnreadableListenerCall(node: SgNode): boolean {
 	if (node.kind() !== "call_expression") return false;
 	const fn = node.field("function");
-	const name =
-		fn?.kind() === "member_expression"
-			? fn.field("property")?.text()
-			: fn?.text();
-	if (name !== "once" && name !== "on") return false;
-	const second = node.field("arguments")?.namedChildren()[1];
-	return second?.kind() === "string" && /^["']abort["']$/.test(second.text());
+	if (fn?.kind() === "subscript_expression" && calleeName(fn) === undefined) {
+		// `x[Symbol.iterator]()` is the one admitted computed form: a well-known
+		// symbol cannot name a listener method.
+		return !/^Symbol\.\w+$/.test(fn.field("index")?.text() ?? "");
+	}
+	const name = calleeName(fn);
+	if (name === undefined || !EVENT_METHODS.has(name)) return false;
+	const args: SgNode[] = node.field("arguments")?.namedChildren() ?? [];
+	if (args.some((arg) => arg.kind() === "spread_element")) return true;
+	const [first, second] = args;
+	if (isPlainString(first)) return stringValue(first) === "abort";
+	if (isPlainString(second)) return stringValue(second) === "abort";
+	return true;
 }
+
+/**
+ * A speed screen, not a verdict: it must admit every text that can hold a site
+ * (a listener token, an `once`/`on` call or string name, or a
+ * computed call `](`), because a
+ * parse of every shipped file costs 6x the screened scan.
+ */
+const MAY_HOLD_SITE =
+	/addEventListener|addAbortListener|onabort|\b(?:once|on)\s*\??\.?\s*[<(]|["'`](?:once|on)["'`]|\]\s*\??\.?\s*[<(]/;
 
 /** Every abort-listener site in one source text. */
 export function scanAbortListenerSites(
 	source: string,
 	relPath = "<source>",
 ): AbortListenerSite[] {
-	if (!/addEventListener|onabort|["']abort["']/.test(source)) return [];
+	if (!MAY_HOLD_SITE.test(source)) return [];
 	const lines = source.split("\n");
 	const seen = new Map<string, number>();
 	const sites: AbortListenerSite[] = [];
 	walkAst(parseRoot(source), (node: SgNode) => {
 		const token = tokenOf(node);
 		const isToken = token !== undefined && ADD_TOKENS.has(token);
-		if (!isToken && !isEventsAbortCall(node)) return;
+		if (!isToken && !isUnreadableListenerCall(node)) return;
 		const label = isToken ? token : "events-abort";
 		const line = node.range().start.line;
 		const symbol = findEnclosingSymbol(lines, line) ?? `line-${line + 1}`;
@@ -153,6 +224,11 @@ export function scanAbortListenerSites(
 const ADMITTED_SITES: Readonly<
 	Record<string, { release: "paired" | "none"; reason: string }>
 > = {
+	"clients/agent-nudge.ts#wireAgentNudgeSubscriber events-abort": {
+		release: "none",
+		reason:
+			"pi.events.on(BUS_FILES_TOUCHED_EVENT, ...): the bus's named-constant event, not the abort event",
+	},
 	"clients/deadline-utils.ts#bounded addEventListener": {
 		release: "paired",
 		reason:
@@ -171,6 +247,11 @@ const ADMITTED_SITES: Readonly<
 		release: "paired",
 		reason: "the one race of a promise against a caller's abort signal",
 	},
+	"clients/lsp/client.ts#clientWaitForDiagnostics events-abort": {
+		release: "none",
+		reason:
+			"the diagnostics emitter's named-constant event (PENDING_RECEIPT_DROPPED), not the abort event; an emitter of ours, not a signal",
+	},
 	"clients/lsp/client.ts#safeSendRequest addEventListener": {
 		release: "paired",
 		reason:
@@ -180,6 +261,11 @@ const ADMITTED_SITES: Readonly<
 		release: "paired",
 		reason:
 			"the batch's own finish() path: kills the pool, clears the timer and removes the listener",
+	},
+	"clients/safe-spawn.ts#installLifetimeCleanup events-abort": {
+		release: "none",
+		reason:
+			"process.once(signal, ...) over SIGINT, SIGTERM and SIGHUP, not the abort event",
 	},
 	"clients/safe-spawn.ts#safeSpawnAsync addEventListener": {
 		release: "paired",
@@ -338,6 +424,81 @@ describe("abort-listener release sweep (shape 4)", () => {
 			expect(sites.map((site) => site.key)).toEqual([
 				"plant.ts#wait events-abort",
 			]);
+		});
+
+		// #5077 review r1 F1: the detector was a token denylist, so a spelling it
+		// did not list (the node:events helper, a computed or constant name) passed
+		// as no site at all. Each plant below slipped through.
+		it("addAbortListener from node:events", () => {
+			const sites = refused(
+				[
+					'import { addAbortListener } from "node:events";',
+					"export function wait(signal: AbortSignal, f: () => void) {",
+					"  const handle = addAbortListener(signal, f);",
+					"  return handle;",
+					"}",
+				].join("\n"),
+			);
+			expect(sites.length).toBeGreaterThan(0);
+			expect(sites.map((site) => site.key)).toContain(
+				"plant.ts#wait addAbortListener",
+			);
+		});
+
+		it("a method name built at run time", () => {
+			const sites = refused(
+				[
+					"export function concat(signal: AbortSignal, f: () => void) {",
+					'  signal["add" + "EventListener"]("abort", f);',
+					"}",
+					"export function template(signal: AbortSignal, f: () => void) {",
+					'  signal[`add${"Event"}Listener`]("abort", f);',
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#concat events-abort",
+				"plant.ts#template events-abort",
+			]);
+		});
+
+		it("an events.once wait whose event is a constant, a template or hidden in a spread", () => {
+			const sites = refused(
+				[
+					'import { once } from "node:events";',
+					'const EVENT = "abort";',
+					"export async function viaConstant(signal: AbortSignal) {",
+					"  await once(signal, EVENT);",
+					"}",
+					"export async function viaTemplate(signal: AbortSignal) {",
+					'  await once(signal, `${"ab"}ort`);',
+					"}",
+					"export async function viaSpread(args: [AbortSignal, string]) {",
+					'  await once(...args, "exit");',
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#viaConstant events-abort",
+				"plant.ts#viaTemplate events-abort",
+				"plant.ts#viaSpread events-abort",
+			]);
+		});
+
+		it("an emitter's own on/once with a literal event that is not abort", () => {
+			// Not noise: the rule is fail-closed on the UNREADABLE, so a plain
+			// literal event of another name stays out of the population.
+			const source = [
+				'import { once } from "node:events";',
+				"export async function quiet(child: NodeJS.EventEmitter, f: () => void) {",
+				'  child.on("close", f);',
+				'  child.once("error", f);',
+				'  await once(child, "exit");',
+				// Split before the call: ast-census.test.ts reads this line as text.
+				"  return pair[Symbol.iterator]" + "();",
+				"}",
+			].join("\n");
+			expect(scanAbortListenerSites(source, "plant.ts")).toEqual([]);
 		});
 
 		it("a removal named only in a comment or a string", () => {

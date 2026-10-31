@@ -808,6 +808,14 @@ describe("#1549 — per-server touch verdict", () => {
 			inconclusive: true,
 			inconclusiveReason: "diagnostics-wait",
 		});
+		// Shape 4, the timer arm (#5077 review r1 F2): the shutdown race sits INSIDE
+		// the probe's `serverTimeout` deadline, so a shutdown clears that timer.
+		// Wrapping the deadline in the race left it ref'd for the server timeout
+		// (2 timers after shutdown, not 1). The one timer left is the client
+		// double's own pending 5 s wait, one per waitForDiagnostics call.
+		expect(vi.getTimerCount()).toBe(
+			primary.waitForDiagnostics.mock.calls.length,
+		);
 		expect(
 			(
 				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }

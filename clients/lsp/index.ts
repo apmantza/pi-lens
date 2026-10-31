@@ -5652,13 +5652,15 @@ export class LSPService {
 							() => "completed" as const,
 							() => "errored" as const,
 						);
-						const completed = untilAborted(
-							withDeadline(probe, {
-								ms: serverTimeout,
-								onTimeout: "undefined",
-							}),
-							this.shutdownController.signal,
-							"shutdown" as const,
+						// The shutdown race sits INSIDE the deadline, so a shutdown
+						// settles the deadline and clears its serverTimeout timer.
+						const completed = withDeadline(
+							untilAborted(
+								probe,
+								this.shutdownController.signal,
+								"shutdown" as const,
+							),
+							{ ms: serverTimeout, onTimeout: "undefined" },
 						);
 						shared = completed
 							.then((outcome) => {

@@ -203,9 +203,9 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 	},
 	{
 		file: "tests/clients/abort-listener-release-sweep.test.ts",
-		text: 'const second = node.field("arguments")?.namedChildren()[1];',
+		text: 'const args: SgNode[] = node.field("arguments")?.namedChildren() ?? [];',
 		count: 1,
-		reason: "indexes the second argument of a call; nothing is visited",
+		reason: "reads one call's argument list; nothing is visited",
 	},
 	{
 		file: "tests/clients/socket-error-listener-sweep.test.ts",
