@@ -201,10 +201,6 @@ export const worktreeCount = (lane: Lane) =>
 	git(lane.root, "worktree", "list", "--porcelain")
 		.split("\n")
 		.filter((line) => line.startsWith("worktree ")).length;
-export const scratch = (lane: Lane) => {
-	const dir = path.join(lane.tmp, "pi-lens-scratch");
-	return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
-};
 export const occurrences = (text: string, needle: string) =>
 	text.split(needle).length - 1;
 export const TIMEOUT = 170_000;

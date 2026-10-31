@@ -25,12 +25,16 @@ import {
 	makeLane,
 	runLane,
 	worktreeCount,
-	scratch,
 	occurrences,
 	TIMEOUT,
 } from "../support/lane-check-kit.js";
 
 useLaneCleanups();
+
+const scratch = (lane: ReturnType<typeof makeLane>) => {
+	const dir = path.join(lane.tmp, "pi-lens-scratch");
+	return fs.existsSync(dir) ? fs.readdirSync(dir) : [];
+};
 
 describe("lane-check verdict table (#4047 round 2)", () => {
 	it(
