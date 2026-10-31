@@ -150,8 +150,8 @@ rebuild:
   on `file` for the real outline. The footer carries index coverage
   (`capped — results may be incomplete` on a truncated index), the MCP-only
   staleness note below, and one next-step line naming the top-ranked hit
-  (`module_report <file>` on pi, `pilens_module_report <file>` on MCP). `details`
-  keeps `{ available, query, count, coverage }`; the rows carry everything the
+  (`module_report <file>` on pi, `pilens_module_report <file>` on MCP). On pi, `details`
+  keeps `{ available, query, count, coverage }` (MCP has no `details`); the rows carry everything the
   dropped JSON did (annotations, and the next step that replaces
   `suggestedNext`).
 - **Staleness hint (MCP only, #536)**: `symbolSearch()` returns
