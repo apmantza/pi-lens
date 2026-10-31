@@ -295,13 +295,16 @@ export interface RunnerDefinition {
  * serve the file's dialect — both are policy decisions named at the delivery
  * surface, never an empty output read as clean). `disabled-by-config` is the
  * operator's own decision (`dispatch.disabledRunners`): the runner never ran,
- * which is neither a failure nor a verdict on the file. */
+ * which is neither a failure nor a verdict on the file. `not-enabled` is the
+ * same for an opt-in runner left off (#5042): nothing failed, and nothing was
+ * checked either. */
 export const RUNNER_SKIP_REASONS = [
 	"no-files-matched",
 	"configured-non-biome-linter",
 	"dialect-unsupported",
 	"covered-by-primary",
 	"disabled-by-config",
+	"not-enabled",
 ] as const;
 export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
 
@@ -312,13 +315,16 @@ export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
  * a reason added to the taxonomy reads as a failure until it is listed here.
  * `covered-by-primary` is left out on purpose: it defers to a lane whose answer
  * is what the denial may have removed. `disabled-by-config` is the denial
- * itself and the caller handles it. {@link reachedNoVerdict} admits the whole
- * taxonomy as a verdict; this is the narrower "not a tool failure" subset.
+ * itself and the caller handles it. {@link reachedNoVerdict} admits the
+ * taxonomy as a verdict except `not-enabled`; this is the narrower "not a tool
+ * failure" subset, and `not-enabled` is in it (#5042): an opt-in runner left
+ * off failed at nothing.
  */
 export const NOT_APPLICABLE_SKIP_REASONS: readonly RunnerSkipReason[] = [
 	"no-files-matched",
 	"configured-non-biome-linter",
 	"dialect-unsupported",
+	"not-enabled",
 ];
 
 /** Whether a skip reason states the runner had nothing to check. */
@@ -573,8 +579,8 @@ export function hasUsableResult(result: {
  * the file and finished (R1 in PR #4491's round-3 table). That is a
  * `succeeded` run not flagged `inconclusive`, a `failed` run with its own
  * findings, or a skip that states a not-applicable reason from
- * {@link RUNNER_SKIP_REASONS}. Every other outcome has none: a `failed` run
- * without findings (timeout, spawn or server failure), a `deferred` one, a
+ * {@link RUNNER_SKIP_REASONS} (`not-enabled` excepted, below). Every other
+ * outcome has none: a `failed` run without findings (timeout, spawn or server failure), a `deferred` one, a
  * run flagged `inconclusive`, and any skip without a stated reason, since a
  * skip that never read the file (a size or line cap, an aborted WASM runtime,
  * a grammar or server that is unavailable) says nothing about it. Unknown
@@ -595,7 +601,15 @@ export function reachedNoVerdict(
 		case "deferred":
 			return true;
 		case "skipped":
-			return !isRunnerSkipReason(result.skipReason);
+			// #5042: an opt-in runner left off states why it did not run, which
+			// changes the notice's wording and nothing else. It still read nothing
+			// of the file, so it stays out of the verdicts exactly as its bare skip
+			// was: a recorded blocker of that runner is kept and its edited lines
+			// stay owed, not retired by a run that never happened.
+			return (
+				!isRunnerSkipReason(result.skipReason) ||
+				result.skipReason === "not-enabled"
+			);
 		default:
 			return false;
 	}

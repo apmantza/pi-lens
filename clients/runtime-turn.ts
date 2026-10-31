@@ -2746,6 +2746,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				r.indeterminate?.reason !== "lsp_binding_rejected" &&
 				r.indeterminate?.reason !== "excluded_by_role" &&
 				r.indeterminate?.reason !== "budget_truncated" &&
+				r.indeterminate?.reason !== "unresolved_reference" &&
+				r.indeterminate?.budget === undefined,
+		);
+		// #5055: the graph WAS available and found its dependents; only files that
+		// reference a changed symbol by an ambiguous name were left unplaced. Its
+		// own frame, for the same reason as the binding bucket: "the review graph
+		// was unavailable" would misname the cause.
+		const referenceRuns = indeterminateRuns.filter(
+			(r) =>
+				r.indeterminate?.reason === "unresolved_reference" &&
 				r.indeterminate?.budget === undefined,
 		);
 		const bindingRuns = indeterminateRuns.filter(
@@ -2787,6 +2797,28 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		if (graphAdvisory) advisoryParts.push(graphAdvisory);
 		if (graphAdvisory) citePart(graphAdvisory, graphNamed);
 		holdAdvisory(graphAdvisory, graphRuns, "indeterminate");
+
+		const referenceNamed: string[] = [];
+		const referenceAdvisory = withCarryLabel(
+			buildAdvisory(
+				referenceRuns,
+				{
+					// The bullet below carries the cause and the files, so the lead
+					// does not say it again.
+					lead: (fileCount) =>
+						`Cascade could not place every dependent of ${fileCount} edited file(s) this turn, ` +
+						`so a clean cascade result does not cover them.`,
+					fallbackDetail: () =>
+						"some files reference a changed symbol by an ambiguous name",
+				},
+				referenceNamed,
+			),
+			referenceRuns,
+		);
+		// @delivery-surface: runtime-turn:cascade-coverage-advisory
+		if (referenceAdvisory) advisoryParts.push(referenceAdvisory);
+		if (referenceAdvisory) citePart(referenceAdvisory, referenceNamed);
+		holdAdvisory(referenceAdvisory, referenceRuns, "indeterminate");
 
 		const bindingNamed: string[] = [];
 		const bindingAdvisory = withCarryLabel(
@@ -2857,6 +2889,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			...(r.indeterminate?.budget && { budget: r.indeterminate.budget }),
 			...(r.indeterminate?.diagnostic && {
 				diagnostic: r.indeterminate.diagnostic,
+			}),
+			...(r.indeterminate?.unplacedReferrerCount !== undefined && {
+				unplacedReferrerCount: r.indeterminate.unplacedReferrerCount,
 			}),
 		}));
 		logCascade({

@@ -182,7 +182,14 @@ const trivyConfigRunner: RunnerDefinition = {
 
 		// Single opt-in switch — trivy is opt-in across all modes.
 		if (!isTrivyEnabled(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			// Stated, so a denied sibling's coverage notice names the opt-in
+			// rather than a failed tool (#5042).
+			return {
+				status: "skipped",
+				diagnostics: [],
+				semantic: "none",
+				skipReason: "not-enabled",
+			};
 		}
 
 		const absPath = path.resolve(cwd, ctx.filePath);

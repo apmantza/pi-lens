@@ -103,6 +103,8 @@ function makePushOnlyServer(options: { serverId?: string; filePath: string }) {
 		holdWait: false,
 		/** The server re-checks the file on its own while a wait is open. */
 		publishOnWait: false,
+		/** What that re-check publishes (a clean file by default). */
+		waitDiags: [] as unknown[],
 	};
 	const publish = (diags: unknown[], publishedAt: number): void => {
 		state.diags = diags;
@@ -156,7 +158,7 @@ function makePushOnlyServer(options: { serverId?: string; filePath: string }) {
 		waitForDiagnostics: vi.fn(async () => {
 			if (state.publishOnWait) {
 				state.publishOnWait = false;
-				publish([], Date.now());
+				publish(state.waitDiags, Date.now());
 			}
 			if (state.holdWait) await heldWait;
 		}),
@@ -570,6 +572,10 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 	 */
 	async function runCascade(options: {
 		publishInsideTouch: boolean;
+		/** The exporter's language: go (gopls) or java (jdtls, #5040 remainder). */
+		lang?: "java";
+		/** What the server publishes for the importer inside the touch. */
+		insideTouchDiags?: unknown[];
 		/** The server publishes after the cascade started and before its touch
 		 *  of the neighbour (a stamp after the edit, nothing inside the touch). */
 		publishBeforeTouch?: boolean;
@@ -577,20 +583,22 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 		publishErrorAfterMerge?: boolean;
 	}) {
 		const env = setupTestEnvironment("cascade-pre-edit-answer-");
-		const exporter = path.join(env.tmpDir, "B.go");
-		const importer = path.join(env.tmpDir, "C.go");
+		const java = options.lang === "java";
+		const [serverId, ext] = java ? ["jdtls", ".java"] : ["gopls", ".go"];
+		const exporter = path.join(env.tmpDir, `B${ext}`);
+		const importer = path.join(env.tmpDir, `C${ext}`);
 		fs.writeFileSync(exporter, "package main\n\nfunc Lib() {}\n");
 		fs.writeFileSync(importer, NEIGHBOR_CONTENT);
 		mocks.computeImpactCascade.mockReturnValue(impact(exporter, [importer]));
 
-		const server = makePushOnlyServer({ filePath: importer });
+		const server = makePushOnlyServer({ serverId, filePath: importer });
 		// The answer a jdtls-class server publishes for the importer BEFORE the
 		// edit, and then never republishes for it on its own.
 		server.publish([], Date.now() - 60_000);
 		mocks.createLSPClient.mockResolvedValue(server.client);
 		const onResolveRoot: { current?: () => void } = {};
 		mocks.getServersForFileWithConfig.mockReturnValue([
-			serverConfig("gopls", env.tmpDir, ".go", onResolveRoot),
+			serverConfig(serverId, env.tmpDir, ext, onResolveRoot),
 		]);
 
 		const { LSPService } = await import("../../clients/lsp/index.js");
@@ -603,6 +611,7 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 		// server answers.
 		if (options.publishInsideTouch) {
 			server.state.publishOnWait = true;
+			server.state.waitDiags = options.insideTouchDiags ?? [];
 		}
 		if (options.publishBeforeTouch) {
 			// The graph build runs after `cascadeStart` and before the neighbour
@@ -631,7 +640,7 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 			turnSeq: 1,
 			writeSeq: 1,
 		});
-		return { env, run, importer, server };
+		return { env, run, importer, server, serverId };
 	}
 
 	it("reads a neighbour whose cached answer predates the edit as unconfirmed, never clean", async () => {
@@ -738,6 +747,68 @@ describe("the cascade does not read a pre-edit answer as this edit's clean", () 
 		} finally {
 			env.cleanup();
 		}
+	});
+
+	// #5040 remainder: java joined CASCADE_GRAPH_KINDS once a push-only server's
+	// pre-edit answer stopped reading as clean. Recurrence each cell prevents:
+	// before the membership, a Java exporter edit ended `skipReason: "non_code"`
+	// before any importer was asked (tool-smoke run 41027095385, 30 attempts, no
+	// importer touched), whatever jdtls would have said; and with the membership
+	// but without the pre-edit refusal, jdtls's silent importer read `clean`
+	// (PR #5035's wire capture). One cell per verdict state of the java cascade.
+	describe("for a java exporter, jdtls's three answers", () => {
+		it("delivers the error jdtls published for the importer inside the touch", async () => {
+			const { env, run, importer, serverId } = await runCascade({
+				lang: "java",
+				publishInsideTouch: true,
+				insideTouchDiags: [LATE_ERROR],
+			});
+			try {
+				expect(serverId).toBe("jdtls");
+				expect(run.skipReason).toBeUndefined();
+				expect(run.unconfirmed).toBeUndefined();
+				expect(run.observedNeighborPaths).toEqual([importer]);
+				expect(run.result?.formatted).toContain("late error");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("confirms a clean importer when jdtls answered inside the touch", async () => {
+			const { env, run, importer } = await runCascade({
+				lang: "java",
+				publishInsideTouch: true,
+			});
+			try {
+				expect(run.skipReason).toBe("clean");
+				expect(run.unconfirmed).toBeUndefined();
+				expect(run.observedNeighborPaths).toEqual([importer]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("reads an importer jdtls never republished as unconfirmed, never clean", async () => {
+			const { env, run, importer } = await runCascade({
+				lang: "java",
+				publishInsideTouch: false,
+			});
+			try {
+				expect(run.skipReason).toBe("indeterminate");
+				expect(run.result).toBeUndefined();
+				expect(run.unconfirmed?.servers).toEqual([
+					{
+						serverId: "jdtls",
+						reason: "pre-edit-answer",
+						waitMs: 0,
+						paths: [importer],
+					},
+				]);
+				expect(run.observedNeighborPaths).toBeUndefined();
+			} finally {
+				env.cleanup();
+			}
+		});
 	});
 });
 

@@ -336,6 +336,79 @@ export function saveVerdictCells(row) {
 }
 
 /**
+ * The run-log line for a row the merge held back (#5060): the answer that
+ * stands, and what the night that could not tell measured.
+ *
+ * @param {{ server: string, prior: string, measured: string, verdict: string }} held
+ * @returns {string}
+ */
+export function describeHeldBack(held) {
+	return `save-verdict: held back ${held.server}: kept "${held.prior}", this night measured "${held.measured}" — ${held.verdict}`;
+}
+
+/**
+ * Emit the held rows for the run: one log line per server and, under GitHub
+ * Actions, one `::warning::` annotation with the same text (#5060 F1). A held
+ * night leaves the doc unchanged, so the refresh PR shows nothing; the
+ * annotation is what puts it on the run's summary page. One record per server
+ * per run, however often a row repeats. A staleness counter or an issue is new
+ * state and not built here.
+ *
+ * @param {Array<{ server: string, prior: string, measured: string, verdict: string }>} heldBack
+ * @param {{ env: Record<string, string | undefined>, log: (line: string) => void }} sink
+ */
+export function reportHeldBack(heldBack, { env, log }) {
+	const seen = new Set();
+	for (const held of heldBack) {
+		if (seen.has(held.server)) continue;
+		seen.add(held.server);
+		const line = describeHeldBack(held);
+		log(line);
+		if (env.GITHUB_ACTIONS) log(`::warning::${line}`);
+	}
+}
+
+/**
+ * Rows of this run that reached their table row: written or held back. The
+ * driver's "none has a table row" floor reads it, so a night that held every
+ * row is not reported as a missing row (#5060).
+ *
+ * @param {{ measured: string[], heldBack: unknown[] }} refreshed
+ * @returns {number}
+ */
+export function rowsReached(refreshed) {
+	return refreshed.measured.length + refreshed.heldBack.length;
+}
+
+/**
+ * The `--summary` record of a run, `heldBack` included (#5060 F1).
+ *
+ * @param {{
+ *   command: string,
+ *   src: string,
+ *   waitMs: number,
+ *   rows: Array<{ cells: Record<string, string> | undefined }>,
+ *   refreshed: ReturnType<typeof refreshSaveVerdictTable>,
+ *   notMeasured: unknown[],
+ *   budgetExhausted: boolean,
+ * }} run
+ */
+export function saveVerdictSummary(run) {
+	return {
+		command: run.command,
+		src: run.src,
+		waitMs: run.waitMs,
+		measured: run.rows.map((row) => row.cells),
+		wrote: run.refreshed.measured,
+		notInTable: run.refreshed.notInTable,
+		kept: run.refreshed.kept,
+		heldBack: run.refreshed.heldBack,
+		notMeasured: run.notMeasured,
+		budgetExhausted: run.budgetExhausted,
+	};
+}
+
+/**
  * Merge this run's measured rows into the doc's save-verdict table.
  *
  * Rows this run did not measure are copied verbatim — the merge guard that keeps
@@ -353,11 +426,20 @@ export function saveVerdictCells(row) {
  * @param {string} text
  * @param {Array<Record<string, string>>} measured  rows keyed by column name
  * @param {{ marker?: string }} [opts]
+ * A measured row whose verdict is not a settled answer (`inconclusive`,
+ * `cannot measure`, anything else) never replaces a settled prior one, and its
+ * evidence stays with it (#5060): a night that could not tell is not a night
+ * that found the opposite. The gate admits the settled answers and refuses every
+ * other value, so a spelling nobody planned cannot erase an answer either. The
+ * row is reported in `heldBack` for the run log; the table has no column for an
+ * unobserved night, so the log is where it is recorded.
+ *
  * @returns {{
  *   text: string,
  *   changed: boolean,
  *   measured: string[],
  *   kept: string[],
+ *   heldBack: Array<{ server: string, prior: string, measured: string, verdict: string }>,
  *   notInTable: string[],
  *   reason?: string,
  * }}
@@ -372,6 +454,7 @@ export function refreshSaveVerdictTable(text, measured, opts = {}) {
 			changed: false,
 			measured: [],
 			kept: [],
+			heldBack: [],
 			notInTable: [],
 			reason: "save-verdict table not found in doc",
 		};
@@ -381,11 +464,27 @@ export function refreshSaveVerdictTable(text, measured, opts = {}) {
 	const merged = [];
 	const measuredServers = [];
 	const kept = [];
+	const heldBack = [];
+	const verdictIdx = table.header.indexOf(SAVE_VERDICT_COLUMN);
+	const detailIdx = table.header.indexOf("verdict");
 	for (const cells of table.rows) {
 		const row = byKey.get(cells[keyIdx]);
 		if (!row) {
 			merged.push(cells);
 			kept.push(cells[keyIdx]);
+			continue;
+		}
+		if (
+			SAVE_VERDICT_SETTLED.has(cells[verdictIdx]) &&
+			!SAVE_VERDICT_SETTLED.has(row[SAVE_VERDICT_COLUMN])
+		) {
+			merged.push(cells);
+			heldBack.push({
+				server: cells[keyIdx],
+				prior: cells[verdictIdx],
+				measured: row[SAVE_VERDICT_COLUMN],
+				verdict: row[table.header[detailIdx]],
+			});
 			continue;
 		}
 		merged.push(
@@ -403,6 +502,7 @@ export function refreshSaveVerdictTable(text, measured, opts = {}) {
 		changed: out !== text,
 		measured: measuredServers,
 		kept,
+		heldBack,
 		notInTable: rows
 			.map((row) => row.server)
 			.filter((server) => !tableKeys.has(server)),

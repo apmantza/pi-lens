@@ -514,6 +514,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 		"no-files-matched",
 		"configured-non-biome-linter",
 		"dialect-unsupported",
+		"not-enabled",
 	] as const)(
 		"words a sibling's stated not-applicable skip (%s) as config only, not a failed tool",
 		async (skipReason) => {
@@ -622,6 +623,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 		"no-files-matched",
 		"configured-non-biome-linter",
 		"dialect-unsupported",
+		"not-enabled",
 	];
 	it.each(
 		RUNNER_SKIP_REASONS.filter(

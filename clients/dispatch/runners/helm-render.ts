@@ -147,6 +147,13 @@ const SKIPPED: RunnerResult = {
 };
 
 /**
+ * Render validation is opt-in and left off: the user's own choice, stated so a
+ * denied sibling's coverage notice names no failed tool (#5042). The other
+ * `SKIPPED` returns (no chart, outside the workspace) stay bare.
+ */
+const NOT_ENABLED: RunnerResult = { ...SKIPPED, skipReason: "not-enabled" };
+
+/**
  * Explicit opt-in for rendering. Rendering runs chart-authored template code,
  * so the default is OFF and only an explicit `helm.renderValidation.enabled`
  * in `.pi-lens.json` (the loader walks up, so `~/.pi-lens.json` enables it for
@@ -1117,7 +1124,7 @@ const helmRenderRunner: RunnerDefinition = {
 		// Gate 1 — consent, read from the project whose chart would run. Keying
 		// this on `cwd` let an opt-in in one directory authorize a DIFFERENT
 		// project root's chart.
-		if (!isHelmRenderEnabled(workspaceRoot)) return SKIPPED;
+		if (!isHelmRenderEnabled(workspaceRoot)) return NOT_ENABLED;
 
 		const startDir = path.dirname(path.resolve(ctx.filePath));
 		const discovered = findNearestDirWithMarker(startDir, "chartYamlPath");

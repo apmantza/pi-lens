@@ -67,10 +67,7 @@ describe("tests/fixtures/lsp-cascade/measurements.json (#1712)", () => {
 	it("has one row per fixture: a pass with a time, or a declared known defect with none", () => {
 		// Recurrence: a fixture added without a measurement, a night where the
 		// declared defect showed and the row carries a time it never had, or an
-		// unavailable server (`skip`) committed as if it had been measured. The
-		// java `pass` row is the sample taken while java was in the cascade set
-		// (PR #5035 head 49b88c8cd, since held out until #5040); the next refreshed
-		// table replaces it with a `known-defect` row.
+		// unavailable server (`skip`) committed as if it had been measured.
 		expect(table.rows.map((r) => r.lang)).toEqual(
 			CASCADE_FIXTURES.map((f) => f.lang),
 		);

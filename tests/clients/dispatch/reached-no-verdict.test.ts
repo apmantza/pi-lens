@@ -17,9 +17,17 @@ import {
 } from "../../../clients/dispatch/types.js";
 
 describe("reachedNoVerdict (#4484 round 3)", () => {
-	it("reads a skip with a stated not-applicable reason as a verdict", () => {
+	it("reads a stated not-applicable skip as a verdict, not-enabled excepted (#5042)", () => {
+		// #5042 (option A): `not-enabled` is the one stated reason that stays no
+		// verdict, because admitting it would retire recorded helm-render blockers
+		// and stop their owed ranges. Every other taxonomy entry reads as a verdict
+		// unless it is named here.
+		const noVerdictReasons: readonly string[] = ["not-enabled"];
 		for (const skipReason of RUNNER_SKIP_REASONS) {
-			expect(reachedNoVerdict({ status: "skipped", skipReason })).toBe(false);
+			expect(
+				reachedNoVerdict({ status: "skipped", skipReason }),
+				skipReason,
+			).toBe(noVerdictReasons.includes(skipReason));
 		}
 	});
 
