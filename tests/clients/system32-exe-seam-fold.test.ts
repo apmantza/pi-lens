@@ -19,6 +19,7 @@
  * `tests/clients/safe-spawn-kill-ownership.test.ts`, whose exact-string
  * expectation also holds with the seam in place.
  */
+// flake-shape: real-process-spawn — the taskkill tree-kill case needs a real live child of this process: safeSpawnAsync's ownership guard reads its /proc ppid, which no double carries; the mock beside it on the same module would otherwise hide that spawn (#5064)
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -208,23 +209,22 @@ describe("safe-spawn names its System32 executables through the seam", () => {
 			await vi.importActual<typeof import("node:child_process")>(
 				"node:child_process",
 			);
-		// A real child of this process: the pid the kill names is one we own.
-		const owned = realSpawn(process.execPath, [
-			"-e",
-			"setTimeout(() => {}, 5000)",
-		]);
-		const main = new FakeChild(owned.pid ?? 0);
-		const { spawns } = doubleChildProcess((call) => {
-			if (!call.command.endsWith("taskkill.exe")) return main;
-			const killer = new FakeChild(4103);
-			setImmediate(() => {
-				killer.emit("close", 0, null);
-				main.emit("close", null, "SIGKILL");
-			});
-			return killer;
-		});
-		doubleFixtureToolsOnDisk();
+		// A real child of this process: the pid the kill names is one we own. It
+		// starts inside the try, so the finally kills it on every path.
+		let owned: import("node:child_process").ChildProcess | undefined;
 		try {
+			owned = realSpawn(process.execPath, ["-e", "setTimeout(() => {}, 5000)"]);
+			const main = new FakeChild(owned.pid ?? 0);
+			const { spawns } = doubleChildProcess((call) => {
+				if (!call.command.endsWith("taskkill.exe")) return main;
+				const killer = new FakeChild(4103);
+				setImmediate(() => {
+					killer.emit("close", 0, null);
+					main.emit("close", null, "SIGKILL");
+				});
+				return killer;
+			});
+			doubleFixtureToolsOnDisk();
 			const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
 			await trustProject();
 
@@ -234,7 +234,7 @@ describe("safe-spawn names its System32 executables through the seam", () => {
 			expect(kill?.command).toBe(system32("taskkill.exe"));
 			expect(kill?.args).toEqual(["/F", "/T", "/PID", String(owned.pid)]);
 		} finally {
-			owned.kill("SIGKILL");
+			owned?.kill("SIGKILL");
 		}
 	});
 });
