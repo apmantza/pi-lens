@@ -532,9 +532,9 @@ Thanks goes to these wonderful people:
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Nyarlathoteppppp"><img src="https://avatars.githubusercontent.com/u/126082256?v=4" width="100px;" alt=""/><br /><sub><b>bowen xu</b></sub></a><br /><a href="#code-Nyarlathoteppppp" title="Code">💻</a> <a href="https://github.com/apmantza/pi-lens/commits?author=Nyarlathoteppppp" title="Tests">⚠️</a></td>
     </tr>
     <tr>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dmae97"><img src="https://avatars.githubusercontent.com/u/146327957?v=4" width="100px;" alt=""/><br /><sub><b>dmae97</b></sub></a><br /><a href="#code-dmae97" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/dmae97"><img src="https://avatars.githubusercontent.com/u/146327957?v=4" width="100px;" alt=""/><br /><sub><b>dmae97</b></sub></a><br /><a href="#code-dmae97" title="Code">💻</a> <a href="#bug-dmae97" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Battlelamb"><img src="https://avatars.githubusercontent.com/u/12995996?v=4" width="100px;" alt=""/><br /><sub><b>Battlelamb</b></sub></a><br /><a href="#code-Battlelamb" title="Code">💻</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="http://wayneh.tw/"><img src="https://avatars.githubusercontent.com/u/5166321?v=4" width="100px;" alt=""/><br /><sub><b>WeiHung</b></sub></a><br /><a href="#code-wayne930242" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://wayneh.tw/"><img src="https://avatars.githubusercontent.com/u/5166321?v=4" width="100px;" alt=""/><br /><sub><b>WeiHung</b></sub></a><br /><a href="#code-wayne930242" title="Code">💻</a> <a href="#ideas-wayne930242" title="Ideas & Planning">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/wertyMSD"><img src="https://avatars.githubusercontent.com/u/130595241?v=4" width="100px;" alt=""/><br /><sub><b>wertyMSD</b></sub></a><br /><a href="#bug-wertyMSD" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/rcdailey"><img src="https://avatars.githubusercontent.com/u/1768054?v=4" width="100px;" alt=""/><br /><sub><b>Robert Dailey</b></sub></a><br /><a href="#bug-rcdailey" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://twitter.com/letwir"><img src="https://avatars.githubusercontent.com/u/16576177?v=4" width="100px;" alt=""/><br /><sub><b>letwir</b></sub></a><br /><a href="#doc-letwir" title="Documentation">📖</a></td>
@@ -543,6 +543,14 @@ Thanks goes to these wonderful people:
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/Silvio-Re"><img src="https://avatars.githubusercontent.com/u/5860449?v=4" width="100px;" alt=""/><br /><sub><b>Silvio</b></sub></a><br /><a href="#bug-Silvio-Re" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/forge18"><img src="https://avatars.githubusercontent.com/u/31629847?v=4" width="100px;" alt=""/><br /><sub><b>forge18</b></sub></a><br /><a href="#ideas-forge18" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/paymog"><img src="https://avatars.githubusercontent.com/u/1986950?v=4" width="100px;" alt=""/><br /><sub><b>Paymahn Moghadasian</b></sub></a><br /><a href="#doc-paymog" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/vjda"><img src="https://avatars.githubusercontent.com/u/20127271?v=4" width="100px;" alt=""/><br /><sub><b>Victor J. Diaz Ayuste</b></sub></a><br /><a href="#ideas-vjda" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/GlitchOverride"><img src="https://avatars.githubusercontent.com/u/112761176?v=4" width="100px;" alt=""/><br /><sub><b>GlitchOverride</b></sub></a><br /><a href="#bug-GlitchOverride" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sbscan"><img src="https://avatars.githubusercontent.com/u/18386839?v=4" width="100px;" alt=""/><br /><sub><b>Can Gürcan</b></sub></a><br /><a href="#ideas-sbscan" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/zackchiutw"><img src="https://avatars.githubusercontent.com/u/107488700?v=4" width="100px;" alt=""/><br /><sub><b>Zachary Chiu</b></sub></a><br /><a href="#bug-zackchiutw" title="Bug reports">🐛</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/yxlimo"><img src="https://avatars.githubusercontent.com/u/13878887?v=4" width="100px;" alt=""/><br /><sub><b>ShayLu</b></sub></a><br /><a href="#bug-yxlimo" title="Bug reports">🐛</a></td>
     </tr>
   </tbody>
 </table>

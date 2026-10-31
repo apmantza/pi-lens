@@ -2000,7 +2000,8 @@
       "avatar_url": "https://avatars.githubusercontent.com/u/146327957?v=4",
       "profile": "https://github.com/dmae97",
       "contributions": [
-        "code"
+        "code",
+        "bug"
       ]
     },
     {
@@ -2018,7 +2019,8 @@
       "avatar_url": "https://avatars.githubusercontent.com/u/5166321?v=4",
       "profile": "http://wayneh.tw/",
       "contributions": [
-        "code"
+        "code",
+        "ideas"
       ]
     },
     {
@@ -2073,6 +2075,60 @@
       "profile": "https://github.com/forge18",
       "contributions": [
         "ideas"
+      ]
+    },
+    {
+      "login": "paymog",
+      "name": "Paymahn Moghadasian",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1986950?v=4",
+      "profile": "https://github.com/paymog",
+      "contributions": [
+        "doc"
+      ]
+    },
+    {
+      "login": "vjda",
+      "name": "Victor J. Diaz Ayuste",
+      "avatar_url": "https://avatars.githubusercontent.com/u/20127271?v=4",
+      "profile": "https://github.com/vjda",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "GlitchOverride",
+      "name": "GlitchOverride",
+      "avatar_url": "https://avatars.githubusercontent.com/u/112761176?v=4",
+      "profile": "https://github.com/GlitchOverride",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "sbscan",
+      "name": "Can Gürcan",
+      "avatar_url": "https://avatars.githubusercontent.com/u/18386839?v=4",
+      "profile": "https://github.com/sbscan",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "zackchiutw",
+      "name": "Zachary Chiu",
+      "avatar_url": "https://avatars.githubusercontent.com/u/107488700?v=4",
+      "profile": "https://github.com/zackchiutw",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "yxlimo",
+      "name": "ShayLu",
+      "avatar_url": "https://avatars.githubusercontent.com/u/13878887?v=4",
+      "profile": "https://github.com/yxlimo",
+      "contributions": [
+        "bug"
       ]
     }
   ]
