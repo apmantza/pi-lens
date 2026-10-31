@@ -116,6 +116,13 @@ interface AgentEndDeps {
 	 * primary. Omitted: the primary's drain.
 	 */
 	sessionRole?: "primary" | "concurrent-secondary";
+	/**
+	 * #5108 F5: the session an agent advisory from this drain is for, as the
+	 * caller's `context` drain resolves it. The coordinator's scope (`session`
+	 * below) is the primary's, and a concurrent secondary drains its own.
+	 * Guarded writes keep `session`. Absent: `session`.
+	 */
+	advisoryScope?: LineageHandle;
 	/** Test/override hook for {@link DEFERRED_FORMAT_STALE_AFTER_MS}. */
 	staleAfterMs?: number;
 }
@@ -194,6 +201,7 @@ export async function handleAgentEnd({
 	getAutofixClients,
 	currentSessionId,
 	sessionRole = "primary",
+	advisoryScope,
 	staleAfterMs = DEFERRED_FORMAT_STALE_AFTER_MS,
 }: AgentEndDeps): Promise<AgentEndFormatSummary | undefined> {
 	// Backstop for read captures (#4185 R2-3, round 4). A call's capture is
@@ -668,7 +676,7 @@ export async function handleAgentEnd({
 							// Keep the captured session: a late advisory must not reach
 							// the session that replaced this drain.
 							const text = renderFixRunLoss(loss);
-							queueAgentAdvisory(text, session);
+							queueAgentAdvisory(text, advisoryScope ?? session);
 							notify(`pi-lens: ${text}`, "warning");
 						} catch (err) {
 							// #3915: `bounded()` boxes this rejection and swallows it once

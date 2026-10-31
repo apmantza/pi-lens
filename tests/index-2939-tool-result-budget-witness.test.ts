@@ -36,6 +36,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const handlerGate = vi.hoisted(() => ({
 	hang: false,
 	ambientAfterYield: undefined as AbortSignal | undefined | "unset",
+	/**
+	 * #5108 F1: when set, the handler waits for it, then finishes having
+	 * collected `notices` as withheld-blocker lines. `work` is the handler's
+	 * returned promise, so a case can wait for its late settlement.
+	 */
+	hold: undefined as Promise<void> | undefined,
+	notices: [] as string[],
+	work: undefined as Promise<unknown> | undefined,
+	/** #5108 G2: when set, the analyzer bootstrap load waits for it. */
+	bootHold: undefined as Promise<void> | undefined,
 }));
 vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 	const actual =
@@ -43,32 +53,79 @@ vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 	const { getAmbientAbortSignal } = await import("../clients/safe-spawn.js");
 	return {
 		...actual,
-		handleToolResult: async (
-			deps: Parameters<typeof actual.handleToolResult>[0],
-		) => {
-			await Promise.resolve();
-			handlerGate.ambientAfterYield = getAmbientAbortSignal();
-			return handlerGate.hang
-				? new Promise<never>(() => {})
-				: actual.handleToolResult(deps);
+		handleToolResult: (deps: Parameters<typeof actual.handleToolResult>[0]) => {
+			const work = (async () => {
+				await Promise.resolve();
+				handlerGate.ambientAfterYield = getAmbientAbortSignal();
+				const hold = handlerGate.hold;
+				if (hold !== undefined) {
+					await hold;
+					deps.withheldNotices?.push(...handlerGate.notices);
+					return undefined;
+				}
+				return handlerGate.hang
+					? new Promise<never>(() => {})
+					: actual.handleToolResult(deps);
+			})();
+			// The promise `index.ts` chains its late advisory on, so a case
+			// awaiting it resumes after that chain has run.
+			handlerGate.work = work;
+			return work;
 		},
 	};
 });
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
-	return bootstrapSeamMock(async () => ({
-		biomeClient: { isAvailable: () => false },
-		ruffClient: { isAvailable: () => false },
-		metricsClient: { reset: () => {} },
-	}));
+	return bootstrapSeamMock(async () => {
+		if (handlerGate.bootHold !== undefined) await handlerGate.bootHold;
+		// #5108: the cases below start sessions, which read the full client set
+		// (the shape `tests/index-3620-sweep-scope-fence.test.ts` uses).
+		return {
+			metricsClient: { reset: () => {} },
+			todoScanner: {},
+			biomeClient: { isAvailable: () => false },
+			ruffClient: { isAvailable: () => false },
+			knipClient: {
+				isAvailable: () => false,
+				resetSessionState: () => {},
+				analyze: async () => ({
+					success: false,
+					summary: "unavailable",
+					issues: [],
+				}),
+			},
+			jscpdClient: { isAvailable: () => false },
+			depChecker: { isAvailable: () => false },
+			testRunnerClient: { detectRunner: () => null },
+			goClient: { isGoAvailableAsync: async () => false },
+			rustClient: { isAvailableAsync: async () => false },
+			agentBehaviorClient: {
+				recordToolCall: () => {},
+				formatWarnings: () => "",
+			},
+			complexityClient: {
+				isSupportedFile: () => false,
+				analyzeFile: () => null,
+			},
+		};
+	});
 });
 
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../clients/degradation-ledger.js";
+import {
+	_resetAgentNudgeForTests,
+	consumeAgentNudge,
+} from "../clients/agent-nudge.js";
+import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import extension from "../index.js";
+import {
+	makeContextWithSystemEvent,
+	makeSessionStartEvent,
+} from "./support/host-event-factory.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 let tmpDir: string;
@@ -76,6 +133,10 @@ let filePath: string;
 
 beforeEach(() => {
 	handlerGate.hang = true;
+	handlerGate.hold = undefined;
+	handlerGate.notices = [];
+	handlerGate.work = undefined;
+	handlerGate.bootHold = undefined;
 	handlerGate.ambientAfterYield = "unset";
 	resetDegradationLedger();
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2939-budget-"));
@@ -205,5 +266,177 @@ describe("#2939 M13 — the ambient abort slot outlives the handler's first yiel
 		// And the `finally` did run once the handler settled.
 		const { getAmbientAbortSignal } = await import("../clients/safe-spawn.js");
 		expect(getAmbientAbortSignal()).toBeUndefined();
+	});
+});
+
+/**
+ * #5108 review F1: the late withheld-blocker advisory an abandoned handler
+ * queues names the session whose tool result it was.
+ *
+ * Recurrence prevented: PR #5114 round 1 queued it under
+ * `runtime.captureSessionGeneration()`, the coordinator's scope, which is the
+ * PRIMARY's. A concurrent secondary (#473) drains its own member scope, so its
+ * disclosure reached the primary's context and the secondary never heard of
+ * its blocker: the #5108 silence, for the secondary.
+ *
+ * Real: both session starts, the bound that abandons the handler, the
+ * advisory queue and both `context_with_system` drains. The double is the
+ * TIMING of `handleToolResult` (held past the bound, then finishing with one
+ * withheld line), as above.
+ */
+describe("#5108 F1: a late advisory reaches the session whose tool result it was", () => {
+	it("queues an abandoned secondary's withheld blocker for the secondary's own context", async () => {
+		_resetSessionLifecycleForTests();
+		_resetAgentNudgeForTests();
+		handlerGate.hang = false;
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		const secondaryRoot = path.join(tmpDir, "secondary-root");
+		fs.mkdirSync(secondaryRoot, { recursive: true });
+		const primaryCtx = () => makeCtx({ cwd: tmpDir, sessionId: "pi-5108-p" });
+		const secondaryCtx = () =>
+			makeCtx({ cwd: secondaryRoot, sessionId: "pi-5108-s" });
+		await pi.emit("session_start", makeSessionStartEvent(), primaryCtx());
+		await pi.emit("session_start", makeSessionStartEvent(), secondaryCtx());
+
+		let release: () => void = () => {};
+		handlerGate.hold = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		handlerGate.notices = [
+			"\u26a0 1 blocking finding in second.ts withheld: test",
+		];
+		vi.useFakeTimers();
+		const settled = pi.emit(
+			"tool_result",
+			{
+				toolName: "bash",
+				toolCallId: "sh-5108",
+				input: { command: "true" },
+				content: [{ type: "text", text: "done" }],
+			},
+			secondaryCtx(),
+		);
+		await vi.advanceTimersByTimeAsync(500);
+		await settled;
+		vi.useRealTimers();
+		// The bound gave up first; the handler finishes afterwards.
+		release();
+		await handlerGate.work;
+
+		const textOf = async (ctx: ReturnType<typeof makeCtx>) => {
+			const injected = (await pi.emit(
+				"context_with_system",
+				makeContextWithSystemEvent([{ role: "user", content: "go" }]),
+				ctx,
+			)) as { messages?: Array<{ content: unknown }> } | undefined;
+			return (injected?.messages ?? [])
+				.map((m) => JSON.stringify(m.content))
+				.join("\n");
+		};
+		const secondary = await textOf(secondaryCtx());
+		const primary = await textOf(primaryCtx());
+		expect(secondary).toContain("second.ts withheld");
+		expect(secondary).toContain("abandoned");
+		expect(primary).not.toContain("second.ts");
+	});
+
+	// The fallback for a call no session start has recorded yet: the late
+	// advisory has no callee default, and an entry with no scope makes every
+	// later drain throw (#5114 verify r2, m4).
+	it("queues a late advisory from before the first session start without breaking the next drain", async () => {
+		_resetSessionLifecycleForTests();
+		_resetAgentNudgeForTests();
+		handlerGate.hang = false;
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		let release: () => void = () => {};
+		handlerGate.hold = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		handlerGate.notices = [
+			"\u26a0 1 blocking finding in early.ts withheld: test",
+		];
+		vi.useFakeTimers();
+		const settled = pi.emit(
+			"tool_result",
+			{
+				toolName: "bash",
+				toolCallId: "sh-5108-early",
+				input: { command: "true" },
+				content: [{ type: "text", text: "done" }],
+			},
+			makeCtx({ cwd: tmpDir, sessionId: "pi-5108-early" }),
+		);
+		await vi.advanceTimersByTimeAsync(500);
+		await settled;
+		vi.useRealTimers();
+		release();
+		await handlerGate.work;
+
+		// Any later drain prunes the queue first, so an entry with no scope
+		// throws there; the real store is read directly, as every drain does.
+		expect(() => consumeAgentNudge()).not.toThrow();
+	});
+
+	// #5108 G2 (Greptile on #5114): the host's own bound, the registration
+	// wrapper's, starts at hook entry, before the edit path's bootstrap await;
+	// the handler's inner bound started after it. A 2 s bootstrap and 9 s of
+	// handling let the host give up at 10 s while the inner wait still settled,
+	// so the late advisory was skipped and the withheld blocker never shown.
+	it("queues the disclosure when the host's bound gave up before a slow bootstrap's handler settled", async () => {
+		_resetSessionLifecycleForTests();
+		_resetAgentNudgeForTests();
+		handlerGate.hang = false;
+		const pi = createPiMock();
+		extension(pi.asExtensionAPI());
+		const ctx = () => makeCtx({ cwd: tmpDir, sessionId: "pi-5108-g2" });
+		await pi.emit("session_start", makeSessionStartEvent(), ctx());
+
+		vi.useFakeTimers();
+		handlerGate.bootHold = new Promise<void>((resolve) => {
+			setTimeout(resolve, 2_000);
+		});
+		// Settles 9 s after the handler starts, which is after the bootstrap.
+		handlerGate.hold = new Promise<void>((resolve) => {
+			setTimeout(resolve, 11_000);
+		});
+		handlerGate.notices = [
+			"\u26a0 1 blocking finding in slow.ts withheld: test",
+		];
+		// A recognised write makes it edit-class: the bootstrap is awaited.
+		const settled = pi.emit(
+			"tool_result",
+			{
+				toolName: "bash",
+				toolCallId: "sh-5108-g2",
+				input: {
+					command: `cat > ${path.join(tmpDir, "known.ts")} <<'EOF'\nconst a = 1;\nEOF`,
+				},
+				content: [{ type: "text", text: "done" }],
+			},
+			ctx(),
+		);
+		await vi.advanceTimersByTimeAsync(10_000);
+		await settled;
+		// The host stopped waiting at its own 10 s bound.
+		expect(Object.keys(exceeded())).toContain(
+			"tool_result_edit:registered-handler",
+		);
+		await vi.advanceTimersByTimeAsync(1_000);
+		await handlerGate.work;
+		vi.useRealTimers();
+
+		const injected = (await pi.emit(
+			"context_with_system",
+			makeContextWithSystemEvent([{ role: "user", content: "go" }]),
+			ctx(),
+		)) as { messages?: Array<{ content: unknown }> } | undefined;
+		const text = JSON.stringify(
+			(injected?.messages ?? []).map((m) => m.content),
+		);
+		expect(text).toContain("slow.ts withheld");
+		expect(text).toContain("abandoned");
+		await pi.emit("session_shutdown", { reason: "quit" }, ctx());
 	});
 });

@@ -29,6 +29,7 @@ import {
 	releasePrimarySession,
 } from "../../clients/session-lifecycle.js";
 import { resetSessionScopedState } from "../../clients/runtime-session.js";
+import { beginScope, retireScope } from "../../clients/session-scope.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -459,6 +460,78 @@ it("records the linked-worktree row for a worktree under a pi-owned temp dir", a
 // Recurrence: #4734 Sourcery thread 4. The row was written after the pipeline
 // await without the #3596 liveness check, so a replaced session's handler
 // latched its once-key in the new session's ledger.
+/**
+ * #5108 review F1, class sweep: the caller names the session an advisory
+ * belongs to (`deps.advisoryScope`), because the coordinator's own scope is
+ * the primary's and a concurrent secondary drains its own (#473). Recurrence
+ * prevented: a `queueAgentAdvisory` site here that takes `writeSession`, so a
+ * secondary's notice reaches the primary's context. The outside-root and
+ * adopted-root sites are witnessed through `index.ts` in
+ * `tests/index-3748-advisory-scope-witness.test.ts`.
+ */
+describe("tool_result advisories follow the caller's advisory scope (#5108 F1)", () => {
+	async function editUnderSecondary(
+		prefix: string,
+		pipeline: (ctx: { onFixRunLoss?: (notice: string) => void }) => unknown,
+	) {
+		resetDegradationLedger();
+		const env = setupTestEnvironment(prefix);
+		const checkoutRoot = path.join(
+			env.tmpDir,
+			"..",
+			`capture-5108-${process.pid}-${prefix}`,
+		);
+		const { runtime, editResult } = linkedWorktreeEdit(checkoutRoot);
+		const secondary = beginScope({ role: "secondary" });
+		try {
+			vi.mocked(runPipeline).mockImplementation(
+				async (ctx) => pipeline(ctx as never) as never,
+			);
+			await handleToolResult({
+				...(editResult() as object),
+				advisoryScope: secondary.capture(),
+			} as never);
+			return {
+				secondary: consumeAgentNudge(undefined, secondary)?.messages ?? [],
+				primary: consumeAgentNudge(undefined, runtime.sessionScope),
+			};
+		} finally {
+			vi.mocked(runPipeline).mockReset();
+			retireScope(secondary, "shutdown");
+			env.cleanup();
+			fs.rmSync(checkoutRoot, { recursive: true, force: true });
+		}
+	}
+
+	it("queues the linked-worktree clean notice for the advisory scope", async () => {
+		const { secondary, primary } = await editUnderSecondary("wt-clean", () =>
+			linkedWorktreeResult.clean(),
+		);
+		expect(secondary).toEqual([
+			expect.objectContaining({
+				content: expect.stringContaining("found nothing to report"),
+			}),
+		]);
+		expect(primary).toBeUndefined();
+	});
+
+	it("queues a fix-run loss notice for the advisory scope", async () => {
+		const { secondary, primary } = await editUnderSecondary(
+			"fix-loss",
+			(ctx) => {
+				ctx.onFixRunLoss?.("restore lost edit 5108-loss.ts");
+				return linkedWorktreeResult.uncheckedCleanLine();
+			},
+		);
+		expect(secondary).toEqual([
+			expect.objectContaining({
+				content: expect.stringContaining("5108-loss.ts"),
+			}),
+		]);
+		expect(primary).toBeUndefined();
+	});
+});
+
 it("a linked-worktree result settling after a replacement records nothing in the new session", async () => {
 	resetDegradationLedger();
 	const env = setupTestEnvironment("pi-lens-2657-worktree-replaced-");

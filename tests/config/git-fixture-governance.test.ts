@@ -57,6 +57,11 @@ const NOT_A_FIXTURE = [
 	// alias config a real checkout needs. Its tests drive it against a
 	// throwaway repo through gitFixtureEnv, so the fixture side is covered.
 	"scripts/pr-worktree.mjs",
+	// #5111: removes a linked worktree of THIS clone (`git worktree list/
+	// remove`), the same real-clone shape as `pr-worktree.mjs` above. Its
+	// tests inject `gitExec` backed by the fixture-env wrapper, so the fixture
+	// side is covered.
+	"scripts/worktree-remove.mjs",
 ] as const;
 
 const REPO_ROOT = path.resolve(__dirname, "../..");

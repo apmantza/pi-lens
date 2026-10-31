@@ -111,6 +111,13 @@ const CONTEXT_PATHS: Array<
 	// every fork / bot guard in the tree.
 	["github.event.pull_request.head.repo.full_name", () => "acme/repo"],
 	["github.event.pull_request.user.login", () => "a-human"],
+	// #5112: greetings.yml starts its job for a pull request only from a
+	// first-time author. A pull request by one is the case that job exists for,
+	// so it reads reachable.
+	[
+		"github.event.pull_request.author_association",
+		() => "FIRST_TIME_CONTRIBUTOR",
+	],
 	["github.repository", () => "acme/repo"],
 	// A `pull_request` event carries no workflow_run payload at all, so every
 	// path under it reads null -- which is what makes a workflow_run-only job

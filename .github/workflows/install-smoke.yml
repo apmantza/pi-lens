@@ -178,6 +178,7 @@ jobs:
       pull-requests: read
     outputs:
       smoke: ${{ steps.classify.outputs.smoke }}
+      install: ${{ steps.classify.outputs.install }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -197,6 +198,19 @@ jobs:
 
   smoke:
     name: ${{ matrix.os }} · ${{ matrix.pm }}
+    # #5112: a pull request starts this job only when its diff touches an
+    # install path (INSTALL_PATHS in scripts/ci-changed-files.mjs: the manifests,
+    # the lifecycle scripts, the Install test's scripts, this workflow). It cost
+    # 1,447 runner minutes in 30 days with 0 real catches (#3995 slice A), and
+    # the PRs that reach this workflow only for the RPC, LSP or trust seams
+    # (PR_SMOKE_PATHS) are served by pi-load and lsp-handshake, which the deep
+    # `scope` verdict still runs in full. The #3043 rule holds: an edit to this
+    # job's own lines is an edit to this file, which is an install path, so the
+    # lines it changes still run before the merge. Every other event runs the
+    # full matrix below, and an empty or missing verdict runs the cell (fail
+    # open, like pi-load's reading of `scope.smoke`).
+    needs: scope
+    if: github.event_name != 'pull_request' || needs.scope.outputs.install != 'false'
     # #3043's shape, swept (2026-09-15 retro F2): this job carried
     # `if: github.event_name != 'pull_request'`, so an edit to any of its four
     # package-manager arms reached master with NO pre-merge lane able to

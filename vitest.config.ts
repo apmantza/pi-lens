@@ -786,6 +786,9 @@ export const wallClockBudgetInclude = [
 	// with vi.waitFor; the fake shellcheck's first run sleeps past the 5 s
 	// collect-later threshold (flake-shape admission).
 	"tests/index-4943-telemetry-session-stamp.test.ts",
+	// #5108: a real bash write plus a handler held past the live 500 ms bound
+	// (flake-shape admission); the git children ride in the serialized lane.
+	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
 	"tests/mcp/session-end.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",
@@ -956,6 +959,10 @@ export const wallClockBudgetInclude = [
 	// master 1701d01. A poll loop (real setTimeout) waits for the file's first
 	// write rather than a fixed sleep (flake-shape admission).
 	"tests/scripts/with-memory-watch.test.ts",
+	// #5111: the worktree-removal helper's decision over a real git fixture --
+	// the registry, the node_modules symlink-or-directory state and the
+	// unlink-before-remove ordering (flake-shape admission).
+	"tests/scripts/worktree-remove.test.ts",
 	"tests/support/fault-injection.test.ts",
 	"tests/support/git-config-guard.test.ts",
 	"tests/support/git-fixture-env.test.ts",

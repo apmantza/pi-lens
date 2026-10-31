@@ -40,7 +40,13 @@ const asList = (needs: Job["needs"]) =>
 
 type Ctx = {
 	event: string;
-	changes: { code: string; formal: string; smoke?: string; hotpath?: string };
+	changes: {
+		code: string;
+		formal: string;
+		smoke?: string;
+		hotpath?: string;
+		install?: string;
+	};
 	results: Record<string, string>;
 	outputs: Record<string, Record<string, string>>;
 	matrixOs?: string;
@@ -73,6 +79,10 @@ function evaluate(rawExpression: string, ctx: Ctx): boolean {
 		if (token === "github.event.pull_request.head.repo.full_name")
 			return "apmantza/pi-lens";
 		if (token === "github.repository") return "apmantza/pi-lens";
+		// #5112: the `install-test` legs read the classify step's own output; the
+		// step runs the same script, so it is the `changes` verdict of the diff.
+		if (token === "steps.scope.outputs.install")
+			return ctx.changes.install ?? "";
 		throw new Error(`unsupported context in if: ${token}`);
 	};
 	function primary(): string | boolean {
@@ -149,7 +159,7 @@ function simulate(
 							.split("\n")
 							.map((l) => l.split("=")),
 					)
-		) as { code: string; formal: string; smoke?: string; hotpath?: string };
+		) as Ctx["changes"];
 		const results: Record<string, string> = changesFails
 			? { changes: "failure" }
 			: {};
@@ -259,6 +269,7 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			formal: "false",
 			smoke: "false",
 			hotpath: "false",
+			install: "false",
 		});
 		for (const id of HEAVY_ADVISORY) expect(results[id], id).toBe("skipped");
 		// Recurrence (#5082): the four shard jobs of a diff that cannot change
@@ -297,26 +308,79 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 		expect(run.match(/exit 0/g)).toBeNull();
 	});
 
-	// Recurrence: the Install legs skipping their steps on docs-only. `docs/` is
-	// in the published `files`, so a docs edit changes the packed tarball the
-	// legs verify.
-	it("runs every step of every Install test leg on a docs-only diff, as on a code diff", () => {
-		const docs = simulate("pull_request", DOCS_ONLY);
-		const code = simulate("pull_request", ["clients/index.ts"]);
-		expect(
-			stepsRun("install-test", "pull_request", docs.changes, docs.results),
-		).toEqual(
-			stepsRun("install-test", "pull_request", code.changes, code.results),
-		);
+	// Recurrence (#5112): the three required `Install test (<os>)` legs cost
+	// 10,875 runner minutes in 30 days for 0 real catches (#3995 slice A), so a
+	// pull request installs only when it touches an install path. The opposite
+	// defect is the one this guards: a leg that SKIPS at job level (a required row
+	// the verdict demands as a literal success, #2618), or that installs on a
+	// master push, the merge queue or a dispatch with no path ever read.
+	// Docs are no longer an install path even though `docs/` ships in `files`.
+	describe("Install test legs (#5112)", () => {
 		const total = (CI["install-test"].steps ?? []).length;
-		const docsSteps = stepsRun(
-			"install-test",
-			"pull_request",
-			docs.changes,
-			docs.results,
+		const CLASSIFY = "Classify the changed files";
+		const NOOP = "No install files changed";
+		const run = (event: string, files: string[]) => {
+			const sim = simulate(event, files);
+			return {
+				job: sim.results["install-test"],
+				legs: stepsRun("install-test", event, sim.changes, sim.results),
+			};
+		};
+
+		it.each([
+			["docs-only", DOCS_ONLY],
+			["a code diff outside the install paths", ["clients/index.ts"]],
+			["a test-only diff", ["tests/clients/foo.test.ts"]],
+		])("reports and installs nothing on %s", (_label, files) => {
+			const { job, legs } = run("pull_request", files);
+			expect(job).toBe("success");
+			for (const os of ["ubuntu-latest", "windows-latest", "macos-latest"]) {
+				const names = legs[os].filter(
+					(name: string) => !name.startsWith("actions/"),
+				);
+				expect(names, os).toEqual([CLASSIFY, NOOP]);
+			}
+		});
+
+		it.each([
+			["package.json"],
+			["package-lock.json"],
+			["scripts/download-grammars.js"],
+			["scripts/install-selftest.mjs"],
+			["clients/installer/registry.ts"],
+			[".github/workflows/ci.yml"],
+		])("runs every install step on a pull request that changes %s", (file) => {
+			const { legs } = run("pull_request", [file]);
+			// The no-op line and the macOS-only APFS step with its evaluated floor
+			// (#4518) are the three steps a pull request never runs; the APFS pair
+			// is a non-pull_request pair (#5112), so all three legs run the same.
+			for (const os of ["ubuntu-latest", "windows-latest", "macos-latest"]) {
+				expect(legs[os], os).not.toContain(NOOP);
+				expect(legs[os], os).toHaveLength(total - 3);
+			}
+		});
+
+		// Recurrence: master, the merge queue, a dispatch
+		// losing the install to the classifier. Any non-pull_request event installs.
+		it.each(["push", "merge_group", "workflow_dispatch"])(
+			"runs every step on a %s event even for a docs-only file list",
+			(event) => {
+				const { job, legs } = run(event, DOCS_ONLY);
+				expect(job).toBe("success");
+				// everything but the no-op line, and the APFS pair on macOS only
+				expect(legs["ubuntu-latest"]).toHaveLength(total - 3);
+				expect(legs["macos-latest"]).toHaveLength(total - 1);
+				expect(legs["macos-latest"]).toContain("APFS anchors evaluated floor");
+				expect(legs["ubuntu-latest"]).not.toContain(NOOP);
+			},
 		);
-		expect(docsSteps["ubuntu-latest"]).toHaveLength(total - 2); // the macOS-only APFS step and its evaluated floor (#4518)
-		expect(docsSteps["macos-latest"]).toHaveLength(total);
+
+		// Recurrence: a classifier that cannot read the diff reading as "nothing
+		// changed". Every doubt installs (AGENTS.md shape 48).
+		it("installs when the file list is empty", () => {
+			const { legs } = run("pull_request", []);
+			expect(legs["ubuntu-latest"]).not.toContain(NOOP);
+		});
 	});
 
 	// Recurrence: one non-docs file in an otherwise docs diff (the allowlist is
@@ -354,6 +418,7 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 				formal: "true",
 				smoke: "true",
 				hotpath: "true",
+				install: "true",
 			});
 			for (const id of [
 				...TEST_JOBS.filter((id) => id !== "changed-tests-shuffled"),

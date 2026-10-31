@@ -70,8 +70,9 @@ repair a wrong `core.hooksPath`, run `node scripts/setup-git-hooks.mjs`.
 
 An agent driven through Claude Code also runs under a `PreToolUse` hook on
 every `Bash` call, `scripts/hooks/guard-bash.mjs` (wired in
-`.claude/settings.json`), which denies `git stash` in any form, a `git reset
---soft`/`--hard`, a hand-typed `git worktree remove` with two force flags (use
+`.claude/settings.json`), which denies `git stash` in any form but the read-only `list` and `show`, a
+`git reset --soft`/`--hard`, a hand-typed `git worktree remove` with two force
+flags (use `node scripts/worktree-remove.mjs <path>` or
 `node scripts/prune-agent-worktrees.mjs` instead), any `git worktree remove`
 on a worktree whose `node_modules` is a symlink pointing outside it (or on a
 path the hook cannot resolve statically; `~`, `$HOME` and relative paths are
