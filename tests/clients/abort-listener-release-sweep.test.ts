@@ -22,9 +22,10 @@
  * `addAbortListener` or `.onabort` (a call, an alias, a destructured binding, a
  * bracket-string access); a computed call whose method name is not a plain
  * string literal (`signal["add" + "EventListener"](...)`, a template with a
- * substitution); or an `once`/`on` call whose event is `"abort"` or is not a
- * string literal (a constant, a template, a spread). Only a plain literal event
- * of another name, and `x[Symbol.iterator]()`, are read as not-a-site. A site is
+ * substitution); an identifier or a subscript name that spells an escape; or an
+ * `once`/`on` call whose event is `"abort"`, is not a string literal (a constant,
+ * a template, a spread) or spells an escape. Only a plain literal event of
+ * another name, and `x[Symbol.iterator]()`, are read as not-a-site. A site is
  * admitted only when it is a registered key in `ADMITTED_SITES` with its reason,
  * and a registered site that claims a release also holds a
  * `removeEventListener` token in its outermost enclosing function. Everything
