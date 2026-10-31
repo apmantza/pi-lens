@@ -88,25 +88,25 @@ interface Admission {
 const ADMITTED: Readonly<Record<string, Admission>> = {
 	"clients/safe-spawn.ts#spawn": {
 		reason:
-			"the chokepoint's own child start (safeSpawnAsync runs admitSpawn before it resolves or starts anything) and its fixed %SystemRoot% taskkill teardown literal",
+			"the chokepoint's own child start (safeSpawnAsync runs admitSpawn before it resolves or starts anything) and its taskkill teardown, whose System32 path now resolves through `windowsExe`",
 		sites: 2,
 		evidence: "admitSpawn(",
 	},
 	"clients/safe-spawn.ts#spawnSync": {
 		reason:
-			"the chokepoint's own synchronous start (safeSpawn runs admitSpawn first) plus its fixed %SystemRoot% taskkill and chcp teardown literals",
+			"the chokepoint's own synchronous start (safeSpawn runs admitSpawn first) plus its taskkill and chcp teardowns, whose System32 paths now resolve through `windowsExe`",
 		sites: 4,
 		evidence: "admitSpawn(",
 	},
 	"clients/lsp/launch.ts#nodeSpawn": {
 		reason:
-			"the LSP launcher's own starts (trySpawn's shell and direct arms): its PATH scan and child PATH are trust-scoped (trustScopedEnvironment), a bare command resolving into the project is refused (refuseProjectLookup), and the served-root project-local gate (#4248) runs on top; plus its fixed %SystemRoot% taskkill teardown literal",
+			"the LSP launcher's own starts (trySpawn's shell and direct arms): its PATH scan and child PATH are trust-scoped (trustScopedEnvironment), a bare command resolving into the project is refused (refuseProjectLookup), and the served-root project-local gate (#4248) runs on top; plus its taskkill teardown, whose System32 path now resolves through `windowsExe`",
 		sites: 3,
 		evidence: "refuseProjectLookup(command, spawnCommand, cwd, env)",
 	},
 	"clients/lsp/client.ts#nodeSpawn": {
 		reason:
-			"a fixed %SystemRoot% taskkill literal that tears down a language server this process already started",
+			"a taskkill teardown of a language server this process already started, whose System32 path now resolves through `windowsExe`",
 		sites: 1,
 		evidence: "taskkill",
 	},

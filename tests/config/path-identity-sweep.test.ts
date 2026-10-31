@@ -191,11 +191,6 @@ const PINS: Readonly<Record<string, Pin>> = {
 		identities: "7e723fe52bc1e91e",
 		reason: SPELLING_MEMO,
 	}, // :1524, :1535 (#4689 batch 7 moved them; count and identity unchanged)
-	"clients/inline-blocker-dispositions.ts#path-resolve-keyed": {
-		sites: 2,
-		identities: "22f213e6ea043ad8",
-		reason: LOCAL_DEDUPE,
-	}, // :147, :149
 	"clients/install-diagnostics.ts#raw-realpath": {
 		sites: 1,
 		identities: "1e68f8fa901aa8c4",

@@ -1,9 +1,11 @@
 export declare const PR_FILES_API_CAP: number;
 export declare const PR_SMOKE_PATHS: string[];
+export declare const HOT_PATH_PATHS: string[];
 export declare function classifyChangedFiles(paths: string[]): {
 	code: boolean;
 	formal: boolean;
 	smoke: boolean;
+	hotpath: boolean;
 	reason: string;
 };
 export declare function pathsFromPrFiles(

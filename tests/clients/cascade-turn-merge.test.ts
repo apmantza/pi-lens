@@ -924,6 +924,81 @@ describe("cascade turn-end merge", () => {
 		}
 	});
 
+	// #5055: an `unresolved_reference` run is a graph that WAS available; only
+	// files that name a changed symbol ambiguously were left unplaced. Recurrence:
+	// the bucket filter lists the reasons it excludes, so a new reason falls into
+	// the "review graph was unavailable" frame (#1104's mis-attribution) unless it
+	// is excluded there too.
+	it("words an unresolved_reference run as its own cause and logs its reason (#5055)", async () => {
+		const env = setupTestEnvironment("cascade-unresolved-reference-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			const cacheManager = new CacheManager(false);
+			const primary = path.join(env.tmpDir, "lib.ts");
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			cacheManager.addModifiedRange(
+				primary,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+
+			runtime.appendCascadeRun({
+				filePath: primary,
+				result: undefined,
+				neighborCount: 0,
+				diagnosticCount: 0,
+				skipReason: "indeterminate",
+				indeterminate: {
+					reason: "unresolved_reference",
+					detail:
+						"2 file(s) reference a changed symbol by name alone, and several definitions share the name: app.ts, other.ts",
+					unplacedReferrerCount: 2,
+				},
+			});
+
+			logCascadeMock.mockClear();
+			await handleTurnEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager,
+				knipClient: {
+					ensureAvailable: async () => false,
+					analyze: async () => EMPTY_KNIP_RESULT,
+				},
+				deadCodeClients: [],
+				depChecker: { ensureAvailable: async () => false },
+				testRunnerClient: { getTestRunTarget: () => null },
+				resetLSPService: () => {},
+				resetFormatService: () => {},
+			} as any);
+
+			const findings = consumeTurnEndFindings(cacheManager, env.tmpDir);
+			const content = findings?.messages[0]?.content ?? "";
+			expect(content).not.toContain("the review graph was unavailable");
+			expect(content).toContain("lib.ts");
+			// The cause and the unplaced files appear once, not in a lead and again
+			// in a bullet (#5070 review F6).
+			expect(content.split("by name alone")).toHaveLength(2);
+			expect(content).toContain("app.ts, other.ts");
+			expect(content).toContain("a clean cascade result does not cover them");
+			expect(content).toContain("Advisory — no action required this turn");
+			const indeterminateLog = logCascadeMock.mock.calls
+				.map((args) => args[0])
+				.find((entry) => entry?.phase === "cascade_indeterminate");
+			expect(indeterminateLog?.metadata?.reasons).toContain(
+				"unresolved_reference",
+			);
+			expect(indeterminateLog?.metadata?.byFile).toEqual([
+				expect.objectContaining({ unplacedReferrerCount: 2 }),
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// #1445: a `missing_node` compute has two causes that read identically to
 	// the advisory text but mean opposite things — "the graph genuinely
 	// doesn't know this file" versus "this file's role (test, #260) is

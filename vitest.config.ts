@@ -705,6 +705,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/safe-spawn-ambient-signal.test.ts",
 	"tests/clients/safe-spawn-failure-taxonomy.test.ts",
 	"tests/clients/safe-spawn-input.test.ts",
+	// #5064: a real node child is started through vi.importActual beside the
+	// same file's child_process mock (flake-shape admission).
+	"tests/clients/safe-spawn-kill-ownership.test.ts",
 	"tests/clients/safe-spawn-resource-usage.test.ts",
 	"tests/clients/safe-spawn-timeout-teardown.test.ts",
 	"tests/clients/safe-spawn-windows-command.test.ts",
@@ -717,6 +720,10 @@ export const wallClockBudgetInclude = [
 	"tests/clients/sgconfig-scratch-bound.test.ts",
 	"tests/clients/shared-checkout-guard.test.ts",
 	"tests/clients/startup-overhead.test.ts",
+	// #5064: a real node child is started through vi.importActual beside the
+	// same file's child_process mock, and taskkill's pid is that child (flake-shape
+	// admission).
+	"tests/clients/system32-exe-seam-fold.test.ts",
 	// #3871: runner-location regex budget (depth-30 paths, 100K blank runs
 	// and tokens); a real event-loop occupancy witness, so it runs serialized.
 	"tests/clients/test-runner-location-regex-budget.test.ts",
@@ -974,6 +981,10 @@ export const wallClockBudgetInclude = [
 	// so the pool's SIGTERM of each fixture fork and a real hook timeout are
 	// what the file observes (flake-shape admission).
 	"tests/support/vitest-setup-registry-teardown.test.ts",
+	// #5071 round 3: the 60-file outline case drives the real ast-grep CLI
+	// through AstGrepClient, so its ordering and byte ratio are measured on real
+	// child output (flake-shape admission).
+	"tests/tools/ast-grep-outline.test.ts",
 	// #4583: same fire-and-forget cold build as its clients sibling above; the
 	// pi-tool witness joins it with a real-time vi.waitFor (flake-shape
 	// admission).

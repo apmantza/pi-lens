@@ -105,13 +105,17 @@ const FILTERABLE_COLUMNS = new Set(["ProcessId", "Name", "CommandLine"]);
  * Absolute path to a System32 executable. Windows resolves a bare
  * `powershell.exe` through PATH, which a caller can shadow; the callers spawn
  * this to decide what to KILL, so the interpreter is named absolutely.
+ * `path.win32`, not the host `path`: the result is a Windows path whatever
+ * host builds it, so a test that stubs the platform reads the same string a
+ * Windows host does. Every pi-lens spawn of a System32 executable
+ * (`taskkill`, `cmd`, `chcp`, `tar`, `powershell`) names it through here.
  *
  * @param {string} name
  * @returns {string}
  */
 export function windowsExe(name) {
-	return path.join(
-		process.env.SystemRoot ?? path.join("C:", "Windows"),
+	return path.win32.join(
+		process.env.SystemRoot ?? path.win32.join("C:", "Windows"),
 		"System32",
 		name,
 	);

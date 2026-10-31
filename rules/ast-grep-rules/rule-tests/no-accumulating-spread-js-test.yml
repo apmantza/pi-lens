@@ -2,7 +2,44 @@ id: no-accumulating-spread-js
 valid:
   - 'arr.reduce((acc, item) => { acc.push(item); return acc }, [])'
   - 'arr.flatMap(item => [item])'
+  # #5093: a copy made once, outside a reduce callback, is not a per-pass copy.
+  - 'const copy = Object.assign({}, acc)'
+  - 'const copy = Array.from(acc)'
+  - 'const copy = acc.slice()'
+  # #5093: mutating the accumulator is not a copy.
+  - 'arr.reduce((acc, item) => Object.assign(acc, item), {})'
+  - 'arr.reduce((acc, item) => { acc.concat(item); return acc }, [])'
+  # #5093 binding guard: the copied value must be the accumulator itself.
+  - 'arr.reduce((acc, item) => Array.from(item), [])'
+  - 'arr.reduce((acc, item) => [].concat(item), [])'
+  - 'arr.reduce((acc, item) => item.slice(), [])'
+  - 'arr.reduce((acc, item) => Object.assign({}, item, { k: 1 }), {})'
 invalid:
   - 'arr.reduce((acc, item) => [...acc, item], [])'
   - 'arr.reduce((acc, item) => [...acc, ...item], [])'
   - 'arr.reduce(function (acc, item) { return [...acc, item] }, [])'
+  # #5093: non-spread copies of the accumulator, expression bodies.
+  - 'arr.reduce((acc, item) => Object.assign({}, acc, { [item.k]: item.v }), {})'
+  - 'arr.reduce((acc, item) => Object.assign({}, acc), {})'
+  - 'arr.reduce((acc, item) => Array.from(acc), [])'
+  - 'arr.reduce((acc, item) => [].concat(acc, item), [])'
+  - 'arr.reduce((acc, item) => [].concat(acc), [])'
+  - 'arr.reduce((acc, item) => acc.concat(item), [])'
+  - 'arr.reduce((acc, item) => acc.concat(item.children), [])'
+  - 'arr.reduce((acc, item) => acc.slice(), [])'
+  # #5093: the same copies as the only statement of an arrow block body.
+  - 'arr.reduce((acc, item) => { return Object.assign({}, acc, { [item.k]: item.v }) }, {})'
+  - 'arr.reduce((acc, item) => { return Object.assign({}, acc) }, {})'
+  - 'arr.reduce((acc, item) => { return Array.from(acc) }, [])'
+  - 'arr.reduce((acc, item) => { return [].concat(acc, item) }, [])'
+  - 'arr.reduce((acc, item) => { return [].concat(acc) }, [])'
+  - 'arr.reduce((acc, item) => { return acc.concat(item) }, [])'
+  - 'arr.reduce((acc, item) => { return acc.slice() }, [])'
+  # #5093: the same copies as the only statement of a function body.
+  - 'arr.reduce(function (acc, item) { return Object.assign({}, acc, { k: item }) }, {})'
+  - 'arr.reduce(function (acc, item) { return Object.assign({}, acc) }, {})'
+  - 'arr.reduce(function (acc, item) { return Array.from(acc) }, [])'
+  - 'arr.reduce(function (acc, item) { return [].concat(acc, item) }, [])'
+  - 'arr.reduce(function (acc, item) { return [].concat(acc) }, [])'
+  - 'arr.reduce(function (acc, item) { return acc.concat(item) }, [])'
+  - 'arr.reduce(function (acc, item) { return acc.slice() }, [])'

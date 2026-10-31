@@ -62,6 +62,12 @@
  *   not create or truncate call sites. It separately uses `codeMatches` for
  *   helper calls and mock declarations, while `strings: "keep"` remains only
  *   for the intentional `"vitest"` argv evidence.
+ * - Detector 1's real-module read (#5064) reads an `importActual` call by its
+ *   name and its first argument. A bound copy of the function (`const load =
+ *   vi.importActual; load(...)`), a `require` of child_process, and a zero-
+ *   argument passthrough in a mock factory (`importOriginal()`) are not read.
+ *   No such call exists in the tree today (grep); a binding-following read is
+ *   the follow-up if one appears.
  * - Detector 1 recognizes known spawn-helper names at their test call sites —
  *   the support-module helpers plus the one production seam that wraps the
  *   child, `collectUntrackedIgnoredIds` (#4598) — and ignores calls whose
@@ -239,6 +245,12 @@ const CHILD_PROCESS_IMPORT =
 	/(?:^\s*import\b.*\bfrom\s*["'](?:node:)?child_process["']|\brequire\(\s*["'](?:node:)?child_process["']\s*\))/;
 const SYNC_TRIAD = new Set(["execFileSync", "spawnSync", "execSync"]);
 const VITEST_IN_ARGV = /\bvitest\b/i;
+// #5064: a same-file `vi.mock`/`vi.doMock` of child_process hides the import
+// and the triad above, but `vi.importActual("node:child_process")` returns the
+// REAL module behind that mock, so the spawns started through it are real.
+const CHILD_PROCESS_SPECIFIER = /^(?:node:)?child_process$/;
+const FIRST_STRING_ARGUMENT = /^(["'`])([^"'`]*)\1/;
+const IMPORT_ACTUAL_CALL = /\bimportActual\b\s*(?:<[^;]*?>)?\s*\(/g;
 // These helpers are the test-side routes to real child processes. Keep this
 // list beside the support-module census: matching the CALL in a test catches
 // a helper that hides `node:child_process` behind another module boundary.
@@ -286,9 +298,38 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 }
 
 /**
+ * An `importActual` call (any receiver, optional type arguments) that reads
+ * the real child_process module (#5064): its first argument names
+ * child_process, or is not a plain string literal (an unknown specifier is
+ * refused, not passed). A plain literal is read as the whole specifier only when
+ * it is the whole argument (followed by `,` or `)`) and holds no `${}` and no
+ * escape; a `+` concatenation, a template interpolation or an escape is
+ * unresolved and read (#5064 r3, fail closed). A literal naming another module,
+ * or no argument, is not read. Lexical rather than AST, because tree-sitter
+ * parses the type arguments of `importActual<typeof import("…")>(…)` as an
+ * expression, so the call is no call_expression there.
+ */
+function importActualReadsChildProcess(
+	source: string,
+	match: RegExpMatchArray,
+): boolean {
+	const rest = source.slice((match.index ?? 0) + match[0].length).trimStart();
+	if (rest.startsWith(")")) return false;
+	const literal = FIRST_STRING_ARGUMENT.exec(rest);
+	if (literal === null) return true;
+	const [whole, , name = ""] = literal;
+	if (!/^\s*[,)]/.test(rest.slice(whole.length))) return true;
+	if (name.includes("${") || name.includes("\\")) return true;
+	return CHILD_PROCESS_SPECIFIER.test(name);
+}
+
+/**
  * A real child process: a `child_process` import, a call-shaped
- * `execFileSync`/`spawnSync`/`execSync`, or ANY spawn flavor whose argv
- * mentions `vitest` — a test file re-launching the suite inside itself.
+ * `execFileSync`/`spawnSync`/`execSync`, ANY spawn flavor whose argv
+ * mentions `vitest` — a test file re-launching the suite inside itself —
+ * or a `vi.importActual` of `child_process` behind a same-file mock (#5064):
+ * the mock hides the first three forms only, so this one is read even in a
+ * mocking file.
  *
  * `strings: "keep"` is required to see `"vitest"` inside an argv array;
  * comments are still blanked so a doc comment naming these calls cannot
@@ -339,6 +380,19 @@ export function scanRealProcessSpawn(
 						: `${name}( vitest-in-vitest (argv mentions "vitest")`,
 				});
 			}
+		}
+	}
+
+	if (/child_process/.test(stripped)) {
+		for (const match of codeMatches(source, IMPORT_ACTUAL_CALL)) {
+			if (!importActualReadsChildProcess(source, match)) continue;
+			const lineIdx = source.slice(0, match.index ?? 0).split("\n").length - 1;
+			if (hits.has(lineIdx)) continue;
+			hits.set(lineIdx, {
+				line: lineIdx + 1,
+				text: (lines[lineIdx] ?? "").trim(),
+				reason: "importActual( reaches the real child_process module",
+			});
 		}
 	}
 

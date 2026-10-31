@@ -712,9 +712,18 @@ describe("M3d: the cascade changed-since-checked line vs the cap (#4495)", () =>
 });
 
 describe("M3b: cascade coverage advisories vs the cap (#3813)", () => {
-	it.each(CELLS)(
-		"$cell: an indeterminate run is consumed only when its advisory reached the message",
-		async ({ filler, reached }) => {
+	// #5055 recurrence: each coverage bucket owns its own holdAdvisory call, so a
+	// bucket added without one drops its advisory when the cap cuts it.
+	it.each(
+		CELLS.flatMap((cell) =>
+			["graph_degraded", "unresolved_reference"].map((reason) => ({
+				...cell,
+				reason,
+			})),
+		),
+	)(
+		"$cell: a $reason run is consumed only when its advisory reached the message",
+		async ({ filler, reached, reason }) => {
 			const rig = makeRig("pi-lens-3813-m3b-");
 			try {
 				const fillerFile = fillerBlocker(rig, filler);
@@ -726,7 +735,7 @@ describe("M3b: cascade coverage advisories vs the cap (#3813)", () => {
 					diagnosticCount: 0,
 					skipReason: "indeterminate",
 					indeterminate: {
-						reason: "graph_degraded",
+						reason: reason as "graph_degraded" | "unresolved_reference",
 						detail: `graph unavailable ENDIND`,
 					},
 				});

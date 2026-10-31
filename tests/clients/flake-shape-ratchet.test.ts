@@ -800,6 +800,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real child reads stdin bytes through the pipe that safeSpawnAsync must close correctly",
 	},
+	// #5064: the ownership guard reads the live child's /proc ppid, so the
+	// child is real; the mock beside it on the same module would hide it.
+	"real-process-spawn:clients/safe-spawn-kill-ownership.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the kill-ownership cases need a real live child of this process: the ownership guard reads its /proc ppid, which no double carries; the child starts through vi.importActual beside the file's own child_process mock",
+	},
 	"real-process-spawn:clients/safe-spawn-resource-usage.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -826,6 +833,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"real git children expose shared-checkout branch-switch races that an in-process model cannot reach",
+	},
+	// #5064: taskkill's pid is the real child this file starts through
+	// vi.importActual beside its own child_process mock, so the census reads it.
+	"real-process-spawn:clients/system32-exe-seam-fold.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the taskkill tree-kill case needs a real live child of this process: safeSpawnAsync's ownership guard reads its /proc ppid, which no double carries; the child starts through vi.importActual beside the file's own child_process mock",
 	},
 	"real-process-spawn:clients/test-runner-resolve-exec.test.ts": {
 		detector: "real-process-spawn",
@@ -2321,6 +2335,125 @@ describe("flake-shape scan — real-process-spawn", () => {
 			'import { execFileSync } from "node:child_process";',
 			'vi.mock("node:child_process");',
 			'execFileSync(process.execPath, ["git", "status"]);',
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
+	});
+
+	it("ATTACK (#5064): vi.importActual of child_process behind a same-file mock is a real spawn", () => {
+		// Recurrence: the system32 seam fold's taskkill case started a real node
+		// child through vi.importActual("node:child_process") beside a
+		// vi.doMock of the same module, and the census counted nothing for it.
+		const source = [
+			'vi.doMock("node:child_process", () => ({ spawn: vi.fn() }));',
+			'it("kills a real child", async () => {',
+			'\tconst { spawn: realSpawn } = await vi.importActual<typeof import("node:child_process")>(',
+			'\t\t"node:child_process",',
+			"\t);",
+			'\trealSpawn(process.execPath, ["-e", "0"]);',
+			"});",
+		].join("\n");
+		const hits = scanRealProcessSpawn("fixture.test.ts", source);
+		expect(hits.map((h) => h.line)).toEqual([3]);
+		expect(hits[0]?.reason).toBe(
+			"importActual( reaches the real child_process module",
+		);
+	});
+
+	it("ATTACK (#5064): importActual with a non-literal specifier is read; a literal other module is not", () => {
+		// A variable specifier is refused, not passed: the census cannot prove the
+		// module is not child_process. A literal naming another module is proven.
+		const variable = [
+			'vi.mock("node:child_process");',
+			'const name = "node:child_process";',
+			"const cp = await vi.importActual(name);",
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", variable).map((h) => h.line),
+		).toEqual([3]);
+
+		const otherModule = [
+			'vi.mock("node:child_process");',
+			'const os = await vi.importActual<typeof import("node:os")>("node:os");',
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", otherModule)).toEqual([]);
+	});
+
+	it("ATTACK (#5064 r3): importActual spelled as a literal prefix plus concatenation is read", () => {
+		// Recurrence: PRRT_kwDORt8rec6yQNSu (Greptile) and PRRT_kwDORt8rec6yQOAE
+		// (CodeRabbit). The reader took the first string literal as the whole
+		// specifier, so "node:" in `"node:" + "child_process"` named another module.
+		const source = [
+			'vi.mock("node:child_process");',
+			'const cp = await vi.importActual("node:" + "child_process");',
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([2]);
+	});
+
+	it("ATTACK (#5064 r3): importActual spelled by concatenation with the split inside the name is read", () => {
+		// Recurrence: PRRT_kwDORt8rec6yQNSu and PRRT_kwDORt8rec6yQOAE. The reader
+		// saw only the first literal, "node:child_", and passed it as another module.
+		const source = [
+			'vi.mock("node:child_process");',
+			'const cp = await vi.importActual("node:child_" + "process");',
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([2]);
+	});
+
+	it("ATTACK (#5064 r3): importActual of a template literal with an interpolation is read", () => {
+		// Recurrence: PRRT_kwDORt8rec6yQOAE's template case. The reader matched the
+		// template text "node:${n}" as the specifier, so an interpolated module name
+		// named no child_process and the real child was not counted.
+		const source = [
+			'vi.mock("node:child_process");',
+			'const n = "child_process";',
+			"const cp = await vi.importActual(`node:${n}`);",
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([3]);
+	});
+
+	it("ATTACK (#5064 r3): importActual of an escaped literal is read", () => {
+		// Recurrence: an escape spells the module name without the literal text
+		// child_process. The reader cannot prove it is another module, so it reads
+		// the call (fail closed on an unplanned spelling).
+		const source = [
+			'vi.mock("node:child_process");',
+			'const cp = await vi.importActual("node:child\\u005fprocess");',
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([2]);
+	});
+
+	it("does not read a zero-argument importActual() of another module beside a child_process mock (#5064)", () => {
+		// Recurrence: tests/clients/lsp/windows-startup-repair.test.ts calls
+		// importActual<...>() with no argument inside a package-manager mock factory
+		// in a file that also mocks child_process; that is the mocked module's own
+		// original, not a child_process reach.
+		const source = [
+			'vi.mock("node:child_process", () => ({ spawn: vi.fn() }));',
+			'vi.doMock("../../../clients/package-manager.js", async (importActual) => ({',
+			'\t...(await importActual<typeof import("../../../clients/package-manager.js")>()),',
+			"}));",
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
+	});
+
+	it("does not read a child_process string passed to an ordinary call (#5064 over-read)", () => {
+		// Recurrence: the first draft of the #5064 read flagged any call whose first
+		// argument was the child_process specifier, which fired on
+		// JSON.stringify("node:child_process") and includes("child_process") in
+		// runner-spawn-cwd-sweep and spawn-chokepoint-sweep. Only importActual reads
+		// the real module.
+		const source = [
+			'vi.mock("node:child_process");',
+			'const literal = JSON.stringify("node:child_process");',
+			'if (text.includes("child_process")) run(literal);',
 		].join("\n");
 		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
 	});
