@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a clean-tree HEAD move exists only in a real repository that git checks out, rebases or resets; a stubbed git could not rewrite the files the language server holds.
 // flake-shape: in-process-mock — a project lsp.json cannot declare an auxiliary server (its role is reserved and inert), so the role lookup (getServerById) answers for the auxiliary fake the config setter's selection adds for the repositories registered here (#4476); every server is still a real child process on a real stdio wire
 // flake-shape: ungoverned-wait-for — #4528 r1 F3 joins a dependency restart that runs between real server processes and ends after the bounded tool_call hook returns; nothing in it is awaitable.
 /**

@@ -972,7 +972,9 @@ describe("every diagnostics route under every server-selecting switch (#4403)", 
 	// Recurrence this guards (#3801): the 15 columns were split over five files
 	// (`COLUMNS_PER_FILE` each) so the sequencer can balance them. A sixth
 	// file's worth of columns, or a file that goes missing, would drop columns
-	// silently, because each file only runs its own slice.
+	// silently, because each file only runs its own slice. A file that calls
+	// `columnsOfFile` with another file's index drops columns the same way
+	// (#3801 F3); the per-file check below reds on it.
 	it(
 		"runs every column in exactly one columns file",
 		() => {
@@ -999,6 +1001,18 @@ describe("every diagnostics route under every server-selecting switch (#4403)", 
 			expect(ran.map((column) => column.id)).toEqual(
 				COLUMNS.map((column) => column.id),
 			);
+			// The kit's arithmetic above cannot see which slice a file runs. Each
+			// columns file names its own slice in one `columnsOfFile(N)` call, so
+			// its literal must equal the number in its own name. The literal is
+			// read from code, so a computed argument fails the same comparison.
+			for (const name of files) {
+				const own = /cols-(\d+)\.test\.ts$/.exec(name)?.[1];
+				const code = stripSource(fs.readFileSync(path.join(dir, name), "utf8"));
+				const calls = [...code.matchAll(/\bcolumnsOfFile\s*\(([^)]*)\)/g)].map(
+					(match) => match[1].trim(),
+				);
+				expect(calls, name).toEqual([own]);
+			}
 		},
 		scaledTestTimeout(10_000),
 	);

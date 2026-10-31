@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a clean-tree HEAD move exists only in a real repository that git checks out, rebases or resets; a stubbed git could not rewrite the files the language server holds.
 /**
  * #4507: a bash command's writes reach the primaries before its dispatches.
  * Split out of `head-move-resync-4493.test.ts` for #3801; the shared harness is

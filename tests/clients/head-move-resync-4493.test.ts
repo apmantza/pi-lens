@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a clean-tree HEAD move exists only in a real repository that git checks out, rebases or resets; a stubbed git could not rewrite the files the language server holds.
 /**
  * #4493: a clean-tree HEAD move left held documents stale on the server.
  *
