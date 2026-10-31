@@ -3237,7 +3237,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// abandons the handler that result is never shown, so the lines it
 			// collects here are queued for the agent's next context call instead.
 			const withheldNotices: string[] = [];
-			const writeScope = runtime.captureSessionGeneration();
+			// #5108 F1: every advisory from this tool result is for the session
+			// that made the call, resolved as its `context` drain resolves it.
+			// The coordinator's scope is the primary's, so a concurrent
+			// secondary's notices reached the primary and never the secondary.
+			const advisoryScope =
+				scopeOfSession(getStableSessionId(ctx))?.capture() ??
+				runtime.captureSessionGeneration();
 			const budgetMs = editClass
 				? HOOK_WALL_BUDGET_MS.tool_result_edit
 				: HOOK_WALL_BUDGET_MS.tool_result_read_only;
@@ -3278,6 +3284,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				// lookups must agree on one root.
 				cwd: ctx?.cwd,
 				withheldNotices,
+				advisoryScope,
 			});
 			let handlerSettled = false;
 			const markSettled = () => {
@@ -3310,7 +3317,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						if (withheldNotices.length === 0) return;
 						queueAgentAdvisory(
 							`pi-lens's check of this ${rtToolName ?? "tool"} call was still running when the host stopped waiting (${budgetMs}ms) and was abandoned, so its tool result showed none of this:\n${withheldNotices.slice(0, 5).join("\n")}${withheldNotices.length > 5 ? `\n+${withheldNotices.length - 5} more` : ""}`,
-							writeScope,
+							advisoryScope,
 						);
 						logLatency({
 							type: "phase",

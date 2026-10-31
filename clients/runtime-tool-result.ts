@@ -675,6 +675,14 @@ interface ToolResultDeps {
 	 */
 	withheldNotices?: string[];
 	/**
+	 * #5108 F1: the session an agent advisory from this tool result is for,
+	 * captured by the caller at handler entry. The coordinator's own scope
+	 * (`writeSession`) is the primary's, while a concurrent secondary's
+	 * `context` drains its own member scope, so the caller resolves it the way
+	 * that drain does. Guarded writes keep `writeSession`. Absent: `writeSession`.
+	 */
+	advisoryScope?: LineageHandle;
+	/**
 	 * The host ctx's `cwd` for THIS tool_result — the same per-session field the
 	 * `tool_call` hook reads. The opaque prescan resolves its root through
 	 * `opaquePrescanRoot(deps.cwd, …)` (#4504): a session whose cwd is not the
@@ -1714,7 +1722,8 @@ async function dispatchPipelineAnalysis(args: {
 			sessionGeneration,
 			// #3830: a whole-package fixer's restore ends after this result, so its
 			// loss notice is queued for the session this dispatch belongs to.
-			onFixRunLoss: (notice) => queueAgentAdvisory(notice, sessionGeneration),
+			onFixRunLoss: (notice) =>
+				queueAgentAdvisory(notice, deps.advisoryScope ?? sessionGeneration),
 			// #3559: the re-token's turn, read when it is drawn.
 			nextWriteIndex: () => ({
 				turnIndex: runtime.turnIndex,
@@ -2109,6 +2118,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// the turn and write counters; a capture taken there would name session 2.
 	const writeSession =
 		deps._sessionGeneration ?? runtime.captureSessionGeneration();
+	const advisoryScope = deps.advisoryScope ?? writeSession;
 	// #3650: the tool_result path question has one owner
 	// (`readToolResultPathField`); no fallback cascade is open-coded here.
 	const rawFilePath = readToolResultPathField(event);
@@ -3788,7 +3798,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			if (firstOutsideRootEdit) {
 				queueAgentAdvisory(
 					`pi-lens skipped analysis for the edit at ${filePath} because it is outside the session root. Start pi in that directory or add it to the workspace to get analysis.`,
-					writeSession,
+					advisoryScope,
 				);
 			}
 		}
@@ -3808,7 +3818,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			if (firstAdoptedRoot) {
 				queueAgentAdvisory(
 					`pi-lens is analysing ${adoptedRoot} as a separate project (LSP + global or managed php-lint/fish-indent; formatting, autofix, other dispatch runners, and automatic tests are off).`,
-					writeSession,
+					advisoryScope,
 				);
 			}
 		}
@@ -4515,7 +4525,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				if (firstSilentRun) {
 					queueAgentAdvisory(
 						`pi-lens analysed the edit at ${filePath} in the linked worktree ${worktreeRoot} (full LSP, formatting, autofix and dispatch) and found nothing to report.`,
-						writeSession,
+						advisoryScope,
 					);
 				}
 			}
