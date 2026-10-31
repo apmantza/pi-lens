@@ -18,8 +18,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { findCommandOnPath } from "../../../command-path.js";
+import { withBudget } from "../../../deadline-utils.js";
 import { recordDegradationOnce } from "../../../degradation-ledger.js";
-import { findCommandOnPath } from "../../../installer/index.js";
+import { realpathOrResolve } from "../../../path-utils.js";
 import type { SpawnResult } from "../../../safe-spawn.js";
 import { createBoundedOutputSink } from "../../../spawn-output-cap.js";
 
@@ -43,18 +45,16 @@ type Cli2Main = (params: Cli2Params) => Promise<number>;
  * counts when its package.json names markdownlint-cli2.
  */
 export function locateCli2Entry(command: string): string | null {
-	const shim = /[\\/]/.test(command) ? command : findCommandOnPath(command);
+	const shim = /[\\/]/.test(command)
+		? command
+		: findCommandOnPath(command, process.platform === "win32");
 	if (!shim) return null;
 	const shimDir = path.dirname(shim);
 	const candidates = [
 		path.join(shimDir, "..", PACKAGE_NAME),
 		path.join(shimDir, "node_modules", PACKAGE_NAME),
 	];
-	try {
-		candidates.push(path.dirname(fs.realpathSync(shim)));
-	} catch {
-		// a shim that cannot be resolved has no package behind it
-	}
+	candidates.push(path.dirname(realpathOrResolve(shim)));
 	for (const dir of candidates) {
 		try {
 			const manifest = JSON.parse(
@@ -69,20 +69,25 @@ export function locateCli2Entry(command: string): string | null {
 			const entry = path.resolve(dir, root);
 			if (fs.statSync(entry).isFile()) return entry;
 		} catch {
-			// not a package directory; try the next candidate
+			// none: a directory with no readable manifest is not the package; the
+			// caller records markdownlint-api-unavailable when no candidate is
 		}
 	}
 	return null;
 }
 
-async function loadCli2Main(entry: string): Promise<Cli2Main | null> {
+/** cli2's `main`, or why the module cannot serve (recorded by the caller). */
+async function loadCli2Main(entry: string): Promise<Cli2Main | string> {
 	try {
 		const loaded = (await import(pathToFileURL(entry).href)) as {
 			main?: unknown;
 		};
-		return typeof loaded.main === "function" ? (loaded.main as Cli2Main) : null;
-	} catch {
-		return null;
+		return typeof loaded.main === "function"
+			? (loaded.main as Cli2Main)
+			: "it exports no main";
+	} catch (thrown) {
+		// none: runMarkdownlintApi records this cause in its unavailable row
+		return `it did not load (${thrown instanceof Error ? thrown.message : String(thrown)})`;
 	}
 }
 
@@ -101,34 +106,33 @@ export async function runMarkdownlintApi(options: {
 	timeoutMs: number;
 }): Promise<SpawnResult | null> {
 	const entry = locateCli2Entry(options.command);
-	const main = entry ? await loadCli2Main(entry) : null;
-	if (!main) {
+	const loaded = entry
+		? await loadCli2Main(entry)
+		: "no markdownlint-cli2 package sits beside it";
+	if (typeof loaded === "string") {
 		recordDegradationOnce({
 			kind: "markdownlint-api-unavailable",
 			subject: options.command,
-			reason: `markdownlint-cli2 module ${entry ? `at ${entry} did not load` : "not found beside the command"}; linting by spawn, where a project "fix": true can still rewrite the file`,
+			reason: `${loaded}; linting by spawn, where a project "fix": true can still rewrite the file`,
 		});
 		return null;
 	}
 
 	const out = createBoundedOutputSink();
 	const err = createBoundedOutputSink();
-	let timer: NodeJS.Timeout | undefined;
-	const timedOut = new Promise<"timeout">((resolve) => {
-		timer = setTimeout(() => resolve("timeout"), options.timeoutMs);
-		timer.unref();
-	});
 	try {
-		const ran = main({
-			directory: options.cwd,
-			argv: options.args,
-			optionsOverride: { fix: false },
-			logMessage: (message) => out.append(`${message}\n`),
-			logError: (message) => err.append(`${message}\n`),
-		});
-		const verdict = await Promise.race([ran, timedOut]);
+		const verdict = await withBudget(
+			loaded({
+				directory: options.cwd,
+				argv: options.args,
+				optionsOverride: { fix: false },
+				logMessage: (message) => out.append(`${message}\n`),
+				logError: (message) => err.append(`${message}\n`),
+			}),
+			options.timeoutMs,
+		);
 		const truncated = out.truncated || err.truncated;
-		if (verdict === "timeout") {
+		if (verdict === undefined) {
 			return {
 				stdout: out.text,
 				stderr: err.text,
@@ -147,11 +151,10 @@ export async function runMarkdownlintApi(options: {
 			...(truncated && { outputTruncated: true }),
 		};
 	} catch (thrown) {
+		// none: the throw is the result, exit 2 with its text on stderr, as cli2's bin reports it
 		err.append(
 			`${thrown instanceof Error ? (thrown.stack ?? thrown.message) : String(thrown)}\n`,
 		);
 		return { stdout: out.text, stderr: err.text, status: 2 };
-	} finally {
-		clearTimeout(timer);
 	}
 }

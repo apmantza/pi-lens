@@ -63,6 +63,7 @@ import path from "node:path";
 import { writeFileAtomicAsync } from "../atomic-write.js";
 import { registerBackgroundWriteDrain } from "../background-write-drains.js";
 import { BoundedLruCache } from "../bounded-cache.js";
+import { findCommandOnPath } from "../command-path.js";
 import { logExtension } from "../extension-log.js";
 import {
 	isFullyQualified,
@@ -2653,61 +2654,15 @@ export function resetPathWalkMemo(): void {
 }
 
 /**
- * Walk PATH for `command` and return the first candidate that is a real file
- * with non-zero size (broken symlinks stat as missing or empty), or null.
- * No spawn: ~μs per candidate vs ~50ms for which/where. Callers that need the
- * file itself (the markdownlint API loader, #5119) read it here; the boolean
- * question is {@link isCommandAvailable}.
+ * Check if a command is available in PATH by walking PATH entries and
+ * verifying each candidate is a real file with non-zero size
+ * (`findCommandOnPath`, shared with the markdownlint API loader, #5119).
  */
-export function findCommandOnPath(command: string): string | null {
-	const isWindows = installerPlatform() === "win32";
-	const pathEnv =
-		process.env.PATH || process.env.Path || process.env.path || "";
-	const dirs = pathEnv.split(path.delimiter);
-
-	// On Windows, probe .exe, .cmd, and .bat extensions in addition to bare name.
-	// On Unix, probe bare name and extensionless (scripts, symlinks).
-	const names = isWindows
-		? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
-		: [command];
-
-	for (const dir of dirs) {
-		if (!dir) continue;
-		for (const name of names) {
-			// #4530: joined as text on POSIX, as the kernel joins it, so a
-			// `link/..` entry is read where the spawn would find it; Win32
-			// folds `..` lexically itself.
-			const candidate = isWindows
-				? path.join(dir, name)
-				: `${dir}${path.sep}${name}`;
-			try {
-				const stat = statSync(candidate);
-				// isFile() returns false for broken symlinks (target missing)
-				if (!stat.isFile() || stat.size === 0) continue;
-				// #4530: a candidate that is the session repository's bytes (a
-				// project PATH entry, a relative one, or a global link into the
-				// project) is no answer until pi trusts the project: the installer
-				// would otherwise report a project binary as an installed tool.
-				if (isUntrustedProjectPath(candidate)) {
-					recordProjectCommandRefusal(candidate);
-					continue;
-				}
-				return candidate;
-			} catch {
-				// ENOENT or permission denied — skip this candidate
-			}
-		}
-	}
-
-	return null;
-}
-
-/** Check if a command is available in PATH (see {@link findCommandOnPath}). */
 export async function isCommandAvailable(
 	command: string,
 	_args?: string[],
 ): Promise<boolean> {
-	return findCommandOnPath(command) !== null;
+	return findCommandOnPath(command, installerPlatform() === "win32") !== null;
 }
 
 /**

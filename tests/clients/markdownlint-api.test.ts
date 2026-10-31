@@ -270,6 +270,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.count).toBe(1);
 		expect(rows[0]?.latestReasons[0]?.subject).toBe(shim);
+		expect(rows[0]?.latestReasons[0]?.reason).toContain("cannot load");
 	});
 
 	it("returns null and records the row when the module exports no main", async () => {

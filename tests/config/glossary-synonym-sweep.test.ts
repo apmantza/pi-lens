@@ -1110,7 +1110,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/gzip-stage-write.ts": 2,
 		"clients/inline-blocker-dispositions.ts": 2,
 		"clients/install-diagnostics.ts": 11,
-		"clients/installer/index.ts": 108,
+		"clients/installer/index.ts": 104,
 		// 4 -> 9 (#4765): refreshOpengrepRulePack computes the candidate's
 		// scratch directory, cwd and sweep with `path.dirname`/`path.join`.
 		"clients/installer/managed-tool-refresh.ts": 9,
@@ -1498,6 +1498,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// payload's per-hit `path.relative`; the renderer now owns that spelling.
 		"mcp/server.ts": 38,
 		"index.ts": 20,
+		"clients/command-path.ts": 5,
 	},
 	record: {
 		"clients/actionable-warnings.ts": 14,
