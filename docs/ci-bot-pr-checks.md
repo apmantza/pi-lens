@@ -14,14 +14,21 @@ that produces a required check on the branch it just pushed:
 
 ```
 gh workflow run ci.yml --ref <bot branch>
+gh workflow run hot-path-latency.yml --ref <bot branch>
 gh workflow run lint.yml --ref <bot branch>
 ```
 
-Both workflows carry a `workflow_dispatch` trigger for this. The run is
-push-shaped (`scripts/ci-changed-files.mjs` runs the full suite for any event
-but `pull_request`), checks out the branch head, and posts the required check
-names (`Lint & type-check`, `Unit tests`, `Install test (...)`, `knip`,
-`oxfmt format check`, `TLA+ models`, `Unit tests Windows`) on that commit.
+The set is every workflow with a `merge_group` trigger, in file-name order. The
+census derives it (`dispatchTargets` in `tests/config/bot-pr-ci-start.test.ts`),
+and each of the three carries a `workflow_dispatch` trigger for this. The
+`ci.yml` and `lint.yml` runs are push-shaped (`scripts/ci-changed-files.mjs`
+runs the full suite for any event but `pull_request`), check out the branch
+head, and post the required check names (`Lint & type-check`, `Unit tests`,
+`Install test (...)`, `knip`, `oxfmt format check`, `TLA+ models`,
+`Unit tests Windows`) on that commit. The `hot-path-latency.yml` run posts
+`Hot-path latency (advisory)` (#4363) and always reports on the head. A manual
+run reads as `hotpath=true`, so it times the head against `HEAD^1`, the
+previous commit on the bot branch.
 Branch protection matches a required check by name and app, not by event, and
 `scripts/ci-verdict.mjs` gates a branch-protection name whatever event its run
 came from (#4090), so those rows count.
@@ -73,9 +80,10 @@ registered in that test as a non-opener with its reason.
   same-repository `pull_request` run of that PR would run, with the permissions
   `ci.yml` and `lint.yml` declare per job (read scopes; `ci.yml` uses no
   secret beyond `GITHUB_TOKEN`).
-- **Dispatch from any ref.** `ci.yml` and `lint.yml` are now dispatchable by
-  anyone with write access on any branch. Their jobs hold read scopes only,
-  except the PR-only CodeQL job (`security-events: write`), whose job-level
+- **Dispatch from any ref.** `ci.yml`, `lint.yml` and `hot-path-latency.yml`
+  are now dispatchable by anyone with write access on any branch. Their jobs
+  hold read scopes only (`hot-path-latency.yml` holds `contents: read` and
+  `pull-requests: read` and reads no secret), except the PR-only CodeQL job (`security-events: write`), whose job-level
   `if` requires a `pull_request` event and so never starts on a dispatch
   (`scripts/dispatch-safety.mjs` reads that conjunct as a guard).
 - **Step order.** Both dispatch steps close the `tool-smoke-prs` job, so a
@@ -102,6 +110,8 @@ registered in that test as a non-opener with its reason.
 - **Not covered.** A dispatched run is not a `pull_request` run: it tests the
   branch head, not the merge with master, and the PR-only advisory jobs (the
   changelog fast-fail, targeted tests, CodeQL, the PR body lint) do not run.
+  The hot-path run compares the head with its first parent (`HEAD^1`), not with
+  the merge ref a `pull_request` run times.
   `ci-infra-kill-rerun.yml` reacts to `pull_request` and `push` runs only, so a
   runner kill on a dispatched run is re-run by hand.
 

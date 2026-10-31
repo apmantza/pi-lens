@@ -1070,6 +1070,7 @@ jobs:
         run: |
           set -euo pipefail
           gh workflow run ci.yml --ref bot/lsp-docs-refresh
+          gh workflow run hot-path-latency.yml --ref bot/lsp-docs-refresh
           gh workflow run lint.yml --ref bot/lsp-docs-refresh
 
       # #5062: this PR is always opened with GITHUB_TOKEN, so it always needs
@@ -1084,6 +1085,7 @@ jobs:
         run: |
           set -euo pipefail
           gh workflow run ci.yml --ref bot/lsp-idle-evict-promote
+          gh workflow run hot-path-latency.yml --ref bot/lsp-idle-evict-promote
           gh workflow run lint.yml --ref bot/lsp-idle-evict-promote
 
   # The tracking-issue writers (#4077): the only job here with `issues: write`

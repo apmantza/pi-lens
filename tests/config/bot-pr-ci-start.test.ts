@@ -351,8 +351,13 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 
 	it("derives the dispatch targets from the merge_group workflows", () => {
 		// Recurrence: a required-check workflow added without a dispatch target
-		// would leave bot PRs with that check absent again.
-		expect(dispatchTargets(workflowFiles())).toEqual(["ci.yml", "lint.yml"]);
+		// would leave bot PRs with that check absent again. #5080 made
+		// hot-path-latency.yml a merge_group workflow, so the pin moved with it.
+		expect(dispatchTargets(workflowFiles())).toEqual([
+			"ci.yml",
+			"hot-path-latency.yml",
+			"lint.yml",
+		]);
 	});
 
 	it("finds tool-smoke.yml's PR-opening job and passes it", () => {
