@@ -235,6 +235,15 @@ cleanup, triage and status upkeep. The script surfaces unfinished work and
 never hides it: stalled work is restarted, not unassigned, archived or deleted.
 Screen: is this the second time this step was done by hand?
 
+**Process carries the net-count rule too.** A new guard, hook, script, lint
+rule, ratchet or scheduled routine retires one of the same kind in the same
+change, or it cites fire data showing what the existing ones miss. Each rule
+must also earn its keep: count how often it fired, and what each fire led to
+(a real fix, a wording edit, or a route-around). One that never fired in its
+window and names no recurrence is demoted or deleted. Process cost is paid on
+every change, while the bug a rule prevents may never arrive. Screen: what
+does this rule retire, and when did the last one like it fire?
+
 ## 4. Honesty and records
 
 **Closes versus refs follows delivery, not optimism.** Close only when every
