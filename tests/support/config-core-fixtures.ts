@@ -120,15 +120,6 @@ export const DENY_ONLY_SCHEMA: ConfigSchemaNode = {
 	},
 };
 
-/** Every schema this PR defines, for the stability-tier sweep. */
-export const CONFIG_CORE_SCHEMAS: ReadonlyArray<{
-	readonly name: string;
-	readonly schema: ConfigSchemaNode;
-}> = [
-	{ name: "DEMO_CONFIG_SCHEMA", schema: DEMO_CONFIG_SCHEMA },
-	{ name: "DENY_ONLY_SCHEMA", schema: DENY_ONLY_SCHEMA },
-];
-
 /**
  * The golden four-tier resolution input: a built-in default, a machine-global
  * file, a project file, and a nested project file. Deliberately overlapping, so
