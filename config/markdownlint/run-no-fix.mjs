@@ -20,7 +20,6 @@ function fail(thrown) {
 }
 
 process.on("uncaughtException", fail);
-process.on("unhandledRejection", fail);
 
 try {
 	const { main } = await import(pathToFileURL(entry).href);
