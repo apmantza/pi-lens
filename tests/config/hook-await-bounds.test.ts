@@ -1926,16 +1926,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"hook (AC8), unbounded exactly like its index.ts twin.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#callTool:0be1c5d6~7e47546e": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
 	"mcp/server.ts#callTool:355aebb4~f9eb7744": {
 		family: "hook-await",
 		site: "off-hook",
@@ -1992,6 +1982,18 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"MCP tool-request handler (LSP navigation/diagnostics) and the " +
 			"request dispatcher itself. An agent is waiting on its own " +
 			"request; no pi hook budget applies.",
+		owner: "#2523 slice 2",
+	},
+	// #5104 moved the surrounding handler text, so the occurrence key moved
+	// with it; the awaited `symbolSearch` call is the same off-hook request.
+	"mcp/server.ts#callTool:8392a6e9~2823caec": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
 		owner: "#2523 slice 2",
 	},
 	"mcp/server.ts#callTool:8b574bae~7f0e398e": {

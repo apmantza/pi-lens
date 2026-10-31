@@ -157,11 +157,24 @@ describe("pilens_analyze (warm) also maintains the word index over MCP (#536 rid
 	let snapshotDataRoot: string;
 	let harness: McpHarness;
 
-	function parseTrailer(res: Record<string, unknown>): Record<string, unknown> {
-		const text = textOf(res);
-		return JSON.parse(
-			text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
-		) as Record<string, unknown>;
+	// The table's rows, in rank order. `symbol_search` renders one row per hit
+	// (`  1. <path> <line> (score 0.82, 3 hit(s))`); it carries no JSON payload
+	// (#5104), so the row line IS the result.
+	function tableRows(
+		res: Record<string, unknown>,
+	): Array<{ file: string; line: number }> {
+		return textOf(res)
+			.split("\n")
+			.flatMap((line) => {
+				const match = /^\s+\d+\.\s+(.+?)\s+(\d+)\s+\(score .*\)$/.exec(line);
+				return match
+					? [{ file: match[1].replace(/\\/g, "/"), line: Number(match[2]) }]
+					: [];
+			});
+	}
+
+	function namesWidgetTs(res: Record<string, unknown>): boolean {
+		return tableRows(res).some((row) => row.file.endsWith("widget.ts"));
 	}
 
 	beforeAll(async () => {
@@ -258,14 +271,7 @@ describe("pilens_analyze (warm) also maintains the word index over MCP (#536 rid
 			name: "pilens_symbol_search",
 			arguments: { query: "widget renderer", cwd: projectDir },
 		});
-		const beforePayload = parseTrailer(before) as {
-			results: Array<{ file: string }>;
-		};
-		expect(
-			beforePayload.results.some((r) =>
-				r.file.replace(/\\/g, "/").endsWith("widget.ts"),
-			),
-		).toBe(false);
+		expect(namesWidgetTs(before)).toBe(false);
 
 		const newFile = path.join(projectDir, "widget.ts");
 		writeFileSync(
@@ -286,13 +292,8 @@ describe("pilens_analyze (warm) also maintains the word index over MCP (#536 rid
 			name: "pilens_symbol_search",
 			arguments: { query: "widget renderer", cwd: projectDir },
 		});
-		const afterPayload = parseTrailer(after) as {
-			results: Array<{ file: string }>;
-		};
-		expect(
-			afterPayload.results.some((r) =>
-				r.file.replace(/\\/g, "/").endsWith("widget.ts"),
-			),
-		).toBe(true);
+		// Rank 1: the row names the new file at the identifier's line, which no
+		// pre-seeded snapshot entry can supply.
+		expect(tableRows(after)[0]).toEqual({ file: "widget.ts", line: 1 });
 	}, 30_000);
 });
