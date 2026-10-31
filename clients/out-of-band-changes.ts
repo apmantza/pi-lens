@@ -57,6 +57,7 @@ import {
 	ensureDiskChangeSubscribers,
 	LSP_CONSUMER,
 } from "./disk-change-subscribers.js";
+import { untilAborted } from "./deadline-utils.js";
 import { isExcludedDirName } from "./file-utils.js";
 import { logLatency } from "./latency-logger.js";
 import {
@@ -657,29 +658,6 @@ export interface OutOfBandLookOptions {
 }
 
 /**
- * Settle when `work` does or when `signal` aborts, whichever happens first
- * (#5005 F3).
- *
- * The work is NOT cancelled. A look is single-flight, so the pass that a caller
- * starts may be one another caller joined (`coalesceTrailing`), and that
- * joiner's walk must not be cut because this caller's answer was abandoned. The
- * walk stays bounded by the declaration caps either way.
- */
-function untilAborted(work: Promise<void>, signal: AbortSignal): Promise<void> {
-	if (signal.aborted) return Promise.resolve();
-	let onAbort: (() => void) | undefined;
-	const aborted = new Promise<void>((resolve) => {
-		onAbort = () => resolve();
-		signal.addEventListener("abort", onAbort, { once: true });
-	});
-	// The race consumes `work`'s rejection too, so an aborted caller leaves no
-	// unhandled rejection behind when the look settles later.
-	return Promise.race([work, aborted]).finally(() => {
-		if (onAbort) signal.removeEventListener("abort", onAbort);
-	});
-}
-
-/**
  * Look at `root` for an install or a declaration-file change since its last
  * look, and publish what changed (see the module doc). Looks of one root run
  * one at a time, each against the record the previous one left (`looks`).
@@ -731,7 +709,7 @@ export function lookForOutOfBandChanges(
 	const look = looks.run(key, () =>
 		lookOnce(root, key, trigger, runtime, options, homeRoot),
 	);
-	return options.signal ? untilAborted(look, options.signal) : look;
+	return untilAborted(look, options.signal);
 }
 
 /** The `DiskChange.sources` entry of a server config file change (#4532). */

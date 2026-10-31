@@ -28,6 +28,7 @@
  *      instead of inferring it from duration histograms.
  */
 
+import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	hashDiagnosticContent,
@@ -673,6 +674,30 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(results).toHaveLength(2);
 		expect(results[0]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
 		expect(results[1]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+	});
+
+	// Shape 4 (a watcher is released on every settle path): the first-contact
+	// probe races the service's shutdown signal, which lives as long as the
+	// service, so a finished probe must not leave its listener on it.
+	it("releases the shutdown listener once the first-contact wait settles", async () => {
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const touch = service.touchFile(FILE, "const x = 1;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(8000);
+		const result = await touch;
+
+		expect(result?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		const { signal } = (
+			service as unknown as { shutdownController: AbortController }
+		).shutdownController;
+		expect(getEventListeners(signal, "abort")).toHaveLength(0);
 	});
 
 	it("fails closed when a shared first-contact probe rejects", async () => {

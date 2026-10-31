@@ -22,6 +22,7 @@
  * so the join happens by construction, never by timing. The throttle is held
  * shut so the trigger is the only difference between the two callers.
  */
+import { getEventListeners } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -213,5 +214,20 @@ describe("#4532 gap 6: a joined look gets the walk it demands", () => {
 				),
 			),
 		).toHaveLength(1);
+	});
+
+	// Shape 4 (a watcher is released on every settle path): a look that finishes
+	// without an abort must not leave its listener on the caller's signal, which
+	// outlives the look by a whole turn.
+	it("leaves no abort listener on the caller's signal once its look settles", async () => {
+		fs.writeFileSync(path.join(root, "package-lock.json"), "{}\n");
+		const turn = new AbortController();
+
+		await lookForOutOfBandChanges(root, "tool_call", undefined, {
+			walk: "always",
+			signal: turn.signal,
+		});
+
+		expect(getEventListeners(turn.signal, "abort")).toHaveLength(0);
 	});
 });

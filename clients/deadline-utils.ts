@@ -40,6 +40,49 @@ export function combineAbortSignals(
 	return controller.signal;
 }
 
+/**
+ * Settle with `work`, or with `aborted` (`undefined` when omitted) as soon as
+ * `signal` aborts, whichever comes first. A missing signal never aborts.
+ *
+ * The one place a caller's abort signal is raced against a promise (defect
+ * shape 4: a listener is a watcher, released on every settle path). The
+ * listener is removed when the race settles, so a signal that outlives the call
+ * (a turn's, a sweep's) never accumulates one dead closure per call. Five
+ * private copies of this race added the listener and never removed it.
+ *
+ * The work is NOT cancelled, only no longer awaited: a promise that may be
+ * joined by another caller (`coalesceTrailing`'s single flight) keeps running.
+ * The race consumes `work`'s rejection, an already-aborted signal included, so
+ * an abandoned caller leaves no unhandled rejection behind when the work
+ * settles later.
+ */
+export function untilAborted<T>(
+	work: Promise<T>,
+	signal: AbortSignal | undefined,
+): Promise<T | undefined>;
+export function untilAborted<T, A>(
+	work: Promise<T>,
+	signal: AbortSignal | undefined,
+	aborted: A,
+): Promise<T | A>;
+export function untilAborted<T, A>(
+	work: Promise<T>,
+	signal: AbortSignal | undefined,
+	aborted?: A,
+): Promise<T | A | undefined> {
+	if (!signal) return work;
+	// Raced, not returned, so the race still consumes the work's rejection.
+	if (signal.aborted) return Promise.race([work, Promise.resolve(aborted)]);
+	let onAbort: (() => void) | undefined;
+	const abortedPromise = new Promise<A | undefined>((resolve) => {
+		onAbort = () => resolve(aborted);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	return Promise.race([work, abortedPromise]).finally(() => {
+		if (onAbort) signal.removeEventListener("abort", onAbort);
+	});
+}
+
 export interface DeadlineOptions {
 	/** Duration budget in ms. Provide this OR `deadlineAt`. */
 	ms?: number;
