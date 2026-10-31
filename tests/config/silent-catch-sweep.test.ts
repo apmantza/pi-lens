@@ -665,10 +665,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :63, :176
 	"clients/installer/index.ts": {
-		silent: 57,
-		identities: "c856f1adb6cf7d52",
+		silent: 56,
+		identities: "c9c8202f747f0522",
 		reason: PRE_RULE,
-	}, // :164, :201, :206, :216, :227, :240, :297, :2172, :2479, :2578, :2597, :2732, :2744, :2770, :3105, :3145, :3180, :3192, :3314, :3337, :3359, :3529, :3625, :3693, :3721, :3861, :3869, :4536, :4589, :4780, :4820, :5293, :5328, :5481, :5498, :5523, :5554, :5557, :5563, :5579, :5616, :5619, :5704, :5791, :5892, :5899, :6091, :6114, :6172, :6182, :6186, :6266, :6302, :6339, :6457, :6616, :6686
+	}, // :171, :208, :213, :223, :234, :247, :304, :2271, :2600, :2684, :2819, :2831, :2857, :3197, :3238, :3273, :3285, :3407, :3430, :3452, :3622, :3724, :3792, :3826, :3966, :3974, :4642, :4695, :4886, :4926, :5410
 	"clients/installer/managed-tool-refresh.ts": {
 		silent: 4,
 		identities: "dbbc0961e686ccc4",
@@ -1391,9 +1391,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
  * seam, and the merged tree's population is 1,175. Folding gitleaks's and trivy's
  * report-scan bodies onto `SecurityScanClient.runReportScan` removed four
  * silent handlers and spent one `none:` line in the one copy, so it is 1,171.
+ * The PATH walk moved out of the installer into `clients/command-path.ts` with
+ * its one handler spent on a `none:` line (#5119), so it is 1,170.
  * It moves only downward from here.
  */
-const PINNED_TOTAL = 1171;
+const PINNED_TOTAL = 1170;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;

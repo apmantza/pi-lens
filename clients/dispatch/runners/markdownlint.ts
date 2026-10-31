@@ -18,6 +18,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
+import { markdownlintNoFixInvocation } from "./utils/markdownlint-api.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import {
 	isInSpawnTimeoutCooldown,
@@ -160,7 +161,14 @@ const markdownlintRunner: RunnerDefinition = {
 		// Shared config-args seam (#1247): the autofix path consumes the same
 		// builder, so the package-owned fallback config can never drift.
 		const configArgs = markdownlintConfigArgs(cwd);
-		const result = await safeSpawnAsync(cmd, [...configArgs, ctx.filePath], {
+		const args = [...configArgs, ctx.filePath];
+		// #5119: cli2's own `fix` option cannot be turned off from the CLI, and a
+		// project `"fix": true` rewrote the file on a diagnostics pass. Lint
+		// through its exported `main` with `optionsOverride: { fix: false }` in a
+		// package-owned child, under the same spawn budget and kill; the bare
+		// command is spawned (never with --fix) only when no package is found.
+		const invocation = markdownlintNoFixInvocation({ command: cmd, cwd, args });
+		const result = await safeSpawnAsync(invocation.command, invocation.args, {
 			timeout: 15000,
 			cwd,
 		});

@@ -1044,6 +1044,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/tree-sitter.ts": 2,
 		"clients/dispatch/runners/trivy-config.ts": 4,
 		"clients/dispatch/runners/utils/diagnostic-parsers.ts": 3,
+		// 7 (#5119): `node:path` joins and resolves while locating cli2's package.
+		"clients/dispatch/runners/utils/markdownlint-api.ts": 7,
 		// 23 -> 30 (#2660): the resolver now carries its selected `path` and
 		// `resolution.path` through the evidence seam, adding seven same-sense
 		// path identifiers while preserving the four-rung lookup ladder.
@@ -1107,7 +1109,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/gzip-stage-write.ts": 2,
 		"clients/inline-blocker-dispositions.ts": 2,
 		"clients/install-diagnostics.ts": 11,
-		"clients/installer/index.ts": 108,
+		"clients/installer/index.ts": 104,
 		// 4 -> 9 (#4765): refreshOpengrepRulePack computes the candidate's
 		// scratch directory, cwd and sweep with `path.dirname`/`path.join`.
 		"clients/installer/managed-tool-refresh.ts": 9,
@@ -1495,6 +1497,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// payload's per-hit `path.relative`; the renderer now owns that spelling.
 		"mcp/server.ts": 38,
 		"index.ts": 20,
+		"clients/command-path.ts": 5,
 	},
 	record: {
 		"clients/actionable-warnings.ts": 14,
