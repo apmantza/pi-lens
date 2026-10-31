@@ -15,26 +15,23 @@ import {
 const MAX_FILES = 50;
 const MAX_ITEMS_PER_FILE = 200;
 
-type OutlineEntry = Omit<AstGrepOutlineItem, "members"> & {
-	read: { path: string; offset: number; limit: number };
-	members?: OutlineEntry[];
-};
-
-/** Attach ready `read` args (1-based) to each item/member from its 0-based range. */
-function withReadHandles(
-	filePath: string,
-	item: AstGrepOutlineItem,
-): OutlineEntry {
-	const { members, ...rest } = item;
-	const offset = item.range.start.line + 1;
-	const limit = Math.max(1, item.range.end.line - item.range.start.line + 1);
-	return {
-		...rest,
-		read: { path: filePath, offset, limit },
-		...(members
-			? { members: members.map((m) => withReadHandles(filePath, m)) }
-			: {}),
-	};
+/**
+ * One text line per symbol, range first as `module_report` view `compact`
+ * does: `start-end [import|export ]kind name[ — signature]`, 1-based inclusive
+ * (the CLI emits 0-based lines), two spaces per nesting level. A signature that
+ * is empty or only echoes the name is dropped (#5071).
+ */
+function renderItem(item: AstGrepOutlineItem, depth: number): string[] {
+	const range = `${item.range.start.line + 1}-${item.range.end.line + 1}`;
+	const marker = item.isImport ? "import " : item.isExported ? "export " : "";
+	const signature =
+		item.signature && item.signature !== item.name
+			? ` \u2014 ${item.signature}`
+			: "";
+	return [
+		`${"  ".repeat(depth)}${range} ${marker}${item.symbolType} ${item.name}${signature}`,
+		...(item.members ?? []).flatMap((m) => renderItem(m, depth + 1)),
+	];
 }
 
 function errorResult(text: string) {
@@ -50,7 +47,7 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 		name: "ast_grep_outline" as const,
 		label: "AST-Grep Outline",
 		description:
-			"Return syntax-only symbols, imports, exports, and members with ast-grep. An outline shows structure, not a symbol body, and does not satisfy read-before-edit; use read_symbol or read_enclosing for body coverage. Example: outline `src/` before choosing a symbol to read.",
+			"Return syntax-only symbols, imports, exports, and members with ast-grep, one `start-end kind name` line each; read a range with offset=start, limit=end-start+1. An outline shows structure, not a symbol body, and does not satisfy read-before-edit; use read_symbol or read_enclosing for body coverage. Example: outline `src/` before choosing a symbol to read.",
 		promptSnippet: "Inspect syntax without index or LSP",
 		renderResult: compactRenderResult<{
 			files?: number;
@@ -169,21 +166,15 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 			}
 			if (result.error) return errorResult(`Error: ${result.error}`);
 
-			const files = (result.output ?? []).slice(0, MAX_FILES);
-			const truncatedFiles = (result.output?.length ?? 0) > MAX_FILES;
-			const outline = files.map((file) => ({
-				path: file.path,
-				language: file.language,
-				items: file.items
-					.slice(0, MAX_ITEMS_PER_FILE)
-					.map((item) => withReadHandles(file.path, item)),
-				...(file.items.length > MAX_ITEMS_PER_FILE
-					? { truncatedItems: file.items.length - MAX_ITEMS_PER_FILE }
-					: {}),
-			}));
-
+			// Sort before the cap: the CLI's walker order differs per run, so an
+			// unsorted slice kept a different 50 files each call (#5071).
+			const all = [...(result.output ?? [])].sort((a, b) =>
+				a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+			);
+			const files = all.slice(0, MAX_FILES);
+			const truncatedFiles = all.length > MAX_FILES;
 			const totalItems = files.reduce((n, f) => n + f.items.length, 0);
-			if (outline.length === 0) {
+			if (files.length === 0) {
 				return {
 					content: [
 						{
@@ -194,10 +185,26 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 					details: { files: 0, items: 0 },
 				};
 			}
+			const lines = files.flatMap((file) => [
+				file.path,
+				...file.items
+					.slice(0, MAX_ITEMS_PER_FILE)
+					.flatMap((item) => renderItem(item, 0)),
+				...(file.items.length > MAX_ITEMS_PER_FILE
+					? [
+							`... ${file.items.length - MAX_ITEMS_PER_FILE} more items not shown (cap ${MAX_ITEMS_PER_FILE})`,
+						]
+					: []),
+			]);
+			if (truncatedFiles) {
+				lines.push(
+					`... ${all.length - MAX_FILES} more files not shown (cap ${MAX_FILES})`,
+				);
+			}
 			return {
-				content: [{ type: "text" as const, text: JSON.stringify({ outline }) }],
+				content: [{ type: "text" as const, text: lines.join("\n") }],
 				details: {
-					files: outline.length,
+					files: files.length,
 					items: totalItems,
 					syntaxOnly: true,
 					...(truncatedFiles ? { truncatedFiles: true } : {}),
