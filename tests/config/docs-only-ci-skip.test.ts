@@ -472,6 +472,11 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 		const verdict = aggregate.steps?.find(
 			(step) => step.name === "Require every TLA+ models shard to succeed",
 		);
+		// the checkout the verdict seam needs is skipped under the same proof
+		const checkout = aggregate.steps?.find((step) =>
+			String(step.uses).startsWith("actions/checkout@"),
+		);
+		expect(checkout?.if).toBe(verdict?.if);
 		const base: Ctx = {
 			event: "pull_request",
 			changes: { code: "true", formal: "false" },
