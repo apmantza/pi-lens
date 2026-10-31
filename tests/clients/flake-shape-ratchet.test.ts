@@ -481,6 +481,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"two activations in one process each assert their own module-level resetLSPService spy, and the singleton lifecycle holds one beforeReset at a time, so the seam cannot tell the activations apart; the stand-in spawns no language server",
 		},
+	// 2026-10-31 (#5108): pass-through wrapper that holds the real handler open.
+	"in-process-mock:index-5108-opaque-blocker-disclosure-witness.test.ts::clients/runtime-tool-result":
+		{
+			detector: "in-process-mock",
+			reason:
+				"a pass-through wrapper holds the real handler open past the host bound and records its return value; dispatch, pipeline, advisory queue and the pi session stay real (precedent: index-2939-tool-result-budget-witness.test.ts)",
+		},
 	// 2026-10-21 (#4675 r2): the format smoke runs the REAL FormatService and
 	// formatter selection; installation is the network boundary, so the stub
 	// answers `ensureTool`/`getToolPath` and the child process is doubled below
@@ -555,6 +562,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a cancelled timer produces no event to await; a bounded real window observes the absence, and every assertion is a count, never elapsed ms",
 		},
+	// 2026-10-31 (#5108): the read-only bound is a live wall deadline.
+	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the read-only bound is a live wall deadline racing a held handler; a fake clock settles the race instantly and the abandonment under test never happens",
+	},
 	// 2026-09-15 (#2042 cheapest probe): the sample-tail file is written by the
 	// wrapper's own real setInterval loop in a separate process; a poll waits
 	// for that file's first write rather than a fixed sleep, and one case kills
@@ -899,6 +912,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the subject is what a real non-bash tool writes into a real git checkout, detected by git's own status; a stubbed git answers only what it was told",
+	},
+	// 2026-10-31 (#5108): a script-written file's blocker must reach the model
+	// through a real bash tool call, and the abandonment is a real 500 ms wall
+	// bound racing a handler held open past it.
+	"real-process-spawn:index-5108-opaque-blocker-disclosure-witness.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told",
 	},
 	// 2026-09-03: the published-manifest guard must run the real `npm pack`
 	// (prepack/postpack are npm lifecycle hooks); header on the file states why.

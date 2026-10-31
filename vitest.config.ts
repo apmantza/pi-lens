@@ -786,6 +786,9 @@ export const wallClockBudgetInclude = [
 	// with vi.waitFor; the fake shellcheck's first run sleeps past the 5 s
 	// collect-later threshold (flake-shape admission).
 	"tests/index-4943-telemetry-session-stamp.test.ts",
+	// #5108: a real bash write plus a handler held past the live 500 ms bound
+	// (flake-shape admission); the git children ride in the serialized lane.
+	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
 	"tests/mcp/session-end.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",

@@ -3283,7 +3283,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 			const markSettled = () => {
 				handlerSettled = true;
 			};
-			work.then(markSettled, markSettled);
+			work.then(markSettled, () => {
+				// none: `bounded()` below hands a rejection to the host; this chain
+				// only records that the handler is no longer running.
+				markSettled();
+			});
 			// The `await` below must stay inside this `try`: it has a `finally` that clears
 			// the ambient abort signal. Without the await the `finally` runs the
 			// instant the promise is RETURNED, so the slot is empty for the whole
@@ -3316,7 +3320,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 							metadata: { notices: withheldNotices.length, budgetMs },
 						});
 					},
-					() => {},
+					() => {
+						// none: the wrapper and `bounded()` already ledger a rejection;
+						// this only keeps the derived promise from going unhandled.
+					},
 				);
 			}
 			return result;

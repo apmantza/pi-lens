@@ -1,4 +1,6 @@
 // flake-shape: real-process-spawn — the subject is what a REAL bash tool call writes into a REAL git checkout and what the model receives for it; the detector is git's own `status --porcelain` and a stubbed shell could not say whether the write was seen.
+// flake-shape: raw-timer-wait — the 500 ms read-only bound is a live wall deadline racing a handler that this file holds open for 700 ms; a fake clock would settle the race instantly and the abandonment under test would never happen.
+// flake-shape: in-process-mock — the wrapper around `handleToolResult` is the only way to hold the real handler open past the host bound and to read its return value; the dispatch, the pipeline, the advisory queue and the pi session are real.
 /**
  * #5108 witness: a blocker on a file the agent wrote through a script (a
  * heredoc that is not a recognised write) is delivered or disclosed as
