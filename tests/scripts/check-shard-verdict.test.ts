@@ -152,10 +152,10 @@ describe("#4672 a cancelled shard that finished its work is a pass with a warnin
 		expect(verdict.line).toContain("concluded failure");
 	});
 
-	// The `formal/`-unchanged rule skips the model check at STEP level and the
-	// shard job still concludes `success`, so this arrives through the `success`
-	// short-circuit. It must stay a pass (a docs-only PR is not a red), and it
-	// must not be read as "a cancelled shard".
+	// Historical shape (the fixture is a pre-#5082 run): the `formal/`-unchanged
+	// rule then skipped the model check at STEP level and the shard job still
+	// concluded `success`, so this arrives through the `success` short-circuit.
+	// It must stay a pass, and it must not be read as "a cancelled shard".
 	it("stays a pass when formal/ was unchanged and the shards skipped their checks", () => {
 		const verdict = verdictLine({
 			label: "TLA+ models",

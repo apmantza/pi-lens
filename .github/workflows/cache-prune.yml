@@ -9,27 +9,48 @@ name: Cache prune
 #
 # `plan` runs on a pull request that edits this file or the script and prints
 # what a real run would delete (a read-only token, nothing changes). `prune`
-# deletes, on the nightly schedule and on a push to master that edits this
-# file or the script (so the merge itself runs the first cleanup). There is no
-# workflow_dispatch: a branch dispatch must not delete shared repository state
-# (#4053), and the push trigger covers the manual run. It runs before the
-# 06:00 UTC smoke workflows so their saves land in freed space.
+# deletes, on the nightly schedule and when the CodeQL workflow completes on
+# master. There is no workflow_dispatch: a branch dispatch must not delete
+# shared repository state (#4053).
+#
+# #5082: the nightly run alone did not bound the CodeQL overlay base databases.
+# Every master push that is not docs-only saves a ~785 MB copy (the key carries
+# the commit sha), GitHub fires the `schedule` hours after 04:30 (the runs of
+# 2026-10-19..30 started 09:00-11:01 UTC), and one day of pushes left 11 copies,
+# 8.65 GB of a 10.19 GB cache, on 2026-10-31. A prune triggered by the push
+# itself can finish before that run's CodeQL baseline saves its copy, so the
+# trigger is the `CodeQL` workflow's `completed` event: the save has happened,
+# and the keep-1 rule for `codeql-overlay-base-database`
+# (KEEP_BY_PREFIX in scripts/prune-actions-cache.mjs) leaves one copy, about
+# 785 MB. That leaves the cap free, so the `npm-` entries the Unit shards
+# restore are never the least-recently-used victims of an eviction.
+#
+# A `workflow_run` workflow always runs from the DEFAULT branch's copy of this
+# file, so this trigger takes effect with the first `CodeQL` completion after
+# the merge (the merge push itself edits ci.yml and workflows, so its CodeQL
+# baseline runs); until then only the nightly run prunes. `workflows:` names the
+# workflow by its `name:` (tests/config/cache-prune-workflow.test.ts pins it
+# against codeql.yml). Neither job restores or saves a cache, and the setup-node
+# steps opt out of its automatic npm cache (tests/config/untrusted-trigger-cache.test.ts).
 
 on:
   schedule:
     - cron: '30 4 * * *' # daily 04:30 UTC
-  push:
+  workflow_run:
+    workflows: [CodeQL]
+    types: [completed]
     branches: [master]
-    paths: &prune-paths
+  pull_request:
+    paths:
       - .github/workflows/cache-prune.yml
       - scripts/prune-actions-cache.mjs
-  pull_request:
-    paths: *prune-paths
 
 permissions: {}
 
 concurrency:
-  group: cache-prune
+  # The dry run takes its own group: GitHub keeps one pending run per group, so
+  # a pull_request dry run must not replace a pending prune (#5095 review).
+  group: cache-prune-${{ github.event_name == 'pull_request' && 'dry-run' || 'prune' }}
   cancel-in-progress: false
 
 jobs:
@@ -51,6 +72,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
+          package-manager-cache: false
       - name: List the caches a real run would delete
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,6 +95,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
+          package-manager-cache: false
       - name: Delete the stale caches
         env:
           GH_TOKEN: ${{ github.token }}
