@@ -8,5 +8,10 @@ note: |
   JavaScript twin of `filter-then-map`. Flags every adjacent `filter(f).map(g)`,
   identity filters included, because no JavaScript identity-filter rule exists.
   JavaScript has no type predicates, so the type-guard exclusion is not needed.
+
+  Shipped disabled (#5094). A reviewer sample of 58 hits (24 of all 524 TypeScript
+  hits, 20 of the 92 outside tests, 14 of 87 JavaScript) found 0 clearly worth a
+  rewrite and 6 marginal, below the 70% bar. Enable by moving back into `rules/`
+  with its fixture.
 rule:
   pattern: "$ARR.filter($F).map($G)"

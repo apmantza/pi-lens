@@ -4,7 +4,7 @@ severity: warning
 message: arr.filter(x => x).map(...) - use flatMap or a single pass
 note: |
   Identity filter only: `arr.filter(x => x).map(f)` and `arr.filter(Boolean).map(f)`.
-  A generic `filter(f).map(g)` chain is the `filter-then-map` hint (#5094).
+  A generic `filter(f).map(g)` chain is not flagged: `filter-then-map` ships disabled (#5094).
 metadata:
   weight: 3
   category: slop

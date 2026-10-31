@@ -1,6 +1,6 @@
 id: no-accumulating-spread-js
 language: JavaScript
-message: "Avoid accumulating array spread in loops/reduce (O(n^2)); use push/flatMap"
+message: "Copying the reduce accumulator each pass is O(n^2) (spread, concat, slice, Array.from, Object.assign); mutate it or build the result with push/flatMap"
 severity: warning
 metadata:
   category: performance

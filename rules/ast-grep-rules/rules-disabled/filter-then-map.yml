@@ -9,6 +9,14 @@ note: |
   between. `flatMap`, or one loop, does both in one pass. Eager versus lazy is
   partly taste, so this is a hint and never blocks.
 
+  Shipped disabled (#5094). A reviewer sample of 58 hits (24 of all 524 TypeScript
+  hits, 20 of the 92 outside tests, 14 of 87 JavaScript) found 0 clearly worth a
+  rewrite and 6 marginal, below the 70% bar. Enable by moving back into `rules/`
+  with its fixture.
+
+  Known gaps: receiver-blind (lodash, jQuery and iterator-helper chains fire), and
+  two-parameter or generic type guards are not excluded.
+
   Not flagged: an identity filter (`filter(x => x)`, `filter(Boolean)`), which
   `ts-redundant-filter-map` owns at warning; and a type-guard filter (an
   `x is T` predicate), which narrows the element type for the map.
