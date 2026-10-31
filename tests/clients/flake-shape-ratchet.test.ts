@@ -766,6 +766,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// pass are the behaviour under test (`"fix": true` made a lint run write the
 	// file); the real module's bytes are the witness and its CLI is the parity
 	// reference; serialized in the wall-clock lane.
+	// 2026-11-01 (#5119 review r1): the no-fix wrapper runs cli2's `main` in a
+	// child so the spawn budget can kill a spinning rule; the kill, the late-throw
+	// exit and the fresh import of an edited config are properties of a real
+	// node process, driven through the runner's own spawn seam.
+	"real-process-spawn:clients/markdownlint-api.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a spinning rule is killed at the budget, a late throw ends only the child and an edited config is imported fresh; each exists only in a real node child",
+	},
 	"real-process-spawn:clients/markdownlint-no-fix-real.test.ts": {
 		detector: "real-process-spawn",
 		reason:

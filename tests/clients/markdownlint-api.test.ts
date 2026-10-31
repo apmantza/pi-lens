@@ -1,3 +1,6 @@
+// flake-shape: real-process-spawn — the wrapper child's contract (killed at the
+// budget, a late throw ends the child, a fresh module cache) exists only in a
+// real node process; a double would encode the guess that the child behaves.
 /**
  * #5119. The markdownlint runner lints through markdownlint-cli2's exported
  * `main` with `optionsOverride: { fix: false }`, run in a package-owned wrapper
