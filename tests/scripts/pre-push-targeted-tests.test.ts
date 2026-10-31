@@ -777,6 +777,8 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/clients/availability-classifiedby-ok-sweep.test.ts",
 			"tests/clients/availability-policy-coverage.test.ts",
 			"tests/clients/bounded-telemetry-sweep.test.ts",
+			// Shape 4: walks the production trees for abort listeners.
+			"tests/clients/abort-listener-release-sweep.test.ts",
 			"tests/clients/single-flight-ratchet.test.ts",
 			"tests/config/bounded-container-guard.test.ts",
 			"tests/scripts/dist-freshness.test.ts",

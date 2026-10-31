@@ -18,11 +18,21 @@
  * every time" regression the issue explicitly calls out.
  */
 
+import { getEventListeners } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	onTestFinished,
+	vi,
+} from "vitest";
 import { removeTempDirSync } from "../test-utils.js";
+import { gatedPromise } from "../../support/fault-injection.js";
 import { makeClientNotifyDouble } from "../../support/lsp-client-notify-double.js";
 
 const getServersForFileWithConfig = vi.fn();
@@ -943,5 +953,206 @@ describe("LSPService.ensureWarmForSweep fallbackFor family (#3939)", () => {
 			failedServerIds: ["other"],
 			skippedFromCache: true,
 		});
+	});
+});
+
+/**
+ * Shape 4 (an abort listener is a watcher: released on every settle path). The
+ * sweep's warm-up race, its retry backoff and its per-file pre-open each raced
+ * the caller's `AbortSignal` with a private `addEventListener("abort", …)` that
+ * nothing ever removed, so a signal that outlives the call (a turn's or a
+ * sweep's) kept one dead listener per call, for as long as it lives. The
+ * count is read off the signal itself after the call settles without an abort.
+ */
+describe("LSP sweep releases the caller's abort listeners (shape 4)", () => {
+	let tmp: string;
+	beforeEach(async () => {
+		vi.resetModules();
+		(await import("../../../clients/lsp/config.js"))._setServersForFileForTests(
+			getServersForFileWithConfig,
+		);
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-abort-listen-"));
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "50";
+	});
+	afterEach(() => {
+		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		delete process.env.PI_LENS_LSP_WARMUP_RETRY_BACKOFF_MS;
+		delete process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS;
+		logLatency.mockReset();
+		removeTempDirSync(tmp);
+	});
+
+	it("a warm-up that finishes leaves no abort listener on the caller's signal", async () => {
+		const filePath = path.join(tmp, "a.ts");
+		fs.writeFileSync(filePath, "const x = 1;\n");
+		const tsServer = makeTsServer(tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [tsServer] : [],
+		);
+		createLSPClient.mockResolvedValue(makeFakeClient(tmp).client);
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const turn = new AbortController();
+
+		const result = await new LSPService().ensureWarmForSweep(filePath, {
+			signal: turn.signal,
+		});
+
+		expect(result.performedWarmup).toBe(true);
+		expect(getEventListeners(turn.signal, "abort")).toHaveLength(0);
+	});
+
+	it("a retried warm-up and its backoff leave no abort listener on the caller's signal", async () => {
+		process.env.PI_LENS_LSP_WARMUP_RETRY_BACKOFF_MS = "5";
+		const filePath = path.join(tmp, "a.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const server = makeServer("workspace-indexer-generic", ".md", tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [server] : [],
+		);
+		const { client, waitCalls } = makeControlledClient(server.id, tmp, [
+			"timeout",
+			"timeout",
+		]);
+		createLSPClient.mockResolvedValue(client);
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const turn = new AbortController();
+
+		const result = await new LSPService().ensureWarmForSweep(filePath, {
+			timeoutMs: 50,
+			signal: turn.signal,
+		});
+
+		// Both attempts ran, so the backoff between them was awaited.
+		expect(waitCalls).toHaveLength(2);
+		expect(result.failedServerIds).toEqual([server.id]);
+		expect(getEventListeners(turn.signal, "abort")).toHaveLength(0);
+	});
+
+	it("a sweep's per-file pre-open leaves no abort listener per file on the sweep's signal", async () => {
+		const names = ["a.ts", "b.ts", "c.ts"];
+		for (const n of names)
+			fs.writeFileSync(path.join(tmp, n), "const z = 1;\n");
+		const tsServer = makeTsServer(tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [tsServer] : [],
+		);
+		createLSPClient.mockResolvedValue(makeFakeClient(tmp).client);
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const sweep = new AbortController();
+
+		const results = await new LSPService().runWorkspaceDiagnostics(tmp, {
+			signal: sweep.signal,
+		});
+
+		expect(results).toHaveLength(3);
+		expect(getEventListeners(sweep.signal, "abort")).toHaveLength(0);
+	});
+
+	// The abort arm of each race. Each wait below is bounded only by a minute-long
+	// budget, so a race that does not end on the caller's abort leaves the case
+	// hanging until vitest's own timeout, and a race that ends on abort settles
+	// at once.
+	it("an abort ends a warm-up whose touch never answers, ahead of the warm-up budget", async () => {
+		const filePath = path.join(tmp, "a.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const server = makeServer("workspace-indexer-generic", ".md", tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [server] : [],
+		);
+		const turn = new AbortController();
+		const hung = gatedPromise<undefined>();
+		onTestFinished(() => hung.resolve(undefined));
+		const { client } = makeControlledClient(server.id, tmp, ["warm"]);
+		createLSPClient.mockResolvedValue({
+			...client,
+			waitForDiagnostics: vi.fn(() => {
+				turn.abort();
+				return hung.promise;
+			}),
+		});
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+
+		const result = await new LSPService().ensureWarmForSweep(filePath, {
+			timeoutMs: 60_000,
+			signal: turn.signal,
+		});
+
+		expect(result.performedWarmup).toBe(true);
+		expect(getEventListeners(turn.signal, "abort")).toHaveLength(0);
+	});
+
+	it("an abort during the retry backoff ends the warm-up without a second attempt", async () => {
+		process.env.PI_LENS_LSP_WARMUP_RETRY_BACKOFF_MS = "60000";
+		const filePath = path.join(tmp, "a.md");
+		fs.writeFileSync(filePath, "# hi\n");
+		const server = makeServer("workspace-indexer-generic", ".md", tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [server] : [],
+		);
+		const { client, waitCalls } = makeControlledClient(server.id, tmp, [
+			"timeout",
+			"timeout",
+		]);
+		createLSPClient.mockResolvedValue(client);
+		const turn = new AbortController();
+		// The abort lands on the next turn of the loop after the failed first attempt is
+		// recorded, which is after the backoff began: nothing but microtasks runs
+		// between the record and the backoff's start.
+		logLatency.mockImplementation((entry: { phase?: string }) => {
+			if (entry.phase === "lsp_sweep_warmup_failed")
+				setImmediate(() => turn.abort());
+		});
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+
+		await new LSPService().ensureWarmForSweep(filePath, {
+			timeoutMs: 50,
+			signal: turn.signal,
+		});
+
+		expect(waitCalls).toHaveLength(1);
+		expect(getEventListeners(turn.signal, "abort")).toHaveLength(0);
+	});
+
+	it("an abort ends a sweep's pre-open of a file whose open never lands, ahead of the per-file budget", async () => {
+		process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS = "60000";
+		const filePath = path.join(tmp, "a.ts");
+		fs.writeFileSync(filePath, "const z = 1;\n");
+		const tsServer = makeTsServer(tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [tsServer] : [],
+		);
+		const sweep = new AbortController();
+		const hung = gatedPromise<undefined>();
+		onTestFinished(() => hung.resolve(undefined));
+		let hang = false;
+		const { client } = makeFakeClient(tmp);
+		createLSPClient.mockResolvedValue({
+			...client,
+			notify: makeClientNotifyDouble({
+				open: vi.fn(async () => {
+					if (!hang) return undefined;
+					sweep.abort();
+					return hung.promise;
+				}),
+			}),
+		});
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		// A confirmed touch first, so the sweep skips its own warm-up (whose open
+		// would take the abort) and its pre-open is the first to see a hung open.
+		await service.touchFile(filePath, "const z = 1;\n", {
+			diagnostics: "document",
+			collectDiagnostics: true,
+			clientScope: "primary",
+			source: "test_prior_touch",
+		});
+		hang = true;
+
+		await service.runWorkspaceDiagnostics(tmp, { signal: sweep.signal });
+
+		expect(sweep.signal.aborted).toBe(true);
+		expect(getEventListeners(sweep.signal, "abort")).toHaveLength(0);
 	});
 });

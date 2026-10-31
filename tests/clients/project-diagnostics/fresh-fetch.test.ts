@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2097,6 +2098,25 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 
 		// Generous ceiling: serial execution of 6 x 20ms would be >=120ms.
 		expect(elapsed).toBeLessThan(100);
+	});
+
+	// Shape 4 (an abort listener is a watcher: released on every settle path).
+	// The fetch raced its analyzers against the caller's signal with a private
+	// listener nothing removed, so each completed fetch left one on the turn's
+	// signal.
+	it("a completed fetch leaves no abort listener on the caller's signal", async () => {
+		fs.writeFileSync(path.join(tmp, "tsconfig.json"), "{}");
+		const turn = new AbortController();
+
+		const result = await fetchFreshProjectDiagnostics(
+			makeCacheManager(),
+			tmp,
+			makeClients(),
+			turn.signal,
+		);
+
+		expect(result.aborted).toBeUndefined();
+		expect(getEventListeners(turn.signal, "abort")).toHaveLength(0);
 	});
 
 	it("returns promptly with partial results when the signal aborts mid-scan, instead of waiting for every analyzer (#585 follow-up)", async () => {

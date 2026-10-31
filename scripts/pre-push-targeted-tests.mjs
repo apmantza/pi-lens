@@ -180,6 +180,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/clients/availability-classifiedby-ok-sweep.test.ts",
 	"tests/clients/availability-policy-coverage.test.ts",
 	"tests/clients/bounded-telemetry-sweep.test.ts",
+	// Shape 4: walks clients/tools/mcp + index.ts for abort listeners, so an
+	// unreleased race added outside the `untilAborted` seam reds.
+	"tests/clients/abort-listener-release-sweep.test.ts",
 	"tests/clients/single-flight-ratchet.test.ts",
 	"tests/config/bounded-container-guard.test.ts",
 	// #4239: walks scripts/lib for static dist/ imports and checks each is in

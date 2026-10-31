@@ -79,6 +79,7 @@ const SEAM_PATH = path.join(REPO_ROOT, SEAM);
  * census (#4618 V1).
  */
 const CONSUMERS = [
+	"tests/clients/abort-listener-release-sweep.test.ts",
 	"tests/clients/socket-error-listener-sweep.test.ts",
 	"tests/config/bounded-container-guard.test.ts",
 	"tests/config/bounded-eviction-idiom-sweep.test.ts",
@@ -192,6 +193,19 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 		count: 1,
 		reason:
 			"#4946: `parameterNames` reads one function's parameter list; nothing is visited",
+	},
+	{
+		file: "tests/clients/abort-listener-release-sweep.test.ts",
+		text: "if (node.children().length > 0) return undefined;",
+		count: 1,
+		reason:
+			"a leaf test on one node (no children means a token); nothing is visited",
+	},
+	{
+		file: "tests/clients/abort-listener-release-sweep.test.ts",
+		text: 'const args: SgNode[] = node.field("arguments")?.namedChildren() ?? [];',
+		count: 1,
+		reason: "reads one call's argument list; nothing is visited",
 	},
 	{
 		file: "tests/clients/socket-error-listener-sweep.test.ts",

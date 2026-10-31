@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -456,6 +457,35 @@ describe("lsp_diagnostics tool", () => {
 				files,
 			);
 			expect(String(result.content[0]?.text)).toContain("Outcomes:");
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	// Shape 4 (an abort listener is a watcher: released on every settle path).
+	// `collectBatchDiagnostics` raced each file against the call's signal with a
+	// private listener nothing removed, so a 100-file batch left 100 dead
+	// listeners on the tool call's signal.
+	it("a finished batch leaves no abort listener per file on the call's signal", async () => {
+		const tool = createLspDiagnosticsTool();
+		const call = new AbortController();
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lsp-diag-abort-listeners-"),
+		);
+		const files = ["a.ts", "b.ts", "c.ts"].map((name) =>
+			path.join(tmpDir, name),
+		);
+		for (const file of files) fs.writeFileSync(file, "const value = 1;\n");
+		try {
+			const result = (await tool.execute(
+				"diag-abort-listeners",
+				{ paths: files, concurrency: 1 },
+				call.signal,
+				null,
+				{ cwd: tmpDir },
+			)) as any;
+			expect(result.details?.filesChecked).toBe(3);
+			expect(getEventListeners(call.signal, "abort")).toHaveLength(0);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}
