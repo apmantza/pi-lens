@@ -1,0 +1,25 @@
+id: filter-then-map
+valid:
+  - 'arr.filter(fn)'
+  - 'arr.map(fn)'
+  - 'arr.flatMap(fn)'
+  # Not adjacent: the chain is not filter() directly followed by map().
+  - 'arr.filter(onlyPositive).slice(0).map(double)'
+  # Identity filters belong to ts-redundant-filter-map (warning), not this hint.
+  - 'arr.filter(x => x).map(fn)'
+  - 'arr.filter((x) => x).map(fn)'
+  - 'arr.filter(Boolean).map(fn)'
+  # Type-guard filters narrow the element type; a rewrite would lose that.
+  - 'arr.filter((x): x is Foo => x !== null).map(g)'
+  - 'arr.filter((x: Foo): x is Bar => x !== null).map(g)'
+  - 'arr.filter(async (x): x is Foo => true).map(g)'
+  - 'arr.filter(function (x): x is Foo { return x !== null }).map(g)'
+invalid:
+  - 'arr.filter(onlyPositive).map(double)'
+  - 'arr.filter((x) => x > 0).map(double)'
+  # Binding guard: the filter's parameter is not the value it returns.
+  - 'arr.filter(x => y).map(f)'
+  - 'arr.filter(x => x !== null).map(f)'
+  # Binding guard: an annotation alone is not a type predicate.
+  - 'arr.filter((x): boolean => x > 0).map(f)'
+  - 'arr.filter((x: number) => x > 0).map(f)'

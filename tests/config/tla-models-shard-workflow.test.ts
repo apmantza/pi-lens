@@ -62,7 +62,9 @@ describe("#3918 sharded TLA+ models workflow contract", () => {
 		);
 		expect(named.map(([id]) => id)).toEqual(["tla-models"]);
 		const aggregate = JOBS["tla-models"];
-		expect(asList(aggregate.needs)).toEqual(["tla-shards"]);
+		// #5082: `changes` joins so the aggregate can tell "formal/ proven
+		// unchanged, no shard started" from "a shard is missing".
+		expect(asList(aggregate.needs)).toEqual(["changes", "tla-shards"]);
 		expect(aggregate.if).toBe("always()");
 		expect(aggregate.env?.SHARDS_RESULT).toBe("${{ needs.tla-shards.result }}");
 		const step = aggregate.steps?.find(

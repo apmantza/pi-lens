@@ -32,7 +32,11 @@ import {
 } from "../degradation-ledger.js";
 import { getProjectTrustState } from "../project-trust.js";
 import { logExtension } from "../extension-log.js";
-import { OWNER_TAG_ENV, ownerTagForChildren } from "../process-snapshot.js";
+import {
+	OWNER_TAG_ENV,
+	ownerTagForChildren,
+	windowsExe,
+} from "../process-snapshot.js";
 import { redactSecrets } from "../redact/secrets.js";
 import {
 	classifySpawnFailure,
@@ -1231,7 +1235,7 @@ export async function stopLSP(handle: LSPProcess): Promise<void> {
 				return false;
 			try {
 				// Absolute path avoids PATH-resolution substitution on Windows.
-				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+				const taskkill = windowsExe("taskkill.exe");
 				const killer = nodeSpawn(
 					taskkill,
 					["/F", "/T", "/PID", String(handle.pid)],

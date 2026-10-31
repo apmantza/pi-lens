@@ -1445,7 +1445,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution
 		// onto the shared `resolveHostToolPath` seam, so ast-grep-outline.ts drops
 		// its own `path` import and two `path.*` calls.
-		"tools/ast-grep-outline.ts": 5,
+		// 5 -> 1 (#5071 r2 F1): the header and the sort read the project-relative
+		// header, not each file's absolute `file.path`; one `file.path` read remains.
+		"tools/ast-grep-outline.ts": 1,
 		"tools/ast-grep-search.ts": 2,
 		"tools/effective-config.ts": 6,
 		// 6 -> 4 (#4577 M2): the `path` argument folds onto
@@ -1510,7 +1512,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// stamp and its shape check read the same row.
 		"clients/git-guard.ts": 67,
 		"clients/govulncheck-client.ts": 4,
-		"clients/inline-blocker-dispositions.ts": 4,
+		"clients/inline-blocker-dispositions.ts": 3,
 		// #3654: the unified bridge's own `record()` API (RFC §3) — a method
 		// name, not the retired finding-record noun; the lexical census cannot
 		// tell the two senses apart.

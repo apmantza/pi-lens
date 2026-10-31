@@ -57,9 +57,8 @@ import {
 } from "./runners/utils/runner-helpers.js";
 import { createAvailabilityProbeFlight } from "../availability-probe-flight.js";
 import type { FactStore } from "./fact-store.js";
-import { applyDispositions } from "../diagnostic-dispositions.js";
 import { linesOfRanges, rangesOfLines } from "../line-alignment.js";
-import { applyInlineSuppressions } from "./inline-suppressions.js";
+import { applyFindingPolicyByOwner } from "./finding-policy.js";
 import { getToolPlan } from "./plan.js";
 import { resolveRunnerPath } from "./runner-context.js";
 import {
@@ -1848,13 +1847,14 @@ export async function dispatchForFile(
 	const applyOutputFilters = (diags: Diagnostic[]): Diagnostic[] => {
 		const dockerOverlap = suppressTrivyConfigDockerOverlap(diags);
 		const overlap = suppressLintOverlapsWithLsp(dockerOverlap);
-		const inline = applyInlineSuppressions(overlap, fileContent);
-		const disposition = applyDispositions(
-			inline,
-			ctx.projectRoot ?? ctx.cwd,
-			ctx.filePath,
-			fileContent,
-		);
+		// #5044: inline comments and dispositions belong to the file a finding
+		// NAMES, not the edited one (see `applyFindingPolicyByOwner`).
+		const { disposed: disposition } = applyFindingPolicyByOwner(overlap, {
+			cwd: rulePolicyRoot,
+			filePath: ctx.filePath,
+			content: fileContent,
+			policyMap: undefined,
+		});
 		return applyRulePolicy(disposition, rulePolicy, {
 			root: rulePolicyRoot,
 			filePath: ctx.filePath,
