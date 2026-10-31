@@ -596,7 +596,23 @@ describe("a failing row from a cancelled run superseded by an open newer run is 
 });
 
 describe("ci-verdict trigger scope on the REST transport (#4090)", () => {
-	it("excuses a dispatch-only red exactly as the gh transport does", async () => {
+	// Recurrence: #5066 r2 verify F6. run() passing `botAuthored: false` on the
+	// REST arm kept every test green, so a bot PR read over REST would have
+	// excused its dispatch reds again (#5062).
+	it.each([
+		{
+			name: "excuses a dispatch-only red exactly as the gh transport does",
+			user: undefined,
+			code: EXIT_SUCCESS,
+			excused: true,
+		},
+		{
+			name: "gates the same dispatch-only red on a bot-opened PR (#5062)",
+			user: { login: "github-actions[bot]", type: "Bot" },
+			code: EXIT_FAILURE,
+			excused: false,
+		},
+	])("$name", async ({ user, code, excused }) => {
 		const original = {
 			PATH: process.env.PATH,
 			GH_TOKEN: process.env.GH_TOKEN,
@@ -617,6 +633,7 @@ describe("ci-verdict trigger scope on the REST transport (#4090)", () => {
 						head: { sha: FULL_SHA },
 						mergeable: true,
 						mergeable_state: "clean",
+						user,
 					}),
 				);
 			if (url.includes("/branches/master/protection"))
@@ -641,7 +658,7 @@ describe("ci-verdict trigger scope on the REST transport (#4090)", () => {
 				stdout: (line: string) => lines.push(line),
 				stderr: () => {},
 			});
-			expect(result.code).toBe(EXIT_SUCCESS);
+			expect(result.code).toBe(code);
 		} finally {
 			process.env.PATH = original.PATH;
 			if (original.GH_TOKEN === undefined) delete process.env.GH_TOKEN;
@@ -650,9 +667,9 @@ describe("ci-verdict trigger scope on the REST transport (#4090)", () => {
 				process.env.GITHUB_TOKEN = original.GITHUB_TOKEN;
 		}
 		expect(lines).toContain("Transport: rest");
-		expect(lines.join("\n")).toContain(
-			"Advisory by trigger (workflow_dispatch run, not this commit's PR/push CI): Stryker shard 0 (12 files) (failure)",
-		);
+		const advisory =
+			"Advisory by trigger (workflow_dispatch run, not this commit's PR/push CI): Stryker shard 0 (12 files) (failure)";
+		expect(lines.join("\n").includes(advisory)).toBe(excused);
 	});
 });
 
