@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
+import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
@@ -17,7 +18,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
-import { runMarkdownlintApi } from "./utils/markdownlint-api.js";
+import { markdownlintNoFixInvocation } from "./utils/markdownlint-api.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import {
 	isInSpawnTimeoutCooldown,
@@ -166,11 +167,10 @@ const markdownlintRunner: RunnerDefinition = {
 		// through its exported `main` with `optionsOverride: { fix: false }` in a
 		// package-owned child, under the same spawn budget and kill; the bare
 		// command is spawned (never with --fix) only when no package is found.
-		const result = await runMarkdownlintApi({
-			command: cmd,
+		const invocation = markdownlintNoFixInvocation({ command: cmd, cwd, args });
+		const result = await safeSpawnAsync(invocation.command, invocation.args, {
+			timeout: 15000,
 			cwd,
-			args,
-			timeoutMs: 15000,
 		});
 
 		// #1995: a timeout is negative runtime evidence. Arm the cooldown so

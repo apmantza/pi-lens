@@ -26,7 +26,6 @@ import { findCommandOnPath } from "../../../command-path.js";
 import { recordDegradationOnce } from "../../../degradation-ledger.js";
 import { resolvePackagePath } from "../../../package-root.js";
 import { realpathOrResolve } from "../../../path-utils.js";
-import { type SpawnResult, safeSpawnAsync } from "../../../safe-spawn.js";
 
 const PACKAGE_NAME = "markdownlint-cli2";
 
@@ -69,15 +68,16 @@ export function locateCli2Entry(command: string): string | null {
 }
 
 /**
- * Lint `args` in `cwd` with cli2's `fix` off, or spawn `command` as it was when
- * no cli2 package sits beside it. Same spawn seam, budget and kill either way.
+ * The command and argv the runner spawns to lint `args` in `cwd` with cli2's
+ * `fix` off: the wrapper child over the located package, or `command` as it
+ * was when no cli2 package sits beside it. The runner owns the spawn, so the
+ * budget, the kill and the output cap are the one it always used.
  */
-export async function runMarkdownlintApi(options: {
+export function markdownlintNoFixInvocation(options: {
 	command: string;
 	cwd: string;
 	args: string[];
-	timeoutMs: number;
-}): Promise<SpawnResult> {
+}): { command: string; args: string[] } {
 	const entry = locateCli2Entry(options.command);
 	if (!entry) {
 		recordDegradationOnce({
@@ -86,19 +86,15 @@ export async function runMarkdownlintApi(options: {
 			reason:
 				'no markdownlint-cli2 package sits beside it; linting by spawn, where a project "fix": true can still rewrite the file',
 		});
-		return safeSpawnAsync(options.command, options.args, {
-			timeout: options.timeoutMs,
-			cwd: options.cwd,
-		});
+		return { command: options.command, args: options.args };
 	}
-	return safeSpawnAsync(
-		process.execPath,
-		[
+	return {
+		command: process.execPath,
+		args: [
 			resolvePackagePath(import.meta.url, "config/markdownlint/run-no-fix.mjs"),
 			entry,
 			options.cwd,
 			...options.args,
 		],
-		{ timeout: options.timeoutMs, cwd: options.cwd },
-	);
+	};
 }

@@ -17,8 +17,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 import markdownlintRunner from "../../clients/dispatch/runners/markdownlint.js";
-import { runMarkdownlintApi } from "../../clients/dispatch/runners/utils/markdownlint-api.js";
+import { markdownlintNoFixInvocation } from "../../clients/dispatch/runners/utils/markdownlint-api.js";
 import { runAutofix } from "../../clients/pipeline.js";
+import { safeSpawnAsync } from "../../clients/safe-spawn.js";
 import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { removeTempDirSync } from "./test-utils.js";
 
@@ -153,11 +154,14 @@ describe.skipIf(!hasCli2)(
 				"# Title\n\ntext   \n\n\n\n## Sub\n* item\n- item\nno newline at end",
 			);
 
-			const api = await runMarkdownlintApi({
+			const invocation = markdownlintNoFixInvocation({
 				command: path.join(cwd, "node_modules", ".bin", "markdownlint-cli2"),
 				cwd,
 				args: [doc],
-				timeoutMs: 15000,
+			});
+			const api = await safeSpawnAsync(invocation.command, invocation.args, {
+				timeout: 15000,
+				cwd,
 			});
 			const cli = spawnSync(
 				process.execPath,
@@ -170,13 +174,13 @@ describe.skipIf(!hasCli2)(
 					.split(/\r?\n/)
 					.filter((line) => /:\d+(:\d+)? /.test(line))
 					.sort();
-			const fromApi = findings(`${api?.stdout}${api?.stderr}`);
+			const fromApi = findings(`${api.stdout}${api.stderr}`);
 			expect(fromApi.length).toBeGreaterThan(2);
 			expect(fromApi.join("\n")).toContain("MD009");
 			expect(fromApi.join("\n")).not.toContain("MD012");
 			expect(fromApi.join("\n")).not.toContain("MD041");
 			expect(fromApi).toEqual(findings(`${cli.stdout}${cli.stderr}`));
-			expect(api?.status).toBe(cli.status);
+			expect(api.status).toBe(cli.status);
 		});
 
 		// Recurrence (review r1 F2): cli2 loads a .cjs config by `import(fileUrl)`,

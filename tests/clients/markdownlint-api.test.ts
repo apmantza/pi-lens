@@ -25,8 +25,9 @@ import { setProjectTrustState } from "../../clients/project-trust.js";
 import markdownlintRunner from "../../clients/dispatch/runners/markdownlint.js";
 import {
 	locateCli2Entry,
-	runMarkdownlintApi,
+	markdownlintNoFixInvocation,
 } from "../../clients/dispatch/runners/utils/markdownlint-api.js";
+import { safeSpawnAsync } from "../../clients/safe-spawn.js";
 import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { removeTempDirSync } from "./test-utils.js";
 
@@ -93,6 +94,20 @@ function recordedCalls(): Cli2Call[] {
 }
 
 let root: string;
+
+/** What the runner does with the invocation: the one spawn, at its budget. */
+function spawnNoFixLint(options: {
+	command: string;
+	cwd: string;
+	args: string[];
+	timeoutMs: number;
+}) {
+	const invocation = markdownlintNoFixInvocation(options);
+	return safeSpawnAsync(invocation.command, invocation.args, {
+		timeout: options.timeoutMs,
+		cwd: options.cwd,
+	});
+}
 
 function writePackage(
 	dir: string,
@@ -209,7 +224,7 @@ describe("locateCli2Entry finds the package the resolved command belongs to", ()
 	});
 });
 
-describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
+describe("markdownlintNoFixInvocation runs cli2's main with fix off, in a child", () => {
 	function project(main = STAND_IN_MAIN): { shim: string; cwd: string } {
 		writePackage(path.join(root, "node_modules", "markdownlint-cli2"), main);
 		return {
@@ -225,7 +240,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	it("passes the project directory, the argv and optionsOverride { fix: false }", async () => {
 		const { shim, cwd } = project();
 
-		await runMarkdownlintApi({
+		await spawnNoFixLint({
 			command: shim,
 			cwd,
 			args: ["--config", "core.json", "doc.md"],
@@ -245,7 +260,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	it("returns logMessage as stdout, logError as stderr and the exit code as status", async () => {
 		const { shim, cwd } = project();
 
-		const result = await runMarkdownlintApi({
+		const result = await spawnNoFixLint({
 			command: shim,
 			cwd,
 			args: ["doc.md"],
@@ -264,7 +279,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	it("turns a thrown main into exit 2 with the message on stderr", async () => {
 		const { shim, cwd } = project();
 
-		const result = await runMarkdownlintApi({
+		const result = await spawnNoFixLint({
 			command: shim,
 			cwd,
 			args: ["throws.md"],
@@ -280,7 +295,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	it("turns a module that will not load into exit 2 with the cause on stderr", async () => {
 		const { shim, cwd } = project('throw new Error("cannot load");\n');
 
-		const result = await runMarkdownlintApi({
+		const result = await spawnNoFixLint({
 			command: shim,
 			cwd,
 			args: ["doc.md"],
@@ -294,7 +309,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	it("turns a module that exports no main into exit 2", async () => {
 		const { shim, cwd } = project("export const other = 1;\n");
 
-		const result = await runMarkdownlintApi({
+		const result = await spawnNoFixLint({
 			command: shim,
 			cwd,
 			args: ["doc.md"],
@@ -310,7 +325,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	it("reports a run that never settles as a timeout", async () => {
 		const { shim, cwd } = project();
 
-		const result = await runMarkdownlintApi({
+		const result = await spawnNoFixLint({
 			command: shim,
 			cwd,
 			args: ["hangs.md"],
@@ -327,9 +342,9 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 		const { shim, cwd } = project();
 		const delay = monitorEventLoopDelay({ resolution: 10 });
 		delay.enable();
-		let result: Awaited<ReturnType<typeof runMarkdownlintApi>>;
+		let result: Awaited<ReturnType<typeof spawnNoFixLint>>;
 		try {
-			result = await runMarkdownlintApi({
+			result = await spawnNoFixLint({
 				command: shim,
 				cwd,
 				args: ["spins.md"],
@@ -350,7 +365,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	it("follows an edit of an imported config between two lints", async () => {
 		const { shim, cwd } = project();
 		const run = () =>
-			runMarkdownlintApi({
+			spawnNoFixLint({
 				command: shim,
 				cwd,
 				args: ["config.md"],
@@ -380,9 +395,9 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 		const uncaught: unknown[] = [];
 		const onUncaught = (error: unknown) => uncaught.push(error);
 		process.on("uncaughtException", onUncaught);
-		let result: Awaited<ReturnType<typeof runMarkdownlintApi>>;
+		let result: Awaited<ReturnType<typeof spawnNoFixLint>>;
 		try {
-			result = await runMarkdownlintApi({
+			result = await spawnNoFixLint({
 				command: shim,
 				cwd,
 				args: ["late-throw.md"],
@@ -409,7 +424,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 		});
 
 		for (let i = 0; i < 2; i += 1) {
-			const result = await runMarkdownlintApi({
+			const result = await spawnNoFixLint({
 				command: shim,
 				cwd: root,
 				args: ["--config", "core.json", "doc.md"],
