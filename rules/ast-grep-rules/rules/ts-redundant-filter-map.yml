@@ -12,5 +12,7 @@ rule:
   kind: call_expression
   any:
     - pattern: "$ARR.filter(($X) => $X).map($G)"
+    # #5093: a typed identity arrow. $T matches any type node; $X must be the returned binding.
+    - pattern: "$ARR.filter(($X: $T) => $X).map($G)"
     - pattern: "$ARR.filter($X => $X).map($G)"
     - pattern: "$ARR.filter(Boolean).map($G)"

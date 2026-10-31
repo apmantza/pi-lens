@@ -8,7 +8,12 @@ valid:
   - 'arr.filter(onlyPositive).map(double)'
   - 'arr.filter(x => y).map(f)'
   - 'arr.filter((x: Foo): x is Bar => x !== null).map(g)'
+  # #5093: a typed arrow that is not an identity (it reads a field) keeps the chain.
+  - 'arr.filter((x: Foo) => x.ok).map(g)'
 invalid:
   - 'arr.filter(x => x).map(fn)'
   - 'arr.filter((x) => x).map(fn)'
   - 'arr.filter(Boolean).map(fn)'
+  # #5093: a typed identity arrow is the same identity filter.
+  - 'arr.filter((x: string | undefined) => x).map(fn)'
+  - 'arr.filter((x: Array<string> | null) => x).map(fn)'
