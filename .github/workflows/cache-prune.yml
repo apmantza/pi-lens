@@ -9,22 +9,29 @@ name: Cache prune
 #
 # `plan` runs on a pull request that edits this file or the script and prints
 # what a real run would delete (a read-only token, nothing changes). `prune`
-# deletes, on the nightly schedule and on a push to master that edits this
-# file or the script (so the merge itself runs the first cleanup). There is no
+# deletes, on the nightly schedule and on EVERY push to master. There is no
 # workflow_dispatch: a branch dispatch must not delete shared repository state
-# (#4053), and the push trigger covers the manual run. It runs before the
-# 06:00 UTC smoke workflows so their saves land in freed space.
+# (#4053), and the push trigger covers the manual run.
+#
+# #5082: the nightly run alone did not bound the CodeQL overlay base databases.
+# Every master push that is not docs-only saves a ~785 MB copy (the key carries
+# the commit sha), GitHub fires the `schedule` hours after 04:30 (the runs of
+# 2026-10-19..30 started 09:00-11:01 UTC), and one day of pushes left 11 copies,
+# 8.65 GB of a 10.19 GB cache, on 2026-10-31. Pruning on each master push keeps
+# at most the newest copy plus the one a still-running CodeQL baseline is about
+# to save (KEEP_BY_PREFIX in scripts/prune-actions-cache.mjs), about 1.6 GB.
+# That leaves the cap free, so the `npm-` entries the Unit shards restore are
+# never the least-recently-used victims of an eviction.
 
 on:
   schedule:
     - cron: '30 4 * * *' # daily 04:30 UTC
   push:
     branches: [master]
-    paths: &prune-paths
+  pull_request:
+    paths:
       - .github/workflows/cache-prune.yml
       - scripts/prune-actions-cache.mjs
-  pull_request:
-    paths: *prune-paths
 
 permissions: {}
 

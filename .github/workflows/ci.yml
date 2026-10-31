@@ -27,15 +27,19 @@ jobs:
   # can red tests/clients and tests/scripts (docs/public-api-stability.md,
   # docs/*_rules_catalog.md are read by them), so the suite is never skipped.
   # `formal` is true when the diff touches formal/ (or what runs it), and then
-  # `TLA+ models` model-checks. Push and any other event
+  # the `tla-shards` matrix model-checks. Push and any other event
   # get code=true formal=true, so master keeps the full suite, and every doubt
   # (unreadable or empty file list, API cap) resolves to the full suite too.
   #
   # `TLA+ models` is a REQUIRED check and never skips at job level: a job `if:`
   # that evaluates false reports `skipped`, which GitHub counts as passing, but
   # ci-verdict demands a literal `success` on a
-  # required row (#2618). It always starts and skips its STEPS. The name ends
-  # in `(advisory)`: this job reports, never gates.
+  # required row (#2618). The aggregate `tla-models` therefore always starts and
+  # reports. The four `tla-shards` MATRIX jobs are not required rows, so they
+  # skip at job level when `formal` is proven 'false' (#5082): a skipped job
+  # takes no runner, where the step-level skip they used before held one of the
+  # 20 concurrent slots for each of four jobs on 72 of 73 pull requests. The
+  # name of this job ends in `(advisory)`: it reports, never gates.
   changes:
     name: Changed files (advisory)
     runs-on: ubuntu-latest
@@ -206,8 +210,10 @@ jobs:
     needs: changes
     # #3801 (verify r2 V1): failed classification must not skip the model
     # shards. Empty `formal` output runs every config; only a proven 'false'
-    # skips model-checking steps. The strict aggregate below stays unchanged.
-    if: ${{ !cancelled() }}
+    # skips them. #5082: the skip is at JOB level so the four shards start no
+    # runner when formal/ is unchanged; the `tla-models` aggregate below reports
+    # the required check either way and reds when a shard that ran is red.
+    if: ${{ !cancelled() && needs.changes.outputs.formal != 'false' }}
     runs-on: ubuntu-latest
     strategy:
       # One red shard must not cancel its siblings: the log of every red shard
@@ -243,28 +249,21 @@ jobs:
 
     steps:
       # #3801: the models depend only on formal/ and the checker, so a diff that
-      # touches neither (the `changes` job) skips the model check at STEP level
-      # and this required check still concludes success. `!= 'false'`: only a
-      # proven-unchanged formal/ skips; an unreadable classification runs it.
-      - name: Skip the model check (formal/ unchanged)
-        if: needs.changes.outputs.formal == 'false'
-        run: echo "formal/ and scripts/check-tla-models.mjs are unchanged in this diff; model checking skipped (runs on every formal change and on master pushes)"
-
+      # touches neither (the `changes` job) never reaches these steps (#5082:
+      # the job-level `if` above). `!= 'false'`: only a proven-unchanged
+      # formal/ skips; an unreadable classification runs the full check.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: needs.changes.outputs.formal != 'false'
         with:
           ref: ${{ github.ref }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: needs.changes.outputs.formal != 'false'
         with:
           node-version: '22'
 
       # The runner image ships a JDK on PATH; the checker downloads the pinned
       # tla2tools.jar and verifies its sha256 before running it.
       - name: Model-check formal/ against each config's expected verdict
-        if: needs.changes.outputs.formal != 'false'
         run: |
           java -version
           node scripts/check-tla-models.mjs --shard ${{ matrix.shard }}/${{ strategy.job-total }}
@@ -283,9 +282,18 @@ jobs:
   # That reading is kept as a pass with a recorded `::warning::`; a shard
   # cancelled BEFORE its model-check step finished stays red, and unreadable
   # evidence fails closed. The reasoning is in the script's header.
+  #
+  # #5082: when `changes` proved formal/ unchanged, the `tla-shards` jobs are
+  # skipped at job level and this aggregate is the ONLY TLA+ job that starts.
+  # It reports success without a checkout or a verdict read, but only when BOTH
+  # facts hold (`formal` is the literal 'false' AND the shard job's result is
+  # `skipped`). Any other pairing -- a shard that ran and failed, an empty
+  # classification, a skipped shard job under a formal change -- reads the
+  # verdict seam, and `skipped` rows without a proven-unchanged formal/ fail
+  # there ("a shard row is missing from the evidence").
   tla-models:
     name: TLA+ models
-    needs: tla-shards
+    needs: [changes, tla-shards]
     if: always()
     runs-on: ubuntu-latest
     # Runs a checkout, one `node` and one API read; 10 min is the repo's floor
@@ -300,11 +308,17 @@ jobs:
     env:
       SHARDS_RESULT: ${{ needs.tla-shards.result }}
     steps:
+      - name: Report that no TLA+ model job was needed (formal/ unchanged)
+        if: needs.changes.outputs.formal == 'false' && needs.tla-shards.result == 'skipped'
+        run: echo "formal/ and scripts/check-tla-models.mjs are unchanged in this diff; the TLA+ shard jobs were not started (they run on every formal change and on master pushes)"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: needs.changes.outputs.formal != 'false' || needs.tla-shards.result != 'skipped'
         with:
           persist-credentials: false
 
       - name: Require every TLA+ models shard to succeed
+        if: needs.changes.outputs.formal != 'false' || needs.tla-shards.result != 'skipped'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -522,9 +536,18 @@ jobs:
           ref: ${{ github.ref }}
           persist-credentials: false
 
+      # #5082: this job restored ~/.npm twice. setup-node auto-caches npm
+      # (package.json names it in `packageManager`) under
+      # `node-cache-Linux-x64-npm-<lockfile hash>`, and the step below restores
+      # the same directory under `npm-Linux-node-22-<hash>`. The setup-node
+      # Linux entry is first-writer-wins and holds 676 bytes in the cache
+      # listing (2026-10-31), against 162 MB for the `npm-` entry, so it
+      # restores nothing. The `npm-` entry, which the push-to-master run saves
+      # and pull requests restore, is the one kept.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
+          package-manager-cache: false
 
       - name: Cache npm cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

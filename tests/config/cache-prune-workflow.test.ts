@@ -9,6 +9,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import yaml from "../../clients/deps/js-yaml.js";
 import {
 	effectivePermissions,
 	guardOf,
@@ -86,6 +87,27 @@ describe("cache-prune.yml: only `prune` writes (#4358 r1 F1)", () => {
 	it("guards `prune` to the schedule or master", () => {
 		expect(guardOf(jobs.prune.if).guarded).toBe(true);
 		expect(String(jobs.prune.if)).not.toContain("pull_request");
+	});
+
+	// Recurrence (#5082): `push` was path-filtered to edits of this file and the
+	// script, so only the nightly `schedule` run (which GitHub started 09:00 to
+	// 11:01 UTC on 2026-10-19..30, hours after its 04:30 cron) pruned. Every
+	// non-docs master push saves a ~785 MB CodeQL overlay base database, and one
+	// day of pushes left 11 copies, 8.65 GB of a 10.19 GB cache, which put the
+	// npm entries the Unit shards restore at the mercy of LRU eviction.
+	it("prunes on every push to master, not only on edits of the prune files", () => {
+		const raw = yaml.load(readFileSync(resolve(ROOT, PRUNE), "utf8")) as {
+			on: Record<string, { branches?: string[]; paths?: string[] }>;
+		};
+		expect(raw.on.push.branches).toEqual(["master"]);
+		expect(raw.on.push.paths).toBeUndefined();
+		expect(raw.on.schedule).toBeDefined();
+		// the dry-run `plan` stays path-filtered: it only needs to run when the
+		// rules change
+		expect(raw.on.pull_request.paths).toEqual([
+			".github/workflows/cache-prune.yml",
+			"scripts/prune-actions-cache.mjs",
+		]);
 	});
 
 	it("is the only workflow that passes --apply to the prune script", () => {

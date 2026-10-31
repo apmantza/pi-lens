@@ -235,7 +235,10 @@ const DOCS_ONLY = [
 // this list: a required row that a docs-only diff skips is absent, not passing.
 const HEAVY_ADVISORY = ["heavy-gate", "codeql"];
 // Every test-running job: a docs edit can red these (review r1 F2), so a
-// docs-only diff runs ALL of them.
+// docs-only diff runs ALL of them. `tla-shards` is the exception (#5082): its
+// four matrix jobs model-check formal/, which a diff that leaves formal/ and
+// the checker alone cannot change, so they skip at job level; the required
+// `tla-models` aggregate still runs and reports.
 const TEST_JOBS = [
 	"test",
 	"unit-tests",
@@ -244,15 +247,18 @@ const TEST_JOBS = [
 	"prod-install-build",
 	"targeted-tests-advisory",
 	"lint-and-typecheck",
-	"tla-shards",
 	"tla-models",
 ];
+const TLA_SHARDS = "tla-shards";
 
 describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () => {
 	it("skips the heavy advisory jobs for a docs-only diff and runs every test job", () => {
 		const { changes, results } = simulate("pull_request", DOCS_ONLY);
 		expect(changes).toEqual({ code: "false", formal: "false", smoke: "false" });
 		for (const id of HEAVY_ADVISORY) expect(results[id], id).toBe("skipped");
+		// Recurrence (#5082): the four shard jobs of a diff that cannot change
+		// formal/ held a runner slot each (72 of 73 audited pull requests).
+		expect(results[TLA_SHARDS]).toBe("skipped");
 		for (const id of [
 			"changes",
 			"dependency-boundaries",
@@ -322,6 +328,14 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 		expect(changes.code).toBe("true");
 		for (const id of [...HEAVY_ADVISORY, ...TEST_JOBS])
 			expect(results[id], id).toBe("success");
+		// formal/, the checker and ci.yml itself are the formal triggers
+		expect(results[TLA_SHARDS], TLA_SHARDS).toBe(
+			["formal/file-locks/FileLock.tla", ".github/workflows/ci.yml"].includes(
+				file,
+			)
+				? "success"
+				: "skipped",
+		);
 	});
 
 	// Recurrence: master and (later) merge_group losing the full suite to the
@@ -333,6 +347,7 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			expect(changes).toEqual({ code: "true", formal: "true", smoke: "true" });
 			for (const id of [
 				...TEST_JOBS.filter((id) => id !== "targeted-tests-advisory"),
+				TLA_SHARDS,
 				"heavy-gate",
 			]) {
 				expect(results[id], id).toBe("success");
@@ -373,33 +388,43 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 	);
 
 	// Recurrence: TLA+ running on every diff (8 minutes of the heaviest required
-	// job), or skipping when formal/ or its checker changed.
-	it("model-checks only when formal/ or what runs it changed, and always on master", () => {
-		const names = (event: string, files: string[]) => {
+	// job), or skipping when formal/ or its checker changed. #5082: and the
+	// four shard jobs starting a runner each on a diff that cannot change formal/
+	// (the step-level skip they used before held a slot for ~3 s each, queued
+	// p50 96 s). The required `TLA+ models` aggregate is the only TLA+ job that
+	// starts there, and it reports success without reading a verdict.
+	it("starts the TLA+ shard jobs only when formal/ or what runs it changed, and always on master", () => {
+		const ran = (event: string, files: string[]) => {
 			const sim = simulate(event, files);
-			return stepsRun("tla-shards", event, sim.changes, sim.results)["-"];
+			return {
+				shards: sim.results[TLA_SHARDS],
+				aggregate: sim.results["tla-models"],
+				steps: stepsRun("tla-models", event, sim.changes, sim.results)["-"],
+			};
 		};
-		expect(names("pull_request", ["clients/index.ts"])).toEqual([
-			"Skip the model check (formal/ unchanged)",
-		]);
-		expect(names("pull_request", DOCS_ONLY)).toEqual([
-			"Skip the model check (formal/ unchanged)",
-		]);
+		const REPORT =
+			"Report that no TLA+ model job was needed (formal/ unchanged)";
+		const VERDICT = "Require every TLA+ models shard to succeed";
+		for (const files of [["clients/index.ts"], DOCS_ONLY]) {
+			const quiet = ran("pull_request", files);
+			expect(quiet.shards).toBe("skipped");
+			expect(quiet.aggregate).toBe("success");
+			expect(quiet.steps).toEqual([REPORT]);
+		}
 		for (const files of [
 			["formal/file-locks/FileLock.tla"],
 			["scripts/check-tla-models.mjs"],
 			["scripts/tla-model-costs.json"],
 			[".github/workflows/ci.yml"],
 		]) {
-			const ran = names("pull_request", files);
-			expect(ran).toContain(
-				"Model-check formal/ against each config's expected verdict",
-			);
-			expect(ran).not.toContain("Skip the model check (formal/ unchanged)");
+			const loud = ran("pull_request", files);
+			expect(loud.shards).toBe("success");
+			expect(loud.steps).toContain(VERDICT);
+			expect(loud.steps).not.toContain(REPORT);
 		}
-		expect(names("push", ["clients/index.ts"])).toContain(
-			"Model-check formal/ against each config's expected verdict",
-		);
+		const master = ran("push", ["clients/index.ts"]);
+		expect(master.shards).toBe("success");
+		expect(master.steps).toContain(VERDICT);
 	});
 
 	// Recurrence: a FAILED classification reading as docs-only or as code. The
@@ -426,17 +451,71 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			"tla-models",
 		])
 			expect(results[id], id).toBe("success");
-		const steps = stepsRun("tla-shards", "pull_request", changes, results)["-"];
-		expect(steps).toContain(
-			"Model-check formal/ against each config's expected verdict",
+		// the shards START (an empty `formal` is not 'false') and the aggregate
+		// reads their verdict instead of reporting "nothing needed"
+		const steps = stepsRun("tla-models", "pull_request", changes, results)["-"];
+		expect(steps).toContain("Require every TLA+ models shard to succeed");
+		expect(steps).not.toContain(
+			"Report that no TLA+ model job was needed (formal/ unchanged)",
 		);
-		expect(steps).not.toContain("Skip the model check (formal/ unchanged)");
+	});
+
+	// Recurrence (#5082, fail closed): the aggregate's "nothing needed" report
+	// must need BOTH proofs. A shard job that did not run under a formal change
+	// (a cancelled run), or a shard that ran under `formal=false`, must go to
+	// the verdict seam, never to the green report.
+	it("reports `no TLA+ job needed` only when formal is proven false AND the shard job was skipped", () => {
+		const aggregate = CI["tla-models"];
+		const report = aggregate.steps?.find((step) =>
+			String(step.name).startsWith("Report that no TLA+ model job was needed"),
+		);
+		const verdict = aggregate.steps?.find(
+			(step) => step.name === "Require every TLA+ models shard to succeed",
+		);
+		const base: Ctx = {
+			event: "pull_request",
+			changes: { code: "true", formal: "false" },
+			results: {},
+			outputs: {},
+		};
+		const decide = (formal: string, shards: string) => {
+			const ctx: Ctx = {
+				...base,
+				changes: { code: "true", formal },
+				results: { changes: "success", "tla-shards": shards },
+				outputs: { changes: { formal } },
+			};
+			return {
+				report: evaluate(String(report?.if), ctx),
+				verdict: evaluate(String(verdict?.if), ctx),
+			};
+		};
+		expect(decide("false", "skipped")).toEqual({
+			report: true,
+			verdict: false,
+		});
+		for (const [formal, shards] of [
+			["false", "success"],
+			["false", "failure"],
+			["false", "cancelled"],
+			["true", "skipped"],
+			["true", "success"],
+			["true", "failure"],
+			["", "skipped"],
+			["", "success"],
+		]) {
+			expect(decide(formal, shards), `${formal}/${shards}`).toEqual({
+				report: false,
+				verdict: true,
+			});
+		}
 	});
 
 	// Recurrence: a new job gated on `changes` without being a heavy advisory or
-	// TLA+ shard job would reintroduce a docs-only skip of tests. The aggregate
-	// depends on the shards, not on classification; it always judges their result.
-	it("lets only tla-shards and heavy-gate depend on `changes`", () => {
+	// TLA+ job would reintroduce a docs-only skip of tests. The TLA+ aggregate
+	// reads `changes` only to tell "nothing needed" from "a shard is missing"
+	// (#5082); it still runs on every event (`if: always()`).
+	it("lets only tla-shards, tla-models and heavy-gate depend on `changes`", () => {
 		const dependents = Object.entries(CI)
 			.filter(
 				([id, job]) =>
@@ -444,7 +523,8 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			)
 			.map(([id]) => id)
 			.sort(byCodeUnit);
-		expect(dependents).toEqual(["heavy-gate", "tla-shards"]);
+		expect(dependents).toEqual(["heavy-gate", "tla-models", "tla-shards"]);
+		expect(CI["tla-models"].if).toBe("always()");
 		expect(CI["heavy-gate"].if).toBe("needs.changes.outputs.code == 'true'");
 	});
 });
