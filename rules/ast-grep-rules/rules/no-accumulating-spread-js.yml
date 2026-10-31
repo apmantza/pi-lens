@@ -1,11 +1,59 @@
 id: no-accumulating-spread-js
 language: JavaScript
-message: "Avoid accumulating array spread in loops/reduce (O(n^2)); use push/flatMap"
+message: "Copying the reduce accumulator each pass can be O(n^2) when it grows (spread, concat, slice, Array.from, Object.assign); build the result with push/flatMap, or mutate only an accumulator the reduce owns"
 severity: warning
 metadata:
   category: performance
+note: |
+  A reduce callback that returns a fresh copy of its own accumulator does the
+  copy on every pass. Each copy costs as much as the accumulator is long, so the
+  loop is O(n^2) when the accumulator grows with the input. A fixed-size
+  accumulator, such as `items.reduce((acc, item) => acc.slice(), [0])`, costs
+  constant work per copy, so that loop is linear. The shape is still flagged,
+  because the copy is wasted work on every pass. Flags the spread copies, and
+  the non-spread copies `Object.assign({}, acc, ...)`, `Array.from(acc)`,
+  `[].concat(acc, ...)`, `acc.concat(...)` and `acc.slice()`.
+
+  Mutating the accumulator also changes the initial value passed to reduce and
+  any intermediate snapshot a caller holds. Mutate it only when it is a fresh
+  value the reduce owns. When the initial value or a snapshot comes from outside,
+  keep the copy, or preserve both when you choose an alternative such as flatMap.
+
+  Matched only where the callback's single result is the copy (an expression
+  body, or a block or function body whose only statement is that `return`), and
+  only when the copied value is the accumulator parameter itself. A copy made
+  once outside the callback, a mutation such as `acc.push`, and a copy of the
+  item are not flagged. A callback with more than one statement is a known miss.
+
+  The non-spread arms follow dmmulroy/anti-slop's `no-reduce-accumulator-copy`
+  (MIT). The text here is written for this catalog, not copied.
 rule:
   any:
     - pattern: $ARR.reduce(($ACC, $ITEM) => [...$ACC, $ITEM], $$$INIT)
     - pattern: $ARR.reduce(($ACC, $ITEM) => [...$ACC, ...$ITEM], $$$INIT)
     - pattern: $ARR.reduce(function($ACC, $ITEM) { return [...$ACC, $ITEM] }, $$$INIT)
+    # #5093: non-spread copies of the accumulator, expression body. The comma
+    # arms need a zero-rest twin: `, $$$REST` does not match a bare `(acc)`.
+    - pattern: $ARR.reduce(($ACC, $ITEM) => Object.assign({}, $ACC, $$$REST), $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => Object.assign({}, $ACC), $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => Array.from($ACC), $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => [].concat($ACC, $$$REST), $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => [].concat($ACC), $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => $ACC.concat($$$REST), $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => $ACC.slice(), $$$INIT)
+    # #5093: the same copies as the only statement of an arrow block body.
+    - pattern: $ARR.reduce(($ACC, $ITEM) => { return Object.assign({}, $ACC, $$$REST) }, $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => { return Object.assign({}, $ACC) }, $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => { return Array.from($ACC) }, $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => { return [].concat($ACC, $$$REST) }, $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => { return [].concat($ACC) }, $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => { return $ACC.concat($$$REST) }, $$$INIT)
+    - pattern: $ARR.reduce(($ACC, $ITEM) => { return $ACC.slice() }, $$$INIT)
+    # #5093: the same copies as the only statement of a function body.
+    - pattern: $ARR.reduce(function($ACC, $ITEM) { return Object.assign({}, $ACC, $$$REST) }, $$$INIT)
+    - pattern: $ARR.reduce(function($ACC, $ITEM) { return Object.assign({}, $ACC) }, $$$INIT)
+    - pattern: $ARR.reduce(function($ACC, $ITEM) { return Array.from($ACC) }, $$$INIT)
+    - pattern: $ARR.reduce(function($ACC, $ITEM) { return [].concat($ACC, $$$REST) }, $$$INIT)
+    - pattern: $ARR.reduce(function($ACC, $ITEM) { return [].concat($ACC) }, $$$INIT)
+    - pattern: $ARR.reduce(function($ACC, $ITEM) { return $ACC.concat($$$REST) }, $$$INIT)
+    - pattern: $ARR.reduce(function($ACC, $ITEM) { return $ACC.slice() }, $$$INIT)
