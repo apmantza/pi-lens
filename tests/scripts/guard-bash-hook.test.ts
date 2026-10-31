@@ -6577,6 +6577,8 @@ const STASH_ADMITTED: string[] = [
 	"git stash show 2",
 	"git -C /home/dev/wt stash list",
 	"git -C /home/dev/a -C b stash show",
+	"git -C ~/wt stash list",
+	"git -C ../wt-1.2_x@y stash show",
 	"git stash list | head -5",
 	"git stash list 2>&1",
 	"git stash list 2>/dev/null",
@@ -6634,6 +6636,22 @@ const STASH_STILL_DENIED: string[] = [
 	"git --no-pager stash list",
 	"git --exec-path=/home/dev/x stash show",
 	"git -C /home/dev/wt -c user.name=a stash list",
+	// PR #5115 Greptile G1: the -C VALUE is part of the words bash hands git, so
+	// a value the scan cannot read as one plain path is a refusal (bash runs
+	// `git -C . stash save stash list` for the first row).
+	'git -C $(printf ". stash save") stash list',
+	"git -C `echo .` stash list",
+	'git -C "$X" stash list',
+	"git -C $X stash list",
+	"git -C ${X} stash list",
+	"git -C '. stash save' stash list",
+	"git -C a\\ b stash list",
+	"git -C {.,.} stash list",
+	"git -C * stash list",
+	"git -C ? stash list",
+	"git -C [a] stash list",
+	"git -C -c stash list",
+	"git -c a=$(echo x) stash list",
 	// env, inline or exported earlier in the command
 	"FOO=1 git stash list",
 	"GIT_EXTERNAL_DIFF=/home/dev/x git stash show -p",

@@ -20,6 +20,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readlinkSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -221,6 +222,52 @@ describe("scripts/worktree-remove.mjs (#5111)", () => {
 		expect(err.join("\n")).toContain("failed to restore node_modules");
 		expect(err.join("\n")).toContain(f.shared);
 	});
+
+	// Recurrence: PR #5115 Greptile G2 -- path.resolve collapsed `..` before the
+	// symlink was followed, so `away/lnk/../wt` selected the registered tree at
+	// `away/wt` (and --force destroyed its work) instead of the physical
+	// `deep/wt` the kernel and git mean (AGENTS.md shape 1).
+	it("resolves `..` after a symlink, not before it", () => {
+		const f = makeFixture(false);
+		const away = join(f.root, "away");
+		const deep = join(f.root, "deep");
+		mkdirSync(away);
+		mkdirSync(join(deep, "sub"), { recursive: true });
+		symlinkSync(join(deep, "sub"), join(away, "lnk"));
+		const wrong = join(away, "wt");
+		const right = join(deep, "wt");
+		gitIn(f.main, ["worktree", "add", "-q", "--detach", wrong]);
+		gitIn(f.main, ["worktree", "add", "-q", "--detach", right]);
+		writeFileSync(join(wrong, "work.txt"), "uncommitted\n");
+		const r = remove([`${join(away, "lnk")}/../wt`, "--force"], f.main);
+		expect(r.err).toBe("");
+		expect(r.code).toBe(0);
+		expect(existsSync(right)).toBe(false);
+		expect(existsSync(join(wrong, "work.txt"))).toBe(true);
+		expect(registered(f, realpathSync(wrong))).toBe(true);
+	});
+
+	it("refuses a path that does not exist and says so", () => {
+		const f = makeFixture();
+		const r = remove([join(f.root, "missing")], f.main);
+		expect(r.code).toBe(1);
+		expect(r.err).toContain("does not exist");
+	});
+
+	// Recurrence: PR #5115 Greptile G3 -- a newline-split, trimmed listing could
+	// not match a registered path holding a newline or a trailing space.
+	it.each([["new\nline"], ["trailing "]])(
+		"removes a registered worktree whose name is %j",
+		(name) => {
+			const f = makeFixture();
+			const odd = join(f.root, name);
+			gitIn(f.main, ["worktree", "add", "-q", "--detach", odd]);
+			const r = remove([odd], f.main);
+			expect(r.err).toBe("");
+			expect(r.code).toBe(0);
+			expect(existsSync(odd)).toBe(false);
+		},
+	);
 
 	// Recurrence: PR #5115 review F3 -- deleting `if (ENTRY) main()` left every
 	// in-process test green while the CLI exited 0 and did nothing.

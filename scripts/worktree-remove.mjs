@@ -32,9 +32,8 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 import { classifyNodeModules } from "./lib/pr-worktree.mjs";
-import { parseWorktreeList } from "./lib/worktree-hygiene.mjs";
 
 const USAGE = "usage: node scripts/worktree-remove.mjs <path> [--force]";
 
@@ -50,7 +49,7 @@ function defaultGitExec(args, options = {}) {
 /** @param {string} p @returns {string} */
 function canonicalPath(p) {
 	try {
-		return fs.realpathSync(p);
+		return fs.realpathSync.native(p);
 	} catch {
 		return path.resolve(p);
 	}
@@ -85,12 +84,29 @@ export function run({
 		stderr(USAGE);
 		return 2;
 	}
-	const target = canonicalPath(path.resolve(cwd, targets[0]));
+	// The raw spelling goes to the NATIVE realpath: `path.resolve`, and the JS
+	// `fs.realpathSync` that starts with it, collapse `..` before a symlink is
+	// followed and pick a different worktree (G2).
+	const raw = targets[0];
+	/** @type {string} */
+	let target;
+	try {
+		target = fs.realpathSync.native(
+			path.isAbsolute(raw) ? raw : `${cwd}${path.sep}${raw}`,
+		);
+	} catch {
+		stderr(`${raw} does not exist`);
+		return 1;
+	}
 	let rows;
 	try {
-		rows = parseWorktreeList(
-			gitExec(["worktree", "list", "--porcelain"], { cwd: target }),
-		);
+		// NUL-delimited, so a path holding a newline or a trailing space is
+		// read back exactly as registered (G3). One `worktree <path>` field
+		// opens each record; the first record is the main checkout.
+		rows = gitExec(["worktree", "list", "--porcelain", "-z"], { cwd: target })
+			.split("\0")
+			.filter((field) => field.startsWith("worktree "))
+			.map((field) => ({ path: field.slice("worktree ".length) }));
 	} catch (error) {
 		stderr(`${target} is not inside a git worktree: ${error.message}`);
 		return 1;
@@ -156,7 +172,4 @@ export function main() {
 	process.exitCode = run();
 }
 
-const ENTRY = process.argv[1]
-	? pathToFileURL(process.argv[1]).href === import.meta.url
-	: false;
-if (ENTRY) main();
+if (isMainModule(import.meta.url)) main();

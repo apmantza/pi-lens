@@ -1760,6 +1760,12 @@ const STASH_READ_REDIRECTS = new Set(["2>&1", "2>/dev/null", ">/dev/null"]);
  *  quote, `$`, backtick, `;`, `|`, `&`, `<`, `>` or the substitution mark. */
 const STASH_FORMAT_FLAG = /^--(?:format|pretty)=[A-Za-z0-9%:,._ -]*$/;
 
+/** The value of a `-C` before the subcommand (PR #5115 G1): one plain path word
+ *  of known-good characters and never a leading `-`. `$`, a backtick, a quote,
+ *  a glob, `{`, `(`, a backslash, a space and the substitution mark are not in
+ *  it, so a value bash could expand or split into more words is refused. */
+const STASH_DIR_VALUE = /^[A-Za-z0-9_./~+@:%=][A-Za-z0-9_./~+@:%=-]*$/;
+
 /** `git stash show`'s one optional stash operand: `stash@{N}` or a bare `N`. */
 const STASH_REF = /^(?:stash@\{\d+\}|\d+)$/;
 
@@ -1777,7 +1783,9 @@ const STASH_REF = /^(?:stash@\{\d+\}|\d+)$/;
  */
 function isReadOnlyStash(args, i, env) {
 	if (Object.keys(env).length > 0) return false;
-	for (let k = 0; k < i; k += 2) if (args[k] !== "-C") return false;
+	for (let k = 0; k < i; k += 2)
+		if (args[k] !== "-C" || !STASH_DIR_VALUE.test(args[k + 1] ?? ""))
+			return false;
 	const [sub, ...rest] = args.slice(i + 1);
 	if (sub !== "list" && sub !== "show") return false;
 	let operands = 0;
