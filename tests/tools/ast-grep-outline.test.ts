@@ -138,7 +138,7 @@ describe("ast_grep_outline tool", () => {
 		// [ - signature]`, two spaces per nesting level, 1-based inclusive ranges.
 		expect(() => JSON.parse(text)).toThrow();
 		expect(text.split("\n")).toEqual([
-			"/proj/a.ts",
+			"a.ts",
 			"1-1 import module fs",
 			"3-10 export class Svc \u2014 class Svc<T>",
 			"  4-4 method foo",
@@ -192,10 +192,71 @@ describe("ast_grep_outline tool", () => {
 		const lines = String(res.content[0].text).split("\n");
 		// Recurrence: three runs over `clients/` kept three different 50-file
 		// sets, and `truncatedFiles` rode in `details` only.
-		const headers = lines.filter((l) => l.startsWith("/proj/"));
-		expect(headers).toEqual(names.slice(0, 50).map((n) => `/proj/f${n}.ts`));
+		const headers = lines.filter((l) => /^f\d\d\.ts$/.test(l));
+		expect(headers).toEqual(names.slice(0, 50).map((n) => `f${n}.ts`));
 		expect(lines.at(-1)).toBe("... 5 more files not shown (cap 50)");
 		expect(res.details).toMatchObject({ files: 50, truncatedFiles: true });
+	});
+
+	it("renders file headers project-relative, absolute outside the project (#5071 r2 F1)", async () => {
+		const output: AstGrepOutlineFile[] = [
+			{
+				path: "/proj/src/a.ts",
+				language: "TypeScript",
+				items: [item("function", "f", 0, 0)],
+			},
+			{
+				path: "/other/b.ts",
+				language: "TypeScript",
+				items: [item("function", "g", 0, 0)],
+			},
+		];
+		const tool = createAstGrepOutlineTool(
+			makeClient({ outline: vi.fn().mockResolvedValue({ output }) }),
+		);
+		const text = String((await run(tool, { paths: ["."] })).content[0].text);
+		// Recurrence: the CLI's absolute path headed every file, 26-40 B of the
+		// cwd per file (45% of the tests/ default view). A file outside the
+		// project keeps its absolute path, so the model still gets a usable one.
+		// Sorted on the display header: '/' (0x2F) sorts before 's'.
+		expect(text.split("\n")).toEqual([
+			"/other/b.ts",
+			"1-1 function g",
+			"src/a.ts",
+			"1-1 function f",
+		]);
+	});
+
+	it("keeps the same 50 files on every host: sort on the project-relative form (#5071 r2 F1)", async () => {
+		// Windows-shaped CLI paths under a Windows cwd. `a1\y.ts` and `a\x.ts`
+		// straddle the 50-file cap. Sorted as raw `\` strings, `a1\y.ts` comes
+		// first ('1' < '\'); sorted as the relative POSIX form, `a/x.ts` comes
+		// first ('/' < '1'). Recurrence: a Windows host and a POSIX host kept
+		// different 50-file sets for the same tree.
+		const fillers = Array.from(
+			{ length: 49 },
+			(_, i) => `${String(i).padStart(2, "0")}.ts`,
+		);
+		const output: AstGrepOutlineFile[] = [
+			...fillers.map((f) => `C:\\proj\\${f}`),
+			"C:\\proj\\a1\\y.ts",
+			"C:\\proj\\a\\x.ts",
+		].map((p) => ({
+			path: p,
+			language: "TypeScript",
+			items: [item("function", "f", 0, 0)],
+		}));
+		const tool = createAstGrepOutlineTool(
+			makeClient({ outline: vi.fn().mockResolvedValue({ output }) }),
+		);
+		const lines = String(
+			(await run(tool, { paths: ["."] }, "C:\\proj")).content[0].text,
+		).split("\n");
+		expect(lines.filter((l) => /\.ts$/.test(l))).toEqual([
+			...fillers,
+			"a/x.ts",
+		]);
+		expect(lines.at(-1)).toBe("... 1 more files not shown (cap 50)");
 	});
 
 	it("says when a file's items were cut at the per-file cap (#5071)", async () => {
@@ -277,10 +338,10 @@ describe("ast_grep_outline over a directory, real ast-grep (#5071)", () => {
 		expect(Buffer.byteLength(text)).toBeLessThan(RESULT_PAYLOAD_BUDGET_BYTES);
 		const delivered = finalizeToolResultWithDelivery(res as never);
 		expect(delivered.truncated).toBe(false);
-		const headers = text.split("\n").filter((l) => l.startsWith(dir as string));
+		const headers = text.split("\n").filter((l) => /^file\d\d\.ts$/.test(l));
 		expect(headers).toHaveLength(50);
 		expect([...headers].sort()).toEqual(headers);
-		expect(headers[0]).toBe(path.join(dir, "file00.ts"));
+		expect(headers[0]).toBe("file00.ts");
 		expect(text.split("\n").at(-1)).toBe(
 			"... 10 more files not shown (cap 50)",
 		);

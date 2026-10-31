@@ -4,6 +4,7 @@ import type {
 	AstGrepOutlineItem,
 } from "../clients/ast-grep-client.js";
 import { Type } from "../clients/deps/typebox.js";
+import { toProjectRelativePath } from "../clients/path-utils.js";
 import { compactRenderResult } from "./render-compact.js";
 import {
 	MAX_PATHS_ENTRIES,
@@ -166,14 +167,21 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 			}
 			if (result.error) return errorResult(`Error: ${result.error}`);
 
-			// Sort before the cap: the CLI's walker order differs per run, so an
-			// unsorted slice kept a different 50 files each call (#5071).
-			const all = [...(result.output ?? [])].sort((a, b) =>
-				a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
-			);
+			// Each header is the project-relative POSIX path (absolute outside the
+			// project), and the sort runs on that header before the cap: the CLI's
+			// walker order differs per run, and a sort on the absolute path kept a
+			// different 50 files on a `\` host than on a `/` host (#5071 r2 F1).
+			const all = (result.output ?? [])
+				.map((file) => ({
+					file,
+					header: toProjectRelativePath(file.path, cwd),
+				}))
+				.sort((a, b) =>
+					a.header < b.header ? -1 : a.header > b.header ? 1 : 0,
+				);
 			const files = all.slice(0, MAX_FILES);
 			const truncatedFiles = all.length > MAX_FILES;
-			const totalItems = files.reduce((n, f) => n + f.items.length, 0);
+			const totalItems = files.reduce((n, f) => n + f.file.items.length, 0);
 			if (files.length === 0) {
 				return {
 					content: [
@@ -185,8 +193,8 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 					details: { files: 0, items: 0 },
 				};
 			}
-			const lines = files.flatMap((file) => [
-				file.path,
+			const lines = files.flatMap(({ file, header }) => [
+				header,
 				...file.items
 					.slice(0, MAX_ITEMS_PER_FILE)
 					.flatMap((item) => renderItem(item, 0)),
