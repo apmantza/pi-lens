@@ -7,9 +7,11 @@
  * uncleared timer.
  */
 
+import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	combineAbortSignals,
+	untilAborted,
 	withBudget,
 	withDeadline,
 	withinRemaining,
@@ -212,5 +214,95 @@ describe("combineAbortSignals", () => {
 		a.abort();
 		const b = new AbortController();
 		expect(combineAbortSignals(a.signal, b.signal)?.aborted).toBe(true);
+	});
+});
+
+// Shape 4 (an abort listener is a watcher: released on every settle path). Five
+// private copies of this race added a listener to the caller's signal and never
+// removed it; `untilAborted` is the one owner, so its release is pinned here and
+// every caller's cell (`sweep-warmup`, `lsp-diagnostics`, `fresh-fetch`,
+// `out-of-band-joined-look-4532`, `service-inconclusive-per-server`) reads the
+// signal after a real call.
+describe("untilAborted", () => {
+	const deferred = <T>() => {
+		let resolve!: (value: T) => void;
+		let reject!: (error: Error) => void;
+		const promise = new Promise<T>((res, rej) => {
+			resolve = res;
+			reject = rej;
+		});
+		return { promise, resolve, reject };
+	};
+
+	it("returns the work itself when there is no signal", async () => {
+		const work = Promise.resolve("done");
+		expect(untilAborted(work, undefined)).toBe(work);
+		await expect(untilAborted(work, undefined, "aborted")).resolves.toBe(
+			"done",
+		);
+	});
+
+	it("resolves the work's value and releases its listener when the work wins", async () => {
+		const signal = new AbortController().signal;
+		const work = deferred<string>();
+		const raced = untilAborted(work.promise, signal, "aborted" as const);
+		expect(getEventListeners(signal, "abort")).toHaveLength(1);
+		work.resolve("done");
+		await expect(raced).resolves.toBe("done");
+		expect(getEventListeners(signal, "abort")).toHaveLength(0);
+	});
+
+	it("releases its listener when the work rejects, and propagates the rejection", async () => {
+		const signal = new AbortController().signal;
+		const work = deferred<string>();
+		const raced = untilAborted(work.promise, signal);
+		work.reject(new Error("boom"));
+		await expect(raced).rejects.toThrow("boom");
+		expect(getEventListeners(signal, "abort")).toHaveLength(0);
+	});
+
+	it("settles with the abort value at once when the signal aborts, leaving the work running", async () => {
+		const controller = new AbortController();
+		const work = deferred<string>();
+		const raced = untilAborted(work.promise, controller.signal, "aborted");
+		controller.abort();
+		await expect(raced).resolves.toBe("aborted");
+		expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+		// The work was abandoned, not cancelled: it can still settle for a caller
+		// that joined it.
+		work.resolve("late");
+		await expect(work.promise).resolves.toBe("late");
+	});
+
+	it("settles undefined on abort when no abort value is given", async () => {
+		const controller = new AbortController();
+		const raced = untilAborted(deferred<string>().promise, controller.signal);
+		controller.abort();
+		await expect(raced).resolves.toBeUndefined();
+	});
+
+	it("adds no listener for an already-aborted signal and swallows the work's late rejection", async () => {
+		const reasons: unknown[] = [];
+		const onUnhandled = (r: unknown) => reasons.push(r);
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			const controller = new AbortController();
+			controller.abort();
+			const work = deferred<string>();
+			const raced = untilAborted(work.promise, controller.signal, "aborted");
+			expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+			await expect(raced).resolves.toBe("aborted");
+			work.reject(new Error("late-after-abort"));
+			// The runtime reports an unhandled rejection after the microtask queue
+			// drains, so one turn of the loop is enough to see it.
+			await new Promise((r) => setImmediate(r));
+			expect(
+				reasons.some(
+					(r) => r instanceof Error && r.message === "late-after-abort",
+				),
+			).toBe(false);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
 	});
 });

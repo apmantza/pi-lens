@@ -41,6 +41,7 @@ import {
 import { mapWithConcurrency } from "../clients/map-with-concurrency.js";
 import {
 	combineAbortSignals,
+	untilAborted,
 	withDeadline,
 } from "../clients/deadline-utils.js";
 import {
@@ -2587,24 +2588,7 @@ async function collectBatchDiagnostics(
 						onTimeout: "undefined",
 						onReject: "undefined",
 					});
-					const result = options.signal
-						? await Promise.race([
-								bounded,
-								new Promise<FileDiagnosticResult | undefined>((resolve) => {
-									if (options.signal?.aborted) {
-										resolve(undefined);
-										return;
-									}
-									options.signal?.addEventListener(
-										"abort",
-										() => resolve(undefined),
-										{
-											once: true,
-										},
-									);
-								}),
-							])
-						: await bounded;
+					const result = await untilAborted(bounded, options.signal);
 					resultsByIndex.set(
 						index,
 						result ??

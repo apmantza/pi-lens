@@ -86,6 +86,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { BootstrapClients } from "../bootstrap.js";
 import type { CacheManager } from "../cache-manager.js";
+import { untilAborted } from "../deadline-utils.js";
 import type { RuntimeCoordinator } from "../runtime-coordinator.js";
 import { applyDispositionsMultiFile } from "../diagnostic-dispositions.js";
 import { parseScannedAtMs } from "../advisory-provenance.js";
@@ -966,20 +967,7 @@ export async function fetchFreshProjectDiagnostics(
 		.then(() => "completed" as const)
 		.catch(() => "completed" as const);
 
-	const outcome = signal
-		? await Promise.race([
-				allSettled,
-				new Promise<"aborted">((resolve) => {
-					if (signal.aborted) {
-						resolve("aborted");
-						return;
-					}
-					signal.addEventListener("abort", () => resolve("aborted"), {
-						once: true,
-					});
-				}),
-			])
-		: await allSettled;
+	const outcome = await untilAborted(allSettled, signal, "aborted" as const);
 
 	if (outcome === "aborted") {
 		const abortedIds = ANALYZER_IDS.filter((id) => !settledIds.has(id));

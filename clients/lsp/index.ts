@@ -50,7 +50,12 @@ import {
 } from "../degradation-ledger.js";
 import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
-import { bounded, withDeadline, withTimeout } from "../deadline-utils.js";
+import {
+	bounded,
+	untilAborted,
+	withDeadline,
+	withTimeout,
+} from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
 import type { LedgerHookKey } from "../hook-budgets.js";
 import { getAmbientAbortSignal } from "../safe-spawn.js";
@@ -5643,37 +5648,20 @@ export class LSPService {
 
 					let shared = this.firstContactWaits.get(entry.info.id);
 					if (!shared) {
-						let removeShutdownListener: (() => void) | undefined;
-						const shutdown = new Promise<"shutdown">((resolve) => {
-							const onShutdown = () => resolve("shutdown");
-							if (this.shutdownController.signal.aborted) {
-								onShutdown();
-								return;
-							}
-							this.shutdownController.signal.addEventListener(
-								"abort",
-								onShutdown,
-								{
-									once: true,
-								},
-							);
-							removeShutdownListener = () =>
-								this.shutdownController.signal.removeEventListener(
-									"abort",
-									onShutdown,
-								);
-						});
-						const probe = Promise.race([
-							waitForDiagnostics().then(
-								() => "completed" as const,
-								() => "errored" as const,
+						const probe = waitForDiagnostics().then(
+							() => "completed" as const,
+							() => "errored" as const,
+						);
+						// The shutdown race sits INSIDE the deadline, so a shutdown
+						// settles the deadline and clears its serverTimeout timer.
+						const completed = withDeadline(
+							untilAborted(
+								probe,
+								this.shutdownController.signal,
+								"shutdown" as const,
 							),
-							shutdown,
-						]);
-						const completed = withDeadline(probe, {
-							ms: serverTimeout,
-							onTimeout: "undefined",
-						});
+							{ ms: serverTimeout, onTimeout: "undefined" },
+						);
 						shared = completed
 							.then((outcome) => {
 								if (outcome === "errored" || outcome === "shutdown") {
@@ -5691,7 +5679,6 @@ export class LSPService {
 							})
 							.catch(() => "errored" as const)
 							.finally(() => {
-								removeShutdownListener?.();
 								if (this.firstContactWaits.get(entry.info.id) === shared) {
 									this.firstContactWaits.delete(entry.info.id);
 								}
@@ -8962,26 +8949,13 @@ export class LSPService {
 				// `warmupAttempt` doc on `LSPTouchFileOptions`.
 				warmupAttempt: attempt,
 			});
-			await (options.signal
-				? Promise.race([
-						withDeadline(warmupAttempt, {
-							ms: timeoutMs,
-							onTimeout: "undefined",
-						}),
-						new Promise<void>((resolve) => {
-							if (options.signal!.aborted) {
-								resolve();
-								return;
-							}
-							options.signal!.addEventListener("abort", () => resolve(), {
-								once: true,
-							});
-						}),
-					])
-				: withDeadline(warmupAttempt, {
-						ms: timeoutMs,
-						onTimeout: "undefined",
-					}));
+			await untilAborted(
+				withDeadline(warmupAttempt, {
+					ms: timeoutMs,
+					onTimeout: "undefined",
+				}),
+				options.signal,
+			);
 			const coldServerIds = stillColdServerIds();
 			logLatency({
 				type: "phase",
@@ -9019,13 +8993,13 @@ export class LSPService {
 		if (failedServerIds.length > 0 && !options.signal?.aborted) {
 			const backoffMs = warmupRetryBackoffMs();
 			if (backoffMs > 0) {
-				await new Promise<void>((resolve) => {
-					const timer = setTimeout(resolve, backoffMs);
-					timer.unref?.();
-					options.signal?.addEventListener("abort", () => resolve(), {
-						once: true,
-					});
-				});
+				await untilAborted(
+					new Promise<void>((resolve) => {
+						const timer = setTimeout(resolve, backoffMs);
+						timer.unref?.();
+					}),
+					options.signal,
+				);
 			}
 			if (!options.signal?.aborted) {
 				await runWarmupTouch(2);
@@ -9477,20 +9451,7 @@ export class LSPService {
 					})(),
 					{ ms: perFileMs, onTimeout: "undefined" },
 				);
-				await (signal
-					? Promise.race([
-							preOpenAttempt,
-							new Promise<void>((resolve) => {
-								if (signal.aborted) {
-									resolve();
-									return;
-								}
-								signal.addEventListener("abort", () => resolve(), {
-									once: true,
-								});
-							}),
-						])
-					: preOpenAttempt);
+				await untilAborted(preOpenAttempt, signal);
 			}
 		};
 

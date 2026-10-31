@@ -28,6 +28,7 @@
  *      instead of inferring it from duration histograms.
  */
 
+import { getEventListeners } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	hashDiagnosticContent,
@@ -675,6 +676,30 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(results[1]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
 	});
 
+	// Shape 4 (a watcher is released on every settle path): the first-contact
+	// probe races the service's shutdown signal, which lives as long as the
+	// service, so a finished probe must not leave its listener on it.
+	it("releases the shutdown listener once the first-contact wait settles", async () => {
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const touch = service.touchFile(FILE, "const x = 1;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(8000);
+		const result = await touch;
+
+		expect(result?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		const { signal } = (
+			service as unknown as { shutdownController: AbortController }
+		).shutdownController;
+		expect(getEventListeners(signal, "abort")).toHaveLength(0);
+	});
+
 	it("fails closed when a shared first-contact probe rejects", async () => {
 		const primary = makeClient(100, [], {
 			serverId: "dexter",
@@ -783,6 +808,14 @@ describe("#1549 — per-server touch verdict", () => {
 			inconclusive: true,
 			inconclusiveReason: "diagnostics-wait",
 		});
+		// Shape 4, the timer arm (#5077 review r1 F2): the shutdown race sits INSIDE
+		// the probe's `serverTimeout` deadline, so a shutdown clears that timer.
+		// Wrapping the deadline in the race left it ref'd for the server timeout
+		// (2 timers after shutdown, not 1). The one timer left is the client
+		// double's own pending 5 s wait, one per waitForDiagnostics call.
+		expect(vi.getTimerCount()).toBe(
+			primary.waitForDiagnostics.mock.calls.length,
+		);
 		expect(
 			(
 				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
