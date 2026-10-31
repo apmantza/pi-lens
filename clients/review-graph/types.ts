@@ -173,6 +173,7 @@ type CascadeIndeterminateReason =
 	| "missing_node" // changed file has no node in the (otherwise-built) graph, and the graph SHOULD know it — a real gap
 	| "excluded_by_role" // #1445: changed file has no node because its role (test, #260) is excluded from the graph BY DESIGN — not a gap, never agent-facing
 	| "budget_truncated" // the selected neighbor budget omitted otherwise-eligible dependents
+	| "unresolved_reference" // #5055: a file references a changed symbol by name alone (2+ same-named definitions) and no neighbor source covers it
 	| "error" // the deferred compute threw before producing a result
 	| "lsp_binding_rejected"; // #1104: every degraded-fallback display candidate was binding-rejected (stale/pre-fix-edit snapshot) and withheld
 
@@ -219,7 +220,16 @@ export interface CascadeIndeterminate {
 	budget?: CascadeBudgetCoverage;
 	/** #1550: log-only evidence for `missing_node` — never agent-facing. */
 	diagnostic?: CascadeMissingNodeDiagnostic;
+	/** #5055: for `unresolved_reference`, how many referrers stayed unplaced. */
+	unplacedReferrerCount?: number;
 }
+
+/**
+ * #5055: the id prefix of the placeholder node a reference lands on while it is
+ * still name-only (0 or 2+ same-named definitions, no import hint that narrowed
+ * it). The builder writes it; the impact query reads it. One spelling.
+ */
+export const UNRESOLVED_NAME_NODE_PREFIX = "symbol-name:";
 
 export interface ImpactCascadeResult {
 	filePath: string;
@@ -235,4 +245,13 @@ export interface ImpactCascadeResult {
 	 * `neighborFiles` then means a genuine clean leaf, not a silent under-report.
 	 */
 	indeterminate?: CascadeIndeterminate;
+	/**
+	 * #5055: files whose reference to a changed symbol stayed on its name-only
+	 * placeholder, so no `calls`/`references` edge reaches the symbol and the
+	 * graph cannot say whether they depend on it. The changed file may be among
+	 * them (its own calls). The caller owns the verdict: a run with no other
+	 * neighbor to check and a referrer the cascade would select is
+	 * indeterminate, never `no_neighbors`.
+	 */
+	nameOnlyReferrers?: string[];
 }

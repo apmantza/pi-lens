@@ -2222,6 +2222,51 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	// #5055 recurrence: the `unresolved_reference` marker is set after the
+	// degraded-graph marker, and a run both degraded AND holding an unplaced
+	// referrer must keep the more fundamental reason (the graph is unavailable),
+	// not be relabelled as an ambiguous-name gap.
+	it("keeps a graph_degraded marker when a name-only referrer is also unplaced (#5055)", async () => {
+		const env = setupTestEnvironment("cascade-degraded-unplaced-");
+		try {
+			const primary = path.join(env.tmpDir, "primary.ts");
+			const referrer = path.join(env.tmpDir, "caller.ts");
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			fs.writeFileSync(referrer, "x;\n");
+			mocks.computeImpactCascade.mockReturnValue({
+				...impact(primary, []),
+				nameOnlyReferrers: [referrer],
+			});
+			installLspService({
+				...makeLspServiceDouble(),
+				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } =
+				await import("../../clients/dispatch/integration.js");
+			const { _setLastGraphBuildInfoForTests } =
+				await import("../../clients/review-graph/builder.js");
+			_setLastGraphBuildInfoForTests({
+				reused: false,
+				mode: "skipped",
+				skipReason: "too_many_files",
+				sourceFileCount: 5000,
+				maxFileCount: 4000,
+			} as any);
+
+			const run = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+			expect(run.skipReason).toBe("indeterminate");
+			expect(run.indeterminate?.reason).toBe("graph_degraded");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// #3605 review F3: a web-tree-sitter trap cost a file in the graph its
 	// symbols and imports, and the build completed. The dependents of that file
 	// are missing from every cascade, so a clean verdict would be a silent

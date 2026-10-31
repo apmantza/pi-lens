@@ -471,6 +471,7 @@ const pinArchiveBody = (toolId: string, body: Buffer): void => {
 let originalPath: string | undefined;
 let fakeBin: string | undefined;
 let restoreDisableToolInstall: () => void;
+let restoreTokenEnv: () => void;
 
 beforeEach(() => {
 	fs.rmSync(TOOLS_DIR, { recursive: true, force: true });
@@ -504,6 +505,16 @@ beforeEach(() => {
 	// against mocked https/spawn — have to opt back in, the same way
 	// `installer-lifecycle.integration.test.ts` does for its child process.
 	restoreDisableToolInstall = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
+	// #5073: the github and zizmor token resolvers read these four before they
+	// spawn `gh auth token`. An exported GH_TOKEN reds nine github cells, so
+	// every case starts with them unset; afterEach restores the caller's values.
+	// The key set matches the ENV_KEYS pin in zizmor-config.test.ts.
+	restoreTokenEnv = withEnv({
+		ZIZMOR_OFFLINE: undefined,
+		ZIZMOR_GITHUB_TOKEN: undefined,
+		GH_TOKEN: undefined,
+		GITHUB_TOKEN: undefined,
+	});
 });
 
 afterEach(() => {
@@ -511,6 +522,7 @@ afterEach(() => {
 	if (fakeBin) fs.rmSync(fakeBin, { recursive: true, force: true });
 	fakeBin = undefined;
 	if (originalPath !== undefined) process.env.PATH = originalPath;
+	restoreTokenEnv();
 	restoreDisableToolInstall();
 	delete process.env.PI_LENS_INSTALL_LOCK_TIMEOUT_MS;
 	resetProjectTrust();

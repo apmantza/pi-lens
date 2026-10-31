@@ -9,6 +9,7 @@ import {
 	classifyChangedFiles,
 	parseArgs,
 	pathsFromPrFiles,
+	HOT_PATH_PATHS,
 	PR_FILES_API_CAP,
 	PR_SMOKE_PATHS,
 	ghPrFiles,
@@ -169,6 +170,72 @@ describe("classifyChangedFiles: the deep install smoke (#4291)", () => {
 	});
 });
 
+// #4363: `hotpath` decides whether hot-path-latency.yml times anything on a
+// pull request. The lane becomes a required check, and a required check that
+// a path filter skips stays "Expected" forever, so the workflow always starts
+// and reads this verdict instead. Recurrence it keeps out: a docs-only PR
+// blocked on a check that never reports; and, in the other direction, a hot
+// file whose PR reads `false` and is never timed. Doubt resolves to timing.
+describe("classifyChangedFiles: the hot-path latency lane (#4363)", () => {
+	const hotpath = (paths: string[]) => classifyChangedFiles(paths).hotpath;
+
+	// Recurrence: a list entry the matcher cannot read, so the path it names
+	// never turns the lane on. A `dir/**` entry is probed with a file under it,
+	// a `*` entry with a name the glob must match.
+	it.each(HOT_PATH_PATHS)("turns on for the listed path %s", (entry) => {
+		const file = entry.endsWith("/**")
+			? `${entry.slice(0, -2)}x/y.ts`
+			: entry.replace("*", "-foo");
+		expect(hotpath([file])).toBe(true);
+		expect(hotpath(["docs/a.md", file])).toBe(true);
+	});
+
+	// Recurrence: the docs-only PR that sat at "Expected"; the lane must read
+	// false for it. Also the tests/scripts neighbours that look hot but are not
+	// on the list, and a `*` that must not cross a directory.
+	it.each([
+		["docs/a.md"],
+		["README.md"],
+		[".changelog/4363-x.md"],
+		["tests/clients/foo.test.ts"],
+		["scripts/ci-verdict.mjs"],
+		["scripts/lib/latency-log-phases.mjs"],
+		["package.json"],
+		["docs/tsconfig.json"],
+		["tsconfig.json.bak"],
+		// Recurrence (review r1 F2): `*` widened to `.*` would cross a directory;
+		// an unescaped `.` would match any character.
+		["tsconfig/x/y.json"],
+		["tsconfigXjson"],
+		["clients"],
+		["clients-extra/a.ts"],
+		["clients/../docs/a.md"],
+		[".github/workflows/ci.yml"],
+	])("stays off for %s", (file) => {
+		expect(hotpath([file])).toBe(false);
+	});
+
+	// Recurrence: a rename out of a hot file reads as its new path only.
+	it("counts the old path of a rename out of a hot file", () => {
+		const paths = pathsFromPrFiles([
+			{ filename: "docs/moved.md", previous_filename: "clients/old-name.ts" },
+		]);
+		expect(hotpath(paths)).toBe(true);
+	});
+
+	// Recurrence: doubt must time the lane (AGENTS.md shape 48), exactly as it
+	// runs the full suite for `code`.
+	it("turns on for an empty list and for a list at the API cap", () => {
+		expect(hotpath([])).toBe(true);
+		const capped = Array.from(
+			{ length: PR_FILES_API_CAP },
+			(_, i) => `docs/f${i}.md`,
+		);
+		expect(hotpath(capped)).toBe(true);
+		expect(hotpath(capped.slice(0, PR_FILES_API_CAP - 1))).toBe(false);
+	});
+});
+
 // N2 (#3861): the per-line parse `ghPrFiles` wraps is the ONE place a
 // `pulls/{n}/files` body is read; a malformed `--jq` line must throw (the
 // full-suite direction) rather than read as an empty list. `exec` is the
@@ -271,9 +338,10 @@ describe("run (the CLI the changes job calls)", () => {
 				code: "false",
 				formal: "false",
 				smoke: "false",
+				hotpath: "false",
 			});
 			expect(fs.readFileSync(files.summary, "utf8")).toMatch(
-				/^changes: code=false formal=false smoke=false -- docs-only diff/,
+				/^changes: code=false formal=false smoke=false hotpath=false -- docs-only diff/,
 			);
 		});
 	});
@@ -297,6 +365,7 @@ describe("run (the CLI the changes job calls)", () => {
 					code: "true",
 					formal: "true",
 					smoke: "true",
+					hotpath: "true",
 				});
 			});
 		},
@@ -318,6 +387,7 @@ describe("run (the CLI the changes job calls)", () => {
 				code: "true",
 				formal: "true",
 				smoke: "true",
+				hotpath: "true",
 			});
 		});
 	});

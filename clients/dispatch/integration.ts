@@ -966,6 +966,9 @@ export function _seedReverseDepsIndexCacheForTests(
 	setReverseDepsEntry(key, { index, savedToSnapshot: false, generation });
 }
 
+// #5055: how many unplaced referrers the advisory names; the rest are counted.
+const UNPLACED_REFERRER_NAMED = 3;
+
 // Bounded transitive cascade (#162): expand neighbour derivation beyond the
 // one-hop importers/callers to depth-2 dependents, so an edit's blast radius
 // reaches indirect dependents — capped so the per-edit cost stays bounded. The
@@ -1840,6 +1843,41 @@ export async function computeCascadeForFile(
 						importerSet.has(p) ? 0 : callerSet.has(p) ? 1 : 2;
 					return rank(a) - rank(b);
 				});
+			// #5055: a file whose reference to a changed symbol stayed on its
+			// name-only placeholder is a dependent the graph could not see. When the
+			// run has no neighbor to check, that file is the difference between a
+			// leaf and an unproven dependent set, so it leaves the run indeterminate
+			// instead of `no_neighbors`. Only a file edited this turn is accounted
+			// for (B10: its own pipeline run answers for it), and a file removed
+			// outside pi is gone, which the seq fast path's cached graph does not
+			// know until its periodic re-verify (the neighbour chain above filters
+			// the same way). The graph holds no test, vendor or ignored file, so no
+			// other state clears a referrer.
+			// Gated on the empty run on purpose: a run that has neighbors already
+			// speaks, and flagging every unplaced common-name call there marked 185
+			// of 515 files of this repo's own graph.
+			if (eligibleNeighbors.length === 0 && !impact.indeterminate) {
+				const unplaced = (impact.nameOnlyReferrers ?? []).filter(
+					(f) =>
+						!primaryFilesThisTurn.has(normalizeMapKey(f)) &&
+						nodeFs.existsSync(f),
+				);
+				if (unplaced.length > 0) {
+					const shown = unplaced
+						.slice(0, UNPLACED_REFERRER_NAMED)
+						.map((f) => toPosix(nodePath.relative(cwd, f)))
+						.join(", ");
+					const more =
+						unplaced.length > UNPLACED_REFERRER_NAMED
+							? ` (+${unplaced.length - UNPLACED_REFERRER_NAMED} more)`
+							: "";
+					impact.indeterminate = {
+						reason: "unresolved_reference",
+						detail: `${unplaced.length} file(s) reference a changed symbol by name alone, and several definitions share the name: ${shown}${more}`,
+						unplacedReferrerCount: unplaced.length,
+					};
+				}
+			}
 			cascadeEligibleCount = eligibleNeighbors.length;
 			cascadeFilterDroppedCount = Math.max(
 				0,

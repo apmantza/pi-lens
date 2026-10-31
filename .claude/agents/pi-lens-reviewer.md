@@ -28,3 +28,5 @@ specific to the Claude Code harness.
 - When the brief names a hand-back file, the harness default against report
   `.md` files does not cover it, nor `REVIEW.md`. Write those files first, then
   call `SubagentHandback` with the summary and the hand-back path.
+- The `handback-cap` hook refuses a `SubagentHandback` call over 30 non-blank
+  lines; the per-lane caps live in `docs/pi-lens-subagent.md` "Deliverable".
