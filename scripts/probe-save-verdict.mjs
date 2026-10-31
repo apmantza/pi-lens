@@ -65,8 +65,11 @@ import {
 	orderByNeed,
 	parseSaveVerdictRows,
 	refreshSaveVerdictTable,
+	reportHeldBack,
+	rowsReached,
 	SAVE_VERDICT_COMMAND,
 	saveVerdictCells,
+	saveVerdictSummary,
 } from "./lib/save-verdict.mjs";
 import { touchAnsweredDiagnostics } from "./lib/touch-result.mjs";
 
@@ -467,22 +470,24 @@ console.error(
 					: ""),
 );
 
+// #5060: a night that could not tell leaves the prior answer in the table, so
+// the night itself is recorded here, one line per held row.
+reportHeldBack(refreshed.heldBack, { env: process.env, log: console.error });
+
 if (summaryPath) {
 	try {
 		fs.writeFileSync(
 			summaryPath,
 			JSON.stringify(
-				{
+				saveVerdictSummary({
 					command: `${SAVE_VERDICT_COMMAND}${install ? " --install" : ""}`,
 					src,
 					waitMs,
-					measured: rows.map((row) => row.cells),
-					wrote: refreshed.measured,
-					notInTable: refreshed.notInTable,
-					kept: refreshed.kept,
+					rows,
+					refreshed,
 					notMeasured,
 					budgetExhausted,
-				},
+				}),
 				null,
 				2,
 			),
@@ -503,7 +508,8 @@ try {
 // written 0 while the instrument works, and calling either "the instrument is
 // dead" reds a healthy nightly (shape 75).
 const measuredCount = rows.length;
-const wroteCount = refreshed.measured.length;
+// A row held back (#5060) reached its table row, so it is not "no table row".
+const wroteCount = rowsReached(refreshed);
 if (measuredCount === 0) {
 	console.error(
 		`save-verdict: measured NO row — ${budgetExhausted ? `the ${Math.round(budgetMs / 1000)} s budget ran out before any save-declaring server was reached` : "no save-declaring server was reached (population gate, a failed install, or a server that never spawned)"}; nothing was written, so this run proved nothing`,

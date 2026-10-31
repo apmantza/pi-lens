@@ -364,6 +364,16 @@ and the merge guard; a run rewrites the three measurement columns of the rows it
 reached and copies every other row verbatim, so a runner that could not install a
 server never blanks a measured cell.
 
+A night that could not tell never erases an answer (#5060). A row that holds a
+settled answer (`no`, `no (pull)`, `yes`, `yes (saved write)`) keeps it, with its
+evidence, when the run measures `inconclusive` or `cannot measure`; only a
+settled answer replaces a settled one, and a `yes` to `no` change stays a visible
+flip. This table has no column for a night a row was not answered, so the held
+night goes to the run log (`save-verdict: held back <server>`), to one
+`::warning::` annotation per held server under GitHub Actions, and to the
+`--summary` JSON (`heldBack`). No counter or issue tracks consecutive held
+nights.
+
 A pull-mode server answers a `textDocument/diagnostic` request rather than
 publishing, so no arm of its run has the save as its only new input: it reads
 `no (pull)` when the request answered without a save and `inconclusive`
