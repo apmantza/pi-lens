@@ -1214,6 +1214,7 @@
 		"tests/config/git-fixture-governance.test.ts": 8.81,
 		"tests/config/github-bearer-ratchet.test.ts": 0.01,
 		"tests/config/github-token-write-gates.test.ts": 0.55,
+		"tests/config/github-workflow-permissions.test.ts": 0.03,
 		"tests/config/gitignore-tracked-shadow.test.ts": 0.04,
 		"tests/config/global-dir-probe-redirect.test.ts": 1.17,
 		"tests/config/global-only-non-flag-key-registry.test.ts": 0.02,
