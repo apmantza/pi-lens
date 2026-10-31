@@ -606,6 +606,92 @@ export async function symbolSearch(
 	};
 }
 
+/** Host-specific spelling of the outline tool the footer's next-step line
+ * names (#5104): pi's `module_report`, MCP's `pilens_module_report`. */
+export type SymbolSearchReportTool = "module_report" | "pilens_module_report";
+
+/** Options for `renderCompactSymbolSearch`. */
+export interface CompactSymbolSearchOptions {
+	/** Directory every hit path is printed relative to. */
+	cwd: string;
+	/** MCP-only staleness note (`graphStalenessNote` in `mcp/server.ts`). */
+	stalenessNote?: string;
+	/** Tool the next-step line names. Defaults to the pi spelling. */
+	reportTool?: SymbolSearchReportTool;
+}
+
+/** The index-coverage sentence both `symbol_search` surfaces print. A capped
+ * index says so: an incomplete answer must not read as a complete one. */
+function coverageLine(
+	coverage: SymbolSearchResult["coverage"],
+): string | undefined {
+	if (!coverage) return undefined;
+	return `Index covers ${coverage.files} files${coverage.truncated ? " (capped — results may be incomplete)" : ""}.`;
+}
+
+/** One ranked row: range first, one line number (`toSymbolSearchHit` sets
+ * `endLine = startLine`, so `12-12` would spend bytes on nothing), then the
+ * score, the hit count, and the graph annotations the hit carries. An
+ * annotation prints whenever its key is present: `fanIn: 0` is an answer ("no
+ * known importers"), so the gate is the type, never truthiness (#5104). */
+function formatSymbolSearchRow(
+	hit: SymbolSearchHit,
+	position: number,
+	cwd: string,
+): string {
+	const annotations = hit.annotations;
+	const detail = [
+		`score ${hit.score.toFixed(2)}`,
+		`${hit.hits} hit(s)`,
+		...(typeof annotations?.fanIn === "number"
+			? [`fanIn ${annotations.fanIn}`]
+			: []),
+		...(typeof annotations?.complexity === "number"
+			? [`complexity ${annotations.complexity}`]
+			: []),
+	];
+	return `  ${position}. ${path.relative(cwd, hit.file)} ${hit.startLine} (${detail.join(", ")})`;
+}
+
+/**
+ * The one renderer for `symbol_search`'s model-facing text (#5104): a header,
+ * one row per ranked hit (path relative to `cwd`, its line, score, hit count
+ * and any graph annotations), and a footer carrying the index coverage, on MCP
+ * the snapshot staleness note, and one next-step line naming the top-ranked
+ * hit through the host's own outline tool name. The pi tool and the MCP mirror
+ * both call this, so the surfaces cannot drift and neither appends a JSON
+ * payload — the ranked table IS the answer. The empty-result path renders
+ * through the same footer, so a capped index stays visible there too.
+ */
+export function renderCompactSymbolSearch(
+	result: SymbolSearchResult,
+	options: CompactSymbolSearchOptions,
+): string {
+	const hits = result.results;
+	const sections = [
+		hits.length > 0
+			? [
+					`Top ${hits.length} file(s) for "${result.query}":`,
+					...hits.map((hit, index) =>
+						formatSymbolSearchRow(hit, index + 1, options.cwd),
+					),
+				].join("\n")
+			: `No files matched "${result.query}".`,
+	];
+	const footer: string[] = [];
+	const coverage = coverageLine(result.coverage);
+	if (coverage) footer.push(coverage);
+	if (options.stalenessNote) footer.push(options.stalenessNote);
+	const top = hits[0];
+	if (top) {
+		footer.push(
+			`Next: ${options.reportTool ?? "module_report"} ${path.relative(options.cwd, top.file)}`,
+		);
+	}
+	if (footer.length > 0) sections.push(footer.join("\n"));
+	return sections.join("\n\n");
+}
+
 // symbolImpact was removed (#304 follow-up): the transitive blast radius is now
 // served by module_report's `blastRadius` option (clients/module-report.ts), which
 // calls computeTransitiveImpact (review-graph/query.ts) directly over the cached

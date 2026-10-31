@@ -1125,7 +1125,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/latency-logger.ts": 2,
 		"clients/lens-config.ts": 3,
 		// 8 -> 9 (#5047 F1): the path-glob matcher relativizes an entry under cwd.
-		"clients/lens-engine.ts": 9,
+		// 9 -> 11 (#5104): the shared hit renderer prints a hit's path relative to
+		// the query cwd, and the footer's next-step line does the same for the top
+		// hit. Both are the `node:path` module, never the retired map-key sense.
+		"clients/lens-engine.ts": 11,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
 		"clients/log-cleanup.ts": 9,
@@ -1483,11 +1486,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `resolveHostToolPath`, because that generated path is pi-lens's own and
 		// must keep its bytes.
 		"tools/shared.ts": 8,
-		"tools/symbol-search.ts": 5,
+		// 5 -> 0 (#5104): the row text moved into `renderCompactSymbolSearch`, so
+		// this wrapper no longer spells a path.
 		"mcp/analyze-cli.ts": 4,
 		"mcp/cli.ts": 2,
 		// 31 -> 30 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"mcp/server.ts": 41,
+		// 41 -> 38 (#5104): the rendered table replaces the inline rows and the JSON
+		// payload's per-hit `path.relative`; the renderer now owns that spelling.
+		"mcp/server.ts": 38,
 		"index.ts": 20,
 	},
 	record: {

@@ -137,11 +137,23 @@ rebuild:
   files by identifier → `module_report` explains one → `read_symbol` reads
   the exact body. See [docs/module-report-read-symbol.md](module-report-read-symbol.md)
   for the second half of that chain.
-- **Hit shape** (#517-slimmed): `{ file, score, hits, startLine, endLine }`.
-  `startLine`/`endLine` mark the file's single best-matching line (there's
-  no synthesized whole-file span) — derive a one-line peek with
-  `offset=startLine, limit=endLine-startLine+1`, or call `module_report` on
-  `file` for the real outline.
+- **One rendered table (#5104)**: both surfaces print a header, one row per
+  hit, and a footer, rendered by `renderCompactSymbolSearch()` in
+  `clients/lens-engine.ts` — neither appends a JSON payload or a fenced
+  block. A row is
+  `  1. <file> <startLine> (score 0.82, 3 hit(s)[, fanIn 4][, complexity 7])`:
+  the path relative to the query's `cwd`, the hit's single best-matching line,
+  the BM25 score and hit count, then the graph annotations when the cached
+  review graph is warm (`fanIn 0` means no known importers, so it prints).
+  `startLine` and `endLine` are that one line — no synthesized whole-file
+  span — so read it with `offset=startLine, limit=1`, or call `module_report`
+  on `file` for the real outline. The footer carries index coverage
+  (`capped — results may be incomplete` on a truncated index), the MCP-only
+  staleness note below, and one next-step line naming the top-ranked hit
+  (`module_report <file>` on pi, `pilens_module_report <file>` on MCP). On pi, `details`
+  keeps `{ available, query, count, coverage }` (MCP has no `details`); the rows carry everything the
+  dropped JSON did (annotations, and the next step that replaces
+  `suggestedNext`).
 - **Staleness hint (MCP only, #536)**: `symbolSearch()` returns
   `snapshotGeneratedAt` (the backing project snapshot's `generatedAt`); the
   MCP handler turns an old timestamp into a human staleness note

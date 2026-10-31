@@ -776,8 +776,8 @@ Test authoring screens:
   timeout, a budget, a generation).
 - Restore env, timers, cwd, and module state; run the case in isolation.
 - A case never reads state a sibling case or file wrote (a file, a latch, a
-  once-per-session claim): `Targeted tests (advisory)` runs a PR's added or
-  changed test files alone and under two fixed shuffle seeds
+  once-per-session claim): `Changed tests shuffled (advisory)` runs a PR's
+  added or changed test files alone and under two fixed shuffle seeds
   (`scripts/ci-shuffle-changed-tests.mjs`). The untouched tree is measured by
   `scripts/ci-shuffle-census.mjs` (every file under seeds 202 and 424, and
   alone; it needs `npm run build` and `npm run build:dist` first). It

@@ -6,7 +6,8 @@
  *   node scripts/ci-shuffle-changed-tests.mjs --files <a.test.ts,b.test.ts> [--cwd <dir>]
  *
  * The `Changed test files, alone and shuffled` step of ci.yml's
- * `Targeted tests (advisory)` job. A new test file that depends on order or on
+ * `Changed tests shuffled (advisory)` job (#3215 removed the targeted-selection
+ * step that used to share it). A new test file that depends on order or on
  * a sibling file passes in CI's file order and reds on a reorder or a shard
  * split (#4390: a fake LSP server delayed only after its first pull, an
  * earlier case supplied it; #4391: a new spawn file failed 6 of 14 cases under
@@ -58,8 +59,8 @@ export const SEEDS = Object.freeze([202, 424]);
  * 365 to 385 s, because that one ~60 s file is paid in both shuffled starts
  * and alone. `tests/support/shuffle-changed-budget-measurements.json` keeps
  * the raw CI lines and `tests/scripts/ci-shuffle-changed-tests.test.ts` pins
- * the budget over them. The job cap is 15 min and the steps before this one
- * take ~5.5 min, so 7 min still leaves ~2.5 min.
+ * the budget over them. The job cap is 10 min and the setup steps before this
+ * one take 23 to 43 s (23 PR runs, 2026-10-31), so 7 min leaves ~2 min.
  */
 export const BUDGET_MS = 7 * 60_000;
 const OUTPUT_TAIL_LINES = 60;

@@ -1,5 +1,5 @@
 {
-	"measuredBy": "gh run view <run> --log | grep -a 'shuffle-changed\\] '  (the Changed test files, alone and shuffled step of Targeted tests (advisory))",
+	"measuredBy": "gh run view <run> --log | grep -a 'shuffle-changed\\] '  (the Changed test files, alone and shuffled step of Changed tests shuffled (advisory), named Targeted tests (advisory) until #3215)",
 	"issue": 4456,
 	"note": "Seconds copied from the step log. An unfinished start is a LOWER bound: atLeastSeconds is the longest figure measured for it. The route-switch matrix alone took 59.6 s in run 38644123472 and 57.0 s of test time in the targeted run of 38846199394. A start that never ran adds nothing, so planSecondsAtLeast is what the plan cost at least.",
 	"runs": [

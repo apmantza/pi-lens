@@ -3,38 +3,26 @@
  * symbol_search finds ranked candidate files by identifier, module_report
  * explains one, read_symbol reads the exact body. Thin wrapper over the
  * existing symbolSearch() engine seam (clients/lens-engine.ts), mirroring the
- * MCP pilens_symbol_search tool with the same #517-slimmed payload.
+ * MCP pilens_symbol_search tool. Both surfaces render through the same
+ * `renderCompactSymbolSearch` (clients/lens-engine.ts), so the ranked table,
+ * its rows and its footer cannot drift apart (#5104).
  */
 
-import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
 import {
+	renderCompactSymbolSearch,
 	symbolSearch,
 	type SymbolSearchResult,
 } from "../clients/lens-engine.js";
 import { compactRenderResult } from "./render-compact.js";
 import { readPathsArgument } from "./shared.js";
 
-/**
- * Machine-actionable follow-up hint (#771) — mirrors ast-grep-search.ts's
- * `suggestedDump` pattern. Cheap enough to attach per hit rather than only the
- * top one: it's a pure derivation of `relPath`, no extra computation. Points
- * the discovery funnel's next step (module_report explains the file; from
- * there read_symbol reads a body).
- */
-function suggestedNext(relPath: string): {
-	tool: "module_report";
-	path: string;
-} {
-	return { tool: "module_report", path: relPath };
-}
-
 export function createSymbolSearchTool(getProjectRoot: () => string) {
 	return {
 		name: "symbol_search" as const,
 		label: "Symbol Search",
 		description:
-			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before module_report.",
+			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before module_report. Read a listed line with offset=<line>, limit=1.",
 		promptSnippet: "Find files by identifier",
 		renderResult: compactRenderResult<{
 			available?: boolean;
@@ -133,63 +121,11 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 					},
 				};
 			}
-			if (result.results.length === 0) {
-				const coverageLine = result.coverage
-					? `Index covers ${result.coverage.files} files${result.coverage.truncated ? " (capped — results may be incomplete)" : ""}.`
-					: "";
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `No files matched "${params.query}".${coverageLine ? `\n${coverageLine}` : ""}`,
-						},
-					],
-					details: {
-						available: true,
-						query: result.query,
-						count: 0,
-						coverage: result.coverage,
-					},
-				};
-			}
-			const lines = [
-				`Top ${result.results.length} file(s) for "${result.query}":`,
-				...result.results.map(
-					(hit, i) =>
-						`  ${i + 1}. ${path.relative(cwd, hit.file)} ` +
-						`(score ${hit.score.toFixed(2)}, ${hit.hits} hit(s), line ${hit.startLine})`,
-				),
-				...(result.coverage
-					? [
-							`Index covers ${result.coverage.files} files${result.coverage.truncated ? " (capped — results may be incomplete)" : ""}.`,
-						]
-					: []),
-			];
-			// Compact (unindented) JSON payload, matching module_report/read_symbol
-			// (#517): path relative-to-cwd once per hit, no per-hit `read` block —
-			// startLine/endLine already derive offset/limit for a one-line peek.
-			const payload = {
-				available: true,
-				query: result.query,
-				coverage: result.coverage,
-				results: result.results.map((hit) => {
-					const relFile = path.relative(cwd, hit.file);
-					return {
-						file: relFile,
-						score: hit.score,
-						hits: hit.hits,
-						startLine: hit.startLine,
-						endLine: hit.endLine,
-						...(hit.annotations ? { annotations: hit.annotations } : {}),
-						suggestedNext: suggestedNext(relFile),
-					};
-				}),
-			};
 			return {
 				content: [
 					{
 						type: "text" as const,
-						text: `${lines.join("\n")}\n\n${JSON.stringify(payload)}`,
+						text: renderCompactSymbolSearch(result, { cwd }),
 					},
 				],
 				details: {
@@ -202,6 +138,3 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 		},
 	};
 }
-
-// Re-exported so tests importing from this module can reach baseName without
-// a second import path.

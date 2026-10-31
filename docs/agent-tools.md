@@ -175,7 +175,12 @@ and `[]` mean no arguments.
   `module_report` explains one, `read_symbol` reads its body. Complements
   `grep` (raw substrings) and `lsp_navigation` (exact references). Returns
   `available: false` with a retry hint when the index isn't built yet — it
-  self-builds in the background and never blocks the call. See
+  self-builds in the background and never blocks the call. The answer is one
+  ranked table: a row per file with its path, best-matching line, score, hit
+  count and any graph annotations, then a footer with index coverage and a
+  next-step line naming the top-ranked hit (`module_report <path>`) — read that
+  line with `offset=<line>, limit=1`. Both surfaces render it through
+  `renderCompactSymbolSearch`, so no JSON payload rides along. See
   [docs/word-index.md](word-index.md) for how the index is built and kept
   warm.
 - **`project_report`** — Project orientation from the cached review graph, the

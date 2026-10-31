@@ -32,14 +32,25 @@ function textOf(res: Record<string, unknown>): string {
 	return (res.result as { content: { text: string }[] }).content[0].text;
 }
 
-function parseTrailer(res: Record<string, unknown>): Record<string, unknown> {
-	const text = textOf(res);
-	return JSON.parse(
-		text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
-	) as Record<string, unknown>;
+/** Ranked rows of the one table #5104 renders. The line number sits before
+ * the detail parenthetical once the row shape moved, so the reader accepts
+ * either position. */
+function rankedFiles(text: string): string[] {
+	return text.split("\n").flatMap((line) => {
+		const match = /^ {2}\d+\. (.*) \((score .*)\)$/.exec(line);
+		if (match === null) return [];
+		const pre = match[1];
+		const cut = pre.lastIndexOf(" ");
+		const tail = cut === -1 ? "" : pre.slice(cut + 1);
+		const file = /^\d+$/.test(tail) ? pre.slice(0, cut) : pre;
+		return [file.replace(/\\/g, "/")];
+	});
 }
 
-function makeTinyProject(prefix: string): string {
+function makeTinyProject(
+	prefix: string,
+	generatedAt = new Date().toISOString(),
+): string {
 	const dir = mkdtempSync(path.join(tmpdir(), prefix));
 	snapshotDataRoot = mkdtempSync(path.join(tmpdir(), `${prefix}data-`));
 	writeFileSync(
@@ -58,7 +69,7 @@ function makeTinyProject(prefix: string): string {
 		saveProjectSnapshot(dir, {
 			version: PROJECT_SNAPSHOT_VERSION,
 			projectRoot: dir,
-			generatedAt: new Date().toISOString(),
+			generatedAt,
 			seq: 0,
 			files: {},
 			symbols: {},
@@ -118,34 +129,20 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		}
 	});
 
-	it("returns a slimmed (#517) ranked payload for a warm index", async () => {
+	it("returns one ranked table for a warm index (#5104)", async () => {
 		const res = await harness.request(10, "tools/call", {
 			name: "pilens_symbol_search",
 			arguments: { query: "authenticate user", cwd: projectDir },
 		});
 		expect((res.result as { isError?: boolean }).isError).toBeFalsy();
-		const payload = parseTrailer(res) as {
-			query: string;
-			coverage: { files: number; truncated: boolean };
-			results: Array<{
-				file: string;
-				score: number;
-				hits: number;
-				startLine: number;
-				endLine: number;
-				read?: unknown;
-				lines?: unknown;
-			}>;
-		};
-		expect(payload.coverage).toEqual({ files: 1, truncated: false });
-		expect(textOf(res)).toContain("Index covers 1 files.");
-		expect(payload.results.length).toBeGreaterThan(0);
-		const hit = payload.results[0];
-		expect(hit.file.replace(/\\/g, "/")).toBe("auth.ts");
-		expect(hit.startLine).toBeGreaterThan(0);
-		expect(hit.endLine).toBe(hit.startLine);
-		expect(hit.read).toBeUndefined();
-		expect(hit.lines).toBeUndefined();
+		const text = textOf(res);
+		expect(text).not.toContain("```");
+		expect(text).toContain("Index covers 1 files.");
+		expect(rankedFiles(text)).toEqual(["auth.ts"]);
+		expect(text).toMatch(/^ {2}\d+\. auth\.ts \d+ \(score /m);
+		// The footer names the top-ranked hit through the MCP tool spelling.
+		expect(text).toContain("Next: pilens_module_report auth.ts");
+		expect(text).not.toMatch(/^Next: module_report /m);
 	}, 30_000);
 
 	it("returns available:false with an actionable hint when no index exists for cwd", async () => {
@@ -157,12 +154,10 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 				name: "pilens_symbol_search",
 				arguments: { query: "anything", cwd: coldDir },
 			});
-			const payload = parseTrailer(res) as {
-				available: boolean;
-				hint?: string;
-			};
-			expect(payload.available).toBe(false);
-			expect(String(payload.hint)).toMatch(/background|retry|session_start/i);
+			const text = textOf(res);
+			expect(text).toMatch(/background|retry|session_start/i);
+			expect(text.trimEnd().endsWith("}")).toBe(false);
+			expect(text).not.toContain("```");
 		} finally {
 			rmSync(coldDir, {
 				recursive: true,
@@ -171,6 +166,68 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 				retryDelay: 200,
 			});
 		}
+	}, 30_000);
+});
+
+// #5104 F3: on MCP, a snapshot older than the staleness threshold adds one note
+// to the footer, between the coverage line and the next-step line. The renderer
+// tests pass `stalenessNote` in directly, so only this case reaches the spread
+// in `mcp/server.ts`. It guards a note that silently vanishes from the answer
+// and a footer whose order drifts.
+describe("pilens_symbol_search footer on a stale snapshot (#5104)", () => {
+	let projectDir: string;
+	let dataRoot: string;
+	let harness: McpHarness;
+
+	beforeAll(async () => {
+		// Two hours old: past the ten-minute threshold `graphStalenessNote` uses.
+		projectDir = makeTinyProject(
+			"pi-lens-symbolsearch-stale-",
+			new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+		);
+		dataRoot = snapshotDataRoot;
+		harness = new McpHarness({
+			cwd: projectDir,
+			env: { PILENS_DATA_DIR: dataRoot },
+		});
+		await harness.request(1, "initialize", {
+			protocolVersion: "2025-06-18",
+			capabilities: {},
+			clientInfo: { name: "symbolsearch-stale", version: "0" },
+		});
+		harness.notify("notifications/initialized");
+	});
+
+	afterAll(() => {
+		harness.dispose();
+		for (const dir of [projectDir, dataRoot]) {
+			try {
+				rmSync(dir, {
+					recursive: true,
+					force: true,
+					maxRetries: 5,
+					retryDelay: 200,
+				});
+			} catch {
+				// OS reclaims the temp dir eventually.
+			}
+		}
+	});
+
+	it("prints coverage, then the staleness note, then the next step (#5104)", async () => {
+		const res = await harness.request(12, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "authenticate user", cwd: projectDir },
+		});
+		const text = textOf(res);
+		// Blocks: the table, the footer, then renderToolText's `result ok` and
+		// `usage` trailer. A table row never holds a blank line.
+		const footer = text.split("\n\n")[1]?.split("\n");
+		expect(footer).toEqual([
+			"Index covers 1 files.",
+			"Project snapshot last updated 2h ago; run pilens_analyze on recently-changed files, pilens_session_start, or pilens_rebuild to refresh it.",
+			"Next: pilens_module_report auth.ts",
+		]);
 	}, 30_000);
 });
 
@@ -266,21 +323,11 @@ describe("pilens_symbol_search paths and limit shapes (#5038)", () => {
 			content: { text: string }[];
 		};
 		const body = result.content.map((part) => part.text).join("\n");
-		// The payload is the fenced JSON block; a zero-hit answer carries none.
-		const fenced = body.indexOf("```json\n");
-		const start = fenced === -1 ? -1 : fenced + "```json\n".length;
-		const end = start === -1 ? -1 : body.indexOf("\n```", start);
-		const payload =
-			start === -1 || end === -1
-				? undefined
-				: (JSON.parse(body.slice(start, end)) as {
-						results?: Array<{ file: string }>;
-					});
+		// #5104: the ranked table IS the answer; no fenced JSON duplicate.
+		expect(body).not.toContain("```");
 		return {
 			...(result.isError === undefined ? {} : { isError: result.isError }),
-			files: (payload?.results ?? []).map((hit) =>
-				hit.file.replace(/\\/g, "/"),
-			),
+			files: rankedFiles(body),
 			text: body,
 		};
 	};
