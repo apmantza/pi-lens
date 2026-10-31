@@ -549,8 +549,8 @@ shrink-only `WINDOWS_LANE_ADMISSIONS` rows
 (`scripts/lib/win32-gate-population.mjs`); a failed or under-executed subset
 reds the job, and no step of it is `continue-on-error`. The tmp-fixture
 hygiene census asserts on every lane, `win32` included, and its teardown
-prints `verdict=asserted` (#4591). A census a lane declines still leaves a
-record: it prints `verdict=declined`, so a quarantine shows in the log.
+prints `verdict=asserted`. A census a lane declines still leaves a record:
+it prints `verdict=declined`, so a quarantine shows in the log.
 
 The same script's `smoke` output (`PR_SMOKE_PATHS`: RPC, install, LSP launch,
 trust) makes `install-smoke.yml` run all four pi-load cells and an advisory LSP
