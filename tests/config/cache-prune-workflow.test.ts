@@ -9,6 +9,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import yaml from "../../clients/deps/js-yaml.js";
 import {
 	effectivePermissions,
 	guardOf,
@@ -16,6 +17,7 @@ import {
 	writeScopes,
 } from "../../scripts/dispatch-safety.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { evaluateGroup } from "../support/workflow-expression.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOWS = ".github/workflows";
@@ -86,6 +88,60 @@ describe("cache-prune.yml: only `prune` writes (#4358 r1 F1)", () => {
 	it("guards `prune` to the schedule or master", () => {
 		expect(guardOf(jobs.prune.if).guarded).toBe(true);
 		expect(String(jobs.prune.if)).not.toContain("pull_request");
+	});
+
+	// Recurrence (#5082): `push` was path-filtered to edits of this file and the
+	// script, so only the nightly `schedule` run (which GitHub started 09:00 to
+	// 11:01 UTC on 2026-10-19..30, hours after its 04:30 cron) pruned. Every
+	// non-docs master push saves a ~785 MB CodeQL overlay base database, and one
+	// day of pushes left 11 copies, 8.65 GB of a 10.19 GB cache, which put the
+	// npm entries the Unit shards restore at the mercy of LRU eviction. A prune
+	// started by the push itself can finish BEFORE that push's CodeQL baseline
+	// saves its copy (CodeRabbit on #5095), so the trigger is the CodeQL
+	// workflow's completion on master instead.
+	it("prunes when the CodeQL workflow completes on master, not on the push", () => {
+		type On = Record<
+			string,
+			{ workflows?: string[]; types?: string[]; branches?: string[] }
+		>;
+		const read = (file: string) =>
+			yaml.load(readFileSync(resolve(ROOT, file), "utf8")) as {
+				name: string;
+				on: On;
+				concurrency?: { group?: string; "cancel-in-progress"?: boolean };
+			};
+		const raw = read(PRUNE);
+		expect(raw.on.push).toBeUndefined();
+		expect(raw.on.schedule).toBeDefined();
+		// the name is what `workflows:` matches, so a rename of codeql.yml must
+		// move this trigger with it
+		const codeql = read(`${WORKFLOWS}/codeql.yml`);
+		expect(raw.on.workflow_run.workflows).toEqual([codeql.name]);
+		expect(raw.on.workflow_run.types).toEqual(["completed"]);
+		expect(raw.on.workflow_run.branches).toEqual(["master"]);
+		// Recurrence (CodeRabbit outside-diff on #5095, cache-prune.yml:51): the
+		// dry run and the deleting runs shared one group. GitHub keeps one pending
+		// run per group, so a later pull_request dry run replaced a pending prune.
+		// Resolve the group per trigger: a dry run takes its own group, and the
+		// deleting triggers (schedule, workflow_run) share one, so queued prunes
+		// wait for the running one and never cancel a delete mid-way.
+		const groupFor = (event: string) =>
+			evaluateGroup(raw.concurrency?.group ?? "", "opened", "run", event);
+		const deletingGroup = groupFor("schedule");
+		expect(groupFor("workflow_run"), "deleting runs share one group").toBe(
+			deletingGroup,
+		);
+		expect(
+			groupFor("pull_request"),
+			"a dry run must not share the deleting group",
+		).not.toBe(deletingGroup);
+		expect(raw.concurrency?.["cancel-in-progress"]).toBe(false);
+		// the dry-run `plan` stays path-filtered: it only needs to run when the
+		// rules change
+		expect((raw.on.pull_request as { paths?: string[] }).paths).toEqual([
+			".github/workflows/cache-prune.yml",
+			"scripts/prune-actions-cache.mjs",
+		]);
 	});
 
 	it("is the only workflow that passes --apply to the prune script", () => {

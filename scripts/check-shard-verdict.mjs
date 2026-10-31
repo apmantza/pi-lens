@@ -156,11 +156,12 @@ export function classifyShardJob(job, checkSteps) {
 		return { outcome: "pass", reason: `${name} succeeded` };
 	}
 	if (conclusion === "skipped") {
-		// The `formal/`-unchanged rule skips the work at STEP level and the job
-		// still concludes `success`; a `skipped` job is therefore its own row
-		// shape. It ran nothing, so the aggregate cannot read it as a violation
-		// (and the aggregate only reaches this branch when its own result was
-		// not `success`, which the row-count check below then refuses).
+		// A `skipped` shard job is its own row shape: since #5082 the
+		// `formal/`-unchanged rule skips the whole job (before, it skipped the
+		// steps and the job concluded `success`). It ran nothing, so the
+		// aggregate cannot read it as a violation (and the aggregate only
+		// reaches this branch when its own result was not `success`, which the
+		// row-count check below then refuses).
 		return { outcome: "pass", reason: `${name} was skipped` };
 	}
 	if (conclusion === "cancelled") {

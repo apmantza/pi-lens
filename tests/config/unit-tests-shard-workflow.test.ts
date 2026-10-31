@@ -53,6 +53,32 @@ describe("#3753 sharded Unit tests workflow contract", () => {
 		expect(cache.with?.path).toBe("~/.npm");
 	});
 
+	// Recurrence (#5082): the shard restored ~/.npm twice, once through
+	// `actions/cache` (`npm-Linux-node-22-<hash>`, 162 MB on master) and once
+	// through setup-node's automatic npm cache, whose Linux entry
+	// (`node-cache-Linux-x64-npm-<hash>`) held 676 bytes. The empty one is the
+	// duplicate: it restores nothing, costs a restore and a post-job save probe
+	// per shard, and sits in the 10 GB cap.
+	it("restores ~/.npm exactly once: setup-node's automatic npm cache is off beside `actions/cache`", () => {
+		const shard = CI().test;
+		const setupNode = shard.steps?.find((entry) =>
+			String((entry as { uses?: string }).uses).startsWith(
+				"actions/setup-node@",
+			),
+		) as { with?: Record<string, unknown> } | undefined;
+		expect(setupNode?.with?.["package-manager-cache"]).toBe(false);
+		expect(setupNode?.with?.cache).toBeUndefined();
+		const npmCaches = (shard.steps ?? []).filter(
+			(entry) =>
+				String((entry as { uses?: string }).uses).startsWith(
+					"actions/cache@",
+				) &&
+				String((entry as { with?: Record<string, string> }).with?.path) ===
+					"~/.npm",
+		);
+		expect(npmCaches.map((entry) => entry.name)).toEqual(["Cache npm cache"]);
+	});
+
 	// Recurrence: changing the matrix job or its shard population without
 	// updating the required aggregate can make branch protection observe the
 	// wrong job. The aggregate must follow the one matrix job by id.
