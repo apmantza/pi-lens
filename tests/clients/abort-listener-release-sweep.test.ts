@@ -181,12 +181,11 @@ function isUnreadableListenerCall(node: SgNode): boolean {
 
 /**
  * A speed screen, not a verdict: it must admit every text that can hold a site
- * (a listener token, an `once`/`on` call or string name, or a
- * computed call `](`), because a
+ * (a listener token, an `once`/`on` call, or a computed call `](`), because a
  * parse of every shipped file costs 6x the screened scan.
  */
 const MAY_HOLD_SITE =
-	/addEventListener|addAbortListener|onabort|\b(?:once|on)\s*\??\.?\s*[<(]|["'`](?:once|on)["'`]|\]\s*\??\.?\s*[<(]/;
+	/addEventListener|addAbortListener|onabort|\b(?:once|on)\s*\??\.?\s*[<(]|\]\s*\??\.?\s*[<(]/;
 
 /** Every abort-listener site in one source text. */
 export function scanAbortListenerSites(
