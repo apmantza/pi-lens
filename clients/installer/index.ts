@@ -102,6 +102,7 @@ import {
 	startGenerationHeartbeat,
 	tryAcquireGeneration,
 } from "../generation-lock.js";
+import { windowsExe } from "../process-snapshot.js";
 import { resolveToolCwd } from "../tool-cwd.js";
 import {
 	allAvailableGlobalBinDirs,
@@ -5600,11 +5601,11 @@ async function installArchiveTool(
 		// bare (consistent with every other tool spawn).
 		const extractor =
 			archiveKind === "zip" && isWindows
-				? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+				? windowsExe("WindowsPowerShell\\v1.0\\powershell.exe")
 				: archiveKind === "zip"
 					? "unzip"
 					: isWindows
-						? `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\tar.exe`
+						? windowsExe("tar.exe")
 						: "tar";
 		const extractionResult = await safeSpawnAsync(extractor, extractionArgs, {
 			cwd: TOOLS_DIR,
