@@ -196,6 +196,11 @@ const EXEMPT: Record<string, string> = {
 		"transforms pipeline stop-blocker output; follows that registration",
 	"runtime-context.ts":
 		"framing wrapper over registered context injections; no own delivery",
+	// #5120: the partial apply's 🛑 "Batch not applied" line wraps the
+	// preflight verdict on the host edit's result; finding-delivery-gate.test.ts
+	// classifies this file as delivering that surface.
+	"runtime-tool-result.ts":
+		"wraps read-guard-tool-lines:preflight-errors (registered) on the edit result",
 	"format-utils.ts":
 		"shared emoji lookup table consumed by registered render paths",
 	// #1892, the same shape as actionable-warnings.ts and

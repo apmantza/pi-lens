@@ -61,19 +61,34 @@ vi.mock("../../clients/pipeline.js", () => ({
 	runPipeline: runPipelineMock,
 }));
 
-// The read-guard log is a file sink that test mode silences; capture its rows
-// at the emit seam, passing every other export through.
-const readGuardRows = vi.hoisted(() => [] as Array<Record<string, unknown>>);
-vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("../../clients/read-guard-logger.js")>();
-	return {
-		...actual,
-		logReadGuardEvent: (entry: Record<string, unknown>) => {
-			readGuardRows.push(entry);
-		},
-	};
-});
+/**
+ * The read-guard rows `run` writes for files under `dir`, read back from the
+ * real sink. Test mode silences the sink, so it is lifted for `run` alone.
+ */
+async function readGuardRowsDuring(
+	dir: string,
+	run: () => Promise<unknown>,
+): Promise<Array<Record<string, unknown>>> {
+	const logger = await import("../../clients/read-guard-logger.js");
+	const previous = process.env.PI_LENS_TEST_MODE;
+	process.env.PI_LENS_TEST_MODE = "0";
+	try {
+		await run();
+	} finally {
+		if (previous === undefined) delete process.env.PI_LENS_TEST_MODE;
+		else process.env.PI_LENS_TEST_MODE = previous;
+	}
+	await logger.flushReadGuardLog();
+	const logPath = logger.getReadGuardLogPath();
+	if (!fs.existsSync(logPath)) return [];
+	const marker = path.basename(dir);
+	return fs
+		.readFileSync(logPath, "utf8")
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+		.filter((row) => String(row.filePath ?? "").includes(marker));
+}
 
 function mockPipelineSucceeds(output = ""): void {
 	runPipelineMock.mockResolvedValue({
@@ -744,11 +759,15 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			runtime.projectRoot = env.tmpDir;
 			readWhole(runtime, filePath);
 			const event = mixedBatchEvent(filePath);
-			readGuardRows.length = 0;
 
-			const call = await runHandlerExpectingNoThrow(() =>
-				handleToolCall(baseDeps({ runtime, ctx: { cwd: env.tmpDir }, event })),
-			);
+			let call: unknown;
+			const rows = await readGuardRowsDuring(env.tmpDir, async () => {
+				call = await runHandlerExpectingNoThrow(() =>
+					handleToolCall(
+						baseDeps({ runtime, ctx: { cwd: env.tmpDir }, event }),
+					),
+				);
+			});
 
 			expect(call).toBeUndefined();
 			expect(event.input.edits).toEqual([
@@ -758,9 +777,7 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 				},
 			]);
 			expect(fs.readFileSync(filePath, "utf-8")).toBe(original);
-			expect(
-				readGuardRows.filter((row) => row.event === "edit_partial_apply"),
-			).toEqual([
+			expect(rows.filter((row) => row.event === "edit_partial_apply")).toEqual([
 				expect.objectContaining({
 					metadata: expect.objectContaining({
 						appliedCount: 1,
@@ -967,14 +984,17 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			runtime.projectRoot = env.tmpDir;
 			readWhole(runtime, filePath);
 			const changed = "import { C } from 'm';\nconst tail = 1;\n";
-			readGuardRows.length = 0;
 
-			const { host, result, text } = await partialApply(
-				env,
-				runtime,
-				mixedBatchEvent(filePath),
-				() => fs.writeFileSync(filePath, changed),
-			);
+			let outcome!: Awaited<ReturnType<typeof partialApply>>;
+			const rows = await readGuardRowsDuring(env.tmpDir, async () => {
+				outcome = await partialApply(
+					env,
+					runtime,
+					mixedBatchEvent(filePath),
+					() => fs.writeFileSync(filePath, changed),
+				);
+			});
+			const { host, result, text } = outcome;
 
 			expect(host.isError).toBe(true);
 			expect(result?.isError).toBe(true);
@@ -985,9 +1005,7 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			expect(fs.readFileSync(filePath, "utf-8")).toBe(changed);
 			// One record per refused partial apply, never a committed summary.
 			expect(
-				readGuardRows.filter(
-					(row) => row.event === "edit_partial_apply_rejected",
-				),
+				rows.filter((row) => row.event === "edit_partial_apply_rejected"),
 			).toEqual([
 				expect.objectContaining({
 					metadata: expect.objectContaining({
@@ -1175,21 +1193,22 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			const runtime = new RuntimeCoordinator();
 			runtime.projectRoot = env.tmpDir;
 			readWhole(runtime, filePath);
-			readGuardRows.length = 0;
 
-			await partialApply(env, runtime, {
-				toolName: "edit",
-				toolCallId: "call-summary",
-				input: {
-					path: filePath,
-					edits: [
-						{ oldText: "function gone() {}", newText: "noop" },
-						{ oldText: "const b = 2;", newText: "const b = 20;" },
-					],
-				},
-			});
+			const rows = await readGuardRowsDuring(env.tmpDir, () =>
+				partialApply(env, runtime, {
+					toolName: "edit",
+					toolCallId: "call-summary",
+					input: {
+						path: filePath,
+						edits: [
+							{ oldText: "function gone() {}", newText: "noop" },
+							{ oldText: "const b = 2;", newText: "const b = 20;" },
+						],
+					},
+				}),
+			);
 
-			const committed = readGuardRows
+			const committed = rows
 				.filter((row) => row.event === "edit_batch_summary")
 				.map(
 					(row) =>
