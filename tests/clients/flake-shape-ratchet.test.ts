@@ -1208,6 +1208,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the real hook pipes git through xargs into the pinned oxfmt; the exit-123 refusal and handoff refusal are process-boundary facts",
 	},
+	// #3801: the lock-admission cases split out of pre-push-targeted-tests.test.ts;
+	// the same real hook chain (`.husky/pre-push` -> selector -> lock wrapper).
+	"real-process-spawn:scripts/pre-push-lock-admission.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the cases drive the real pre-push hook chain over a git fixture and read its exit status and the lock wrapper's timeout line; an in-process call cannot see either",
+	},
 	"real-process-spawn:scripts/pre-push-targeted-tests.test.ts": {
 		detector: "real-process-spawn",
 		reason:

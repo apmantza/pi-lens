@@ -910,6 +910,9 @@ export const wallClockBudgetInclude = [
 	// #3661: the pre-push hook's own stdin parsing and deletion-only early exit
 	// are the subject; the union witness runs the real script over a real git
 	// fixture (flake-shape admission).
+	// #3801: the lock-admission cases of the pre-push hook, split out of the
+	// selection file; the same real hook chain over a git fixture.
+	"tests/scripts/pre-push-lock-admission.test.ts",
 	"tests/scripts/pre-push-targeted-tests.test.ts",
 	"tests/scripts/prune-agent-worktrees.test.ts",
 	"tests/scripts/red-on-base.test.ts",
