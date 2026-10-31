@@ -4,7 +4,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { stripSource } from "../support/sweep-kit.js";
-import { formatTmpHygieneLeakOrigin } from "../support/vitest-setup.js";
+import {
+	diagnoseTmpHygieneLeak,
+	diagnoseTmpHygieneLeaks,
+	formatTmpHygieneLeakOrigin,
+	tmpHygieneSweepRecords,
+	TMP_HYGIENE_DIAGNOSIS_LIMIT,
+	type TmpHygieneSweepRecord,
+} from "../support/vitest-setup.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -137,5 +144,193 @@ describe("tmp-hygiene leak origin record (#4591)", () => {
 		);
 		expect(record).toBeGreaterThan(-1);
 		expect(record).toBeLessThan(body.indexOf("removeTempDirSync(entryDir)"));
+	});
+});
+
+/**
+ * #4591: the census failure message tells the two producer candidates apart.
+ * Candidate 1 is a deferred writer that recreates a `registered` root after the
+ * sweep removed it; candidate 2 is a root the interposer never recorded, so the
+ * sweep never owned it. The Windows lane reds about one run in ten and cannot be
+ * run locally, so the message itself is the probe: it must name the candidate and
+ * the facts behind the name. The facts are injected here (times, sweep records)
+ * because the arms are decided by an ordering of clocks no local run can stage on
+ * demand; the real hooks that WRITE the sweep record are driven in
+ * `tests/support/tmp-root-teardown.test.ts`.
+ */
+describe("tmp-hygiene census diagnosis (#4591)", () => {
+	const SWEEP_AT = Date.parse("2026-10-31T12:00:00.000Z");
+	const sweep = (
+		over: Partial<TmpHygieneSweepRecord> = {},
+	): TmpHygieneSweepRecord => ({
+		via: "afterAll",
+		kind: "registered",
+		outcome: "removed",
+		at: SWEEP_AT,
+		...over,
+	});
+
+	it("names candidate 1: a registered root born after its sweep, with the HOME child", () => {
+		const line = diagnoseTmpHygieneLeak(
+			"pi-lens-x-AbC123",
+			"clients/x.test.ts",
+			[sweep()],
+			{
+				birthtimeMs: SWEEP_AT + 9_034,
+				mtimeMs: SWEEP_AT + 9_040,
+				ctimeMs: SWEEP_AT + 9_041,
+				children: ["home"],
+			},
+		);
+		expect(line).toBe(
+			"pi-lens-x-AbC123 [recreated-after-sweep] in the registry at sweep time; sweeps: afterAll registered removed at 2026-10-31T12:00:00.000Z; vs last sweep: birth +9034ms, mtime +9040ms, ctime +9041ms; first-level children: home",
+		);
+	});
+
+	it("names candidate 2: no creator on record and no sweep record", () => {
+		const line = diagnoseTmpHygieneLeak("pi-lens-y-Zz9", undefined, [], {
+			birthtimeMs: SWEEP_AT,
+			children: [],
+		});
+		expect(line).toBe(
+			"pi-lens-y-Zz9 [unrecorded] not in the registry (no creator on record); no sweep record; first-level children: none",
+		);
+	});
+
+	it("keeps the remaining cells explicit instead of folding them into a candidate", () => {
+		const times = { birthtimeMs: SWEEP_AT - 500, children: ["workspace"] };
+		// Recorded by the interposer but never a sweep root (an mkdir sibling).
+		expect(
+			diagnoseTmpHygieneLeak("pi-lens-s", "clients/s.test.ts", [], times),
+		).toContain("[recorded-not-swept] creator on record, never a sweep root");
+		// Born BEFORE the sweep that listed it: the sweep had it and it survived.
+		expect(
+			diagnoseTmpHygieneLeak(
+				"pi-lens-p",
+				"clients/p.test.ts",
+				[sweep({ kind: "observed", outcome: "held" })],
+				times,
+			),
+		).toContain("[present-at-sweep(held)]");
+		// A filesystem that withholds the birth time cannot place it.
+		expect(
+			diagnoseTmpHygieneLeak("pi-lens-o", "clients/o.test.ts", [sweep()], {
+				birthtimeMs: 0,
+				mtimeMs: SWEEP_AT + 5,
+			}),
+		).toBe(
+			"pi-lens-o [order-unknown] in the registry at sweep time; sweeps: afterAll registered removed at 2026-10-31T12:00:00.000Z; vs last sweep: birth unavailable, mtime +5ms, ctime unavailable; first-level children unavailable",
+		);
+	});
+
+	it("measures against the LAST sweep when a root was swept through both hooks", () => {
+		const line = diagnoseTmpHygieneLeak(
+			"pi-lens-m",
+			"clients/m.test.ts",
+			[
+				sweep({ at: SWEEP_AT }),
+				sweep({ via: "SIGTERM", at: SWEEP_AT + 20_000 }),
+			],
+			{ birthtimeMs: SWEEP_AT + 10_000, children: ["home"] },
+		);
+		// Born between the two sweeps: the SIGTERM sweep came after it was born and
+		// still listed it, so it is not a recreation after the last sweep.
+		expect(line).toContain("[present-at-sweep(removed)]");
+		expect(line).toContain("birth -10000ms");
+	});
+
+	it("reads the sweep records back from the creators map and drops a line it does not recognise", () => {
+		const records = tmpHygieneSweepRecords(
+			new Map([
+				["pi-lens-x", "clients/x.test.ts"],
+				["sweep:afterAll:pi-lens-x", `registered,removed,${SWEEP_AT}`],
+				["sweep:SIGTERM:pi-lens-x", `registered,absent,${SWEEP_AT + 1}`],
+				["sweep:afterAll:pi-lens-bad-kind", `weird,removed,${SWEEP_AT}`],
+				[
+					"sweep:afterAll:pi-lens-bad-outcome",
+					`registered,vanished,${SWEEP_AT}`,
+				],
+				["sweep:afterAll:pi-lens-bad-time", "registered,removed,soon"],
+				["sweep:afterAll:pi-lens-no-time", "registered,removed,"],
+				["sweep:afterAll:pi-lens-extra", `registered,removed,${SWEEP_AT},more`],
+				["sweep:hook:pi-lens-bad-via", `registered,removed,${SWEEP_AT}`],
+				["sweep:pi-lens-no-via", `registered,removed,${SWEEP_AT}`],
+				["sweep:afterAll:", `registered,removed,${SWEEP_AT}`],
+				// #5081 review F2: a line torn right after the outcome has no stamp
+				// field at all; it is dropped like the others, never a TypeError.
+				["sweep:afterAll:pi-lens-torn", "registered,removed"],
+			]),
+		);
+		expect([...records.keys()]).toEqual(["pi-lens-x"]);
+		expect(records.get("pi-lens-x")).toEqual([
+			{ via: "afterAll", kind: "registered", outcome: "removed", at: SWEEP_AT },
+			{
+				via: "SIGTERM",
+				kind: "registered",
+				outcome: "absent",
+				at: SWEEP_AT + 1,
+			},
+		]);
+	});
+
+	it("builds an empty diagnosis for a clean census whose record holds a torn sweep line", () => {
+		// #5081 review F2: the census builds its failure message eagerly, so on a
+		// run with no leaks a torn record would red the census through a throw.
+		expect(
+			diagnoseTmpHygieneLeaks(
+				[],
+				new Map([["sweep:afterAll:pi-lens-torn", "registered,removed"]]),
+			),
+		).toBe("");
+	});
+
+	it("diagnoses a real directory through the shipped reader and bounds the list", () => {
+		const env = setupTestEnvironment("pi-lens-4591-diagnosis-");
+		try {
+			const names: string[] = [];
+			for (let i = 0; i < TMP_HYGIENE_DIAGNOSIS_LIMIT + 2; i++) {
+				const name = `pi-lens-4591-leak-${i}`;
+				fs.mkdirSync(path.join(env.tmpDir, name, "home"), { recursive: true });
+				names.push(name);
+			}
+			const creators = new Map([
+				[
+					`sweep:afterAll:${names[0]}`,
+					`registered,removed,${Date.now() - 60_000}`,
+				],
+				[names[0], "config/x.test.ts"],
+			]);
+			const text = diagnoseTmpHygieneLeaks(names, creators, env.tmpDir);
+			// The first entry has a sweep record from a minute ago and was born now.
+			expect(text).toContain(`${names[0]} [recreated-after-sweep] `);
+			expect(text).toContain("first-level children: home");
+			// No creator and no record: candidate 2, from the same real directory.
+			expect(text).toContain(`${names[1]} [unrecorded] `);
+			expect(text.split(" | ")).toHaveLength(TMP_HYGIENE_DIAGNOSIS_LIMIT + 1);
+			expect(text.endsWith(" | (+2 more)")).toBe(true);
+			// An entry that is gone since the census listed it reports itself so.
+			expect(
+				diagnoseTmpHygieneLeaks(["pi-lens-4591-gone"], new Map(), env.tmpDir),
+			).toBe(
+				"pi-lens-4591-gone [unrecorded] not in the registry (no creator on record); no sweep record; first-level children unavailable",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("puts the diagnosis in the census failure message, where the Windows log shows it", () => {
+		// The wiring is a source pin, the idiom this file already uses for the
+		// destructive owner: the assertion that reds is inside an `afterAll` of the
+		// serialized census, and driving it for real would sweep the live run.
+		// Comments blanked (a docblock naming the call never satisfies it); strings
+		// kept, because the call sits inside the message's template literal.
+		const source = fs.readFileSync(
+			path.join(REPO_ROOT, "tests/config/tmp-fixture-hygiene.test.ts"),
+			"utf8",
+		);
+		expect(stripSource(source, { strings: "keep" })).toContain(
+			"diagnosis (#4591): ${diagnoseTmpHygieneLeaks(attributable, creators)}",
+		);
 	});
 });

@@ -18,11 +18,13 @@ import {
 import {
 	formatTmpRootCreators,
 	formatTmpRootSweep,
+	formatTmpRootSweepRecords,
 	getTmpRootRegistry,
 	installTmpRootInterposer,
 	REPO_ROOT_CREATE_PREFIX,
 	sampleTmpRoots,
 	sweepTmpRoots,
+	TMP_ROOT_SWEEP_PREFIX,
 	type TmpRootFsTarget,
 } from "./tmp-root-registry.js";
 // The tail's dependency leaf, never `instance-registry.js`: this file loads
@@ -285,6 +287,26 @@ function flushTmpRootCreators(): void {
 	}
 }
 
+/** The wall clock as this module saw it at load. A case that installs fake
+ *  timers replaces the global `Date`, and a sweep that runs inside that scope
+ *  would stamp its record with the fake clock; the census compares the stamp
+ *  with filesystem times, which are the kernel's (#4591). */
+const hygieneNow = Date.now.bind(Date);
+/** Append this sweep's per-root records (#4591) to the run's creators record.
+ *  Each fork sweeps once per `via` (afterAll, then SIGTERM), so there is no
+ *  repeat to dedupe. Closed with the creators record, so the setup's own
+ *  afterAll, which runs after the owner's cleanup, cannot recreate the file
+ *  the owner removed. */
+function flushTmpRootSweepRecords(lines: readonly string[]): void {
+	if (tmpHygieneCreatorsClosed || lines.length === 0) return;
+	try {
+		fs.appendFileSync(tmpHygieneCreatorsPath, `${lines.join("\n")}\n`);
+	} catch {
+		// Costs the diagnosis only: the census then prints the entry without a
+		// sweep record, which it names as such.
+	}
+}
+
 /** Remove the run's creators record and close the flush. `cleanupTmpHygiene`
  *  runs in the owner's afterAll, which runs BEFORE the setup's own afterAll
  *  under the stack hook order; without the closed latch the setup flush would
@@ -300,10 +322,14 @@ export function closeTmpHygieneCreators(): void {
 	}
 }
 
-/** Test seam (#4307 sweep): run the setup's flush so a test can prove the
- *  closed latch suppresses it. */
-export function flushTmpRootCreatorsForTests(): void {
+/** Test seam (#4307 sweep, #5081 review F4): run both of the setup's flushes
+ *  (the creators record, then `sweepLines` as a sweep's records) so a test can
+ *  prove the closed latch suppresses each. */
+export function flushTmpHygieneRecordsForTests(
+	sweepLines: readonly string[],
+): void {
 	flushTmpRootCreators();
+	flushTmpRootSweepRecords(sweepLines);
 }
 
 /**
@@ -474,9 +500,15 @@ function sweepOwnTmpRoots(via: "afterAll" | "SIGTERM"): void {
 	// the registry is gone with the fork, so the serialized owner can name the
 	// test file behind a leak. One line per entry; a second teardown is a no-op.
 	flushTmpRootCreators();
+	const sweep = sweepTmpRoots(tmpRootRegistry, tmpRootIo);
+	// #4591: which roots the registry held when this sweep ran, and what it found
+	// at each, so a root that reappears afterwards is attributable.
+	flushTmpRootSweepRecords(
+		formatTmpRootSweepRecords(tmpRootRegistry, sweep, via, hygieneNow()),
+	);
 	const line = formatTmpRootSweep(
 		tmpHygieneOwnFile,
-		sweepTmpRoots(tmpRootRegistry, tmpRootIo),
+		sweep,
 		tmpRootRegistry,
 		via,
 	);
@@ -1638,6 +1670,17 @@ export interface TmpHygieneLeakOriginFacts {
 	children?: string[];
 }
 
+/** The bounded first-level children of a leaked entry, the one phrase the
+ *  origin line and the census diagnosis share. */
+function describeLeakChildren(children: string[] | undefined): string {
+	if (children === undefined) return "first-level children unavailable";
+	if (children.length === 0) return "first-level children: none";
+	const shown = children.slice(0, TMP_HYGIENE_ORIGIN_CHILD_LIMIT).join(",");
+	return children.length > TMP_HYGIENE_ORIGIN_CHILD_LIMIT
+		? `first-level children: ${shown} (+${children.length - TMP_HYGIENE_ORIGIN_CHILD_LIMIT} more)`
+		: `first-level children: ${shown}`;
+}
+
 /** The shipped reader. The parameter exists so a test can drive the arm this
  *  host's filesystems never produce — a stat that succeeds with a zero birth
  *  time — instead of leaving it unproven; `unadmittedRootBackstopEntries` and
@@ -1680,22 +1723,179 @@ export function formatTmpHygieneLeakOrigin(
 ): string {
 	const name = path.basename(dir);
 	const { birthtimeMs, children } = facts;
-	const listed =
-		children === undefined
-			? "first-level children unavailable"
-			: children.length === 0
-				? "first-level children: none"
-				: `first-level children: ${children
-						.slice(0, TMP_HYGIENE_ORIGIN_CHILD_LIMIT)
-						.join(",")}${
-						children.length > TMP_HYGIENE_ORIGIN_CHILD_LIMIT
-							? ` (+${children.length - TMP_HYGIENE_ORIGIN_CHILD_LIMIT} more)`
-							: ""
-					}`;
+	const listed = describeLeakChildren(children);
 	if (birthtimeMs === undefined || !(birthtimeMs > 0))
 		return `[tmp-hygiene-origin] ${name} birth time unavailable (${listed})\n`;
 	const ageMs = Math.max(0, Math.round(now - birthtimeMs));
 	return `[tmp-hygiene-origin] ${name} born ${ageMs}ms before this line (created at ${new Date(birthtimeMs).toISOString()}; ${listed})\n`;
+}
+
+/** One sweep's finding at one recorded root (#4591), parsed back from the
+ *  creators record `formatTmpRootSweepRecords` wrote. */
+export interface TmpHygieneSweepRecord {
+	via: "afterAll" | "SIGTERM";
+	kind: "registered" | "observed";
+	outcome: "removed" | "failed" | "held" | "absent";
+	/** Epoch ms of the sweep, read from the clock the filesystem shares. */
+	at: number;
+}
+
+const SWEEP_VIAS: readonly string[] = ["afterAll", "SIGTERM"];
+const SWEEP_KINDS: readonly string[] = ["registered", "observed"];
+const SWEEP_OUTCOMES: readonly string[] = [
+	"removed",
+	"failed",
+	"held",
+	"absent",
+];
+
+/** The sweep records per entry name, from the creators map (the persisted
+ *  record carries them under `TMP_ROOT_SWEEP_PREFIX`). Admits the one shape the
+ *  writer produces and drops everything else, so a torn or foreign line is
+ *  absent from the diagnosis rather than misread as a sweep. */
+export function tmpHygieneSweepRecords(
+	creators: ReadonlyMap<string, string>,
+): Map<string, TmpHygieneSweepRecord[]> {
+	const records = new Map<string, TmpHygieneSweepRecord[]>();
+	for (const [key, value] of creators) {
+		if (!key.startsWith(TMP_ROOT_SWEEP_PREFIX)) continue;
+		const rest = key.slice(TMP_ROOT_SWEEP_PREFIX.length);
+		const colon = rest.indexOf(":");
+		const [kind, outcome, at, ...extra] = value.split(",");
+		const stamp = Number(at);
+		if (
+			colon <= 0 ||
+			colon === rest.length - 1 ||
+			extra.length > 0 ||
+			!SWEEP_VIAS.includes(rest.slice(0, colon)) ||
+			!SWEEP_KINDS.includes(kind) ||
+			!SWEEP_OUTCOMES.includes(outcome) ||
+			!(at !== undefined && at.length > 0 && Number.isFinite(stamp))
+		)
+			continue;
+		const name = rest.slice(colon + 1);
+		const list = records.get(name) ?? [];
+		list.push({
+			via: rest.slice(0, colon) as TmpHygieneSweepRecord["via"],
+			kind: kind as TmpHygieneSweepRecord["kind"],
+			outcome: outcome as TmpHygieneSweepRecord["outcome"],
+			at: stamp,
+		});
+		records.set(name, list);
+	}
+	return records;
+}
+
+/** What a leaked entry reports about itself for the diagnosis: its times and
+ *  first-level children. An `undefined` field is the unreadable arm. */
+export interface TmpHygieneLeakTimes {
+	birthtimeMs?: number;
+	mtimeMs?: number;
+	ctimeMs?: number;
+	children?: string[];
+}
+
+function readTmpHygieneLeakTimes(dir: string): TmpHygieneLeakTimes {
+	const times: TmpHygieneLeakTimes = {};
+	try {
+		const stat = fs.statSync(dir);
+		times.birthtimeMs = stat.birthtimeMs;
+		times.mtimeMs = stat.mtimeMs;
+		times.ctimeMs = stat.ctimeMs;
+	} catch {
+		// Gone since the census listed it: the facts stay undefined and say so.
+	}
+	times.children = readTmpHygieneLeakOrigin(dir).children;
+	return times;
+}
+
+/**
+ * #4591: which of the two producer candidates a leaked census entry matches,
+ * with the facts that decide it, one bounded string per entry for the census
+ * failure message.
+ *
+ *  - candidate 1 (`recreated-after-sweep`): the registry held the root at sweep
+ *    time and the sweep recorded it, yet the entry was born after the sweep, so
+ *    a deferred writer under the pinned HOME or cwd recreated it. Its first-level
+ *    children name the writer (`home` is HOME, `workspace` is cwd).
+ *  - candidate 2 (`unrecorded`): no creator on record and no sweep record, so the
+ *    interposer never saw the root and the sweep never owned it.
+ *  - the other verdicts keep the remaining cells explicit instead of folding them
+ *    into one of the two: a root the creator recorded but no sweep ever listed
+ *    (`recorded-not-swept`: a sibling `mkdir`, or a worker killed before any
+ *    sweep), a root already present when its last sweep ran (`present-at-sweep`),
+ *    and an entry whose birth time the filesystem withholds (`order-unknown`).
+ * Times are signed milliseconds from the LAST sweep record, so `+9034ms` reads
+ * "9034 ms after the sweep".
+ */
+export function diagnoseTmpHygieneLeak(
+	entry: string,
+	creator: string | undefined,
+	records: readonly TmpHygieneSweepRecord[],
+	times: TmpHygieneLeakTimes,
+): string {
+	const children = describeLeakChildren(times.children);
+	const sweeps =
+		records.length === 0
+			? "no sweep record"
+			: `sweeps: ${records
+					.map(
+						(r) =>
+							`${r.via} ${r.kind} ${r.outcome} at ${new Date(r.at).toISOString()}`,
+					)
+					.join("; ")}`;
+	const registry =
+		records.length > 0
+			? "in the registry at sweep time"
+			: creator === undefined
+				? "not in the registry (no creator on record)"
+				: "creator on record, never a sweep root";
+	const last = records.reduce<TmpHygieneSweepRecord | undefined>(
+		(latest, r) => (latest === undefined || r.at > latest.at ? r : latest),
+		undefined,
+	);
+	const born = times.birthtimeMs;
+	const bornKnown = born !== undefined && born > 0;
+	const delta = (ms: number | undefined): string =>
+		ms === undefined || last === undefined || !(ms > 0)
+			? "unavailable"
+			: `${ms >= last.at ? "+" : "-"}${Math.abs(Math.round(ms - last.at))}ms`;
+	let verdict: string;
+	if (last === undefined)
+		verdict = creator === undefined ? "unrecorded" : "recorded-not-swept";
+	else if (!bornKnown) verdict = "order-unknown";
+	else if (born > last.at) verdict = "recreated-after-sweep";
+	else verdict = `present-at-sweep(${last.outcome})`;
+	const against =
+		last === undefined
+			? ""
+			: `; vs last sweep: birth ${delta(born)}, mtime ${delta(times.mtimeMs)}, ctime ${delta(times.ctimeMs)}`;
+	return `${entry} [${verdict}] ${registry}; ${sweeps}${against}; ${children}`;
+}
+
+/** The diagnosis for each leaked entry, bounded: a census that leaked a whole
+ *  run's roots names the first few and counts the rest. */
+export const TMP_HYGIENE_DIAGNOSIS_LIMIT = 6;
+
+export function diagnoseTmpHygieneLeaks(
+	entries: readonly string[],
+	creators: ReadonlyMap<string, string>,
+	tmpRoot: string = tmpHygieneRealTmp,
+	readTimes: (dir: string) => TmpHygieneLeakTimes = readTmpHygieneLeakTimes,
+): string {
+	const records = tmpHygieneSweepRecords(creators);
+	const shown = entries
+		.slice(0, TMP_HYGIENE_DIAGNOSIS_LIMIT)
+		.map((entry) =>
+			diagnoseTmpHygieneLeak(
+				entry,
+				creators.get(entry),
+				records.get(entry) ?? [],
+				readTimes(path.join(tmpRoot, entry)),
+			),
+		);
+	const more = entries.length - shown.length;
+	return `${shown.join(" | ")}${more > 0 ? ` | (+${more} more)` : ""}`;
 }
 
 export function writeTmpHygieneLeakNotice(

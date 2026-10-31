@@ -287,6 +287,49 @@ export function formatTmpRootSweep(
 	return `[tmp-hygiene-sweep] tests/${file} via=${via} registered=${registered.length} stragglers=${stragglers} failed=${sweep.failed.length} dropped=${dropped}\n`;
 }
 
+/** The creators-record prefix of a sweep record (#4591), the way
+ *  `REPO_ROOT_CREATE_PREFIX` marks a repository-root creation: `sweep:<via>:<name>`
+ *  keys never collide with a bare entry name, so the one persisted record
+ *  carries both without a second file or a second flush latch. */
+export const TMP_ROOT_SWEEP_PREFIX = "sweep:";
+
+/** What a sweep found at one recorded root: it `removed` it, tried and `failed`,
+ *  `held` an observed root its file never removed (not the sweep's to remove),
+ *  or the root was `absent` (its owner removed it, or it was never created). */
+export type TmpRootSweepOutcome = "removed" | "failed" | "held" | "absent";
+
+/** One `sweep:<via>:<name>` key and `<kind>,<outcome>,<epoch ms>` value per
+ *  recorded root, so the serialized census can tell a root that was in the
+ *  registry at sweep time and reappeared afterwards (a deferred writer) from a
+ *  root the sweep never owned (the interposer never recorded it). The outcome is
+ *  read back from the registry and the sweep, so it needs no second `exists`
+ *  probe: after `sweepTmpRoots` sampled, a root that is neither removed nor
+ *  failed is `held` exactly when it is observed and was never seen absent. One
+ *  record per root per `via`, bounded by `MAX_TMP_ROOTS`, never one per call. */
+export function formatTmpRootSweepRecords(
+	registry: TmpRootRegistry,
+	sweep: TmpRootSweep,
+	via: "afterAll" | "SIGTERM",
+	at: number,
+): string[] {
+	const removed = new Set(sweep.removed.map((r) => r.dir));
+	const failed = new Set(sweep.failed);
+	const lines: string[] = [];
+	for (const [dir, entry] of registry.roots) {
+		const outcome: TmpRootSweepOutcome = removed.has(dir)
+			? "removed"
+			: failed.has(dir)
+				? "failed"
+				: entry.kind !== "registered" && !entry.sawAbsent
+					? "held"
+					: "absent";
+		lines.push(
+			`${TMP_ROOT_SWEEP_PREFIX}${via}:${path.basename(dir)}\t${entry.kind},${outcome},${Math.round(at)}`,
+		);
+	}
+	return lines;
+}
+
 /** The slice of `node:fs` the interposer wraps. Typed loosely on purpose: the
  *  real module's members are read-only in its declaration. */
 export interface TmpRootFsTarget {

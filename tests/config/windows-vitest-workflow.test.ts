@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import { siblingPin } from "../support/sibling-pin.js";
-import { stripSource } from "../support/sweep-kit.js";
+import { matchingCloseIndex, stripSource } from "../support/sweep-kit.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = resolve(ROOT, ".github/workflows/ci.yml");
@@ -34,6 +34,210 @@ function readWorkflow(): { jobs: Record<string, Job> } {
 		jobs: Record<string, Job>;
 	};
 }
+
+const OPENERS: Record<string, string> = { "(": ")", "{": "}", "[": "]" };
+
+/** `text` with every bracket group emptied (`f(a, b)` reads `f()`), blank
+ *  string contents dropped, and whitespace collapsed: the statement shape at
+ *  this nesting level. */
+function skeleton(text: string): string {
+	let out = "";
+	for (let i = 0; i < text.length; i++) {
+		const close = OPENERS[text[i]];
+		if (close === undefined) {
+			out += text[i];
+			continue;
+		}
+		const end = matchingCloseIndex(text, i, text[i], close);
+		if (end < 0) throw new Error(`unbalanced ${text[i]} at ${i}`);
+		out += text[i] + close;
+		i = end;
+	}
+	return out
+		.replace(/(["'`])\s*\1/g, "$1$1")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/** Top-level statements of a block body (split at depth-0 `;`), each with its
+ *  whitespace collapsed. */
+function statements(body: string): string[] {
+	const out: string[] = [];
+	let depth = 0;
+	let start = 0;
+	for (let i = 0; i < body.length; i++) {
+		const ch = body[i];
+		if (ch in OPENERS) depth++;
+		else if (ch === ")" || ch === "}" || ch === "]") depth--;
+		else if (ch === ";" && depth === 0) {
+			out.push(body.slice(start, i + 1));
+			start = i + 1;
+		}
+	}
+	out.push(body.slice(start));
+	return out
+		.map((entry) => entry.replace(/\s+/g, " ").trim())
+		.filter(Boolean)
+		.flatMap(expandTry);
+}
+
+/** A `try {...} finally {...}` statement as its own lines, so a drift inside
+ *  it names the statement that moved. Any other shape stays one statement. */
+function expandTry(statement: string): string[] {
+	if (!statement.startsWith("try {")) return [statement];
+	const tryEnd = matchingCloseIndex(statement, 4, "{", "}");
+	const tail = statement.slice(tryEnd + 1).trimStart();
+	if (!tail.startsWith("finally {")) return [statement];
+	const open = statement.length - tail.length + "finally ".length;
+	const end = matchingCloseIndex(statement, open, "{", "}");
+	if (end !== statement.length - 1) return [statement];
+	return [
+		"try {",
+		...statements(statement.slice(5, tryEnd)),
+		"} finally {",
+		...statements(statement.slice(open + 1, end)),
+		"}",
+	];
+}
+
+/**
+ * The census hook's statements as `censusStructure` reads them (comments and
+ * string contents blanked, whitespace collapsed). The admitted form of the
+ * hook: any added, removed or edited statement reds, so a guard spelled any
+ * way (a ternary on an env var or `path.sep`, an early `return`, a value
+ * swapped for `[]`) is a reviewed change to this list (#5081 review F1).
+ * Editing a comment or a message's wording does not move it. After a
+ * deliberate hook change, copy the pin's received list here.
+ */
+const CENSUS_HOOK_STATEMENTS: readonly string[] = [
+	"const scan = await tmpHygieneWaitForOwnerDrain();",
+	"const liveOwners = scan.live;",
+	"const { testFile, leftovers } = tmpHygieneLeakReport();",
+	"const creators = censusTmpRootCreators();",
+	"const otherInvocation = new Set( tmpHygieneForeignRunEntries( leftovers, ownersForTmpEntry, tmpHygieneRunFiles(), creators, ), );",
+	"const attributable = tmpHygieneExcludeLiveOwnerEntries( leftovers.filter((entry) => !otherInvocation.has(entry)), ownerForTmpEntry, liveOwners, );",
+	"const described = attributable.map((entry) => formatTmpHygieneLeakEntry( entry, ownerForTmpEntry(entry), creators.get(entry), ), );",
+	"const rootCensus = unadmittedRepoRootEntries(repoRootBaseline());",
+	"if (rootCensus.unknown) process.stderr.write( ` ${rootCensus.unknown} `, );",
+	"const repoRootCreated = [...tmpHygieneRepoRootCreates()].filter( ([, creator]) => creator !== OWN_FILE, );",
+	"const repoRootCreateNames = repoRootCreated.map(([name]) => name);",
+	"const repoRootCreateLeaks = untrackedUnignoredEntries( repoRootCreateNames, process.cwd(), new Set(repoRootCreateNames), );",
+	"const tmpRootWrites = tmpHygieneTmpRootWrites();",
+	"const tmpRootWriteLeaks = judgedTmpRootWrites( tmpRootWrites ?? [], creators, );",
+	"try {",
+	'expect( attributable, ` ${testFile} ${attributable.length} ${described.join(" ")} ${[...liveOwners].join(" ") || " "} ${diagnoseTmpHygieneLeaks(attributable, creators)}`, ).toEqual([]);',
+	'expect( tmpRootWriteLeaks, ` ${testFile} ${tmpRootWriteLeaks.length} ${tmpRootWriteLeaks .map( (entry) => `${entry} ${creators.get(entry) ?? " "} `, ) .join( " ", )} `, ).toEqual([]);',
+	'expect( rootCensus.leaked, ` ${rootCensus.leaked.length} ${rootCensus.leaked .map( (entry) => `${entry} ${repoRootEntryCandidates(entry).join(" ") || " "} `, ) .join( " ", )} `, ).toEqual([]);',
+	'expect( repoRootCreateLeaks, ` ${repoRootCreateLeaks === undefined ? " " : `${repoRootCreateLeaks.length} `} ${repoRootCreated .map(([name, creator]) => `${name} ${creator} `) .join( " ", )} `, ).toEqual([]);',
+	"} finally {",
+	"const reaped = cleanupTmpHygiene(otherInvocation);",
+	"writeCensusSummary( scan, otherInvocation.size, reaped, tmpRootWrites, tmpRootWriteLeaks.length, );",
+	"}",
+];
+/** The only statements the census describe body may hold. */
+const BODY_STATEMENTS = ["afterAll();", "it();", "describe();"];
+const CENSUS_HEAD = 'describe("tmp-fixture-hygiene", () => {';
+const VITEST_BINDINGS = ["describe", "afterAll", "it", "expect"] as const;
+
+/**
+ * The census file's structure as the pin judges it (#4591, #5081 review F1),
+ * read with comments and strings blanked so prose never satisfies it. Admitted,
+ * and nothing else: the census `describe` is a top-level statement (the code
+ * before it ends in `;`) with exactly the head above; its body holds only
+ * `afterAll()`, `it()` and `describe()` statements, with at least one direct
+ * `it()` whose arguments are a name and a callback (no options object, no
+ * `.skipIf`); the hook is `afterAll(async () => {...})` whose statements equal
+ * `CENSUS_HOOK_STATEMENTS`; and `describe`, `afterAll`, `it` and `expect` are
+ * bound only by the vitest import (every other occurrence is a call). Each
+ * field reports what it read when it is not the admitted form, so the failure
+ * names the drift.
+ */
+function censusStructure(raw: string) {
+	const code = stripSource(raw);
+	const at = raw.indexOf(CENSUS_HEAD);
+	const before = code.slice(0, Math.max(at, 0)).trimEnd();
+	const open = at + CENSUS_HEAD.length - 1;
+	const close = at < 0 ? -1 : matchingCloseIndex(code, open, "{", "}");
+	const bodyText = close < 0 ? "" : code.slice(open + 1, close);
+	const shapes = statements(skeleton(bodyText));
+	// Every direct `it` call, judged on its own argument shape.
+	const directIts: string[] = [];
+	let hookArgs = "missing";
+	let hookBody = "";
+	for (let i = 0, depth = 0; i < bodyText.length; i++) {
+		const ch = bodyText[i];
+		if (ch in OPENERS) depth++;
+		else if (ch === ")" || ch === "}" || ch === "]") depth--;
+		if (depth !== 0 || !/[ai]/.test(ch) || /[\w$.]/.test(bodyText[i - 1] ?? ""))
+			continue;
+		const call = /^(afterAll|it)\(/.exec(bodyText.slice(i));
+		if (!call) continue;
+		const paren = i + call[1].length;
+		const end = matchingCloseIndex(bodyText, paren, "(", ")");
+		const args = skeleton(bodyText.slice(paren + 1, end));
+		if (call[1] === "it") directIts.push(args);
+		else if (hookArgs === "missing") {
+			hookArgs = args;
+			const brace = bodyText.indexOf("{", paren);
+			hookBody = bodyText.slice(
+				brace + 1,
+				matchingCloseIndex(bodyText, brace, "{", "}"),
+			);
+		}
+	}
+	// One direct case with no third argument (no options object, so no `skip`)
+	// is what makes Vitest run the suite, and with it the hook.
+	const plainIt = (args: string) => /^"", (?:async )?\(\) => \{\}$/.test(args);
+	const bodyAdmitted =
+		shapes.every((entry) => BODY_STATEMENTS.includes(entry)) &&
+		directIts.some(plainIt);
+	const vitestImport = /import\s*\{[^}]*\}\s*from\s*"\s*"\s*;/g;
+	const imports = [...code.matchAll(vitestImport)].filter((entry) =>
+		raw.slice(entry.index, entry.index + entry[0].length).includes('"vitest"'),
+	);
+	const bindings: string[] = [];
+	for (const name of VITEST_BINDINGS) {
+		for (const hit of code.matchAll(
+			new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, "g"),
+		)) {
+			const index = hit.index;
+			if (
+				imports.some(
+					(entry) =>
+						index > entry.index && index < entry.index + entry[0].length,
+				)
+			)
+				continue;
+			const after = code.slice(index + name.length).trimStart()[0];
+			const prior = code.slice(0, index).trimEnd();
+			if (
+				(after === "(" || after === ".") &&
+				!/\b(?:function|class)$/.test(prior)
+			)
+				continue;
+			bindings.push(
+				`${name} at line ${code.slice(0, index).split("\n").length}`,
+			);
+		}
+	}
+	return {
+		topLevel: before.endsWith(";"),
+		body: bodyAdmitted
+			? "afterAll(), it() and describe() only"
+			: `${shapes.join(" ")}${directIts.some(plainIt) ? "" : " (no direct it() with only a name and a callback)"}`,
+		hookArgs,
+		hook: statements(hookBody),
+		bindings,
+	};
+}
+
+const ADMITTED_CENSUS = {
+	topLevel: true,
+	body: "afterAll(), it() and describe() only",
+	hookArgs: "async () => {}",
+	hook: CENSUS_HOOK_STATEMENTS,
+	bindings: [],
+};
 
 describe("Windows Vitest workflow contract (#2536)", () => {
 	it("keeps the Windows subset lane present, bounded, and gating (#4518)", () => {
@@ -157,87 +361,115 @@ describe("Windows Vitest workflow contract (#2536)", () => {
 		expect(raw).not.toContain("Windows Vitest failures: ${failures:-0}");
 	});
 
-	// #4591: the one governance file declined on this lane. The census reds ~1 run
-	// in 10 there on a root its own file's teardown had already removed, and the
-	// lane gates now, so that verdict is postponed until the producer is named.
-	// Read with comments blanked (#4592 review, Greptile P2 "Quarantine test
-	// misses actual skip"): a commented-out copy of the declaration cannot satisfy
-	// this, and the arm covers the suite's own registration rather than only the
-	// constant, so moving the gate off `win32` or dropping `skipIf` reds here.
-	// A source read, not a tests/-tree sweep: this pins the ONE condition (a
-	// platform test, never a constant, so it cannot be widened to every lane
-	// silently) and the issue that retires it. A second quarantined file is a
-	// reviewed change, not a population this case can enumerate.
-	it("keeps the tmp-fixture census quarantine on win32, named to its issue (#4591)", () => {
+	// #4591: the tmp-fixture census asserts on the Windows lane. It was declined
+	// there (a `win32` guard around its assertions) while the producer of a
+	// root that reappeared after its file's sweep was unnamed; the quarantine is
+	// gone so a Windows soak measures the census, and its failure message now
+	// carries the diagnosis that names the producer. Recurrence this prevents: a
+	// platform guard returning around the census (the lane then runs the file
+	// and measures nothing, shapes 10 and 31). Round 1 enumerated guard words
+	// and #5081's review passed three plants through it (an env ternary, a
+	// `path.sep` ternary, an early `return` in the describe), so the pin now
+	// ADMITS the one known-good structure and refuses every other form; see
+	// `censusStructure` for what is admitted. Out of a source pin's reach: a
+	// Windows branch inside a function the hook already calls (a support helper
+	// returning `[]`); those helpers are judged by their own tests.
+	it("keeps the tmp-fixture census asserting on win32, with no platform guard (#4591)", () => {
 		const raw = readFileSync(
 			resolve(ROOT, "tests/config/tmp-fixture-hygiene.test.ts"),
 			"utf8",
 		);
-		// Two reads of one source, for two different questions (#4592 review V1):
-		// `code` keeps string contents because two needles below quote a literal
-		// (`process.platform === "win32"`, `describe("tmp-fixture-hygiene"`), and
-		// `stringsBlanked` is where liveness is judged -- reading the deferred slice
-		// from `code` let a quoted copy of the three assertions satisfy every needle
-		// (measured: the guard body replaced by one template literal holding their
-		// text passed 7/7, shape 69).
-		const code = stripSource(raw, { strings: "keep" });
-		const stringsBlanked = stripSource(raw);
-		expect(code).toContain(
-			'const WINDOWS_QUARANTINE = process.platform === "win32";',
+		expect(censusStructure(raw)).toEqual(ADMITTED_CENSUS);
+		// The census line states the verdict the run reached, and it is asserted.
+		expect(stripSource(raw, { strings: "keep" })).toContain(
+			'const censusVerdict: TmpHygieneCensusVerdict = "asserted";',
 		);
-		// #4592 review, Greptile P2 "Windows cleanup stops running": the file is
-		// NOT skipped, only its verdict is. A suite-level skip was measured to run
-		// no hook at all (Vitest reports `Test Files 1 skipped (1)`), which took
-		// the run's only `cleanupTmpHygiene` call with it, so a re-added suite
-		// skip reds here.
-		expect(code).toContain('describe("tmp-fixture-hygiene"');
-		expect(code).not.toContain("describe.skipIf(WINDOWS_QUARANTINE)");
-		expect(code).toContain("if (!WINDOWS_QUARANTINE) {");
-		// The four census assertions sit inside the guard, and the sweep sits in
-		// the `finally` that follows it, so the sweep reaps on win32 too.
-		const guard = code.indexOf("if (!WINDOWS_QUARANTINE) {");
-		const finallyIndex = code.indexOf("} finally {", guard);
-		const swept = code.indexOf(
-			"const reaped = cleanupTmpHygiene(otherInvocation);",
+	});
+
+	// #5081 review F1: the plants that passed round 1's needle pin, plus the
+	// other spellings the state table names (an alias, an indirect call, a
+	// value reached through another binding). Each must leave the admitted
+	// structure; a comment-only edit must not. Applied in memory to the real
+	// file, so the plants track the file's current text.
+	it("refuses every guard spelling #5081 review planted in the census", () => {
+		const raw = readFileSync(
+			resolve(ROOT, "tests/config/tmp-fixture-hygiene.test.ts"),
+			"utf8",
 		);
-		expect(swept).toBeGreaterThan(guard);
-		expect(code.slice(guard, swept)).toContain("} finally {");
-		// #4592 review F1: the assertions must be LIVE inside the guard.
-		// Without this arm the block could be emptied and the quarantine would read
-		// as "declined on every lane" with no red (shape 33: the pin covered the
-		// bracket, not the property; measured -- the emptied guard passed 59/59).
-		// Each assertion's subject is named, and the count is pinned, so a further
-		// one is a reviewed change rather than a silent widening. #4864 added the
-		// fourth: the repository-root creation ledger the interposer records, which
-		// is deferred on win32 with its three siblings.
-		const deferred = stringsBlanked.slice(guard, finallyIndex);
-		expect(deferred).toContain("attributable,");
-		expect(deferred).toContain("tmpRootWriteLeaks,");
-		expect(deferred).toContain("rootCensus.leaked,");
-		expect(deferred).toContain("repoRootCreateLeaks,");
-		expect(deferred.match(/\.toEqual\(\[\]\)/g) ?? []).toHaveLength(4);
-		// #4592 review F4: a declined verdict leaves its own record. The census
-		// line carries which verdict ran, derived from this same guard, so the
-		// win32 lane prints `verdict=declined` instead of a counting line
-		// identical to an asserting lane's (shapes 10 and 31).
-		expect(code).toMatch(
-			/const censusVerdict: TmpHygieneCensusVerdict = WINDOWS_QUARANTINE\s*\?\s*"declined"\s*:\s*"asserted";/,
-		);
-		// Why this is a source read and not a runtime probe (shape 33): the
-		// property is "on a lane that is not win32 the census asserts", and one
-		// process cannot observe both arms -- `process.platform` is read once at
-		// module load, the gating lane is win32, and this pin runs where the guard
-		// is armed. The runtime behaviour of the asserting arm is already the
-		// suite plus the census cases below; only its SHAPE is unreachable here.
-		// The teardown belongs to the suite's hook list, not the root list the
-		// shared setup registers on: a red census must not abort the setup's own
-		// teardown (Greptile's second P2 on this round).
-		expect(code.indexOf("afterAll(")).toBeGreaterThan(
-			code.indexOf('describe("tmp-fixture-hygiene"'),
-		);
-		expect(raw).toMatch(
-			/#4591:\s*the census VERDICT is declined on the Windows lane/,
-		);
+		const onWindows = 'process.env.RUNNER_OS === "Windows"';
+		const plant = (from: string, to: string, text = raw): string => {
+			expect(text).toContain(from);
+			return text.replace(from, to);
+		};
+		const plants: Record<string, string> = {
+			"env ternary on a subject": plant(
+				"const attributable = tmpHygieneExcludeLiveOwnerEntries(",
+				`const attributable = ${onWindows} ? [] : tmpHygieneExcludeLiveOwnerEntries(`,
+			),
+			"path.sep ternary on the repo-root census": plant(
+				"const rootCensus = unadmittedRepoRootEntries(repoRootBaseline());",
+				'const rootCensus = path.sep === "\\\\" ? { leaked: [], unknown: undefined } : unadmittedRepoRootEntries(repoRootBaseline());',
+			),
+			"early return first in the describe": plant(
+				CENSUS_HEAD,
+				`${CENSUS_HEAD}\n\tif (${onWindows}) return;`,
+			),
+			"early return on an in-file helper": plant(
+				"const censusVerdict",
+				'function isHostWin() { return os.EOL === "\\r\\n"; }\nconst censusVerdict',
+				plant(CENSUS_HEAD, `${CENSUS_HEAD}\n\tif (isHostWin()) return;`),
+			),
+			"early return on an imported flag": plant(
+				CENSUS_HEAD,
+				`${CENSUS_HEAD}\n\tif (hostIsWindows) return;`,
+			),
+			"return after the hook (no case runs, so neither does the hook)": plant(
+				'\n\t});\n\n\tit("reports an unknown baseline',
+				`\n\t});\n\tif (${onWindows}) return;\n\n\tit("reports an unknown baseline`,
+			),
+			"skipIf on the describe": plant(
+				CENSUS_HEAD,
+				`describe.skipIf(${onWindows})("tmp-fixture-hygiene", () => {`,
+			),
+			"describe wrapped in an if": plant(
+				CENSUS_HEAD,
+				`if (!(${onWindows}))\n${CENSUS_HEAD}`,
+			),
+			"alias: the hook through another binding": plant(
+				"const censusVerdict",
+				`const hook = ${onWindows} ? () => undefined : afterAll;\nconst censusVerdict`,
+				plant(
+					"\tafterAll(async () => {\n\t\tconst scan",
+					"\thook(async () => {\n\t\tconst scan",
+				),
+			),
+			"every direct case skipped through an options object": raw.replace(
+				/(\n\tit\(\s*)("(?:[^"\\]|\\.)*"),/g,
+				`$1$2, { skip: ${onWindows} },`,
+			),
+			"hook callback chosen by a ternary": plant(
+				"\tafterAll(async () => {\n\t\tconst scan",
+				`\tafterAll(${onWindows} ? () => undefined : async () => {\n\t\tconst scan`,
+			),
+			"afterAll imported from another module": plant(
+				'import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";',
+				'import { beforeAll, describe, expect, it, vi } from "vitest";\nimport { afterAll } from "../support/win-skip.js";',
+			),
+			"value reached through another binding": plant(
+				"\t\t\texpect(\n\t\t\t\tattributable,",
+				"\t\t\texpect(\n\t\t\t\tdescribed.filter(() => false),",
+			),
+		};
+		for (const [name, text] of Object.entries(plants)) {
+			expect(text, name).not.toBe(raw);
+			expect(censusStructure(text), name).not.toEqual(ADMITTED_CENSUS);
+		}
+		// A commented-out guard is prose, not code: it never moves the verdict.
+		expect(
+			censusStructure(
+				plant(CENSUS_HEAD, `${CENSUS_HEAD}\n\t// if (${onWindows}) return;`),
+			),
+		).toEqual(ADMITTED_CENSUS);
 	});
 
 	it("pins the sibling action revisions and the isolated home", () => {

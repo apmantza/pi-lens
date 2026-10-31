@@ -22,10 +22,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import {
 	closeTmpHygieneCreators,
-	flushTmpRootCreatorsForTests,
+	flushTmpHygieneRecordsForTests,
 	formatTmpHygieneLeakEntry,
 	tmpHygieneCreators,
 	tmpHygieneCreatorsPath,
+	tmpHygieneSweepRecords,
 	tmpHygieneUnadmittedEntries,
 } from "./vitest-setup.js";
 
@@ -238,6 +239,42 @@ describe("shared setup tmp-root sweep, through the real hooks (#2912)", () => {
 		expect(new Set(lines).size, lines.join("|")).toBe(lines.length);
 	});
 
+	it("persists what each sweep found at every registered root, so the census can name the producer (#4591)", () => {
+		// The census runs in another worker after the file's fork is gone, so the
+		// registry's view at sweep time only crosses through the run's record. The
+		// Windows lane reds about one run in ten on a root that reappeared after
+		// its file's sweep; the record separates a registered root a deferred writer
+		// recreated from a root the sweep never owned.
+		const records = tmpHygieneSweepRecords(
+			tmpHygieneCreators(
+				path.join(REPO, ".probe-home", `tmp-hygiene-creators-${RUN_ID}.log`),
+			),
+		);
+		// The afterAll sweep is the one every platform runs; the SIGTERM sweep is
+		// not deliverable on win32, so it is not asserted here.
+		const recordFor = (prefix: string) =>
+			[...records].find(([name]) => name.startsWith(prefix))?.[1];
+		const afterAllFor = (prefix: string) =>
+			recordFor(prefix)?.find((record) => record.via === "afterAll");
+		// A registered root the test timed out holding: the sweep removed it.
+		expect(afterAllFor("pi-lens-2912-timeout-")).toEqual(
+			expect.objectContaining({ kind: "registered", outcome: "removed" }),
+		);
+		// A raw root the file never removed: the registry held it and the sweep
+		// left it for the owner, which is "held", not "removed".
+		expect(afterAllFor("pi-lens-2912-genuine-raw-")).toEqual(
+			expect.objectContaining({ kind: "observed", outcome: "held" }),
+		);
+		// A directory a child process made was never in the registry at all.
+		expect(recordFor("pi-lens-2912child-")).toBeUndefined();
+		// A file that left fake timers installed at its sweep: the stamp is still
+		// this run's wall clock (the census compares it with filesystem times),
+		// never the fake clock's epoch.
+		const stamp = afterAllFor("pi-lens-4591-faketimers-")?.at ?? 0;
+		expect(stamp).toBeGreaterThan(Date.now() - 10 * 60_000);
+		expect(stamp).toBeLessThanOrEqual(Date.now());
+	});
+
 	it("labels an entry a grandchild process made as created outside the test process", () => {
 		// #2912 (2026-10-10): the real-pi jscpd shape — a process the fixture
 		// spawned makes the root, so no interposer in the run observes it. The
@@ -260,9 +297,13 @@ describe("shared setup tmp-root sweep, through the real hooks (#2912)", () => {
 		// flush under the stack hook order, so the closed latch is what keeps the
 		// flush from recreating the record it removed. This worker's registry
 		// already holds a created entry (`setupTestEnvironment` at module load),
-		// so a missing latch would make the flush write the file back.
+		// so a missing latch in the creators flush would write the file back;
+		// #5081 review F4: so would a missing latch in the sweep-record flush,
+		// which is handed a real sweep line here.
 		closeTmpHygieneCreators();
-		flushTmpRootCreatorsForTests();
+		flushTmpHygieneRecordsForTests([
+			`sweep:afterAll:pi-lens-4591-latch\tregistered,removed,${Date.now()}`,
+		]);
 		expect(fs.existsSync(tmpHygieneCreatorsPath)).toBe(false);
 	});
 });
