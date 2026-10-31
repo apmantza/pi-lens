@@ -111,43 +111,39 @@ describe("locateCli2Entry finds the package the resolved command belongs to", ()
 		expect(locateCli2Entry(shim)).toBe(entry);
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"follows a POSIX global symlink into the package",
-		() => {
-			const entry = writePackage(
-				path.join(root, "lib", "node_modules", "markdownlint-cli2"),
-			);
-			fs.mkdirSync(path.join(root, "bin"));
-			const link = path.join(root, "bin", "markdownlint-cli2");
-			fs.symlinkSync(
-				path.join(
-					root,
-					"lib",
-					"node_modules",
-					"markdownlint-cli2",
-					"markdownlint-cli2-bin.mjs",
-				),
-				link,
-			);
+	it("follows a POSIX global symlink into the package", (ctx) => {
+		if (process.platform === "win32") ctx.skip();
+		const entry = writePackage(
+			path.join(root, "lib", "node_modules", "markdownlint-cli2"),
+		);
+		fs.mkdirSync(path.join(root, "bin"));
+		const link = path.join(root, "bin", "markdownlint-cli2");
+		fs.symlinkSync(
+			path.join(
+				root,
+				"lib",
+				"node_modules",
+				"markdownlint-cli2",
+				"markdownlint-cli2-bin.mjs",
+			),
+			link,
+		);
 
-			expect(locateCli2Entry(link)).toBe(entry);
-		},
-	);
+		expect(locateCli2Entry(link)).toBe(entry);
+	});
 
 	// Recurrence: the bare command name the PATH rung returns for a global
 	// install was handed to the spawn path unresolved.
-	it.skipIf(process.platform === "win32")(
-		"resolves a bare command name through PATH",
-		() => {
-			const entry = writePackage(
-				path.join(root, "node_modules", "markdownlint-cli2"),
-			);
-			writeShim(path.join(root, "node_modules", ".bin", "markdownlint-cli2"));
-			vi.stubEnv("PATH", path.join(root, "node_modules", ".bin"));
+	it("resolves a bare command name through PATH", (ctx) => {
+		if (process.platform === "win32") ctx.skip();
+		const entry = writePackage(
+			path.join(root, "node_modules", "markdownlint-cli2"),
+		);
+		writeShim(path.join(root, "node_modules", ".bin", "markdownlint-cli2"));
+		vi.stubEnv("PATH", path.join(root, "node_modules", ".bin"));
 
-			expect(locateCli2Entry("markdownlint-cli2")).toBe(entry);
-		},
-	);
+		expect(locateCli2Entry("markdownlint-cli2")).toBe(entry);
+	});
 
 	// Recurrence: a sibling package whose shim shares the directory must never
 	// be imported as cli2 (its `main` would run with cli2's parameters).
