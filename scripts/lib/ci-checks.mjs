@@ -71,7 +71,7 @@ export const ADVISORY_CHECKS = new Set([
 	"typos (advisory)",
 	"taplo (advisory)",
 	"complexity (advisory)",
-	"Targeted tests (advisory)",
+	"Changed tests shuffled (advisory)",
 	// Stale verdict labels are bookkeeping only. Their cleanup asserts no
 	// property of the change, so API or token failures must never block a merge
 	// (#2993, including read-only fork pull_request tokens).

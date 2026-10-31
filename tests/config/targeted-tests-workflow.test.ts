@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
@@ -740,9 +740,11 @@ describe("targeted advisory workflow contract (#3215)", () => {
 		TREE_WALK_TIMEOUT_MS,
 	);
 
-	it("runs the selector on every PR with a full checkout and no gating power", () => {
-		const job = readWorkflow().jobs["targeted-tests-advisory"];
-		expect(job?.name).toBe("Targeted tests (advisory)");
+	// Recurrence (#3215): the job that kept the shuffle step lost its advisory
+	// shape or its history when the selection step was removed with it.
+	it("runs the changed-test shuffle on every PR with a full checkout and no gating power", () => {
+		const job = readWorkflow().jobs["changed-tests-shuffled"];
+		expect(job?.name).toBe("Changed tests shuffled (advisory)");
 		expect(job?.if).toBe("github.event_name == 'pull_request'");
 		expect(job?.["continue-on-error"]).toBe(true);
 		const checkout = job?.steps?.find((step) =>
@@ -752,9 +754,10 @@ describe("targeted advisory workflow contract (#3215)", () => {
 			siblingPin(
 				readWorkflow().jobs,
 				"actions/checkout",
-				"targeted-tests-advisory",
+				"changed-tests-shuffled",
 			),
 		);
+		// `git diff <base>...<head>` needs the merge base: a shallow clone has none.
 		expect(checkout?.with?.["fetch-depth"]).toBe(0);
 		const setupNode = job?.steps?.find((step) =>
 			step.uses?.startsWith("actions/setup-node@"),
@@ -763,21 +766,36 @@ describe("targeted advisory workflow contract (#3215)", () => {
 			siblingPin(
 				readWorkflow().jobs,
 				"actions/setup-node",
-				"targeted-tests-advisory",
+				"changed-tests-shuffled",
 			),
 		);
 	});
 
-	it("keeps install/build parity and publishes the selector outcome", () => {
+	// Recurrence (#3215): the selection step was removed and its job id with it;
+	// the old id coming back (or a second selection run) would restore the
+	// 26.7%-recall lane the maintainer decided against.
+	it("no longer runs the pre-push selector in CI (#3215)", () => {
+		const workflow = readWorkflow();
+		expect(workflow.jobs["targeted-tests-advisory"]).toBeUndefined();
+		for (const [id, job] of Object.entries(workflow.jobs)) {
+			for (const step of job.steps ?? []) {
+				expect(step.run ?? "", `${id}: ${step.name}`).not.toContain(
+					"pre-push-targeted-tests",
+				);
+			}
+		}
+	});
+
+	it("keeps install/build parity for the shuffle job and the selector summary", () => {
 		const selector = readFileSync(
 			resolve(ROOT, "scripts/pre-push-targeted-tests.mjs"),
 			"utf8",
 		);
-		const job = readWorkflow().jobs["targeted-tests-advisory"];
+		const job = readWorkflow().jobs["changed-tests-shuffled"];
 		const runs = job?.steps?.map((step) => step.run).filter(Boolean) ?? [];
 		// Lockfile-locked and script-free (SonarCloud githubactions:S8543 /
 		// S6505 on the copied `npm install`); the grammar download is the one
-		// `prepare` piece the targeted files need, so it is an explicit step.
+		// `prepare` piece the changed files need, so it is an explicit step.
 		expect(runs).toContain("npm ci --no-audit --no-fund --ignore-scripts");
 		expect(runs).toContain(
 			"node scripts/download-grammars.js --core --dest grammars",
@@ -786,22 +804,12 @@ describe("targeted advisory workflow contract (#3215)", () => {
 			runs.indexOf("node scripts/download-grammars.js --core --dest grammars"),
 		).toBeLessThan(runs.indexOf("npm run build"));
 		expect(runs).toContain("npm run build");
-		// #3426 H3432-1: the advisory job is the CI row for the CI-only tier.
-		expect(runs).toContain(
-			"node scripts/pre-push-targeted-tests.mjs --skip-build --include-ci-only",
-		);
+		// #4003: `--ignore-scripts` skips `prepare`, so a changed file that
+		// imports dist/ needs this step.
+		expect(runs).toContain("npm run build:dist");
+		// The local pre-push hook still prints these through the selector.
 		expect(selector).toContain("GITHUB_STEP_SUMMARY");
 		expect(selector).toContain("cap exceeded");
-	});
-
-	// #4437: run 38618401454 failed "Run targeted tests" on a fixed 3000 ms
-	// waitFor while only the shuffle step below set the timeout scale.
-	it("scales the interleaving kit's wall budgets on the targeted run (#4437)", () => {
-		const job = readWorkflow().jobs["targeted-tests-advisory"];
-		const step = job?.steps?.find(
-			(other) => other.name === "Run targeted tests",
-		);
-		expect(step?.env).toMatchObject({ PI_LENS_TEST_TIMEOUT_SCALE: "3" });
 	});
 
 	// #4397 recurrence: a PR's new test file that depends on case order passes
@@ -811,7 +819,7 @@ describe("targeted advisory workflow contract (#3215)", () => {
 	// data in a shell string) must red here.
 	it("runs the changed-test shuffle step after the build, with the SHAs in env only (#4397)", () => {
 		const workflow = readWorkflow();
-		const job = workflow.jobs["targeted-tests-advisory"];
+		const job = workflow.jobs["changed-tests-shuffled"];
 		const steps = job?.steps ?? [];
 		const index = steps.findIndex(
 			(step) => step.name === "Changed test files, alone and shuffled",
@@ -826,17 +834,17 @@ describe("targeted advisory workflow contract (#3215)", () => {
 			BASE_SHA: "${{ github.event.pull_request.base.sha }}",
 			HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
 		});
-		// It follows the build and the selector run: the compiled twins exist.
-		expect(index).toBeGreaterThan(
-			steps.findIndex((other) => other.run === "npm run build"),
-		);
-		expect(index).toBeGreaterThan(
-			steps.findIndex((other) => other.name === "Run targeted tests"),
-		);
-		// A red selector must not skip it, and a cancelled run must.
-		expect(step.if).toBe("${{ !cancelled() }}");
+		// #4437: the interleaving kit's waitFor budget scales by this; run
+		// 38618401454 failed on a fixed 3000 ms wait without it.
+		expect(step.env).toMatchObject({ PI_LENS_TEST_TIMEOUT_SCALE: "3" });
+		// It follows both builds: the compiled twins and dist/ exist.
+		for (const build of ["npm run build", "npm run build:dist"]) {
+			expect(index).toBeGreaterThan(
+				steps.findIndex((other) => other.run === build),
+			);
+		}
 		// The script's own budget sits a minute under the step cap (the kill and
-		// the summary, #4456), the step cap under the job's (15 min).
+		// the summary, #4456), the step cap under the job's.
 		const stepCap = step["timeout-minutes"] ?? Infinity;
 		expect(stepCap * 60_000).toBeGreaterThanOrEqual(BUDGET_MS + 60_000);
 		expect(stepCap).toBeLessThan(job?.["timeout-minutes"] ?? 0);
@@ -1310,10 +1318,19 @@ describe("CI-only pre-push tier (#3426 H3432-1)", () => {
 		}
 	});
 
-	it("runs the deferred suite in the advisory CI job, never the pre-push hook", () => {
-		const job = readWorkflow().jobs["targeted-tests-advisory"];
-		const runs = job?.steps?.map((step) => step.run).filter(Boolean) ?? [];
-		expect(runs.some((run) => run?.includes("--include-ci-only"))).toBe(true);
+	// Recurrence (#3215): the table's CI row was the advisory job that passed
+	// `--include-ci-only`; with that job gone the row is the gating Unit shards,
+	// which must run the whole collection (no file list narrowing them) and
+	// every deferred file must still exist to be collected.
+	it("runs the deferred suites in the gating Unit shards, never the pre-push hook", () => {
+		const unit = readWorkflow().jobs.test;
+		const runTests = unit?.steps?.find((step) => step.name === "Run tests");
+		expect(runTests?.run).toMatch(
+			/ -- npm test -- --shard=\$\{\{ matrix\.shard \}\}\/\$\{\{ strategy\.job-total \}\} --reporter=/,
+		);
+		for (const file of Object.keys(CI_ONLY_PRE_PUSH_TESTS)) {
+			expect(existsSync(resolve(ROOT, file)), file).toBe(true);
+		}
 		const prePush = readFileSync(resolve(ROOT, ".husky/pre-push"), "utf8");
 		expect(prePush).not.toContain("--include-ci-only");
 	});

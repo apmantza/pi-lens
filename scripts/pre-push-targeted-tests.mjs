@@ -115,15 +115,16 @@ let recordWriteWarningEmitted = false;
 // armed together in a `maxWorkers: 1` lane whose phase does (#4724), so they
 // are excluded from the local pre-push selection and run in CI instead
 // (#3426 H3432-1). Never a blanket skip: each entry carries a reason and a CI
-// row, and `--include-ci-only` admits them in the CI job that owns them. The
-// governance suite pins this table, the exclusion, and the CI invocation.
+// row (the gating Unit tests shards: every entry is in the default vitest
+// collection, #3215), and `--include-ci-only` admits them in a local run. The
+// governance suite pins this table, the exclusion, and the CI row.
 const REAL_HARNESS_CI_ONLY =
-	"real pi sessions in the serialized real-harness lane (maxWorkers 1, its own phase), and any tests/ change arms all 12 registered suites: 105 s of CI time together (scripts/test-shard-weights.json), and 117 s locally with the route matrix on 2026-10-21, the whole 120s pre-push budget (#4724). Runs in the Targeted tests (advisory) CI job via --include-ci-only and in the gating Unit tests job.";
+	"real pi sessions in the serialized real-harness lane (maxWorkers 1, its own phase), and any tests/ change arms all 12 registered suites: 105 s of CI time together (scripts/test-shard-weights.json), and 117 s locally with the route matrix on 2026-10-21, the whole 120s pre-push budget (#4724). Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.";
 export const CI_ONLY_PRE_PUSH_TESTS = {
 	"tests/scripts/guard-bash-hook.test.ts":
-		"spawns ~1,270 real hook child processes: the transcript corpus alone measured 169s and the file measured 211s end to end, over the 120s pre-push budget. Runs in the Targeted tests (advisory) CI job via --include-ci-only and in the gating Unit tests job.",
+		"spawns ~1,270 real hook child processes: the transcript corpus alone measured 169s and the file measured 211s end to end, over the 120s pre-push budget. Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.",
 	"tests/tools/diagnostics-route-switch-matrix.test.ts":
-		"real LSP handshakes in the serialized lsp-spawn-heavy lane (maxWorkers 1, its own phase), and any production change arms it: 60 s of CI time (scripts/test-shard-weights.json) and 50 s locally alone on 2026-10-21 (#4724). Runs in the Targeted tests (advisory) CI job via --include-ci-only and in the gating Unit tests job.",
+		"real LSP handshakes in the serialized lsp-spawn-heavy lane (maxWorkers 1, its own phase), and any production change arms it: 60 s of CI time (scripts/test-shard-weights.json) and 50 s locally alone on 2026-10-21 (#4724). Runs in the gating Unit tests job (the default vitest collection; the advisory CI job that also admitted it via --include-ci-only was removed in #3215) and, with --include-ci-only, in a local run.",
 	"tests/real-harness/bridge-reload-ts.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/bridge-reload.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/child-exit.test.ts": REAL_HARNESS_CI_ONLY,
@@ -533,9 +534,9 @@ function buildTestImportIndex(allTests) {
  * @param {string[]} changed
  * @param {string[]} allTests
  * @param {{ includeCiOnly?: boolean, historyPicks?: string[] }} [options]
- *   `includeCiOnly` admits the `CI_ONLY_PRE_PUSH_TESTS` tier (the CI job passes
- *   it); the local pre-push caller leaves it false so a budget-busting suite
- *   never runs there. `historyPicks` are the history pass's additions
+ *   `includeCiOnly` admits the `CI_ONLY_PRE_PUSH_TESTS` tier (a local run
+ *   passes it; no CI job does since #3215); the pre-push hook leaves it false
+ *   so a budget-busting suite never runs there. `historyPicks` are the history pass's additions
  *   (`loadHistorySelection`): bounded by their own cap, so they join the
  *   registries and the change's own tests in surviving the import cap, and
  *   they are never counted toward it.
@@ -627,7 +628,7 @@ export function selectTargetedTests(changed, allTests, options = {}) {
 	}
 
 	// CI-only tier (#3426 H3432-1): remove the suites measured to exceed the
-	// pre-push budget unless the caller is the CI job that owns them. The
+	// pre-push budget unless the caller asked for them (`--include-ci-only`). The
 	// count is disclosed on the summary surface, never silently dropped.
 	const excludedCiOnly = [];
 	if (options.includeCiOnly !== true) {

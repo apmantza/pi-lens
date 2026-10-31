@@ -567,7 +567,7 @@ describe("run — gating and advisory reported apart (#3700)", () => {
 			"unit-tests-fail-101554674114",
 			"Tests  56 failed | 1593 passed | 19 skipped (1668)\n",
 		);
-		advisory.json.name = "Targeted tests (advisory)";
+		advisory.json.name = "Changed tests shuffled (advisory)";
 		const w = world({
 			prs: [
 				{
@@ -580,7 +580,7 @@ describe("run — gating and advisory reported apart (#3700)", () => {
 		const { exitCode, lines } = await cli(["5"], w);
 		expect(exitCode).toBe(EXIT_SUCCESS);
 		expect(lines).toContain(
-			"Advisory (never gates): 1 checks, 1 red: Targeted tests (advisory) (failure, 56 failed)",
+			"Advisory (never gates): 1 checks, 1 red: Changed tests shuffled (advisory) (failure, 56 failed)",
 		);
 	});
 
@@ -591,7 +591,7 @@ describe("run — gating and advisory reported apart (#3700)", () => {
 			"unit-tests-fail-101554674114",
 			"Tests  56 failed | 1593 passed | 19 skipped (1668)\n",
 		);
-		advisory.json.name = "Targeted tests (advisory)";
+		advisory.json.name = "Changed tests shuffled (advisory)";
 		const w = world({
 			prs: [{ number: 5, login: "apmantza", checkRuns: [jobRow(advisory)] }],
 			jobs: [advisory],

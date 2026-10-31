@@ -294,7 +294,7 @@ describe("every PR-triggerable workflow job is reachable on a pull request (#304
 			const { flagged, advisoryJobs } =
 				findUndeclaredAdvisoryJobs(repoWorkflowFiles());
 			// Dead-sweep floor (AGENTS.md shape 10): measured 2 on 2026-09-25
-			// (ci.yml::targeted-tests-advisory, install-smoke.yml::mise-repro).
+			// (ci.yml::changed-tests-shuffled, install-smoke.yml::mise-repro).
 			expect(advisoryJobs.length).toBeGreaterThanOrEqual(2);
 			expect(
 				flagged,
