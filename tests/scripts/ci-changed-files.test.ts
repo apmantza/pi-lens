@@ -185,7 +185,7 @@ describe("classifyChangedFiles: the hot-path latency lane (#4363)", () => {
 	it.each(HOT_PATH_PATHS)("turns on for the listed path %s", (entry) => {
 		const file = entry.endsWith("/**")
 			? `${entry.slice(0, -2)}x/y.ts`
-			: entry.replace("*", "-foo");
+			: entry.replaceAll("*", "-foo");
 		expect(hotpath([file])).toBe(true);
 		expect(hotpath(["docs/a.md", file])).toBe(true);
 	});
