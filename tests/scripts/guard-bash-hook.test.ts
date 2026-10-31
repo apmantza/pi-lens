@@ -442,6 +442,9 @@ const ALLOW_CASES: string[] = [
 	"node scripts/pr-worktree.mjs open 9001 --merge",
 	"node scripts/pr-worktree.mjs close /home/dev/Desktop/pi-lens-worktrees/review-1",
 	// #5111: the one worktree-removal helper the refusals name.
+	// a process substitution AFTER the subcommand is classified normally
+	"git diff <(true) <(true)",
+	"git -C . diff --no-index <(echo a) <(echo b)",
 	"node scripts/worktree-remove.mjs /home/dev/wt/lane-1",
 	"node scripts/worktree-remove.mjs /home/dev/wt/lane-1 --force",
 	"npx vitest run tests/clients/foo.test.ts",
@@ -6652,6 +6655,14 @@ const STASH_STILL_DENIED: string[] = [
 	"git -C [a] stash list",
 	"git -C -c stash list",
 	"git -c a=$(echo x) stash list",
+	// PR #5115 verify r4: the lexer splits a segment at `<(`/`>(`, so the words
+	// after a process substitution before the subcommand are never classified
+	// (bash runs `git -C /dev/fd/63 stash drop`). A git segment that ends
+	// before its subcommand on a dangling `<`/`>` is refused.
+	"git -C <(true) stash drop",
+	"git -C >(true) stash drop",
+	"git <(true) stash drop",
+	"git -C . <(true) stash pop",
 	// env, inline or exported earlier in the command
 	"FOO=1 git stash list",
 	"GIT_EXTERNAL_DIFF=/home/dev/x git stash show -p",

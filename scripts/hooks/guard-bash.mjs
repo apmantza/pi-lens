@@ -1821,6 +1821,12 @@ function classifyGit(args, cwd, env = {}, expansionEnv = env) {
 		["false", "no", "0", "off"].includes(value.toLowerCase());
 	const i = gitSubcommandIndex(args);
 	const subcommand = args[i];
+	// A process substitution before the subcommand (`git -C <(true) stash
+	// drop`): the lexer splits the segment at `<(`/`>(`, so the words after it
+	// are never classified. A git segment that ends before its subcommand on a
+	// dangling `<`/`>` is refused, as the stash rule (PR #5115 verify r4).
+	if ((args.at(-1) === "<" || args.at(-1) === ">") && i >= args.length - 1)
+		return "stash";
 	if (classifyHookBypass(args, i, env)) return "hookBypass";
 	if (subcommand === "rebase") {
 		const rest = args.slice(i + 1);

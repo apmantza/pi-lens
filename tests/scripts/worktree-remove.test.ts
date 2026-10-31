@@ -254,6 +254,44 @@ describe("scripts/worktree-remove.mjs (#5111)", () => {
 		expect(r.err).toContain("does not exist");
 	});
 
+	// Recurrence: PR #5115 verify r4 F5 -- `"$WT"` with WT unset reached the
+	// helper as "", resolved to the cwd and removed the CURRENT linked worktree.
+	it.each([[""], ["  "], ["\t"]])(
+		"exits 2 with usage for the empty path %j and keeps the tree",
+		(arg) => {
+			const f = makeFixture();
+			const r = remove([arg], f.linked);
+			expect(r.code).toBe(2);
+			expect(r.err).toContain("usage: node scripts/worktree-remove.mjs");
+			expect(registered(f, f.linked)).toBe(true);
+			expect(existsSync(f.linked)).toBe(true);
+		},
+	);
+
+	it("accepts `.` as the current worktree", () => {
+		const f = makeFixture();
+		const r = remove(["."], f.linked);
+		expect(r.code).toBe(0);
+		expect(existsSync(f.linked)).toBe(false);
+	});
+
+	// Recurrence: PR #5115 verify r4 LOW -- a record must OPEN with `worktree `.
+	// A lock reason carrying a fake `worktree <path>` (after a newline, or as a
+	// substring that slices to a real path) must not register a plain directory.
+	it.each([
+		["a newline line", (plain: string) => `x\nworktree ${plain}`],
+		["a substring", (plain: string) => `zz${plain}`],
+	])("ignores a fake record in a lock reason (%s)", (_name, reason) => {
+		const f = makeFixture();
+		const plain = join(f.main, "a worktree b");
+		mkdirSync(plain);
+		gitIn(f.main, ["worktree", "lock", "--reason", reason(plain), f.linked]);
+		const r = remove([plain], f.main);
+		expect(r.code).toBe(1);
+		expect(r.err).toContain("not a registered git worktree");
+		expect(existsSync(plain)).toBe(true);
+	});
+
 	// Recurrence: PR #5115 Greptile G3 -- a newline-split, trimmed listing could
 	// not match a registered path holding a newline or a trailing space.
 	it.each([["new\nline"], ["trailing "]])(

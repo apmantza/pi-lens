@@ -75,7 +75,7 @@ export function run({
 	const targets = [];
 	for (const arg of argv) {
 		if (arg === "--force") force = true;
-		else if (arg.startsWith("-") || targets.length > 0) {
+		else if (arg.startsWith("-") || arg.trim() === "" || targets.length > 0) {
 			stderr(USAGE);
 			return 2;
 		} else targets.push(arg);
