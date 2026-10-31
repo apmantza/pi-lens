@@ -1,11 +1,11 @@
 {
 	"pi": {
-		"budget": 18864,
-		"descriptionTotal": 3338,
+		"budget": 18961,
+		"descriptionTotal": 3426,
 		"schemaTotal": 13811,
 		"tools": {
 			"ast_grep_outline": {
-				"description": 269,
+				"description": 357,
 				"schema": 1163
 			},
 			"ast_grep_replace": {

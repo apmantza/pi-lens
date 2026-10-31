@@ -159,8 +159,10 @@ and `[]` mean no arguments.
 - **`ast_grep_outline`** — Syntax-only code structure (symbols, imports, exports,
   members) for files or directories via `ast-grep outline`. Fast, local, no
   index/LSP/cross-file semantics. Supports `items`/`view`/`type`/`match`/
-  `pubMembers`/`globs`; returns per-file `items[]` (nested `members[]`) with
-  ready `read` args. Prefer `module_report` for pi-lens-aware navigation; reach
+  `pubMembers`/`globs`; returns a compact text tree, one
+  `start-end [import|export ]kind name[ — signature]` line per symbol (members
+  indented, files sorted by path, a visible line when files or items were cut);
+  read a range with `offset=start`, `limit=end-start+1`. Prefer `module_report` for pi-lens-aware navigation; reach
   for this when the syntax tree's own view is enough or pi-lens's extractor is
   weak for a language.
 
