@@ -126,21 +126,52 @@ function openerSignals(workflow: Workflow, job: Job): string[] {
 // ── the mechanism ───────────────────────────────────────────────────────────
 
 const OPERATION = (id: string) => `steps.${id}.outputs.pull-request-operation`;
-// The only `if:` forms that admit the dispatch: it fires when the PR was just
-// created or updated, and it runs whatever an earlier step did (`!cancelled()`),
-// so one failed dispatch or a failed disarm does not skip the other dispatch
-// (#5062 r2 F2). The second form is the docs-refresh PR, which skips it when
-// the App token opened the PR (CI already started, #4512).
-function admittedIfs(id: string): string[] {
-	const fired = `${OPERATION(id)} == 'created' || ${OPERATION(id)} == 'updated'`;
+// The `if:` forms that admit the dispatch, one status prefix per opener,
+// derived from the steps after the opener (#5062 r3; the state table is in
+// PR #5066's body). The dispatch fires when the PR was just created or
+// updated. A non-dispatch step after the opener may be a failsafe for its PR
+// (the auto-merge disarm): its failure must withhold CI, so the dispatch keeps
+// GitHub's implicit `success()`. Any step this file does not classify as a
+// dispatch counts, so an unknown step forces that form. Only when nothing but
+// dispatch steps follows does the dispatch run under `!cancelled()`, so one
+// failed dispatch does not skip the next (#5062 r2 F2). The second body is the
+// docs-refresh PR, which skips the dispatch when the App token opened the PR
+// (CI already started, #4512).
+function admittedIfs(id: string, onlyDispatchesFollow: boolean): string[] {
+	const fired = `(${OPERATION(id)} == 'created' || ${OPERATION(id)} == 'updated')`;
+	const status = onlyDispatchesFollow ? "!cancelled() && " : "";
 	return [
-		`\${{ !cancelled() && (${fired}) }}`,
-		`\${{ !cancelled() && (${fired}) && steps.app_token.outputs.token == '' }}`,
+		`\${{ ${status}${fired} }}`,
+		`\${{ ${status}${fired} && steps.app_token.outputs.token == '' }}`,
 	];
 }
 
-const isDispatchStep = (step: Step) =>
-	commandLines(step.run).some((line) => line.startsWith("gh workflow run "));
+// A dispatch step's whole run, nothing else: `set -euo pipefail`, then one
+// whole-line `gh workflow run` per derived target, in order, on one opener's
+// literal branch. A step with any other line (a third workflow, a failsafe,
+// `|| true`, `exit 0`, `set +e`, a variable branch) is not a dispatch step, so
+// it cannot carry an opener's dispatch or sit among the dispatches (#5062 r2
+// verify: any `gh workflow run` line used to make a step one).
+const dispatchRun = (targets: string[], branch: string) => [
+	"set -euo pipefail",
+	...targets.map((target) => `gh workflow run ${target} --ref ${branch}`),
+];
+
+function dispatchBranch(
+	step: Step,
+	targets: string[],
+	branches: string[],
+): string | undefined {
+	const lines = JSON.stringify(commandLines(step.run));
+	return branches.find(
+		(branch) => lines === JSON.stringify(dispatchRun(targets, branch)),
+	);
+}
+
+const literalBranch = (step: Step): string => {
+	const branch = text(step.with?.branch);
+	return branch.includes("${{") ? "" : branch;
+};
 
 function dispatchProblems(
 	workflow: Workflow,
@@ -161,6 +192,12 @@ function dispatchProblems(
 	if (permissions.actions !== "write") problems.push("lacks actions: write");
 	if (job["continue-on-error"] !== undefined)
 		problems.push("job continue-on-error");
+	for (const target of targets)
+		if (!targetsDispatchable[target])
+			problems.push(`${target} has no workflow_dispatch trigger`);
+	const branches = openers.map(literalBranch).filter(Boolean);
+	const branchOf = (step: Step) => dispatchBranch(step, targets, branches);
+	const isDispatchStep = (step: Step) => branchOf(step) !== undefined;
 	// Position (#5062 r2 F2): the dispatch steps close the job. A hard-failing
 	// dispatch placed before the disarm failsafe or the promotion PR step skips
 	// them (each runs under an implicit `success()`), and one placed before its
@@ -180,39 +217,38 @@ function dispatchProblems(
 	}
 	for (const opener of openers) {
 		const id = text(opener.id);
-		const branch = text(opener.with?.branch);
-		if (id === "" || branch === "" || branch.includes("${{")) {
+		const branch = literalBranch(opener);
+		if (id === "" || branch === "") {
 			problems.push(
 				"a create-pull-request step needs an id and a literal branch",
 			);
 			continue;
 		}
-		for (const target of targets) {
-			if (!targetsDispatchable[target])
-				problems.push(`${target} has no workflow_dispatch trigger`);
-			const command = `gh workflow run ${target} --ref ${branch}`;
-			const carrying = steps.filter((step) =>
-				commandLines(step.run).includes(command),
-			);
-			if (carrying.length === 0) {
-				problems.push(`no step runs \`${command}\``);
-				continue;
-			}
-			for (const step of carrying) {
-				if (step["continue-on-error"] !== undefined)
-					problems.push(`\`${command}\` is continue-on-error`);
-				if (
-					typeof step.if !== "string" ||
-					!admittedIfs(id).includes(step.if.replace(/\s+/g, " ").trim())
+		const expected = dispatchRun(targets, branch).join("; ");
+		const carrying = steps.filter((step) => branchOf(step) === branch);
+		if (carrying.length === 0) {
+			problems.push(`no step runs exactly \`${expected}\``);
+			continue;
+		}
+		const onlyDispatchesFollow = steps
+			.slice(steps.indexOf(opener) + 1)
+			.every(isDispatchStep);
+		for (const step of carrying) {
+			if (step["continue-on-error"] !== undefined)
+				problems.push(`the ${branch} dispatch is continue-on-error`);
+			if (
+				typeof step.if !== "string" ||
+				!admittedIfs(id, onlyDispatchesFollow).includes(
+					step.if.replace(/\s+/g, " ").trim(),
 				)
-					problems.push(`\`${command}\` has an unadmitted if`);
-				if (step.env?.GH_TOKEN !== "${{ secrets.GITHUB_TOKEN }}")
-					problems.push(`\`${command}\` does not use the repository token`);
-				// Whole-line command: `|| true`, a variable branch or an `echo` of it
-				// never matches, so a swallowed failure cannot satisfy the line.
-				if (!commandLines(step.run).includes("set -euo pipefail"))
-					problems.push(`\`${command}\` lacks set -euo pipefail`);
-			}
+			)
+				problems.push(
+					`the ${branch} dispatch has an unadmitted if (expected ${onlyDispatchesFollow ? "!cancelled()" : "the implicit success(): a non-dispatch step follows its opener"})`,
+				);
+			if (step.env?.GH_TOKEN !== "${{ secrets.GITHUB_TOKEN }}")
+				problems.push(
+					`the ${branch} dispatch does not use the repository token`,
+				);
 		}
 	}
 	return problems;
@@ -331,24 +367,31 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 
 	const CI = "on:\n  merge_group:\n  workflow_dispatch:\njobs: {}\n";
 	const LINT = CI;
+	const FIRED =
+		"steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'";
+	const CANCEL_IF = `\${{ !cancelled() && (${FIRED}) }}`;
+	const PLAIN_IF = `\${{ (${FIRED}) }}`;
 	const dispatchStep = (
-		target: string,
-		branch: string,
-		extra = "",
-		ifLine = "        if: ${{ !cancelled() && (steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated') }}",
+		branch = "bot/x",
+		ifExpr = CANCEL_IF,
+		lines = ["ci.yml", "lint.yml"].map(
+			(target) => `gh workflow run ${target} --ref ${branch}`,
+		),
 	) =>
 		[
 			"      - name: Start CI",
-			ifLine,
+			`        if: ${ifExpr}`,
 			"        env:",
 			"          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
-			extra,
 			"        run: |",
 			"          set -euo pipefail",
-			`          gh workflow run ${target} --ref ${branch}`,
-		]
-			.filter(Boolean)
-			.join("\n");
+			...lines.map((line) => `          ${line}`),
+		].join("\n");
+	const DISARM = "      - name: Disarm\n        run: echo disarm";
+	const TARGET_LINES = [
+		"gh workflow run ci.yml --ref bot/x",
+		"gh workflow run lint.yml --ref bot/x",
+	];
 	const opener = (steps: string, permissions = "actions: write") =>
 		[
 			"on:\n  schedule:\n    - cron: '0 6 * * *'\njobs:",
@@ -364,7 +407,7 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 			"          branch: bot/x",
 			steps,
 		].join("\n");
-	const both = `${dispatchStep("ci.yml", "bot/x")}\n${dispatchStep("lint.yml", "bot/x")}`;
+	const both = dispatchStep();
 	const run = (opening: string) =>
 		botPrFindings([
 			{ file: "ci.yml", source: CI },
@@ -376,15 +419,20 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 		expect(run(opener(both))).toEqual([]);
 	});
 
+	it("admits the implicit success() when a failsafe step follows the opener", () => {
+		// The docs-refresh shape (#5062 r3 F5): a failed disarm withholds CI.
+		expect(
+			run(opener(`${DISARM}\n${dispatchStep("bot/x", PLAIN_IF)}`)),
+		).toEqual([]);
+	});
+
 	it.each([
 		["no dispatch at all", opener("      - run: echo hi")],
-		["only one target", opener(dispatchStep("ci.yml", "bot/x"))],
 		[
-			"another branch",
-			opener(
-				`${dispatchStep("ci.yml", "bot/y")}\n${dispatchStep("lint.yml", "bot/y")}`,
-			),
+			"only one target",
+			opener(dispatchStep("bot/x", CANCEL_IF, TARGET_LINES.slice(0, 1))),
 		],
+		["another branch", opener(dispatchStep("bot/y"))],
 		["no actions: write", opener(both, "contents: write")],
 		[
 			"a swallowed failure",
@@ -447,27 +495,14 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 				),
 			),
 		],
-		[
-			"a dead if",
-			opener(
-				both.replaceAll(
-					"if: ${{ !cancelled() && (steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated') }}",
-					"if: false",
-				),
-			),
-		],
+		["a dead if", opener(both.replaceAll(`if: ${CANCEL_IF}`, "if: false"))],
 		[
 			"a widened if",
 			opener(both.replaceAll("== 'updated')", "== 'updated' || always())")),
 		],
 		[
 			"a dispatch without !cancelled()",
-			opener(
-				both.replaceAll(
-					"${{ !cancelled() && (steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated') }}",
-					"steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'",
-				),
-			),
+			opener(both.replaceAll(CANCEL_IF, FIRED)),
 		],
 		// Recurrence: #5062 r2 F2, the docs-refresh dispatch sat before the
 		// disarm failsafe and the promotion PR step; a failed `gh workflow run`
@@ -481,6 +516,66 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 			opener(both).replace(
 				"      - id: pr\n        uses: peter-evans/create-pull-request@abc\n        with:\n          branch: bot/x\n",
 				`${both}\n      - id: pr\n        uses: peter-evans/create-pull-request@abc\n        with:\n          branch: bot/x\n`,
+			),
+		],
+		// Recurrence: #5062 r3 F5. `!cancelled()` on the docs-refresh dispatch
+		// started CI after a failed auto-merge disarm, and the armed merge then
+		// carried the refresh's flips to master. A step between the opener and
+		// its dispatch may be that failsafe, so the dispatch keeps the implicit
+		// `success()`.
+		["!cancelled() after a failsafe step", opener(`${DISARM}\n${both}`)],
+		[
+			"an explicit success() after a failsafe step",
+			opener(
+				`${DISARM}\n${dispatchStep("bot/x", `\${{ success() && (${FIRED}) }}`)}`,
+			),
+		],
+		[
+			"always() after a failsafe step",
+			opener(
+				`${DISARM}\n${dispatchStep("bot/x", `\${{ always() && (${FIRED}) }}`)}`,
+			),
+		],
+		// Recurrence: #5062 r2 F2. With only dispatches after the opener, the
+		// plain form lets one failed dispatch skip the next.
+		[
+			"the plain form with only dispatch steps after the opener",
+			opener(dispatchStep("bot/x", PLAIN_IF)),
+		],
+		// Recurrence: #5062 r2 verify. Any `gh workflow run` line made a step a
+		// dispatch step, so a third workflow or a failsafe behind one passed.
+		[
+			"a trailing dispatch of a third workflow",
+			opener(
+				`${both}\n${dispatchStep("bot/x", CANCEL_IF, ["gh workflow run release.yml --ref master"])}`,
+			),
+		],
+		[
+			"a failsafe line held by a decoy dispatch step",
+			opener(
+				`${both}\n${dispatchStep("bot/x", CANCEL_IF, ["gh workflow run other.yml --ref bot/x", "gh pr merge 1 --disable-auto"])}`,
+			),
+		],
+		// Planted against the position rule: an alias (a failsafe dressed as a
+		// dispatch step), an indirect call (a failsafe behind a local action)
+		// and a value reached through another binding (another step's output).
+		[
+			"a failsafe dressed as a dispatch step before !cancelled()",
+			opener(
+				`${dispatchStep("bot/x", CANCEL_IF, [...TARGET_LINES, "gh pr merge 1 --disable-auto"])}\n${both}`,
+			),
+		],
+		[
+			"a failsafe behind a local action before !cancelled()",
+			opener(`      - uses: ./.github/actions/disarm\n${both}`),
+		],
+		[
+			"an operation read through another step's output",
+			opener(
+				dispatchStep(
+					"bot/x",
+					"${{ !cancelled() && steps.alias.outputs.op == 'created' }}",
+				),
 			),
 		],
 		[

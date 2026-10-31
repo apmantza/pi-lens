@@ -1057,12 +1057,13 @@ jobs:
       # required names, on the PR head. Skipped when the App token opened the
       # PR (#4512): CI already started, and a second run would only duplicate it.
       # Not `continue-on-error`: a PR that opened without checks reds the job.
-      # Both dispatch steps close the job and run under `!cancelled()`: a failed
-      # `gh workflow run` must not skip the auto-merge disarm above or the
-      # promotion PR, and one failed dispatch must not skip the other.
+      # Both dispatch steps close the job, so a failed `gh workflow run` never
+      # skips the auto-merge disarm above or the promotion PR. This one keeps
+      # the implicit `success()`: after a failed disarm it withholds CI, so an
+      # auto-merge armed last night cannot merge tonight's flips (#5062 r3).
       # Trust boundary: docs/ci-bot-pr-checks.md.
       - name: Start required CI on the LSP-docs refresh branch
-        if: ${{ !cancelled() && (steps.refresh_pr.outputs.pull-request-operation == 'created' || steps.refresh_pr.outputs.pull-request-operation == 'updated') && steps.app_token.outputs.token == '' }}
+        if: ${{ (steps.refresh_pr.outputs.pull-request-operation == 'created' || steps.refresh_pr.outputs.pull-request-operation == 'updated') && steps.app_token.outputs.token == '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -1072,7 +1073,9 @@ jobs:
           gh workflow run lint.yml --ref bot/lsp-docs-refresh
 
       # #5062: this PR is always opened with GITHUB_TOKEN, so it always needs
-      # the same dispatch (docs/ci-bot-pr-checks.md).
+      # the same dispatch (docs/ci-bot-pr-checks.md). Only a dispatch step runs
+      # between its opener and this step, so it runs under `!cancelled()`: a
+      # failed docs-refresh dispatch must not skip it. Nothing arms this draft.
       - name: Start required CI on the idle-eviction promotion branch
         if: ${{ !cancelled() && (steps.promote_pr.outputs.pull-request-operation == 'created' || steps.promote_pr.outputs.pull-request-operation == 'updated') }}
         env:
