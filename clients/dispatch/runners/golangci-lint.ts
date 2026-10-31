@@ -176,10 +176,14 @@ const golangciRunner: RunnerDefinition = {
 		// `output.formats` merge with the flags, so a config that prints any other
 		// format to stdout puts that text beside the JSON; every other format is
 		// pointed at nowhere (`--output.<format>.path=`), probed against 2.14.0.
+		// `--fix=false` (#5119): a project config with `issues.fix: true` makes
+		// `run` rewrite the file; the flag outranks the config file. Documented
+		// bool flag in v1 and v2, not probed here (no Go toolchain on the lane).
 		const result = await safeSpawnAsync(
 			cmd,
 			[
 				"run",
+				"--fix=false",
 				"--output.json.path=stdout",
 				...OTHER_OUTPUT_FORMATS.map((format) => `--output.${format}.path=`),
 				"--show-stats=false",
