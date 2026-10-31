@@ -140,6 +140,11 @@ export class RuffClient {
 				this.ruffCommand,
 				[
 					"check",
+					// `--no-fix --no-fix-only` (#5119): the count below must see the
+					// findings; a project `fix = true` / `fix-only = true` made this
+					// pass fix them first.
+					"--no-fix",
+					"--no-fix-only",
 					"--output-format",
 					"json",
 					// No target-version override here (#4638): one made the pre-check
