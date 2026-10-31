@@ -57,7 +57,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { pinNoCli2OnPath } from "../../../support/no-cli2-on-path.js";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { pathsEqual } from "../../../../clients/path-utils.js";
 import { setupTestEnvironment } from "../../test-utils.js";
@@ -69,8 +68,6 @@ const { safeSpawnAsync, unavailableCommands, CARGO_PATH } = vi.hoisted(() => ({
 	/** rust-clippy resolves cargo through its own client, not the shared probe. */
 	CARGO_PATH: "/usr/bin/cargo",
 }));
-
-pinNoCli2OnPath();
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<

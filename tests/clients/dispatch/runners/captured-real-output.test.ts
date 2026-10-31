@@ -38,7 +38,6 @@ import {
 	it,
 	vi,
 } from "vitest";
-import { pinNoCli2OnPath } from "../../../support/no-cli2-on-path.js";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import {
 	listCapturedOutputs,
@@ -62,8 +61,6 @@ const { safeSpawnAsync, getLinterPolicyForCwd } = vi.hoisted(() => ({
 
 // Partial mocks throughout: these modules keep growing exports, and a full
 // replacement turns every new one into an unrelated crash in this suite.
-pinNoCli2OnPath();
-
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	safeSpawnAsync,

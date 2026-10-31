@@ -31,7 +31,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { pinNoCli2OnPath } from "../../../support/no-cli2-on-path.js";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { _resetWarmAttachForTests } from "../../../../clients/warm-attach.js";
 import {
@@ -49,8 +48,6 @@ const { safeSpawnAsync, lspTouch, logLatency } = vi.hoisted(() => ({
 
 // The latency.log runner row is what scripts/analyze-pi-lens-logs.mjs reads
 // `metadata.failureKind` from.
-pinNoCli2OnPath();
-
 vi.mock("../../../../clients/latency-logger.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../../../clients/latency-logger.js")

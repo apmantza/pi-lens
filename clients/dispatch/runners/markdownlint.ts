@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
-import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
@@ -164,15 +163,15 @@ const markdownlintRunner: RunnerDefinition = {
 		const args = [...configArgs, ctx.filePath];
 		// #5119: cli2's own `fix` option cannot be turned off from the CLI, and a
 		// project `"fix": true` rewrote the file on a diagnostics pass. Lint
-		// through its exported `main` with `optionsOverride: { fix: false }`;
-		// spawn only when the module cannot be loaded (never with --fix).
-		const result =
-			(await runMarkdownlintApi({
-				command: cmd,
-				cwd,
-				args,
-				timeoutMs: 15000,
-			})) ?? (await safeSpawnAsync(cmd, args, { timeout: 15000, cwd }));
+		// through its exported `main` with `optionsOverride: { fix: false }` in a
+		// package-owned child, under the same spawn budget and kill; the bare
+		// command is spawned (never with --fix) only when no package is found.
+		const result = await runMarkdownlintApi({
+			command: cmd,
+			cwd,
+			args,
+			timeoutMs: 15000,
+		});
 
 		// #1995: a timeout is negative runtime evidence. Arm the cooldown so
 		// the autofix and availability lanes cannot hand this command a second

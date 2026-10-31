@@ -1,16 +1,20 @@
 /**
  * #5119. The markdownlint runner lints through markdownlint-cli2's exported
- * `main` with `optionsOverride: { fix: false }`. The real module is driven in
+ * `main` with `optionsOverride: { fix: false }`, run in a package-owned wrapper
+ * child through the spawn seam (killed at the budget, fresh module cache, a
+ * crash costs the child). The real module is driven in
  * markdownlint-no-fix-real.test.ts; this file drives the branches the real
- * module cannot be made to take on demand (a throw, a hang, a module that is
- * missing or will not load) with a stand-in package written to disk in the
- * layouts npm and the platforms produce. The stand-in records the parameters
- * it received, so the contract with the real `main` is asserted at the call.
+ * module cannot be made to take on demand (a throw, a hang, a spin, a late
+ * throw, an edited config) with a stand-in package written to disk in the
+ * layouts npm and the platforms produce. The stand-in appends the parameters it
+ * received to `cli2-calls.jsonl` in its directory, so the contract with the
+ * real `main` is asserted at the call.
  *
  * Recurrences each case guards are named on the case.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -28,11 +32,41 @@ import { removeTempDirSync } from "./test-utils.js";
 
 /** Behaviour keyed by the last argv entry, so one package serves every case. */
 const STAND_IN_MAIN = `
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 export async function main(params) {
-	(globalThis.__cli2Calls ??= []).push(params);
+	fs.appendFileSync(
+		path.join(params.directory, "cli2-calls.jsonl"),
+		JSON.stringify({
+			directory: params.directory,
+			argv: params.argv,
+			optionsOverride: params.optionsOverride,
+		}) + "\\n",
+	);
 	const file = params.argv.at(-1);
 	if (file.endsWith("throws.md")) throw new Error("boom: unreadable config");
-	if (file.endsWith("hangs.md")) return new Promise(() => {});
+	if (file.endsWith("hangs.md")) {
+		// A live handle, as a rule awaiting a socket or a timer would hold.
+		setInterval(() => {}, 1000);
+		return new Promise(() => {});
+	}
+	if (file.endsWith("spins.md")) {
+		const end = Date.now() + 3000;
+		while (Date.now() < end) {}
+	}
+	if (file.endsWith("late-throw.md")) {
+		setTimeout(() => {
+			throw new Error("late: rule threw after main returned its promise");
+		}, 30);
+		await new Promise((resolve) => setTimeout(resolve, 400));
+	}
+	if (file.endsWith("config.md")) {
+		// What cli2 does with a .cjs/.mjs config: import(fileUrl).
+		const config = await import(pathToFileURL(path.join(params.directory, "config.mjs")).href);
+		params.logError(file + ":3 error " + config.default + " from the config");
+		return 1;
+	}
 	params.logMessage("markdownlint-cli2 v0 (stand-in)");
 	params.logError(file + ":3 error MD009/no-trailing-spaces Trailing spaces");
 	return 1;
@@ -46,7 +80,16 @@ interface Cli2Call {
 }
 
 function recordedCalls(): Cli2Call[] {
-	return (globalThis as { __cli2Calls?: Cli2Call[] }).__cli2Calls ?? [];
+	try {
+		return fs
+			.readFileSync(path.join(root, "cli2-calls.jsonl"), "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as Cli2Call);
+	} catch {
+		// none: no call recorded yet reads as an empty list the assertion fails on
+		return [];
+	}
 }
 
 let root: string;
@@ -74,7 +117,6 @@ function writeShim(file: string): string {
 
 beforeEach(() => {
 	root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5119-api-"));
-	(globalThis as { __cli2Calls?: Cli2Call[] }).__cli2Calls = [];
 	resetDegradationLedger();
 	// The runner resolves the project's own node_modules/.bin only once pi
 	// trusts the project (#4268).
@@ -167,7 +209,7 @@ describe("locateCli2Entry finds the package the resolved command belongs to", ()
 	});
 });
 
-describe("runMarkdownlintApi runs cli2's main with fix off", () => {
+describe("runMarkdownlintApi runs cli2's main with fix off, in a child", () => {
 	function project(main = STAND_IN_MAIN): { shim: string; cwd: string } {
 		writePackage(path.join(root, "node_modules", "markdownlint-cli2"), main);
 		return {
@@ -187,7 +229,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 			command: shim,
 			cwd,
 			args: ["--config", "core.json", "doc.md"],
-			timeoutMs: 5000,
+			timeoutMs: 15000,
 		});
 
 		expect(recordedCalls()).toHaveLength(1);
@@ -198,8 +240,8 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 		});
 	});
 
-	// Recurrence: output written with console.log would reach the host's own
-	// stdout; the loggers are the API's capture channel.
+	// Recurrence: output the host never captured; the loggers are the API's
+	// channel and the wrapper maps them onto the child's stdout and stderr.
 	it("returns logMessage as stdout, logError as stderr and the exit code as status", async () => {
 		const { shim, cwd } = project();
 
@@ -207,7 +249,7 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 			command: shim,
 			cwd,
 			args: ["doc.md"],
-			timeoutMs: 5000,
+			timeoutMs: 15000,
 		});
 
 		expect(result).toMatchObject({
@@ -217,8 +259,8 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 		});
 	});
 
-	// Recurrence: cli2's bin catches a rejected config and exits 2; the same
-	// throw in-process must not escape into the host's dispatch.
+	// Recurrence: cli2's bin catches a rejected config and exits 2; a throw in
+	// the wrapper child must read as the same exit 2, never as exit 1 (findings).
 	it("turns a thrown main into exit 2 with the message on stderr", async () => {
 		const { shim, cwd } = project();
 
@@ -226,15 +268,45 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 			command: shim,
 			cwd,
 			args: ["throws.md"],
-			timeoutMs: 5000,
+			timeoutMs: 15000,
 		});
 
-		expect(result?.status).toBe(2);
-		expect(result?.stderr).toContain("boom: unreadable config");
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("boom: unreadable config");
 	});
 
-	// Recurrence: the spawn path killed a 15 s run; a run that never settles
-	// must still hand the runner a timeout, not park dispatch forever.
+	// Recurrence: a module that will not load must read as a rejected invocation
+	// (exit 2 with the cause), not as a clean file and not as findings.
+	it("turns a module that will not load into exit 2 with the cause on stderr", async () => {
+		const { shim, cwd } = project('throw new Error("cannot load");\n');
+
+		const result = await runMarkdownlintApi({
+			command: shim,
+			cwd,
+			args: ["doc.md"],
+			timeoutMs: 15000,
+		});
+
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("cannot load");
+	});
+
+	it("turns a module that exports no main into exit 2", async () => {
+		const { shim, cwd } = project("export const other = 1;\n");
+
+		const result = await runMarkdownlintApi({
+			command: shim,
+			cwd,
+			args: ["doc.md"],
+			timeoutMs: 15000,
+		});
+
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("exports no main");
+	});
+
+	// Recurrence: the pre-child design left a run that never settles running
+	// inside the host; the child is killed at the budget.
 	it("reports a run that never settles as a timeout", async () => {
 		const { shim, cwd } = project();
 
@@ -242,72 +314,120 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 			command: shim,
 			cwd,
 			args: ["hangs.md"],
-			timeoutMs: 50,
+			timeoutMs: 1000,
 		});
 
 		expect(result).toMatchObject({ status: null, failure: "timeout" });
 	});
 
-	// Recurrence: silently linting by spawn hid the one path where a project
-	// fix setting can still write. Each unusable module is a row, once.
-	it("returns null and records one markdownlint-api-unavailable row when the module will not load", async () => {
-		const { shim, cwd } = project('throw new Error("cannot load");\n');
-
-		for (let i = 0; i < 2; i += 1) {
-			expect(
-				await runMarkdownlintApi({
-					command: shim,
-					cwd,
-					args: ["doc.md"],
-					timeoutMs: 5000,
-				}),
-			).toBeNull();
-		}
-
-		const rows = getDegradationSummary().filter(
-			(group) => group.kind === "markdownlint-api-unavailable",
-		);
-		expect(rows).toHaveLength(1);
-		expect(rows[0]?.count).toBe(1);
-		expect(rows[0]?.latestReasons[0]?.subject).toBe(shim);
-		expect(rows[0]?.latestReasons[0]?.reason).toContain("cannot load");
-	});
-
-	it("returns null and records the row when the module exports no main", async () => {
-		const { shim, cwd } = project("export const other = 1;\n");
-
-		expect(
-			await runMarkdownlintApi({
+	// Recurrence (review r1 F1): a rule that spins, or a 240 KB table, ran on the
+	// host's event loop (measured 20 s and >60 s blocked) where the old child was
+	// killed at 15 s. The event-loop delay histogram is the host loop; the spin is 3 s.
+	it("does not block the host loop and times a spinning rule out", async () => {
+		const { shim, cwd } = project();
+		const delay = monitorEventLoopDelay({ resolution: 10 });
+		delay.enable();
+		let result: Awaited<ReturnType<typeof runMarkdownlintApi>>;
+		try {
+			result = await runMarkdownlintApi({
 				command: shim,
 				cwd,
-				args: ["doc.md"],
-				timeoutMs: 5000,
-			}),
-		).toBeNull();
-		expect(
-			getDegradationSummary().some(
-				(group) => group.kind === "markdownlint-api-unavailable",
-			),
-		).toBe(true);
+				args: ["spins.md"],
+				timeoutMs: 700,
+			});
+		} finally {
+			delay.disable();
+		}
+
+		expect(result).toMatchObject({ status: null, failure: "timeout" });
+		// Nanoseconds; a 3 s spin in the host reads ~3e9.
+		expect(delay.max).toBeLessThan(5e8);
 	});
 
-	it("returns null and records the row when no package sits beside the command", async () => {
-		const shim = writeShim(path.join(root, "bin", "markdownlint-cli2"));
-
-		expect(
-			await runMarkdownlintApi({
+	// Recurrence (review r1 F2): cli2 loads .cjs/.mjs configs and custom rules by
+	// `import(fileUrl)`, which the host process caches until restart; an agent
+	// that edited the config to silence a rule kept getting the rule's findings.
+	it("follows an edit of an imported config between two lints", async () => {
+		const { shim, cwd } = project();
+		const run = () =>
+			runMarkdownlintApi({
 				command: shim,
-				cwd: root,
-				args: ["doc.md"],
-				timeoutMs: 5000,
-			}),
-		).toBeNull();
-		expect(
-			getDegradationSummary().some(
-				(group) => group.kind === "markdownlint-api-unavailable",
-			),
-		).toBe(true);
+				cwd,
+				args: ["config.md"],
+				timeoutMs: 15000,
+			});
+
+		fs.writeFileSync(
+			path.join(root, "config.mjs"),
+			'export default "CONFIG-V1";\n',
+		);
+		const first = await run();
+		fs.writeFileSync(
+			path.join(root, "config.mjs"),
+			'export default "CONFIG-V2";\n',
+		);
+		const second = await run();
+
+		expect(first.stderr).toContain("CONFIG-V1");
+		expect(second.stderr).toContain("CONFIG-V2");
 	});
+
+	// Recurrence (review r1 F3): a rule that throws after `main` returned its
+	// promise is an uncaught exception, and pi's interactive mode exits on one.
+	// The child dies instead and the run reads as exit 2.
+	it("keeps a late throw out of the host", async () => {
+		const { shim, cwd } = project();
+		const uncaught: unknown[] = [];
+		const onUncaught = (error: unknown) => uncaught.push(error);
+		process.on("uncaughtException", onUncaught);
+		let result: Awaited<ReturnType<typeof runMarkdownlintApi>>;
+		try {
+			result = await runMarkdownlintApi({
+				command: shim,
+				cwd,
+				args: ["late-throw.md"],
+				timeoutMs: 15000,
+			});
+		} finally {
+			process.off("uncaughtException", onUncaught);
+		}
+
+		expect(uncaught).toEqual([]);
+		expect(result.status).toBe(2);
+		expect(result.stderr).toContain("late: rule threw");
+	});
+
+	// Recurrence: silently linting by an unresolved spawn hid the one path where
+	// a project fix setting can still write. No package beside the command is
+	// one row, once, and the command runs with its own argv (never --fix).
+	it.skipIf(process.platform === "win32")(
+		"spawns the command as it was and records one markdownlint-api-unavailable row when no package sits beside it",
+		async () => {
+			const shim = path.join(root, "bin", "markdownlint-cli2");
+			fs.mkdirSync(path.dirname(shim), { recursive: true });
+			fs.writeFileSync(shim, '#!/bin/sh\necho "argv:$*"\nexit 0\n', {
+				mode: 0o755,
+			});
+
+			for (let i = 0; i < 2; i += 1) {
+				const result = await runMarkdownlintApi({
+					command: shim,
+					cwd: root,
+					args: ["--config", "core.json", "doc.md"],
+					timeoutMs: 15000,
+				});
+				expect(result.stdout).toBe("argv:--config core.json doc.md\n");
+				expect(result.stdout).not.toContain("--fix");
+			}
+
+			const rows = getDegradationSummary().filter(
+				(group) => group.kind === "markdownlint-api-unavailable",
+			);
+			expect(rows).toHaveLength(1);
+			expect(rows[0]?.count).toBe(1);
+			expect(rows[0]?.latestReasons[0]?.subject).toBe(shim);
+		},
+	);
 });
 
 describe.skipIf(process.platform === "win32")(

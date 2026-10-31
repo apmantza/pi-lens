@@ -179,6 +179,34 @@ describe.skipIf(!hasCli2)(
 			expect(api?.status).toBe(cli.status);
 		});
 
+		// Recurrence (review r1 F2): cli2 loads a .cjs config by `import(fileUrl)`,
+		// which a process caches until restart; the second lint kept the first
+		// run's rules after the config was edited to turn one off.
+		it("follows an edit of a .markdownlint-cli2.cjs between two lints", async () => {
+			const config = path.join(cwd, ".markdownlint-cli2.cjs");
+			fs.rmSync(path.join(cwd, ".markdownlint-cli2.jsonc"));
+			const lint = async () =>
+				(
+					await markdownlintRunner.run(
+						makeRunnerCtx(filePath, cwd, { kind: "markdown" }) as never,
+					)
+				).diagnostics.map((d) => d.rule);
+
+			fs.writeFileSync(
+				config,
+				"module.exports = { config: { MD009: true } };\n",
+			);
+			const before = await lint();
+			fs.writeFileSync(
+				config,
+				"module.exports = { config: { MD009: false } };\n",
+			);
+			const after = await lint();
+
+			expect(before).toContain("MD009");
+			expect(after).not.toContain("MD009");
+		});
+
 		// Recurrence: the package-owned fallback config (`--config core.json`,
 		// MD013 off) must still reach `main` when the project has no config.
 		it("applies the package-owned fallback config when the project has none", async () => {
