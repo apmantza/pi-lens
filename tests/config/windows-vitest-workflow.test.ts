@@ -157,86 +157,58 @@ describe("Windows Vitest workflow contract (#2536)", () => {
 		expect(raw).not.toContain("Windows Vitest failures: ${failures:-0}");
 	});
 
-	// #4591: the one governance file declined on this lane. The census reds ~1 run
-	// in 10 there on a root its own file's teardown had already removed, and the
-	// lane gates now, so that verdict is postponed until the producer is named.
-	// Read with comments blanked (#4592 review, Greptile P2 "Quarantine test
-	// misses actual skip"): a commented-out copy of the declaration cannot satisfy
-	// this, and the arm covers the suite's own registration rather than only the
-	// constant, so moving the gate off `win32` or dropping `skipIf` reds here.
-	// A source read, not a tests/-tree sweep: this pins the ONE condition (a
-	// platform test, never a constant, so it cannot be widened to every lane
-	// silently) and the issue that retires it. A second quarantined file is a
-	// reviewed change, not a population this case can enumerate.
-	it("keeps the tmp-fixture census quarantine on win32, named to its issue (#4591)", () => {
+	// #4591: the tmp-fixture census asserts on the Windows lane. It was declined
+	// there (a `win32` guard around its assertions) while the producer of a
+	// root that reappeared after its file's sweep was unnamed; the quarantine is
+	// gone so a Windows soak measures the census, and its failure message now
+	// carries the diagnosis that names the producer. Recurrence this prevents: a
+	// platform guard returning around the census assertions (the lane then runs
+	// the file and measures nothing, shapes 10 and 31). Read with comments AND
+	// strings blanked: a commented-out or quoted copy of an assertion cannot
+	// satisfy a needle, and the assertions are judged where they execute.
+	it("keeps the tmp-fixture census asserting on win32, with no platform guard (#4591)", () => {
 		const raw = readFileSync(
 			resolve(ROOT, "tests/config/tmp-fixture-hygiene.test.ts"),
 			"utf8",
 		);
-		// Two reads of one source, for two different questions (#4592 review V1):
-		// `code` keeps string contents because two needles below quote a literal
-		// (`process.platform === "win32"`, `describe("tmp-fixture-hygiene"`), and
-		// `stringsBlanked` is where liveness is judged -- reading the deferred slice
-		// from `code` let a quoted copy of the three assertions satisfy every needle
-		// (measured: the guard body replaced by one template literal holding their
-		// text passed 7/7, shape 69).
-		const code = stripSource(raw, { strings: "keep" });
-		const stringsBlanked = stripSource(raw);
-		expect(code).toContain(
-			'const WINDOWS_QUARANTINE = process.platform === "win32";',
+		const code = stripSource(raw);
+		// The file is not skipped, and no platform test appears in it at all: a
+		// guard spelled any other way (`isWindows`, `os.platform()`) still has to
+		// name the platform to decide, so the needles are the platform reads.
+		expect(code).not.toContain("WINDOWS_QUARANTINE");
+		expect(code).not.toMatch(/process\s*\.\s*platform/);
+		expect(code).not.toMatch(/\bplatform\s*\(\s*\)/);
+		expect(code).not.toMatch(
+			/\b(?:describe|it)\s*\.\s*(?:skipIf|skip|runIf)\b/,
 		);
-		// #4592 review, Greptile P2 "Windows cleanup stops running": the file is
-		// NOT skipped, only its verdict is. A suite-level skip was measured to run
-		// no hook at all (Vitest reports `Test Files 1 skipped (1)`), which took
-		// the run's only `cleanupTmpHygiene` call with it, so a re-added suite
-		// skip reds here.
-		expect(code).toContain('describe("tmp-fixture-hygiene"');
-		expect(code).not.toContain("describe.skipIf(WINDOWS_QUARANTINE)");
-		expect(code).toContain("if (!WINDOWS_QUARANTINE) {");
-		// The four census assertions sit inside the guard, and the sweep sits in
-		// the `finally` that follows it, so the sweep reaps on win32 too.
-		const guard = code.indexOf("if (!WINDOWS_QUARANTINE) {");
-		const finallyIndex = code.indexOf("} finally {", guard);
+		// The assertions sit in the afterAll's `try`, directly, with no condition
+		// between the `try` and the first one (an `if` there is a guard) and the
+		// sweep in the `finally` that follows.
+		const tried = code.indexOf("try {", code.indexOf("afterAll("));
+		const finallyIndex = code.indexOf("} finally {", tried);
 		const swept = code.indexOf(
 			"const reaped = cleanupTmpHygiene(otherInvocation);",
 		);
-		expect(swept).toBeGreaterThan(guard);
-		expect(code.slice(guard, swept)).toContain("} finally {");
-		// #4592 review F1: the assertions must be LIVE inside the guard.
-		// Without this arm the block could be emptied and the quarantine would read
-		// as "declined on every lane" with no red (shape 33: the pin covered the
-		// bracket, not the property; measured -- the emptied guard passed 59/59).
-		// Each assertion's subject is named, and the count is pinned, so a further
-		// one is a reviewed change rather than a silent widening. #4864 added the
-		// fourth: the repository-root creation ledger the interposer records, which
-		// is deferred on win32 with its three siblings.
-		const deferred = stringsBlanked.slice(guard, finallyIndex);
-		expect(deferred).toContain("attributable,");
-		expect(deferred).toContain("tmpRootWriteLeaks,");
-		expect(deferred).toContain("rootCensus.leaked,");
-		expect(deferred).toContain("repoRootCreateLeaks,");
-		expect(deferred.match(/\.toEqual\(\[\]\)/g) ?? []).toHaveLength(4);
-		// #4592 review F4: a declined verdict leaves its own record. The census
-		// line carries which verdict ran, derived from this same guard, so the
-		// win32 lane prints `verdict=declined` instead of a counting line
-		// identical to an asserting lane's (shapes 10 and 31).
-		expect(code).toMatch(
-			/const censusVerdict: TmpHygieneCensusVerdict = WINDOWS_QUARANTINE\s*\?\s*"declined"\s*:\s*"asserted";/,
+		expect(tried).toBeGreaterThan(-1);
+		expect(swept).toBeGreaterThan(finallyIndex);
+		const asserted = code.slice(tried, finallyIndex);
+		expect(asserted).not.toMatch(/\bif\s*\(/);
+		// Each assertion's subject is named and the count is pinned, so emptying
+		// the block or adding a further one is a reviewed change (shape 33).
+		expect(asserted).toContain("attributable,");
+		expect(asserted).toContain("tmpRootWriteLeaks,");
+		expect(asserted).toContain("rootCensus.leaked,");
+		expect(asserted).toContain("repoRootCreateLeaks,");
+		expect(asserted.match(/\.toEqual\(\[\]\)/g) ?? []).toHaveLength(4);
+		// The census line states the verdict the run reached, and it is asserted.
+		expect(stripSource(raw, { strings: "keep" })).toContain(
+			'const censusVerdict: TmpHygieneCensusVerdict = "asserted";',
 		);
-		// Why this is a source read and not a runtime probe (shape 33): the
-		// property is "on a lane that is not win32 the census asserts", and one
-		// process cannot observe both arms -- `process.platform` is read once at
-		// module load, the gating lane is win32, and this pin runs where the guard
-		// is armed. The runtime behaviour of the asserting arm is already the
-		// suite plus the census cases below; only its SHAPE is unreachable here.
 		// The teardown belongs to the suite's hook list, not the root list the
 		// shared setup registers on: a red census must not abort the setup's own
-		// teardown (Greptile's second P2 on this round).
+		// teardown (Greptile's P2 on #4592).
 		expect(code.indexOf("afterAll(")).toBeGreaterThan(
-			code.indexOf('describe("tmp-fixture-hygiene"'),
-		);
-		expect(raw).toMatch(
-			/#4591:\s*the census VERDICT is declined on the Windows lane/,
+			code.indexOf("describe("),
 		);
 	});
 

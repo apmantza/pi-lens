@@ -23,6 +23,7 @@ import {
 	createTmpRootRegistry,
 	formatTmpRootCreators,
 	formatTmpRootSweep,
+	formatTmpRootSweepRecords,
 	getTmpRootRegistry,
 	installTmpRootInterposer,
 	recordedRepoRootDirs,
@@ -170,6 +171,54 @@ describe("tmp-root registry decisions (#2912)", () => {
 			"[tmp-hygiene-sweep] tests/a.test.ts via=SIGTERM registered=1 stragglers=1 failed=1 dropped=0\n",
 		);
 	});
+	// #4591: the census must tell "the registry held the root at sweep time and a
+	// deferred writer recreated it" from "the interposer never recorded it". The
+	// per-root record is that evidence; the cells are the four outcomes a sweep
+	// can find, decided from the registry and the sweep alone.
+	it("records what a sweep found at every registered root, one line per root (#4591)", () => {
+		const registry = createTmpRootRegistry();
+		registerTmpRoot(registry, "/tmp/pi-lens-removed", "registered");
+		registerTmpRoot(registry, "/tmp/pi-lens-failed", "registered");
+		registerTmpRoot(registry, "/tmp/pi-lens-gone", "registered");
+		registerTmpRoot(registry, "/tmp/pi-lens-held", "observed");
+		registerTmpRoot(registry, "/tmp/pi-lens-straggler", "observed");
+		const io = memoryIo([
+			"/tmp/pi-lens-removed",
+			"/tmp/pi-lens-failed",
+			"/tmp/pi-lens-held",
+		]);
+		// The straggler was seen absent after its file removed it, then recreated.
+		registry.roots.get("/tmp/pi-lens-straggler")!.sawAbsent = true;
+		io.present.add("/tmp/pi-lens-straggler");
+		const sweep = sweepTmpRoots(registry, {
+			exists: io.exists,
+			remove: (dir) => {
+				if (dir !== "/tmp/pi-lens-failed") io.remove(dir);
+			},
+		});
+		expect(
+			formatTmpRootSweepRecords(registry, sweep, "afterAll", 1234.4),
+		).toEqual([
+			"sweep:afterAll:pi-lens-removed\tregistered,removed,1234",
+			"sweep:afterAll:pi-lens-failed\tregistered,failed,1234",
+			"sweep:afterAll:pi-lens-gone\tregistered,absent,1234",
+			"sweep:afterAll:pi-lens-held\tobserved,held,1234",
+			"sweep:afterAll:pi-lens-straggler\tobserved,removed,1234",
+		]);
+		// A second hook is its own key, so both sweeps stay on record.
+		expect(formatTmpRootSweepRecords(registry, sweep, "SIGTERM", 5)[0]).toBe(
+			"sweep:SIGTERM:pi-lens-removed\tregistered,removed,5",
+		);
+		expect(
+			formatTmpRootSweepRecords(
+				createTmpRootRegistry(),
+				{ removed: [], failed: [] },
+				"afterAll",
+				1,
+			),
+		).toEqual([]);
+	});
+
 	// #4864: the ledger is keyed by NAME, not path -- two workers that build the
 	// same fixture name are the collision it records -- and the first creator
 	// wins, exactly like the tmp-root entries.
