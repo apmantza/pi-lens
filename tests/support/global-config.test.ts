@@ -109,8 +109,8 @@ const COLLECTED_VALUE = "/pi-lens-global-config-test/collected.json";
  * The check runs in each case itself, so no case reads state a sibling case
  * wrote: the verdict is the same under any shuffle order. The earlier witness
  * read a value that only a sibling case's afterEach filled; shuffle seed 202
- * ran it first and read "never observed" (`Targeted tests (advisory)`,
- * #4937 round 3).
+ * ran it first and read "never observed" (the `Changed tests shuffled
+ * (advisory)` job, then named `Targeted tests (advisory)`, #4937 round 3).
  */
 function expectRestoreTo(expected: string | undefined): void {
 	afterEach(() => {

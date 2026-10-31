@@ -1616,7 +1616,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"complexity (advisory)",
 		// #2697 item 9: the strictness census lane (two scratch tsconfigs) is advisory.
 		"strictness (advisory)",
-		"Targeted tests (advisory)",
+		"Changed tests shuffled (advisory)",
 		// #4363: the head-against-base latency lane. It is not a required check
 		// and keeps a truthful run conclusion, so only the suffix marks it advisory.
 		"Hot-path latency (advisory)",
@@ -1744,7 +1744,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 				"typos (advisory)",
 				"taplo (advisory)",
 				"complexity (advisory)",
-				"Targeted tests (advisory)",
+				"Changed tests shuffled (advisory)",
 			]),
 		);
 	});

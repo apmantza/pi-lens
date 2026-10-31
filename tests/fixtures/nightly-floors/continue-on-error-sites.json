@@ -11,9 +11,9 @@
 			"status": "no-floor",
 			"reason": "The reporter runs scripts/validate-rule-catalog.mjs over rules/rule-catalog.json and the rule trees, both checked in, and exits non-zero on drift. tests/scripts/rule-language-case.test.ts spawns the same script on fixture repos and asserts its findings in the gating Unit lane, so a validator that stopped reporting cannot pass unnoticed."
 		},
-		".github/workflows/ci.yml#targeted-tests-advisory": {
+		".github/workflows/ci.yml#changed-tests-shuffled": {
 			"status": "no-floor",
-			"reason": "A pull request that touches no test-covered source legitimately matches zero test files, so a count floor would red a docs-only PR. scripts/pre-push-targeted-tests.mjs logs every file it matched nothing for ('[pre-push] no tests matched <file>'), the job is advisory by its name suffix, and a job-level continue-on-error still lets its check row read failure."
+			"reason": "A pull request that adds or changes no test file legitimately shuffles zero files, so a count floor would red a docs-only PR. scripts/ci-shuffle-changed-tests.mjs prints 'no test file added or changed' for that case, exits 3 (unproven) when a vitest start answers 'No test files found' or never finishes, the job is advisory by its name suffix, and a job-level continue-on-error still lets its check row read failure."
 		},
 		".github/workflows/compat-smoke.yml#compat-smoke#Layer A — pinned-contract verification (no pi, no LLM)": {
 			"status": "no-floor",

@@ -415,12 +415,29 @@ jobs:
       - name: ast-grep rule pair audit
         run: npm run audit:astgrep-rule-pairs
 
-  targeted-tests-advisory:
-    name: Targeted tests (advisory)
+  # #4397: a test file that depends on case order or on a sibling file passes
+  # in CI's file order and reds on a reorder or a shard split (#4390, #4391).
+  # Run the test files this PR adds or changes under two fixed shuffle seeds,
+  # and each alone. Nothing else reorders a PR's own tests before merge. This
+  # job is what remained of `Targeted tests (advisory)` (#3215): its selection
+  # step caught the failing file on 26.7% of real Unit reds (50 of 187 heads,
+  # measured 2026-10-31) and was removed; the CI-only suites it admitted run in
+  # the gating `Unit tests` shards too. Advisory: `continue-on-error` keeps a
+  # red from gating, and the step still reds so the job row shows it. Flip
+  # plan: when 20 consecutive PR runs show no false red, drop the
+  # `continue-on-error` below, drop `(advisory)` from the name, and add
+  # `Changed tests shuffled` to the required set. The script bounds itself to
+  # 7 min (BUDGET_MS), 1 min under the step's cap; setup measured 23-43 s over
+  # 23 PR runs (2026-10-31), so the 10 min job cap holds the 8 min step plus
+  # setup with margin. Files the PR adds run alone first; the time budget is
+  # the only bound (#4456). The SHAs reach the script through `env`, never the
+  # `run:` text.
+  changed-tests-shuffled:
+    name: Changed tests shuffled (advisory)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 15
+    timeout-minutes: 10
     permissions:
       contents: read
 
@@ -436,7 +453,7 @@ jobs:
 
       # Lockfile-locked and script-free (SonarCloud githubactions:S8543 /
       # S6505 flagged the copied `npm install` here); the one piece of
-      # `prepare` the targeted vitest files need is the grammar download, run
+      # `prepare` the changed vitest files need is the grammar download, run
       # explicitly below. The Unit job keeps `npm install` because its
       # lockfile-in-sync check depends on it.
       - name: Install dependencies
@@ -449,36 +466,15 @@ jobs:
         run: npm run build
 
       # #4003: `--ignore-scripts` above skips `prepare`, so nothing here builds
-      # dist/; the LSP fixture files in the targeted set import it and fail with
-      # a named "run npm run build:dist first" precondition without it.
+      # dist/; a changed LSP fixture file imports it and fails with a named
+      # "run npm run build:dist first" precondition without it.
       - name: Build dist
         run: npm run build:dist
 
-      - name: Run targeted tests
-        # --include-ci-only admits the real-spawn suites that exceed the local
-        # pre-push budget (#3426 H3432-1); this job is their CI row.
-        env:
-          # The interleaving kit's waitFor budget scales by this (#4437); the
-          # shuffle step below sets it, this step did not.
-          PI_LENS_TEST_TIMEOUT_SCALE: '3'
-        run: node scripts/pre-push-targeted-tests.mjs --skip-build --include-ci-only
-
-      # #4397: a test file that depends on case order or on a sibling file
-      # passes in CI's file order and reds on a reorder or a shard split
-      # (#4390, #4391). Run the test files this PR adds or changes under two
-      # fixed shuffle seeds, and each alone. Advisory like the rest of this job:
-      # `continue-on-error` above keeps a red from gating, and the step still
-      # reds so the job row shows it. Flip plan: when 20 consecutive PR runs
-      # show no false red, move this step to its own job named
-      # `Changed tests shuffled` and add it to the required set. The script
-      # bounds itself to 7 min (BUDGET_MS), 1 min under this step's cap; the
-      # steps before it take ~5.5 min, so the job stays under its 15. Files the
-      # PR adds run alone first; the time budget is the only bound (#4456).
-      # The SHAs reach the script through `env`, never the `run:` text.
       - name: Changed test files, alone and shuffled
-        if: ${{ !cancelled() }}
         timeout-minutes: 8
         env:
+          # The interleaving kit's waitFor budget scales by this (#4437).
           PI_LENS_TEST_TIMEOUT_SCALE: '3'
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
