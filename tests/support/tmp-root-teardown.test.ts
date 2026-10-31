@@ -26,6 +26,7 @@ import {
 	formatTmpHygieneLeakEntry,
 	tmpHygieneCreators,
 	tmpHygieneCreatorsPath,
+	tmpHygieneSweepRecords,
 	tmpHygieneUnadmittedEntries,
 } from "./vitest-setup.js";
 
@@ -236,6 +237,42 @@ describe("shared setup tmp-root sweep, through the real hooks (#2912)", () => {
 			.filter((line) => line.length > 0);
 		expect(lines.length).toBeGreaterThan(0);
 		expect(new Set(lines).size, lines.join("|")).toBe(lines.length);
+	});
+
+	it("persists what each sweep found at every registered root, so the census can name the producer (#4591)", () => {
+		// The census runs in another worker after the file's fork is gone, so the
+		// registry's view at sweep time only crosses through the run's record. The
+		// Windows lane reds about one run in ten on a root that reappeared after
+		// its file's sweep; the record separates a registered root a deferred writer
+		// recreated from a root the sweep never owned.
+		const records = tmpHygieneSweepRecords(
+			tmpHygieneCreators(
+				path.join(REPO, ".probe-home", `tmp-hygiene-creators-${RUN_ID}.log`),
+			),
+		);
+		// The afterAll sweep is the one every platform runs; the SIGTERM sweep is
+		// not deliverable on win32, so it is not asserted here.
+		const recordFor = (prefix: string) =>
+			[...records].find(([name]) => name.startsWith(prefix))?.[1];
+		const afterAllFor = (prefix: string) =>
+			recordFor(prefix)?.find((record) => record.via === "afterAll");
+		// A registered root the test timed out holding: the sweep removed it.
+		expect(afterAllFor("pi-lens-2912-timeout-")).toEqual(
+			expect.objectContaining({ kind: "registered", outcome: "removed" }),
+		);
+		// A raw root the file never removed: the registry held it and the sweep
+		// left it for the owner, which is "held", not "removed".
+		expect(afterAllFor("pi-lens-2912-genuine-raw-")).toEqual(
+			expect.objectContaining({ kind: "observed", outcome: "held" }),
+		);
+		// A directory a child process made was never in the registry at all.
+		expect(recordFor("pi-lens-2912child-")).toBeUndefined();
+		// A file that left fake timers installed at its sweep: the stamp is still
+		// this run's wall clock (the census compares it with filesystem times),
+		// never the fake clock's epoch.
+		const stamp = afterAllFor("pi-lens-4591-faketimers-")?.at ?? 0;
+		expect(stamp).toBeGreaterThan(Date.now() - 10 * 60_000);
+		expect(stamp).toBeLessThanOrEqual(Date.now());
 	});
 
 	it("labels an entry a grandchild process made as created outside the test process", () => {
