@@ -136,15 +136,31 @@ const OPERATION = (id: string) => `steps.${id}.outputs.pull-request-operation`;
 // dispatch steps follows does the dispatch run under `!cancelled()`, so one
 // failed dispatch does not skip the next (#5062 r2 F2). The second body is the
 // docs-refresh PR, which skips the dispatch when the App token opened the PR
-// (CI already started, #4512).
-function admittedIfs(id: string, onlyDispatchesFollow: boolean): string[] {
+// (CI already started, #4512). That form is admitted only for an opener whose
+// token is the App token (`opensWithAppToken`, #5062 r4).
+function admittedIfs(
+	id: string,
+	onlyDispatchesFollow: boolean,
+	appTokenOpener: boolean,
+): string[] {
 	const fired = `(${OPERATION(id)} == 'created' || ${OPERATION(id)} == 'updated')`;
 	const status = onlyDispatchesFollow ? "!cancelled() && " : "";
 	return [
 		`\${{ ${status}${fired} }}`,
-		`\${{ ${status}${fired} && steps.app_token.outputs.token == '' }}`,
+		...(appTokenOpener
+			? [`\${{ ${status}${fired} && steps.app_token.outputs.token == '' }}`]
+			: []),
 	];
 }
+
+// The docs-refresh opener's token: the App token when it was minted, else the
+// repository token. Only an opener that carries this exact token may skip its
+// dispatch on the App token. An opener on GITHUB_TOKEN, or on any other token,
+// opened its PR without the checks and must dispatch (#5062 r4, Greptile P2).
+const APP_TOKEN_OPENER =
+	"${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}";
+const opensWithAppToken = (step: Step): boolean =>
+	text(step.with?.token).replace(/\s+/g, " ").trim() === APP_TOKEN_OPENER;
 
 // A dispatch step's whole run, nothing else: `set -euo pipefail`, then one
 // whole-line `gh workflow run` per derived target, in order, on one opener's
@@ -229,12 +245,13 @@ function dispatchProblems(
 		const onlyDispatchesFollow = steps
 			.slice(steps.indexOf(opener) + 1)
 			.every(isDispatchStep);
+		const appTokenOpener = opensWithAppToken(opener);
 		for (const step of carrying) {
 			if (step["continue-on-error"] !== undefined)
 				problems.push(`the ${branch} dispatch is continue-on-error`);
 			if (
 				typeof step.if !== "string" ||
-				!admittedIfs(id, onlyDispatchesFollow).includes(
+				!admittedIfs(id, onlyDispatchesFollow, appTokenOpener).includes(
 					step.if.replace(/\s+/g, " ").trim(),
 				)
 			)
@@ -403,6 +420,16 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 			"          branch: bot/x",
 			steps,
 		].join("\n");
+	// The docs-refresh opener (#4512) mints the App token and falls back to the
+	// repository token; its dispatch skips when the App token opened the PR.
+	const APP_TOKEN_STEP =
+		"      - id: app_token\n        uses: actions/create-github-app-token@abc";
+	const SKIP_IF = `\${{ (${FIRED}) && steps.app_token.outputs.token == '' }}`;
+	const withToken = (token: string, steps: string) =>
+		opener(steps).replace(
+			"          branch: bot/x",
+			`          branch: bot/x\n          token: ${token}`,
+		);
 	const both = dispatchStep();
 	const run = (opening: string) =>
 		botPrFindings([
@@ -419,6 +446,20 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 		// The docs-refresh shape (#5062 r3 F5): a failed disarm withholds CI.
 		expect(
 			run(opener(`${DISARM}\n${dispatchStep("bot/x", PLAIN_IF)}`)),
+		).toEqual([]);
+	});
+
+	it("admits the App-token skip on the opener that uses the App token", () => {
+		// Recurrence: #5062 r4 (Greptile P2). The docs-refresh shape: the dispatch
+		// skips only when the App token opened the PR, and its token input is that
+		// token.
+		expect(
+			run(
+				withToken(
+					"${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}",
+					`${APP_TOKEN_STEP}\n${dispatchStep("bot/x", SKIP_IF)}`,
+				),
+			),
 		).toEqual([]);
 	});
 
@@ -513,6 +554,20 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 		[
 			"a plain-form dispatch before a failsafe step",
 			opener(`${dispatchStep("bot/x", PLAIN_IF)}\n${DISARM}`),
+		],
+		// Recurrence: #5062 r4 (Greptile P2). The skip is for the App-token opener
+		// only: an opener on the repository token that skips the dispatch on the
+		// App token's absence never starts CI.
+		[
+			"a skip that the opener's token does not earn: no token input",
+			opener(`${APP_TOKEN_STEP}\n${dispatchStep("bot/x", SKIP_IF)}`),
+		],
+		[
+			"a skip that the opener's token does not earn: the repository token",
+			withToken(
+				"${{ secrets.GITHUB_TOKEN }}",
+				`${APP_TOKEN_STEP}\n${dispatchStep("bot/x", SKIP_IF)}`,
+			),
 		],
 		[
 			"a dispatch step before the create-pull-request step",
