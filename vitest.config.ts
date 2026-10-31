@@ -432,6 +432,7 @@ const lspSpawnHeavyInclude = [
 	"tests/index-4632-s7-turn-end-ordering.test.ts",
 	"tests/mcp/analyze-cli.test.ts",
 	// #4300: the MCP witness crosses Lean's real initialize handshake.
+	"tests/mcp/server.smoke-fallback-5014.test.ts",
 	"tests/mcp/server.smoke.test.ts",
 	// #4521: the nightly born-after-start phase run through the production
 	// lsp_diagnostics handler and LSPService over real stdio fake-server
