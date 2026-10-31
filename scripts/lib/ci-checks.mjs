@@ -217,7 +217,9 @@ export function resolveTriggerAdvisoryNames(checkRuns) {
 	const events = new Map();
 	for (const run of checkRuns ?? []) {
 		const seen = events.get(run.name) ?? [];
-		seen.push(run.workflow_event);
+		// #5062: a dispatch run on a bot-opened PR is that PR's CI, so it is
+		// never a non-PR event (`dispatch_is_pr_ci`, stamped by ci-verdict).
+		seen.push(run.dispatch_is_pr_ci === true ? undefined : run.workflow_event);
 		events.set(run.name, seen);
 	}
 	return new Set(

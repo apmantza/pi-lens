@@ -230,6 +230,7 @@ import {
 	resolveTriggerAdvisoryNames,
 	shardAggregateName,
 } from "./lib/ci-checks.mjs";
+import { isBot } from "./update-contributors.mjs";
 
 export { REQUIRED_CHECKS };
 
@@ -529,7 +530,11 @@ function headShaOf(payload, fallback) {
  * @param {{ check_runs?: object[] }} payload
  * @param {{ suiteEvents: Map<number|string, string>, supersededSuites: Map<number|string, number|string> }} headRuns
  */
-function annotateTriggerEvents(payload, { suiteEvents, supersededSuites }) {
+function annotateTriggerEvents(
+	payload,
+	{ suiteEvents, supersededSuites },
+	botAuthored = false,
+) {
 	return {
 		...payload,
 		check_runs: (payload?.check_runs ?? []).map((run) => {
@@ -539,6 +544,12 @@ function annotateTriggerEvents(payload, { suiteEvents, supersededSuites }) {
 			return {
 				...run,
 				...(event === undefined ? {} : { workflow_event: event }),
+				// #5062: a bot-opened PR starts no pull_request run, so its dispatch
+				// runs ARE its CI (docs/ci-bot-pr-checks.md). Only the dispatch
+				// event flips; a schedule or workflow_run row stays advisory.
+				...(botAuthored && event === "workflow_dispatch"
+					? { dispatch_is_pr_ci: true }
+					: {}),
 				...(newerRun === undefined ? {} : { superseded_by_run: newerRun }),
 			};
 		}),
@@ -1298,19 +1309,26 @@ export function resolveHeadSha(
 ) {
 	if (isPrNumber(target)) {
 		const raw = ghExec(
-			["pr", "view", String(target), "--json", "headRefOid,mergeable"],
+			["pr", "view", String(target), "--json", "headRefOid,mergeable,author"],
 			{ timeoutMs },
 		);
 		try {
 			const parsed = JSON.parse(raw);
-			return { sha: parsed.headRefOid, mergeable: parsed.mergeable ?? null };
+			return {
+				sha: parsed.headRefOid,
+				mergeable: parsed.mergeable ?? null,
+				botAuthored: isBot(
+					String(parsed.author?.login ?? ""),
+					parsed.author?.is_bot === true,
+				),
+			};
 		} catch (error) {
 			throw new Error(
 				`could not parse the PR view JSON for ${target}: ${error instanceof Error ? error.message : error}`,
 			);
 		}
 	}
-	return { sha: String(target).trim(), mergeable: null };
+	return { sha: String(target).trim(), mergeable: null, botAuthored: false };
 }
 
 export function resolveClassification(
@@ -2290,7 +2308,11 @@ export function mapRestMergeableState(pullRequest) {
  * the single `gh pr view` call it replaces. */
 export async function restResolveHeadSha(repository, target, options = {}) {
 	if (!isPrNumber(target))
-		return { sha: String(target).trim(), mergeable: null };
+		return {
+			sha: String(target).trim(),
+			mergeable: null,
+			botAuthored: false,
+		};
 	const pullRequest = await restGet(
 		`repos/${repository}/pulls/${target}`,
 		options,
@@ -2298,6 +2320,10 @@ export async function restResolveHeadSha(repository, target, options = {}) {
 	return {
 		sha: pullRequest?.head?.sha,
 		mergeable: mapRestMergeableState(pullRequest),
+		botAuthored: isBot(
+			String(pullRequest?.user?.login ?? ""),
+			pullRequest?.user?.type === "Bot",
+		),
 	};
 }
 
@@ -3152,7 +3178,7 @@ export async function run({
 				: await retryStartup((remainingMs) =>
 						resolveRepository(ghExec, resolveGhTimeoutMs(remainingMs)),
 					);
-		const { sha, mergeable, classification } =
+		const { sha, mergeable, classification, botAuthored } =
 			transport === TRANSPORT_REST
 				? {
 						...(await retryStartup((remainingMs) =>
@@ -3328,7 +3354,7 @@ export async function run({
 										resolveGhTimeoutMs(remainingMs),
 										false,
 									);
-						lastPayload = annotateTriggerEvents(raw, headRuns);
+						lastPayload = annotateTriggerEvents(raw, headRuns, botAuthored);
 					} catch (error) {
 						readError = firstLine(error);
 					}
