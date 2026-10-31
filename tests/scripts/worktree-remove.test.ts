@@ -44,7 +44,7 @@ interface Fixture {
 	shared: string;
 }
 
-function makeFixture(): Fixture {
+function makeFixture(ignoreNodeModules = true): Fixture {
 	const root = mkdtempSync(join(tmpdir(), "pi-lens-worktree-remove-"));
 	roots.push(root);
 	const main = join(root, "main");
@@ -64,7 +64,10 @@ function makeFixture(): Fixture {
 		});
 	git(["init", "-q"]);
 	writeFileSync(join(main, "README.md"), "fixture\n");
-	writeFileSync(join(main, ".gitignore"), "node_modules\n");
+	writeFileSync(
+		join(main, ".gitignore"),
+		ignoreNodeModules ? "node_modules\n" : "# nothing ignored\n",
+	);
 	git(["add", "README.md", ".gitignore"]);
 	git(["commit", "-q", "-m", "seed"]);
 	mkdirSync(shared);
@@ -115,6 +118,23 @@ describe("scripts/worktree-remove.mjs (#5111)", () => {
 		expect(existsSync(f.linked)).toBe(false);
 		expect(registered(f, f.linked)).toBe(false);
 		// the #3173 harm: the shared install survives the removal
+		expect(readFileSync(join(f.shared, "sentinel.txt"), "utf8")).toBe(
+			"shared install\n",
+		);
+	});
+
+	// Recurrence: the unlink is the helper's own step, not git's. With
+	// node_modules not ignored, the symlink is an untracked file and plain
+	// `git worktree remove` refuses; only the unlink makes the removal pass.
+	it("unlinks the symlink itself when git alone would refuse over it", () => {
+		const f = makeFixture(false);
+		symlinkSync(f.shared, join(f.linked, "node_modules"));
+		expect(() => gitIn(f.main, ["worktree", "remove", f.linked])).toThrow();
+		expect(registered(f, f.linked)).toBe(true);
+		const r = remove([f.linked], f.main);
+		expect(r.err).toBe("");
+		expect(r.code).toBe(0);
+		expect(registered(f, f.linked)).toBe(false);
 		expect(readFileSync(join(f.shared, "sentinel.txt"), "utf8")).toBe(
 			"shared install\n",
 		);

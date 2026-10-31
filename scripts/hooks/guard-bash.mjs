@@ -1752,6 +1752,10 @@ const STASH_READ_FLAGS = new Set([
 	"-u",
 ]);
 
+/** The redirects agents append to a read (#5111): stderr to stdout, or output
+ *  to `/dev/null`. Exact words only; any other redirect target is refused. */
+const STASH_READ_REDIRECTS = new Set(["2>&1", "2>/dev/null", ">/dev/null"]);
+
 /** `--format=` / `--pretty=` with a value of plain format characters only: no
  *  quote, `$`, backtick, `;`, `|`, `&`, `<`, `>` or the substitution mark. */
 const STASH_FORMAT_FLAG = /^--(?:format|pretty)=[A-Za-z0-9%:,._ -]*$/;
@@ -1778,7 +1782,8 @@ function isReadOnlyStash(args, i, env) {
 	if (sub !== "list" && sub !== "show") return false;
 	let operands = 0;
 	for (const word of rest) {
-		if (STASH_READ_FLAGS.has(word) || STASH_FORMAT_FLAG.test(word)) continue;
+		if (STASH_READ_FLAGS.has(word) || STASH_READ_REDIRECTS.has(word)) continue;
+		if (STASH_FORMAT_FLAG.test(word)) continue;
 		if (sub === "show" && STASH_REF.test(word) && ++operands === 1) continue;
 		return false;
 	}
