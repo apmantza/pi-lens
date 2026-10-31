@@ -94,17 +94,38 @@ describe("cache-prune.yml: only `prune` writes (#4358 r1 F1)", () => {
 	// 11:01 UTC on 2026-10-19..30, hours after its 04:30 cron) pruned. Every
 	// non-docs master push saves a ~785 MB CodeQL overlay base database, and one
 	// day of pushes left 11 copies, 8.65 GB of a 10.19 GB cache, which put the
-	// npm entries the Unit shards restore at the mercy of LRU eviction.
-	it("prunes on every push to master, not only on edits of the prune files", () => {
-		const raw = yaml.load(readFileSync(resolve(ROOT, PRUNE), "utf8")) as {
-			on: Record<string, { branches?: string[]; paths?: string[] }>;
-		};
-		expect(raw.on.push.branches).toEqual(["master"]);
-		expect(raw.on.push.paths).toBeUndefined();
+	// npm entries the Unit shards restore at the mercy of LRU eviction. A prune
+	// started by the push itself can finish BEFORE that push's CodeQL baseline
+	// saves its copy (CodeRabbit on #5095), so the trigger is the CodeQL
+	// workflow's completion on master instead.
+	it("prunes when the CodeQL workflow completes on master, not on the push", () => {
+		type On = Record<
+			string,
+			{ workflows?: string[]; types?: string[]; branches?: string[] }
+		>;
+		const read = (file: string) =>
+			yaml.load(readFileSync(resolve(ROOT, file), "utf8")) as {
+				name: string;
+				on: On;
+				concurrency?: { group?: string; "cancel-in-progress"?: boolean };
+			};
+		const raw = read(PRUNE);
+		expect(raw.on.push).toBeUndefined();
 		expect(raw.on.schedule).toBeDefined();
+		// the name is what `workflows:` matches, so a rename of codeql.yml must
+		// move this trigger with it
+		const codeql = read(`${WORKFLOWS}/codeql.yml`);
+		expect(raw.on.workflow_run.workflows).toEqual([codeql.name]);
+		expect(raw.on.workflow_run.types).toEqual(["completed"]);
+		expect(raw.on.workflow_run.branches).toEqual(["master"]);
+		// queued prunes wait for the running one, never cancel a delete mid-way
+		expect(raw.concurrency).toEqual({
+			group: "cache-prune",
+			"cancel-in-progress": false,
+		});
 		// the dry-run `plan` stays path-filtered: it only needs to run when the
 		// rules change
-		expect(raw.on.pull_request.paths).toEqual([
+		expect((raw.on.pull_request as { paths?: string[] }).paths).toEqual([
 			".github/workflows/cache-prune.yml",
 			"scripts/prune-actions-cache.mjs",
 		]);
