@@ -96,10 +96,12 @@ describe("markdownlint runner — fixable metadata", () => {
 			).default;
 			const result = await runner.run(createCtx(filePath, env.tmpDir) as never);
 
+			// #5119 review r1 F1: the 15 s kill is what bounds a spinning rule now
+			// that cli2 runs in a child, so the runner's budget is pinned.
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"markdownlint-cli2",
 				[filePath],
-				expect.objectContaining({ cwd: env.tmpDir }),
+				expect.objectContaining({ cwd: env.tmpDir, timeout: 15000 }),
 			);
 			expect(result.diagnostics.length).toBeGreaterThanOrEqual(2);
 			const md009 = result.diagnostics.find((d) => d.rule === "MD009");
