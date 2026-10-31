@@ -225,6 +225,12 @@ merges, its `## Accepted residuals` lines join the same tracker under their
 seam. A known gap reopens as p2 when it turns material: a live wrong result,
 data loss, a hang, or a leak with no bound.
 
+**Ideas go on the tracker (user, 2026-10-31).** A rule candidate, research idea
+or optional slice that no lane will start is never filed as a p3 issue. It goes
+straight onto the pinned known-gaps tracker under its seam. On 2026-10-31 five
+such issues were filed from research passes (#5083, #5091, #5093, #5094,
+#5096); three were closed onto #4835.
+
 Every reviewer **follow-up issue** generalization verdict that meets that bar is
 filed and assigned to a seam group on the tracking queue in the same turn. At each regroup, scan
 merged PRs for subset-shaped changes that lack a generalization verdict.
