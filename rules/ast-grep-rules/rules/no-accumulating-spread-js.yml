@@ -1,15 +1,23 @@
 id: no-accumulating-spread-js
 language: JavaScript
-message: "Copying the reduce accumulator each pass is O(n^2) (spread, concat, slice, Array.from, Object.assign); mutate it or build the result with push/flatMap"
+message: "Copying the reduce accumulator each pass can be O(n^2) when it grows (spread, concat, slice, Array.from, Object.assign); build the result with push/flatMap, or mutate only an accumulator the reduce owns"
 severity: warning
 metadata:
   category: performance
 note: |
   A reduce callback that returns a fresh copy of its own accumulator does the
-  copy on every pass, so the loop is O(n^2). Flags the spread copies, and the
-  non-spread copies `Object.assign({}, acc, ...)`, `Array.from(acc)`,
-  `[].concat(acc, ...)`, `acc.concat(...)` and `acc.slice()`. Mutate the
-  accumulator, or build the result with flatMap.
+  copy on every pass. Each copy costs as much as the accumulator is long, so the
+  loop is O(n^2) when the accumulator grows with the input. A fixed-size
+  accumulator, such as `items.reduce((acc, item) => acc.slice(), [0])`, costs
+  constant work per copy, so that loop is linear. The shape is still flagged,
+  because the copy is wasted work on every pass. Flags the spread copies, and
+  the non-spread copies `Object.assign({}, acc, ...)`, `Array.from(acc)`,
+  `[].concat(acc, ...)`, `acc.concat(...)` and `acc.slice()`.
+
+  Mutating the accumulator also changes the initial value passed to reduce and
+  any intermediate snapshot a caller holds. Mutate it only when it is a fresh
+  value the reduce owns. When the initial value or a snapshot comes from outside,
+  keep the copy, or preserve both when you choose an alternative such as flatMap.
 
   Matched only where the callback's single result is the copy (an expression
   body, or a block or function body whose only statement is that `return`), and

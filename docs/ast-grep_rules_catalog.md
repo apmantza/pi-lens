@@ -167,7 +167,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `jwt-simple-noverify-javascript` | warning | no | CodeRabbit | "Detected the decoding of a JWT token without a verify step. JWT tokens must be verified before use, otherwise the token's integrity is unk… |
 | `nested-ternary-js` | warning | no | pi-lens | Nested ternary expressions are hard to read — use if/else or switch |
 | `no-absolute-path-import-js` | warning | no | pi-lens | Absolute import path is not portable — use a relative or aliased path |
-| `no-accumulating-spread-js` | warning | no | pi-lens | Copying the reduce accumulator each pass is O(n^2) (spread, concat, slice, Array.from, Object.assign); mutate it or build the result with p… |
+| `no-accumulating-spread-js` | warning | no | pi-lens | Copying the reduce accumulator each pass can be O(n^2) when it grows (spread, concat, slice, Array.from, Object.assign); build the result w… |
 | `no-alert-js` | warning | no | pi-lens | Avoid alert() — use a proper notification system |
 | `no-array-constructor-js` | warning | yes | pi-lens | Use array literal [] instead of new Array() |
 | `no-array-reverse-mutation-js` | warning | no | pi-lens | .reverse() mutates the array in place — use toReversed() or slice first |
