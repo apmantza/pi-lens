@@ -209,27 +209,26 @@ describe("prose rules warn, structural rules still fail (#5110)", () => {
 		);
 	});
 
-	it.each([
-		["a 40-word sentence", forty, "sentence-length", "found 40"],
-		[
-			"a filler word",
+	// Recurrence it prevents: a prose rule that fails the lint again, which
+	// the author would only see on the next push.
+	const passesWithWarning = (summary: string, rule: string, detail: string) => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		expect(lintPrBody(body(summary), { workingTree: true })).toEqual({
+			valid: true,
+			errors: [],
+		});
+		const printed = warn.mock.calls.map(([line]) => String(line)).join("\n");
+		expect(printed).toContain(`PR body prose warning: ${rule} (line 3)`);
+		expect(printed).toContain(detail);
+	};
+	it("passes a body whose only fault is a 40-word sentence, with a warning line", () =>
+		passesWithWarning(forty, "sentence-length", "found 40"));
+	it("passes a body whose only fault is a filler word, with a warning line", () =>
+		passesWithWarning(
 			"Please read the summary before the round starts.",
 			"filler",
 			'remove "please"',
-		],
-	])(
-		"passes a body whose only fault is %s, with a warning line",
-		(_name, summary, rule, detail) => {
-			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-			expect(lintPrBody(body(summary), { workingTree: true })).toEqual({
-				valid: true,
-				errors: [],
-			});
-			const printed = warn.mock.calls.map(([line]) => String(line)).join("\n");
-			expect(printed).toContain(`PR body prose warning: ${rule} (line 3)`);
-			expect(printed).toContain(detail);
-		},
-	);
+		));
 
 	it("still fails a body that is missing a required section", () => {
 		// Recurrence it prevents: demoting the prose channel to warnings also
