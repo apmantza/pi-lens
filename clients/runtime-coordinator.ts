@@ -762,7 +762,10 @@ export class RuntimeCoordinator {
 	 * carries other `args`. The entry dies with its `args`; no id, TTL or
 	 * session reset is involved.
 	 */
-	private readonly _partialApplies = new WeakMap<object, PartialApplyPending>();
+	private readonly _partialApplies = new WeakMap<
+		Record<string, unknown>,
+		PartialApplyPending
+	>();
 	private readonly _lspReadWarmState = new Map<
 		string,
 		{ status: "warming" | "ready"; ts: number }
@@ -3021,7 +3024,10 @@ export class RuntimeCoordinator {
 	}
 
 	/** #5120: see {@link RuntimeCoordinator._partialApplies}. */
-	markToolCallPartialApply(input: object, pending: PartialApplyPending): void {
+	markToolCallPartialApply(
+		input: Record<string, unknown>,
+		pending: PartialApplyPending,
+	): void {
 		this._partialApplies.set(input, pending);
 	}
 
@@ -3030,7 +3036,7 @@ export class RuntimeCoordinator {
 	 * `input`. A non-object key is a miss: `WeakMap.get` answers undefined.
 	 */
 	toolCallPartialApply(input: unknown): PartialApplyPending | undefined {
-		return this._partialApplies.get(input as object);
+		return this._partialApplies.get(input as Record<string, unknown>);
 	}
 
 	/**
