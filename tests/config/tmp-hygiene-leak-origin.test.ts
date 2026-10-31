@@ -256,6 +256,9 @@ describe("tmp-hygiene census diagnosis (#4591)", () => {
 				["sweep:hook:pi-lens-bad-via", `registered,removed,${SWEEP_AT}`],
 				["sweep:pi-lens-no-via", `registered,removed,${SWEEP_AT}`],
 				["sweep:afterAll:", `registered,removed,${SWEEP_AT}`],
+				// #5081 review F2: a line torn right after the outcome has no stamp
+				// field at all; it is dropped like the others, never a TypeError.
+				["sweep:afterAll:pi-lens-torn", "registered,removed"],
 			]),
 		);
 		expect([...records.keys()]).toEqual(["pi-lens-x"]);
@@ -268,6 +271,17 @@ describe("tmp-hygiene census diagnosis (#4591)", () => {
 				at: SWEEP_AT + 1,
 			},
 		]);
+	});
+
+	it("builds an empty diagnosis for a clean census whose record holds a torn sweep line", () => {
+		// #5081 review F2: the census builds its failure message eagerly, so on a
+		// run with no leaks a torn record would red the census through a throw.
+		expect(
+			diagnoseTmpHygieneLeaks(
+				[],
+				new Map([["sweep:afterAll:pi-lens-torn", "registered,removed"]]),
+			),
+		).toBe("");
 	});
 
 	it("diagnoses a real directory through the shipped reader and bounds the list", () => {

@@ -292,23 +292,15 @@ function flushTmpRootCreators(): void {
  *  would stamp its record with the fake clock; the census compares the stamp
  *  with filesystem times, which are the kernel's (#4591). */
 const hygieneNow = Date.now.bind(Date);
-const flushedTmpRootSweepKeys = new Set<string>();
-
-/** Append this sweep's per-root records (#4591) to the run's creators record,
- *  one line per `via` and root: a second sweep of the same root through the
- *  same `via` (none today) would not double it. Closed with the creators
- *  record, so the setup's own afterAll, which runs after the owner's cleanup,
- *  cannot recreate the file the owner removed. */
+/** Append this sweep's per-root records (#4591) to the run's creators record.
+ *  Each fork sweeps once per `via` (afterAll, then SIGTERM), so there is no
+ *  repeat to dedupe. Closed with the creators record, so the setup's own
+ *  afterAll, which runs after the owner's cleanup, cannot recreate the file
+ *  the owner removed. */
 function flushTmpRootSweepRecords(lines: readonly string[]): void {
-	if (tmpHygieneCreatorsClosed) return;
-	const fresh = lines.filter(
-		(line) => !flushedTmpRootSweepKeys.has(line.slice(0, line.indexOf("\t"))),
-	);
-	if (fresh.length === 0) return;
+	if (tmpHygieneCreatorsClosed || lines.length === 0) return;
 	try {
-		fs.appendFileSync(tmpHygieneCreatorsPath, `${fresh.join("\n")}\n`);
-		for (const line of fresh)
-			flushedTmpRootSweepKeys.add(line.slice(0, line.indexOf("\t")));
+		fs.appendFileSync(tmpHygieneCreatorsPath, `${lines.join("\n")}\n`);
 	} catch {
 		// Costs the diagnosis only: the census then prints the entry without a
 		// sweep record, which it names as such.
@@ -330,10 +322,14 @@ export function closeTmpHygieneCreators(): void {
 	}
 }
 
-/** Test seam (#4307 sweep): run the setup's flush so a test can prove the
- *  closed latch suppresses it. */
-export function flushTmpRootCreatorsForTests(): void {
+/** Test seam (#4307 sweep, #5081 review F4): run both of the setup's flushes
+ *  (the creators record, then `sweepLines` as a sweep's records) so a test can
+ *  prove the closed latch suppresses each. */
+export function flushTmpHygieneRecordsForTests(
+	sweepLines: readonly string[],
+): void {
 	flushTmpRootCreators();
+	flushTmpRootSweepRecords(sweepLines);
 }
 
 /**
@@ -1774,7 +1770,7 @@ export function tmpHygieneSweepRecords(
 			!SWEEP_VIAS.includes(rest.slice(0, colon)) ||
 			!SWEEP_KINDS.includes(kind) ||
 			!SWEEP_OUTCOMES.includes(outcome) ||
-			!(at.length > 0 && Number.isFinite(stamp))
+			!(at !== undefined && at.length > 0 && Number.isFinite(stamp))
 		)
 			continue;
 		const name = rest.slice(colon + 1);

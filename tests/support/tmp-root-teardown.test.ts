@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import {
 	closeTmpHygieneCreators,
-	flushTmpRootCreatorsForTests,
+	flushTmpHygieneRecordsForTests,
 	formatTmpHygieneLeakEntry,
 	tmpHygieneCreators,
 	tmpHygieneCreatorsPath,
@@ -297,9 +297,13 @@ describe("shared setup tmp-root sweep, through the real hooks (#2912)", () => {
 		// flush under the stack hook order, so the closed latch is what keeps the
 		// flush from recreating the record it removed. This worker's registry
 		// already holds a created entry (`setupTestEnvironment` at module load),
-		// so a missing latch would make the flush write the file back.
+		// so a missing latch in the creators flush would write the file back;
+		// #5081 review F4: so would a missing latch in the sweep-record flush,
+		// which is handed a real sweep line here.
 		closeTmpHygieneCreators();
-		flushTmpRootCreatorsForTests();
+		flushTmpHygieneRecordsForTests([
+			`sweep:afterAll:pi-lens-4591-latch\tregistered,removed,${Date.now()}`,
+		]);
 		expect(fs.existsSync(tmpHygieneCreatorsPath)).toBe(false);
 	});
 });
