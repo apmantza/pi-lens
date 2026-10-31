@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the 60-file outline case drives the real ast-grep CLI through AstGrepClient; its ordering and byte ratio are properties of that CLI's output, which no in-process double reproduces
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -346,5 +347,33 @@ describe("ast_grep_outline over a directory, real ast-grep (#5071)", () => {
 			"... 10 more files not shown (cap 50)",
 		);
 		expect(text).toContain("1-3 export function handler0x0");
+	});
+
+	// #5071 round 3 (CodeRabbit on df85739fb): the CLI keeps a line break inside an
+	// item's name and signature when the source splits it (a Java import over two
+	// lines), and renderItem wrote both raw, so one item printed as two lines. Only
+	// the `signatures` view carries the signature, and `items: "all"` keeps an
+	// import, which the default `exports` filter drops.
+	it("prints a multiline Java import as one line (#5071)", async () => {
+		dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-outline-5071-"));
+		fs.writeFileSync(
+			path.join(dir, "Svc.java"),
+			"import java.util.\n    List;\n\npublic class Svc {}\n",
+		);
+		const client = new AstGrepClient();
+		expect(await client.ensureAvailable()).toBe(true);
+		const tool = createAstGrepOutlineTool(client);
+		const res = await run(
+			tool,
+			{ paths: [dir], items: "all", view: "signatures" },
+			dir,
+		);
+		expect(res.isError).toBeUndefined();
+		const lines = String(res.content[0].text).split("\n");
+		// Range, `import` marker, kind and the collapsed name and signature on one line.
+		expect(lines).toContain(
+			"1-2 import module java.util. List — import java.util. List",
+		);
+		expect(lines.some((line) => line.startsWith("    List"))).toBe(false);
 	});
 });

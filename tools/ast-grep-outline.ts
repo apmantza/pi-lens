@@ -20,17 +20,20 @@ const MAX_ITEMS_PER_FILE = 200;
  * One text line per symbol, range first as `module_report` view `compact`
  * does: `start-end [import|export ]kind name[ — signature]`, 1-based inclusive
  * (the CLI emits 0-based lines), two spaces per nesting level. A signature that
- * is empty or only echoes the name is dropped (#5071).
+ * is empty or only echoes the name is dropped (#5071). A name or signature the
+ * source splits over lines (a Java import) keeps its line break in the CLI JSON,
+ * so every whitespace run collapses to one space and the item stays one line.
  */
 function renderItem(item: AstGrepOutlineItem, depth: number): string[] {
 	const range = `${item.range.start.line + 1}-${item.range.end.line + 1}`;
 	const marker = item.isImport ? "import " : item.isExported ? "export " : "";
+	const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+	const name = flat(item.name);
+	const flatSignature = item.signature ? flat(item.signature) : "";
 	const signature =
-		item.signature && item.signature !== item.name
-			? ` \u2014 ${item.signature}`
-			: "";
+		flatSignature && flatSignature !== name ? ` \u2014 ${flatSignature}` : "";
 	return [
-		`${"  ".repeat(depth)}${range} ${marker}${item.symbolType} ${item.name}${signature}`,
+		`${"  ".repeat(depth)}${range} ${marker}${item.symbolType} ${name}${signature}`,
 		...(item.members ?? []).flatMap((m) => renderItem(m, depth + 1)),
 	];
 }
