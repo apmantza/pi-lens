@@ -1132,11 +1132,12 @@ export default defineConfig({
 					globalSetup: sharedGlobalSetup,
 					setupFiles: sharedSetupFiles,
 					execArgv: sharedExecArgv,
-					// Full serialization, not just a cap: five files, but the point
-					// is to guarantee zero overlap with the "default" project's
-					// fork storm (the actual contention source, see #1022/#2332
-					// above), not to bound intra-project concurrency.
-					maxWorkers: 1,
+					// EXPERIMENT (#3801, branch exp/3801-two-workers, never merged):
+					// two at a time instead of one, to measure whether the
+					// contention flakes (#1022/#2332/#902) return. The lane still runs
+					// alone in its phase, so zero overlap with the "default"
+					// project's fork storm holds; only intra-lane overlap is new.
+					maxWorkers: 2,
 					// Last phase: by the time this runs, "default", "grammar-heavy",
 					// and "timing-sensitive" have all fully drained, so the real
 					// ast-grep LSP spawn's initialize/diagnostics budget window gets
@@ -1170,11 +1171,12 @@ export default defineConfig({
 					globalSetup: sharedGlobalSetup,
 					setupFiles: sharedSetupFiles,
 					execArgv: sharedExecArgv,
-					// Fully serialized (#1920): these files' budgets measure real
-					// elapsed time around awaited work, so even ONE concurrent
-					// sibling can inflate them. One at a time, after every other
-					// project has drained.
-					maxWorkers: 1,
+					// EXPERIMENT (#3801, branch exp/3801-two-workers, never merged):
+					// two at a time instead of one. #1920 serialized this lane
+					// because these files' budgets measure real elapsed time around
+					// awaited work, so even ONE concurrent sibling can inflate them;
+					// this branch measures how often that happens at two.
+					maxWorkers: 2,
 					sequence: { groupOrder: 4 },
 					hookTimeout: 60_000,
 				},

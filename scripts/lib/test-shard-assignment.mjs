@@ -73,12 +73,15 @@ export function median(values) {
  * a divisor taken from `os.availableParallelism()` made two shard hosts of
  * different shapes disagree, so a file ran twice or nowhere (review r1 F4).
  * A project not listed is serialized (`maxWorkers: 1`): grammar-heavy,
- * lsp-spawn-heavy, real-harness, wall-clock-budget, tmp-fixture-hygiene.
+ * real-harness, tmp-fixture-hygiene.
  * tests/config/test-shard-assignment.test.ts pins this table to the config.
  */
 export const PROJECT_PARALLELISM = Object.freeze({
 	default: 3,
 	"timing-sensitive": 2,
+	// EXPERIMENT (#3801, exp/3801-two-workers): the two lanes the config runs at 2.
+	"lsp-spawn-heavy": 2,
+	"wall-clock-budget": 2,
 });
 
 /** @param {unknown} projectName a vitest project's name */

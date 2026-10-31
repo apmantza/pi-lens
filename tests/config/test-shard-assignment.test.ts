@@ -153,7 +153,7 @@ describe("#3771 duration-balanced Unit tests shards", () => {
 			const log: string[] = [];
 			const specs = ["a", "b", "planted"].map((name) => ({
 				moduleId: path.join(root, `tests/${name}.test.ts`),
-				project: { name: "wall-clock-budget", config: { maxWorkers: 1 } },
+				project: { name: "real-harness", config: { maxWorkers: 1 } },
 			}));
 			const ctx = {
 				config: { root, shard: { index: 1, count: 2 } },
@@ -177,7 +177,8 @@ describe("#3771 duration-balanced Unit tests shards", () => {
 		expect(specCost(9, 0)).toBe(9);
 		expect(projectWorkers("default")).toBe(3);
 		expect(projectWorkers("timing-sensitive")).toBe(2);
-		expect(projectWorkers("wall-clock-budget")).toBe(1);
+		expect(projectWorkers("wall-clock-budget")).toBe(2);
+		expect(projectWorkers("real-harness")).toBe(1);
 		expect(projectWorkers(undefined)).toBe(1);
 	});
 
