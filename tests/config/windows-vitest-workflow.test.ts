@@ -172,29 +172,46 @@ describe("Windows Vitest workflow contract (#2536)", () => {
 			"utf8",
 		);
 		const code = stripSource(raw);
-		// The file is not skipped, and no platform test appears in it at all: a
-		// guard spelled any other way (`isWindows`, `os.platform()`) still has to
-		// name the platform to decide, so the needles are the platform reads.
+		// The file is not skipped, and nothing in it names the platform: a guard
+		// has to name it (or a Windows marker) to decide, so the needles are the
+		// words, not one spelling of the read (`process.platform`, an aliased
+		// `platform`, `os.platform()`, a `win32` literal).
 		expect(code).not.toContain("WINDOWS_QUARANTINE");
-		expect(code).not.toMatch(/process\s*\.\s*platform/);
-		expect(code).not.toMatch(/\bplatform\s*\(\s*\)/);
+		expect(code).not.toMatch(/\b(?:platform|win32|Windows_NT)\b/);
+		expect(stripSource(raw, { strings: "keep" })).not.toMatch(
+			/["'`](?:win32|Windows_NT)["'`]/,
+		);
 		expect(code).not.toMatch(
 			/\b(?:describe|it)\s*\.\s*(?:skipIf|skip|runIf)\b/,
 		);
-		// The assertions sit in the afterAll's `try`, directly, with no condition
-		// between the `try` and the first one (an `if` there is a guard) and the
-		// sweep in the `finally` that follows.
-		const tried = code.indexOf("try {", code.indexOf("afterAll("));
+		// The structure fails closed on every other spelling of a guard: the
+		// `afterAll` runs straight into its `try`, and the `try` holds the four
+		// census assertions and NOTHING else. Remove the four known statements and
+		// only `try {` may remain, so an `if`, a `cond ||`, a ternary or a `return`
+		// reached through any alias or helper leaves residue and reds.
+		const hook = code.indexOf("afterAll(");
+		const tried = code.indexOf("try {", hook);
 		const finallyIndex = code.indexOf("} finally {", tried);
 		const swept = code.indexOf(
 			"const reaped = cleanupTmpHygiene(otherInvocation);",
 		);
-		expect(tried).toBeGreaterThan(-1);
+		expect(hook).toBeGreaterThan(-1);
+		expect(tried).toBeGreaterThan(hook);
 		expect(swept).toBeGreaterThan(finallyIndex);
+		// Before the `try` there is one `if` (the repo-root census's own "could not
+		// run" note, which writes and continues) and no `return`.
+		const before = code.slice(hook, tried);
+		expect(before).not.toMatch(/\breturn\b/);
+		expect(before.match(/\bif\b/g) ?? []).toHaveLength(1);
+		const residue = code
+			.slice(tried, finallyIndex)
+			.replace(
+				/expect\(\s*(?:attributable|tmpRootWriteLeaks|rootCensus\.leaked|repoRootCreateLeaks),[\s\S]*?\)\.toEqual\(\[\]\);/g,
+				"",
+			);
+		expect(residue.trim()).toBe("try {");
+		// The four are all there: removing one is a reviewed change (shape 33).
 		const asserted = code.slice(tried, finallyIndex);
-		expect(asserted).not.toMatch(/\bif\s*\(/);
-		// Each assertion's subject is named and the count is pinned, so emptying
-		// the block or adding a further one is a reviewed change (shape 33).
 		expect(asserted).toContain("attributable,");
 		expect(asserted).toContain("tmpRootWriteLeaks,");
 		expect(asserted).toContain("rootCensus.leaked,");
