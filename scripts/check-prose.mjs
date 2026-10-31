@@ -111,6 +111,8 @@ export function checkProse(text = "", options = {}) {
 	for (const heading of markdownHeadings(text))
 		for (let line = heading.line; line < heading.contentLine; line += 1)
 			headingAt.set(line, line === heading.line ? heading : null);
+	// #5110: only heading case blocks. Sentence length, filler and passive
+	// voice warn, so wording alone never fails the PR-body lint.
 	const addBlock = (message) => {
 		(mode === "warn" ? warnings : errors).push(message);
 	};
@@ -137,7 +139,7 @@ export function checkProse(text = "", options = {}) {
 			: splitSentences(source);
 		for (const unit of units) {
 			if (wordCount(unit) > MAX_WORDS)
-				addBlock(
+				warnings.push(
 					finding(
 						"sentence-length",
 						`use ${MAX_WORDS} words or fewer (found ${wordCount(unit)})`,
@@ -149,7 +151,7 @@ export function checkProse(text = "", options = {}) {
 			if (
 				new RegExp(`\\b${filler.replaceAll(" ", "\\s+")}\\b`, "i").test(source)
 			)
-				addBlock(finding("filler", `remove "${filler}"`, index + 1));
+				warnings.push(finding("filler", `remove "${filler}"`, index + 1));
 		}
 		for (const match of source.matchAll(PASSIVE_RE))
 			warnings.push(

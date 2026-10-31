@@ -119,7 +119,8 @@ jobs:
 
       - name: Validate PR body structure
         env:
-          # Existing bodies need a cleanup window before prose becomes blocking.
+          # Existing bodies need a cleanup window before title-case headings
+          # block; the other prose rules only warn (#5110).
           PI_LENS_PROSE_GRACE: "1"
         run: node scripts/check-pr-body.mjs
 
