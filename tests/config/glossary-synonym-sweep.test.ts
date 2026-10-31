@@ -421,6 +421,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/availability-policy.ts": 3,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
+		"clients/dispatch/runners/utils/markdownlint-api.ts": 1,
 		"clients/dispatch/runners/utils/runner-helpers.ts": 9,
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 2,
 		"clients/dispatch/runners/vale.ts": 1,
@@ -1044,6 +1045,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/tree-sitter.ts": 2,
 		"clients/dispatch/runners/trivy-config.ts": 4,
 		"clients/dispatch/runners/utils/diagnostic-parsers.ts": 3,
+		// 7 (#5119): `node:path` joins and resolves while locating cli2's package.
+		"clients/dispatch/runners/utils/markdownlint-api.ts": 7,
 		// 23 -> 30 (#2660): the resolver now carries its selected `path` and
 		// `resolution.path` through the evidence seam, adding seven same-sense
 		// path identifiers while preserving the four-rung lookup ladder.
@@ -1768,6 +1771,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"mcp/analyze-cli.ts": 2,
 		"mcp/server.ts": 1,
 		"index.ts": 2,
+		"clients/dispatch/runners/utils/markdownlint-api.ts": 3,
 	},
 	telemetry: {
 		"clients/lsp-mutation.ts": 11,

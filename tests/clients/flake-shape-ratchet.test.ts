@@ -762,6 +762,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a clean-tree HEAD move needs a real git checkout and a closed module's stale bytes live only in a real pyright-langserver child; no double reproduces what the server kept",
 		},
+	// 2026-10-31 (#5119): markdownlint-cli2's own directory-config merge and fix
+	// pass are the behaviour under test (`"fix": true` made a lint run write the
+	// file); the real module's bytes are the witness and its CLI is the parity
+	// reference; serialized in the wall-clock lane.
+	"real-process-spawn:clients/markdownlint-no-fix-real.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"markdownlint-cli2's config merge and fix pass decide whether a lint run writes; a fake module would encode the guess that no option was missing",
+	},
 	"real-process-spawn:clients/mcp/review-rebuild.test.ts": {
 		detector: "real-process-spawn",
 		reason:

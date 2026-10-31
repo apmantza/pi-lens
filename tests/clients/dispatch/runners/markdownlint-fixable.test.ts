@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { pinNoCli2OnPath } from "../../../support/no-cli2-on-path.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
@@ -11,6 +12,8 @@ const createAvailabilityCheckerMock = vi.fn(() => ({
 	getCommand: () => "markdownlint-cli2",
 }));
 const hasMarkdownlintConfigMock = vi.fn(() => true);
+
+pinNoCli2OnPath();
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawn: vi.fn(),

@@ -148,9 +148,9 @@ export async function runMarkdownlintApi(options: {
 			status: verdict,
 			...(truncated && { outputTruncated: true }),
 		};
-	} catch (error) {
+	} catch (thrown) {
 		err.append(
-			`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+			`${thrown instanceof Error ? (thrown.stack ?? thrown.message) : String(thrown)}\n`,
 		);
 		return { stdout: out.text, stderr: err.text, status: 2 };
 	} finally {

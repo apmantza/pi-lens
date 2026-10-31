@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { pinNoCli2OnPath } from "../../../support/no-cli2-on-path.js";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
@@ -31,6 +32,8 @@ const { safeSpawnAsync, getLinterPolicyForCwd } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
 	getLinterPolicyForCwd: vi.fn(),
 }));
+
+pinNoCli2OnPath();
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
