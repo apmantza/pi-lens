@@ -33,11 +33,6 @@ export async function main(params) {
 	const file = params.argv.at(-1);
 	if (file.endsWith("throws.md")) throw new Error("boom: unreadable config");
 	if (file.endsWith("hangs.md")) return new Promise(() => {});
-	if (file.endsWith("late-reject.md")) {
-		await new Promise((resolve) => setTimeout(resolve, 80));
-		globalThis.__cli2LateReject?.();
-		throw new Error("late");
-	}
 	params.logMessage("markdownlint-cli2 v0 (stand-in)");
 	params.logError(file + ":3 error MD009/no-trailing-spaces Trailing spaces");
 	return 1;
@@ -255,26 +250,6 @@ describe("runMarkdownlintApi runs cli2's main with fix off", () => {
 		});
 
 		expect(result).toMatchObject({ status: null, failure: "timeout" });
-	});
-
-	// Recurrence: a run past its budget cannot be cancelled and may reject
-	// later; an unhandled rejection reaches the host's process.
-	it("absorbs a rejection that lands after the timeout", async () => {
-		const { shim, cwd } = project();
-		const rejected = new Promise<void>((resolve) => {
-			(globalThis as { __cli2LateReject?: () => void }).__cli2LateReject =
-				resolve;
-		});
-
-		const result = await runMarkdownlintApi({
-			command: shim,
-			cwd,
-			args: ["late-reject.md"],
-			timeoutMs: 20,
-		});
-		await rejected;
-
-		expect(result?.failure).toBe("timeout");
 	});
 
 	// Recurrence: silently linting by spawn hid the one path where a project

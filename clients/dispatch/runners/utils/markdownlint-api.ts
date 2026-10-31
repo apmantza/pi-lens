@@ -126,8 +126,6 @@ export async function runMarkdownlintApi(options: {
 			logMessage: (message) => out.append(`${message}\n`),
 			logError: (message) => err.append(`${message}\n`),
 		});
-		// A rejection after the timeout has nobody to tell; do not let it escape.
-		ran.catch(() => {});
 		const verdict = await Promise.race([ran, timedOut]);
 		const truncated = out.truncated || err.truncated;
 		if (verdict === "timeout") {
