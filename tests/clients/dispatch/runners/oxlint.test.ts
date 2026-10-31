@@ -145,6 +145,8 @@ describe("oxlint runner", () => {
 			// `dispatch.disabledRunners`: the operator's own decision, so the
 			// dispatcher records it as a stated skip, never a failed run.
 			"disabled-by-config",
+			// #5042: an opt-in runner left off, a stated skip and no failed tool.
+			"not-enabled",
 		]);
 		const valid: RunnerResult = {
 			status: "skipped",

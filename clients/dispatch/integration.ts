@@ -989,6 +989,7 @@ export const CASCADE_GRAPH_KINDS = new Set([
 	"rust",
 	"ruby",
 	"cxx",
+	"java",
 ]);
 
 /**
@@ -998,9 +999,9 @@ export const CASCADE_GRAPH_KINDS = new Set([
  * autoPropagate (jsts): tsserver pushes diagnostics automatically, so we
  * read from the passive snapshot instead of touching neighbors actively.
  *
- * Degraded fallback: when the graph produces no neighbors (ungraphed languages
- * like Java/Kotlin/C#), fall back to the passive LSP snapshot from getAllDiagnostics
- * to preserve cascade coverage.
+ * Degraded fallback: when the graph yields no neighbours for a graphed kind,
+ * fall back to the passive LSP snapshot from getAllDiagnostics to preserve
+ * cascade coverage. A kind outside this set skips as `non_code` first.
  */
 /**
  * Whether a cascade neighbour is suppressed by the project's ignore config

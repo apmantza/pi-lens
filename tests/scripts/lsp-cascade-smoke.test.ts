@@ -423,13 +423,14 @@ describe("cascade fixtures (#1712)", () => {
 		},
 	);
 
-	it("holds a language out of the cascade graph only with the declaration that names it", () => {
+	it("lists every fixture's language in the cascade graph unless it declares the skip", () => {
 		// Recurrence: tool-smoke run 41027095385, jdtls answered every warm touch
 		// and the cascade still returned skipReason=non_code for java, because
 		// CASCADE_GRAPH_KINDS had no java: thirty attempts, no importer asked. A
-		// fixture for a language the cascade skips can only measure the skip, so
-		// it declares that skip; and a declaration for a language the cascade now
-		// models would excuse nothing and hide the next regression (#5040).
+		// fixture for a language the cascade skips can only measure the skip, so it
+		// declares that skip; java joined the set with #5040 and declares nothing,
+		// and a declaration for a language the cascade models would excuse nothing
+		// and hide the next regression (re-declaring java's reds this test).
 		const graphKind: Record<string, string> = {
 			typescript7: "jsts",
 			rust: "rust",
@@ -443,17 +444,6 @@ describe("cascade fixtures (#1712)", () => {
 				CASCADE_GRAPH_KINDS.has(kind),
 				`${f.lang} (${kind}) is a cascade graph kind exactly when it declares no non_code skip`,
 			).toBe(f.expectDefect?.skipReason !== "non_code");
-		}
-	});
-
-	it("declares a defect only for jdtls, with a reason and the skip it excuses", () => {
-		// Recurrence: #1712. An excuse that spreads to a second server turns the
-		// lane's red into a warning for every regression of that server.
-		const declared = CASCADE_FIXTURES.filter((f) => f.expectDefect);
-		expect(declared.map((f) => f.lang)).toEqual(["java"]);
-		for (const f of declared) {
-			expect(f.expectDefect?.skipReason).toBeTruthy();
-			expect(String(f.expectDefect?.reason).length).toBeGreaterThan(40);
 		}
 	});
 

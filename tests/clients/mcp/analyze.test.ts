@@ -754,6 +754,28 @@ describe("analyzeFile", () => {
 		);
 	});
 
+	it("updates the graph for a Java file, which the cascade now models (#5040)", async () => {
+		// Recurrence: CASCADE_GRAPH_KINDS is the one file-kind set both the pi
+		// cascade and this warm-analyze seam read. Java was absent from it, so a
+		// warm pilens_analyze of a Java file never fed the graph that
+		// pilens_module_report answers from, while the review graph itself already
+		// resolved Java imports.
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		const javaFile = path.join(tmpDir, "src", "lib", "Lib.java");
+		fs.mkdirSync(path.dirname(javaFile), { recursive: true });
+		fs.writeFileSync(
+			javaFile,
+			"package lib;\n\npublic class Lib {\n    public static int foo(int x) {\n        return x;\n    }\n}\n",
+		);
+		await analyzeFile(javaFile, tmpDir, { updateGraph: true });
+		expect(mockBuildOrUpdateGraph).toHaveBeenCalledTimes(1);
+		expect(mockBuildOrUpdateGraph).toHaveBeenCalledWith(
+			tmpDir,
+			[javaFile],
+			expect.anything(),
+		);
+	});
+
 	it("skips the graph update when the dispatch has blockers, even with updateGraph:true", async () => {
 		vi.mocked(dispatchForFile).mockResolvedValue({
 			...emptyResult,

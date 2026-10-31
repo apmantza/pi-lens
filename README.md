@@ -4,6 +4,8 @@
 
 # pi-lens
 
+[![omp status](https://omppackages.com/badge/pi-lens.svg)](https://omppackages.com/packages/pi-lens)
+
 pi-lens gives AI coding agents fast, language-aware feedback while they write/edit.
 
 > **Working in this project as an AI agent?** Read the [agent guide](docs/agent-guide.md)

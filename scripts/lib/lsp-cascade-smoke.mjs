@@ -55,7 +55,9 @@ export const CASCADE_RENAME_EXTRA_DEADLINES = 2;
  * inconclusive run). Every other outcome is red, so the declaration covers the
  * one known shape and nothing else: an unconfirmed importer, another skip
  * reason, a wrong verdict, and a run that concluded (the defect is gone:
- * remove the declaration). Declared today: java.
+ * remove the declaration). Declared today: none; java's was removed once
+ * a push-only server's pre-edit cached answer read unconfirmed and java joined
+ * the cascade (#5040).
  */
 export const CASCADE_FIXTURES = [
 	{
@@ -107,27 +109,6 @@ export const CASCADE_FIXTURES = [
 		expectFindings: "not applicable|mismatch|cannot convert",
 		warmDeadlineMs: 180_000,
 		provisionedBy: "JDTLS_PATH",
-		// Held out of the cascade on purpose (#5040). `computeCascadeForFile` skips
-		// a Java edit with skipReason=non_code because CASCADE_GRAPH_KINDS
-		// (clients/dispatch/integration.ts) has no java, although the review graph
-		// resolves Java imports. Putting java in the set was measured against
-		// jdtls 1.63.0 with this fixture (#1712, PR #5035): jdtls concluded on 2 of
-		// 12 runs. After the exporter's edit it publishes diagnostics for one
-		// importer and, on most runs, never for the other (wire capture: B.java got
-		// a publishDiagnostics with the error, C.java none, however long the run
-		// waited; 25 s of settle time before the edit did not change it, and jdtls
-		// had announced ServiceReady). The cascade touches C with unchanged
-		// content, sends the server nothing, and reads the cached pre-edit clean
-		// as a confirmed answer once its wait lapses, so a broken importer reads
-		// as a clean cascade. #5040 fixes that read and then adds java to the set;
-		// that change removes this declaration. The short deadline is because
-		// retrying a structural skip proves nothing.
-		expectDefect: {
-			skipReason: "non_code",
-			reason:
-				"java is held out of CASCADE_GRAPH_KINDS until #5040: the cascade reads a push-only server's cached importer answer as confirmed clean, so the cascade skips with non_code",
-		},
-		conclusiveDeadlineMs: 10_000,
 	},
 ];
 

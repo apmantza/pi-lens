@@ -775,11 +775,11 @@ jobs:
       # a red. One unavailable server (`skip`, a warning) is allowed;
       # `--min-pass=3` (of four) reds the night when fewer than three rows are a
       # pass or a known defect, and keeps an all-unavailable night from reading
-      # green. java is a declared known defect (`known-defect`, its own state,
-      # counted as work done) while java is held out of CASCADE_GRAPH_KINDS
-      # (#5040): a provisioned jdtls that answers and shows exactly the declared
-      # skip is that row; a jdtls that is not provisioned (empty JDTLS_PATH) is
-      # a `skip`; any other outcome, or a cascade that concludes, is a red row.
+      # green. A fixture may declare a known defect (`known-defect`, its own state,
+      # counted as work done; none does today, java's went with #5040): a server
+      # that answers and shows exactly the declared skip is that row, and any
+      # other outcome, or a cascade that concludes, is a red row. A jdtls that is
+      # not provisioned (empty JDTLS_PATH) is a `skip`.
       - name: LSP cascade layer (edit an exporter, importers conclude)
         id: lsp_cascade
         timeout-minutes: 20

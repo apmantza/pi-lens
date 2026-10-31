@@ -110,6 +110,24 @@ describe("trivy-config run() — terraform pass-through", () => {
 		expect(result.status).toBe("succeeded");
 	});
 
+	// Recurrence (#5042): an opt-in runner left off returned a bare skip, which
+	// a denied sibling's coverage notice reads as a failed tool.
+	it("states a not-enabled skip, and spawns nothing, while trivy is not opted in", async () => {
+		isTrivyEnabled.mockReturnValue(false);
+
+		const runner = (
+			await import("../../../clients/dispatch/runners/trivy-config.js")
+		).default;
+
+		const result = await runner.run(
+			createCtx("terraform", tfFile, tfCwd) as never,
+		);
+
+		expect(result.status).toBe("skipped");
+		expect(result.skipReason).toBe("not-enabled");
+		expect(safeSpawnAsync).not.toHaveBeenCalled();
+	});
+
 	// `trivy config` gets no `--exit-code`, so it exits 0 whenever it
 	// completed (findings included). A nonzero exit is therefore always a
 	// real error, regardless of stdout content — an empty-output-ONLY guard

@@ -179,9 +179,12 @@ file-scoped worklist and receives no project-wide scanner output.
     decides only delivery, and a run with no verdict (failed, unanswered, in
     flight) observes nothing, so neither retires a recorded blocker. A skip
     has a verdict only with a stated not-applicable reason
-    (`RUNNER_SKIP_REASONS`). A recorded blocker is still observed only at its
-    own line, aligned to the current bytes: another occurrence of the same
-    rule is not it. A fallback for missing evidence narrows what retires:
+    (`RUNNER_SKIP_REASONS`). `not-enabled` (an opt-in runner left off, #5042)
+    is the one stated reason that stays a no-verdict: admitting it would retire
+    recorded helm-render blockers and stop their owed ranges. A recorded blocker
+    is still observed only at its own line, aligned to the current bytes:
+    another occurrence of the same rule is not it. A fallback for missing
+    evidence narrows what retires:
     with no alignment, its identity anywhere keeps it. It stays a per-write
     hold and never widens what counts as the same finding: the match still
     needs the entry's own line text, and owed lines are matched by content,

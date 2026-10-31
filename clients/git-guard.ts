@@ -2055,6 +2055,8 @@ export function resyncGitGuardAfterRetire(args: {
 	owner: string | undefined;
 	lensGuardEnabled: boolean;
 	analysisRootMode?: AnalysisRootMode;
+	/** #5052 r2: the commit gate's checkout scope (see `syncGitGuardRecord`). */
+	inCheckout?: ((filePath: string) => boolean) | undefined;
 }): void {
 	args.runtime.updateGitGuardStatus(false, "");
 	if (args.lensGuardEnabled) {
@@ -2066,6 +2068,7 @@ export function resyncGitGuardAfterRetire(args: {
 			args.analysisRootMode,
 			undefined,
 			args.owner,
+			args.inCheckout,
 		);
 	}
 }
@@ -2145,6 +2148,13 @@ export function syncGitGuardRecord(
 	analysisRootMode: AnalysisRootMode = "session",
 	editedCleanVerdict = false,
 	sessionId?: string,
+	/**
+	 * #5048 (PR #5052 review): the commit gate's checkout scope. Its sync
+	 * persists only the blockers in the committed tree, so another checkout's
+	 * blocker is neither written into this cwd's cache nor judged by the
+	 * commit. Omitted, every blocker of the session counts.
+	 */
+	inCheckout?: (filePath: string) => boolean,
 ): void {
 	if (!canWriteAnalysisRoot(analysisRootMode)) return;
 	// #3248: a record the turn-end policy fully suppressed is not a blocker the
@@ -2153,7 +2163,10 @@ export function syncGitGuardRecord(
 	// bytes; it just stops speaking for the gate.
 	const entries = (
 		runtime.getInlineBlockersSnapshot?.({ sessionId }) ?? []
-	).filter((entry) => !entry.policySuppressed);
+	).filter(
+		(entry) =>
+			!entry.policySuppressed && (!inCheckout || inCheckout(entry.filePath)),
+	);
 	// #4725: the record is read whatever its age (`storedRecord`). Read through
 	// the freshness window, a stale record latched `cache_stale` here on every
 	// write, and no later session could clear it.
@@ -2556,12 +2569,36 @@ export function evaluateGitGuard(
 		const absorbed = absorbSettledRunnerBlockers(runtime, cwd);
 		// The inline path refreshes the persisted record beside the latch at
 		// `tool_result`; a recording at the gate has no turn end to do it, and a
-		// session boundary reads the record, not the latch (r1 M3).
-		if (absorbed.recorded > 0) syncGitGuardRecord(runtime, cacheManager, cwd);
+		// session boundary reads the record, not the latch (r1 M3). #5048: both
+		// resyncs persist only the committing session's records into this cwd's
+		// cache, and only those in the committed checkout (#5052 review:
+		// `inScope`). An answer absorbed for another session joins the map (and
+		// the latch) for its owner, whose own write or turn end persists it.
+		if (absorbed.recorded > 0) {
+			syncGitGuardRecord(
+				runtime,
+				cacheManager,
+				cwd,
+				undefined,
+				undefined,
+				undefined,
+				sessionId,
+				inScope,
+			);
+		}
 		// #4484 r2: a retire speaks for its file, as a clean write does, so the
 		// persisted record drops that file's section.
 		for (const filePath of absorbed.retiredFiles) {
-			syncGitGuardRecord(runtime, cacheManager, cwd, filePath);
+			syncGitGuardRecord(
+				runtime,
+				cacheManager,
+				cwd,
+				filePath,
+				undefined,
+				undefined,
+				sessionId,
+				inScope,
+			);
 		}
 		// #5020: a row naming a file that was deleted since the record was made
 		// has nothing left to fix, and no dispatch will ever re-take it. The gate
@@ -2580,6 +2617,7 @@ export function evaluateGitGuard(
 				filePath: retired.filePath,
 				owner: retired.owner,
 				lensGuardEnabled: true,
+				inCheckout: inScope,
 			});
 		}
 	} catch (failure) {
