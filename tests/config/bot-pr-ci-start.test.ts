@@ -569,6 +569,15 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 				`${APP_TOKEN_STEP}\n${dispatchStep("bot/x", SKIP_IF)}`,
 			),
 		],
+		// Recurrence: #5062 r5 F10. A loosened check that only looks for
+		// `app_token` would admit a fallback to a personal token.
+		[
+			"a skip that the opener's token does not earn: a personal-token fallback",
+			withToken(
+				"${{ steps.app_token.outputs.token || secrets.BOT_PAT }}",
+				`${APP_TOKEN_STEP}\n${dispatchStep("bot/x", SKIP_IF)}`,
+			),
+		],
 		[
 			"a dispatch step before the create-pull-request step",
 			opener(both).replace(
