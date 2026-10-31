@@ -30,10 +30,13 @@ import {
 	getDegradationLedgerGeneration,
 	recordDegradationOnce,
 } from "../degradation-ledger.js";
-import { windowsExe } from "../process-snapshot.js";
 import { getProjectTrustState } from "../project-trust.js";
 import { logExtension } from "../extension-log.js";
-import { OWNER_TAG_ENV, ownerTagForChildren } from "../process-snapshot.js";
+import {
+	OWNER_TAG_ENV,
+	ownerTagForChildren,
+	windowsExe,
+} from "../process-snapshot.js";
 import { redactSecrets } from "../redact/secrets.js";
 import {
 	classifySpawnFailure,

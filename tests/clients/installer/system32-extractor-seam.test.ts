@@ -132,7 +132,7 @@ describe("the Windows archive extractors are named through the System32 seam", (
 	});
 
 	it("a .zip archive is extracted with the pinned powershell.exe", async () => {
-		const call = await extractorFor("kotlin-language-server");
+		const call = await extractorFor("powershell-editor-services");
 		expect(call.command).toBe(
 			"Z:\\Sentinel Root\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
 		);
