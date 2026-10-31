@@ -1805,9 +1805,10 @@ describe("Pipeline", () => {
 			]);
 		});
 
-		it("reports no checked clean verdict for a run without authorship that keeps a blocker", async () => {
-			// Row 5: without authorship (#3226) a held-back blocker renders no text,
-			// so the run ends with the clean line while the file's record keeps it.
+		it("reports no checked clean verdict, and the withheld disclosure, for a run without authorship that keeps a blocker", async () => {
+			// Row 5: without authorship (#3226) a held-back blocker renders no STOP
+			// text. #5108: the run no longer ends with the clean line over it; it
+			// states that the blocker was withheld.
 			const filePath = createTempFile(
 				tmpDir,
 				"held.ts",
@@ -1829,7 +1830,10 @@ describe("Pipeline", () => {
 					cleanDispatch({ ...answered, heldBackBlockers: [blocker] }),
 					{ allowAutonomousWriters: false },
 				),
-			).toEqual(["✓ JavaScript/TypeScript clean", false]);
+			).toEqual([
+				expect.stringMatching(/^⚠ 1 blocking finding in held\.ts withheld/),
+				false,
+			]);
 		});
 
 		it("reports no checked clean verdict for a format-only change whose primary did not answer", async () => {
@@ -2413,6 +2417,132 @@ describe("Pipeline", () => {
 			expect(result.inlineBlockerLines).toEqual([1, 2]);
 			expect(result.inlineBlockerDiagnostics).toHaveLength(2);
 			expect(result.hasBlockers).toBe(true);
+		});
+	});
+	// #5108: a run without authorship (#3226) withholds the STOP block and the
+	// record, and says so. Recurrence prevented: pi session 01a192b9, where the
+	// withheld blocker left the output empty and `buildAllClearOutput` rendered
+	// `✓ JavaScript/TypeScript clean` over an lsp error on the written file.
+	describe("#5108 withheld blockers in a run without authorship", () => {
+		function blocker(
+			filePath: string,
+			tool: string,
+			message: string,
+			line = 3,
+		): Diagnostic {
+			return {
+				id: `${tool}:${line}`,
+				message,
+				filePath,
+				line,
+				severity: "error",
+				semantic: "blocking",
+				tool,
+			} as Diagnostic;
+		}
+
+		function dispatchWith(blockers: Diagnostic[]) {
+			const blockerOutput = formatDiagnostics(blockers, "blocking");
+			return {
+				diagnostics: [...blockers],
+				blockers,
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: blockerOutput,
+				blockerOutput,
+				hasBlockers: blockers.length > 0,
+			};
+		}
+
+		// The family axis: the disclosure keys off the run's blocker set, not off
+		// which runner raised it or which language the file is.
+		it.each([
+			["a TypeScript language server", "config.ts", "lsp"],
+			["a Python language server", "config.py", "lsp"],
+			["a Rust language server", "config.rs", "lsp"],
+			["oxlint", "config.ts", "oxlint"],
+		])(
+			"discloses the blocker %s raised, never the all-clear",
+			async (_member, name, tool) => {
+				const filePath = createTempFile(tmpDir, name, "x = 1\n");
+				vi.mocked(dispatchLintWithResult).mockResolvedValue(
+					dispatchWith([
+						blocker(filePath, tool, "Cannot find name 'PROVIDER_INFERX'"),
+					]) as never,
+				);
+
+				const result = await runPipeline(
+					createMockContext(filePath, { allowAutonomousWriters: false }),
+					createMockDeps(),
+				);
+
+				expect(result.output).toContain(
+					`1 blocking finding in ${name} withheld`,
+				);
+				expect(result.output).not.toMatch(/clean|\u2713/);
+				expect(result.output).not.toContain("STOP");
+				expect(result.withheldBlockerLine).toBe(result.output);
+				// Withheld stays withheld (#3226, #4137): no record for the turn-end
+				// replay and no verdict for the commit gate.
+				expect(result.hasBlockers).toBe(false);
+				expect(result.inlineBlockerSummary).toBeUndefined();
+				expect(result.checkedClean).toBe(false);
+			},
+		);
+
+		it("counts every withheld blocker", async () => {
+			const filePath = createTempFile(tmpDir, "two.ts", "const x = 1;\n");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue(
+				dispatchWith([
+					blocker(filePath, "lsp", "first", 1),
+					blocker(filePath, "oxlint", "second", 2),
+				]) as never,
+			);
+
+			const result = await runPipeline(
+				createMockContext(filePath, { allowAutonomousWriters: false }),
+				createMockDeps(),
+			);
+
+			expect(result.output).toContain("2 blocking findings in two.ts withheld");
+			expect(result.output).toContain("lens_diagnostics mode=all lists them");
+		});
+
+		it("keeps the all-clear for a run that held no blocker", async () => {
+			// The control: the disclosure is the blocker's, not every unauthored
+			// run's.
+			const filePath = createTempFile(tmpDir, "fine.ts", "const x = 1;\n");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue(
+				dispatchWith([]) as never,
+			);
+
+			const result = await runPipeline(
+				createMockContext(filePath, { allowAutonomousWriters: false }),
+				createMockDeps(),
+			);
+
+			expect(result.output).toContain("clean");
+			expect(result.withheldBlockerLine).toBeUndefined();
+		});
+
+		it("renders the STOP block, not the disclosure, when the run is authored", async () => {
+			// The other direction: authorship decides the channel, and the two are
+			// never both rendered for one blocker.
+			const filePath = createTempFile(tmpDir, "authored.ts", "const x = 1;\n");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue(
+				dispatchWith([blocker(filePath, "lsp", "bad name")]) as never,
+			);
+
+			const result = await runPipeline(
+				createMockContext(filePath),
+				createMockDeps(),
+			);
+
+			expect(result.output).toContain("STOP");
+			expect(result.output).not.toContain("withheld");
+			expect(result.withheldBlockerLine).toBeUndefined();
 		});
 	});
 });
