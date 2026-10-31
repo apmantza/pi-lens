@@ -135,7 +135,7 @@ describe("#3754 merge queue workflow contract", () => {
 	});
 
 	// Recurrence: the PR-only lanes (PR title/body, changelog fast-fail,
-	// targeted advisory) read `github.event.pull_request`, which is empty on a
+	// changed tests shuffled) read `github.event.pull_request`, which is empty on a
 	// merge_group run. They must be skipped there, by an explicit
 	// `pull_request` guard, never by failing. The short `github.base_ref` /
 	// `github.head_ref` forms are PR-only too (#3765 F4), and a step-level
