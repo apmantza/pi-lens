@@ -80,7 +80,15 @@ const asList = (needs: string | string[] | undefined) =>
 // suite for a merge_group event even for a docs-only file list`). Every row is
 // checked to still be needed at the end of the guard test, so a future fix
 // that removes the need reds here instead of leaving a stale admission.
-const MERGE_GROUP_SAFE_PR_CONTEXT = [".github/workflows/ci.yml#changes"];
+//
+// `install-test` (#5112) is the same case: its classify step passes
+// `github.event.pull_request.number` to the same script, which reads any other
+// event (merge_group included) as install=true and never reads `--pr`. The
+// three legs are required checks, so they must start on the queue's commit.
+const MERGE_GROUP_SAFE_PR_CONTEXT = [
+	".github/workflows/ci.yml#changes",
+	".github/workflows/ci.yml#install-test",
+];
 
 describe("#3754 merge queue workflow contract", () => {
 	// Recurrence it prevents: enabling the queue while a required-check

@@ -18,6 +18,14 @@ on:
   # reports the same required check names on the branch head and takes the
   # push-shaped full-suite path (docs/ci-bot-pr-checks.md).
   workflow_dispatch:
+  # #5112: a nightly run of the whole workflow on master's tip, 03:30 UTC. A
+  # pull request runs `Install test (<os>)` only when it touches an install
+  # path and `Strict install` never, and a master push is the only other full
+  # run; this one catches registry and runner-image drift on a day nothing
+  # merged. A `schedule` run takes the push-shaped full-suite path in
+  # scripts/ci-changed-files.mjs (any non-pull_request event).
+  schedule:
+    - cron: "30 3 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -79,10 +87,16 @@ jobs:
   # uncovered lifecycle script (#4028). Keep this early PR/push signal
   # independent of the required install lanes and make the cache boundary
   # explicit: the job-local directory starts empty and setup-node has no npm
-  # cache input. The exact PR head is checked out because `github.ref` is the
-  # mutable pull-request merge ref and can disappear after the run starts.
+  # cache input.
+  #
+  # #5112: not a pull_request job. It caught nothing in 30 days (1,410 runner
+  # minutes, #3995 slice A) and a pull request that changes the manifests or
+  # the lockfile still runs the same strict install through install-smoke.yml's
+  # `npm-strict` job (package.json and package-lock.json are in its paths).
+  # Master pushes, the merge queue, dispatches and the nightly schedule keep it.
   strict-install-cold-cache:
     name: Strict install (cold npm cache) (fast-fail)
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     # refs #3123: this is a single dependency install plus prepare; keep a
     # bounded runner even if the registry or a lifecycle child hangs.
@@ -92,7 +106,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1195,8 +1209,24 @@ jobs:
     # install the repo's own tarball), and it made Install the LAST required
     # check in 35 of 37 green runs, landing a median 3.5 minutes after Unit
     # tests. Every required check on this workflow still runs to completion.
+    #
+    # #5112: ALWAYS REPORTS, INSTALLS ONLY WHEN IT CAN CATCH SOMETHING. The three
+    # legs are required contexts (`Install test (ubuntu-latest|windows-latest|
+    # macos-latest)`) and cost 10,875 runner minutes in 30 days for 0 real
+    # catches (#3995 slice A). On a pull request the first step asks
+    # scripts/ci-changed-files.mjs whether the diff touches INSTALL_PATHS
+    # (manifests, install and postinstall scripts, the scripts this job runs,
+    # `bin/`, the install workflows). When it does not, every step after it is
+    # skipped and the leg passes in seconds with the line "no install files
+    # changed". The job is never skipped at job level: a skipped job reports
+    # `skipped`, and ci-verdict demands a literal `success` on a required row
+    # (#2618), the way hot-path-latency.yml reports. A master push, the merge
+    # queue, a dispatch and the nightly `schedule` run every step: the script
+    # reads any non-pull_request event as install=true, and so does an
+    # unreadable or empty file list (shape 48, doubt installs).
     permissions:
       contents: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:
@@ -1212,7 +1242,29 @@ jobs:
         with:
           node-version: '22'
 
+      # `shell: bash` on every leg: the Windows default is pwsh, which does not
+      # expand "$EVENT_NAME". The step has no `if`, so the verdict is written on
+      # every event and a crashed classifier reds the leg instead of passing it.
+      # The steps below test `!= 'false'`: an empty output installs.
+      - name: Classify the changed files
+        id: scope
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node scripts/ci-changed-files.mjs --event "$EVENT_NAME" --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER"
+
+      - name: No install files changed
+        if: steps.scope.outputs.install == 'false'
+        shell: bash
+        run: |
+          line="no install files changed: nothing to install, passing"
+          echo "$line"
+          echo "$line" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Install dependencies
+        if: steps.scope.outputs.install != 'false'
         run: npm install --no-audit --no-fund
 
       # refs #3098: the ONLY case-insensitive POSIX filesystem in CI is this
@@ -1228,7 +1280,7 @@ jobs:
       # on its first outings. Promotion to gating is a separate decision after
       # several green legs (#3159 round 3).
       - name: POSIX case-insensitive anchors (APFS)
-        if: matrix.os == 'macos-latest'
+        if: github.event_name != 'pull_request' && matrix.os == 'macos-latest'
         continue-on-error: true
         shell: bash
         run: |
@@ -1246,8 +1298,16 @@ jobs:
       # counter the promotion decision above reads. 100 is under half of the
       # measured 223: the step exists to catch a run that executed nothing, and
       # a tight margin would red the required leg on a legitimate test removal.
+      #
+      # #5112: not a pull_request step, and neither is the step above. They
+      # share one condition so the floor never outlives its site, and the
+      # evaluated-floors registry admits a comparison of the event name. The
+      # anchors test is advisory and added a macOS build and a Vitest run to a
+      # leg a docs-only pull request now ends after the classify step; master
+      # pushes, the merge queue and the nightly schedule keep it, so a
+      # case-insensitive regression still reds before the next release.
       - name: APFS anchors evaluated floor
-        if: ${{ !cancelled() && matrix.os == 'macos-latest' }}
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.os == 'macos-latest' }}
         shell: bash
         run: |
           set -uo pipefail
@@ -1255,13 +1315,16 @@ jobs:
           node scripts/assert-evaluated.mjs --count "apfs-anchors=${count}" --floor 100
 
       - name: Rule catalog report (non-blocking)
+        if: steps.scope.outputs.install != 'false'
         continue-on-error: true
         run: npm run audit:rule-catalog
 
       - name: Pack tarball
+        if: steps.scope.outputs.install != 'false'
         run: npm pack
 
       - name: Verify required files in tarball
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: |
           TARBALL=$(ls pi-lens-*.tgz)
@@ -1295,6 +1358,7 @@ jobs:
           fi
 
       - name: Verify package.json entry points exist in tarball
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: |
           TARBALL=$(ls pi-lens-*.tgz)
@@ -1364,12 +1428,14 @@ jobs:
 
       # Intentional: this job verifies the package installs like pi installs it.
       - name: Install from tarball (simulates pi install npm:pi-lens)
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: | # zizmor: ignore[adhoc-packages]
           TARBALL=$(ls pi-lens-*.tgz)
           npm install -g "$TARBALL"
 
       - name: Verify bundled core grammars shipped in the tarball
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: |
           # Core grammars ship bundled in pi-lens/grammars (via prepare + files[]);
@@ -1383,6 +1449,7 @@ jobs:
           echo "Bundled core grammar checks passed"
 
       - name: Load each extension entry point (catches missing files)
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: |
           INSTALL_DIR=$(npm root -g)/pi-lens
@@ -1392,6 +1459,7 @@ jobs:
       # runs from the checkout against the GLOBAL install the earlier step made,
       # so it inspects what a real `pi install npm:pi-lens` produces.
       - name: Verify no host-provided package shipped in the tarball (#1926)
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: node scripts/check-prod-install-shape.mjs "$(npm root -g)/pi-lens"
 
@@ -1403,6 +1471,7 @@ jobs:
       # never hardcoded here. The type-only host SDK is deliberately NOT
       # installed (Windows MAX_PATH, #1334 S6).
       - name: Supply host-provided packages the way pi does (#1926)
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: | # zizmor: ignore[adhoc-packages]
           INSTALL_DIR=$(npm root -g)/pi-lens
@@ -1416,6 +1485,7 @@ jobs:
             --prefix "$INSTALL_DIR" "${HOST_PKGS[@]}"
 
       - name: Verify extension entry loads (catches missing node_modules deps)
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: |
           # Build the allowlist BEFORE leaving the checkout: the global install
@@ -1441,6 +1511,7 @@ jobs:
           echo "Extension import check passed"
 
       - name: Startup not weakened — entry loads from precompiled dist (#182)
+        if: steps.scope.outputs.install != 'false'
         shell: bash
         run: |
           # Loading the entry above made pi-lens self-report its load source to

@@ -12,7 +12,18 @@ permissions:
   pull-requests: write
 
 jobs:
+  # #5112: 1,446 runner minutes in 30 days, almost all for an action that found
+  # an author who was not new and posted nothing. GitHub already says who is
+  # new in the payload (`author_association`), so the job is skipped at job
+  # level, on no runner, for everyone else. The check is not a required
+  # context (scripts/lib/ci-checks.mjs lists it as advisory). The job has no
+  # checkout and runs no repository code.
   greeting:
+    if: >-
+      github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
+      github.event.pull_request.author_association == 'FIRST_TIMER' ||
+      github.event.issue.author_association == 'FIRST_TIME_CONTRIBUTOR' ||
+      github.event.issue.author_association == 'FIRST_TIMER'
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max over last 10 successful master runs: 71s; timeout = floor of
