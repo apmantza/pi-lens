@@ -140,9 +140,10 @@ the requested window.
    withheld blockers: one row per abandoned call that queued its disclosure
    for the calling session's next context call, with `metadata.notices` (the
    withheld lines; the advisory shows five) and `metadata.budgetMs`, and the
-   tool name as `filePath`. The row is written even when the advisory queue
-   was full; that drop is the `agent-advisory-dropped` degradation (`cap`),
-   so report the pair.
+   tool name as `filePath`. The row is written even when the advisory never
+   reaches the agent: a full queue or a session that ended before its next
+   context call drops it as the `agent-advisory-dropped` degradation (`cap`
+   or `scope-retired`), so report the pair.
    **Session decisions** (#3873; each row is one lifecycle event, none is per
    occurrence in a loop): `session_handoff_slot` (`op`: `stashed`, `replaced`,
    `taken`, `key-mismatch-left` (once per stale slot), `forwarded`,
