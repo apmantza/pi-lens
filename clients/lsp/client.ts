@@ -43,6 +43,7 @@ import {
 	newLspMutationCorrelationId,
 } from "../lsp-mutation.js";
 import { getProcessSingleton } from "../process-singletons.js";
+import { windowsExe } from "../process-snapshot.js";
 import {
 	getAmbientAbortSignal,
 	isOwnLiveChild,
@@ -1640,7 +1641,7 @@ export async function killProcessTree(
 		}
 		try {
 			// Absolute path avoids PATH-resolution: SystemRoot is set by Windows itself.
-			const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+			const taskkill = windowsExe("taskkill.exe");
 			const killer = nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
 				shell: false,
 				windowsHide: true,

@@ -39,6 +39,7 @@ import {
 	recordProjectCommandRefusal,
 	sessionRepositoryJudge,
 } from "./session-repository.js";
+import { windowsExe } from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
 import { compareOrdinal } from "./string-utils.js";
@@ -658,7 +659,7 @@ export function isOwnLiveChild(
 function killPidTreeSync(pid: number): void {
 	if (process.platform === "win32") {
 		try {
-			const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+			const taskkill = windowsExe("taskkill.exe");
 			spawnSync(taskkill, ["/F", "/T", "/PID", String(pid)], {
 				shell: false,
 				windowsHide: true,
@@ -812,7 +813,7 @@ export function buildWindowsShellCommand(
 	command: string,
 	args: string[],
 ): string {
-	const chcp = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\chcp.com`;
+	const chcp = windowsExe("chcp.com");
 	return `${chcp} 65001 >nul 2>&1 & ${[command, ...args].map(cmdEscapeArg).join(" ")}`;
 }
 
@@ -1605,7 +1606,7 @@ function ensureUtf8ConsoleCodePageOnce(): void {
 	if (utf8ConsoleCodePageApplied) return;
 	utf8ConsoleCodePageApplied = true;
 	try {
-		const cmdExe = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\cmd.exe`;
+		const cmdExe = windowsExe("cmd.exe");
 		spawnSync(cmdExe, ["/d", "/s", "/c", "chcp 65001 >nul 2>&1"], {
 			shell: false,
 			windowsHide: true,
@@ -2044,7 +2045,7 @@ export async function safeSpawnAsync(
 				} else {
 					// Pin the interpreter — never trust ComSpec/COMSPEC (#18): an
 					// env-controlled ComSpec could point anywhere.
-					spawnCmd = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\cmd.exe`;
+					spawnCmd = windowsExe("cmd.exe");
 					spawnArgs = [
 						"/d",
 						"/s",
@@ -2225,7 +2226,7 @@ export async function safeSpawnAsync(
 		// as an orphan. Use taskkill /F /T to kill the full process tree instead.
 		const killTree = async (phase: KillPhase): Promise<void> => {
 			if (isWindows && child.pid && child.pid > 0) {
-				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+				const taskkill = windowsExe("taskkill.exe");
 				try {
 					await new Promise<void>((done) => {
 						const killer = spawn(
@@ -2940,7 +2941,7 @@ export function safeSpawn(
 					}),
 				};
 			}
-			spawnCmd = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\cmd.exe`;
+			spawnCmd = windowsExe("cmd.exe");
 			spawnArgs = [
 				"/d",
 				"/s",
