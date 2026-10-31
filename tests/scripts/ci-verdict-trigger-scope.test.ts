@@ -82,17 +82,20 @@ async function verdictOf({
 	runs,
 	target = "eb25d80cb",
 	runsThrow = false,
+	author,
 }: {
 	rows: Row[];
 	runs: Array<Record<string, unknown>>;
 	target?: string;
 	runsThrow?: boolean;
+	author?: { login: string; is_bot?: boolean };
 }) {
 	return verdictRaw({
 		checkRuns: rows.map(checkRun),
 		runs,
 		target,
 		runsThrow,
+		author,
 	});
 }
 
@@ -102,12 +105,14 @@ async function verdictRaw({
 	target = "eb25d80cb",
 	runsThrow = false,
 	required = REQUIRED,
+	author,
 }: {
 	checkRuns: Array<Record<string, unknown>>;
 	runs: Array<Record<string, unknown>>;
 	target?: string;
 	runsThrow?: boolean;
 	required?: string[];
+	author?: { login: string; is_bot?: boolean };
 }) {
 	const sha = String(checkRuns[0]?.head_sha);
 	const calls: string[] = [];
@@ -115,7 +120,11 @@ async function verdictRaw({
 		calls.push(args.join(" "));
 		if (args[0] === "repo") return "acme/repo";
 		if (args[0] === "pr")
-			return JSON.stringify({ headRefOid: sha, mergeable: "MERGEABLE" });
+			return JSON.stringify({
+				headRefOid: sha,
+				mergeable: "MERGEABLE",
+				author,
+			});
 		const endpoint = args[1] ?? "";
 		if (endpoint.endsWith("/protection"))
 			return JSON.stringify({ required_status_checks: { contexts: required } });
@@ -180,6 +189,100 @@ describe("ci-verdict gates only on checks from this commit's PR/push CI (#4090)"
 		expect(v.out).toContain(
 			"Advisory by trigger (workflow_dispatch run, not this commit's PR/push CI): Stryker shard 0 (12 files) (failure)",
 		);
+	});
+
+	// Recurrence: #5062. A PR a workflow opens with GITHUB_TOKEN has no
+	// pull_request run; the nightly dispatches ci.yml and lint.yml on its branch,
+	// so every non-required check is a dispatch row. Read as advisory (#4090),
+	// `Dependency boundaries` and `Production install build` red gave `success`.
+	describe("dispatch runs on a bot-opened PR are its CI (#5062)", () => {
+		const RED_DISPATCH: Row[] = [
+			{ name: "Dependency boundaries", suite: 3, conclusion: "failure" },
+			{
+				name: "Production install build (--omit=dev, from source)",
+				suite: 3,
+				conclusion: "failure",
+			},
+		];
+		const BOT = { login: "app/github-actions", is_bot: true };
+
+		it("gates a red non-required dispatch check on a bot PR: exit 1", async () => {
+			const v = await verdictOf({
+				target: "5066",
+				author: BOT,
+				rows: [...REQUIRED_GREEN, ...RED_DISPATCH],
+				runs: [...REQUIRED_RUNS, workflowRun(3, "workflow_dispatch")],
+			});
+			expect(v.code).toBe(EXIT_FAILURE);
+			expect(v.out).toContain("Dependency boundaries (failure)");
+			expect(v.out).not.toContain("Advisory by trigger");
+		});
+
+		it("holds a still-running non-required dispatch check on a bot PR pending: exit 3", async () => {
+			const v = await verdictOf({
+				target: "5066",
+				author: BOT,
+				rows: [
+					...REQUIRED_GREEN,
+					{
+						name: "Dependency boundaries",
+						suite: 3,
+						status: "in_progress",
+						conclusion: null,
+					},
+				],
+				runs: [...REQUIRED_RUNS, workflowRun(3, "workflow_dispatch")],
+			});
+			expect(v.code).toBe(EXIT_PENDING);
+		});
+
+		it("keeps the same dispatch rows advisory on a human PR: exit 0", async () => {
+			const v = await verdictOf({
+				target: "5066",
+				author: { login: "apmantza", is_bot: false },
+				rows: [...REQUIRED_GREEN, ...RED_DISPATCH],
+				runs: [...REQUIRED_RUNS, workflowRun(3, "workflow_dispatch")],
+			});
+			expect(v.code).toBe(EXIT_SUCCESS);
+			expect(v.out).toContain(
+				"Advisory by trigger (workflow_dispatch run, not this commit's PR/push CI): Dependency boundaries (failure)",
+			);
+		});
+
+		it("keeps a bare-SHA target advisory: it carries no author", async () => {
+			const v = await verdictOf({
+				rows: [...REQUIRED_GREEN, ...RED_DISPATCH],
+				runs: [...REQUIRED_RUNS, workflowRun(3, "workflow_dispatch")],
+				author: BOT,
+			});
+			expect(v.code).toBe(EXIT_SUCCESS);
+		});
+
+		it.each(["schedule", "workflow_run", "repository_dispatch"])(
+			"keeps a %s run advisory on a bot PR: only dispatch flips",
+			async (event) => {
+				const v = await verdictOf({
+					target: "5066",
+					author: BOT,
+					rows: [...REQUIRED_GREEN, ...RED_DISPATCH],
+					runs: [...REQUIRED_RUNS, workflowRun(3, event)],
+				});
+				expect(v.code).toBe(EXIT_SUCCESS);
+			},
+		);
+
+		it("keeps an (advisory) name advisory even from a bot PR's dispatch run", async () => {
+			const v = await verdictOf({
+				target: "5066",
+				author: BOT,
+				rows: [
+					...REQUIRED_GREEN,
+					{ name: "OSV scan (advisory)", suite: 3, conclusion: "failure" },
+				],
+				runs: [...REQUIRED_RUNS, workflowRun(3, "workflow_dispatch")],
+			});
+			expect(v.code).toBe(EXIT_SUCCESS);
+		});
 	});
 
 	it("a still-running dispatch check does not hold the verdict pending", async () => {

@@ -411,6 +411,7 @@ describe("#4680 r4 F1: ci-verdict runs in a checkout that was never built", () =
 				"scripts/lib/ci-runtime-cap.mjs",
 				"scripts/lib/github-rest.mjs",
 				"scripts/lib/vitest-summary.mjs",
+				"scripts/update-contributors.mjs",
 			])
 				copyFileSync(join(ROOT, file), join(dir, file));
 			mkdirSync(join(dir, ".github", "workflows"), { recursive: true });

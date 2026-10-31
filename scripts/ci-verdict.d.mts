@@ -205,7 +205,7 @@ export declare function resolveHeadSha(
 	target: string,
 	ghExec?: GhExec,
 	timeoutMs?: number,
-): { sha: string; mergeable: string | null };
+): { sha: string; mergeable: string | null; botAuthored: boolean };
 
 export declare function resolveClassification(
 	target: string,
@@ -340,7 +340,11 @@ export declare function restResolveHeadSha(
 	repository: string,
 	target: string,
 	options?: RestOptions,
-): Promise<{ sha: string | undefined; mergeable: string | null }>;
+): Promise<{
+	sha: string | undefined;
+	mergeable: string | null;
+	botAuthored: boolean;
+}>;
 
 export declare function restFetchCheckRunsPayload(
 	repository: string,
