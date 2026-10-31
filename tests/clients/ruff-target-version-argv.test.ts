@@ -71,9 +71,15 @@ const PYPROJECT_312 =
 /** The pre-check's config slice: everything between the mode flags and the file. */
 function preCheckConfigArgs(call: SpawnCall, filePath: string): string[] {
 	const args = [...call.args];
-	expect(args.slice(0, 3)).toEqual(["check", "--output-format", "json"]);
+	expect(args.slice(0, 5)).toEqual([
+		"check",
+		"--no-fix",
+		"--no-fix-only",
+		"--output-format",
+		"json",
+	]);
 	expect(args.at(-1)).toBe(filePath);
-	return args.slice(3, -1);
+	return args.slice(5, -1);
 }
 
 /** The fix pass's config slice: everything between its mode flag and the file. */
