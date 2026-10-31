@@ -21,9 +21,14 @@ The editor-facing JSON Schema is published at
 [`docs/schema/pi-lens-config-v1.json`](schema/pi-lens-config-v1.json). LSP
 server entries also accept canonical argv arrays, optional `name` (defaulting
 to the map id), `enabled`, `role` (`language` or `auxiliary`), `args`, and
-`rootMarkers`. These new fields are experimental; reserved role, root-policy,
-and timing semantics are inert until their planned catalog slices land, so this
-schema slice does not change server launch behavior.
+`rootMarkers`. A `command` is either a bare string (launched with `args`,
+default `["--stdio"]`) or an argv array whose first element is the program;
+the array's remaining elements come before `args`, and no `--stdio` is added to
+it. A `command` that is neither, or an empty or non-string array, fails at
+launch with a message naming the field. These new fields are experimental;
+reserved role, root-policy, and timing semantics are inert until their planned
+catalog slices land, so this schema slice does not change server launch
+behavior.
 
 ```jsonc
 {

@@ -662,6 +662,38 @@ describe("effectiveConfig — redaction is unconditional", () => {
 		expect(projectDir).toContain("proj");
 	});
 
+	it("renders an argv-array command by its head and counts its tail (#5127)", async () => {
+		// Recurrence: the redacted spec read `command` only when it was a string,
+		// so the documented argv form rendered as a server with NO command and
+		// `argvCount` 0 while the runtime held a launchable row.
+		const { view } = await viewFor(
+			{
+				files: {
+					"proj/.pi-lens.json": {
+						lsp: {
+							servers: {
+								"array-server": {
+									name: "Array",
+									extensions: [".md"],
+									command: ["my-lsp", "--stdio", "--token", "ARGV_SECRET_ZZZ"],
+									args: ["--extra"],
+								},
+							},
+						},
+					},
+				},
+				startDir: "proj",
+			},
+			{ file: "notes.md" },
+		);
+		const custom = resolvedFile(view)?.servers.find(
+			(entry) => entry.id === "array-server",
+		);
+		expect(custom?.spec?.command).toBe("my-lsp");
+		expect(custom?.spec?.argvCount).toBe(5);
+		expect(JSON.stringify(view)).not.toContain("ARGV_SECRET_ZZZ");
+	});
+
 	it("reports a legacy config location as legacy rather than silently reading it", async () => {
 		const { view } = await viewFor({
 			files: { "proj/pi-lsp.json": { disabledServers: ["typos"] } },
