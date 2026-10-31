@@ -2191,9 +2191,13 @@ describe("resolveHeadSha — mergeable resolution (#2539 round 2, F1)", () => {
 			});
 		};
 		const result = resolveHeadSha("2539", ghExec);
-		expect(result).toEqual({ sha: "c0ffee123456", mergeable: "CONFLICTING" });
+		expect(result).toEqual({
+			sha: "c0ffee123456",
+			mergeable: "CONFLICTING",
+			botAuthored: false,
+		});
 		expect(calls).toEqual([
-			["pr", "view", "2539", "--json", "headRefOid,mergeable"],
+			["pr", "view", "2539", "--json", "headRefOid,mergeable,author"],
 		]);
 	});
 
@@ -2204,6 +2208,7 @@ describe("resolveHeadSha — mergeable resolution (#2539 round 2, F1)", () => {
 		expect(resolveHeadSha("abc1234", ghExec)).toEqual({
 			sha: "abc1234",
 			mergeable: null,
+			botAuthored: false,
 		});
 	});
 
@@ -2226,6 +2231,22 @@ describe("resolveHeadSha — mergeable resolution (#2539 round 2, F1)", () => {
 		};
 		resolveHeadSha("2539", ghExec);
 		expect(calls[0]).toEqual({ timeoutMs: DEFAULT_GH_TIMEOUT_MS });
+	});
+});
+
+describe("resolveHeadSha — bot authorship (#5062)", () => {
+	// Recurrence: a bot-opened PR's checks are all dispatch runs, which #4090
+	// reads as advisory; the verdict needs to know who opened the PR.
+	it.each([
+		["gh is_bot flag", { login: "someone", is_bot: true }, true],
+		["an app login", { login: "app/github-actions", is_bot: false }, true],
+		["a [bot] login", { login: "dependabot[bot]" }, true],
+		["a human", { login: "apmantza", is_bot: false }, false],
+		["a missing author", undefined, false],
+	])("reads %s", (_name, author, expected) => {
+		const ghExec = () =>
+			JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE", author });
+		expect(resolveHeadSha("5066", ghExec).botAuthored).toBe(expected);
 	});
 });
 

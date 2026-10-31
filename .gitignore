@@ -105,6 +105,7 @@ migrate-*.js
 !docs/pi-lens-orchestration.md
 !docs/pi-lens-release.md
 !docs/merge-queue-rollout.md
+!docs/ci-bot-pr-checks.md
 !docs/pi-lens-monitor.md
 !docs/real-harness.md
 !docs/audit1.md

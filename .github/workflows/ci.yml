@@ -13,6 +13,11 @@ on:
   # carry `if: github.event_name == 'pull_request'` and are skipped there.
   merge_group:
     types: [checks_requested]
+  # #5062: a PR a workflow opens with GITHUB_TOKEN starts no `pull_request` run.
+  # The opening job dispatches this workflow on the bot branch instead; the run
+  # reports the same required check names on the branch head and takes the
+  # push-shaped full-suite path (docs/ci-bot-pr-checks.md).
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}

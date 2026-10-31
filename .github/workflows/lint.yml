@@ -17,6 +17,9 @@ on:
   # #3754: the merge queue needs knip and oxfmt on its own merge commit.
   merge_group:
     types: [checks_requested]
+  # #5062: dispatched on a bot-opened PR's branch, where GITHUB_TOKEN starts no
+  # `pull_request` run (docs/ci-bot-pr-checks.md).
+  workflow_dispatch:
 
 concurrency:
   group: lint-${{ github.ref }}
