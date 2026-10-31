@@ -92,10 +92,21 @@ const ruffRunner: RunnerDefinition = {
 		// builder, so the package-owned fallback config can never drift.
 		const configArgs = ruffConfigArgs(cwd);
 
-		// Step 1: Capture diagnostics (before fixing) — teaching signal for the agent
+		// Step 1: Capture diagnostics (before fixing) — teaching signal for the agent.
+		// `--no-fix --no-fix-only` (#5119): a project `fix = true` or
+		// `fix-only = true` would otherwise make this diagnostics-only pass
+		// rewrite the file; `--no-fix` alone leaves `fix-only = true` writing.
 		const checkResult = await safeSpawnAsync(
 			cmd,
-			["check", "--output-format", "json", ...configArgs, ctx.filePath],
+			[
+				"check",
+				"--no-fix",
+				"--no-fix-only",
+				"--output-format",
+				"json",
+				...configArgs,
+				ctx.filePath,
+			],
 			{ cwd, timeout: 30000 },
 		);
 

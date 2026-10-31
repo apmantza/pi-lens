@@ -352,6 +352,9 @@ describe("JSON runner outcome seam (#1816)", () => {
 						]
 					: [
 							"run",
+							// #5119: a project `issues.fix: true` must not make this
+							// diagnostics-only run rewrite the file.
+							"--fix=false",
 							"--output.json.path=stdout",
 							"--output.text.path=",
 							"--output.tab.path=",

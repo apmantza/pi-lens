@@ -12,13 +12,19 @@
  * was told `fixed: 1` for a file ruff never touched. Both directions are pinned:
  * the report matches the file when the declaration forbids the fix, and the fix
  * still lands when the declaration allows it.
+ *
+ * #5119 rides the same real-binary admission: a diagnostics-only `ruff check`
+ * obeys the project's `fix` / `fix-only` settings, so the last describe pins
+ * that neither the dispatch runner nor the autofix pre-check writes the file.
  */
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import ruffRunner from "../../clients/dispatch/runners/ruff.js";
 import { RuffClient } from "../../clients/ruff-client.js";
+import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { detectPythonTargetVersion } from "../../clients/python-environment.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 
@@ -221,6 +227,57 @@ describe.skipIf(!hasRuff)(
 			expect(result.fixed).toBe(1);
 			expect(result.changed).toBe(true);
 			expect(fs.readFileSync(filePath, "utf-8")).not.toContain("List[int]");
+		});
+	},
+);
+
+describe.skipIf(!hasRuff)(
+	"a diagnostics-only ruff pass never writes the file (#5119)",
+	() => {
+		// Recurrence: the dispatch runner (`ruff.ts`) and the autofix pre-check
+		// (`ruff-client.ts`) both ran `ruff check --output-format json` without
+		// `--no-fix`, so a project `fix = true` rewrote the file on a lint pass
+		// even with pi-lens format and autofix disabled. `fix-only = true` is a
+		// separate boundary: `--no-fix` alone still writes (and reports nothing).
+		const UNUSED = "import os\nkept = 1\n";
+		const withConfig = (toml: string): string => {
+			fs.writeFileSync(path.join(cwd, "ruff.toml"), toml);
+			const filePath = path.join(cwd, "fix-config.py");
+			fs.writeFileSync(filePath, UNUSED);
+			return filePath;
+		};
+		const runnerKeepsBytes = async (toml: string): Promise<void> => {
+			const filePath = withConfig(toml);
+
+			const result = await ruffRunner.run(
+				makeRunnerCtx(filePath, cwd, { kind: "python" }) as never,
+			);
+
+			expect(fs.readFileSync(filePath, "utf-8")).toBe(UNUSED);
+			expect(result.diagnostics.map((d) => d.rule)).toContain("F401");
+		};
+
+		it("runner keeps the bytes and still reports F401 under fix = true", async () => {
+			await runnerKeepsBytes('fix = true\n[lint]\nselect = ["F401"]\n');
+		});
+
+		it("runner keeps the bytes and reports F401 under fix = true and fix-only = true", async () => {
+			await runnerKeepsBytes(
+				'fix = true\nfix-only = true\n[lint]\nselect = ["F401"]\n',
+			);
+		});
+
+		it("autofix pre-check counts the fixable finding, then check --fix still fixes", async () => {
+			// The pre-check wrote the file under `fix = true`, counted zero
+			// fixable findings, and reported `fixed: 0` for a file that changed.
+			const filePath = withConfig('fix = true\n[lint]\nselect = ["F401"]\n');
+
+			const result = await new RuffClient().fixFileAsync(filePath, cwd);
+
+			expect(result.success).toBe(true);
+			expect(result.changed).toBe(true);
+			expect(result.fixed).toBe(1);
+			expect(fs.readFileSync(filePath, "utf-8")).toBe("kept = 1\n");
 		});
 	},
 );

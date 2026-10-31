@@ -52,10 +52,6 @@ const reviewedExceptions = new Map<string, string>([
 		"reads the live config source, not the stale compiled vitest.config.js",
 	],
 	[
-		"tests/config/real-harness-lane.test.ts -> vitest.config.ts",
-		"reads the live config source, not the stale compiled vitest.config.js",
-	],
-	[
 		"tests/config/test-shard-assignment.test.ts -> vitest.config.ts",
 		"reads the live config source, not the stale compiled vitest.config.js",
 	],

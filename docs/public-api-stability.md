@@ -422,7 +422,7 @@ The compatibility policy and migration path from legacy v1 symbols are documente
 | 2. Append-only `PILENS_CFG_*` codes | `CONFIG_DIAGNOSTIC_CODES` | `tests/clients/config-diagnostic-codes.test.ts` |
 | 3. Reserved `$schema` identity anchor | `CONFIG_SCHEMA_ID`, `CONFIG_SCHEMA_ANCHOR_KEY` | `assertSchemaIdentityAnchor` |
 | 4. Deprecation window + removal checklist | `DEPRECATED_CONFIG_SURFACES` | `tests/clients/config-deprecation-registry.test.ts` |
-| 5. Config core: tiers, deny precedence, ProcessSpec trust | `clients/config-core/` | `tests/clients/config-core/*.test.ts`, `tests/config/config-core-schema-stability.test.ts` |
+| 5. Config core: tiers, deny precedence, ProcessSpec trust | `clients/config-core/` | `tests/clients/config-core/*.test.ts` |
 
 ## Related
 
