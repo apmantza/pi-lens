@@ -44,8 +44,8 @@ const handlerGate = vi.hoisted(() => ({
 	hold: undefined as Promise<void> | undefined,
 	notices: [] as string[],
 	work: undefined as Promise<unknown> | undefined,
-	/** #5108 G2: how long the analyzer bootstrap load takes (fake clock). */
-	bootMs: 0,
+	/** #5108 G2: when set, the analyzer bootstrap load waits for it. */
+	bootHold: undefined as Promise<void> | undefined,
 }));
 vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 	const actual =
@@ -78,8 +78,7 @@ vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
 	return bootstrapSeamMock(async () => {
-		if (handlerGate.bootMs > 0)
-			await new Promise((resolve) => setTimeout(resolve, handlerGate.bootMs));
+		if (handlerGate.bootHold !== undefined) await handlerGate.bootHold;
 		// #5108: the cases below start sessions, which read the full client set
 		// (the shape `tests/index-3620-sweep-scope-fence.test.ts` uses).
 		return {
@@ -137,7 +136,7 @@ beforeEach(() => {
 	handlerGate.hold = undefined;
 	handlerGate.notices = [];
 	handlerGate.work = undefined;
-	handlerGate.bootMs = 0;
+	handlerGate.bootHold = undefined;
 	handlerGate.ambientAfterYield = "unset";
 	resetDegradationLedger();
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-2939-budget-"));
@@ -395,7 +394,9 @@ describe("#5108 F1: a late advisory reaches the session whose tool result it was
 		await pi.emit("session_start", makeSessionStartEvent(), ctx());
 
 		vi.useFakeTimers();
-		handlerGate.bootMs = 2_000;
+		handlerGate.bootHold = new Promise<void>((resolve) => {
+			setTimeout(resolve, 2_000);
+		});
 		// Settles 9 s after the handler starts, which is after the bootstrap.
 		handlerGate.hold = new Promise<void>((resolve) => {
 			setTimeout(resolve, 11_000);
