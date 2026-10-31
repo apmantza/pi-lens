@@ -10,6 +10,7 @@ import {
 	parseArgs,
 	pathsFromPrFiles,
 	HOT_PATH_PATHS,
+	INSTALL_PATHS,
 	PR_FILES_API_CAP,
 	PR_SMOKE_PATHS,
 	ghPrFiles,
@@ -236,6 +237,71 @@ describe("classifyChangedFiles: the hot-path latency lane (#4363)", () => {
 	});
 });
 
+// #5112: `install` decides whether an `Install test (<os>)` leg of ci.yml
+// installs anything on a pull request, and whether install-smoke's `smoke` job
+// starts. The three legs are required checks, so each always reports and reads
+// this verdict (the hot-path shape). The Install test cost 10,875 runner
+// minutes in 30 days with 0 real catches (#3995 slice A). Recurrence it keeps
+// out: an install-path PR that reads `false` and ships a broken tarball or
+// lifecycle script to master unrun; and, in the other direction, a docs or
+// test-only PR that pays three runners for nothing. Doubt resolves to installing.
+describe("classifyChangedFiles: the Install test lane (#5112)", () => {
+	const install = (paths: string[]) => classifyChangedFiles(paths).install;
+
+	// Recurrence: a list entry the matcher cannot read, so the path it names
+	// never turns the lane on.
+	it.each(INSTALL_PATHS)("turns on for the listed path %s", (entry) => {
+		const file = entry.endsWith("/**") ? `${entry.slice(0, -2)}x/y.ts` : entry;
+		expect(install([file])).toBe(true);
+		expect(install(["docs/a.md", file])).toBe(true);
+	});
+
+	// Recurrence: the PRs the 10,875-minute lane exists to skip, plus neighbours
+	// that look like install paths but are not on the list (a sibling script, a
+	// nested package.json, a prefix collision).
+	it.each([
+		["docs/a.md"],
+		["README.md"],
+		[".changelog/5112-x.md"],
+		["clients/dispatch/runners/foo.ts"],
+		["tests/clients/foo.test.ts"],
+		["scripts/ci-verdict.mjs"],
+		["scripts/lib/latency-log-phases.mjs"],
+		["docs/package.json"],
+		["tests/fixtures/x/package.json"],
+		["package.json.bak"],
+		["package-lock.jsonl"],
+		["clients/installer-notes.ts"],
+		["clients/bootstrap.test.ts"],
+		["binx/a.mjs"],
+		["clients/../docs/a.md"],
+		[".github/workflows/lint.yml"],
+		[".github/workflows/hot-path-latency.yml"],
+	])("stays off for %s", (file) => {
+		expect(install([file])).toBe(false);
+	});
+
+	// Recurrence: a rename out of an install path reads as its new path only.
+	it("counts the old path of a rename out of an install path", () => {
+		const paths = pathsFromPrFiles([
+			{ filename: "docs/moved.md", previous_filename: "package-lock.json" },
+		]);
+		expect(install(paths)).toBe(true);
+	});
+
+	// Recurrence: doubt must install (AGENTS.md shape 48), exactly as it runs the
+	// full suite for `code`.
+	it("turns on for an empty list and for a list at the API cap", () => {
+		expect(install([])).toBe(true);
+		const capped = Array.from(
+			{ length: PR_FILES_API_CAP },
+			(_, i) => `docs/f${i}.md`,
+		);
+		expect(install(capped)).toBe(true);
+		expect(install(capped.slice(0, PR_FILES_API_CAP - 1))).toBe(false);
+	});
+});
+
 // N2 (#3861): the per-line parse `ghPrFiles` wraps is the ONE place a
 // `pulls/{n}/files` body is read; a malformed `--jq` line must throw (the
 // full-suite direction) rather than read as an empty list. `exec` is the
@@ -339,9 +405,10 @@ describe("run (the CLI the changes job calls)", () => {
 				formal: "false",
 				smoke: "false",
 				hotpath: "false",
+				install: "false",
 			});
 			expect(fs.readFileSync(files.summary, "utf8")).toMatch(
-				/^changes: code=false formal=false smoke=false hotpath=false -- docs-only diff/,
+				/^changes: code=false formal=false smoke=false hotpath=false install=false -- docs-only diff/,
 			);
 		});
 	});
@@ -349,7 +416,7 @@ describe("run (the CLI the changes job calls)", () => {
 	// Recurrence: master losing the full suite when a non-PR event was read as
 	// docs-only. Only a pull_request is ever classified; every other event runs
 	// everything and never reads the API.
-	it.each(["push", "merge_group", "workflow_dispatch"])(
+	it.each(["push", "merge_group", "workflow_dispatch", "schedule"])(
 		"runs everything for a %s event without reading the API",
 		(event) => {
 			withOutput((files) => {
@@ -366,6 +433,7 @@ describe("run (the CLI the changes job calls)", () => {
 					formal: "true",
 					smoke: "true",
 					hotpath: "true",
+					install: "true",
 				});
 			});
 		},
@@ -388,6 +456,7 @@ describe("run (the CLI the changes job calls)", () => {
 				formal: "true",
 				smoke: "true",
 				hotpath: "true",
+				install: "true",
 			});
 		});
 	});
