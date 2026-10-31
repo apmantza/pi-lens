@@ -665,6 +665,16 @@ interface ToolResultDeps {
 	/** Role of the activation that owns this write. */
 	sessionRole?: "primary" | "secondary";
 	/**
+	 * #5108: the lines a run without authorship ended with for blockers it
+	 * withheld (`PipelineResult.withheldBlockerLine`), pushed as each dispatch
+	 * of this tool result finishes. The caller owns the array and reads it after
+	 * the handler settles: `index.ts`' tool_result bound abandons a slow handler
+	 * without cancelling it, and the tool result it then returns is never shown,
+	 * so these lines are the only copy of the disclosure the agent can still be
+	 * given. Absent when the caller has no such bound.
+	 */
+	withheldNotices?: string[];
+	/**
 	 * The host ctx's `cwd` for THIS tool_result — the same per-session field the
 	 * `tool_call` hook reads. The opaque prescan resolves its root through
 	 * `opaquePrescanRoot(deps.cwd, …)` (#4504): a session whose cwd is not the
@@ -4472,6 +4482,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		analysisRootMode,
 		sessionId: deps.sessionId,
 	});
+	if (result.withheldBlockerLine) {
+		deps.withheldNotices?.push(result.withheldBlockerLine);
+	}
 
 	// #2050 AC3 / #2657: `linked-worktree` is a WRITABLE class
 	// (`canWriteAnalysisRoot`), so the pipeline above ran the full set — format,

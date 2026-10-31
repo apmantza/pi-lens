@@ -172,6 +172,7 @@ import {
 } from "./clients/path-attribution-telemetry.js";
 import {
 	consumeAgentNudge,
+	queueAgentAdvisory,
 	recordCrossProcessTouches,
 	wireAgentNudgeSubscriber,
 } from "./clients/agent-nudge.js";
@@ -3231,61 +3232,94 @@ function activateExtension(hostPi: ExtensionAPI) {
 						label: "tool-result-bootstrap",
 					})
 				: peekBootstrapClients();
-			// `return await`, not `return`: this `try` has a `finally` that clears
+			// #5108: a run without authorship (#3226) withholds its blockers from
+			// the STOP block and says so in its tool result. When the bound below
+			// abandons the handler that result is never shown, so the lines it
+			// collects here are queued for the agent's next context call instead.
+			const withheldNotices: string[] = [];
+			const writeScope = runtime.captureSessionGeneration();
+			const budgetMs = editClass
+				? HOOK_WALL_BUDGET_MS.tool_result_edit
+				: HOOK_WALL_BUDGET_MS.tool_result_read_only;
+			const work = handleToolResult({
+				signal: ctx.signal,
+				event: event as any,
+				getFlag: (name: string, filePath?: string) =>
+					getLensFlag(name, filePath),
+				getFlagSource: (name: string, filePath?: string) =>
+					getLensFlagSource(name, filePath),
+				dbg,
+				runtime,
+				cacheManager,
+				biomeClient: resident?.biomeClient,
+				ruffClient: resident?.ruffClient,
+				metricsClient: resident?.metricsClient,
+				resetLSPService,
+				// #4942: the read guard of the session whose tool result this is.
+				readGuard: runtime.readGuardFor(getStableSessionId(ctx)),
+				agentBehaviorRecord: (toolName, filePath) =>
+					(
+						resident?.agentBehaviorClient ?? getAgentBehaviorClient()
+					).recordToolCall(toolName, filePath),
+				formatBehaviorWarnings: (warnings) =>
+					(
+						resident?.agentBehaviorClient ?? getAgentBehaviorClient()
+					).formatWarnings(warnings as any),
+				// #791: tags any deferred-format record queued from this tool_result
+				// with the STABLE session id of the ctx that produced it, so a
+				// later agent_end can tell its own queued work apart from a
+				// concurrent in-process secondary session's.
+				sessionId: getStableSessionId(ctx),
+				sessionRole:
+					ownedSessionRole === "concurrent-secondary" ? "secondary" : "primary",
+				// #4504: the same per-session cwd the `tool_call` hook hands the
+				// opaque prescan. A concurrent secondary's ctx carries ITS root while
+				// the shared coordinator keeps the primary's, and the prescan's two
+				// lookups must agree on one root.
+				cwd: ctx?.cwd,
+				withheldNotices,
+			});
+			let handlerSettled = false;
+			const markSettled = () => {
+				handlerSettled = true;
+			};
+			work.then(markSettled, markSettled);
+			// The `await` below must stay inside this `try`: it has a `finally` that clears
 			// the ambient abort signal. Without the await the `finally` runs the
 			// instant the promise is RETURNED, so the slot is empty for the whole
 			// pipeline and an Escape mid-edit no longer kills its child processes
 			// (#2897 round 2 V2; #2939 round 2 restored it after measuring the
 			// deletion observable).
-			return await bounded(
-				handleToolResult({
-					signal: ctx.signal,
-					event: event as any,
-					getFlag: (name: string, filePath?: string) =>
-						getLensFlag(name, filePath),
-					getFlagSource: (name: string, filePath?: string) =>
-						getLensFlagSource(name, filePath),
-					dbg,
-					runtime,
-					cacheManager,
-					biomeClient: resident?.biomeClient,
-					ruffClient: resident?.ruffClient,
-					metricsClient: resident?.metricsClient,
-					resetLSPService,
-					// #4942: the read guard of the session whose tool result this is.
-					readGuard: runtime.readGuardFor(getStableSessionId(ctx)),
-					agentBehaviorRecord: (toolName, filePath) =>
-						(
-							resident?.agentBehaviorClient ?? getAgentBehaviorClient()
-						).recordToolCall(toolName, filePath),
-					formatBehaviorWarnings: (warnings) =>
-						(
-							resident?.agentBehaviorClient ?? getAgentBehaviorClient()
-						).formatWarnings(warnings as any),
-					// #791: tags any deferred-format record queued from this tool_result
-					// with the STABLE session id of the ctx that produced it, so a
-					// later agent_end can tell its own queued work apart from a
-					// concurrent in-process secondary session's.
-					sessionId: getStableSessionId(ctx),
-					sessionRole:
-						ownedSessionRole === "concurrent-secondary"
-							? "secondary"
-							: "primary",
-					// #4504: the same per-session cwd the `tool_call` hook hands the
-					// opaque prescan. A concurrent secondary's ctx carries ITS root while
-					// the shared coordinator keeps the primary's, and the prescan's two
-					// lookups must agree on one root.
-					cwd: ctx?.cwd,
-				}),
-				{
-					ms: editClass
-						? HOOK_WALL_BUDGET_MS.tool_result_edit
-						: HOOK_WALL_BUDGET_MS.tool_result_read_only,
-					signal: ctx.signal,
-					hook: editClass ? "tool_result_edit" : "tool_result_read_only",
-					label: "handleToolResult",
-				},
-			);
+			const result = await bounded(work, {
+				ms: budgetMs,
+				signal: ctx.signal,
+				hook: editClass ? "tool_result_edit" : "tool_result_read_only",
+				label: "handleToolResult",
+			});
+			if (!handlerSettled) {
+				// Abandoned, not cancelled: it still finishes and records. What it
+				// withheld reaches the agent at its next context call, with the
+				// abandonment stated (defect shape 10: a bound on an agent-facing
+				// path discloses its truncation on the surface).
+				void work.then(
+					() => {
+						if (withheldNotices.length === 0) return;
+						queueAgentAdvisory(
+							`pi-lens's check of this ${rtToolName ?? "tool"} call was still running when the host stopped waiting (${budgetMs}ms) and was abandoned, so its tool result showed none of this:\n${withheldNotices.slice(0, 5).join("\n")}${withheldNotices.length > 5 ? `\n+${withheldNotices.length - 5} more` : ""}`,
+							writeScope,
+						);
+						logLatency({
+							type: "phase",
+							phase: "withheld_blocker_late_advisory",
+							filePath: rtToolName ?? "tool_result",
+							durationMs: 0,
+							metadata: { notices: withheldNotices.length, budgetMs },
+						});
+					},
+					() => {},
+				);
+			}
+			return result;
 		} finally {
 			setAmbientAbortSignal(undefined);
 		}

@@ -481,6 +481,15 @@ export interface PipelineResult {
 	 */
 	currentBlockerCount?: number;
 	/**
+	 * #5108: the one line a run without authorship (#3226) ends with when it
+	 * holds blockers it withheld from the STOP block and the record: names the
+	 * file and the count, directs no edit. `output` carries the same line, so
+	 * the all-clear never renders over a blocker; this copy is what a host that
+	 * abandoned the handler (`index.ts`' tool_result bound) queues for the
+	 * agent's next context. Absent when nothing was withheld.
+	 */
+	withheldBlockerLine?: string;
+	/**
 	 * #4733 r5 G3: how many blocking findings the observation still holds that
 	 * the #4483 seed called pre-existing (`DispatchResult.preExisting`). Absent
 	 * when there are none. Not part of `currentBlockerCount`, which governs this
@@ -1771,6 +1780,17 @@ function formatStillUnfixedLine(
 }
 
 /**
+ * #5108: the line a run without authorship (#3226) gets for blockers it
+ * withheld. The STOP block and the commit gate stay off for bytes pi-lens
+ * cannot prove the agent wrote, but the agent is told the blockers exist, so a
+ * withheld verdict never reads as the all-clear (defect shape 10). It states a
+ * fact and names where the findings are; it asks for no edit.
+ */
+function formatWithheldBlockerLine(count: number, display: string): string {
+	return `\u26a0 ${count} blocking finding${count === 1 ? "" : "s"} in ${display} withheld: the file was changed by a script, so pi-lens cannot tell it was your edit and shows no fix prompt. lens_diagnostics lists ${count === 1 ? "it" : "them"}.`;
+}
+
+/**
  * #4483: the one line a write gets for linter errors the file already held
  * before its first edit this session (`DispatchResult.preExisting`). They do
  * not stop the agent or shut the commit gate. Bounded and counted the same way
@@ -2790,6 +2810,21 @@ async function analysePipeline(
 	if (preExisting.length > 0) {
 		output += `\n\n${formatPreExistingLine(preExisting, filePath)}`;
 	}
+	// #5108: a run without authorship records and delivers no blocker, but the
+	// ones it withheld are still on the file. Say so before the all-clear below
+	// can render over them.
+	const withheldBlockerLine =
+		!allowAutonomousWriters && liveBlockers.length > 0
+			? formatWithheldBlockerLine(
+					liveBlockers.length,
+					toRunnerDisplayPath(cwd, filePath),
+				)
+			: undefined;
+	if (withheldBlockerLine) {
+		output = output
+			? `${output}\n\n${withheldBlockerLine}`
+			: withheldBlockerLine;
+	}
 	if (fixedCount > 0) {
 		const detail =
 			autofixTools.length > 0 ? ` (${autofixTools.join(", ")})` : "";
@@ -3008,6 +3043,7 @@ async function analysePipeline(
 				: undefined,
 		// #4484: what a clear must find empty, whatever the authorship.
 		currentBlockerCount: liveBlockers.length,
+		...(withheldBlockerLine !== undefined && { withheldBlockerLine }),
 		...(preExisting.length > 0 && {
 			preExistingBlockerCount: preExisting.length,
 		}),
