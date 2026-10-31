@@ -2378,6 +2378,58 @@ describe("flake-shape scan — real-process-spawn", () => {
 		expect(scanRealProcessSpawn("fixture.test.ts", otherModule)).toEqual([]);
 	});
 
+	it("ATTACK (#5064 r3): importActual spelled as a literal prefix plus concatenation is read", () => {
+		// Recurrence: PRRT_kwDORt8rec6yQNSu (Greptile) and PRRT_kwDORt8rec6yQOAE
+		// (CodeRabbit). The reader took the first string literal as the whole
+		// specifier, so "node:" in `"node:" + "child_process"` named another module.
+		const source = [
+			'vi.mock("node:child_process");',
+			'const cp = await vi.importActual("node:" + "child_process");',
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([2]);
+	});
+
+	it("ATTACK (#5064 r3): importActual spelled by concatenation with the split inside the name is read", () => {
+		// Recurrence: PRRT_kwDORt8rec6yQNSu and PRRT_kwDORt8rec6yQOAE. The reader
+		// saw only the first literal, "node:child_", and passed it as another module.
+		const source = [
+			'vi.mock("node:child_process");',
+			'const cp = await vi.importActual("node:child_" + "process");',
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([2]);
+	});
+
+	it("ATTACK (#5064 r3): importActual of a template literal with an interpolation is read", () => {
+		// Recurrence: PRRT_kwDORt8rec6yQOAE's template case. The reader matched the
+		// template text "node:${n}" as the specifier, so an interpolated module name
+		// named no child_process and the real child was not counted.
+		const source = [
+			'vi.mock("node:child_process");',
+			'const n = "child_process";',
+			"const cp = await vi.importActual(`node:${n}`);",
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([3]);
+	});
+
+	it("ATTACK (#5064 r3): importActual of an escaped literal is read", () => {
+		// Recurrence: an escape spells the module name without the literal text
+		// child_process. The reader cannot prove it is another module, so it reads
+		// the call (fail closed on an unplanned spelling).
+		const source = [
+			'vi.mock("node:child_process");',
+			'const cp = await vi.importActual("node:child\\u005fprocess");',
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.line),
+		).toEqual([2]);
+	});
+
 	it("does not read a zero-argument importActual() of another module beside a child_process mock (#5064)", () => {
 		// Recurrence: tests/clients/lsp/windows-startup-repair.test.ts calls
 		// importActual<...>() with no argument inside a package-manager mock factory

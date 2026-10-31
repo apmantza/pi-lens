@@ -300,11 +300,14 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 /**
  * An `importActual` call (any receiver, optional type arguments) that reads
  * the real child_process module (#5064): its first argument names
- * child_process, or is not a string literal (an unknown specifier is refused,
- * not passed). A literal naming another module, or no argument, is not read.
- * Lexical rather than AST, because tree-sitter parses the type arguments of
- * `importActual<typeof import("…")>(…)` as an expression, so the call is no
- * call_expression there.
+ * child_process, or is not a plain string literal (an unknown specifier is
+ * refused, not passed). A plain literal is read as the whole specifier only when
+ * it is the whole argument (followed by `,` or `)`) and holds no `${}` and no
+ * escape; a `+` concatenation, a template interpolation or an escape is
+ * unresolved and read (#5064 r3, fail closed). A literal naming another module,
+ * or no argument, is not read. Lexical rather than AST, because tree-sitter
+ * parses the type arguments of `importActual<typeof import("…")>(…)` as an
+ * expression, so the call is no call_expression there.
  */
 function importActualReadsChildProcess(
 	source: string,
@@ -312,8 +315,12 @@ function importActualReadsChildProcess(
 ): boolean {
 	const rest = source.slice((match.index ?? 0) + match[0].length).trimStart();
 	if (rest.startsWith(")")) return false;
-	const specifier = FIRST_STRING_ARGUMENT.exec(rest)?.[2];
-	return specifier === undefined || CHILD_PROCESS_SPECIFIER.test(specifier);
+	const literal = FIRST_STRING_ARGUMENT.exec(rest);
+	if (literal === null) return true;
+	const [whole, , name = ""] = literal;
+	if (!/^\s*[,)]/.test(rest.slice(whole.length))) return true;
+	if (name.includes("${") || name.includes("\\")) return true;
+	return CHILD_PROCESS_SPECIFIER.test(name);
 }
 
 /**
