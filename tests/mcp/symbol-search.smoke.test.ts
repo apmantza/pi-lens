@@ -47,7 +47,10 @@ function rankedFiles(text: string): string[] {
 	});
 }
 
-function makeTinyProject(prefix: string): string {
+function makeTinyProject(
+	prefix: string,
+	generatedAt = new Date().toISOString(),
+): string {
 	const dir = mkdtempSync(path.join(tmpdir(), prefix));
 	snapshotDataRoot = mkdtempSync(path.join(tmpdir(), `${prefix}data-`));
 	writeFileSync(
@@ -66,7 +69,7 @@ function makeTinyProject(prefix: string): string {
 		saveProjectSnapshot(dir, {
 			version: PROJECT_SNAPSHOT_VERSION,
 			projectRoot: dir,
-			generatedAt: new Date().toISOString(),
+			generatedAt,
 			seq: 0,
 			files: {},
 			symbols: {},
@@ -163,6 +166,68 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 				retryDelay: 200,
 			});
 		}
+	}, 30_000);
+});
+
+// #5104 F3: on MCP, a snapshot older than the staleness threshold adds one note
+// to the footer, between the coverage line and the next-step line. The renderer
+// tests pass `stalenessNote` in directly, so only this case reaches the spread
+// in `mcp/server.ts`. It guards a note that silently vanishes from the answer
+// and a footer whose order drifts.
+describe("pilens_symbol_search footer on a stale snapshot (#5104)", () => {
+	let projectDir: string;
+	let dataRoot: string;
+	let harness: McpHarness;
+
+	beforeAll(async () => {
+		// Two hours old: past the ten-minute threshold `graphStalenessNote` uses.
+		projectDir = makeTinyProject(
+			"pi-lens-symbolsearch-stale-",
+			new Date(Date.now() - 2 * 60 * 60_000).toISOString(),
+		);
+		dataRoot = snapshotDataRoot;
+		harness = new McpHarness({
+			cwd: projectDir,
+			env: { PILENS_DATA_DIR: dataRoot },
+		});
+		await harness.request(1, "initialize", {
+			protocolVersion: "2025-06-18",
+			capabilities: {},
+			clientInfo: { name: "symbolsearch-stale", version: "0" },
+		});
+		harness.notify("notifications/initialized");
+	});
+
+	afterAll(() => {
+		harness.dispose();
+		for (const dir of [projectDir, dataRoot]) {
+			try {
+				rmSync(dir, {
+					recursive: true,
+					force: true,
+					maxRetries: 5,
+					retryDelay: 200,
+				});
+			} catch {
+				// OS reclaims the temp dir eventually.
+			}
+		}
+	});
+
+	it("prints coverage, then the staleness note, then the next step (#5104)", async () => {
+		const res = await harness.request(12, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "authenticate user", cwd: projectDir },
+		});
+		const text = textOf(res);
+		// Blocks: the table, the footer, then renderToolText's `result ok` and
+		// `usage` trailer. A table row never holds a blank line.
+		const footer = text.split("\n\n")[1]?.split("\n");
+		expect(footer).toEqual([
+			"Index covers 1 files.",
+			"Project snapshot last updated 2h ago; run pilens_analyze on recently-changed files, pilens_session_start, or pilens_rebuild to refresh it.",
+			"Next: pilens_module_report auth.ts",
+		]);
 	}, 30_000);
 });
 
