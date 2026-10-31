@@ -412,6 +412,22 @@ describe("abort-listener release sweep (shape 4)", () => {
 			]);
 		});
 
+		// #5077 verify r1 V10 probe: the plant above also holds `addEventListener`, so
+		// dropping the prefilter's `onabort` clause alone stayed green. This source has
+		// no other listener spelling, so that clause is the only screen that admits it.
+		it("an onabort assignment with no other listener spelling", () => {
+			const sites = refused(
+				[
+					"export function property(signal: AbortSignal, f: () => void) {",
+					"  signal.onabort = f;",
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#property onabort",
+			]);
+		});
+
 		it("an events.once wait on the abort event", () => {
 			const sites = refused(
 				[
