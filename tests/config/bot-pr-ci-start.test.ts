@@ -511,6 +511,13 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 			"a failsafe step after the dispatch",
 			opener(`${both}\n      - name: Disarm\n        run: echo disarm`),
 		],
+		// Recurrence: #5062 r2 F2. A plain-form dispatch before a failsafe is
+		// the form the `if` rule admits for that position, so only the position
+		// rule refuses it: a failed dispatch there skipped the disarm.
+		[
+			"a plain-form dispatch before a failsafe step",
+			opener(`${dispatchStep("bot/x", PLAIN_IF)}\n${DISARM}`),
+		],
 		[
 			"a dispatch step before the create-pull-request step",
 			opener(both).replace(
