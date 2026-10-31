@@ -148,6 +148,15 @@ function stringValue(node: SgNode): string {
 }
 
 /**
+ * A plain string literal whose text holds a backslash escape. Its decoded value
+ * is not read (shape 69): an escape can spell the abort event, so the raw text is
+ * unrecognized and cannot pass as "not the abort event".
+ */
+function isEscapedString(node: SgNode | undefined): boolean {
+	return isPlainString(node) && stringValue(node).includes("\\");
+}
+
+/**
  * The callee's method name, or `undefined` when it is not a plain name: a
  * computed callee (`x[expr](...)`) whose index is not a string literal.
  */
@@ -162,17 +171,26 @@ function calleeName(fn: SgNode | undefined): string | undefined {
 }
 
 /**
- * A call that can attach a listener under a name or event the scan cannot read.
+ * A node that can attach a listener under a name or event the scan cannot read.
  * Fail closed: it is a site unless BOTH the method name and the event are plain
  * string literals that name something other than the abort event.
+ *   - a name whose raw text holds a backslash: an identifier with an escape, or
+ *     a subscript whose index is an escaped string literal, read raw;
  *   - a computed callee whose index is not a string literal (`s["add" + "X"](...)`,
  *     a template with a substitution), whatever the call passes;
- *   - an `once`/`on` call whose event is not a string literal, or is `"abort"`.
- *     The event is the first argument of an emitter's own `.on("evt", fn)` and
- *     the second of `events.once(target, "evt")`, so a literal first argument
- *     names the event and a non-literal one sends us to the second.
+ *   - an `once`/`on` call whose event is not a string literal, or is `"abort"`, or
+ *     is an escaped literal. The event is the first argument of an emitter's own
+ *     `.on("evt", fn)` and the second of `events.once(target, "evt")`, so a
+ *     literal first argument names the event and a non-literal one sends us to
+ *     the second.
  */
-function isUnreadableListenerCall(node: SgNode): boolean {
+function isUnreadableListenerSite(node: SgNode): boolean {
+	if (node.kind() === "identifier" || node.kind() === "property_identifier") {
+		return node.text().includes("\\");
+	}
+	if (node.kind() === "subscript_expression") {
+		return isEscapedString(node.field("index"));
+	}
 	if (node.kind() !== "call_expression") return false;
 	const fn = node.field("function");
 	if (fn?.kind() === "subscript_expression" && calleeName(fn) === undefined) {
@@ -185,18 +203,23 @@ function isUnreadableListenerCall(node: SgNode): boolean {
 	const args: SgNode[] = node.field("arguments")?.namedChildren() ?? [];
 	if (args.some((arg) => arg.kind() === "spread_element")) return true;
 	const [first, second] = args;
-	if (isPlainString(first)) return stringValue(first) === "abort";
-	if (isPlainString(second)) return stringValue(second) === "abort";
+	if (isPlainString(first)) {
+		return stringValue(first) === "abort" || isEscapedString(first);
+	}
+	if (isPlainString(second)) {
+		return stringValue(second) === "abort" || isEscapedString(second);
+	}
 	return true;
 }
 
 /**
  * A speed screen, not a verdict: it must admit every text that can hold a site
- * (a listener token, an `once`/`on` call, or a computed call `](`), because a
- * parse of every shipped file costs 6x the screened scan.
+ * (a listener token, an `once`/`on` call, a computed call `](`, an identifier
+ * with a unicode escape, or a subscript whose string holds a backslash), because a parse of every
+ * shipped file costs 6x the screened scan.
  */
 const MAY_HOLD_SITE =
-	/addEventListener|addAbortListener|onabort|\b(?:once|on)\s*\??\.?\s*[<(]|\]\s*\??\.?\s*[<(]/;
+	/addEventListener|addAbortListener|onabort|\b(?:once|on)\s*\??\.?\s*[<(]|\]\s*\??\.?\s*[<(]|\\u[0-9a-fA-F{]|\[\s*["'`][^\]\n]*\\/;
 
 /** Every abort-listener site in one source text. */
 export function scanAbortListenerSites(
@@ -210,7 +233,7 @@ export function scanAbortListenerSites(
 	walkAst(parseRoot(source), (node: SgNode) => {
 		const token = tokenOf(node);
 		const isToken = token !== undefined && ADD_TOKENS.has(token);
-		if (!isToken && !isUnreadableListenerCall(node)) return;
+		if (!isToken && !isUnreadableListenerSite(node)) return;
 		const label = isToken ? token : "events-abort";
 		const line = node.range().start.line;
 		const symbol = findEnclosingSymbol(lines, line) ?? `line-${line + 1}`;
@@ -286,10 +309,10 @@ const ADMITTED_SITES: Readonly<
 
 let shippedScan: { sites: AbortListenerSite[]; scannedFiles: number };
 
-function scanShippedTrees(): {
+async function scanShippedTrees(): Promise<{
 	sites: AbortListenerSite[];
 	scannedFiles: number;
-} {
+}> {
 	if (shippedScan) return shippedScan;
 	const files = [
 		...listSourceFiles(path.join(REPO_ROOT, "clients"), { skipTests: true }),
@@ -306,6 +329,10 @@ function scanShippedTrees(): {
 		sites.push(
 			...scanAbortListenerSites(source, relativePosix(REPO_ROOT, file)),
 		);
+		// Shape 81: one macrotask turn per file. The napi finalizer frees a dropped
+		// tree only when the loop turns, so a synchronous pass holds every tree it
+		// parsed until the case ends (a turn per scanned file covers each parse).
+		await new Promise<void>((resolve) => setImmediate(resolve));
 	}
 	shippedScan = { sites, scannedFiles };
 	return shippedScan;
@@ -314,8 +341,8 @@ function scanShippedTrees(): {
 describe("abort-listener release sweep (shape 4)", () => {
 	it(
 		"admits only registered sites, and a paired site holds its removal",
-		() => {
-			const { sites, scannedFiles } = scanShippedTrees();
+		async () => {
+			const { sites, scannedFiles } = await scanShippedTrees();
 			// #1718 shape: a walk that resolved to nothing would read as a clean sweep.
 			assertNonEmptyScan("abort-listener sweep (files)", scannedFiles, 300);
 			assertNonEmptyScan("abort-listener sweep (sites)", sites.length, 5);
@@ -342,9 +369,9 @@ describe("abort-listener release sweep (shape 4)", () => {
 
 	it(
 		"pins the population in both directions",
-		() => {
-			const live = scanShippedTrees()
-				.sites.map((site) => site.key)
+		async () => {
+			const live = (await scanShippedTrees()).sites
+				.map((site) => site.key)
 				.sort();
 			const registered = Object.keys(ADMITTED_SITES).sort();
 			expect(
@@ -524,6 +551,61 @@ describe("abort-listener release sweep (shape 4)", () => {
 			);
 			expect(sites.map((site) => site.key)).toEqual([
 				"plant.ts#viaEmitter events-abort",
+			]);
+		});
+
+		// #5077 review r2, Greptile PRRT_kwDORt8rec6yQwxF (shape 69): `stringValue`
+		// read the raw text, so an escaped literal that decodes to "abort" passed as
+		// "not abort". A string literal with a backslash is unread, so it is a site.
+		it("an escaped event literal that decodes to the abort event", () => {
+			const sites = refused(
+				[
+					"export function viaEscape(emitter: NodeJS.EventEmitter, f: () => void) {",
+					'  emitter.on("ab\\u006frt", f);',
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#viaEscape events-abort",
+			]);
+		});
+
+		// #5077 review r2 (shape 69): a computed name whose literal holds an escape is
+		// unread, as a callee and as an assignment target. The assignment has no call,
+		// so only the subscript itself can be the site.
+		it("an escaped subscript name, called or assigned", () => {
+			const sites = refused(
+				[
+					"export function callee(signal: AbortSignal, f: () => void) {",
+					'  signal["add\\x45ventListener"]("abort", f);',
+					"}",
+					"export function assigned(signal: AbortSignal, f: () => void) {",
+					'  signal["\\u006fnabort"] = f;',
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#callee events-abort",
+				"plant.ts#assigned events-abort",
+			]);
+		});
+
+		// #5077 review r2 (shape 69): a unicode escape in an identifier decodes to the
+		// name, but the raw property text is not the name the scan reads.
+		it("an escaped identifier naming the listener method or the abort property", () => {
+			const sites = refused(
+				[
+					"export function ident(signal: AbortSignal, f: () => void) {",
+					'  signal.\\u0061ddEventListener("abort", f);',
+					"}",
+					"export function prop(signal: AbortSignal, f: () => void) {",
+					"  signal.\\u006fnabort = f;",
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#ident events-abort",
+				"plant.ts#prop events-abort",
 			]);
 		});
 
