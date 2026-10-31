@@ -340,7 +340,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4476): the same fake auxiliary, seen from the role lookup
 	// the registry's dependency restart asks; getServerById knows only the
 	// built-in catalog, so the auxiliary added above answers there too.
-	"in-process-mock:clients/head-move-resync-4493.test.ts::clients/lsp/server": {
+	"in-process-mock:clients/head-move-resync-4476.test.ts::clients/lsp/server": {
 		detector: "in-process-mock",
 		reason:
 			"getServerById reads only the built-in catalog, so the auxiliary fake the config lookup adds is answered there too; the restart then keeps it, and every server is still a real child process",
@@ -676,11 +676,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"real git children decide tracked-versus-ignored files from index state no stub reproduces",
-	},
-	"real-process-spawn:clients/head-move-resync-4493.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"a clean-tree HEAD move only exists in a real repository that git checks out, rebases or resets; a stubbed git cannot rewrite the files the server holds",
 	},
 	"real-process-spawn:clients/installer/pip-pep668.test.ts": {
 		detector: "real-process-spawn",
@@ -1414,7 +1409,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4528 r1 F3): the spawn-gate window of a dependency restart
 	// exists only between real server processes, and the tool_call hook bounds
 	// its look, so the restart finishes after the hook returns.
-	"ungoverned-wait-for:clients/head-move-resync-4493.test.ts": {
+	"ungoverned-wait-for:clients/head-move-resync-4476.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
 			"the restart's spawn-gate window is between real server processes: one server's shutdown, the cache clock, and a restart that ends after the bounded tool_call hook returns expose no awaitable, so vi.waitFor joins them",

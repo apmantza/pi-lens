@@ -617,8 +617,11 @@ export const wallClockBudgetInclude = [
 	"tests/clients/git-tracked-ignore.test.ts",
 	// #4493: real git repositories and fake-LSP children driven through the
 	// tool_call/tool_result seams (flake-shape admission); the fake-server
-	// handshake rides along in this fully serialized lane.
+	// handshake rides along in this fully serialized lane. #3801: the three
+	// describes run from three files over tests/support/head-move-resync-kit.ts.
+	"tests/clients/head-move-resync-4476.test.ts",
 	"tests/clients/head-move-resync-4493.test.ts",
+	"tests/clients/head-move-resync-4507.test.ts",
 	// #2557 review round 3: a real 30s deadline margin is the subject of an abort-vs-deadline precedence assertion (flake-shape admission).
 	"tests/clients/hook-await-fold-bounds.test.ts",
 	"tests/clients/installer/pip-pep668.test.ts",
