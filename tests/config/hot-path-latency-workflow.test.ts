@@ -9,8 +9,13 @@
 //    (#4358) and every cache write evicts an entry CI needs;
 //  - the script's own time budget raised past the job cap, which would let a
 //    hung sample end as a cancelled run instead of a harness failure;
-//  - the pull_request and push path filters drifting apart, so master runs a
-//    different population than the PRs it is compared with.
+//  - the push path filter drifting from the list the pull_request classifier
+//    reads, so master runs a different population than the PRs it is compared
+//    with;
+//  - (#4363, required check) a workflow-level `paths:` on pull_request, which
+//    leaves the check "Expected" forever on a docs-only PR; a job-level `if:`,
+//    which reports `skipped` where ci-verdict demands a literal success; and a
+//    timing step left unguarded, which times the lane on every docs PR.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,11 +24,15 @@ import {
 	DEFAULT_BUDGET_MS,
 	DEFAULT_RUNS,
 } from "../../scripts/check-hot-path-latency.mjs";
+import { HOT_PATH_PATHS } from "../../scripts/ci-changed-files.mjs";
 import { isAdvisoryCheck } from "../../scripts/lib/ci-checks.mjs";
 import { stripSource } from "../support/sweep-kit.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 type Step = {
+	id?: string;
+	if?: string;
+	env?: Record<string, string>;
 	name?: string;
 	uses?: string;
 	run?: string;
@@ -33,8 +42,9 @@ const workflow = yaml.load(
 	readFileSync(resolve(ROOT, ".github/workflows/hot-path-latency.yml"), "utf8"),
 ) as {
 	on: {
-		pull_request: { paths: string[] };
+		pull_request: { branches: string[]; paths?: string[] };
 		push: { branches: string[]; paths: string[] };
+		merge_group?: { types: string[] };
 	};
 	permissions: unknown;
 	concurrency: { group: string; "cancel-in-progress": unknown };
@@ -42,6 +52,7 @@ const workflow = yaml.load(
 		string,
 		{
 			name: string;
+			if?: unknown;
 			"continue-on-error"?: unknown;
 			"timeout-minutes": number;
 			permissions: Record<string, string>;
@@ -70,10 +81,14 @@ describe("hot-path latency workflow (#4363)", () => {
 		);
 	});
 
-	it("runs on the same paths for pull requests and master pushes", () => {
-		expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
+	it("lists the push paths the classifier lists, and no pull_request paths", () => {
+		// Recurrence (#4363): the push filter is the one copy of HOT_PATH_PATHS
+		// GitHub can read, so it is pinned equal to the script's list. A drift
+		// makes master time a different population than the PRs it is compared
+		// with.
+		expect(workflow.on.push.paths).toEqual(HOT_PATH_PATHS);
 		expect(workflow.on.push.branches).toEqual(["master"]);
-		expect(workflow.on.pull_request.paths).toEqual(
+		expect(HOT_PATH_PATHS).toEqual(
 			expect.arrayContaining([
 				"clients/**",
 				"index.ts",
@@ -82,11 +97,72 @@ describe("hot-path latency workflow (#4363)", () => {
 				".github/workflows/hot-path-latency.yml",
 			]),
 		);
+		// Recurrence (#4363): a required check from a path-filtered workflow
+		// stays "Expected" forever on a PR the filter skips.
+		expect(workflow.on.pull_request.paths).toBeUndefined();
+		expect(workflow.on.pull_request.branches).toEqual(["master"]);
+	});
+
+	it("always reports: no job-level skip, one classify step ahead of every timing step", () => {
+		// Recurrence (#4363): a job `if:` that is false reports `skipped`, which
+		// GitHub counts as passing but ci-verdict does not read as a literal
+		// success (#2618); the check name must stay the required context.
+		expect(job.if).toBeUndefined();
+		expect(job.name).toBe("Hot-path latency (advisory)");
+		const names = job.steps.map((s) => s.name);
+		const classify = job.steps.find((s) => s.id === "scope");
+		expect(classify?.run).toMatch(/node scripts\/ci-changed-files\.mjs\b/);
+		expect(classify?.env?.GH_TOKEN).toBe("${{ github.token }}");
+		// Recurrence (review r1 F1): EVENT_NAME hardcoded to `push` classifies
+		// every PR as a push, so every docs PR times (3 min) with no red; a
+		// dropped PR_NUMBER exits 2 and reds every PR.
+		expect(classify?.env?.EVENT_NAME).toBe("${{ github.event_name }}");
+		expect(classify?.env?.PR_NUMBER).toBe(
+			"${{ github.event.pull_request.number }}",
+		);
+		expect(classify?.run).toContain('--event "$EVENT_NAME"');
+		expect(classify?.run).toContain('--pr "$PR_NUMBER"');
+		// Recurrence (#3754, #5066): a required check that has no merge_group
+		// trigger never reports on the queue's commit and stalls the queue, and
+		// #5066's bot-PR dispatch census derives its targets from the trigger.
+		// The classify step has no `if`, so the script reads a merge_group event
+		// (hotpath=true, tests/scripts/ci-changed-files.test.ts) and times it.
+		expect(workflow.on.merge_group).toEqual({ types: ["checks_requested"] });
+		expect(classify?.if).toBeUndefined();
+		expect(job.permissions["pull-requests"]).toBe("read");
+		const timing = [
+			"Install dependencies",
+			"Build head",
+			"Build base",
+			"Time the hot paths on base and head",
+		];
+		for (const name of timing) {
+			const step = job.steps.find((s) => s.name === name);
+			// `!= 'false'`, not `== 'true'`: an empty output (a doubt) times.
+			expect(step?.if, name).toBe("steps.scope.outputs.hotpath != 'false'");
+			expect(names.indexOf(name), name).toBeGreaterThan(
+				names.indexOf(classify?.name ?? ""),
+			);
+		}
+		// Every step after the classifier is either a timing step above or the
+		// no-op line: an unguarded newcomer would time every docs PR.
+		const after = job.steps.slice(job.steps.indexOf(classify as Step) + 1);
+		const noop = after.find((s) => s.name === "No hot-path files changed");
+		expect(noop?.if).toBe("steps.scope.outputs.hotpath == 'false'");
+		expect(noop?.run).toContain("no hot-path files changed");
+		expect(
+			after
+				.filter((s) => s !== noop && !timing.includes(s.name ?? ""))
+				.map((s) => s.name),
+		).toEqual([]);
 	});
 
 	it("is read-only and runs the gate script over two built trees", () => {
 		expect(workflow.permissions).toEqual({});
-		expect(job.permissions).toEqual({ contents: "read" });
+		expect(job.permissions).toEqual({
+			contents: "read",
+			"pull-requests": "read",
+		});
 		const runs = job.steps.map((s) => s.run ?? "").join("\n");
 		expect(runs).toMatch(/node scripts\/check-hot-path-latency\.mjs/);
 		expect(runs.match(/npm run build/g)).toHaveLength(2);

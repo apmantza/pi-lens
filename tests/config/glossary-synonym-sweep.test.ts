@@ -589,7 +589,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `Array.prototype.filter` is deleted with the delta.
 		// 19 -> 20 (#4483): the pre-edit capture keeps a dispatch group's
 		// linter runner ids, an `Array.prototype.filter` call.
-		"clients/dispatch/integration.ts": 20,
+		// 20 -> 21 (#5055): the unplaced-referrer check drops the files edited this
+		// turn with one `Array.prototype.filter`.
+		"clients/dispatch/integration.ts": 21,
 		// #4483: the seed's runner and line selection, `Array.prototype.filter`
 		// calls, not a delivery filter.
 		"clients/dispatch/pre-edit-seed.ts": 4,
@@ -798,7 +800,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// neighbours a run owns, the pending entries this turn did not observe
 		// and the runs that carry an unconfirmed bucket, three
 		// `Array.prototype.filter` calls, not a delivery filter.
-		"clients/runtime-turn.ts": 33,
+		// 33 -> 34 (#5055): the unresolved-reference advisory bucket selects its
+		// runs with one `Array.prototype.filter`, like the binding and budget buckets.
+		"clients/runtime-turn.ts": 34,
 		"clients/safe-spawn.ts": 5,
 		"clients/scratch-tree-policy.ts": 2,
 		"clients/session-repository.ts": 1,
