@@ -29,6 +29,7 @@ const WORKFLOWS = resolve(ROOT, ".github/workflows");
 
 type Step = {
 	id?: unknown;
+	name?: unknown;
 	if?: unknown;
 	run?: unknown;
 	uses?: unknown;
@@ -126,12 +127,20 @@ function openerSignals(workflow: Workflow, job: Job): string[] {
 
 const OPERATION = (id: string) => `steps.${id}.outputs.pull-request-operation`;
 // The only `if:` forms that admit the dispatch: it fires when the PR was just
-// created or updated. The second form is the docs-refresh PR, which skips it
-// when the App token opened the PR (CI already started, #4512).
+// created or updated, and it runs whatever an earlier step did (`!cancelled()`),
+// so one failed dispatch or a failed disarm does not skip the other dispatch
+// (#5062 r2 F2). The second form is the docs-refresh PR, which skips it when
+// the App token opened the PR (CI already started, #4512).
 function admittedIfs(id: string): string[] {
 	const fired = `${OPERATION(id)} == 'created' || ${OPERATION(id)} == 'updated'`;
-	return [fired, `(${fired}) && steps.app_token.outputs.token == ''`];
+	return [
+		`\${{ !cancelled() && (${fired}) }}`,
+		`\${{ !cancelled() && (${fired}) && steps.app_token.outputs.token == '' }}`,
+	];
 }
+
+const isDispatchStep = (step: Step) =>
+	commandLines(step.run).some((line) => line.startsWith("gh workflow run "));
 
 function dispatchProblems(
 	workflow: Workflow,
@@ -152,6 +161,23 @@ function dispatchProblems(
 	if (permissions.actions !== "write") problems.push("lacks actions: write");
 	if (job["continue-on-error"] !== undefined)
 		problems.push("job continue-on-error");
+	// Position (#5062 r2 F2): the dispatch steps close the job. A hard-failing
+	// dispatch placed before the disarm failsafe or the promotion PR step skips
+	// them (each runs under an implicit `success()`), and one placed before its
+	// opener reads an empty `pull-request-operation` and never fires.
+	const dispatchAt = steps.findIndex(isDispatchStep);
+	if (dispatchAt >= 0) {
+		for (const [index, step] of steps.entries())
+			if (index > dispatchAt && !isDispatchStep(step))
+				problems.push(
+					`step ${JSON.stringify(text(step.name) || index)} runs after the first CI dispatch`,
+				);
+		for (const opener of openers)
+			if (steps.indexOf(opener) > dispatchAt)
+				problems.push(
+					"a CI dispatch step precedes the create-pull-request step",
+				);
+	}
 	for (const opener of openers) {
 		const id = text(opener.id);
 		const branch = text(opener.with?.branch);
@@ -309,7 +335,7 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 		target: string,
 		branch: string,
 		extra = "",
-		ifLine = "        if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'",
+		ifLine = "        if: ${{ !cancelled() && (steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated') }}",
 	) =>
 		[
 			"      - name: Start CI",
@@ -425,14 +451,37 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 			"a dead if",
 			opener(
 				both.replaceAll(
-					"if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'",
+					"if: ${{ !cancelled() && (steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated') }}",
 					"if: false",
 				),
 			),
 		],
 		[
 			"a widened if",
-			opener(both.replaceAll("== 'updated'", "== 'updated' || always()")),
+			opener(both.replaceAll("== 'updated')", "== 'updated' || always())")),
+		],
+		[
+			"a dispatch without !cancelled()",
+			opener(
+				both.replaceAll(
+					"${{ !cancelled() && (steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated') }}",
+					"steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'",
+				),
+			),
+		],
+		// Recurrence: #5062 r2 F2, the docs-refresh dispatch sat before the
+		// disarm failsafe and the promotion PR step; a failed `gh workflow run`
+		// skipped both. Any step after the first dispatch is refused.
+		[
+			"a failsafe step after the dispatch",
+			opener(`${both}\n      - name: Disarm\n        run: echo disarm`),
+		],
+		[
+			"a dispatch step before the create-pull-request step",
+			opener(both).replace(
+				"      - id: pr\n        uses: peter-evans/create-pull-request@abc\n        with:\n          branch: bot/x\n",
+				`${both}\n      - id: pr\n        uses: peter-evans/create-pull-request@abc\n        with:\n          branch: bot/x\n`,
+			),
 		],
 		[
 			"a personal token",

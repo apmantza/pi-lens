@@ -988,26 +988,6 @@ jobs:
           body-path: ${{ runner.temp }}/lsp-refresh-pr-body.md
           delete-branch: false
 
-      # #5062: a PR opened or updated with the repository GITHUB_TOKEN starts
-      # no `pull_request` run, so the required checks stayed absent until a
-      # maintainer closed and reopened it. `workflow_dispatch` is the one event
-      # a GITHUB_TOKEN can start, so the same job dispatches every workflow that
-      # produces a required check (those with a `merge_group` trigger, #3754) on
-      # the branch it just pushed. The dispatched jobs report under the
-      # required names, on the PR head. Skipped when the App token opened the
-      # PR (#4512): CI already started, and a second run would only duplicate it.
-      # Not `continue-on-error`: a PR that opened without checks reds the job.
-      # Trust boundary: docs/ci-bot-pr-checks.md.
-      - name: Start required CI on the LSP-docs refresh branch
-        if: (steps.refresh_pr.outputs.pull-request-operation == 'created' || steps.refresh_pr.outputs.pull-request-operation == 'updated') && steps.app_token.outputs.token == ''
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh workflow run ci.yml --ref bot/lsp-docs-refresh
-          gh workflow run lint.yml --ref bot/lsp-docs-refresh
-
       # #4512: a refresh with no capability flips lands without a manual step.
       # Auto-merge is armed only for a flip-free refresh, only with the App
       # token (so CI runs on the PR), and only when the repository opted in with
@@ -1068,10 +1048,33 @@ jobs:
           body-path: ${{ runner.temp }}/pr-inputs/idle-eviction-promote.md
           delete-branch: false
 
+      # #5062: a PR opened or updated with the repository GITHUB_TOKEN starts
+      # no `pull_request` run, so the required checks stayed absent until a
+      # maintainer closed and reopened it. `workflow_dispatch` is the one event
+      # a GITHUB_TOKEN can start, so the same job dispatches every workflow that
+      # produces a required check (those with a `merge_group` trigger, #3754) on
+      # the branch it just pushed. The dispatched jobs report under the
+      # required names, on the PR head. Skipped when the App token opened the
+      # PR (#4512): CI already started, and a second run would only duplicate it.
+      # Not `continue-on-error`: a PR that opened without checks reds the job.
+      # Both dispatch steps close the job and run under `!cancelled()`: a failed
+      # `gh workflow run` must not skip the auto-merge disarm above or the
+      # promotion PR, and one failed dispatch must not skip the other.
+      # Trust boundary: docs/ci-bot-pr-checks.md.
+      - name: Start required CI on the LSP-docs refresh branch
+        if: ${{ !cancelled() && (steps.refresh_pr.outputs.pull-request-operation == 'created' || steps.refresh_pr.outputs.pull-request-operation == 'updated') && steps.app_token.outputs.token == '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref bot/lsp-docs-refresh
+          gh workflow run lint.yml --ref bot/lsp-docs-refresh
+
       # #5062: this PR is always opened with GITHUB_TOKEN, so it always needs
-      # the dispatch above (docs/ci-bot-pr-checks.md).
+      # the same dispatch (docs/ci-bot-pr-checks.md).
       - name: Start required CI on the idle-eviction promotion branch
-        if: steps.promote_pr.outputs.pull-request-operation == 'created' || steps.promote_pr.outputs.pull-request-operation == 'updated'
+        if: ${{ !cancelled() && (steps.promote_pr.outputs.pull-request-operation == 'created' || steps.promote_pr.outputs.pull-request-operation == 'updated') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
