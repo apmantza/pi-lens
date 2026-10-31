@@ -29,6 +29,7 @@ import {
 	createAgentSessionFromServices,
 	createAgentSessionRuntime,
 	createAgentSessionServices,
+	createEditToolDefinition,
 	createReadToolDefinition,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
@@ -3344,8 +3345,9 @@ describe("#3613 a concurrent secondary's turn leaves the primary's turn state al
 		runtime.session.sessionManager.getSessionId();
 
 	/**
-	 * An edit batch with one stale `oldText`: pi-lens applies the edit that
-	 * still matches and runs the post-edit pipeline itself, from tool_call.
+	 * An edit batch with one stale `oldText`: pi-lens narrows the call to the
+	 * edit that still matches (#5120), pi's own edit tool writes it, and the
+	 * post-edit pipeline runs at its tool_result.
 	 */
 	async function partialEdit(runtime: AgentSessionRuntime, file: string) {
 		const c = conversation(runtime);
@@ -3359,9 +3361,24 @@ describe("#3613 a concurrent secondary's turn leaves the primary's turn state al
 				{ oldText: "const gone = 0;", newText: "const gone = 1;" },
 			],
 		};
-		await runtime.session.agent.beforeToolCall?.({
-			toolCall: { type: "toolCall", id, name: "edit", arguments: args },
+		const toolCall = { type: "toolCall", id, name: "edit", arguments: args };
+		const verdict = (await runtime.session.agent.beforeToolCall?.({
+			toolCall,
 			args,
+		} as never)) as { block?: boolean } | undefined;
+		expect(verdict?.block).not.toBe(true);
+		const result = await createEditToolDefinition(cwd).execute(
+			id,
+			args,
+			undefined,
+			undefined,
+			{ cwd } as never,
+		);
+		await runtime.session.agent.afterToolCall?.({
+			toolCall,
+			args,
+			result: { content: result.content, details: result.details },
+			isError: false,
 		} as never);
 	}
 
