@@ -956,6 +956,10 @@ export const wallClockBudgetInclude = [
 	// master 1701d01. A poll loop (real setTimeout) waits for the file's first
 	// write rather than a fixed sleep (flake-shape admission).
 	"tests/scripts/with-memory-watch.test.ts",
+	// #5111: the worktree-removal helper's decision over a real git fixture --
+	// the registry, the node_modules symlink-or-directory state and the
+	// unlink-before-remove ordering (flake-shape admission).
+	"tests/scripts/worktree-remove.test.ts",
 	"tests/support/fault-injection.test.ts",
 	"tests/support/git-config-guard.test.ts",
 	"tests/support/git-fixture-env.test.ts",
