@@ -216,7 +216,8 @@ function isUnreadableListenerSite(node: SgNode): boolean {
 /**
  * A speed screen, not a verdict: it must admit every text that can hold a site
  * (a listener token, an `once`/`on` call, a computed call `](`, an identifier
- * with a unicode escape, or a subscript whose string holds a backslash), because a parse of every
+ * with a unicode escape, or a subscript whose string holds a backslash), because
+ * a parse of every
  * shipped file costs 6x the screened scan.
  */
 const MAY_HOLD_SITE =
@@ -568,6 +569,22 @@ describe("abort-listener release sweep (shape 4)", () => {
 			);
 			expect(sites.map((site) => site.key)).toEqual([
 				"plant.ts#viaEscape events-abort",
+			]);
+		});
+
+		// #5077 review r2 (shape 69): the second arm of `once(target, "evt")` reads its
+		// event the same way, so an escaped literal there is a site too.
+		it("an escaped event literal in the second argument of events.once", () => {
+			const sites = refused(
+				[
+					'import { once } from "node:events";',
+					"export async function viaEscapedOnce(signal: AbortSignal) {",
+					'  await once(signal, "ab\\u006frt");',
+					"}",
+				].join("\n"),
+			);
+			expect(sites.map((site) => site.key)).toEqual([
+				"plant.ts#viaEscapedOnce events-abort",
 			]);
 		});
 
