@@ -76,12 +76,20 @@ registered in that test as a non-opener with its reason.
   except the PR-only CodeQL job (`security-events: write`), whose job-level
   `if` requires a `pull_request` event and so never starts on a dispatch
   (`scripts/dispatch-safety.mjs` reads that conjunct as a guard).
-- **Step order.** Both dispatch steps close the `tool-smoke-prs` job and run
-  under `!cancelled()`. A failed `gh workflow run` must not skip the
-  auto-merge disarm failsafe or the promotion PR (every other step there runs
-  under an implicit `success()`), and one failed dispatch must not skip the
-  other. `tests/config/bot-pr-ci-start.test.ts` refuses a step after the first
-  dispatch and a dispatch before its opener.
+- **Step order.** Both dispatch steps close the `tool-smoke-prs` job, so a
+  failed `gh workflow run` never skips the auto-merge disarm failsafe or the
+  promotion PR (every other step there runs under an implicit `success()`).
+  Each dispatch's status check follows from what its PR's failsafe needs. The
+  docs-refresh dispatch keeps the implicit `success()`: a failed disarm
+  withholds CI, so an auto-merge armed on an earlier night cannot merge a
+  refresh with flips. The promotion dispatch runs under `!cancelled()`: only
+  the docs-refresh dispatch sits between its PR step and it, and a failure
+  there must not skip it. `tests/config/bot-pr-ci-start.test.ts` derives the
+  form per PR step: any non-dispatch step after the PR step means the
+  implicit `success()`, and only dispatch steps mean `!cancelled()`. It
+  refuses every other form, a step after the first dispatch, a dispatch
+  before its PR step, and a dispatch step whose run is anything but
+  `set -euo pipefail` and one `gh workflow run` per target.
 - **Not covered.** A dispatched run is not a `pull_request` run: it tests the
   branch head, not the merge with master, and the PR-only advisory jobs (the
   changelog fast-fail, targeted tests, CodeQL, the PR body lint) do not run.
