@@ -33,6 +33,8 @@ import { describe, expect, it, vi } from "vitest";
  */
 const gate = vi.hoisted(() => ({
 	holdMs: 0,
+	/** A handler that finishes at once having collected this notice. */
+	fastNotice: undefined as string | undefined,
 	pending: [] as Promise<void>[],
 	results: [] as Array<{ command: string; text: string }>,
 }));
@@ -45,6 +47,10 @@ vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 			deps: Parameters<typeof actual.handleToolResult>[0],
 		) => {
 			if (deps.event.toolName !== "bash") return actual.handleToolResult(deps);
+			if (gate.fastNotice !== undefined) {
+				deps.withheldNotices?.push(gate.fastNotice);
+				return undefined;
+			}
 			const work = (async () => {
 				if (gate.holdMs > 0)
 					await new Promise((resolve) => setTimeout(resolve, gate.holdMs));
@@ -229,7 +235,7 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 	);
 
 	it(
-		"still says so at the next turn end when the host abandoned the handler",
+		"queues the disclosure for the next context call when the host abandoned the handler",
 		{ timeout: 60_000 },
 		async () => {
 			gate.results.length = 0;
@@ -265,6 +271,77 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 				// The queued advisory leaves one bounded record for the call. The
 				// file is the fixture root's, so an earlier case's row is subtracted.
 				expect(await lateAdvisoryRows()).toBe(rowsBefore + 1);
+				expect(handle.errors).toEqual([]);
+			} finally {
+				gate.holdMs = 0;
+			}
+		},
+	);
+	it(
+		"queues nothing when the handler finished inside the bound",
+		{ timeout: 60_000 },
+		async () => {
+			// The tool result already carried the disclosure: a second copy at the
+			// next context call would be noise.
+			gate.results.length = 0;
+			gate.fastNotice = "\u26a0 1 blocking finding in fast.ts withheld: test";
+			try {
+				const repo = initRepo("in-bound");
+				const rowsBefore = await lateAdvisoryRows();
+				const handle = await startPiSession({
+					root: fixture.root,
+					cwd: repo,
+					flags: new Map(GUARDED_FLAGS),
+					inlineFactory: async () => (await import("../index.js")).default,
+					responses: [
+						step(scriptWrite("fast.ts", CLEAN_FILE), "writing"),
+						endTurn("turn 1 done"),
+						endTurn("turn 2 done"),
+					],
+				});
+				await handle.prompt("write the file with a script");
+				await handle.prompt("anything else?");
+
+				expect(await lateAdvisoryRows()).toBe(rowsBefore);
+				expect(everyText(handle.requests)).not.toContain("fast.ts withheld");
+				expect(handle.errors).toEqual([]);
+			} finally {
+				gate.fastNotice = undefined;
+			}
+		},
+	);
+
+	it(
+		"says nothing about an abandoned check that withheld nothing",
+		{ timeout: 60_000 },
+		async () => {
+			// The abandonment alone is not the disclosure: a clean script write the
+			// host stopped waiting for has nothing to report.
+			gate.results.length = 0;
+			gate.holdMs = 700;
+			try {
+				const repo = initRepo("abandoned-clean");
+				const rowsBefore = await lateAdvisoryRows();
+				const handle = await startPiSession({
+					root: fixture.root,
+					cwd: repo,
+					flags: new Map(GUARDED_FLAGS),
+					inlineFactory: async () => (await import("../index.js")).default,
+					responses: [
+						step(scriptWrite("tidy.ts", CLEAN_FILE), "writing"),
+						endTurn("turn 1 done"),
+						endTurn("turn 2 done"),
+					],
+				});
+				await handle.prompt("write the file with a script");
+				await Promise.all(gate.pending);
+				await handle.prompt("anything else?");
+
+				expect(gate.results.some((r) => r.command.includes("tidy.ts"))).toBe(
+					true,
+				);
+				expect(await lateAdvisoryRows()).toBe(rowsBefore);
+				expect(everyText(handle.requests)).not.toContain("abandoned");
 				expect(handle.errors).toEqual([]);
 			} finally {
 				gate.holdMs = 0;
