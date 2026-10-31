@@ -744,6 +744,7 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			runtime.projectRoot = env.tmpDir;
 			readWhole(runtime, filePath);
 			const event = mixedBatchEvent(filePath);
+			readGuardRows.length = 0;
 
 			const call = await runHandlerExpectingNoThrow(() =>
 				handleToolCall(baseDeps({ runtime, ctx: { cwd: env.tmpDir }, event })),
@@ -757,6 +758,17 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 				},
 			]);
 			expect(fs.readFileSync(filePath, "utf-8")).toBe(original);
+			expect(
+				readGuardRows.filter((row) => row.event === "edit_partial_apply"),
+			).toEqual([
+				expect.objectContaining({
+					metadata: expect.objectContaining({
+						appliedCount: 1,
+						requestedTotal: 2,
+						rewrittenForHostEdit: true,
+					}),
+				}),
+			]);
 		} finally {
 			env.cleanup();
 		}
@@ -955,6 +967,7 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			runtime.projectRoot = env.tmpDir;
 			readWhole(runtime, filePath);
 			const changed = "import { C } from 'm';\nconst tail = 1;\n";
+			readGuardRows.length = 0;
 
 			const { host, result, text } = await partialApply(
 				env,
@@ -970,6 +983,19 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			expect(text).toContain("Batch not applied");
 			expect(text).not.toContain("PARTIAL APPLY");
 			expect(fs.readFileSync(filePath, "utf-8")).toBe(changed);
+			// One record per refused partial apply, never a committed summary.
+			expect(
+				readGuardRows.filter(
+					(row) => row.event === "edit_partial_apply_rejected",
+				),
+			).toEqual([
+				expect.objectContaining({
+					metadata: expect.objectContaining({
+						rejectionReason: "host_refused",
+						editCount: 1,
+					}),
+				}),
+			]);
 		} finally {
 			env.cleanup();
 		}
