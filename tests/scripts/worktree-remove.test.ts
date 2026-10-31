@@ -177,6 +177,51 @@ describe("scripts/worktree-remove.mjs (#5111)", () => {
 		expect(readlinkSync(join(f.linked, "node_modules"))).toBe(f.shared);
 	});
 
+	// Recurrence: PR #5115 verify r2 L1 -- the restore must run only for a link
+	// the helper unlinked; a refused remove with no node_modules must not try
+	// to re-create one (or print a restore failure).
+	it("does not attempt a restore when a refused tree had no node_modules", () => {
+		const f = makeFixture(false);
+		writeFileSync(join(f.linked, "dirty.txt"), "uncommitted\n");
+		const r = remove([f.linked], f.main);
+		expect(r.code).toBe(1);
+		expect(r.err).toContain("failed to remove worktree");
+		expect(r.err).not.toContain("restore");
+		expect(existsSync(join(f.linked, "node_modules"))).toBe(false);
+	});
+
+	// Recurrence: PR #5115 verify r2 L2 -- a restore that fails must say so, or
+	// the lane loses its link silently. git's refusal is injected together with
+	// a regular file at the link's path, so re-creating the link fails (EEXIST).
+	it("reports a failed restore on stderr and still exits 1", () => {
+		const f = makeFixture(false);
+		const nodeModules = join(f.linked, "node_modules");
+		symlinkSync(f.shared, nodeModules);
+		const err: string[] = [];
+		const code = run({
+			argv: [f.linked],
+			cwd: f.main,
+			gitExec: (args, options) => {
+				if (args[0] === "worktree" && args[1] === "remove") {
+					writeFileSync(nodeModules, "in the way\n");
+					throw new Error("refused");
+				}
+				return String(
+					gitExecFileSync("git", args, {
+						cwd: options?.cwd,
+						encoding: "utf8",
+						stdio: "pipe",
+					}),
+				);
+			},
+			stdout: () => {},
+			stderr: (m) => err.push(m),
+		});
+		expect(code).toBe(1);
+		expect(err.join("\n")).toContain("failed to restore node_modules");
+		expect(err.join("\n")).toContain(f.shared);
+	});
+
 	// Recurrence: PR #5115 review F3 -- deleting `if (ENTRY) main()` left every
 	// in-process test green while the CLI exited 0 and did nothing.
 	it("runs as a CLI: no argument prints usage and exits 2", () => {
