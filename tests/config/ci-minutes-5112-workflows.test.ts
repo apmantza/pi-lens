@@ -154,37 +154,39 @@ describe("the cuts leave master, the merge queue and dispatches intact (#5112)",
 	);
 });
 
-describe("the greeting job starts only for a first-time author (#5112)", () => {
+describe("the greeting job starts for every issue and for a first-time pull request author (#5112)", () => {
 	const job = greetings.jobs.greeting;
 
-	const starts = (
-		pullRequest: string | null,
-		issue: string | null,
-	): boolean => {
+	// Recurrence (#5117 review B2): the job first keyed both events on the
+	// payload's author_association, so a CONTRIBUTOR (an author with commits)
+	// opening a first ISSUE never reached actions/first-interaction, which asks
+	// the repository's history. The issue path therefore starts on the event
+	// alone; only pull requests, the bulk of the 1,446 minutes, are gated.
+	const starts = (event: string, association: string | null): boolean => {
 		const expr = (job.if as string)
+			.split("github.event_name")
+			.join(JSON.stringify(event))
 			.split("github.event.pull_request.author_association")
-			.join(JSON.stringify(pullRequest))
-			.split("github.event.issue.author_association")
-			.join(JSON.stringify(issue));
+			.join(JSON.stringify(association));
 		expect(expr).not.toContain("github.");
 		return Boolean(new Function(`"use strict"; return (${expr});`)());
 	};
 
 	it.each([
-		["FIRST_TIME_CONTRIBUTOR", null, true],
-		["FIRST_TIMER", null, true],
-		[null, "FIRST_TIME_CONTRIBUTOR", true],
-		[null, "FIRST_TIMER", true],
-		["MEMBER", null, false],
-		["OWNER", null, false],
-		["CONTRIBUTOR", null, false],
-		["NONE", null, false],
-		[null, "COLLABORATOR", false],
-		[null, "CONTRIBUTOR", false],
-		[null, null, false],
-	])("pull_request=%s issue=%s starts: %s", (pullRequest, issue, expected) => {
-		expect(starts(pullRequest, issue)).toBe(expected);
-	});
+		["pull_request_target", "FIRST_TIME_CONTRIBUTOR", true],
+		["pull_request_target", "FIRST_TIMER", true],
+		["pull_request_target", "MEMBER", false],
+		["pull_request_target", "OWNER", false],
+		["pull_request_target", "CONTRIBUTOR", false],
+		["pull_request_target", "NONE", false],
+		// An `issues` payload has no pull_request object at all.
+		["issues", null, true],
+	])(
+		"%s with pull_request association %s starts: %s",
+		(event, association, expected) => {
+			expect(starts(event, association)).toBe(expected);
+		},
+	);
 
 	it("has no checkout and runs no repository code", () => {
 		for (const s of job.steps ?? [])

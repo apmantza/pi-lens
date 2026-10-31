@@ -529,7 +529,10 @@ success. A docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
 nothing else, classified by `scripts/ci-changed-files.mjs`; every doubt runs the
 full suite) skips only those heavy advisory jobs: the Unit shards and every
 other test job always run, because a docs edit can red tests outside tests/config
-(`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). `TLA+ models`
+(`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
+is the three `Install test` legs: outside `INSTALL_PATHS` in that script
+they report success without installing, and `Strict install` and the macOS APFS
+step run on non-pull_request events only. `TLA+ models`
 model-checks only when `formal/` (or its checker or ci.yml) changed. A REQUIRED
 job never skips at job level: ci-verdict and the merge train demand a literal
 `success`, so `TLA+ models` starts and skips its steps.
