@@ -1345,6 +1345,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the record's landing spot is decided by a child's own env-pinned os.homedir() fallback; unobservable in-process",
 	},
+	// #5111: the worktree-removal helper's decision over a real git fixture --
+	// the worktree registry, the on-disk node_modules symlink-or-directory
+	// state, and the unlink-before-remove ordering decide the run.
+	"real-process-spawn:scripts/worktree-remove.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the helper's real git fixture, node_modules symlink state, and unlink-before-remove ordering are the subject; an in-process double restates none of them",
+	},
 	"real-process-spawn:support/fault-injection.test.ts": {
 		detector: "real-process-spawn",
 		reason:

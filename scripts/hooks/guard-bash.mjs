@@ -12,11 +12,13 @@
  * the shared checkout, so git followed the link and emptied the shared
  * install (#3173), all rules a hook can catch that prose could not:
  *
- *   - `git stash` in any form (CLAUDE.md non-negotiable)
+ *   - `git stash` in any form but the read-only `list` / `show` (CLAUDE.md
+ *     non-negotiable; an admit list, #5111)
  *   - `git reset --soft origin/<branch>` / `git reset --hard <anything>`
  *   - a HAND-typed `git worktree remove` with two force flags (the
- *     sanctioned removal is `node scripts/prune-agent-worktrees.mjs`,
- *     liveness-checked, or unlock + single force)
+ *     sanctioned removal is `node scripts/worktree-remove.mjs <path>` (#5111),
+ *     `node scripts/prune-agent-worktrees.mjs` (liveness-checked), or unlock +
+ *     single force)
  *   - ANY `git worktree remove` (force or not) on a worktree whose
  *     `node_modules` is a symlink pointing OUTSIDE that worktree (#3173,
  *     the #2704 class) -- see {@link hasNodeModulesSymlinkOutside}
@@ -250,15 +252,15 @@ import { fileURLToPath } from "node:url";
 /** @type {Record<DenyRule, string>} */
 export const RULE_MESSAGES = {
 	stash:
-		"git stash is forbidden (CLAUDE.md non-negotiable) -- it is repo-global across worktrees; use `git diff > fix.patch` / `git checkout --` / `git apply` instead.",
+		"git stash that writes is forbidden (CLAUDE.md non-negotiable) -- it is repo-global across worktrees; use `git diff > fix.patch` / `git checkout --` / `git apply` instead. Only the read-only `git stash list` and `git stash show [<flags>] [stash@{N}]` are admitted, as a bare command with no `-c`/global option other than `-C <dir>` and no env var (inline or exported) before it.",
 	reset:
 		"`git reset --soft origin/<branch>` / `git reset --hard` is forbidden (fixer playbook rule) -- use `git checkout HEAD -- <path>` to discard a single file instead.",
 	worktreeForce:
-		"a HAND-typed `git worktree remove` with two force flags is forbidden (fixer playbook rule) -- use `node scripts/prune-agent-worktrees.mjs` (liveness-checked; it applies the same double force internally once a tree is confirmed dead) for a stuck worktree, or `git worktree unlock` then a single-force remove.",
+		"a HAND-typed `git worktree remove` with two force flags is forbidden (fixer playbook rule) -- use `node scripts/worktree-remove.mjs <path> [--force]` (one force), `node scripts/prune-agent-worktrees.mjs` (liveness-checked; it applies the same double force internally once a tree is confirmed dead) for a stuck worktree, or `git worktree unlock` then a single-force remove.",
 	worktreeSymlink:
-		"git worktree remove on a tree whose node_modules symlink chain cannot be safely resolved or leads outside the tree is forbidden (#3173, the #2704 class -- git can follow the link and empty the SHARED install, not just this worktree's copy) -- unlink it first: `rm <tree>/node_modules` (removes only the symlink, not the shared install), then retry the remove; if it is a directory, remove only that worktree copy after confirming the main checkout is intact.",
+		"git worktree remove on a tree whose node_modules symlink chain cannot be safely resolved or leads outside the tree is forbidden (#3173, the #2704 class -- git can follow the link and empty the SHARED install, not just this worktree's copy) -- run `node scripts/worktree-remove.mjs <path>`: it unlinks the `node_modules` symlink (only the link, never the shared install), refuses a real `node_modules` directory, then runs `git worktree remove` (add `--force` for a single force).",
 	worktreeUnresolved:
-		"git worktree remove on a path this hook cannot resolve statically is forbidden (#3988) -- the #3173 node_modules-symlink check cannot run on it. The path, or the directory it is relative to, comes from a `$(...)`/backtick substitution, a `$VAR` with no value in the command or the hook environment, a `~user` or glob spelling, or an unresolvable `cd`/`git -C`/`popd`. Spell the worktree's absolute path literally (or `cd` to a literal directory first), or use `node scripts/prune-agent-worktrees.mjs`.",
+		"git worktree remove on a path this hook cannot resolve statically is forbidden (#3988) -- the #3173 node_modules-symlink check cannot run on it. The path, or the directory it is relative to, comes from a `$(...)`/backtick substitution, a `$VAR` with no value in the command or the hook environment, a `~user` or glob spelling, or an unresolvable `cd`/`git -C`/`popd`. Spell the worktree's absolute path literally (or `cd` to a literal directory first) and run `node scripts/worktree-remove.mjs <path>`, or use `node scripts/prune-agent-worktrees.mjs` for a stuck tree.",
 	probe:
 		"an unpinned node probe that LOADS runtime code from clients/ or dist/ is forbidden (docs/invariants/paths-os.md, Paths, data, and operating systems) -- prefix `PI_LENS_HOME=<worktree>/.probe-home`.",
 	tmpdirCollision:
@@ -1729,6 +1731,73 @@ function classifyHookBypass(args, i, env) {
 	return false;
 }
 
+/** `git stash list` / `git stash show` flags that only choose how history is
+ *  printed (#5111). An ADMIT set: a flag not named here is refused, including
+ *  `--output=`, `--ext-diff` and `--textconv`, which write or run programs. */
+const STASH_READ_FLAGS = new Set([
+	"--oneline",
+	"--stat",
+	"--shortstat",
+	"--numstat",
+	"--summary",
+	"--name-only",
+	"--name-status",
+	"--no-color",
+	"--no-patch",
+	"-p",
+	"--patch",
+	"-s",
+	"--include-untracked",
+	"--only-untracked",
+	"-u",
+]);
+
+/** The redirects agents append to a read (#5111): stderr to stdout, or output
+ *  to `/dev/null`. Exact words only; any other redirect target is refused. */
+const STASH_READ_REDIRECTS = new Set(["2>&1", "2>/dev/null", ">/dev/null"]);
+
+/** `--format=` / `--pretty=` with a value of plain format characters only: no
+ *  quote, `$`, backtick, `;`, `|`, `&`, `<`, `>` or the substitution mark. */
+const STASH_FORMAT_FLAG = /^--(?:format|pretty)=[A-Za-z0-9%:,._ -]*$/;
+
+/** The value of a `-C` before the subcommand (PR #5115 G1): one plain path word
+ *  of known-good characters and never a leading `-`. `$`, a backtick, a quote,
+ *  a glob, `{`, `(`, a backslash, a space and the substitution mark are not in
+ *  it, so a value bash could expand or split into more words is refused. */
+const STASH_DIR_VALUE = /^[A-Za-z0-9_./~+@:%=][A-Za-z0-9_./~+@:%=-]*$/;
+
+/** `git stash show`'s one optional stash operand: `stash@{N}` or a bare `N`. */
+const STASH_REF = /^(?:stash@\{\d+\}|\d+)$/;
+
+/**
+ * Is this `git ... stash ...` invocation one of the two read-only forms
+ * (#5111)? Fail closed: it is an ADMIT list, so everything it does not
+ * recognise -- a writing subcommand, bare `git stash`, a global option other
+ * than `-C <dir>`, any env var (inline or exported), a flag or operand
+ * outside the sets above, or a word holding a substitution -- is not read-only.
+ *
+ * @param {string[]} args
+ * @param {number} i index of the `stash` word
+ * @param {Record<string, string>} env
+ * @returns {boolean}
+ */
+function isReadOnlyStash(args, i, env) {
+	if (Object.keys(env).length > 0) return false;
+	for (let k = 0; k < i; k += 2)
+		if (args[k] !== "-C" || !STASH_DIR_VALUE.test(args[k + 1] ?? ""))
+			return false;
+	const [sub, ...rest] = args.slice(i + 1);
+	if (sub !== "list" && sub !== "show") return false;
+	let operands = 0;
+	for (const word of rest) {
+		if (STASH_READ_FLAGS.has(word) || STASH_READ_REDIRECTS.has(word)) continue;
+		if (STASH_FORMAT_FLAG.test(word)) continue;
+		if (sub === "show" && STASH_REF.test(word) && ++operands === 1) continue;
+		return false;
+	}
+	return true;
+}
+
 /**
  * Classify a `git` invocation's args (after the leading "git" word).
  *
@@ -1752,6 +1821,14 @@ function classifyGit(args, cwd, env = {}, expansionEnv = env) {
 		["false", "no", "0", "off"].includes(value.toLowerCase());
 	const i = gitSubcommandIndex(args);
 	const subcommand = args[i];
+	// A bare process substitution word before the subcommand (`git -C <(true)
+	// stash drop`): the lexer splits the segment at `<(`/`>(`, so the words
+	// after it are never classified. A git segment that ends before its
+	// subcommand on a dangling `<`/`>` word is refused, as the stash rule
+	// (PR #5115 verify r4). Glued values (`-c x=<(..)`) and redirect words
+	// read as the subcommand are not covered; see #4025.
+	if ((args.at(-1) === "<" || args.at(-1) === ">") && i >= args.length - 1)
+		return "stash";
 	if (classifyHookBypass(args, i, env)) return "hookBypass";
 	if (subcommand === "rebase") {
 		const rest = args.slice(i + 1);
@@ -1825,7 +1902,8 @@ function classifyGit(args, cwd, env = {}, expansionEnv = env) {
 			return "forcePush";
 		return null;
 	}
-	if (subcommand === "stash") return "stash";
+	if (subcommand === "stash")
+		return isReadOnlyStash(args, i, env) ? null : "stash";
 	if (subcommand === "reset") {
 		const rest = args.slice(i + 1);
 		if (rest.includes("--hard")) return "reset";
