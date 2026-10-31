@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripSource } from "../support/sweep-kit.js";
 import {
 	classifyChangedFiles,
 	parseArgs,
@@ -236,6 +237,167 @@ describe("classifyChangedFiles: the hot-path latency lane (#4363)", () => {
 	});
 });
 
+// #5112: `install` decides whether an `Install test (<os>)` leg of ci.yml
+// installs anything on a pull request, and whether install-smoke's `smoke` job
+// starts. The three legs are required checks, so each always reports and reads
+// this verdict (the hot-path shape). The Install test cost 10,875 runner
+// minutes in 30 days with 0 real catches (#3995 slice A). Recurrence it keeps
+// out: an install-path PR that reads `false` and ships a broken tarball or
+// lifecycle script to master unrun; and, in the other direction, a docs or
+// test-only PR that pays three runners for nothing. Doubt resolves to installing.
+describe("classifyChangedFiles: the Install test lane (#5112)", () => {
+	const install = (paths: string[]) => classifyChangedFiles(paths).install;
+
+	// Recurrence (#5112 review r1 F1, F2): the first roster test iterated
+	// INSTALL_PATHS itself, so deleting an entry deleted its own case, and the
+	// list had already lost the prepare chain's `exec-isolation.mjs` (the Windows
+	// only spawn failure class recorded in scripts/build-dist-tsc.mjs) and
+	// `tsconfig.build.json`. This derives the expected set from package.json
+	// alone: the install-lifecycle scripts and every `npm run` they chain, the
+	// script and tsconfig files those commands name, the relative imports of
+	// those scripts, the `extends` and scripts `include` of those tsconfigs, and
+	// the `files` entries that are scripts. The rest of `files` is content
+	// (docs, rules, skills, config, banners, generated grammars), not code that
+	// runs at install.
+	describe("the install roster is derived from package.json", () => {
+		const root = path.resolve(import.meta.dirname, "../..");
+		const pkg = JSON.parse(
+			fs.readFileSync(path.join(root, "package.json"), "utf8"),
+		) as { scripts: Record<string, string>; files: string[] };
+
+		const lifecycle = (name: string, seen = new Set<string>()): string[] => {
+			const command = pkg.scripts[name];
+			if (command === undefined || seen.has(name)) return [];
+			seen.add(name);
+			const chained = [...command.matchAll(/npm run ([\w:-]+)/g)].flatMap(
+				(match) => lifecycle(match[1] ?? "", seen),
+			);
+			return [command, ...chained];
+		};
+		const imports = (file: string): string[] => {
+			const code = stripSource(fs.readFileSync(path.join(root, file), "utf8"), {
+				strings: "keep",
+			});
+			return [
+				...code.matchAll(/(?:from|import\()\s*["'](\.{1,2}\/[^"']+)["']/g),
+			]
+				.map((match) =>
+					path.posix.join(path.posix.dirname(file), match[1] ?? ""),
+				)
+				.filter((target) => fs.existsSync(path.join(root, target)));
+		};
+		const derive = (): Set<string> => {
+			const commands = [
+				"preinstall",
+				"install",
+				"postinstall",
+				"prepare",
+				"prepack",
+				"postpack",
+			].flatMap((name) => lifecycle(name));
+			const named = commands.flatMap((command) => [
+				...(command.match(/scripts\/[\w./-]+\.(?:m?js)/g) ?? []),
+				...(command.match(/tsconfig[\w.-]*\.json/g) ?? []),
+			]);
+			const roster = new Set<string>([
+				"package.json",
+				"package-lock.json",
+				...named,
+				...pkg.files.filter((entry) => /^scripts\/[^*]+\.m?js$/.test(entry)),
+			]);
+			// Close over imports and tsconfig links until nothing new appears.
+			for (const file of roster) {
+				if (/\.m?js$/.test(file)) {
+					for (const target of imports(file)) roster.add(target);
+				} else if (/tsconfig[\w.-]*\.json$/.test(file)) {
+					const config = fs.readFileSync(path.join(root, file), "utf8");
+					for (const match of config.matchAll(/"extends":\s*"\.\/([^"]+)"/g))
+						roster.add(match[1] ?? "");
+					for (const match of config.matchAll(/"(scripts\/[^"*]+\.m?js)"/g))
+						roster.add(match[1] ?? "");
+				}
+			}
+			return roster;
+		};
+
+		it("derives the files the review found missing, so the derivation is not empty", () => {
+			const roster = derive();
+			for (const file of [
+				"scripts/lib/exec-isolation.mjs",
+				"tsconfig.build.json",
+				"scripts/strip-dev-deps-for-pack.mjs",
+				"scripts/bundle-dist.mjs",
+				// One file per derivation arm that no other arm reaches (#5117 verify
+				// V2): the package.json `files` arm and the tsconfig `include` arm.
+				// Dropping either arm leaves the roster test green without these.
+				"scripts/analyze-pi-lens-logs.mjs",
+				"scripts/lib/process-scan.mjs",
+			])
+				expect(roster.has(file), file).toBe(true);
+			expect(roster.size).toBeGreaterThan(15);
+		});
+
+		it("classifies every derived file as an install path", () => {
+			const missing = [...derive()].filter((file) => !install([file]));
+			expect(missing).toEqual([]);
+		});
+
+		// Recurrence: a directory entry whose matcher the roster above never
+		// probes (it only names files).
+		it.each([["bin/pi-lens"], ["clients/installer/registry.ts"]])(
+			"turns on for the directory entry %s",
+			(file) => {
+				expect(install([file])).toBe(true);
+			},
+		);
+	});
+
+	// Recurrence: the PRs the 10,875-minute lane exists to skip, plus neighbours
+	// that look like install paths but are not on the list (a sibling script, a
+	// nested package.json, a prefix collision).
+	it.each([
+		["docs/a.md"],
+		["README.md"],
+		[".changelog/5112-x.md"],
+		["clients/dispatch/runners/foo.ts"],
+		["tests/clients/foo.test.ts"],
+		["scripts/ci-verdict.mjs"],
+		["scripts/lib/safe-rm.mjs"],
+		["docs/package.json"],
+		["tests/fixtures/x/package.json"],
+		["package.json.bak"],
+		["package-lock.jsonl"],
+		["clients/installer-notes.ts"],
+		["clients/bootstrap.test.ts"],
+		["binx/a.mjs"],
+		["clients/../docs/a.md"],
+		[".github/workflows/lint.yml"],
+		[".github/workflows/hot-path-latency.yml"],
+	])("stays off for %s", (file) => {
+		expect(install([file])).toBe(false);
+	});
+
+	// Recurrence: a rename out of an install path reads as its new path only.
+	it("counts the old path of a rename out of an install path", () => {
+		const paths = pathsFromPrFiles([
+			{ filename: "docs/moved.md", previous_filename: "package-lock.json" },
+		]);
+		expect(install(paths)).toBe(true);
+	});
+
+	// Recurrence: doubt must install (AGENTS.md shape 48), exactly as it runs the
+	// full suite for `code`.
+	it("turns on for an empty list and for a list at the API cap", () => {
+		expect(install([])).toBe(true);
+		const capped = Array.from(
+			{ length: PR_FILES_API_CAP },
+			(_, i) => `docs/f${i}.md`,
+		);
+		expect(install(capped)).toBe(true);
+		expect(install(capped.slice(0, PR_FILES_API_CAP - 1))).toBe(false);
+	});
+});
+
 // N2 (#3861): the per-line parse `ghPrFiles` wraps is the ONE place a
 // `pulls/{n}/files` body is read; a malformed `--jq` line must throw (the
 // full-suite direction) rather than read as an empty list. `exec` is the
@@ -339,9 +501,10 @@ describe("run (the CLI the changes job calls)", () => {
 				formal: "false",
 				smoke: "false",
 				hotpath: "false",
+				install: "false",
 			});
 			expect(fs.readFileSync(files.summary, "utf8")).toMatch(
-				/^changes: code=false formal=false smoke=false hotpath=false -- docs-only diff/,
+				/^changes: code=false formal=false smoke=false hotpath=false install=false -- docs-only diff/,
 			);
 		});
 	});
@@ -349,7 +512,7 @@ describe("run (the CLI the changes job calls)", () => {
 	// Recurrence: master losing the full suite when a non-PR event was read as
 	// docs-only. Only a pull_request is ever classified; every other event runs
 	// everything and never reads the API.
-	it.each(["push", "merge_group", "workflow_dispatch"])(
+	it.each(["push", "merge_group", "workflow_dispatch", "schedule"])(
 		"runs everything for a %s event without reading the API",
 		(event) => {
 			withOutput((files) => {
@@ -366,6 +529,7 @@ describe("run (the CLI the changes job calls)", () => {
 					formal: "true",
 					smoke: "true",
 					hotpath: "true",
+					install: "true",
 				});
 			});
 		},
@@ -388,6 +552,7 @@ describe("run (the CLI the changes job calls)", () => {
 				formal: "true",
 				smoke: "true",
 				hotpath: "true",
+				install: "true",
 			});
 		});
 	});

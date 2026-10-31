@@ -34,6 +34,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import { classifyChangedFiles } from "../../scripts/ci-changed-files.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOW_PATH = ".github/workflows/install-smoke.yml";
@@ -77,12 +78,20 @@ function readStepRun(
 	return step.run;
 }
 
-// `scope` is the #4291 deep-smoke verdict (`needs.scope.outputs.smoke`); a
-// gate that does not read it ignores the argument.
-function evaluateIf(expr: string, eventName: string, scope = "true"): boolean {
+// `scope` is the #4291 deep-smoke verdict (`needs.scope.outputs.smoke`) and
+// `install` the #5112 install-path verdict (`needs.scope.outputs.install`); a
+// gate that does not read one ignores the argument.
+function evaluateIf(
+	expr: string,
+	eventName: string,
+	scope = "true",
+	install = "true",
+): boolean {
 	const substituted = expr
 		.split("needs.scope.outputs.smoke")
 		.join(JSON.stringify(scope))
+		.split("needs.scope.outputs.install")
+		.join(JSON.stringify(install))
 		.split("github.event_name")
 		.join(JSON.stringify(eventName));
 	if (substituted.includes("github.")) {
@@ -117,7 +126,7 @@ describe("install-smoke.yml job event gates (#2613 review T1)", () => {
 		expect(GATES.map(([name]) => name)).toEqual(["host-latest-smoke"]);
 	});
 
-	it.each(["host-range-smoke", "smoke", "mise-repro"])(
+	it.each(["host-range-smoke", "mise-repro"])(
 		"%s deliberately carries no event gate (its matrix is the whole gate)",
 		(jobName) => {
 			expect(workflow.jobs?.[jobName]?.if).toBeUndefined();
@@ -473,11 +482,15 @@ describe.each(MATRIX_GATED_JOBS)(
 		}
 
 		// pi-load alone carries `!cancelled()` (#4291 F4): not an event gate, it
-		// only keeps the job alive when `scope` fails.
+		// only keeps the job alive when `scope` fails. `smoke` carries the #5112
+		// install-path gate, which is evaluated per event in its own block below.
 		it("carries no event gate (the matrix is the whole gate)", () => {
-			expect(workflow.jobs?.[job]?.if).toBe(
-				job === "pi-load" ? "${{ !cancelled() }}" : undefined,
-			);
+			const gate = workflow.jobs?.[job]?.if;
+			if (job === "smoke") expect(typeof gate).toBe("string");
+			else
+				expect(gate).toBe(
+					job === "pi-load" ? "${{ !cancelled() }}" : undefined,
+				);
 		});
 
 		it(`runs exactly ${prCells.join(", ")} on pull_request`, () => {
@@ -537,6 +550,46 @@ describe("install-smoke.yml lsp-handshake gate (#4291)", () => {
 		["workflow_dispatch", "true", false],
 	])("%s with smoke=%j runs: %s", (event, scope, expected) => {
 		expect(evaluateIf(ifExpr, event, scope)).toBe(expected);
+	});
+});
+
+// #5112: the `smoke` job (the package-manager install matrix) cost 1,447 runner
+// minutes in 30 days for 0 real catches (#3995 slice A). A pull request starts it
+// only when its diff touches an install path; every other event runs the matrix.
+// Recurrences: (1) the job gated off the pull request outright, which is #3043's
+// shape (an edit to its own arms reaches master with no pre-merge run), so the
+// workflow that holds the job must itself be an install path; (2) a missing
+// verdict (the `scope` job failed) narrowing the job instead of running it.
+describe("install-smoke.yml smoke job install gate (#5112)", () => {
+	const workflow = loadWorkflow();
+	const ifExpr = readJobIf(workflow, "smoke");
+
+	it.each([
+		["pull_request", "true", true],
+		["pull_request", "false", false],
+		["pull_request", "", true],
+		["push", "false", true],
+		["schedule", "false", true],
+		["workflow_dispatch", "false", true],
+	])("%s with install=%j runs: %s", (event, install, expected) => {
+		expect(evaluateIf(ifExpr, event, "true", install)).toBe(expected);
+	});
+
+	it("waits for the scope job and reads its install output", () => {
+		const jobs = workflow.jobs as unknown as Record<
+			string,
+			{ needs?: unknown; outputs?: Record<string, string> }
+		>;
+		expect(jobs.smoke.needs).toBe("scope");
+		expect(jobs.scope.outputs?.install).toBe(
+			"${{ steps.classify.outputs.install }}",
+		);
+	});
+
+	it("an edit to the workflow that holds the job is an install path", () => {
+		expect(
+			classifyChangedFiles([".github/workflows/install-smoke.yml"]).install,
+		).toBe(true);
 	});
 });
 

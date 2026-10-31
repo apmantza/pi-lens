@@ -66,11 +66,19 @@ function pinnedInstalls(workflow: Workflow, job: string): string[] {
 describe("strict lifecycle-script policy in CI installs (#1185)", () => {
 	// Recurrence: #4064/#4028. A warm npm/npx cache let a nested exec skip the
 	// install whose lifecycle script the strict policy was meant to inspect.
-	it("ci.yml has a PR-reachable cold-cache strict-install fast-fail", () => {
+	//
+	// #5112: the job left the pull_request trigger (1,410 runner minutes, 0 real
+	// catches in 30 days, #3995 slice A). It keeps every other event: a master
+	// push, a dispatch and the merge_group trigger, so the cold cache install
+	// still runs on every commit that reaches master (after the merge; no
+	// nightly schedule exists for it). A PR that
+	// changes the manifests keeps a strict install through `npm-strict`, pinned
+	// by the next test; this one reds if that substitute ever drops out.
+	it("ci.yml has a cold-cache strict-install fast-fail on every event but a pull request", () => {
 		const workflow = load("ci.yml");
 		const job = workflow.jobs?.["strict-install-cold-cache"];
 		expect(job, "strict-install-cold-cache").toBeDefined();
-		expect(job?.if).toBeUndefined();
+		expect(job?.if).toBe("github.event_name != 'pull_request'");
 		expect(job?.["continue-on-error"]).toBeUndefined();
 		// Recurrence (2026-10-07, #4067 r2): `${{ runner.temp }}` in job-level
 		// `env:` made GitHub reject the whole ci.yml, so no pull_request run
@@ -90,7 +98,9 @@ describe("strict lifecycle-script policy in CI installs (#1185)", () => {
 		const checkout = steps(workflow, "strict-install-cold-cache").find((s) =>
 			s.uses?.startsWith("actions/checkout@"),
 		);
-		expect(checkout?.with?.ref).toContain("github.event.pull_request.head.sha");
+		// No pull request reaches this job, so the pull-request merge ref and its
+		// head sha are gone from the checkout: the event's own commit.
+		expect(checkout?.with?.ref).toBe("${{ github.sha }}");
 		const install = steps(workflow, "strict-install-cold-cache").find((s) =>
 			s.name?.includes("cold cache"),
 		);
@@ -100,6 +110,25 @@ describe("strict lifecycle-script policy in CI installs (#1185)", () => {
 		for (const s of steps(workflow, "strict-install-cold-cache")) {
 			expect(s.with?.cache, s.name).toBeUndefined();
 		}
+	});
+
+	// Recurrence (#5112): the strict install left ci.yml's pull_request trigger,
+	// so a PR that adds a dependency with an unreviewed lifecycle script is
+	// refused only by `npm-strict`. That job is the substitute, and it is
+	// reachable on a pull request only through install-smoke.yml's `paths`.
+	it("a pull request that changes the manifests still reaches npm-strict (#5112)", () => {
+		const on = (
+			yaml.load(
+				readFileSync(
+					resolve(REPO_ROOT, ".github/workflows/install-smoke.yml"),
+					"utf8",
+				),
+			) as { on: { pull_request: { paths: string[] } } }
+		).on;
+		expect(on.pull_request.paths).toEqual(
+			expect.arrayContaining(["package.json", "package-lock.json"]),
+		);
+		expect(load("install-smoke.yml").jobs?.["npm-strict"]?.if).toBeUndefined();
 	});
 
 	// Recurrence: #1176. The tree installed with the runner's bundled npm, which

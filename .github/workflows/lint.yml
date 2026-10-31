@@ -376,6 +376,11 @@ jobs:
   # script that crashed behind `| tee` would otherwise read green.
   strictness:
     name: strictness (advisory)
+    # #5112: not a pull_request job. It reported 0 real catches in 30 days (2,106
+    # runner minutes, #3995 slice A) and only republishes counts that
+    # strictness-ratchet.test.ts already pins on every pull request. Master
+    # pushes and dispatches keep it.
+    if: github.event_name != 'pull_request'
     continue-on-error: true
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.

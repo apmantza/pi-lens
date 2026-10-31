@@ -5,8 +5,9 @@
  *   node scripts/ci-changed-files.mjs --event <github event name> \
  *     [--repo <owner/repo> --pr <number>]
  *
- * The `changes` job of ci.yml, the `scope` job of install-smoke.yml and the
- * first step of hot-path-latency.yml. Writes four step outputs:
+ * The `changes` job of ci.yml, the `scope` job of install-smoke.yml, the
+ * first step of hot-path-latency.yml and the classify step of ci.yml's
+ * `install-test` legs. Writes five step outputs:
  *
  *   code=true|false    false ONLY for a pull_request whose every changed path
  *                      is on the strict docs allowlist below: the heavy advisory
@@ -27,12 +28,18 @@
  *                      trigger is classified here; the workflow's own
  *                      `on.push.paths` is the push-side filter, pinned equal
  *                      to HOT_PATH_PATHS by tests/config/hot-path-latency-workflow.test.ts.
+ *   install=true|false true when the diff touches INSTALL_PATHS (#5112).
+ *                      ci.yml's `Install test (<os>)` legs and install-smoke's
+ *                      `smoke` job read it: false makes an Install test leg
+ *                      pass in seconds with a stated line (the three required
+ *                      contexts keep reporting) and leaves the `smoke` job
+ *                      off the pull request. A non-PR event runs both in full.
  *
  * Direction of every doubt is FULL SUITE (AGENTS.md shape 48): a non-PR event
  * (push to master, merge_group), an unreadable file list,
  * an empty list, a list at GitHub's 3000-file cap, or any path this file does
  * not recognise as docs all give code=true, and the same doubts give
- * smoke=true and hotpath=true. The script exits 0 in each of
+ * smoke=true, hotpath=true and install=true. The script exits 0 in each of
  * those cases; only bad arguments exit 2.
  */
 
@@ -126,6 +133,64 @@ export const HOT_PATH_PATHS = [
 	".github/workflows/hot-path-latency.yml",
 ];
 
+/**
+ * What `Install test (<os>)` (ci.yml) and install-smoke's `smoke` job exercise
+ * (#5112): the manifests, the lifecycle scripts `npm install` runs (`prepare`,
+ * `prepack`/`postpack`) with the build and the helpers they import, the scripts
+ * package.json ships, the scripts the job's own steps run against the packed
+ * tarball, the installer, and the two workflows that hold the jobs.
+ * tests/scripts/ci-changed-files.test.ts derives the expected set from
+ * package.json, so a lifecycle helper that falls off this list reds there, with
+ * four blind spots: a bare side-effect `import "..."`, `createRequire` or
+ * `require`, a `.cjs` lifecycle script, and data read through `fs` or
+ * `new URL` (so `scripts/grammars.lock.json` is listed by hand). A new helper
+ * reached only that way must be added here and to that test. Same entry
+ * grammar as HOT_PATH_PATHS. `bin/**` is the issue's name for the launcher
+ * directory; pi-lens ships its `bin` entries from dist/ today, so the entry
+ * matches nothing yet.
+ */
+export const INSTALL_PATHS = [
+	"package.json",
+	"package-lock.json",
+	"bin/**",
+	"clients/installer/**",
+	"clients/bootstrap.ts",
+	// `prepare`: build:dist, grammar download, hooks, lock stamp, loader cache.
+	"tsconfig.build.json",
+	"tsconfig.dist.json",
+	"scripts/build-dist-tsc.mjs",
+	"scripts/bundle-dist.mjs",
+	"scripts/lib/exec-isolation.mjs",
+	"scripts/lib/process-scan.mjs",
+	"scripts/download-grammars.js",
+	"scripts/grammars.lock.json",
+	"scripts/setup-git-hooks.mjs",
+	"scripts/stamp-package-lock.mjs",
+	"scripts/warm-loader-cache.mjs",
+	"scripts/lib/warm-loader-cache.mjs",
+	// `prepack` / `postpack`.
+	"scripts/strip-dev-deps-for-pack.mjs",
+	// Shipped in the tarball (package.json `files`) with their imports, and
+	// compiled into dist by tsconfig.dist.json.
+	"scripts/analyze-pi-lens-logs.mjs",
+	"scripts/rpc-load-check.mjs",
+	"scripts/lib/is-main-module.mjs",
+	"scripts/lib/latency-log-phases.mjs",
+	"scripts/lib/scratch-home-env.mjs",
+	"scripts/lib/skills-predicate.mjs",
+	"scripts/lib/web-tree-sitter-dir.mjs",
+	// Run by the job's own steps against the packed tarball.
+	"scripts/install-selftest.mjs",
+	"scripts/check-extensions.mjs",
+	"scripts/check-prod-install-shape.mjs",
+	"scripts/supply-host-provided-deps.mjs",
+	"scripts/lib/host-provided-deps.mjs",
+	"scripts/assert-evaluated.mjs",
+	// The workflows that hold the two jobs.
+	".github/workflows/ci.yml",
+	".github/workflows/install-smoke.yml",
+];
+
 /** Paths that run or define the TLA+ models. */
 const FORMAL_TRIGGERS = [
 	(path) => path.startsWith("formal/"),
@@ -168,7 +233,7 @@ function matchesPathList(path, list) {
 /**
  * @param {string[]} paths every path the diff touches (a rename contributes
  *   both its old and new path)
- * @returns {{ code: boolean, formal: boolean, smoke: boolean, hotpath: boolean, reason: string }}
+ * @returns {{ code: boolean, formal: boolean, smoke: boolean, hotpath: boolean, install: boolean, reason: string }}
  */
 export function classifyChangedFiles(paths) {
 	if (!Array.isArray(paths) || paths.length === 0)
@@ -177,6 +242,7 @@ export function classifyChangedFiles(paths) {
 			formal: true,
 			smoke: true,
 			hotpath: true,
+			install: true,
 			reason: "no changed files listed",
 		};
 	if (paths.length >= PR_FILES_API_CAP)
@@ -185,10 +251,12 @@ export function classifyChangedFiles(paths) {
 			formal: true,
 			smoke: true,
 			hotpath: true,
+			install: true,
 			reason: `${paths.length} files reaches the API listing cap`,
 		};
 	const smoke = paths.some((path) => matchesPathList(path, PR_SMOKE_PATHS));
 	const hotpath = paths.some((path) => matchesPathList(path, HOT_PATH_PATHS));
+	const install = paths.some((path) => matchesPathList(path, INSTALL_PATHS));
 	const nonDocs = paths.filter((path) => !isDocsPath(path));
 	const formal = paths.some((path) =>
 		FORMAL_TRIGGERS.some((matches) => matches(path)),
@@ -199,6 +267,7 @@ export function classifyChangedFiles(paths) {
 			formal,
 			smoke,
 			hotpath,
+			install,
 			reason: `code paths in the diff: ${nonDocs.slice(0, 3).join(", ")}${nonDocs.length > 3 ? `, +${nonDocs.length - 3} more` : ""}`,
 		};
 	return {
@@ -206,6 +275,7 @@ export function classifyChangedFiles(paths) {
 		formal,
 		smoke,
 		hotpath,
+		install,
 		reason: `docs-only diff (${paths.length} files)`,
 	};
 }
@@ -311,6 +381,7 @@ export function run(argv, io = {}) {
 			formal: true,
 			smoke: true,
 			hotpath: true,
+			install: true,
 			reason: `${options.event} runs the full suite`,
 		};
 	} else {
@@ -323,16 +394,17 @@ export function run(argv, io = {}) {
 				formal: true,
 				smoke: true,
 				hotpath: true,
+				install: true,
 				reason: `changed files unreadable (${message.split("\n")[0]})`,
 			};
 		}
 	}
-	const line = `changes: code=${result.code} formal=${result.formal} smoke=${result.smoke} hotpath=${result.hotpath} -- ${result.reason}`;
+	const line = `changes: code=${result.code} formal=${result.formal} smoke=${result.smoke} hotpath=${result.hotpath} install=${result.install} -- ${result.reason}`;
 	log(line);
 	if (env.GITHUB_OUTPUT)
 		fs.appendFileSync(
 			env.GITHUB_OUTPUT,
-			`code=${result.code}\nformal=${result.formal}\nsmoke=${result.smoke}\nhotpath=${result.hotpath}\n`,
+			`code=${result.code}\nformal=${result.formal}\nsmoke=${result.smoke}\nhotpath=${result.hotpath}\ninstall=${result.install}\n`,
 		);
 	if (env.GITHUB_STEP_SUMMARY)
 		fs.appendFileSync(env.GITHUB_STEP_SUMMARY, `${line}\n`);
