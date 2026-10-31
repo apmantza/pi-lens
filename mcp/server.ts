@@ -1885,7 +1885,8 @@ const WARN_ONLY_STALE_TOOLS = new Set([
  * Appends the warm-code-stale advisory to a tool result's text (and a
  * `warmCodeStale: true` marker line) after whatever the tool rendered. The
  * tool's own text stays byte-identical, so the advisory only ever reads last
- * (no surface parses a fenced payload any more, #5104).
+ * (only `symbol_search` stopped fencing; `module_report` still passes a
+ * structured payload, #5104).
  */
 function withStaleWarning<
 	T extends { content: { type: "text"; text: string }[] },
