@@ -33,7 +33,7 @@
  * moved or vanished reds as STALE instead of silently re-admitting a deleted
  * release.
  *
- * ## Accepted gap (p3)
+ * ## Accepted gaps (p3)
  *
  * A spelling that never names the listener method or the event in the scanned
  * file still passes: an aliased import (`import { once as waitFor } from
@@ -43,6 +43,17 @@
  * an indirection that crosses a binding; closing it means keying on the
  * `AbortSignal` type, which this file does not have. No live site is missed
  * today (`rg` over the shipped trees is clean).
+ *
+ * Further spellings pass, each with live population 0 in the shipped trees
+ * (`rg` over `clients/`, `mcp/`, `tools/` and `index.ts` finds none):
+ *   - a callee that is parenthesized or non-null: `(e.on)(..)`, `e.on!(..)`,
+ *     `s[k]!(..)`;
+ *   - a method reached through `.call`, `.apply` or `.bind`: `e.on.call(e, ..)`;
+ *   - a destructured rename: `const { on: sub } = e`, then `sub("abort", f)`;
+ *   - a computed assignment with a literal-built name: `s["on" + "abort"] = f`;
+ *   - a comment between the callee and its paren: the prefilter screens the
+ *     file out before the parse, so it is read only when another clause in the
+ *     same file admits it.
  *
  * Structure comes from the parsed tree, never from text: a comment or a string
  * that spells the token is not a site and cannot excuse one.
