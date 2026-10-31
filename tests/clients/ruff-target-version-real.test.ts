@@ -246,24 +246,26 @@ describe.skipIf(!hasRuff)(
 			fs.writeFileSync(filePath, UNUSED);
 			return filePath;
 		};
-		for (const [label, toml] of [
-			["fix = true", 'fix = true\n[lint]\nselect = ["F401"]\n'],
-			[
-				"fix = true and fix-only = true",
+		const runnerKeepsBytes = async (toml: string): Promise<void> => {
+			const filePath = withConfig(toml);
+
+			const result = await ruffRunner.run(
+				makeRunnerCtx(filePath, cwd, { kind: "python" }) as never,
+			);
+
+			expect(fs.readFileSync(filePath, "utf-8")).toBe(UNUSED);
+			expect(result.diagnostics.map((d) => d.rule)).toContain("F401");
+		};
+
+		it("runner keeps the bytes and still reports F401 under fix = true", async () => {
+			await runnerKeepsBytes('fix = true\n[lint]\nselect = ["F401"]\n');
+		});
+
+		it("runner keeps the bytes and reports F401 under fix = true and fix-only = true", async () => {
+			await runnerKeepsBytes(
 				'fix = true\nfix-only = true\n[lint]\nselect = ["F401"]\n',
-			],
-		] as const) {
-			it(`runner keeps the bytes and still reports F401 under ${label}`, async () => {
-				const filePath = withConfig(toml);
-
-				const result = await ruffRunner.run(
-					makeRunnerCtx(filePath, cwd, { kind: "python" }) as never,
-				);
-
-				expect(fs.readFileSync(filePath, "utf-8")).toBe(UNUSED);
-				expect(result.diagnostics.map((d) => d.rule)).toContain("F401");
-			});
-		}
+			);
+		});
 
 		it("autofix pre-check counts the fixable finding, then check --fix still fixes", async () => {
 			// The pre-check wrote the file under `fix = true`, counted zero
