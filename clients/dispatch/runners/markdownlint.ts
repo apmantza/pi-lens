@@ -1,4 +1,6 @@
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
+import { resolvePackagePath } from "../../package-root.js";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
@@ -123,6 +125,19 @@ function parseMarkdownlintOutput(
 	return diagnostics;
 }
 
+/**
+ * Child environment for the diagnostics-only run (#5119). markdownlint-cli2
+ * has no switch that turns a project's `"fix": true` off (the directory
+ * config beats every flag), so the run preloads `config/markdownlint/
+ * no-write.mjs`, which makes the fix pass's one `writeFile` a no-op. The
+ * autofix stage (`pipeline.ts`, `--fix`) spawns without it and still fixes.
+ */
+function noWriteEnv(): NodeJS.ProcessEnv {
+	const preload = `--import=${pathToFileURL(resolvePackagePath(import.meta.url, "config", "markdownlint", "no-write.mjs")).href}`;
+	const inherited = process.env.NODE_OPTIONS;
+	return { NODE_OPTIONS: inherited ? `${inherited} ${preload}` : preload };
+}
+
 const markdownlintRunner: RunnerDefinition = {
 	id: "markdownlint",
 	appliesTo: ["markdown"],
@@ -163,6 +178,7 @@ const markdownlintRunner: RunnerDefinition = {
 		const result = await safeSpawnAsync(cmd, [...configArgs, ctx.filePath], {
 			timeout: 15000,
 			cwd,
+			env: noWriteEnv(),
 		});
 
 		// #1995: a timeout is negative runtime evidence. Arm the cooldown so

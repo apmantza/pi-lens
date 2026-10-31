@@ -37,6 +37,7 @@
 		"clients/lsp/typescript-classic-repair.integration.test.ts": 2,
 		"clients/lsp/typescript-native-vitest.integration.test.ts": 1,
 		"clients/lsp/unheld-module-pyright-4742.integration.test.ts": 1,
+		"clients/markdownlint-no-fix-real.test.ts": 3,
 		"clients/mcp/review-rebuild.test.ts": 1,
 		"clients/metrics-history-stderr.test.ts": 19,
 		"clients/opaque-any-tool-4732.test.ts": 1,
