@@ -653,8 +653,6 @@ export const wallClockBudgetInclude = [
 	// the server, so the handshake and two diagnostics waits of up to 30 s run
 	// in the serialized lane (flake-shape admission).
 	"tests/clients/lsp/unheld-module-pyright-4742.integration.test.ts",
-	// #5119: a lint pass's bytes are measured through the real markdownlint-cli2 binary (flake-shape admission).
-	"tests/clients/markdownlint-no-fix-real.test.ts",
 	// #4709 slice 3b: the resolver verdict `runRebuild` acts on comes from the
 	// real package-manager lookup spawning executable stand-in managers on PATH
 	// (flake-shape admission).
