@@ -1190,6 +1190,13 @@ export type DegradationKind =
 	| "madge-skip-visibility-unavailable"
 	| "managed-tool-install"
 	| "managed-tool-refresh"
+	/**
+	 * #5119: the markdownlint runner could not lint through markdownlint-cli2's
+	 * exported `main` (module not found beside the command, or it did not load),
+	 * so it spawned the CLI, where a project `"fix": true` can still rewrite the
+	 * file. Subject is the resolved command; once per session.
+	 */
+	| "markdownlint-api-unavailable"
 	/** A complete MCP result exceeded the hard input budget (#2848). */
 	| "mcp-complete-result-budget-exceeded"
 	/**

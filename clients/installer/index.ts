@@ -2653,15 +2653,13 @@ export function resetPathWalkMemo(): void {
 }
 
 /**
- * Check if a command is available in PATH by walking PATH entries and
- * verifying each candidate is a real file with non-zero size.
- * Catches broken symlinks (stat throws ENOENT or returns size 0) without
- * spawning a process — ~μs per candidate vs ~50ms for which/where.
+ * Walk PATH for `command` and return the first candidate that is a real file
+ * with non-zero size (broken symlinks stat as missing or empty), or null.
+ * No spawn: ~μs per candidate vs ~50ms for which/where. Callers that need the
+ * file itself (the markdownlint API loader, #5119) read it here; the boolean
+ * question is {@link isCommandAvailable}.
  */
-export async function isCommandAvailable(
-	command: string,
-	_args?: string[],
-): Promise<boolean> {
+export function findCommandOnPath(command: string): string | null {
 	const isWindows = installerPlatform() === "win32";
 	const pathEnv =
 		process.env.PATH || process.env.Path || process.env.path || "";
@@ -2694,14 +2692,22 @@ export async function isCommandAvailable(
 					recordProjectCommandRefusal(candidate);
 					continue;
 				}
-				return true;
+				return candidate;
 			} catch {
 				// ENOENT or permission denied — skip this candidate
 			}
 		}
 	}
 
-	return false;
+	return null;
+}
+
+/** Check if a command is available in PATH (see {@link findCommandOnPath}). */
+export async function isCommandAvailable(
+	command: string,
+	_args?: string[],
+): Promise<boolean> {
+	return findCommandOnPath(command) !== null;
 }
 
 /**
