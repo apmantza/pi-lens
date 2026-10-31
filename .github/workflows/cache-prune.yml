@@ -48,7 +48,9 @@ on:
 permissions: {}
 
 concurrency:
-  group: cache-prune
+  # The dry run takes its own group: GitHub keeps one pending run per group, so
+  # a pull_request dry run must not replace a pending prune (#5095 review).
+  group: cache-prune-${{ github.event_name == 'pull_request' && 'dry-run' || 'prune' }}
   cancel-in-progress: false
 
 jobs:

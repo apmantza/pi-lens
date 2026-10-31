@@ -17,6 +17,7 @@ import {
 	writeScopes,
 } from "../../scripts/dispatch-safety.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { evaluateGroup } from "../support/workflow-expression.js";
 
 const ROOT = resolve(import.meta.dirname, "../..");
 const WORKFLOWS = ".github/workflows";
@@ -118,11 +119,23 @@ describe("cache-prune.yml: only `prune` writes (#4358 r1 F1)", () => {
 		expect(raw.on.workflow_run.workflows).toEqual([codeql.name]);
 		expect(raw.on.workflow_run.types).toEqual(["completed"]);
 		expect(raw.on.workflow_run.branches).toEqual(["master"]);
-		// queued prunes wait for the running one, never cancel a delete mid-way
-		expect(raw.concurrency).toEqual({
-			group: "cache-prune",
-			"cancel-in-progress": false,
-		});
+		// Recurrence (CodeRabbit outside-diff on #5095, cache-prune.yml:51): the
+		// dry run and the deleting runs shared one group. GitHub keeps one pending
+		// run per group, so a later pull_request dry run replaced a pending prune.
+		// Resolve the group per trigger: a dry run takes its own group, and the
+		// deleting triggers (schedule, workflow_run) share one, so queued prunes
+		// wait for the running one and never cancel a delete mid-way.
+		const groupFor = (event: string) =>
+			evaluateGroup(raw.concurrency?.group ?? "", "opened", "run", event);
+		const deletingGroup = groupFor("schedule");
+		expect(groupFor("workflow_run"), "deleting runs share one group").toBe(
+			deletingGroup,
+		);
+		expect(
+			groupFor("pull_request"),
+			"a dry run must not share the deleting group",
+		).not.toBe(deletingGroup);
+		expect(raw.concurrency?.["cancel-in-progress"]).toBe(false);
 		// the dry-run `plan` stays path-filtered: it only needs to run when the
 		// rules change
 		expect((raw.on.pull_request as { paths?: string[] }).paths).toEqual([
