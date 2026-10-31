@@ -2183,7 +2183,7 @@ export async function handleToolResult(
 			callId !== undefined
 				? (
 						deps.runtime as Partial<RuntimeCoordinator>
-					).takeToolCallPartialApply?.call(deps.runtime, callId)
+					).toolCallPartialApply?.call(deps.runtime, callId)
 				: undefined;
 		if (partialApply)
 			return composePartialApplyResult(

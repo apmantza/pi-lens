@@ -516,8 +516,8 @@ export interface ToolCallAttribution {
 	/**
 	 * #5120: this call's `edits` were rewritten to the matched subset of a
 	 * partly matching batch, for the host edit to write. Its `tool_result`
-	 * takes it once ({@link RuntimeCoordinator.takeToolCallPartialApply}) to
-	 * tell the agent what applied. A call a later handler blocks gets no
+	 * reads it ({@link RuntimeCoordinator.toolCallPartialApply}) to tell the
+	 * agent what applied. A call a later handler blocks gets no
 	 * `tool_result`; the entry then goes with the attribution's own bound.
 	 */
 	partialApply?: PartialApplyPending;
@@ -3028,18 +3028,12 @@ export class RuntimeCoordinator {
 	}
 
 	/**
-	 * #5120: one-shot claim of a call's partial apply. It leaves the rest of the
-	 * attribution for {@link takeToolCallAttribution}. pi's call ids are unique
-	 * per call; a write, edit or read that reused one would record a new
-	 * attribution at its `tool_call` and drop this.
+	 * #5120: a call's partial apply, read at its `tool_result`. It goes with
+	 * the attribution, which that `tool_result` takes
+	 * ({@link takeToolCallAttribution}).
 	 */
-	takeToolCallPartialApply(
-		toolCallId: string,
-	): PartialApplyPending | undefined {
-		const attribution = this._toolCallAttributions.get(toolCallId);
-		const pending = attribution?.partialApply;
-		if (attribution) delete attribution.partialApply;
-		return pending;
+	toolCallPartialApply(toolCallId: string): PartialApplyPending | undefined {
+		return this._toolCallAttributions.get(toolCallId)?.partialApply;
 	}
 
 	/**

@@ -1048,7 +1048,7 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			expect((call as { reason: string }).reason).toContain(
 				"Edit without read",
 			);
-			expect(runtime.takeToolCallPartialApply("call-unread")).toBeUndefined();
+			expect(runtime.toolCallPartialApply("call-unread")).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}
