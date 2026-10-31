@@ -28,6 +28,18 @@ jobs:
       issues: write
     steps:
       - run: node scripts/upsert-tracking-issue.mjs
+  pull-request-only:
+    if: github.event_name == 'pull_request' && needs.gate.outputs.ready == 'true'
+    permissions:
+      issues: write
+    steps:
+      - run: node scripts/upsert-tracking-issue.mjs
+  pull-request-or-input:
+    if: github.event_name == 'pull_request' || inputs.force
+    permissions:
+      issues: write
+    steps:
+      - run: node scripts/upsert-tracking-issue.mjs
   always-or-guard:
     if: always() || (github.event_name == 'schedule' || github.ref == 'refs/heads/master')
     permissions:

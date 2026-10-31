@@ -114,7 +114,10 @@ describe("tool-smoke.yml's issue writers are scoped to nightly/default runs (#33
 			contents: "read",
 			issues: "write",
 		});
+		// #5062: `actions: write` is the dispatch of ci.yml and lint.yml on the bot
+		// branches (docs/ci-bot-pr-checks.md); nothing else holds it.
 		expect(workflow.jobs?.[PRS_JOB]?.permissions).toEqual({
+			actions: "write",
 			contents: "write",
 			"pull-requests": "write",
 		});

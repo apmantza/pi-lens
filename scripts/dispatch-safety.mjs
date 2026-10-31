@@ -234,11 +234,15 @@ function isEquality(expr, context, value) {
 
 const isSchedule = (e) => isEquality(e, "github.event_name", "schedule");
 const isMaster = (e) => isEquality(e, "github.ref", "refs/heads/master");
+// #5062: a job that runs only on `pull_request` never runs on a dispatch, whose
+// `github.event_name` is `workflow_dispatch` (ci.yml's PR-only CodeQL job).
+const isPullRequest = (e) => isEquality(e, "github.event_name", "pull_request");
 
 // `schedule || master`, or either half alone: a stricter guard that a branch
-// dispatch cannot satisfy either.
+// dispatch cannot satisfy either. `pull_request` alone is a guard too; it never
+// joins an `||`, which a dispatch could satisfy through the other operand.
 function isGuardConjunct(expr) {
-	if (isSchedule(expr) || isMaster(expr)) return true;
+	if (isSchedule(expr) || isMaster(expr) || isPullRequest(expr)) return true;
 	const ors = operands(expr, "or");
 	return ors.length === 2 && ors.some(isSchedule) && ors.some(isMaster);
 }
@@ -272,9 +276,11 @@ export function guardOf(...conditions) {
 	return { guarded: false, reason: "lacks ref guard" };
 }
 
-// A guard conjunct is only ever `schedule`, `master` or `schedule || master`,
-// so its truth under a dispatch context needs no general evaluator.
+// A guard conjunct is only ever `schedule`, `master`, `schedule || master` or
+// `pull_request`, so its truth under a dispatch context needs no general
+// evaluator.
 function holds(conjunct, context) {
+	if (isPullRequest(conjunct)) return context.event === "pull_request";
 	if (isSchedule(conjunct)) return context.event === "schedule";
 	if (isMaster(conjunct)) return context.ref === "refs/heads/master";
 	return (

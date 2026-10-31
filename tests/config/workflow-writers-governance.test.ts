@@ -428,7 +428,7 @@ const REGISTERED_EXCEPTIONS: Record<string, string> = {};
 // The census as counts: dispatchable workflows, and writer steps per workflow.
 // A new writer (even a guarded one) or a new dispatchable workflow reds here so
 // its author reviews the guard; the failure prints the re-pin.
-const DISPATCHABLE_WORKFLOWS = 18;
+const DISPATCHABLE_WORKFLOWS = 20;
 // #4077: the split moved every writer step into its own job without adding one,
 // except codeql.yml, whose SARIF upload moved into the `upload` job as the
 // `github/codeql-action/upload-sarif` writer action (+1).
@@ -445,7 +445,7 @@ const WRITER_STEPS: Record<string, number> = {
 	".github/workflows/stale-open-issues.yml": 1,
 	".github/workflows/stale.yml": 1,
 	".github/workflows/stryker-nightly.yml": 1,
-	".github/workflows/tool-smoke.yml": 13,
+	".github/workflows/tool-smoke.yml": 15,
 };
 
 // Every dispatchable job that holds a write scope, with the scopes it holds.
@@ -455,6 +455,7 @@ const WRITER_STEPS: Record<string, number> = {
 // back on a producer reds here with the re-pin printed; the unguarded direction
 // also reds `guards every dispatchable job with an effective write token`.
 const WRITE_SCOPED_JOBS: Record<string, string> = {
+	".github/workflows/ci.yml:codeql": "security-events",
 	".github/workflows/codeql.yml:upload": "security-events",
 	".github/workflows/compat-smoke.yml:compat-smoke-alert": "issues",
 	".github/workflows/install-smoke.yml:host-latest-notify": "issues",
@@ -469,7 +470,8 @@ const WRITE_SCOPED_JOBS: Record<string, string> = {
 	".github/workflows/tool-smoke.yml:test-history-notify": "issues",
 	".github/workflows/tool-smoke.yml:test-history-publish": "contents",
 	".github/workflows/tool-smoke.yml:tool-smoke-notify": "issues",
-	".github/workflows/tool-smoke.yml:tool-smoke-prs": "contents, pull-requests",
+	".github/workflows/tool-smoke.yml:tool-smoke-prs":
+		"actions, contents, pull-requests",
 };
 
 function workflowFiles(): string[] {
@@ -1005,6 +1007,18 @@ describe("workflow writer governance (#4053)", () => {
 			["a wrapped expression", `\${{ !cancelled() && (${GUARD_SRC}) }}`],
 			["schedule alone", "github.event_name == 'schedule'"],
 			["master alone", "github.ref == 'refs/heads/master'"],
+			// Recurrence: #5062 gave ci.yml a `workflow_dispatch`, and its
+			// pull_request-only CodeQL job (security-events: write) read as an
+			// unguarded dispatchable writer although no dispatch can start it.
+			["pull_request alone", "github.event_name == 'pull_request'"],
+			[
+				"pull_request and another condition",
+				"github.event_name == 'pull_request' && needs.gate.outputs.ready == 'true'",
+			],
+			[
+				"reversed pull_request operands",
+				"'pull_request' == github.event_name && inputs.x",
+			],
 			[
 				"reversed operands",
 				"'schedule' == github.event_name || 'refs/heads/master' == github.ref",
@@ -1026,6 +1040,23 @@ describe("workflow writer governance (#4053)", () => {
 			["guard || other", `${GUARD_SRC} || inputs.x`],
 			["precedence: a && b || guard", `a && b || ${GUARD_SRC}`],
 			["a negated schedule", "github.event_name != 'schedule'"],
+			["a negated pull_request", "github.event_name != 'pull_request'"],
+			["!(pull_request)", "!(github.event_name == 'pull_request')"],
+			[
+				"pull_request || other",
+				"github.event_name == 'pull_request' || inputs.x",
+			],
+			[
+				"pull_request || workflow_dispatch",
+				"github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'",
+			],
+			["merge_group", "github.event_name == 'merge_group'"],
+			[
+				"a pull_request_target event",
+				"github.event_name == 'pull_request_target'",
+			],
+			["an upper-case event", "github.event_name == 'Pull_Request'"],
+			["a pull_request payload test", "github.event.pull_request"],
 			["workflow_dispatch", "github.event_name == 'workflow_dispatch'"],
 			["a different branch", "github.ref == 'refs/heads/main'"],
 			["ref_name", "github.ref_name == 'master'"],

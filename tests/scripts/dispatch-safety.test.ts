@@ -33,7 +33,9 @@ describe("dispatch-safety guardSkips on a branch dispatch (#4076 D2)", () => {
 	const onBranch = rows([JOBS, "--ref", "feature-x"]);
 
 	// Recurrence: a real guard skips the whole job on a branch dispatch.
-	it.each(["guarded", "schedule-only", "master-only"])(
+	// Recurrence: #5062 made ci.yml dispatchable, and its pull_request-only CodeQL
+	// job (`security-events: write`) read as runnable on a dispatch.
+	it.each(["guarded", "schedule-only", "master-only", "pull-request-only"])(
 		"reports %s as skipped",
 		(job) => {
 			expect(onBranch[job].guardSkips).toBe(true);
@@ -50,6 +52,7 @@ describe("dispatch-safety guardSkips on a branch dispatch (#4076 D2)", () => {
 		"format-wrapped",
 		"compared-to-false",
 		"schedule-or-input",
+		"pull-request-or-input",
 	])("does not report the spoofed guard %s as skipped", (job) => {
 		expect(onBranch[job].guardSkips).toBe(false);
 	});
@@ -66,7 +69,7 @@ describe("dispatch-safety guardSkips on a branch dispatch (#4076 D2)", () => {
 	it("reports the write scopes the census resolves, per job", () => {
 		expect(onBranch.guarded.writeScopes).toEqual(["issues"]);
 		expect(onBranch["read-only"].writeScopes).toEqual([]);
-		expect(Object.keys(onBranch)).toHaveLength(12);
+		expect(Object.keys(onBranch)).toHaveLength(14);
 	});
 });
 
@@ -78,6 +81,7 @@ describe("dispatch-safety on a master dispatch", () => {
 		expect(onMaster.guarded.guardSkips).toBe(false);
 		expect(onMaster["master-only"].guardSkips).toBe(false);
 		expect(onMaster["schedule-only"].guardSkips).toBe(true);
+		expect(onMaster["pull-request-only"].guardSkips).toBe(true);
 	});
 
 	// Recurrence: `--ref=x` was parsed as "no flag" and answered for master.

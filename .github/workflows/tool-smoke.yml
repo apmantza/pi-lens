@@ -899,6 +899,7 @@ jobs:
     # Two create-pull-request calls (a push and an API call each).
     timeout-minutes: 10
     permissions:
+      actions: write # dispatch ci.yml and lint.yml on each bot PR head (#5062)
       contents: write # commit-back branch for the LSP-docs refresh PR (#390)
       pull-requests: write # open/update the auto-refresh PR (#390)
     steps:
@@ -987,6 +988,26 @@ jobs:
           body-path: ${{ runner.temp }}/lsp-refresh-pr-body.md
           delete-branch: false
 
+      # #5062: a PR opened or updated with the repository GITHUB_TOKEN starts
+      # no `pull_request` run, so the required checks stayed absent until a
+      # maintainer closed and reopened it. `workflow_dispatch` is the one event
+      # a GITHUB_TOKEN can start, so the same job dispatches every workflow that
+      # produces a required check (those with a `merge_group` trigger, #3754) on
+      # the branch it just pushed. The dispatched jobs report under the
+      # required names, on the PR head. Skipped when the App token opened the
+      # PR (#4512): CI already started, and a second run would only duplicate it.
+      # Not `continue-on-error`: a PR that opened without checks reds the job.
+      # Trust boundary: docs/ci-bot-pr-checks.md.
+      - name: Start required CI on the LSP-docs refresh branch
+        if: (steps.refresh_pr.outputs.pull-request-operation == 'created' || steps.refresh_pr.outputs.pull-request-operation == 'updated') && steps.app_token.outputs.token == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref bot/lsp-docs-refresh
+          gh workflow run lint.yml --ref bot/lsp-docs-refresh
+
       # #4512: a refresh with no capability flips lands without a manual step.
       # Auto-merge is armed only for a flip-free refresh, only with the App
       # token (so CI runs on the PR), and only when the repository opted in with
@@ -1028,6 +1049,7 @@ jobs:
       # is widened. Never auto-merged: this PR is opened with the repository
       # token, which cannot arm CI, and a maintainer reviews the table.
       - name: Open/update idle-eviction promotion PR
+        id: promote_pr
         if: needs.tool-smoke.outputs.promoted == 'true'
         continue-on-error: true
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
@@ -1045,6 +1067,18 @@ jobs:
           title: 'perf(lsp): promote measured idle-eviction servers (refs #3989)'
           body-path: ${{ runner.temp }}/pr-inputs/idle-eviction-promote.md
           delete-branch: false
+
+      # #5062: this PR is always opened with GITHUB_TOKEN, so it always needs
+      # the dispatch above (docs/ci-bot-pr-checks.md).
+      - name: Start required CI on the idle-eviction promotion branch
+        if: steps.promote_pr.outputs.pull-request-operation == 'created' || steps.promote_pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref bot/lsp-idle-evict-promote
+          gh workflow run lint.yml --ref bot/lsp-idle-evict-promote
 
   # The tracking-issue writers (#4077): the only job here with `issues: write`
   # beside the snapshot notifier below. Every step is `continue-on-error`, and
