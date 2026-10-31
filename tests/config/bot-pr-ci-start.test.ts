@@ -200,19 +200,15 @@ function dispatchProblems(
 	const isDispatchStep = (step: Step) => branchOf(step) !== undefined;
 	// Position (#5062 r2 F2): the dispatch steps close the job. A hard-failing
 	// dispatch placed before the disarm failsafe or the promotion PR step skips
-	// them (each runs under an implicit `success()`), and one placed before its
-	// opener reads an empty `pull-request-operation` and never fires.
+	// them (each runs under an implicit `success()`). One placed before its
+	// opener reads an empty `pull-request-operation` and never fires: the opener
+	// is never a dispatch step, so this loop refuses it too.
 	const dispatchAt = steps.findIndex(isDispatchStep);
 	if (dispatchAt >= 0) {
 		for (const [index, step] of steps.entries())
 			if (index > dispatchAt && !isDispatchStep(step))
 				problems.push(
 					`step ${JSON.stringify(text(step.name) || index)} runs after the first CI dispatch`,
-				);
-		for (const opener of openers)
-			if (steps.indexOf(opener) > dispatchAt)
-				problems.push(
-					"a CI dispatch step precedes the create-pull-request step",
 				);
 	}
 	for (const opener of openers) {
