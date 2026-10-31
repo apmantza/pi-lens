@@ -14,6 +14,14 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../test-utils.js";
 
+const recordLsp = vi.fn();
+vi.mock("../../../clients/widget-state.js", async (importOriginal) => {
+	const real =
+		await importOriginal<typeof import("../../../clients/widget-state.js")>();
+	// Pass-through spy: the real store still records; the spy only observes it.
+	recordLsp.mockImplementation(real.recordLsp);
+	return { ...real, recordLsp };
+});
 const launchLSP = vi.fn(async (..._args: unknown[]) => ({}));
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
@@ -31,6 +39,9 @@ function tempDir(): string {
 
 afterEach(async () => {
 	launchLSP.mockClear();
+	recordLsp.mockClear();
+	const config = await import("../../../clients/lsp/config.js");
+	config._setServersForFileForTests(undefined);
 	for (const dir of dirs.splice(0)) removeTempDirSync(dir);
 	const trust = await import("../../../clients/project-trust.js");
 	trust.resetProjectTrust();
@@ -72,7 +83,7 @@ describe("custom server command forms (#5127)", () => {
 		]);
 	});
 
-	it("puts the array's tail before `args` and adds no default --stdio", async () => {
+	it("puts the array tail before args and adds no default --stdio", async () => {
 		const withArgs = await compiled({
 			command: ["srv", "--lang", "x"],
 			args: ["--extra"],
@@ -142,5 +153,26 @@ describe("custom server command forms (#5127)", () => {
 		const config = await loadLSPConfig(project);
 		const registry = compileLspRegistry(config, config.__provenance);
 		expect(registry.customServers.map((server) => server.id)).toEqual([]);
+	});
+
+	it("surfaces a malformed command as the existing spawn_failed record, not a crash", async () => {
+		// Recurrence: the failure must reach the registry's spawn_failed record
+		// (client-registry.ts) so the widget and breaker see the server as failed,
+		// instead of the throw escaping the service.
+		const { project, server } = await compiled({ command: [] });
+		const config = await import("../../../clients/lsp/config.js");
+		config._setServersForFileForTests(() => (server ? [server] : []));
+		const file = path.join(project, "a.myext");
+		fs.writeFileSync(file, "x");
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		expect(await service.getClientForFile(file)).toBeUndefined();
+		expect(launchLSP).not.toHaveBeenCalled();
+		expect(recordLsp).toHaveBeenCalledWith(
+			"mine",
+			expect.any(String),
+			"spawn_failed",
+			expect.any(Number),
+		);
 	});
 });
