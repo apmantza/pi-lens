@@ -35,7 +35,10 @@ import {
 import { PathKeyedMap } from "./path-keyed-map.js";
 import { BoundedFifoMap, BoundedLruCache } from "./bounded-cache.js";
 import { type AnalysisAnchor, owedByContentOnly } from "./line-alignment.js";
-import { PartialApplyRecordStore } from "./partial-edit-apply.js";
+import {
+	type PartialApplyPending,
+	PartialApplyRecordStore,
+} from "./partial-edit-apply.js";
 import { ReadGuard } from "./read-guard.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
@@ -510,6 +513,14 @@ export interface ToolCallAttribution {
 	 * (`ReadGuard.fileTimeMoved`), so its write must not re-stamp it.
 	 */
 	fileTimeStale?: true;
+	/**
+	 * #5120: this call's `edits` were rewritten to the matched subset of a
+	 * partly matching batch, for the host edit to write. Its `tool_result`
+	 * takes it once ({@link RuntimeCoordinator.takeToolCallPartialApply}) to
+	 * tell the agent what applied. A call a later handler blocks gets no
+	 * `tool_result`; the entry then goes with the attribution's own bound.
+	 */
+	partialApply?: PartialApplyPending;
 	/** `Date.now()` when recorded — see `TOOL_CALL_ATTRIBUTION_TTL_MS`. */
 	recordedAt: number;
 }
@@ -3005,6 +3016,30 @@ export class RuntimeCoordinator {
 	markToolCallFileTimeStale(toolCallId: string): void {
 		const attribution = this._toolCallAttributions.get(toolCallId);
 		if (attribution) attribution.fileTimeStale = true;
+	}
+
+	/** #5120: see {@link ToolCallAttribution.partialApply}. */
+	markToolCallPartialApply(
+		toolCallId: string,
+		pending: PartialApplyPending,
+	): void {
+		const attribution = this._toolCallAttributions.get(toolCallId);
+		if (attribution) attribution.partialApply = pending;
+	}
+
+	/**
+	 * #5120: one-shot claim of a call's partial apply. It leaves the rest of the
+	 * attribution for {@link takeToolCallAttribution}. pi's call ids are unique
+	 * per call; a write, edit or read that reused one would record a new
+	 * attribution at its `tool_call` and drop this.
+	 */
+	takeToolCallPartialApply(
+		toolCallId: string,
+	): PartialApplyPending | undefined {
+		const attribution = this._toolCallAttributions.get(toolCallId);
+		const pending = attribution?.partialApply;
+		if (attribution) delete attribution.partialApply;
+		return pending;
 	}
 
 	/**

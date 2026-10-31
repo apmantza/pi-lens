@@ -1908,9 +1908,9 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 	"file-time.ts": {
 		ownerKey: "session",
 		sessionSeamException:
-			"reads is keyed by the sessionID string a caller passes to the FileTime constructor, not by a scope cell: the module reads no ambient session, so there is nothing to derive a scope from; locks is keyed by absolute path alone and is shared on purpose, so two writers to one file serialise",
+			"reads is keyed by the sessionID string a caller passes to the FileTime constructor, not by a scope cell: the module reads no ambient session, so there is nothing to derive a scope from",
 		reason:
-			"#5036 F1: the read stamps and write locks live in the module object globalState, a store the module-container scan did not read before; clearFileTimeSessions (clearAllSessions) empties both at session_start (runtime-session.ts)",
+			"#5036 F1: the read stamps live in the module object globalState, a store the module-container scan did not read before; clearFileTimeSessions (clearAllSessions) empties it at session_start (runtime-session.ts). #5120 deleted the write locks with their only caller, the partial-apply writer",
 	},
 	"file-utils.ts": {
 		ownerKey: "project",
@@ -2503,7 +2503,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"event-loop-hold.ts": 0,
 	"extension-log.ts": 2,
 	"file-kinds.ts": 2,
-	"file-time.ts": 2,
+	"file-time.ts": 1,
 	// #2874: the live scan sees settledDataDirs plus the two project-ignore
 	// caches. All three ride the file-level exemption above: the ignore caches
 	// are signature-validated per call (#2929 round 4, F1), so no reset exists

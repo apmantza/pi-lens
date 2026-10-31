@@ -470,7 +470,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/opaque-mutation-scan.ts": 5,
 		"clients/opengrep-client.ts": 11,
 		"clients/package-manager.ts": 2,
-		"clients/partial-edit-apply.ts": 7,
 		"clients/performance-report.ts": 3,
 		"clients/pipeline.ts": 13,
 		"clients/project-diagnostics/fresh-fetch.ts": 4,
@@ -769,7 +768,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the owned in-process mutation paths; round 5 folds two of its three
 		// branches onto the observational net's arm, and the surviving ast-grep
 		// site walks its `paths` array instead of filtering it.
-		"clients/runtime-tool-call.ts": 3,
+		"clients/runtime-tool-call.ts": 2,
 		// #4535 slice 2: the LSP consumer narrows a publish's population to the
 		// documents a live client holds and keeps the stale ones among them —
 		// two `Array.prototype.filter` calls that moved here from
@@ -1062,7 +1061,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/effective-config.ts": 5,
 		"clients/extension-log.ts": 2,
 		"clients/file-kinds.ts": 2,
-		"clients/file-time.ts": 7,
+		"clients/file-time.ts": 6,
 		// 18 -> 13 (#4689): the private nearest-existing realpath walk folded
 		// onto path-utils' `realpathOrResolve`.
 		// 13 -> 11 (#4689 batch 7): the git-marker climb is `walkUpDirs`, so its
@@ -1355,7 +1354,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.dirname(filePath)`; `resolveSessionConfigRoot` answers it.
 		// 21 -> 23 (#3650): the `lsp_navigation` branch reads the `path` field
 		// the tool declares, in its condition and its return.
-		"clients/runtime-tool-call.ts": 23,
+		"clients/runtime-tool-call.ts": 22,
 		// 22 -> 20 (#3650): the tool_result path read is routed through
 		// readToolResultPathField; the open-coded input.path cast is gone.
 		// 19 -> 18 (#4576): the tool_result path resolves through
@@ -1533,7 +1532,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/analyze.ts": 2,
 		"clients/observed-mutation.ts": 4,
 		"clients/opaque-mutation-scan.ts": 1,
-		"clients/partial-edit-apply.ts": 5,
+		"clients/partial-edit-apply.ts": 4,
 		"clients/persistent-reverify.ts": 3,
 		"clients/project-diagnostics/fresh-fetch.ts": 12,
 		"clients/project-lens-config.ts": 8,
@@ -1582,7 +1581,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/metrics-history.ts": 11,
 		"clients/observed-mutation.ts": 7,
 		"clients/opaque-mutation-scan.ts": 8,
-		"clients/partial-edit-apply.ts": 6,
 		"clients/pipeline.ts": 6,
 		"clients/project-diagnostics/cache.ts": 16,
 		"clients/project-diagnostics/scanner.ts": 10,
@@ -1590,7 +1588,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// #4129 adds the word-index splice and worker heap slot's snapshot uses.
 		"clients/project-snapshot.ts": 130,
 		"clients/read-guard-branch.ts": 2,
-		"clients/read-guard-tool-lines.ts": 3,
+		"clients/read-guard-tool-lines.ts": 2,
 		"clients/read-guard.ts": 2,
 		"clients/reverse-deps.ts": 14,
 		"clients/runtime-session.ts": 38,

@@ -377,7 +377,6 @@
 		"tests/clients/file-kinds.test.ts": 0.02,
 		"tests/clients/file-mutation-queue.test.ts": 0.02,
 		"tests/clients/file-role.test.ts": 0.01,
-		"tests/clients/file-time.test.ts": 0,
 		"tests/clients/file-utils.test.ts": 0.03,
 		"tests/clients/finding-delivery-gate.test.ts": 1.64,
 		"tests/clients/finding-identity-retain.test.ts": 0.02,

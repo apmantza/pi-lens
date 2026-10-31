@@ -22,14 +22,12 @@ export interface FileStamp {
 
 interface FileTimeState {
 	reads: Map<string, Map<string, FileStamp>>; // sessionID -> filePath -> stamp
-	locks: Map<string, Promise<void>>; // filePath -> lock promise
 }
 
 // --- Singleton State ---
 
 const globalState: FileTimeState = {
 	reads: new Map(),
-	locks: new Map(),
 };
 
 // --- Public API ---
@@ -122,38 +120,6 @@ export class FileTime {
 	}
 
 	/**
-	 * Acquire exclusive lock on file
-	 * Prevents concurrent modifications to same file
-	 */
-	async withLock<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-		const absolutePath = path.resolve(filePath);
-
-		// Wait for existing lock
-		while (globalState.locks.has(absolutePath)) {
-			const existing = globalState.locks.get(absolutePath);
-			if (existing) await existing;
-		}
-
-		// Create new lock
-		const lockPromise = fn().finally(() => {
-			globalState.locks.delete(absolutePath);
-		});
-		// The STORED lock promise must never reject unhandled: a rejecting fn
-		// (e.g. partial-apply's pre-write rejection, #2402) would otherwise leave
-		// an orphaned rejected promise on every withLock caller. Waiters awaiting
-		// the stored copy still resume — the finally above already deleted the
-		// lock entry by the time the rejection settles.
-		globalState.locks.set(
-			absolutePath,
-			lockPromise.then(
-				() => {},
-				() => {},
-			),
-		);
-		return lockPromise;
-	}
-
-	/**
 	 * Clear all tracked files for this session
 	 */
 	clear(): void {
@@ -218,5 +184,4 @@ export function createFileTime(sessionID: string): FileTime {
 
 export function clearAllSessions(): void {
 	globalState.reads.clear();
-	globalState.locks.clear();
 }

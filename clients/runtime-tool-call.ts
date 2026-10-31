@@ -1,6 +1,6 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
-import { loadBootstrapClients, requestBootstrapClients } from "./bootstrap.js";
+import { requestBootstrapClients } from "./bootstrap.js";
 import type { CacheManager } from "./cache-manager.js";
 import { resolveSessionConfigRoot } from "./analysis-root.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
@@ -42,7 +42,6 @@ import {
 import { isProvisionalLearnedAttribution } from "./mutation-attribution.js";
 import { armObservedMutation } from "./observed-mutation.js";
 import { extractWrittenPathsFromCommand } from "./bash-file-access.js";
-import type { LSPShutdownOptions } from "./lsp/client.js";
 import { getLSPService } from "./lsp/capabilities.js";
 import {
 	findDocumentSymbolAtLine,
@@ -54,7 +53,6 @@ import {
 	computeTrailingWhitespaceOldTextPatch,
 	findUniqueMatchLineRange,
 } from "./oldtext-autopatch.js";
-import { applyPartiallyApplicableEdits } from "./partial-edit-apply.js";
 import {
 	isExternalOrVendorFile,
 	resolveToolCallFilePath,
@@ -67,20 +65,21 @@ import {
 } from "./read-expansion.js";
 import { scanFileLines } from "./read-guard.js";
 import {
+	boundedEditIndexes,
 	boundedIndexesForCount,
 	createReadGuardEditBatchSummary,
+	formatBoundedEditIndexes,
 	getReadGuardCorrelationId,
 	logReadGuardEvent,
 } from "./read-guard-logger.js";
 import {
-	formatAlreadyAppliedNotes,
 	getTouchedLinesForGuard,
 	relocateEditRange,
 	tryCorrectIndentationMismatch,
 	tryCorrectIndentationMismatchFromContent,
 } from "./read-guard-tool-lines.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
-import { handleToolResult, resyncHeadMove } from "./runtime-tool-result.js";
+import { resyncHeadMove } from "./runtime-tool-result.js";
 import {
 	resolveReadEvidenceCorrelationId,
 	resolveToolCallCorrelationId,
@@ -101,39 +100,6 @@ const LSP_TOOLCALL_TOUCH_BUDGET_MS = Math.max(
 	0,
 	Number.parseInt(process.env.PI_LENS_TOOLCALL_TOUCH_MS ?? "750", 10) || 750,
 );
-
-/**
- * Composes the final block reason for a partial apply whose commit landed
- * (#2402). The committed bytes lead the message; the preflight's per-edit
- * failure bodies follow UNCHANGED, so they still describe exactly the edits
- * that were NOT applied. The preflight header (🔄/🛑) is never reused here —
- * relabelling committed edits as a retryable oldText miss is the #2402 defect.
- */
-function composePartialApplyReason(args: {
-	appliedCount: number;
-	appliedIndices: string;
-	postEditStatus: "succeeded" | "failed";
-	postEditOutput?: string;
-	preflightDetails?: string[];
-	alreadyAppliedEdits?: number[];
-}): string {
-	const parts: string[] = [];
-	const editSuffix = args.appliedCount === 1 ? "" : "s";
-	parts.push(
-		args.postEditStatus === "failed"
-			? `⚠️ PARTIAL APPLY — ${args.appliedCount} edit${editSuffix} committed (${args.appliedIndices}). Post-edit analysis failed after the commit; the committed bytes stand and were not reverted. Do NOT resubmit the applied edits.`
-			: `⚠️ PARTIAL APPLY — ${args.appliedCount} edit${editSuffix} committed (${args.appliedIndices}). Do NOT resubmit the applied edits.`,
-	);
-	if (args.preflightDetails && args.preflightDetails.length > 0) {
-		parts.push(args.preflightDetails.join("\n\n"));
-	}
-	const alreadyNotes = formatAlreadyAppliedNotes(args.alreadyAppliedEdits);
-	if (alreadyNotes) parts.push(alreadyNotes.trimStart());
-	if (args.postEditOutput && args.postEditStatus === "succeeded") {
-		parts.push(`Post-apply analysis:\n${args.postEditOutput}`);
-	}
-	return parts.join("\n\n");
-}
 
 function getToolCallRawFilePath(
 	toolName: string,
@@ -391,7 +357,6 @@ interface ToolCallDeps {
 			) => string;
 		},
 	) => void;
-	resetLSPService: (options?: LSPShutdownOptions) => void;
 	getTreeSitterClient?: typeof getSharedTreeSitterClient;
 	/**
 	 * #3613: the stable session id of the session whose tool call this is, so
@@ -577,7 +542,6 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		cacheManager,
 		ensureLSPConfigInitialized,
 		updateLspStatus,
-		resetLSPService,
 		getTreeSitterClient = getSharedTreeSitterClient,
 	} = deps;
 	// #4943: the calling session, which this call's read-guard log rows name
@@ -1685,148 +1649,82 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			typeof readGuard?.isNewFile !== "function" ||
 			!readGuard.isNewFile(filePath);
 		if (readGuard && isExistingFile && !isExternalOrVendor) {
-			const {
-				touchedLines,
-				editRanges,
-				preflightError,
-				preflightDetails,
-				alreadyAppliedEdits,
-				partiallyApplicable,
-				contentMatchValidated,
-				editBatchSummary,
-			} = getTouchedLinesForGuard(
-				event,
+			const guardArgs = [
 				filePath,
 				callSessionId,
 				readGuardCorrelationId,
 				runtime.partialApplyRecords,
 				readGuard.contentMatchesLastRead(filePath),
-			);
+			] as const;
+			let guardLines = getTouchedLinesForGuard(event, ...guardArgs);
+			const {
+				preflightError,
+				preflightDetails,
+				alreadyAppliedEdits,
+				partiallyApplicable,
+				editBatchSummary,
+			} = guardLines;
 			if (preflightError) {
-				if (partiallyApplicable && partiallyApplicable.length > 0) {
-					// #3525: the same fresh-at-check rule as a whole edit.
-					const partialStamp = {
-						stampFileTime: readGuard.fileTimeMoved?.(filePath) !== true,
+				// #5120: a partial apply never writes from tool_call. It hands the
+				// host edit the matched subset, at the exact span bytes, so every
+				// later tool_call handler sees what will be written and can refuse
+				// it; the tool_result tells the agent what applied. A call with no
+				// id cannot reach its tool_result, so it blocks like a native batch.
+				if (
+					partiallyApplicable &&
+					partiallyApplicable.length > 0 &&
+					toolCallId !== undefined
+				) {
+					const input = (event as { input?: unknown }).input as {
+						edits?: unknown;
 					};
-					try {
-						const partial = await applyPartiallyApplicableEdits({
+					input.edits = partiallyApplicable.map((edit) => ({
+						oldText: edit.appliedSpanText,
+						newText: edit.newText ?? "",
+					}));
+					// The subset is now an ordinary edit: the checks below judge it,
+					// and the in-flight expectation names what it will write.
+					guardLines = getTouchedLinesForGuard(event, ...guardArgs);
+					if (!guardLines.preflightError) {
+						runtime.markToolCallPartialApply(toolCallId, {
+							applied: partiallyApplicable.map((edit) => ({
+								oldText: edit.oldText,
+								newText: edit.newText,
+								originalIndex: edit.originalIndex,
+							})),
+							preflightError,
+							...(preflightDetails && { preflightDetails }),
+							...(alreadyAppliedEdits && { alreadyAppliedEdits }),
+							...(editBatchSummary && { summary: editBatchSummary }),
+						});
+						noteAgentCallStart(
+							toolCallId,
 							filePath,
-							edits: partiallyApplicable,
-							summary: editBatchSummary,
-							correlationId: readGuardCorrelationId,
-							recordStore: runtime.partialApplyRecords,
-							afterWrite: async () => {
-								const {
-									biomeClient,
-									ruffClient,
-									metricsClient,
-									agentBehaviorClient,
-								} = await loadBootstrapClients();
-								const result = await handleToolResult({
-									signal: deps.ctx.signal,
-									event: {
-										toolName: "write",
-										input: { path: filePath },
-										details: {
-											piLensPartialApply: true,
-											readGuardCorrelationId,
-										},
-										content: [],
-										// #1655 item 2: `provider`/`model`/`sessionId`/`session`
-										// used to be forwarded here from the tool_call event.
-										// pi builds a `tool_call` with exactly
-										// `type`/`toolName`/`toolCallId`/`input`
-										// (`@earendil-works/pi-coding-agent/dist/core/agent-session.js:230-234`,
-										// source `src/core/agent-session.ts:~228-236`), so all
-										// four were always `undefined` and the tool_result
-										// branch they fed was unreachable.
-									},
-									getFlag: (name: string) => getFlag(name),
-									dbg,
-									runtime,
-									cacheManager,
-									biomeClient,
-									ruffClient,
-									metricsClient,
-									resetLSPService,
-									readGuard: runtime.readGuardFor(deps.sessionId),
-									sessionId: deps.sessionId,
-									_ownWriteStamp: partialStamp,
-									agentBehaviorRecord: (toolName, analyzedPath) =>
-										agentBehaviorClient.recordToolCall(toolName, analyzedPath),
-									formatBehaviorWarnings: (warnings) =>
-										agentBehaviorClient.formatWarnings(warnings as any),
-								});
-								if (result?.isError) {
-									throw new Error(
-										"post-edit pipeline rejected synthetic partial apply",
-									);
-								}
-								return result?.content
-									?.map((item) => item.text)
-									.filter((text): text is string => !!text)
-									.join("\n\n");
+							expectationFromToolInput(input, "edit"),
+						);
+						logToolReadGuardEvent({
+							event: "edit_partial_apply",
+							sessionId: callSessionId,
+							filePath,
+							metadata: {
+								appliedCount: partiallyApplicable.length,
+								appliedIndices: formatBoundedEditIndexes(
+									boundedEditIndexes(
+										partiallyApplicable.map((edit) => edit.originalIndex),
+									),
+								),
+								requestedTotal: requestedEditTotal,
+								rewrittenForHostEdit: true,
 							},
 						});
-						if (partial.rejected) {
-							// Nothing was written and no post-edit dispatch ran. The
-							// preflight verdict still describes the whole batch; append
-							// the structured rejection so the agent rebuilds from a
-							// fresh read instead of retrying the stale payload.
-							if (!editBatchSummary) logBlockedEditSummary("preflight");
-							return {
-								block: true,
-								reason: `${preflightError}\n\n🛑 Batch not applied: ${partial.rejected.detail}`,
-							};
-						}
-						if (partial.postEditStatus === "failed") {
-							// The commit stands; the post-edit analysis does not. The
-							// committed bytes must never be re-labelled by the preflight
-							// header (a RETRYABLE/RE-READ line here sends the agent into
-							// the #2402 retry loop against already-applied edits).
-							return {
-								block: true,
-								reason: composePartialApplyReason({
-									appliedCount: partial.appliedCount,
-									appliedIndices: partial.appliedIndices,
-									postEditStatus: "failed",
-									preflightDetails,
-									alreadyAppliedEdits,
-								}),
-							};
-						}
-						if (partial.appliedCount > 0) {
-							logToolReadGuardEvent({
-								event: "edit_partial_apply",
-								sessionId: callSessionId,
-								filePath,
-								metadata: {
-									appliedCount: partial.appliedCount,
-									appliedTotal: partial.appliedTotal,
-									appliedIndices: partial.appliedIndices,
-									editBatchSummary: partial.summary,
-									routedThroughPostEditPipeline: true,
-								},
-							});
-							return {
-								block: true,
-								reason: composePartialApplyReason({
-									appliedCount: partial.appliedCount,
-									appliedIndices: partial.appliedIndices,
-									postEditStatus: "succeeded",
-									postEditOutput: partial.postEditOutput,
-									preflightDetails,
-									alreadyAppliedEdits,
-								}),
-							};
-						}
-					} catch {
-						// commit write failure — fall through to the full preflight block
 					}
 				}
-				if (!editBatchSummary) logBlockedEditSummary("preflight");
-				return { block: true, reason: preflightError };
+				if (guardLines.preflightError) {
+					if (!editBatchSummary) logBlockedEditSummary("preflight");
+					return { block: true, reason: preflightError };
+				}
 			}
+			const { touchedLines, editRanges, contentMatchValidated } = guardLines;
 			logToolReadGuardEvent({
 				event: "edit_check_started",
 				sessionId: callSessionId,
