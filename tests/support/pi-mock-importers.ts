@@ -84,6 +84,11 @@ export const PI_MOCK_IMPORTERS: Readonly<Record<string, string>> = {
 	// factory reload and reads the test-side `getIOBridge` copy (#4258).
 	"index-process-bridge-rebind-real-factory.test.ts": "internal-seam",
 	"tools/diagnostics-route-switch-matrix.test.ts": "internal-seam",
+	"tools/diagnostics-route-switch-matrix-cols-1.test.ts": "internal-seam",
+	"tools/diagnostics-route-switch-matrix-cols-2.test.ts": "internal-seam",
+	"tools/diagnostics-route-switch-matrix-cols-3.test.ts": "internal-seam",
+	"tools/diagnostics-route-switch-matrix-cols-4.test.ts": "internal-seam",
+	"tools/diagnostics-route-switch-matrix-cols-5.test.ts": "internal-seam",
 	"clients/handler-verdict-helper.test.ts": "internal-seam",
 	// unproducible-payload
 	"clients/context-append-to-last-user.test.ts": "unproducible-payload",

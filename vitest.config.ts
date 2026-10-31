@@ -448,7 +448,13 @@ const lspSpawnHeavyInclude = [
 	// pi's hooks and tools, plus a real MCP server child per column; waits on
 	// real handshakes and pull rounds like #4320's. The MCP bin receives the
 	// fixture path, so the marker census cannot see that half; stated here by
-	// hand like analyze-cli above.
+	// hand like analyze-cli above. #3801: the 15 columns run from five
+	// `-cols-N` files so the sequencer can balance them; the route scan stays here.
+	"tests/tools/diagnostics-route-switch-matrix-cols-1.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-2.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-3.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-4.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-5.test.ts",
 	"tests/tools/diagnostics-route-switch-matrix.test.ts",
 	// #873/#448: the dispatch LSP runner against a real stdio JSON-RPC server
 	// — a real child spawn through the production LSPService plus a
