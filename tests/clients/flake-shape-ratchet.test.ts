@@ -381,6 +381,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"tool installation and discovery are the host boundary; the stub hands the real typescript-language-server wrapper and a classic compiler to the real launcher, service, client and rename/watched-files paths",
 		},
+	// 2026-11-01 (#5127): the custom-server cells drive the real config loader,
+	// registry compile and the registered server's own spawn; the launcher is
+	// the child-process boundary, and its call arguments are what the contract
+	// (program, then tail, then args) is asserted on.
+	"in-process-mock:clients/lsp/custom-server-command-array.test.ts::clients/lsp/launch":
+		{
+			detector: "in-process-mock",
+			reason:
+				"the launcher is the child-process boundary; the loader, registry compile and the server's own spawn are real and the asserted effect is the program and argv handed to it",
+		},
 	// 2026-10-27 (#4914): the effect-tsgo selection cells drive the real
 	// TypeScriptServer.spawn and the real project-trust gate; the installer is
 	// the host boundary and the launcher the child-process boundary, so nothing

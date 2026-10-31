@@ -233,10 +233,9 @@ function redactServerSpec(entry: unknown): RedactedServerSpec | undefined {
 	const record = entry as Record<string, unknown>;
 	// The argv-array form (#5127): the head is the command token, and the
 	// rest count toward `argvCount` like `args` do.
-	const commandArray = Array.isArray(record.command)
-		? (record.command as unknown[])
-		: undefined;
-	const head = commandArray ? commandArray[0] : record.command;
+	const rawCommand: unknown = record.command;
+	const commandArray = Array.isArray(rawCommand) ? rawCommand : undefined;
+	const head = commandArray ? commandArray[0] : rawCommand;
 	const command = typeof head === "string" ? head : undefined;
 	const args = [
 		...(commandArray?.slice(1) ?? []),

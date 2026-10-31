@@ -1,3 +1,4 @@
+// flake-shape: in-process-mock — the launcher is the child-process boundary; the config loader, registry compile and the server's own spawn are real, and the asserted effect is the program and argv handed to it.
 /**
  * #5127: `lsp.servers.<id>.command` documented an argv array
  * (`docs/configuration.md`) that the loader handed straight to `launchLSP`,
@@ -12,16 +13,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { getFailedLspServerIds } from "../../../clients/widget-state.js";
 import { removeTempDirSync } from "../test-utils.js";
 
-const recordLsp = vi.fn();
-vi.mock("../../../clients/widget-state.js", async (importOriginal) => {
-	const real =
-		await importOriginal<typeof import("../../../clients/widget-state.js")>();
-	// Pass-through spy: the real store still records; the spy only observes it.
-	recordLsp.mockImplementation(real.recordLsp);
-	return { ...real, recordLsp };
-});
 const launchLSP = vi.fn(async (..._args: unknown[]) => ({}));
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
@@ -39,7 +33,6 @@ function tempDir(): string {
 
 afterEach(async () => {
 	launchLSP.mockClear();
-	recordLsp.mockClear();
 	const config = await import("../../../clients/lsp/config.js");
 	config._setServersForFileForTests(undefined);
 	for (const dir of dirs.splice(0)) removeTempDirSync(dir);
@@ -155,10 +148,10 @@ describe("custom server command forms (#5127)", () => {
 		expect(registry.customServers.map((server) => server.id)).toEqual([]);
 	});
 
-	it("surfaces a malformed command as the existing spawn_failed record, not a crash", async () => {
-		// Recurrence: the failure must reach the registry's spawn_failed record
-		// (client-registry.ts) so the widget and breaker see the server as failed,
-		// instead of the throw escaping the service.
+	it("surfaces a malformed command as a failed server, not a crash", async () => {
+		// Recurrence: the failure must reach the registry's failed-spawn state
+		// (the widget and breaker read it) instead of the throw escaping the
+		// service.
 		const { project, server } = await compiled({ command: [] });
 		const config = await import("../../../clients/lsp/config.js");
 		config._setServersForFileForTests(() => (server ? [server] : []));
@@ -168,11 +161,6 @@ describe("custom server command forms (#5127)", () => {
 		const service = new LSPService();
 		expect(await service.getClientForFile(file)).toBeUndefined();
 		expect(launchLSP).not.toHaveBeenCalled();
-		expect(recordLsp).toHaveBeenCalledWith(
-			"mine",
-			expect.any(String),
-			"spawn_failed",
-			expect.any(Number),
-		);
+		expect(getFailedLspServerIds()).toContain("mine");
 	});
 });

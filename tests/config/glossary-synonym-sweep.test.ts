@@ -1512,7 +1512,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/degradation-ledger.ts": 16,
 		// #3968 PR 2: +1 — `redactServerSpec` reads `record.covers` (the
 		// rendered claim beside the existing redacted fields).
-		"clients/effective-config.ts": 11,
+		// 11 -> 10 (#5127): `redactServerSpec` reads `record.command` once into
+		// `rawCommand` instead of twice in the string-only test.
+		"clients/effective-config.ts": 10,
 		// 44 -> 59 (#4725): the any-age read, the retire and the refusal's
 		// remedy each name the `turn-end-findings` row, the durable cache row the
 		// glossary keeps `record` for. 53 -> 65 (#4738): the partition reads, the

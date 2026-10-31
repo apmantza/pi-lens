@@ -824,6 +824,14 @@ export function createCustomServer(
 	config: CustomServerConfig,
 	id: string,
 ): LSPServerInfo {
+	// An unusable value (a hand-edited non-string/array) projects no token; the
+	// spawn names the field.
+	const commandToken: string | undefined =
+		typeof config.command === "string"
+			? config.command
+			: Array.isArray(config.command)
+				? (config.command[0] as string | undefined)
+				: undefined;
 	return {
 		id,
 		name: config.name,
@@ -831,14 +839,7 @@ export function createCustomServer(
 		// The own-command token the runner-coverage seam gates this row's
 		// covers claim on (#3968 F2): the declared covering lane's binary must
 		// be probeable before the claim can defer a CLI runner.
-		// An unusable value (a hand-edited non-string/array) projects no token;
-		// the spawn names the field.
-		command:
-			typeof config.command === "string"
-				? config.command
-				: Array.isArray(config.command)
-					? (config.command[0] as string | undefined)
-					: undefined,
+		...(commandToken === undefined ? {} : { command: commandToken }),
 		extensions: config.extensions,
 		// A config-declared server is a language server. The public
 		// `lsp.servers.<id>.role` field is validated and projected by

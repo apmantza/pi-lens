@@ -731,6 +731,7 @@
 		"clients/lsp/concurrent-auxiliary-spawn.test.ts::clients/lsp/client": 1,
 		"clients/lsp/config.test.ts::clients/extension-log": 1,
 		"clients/lsp/crossfile-classic-ts-live.test.ts::clients/installer/index": 1,
+		"clients/lsp/custom-server-command-array.test.ts::clients/lsp/launch": 1,
 		"clients/lsp/diagnostics-fence.test.ts::clients/latency-logger": 1,
 		"clients/lsp/docker-official-fallback.test.ts::clients/installer/index": 1,
 		"clients/lsp/docker-official-fallback.test.ts::clients/lsp/client": 1,
