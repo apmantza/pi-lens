@@ -1115,14 +1115,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"gitignore/tracked-vs-untracked resolution is the mechanism under test; no mock reproduces git's own resolution faithfully",
 	},
-	// #4047: the CLI's verdict and exit code are what a delegated lane acts on;
-	// they come from parsing the real selector, red-on-base and vitest
-	// transcripts over a real Git fixture, which an in-process stub restates.
-	"real-process-spawn:scripts/lane-check.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the CLI's verdict and exit code are parsed from the real selector, red-on-base and vitest transcripts over a real Git fixture; an in-process stub restates the transcript instead of proving the parse",
-	},
 	// 2026-09-07 (#2700): the gating/advisory subset test resolves oxlint's
 	// REAL `--print-config` for both npm scripts (never a hand-copied rule
 	// list) so a change to either script's flags is caught automatically; an

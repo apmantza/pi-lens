@@ -868,6 +868,10 @@ export const wallClockBudgetInclude = [
 	// #4047: `npm run lane:check` against real Git fixtures, the real pre-push
 	// selector, red-on-base and vitest (real child processes, flake-shape
 	// admission).
+	// #3801: lane-check.test.ts split over three files; the shared fixture is
+	// tests/support/lane-check-kit.ts.
+	"tests/scripts/lane-check-lock.test.ts",
+	"tests/scripts/lane-check-secondary.test.ts",
 	"tests/scripts/lane-check.test.ts",
 	// #2700: the gating/advisory subset test resolves oxlint's real
 	// --print-config for both npm scripts (real child process, flake-shape

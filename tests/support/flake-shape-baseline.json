@@ -112,7 +112,6 @@
 		"scripts/guard-bash-probe.test.ts": 4,
 		"scripts/install-smoke-handshake-steps.test.ts": 2,
 		"scripts/knip-sibling-purge.test.ts": 1,
-		"scripts/lane-check.test.ts": 4,
 		"scripts/lint-js.test.ts": 6,
 		"scripts/lockfile-completeness.test.ts": 1,
 		"scripts/lsp-idle-eviction-promote.test.ts": 3,
