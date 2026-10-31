@@ -18,6 +18,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { expect } from "vitest";
 import {
 	type PiFauxReply,
 	type PiMessage,
@@ -215,4 +216,41 @@ export async function openGuardedSession(
 		flags: new Map(GUARDED_FLAGS),
 		responses,
 	});
+}
+
+/**
+ * Pay the first guarded session's cold cost in a HOOK, not in a file's first
+ * case (#5061; the same shape #4719 F8 fixed for the host module, and #5056
+ * for `tests/index-4632-s4-tool-call-verdict.test.ts`). The first real session
+ * in a worker loads the pipeline, the bundled rules and their grammars: the
+ * s4 golden case measured 1.7 s cold and 0.65 s once a session had run, and
+ * the first case of `tests/index-4689-path-identity-witness.test.ts` 2.9 s
+ * cold against 1.0 s for its control. On a loaded runner, or in a shuffled
+ * order that puts a heavy case first, that crosses vitest's 5000 ms default
+ * (Unit tests shard 5/5, run 41166485833; the shuffle census, run
+ * 41044391479). The cases hold no artificial wait, so the cost is real
+ * work only the first caller pays. A hook runs against the project's
+ * hookTimeout, and no case timeout is raised to make room for it.
+ *
+ * Call it as `beforeAll(() => warmGuardedSession(fixture.root))`. It runs the
+ * golden path (read, write a blocker, attempt the commit) in `<root>/warm-up`,
+ * inside the file's fixture root and sharing its home and data dirs, and
+ * asserts only that the throwaway session recorded no error: each
+ * case still witnesses its verdict on its own session. The session is disposed
+ * in a `finally`, so a failed warm-up leaks no host.
+ */
+export async function warmGuardedSession(root: string): Promise<void> {
+	const { proj, target } = seed(root, "warm-up", CLEAN_FILE);
+	const handle = await openGuardedSession(root, proj, [
+		step(readTarget(target), "reading"),
+		step(writeTarget(target, BLOCKING_FILE), "writing"),
+		step(commitAttempt(), "committing"),
+		endTurn("warm-up done"),
+	]);
+	try {
+		await handle.prompt("warm the first session up");
+		expect(handle.errors).toEqual([]);
+	} finally {
+		await handle.dispose();
+	}
 }

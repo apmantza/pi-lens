@@ -65,6 +65,7 @@ import {
 	step,
 	textBlocks,
 	toolResults,
+	warmGuardedSession,
 	writeTarget,
 } from "./support/pi-session-commit-gate.js";
 import {
@@ -76,36 +77,8 @@ import {
 
 const fixture = piSessionFixture();
 
-/**
- * Pay the first guarded session's cold cost in a HOOK, not in the file's first
- * case (#5056, the same shape #4719 F8 fixed for the host module). The first
- * real session in a worker loads the pipeline, the bundled rules and their
- * grammars: measured locally, the golden case costs 1.7 s cold and 0.65 s once
- * a session has run, and on a loaded Unit tests shard 5/5 it ran past vitest's
- * 5000 ms default three times in a row on #5054 (runs 41164970939,
- * 41166485833). The cases hold no artificial wait, so the cost is real work
- * that only the first caller pays; a hook runs against the project's 60 s
- * hookTimeout, and no case timeout is raised to make room for it. The warm-up
- * is the golden case's own path (read, write a blocker, attempt the commit)
- * under a root of its own, and asserts only that its session recorded no error
- * (as the golden case did before this hook took its place): the cases below
- * still witness the verdict on their own sessions.
- */
-beforeAll(async () => {
-	const { proj, target } = seed(fixture.root, "warm-up", CLEAN_FILE);
-	const handle = await openGuardedSession(fixture.root, proj, [
-		step(readTarget(target), "reading"),
-		step(writeTarget(target, BLOCKING_FILE), "writing"),
-		step(commitAttempt(), "committing"),
-		endTurn("warm-up done"),
-	]);
-	try {
-		await handle.prompt("warm the first session up");
-		expect(handle.errors).toEqual([]);
-	} finally {
-		await handle.dispose();
-	}
-});
+// The first guarded session's cold cost is paid in a hook (#5056, #5061).
+beforeAll(() => warmGuardedSession(fixture.root));
 
 /**
  * The sentence BOTH guard branches answer with: the live latch (`:1358`) and

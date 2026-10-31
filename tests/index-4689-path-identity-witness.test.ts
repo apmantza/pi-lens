@@ -22,7 +22,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
 	BLOCKING_FILE,
 	CLEAN_FILE,
@@ -38,6 +38,7 @@ import {
 	readTarget,
 	step,
 	toolResults,
+	warmGuardedSession,
 	writeTarget,
 } from "./support/pi-session-commit-gate.js";
 import {
@@ -54,6 +55,9 @@ import {
 import { dataDir444 } from "./support/data-dir-4-4-4.js";
 
 const fixture = piSessionFixture();
+
+// The first guarded session's cold cost is paid in a hook (#5061).
+beforeAll(() => warmGuardedSession(fixture.root));
 
 /** A 4.4.4 link-rooted session's data dir, every file that names no absolute path. */
 const ALIAS_SESSION_444 = path.join(
