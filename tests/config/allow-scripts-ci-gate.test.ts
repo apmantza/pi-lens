@@ -69,8 +69,9 @@ describe("strict lifecycle-script policy in CI installs (#1185)", () => {
 	//
 	// #5112: the job left the pull_request trigger (1,410 runner minutes, 0 real
 	// catches in 30 days, #3995 slice A). It keeps every other event: a master
-	// push, the merge queue, a dispatch and the nightly schedule, so the cold
-	// cache install is still run on every commit that reaches master. A PR that
+	// push, a dispatch and the merge_group trigger, so the cold cache install
+	// still runs on every commit that reaches master (after the merge; no
+	// nightly schedule exists for it). A PR that
 	// changes the manifests keeps a strict install through `npm-strict`, pinned
 	// by the next test; this one reds if that substitute ever drops out.
 	it("ci.yml has a cold-cache strict-install fast-fail on every event but a pull request", () => {

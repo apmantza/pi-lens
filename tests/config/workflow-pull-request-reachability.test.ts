@@ -234,7 +234,7 @@ const EXEMPTIONS: Readonly<Record<string, string>> = {
 	".github/workflows/ci-infra-kill-rerun.yml::finalize-rerun":
 		"workflow_run-triggered terminal-label swap, same lane and same reason as classify above; its if: is evaluated pre-merge in tests/config/ci-infra-kill-rerun-gate.test.ts",
 	".github/workflows/ci.yml::strict-install-cold-cache":
-		"left the pull_request trigger (#5112): 1,410 runner minutes in 30 days and no real catch (#3995 slice A). A pull request that changes the manifests still runs the same pinned-npm strict install through install-smoke.yml's `npm-strict`, pinned by tests/config/allow-scripts-ci-gate.test.ts; master pushes, the merge queue and the nightly schedule keep this job",
+		"left the pull_request trigger (#5112): 1,410 runner minutes in 30 days and no real catch (#3995 slice A). A pull request that changes the manifests still runs the same pinned-npm strict install through install-smoke.yml's `npm-strict`, pinned by tests/config/allow-scripts-ci-gate.test.ts; master pushes and dispatches keep this job (it runs after the merge)",
 	".github/workflows/close-keyword-verification.yml::verify":
 		"pull_request_target gated on github.event.pull_request.merged == true: it verifies what the close keywords DID once the PR is merged, which cannot be observed before the merge",
 	".github/workflows/install-smoke.yml::host-latest-notify":
@@ -242,7 +242,7 @@ const EXEMPTIONS: Readonly<Record<string, string>> = {
 	".github/workflows/install-smoke.yml::host-latest-smoke":
 		"advisory nightly drift lane: it installs the newest published host to detect upstream drift on a schedule, a signal about the ecosystem's state at a point in time rather than about the PR's diff (#2613)",
 	".github/workflows/lint.yml::strictness":
-		"left the pull_request trigger (#5112): 2,106 runner minutes in 30 days and no real catch (#3995 slice A). It only republishes the two tsc counts that the gating tests/config/strictness-ratchet.test.ts pins on every pull request; master pushes, the merge queue and the nightly schedule keep it",
+		"left the pull_request trigger (#5112): 2,106 runner minutes in 30 days and no real catch (#3995 slice A). It only republishes the two tsc counts that the gating tests/config/strictness-ratchet.test.ts pins on every pull request; master pushes and dispatches keep it (they run after the merge)",
 };
 
 describe("every PR-triggerable workflow job is reachable on a pull request (#3043)", () => {

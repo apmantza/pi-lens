@@ -27,9 +27,9 @@ jobs:
   # #3801: classify the diff once. `code` is false ONLY for a pull_request whose
   # every changed path is on the strict docs allowlist (root *.md, docs/**,
   # .changelog/**; scripts/ci-changed-files.mjs), and then the HEAVY ADVISORY
-  # job (CodeQL) does not start. The Unit shards, the Install
-  # tests and every other test job still run for a docs-only diff: a docs edit
-  # can red tests/clients and tests/scripts (docs/public-api-stability.md,
+  # job (CodeQL) does not start. The Unit shards and every other test job
+  # still run for a docs-only diff (the `Install test` legs report without
+  # installing, #5112): a docs edit can red tests/clients and tests/scripts (docs/public-api-stability.md,
   # docs/*_rules_catalog.md are read by them), so the suite is never skipped.
   # `formal` is true when the diff touches formal/ (or what runs it), and then
   # the `tla-shards` matrix model-checks. Push and any other event
@@ -85,7 +85,7 @@ jobs:
   # minutes, #3995 slice A) and a pull request that changes the manifests or
   # the lockfile still runs the same strict install through install-smoke.yml's
   # `npm-strict` job (package.json and package-lock.json are in its paths).
-  # Master pushes, the merge queue and dispatches keep it.
+  # Master pushes and dispatches keep it.
   strict-install-cold-cache:
     name: Strict install (cold npm cache) (fast-fail)
     if: github.event_name != 'pull_request'
@@ -1291,9 +1291,9 @@ jobs:
       # share one condition so the floor never outlives its site, and the
       # evaluated-floors registry admits a comparison of the event name. The
       # anchors test is advisory and added a macOS build and a Vitest run to a
-      # leg a docs-only pull request now ends after the classify step; master
-      # pushes and the merge queue keep it, so a case-insensitive regression
-      # still reds before the merge.
+      # leg a docs-only pull request now ends after the classify step. Master
+      # pushes keep it, after the merge, and the step is continue-on-error, so a
+      # case-insensitive regression shows as a failed step on a green leg.
       - name: APFS anchors evaluated floor
         if: ${{ !cancelled() && github.event_name != 'pull_request' && matrix.os == 'macos-latest' }}
         shell: bash

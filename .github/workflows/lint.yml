@@ -379,7 +379,7 @@ jobs:
     # #5112: not a pull_request job. It reported 0 real catches in 30 days (2,106
     # runner minutes, #3995 slice A) and only republishes counts that
     # strictness-ratchet.test.ts already pins on every pull request. Master
-    # pushes, the merge queue and dispatches keep it.
+    # pushes and dispatches keep it.
     if: github.event_name != 'pull_request'
     continue-on-error: true
     runs-on: ubuntu-latest

@@ -5,12 +5,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { stripSource } from "../support/sweep-kit.js";
 import {
 	classifyChangedFiles,
 	parseArgs,
 	pathsFromPrFiles,
 	HOT_PATH_PATHS,
-	INSTALL_PATHS,
 	PR_FILES_API_CAP,
 	PR_SMOKE_PATHS,
 	ghPrFiles,
@@ -248,12 +248,103 @@ describe("classifyChangedFiles: the hot-path latency lane (#4363)", () => {
 describe("classifyChangedFiles: the Install test lane (#5112)", () => {
 	const install = (paths: string[]) => classifyChangedFiles(paths).install;
 
-	// Recurrence: a list entry the matcher cannot read, so the path it names
-	// never turns the lane on.
-	it.each(INSTALL_PATHS)("turns on for the listed path %s", (entry) => {
-		const file = entry.endsWith("/**") ? `${entry.slice(0, -2)}x/y.ts` : entry;
-		expect(install([file])).toBe(true);
-		expect(install(["docs/a.md", file])).toBe(true);
+	// Recurrence (#5112 review r1 F1, F2): the first roster test iterated
+	// INSTALL_PATHS itself, so deleting an entry deleted its own case, and the
+	// list had already lost the prepare chain's `exec-isolation.mjs` (the Windows
+	// only spawn failure class recorded in scripts/build-dist-tsc.mjs) and
+	// `tsconfig.build.json`. This derives the expected set from package.json
+	// alone: the install-lifecycle scripts and every `npm run` they chain, the
+	// script and tsconfig files those commands name, the relative imports of
+	// those scripts, the `extends` and scripts `include` of those tsconfigs, and
+	// the `files` entries that are scripts. The rest of `files` is content
+	// (docs, rules, skills, config, banners, generated grammars), not code that
+	// runs at install.
+	describe("the install roster is derived from package.json", () => {
+		const root = path.resolve(import.meta.dirname, "../..");
+		const pkg = JSON.parse(
+			fs.readFileSync(path.join(root, "package.json"), "utf8"),
+		) as { scripts: Record<string, string>; files: string[] };
+
+		const lifecycle = (name: string, seen = new Set<string>()): string[] => {
+			const command = pkg.scripts[name];
+			if (command === undefined || seen.has(name)) return [];
+			seen.add(name);
+			const chained = [...command.matchAll(/npm run ([\w:-]+)/g)].flatMap(
+				(match) => lifecycle(match[1] ?? "", seen),
+			);
+			return [command, ...chained];
+		};
+		const imports = (file: string): string[] => {
+			const code = stripSource(fs.readFileSync(path.join(root, file), "utf8"), {
+				strings: "keep",
+			});
+			return [
+				...code.matchAll(/(?:from|import\()\s*["'](\.{1,2}\/[^"']+)["']/g),
+			]
+				.map((match) =>
+					path.posix.join(path.posix.dirname(file), match[1] ?? ""),
+				)
+				.filter((target) => fs.existsSync(path.join(root, target)));
+		};
+		const derive = (): Set<string> => {
+			const commands = [
+				"preinstall",
+				"install",
+				"postinstall",
+				"prepare",
+				"prepack",
+				"postpack",
+			].flatMap((name) => lifecycle(name));
+			const named = commands.flatMap((command) => [
+				...(command.match(/scripts\/[\w./-]+\.(?:m?js)/g) ?? []),
+				...(command.match(/tsconfig[\w.-]*\.json/g) ?? []),
+			]);
+			const roster = new Set<string>([
+				"package.json",
+				"package-lock.json",
+				...named,
+				...pkg.files.filter((entry) => /^scripts\/[^*]+\.m?js$/.test(entry)),
+			]);
+			// Close over imports and tsconfig links until nothing new appears.
+			for (const file of roster) {
+				if (/\.m?js$/.test(file)) {
+					for (const target of imports(file)) roster.add(target);
+				} else if (/tsconfig[\w.-]*\.json$/.test(file)) {
+					const config = fs.readFileSync(path.join(root, file), "utf8");
+					for (const match of config.matchAll(/"extends":\s*"\.\/([^"]+)"/g))
+						roster.add(match[1] ?? "");
+					for (const match of config.matchAll(/"(scripts\/[^"*]+\.m?js)"/g))
+						roster.add(match[1] ?? "");
+				}
+			}
+			return roster;
+		};
+
+		it("derives the files the review found missing, so the derivation is not empty", () => {
+			const roster = derive();
+			for (const file of [
+				"scripts/lib/exec-isolation.mjs",
+				"tsconfig.build.json",
+				"scripts/strip-dev-deps-for-pack.mjs",
+				"scripts/bundle-dist.mjs",
+			])
+				expect(roster.has(file), file).toBe(true);
+			expect(roster.size).toBeGreaterThan(15);
+		});
+
+		it("classifies every derived file as an install path", () => {
+			const missing = [...derive()].filter((file) => !install([file]));
+			expect(missing).toEqual([]);
+		});
+
+		// Recurrence: a directory entry whose matcher the roster above never
+		// probes (it only names files).
+		it.each([["bin/pi-lens"], ["clients/installer/registry.ts"]])(
+			"turns on for the directory entry %s",
+			(file) => {
+				expect(install([file])).toBe(true);
+			},
+		);
 	});
 
 	// Recurrence: the PRs the 10,875-minute lane exists to skip, plus neighbours
@@ -266,7 +357,7 @@ describe("classifyChangedFiles: the Install test lane (#5112)", () => {
 		["clients/dispatch/runners/foo.ts"],
 		["tests/clients/foo.test.ts"],
 		["scripts/ci-verdict.mjs"],
-		["scripts/lib/latency-log-phases.mjs"],
+		["scripts/lib/safe-rm.mjs"],
 		["docs/package.json"],
 		["tests/fixtures/x/package.json"],
 		["package.json.bak"],

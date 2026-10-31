@@ -136,9 +136,11 @@ export const HOT_PATH_PATHS = [
 /**
  * What `Install test (<os>)` (ci.yml) and install-smoke's `smoke` job exercise
  * (#5112): the manifests, the lifecycle scripts `npm install` runs (`prepare`,
- * `prepack`/`postpack`) and the build they call, the scripts the job's own
- * steps run against the packed tarball, the installer, and the two workflows
- * that hold the jobs. Same entry grammar as HOT_PATH_PATHS. `bin/**` is the
+ * `prepack`/`postpack`) with the build and the helpers they import, the scripts
+ * package.json ships, the scripts the job's own steps run against the packed
+ * tarball, the installer, and the two workflows that hold the jobs.
+ * tests/scripts/ci-changed-files.test.ts derives the expected set from
+ * package.json, so a lifecycle helper that falls off this list reds there. Same entry grammar as HOT_PATH_PATHS. `bin/**` is the
  * issue's name for the launcher directory; pi-lens ships its `bin` entries from
  * dist/ today, so the entry matches nothing yet.
  */
@@ -149,9 +151,12 @@ export const INSTALL_PATHS = [
 	"clients/installer/**",
 	"clients/bootstrap.ts",
 	// `prepare`: build:dist, grammar download, hooks, lock stamp, loader cache.
+	"tsconfig.build.json",
 	"tsconfig.dist.json",
 	"scripts/build-dist-tsc.mjs",
 	"scripts/bundle-dist.mjs",
+	"scripts/lib/exec-isolation.mjs",
+	"scripts/lib/process-scan.mjs",
 	"scripts/download-grammars.js",
 	"scripts/grammars.lock.json",
 	"scripts/setup-git-hooks.mjs",
@@ -160,6 +165,15 @@ export const INSTALL_PATHS = [
 	"scripts/lib/warm-loader-cache.mjs",
 	// `prepack` / `postpack`.
 	"scripts/strip-dev-deps-for-pack.mjs",
+	// Shipped in the tarball (package.json `files`) with their imports, and
+	// compiled into dist by tsconfig.dist.json.
+	"scripts/analyze-pi-lens-logs.mjs",
+	"scripts/rpc-load-check.mjs",
+	"scripts/lib/is-main-module.mjs",
+	"scripts/lib/latency-log-phases.mjs",
+	"scripts/lib/scratch-home-env.mjs",
+	"scripts/lib/skills-predicate.mjs",
+	"scripts/lib/web-tree-sitter-dir.mjs",
 	// Run by the job's own steps against the packed tarball.
 	"scripts/install-selftest.mjs",
 	"scripts/check-extensions.mjs",
