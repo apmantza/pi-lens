@@ -180,7 +180,7 @@ describe("artifact listing pages (#4030)", () => {
 	});
 });
 
-type Mode = "transient" | "persistent" | "large";
+type Mode = "transient" | "persistent" | "large" | "truncated" | "notFound";
 const LARGE_ZIP_BYTES = 1.5 * 1024 * 1024;
 
 function fakeGh(mode: Mode) {
@@ -192,6 +192,7 @@ function fakeGh(mode: Mode) {
 	const output = path.join(root, "artifacts");
 	fs.mkdirSync(bin);
 	const zipCalls = path.join(root, "zip-calls");
+	const listCalls = path.join(root, "list-calls");
 	const listed = JSON.stringify({
 		id: 101,
 		name: "unit-test-results-linux",
@@ -205,12 +206,28 @@ function fakeGh(mode: Mode) {
 			"if [ \"$count\" -lt 4 ]; then printf '%s\\n' 'gh: HTTP 503' >&2; exit 1; fi; printf 'zip-bytes'",
 		persistent: "printf '%s\\n' 'gh: HTTP 503' >&2; exit 1",
 		large: `head -c ${LARGE_ZIP_BYTES} /dev/zero`,
+		truncated: "printf 'zip-bytes'",
+		notFound: "printf 'zip-bytes'",
+	}[mode];
+	// Listing faults: the `gh api --jq` listing on a cut-off body (#5154, the
+	// reported failure) and a non-retryable 404 (the control).
+	const listFault = {
+		transient: "",
+		persistent: "",
+		large: "",
+		truncated: `if [ "$listCount" -lt 2 ]; then printf '%s\\n' 'unexpected end of JSON input' >&2; exit 1; fi`,
+		notFound: "printf '%s\\n' 'gh: Not Found (HTTP 404)' >&2; exit 1",
 	}[mode];
 	fs.writeFileSync(
 		path.join(bin, "gh"),
 		`#!/bin/sh
 case "$*" in
   *actions/artifacts\\?per_page=100\\&page=1*)
+    listCount=0
+    [ -f ${JSON.stringify(listCalls)} ] && listCount=$(cat ${JSON.stringify(listCalls)})
+    listCount=$((listCount + 1))
+    printf '%s' "$listCount" > ${JSON.stringify(listCalls)}
+    ${listFault}
     printf '%s\\n' '${listed}'
     ;;
   *actions/artifacts\\?per_page=100\\&page=*)
@@ -242,7 +259,8 @@ esac
 			},
 		);
 	const zips = () => Number(fs.readFileSync(zipCalls, "utf8"));
-	return { run, zips, zip: path.join(output, "101.zip") };
+	const listingCalls = () => Number(fs.readFileSync(listCalls, "utf8"));
+	return { run, zips, listingCalls, zip: path.join(output, "101.zip") };
 }
 
 describe("download-test-history-artifacts process boundary", () => {
@@ -264,6 +282,26 @@ describe("download-test-history-artifacts process boundary", () => {
 		// Four bounded ZIP attempts, and no partial ZIP left behind.
 		expect(gh.zips()).toBe(4);
 		expect(fs.existsSync(gh.zip)).toBe(false);
+	});
+
+	// Recurrence #5154 (#5103 closed without the fix): the nightly's `gh api
+	// --jq` listing got a cut-off body, `unexpected end of JSON input`, and
+	// `isRetryable` retried only HTTP 5xx, so the whole night failed.
+	it("retries a listing whose body is cut off (unexpected end of JSON input) and succeeds on the second attempt", () => {
+		const gh = fakeGh("truncated");
+		expect(gh.run()).toContain(
+			"test-history download: 1 run(s), 1 artifact(s) of 1 eligible run(s) after no watermark; 0 metadata-only skipped",
+		);
+		// The listing ran twice: the cut-off attempt, then the retry.
+		expect(gh.listingCalls()).toBe(2);
+		expect(fs.readFileSync(gh.zip, "utf8")).toBe("zip-bytes");
+	});
+
+	// Control: a 404 is not transient, so the listing fails on its first call.
+	it("fails at once on a non-retryable 404 in the listing", () => {
+		const gh = fakeGh("notFound");
+		expect(() => gh.run()).toThrow(/HTTP 404/);
+		expect(gh.listingCalls()).toBe(1);
 	});
 
 	// #4030 review F4: `spawnSync`'s default 1 MiB `maxBuffer` failed every ZIP

@@ -23,7 +23,8 @@
  *   selects it.
  * Downloading every unexpired artifact (90-day retention) grew until the
  * rollup's heap ran out (runs 36860553809 to 37316090921). Each ZIP streams to
- * its file, so no output buffer bounds its size. Only `HTTP 5xx` retries.
+ * its file, so no output buffer bounds its size. Only `HTTP 5xx` and a cut-off
+ * JSON body (`unexpected end of JSON input`, #5154) retry.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -81,7 +82,10 @@ function pause(attempt) {
 }
 
 function isRetryable(result) {
-	return /\bHTTP 5\d\d\b/.test(`${result.stderr}\n${result.stdout}`);
+	const text = `${result.stderr}\n${result.stdout}`;
+	return (
+		/\bHTTP 5\d\d\b/.test(text) || text.includes("unexpected end of JSON input")
+	);
 }
 
 function failureText(result) {
@@ -94,7 +98,8 @@ function failureText(result) {
 }
 
 /**
- * `gh api <args>`, retried on `HTTP 5xx` only. With `outputFile`, stdout goes
+ * `gh api <args>`, retried on `HTTP 5xx` and on `unexpected end of JSON input`
+ * (a cut-off response body, #5154) only. With `outputFile`, stdout goes
  * straight to that file (a ZIP of any size), and a failed attempt leaves no
  * partial file.
  */
