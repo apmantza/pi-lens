@@ -37,6 +37,7 @@ import { LANGUAGE_POLICY } from "./language-policy.js";
 import { isComplexitySupportedFile } from "./tree-sitter-shared.js";
 import {
 	classifyMutatingTool,
+	isProviderReplayCall,
 	readMutationPathField,
 } from "./mutating-tool.js";
 import { isProvisionalLearnedAttribution } from "./mutation-attribution.js";
@@ -688,7 +689,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			: otherOpaqueTool && callId !== undefined
 				? ""
 				: undefined;
-	if (opaqueCommand !== undefined) {
+	// #5162 r3: a provider replay's work ran before its call, so a diff of its
+	// window is another writer's; its tool_result skips the recovery too.
+	if (opaqueCommand !== undefined && !isProviderReplayCall(event)) {
 		if (scanRoot && shouldRunOpaqueRecovery(toolName, scanRoot)) {
 			const started = Date.now();
 			// #2050: the trees this command's writes must be recovered from. The
@@ -765,6 +768,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	if (
 		(mutation === undefined || isProvisionalLearnedAttribution(toolName)) &&
 		toolName !== "bash" &&
+		// #5160: a provider's display-only replay ran before it arrived, so any
+		// disk change in its window is another writer's, not this call's.
+		!isProviderReplayCall(event) &&
 		!getFlag("no-read-guard")
 	) {
 		const observedRawPath = readMutationPathField(event);
@@ -1643,7 +1649,15 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			}
 		}
 	}
-	if (isEditOnly && filePath && !getFlag("no-read-guard")) {
+	// #5160: a provider's replay (`isProviderReplayCall`) is a card for work
+	// that ran before it arrived, built-in `edit` replays included, so the
+	// guard has nothing left to protect and its refusal only reddens the card.
+	if (
+		isEditOnly &&
+		filePath &&
+		!getFlag("no-read-guard") &&
+		!isProviderReplayCall(event)
+	) {
 		const readGuard = runtime.readGuardFor(deps.sessionId);
 		const isExistingFile =
 			typeof readGuard?.isNewFile !== "function" ||
