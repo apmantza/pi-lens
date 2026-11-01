@@ -318,7 +318,7 @@ export interface LSPState {
 	demonstratedCold: Set<string>;
 	/** Server ids that have published diagnostics in this LSP session. */
 	diagnosticsPublished: Set<string>;
-	/** Custom servers proved navigation-only after their first bounded contact. */
+	/** Custom servers silent through their first bounded contact; a publish clears the entry (#5128). */
 	diagnosticsUnsupported: Set<string>;
 }
 
@@ -1273,7 +1273,7 @@ export class LSPService {
 	/**
 	 * One first-contact diagnostic wait per custom server in this service
 	 * generation. Concurrent touches share the probe; a hook cutoff never arms
-	 * the navigation-only latch, so the next touch can try again.
+	 * the diagnostics-unsupported latch, so the next touch can try again.
 	 */
 	private readonly firstContactWaits = new Map<
 		string,
@@ -6998,7 +6998,7 @@ export class LSPService {
 					result.primaryUnavailableCause = verdict.primaryUnavailableCause;
 				}
 			} else if (collected !== undefined && primaryDiagnosticsUnsupported) {
-				// A navigation-only primary has no diagnostic confirmation to report,
+				// A latched (diagnostics-unsupported) primary has no diagnostic confirmation to report,
 				// but an uncovered auxiliary still needs to be named for delivery.
 				if (unconfirmedServerIds.length > 0) {
 					result.unconfirmedServerIds = [...unconfirmedServerIds];

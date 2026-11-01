@@ -447,6 +447,26 @@ describe("#5128 lsp_diagnostics: the first-contact latch for a custom push-only 
 		);
 	}
 
+	/** The single-file `path:` mode, which reaches `runFileDiagnostics`, not the batch. */
+	async function checkOne(
+		content: string,
+		onConfirmedNoBlockers: (info: unknown) => void,
+	): Promise<any> {
+		fs.writeFileSync(file, content);
+		const { createLspDiagnosticsTool } =
+			await import("../../tools/lsp-diagnostics.js");
+		return (await createLspDiagnosticsTool(
+			undefined,
+			onConfirmedNoBlockers,
+		).execute(
+			"diag-5128-single",
+			{ path: file, severity: "all", serverScope: "all", waitMs: 5000 },
+			new AbortController().signal,
+			null,
+			{ cwd: tmp },
+		)) as any;
+	}
+
 	beforeEach(async () => {
 		getServersForFileWithConfig.mockReset();
 		createLSPClient.mockReset();
@@ -532,5 +552,23 @@ describe("#5128 lsp_diagnostics: the first-contact latch for a custom push-only 
 			unsupported: 0,
 			clean: 0,
 		});
+	});
+
+	// Recurrence (#5133 review r1 F1): the single-file branch of the latched-server
+	// unconfirmed disjunct in `runFileDiagnostics` had no test. Drop it and an empty
+	// latched file reconciles as confirmed, which retires its inline blocker through
+	// `onConfirmedNoBlockers`. The batch cases above never reach that path.
+	it("reads a single file from a latched custom server as unconfirmed and retires no blocker", async () => {
+		const onConfirmedNoBlockers = vi.fn();
+		await checkOne("class Clean {}\n", onConfirmedNoBlockers);
+		const single = await checkOne(
+			"class Clean { int x }\n",
+			onConfirmedNoBlockers,
+		);
+
+		expect(String(single.content[0]?.text)).toContain(
+			"Primary LSP (groovy-stub): unconfirmed — a custom server with no pull provider has not published diagnostics yet",
+		);
+		expect(onConfirmedNoBlockers).not.toHaveBeenCalled();
 	});
 });
