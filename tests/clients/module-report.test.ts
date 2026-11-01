@@ -9,6 +9,7 @@ import {
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import {
 	moduleReport,
+	projectModuleReport,
 	readEnclosing,
 	readSymbol,
 	renderCompactModuleReport,
@@ -101,7 +102,7 @@ describe("moduleReport — outline + structure", () => {
 		expect(report.api.some((e) => e.name === "helper")).toBe(false);
 	});
 
-	it("supports a payload-reducing summary view with section provenance", async () => {
+	it("projects a metrics-off summary that keeps callbacks and provenance", async () => {
 		const env = makeEnv();
 		const file = createTempFile(
 			env.tmpDir,
@@ -116,22 +117,24 @@ describe("moduleReport — outline + structure", () => {
 			].join("\n"),
 		);
 
-		const report = await moduleReport(file, env.tmpDir, { view: "summary" });
-
-		expect(report.view).toBe("summary");
-		expect(report.api[0]).toMatchObject({
+		const report = await moduleReport(file, env.tmpDir);
+		expect(report as { view?: unknown }).not.toHaveProperty("view");
+		const summary = projectModuleReport(report, "summary");
+		expect(summary.api[0]).toMatchObject({
 			name: "add",
 			kind: "function",
 			startLine: 1,
 			endLine: 3,
 		});
-		expect(report.api[0].usedBy).toBeUndefined();
-		expect(report.callbacks).toEqual([]);
-		expect(report.provenance).toMatchObject({
+		expect(summary.api[0].usedBy).toBeUndefined();
+		expect(summary.api[0].fanout).toBeUndefined();
+		expect(summary.api[0].complexity).toBeUndefined();
+		expect(summary.callbacks).toEqual(report.callbacks);
+		expect(summary.provenance).toMatchObject({
 			symbols: "syntax",
-			callbacks: "none",
+			callbacks: "heuristic-tree-sitter",
 		});
-		expect(report.recommendedReads.length).toBeGreaterThan(0);
+		expect(summary.recommendedReads.length).toBeGreaterThan(0);
 	});
 
 	it("extracts a Python outline (language-uniform, not TS-only)", async () => {
@@ -225,6 +228,42 @@ describe("moduleReport — outline + structure", () => {
 		expect(timer?.flags).toContain("detached timer");
 	});
 
+	it("keeps the longest callback kind separable from its name in compact text", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"callbacks.ts",
+			[
+				"export async function run(ctx: any) {",
+				"  await handleTurnEnd({",
+				"    resetLSPService: () => {",
+				"      ctx.ui.setStatus('x');",
+				"    },",
+				"  });",
+				"}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		// "object_property_callback" (24 chars) overflowed the old 20-char
+		// column, gluing kind and handle into one token.
+		const reset = report.callbacks.find(
+			(callback) => callback.kind === "object_property_callback",
+		);
+		expect(reset).toBeDefined();
+		const text = renderCompactModuleReport(
+			projectModuleReport(report, "summary"),
+		);
+		const line = text
+			.split("\n")
+			.find((candidate) => candidate.includes(reset!.name));
+		expect(line).toBeDefined();
+		// Kind and name must be separately recoverable tokens, not merely both
+		// present somewhere on the line.
+		expect(line).toContain(`${reset!.kind}  ${reset!.name}`);
+		const tokens = line!.trim().split(/\s+/);
+		expect(tokens).toContain(reset!.kind);
+		expect(tokens).toContain(reset!.name);
+	});
 	it("extracts inline executable handles across non-TypeScript grammars", async () => {
 		const env = makeEnv();
 		const py = createTempFile(
@@ -680,10 +719,10 @@ describe("moduleReport — compact view rendering (#512)", () => {
 				"}",
 			].join("\n"),
 		);
-		const report = await moduleReport(file, env.tmpDir, { view: "compact" });
-		expect(report.view).toBe("compact");
-		// "compact" computes full data, unlike "summary" — usedBy/callbacks are
-		// still present; it's a rendering instruction, not a data tier.
+		const report = await moduleReport(file, env.tmpDir);
+		expect(report as { view?: unknown }).not.toHaveProperty("view");
+		// The artifact always carries full data — projection, not the build,
+		// decides which fields the text cell prints.
 		expect(report.api.length).toBeGreaterThan(0);
 
 		const rendered = renderCompactModuleReport(report);
@@ -2152,5 +2191,513 @@ describe("moduleReport — JavaScript files parse under the javascript grammar (
 		const names = [...report.api, ...report.internal].map((e) => e.name);
 		expect(names).toContain("greet");
 		expect(names).toContain("Panel");
+	});
+});
+
+describe("moduleReport — preset losslessness (#5137)", () => {
+	const HUB_SOURCE = [
+		'import { join } from "node:path";',
+		'import { dep } from "./dep";',
+		"",
+		"/** Hub calls everything. */",
+		"export function hub(n: number): number {",
+		"  let total = dep(n);",
+		"  if (n > 10) {",
+		"    total += add(n, 1);",
+		"  } else {",
+		"    total += add(n, 2);",
+		"  }",
+		'  return total + join("a", "b").length + identity(n);',
+		"}",
+		"",
+		"export function identity(n: number): number {",
+		"  return n;",
+		"}",
+		"",
+		"/** Adds two numbers. */",
+		"export function add(a: number, b: number): number {",
+		"  return a + b;",
+		"}",
+		"",
+		"function helper(): number {",
+		"  return hub(1);",
+		"}",
+		"",
+		"/** Runs the callbacks. */",
+		"export function run(ctx: any) {",
+		"  return { resetLSPService: () => ctx.ui.setStatus('x') };",
+		"}",
+		"",
+		"@Injectable()",
+		"export class Svc {",
+		"  /** Runs the service. */",
+		"  async run(): Promise<number> {",
+		"    return 1;",
+		"  }",
+		"  stop(): number {",
+		"    return 2;",
+		"  }",
+		"  private secret(): number {",
+		"    return 3;",
+		"  }",
+		"}",
+		"",
+		"export class Relay {",
+		"  constructor(private inner: Svc) {}",
+		"  start(): Promise<number> {",
+		"    return this.inner.run();",
+		"  }",
+		"  halt(): number {",
+		"    return this.inner.stop();",
+		"  }",
+		"}",
+		"const broken = [",
+	].join("\n");
+
+	function makeMegaSource(count: number): string {
+		const lines = ['import { hub } from "./hub";'];
+		for (let i = 0; i < count; i++) {
+			lines.push(`export function d${i}(): number {`, "  return hub();", "}");
+		}
+		return lines.join("\n");
+	}
+
+	async function makeMegaEnv(callerCount: number) {
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "hub.ts", HUB_SOURCE);
+		createTempFile(
+			env.tmpDir,
+			"dep.ts",
+			"export function dep(n: number): number {\n  return n;\n}\n",
+		);
+		createTempFile(env.tmpDir, "mega.ts", makeMegaSource(callerCount));
+		await warmGraph(env.tmpDir);
+		const graph = getCachedReviewGraph(env.tmpDir);
+		const identity = graph
+			? getReviewGraphCacheIdentity(env.tmpDir, graph)
+			: undefined;
+		if (!identity)
+			throw new Error("test graph did not expose a canonical identity");
+		const normalized = extractSymbolsAndRefsFromGraph(graph!);
+		const callGraph = buildCallGraph(
+			normalized.allSymbols,
+			normalized.allRefs,
+			normalized.coverage,
+		);
+		saveCallGraph(env.tmpDir, callGraph, {
+			reviewGraphVersion: identity.version,
+			reviewGraphSignature: identity.signature,
+		});
+		return env;
+	}
+
+	/** Key path -> proof that the text cell renders it. Keys with a deliberate
+	 * no-marker decision live in UNRENDERED with a reason instead (pinned below). */
+	function collectKeyPaths(value: unknown, prefix = ""): string[] {
+		if (Array.isArray(value)) {
+			if (value.length === 0) return [];
+			if (value.every((item) => item === null || typeof item !== "object")) {
+				return prefix ? [prefix] : [];
+			}
+			return value.flatMap((item) => collectKeyPaths(item, `${prefix}[]`));
+		}
+		if (value !== null && typeof value === "object") {
+			const entries = Object.entries(value as Record<string, unknown>).filter(
+				([, v]) => v !== undefined,
+			);
+			if (entries.length === 0) return [];
+			return entries.flatMap(([key, v]) =>
+				collectKeyPaths(v, prefix ? `${prefix}.${key}` : key),
+			);
+		}
+		return prefix ? [prefix] : [];
+	}
+
+	it("field-parity census: every report key is rendered or declared", async () => {
+		const env = await makeMegaEnv(210);
+		try {
+			const file = path.join(env.tmpDir, "hub.ts");
+			const report = await moduleReport(file, env.tmpDir, {
+				blastRadius: true,
+				blastRadiusDepth: 1,
+				callGraph: true,
+				maxCallGraphEntries: 1,
+			});
+			expect(report.available).toBe(true);
+			const text = renderCompactModuleReport(
+				projectModuleReport(report, "summary"),
+			);
+			// Metric fields (usedBy/fanout/complexity) are stripped by the summary
+			// projection by design (case 2 pins their absence), so their proofs run
+			// against the lossless full-projection text; every other proof runs
+			// against the summary text.
+			const fullText = renderCompactModuleReport(
+				projectModuleReport(report, "full"),
+			);
+			const hub = report.api.find((e) => e.name === "hub")!;
+			const svc = report.api.find((e) => e.name === "Svc")!;
+			const runMember = svc.members?.find((m) => m.name === "run")!;
+			const secretMember = svc.members?.find((m) => m.name === "secret")!;
+			const wrapper = report.api.find((e) => e.name === "Relay")!;
+			const usedBy = hub.usedBy?.[0]!;
+			const callback = report.callbacks[0]!;
+			const blastFile = report.blastRadius?.files[0]!;
+			const caller = report.callGraph?.callers[0]!;
+			const callee = report.callGraph?.callees[0]!;
+			const reads = report.recommendedReads;
+			/** Key path -> proof that the text cell renders it. */
+			const RENDERED: Record<string, (text: string) => boolean> = {
+				available: (t) => (t.split("\n")[0] ?? "").includes("[fresh]"),
+				staleness: (t) => t.includes(`[${report.staleness}]`),
+				path: (t) => t.includes(report.path),
+				warnings: (t) => t.includes(`WARNING: ${report.warnings?.[0] ?? ""}`),
+				language: (t) => t.includes(` ${report.language} `),
+				lineCount: (t) => t.includes(`${report.lineCount}L`),
+				"summary.imports": (t) =>
+					t.includes(`${report.summary.imports} imports`),
+				"summary.exports": (t) =>
+					t.includes(`${report.summary.exports} exported`),
+				"summary.symbols": (t) =>
+					t.includes(`${report.summary.symbols} symbols`),
+				"imports.external": (t) =>
+					t.includes(`external: ${report.imports.external.join(", ")}`),
+				"imports.internal": (t) =>
+					t.includes(`internal: ${report.imports.internal.join(", ")}`),
+				"api[].name": (t) => t.includes(hub.name),
+				"api[].kind": (t) => t.includes(" fn "),
+				"api[].startLine": (t) => t.includes(`${hub.startLine}-${hub.endLine}`),
+				"api[].endLine": (t) => t.includes(`${hub.startLine}-${hub.endLine}`),
+				// The entry's own exported boolean selects its section: an exported
+				// top-level entry renders under API:, an unexported one under
+				// INTERNAL:. The section header IS the encoding, not a tautology —
+				// the proof reads the value's rendering decision. (Members have no
+				// such split, hence the UNRENDERED row below.)
+				"api[].exported": (t) => t.includes("API:"),
+				"api[].signature": (t) => t.includes(hub.signature ?? ""),
+				"api[].doc": (t) => t.includes(hub.doc ?? ""),
+				"api[].fanout": (t) => t.includes(`fo:${hub.fanout}`),
+				"api[].complexity": (t) => t.includes(`cx:${hub.complexity}`),
+				"api[].flags": (t) => t.includes("[high fanout]"),
+				"api[].delegationRatio": (t) =>
+					t.includes(`delegationRatio: ${wrapper.delegationRatio}`),
+				"api[].decorators": (t) =>
+					t.includes(`decorators: ${svc.decorators?.join(", ")}`),
+				"api[].members[].name": (t) => t.includes(runMember.name),
+				"api[].members[].kind": (t) => t.includes(" fn "),
+				"api[].members[].startLine": (t) =>
+					t.includes(`${runMember.startLine}-${runMember.endLine}`),
+				"api[].members[].endLine": (t) =>
+					t.includes(`${runMember.startLine}-${runMember.endLine}`),
+				// Members ride along inside their container with no per-member export
+				// marker, so this key is a declared UNRENDERED row below, not a
+				// RENDERED proof (the container's own section carries the export).
+				"api[].members[].signature": (t) =>
+					runMember.signature ? t.includes(runMember.signature) : true,
+				"api[].members[].visibility": (t) =>
+					t.includes(`visibility: ${secretMember.visibility}`),
+				"api[].members[].doc": (t) =>
+					runMember.doc ? t.includes(runMember.doc) : true,
+				"api[].members[].fanout": (t) =>
+					runMember.fanout !== undefined
+						? t.includes(`fo:${runMember.fanout}`)
+						: true,
+				"api[].members[].complexity": (t) =>
+					runMember.complexity !== undefined
+						? t.includes(`cx:${runMember.complexity}`)
+						: true,
+				"api[].members[].flags": (t) => t.includes("[async]"),
+				"api[].usedBy[].file": (t) => t.includes(usedBy.file),
+				"api[].usedBy[].symbol": (t) => t.includes(usedBy.symbol),
+				"api[].usedBy[].line": (t) =>
+					t.includes(`used-by: ${usedBy.file} ${usedBy.symbol} ${usedBy.line}`),
+				"api[].usedBy[].relation": (t) => t.includes(` ${usedBy.relation}`),
+				"api[].usedBy[].resolution": (t) => t.includes(` ${usedBy.resolution}`),
+				"internal[].name": (t) => t.includes("helper"),
+				"internal[].kind": (t) => t.includes(" fn "),
+				"internal[].startLine": (t) => {
+					const helperEntry = report.internal.find((e) => e.name === "helper")!;
+					return t.includes(`${helperEntry.startLine}-${helperEntry.endLine}`);
+				},
+				"internal[].endLine": (t) => {
+					const helperEntry = report.internal.find((e) => e.name === "helper")!;
+					return t.includes(`${helperEntry.startLine}-${helperEntry.endLine}`);
+				},
+				// Same section-split encoding as api[].exported: the fixture's
+				// unexported helper renders under INTERNAL: because exported is false.
+				"internal[].exported": (t) => t.includes("INTERNAL:"),
+				"internal[].signature": (t) => {
+					const helperEntry = report.internal.find((e) => e.name === "helper")!;
+					return helperEntry.signature
+						? t.includes(helperEntry.signature)
+						: true;
+				},
+				"internal[].fanout": (t) => {
+					const helperEntry = report.internal.find((e) => e.name === "helper")!;
+					return helperEntry.fanout !== undefined
+						? t.includes(`fo:${helperEntry.fanout}`)
+						: true;
+				},
+				"internal[].complexity": (t) => {
+					const helperEntry = report.internal.find((e) => e.name === "helper")!;
+					return helperEntry.complexity !== undefined
+						? t.includes(`cx:${helperEntry.complexity}`)
+						: true;
+				},
+				"callbacks[].name": (t) => t.includes(callback.name),
+				"callbacks[].kind": (t) => t.includes(callback.kind),
+				"callbacks[].rawKind": (t) => t.includes(`raw:${callback.rawKind}`),
+				"callbacks[].startLine": (t) =>
+					t.includes(`${callback.startLine}-${callback.endLine}`),
+				"callbacks[].endLine": (t) =>
+					t.includes(`${callback.startLine}-${callback.endLine}`),
+				"callbacks[].signature": (t) =>
+					callback.signature ? t.includes(callback.signature) : true,
+				"callbacks[].parentChain": (t) =>
+					callback.parentChain?.length
+						? t.includes(`(in ${callback.parentChain.join(".")})`)
+						: true,
+				"callbacks[].flags": (t) =>
+					t.includes(`[${callback.flags?.[0] ?? ""}]`),
+				callbackSupport: (t) =>
+					t.includes(`(callbackSupport: ${report.callbackSupport})`),
+				"recommendedReads[].reason": (t) => t.includes(reads[0]?.reason ?? ""),
+				"recommendedReads[].symbol": (t) => t.includes(reads[0]?.symbol ?? ""),
+				"recommendedReads[].startLine": (t) =>
+					t.includes(`${reads[0]?.startLine}-${reads[0]?.endLine}`),
+				"recommendedReads[].endLine": (t) =>
+					t.includes(`${reads[0]?.startLine}-${reads[0]?.endLine}`),
+				"blastRadius.truncated": (t) => t.includes("BLAST RADIUS: (truncated)"),
+				"blastRadius.maxDepth": (t) =>
+					t.includes(`maxDepth: ${report.blastRadius?.maxDepth}`),
+				"blastRadius.files[].file": (t) => t.includes(blastFile.file),
+				"blastRadius.files[].dependents": (t) =>
+					t.includes(`dependents: ${blastFile.dependents}`),
+				"blastRadius.files[].minDepth": (t) =>
+					t.includes(`minDepth: ${blastFile.minDepth}`),
+				"blastRadius.files[].relations": (t) =>
+					t.includes(`relations: ${blastFile.relations.join(",")}`),
+				"blastRadius.files[].read.path": (t) =>
+					t.includes(
+						`read: ${blastFile.read.path} ${blastFile.read.offset} ${blastFile.read.limit}`,
+					),
+				"blastRadius.files[].read.offset": (t) =>
+					t.includes(
+						`read: ${blastFile.read.path} ${blastFile.read.offset} ${blastFile.read.limit}`,
+					),
+				"blastRadius.files[].read.limit": (t) =>
+					t.includes(
+						`read: ${blastFile.read.path} ${blastFile.read.offset} ${blastFile.read.limit}`,
+					),
+				"callGraph.available": (t) => t.includes("callers:"),
+				"callGraph.callers[].symbolId": (t) => t.includes(caller.symbolId),
+				"callGraph.callers[].targetSymbolId": (t) =>
+					t.includes(caller.targetSymbolId),
+				"callGraph.callers[].file": (t) => t.includes(caller.file),
+				"callGraph.callers[].symbol": (t) => t.includes(caller.symbol ?? ""),
+				"callGraph.callers[].kind": (t) =>
+					caller.kind ? t.includes(`(${caller.kind})`) : true,
+				"callGraph.callees[].symbolId": (t) => t.includes(callee.symbolId),
+				"callGraph.callees[].targetSymbolId": (t) =>
+					t.includes(callee.targetSymbolId),
+				"callGraph.callees[].file": (t) => t.includes(callee.file),
+				"callGraph.callees[].symbol": (t) => t.includes(callee.symbol ?? ""),
+				"callGraph.callees[].kind": (t) =>
+					callee.kind ? t.includes(`(${callee.kind})`) : true,
+				"callGraph.callees[].line": (t) =>
+					callee.line !== undefined ? t.includes(`:${callee.line} `) : true,
+				"callGraph.callees[].evidenceKind": (t) =>
+					callee.evidenceKind ? t.includes(callee.evidenceKind) : true,
+				"callGraph.callees[].resolution": (t) =>
+					callee.resolution ? t.includes(callee.resolution) : true,
+				"callGraph.callers[].line": (t) =>
+					caller.line !== undefined ? t.includes(`:${caller.line} `) : true,
+				"callGraph.callers[].evidenceKind": (t) =>
+					caller.evidenceKind ? t.includes(caller.evidenceKind) : true,
+				"callGraph.callers[].resolution": (t) =>
+					caller.resolution ? t.includes(caller.resolution) : true,
+				"callGraph.callers[].evidenceCount": (t) =>
+					caller.evidenceCount !== undefined
+						? t.includes(`n:${caller.evidenceCount}`)
+						: true,
+				"callGraph.callers[].weight": (t) =>
+					caller.weight !== undefined ? t.includes(`w:${caller.weight}`) : true,
+				"callGraph.truncated": (t) => t.includes("CALL GRAPH: (truncated)"),
+				"callGraph.coverage.status": (t) =>
+					t.includes(`coverage: ${report.callGraph?.coverage.status}`),
+				"callGraph.coverage.complete": (t) =>
+					t.includes(`complete:${report.callGraph?.coverage.complete}`),
+				"callGraph.coverage.totalEvidence": (t) =>
+					t.includes(`total:${report.callGraph?.coverage.totalEvidence}`),
+				"callGraph.coverage.callsEvidence": (t) =>
+					t.includes(`calls:${report.callGraph?.coverage.callsEvidence}`),
+				"callGraph.coverage.referencesEvidence": (t) =>
+					t.includes(`refs:${report.callGraph?.coverage.referencesEvidence}`),
+				"callGraph.coverage.eligibleEvidence": (t) =>
+					t.includes(`eligible:${report.callGraph?.coverage.eligibleEvidence}`),
+				"callGraph.coverage.resolvedEvidence": (t) =>
+					t.includes(`resolved:${report.callGraph?.coverage.resolvedEvidence}`),
+				"callGraph.coverage.unresolvedEvidence": (t) =>
+					t.includes(
+						`unresolved:${report.callGraph?.coverage.unresolvedEvidence}`,
+					),
+				"callGraph.coverage.typeOnlyEvidence": (t) =>
+					t.includes(`typeOnly:${report.callGraph?.coverage.typeOnlyEvidence}`),
+				"callGraph.coverage.unsupportedEvidence": (t) =>
+					t.includes(
+						`unsupported:${report.callGraph?.coverage.unsupportedEvidence}`,
+					),
+				"callGraph.coverage.sameFileEvidence": (t) =>
+					t.includes(`sameFile:${report.callGraph?.coverage.sameFileEvidence}`),
+				"callGraph.coverage.duplicateEvidence": (t) =>
+					t.includes(
+						`duplicate:${report.callGraph?.coverage.duplicateEvidence}`,
+					),
+				"callGraph.coverage.languages.jsts": (t) => t.includes("jsts="),
+				graphBuiltAt: (t) => t.includes(`graphBuiltAt=${report.graphBuiltAt}`),
+				"provenance.symbols": (t) =>
+					t.includes(`symbols=${report.provenance?.symbols}`),
+				"provenance.imports": (t) =>
+					t.includes(`imports=${report.provenance?.imports}`),
+				"provenance.usedBy": (t) =>
+					t.includes(`usedBy=${report.provenance?.usedBy}`),
+				"provenance.callbacks": (t) =>
+					t.includes(`callbacks=${report.provenance?.callbacks}`),
+				"provenance.blastRadius": (t) =>
+					t.includes(`blastRadius=${report.provenance?.blastRadius}`),
+				"provenance.callGraph": (t) =>
+					t.includes(`callGraph=${report.provenance?.callGraph}`),
+				"semantic.source": (t) =>
+					t.includes(`semantic.source=${report.semantic.source}`),
+				"semantic.references": (t) =>
+					t.includes(`semantic.references=${report.semantic.references}`),
+				"semantic.implementations": (t) =>
+					t.includes(
+						`semantic.implementations=${report.semantic.implementations}`,
+					),
+			};
+			/** Key path -> reason it has no text-cell proof. Non-empty by design:
+			 * each row names a deliberate rendering decision, and the pin below
+			 * refuses silent growth. */
+			const UNRENDERED: Record<string, string> = {
+				"api[].members[].exported":
+					"member rows carry no per-member export marker (#512: exported stays " +
+					"a boolean on the container, never repeated per member); the " +
+					"container's API:/INTERNAL: section carries the member's export, " +
+					"so a section-header proof would prove the container, not the member",
+			};
+
+			const present = [...new Set(collectKeyPaths(report))];
+			// Floor: a fixture that degrades reds here instead of weakening the census.
+			const REQUIRED_PRESENT = [
+				"api[].name",
+				"api[].usedBy[].file",
+				"api[].usedBy[].resolution",
+				"api[].fanout",
+				"api[].complexity",
+				"api[].flags",
+				"api[].members[].name",
+				"api[].members[].flags",
+				"api[].members[].visibility",
+				"api[].doc",
+				"api[].decorators",
+				"api[].delegationRatio",
+				"callbacks[].name",
+				"callbacks[].rawKind",
+				"callbackSupport",
+				"imports.external",
+				"imports.internal",
+				"recommendedReads[].reason",
+				"warnings",
+				"blastRadius.truncated",
+				"blastRadius.files[].read.path",
+				"callGraph.callers[].symbolId",
+				"callGraph.callers[].targetSymbolId",
+				"callGraph.coverage.totalEvidence",
+				"graphBuiltAt",
+				"provenance.callbacks",
+				"provenance.blastRadius",
+				"provenance.callGraph",
+				"semantic.source",
+			];
+			for (const key of REQUIRED_PRESENT) expect(present).toContain(key);
+			const missing = present.filter(
+				(key) => !(key in RENDERED) && !(key in UNRENDERED),
+			);
+			const isMetricPath = (key: string) =>
+				key.includes("usedBy") ||
+				key.endsWith(".fanout") ||
+				key.endsWith(".complexity");
+			const failing = present.filter(
+				(key) =>
+					key in RENDERED &&
+					!RENDERED[key]!(isMetricPath(key) ? fullText : text),
+			);
+			expect(missing).toEqual([]);
+			expect(failing).toEqual([]);
+			expect(Object.keys(UNRENDERED).sort()).toEqual([
+				"api[].members[].exported",
+			]);
+			// Negative control: the census helper must flag an unknown field.
+			const offenders = collectKeyPaths({ ...report, brandNewField: 1 }).filter(
+				(key) => !(key in RENDERED) && !(key in UNRENDERED),
+			);
+			expect(offenders).toEqual(["brandNewField"]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("blastRadius renders a BLAST RADIUS block with depth and truncation", async () => {
+		const env = await makeMegaEnv(210);
+		try {
+			const file = path.join(env.tmpDir, "hub.ts");
+			const report = await moduleReport(file, env.tmpDir, {
+				blastRadius: true,
+				blastRadiusDepth: 1,
+			});
+			expect(report.blastRadius?.truncated).toBe(true);
+			const text = renderCompactModuleReport(
+				projectModuleReport(report, "summary"),
+			);
+			expect(text).toContain("BLAST RADIUS:");
+			expect(text).toContain(`maxDepth: ${report.blastRadius?.maxDepth}`);
+			expect(text).toContain("mega.ts");
+			expect(text).toContain("(truncated)");
+			// The summary projection keeps blastRadius: the JSON twin carries it too.
+			const projected = projectModuleReport(report, "summary");
+			expect(projected.blastRadius).toEqual(report.blastRadius);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("member flags render in both projections", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"svc.ts",
+			[
+				"export class Svc {",
+				"  async run(): Promise<number> {",
+				"    return 1;",
+				"  }",
+				"}",
+			].join("\n"),
+		);
+		try {
+			const report = await moduleReport(file, env.tmpDir);
+			const run = report.api
+				.find((e) => e.name === "Svc")
+				?.members?.find((m) => m.name === "run");
+			expect(run?.flags).toContain("async");
+			expect(
+				renderCompactModuleReport(projectModuleReport(report, "summary")),
+			).toContain("[async]");
+			expect(
+				renderCompactModuleReport(projectModuleReport(report, "full")),
+			).toContain("[async]");
+		} finally {
+			env.cleanup();
+		}
 	});
 });

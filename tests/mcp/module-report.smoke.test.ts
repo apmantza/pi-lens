@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { McpHarness } from "./harness.js";
+import { createModuleReportTool } from "../../tools/module-report.js";
 
 interface ModuleReportShape {
 	available: boolean;
@@ -92,7 +93,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 	it("answers pilens_module_report with a navigable report (read-only, source none)", async () => {
 		const res = await harness.request(10, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: path.join(projectDir, "a.ts") },
+			arguments: { file: path.join(projectDir, "a.ts"), view: "full-json" },
 		});
 		const report = parseReport(res);
 		expect(report.available).toBe(true);
@@ -101,6 +102,28 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 		expect(report.semantic.source).toBe("none");
 	}, 30_000);
 
+	it("MCP default text matches pi byte for byte (no JSON fence)", async () => {
+		const res = await harness.request(15, "tools/call", {
+			name: "pilens_module_report",
+			arguments: { file: path.join(projectDir, "a.ts") },
+		});
+		const mcpText = textOf(res);
+		expect(mcpText).not.toContain("```json");
+		// The stdio harness appends a `result ok` + usage trailer to every tool
+		// payload; strip it so the comparison is payload to payload.
+		const trailerAt = mcpText.indexOf("\n\nresult ok");
+		const mcpPayload = trailerAt >= 0 ? mcpText.slice(0, trailerAt) : mcpText;
+		const tool = createModuleReportTool(() => projectDir);
+		const result = await tool.execute(
+			"mcp-parity",
+			{ path: path.join(projectDir, "a.ts") },
+			undefined,
+			null,
+			{ cwd: projectDir },
+		);
+		expect(result.isError).toBeFalsy();
+		expect(String(result.content[0]?.text)).toBe(mcpPayload);
+	}, 30_000);
 	it("answers pilens_read_symbol with the verbatim body", async () => {
 		const res = await harness.request(11, "tools/call", {
 			name: "pilens_read_symbol",

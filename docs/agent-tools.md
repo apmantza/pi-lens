@@ -237,11 +237,16 @@ and `[]` mean no arguments.
   spawn/move-closure, Swift weak/strong-self capture, C++ by-reference-
   capture, Kotlin coroutine-builder, Java thread/executor/listener, and C#
   Task.Run/event-`+=` slices); named symbols span all tree-sitter
-  `SYMBOL_QUERIES` languages. Pass `view: "summary"` for a smaller orientation
-  payload (top-level entries + recommendations, heavy callback/usedBy/
-  blast-radius payloads omitted); pass `view: "compact"` for a line-oriented
-  TEXT rendering of the full report (cheapest option — roughly a quarter of
-  the JSON cost, same underlying data). Reports section-level `provenance`
+  `SYMBOL_QUERIES` languages. `view` selects an output preset, projection ×
+  format: `"summary-text"` (default) = metrics off (no `usedBy`, `fanout`,
+  `complexity`), text; `"summary-json"` = same fields, JSON; `"full-text"`
+  = every field, text; `"full-json"` = every field, JSON. The text cell is
+  lossless against its JSON payload (metrics as a `cx:`/`fo:` suffix, each
+  flag in its own bracket, `used-by:` continuation lines, plus
+  `IMPORTS:`/`CALL GRAPH:`/`BLAST RADIUS:` blocks and a `PROVENANCE:` footer),
+  so the default text preset carries the same data at roughly half the byte
+  size of JSON. A `maxRefsPerSymbol` argument promotes the projection to
+  `full` and keeps the format. Reports section-level `provenance`
   for syntax, cached-graph, and heuristic sections. Pass `blastRadius: true`
   for cross-file transitive dependents (read-only over the cached graph).
 - **`read_symbol`** — One symbol's verbatim source body, by name or by a

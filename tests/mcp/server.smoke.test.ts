@@ -1300,7 +1300,7 @@ describe("pi-lens MCP unknown arguments (#3749)", { retry: 2 }, () => {
 			bogus: true,
 		});
 		expect(firstLine(result)).toContain("Ignored unknown argument(s)");
-		expect(result.content[0]?.text).toContain("No module report for");
+		expect(result.content[0]?.text).toContain("missing.ts — unavailable");
 		expect(result.content[0]?.text).not.toContain("Not run");
 	}, 25_000);
 
@@ -1804,7 +1804,7 @@ describe("pi-lens MCP canonical `path` parameter (#5041)", { retry: 2 }, () => {
 		const result = await call("pilens_module_report", { path: "missing.ts" });
 		// A missing file is its own answer; the point is that the argument was
 		// READ (pre-fix this call was refused as an unknown `path` key).
-		expect(text(result)).toContain("No module report for missing.ts");
+		expect(text(result)).toContain("missing.ts — unavailable");
 		expect(text(result)).not.toContain("Not run:");
 		expect(text(result)).not.toContain("Ignored unknown");
 	}, 30_000);
