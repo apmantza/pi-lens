@@ -228,35 +228,35 @@ carries the named admission until then.
 
 | lang | server | mode | clean-behavior | first-publish | tier | src | version | install | stale |
 |---|---|---|---|---|---|---|---|---|---|
-| json | vscode-json-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | — | — |
-| css | vscode-css-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | — | — |
-| html | vscode-html-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | — | — |
-| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | — | — | — |
-| svelte | svelte-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | — | — |
-| deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci | — | — | — |
+| json | vscode-json-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
+| css | vscode-css-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
+| html | vscode-html-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
+| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3097-standalone | global-path | — |
+| svelte | svelte-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
+| deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci | 2.9.8 | global-path | — |
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci | — | — | — |
 | csharp | csharp-ls | pull | — | n/a (pull) | 1 | ci | — | — | — |
-| typescript | typescript-language-server | push-only | silent | direct | 3 | dev+ci | — | — | — |
-| markdown | marksman | push-only | silent | direct | 3 | ci | — | — | — |
-| lua | lua-language-server | push-only | silent | direct | 3 | dev+ci | — | — | — |
-| python | pyright | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
-| jedi | jedi-language-server (alt of python) | push-only | publishes-versioned | direct | 2 | ci | — | — | — |
-| yaml | yaml-language-server | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
-| shell | bash-language-server | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
-| dockerfile | docker-langserver | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
+| typescript | typescript-language-server | push-only | silent | direct | 3 | dev+ci | 5.3.0 | pi-lens-auto | — |
+| markdown | marksman | push-only | silent | direct | 3 | ci | — | global-path | — |
+| lua | lua-language-server | push-only | silent | direct | 3 | dev+ci | — | archive-dist | — |
+| python | pyright | push-only | publishes-versioned | direct | 2 | dev+ci | 1.1.414 | pi-lens-auto | — |
+| jedi | jedi-language-server (alt of python) | push-only | publishes-versioned | direct | 2 | ci | 0.47.0 | global-path | — |
+| yaml | yaml-language-server | push-only | publishes-unversioned | direct | 2* | dev+ci | 2.0.0 | pi-lens-auto | — |
+| shell | bash-language-server | push-only | publishes-versioned | direct | 2 | dev+ci | 5.8.1 | pi-lens-auto | — |
+| dockerfile | docker-langserver | push-only | publishes-unversioned | direct | 2* | dev+ci | — | pi-lens-auto | — |
 | dockerfile-official | docker-language-server (official) | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
-| toml | taplo | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
-| terraform | terraform-ls | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
-| prisma | @prisma/language-server | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
-| php | intelephense | push-only | publishes-unversioned | empty-first | 2* | dev+ci | — | — | — |
-| zig | zls | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
-| vue | @vue/language-server | push-only | unknown | unknown | 2/3? | dev+ci | — | — | — |
+| toml | taplo | push-only | publishes-unversioned | direct | 2* | dev+ci | 0.10.0 | global-path | — |
+| terraform | terraform-ls | push-only | publishes-unversioned | direct | 2* | dev+ci | 0.39.1 | global-path | — |
+| prisma | @prisma/language-server | push-only | publishes-unversioned | direct | 2* | dev+ci | — | pi-lens-auto | — |
+| php | intelephense | push-only | publishes-unversioned | empty-first | 2* | dev+ci | — | pi-lens-auto | — |
+| zig | zls | push-only | publishes-unversioned | direct | 2* | dev+ci | 0.17.0 | global-path | — |
+| vue | @vue/language-server | push-only | unknown | unknown | 2/3? | dev+ci | 3.3.14 | pi-lens-auto | — |
 | dart | dart language-server | push-only | publishes-unversioned | direct | 2* | ci | — | — | — |
-| gleam | gleam lsp | push-only | publishes-unversioned | direct | 2* | ci | — | — | — |
-| clojure | clojure-lsp | push-only | publishes-unversioned | direct | 2* | ci | — | — | — |
-| opengrep | opengrep (aux) | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
+| gleam | gleam lsp | push-only | publishes-unversioned | direct | 2* | ci | 1.19.2 | global-path | — |
+| clojure | clojure-lsp | push-only | publishes-unversioned | direct | 2* | ci | 2026.10.15-11.42.38 | global-path | — |
+| opengrep | opengrep (aux) | push-only | publishes-unversioned | direct | 2* | dev+ci | — | global-path | — |
 | ast-grep | ast-grep (aux) | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
-| cue | CUE Language Server (cue lsp serve) | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
+| cue | CUE Language Server (cue lsp serve) | push-only | publishes-versioned | direct | 2 | dev+ci | 0.17.1 | global-path | — |
 
 **Unknown — fixture exists, mode not yet captured.** The toolchain-gated family
 (no auto-install today; tracked in #241) — `go` (gopls), `java` (jdtls),
@@ -409,22 +409,22 @@ dispatched nightly replaces it on the first night that reaches the server.
 | cpp | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture cpp) |
 | lua | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture lua) |
 | python-jedi | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture jedi) |
-| opengrep | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Auxiliary, not gated. | `node scripts/probe-save-verdict.mjs` (fixture opengrep) |
+| opengrep | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Auxiliary, not gated. | `node scripts/probe-save-verdict.mjs` (fixture opengrep) |
 | gleam | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture gleam) |
-| go | `save` | no | Source: `DidSave` calls `didModifyFiles`, the path a change takes. Gated. | golang/tools `02c9e4cb4c2f`, `gopls/internal/server/text_synchronization.go` |
-| zig | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture zig) |
-| rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
-| terraform | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture terraform) |
+| go | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
+| zig | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture zig) |
+| rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone 1 diagnostic, saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
+| terraform | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture terraform) |
 | fsharp | `save+text` | no | Source: a save holds the source and refreshes code lenses; diagnostics come from open and change checks. Exempt: 0 findings in every run. | ionide/FsAutoComplete `8f011f1395a4`, `src/FsAutoComplete/LspServers/AdaptiveFSharpLspServer.fs` (`TextDocumentDidSave`); nightly run 39845687189 |
 | zizmor | · (registered dynamically) | no | Source: `didSave` is registered dynamically and pi-lens does not map that registration, so no save is sent. Auxiliary, not gated. | zizmor `crates/zizmor/src/lsp.rs` (`initialized`); `clients/lsp/wait-policy/strategies.ts:400-410` (#3548) |
-| clojure | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture clojure) |
-| fish | `save+text` | unknown | Unverified: not measured. Gated. | none |
+| clojure | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 2 publish events. Gated. | `node scripts/probe-save-verdict.mjs` (fixture clojure) |
+| fish | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture fish) |
 | tinymist | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture typst) |
-| cue | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture cue) |
-| csharp | `save+text` | unknown | Unverified: not measured. Pull mode, so diagnostics are requested and a save is unlikely to be the only trigger. Gated. | none |
+| cue | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture cue) |
+| csharp | `save+text` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture csharp) |
 | deno | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture deno) |
 | svelte | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 2 diagnostics. Gated. | `node scripts/probe-save-verdict.mjs` (fixture svelte) |
-| powershell | `save+text` | unknown | Unverified: not measured. Exempt: intermittent. | none |
+| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
 | cmake | `save` | inconclusive | Measured: inconclusive — no arm published, so this fixture does not distinguish a save-triggered server from one that never diagnoses it (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture cmake) |
 
 Notes.
@@ -491,6 +491,7 @@ marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
 - **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "typescript7" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
+- **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "fallow" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
 
 ## Capability matrix refresh state (nightly-generated)
 
@@ -500,5 +501,5 @@ streaks behind the `stale` column (#4512) and consecutive-night
 `idle-eviction` counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"idle-eviction":{"powershell":{"nights":[{"day":"2026-10-27","rssMb":155,"coldMs":2553}]}}}
+{"idle-eviction":{"powershell":{"nights":[{"day":"2026-11-01","rssMb":155,"coldMs":2539}]}}}
 ```
