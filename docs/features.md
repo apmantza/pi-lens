@@ -178,9 +178,12 @@ path since they point at a different file. Pass `blastRadius: true` to also get
 the cross-file **blast radius** — transitive dependents aggregated to ranked
 file `read` args ("if you change this, verify these files"); read-only over
 the cached graph, omitted when cold (this replaced the standalone
-`pilens_impact` tool). `view: "compact"` returns a line-oriented text
-rendering (one line per symbol/callback, roughly a quarter of the JSON cost)
-instead of JSON — same data, opt-in. Tree-sitter extract + cached review-graph
+`pilens_impact` tool). `view` selects an output preset, projection × format
+(`"summary-text"` default = metrics off, text; `"summary-json"`; `"full-text"`;
+`"full-json"` = every field, JSON) — the text cell is lossless against the
+JSON payload; the default leaves out `usedBy`, `fanout` and `complexity`, at
+roughly half the byte
+size. Tree-sitter extract + cached review-graph
 lookup; never builds the graph, never calls LSP on this path.
 `semantic.source` reports what backed the data (`review-graph` | `none`).
 

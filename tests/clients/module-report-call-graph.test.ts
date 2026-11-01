@@ -12,6 +12,7 @@ import { getSharedTreeSitterClient } from "../../clients/tree-sitter-shared.js";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import {
 	moduleReport,
+	projectModuleReport,
 	renderCompactModuleReport,
 } from "../../clients/module-report.js";
 import {
@@ -465,29 +466,48 @@ describe("module_report derived callGraph (#1073)", () => {
 		expect(report.provenance?.callGraph).toBe("cached-call-graph");
 	});
 
-	it("preserves the call section in summary and compact views", async () => {
+	it("keeps the call section in the full artifact and the summary projection", async () => {
 		const env = makeFixtureProject("typescript");
 		await warmCallGraph(env.project);
 
-		const summary = await moduleReport(env.target, env.project, {
+		const report = await moduleReport(env.target, env.project, {
 			callGraph: true,
-			view: "summary",
 		});
+		expect(report.callGraph).toMatchObject({
+			available: true,
+			truncated: false,
+		});
+		const summary = projectModuleReport(report, "summary");
 		expect(summary.callGraph).toMatchObject({
 			available: true,
 			truncated: false,
 		});
 		expect(summary.api[0]?.usedBy).toBeUndefined();
-		expect(summary.callbacks).toHaveLength(0);
+		expect(summary.callbacks).toEqual(report.callbacks);
 
-		const compact = await moduleReport(env.target, env.project, {
-			callGraph: true,
-			view: "compact",
-		});
-		const rendered = renderCompactModuleReport(compact);
+		const rendered = renderCompactModuleReport(report);
 		expect(rendered).toContain("CALL GRAPH:");
 		expect(rendered).toContain("callers: 1");
 		expect(rendered).toContain("coverage: complete");
+	});
+
+	it("call graph renders relation names and honours truncation", async () => {
+		const env = makeFixtureProject("typescript");
+		fs.writeFileSync(
+			path.join(env.project, "caller2.ts"),
+			'import { helper } from "./callee";\nexport function caller2(): number {\n  return helper();\n}\n',
+		);
+		await warmCallGraph(env.project);
+
+		const report = await moduleReport(env.target, env.project, {
+			callGraph: true,
+			maxCallGraphEntries: 1,
+		});
+		expect(report.callGraph?.truncated).toBe(true);
+		const rendered = renderCompactModuleReport(report);
+		expect(rendered).toContain("CALL GRAPH: (truncated)");
+		expect(rendered).toContain("caller");
+		expect(rendered).toContain("caller.ts");
 	});
 
 	it("reports a derived projection as partial without hiding its usable edges", async () => {

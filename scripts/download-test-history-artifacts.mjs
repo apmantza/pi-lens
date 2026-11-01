@@ -23,8 +23,9 @@
  *   selects it.
  * Downloading every unexpired artifact (90-day retention) grew until the
  * rollup's heap ran out (runs 36860553809 to 37316090921). Each ZIP streams to
- * its file, so no output buffer bounds its size. Only `HTTP 5xx` and a cut-off
- * JSON body (`unexpected end of JSON input`, #5154) retry.
+ * its file, so no output buffer bounds its size. Only gh's `HTTP 5xx` and
+ * `unexpected end of JSON input` (#5154) retry. The listing's JSON is parsed
+ * here, so a listing body that fails to parse is not retried.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -37,7 +38,14 @@ export const MAX_RUNS_PER_NIGHT = 100;
 export const SELECT_OVERLAP_MS = 60 * 60 * 1000;
 export const LIST_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
 export const METADATA_ONLY_MAX_BYTES = 1024;
-export const MAX_LIST_PAGES = 300;
+// #5154: the orchestrator's local `gh api -i` probe (comment 6559081169 on #5154)
+// saw HTTP 500 with an empty body for listing pages 1 and 3 at 100 a page, and
+// 200 for pages 1 to 10 at 30. The 500 is intermittent: a later probe got 200
+// for the same pages at 100 a page. The CI job printed only
+// `unexpected end of JSON input`, with no status.
+export const LIST_PAGE_SIZE = 30;
+// 1000 pages of 30 hold the 30000-artifact ceiling that 300 pages of 100 did.
+export const MAX_LIST_PAGES = 1000;
 export const ARTIFACT_NAMES = [
 	"unit-test-results-linux",
 	"unit-test-results-linux-shard-1",
@@ -202,17 +210,21 @@ export function selectArtifacts(
 }
 
 function fetchPageFor(repository) {
-	return (page) =>
-		String(
+	return (page) => {
+		const { artifacts } = JSON.parse(
 			runGh([
-				`/repos/${repository}/actions/artifacts?per_page=100&page=${page}`,
-				"--jq",
-				".artifacts[] | {id, name, size: .size_in_bytes, createdAt: .created_at, expired, runId: .workflow_run.id}",
+				`/repos/${repository}/actions/artifacts?per_page=${LIST_PAGE_SIZE}&page=${page}`,
 			]),
-		)
-			.split(/\r?\n/)
-			.filter(Boolean)
-			.map((line) => JSON.parse(line));
+		);
+		return artifacts.map((artifact) => ({
+			id: artifact.id,
+			name: artifact.name,
+			size: artifact.size_in_bytes,
+			createdAt: artifact.created_at,
+			expired: artifact.expired,
+			runId: artifact.workflow_run?.id ?? null,
+		}));
+	};
 }
 
 export function downloadArtifacts({

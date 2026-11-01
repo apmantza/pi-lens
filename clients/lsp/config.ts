@@ -1015,6 +1015,7 @@ function executableAllowed(
 
 function registryDecision(
 	id: string,
+	section: "servers" | "serverOverrides",
 	field: string,
 	provenance: Provenance | undefined,
 	trust: ProjectTrustState,
@@ -1022,7 +1023,11 @@ function registryDecision(
 ): void {
 	if (allowed || !provenance || !isRepoTier(provenance.tier)) return;
 	const subject = `${id}:${field}:${provenance.tier}`;
-	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}`;
+	const outcome =
+		section === "servers"
+			? `the ${id} entry is not applied for this project`
+			: `the project's ${id} override is not applied`;
+	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}; ${outcome}`;
 	recordDegradationOnce({
 		kind: "lsp-registry-decision",
 		subject,
@@ -1044,14 +1049,132 @@ function registryDecision(
 	}
 }
 
+/** One field's answer to "may an untrusted repo tier set this?" (#5147). */
+interface RepoFieldDecision {
+	/** True = a repo tier may set the field without pi's `trusted` answer. */
+	readonly admit: boolean;
+	readonly why: string;
+}
+
+/**
+ * #5147: the fields of `lsp.servers.<id>` a repo tier may set WITHOUT pi's
+ * `trusted` answer. The gate admits this short list and refuses everything
+ * else (shape 69): a field the table does not name, on the type or only in
+ * the file, is refused and recorded. The mapped type
+ * refuses to compile until a new `CustomServerConfig` member is decided.
+ *
+ * The test for admission is "reaches no launch input": argv, environment,
+ * working directory or root, and initialization options are all launch
+ * inputs, and so is anything that changes which analysis runs. The merge
+ * keeps the winning tier's value only, so a refused repo value may have
+ * shadowed a value the user set. For `lsp.servers` the caller therefore does
+ * not register the server when any field is refused (fail closed). For
+ * `lsp.serverOverrides` it applies the global tier's entry for that id instead,
+ * resolved on its own: never a partly stripped override.
+ */
+export const REPO_TIER_SERVER_FIELDS: {
+	readonly [K in keyof CustomServerConfig]-?: RepoFieldDecision;
+} = {
+	name: {
+		admit: true,
+		why: "Display label only: it selects nothing and reaches no argv, environment, working directory or initialization option.",
+	},
+	extensions: {
+		admit: false,
+		why: "Routing: decides which repo files start the user's server (a repo could send `.env` to it, or unroute it with `[]`).",
+	},
+	command: {
+		admit: false,
+		why: "Launch: the program and, for the array form, the leading argv.",
+	},
+	args: {
+		admit: false,
+		why: "Launch: appended to the child's argv (customServerLaunch).",
+	},
+	rootMarkers: {
+		admit: false,
+		why: "Launch: chooses the root, and the root is the child's working directory (spawn(root) hands it to launchLSP as cwd).",
+	},
+	env: {
+		admit: false,
+		why: "Launch: merged into the child's environment.",
+	},
+	initializationOptions: {
+		admit: false,
+		why: "Launch: sent to the server in the initialize request.",
+	},
+	covers: {
+		admit: false,
+		why: "Changes which analysis runs: a covered runner defers to the server, so a repo could silence a runner the user kept.",
+	},
+};
+
+/**
+ * #5147: the same table for `lsp.serverOverrides.<id>`. All three members
+ * launch the catalog server with another binary, environment or settings, so
+ * none is admitted; a field not named here is refused as well.
+ */
+export const REPO_TIER_OVERRIDE_FIELDS: {
+	readonly [K in keyof ServerInitOverride]-?: RepoFieldDecision;
+} = {
+	command: {
+		admit: false,
+		why: "Launch: replaces the catalog server's binary and argv.",
+	},
+	env: {
+		admit: false,
+		why: "Launch: merged into the child's environment.",
+	},
+	initializationOptions: {
+		admit: false,
+		why: "Launch: sent to the server in the initialize request.",
+	},
+};
+
+/**
+ * The keys of one config entry that an untrusted repo tier may not set. A key
+ * is allowed when the table admits it, when its source is not a repo tier, or
+ * when pi marked the project trusted. A key no table names is refused and
+ * recorded under one fixed label, never under the repo's own spelling.
+ */
+function refusedRepoFields(
+	id: string,
+	section: "servers" | "serverOverrides",
+	entry: unknown,
+	table: Readonly<Record<string, RepoFieldDecision>>,
+	provenance: ProvenanceMap,
+	trust: ProjectTrustState,
+	labelOf: (key: string) => string,
+): Set<string> {
+	const refused = new Set<string>();
+	if (!entry || typeof entry !== "object") return refused;
+	for (const key of Object.keys(entry)) {
+		const named = Object.hasOwn(table, key);
+		if (named && table[key]?.admit) continue;
+		const source = sourceFor(provenance, `/lsp/${section}/${id}/${key}`);
+		const allowed = executableAllowed(source, trust);
+		registryDecision(
+			id,
+			section,
+			named ? labelOf(key) : "unrecognized field",
+			source,
+			trust,
+			allowed,
+		);
+		if (!allowed) refused.add(key);
+	}
+	return refused;
+}
+
 function getConfigForFile(filePath: string): RegisteredLSPConfig {
 	return sessionRootConfigForFile(filePath) ?? EMPTY_CONFIG;
 }
 
 /**
  * THE `LSPConfig` → `RegisteredLSPConfig` conversion: construct the custom
- * servers, index the deny list, index the overrides. Pure — it reads no
- * module state and writes none.
+ * servers, index the deny list, index the overrides. It writes no registry
+ * state; an override refused for an untrusted project reads the global config
+ * files once to apply the user's own entry (#5147).
  *
  * Extracted from `initLSPConfig`'s body in #2427 review round 3 so that
  * `effectiveConfig` can build the config its question needs WITHOUT calling
@@ -1257,30 +1380,24 @@ export function compileLspRegistry(
 
 	if (config.servers) {
 		for (const [id, serverConfig] of Object.entries(config.servers)) {
-			const commandSource = sourceFor(provenance, `/lsp/servers/${id}/command`);
-			const commandAllowed = executableAllowed(commandSource, trust);
-			registryDecision(id, "command", commandSource, trust, commandAllowed);
-			if (!commandAllowed) continue;
-			const envSource = sourceFor(provenance, `/lsp/servers/${id}/env`);
-			const initSource = sourceFor(
-				provenance,
-				`/lsp/servers/${id}/initializationOptions`,
-			);
-			const envAllowed = executableAllowed(envSource, trust);
-			const initAllowed = executableAllowed(initSource, trust);
-			registryDecision(id, "env", envSource, trust, envAllowed);
-			registryDecision(
+			const refused = refusedRepoFields(
 				id,
-				"initializationOptions",
-				initSource,
+				"servers",
+				serverConfig,
+				REPO_TIER_SERVER_FIELDS,
+				provenance,
 				trust,
-				initAllowed,
+				(key) => key,
 			);
-			const admitted: CustomServerConfig = { ...serverConfig };
-			if (!envAllowed) delete admitted.env;
-			if (!initAllowed) delete admitted.initializationOptions;
+			// #5147: a refused field may have shadowed the user's own value
+			// (the merge keeps the winner only), so the server is not registered
+			// rather than started on a stripped configuration.
+			if (refused.size > 0) continue;
+			// A server no file can select (`{"name":"x"}`) is not registered:
+			// selection iterates `extensions` for every file (fileMatchReason).
+			if (!Array.isArray(serverConfig.extensions)) continue;
 			try {
-				const server = createCustomServer(admitted, id);
+				const server = createCustomServer({ ...serverConfig }, id);
 				customServers.push({ ...server, trustAllowed: true });
 			} catch {
 				// pi-lens-ignore: missing-error-propagation — per-server registration, skip bad entries
@@ -1289,42 +1406,44 @@ export function compileLspRegistry(
 	}
 
 	const serverOverrides = new Map<string, ServerInitOverride>();
+	// #5147: the global tier on its own, read only when an override is refused.
+	// No cwd skips the project walk; the two paths are the ones both production
+	// callers (`loadLSPConfig`, `effectiveConfig`) pass for their global tier.
+	let globalOverrides: Record<string, ServerInitOverride> | undefined;
 	if (config.serverOverrides) {
-		for (const [id, entry] of Object.entries(config.serverOverrides)) {
-			if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+		for (const [id, merged] of Object.entries(config.serverOverrides)) {
+			if (merged && typeof merged === "object" && !Array.isArray(merged)) {
+				const refused = refusedRepoFields(
+					id,
+					"serverOverrides",
+					merged,
+					REPO_TIER_OVERRIDE_FIELDS,
+					provenance,
+					trust,
+					(key) =>
+						key === "command" || key === "env" ? `${key} override` : key,
+				);
+				// #5147: the merge keeps the winner only, so a refused repo value
+				// may have shadowed the user's own. The global tier's entry for this
+				// id applies instead: every repo contribution goes, every global
+				// field stays, and an id with no global entry runs on the catalog.
+				let entry: ServerInitOverride | undefined = merged;
+				if (refused.size > 0) {
+					globalOverrides ??=
+						lspConfigOf(
+							resolvePiLensConfig({
+								globalDir: getGlobalPiLensDir(),
+								globalConfigPath: getPiLensGlobalConfigPath(),
+							}).value,
+						).serverOverrides ?? {};
+					entry = Object.hasOwn(globalOverrides, id)
+						? globalOverrides[id]
+						: undefined;
+				}
+				if (!entry) continue;
 				const initOpts = (entry as Record<string, unknown>)
 					.initializationOptions;
 				const command = (entry as ServerInitOverride).command;
-				const commandSource = sourceFor(
-					provenance,
-					`/lsp/serverOverrides/${id}/command`,
-				);
-				const envSource = sourceFor(
-					provenance,
-					`/lsp/serverOverrides/${id}/env`,
-				);
-				const initSource = sourceFor(
-					provenance,
-					`/lsp/serverOverrides/${id}/initializationOptions`,
-				);
-				const commandAllowed = executableAllowed(commandSource, trust);
-				const envAllowed = executableAllowed(envSource, trust);
-				const overrideInitAllowed = executableAllowed(initSource, trust);
-				registryDecision(
-					id,
-					"command override",
-					commandSource,
-					trust,
-					commandAllowed,
-				);
-				registryDecision(id, "env override", envSource, trust, envAllowed);
-				registryDecision(
-					id,
-					"initializationOptions",
-					initSource,
-					trust,
-					overrideInitAllowed,
-				);
 				if (
 					command !== undefined ||
 					(entry as ServerInitOverride).env !== undefined ||
@@ -1334,11 +1453,11 @@ export function compileLspRegistry(
 						!Array.isArray(initOpts))
 				) {
 					serverOverrides.set(id, {
-						...(overrideInitAllowed && initOpts !== undefined
+						...(initOpts !== undefined
 							? { initializationOptions: initOpts as Record<string, unknown> }
 							: {}),
-						...(commandAllowed && command !== undefined ? { command } : {}),
-						...(envAllowed && (entry as ServerInitOverride).env
+						...(command !== undefined ? { command } : {}),
+						...((entry as ServerInitOverride).env
 							? { env: (entry as ServerInitOverride).env }
 							: {}),
 					});
