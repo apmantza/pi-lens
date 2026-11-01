@@ -235,8 +235,9 @@ symbols), the default JSON view dropped from measuring ~1,900 tokens
 to a schema with no repeated `read`/path noise. **#5137 presets
 (2026-11-01):** `view` now names projection × format (`summary-text` /
 `summary-json` / `full-text` / `full-json`, default `summary-text`); the text
-cell is lossless against its JSON payload, so the text preset carries the same
-data at roughly half the byte size of the JSON view for that file.
+cell mirrors its JSON payload field by field, with one declared exception (a
+member's own `exported` rides on its container's section), and lands at about
+60% of the JSON byte size on the measured file set.
 ## When *not* to use these
 
 - **Looking for a textual pattern across files** — use `grep` (tool in pi). `module_report` is per-file shape, not cross-file content.
