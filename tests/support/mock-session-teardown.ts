@@ -50,6 +50,16 @@ let childrenBeforeCase: ReadonlySet<number> = new Set();
 // lane: unit-linux. The census reads `/proc`, which only Linux has. Other hosts
 // still end every session and skip only the census.
 const CENSUS_HOST = process.platform === "linux";
+/** Where the census reads; `mock-session-teardown.test.ts` points it at a fixture tree. */
+let censusProcRoot = "/proc";
+
+/** Test seam: read the census from `root` until the returned function restores `/proc`. */
+export function readCensusFromForTests(root: string): () => void {
+	censusProcRoot = root;
+	return () => {
+		censusProcRoot = "/proc";
+	};
+}
 
 /** A session's identity as the host names it: its id and working directory. */
 function identityOf(ctx: unknown): { sessionId?: string; cwd?: string } {
@@ -139,7 +149,7 @@ export function trackSessionEvent(
 		// The census judges only the children this case created: a child an
 		// earlier case left in this worker is that case's to answer for.
 		if (!startedThisCase && CENSUS_HOST) {
-			childrenBeforeCase = new Set(astGrepLspChildrenOwnedHere());
+			childrenBeforeCase = new Set(astGrepLspChildrenOwnedHere(censusProcRoot));
 		}
 		startedThisCase = true;
 		open.push({ host, ctx });
@@ -169,7 +179,9 @@ async function assertNoLeakedLspChild(): Promise<void> {
 	// bounded: a child that never leaves still reds, with the same pid list.
 	await vi.waitFor(
 		() => {
-			expect(newAstGrepLspChildren(childrenBeforeCase)).toEqual([]);
+			expect(newAstGrepLspChildren(childrenBeforeCase, censusProcRoot)).toEqual(
+				[],
+			);
 		},
 		{ timeout: 2_000, interval: 25 },
 	);

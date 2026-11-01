@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	endMockSessions,
 	failOnOpenMockSessions,
+	readCensusFromForTests,
 } from "./mock-session-teardown.js";
 import {
 	createPiMock,
@@ -11,6 +13,7 @@ import {
 	SESSION_START_TEST_BUDGET_MS,
 } from "./pi-mock.js";
 import { stripSource } from "./sweep-kit.js";
+import { removeTempDirSync } from "../clients/test-utils.js";
 
 describe("createPiMock", () => {
 	it("records flags and exposes defaults via getFlag", () => {
@@ -381,7 +384,12 @@ describe("createPiMock sessions and the shared teardown (#5146)", () => {
 
 	it("pi-mock.ts registers the gate as a root afterEach", () => {
 		expect(
-			gated(readFileSync(resolve(import.meta.dirname, "pi-mock.ts"), "utf8")),
+			gated(
+				fs.readFileSync(
+					path.resolve(import.meta.dirname, "pi-mock.ts"),
+					"utf8",
+				),
+			),
 		).toBe(true);
 	});
 
@@ -400,5 +408,63 @@ describe("createPiMock sessions and the shared teardown (#5146)", () => {
 		],
 	])("does not read a gate that is %s as registered", (_name, source) => {
 		expect(gated(source)).toBe(false);
+	});
+});
+
+/**
+ * #5146: every case that started a session owes the census, whether
+ * `endMockSessions` or the case itself ended it. Recurrence: a census wired only
+ * behind the shared teardown never ran for a file that ended its sessions by
+ * hand, so the child the s7 sweep refused could come from either kind of file.
+ * The census reads a fixture `/proc` here: no committed test runs a real
+ * `ast-grep lsp`.
+ */
+describe("the census a case owes after its sessions end (#5146)", () => {
+	let proc: string;
+	let restore: () => void;
+	const lspChild = (pid: number) => {
+		const dir = path.join(proc, String(pid));
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(
+			path.join(dir, "stat"),
+			`${pid} (ast-grep) S ${process.pid} 0 0\n`,
+		);
+		fs.writeFileSync(path.join(dir, "cmdline"), "ast-grep\0lsp\0");
+	};
+	const startOne = async () => {
+		const pi = createPiMock();
+		pi.on("session_start", () => {});
+		pi.on("session_shutdown", () => {});
+		const ctx = makeCtx({ cwd: "/p/c", sessionId: "c" });
+		await pi.emit("session_start", { reason: "startup" }, ctx);
+		return { pi, ctx };
+	};
+
+	beforeEach(() => {
+		proc = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5146-census-"));
+		restore = readCensusFromForTests(proc);
+	});
+	afterEach(() => {
+		restore();
+		removeTempDirSync(proc);
+	});
+
+	it("reds a case whose ended session left an ast-grep lsp child", async () => {
+		await startOne();
+		lspChild(7771);
+		await expect(endMockSessions()).rejects.toThrow(/7771/);
+	});
+
+	it("reds a case that ended its session by hand and left the child", async () => {
+		const { pi, ctx } = await startOne();
+		await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+		lspChild(7772);
+		await expect(failOnOpenMockSessions()).rejects.toThrow(/7772/);
+	});
+
+	it("does not charge a case for a child that was there before it started", async () => {
+		lspChild(7773);
+		await startOne();
+		await expect(endMockSessions()).resolves.toBeUndefined();
 	});
 });
