@@ -13,7 +13,7 @@ export interface ListedArtifact {
 	size: number;
 	createdAt: string;
 	expired: boolean;
-	runId: number | string;
+	runId: number | string | null;
 }
 export function listArtifacts(
 	fetchPage: (page: number) => ListedArtifact[],
