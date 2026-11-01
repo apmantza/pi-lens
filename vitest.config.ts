@@ -382,6 +382,9 @@ const lspSpawnHeavyInclude = [
 	// launchLSP/getServerById marker, so the census cannot derive it (its known
 	// marker gap); membership is by hand.
 	"tests/clients/lsp/opengrep-offline-findings-4765.integration.test.ts",
+	// #5151: the bytes of a PowerShell BOM file over a real fixture-server stdio
+	// stream; the same #1022/#2332 handshake contention class as its lane siblings.
+	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts",
 	// #4758: a real pyright-langserver child (skipped, with a named reason, when
 	// none is installed) behind a real initialize handshake, then a first-
 	// diagnostics wait of up to 30 s per case — the #1022/#2332 shape of its
@@ -784,6 +787,9 @@ export const wallClockBudgetInclude = [
 	// and pi's own `bash` tool, so the child shells and git processes ride along
 	// in the serialized lane too.
 	"tests/index-2050-worktree-bash-dispatch-witness.test.ts",
+	// #5146: the per-case census polls /proc with vi.waitFor for an ast-grep
+	// child that the fast POSIX shutdown is still exiting (flake-shape admission).
+	"tests/index-3748-advisory-scope-witness.test.ts",
 	// #4316: the session-start LSP warm is fire-and-forget inside the loaded
 	// extension copy, so the witness joins its log record with vi.waitFor
 	// (flake-shape admission).

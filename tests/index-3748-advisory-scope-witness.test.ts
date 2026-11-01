@@ -1,3 +1,4 @@
+// flake-shape: ungoverned-wait-for — the fast POSIX shutdown sends SIGTERM and returns without awaiting the child's exit, and that exit exposes no awaitable, so the census vi.waitFor polls /proc for the owned child to leave.
 /**
  * #3748 item 1, the pi host ADAPTER: `index.ts`'s `context` handler drains the
  * agent advisory queue for the scope its own activation serves.
@@ -30,8 +31,85 @@ import {
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 let tmpDir: string;
+let childrenBeforeCase: ReadonlySet<number>;
+
+// lane: unit-linux. The census reads `/proc`, which only Linux has. Other hosts
+// still run each case as written and skip only the census below.
+const CENSUS_HOST = process.platform === "linux";
+
+/**
+ * The `ast-grep lsp` children this worker owns (#5146): alive, parented to this
+ * process, launched as `ast-grep lsp`. The #2042 kill guard refuses a child that
+ * outlives its worker, found later by the production orphan sweep. Read from
+ * `/proc`, so the census spawns nothing.
+ */
+function astGrepLspChildrenOwnedHere(): number[] {
+	const owned: number[] = [];
+	for (const entry of fs.readdirSync("/proc")) {
+		if (!/^\d+$/.test(entry)) continue;
+		try {
+			// `pid (comm) state ppid ...`: `comm` may hold spaces, so split after `)`.
+			const stat = fs.readFileSync(`/proc/${entry}/stat`, "utf8");
+			const [state, ppid] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+			if (Number(ppid) !== process.pid || state === "Z" || state === "X") {
+				continue;
+			}
+			const argv = fs
+				.readFileSync(`/proc/${entry}/cmdline`, "utf8")
+				.split("\0");
+			if (path.basename(argv[0] ?? "") === "ast-grep" && argv[1] === "lsp") {
+				owned.push(Number(entry));
+			}
+		} catch {
+			// Exited between the listing and the read: not a live child.
+		}
+	}
+	return owned;
+}
+
+type PiMock = ReturnType<typeof createPiMock>;
+
+/**
+ * The sessions the running case started (#5146). `endOpenSessions` ends them in
+ * the teardown; a session never shut down keeps the LSP its `tool_result` spawned
+ * alive after the worker exits.
+ */
+const openSessions: { pi: PiMock; cwd: string; sessionId: string }[] = [];
+
+async function startSession(
+	pi: PiMock,
+	cwd: string,
+	sessionId: string,
+): Promise<void> {
+	openSessions.push({ pi, cwd, sessionId });
+	await pi.emit(
+		"session_start",
+		makeSessionStartEvent(),
+		makeCtx({ cwd, sessionId }),
+	);
+}
+
+/**
+ * Ends the case's sessions in reverse start order, as the host does. The
+ * primary, started first, ends last and runs the shared teardown, the LSP fleet
+ * reset; a secondary's shutdown skips it while a session is still live (#4554).
+ */
+async function endOpenSessions(): Promise<void> {
+	for (let s = openSessions.pop(); s !== undefined; s = openSessions.pop()) {
+		await s.pi.emit(
+			"session_shutdown",
+			{ reason: "quit" },
+			makeCtx({ cwd: s.cwd, sessionId: s.sessionId }),
+		);
+	}
+}
 
 beforeEach(() => {
+	// The census judges only the children a case created: a child a sibling file
+	// left in this worker is not this case's to answer for.
+	childrenBeforeCase = new Set(
+		CENSUS_HOST ? astGrepLspChildrenOwnedHere() : [],
+	);
 	// The process primary registration, the advisory queue and the scopes are
 	// process-global. Clearing the lifecycle state per case keeps a primary left
 	// by ANOTHER suite (same vitest worker) from turning this file's first start
@@ -42,9 +120,27 @@ beforeEach(() => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3748-advisory-"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+	await endOpenSessions();
 	vi.restoreAllMocks();
 	removeTempDirSync(tmpDir);
+	// #5146: a case whose `tool_result` spawned an ast-grep LSP must end its
+	// sessions, or the child is still alive here and orphans when the worker exits.
+	if (CENSUS_HOST) {
+		// #5146 (CI: PR #5155 shard 4/5, job 124859079792): the fast POSIX shutdown
+		// sends SIGTERM and returns, so the child can still be exiting here. Poll,
+		// bounded: a child that never leaves still reds, with the same pid list.
+		await vi.waitFor(
+			() => {
+				expect(
+					astGrepLspChildrenOwnedHere().filter(
+						(pid) => !childrenBeforeCase.has(pid),
+					),
+				).toEqual([]);
+			},
+			{ timeout: 2_000, interval: 25 },
+		);
+	}
 });
 
 describe("pi context delivers the primary's own queued advisory (#3748)", () => {
@@ -60,11 +156,7 @@ describe("pi context delivers the primary's own queued advisory (#3748)", () => 
 		});
 		const pi = createPiMock();
 		extension(pi.asExtensionAPI());
-		await pi.emit(
-			"session_start",
-			makeSessionStartEvent(),
-			makeCtx({ cwd: tmpDir, sessionId: "pi-3748-advisory-session" }),
-		);
+		await startSession(pi, tmpDir, "pi-3748-advisory-session");
 		const runtime = runtimes[0];
 		expect(runtime).toBeDefined();
 		queueAgentAdvisory("lost edit in a.rs", runtime.captureSessionGeneration());
@@ -85,11 +177,7 @@ describe("pi context delivers the primary's own queued advisory (#3748)", () => 
 
 		// Release the process primary, so the case below starts one of its own
 		// rather than being declined behind a leaked registration.
-		await pi.emit(
-			"session_shutdown",
-			{ reason: "quit" },
-			makeCtx({ cwd: tmpDir, sessionId: "pi-3748-advisory-session" }),
-		);
+		await endOpenSessions();
 	});
 
 	it("drains the requesting session's own scope after a concurrent start (#4631 F3)", async () => {
@@ -112,11 +200,7 @@ describe("pi context delivers the primary's own queued advisory (#3748)", () => 
 		const pi = createPiMock();
 		extension(pi.asExtensionAPI());
 
-		await pi.emit(
-			"session_start",
-			makeSessionStartEvent(),
-			makeCtx({ cwd: tmpDir, sessionId: "pi-3748-primary" }),
-		);
+		await startSession(pi, tmpDir, "pi-3748-primary");
 		const primary = runtimes[0];
 		expect(primary).toBeDefined();
 		queueAgentAdvisory("lost edit in a.rs", primary.captureSessionGeneration());
@@ -130,11 +214,7 @@ describe("pi context delivers the primary's own queued advisory (#3748)", () => 
 		// different scenario (the session really ended).
 		const secondaryCwd = path.join(tmpDir, "secondary-root");
 		fs.mkdirSync(secondaryCwd, { recursive: true });
-		await pi.emit(
-			"session_start",
-			makeSessionStartEvent(),
-			makeCtx({ cwd: secondaryCwd, sessionId: "pi-3748-secondary" }),
-		);
+		await startSession(pi, secondaryCwd, "pi-3748-secondary");
 		expect(runtimes).toHaveLength(1);
 
 		const injected = (await pi.emit(
@@ -172,11 +252,7 @@ describe("pi context delivers the primary's own queued advisory (#3748)", () => 
 		const pi = createPiMock();
 		extension(pi.asExtensionAPI());
 
-		await pi.emit(
-			"session_start",
-			makeSessionStartEvent(),
-			makeCtx({ cwd: tmpDir, sessionId: "pi-3748-recorded" }),
-		);
+		await startSession(pi, tmpDir, "pi-3748-recorded");
 		const recorded = runtimes[0];
 		expect(recorded).toBeDefined();
 		queueAgentAdvisory(
@@ -217,16 +293,8 @@ describe("a tool_result advisory reaches the session that made the edit (#5108 F
 	async function twoSessions(secondaryRoot: string) {
 		const pi = createPiMock();
 		extension(pi.asExtensionAPI());
-		await pi.emit(
-			"session_start",
-			makeSessionStartEvent(),
-			makeCtx({ cwd: tmpDir, sessionId: "pi-5108-primary" }),
-		);
-		await pi.emit(
-			"session_start",
-			makeSessionStartEvent(),
-			makeCtx({ cwd: secondaryRoot, sessionId: "pi-5108-secondary" }),
-		);
+		await startSession(pi, tmpDir, "pi-5108-primary");
+		await startSession(pi, secondaryRoot, "pi-5108-secondary");
 		const contextOf = async (cwd: string, sessionId: string) => {
 			const injected = (await pi.emit(
 				"context_with_system",
