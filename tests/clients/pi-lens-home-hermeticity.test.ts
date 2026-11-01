@@ -33,6 +33,7 @@ import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 
 import { EventEmitter } from "node:events";
 import { waitFor } from "./interleaving-kit.js";
+import { endMockSessions } from "../support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "../support/pi-mock.js";
 import { makeSessionStartEvent } from "../support/host-event-factory.js";
 
@@ -1210,11 +1211,14 @@ describe("transitive session_start backstop isolation", () => {
 
 	beforeEach(clearOwnBackstopStamps);
 
-	afterEach(() => {
+	afterEach(async () => {
 		vi.clearAllTimers();
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		vi.unstubAllEnvs();
+		// #5146: end the session on real timers and the worker's own home, before
+		// its lifecycle state resets.
+		await endMockSessions();
 		_resetSessionLifecycleForTests();
 	});
 

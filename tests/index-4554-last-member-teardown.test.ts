@@ -48,6 +48,7 @@ import {
 	readInstanceRegistry,
 } from "../clients/instance-registry.js";
 import { _resetProcessSingletonsForTests } from "../clients/process-singletons.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, STALE_CTX_MESSAGE } from "./support/pi-mock.js";
 import { makeLspServiceDouble } from "./support/lsp-service-double.js";
 import { aliveServerHolder } from "./support/lsp-status-repaint.js";
@@ -263,6 +264,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	try {
+		// #5146: end the case's sessions first, then settle what they wrote.
+		await endMockSessions();
 		await drainBackgroundWritesForTests();
 		await settleRegistryWrites();
 		deregisterInstance();

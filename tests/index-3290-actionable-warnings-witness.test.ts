@@ -26,6 +26,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
 
@@ -44,7 +45,11 @@ beforeEach(() => {
 	);
 });
 
-afterEach(() => removeTempDirSync(tmpDir));
+afterEach(async () => {
+	// #5146: end the sessions the case started before the fixture root goes.
+	await endMockSessions();
+	removeTempDirSync(tmpDir);
+});
 
 function warning(
 	filePath: string,

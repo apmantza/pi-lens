@@ -41,6 +41,7 @@ import { waitForProjectSnapshotPersistsForTests } from "../clients/project-snaps
 import { removeTempDirSync } from "./clients/test-utils.js";
 import { drainRegisteredBackgroundWritesForTests } from "./support/background-write-drains.js";
 import { makeSessionStartEvent } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 const DENIED_SERVER = "typos";
@@ -120,8 +121,6 @@ afterEach(async () => {
 	try {
 		await settleExtensionWriters();
 	} finally {
-		_resetSessionLifecycleForTests();
-		resetLSPConfigStateForTests();
 		if (previousStartupMode === undefined)
 			delete process.env.PI_LENS_STARTUP_MODE;
 		else process.env.PI_LENS_STARTUP_MODE = previousStartupMode;
@@ -132,7 +131,19 @@ afterEach(async () => {
 		else
 			process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS =
 				previousPersistDelay;
+		try {
+			// #5146: end the sessions once `PI_LENS_HOME` is restored and before the
+			// lifecycle resets under them. The instance-registry deregistration a
+			// shutdown queues resolves the machine-state directory when it lands, so
+			// with the fixture home still pinned it would re-create that home after
+			// its removal (tmp-fixture-hygiene, #4591).
+			await endMockSessions();
+		} finally {
+			_resetSessionLifecycleForTests();
+			resetLSPConfigStateForTests();
+		}
 	}
+	await settleExtensionWriters();
 	// Removed only after a settle that returned: a root a writer may still
 	// re-create stays in `dirs`, because the splice never runs on a throw.
 	for (const dir of dirs.splice(0)) removeTempDirSync(dir);

@@ -16,7 +16,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
@@ -50,9 +50,12 @@ vi.mock("../clients/bootstrap.js", async () => {
 });
 vi.mock("../clients/runtime-session.js", () => ({
 	handleSessionStart: async (deps: {
-		runtime: { projectRoot: string };
+		runtime: { projectRoot: string; resetForSession: () => void };
 		ctxCwd?: string;
 	}) => {
+		// #5146: the real start begins a fresh scope before its first await
+		// (runtime-session.ts), so a second case's session is not on a retired one.
+		deps.runtime.resetForSession();
 		if (deps.ctxCwd) deps.runtime.projectRoot = deps.ctxCwd;
 	},
 }));
@@ -60,6 +63,7 @@ vi.mock("../clients/runtime-session.js", () => ({
 import extension from "../index.js";
 import { READ_BRIDGE_KEY, type ReadBridge } from "../clients/read-bridge.js";
 import { ReadGuard } from "../clients/read-guard.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 
@@ -68,7 +72,7 @@ describe("#3654 F1: index.ts's read shim records a v1 zero-line read through v2"
 	let prevDataDir: string | undefined;
 	let readBridge: ReadBridge;
 
-	beforeAll(async () => {
+	beforeEach(async () => {
 		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3654-zero-line-"));
 		prevDataDir = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = path.join(tmp, "data");
@@ -82,7 +86,9 @@ describe("#3654 F1: index.ts's read shim records a v1 zero-line read through v2"
 		readBridge = (globalThis as Record<symbol, ReadBridge>)[READ_BRIDGE_KEY];
 	});
 
-	afterAll(() => {
+	afterEach(async () => {
+		// #5146: each case's session ends before its data dir and root go.
+		await endMockSessions();
 		vi.restoreAllMocks();
 		if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = prevDataDir;

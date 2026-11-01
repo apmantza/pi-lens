@@ -37,9 +37,14 @@ vi.mock("../clients/bootstrap.js", async () => {
 });
 vi.mock("../clients/runtime-session.js", () => ({
 	handleSessionStart: async (deps: {
-		runtime: { projectRoot: string };
+		runtime: { projectRoot: string; resetForSession: () => void };
 		ctxCwd?: string;
 	}) => {
+		// #5146 F1: the real start begins a fresh scope before its first await
+		// (runtime-session.ts). Without it an earlier case's shutdown leaves the
+		// scope retired, a handle captured on it reads current, and the replaced
+		// drain's refresh is not dropped (seed 202: "expected 1 to be +0").
+		deps.runtime.resetForSession();
 		if (deps.ctxCwd) deps.runtime.projectRoot = deps.ctxCwd;
 	},
 }));
@@ -94,6 +99,7 @@ import { _resetAgentNudgeForTests } from "../clients/agent-nudge.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import extension from "../index.js";
 import { makeContextWithSystemEvent } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 
@@ -109,7 +115,9 @@ describe("#3576: the post-drain ledger refresh stays in the drain's session", ()
 		resetDegradationLedger();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		// #5146: end the session before the data dir and the root go.
+		await endMockSessions();
 		if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = prevDataDir;
 		removeTempDirSync(tmp);
@@ -159,7 +167,9 @@ describe("#5108 F8: the agent_settled drain's advisory reaches the session that 
 		secondaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5108-s-"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		// #5146: end both sessions before their roots go.
+		await endMockSessions();
 		drain.lossNotice = undefined;
 		removeTempDirSync(primaryRoot);
 		removeTempDirSync(secondaryRoot);
