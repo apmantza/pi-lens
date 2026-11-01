@@ -1,3 +1,4 @@
+// flake-shape: ungoverned-wait-for — the fast POSIX shutdown sends SIGTERM and returns without awaiting the child's exit, and that exit exposes no awaitable, so the census vi.waitFor polls /proc for the owned child to leave.
 /**
  * #3748 item 1, the pi host ADAPTER: `index.ts`'s `context` handler drains the
  * agent advisory queue for the scope its own activation serves.
@@ -126,11 +127,19 @@ afterEach(async () => {
 	// #5146: a case whose `tool_result` spawned an ast-grep LSP must end its
 	// sessions, or the child is still alive here and orphans when the worker exits.
 	if (CENSUS_HOST) {
-		expect(
-			astGrepLspChildrenOwnedHere().filter(
-				(pid) => !childrenBeforeCase.has(pid),
-			),
-		).toEqual([]);
+		// #5146 (CI: PR #5155 shard 4/5, job 124859079792): the fast POSIX shutdown
+		// sends SIGTERM and returns, so the child can still be exiting here. Poll,
+		// bounded: a child that never leaves still reds, with the same pid list.
+		await vi.waitFor(
+			() => {
+				expect(
+					astGrepLspChildrenOwnedHere().filter(
+						(pid) => !childrenBeforeCase.has(pid),
+					),
+				).toEqual([]);
+			},
+			{ timeout: 2_000, interval: 25 },
+		);
 	}
 });
 
