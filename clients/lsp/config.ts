@@ -1022,7 +1022,7 @@ function registryDecision(
 ): void {
 	if (allowed || !provenance || !isRepoTier(provenance.tier)) return;
 	const subject = `${id}:${field}:${provenance.tier}`;
-	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}; ${id} is not started for this project`;
+	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}; the ${id} entry is not applied for this project`;
 	recordDegradationOnce({
 		kind: "lsp-registry-decision",
 		subject,
@@ -1062,9 +1062,10 @@ interface RepoFieldDecision {
  * working directory or root, and initialization options are all launch
  * inputs, and so is anything that changes which analysis runs. The merge
  * keeps the winning tier's value only, so a refused repo value may have
- * shadowed a value the user set. The caller therefore does not register the
- * server at all when any field is refused (fail closed): it never starts on a
- * partly stripped user configuration.
+ * shadowed a value the user set. For `lsp.servers` the caller therefore does
+ * not register the server when any field is refused (fail closed). For
+ * `lsp.serverOverrides` it drops the whole override and the built-in runs on
+ * its catalog defaults: never a partly stripped override.
  */
 export const REPO_TIER_SERVER_FIELDS: {
 	readonly [K in keyof CustomServerConfig]-?: RepoFieldDecision;
@@ -1408,12 +1409,11 @@ export function compileLspRegistry(
 					(key) =>
 						key === "command" || key === "env" ? `${key} override` : key,
 				);
-				// #5147: the same rule as `servers`. The catalog server is turned off
-				// for this project instead of starting on a partly stripped override.
-				if (refused.size > 0) {
-					disabledServerIds.add(id);
-					continue;
-				}
+				// #5147: a refused field drops the whole override and the catalog
+				// server runs on its defaults (master's behaviour for built-ins).
+				// The winning tier is all provenance keeps, so a global override
+				// for this id is skipped too: never a partly stripped override.
+				if (refused.size > 0) continue;
 				const initOpts = (entry as Record<string, unknown>)
 					.initializationOptions;
 				const command = (entry as ServerInitOverride).command;

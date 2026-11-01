@@ -35,8 +35,13 @@
   while a project field requires pi's `trusted` answer unless
   `REPO_TIER_SERVER_FIELDS` (`name`) admits it; a field no table names is
   refused (`REPO_TIER_OVERRIDE_FIELDS` admits none, #5147). A refused field
-  may have shadowed the user's own value, so the server (or, for an override,
-  the catalog server) is not started for the project. Missing trust APIs are
+  may have shadowed the user's own value, so a refused `lsp.servers.<id>` field
+  leaves that server unregistered for the project. A refused
+  `lsp.serverOverrides.<id>` field drops the whole override and the built-in
+  runs on its catalog defaults (master's behaviour). Accepted residual: provenance
+  keeps only the winning tier, so in an untrusted project the user's own global
+  override for that built-in is skipped too, and a global safety wrapper on a
+  built-in does not apply until pi trusts the project (#5147). Missing trust APIs are
   fail-closed for those project fields with one bounded notice; installs keep
   their existing compatibility policy. `tests/clients/lsp/lsp-registry-trust.test.ts`
   and the LSP config/service suites pin the boundary.

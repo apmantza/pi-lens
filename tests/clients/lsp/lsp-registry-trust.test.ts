@@ -155,7 +155,7 @@ describe("compiled LSP registry trust boundary (#2372)", () => {
 		expect(override?.command).toBeUndefined();
 		expect(override?.env).toBeUndefined();
 		expect(override?.initializationOptions).toBeUndefined();
-		expect(registry.disabledServerIds.has("rust")).toBe(true);
+		expect(registry.disabledServerIds.has("rust")).toBe(false);
 		expect(logExtension).toHaveBeenCalledTimes(1);
 		expect(ledger.getDegradationSummary()).toContainEqual(
 			expect.objectContaining({ kind: "lsp-registry-decision", count: 3 }),

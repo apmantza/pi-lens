@@ -25,8 +25,8 @@
  *   synthetic field               stub not registered        kept
  *   name                          registered, global argv    kept
  *   global only                   unchanged                  unchanged
- * serverOverrides.<id>: any refused field turns the catalog server off for
- * the project (`disabledServerIds`), never a launch on a stripped override.
+ * serverOverrides.<id>: any refused field drops the whole override and the
+ * built-in runs on its catalog defaults (round 3, maintainer option B).
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -187,7 +187,7 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 			expect.stringContaining(`project LSP ${field} refused for stub`),
 		);
 		expect(decisionFields()).toContainEqual(
-			expect.stringContaining("stub is not started for this project"),
+			expect.stringContaining("the stub entry is not applied for this project"),
 		);
 	}
 
@@ -280,7 +280,7 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 		await compile(arranged.project);
 		const reasons = decisionFields();
 		expect(reasons).toEqual([
-			"project LSP unrecognized field refused for stub: pi project trust is untrusted; stub is not started for this project",
+			"project LSP unrecognized field refused for stub: pi project trust is untrusted; the stub entry is not applied for this project",
 		]);
 	});
 
@@ -308,11 +308,12 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 });
 
 describe("untrusted project serverOverrides on a catalog server (#5147)", () => {
-	// Recurrence: the override loop kept the winner's surviving fields, so a
-	// refused `env` left the user's global override command running without its
-	// env. Either direction of the partial result is a stripped override; the
-	// catalog server is off for the project.
-	async function offFor(trust: Trust, fields: Record<string, unknown>) {
+	// Recurrence: round 2 turned the built-in server off for the project on any
+	// refused override field, so a team repo that only sets
+	// `initializationOptions` for rust lost rust-analyzer until trusted. Master
+	// ran the built-in on its catalog defaults; the refused override is dropped
+	// and the built-in stays on.
+	async function builtinFor(trust: Trust, fields: Record<string, unknown>) {
 		const arranged = arrange(trust, undefined, { rust: fields });
 		const registry = await compile(arranged.project);
 		const file = path.join(arranged.project, "x.rs");
@@ -324,24 +325,37 @@ describe("untrusted project serverOverrides on a catalog server (#5147)", () => 
 		};
 	}
 
-	it("turns the catalog server off when an untrusted project sets an override env", async () => {
-		const { registry, reason } = await offFor("untrusted", {
+	it("keeps the built-in on its defaults when an untrusted project sets an override env", async () => {
+		const { registry, reason } = await builtinFor("untrusted", {
 			env: { RUST_LOG: "debug" },
 		});
-		expect(registry.disabledServerIds.has("rust")).toBe(true);
+		expect(registry.disabledServerIds.has("rust")).toBe(false);
 		expect(registry.serverOverrides.get("rust")).toBeUndefined();
-		expect(reason).toBe("disabled-by-config");
+		expect(reason).toBe("selected");
 		expect(decisionFields()).toEqual([
-			"project LSP env override refused for rust: pi project trust is untrusted; rust is not started for this project",
+			"project LSP env override refused for rust: pi project trust is untrusted; the rust entry is not applied for this project",
 		]);
 	});
 
-	it("turns the catalog server off for an unknown-trust initializationOptions override", async () => {
-		const { registry } = await offFor("unknown", {
+	it("keeps the built-in on for an unknown-trust initializationOptions-only override", async () => {
+		const { registry, reason } = await builtinFor("unknown", {
 			initializationOptions: { check: { command: "clippy" } },
 		});
-		expect(registry.disabledServerIds.has("rust")).toBe(true);
+		expect(registry.disabledServerIds.has("rust")).toBe(false);
 		expect(registry.serverOverrides.get("rust")).toBeUndefined();
+		expect(reason).toBe("selected");
+	});
+
+	// Accepted residual: the merge keeps only the winning tier, so the user's
+	// own global override for this id is skipped with the project's.
+	it("skips the user's global override for the id too while the project is untrusted", async () => {
+		const arranged = arrange("untrusted", undefined, {
+			rust: { env: { RUST_LOG: "debug" } },
+		});
+		const config = await loadLSPConfig(arranged.project);
+		const registry = compileLspRegistry(config, config.__provenance);
+		expect(registry.serverOverrides.get("rust")).toBeUndefined();
+		expect(registry.disabledServerIds.has("rust")).toBe(false);
 	});
 
 	it("refuses an untrusted override field no table names, and keeps trusted ones", async () => {
@@ -349,19 +363,19 @@ describe("untrusted project serverOverrides on a catalog server (#5147)", () => 
 			args: ["--project-flag"],
 			syntheticLaunchFlag: true,
 		};
-		const { registry } = await offFor("untrusted", overrides);
-		expect(registry.disabledServerIds.has("rust")).toBe(true);
+		const { registry } = await builtinFor("untrusted", overrides);
+		expect(registry.serverOverrides.get("rust")).toBeUndefined();
 		expect(decisionFields()).toEqual([
-			"project LSP unrecognized field refused for rust: pi project trust is untrusted; rust is not started for this project",
+			"project LSP unrecognized field refused for rust: pi project trust is untrusted; the rust entry is not applied for this project",
 		]);
 		resetDegradationLedger();
-		const trusted = await offFor("trusted", overrides);
-		expect(trusted.registry.disabledServerIds.has("rust")).toBe(false);
+		const trusted = await builtinFor("trusted", overrides);
+		expect(trusted.registry.serverOverrides.get("rust")?.command).toBeDefined();
 		expect(decisionFields()).toEqual([]);
 	});
 
 	it("keeps the user's global override and the catalog server when the project sets none", async () => {
-		const { registry, reason } = await offFor("untrusted", {});
+		const { registry, reason } = await builtinFor("untrusted", {});
 		expect(registry.disabledServerIds.has("rust")).toBe(false);
 		expect(registry.serverOverrides.get("rust")?.command).toEqual([
 			process.execPath,
