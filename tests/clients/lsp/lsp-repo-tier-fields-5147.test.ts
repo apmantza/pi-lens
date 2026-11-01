@@ -155,16 +155,22 @@ function decisionFields(): string[] {
 }
 
 describe("untrusted project fields on a global LSP server (#5147)", () => {
-	for (const trust of ["untrusted", "unknown"] as const) {
-		it(`does not carry a ${trust} project's args to the started child's argv`, async () => {
-			const arranged = arrange(trust, { args: ["--project-flag"] });
-			const argv = await startedArgv(arranged);
-			expect(argv).not.toContain("--project-flag");
-			expect(decisionFields()).toContainEqual(
-				expect.stringContaining("project LSP args refused for stub"),
-			);
-		});
+	async function expectProjectArgsRefused(trust: Trust): Promise<void> {
+		const arranged = arrange(trust, { args: ["--project-flag"] });
+		const argv = await startedArgv(arranged);
+		expect(argv).not.toContain("--project-flag");
+		expect(decisionFields()).toContainEqual(
+			expect.stringContaining("project LSP args refused for stub"),
+		);
 	}
+
+	it("does not carry an untrusted project's args to the started child's argv", async () => {
+		await expectProjectArgsRefused("untrusted");
+	});
+
+	it("does not carry an unknown-trust project's args to the started child's argv", async () => {
+		await expectProjectArgsRefused("unknown");
+	});
 
 	it("carries a trusted project's args to the started child's argv", async () => {
 		const arranged = arrange("trusted", { args: ["--project-flag"] });
