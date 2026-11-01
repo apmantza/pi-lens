@@ -181,7 +181,8 @@ the cached graph, omitted when cold (this replaced the standalone
 `pilens_impact` tool). `view` selects an output preset, projection × format
 (`"summary-text"` default = metrics off, text; `"summary-json"`; `"full-text"`;
 `"full-json"` = every field, JSON) — the text cell is lossless against the
-JSON payload, so the default carries the same data at roughly half the byte
+JSON payload; the default leaves out `usedBy`, `fanout` and `complexity`, at
+roughly half the byte
 size. Tree-sitter extract + cached review-graph
 lookup; never builds the graph, never calls LSP on this path.
 `semantic.source` reports what backed the data (`review-graph` | `none`).

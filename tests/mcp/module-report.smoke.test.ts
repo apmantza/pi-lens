@@ -15,7 +15,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+	buildOrUpdateGraph,
+	flushReviewGraphPersistsForExitForTests,
+} from "../../clients/review-graph/builder.js";
+import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { McpHarness } from "./harness.js";
 import { createModuleReportTool } from "../../tools/module-report.js";
 
@@ -57,6 +62,104 @@ function makeTinyProject(prefix: string): string {
 	);
 	return dir;
 }
+
+// #5137 (verify r1 F3, F7): MCP keeps the graph-age advisory on the text cell,
+// and its maxRefsPerSymbol promotion reaches the MCP handler. The review graph is
+// seeded one hour in the past and persisted under a pinned data dir, so the server
+// process reads an old builtAt and a warm graph. Recurrence: the age line vanished
+// from the MCP text cell with no test to red it, and the MCP argument was dropped
+// with no MCP test to red it.
+describe("pilens_module_report on an old, warm review graph (#5137)", () => {
+	let projectDir: string;
+	let dataRoot: string;
+	let harness: McpHarness;
+	let previousDataDir: string | undefined;
+
+	beforeAll(async () => {
+		projectDir = makeTinyProject("pi-lens-modreport-age-");
+		dataRoot = mkdtempSync(path.join(tmpdir(), "pi-lens-modreport-age-data-"));
+		previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = dataRoot;
+		try {
+			vi.useFakeTimers({ toFake: ["Date"] });
+			vi.setSystemTime(Date.now() - 60 * 60_000);
+			await buildOrUpdateGraph(projectDir, [], new FactStore());
+			vi.useRealTimers();
+			flushReviewGraphPersistsForExitForTests();
+		} finally {
+			vi.useRealTimers();
+		}
+		harness = new McpHarness({
+			cwd: projectDir,
+			env: { PILENS_DATA_DIR: dataRoot },
+		});
+		await harness.request(1, "initialize", {
+			protocolVersion: "2025-06-18",
+			capabilities: {},
+			clientInfo: { name: "modreport-age", version: "0" },
+		});
+		harness.notify("notifications/initialized");
+	});
+
+	afterAll(() => {
+		harness.dispose();
+		if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+		else process.env.PILENS_DATA_DIR = previousDataDir;
+		for (const dir of [projectDir, dataRoot]) {
+			try {
+				rmSync(dir, {
+					recursive: true,
+					force: true,
+					maxRetries: 5,
+					retryDelay: 200,
+				});
+			} catch {
+				// OS reclaims the temp dir eventually.
+			}
+		}
+	});
+
+	it("appends the graph-age line to the default text cell", async () => {
+		const res = await harness.request(20, "tools/call", {
+			name: "pilens_module_report",
+			arguments: { file: path.join(projectDir, "a.ts") },
+		});
+		expect(textOf(res)).toContain(
+			"Review graph last updated 1h ago; run pilens_analyze",
+		);
+	}, 30_000);
+
+	// Recurrence: the MCP handler resolved the preset without `maxRefsPerSymbol`,
+	// so the promotion lived only on the pi tool and no MCP test reached it (verify
+	// r1 F7: dropping the MCP argument survived 205 tests). The cx: metric needs the
+	// warm graph seeded above; a cold cache prints no metric in either projection.
+	it("pilens_module_report maxRefsPerSymbol promotes to the full projection and keeps the format", async () => {
+		const file = path.join(projectDir, "a.ts");
+		const text = textOf(
+			await harness.request(21, "tools/call", {
+				name: "pilens_module_report",
+				arguments: { file, maxRefsPerSymbol: 3 },
+			}),
+		);
+		// The default format is text, and the promoted cell carries the cx: metric
+		// that the summary projection omits.
+		expect(text).toContain("API:");
+		expect(text).toContain("cx:");
+		const json = textOf(
+			await harness.request(22, "tools/call", {
+				name: "pilens_module_report",
+				arguments: { file, maxRefsPerSymbol: 3, view: "summary-json" },
+			}),
+		);
+		// The promotion keeps the requested JSON format and the full fields.
+		const parsed = JSON.parse(
+			json.slice(json.indexOf("{"), json.lastIndexOf("}") + 1),
+		) as { api: Array<{ complexity?: unknown }> };
+		expect(parsed.api.some((entry) => entry.complexity !== undefined)).toBe(
+			true,
+		);
+	}, 30_000);
+});
 
 describe("module_report + read_symbol over MCP (tiny project)", () => {
 	let projectDir: string;

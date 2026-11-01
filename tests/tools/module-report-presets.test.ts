@@ -33,6 +33,20 @@ const HUB_SOURCE = [
 	"}",
 ].join("\n");
 
+const WIDGET_SOURCE = [
+	"export class Widget {",
+	"  render(): number {",
+	"    return this.size() + 1;",
+	"  }",
+	"  size(): number {",
+	"    return 2;",
+	"  }",
+	"}",
+	"export function build(): Widget {",
+	"  return new Widget();",
+	"}",
+].join("\n");
+
 const CALLER_SOURCE = [
 	"import { hub } from './hub';",
 	"export function caller(): number {",
@@ -321,6 +335,44 @@ describe("module_report presets (#5137)", () => {
 			expect(text).toContain("unavailable");
 			expect(text).toContain("CALLBACKS:");
 			expect(text).toContain("setTimeout");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence: `stripEntryMetrics` stripped only the top-level entries, so a
+	// class's methods kept `cx:`, `fan:` and `used-by:` in the summary text. Leaving
+	// `entry.members` unstripped survived the whole suite (verify r1 F7).
+	it("summary-text shows no member metrics on a class's methods", async () => {
+		const env = setupTestEnvironment("pi-lens-preset-members-");
+		try {
+			createTempFile(env.tmpDir, "widget.ts", WIDGET_SOURCE);
+			await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const summary = await tool.execute(
+				"1",
+				{ path: "widget.ts" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			const full = await tool.execute(
+				"2",
+				{ path: "widget.ts", view: "full-text" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			const summaryText = String(summary.content[0]?.text);
+			// Controls: the methods render, and the full cell gives them metrics, so the
+			// summary's absence below is the projection, not a missing member.
+			expect(String(full.content[0]?.text)).toMatch(
+				/method\s+render\(\)\s+cx:\d+/,
+			);
+			expect(summaryText).toMatch(/method\s+render\(\)/);
+			expect(summaryText).not.toContain("used-by:");
+			expect(summaryText).not.toContain("cx:");
+			expect(summaryText).not.toContain("fan:");
 		} finally {
 			env.cleanup();
 		}

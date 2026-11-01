@@ -244,7 +244,8 @@ and `[]` mean no arguments.
   lossless against its JSON payload (metrics as a `cx:`/`fan:` suffix, each
   flag in its own bracket, `used-by:` continuation lines, plus
   `IMPORTS:`/`CALL GRAPH:`/`BLAST RADIUS:` blocks and a `PROVENANCE:` footer),
-  so the default text preset carries the same data at roughly half the byte
+  so the default text preset leaves out `usedBy`, `fanout` and `complexity`
+  and runs at roughly half the byte
   size of JSON. A `maxRefsPerSymbol` argument promotes the projection to
   `full` and keeps the format. Reports section-level `provenance`
   for syntax, cached-graph, and heuristic sections. Pass `blastRadius: true`

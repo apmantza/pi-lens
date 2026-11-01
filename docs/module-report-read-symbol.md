@@ -254,8 +254,9 @@ Both tools are also exposed via the pi-lens MCP server:
 - `pilens_read_symbol({file, symbol, kind?, cwd?})`
 
 The MCP wrappers return the same text or JSON payload the pi tools emit for
-the same preset — `pilens_module_report` default text is byte-identical to
-`module_report` default text — so an agent in Claude Code (or any MCP client)
+the same preset — `pilens_module_report` default text equals `module_report`
+default text except for the graph-age line MCP appends when the graph is over
+ten minutes old — so an agent in Claude Code (or any MCP client)
 gets the same navigable flow without needing to install the pi extension.
 `pilens_read_symbol`'s response no longer restates its own header line in a
 trailing JSON block — the header line already carries name/kind/path/range,
