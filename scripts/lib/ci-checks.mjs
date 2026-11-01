@@ -44,8 +44,8 @@ export function isUnitTestsShardJobName(name) {
 
 // How this repository ACTUALLY marks a check advisory: the workflow job name
 // ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
-// open PR -- `PR body (advisory)`, `Vale prose lint (advisory)`,
-// `OSV scan (advisory)`. Originally lived only
+// open PR -- `PR body (advisory)`, `Vale prose lint (advisory)` (a step of
+// `Lint (advisory)` since #5164), `OSV scan (advisory)`. Originally lived only
 // in the former merge lane; moved here in #2609 so ci-verdict.mjs (a second
 // consumer of the exact same policy) imports the ONE list instead of
 // hand-rolling its own -- AGENTS.md shape 38's own warning ("the cheapest
