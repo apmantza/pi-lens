@@ -464,8 +464,9 @@ operations (for example `lsp_navigation`). MCP-only registry names remain
 third-party names on pi and retain the bounded observation path. A provider's
 display-only replay (`isProviderReplayCall` in `clients/mutating-tool.ts`,
 keyed on the `cursor-replay-` id prefix) is neither armed for observation,
-classified from a learned name, nor checked by the read guard, built-in `edit`
-replays included, because the work ran before the replay arrived.
+classified from a learned name, diffed by the opaque net, nor checked by the
+read guard, built-in `edit` replays included, because the work ran before the
+replay arrived. Its write credit passes `advanceAuthorship: false`.
 
 The read guard keys all path state through its normalizer. It accepts Read,
 search, LSP, bridge, bash-view, and authored-write evidence, but name-only

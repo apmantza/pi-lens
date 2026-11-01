@@ -11,6 +11,9 @@ Cursor's write landing in a replay's window taught the net `cursor`, and every
 later replay was refused "Edit without read". The fix keys on the id prefix
 (`isProviderReplayCall`), which also skips the read guard for built-in `edit`
 replays. Two carve-outs now: a third triggers the fail-closed redesign.
+The replays' write credits were shape 65 instances too (#5162 r3): a replayed
+`edit` or `write` re-baselined an existing authorship over another writer's
+bytes, and a replayed `bash` credited a first one from its window's git diff.
 
 ## 2026-10-27 — factory-time read of a host value set later (shape 87)
 

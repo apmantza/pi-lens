@@ -1022,6 +1022,160 @@ describe("#5160 provider replays are display-only", () => {
 			env.cleanup();
 		}
 	});
+
+	// RECURRENCE GUARDED: #5162 r3 (Greptile PRRT_kwDORt8rec6ycYW4, shape 65).
+	// A replayed built-in edit or write skips the pre-write check, yet its
+	// tool_result credited authorship as a checked own write: an existing
+	// authorship was re-baselined over the current disk bytes, erasing the
+	// evidence that another writer had changed the file.
+	const writeEvent = (
+		filePath: string,
+		toolCallId: string,
+		content: string,
+	) => ({
+		toolName: "write",
+		toolCallId,
+		input: { path: filePath, content },
+	});
+	const lines3 = (a: string, b: string, c: string) =>
+		[`const a = ${a};`, `const b = ${b};`, `const c = ${c};`, ""].join("\n");
+	/** The agent's earlier write, then a call and result with `onDisk` landing between them. */
+	const afterAuthoredWrite = async (
+		prefix: string,
+		event: (filePath: string) => Record<string, unknown>,
+		onDisk: (filePath: string) => void,
+		before?: (filePath: string, session: Session) => void,
+	) => {
+		const env = setupTestEnvironment(prefix);
+		const filePath = path.join(env.tmpDir, "authored.ts");
+		fs.writeFileSync(filePath, SOURCE);
+		const session = newSession(env.tmpDir);
+		session.runtime.readGuard.recordWritten(filePath, {
+			stampFileTime: false,
+			toolCallId: "call-5160-authored",
+		});
+		before?.(filePath, session);
+		const call = event(filePath);
+		const verdict = await callOf(call, env, session);
+		onDisk(filePath);
+		await handleToolResult({
+			...toolResultDeps({
+				event: { ...call, content: [{ type: "text", text: "ok" }] },
+				runtime: session.runtime,
+				cacheManager: session.cacheManager,
+			}),
+			readGuard: session.runtime.readGuard,
+		});
+		const entry = (
+			session.runtime.readGuard.exportAuthorship().entries ?? []
+		).find((row) => row.filePath === filePath);
+		return { env, filePath, session, verdict, entry };
+	};
+
+	it("keeps another writer's change visible after a replayed built-in edit", async () => {
+		const run = await afterAuthoredWrite(
+			"pi-lens-5160-replay-edit-authorship-",
+			(filePath) => editEvent(filePath, "cursor-replay-7-1"),
+			// Another writer changed line 3; Cursor's own edit changed line 1.
+			(filePath) => fs.writeFileSync(filePath, lines3("2", "2", "333")),
+		);
+		try {
+			expect(run.verdict).toBeUndefined();
+			expect(run.entry?.retired).toBe(true);
+			const verdict = run.session.runtime.readGuard.checkEdit(
+				run.filePath,
+				[3, 3],
+			);
+			expect(verdict.action).toBe("block");
+			expect(verdict.reason).toContain("File modified since your write");
+		} finally {
+			run.env.cleanup();
+		}
+	});
+
+	it("keeps another writer's change visible after a replayed built-in write", async () => {
+		const run = await afterAuthoredWrite(
+			"pi-lens-5160-replay-write-authorship-",
+			(filePath) =>
+				writeEvent(filePath, "cursor-replay-7-2", lines3("2", "2", "3")),
+			// Cursor wrote its content, then another writer changed line 3.
+			(filePath) => fs.writeFileSync(filePath, lines3("2", "2", "333")),
+		);
+		try {
+			expect(run.verdict).toBeUndefined();
+			expect(run.entry?.retired).toBe(true);
+			expect(run.entry?.toolCallId).toBe("call-5160-authored");
+			expect(
+				run.session.runtime.readGuard.exportAuthorship().written,
+			).not.toContain(run.filePath);
+		} finally {
+			run.env.cleanup();
+		}
+	});
+
+	it("still advances authorship for a real built-in edit after a read", async () => {
+		// Control for the replay rule: a checked own edit re-baselines its
+		// authorship over the bytes it wrote. Recurrence: the flag applied to
+		// every built-in edit, retiring the agent's own authorship.
+		const run = await afterAuthoredWrite(
+			"pi-lens-5160-real-edit-authorship-",
+			(filePath) => editEvent(filePath, "call-5160-real-edit"),
+			(filePath) => fs.writeFileSync(filePath, lines3("2", "2", "3")),
+			(filePath, session) =>
+				session.runtime.readGuard.recordRead({
+					filePath,
+					requestedOffset: 1,
+					requestedLimit: 4,
+					effectiveOffset: 1,
+					effectiveLimit: 4,
+					expandedByLsp: false,
+					turnIndex: session.runtime.turnIndex,
+					writeIndex: 0,
+					timestamp: Date.now(),
+				}),
+		);
+		try {
+			expect(run.verdict).toBeUndefined();
+			expect(run.entry?.retired).toBeUndefined();
+			expect(run.entry?.toolCallId).toBe("call-5160-real-edit");
+		} finally {
+			run.env.cleanup();
+		}
+	});
+
+	it("gives a replay on a file with no authorship only a write's first credit", async () => {
+		// Shape 65's writer rule: a producer with no pre-write check may still
+		// create a first authorship (a write's whole file), never a first
+		// UNKNOWN one (an edit's). Recurrence: the replay rule refused first
+		// credits too, or let an edit replay create one.
+		const env = setupTestEnvironment("pi-lens-5160-replay-first-credit-");
+		try {
+			const session = newSession(env.tmpDir);
+			const edited = path.join(env.tmpDir, "edited.ts");
+			const written = path.join(env.tmpDir, "written.ts");
+			for (const [filePath, event] of [
+				[edited, editEvent(edited, "cursor-replay-8-1")],
+				[written, writeEvent(written, "cursor-replay-8-2", SOURCE)],
+			] as const) {
+				fs.writeFileSync(filePath, SOURCE);
+				expect(await callOf(event, env, session)).toBeUndefined();
+				await handleToolResult({
+					...toolResultDeps({
+						event: { ...event, content: [{ type: "text", text: "ok" }] },
+						runtime: session.runtime,
+						cacheManager: session.cacheManager,
+					}),
+					readGuard: session.runtime.readGuard,
+				});
+			}
+			const entries =
+				session.runtime.readGuard.exportAuthorship().entries ?? [];
+			expect(entries.map((row) => row.filePath)).toEqual([written]);
+			expect(entries[0]?.toolCallId).toBe("cursor-replay-8-2");
+		} finally {
+			env.cleanup();
+		}
+	});
 });
 
 describe("#2430 acceptance 2 — the SECOND call is classified without a snapshot", () => {

@@ -689,7 +689,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			: otherOpaqueTool && callId !== undefined
 				? ""
 				: undefined;
-	if (opaqueCommand !== undefined) {
+	// #5162 r3: a provider replay's work ran before its call, so a diff of its
+	// window is another writer's; its tool_result skips the recovery too.
+	if (opaqueCommand !== undefined && !isProviderReplayCall(event)) {
 		if (scanRoot && shouldRunOpaqueRecovery(toolName, scanRoot)) {
 			const started = Date.now();
 			// #2050: the trees this command's writes must be recovered from. The

@@ -470,6 +470,88 @@ describe("which calls pay for git status (#4732)", () => {
 		expect(hasPendingObservation(id)).toBe(false);
 	});
 
+	it("takes no opaque baseline for a provider replay, and recovers nothing at its result", async () => {
+		// RECURRENCE GUARDED: #5162 r3 (CodeRabbit PRRT_kwDORt8rec6ycahw). A
+		// `cursor-replay-` call is a card for work that ran before it arrived, so
+		// a change in its window is another writer's; the opaque net still diffed
+		// the session root around it and dispatched the change as the replay's.
+		// The near-miss id is pi-cursor-sdk's real bridged execution: still diffed.
+		const runtime = runtimeFor("5162-replay-opaque");
+		// The near-miss first, on the clean repository; a replay pays nothing
+		// whatever the tree holds.
+		for (const [toolCallId, spawns, analysed] of [
+			// Not a replay: the #2430 net observes it, and the opaque diff runs.
+			["cursor-pi-bridge-ab-t1", 2, ["cursor seed.ts"]],
+			["cursor-replay-9-1", 0, []],
+		] as const) {
+			spawned.argv.length = 0;
+			const event = {
+				toolName: "cursor",
+				toolCallId,
+				input: {
+					path: "seed.ts",
+					activityTitle: "Cursor edit",
+					activitySummary: "edited the file",
+				},
+			};
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(callDeps(runtime, event)),
+			);
+			const offset = await latencyOffset();
+			fs.writeFileSync(seed(), `export const seed = "${toolCallId}";\n`);
+			await handleToolResult(resultDeps(runtime, event));
+			expect(gitStatusSpawns(), toolCallId).toBe(spawns);
+			expect(await analysedSince(offset), toolCallId).toEqual(analysed);
+		}
+	});
+
+	it("credits no authorship to a replayed bash command's window, and still analyses what it names", async () => {
+		// RECURRENCE GUARDED: #5162 r3 sweep (shape 65). pi-cursor-sdk replays
+		// Cursor's shell as a pi `bash` card with a `cursor-replay-` id, after the
+		// command ran. The git recovery of its window saw another writer's bytes
+		// on the path the command names and credited them as the agent's own
+		// whole-file write.
+		const cases = [
+			// [id, Cursor ran it before the call, bytes landing in the window]
+			// pi-cursor-sdk's real bridged execution: the host runs it in the
+			// window. First, on the clean repository.
+			["cursor-pi-bridge-ab-t2", false, "export const x = 1;\n"],
+			["cursor-replay-b-1", true, "export const x = 'OTHER';\n"],
+		] as const;
+		const file = seed();
+		for (const [toolCallId, ranBefore, windowBytes] of cases) {
+			const runtime = runtimeFor(`5162-${toolCallId}`);
+			spawned.argv.length = 0;
+			const event = {
+				toolName: "bash",
+				toolCallId,
+				input: { command: "echo 'export const x = 1;' > seed.ts" },
+			};
+			if (ranBefore) fs.writeFileSync(file, "export const x = 1;\n");
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(callDeps(runtime, event)),
+			);
+			fs.writeFileSync(file, windowBytes);
+			const offset = await latencyOffset();
+			await handleToolResult({
+				...resultDeps(runtime, event),
+				readGuard: runtime.readGuard,
+			} as never);
+			const authored = (runtime.readGuard.exportAuthorship().entries ?? [])
+				.filter((entry) => entry.filePath === file)
+				.map((entry) => entry.toolCallId);
+			expect(authored, toolCallId).toEqual(ranBefore ? [] : [toolCallId]);
+			expect(gitStatusSpawns(), toolCallId).toBe(ranBefore ? 0 : 2);
+			expect(await analysedSince(offset), toolCallId).toEqual([
+				"write seed.ts",
+			]);
+			expect(
+				await phaseRowsSince(offset, "opaque_mutation_coverage_unknown"),
+				toolCallId,
+			).toEqual([]);
+		}
+	});
+
 	it("analyses an observed call's file when the result refuses its relative path", async () => {
 		// RECURRENCE GUARDED: #4737 r3 (Greptile PRRT_kwDORt8rec6vD_bg). With the
 		// read guard on, the result side refuses a relative path no attribution
