@@ -970,8 +970,8 @@ interface RepoFieldDecision {
 /**
  * #5147: the fields of `lsp.servers.<id>` a repo tier may set WITHOUT pi's
  * `trusted` answer. The gate admits this short list and refuses everything
- * else (AGENTS.md "Gates fail closed"): a field the table does not name, on
- * the type or only in the file, is refused and recorded. The mapped type
+ * else (shape 69): a field the table does not name, on the type or only in
+ * the file, is refused and recorded. The mapped type
  * refuses to compile until a new `CustomServerConfig` member is decided.
  *
  * The test for admission is "reaches no launch input": argv, environment,
