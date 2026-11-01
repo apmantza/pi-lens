@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getGlobalPiLensDir } from "../../clients/file-utils.js";
 import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import { flushLatencyLog } from "../../clients/latency-logger.js";
@@ -37,6 +37,7 @@ describe("sgconfig scratch bound", () => {
 	});
 
 	afterEach(() => {
+		vi.unstubAllEnvs();
 		for (const root of roots.splice(0)) removeTempDirSync(root);
 		_resetBaselineSgconfigForTests();
 		if (prevTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
@@ -70,6 +71,32 @@ describe("sgconfig scratch bound", () => {
 		expect(rows.length).toBeGreaterThan(0);
 		expect(Date.now() - startedAt).toBeLessThan(10_000);
 	}, 10_000);
+
+	// Recurrence (the scanner temp-root fold, refs #4907): the baseline scratch
+	// dir was joined onto a bare `os.tmpdir()`, so an ast-grep LSP spawn from a
+	// harness that owns a scanner root (`PI_LENS_TEST_SCANNER_TMPDIR`) left its
+	// config and merged rules outside the root the harness sweeps.
+	it("materializes the baseline under the scanner report root", () => {
+		_resetBaselineSgconfigForTests();
+		const scannerRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-sgcap-scanner-root-"),
+		);
+		const project = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-sgcap-proj-"),
+		);
+		roots.push(scannerRoot, project);
+		vi.stubEnv("PI_LENS_TEST_SCANNER_TMPDIR", scannerRoot);
+		const configPath = resolveBaselineSgconfig(project);
+		expect(configPath).toBeDefined();
+		const dir = path.join(scannerRoot, "pi-lens-ast-grep");
+		expect(path.dirname(configPath as string)).toBe(dir);
+		expect(
+			fs
+				.readdirSync(dir)
+				.filter((name) => name.endsWith(".rules"))
+				.map((name) => fs.statSync(path.join(dir, name)).isDirectory()),
+		).toEqual([true]);
+	});
 
 	it("evicts the oldest baselines first and keeps the newest", () => {
 		_resetBaselineSgconfigForTests();

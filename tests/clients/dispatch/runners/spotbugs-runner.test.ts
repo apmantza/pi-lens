@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment, useTrackedTempDirs } from "../../test-utils.js";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
@@ -70,6 +71,8 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 		);
 	});
 
+	afterEach(() => vi.unstubAllEnvs());
+
 	// The skip case never cleans the env this hook made, so drain every root
 	// here rather than relying on each test's own `finally`.
 	useTrackedTempDirs("pi-lens-spotbugs-");
@@ -123,6 +126,29 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 			await runner.run(ctx(env.tmpDir) as never);
 			expect(safeSpawnAsync).toHaveBeenCalledTimes(2);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (the scanner temp-root fold, refs #4907): the -output file was
+	// joined onto a bare `os.tmpdir()`, so a harness that owns a scanner root
+	// (`PI_LENS_TEST_SCANNER_TMPDIR`) and sweeps it never saw the XML a killed
+	// SpotBugs run stranded; every sibling scanner already asks
+	// `scannerReportParentDir()`.
+	it("writes the -output file under the scanner report root", async () => {
+		const scannerRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-spotbugs-root-"),
+		);
+		vi.stubEnv("PI_LENS_TEST_SCANNER_TMPDIR", scannerRoot);
+		try {
+			const res = await run(env.tmpDir);
+			expect(res.status).toBe("succeeded");
+			const args = safeSpawnAsync.mock.calls[0]?.[1] as string[];
+			const output = args[args.indexOf("-output") + 1];
+			expect(path.dirname(output)).toBe(scannerRoot);
+			expect(path.basename(output)).toMatch(/^pi-lens-spotbugs-.*\.xml$/);
+		} finally {
+			fs.rmSync(scannerRoot, { recursive: true, force: true });
 			env.cleanup();
 		}
 	});
