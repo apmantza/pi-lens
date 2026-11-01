@@ -2383,7 +2383,18 @@ describe("moduleReport — preset losslessness (#5137)", () => {
 				"api[].decorators": (t) =>
 					t.includes(`decorators: ${svc.decorators?.join(", ")}`),
 				"api[].members[].name": (t) => t.includes(runMember.name),
-				"api[].members[].kind": (t) => t.includes(" function "),
+				// Recurrence: #5158 Greptile. The old " function " check passed on the
+				// top-level `hub`, so dropping member kinds left it green. Check the
+				// selected member's own row: its range, its kind and its name together.
+				"api[].members[].kind": (t) =>
+					t
+						.split("\n")
+						.some(
+							(line) =>
+								line.includes(`${runMember.startLine}-${runMember.endLine}`) &&
+								line.includes(` ${runMember.kind} `) &&
+								line.includes(runMember.name),
+						),
 				"api[].members[].startLine": (t) =>
 					t.includes(`${runMember.startLine}-${runMember.endLine}`),
 				"api[].members[].endLine": (t) =>
