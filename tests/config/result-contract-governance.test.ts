@@ -143,7 +143,7 @@ describe("result contract across registered tool surfaces", () => {
 				lsp_navigation: { operation: "documentSymbol", path: "fixture.ts" },
 				lens_diagnostics: { source: "lsp", scope: "paths", paths: ["bad.ts"] },
 				symbol_search: { query: "fixture", paths: ["fixture.ts"] },
-				module_report: { path: "fixture.ts", view: "compact" },
+				module_report: { path: "fixture.ts" },
 				project_report: { view: "compact", limit: 1 },
 				read_symbol: {
 					path: path.join(cwd, "fixture.ts"),

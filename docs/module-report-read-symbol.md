@@ -24,7 +24,7 @@ work.
 
 ### `module_report(filePath, maxRefsPerSymbol?)`
 
-Returns a structured outline of one module as JSON. The shape:
+Returns a structured outline of one module (default `summary-text`; see the `view` preset below for the projection × format matrix). The `full-json` shape:
 
 ```json
 {
@@ -81,21 +81,32 @@ top three by `(usedBy × 2) + complexity + (exported ? 2 : 0)
 outline to decide where to look next; each entry carries `{reason, symbol,
 startLine, endLine}` (no path — always the same file as the report).
 
-`view: "compact"` renders the same data as a line-oriented TEXT view instead
-of JSON — one line per symbol/callback, roughly a quarter of the token cost:
+The `view` output preset is projection × format: `"summary-text"` (default) =
+metric fields off (no `usedBy`/`fanout`/`complexity` fields), text; `"summary-json"` =
+same fields, JSON; `"full-text"` = every field, text; `"full-json"` = every
+field, JSON. Every field appears in the text cell: `kind` prints raw, so it can
+be reused as `read_symbol`'s `kind` filter, and an unavailable module still
+renders its callbacks and recommended reads. Metrics
+who-uses-this as a `used-by:` continuation line:
 
 ```text
-clients/agent-nudge.ts jsts 266L — 8 symbols, 5 exported | imports: bus-publish, latency-logger
+clients/agent-nudge.ts jsts 266L [fresh] — 8 symbols, 5 exported, 2 imports (callbackSupport: generic)
 API:
-  77-81    fn  _resetAgentNudgeForTests()  — Test-only: clear accumulator state.
+  77-81    function  _resetAgentNudgeForTests()  [async]  — Test-only: clear accumulator state.
 INTERNAL:
-  95-104   fn  isValidPayload(data: unknown)
+  95-104   function  isValidPayload(data: unknown)  cx:2 fan:1
 CALLBACKS:
-  164-172  event_handler  events.on@164  [lifecycle]  (in wireAgentNudgeSubscriber)
+  164-172  event_handler             events.on@164  raw:function_expression  [lifecycle]  (in wireAgentNudgeSubscriber)
+IMPORTS:
+  external: bus-publish, latency-logger
+PROVENANCE: symbols=syntax imports=cached-review-graph usedBy=cached-review-graph callbacks=heuristic-tree-sitter semantic.source=review-graph semantic.references=true semantic.implementations=false graphBuiltAt=unknown
 ```
 
-Default view stays JSON; `compact` is opt-in.
-
+Default preset is `summary-text`; a `maxRefsPerSymbol` argument promotes the
+projection to `full` and keeps the format. `RECOMMENDED` reasons are ranked
+from unprojected entries, so they may still cite counts in prose (e.g.
+"used by 3") even under `summary-*` — the promise is field-token absence,
+not prose silence.
 ### `read_symbol(filePath, symbol, kind?)`
 
 Returns the verbatim body of one named symbol plus a one-line header
@@ -222,10 +233,12 @@ a wash — use `read` with a line range instead.
 symbols), the default JSON view dropped from measuring ~1,900 tokens
 (per-symbol `read` blocks + `flags: ["exported", ...]` duplicating the
 `exported` boolean + `recommendedReads` repeating `{path, offset, limit}`)
-to a schema with no repeated `read`/path noise; `view: "compact"` renders the
-same report as text at roughly half the byte size of the JSON view for that
-file.
-
+to a schema with no repeated `read`/path noise. **#5137 presets
+(2026-11-01):** `view` now names projection × format (`summary-text` /
+`summary-json` / `full-text` / `full-json`, default `summary-text`); the text
+cell mirrors its JSON payload field by field, with one declared exception (a
+member's own `exported` rides on its container's section), and lands at about
+60% of the JSON byte size on the measured file set.
 ## When *not* to use these
 
 - **Looking for a textual pattern across files** — use `grep` (tool in pi). `module_report` is per-file shape, not cross-file content.
@@ -240,16 +253,14 @@ Both tools are also exposed via the pi-lens MCP server:
 - `pilens_module_report({file, cwd?, maxRefsPerSymbol?, focus?, view?, blastRadius?, blastRadiusDepth?})`
 - `pilens_read_symbol({file, symbol, kind?, cwd?})`
 
-The MCP wrappers return the same JSON shape plus a one-line human summary, so
-an agent in Claude Code (or any MCP client) gets the same navigable flow
-without needing to install the pi extension. Both surfaces are compact
-(unindented) JSON by default (#512) — the payload is parsed by an agent, not
-read formatted; `view: "compact"` on `pilens_module_report` returns the
-line-oriented text rendering instead. `pilens_read_symbol`'s response no
-longer restates its own header line in a trailing JSON block — the header
-line already carries name/kind/path/range, so only `signature` (genuinely
-new) is folded into it.
-
+The MCP wrappers return the same text or JSON payload the pi tools emit for
+the same preset — `pilens_module_report` default text equals `module_report`
+default text except for the graph-age line MCP appends when the graph is over
+ten minutes old — so an agent in Claude Code (or any MCP client)
+gets the same navigable flow without needing to install the pi extension.
+`pilens_read_symbol`'s response no longer restates its own header line in a
+trailing JSON block — the header line already carries name/kind/path/range,
+so only `signature` (genuinely new) is folded into it.
 ## See also
 
 - `clients/module-report.ts` — implementation, single-mode rationale, per-tier degradation

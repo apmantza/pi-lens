@@ -464,7 +464,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/ipc.ts": 8,
 		"clients/mcp/review.ts": 8,
 		"clients/mcp/session.ts": 1,
-		"clients/module-report.ts": 27,
+		"clients/module-report.ts": 29,
+		// 27 -> 29 (#5137): the text renderer prints the report's own `error`
+		// field twice on one line, as the guard and as the message.
 		// 3 -> 5 (#4493): readGitHead and listGitHeadDelta read the spawn
 		// result's `error` field (SpawnResult.error), not a delivery tier.
 		"clients/opaque-mutation-scan.ts": 5,
@@ -1219,7 +1221,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/metrics-client.ts": 6,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
-		"clients/module-report.ts": 30,
+		// 30 -> 31 (#5137): the text header prints the report's own `path`.
+		"clients/module-report.ts": 31,
 		// 6 -> 9 (#3650): MutationLineResult.path field, the adapter-declared
 		// preference, and the readToolResultPathField return.
 		"clients/mutating-tool.ts": 9,
@@ -1495,7 +1498,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 31 -> 30 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 41 -> 38 (#5104): the rendered table replaces the inline rows and the JSON
 		// payload's per-hit `path.relative`; the renderer now owns that spelling.
-		"mcp/server.ts": 38,
+		// 38 -> 33 (#5137): the module_report handler stops building its own
+		// `path.relative` summary and delegates the rendering.
+		"mcp/server.ts": 33,
 		"index.ts": 20,
 		"clients/command-path.ts": 5,
 	},
@@ -1733,7 +1738,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/server.ts": 4,
 		"clients/mcp/analyze.ts": 9,
 		"clients/mcp/review.ts": 1,
-		"clients/module-report.ts": 6,
+		// 6 -> 9 (#5137): the text cell prints call-graph coverage `status` and
+		// the report's own staleness line.
+		"clients/module-report.ts": 9,
 		// 24 -> 26 (#4493): readGitHead and listGitHeadDelta read the spawn
 		// result's exit `status`, not a delivery status.
 		// 26 -> 27 (#4502): readGitStatusEntries checks the spawn result's exit
