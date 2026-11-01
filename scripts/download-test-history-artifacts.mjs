@@ -38,8 +38,11 @@ export const MAX_RUNS_PER_NIGHT = 100;
 export const SELECT_OVERLAP_MS = 60 * 60 * 1000;
 export const LIST_LOOKBACK_MS = 3 * 24 * 60 * 60 * 1000;
 export const METADATA_ONLY_MAX_BYTES = 1024;
-// #5154: GitHub answered HTTP 500 for listing pages 1 and 3 at 100 a page, and
-// 200 for pages 1 to 10 at 30.
+// #5154: the orchestrator's local `gh api -i` probe (comment 6559081169 on #5154)
+// saw HTTP 500 with an empty body for listing pages 1 and 3 at 100 a page, and
+// 200 for pages 1 to 10 at 30. The 500 is intermittent: a later probe got 200
+// for the same pages at 100 a page. The CI job printed only
+// `unexpected end of JSON input`, with no status.
 export const LIST_PAGE_SIZE = 30;
 // 1000 pages of 30 hold the 30000-artifact ceiling that 300 pages of 100 did.
 export const MAX_LIST_PAGES = 1000;

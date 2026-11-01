@@ -8,6 +8,7 @@ import {
 	METADATA_ONLY_MAX_BYTES,
 	SELECT_OVERLAP_MS,
 	type ListedArtifact,
+	downloadArtifacts,
 	listArtifacts,
 	selectArtifacts,
 } from "../../scripts/download-test-history-artifacts.mjs";
@@ -353,9 +354,11 @@ describe("download-test-history-artifacts process boundary", () => {
 		expect(fs.readFileSync(gh.zip, "utf8")).toBe("zip-bytes");
 	});
 
-	// Recurrence #5154 (run 41312503792): the listing's GET answered HTTP 500 with
-	// an empty body. `gh api --jq` reported that as `unexpected end of JSON
-	// input` and hid the status; without --jq gh prints `HTTP 500`, which retries.
+	// Recurrence #5154 (run 41312503792): CI printed only `unexpected end of JSON
+	// input` for the listing, with no status. The orchestrator's probe (comment
+	// 6559081169 on #5154) saw an empty HTTP 500 on this listing, intermittently.
+	// Without --jq gh is expected to print the status, `HTTP 500`, which retries;
+	// no live 5xx was observed to confirm the stderr text.
 	it("retries a listing that fails with HTTP 500 and succeeds on the second attempt", () => {
 		const gh = fakeGh("listing500");
 		expect(gh.run()).toContain(
@@ -374,9 +377,10 @@ describe("download-test-history-artifacts process boundary", () => {
 		expect(gh.listingCalls()).toBe(4);
 	});
 
-	// Recurrence #5154: at per_page=100 GitHub answered HTTP 500 for listing
-	// pages 1 and 3, while per_page=30 answered 200 for pages 1 to 10. The argv
-	// pins the page size and the absence of --jq (the script parses the JSON).
+	// Recurrence #5154: the orchestrator's probe (comment 6559081169 on #5154)
+	// saw HTTP 500 for listing pages 1 and 3 at per_page=100, and 200 for pages
+	// 1 to 10 at per_page=30. The argv pins the page size and the absence of
+	// --jq (the script parses the JSON).
 	it("pages the artifact listing at per_page=30 with no --jq", () => {
 		const gh = fakeGh("transient");
 		gh.run();
@@ -411,5 +415,61 @@ describe("download-test-history-artifacts process boundary", () => {
 		gh.run();
 		expect(gh.zips()).toBe(1);
 		expect(fs.statSync(gh.zip).size).toBe(LARGE_ZIP_BYTES);
+	});
+});
+
+// Recurrence #5154 review F3: the listing maps `workflow_run?.id ?? null`. Without
+// the fallback, one artifact with a null workflow_run throws inside the map and
+// fails the whole night's listing. The CLI prints counts only, so the run key is
+// read from the in-process selection: the map yields null and selectArtifacts
+// groups it by String(null), the run "null".
+describe("listing run keys (#5154 review F3)", () => {
+	it("keys an artifact with no workflow_run under run null", () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-history-null-run-"),
+		);
+		roots.push(root);
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin);
+		const createdAt = new Date().toISOString();
+		const entry = (id: number, workflowRun: { id: number } | null) => ({
+			id,
+			name: "unit-test-results-linux",
+			size_in_bytes: 300_000,
+			created_at: createdAt,
+			expired: false,
+			workflow_run: workflowRun,
+		});
+		const listed = JSON.stringify({
+			total_count: 2,
+			artifacts: [entry(201, { id: 7 }), entry(202, null)],
+		});
+		fs.writeFileSync(
+			path.join(bin, "gh"),
+			`#!/bin/sh
+case "$*" in
+  *actions/artifacts\\?per_page=30\\&page=1*) printf '%s\\n' '${listed}' ;;
+  *actions/artifacts\\?per_page=30\\&page=*) printf '%s\\n' '{"total_count":2,"artifacts":[]}' ;;
+  */zip) printf 'zip-bytes' ;;
+esac
+`,
+		);
+		fs.chmodSync(path.join(bin, "gh"), 0o755);
+		const priorPath = process.env.PATH ?? "";
+		process.env.PATH = `${bin}${path.delimiter}${priorPath}`;
+		try {
+			const selection = downloadArtifacts({
+				repository: "o/r",
+				outputDir: path.join(root, "artifacts"),
+			});
+			expect(selection.runs.map((run) => run.runId).sort()).toEqual([
+				"7",
+				"null",
+			]);
+			const nullRun = selection.runs.find((run) => run.runId === "null");
+			expect(nullRun?.artifacts.map((artifact) => artifact.id)).toEqual([202]);
+		} finally {
+			process.env.PATH = priorPath;
+		}
 	});
 });
