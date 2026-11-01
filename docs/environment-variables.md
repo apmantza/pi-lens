@@ -260,6 +260,16 @@ Explicit path to a Lombok jar for the Java language server, used when
 auto-resolution does not find one. The legacy `LOMBOK_JAR` variable is also
 honored.
 
+### `GROOVY_LANGUAGE_SERVER_JAR`
+
+Path to the `groovy-language-server-all.jar` the built-in Groovy row runs as
+`java -jar <jar>`, when no `groovy-language-server` launcher is on `PATH`.
+groovy-language-server publishes no release: build it with `./gradlew build` in
+a checkout of GroovyLanguageServer/groovy-language-server and point this at
+`build/libs/groovy-language-server-all.jar`. Java 17 or newer is found the same
+way the Java language server finds it. A path that is not a file reads as not
+installed, and the session start log says so.
+
 ## Project map
 
 ### `PI_LENS_MAP_MAX_NODES`

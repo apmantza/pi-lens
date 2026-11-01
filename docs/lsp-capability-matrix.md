@@ -130,6 +130,7 @@ belonged to another live client of the same server id became `typescript`'s
 | **2\* — push, publishes-unversioned** | re-publishes on a clean scan but **version-less** — the wait still early-returns (the client accepts a version-less publish as fresh: it can't be proven stale), but currency is only *temporally correlated*, not proven. Since #3484 the client fences a server measured to answer a `documentSymbol` fence before it publishes (`diagnosticsFence: "reply-first"`: yaml, intelephense): a pre-edit publish is dropped until the fence's reply. Every other 2\* server (docker publishes before answering; prisma, taplo, zls, dart, gleam, clojure unmarked) keeps this behaviour | YES at runtime, with a staleness-risk caveat (not a latency cost) | opengrep |
 | **3 — push, silent on clean** | server publishes nothing when nothing changed | **NO** — budget-wait floor (safe; a timeout is *not* a false clean). **This tier is #458's learned-deadline target set.** | typescript-language-server |
 | **Unconfirmed — custom, no evidence** | custom `lsp.servers.*` entry has no pull provider and has not published in this session | **NO** — diagnostics are unconfirmed (reported `inconclusive`, never `unsupported`); skip the wait until the server publishes | Dexter, groovy-language-server |
+| **Unmarked push — built-in, unmeasured** | built-in push-only row with no `silentOnClean` marker and no measured row | **NO** — the full push budget runs on every touch; a timeout with no publish is `inconclusive`, never clean | groovy-language-server (built-in `groovy` row) |
 
 Detection is **cached** at `initialize` (`detectWorkspaceDiagnosticsSupport` →
 `state.workspaceDiagnosticsSupport.mode`, upgraded on `client/registerCapability`),
@@ -148,6 +149,25 @@ only for files with errors (groovy-language-server sends nothing for a file that
 compiles) therefore reads unconfirmed on clean files, and its findings arrive as
 soon as it publishes them. A publish that lands while the first-contact wait is
 still in flight prevents the latch.
+
+The built-in `groovy` row (#5123) takes the other branch. It has no
+`silentOnClean` marker, because nothing has measured the real server (it
+publishes no release, so no nightly job can install it), and the marker would
+make a quiet touch count as clean. It therefore pays the full push budget on
+every touch of a file it stays silent for, and that file reads `inconclusive`
+by the timeout, where a custom entry skips the wait after its first-contact
+latch. Two of the custom behaviours are declared on the row instead of read
+from `custom`: `echoesOwnNotice: true` holds the empty publish the server
+sends after pi-lens's own first-open watched-files notice (#5131), so an
+`unable to resolve class` error is not erased 5 ms after it is published. The
+row's hand-added line in the matrix below stays `unknown` until a run observes
+the server. It launches a `groovy-language-server` on PATH, else
+`java -jar $GROOVY_LANGUAGE_SERVER_JAR`, on a JDK 17+ found the way jdtls finds
+one; `.groovy`, `.gvy`, `.gy` and `.gsh` only (add `.gradle` or `Jenkinsfile`
+through `lsp.servers` if the build classpath is worth the unresolved-class
+noise). The row has no file kind, so only the explicit probes reach it
+(`lens_diagnostics` with `source: "lsp"`, `lsp_navigation`), not the write-time
+dispatch.
 
 The first-contact budget on the per-edit path is the strategy's
 `aggregateWaitMs` (1500 ms). It is a cost, not a verdict: the latch is
@@ -251,6 +271,7 @@ carries the named admission until then.
 | php | intelephense | push-only | publishes-unversioned | empty-first | 2* | dev+ci | — | — | — |
 | zig | zls | push-only | publishes-unversioned | direct | 2* | dev+ci | — | — | — |
 | vue | @vue/language-server | push-only | unknown | unknown | 2/3? | dev+ci | — | — | — |
+| groovy | groovy-language-server (built-in, no fixture) | push-only | unknown | unknown | 3? | — | — | — | — |
 | dart | dart language-server | push-only | publishes-unversioned | direct | 2* | ci | — | — | — |
 | gleam | gleam lsp | push-only | publishes-unversioned | direct | 2* | ci | — | — | — |
 | clojure | clojure-lsp | push-only | publishes-unversioned | direct | 2* | ci | — | — | — |

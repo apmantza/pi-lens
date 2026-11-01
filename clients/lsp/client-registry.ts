@@ -1539,8 +1539,10 @@ export class ClientRegistry {
 				// #4764: the declared role travels with the client, so a failed server
 				// config can gate an auxiliary scanner's empty publications only.
 				role: server.role,
-				// #5131 round 2: the config-declared flag gates the echo hold.
+				// #5131 round 2: the config-declared flag gates the echo hold; a
+				// built-in row with the same behaviour declares `echoesOwnNotice`.
 				custom: server.custom,
+				echoesOwnNotice: server.echoesOwnNotice,
 				onDiagnosticsPublished: (serverId) => {
 					this.hooks.noteDiagnosticsPublished(serverId);
 				},

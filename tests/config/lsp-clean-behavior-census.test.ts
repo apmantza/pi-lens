@@ -61,6 +61,10 @@ const MATRIX_PATH = path.join(repoRoot, "docs", "lsp-capability-matrix.md");
  */
 const UNMEASURED_PUSH_ADMISSIONS = new Map<string, string>([
 	[
+		"groovy",
+		"groovy-language-server publishes no release, so no nightly fixture can install it (#5123); the row is hand-added and its `unknown` cell stays until a run observes the server itself",
+	],
+	[
 		"vue",
 		"@vue/language-server: the `publishes-unversioned` cell was an artifact of #3390 (58/45 publishes attributed to vue were tinymist's); nightly 36046209160 re-measured 0/0 with the sink scoped, so the cell is `unknown` until a run observes vue itself publish",
 	],

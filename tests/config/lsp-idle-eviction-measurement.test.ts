@@ -43,6 +43,8 @@ const DOC = "docs/lsp-idle-eviction.md";
 // fixture. The row reads `unavailable (no-fixture)` until then. Shrink-only: a
 // fixture that starts routing to a server makes its admission stale and red.
 const NO_FIXTURE_ADMISSIONS: Record<string, string> = {
+	groovy:
+		"groovy-language-server publishes no release, so no nightly job can install it; #5123 covers the row through a PATH-shim fake server only",
 	omnisharp:
 		"csharp fallback with no smoke fixture yet; lane C (#3311) adds it and removes this row",
 };
