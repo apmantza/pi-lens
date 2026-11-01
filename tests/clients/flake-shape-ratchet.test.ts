@@ -7,8 +7,9 @@
  * runs seven detectors over every `tests/**\/*.test.ts` file —
  *
  * 1. `real-process-spawn` — a real child process (`child_process` import,
- *    `execFileSync`/`spawnSync`/`execSync`, a support spawn-helper call, or a
- *    spawn whose argv mentions `vitest`).
+ *    `execFileSync`/`spawnSync`/`execSync`, a support spawn-helper call, a
+ *    spawning kit helper in a file that names its kit (#3801), or a spawn
+ *    whose argv mentions `vitest`).
  * 2. `elapsed-time-assertion` — a DELTA of two clock reads flowing into a
  *    numeric matcher (`toBeLessThan`/`toBeGreaterThan`/…).
  * 3. `raw-timer-wait` — a raw `setTimeout`/`setInterval` wait outside a
@@ -340,7 +341,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4476): the same fake auxiliary, seen from the role lookup
 	// the registry's dependency restart asks; getServerById knows only the
 	// built-in catalog, so the auxiliary added above answers there too.
-	"in-process-mock:clients/head-move-resync-4493.test.ts::clients/lsp/server": {
+	"in-process-mock:clients/head-move-resync-4476.test.ts::clients/lsp/server": {
 		detector: "in-process-mock",
 		reason:
 			"getServerById reads only the built-in catalog, so the auxiliary fake the config lookup adds is answered there too; the restart then keeps it, and every server is still a real child process",
@@ -700,7 +701,20 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real git children decide tracked-versus-ignored files from index state no stub reproduces",
 	},
+	// #3801 (review F2): split out of head-move-resync-4493; its spawns run through the kit.
+	"real-process-spawn:clients/head-move-resync-4476.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a clean-tree HEAD move only exists in a real repository that git checks out, rebases or resets; a stubbed git cannot rewrite the files the server holds",
+	},
+	// #3801 (review F2): the head-move driver's real git, now read through the kit.
 	"real-process-spawn:clients/head-move-resync-4493.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a clean-tree HEAD move only exists in a real repository that git checks out, rebases or resets; a stubbed git cannot rewrite the files the server holds",
+	},
+	// #3801 (review F2): split out of head-move-resync-4493; its spawns run through the kit.
+	"real-process-spawn:clients/head-move-resync-4507.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"a clean-tree HEAD move only exists in a real repository that git checks out, rebases or resets; a stubbed git cannot rewrite the files the server holds",
@@ -1164,9 +1178,19 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"gitignore/tracked-vs-untracked resolution is the mechanism under test; no mock reproduces git's own resolution faithfully",
 	},
-	// #4047: the CLI's verdict and exit code are what a delegated lane acts on;
-	// they come from parsing the real selector, red-on-base and vitest
-	// transcripts over a real Git fixture, which an in-process stub restates.
+	// #3801 (review F2): split out of lane-check.test.ts; the CLI runs through the kit.
+	"real-process-spawn:scripts/lane-check-lock.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's verdict and exit code are parsed from the real selector, red-on-base and vitest transcripts over a real Git fixture; an in-process stub restates the transcript instead of proving the parse",
+	},
+	// #3801 (review F2): split out of lane-check.test.ts; the CLI runs through the kit.
+	"real-process-spawn:scripts/lane-check-secondary.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's verdict and exit code are parsed from the real selector, red-on-base and vitest transcripts over a real Git fixture; an in-process stub restates the transcript instead of proving the parse",
+	},
+	// #4047: the CLI's verdict and exit code, read through the lane-check kit (#3801 F2).
 	"real-process-spawn:scripts/lane-check.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1256,6 +1280,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the real hook pipes git through xargs into the pinned oxfmt; the exit-123 refusal and handoff refusal are process-boundary facts",
+	},
+	// #3801: the lock-admission cases split out of pre-push-targeted-tests.test.ts;
+	// the same real hook chain (`.husky/pre-push` -> selector -> lock wrapper).
+	"real-process-spawn:scripts/pre-push-lock-admission.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the cases drive the real pre-push hook chain over a git fixture and read its exit status and the lock wrapper's timeout line; an in-process call cannot see either",
 	},
 	"real-process-spawn:scripts/pre-push-targeted-tests.test.ts": {
 		detector: "real-process-spawn",
@@ -1472,7 +1503,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-16 (#4528 r1 F3): the spawn-gate window of a dependency restart
 	// exists only between real server processes, and the tool_call hook bounds
 	// its look, so the restart finishes after the hook returns.
-	"ungoverned-wait-for:clients/head-move-resync-4493.test.ts": {
+	"ungoverned-wait-for:clients/head-move-resync-4476.test.ts": {
 		detector: "ungoverned-wait-for",
 		reason:
 			"the restart's spawn-gate window is between real server processes: one server's shutdown, the cache clock, and a restart that ends after the bounded tool_call hook returns expose no awaitable, so vi.waitFor joins them",
@@ -2521,6 +2552,101 @@ describe("flake-shape scan — real-process-spawn", () => {
 			"await safeSpawnAsync(command, args);",
 		].join("\n");
 		expect(scanRealProcessSpawn("fixture.test.ts", source)).toHaveLength(1);
+	});
+});
+
+describe("flake-shape scan — real-process-spawn, kit helpers (#3801 F2)", () => {
+	// Recurrence (#3801 review F2): the lane-check and head-move cuts moved their
+	// real `runLane` / `runGit` / `makeRepo` spawns into tests/support kits. The
+	// detector read none of them, so six files lost their admission and baseline
+	// row with no red. The kit names are generic (`git`, `makeRepo` are local
+	// helpers in other files), so a call counts only in a file that names its kit.
+
+	it("ATTACK kit call: a named kit import and each kit call are real-spawn hits", () => {
+		const source = [
+			'import { runLane } from "../support/lane-check-kit.js";',
+			"",
+			'it("runs the lane-check CLI", () => {',
+			'\trunLane(lane, {}, ["--json"]);',
+			"});",
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.reason),
+		).toEqual([
+			"lane-check-kit import (its helpers spawn real children)",
+			"runLane( kit spawn helper (lane-check-kit)",
+		]);
+	});
+
+	it("ATTACK aliased kit import: the alias is still a hit on the import line", () => {
+		const source = [
+			'import { runLane as run } from "../support/lane-check-kit.js";',
+			'it("aliases the helper", () => {',
+			"\trun(lane);",
+			"});",
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.reason),
+		).toEqual(["lane-check-kit import (its helpers spawn real children)"]);
+	});
+
+	it("ATTACK dynamic import: a kit reached only through import() is a hit", () => {
+		const source = [
+			'it("loads the kit late", async () => {',
+			'\tconst kit = await import("../support/head-move-resync-kit.js");',
+			"\tawait kit.makeRepo({}, {});",
+			"});",
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.reason),
+		).toEqual([
+			"head-move-resync-kit import (its helpers spawn real children)",
+			"makeRepo( kit spawn helper (head-move-resync-kit)",
+		]);
+	});
+
+	it("ATTACK barrel: a helper imported by name from another module names its kit", () => {
+		const source = [
+			'import { runLane } from "../support/lane-check-barrel.js";',
+			'it("reaches the kit through a barrel", () => {',
+			"\trunLane(lane);",
+			"});",
+		].join("\n");
+		expect(
+			scanRealProcessSpawn("fixture.test.ts", source).map((h) => h.reason),
+		).toEqual([
+			"lane-check-kit import (its helpers spawn real children)",
+			"runLane( kit spawn helper (lane-check-kit)",
+		]);
+	});
+
+	it("keeps a same-named local helper uncounted in a file that names no kit", () => {
+		const source = [
+			"const git = (dir: string, ...args: string[]) => dir + args.join(' ');",
+			'it("uses a local helper", () => {',
+			'\texpect(git("repo", "status")).toContain("status");',
+			"});",
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
+	});
+
+	it("a dynamically imported kit whose module is mocked gets no kit hits", () => {
+		const source = [
+			'vi.mock("../support/head-move-resync-kit.js", () => ({ makeRepo: async () => ({}) }));',
+			'it("uses the fake", async () => {',
+			'\tconst kit = await import("../support/head-move-resync-kit.js");',
+			"\tawait kit.makeRepo({}, {});",
+			"});",
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
+	});
+
+	it("names no kit from a string key that only mentions its path", () => {
+		const source = [
+			'const KEYS = { "tests/support/lane-check-kit.ts#runLane:f2fe9f48#PATH": "spread-override" };',
+			'it("keys", () => { expect(Object.keys(KEYS)).toHaveLength(1); });',
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
 	});
 });
 

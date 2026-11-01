@@ -127,7 +127,6 @@ function deps(signal: AbortSignal) {
 		cacheManager: new CacheManager(false),
 		ensureLSPConfigInitialized: async () => {},
 		updateLspStatus: () => {},
-		resetLSPService: () => {},
 	} as unknown as Parameters<typeof handleToolCall>[0];
 }
 

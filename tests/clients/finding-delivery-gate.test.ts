@@ -464,7 +464,13 @@ const SINK_FILES: Record<string, Classification> = {
 			"session notices that background scans were skipped or limited; no finding rows",
 	},
 	"clients/runtime-tool-result.ts": {
-		delivers: ["tool-call:stop-blocker", "agent-behavior:thrashing-notice"],
+		// #5120: a partial apply's preflight verdict reaches the agent on the
+		// host edit's own result, wrapped here.
+		delivers: [
+			"tool-call:stop-blocker",
+			"agent-behavior:thrashing-notice",
+			"read-guard-tool-lines:preflight-errors",
+		],
 	},
 	"tools/activate-tools.ts": {
 		noFindings: "confirms which situational tools were activated",

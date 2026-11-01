@@ -2887,8 +2887,9 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 	});
 
 	/**
-	 * An oldText batch whose second edit does not resolve: pi-lens applies the
-	 * first itself and refuses the batch (#2402's partial apply).
+	 * An oldText batch whose second edit does not resolve (#2402's partial
+	 * apply): tool_call rewrites it to the first edit (#5120), the host applies
+	 * the executed input, and the edit's tool_result reports the partial apply.
 	 */
 	const partialApply = async (
 		runtime: RuntimeCoordinator,
@@ -2897,7 +2898,10 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 		newText: string,
 	) => {
 		const toolCallId = `partial-${++seq}`;
-		const input = {
+		const input: {
+			path: string;
+			edits: Array<{ oldText: string; newText: string }>;
+		} = {
 			path: file,
 			edits: [
 				{ oldText, newText },
@@ -2909,8 +2913,19 @@ describe("#3525: FileTime moves only over bytes the conversation accounts for", 
 				callDeps(runtime, { toolName: "edit", toolCallId, input }),
 			),
 		)) as { block?: boolean; reason?: string } | undefined;
-		expect(verdict?.reason).toContain("PARTIAL APPLY — 1 edit committed");
-		expect(verdict?.reason).not.toContain("Post-edit analysis failed");
+		expect(verdict).toBeUndefined();
+		let text = fs.readFileSync(file, "utf8");
+		for (const edit of input.edits)
+			text = text.replace(edit.oldText, edit.newText);
+		writeNow(file, text);
+		const result = await handleToolResult(
+			resultDeps(runtime, { toolName: "edit", toolCallId, input, content: [] }),
+		);
+		const reported = (result?.content ?? [])
+			.map((part) => part.text)
+			.join("\n");
+		expect(reported).toContain("PARTIAL APPLY — 1 edit committed");
+		expect(reported).not.toContain("Post-edit analysis failed");
 	};
 
 	// #3785 review r1 F2: the partial apply reached tool_result with no

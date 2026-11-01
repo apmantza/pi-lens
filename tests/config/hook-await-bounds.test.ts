@@ -1246,16 +1246,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:22725cc2~723fd306": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:3f848c4d~b3c7028c": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
@@ -1307,27 +1297,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:ce0d3f2f~51275360": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~eab210c1": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:e7b5efbb~e9eba0d8": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1438,6 +1408,16 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"dispatch consumes, and each leaf bounds itself (`git status` 5s, the stat " +
 			"walk's own budget), so the aggregate is the dispatch's work, not a wait.",
 		owner: "#2050",
+	},
+	"clients/runtime-tool-result.ts#handleToolResult:e3ea8f2d~5f4c11fd": {
+		family: "hook-await",
+		site: "tool_result_edit",
+		reason:
+			"#5120: the partial-apply entry re-enters `handleToolResult` once " +
+			"with the pending record taken, so the awaited body is this same " +
+			"edit `tool_result` body under the same 10000ms edit budget; the " +
+			"re-entry carries `_partialApply`, so it cannot recurse again.",
+		owner: "#5120",
 	},
 	"clients/runtime-tool-result.ts#lookAtHead:6c9224dd~45cd3f56": {
 		family: "hook-await",
@@ -2408,7 +2388,6 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// already awaits without a bound (#2523 slice 2's row for
 	// `applyConservativeActionableWarningFixes`); no hook signal reaches it.
 	"clients/file-mutation-queue.ts": 1,
-	"clients/file-time.ts": 1,
 	// #1129: +4 — `sweepDeadEphemeralDataDirs` awaits the bounded directory
 	// read (opendir, read, close) and each dead-pid removal. session_start
 	// fires it with `void` and never awaits it, so no hook waits on these.
@@ -2659,7 +2638,6 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// would bound them here.
 	"clients/out-of-band-changes.ts": 12,
 	"clients/package-manager.ts": 8,
-	"clients/partial-edit-apply.ts": 2,
 	// #4689 batch 10: 0 -> 1. `realpathOrResolveAsync` awaits the kernel
 	// `realpath` of the step the identity walk is on, the async form of the seam
 	// the host mutation queue and the LSP workspace-edit preflight now need.
