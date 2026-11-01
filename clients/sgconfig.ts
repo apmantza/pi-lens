@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { load as loadYaml } from "./deps/js-yaml.js";
@@ -11,6 +10,7 @@ import {
 	ruleCorpusFingerprintForCycle,
 	_resetRuleCorpusCycleFingerprintsForTests,
 } from "./custom-rule-locations.js";
+import { scannerReportParentDir } from "./scanner-temp-root.js";
 
 // ast-grep's root config marker. The `ast-grep lsp` server is workspace-gated:
 // it only operates in a project that has an `sgconfig.y[a]ml` at (or above) the
@@ -348,7 +348,7 @@ export function resolveBaselineSgconfig(
 	const sources = getAstGrepRuleSources(root).map(snapshotRuleSource);
 	if (sources.length === 0) return undefined;
 
-	const dir = path.join(os.tmpdir(), "pi-lens-ast-grep");
+	const dir = path.join(scannerReportParentDir(), "pi-lens-ast-grep");
 	fs.mkdirSync(dir, { recursive: true });
 	const artifactKey = rootArtifactKey(root);
 	const file = path.join(

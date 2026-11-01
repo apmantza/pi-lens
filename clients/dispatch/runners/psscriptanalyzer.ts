@@ -1,8 +1,8 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
 import { safeSpawnAsync, type SpawnResult } from "../../safe-spawn.js";
+import { scannerReportParentDir } from "../../scanner-temp-root.js";
 import { probeToolAsync } from "../../tool-probe.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import type {
@@ -366,7 +366,10 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 		const absPath = path.resolve(cwd, ctx.filePath);
 
 		// Write script to temp file so we avoid cmd.exe quoting entirely
-		const tmpScript = path.join(os.tmpdir(), `pi-lens-psa-${process.pid}.ps1`);
+		const tmpScript = path.join(
+			scannerReportParentDir(),
+			`pi-lens-psa-${process.pid}.ps1`,
+		);
 		await fs.writeFile(tmpScript, PS_SCRIPT, "utf-8");
 
 		try {
