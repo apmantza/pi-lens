@@ -460,7 +460,11 @@ Tier-4 mutation attribution is only for third-party tool names. Names in
 `clients/tool-config.ts`'s `PI_LENS_TOOL_NAMES` projection are never learned or
 observed as generic edits, because one pi-lens tool may mix write and read-only
 operations (for example `lsp_navigation`). MCP-only registry names remain
-third-party names on pi and retain the bounded observation path.
+third-party names on pi and retain the bounded observation path. A provider's
+display-only replay (`isProviderReplayCall` in `clients/mutating-tool.ts`,
+keyed on the `cursor-replay-` id prefix) is neither armed for observation nor
+classified from a learned name, because the work ran before the replay arrived
+(#5160).
 
 The read guard keys all path state through its normalizer. It accepts Read,
 search, LSP, bridge, bash-view, and authored-write evidence, but name-only
