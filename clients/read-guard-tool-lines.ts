@@ -39,8 +39,8 @@ export interface GuardLineResult {
 	 */
 	preflightDetails?: string[];
 	// Edits that resolved successfully when only a subset failed preflight.
-	// Caller can apply these directly and return a ⚠️ PARTIAL APPLY message.
-	// Shares the host-pinned edit shape with applyPartiallyApplicableEdits.
+	// The caller rewrites the call to these for the host edit to write, and
+	// its tool_result returns a ⚠️ PARTIAL APPLY message (#5120).
 	partiallyApplicable?: PartiallyApplicableEdit[];
 	/** Edits recognized as exact retries of already-applied pairs (#2402). */
 	alreadyAppliedEdits?: number[];
@@ -204,8 +204,8 @@ export function countFileLines(filePath: string): number {
 // the Tier A/B/C fallbacks in tryCorrectIndentationMismatchFromContent are
 // even reached. Comparison-only, same as every tier below it — the bytes
 // actually written on a successful edit are always the caller's original
-// oldText/newText (see resolveOldTextEdits / applyPartiallyApplicableEdits),
-// never this normalized form.
+// oldText/newText, or the exact file span a partial apply hands the host edit
+// (resolveOldTextEdits), never this normalized form.
 function normalizeContent(text: string): string {
 	return normalizeForGuardMatch(text);
 }
@@ -439,10 +439,8 @@ function resolveOldTextEdits(
 
 	const rawContentLf = normalizeToLF(rawContent);
 	const content = normalizeContent(rawContent);
-	// #1053: the identity the spans below are resolved against. The apply step
-	// re-reads the file and rejects the whole batch when this no longer holds,
-	// so spans are never re-interpreted against changed bytes. The hash covers
-	// byte identity; spans carry their own bounds checks.
+	// The identity the spans below are resolved against, which exact-retry
+	// recognition compares with an applied record's hash (#2402).
 	const snapshot: EditSnapshotIdentity = {
 		hash: createHash("sha256").update(rawBytes).digest("hex"),
 	};
@@ -655,15 +653,13 @@ function resolveOldTextEdits(
 				needle,
 			);
 			if (applySpan !== undefined) {
-				// #1053: carry the exact span the preflight approved, plus the
-				// snapshot identity it was resolved against. The apply step
-				// consumes these instead of re-searching oldText.
+				// #1053: carry the exact span the preflight approved. A partial
+				// apply hands its text to the host edit as the oldText (#5120).
 				candidateEdits.push({
 					oldText,
 					appliedSpanText: applySpan.text,
 					newText: edits[i].newText,
 					originalIndex: editIndex,
-					snapshot,
 					spanStart: applySpan.start,
 					spanEnd: applySpan.end,
 				});

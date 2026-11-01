@@ -184,6 +184,8 @@ const COORDINATOR_FIELDS: Readonly<Record<string, "reset" | string>> = {
 		"kept: a monotonic token source; restarting it would let an old settle's token match a new one",
 	_owedAnchors: "reset",
 	_owedRunners: "reset",
+	_partialApplies:
+		"kept: keyed by one call's own input object, so an entry dies with that call and no session can read another's; a call in flight across a reset still reports what its host edit wrote (#5120)",
 	_pendingCascadeRuns: "reset",
 	_pendingDeferredMutations: "reset",
 	_pendingInlineBlockers: "reset",
