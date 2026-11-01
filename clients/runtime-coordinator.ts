@@ -35,7 +35,10 @@ import {
 import { PathKeyedMap } from "./path-keyed-map.js";
 import { BoundedFifoMap, BoundedLruCache } from "./bounded-cache.js";
 import { type AnalysisAnchor, owedByContentOnly } from "./line-alignment.js";
-import { PartialApplyRecordStore } from "./partial-edit-apply.js";
+import {
+	type PartialApplyPending,
+	PartialApplyRecordStore,
+} from "./partial-edit-apply.js";
 import { ReadGuard } from "./read-guard.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
@@ -750,6 +753,19 @@ export class RuntimeCoordinator {
 	private readonly _readWidenings = new BoundedLruCache<string, ReadWidening>(
 		TOOL_CALL_ATTRIBUTION_CAPACITY,
 	);
+	/**
+	 * #5120: a call whose `edits` were rewritten to the matched subset of a
+	 * partly matching batch, keyed by that call's own `event.input`. pi hands
+	 * both hooks one `args` object per call (a fresh clone), so only that
+	 * call's `tool_result` finds the record: a call a later handler blocked
+	 * or an abort ended gets no `tool_result`, and a later call reusing its id
+	 * carries other `args`. The entry dies with its `args`; no id, TTL or
+	 * session reset is involved.
+	 */
+	private readonly _partialApplies = new WeakMap<
+		Record<string, unknown>,
+		PartialApplyPending
+	>();
 	private readonly _lspReadWarmState = new Map<
 		string,
 		{ status: "warming" | "ready"; ts: number }
@@ -3005,6 +3021,22 @@ export class RuntimeCoordinator {
 	markToolCallFileTimeStale(toolCallId: string): void {
 		const attribution = this._toolCallAttributions.get(toolCallId);
 		if (attribution) attribution.fileTimeStale = true;
+	}
+
+	/** #5120: see {@link RuntimeCoordinator._partialApplies}. */
+	markToolCallPartialApply(
+		input: Record<string, unknown>,
+		pending: PartialApplyPending,
+	): void {
+		this._partialApplies.set(input, pending);
+	}
+
+	/**
+	 * #5120: the partial apply of the call whose `tool_result` carries
+	 * `input`. A non-object key is a miss: `WeakMap.get` answers undefined.
+	 */
+	toolCallPartialApply(input: unknown): PartialApplyPending | undefined {
+		return this._partialApplies.get(input as Record<string, unknown>);
 	}
 
 	/**
