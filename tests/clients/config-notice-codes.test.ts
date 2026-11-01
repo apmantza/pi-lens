@@ -103,7 +103,52 @@ const PROJECT_CASES = [
 		'{ "rules": { "x": 5 } }',
 		"PILENS_CFG_0005",
 	],
-	["a top-level array", "[1, 2]", "PILENS_CFG_0005"],
+	// Unchanged by #5140: a document that is not a JSON object is ignored whole,
+	// so it keeps the read/parse code (#2445).
+	["a top-level array", "[1, 2]", "PILENS_CFG_0001"],
+	["a top-level scalar", '"x"', "PILENS_CFG_0001"],
+	// One row per notice site the table did not reach before #5140 (F3): a code
+	// flipped at that site turns its row red.
+	[
+		"a maxProjectFiles that is not a number",
+		'{ "maxProjectFiles": "x" }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a reviewGraph that is not an object",
+		'{ "reviewGraph": "x" }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a rule threshold that is not a number",
+		'{ "rules": { "x": { "threshold": "n" } } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a rule disable that is not an array",
+		'{ "rules": { "x": { "disable": "n" } } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a rule disable with no usable string",
+		'{ "rules": { "x": { "disable": [1] } } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a rule ignorePaths that is not an array",
+		'{ "rules": { "x": { "ignorePaths": "n" } } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a rule ignorePaths with no usable string",
+		'{ "rules": { "x": { "ignorePaths": [1] } } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a rule with no recognized setting",
+		'{ "rules": { "x": {} } }',
+		"PILENS_CFG_0004",
+	],
 	// Controls: these already carried their own code before #5140.
 	[
 		"an invalid enum value (core-validated)",
@@ -130,7 +175,10 @@ const GLOBAL_CASES = [
 		"PILENS_CFG_0005",
 	],
 	["a wrong-typed value", '{ "tools": { "lazy": "nope" } }', "PILENS_CFG_0005"],
-	["a top-level array", "[1, 2]", "PILENS_CFG_0005"],
+	// Unchanged by #5140: a document that is not a JSON object is ignored whole,
+	// so it keeps the read/parse code (#2445).
+	["a top-level array", "[1, 2]", "PILENS_CFG_0001"],
+	["a top-level scalar", '"x"', "PILENS_CFG_0001"],
 	// The flag helpers in lens-flag-registry.ts warn through the same callback.
 	[
 		"a flag section that is not an object",
@@ -140,6 +188,27 @@ const GLOBAL_CASES = [
 	[
 		"a flag leaf that is not a boolean",
 		'{ "contextInjection": { "retain": "yes" } }',
+		"PILENS_CFG_0005",
+	],
+	// One row per global notice site the table did not reach before #5140 (F3).
+	[
+		"a runner timeout floor that is not a number",
+		'{ "dispatch": { "runnerTimeoutFloorMs": "x" } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"an autoFix maxFixes that is not a number",
+		'{ "actionableWarnings": { "autoFix": { "maxFixes": "x" } } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a requirePreExistingFixes that is not a boolean",
+		'{ "contextInjection": { "requirePreExistingFixes": "x" } }',
+		"PILENS_CFG_0005",
+	],
+	[
+		"a widget visible flag that is not a boolean",
+		'{ "widget": { "visible": "x" } }',
 		"PILENS_CFG_0005",
 	],
 	// Controls: unchanged by #5140.

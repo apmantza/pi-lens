@@ -83,13 +83,14 @@ The trailing ` [PILENS_CFG_NNNN]` marker is appended by
 `withConfigDiagnosticCode`, is idempotent, and is always last. Match on it:
 
 ```sh
-# every config file this session that could not be read or parsed
+# every config file this session that is unreadable, unparsable, or not a JSON object
 grep 'PILENS_CFG_0001' ~/.pi-lens/latency.log
 
-# every unknown key and rejected value this session (typos, wrong types)
-grep -E 'PILENS_CFG_000[45]' ~/.pi-lens/latency.log
+# every unknown key and rejected value this session (typos, wrong types);
+# latency.log keeps only the first notice's code per file, so read extension.log
+grep -E 'PILENS_CFG_000[45]' ~/.pi-lens/extension.log
 
-# drop only the unreadable-file notices; typo notices keep PILENS_CFG_0004 and PILENS_CFG_0005
+# drop only the whole-file notices; typo notices keep PILENS_CFG_0004 and PILENS_CFG_0005
 pi ... 2>&1 | grep -v 'PILENS_CFG_0001'
 ```
 
@@ -102,7 +103,7 @@ this policy explicitly reserves the right to change.
 
 | Code | Meaning | Emitter |
 | --- | --- | --- |
-| `PILENS_CFG_0001` | A config file exists but could not be read or parsed, so it is ignored. | `warnIgnoredConfigOnce` (`clients/config-warn.ts`), the single choke point behind the LSP, global, and project config loaders, and its default code for a read or parse failure. |
+| `PILENS_CFG_0001` | A config file exists but is unreadable, unparsable, or not a JSON object, so it is ignored. | `warnIgnoredConfigOnce` (`clients/config-warn.ts`), the single choke point behind the LSP, global, and project config loaders, and its default code for a read or parse failure. |
 | `PILENS_CFG_0002` | A deprecated config **key** was accepted inside its deprecation window. | `deprecationRecords` (`clients/config-resolve.ts`), one record per `(file, key)`, delivered by `reportPiLensConfigRecords` (#2426). |
 | `PILENS_CFG_0003` | A deprecated config **file location** was read inside its window. | Same producer and same delivery path as `PILENS_CFG_0002`. |
 | `PILENS_CFG_0004` | A config field no schema property claims was dropped. | `validate()` (`clients/config-core/normalize.ts`) produces the record; `reportPiLensConfigRecords` (`clients/config-resolve.ts`) delivers it through `warnIgnoredConfigOnce` (#2426). The global and project loaders' own unknown-key scans pass the same code (`clients/lens-config.ts`, `clients/project-lens-config.ts`). |

@@ -384,9 +384,9 @@ unrecognized-key notice (`PILENS_CFG_0004`) and is counted in ONE whole-file
 
 ## When a config is ignored
 
-A file that cannot be read or parsed is **ignored, never partially applied** —
-pi-lens runs on defaults for it and says so once, with the code
-`PILENS_CFG_0001`. A field whose value does not match its declared type is
+A file that is unreadable, unparsable, or not a JSON object is **ignored, never
+partially applied** — pi-lens runs on defaults for it and says so once, with the
+code `PILENS_CFG_0001`. A field whose value does not match its declared type is
 dropped on its own (`PILENS_CFG_0005`), and an unrecognized field is dropped
 with a message naming the key (`PILENS_CFG_0004`). If resolving a file fails
 internally the whole file is ignored and said so under its own code

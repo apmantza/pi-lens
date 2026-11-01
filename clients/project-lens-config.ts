@@ -832,7 +832,7 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 		typeof outcome.value !== "object" ||
 		Array.isArray(outcome.value)
 	) {
-		note("top-level value must be an object", "PILENS_CFG_0005");
+		note("top-level value must be an object", "PILENS_CFG_0001");
 		return {
 			config: EMPTY_PROJECT_CONFIG,
 			records: NO_RECORDS,

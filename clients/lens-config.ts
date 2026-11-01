@@ -328,7 +328,7 @@ export function loadPiLensGlobalConfig(
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 			// The other half of the same silence: a file that PARSES but is a list
 			// or a scalar is not a config either, and was dropped without a word.
-			note("top-level value must be an object", "PILENS_CFG_0005");
+			note("top-level value must be an object", "PILENS_CFG_0001");
 			return undefined;
 		}
 
