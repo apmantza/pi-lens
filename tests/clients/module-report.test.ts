@@ -2375,7 +2375,7 @@ describe("moduleReport — preset losslessness (#5137)", () => {
 				"api[].exported": (t) => t.includes("API:"),
 				"api[].signature": (t) => t.includes(hub.signature ?? ""),
 				"api[].doc": (t) => t.includes(hub.doc ?? ""),
-				"api[].fanout": (t) => t.includes(`fo:${hub.fanout}`),
+				"api[].fanout": (t) => t.includes(`fan:${hub.fanout}`),
 				"api[].complexity": (t) => t.includes(`cx:${hub.complexity}`),
 				"api[].flags": (t) => t.includes("[high fanout]"),
 				"api[].delegationRatio": (t) =>
@@ -2399,7 +2399,7 @@ describe("moduleReport — preset losslessness (#5137)", () => {
 					runMember.doc ? t.includes(runMember.doc) : true,
 				"api[].members[].fanout": (t) =>
 					runMember.fanout !== undefined
-						? t.includes(`fo:${runMember.fanout}`)
+						? t.includes(`fan:${runMember.fanout}`)
 						: true,
 				"api[].members[].complexity": (t) =>
 					runMember.complexity !== undefined
@@ -2434,7 +2434,7 @@ describe("moduleReport — preset losslessness (#5137)", () => {
 				"internal[].fanout": (t) => {
 					const helperEntry = report.internal.find((e) => e.name === "helper")!;
 					return helperEntry.fanout !== undefined
-						? t.includes(`fo:${helperEntry.fanout}`)
+						? t.includes(`fan:${helperEntry.fanout}`)
 						: true;
 				},
 				"internal[].complexity": (t) => {

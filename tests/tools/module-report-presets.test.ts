@@ -86,12 +86,12 @@ describe("module_report presets (#5137)", () => {
 			);
 			const text = String(result.content[0]?.text);
 			// The summary promise is field-token absence: no `used-by:` lines, no
-			// `cx:`/`fo:` metric suffixes. It is NOT "metrics never appear in
+			// `cx:`/`fan:` metric suffixes. It is NOT "metrics never appear in
 			// prose": RECOMMENDED reasons are ranked from unprojected entries
 			// and may still cite counts (e.g. "used by 3").
 			expect(text).not.toContain("used-by:");
 			expect(text).not.toContain("cx:");
-			expect(text).not.toContain("fo:");
+			expect(text).not.toContain("fan:");
 			expect(text).toContain("CALLBACKS:");
 		} finally {
 			env.cleanup();
@@ -112,7 +112,7 @@ describe("module_report presets (#5137)", () => {
 			const text = String(result.content[0]?.text);
 			expect(text).toContain("used-by:");
 			expect(text).toContain("cx:");
-			expect(text).toContain("fo:");
+			expect(text).toContain("fan:");
 			expect(text).toContain("[high fanout]");
 		} finally {
 			env.cleanup();

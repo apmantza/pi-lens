@@ -241,7 +241,7 @@ and `[]` mean no arguments.
   format: `"summary-text"` (default) = metrics off (no `usedBy`, `fanout`,
   `complexity`), text; `"summary-json"` = same fields, JSON; `"full-text"`
   = every field, text; `"full-json"` = every field, JSON. The text cell is
-  lossless against its JSON payload (metrics as a `cx:`/`fo:` suffix, each
+  lossless against its JSON payload (metrics as a `cx:`/`fan:` suffix, each
   flag in its own bracket, `used-by:` continuation lines, plus
   `IMPORTS:`/`CALL GRAPH:`/`BLAST RADIUS:` blocks and a `PROVENANCE:` footer),
   so the default text preset carries the same data at roughly half the byte

@@ -2286,7 +2286,7 @@ function compactMetricsSuffix(
 ): string {
 	const parts: string[] = [];
 	if (entry.complexity !== undefined) parts.push(`cx:${entry.complexity}`);
-	if (entry.fanout !== undefined) parts.push(`fo:${entry.fanout}`);
+	if (entry.fanout !== undefined) parts.push(`fan:${entry.fanout}`);
 	return parts.length > 0 ? `  ${parts.join(" ")}` : "";
 }
 
@@ -2385,7 +2385,7 @@ function compactCallGraphCoverageLine(
  * path renders its defaults as absent; kind is abbreviated).
  * Blocks run API:, INTERNAL:, CALLBACKS:, IMPORTS:, CALL GRAPH:, BLAST RADIUS:,
  * RECOMMENDED:, each only when its data is non-empty, followed by one
- * PROVENANCE: footer line. Metrics render as a `cx:`/`fo:` suffix, flags each
+ * PROVENANCE: footer line. Metrics render as a `cx:`/`fan:` suffix, flags each
  * in their own bracket, who-uses-this as a `used-by:` continuation line, and
  * truncated walks carry a `(truncated)` marker on their block header.
  * Example:
@@ -2394,7 +2394,7 @@ function compactCallGraphCoverageLine(
  * API:
  *   77-81    fn  _resetAgentNudgeForTests()  [async]  \u2014 Test-only: clear accumulator state.
  * INTERNAL:
- *   95-104   fn  isValidPayload(data: unknown)  cx:2 fo:1
+ *   95-104   fn  isValidPayload(data: unknown)  cx:2 fan:1
  * CALLBACKS:
  *   164-172  event_handler             events.on@164  raw:function_expression  [lifecycle]  (in wireAgentNudgeSubscriber)
  * PROVENANCE: symbols=syntax imports=cached-review-graph usedBy=cached-review-graph callbacks=heuristic-tree-sitter semantic.source=review-graph semantic.references=true semantic.implementations=false graphBuiltAt=unknown

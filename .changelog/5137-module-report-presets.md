@@ -7,7 +7,7 @@ audience: user
   format: `summary-text` (default, metrics off, text), `summary-json`,
   `full-text`, `full-json` (every field, JSON). Applies to `module_report`
   and `pilens_module_report`. The text cell mirrors its JSON payload field by
-  field (metrics as `cx:`/`fo:` suffixes, flags per bracket, `used-by:`
+  field (metrics as `cx:`/`fan:` suffixes, flags per bracket, `used-by:`
   lines, `IMPORTS:` / `CALL GRAPH:` / `BLAST RADIUS:` blocks, `PROVENANCE:`
   footer), with one declared exception: a member's own `exported` flag rides
   on its container's section and has no member-level marker. The stale

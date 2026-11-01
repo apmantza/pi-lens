@@ -93,7 +93,7 @@ clients/agent-nudge.ts jsts 266L [fresh] — 8 symbols, 5 exported, 2 imports (c
 API:
   77-81    fn  _resetAgentNudgeForTests()  [async]  — Test-only: clear accumulator state.
 INTERNAL:
-  95-104   fn  isValidPayload(data: unknown)  cx:2 fo:1
+  95-104   fn  isValidPayload(data: unknown)  cx:2 fan:1
 CALLBACKS:
   164-172  event_handler             events.on@164  raw:function_expression  [lifecycle]  (in wireAgentNudgeSubscriber)
 IMPORTS:
