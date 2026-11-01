@@ -596,7 +596,7 @@ export interface LspConfigProblems {
 	readonly unknownDisabled: { readonly id: string; readonly index: number }[];
 }
 
-function newLspConfigProblems(): LspConfigProblems {
+export function newLspConfigProblems(): LspConfigProblems {
 	return { refusals: [], unvalidated: [], unknownDisabled: [] };
 }
 
@@ -672,8 +672,10 @@ function coversClaimRecords(
  * the entry was dropped, and it quotes the entry the way the dispatch sibling
  * does (`disabledRunnersOf`), so the user can match it to what they typed.
  * Finalized like that sibling, so a pasted list ends in one suppression count.
+ * `effectiveConfig` counts the same records through this function without
+ * reporting them (#5141).
  */
-function disabledServerRecords(
+export function disabledServerRecords(
 	resolution: PiLensConfigResolution,
 	problems: LspConfigProblems,
 ): readonly MigrationRecord[] {

@@ -263,6 +263,41 @@ describe("effectiveConfig — provenance of the resolution", () => {
 		});
 		expect(view.recordCounts.PILENS_CFG_0002).toBeGreaterThanOrEqual(1);
 	});
+
+	// #5141 (CodeRabbit thread on clients/lsp/config.ts). The loader reports an
+	// unknown `lsp.disabledServers` id as a PILENS_CFG_0005 record, but this query
+	// counted only the resolution's records and the disabled-runner records, so a
+	// config whose only error was that id read as clean. The query now counts the
+	// same pure records the loader builds, without sending a notice.
+	it("counts an unknown lsp.disabledServers id as one PILENS_CFG_0005 record and sends no notice", async () => {
+		const { view } = await viewFor({
+			files: { "proj/.pi-lens.json": denyDoc("no-such-server") },
+			startDir: "proj",
+		});
+		expect(view.recordCounts.PILENS_CFG_0005).toBe(1);
+		expect(
+			logSink.messages.filter((message) => message.includes("no-such-server")),
+		).toEqual([]);
+	});
+
+	// Guard for the same seam: a deny list of valid ids (a built-in id and a
+	// declared custom id) adds no record, so the count stays where it was. Green
+	// before and after the fix by design; it fails if the query starts counting
+	// valid ids as unknown.
+	it("keeps the PILENS_CFG_0005 count unchanged for a deny list of valid ids", async () => {
+		const { view } = await viewFor({
+			files: {
+				"proj/.pi-lens.json": {
+					lsp: {
+						servers: { mysh: sharedServer("mysh-lsp") },
+						disabledServers: ["typescript", "mysh"],
+					},
+				},
+			},
+			startDir: "proj",
+		});
+		expect(view.recordCounts.PILENS_CFG_0005).toBeUndefined();
+	});
 });
 
 describe("effectiveConfig — why is X running (#2415 AC)", () => {
