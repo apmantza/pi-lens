@@ -71,7 +71,8 @@ export const CONFIG_SCHEMA_ANCHOR_KEY = "$schema";
  */
 export const CONFIG_DIAGNOSTIC_CODES = {
 	/**
-	 * A config file exists but could not be read or parsed, so it is ignored.
+	 * A config file exists but could not be read or parsed, or its top level is
+	 * not a JSON object, so the whole file is ignored.
 	 *
 	 * EMITTED, by `warnIgnoredConfigOnce` (`clients/config-warn.ts`) — the one
 	 * seam behind all three config loaders. It rides the user-facing message as

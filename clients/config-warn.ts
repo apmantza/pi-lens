@@ -58,10 +58,10 @@ const SUBSYSTEM_CONFIG_LABEL: Record<IgnoredConfigSubsystem, string> = {
 };
 
 /**
- * The code a config file that cannot be read or parsed carries by default:
- * PILENS_CFG_0001, "config file unreadable, unparsable, or not a JSON object; ignored". A notice
- * about one key or value passes its own registered code (#5140), so this
- * default names only the read/parse failure. Named here rather than repeated
+ * The code a config file carries when it cannot be read or parsed, or is not
+ * a JSON object: PILENS_CFG_0001, "config file unreadable, unparsable, or not
+ * a JSON object; ignored". A notice about one key or value passes its own
+ * registered code (#5140), so this code names only a whole-file failure. Named here rather than repeated
  * at the call sites so the registry entry has exactly one referent.
  */
 const IGNORED_CONFIG_CODE: ConfigDiagnosticCode = "PILENS_CFG_0001";
