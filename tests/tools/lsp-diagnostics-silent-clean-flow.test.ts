@@ -363,3 +363,174 @@ describe("#1253 lsp_diagnostics end-to-end silent-clean confirmation", () => {
 		});
 	});
 });
+
+/** What the stub server publishes for the content it last received (#5128). */
+type StubBehaviour = {
+	/** `undefined` = nothing published (the server is silent for this content). */
+	publishFor: (content: string) => unknown[] | undefined;
+};
+
+/**
+ * A push-only custom server with no pull provider. It publishes per
+ * `behaviour`; when it has nothing to publish it waits like `makeSilentClient`.
+ */
+function makeStubClient(root: string, behaviour: StubBehaviour) {
+	const client = makeSilentClient("groovy-stub", root);
+	const silentWait = client.waitForDiagnostics as (
+		filePath: string,
+		ms: number,
+	) => Promise<undefined>;
+	let version = 0;
+	let delivered = "";
+	const stampsByPath = new Map<string, number>();
+	const cache = new Map<string, { diags: unknown[]; ts: number }>();
+	client.getDiagnosticsVersionForPath = vi.fn(
+		(filePath: string) => stampsByPath.get(filePath) ?? 0,
+	) as never;
+	client.notify.open = vi.fn(async (filePath: string, content: string) => {
+		delivered = content;
+		cache.delete(normalizeMapKey(filePath));
+	}) as never;
+	client.waitForDiagnostics = vi.fn(async (filePath: string, ms: number) => {
+		const diags = behaviour.publishFor(delivered);
+		if (diags === undefined) return silentWait(filePath, ms);
+		version += 1;
+		stampsByPath.set(filePath, version);
+		cache.set(normalizeMapKey(filePath), { diags, ts: Date.now() });
+		return undefined;
+	}) as never;
+	client.getDiagnostics = vi.fn(
+		(filePath: string) => cache.get(normalizeMapKey(filePath))?.diags ?? [],
+	) as never;
+	client.getAllDiagnostics = vi.fn(() => cache) as never;
+	return client;
+}
+
+const STUB_FINDING = {
+	severity: 1 as const,
+	message: "stub syntax error",
+	range: {
+		start: { line: 0, character: 0 },
+		end: { line: 0, character: 5 },
+	},
+	source: "stub",
+};
+
+/**
+ * #5128 (found in #5123): a custom push-only server that has not published by
+ * the end of the first-contact wait was latched `diagnosticsUnsupported` for the
+ * session. The tool reported such a file as `unsupported` ("navigation-only")
+ * and a later publish never cleared the latch, so a server that publishes only
+ * for files with errors (groovy-language-server) read as unsupported forever,
+ * and one report listed a finding beside `unsupported=1`.
+ *
+ * These cases drive the REAL `lsp_diagnostics` tool and the real LSPService; only
+ * the client transport is faked. The publish reaches the service through the
+ * `onDiagnosticsPublished` callback `createLSPClient` is handed, which is the
+ * call the real client makes when a `publishDiagnostics` frame lands.
+ */
+describe("#5128 lsp_diagnostics: the first-contact latch for a custom push-only server", () => {
+	let tmp: string;
+	let file: string;
+	let behaviour: StubBehaviour;
+
+	/** What the real client calls when a `publishDiagnostics` frame lands. */
+	function serverPublishes(): void {
+		createLSPClient.mock.calls[0][0].onDiagnosticsPublished("groovy-stub");
+	}
+
+	async function check(content: string): Promise<any> {
+		fs.writeFileSync(file, content);
+		return await runTool(
+			{ paths: [file], severity: "all", serverScope: "primary", waitMs: 5000 },
+			tmp,
+		);
+	}
+
+	beforeEach(async () => {
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5128-"));
+		file = path.join(tmp, "Clean.groovy");
+		// Keep the silent server's real wait short; the verdict under test does
+		// not depend on the budget.
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "50";
+		behaviour = { publishFor: () => undefined };
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".groovy")
+				? [
+						{
+							...makeServer("groovy-stub", tmp),
+							extensions: [".groovy"],
+							custom: true,
+						},
+					]
+				: [],
+		);
+		createLSPClient.mockImplementation(async () =>
+			makeStubClient(tmp, behaviour),
+		);
+		await freshService();
+	});
+
+	afterEach(async () => {
+		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		await (service as { destroy?: () => Promise<void> })?.destroy?.();
+		removeTempDirSync(tmp);
+	});
+
+	it("reads a custom server that never published as unconfirmed, not unsupported", async () => {
+		const first = await check("class Clean {}\n");
+		const second = await check("class Clean { int x }\n");
+
+		for (const result of [first, second]) {
+			expect(result.details?.outcomeCounts).toMatchObject({
+				inconclusive: 1,
+				unsupported: 0,
+				clean: 0,
+			});
+			expect(result.details?.navigationOnlyFiles).toBeUndefined();
+		}
+		expect(String(second.content[0]?.text)).toContain("inconclusive=1");
+	});
+
+	it("recovers to the real outcome when the server publishes after the latch", async () => {
+		await check("class Clean {}\n");
+		behaviour.publishFor = () => [];
+		serverPublishes();
+
+		const after = await check("class Clean { int x }\n");
+
+		expect(after.details?.outcomeCounts).toMatchObject({
+			clean: 1,
+			inconclusive: 0,
+			unsupported: 0,
+		});
+	});
+
+	it("reports a dirty-only publisher's finding as findings, and its clean files as unconfirmed", async () => {
+		behaviour.publishFor = (content) =>
+			content.includes("BROKEN") ? [STUB_FINDING] : undefined;
+		const clean = await check("class Clean {}\n");
+		expect(clean.details?.outcomeCounts).toMatchObject({ inconclusive: 1 });
+
+		// The latch skips the wait for this write; the publish lands afterwards.
+		await check("BROKEN\n");
+		serverPublishes();
+		const dirty = await check("BROKEN again\n");
+
+		expect(dirty.details?.totalDiagnostics).toBe(1);
+		expect(dirty.details?.outcomeCounts).toMatchObject({
+			findings: 1,
+			unsupported: 0,
+		});
+		expect(String(dirty.content[0]?.text)).toContain("stub syntax error");
+
+		const cleanAgain = await check("class Clean {}\n");
+		expect(cleanAgain.details?.outcomeCounts).toMatchObject({
+			inconclusive: 1,
+			unsupported: 0,
+			clean: 0,
+		});
+	});
+});

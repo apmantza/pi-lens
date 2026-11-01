@@ -405,7 +405,6 @@ export function createLensDiagnosticsTool(
 			totalDiagnostics?: number;
 			cleanFiles?: number;
 			unconfirmedFiles?: number;
-			navigationOnlyFiles?: number;
 			timedOutFiles?: number;
 			outcomeCounts?: Record<string, number>;
 			outcomes?: BatchOutcomeDetail[];
@@ -440,8 +439,6 @@ export function createLensDiagnosticsTool(
 				const scope = files > 1 ? ` across ${files} files` : singleFile;
 				if (isError)
 					return `lens_diagnostics lsp — ${text.split("\n")[0] ?? "error"}`;
-				if ((details.navigationOnlyFiles ?? 0) > 0)
-					return `lens_diagnostics${scope} — ${count} ${noun} · ${details.cleanFiles ?? 0} clean · ${details.navigationOnlyFiles} navigation-only`;
 				if ((details.unconfirmedFiles ?? 0) > 0)
 					return `lens_diagnostics${scope} — ${count} ${noun} · ${details.cleanFiles ?? 0} clean · ${details.unconfirmedFiles} unconfirmed${details.timedOutFiles ? ` (${details.timedOutFiles} timed out)` : ""}`;
 				const outcomeCounts = details.outcomeCounts;

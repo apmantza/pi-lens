@@ -840,7 +840,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
-		"tools/lsp-diagnostics.ts": 14,
+		// 14 -> 12 (#5128): the navigation-only tally filters left with the field.
+		"tools/lsp-diagnostics.ts": 12,
 		"tools/lsp-navigation.ts": 6,
 		"tools/render-compact.ts": 3,
 		"mcp/analyze-cli.ts": 1,

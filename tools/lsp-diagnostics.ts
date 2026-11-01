@@ -309,7 +309,6 @@ type FileDiagnosticResult = {
 	 * type checker/compiler confirmed the file clean.
 	 */
 	primaryServerId?: string;
-	diagnosticsUnsupported?: boolean;
 	/**
 	 * #3088: how many of this file's findings the probe lane's own filter stack
 	 * dropped (stored disposition, `.pi-lens.json` rule policy, inline
@@ -818,7 +817,7 @@ type DiagnosticsCollectionResult = {
 	 * honest.
 	 */
 	unconfirmedServerIds: readonly string[];
-	/** Custom navigation-only servers that supplied no diagnostic evidence. */
+	/** Custom push-only servers that have not published (unconfirmed, #5128). */
 	diagnosticsUnsupportedServerIds: readonly string[];
 	/**
 	 * #4322: the file has a language server, but the touch acquired only
@@ -1720,11 +1719,14 @@ async function collectFileDiagnosticResult(
 	// be merged in rather than discarded.
 	let effectiveRawDiags = rawDiags;
 	let confirmation: "clean" | "unconfirmed" | undefined;
-	if (diagnosticsUnsupportedServerIds.length > 0) {
-		// No diagnostic provider and no push evidence is a capability boundary,
-		// not a clean result and not a timeout.
-		confirmation = undefined;
-	} else if (skipReason !== undefined || primaryUnavailable !== undefined) {
+	if (
+		diagnosticsUnsupportedServerIds.length > 0 ||
+		skipReason !== undefined ||
+		primaryUnavailable !== undefined
+	) {
+		// #5128: a custom server with no pull provider that has not published is
+		// unconfirmed (it may publish later), never "unsupported". Not a clean
+		// result and not a timeout either.
 		confirmation = "unconfirmed";
 	} else if (timedOut) {
 		if (applySeverityFilter(rawDiags, severity).length === 0) {
@@ -1879,7 +1881,6 @@ async function collectFileDiagnosticResult(
 		}),
 		...(noClientAnswered && { noClientAnswered }),
 		primaryServerId: primaryServerId(file),
-		diagnosticsUnsupported: diagnosticsUnsupportedServerIds.length > 0,
 		...(policy.suppressed > 0 && {
 			dispositionSuppressed: policy.suppressed,
 		}),
@@ -1968,9 +1969,11 @@ async function runFileDiagnostics(
 	// diagnostics it surfaces are merged in, not discarded.
 	let effectiveRawDiags = rawDiags;
 	let confirmation: "clean" | "unconfirmed" | undefined;
-	if (diagnosticsUnsupportedServerIds.length > 0) {
-		confirmation = undefined;
-	} else if (skipReason !== undefined || primaryUnavailable !== undefined) {
+	if (
+		diagnosticsUnsupportedServerIds.length > 0 ||
+		skipReason !== undefined ||
+		primaryUnavailable !== undefined
+	) {
 		confirmation = "unconfirmed";
 	} else if (timedOut) {
 		if (applySeverityFilter(rawDiags, severity).length === 0) {
@@ -2089,7 +2092,7 @@ async function runFileDiagnostics(
 				: primaryUnavailable;
 		}
 		if (diagnosticsUnsupportedServerIds.length > 0) {
-			return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: navigation-only — diagnostics unsupported (no pull provider or publish evidence).`;
+			return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: unconfirmed — a custom server with no pull provider has not published diagnostics yet. NOT the same as 0 diagnostics; it is checked again once the server publishes.`;
 		}
 		if (timedOut) {
 			return (
@@ -2229,8 +2232,6 @@ async function runFileDiagnostics(
 			truncated,
 			unconfirmed,
 			timedOut: unconfirmed ? timedOut : undefined,
-			navigationOnlyFiles:
-				diagnosticsUnsupportedServerIds.length > 0 ? 1 : undefined,
 			...(skipReason !== undefined && { skipReason }),
 			...(primaryUnavailable !== undefined && { primaryUnavailable }),
 			...(rootFallback && {
@@ -2264,7 +2265,6 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 	timedOut: number;
 	primaryUnavailable: PrimaryUnavailableTally;
 	rootFallbackReasons: string[];
-	navigationOnly: number;
 	tooLarge: number;
 } {
 	let clean = 0;
@@ -2274,15 +2274,10 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 	const primaryUnavailableCauses: PrimaryUnavailableCause[] = [];
 	const primaryUnavailableRootReasons = new Set<string>();
 	const rootFallbackReasons = new Set<string>();
-	let navigationOnly = 0;
 	let tooLarge = 0;
 	for (const result of results) {
 		if (result.tooLargeReason) {
 			tooLarge += 1;
-			continue;
-		}
-		if (result.diagnosticsUnsupported) {
-			navigationOnly += 1;
 			continue;
 		}
 		if (result.diagnostics.length > 0) continue;
@@ -2323,7 +2318,6 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 			rootFallbackReasons: [...primaryUnavailableRootReasons],
 		},
 		rootFallbackReasons: [...rootFallbackReasons],
-		navigationOnly,
 		tooLarge,
 	};
 }
@@ -2333,7 +2327,6 @@ function classifyBatchFileOutcome(
 ): BatchFileOutcome {
 	if (result.error) return "failed";
 	if (result.tooLargeReason) return "too_large";
-	if (result.diagnosticsUnsupported) return "unsupported";
 	// #4322: this read acquired no client at all, and a primary resolved a root
 	// for the file. The result is unconfirmed, but "unavailable" names why.
 	if (result.noClientAnswered && result.primaryUnavailable !== undefined) {
@@ -2805,9 +2798,6 @@ async function runBatchFileDiagnostics(
 		outcomeCounts,
 		incompleteFiles,
 	} = await collectBatchDiagnostics(absPaths, severity, lspService, options);
-	const navigationOnly = results.filter(
-		(result) => result.diagnosticsUnsupported,
-	).length;
 	// #3088: the batch's own suppressed bucket — one summed line, never one per
 	// file or per finding.
 	const dispositionSuppressed = results.reduce(
@@ -2941,7 +2931,6 @@ async function runBatchFileDiagnostics(
 			truncated,
 			cleanFiles: clean,
 			unconfirmedFiles: unconfirmed,
-			navigationOnlyFiles: navigationOnly > 0 ? navigationOnly : undefined,
 			timedOutFiles: timedOut > 0 ? timedOut : undefined,
 			outcomes: results.map((result) => ({
 				file: result.file,
@@ -3103,9 +3092,6 @@ async function runDirectoryDiagnostics(
 		lspService,
 		options,
 	);
-	const navigationOnly = results.filter(
-		(result) => result.diagnosticsUnsupported,
-	).length;
 	// #3088: the directory scan's own suppressed bucket — one summed line.
 	const dispositionSuppressed = results.reduce(
 		(sum, result) => sum + (result.dispositionSuppressed ?? 0),
@@ -3247,7 +3233,6 @@ async function runDirectoryDiagnostics(
 			unconfirmedFiles: unconfirmed,
 			outcomes: outcomeDetails,
 			outcomeCounts,
-			navigationOnlyFiles: navigationOnly > 0 ? navigationOnly : undefined,
 			timedOutFiles: timedOut > 0 ? timedOut : undefined,
 			fileErrors: fileErrors.length > 0 ? fileErrors : undefined,
 			lspHealthWarnings:
