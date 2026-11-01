@@ -83,13 +83,6 @@ const EXPECTED_PERMISSIONS: Record<
 			},
 		},
 	},
-	// #5002: moved out of ci.yml; it only checks out and installs.
-	".github/workflows/strict-install.yml": {
-		workflow: {},
-		jobs: {
-			"strict-install-cold-cache": { contents: "read" },
-		},
-	},
 };
 
 describe("GitHub Actions workflow permissions", () => {

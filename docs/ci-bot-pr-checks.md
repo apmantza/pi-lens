@@ -16,15 +16,11 @@ that produces a required check on the branch it just pushed:
 gh workflow run ci.yml --ref <bot branch>
 gh workflow run hot-path-latency.yml --ref <bot branch>
 gh workflow run lint.yml --ref <bot branch>
-gh workflow run strict-install.yml --ref <bot branch>
 ```
 
 The set is every workflow with a `merge_group` trigger, in file-name order. The
 census derives it (`dispatchTargets` in `tests/config/bot-pr-ci-start.test.ts`),
-and each of the four carries a `workflow_dispatch` trigger for this.
-`strict-install.yml` produces no required check; it is a target because the
-cold-cache strict install ran in the dispatched `ci.yml` run before it moved
-out of `ci.yml`. The
+and each of the three carries a `workflow_dispatch` trigger for this. The
 `ci.yml` and `lint.yml` runs are push-shaped (`scripts/ci-changed-files.mjs`
 runs the full suite for any event but `pull_request`), check out the branch
 head, and post the required check names (`Lint & type-check`, `Unit tests`,

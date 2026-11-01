@@ -74,22 +74,16 @@ describe("strict lifecycle-script policy in CI installs (#1185)", () => {
 	// nightly schedule exists for it). A PR that
 	// changes the manifests keeps a strict install through `npm-strict`, pinned
 	// by the next test; this one reds if that substitute ever drops out.
-	it("strict-install.yml has a cold-cache strict-install fast-fail on every event but a pull request", () => {
-		// #5002: the job moved out of ci.yml, whose `if` posted a skipped row on
-		// every pull request; the workflow has no pull_request trigger instead.
-		expect(load("ci.yml").jobs?.["strict-install-cold-cache"]).toBeUndefined();
-		const workflow = load("strict-install.yml");
+	it("ci.yml has a cold-cache strict-install fast-fail on every event but a pull request", () => {
+		const workflow = load("ci.yml");
 		const job = workflow.jobs?.["strict-install-cold-cache"];
 		expect(job, "strict-install-cold-cache").toBeDefined();
-		expect(job?.if).toBeUndefined();
+		expect(job?.if).toBe("github.event_name != 'pull_request'");
 		expect(job?.["continue-on-error"]).toBeUndefined();
 		// Recurrence (2026-10-07, #4067 r2): `${{ runner.temp }}` in job-level
 		// `env:` made GitHub reject the whole ci.yml, so no pull_request run
 		// started. The runner context exists only inside steps.
-		for (const [id, j] of Object.entries({
-			...load("ci.yml").jobs,
-			...workflow.jobs,
-		}))
+		for (const [id, j] of Object.entries(workflow.jobs ?? {}))
 			expect(
 				JSON.stringify((j as { env?: unknown }).env ?? {}),
 				`${id} job env`,

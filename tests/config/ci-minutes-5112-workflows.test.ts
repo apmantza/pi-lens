@@ -53,7 +53,6 @@ const load = (file: string) =>
 
 const ci = load("ci.yml");
 const lint = load("lint.yml");
-const strictInstall = load("strict-install.yml");
 const greetings = load("greetings.yml");
 
 describe("Install test always reports and installs only on install paths (#5112)", () => {
@@ -131,22 +130,11 @@ describe("the cuts leave master, the merge queue and dispatches intact (#5112)",
 			)(),
 		);
 
-	// #5002: Strict install left ci.yml for a workflow with no pull_request
-	// trigger, so it posts no skipped row on a pull request. It still runs on
-	// every event it ran on in ci.yml.
-	it("strict-install.yml runs on a push to master, the merge queue and a dispatch, never a pull request", () => {
-		expect(Object.keys(strictInstall.on).sort()).toEqual([
-			"merge_group",
-			"push",
-			"workflow_dispatch",
-		]);
-		expect(strictInstall.on.merge_group).toEqual({
-			types: ["checks_requested"],
-		});
-		expect(ci.jobs["strict-install-cold-cache"]).toBeUndefined();
-		const job = strictInstall.jobs["strict-install-cold-cache"];
-		expect(job.name).toBe("Strict install (cold npm cache) (fast-fail)");
-		expect(job.if).toBeUndefined();
+	it("ci.yml strict-install-cold-cache skips a pull request and runs every other event", () => {
+		const expr = ci.jobs["strict-install-cold-cache"].if as string;
+		expect(evaluate(expr, "pull_request")).toBe(false);
+		for (const event of ["push", "merge_group", "workflow_dispatch"])
+			expect(evaluate(expr, event), event).toBe(true);
 	});
 
 	// The strictness steps carry the cut as a step `if`: the guarded steps skip

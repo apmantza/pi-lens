@@ -344,10 +344,10 @@ function censusPins(
 const PINNED_PRINT = [
 	"expect(CENSUS_SITES.length).toBe(72);",
 	'expect(CENSUS_ROWS.filter((row) => row.stage !== "gate").length).toBe(75);',
-	'expect(stageJobs("A")).toBe(25);',
+	'expect(stageJobs("A")).toBe(26);',
 	'expect(stageJobs("B")).toBe(1);',
 	'expect(stageJobs("C")).toBe(11);',
-	'expect(stageJobs("D")).toBe(38);',
+	'expect(stageJobs("D")).toBe(37);',
 	"expect(CENSUS_SITES.filter((site) => site.ref !== undefined).length).toBe(20);",
 	"expect(CENSUS_SITES.filter((site) => site.ref === EPHEMERAL_PULL_REF).length).toBe(17);",
 	'expect(stageRefs("A")).toBe(16);',
@@ -357,7 +357,7 @@ const PINNED_PRINT = [
 // Snapshot identities make a pin failure actionable. Counts alone say that a
 // row moved; these keys say which job added or removed it.
 const PINNED_ROW_KEYS =
-	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::clear-stale-verdict-labels::A|ci-infra-kill-rerun.yml::classify::A|ci-infra-kill-rerun.yml::finalize-rerun::A|ci.yml::changes::C|ci.yml::dependency-boundaries::A|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::heavy-gate::gate|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|ci.yml::codeql::B|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::markdownlint::A|lint.yml::oxlint-advisory::C|lint.yml::lint-advisory::C|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-metadata::A|pr-metadata.yml::pr-body-lint::C|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|strict-install.yml::strict-install-cold-cache::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
+	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::clear-stale-verdict-labels::A|ci-infra-kill-rerun.yml::classify::A|ci-infra-kill-rerun.yml::finalize-rerun::A|ci.yml::changes::C|ci.yml::strict-install-cold-cache::A|ci.yml::dependency-boundaries::A|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::heavy-gate::gate|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|ci.yml::codeql::B|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::markdownlint::A|lint.yml::oxlint-advisory::C|lint.yml::lint-advisory::C|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-metadata::A|pr-metadata.yml::pr-body-lint::C|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
 		"|",
 	);
 const PINNED_NO_CHECKOUT_KEYS = new Set([
@@ -824,9 +824,8 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		// manual #4756 repeat probe (`windows-repeat-probe.yml`, workflow_dispatch
 		// only) adds one checkout in D: 79 -> 80, and D grows 36 -> 37. #5002 folded
 		// seven lint.yml jobs into `lint-advisory` (C 17 -> 11), PR title and
-		// close-keyword into `pr-metadata`, dropped osv-scan's detect job for a
-		// `paths:` filter, and moved the strict install to its own D workflow:
-		// 80 -> 72 sites, A 28 -> 25, D 37 -> 38.
+		// close-keyword into `pr-metadata`, and dropped osv-scan's detect job for a
+		// `paths:` filter: 80 -> 72 sites, A 28 -> 26.
 		assertNonEmptyScan(
 			"early-start advisory checkout census",
 			CENSUS_SITES.length,
@@ -838,10 +837,10 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 			CENSUS_ROWS.filter((row) => row.stage !== "gate").length,
 			75,
 		);
-		pinnedNumber("stage A rows", stageJobs("A"), 25);
+		pinnedNumber("stage A rows", stageJobs("A"), 26);
 		pinnedNumber("stage B rows", stageJobs("B"), 1);
 		pinnedNumber("stage C rows", stageJobs("C"), 11);
-		pinnedNumber("stage D rows", stageJobs("D"), 38);
+		pinnedNumber("stage D rows", stageJobs("D"), 37);
 		// The gate's own checkout is its own stage and is excluded from A-D.
 		pinnedNumber("gate checkout sites", summary.get("gate")?.sites ?? 0, 1);
 		// #3941 F1: the schedule/dispatch-only advisory job is NOT early-start,
