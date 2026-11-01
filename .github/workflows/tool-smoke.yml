@@ -80,7 +80,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/test-history-artifacts"
           # #4030: incremental ingest. Whole CI runs newer than the watermark,
-          # at most 100 a night, oldest first; 5xx responses retry.
+          # at most 100 a night, oldest first; 5xx responses and a cut-off JSON
+          # body ("unexpected end of JSON input") retry.
           node "$RUNNER_TEMP/history-scripts/download-test-history-artifacts.mjs" \
             --repository "$GITHUB_REPOSITORY" \
             --since "$SINCE" \
