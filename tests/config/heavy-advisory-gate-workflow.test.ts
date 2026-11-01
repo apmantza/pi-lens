@@ -67,6 +67,10 @@ const load = (file: string) =>
 const asList = (needs: Job["needs"]) =>
 	Array.isArray(needs) ? needs : needs ? [needs] : [];
 
+const canSkipAtJobLevel = (condition: string | undefined) =>
+	condition !== undefined &&
+	!/^\s*(?:\$\{\{\s*)?always\(\)(?:\s*\}\})?\s*$/.test(condition);
+
 /** Every check-run name a job can produce (a matrix expands its `name`). */
 function checkNamesOf(job: Job): string[] {
 	const name = job.name ?? "";
@@ -513,11 +517,22 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 		};
 		visit("heavy-gate");
 		expect(ancestors.size).toBeGreaterThanOrEqual(asList(gate.needs).length);
-		const skippable = [...ancestors].filter((id) => {
-			const condition = CI.jobs[id]?.if;
-			return condition !== undefined && !condition.includes("always()");
-		});
+		const skippable = [...ancestors].filter((id) =>
+			canSkipAtJobLevel(CI.jobs[id]?.if),
+		);
 		expect(skippable).toEqual([]);
+	});
+
+	it("treats only a bare always() as unable to skip", () => {
+		for (const condition of [undefined, "always()", "${{ always() }}"])
+			expect(canSkipAtJobLevel(condition), String(condition)).toBe(false);
+		for (const condition of [
+			"always() && github.event_name == 'push'",
+			"${{ always() && needs.changes.outputs.formal != 'false' }}",
+			"!cancelled()",
+			"github.event_name != 'pull_request'",
+		])
+			expect(canSkipAtJobLevel(condition), condition).toBe(true);
 	});
 
 	// Recurrence (#3801 docs-only scope): a gate that starts on a docs-only diff
