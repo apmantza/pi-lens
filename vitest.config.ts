@@ -403,6 +403,10 @@ const lspSpawnHeavyInclude = [
 	// #4320: the watched-files wire frames only exist on a real stdio connection
 	// to a real fake-server child; the handshake is the same #1022/#2332 shape as
 	// its lane siblings.
+	// #5131: the recompile-on-notice clear exists only on a real stdio wire to a
+	// real fake-server child; the handshake is the same #1022/#2332 shape as its
+	// lane siblings.
+	"tests/clients/lsp/watched-clear-5131.test.ts",
 	"tests/clients/lsp/watched-files-created-4320.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	// #2776: the real fake-server wire is the only way to reproduce the

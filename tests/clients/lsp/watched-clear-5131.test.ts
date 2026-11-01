@@ -105,6 +105,66 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 	const codes = (result: Awaited<ReturnType<typeof touch>>) =>
 		(result?.diags ?? []).map((d) => (d as { code?: unknown }).code);
 
+	const heldRows = () =>
+		getDegradationSummary().filter(
+			(group) => group.kind === "lsp-watched-echo-held",
+		);
+
+	/**
+	 * A real client over the wire. The server echoes each watched-files frame it
+	 * receives and follows each publish with a marker; both arrive in wire
+	 * order, so a join on a marker means the client has already decided what to
+	 * do with that publish.
+	 */
+	const startClient = async (env: Record<string, string>) => {
+		const proc = await spawnFakeLspServer({
+			cwd: tmp,
+			env: {
+				...process.env,
+				FAKE_LSP_TRACE_FILE: trace,
+				FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
+				FAKE_LSP_ECHO_WATCHED_FILES: "1",
+				FAKE_LSP_RECOMPILE_MARK_PUBLISHES: "1",
+				...env,
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "groovy-lang-server",
+			process: proc,
+			root: tmp,
+		});
+		const frames: unknown[] = [];
+		const publishes: string[] = [];
+		const waiters: Array<() => void> = [];
+		const wake = () => {
+			for (const waiter of waiters.splice(0)) waiter();
+		};
+		client.connection.onNotification("$/test/watchedFilesReceived", (p) => {
+			frames.push(p);
+			wake();
+		});
+		client.connection.onNotification(
+			"$/test/publishSent",
+			(p: { uri: string }) => {
+				publishes.push(p.uri);
+				wake();
+			},
+		);
+		const until = (ready: () => boolean): Promise<void> =>
+			new Promise((resolve) => {
+				const check = () => (ready() ? resolve() : waiters.push(check));
+				check();
+			});
+		return {
+			client,
+			until,
+			frames,
+			publishesFor: (file: string) =>
+				publishes.filter((uri) => uri === pathToFileURL(file).href).length,
+			publishCount: () => publishes.length,
+		};
+	};
+
 	it("keeps the error the server publishes before it clears it, and still sends the notice", async () => {
 		const service = startService(200);
 		try {
@@ -135,11 +195,7 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 				confirmation: result?.confirmation,
 				diags: result?.diags,
 			}).toEqual({ confirmation: "confirmed", diags: [] });
-			expect(
-				getDegradationSummary().some(
-					(group) => group.kind === "lsp-watched-echo-held",
-				),
-			).toBe(false);
+			expect(heldRows()).toEqual([]);
 		} finally {
 			await service.shutdown();
 		}
@@ -173,30 +229,31 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 				touch(service, "b.groovy", CLEAN),
 			]);
 			expect(broken?.diags).toEqual([]);
-			expect(
-				getDegradationSummary().some(
-					(group) => group.kind === "lsp-watched-echo-held",
-				),
-			).toBe(false);
+			expect(heldRows()).toEqual([]);
 		} finally {
 			await service.shutdown();
 		}
 	}, 30_000);
 
 	it("stops holding once a later notice reached the server", async () => {
-		const service = startService(900);
+		const { client, until, frames, publishesFor } = await startClient({
+			FAKE_LSP_RECOMPILE_CLEARS_MS: "900",
+		});
 		try {
-			const first = touch(service, "a.groovy", BROKEN);
-			const watched = pathToFileURL(path.join(tmp, "a.groovy")).href;
-			await vi.waitFor(() =>
-				expect(traceLines()).toContain(`watched ${watched} 1`),
-			);
+			const first = path.join(tmp, "a.groovy");
+			const second = path.join(tmp, "b.groovy");
+			fs.writeFileSync(first, BROKEN);
+			fs.writeFileSync(second, CLEAN);
+			await client.notify.open(first, BROKEN, "groovy");
+			await until(() => frames.length >= 1);
 			// A second notice (another document's) lands before a.groovy's clear:
 			// from then on a clear may be the server's answer to either.
-			await touch(service, "b.groovy", CLEAN);
-			expect((await first)?.diags).toEqual([]);
+			await client.notify.open(second, CLEAN, "groovy");
+			await until(() => frames.length >= 2);
+			await until(() => publishesFor(first) >= 2);
+			expect(heldRows()).toEqual([]);
 		} finally {
-			await service.shutdown();
+			await client.shutdown();
 		}
 	}, 30_000);
 
@@ -222,11 +279,7 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 		try {
 			const result = await touch(service, "a.groovy", BROKEN);
 			expect(result?.diags).toEqual([]);
-			expect(
-				getDegradationSummary().some(
-					(group) => group.kind === "lsp-watched-echo-held",
-				),
-			).toBe(false);
+			expect(heldRows()).toEqual([]);
 		} finally {
 			await service.shutdown();
 		}
@@ -236,30 +289,18 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 		// Recurrence: a preserve-diagnostics resync (formatting) does not clear the
 		// path's bookkeeping, so only the sent version tells the new bytes' clear
 		// from the notice's echo.
-		const proc = await spawnFakeLspServer({
-			cwd: tmp,
-			env: {
-				...process.env,
-				FAKE_LSP_TRACE_FILE: trace,
-				FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
-				FAKE_LSP_RECOMPILE_CLEARS_MS: "100",
-				FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR: "1",
-			},
-		});
-		const client = await createLSPClient({
-			serverId: "groovy-lang-server",
-			process: proc,
-			root: tmp,
+		const { client, until, publishCount } = await startClient({
+			FAKE_LSP_RECOMPILE_CLEARS_MS: "100",
+			FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR: "1",
 		});
 		try {
 			const file = path.join(tmp, "a.groovy");
 			fs.writeFileSync(file, BROKEN);
 			await client.notify.open(file, BROKEN, "groovy");
-			await vi.waitFor(() =>
-				expect(client.getDiagnostics(file)).toHaveLength(1),
-			);
+			await until(() => publishCount() >= 1);
 			await client.notify.open(file, FIXED, "groovy", true);
-			await vi.waitFor(() => expect(client.getDiagnostics(file)).toEqual([]));
+			await until(() => publishCount() >= 2);
+			expect(heldRows()).toEqual([]);
 		} finally {
 			await client.shutdown();
 		}
@@ -269,39 +310,20 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 		// Recurrence: the version counter restarts at 0 on a first open, so an
 		// entry left by the previous lifetime would match the new one and swallow
 		// the clear that answers its content.
-		const proc = await spawnFakeLspServer({
-			cwd: tmp,
-			env: {
-				...process.env,
-				FAKE_LSP_TRACE_FILE: trace,
-				FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
-				FAKE_LSP_RECOMPILE_CLEARS_MS: "100",
-				FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR: "1",
-			},
-		});
-		const client = await createLSPClient({
-			serverId: "groovy-lang-server",
-			process: proc,
-			root: tmp,
+		const { client, until, publishCount } = await startClient({
+			FAKE_LSP_RECOMPILE_CLEARS_MS: "100",
+			FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR: "1",
 		});
 		try {
 			const file = path.join(tmp, "a.groovy");
 			fs.writeFileSync(file, BROKEN);
 			await client.notify.open(file, BROKEN, "groovy");
-			await vi.waitFor(() =>
-				expect(client.getDiagnostics(file)).toHaveLength(1),
-			);
+			await until(() => publishCount() >= 1);
 			await client.closeDocument(file);
 			fs.writeFileSync(file, FIXED);
 			await client.notify.open(file, FIXED, "groovy", false, true);
-			// Stored (not held): the empty publish for the fixed bytes is an answer.
-			await client.waitForDiagnostics(file, 3000);
-			expect(client.getDiagnostics(file)).toEqual([]);
-			expect(
-				getDegradationSummary().some(
-					(group) => group.kind === "lsp-watched-echo-held",
-				),
-			).toBe(false);
+			await until(() => publishCount() >= 2);
+			expect(heldRows()).toEqual([]);
 		} finally {
 			await client.shutdown();
 		}

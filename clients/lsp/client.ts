@@ -2219,7 +2219,7 @@ const PENDING_RECEIPT_DROPPED = "pending-receipt-dropped";
 export interface OwnNoticeEcho {
 	readonly uri: string;
 	/** The sent version the notice and the publishes are judged at. */
-	readonly version: number;
+	readonly sentVersion: number;
 	flushed: boolean;
 	sawNonEmpty: boolean;
 }
@@ -2232,11 +2232,11 @@ function noteOwnNoticeQueued(
 	state: LSPClientState,
 	normalizedPath: string,
 	uri: string,
-	version: number,
+	sentVersion: number,
 ): void {
 	(state.ownNoticeEchoes ??= new Map()).set(normalizedPath, {
 		uri,
-		version,
+		sentVersion,
 		flushed: false,
 		sawNonEmpty: false,
 	});
@@ -2282,7 +2282,7 @@ function holdEmptyEchoOfOwnNotice(
 	if (
 		!echo ||
 		docVersion !== undefined ||
-		echo.version !== state.documentVersions.get(normalizedPath)
+		echo.sentVersion !== state.documentVersions.get(normalizedPath)
 	)
 		return false;
 	if (diagnosticCount > 0) {

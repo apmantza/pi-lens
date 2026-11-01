@@ -551,32 +551,42 @@ let sequenceRefreshed = false;
 // `unable to resolve class Foo` error, then its `[]` 5 ms later, 100 ms after
 // the client's own watched-files notice). Publishes are version-less unless
 // `FAKE_LSP_RECOMPILE_VERSIONED=1` stamps the document version the server last
-// read; `FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR=1` leaves the notice unanswered.
+// read; `FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR=1` leaves the notice unanswered;
+// `FAKE_LSP_RECOMPILE_MARK_PUBLISHES=1` follows each publish with a
+// `$/test/publishSent` notification.
 const RECOMPILE_CLEARS_MS = Number(
 	process.env.FAKE_LSP_RECOMPILE_CLEARS_MS ?? "-1",
 );
 const RECOMPILE_VERSIONED = process.env.FAKE_LSP_RECOMPILE_VERSIONED === "1";
 const RECOMPILE_NO_WATCHED_CLEAR =
 	process.env.FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR === "1";
+const RECOMPILE_MARK_PUBLISHES =
+	process.env.FAKE_LSP_RECOMPILE_MARK_PUBLISHES === "1";
 const recompileVersions = new Map();
 let recompileBusyUntil = 0;
 function recompilePublish(uri, diagnostics, compileMs = 0) {
 	const version = recompileVersions.get(uri);
 	const at = Math.max(Date.now() + compileMs, recompileBusyUntil) + 5;
 	recompileBusyUntil = at;
-	const timer = setTimeout(
-		() =>
+	const timer = setTimeout(() => {
+		send({
+			jsonrpc: "2.0",
+			method: "textDocument/publishDiagnostics",
+			params: {
+				uri,
+				diagnostics,
+				...(RECOMPILE_VERSIONED && version !== undefined ? { version } : {}),
+			},
+		});
+		// The client has handled the publish by the time it reads this marker, so
+		// a test joins on it instead of polling.
+		if (RECOMPILE_MARK_PUBLISHES)
 			send({
 				jsonrpc: "2.0",
-				method: "textDocument/publishDiagnostics",
-				params: {
-					uri,
-					diagnostics,
-					...(RECOMPILE_VERSIONED && version !== undefined ? { version } : {}),
-				},
-			}),
-		at - Date.now(),
-	);
+				method: "$/test/publishSent",
+				params: { uri, count: diagnostics.length },
+			});
+	}, at - Date.now());
 	timer.unref?.();
 }
 function recompileCompile(uri, text, compileMs) {
