@@ -79,7 +79,8 @@ export const CONFIG_DIAGNOSTIC_CODES = {
 	 * degradation row, so the code a user greps for in the terminal is the same
 	 * one in `latency.log`.
 	 */
-	PILENS_CFG_0001: "config file unreadable or unparsable; ignored",
+	PILENS_CFG_0001:
+		"config file unreadable, unparsable, or not a JSON object; ignored",
 	/**
 	 * A deprecated config KEY was accepted inside its deprecation window.
 	 *
