@@ -340,6 +340,39 @@ describe("module_report presets (#5137)", () => {
 		}
 	});
 
+	// Recurrence: #5158 CodeRabbit. The unavailable branch returned before it
+	// rendered callbackSupport or PROVENANCE, so a cold callback-only file gave the
+	// text default no way to judge its handles. The JSON default carried both.
+	it("keeps a callback-only module's callbackSupport and PROVENANCE on the text cell", async () => {
+		const env = setupTestEnvironment("pi-lens-preset-callback-provenance-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"only-callbacks.ts",
+				"setTimeout(() => cleanup(), 100);\n",
+			);
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"1",
+				{ path: "only-callbacks.ts" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			const text = String(result.content[0]?.text);
+			expect(result.isError).toBe(true);
+			expect(text).toContain("(callbackSupport: tuned)");
+			// Cold cache: no graph backs who-uses-this, and the callbacks come from
+			// the heuristic extractor. The summary footer also names its omissions.
+			expect(text).toMatch(/^PROVENANCE: /m);
+			expect(text).toContain("callbacks=heuristic-tree-sitter");
+			expect(text).toContain("semantic.source=none");
+			expect(text).toContain("metrics=omitted (view=full-text)");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// Recurrence: `stripEntryMetrics` stripped only the top-level entries, so a
 	// class's methods kept `cx:`, `fan:` and `used-by:` in the summary text. Leaving
 	// `entry.members` unstripped survived the whole suite (verify r1 F7).

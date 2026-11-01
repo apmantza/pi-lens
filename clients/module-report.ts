@@ -2371,7 +2371,7 @@ function compactCallGraphCoverageLine(
  * Render a ModuleReport as line-oriented text (#5137): lossless against the
  * projected artifact: every field appears in the text cell, `kind` prints raw so
  * it can be reused as `read_symbol`'s `kind` filter, and an unavailable module
- * still renders its callbacks and recommended reads.
+ * still renders its callbacks, recommended reads and PROVENANCE footer.
  * Blocks run API:, INTERNAL:, CALLBACKS:, IMPORTS:, CALL GRAPH:, BLAST RADIUS:,
  * RECOMMENDED:, each only when its data is non-empty, followed by one
  * PROVENANCE: footer line. Metrics render as a `cx:`/`fan:` suffix, flags each
@@ -2416,6 +2416,38 @@ function appendRecommendedSection(
 	}
 }
 
+/** The `(callbackSupport: \u2026)` status a text header carries, when the report has one. */
+function callbackSupportSuffix(report: ModuleReport): string {
+	return report.callbackSupport
+		? ` (callbackSupport: ${report.callbackSupport})`
+		: "";
+}
+
+/** The PROVENANCE footer: provenance and semantic keys, the graph build time, and a
+ * marker when the summary projection dropped metrics. */
+function provenanceLine(
+	report: ModuleReport,
+	projection: ModuleReportProjection | undefined,
+): string {
+	const provenanceParts: string[] = [];
+	if (report.provenance) {
+		for (const [key, value] of Object.entries(report.provenance)) {
+			if (value !== undefined) provenanceParts.push(`${key}=${String(value)}`);
+		}
+	}
+	if (report.semantic) {
+		for (const [key, value] of Object.entries(report.semantic)) {
+			provenanceParts.push(`semantic.${key}=${String(value)}`);
+		}
+	}
+	provenanceParts.push(`graphBuiltAt=${report.graphBuiltAt ?? "unknown"}`);
+	// A projection that drops metrics must say so, or an absent `used-by:` line
+	// reads as "nothing uses this symbol" (#5137 review).
+	if (projection === "summary")
+		provenanceParts.push("metrics=omitted (view=full-text)");
+	return `PROVENANCE: ${provenanceParts.join(" ")}`;
+}
+
 export function renderCompactModuleReport(
 	report: ModuleReport,
 	options: { projection?: ModuleReportProjection } = {},
@@ -2427,7 +2459,7 @@ export function renderCompactModuleReport(
 		// carries navigation handles, so those render here as well (#5137
 		// review): the old JSON default preserved them.
 		const unavailable = [
-			`${report.path} \u2014 unavailable${report.error ? `: ${report.error}` : ""}`,
+			`${report.path} \u2014 unavailable${report.error ? `: ${report.error}` : ""}${callbackSupportSuffix(report)}`,
 			...(report.warnings ?? []).map((note) => `WARNING: ${note}`),
 		];
 		const handleWidth =
@@ -2437,6 +2469,10 @@ export function renderCompactModuleReport(
 			) + 2;
 		appendCallbacksSection(unavailable, report, handleWidth);
 		appendRecommendedSection(unavailable, report, handleWidth);
+		// The same footer the available branch prints (#5158 CodeRabbit): a
+		// callback-only module reaches this return, and its handles need the
+		// provenance that says how reliable they are.
+		unavailable.push(provenanceLine(report, options.projection));
 		return unavailable.join("\n");
 	}
 	const allEntries = [...report.api, ...report.internal];
@@ -2448,13 +2484,10 @@ export function renderCompactModuleReport(
 			...report.callbacks.map((c) => `${c.startLine}-${c.endLine}`.length),
 		) + 2;
 
-	const callbackSupportSuffix = report.callbackSupport
-		? ` (callbackSupport: ${report.callbackSupport})`
-		: "";
 	const lines: string[] = [
 		`${report.path} ${report.language ?? "?"} ${report.lineCount ?? "?"}L [${report.staleness}] \u2014 ` +
 			`${report.summary.symbols} symbols, ${report.summary.exports} exported, ` +
-			`${report.summary.imports} imports${callbackSupportSuffix}`,
+			`${report.summary.imports} imports${callbackSupportSuffix(report)}`,
 	];
 	if (report.error) lines.push(`INCOMPLETE: ${report.error}`);
 	for (const warning of report.warnings ?? []) {
@@ -2509,23 +2542,7 @@ export function renderCompactModuleReport(
 		}
 	}
 	appendRecommendedSection(lines, report, width);
-	const provenanceParts: string[] = [];
-	if (report.provenance) {
-		for (const [key, value] of Object.entries(report.provenance)) {
-			if (value !== undefined) provenanceParts.push(`${key}=${String(value)}`);
-		}
-	}
-	if (report.semantic) {
-		for (const [key, value] of Object.entries(report.semantic)) {
-			provenanceParts.push(`semantic.${key}=${String(value)}`);
-		}
-	}
-	provenanceParts.push(`graphBuiltAt=${report.graphBuiltAt ?? "unknown"}`);
-	// A projection that drops metrics must say so, or an absent `used-by:` line
-	// reads as "nothing uses this symbol" (#5137 review).
-	if (options.projection === "summary")
-		provenanceParts.push("metrics=omitted (view=full-text)");
-	lines.push(`PROVENANCE: ${provenanceParts.join(" ")}`);
+	lines.push(provenanceLine(report, options.projection));
 	return lines.join("\n");
 }
 
