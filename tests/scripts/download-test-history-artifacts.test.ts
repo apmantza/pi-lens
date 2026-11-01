@@ -178,6 +178,21 @@ describe("artifact listing pages (#4030)", () => {
 		).toThrow(/passed 3 pages without reaching 2026-10-01T06:00:00.000Z/);
 		expect(asked).toBe(3);
 	});
+
+	// Recurrence #5154 (per_page 100 to 30): the default bound was sized for 100
+	// a page. At 30, 300 pages hold 9000 artifacts, under the 14883 the
+	// repository retained on 2026-11-01, so a full walk must fit the bound.
+	it("walks the whole retention inside the default page bound at 30 a page", () => {
+		const retained = 14_883;
+		const listed = listArtifacts((page) => {
+			const first = (page - 1) * 30;
+			const count = Math.max(0, Math.min(30, retained - first));
+			return Array.from({ length: count }, (_, index) =>
+				artifact(first + index + 1, at(HOUR)),
+			);
+		}, cutoff);
+		expect(listed).toHaveLength(retained);
+	});
 });
 
 type Mode =
@@ -185,6 +200,8 @@ type Mode =
 	| "persistent"
 	| "large"
 	| "truncated"
+	| "listing500"
+	| "listingPersistent500"
 	| "notFound"
 	| "otherJson";
 const LARGE_ZIP_BYTES = 1.5 * 1024 * 1024;
@@ -199,13 +216,20 @@ function fakeGh(mode: Mode) {
 	fs.mkdirSync(bin);
 	const zipCalls = path.join(root, "zip-calls");
 	const listCalls = path.join(root, "list-calls");
+	const listArgs = path.join(root, "list-argv");
+	// The raw REST shape of GET /actions/artifacts: the script maps it in node.
 	const listed = JSON.stringify({
-		id: 101,
-		name: "unit-test-results-linux",
-		size: 300_000,
-		createdAt: new Date().toISOString(),
-		expired: false,
-		runId: 7,
+		total_count: 1,
+		artifacts: [
+			{
+				id: 101,
+				name: "unit-test-results-linux",
+				size_in_bytes: 300_000,
+				created_at: new Date().toISOString(),
+				expired: false,
+				workflow_run: { id: 7 },
+			},
+		],
 	});
 	const zipBody = {
 		transient:
@@ -215,6 +239,8 @@ function fakeGh(mode: Mode) {
 		truncated: "printf 'zip-bytes'",
 		notFound: "printf 'zip-bytes'",
 		otherJson: "printf 'zip-bytes'",
+		listing500: "printf 'zip-bytes'",
+		listingPersistent500: "printf 'zip-bytes'",
 	}[mode];
 	// Listing faults: the `gh api --jq` listing on a cut-off body (#5154, the
 	// reported failure), a non-retryable 404 (the control), and another JSON
@@ -224,6 +250,11 @@ function fakeGh(mode: Mode) {
 		persistent: "",
 		large: "",
 		truncated: `if [ "$listCount" -lt 2 ]; then printf '%s\\n' 'unexpected end of JSON input' >&2; exit 1; fi`,
+		// #5154: gh prints the status of a 500 whose body is empty (no --jq now).
+		listing500:
+			"if [ \"$listCount\" -lt 2 ]; then printf '%s\\n' 'gh: Server Error (HTTP 500)' >&2; exit 1; fi",
+		listingPersistent500:
+			"printf '%s\\n' 'gh: Server Error (HTTP 500)' >&2; exit 1",
 		notFound: "printf '%s\\n' 'gh: Not Found (HTTP 404)' >&2; exit 1",
 		otherJson:
 			"printf '%s\\n' 'json: cannot unmarshal string into Go value of type int' >&2; exit 1",
@@ -232,7 +263,12 @@ function fakeGh(mode: Mode) {
 		path.join(bin, "gh"),
 		`#!/bin/sh
 case "$*" in
-  *actions/artifacts\\?per_page=100\\&page=1*)
+  *actions/artifacts\\?per_page=*)
+    printf '%s\\n' "$*" >> ${JSON.stringify(listArgs)}
+    ;;
+esac
+case "$*" in
+  *actions/artifacts\\?per_page=30\\&page=1*)
     listCount=0
     [ -f ${JSON.stringify(listCalls)} ] && listCount=$(cat ${JSON.stringify(listCalls)})
     listCount=$((listCount + 1))
@@ -240,7 +276,8 @@ case "$*" in
     ${listFault}
     printf '%s\\n' '${listed}'
     ;;
-  *actions/artifacts\\?per_page=100\\&page=*)
+  *actions/artifacts\\?per_page=30\\&page=*)
+    printf '%s\\n' '{"total_count":1,"artifacts":[]}'
     ;;
   */zip)
     count=0
@@ -270,7 +307,16 @@ esac
 		);
 	const zips = () => Number(fs.readFileSync(zipCalls, "utf8"));
 	const listingCalls = () => Number(fs.readFileSync(listCalls, "utf8"));
-	return { run, zips, listingCalls, zip: path.join(output, "101.zip") };
+	// Each listing request's argv as gh received it, one line per call.
+	const listingArgs = () =>
+		fs.readFileSync(listArgs, "utf8").split("\n").filter(Boolean);
+	return {
+		run,
+		zips,
+		listingCalls,
+		listingArgs,
+		zip: path.join(output, "101.zip"),
+	};
 }
 
 describe("download-test-history-artifacts process boundary", () => {
@@ -305,6 +351,39 @@ describe("download-test-history-artifacts process boundary", () => {
 		// The listing ran twice: the cut-off attempt, then the retry.
 		expect(gh.listingCalls()).toBe(2);
 		expect(fs.readFileSync(gh.zip, "utf8")).toBe("zip-bytes");
+	});
+
+	// Recurrence #5154 (run 41312503792): the listing's GET answered HTTP 500 with
+	// an empty body. `gh api --jq` reported that as `unexpected end of JSON
+	// input` and hid the status; without --jq gh prints `HTTP 500`, which retries.
+	it("retries a listing that fails with HTTP 500 and succeeds on the second attempt", () => {
+		const gh = fakeGh("listing500");
+		expect(gh.run()).toContain(
+			"test-history download: 1 run(s), 1 artifact(s) of 1 eligible run(s) after no watermark; 0 metadata-only skipped",
+		);
+		expect(gh.listingCalls()).toBe(2);
+		expect(fs.readFileSync(gh.zip, "utf8")).toBe("zip-bytes");
+	});
+
+	// Recurrence #5154: a listing 500 that persists must name the HTTP status in
+	// the failure, not a JSON parse error, after the bounded attempts.
+	it("fails after the retry bound on a persistent listing 500, naming the HTTP status", () => {
+		const gh = fakeGh("listingPersistent500");
+		expect(() => gh.run()).toThrow(/HTTP 500/);
+		// Four bounded listing attempts (MAX_ATTEMPTS), then the status is reported.
+		expect(gh.listingCalls()).toBe(4);
+	});
+
+	// Recurrence #5154: at per_page=100 GitHub answered HTTP 500 for listing
+	// pages 1 and 3, while per_page=30 answered 200 for pages 1 to 10. The argv
+	// pins the page size and the absence of --jq (the script parses the JSON).
+	it("pages the artifact listing at per_page=30 with no --jq", () => {
+		const gh = fakeGh("transient");
+		gh.run();
+		expect(gh.listingArgs()).toEqual([
+			"api /repos/o/r/actions/artifacts?per_page=30&page=1",
+			"api /repos/o/r/actions/artifacts?per_page=30&page=2",
+		]);
 	});
 
 	// Control: a 404 is not transient, so the listing fails on its first call.
