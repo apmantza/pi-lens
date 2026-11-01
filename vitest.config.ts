@@ -787,6 +787,9 @@ export const wallClockBudgetInclude = [
 	// and pi's own `bash` tool, so the child shells and git processes ride along
 	// in the serialized lane too.
 	"tests/index-2050-worktree-bash-dispatch-witness.test.ts",
+	// #5146: the per-case census polls /proc with vi.waitFor for an ast-grep
+	// child that the fast POSIX shutdown is still exiting (flake-shape admission).
+	"tests/index-3748-advisory-scope-witness.test.ts",
 	// #4316: the session-start LSP warm is fire-and-forget inside the loaded
 	// extension copy, so the witness joins its log record with vi.waitFor
 	// (flake-shape admission).
