@@ -307,22 +307,29 @@ describe("ruleIgnoredForPath on a policy map built from bare strings (#5029)", (
 	});
 });
 
-describe("a zero-width extglob entry on a directory walk (#5129)", () => {
+describe("a final extglob that can match nothing, on a directory walk (#5129)", () => {
 	// Recurrence: minimatch 10 matched the trailing-slash directory candidate
-	// (`legacy/`) against a zero-width extglob such as `?(x)`, so the entry hid
-	// every directory from the walkers that call `isIgnored(dir, true)`
-	// (source-walker, pipeline, workspace-modules); minimatch 11 (the
-	// GHSA-g3hv-75wg-m249 bump) leaves an empty path portion to an empty
-	// pattern portion. Git reads `?(x)` as one character then `(x)`, which
-	// names none of these directories.
-	it.each(["?(x)", "*(x)"])("%s hides no directory", (entry) => {
-		fs.mkdirSync(path.join(repo, "legacy", "sub"), { recursive: true });
-		writeConfig(repo, { ignore: [entry] });
-		const matcher = getProjectIgnoreMatcher(repo);
+	// (`legacy/`, `src/`) against a final extglob that can match nothing, such as
+	// `?(x)`, `*(x)` or `dir/!(x)`, so the entry hid the whole directory from the
+	// walkers that call `isIgnored(dir, true)` (source-walker, pipeline,
+	// workspace-modules); minimatch 11 (the GHSA-g3hv-75wg-m249 bump) leaves an
+	// empty path portion to an empty pattern portion. Git reads `?(x)` as one
+	// character then `(x)`, which names none of these directories.
+	it.each([
+		{ entry: "?(x)", dir: "legacy", child: "sub" },
+		{ entry: "*(x)", dir: "legacy", child: "sub" },
+		{ entry: "src/*(x)", dir: "src", child: "sub" },
+		// `!(x)` matches every name but `x`, so the child the walk keeps is `x`.
+		{ entry: "src/!(x)", dir: "src", child: "x" },
+	])(
+		"$entry hides no directory: $dir and $dir/$child",
+		({ entry, dir, child }) => {
+			fs.mkdirSync(path.join(repo, dir, child), { recursive: true });
+			writeConfig(repo, { ignore: [entry] });
+			const matcher = getProjectIgnoreMatcher(repo);
 
-		expect(matcher.isIgnored(path.join(repo, "legacy"), true)).toBe(false);
-		expect(matcher.isIgnored(path.join(repo, "legacy", "sub"), true)).toBe(
-			false,
-		);
-	});
+			expect(matcher.isIgnored(path.join(repo, dir), true)).toBe(false);
+			expect(matcher.isIgnored(path.join(repo, dir, child), true)).toBe(false);
+		},
+	);
 });
