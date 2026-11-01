@@ -1145,6 +1145,14 @@ export type DegradationKind =
 	 */
 	| "lsp-warm-client-missing"
 	/**
+	 * #5131: an empty version-less `publishDiagnostics` followed the client's own
+	 * first-open `workspace/didChangeWatchedFiles` for a document the server had
+	 * already reported on, and was held: the server recompiled from disk on the
+	 * notice and cleared a real finding. Subject is the server id; counted per
+	 * held publish, one latest-reason entry per server.
+	 */
+	| "lsp-watched-echo-held"
+	/**
 	 * A liveness probe (`clientPingLiveness`, `clients/lsp/client.ts`) found no
 	 * request method the server advertises that it could safely probe with, so
 	 * it reported liveness from process and connection state alone (#1969).

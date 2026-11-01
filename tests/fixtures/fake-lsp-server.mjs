@@ -541,6 +541,75 @@ function checkEveryOpenDocument(changedUri) {
 // `dirty` alone). Without a `refreshed` element nothing changes.
 let sequenceRefreshed = false;
 
+// #5131: a recompile-from-disk server (groovy-language-server). It "compiles"
+// one document at a time: `didOpen` and `didChange` publish one error when the
+// text holds `Foo` (an unresolved class), else an empty set, after
+// `FAKE_LSP_RECOMPILE_CLEARS_MS` of compile time for the open. A
+// `workspace/didChangeWatchedFiles` naming an open document recompiles it from
+// the tracker's reset state and publishes an EMPTY set 5 ms after the compile
+// queue drains, whatever the document holds (measured on the real server: the
+// `unable to resolve class Foo` error, then its `[]` 5 ms later, 100 ms after
+// the client's own watched-files notice). Publishes are version-less unless
+// `FAKE_LSP_RECOMPILE_VERSIONED=1` stamps the document version the server last
+// read; `FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR=1` leaves the notice unanswered;
+// `FAKE_LSP_RECOMPILE_MARK_PUBLISHES=1` follows each publish with a
+// `$/test/publishSent` notification (a `FAKE_LSP_PUBLISH_SEQUENCE` publish too).
+const RECOMPILE_CLEARS_MS = Number(
+	process.env.FAKE_LSP_RECOMPILE_CLEARS_MS ?? "-1",
+);
+const RECOMPILE_VERSIONED = process.env.FAKE_LSP_RECOMPILE_VERSIONED === "1";
+const RECOMPILE_NO_WATCHED_CLEAR =
+	process.env.FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR === "1";
+const RECOMPILE_MARK_PUBLISHES =
+	process.env.FAKE_LSP_RECOMPILE_MARK_PUBLISHES === "1";
+const recompileVersions = new Map();
+let recompileBusyUntil = 0;
+function recompilePublish(uri, diagnostics, compileMs = 0) {
+	const version = recompileVersions.get(uri);
+	const at = Math.max(Date.now() + compileMs, recompileBusyUntil) + 5;
+	recompileBusyUntil = at;
+	const timer = setTimeout(() => {
+		send({
+			jsonrpc: "2.0",
+			method: "textDocument/publishDiagnostics",
+			params: {
+				uri,
+				diagnostics,
+				...(RECOMPILE_VERSIONED && version !== undefined ? { version } : {}),
+			},
+		});
+		// The client has handled the publish by the time it reads this marker, so
+		// a test joins on it instead of polling.
+		if (RECOMPILE_MARK_PUBLISHES)
+			send({
+				jsonrpc: "2.0",
+				method: "$/test/publishSent",
+				params: { uri, count: diagnostics.length },
+			});
+	}, at - Date.now());
+	timer.unref?.();
+}
+function recompileCompile(uri, text, compileMs) {
+	recompilePublish(
+		uri,
+		text.includes("Foo")
+			? [
+					{
+						severity: 1,
+						source: "fake-recompile",
+						code: "P5131",
+						message: "unable to resolve class Foo",
+						range: {
+							start: { line: 0, character: 0 },
+							end: { line: 0, character: 1 },
+						},
+					},
+				]
+			: [],
+		compileMs,
+	);
+}
+
 function publishSequenceFor(uri) {
 	if (PUBLISH_SEQUENCE.length === 0) return false;
 	const sequence = sequenceRefreshed
@@ -575,6 +644,14 @@ function publishSequenceFor(uri) {
 							: [],
 				},
 			});
+			// #5131 round 2: the join marker a recompile publish carries, so a test
+			// reads each sequence publish's handled state off the wire, not a sleep.
+			if (RECOMPILE_MARK_PUBLISHES)
+				send({
+					jsonrpc: "2.0",
+					method: "$/test/publishSent",
+					params: { uri, count: shape === "dirty" ? 1 : 0 },
+				});
 		};
 		if (index === 0 && PUBLISH_SEQUENCE_FIRST_MS <= 0) {
 			emit();
@@ -1109,6 +1186,17 @@ function handle(raw) {
 			data.params?.textDocument?.text ?? "",
 		);
 		publishSequenceFor(data.params?.textDocument?.uri);
+		if (RECOMPILE_CLEARS_MS >= 0) {
+			recompileVersions.set(
+				data.params?.textDocument?.uri,
+				data.params?.textDocument?.version,
+			);
+			recompileCompile(
+				data.params?.textDocument?.uri,
+				data.params?.textDocument?.text ?? "",
+				RECOMPILE_CLEARS_MS,
+			);
+		}
 		if (STALE_MODULE_LOOKUP) publishModuleLookups(data.params?.textDocument?.uri);
 		if (CLOSED_FILE_CACHE)
 			checkEveryOpenDocument(data.params?.textDocument?.uri);
@@ -1166,6 +1254,13 @@ function handle(raw) {
 		if (slowMarker && typeof text === "string" && text.includes(slowMarker))
 			burnCpu(Number(process.env.FAKE_LSP_SLOW_CHANGE_MS ?? "400"));
 		publishSequenceFor(data.params?.textDocument?.uri);
+		if (RECOMPILE_CLEARS_MS >= 0 && typeof text === "string") {
+			recompileVersions.set(
+				data.params?.textDocument?.uri,
+				data.params?.textDocument?.version,
+			);
+			recompileCompile(data.params?.textDocument?.uri, text, 0);
+		}
 		if (STALE_MODULE_LOOKUP) publishModuleLookups(data.params?.textDocument?.uri);
 		if (CLOSED_FILE_CACHE)
 			checkEveryOpenDocument(data.params?.textDocument?.uri);
@@ -1266,6 +1361,10 @@ function handle(raw) {
 				else ambientFiles.add(changed);
 			}
 			checkEveryOpenDocument();
+		}
+		if (RECOMPILE_CLEARS_MS >= 0 && !RECOMPILE_NO_WATCHED_CLEAR) {
+			for (const change of data.params?.changes ?? [])
+				if (openDocuments.has(change.uri)) recompilePublish(change.uri, []);
 		}
 		if (process.env.FAKE_LSP_ECHO_WATCHED_FILES) {
 			send({
