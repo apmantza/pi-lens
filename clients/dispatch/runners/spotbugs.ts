@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { BoundedLruCache } from "../../bounded-cache.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { scannerReportParentDir } from "../../scanner-temp-root.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { findCompiledClassesDir } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
@@ -249,7 +249,7 @@ const spotbugsRunner: RunnerDefinition = {
 		// One file per RUN: pid and millisecond are shared by two cold starts of
 		// one process, and a shared file lets one run read or delete the other's.
 		const tmpXml = path.join(
-			os.tmpdir(),
+			scannerReportParentDir(),
 			`pi-lens-spotbugs-${process.pid}-${randomUUID()}.xml`,
 		);
 		const result = await safeSpawnAsync(
