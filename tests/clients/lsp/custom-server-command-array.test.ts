@@ -17,9 +17,9 @@ import { getFailedLspServerIds } from "../../../clients/widget-state.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const launchLSP = vi.fn(async (..._args: unknown[]) => ({}));
-vi.mock("../../../clients/lsp/launch.js", () => ({
+vi.mock("../../../clients/lsp/launch.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/lsp/launch.js")>()),
 	launchLSP,
-	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 
 const dirs: string[] = [];
