@@ -43,11 +43,20 @@ const SECOND_BODY = `${BODY}Get-Thing\r\n`;
 const FILE = "/project/script.ps1";
 const KEY = normalizeMapKey(FILE);
 
+interface SentParams {
+	textDocument: { text: string };
+	contentChanges: Array<{
+		text: string;
+		range: { end: { line: number; character: number } };
+	}>;
+	text: string;
+}
+
 function sent(state: LSPClientState, method: string) {
 	return vi
 		.mocked(state.connection.sendNotification)
 		.mock.calls.filter((call) => call[0] === method)
-		.map((call) => call[1] as Record<string, any>);
+		.map((call) => call[1] as SentParams);
 }
 
 function psState(overrides?: Partial<LSPClientState>): LSPClientState {

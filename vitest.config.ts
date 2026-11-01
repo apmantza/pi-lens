@@ -363,9 +363,6 @@ const lspSpawnHeavyInclude = [
 	// asserting which notifications reached the server — the same #1022/#2332
 	// contention class as its lane siblings.
 	"tests/clients/lsp/did-save-notification.test.ts",
-	// #5151: the bytes of a PowerShell BOM file over a real fixture-server stdio
-	// stream; the same #1022/#2332 handshake contention class as its lane siblings.
-	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts",
 	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	"tests/clients/lsp/integration.test.ts",
 	// #4786: a real `createLSPClient` over stdio fake-server children that publish
@@ -385,6 +382,9 @@ const lspSpawnHeavyInclude = [
 	// launchLSP/getServerById marker, so the census cannot derive it (its known
 	// marker gap); membership is by hand.
 	"tests/clients/lsp/opengrep-offline-findings-4765.integration.test.ts",
+	// #5151: the bytes of a PowerShell BOM file over a real fixture-server stdio
+	// stream; the same #1022/#2332 handshake contention class as its lane siblings.
+	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts",
 	// #4758: a real pyright-langserver child (skipped, with a named reason, when
 	// none is installed) behind a real initialize handshake, then a first-
 	// diagnostics wait of up to 30 s per case — the #1022/#2332 shape of its

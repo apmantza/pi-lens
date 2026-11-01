@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createLSPClient } from "../../../clients/lsp/client.js";
 import { stopLSP } from "../../../clients/lsp/launch.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
@@ -56,25 +56,26 @@ describe("#5151 the bytes that leave the process", () => {
 			root: dir,
 		});
 		try {
-			const echoed: string[] = [];
+			// The server handles notifications in order and traces the open before it
+			// echoes the change, so the echo is the signal that the trace is complete.
+			let gotChange: (text: string) => void = () => {};
+			const changeText = new Promise<string>((resolve) => {
+				gotChange = resolve;
+			});
 			client.connection.onNotification(
 				"$/test/didChangeReceived",
 				(params: { contentChanges: Array<{ text: string }> }) => {
-					echoed.push(params.contentChanges[0].text);
+					gotChange(params.contentChanges[0].text);
 				},
 			);
 			const file = path.join(dir, "script.ps1");
 			await client.notify.open(file, BOM + BODY, "powershell");
 			await client.notify.change(file, BOM + SECOND_BODY);
-			await vi.waitFor(() => expect(echoed.length).toBe(1));
-			const lines = await vi.waitFor(() => {
-				const text = fs
-					.readFileSync(trace, "utf8")
-					.split("\n")
-					.filter((line) => line.startsWith("text "));
-				expect(text.length).toBeGreaterThanOrEqual(2);
-				return text;
-			});
+			const echoed = [await changeText];
+			const lines = fs
+				.readFileSync(trace, "utf8")
+				.split("\n")
+				.filter((line) => line.startsWith("text "));
 			return { echoed, lines };
 		} finally {
 			await client.shutdown().catch(() => {});
