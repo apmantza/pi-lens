@@ -815,7 +815,7 @@ export function isBashDerivedReplay(event: unknown): boolean {
  * signal there is. Keep this list to prefixes a provider extension mints for
  * calls it replays after the work happened.
  */
-export const PROVIDER_REPLAY_TOOL_CALL_ID_PREFIX = "cursor-replay-";
+const PROVIDER_REPLAY_TOOL_CALL_ID_PREFIX = "cursor-replay-";
 
 /**
  * Whether `event` is a provider's display-only replay of work that already
