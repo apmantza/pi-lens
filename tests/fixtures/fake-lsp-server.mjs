@@ -553,7 +553,7 @@ let sequenceRefreshed = false;
 // `FAKE_LSP_RECOMPILE_VERSIONED=1` stamps the document version the server last
 // read; `FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR=1` leaves the notice unanswered;
 // `FAKE_LSP_RECOMPILE_MARK_PUBLISHES=1` follows each publish with a
-// `$/test/publishSent` notification.
+// `$/test/publishSent` notification (a `FAKE_LSP_PUBLISH_SEQUENCE` publish too).
 const RECOMPILE_CLEARS_MS = Number(
 	process.env.FAKE_LSP_RECOMPILE_CLEARS_MS ?? "-1",
 );
@@ -644,6 +644,14 @@ function publishSequenceFor(uri) {
 							: [],
 				},
 			});
+			// #5131 round 2: the join marker a recompile publish carries, so a test
+			// reads each sequence publish's handled state off the wire, not a sleep.
+			if (RECOMPILE_MARK_PUBLISHES)
+				send({
+					jsonrpc: "2.0",
+					method: "$/test/publishSent",
+					params: { uri, count: shape === "dirty" ? 1 : 0 },
+				});
 		};
 		if (index === 0 && PUBLISH_SEQUENCE_FIRST_MS <= 0) {
 			emit();

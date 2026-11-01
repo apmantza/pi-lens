@@ -1338,8 +1338,9 @@ export interface LSPClientState {
 	/**
 	 * #5131: per path, the bookkeeping that tells the client's OWN first-open
 	 * `workspace/didChangeWatchedFiles` apart from the server's answer. Set when
-	 * the open queues the notice; `flushed` once the queue sent it as a batch
-	 * naming this document alone (any other batch voids the entry: it carries
+	 * the open of a config-declared server queues the notice (`customServer`);
+	 * `flushed` once the queue sent it as a batch naming this document alone
+	 * (any other batch voids the entry: it carries
 	 * news besides this document's own bytes); `sawNonEmpty` once a version-less
 	 * non-empty publish arrived for the document at the version it was opened
 	 * at. A version-less EMPTY publish that then arrives is the server
@@ -1349,6 +1350,10 @@ export interface LSPClientState {
 	 * most the paths opened since the last flush plus the one batch sent.
 	 */
 	ownNoticeEchoes?: Map<string, OwnNoticeEcho>;
+	/** #5131 round 2: the server is a config-declared (`lsp.servers`) entry, the
+	 *  only kind whose first-open notice gets an {@link ownNoticeEchoes} entry.
+	 *  A built-in server never holds an echo: its clear is its answer. */
+	customServer?: boolean;
 	/** #4763: empty publishes held since the last `lsp_rules_refreshed` row,
 	 *  which reports it and resets it. */
 	heldEmptyPublishes?: number;
@@ -5321,7 +5326,8 @@ async function handleNotifyOpenOnce(
 		// (below) still carries this file's content immediately, so the open
 		// document is analyzed without waiting on the batched watcher notify.
 		enqueueWatchedChange(state, normalizedPath, uri, watchedType, onDisk);
-		noteOwnNoticeQueued(state, normalizedPath, uri, 0);
+		// #5131 round 2: only a config-declared server's notice can be its echo.
+		if (state.customServer) noteOwnNoticeQueued(state, normalizedPath, uri, 0);
 	}
 
 	if (!isClientAlive(state)) return false;
@@ -6819,6 +6825,9 @@ export async function createLSPClient(options: {
 	/** The declared role ({@link LspServerRole}); an auxiliary's failed config
 	 *  gates its empty publications (#4764). Absent behaves as non-auxiliary. */
 	role?: LspServerRole;
+	/** #5131 round 2: `LSPServerInfo.custom`, a config-declared server. Only its
+	 *  first-open notice can be its own echo ({@link LSPClientState.customServer}). */
+	custom?: boolean;
 	onDiagnosticsPublished?: (serverId: string) => void;
 }): Promise<LSPClientInfo> {
 	installCrashGuard();
@@ -6833,6 +6842,7 @@ export async function createLSPClient(options: {
 		launchVariant,
 		settingsSection,
 		role,
+		custom,
 		onDiagnosticsPublished,
 	} = options;
 
@@ -7023,6 +7033,8 @@ export async function createLSPClient(options: {
 		// #4764: the declared role, so a config-load failure gates only an
 		// auxiliary scanner's empty publications.
 		...(role !== undefined && { serverRole: role }),
+		// #5131 round 2: the echo hold reads a config-declared server only.
+		customServer: custom === true,
 		// #3310: one-shot, per client session.
 		emptyFirstPublishHoldSpent: false,
 		rulesGeneration: 0,

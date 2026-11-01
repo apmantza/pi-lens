@@ -61,12 +61,16 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 	const startService = (
 		compileMs: number,
 		extraEnv: Record<string, string> = {},
+		custom = true,
 	): LSPService => {
 		const server = {
 			id: "groovy-lang-server",
 			name: "groovy-lang-server",
 			extensions: [".groovy"],
 			idleEviction: "resident",
+			// A config-declared `lsp.servers` entry carries `custom: true`; the hold
+			// is for those servers only (#5131 round 2, F2).
+			...(custom ? { custom: true } : {}),
 			root: async () => tmp,
 			spawn: async () => ({
 				process: await spawnFakeLspServer({
@@ -132,6 +136,7 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 			serverId: "groovy-lang-server",
 			process: proc,
 			root: tmp,
+			custom: true,
 		});
 		const frames: unknown[] = [];
 		const publishes: string[] = [];
@@ -264,6 +269,52 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 			// ambiguous. Nothing here reaches a versioned built-in (typescript).
 			const result = await touch(service, "a.groovy", BROKEN);
 			expect(result?.diags).toEqual([]);
+		} finally {
+			await service.shutdown();
+		}
+	}, 30_000);
+
+	it("stores the empty publish that follows a held one, with no send between", async () => {
+		// Recurrence: the hold spends its entry. Without the spend, every later
+		// empty for the same send is held too, and the file reads dirty until the
+		// next edit (round-1 review F1: "never spend the entry" passed all nine).
+		// Sequence: a dirty answer, the notice's echo (held), then an empty with
+		// nothing sent or flushed since the held one (stored).
+		const { client, until, publishesFor } = await startClient({
+			FAKE_LSP_PUBLISH_SEQUENCE: "dirty,empty,empty",
+			FAKE_LSP_PUBLISH_SEQUENCE_GAP_MS: "600",
+		});
+		try {
+			const file = path.join(tmp, "a.groovy");
+			fs.writeFileSync(file, BROKEN);
+			await client.notify.open(file, BROKEN, "groovy");
+			await until(() => publishesFor(file) >= 3);
+			// The store is debounced: the third receipt's pending store settles this
+			// wait. Under the mutation nothing is pending and the stored dirty answer
+			// settles it at once, so the expectation below reads the dirty set.
+			await client.waitForDiagnostics(file, 3000);
+			expect(client.getDiagnostics(file)).toEqual([]);
+			expect(
+				heldRows().find((group) => group.kind === "lsp-watched-echo-held")
+					?.count,
+			).toBe(1);
+		} finally {
+			await client.shutdown();
+		}
+	}, 30_000);
+
+	it("does not hold a built-in-shaped server's clear, which answers its own notice", async () => {
+		// Recurrence: the echo hold is for config-declared (`lsp.servers`) servers
+		// only (round-2 review F2). The same recompile-on-notice fake, registered
+		// with no `custom` flag, keeps master's behaviour: its clear is the answer.
+		const service = startService(200, {}, false);
+		try {
+			const result = await touch(service, "a.groovy", BROKEN);
+			expect({
+				confirmation: result?.confirmation,
+				diags: result?.diags,
+			}).toEqual({ confirmation: "confirmed", diags: [] });
+			expect(heldRows()).toEqual([]);
 		} finally {
 			await service.shutdown();
 		}
