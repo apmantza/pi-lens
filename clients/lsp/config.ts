@@ -1015,6 +1015,7 @@ function executableAllowed(
 
 function registryDecision(
 	id: string,
+	section: "servers" | "serverOverrides",
 	field: string,
 	provenance: Provenance | undefined,
 	trust: ProjectTrustState,
@@ -1022,7 +1023,11 @@ function registryDecision(
 ): void {
 	if (allowed || !provenance || !isRepoTier(provenance.tier)) return;
 	const subject = `${id}:${field}:${provenance.tier}`;
-	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}; the ${id} entry is not applied for this project`;
+	const outcome =
+		section === "servers"
+			? `the ${id} entry is not applied for this project`
+			: `the project's ${id} override is not applied`;
+	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}; ${outcome}`;
 	recordDegradationOnce({
 		kind: "lsp-registry-decision",
 		subject,
@@ -1064,8 +1069,8 @@ interface RepoFieldDecision {
  * keeps the winning tier's value only, so a refused repo value may have
  * shadowed a value the user set. For `lsp.servers` the caller therefore does
  * not register the server when any field is refused (fail closed). For
- * `lsp.serverOverrides` it drops the whole override and the built-in runs on
- * its catalog defaults: never a partly stripped override.
+ * `lsp.serverOverrides` it applies the global tier's entry for that id instead,
+ * resolved on its own: never a partly stripped override.
  */
 export const REPO_TIER_SERVER_FIELDS: {
 	readonly [K in keyof CustomServerConfig]-?: RepoFieldDecision;
@@ -1150,6 +1155,7 @@ function refusedRepoFields(
 		const allowed = executableAllowed(source, trust);
 		registryDecision(
 			id,
+			section,
 			named ? labelOf(key) : "unrecognized field",
 			source,
 			trust,
@@ -1166,8 +1172,9 @@ function getConfigForFile(filePath: string): RegisteredLSPConfig {
 
 /**
  * THE `LSPConfig` → `RegisteredLSPConfig` conversion: construct the custom
- * servers, index the deny list, index the overrides. Pure — it reads no
- * module state and writes none.
+ * servers, index the deny list, index the overrides. It writes no registry
+ * state; an override refused for an untrusted project reads the global config
+ * files once to apply the user's own entry (#5147).
  *
  * Extracted from `initLSPConfig`'s body in #2427 review round 3 so that
  * `effectiveConfig` can build the config its question needs WITHOUT calling
@@ -1386,6 +1393,9 @@ export function compileLspRegistry(
 			// (the merge keeps the winner only), so the server is not registered
 			// rather than started on a stripped configuration.
 			if (refused.size > 0) continue;
+			// A server no file can select (`{"name":"x"}`) is not registered:
+			// selection iterates `extensions` for every file (fileMatchReason).
+			if (!Array.isArray(serverConfig.extensions)) continue;
 			try {
 				const server = createCustomServer({ ...serverConfig }, id);
 				customServers.push({ ...server, trustAllowed: true });
@@ -1396,24 +1406,41 @@ export function compileLspRegistry(
 	}
 
 	const serverOverrides = new Map<string, ServerInitOverride>();
+	// #5147: the global tier on its own, read only when an override is refused.
+	// No cwd skips the project walk; the two paths are the ones both production
+	// callers (`loadLSPConfig`, `effectiveConfig`) pass for their global tier.
+	let globalOverrides: Record<string, ServerInitOverride> | undefined;
 	if (config.serverOverrides) {
-		for (const [id, entry] of Object.entries(config.serverOverrides)) {
-			if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+		for (const [id, merged] of Object.entries(config.serverOverrides)) {
+			if (merged && typeof merged === "object" && !Array.isArray(merged)) {
 				const refused = refusedRepoFields(
 					id,
 					"serverOverrides",
-					entry,
+					merged,
 					REPO_TIER_OVERRIDE_FIELDS,
 					provenance,
 					trust,
 					(key) =>
 						key === "command" || key === "env" ? `${key} override` : key,
 				);
-				// #5147: a refused field drops the whole override and the catalog
-				// server runs on its defaults (master's behaviour for built-ins).
-				// The winning tier is all provenance keeps, so a global override
-				// for this id is skipped too: never a partly stripped override.
-				if (refused.size > 0) continue;
+				// #5147: the merge keeps the winner only, so a refused repo value
+				// may have shadowed the user's own. The global tier's entry for this
+				// id applies instead: every repo contribution goes, every global
+				// field stays, and an id with no global entry runs on the catalog.
+				let entry: ServerInitOverride | undefined = merged;
+				if (refused.size > 0) {
+					globalOverrides ??=
+						lspConfigOf(
+							resolvePiLensConfig({
+								globalDir: getGlobalPiLensDir(),
+								globalConfigPath: getPiLensGlobalConfigPath(),
+							}).value,
+						).serverOverrides ?? {};
+					entry = Object.hasOwn(globalOverrides, id)
+						? globalOverrides[id]
+						: undefined;
+				}
+				if (!entry) continue;
 				const initOpts = (entry as Record<string, unknown>)
 					.initializationOptions;
 				const command = (entry as ServerInitOverride).command;

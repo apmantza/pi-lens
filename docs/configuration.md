@@ -11,21 +11,24 @@ Both files have the same shape, with one exception noted below the example:
 everything LSP-related lives under an `lsp` namespace inside them.
 
 LSP fields from a project config are admitted without trust only when they
-are on a short list: for `lsp.servers.<id>` that is `name` alone, and
-`lsp.serverOverrides.<id>` admits nothing. Every other field, including custom
-`command` values, `args`, `rootMarkers`, `covers`, `extensions`, `env`,
-`initializationOptions`, command overrides under `serverOverrides`, and any
-field pi-lens does not recognise, needs pi to have marked the project trusted.
-An untrusted project that sets any of them on an `lsp.servers.<id>` entry
-disables that server for the project: pi-lens does not start it, rather than
-start it on a configuration where the project's value replaced one you set in
-your global config. Look for the `lsp-registry-decision` record: its reason
-reads "project LSP <field> refused for <id>: pi project trust is <state>; the
-<id> entry is not applied for this project". A refused field under
-`serverOverrides.<id>` drops the whole override instead, and the built-in server
-runs on pi-lens defaults. The merge keeps only the winning tier, so your own
-global override for that built-in is skipped too until pi trusts the project;
-a global wrapper command on a built-in does not apply there. An untrusted or older host
+are on a short list. On an `lsp.servers.<id>` entry an untrusted project may
+set `name` and nothing else. It may not set `command`, `args`, `extensions`,
+`rootMarkers`, `env`, `initializationOptions`, `covers`, `enabled`, `role`, or
+any field pi-lens does not recognise; on `lsp.serverOverrides.<id>` it may set
+none of `command`, `env`, `initializationOptions`, or any other field. Those
+fields need pi to have marked the project trusted. An untrusted project that
+sets one of them on an `lsp.servers.<id>` entry disables that server for the
+project: pi-lens does not start it, rather than start it on a configuration
+where the project's value replaced one you set in your global config. Under
+`serverOverrides.<id>`, the project's fields are dropped and your global
+override for that built-in applies field by field: a global wrapper `command`
+stays, a global value the project replaced comes back, and a field you did not
+set globally runs on the pi-lens default. The built-in server stays on. Look
+for the `lsp-registry-decision` record: its reason reads "project LSP <field>
+refused for <id>: pi project trust is <state>; the <id> entry is not applied
+for this project" for a server, or "...; the project's <id> override is not
+applied" for an override. An `lsp.servers.<id>` entry with no `extensions`
+list is not registered, since no file can select it. An untrusted or older host
 is fail-closed and emits one bounded notice telling you to mark the project
 trusted in pi or upgrade pi. Global config remains trusted, and a project can
 always disable a server. pi-lens does not maintain a second trust setting.

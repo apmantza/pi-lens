@@ -200,6 +200,60 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	// #5147 verify V2. Recurrence: an untrusted repo's
+	// `lsp.servers.x = {"name":"x"}` registered a server with no `extensions`,
+	// and the cascade's per-neighbour server selection
+	// (`shouldReadCascadeFromSnapshot`) threw "server.extensions is not iterable".
+	it("computes the cascade when a project declares a server with no extensions", async () => {
+		const env = setupTestEnvironment("cascade-no-ext-");
+		const savedHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = path.join(env.tmpDir, ".pi-lens-home");
+		const config = await import("../../clients/lsp/config.js");
+		const trust = await import("../../clients/project-trust.js");
+		try {
+			const primary = path.join(env.tmpDir, "src", "primary.ts");
+			const neighbor = path.join(env.tmpDir, "src", "neighbor.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			fs.writeFileSync(neighbor, "import { x } from './primary';\n");
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".pi-lens.json"),
+				JSON.stringify({ lsp: { servers: { x: { name: "x" } } } }),
+			);
+			trust.setProjectTrustState("untrusted");
+			await config.initLSPConfig(env.tmpDir);
+			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
+			installLspService({
+				...makeLspServiceDouble(),
+				getAllDiagnostics: vi
+					.fn()
+					.mockResolvedValue(
+						new Map([
+							[
+								neighbor.split(path.sep).join("/"),
+								{ diags: [lspError()], ts: postEditTs() },
+							],
+						]),
+					),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+			});
+			const { computeCascadeForFile } =
+				await import("../../clients/dispatch/integration.js");
+			const result = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+			expect(result?.result?.neighbors[0]?.filePath).toBe(neighbor);
+		} finally {
+			config.resetLSPConfigStateForTests();
+			trust.resetProjectTrust();
+			if (savedHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = savedHome;
+			env.cleanup();
+		}
+	});
+
 	it("includes bounded transitive (depth>1) dependents as neighbors", async () => {
 		const env = setupTestEnvironment("cascade-transitive-");
 		try {

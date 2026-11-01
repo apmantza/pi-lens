@@ -37,11 +37,10 @@
   refused (`REPO_TIER_OVERRIDE_FIELDS` admits none, #5147). A refused field
   may have shadowed the user's own value, so a refused `lsp.servers.<id>` field
   leaves that server unregistered for the project. A refused
-  `lsp.serverOverrides.<id>` field drops the whole override and the built-in
-  runs on its catalog defaults (master's behaviour). Accepted residual: provenance
-  keeps only the winning tier, so in an untrusted project the user's own global
-  override for that built-in is skipped too, and a global safety wrapper on a
-  built-in does not apply until pi trusts the project (#5147). Missing trust APIs are
+  `lsp.serverOverrides.<id>` field drops the repo tier's contribution only: the
+  global tier, resolved on its own, supplies that id's override field by field,
+  and a field it does not set runs on the catalog default; the built-in is never
+  disabled for a repo field (#5147). Missing trust APIs are
   fail-closed for those project fields with one bounded notice; installs keep
   their existing compatibility policy. `tests/clients/lsp/lsp-registry-trust.test.ts`
   and the LSP config/service suites pin the boundary.

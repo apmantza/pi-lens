@@ -25,8 +25,17 @@
  *   synthetic field               stub not registered        kept
  *   name                          registered, global argv    kept
  *   global only                   unchanged                  unchanged
- * serverOverrides.<id>: any refused field drops the whole override and the
- * built-in runs on its catalog defaults (round 3, maintainer option B).
+ * serverOverrides.<id> (round 4): an untrusted or unknown project's refused
+ * field drops the repo tier's contribution only. The user's global entry for
+ * that id applies field by field (a shadowed global value is restored), and a
+ * field with no global value falls back to the catalog default. The built-in
+ * is never disabled for a repo field.
+ *   field set by          trusted        untrusted / unknown
+ *   global only           global         global
+ *   repo only             repo           catalog default + 1 record
+ *   both                  repo wins      global (restored) + 1 record
+ * A server entry with no `extensions` array (V2: `{"name":"x"}`) is not
+ * registered, so server selection never iterates `undefined`.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -34,17 +43,24 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getDegradationSummary } from "../../../clients/degradation-ledger.js";
 import { resetDegradationLedger } from "../../../clients/degradation-ledger.js";
+import { lspPrimaryCoversFile } from "../../../clients/dispatch/runners/utils/runner-helpers.js";
+import type { DispatchContext } from "../../../clients/dispatch/types.js";
 import {
 	compileLspRegistry,
 	explainServersForFile,
+	getServersForFileWithConfig,
+	initLSPConfig,
 	loadLSPConfig,
 	REPO_TIER_OVERRIDE_FIELDS,
 	REPO_TIER_SERVER_FIELDS,
+	resetLSPConfigStateForTests,
 } from "../../../clients/lsp/config.js";
+import { aggregateServersForFile } from "../../../clients/lsp/grouping.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
+import { getServerById } from "../../../clients/lsp/server.js";
 import { waitFor } from "../interleaving-kit.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -69,13 +85,16 @@ afterEach(() => {
 	for (const dir of dirs.splice(0)) removeTempDirSync(dir);
 	resetProjectTrust();
 	resetDegradationLedger();
+	resetLSPConfigStateForTests();
 	if (originalPiLensHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = originalPiLensHome;
 });
 
 const STUB = `import fs from "node:fs";
 const [record, ...rest] = process.argv.slice(2);
-fs.writeFileSync(record, JSON.stringify(rest));
+const env = {};
+for (const key of ["GLOBAL_ENV", "PROJECT_ENV"]) env[key] = process.env[key] ?? null;
+fs.writeFileSync(record, JSON.stringify({ argv: rest, env }));
 process.stdin.on("end", () => process.exit(0));
 process.stdin.resume();
 setInterval(() => {}, 1000);
@@ -86,6 +105,10 @@ type Trust = "trusted" | "untrusted" | "unknown";
 interface Arranged {
 	project: string;
 	record: string;
+	/** The file the stub writes when the global rust override starts it. */
+	overrideRecord: string;
+	/** The user's global `serverOverrides.rust.command`, a wrapper argv. */
+	globalOverrideCommand: string[];
 }
 
 /** Writes the stub, the user's global config and the project's `.pi-lens.json`. */
@@ -93,6 +116,7 @@ function arrange(
 	trust: Trust,
 	projectServerFields: Record<string, unknown> | undefined,
 	projectOverrides?: Record<string, unknown>,
+	options: { globalOverride?: boolean } = {},
 ): Arranged {
 	const project = tempDir();
 	const globalDir = tempDir();
@@ -101,6 +125,7 @@ function arrange(
 	const globalOverride = path.join(globalDir, "override-argv.json");
 	const record = path.join(globalDir, "argv.json");
 	fs.writeFileSync(stub, STUB);
+	const globalOverrideCommand = [process.execPath, stub, globalOverride];
 	fs.writeFileSync(
 		path.join(globalDir, "lsp.json"),
 		JSON.stringify({
@@ -113,9 +138,17 @@ function arrange(
 					env: { GLOBAL_ENV: "g" },
 				},
 			},
-			serverOverrides: {
-				rust: { command: [process.execPath, stub, globalOverride] },
-			},
+			...(options.globalOverride === false
+				? {}
+				: {
+						serverOverrides: {
+							rust: {
+								command: globalOverrideCommand,
+								env: { GLOBAL_ENV: "g" },
+								initializationOptions: { globalOpt: 1 },
+							},
+						},
+					}),
 		}),
 	);
 	const lsp: Record<string, unknown> = {};
@@ -129,7 +162,12 @@ function arrange(
 	}
 	if (trust === "unknown") resetProjectTrust();
 	else setProjectTrustState(trust);
-	return { project, record };
+	return {
+		project,
+		record,
+		overrideRecord: globalOverride,
+		globalOverrideCommand,
+	};
 }
 
 async function compile(project: string) {
@@ -145,17 +183,30 @@ async function startedArgv(arranged: Arranged): Promise<string[] | undefined> {
 	const registry = await compile(arranged.project);
 	const server = registry.customServers.find((entry) => entry.id === "stub");
 	if (!server) return undefined;
-	const launch = await server.spawn(arranged.project);
+	return (await started(server, arranged.project, arranged.record)).argv;
+}
+
+interface StubLaunch {
+	argv: string[];
+	env: Record<string, string | null>;
+}
+
+/** Starts `server` for real and reads what the stub child recorded. */
+async function started(
+	server: {
+		spawn(root: string): Promise<{ process: { pid?: number } } | undefined>;
+	},
+	root: string,
+	record: string,
+): Promise<StubLaunch> {
+	const launch = await server.spawn(root);
 	if (!launch) throw new Error("stub spawn was not admitted");
-	pids.push(launch.process.pid);
+	if (launch.process.pid !== undefined) pids.push(launch.process.pid);
 	const raw = await waitFor(
-		() =>
-			fs.existsSync(arranged.record)
-				? fs.readFileSync(arranged.record, "utf8")
-				: "",
+		() => (fs.existsSync(record) ? fs.readFileSync(record, "utf8") : ""),
 		(value) => value !== "",
 	);
-	return JSON.parse(raw) as string[];
+	return JSON.parse(raw) as StubLaunch;
 }
 
 function decisionFields(): string[] {
@@ -308,16 +359,16 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 });
 
 describe("untrusted project serverOverrides on a catalog server (#5147)", () => {
-	// Recurrence: round 2 turned the built-in server off for the project on any
-	// refused override field, so a team repo that only sets
-	// `initializationOptions` for rust lost rust-analyzer until trusted. Master
-	// ran the built-in on its catalog defaults; the refused override is dropped
-	// and the built-in stays on.
-	async function builtinFor(trust: Trust, fields: Record<string, unknown>) {
-		const arranged = arrange(trust, undefined, { rust: fields });
+	async function builtinFor(
+		trust: Trust,
+		fields: Record<string, unknown>,
+		options: { globalOverride?: boolean } = {},
+	) {
+		const arranged = arrange(trust, undefined, { rust: fields }, options);
 		const registry = await compile(arranged.project);
 		const file = path.join(arranged.project, "x.rs");
 		return {
+			arranged,
 			registry,
 			reason: explainServersForFile(file, registry).find(
 				(entry) => entry.server.id === "rust",
@@ -325,37 +376,92 @@ describe("untrusted project serverOverrides on a catalog server (#5147)", () => 
 		};
 	}
 
-	it("keeps the built-in on its defaults when an untrusted project sets an override env", async () => {
-		const { registry, reason } = await builtinFor("untrusted", {
-			env: { RUST_LOG: "debug" },
-		});
-		expect(registry.disabledServerIds.has("rust")).toBe(false);
-		expect(registry.serverOverrides.get("rust")).toBeUndefined();
-		expect(reason).toBe("selected");
-		expect(decisionFields()).toEqual([
-			"project LSP env override refused for rust: pi project trust is untrusted; the rust entry is not applied for this project",
-		]);
+	const refusedOverride = (field: string, trust: Trust) =>
+		`project LSP ${field} refused for rust: pi project trust is ${trust}; the project's rust override is not applied`;
+
+	// Recurrence (verify V1 on 627196a6c): any refused repo field dropped the
+	// whole override, so a repo removed the user's global wrapper `command`
+	// by setting one env key, and rust-analyzer started unwrapped.
+	it("keeps the user's global wrapper command when an untrusted project sets an override env", async () => {
+		for (const trust of ["untrusted", "unknown"] as const) {
+			resetDegradationLedger();
+			const { arranged, registry, reason } = await builtinFor(trust, {
+				env: { PROJECT_ENV: "p" },
+			});
+			expect(registry.serverOverrides.get("rust"), trust).toEqual({
+				command: arranged.globalOverrideCommand,
+				env: { GLOBAL_ENV: "g" },
+				initializationOptions: { globalOpt: 1 },
+			});
+			expect(registry.disabledServerIds.has("rust"), trust).toBe(false);
+			expect(reason, trust).toBe("selected");
+			const rust = registry.registeredServers.find((s) => s.id === "rust");
+			if (!rust) throw new Error("rust is not registered");
+			expect(
+				await started(rust, arranged.project, arranged.overrideRecord),
+				trust,
+			).toEqual({ argv: [], env: { GLOBAL_ENV: "g", PROJECT_ENV: null } });
+			expect(decisionFields(), trust).toEqual([
+				refusedOverride("env override", trust),
+			]);
+		}
 	});
 
-	it("keeps the built-in on for an unknown-trust initializationOptions-only override", async () => {
-		const { registry, reason } = await builtinFor("unknown", {
-			initializationOptions: { check: { command: "clippy" } },
-		});
-		expect(registry.disabledServerIds.has("rust")).toBe(false);
-		expect(registry.serverOverrides.get("rust")).toBeUndefined();
-		expect(reason).toBe("selected");
+	// Recurrence: a repo `command` that shadows the user's global command must
+	// neither stay nor take the global value with it; the global one applies.
+	it("restores the user's global command when an untrusted project shadows it", async () => {
+		for (const trust of ["untrusted", "unknown"] as const) {
+			resetDegradationLedger();
+			const { arranged, registry } = await builtinFor(trust, {
+				command: ["project-rust", "--stdio"],
+				initializationOptions: { globalOpt: 2, projectOpt: true },
+			});
+			expect(registry.serverOverrides.get("rust"), trust).toEqual({
+				command: arranged.globalOverrideCommand,
+				env: { GLOBAL_ENV: "g" },
+				initializationOptions: { globalOpt: 1 },
+			});
+			expect(decisionFields(), trust).toEqual([
+				refusedOverride("command override", trust),
+				refusedOverride("initializationOptions", trust),
+			]);
+		}
 	});
 
-	// Accepted residual: the merge keeps only the winning tier, so the user's
-	// own global override for this id is skipped with the project's.
-	it("skips the user's global override for the id too while the project is untrusted", async () => {
-		const arranged = arrange("untrusted", undefined, {
-			rust: { env: { RUST_LOG: "debug" } },
+	// Recurrence: round 2 turned the built-in off for any refused override
+	// field; with no global value the built-in runs on its catalog defaults.
+	it("runs the built-in on catalog defaults for a repo-only initializationOptions override", async () => {
+		for (const trust of ["untrusted", "unknown"] as const) {
+			resetDegradationLedger();
+			const { registry, reason } = await builtinFor(
+				trust,
+				{ initializationOptions: { check: { command: "clippy" } } },
+				{ globalOverride: false },
+			);
+			expect(registry.serverOverrides.get("rust"), trust).toBeUndefined();
+			expect(registry.disabledServerIds.has("rust"), trust).toBe(false);
+			expect(
+				registry.registeredServers.find((s) => s.id === "rust"),
+				trust,
+			).toBe(getServerById("rust"));
+			expect(reason, trust).toBe("selected");
+			expect(decisionFields(), trust).toEqual([
+				refusedOverride("initializationOptions", trust),
+			]);
+		}
+	});
+
+	it("applies the project's override fields over the global ones once pi trusts the project", async () => {
+		const { registry } = await builtinFor("trusted", {
+			command: ["project-rust", "--stdio"],
+			env: { PROJECT_ENV: "p" },
 		});
-		const config = await loadLSPConfig(arranged.project);
-		const registry = compileLspRegistry(config, config.__provenance);
-		expect(registry.serverOverrides.get("rust")).toBeUndefined();
-		expect(registry.disabledServerIds.has("rust")).toBe(false);
+		expect(registry.serverOverrides.get("rust")).toEqual({
+			command: ["project-rust", "--stdio"],
+			env: { GLOBAL_ENV: "g", PROJECT_ENV: "p" },
+			initializationOptions: { globalOpt: 1 },
+		});
+		expect(decisionFields()).toEqual([]);
 	});
 
 	it("refuses an untrusted override field no table names, and keeps trusted ones", async () => {
@@ -363,10 +469,12 @@ describe("untrusted project serverOverrides on a catalog server (#5147)", () => 
 			args: ["--project-flag"],
 			syntheticLaunchFlag: true,
 		};
-		const { registry } = await builtinFor("untrusted", overrides);
-		expect(registry.serverOverrides.get("rust")).toBeUndefined();
+		const untrusted = await builtinFor("untrusted", overrides);
+		expect(untrusted.registry.serverOverrides.get("rust")?.command).toEqual(
+			untrusted.arranged.globalOverrideCommand,
+		);
 		expect(decisionFields()).toEqual([
-			"project LSP unrecognized field refused for rust: pi project trust is untrusted; the rust entry is not applied for this project",
+			refusedOverride("unrecognized field", "untrusted"),
 		]);
 		resetDegradationLedger();
 		const trusted = await builtinFor("trusted", overrides);
@@ -383,5 +491,30 @@ describe("untrusted project serverOverrides on a catalog server (#5147)", () => 
 			expect.stringContaining("override-argv.json"),
 		]);
 		expect(reason).toBe("selected");
+	});
+});
+
+describe("a server entry without extensions (#5147 verify V2)", () => {
+	// Recurrence: an untrusted repo's `lsp.servers.x = {"name":"x"}` registered
+	// a server with no `extensions`, and every server selection for any file
+	// then threw "server.extensions is not iterable" from the selection gate
+	// (`fileMatchReason`), in each caller below.
+	it("does not register it, so server selection for a file does not throw", async () => {
+		const arranged = arrange("untrusted", undefined);
+		fs.writeFileSync(
+			path.join(arranged.project, ".pi-lens.json"),
+			JSON.stringify({ lsp: { servers: { x: { name: "x" } } } }),
+		);
+		await initLSPConfig(arranged.project);
+		const file = path.join(arranged.project, "main.rs");
+		const ctx = { filePath: file } as unknown as DispatchContext;
+		expect(
+			getServersForFileWithConfig(file).map((server) => server.id),
+		).not.toContain("x");
+		expect(() => lspPrimaryCoversFile(ctx, "shellcheck")).not.toThrow();
+		expect(
+			aggregateServersForFile(file).map((server) => server.id),
+		).not.toContain("x");
+		expect(decisionFields()).toEqual([]);
 	});
 });
