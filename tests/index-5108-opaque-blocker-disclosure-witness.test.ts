@@ -1,5 +1,5 @@
 // flake-shape: real-process-spawn — the subject is what a REAL bash tool call writes into a REAL git checkout and what the model receives for it; the detector is git's own `status --porcelain` and a stubbed shell could not say whether the write was seen.
-// flake-shape: raw-timer-wait — the 500 ms read-only bound is a live wall deadline racing a handler that this file holds open for 700 ms; a fake clock would settle the race instantly and the abandonment under test would never happen.
+// flake-shape: raw-timer-wait — the 500 ms read-only bound is a live wall deadline racing a handler that this file holds open for 700 ms; a fake clock would settle the race instantly and the abandonment under test would never happen. The 10 s inner pipeline bound is the same kind of live deadline: the pipeline is held past it for 11.5 s, and no fake clock can move it.
 // flake-shape: in-process-mock — the wrapper around `handleToolResult` is the only way to hold the real handler open past the host bound and to read its return value; the dispatch, the pipeline, the advisory queue and the pi session are real.
 // flake-shape: in-process-mock — the wrapper around `runPipeline` only delays the REAL pipeline (a cold analyzer stand-in) so a dispatch outlives the inner 10 s bound; it runs the real pipeline after the hold.
 /**
@@ -646,12 +646,14 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 						],
 					});
 					await first.prompt("write the file with a script");
-					// The inner bound fired: its ledger row is the observable.
-					await vi.waitFor(
-						async () => {
-							expect(await innerBoundRows()).toBe(boundRowsBefore + 1);
-						},
-						{ timeout: 20_000, interval: 250 },
+					// Let the 10 s inner bound fire (a live deadline, so a live wait),
+					// with a margin: its timer was armed after the dispatch started.
+					const [startedAt] = gate.pipelineStartedAt;
+					await new Promise((resolve) =>
+						setTimeout(
+							resolve,
+							Math.max(0, (startedAt ?? Date.now()) + 10_800 - Date.now()),
+						),
 					);
 					const next = await first.restart({ reason: "new" }, [
 						endTurn("fresh turn 1 done"),
@@ -662,6 +664,9 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 					await next.prompt("start fresh");
 					await next.prompt("anything else?");
 
+					// The ledger row is only written for the deadline, so a bound that
+					// had not fired (an aborted wait) would make this case vacuous.
+					expect(await innerBoundRows()).toBe(boundRowsBefore + 1);
 					expect(copiesOfAdvisory(next.requests)).toBe(0);
 					expect(everyText(next.requests)).not.toContain("opaque.ts");
 					expect(await lateAdvisoryRows()).toBe(rowsBefore);
