@@ -2369,8 +2369,9 @@ function compactCallGraphCoverageLine(
 }
 /**
  * Render a ModuleReport as line-oriented text (#5137): lossless against the
- * projected artifact — every field appears in the text cell (the unavailable
- * path renders its defaults as absent; kind is abbreviated).
+ * projected artifact: every field appears in the text cell, `kind` prints raw so
+ * it can be reused as `read_symbol`'s `kind` filter, and an unavailable module
+ * still renders its callbacks and recommended reads.
  * Blocks run API:, INTERNAL:, CALLBACKS:, IMPORTS:, CALL GRAPH:, BLAST RADIUS:,
  * RECOMMENDED:, each only when its data is non-empty, followed by one
  * PROVENANCE: footer line. Metrics render as a `cx:`/`fan:` suffix, flags each

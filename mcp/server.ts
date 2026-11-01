@@ -783,7 +783,7 @@ const ALL_TOOLS = [
 				view: {
 					type: "string",
 					description:
-						'Output preset: projection \u00d7 format. "summary-text" (default) = metric fields off (no usedBy/fanout/complexity fields), text. "summary-json" = same fields, JSON. "full-text" = every field, text. "full-json" = every field, JSON (byte-identical to the pre-#5137 default). Metrics render as a cx:/fo: suffix and flags as [flag]; every field appears in the text cell (the unavailable path renders its defaults as absent; kind is abbreviated). RECOMMENDED reasons may still cite counts in prose. A maxRefsPerSymbol argument promotes the projection to full and keeps the format.',
+						'Output preset: projection \u00d7 format. "summary-text" (default) = metric fields off (no usedBy/fanout/complexity fields), text. "summary-json" = same fields, JSON. "full-text" = every field, text. "full-json" = every field, JSON (byte-identical to the pre-#5137 default). Metrics render as a cx:/fan: suffix and flags as [flag]; every field appears in the text cell, `kind` prints raw so it can be reused as read_symbol\'s kind filter, and an unavailable module still renders its callbacks and recommended reads. A summary cell states the omission in its PROVENANCE footer. A maxRefsPerSymbol argument promotes the projection to full and keeps the format.',
 				},
 				blastRadius: {
 					type: "boolean",
