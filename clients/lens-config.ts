@@ -328,7 +328,7 @@ export function loadPiLensGlobalConfig(
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 			// The other half of the same silence: a file that PARSES but is a list
 			// or a scalar is not a config either, and was dropped without a word.
-			note("top-level value must be an object");
+			note("top-level value must be an object", "PILENS_CFG_0005");
 			return undefined;
 		}
 
@@ -364,7 +364,10 @@ export function loadPiLensGlobalConfig(
 		if (toolsSection && "lazy" in toolsSection) {
 			const lazy = readLazyToolsSetting(raw);
 			if (lazy === undefined)
-				warnInvalid('tools.lazy must be "auto", true, or false');
+				warnInvalid(
+					'tools.lazy must be "auto", true, or false',
+					"PILENS_CFG_0005",
+				);
 			else config.tools = { ...(config.tools as object), lazy };
 		}
 
@@ -386,12 +389,18 @@ export function loadPiLensGlobalConfig(
 			if (mode === "quick" || mode === "full" || mode === "minimal")
 				startupConfig.mode = mode;
 			else if ("mode" in startup)
-				warnInvalid('startup.mode must be "quick", "full", or "minimal"');
+				warnInvalid(
+					'startup.mode must be "quick", "full", or "minimal"',
+					"PILENS_CFG_0005",
+				);
 			if (scans) {
 				if (typeof scans.enabled === "boolean") {
 					startupConfig.scans = { enabled: scans.enabled };
 				} else if ("enabled" in scans)
-					warnInvalid("startup.scans.enabled must be a boolean");
+					warnInvalid(
+						"startup.scans.enabled must be a boolean",
+						"PILENS_CFG_0005",
+					);
 			}
 			if (startupConfig.mode !== undefined || startupConfig.scans !== undefined)
 				config.startup = startupConfig;
@@ -409,6 +418,7 @@ export function loadPiLensGlobalConfig(
 				if ("runnerTimeoutFloorMs" in dispatch) {
 					warnInvalid(
 						"dispatch.runnerTimeoutFloorMs must be a positive finite number",
+						"PILENS_CFG_0005",
 					);
 				}
 				config.dispatch = { runnerTimeoutFloorMs: undefined };
@@ -433,6 +443,7 @@ export function loadPiLensGlobalConfig(
 			} else {
 				warnInvalid(
 					"actionableWarnings.autoFix.maxFixes must be a non-negative finite number",
+					"PILENS_CFG_0005",
 				);
 			}
 		}
@@ -450,6 +461,7 @@ export function loadPiLensGlobalConfig(
 			} else {
 				warnInvalid(
 					"contextInjection.requirePreExistingFixes must be a boolean",
+					"PILENS_CFG_0005",
 				);
 			}
 		}
@@ -461,7 +473,7 @@ export function loadPiLensGlobalConfig(
 			} else {
 				// #533: present-but-wrong-type warns; absent stays silent.
 				if ("visible" in widget) {
-					warnInvalid("widget.visible must be a boolean");
+					warnInvalid("widget.visible must be a boolean", "PILENS_CFG_0005");
 				}
 				config.widget = { visible: undefined };
 			}
@@ -477,7 +489,10 @@ export function loadPiLensGlobalConfig(
 				// #533: a present-but-invalid mode (e.g. "immedaite") warns and // spellchecker:disable-line
 				// falls back; an absent mode stays silent.
 				if ("mode" in format) {
-					warnInvalid('format.mode must be "immediate" or "deferred"');
+					warnInvalid(
+						'format.mode must be "immediate" or "deferred"',
+						"PILENS_CFG_0005",
+					);
 				}
 				formatSection.mode = undefined;
 			}
@@ -514,6 +529,7 @@ export function loadPiLensGlobalConfig(
 					PROJECT_NON_FLAG_CONFIG_SECTIONS.includes(key)
 						? `"${key}" is a project-scoped pi-lens setting; set it in <project>/.pi-lens.json, not in the global config; ignored`
 						: `unknown key "${key}" is not a recognized pi-lens setting (check for a typo); ignored`,
+					"PILENS_CFG_0004",
 				);
 			}
 		}

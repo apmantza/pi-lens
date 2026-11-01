@@ -58,9 +58,11 @@ const SUBSYSTEM_CONFIG_LABEL: Record<IgnoredConfigSubsystem, string> = {
 };
 
 /**
- * The code every ignored-config warning carries: PILENS_CFG_0001, "config file
- * unreadable or unparsable; ignored". Named here rather than repeated at three
- * call sites so the registry entry has exactly one referent in production code.
+ * The code a config file that cannot be read or parsed carries by default:
+ * PILENS_CFG_0001, "config file unreadable or unparsable; ignored". A notice
+ * about one key or value passes its own registered code (#5140), so this
+ * default names only the read/parse failure. Named here rather than repeated
+ * at the call sites so the registry entry has exactly one referent.
  */
 const IGNORED_CONFIG_CODE: ConfigDiagnosticCode = "PILENS_CFG_0001";
 
@@ -422,8 +424,8 @@ export interface WarnIgnoredConfigOptions {
 	readonly key?: string;
 	/**
 	 * Override the stable diagnostic code. Defaults to `PILENS_CFG_0001`
-	 * (unreadable/unparsable, ignored), which is what all three loaders mean
-	 * today. The seam exists because `PILENS_CFG_0002`/`0003` (deprecated key /
+	 * (unreadable/unparsable, ignored), which is what a read or parse failure
+	 * means. A rejected key or value passes its own code (#5140). The seam exists because `PILENS_CFG_0002`/`0003` (deprecated key /
 	 * deprecated file location accepted) are registered and reserved for the
 	 * #2416 migration path, and will report through this same helper.
 	 */
