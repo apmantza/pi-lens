@@ -131,6 +131,17 @@ function evaluate(rawExpression: string, ctx: Ctx): boolean {
 const hasStatusFunction = (expression: string) =>
 	/\b(always|cancelled|failure|success)\(\)/.test(expression);
 
+// GitHub's implicit success() reads every ancestor, not only the direct needs:
+// PR 5153's gate skipped with `tla-models` green and `tla-shards` skipped.
+function ancestorsOf(id: string, seen = new Set<string>()): Set<string> {
+	for (const need of asList(CI[id].needs)) {
+		if (seen.has(need)) continue;
+		seen.add(need);
+		ancestorsOf(need, seen);
+	}
+	return seen;
+}
+
 /** Run the job graph for one event and diff; every job that runs succeeds. */
 function simulate(
 	event: string,
@@ -176,16 +187,14 @@ function simulate(
 			remaining.splice(remaining.indexOf(id), 1);
 			const job = CI[id];
 			const ctx: Ctx = { event, changes, results, outputs };
-			let runs: boolean;
-			if (job.if === undefined) {
-				runs = asList(job.needs).every((need) => results[need] === "success");
-			} else {
-				runs =
-					(hasStatusFunction(job.if)
-						? true
-						: asList(job.needs).every((need) => results[need] === "success")) &&
-					evaluate(job.if, ctx);
-			}
+			const implicitSuccess = [...ancestorsOf(id)].every(
+				(ancestor) => results[ancestor] === "success",
+			);
+			const runs =
+				job.if === undefined
+					? implicitSuccess
+					: (hasStatusFunction(job.if) || implicitSuccess) &&
+						evaluate(job.if, ctx);
 			results[id] = runs ? "success" : "skipped";
 		}
 		return { changes, results };
@@ -223,9 +232,8 @@ function stepsRun(
 	);
 }
 
-// The branch-protection contexts (probed 2026-09-30) and the ci.yml job that
-// produces each; knip and `oxfmt format check` come from lint.yml, which this
-// change does not touch.
+// The branch-protection contexts ci.yml hosts and the job that produces each;
+// BRANCH_PROTECTION_CONTEXTS has the rest, hosted by other workflows.
 const REQUIRED_FROM_CI: Record<string, string> = {
 	"Lint & type-check": "lint-and-typecheck",
 	"Unit tests": "unit-tests",
@@ -233,6 +241,7 @@ const REQUIRED_FROM_CI: Record<string, string> = {
 	"Install test (windows-latest)": "install-test",
 	"Install test (macos-latest)": "install-test",
 	"TLA+ models": "tla-models",
+	"Unit tests Windows": "unit-tests-windows",
 };
 
 const DOCS_ONLY = [

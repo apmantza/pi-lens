@@ -12,10 +12,12 @@ neither is needed. Sharded Unit tests (#3753) keep one queue run short.
 
 ## Repository side (already in this change)
 
-- `ci.yml` and `lint.yml` run on `merge_group` (`types: [checks_requested]`).
-  Together they produce every required check: `Lint & type-check`,
-  `Unit tests`, `Install test (ubuntu-latest)`, `Install test (windows-latest)`,
-  `Install test (macos-latest)`, `knip`, `oxfmt format check`, `TLA+ models`.
+- `ci.yml`, `lint.yml`, and `hot-path-latency.yml` run on `merge_group`
+  (`types: [checks_requested]`). Together they produce every required check:
+  `Lint & type-check`, `Unit tests`, `Install test (ubuntu-latest)`,
+  `Install test (windows-latest)`, `Install test (macos-latest)`, `knip`,
+  `oxfmt format check`, `TLA+ models`, `Unit tests Windows`,
+  `Hot-path latency (advisory)`.
 - PR-only jobs (PR title, PR body, changelog fast-fail, changed tests shuffled) are
   guarded by `github.event_name == 'pull_request'` and are skipped on
   `merge_group`; none of them is required.
@@ -32,7 +34,7 @@ neither is needed. Sharded Unit tests (#3753) keep one queue run short.
 | Ruleset name | `master merge queue` | |
 | Enforcement status | Active | |
 | Target branches | Include default branch (`master`) | |
-| Require status checks to pass | the eight names above, source GitHub Actions | unchanged from branch protection today |
+| Require status checks to pass | the ten names above, source GitHub Actions | unchanged from branch protection today |
 | Require branches to be up to date | off | the queue replaces it |
 | Require merge queue | on | |
 | Merge method | Merge commit | repo convention (`gh pr merge --merge`) |
@@ -56,9 +58,9 @@ detection.
 1. Merge #3753 (sharded Unit tests) first, then this change.
 2. Create the ruleset above.
 3. Enqueue one low-risk PR: `gh pr merge <N> --merge`.
-4. Confirm in `gh run list --event merge_group` that `CI` and `Lint` ran on the
-   `gh-readonly-queue/master/pr-<N>-<sha>` ref and that all seven required
-   checks reported there. A required check that never reports stalls the queue
+4. Confirm in `gh run list --event merge_group` that `CI`, `Lint`, and
+   `Hot-path latency` ran on the `gh-readonly-queue/master/pr-<N>-<sha>` ref and
+   that all ten required checks reported there. A required check that never reports stalls the queue
    until the 30-minute timeout.
 5. Stop using `gh pr update-branch` and "re-arm" pushes; both are moot and a
    push to a queued PR ejects it.

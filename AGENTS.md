@@ -533,20 +533,23 @@ other test job always run, because a docs edit can red tests outside tests/confi
 is the three `Install test` legs: outside `INSTALL_PATHS` in that script
 they report success without installing, and `Strict install` and the macOS APFS
 step run on non-pull_request events only. `TLA+ models`
-model-checks only when `formal/` (or its checker or ci.yml) changed. A REQUIRED
-job never skips at job level: ci-verdict and the merge train demand a literal
-`success`, so `TLA+ models` starts and skips its steps.
+model-checks only when `formal/` (or its checker or ci.yml) changed: its shards
+skip at job level and the aggregate still reports. A REQUIRED job never skips at
+job level: ci-verdict and the merge train demand a literal `success`. Implicit
+`success()` reads every ancestor, so a job behind a skippable ancestor skips even
+when its direct needs are green; `heavy-gate` therefore reads `TLA+ models` from
+check-runs.
+
+Master requires the ten contexts in `BRANCH_PROTECTION_CONTEXTS`
+(`scripts/lib/ci-checks.mjs`). ci-verdict reads the live list, and it also gates
+every other non-advisory row a run posts.
 
 The Windows unit leg (`Unit tests Windows`, job key `unit-tests-windows`) GATES
 by maintainer decision on 2026-10-17: it runs the real `win32` gates, and
 advisory reds were waved through (the incidents are in `HISTORY.md`). It
 therefore starts on every event like the Unit shards and is never behind
 `heavy-gate`, whose docs-only skip would leave a required row absent. Its name
-carries no `(advisory)` suffix, so a row it reports with a failing conclusion
-gates. A row it does not report, or reports `skipped`, does not: until the
-maintainer adds `Unit tests Windows` to master's required status checks,
-ci-verdict is the only enforcement, and it judges only the rows that are
-posted, so an absent or job-skipped Windows row reads green (shape 11). Its
+carries no `(advisory)` suffix, and it is a required context on master. Its
 population is every
 `tests/config/*` file, every `process.platform` Windows gate, and the
 shrink-only `WINDOWS_LANE_ADMISSIONS` rows
