@@ -2428,7 +2428,7 @@ export function renderCompactModuleReport(report: ModuleReport): string {
 			`${report.summary.symbols} symbols, ${report.summary.exports} exported, ` +
 			`${report.summary.imports} imports${callbackSupportSuffix}`,
 	];
-	if (report.error) lines.push(`ERROR: ${report.error}`);
+	if (report.error) lines.push(`INCOMPLETE: ${report.error}`);
 	for (const warning of report.warnings ?? []) {
 		lines.push(`WARNING: ${warning}`);
 	}
