@@ -1373,7 +1373,15 @@ async function callTool(
 			callGraph,
 			maxCallGraphEntries,
 		});
-		const text = renderModuleReportPreset(report, choice);
+		// The graph-age advisory is a surface concern: pi's graph is per-edit warm,
+		// so a staleness line there would be noise, while an MCP caller sits on a
+		// cached graph. It wraps the text cell and never the JSON one (#5137 review).
+		const rendered = renderModuleReportPreset(report, choice);
+		const graphStaleness =
+			choice.format === "text"
+				? graphStalenessNote(report.graphBuiltAt, "Review graph")
+				: undefined;
+		const text = graphStaleness ? `${rendered}\n\n${graphStaleness}` : rendered;
 		if (!report.available)
 			return { content: [{ type: "text" as const, text }], isError: true };
 		return { content: [{ type: "text" as const, text }] };

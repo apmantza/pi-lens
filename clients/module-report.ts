@@ -992,7 +992,9 @@ export function renderModuleReportPreset(
 ): string {
 	const projected = projectModuleReport(report, choice.projection);
 	return choice.format === "text"
-		? renderCompactModuleReport(projected)
+		? renderCompactModuleReport(projected, {
+				projection: choice.projection,
+			})
 		: JSON.stringify(projected);
 }
 function normalizeFocus(focus: string | undefined): string[] {
@@ -2262,20 +2264,6 @@ function padRange(startLine: number, endLine: number, width: number): string {
 	return `${startLine}-${endLine}`.padEnd(width);
 }
 
-const KIND_ABBREV: Record<string, string> = {
-	function: "fn",
-	method: "fn",
-	class: "class",
-	interface: "iface",
-	type: "type",
-	variable: "var",
-	property: "prop",
-};
-
-function compactKind(kind: string): string {
-	return KIND_ABBREV[kind] ?? kind;
-}
-
 function compactFlagsSuffix(flags: string[] | undefined): string {
 	if (!flags || flags.length === 0) return "";
 	return `  ${flags.map((flag) => `[${flag}]`).join(" ")}`;
@@ -2307,7 +2295,7 @@ function compactEntryLines(
 	indent: string,
 ): string[] {
 	const range = padRange(entry.startLine, entry.endLine, width);
-	const kind = compactKind(entry.kind).padEnd(6);
+	const kind = entry.kind.padEnd(10);
 	const sig = entry.signature ? `${entry.name}${entry.signature}` : entry.name;
 	const docSuffix = entry.doc ? `  \u2014 ${entry.doc}` : "";
 	const out = [
@@ -2392,9 +2380,9 @@ function compactCallGraphCoverageLine(
  * ```
  * clients/agent-nudge.ts jsts 266L [fresh] \u2014 8 symbols, 5 exported, 2 imports (callbackSupport: generic)
  * API:
- *   77-81    fn  _resetAgentNudgeForTests()  [async]  \u2014 Test-only: clear accumulator state.
+ *   77-81    function  _resetAgentNudgeForTests()  [async]  \u2014 Test-only: clear accumulator state.
  * INTERNAL:
- *   95-104   fn  isValidPayload(data: unknown)  cx:2 fan:1
+ *   95-104   function  isValidPayload(data: unknown)  cx:2 fan:1
  * CALLBACKS:
  *   164-172  event_handler             events.on@164  raw:function_expression  [lifecycle]  (in wireAgentNudgeSubscriber)
  * PROVENANCE: symbols=syntax imports=cached-review-graph usedBy=cached-review-graph callbacks=heuristic-tree-sitter semantic.source=review-graph semantic.references=true semantic.implementations=false graphBuiltAt=unknown
@@ -2402,14 +2390,53 @@ function compactCallGraphCoverageLine(
  * Purely presentational over an already-built (and projected) report — call
  * `moduleReport`, then `projectModuleReport`, and pass the result here.
  */
-export function renderCompactModuleReport(report: ModuleReport): string {
+function appendCallbacksSection(
+	lines: string[],
+	report: ModuleReport,
+	width: number,
+): void {
+	if (report.callbacks.length === 0) return;
+	lines.push("CALLBACKS:");
+	for (const callback of report.callbacks)
+		lines.push(...compactCallbackLines(callback, width));
+}
+
+function appendRecommendedSection(
+	lines: string[],
+	report: ModuleReport,
+	width: number,
+): void {
+	if (report.recommendedReads.length === 0) return;
+	lines.push("RECOMMENDED:");
+	for (const r of report.recommendedReads) {
+		lines.push(
+			`  ${padRange(r.startLine, r.endLine, width)}${r.symbol ?? ""}  \u2014 ${r.reason}`,
+		);
+	}
+}
+
+export function renderCompactModuleReport(
+	report: ModuleReport,
+	options: { projection?: ModuleReportProjection } = {},
+): string {
 	if (!report.available) {
 		// #4949: a parse that recovered zero symbols lands here, the case the
-		// disclosure matters most for; keep the caveat lines.
-		return [
-			`${report.path} — unavailable${report.error ? `: ${report.error}` : ""}`,
+		// disclosure matters most for; keep the caveat lines. A callback-only
+		// module is unavailable too (no named entry, no graph node) and still
+		// carries navigation handles, so those render here as well (#5137
+		// review): the old JSON default preserved them.
+		const unavailable = [
+			`${report.path} \u2014 unavailable${report.error ? `: ${report.error}` : ""}`,
 			...(report.warnings ?? []).map((note) => `WARNING: ${note}`),
-		].join("\n");
+		];
+		const handleWidth =
+			Math.max(
+				5,
+				...report.callbacks.map((c) => `${c.startLine}-${c.endLine}`.length),
+			) + 2;
+		appendCallbacksSection(unavailable, report, handleWidth);
+		appendRecommendedSection(unavailable, report, handleWidth);
+		return unavailable.join("\n");
 	}
 	const allEntries = [...report.api, ...report.internal];
 	const allRanges = allEntries.flatMap((e) => [e, ...(e.members ?? [])]);
@@ -2443,11 +2470,7 @@ export function renderCompactModuleReport(report: ModuleReport): string {
 		for (const entry of report.internal)
 			lines.push(...compactEntryLines(entry, width, "  "));
 	}
-	if (report.callbacks.length > 0) {
-		lines.push("CALLBACKS:");
-		for (const callback of report.callbacks)
-			lines.push(...compactCallbackLines(callback, width));
-	}
+	appendCallbacksSection(lines, report, width);
 	if (report.imports.external.length + report.imports.internal.length > 0) {
 		lines.push("IMPORTS:");
 		if (report.imports.external.length > 0)
@@ -2484,14 +2507,7 @@ export function renderCompactModuleReport(report: ModuleReport): string {
 			);
 		}
 	}
-	if (report.recommendedReads.length > 0) {
-		lines.push("RECOMMENDED:");
-		for (const r of report.recommendedReads) {
-			lines.push(
-				`  ${padRange(r.startLine, r.endLine, width)}${r.symbol ?? ""}  \u2014 ${r.reason}`,
-			);
-		}
-	}
+	appendRecommendedSection(lines, report, width);
 	const provenanceParts: string[] = [];
 	if (report.provenance) {
 		for (const [key, value] of Object.entries(report.provenance)) {
@@ -2504,6 +2520,10 @@ export function renderCompactModuleReport(report: ModuleReport): string {
 		}
 	}
 	provenanceParts.push(`graphBuiltAt=${report.graphBuiltAt ?? "unknown"}`);
+	// A projection that drops metrics must say so, or an absent `used-by:` line
+	// reads as "nothing uses this symbol" (#5137 review).
+	if (options.projection === "summary")
+		provenanceParts.push("metrics=omitted (view=full-text)");
 	lines.push(`PROVENANCE: ${provenanceParts.join(" ")}`);
 	return lines.join("\n");
 }

@@ -269,4 +269,60 @@ describe("module_report presets (#5137)", () => {
 			env.cleanup();
 		}
 	});
+
+	it("discloses the omitted metrics on the summary text cell", async () => {
+		const env = await makeWarmEnv("pi-lens-preset-omitted-");
+		try {
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const summary = await tool.execute(
+				"1",
+				{ path: "hub.ts" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			const full = await tool.execute(
+				"2",
+				{ path: "hub.ts", view: "full-text" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			// A missing `used-by:` line must not read as "nothing uses this".
+			expect(String(summary.content[0]?.text)).toContain(
+				"metrics=omitted (view=full-text)",
+			);
+			expect(String(full.content[0]?.text)).not.toContain("metrics=omitted");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps a callback-only module's handles on the default text cell", async () => {
+		const env = setupTestEnvironment("pi-lens-preset-callback-only-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"only-callbacks.ts",
+				"setTimeout(() => cleanup(), 100);\n",
+			);
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"1",
+				{ path: "only-callbacks.ts" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			const text = String(result.content[0]?.text);
+			// No named entry and no graph node, so the report is unavailable, but
+			// the handle the old JSON default carried still renders.
+			expect(result.isError).toBe(true);
+			expect(text).toContain("unavailable");
+			expect(text).toContain("CALLBACKS:");
+			expect(text).toContain("setTimeout");
+		} finally {
+			env.cleanup();
+		}
+	});
 });

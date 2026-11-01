@@ -2364,7 +2364,7 @@ describe("moduleReport — preset losslessness (#5137)", () => {
 				"imports.internal": (t) =>
 					t.includes(`internal: ${report.imports.internal.join(", ")}`),
 				"api[].name": (t) => t.includes(hub.name),
-				"api[].kind": (t) => t.includes(" fn "),
+				"api[].kind": (t) => t.includes(" function "),
 				"api[].startLine": (t) => t.includes(`${hub.startLine}-${hub.endLine}`),
 				"api[].endLine": (t) => t.includes(`${hub.startLine}-${hub.endLine}`),
 				// The entry's own exported boolean selects its section: an exported
@@ -2383,7 +2383,7 @@ describe("moduleReport — preset losslessness (#5137)", () => {
 				"api[].decorators": (t) =>
 					t.includes(`decorators: ${svc.decorators?.join(", ")}`),
 				"api[].members[].name": (t) => t.includes(runMember.name),
-				"api[].members[].kind": (t) => t.includes(" fn "),
+				"api[].members[].kind": (t) => t.includes(" function "),
 				"api[].members[].startLine": (t) =>
 					t.includes(`${runMember.startLine}-${runMember.endLine}`),
 				"api[].members[].endLine": (t) =>
@@ -2413,7 +2413,7 @@ describe("moduleReport — preset losslessness (#5137)", () => {
 				"api[].usedBy[].relation": (t) => t.includes(` ${usedBy.relation}`),
 				"api[].usedBy[].resolution": (t) => t.includes(` ${usedBy.resolution}`),
 				"internal[].name": (t) => t.includes("helper"),
-				"internal[].kind": (t) => t.includes(" fn "),
+				"internal[].kind": (t) => t.includes(" function "),
 				"internal[].startLine": (t) => {
 					const helperEntry = report.internal.find((e) => e.name === "helper")!;
 					return t.includes(`${helperEntry.startLine}-${helperEntry.endLine}`);

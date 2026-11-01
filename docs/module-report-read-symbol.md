@@ -84,16 +84,17 @@ startLine, endLine}` (no path — always the same file as the report).
 The `view` output preset is projection × format: `"summary-text"` (default) =
 metric fields off (no `usedBy`/`fanout`/`complexity` fields), text; `"summary-json"` =
 same fields, JSON; `"full-text"` = every field, text; `"full-json"` = every
-field, JSON. Every field appears in the text cell (the unavailable path
-renders its defaults as absent; kind is abbreviated): metrics
+field, JSON. Every field appears in the text cell: `kind` prints raw, so it can
+be reused as `read_symbol`'s `kind` filter, and an unavailable module still
+renders its callbacks and recommended reads. Metrics
 who-uses-this as a `used-by:` continuation line:
 
 ```text
 clients/agent-nudge.ts jsts 266L [fresh] — 8 symbols, 5 exported, 2 imports (callbackSupport: generic)
 API:
-  77-81    fn  _resetAgentNudgeForTests()  [async]  — Test-only: clear accumulator state.
+  77-81    function  _resetAgentNudgeForTests()  [async]  — Test-only: clear accumulator state.
 INTERNAL:
-  95-104   fn  isValidPayload(data: unknown)  cx:2 fan:1
+  95-104   function  isValidPayload(data: unknown)  cx:2 fan:1
 CALLBACKS:
   164-172  event_handler             events.on@164  raw:function_expression  [lifecycle]  (in wireAgentNudgeSubscriber)
 IMPORTS:
