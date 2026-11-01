@@ -44,8 +44,8 @@ export function isUnitTestsShardJobName(name) {
 
 // How this repository ACTUALLY marks a check advisory: the workflow job name
 // ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
-// open PR -- `PR body (advisory)`, `Vale prose lint (advisory)`,
-// `OSV scan (advisory)`. Originally lived only
+// open PR -- `PR body (advisory)`, `Vale prose lint (advisory)` (a step of
+// `Lint (advisory)` since #5164), `OSV scan (advisory)`. Originally lived only
 // in the former merge lane; moved here in #2609 so ci-verdict.mjs (a second
 // consumer of the exact same policy) imports the ONE list instead of
 // hand-rolling its own -- AGENTS.md shape 38's own warning ("the cheapest
@@ -65,12 +65,6 @@ export const ADVISORY_CHECKS = new Set([
 	// DIFFERENT set of names this list does NOT cover; they keep gating because
 	// an alert on such a head is a real result.
 	"CodeQL",
-	// #2706 tooling jobs have explicit advisory entries as well as the suffix.
-	"jscpd (advisory)",
-	"yamllint (advisory)",
-	"typos (advisory)",
-	"taplo (advisory)",
-	"complexity (advisory)",
 	"Changed tests shuffled (advisory)",
 	// Stale verdict labels are bookkeeping only. Their cleanup asserts no
 	// property of the change, so API or token failures must never block a merge

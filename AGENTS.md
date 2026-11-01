@@ -526,6 +526,9 @@ node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <re
                                         prints only the rows that changed head vs base
 ```
 
+The seven advisory lint tools are steps of one `Lint (advisory)` job, and the PR
+title and close-keyword checks are steps of one gating `PR metadata` job.
+
 CI cost gates (#3801). The heavy advisory jobs (`CodeQL (<language>) (advisory)`)
 start only after every required check passed on the
 head (`heavy-gate` in ci.yml; it is red when a lint.yml required check was red

@@ -82,35 +82,11 @@
 			"status": "no-floor",
 			"reason": "A fail-open classifier, not a producer. A failed job leaves outputs.smoke empty, and pi-load reads empty as 'not false', so the full matrix runs: the green path cannot skip the work this job scopes."
 		},
-		".github/workflows/lint.yml#complexity": {
+		".github/workflows/lint.yml#lint-advisory": {
 			"status": "floored",
 			"floorStep": "Generate complexity report",
 			"evidence": "scripts/complexity-report.mjs",
-			"reason": "scripts/complexity-report.mjs calls the shared assertEvaluated with COMPLEXITY_ANALYZED_FILES_FLOOR, so a run that analyses too few source files exits non-zero and the graded step reds; set -o pipefail keeps a crash behind the pipe from reading green."
-		},
-		".github/workflows/lint.yml#jscpd": {
-			"status": "no-floor",
-			"reason": "jscpd's exit code is the whole verdict (threshold 1) over four fixed in-repo paths: a missing path exits 1, and only a .jscpd.json format or ignore edit can empty the scan. The header above the job in lint.yml states this.",
-			"header": true
-		},
-		".github/workflows/lint.yml#strictness": {
-			"status": "no-floor",
-			"reason": "The job only publishes the two tsc counts. The gating tests/config/strictness-ratchet.test.ts runs the same two configurations and reds on exit 0, zero diagnostics or any drift, so a tsc that evaluated nothing reds the Unit lane. The header above the job states this.",
-			"header": true
-		},
-		".github/workflows/lint.yml#taplo": {
-			"status": "no-floor",
-			"reason": "npm run taplo feeds git ls-files '*.toml' to taplo, which exits non-zero on a parse error or format drift; only a pathspec edit can empty the match. The header above the job states this.",
-			"header": true
-		},
-		".github/workflows/lint.yml#typos": {
-			"status": "no-floor",
-			"reason": "crate-ci/typos walks the checkout and exits non-zero on any finding or error; the population is the repo itself and cannot be empty. The header above the job states this.",
-			"header": true
-		},
-		".github/workflows/lint.yml#yamllint": {
-			"status": "no-floor",
-			"reason": "The file list is git ls-files of the checkout, and yamllint with an empty list exits 2 (usage), so an empty population reds the row instead of reading clean. The header above the job states this.",
+			"reason": "Seven advisory tool steps share this job-level site (#5002). scripts/complexity-report.mjs calls the shared assertEvaluated with COMPLEXITY_ANALYZED_FILES_FLOOR, so a run that analyses too few source files exits non-zero and the graded step reds; set -o pipefail keeps a crash behind the pipe from reading green. The comment on the jscpd, taplo, typos, yamllint and strictness steps states the reader that makes an empty result visible. No step is continue-on-error, so the row reads failure on any finding. The header above the job in lint.yml states this.",
 			"header": true
 		},
 		".github/workflows/parser-smoke.yml#parser-smoke#Save the managed tool tree": {
