@@ -11,9 +11,8 @@
  *
  * Production chain: the REAL `handleNotifyOpen` / `handleNotifyChange` (the
  * one boundary every open, change, save and resync passes through) against a
- * mock `MessageConnection` for per-notification detail, and against the real
- * fixture server over a real JSON-RPC stream for the bytes that actually leave
- * the process. Only the process boundary is faked.
+ * mock `MessageConnection`, the process boundary. The bytes over a real stdio
+ * stream are `powershell-bom-wire-5151.integration.test.ts`.
  *
  * The wire text replaces the BOM with ONE space, not a deletion: every
  * UTF-16 offset in the document stays where the disk-decoded text has it, and
@@ -22,24 +21,17 @@
  * `clients/lsp/diagnostic-binding.ts`).
  */
 
-import { createHash } from "node:crypto";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
-	createLSPClient,
 	handleNotifyChange,
 	handleNotifyOpen,
 	setupIncomingHandlers,
 	type LSPClientState,
 } from "../../../clients/lsp/client.js";
 import { hashDiagnosticContent } from "../../../clients/lsp/diagnostic-binding.js";
-import { stopLSP } from "../../../clients/lsp/launch.js";
 import { TEXT_DOCUMENT_SYNC_KIND_INCREMENTAL } from "../../../clients/lsp/sync-kind.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
-import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import { createMockState } from "./mock-client-state.js";
 
 const BOM = "﻿";
@@ -222,72 +214,4 @@ describe("#5151 the document text a PowerShell server is sent", () => {
 		expect(diagnostic?.message).toContain("Missing closing '}'");
 		expect(diagnostic?.range.start).toEqual({ line: 0, character: 8 });
 	});
-});
-
-describe("#5151 the bytes that leave the process", () => {
-	const dirs: string[] = [];
-	afterEach(() => {
-		for (const dir of dirs.splice(0))
-			fs.rmSync(dir, { recursive: true, force: true });
-	});
-
-	const sha12 = (text: string) =>
-		createHash("sha256").update(text).digest("hex").slice(0, 12);
-
-	async function openAndChange(serverId: string) {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-bom-5151-"));
-		dirs.push(dir);
-		const trace = path.join(dir, "wire.trace");
-		const proc = await spawnFakeLspServer({
-			cwd: dir,
-			env: {
-				...process.env,
-				FAKE_LSP_TRACE_FILE: trace,
-				FAKE_LSP_TRACE_TEXT: "1",
-				FAKE_LSP_ECHO_DID_CHANGE: "1",
-			},
-		});
-		const client = await createLSPClient({
-			serverId,
-			process: proc,
-			root: dir,
-		});
-		try {
-			const echoed: string[] = [];
-			client.connection.onNotification(
-				"$/test/didChangeReceived",
-				(params: { contentChanges: Array<{ text: string }> }) => {
-					echoed.push(params.contentChanges[0].text);
-				},
-			);
-			const file = path.join(dir, "script.ps1");
-			await client.notify.open(file, BOM + BODY, "powershell");
-			await client.notify.change(file, BOM + SECOND_BODY);
-			await vi.waitFor(() => expect(echoed.length).toBe(1));
-			const lines = await vi.waitFor(() => {
-				const text = fs
-					.readFileSync(trace, "utf8")
-					.split("\n")
-					.filter((line) => line.startsWith("text "));
-				expect(text.length).toBeGreaterThanOrEqual(2);
-				return text;
-			});
-			return { echoed, lines };
-		} finally {
-			await client.shutdown().catch(() => {});
-			await stopLSP(proc).catch(() => {});
-		}
-	}
-
-	it("a powershell server reads the replaced text from the JSON-RPC stream", async () => {
-		const { echoed, lines } = await openAndChange("powershell");
-		expect(lines[0]?.endsWith(sha12(` ${BODY}`))).toBe(true);
-		expect(echoed[0]).toBe(` ${SECOND_BODY}`);
-	}, 20_000);
-
-	it("another server's stream still carries the BOM", async () => {
-		const { echoed, lines } = await openAndChange("fake-other");
-		expect(lines[0]?.endsWith(sha12(BOM + BODY))).toBe(true);
-		expect(echoed[0]).toBe(BOM + SECOND_BODY);
-	}, 20_000);
 });
