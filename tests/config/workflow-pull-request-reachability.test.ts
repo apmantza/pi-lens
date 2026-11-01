@@ -576,7 +576,7 @@ describe("the reachability model itself", () => {
 		],
 		// A non-event gate is permissive: an upstream success and a truthy
 		// output are the model's reading.
-		["needs.detect-lockfile-change.outputs.changed == 'true'", true],
+		["needs.upstream.outputs.changed == 'true'", true],
 		["github.event.pull_request.user.login != 'dependabot[bot]'", true],
 		["github.event.workflow_run.conclusion == 'failure'", false],
 	])("%s -> reachable=%s", (expr, expected) => {

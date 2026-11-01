@@ -1679,14 +1679,10 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 	it("the reviewer's named gating list is NOT advisory", () => {
 		for (const name of [
 			...EXTERNAL_GATING_NAMES,
-			"Detect lockfile change",
-			"PR title",
-			// #5002: the title and close-keyword checks are steps of this one job.
 			"PR metadata",
 			"actionlint",
 			"markdownlint",
 			"Dependency boundaries",
-			"Close-keyword syntax",
 			"Changelog fragment (fast-fail)",
 			"Install test (ubuntu-latest)",
 			"Install test (windows-latest)",

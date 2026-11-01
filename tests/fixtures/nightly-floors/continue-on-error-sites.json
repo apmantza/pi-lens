@@ -83,8 +83,10 @@
 			"reason": "A fail-open classifier, not a producer. A failed job leaves outputs.smoke empty, and pi-load reads empty as 'not false', so the full matrix runs: the green path cannot skip the work this job scopes."
 		},
 		".github/workflows/lint.yml#lint-advisory": {
-			"status": "no-floor",
-			"reason": "Seven advisory tool steps share this job-level site (#5002). The complexity step keeps its own floor through scripts/complexity-report.mjs (the shared assertEvaluated), and the comment on the jscpd, taplo, typos, yamllint and strictness steps states the reader that makes an empty result visible. No step is continue-on-error, so the row reads failure on any finding. The header above the job in lint.yml states this.",
+			"status": "floored",
+			"floorStep": "Generate complexity report",
+			"evidence": "scripts/complexity-report.mjs",
+			"reason": "Seven advisory tool steps share this job-level site (#5002). scripts/complexity-report.mjs calls the shared assertEvaluated with COMPLEXITY_ANALYZED_FILES_FLOOR, so a run that analyses too few source files exits non-zero and the graded step reds; set -o pipefail keeps a crash behind the pipe from reading green. The comment on the jscpd, taplo, typos, yamllint and strictness steps states the reader that makes an empty result visible. No step is continue-on-error, so the row reads failure on any finding. The header above the job in lint.yml states this.",
 			"header": true
 		},
 		".github/workflows/parser-smoke.yml#parser-smoke#Save the managed tool tree": {
