@@ -100,11 +100,15 @@ import {
 	resolveToolCallCorrelationId,
 } from "./tool-event.js";
 import {
+	boundedEditIndexes,
 	boundedIndexesForCount,
 	createReadGuardEditBatchSummary,
+	formatBoundedEditIndexes,
 	getReadGuardCorrelationId,
 	logReadGuardEvent,
 } from "./read-guard-logger.js";
+import { formatAlreadyAppliedNotes } from "./read-guard-tool-lines.js";
+import type { PartialApplyPending } from "./partial-edit-apply.js";
 import type { PiLensFlagSource } from "./lens-config.js";
 import type { EditToolDetails } from "@earendil-works/pi-coding-agent";
 import type { LSPShutdownOptions } from "./lsp/client.js";
@@ -699,6 +703,8 @@ interface ToolResultDeps {
 	_bypassDebounce?: boolean;
 	/** #2000: overrides the change-log source for this synthetic dispatch. */
 	_mutationSourceOverride?: ProjectChangeSource;
+	/** Internal (#5120): this call's partial apply, taken by the wrapper. */
+	_partialApply?: PartialApplyPending;
 	/** Internal bounded provenance carried through debounce/coalescing. */
 	_telemetryParticipantIds?: string[];
 	_telemetryParticipantTotal?: number;
@@ -1199,14 +1205,7 @@ function getRequestedEditIndexes(
  */
 function sourceForMutation(
 	classification: MutatingToolClassification,
-	details?: unknown,
 ): ProjectChangeSource {
-	if (
-		(details as { piLensPartialApply?: unknown } | undefined)
-			?.piLensPartialApply
-	) {
-		return "partial-apply";
-	}
 	if (
 		classification.provenance === "builtin" ||
 		classification.provenance === "bash-derived"
@@ -1584,7 +1583,8 @@ async function dispatchPipelineAnalysis(args: {
 	readGuardCorrelationId: string;
 	requestedEditIndexes: number[];
 	requestedEditTotal: number;
-	isPartialApplyResult: boolean;
+	/** #5120: the call's partial apply, whose commit summary names its own edits. */
+	partialApply?: PartialApplyPending;
 	participantIds: string[];
 	participantTotal: number;
 	toolResultStart: number;
@@ -1640,7 +1640,7 @@ async function dispatchPipelineAnalysis(args: {
 		readGuardCorrelationId,
 		requestedEditIndexes,
 		requestedEditTotal,
-		isPartialApplyResult,
+		partialApply,
 		toolResultStart,
 		nativeAppliedPairs,
 		allowAutonomousWriters,
@@ -1844,43 +1844,49 @@ async function dispatchPipelineAnalysis(args: {
 		);
 	}
 
-	if (!isPartialApplyResult) {
-		const postEditStatus = result.isError ? "failed" : "succeeded";
-		if (result.isError) {
-			logReadGuardEvent({
-				event: "edit_post_edit_pipeline_failed",
-				correlationId: readGuardCorrelationId,
-				filePath,
-				metadata: {
-					tool: event.toolName,
-					commitStatus: "committed",
-					reasonCode: "pipeline_failed",
-				},
-			});
-		}
+	const postEditStatus = result.isError ? "failed" : "succeeded";
+	if (result.isError) {
 		logReadGuardEvent({
-			event: "edit_batch_summary",
+			event: "edit_post_edit_pipeline_failed",
 			correlationId: readGuardCorrelationId,
 			filePath,
 			metadata: {
 				tool: event.toolName,
-				editBatchSummary: createReadGuardEditBatchSummary({
+				commitStatus: "committed",
+				reasonCode: "pipeline_failed",
+			},
+		});
+	}
+	// #5120: a partial apply's executed batch is renumbered; its summary is
+	// the preflight's, over the original batch, with the edits it applied.
+	const appliedIndexes = partialApply
+		? boundedEditIndexes(partialApply.applied.map((edit) => edit.originalIndex))
+		: requestedEditIndexes;
+	logReadGuardEvent({
+		event: "edit_batch_summary",
+		correlationId: readGuardCorrelationId,
+		filePath,
+		metadata: {
+			tool: event.toolName,
+			editBatchSummary: createReadGuardEditBatchSummary({
+				...(partialApply?.summary ?? {
 					requestedIndexes: requestedEditIndexes,
 					requestedTotal: requestedEditTotal,
 					resolvedIndexes: requestedEditIndexes,
 					resolvedTotal: requestedEditTotal,
-					appliedIndexes: requestedEditIndexes,
-					appliedTotal: requestedEditTotal,
-					participantIds: pipelineTelemetry.participantIds,
-					participantTotal: pipelineTelemetry.participantTotal,
-					commitStatus: "committed",
-					postEditStatus,
-					terminalStatus: postEditStatus === "failed" ? "failed" : "success",
-					durationMs: Date.now() - toolResultStart,
 				}),
-			},
-		});
-	}
+				appliedIndexes,
+				// The executed batch is exactly the applied edits.
+				appliedTotal: requestedEditTotal,
+				participantIds: pipelineTelemetry.participantIds,
+				participantTotal: pipelineTelemetry.participantTotal,
+				commitStatus: "committed",
+				postEditStatus,
+				terminalStatus: postEditStatus === "failed" ? "failed" : "success",
+				durationMs: Date.now() - toolResultStart,
+			}),
+		},
+	});
 
 	// ── Post-pipeline post-conditions (#2464 review round 2, S1) ───────────────
 	// These live INSIDE the helper rather than at its call sites so EVERY
@@ -2097,11 +2103,95 @@ export function handleToolExecutionEnd(
 		: false;
 }
 
-export async function handleToolResult(deps: ToolResultDeps): Promise<{
-	content: Array<{ type: string; text?: string }>;
-	isError?: boolean;
-	structuredContent?: unknown;
-} | void> {
+/**
+ * #5120: the agent-facing result of a partial apply. The host edit wrote the
+ * matched subset, so the edits that applied lead the message and the
+ * preflight's per-edit bodies follow unchanged: they describe exactly the
+ * edits that did not apply. The preflight header (🔄/🛑) is never reused for
+ * committed bytes; that relabelling is the #2402 retry loop. When the host
+ * refused the subset, nothing was written and the preflight verdict stands.
+ * Either way the call reports `isError`: the batch as submitted did not land.
+ */
+function composePartialApplyResult(
+	pending: PartialApplyPending,
+	event: ToolResultDeps["event"],
+	result: ToolResultReturn,
+): ToolResultReturn {
+	// pi's edit tool reports a refusal by throwing, which pi turns into an
+	// error result.
+	const hostRefused = event.isError === true;
+	const content = result ? result.content : event.content;
+	const structuredContent = result
+		? result.structuredContent
+		: event.structuredContent;
+	const readGuardCorrelationId = getReadGuardCorrelationId(event);
+	const filePath = readToolResultPathField(event) ?? "";
+	if (hostRefused) {
+		logReadGuardEvent({
+			event: "edit_partial_apply_rejected",
+			correlationId: readGuardCorrelationId,
+			filePath,
+			metadata: {
+				tool: event.toolName,
+				rejectionReason: "host_refused",
+				editCount: pending.applied.length,
+			},
+		});
+		return {
+			content: [
+				{
+					type: "text",
+					text: `${pending.preflightError}\n\n🛑 Batch not applied: the host edit refused the matched edits as well, so nothing was written. Rebuild the edit from a fresh read.`,
+				},
+				...content,
+			],
+			isError: true,
+			structuredContent,
+		};
+	}
+	const count = pending.applied.length;
+	const indices = formatBoundedEditIndexes(
+		boundedEditIndexes(pending.applied.map((edit) => edit.originalIndex)),
+	);
+	const committed = `⚠️ PARTIAL APPLY — ${count} edit${count === 1 ? "" : "s"} committed (${indices}).`;
+	const parts = [
+		result?.isError === true
+			? `${committed} Post-edit analysis failed after the commit; the committed bytes stand and were not reverted. Do NOT resubmit the applied edits.`
+			: `${committed} Do NOT resubmit the applied edits.`,
+	];
+	if (pending.preflightDetails && pending.preflightDetails.length > 0)
+		parts.push(pending.preflightDetails.join("\n\n"));
+	const alreadyNotes = formatAlreadyAppliedNotes(pending.alreadyAppliedEdits);
+	if (alreadyNotes) parts.push(alreadyNotes.trimStart());
+	return {
+		content: [{ type: "text", text: parts.join("\n\n") }, ...content],
+		isError: true,
+		structuredContent,
+	};
+}
+
+export async function handleToolResult(
+	deps: ToolResultDeps,
+): Promise<ToolResultReturn> {
+	// #5120: a call whose tool_call rewrote a partly matching batch to its
+	// matched subset is found here by its own input object. The handler runs
+	// it as the edit it is, and the partial-apply message wraps its result. A
+	// re-entry (the debounce) already carries it.
+	if (deps._partialApply === undefined) {
+		const partialApply = (
+			deps.runtime as Partial<RuntimeCoordinator>
+		).toolCallPartialApply?.call(deps.runtime, deps.event.input);
+		if (partialApply)
+			return composePartialApplyResult(
+				partialApply,
+				deps.event,
+				await handleToolResult({
+					...deps,
+					_partialApply: partialApply,
+					_mutationSourceOverride: "partial-apply",
+				}),
+			);
+	}
 	const {
 		event,
 		getFlag,
@@ -3692,9 +3782,6 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 								observedKind,
 							),
 							requestedEditTotal: getRequestedEditCount(event, observedKind),
-							isPartialApplyResult:
-								((event.details ?? {}) as Record<string, unknown>)
-									.piLensPartialApply === true,
 							participantIds: [observedReadGuardCorrelationId],
 							participantTotal: 1,
 							toolResultStart,
@@ -3829,7 +3916,6 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	noteMutationHandled(filePath);
 	const readGuardCorrelationId = getReadGuardCorrelationId(event);
 	const resultDetails = (event.details ?? {}) as Record<string, unknown>;
-	const isPartialApplyResult = resultDetails.piLensPartialApply === true;
 	const requestedEditIndexes = getRequestedEditIndexes(event, mutation.kind);
 	const requestedEditTotal = getRequestedEditCount(event, mutation.kind);
 	const participantIds = [
@@ -3888,7 +3974,11 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// args (post-autopatch), the same text the preflight resolves against.
 	const nativeAppliedPairs = recordNativeAppliedPairs({
 		runtime,
-		input: event.input,
+		// #5120: a partial apply's host edit ran on the exact span text; an
+		// identical resubmission carries the agent's own pairs.
+		input: deps._partialApply
+			? { edits: deps._partialApply.applied }
+			: event.input,
 		kind: mutation.kind,
 		filePath,
 		stateHash: postWriteStateHash,
@@ -4212,9 +4302,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		cwd: turnStateCwd,
 		analysisRootMode,
 		filePath,
-		source:
-			deps._mutationSourceOverride ??
-			sourceForMutation(mutation, event.details),
+		source: deps._mutationSourceOverride ?? sourceForMutation(mutation),
 		changedRange: singleRange(modifiedRanges),
 		dbg,
 		sessionId: deps.sessionId,
@@ -4251,7 +4339,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			readGuardCorrelationId,
 			requestedEditIndexes,
 			requestedEditTotal,
-			isPartialApplyResult,
+			partialApply: deps._partialApply,
 			participantIds,
 			participantTotal,
 			toolResultStart,

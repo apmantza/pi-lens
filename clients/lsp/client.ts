@@ -1335,6 +1335,25 @@ export interface LSPClientState {
 	 * the paths the diagnostics store holds.
 	 */
 	nonEmptyAnswerPhases?: Map<string, string>;
+	/**
+	 * #5131: per path, the bookkeeping that tells the client's OWN first-open
+	 * `workspace/didChangeWatchedFiles` apart from the server's answer. Set when
+	 * the open of a config-declared server queues the notice (`customServer`);
+	 * `flushed` once the queue sent it as a batch naming this document alone
+	 * (any other batch voids the entry: it carries
+	 * news besides this document's own bytes); `sawNonEmpty` once a version-less
+	 * non-empty publish arrived for the document at the version it was opened
+	 * at. A version-less EMPTY publish that then arrives is the server
+	 * recompiling from disk on that notice, not an answer: it is held
+	 * ({@link holdEmptyEchoOfOwnNotice}). Dropped with the path's diagnostics in
+	 * {@link clearDiagnosticsForPath}, and by the next flush, so it holds at
+	 * most the paths opened since the last flush plus the one batch sent.
+	 */
+	ownNoticeEchoes?: Map<string, OwnNoticeEcho>;
+	/** #5131 round 2: the server is a config-declared (`lsp.servers`) entry, the
+	 *  only kind whose first-open notice gets an {@link ownNoticeEchoes} entry.
+	 *  A built-in server never holds an echo: its clear is its answer. */
+	customServer?: boolean;
 	/** #4763: empty publishes held since the last `lsp_rules_refreshed` row,
 	 *  which reports it and resets it. */
 	heldEmptyPublishes?: number;
@@ -2201,6 +2220,92 @@ export function diagnosticsPublishedAtForPath(
  */
 const PENDING_RECEIPT_DROPPED = "pending-receipt-dropped";
 
+/** #5131: see {@link LSPClientState.ownNoticeEchoes}. */
+export interface OwnNoticeEcho {
+	readonly uri: string;
+	/** The sent version the notice and the publishes are judged at. */
+	readonly sentVersion: number;
+	flushed: boolean;
+	sawNonEmpty: boolean;
+}
+
+/**
+ * #5131: the open queued a watched-files notice for `uri`; remember it so the
+ * echo can be told from an answer once the queue sends it.
+ */
+function noteOwnNoticeQueued(
+	state: LSPClientState,
+	normalizedPath: string,
+	uri: string,
+	sentVersion: number,
+): void {
+	(state.ownNoticeEchoes ??= new Map()).set(normalizedPath, {
+		uri,
+		sentVersion,
+		flushed: false,
+		sawNonEmpty: false,
+	});
+}
+
+/**
+ * #5131: the watch queue sent `changes`. An entry survives only as the sole
+ * document of its own batch; an already-sent entry never survives a later
+ * flush, which may carry the news a server's clear answers (#4320: a sibling's
+ * Created clears an importer's cached miss).
+ */
+function noteOwnNoticeFlushed(
+	state: LSPClientState,
+	changes: ReadonlyArray<{ uri: string }>,
+): void {
+	const echoes = state.ownNoticeEchoes;
+	if (!echoes) return;
+	for (const [normalizedPath, echo] of echoes) {
+		if (!echo.flushed && changes.length === 1 && changes[0]?.uri === echo.uri)
+			echo.flushed = true;
+		else echoes.delete(normalizedPath);
+	}
+}
+
+/**
+ * #5131: an EMPTY version-less publish for a document whose own notice was
+ * sent alone, after a non-empty one for the same version, is the server
+ * recompiling from disk on that notice (groovy-language-server: the notice
+ * resets its change tracker, the recompile skips the file, and the clear
+ * erases the `unable to resolve class` it published 5 ms earlier). It cannot
+ * say it is about newer bytes, so it does not downgrade the earlier answer.
+ * Holds one publish: the entry is spent, so a later clear (a dependency that
+ * resolved) is an answer again. Versioned servers stamp what a publish is
+ * about and are not judged here.
+ */
+function holdEmptyEchoOfOwnNotice(
+	state: LSPClientState,
+	normalizedPath: string,
+	diagnosticCount: number,
+	docVersion: number | undefined,
+): boolean {
+	const echo = state.ownNoticeEchoes?.get(normalizedPath);
+	if (
+		!echo ||
+		docVersion !== undefined ||
+		echo.sentVersion !== state.documentVersions.get(normalizedPath)
+	)
+		return false;
+	if (diagnosticCount > 0) {
+		echo.sawNonEmpty = true;
+		return false;
+	}
+	if (!echo.flushed || !echo.sawNonEmpty) return false;
+	state.ownNoticeEchoes?.delete(normalizedPath);
+	countPublication(state, normalizedPath);
+	incrementDegradationCount({
+		kind: "lsp-watched-echo-held",
+		subject: state.serverId,
+		reason:
+			"an empty version-less publish followed the client's own watched-files notice for a document the server had already reported on",
+	});
+	return true;
+}
+
 /** Exported for tests: the quiet-window timer cancel on clear/resync is the
  * headline #1412 safety property (a stale versionless publication must never
  * land after the document content changed). */
@@ -2231,6 +2336,7 @@ export function clearDiagnosticsForPath(
 	state.diagnosticDocVersions?.delete(normalizedPath);
 	// #4786: the finding this phase stamp stood for is gone with the cache.
 	state.nonEmptyAnswerPhases?.delete(normalizedPath);
+	state.ownNoticeEchoes?.delete(normalizedPath);
 	// #1095: a cleared path must never serve a stale content binding alongside a
 	// later publish — drop it with the diagnostics it described. (The last-sent
 	// `documentContentHashes` record is intentionally retained: it describes what
@@ -3026,6 +3132,16 @@ export function setupIncomingHandlers(
 						},
 					});
 				}
+				return;
+			}
+			if (
+				holdEmptyEchoOfOwnNotice(
+					state,
+					normalizedPath,
+					newDiags.length,
+					docVersion,
+				)
+			) {
 				return;
 			}
 			if (PUB_DEBUG) {
@@ -5210,6 +5326,8 @@ async function handleNotifyOpenOnce(
 		// (below) still carries this file's content immediately, so the open
 		// document is analyzed without waiting on the batched watcher notify.
 		enqueueWatchedChange(state, normalizedPath, uri, watchedType, onDisk);
+		// #5131 round 2: only a config-declared server's notice can be its echo.
+		if (state.customServer) noteOwnNoticeQueued(state, normalizedPath, uri, 0);
 	}
 
 	if (!isClientAlive(state)) return false;
@@ -6707,6 +6825,9 @@ export async function createLSPClient(options: {
 	/** The declared role ({@link LspServerRole}); an auxiliary's failed config
 	 *  gates its empty publications (#4764). Absent behaves as non-auxiliary. */
 	role?: LspServerRole;
+	/** #5131 round 2: `LSPServerInfo.custom`, a config-declared server. Only its
+	 *  first-open notice can be its own echo ({@link LSPClientState.customServer}). */
+	custom?: boolean;
 	onDiagnosticsPublished?: (serverId: string) => void;
 }): Promise<LSPClientInfo> {
 	installCrashGuard();
@@ -6721,6 +6842,7 @@ export async function createLSPClient(options: {
 		launchVariant,
 		settingsSection,
 		role,
+		custom,
 		onDiagnosticsPublished,
 	} = options;
 
@@ -6911,6 +7033,8 @@ export async function createLSPClient(options: {
 		// #4764: the declared role, so a config-load failure gates only an
 		// auxiliary scanner's empty publications.
 		...(role !== undefined && { serverRole: role }),
+		// #5131 round 2: the echo hold reads a config-declared server only.
+		customServer: custom === true,
 		// #3310: one-shot, per client session.
 		emptyFirstPublishHoldSpent: false,
 		rulesGeneration: 0,
@@ -6947,6 +7071,7 @@ export async function createLSPClient(options: {
 	state.watchQueue = new WatchedFilesQueue(
 		(changes) => {
 			if (!isClientAlive(state)) return;
+			noteOwnNoticeFlushed(state, changes);
 			void safeSendNotification(
 				state.connection,
 				"workspace/didChangeWatchedFiles",

@@ -297,6 +297,100 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 	);
 }
 
+// #3801 (review F2): the test-side helpers of the two kits that spawn real
+// children. `lane-check-kit` runs the lane-check CLI and real git; the
+// `head-move-resync-kit` runs real git. The names are generic: `git`, `runGit`,
+// `makeRepo` and `runLane` are also local helpers in 34 other test files that
+// import no kit, so a bare-name entry in SUPPORT_SPAWN_HELPER_CALL would count
+// those files too. A call therefore counts only in a file that names its kit
+// module, or imports one of its helpers by name from any module (a barrel that
+// re-exports it). That file also takes a hit on its import line, so an aliased
+// import (`runLane as run`) cannot pass unseen.
+const SPAWNING_KIT_HELPERS: Readonly<Record<string, readonly string[]>> = {
+	"lane-check-kit": ["runLane", "makeLane", "git", "worktreeCount"],
+	"head-move-resync-kit": ["runGit", "makeRepo"],
+};
+// A kit module named as a whole string: an import, a re-export, a dynamic
+// import or a require. Read over the stripped source, which keeps strings.
+const KIT_MODULE_SPECIFIER =
+	/(["'])(?:[^"'\n]*\/)?(lane-check-kit|head-move-resync-kit)(?:\.[jt]s)?\1/g;
+// An import clause, read whole: a kit helper imported by name from any module
+// (a barrel that re-exports it) names its kit too. Only the six split files
+// import these names, so the clause form reads no other file.
+const IMPORT_CLAUSE = /\bimport\s+(?:type\s+)?\{([^{}]*)\}\s*from\s*["']/g;
+
+function kitIsMocked(kit: string, modules: ReadonlySet<string>): boolean {
+	return [...modules].some(
+		(module) =>
+			module === kit ||
+			module.endsWith(`/${kit}`) ||
+			module.endsWith(`/${kit}.js`) ||
+			module.endsWith(`/${kit}.ts`),
+	);
+}
+
+/**
+ * The kit hits of one file (#3801 F2). A kit is named when the file names its
+ * module or imports one of its helpers by name; each named kit is a hit on that
+ * import line, and each call of one of its helpers is a hit on its call line.
+ * A file that mocks a kit module gets nothing for that kit: its helpers are the
+ * mock's fakes.
+ */
+function kitSpawnHits(
+	source: string,
+	stripped: string,
+	mocks: ReadonlySet<string>,
+): FlakeHit[] {
+	const sourceLines = source.split("\n");
+	const hits = new Map<number, FlakeHit>();
+	const named = new Set<string>();
+	const hitImport = (kit: string, index: number): void => {
+		const lineIdx = stripped.slice(0, index).split("\n").length - 1;
+		hits.set(lineIdx, {
+			line: lineIdx + 1,
+			text: (sourceLines[lineIdx] ?? "").trim(),
+			reason: `${kit} import (its helpers spawn real children)`,
+		});
+	};
+	for (const match of stripped.matchAll(KIT_MODULE_SPECIFIER)) {
+		const kit = match[2];
+		if (kitIsMocked(kit, mocks)) continue;
+		named.add(kit);
+		hitImport(kit, match.index ?? 0);
+	}
+	for (const match of stripped.matchAll(IMPORT_CLAUSE)) {
+		const imported = match[1].split(",").map(
+			(item) =>
+				item
+					.trim()
+					.replace(/^type\s+/, "")
+					.split(/\s+as\s+/)[0],
+		);
+		for (const [kit, helpers] of Object.entries(SPAWNING_KIT_HELPERS)) {
+			if (kitIsMocked(kit, mocks)) continue;
+			if (!imported.some((name) => helpers.includes(name ?? ""))) continue;
+			named.add(kit);
+			// The module quote closes the match, on the `from` line the specifier
+			// rule also reads, so one import statement takes one hit.
+			hitImport(kit, (match.index ?? 0) + match[0].length - 1);
+		}
+	}
+	for (const [kit, names] of Object.entries(SPAWNING_KIT_HELPERS)) {
+		if (!named.has(kit)) continue;
+		const calls = new RegExp(`\\b(${names.join("|")})\\s*\\(`, "g");
+		for (const match of codeMatches(source, calls)) {
+			const lineIdx = source.slice(0, match.index ?? 0).split("\n").length - 1;
+			if (hits.has(lineIdx)) continue;
+			hits.set(lineIdx, {
+				line: lineIdx + 1,
+				text: (sourceLines[lineIdx] ?? "").trim(),
+				reason: `${match[1]}( kit spawn helper (${kit})`,
+			});
+		}
+	}
+	return [...hits.values()];
+}
+
 /**
  * An `importActual` call (any receiver, optional type arguments) that reads
  * the real child_process module (#5064): its first argument names
@@ -325,8 +419,10 @@ function importActualReadsChildProcess(
 
 /**
  * A real child process: a `child_process` import, a call-shaped
- * `execFileSync`/`spawnSync`/`execSync`, ANY spawn flavor whose argv
- * mentions `vitest` — a test file re-launching the suite inside itself —
+ * `execFileSync`/`spawnSync`/`execSync`, a call of a spawning kit helper in a
+ * file that names its kit (`SPAWNING_KIT_HELPERS`, #3801 F2), ANY spawn
+ * flavor whose argv mentions `vitest` — a test file re-launching the suite
+ * inside itself —
  * or a `vi.importActual` of `child_process` behind a same-file mock (#5064):
  * the mock hides the first three forms only, so this one is read even in a
  * mocking file.
@@ -405,6 +501,11 @@ export function scanRealProcessSpawn(
 				text: source.split("\n")[lineIdx]?.trim() ?? "",
 				reason: `${match[1]}( support spawn helper`,
 			});
+		}
+	}
+	if (!childProcessMocked) {
+		for (const hit of kitSpawnHits(source, stripped, mocks)) {
+			if (!hits.has(hit.line - 1)) hits.set(hit.line - 1, hit);
 		}
 	}
 	return [...hits.values()].sort((a, b) => a.line - b.line);

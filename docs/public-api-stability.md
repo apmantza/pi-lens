@@ -83,10 +83,14 @@ The trailing ` [PILENS_CFG_NNNN]` marker is appended by
 `withConfigDiagnosticCode`, is idempotent, and is always last. Match on it:
 
 ```sh
-# every ignored-config warning this session, from the durable degradation log
+# every config file this session that is unreadable, unparsable, or not a JSON object
 grep 'PILENS_CFG_0001' ~/.pi-lens/latency.log
 
-# suppress one code while keeping every other pi-lens warning
+# every unknown key and rejected value this session (typos, wrong types);
+# latency.log keeps only the first notice's code per file, so read extension.log
+grep -E 'PILENS_CFG_000[45]' ~/.pi-lens/extension.log
+
+# drop only the whole-file notices; typo notices keep PILENS_CFG_0004 and PILENS_CFG_0005
 pi ... 2>&1 | grep -v 'PILENS_CFG_0001'
 ```
 
@@ -99,11 +103,11 @@ this policy explicitly reserves the right to change.
 
 | Code | Meaning | Emitter |
 | --- | --- | --- |
-| `PILENS_CFG_0001` | A config file exists but could not be read or parsed, so it is ignored. | `warnIgnoredConfigOnce` (`clients/config-warn.ts`), the single choke point behind the LSP, global, and project config loaders. |
+| `PILENS_CFG_0001` | A config file exists but is unreadable, unparsable, or not a JSON object, so it is ignored. | `warnIgnoredConfigOnce` (`clients/config-warn.ts`), the single choke point behind the LSP, global, and project config loaders, and its default code for a read or parse failure. |
 | `PILENS_CFG_0002` | A deprecated config **key** was accepted inside its deprecation window. | `deprecationRecords` (`clients/config-resolve.ts`), one record per `(file, key)`, delivered by `reportPiLensConfigRecords` (#2426). |
 | `PILENS_CFG_0003` | A deprecated config **file location** was read inside its window. | Same producer and same delivery path as `PILENS_CFG_0002`. |
-| `PILENS_CFG_0004` | A config field no schema property claims was dropped. | `validate()` (`clients/config-core/normalize.ts`) produces the record; `reportPiLensConfigRecords` (`clients/config-resolve.ts`) delivers it through `warnIgnoredConfigOnce` (#2426). |
-| `PILENS_CFG_0005` | A config field's value did not match its schema and was dropped. One FIELD; the rest of the file is in effect. | Same producer and same delivery path as `PILENS_CFG_0004`. |
+| `PILENS_CFG_0004` | A config field no schema property claims was dropped. | `validate()` (`clients/config-core/normalize.ts`) produces the record; `reportPiLensConfigRecords` (`clients/config-resolve.ts`) delivers it through `warnIgnoredConfigOnce` (#2426). The global and project loaders' own unknown-key scans pass the same code (`clients/lens-config.ts`, `clients/project-lens-config.ts`). |
+| `PILENS_CFG_0005` | A config field's value did not match its schema and was dropped. One FIELD; the rest of the file is in effect. | Same producer and same delivery path as `PILENS_CFG_0004`, plus the loaders' own value checks (`clients/lens-config.ts`, `clients/project-lens-config.ts`, `clients/tool-config.ts`, `clients/lens-flag-registry.ts`). |
 | `PILENS_CFG_0006` | A config key that would modify an object's prototype (`__proto__`, `constructor`, `prototype`) was refused. | Both halves of the config core, through the shared policy in `clients/config-core/safe-object.ts`. |
 | `PILENS_CFG_0007` | Further config notices were suppressed by a bound, and this one carries the count — the WHOLE count, including anything an earlier bound in the same pipeline dropped. Nothing about the config is wrong; the notice list was truncated. | `MigrationRecordCollector.finalize` (`clients/config-core/records.ts`) — the ONE producer, reached through `finalizeRecords` by every record list: the shared resolution, the global loader's unknown-key scan, the project loader's unknown-key scan, and its legacy-document enumeration. Rendered with neutral prose and recorded under the `config-notice-suppressed` degradation kind, never `config-ignored`. |
 | `PILENS_CFG_0008` | Resolving a config failed internally, so the WHOLE file was ignored and pi-lens ran on defaults. | The two guards under the pipeline: `resolveConfig` (`clients/config-core/resolve.ts`) and the global loader's post-parse catch (`clients/lens-config.ts`). Carries the error class only, never its message. |

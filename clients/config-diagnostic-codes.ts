@@ -71,7 +71,8 @@ export const CONFIG_SCHEMA_ANCHOR_KEY = "$schema";
  */
 export const CONFIG_DIAGNOSTIC_CODES = {
 	/**
-	 * A config file exists but could not be read or parsed, so it is ignored.
+	 * A config file exists but could not be read or parsed, or its top level is
+	 * not a JSON object, so the whole file is ignored.
 	 *
 	 * EMITTED, by `warnIgnoredConfigOnce` (`clients/config-warn.ts`) — the one
 	 * seam behind all three config loaders. It rides the user-facing message as
@@ -79,7 +80,8 @@ export const CONFIG_DIAGNOSTIC_CODES = {
 	 * degradation row, so the code a user greps for in the terminal is the same
 	 * one in `latency.log`.
 	 */
-	PILENS_CFG_0001: "config file unreadable or unparsable; ignored",
+	PILENS_CFG_0001:
+		"config file unreadable, unparsable, or not a JSON object; ignored",
 	/**
 	 * A deprecated config KEY was accepted inside its deprecation window.
 	 *
@@ -114,6 +116,9 @@ export const CONFIG_DIAGNOSTIC_CODES = {
 	 * when the loaders adopt the core. Registered now because the resolution
 	 * pipeline already stamps records with it, and a record carrying an
 	 * unregistered code is exactly what the #2418 drift test forbids.
+	 *
+	 * The global and project loaders' own unknown-key scans pass this code too
+	 * (`clients/lens-config.ts`, `clients/project-lens-config.ts`; #5140).
 	 */
 	PILENS_CFG_0004: "unknown config field ignored",
 	/**
@@ -121,7 +126,8 @@ export const CONFIG_DIAGNOSTIC_CODES = {
 	 *
 	 * Wrong type, a value outside a declared `enum`, or a nesting depth past the
 	 * validator's bound. Same producer and same delivery path as
-	 * `PILENS_CFG_0004`. Kept distinct from it because the two need different
+	 * `PILENS_CFG_0004`, plus the loaders' own value checks (#5140). Kept distinct
+	 * from it because the two need different
 	 * user actions: an unknown field is usually a typo or a removed key, while a
 	 * rejected value is a field the user meant and spelled wrongly.
 	 */

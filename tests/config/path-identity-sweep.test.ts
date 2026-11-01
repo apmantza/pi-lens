@@ -182,10 +182,10 @@ const PINS: Readonly<Record<string, Pin>> = {
 		reason: SPELLING_MEMO,
 	}, // :1182, :1193, :1290, :1447, :1449, :1452, :1617, :1691, :1693, :1696
 	"clients/file-time.ts#path-resolve-keyed": {
-		sites: 9,
-		identities: "62c789065f4e9d86",
+		sites: 5,
+		identities: "90196aeba76b2323",
 		reason: PRE_4689,
-	}, // :58, :68, :78, :112, :132, :133, :139, :147, :169
+	}, // :56, :66, :76, :110, :135 (9 -> 5, #5120: withLock's four lock-map keys went with it)
 	"clients/file-utils.ts#path-resolve-keyed": {
 		sites: 2,
 		identities: "7e723fe52bc1e91e",
