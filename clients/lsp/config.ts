@@ -129,7 +129,12 @@ import { DEFAULT_LSP_SERVER_ROLE, isAuxiliary } from "./server-traits.js";
 export interface CustomServerConfig {
 	name: string;
 	extensions: string[];
-	command: string;
+	/**
+	 * The launcher: a bare command (default args `["--stdio"]`) or the
+	 * canonical argv array the docs show (#5127) — head is the program, the
+	 * rest precedes `args`, and no default `--stdio` is appended.
+	 */
+	command: string | readonly string[];
 	args?: string[];
 	rootMarkers?: string[];
 	env?: Record<string, string>;
@@ -782,12 +787,51 @@ export function lspConfigOf(
 // --- Custom Server Factory ---
 
 /**
+ * The program and argv a custom server launches with (#5127). A string
+ * command takes `args` (default `["--stdio"]`); an argv array supplies its own
+ * arguments, then `args`. Anything else throws, naming the field, so the
+ * failure reaches the launch-failure records instead of Node's
+ * `The "path" argument must be of type string`.
+ */
+function customServerLaunch(
+	config: CustomServerConfig,
+	id: string,
+): { program: string; argv: string[] } {
+	const { command } = config;
+	if (typeof command === "string" && command !== "") {
+		return { program: command, argv: config.args ?? ["--stdio"] };
+	}
+	if (
+		Array.isArray(command) &&
+		typeof command[0] === "string" &&
+		command[0] !== "" &&
+		command.every((part) => typeof part === "string")
+	) {
+		return {
+			program: command[0],
+			argv: [...command.slice(1), ...(config.args ?? [])],
+		};
+	}
+	throw new Error(
+		`lsp.servers.${id}.command must be a non-empty string or a non-empty array of strings`,
+	);
+}
+
+/**
  * Create LSPServerInfo from user configuration
  */
 export function createCustomServer(
 	config: CustomServerConfig,
 	id: string,
 ): LSPServerInfo {
+	// An unusable value (a hand-edited non-string/array) projects no token; the
+	// spawn names the field.
+	const commandToken: string | undefined =
+		typeof config.command === "string"
+			? config.command
+			: Array.isArray(config.command)
+				? (config.command[0] as string | undefined)
+				: undefined;
 	return {
 		id,
 		name: config.name,
@@ -795,7 +839,7 @@ export function createCustomServer(
 		// The own-command token the runner-coverage seam gates this row's
 		// covers claim on (#3968 F2): the declared covering lane's binary must
 		// be probeable before the claim can defer a CLI runner.
-		command: config.command,
+		...(commandToken === undefined ? {} : { command: commandToken }),
 		extensions: config.extensions,
 		// A config-declared server is a language server. The public
 		// `lsp.servers.<id>.role` field is validated and projected by
@@ -820,7 +864,8 @@ export function createCustomServer(
 			: async (file) =>
 					resolveToolCwd("lsp", id, file, { cwd: process.cwd() }).cwd,
 		async spawn(root) {
-			const proc = await launchLSP(config.command, config.args ?? ["--stdio"], {
+			const { program, argv } = customServerLaunch(config, id);
+			const proc = await launchLSP(program, argv, {
 				cwd: root,
 				env: config.env ? { ...process.env, ...config.env } : process.env,
 			});
