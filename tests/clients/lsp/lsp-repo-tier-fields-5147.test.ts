@@ -60,7 +60,6 @@ import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
-import { getServerById } from "../../../clients/lsp/server.js";
 import { waitFor } from "../interleaving-kit.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -443,7 +442,9 @@ describe("untrusted project serverOverrides on a catalog server (#5147)", () => 
 			expect(
 				registry.registeredServers.find((s) => s.id === "rust"),
 				trust,
-			).toBe(getServerById("rust"));
+			).toBe(
+				compileLspRegistry({}).registeredServers.find((s) => s.id === "rust"),
+			);
 			expect(reason, trust).toBe("selected");
 			expect(decisionFields(), trust).toEqual([
 				refusedOverride("initializationOptions", trust),
