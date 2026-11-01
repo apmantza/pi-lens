@@ -14,16 +14,19 @@
  * records its own argv to a file. No language server is involved.
  *
  * State table (global entry `stub`: `command: [node, stub.mjs, <record>]`,
- * `args: ["--global-flag"]`; project entry sets the field named):
- *   field            untrusted / unknown            trusted
- *   args             refused (argv has no project)  kept
- *   rootMarkers      refused                        kept
- *   covers           refused                        kept
- *   name,extensions  kept                           kept
- *   synthetic field  refused (unrecognized)         kept
- *   global only      unchanged (args reach argv)    unchanged
- * serverOverrides.<id>: command/env/initializationOptions stay refused, and a
- * field the table does not name is refused with its own record.
+ * `args: ["--global-flag", "--sandbox"]`, env GLOBAL_ENV; the project entry
+ * sets the field named). Round 2 (fail closed): a refused field may have
+ * shadowed the user's own value because the merge keeps the winner only, so
+ * the server is not registered at all, as a refused `command` already was.
+ *   field                         untrusted / unknown        trusted
+ *   args, env, initOptions,
+ *   rootMarkers, covers,
+ *   extensions, command,
+ *   synthetic field               stub not registered        kept
+ *   name                          registered, global argv    kept
+ *   global only                   unchanged                  unchanged
+ * serverOverrides.<id>: any refused field turns the catalog server off for
+ * the project (`disabledServerIds`), never a launch on a stripped override.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -33,6 +36,7 @@ import { getDegradationSummary } from "../../../clients/degradation-ledger.js";
 import { resetDegradationLedger } from "../../../clients/degradation-ledger.js";
 import {
 	compileLspRegistry,
+	explainServersForFile,
 	loadLSPConfig,
 	REPO_TIER_OVERRIDE_FIELDS,
 	REPO_TIER_SERVER_FIELDS,
@@ -94,6 +98,7 @@ function arrange(
 	const globalDir = tempDir();
 	process.env.PI_LENS_HOME = globalDir;
 	const stub = path.join(globalDir, "stub.mjs");
+	const globalOverride = path.join(globalDir, "override-argv.json");
 	const record = path.join(globalDir, "argv.json");
 	fs.writeFileSync(stub, STUB);
 	fs.writeFileSync(
@@ -104,8 +109,12 @@ function arrange(
 					name: "Global stub",
 					extensions: [".stub"],
 					command: [process.execPath, stub, record],
-					args: ["--global-flag"],
+					args: ["--global-flag", "--sandbox"],
+					env: { GLOBAL_ENV: "g" },
 				},
+			},
+			serverOverrides: {
+				rust: { command: [process.execPath, stub, globalOverride] },
 			},
 		}),
 	);
@@ -128,11 +137,14 @@ async function compile(project: string) {
 	return compileLspRegistry(config, config.__provenance);
 }
 
-/** Starts the compiled `stub` server for real and reads the argv it saw. */
-async function startedArgv(arranged: Arranged): Promise<string[]> {
+/**
+ * Starts the compiled `stub` server for real and reads the argv it saw, or
+ * undefined when the registry did not register it for this project.
+ */
+async function startedArgv(arranged: Arranged): Promise<string[] | undefined> {
 	const registry = await compile(arranged.project);
 	const server = registry.customServers.find((entry) => entry.id === "stub");
-	if (!server) throw new Error("global stub server was not registered");
+	if (!server) return undefined;
 	const launch = await server.spawn(arranged.project);
 	if (!launch) throw new Error("stub spawn was not admitted");
 	pids.push(launch.process.pid);
@@ -154,22 +166,45 @@ function decisionFields(): string[] {
 	);
 }
 
+const GLOBAL_ARGV = ["--global-flag", "--sandbox"];
+
 describe("untrusted project fields on a global LSP server (#5147)", () => {
-	async function expectProjectArgsRefused(trust: Trust): Promise<void> {
-		const arranged = arrange(trust, { args: ["--project-flag"] });
-		const argv = await startedArgv(arranged);
-		expect(argv).not.toContain("--project-flag");
+	// Recurrence: r1 refused only the repo's value, so an untrusted `args` left
+	// the user's `--sandbox` flag out of the argv (the stub started on `[]`) and
+	// one untrusted `env` key dropped the whole global env. The server must not
+	// start at all.
+	async function expectNotStarted(
+		trust: Trust,
+		fields: Record<string, unknown>,
+		field: string,
+	): Promise<void> {
+		const arranged = arrange(trust, fields);
+		expect(await startedArgv(arranged), `${trust} ${field}`).toBeUndefined();
+		expect(fs.existsSync(arranged.record), `${trust} ${field} record`).toBe(
+			false,
+		);
 		expect(decisionFields()).toContainEqual(
-			expect.stringContaining("project LSP args refused for stub"),
+			expect.stringContaining(`project LSP ${field} refused for stub`),
+		);
+		expect(decisionFields()).toContainEqual(
+			expect.stringContaining("stub is not started for this project"),
 		);
 	}
 
-	it("does not carry an untrusted project's args to the started child's argv", async () => {
-		await expectProjectArgsRefused("untrusted");
+	it("does not start the global server when an untrusted project sets args", async () => {
+		await expectNotStarted("untrusted", { args: ["--project-flag"] }, "args");
 	});
 
-	it("does not carry an unknown-trust project's args to the started child's argv", async () => {
-		await expectProjectArgsRefused("unknown");
+	it("does not start the global server when an unknown-trust project sets args", async () => {
+		await expectNotStarted("unknown", { args: ["--project-flag"] }, "args");
+	});
+
+	it("does not start the global server when an untrusted project sets empty args", async () => {
+		await expectNotStarted("untrusted", { args: [] }, "args");
+	});
+
+	it("does not start the global server when an untrusted project sets one env key", async () => {
+		await expectNotStarted("untrusted", { env: { PROJECT_ENV: "p" } }, "env");
 	});
 
 	it("carries a trusted project's args to the started child's argv", async () => {
@@ -181,14 +216,43 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 	it("starts a global-only config with the global args under every trust state", async () => {
 		for (const trust of ["untrusted", "unknown", "trusted"] as const) {
 			const arranged = arrange(trust, undefined);
-			expect(await startedArgv(arranged), trust).toEqual(["--global-flag"]);
+			expect(await startedArgv(arranged), trust).toEqual(GLOBAL_ARGV);
+			fs.rmSync(arranged.record, { force: true });
 		}
 		expect(decisionFields()).toEqual([]);
 	});
 
-	it("refuses project rootMarkers and covers, and keeps name and extensions", async () => {
-		const arranged = arrange("untrusted", {
-			name: "Project label",
+	it("starts the global server on its own argv when the project sets only name", async () => {
+		const arranged = arrange("untrusted", { name: "Project label" });
+		const registry = await compile(arranged.project);
+		expect(
+			registry.customServers.find((entry) => entry.id === "stub")?.name,
+		).toBe("Project label");
+		expect(await startedArgv(arranged)).toEqual(GLOBAL_ARGV);
+		expect(decisionFields()).toEqual([]);
+	});
+
+	// Recurrence: every refused field must turn the server off, not only the
+	// two argv/env fields the r1 probe showed.
+	it("does not register the global server for any other refused field", async () => {
+		const refusedFields: Array<[string, Record<string, unknown>]> = [
+			["initializationOptions", { initializationOptions: { x: 1 } }],
+			["rootMarkers", { rootMarkers: ["Cargo.toml"] }],
+			["covers", { covers: ["shellcheck"] }],
+			["extensions", { extensions: [".env"] }],
+			["command", { command: "project-binary" }],
+			["unrecognized field", { syntheticLaunchFlag: "--x" }],
+		];
+		for (const trust of ["untrusted", "unknown"] as const) {
+			for (const [field, fields] of refusedFields) {
+				resetDegradationLedger();
+				await expectNotStarted(trust, fields, field);
+			}
+		}
+	});
+
+	it("keeps every project field on the global server once pi trusts the project", async () => {
+		const arranged = arrange("trusted", {
 			extensions: [".proj"],
 			rootMarkers: ["Cargo.toml"],
 			covers: ["shellcheck"],
@@ -196,28 +260,10 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 		const server = (await compile(arranged.project)).customServers.find(
 			(entry) => entry.id === "stub",
 		);
-		expect(server?.name).toBe("Project label");
 		expect(server?.extensions).toEqual([".proj"]);
-		expect(server?.rootMarkers).toBeUndefined();
-		expect(server?.covers).toBeUndefined();
-		expect(decisionFields()).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining("project LSP rootMarkers refused for stub"),
-				expect.stringContaining("project LSP covers refused for stub"),
-			]),
-		);
-	});
-
-	it("keeps project rootMarkers and covers once pi trusts the project", async () => {
-		const arranged = arrange("trusted", {
-			rootMarkers: ["Cargo.toml"],
-			covers: ["shellcheck"],
-		});
-		const server = (await compile(arranged.project)).customServers.find(
-			(entry) => entry.id === "stub",
-		);
 		expect(server?.rootMarkers).toEqual(["Cargo.toml"]);
 		expect(server?.covers).toEqual(["shellcheck"]);
+		expect(decisionFields()).toEqual([]);
 	});
 
 	// Recurrence: the gate listed dangerous fields, so a field nobody listed
@@ -234,7 +280,7 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 		await compile(arranged.project);
 		const reasons = decisionFields();
 		expect(reasons).toEqual([
-			"project LSP unrecognized field refused for stub: pi project trust is untrusted",
+			"project LSP unrecognized field refused for stub: pi project trust is untrusted; stub is not started for this project",
 		]);
 	});
 
@@ -244,25 +290,84 @@ describe("untrusted project fields on a global LSP server (#5147)", () => {
 		expect(decisionFields()).toEqual([]);
 	});
 
+	// Recurrence: `extensions` was admitted in r1, so a repo could route its
+	// `.env` to the user's server or unroute it with `[]`. Only `name` is left.
+	it("admits only name from a repo tier on lsp.servers", () => {
+		expect(
+			Object.entries(REPO_TIER_SERVER_FIELDS)
+				.filter(([, row]) => row.admit)
+				.map(([field]) => field),
+		).toEqual(["name"]);
+	});
+
 	it("decides every serverOverrides field as refused-without-trust", () => {
 		expect(
 			Object.values(REPO_TIER_OVERRIDE_FIELDS).filter((row) => row.admit),
 		).toEqual([]);
 	});
+});
 
-	it("refuses an untrusted serverOverrides field no table names, and keeps trusted ones", async () => {
-		const overrides = {
-			rust: { args: ["--project-flag"], syntheticLaunchFlag: true },
+describe("untrusted project serverOverrides on a catalog server (#5147)", () => {
+	// Recurrence: the override loop kept the winner's surviving fields, so a
+	// refused `env` left the user's global override command running without its
+	// env. Either direction of the partial result is a stripped override; the
+	// catalog server is off for the project.
+	async function offFor(trust: Trust, fields: Record<string, unknown>) {
+		const arranged = arrange(trust, undefined, { rust: fields });
+		const registry = await compile(arranged.project);
+		const file = path.join(arranged.project, "x.rs");
+		return {
+			registry,
+			reason: explainServersForFile(file, registry).find(
+				(entry) => entry.server.id === "rust",
+			)?.reason,
 		};
-		const untrusted = arrange("untrusted", undefined, overrides);
-		const registry = await compile(untrusted.project);
+	}
+
+	it("turns the catalog server off when an untrusted project sets an override env", async () => {
+		const { registry, reason } = await offFor("untrusted", {
+			env: { RUST_LOG: "debug" },
+		});
+		expect(registry.disabledServerIds.has("rust")).toBe(true);
 		expect(registry.serverOverrides.get("rust")).toBeUndefined();
+		expect(reason).toBe("disabled-by-config");
 		expect(decisionFields()).toEqual([
-			"project LSP unrecognized field refused for rust: pi project trust is untrusted",
+			"project LSP env override refused for rust: pi project trust is untrusted; rust is not started for this project",
+		]);
+	});
+
+	it("turns the catalog server off for an unknown-trust initializationOptions override", async () => {
+		const { registry } = await offFor("unknown", {
+			initializationOptions: { check: { command: "clippy" } },
+		});
+		expect(registry.disabledServerIds.has("rust")).toBe(true);
+		expect(registry.serverOverrides.get("rust")).toBeUndefined();
+	});
+
+	it("refuses an untrusted override field no table names, and keeps trusted ones", async () => {
+		const overrides = {
+			args: ["--project-flag"],
+			syntheticLaunchFlag: true,
+		};
+		const { registry } = await offFor("untrusted", overrides);
+		expect(registry.disabledServerIds.has("rust")).toBe(true);
+		expect(decisionFields()).toEqual([
+			"project LSP unrecognized field refused for rust: pi project trust is untrusted; rust is not started for this project",
 		]);
 		resetDegradationLedger();
-		const trusted = arrange("trusted", undefined, overrides);
-		await compile(trusted.project);
+		const trusted = await offFor("trusted", overrides);
+		expect(trusted.registry.disabledServerIds.has("rust")).toBe(false);
 		expect(decisionFields()).toEqual([]);
+	});
+
+	it("keeps the user's global override and the catalog server when the project sets none", async () => {
+		const { registry, reason } = await offFor("untrusted", {});
+		expect(registry.disabledServerIds.has("rust")).toBe(false);
+		expect(registry.serverOverrides.get("rust")?.command).toEqual([
+			process.execPath,
+			expect.stringContaining("stub.mjs"),
+			expect.stringContaining("override-argv.json"),
+		]);
+		expect(reason).toBe("selected");
 	});
 });

@@ -1022,7 +1022,7 @@ function registryDecision(
 ): void {
 	if (allowed || !provenance || !isRepoTier(provenance.tier)) return;
 	const subject = `${id}:${field}:${provenance.tier}`;
-	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}`;
+	const reason = `project LSP ${field} refused for ${id}: pi project trust is ${trust}; ${id} is not started for this project`;
 	recordDegradationOnce({
 		kind: "lsp-registry-decision",
 		subject,
@@ -1060,10 +1060,11 @@ interface RepoFieldDecision {
  *
  * The test for admission is "reaches no launch input": argv, environment,
  * working directory or root, and initialization options are all launch
- * inputs, and so is anything that changes which analysis runs. When a repo
- * tier shadows a lower tier's value for a refused field, the refused value is
- * dropped and the lower tier's is not restored (the merge keeps the winner
- * only).
+ * inputs, and so is anything that changes which analysis runs. The merge
+ * keeps the winning tier's value only, so a refused repo value may have
+ * shadowed a value the user set. The caller therefore does not register the
+ * server at all when any field is refused (fail closed): it never starts on a
+ * partly stripped user configuration.
  */
 export const REPO_TIER_SERVER_FIELDS: {
 	readonly [K in keyof CustomServerConfig]-?: RepoFieldDecision;
@@ -1073,8 +1074,8 @@ export const REPO_TIER_SERVER_FIELDS: {
 		why: "Display label only: it selects nothing and reaches no argv, environment, working directory or initialization option.",
 	},
 	extensions: {
-		admit: true,
-		why: "Routing among servers the user declared, over files already in the repo: no launch input; the server starts on a repo file either way.",
+		admit: false,
+		why: "Routing: decides which repo files start the user's server (a repo could send `.env` to it, or unroute it with `[]`).",
 	},
 	command: {
 		admit: false,
@@ -1380,11 +1381,12 @@ export function compileLspRegistry(
 				trust,
 				(key) => key,
 			);
-			if (refused.has("command")) continue;
-			const admitted: CustomServerConfig = { ...serverConfig };
-			for (const key of refused) Reflect.deleteProperty(admitted, key);
+			// #5147: a refused field may have shadowed the user's own value
+			// (the merge keeps the winner only), so the server is not registered
+			// rather than started on a stripped configuration.
+			if (refused.size > 0) continue;
 			try {
-				const server = createCustomServer(admitted, id);
+				const server = createCustomServer({ ...serverConfig }, id);
 				customServers.push({ ...server, trustAllowed: true });
 			} catch {
 				// pi-lens-ignore: missing-error-propagation — per-server registration, skip bad entries
@@ -1396,9 +1398,6 @@ export function compileLspRegistry(
 	if (config.serverOverrides) {
 		for (const [id, entry] of Object.entries(config.serverOverrides)) {
 			if (entry && typeof entry === "object" && !Array.isArray(entry)) {
-				const initOpts = (entry as Record<string, unknown>)
-					.initializationOptions;
-				const command = (entry as ServerInitOverride).command;
 				const refused = refusedRepoFields(
 					id,
 					"serverOverrides",
@@ -1409,9 +1408,15 @@ export function compileLspRegistry(
 					(key) =>
 						key === "command" || key === "env" ? `${key} override` : key,
 				);
-				const commandAllowed = !refused.has("command");
-				const envAllowed = !refused.has("env");
-				const overrideInitAllowed = !refused.has("initializationOptions");
+				// #5147: the same rule as `servers`. The catalog server is turned off
+				// for this project instead of starting on a partly stripped override.
+				if (refused.size > 0) {
+					disabledServerIds.add(id);
+					continue;
+				}
+				const initOpts = (entry as Record<string, unknown>)
+					.initializationOptions;
+				const command = (entry as ServerInitOverride).command;
 				if (
 					command !== undefined ||
 					(entry as ServerInitOverride).env !== undefined ||
@@ -1421,11 +1426,11 @@ export function compileLspRegistry(
 						!Array.isArray(initOpts))
 				) {
 					serverOverrides.set(id, {
-						...(overrideInitAllowed && initOpts !== undefined
+						...(initOpts !== undefined
 							? { initializationOptions: initOpts as Record<string, unknown> }
 							: {}),
-						...(commandAllowed && command !== undefined ? { command } : {}),
-						...(envAllowed && (entry as ServerInitOverride).env
+						...(command !== undefined ? { command } : {}),
+						...((entry as ServerInitOverride).env
 							? { env: (entry as ServerInitOverride).env }
 							: {}),
 					});
