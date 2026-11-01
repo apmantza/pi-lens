@@ -37,6 +37,7 @@ import { LANGUAGE_POLICY } from "./language-policy.js";
 import { isComplexitySupportedFile } from "./tree-sitter-shared.js";
 import {
 	classifyMutatingTool,
+	isProviderReplayCall,
 	readMutationPathField,
 } from "./mutating-tool.js";
 import { isProvisionalLearnedAttribution } from "./mutation-attribution.js";
@@ -765,6 +766,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	if (
 		(mutation === undefined || isProvisionalLearnedAttribution(toolName)) &&
 		toolName !== "bash" &&
+		// #5160: a provider's display-only replay ran before it arrived, so any
+		// disk change in its window is another writer's, not this call's.
+		!isProviderReplayCall(event) &&
 		!getFlag("no-read-guard")
 	) {
 		const observedRawPath = readMutationPathField(event);
