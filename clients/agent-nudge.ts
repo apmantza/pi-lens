@@ -181,6 +181,21 @@ export function queueAgentAdvisory(text: string, scope: LineageHandle): void {
 }
 
 /**
+ * #5108: the advisory for a check that outlived the wait for it and withheld
+ * blockers (`PipelineResult.withheldBlockerLine`). One template for both
+ * writers: the host-bound continuation in `index.ts` and the inner-bound one in
+ * `handleToolResult`. At most five lines; the rest are counted.
+ */
+export function buildWithheldAdvisory(
+	toolName: string | undefined,
+	budgetMs: number,
+	notices: readonly string[],
+): string {
+	const more = notices.length > 5 ? `\n+${notices.length - 5} more` : "";
+	return `pi-lens's check of this ${toolName ?? "tool"} call was still running when the host stopped waiting (${budgetMs}ms) and was abandoned, so its tool result showed none of this:\n${notices.slice(0, 5).join("\n")}${more}`;
+}
+
+/**
  * #3612: a scope's undelivered advisories, as a session store. A `/reload`
  * continues the conversation under a new scope, so they move to it; every
  * other start leaves them to the session that queued them (#3748).

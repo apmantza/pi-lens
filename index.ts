@@ -171,6 +171,7 @@ import {
 	resetVerifiedPathAttributionGuessCount,
 } from "./clients/path-attribution-telemetry.js";
 import {
+	buildWithheldAdvisory,
 	consumeAgentNudge,
 	queueAgentAdvisory,
 	recordCrossProcessTouches,
@@ -3321,7 +3322,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					() => {
 						if (withheldNotices.length === 0) return;
 						queueAgentAdvisory(
-							`pi-lens's check of this ${rtToolName ?? "tool"} call was still running when the host stopped waiting (${budgetMs}ms) and was abandoned, so its tool result showed none of this:\n${withheldNotices.slice(0, 5).join("\n")}${withheldNotices.length > 5 ? `\n+${withheldNotices.length - 5} more` : ""}`,
+							buildWithheldAdvisory(rtToolName, budgetMs, withheldNotices),
 							advisoryScope,
 						);
 						logLatency({
