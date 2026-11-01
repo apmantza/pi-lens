@@ -1,6 +1,7 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import {
+	buildWithheldAdvisory,
 	noteAuthoritativeContentAttachment,
 	queueAgentAdvisory,
 } from "./agent-nudge.js";
@@ -4336,42 +4337,80 @@ export async function handleToolResult(
 	// early return. This call site is otherwise unchanged — same arguments, same
 	// crash-then-return / success-then-continue shape as before the split.
 	if (!classifiedClientsReady || !entryLive) return;
-	const dispatchOutcome = await bounded(
-		dispatchPipelineAnalysis({
-			deps,
-			runtime,
-			filePath,
-			dispatchCwd,
-			turnStateCwd,
-			analysisRootMode,
-			autofixMode,
-			modifiedRanges,
-			writeIndex,
-			writeOrderTurn,
-			initialStateHash,
-			readGuardCorrelationId,
-			requestedEditIndexes,
-			requestedEditTotal,
-			partialApply: deps._partialApply,
-			participantIds,
-			participantTotal,
-			toolResultStart,
-			nativeAppliedPairs,
-			preserveNativeAuthorship: mutation.kind !== "write",
-			allowAutonomousWriters: bashAuthorshipConfirmed,
-			// #3512: one capture for the whole dispatch, the same one the
-			// inline verdict below writes through.
-			sessionGeneration: writeSession,
-			ownFileTimeStamp: ownWriteStamp.stampFileTime,
-		}),
-		{
-			ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
-			signal: deps.signal || undefined,
-			hook: "tool_result_edit",
-			label: "pipeline-analysis",
-		},
-	);
-	if (!dispatchOutcome) return;
+	const dispatching = dispatchPipelineAnalysis({
+		deps,
+		runtime,
+		filePath,
+		dispatchCwd,
+		turnStateCwd,
+		analysisRootMode,
+		autofixMode,
+		modifiedRanges,
+		writeIndex,
+		writeOrderTurn,
+		initialStateHash,
+		readGuardCorrelationId,
+		requestedEditIndexes,
+		requestedEditTotal,
+		partialApply: deps._partialApply,
+		participantIds,
+		participantTotal,
+		toolResultStart,
+		nativeAppliedPairs,
+		preserveNativeAuthorship: mutation.kind !== "write",
+		allowAutonomousWriters: bashAuthorshipConfirmed,
+		// #3512: one capture for the whole dispatch, the same one the
+		// inline verdict below writes through.
+		sessionGeneration: writeSession,
+		ownFileTimeStamp: ownWriteStamp.stampFileTime,
+	});
+	const dispatchOutcome = await bounded(dispatching, {
+		ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+		signal: deps.signal || undefined,
+		hook: "tool_result_edit",
+		label: "pipeline-analysis",
+	});
+	if (!dispatchOutcome) {
+		// #5108: the bound abandons the dispatch, it does not cancel it, and the
+		// tail below (which collects the withheld line) is skipped. A dispatch
+		// that settles later hands that line to the session that wrote the file
+		// through the same queue and scope as `index.ts`' host-bound path. Those
+		// two never carry the same file's line: that one needs it collected
+		// inside this bound, this one needs the bound to have fired. An aborted
+		// call is a cancelled turn, not a late result.
+		if (!deps.signal?.aborted) {
+			void dispatching.then(
+				(late) => {
+					if (late.crashed || !late.result.withheldBlockerLine) return;
+					if (writeSession.guardedWrite(filePath, () => true) !== true) return;
+					queueAgentAdvisory(
+						buildWithheldAdvisory(
+							event.toolName,
+							HOOK_WALL_BUDGET_MS.tool_result_edit,
+							[late.result.withheldBlockerLine],
+						),
+						advisoryScope,
+					);
+					logLatency({
+						type: "phase",
+						phase: "withheld_blocker_late_advisory",
+						filePath: event.toolName,
+						durationMs: 0,
+						metadata: {
+							notices: 1,
+							budgetMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
+							late: "inner-bound",
+						},
+					});
+				},
+				() => {
+					// none: `bounded()` above hands a rejection to the host; this only
+					// keeps the derived promise from going unhandled.
+				},
+			);
+		}
+		return;
+	}
 	if (dispatchOutcome.crashed) {
 		return dispatchOutcome.response;
 	}

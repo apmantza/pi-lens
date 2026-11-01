@@ -3524,6 +3524,131 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 			},
 		);
 	});
+	it(
+		"a dispatch settling after the 10 s inner bound queues its withheld line for the calling scope while that session lives, and for no one after a replacement (#5108)",
+		{ timeout: 40_000 },
+		async () => {
+			// RECURRENCE GUARDED: #5108 remainder. The bound abandons the dispatch, and
+			// the continuation that hands its withheld line to the agent runs after an
+			// await against the LIVE coordinator: without the #3596 liveness check, or
+			// with the coordinator's own scope in place of the caller's (#473), the
+			// line reaches the wrong session or a session that never wrote the file; an
+			// Escape mid-check (a cancelled turn) must queue nothing at all.
+			// The 10 s is the real bound, so this case holds a live 10 s wait.
+			const { runPipeline } = await import("../../clients/pipeline.js");
+			const settle = new Map<string, ReturnType<typeof gatedPromise<void>>>();
+			const entered = new Map<string, ReturnType<typeof gatedPromise<void>>>();
+			vi.mocked(runPipeline).mockReset();
+			vi.mocked(runPipeline).mockImplementation((async (ctx: {
+				filePath: string;
+			}) => {
+				const name = path.basename(ctx.filePath);
+				entered.get(name)?.resolve();
+				await settle.get(name)?.promise;
+				return {
+					output: "",
+					hasBlockers: false,
+					isError: false,
+					fileModified: false,
+					checkedClean: false,
+					withheldBlockerLine: `\u26a0 1 blocking finding in ${name} withheld: test`,
+				};
+			}) as never);
+			// Event-driven: the row is the only observable of the continuation.
+			const lateSeen = gatedPromise<void>();
+			logLatency.mockClear();
+			logLatency.mockImplementation((row?: { phase?: string }) => {
+				if (row?.phase === "withheld_blocker_late_advisory") lateSeen.resolve();
+			});
+			const lateRows = () =>
+				logLatency.mock.calls.filter(
+					([row]) => row?.phase === "withheld_blocker_late_advisory",
+				);
+			try {
+				await acrossReplacement(
+					"late-withheld",
+					async ({ tmpDir, filePath, runtime, cacheManager }) => {
+						const goneFile = createTempFile(tmpDir, "gone.ts", "export {};\n");
+						const abortedFile = createTempFile(
+							tmpDir,
+							"aborted.ts",
+							"export {};\n",
+						);
+						for (const name of ["edit.ts", "gone.ts", "aborted.ts"]) {
+							settle.set(name, gatedPromise<void>());
+							entered.set(name, gatedPromise<void>());
+						}
+						const secondary = beginScope({ role: "secondary" });
+						try {
+							const liveHandler = handleToolResult({
+								...toolResultDeps({ filePath, runtime, cacheManager }),
+								advisoryScope: secondary.capture(),
+							});
+							const goneHandler = handleToolResult(
+								toolResultDeps({ filePath: goneFile, runtime, cacheManager }),
+							);
+							// Escape mid-check: a cancelled turn, not a late result.
+							const escape = new AbortController();
+							const abortedHandler = handleToolResult({
+								...toolResultDeps({
+									filePath: abortedFile,
+									runtime,
+									cacheManager,
+								}),
+								signal: escape.signal,
+							});
+							await Promise.all([
+								entered.get("edit.ts")?.promise,
+								entered.get("gone.ts")?.promise,
+								entered.get("aborted.ts")?.promise,
+							]);
+							escape.abort();
+							await abortedHandler;
+							settle.get("aborted.ts")?.resolve();
+							await new Promise((resolve) => setImmediate(resolve));
+							expect(lateRows()).toEqual([]);
+							// Both handlers return at the inner bound with nothing collected.
+							await Promise.all([liveHandler, goneHandler]);
+							expect(lateRows()).toEqual([]);
+
+							settle.get("edit.ts")?.resolve();
+							await lateSeen.promise;
+							expect(lateRows()[0]?.[0]).toMatchObject({
+								filePath: "edit",
+								metadata: { notices: 1, late: "inner-bound" },
+							});
+							expect(
+								consumeAgentNudge(undefined, runtime.sessionScope),
+							).toBeUndefined();
+							const delivered =
+								consumeAgentNudge(undefined, secondary)?.messages ?? [];
+							expect(delivered).toEqual([
+								expect.objectContaining({
+									content: expect.stringMatching(
+										/abandoned[^]*edit\.ts withheld/,
+									),
+								}),
+							]);
+
+							// Session 2 starts; the held dispatch of session 1 settles.
+							runtime.resetForSession();
+							runtime.beginTurn();
+							settle.get("gone.ts")?.resolve();
+							await new Promise((resolve) => setImmediate(resolve));
+							expect(lateRows()).toHaveLength(1);
+							expect(
+								consumeAgentNudge(undefined, runtime.sessionScope),
+							).toBeUndefined();
+						} finally {
+							retireScope(secondary, "shutdown");
+						}
+					},
+				);
+			} finally {
+				logLatency.mockReset();
+			}
+		},
+	);
 	it("drops another session's git-guard section only for a write that reached a whole-file clean verdict (#4733 r1 F2)", async () => {
 		// RECURRENCE GUARDED: #4733 r1 F2 (Greptile "Unanswered checks clear
 		// blockers"). Every live write under `--lens-guard` called

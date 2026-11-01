@@ -1,6 +1,7 @@
 // flake-shape: real-process-spawn — the subject is what a REAL bash tool call writes into a REAL git checkout and what the model receives for it; the detector is git's own `status --porcelain` and a stubbed shell could not say whether the write was seen.
-// flake-shape: raw-timer-wait — the 500 ms read-only bound is a live wall deadline racing a handler that this file holds open for 700 ms; a fake clock would settle the race instantly and the abandonment under test would never happen.
+// flake-shape: raw-timer-wait — the 500 ms read-only bound is a live wall deadline racing a handler that this file holds open for 700 ms; a fake clock would settle the race instantly and the abandonment under test would never happen. The 10 s inner pipeline bound is the same kind of live deadline: the pipeline is held past it for 11.5 s, and no fake clock can move it.
 // flake-shape: in-process-mock — the wrapper around `handleToolResult` is the only way to hold the real handler open past the host bound and to read its return value; the dispatch, the pipeline, the advisory queue and the pi session are real.
+// flake-shape: in-process-mock — the wrapper around `runPipeline` only delays the REAL pipeline (a cold analyzer stand-in) so a dispatch outlives the inner 10 s bound; it runs the real pipeline after the hold.
 /**
  * #5108 witness: a blocker on a file the agent wrote through a script (a
  * heredoc that is not a recognised write) is delivered or disclosed as
@@ -35,11 +36,51 @@ import { describe, expect, it, vi } from "vitest";
  */
 const gate = vi.hoisted(() => ({
 	holdMs: 0,
+	/**
+	 * #5108 remainder: a stand-in for a cold analyzer. The real `runPipeline`
+	 * for a file named in `pipelineHoldFile` starts only after `pipelineHoldMs`
+	 * (a live wall delay, because the 10 s inner bound is the subject) and after
+	 * `pipelineLatch` settles. `pipelines` settle when each held run has finished.
+	 */
+	pipelineHoldMs: 0,
+	pipelineHoldFile: "",
+	pipelineLatch: undefined as Promise<void> | undefined,
+	pipelines: [] as Promise<void>[],
+	pipelineStartedAt: [] as number[],
 	/** A handler that, after `holdMs`, finishes having collected these notices. */
 	fakeNotices: undefined as string[] | undefined,
 	pending: [] as Promise<void>[],
 	results: [] as Array<{ command: string; text: string }>,
 }));
+vi.mock("../clients/pipeline.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../clients/pipeline.js")>();
+	return {
+		...actual,
+		runPipeline: (...args: Parameters<typeof actual.runPipeline>) => {
+			const held =
+				gate.pipelineHoldFile !== "" &&
+				args[0].filePath.endsWith(gate.pipelineHoldFile);
+			if (!held) return actual.runPipeline(...args);
+			const run = (async () => {
+				gate.pipelineStartedAt.push(Date.now());
+				if (gate.pipelineHoldMs > 0)
+					await new Promise((resolve) =>
+						setTimeout(resolve, gate.pipelineHoldMs),
+					);
+				await gate.pipelineLatch;
+				return actual.runPipeline(...args);
+			})();
+			gate.pipelines.push(
+				run.then(
+					() => undefined,
+					() => undefined,
+				),
+			);
+			return run;
+		},
+	};
+});
 vi.mock("../clients/runtime-tool-result.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../clients/runtime-tool-result.js")>();
@@ -135,6 +176,16 @@ function scriptWrite(file: string, content: string): Record<string, unknown> {
 	return fauxToolCall("bash", {
 		command: `node - <<'JS'\nrequire("node:fs").writeFileSync(${JSON.stringify(file)}, ${JSON.stringify(content)});\nJS`,
 	});
+}
+
+/** How many times the inner pipeline bound has been ledgered in the fixture's log. */
+async function innerBoundRows(): Promise<number> {
+	await flushLatencyLog();
+	return readNdjsonRows(getLatencyLogPath()).rows.filter(
+		(row) =>
+			row.phase === "degradation_ledger" &&
+			row.filePath === "tool_result_edit:pipeline-analysis",
+	).length;
 }
 
 /** How many `withheld_blocker_late_advisory` rows the fixture's log holds. */
@@ -410,4 +461,220 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 			}
 		},
 	);
+
+	describe("a pipeline slower than the 10 s inner bound (#5108 remainder)", () => {
+		// Recurrence prevented: a first-run analyzer (cold Pyright) outruns the
+		// inner `pipeline-analysis` bound, `handleToolResult` returns before the
+		// tail that collects the withheld line, and #5114's late advisory reads an
+		// empty array. The line then reached no channel (r2 probe case B:
+		// `[0,0,0,0,0,0,0,0]` requests carried it). Defect shape 10.
+		const SETTLE_TAIL_MS = 1_000;
+
+		/** The held run has finished; give the dispatch tail a moment to queue. */
+		async function afterPipelines(): Promise<void> {
+			await Promise.all(gate.pipelines);
+			await new Promise((resolve) => setTimeout(resolve, SETTLE_TAIL_MS));
+		}
+
+		/** Occurrences, not messages: the drain may join advisories into one message. */
+		function copiesOfAdvisory(
+			requests: readonly (readonly PiMessage[])[],
+		): number {
+			return everyText(requests).split("was abandoned").length - 1;
+		}
+
+		function hold(file: string, ms: number): void {
+			gate.pipelineHoldFile = file;
+			gate.pipelineHoldMs = ms;
+			gate.pipelines.length = 0;
+			gate.pipelineStartedAt.length = 0;
+		}
+		function release(): void {
+			gate.pipelineHoldFile = "";
+			gate.pipelineHoldMs = 0;
+			gate.pipelineLatch = undefined;
+		}
+
+		it(
+			"delivers the withheld line once at the next context when the dispatch outlives the bound, and leaves the commit gate open",
+			{ timeout: 90_000 },
+			async () => {
+				hold("opaque.ts", 11_500);
+				try {
+					const repo = initRepo("slow-pipeline");
+					const rowsBefore = await lateAdvisoryRows();
+					const handle = await startPiSession({
+						root: fixture.root,
+						cwd: repo,
+						flags: new Map(GUARDED_FLAGS),
+						inlineFactory: async () => (await import("../index.js")).default,
+						responses: [
+							step(scriptWrite("opaque.ts", BLOCKING_FILE), "writing"),
+							endTurn("turn 1 done"),
+							endTurn("turn 2 done"),
+							step(commitAttempt(), "committing"),
+							endTurn("turn 3 done"),
+						],
+					});
+					await handle.prompt("write the file with a script");
+					const [write] = toolResults(handle.requests.at(-1) ?? [], "bash");
+					expect(write?.text).not.toContain("opaque.ts");
+					await afterPipelines();
+					await handle.prompt("anything else?");
+
+					const surface = everyText(handle.requests);
+					expect(surface).toContain("opaque.ts");
+					expect(surface).toContain("withheld");
+					expect(surface).toMatch(/abandoned/);
+					expect(copiesOfAdvisory(handle.requests)).toBe(1);
+					expect(await lateAdvisoryRows()).toBe(rowsBefore + 1);
+					const rows = readNdjsonRows(getLatencyLogPath()).rows.filter(
+						(row) => row.phase === "withheld_blocker_late_advisory",
+					);
+					expect(rows.at(-1)?.metadata).toMatchObject({
+						late: "inner-bound",
+						notices: 1,
+					});
+
+					// Unauthored bytes never latch the commit gate (#3226, #4137): the
+					// late disclosure is an advisory, not a blocker record.
+					await handle.prompt("commit it");
+					const commit = toolResults(handle.requests.at(-1) ?? [], "bash").at(
+						-1,
+					);
+					expect(commit?.text).not.toContain(GATE_BLOCK);
+					expect(commit?.text).toContain(RAN_MARKER);
+					expect(handle.errors).toEqual([]);
+				} finally {
+					release();
+				}
+			},
+		);
+
+		it(
+			"delivers exactly one copy when the dispatch ends inside the 10 s bound but past the host's",
+			{ timeout: 60_000 },
+			async () => {
+				// Two writers can carry the line (#5114's work.then and the inner-bound
+				// continuation); exactly one of them has the notice for a given call.
+				hold("opaque.ts", 2_000);
+				try {
+					const repo = initRepo("mid-pipeline");
+					const rowsBefore = await lateAdvisoryRows();
+					const handle = await startPiSession({
+						root: fixture.root,
+						cwd: repo,
+						flags: new Map(GUARDED_FLAGS),
+						inlineFactory: async () => (await import("../index.js")).default,
+						responses: [
+							step(scriptWrite("opaque.ts", BLOCKING_FILE), "writing"),
+							endTurn("turn 1 done"),
+							endTurn("turn 2 done"),
+						],
+					});
+					await handle.prompt("write the file with a script");
+					await afterPipelines();
+					await handle.prompt("anything else?");
+
+					expect(everyText(handle.requests)).toContain("withheld");
+					expect(copiesOfAdvisory(handle.requests)).toBe(1);
+					expect(await lateAdvisoryRows()).toBe(rowsBefore + 1);
+					expect(handle.errors).toEqual([]);
+				} finally {
+					release();
+				}
+			},
+		);
+
+		it(
+			"queues nothing for a clean file whose dispatch outlives the bound",
+			{ timeout: 90_000 },
+			async () => {
+				hold("tidy.ts", 11_500);
+				try {
+					const repo = initRepo("slow-clean");
+					const rowsBefore = await lateAdvisoryRows();
+					const handle = await startPiSession({
+						root: fixture.root,
+						cwd: repo,
+						flags: new Map(GUARDED_FLAGS),
+						inlineFactory: async () => (await import("../index.js")).default,
+						responses: [
+							step(scriptWrite("tidy.ts", CLEAN_FILE), "writing"),
+							endTurn("turn 1 done"),
+							endTurn("turn 2 done"),
+						],
+					});
+					await handle.prompt("write the file with a script");
+					await afterPipelines();
+					await handle.prompt("anything else?");
+
+					expect(gate.pipelineStartedAt.length).toBeGreaterThan(0);
+					expect(await lateAdvisoryRows()).toBe(rowsBefore);
+					expect(copiesOfAdvisory(handle.requests)).toBe(0);
+					expect(everyText(handle.requests)).not.toContain("abandoned");
+					expect(handle.errors).toEqual([]);
+				} finally {
+					release();
+				}
+			},
+		);
+
+		it(
+			"queues nothing when the session was replaced before the dispatch settled",
+			{ timeout: 90_000 },
+			async () => {
+				// The latch holds the dispatch until the inner bound has fired AND the
+				// session is gone, so the settle is the only thing left to deliver.
+				let open: () => void = () => undefined;
+				gate.pipelineLatch = new Promise<void>((resolve) => {
+					open = resolve;
+				});
+				hold("opaque.ts", 0);
+				try {
+					const repo = initRepo("slow-replaced");
+					const rowsBefore = await lateAdvisoryRows();
+					const boundRowsBefore = await innerBoundRows();
+					const first = await startPiSession({
+						root: fixture.root,
+						cwd: repo,
+						flags: new Map(GUARDED_FLAGS),
+						inlineFactory: async () => (await import("../index.js")).default,
+						responses: [
+							step(scriptWrite("opaque.ts", BLOCKING_FILE), "writing"),
+							endTurn("turn 1 done"),
+						],
+					});
+					await first.prompt("write the file with a script");
+					// Let the 10 s inner bound fire (a live deadline, so a live wait),
+					// with a margin: its timer was armed after the dispatch started.
+					const [startedAt] = gate.pipelineStartedAt;
+					await new Promise((resolve) =>
+						setTimeout(
+							resolve,
+							Math.max(0, (startedAt ?? Date.now()) + 10_800 - Date.now()),
+						),
+					);
+					const next = await first.restart({ reason: "new" }, [
+						endTurn("fresh turn 1 done"),
+						endTurn("fresh turn 2 done"),
+					]);
+					open();
+					await afterPipelines();
+					await next.prompt("start fresh");
+					await next.prompt("anything else?");
+
+					// The ledger row is only written for the deadline, so a bound that
+					// had not fired (an aborted wait) would make this case vacuous.
+					expect(await innerBoundRows()).toBe(boundRowsBefore + 1);
+					expect(copiesOfAdvisory(next.requests)).toBe(0);
+					expect(everyText(next.requests)).not.toContain("opaque.ts");
+					expect(await lateAdvisoryRows()).toBe(rowsBefore);
+					expect(next.errors).toEqual([]);
+				} finally {
+					release();
+				}
+			},
+		);
+	});
 });
