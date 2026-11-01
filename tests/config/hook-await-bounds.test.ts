@@ -781,13 +781,14 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"from session_start with no wall bound above the spawn.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#readSequenceWithBudget:41c0b191~d5c54d05": {
+	"clients/runtime-session.ts#readSequenceWithBudget:31d18ec3~501c4d30": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"`readSequenceWithBudget`'s race: a real budget with NO abort " +
-			"arm. Also flagged by this sweep's hand-rolled-race family, " +
-			"which is the fold slice 2 owns.",
+			"`readSequenceWithBudget`'s `withBudget` wait: a real budget with " +
+			"NO abort arm. The caller's own `bounded()` at the same budget is " +
+			"the abort backstop (see handleSessionStart); the hand-rolled " +
+			"race itself is folded onto `withBudget`.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-session.ts#scheduleDeferredToolProbes:ca89b6b8~8ef90162": {
@@ -2188,15 +2189,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"turn_end hook (AC8) and carries the same 3000ms contract.",
 		owner: "#2523 slice 2",
 	},
-	"race:clients/dispatch/dispatcher.ts#runRunner:5dbd3dcf~c580947c": {
-		family: "hand-rolled-race",
-		site: "off-hook",
-		reason:
-			"Per-runner RUNNER_TIMEOUT_MS race (30000ms) with no abort arm " +
-			"— 10x turn_end's whole budget at one leaf. Slice 2's fold " +
-			"worklist.",
-		owner: "#2523 slice 2",
-	},
 	"race:clients/dispatch/integration.ts#computeCascadeForFile:7c47013c~8d42d097":
 		{
 			family: "hand-rolled-race",
@@ -2204,15 +2196,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			reason:
 				"Cascade-computation race in the dispatch integration layer; a " +
 				"hand-rolled timer arm, no abort arm. Slice 2's fold worklist.",
-			owner: "#2523 slice 2",
-		},
-	"race:clients/lsp-document-symbols.ts#getOpenDocumentSymbols:888067f6~68634f87":
-		{
-			family: "hand-rolled-race",
-			site: "off-hook",
-			reason:
-				"Document-symbol wait race with a hand-rolled timer arm; the " +
-				"LSP family's `maxWaitMs` shape. Slice 2's fold worklist.",
 			owner: "#2523 slice 2",
 		},
 	"race:clients/lsp/index.ts#LSPService:41c0b191~56c015fc": {
@@ -2223,16 +2206,18 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"family #2523's inventory names). Slice 2's fold worklist.",
 		owner: "#2523 slice 2",
 	},
-	"race:clients/quiet-window.ts#buildHeartbeatResourcePatchBounded:888067f6~f7fcd4ba":
-		{
-			family: "hand-rolled-race",
-			site: "off-hook",
-			reason:
-				"`buildHeartbeatResourcePatchBounded`'s hand-rolled race — " +
-				"already named `Bounded`, which is exactly why it should be " +
-				"spelled with the shared primitive. Slice 2's fold worklist.",
-			owner: "#2523 slice 2",
-		},
+	"race:clients/lsp/index.ts#LSPService:d7953776~763e332c": {
+		family: "hand-rolled-race",
+		site: "off-hook",
+		reason:
+			"The 3-way client-wait race (`withBudget()` acquisition, the " +
+			"known-slow sentinel, a timer sentinel). It spells `Promise.race<` " +
+			"with type arguments, which this scan did not read until the " +
+			"detector learned the generic call head; the fold needs a boxed " +
+			"`withDeadline` over the inner race and a cell through the real " +
+			"client-wait path.",
+		owner: "#2523 slice 2",
+	},
 	"race:clients/runtime-coordinator.ts#RuntimeCoordinator:f1693e28~c40c7404": {
 		family: "hand-rolled-race",
 		site: "turn_end",
@@ -2240,24 +2225,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"The turn-end cascade settle race (5000ms, no abort arm) as a " +
 			"hand-rolled race. Its await is separately exempted in the " +
 			"hook-await family; both entries close together in slice 2.",
-		owner: "#2523 slice 2",
-	},
-	"race:clients/runtime-session.ts#readSequenceWithBudget:41c0b191~d5c54d05": {
-		family: "hand-rolled-race",
-		site: "session_start",
-		reason:
-			"`readSequenceWithBudget`'s hand-rolled race on the " +
-			"session_start sequence fast path (#451). Its awaits are " +
-			"separately exempted in the hook-await family.",
-		owner: "#2523 slice 2",
-	},
-	"race:mcp/analyze-cli.ts#readHookPayload:5b26dbc8~bab4bd45": {
-		family: "hand-rolled-race",
-		site: "off-hook",
-		reason:
-			"`readHookPayload`'s stdin-read race in the analyze CLI: a " +
-			"standalone process entry point, no pi hook involved. Slice 2's " +
-			"fold worklist for uniformity, not for a hook budget.",
 		owner: "#2523 slice 2",
 	},
 };
@@ -2731,7 +2698,7 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// four tiers, so the tier awaits sit in one loop instead of in the walker.
 	// Fewer awaits, the same declaration-file reads, no new unbounded operation.
 	"clients/python-environment.ts": 11,
-	"clients/quiet-window.ts": 6,
+	"clients/quiet-window.ts": 5,
 	"clients/read-expansion.ts": 2,
 	// 5 -> 3 (#3612): `resolveReadGuardStartState`'s two sidecar awaits moved
 	// to the session-scope hand-off (`adoptHandoff`, below).
@@ -3421,6 +3388,60 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		expect(
 			findHandRolledRaceLines(
 				stripSource("// Promise.race([work(), setTimeout(done, 5)])"),
+			),
+		).toEqual([]);
+	});
+
+	// Recurrence (AGENTS.md shape 69, spelling enumerator): the call head was
+	// `Promise.race(` and nothing else, so `clients/lsp/index.ts`'s
+	// `Promise.race<…>(` client-wait race read as no race at all. The scan
+	// admits one form, a direct call whose own arms show no timer, and refuses
+	// every other reference to `race`/`any`, because the arms of an aliased or
+	// extracted race are not in view. Each plant below was green (`[]`) before.
+	it("refuses a race reached through type arguments, an alias, a binding or a computed access", () => {
+		const filler = Array.from({ length: 30 }, (_, i) => `const f${i} = ${i};`);
+		// Type arguments: the timer arm is in the call's own parentheses.
+		expect(
+			findHandRolledRaceLines(
+				[
+					"const r = await Promise.race<string | undefined>([",
+					"\twork(),",
+					"\tnew Promise<undefined>((resolve) => setTimeout(resolve, 5)),",
+					"]);",
+				].join("\n"),
+			),
+		).toEqual([1]);
+		// An alias: the call site is far from the reference and names no timer.
+		expect(
+			findHandRolledRaceLines(
+				[
+					"const race = Promise.race.bind(Promise);",
+					...filler,
+					"const r = await race([work(), sleepArm()]);",
+				].join("\n"),
+			),
+		).toEqual([1]);
+		// A value reached through another binding.
+		expect(
+			findHandRolledRaceLines(
+				[
+					"const { race } = Promise;",
+					...filler,
+					"const r = await race([work(), sleepArm()]);",
+				].join("\n"),
+			),
+		).toEqual([1]);
+		// A computed access (string contents are blanked before the scan).
+		expect(
+			findHandRolledRaceLines(
+				stripSource('const r = await Promise["race"]([work(), sleepArm()]);'),
+			),
+		).toEqual([1]);
+		// The admitted form stays admitted: a direct call, generic or not, with
+		// no timer in its arms or in the 25 lines above it.
+		expect(
+			findHandRolledRaceLines(
+				"const r = await Promise.race<string>([primary(), secondary()]);",
 			),
 		).toEqual([]);
 	});

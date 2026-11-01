@@ -6,7 +6,7 @@ import { resetBoundedTelemetry } from "./bounded-telemetry.js";
 import { rotateMessageEndAttribution } from "./message-end-attribution.js";
 import type { CacheManager } from "./cache-manager.js";
 import { createDeadline, yieldIfOverBudget } from "./cooperative-budget.js";
-import { bounded } from "./deadline-utils.js";
+import { bounded, withBudget } from "./deadline-utils.js";
 import type { DeadCodeResult } from "./dead-code-client.js";
 import { deadCodeIssueCount } from "./dead-code-client.js";
 import { logDeadCodeScan } from "./dead-code-logger.js";
@@ -835,22 +835,12 @@ async function readSequenceWithBudget(args: {
 	} = args;
 	const readPromise = readLatestProjectSequenceAsync(snapshotRoot, base);
 
-	let timeoutHandle: NodeJS.Timeout | undefined;
-	const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
-		timeoutHandle = setTimeout(
-			() => resolve({ timedOut: true }),
-			sequenceReadBudgetMs(),
-		);
-		timeoutHandle.unref();
-	});
+	const raced = await withBudget(
+		readPromise.then((latestSeq) => ({ latestSeq })),
+		sequenceReadBudgetMs(),
+	);
 
-	const raced = await Promise.race([
-		readPromise.then((latestSeq) => ({ timedOut: false as const, latestSeq })),
-		timeoutPromise,
-	]);
-	if (timeoutHandle) clearTimeout(timeoutHandle);
-
-	if (!raced.timedOut) {
+	if (raced !== undefined) {
 		return { latestSeq: raced.latestSeq, timedOut: false };
 	}
 

@@ -227,6 +227,19 @@ describe("pi-lens-analyze bin", { retry: 2 }, () => {
 		expect(elapsedMs).toBeLessThan(30_000);
 	}, 45_000);
 
+	// Shape 4 (#1271): with NO argv input the bin does read stdin, and the read is
+	// one `withBudget` race (`readHookPayload`, 2 s). A copy of that race that
+	// never fires its timer leaves the bin parked on the open pipe forever; the
+	// harness rejects such a run at its own ceiling instead of resolving.
+	it("gives up on a stdin payload that never arrives and exits clean", async () => {
+		const { code, stdout } = await runBinWithOpenStdin(
+			[`--cwd=${tmpDir}`],
+			30_000,
+		);
+		expect(code).toBe(0);
+		expect(stdout.trim()).toBe("");
+	}, 45_000);
+
 	// The companion: `--turn-end` must not read stdin either. No warm server, so
 	// the pass skips immediately — the only thing that could delay this exit is
 	// the stdin read the flag is supposed to short-circuit.
