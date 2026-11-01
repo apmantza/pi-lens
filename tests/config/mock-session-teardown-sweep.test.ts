@@ -24,16 +24,27 @@ import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
  *   that already ended their sessions).
  *
  * Everything else refuses. A start is any quoted `session_start` literal in
- * code, or an `.emit(` / `getHandlers(` call whose first argument is not a
- * literal (the event name is then unresolved, so the file may start one).
- * Comments are blanked and strings kept: the evidence for a start is a string
- * literal, and a comment that names the helper never satisfies the scan.
+ * code, or any mention of the double's event seam (`emit`, `getHandlers`,
+ * `getHandler`, `getHandlerOrThrow`) other than a call whose first argument is
+ * a quoted event that is not `session_start`: an alias, `.call`, a destructure,
+ * a computed member or an event held in a variable cannot be resolved here, so
+ * the file may start one. Comments are blanked and strings kept for the
+ * literals, since the evidence for a start is a string; a comment that names
+ * the helper never satisfies the scan.
  */
 const TESTS_ROOT = resolve(import.meta.dirname, "..");
 
 const START_LITERAL = /["'`]session_start["'`]/;
-const UNRESOLVED_EVENT =
-	/\.emit\(\s*(?![\s"'`])|\bgetHandlers?(?:OrThrow)?\(\s*(?![\s"'`])/;
+// Every way the double hands an event to its handlers: `emit`, and the handler
+// lookups a test can call directly. A call whose first argument is a quoted
+// event other than `session_start` is the one admitted non-start form; any
+// other mention (an alias, `.call`, a destructure, a computed member, a name
+// held in a variable) cannot be resolved here and counts as a possible start.
+const EVENT_SEAM = /\b(?:emit|getHandlers|getHandler|getHandlerOrThrow)\b/g;
+const COMPUTED_SEAM =
+	/\[\s*["'`](?:emit|getHandlers|getHandler|getHandlerOrThrow)["'`]\s*\]/;
+const OTHER_EVENT_CALL =
+	/\.(?:emit|getHandlers|getHandler|getHandlerOrThrow)\(\s*["'`](?!session_start["'`])[^"'`]+["'`]/g;
 const SHARED_IMPORT =
 	/\bimport\s*\{[^}]*\bendMockSessions\b[^}]*\}\s*from\s*["'][^"']*\/mock-session-teardown\.js["']/;
 const SHARED_CALL = /\bendMockSessions\s*\(/;
@@ -42,7 +53,18 @@ const HAND_SHUTDOWN = /\.emit\(\s*["'`]session_shutdown["'`]/;
 /** Whether `source` may start a session on the double. */
 export function startsSession(source: string): boolean {
 	const code = stripSource(source, { strings: "keep" });
-	return START_LITERAL.test(code) || UNRESOLVED_EVENT.test(code);
+	if (START_LITERAL.test(code) || COMPUTED_SEAM.test(code)) return true;
+	// Positions line up between the two strips, so a seam mention that is not the
+	// head of an admitted call is found by index.
+	const admitted = new Set(
+		[...code.matchAll(OTHER_EVENT_CALL)].map(
+			(m) => (m.index ?? 0) + m[0].indexOf(".") + 1,
+		),
+	);
+	const blanked = stripSource(source, { strings: "blank" });
+	return [...blanked.matchAll(EVENT_SEAM)].some(
+		(m) => !admitted.has(m.index ?? -1),
+	);
 }
 
 /** Whether `source` ends its sessions through a form the scan recognizes. */
@@ -93,6 +115,10 @@ describe("every importer of the pi double that starts a session ends it (#5146)"
 				'const go = pi.emit;\nawait go("session_start", e, ctx);\n',
 			],
 			[
+				"an aliased emit with a variable event",
+				"const go = pi.emit;\nawait go(evt, e, ctx);\n",
+			],
+			[
 				"a name held in another binding",
 				'const evt = "session_start";\nawait pi.emit(evt, e, ctx);\n',
 			],
@@ -100,9 +126,16 @@ describe("every importer of the pi double that starts a session ends it (#5146)"
 				"a name built at run time",
 				'const evt = ["session", "start"].join("_");\nawait pi.emit(evt, e, ctx);\n',
 			],
+			["an indirect call", "await pi.emit.call(pi, evt, e, ctx);\n"],
+			[
+				"a bound emit",
+				"const go = pi.emit.bind(pi);\nawait go(evt, e, ctx);\n",
+			],
+			["Reflect.apply", "await Reflect.apply(pi.emit, pi, [evt, e, ctx]);\n"],
+			["a computed member", 'await pi["emit"](evt, e, ctx);\n'],
 			[
 				"a destructured emit",
-				'const { emit } = pi;\nawait emit("session_start", e, ctx);\n',
+				"const { emit } = pi;\nawait emit(evt, e, ctx);\n",
 			],
 			[
 				"a direct handler call",
@@ -120,6 +153,8 @@ describe("every importer of the pi double that starts a session ends it (#5146)"
 			["a comment", '// pi.emit("session_start", e, ctx)\n'],
 			["a block comment", '/* await pi.emit("session_start") */\n'],
 			["an emit of another event", 'await pi.emit("tool_result", e, ctx);\n'],
+			["a handler lookup of another event", 'pi.getHandlers("turn_start");\n'],
+			["a name in a string", 'const s = "pi.emit(evt)";\n'],
 		])("does not start a session through %s", (_name, source) => {
 			expect(startsSession(source)).toBe(false);
 		});
