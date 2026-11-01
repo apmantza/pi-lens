@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeTimerRelease } from "../support/timer-release.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
 	_resetBuiltinQuietWindowRegistrationForTests,
@@ -210,6 +211,23 @@ describe("quiet-window", () => {
 			await runQuietWindow({ runtime, dbg: vi.fn() });
 
 			expect(settleSpy).toHaveBeenCalledTimes(1);
+		});
+
+		// Shape 4 (#1097): the heartbeat's resource sample is raced against a
+		// 2000 ms budget (`HEARTBEAT_SAMPLE_TIMEOUT_MS`); a sample that lands first
+		// must release that timer, or every quiet window leaves a REF'd 2 s tail
+		// that keeps a one-shot `pi --print` process alive after `agent_settled`.
+		it("releases the heartbeat sample's budget timer once the sample lands", async () => {
+			const observer = observeTimerRelease(2000);
+			try {
+				const runtime = new RuntimeCoordinator();
+				registerBuiltinQuietWindowTasks(() => runtime);
+				await runQuietWindow({ runtime, dbg: vi.fn() });
+				expect(observer.armed()).toHaveLength(1);
+				expect(observer.unreleased()).toEqual([]);
+			} finally {
+				observer.restore();
+			}
 		});
 	});
 });

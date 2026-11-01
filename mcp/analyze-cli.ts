@@ -31,6 +31,7 @@
  */
 
 import { setProjectTrustState } from "../clients/project-trust.js";
+import { withBudget } from "../clients/deadline-utils.js";
 import * as path from "node:path";
 import { flushExtensionLog, logExtension } from "../clients/extension-log.js";
 import { redactSecrets } from "../clients/redact/secrets.js";
@@ -105,13 +106,7 @@ const STDIN_READ_TIMEOUT_MS = 2_000;
 
 async function readHookPayload(): Promise<HookPayload | undefined> {
 	if (process.stdin.isTTY) return undefined;
-	const raw = await Promise.race([
-		readStdin(),
-		new Promise<undefined>((resolve) => {
-			const timer = setTimeout(() => resolve(undefined), STDIN_READ_TIMEOUT_MS);
-			timer.unref();
-		}),
-	]);
+	const raw = await withBudget(readStdin(), STDIN_READ_TIMEOUT_MS);
 	if (raw === undefined) {
 		process.stdin.pause();
 		(process.stdin as { unref?: () => void }).unref?.();

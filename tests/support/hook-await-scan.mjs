@@ -31,12 +31,27 @@ export const DEFINITION_FILE = "clients/deadline-utils.ts";
 /** An `await` token that is a KEYWORD, not a property name or an identifier tail. */
 const AWAIT_TOKEN = /(?<![.\w$])await(?![\w$])/g;
 /**
- * A `Promise.race(` or `Promise.any(` call head. `Promise.any([work, delay])`
- * is the same shape as a `Promise.race` with a timer arm — first settlement
- * wins either way — so a hand-rolled bound spelled with `any` instead of
- * `race` must not slip past this scan (#2530 round 3 F3).
+ * A `Promise.race(` or `Promise.any(` call head, with or without type
+ * arguments (`Promise.race<T>(`). `Promise.any([work, delay])` is the same
+ * shape as a `Promise.race` with a timer arm — first settlement wins either
+ * way — so a hand-rolled bound spelled with `any` instead of `race` must not
+ * slip past this scan (#2530 round 3 F3). A generic call used to read as no
+ * call at all (the `<` sat between `race` and `(`), which hid the 3-way
+ * client-wait race in `clients/lsp/index.ts`.
  */
-const RACE_TOKEN = /\bPromise\s*\.\s*(?:race|any)\s*\(/g;
+const RACE_TOKEN = /\bPromise\s*\.\s*(?:race|any)\s*(?:<[^()]*>\s*)?\(/g;
+/**
+ * Every OTHER way to reach `Promise.race`/`Promise.any`: a bare property read
+ * (`Promise.race.bind(Promise)`, `const r = Promise.race`), a computed access
+ * (`Promise["race"]`; string contents are blanked before the scan, so the
+ * bracket itself is the evidence) and a destructure (`const { race } =
+ * Promise`). The arms of a race reached this way are not in the call's own
+ * parentheses, so the scan cannot see a timer there; it refuses the form
+ * instead of guessing (a gate admits the known-good call form and refuses
+ * every other, #3134's lesson and AGENTS.md shape 69).
+ */
+const RACE_REFERENCE =
+	/\bPromise\s*\.\s*(?:race|any)\b(?!\s*(?:<[^()]*>\s*)?\()|\bPromise\s*\[|\{[^{}]*\b(?:race|any)\b[^{}]*\}\s*=\s*Promise\b/g;
 /** A timer arm: the shape that makes a race a hand-rolled bound. */
 const TIMER_ARM = /\bsetTimeout\s*\(|\bAbortSignal\s*\.\s*timeout\s*\(/;
 /**
@@ -120,11 +135,15 @@ export function findUnboundedAwaitLines(stripped) {
 /**
  * Every hand-rolled timeout race LINE in one already-stripped source,
  * 1-based: a `Promise.race(`/`Promise.any(` whose own arguments, or the 25
- * lines above it, spell a timer.
+ * lines above it, spell a timer; and every reference to either that is not a
+ * direct call ({@link RACE_REFERENCE}), whose arms cannot be read.
  */
 export function findHandRolledRaceLines(stripped) {
 	const hits = new Set();
 	const lines = stripped.split("\n");
+	for (const match of stripped.matchAll(RACE_REFERENCE)) {
+		hits.add(lineOf(stripped, match.index));
+	}
 	for (const match of stripped.matchAll(RACE_TOKEN)) {
 		const line = lineOf(stripped, match.index);
 		const args = callArguments(stripped, match.index + match[0].length - 1);

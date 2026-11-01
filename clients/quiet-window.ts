@@ -35,6 +35,7 @@ import {
 	readInstanceRegistry,
 	updateHeartbeat,
 } from "./instance-registry.js";
+import { withBudget } from "./deadline-utils.js";
 import { logLatency } from "./latency-logger.js";
 import { sampleProcesses } from "./resource-sampler.js";
 import type { GenerationHandle } from "./generation-guard.js";
@@ -246,25 +247,15 @@ export function registerBuiltinQuietWindowTasks(
 const HEARTBEAT_SAMPLE_TIMEOUT_MS = 2000;
 
 /** Race `buildHeartbeatResourcePatch` against `HEARTBEAT_SAMPLE_TIMEOUT_MS`;
- *  a timeout resolves to `{}` (same "leave everything untouched" semantics as
- *  any other sampling failure — see the module docstring below). */
-async function buildHeartbeatResourcePatchBounded(): Promise<HeartbeatPatch> {
-	// #1097: clear the timeout once the race settles. An uncleared, REF'D
-	// setTimeout would keep the event loop alive for the full
-	// HEARTBEAT_SAMPLE_TIMEOUT_MS after `agent_settled` fires the quiet window —
-	// a same-class sibling of the LSP client-wait leak: harmless in a long-lived
-	// session, but a keep-alive tail in a one-shot `pi --print` process.
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	try {
-		return await Promise.race([
-			buildHeartbeatResourcePatch(),
-			new Promise<HeartbeatPatch>((resolve) => {
-				timer = setTimeout(() => resolve({}), HEARTBEAT_SAMPLE_TIMEOUT_MS);
-			}),
-		]);
-	} finally {
-		if (timer) clearTimeout(timer);
-	}
+ *  a timeout resolves `undefined`, which `updateHeartbeat` reads as its default
+ *  `{}` patch (same "leave everything untouched" semantics as any other
+ *  sampling failure — see the module docstring below). The shared `withBudget`
+ *  race clears its timer on every settle path (#1097), so a sample that lands
+ *  first leaves no REF'd tail after `agent_settled`. */
+function buildHeartbeatResourcePatchBounded(): Promise<
+	HeartbeatPatch | undefined
+> {
+	return withBudget(buildHeartbeatResourcePatch(), HEARTBEAT_SAMPLE_TIMEOUT_MS);
 }
 
 /**
