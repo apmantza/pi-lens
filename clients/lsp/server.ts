@@ -613,6 +613,14 @@ export interface LSPServerInfo {
 	idleEviction: "transparent" | "resident" | "unmeasured";
 	/** True for entries supplied through `lsp.servers.*`, not the built-in table. */
 	custom?: boolean;
+	/**
+	 * True when the server recompiles an open document from disk on the client's
+	 * own first-open `workspace/didChangeWatchedFiles` and publishes an empty set
+	 * that erases the error it published first (#5131). The client then holds
+	 * that one empty echo. A config-declared server gets the same hold through
+	 * `custom`; a built-in row that shares the behaviour declares it here.
+	 */
+	echoesOwnNotice?: boolean;
 	/** True when startup/indexing can execute project-owned build or plugin code. */
 	executesProjectCode?: boolean;
 	/** Set by compileLspRegistry after the source trust decision is admitted. */
@@ -4012,6 +4020,66 @@ export const KotlinServer: LSPServerInfo = {
 	},
 };
 
+/**
+ * groovy-language-server (GroovyLanguageServer/groovy-language-server, #5123).
+ * The project publishes no release, so nothing is downloaded or installed:
+ * a `groovy-language-server` launcher on PATH (Mason builds one) wins, else
+ * `java -jar $GROOVY_LANGUAGE_SERVER_JAR` (`./gradlew build` in the repo
+ * produces the jar). Both run on a JDK >= 17 resolved the way jdtls resolves
+ * it. `.gradle` and `Jenkinsfile` are left to `lsp.servers` config: without
+ * the build classpath they only produce unresolved-class noise.
+ */
+export const GROOVY_LANGUAGE_SERVER_JAR_ENV = "GROOVY_LANGUAGE_SERVER_JAR";
+export const GroovyServer: LSPServerInfo = {
+	id: "groovy",
+	idleEviction: "unmeasured",
+	role: "language",
+	name: "Groovy Language Server",
+	// The server imports the project through the Gradle Tooling API, which
+	// evaluates the project's build scripts.
+	executesProjectCode: true,
+	// The server recompiles an open document from disk on pi-lens's own
+	// first-open watched-files notice and publishes an empty set that erases
+	// the error it just published (#5131).
+	echoesOwnNotice: true,
+	extensions: [".groovy", ".gvy", ".gy", ".gsh"],
+	root: RootWithFallback(
+		createRootDetector(["build.gradle", "settings.gradle"]),
+	),
+	async spawn(root, options) {
+		const env = await resolveJavaRuntimeEnv();
+		const viaLauncher = await resolveAndLaunch(
+			{
+				candidates: ["groovy-language-server"],
+				args: [],
+				cwd: root,
+				...(env ? { env } : {}),
+			},
+			options?.allowInstall,
+		);
+		if (viaLauncher) return viaLauncher;
+		const jar = process.env[GROOVY_LANGUAGE_SERVER_JAR_ENV];
+		if (jar && existsSync(jar)) {
+			try {
+				const proc = await launchLSP("java", ["-jar", jar], {
+					cwd: root,
+					...(env ? { env } : {}),
+				});
+				return { process: proc, source: "direct" };
+			} catch (err) {
+				logSessionStart(
+					`lsp launch groovy: java -jar ${jar} failed: ${err instanceof Error ? err.message : String(err)}`,
+				);
+				if (!hasSpawnFailureKind(err, "tool-not-found")) throw err;
+			}
+		}
+		logSessionStart(
+			`lsp launch groovy: not installed (no groovy-language-server on PATH; ${GROOVY_LANGUAGE_SERVER_JAR_ENV}=${jar ? `${jar} (${existsSync(jar) ? "java not found" : "no such file"})` : "unset"}). Run ./gradlew build in GroovyLanguageServer/groovy-language-server, then set ${GROOVY_LANGUAGE_SERVER_JAR_ENV} to build/libs/groovy-language-server-all.jar`,
+		);
+		return undefined;
+	},
+};
+
 export const LeanServer = createInteractiveServer({
 	id: "lean",
 	name: "Lean 4 Language Server",
@@ -5238,6 +5306,7 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	FSharpServer,
 	JavaServer,
 	KotlinServer,
+	GroovyServer,
 	LeanServer,
 	SwiftServer,
 	DartServer,

@@ -53,6 +53,7 @@ step log only, because it flaps.
 | fsharp | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | gleam | primary | unmeasured | eligible | · | ok | preserved |
 | go | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
+| groovy | primary | unmeasured | unavailable | no-fixture | n/a | n/a |
 | haskell | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |
 | html | primary | transparent | eligible | · | ok | preserved |
 | java | primary | unmeasured | unavailable | tool-unavailable | n/a | n/a |

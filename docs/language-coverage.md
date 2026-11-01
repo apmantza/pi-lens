@@ -33,6 +33,7 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Java                  | ✓   | lsp, javac                                                                                                     | google-java-format      |
 | Java + Lombok         | ✓   | JDT LS launched with `-javaagent:<lombok.jar>` when Lombok is detected and a jar is found (`PI_LENS_LOMBOK_JAR` / `LOMBOK_JAR`, project `.lombok/lombok.jar`, or Maven/Gradle cache) | google-java-format      |
 | Kotlin                | ✓   | lsp, ktlint, detekt                                                                                            | ktlint                  |
+| Groovy                | ✓ (groovy-language-server; explicit `lens_diagnostics source=lsp` and `lsp_navigation` only) | —                                                                      | —                       |
 | Lean 4                | ✓ (Lake `serve`) | lsp; uses each project's Lake toolchain and environment                                               | —                       |
 | Swift                 | ✓   | lsp, swiftlint                                                                                                 | swiftformat             |
 | Dart                  | ✓   | lsp, dart-analyze                                                                                              | dart format             |
