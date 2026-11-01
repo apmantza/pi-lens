@@ -24,7 +24,7 @@
 // pipe-safe ci-verdict message, the tmpWrite exit-2/exit-0 witness, malformed
 // JSON, the large-payload drain, the broken stderr and the corpus's denies plus
 // every 50th row) pin the stdin, exit-code and stderr wiring those rows skip.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	closeSync,
@@ -111,6 +111,60 @@ function runHook(
 		encoding: "utf8",
 		env,
 	});
+}
+
+/**
+ * runHook's result for many commands at once: the same PreToolUse payload and
+ * the same child, spawned `concurrency` at a time (#3801; the transcript corpus
+ * spawned 1122 children one after another while the wall-clock lane leaves the
+ * other cores idle). Results come back in input order, so a caller's offense
+ * list is as deterministic as the serial loop's.
+ */
+async function runHooksConcurrently(
+	commands: readonly string[],
+	env: NodeJS.ProcessEnv,
+	concurrency: number,
+): Promise<Array<{ status: number | null; stderr: string }>> {
+	const results = new Array<{ status: number | null; stderr: string }>(
+		commands.length,
+	);
+	let next = 0;
+	const one = (command: string) =>
+		new Promise<{ status: number | null; stderr: string }>(
+			(resolveRun, rejectRun) => {
+				const child = spawn(process.execPath, [HOOK], {
+					env,
+					stdio: ["pipe", "ignore", "pipe"],
+				});
+				let stderr = "";
+				child.stderr.setEncoding("utf8");
+				child.stderr.on("data", (chunk: string) => {
+					stderr += chunk;
+				});
+				child.on("error", rejectRun);
+				child.on("close", (status) => resolveRun({ status, stderr }));
+				child.stdin.on("error", rejectRun);
+				child.stdin.end(
+					JSON.stringify({
+						session_id: "test",
+						cwd: PAYLOAD_CWD,
+						permission_mode: "default",
+						hook_event_name: "PreToolUse",
+						tool_name: "Bash",
+						tool_input: { command },
+					}),
+				);
+			},
+		);
+	await Promise.all(
+		Array.from({ length: concurrency }, async () => {
+			while (next < commands.length) {
+				const at = next++;
+				results[at] = await one(commands[at]);
+			}
+		}),
+	);
+	return results;
 }
 
 /**
@@ -3480,13 +3534,20 @@ describe(`scripts/hooks/guard-bash.mjs -- transcript corpus ${TRANSCRIPT_CORPUS_
 	// Recurrence: the 88-row sample this loop replaced let a hook-only deny on
 	// an unsampled row pass (#4729 review r1 F1). The in-process verdict rides
 	// beside each spawn, since it costs no process.
-	it("keeps every transcript row's real hook verdict at zero non-rule denies", () => {
+	it("keeps every transcript row's real hook verdict at zero non-rule denies", async () => {
 		const offenses: string[] = [];
 		const mismatches: string[] = [];
 		let actualDenies = 0;
 		const started = performance.now();
-		for (const { command } of TRANSCRIPT_CORPUS) {
-			const child = runHook(asRunner(command), corpusEnv);
+		// #3801: four children at a time; the verdicts below are read in corpus
+		// order, so the offense and mismatch lists keep their serial order.
+		const children = await runHooksConcurrently(
+			TRANSCRIPT_CORPUS.map(({ command }) => asRunner(command)),
+			corpusEnv,
+			4,
+		);
+		for (const [index, { command }] of TRANSCRIPT_CORPUS.entries()) {
+			const child = children[index];
 			const verdict = hookVerdict(asRunner(command), corpusEnv);
 			if (child.status !== verdict.status || child.stderr !== verdict.stderr)
 				mismatches.push(

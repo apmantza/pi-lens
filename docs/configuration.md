@@ -384,14 +384,14 @@ canonical key wins, and the keys you have not moved yet keep working.
 Only keys pi-lens actually recognizes get "move it to …" advice. A key in a
 legacy file that is not a pi-lens setting at all — a typo, or a leftover from
 another tool — cannot be migrated anywhere, so it gets the ordinary
-unrecognized-key notice (`PILENS_CFG_0001`) and is counted in ONE whole-file
+unrecognized-key notice (`PILENS_CFG_0004`) and is counted in ONE whole-file
 `PILENS_CFG_0003` notice for the file rather than being told to move.
 
 ## When a config is ignored
 
-A file that cannot be read or parsed is **ignored, never partially applied** —
-pi-lens runs on defaults for it and says so once, with the code
-`PILENS_CFG_0001`. A field whose value does not match its declared type is
+A file that is unreadable, unparsable, or not a JSON object is **ignored, never
+partially applied** — pi-lens runs on defaults for it and says so once, with the
+code `PILENS_CFG_0001`. A field whose value does not match its declared type is
 dropped on its own (`PILENS_CFG_0005`), and an unrecognized field is dropped
 with a message naming the key (`PILENS_CFG_0004`). If resolving a file fails
 internally the whole file is ignored and said so under its own code
@@ -408,7 +408,7 @@ them rather than by what they say — both are about values that were rejected:
   deprecation notices (`PILENS_CFG_0002`, `PILENS_CFG_0003`), which share this
   list;
 - what the **loader** reading the file produced on its own — unknown top-level
-  keys and settings it refused (`PILENS_CFG_0001`).
+  keys (`PILENS_CFG_0004`) and values it refused (`PILENS_CFG_0005`).
 
 Each list is bounded at 20 records: up to 19 notices plus, when the bound bit,
 a single `PILENS_CFG_0007` summary giving the count that was suppressed, so a
