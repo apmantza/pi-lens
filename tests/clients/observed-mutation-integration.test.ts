@@ -895,7 +895,7 @@ describe("#5160 provider replays are display-only", () => {
 		}
 	});
 
-	it("ignores a persisted `cursor` entry for a replay, and keys on the id rather than the name", async () => {
+	it("ignores a persisted cursor entry for a replay, and keys on the id rather than the name", async () => {
 		const env = setupTestEnvironment("pi-lens-5160-persisted-");
 		const previousDataDir = process.env.PILENS_DATA_DIR;
 		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
