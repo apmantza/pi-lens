@@ -318,7 +318,7 @@ export interface LSPState {
 	demonstratedCold: Set<string>;
 	/** Server ids that have published diagnostics in this LSP session. */
 	diagnosticsPublished: Set<string>;
-	/** Custom servers proved navigation-only after their first bounded contact. */
+	/** Custom servers silent through their first bounded contact; a publish clears the entry (#5128). */
 	diagnosticsUnsupported: Set<string>;
 }
 
@@ -1273,7 +1273,7 @@ export class LSPService {
 	/**
 	 * One first-contact diagnostic wait per custom server in this service
 	 * generation. Concurrent touches share the probe; a hook cutoff never arms
-	 * the navigation-only latch, so the next touch can try again.
+	 * the diagnostics-unsupported latch, so the next touch can try again.
 	 */
 	private readonly firstContactWaits = new Map<
 		string,
@@ -1491,6 +1491,12 @@ export class LSPService {
 				},
 				noteDiagnosticsPublished: (serverId) => {
 					this.state.diagnosticsPublished.add(serverId);
+					// #5128: a server that publishes is not diagnostics-unsupported, so a
+					// publish after the first-contact latch retires it. `published`
+					// implies `!unsupported`, which keeps every reader of either set
+					// (the wait skip, the eligibility gates, the capability snapshots)
+					// agreeing without a second check at each.
+					this.state.diagnosticsUnsupported.delete(serverId);
 				},
 			},
 			generationHandoff,
@@ -1507,6 +1513,26 @@ export class LSPService {
 			diagnosticsPublished: new Set(),
 			diagnosticsUnsupported: new Set(),
 		};
+	}
+
+	/**
+	 * Latch a custom push-only server diagnostics-unsupported after silence
+	 * through its first-contact wait. The one writer of the latch, so `published`
+	 * implies `!unsupported` holds at the add as well as at the publish (#5128):
+	 * a publish for another file that landed during this file's wait proves the
+	 * server pushes, so the silence is a timeout and no latch is set. Returns
+	 * whether the server is now latched.
+	 */
+	private latchDiagnosticsUnsupported(serverId: string): boolean {
+		if (this.state.diagnosticsPublished.has(serverId)) return false;
+		this.state.diagnosticsUnsupported.add(serverId);
+		recordDegradationOnce({
+			kind: "lsp-diagnostics-unsupported",
+			subject: serverId,
+			reason:
+				"custom server has no pull provider and no publish evidence after first contact wait",
+		});
+		return true;
 	}
 
 	private isAuxiliaryWaitDemoted(serverId: string, root: string): boolean {
@@ -5668,13 +5694,7 @@ export class LSPService {
 									return "errored" as const;
 								}
 								if (answeredForThisTouch(entry)) return "answered" as const;
-								this.state.diagnosticsUnsupported.add(entry.info.id);
-								recordDegradationOnce({
-									kind: "lsp-diagnostics-unsupported",
-									subject: entry.info.id,
-									reason:
-										"custom server has no pull provider and no publish evidence after first contact wait",
-								});
+								this.latchDiagnosticsUnsupported(entry.info.id);
 								return "silent" as const;
 							})
 							.catch(() => "errored" as const)
@@ -6064,14 +6084,8 @@ export class LSPService {
 						(candidate) => candidate.info.id === serverId,
 					);
 					if (!entry || answeredForThisTouch(entry)) continue;
-					this.state.diagnosticsUnsupported.add(serverId);
+					if (!this.latchDiagnosticsUnsupported(serverId)) continue;
 					diagnosticsUnsupportedServerIds.push(serverId);
-					recordDegradationOnce({
-						kind: "lsp-diagnostics-unsupported",
-						subject: serverId,
-						reason:
-							"custom server has no pull provider and no publish evidence after first contact wait",
-					});
 				}
 				for (const entry of spawned) {
 					if (
@@ -6984,7 +6998,7 @@ export class LSPService {
 					result.primaryUnavailableCause = verdict.primaryUnavailableCause;
 				}
 			} else if (collected !== undefined && primaryDiagnosticsUnsupported) {
-				// A navigation-only primary has no diagnostic confirmation to report,
+				// A latched (diagnostics-unsupported) primary has no diagnostic confirmation to report,
 				// but an uncovered auxiliary still needs to be named for delivery.
 				if (unconfirmedServerIds.length > 0) {
 					result.unconfirmedServerIds = [...unconfirmedServerIds];

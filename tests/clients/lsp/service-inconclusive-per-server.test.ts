@@ -126,6 +126,11 @@ function makeClient(
 		/** Model a write that lands LATE (past the caller's notify budget). */
 		notifyDelayMs?: number;
 		waitForDiagnosticsRejects?: boolean;
+		/**
+		 * #5128: publish only for content containing this marker, like
+		 * groovy-language-server, which sends nothing for a file that compiles.
+		 */
+		publishesOnlyForContent?: string;
 	},
 ) {
 	let version = 0;
@@ -209,7 +214,12 @@ function makeClient(
 					// leaves the previous publication (and its binding) in place —
 					// exactly the stale-findings hazard the merge has to drop.
 					const delivered = deliveredContent.get(filePath);
-					if (publishes && delivered !== undefined) {
+					if (
+						publishes &&
+						delivered !== undefined &&
+						(options.publishesOnlyForContent === undefined ||
+							delivered.includes(options.publishesOnlyForContent))
+					) {
 						version += 1;
 						stampsByPath.set(filePath, version);
 						cache.set(normalizeMapKey(filePath), {
@@ -1183,5 +1193,125 @@ describe("#1549 — resolveTouchVerdict (the merge rule, in isolation)", () => {
 				diagnosticsUnansweredServerIds: [],
 			}),
 		).toEqual({ inconclusive: true, inconclusiveReason: "diagnostics-wait" });
+	});
+});
+
+/**
+ * #5128 (found in #5123): a custom push-only server that had not published by
+ * the end of the first-contact wait was latched `diagnosticsUnsupported` for
+ * the session, and the publish that followed never cleared it. A server that
+ * only publishes for files with errors (groovy-language-server) therefore read
+ * as unsupported forever, and one report could list a finding beside
+ * `unsupported=1`. The publish arrives through the production seam, the
+ * `onDiagnosticsPublished` callback the service hands `createLSPClient`.
+ */
+describe("#5128 — a publish after the first-contact latch clears it", () => {
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		(await import("../../../clients/lsp/config.js"))._setServersForFileForTests(
+			getServersForFileWithConfig,
+		);
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		logLatency.mockReset();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	/** What the real client calls when a `publishDiagnostics` frame lands. */
+	function serverPublishes(serverId: string): void {
+		const spawnOptions = createLSPClient.mock.calls
+			.map(([options]) => options)
+			.find((options) => options?.serverId === serverId);
+		spawnOptions.onDiagnosticsPublished(serverId);
+	}
+
+	function latched(service: unknown, serverId: string): boolean {
+		return (
+			service as { state: { diagnosticsUnsupported: Set<string> } }
+		).state.diagnosticsUnsupported.has(serverId);
+	}
+
+	it("lets the next touch wait and read the server's real outcome", async () => {
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const first = await touchOnce(service);
+		expect(first?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(latched(service, "dexter")).toBe(true);
+
+		serverPublishes("dexter");
+
+		expect(latched(service, "dexter")).toBe(false);
+		const second = await touchOnce(service, "const y = 2;");
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(2);
+		expect(second?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		// Published once, silent for this file: unconfirmed, never unsupported.
+		expect(second?.inconclusive).toBe(true);
+	});
+
+	it("reads a dirty-only publisher's finding, and never a clean file as unsupported", async () => {
+		const primary = makeClient(100, [makeDiagnostic("syntax error")], {
+			serverId: "dexter",
+			customServer: true,
+			publishesOnlyForContent: "BROKEN",
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(100, [], { serverId: "opengrep" }),
+		});
+
+		const clean = await touchOnce(service, "ok");
+		expect(clean?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+
+		// The latch skips the wait for this write; the server's publish lands later.
+		const skipped = await touchOnce(service, "BROKEN");
+		expect(skipped?.diags).toEqual([]);
+		serverPublishes("dexter");
+
+		const dirty = await touchOnce(service, "BROKEN again");
+		expect(dirty?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(dirty?.diags.map((diag) => diag.message)).toEqual(["syntax error"]);
+
+		// A clean file the dirty-only server cannot confirm pays the ordinary push
+		// wait again; it is not skipped as unsupported.
+		const waitsBefore = primary.waitForDiagnostics.mock.calls.length;
+		const cleanAgain = await touchOnce(service, "ok again");
+		expect(cleanAgain?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(waitsBefore + 1);
+		expect(latched(service, "dexter")).toBe(false);
+	});
+
+	it("does not latch a server that published while its first-contact wait was in flight", async () => {
+		// Another file's publish lands before this file's silent wait lapses: the
+		// server does push, so this file's silence is a timeout, not a capability.
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const touch = service.touchFile(FILE, "const x = 1;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(50);
+		serverPublishes("dexter");
+		await vi.advanceTimersByTimeAsync(8000);
+		const result = await touch;
+
+		expect(latched(service, "dexter")).toBe(false);
+		expect(result?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(result?.inconclusive).toBe(true);
 	});
 });

@@ -690,7 +690,7 @@ const lspRunner: RunnerDefinition = {
 			// and a settled collect-later run would too. `inconclusive` is the
 			// touch's own positive evidence that a primary deadline lapsed or no
 			// primary was acquired — a touch that says neither keeps the pre-#5008
-			// reading (a navigation-only primary, an incumbent built before the
+			// reading (a diagnostics-unsupported primary, an incumbent built before the
 			// confirmation field), which is today's behaviour.
 			...(diagnosticsInconclusive && { inconclusive: true as const }),
 			...(unconfirmedServerIds.length > 0 && {

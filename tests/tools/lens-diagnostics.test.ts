@@ -736,10 +736,7 @@ describe("lens_diagnostics source=lsp compact render", () => {
 		expect(line).toContain("timed out");
 	});
 
-	it("preserves navigation-only and unavailable outcomes", () => {
-		expect(
-			render({ source: "lsp", filesChecked: 1, navigationOnlyFiles: 1 }),
-		).toContain("navigation-only");
+	it("preserves unavailable outcomes", () => {
 		expect(
 			render({
 				source: "lsp",

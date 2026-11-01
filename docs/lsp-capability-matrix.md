@@ -129,7 +129,7 @@ belonged to another live client of the same server id became `typescript`'s
 | **2 — push, publishes-versioned** | `publishDiagnostics([])` **with version** on every scan, incl. clean→clean | YES, currency-proven via version | ast-grep |
 | **2\* — push, publishes-unversioned** | re-publishes on a clean scan but **version-less** — the wait still early-returns (the client accepts a version-less publish as fresh: it can't be proven stale), but currency is only *temporally correlated*, not proven. Since #3484 the client fences a server measured to answer a `documentSymbol` fence before it publishes (`diagnosticsFence: "reply-first"`: yaml, intelephense): a pre-edit publish is dropped until the fence's reply. Every other 2\* server (docker publishes before answering; prisma, taplo, zls, dart, gleam, clojure unmarked) keeps this behaviour | YES at runtime, with a staleness-risk caveat (not a latency cost) | opengrep |
 | **3 — push, silent on clean** | server publishes nothing when nothing changed | **NO** — budget-wait floor (safe; a timeout is *not* a false clean). **This tier is #458's learned-deadline target set.** | typescript-language-server |
-| **Navigation-only — custom, no evidence** | custom `lsp.servers.*` entry has no pull provider and has not published in this session | **NO** — diagnostics are unsupported; skip the wait and report navigation-only | Dexter |
+| **Unconfirmed — custom, no evidence** | custom `lsp.servers.*` entry has no pull provider and has not published in this session | **NO** — diagnostics are unconfirmed (reported `inconclusive`, never `unsupported`); skip the wait until the server publishes | Dexter, groovy-language-server |
 
 Detection is **cached** at `initialize` (`detectWorkspaceDiagnosticsSupport` →
 `state.workspaceDiagnosticsSupport.mode`, upgraded on `client/registerCapability`),
@@ -139,8 +139,22 @@ Custom servers without a pull provider begin with one bounded first-contact
 probe. The probe uses the smaller of the server's push-wait budget and the live
 hook deadline. If the hook cuts it off first, the result remains unconfirmed and
 the next touch probes again. Only silence through the full push budget latches
-that server id as navigation-only for the service session. A publish upgrades it
-to the ordinary push-wait policy.
+that server id for the service session: the latch skips the wait and the file
+reads **unconfirmed** (`inconclusive` in a batch outcome, "not the same as 0
+diagnostics" in a single-file result), never `unsupported` and never clean. Any
+publish, however late and whatever file it is for, clears the latch (#5128), and
+the server returns to the ordinary push-wait policy. A server that publishes
+only for files with errors (groovy-language-server sends nothing for a file that
+compiles) therefore reads unconfirmed on clean files, and its findings arrive as
+soon as it publishes them. A publish that lands while the first-contact wait is
+still in flight prevents the latch.
+
+The first-contact budget on the per-edit path is the strategy's
+`aggregateWaitMs` (1500 ms). It is a cost, not a verdict: the latch is
+recoverable, so a server slower than the budget pays 1.5 s once and reads
+unconfirmed until its first publish, instead of being lost for the session.
+Raising it would charge up to the larger budget on the first edit of every
+custom server that never publishes for a clean file.
 
 ## Matrix (dev box + CI nightly; mode last refreshed 2026-06-17 from run 27713958681, clean-behavior probed in run 35914033696 — #460)
 
