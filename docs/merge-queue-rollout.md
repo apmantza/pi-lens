@@ -14,10 +14,10 @@ neither is needed. Sharded Unit tests (#3753) keep one queue run short.
 
 - `ci.yml`, `lint.yml`, and `hot-path-latency.yml` run on `merge_group`
   (`types: [checks_requested]`). Together they produce every required check:
-  `Lint & type-check`, `Unit tests`, `Install test (ubuntu-latest)`,
-  `Install test (windows-latest)`, `Install test (macos-latest)`, `knip`,
-  `oxfmt format check`, `TLA+ models`, `Unit tests Windows`,
-  `Hot-path latency (advisory)`.
+  `Lint & type-check`, `Unit tests`, `Unit tests Windows`,
+  `Hot-path latency (advisory)`, `Install test (ubuntu-latest)`,
+  `Install test (windows-latest)`,
+  `Install test (macos-latest)`, `knip`, `oxfmt format check`, `TLA+ models`.
 - PR-only jobs (PR title, PR body, changelog fast-fail, changed tests shuffled) are
   guarded by `github.event_name == 'pull_request'` and are skipped on
   `merge_group`; none of them is required.
