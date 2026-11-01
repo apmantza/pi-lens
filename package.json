@@ -133,7 +133,7 @@
 		"@ast-grep/cli": "0.51.0",
 		"@ast-grep/napi": "^0.51.0",
 		"js-yaml": "^5.2.2",
-		"minimatch": "^10.2.6",
+		"minimatch": "^11.0.1",
 		"pidusage": "^4.0.1",
 		"vscode-jsonrpc": "^9.0.0"
 	},
