@@ -1,5 +1,20 @@
 # HISTORY
 
+## 2026-11-01 — learned attribution keyed on a name alone (shape 88)
+
+#4139: `lsp_navigation` mixes a write (`rename`) with read-only operations, and
+tier-4 learning classified the whole tool as an edit after two observed
+renames, so a plain hover on an unread file was refused. The fix exempted the
+registry names. #5160: pi-cursor-sdk replays Cursor's native edits as
+display-only `cursor` calls (`cursor-replay-` ids) after the file is written;
+Cursor's write landing in a replay's window taught the net `cursor`, and every
+later replay was refused "Edit without read". The fix keys on the id prefix
+(`isProviderReplayCall`), which also skips the read guard for built-in `edit`
+replays. Two carve-outs now: a third triggers the fail-closed redesign.
+The replays' write credits were shape 65 instances too (#5162 r3): a replayed
+`edit` or `write` re-baselined an existing authorship over another writer's
+bytes, and a replayed `bash` credited a first one from its window's git diff.
+
 ## 2026-10-27 — factory-time read of a host value set later (shape 87)
 
 #4913: `pi --no-lens` still started language servers and ran the write-time

@@ -35,7 +35,7 @@ describe("module_report tool", () => {
 			const tool = createModuleReportTool(() => env.tmpDir);
 			const result = await tool.execute(
 				"1",
-				{ path: "sample.ts" },
+				{ path: "sample.ts", view: "full-json" },
 				undefined,
 				null,
 				{ cwd: env.tmpDir },
@@ -57,7 +57,7 @@ describe("module_report tool", () => {
 		}
 	});
 
-	it("passes through summary view", async () => {
+	it("resolves the summary-json preset with metrics off", async () => {
 		const env = setupTestEnvironment("pi-lens-modreport-tool-");
 		try {
 			createTempFile(
@@ -68,15 +68,15 @@ describe("module_report tool", () => {
 			const tool = createModuleReportTool(() => env.tmpDir);
 			const result = await tool.execute(
 				"summary",
-				{ path: "sample.ts", view: "summary" },
+				{ path: "sample.ts", view: "summary-json" },
 				undefined,
 				null,
 				{ cwd: env.tmpDir },
 			);
 			const report = JSON.parse(String(result.content[0]?.text));
-			expect(report.view).toBe("summary");
+			expect(report).not.toHaveProperty("view");
 			expect(report.provenance.symbols).toBe("syntax");
-			expect(result.details.view).toBe("summary");
+			expect(result.details.view).toBe("summary-json");
 		} finally {
 			env.cleanup();
 		}
@@ -93,7 +93,7 @@ describe("module_report tool", () => {
 			const tool = createModuleReportTool(() => env.tmpDir);
 			const result = await tool.execute(
 				"callbacks",
-				{ path: "callbacks.ts", focus: "reset ctx" },
+				{ path: "callbacks.ts", focus: "reset ctx", view: "full-json" },
 				undefined,
 				null,
 				{ cwd: env.tmpDir },
@@ -581,7 +581,7 @@ describe("module_report path resolution (#4577 M2)", () => {
 			const tool = createModuleReportTool(() => env.tmpDir);
 			const result = await tool.execute(
 				"1",
-				{ path: "~/proj/sample.ts" },
+				{ path: "~/proj/sample.ts", view: "full-json" },
 				undefined,
 				null,
 				{ cwd: env.tmpDir },

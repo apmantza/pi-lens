@@ -64,7 +64,8 @@ import {
 	readSymbol,
 	readTurnEndStatus,
 	recentLatency,
-	renderCompactModuleReport,
+	renderModuleReportPreset,
+	resolveModuleReportPreset,
 	renderCompactProjectReport,
 	renderCompactSymbolSearch,
 	renderLspBrokenStatusLines,
@@ -781,9 +782,8 @@ const ALL_TOOLS = [
 				},
 				view: {
 					type: "string",
-					enum: ["summary", "default", "compact"],
 					description:
-						"Payload tier. summary returns top-level entries/recommendedReads with heavy callback/usedBy/blast-radius payloads omitted. compact (cheapest) returns a line-oriented TEXT rendering of the full report instead of JSON.",
+						'Output preset: projection \u00d7 format. "summary-text" (default) = metric fields off (no usedBy/fanout/complexity fields), text. "summary-json" = same fields, JSON. "full-text" = every field, text. "full-json" = every field, JSON (byte-identical to the pre-#5137 default). Metrics render as a cx:/fan: suffix and flags as [flag]; every field appears in the text cell, `kind` prints raw so it can be reused as read_symbol\'s kind filter, and an unavailable module still renders its callbacks and recommended reads. A summary cell states the omission in its PROVENANCE footer. A maxRefsPerSymbol argument promotes the projection to full and keeps the format.',
 				},
 				blastRadius: {
 					type: "boolean",
@@ -1362,61 +1362,29 @@ async function callTool(
 			Number.isFinite(args.maxCallGraphEntries)
 				? Math.max(1, Math.floor(args.maxCallGraphEntries))
 				: undefined;
-		const view =
-			args.view === "summary" || args.view === "compact"
-				? args.view
-				: undefined;
+		const choice = resolveModuleReportPreset(args.view, maxRefsPerSymbol);
 		const focus = typeof args.focus === "string" ? args.focus : undefined;
 		const report = await moduleReport(file, cwd, {
 			maxRefsPerSymbol,
+			view: args.view,
+			focus,
 			blastRadius,
 			blastRadiusDepth,
 			callGraph,
 			maxCallGraphEntries,
-			view,
-			focus,
 		});
-		if (!report.available) {
-			return {
-				...toolText(
-					`No module report for ${path.relative(cwd, path.resolve(cwd, file))} — not a symbol-bearing file, or unreadable.`,
-					report,
-					true,
-				),
-				isError: true,
-			};
-		}
-		const graphStaleness = graphStalenessNote(
-			report.graphBuiltAt,
-			"Review graph",
-		);
-		const summary =
-			`${path.relative(cwd, report.path) || report.path} [${report.staleness}] — ` +
-			`${report.summary.symbols} symbol(s), ${report.summary.exports} exported, ` +
-			`${report.api.length} in public API` +
-			(graphStaleness ? `\n\n${graphStaleness}` : "");
-		if (view === "compact") {
-			const compactText = renderCompactModuleReport(report);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: graphStaleness
-							? `${compactText}\n\n${graphStaleness}`
-							: compactText,
-					},
-				],
-			};
-		}
-		// Compact (unindented) JSON — matches the pi tool's mirror (#512); an
-		// agent parses this payload, it doesn't read it formatted.
-		return toolText(
-			summary,
-			graphStaleness
-				? { ...report, graphStalenessNote: graphStaleness }
-				: report,
-			true,
-		);
+		// The graph-age advisory is a surface concern: pi's graph is per-edit warm,
+		// so a staleness line there would be noise, while an MCP caller sits on a
+		// cached graph. It wraps the text cell and never the JSON one (#5137 review).
+		const rendered = renderModuleReportPreset(report, choice);
+		const graphStaleness =
+			choice.format === "text"
+				? graphStalenessNote(report.graphBuiltAt, "Review graph")
+				: undefined;
+		const text = graphStaleness ? `${rendered}\n\n${graphStaleness}` : rendered;
+		if (!report.available)
+			return { content: [{ type: "text" as const, text }], isError: true };
+		return { content: [{ type: "text" as const, text }] };
 	}
 
 	if (name === "pilens_project_report") {
@@ -1885,8 +1853,8 @@ const WARN_ONLY_STALE_TOOLS = new Set([
  * Appends the warm-code-stale advisory to a tool result's text (and a
  * `warmCodeStale: true` marker line) after whatever the tool rendered. The
  * tool's own text stays byte-identical, so the advisory only ever reads last
- * (only `symbol_search` stopped fencing; `module_report` still passes a
- * structured payload, #5104).
+ * (only `symbol_search` stopped fencing; `module_report` passes a structured
+ * payload only under *-json presets, #5104).
  */
 function withStaleWarning<
 	T extends { content: { type: "text"; text: string }[] },

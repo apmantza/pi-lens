@@ -79,6 +79,7 @@ import { logLatency } from "./latency-logger.js";
 import {
 	classifyMutatingTool,
 	isBashDerivedReplay,
+	isProviderReplayCall,
 	readToolResultPathField,
 	PI_LENS_SYNTHETIC_MUTATION_FIELD,
 	type MutatingToolClassification,
@@ -762,6 +763,8 @@ type OwnWriteStamp = {
 	toolCallId?: string;
 	/** sha256 of the bytes this handler already read after the write (#2499). */
 	contentHash?: string;
+	/** `false` for a write no pre-write check guarded (a provider replay, #5160). */
+	advanceAuthorship?: false;
 };
 
 function ensureToolResultClients(
@@ -2587,7 +2590,13 @@ export async function handleToolResult(
 					unknownPairs: number;
 			  }
 			| { root: string; verdict: "unknown"; reason: string };
-		if (shouldRunOpaqueRecovery(event.toolName, workspaceRoot)) {
+		// #5162 r3: a provider replay took no baseline (its window holds another
+		// writer's change), so its recognized writes dispatch unauthored, as in
+		// a session with no scan root.
+		if (
+			shouldRunOpaqueRecovery(event.toolName, workspaceRoot) &&
+			!isProviderReplayCall(event)
+		) {
 			const started = Date.now();
 			const unknownRoots = new Set<string>();
 			let unknownReason: string | undefined;
@@ -4043,6 +4052,10 @@ export async function handleToolResult(
 			writtenContent: executedContent,
 		}),
 		...(toolCallId !== undefined && { toolCallId }),
+		// #5162 r3 (shape 65): a provider replay's tool_call skipped the
+		// pre-write check, so over an existing authorship its credit may only
+		// end it: the bytes may be another writer's.
+		...(isProviderReplayCall(event) && { advanceAuthorship: false }),
 	};
 
 	// Must happen before debounce admission: latestDeps intentionally retains only
