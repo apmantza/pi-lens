@@ -196,6 +196,8 @@ describe("createPiMock session-manager identity (#3855)", () => {
  */
 describe("createPiMock sessions and the shared teardown (#5146)", () => {
 	it("ends the open sessions newest first, skips one ended by hand, and ends none twice", async () => {
+		// Sessions the cases above left open are not this case's to count.
+		await endMockSessions();
 		const pi = createPiMock();
 		const ended: string[] = [];
 		pi.on("session_shutdown", (_event, ctx) => {
@@ -220,8 +222,9 @@ describe("createPiMock sessions and the shared teardown (#5146)", () => {
 		);
 
 		await endMockSessions();
-		await endMockSessions();
+		expect(ended).toEqual(["b", "c", "a"]);
 
+		await endMockSessions();
 		expect(ended).toEqual(["b", "c", "a"]);
 	});
 });
