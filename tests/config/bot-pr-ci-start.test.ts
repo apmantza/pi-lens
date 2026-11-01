@@ -357,6 +357,9 @@ describe("bot-opened PRs start the required CI (#5062)", () => {
 			"ci.yml",
 			"hot-path-latency.yml",
 			"lint.yml",
+			// #5002: not a required-check workflow, but it ran on the merge queue
+			// and on a bot branch's dispatched ci.yml run before it moved out.
+			"strict-install.yml",
 		]);
 	});
 

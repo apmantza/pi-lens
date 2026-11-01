@@ -65,12 +65,6 @@ export const ADVISORY_CHECKS = new Set([
 	// DIFFERENT set of names this list does NOT cover; they keep gating because
 	// an alert on such a head is a real result.
 	"CodeQL",
-	// #2706 tooling jobs have explicit advisory entries as well as the suffix.
-	"jscpd (advisory)",
-	"yamllint (advisory)",
-	"typos (advisory)",
-	"taplo (advisory)",
-	"complexity (advisory)",
 	"Changed tests shuffled (advisory)",
 	// Stale verdict labels are bookkeeping only. Their cleanup asserts no
 	// property of the change, so API or token failures must never block a merge

@@ -221,7 +221,7 @@ export function runPreflight({
 					"--lint-local",
 					"COMMIT_MSG.txt",
 				],
-				job: "PR title",
+				job: "PR metadata",
 			},
 			{
 				name: "check-close-keywords",
@@ -232,7 +232,7 @@ export function runPreflight({
 					"COMMIT_MSG.txt",
 					"PR_BODY.md",
 				],
-				job: "Close-keyword syntax",
+				job: "PR metadata",
 			},
 			{
 				name: "check-pr-body",

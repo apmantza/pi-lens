@@ -531,8 +531,11 @@ full suite) skips only those heavy advisory jobs: the Unit shards and every
 other test job always run, because a docs edit can red tests outside tests/config
 (`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
 is the three `Install test` legs: outside `INSTALL_PATHS` in that script
-they report success without installing, and `Strict install` and the macOS APFS
-step run on non-pull_request events only. `TLA+ models`
+they report success without installing, and `Strict install` (its own
+`strict-install.yml`, no pull_request trigger) and the macOS APFS step run on
+non-pull_request events only. The seven advisory lint tools are steps of one
+`Lint (advisory)` job, and the PR title and close-keyword checks are steps of
+one gating `PR metadata` job. `TLA+ models`
 model-checks only when `formal/` (or its checker or ci.yml) changed. A REQUIRED
 job never skips at job level: ci-verdict and the merge train demand a literal
 `success`, so `TLA+ models` starts and skips its steps.

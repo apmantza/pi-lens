@@ -180,42 +180,6 @@ jobs:
       - name: Lint markdown
         run: ./node_modules/.bin/markdownlint-cli2
 
-  vale:
-    name: Vale prose lint (advisory)
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 13s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    # Advisory to start (see PR body / #1844): not wired into required-checks
-    # branch protection, so it never blocks a merge on its own. No
-    # continue-on-error, for the same reason osv-scan.yml gives -- a real
-    # finding should show as a red advisory check a reviewer can see, not a
-    # silently-green one.
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      # Pinned release + checksum verification, matching the actionlint job
-      # above. The style package itself (.vale/styles/Google/) is vendored
-      # in the repo, not fetched via `vale sync` -- this step is the only
-      # network access the job makes.
-      - name: Download and verify vale v3.9.6 (Linux_64-bit)
-        run: |
-          set -eu
-          curl -sLO --proto '=https' --tlsv1.2 https://github.com/errata-ai/vale/releases/download/v3.9.6/vale_3.9.6_Linux_64-bit.tar.gz
-          echo "dd8519d9bdf381a3b1a30f1df7f6e589b69ec1e38a495e4bd9af8e450703dde0  vale_3.9.6_Linux_64-bit.tar.gz" | sha256sum -c -
-          tar -xzf vale_3.9.6_Linux_64-bit.tar.gz vale
-
-      # Explicit path list, not a bare invocation: .vale.ini's BasedOnStyles
-      # section already scopes which paths get styles applied, but vale
-      # still needs paths on the command line to know what to walk.
-      - name: Lint prose
-        run: ./vale docs AGENTS.md CLAUDE.md README.md CONTRIBUTING.md .claude/agents .changelog
-
   oxlint-advisory:
     name: oxlint (advisory)
     runs-on: ubuntu-latest
@@ -301,18 +265,18 @@ jobs:
           fi
           exit 0
 
-  # No floor (#4518): jscpd's exit code is the whole verdict (threshold 1) and
-  # its input is four fixed in-repo paths. Probed: a missing path exits 1, but a
-  # path whose files the `.jscpd.json` format and ignore filters all drop prints
-  # "analyzed no files" and exits 0. The paths hold 500+ tracked sources today,
-  # so only a config edit can empty the scan; the row is the reader.
-  jscpd:
-    name: jscpd (advisory)
+  # No floor (#4518): every tool step below states the reader that makes an
+  # empty result visible, and the complexity step carries its own floor.
+  # Advisory to start (see PR body / #1844): not wired into required-checks
+  # branch protection, so it never blocks a merge on its own.
+  lint-advisory:
+    name: Lint (advisory)
     continue-on-error: true
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 23s; timeout = floor of
-    # 10 min.
+    # Measured max over last 10 successful master runs of the seven former jobs:
+    # 13 + 23 + 34 + 33 + 20 + 11 + 30 = 164s, one install shared; timeout =
+    # floor of 10 min.
     timeout-minutes: 10
     permissions:
       contents: read
@@ -320,41 +284,113 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund --ignore-scripts
-      - name: Detect duplicated code
-        run: node_modules/.bin/jscpd --config .jscpd.json clients scripts tools mcp index.ts
 
-  complexity:
-    name: complexity (advisory)
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 34s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # crate-ci/typos walks the checkout and exits non-zero on any finding or
+      # error; the population is the repo itself and cannot be empty. The row is
+      # the reader.
+      - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
+        if: ${{ !cancelled() }}
         with:
-          persist-credentials: false
+          args: --force-exclude
+
+      # Pinned release + checksum verification, matching the actionlint job
+      # above. The style package itself (.vale/styles/Google/) is vendored
+      # in the repo, not fetched via `vale sync` -- this step is the only
+      # network access vale makes.
+      - name: Download and verify vale v3.9.6 (Linux_64-bit)
+        if: ${{ !cancelled() }}
+        run: |
+          set -eu
+          curl -sLO --proto '=https' --tlsv1.2 https://github.com/errata-ai/vale/releases/download/v3.9.6/vale_3.9.6_Linux_64-bit.tar.gz
+          echo "dd8519d9bdf381a3b1a30f1df7f6e589b69ec1e38a495e4bd9af8e450703dde0  vale_3.9.6_Linux_64-bit.tar.gz" | sha256sum -c -
+          tar -xzf vale_3.9.6_Linux_64-bit.tar.gz vale
+
+      # Explicit path list, not a bare invocation: .vale.ini's BasedOnStyles
+      # section already scopes which paths get styles applied, but vale
+      # still needs paths on the command line to know what to walk.
+      - name: Lint prose
+        if: ${{ !cancelled() }}
+        run: ./vale docs AGENTS.md CLAUDE.md README.md CONTRIBUTING.md .claude/agents .changelog
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        if: ${{ !cancelled() }}
+        with:
+          # #4666: the floating "3.x" channel reached an interpreter with no
+          # pyyaml wheel under --only-binary=:all:, so this advisory row's lint
+          # stopped silently while the workflow still reported success.
+          # #4683: scripts/check-action-pins.mjs parses this file and refuses any
+          # setup-python step whose python-version is not a concrete release, so
+          # the pin cannot drift back to a channel.
+          python-version: "3.12"
+      - name: Install yamllint
+        if: ${{ !cancelled() }}
+        run: "python -m pip install --disable-pip-version-check --only-binary=:all: yamllint==1.37.1"
+      # The file list is `git ls-files` of the checkout, and yamllint with an
+      # empty list exits 2 (usage), so an empty population reds the row instead
+      # of reading clean. The row is the reader.
+      - name: Lint YAML
+        if: ${{ !cancelled() }}
+        run: |
+          mapfile -t yaml_files < <(git ls-files '*.yml' '*.yaml')
+          yamllint "${yaml_files[@]}"
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !cancelled() }}
         with:
           node-version: "22"
           cache: npm
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        if: ${{ !cancelled() }}
+        run: npm ci --no-audit --no-fund --ignore-scripts
+
+      # `npm run taplo` feeds `git ls-files '*.toml'` (39 files today) to taplo.
+      # Probed: `taplo check` on a pattern or file that matches nothing logs
+      # "found files total=0" and exits 0, so only a pathspec edit can empty the
+      # check; it exits non-zero on a parse error or a format drift. The row is
+      # the reader.
+      - name: Check TOML
+        if: ${{ !cancelled() }}
+        run: npm run taplo
+
+      # jscpd's exit code is the whole verdict (threshold 1) and its input is
+      # four fixed in-repo paths. Probed: a missing path exits 1, but a path
+      # whose files the `.jscpd.json` format and ignore filters all drop prints
+      # "analyzed no files" and exits 0. The paths hold 500+ tracked sources
+      # today, so only a config edit can empty the scan; the row is the reader.
+      - name: Detect duplicated code
+        if: ${{ !cancelled() }}
+        run: node_modules/.bin/jscpd --config .jscpd.json clients scripts tools mcp index.ts
+
+      # #5112: not a pull_request step. It reported 0 real catches in 30 days
+      # (2,106 runner minutes, #3995 slice A) and only republishes counts that
+      # strictness-ratchet.test.ts already pins on every pull request. Master
+      # pushes and dispatches keep it. This step only publishes the two tsc
+      # counts. They are pinned by the gating
+      # tests/config/strictness-ratchet.test.ts, which runs the same two
+      # configurations and reds on exit 0, zero diagnostics or any drift, so a
+      # tsc that evaluated nothing reds the Unit lane, not this row. The report
+      # step still carries `set -o pipefail`: the default shell has none, and a
+      # script that crashed behind `| tee` would otherwise read green.
+      - name: Generate strictness report
+        if: ${{ !cancelled() && github.event_name != 'pull_request' }}
+        run: |
+          set -o pipefail
+          node scripts/strictness-report.mjs | tee strictness-report.txt
+      - name: Publish strictness report
+        if: ${{ always() && github.event_name != 'pull_request' }}
+        run: cat strictness-report.txt >> "$GITHUB_STEP_SUMMARY"
+
+      # Last: the build writes compiled twins into the checkout.
       - name: Download core tree-sitter grammars
+        if: ${{ !cancelled() }}
         run: node scripts/download-grammars.js --core --dest grammars
       - run: npm run build
+        if: ${{ !cancelled() }}
       # The script fails below its analysed-files floor (#4518). `set -o
       # pipefail` is load-bearing: the default shell has none, so `| tee` would
       # take tee's exit code and a script that crashed would read green.
       - name: Generate complexity report
+        if: ${{ !cancelled() }}
         run: |
           set -o pipefail
           node scripts/complexity-report.mjs | tee complexity-report.txt
@@ -367,123 +403,3 @@ jobs:
           name: complexity-report
           path: reports/complexity/complexity.md
           if-no-files-found: ignore
-
-  # No floor (#4518): this job only publishes the two tsc counts. They are
-  # pinned by the gating tests/config/strictness-ratchet.test.ts, which runs the
-  # same two configurations and reds on exit 0, zero diagnostics or any drift,
-  # so a tsc that evaluated nothing reds the Unit lane, not this row. The report
-  # step still carries `set -o pipefail`: the default shell has none, and a
-  # script that crashed behind `| tee` would otherwise read green.
-  strictness:
-    name: strictness (advisory)
-    # #5112: not a pull_request job. It reported 0 real catches in 30 days (2,106
-    # runner minutes, #3995 slice A) and only republishes counts that
-    # strictness-ratchet.test.ts already pins on every pull request. Master
-    # pushes and dispatches keep it.
-    if: github.event_name != 'pull_request'
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 33s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-          cache: npm
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Generate strictness report
-        run: |
-          set -o pipefail
-          node scripts/strictness-report.mjs | tee strictness-report.txt
-      - name: Publish strictness report
-        if: always()
-        run: cat strictness-report.txt >> "$GITHUB_STEP_SUMMARY"
-
-  # No floor (#4518): the file list is `git ls-files` of a checkout of this
-  # repo, and yamllint with an empty list exits 2 (usage), so an empty
-  # population reds the row instead of reading clean. The row is the reader.
-  yamllint:
-    name: yamllint (advisory)
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 20s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          # #4666: the floating "3.x" channel reached an interpreter with no
-          # pyyaml wheel under --only-binary=:all:, so this advisory row's lint
-          # stopped silently while the workflow still reported success.
-          # #4683: scripts/check-action-pins.mjs parses this file and refuses any
-          # setup-python step whose python-version is not a concrete release, so
-          # the pin cannot drift back to a channel.
-          python-version: "3.12"
-      - name: Install yamllint
-        run: "python -m pip install --disable-pip-version-check --only-binary=:all: yamllint==1.37.1"
-      - name: Lint YAML
-        run: |
-          mapfile -t yaml_files < <(git ls-files '*.yml' '*.yaml')
-          yamllint "${yaml_files[@]}"
-
-  # No floor (#4518): crate-ci/typos walks the checkout and exits non-zero on
-  # any finding or error; the population is the repo itself and cannot be
-  # empty. The row is the reader.
-  typos:
-    name: typos (advisory)
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 11s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
-        with:
-          args: --force-exclude
-
-  # No floor (#4518): `npm run taplo` feeds `git ls-files '*.toml'` (39 files
-  # today) to taplo. Probed: `taplo check` on a pattern or file that matches
-  # nothing logs "found files total=0" and exits 0, so only a pathspec edit can
-  # empty the check; it exits non-zero on a parse error or a format drift. The
-  # row is the reader.
-  taplo:
-    name: taplo (advisory)
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 30s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund --ignore-scripts
-      - name: Check TOML
-        run: npm run taplo

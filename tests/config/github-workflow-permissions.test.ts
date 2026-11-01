@@ -69,18 +69,25 @@ const EXPECTED_PERMISSIONS: Record<
 		},
 	},
 	// #4288 R7: `pr-body-lint` reads the closed issue's labels, so it needs
-	// issues:read; the title job reads only the PR and the close-keyword job only
-	// the body. Pin every job so a later edit cannot silently drop the read.
+	// issues:read; `pr-metadata` (the title and close-keyword steps, #5002)
+	// reads only the PR and its body. Pin every job so a later edit cannot
+	// silently drop the read.
 	".github/workflows/pr-metadata.yml": {
 		workflow: {},
 		jobs: {
-			"pr-title-lint": { contents: "read", "pull-requests": "read" },
+			"pr-metadata": { contents: "read", "pull-requests": "read" },
 			"pr-body-lint": {
 				contents: "read",
 				"pull-requests": "read",
 				issues: "read",
 			},
-			"close-keyword-lint": { "pull-requests": "read" },
+		},
+	},
+	// #5002: moved out of ci.yml; it only checks out and installs.
+	".github/workflows/strict-install.yml": {
+		workflow: {},
+		jobs: {
+			"strict-install-cold-cache": { contents: "read" },
 		},
 	},
 };
