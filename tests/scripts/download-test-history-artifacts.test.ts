@@ -180,7 +180,13 @@ describe("artifact listing pages (#4030)", () => {
 	});
 });
 
-type Mode = "transient" | "persistent" | "large" | "truncated" | "notFound";
+type Mode =
+	| "transient"
+	| "persistent"
+	| "large"
+	| "truncated"
+	| "notFound"
+	| "otherJson";
 const LARGE_ZIP_BYTES = 1.5 * 1024 * 1024;
 
 function fakeGh(mode: Mode) {
@@ -208,15 +214,19 @@ function fakeGh(mode: Mode) {
 		large: `head -c ${LARGE_ZIP_BYTES} /dev/zero`,
 		truncated: "printf 'zip-bytes'",
 		notFound: "printf 'zip-bytes'",
+		otherJson: "printf 'zip-bytes'",
 	}[mode];
 	// Listing faults: the `gh api --jq` listing on a cut-off body (#5154, the
-	// reported failure) and a non-retryable 404 (the control).
+	// reported failure), a non-retryable 404 (the control), and another JSON
+	// error that must stay fatal (the #5154 review F1 control).
 	const listFault = {
 		transient: "",
 		persistent: "",
 		large: "",
 		truncated: `if [ "$listCount" -lt 2 ]; then printf '%s\\n' 'unexpected end of JSON input' >&2; exit 1; fi`,
 		notFound: "printf '%s\\n' 'gh: Not Found (HTTP 404)' >&2; exit 1",
+		otherJson:
+			"printf '%s\\n' 'json: cannot unmarshal string into Go value of type int' >&2; exit 1",
 	}[mode];
 	fs.writeFileSync(
 		path.join(bin, "gh"),
@@ -301,6 +311,16 @@ describe("download-test-history-artifacts process boundary", () => {
 	it("fails at once on a non-retryable 404 in the listing", () => {
 		const gh = fakeGh("notFound");
 		expect(() => gh.run()).toThrow(/HTTP 404/);
+		expect(gh.listingCalls()).toBe(1);
+	});
+
+	// Control (#5154 review F1): only the cut-off literal retries. Any other JSON
+	// error stays fatal on its first call. Recurrence: a predicate broadened to
+	// every JSON error (`/JSON/i`) would retry this non-transient gh failure
+	// four times.
+	it("fails at once on another JSON error in the listing (only the cut-off body retries)", () => {
+		const gh = fakeGh("otherJson");
+		expect(() => gh.run()).toThrow(/cannot unmarshal/);
 		expect(gh.listingCalls()).toBe(1);
 	});
 
