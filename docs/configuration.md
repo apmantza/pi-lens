@@ -10,12 +10,17 @@ There are **two** pi-lens config files:
 Both files have the same shape, with one exception noted below the example:
 everything LSP-related lives under an `lsp` namespace inside them.
 
-Executable LSP fields from a project config are admitted only when pi has
-marked the project trusted. This includes custom `command` values, command
-overrides, `env`, and `initializationOptions`; an untrusted or older host is
-fail-closed and emits one bounded notice telling you to mark the project
-trusted in pi or upgrade pi. Global config remains trusted, and a project can
-always disable a server. pi-lens does not maintain a second trust setting.
+LSP fields from a project config are admitted without trust only when they
+are on a short list: for `lsp.servers.<id>` that is `name` and `extensions`.
+Every other field, including custom `command` values, `args`, `rootMarkers`,
+`covers`, `env`, `initializationOptions`, command overrides under
+`serverOverrides`, and any field pi-lens does not recognise, needs pi to have
+marked the project trusted. An untrusted or older host is fail-closed and
+emits one bounded notice telling you to mark the project trusted in pi or
+upgrade pi. A refused project value is dropped, and the value a global config
+set for the same field is not restored. Global config remains trusted, and a
+project can always disable a server. pi-lens does not maintain a second trust
+setting.
 
 The editor-facing JSON Schema is published at
 [`docs/schema/pi-lens-config-v1.json`](schema/pi-lens-config-v1.json). LSP

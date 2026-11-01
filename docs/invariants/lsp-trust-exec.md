@@ -32,8 +32,9 @@
 - Under pi, project trust is consumed through `isProjectTrusted`; pi-lens never
   registers the host's trust-answer handler. `compileLspRegistry` is the one admission
   seam for LSP executable fields: global config and built-ins remain allowed,
-  while project `command`, command overrides, `env`, and
-  `initializationOptions` require pi's `trusted` answer. Missing trust APIs are
+  while a project field requires pi's `trusted` answer unless
+  `REPO_TIER_SERVER_FIELDS` (`name`, `extensions`) admits it; a field no
+  table names is refused (`REPO_TIER_OVERRIDE_FIELDS` admits none, #5147). Missing trust APIs are
   fail-closed for those project fields with one bounded notice; installs keep
   their existing compatibility policy. `tests/clients/lsp/lsp-registry-trust.test.ts`
   and the LSP config/service suites pin the boundary.
