@@ -212,6 +212,59 @@ describe("#5131 — the client's own watched-files notice cannot clear a real er
 		}
 	}, 30_000);
 
+	it("accepts a clear the server publishes before the notice was sent", async () => {
+		// Recurrence: an entry that held every empty after a non-empty one would
+		// swallow a server's own early clear, which the notice did not cause.
+		const service = startService(-1, {
+			FAKE_LSP_PUBLISH_SEQUENCE: "dirty,empty",
+			FAKE_LSP_PUBLISH_SEQUENCE_GAP_MS: "10",
+		});
+		try {
+			const result = await touch(service, "a.groovy", BROKEN);
+			expect(result?.diags).toEqual([]);
+			expect(
+				getDegradationSummary().some(
+					(group) => group.kind === "lsp-watched-echo-held",
+				),
+			).toBe(false);
+		} finally {
+			await service.shutdown();
+		}
+	}, 30_000);
+
+	it("accepts the clear for a later send that kept the earlier diagnostics", async () => {
+		// Recurrence: a preserve-diagnostics resync (formatting) does not clear the
+		// path's bookkeeping, so only the sent version tells the new bytes' clear
+		// from the notice's echo.
+		const proc = await spawnFakeLspServer({
+			cwd: tmp,
+			env: {
+				...process.env,
+				FAKE_LSP_TRACE_FILE: trace,
+				FAKE_LSP_NO_DIAGNOSTIC_PROVIDER: "1",
+				FAKE_LSP_RECOMPILE_CLEARS_MS: "100",
+				FAKE_LSP_RECOMPILE_NO_WATCHED_CLEAR: "1",
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "groovy-lang-server",
+			process: proc,
+			root: tmp,
+		});
+		try {
+			const file = path.join(tmp, "a.groovy");
+			fs.writeFileSync(file, BROKEN);
+			await client.notify.open(file, BROKEN, "groovy");
+			await vi.waitFor(() =>
+				expect(client.getDiagnostics(file)).toHaveLength(1),
+			);
+			await client.notify.open(file, FIXED, "groovy", true);
+			await vi.waitFor(() => expect(client.getDiagnostics(file)).toEqual([]));
+		} finally {
+			await client.shutdown();
+		}
+	}, 30_000);
+
 	it("forgets an unanswered notice when the document is closed and reopened silently", async () => {
 		// Recurrence: the version counter restarts at 0 on a first open, so an
 		// entry left by the previous lifetime would match the new one and swallow
