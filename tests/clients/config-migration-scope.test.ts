@@ -132,7 +132,7 @@ describe("F1: a legacy root LSP key in the GLOBAL config is a migration, not a t
 		write(globalFile, {
 			servers: {},
 			serverOverrides: {},
-			disabledServers: ["ts"],
+			disabledServers: ["typescript"],
 			warmFiles: ["a.ts"],
 		});
 
@@ -145,7 +145,7 @@ describe("F1: a legacy root LSP key in the GLOBAL config is a migration, not a t
 		// calling them typos is the contradiction under test.
 		const { loadLSPConfig } = await import("../../clients/lsp/config.js");
 		const lsp = await loadLSPConfig(path.join(home, "proj"), home);
-		expect(lsp.disabledServers).toEqual(["ts"]);
+		expect(lsp.disabledServers).toEqual(["typescript"]);
 		expect(lsp.warmFiles).toEqual(["a.ts"]);
 
 		const typos = notices.filter((message) => message.includes("unknown key"));

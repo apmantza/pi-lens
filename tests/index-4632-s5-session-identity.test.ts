@@ -111,7 +111,7 @@ function configuredRoot(...segments: string[]): string {
 	fs.mkdirSync(cwd, { recursive: true });
 	fs.writeFileSync(
 		path.join(cwd, ".pi-lens.json"),
-		JSON.stringify({ lsp: { disabledServers: ["gopls"] } }),
+		JSON.stringify({ lsp: { disabledServers: ["go"] } }),
 	);
 	return cwd;
 }

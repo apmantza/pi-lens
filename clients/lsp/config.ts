@@ -61,6 +61,8 @@ import * as os from "node:os";
 import path from "node:path";
 import { LSP_NAMESPACE_KEY } from "../config-locations.js";
 import {
+	boundedKeyLabel,
+	finalizeRecords,
 	type MigrationRecord,
 	migrationSubject,
 } from "../config-core/records.js";
@@ -116,6 +118,7 @@ import {
 	registeredServers,
 } from "./file-server-match.js";
 import {
+	getServerById,
 	LSP_SERVERS,
 	resetLSPCaseSensitivityState,
 	resolveLspServerCwd,
@@ -182,6 +185,11 @@ export interface LSPConfig {
 	 * built-in defaults so you only need to specify the keys you want to change.
 	 */
 	serverOverrides?: Record<string, ServerInitOverride>;
+	/**
+	 * Denied server ids. An id that names neither a built-in server nor a
+	 * server declared under `lsp.servers` is dropped at load, with a
+	 * `PILENS_CFG_0005` notice (#5141).
+	 */
 	disabledServers?: string[];
 	/** Files to open at session start to seed lazy LSP indexing (e.g., clangd). */
 	warmFiles?: string[];
@@ -488,15 +496,15 @@ export async function loadLSPConfig(
 	// one notice. Filtering here (as round 2 did) silently dropped a pi-lens-
 	// owned record from a document only this multi-file resolution discovered.
 	//
-	// The projection VALIDATES the resolved value's covers claims (#3968), and
-	// the funnel owns the NEW records because it owns the resolution's
+	// The projection VALIDATES the resolved value's covers claims (#3968) and its
+	// deny-list ids (#5141), and the funnel owns the NEW records because it owns the resolution's
 	// provenance (`coversClaimRecords`'s file/tier lookups) and the reporting
 	// gate (`report: false` exists so a QUERY cannot warn or consume the
 	// warn-once latch; the ledger row below is durable telemetry and follows
 	// `recordConfigResolved`'s "report: false is not a gate" rule). The
 	// resolution's records and the covers records report here, once, together.
-	const coversProblems = newCoversClaimProblems();
-	const config = lspConfigOf(resolution.value, coversProblems);
+	const configProblems = newLspConfigProblems();
+	const config = lspConfigOf(resolution.value, configProblems);
 	// Preserve the source map for the registry compiler without changing the
 	// enumerable loader projection consumed by existing callers.
 	Object.defineProperty(config, "__provenance", {
@@ -506,10 +514,11 @@ export async function loadLSPConfig(
 	if (reporting) {
 		reportPiLensConfigRecords([
 			...resolution.records,
-			...coversClaimRecords(resolution, coversProblems),
+			...coversClaimRecords(resolution, configProblems),
+			...disabledServerRecords(resolution, configProblems),
 		]);
 	}
-	recordCoversUnvalidated(resolution, coversProblems);
+	recordCoversUnvalidated(resolution, configProblems);
 	// #2526: the session's one positive record that config resolution HAPPENED,
 	// written where the resolution actually exists. `report: false` is not a
 	// gate here — the option suppresses USER-FACING notices, and a record in
@@ -576,13 +585,19 @@ export interface CoversClaimUnvalidated {
  * and the bounded ledger row (`recordCoversUnvalidated`). A caller that
  * passes no collector gets the same validated projection silently.
  */
-export interface CoversClaimProblems {
+export interface LspConfigProblems {
 	readonly refusals: CoversClaimRefusal[];
 	readonly unvalidated: CoversClaimUnvalidated[];
+	/**
+	 * `lsp.disabledServers` members that name no server, in resolved order
+	 * (#5141). `index` is the member's position in the resolved array, where
+	 * its provenance pointer lives.
+	 */
+	readonly unknownDisabled: { readonly id: string; readonly index: number }[];
 }
 
-function newCoversClaimProblems(): CoversClaimProblems {
-	return { refusals: [], unvalidated: [] };
+export function newLspConfigProblems(): LspConfigProblems {
+	return { refusals: [], unvalidated: [], unknownDisabled: [] };
 }
 
 /**
@@ -630,7 +645,7 @@ function coversClaimSource(
  */
 function coversClaimRecords(
 	resolution: PiLensConfigResolution,
-	problems: CoversClaimProblems,
+	problems: LspConfigProblems,
 ): MigrationRecord[] {
 	return problems.refusals.map((refusal) => {
 		const pointer = coversPointer(refusal.serverId);
@@ -651,6 +666,36 @@ function coversClaimRecords(
 	});
 }
 
+/**
+ * THE `PILENS_CFG_0005` records for `lsp.disabledServers` members that name no
+ * server (#5141), the deny-list sibling of `coversClaimRecords`. The reason says
+ * the entry was dropped, and it quotes the entry the way the dispatch sibling
+ * does (`disabledRunnersOf`), so the user can match it to what they typed.
+ * Finalized like that sibling, so a pasted list ends in one suppression count.
+ * `effectiveConfig` counts the same records through this function without
+ * reporting them (#5141).
+ */
+export function disabledServerRecords(
+	resolution: PiLensConfigResolution,
+	problems: LspConfigProblems,
+): readonly MigrationRecord[] {
+	const records: MigrationRecord[] = problems.unknownDisabled.map(
+		({ id, index }) => {
+			const pointer = `/${LSP_NAMESPACE_KEY}/disabledServers/${index}`;
+			const { file, tier } = coversClaimSource(resolution, pointer);
+			return {
+				code: "PILENS_CFG_0005",
+				file,
+				key: pointer,
+				subject: migrationSubject(file, pointer),
+				reason: `lsp.disabledServers entry "${boundedKeyLabel(id)}" is not a recognized LSP server id; dropped`,
+				...(tier ? { tier } : {}),
+			};
+		},
+	);
+	return finalizeRecords(records, records.at(-1));
+}
+
 /** The refusal tail: what remains of the claim after the drop. */
 function keptTail(keptCount: number): string {
 	return keptCount > 0
@@ -669,7 +714,7 @@ function keptTail(keptCount: number): string {
  */
 function recordCoversUnvalidated(
 	resolution: PiLensConfigResolution,
-	problems: CoversClaimProblems,
+	problems: LspConfigProblems,
 ): void {
 	for (const unvalidated of problems.unvalidated) {
 		const pointer = coversPointer(unvalidated.serverId);
@@ -702,7 +747,7 @@ function recordCoversUnvalidated(
  */
 function coversValidatedServers(
 	servers: Record<string, unknown>,
-	problems: CoversClaimProblems | undefined = undefined,
+	problems: LspConfigProblems | undefined = undefined,
 ): Record<string, CustomServerConfig> {
 	const out: Record<string, CustomServerConfig> = {};
 	for (const [id, raw] of Object.entries(servers)) {
@@ -753,9 +798,44 @@ export function customServerSpecsOf(
 	return servers ? coversValidatedServers(servers) : {};
 }
 
+/**
+ * The deny list a loaded config carries: each member that names a built-in
+ * server or a server declared under `lsp.servers` (#5141). A member that names
+ * neither is dropped, because it matches no server and would otherwise read as
+ * a server the operator turned off, and it goes into the collector for the
+ * funnel to report. The resolver's deny union already folds duplicate members
+ * (`resolveArrayDeny`), so each unknown id reaches here once.
+ *
+ * A non-string member is kept as it always was. The schema does not type the
+ * items of `lsp.disabledServers` (`LSP_KEY_TYPES` is `array`), and such a member
+ * matches no server either way.
+ */
+function knownDisabledServerIds(
+	members: readonly unknown[],
+	declared: Record<string, unknown> | undefined,
+	problems: LspConfigProblems | undefined,
+): unknown[] {
+	const kept: unknown[] = [];
+	members.forEach((member, index) => {
+		if (typeof member !== "string") {
+			kept.push(member);
+			return;
+		}
+		if (
+			getServerById(member) !== undefined ||
+			(declared !== undefined && Object.hasOwn(declared, member))
+		) {
+			kept.push(member);
+			return;
+		}
+		problems?.unknownDisabled.push({ id: member, index });
+	});
+	return kept;
+}
+
 export function lspConfigOf(
 	value: Record<string, unknown>,
-	problems?: CoversClaimProblems,
+	problems?: LspConfigProblems,
 	provenance?: ProvenanceMap,
 ): LSPConfig {
 	const section = lspSectionOf(value);
@@ -770,7 +850,11 @@ export function lspConfigOf(
 		>;
 	}
 	if (Array.isArray(section.disabledServers)) {
-		config.disabledServers = section.disabledServers as string[];
+		config.disabledServers = knownDisabledServerIds(
+			section.disabledServers,
+			servers,
+			problems,
+		) as string[];
 	}
 	if (Array.isArray(section.warmFiles)) {
 		config.warmFiles = section.warmFiles as string[];

@@ -94,7 +94,7 @@ describe("loadLSPConfig global configuration (#870)", () => {
 					rust: { initializationOptions: { check: { command: "check" } } },
 					go: { initializationOptions: { gofumpt: true } },
 				},
-				disabledServers: ["global-disabled"],
+				disabledServers: ["typescript"],
 				warmFiles: ["global.ts"],
 			}),
 		);
@@ -144,7 +144,7 @@ describe("loadLSPConfig global configuration (#870)", () => {
 		// `toEqual([])`, which is to say it pinned repository content silently
 		// re-enabling a server the operator had turned off; #2415 AC 3 forbids
 		// exactly that, and `docs/configuration.md` documents the exception.
-		expect(config.disabledServers).toEqual(["global-disabled"]);
+		expect(config.disabledServers).toEqual(["typescript"]);
 		expect(config.warmFiles).toEqual(["project.ts"]);
 	});
 
@@ -482,9 +482,9 @@ describe("loadLSPConfig — the deny union spans key spellings (#2427 round 2)",
 	it("unions across spellings instead of replacing the legacy one", async () => {
 		const files: Record<string, unknown> = {};
 		files[GLOBAL_LEGACY] = denyAtRoot("typos");
-		files[PROJECT_CANONICAL] = deny("ruff");
+		files[PROJECT_CANONICAL] = deny("rust");
 		const config = await loadWith(files);
-		expect(sorted(config.disabledServers)).toEqual(["ruff", "typos"]);
+		expect(sorted(config.disabledServers)).toEqual(["rust", "typos"]);
 	});
 
 	// Case C-prime — the mirror image: canonical global, legacy project. A user
@@ -492,9 +492,9 @@ describe("loadLSPConfig — the deny union spans key spellings (#2427 round 2)",
 	it("unions when the tiers swap spellings", async () => {
 		const files: Record<string, unknown> = {};
 		files[GLOBAL_CANONICAL] = deny("typos");
-		files[PROJECT_CANONICAL] = denyAtRoot("ruff");
+		files[PROJECT_CANONICAL] = denyAtRoot("rust");
 		const config = await loadWith(files);
-		expect(sorted(config.disabledServers)).toEqual(["ruff", "typos"]);
+		expect(sorted(config.disabledServers)).toEqual(["rust", "typos"]);
 	});
 
 	// Case G — the same split silently CLOBBERED the by-id object merge. A

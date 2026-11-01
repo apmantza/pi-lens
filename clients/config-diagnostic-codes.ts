@@ -122,7 +122,9 @@ export const CONFIG_DIAGNOSTIC_CODES = {
 	 */
 	PILENS_CFG_0004: "unknown config field ignored",
 	/**
-	 * A config field's value did not match its schema and was dropped.
+	 * A config field's value did not match its schema and was dropped, or an id
+	 * check dropped one member of a list field (`dispatch.disabledRunners`,
+	 * `lsp.disabledServers`). The rest of the file stays in effect.
 	 *
 	 * Wrong type, a value outside a declared `enum`, or a nesting depth past the
 	 * validator's bound. Same producer and same delivery path as

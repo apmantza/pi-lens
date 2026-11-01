@@ -57,8 +57,10 @@ import { type LanguageEntry, resolveLanguage } from "./language-registry.js";
 import { getPiLensGlobalConfigPath } from "./lens-config.js";
 import {
 	customServerSpecsOf,
+	disabledServerRecords,
 	explainServersForFile,
 	lspConfigOf,
+	newLspConfigProblems,
 	registerLSPConfig,
 	type RegisteredLSPConfig,
 	type ServerSelectionReason,
@@ -488,6 +490,11 @@ export async function effectiveConfig(
 	// uses, not a second, raw-path rendering of it.
 	const homeRelativeCwd = homeRelativePath(cwd, homeDir);
 
+	// The unknown `lsp.disabledServers` ids (#5141) are collected by the same
+	// projection the loader runs, into a problems list this query never reports.
+	const lspProblems = newLspConfigProblems();
+	lspConfigOf(resolution.value, lspProblems);
+
 	const view: EffectiveConfigView = {
 		cwd: homeRelativeCwd,
 		documents: summary.documents,
@@ -496,8 +503,14 @@ export async function effectiveConfig(
 		// The unknown `dispatch.disabledRunners` ids are records too: the pure
 		// `disabledRunnersOf` derives them without reporting (this query is not a
 		// dispatch), so a typo'd id shows here even where notifications are off.
+		// The unknown `lsp.disabledServers` ids are the same, through the pure
+		// `disabledServerRecords` (#5141).
 		recordCounts: countBy(
-			[...resolution.records, ...disabledRunnersOf(resolution).records],
+			[
+				...resolution.records,
+				...disabledRunnersOf(resolution).records,
+				...disabledServerRecords(resolution, lspProblems),
+			],
 			(record) => record.code,
 		),
 		tools: LENS_TOOL_NAMES.map((name) => ({
