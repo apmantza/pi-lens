@@ -935,26 +935,51 @@ describe("#5160 provider replays are display-only", () => {
 		}
 	});
 
-	it("still refuses a real pi edit with no read", async () => {
+	const editEvent = (filePath: string, toolCallId: string) => ({
+		toolName: "edit",
+		toolCallId,
+		input: {
+			path: filePath,
+			edits: [{ oldText: "const a = 1;", newText: "const a = 2;" }],
+		},
+	});
+
+	it("does not refuse a replayed built-in edit with no read", async () => {
+		// RECURRENCE GUARDED: #5160 review r1 probe P1. pi-cursor-sdk replays
+		// Cursor StrReplace as a native-looking `edit` card with a
+		// `cursor-replay-` id; the file was written before it arrived, so the
+		// read guard has nothing to protect.
+		const env = setupTestEnvironment("pi-lens-5160-replay-edit-");
+		try {
+			const unread = path.join(env.tmpDir, "unread.ts");
+			fs.writeFileSync(unread, SOURCE);
+			const session = newSession(env.tmpDir);
+			expect(
+				await callOf(editEvent(unread, "cursor-replay-1-1"), env, session),
+			).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("still refuses a real pi edit with no read, whatever near-miss id it carries", async () => {
+		// RECURRENCE GUARDED: #5160 review F2. A prefix widened to `cursor-` or
+		// matched with `includes` would exempt pi-cursor-sdk's real bridged
+		// executions (`cursor-pi-bridge-*`) and any id that merely contains it.
 		const env = setupTestEnvironment("pi-lens-5160-real-edit-");
 		try {
 			const unread = path.join(env.tmpDir, "unread.ts");
 			fs.writeFileSync(unread, SOURCE);
 			const session = newSession(env.tmpDir);
-			const verdict = await callOf(
-				{
-					toolName: "edit",
-					toolCallId: "call-5160-edit",
-					input: {
-						path: unread,
-						edits: [{ oldText: "const a = 1;", newText: "const a = 2;" }],
-					},
-				},
-				env,
-				session,
-			);
-			expect(verdict?.block).toBe(true);
-			expect(verdict?.reason).toContain("Edit without read");
+			for (const id of [
+				"call-5160-edit",
+				"cursor-pi-bridge-ab-t1",
+				"xcursor-replay-x",
+			]) {
+				const verdict = await callOf(editEvent(unread, id), env, session);
+				expect(verdict?.block, id).toBe(true);
+				expect(verdict?.reason, id).toContain("Edit without read");
+			}
 		} finally {
 			env.cleanup();
 		}
@@ -980,13 +1005,17 @@ describe("#5160 provider replays are display-only", () => {
 			expect(lookupLearnedMutatingTool("patch_file")).toBe("session");
 			const unread = path.join(env.tmpDir, "unread.ts");
 			fs.writeFileSync(unread, SOURCE);
-			const verdict = await callOf(
-				patchEvent(unread, "call-5160-patch-three"),
-				env,
-				session,
-			);
-			expect(verdict?.block).toBe(true);
-			expect(verdict?.reason).toContain("Edit without read");
+			// The near-miss ids are pi-cursor-sdk's real bridged executions and an id
+			// that merely contains the replay prefix (#5160 review F2).
+			for (const id of [
+				"call-5160-patch-three",
+				"cursor-pi-bridge-ab-t1",
+				"xcursor-replay-x",
+			]) {
+				const verdict = await callOf(patchEvent(unread, id), env, session);
+				expect(verdict?.block, id).toBe(true);
+				expect(verdict?.reason, id).toContain("Edit without read");
+			}
 		} finally {
 			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 			else process.env.PILENS_DATA_DIR = previousDataDir;

@@ -1647,7 +1647,15 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			}
 		}
 	}
-	if (isEditOnly && filePath && !getFlag("no-read-guard")) {
+	// #5160: a provider's replay (`isProviderReplayCall`) is a card for work
+	// that ran before it arrived, built-in `edit` replays included, so the
+	// guard has nothing left to protect and its refusal only reddens the card.
+	if (
+		isEditOnly &&
+		filePath &&
+		!getFlag("no-read-guard") &&
+		!isProviderReplayCall(event)
+	) {
 		const readGuard = runtime.readGuardFor(deps.sessionId);
 		const isExistingFile =
 			typeof readGuard?.isNewFile !== "function" ||

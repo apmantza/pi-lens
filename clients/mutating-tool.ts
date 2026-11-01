@@ -824,9 +824,11 @@ const PROVIDER_REPLAY_TOOL_CALL_ID_PREFIX = "cursor-replay-";
  * nothing and only turns the replay card into an error. It must also never
  * teach tier-4 learning that its tool name mutates, because the learned name
  * would then misclassify every later replay (and, persisted, every later
- * session). Consumers of tier 4 ask here: {@link classifyMutatingTool} skips
- * the learned lookup, and `runtime-tool-call.ts` does not arm the
- * observational net.
+ * session). Three consumers ask here: {@link classifyMutatingTool} skips the
+ * tier-4 learned lookup, and `runtime-tool-call.ts` neither arms the
+ * observational net nor runs the read guard's edit check, for built-in `edit`
+ * replays too. The match is the full prefix at the start of the id: a real
+ * execution of the same provider (`cursor-pi-bridge-*`) is not a replay.
  */
 export function isProviderReplayCall(event: unknown): boolean {
 	return (
