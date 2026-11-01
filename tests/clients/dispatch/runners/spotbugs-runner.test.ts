@@ -71,10 +71,10 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 		);
 	});
 
-	// The skip case never cleans the env this hook made, so drain every root
-	// here rather than relying on each test's own `finally`.
 	afterEach(() => vi.unstubAllEnvs());
 
+	// The skip case never cleans the env this hook made, so drain every root
+	// here rather than relying on each test's own `finally`.
 	useTrackedTempDirs("pi-lens-spotbugs-");
 
 	it("scans the compiled tree and maps the bug to a diagnostic", async () => {
