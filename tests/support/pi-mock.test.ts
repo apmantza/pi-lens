@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { endMockSessions } from "./mock-session-teardown.js";
 import {
 	createPiMock,
 	makeCtx,
@@ -183,5 +184,44 @@ describe("createPiMock session-manager identity (#3855)", () => {
 		await pi.emit("session_start", { reason: "reload" }, second);
 		expect(first.sessionManager).toBe(before.sessionManager);
 		expect(second.sessionManager).not.toBe(before.sessionManager);
+	});
+});
+
+/**
+ * #5146: `endMockSessions` ends what the double's `emit` started. Recurrence: a
+ * test that emitted `session_start` and never `session_shutdown` left the
+ * `ast-grep lsp` child its `tool_result` spawned alive past its file, where
+ * `tests/index-4632-s7-turn-end-ordering.test.ts`'s orphan sweep reached it
+ * (PR #5161 shard 5, job 124892873231).
+ */
+describe("createPiMock sessions and the shared teardown (#5146)", () => {
+	it("ends the open sessions newest first, skips one ended by hand, and ends none twice", async () => {
+		const pi = createPiMock();
+		const ended: string[] = [];
+		pi.on("session_shutdown", (_event, ctx) => {
+			ended.push(
+				(
+					ctx as { sessionManager: { getSessionId(): string } }
+				).sessionManager.getSessionId(),
+			);
+		});
+		for (const id of ["a", "b", "c"]) {
+			await pi.emit(
+				"session_start",
+				{ reason: "startup" },
+				makeCtx({ cwd: `/p/${id}`, sessionId: id }),
+			);
+		}
+		// By hand, on a fresh ctx of the same session, as the pre-#5146 files do.
+		await pi.emit(
+			"session_shutdown",
+			{ reason: "quit" },
+			makeCtx({ cwd: "/p/b", sessionId: "b" }),
+		);
+
+		await endMockSessions();
+		await endMockSessions();
+
+		expect(ended).toEqual(["b", "c", "a"]);
 	});
 });

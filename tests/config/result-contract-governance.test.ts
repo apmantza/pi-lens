@@ -16,7 +16,7 @@ import { McpHarness } from "../mcp/harness.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import { bindSession, retireBoundSessions } from "../support/bound-sessions.js";
-import { createPiMock } from "../support/pi-mock.js";
+import { createPiMock, makeCtx } from "../support/pi-mock.js";
 
 // #4151: parity must not race two independent cold ast-grep starts against
 // the product's 1800 ms strategy budget; this test is about rendered results.
@@ -109,7 +109,11 @@ describe("result contract across registered tool surfaces", () => {
 		});
 	});
 
-	afterAll(() => {
+	afterAll(async () => {
+		// #5146: the registered tools spawned an `ast-grep lsp` child; no
+		// `session_start` ran, so the shared teardown has no session to end, and
+		// the extension's own shutdown resets the LSP fleet the tools started.
+		await pi.emit("session_shutdown", { reason: "quit" }, makeCtx({ cwd }));
 		retireBoundSessions();
 		mcp?.dispose();
 		process.chdir(originalCwd);

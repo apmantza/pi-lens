@@ -26,6 +26,7 @@ import type {
 import { afterEach, expect } from "vitest";
 import { withTimeout } from "../../clients/deadline-utils.js";
 import { runHandlerExpectingNoThrow } from "./handler-verdict.js";
+import { trackSessionEvent } from "./mock-session-teardown.js";
 import { piMockAdmission } from "./pi-mock-importers.js";
 
 /**
@@ -418,6 +419,8 @@ export function createPiMock(options: PiMockOptions = {}): PiMock {
 		},
 		async emit(event, payload, ctx) {
 			handOverManager(event, payload, ctx);
+			// #5146: `endMockSessions` ends what this emit started.
+			trackSessionEvent(mock, event, ctx);
 			let result: unknown;
 			for (const handler of mock.getHandlers(event)) {
 				const r = await handler(payload, ctx);

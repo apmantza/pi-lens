@@ -23,7 +23,15 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterAll,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
@@ -75,6 +83,7 @@ import { normalizeMapKey } from "../clients/path-utils.js";
 import { readChangesSince } from "../clients/project-changes.js";
 import { ReadGuard } from "../clients/read-guard.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
@@ -102,6 +111,17 @@ describe("#2465: index.ts's mutation-bridge wiring separates recordability from 
 		else process.env.PILENS_DATA_DIR = prevDataDir;
 		resetObservedMutationNet();
 		removeTempDirSync(tmp);
+	});
+
+	// #5146: the file's sessions end together once the last cell is done. Ending
+	// the first cell's session in its own `afterEach` makes the second cell's
+	// `recordMutation` answer false (`process-bridge-unavailable`, "no live
+	// primary session owns its dependencies"); measured with the shutdown reason
+	// `quit`, `new` and `reload`. These cells spawn no child, so the file-end
+	// teardown is enough for the leak, and the cause is a residual for the
+	// maintainer.
+	afterAll(async () => {
+		await endMockSessions();
 	});
 
 	// Review F3: the --no-read-guard cell above cannot fail on the stamp gate by

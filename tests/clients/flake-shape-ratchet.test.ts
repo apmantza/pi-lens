@@ -1530,13 +1530,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the cold build's completion exposes no awaitable, so the adoption witness joins the snapshot it publishes with vi.waitFor",
 	},
-	// 2026-11-01 (#5146): the fast POSIX shutdown returns before its ast-grep
-	// child exits, and that exit exposes no awaitable, so the census polls /proc.
-	"ungoverned-wait-for:index-3748-advisory-scope-witness.test.ts": {
-		detector: "ungoverned-wait-for",
-		reason:
-			"the fast POSIX shutdown sends SIGTERM and returns without awaiting the child's exit, and that exit exposes no awaitable, so vi.waitFor polls /proc for the owned child to leave",
-	},
 	// 2026-10-23 (#4316): the session-start LSP warm is a floating promise
 	// inside the loaded extension copy, so its record is joinable only by
 	// polling the log the copy writes.
@@ -1551,6 +1544,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "ungoverned-wait-for",
 		reason:
 			"a collect-later runner answer settles inside the loaded extension copy and exposes no awaitable, so vi.waitFor joins the latency row the dispatcher logs when it lands",
+	},
+	// 2026-11-01 (#5146): the fast POSIX shutdown returns before its ast-grep
+	// child exits, and that exit exposes no awaitable, so the shared session
+	// teardown polls /proc.
+	"ungoverned-wait-for:support/mock-session-teardown.ts": {
+		detector: "ungoverned-wait-for",
+		reason:
+			"the fast POSIX shutdown sends SIGTERM and returns without awaiting the child's exit, and that exit exposes no awaitable, so vi.waitFor polls /proc for the owned child to leave",
 	},
 	"ungoverned-wait-for:tools/symbol-search.test.ts": {
 		detector: "ungoverned-wait-for",

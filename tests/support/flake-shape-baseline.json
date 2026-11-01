@@ -355,10 +355,10 @@
 		"clients/word-index-lifecycle.test.ts": 15,
 		"clients/word-index-observability.test.ts": 5,
 		"clients/word-index.test.ts": 7,
-		"index-3748-advisory-scope-witness.test.ts": 1,
 		"index-4316-lsp-warm-record.test.ts": 1,
 		"index-4943-telemetry-session-stamp.test.ts": 1,
 		"mcp/turn-end-route.smoke.test.ts": 1,
+		"support/mock-session-teardown.ts": 1,
 		"tools/lens-diagnostics.test.ts": 1,
 		"tools/lsp-diagnostics.test.ts": 1,
 		"tools/symbol-search.test.ts": 3

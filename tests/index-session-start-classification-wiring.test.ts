@@ -48,6 +48,7 @@ import {
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import { makeSessionStartEvent } from "./support/host-event-factory.js";
 import { readNdjsonRows } from "./support/ndjson-rows.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import {
 	fauxAssistantMessage,
@@ -138,6 +139,8 @@ describe("index session_start wiring — classification logged with mode (#2129)
 	});
 
 	afterEach(async () => {
+		// #5146: end the sessions the case started before the log is flushed.
+		await endMockSessions();
 		await flushLatencyLog();
 		_resetSessionLifecycleForTests();
 		if (previousStartupMode === undefined) {

@@ -60,6 +60,7 @@ vi.mock("../clients/runtime-session.js", () => ({
 import extension from "../index.js";
 import { READ_BRIDGE_KEY, type ReadBridge } from "../clients/read-bridge.js";
 import { ReadGuard } from "../clients/read-guard.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 
@@ -82,7 +83,9 @@ describe("#3654 F1: index.ts's read shim records a v1 zero-line read through v2"
 		readBridge = (globalThis as Record<symbol, ReadBridge>)[READ_BRIDGE_KEY];
 	});
 
-	afterAll(() => {
+	afterAll(async () => {
+		// #5146: the file's one session ends before its data dir and root go.
+		await endMockSessions();
 		vi.restoreAllMocks();
 		if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = prevDataDir;
