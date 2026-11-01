@@ -23,15 +23,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	afterAll,
-	afterEach,
-	beforeEach,
-	describe,
-	expect,
-	it,
-	vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
@@ -65,9 +57,13 @@ vi.mock("../clients/bootstrap.js", async () => {
 });
 vi.mock("../clients/runtime-session.js", () => ({
 	handleSessionStart: async (deps: {
-		runtime: { projectRoot: string };
+		runtime: { projectRoot: string; resetForSession: () => void };
 		ctxCwd?: string;
 	}) => {
+		// #5146: the real start begins a fresh scope before its first await
+		// (runtime-session.ts). Without it a second cell reuses the scope the
+		// first cell's shutdown retired, and the bridge refuses the retired scope.
+		deps.runtime.resetForSession();
 		if (deps.ctxCwd) deps.runtime.projectRoot = deps.ctxCwd;
 	},
 }));
@@ -105,23 +101,14 @@ describe("#2465: index.ts's mutation-bridge wiring separates recordability from 
 		resetObservedMutationNet();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		// #5146: end the cell's session before its data dir and root go.
+		await endMockSessions();
 		_resetSessionLifecycleForTests();
 		if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = prevDataDir;
 		resetObservedMutationNet();
 		removeTempDirSync(tmp);
-	});
-
-	// #5146: the file's sessions end together once the last cell is done. Ending
-	// the first cell's session in its own `afterEach` makes the second cell's
-	// `recordMutation` answer false (`process-bridge-unavailable`, "no live
-	// primary session owns its dependencies"); measured with the shutdown reason
-	// `quit`, `new` and `reload`. These cells spawn no child, so the file-end
-	// teardown is enough for the leak, and the cause is a residual for the
-	// maintainer.
-	afterAll(async () => {
-		await endMockSessions();
 	});
 
 	// Review F3: the --no-read-guard cell above cannot fail on the stamp gate by

@@ -1,10 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { endMockSessions } from "./mock-session-teardown.js";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+	endMockSessions,
+	failOnOpenMockSessions,
+} from "./mock-session-teardown.js";
 import {
 	createPiMock,
 	makeCtx,
 	SESSION_START_TEST_BUDGET_MS,
 } from "./pi-mock.js";
+import { stripSource } from "./sweep-kit.js";
 
 describe("createPiMock", () => {
 	it("records flags and exposes defaults via getFlag", () => {
@@ -187,19 +193,33 @@ describe("createPiMock session-manager identity (#3855)", () => {
 	});
 });
 
+// #5146: the double's own cases start sessions too (the never-settling handler
+// below); end them here so the root gate in pi-mock.ts has nothing to red.
+afterEach(async () => {
+	await endMockSessions();
+});
+
 /**
- * #5146: `endMockSessions` ends what the double's `emit` started. Recurrence: a
- * test that emitted `session_start` and never `session_shutdown` left the
- * `ast-grep lsp` child its `tool_result` spawned alive past its file, where
+ * #5146: the double itself reports every session its handlers saw, and a case
+ * that ends with one open reds. Recurrence: a test that emitted `session_start`
+ * and never `session_shutdown` left the `ast-grep lsp` child its `tool_result`
+ * spawned alive past its file, where
  * `tests/index-4632-s7-turn-end-ordering.test.ts`'s orphan sweep reached it
- * (PR #5161 shard 5, job 124892873231).
+ * (PR #5161 shard 5, job 124892873231). The previous guard was a scan of how
+ * each file spelled the start, and PR #5163's review found seven importers and
+ * five spellings it let through; this one is a verdict on what the double
+ * observed, so each start route below is a plant for it.
  */
 describe("createPiMock sessions and the shared teardown (#5146)", () => {
-	it("ends the open sessions newest first, skips one ended by hand, and ends none twice", async () => {
-		// Sessions the cases above left open are not this case's to count.
-		await endMockSessions();
+	type Pi = ReturnType<typeof createPiMock>;
+	const START = { type: "session_start", reason: "startup" };
+	const SHUTDOWN = { type: "session_shutdown", reason: "quit" };
+
+	/** A host with a session_start and a session_shutdown handler, as the extension has. */
+	function host(): { pi: Pi; ended: string[] } {
 		const pi = createPiMock();
 		const ended: string[] = [];
+		pi.on("session_start", () => {});
 		pi.on("session_shutdown", (_event, ctx) => {
 			ended.push(
 				(
@@ -207,24 +227,178 @@ describe("createPiMock sessions and the shared teardown (#5146)", () => {
 				).sessionManager.getSessionId(),
 			);
 		});
-		for (const id of ["a", "b", "c"]) {
-			await pi.emit(
-				"session_start",
-				{ reason: "startup" },
-				makeCtx({ cwd: `/p/${id}`, sessionId: id }),
-			);
-		}
+		return { pi, ended };
+	}
+	const ctxOf = (id: string) => makeCtx({ cwd: `/p/${id}`, sessionId: id });
+
+	it("ends the open sessions newest first, skips one ended by hand, and ends none twice", async () => {
+		const { pi, ended } = host();
+		for (const id of ["a", "b", "c"])
+			await pi.emit("session_start", START, ctxOf(id));
 		// By hand, on a fresh ctx of the same session, as the pre-#5146 files do.
-		await pi.emit(
-			"session_shutdown",
-			{ reason: "quit" },
-			makeCtx({ cwd: "/p/b", sessionId: "b" }),
+		await pi.emit("session_shutdown", SHUTDOWN, ctxOf("b"));
+		expect(ended).toEqual(["b"]);
+
+		await endMockSessions();
+		expect(ended).toEqual(["b", "c", "a"]);
+
+		await endMockSessions();
+		expect(ended).toEqual(["b", "c", "a"]);
+	});
+
+	it("counts one session when several handlers receive the same start", async () => {
+		const pi = createPiMock();
+		pi.on("session_start", () => {});
+		pi.on("session_start", () => {});
+		const ended: string[] = [];
+		pi.on("session_shutdown", () => {
+			ended.push("1");
+		});
+		pi.on("session_shutdown", () => {
+			ended.push("2");
+		});
+		await pi.emit("session_start", START, ctxOf("m"));
+		await expect(failOnOpenMockSessions()).rejects.toThrow(
+			/^1 pi-mock session\(s\) still open/,
 		);
+		// One shutdown emit reached both handlers, once.
+		expect(ended).toEqual(["1", "2"]);
+	});
 
-		await endMockSessions();
-		expect(ended).toEqual(["b", "c", "a"]);
+	// Every route to a session_start handler leaves the session open unless
+	// something ends it. A scan of the test source had to know each spelling.
+	it.each<[string, (pi: Pi, ctx: unknown) => Promise<unknown>]>([
+		["emit", (pi, ctx) => pi.emit("session_start", START, ctx)],
+		[
+			"an aliased bound emit",
+			async (pi, ctx) => {
+				const go = pi.emit.bind(pi);
+				await go("session_start", START, ctx);
+			},
+		],
+		[
+			"a computed member built at run time",
+			async (pi, ctx) => {
+				await (pi as unknown as Record<string, Function>)["em" + "it"](
+					"session_" + "start",
+					START,
+					ctx,
+				);
+			},
+		],
+		[
+			"a destructured emit",
+			async (pi, ctx) => {
+				const { emit } = pi;
+				await emit.call(pi, "session_start", START, ctx);
+			},
+		],
+		[
+			"a handler out of getHandlers",
+			async (pi, ctx) => {
+				await pi.getHandlers("session_start")[0](START, ctx);
+			},
+		],
+		[
+			"a loop over the handlers map",
+			async (pi, ctx) => {
+				for (const h of pi.handlers.get("session_start") ?? []) {
+					await h(START, ctx);
+				}
+			},
+		],
+		[
+			"a wrapper in a support module",
+			async (pi, ctx) => {
+				const startThere = (p: Pi) => p.emit("session_start", START, ctx);
+				await startThere(pi);
+			},
+		],
+		[
+			"the reload helper after a hand shutdown",
+			async (pi, ctx) => {
+				await pi.emit("session_start", START, ctx);
+				await pi.emit("session_shutdown", SHUTDOWN, ctx);
+				await pi.simulateSessionShutdownAndRebuild("reload", ctx);
+			},
+		],
+	])(
+		"reds a case that started a session through %s and ended none",
+		async (_name, start) => {
+			const { pi, ended } = host();
+			await start(pi, ctxOf("x"));
+			const shutdownsBefore = ended.length;
+			await expect(failOnOpenMockSessions()).rejects.toThrow(
+				/^1 pi-mock session\(s\) still open when the case ended; call endMockSessions\(\)/,
+			);
+			// The gate ended it, so the next case starts clean.
+			expect(ended.length - shutdownsBefore).toBe(1);
+			await expect(failOnOpenMockSessions()).resolves.toBeUndefined();
+		},
+	);
 
-		await endMockSessions();
-		expect(ended).toEqual(["b", "c", "a"]);
+	it("reds a case whose shutdown ended only one of its two sessions", async () => {
+		// Recurrence: a file excused whole by one hand-written shutdown (index-3814
+		// 29 cases, index-wiring 12, ...: 61 cases in 7 files left a session open).
+		const { pi, ended } = host();
+		await pi.emit("session_start", START, ctxOf("a"));
+		await pi.emit("session_start", START, ctxOf("b"));
+		await pi.emit("session_shutdown", SHUTDOWN, ctxOf("a"));
+		await expect(failOnOpenMockSessions()).rejects.toThrow(
+			/^1 pi-mock session/,
+		);
+		expect(ended).toEqual(["a", "b"]);
+	});
+
+	it.each<[string, (pi: Pi, ctx: unknown) => Promise<unknown>]>([
+		["endMockSessions", () => endMockSessions()],
+		[
+			"a shutdown emit by hand",
+			(pi, ctx) => pi.emit("session_shutdown", SHUTDOWN, ctx),
+		],
+		[
+			"a shutdown handler called directly",
+			async (pi, ctx) => {
+				await pi.getHandlers("session_shutdown")[0](SHUTDOWN, ctx);
+			},
+		],
+	])("passes a case that ended its session through %s", async (_name, end) => {
+		const { pi, ended } = host();
+		await pi.emit("session_start", START, ctxOf("y"));
+		await end(pi, ctxOf("y"));
+		await expect(failOnOpenMockSessions()).resolves.toBeUndefined();
+		expect(ended).toEqual(["y"]);
+	});
+
+	// Recurrence: the gate above is only a function until `pi-mock.ts` registers
+	// it. A root `afterEach` deleted, commented out, or moved inside a function
+	// that never runs leaves every importer ungated while this file stays green.
+	// The one file read is our own, and the form is the whole contract.
+	const ROOT_GATE =
+		/^afterEach\(async \(\) => \{\s*await failOnOpenMockSessions\(\);\s*\}\);$/m;
+	const gated = (source: string) =>
+		ROOT_GATE.test(stripSource(source, { strings: "blank" }));
+
+	it("pi-mock.ts registers the gate as a root afterEach", () => {
+		expect(
+			gated(readFileSync(resolve(import.meta.dirname, "pi-mock.ts"), "utf8")),
+		).toBe(true);
+	});
+
+	it.each([
+		[
+			"commented out",
+			"// afterEach(async () => {\n//\tawait failOnOpenMockSessions();\n// });\n",
+		],
+		[
+			"inside a function that never runs",
+			"function later() {\n\tafterEach(async () => {\n\t\tawait failOnOpenMockSessions();\n\t});\n}\n",
+		],
+		[
+			"registered without the gate call",
+			"afterEach(async () => {\n\tawait other();\n});\n",
+		],
+	])("does not read a gate that is %s as registered", (_name, source) => {
+		expect(gated(source)).toBe(false);
 	});
 });

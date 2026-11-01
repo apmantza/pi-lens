@@ -1,9 +1,15 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { getIOBridge } from "../clients/io-bridge.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import extension from "../index.js";
 import { setupTestEnvironment } from "./clients/test-utils.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
+
+afterEach(async () => {
+	// #5146: end the session the case leaves open (the last primary).
+	await endMockSessions();
+});
 
 // Recurrence prevented: a factory reload can mount the process bridge before
 // the replacement primary starts; dropping the primary rebind then leaves the

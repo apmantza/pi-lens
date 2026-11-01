@@ -37,9 +37,14 @@ vi.mock("../clients/bootstrap.js", async () => {
 });
 vi.mock("../clients/runtime-session.js", () => ({
 	handleSessionStart: async (deps: {
-		runtime: { projectRoot: string };
+		runtime: { projectRoot: string; resetForSession: () => void };
 		ctxCwd?: string;
 	}) => {
+		// #5146 F1: the real start begins a fresh scope before its first await
+		// (runtime-session.ts). Without it an earlier case's shutdown leaves the
+		// scope retired, a handle captured on it reads current, and the replaced
+		// drain's refresh is not dropped (seed 202: "expected 1 to be +0").
+		deps.runtime.resetForSession();
 		if (deps.ctxCwd) deps.runtime.projectRoot = deps.ctxCwd;
 	},
 }));

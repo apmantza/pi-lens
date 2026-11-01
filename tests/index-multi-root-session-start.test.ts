@@ -31,6 +31,7 @@ import {
 	registerInstance,
 } from "../clients/instance-registry.js";
 import { makeSessionStartEvent } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, STALE_CTX_MESSAGE } from "./support/pi-mock.js";
 import {
 	fauxAssistantMessage,
@@ -118,6 +119,8 @@ describe("session_start keys on the project root (#2129 wiring)", () => {
 	});
 
 	afterEach(async () => {
+		// #5146: end the case's sessions before the registry settles and roots go.
+		await endMockSessions();
 		_resetSessionLifecycleForTests();
 		await settleRegistryWrites();
 		deregisterInstance();
