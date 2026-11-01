@@ -3532,7 +3532,8 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 			// the continuation that hands its withheld line to the agent runs after an
 			// await against the LIVE coordinator: without the #3596 liveness check, or
 			// with the coordinator's own scope in place of the caller's (#473), the
-			// line reaches the wrong session or a session that never wrote the file.
+			// line reaches the wrong session or a session that never wrote the file; an
+			// Escape mid-check (a cancelled turn) must queue nothing at all.
 			// The 10 s is the real bound, so this case holds a live 10 s wait.
 			const { runPipeline } = await import("../../clients/pipeline.js");
 			const settle = new Map<string, ReturnType<typeof gatedPromise<void>>>();
@@ -3561,7 +3562,12 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 				"late-withheld",
 				async ({ tmpDir, filePath, runtime, cacheManager }) => {
 					const goneFile = createTempFile(tmpDir, "gone.ts", "export {};\n");
-					for (const name of ["edit.ts", "gone.ts"]) {
+					const abortedFile = createTempFile(
+						tmpDir,
+						"aborted.ts",
+						"export {};\n",
+					);
+					for (const name of ["edit.ts", "gone.ts", "aborted.ts"]) {
 						settle.set(name, gatedPromise<void>());
 						entered.set(name, gatedPromise<void>());
 					}
@@ -3574,10 +3580,26 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 						const goneHandler = handleToolResult(
 							toolResultDeps({ filePath: goneFile, runtime, cacheManager }),
 						);
+						// Escape mid-check: a cancelled turn, not a late result.
+						const escape = new AbortController();
+						const abortedHandler = handleToolResult({
+							...toolResultDeps({
+								filePath: abortedFile,
+								runtime,
+								cacheManager,
+							}),
+							signal: escape.signal,
+						});
 						await Promise.all([
 							entered.get("edit.ts")?.promise,
 							entered.get("gone.ts")?.promise,
+							entered.get("aborted.ts")?.promise,
 						]);
+						escape.abort();
+						await abortedHandler;
+						settle.get("aborted.ts")?.resolve();
+						await new Promise((resolve) => setImmediate(resolve));
+						expect(lateRows()).toEqual([]);
 						// Both handlers return at the inner bound with nothing collected.
 						await Promise.all([liveHandler, goneHandler]);
 						expect(lateRows()).toEqual([]);
