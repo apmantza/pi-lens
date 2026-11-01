@@ -180,6 +180,37 @@ describe("the cuts leave master, the merge queue and dispatches intact (#5112)",
 	);
 });
 
+// #5002: the lockfile gate is a trigger filter, not a detect job. A pull request
+// that touches neither path posts no OSV row; schedule and dispatch scan in full.
+describe("OSV scan starts from a lockfile paths filter, not a detect job (#5002)", () => {
+	const osv = load("osv-scan.yml");
+
+	it("filters the pull_request trigger to the lockfile and this file, leaving schedule and dispatch unfiltered", () => {
+		const on = osv.on as Record<string, { paths?: string[] } | undefined>;
+		expect(on.pull_request?.paths).toEqual([
+			"package-lock.json",
+			".github/workflows/osv-scan.yml",
+		]);
+		expect(on.schedule).toBeDefined();
+		expect(on.workflow_dispatch).toBeDefined();
+		expect(on.schedule).not.toHaveProperty("paths");
+	});
+
+	it("has the one scan job, with no needs or if, scanning the PR's own head lockfile", () => {
+		expect(Object.keys(osv.jobs)).toEqual(["osv-scan"]);
+		const job = osv.jobs["osv-scan"] as Job & { needs?: unknown };
+		expect(job.name).toBe("OSV scan (advisory)");
+		expect(job.needs).toBeUndefined();
+		expect(job.if).toBeUndefined();
+		const checkout = (job.steps ?? []).find((s) =>
+			s.uses?.startsWith("actions/checkout@"),
+		) as (Step & { with?: Record<string, string> }) | undefined;
+		expect(checkout?.with?.ref).toBe(
+			"${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
+		);
+	});
+});
+
 describe("the greeting job starts for every issue and for a first-time pull request author (#5112)", () => {
 	const job = greetings.jobs.greeting;
 
