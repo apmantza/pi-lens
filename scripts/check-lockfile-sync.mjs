@@ -10,7 +10,7 @@
  * result.
  */
 import * as fs from "node:fs";
-import { spawnSync } from "node:child_process";
+import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import {
 	findLibcDrift,
 	formatLibcDriftFailure,
@@ -43,21 +43,25 @@ function read(file) {
  * no git) has nothing to compare and says so instead of guessing.
  */
 function readCommittedLock() {
-	let result;
+	let stdout;
 	try {
-		result = spawnSync("git", ["show", "HEAD:package-lock.json"], {
+		stdout = gitExecFileSync(["show", "HEAD:package-lock.json"], {
+			cwd: process.cwd(),
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
 			timeout: GIT_TIMEOUT_MS,
 		});
 	} catch (err) {
-		return { skipped: `git unavailable: ${err.message}` };
-	}
-	if (result.error || result.status !== 0) {
-		return { skipped: "HEAD records no package-lock.json" };
+		const detail =
+			String(err.stderr ?? "")
+				.trim()
+				.split("\n")[0] || err.message;
+		return {
+			skipped: `git show HEAD:package-lock.json failed: ${detail}`,
+		};
 	}
 	try {
-		return { lock: JSON.parse(result.stdout) };
+		return { lock: JSON.parse(stdout) };
 	} catch (err) {
 		return {
 			skipped: `HEAD's package-lock.json is unreadable: ${err.message}`,

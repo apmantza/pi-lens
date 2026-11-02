@@ -492,7 +492,7 @@ describe("package-lock libc drift guard (#5207)", () => {
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain(
-			"libc drift: not checked (HEAD records no package-lock.json)",
+			"libc drift: not checked (git show HEAD:package-lock.json failed: ",
 		);
 	});
 
