@@ -19,7 +19,8 @@ acceptance surface quoted from that run's log. Any self-bound inside the lane
 must sit below the job cap by a stated margin so the loud-failure path is
 reachable.
 
-Every PR body has `## Summary` (at most three sentences),
+Every PR body has `## Summary` (at most three sentences, counted sentences in
+its `Refs #NNN`, `Remaining #NNN:` and `Closes #NNN` lines included),
 `## Notes for the reviewer` (at most five bullets), `## Change outline`, and
 `## Proof and checks`, which holds `### Tests`, `### Class sweep`,
 `### Observability`, and `### Fold check`, plus the conditional sections the

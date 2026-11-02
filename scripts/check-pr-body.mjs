@@ -4489,48 +4489,73 @@ function summaryText(tokens) {
 		.join("");
 }
 
-// #5208: the `Refs #N` and `Remaining #N:` paragraphs an author keeps in the
-// Summary section are bookkeeping, and they count toward the same
-// SUMMARY_MAX_SENTENCES cap as the prose. A refusal that named only the cap
-// sent the author back to the summary text while the fourth sentence sat in
-// the bookkeeping line below it (3 retries on #5176, 4 on #5202).
-const SUMMARY_BOOKKEEPING = /^(?:refs?|remaining)\b/i;
+// #5208: the `Refs #N`, `Remaining #N:` and `Closes #N` lines an author keeps
+// in the Summary section are bookkeeping, and counted sentences in them count
+// toward the same SUMMARY_MAX_SENTENCES cap as the prose. A refusal that named
+// only the cap sent the author back to the summary text while the fourth
+// sentence sat in the bookkeeping line below it (3 retries on #5176, 4 on
+// #5202). The form is matched, not the first word, so prose that opens
+// "Remaining work is documented" stays prose (#5215 F2).
+const SUMMARY_BOOKKEEPING = /^(refs?|remaining|closes?)\s*#\d+/i;
+const SUMMARY_SECTION = "the summary";
 
 function counted(count, noun) {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /**
- * Every Summary paragraph holding a counted sentence, labelled by the
- * bookkeeping keyword it opens with ("the summary" for prose), and the total.
+ * Every counted sentence of a Summary section, aggregated per labelled line:
+ * the bookkeeping keyword the line the terminator sits on opens with ("the
+ * summary" for prose), in the order the labels first appear, plus the total.
  * The sentences are counted over the section as one text and then attributed
- * to the paragraph each terminator sits in, so the count keeps its
- * abbreviation tolerance (#3262): a sentence that starts in lower case counts
- * with the one before it, and the character cap, not the count, bounds a
- * Summary written that way.
+ * to the line each terminator sits in, so the count keeps its abbreviation
+ * tolerance (#3262): a sentence that starts in lower case counts with the one
+ * before it, and the character cap, not the count, bounds a Summary written
+ * that way. Aggregating by label keeps one entry per place the author can
+ * find, and reading the label off the terminator's own line reports
+ * `Refs #N` then `Remaining #N:` inside one paragraph as the `Remaining` line
+ * the sentence ends on (#5215 F1, F3).
  */
-function summarySentenceParts(tokens) {
-	const segments = tokens.map((token) =>
-		token.type === "paragraph" ? summaryText(token.tokens ?? []) : "",
-	);
-	const raw = segments.join("\n");
-	const lead = raw.length - raw.trimStart().length;
-	const ends = sentenceEndOffsets(raw.trim()).map((at) => at + lead);
-	const parts = [];
+function summarySentenceCounts(tokens) {
+	const text = tokens
+		.map((token) =>
+			token.type === "paragraph" ? summaryText(token.tokens ?? []) : "",
+		)
+		.join("\n")
+		.trim();
+	const lines = [];
 	let start = 0;
-	for (const text of segments) {
-		const sentences = ends.filter(
-			(at) => at >= start && at < start + text.length,
-		).length;
-		const keyword = SUMMARY_BOOKKEEPING.exec(text.trim())?.[0];
-		if (sentences > 0)
-			parts.push({
-				label: keyword ? `the ${keyword} line` : "the summary",
-				sentences,
-			});
-		start += text.length + 1;
+	for (const line of text.split("\n")) {
+		const keyword = SUMMARY_BOOKKEEPING.exec(line.trim())?.[1];
+		lines.push({
+			start,
+			end: start + line.length,
+			label: keyword ? `the ${keyword} line` : SUMMARY_SECTION,
+		});
+		start += line.length + 1;
 	}
-	return { parts, sentences: ends.length };
+	const ends = sentenceEndOffsets(text);
+	const counts = new Map();
+	for (const at of ends) {
+		const label =
+			lines.find((each) => at >= each.start && at < each.end)?.label ??
+			SUMMARY_SECTION;
+		counts.set(label, (counts.get(label) ?? 0) + 1);
+	}
+	return { counts, sentences: ends.length };
+}
+
+/**
+ * Where the sentences over the cap sit: the labelled line holding the most of
+ * them, so a refusal whose bookkeeping fills the cap does not tell the author
+ * to cut prose that is already one sentence (#5215 F5).
+ */
+function summaryExcessGroup(groups) {
+	const [label] = groups.reduce(
+		(worst, group) => (group[1] > worst[1] ? group : worst),
+		[SUMMARY_SECTION, 0],
+	);
+	return label === SUMMARY_SECTION ? "the summary prose" : label;
 }
 
 /**
@@ -4548,12 +4573,11 @@ function summaryRefusal(tokens, name) {
 		)
 	)
 		return `${rule}. See ${TEMPLATE_PATH}.`;
-	const { parts, sentences } = summarySentenceParts(tokens);
+	const { counts, sentences } = summarySentenceCounts(tokens);
 	const chars = tallyTokens(tokens, { chars: 0, code: [] }).chars;
-	const where = parts.length
-		? ` (${parts
-				.map((part) => `${part.sentences} in ${part.label}`)
-				.join(", ")})`
+	const groups = [...counts];
+	const where = groups.length
+		? ` (${groups.map(([label, count]) => `${count} in ${label}`).join(", ")})`
 		: "";
 	const breaches = [];
 	if (sentences > SUMMARY_MAX_SENTENCES)
@@ -4569,19 +4593,19 @@ function summaryRefusal(tokens, name) {
 			`${counted(chars, "visible character")}, over the ${SUMMARY_MAX_CHARS}-character cap`,
 		);
 	if (breaches.length === 0) return null;
-	const bookkeeping = parts
-		.filter((part) => part.label !== "the summary")
-		.reduce((sum, part) => sum + part.sentences, 0);
+	const prose = counts.get(SUMMARY_SECTION) ?? 0;
+	const bookkeeping = sentences - prose;
+	const spare = SUMMARY_MAX_SENTENCES - bookkeeping;
 	const advice = [];
 	if (sentences > SUMMARY_MAX_SENTENCES)
 		advice.push(
-			bookkeeping > 0 && SUMMARY_MAX_SENTENCES - bookkeeping >= 1
-				? `The "Refs #N" and "Remaining #N:" lines count toward the cap, so keep the summary prose to ${counted(SUMMARY_MAX_SENTENCES - bookkeeping, "sentence")}`
-				: `Cut ${counted(sentences - SUMMARY_MAX_SENTENCES, "sentence")} from the summary prose`,
+			bookkeeping > 0 && spare >= 1
+				? `Counted sentences in the "Refs #N", "Remaining #N:" and "Closes #N" lines also count toward the cap, so keep the summary prose to ${counted(spare, "sentence")}`
+				: `Cut ${counted(sentences - SUMMARY_MAX_SENTENCES, "sentence")} from ${summaryExcessGroup(groups)}`,
 		);
 	if (sentences < 1)
 		advice.push(
-			`Write the summary as plain prose of one to ${SUMMARY_MAX_SENTENCES} sentences, because a "Refs #N" or "Remaining #N:" line alone does not read as one`,
+			`Write the summary as plain prose of one to ${SUMMARY_MAX_SENTENCES} sentences, because a "Refs #N", "Remaining #N:" or "Closes #N" line alone does not read as one`,
 		);
 	if (chars > SUMMARY_MAX_CHARS)
 		advice.push(

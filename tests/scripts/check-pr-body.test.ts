@@ -4190,7 +4190,11 @@ describe("body caps (#5003)", () => {
 	// refusal named neither the count nor the paragraphs it came from, so an
 	// author edited the summary prose and stayed red (3 retries on #5176, 4 on
 	// #5202). These cases pin the count, where it came from, and the template
-	// line that admits the counting.
+	// line that admits the counting. #5215 adds one case per shape a review
+	// probe found mislabelled: two prose paragraphs, a `Closes` line, prose that
+	// opens "Remaining", two bookkeeping lines inside one paragraph,
+	// bookkeeping that fills the cap, and the two breach clauses that had no
+	// pin at all.
 	const summaryOf = (paragraphs: string[]) =>
 		NEW_BODY.replace(
 			"## Summary\nThe lint caps what a reader scrolls past.\n\nRefs #5003\n\n",
@@ -4202,9 +4206,89 @@ describe("body caps (#5003)", () => {
 		"Remaining #5208: a real render of the shipped file stays unverified.",
 	];
 
+	const RULE =
+		'PR body "## Summary" must hold plain paragraphs of one to 3 sentences and at most 600 characters, with no list, table, code or HTML';
+	const BOOKKEEPING_ADVICE =
+		'Counted sentences in the "Refs #N", "Remaining #N:" and "Closes #N" lines also count toward the cap';
+
 	it("names each counted Summary sentence and the paragraph it sits in (#5208)", () => {
 		expect(capError(summaryOf(COUNTED_SHAPE), "sentences")).toEqual([
-			'PR body "## Summary" must hold plain paragraphs of one to 3 sentences and at most 600 characters, with no list, table, code or HTML: it holds 4 counted sentences (3 in the summary, 1 in the Remaining line), over the 3-sentence cap. The "Refs #N" and "Remaining #N:" lines count toward the cap, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.',
+			`${RULE}: it holds 4 counted sentences (3 in the summary, 1 in the Remaining line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("labels two prose paragraphs once, as the summary (#5215)", () => {
+		expect(
+			capError(summaryOf(["One. Two.", "Three. Four."]), "sentences"),
+		).toEqual([
+			`${RULE}: it holds 4 counted sentences (4 in the summary), over the 3-sentence cap. Cut 1 sentence from the summary prose. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("labels a Closes line as its own paragraph and holds the prose to what it leaves (#5215)", () => {
+		expect(
+			capError(
+				summaryOf(["One. Two. Three.", "Closes #5208. It is done."]),
+				"sentences",
+			),
+		).toEqual([
+			`${RULE}: it holds 5 counted sentences (3 in the summary, 2 in the Closes line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 1 sentence. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("keeps a prose paragraph that opens Remaining out of the bookkeeping count (#5215)", () => {
+		expect(
+			capError(
+				summaryOf([
+					"Remaining work is documented. It is on the board.",
+					"One. Two.",
+				]),
+				"sentences",
+			),
+		).toEqual([
+			`${RULE}: it holds 4 counted sentences (4 in the summary), over the 3-sentence cap. Cut 1 sentence from the summary prose. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("labels a sentence by the bookkeeping line it ends on, not the paragraph's first line (#5215)", () => {
+		expect(
+			capError(
+				summaryOf([
+					"One. Two. Three.",
+					"Refs #5208\nRemaining #5208: This stays open.",
+				]),
+				"sentences",
+			),
+		).toEqual([
+			`${RULE}: it holds 4 counted sentences (3 in the summary, 1 in the Remaining line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("names the bookkeeping line holding the excess when it fills the cap (#5215)", () => {
+		expect(
+			capError(
+				summaryOf(["One only.", "Refs #5208. See the issue. It is open."]),
+				"sentences",
+			),
+		).toEqual([
+			`${RULE}: it holds 4 counted sentences (1 in the summary, 3 in the Refs line), over the 3-sentence cap. Cut 1 sentence from the Refs line. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("states the character count of a Summary over the character cap (#5215)", () => {
+		expect(
+			capError(
+				summaryOf([`First ${"x".repeat(620)}. Second one. Third one.`]),
+				"character cap",
+			),
+		).toEqual([
+			`${RULE}: 650 visible characters, over the 600-character cap. Cut 50 visible characters. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("states the one-sentence minimum of a Summary holding no counted sentence (#5215)", () => {
+		expect(capError(summaryOf(["Refs #5208"]), "minimum")).toEqual([
+			`${RULE}: it holds no counted sentence, under the one-sentence minimum. Write the summary as plain prose of one to 3 sentences, because a "Refs #N", "Remaining #N:" or "Closes #N" line alone does not read as one. See .github/PULL_REQUEST_TEMPLATE.md.`,
 		]);
 	});
 
@@ -4221,14 +4305,15 @@ describe("body caps (#5003)", () => {
 		).toEqual([]);
 	});
 
-	it("says in the template that the bookkeeping lines count (#5208)", () => {
+	it("says in the template that counted sentences in the bookkeeping lines count (#5208)", () => {
 		const template = readFileSync(
 			resolve(repositoryRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
 			"utf8",
 		);
 		expect(template).toContain(
-			"The `Refs #NNN` and `Remaining #NNN:` lines count toward the three-sentence cap",
+			"Counted sentences in the `Refs #NNN`, `Remaining #NNN:` and `Closes #NNN` lines count toward the three-sentence cap",
 		);
+		expect(template).toContain("while a bare `Refs #NNN` adds none");
 	});
 
 	it.each(["Why", "Problem", "What changed"])(

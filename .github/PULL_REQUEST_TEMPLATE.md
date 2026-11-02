@@ -4,7 +4,7 @@ At most three sentences: what changed, who notices, and the risk.
 
 Closes #NNN only when every acceptance criterion is met. Otherwise Refs #NNN, and comment on the issue naming what remains. The PR title carries the same reference.
 
-The `Refs #NNN` and `Remaining #NNN:` lines count toward the three-sentence cap: a two-sentence summary with a one-sentence `Remaining` line sits at the cap.
+Counted sentences in the `Refs #NNN`, `Remaining #NNN:` and `Closes #NNN` lines count toward the three-sentence cap: a two-sentence summary with a one-sentence `Remaining` line sits at the cap, while a bare `Refs #NNN` adds none.
 
 ## Notes for the reviewer
 
