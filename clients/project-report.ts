@@ -52,14 +52,6 @@ export interface ProjectReportOptions {
 	 * subsystems; never expands scope or triggers scans. The project-level
 	 * analogue of module_report's `focus`-ranked recommendedReads. */
 	focus?: string;
-	/** Rendering instruction only (mirrors module_report's `view`): frozen
-	 * pre-#5150 compact hatch. #5150 R2 made the default the text cell and
-	 * replaced this hatch with `view: "json"`, so no production caller passes
-	 * it any more; `renderCompactProjectReport` stays exported so a caller that
-	 * pinned its bytes keeps them. The computed data is identical either way.
-	 * Deletion trigger: #5168 removes this field and the renderer once #5150
-	 * has shipped and no caller pins the compact bytes. */
-	view?: "compact";
 }
 
 interface ProjectReportTrust {
@@ -183,9 +175,6 @@ export interface ProjectReport {
 		 * one field that always distinguishes attempts; compare it, not `when`. */
 		buildId?: number;
 	};
-	/** Frozen pre-#5150 rendering echo; see `ProjectReportOptions.view`.
-	 * Deletion trigger: #5168. */
-	view?: "compact";
 	trust?: ProjectReportTrust;
 	hubs?: ProjectReportHub[];
 	entryPoints?: ProjectReportEntryPoint[];
@@ -818,7 +807,6 @@ export async function projectReport(
 ): Promise<ProjectReport> {
 	const limit = clampLimit(options?.limit);
 	const focusTerms = normalizeFocus(options?.focus);
-	const view = options?.view;
 
 	const {
 		getCachedReviewGraph,
@@ -856,7 +844,6 @@ export async function projectReport(
 					"or set PI_LENS_REVIEW_GRAPH_MAX_FILES; for CI/cron, run " +
 					"npx pi-lens build-graph after configuring the cap",
 				...(lastBuildAttempt ? { lastBuildAttempt } : {}),
-				...(view ? { view } : {}),
 			};
 		}
 		const previousAttempt = getLastReviewGraphBuildAttempt(cwd);
@@ -896,7 +883,6 @@ export async function projectReport(
 					: "No review graph cached for this workspace yet — a build was kicked off in the background; retry this call shortly."
 				: `${cause}A build is already running for this workspace; retry this call shortly.`,
 			...(lastBuildAttempt ? { lastBuildAttempt } : {}),
-			...(view ? { view } : {}),
 		};
 	}
 
@@ -932,7 +918,6 @@ export async function projectReport(
 	return {
 		available: true,
 		...(lastBuildAttempt ? { lastBuildAttempt } : {}),
-		...(view ? { view } : {}),
 		trust,
 		hubs,
 		entryPoints,
@@ -943,16 +928,13 @@ export async function projectReport(
 }
 
 // --- default text cell (#5150 R2) -------------------------------------------------
-// The default `project_report` rendering, with its own layout (NOT the compact
-// seam: `renderCompactProjectReport` stays frozen below for back-compat, so a
-// caller that pinned its bytes keeps them). The cell is a total function of
-// the artifact: every field the JSON payload carries is rendered in its own
+// The default `project_report` rendering. The cell is a total function of the
+// artifact: every field the JSON payload carries is rendered in its own
 // section, except the per-item `suggestedNext` navigation hints — which repeat
 // their item's file path beside the constant tool `module_report`, so the item
-// line itself is the hint — and the `view` rendering-instruction echo, which is
-// not report content. Both stay named in the trailing UNRENDERED row, and the
-// strict census in tests/clients/project-report-text.test.ts reds on any
-// runtime leaf outside those two sets.
+// line itself is the hint. They stay named in the trailing UNRENDERED row, and
+// the strict census in tests/clients/project-report-text.test.ts reds on any
+// runtime leaf outside that set.
 //
 // Staleness owns the trailing STALENESS block (per #5159: never inline in
 // another section, never mutated into a JSON payload — the MCP handler passes
@@ -961,9 +943,8 @@ export async function projectReport(
 //
 // View vocabulary (deliberately smaller than #5137's preset matrix): the
 // report has one projection, so `view` is a plain string — `"json"` returns
-// the full JSON document, anything else (absent, "default", "compact",
-// unknown) returns this text. "compact" falls through to this cell; the
-// frozen function below keeps the legacy bytes for whoever pinned them.
+// the full JSON document, anything else (absent, "default", unknown) returns
+// this text.
 export function renderTextProjectReport(report: ProjectReport): string {
 	if (!report.available) {
 		const lines = [
@@ -1107,9 +1088,9 @@ function renderLastBuildLines(report: ProjectReport): string[] {
 
 /** The declared row: every runtime leaf the sections above intentionally do
  * not name. Tokens are short names the census expands against runtime leaves
- * (`view`, or a `suggestedNext.<field>` suffix); the parenthetical carries
- * the reason. Empty set renders as an explicit `none` so the row itself is
- * the totality proof rather than its absence. */
+ * (a `suggestedNext.<field>` suffix); the parenthetical carries the reason.
+ * Empty set renders as an explicit `none` so the row itself is the totality
+ * proof rather than its absence. */
 function renderUnrenderedLine(report: ProjectReport): string {
 	const tokens: string[] = [];
 	const leaves: string[] = [];
@@ -1118,12 +1099,11 @@ function renderUnrenderedLine(report: ProjectReport): string {
 		tokens.push("suggestedNext.tool");
 	if (leaves.some((leaf) => leaf.endsWith(".suggestedNext.path")))
 		tokens.push("suggestedNext.path");
-	if (report.view !== undefined) tokens.push("view");
 	if (tokens.length === 0)
 		return "UNRENDERED: none — every artifact field is rendered above";
 	return (
 		`UNRENDERED: ${tokens.join(", ")} (per-item module_report navigation ` +
-		`hints repeat their item's file path; view is a rendering echo, not content)`
+		`hints repeat their item's file path)`
 	);
 }
 
@@ -1148,93 +1128,6 @@ export function collectLeafPaths(
 	out.push(prefix);
 }
 
-// --- compact (line-oriented text) rendering — frozen pre-#5150 hatch ------------
-
 function fmtPct(n: number): string {
 	return `${Math.round(n * 100)}%`;
-}
-
-/**
- * Render a ProjectReport as line-oriented text (mirrors
- * renderCompactModuleReport's convention) — one line per ranked item instead of
- * a repeated-keys JSON object.
- *
- * Frozen pre-#5150 hatch: the default is now `renderTextProjectReport` and the
- * JSON hatch is `view:"json"`, so no production caller reaches this renderer.
- * It stays exported (and covered) so a caller that pinned its bytes keeps them.
- * Deletion trigger: #5168 removes this renderer (and the `view` field) once
- * #5150 has shipped and no caller pins the compact bytes.
- */
-export function renderCompactProjectReport(report: ProjectReport): string {
-	if (!report.available) {
-		return `project_report — unavailable${report.hint ? `: ${report.hint}` : ""}`;
-	}
-	const lines: string[] = [];
-	// #919: an available graph whose persist failed serves this process fine
-	// but leaves the NEXT session cold — compact view must say so, not only
-	// the JSON view.
-	if (report.lastBuildAttempt?.reason) {
-		lines.push(`! build: ${report.lastBuildAttempt.reason}`);
-	}
-	const t = report.trust;
-	if (t) {
-		lines.push(
-			`TRUST: built ${t.graphBuiltAt} — ${t.filesCovered}/${t.filesTotal} files (${fmtPct(t.coverage)} coverage)` +
-				(t.resolution.sampleSize > 0
-					? ` — resolution: exact ${fmtPct(t.resolution.exact)}, import ${fmtPct(t.resolution.import)}, receiver-type ${fmtPct(t.resolution.receiverType)}, name-only ${fmtPct(t.resolution.nameOnly)}`
-					: " — no resolution-tagged edges yet"),
-		);
-		for (const note of t.notes) lines.push(`  ! ${note}`);
-	}
-	if (report.hubs?.length) {
-		lines.push("HUBS:");
-		for (const h of report.hubs) {
-			const role = h.role ? ` — ${h.role}` : "";
-			lines.push(
-				`  ${h.file}${role}; ${h.fanIn} importer(s), blastRadius ${h.blastRadius}`,
-			);
-		}
-	}
-	if (report.entryPoints?.length) {
-		lines.push("ENTRY POINTS:");
-		for (const e of report.entryPoints) {
-			lines.push(`  ${e.file}; fan-out ${e.fanOut}`);
-		}
-	}
-	if (report.subsystems) {
-		const s = report.subsystems;
-		lines.push(
-			`SUBSYSTEMS: ${s.directories.length} directories, ${s.edges.length} cross-dir edge group(s)`,
-		);
-		if (s.cycles.length > 0) {
-			lines.push("  CYCLES:");
-			for (const c of s.cycles) {
-				lines.push(`    ${c.dirs.join(" <-> ")} (${c.edgeCount} edges)`);
-			}
-		}
-		if (s.violations.length > 0) {
-			lines.push("  LAYERING VIOLATIONS:");
-			for (const v of s.violations) {
-				lines.push(
-					`    ${v.from} -> ${v.to} (${v.count} edge(s), against the dominant ${v.to} -> ${v.from} direction, ${v.dominantCount} edge(s))`,
-				);
-			}
-		}
-	}
-	if (report.riskHotspots?.length) {
-		lines.push("RISK HOTSPOTS:");
-		for (const r of report.riskHotspots) {
-			lines.push(
-				`  ${r.file}; fan-in ${r.fanIn} × max complexity ${r.maxComplexity} = ${r.score}`,
-			);
-		}
-	}
-	if (report.deadWeight) {
-		lines.push(`DEAD WEIGHT (${report.deadWeight.disclaimer}):`);
-		for (const d of report.deadWeight.files) {
-			lines.push(`  ${d.file}`);
-		}
-		if (report.deadWeight.files.length === 0) lines.push("  (none found)");
-	}
-	return lines.join("\n");
 }
