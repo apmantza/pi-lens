@@ -122,6 +122,31 @@ describe("the ast-grep lsp census over a fixture /proc (#5146)", () => {
 		}
 	});
 
+	it("resets the read failure bound after a successful process read", () => {
+		fresh();
+		const readSync = vi
+			.spyOn(fs.Dir.prototype, "readSync")
+			.mockImplementationOnce(() => {
+				throw new Error("transient process census failure");
+			})
+			.mockImplementationOnce(() => ({ name: "not-a-pid" }) as fs.Dirent)
+			.mockImplementationOnce(() => {
+				throw new Error("persistent process census failure");
+			})
+			.mockImplementationOnce(() => {
+				throw new Error("persistent process census failure");
+			})
+			.mockImplementationOnce(() => {
+				throw new Error("persistent process census failure");
+			});
+		try {
+			expect(astGrepLspChildrenOwnedHere(proc, WORKER)).toEqual([]);
+			expect(readSync).toHaveBeenCalledTimes(5);
+		} finally {
+			readSync.mockRestore();
+		}
+	});
+
 	it("disables an unreadable process census once", () => {
 		fresh();
 		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
