@@ -14,11 +14,16 @@ describe("Vitest module cache roots (#5206)", () => {
 	});
 
 	it("separates cache directories for two worktree roots", () => {
-		const cacheA = resolveVitestCacheDir("/worktrees/worktree-a");
-		const cacheB = resolveVitestCacheDir("/worktrees/worktree-b");
+		// Host path functions: on Windows the roots resolve to a drive letter
+		// and backslashes, so POSIX literals would red the required job.
+		const rootA = path.resolve("worktrees", "worktree-a");
+		const rootB = path.resolve("worktrees", "worktree-b");
+		const cacheA = resolveVitestCacheDir(rootA);
+		const cacheB = resolveVitestCacheDir(rootB);
 
 		expect(cacheA).not.toBe(cacheB);
-		expect(cacheA).toBe("/worktrees/worktree-a/.vitest-cache");
-		expect(cacheB).toBe("/worktrees/worktree-b/.vitest-cache");
+		expect(path.dirname(cacheA)).toBe(rootA);
+		expect(path.dirname(cacheB)).toBe(rootB);
+		expect(path.basename(cacheA)).toBe(".vitest-cache");
 	});
 });
