@@ -385,7 +385,7 @@ describe("package-lock libc drift guard (#5207)", () => {
 		if (headLock !== null)
 			fs.writeFileSync(
 				path.join(root, "package-lock.json"),
-				JSON.stringify(headLock),
+				typeof headLock === "string" ? headLock : JSON.stringify(headLock),
 			);
 		probeGit(["init", "-q", "-b", "fixture-lock"], root);
 		probeGit(["add", "."], root);
@@ -491,6 +491,17 @@ describe("package-lock libc drift guard (#5207)", () => {
 		const result = check(root, libcLock({ kept: { version: "1.0.0" } }));
 
 		expect(result.status).toBe(0);
-		expect(result.stdout).toContain("libc drift: not checked");
+		expect(result.stdout).toContain(
+			"libc drift: not checked (HEAD records no package-lock.json)",
+		);
+	});
+
+	it("skips the comparison when HEAD's lockfile is unreadable", () => {
+		const root = committedRepo("{ not json");
+		const result = check(root, libcLock({ kept: { version: "1.0.0" } }));
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("libc drift: not checked (HEAD's");
+		expect(result.stdout).toContain("is unreadable");
 	});
 });
