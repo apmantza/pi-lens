@@ -4388,6 +4388,7 @@ export async function handleToolResult(
 							event.toolName,
 							HOOK_WALL_BUDGET_MS.tool_result_edit,
 							[late.result.withheldBlockerLine],
+							"inner-analysis-bound",
 						),
 						advisoryScope,
 					);

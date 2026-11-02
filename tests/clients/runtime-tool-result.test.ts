@@ -3319,10 +3319,12 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 		runtime: RuntimeCoordinator;
 		cacheManager: CacheManager;
 		flags?: string[];
+		toolName?: string;
+		clientsReady?: boolean;
 	}) {
 		return {
 			event: {
-				toolName: "edit",
+				toolName: args.toolName ?? "edit",
 				input: { path: args.filePath },
 				details: { diff: "+  1 export const x = 2;" },
 				content: [{ type: "text", text: "ok" }],
@@ -3335,6 +3337,13 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 			resetLSPService: () => {},
 			agentBehaviorRecord: () => [],
 			formatBehaviorWarnings: () => "",
+			...(args.clientsReady
+				? {
+						biomeClient: {},
+						ruffClient: {},
+						metricsClient: {},
+					}
+				: {}),
 		} as any;
 	}
 
@@ -3568,6 +3577,9 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 				await acrossReplacement(
 					"late-withheld",
 					async ({ tmpDir, filePath, runtime, cacheManager }) => {
+						vi.useFakeTimers({
+							toFake: ["setTimeout", "clearTimeout"],
+						});
 						const goneFile = createTempFile(tmpDir, "gone.ts", "export {};\n");
 						const abortedFile = createTempFile(
 							tmpDir,
@@ -3581,11 +3593,21 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 						const secondary = beginScope({ role: "secondary" });
 						try {
 							const liveHandler = handleToolResult({
-								...toolResultDeps({ filePath, runtime, cacheManager }),
+								...toolResultDeps({
+									filePath,
+									runtime,
+									cacheManager,
+									clientsReady: true,
+								}),
 								advisoryScope: secondary.capture(),
 							});
 							const goneHandler = handleToolResult(
-								toolResultDeps({ filePath: goneFile, runtime, cacheManager }),
+								toolResultDeps({
+									filePath: goneFile,
+									runtime,
+									cacheManager,
+									clientsReady: true,
+								}),
 							);
 							// Escape mid-check: a cancelled turn, not a late result.
 							const escape = new AbortController();
@@ -3594,6 +3616,7 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 									filePath: abortedFile,
 									runtime,
 									cacheManager,
+									clientsReady: true,
 								}),
 								signal: escape.signal,
 							});
@@ -3605,8 +3628,9 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 							escape.abort();
 							await abortedHandler;
 							settle.get("aborted.ts")?.resolve();
-							await new Promise((resolve) => setImmediate(resolve));
+							await vi.advanceTimersByTimeAsync(0);
 							expect(lateRows()).toEqual([]);
+							await vi.advanceTimersByTimeAsync(10_000);
 							// Both handlers return at the inner bound with nothing collected.
 							await Promise.all([liveHandler, goneHandler]);
 							expect(lateRows()).toEqual([]);
@@ -3629,6 +3653,9 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 									),
 								}),
 							]);
+							expect(delivered[0]?.content).toContain(
+								"this edit call was still running when the inner 10000ms analysis bound fired",
+							);
 
 							// Session 2 starts; the held dispatch of session 1 settles.
 							runtime.resetForSession();
@@ -3645,6 +3672,7 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 					},
 				);
 			} finally {
+				vi.useRealTimers();
 				logLatency.mockReset();
 			}
 		},

@@ -338,6 +338,9 @@ describe("#5108 F1: a late advisory reaches the session whose tool result it was
 		const primary = await textOf(primaryCtx());
 		expect(secondary).toContain("second.ts withheld");
 		expect(secondary).toContain("abandoned");
+		expect(secondary).toContain(
+			"this bash call was still running when the host stopped waiting (500ms)",
+		);
 		expect(primary).not.toContain("second.ts");
 	});
 

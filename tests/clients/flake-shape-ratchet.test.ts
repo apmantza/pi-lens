@@ -585,7 +585,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "raw-timer-wait",
 		reason:
-			"the read-only bound and the 10 s inner pipeline bound are live wall deadlines racing a held handler or pipeline; a fake clock settles the race instantly and the abandonment under test never happens",
+			"the read-only host bound is a live wall deadline racing a held handler; the inner pipeline-bound unit witness uses fake timers, so it adds no real wait",
 	},
 	// 2026-09-15 (#2042 cheapest probe): the sample-tail file is written by the
 	// wrapper's own real setInterval loop in a separate process; a poll waits

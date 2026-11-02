@@ -3322,7 +3322,12 @@ function activateExtension(hostPi: ExtensionAPI) {
 					() => {
 						if (withheldNotices.length === 0) return;
 						queueAgentAdvisory(
-							buildWithheldAdvisory(rtToolName, budgetMs, withheldNotices),
+							buildWithheldAdvisory(
+								rtToolName,
+								budgetMs,
+								withheldNotices,
+								"host-deadline",
+							),
 							advisoryScope,
 						);
 						logLatency({
