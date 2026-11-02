@@ -6190,10 +6190,10 @@ export async function navRequest<T>(
 					scope: normalizedPath,
 					requestStartedAt,
 				});
-				return undefined;
+				throw new LspRequestTimeoutError(method, timeoutMs);
 			}
 			if (err instanceof Error && err.message.startsWith("Timeout after")) {
-				return undefined;
+				throw new LspRequestTimeoutError(method, timeoutMs);
 			}
 			throw err;
 		},
@@ -6211,6 +6211,19 @@ export async function navRequest<T>(
 		}
 	}
 	return result;
+}
+
+/** A request deadline is an error, not an empty LSP answer. */
+export class LspRequestTimeoutError extends Error {
+	readonly method: string;
+	readonly timeoutMs: number;
+
+	constructor(method: string, timeoutMs: number) {
+		super(`LSP request timed out: ${method} after ${timeoutMs}ms`);
+		this.name = "LspRequestTimeoutError";
+		this.method = method;
+		this.timeoutMs = timeoutMs;
+	}
 }
 
 /**

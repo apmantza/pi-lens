@@ -639,6 +639,38 @@ describe("lsp_navigation tool", () => {
 		).toHaveBeenCalled();
 	});
 
+	it("reports a navigation timeout as an error, not an empty result", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		(
+			mocked.service as { documentSymbol: ReturnType<typeof vi.fn> }
+		).documentSymbol = vi
+			.fn()
+			.mockRejectedValue(
+				new Error(
+					"LSP request timed out: textDocument/documentSymbol after 100ms",
+				),
+			);
+
+		const result = await tool.execute(
+			"document-symbol-timeout",
+			{
+				operation: "documentSymbol",
+				path: path.resolve("tests/tools/lsp-navigation.test.ts"),
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBe(true);
+		expect(parseToolJson(result)).toMatchObject({
+			ok: false,
+			status: "error",
+			resultCount: 0,
+		});
+		expect(String(result.content[0]?.text)).toContain("timed out");
+	});
+
 	it("attaches searchReads for reference locations", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 
