@@ -110,6 +110,10 @@ import {
 } from "./diagnostic-binding.js";
 import { getServersForFileWithConfig } from "./config.js";
 import { serverIdsForConfigFile } from "./server-config-files.js";
+import {
+	isLspRequestTimeoutError,
+	type LspRequestTimeoutError,
+} from "./request-timeout-error.js";
 // #2052: deliberately NOT taken from `config.js`. This module's import surface
 // from `config.js` is mirrored by explicit `vi.mock` factories in ~58 test
 // files, so every new symbol taken from there breaks all of them.
@@ -545,7 +549,11 @@ export interface RenameNotifyFailure {
 export interface LSPRenameFileResult {
 	applied: boolean;
 	serverIds: string[];
-	willRenameFailures: Array<{ serverId: string; error: string }>;
+	willRenameFailures: Array<{
+		serverId: string;
+		error: string;
+		timeout?: LspRequestTimeoutError;
+	}>;
 	didRenameFailures: RenameNotifyFailure[];
 	droppedConflicts: number;
 	inputEditCount: number;
@@ -555,7 +563,13 @@ export interface LSPRenameFileResult {
 }
 
 export interface LSPDiagnosticsHealth {
-	health: "ok" | "ok_empty" | "no_clients" | "no_clients_stale" | "destroyed";
+	health:
+		| "ok"
+		| "ok_empty"
+		| "timeout"
+		| "no_clients"
+		| "no_clients_stale"
+		| "destroyed";
 	failureKind: string;
 	serverCountAttempted: number;
 	serverCountReady: number;
@@ -7598,7 +7612,12 @@ export class LSPService {
 		const serversWithDiagnostics = perServerFull.filter(
 			(entry) => entry.diagnosticCount > 0,
 		).length;
-		const failureKind = merged.length === 0 ? "ok_empty" : "success";
+		const timedOut = earlyUnblockedCount > 0;
+		const failureKind = timedOut
+			? "timeout"
+			: merged.length === 0
+				? "ok_empty"
+				: "success";
 		const unanswered = unansweredPrimaries(
 			spawned,
 			resolvedPrimaryRoots,
@@ -7607,7 +7626,12 @@ export class LSPService {
 		const unavailablePrimaryServerIds = unanswered.serverIds;
 
 		this.lastDiagnosticsHealth.set(normalizedPath, {
-			health: failureKind === "success" ? "ok" : "ok_empty",
+			health:
+				failureKind === "timeout"
+					? "timeout"
+					: failureKind === "success"
+						? "ok"
+						: "ok_empty",
 			failureKind,
 			serverCountAttempted,
 			serverCountReady: perServerFull.length,
@@ -8270,7 +8294,12 @@ export class LSPService {
 			(server) => server.id,
 		);
 		const activeClients = this.activeClientsForCwd(cwd, priorityServerIds);
-		const willRenameFailures: Array<{ serverId: string; error: string }> = [];
+		const willRenameFailures: Array<{
+			serverId: string;
+			error: string;
+			timeout?: LspRequestTimeoutError;
+		}> = [];
+		let firstTimeout: LspRequestTimeoutError | undefined;
 		const didRenameFailures: RenameNotifyFailure[] = [];
 		const willRenameClients = activeClients.filter(({ serverId, client }) => {
 			if (client.getOperationSupport().willRenameFiles === true) return true;
@@ -8302,9 +8331,12 @@ export class LSPService {
 						failed: false,
 					};
 				} catch (err) {
+					const timeout = isLspRequestTimeoutError(err) ? err : undefined;
+					if (timeout && !firstTimeout) firstTimeout = timeout;
 					willRenameFailures.push({
 						serverId,
 						error: err instanceof Error ? err.message : String(err),
+						...(timeout ? { timeout } : {}),
 					});
 					return { clientKey, serverId, edit: null, failed: true };
 				}
@@ -8318,6 +8350,11 @@ export class LSPService {
 			(result) => !result.failed,
 		);
 		if (willRenameClients.length > 0 && successfulWillResults.length === 0) {
+			if (
+				firstTimeout &&
+				willRenameFailures.every((failure) => failure.timeout !== undefined)
+			)
+				throw firstTimeout;
 			throw new Error(
 				`workspace/willRenameFiles failed for all active LSP servers: ${willRenameFailures.map((failure) => `${failure.serverId}: ${failure.error}`).join("; ")}`,
 			);

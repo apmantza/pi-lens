@@ -156,6 +156,7 @@ it.each([
 			const envelope = JSON.parse(text);
 			if (outcome === "hit") {
 				expect(result.isError).not.toBe(true);
+				expect(envelope.status).toBe("success");
 				expect(envelope.notes).toContain(
 					"served from documentSymbol fallback; definition timed out.",
 				);
@@ -164,6 +165,7 @@ it.each([
 				]);
 				expect(text).toContain("definition timed out");
 				expect(text).toContain("definition.ts");
+				expect(result.details?.failureKind).toBe("fallback_after_timeout");
 			} else {
 				expect(result.isError).toBe(true);
 				expect(envelope).toMatchObject({

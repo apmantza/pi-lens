@@ -22,7 +22,8 @@
  * implementation; do not re-flag in dead-code sweeps while #236 is open.
  */
 
-import { withinRemaining } from "./deadline-utils.js";
+import { withDeadline } from "./deadline-utils.js";
+import { isLspRequestTimeoutError } from "./lsp/request-timeout-error.js";
 import type { LSPLocation } from "./lsp/client.js";
 import type { ModuleSymbolUsedBy } from "./module-report.js";
 import { uriToPath } from "./path-utils.js";
@@ -73,7 +74,7 @@ interface LspServiceLike {
 }
 
 export interface ModuleReportLspEnrichment {
-	source: "live-lsp" | "none";
+	source: "live-lsp" | "none" | "timeout";
 	/** Reference data resolved from a live LSP server. */
 	references: boolean;
 	/** At least one symbol had implementers. */
@@ -200,15 +201,21 @@ async function enrichModuleReportWithLspNow(
 	>();
 	let sawReferences = false;
 	let sawImpl = false;
+	let timedOut = false;
 	let next = 0;
 	const cappedTargets = targets.slice(0, MAX_LSP_SYMBOLS);
+	const withinLspRemaining = <T>(promise: Promise<T>) =>
+		withDeadline(promise, {
+			deadlineAt,
+			onTimeout: "undefined",
+			onReject: "propagate",
+		});
 
 	async function enrichOne(sym: ExtractedSymbol): Promise<void> {
 		if (Date.now() >= deadlineAt) return;
 		const { line, character } = lspPosition(sym, lines);
-		const refsPromise = withinRemaining(
+		const refsPromise = withinLspRemaining(
 			lsp.references(absPath, line, character, false),
-			deadlineAt,
 		).then((locs) => {
 			if (!locs || Date.now() > deadlineAt) return;
 			const usedBy = lspLocationsToUsedBy(locs, maxRefs);
@@ -218,17 +225,20 @@ async function enrichModuleReportWithLspNow(
 		});
 
 		const implPromise = INTERFACE_LIKE_KINDS.has(sym.kind)
-			? withinRemaining(
-					lsp.implementation(absPath, line, character),
-					deadlineAt,
-				).then((locs) => {
-					if (!locs || locs.length === 0 || Date.now() > deadlineAt) return;
-					byName.set(sym.name, { ...byName.get(sym.name), hasImpl: true });
-					sawImpl = true;
-				})
+			? withinLspRemaining(lsp.implementation(absPath, line, character)).then(
+					(locs) => {
+						if (!locs || locs.length === 0 || Date.now() > deadlineAt) return;
+						byName.set(sym.name, { ...byName.get(sym.name), hasImpl: true });
+						sawImpl = true;
+					},
+				)
 			: Promise.resolve();
-
-		await Promise.allSettled([refsPromise, implPromise]);
+		const outcomes = await Promise.allSettled([refsPromise, implPromise]);
+		for (const outcome of outcomes) {
+			if ("reason" in outcome && isLspRequestTimeoutError(outcome.reason)) {
+				timedOut = true;
+			}
+		}
 	}
 
 	async function worker(): Promise<void> {
@@ -247,7 +257,8 @@ async function enrichModuleReportWithLspNow(
 	await Promise.allSettled(workers);
 
 	return {
-		source: sawReferences || sawImpl ? "live-lsp" : "none",
+		source:
+			sawReferences || sawImpl ? "live-lsp" : timedOut ? "timeout" : "none",
 		references: sawReferences,
 		implementations: sawImpl,
 		byName,

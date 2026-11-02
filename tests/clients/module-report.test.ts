@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	buildCallGraph,
 	CALL_GRAPH_CACHE_VERSION,
@@ -26,6 +26,10 @@ import {
 } from "../../clients/review-graph/builder.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { LspRequestTimeoutError } from "../../clients/lsp/request-timeout-error.js";
+import { enrichModuleReportWithLsp } from "../../clients/module-report-lsp.js";
+import { _setServersForFileForTests } from "../../clients/lsp/config.js";
+import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 
 // module_report consumes the cached review graph read-only (#256) — it never
 // builds and never calls an LSP server. Production warms the cache via the edit
@@ -64,6 +68,33 @@ function makeEnv(prefix = "pi-lens-modreport-") {
 }
 
 describe("moduleReport — outline + structure", () => {
+	it("keeps an LSP references timeout out of source none", async () => {
+		const servers = vi.fn(() => [{} as never]);
+		_setServersForFileForTests(servers);
+		await installLspServiceDouble({
+			references: vi
+				.fn()
+				.mockRejectedValue(
+					new LspRequestTimeoutError("textDocument/references", 100, 101),
+				),
+			implementation: vi.fn().mockResolvedValue([]),
+		});
+		try {
+			await expect(
+				enrichModuleReportWithLsp(
+					"/workspace/a.ts",
+					["interface Thing {}"],
+					[{ name: "Thing", kind: "interface", line: 1, column: 1 } as never],
+					5,
+					100,
+				),
+			).resolves.toMatchObject({ source: "timeout" });
+		} finally {
+			_setServersForFileForTests(undefined);
+			await installLspServiceDouble(null);
+		}
+	});
+
 	it("extracts a TypeScript outline with signatures, line ranges, and read args", async () => {
 		const env = makeEnv();
 		const file = createTempFile(
