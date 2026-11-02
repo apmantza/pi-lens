@@ -497,6 +497,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"two activations in one process each assert their own module-level resetLSPService spy, and the singleton lifecycle holds one beforeReset at a time, so the seam cannot tell the activations apart; the stand-in spawns no language server",
 		},
+	// 2026-11-01 (#5108 remainder): delays the REAL pipeline to stand in for a
+	// cold analyzer that outruns the inner 10 s bound.
+	"in-process-mock:index-5108-opaque-blocker-disclosure-witness.test.ts::clients/pipeline":
+		{
+			detector: "in-process-mock",
+			reason:
+				"a pass-through wrapper delays the real runPipeline past the 10 s inner bound (a cold analyzer stand-in) and then runs it unchanged; dispatch, advisory queue and the pi session stay real, and no installed analyzer is slow on demand",
+		},
 	// 2026-10-31 (#5108): pass-through wrapper that holds the real handler open.
 	"in-process-mock:index-5108-opaque-blocker-disclosure-witness.test.ts::clients/runtime-tool-result":
 		{
@@ -582,7 +590,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "raw-timer-wait",
 		reason:
-			"the read-only bound is a live wall deadline racing a held handler; a fake clock settles the race instantly and the abandonment under test never happens",
+			"the read-only host bound is a live wall deadline racing a held handler; the inner pipeline-bound unit witness uses fake timers, so it adds no real wait",
 	},
 	// #5150 R2: the parity smoke waits for the real MCP child's background
 	// review-graph build before it can compare the two surfaces' text; the wait
