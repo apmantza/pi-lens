@@ -96,11 +96,10 @@ describe("#3585 sweep pre-open backlog accounting", () => {
 			calls += 1;
 			return calls === 1 ? firstOpenResult : undefined;
 		});
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "ast-grep"
-					? aux
-					: makeClient("typescript", async () => undefined),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "ast-grep"
+				? aux
+				: makeClient("typescript", async () => undefined),
 		);
 		await raw.runWorkspaceDiagnostics(tmp);
 		return { ledgerAtWrite, aux };

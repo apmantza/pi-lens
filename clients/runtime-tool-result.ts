@@ -681,6 +681,16 @@ interface ToolResultDeps {
 	 */
 	withheldNotices?: string[];
 	/**
+	 * #5165 F1: the HOST's own liveness for this tool result, beside the
+	 * notices the same call collects. The host wall that abandons
+	 * `handleToolResult` is a second bound, and it can discard the returned
+	 * result while the dispatch inside is still inside its own 10 s bound, so
+	 * `delivery.abandoned` alone would let the findings row claim an inline
+	 * delivery the model never saw. The caller flips `abandoned` in the branch
+	 * where its own bound fired; absent means the caller has no such bound.
+	 */
+	hostDelivery?: { abandoned: boolean };
+	/**
 	 * #5108 F1: the session an agent advisory from this tool result is for,
 	 * captured by the caller at handler entry. The coordinator's own scope
 	 * (`writeSession`) is the primary's, while a concurrent secondary's
@@ -1572,6 +1582,8 @@ function publishInlineVerdict(args: {
  * pipeline AND record" block could not express.
  */
 async function dispatchPipelineAnalysis(args: {
+	/** #5165: the caller stopped waiting; analysis still owns its verdict. */
+	delivery: { abandoned: boolean };
 	deps: ToolResultDeps;
 	runtime: RuntimeCoordinator;
 	filePath: string;
@@ -1673,6 +1685,8 @@ async function dispatchPipelineAnalysis(args: {
 	const pipelinePromise = runPipeline(
 		{
 			signal: deps.signal,
+			inlineDeliveryAvailable: () =>
+				!args.delivery.abandoned && !deps.hostDelivery?.abandoned,
 			filePath,
 			cwd: dispatchCwd,
 			projectRoot: turnStateCwd,
@@ -1824,6 +1838,35 @@ async function dispatchPipelineAnalysis(args: {
 		});
 
 		const notice = runtime.formatPipelineCrashNotice(filePath, pipelineErr);
+		if (args.delivery.abandoned && !deps.signal?.aborted && notice) {
+			sessionGeneration.guardedWrite(filePath, () =>
+				queueAgentAdvisory(
+					buildWithheldAdvisory(
+						event.toolName,
+						HOOK_WALL_BUDGET_MS.tool_result_edit,
+						[notice],
+						"inner-analysis-bound",
+					),
+					deps.advisoryScope ?? sessionGeneration,
+				),
+			);
+			// #5165 F3: the late REJECTION discloses on the same surface as the
+			// late success, so a reader of this phase counts both populations.
+			// `crash` separates them without a second phase name.
+			logLatency({
+				type: "phase",
+				phase: "withheld_blocker_late_advisory",
+				filePath: event.toolName,
+				durationMs: 0,
+				metadata: {
+					notices: 1,
+					budgetMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
+					late: "inner-bound",
+					crash: true,
+				},
+			});
+		}
+
 		return {
 			crashed: true,
 			response: {
@@ -1976,6 +2019,53 @@ async function dispatchPipelineAnalysis(args: {
 						}),
 				});
 			}
+		}
+	}
+
+	// #5165: bounded() abandons only the wait. Both authored callers still
+	// publish the ordered verdict and disclose the result to their own scope.
+	if (
+		args.delivery.abandoned &&
+		!deps.signal?.aborted &&
+		getFileStateHash(filePath) === finalStateHash &&
+		sessionGeneration.guardedWrite(filePath, () => true) === true
+	) {
+		publishInlineVerdict({
+			runtime,
+			cacheManager: deps.cacheManager,
+			filePath,
+			result,
+			writeSession: sessionGeneration,
+			writeIndex,
+			writeOrderTurn,
+			authored: allowAutonomousWriters,
+			getFlag,
+			turnStateCwd,
+			analysisRootMode,
+			sessionId: deps.sessionId,
+		});
+		const notice = result.inlineBlockerSummary || result.withheldBlockerLine;
+		if (notice) {
+			queueAgentAdvisory(
+				buildWithheldAdvisory(
+					event.toolName,
+					HOOK_WALL_BUDGET_MS.tool_result_edit,
+					[notice],
+					"inner-analysis-bound",
+				),
+				deps.advisoryScope ?? sessionGeneration,
+			);
+			logLatency({
+				type: "phase",
+				phase: "withheld_blocker_late_advisory",
+				filePath: event.toolName,
+				durationMs: 0,
+				metadata: {
+					notices: 1,
+					budgetMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
+					late: "inner-bound",
+				},
+			});
 		}
 	}
 
@@ -3768,8 +3858,10 @@ export async function handleToolResult(
 					const observedWriteIndex = runtime.nextWriteIndex();
 					const observedWriteOrderTurn = runtime.writeOrderTurn;
 					const observedTurnStateCwd = path.resolve(workspaceRoot);
+					const observedDelivery = { abandoned: false };
 					const observedDispatchOutcome = await bounded(
 						dispatchPipelineAnalysis({
+							delivery: observedDelivery,
 							deps,
 							runtime,
 							filePath: observedPath,
@@ -3818,6 +3910,7 @@ export async function handleToolResult(
 							label: "observed-tool-result-analysis",
 						},
 					);
+					observedDelivery.abandoned = !observedDispatchOutcome;
 					if (observedDispatchOutcome?.crashed) {
 						// #2464 review round 2, S6: parity with the classified chain — a
 						// pipeline crash surfaces its notice to the agent instead of being
@@ -4337,7 +4430,9 @@ export async function handleToolResult(
 	// early return. This call site is otherwise unchanged — same arguments, same
 	// crash-then-return / success-then-continue shape as before the split.
 	if (!classifiedClientsReady || !entryLive) return;
+	const delivery = { abandoned: false };
 	const dispatching = dispatchPipelineAnalysis({
+		delivery,
 		deps,
 		runtime,
 		filePath,
@@ -4370,50 +4465,8 @@ export async function handleToolResult(
 		hook: "tool_result_edit",
 		label: "pipeline-analysis",
 	});
-	if (!dispatchOutcome) {
-		// #5108: the bound abandons the dispatch, it does not cancel it, and the
-		// tail below (which collects the withheld line) is skipped. A dispatch
-		// that settles later hands that line to the session that wrote the file
-		// through the same queue and scope as `index.ts`' host-bound path. Those
-		// two never carry the same file's line: that one needs it collected
-		// inside this bound, this one needs the bound to have fired. An aborted
-		// call is a cancelled turn, not a late result.
-		if (!deps.signal?.aborted) {
-			void dispatching.then(
-				(late) => {
-					if (deps.signal?.aborted) return;
-					if (late.crashed || !late.result.withheldBlockerLine) return;
-					if (getFileStateHash(filePath) !== initialStateHash) return;
-					if (writeSession.guardedWrite(filePath, () => true) !== true) return;
-					queueAgentAdvisory(
-						buildWithheldAdvisory(
-							event.toolName,
-							HOOK_WALL_BUDGET_MS.tool_result_edit,
-							[late.result.withheldBlockerLine],
-							"inner-analysis-bound",
-						),
-						advisoryScope,
-					);
-					logLatency({
-						type: "phase",
-						phase: "withheld_blocker_late_advisory",
-						filePath: event.toolName,
-						durationMs: 0,
-						metadata: {
-							notices: 1,
-							budgetMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
-							late: "inner-bound",
-						},
-					});
-				},
-				() => {
-					// none: `bounded()` above hands a rejection to the host; this only
-					// keeps the derived promise from going unhandled.
-				},
-			);
-		}
-		return;
-	}
+	delivery.abandoned = !dispatchOutcome;
+	if (!dispatchOutcome) return;
 	if (dispatchOutcome.crashed) {
 		return dispatchOutcome.response;
 	}

@@ -342,6 +342,8 @@ export interface PipelineContext {
 	 * through keep passing unchanged).
 	 */
 	getFlagSource?: (name: string, filePath?: string) => PiLensFlagSource;
+	/** #5165: live hook-delivery state, read when findings are logged. */
+	inlineDeliveryAvailable?: () => boolean;
 	/** Debug logger */
 	dbg: (msg: string) => void;
 	/**
@@ -2770,7 +2772,7 @@ async function analysePipeline(
 					turnIndex: ctx.telemetry?.turnIndex ?? 0,
 					writeIndex: ctx.telemetry?.writeIndex ?? 0,
 				},
-				inlineKeys.has(toKey(d)),
+				(ctx.inlineDeliveryAvailable?.() ?? true) && inlineKeys.has(toKey(d)),
 			);
 		}
 	}
