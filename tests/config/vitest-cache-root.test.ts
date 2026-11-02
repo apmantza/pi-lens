@@ -4,11 +4,13 @@ import vitestConfig, { resolveVitestCacheDir } from "../../vitest.config.ts";
 
 describe("Vitest module cache roots (#5206)", () => {
 	it("does not use the linked install's shared cache", () => {
-		expect(vitestConfig.cacheDir).toBe(resolveVitestCacheDir(process.cwd()));
-		expect(vitestConfig.cacheDir).not.toBe(
+		expect(vitestConfig.test?.fsModuleCachePath).toBe(
+			resolveVitestCacheDir(process.cwd()),
+		);
+		expect(vitestConfig.test?.fsModuleCachePath).not.toBe(
 			path.join(process.cwd(), "node_modules", ".vitest-cache"),
 		);
-		expect(vitestConfig.cacheDir).toBe(
+		expect(vitestConfig.test?.fsModuleCachePath).toBe(
 			path.join(process.cwd(), ".vitest-cache"),
 		);
 	});

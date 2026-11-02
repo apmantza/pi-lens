@@ -1071,8 +1071,11 @@ export const tmpFixtureHygieneInclude = [
 // call site in runtime-turn-session.test.ts.
 
 export default defineConfig({
-	cacheDir: resolveVitestCacheDir(process.cwd()),
 	test: {
+		// Vitest's filesystem module cache (#5206). Its default is
+		// node_modules/.vitest-cache, which every worktree that links the shared
+		// install reads; Vite's cacheDir holds only results.json and is unrelated.
+		fsModuleCachePath: resolveVitestCacheDir(process.cwd()),
 		exclude: sharedExclude,
 		// Root-config-only in Vitest 4 (see the grammar-heavy project's comment
 		// below) — applies to every project's fork teardown, not just the
