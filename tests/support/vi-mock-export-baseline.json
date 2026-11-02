@@ -7,7 +7,7 @@
 	"tests/clients/availability-latching-clients.test.ts:../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 26,
 	"tests/clients/availability-latching-siblings.test.ts:../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getInstallAttempt\",\"getToolEnvironment\",\"isSpawnableCommand\",\"resetPathWalkMemo\"]": 47,
 	"tests/clients/availability-latching-siblings.test.ts:../../clients/safe-spawn.js:[\"isCommandAvailableAsync\",\"safeSpawn\",\"safeSpawnAsync\"]": 14,
-	"tests/clients/bash-read-guard-integration.test.ts:../../clients/read-guard-logger.js:[\"getReadGuardLogPath\",\"logReadGuardEvent\"]": 5,
+	"tests/clients/bash-read-guard-integration.test.ts:../../clients/read-guard-logger.js:[\"getReadGuardLogPath\",\"logReadGuardEvent\"]": 4,
 	"tests/clients/biome-autofix-argv.test.ts:../../clients/installer/index.js:[\"ensureTool\"]": 52,
 	"tests/clients/biome-autofix-argv.test.ts:../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
 	"tests/clients/biome-client-dedupe.test.ts:../../clients/installer/index.js:[\"ensureTool\",\"getInstallAttempt\"]": 51,
