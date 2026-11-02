@@ -530,9 +530,9 @@ The seven advisory lint tools are steps of one `Lint (advisory)` job, and the PR
 title and close-keyword checks are steps of one gating `PR metadata` job.
 
 CI cost gates (#3801). The heavy advisory jobs (`CodeQL (<language>) (advisory)`)
-start only after every required check passed on the
-head (`heavy-gate` in ci.yml; it is red when a lint.yml required check was red
-or unfinished at its deadline). ci-verdict lists them with their real state
+start only after every required check but `Hot-path latency (advisory)` passed on
+the head (`heavy-gate` in ci.yml; it is red when a required check it polls was
+red or unfinished at its deadline). ci-verdict lists them with their real state
 (PENDING, or NOT RUN with the gate's reason) before and after the verdict turns
 success. A docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
 nothing else, classified by `scripts/ci-changed-files.mjs`; every doubt runs the

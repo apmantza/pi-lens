@@ -479,7 +479,7 @@ function deferredStateFor(gate) {
 		};
 	return {
 		deferredState: "NOT RUN",
-		deferredWhy: `the heavy gate concluded ${gate.conclusion} (a lint.yml required check was red or unfinished at its deadline)`,
+		deferredWhy: `the heavy gate concluded ${gate.conclusion} (a required check it polls was red or unfinished at its deadline)`,
 	};
 }
 
