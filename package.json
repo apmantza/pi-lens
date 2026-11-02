@@ -164,7 +164,7 @@
 		"@jridgewell/sourcemap-codec": "^1.6.0",
 		"@jridgewell/trace-mapping": "^0.3.31",
 		"@stryker-mutator/core": "10.0.0",
-		"@stryker-mutator/vitest-runner": "10.0.0",
+		"@stryker-mutator/vitest-runner": "10.1.1",
 		"@taplo/cli": "0.7.0",
 		"@types/node": "^26.6.3",
 		"@types/pidusage": "^2.0.5",
