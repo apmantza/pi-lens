@@ -42,6 +42,7 @@ import {
 	normalizeMapKey,
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
+import { withBudget } from "../deadline-utils.js";
 import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
 import { probeToolAsync } from "../tool-probe.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
@@ -2218,7 +2219,6 @@ async function runRunner(
 		runner.timeoutMs ?? RUNNER_TIMEOUT_MS,
 		getRunnerTimeoutFloorMs(),
 	);
-	let timer: ReturnType<typeof setTimeout> | undefined;
 	// #1723: mark this runner as the in-flight phase for the WHOLE race below,
 	// not just the runner's own promise — a synchronous CPU hog inside
 	// `runner.run` (ast-grep-napi, tree-sitter, …) blocks the event loop before
@@ -2230,18 +2230,17 @@ async function runRunner(
 	// reasoning and the cost note (negligible next to a runner invocation).
 	const phaseToken = phaseStarted(runner.id);
 	try {
-		const result = await Promise.race([
-			runner.run(ctx).finally(() => clearTimeout(timer)),
-			new Promise<never>((_, reject) => {
-				timer = setTimeout(
-					() =>
-						reject(
-							new Error(`Runner ${runner.id} timed out after ${timeoutMs}ms`),
-						),
-					timeoutMs,
-				);
-			}),
-		]);
+		// `withBudget` settles `undefined` when the budget lapses; boxing the
+		// runner's value tells that apart from a runner that resolved nothing.
+		// The message keeps the words `failureKind` is classified from below.
+		const outcome = await withBudget(
+			runner.run(ctx).then((value) => ({ value })),
+			timeoutMs,
+		);
+		if (outcome === undefined) {
+			throw new Error(`Runner ${runner.id} timed out after ${timeoutMs}ms`);
+		}
+		const result = outcome.value;
 
 		const diagnostics = result.diagnostics.map((d) => ({
 			...d,
@@ -2254,7 +2253,6 @@ async function runRunner(
 			semantic: result.semantic ?? defaultSemantic,
 		};
 	} catch (error) {
-		clearTimeout(timer);
 		ctx.log(`Runner ${runner.id} failed: ${error}`);
 		const message = error instanceof Error ? error.message : String(error);
 		return {

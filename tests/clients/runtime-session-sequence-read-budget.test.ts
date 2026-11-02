@@ -59,6 +59,7 @@ import {
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 import { waitFor } from "./interleaving-kit.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
+import { observeTimerRelease } from "../support/timer-release.js";
 
 const logLatencySpy = vi.hoisted(() => vi.fn());
 const readLatestProjectSequenceAsyncSpy = vi.hoisted(() => vi.fn());
@@ -323,6 +324,30 @@ describe("#1162 — bounded session_start sequence read", () => {
 				}),
 			);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Shape 4 (#1097): the sequence read's budget timer is released when the read
+	// lands first. A hand-rolled copy that leaves it armed keeps a REF'd tail on a
+	// one-shot `pi --print` process for the rest of the budget.
+	it("releases the sequence read's budget timer once a healthy read lands", async () => {
+		const env = setupTestEnvironment("pi-lens-seq-budget-release-");
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		process.env.PI_LENS_SEQUENCE_READ_BUDGET_MS = "1234";
+		const observer = observeTimerRelease(1234);
+		try {
+			const cwd = makeProject(env);
+			readLatestProjectSequenceAsyncSpy.mockResolvedValue({
+				projectSeq: 3,
+				fileSeqByPath: new Map([["/some/other.ts", 1]]),
+				logEntries: 4,
+			});
+			await handleSessionStart(makeDeps(cwd, new RuntimeCoordinator()));
+			expect(observer.armed()).toHaveLength(1);
+			expect(observer.unreleased()).toEqual([]);
+		} finally {
+			observer.restore();
 			env.cleanup();
 		}
 	});

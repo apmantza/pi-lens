@@ -24,6 +24,7 @@ import {
 	clearLatencyReports,
 	createDispatchContext,
 	dispatchForFile,
+	getLatencyReports,
 	RunnerRegistry,
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
@@ -113,6 +114,14 @@ describe("coverage notice keys on the primary runner's usable result (#3867)", (
 			expect(result.warnings.map((w) => w.message)).toContainEqual(
 				expect.stringContaining(COVERAGE_NOTICE),
 			);
+			// The row says WHY: `runRunner` classifies a timeout from the error's own
+			// words ("timed out"), so a timeout re-worded by a shared race reads
+			// `exception` and the collect-later tier never sees a timed-out run.
+			const row = getLatencyReports()
+				.at(-1)
+				?.runners.find((r) => r.runnerId === "lsp");
+			expect(row?.status).toBe("failed");
+			expect(row?.failureKind).toBe("timeout");
 		} finally {
 			vi.useRealTimers();
 		}

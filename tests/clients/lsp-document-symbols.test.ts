@@ -9,6 +9,7 @@ import {
 	installLspService,
 	installLspServiceDouble,
 } from "../support/lsp-service-seam.js";
+import { observeTimerRelease } from "../support/timer-release.js";
 
 // No service until a case installs one (the former `getLSPService: vi.fn()`
 // answered undefined). The first two cases are pure functions and never ask.
@@ -20,6 +21,21 @@ const range = (start: number, end: number) => ({
 	start: { line: start, character: 0 },
 	end: { line: end, character: 1 },
 });
+
+// A warm client whose document is open and whose `documentSymbol` is the case's.
+function installOpenDocumentClient(documentSymbol: () => Promise<unknown>) {
+	installLspService(
+		makeLspServiceDouble({
+			getWarmClientForFile: vi.fn().mockResolvedValue({
+				client: {
+					isDocumentOpen: () => true,
+					getOperationSupport: () => ({ documentSymbol: true }),
+					documentSymbol,
+				},
+			}),
+		}),
+	);
+}
 
 describe("LSP document symbols", () => {
 	it("selects the smallest hierarchical symbol and qualifies its ancestry", () => {
@@ -78,18 +94,32 @@ describe("LSP document symbols", () => {
 			.fn()
 			.mockRejectedValueOnce(new Error("nope"))
 			.mockReturnValueOnce(new Promise(() => {}));
-		installLspService(
-			makeLspServiceDouble({
-				getWarmClientForFile: vi.fn().mockResolvedValue({
-					client: {
-						isDocumentOpen: () => true,
-						getOperationSupport: () => ({ documentSymbol: true }),
-						documentSymbol,
-					},
-				}),
-			}),
-		);
+		installOpenDocumentClient(documentSymbol);
 		expect(await getOpenDocumentSymbols("/a.ts", 5)).toBeUndefined();
 		expect(await getOpenDocumentSymbols("/a.ts", 5)).toBeUndefined();
+	});
+
+	// Recurrence (shape 4, #1097/#1109): the budget is one shared `withBudget`
+	// race. A hand-rolled copy that leaves its losing timer armed keeps a REF'd
+	// tail on a one-shot `pi --print` process for the rest of the budget.
+	it.each([
+		["answers first", async () => [{ name: "foo", kind: 12 }]],
+		[
+			"rejects",
+			async () => {
+				throw new Error("server died");
+			},
+		],
+	])("releases the budget timer when the request %s", async (_name, answer) => {
+		const BUDGET_MS = 4_321;
+		const observer = observeTimerRelease(BUDGET_MS);
+		try {
+			installOpenDocumentClient(answer);
+			await getOpenDocumentSymbols("/a.ts", BUDGET_MS);
+			expect(observer.armed()).toHaveLength(1);
+			expect(observer.unreleased()).toEqual([]);
+		} finally {
+			observer.restore();
+		}
 	});
 });

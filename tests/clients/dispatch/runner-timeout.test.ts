@@ -8,9 +8,12 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { observeTimerRelease } from "../../support/timer-release.js";
 import {
 	clearCoverageNoticeState,
+	clearLatencyReports,
 	createDispatchContext,
+	getLatencyReports,
 	RunnerRegistry,
 	dispatchForFile as runDispatchForFile,
 } from "../../../clients/dispatch/dispatcher.js";
@@ -169,6 +172,81 @@ describe("runRunner timeout behavior", () => {
 
 		expect(result.diagnostics.map((d) => d.id)).toEqual(["b-warn"]);
 	}, 500);
+});
+
+// Shape 4 (an unreleased timer): the runner's budget is one `withBudget` race in
+// `runRunner`. A hand-rolled copy of that race leaves its losing timer REF'd
+// for the rest of the budget (#1097/#1109). The timeout arm's `failureKind` is
+// read back in coverage-notice-runner-outcome.test.ts.
+describe("runRunner budget timer release", () => {
+	const BUDGET_MS = 7_777;
+	let registry: RunnerRegistry;
+
+	function context() {
+		return createDispatchContext(
+			"test.ts",
+			"/project",
+			{ getFlag: () => false },
+			new FactStore(),
+		);
+	}
+
+	beforeEach(() => {
+		registry = new RunnerRegistry();
+		clearCoverageNoticeState();
+		clearLatencyReports();
+	});
+	it("releases the runner's budget timer when the runner finishes first", async () => {
+		const observer = observeTimerRelease(BUDGET_MS);
+		try {
+			registry.register({
+				id: "fast-tool",
+				appliesTo: ["jsts"],
+				priority: 10,
+				timeoutMs: BUDGET_MS,
+				async run(): Promise<RunnerResult> {
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			await runDispatchForFile(
+				context(),
+				[{ mode: "all", runnerIds: ["fast-tool"] }],
+				registry,
+			);
+			expect(observer.armed()).toHaveLength(1);
+			expect(observer.unreleased()).toEqual([]);
+		} finally {
+			observer.restore();
+		}
+	});
+
+	it("releases the budget timer when the runner throws", async () => {
+		const observer = observeTimerRelease(BUDGET_MS);
+		try {
+			registry.register({
+				id: "exploding",
+				appliesTo: ["jsts"],
+				priority: 10,
+				timeoutMs: BUDGET_MS,
+				async run(): Promise<RunnerResult> {
+					throw new Error("runner blew up");
+				},
+			});
+			await runDispatchForFile(
+				context(),
+				[{ mode: "all", runnerIds: ["exploding"] }],
+				registry,
+			);
+			expect(observer.armed()).toHaveLength(1);
+			expect(observer.unreleased()).toEqual([]);
+			const row = getLatencyReports()[0].runners.find(
+				(r) => r.runnerId === "exploding",
+			);
+			expect(row?.failureKind).toBe("exception");
+		} finally {
+			observer.restore();
+		}
+	});
 });
 
 // #1723: runRunner is the hot dispatch path a synchronous CPU hog (ast-grep,
