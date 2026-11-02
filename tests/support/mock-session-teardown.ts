@@ -104,14 +104,17 @@ export function astGrepLspChildrenOwnedHere(
 		return owned;
 	}
 	try {
+		let consecutiveReadFailures = 0;
 		for (;;) {
 			let e: fs.Dirent | null;
 			try {
 				e = procDir.readSync();
 			} catch {
 				// The process directory can disappear between reads; skip it.
+				if (++consecutiveReadFailures >= 3) break;
 				continue;
 			}
+			consecutiveReadFailures = 0;
 			if (e === null) break;
 			const entry = e.name;
 			if (!/^\d+$/.test(entry)) continue;

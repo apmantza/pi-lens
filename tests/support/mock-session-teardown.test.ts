@@ -101,7 +101,29 @@ describe("the ast-grep lsp census over a fixture /proc (#5146)", () => {
 		}
 	});
 
+	it("bounds consecutive process census read failures", () => {
+		fresh();
+		const readSync = vi
+			.spyOn(fs.Dir.prototype, "readSync")
+			.mockImplementationOnce(() => {
+				throw new Error("persistent process census failure");
+			})
+			.mockImplementationOnce(() => {
+				throw new Error("persistent process census failure");
+			})
+			.mockImplementationOnce(() => {
+				throw new Error("persistent process census failure");
+			});
+		try {
+			expect(astGrepLspChildrenOwnedHere(proc, WORKER)).toEqual([]);
+			expect(readSync).toHaveBeenCalledTimes(3);
+		} finally {
+			readSync.mockRestore();
+		}
+	});
+
 	it("disables an unreadable process census once", () => {
+		fresh();
 		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
 			expect(
