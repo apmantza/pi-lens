@@ -343,6 +343,24 @@ file-scoped worklist and receives no project-wide scanner output.
     try) by `tests/clients/worker-message-boundary-ratchet.test.ts`; screen
     `close` and timer callbacks by hand.
 
+89. **Serial await of independent work on a hot path:** a `for` loop or a run
+    of `await`s on the edit, write or turn-end path waits for each call before
+    starting the next, though no call needs another's result. The cost is the
+    sum of the calls instead of the slowest one: LSP servers spawned one after
+    another made a cold first edit block ~7 s (#2540), and a serial stat walk
+    took 8 s on a slow filesystem (#1409). Overlapping is not always a win:
+    some servers answer one request at a time (typescript-language-server
+    forwards to one tsserver; #387, #631), and a write-ordered loop
+    (`runtime.nextWriteIndex()`, a pipeline claim) must stay serial. Screen: do
+    the calls this loop or sequence awaits one at a time need each other's
+    results, share a write order, or go to one server that answers one request
+    at a time? If none, overlap them through `clients/map-with-concurrency.ts`;
+    if one does, a comment at the loop names it. Measure before overlapping
+    calls to one server. #5174 is the open instance. Census: not
+    countable. Enforcer: none: judgment-only; a scan cannot tell an
+    independent await from an ordered one without reading what each call
+    feeds. Instances and dates: `HISTORY.md`.
+
 60. **Wasm failure outside the #3605 containment:** every failure thrown out
     of web-tree-sitter classifies through `classifyTreeSitterWasmError`, and a
     `catch` inside a `withParsedTree` consumer calls `reportWasmAbort` before it
