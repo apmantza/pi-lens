@@ -24,6 +24,7 @@ import { siblingPin } from "../support/sibling-pin.js";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
 import { provesNotPullRequestEligible } from "../support/workflow-pull-request-reachability.js";
 import {
+	BRANCH_PROTECTION_CONTEXTS as REQUIRED_CONTEXTS,
 	CHANGES_CHECK,
 	DEFERRED_ADVISORY_CHECKS,
 	HEAVY_GATE_CHECK,
@@ -66,20 +67,9 @@ const load = (file: string) =>
 const asList = (needs: Job["needs"]) =>
 	Array.isArray(needs) ? needs : needs ? [needs] : [];
 
-// The branch-protection contexts of master, probed 2026-09-30 with
-// `gh api repos/apmantza/pi-lens/branches/master/protection/required_status_checks`.
-// A ruleset change is not visible to this file; ci-verdict's live read is the
-// runtime authority and this list is the workflow shape it must match.
-const REQUIRED_CONTEXTS = [
-	"Lint & type-check",
-	"Unit tests",
-	"Install test (ubuntu-latest)",
-	"Install test (windows-latest)",
-	"Install test (macos-latest)",
-	"knip",
-	"oxfmt format check",
-	"TLA+ models",
-];
+const canSkipAtJobLevel = (condition: string | undefined) =>
+	condition !== undefined &&
+	!/^\s*(?:\$\{\{\s*)?always\(\)(?:\s*\}\})?\s*$/.test(condition);
 
 /** Every check-run name a job can produce (a matrix expands its `name`). */
 function checkNamesOf(job: Job): string[] {
@@ -96,6 +86,7 @@ function checkNamesOf(job: Job): string[] {
 
 const CI = load(".github/workflows/ci.yml");
 const LINT = load(".github/workflows/lint.yml");
+const HOT_PATH = load(".github/workflows/hot-path-latency.yml");
 const gate = CI.jobs["heavy-gate"];
 const gated = Object.entries(CI.jobs).filter(
 	([id, job]) =>
@@ -471,6 +462,7 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 		for (const [file, workflow] of [
 			["ci.yml", CI],
 			["lint.yml", LINT],
+			["hot-path-latency.yml", HOT_PATH],
 		] as const) {
 			for (const [id, job] of Object.entries(workflow.jobs)) {
 				for (const name of checkNamesOf(job)) hosted.set(name, `${file}:${id}`);
@@ -486,7 +478,7 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 	// Recurrence: a required job omitted from the gate's needs (for example a
 	// new install-test leg job id) lets the heavy lane start while that check
 	// is still red or running.
-	it("needs every required job hosted by ci.yml", () => {
+	it("needs every required job hosted by ci.yml except the TLA+ aggregate", () => {
 		const needs = asList(gate.needs);
 		const ciRequired = REQUIRED_CONTEXTS.flatMap((context) =>
 			Object.entries(CI.jobs)
@@ -498,8 +490,44 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 			"lint-and-typecheck",
 			"tla-models",
 			"unit-tests",
+			"unit-tests-windows",
 		]);
-		for (const id of ciRequired) expect(needs).toContain(id);
+		for (const id of ciRequired) {
+			if (id === "tla-models") expect(needs).not.toContain(id);
+			else expect(needs).toContain(id);
+		}
+	});
+
+	// Recurrence (#5002): #5082 made `tla-shards` skip at job level, and the gate
+	// reached it through `tla-models`. Implicit success() reads every ancestor, so
+	// the gate and CodeQL skipped on every pull request that left formal/ alone.
+	it("has no ancestor that can skip at job level", () => {
+		const ancestors = new Set<string>();
+		const visit = (id: string) => {
+			for (const need of asList(CI.jobs[id]?.needs)) {
+				if (ancestors.has(need)) continue;
+				ancestors.add(need);
+				visit(need);
+			}
+		};
+		visit("heavy-gate");
+		expect(ancestors.size).toBeGreaterThanOrEqual(asList(gate.needs).length);
+		const skippable = [...ancestors].filter((id) =>
+			canSkipAtJobLevel(CI.jobs[id]?.if),
+		);
+		expect(skippable).toEqual([]);
+	});
+
+	it("treats only a bare always() as unable to skip", () => {
+		for (const condition of [undefined, "always()", "${{ always() }}"])
+			expect(canSkipAtJobLevel(condition), String(condition)).toBe(false);
+		for (const condition of [
+			"always() && github.event_name == 'push'",
+			"${{ always() && needs.changes.outputs.formal != 'false' }}",
+			"!cancelled()",
+			"github.event_name != 'pull_request'",
+		])
+			expect(canSkipAtJobLevel(condition), condition).toBe(true);
 	});
 
 	// Recurrence (#3801 docs-only scope): a gate that starts on a docs-only diff
@@ -522,8 +550,9 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 
 	// Recurrence: `needs:` cannot reach lint.yml, so a required check hosted
 	// there (knip, oxfmt) was simply not waited for. The gate step names each
-	// one; a context hosted by lint.yml but missing from `--context` fails here.
-	it("waits, through the script, for every required context that lint.yml hosts", () => {
+	// one, plus `TLA+ models`, which `needs:` must not reach (#5002). Hot-path is
+	// out on purpose: a master push path-filters it, so its row can be absent.
+	it("waits, through the script, for lint.yml's required contexts and TLA+ models", () => {
 		const step = gate.steps?.find((entry) => entry.id === "gate");
 		const args = [
 			...String(step?.run).matchAll(/--context (?:"([^"]+)"|(\S+))/g),
@@ -535,7 +564,7 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 		);
 		expect(lintHosted.length).toBeGreaterThan(0);
 		expect([...args].sort(byCodeUnit)).toEqual(
-			[...lintHosted].sort(byCodeUnit),
+			[...lintHosted, "TLA+ models"].sort(byCodeUnit),
 		);
 	});
 

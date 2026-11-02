@@ -190,8 +190,8 @@ jobs:
   # single job reached its 12-minute cap at 514 configs (master 623 s; PR heads
   # cancelled at 736 s, 881 s and 12m15s), because the population outgrew the
   # estimate this comment used to carry. The job id `tla-models` and the check
-  # name `TLA+ models` stay with the aggregate below (CodeQL `needs:` it, and
-  # the ruleset requires that name); the shard jobs are `tla-shards`.
+  # name `TLA+ models` stay with the aggregate below (the ruleset requires that
+  # name); the shard jobs are `tla-shards`.
   # Measured per-shard WALL time on master run 39380875926 (attempt 1):
   # 268 s, 349 s, 494 s and 726 s -- the round-robin split was unbalanced by
   # ~2.7x and shard 4 owned the tail. That shard hit the 12-minute cap TWICE,
@@ -839,26 +839,30 @@ jobs:
   # (about 40 jobs per push against about 20 concurrent slots), and on a head
   # whose required checks are red they were pure waste.
   #
-  # `needs:` reaches the required checks this workflow hosts (`lint-and-typecheck`,
-  # `tla-models`, the `unit-tests` aggregate, and every `install-test` leg); it
-  # cannot reach lint.yml, which hosts `knip` and `oxfmt format check`, so the
-  # script reads those two from the head's check-runs (a cheap poll; both
-  # finish in well under a minute and are long done by the time this job is
-  # reached). If any needed job is red or skipped this job is skipped and so
-  # are its dependents. If the check-runs show a red or never-finished lint.yml
-  # check, the gate step reports `ready=false` and FAILS, so the row is red and a
-  # run that was deferred for that reason is visible and distinguishable from a
-  # dropped one (ci-verdict reads it). The job name ends in `(advisory)` so
-  # ci-verdict never gates on it, red or not. The Windows Vitest subset was
-  # released here until #4518's promotion: it gates now, so it must start on
-  # every event, including the docs-only diff this gate skips.
+  # `needs:` reaches `lint-and-typecheck`, the `unit-tests` aggregate, the
+  # Windows leg, and every `install-test` leg. The script reads the rest from the
+  # head's check-runs (a cheap poll): lint.yml's `knip` and `oxfmt format check`,
+  # which `needs:` cannot reach, and `TLA+ models`, which can still be running on
+  # a formal head, so the poll waits up to 300 s for it. `tla-models` stays out of
+  # `needs:` because implicit success() reads every ancestor: its `tla-shards`
+  # need skips on most pull requests (#5082), and that skipped this gate and
+  # CodeQL with it (#5002).
+  # `Hot-path latency (advisory)` is required but not waited for: a master push
+  # path-filters that workflow, so its row can be absent here.
+  #
+  # If any needed job is red or skipped this job is skipped and so are its
+  # dependents. If the check-runs show a red or never-finished check, the gate
+  # step reports `ready=false` and FAILS, so the row is red and a run that was
+  # deferred for that reason is visible and distinguishable from a dropped one
+  # (ci-verdict reads it). The job name ends in `(advisory)` so ci-verdict never
+  # gates on it, red or not.
   heavy-gate:
     name: Heavy advisory gate (advisory)
     needs:
       - changes
       - lint-and-typecheck
-      - tla-models
       - unit-tests
+      - unit-tests-windows
       - install-test
     # #3801: only a code diff starts the heavy jobs: a docs-only pull request
     # runs every test job but not CodeQL, the one heavy job left behind this
@@ -884,20 +888,19 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
-      - name: Require the lint.yml required checks, then release the heavy advisory jobs
+      - name: Require the checks `needs` cannot prove, then release the heavy advisory jobs
         id: gate
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/ci-heavy-gate.mjs --repo "$GITHUB_REPOSITORY" --sha "$HEAD_SHA" --context knip --context "oxfmt format check"
+        run: node scripts/ci-heavy-gate.mjs --repo "$GITHUB_REPOSITORY" --sha "$HEAD_SHA" --context knip --context "oxfmt format check" --context "TLA+ models"
 
   # GATING since #4518 (maintainer decision, 2026-10-17): the Windows unit leg
   # runs the real `win32` gates, and advisory reds were waved through (#4566
   # r14's `.cmd` branch, #4551). It therefore starts on every event like the
   # Unit shards -- never behind `heavy-gate`, whose docs-only skip would leave a
   # required row absent -- and it is not named `(advisory)` any more, so
-  # ci-verdict gates it. Branch protection must still list `Unit tests Windows`
-  # as a required status check; until it does, ci-verdict is the enforcement.
+  # ci-verdict gates it, and branch protection requires it.
   unit-tests-windows:
     name: Unit tests Windows
     runs-on: windows-latest

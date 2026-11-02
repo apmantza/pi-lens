@@ -16,6 +16,23 @@
 
 export const REQUIRED_CHECKS = ["Unit tests", "Lint & type-check"];
 
+// The required contexts on master, read 2026-11-01 with `gh api
+// repos/apmantza/pi-lens/branches/master --jq
+// .protection.required_status_checks.contexts`. GitHub is the source of truth
+// and ci-verdict reads it live; workflow tests read this one mirror.
+export const BRANCH_PROTECTION_CONTEXTS = Object.freeze([
+	"Lint & type-check",
+	"Unit tests",
+	"Install test (ubuntu-latest)",
+	"Install test (windows-latest)",
+	"Install test (macos-latest)",
+	"knip",
+	"oxfmt format check",
+	"TLA+ models",
+	"Unit tests Windows",
+	"Hot-path latency (advisory)",
+]);
+
 export const CI_JOB_NAMES = Object.freeze({
 	CHANGELOG_FRAGMENT: "Changelog fragment (fast-fail)",
 	LINT_AND_TYPECHECK: "Lint & type-check",
