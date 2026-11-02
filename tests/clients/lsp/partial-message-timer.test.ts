@@ -1,3 +1,4 @@
+// flake-shape: elapsed-time-assertion — #5173 measures real host exit within 3s of teardown.
 // flake-shape: real-process-spawn — #5169 needs a separate event loop to witness natural exit.
 /**
  * #5169 real-spawn admission: only a separate Node event loop can prove that
@@ -21,29 +22,26 @@ for (const mode of ["exit", "shutdown"]) {
 		pinFixtureHome("partial-message-5169");
 		// #5169: teardown must not retain the dependency’s pending 10s tick.
 		const pending = run(process.execPath, [host, mode], {
-			timeout: 8_000,
+			timeout: 16_000,
 			killSignal: "SIGKILL",
 			maxBuffer: 1024 * 1024,
 		});
-		let teardownDeadline: ReturnType<typeof setTimeout> | undefined;
+		let teardownAt = 0;
 		pending.child.stdout?.on("data", (data) => {
 			if (data.toString().includes(`completed:${mode}:partial-body`)) {
-				teardownDeadline = setTimeout(
-					() => pending.child.kill("SIGKILL"),
-					3_000,
-				);
+				teardownAt = performance.now();
 			}
 		});
-		const { stdout } = await pending
-			.catch((error) => {
-				expect(error.stdout).toContain(`completed:${mode}:partial-body`);
-				expect(
-					error.killed,
-					"host retained a ref’d handle after LSP teardown",
-				).toBe(false);
-				throw error;
-			})
-			.finally(() => clearTimeout(teardownDeadline));
+		const { stdout } = await pending.catch((error) => {
+			expect(error.stdout).toContain(`completed:${mode}:partial-body`);
+			expect(
+				error.killed,
+				"host retained a ref’d handle after LSP teardown",
+			).toBe(false);
+			throw error;
+		});
+		expect(teardownAt).toBeGreaterThan(0);
+		expect(performance.now() - teardownAt).toBeLessThan(3_000);
 		expect(stdout).toContain(`completed:${mode}:partial-body`);
 		expect(stdout).toContain("natural-exit:no-ref-timer");
 	}, 20_000);
