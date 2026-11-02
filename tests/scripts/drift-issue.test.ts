@@ -159,4 +159,10 @@ describe("findDriftTrackingIssue (#594)", () => {
 			title: "install-smoke: pi-coding-agent@latest install drift detected",
 		});
 	});
+
+	// The nightly job finds and closes its live tracker by this title; a rename
+	// would leave that issue orphaned and file a duplicate (#5177 review F1).
+	it("keeps the live tracker's title fixed", () => {
+		expect(DRIFT_ISSUE_TITLE).toBe("nightly: silentOnClean drift detected");
+	});
 });
