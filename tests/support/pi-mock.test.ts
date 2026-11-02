@@ -443,18 +443,26 @@ describe("the census a case owes after its sessions end (#5146)", () => {
 		removeTempDirSync(proc);
 	});
 
-	it("reds a case whose ended session left an ast-grep lsp child", async () => {
-		await startOne();
-		lspChild(7771);
-		await expect(endMockSessions()).rejects.toThrow(/7771/);
-	});
+	// The child census reads /proc, so it only runs on Linux; elsewhere these
+	// two cases would expect a rejection the census never raises.
+	it.skipIf(process.platform !== "linux")(
+		"reds a case whose ended session left an ast-grep lsp child",
+		async () => {
+			await startOne();
+			lspChild(7771);
+			await expect(endMockSessions()).rejects.toThrow(/7771/);
+		},
+	);
 
-	it("reds a case that ended its session by hand and left the child", async () => {
-		const { pi, ctx } = await startOne();
-		await pi.emit("session_shutdown", { reason: "quit" }, ctx);
-		lspChild(7772);
-		await expect(failOnOpenMockSessions()).rejects.toThrow(/7772/);
-	});
+	it.skipIf(process.platform !== "linux")(
+		"reds a case that ended its session by hand and left the child",
+		async () => {
+			const { pi, ctx } = await startOne();
+			await pi.emit("session_shutdown", { reason: "quit" }, ctx);
+			lspChild(7772);
+			await expect(failOnOpenMockSessions()).rejects.toThrow(/7772/);
+		},
+	);
 
 	it("does not charge a case for a child that was there before it started", async () => {
 		lspChild(7773);
