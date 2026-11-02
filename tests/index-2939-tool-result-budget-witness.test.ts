@@ -126,6 +126,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 let tmpDir: string;
@@ -144,8 +145,10 @@ beforeEach(() => {
 	fs.writeFileSync(filePath, "const a = 1;\nconst b = 2;\n", "utf8");
 });
 
-afterEach(() => {
+afterEach(async () => {
 	vi.useRealTimers();
+	// #5146: end the case's sessions before its root goes.
+	await endMockSessions();
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

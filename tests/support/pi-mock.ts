@@ -26,6 +26,10 @@ import type {
 import { afterEach, expect } from "vitest";
 import { withTimeout } from "../../clients/deadline-utils.js";
 import { runHandlerExpectingNoThrow } from "./handler-verdict.js";
+import {
+	failOnOpenMockSessions,
+	trackSessionEvent,
+} from "./mock-session-teardown.js";
 import { piMockAdmission } from "./pi-mock-importers.js";
 
 /**
@@ -72,6 +76,12 @@ let managerHandOver:
 	| undefined;
 afterEach(() => {
 	managerHandOver = undefined;
+});
+// #5146: registered first, so it runs last, after every `afterEach` the file
+// declared: a case that ends with a session still open reds here, however the
+// session was started (see `failOnOpenMockSessions`).
+afterEach(async () => {
+	await failOnOpenMockSessions();
 });
 
 function mockManagerOf(ctx: unknown): MockSessionManager | undefined {
@@ -327,14 +337,26 @@ export function createPiMock(options: PiMockOptions = {}): PiMock {
 			// (`emit`, `getHandlers`, `getHandlerOrThrow`, `handlers`) runs
 			// through the checker: a swallowed throw fails the awaiting test
 			// instead of reading as "no opinion" (#3518, recurrence #4182).
+			//
+			// #5146: the session events are reported to `trackSessionEvent` here,
+			// not in `emit`, so a route that never calls `emit` (a handler picked
+			// out of `getHandlers`, a loop over `handlers`, a computed or aliased
+			// emit) is observed all the same.
 			const boundedHandler: Hook =
 				event === "session_start"
-					? (payload, ctx) =>
-							runSessionStartWithBudget(() => handler(payload, ctx))
-					: event === "tool_call"
-						? (payload, ctx) =>
-								runHandlerExpectingNoThrow(() => handler(payload, ctx))
-						: handler;
+					? (payload, ctx) => {
+							trackSessionEvent(mock, event, ctx);
+							return runSessionStartWithBudget(() => handler(payload, ctx));
+						}
+					: event === "session_shutdown"
+						? (payload, ctx) => {
+								trackSessionEvent(mock, event, ctx);
+								return handler(payload, ctx);
+							}
+						: event === "tool_call"
+							? (payload, ctx) =>
+									runHandlerExpectingNoThrow(() => handler(payload, ctx))
+							: handler;
 			const list = handlers.get(event) ?? [];
 			list.push(boundedHandler);
 			handlers.set(event, list);

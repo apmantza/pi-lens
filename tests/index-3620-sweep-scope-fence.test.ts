@@ -103,6 +103,7 @@ import {
 } from "../clients/degradation-ledger.js";
 import { resetObservedMutationNet } from "../clients/observed-mutation.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import {
 	cleanupTestEnvironmentsDrained,
@@ -125,6 +126,8 @@ describe("#3620 the settled sweep's replay is fenced by the settle's scope", () 
 	});
 
 	afterEach(async () => {
+		// #5146: end the session before the lifecycle state and the root go.
+		await endMockSessions();
 		if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = prevDataDir;
 		resetObservedMutationNet();

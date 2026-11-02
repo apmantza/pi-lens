@@ -71,6 +71,7 @@ import {
 } from "../clients/degradation-ledger.js";
 import extension from "../index.js";
 import { makeSessionStartEvent } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, type PiMock } from "./support/pi-mock.js";
 
 let tmpDir: string;
@@ -106,7 +107,9 @@ beforeEach(() => {
 	fs.writeFileSync(filePath, "const a = 1;\nconst b = 2;\n", "utf8");
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// #5146: end the sessions the case started before the fixture root goes.
+	await endMockSessions();
 	fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 

@@ -54,6 +54,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 const SESSION_ID = "pi-1892-govulncheck-lane-session";
@@ -80,7 +81,11 @@ beforeEach(() => {
 	);
 });
 
-afterEach(() => removeTempDirSync(tmpDir));
+afterEach(async () => {
+	// #5146: end the sessions the case started before the fixture root goes.
+	await endMockSessions();
+	removeTempDirSync(tmpDir);
+});
 
 /** Write `relative` with `content` and pin its mtime. */
 function writeAt(relative: string, content: string, mtimeMs: number): string {

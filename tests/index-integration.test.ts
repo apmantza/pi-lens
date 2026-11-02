@@ -6,6 +6,7 @@ import * as vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
 import { getEffectiveLspIdleResetMs } from "../clients/runtime-turn.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
 import {
@@ -137,6 +138,10 @@ vi.mock("../clients/read-guard.js", async (importOriginal) => {
 		// #4185: agent_settled's backstop and tool_execution_end release read
 		// captures; this double holds none.
 		dropProvisionalReads = () => 0;
+		// #5146: a session's shutdown forgets its foreign turn keys and releases
+		// the guard's file-time captures; this double holds none. Until a case
+		// ended its session, no path here reached it.
+		releaseFileTime = () => {};
 		dropProvisionalReadByCall = () => false;
 		getSummary = () => ({
 			totalEdits: 0,
@@ -174,6 +179,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 // "../clients/runtime-coordinator.js" mock` (#4405: 64 member rows over three
 // seeds).
 afterEach(async () => {
+	// #5146: end the case's sessions (this root hook runs after the describes').
+	await endMockSessions();
 	vi.doUnmock("../clients/bootstrap.js");
 	vi.doUnmock("../clients/bus-events-logger.js");
 	vi.doUnmock("../clients/cache-observability.js");

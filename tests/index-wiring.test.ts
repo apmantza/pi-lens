@@ -168,6 +168,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
 import {
@@ -291,6 +292,12 @@ const EXPECTED_HOOKS = [
 ];
 
 const setGlobalConfig = useGlobalConfig();
+
+// #5146: the file's cases start sessions in many shapes, some with their own
+// fixture roots inside the case, so one root hook ends whatever is still open.
+afterEach(async () => {
+	await endMockSessions();
+});
 
 describe("index.ts extension wiring", () => {
 	it.each(["reject", "throw"])(

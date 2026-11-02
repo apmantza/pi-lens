@@ -794,8 +794,10 @@ export const wallClockBudgetInclude = [
 	// and pi's own `bash` tool, so the child shells and git processes ride along
 	// in the serialized lane too.
 	"tests/index-2050-worktree-bash-dispatch-witness.test.ts",
-	// #5146: the per-case census polls /proc with vi.waitFor for an ast-grep
-	// child that the fast POSIX shutdown is still exiting (flake-shape admission).
+	// #5146: the shared session teardown (tests/support/mock-session-teardown.ts)
+	// polls /proc with vi.waitFor for an ast-grep child that the fast POSIX
+	// shutdown is still exiting (flake-shape admission, lane proof for the
+	// helper through this importer).
 	"tests/index-3748-advisory-scope-witness.test.ts",
 	// #4316: the session-start LSP warm is fire-and-forget inside the loaded
 	// extension copy, so the witness joins its log record with vi.waitFor
@@ -1012,6 +1014,9 @@ export const wallClockBudgetInclude = [
 	// #4709 slice 3b: the PATH-probe stub's fidelity is observable only through a
 	// real child (flake-shape admission).
 	"tests/support/path-probe-stub.test.ts",
+	// #5146: the root afterEach's failing exit status is only observable from a
+	// separate Vitest process that deliberately leaks a session (flake-shape admission).
+	"tests/support/pi-mock.test.ts",
 	// #3179: the guard's #3179 fix's one real, cross-process reproduction. A
 	// separately spawned process races node's own recursive-watch readdirSync
 	// against a directory removal — the same race PR #3178 hit in CI — which

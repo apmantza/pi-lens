@@ -74,6 +74,9 @@
 		// #4583: a tools test is a wall-clock lane member now, and the lane
 		// coverage gate (#2837) requires every member to be a knip entry.
 		"tests/tools/*.test.ts",
+		// #5146: the pi-mock root-hook witness is a serialized wall-clock lane
+		// member and must remain visible to Knip as a direct test entry.
+		"tests/support/pi-mock.test.ts",
 		"tests/scripts/*.test.ts"
 		// tools/*.ts and vitest's setupFiles are NOT listed here: both are
 		// already reached without help — tools/*.ts via index.ts's and

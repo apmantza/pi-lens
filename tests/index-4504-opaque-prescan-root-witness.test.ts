@@ -58,6 +58,7 @@ import { resetSessionScopedState } from "../clients/runtime-session.js";
 import { setupTestEnvironment } from "./clients/test-utils.js";
 import { execFileSync } from "./support/git-fixture-env.js";
 import { makeSessionStartEvent } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { readNdjsonRows } from "./support/ndjson-rows.js";
 
@@ -98,7 +99,9 @@ beforeEach(() => {
 	else process.env.PI_LENS_TEST_MODE = originalTestMode;
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// #5146: end the sessions the case started before their state is reset.
+	await endMockSessions();
 	// The shared per-session reset, not a hand-picked subset: it clears the
 	// opaque baseline and HEAD records these cases write (through
 	// `resetOpaqueMutationState`) beside every other owner-held store, and the

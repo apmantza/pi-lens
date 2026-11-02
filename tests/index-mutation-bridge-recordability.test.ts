@@ -57,9 +57,13 @@ vi.mock("../clients/bootstrap.js", async () => {
 });
 vi.mock("../clients/runtime-session.js", () => ({
 	handleSessionStart: async (deps: {
-		runtime: { projectRoot: string };
+		runtime: { projectRoot: string; resetForSession: () => void };
 		ctxCwd?: string;
 	}) => {
+		// #5146: the real start begins a fresh scope before its first await
+		// (runtime-session.ts). Without it a second cell reuses the scope the
+		// first cell's shutdown retired, and the bridge refuses the retired scope.
+		deps.runtime.resetForSession();
 		if (deps.ctxCwd) deps.runtime.projectRoot = deps.ctxCwd;
 	},
 }));
@@ -75,6 +79,7 @@ import { normalizeMapKey } from "../clients/path-utils.js";
 import { readChangesSince } from "../clients/project-changes.js";
 import { ReadGuard } from "../clients/read-guard.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
@@ -96,7 +101,9 @@ describe("#2465: index.ts's mutation-bridge wiring separates recordability from 
 		resetObservedMutationNet();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		// #5146: end the cell's session before its data dir and root go.
+		await endMockSessions();
 		_resetSessionLifecycleForTests();
 		if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = prevDataDir;

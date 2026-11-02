@@ -42,6 +42,7 @@ import {
 	cleanupTestEnvironmentsDrained,
 	setupTestEnvironment,
 } from "./clients/test-utils.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 const TMP_PREFIX = "pi-lens-4631-pre087-";
@@ -58,7 +59,9 @@ beforeEach(() => {
 	process.env.PILENS_DATA_DIR = path.join(tmp, "data");
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// #5146: end the session before the lifecycle state and the root go.
+	await endMockSessions();
 	_resetSessionLifecycleForTests();
 	if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 	else process.env.PILENS_DATA_DIR = previousDataDir;

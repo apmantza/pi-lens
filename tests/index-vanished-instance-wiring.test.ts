@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import extension from "../index.js";
 import { getGlobalPiLensDir } from "../clients/file-utils.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 
@@ -200,7 +201,9 @@ describe("index session_start vanished-instance wiring (#1123 item 2)", () => {
 		process.env.PI_LENS_HOME = caseHome;
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		// #5146: end the session while its data dir and home are still pinned.
+		await endMockSessions();
 		if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = prevDataDir;
 		if (prevHome === undefined) delete process.env.PI_LENS_HOME;

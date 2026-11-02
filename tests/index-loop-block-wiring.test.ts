@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock } from "./support/pi-mock.js";
 import { getCurrentPhase, phaseStarted } from "../clients/latency-logger.js";
 
@@ -132,7 +133,9 @@ describe(
 			statsToReturn = undefined;
 			phaseForWindowToReturn = undefined;
 		});
-		afterEach(() => {
+		afterEach(async () => {
+			// #5146: case (f) starts a session; end it before the mocks clear.
+			await endMockSessions();
 			vi.clearAllMocks();
 		});
 
@@ -358,8 +361,7 @@ describe(
 			phaseStarted("leaked_before_session_start");
 			expect(getCurrentPhase()).toBeDefined();
 
-			const sessionStart = mock.getHandlers("session_start")[0];
-			expect(sessionStart).toBeTypeOf("function");
+			expect(mock.getHandlers("session_start")[0]).toBeTypeOf("function");
 			const sessionCtx = {
 				cwd: process.cwd(),
 				ui: {
@@ -368,7 +370,8 @@ describe(
 					theme: { fg: (_c: string, s: string) => s },
 				},
 			};
-			await sessionStart?.({ reason: "new" }, sessionCtx as never);
+			// `emit` runs the real handler and records the session for the teardown.
+			await mock.emit("session_start", { reason: "new" }, sessionCtx);
 
 			expect(getCurrentPhase()).toBeUndefined();
 		});

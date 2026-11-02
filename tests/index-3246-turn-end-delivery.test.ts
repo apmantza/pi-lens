@@ -36,6 +36,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 
 const SESSION_ID = "pi-3246-delivery-session";
@@ -46,7 +47,9 @@ beforeEach(() => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3246-pi-hook-"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// #5146: end the sessions the case started before the fixture root goes.
+	await endMockSessions();
 	removeTempDirSync(tmpDir);
 });
 

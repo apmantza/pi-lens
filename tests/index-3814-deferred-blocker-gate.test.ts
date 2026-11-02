@@ -82,6 +82,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
 
@@ -182,7 +183,9 @@ beforeEach(async () => {
 	);
 });
 
-afterEach(() => {
+afterEach(async () => {
+	// #5146: end the case's sessions before its root goes.
+	await endMockSessions();
 	_resetSessionLifecycleForTests();
 	if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
 	else process.env.PI_LENS_TEST_MODE = previousTestMode;

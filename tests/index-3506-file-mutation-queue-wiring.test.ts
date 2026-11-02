@@ -24,6 +24,7 @@ import {
 } from "../clients/file-mutation-queue.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import { makeSessionStartEvent } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 
@@ -95,7 +96,9 @@ describe("index.ts registers pi's mutation queue for pi-lens' writers (#3506)", 
 	// check that tells the host's SDK copy from a second one.
 	describe("the SDK-copy check reads the host's session manager", () => {
 		const previousStartupMode = process.env.PI_LENS_STARTUP_MODE;
-		afterEach(() => {
+		afterEach(async () => {
+			// #5146: end the session before the lifecycle state is reset under it.
+			await endMockSessions();
 			_resetSessionLifecycleForTests();
 			resetDegradationLedger();
 			vi.mocked(logExtension).mockClear();

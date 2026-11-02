@@ -392,6 +392,7 @@ import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
 } from "./support/host-event-factory.js";
+import { endMockSessions } from "./support/mock-session-teardown.js";
 import { createPiMock, makeCtx } from "./support/pi-mock.js";
 import { useGlobalConfig } from "./support/global-config.js";
 import { installLspServiceDouble } from "./support/lsp-service-seam.js";
@@ -442,6 +443,8 @@ afterEach(async () => {
 	boundary.lsp.onHold = undefined;
 	for (const release of boundary.lsp.held.splice(0)) release();
 	resetObservedRunnerLatency();
+	// #5146: end the cell's session once its held boundaries are released.
+	await endMockSessions();
 	if (cleanup) await cleanup().catch(() => {});
 	boundary.ag.published = false;
 	boundary.ag.diag = false;
