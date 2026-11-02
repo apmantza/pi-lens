@@ -98,6 +98,7 @@ import {
 	clearWorkspaceDiagnosticsCacheAtAndAbove,
 } from "./workspace-diagnostics-cache.js";
 import { toPosix } from "../path-utils.js";
+import { LspRequestTimeoutError } from "./request-timeout-error.js";
 
 // Opt-in publishDiagnostics trace (PILENS_PUB_DEBUG=1) — read once, negligible
 // hot-path cost. Surfaces each server's publish behavior (version + count) to
@@ -6190,10 +6191,18 @@ export async function navRequest<T>(
 					scope: normalizedPath,
 					requestStartedAt,
 				});
-				throw new LspRequestTimeoutError(method, timeoutMs);
+				throw new LspRequestTimeoutError(
+					method,
+					timeoutMs,
+					Date.now() - requestStartedAt,
+				);
 			}
 			if (err instanceof Error && err.message.startsWith("Timeout after")) {
-				throw new LspRequestTimeoutError(method, timeoutMs);
+				throw new LspRequestTimeoutError(
+					method,
+					timeoutMs,
+					Date.now() - requestStartedAt,
+				);
 			}
 			throw err;
 		},
@@ -6211,19 +6220,6 @@ export async function navRequest<T>(
 		}
 	}
 	return result;
-}
-
-/** A request deadline is an error, not an empty LSP answer. */
-export class LspRequestTimeoutError extends Error {
-	readonly method: string;
-	readonly timeoutMs: number;
-
-	constructor(method: string, timeoutMs: number) {
-		super(`LSP request timed out: ${method} after ${timeoutMs}ms`);
-		this.name = "LspRequestTimeoutError";
-		this.method = method;
-		this.timeoutMs = timeoutMs;
-	}
 }
 
 /**

@@ -765,8 +765,8 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :483, :777, :767, :818, :1034, :1369, :1466, :1782
 	"clients/lsp/client.ts": {
-		silent: 35,
-		identities: "cdb169f677809664",
+		silent: 34,
+		identities: "bf780f9a41c81ff1",
 		reason: PRE_RULE,
 	}, // :1559, :1617, :1680, :1687, :1775, :3444, :3712, :4105, :4198, :4222, :4268, :4957, :5150, :5350, :5575, :5748, :5815, :5829, :5932, :5982, :6116, :6137, :6259, :6269, :6358, :6431, :6573, :7718, :7721, :7735, :7821, :8104, :8116, :8125, :8139
 	"clients/lsp/config.ts": {
@@ -1349,7 +1349,7 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :371, :405, :628, :861, :1026, :1084, :1184, :1405, :1452, :2477
 	"tools/lsp-navigation.ts": {
 		silent: 8,
-		identities: "7d261d33eecee18f",
+		identities: "bd32955f536a05dd",
 		reason: PRE_RULE,
 	}, // :529, :739, :757, :1200, :1569, :1676, :1710, :1898
 	"tools/lsp-structured-output.ts": {

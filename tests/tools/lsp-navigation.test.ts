@@ -55,6 +55,7 @@ vi.mock("../../clients/python-environment.js", async (importOriginal) => {
 
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
 import { createLspNavigationTool } from "../../tools/lsp-navigation.js";
+import { LspRequestTimeoutError } from "../../clients/lsp/request-timeout-error.js";
 import { installLspService } from "../support/lsp-service-seam.js";
 
 const tmpPath = (name: string): string => path.join(os.tmpdir(), name);
@@ -235,6 +236,8 @@ describe("lsp_navigation tool", () => {
 		);
 
 		expect(result.isError).toBe(true);
+		expect(result.details?.failureKind).toBe("timeout");
+		expect(result.details?.status).toBe("timeout");
 		expect(parseToolJson(result)).toMatchObject({
 			tool: "lsp_navigation",
 			operation: "precheck",
@@ -646,9 +649,7 @@ describe("lsp_navigation tool", () => {
 		).documentSymbol = vi
 			.fn()
 			.mockRejectedValue(
-				new Error(
-					"LSP request timed out: textDocument/documentSymbol after 100ms",
-				),
+				new LspRequestTimeoutError("textDocument/documentSymbol", 100, 101),
 			);
 
 		const result = await tool.execute(
@@ -665,7 +666,7 @@ describe("lsp_navigation tool", () => {
 		expect(result.isError).toBe(true);
 		expect(parseToolJson(result)).toMatchObject({
 			ok: false,
-			status: "error",
+			status: "timeout",
 			resultCount: 0,
 		});
 		expect(String(result.content[0]?.text)).toContain("timed out");

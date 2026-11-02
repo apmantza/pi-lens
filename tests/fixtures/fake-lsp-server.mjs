@@ -116,6 +116,7 @@ let deferredApplyEdit = null;
 const HANG_PROJECT_INFO = ["1", "cancel"].includes(
 	process.env.FAKE_LSP_HANG_PROJECT_INFO ?? "",
 );
+const HANG_DOCUMENT_SYMBOL = process.env.FAKE_LSP_HANG_DOCUMENT_SYMBOL === "1";
 let hungProjectInfoId = null;
 
 // #2450 review round 2 (F2): the target line/columns/replacement text are
@@ -1386,6 +1387,7 @@ function handle(raw) {
 
 	// Document symbol
 	if (data.method === "textDocument/documentSymbol") {
+		if (HANG_DOCUMENT_SYMBOL) return;
 		send({
 			jsonrpc: "2.0",
 			id: data.id,
