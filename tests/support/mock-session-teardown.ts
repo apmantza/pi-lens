@@ -52,6 +52,7 @@ let childrenBeforeCase: ReadonlySet<number> = new Set();
 const CENSUS_HOST = process.platform === "linux";
 /** Where the census reads; `mock-session-teardown.test.ts` points it at a fixture tree. */
 let censusProcRoot = "/proc";
+let censusUnavailableNoted = false;
 
 /** Test seam: read the census from `root` until the returned function restores `/proc`. */
 export function readCensusFromForTests(root: string): () => void {
@@ -90,9 +91,28 @@ export function astGrepLspChildrenOwnedHere(
 	// `opendirSync`, not `readdirSync`: this lists processes, not a source tree,
 	// and `pi-mock.ts` reaches it, so a `readdirSync` here would make the
 	// tree-scanner census (#3426) read every importer of the double as a walker.
-	const procDir = fs.opendirSync(procRoot);
+	let procDir: fs.Dir;
 	try {
-		for (let e = procDir.readSync(); e !== null; e = procDir.readSync()) {
+		procDir = fs.opendirSync(procRoot);
+	} catch {
+		if (!censusUnavailableNoted) {
+			censusUnavailableNoted = true;
+			console.warn(
+				`[pi-mock] process census disabled: cannot read ${procRoot}`,
+			);
+		}
+		return owned;
+	}
+	try {
+		for (;;) {
+			let e: fs.Dirent | null;
+			try {
+				e = procDir.readSync();
+			} catch {
+				// The process directory can disappear between reads; skip it.
+				continue;
+			}
+			if (e === null) break;
 			const entry = e.name;
 			if (!/^\d+$/.test(entry)) continue;
 			try {

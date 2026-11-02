@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import {
 	astGrepLspChildrenOwnedHere,
@@ -82,6 +82,38 @@ describe("the ast-grep lsp census over a fixture /proc (#5146)", () => {
 		fs.mkdirSync(path.join(proc, "self"));
 		fs.mkdirSync(path.join(proc, "52"));
 		expect(astGrepLspChildrenOwnedHere(proc, WORKER)).toEqual([51]);
+	});
+
+	it("skips a process directory that vanishes during readSync", () => {
+		fresh();
+		entry("53", {});
+		const readSync = vi
+			.spyOn(fs.Dir.prototype, "readSync")
+			.mockImplementationOnce(() => {
+				const error = new Error("process exited") as NodeJS.ErrnoException;
+				error.code = "ENOENT";
+				throw error;
+			});
+		try {
+			expect(astGrepLspChildrenOwnedHere(proc, WORKER)).toEqual([53]);
+		} finally {
+			readSync.mockRestore();
+		}
+	});
+
+	it("disables an unreadable process census once", () => {
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			expect(
+				astGrepLspChildrenOwnedHere(path.join(proc, "missing"), WORKER),
+			).toEqual([]);
+			expect(
+				astGrepLspChildrenOwnedHere(path.join(proc, "still-missing"), WORKER),
+			).toEqual([]);
+			expect(warning).toHaveBeenCalledTimes(1);
+		} finally {
+			warning.mockRestore();
+		}
 	});
 
 	it("charges a case only for the children it created", () => {

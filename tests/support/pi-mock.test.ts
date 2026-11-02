@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +13,6 @@ import {
 	makeCtx,
 	SESSION_START_TEST_BUDGET_MS,
 } from "./pi-mock.js";
-import { stripSource } from "./sweep-kit.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 
 describe("createPiMock", () => {
@@ -199,7 +199,9 @@ describe("createPiMock session-manager identity (#3855)", () => {
 // #5146: the double's own cases start sessions too (the never-settling handler
 // below); end them here so the root gate in pi-mock.ts has nothing to red.
 afterEach(async () => {
-	await endMockSessions();
+	if (process.env.PI_LENS_ROOT_GATE_WITNESS !== "1") {
+		await endMockSessions();
+	}
 });
 
 /**
@@ -373,41 +375,31 @@ describe("createPiMock sessions and the shared teardown (#5146)", () => {
 		expect(ended).toEqual(["y"]);
 	});
 
-	// Recurrence: the gate above is only a function until `pi-mock.ts` registers
-	// it. A root `afterEach` deleted, commented out, or moved inside a function
-	// that never runs leaves every importer ungated while this file stays green.
-	// The one file read is our own, and the form is the whole contract.
-	const ROOT_GATE =
-		/^afterEach\(async \(\) => \{\s*await failOnOpenMockSessions\(\);\s*\}\);$/m;
-	const gated = (source: string) =>
-		ROOT_GATE.test(stripSource(source, { strings: "blank" }));
-
-	it("pi-mock.ts registers the gate as a root afterEach", () => {
-		expect(
-			gated(
-				fs.readFileSync(
-					path.resolve(import.meta.dirname, "pi-mock.ts"),
-					"utf8",
-				),
-			),
-		).toBe(true);
-	});
-
-	it.each([
-		[
-			"commented out",
-			"// afterEach(async () => {\n//\tawait failOnOpenMockSessions();\n// });\n",
-		],
-		[
-			"inside a function that never runs",
-			"function later() {\n\tafterEach(async () => {\n\t\tawait failOnOpenMockSessions();\n\t});\n}\n",
-		],
-		[
-			"registered without the gate call",
-			"afterEach(async () => {\n\tawait other();\n});\n",
-		],
-	])("does not read a gate that is %s as registered", (_name, source) => {
-		expect(gated(source)).toBe(false);
+	it("the real root afterEach rejects a leaked session", async () => {
+		if (process.env.PI_LENS_ROOT_GATE_WITNESS === "1") {
+			const { pi } = host();
+			await pi.emit("session_start", START, ctxOf("root-gate-witness"));
+			return;
+		}
+		const result = spawnSync(
+			process.execPath,
+			[
+				path.resolve("node_modules/vitest/vitest.mjs"),
+				"run",
+				path.resolve(import.meta.filename),
+				"-t",
+				"the real root afterEach rejects a leaked session",
+				"--configLoader",
+				"runner",
+			],
+			{
+				cwd: path.resolve("."),
+				encoding: "utf8",
+				env: { ...process.env, PI_LENS_ROOT_GATE_WITNESS: "1" },
+			},
+		);
+		expect(result.status).not.toBe(0);
+		expect(`${result.stdout}\n${result.stderr}`).toMatch(/still open/);
 	});
 });
 
