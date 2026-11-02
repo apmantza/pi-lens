@@ -109,21 +109,8 @@ it("the check CLI rejects a stale user changelog", async () => {
 	const root = fixture();
 	rollup.writeUserChangelog({ rootDir: root });
 	fs.appendFileSync(path.join(root, "CHANGELOG-USER.md"), "stale\n");
-	// #5202 r2b: copied scripts need dependencies even outside the repo tree.
-	// Local path on purpose: lane-check-kit's REAL_NODE_MODULES lives in a
-	// module that imports child_process, and importing it trips the
-	// flake-shape real-process-spawn ratchet for this file.
-	fs.symlinkSync(
-		path.resolve("node_modules"),
-		path.join(root, "node_modules"),
-		"dir",
-	);
 	fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
-	for (const file of [
-		"rollup-changelog.mjs",
-		"lib/changelog.mjs",
-		"lib/markdown-lexer.mjs",
-	])
+	for (const file of ["rollup-changelog.mjs", "lib/changelog.mjs"])
 		fs.copyFileSync(
 			path.resolve("scripts", file),
 			path.join(root, "scripts", file),

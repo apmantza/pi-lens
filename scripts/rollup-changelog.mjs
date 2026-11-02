@@ -154,21 +154,20 @@ function renderInternal(entries) {
 	return `### ${INTERNAL_HEADING}\n\n<details>\n<summary>${summary}</summary>\n\n${entries.join("\n\n")}\n\n</details>`;
 }
 
-function renderBody(bodies, sections = RELEASE_SECTIONS) {
+function renderBody(bodies) {
 	const combined = new Map(RELEASE_SECTIONS.map((section) => [section, []]));
 	for (const body of bodies) {
 		const buckets = bucketSectionBody(body);
 		for (const section of RELEASE_SECTIONS)
 			combined.get(section).push(...buckets.get(section));
 	}
-	return sections
-		.map((section) => {
-			const content = combined.get(section).filter(Boolean);
-			if (!content.length) return "";
-			return section === INTERNAL_HEADING
-				? renderInternal(content)
-				: `### ${section}\n\n${content.join("\n\n")}`;
-		})
+	return RELEASE_SECTIONS.map((section) => {
+		const content = combined.get(section).filter(Boolean);
+		if (!content.length) return "";
+		return section === INTERNAL_HEADING
+			? renderInternal(content)
+			: `### ${section}\n\n${content.join("\n\n")}`;
+	})
 		.filter(Boolean)
 		.join("\n\n");
 }
