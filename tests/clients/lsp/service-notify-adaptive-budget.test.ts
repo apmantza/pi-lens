@@ -241,9 +241,8 @@ describe("#2358 — adaptive wedge window pricing", () => {
 			makeServer("typescript"),
 			makeServer("ast-grep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "ast-grep" ? aux : makePrimary("typescript"),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "ast-grep" ? aux : makePrimary("typescript"),
 		);
 		const pending = (
 			service as { touchFile: (...args: unknown[]) => Promise<unknown> }

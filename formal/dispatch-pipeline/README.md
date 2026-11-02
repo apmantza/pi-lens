@@ -46,7 +46,7 @@ Issues: #3506, #3507, #3508, #3541, #3598, #3741, #3830; model lane L5 of #3803.
      writes the widget store under its `WriteOrderingGuard`.
   6. `Release`: `releaseInFlightPipeline` (deletes by hash key), and the
      already-analysed latch is set.
-  7. `Record`: the handler's `recordInlineBlockers` / `clearInlineBlockers`
+  7. `Record`: the dispatch's late continuation or the in-bound handler's `recordInlineBlockers` / `clearInlineBlockers`
      (~2888 / ~2909). This is the turn-end "Unresolved from this turn" record,
      and the git-guard latch aggregates it (`runtime-coordinator.ts` ~653).
 
@@ -410,3 +410,6 @@ Assumptions:
   compared mtime + size + inode, which an in-place same-size edit inside one
   mtime tick passes; it now compares bytes before the write, and the model does
   not show the difference (`tests/clients/fix-run-restore.test.ts` pins it).
+
+#5165: `AllActorsFixOrphan` also checks `InlineExact`. Abandonment stops the
+hook wait; it no longer skips the ordered verdict publication in `Record`.

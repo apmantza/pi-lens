@@ -329,11 +329,8 @@ function workflowWriters(source: string, workflowPath: string): WriterRecord[] {
 }
 
 function writerFindings(source: string, workflowPath: string): string[] {
-	return workflowWriters(source, workflowPath).flatMap(
-		({ id, kinds, guard }) =>
-			guard.guarded
-				? []
-				: kinds.map((kind) => `${id}: ${kind} ${guard.reason}`),
+	return workflowWriters(source, workflowPath).flatMap(({ id, kinds, guard }) =>
+		guard.guarded ? [] : kinds.map((kind) => `${id}: ${kind} ${guard.reason}`),
 	);
 }
 
