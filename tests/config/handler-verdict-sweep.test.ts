@@ -79,6 +79,8 @@ const INTENTIONAL_DEGRADATION: Readonly<Record<string, string>> = {
 		"Calls the throwing handler three times to assert the ledger keeps one record per tool name; the helper refuses a call after a recorded swallow, which is the state under test.",
 	"tests/clients/pi-host-contract.test.ts :: still blocks an unread edit when the attribution cleanup throws":
 		"Makes the blocked-attribution cleanup throw to assert the block verdict survives and the swallow is recorded under attribution-cleanup:<tool>; the recorded throw is the assertion.",
+	"tests/clients/runtime-tool-call.test.ts :: reports PARTIAL APPLY when tool_call throws after rewriting the batch":
+		"Makes the input's setter throw after the partial-apply rewrite (#5125 r1 F2) to assert the call runs and its tool_result still reports the partial apply; the recorded tool-call-handler-throw row is asserted, and the helper would fail the call this test requires to succeed.",
 };
 
 export interface HandlerCallScan {

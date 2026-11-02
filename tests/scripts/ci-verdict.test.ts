@@ -1607,15 +1607,10 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		// full suite on any doubt and must never gate a merge.
 		"Changed files (advisory)",
 		"PR body (advisory)",
-		"Vale prose lint (advisory)",
 		"OSV scan (advisory)",
-		"jscpd (advisory)",
-		"yamllint (advisory)",
-		"typos (advisory)",
-		"taplo (advisory)",
-		"complexity (advisory)",
-		// #2697 item 9: the strictness census lane (two scratch tsconfigs) is advisory.
-		"strictness (advisory)",
+		// #5002: Vale, jscpd, yamllint, typos, taplo, complexity and strictness
+		// are steps of this one advisory job.
+		"Lint (advisory)",
 		"Changed tests shuffled (advisory)",
 		// #4363: the head-against-base latency lane. It is not a required check
 		// and keeps a truthful run conclusion, so only the suffix marks it advisory.
@@ -1684,12 +1679,10 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 	it("the reviewer's named gating list is NOT advisory", () => {
 		for (const name of [
 			...EXTERNAL_GATING_NAMES,
-			"Detect lockfile change",
-			"PR title",
+			"PR metadata",
 			"actionlint",
 			"markdownlint",
 			"Dependency boundaries",
-			"Close-keyword syntax",
 			"Changelog fragment (fast-fail)",
 			"Install test (ubuntu-latest)",
 			"Install test (windows-latest)",
@@ -1710,13 +1703,9 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			...EXTERNAL_ADVISORY_NAMES,
 			"greeting",
 			"PR body (advisory)",
-			"Vale prose lint (advisory)",
 			"OSV scan (advisory)",
 			"oxlint (advisory)",
-			"jscpd (advisory)",
-			"yamllint (advisory)",
-			"typos (advisory)",
-			"taplo (advisory)",
+			"Lint (advisory)",
 		]) {
 			expect(isAdvisoryCheck(name)).toBe(true);
 		}
@@ -1736,17 +1725,10 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		expect(isAdvisoryCheck("oxlint (advisory)")).toBe(true);
 	});
 
-	it("registers the four tool jobs in the explicit advisory allowlist (#2706)", () => {
-		expect([...ADVISORY_CHECKS]).toEqual(
-			expect.arrayContaining([
-				"jscpd (advisory)",
-				"yamllint (advisory)",
-				"typos (advisory)",
-				"taplo (advisory)",
-				"complexity (advisory)",
-				"Changed tests shuffled (advisory)",
-			]),
-		);
+	it("classifies the folded lint job by the suffix, with no allowlist entry (#5002)", () => {
+		expect(ADVISORY_CHECKS.has("Lint (advisory)")).toBe(false);
+		expect(isAdvisoryCheck("Lint (advisory)")).toBe(true);
+		expect(ADVISORY_CHECKS.has("Changed tests shuffled (advisory)")).toBe(true);
 	});
 });
 

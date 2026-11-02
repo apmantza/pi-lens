@@ -219,7 +219,7 @@ function canonicalOnlyLayout(): { home: string; projectDir: string } {
 	process.env.PI_LENS_HOME = tmpRoot("pi-lens-cfgres-canon-global-");
 	const projectDir = path.join(home, "proj");
 	write(path.join(projectDir, ".pi-lens.json"), {
-		lsp: { disabledServers: ["gopls", "rust"] },
+		lsp: { disabledServers: ["typescript", "rust"] },
 	});
 	return { home, projectDir };
 }
@@ -271,7 +271,7 @@ describe("config_resolved: the session's one positive config record (#2526)", ()
 
 		// REDACTION: no config VALUE and no absolute `$HOME` may reach the log.
 		const serialized = JSON.stringify(metadata);
-		expect(serialized).not.toContain("gopls");
+		expect(serialized).not.toContain("typescript");
 		expect(serialized).not.toContain(home);
 
 		// One matching sessionstart.log line summarising the same facts.

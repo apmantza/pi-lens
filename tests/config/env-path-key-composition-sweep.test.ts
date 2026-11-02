@@ -1624,7 +1624,6 @@ const SEEDED_OFFENDERS: Readonly<Record<string, PathKeyReason>> = {
 		"spread-override",
 	"tests/scripts/install-smoke-handshake-steps.test.ts#bash:8c06ec3b#PATH":
 		"spread-override",
-	"tests/scripts/lane-check.test.ts#runLane:f2fe9f48#PATH": "spread-override",
 	"tests/scripts/lint-js.test.ts#runNodeWithOxlint:e2627086#PATH":
 		"spread-override",
 	"tests/scripts/notify-install-smoke-drift.test.ts#EXISTING_TRACKER:7b47e8d1#PATH":
@@ -1652,6 +1651,7 @@ const SEEDED_OFFENDERS: Readonly<Record<string, PathKeyReason>> = {
 		"spread-override",
 	"tests/scripts/resolve-newest-in-range-host.test.ts#runCli:7b47e8d1#PATH":
 		"spread-override",
+	"tests/support/lane-check-kit.ts#runLane:f2fe9f48#PATH": "spread-override",
 };
 
 const REMEDIATION =

@@ -5557,6 +5557,39 @@ export function handleNotifySave(
 	);
 }
 
+/**
+ * #5151: the document text a server is sent, and the fingerprint of the bytes
+ * it came from.
+ *
+ * pi-lens reads files with `readFile(path, "utf8")`, which keeps a leading
+ * U+FEFF. PowerShell Editor Services parses the in-memory text, takes that
+ * U+FEFF for a token and reports syntax errors that `Parser.ParseFile` (which
+ * reads the BOM as an encoding mark) does not report for the same file. For
+ * that server the BOM is sent as ONE space: a deletion would move every UTF-16
+ * offset on line 0, and `clients/lsp/edits.ts` applies server positions to the
+ * disk-decoded text. Other servers are not touched here: a space is an
+ * IndentationError in a Python document, and nothing measured shows another
+ * server misreading the BOM.
+ *
+ * The fingerprint stays on the raw bytes (the read-transform symmetry
+ * `createDiskBindingCache` relies on), so it is fixed here before the text
+ * changes. Both notify entry points call this, so open, change, save and
+ * every resync send the same text.
+ */
+function toWireDocument(
+	state: LSPClientState,
+	content: string,
+	contentHash?: string,
+): { text: string; contentHash: string | undefined } {
+	if (state.serverId !== "powershell" || content.charCodeAt(0) !== 0xfeff) {
+		return { text: content, contentHash };
+	}
+	return {
+		text: ` ${content.slice(1)}`,
+		contentHash: contentHash ?? hashDiagnosticContent(content),
+	};
+}
+
 export function handleNotifyOpen(
 	state: LSPClientState,
 	filePath: string,
@@ -5572,6 +5605,7 @@ export function handleNotifyOpen(
 	// #3543: no dead-client check here. The queued run makes it and resolves
 	// false; an early return only duplicated that answer.
 	const normalizedPath = normalizeMapKey(filePath);
+	const wire = toWireDocument(state, content, contentHash);
 	return enqueueDocumentNotify(
 		state,
 		normalizedPath,
@@ -5579,13 +5613,13 @@ export function handleNotifyOpen(
 			handleNotifyOpenOnce(
 				state,
 				filePath,
-				content,
+				wire.text,
 				languageId,
 				preserveDiagnostics,
 				silent,
 				coalescedCount,
 				queuedSaved,
-				contentHash,
+				wire.contentHash,
 			),
 		saved,
 		readStamp,
@@ -5695,6 +5729,7 @@ export function handleNotifyChange(
 ): Promise<boolean> {
 	// #3543: the queued run makes the dead-client check and resolves false.
 	const normalizedPath = normalizeMapKey(filePath);
+	const wire = toWireDocument(state, content, contentHash);
 	// #3405: no `saved` argument — `LSPService.updateFile` is this path's only
 	// entry point and no caller declares a save through it, so a change never
 	// originates one. #3545: it still sends the save its entry inherited.
@@ -5705,11 +5740,11 @@ export function handleNotifyChange(
 			handleNotifyChangeOnce(
 				state,
 				filePath,
-				content,
+				wire.text,
 				normalizedPath,
 				coalescedCount,
 				queuedSaved,
-				contentHash,
+				wire.contentHash,
 			),
 	);
 }

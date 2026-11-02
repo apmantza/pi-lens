@@ -155,13 +155,17 @@ describe("compiled LSP registry trust boundary (#2372)", () => {
 		expect(override?.command).toBeUndefined();
 		expect(override?.env).toBeUndefined();
 		expect(override?.initializationOptions).toBeUndefined();
+		expect(registry.disabledServerIds.has("rust")).toBe(false);
 		expect(logExtension).toHaveBeenCalledTimes(1);
 		expect(ledger.getDegradationSummary()).toContainEqual(
 			expect.objectContaining({ kind: "lsp-registry-decision", count: 3 }),
 		);
 	});
 
-	it("refuses project env and initialization options while retaining global command", async () => {
+	// #5147 r2: a refused project env/initializationOptions used to leave the
+	// global command running without the user's own env and init options. The
+	// merge keeps only the winning tier's value, so the server is not started.
+	it("does not register a global server whose env and initialization options a project sets while untrusted", async () => {
 		const project = tempDir();
 		const globalDir = tempDir();
 		process.env.PI_LENS_HOME = globalDir;
@@ -173,6 +177,7 @@ describe("compiled LSP registry trust boundary (#2372)", () => {
 						name: "Shared",
 						extensions: [".shared"],
 						command: "global-shared",
+						env: { GLOBAL_ONLY: "1" },
 					},
 				},
 			}),
@@ -184,7 +189,6 @@ describe("compiled LSP registry trust boundary (#2372)", () => {
 					servers: {
 						shared: {
 							name: "Shared project fields",
-							extensions: [".shared"],
 							env: { PROJECT_ONLY: "1" },
 							initializationOptions: { projectOnly: true },
 						},
@@ -199,23 +203,11 @@ describe("compiled LSP registry trust boundary (#2372)", () => {
 			await import("../../../clients/lsp/config.js");
 		const config = await loadLSPConfig(project);
 		const registry = compileLspRegistry(config, config.__provenance);
-		const server = registry.customServers.find(
-			(entry) => entry.id === "shared",
-		);
 
-		expect(server).toBeDefined();
-		const spawn = server?.spawn;
-		if (!spawn) throw new Error("global server did not register a spawn seam");
-		const launch = await spawn(project);
-		if (!launch) throw new Error("global server spawn was not admitted");
-		expect(launch.initialization).toBeUndefined();
-		expect(launchLSP).toHaveBeenCalledWith(
-			"global-shared",
-			["--stdio"],
-			expect.objectContaining({
-				env: expect.not.objectContaining({ PROJECT_ONLY: "1" }),
-			}),
-		);
+		expect(
+			registry.customServers.find((entry) => entry.id === "shared"),
+		).toBeUndefined();
+		expect(launchLSP).not.toHaveBeenCalled();
 	});
 
 	it("retains every project override field after pi grants trust", async () => {

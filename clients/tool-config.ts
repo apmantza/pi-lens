@@ -1,5 +1,6 @@
 /** Shared resolver for model-facing tool availability (#2800). */
 
+import type { ConfigDiagnosticCode } from "./config-diagnostic-codes.js";
 import { readFlagConfigValue } from "./lens-flag-registry.js";
 import { escapeRegExp } from "./string-utils.js";
 
@@ -297,7 +298,7 @@ export function resolveLensToolEnabled(
 /** Copy and validate the known per-tool leaves from one config document. */
 export function readToolConfig(
 	raw: unknown,
-	warnInvalid: (reason: string, code?: "PILENS_CFG_0009") => void,
+	warnInvalid: (reason: string, code: ConfigDiagnosticCode) => void,
 ): Record<string, { enabled?: boolean }> | undefined {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
 	const section = (raw as Record<string, unknown>).tools;
@@ -322,12 +323,15 @@ export function readToolConfig(
 			continue;
 		}
 		if (!value || typeof value !== "object" || Array.isArray(value)) {
-			warnInvalid(`tools.${name} must be an object with enabled`);
+			warnInvalid(
+				`tools.${name} must be an object with enabled`,
+				"PILENS_CFG_0005",
+			);
 			continue;
 		}
 		const enabled = (value as Record<string, unknown>).enabled;
 		if (enabled !== undefined && typeof enabled !== "boolean") {
-			warnInvalid(`tools.${name}.enabled must be a boolean`);
+			warnInvalid(`tools.${name}.enabled must be a boolean`, "PILENS_CFG_0005");
 			continue;
 		}
 		result[name] = enabled === undefined ? {} : { enabled };

@@ -126,7 +126,7 @@
 			}
 		},
 		"complexity-report": {
-			"producer": "lint.yml complexity (advisory), scripts/complexity-report.mjs",
+			"producer": "lint.yml Lint (advisory) complexity step, scripts/complexity-report.mjs",
 			"evaluated": "source files under clients/, tools/ and mcp/ the ComplexityClient analysed",
 			"healthy": {
 				"sha": "86336d00a2ffa88cf8e9a7c438fd71d60c3465c4",

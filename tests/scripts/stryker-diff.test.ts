@@ -158,11 +158,17 @@ function runDriver(cwd: string, args: string[], timeout: number) {
 }
 
 /** A real driver run that is allowed to exit non-zero (the partial path). */
-function runDriverResult(cwd: string, args: string[], timeout: number) {
+function runDriverResult(
+	cwd: string,
+	args: string[],
+	timeout: number,
+	env?: NodeJS.ProcessEnv,
+) {
 	return spawnSync(process.execPath, [driverPath, ...args], {
 		cwd,
 		encoding: "utf8",
 		timeout,
+		...(env ? { env } : {}),
 	});
 }
 
@@ -227,8 +233,10 @@ try {
 	control = JSON.parse(fs.readFileSync(".fake-stryker/control.json", "utf8"));
 } catch {}
 // #4989: a pass the driver's kill bound must reach (control.dryRunHangMs), and a
-// first real run that spends wall clock so the admission after it sees a budget
-// too small to afford a mutant (control.firstRealRunSleepMs).
+// first real run that spends budget so the admission after it sees a budget too
+// small to afford a mutant (control.firstRealRunClockSkewMs). The spend is a
+// clock offset the driver's test-only preload adds to Date.now (#3801), not a
+// real sleep: the driver reads its budget from Date.now alone.
 const sleep = (ms) => {
 	if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 };
@@ -277,7 +285,8 @@ try {
 	realRuns = Number(fs.readFileSync(countFile, "utf8")) + 1;
 } catch {}
 fs.writeFileSync(countFile, String(realRuns));
-sleep(realRuns === 1 ? control.firstRealRunSleepMs || 0 : 0);
+if (realRuns === 1 && control.firstRealRunClockSkewMs)
+	fs.writeFileSync(".fake-stryker/clock-offset-ms", String(control.firstRealRunClockSkewMs));
 const files = {};
 for (const pattern of patterns) {
 	const match = /^(.*):(\d+)-(\d+)$/.exec(pattern);
@@ -1480,12 +1489,41 @@ describe("driver Stryker stage, spawned for real (#3856 F3)", () => {
 			mkdirSync(join(fixture.root, ".fake-stryker"), { recursive: true });
 			writeFileSync(
 				join(fixture.root, ".fake-stryker", "control.json"),
-				JSON.stringify({ density, firstRealRunSleepMs: 40_000 }),
+				JSON.stringify({ density, firstRealRunClockSkewMs: 40_000 }),
+			);
+			// #3801: the first real run used to sleep 40 s of real time. The preload
+			// (the driver process only, not its tsc/vitest/Stryker children) adds the
+			// offset the fake Stryker writes to Date.now, which is all the driver's
+			// budget reads (scripts/stryker-diff.mjs remainingBudgetMs).
+			const preload = join(fixture.root, ".fake-stryker", "clock-skew.mjs");
+			writeFileSync(
+				preload,
+				[
+					'import { readFileSync } from "node:fs";',
+					'import { basename } from "node:path";',
+					'if (basename(process.argv[1] ?? "") === "stryker-diff.mjs") {',
+					"	const realNow = Date.now.bind(Date);",
+					"	let offset = 0;",
+					"	Date.now = () => {",
+					"		if (offset === 0) {",
+					"			try {",
+					'				offset = Number(readFileSync(".fake-stryker/clock-offset-ms", "utf8")) || 0;',
+					"			} catch {}",
+					"		}",
+					"		return realNow() + offset;",
+					"	};",
+					"}",
+					"",
+				].join("\n"),
 			);
 			const result = runDriverResult(
 				fixture.root,
 				["--base", "main", "--budget-minutes", "5.5"],
 				120_000,
+				{
+					...process.env,
+					NODE_OPTIONS: `--import ${pathToFileURL(preload).href}`,
+				},
 			);
 			expect(result.error).toBeUndefined();
 			const calls = fakeStrykerInvocations(fixture.root);

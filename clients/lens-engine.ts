@@ -78,9 +78,16 @@ export {
 } from "./mcp/session.js";
 export {
 	moduleReport,
+	projectModuleReport,
 	readEnclosing,
 	readSymbol,
 	renderCompactModuleReport,
+	renderModuleReportPreset,
+	resolveModuleReportPreset,
+	type ModuleReportFormat,
+	type ModuleReportPreset,
+	type ModuleReportPresetChoice,
+	type ModuleReportProjection,
 } from "./module-report.js";
 export {
 	type ProjectReport,

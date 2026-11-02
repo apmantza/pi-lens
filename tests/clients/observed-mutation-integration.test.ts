@@ -781,6 +781,403 @@ describe("#4139 pi-lens tool attribution boundary", () => {
 	});
 });
 
+describe("#5160 provider replays are display-only", () => {
+	// RECURRENCE GUARDED: #5160. pi-cursor-sdk replays Cursor's native edit as a
+	// display-only `cursor` tool call (id `cursor-replay-*`, input
+	// {path, activityTitle, activitySummary}). Cursor's own write can land
+	// while the replay card is pending, so tier-4 learning attributed `cursor`
+	// as mutating (then persisted it) and the read guard refused every later
+	// replay "Edit without read" although the file was already written.
+	const replayEvent = (
+		filePath: string,
+		toolCallId: string,
+	): Record<string, unknown> => ({
+		toolName: "cursor",
+		toolCallId,
+		input: {
+			path: filePath,
+			activityTitle: "Cursor edit",
+			activitySummary: "edited the file",
+		},
+		content: [{ type: "text", text: "Cursor edit" }],
+	});
+	type Session = { runtime: RuntimeCoordinator; cacheManager: CacheManager };
+	const callOf = (
+		event: Record<string, unknown>,
+		env: { tmpDir: string },
+		session: Session,
+	) =>
+		runHandlerExpectingNoThrow(() =>
+			handleToolCall(
+				toolCallDeps({
+					event,
+					cwd: env.tmpDir,
+					runtime: session.runtime,
+					cacheManager: session.cacheManager,
+				}),
+			),
+		) as Promise<{ block?: boolean; reason?: string } | undefined>;
+	/** One call whose target changes while it is pending, then its result. */
+	const callWithWrite = async (
+		event: Record<string, unknown>,
+		filePath: string,
+		env: { tmpDir: string },
+		session: Session,
+		suffix: string,
+	) => {
+		await callOf(event, env, session);
+		fs.writeFileSync(filePath, `${SOURCE}const ${suffix} = 1;\n`);
+		await handleToolResult(
+			toolResultDeps({
+				event,
+				runtime: session.runtime,
+				cacheManager: session.cacheManager,
+			}),
+		);
+	};
+
+	it("does not refuse a replay after earlier replays touched the file", async () => {
+		const env = setupTestEnvironment("pi-lens-5160-replay-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = path.join(env.tmpDir, "x.ts");
+			fs.writeFileSync(filePath, SOURCE);
+			const session = newSession(env.tmpDir);
+			for (const suffix of ["one", "two"]) {
+				await callWithWrite(
+					replayEvent(filePath, `cursor-replay-${suffix}`),
+					filePath,
+					env,
+					session,
+					suffix,
+				);
+			}
+			const unread = path.join(env.tmpDir, "unread.ts");
+			fs.writeFileSync(unread, SOURCE);
+			expect(
+				await callOf(replayEvent(unread, "cursor-replay-three"), env, session),
+			).toBeUndefined();
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	it("learns nothing from replays, in session or on disk", async () => {
+		const env = setupTestEnvironment("pi-lens-5160-not-learned-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = path.join(env.tmpDir, "x.ts");
+			fs.writeFileSync(filePath, SOURCE);
+			const session = newSession(env.tmpDir);
+			for (const suffix of ["one", "two", "three"]) {
+				await callWithWrite(
+					replayEvent(filePath, `cursor-replay-${suffix}`),
+					filePath,
+					env,
+					session,
+					suffix,
+				);
+			}
+			expect(lookupLearnedMutatingTool("cursor")).toBeUndefined();
+			expect(
+				fs.existsSync(
+					path.join(getProjectDataDir(env.tmpDir), MUTATION_ATTRIBUTION_FILE),
+				),
+			).toBe(false);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	it("ignores a persisted cursor entry for a replay, and keys on the id rather than the name", async () => {
+		const env = setupTestEnvironment("pi-lens-5160-persisted-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const dataDir = getProjectDataDir(env.tmpDir);
+			fs.mkdirSync(dataDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(dataDir, MUTATION_ATTRIBUTION_FILE),
+				fs.readFileSync(
+					new URL(
+						"../fixtures/mutation-attribution/observed-mutating-tools-v1-cursor.json",
+						import.meta.url,
+					),
+				),
+			);
+			const session = newSession(env.tmpDir);
+			primePersistedMutationAttribution(env.tmpDir);
+			const unread = path.join(env.tmpDir, "unread.ts");
+			fs.writeFileSync(unread, SOURCE);
+
+			expect(
+				await callOf(replayEvent(unread, "cursor-replay-a"), env, session),
+			).toBeUndefined();
+			// Narrowness: the rule is the replay id, not the name `cursor`. A call
+			// of that name without the id is still the learned mutation it was.
+			const real = await callOf(
+				replayEvent(unread, "call-5160-real"),
+				env,
+				session,
+			);
+			expect(real?.block).toBe(true);
+			expect(real?.reason).toContain("Edit without read");
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	const editEvent = (filePath: string, toolCallId: string) => ({
+		toolName: "edit",
+		toolCallId,
+		input: {
+			path: filePath,
+			edits: [{ oldText: "const a = 1;", newText: "const a = 2;" }],
+		},
+	});
+
+	it("does not refuse a replayed built-in edit with no read", async () => {
+		// RECURRENCE GUARDED: #5160 review r1 probe P1. pi-cursor-sdk replays
+		// Cursor StrReplace as a native-looking `edit` card with a
+		// `cursor-replay-` id; the file was written before it arrived, so the
+		// read guard has nothing to protect.
+		const env = setupTestEnvironment("pi-lens-5160-replay-edit-");
+		try {
+			const unread = path.join(env.tmpDir, "unread.ts");
+			fs.writeFileSync(unread, SOURCE);
+			const session = newSession(env.tmpDir);
+			expect(
+				await callOf(editEvent(unread, "cursor-replay-1-1"), env, session),
+			).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("still refuses a real pi edit with no read, whatever near-miss id it carries", async () => {
+		// RECURRENCE GUARDED: #5160 review F2. A prefix widened to `cursor-` or
+		// matched with `includes` would exempt pi-cursor-sdk's real bridged
+		// executions (`cursor-pi-bridge-*`) and any id that merely contains it.
+		const env = setupTestEnvironment("pi-lens-5160-real-edit-");
+		try {
+			const unread = path.join(env.tmpDir, "unread.ts");
+			fs.writeFileSync(unread, SOURCE);
+			const session = newSession(env.tmpDir);
+			for (const id of [
+				"call-5160-edit",
+				"cursor-pi-bridge-ab-t1",
+				"xcursor-replay-x",
+			]) {
+				const verdict = await callOf(editEvent(unread, id), env, session);
+				expect(verdict?.block, id).toBe(true);
+				expect(verdict?.reason, id).toContain("Edit without read");
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("still refuses a genuinely mutating learned tool with no read", async () => {
+		const env = setupTestEnvironment("pi-lens-5160-learned-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = path.join(env.tmpDir, "x.ts");
+			fs.writeFileSync(filePath, SOURCE);
+			const session = newSession(env.tmpDir);
+			for (const suffix of ["one", "two"]) {
+				await callWithWrite(
+					patchEvent(filePath, `call-5160-patch-${suffix}`),
+					filePath,
+					env,
+					session,
+					suffix,
+				);
+			}
+			expect(lookupLearnedMutatingTool("patch_file")).toBe("session");
+			const unread = path.join(env.tmpDir, "unread.ts");
+			fs.writeFileSync(unread, SOURCE);
+			// The near-miss ids are pi-cursor-sdk's real bridged executions and an id
+			// that merely contains the replay prefix (#5160 review F2).
+			for (const id of [
+				"call-5160-patch-three",
+				"cursor-pi-bridge-ab-t1",
+				"xcursor-replay-x",
+			]) {
+				const verdict = await callOf(patchEvent(unread, id), env, session);
+				expect(verdict?.block, id).toBe(true);
+				expect(verdict?.reason, id).toContain("Edit without read");
+			}
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
+	// RECURRENCE GUARDED: #5162 r3 (Greptile PRRT_kwDORt8rec6ycYW4, shape 65).
+	// A replayed built-in edit or write skips the pre-write check, yet its
+	// tool_result credited authorship as a checked own write: an existing
+	// authorship was re-baselined over the current disk bytes, erasing the
+	// evidence that another writer had changed the file.
+	const writeEvent = (
+		filePath: string,
+		toolCallId: string,
+		content: string,
+	) => ({
+		toolName: "write",
+		toolCallId,
+		input: { path: filePath, content },
+	});
+	const lines3 = (a: string, b: string, c: string) =>
+		[`const a = ${a};`, `const b = ${b};`, `const c = ${c};`, ""].join("\n");
+	/** The agent's earlier write, then a call and result with `onDisk` landing between them. */
+	const afterAuthoredWrite = async (
+		prefix: string,
+		event: (filePath: string) => Record<string, unknown>,
+		onDisk: (filePath: string) => void,
+		before?: (filePath: string, session: Session) => void,
+	) => {
+		const env = setupTestEnvironment(prefix);
+		const filePath = path.join(env.tmpDir, "authored.ts");
+		fs.writeFileSync(filePath, SOURCE);
+		const session = newSession(env.tmpDir);
+		session.runtime.readGuard.recordWritten(filePath, {
+			stampFileTime: false,
+			toolCallId: "call-5160-authored",
+		});
+		before?.(filePath, session);
+		const call = event(filePath);
+		const verdict = await callOf(call, env, session);
+		onDisk(filePath);
+		await handleToolResult({
+			...toolResultDeps({
+				event: { ...call, content: [{ type: "text", text: "ok" }] },
+				runtime: session.runtime,
+				cacheManager: session.cacheManager,
+			}),
+			readGuard: session.runtime.readGuard,
+		});
+		const entry = (
+			session.runtime.readGuard.exportAuthorship().entries ?? []
+		).find((row) => row.filePath === filePath);
+		return { env, filePath, session, verdict, entry };
+	};
+
+	it("keeps another writer's change visible after a replayed built-in edit", async () => {
+		const run = await afterAuthoredWrite(
+			"pi-lens-5160-replay-edit-authorship-",
+			(filePath) => editEvent(filePath, "cursor-replay-7-1"),
+			// Another writer changed line 3; Cursor's own edit changed line 1.
+			(filePath) => fs.writeFileSync(filePath, lines3("2", "2", "333")),
+		);
+		try {
+			expect(run.verdict).toBeUndefined();
+			expect(run.entry?.retired).toBe(true);
+			const verdict = run.session.runtime.readGuard.checkEdit(
+				run.filePath,
+				[3, 3],
+			);
+			expect(verdict.action).toBe("block");
+			expect(verdict.reason).toContain("File modified since your write");
+		} finally {
+			run.env.cleanup();
+		}
+	});
+
+	it("keeps another writer's change visible after a replayed built-in write", async () => {
+		const run = await afterAuthoredWrite(
+			"pi-lens-5160-replay-write-authorship-",
+			(filePath) =>
+				writeEvent(filePath, "cursor-replay-7-2", lines3("2", "2", "3")),
+			// Cursor wrote its content, then another writer changed line 3.
+			(filePath) => fs.writeFileSync(filePath, lines3("2", "2", "333")),
+		);
+		try {
+			expect(run.verdict).toBeUndefined();
+			expect(run.entry?.retired).toBe(true);
+			expect(run.entry?.toolCallId).toBe("call-5160-authored");
+			expect(
+				run.session.runtime.readGuard.exportAuthorship().written,
+			).not.toContain(run.filePath);
+		} finally {
+			run.env.cleanup();
+		}
+	});
+
+	it("still advances authorship for a real built-in edit after a read", async () => {
+		// Control for the replay rule: a checked own edit re-baselines its
+		// authorship over the bytes it wrote. Recurrence: the flag applied to
+		// every built-in edit, retiring the agent's own authorship.
+		const run = await afterAuthoredWrite(
+			"pi-lens-5160-real-edit-authorship-",
+			(filePath) => editEvent(filePath, "call-5160-real-edit"),
+			(filePath) => fs.writeFileSync(filePath, lines3("2", "2", "3")),
+			(filePath, session) =>
+				session.runtime.readGuard.recordRead({
+					filePath,
+					requestedOffset: 1,
+					requestedLimit: 4,
+					effectiveOffset: 1,
+					effectiveLimit: 4,
+					expandedByLsp: false,
+					turnIndex: session.runtime.turnIndex,
+					writeIndex: 0,
+					timestamp: Date.now(),
+				}),
+		);
+		try {
+			expect(run.verdict).toBeUndefined();
+			expect(run.entry?.retired).toBeUndefined();
+			expect(run.entry?.toolCallId).toBe("call-5160-real-edit");
+		} finally {
+			run.env.cleanup();
+		}
+	});
+
+	it("gives a replay on a file with no authorship only a write's first credit", async () => {
+		// Shape 65's writer rule: a producer with no pre-write check may still
+		// create a first authorship (a write's whole file), never a first
+		// UNKNOWN one (an edit's). Recurrence: the replay rule refused first
+		// credits too, or let an edit replay create one.
+		const env = setupTestEnvironment("pi-lens-5160-replay-first-credit-");
+		try {
+			const session = newSession(env.tmpDir);
+			const edited = path.join(env.tmpDir, "edited.ts");
+			const written = path.join(env.tmpDir, "written.ts");
+			for (const [filePath, event] of [
+				[edited, editEvent(edited, "cursor-replay-8-1")],
+				[written, writeEvent(written, "cursor-replay-8-2", SOURCE)],
+			] as const) {
+				fs.writeFileSync(filePath, SOURCE);
+				expect(await callOf(event, env, session)).toBeUndefined();
+				await handleToolResult({
+					...toolResultDeps({
+						event: { ...event, content: [{ type: "text", text: "ok" }] },
+						runtime: session.runtime,
+						cacheManager: session.cacheManager,
+					}),
+					readGuard: session.runtime.readGuard,
+				});
+			}
+			const entries =
+				session.runtime.readGuard.exportAuthorship().entries ?? [];
+			expect(entries.map((row) => row.filePath)).toEqual([written]);
+			expect(entries[0]?.toolCallId).toBe("cursor-replay-8-2");
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
 describe("#2430 acceptance 2 — the SECOND call is classified without a snapshot", () => {
 	it("classifies the same tool by name once one mutation has been observed", async () => {
 		const env = setupTestEnvironment("pi-lens-2430-second-");

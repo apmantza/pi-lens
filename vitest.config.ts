@@ -382,6 +382,9 @@ const lspSpawnHeavyInclude = [
 	// launchLSP/getServerById marker, so the census cannot derive it (its known
 	// marker gap); membership is by hand.
 	"tests/clients/lsp/opengrep-offline-findings-4765.integration.test.ts",
+	// #5151: the bytes of a PowerShell BOM file over a real fixture-server stdio
+	// stream; the same #1022/#2332 handshake contention class as its lane siblings.
+	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts",
 	// #4758: a real pyright-langserver child (skipped, with a named reason, when
 	// none is installed) behind a real initialize handshake, then a first-
 	// diagnostics wait of up to 30 s per case — the #1022/#2332 shape of its
@@ -436,6 +439,7 @@ const lspSpawnHeavyInclude = [
 	"tests/index-4632-s7-turn-end-ordering.test.ts",
 	"tests/mcp/analyze-cli.test.ts",
 	// #4300: the MCP witness crosses Lean's real initialize handshake.
+	"tests/mcp/server.smoke-fallback-5014.test.ts",
 	"tests/mcp/server.smoke.test.ts",
 	// #4521: the nightly born-after-start phase run through the production
 	// lsp_diagnostics handler and LSPService over real stdio fake-server
@@ -452,7 +456,13 @@ const lspSpawnHeavyInclude = [
 	// pi's hooks and tools, plus a real MCP server child per column; waits on
 	// real handshakes and pull rounds like #4320's. The MCP bin receives the
 	// fixture path, so the marker census cannot see that half; stated here by
-	// hand like analyze-cli above.
+	// hand like analyze-cli above. #3801: the 15 columns run from five
+	// `-cols-N` files so the sequencer can balance them; the route scan stays here.
+	"tests/tools/diagnostics-route-switch-matrix-cols-1.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-2.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-3.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-4.test.ts",
+	"tests/tools/diagnostics-route-switch-matrix-cols-5.test.ts",
 	"tests/tools/diagnostics-route-switch-matrix.test.ts",
 	// #873/#448: the dispatch LSP runner against a real stdio JSON-RPC server
 	// — a real child spawn through the production LSPService plus a
@@ -614,8 +624,11 @@ export const wallClockBudgetInclude = [
 	"tests/clients/git-tracked-ignore.test.ts",
 	// #4493: real git repositories and fake-LSP children driven through the
 	// tool_call/tool_result seams (flake-shape admission); the fake-server
-	// handshake rides along in this fully serialized lane.
+	// handshake rides along in this fully serialized lane. #3801: the three
+	// describes run from three files over tests/support/head-move-resync-kit.ts.
+	"tests/clients/head-move-resync-4476.test.ts",
 	"tests/clients/head-move-resync-4493.test.ts",
+	"tests/clients/head-move-resync-4507.test.ts",
 	// #2557 review round 3: a real 30s deadline margin is the subject of an abort-vs-deadline precedence assertion (flake-shape admission).
 	"tests/clients/hook-await-fold-bounds.test.ts",
 	"tests/clients/installer/pip-pep668.test.ts",
@@ -774,6 +787,9 @@ export const wallClockBudgetInclude = [
 	// and pi's own `bash` tool, so the child shells and git processes ride along
 	// in the serialized lane too.
 	"tests/index-2050-worktree-bash-dispatch-witness.test.ts",
+	// #5146: the per-case census polls /proc with vi.waitFor for an ast-grep
+	// child that the fast POSIX shutdown is still exiting (flake-shape admission).
+	"tests/index-3748-advisory-scope-witness.test.ts",
 	// #4316: the session-start LSP warm is fire-and-forget inside the loaded
 	// extension copy, so the witness joins its log record with vi.waitFor
 	// (flake-shape admission).
@@ -877,6 +893,10 @@ export const wallClockBudgetInclude = [
 	// #4047: `npm run lane:check` against real Git fixtures, the real pre-push
 	// selector, red-on-base and vitest (real child processes, flake-shape
 	// admission).
+	// #3801: lane-check.test.ts split over three files; the shared fixture is
+	// tests/support/lane-check-kit.ts.
+	"tests/scripts/lane-check-lock.test.ts",
+	"tests/scripts/lane-check-secondary.test.ts",
 	"tests/scripts/lane-check.test.ts",
 	// #2700: the gating/advisory subset test resolves oxlint's real
 	// --print-config for both npm scripts (real child process, flake-shape
@@ -919,6 +939,9 @@ export const wallClockBudgetInclude = [
 	// #3661: the pre-push hook's own stdin parsing and deletion-only early exit
 	// are the subject; the union witness runs the real script over a real git
 	// fixture (flake-shape admission).
+	// #3801: the lock-admission cases of the pre-push hook, split out of the
+	// selection file; the same real hook chain over a git fixture.
+	"tests/scripts/pre-push-lock-admission.test.ts",
 	"tests/scripts/pre-push-targeted-tests.test.ts",
 	"tests/scripts/prune-agent-worktrees.test.ts",
 	"tests/scripts/red-on-base.test.ts",

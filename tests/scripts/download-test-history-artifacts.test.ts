@@ -8,6 +8,7 @@ import {
 	METADATA_ONLY_MAX_BYTES,
 	SELECT_OVERLAP_MS,
 	type ListedArtifact,
+	downloadArtifacts,
 	listArtifacts,
 	selectArtifacts,
 } from "../../scripts/download-test-history-artifacts.mjs";
@@ -178,9 +179,32 @@ describe("artifact listing pages (#4030)", () => {
 		).toThrow(/passed 3 pages without reaching 2026-10-01T06:00:00.000Z/);
 		expect(asked).toBe(3);
 	});
+
+	// Recurrence #5154 (per_page 100 to 30): the default bound was sized for 100
+	// a page. At 30, 300 pages hold 9000 artifacts, under the 14883 the
+	// repository retained on 2026-11-01, so a full walk must fit the bound.
+	it("walks the whole retention inside the default page bound at 30 a page", () => {
+		const retained = 14_883;
+		const listed = listArtifacts((page) => {
+			const first = (page - 1) * 30;
+			const count = Math.max(0, Math.min(30, retained - first));
+			return Array.from({ length: count }, (_, index) =>
+				artifact(first + index + 1, at(HOUR)),
+			);
+		}, cutoff);
+		expect(listed).toHaveLength(retained);
+	});
 });
 
-type Mode = "transient" | "persistent" | "large";
+type Mode =
+	| "transient"
+	| "persistent"
+	| "large"
+	| "truncated"
+	| "listing500"
+	| "listingPersistent500"
+	| "notFound"
+	| "otherJson";
 const LARGE_ZIP_BYTES = 1.5 * 1024 * 1024;
 
 function fakeGh(mode: Mode) {
@@ -192,28 +216,69 @@ function fakeGh(mode: Mode) {
 	const output = path.join(root, "artifacts");
 	fs.mkdirSync(bin);
 	const zipCalls = path.join(root, "zip-calls");
+	const listCalls = path.join(root, "list-calls");
+	const listArgs = path.join(root, "list-argv");
+	// The raw REST shape of GET /actions/artifacts: the script maps it in node.
 	const listed = JSON.stringify({
-		id: 101,
-		name: "unit-test-results-linux",
-		size: 300_000,
-		createdAt: new Date().toISOString(),
-		expired: false,
-		runId: 7,
+		total_count: 1,
+		artifacts: [
+			{
+				id: 101,
+				name: "unit-test-results-linux",
+				size_in_bytes: 300_000,
+				created_at: new Date().toISOString(),
+				expired: false,
+				workflow_run: { id: 7 },
+			},
+		],
 	});
 	const zipBody = {
 		transient:
 			"if [ \"$count\" -lt 4 ]; then printf '%s\\n' 'gh: HTTP 503' >&2; exit 1; fi; printf 'zip-bytes'",
 		persistent: "printf '%s\\n' 'gh: HTTP 503' >&2; exit 1",
 		large: `head -c ${LARGE_ZIP_BYTES} /dev/zero`,
+		truncated: "printf 'zip-bytes'",
+		notFound: "printf 'zip-bytes'",
+		otherJson: "printf 'zip-bytes'",
+		listing500: "printf 'zip-bytes'",
+		listingPersistent500: "printf 'zip-bytes'",
+	}[mode];
+	// Listing faults: the `gh api --jq` listing on a cut-off body (#5154, the
+	// reported failure), a non-retryable 404 (the control), and another JSON
+	// error that must stay fatal (the #5154 review F1 control).
+	const listFault = {
+		transient: "",
+		persistent: "",
+		large: "",
+		truncated: `if [ "$listCount" -lt 2 ]; then printf '%s\\n' 'unexpected end of JSON input' >&2; exit 1; fi`,
+		// #5154: gh prints the status of a 500 whose body is empty (no --jq now).
+		listing500:
+			"if [ \"$listCount\" -lt 2 ]; then printf '%s\\n' 'gh: Server Error (HTTP 500)' >&2; exit 1; fi",
+		listingPersistent500:
+			"printf '%s\\n' 'gh: Server Error (HTTP 500)' >&2; exit 1",
+		notFound: "printf '%s\\n' 'gh: Not Found (HTTP 404)' >&2; exit 1",
+		otherJson:
+			"printf '%s\\n' 'json: cannot unmarshal string into Go value of type int' >&2; exit 1",
 	}[mode];
 	fs.writeFileSync(
 		path.join(bin, "gh"),
 		`#!/bin/sh
 case "$*" in
-  *actions/artifacts\\?per_page=100\\&page=1*)
+  *actions/artifacts\\?per_page=*)
+    printf '%s\\n' "$*" >> ${JSON.stringify(listArgs)}
+    ;;
+esac
+case "$*" in
+  *actions/artifacts\\?per_page=30\\&page=1*)
+    listCount=0
+    [ -f ${JSON.stringify(listCalls)} ] && listCount=$(cat ${JSON.stringify(listCalls)})
+    listCount=$((listCount + 1))
+    printf '%s' "$listCount" > ${JSON.stringify(listCalls)}
+    ${listFault}
     printf '%s\\n' '${listed}'
     ;;
-  *actions/artifacts\\?per_page=100\\&page=*)
+  *actions/artifacts\\?per_page=30\\&page=*)
+    printf '%s\\n' '{"total_count":1,"artifacts":[]}'
     ;;
   */zip)
     count=0
@@ -242,7 +307,17 @@ esac
 			},
 		);
 	const zips = () => Number(fs.readFileSync(zipCalls, "utf8"));
-	return { run, zips, zip: path.join(output, "101.zip") };
+	const listingCalls = () => Number(fs.readFileSync(listCalls, "utf8"));
+	// Each listing request's argv as gh received it, one line per call.
+	const listingArgs = () =>
+		fs.readFileSync(listArgs, "utf8").split("\n").filter(Boolean);
+	return {
+		run,
+		zips,
+		listingCalls,
+		listingArgs,
+		zip: path.join(output, "101.zip"),
+	};
 }
 
 describe("download-test-history-artifacts process boundary", () => {
@@ -266,6 +341,72 @@ describe("download-test-history-artifacts process boundary", () => {
 		expect(fs.existsSync(gh.zip)).toBe(false);
 	});
 
+	// Recurrence #5154 (#5103 closed without the fix): the nightly's `gh api
+	// --jq` listing got a cut-off body, `unexpected end of JSON input`, and
+	// `isRetryable` retried only HTTP 5xx, so the whole night failed.
+	it("retries a listing whose body is cut off (unexpected end of JSON input) and succeeds on the second attempt", () => {
+		const gh = fakeGh("truncated");
+		expect(gh.run()).toContain(
+			"test-history download: 1 run(s), 1 artifact(s) of 1 eligible run(s) after no watermark; 0 metadata-only skipped",
+		);
+		// The listing ran twice: the cut-off attempt, then the retry.
+		expect(gh.listingCalls()).toBe(2);
+		expect(fs.readFileSync(gh.zip, "utf8")).toBe("zip-bytes");
+	});
+
+	// Recurrence #5154 (run 41312503792): CI printed only `unexpected end of JSON
+	// input` for the listing, with no status. The orchestrator's probe (comment
+	// 6559081169 on #5154) saw an empty HTTP 500 on this listing, intermittently.
+	// Without --jq gh is expected to print the status, `HTTP 500`, which retries;
+	// no live 5xx was observed to confirm the stderr text.
+	it("retries a listing that fails with HTTP 500 and succeeds on the second attempt", () => {
+		const gh = fakeGh("listing500");
+		expect(gh.run()).toContain(
+			"test-history download: 1 run(s), 1 artifact(s) of 1 eligible run(s) after no watermark; 0 metadata-only skipped",
+		);
+		expect(gh.listingCalls()).toBe(2);
+		expect(fs.readFileSync(gh.zip, "utf8")).toBe("zip-bytes");
+	});
+
+	// Recurrence #5154: a listing 500 that persists must name the HTTP status in
+	// the failure, not a JSON parse error, after the bounded attempts.
+	it("fails after the retry bound on a persistent listing 500, naming the HTTP status", () => {
+		const gh = fakeGh("listingPersistent500");
+		expect(() => gh.run()).toThrow(/HTTP 500/);
+		// Four bounded listing attempts (MAX_ATTEMPTS), then the status is reported.
+		expect(gh.listingCalls()).toBe(4);
+	});
+
+	// Recurrence #5154: the orchestrator's probe (comment 6559081169 on #5154)
+	// saw HTTP 500 for listing pages 1 and 3 at per_page=100, and 200 for pages
+	// 1 to 10 at per_page=30. The argv pins the page size and the absence of
+	// --jq (the script parses the JSON).
+	it("pages the artifact listing at per_page=30 with no --jq", () => {
+		const gh = fakeGh("transient");
+		gh.run();
+		expect(gh.listingArgs()).toEqual([
+			"api /repos/o/r/actions/artifacts?per_page=30&page=1",
+			"api /repos/o/r/actions/artifacts?per_page=30&page=2",
+		]);
+	});
+
+	// Control: a 404 is not transient, so the listing fails on its first call.
+	it("fails at once on a non-retryable 404 in the listing", () => {
+		const gh = fakeGh("notFound");
+		expect(() => gh.run()).toThrow(/HTTP 404/);
+		expect(gh.listingCalls()).toBe(1);
+	});
+
+	// Control (#5154 review F1): only the cut-off literal retries. Any other JSON
+	// error stays fatal on its first call. Recurrence: a predicate broadened to
+	// every JSON error (`/JSON/i`) would retry this non-transient gh failure
+	// four times.
+	it("fails at once on another JSON error in the listing (only the cut-off body retries)", () => {
+		const gh = fakeGh("otherJson");
+		expect(() => gh.run()).toThrow(/cannot unmarshal/);
+		expect(gh.listingCalls()).toBe(1);
+	});
+
 	// #4030 review F4: `spawnSync`'s default 1 MiB `maxBuffer` failed every ZIP
 	// over 1 MiB with a blank error and no retry (probe: 1.5 MiB, exit 1, empty
 	// stderr); the legacy artifact was at 87% of it. A ZIP streams to its file.
@@ -274,5 +415,61 @@ describe("download-test-history-artifacts process boundary", () => {
 		gh.run();
 		expect(gh.zips()).toBe(1);
 		expect(fs.statSync(gh.zip).size).toBe(LARGE_ZIP_BYTES);
+	});
+});
+
+// Recurrence #5154 review F3: the listing maps `workflow_run?.id ?? null`. Without
+// the fallback, one artifact with a null workflow_run throws inside the map and
+// fails the whole night's listing. The CLI prints counts only, so the run key is
+// read from the in-process selection: the map yields null and selectArtifacts
+// groups it by String(null), the run "null".
+describe("listing run keys (#5154 review F3)", () => {
+	it("keys an artifact with no workflow_run under run null", () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-history-null-run-"),
+		);
+		roots.push(root);
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin);
+		const createdAt = new Date().toISOString();
+		const entry = (id: number, workflowRun: { id: number } | null) => ({
+			id,
+			name: "unit-test-results-linux",
+			size_in_bytes: 300_000,
+			created_at: createdAt,
+			expired: false,
+			workflow_run: workflowRun,
+		});
+		const listed = JSON.stringify({
+			total_count: 2,
+			artifacts: [entry(201, { id: 7 }), entry(202, null)],
+		});
+		fs.writeFileSync(
+			path.join(bin, "gh"),
+			`#!/bin/sh
+case "$*" in
+  *actions/artifacts\\?per_page=30\\&page=1*) printf '%s\\n' '${listed}' ;;
+  *actions/artifacts\\?per_page=30\\&page=*) printf '%s\\n' '{"total_count":2,"artifacts":[]}' ;;
+  */zip) printf 'zip-bytes' ;;
+esac
+`,
+		);
+		fs.chmodSync(path.join(bin, "gh"), 0o755);
+		const priorPath = process.env.PATH ?? "";
+		process.env.PATH = `${bin}${path.delimiter}${priorPath}`;
+		try {
+			const selection = downloadArtifacts({
+				repository: "o/r",
+				outputDir: path.join(root, "artifacts"),
+			});
+			expect(selection.runs.map((run) => run.runId).sort()).toEqual([
+				"7",
+				"null",
+			]);
+			const nullRun = selection.runs.find((run) => run.runId === "null");
+			expect(nullRun?.artifacts.map((artifact) => artifact.id)).toEqual([202]);
+		} finally {
+			process.env.PATH = priorPath;
+		}
 	});
 });

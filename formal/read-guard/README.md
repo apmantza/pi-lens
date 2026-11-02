@@ -405,8 +405,8 @@ the `#3522` block of the same file.
   `tests/clients/read-guard-conversation-evidence.test.ts` only: R4 (the
   own-edit stamp decided by `fileTimeMoved` at the check; see above), the
   own-edit read's `stampFileTime: false`, the debounce carrying that
-  decision (`_ownWriteStamp`), the partial apply's decision taken at its
-  preflight, and the settled sweep. Bash writes, LSP rename and code-action
+  decision (`_ownWriteStamp`) and the settled sweep. A partial apply is an
+  ordinary oldText edit since #5120: pi's edit writes the matched subset. Bash writes, LSP rename and code-action
   applies on the direct branch (the no-context bridge fallback still stamps
   until #3865) and the format service credit authorship and leave FileTime:
   for FileTime and hashes that is the model's "another writer", and the

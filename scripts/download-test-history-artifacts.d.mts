@@ -3,16 +3,17 @@ export const MAX_RUNS_PER_NIGHT: number;
 export const SELECT_OVERLAP_MS: number;
 export const LIST_LOOKBACK_MS: number;
 export const METADATA_ONLY_MAX_BYTES: number;
+export const LIST_PAGE_SIZE: number;
 export const MAX_LIST_PAGES: number;
 export const ARTIFACT_NAMES: string[];
-/** One listed artifact, as the downloader's `--jq` projection emits it. */
+/** One listed artifact, as the downloader maps the REST listing. */
 export interface ListedArtifact {
 	id: number;
 	name: string;
 	size: number;
 	createdAt: string;
 	expired: boolean;
-	runId: number | string;
+	runId: number | string | null;
 }
 export function listArtifacts(
 	fetchPage: (page: number) => ListedArtifact[],

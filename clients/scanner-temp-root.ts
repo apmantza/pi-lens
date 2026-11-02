@@ -6,7 +6,11 @@
  * (`SgRunner`, reached unawaited by session_start's exports scan, #4347), the
  * helm render pass, and the ast-grep snippet directories of `dumpAst`,
  * `validatePattern` and `validateRule` all create their directory with
- * `mkdtempSync` under `os.tmpdir()` and delete it in a `finally`. A process killed before that `finally` (the MCP
+ * `mkdtempSync` under `os.tmpdir()` and delete it in a `finally`. The
+ * SpotBugs `-output` file, the PSScriptAnalyzer `-File` script and the ast-grep
+ * baseline scratch directory (`clients/sgconfig.ts`) do the same job without
+ * the `mkdtempSync`: a path joined onto this parent. A process killed before
+ * that `finally` (the MCP
  * harness `dispose()` SIGKILLs its child tree, which runs `mode=full`
  * scanners) strands a `pi-lens-<scanner>-*` directory in the shared tmpdir. A harness that owns a
  * root and sweeps it sets `PI_LENS_TEST_SCANNER_TMPDIR`, so the orphan lands

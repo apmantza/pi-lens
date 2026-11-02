@@ -204,6 +204,58 @@ describe("pi-session: the built extension in a real AgentSession (#4632)", () =>
 		expect(toolResult?.isError).toBeFalsy();
 	});
 
+	// #5120: a composition case loads another extension before or after the
+	// built entry. Recurrence prevented: the paths are dropped or loaded in
+	// another order, and a case that means "a guard after pi-lens" runs the
+	// guard first, where pi-lens's rewrite never reaches it.
+	it("loads extra extensions before and after the built entry, in that order", async () => {
+		const cwd = path.join(fixture.root, "extra-extensions", "proj");
+		fs.mkdirSync(cwd, { recursive: true });
+		const log = path.join(fixture.root, "extra-extensions", "calls.log");
+		const extension = (name: string): string => {
+			const file = path.join(fixture.root, "extra-extensions", `${name}.mjs`);
+			fs.writeFileSync(
+				file,
+				`import fs from "node:fs";\nexport default function (pi) {\n\tpi.on("tool_call", (event) => {\n\t\tfs.appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(name)} + ":" + event.toolName + "\\n");\n\t});\n}\n`,
+			);
+			return file;
+		};
+		const before = extension("before");
+		const after = extension("after");
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd,
+			extraExtensions: { before: [before], after: [after] },
+			responses: [
+				fauxAssistantMessage([fauxToolCall("lens_diagnostics", {})]),
+				fauxAssistantMessage(fauxText("done")),
+			],
+		});
+		const paths = handle.session.extensionRunner.getExtensionPaths();
+		expect(paths).toHaveLength(3);
+		expect(paths[0]).toBe(before);
+		expect(path.basename(paths[1] ?? "")).toBe("index.js");
+		expect(paths[2]).toBe(after);
+
+		await handle.prompt("check");
+
+		expect(fs.readFileSync(log, "utf8").trim().split("\n")).toEqual([
+			"before:lens_diagnostics",
+			"after:lens_diagnostics",
+		]);
+		await expect(
+			outcome(
+				startPiSession({
+					root: fixture.root,
+					cwd,
+					extraExtensions: { after: [after] },
+					inlineFactory: async () => () => {},
+					responses: [],
+				}),
+			),
+		).resolves.toContain("extraExtensions is path mode only");
+	});
+
 	it("reopens the persisted session file for the next turn", async () => {
 		const first = await startPiSession({
 			root: fixture.root,

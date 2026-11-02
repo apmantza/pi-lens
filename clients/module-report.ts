@@ -77,14 +77,11 @@ function normalizeMaxRefsPerSymbol(value: number | undefined): number {
 export interface ModuleReportOptions {
 	/** Cap on who-uses-this entries per symbol (hard-capped at 100). */
 	maxRefsPerSymbol?: number;
+
+	/** Raw `view` preset argument (pre-resolution), recorded with the resolved preset in the module_report phase log. */
+	view?: unknown;
 	/** Optional task hint used only to rank recommendedReads; never expands scope or triggers scans. */
 	focus?: string;
-	/** Payload tier. `summary` keeps top-level read handles/recommendations only.
-	 * `compact` computes the same full data as `default` (so the JSON shape and
-	 * `ModuleReport` type are unaffected) but signals the caller to render it as
-	 * the line-oriented text view (`renderCompactModuleReport`) instead of JSON —
-	 * see tools/module-report.ts. */
-	view?: "summary" | "default" | "compact";
 	/** Include the cross-file blast-radius section (#304): the transitive
 	 * dependents of this module, aggregated to ranked file `read` args. Read-only
 	 * over the CACHED graph — omitted entirely on a cold cache (never builds). */
@@ -284,7 +281,6 @@ export interface ModuleReport {
 	warnings?: string[];
 	language?: string;
 	lineCount?: number;
-	view?: "summary" | "compact";
 	summary: { imports: number; exports: number; symbols: number };
 	imports: { external: string[]; internal: string[] };
 	api: ModuleSymbolEntry[];
@@ -901,34 +897,106 @@ function nestEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
 	return entries.filter((e) => !containerOf.get(e));
 }
 
-function summarizeEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
-	return entries.map((entry) => ({
-		name: entry.name,
-		kind: entry.kind,
-		startLine: entry.startLine,
-		endLine: entry.endLine,
-		exported: entry.exported,
-		...(entry.visibility ? { visibility: entry.visibility } : {}),
-		...(entry.signature ? { signature: entry.signature } : {}),
-		...(entry.doc ? { doc: entry.doc } : {}),
-		...(entry.flags ? { flags: entry.flags } : {}),
-		...(entry.members
-			? {
-					members: entry.members.map((member) => ({
-						name: member.name,
-						kind: member.kind,
-						startLine: member.startLine,
-						endLine: member.endLine,
-						exported: member.exported,
-						...(member.visibility ? { visibility: member.visibility } : {}),
-						...(member.signature ? { signature: member.signature } : {}),
-						...(member.doc ? { doc: member.doc } : {}),
-					})),
-				}
-			: {}),
-	}));
+export type ModuleReportProjection = "summary" | "full";
+export type ModuleReportFormat = "text" | "json";
+export type ModuleReportPreset =
+	`${ModuleReportProjection}-${ModuleReportFormat}`;
+
+export interface ModuleReportPresetChoice {
+	preset: ModuleReportPreset;
+	projection: ModuleReportProjection;
+	format: ModuleReportFormat;
 }
 
+function stripEntryMetrics(entry: ModuleSymbolEntry): ModuleSymbolEntry {
+	const {
+		usedBy: _usedBy,
+		fanout: _fanout,
+		complexity: _complexity,
+		...kept
+	} = entry;
+	void _usedBy;
+	void _fanout;
+	void _complexity;
+	return {
+		...kept,
+		...(entry.members ? { members: entry.members.map(stripEntryMetrics) } : {}),
+	};
+}
+
+/**
+ * Project a built report onto the summary tier: metrics off (`usedBy`,
+ * `fanout`, `complexity`), everything else on. `full` returns the report
+ * unchanged. Pure — never mutates its input.
+ */
+export function projectModuleReport(
+	report: ModuleReport,
+	projection: ModuleReportProjection,
+): ModuleReport {
+	if (projection === "full") return report;
+	return {
+		...report,
+		api: report.api.map(stripEntryMetrics),
+		internal: report.internal.map(stripEntryMetrics),
+	};
+}
+
+const PRESET_AXES: Record<
+	ModuleReportPreset,
+	{ projection: ModuleReportProjection; format: ModuleReportFormat }
+> = {
+	"summary-text": { projection: "summary", format: "text" },
+	"summary-json": { projection: "summary", format: "json" },
+	"full-text": { projection: "full", format: "text" },
+	"full-json": { projection: "full", format: "json" },
+};
+
+/**
+ * Resolve a `view` preset name plus an optional reference-shaping argument into
+ * its projection/format axes. Unknown or absent values fall through to the
+ * `summary-text` default and never throw. A finite `maxRefsPerSymbol` promotes
+ * the projection to `full` (an explicit shaping argument must not be a no-op)
+ * while keeping the resolved format.
+ */
+export function resolveModuleReportPreset(
+	view: unknown,
+	maxRefsPerSymbol?: number,
+): ModuleReportPresetChoice {
+	const axes =
+		typeof view === "string" && Object.hasOwn(PRESET_AXES, view)
+			? PRESET_AXES[view as ModuleReportPreset]
+			: PRESET_AXES["summary-text"];
+	if (
+		typeof maxRefsPerSymbol === "number" &&
+		Number.isFinite(maxRefsPerSymbol)
+	) {
+		const format = axes.format;
+		return {
+			preset: `full-${format}` as ModuleReportPreset,
+			projection: "full",
+			format,
+		};
+	}
+	const preset = `${axes.projection}-${axes.format}` as ModuleReportPreset;
+	return { preset, projection: axes.projection, format: axes.format };
+}
+
+/**
+ * Render a built report under a resolved preset choice: project onto the
+ * choice's projection, then serialize in the choice's format. One seam for
+ * the pi tool and the MCP surface so their text/JSON cells stay byte-identical.
+ */
+export function renderModuleReportPreset(
+	report: ModuleReport,
+	choice: ModuleReportPresetChoice,
+): string {
+	const projected = projectModuleReport(report, choice.projection);
+	return choice.format === "text"
+		? renderCompactModuleReport(projected, {
+				projection: choice.projection,
+			})
+		: JSON.stringify(projected);
+}
 function normalizeFocus(focus: string | undefined): string[] {
 	return (focus ?? "")
 		.toLowerCase()
@@ -2095,13 +2163,6 @@ export async function moduleReport(
 			)
 		: undefined;
 
-	const view = options?.view ?? "default";
-	const summaryView = view === "summary";
-	// "compact" computes the same full data as "default" — it's a rendering
-	// instruction for the caller (renderCompactModuleReport), not a data tier —
-	// so it only needs to echo back on the report; it never gates section content
-	// the way summaryView does.
-	const compactView = view === "compact";
 	let importsProvenance: NonNullable<ModuleReport["provenance"]>["imports"] =
 		"none";
 	if (coldImportResult) {
@@ -2132,9 +2193,9 @@ export async function moduleReport(
 		},
 		imports,
 		...(warnings.length > 0 ? { warnings } : {}),
-		api: summaryView ? summarizeEntries(api) : api,
-		internal: summaryView ? summarizeEntries(internal) : internal,
-		callbacks: summaryView ? [] : callbacks,
+		api,
+		internal,
+		callbacks,
 		callbackSupport: callbackSupportFor(languageId),
 		recommendedReads: rankRecommendedReads(
 			entries,
@@ -2142,16 +2203,14 @@ export async function moduleReport(
 			5,
 			options?.focus,
 		),
-		...(summaryView ? { view: "summary" } : {}),
-		...(compactView ? { view: "compact" } : {}),
-		...(blastRadius && !summaryView ? { blastRadius } : {}),
+		...(blastRadius ? { blastRadius } : {}),
 		...(callGraph ? { callGraph } : {}),
 		...(graph ? { graphBuiltAt: graph.builtAt } : {}),
 		provenance: {
 			symbols: languageId ? "syntax" : "none",
 			imports: importsProvenance,
 			usedBy: hasGraphNode ? "cached-review-graph" : unavailableGraphProvenance,
-			callbacks: languageId && !summaryView ? "heuristic-tree-sitter" : "none",
+			callbacks: languageId ? "heuristic-tree-sitter" : "none",
 			...(options?.blastRadius ? { blastRadius: blastRadiusProvenance } : {}),
 			...(options?.callGraph ? { callGraph: callGraphProvenance } : {}),
 		},
@@ -2166,8 +2225,14 @@ export async function moduleReport(
 	};
 
 	// Observability (#256): record graph source (cached vs cold) so a future
-	// regression is attributable per call. This path is read-only by contract —
+	// regression is attributable per call. The resolved preset rides along too
+	// (plus the raw view, truncated, when it did not resolve to that preset).
+	// This path is read-only by contract —
 	// "graph: cached|cold", never a build, never an LSP call.
+	const presetChoice = resolveModuleReportPreset(
+		options?.view,
+		options?.maxRefsPerSymbol,
+	);
 	logLatency({
 		type: "phase",
 		phase: "module_report",
@@ -2177,113 +2242,238 @@ export async function moduleReport(
 			graph: graph ? "cached" : "cold",
 			symbols: entries.length,
 			exported: api.length,
+			preset: presetChoice.preset,
+			...(typeof options?.view === "string" &&
+			options.view.length > 0 &&
+			options.view !== presetChoice.preset
+				? { view: options.view.slice(0, 32) }
+				: {}),
 		},
 	});
 
 	return report;
 }
 
-// --- Compact (line-oriented text) rendering (#512 slice 4) ------------------
+// --- Text rendering (#5137): lossless line-oriented view ------------------
 //
-// An opt-in `view: "compact"` alternative to the JSON report: one line per
-// symbol/callback instead of a repeated-keys JSON object, at roughly a quarter
-// of the token cost for the same information. Purely a rendering step over the
-// already-built ModuleReport — it changes no data, only presentation, so a
-// caller that wants JSON just skips this function. Default view stays JSON
-// (this is opt-in for dogfooding, not a default flip).
-
+// Renders every field of an already-built (and projected) ModuleReport as text,
+// so the text preset carries the same data as the JSON preset. Purely a
+// rendering step — it changes no data, only presentation, so a caller that
+// wants JSON just skips this function.
 function padRange(startLine: number, endLine: number, width: number): string {
 	return `${startLine}-${endLine}`.padEnd(width);
 }
 
-const KIND_ABBREV: Record<string, string> = {
-	function: "fn",
-	method: "fn",
-	class: "class",
-	interface: "iface",
-	type: "type",
-	variable: "var",
-	property: "prop",
-};
-
-function compactKind(kind: string): string {
-	return KIND_ABBREV[kind] ?? kind;
+function compactFlagsSuffix(flags: string[] | undefined): string {
+	if (!flags || flags.length === 0) return "";
+	return `  ${flags.map((flag) => `[${flag}]`).join(" ")}`;
 }
 
-function compactUsedBySuffix(usedBy: ModuleSymbolUsedBy[] | undefined): string {
-	if (!usedBy || usedBy.length === 0) return "";
-	const counts = new Map<string, number>();
-	for (const u of usedBy) counts.set(u.file, (counts.get(u.file) ?? 0) + 1);
-	const parts = [...counts.entries()].map(([file, n]) =>
-		n > 1 ? `${file}×${n}` : file,
+function compactMetricsSuffix(
+	entry: Pick<ModuleSymbolEntry, "fanout" | "complexity">,
+): string {
+	const parts: string[] = [];
+	if (entry.complexity !== undefined) parts.push(`cx:${entry.complexity}`);
+	if (entry.fanout !== undefined) parts.push(`fan:${entry.fanout}`);
+	return parts.length > 0 ? `  ${parts.join(" ")}` : "";
+}
+
+function compactUsedByLines(
+	usedBy: ModuleSymbolUsedBy[] | undefined,
+	indent: string,
+): string[] {
+	if (!usedBy || usedBy.length === 0) return [];
+	return usedBy.map(
+		(u) =>
+			`${indent}used-by: ${u.file} ${u.symbol} ${u.line} ${u.relation}` +
+			`${u.provenance ? ` ${u.provenance}` : ""}${u.resolution ? ` ${u.resolution}` : ""}`,
 	);
-	return `  used-by: ${parts.join(", ")}`;
 }
-
-function compactEntryLine(entry: ModuleSymbolEntry, width: number): string {
-	const range = padRange(entry.startLine, entry.endLine, width);
-	const kind = compactKind(entry.kind).padEnd(6);
-	const sig = entry.signature ? `${entry.name}${entry.signature}` : entry.name;
-	const flagsSuffix =
-		entry.flags && entry.flags.length > 0
-			? `  [${entry.flags.join(", ")}]`
-			: "";
-	const docSuffix = entry.doc ? `  — ${entry.doc}` : "";
-	const usedBySuffix = compactUsedBySuffix(entry.usedBy);
-	return `  ${range}${kind}${sig}${flagsSuffix}${usedBySuffix}${docSuffix}`;
-}
-
-function compactMemberLines(
+function compactEntryLines(
 	entry: ModuleSymbolEntry,
 	width: number,
 	indent: string,
 ): string[] {
-	if (!entry.members || entry.members.length === 0) return [];
-	return entry.members.map(
-		(m) => `${indent}${compactEntryLine(m, width).slice(2)}`,
-	);
+	const range = padRange(entry.startLine, entry.endLine, width);
+	const kind = entry.kind.padEnd(10);
+	const sig = entry.signature ? `${entry.name}${entry.signature}` : entry.name;
+	const docSuffix = entry.doc ? `  \u2014 ${entry.doc}` : "";
+	const out = [
+		`${indent}${range}${kind}${sig}${compactMetricsSuffix(entry)}${compactFlagsSuffix(entry.flags)}${docSuffix}`,
+	];
+	if (entry.visibility) out.push(`${indent}  visibility: ${entry.visibility}`);
+	if (entry.decorators && entry.decorators.length > 0)
+		out.push(`${indent}  decorators: ${entry.decorators.join(", ")}`);
+	if (entry.delegationRatio !== undefined)
+		out.push(`${indent}  delegationRatio: ${entry.delegationRatio}`);
+	out.push(...compactUsedByLines(entry.usedBy, `${indent}  `));
+	for (const member of entry.members ?? [])
+		out.push(...compactEntryLines(member, width, `${indent}  `));
+	return out;
 }
-
-function compactCallbackLine(
+function compactCallbackLines(
 	callback: ModuleCallbackEntry,
 	width: number,
-): string {
+): string[] {
 	const range = padRange(callback.startLine, callback.endLine, width);
-	const kind = callback.kind.padEnd(20);
-	const flagsSuffix =
-		callback.flags && callback.flags.length > 0
-			? `  [${callback.flags.join(", ")}]`
-			: "";
+	// Column holds the longest real kind ("object_property_callback", 24
+	// chars); the gap after the padded column keeps kind and name separable
+	// even at the maximum width.
+	const kind = callback.kind.padEnd(24);
+	const sigSuffix = callback.signature ? `  sig: ${callback.signature}` : "";
 	const ownerSuffix = callback.parentChain?.length
 		? `  (in ${callback.parentChain.join(".")})`
 		: "";
-	return `  ${range}${kind}${callback.name}${flagsSuffix}${ownerSuffix}`;
+	const head =
+		`  ${range}${kind}  ${callback.name}  raw:${callback.rawKind}` +
+		`${sigSuffix}${compactFlagsSuffix(callback.flags)}${ownerSuffix}`;
+	return [head];
 }
 
+function compactCallGraphRelationLine(
+	relation: ModuleCallGraphRelation,
+	role: "caller" | "callee",
+): string {
+	const where = `${relation.file}${relation.line !== undefined ? `:${relation.line}` : ""}`;
+	const what = `${relation.symbol ?? "?"}${relation.kind ? ` (${relation.kind})` : ""}`;
+	const evidence = [
+		relation.evidenceKind ?? "?",
+		relation.resolution ?? "?",
+		relation.evidenceCount !== undefined ? `n:${relation.evidenceCount}` : "?",
+		relation.weight !== undefined ? `w:${relation.weight}` : "?",
+	].join(" ");
+	return `    ${role} ${what} ${where} id:${relation.symbolId} -> ${relation.targetSymbolId} ${evidence}`;
+}
+
+function compactCallGraphCoverageLine(
+	coverage: ModuleCallGraphCoverage,
+): string {
+	const counts = [
+		`total:${coverage.totalEvidence ?? "?"}`,
+		`calls:${coverage.callsEvidence ?? "?"}`,
+		`refs:${coverage.referencesEvidence ?? "?"}`,
+		`eligible:${coverage.eligibleEvidence ?? "?"}`,
+		`resolved:${coverage.resolvedEvidence ?? "?"}`,
+		`unresolved:${coverage.unresolvedEvidence ?? "?"}`,
+		`typeOnly:${coverage.typeOnlyEvidence ?? "?"}`,
+		`unsupported:${coverage.unsupportedEvidence ?? "?"}`,
+		`sameFile:${coverage.sameFileEvidence ?? "?"}`,
+		`duplicate:${coverage.duplicateEvidence ?? "?"}`,
+	].join(" ");
+	const languages = coverage.languages
+		? ` langs: ${Object.entries(coverage.languages)
+				.map(([language, status]) => `${language}=${status}`)
+				.join(",")}`
+		: "";
+	return `    coverage: ${coverage.status} complete:${coverage.complete} ${counts}${languages}`;
+}
 /**
- * Render a ModuleReport as the line-oriented compact text view (#512 slice 4):
- * one line per symbol/member/callback instead of a JSON object per entry.
+ * Render a ModuleReport as line-oriented text (#5137): lossless against the
+ * projected artifact: every field appears in the text cell, `kind` prints raw so
+ * it can be reused as `read_symbol`'s `kind` filter, and an unavailable module
+ * still renders its callbacks, recommended reads and PROVENANCE footer.
+ * Blocks run API:, INTERNAL:, CALLBACKS:, IMPORTS:, CALL GRAPH:, BLAST RADIUS:,
+ * RECOMMENDED:, each only when its data is non-empty, followed by one
+ * PROVENANCE: footer line. Metrics render as a `cx:`/`fan:` suffix, flags each
+ * in their own bracket, who-uses-this as a `used-by:` continuation line, and
+ * truncated walks carry a `(truncated)` marker on their block header.
  * Example:
  * ```
- * clients/agent-nudge.ts jsts 266L — 8 symbols, 5 exported | imports: bus-publish, latency-logger
+ * clients/agent-nudge.ts jsts 266L [fresh] \u2014 8 symbols, 5 exported, 2 imports (callbackSupport: generic)
  * API:
- *   77-81    fn  _resetAgentNudgeForTests()  — Test-only: clear accumulator state.
+ *   77-81    function  _resetAgentNudgeForTests()  [async]  \u2014 Test-only: clear accumulator state.
  * INTERNAL:
- *   95-104   fn  isValidPayload(data: unknown)
+ *   95-104   function  isValidPayload(data: unknown)  cx:2 fan:1
  * CALLBACKS:
- *   164-172  event_handler  events.on@164  [lifecycle]  (in wireAgentNudgeSubscriber)
+ *   164-172  event_handler             events.on@164  raw:function_expression  [lifecycle]  (in wireAgentNudgeSubscriber)
+ * PROVENANCE: symbols=syntax imports=cached-review-graph usedBy=cached-review-graph callbacks=heuristic-tree-sitter semantic.source=review-graph semantic.references=true semantic.implementations=false graphBuiltAt=unknown
  * ```
- * Purely presentational over an already-built report — call `moduleReport`
- * first (with `view: "compact"` or any other view) and pass its result here.
+ * Purely presentational over an already-built (and projected) report — call
+ * `moduleReport`, then `projectModuleReport`, and pass the result here.
  */
-export function renderCompactModuleReport(report: ModuleReport): string {
+function appendCallbacksSection(
+	lines: string[],
+	report: ModuleReport,
+	width: number,
+): void {
+	if (report.callbacks.length === 0) return;
+	lines.push("CALLBACKS:");
+	for (const callback of report.callbacks)
+		lines.push(...compactCallbackLines(callback, width));
+}
+
+function appendRecommendedSection(
+	lines: string[],
+	report: ModuleReport,
+	width: number,
+): void {
+	if (report.recommendedReads.length === 0) return;
+	lines.push("RECOMMENDED:");
+	for (const r of report.recommendedReads) {
+		lines.push(
+			`  ${padRange(r.startLine, r.endLine, width)}${r.symbol ?? ""}  \u2014 ${r.reason}`,
+		);
+	}
+}
+
+/** The `(callbackSupport: \u2026)` status a text header carries, when the report has one. */
+function callbackSupportSuffix(report: ModuleReport): string {
+	return report.callbackSupport
+		? ` (callbackSupport: ${report.callbackSupport})`
+		: "";
+}
+
+/** The PROVENANCE footer: provenance and semantic keys, the graph build time, and a
+ * marker when the summary projection dropped metrics. */
+function provenanceLine(
+	report: ModuleReport,
+	projection: ModuleReportProjection | undefined,
+): string {
+	const provenanceParts: string[] = [];
+	if (report.provenance) {
+		for (const [key, value] of Object.entries(report.provenance)) {
+			if (value !== undefined) provenanceParts.push(`${key}=${String(value)}`);
+		}
+	}
+	if (report.semantic) {
+		for (const [key, value] of Object.entries(report.semantic)) {
+			provenanceParts.push(`semantic.${key}=${String(value)}`);
+		}
+	}
+	provenanceParts.push(`graphBuiltAt=${report.graphBuiltAt ?? "unknown"}`);
+	// A projection that drops metrics must say so, or an absent `used-by:` line
+	// reads as "nothing uses this symbol" (#5137 review).
+	if (projection === "summary")
+		provenanceParts.push("metrics=omitted (view=full-text)");
+	return `PROVENANCE: ${provenanceParts.join(" ")}`;
+}
+
+export function renderCompactModuleReport(
+	report: ModuleReport,
+	options: { projection?: ModuleReportProjection } = {},
+): string {
 	if (!report.available) {
 		// #4949: a parse that recovered zero symbols lands here, the case the
-		// disclosure matters most for; keep the caveat lines.
-		return [
-			`${report.path} — unavailable${report.error ? `: ${report.error}` : ""}`,
+		// disclosure matters most for; keep the caveat lines. A callback-only
+		// module is unavailable too (no named entry, no graph node) and still
+		// carries navigation handles, so those render here as well (#5137
+		// review): the old JSON default preserved them.
+		const unavailable = [
+			`${report.path} \u2014 unavailable${report.error ? `: ${report.error}` : ""}${callbackSupportSuffix(report)}`,
 			...(report.warnings ?? []).map((note) => `WARNING: ${note}`),
-		].join("\n");
+		];
+		const handleWidth =
+			Math.max(
+				5,
+				...report.callbacks.map((c) => `${c.startLine}-${c.endLine}`.length),
+			) + 2;
+		appendCallbacksSection(unavailable, report, handleWidth);
+		appendRecommendedSection(unavailable, report, handleWidth);
+		// The same footer the available branch prints (#5158 CodeRabbit): a
+		// callback-only module reaches this return, and its handles need the
+		// provenance that says how reliable they are.
+		unavailable.push(provenanceLine(report, options.projection));
+		return unavailable.join("\n");
 	}
 	const allEntries = [...report.api, ...report.internal];
 	const allRanges = allEntries.flatMap((e) => [e, ...(e.members ?? [])]);
@@ -2294,69 +2484,66 @@ export function renderCompactModuleReport(report: ModuleReport): string {
 			...report.callbacks.map((c) => `${c.startLine}-${c.endLine}`.length),
 		) + 2;
 
-	const importsList = [...report.imports.internal, ...report.imports.external];
-	const importsSuffix =
-		importsList.length > 0
-			? ` | imports: ${importsList
-					.slice(0, 6)
-					.map((i) => baseNameNoExt(i))
-					.join(", ")}${importsList.length > 6 ? ", …" : ""}`
-			: "";
 	const lines: string[] = [
-		`${report.path} ${report.language ?? "?"} ${report.lineCount ?? "?"}L — ` +
-			`${report.summary.symbols} symbols, ${report.summary.exports} exported${importsSuffix}`,
+		`${report.path} ${report.language ?? "?"} ${report.lineCount ?? "?"}L [${report.staleness}] \u2014 ` +
+			`${report.summary.symbols} symbols, ${report.summary.exports} exported, ` +
+			`${report.summary.imports} imports${callbackSupportSuffix(report)}`,
 	];
+	if (report.error) lines.push(`INCOMPLETE: ${report.error}`);
 	for (const warning of report.warnings ?? []) {
 		lines.push(`WARNING: ${warning}`);
 	}
 
 	if (report.api.length > 0) {
 		lines.push("API:");
-		for (const entry of report.api) {
-			lines.push(compactEntryLine(entry, width));
-			lines.push(...compactMemberLines(entry, width, "    "));
-		}
+		for (const entry of report.api)
+			lines.push(...compactEntryLines(entry, width, "  "));
 	}
 	if (report.internal.length > 0) {
 		lines.push("INTERNAL:");
-		for (const entry of report.internal) {
-			lines.push(compactEntryLine(entry, width));
-			lines.push(...compactMemberLines(entry, width, "    "));
-		}
+		for (const entry of report.internal)
+			lines.push(...compactEntryLines(entry, width, "  "));
 	}
-	if (report.callbacks.length > 0) {
-		lines.push("CALLBACKS:");
-		for (const callback of report.callbacks) {
-			lines.push(compactCallbackLine(callback, width));
-		}
+	appendCallbacksSection(lines, report, width);
+	if (report.imports.external.length + report.imports.internal.length > 0) {
+		lines.push("IMPORTS:");
+		if (report.imports.external.length > 0)
+			lines.push(`  external: ${report.imports.external.join(", ")}`);
+		if (report.imports.internal.length > 0)
+			lines.push(`  internal: ${report.imports.internal.join(", ")}`);
 	}
 	if (report.callGraph) {
 		const callGraph = report.callGraph;
-		const suffix = callGraph.truncated ? " (truncated)" : "";
-		lines.push("CALL GRAPH:");
+		lines.push(`CALL GRAPH:${callGraph.truncated ? " (truncated)" : ""}`);
 		if (!callGraph.available) {
 			lines.push(`  unavailable (${callGraph.reason ?? "unknown"})`);
 		} else {
 			lines.push(
-				`  callers: ${callGraph.callers.length} · callees: ${callGraph.callees.length}` +
-					` · coverage: ${callGraph.coverage.status}${suffix}`,
+				`  callers: ${callGraph.callers.length} \u00b7 callees: ${callGraph.callees.length} \u00b7 coverage: ${callGraph.coverage.status}`,
 			);
+			lines.push(compactCallGraphCoverageLine(callGraph.coverage));
+			for (const caller of callGraph.callers)
+				lines.push(compactCallGraphRelationLine(caller, "caller"));
+			for (const callee of callGraph.callees)
+				lines.push(compactCallGraphRelationLine(callee, "callee"));
 		}
 	}
-	if (report.recommendedReads.length > 0) {
-		lines.push("RECOMMENDED:");
-		for (const r of report.recommendedReads) {
+	if (report.blastRadius) {
+		const blastRadius = report.blastRadius;
+		lines.push(`BLAST RADIUS:${blastRadius.truncated ? " (truncated)" : ""}`);
+		lines.push(
+			`  maxDepth: ${blastRadius.maxDepth} truncated: ${blastRadius.truncated}`,
+		);
+		for (const file of blastRadius.files) {
 			lines.push(
-				`  ${padRange(r.startLine, r.endLine, width)}${r.symbol ?? ""}  — ${r.reason}`,
+				`  ${file.file} dependents: ${file.dependents} minDepth: ${file.minDepth} ` +
+					`relations: ${file.relations.join(",")} read: ${file.read.path} ${file.read.offset} ${file.read.limit}`,
 			);
 		}
 	}
+	appendRecommendedSection(lines, report, width);
+	lines.push(provenanceLine(report, options.projection));
 	return lines.join("\n");
-}
-
-function baseNameNoExt(p: string): string {
-	const base = p.split(/[\\/]/).pop() ?? p;
-	return base.replace(/\.[^./\\]+$/, "");
 }
 
 // ── readSymbol lookup helpers (#523) ──────────────────────────────────────────

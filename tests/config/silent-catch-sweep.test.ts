@@ -580,10 +580,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :103
 	"clients/file-time.ts": {
-		silent: 2,
-		identities: "cef7af043e4732be",
+		silent: 1,
+		identities: "addabcaec0339b4f",
 		reason: PRE_RULE,
-	}, // :148, :202
+	}, // :168 (2 -> 1, #5120: the write lock's swallow went with withLock)
 	"clients/file-utils.ts": {
 		silent: 10,
 		identities: "6ae9ab1bab948b4e",
@@ -941,10 +941,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :113, :468
 	"clients/partial-edit-apply.ts": {
-		silent: 3,
-		identities: "9457f6c639682a54",
+		silent: 1,
+		identities: "cf08efebeaedf178",
 		reason: PRE_RULE,
-	}, // :304, :457, :477
+	}, // :277 (3 -> 1, #5120: the partial-apply writer and its catches are gone)
 	"clients/path-birth.ts": {
 		silent: 1,
 		identities: "b47f07ef1f3c61f0",
@@ -1116,10 +1116,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :403, :648, :901, :949, :956, :1042, :1069, :1146, :1181, :1183, :1208, :1238, :1371, :1422, :1592, :2189, :2782, :2814, :2922, :2999, :3004, :3414, :3428, :3501
 	"clients/runtime-tool-call.ts": {
-		silent: 11,
-		identities: "9c12ec155c04701f",
+		silent: 10,
+		identities: "042e838b36502579",
 		reason: PRE_RULE,
-	}, // :286, :461, :485, :799, :960, :966, :1133, :1356, :1705, :1813, :1906
+	}, // :269, :502, :526, :1049, :1216, :1441, :1832 and the rest (11 -> 10, #5120: the partial-apply rejection catch went with the in-tool_call writer)
 	"clients/runtime-tool-result.ts": {
 		silent: 9,
 		identities: "b34b5e082d0b70b8",

@@ -287,12 +287,6 @@ const REFUSED_PROGRAMS: Readonly<
 		anchor: "existing.history = existing.history.slice(-MAX_HISTORY_PER_FILE);",
 		count: 2,
 	},
-	"array of edits scanned in order, no victim hand-off": {
-		file: "clients/partial-edit-apply.ts",
-		anchor:
-			"const ordered = [...args.edits].sort((a, b) => a.spanStart - b.spanStart);",
-		count: 1,
-	},
 	"line-window rendering, runtime line budget": {
 		file: "clients/runtime-turn.ts",
 		// The assignment that owns the slice, not the guard above it: a runtime
@@ -1250,8 +1244,10 @@ describe("#2442 no new hand-rolled evict-oldest program outside bounded-cache.ts
 		// real file, so a row can neither go stale nor describe a site that
 		// migrated, and a row with two sites cannot hide the second flagging
 		// (#4606 r2 F3).
+		// 6 -> 5 (#5120): the partial-apply writer's ordered edit scan was
+		// deleted with the writer.
 		const rows = Object.entries(REFUSED_PROGRAMS);
-		expect(rows.length).toBeGreaterThanOrEqual(6);
+		expect(rows.length).toBeGreaterThanOrEqual(5);
 		const { witnesses, anchorsChecked } = refusalWitnesses(
 			REFUSED_PROGRAMS,
 			(file) => fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
