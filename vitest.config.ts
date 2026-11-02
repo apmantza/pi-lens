@@ -797,6 +797,11 @@ export const wallClockBudgetInclude = [
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",
+	// #5150 R2: the parity smoke polls the real MCP child's background
+	// review-graph build on a scaled real-clock deadline (shape 86) before
+	// comparing the two surfaces' text (flake-shape admission); serializing it
+	// removes the contention that makes that race likely.
+	"tests/mcp/project-report-text-parity.smoke.test.ts",
 	"tests/mcp/session-end.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",

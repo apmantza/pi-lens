@@ -142,7 +142,7 @@ The common extraction contract is nodes with `id`, `label`, `source_file`, `sour
 | Upstream idea | Existing pi-lens equivalent | Real gap/overlap | Fit and likely seam |
 | --- | --- | --- | --- |
 | Provenance per relationship | Review-graph edge `resolution`, report section provenance, capped-coverage fields | More edge-level evidence/locations could be surfaced consistently | **Adapt** in `clients/review-graph/types.ts`, `module-report.ts`, `project-report.ts`; no new graph |
-| Digest of top architecture | `project_report` compact view, word-index ranking, `recommendedReads` | No single persisted digest/tour artifact | **Adapt** as a bounded report/context mode, not a second cache; `clients/project-report.ts` |
+| Digest of top architecture | `project_report` default text view, word-index ranking, `recommendedReads` | No single persisted digest/tour artifact | **Adapt** as a bounded report/context mode, not a second cache; `clients/project-report.ts` |
 | Guided tours/read order | Entry points, hubs, recommended reads, blast radius | No explicit multi-step tour contract | **Adapt** deterministically first; later optional agent-authored notes in reports/docs, not graph truth |
 | Query-first agent workflow | Pi tools plus MCP mirrored engine; read guard tracks coverage | Could nudge toward `project_report`/`symbol_search` before broad reads | **Adapt** in a skill/docs surface; do not block native reads like Graphify strict mode |
 | FTS/BM25 plus graph centrality | Persisted word index already uses BM25, reverse-dep centrality, graph annotations | Strong overlap; validate ranking quality rather than add embeddings | **Keep/adapt** in `clients/word-index.ts` and `lens-engine.ts` |

@@ -184,6 +184,12 @@ const LANE_ALREADY_REACHED: Readonly<Record<string, string>> = {
 	"tests/index-4504-opaque-prescan-root-witness.test.ts":
 		"already reached through the Vitest config's default project graph; " +
 		"Knip reports an explicit entry as redundant",
+	// #5150: verified the same way — `npm run knip` with this file added to
+	// knip.jsonc's entry list reported "Remove redundant entry pattern" for
+	// exactly that line, and without it knip reports no unused file.
+	"tests/mcp/project-report-text-parity.smoke.test.ts":
+		"already reached through the Vitest config's default project graph; " +
+		"Knip reports an explicit entry as redundant",
 };
 
 describe("knip entry coverage (#2698)", () => {

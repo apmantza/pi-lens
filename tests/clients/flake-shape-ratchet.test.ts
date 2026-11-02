@@ -578,6 +578,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the read-only bound is a live wall deadline racing a held handler; a fake clock settles the race instantly and the abandonment under test never happens",
 	},
+	// #5150 R2: the parity smoke waits for the real MCP child's background
+	// review-graph build before it can compare the two surfaces' text; the wait
+	// is a poll of that live child's own build, not a fixed sleep.
+	"raw-timer-wait:mcp/project-report-text-parity.smoke.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the real MCP child builds its own review graph in the background; a fake clock cannot advance that child's build, so the parity compare polls until it serves",
+	},
 	// 2026-09-15 (#2042 cheapest probe): the sample-tail file is written by the
 	// wrapper's own real setInterval loop in a separate process; a poll waits
 	// for that file's first write rather than a fixed sleep, and one case kills

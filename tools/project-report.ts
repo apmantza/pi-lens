@@ -11,7 +11,7 @@
 import { Type } from "../clients/deps/typebox.js";
 import {
 	projectReport,
-	renderCompactProjectReport,
+	renderTextProjectReport,
 	type ProjectReport,
 } from "../clients/lens-engine.js";
 import {
@@ -37,7 +37,7 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 		name: "project_report" as const,
 		label: "Project Report",
 		description:
-			"Orient in a project from its review graph, with ranked hubs and entry points. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use project_report before module_report when the target file is unknown.",
+			'Orient in a project from its review graph, with ranked hubs and entry points. Returns a line-oriented TEXT report by default; pass view:"json" for the full JSON payload. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use project_report before module_report when the target file is unknown.',
 		promptSnippet: "Orient in a project before choosing a file",
 		renderResult: compactRenderResult<ProjectReportDetails>(
 			({ details, isError }) => {
@@ -70,15 +70,15 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 			),
 			view: Type.Optional(
 				Type.String({
-					enum: ["default", "compact"],
+					// Plain string, no enum: "json" is the JSON hatch; anything else is text.
 					description:
-						"Payload tier. compact (cheapest) returns a line-oriented TEXT rendering instead of JSON. Default returns JSON.",
+						'Payload tier. "json" returns the full JSON report; any other value (or omitting view) returns the default line-oriented TEXT rendering.',
 				}),
 			),
 		}),
 		async execute(
 			_toolCallId: string,
-			params: { limit?: number; focus?: string; view?: "default" | "compact" },
+			params: { limit?: number; focus?: string; view?: string },
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
@@ -89,7 +89,6 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 				report = await projectReport(cwd, {
 					limit: params.limit,
 					focus: params.focus,
-					view: params.view === "compact" ? "compact" : undefined,
 				});
 			} catch (err) {
 				return {
@@ -99,19 +98,23 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 				};
 			}
 			if (!report.available) {
+				// Cold cache is still the text cell (#5150): the renderer owns the
+				// unavailable layout (hint, LAST BUILD, UNRENDERED), so no fenced
+				// JSON sidecar is emitted here either.
 				return {
-					...renderToolText(
-						report.hint ?? "No review graph cached for this workspace yet.",
-						report,
-					),
+					content: [
+						{ type: "text" as const, text: renderTextProjectReport(report) },
+					],
 					isError: true,
 					details: { available: false, hint: report.hint },
 				};
 			}
+			// #5150: default text, explicit JSON hatch. Unknown views fall
+			// through to the default cell — never to JSON.
 			const text =
-				params.view === "compact"
-					? renderCompactProjectReport(report)
-					: JSON.stringify(report);
+				params.view === "json"
+					? JSON.stringify(report)
+					: renderTextProjectReport(report);
 			return {
 				content: [{ type: "text" as const, text }],
 				isError: false,
@@ -119,7 +122,7 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 					available: true,
 					hubs: report.hubs?.length ?? 0,
 					entryPoints: report.entryPoints?.length ?? 0,
-					view: report.view ?? "default",
+					view: params.view === "json" ? "json" : "default",
 				},
 			};
 		},
