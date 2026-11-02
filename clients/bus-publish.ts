@@ -67,7 +67,7 @@ export interface FilesTouchedPayload {
 
 const liveEmitter = createLiveBusEmitter();
 // The publish path, its once-per-process skip rows and its failure latch live
-// in the shared seam (see bus-events-logger.ts's module doc for why the two
+// in the shared seam (see live-bus-emitter.ts's module doc for why the two
 // structural-no-op outcomes are logged once, not on every call).
 const publisher = createBusPublisher(liveEmitter, {
 	module: "bus-publish",

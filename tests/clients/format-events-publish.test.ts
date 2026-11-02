@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const logBusEvent = vi.fn();
-vi.mock("../../clients/bus-events-logger.js", () => ({
-	logBusEvent: (...args: unknown[]) => logBusEvent(...args),
-}));
+import { installBusSinkReader } from "../support/bus-sink-reader.js";
+const { busRows, clearBusRows } = installBusSinkReader();
 
 import {
 	_resetFormatEventsPublishForTests,
@@ -27,13 +25,13 @@ import { _resetForTests as _resetBusPublishForTests } from "../../clients/bus-pu
 describe("format-events-publish — pilens:format:queued / pilens:format:start (#673)", () => {
 	const originalEnv = process.env.PI_LENS_BUS_PUBLISH;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		_resetFormatEventsPublishForTests();
 		_resetBusPublishForTests();
-		logBusEvent.mockClear();
+		await clearBusRows();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		_resetFormatEventsPublishForTests();
 		_resetBusPublishForTests();
 		if (originalEnv === undefined) {
@@ -44,7 +42,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 	});
 
 	describe("pilens:format:queued", () => {
-		it("skips a stale session target without attempting emit", () => {
+		it("skips a stale session target without attempting emit", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitterGetter(() => ({
 				emit,
@@ -65,7 +63,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			});
 
 			expect(emit).not.toHaveBeenCalled();
-			expect(logBusEvent).toHaveBeenCalledWith(
+			expect(await busRows()).toContainEqual(
 				expect.objectContaining({
 					event: BUS_FORMAT_QUEUED_EVENT,
 					outcome: "skipped_stale_session",
@@ -74,7 +72,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			);
 		});
 
-		it("emits the exact payload shape: v, source, filePath, cwd, tool", () => {
+		it("emits the exact payload shape: v, source, filePath, cwd, tool", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -101,7 +99,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(payload.cwd).toEqual(expect.any(String));
 		});
 
-		it("normalizes filePath and cwd (backslashes -> forward slashes)", () => {
+		it("normalizes filePath and cwd (backslashes -> forward slashes)", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -120,7 +118,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(payload.cwd).not.toContain("\\");
 		});
 
-		it("carries the queued record identity for lifecycle matching (#4213)", () => {
+		it("carries the queued record identity for lifecycle matching (#4213)", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 			publishFormatQueued({
@@ -139,7 +137,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			});
 		});
 
-		it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", () => {
+		it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", async () => {
 			process.env.PI_LENS_BUS_PUBLISH = "0";
 			_resetBusPublishForTests();
 			const emit = vi.fn();
@@ -155,7 +153,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(emit).not.toHaveBeenCalled();
 		});
 
-		it("swallows emit throws and logs once via dbg without affecting the caller", () => {
+		it("swallows emit throws and logs once via dbg without affecting the caller", async () => {
 			const emit = vi.fn(() => {
 				throw new Error("bus explosion");
 			});
@@ -186,7 +184,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(dbg).toHaveBeenCalledTimes(1);
 		});
 
-		it("logs 'emitted' with fileCount 1 on a successful emit", () => {
+		it("logs 'emitted' with fileCount 1 on a successful emit", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -197,7 +195,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 				kinds: ["format"],
 			});
 
-			expect(logBusEvent).toHaveBeenCalledWith(
+			expect(await busRows()).toContainEqual(
 				expect.objectContaining({
 					event: BUS_FORMAT_QUEUED_EVENT,
 					outcome: "emitted",
@@ -206,7 +204,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			);
 		});
 
-		it("logs 'skipped_unwired' once when busEmit was never wired", () => {
+		it("logs 'skipped_unwired' once when busEmit was never wired", async () => {
 			publishFormatQueued({
 				filePath: "/repo/a.ts",
 				cwd: "/repo",
@@ -220,21 +218,23 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 				kinds: ["format"],
 			});
 
-			const unwiredCalls = logBusEvent.mock.calls.filter(
-				(c) => (c[0] as { outcome: string }).outcome === "skipped_unwired",
-			);
+			const unwiredCalls = (await busRows())
+				.map((entry) => [entry])
+				.filter(
+					(c) => (c[0] as { outcome: string }).outcome === "skipped_unwired",
+				);
 			expect(unwiredCalls).toHaveLength(1);
 		});
 	});
 
 	describe("pilens:format:start", () => {
-		it("no-ops when never wired", () => {
+		it("no-ops when never wired", async () => {
 			expect(() =>
 				publishFormatStart({ cwd: "/repo", paths: ["/repo/a.ts"] }),
 			).not.toThrow();
 		});
 
-		it("emits the exact payload shape: v, source, cwd, paths, fileCount", () => {
+		it("emits the exact payload shape: v, source, cwd, paths, fileCount", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -258,7 +258,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(payload.paths).toHaveLength(2);
 		});
 
-		it("does not emit for an empty paths batch", () => {
+		it("does not emit for an empty paths batch", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -267,12 +267,12 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(emit).not.toHaveBeenCalled();
 		});
 
-		it("does not log anything for an empty paths batch", () => {
+		it("does not log anything for an empty paths batch", async () => {
 			publishFormatStart({ cwd: "/repo", paths: [] });
-			expect(logBusEvent).not.toHaveBeenCalled();
+			expect(await busRows()).toEqual([]);
 		});
 
-		it("normalizes paths and cwd", () => {
+		it("normalizes paths and cwd", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -289,7 +289,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(payload.cwd).not.toContain("\\");
 		});
 
-		it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", () => {
+		it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", async () => {
 			process.env.PI_LENS_BUS_PUBLISH = "0";
 			_resetBusPublishForTests();
 			const emit = vi.fn();
@@ -300,7 +300,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(emit).not.toHaveBeenCalled();
 		});
 
-		it("swallows emit throws and logs once via dbg without affecting the caller", () => {
+		it("swallows emit throws and logs once via dbg without affecting the caller", async () => {
 			const emit = vi.fn(() => {
 				throw new Error("bus explosion");
 			});
@@ -318,7 +318,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(dbg).toHaveBeenCalledTimes(1);
 		});
 
-		it("logs 'emitted' with the file count on a successful emit", () => {
+		it("logs 'emitted' with the file count on a successful emit", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -327,7 +327,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 				paths: ["/repo/a.ts", "/repo/b.ts", "/repo/c.ts"],
 			});
 
-			expect(logBusEvent).toHaveBeenCalledWith(
+			expect(await busRows()).toContainEqual(
 				expect.objectContaining({
 					event: BUS_FORMAT_START_EVENT,
 					outcome: "emitted",
@@ -338,7 +338,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 	});
 
 	describe("pilens:format:done", () => {
-		it("emits changed paths after the batch, including an empty no-change batch", () => {
+		it("emits changed paths after the batch, including an empty no-change batch", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -364,7 +364,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 	});
 
 	describe("pilens:autofix:start (#684)", () => {
-		it("no-ops when never wired", () => {
+		it("no-ops when never wired", async () => {
 			expect(() =>
 				publishAutofixStart({
 					cwd: "/repo",
@@ -374,7 +374,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			).not.toThrow();
 		});
 
-		it("emits the exact payload shape: v, source, cwd, paths, fileCount, eligibleCount", () => {
+		it("emits the exact payload shape: v, source, cwd, paths, fileCount, eligibleCount", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -399,7 +399,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(payload.paths).toHaveLength(2);
 		});
 
-		it("does not emit for an empty paths batch", () => {
+		it("does not emit for an empty paths batch", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -408,12 +408,12 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(emit).not.toHaveBeenCalled();
 		});
 
-		it("does not log anything for an empty paths batch", () => {
+		it("does not log anything for an empty paths batch", async () => {
 			publishAutofixStart({ cwd: "/repo", paths: [], eligibleCount: 0 });
-			expect(logBusEvent).not.toHaveBeenCalled();
+			expect(await busRows()).toEqual([]);
 		});
 
-		it("normalizes paths and cwd", () => {
+		it("normalizes paths and cwd", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -431,7 +431,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(payload.cwd).not.toContain("\\");
 		});
 
-		it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", () => {
+		it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", async () => {
 			process.env.PI_LENS_BUS_PUBLISH = "0";
 			_resetBusPublishForTests();
 			const emit = vi.fn();
@@ -446,7 +446,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(emit).not.toHaveBeenCalled();
 		});
 
-		it("swallows emit throws and logs once via dbg without affecting the caller", () => {
+		it("swallows emit throws and logs once via dbg without affecting the caller", async () => {
 			const emit = vi.fn(() => {
 				throw new Error("bus explosion");
 			});
@@ -474,7 +474,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(dbg).toHaveBeenCalledTimes(1);
 		});
 
-		it("logs 'emitted' with the file count on a successful emit", () => {
+		it("logs 'emitted' with the file count on a successful emit", async () => {
 			const emit = vi.fn();
 			wireFormatEventsBusEmitter(emit);
 
@@ -484,7 +484,7 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 				eligibleCount: 5,
 			});
 
-			expect(logBusEvent).toHaveBeenCalledWith(
+			expect(await busRows()).toContainEqual(
 				expect.objectContaining({
 					event: BUS_AUTOFIX_START_EVENT,
 					outcome: "emitted",

@@ -39,7 +39,7 @@ const BUS_EVENTS = path.join(logDir, "bus-events.log");
 
 /**
  * One `bus-events.log` row, in the shape `logBusEvent`
- * (`clients/bus-events-logger.ts`) writes when a producer's publish throws the
+ * (`clients/live-bus-emitter.ts`) writes when a producer's publish throws the
  * SDK's stale-ctx error (for example `clients/bus-publish.ts`'s `catch`).
  * `event`, `outcome` and `cwd` are required by `BusEventLogEntry`; `error` and
  * `ctxSource` are the emit_failed detail.

@@ -387,7 +387,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/biome-client.ts": 8,
 		"clients/bounded-pid-file-lock.ts": 9,
 		"clients/bundled-resource-health.ts": 2,
-		"clients/bus-events-logger.ts": 1,
 		"clients/cascade-logger.ts": 1,
 		"clients/child-unref.ts": 5,
 		"clients/config-core/normalize.ts": 2,
@@ -448,7 +447,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/jscpd-client.ts": 2,
 		"clients/knip-client.ts": 3,
 		"clients/lens-config.ts": 4,
-		"clients/live-bus-emitter.ts": 3,
+		"clients/live-bus-emitter.ts": 4,
 		"clients/lsp/cascade-tier.ts": 1,
 		"clients/lsp/client-registry.ts": 4,
 		"clients/lsp/client.ts": 13,
@@ -864,7 +863,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/ast-grep-tool-logger.ts": 1,
 		"clients/biome-client.ts": 4,
-		"clients/bus-events-logger.ts": 1,
+		"clients/live-bus-emitter.ts": 1,
 		// 10 -> 12 (#3274): `readCacheAsync` and the shared `freshAgeMs` each log
 		// their own verdict through the manager's existing verbose logger. Same
 		// sense as the ten beside them; no new logging concept.
@@ -948,7 +947,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.resolve(dir)`, mirroring `withGenerationLockSync`'s own (#3578).
 		"clients/bounded-pid-file-lock.ts": 6,
 		"clients/build-identity.ts": 3,
-		"clients/bus-events-logger.ts": 2,
+		"clients/live-bus-emitter.ts": 2,
 		"clients/bus-publish.ts": 3,
 		// 17 -> 19 (#3274): `readCacheAsync` builds the same two store paths its
 		// synchronous sibling does (`cachePath`, `metaPath`). Same sense, one more
