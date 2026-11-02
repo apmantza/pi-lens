@@ -12,6 +12,7 @@ import {
 } from "../../clients/project-report.js";
 import {
 	_resetReviewGraphBuildAttemptsForTests,
+	_setReviewGraphEntryBudgetForTests,
 	buildOrUpdateGraph,
 	clearReviewGraphWorkspaceCache,
 	flushReviewGraphPersistsForTests,
@@ -37,6 +38,7 @@ afterEach(() => {
 	clearReviewGraphWorkspaceCache();
 	_resetReviewGraphBuildAttemptsForTests();
 	_resetProjectReportBuildGuardForTests();
+	_setReviewGraphEntryBudgetForTests();
 	if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 	else process.env.PILENS_DATA_DIR = previousDataDir;
 });
@@ -477,6 +479,25 @@ describe("projectReport — default text cell strict census (#5150 R2)", () => {
 				? ["report.view"]
 				: leaves.filter((leaf) => leaf.endsWith(`.${token}`));
 		expect(declared.flatMap(expand).sort()).toEqual(unrendered);
+	});
+
+	it("renders the entry-budget-truncated graph as a partial note under TRUST", async () => {
+		const env = makeEnv("pi-lens-preport-text-partial-");
+		_setReviewGraphEntryBudgetForTests(2);
+		createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;\n");
+		createTempFile(env.tmpDir, "src/b.ts", "export const b = 2;\n");
+		createTempFile(env.tmpDir, "src/c.ts", "export const c = 3;\n");
+		await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+		const report = await projectReport(env.tmpDir);
+		expect(report.available).toBe(true);
+		expect(report.trust?.persistCoverage?.sourceFilesTruncated).toBe(true);
+		const text = renderTextProjectReport(report);
+		const note = linesUnder(text, "TRUST:").find((line) =>
+			line.includes("Partial source walk"),
+		);
+		expect(note).toBeDefined();
+		expect(note!).toContain(`${report.trust!.persistCoverage!.totalFiles}`);
+		expect(note!).toContain(`${report.trust!.persistCoverage!.persistedFiles}`);
 	});
 
 	it("ignores unknown fields instead of breaking (planted-key control)", async () => {
