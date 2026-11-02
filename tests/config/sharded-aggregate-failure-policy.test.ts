@@ -5,6 +5,7 @@ import yaml from "../../clients/deps/js-yaml.js";
 
 type Step = {
 	name?: string;
+	if?: string;
 	uses?: string;
 	"continue-on-error"?: boolean | string;
 };
@@ -110,6 +111,8 @@ const CRITICAL_STEPS: [
 	["ci.yml", "lint-and-typecheck", "Audit production dependencies"],
 	["ci.yml", "lint-and-typecheck", "TypeScript & JS lint"],
 	["ci.yml", "lint-and-typecheck", "ast-grep rule pair audit"],
+	// #5002: the former `Dependency boundaries` job.
+	["ci.yml", "lint-and-typecheck", "Check client dependency boundaries"],
 	// #3957: lint.yml's non-matrix required `knip` and `oxfmt` jobs.
 	["lint.yml", "knip", "Run knip"],
 	["lint.yml", "oxfmt", "Check formatting"],
@@ -153,6 +156,8 @@ const PRODUCERS: Producer[] = [
 			{ id: "Audit production dependencies", stepClass: "verdict" },
 			{ id: "TypeScript & JS lint", stepClass: "verdict" },
 			{ id: "ast-grep rule pair audit", stepClass: "verdict" },
+			{ id: "Build compiled clients", stepClass: "setup" },
+			{ id: "Check client dependency boundaries", stepClass: "verdict" },
 		],
 	},
 	{
@@ -187,7 +192,7 @@ const PRODUCER_STEP_COUNTS: Record<
 	`${StepWorkflow}:${string}`,
 	Record<StepClass, number>
 > = {
-	"ci.yml:lint-and-typecheck": { verdict: 7, setup: 3, "best-effort": 0 },
+	"ci.yml:lint-and-typecheck": { verdict: 8, setup: 4, "best-effort": 0 },
 	"lint.yml:knip": { verdict: 1, setup: 3, "best-effort": 0 },
 	"lint.yml:oxfmt": { verdict: 1, setup: 3, "best-effort": 0 },
 };
@@ -243,6 +248,18 @@ describe("#3920 sharded required-check failure policy", () => {
 				step?.["continue-on-error"] ?? false,
 				`${workflowFile}:${jobId} \`${stepName}\` must not tolerate failure`,
 			).toBe(false);
+		},
+	);
+
+	// #5002: as its own job the boundary check reported beside a lint red. Inside
+	// `Lint & type-check` it needs `!cancelled()` to keep doing that.
+	it.each(["Build compiled clients", "Check client dependency boundaries"])(
+		"keeps lint-and-typecheck %s running after an earlier red step",
+		(stepName) => {
+			const step = jobs["lint-and-typecheck"].steps?.find(
+				(entry) => entry.name === stepName,
+			);
+			expect(step?.if).toBe("${{ !cancelled() }}");
 		},
 	);
 

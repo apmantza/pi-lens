@@ -148,7 +148,7 @@ describe("fork-capped workflow token writes (#2993)", () => {
 	});
 
 	it("skips cleanup when the synchronize PR head is a fork", () => {
-		const { workflow } = load(resolve(WORKFLOWS, "ci-infra-kill-rerun.yml"));
+		const { workflow } = load(resolve(WORKFLOWS, "ci-verdict-labels.yml"));
 		expect(workflow.jobs?.["clear-stale-verdict-labels"]?.if).toContain(
 			"github.event.pull_request.head.repo.full_name == github.repository",
 		);

@@ -74,10 +74,9 @@ const tools = [
 describe("#2706 advisory tooling workflow contracts", () => {
 	it("hosts the seven tools in one job and keeps lint.yml's other jobs exact", () => {
 		expect(Object.keys(workflow.jobs)).toEqual([
-			"actionlint",
+			"actionlint-markdownlint",
 			"oxfmt",
 			"knip",
-			"markdownlint",
 			"oxlint-advisory",
 			"lint-advisory",
 		]);
@@ -99,6 +98,27 @@ describe("#2706 advisory tooling workflow contracts", () => {
 		expect(job?.name).toBe("knip");
 		expect(job?.["continue-on-error"]).not.toBe(true);
 		expect(isAdvisoryCheck("knip")).toBe(false);
+	});
+
+	// #5002: one row for both linters. It stays gating, and neither tool's red
+	// may hide the other's or read green.
+	it("keeps actionlint and markdownlint in one gating job that reports both", () => {
+		const job = workflow.jobs["actionlint-markdownlint"];
+		expect(job?.name).toBe("actionlint & markdownlint");
+		expect(job?.["continue-on-error"]).not.toBe(true);
+		expect(isAdvisoryCheck("actionlint & markdownlint")).toBe(false);
+		const steps = job?.steps ?? [];
+		expect(steps.slice(1).map((step) => step.if)).toEqual(
+			steps.slice(1).map(() => "${{ !cancelled() }}"),
+		);
+		expect(
+			steps.filter((step) => step["continue-on-error"] !== undefined),
+		).toEqual([]);
+		for (const command of [
+			"./actionlint -color",
+			"./node_modules/.bin/markdownlint-cli2",
+		])
+			expect(steps.map((step) => step.run)).toContain(command);
 	});
 
 	// Job-level `continue-on-error` is the pinned tolerance (the six folded
