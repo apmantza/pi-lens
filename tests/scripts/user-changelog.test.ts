@@ -9,7 +9,6 @@ import {
 	summarizeSection,
 } from "../../scripts/lib/changelog.mjs";
 import * as rollup from "../../scripts/rollup-changelog.mjs";
-import { REAL_NODE_MODULES } from "../support/lane-check-kit.js";
 const {
 	parseChangelog,
 }: {
@@ -111,7 +110,14 @@ it("the check CLI rejects a stale user changelog", async () => {
 	rollup.writeUserChangelog({ rootDir: root });
 	fs.appendFileSync(path.join(root, "CHANGELOG-USER.md"), "stale\n");
 	// #5202 r2b: copied scripts need dependencies even outside the repo tree.
-	fs.symlinkSync(REAL_NODE_MODULES, path.join(root, "node_modules"), "dir");
+	// Local path on purpose: lane-check-kit's REAL_NODE_MODULES lives in a
+	// module that imports child_process, and importing it trips the
+	// flake-shape real-process-spawn ratchet for this file.
+	fs.symlinkSync(
+		path.resolve("node_modules"),
+		path.join(root, "node_modules"),
+		"dir",
+	);
 	fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
 	for (const file of [
 		"rollup-changelog.mjs",
