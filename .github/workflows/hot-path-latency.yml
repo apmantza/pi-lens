@@ -13,11 +13,11 @@ name: Hot-path latency
 # this lane only a reviewer re-running a probe caught #4344 round 1 (replay
 # 6 ms to 321 ms).
 #
-# ADVISORY until flipped. The check name ends in "(advisory)", so ci-verdict
-# and the check list read a red as a note, and the job does not use
-# continue-on-error, so the run conclusion stays truthful. The maintainer
-# decided on 2026-10-31 to flip it to a required check (#4363); the flip bar
-# was 10 consecutive master push runs that conclude success with no false red:
+# REQUIRED despite the name. The maintainer flipped it to a required check after
+# the 2026-10-31 decision (#4363), and a required name gates whatever its suffix
+# says. The job does not use continue-on-error, so the run conclusion stays
+# truthful. The flip bar was 10 consecutive master push runs that conclude
+# success with no false red:
 #
 #   gh run list --workflow hot-path-latency.yml --branch master --event push \
 #     --limit 10 --json conclusion --jq 'all(.[]; .conclusion == "success")'

@@ -1,4 +1,5 @@
 export declare const REQUIRED_CHECKS: string[];
+export declare const BRANCH_PROTECTION_CONTEXTS: readonly string[];
 export declare const CI_JOB_NAMES: Readonly<{
 	CHANGELOG_FRAGMENT: string;
 	LINT_AND_TYPECHECK: string;

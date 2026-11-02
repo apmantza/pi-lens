@@ -6,10 +6,10 @@
  *     --context <check name> [--context <check name> ...] \
  *     [--deadline-seconds 300] [--interval-seconds 15]
  *
- * The last step of ci.yml's `heavy-gate` job. The job's own `needs:` already
- * proves the required checks that live in ci.yml passed; `needs:` cannot reach
- * another workflow, so the required checks hosted by lint.yml (`knip`,
- * `oxfmt format check`) are read here from the head's check-runs. Result:
+ * The last step of ci.yml's `heavy-gate` job. The job's own `needs:` proves most
+ * required checks passed. The rest are read here from the head's check-runs:
+ * `knip` and `oxfmt format check`, which live in another workflow, and
+ * `TLA+ models`, whose skippable `tla-shards` need would skip the gate. Result:
  * `ready=true` on the step output only when every named check's LATEST
  * check-run on the exact head concluded success. Red, absent at the deadline,
  * or a transport failure all give `ready=false` and exit 1: the heavy advisory
