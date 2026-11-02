@@ -1,5 +1,16 @@
 # HISTORY
 
+## 2026-11-02 — serial await of independent work on a hot path (shape 89)
+
+#2540: a cold first edit blocked ~7 s because the edit hook spawned the file's
+LSP servers one after another; #1409: the word-index rebuild walked its files
+with one `stat` at a time, 8 s on a slow filesystem. Both were fixed by
+overlapping the calls. A hot-path audit (2026-11-02) found one more candidate,
+the neighbour cascade's serial `references()` calls (#5174), and refuted its
+own top finding: dispatch groups already run in parallel and every
+`mode:"all"` group holds one runner. #5174 is measure-first because
+typescript-language-server answers one request at a time.
+
 ## 2026-11-01 — learned attribution keyed on a name alone (shape 88)
 
 #4139: `lsp_navigation` mixes a write (`rename`) with read-only operations, and
