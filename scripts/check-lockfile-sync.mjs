@@ -10,13 +10,20 @@
  * result.
  */
 import * as fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import {
+	findLibcDrift,
+	formatLibcDriftFailure,
 	formatPackageLockSyncFailure,
 	validatePackageLockSync,
 } from "./lib/package-lock-sync.mjs";
-import { runLockfileCompleteness } from "./lib/lockfile-completeness.mjs";
+import {
+	getPinnedNpmVersion,
+	runLockfileCompleteness,
+} from "./lib/lockfile-completeness.mjs";
 
 const complete = process.argv.slice(2).includes("--complete");
+const GIT_TIMEOUT_MS = 10_000;
 
 function read(file) {
 	try {
@@ -24,6 +31,37 @@ function read(file) {
 	} catch (err) {
 		console.error(`Cannot read ${file}: ${err.message}`);
 		process.exit(1);
+	}
+}
+
+/**
+ * The lockfile this checkout committed, or the reason it cannot be read.
+ *
+ * A lockfile change is compared against HEAD: the pre-commit hook sees the
+ * rewrite in the working tree while HEAD still holds the lock the last commit
+ * wrote (#5207). A tree with no HEAD lock (first commit, a consumer tarball,
+ * no git) has nothing to compare and says so instead of guessing.
+ */
+function readCommittedLock() {
+	let result;
+	try {
+		result = spawnSync("git", ["show", "HEAD:package-lock.json"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+			timeout: GIT_TIMEOUT_MS,
+		});
+	} catch (err) {
+		return { skipped: `git unavailable: ${err.message}` };
+	}
+	if (result.error || result.status !== 0) {
+		return { skipped: "HEAD records no package-lock.json" };
+	}
+	try {
+		return { lock: JSON.parse(result.stdout) };
+	} catch (err) {
+		return {
+			skipped: `HEAD's package-lock.json is unreadable: ${err.message}`,
+		};
 	}
 }
 
@@ -37,6 +75,20 @@ if (problems.length > 0) {
 }
 
 console.log("package-lock.json is in sync with package.json ✓");
+
+const committed = readCommittedLock();
+if (committed.lock === undefined) {
+	console.log(`package-lock libc drift: not checked (${committed.skipped})`);
+} else {
+	const drifted = findLibcDrift(committed.lock, lock);
+	if (drifted.length > 0) {
+		console.error(formatLibcDriftFailure(drifted, getPinnedNpmVersion()));
+		process.exit(1);
+	}
+	console.log(
+		'package-lock.json keeps every "libc" field it recorded at HEAD ✓',
+	);
+}
 
 if (complete) {
 	const result = runLockfileCompleteness();

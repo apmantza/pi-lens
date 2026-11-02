@@ -1,9 +1,12 @@
+// flake-shape: real-process-spawn — the guard reads the committed lock through
+// a real `git show`, so its regression cases drive a real repository.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -59,10 +62,16 @@ function fixtureRoot() {
 	return { root, pkg, lock };
 }
 
-function run(script: string, cwd: string, args: string[] = []) {
+function run(
+	script: string,
+	cwd: string,
+	args: string[] = [],
+	env?: NodeJS.ProcessEnv,
+) {
 	return spawnSync(process.execPath, [script, ...args], {
 		cwd,
 		encoding: "utf8",
+		...(env ? { env } : {}),
 	});
 }
 
@@ -327,5 +336,161 @@ describe("package-lock identity guard (#2043)", () => {
 		expect(fs.existsSync(path.join(root, ".changelog", "pending.md"))).toBe(
 			false,
 		);
+	});
+});
+
+// #5207. npm 9.2 on the maintainer host does not know the lockfile's `libc`
+// field, so `npm install --package-lock-only` under it rewrote all 56 entries
+// of #5200's lock without the field and nothing failed. The guard compares the
+// working lock against the committed one — the state the pre-commit hook sees —
+// and refuses a drop that no resolved version explains.
+describe("package-lock libc drift guard (#5207)", () => {
+	const PKG = {
+		name: "pi-lens",
+		version: "4.1.2",
+		packageManager: "npm@11.18.0",
+	};
+	const libcLock = (
+		entries: Record<string, { version: string; libc?: string[] }>,
+	) => ({
+		name: PKG.name,
+		version: PKG.version,
+		lockfileVersion: 3,
+		requires: true,
+		packages: {
+			"": { name: PKG.name, version: PKG.version },
+			...Object.fromEntries(
+				Object.entries(entries).map(([key, entry]) => [
+					`node_modules/${key}`,
+					entry,
+				]),
+			),
+		},
+	});
+	const GLYDE = { version: "4.52.4", libc: ["glibc"] };
+
+	// One shared `git` call site keeps the file's pinned real-spawn count while
+	// every case needs its own committed lock (#4867: a real git fixture lives
+	// under the git-ignored `.probe-home`, never at the checkout root).
+	function probeGit(args: string[], cwd: string) {
+		return String(gitExecFileSync(args, { cwd }));
+	}
+
+	function committedRepo(headLock: unknown | null) {
+		const root = fs.mkdtempSync(
+			path.join(REPO_ROOT, ".probe-home", "lockfile-libc-"),
+		);
+		tempDirs.push(root);
+		fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(PKG));
+		if (headLock !== null)
+			fs.writeFileSync(
+				path.join(root, "package-lock.json"),
+				JSON.stringify(headLock),
+			);
+		probeGit(["init", "-q", "-b", "fixture-lock"], root);
+		probeGit(["add", "."], root);
+		probeGit(
+			[
+				"-c",
+				"user.email=pi-lens-test@example.com",
+				"-c",
+				"user.name=pi-lens-test",
+				"commit",
+				"-qm",
+				"fixture",
+			],
+			root,
+		);
+		return root;
+	}
+
+	function check(root: string, workingLock: unknown | null) {
+		if (workingLock === null)
+			fs.rmSync(path.join(root, "package-lock.json"), { force: true });
+		else
+			fs.writeFileSync(
+				path.join(root, "package-lock.json"),
+				JSON.stringify(workingLock),
+			);
+		return run(CHECKER, root, [], envFor(root));
+	}
+
+	it("refuses the npm-9.2 shape and names the pinned regeneration", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const result = check(committedRepo(good), dropped);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			'node_modules/@rollup/rollup-linux-x64-gnu@4.52.4 recorded libc ["glibc"]',
+		);
+		expect(result.stderr).toContain("npm@11.18.0");
+		expect(result.stderr).toContain(
+			"npx npm@11.18.0 install --package-lock-only --ignore-scripts",
+		);
+	});
+
+	it("accepts the pinned npm's regeneration, unrelated drift included", () => {
+		const good = libcLock({
+			"@rollup/rollup-linux-x64-gnu": GLYDE,
+			"@rollup/rollup-linux-arm64-musl": {
+				version: "4.52.4",
+				libc: ["musl"],
+			},
+			kept: { version: "1.0.0" },
+		});
+		const regenerated = libcLock({
+			"@rollup/rollup-linux-x64-gnu": GLYDE,
+			"@rollup/rollup-linux-arm64-musl": { version: "4.52.4", libc: ["musl"] },
+			kept: { version: "1.1.0" },
+		});
+		const result = check(committedRepo(good), regenerated);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain('keeps every "libc" field');
+	});
+
+	it("ignores a package that left the lock and a resolved version that moved", () => {
+		const good = libcLock({
+			gone: { version: "1.0.0", libc: ["glibc"] },
+			moved: { version: "2.0.0", libc: ["glibc"] },
+			kept: { version: "1.0.0" },
+		});
+		const after = libcLock({
+			moved: { version: "3.0.0" },
+			kept: { version: "1.0.0" },
+		});
+		const result = check(committedRepo(good), after);
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toBe("");
+	});
+
+	it("caps the reported entries and counts the rest", () => {
+		const entries = Object.fromEntries(
+			Array.from({ length: 8 }, (_, index) => [
+				`binding-${index}`,
+				{ version: "1.0.0", libc: ["glibc"] },
+			]),
+		);
+		const dropped = Object.fromEntries(
+			Object.keys(entries).map((key) => [key, { version: "1.0.0" }]),
+		);
+		const result = check(committedRepo(libcLock(entries)), libcLock(dropped));
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("8 package entries");
+		expect(result.stderr.match(/recorded libc/g) as string[]).toHaveLength(5);
+		expect(result.stderr).toContain("... and 3 more");
+	});
+
+	it("skips the comparison when HEAD records no lockfile", () => {
+		const root = committedRepo(null);
+		const result = check(root, libcLock({ kept: { version: "1.0.0" } }));
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("libc drift: not checked");
 	});
 });

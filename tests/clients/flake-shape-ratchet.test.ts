@@ -1133,6 +1133,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the nightly CLI runs as a real child with PATH at a recorded gh stand-in; an in-process double would not prove its annotation escapes or exit codes",
 	},
+	// 2026-11-02 (#5207): the libc drift guard compares the working lock
+	// against HEAD's committed blob through real git in a fixture repository,
+	// so the split a reviewer sees is the split the guard refuses; a stub would
+	// restate the comparison.
+	"real-process-spawn:scripts/check-lockfile-sync.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the libc drift guard reads HEAD's committed lock through a real git child in a fixture repository; a stub would restate the comparison instead of proving the committed-versus-working split",
+	},
 	"real-process-spawn:scripts/check-pr-body.test.ts": {
 		detector: "real-process-spawn",
 		reason:

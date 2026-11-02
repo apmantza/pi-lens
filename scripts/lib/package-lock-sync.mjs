@@ -171,6 +171,55 @@ export function validatePackageLockSync(pkg, lock) {
 	return problems;
 }
 
+/**
+ * Return every package entry that stayed in the lock at the same resolved
+ * version yet lost the `libc` field it recorded before.
+ *
+ * npm older than package.json's packageManager pin does not know `libc`
+ * (npm 9.2 on the maintainer host), so `npm install --package-lock-only` under
+ * it rewrites every optional platform binding without the field: #5200's lock
+ * lost all 56 entries and no gate noticed (#5207). A published manifest is
+ * immutable, so a same-version entry can only lose `libc` through a rewrite;
+ * an entry whose version moved, or that left the lock, is a different
+ * resolution the pinned npm decides, and `--complete` covers it.
+ */
+export function findLibcDrift(beforeLock, afterLock) {
+	const before = isJsonObject(beforeLock?.packages) ? beforeLock.packages : {};
+	const after = isJsonObject(afterLock?.packages) ? afterLock.packages : {};
+	const dropped = [];
+	for (const [key, entry] of Object.entries(before)) {
+		if (!key.startsWith("node_modules/") || !isJsonObject(entry)) continue;
+		const libc = entry.libc;
+		if (!Array.isArray(libc) || libc.length === 0) continue;
+		const next = after[key];
+		if (!isJsonObject(next) || next.version !== entry.version) continue;
+		if (Array.isArray(next.libc) && next.libc.length > 0) continue;
+		dropped.push({ key, version: entry.version, libc });
+	}
+	return dropped.sort((left, right) => left.key.localeCompare(right.key));
+}
+
+const LIBC_DRIFT_EXAMPLES = 5;
+
+export function formatLibcDriftFailure(dropped, npmPin) {
+	const shown = dropped
+		.slice(0, LIBC_DRIFT_EXAMPLES)
+		.map(
+			(entry) =>
+				`  - ${entry.key}@${entry.version} recorded libc ${JSON.stringify(entry.libc)}; the lock no longer records it.`,
+		);
+	const rest = dropped.length - shown.length;
+	return [
+		`package-lock.json dropped the "libc" field from ${dropped.length} package ${dropped.length === 1 ? "entry" : "entries"} that stay in the lock:`,
+		"",
+		...shown,
+		...(rest > 0 ? [`  ... and ${rest} more.`] : []),
+		"",
+		`npm older than package.json's packageManager pin (npm@${npmPin}) writes no "libc" field, so a --package-lock-only regeneration under it silently drops the platform metadata.`,
+		`Restore the committed lock, then regenerate with \`npx npm@${npmPin} install --package-lock-only --ignore-scripts\` and commit the result.`,
+	].join("\n");
+}
+
 export function formatPackageLockSyncFailure(problems) {
 	return [
 		"package-lock.json is out of sync with package.json:",
