@@ -541,9 +541,10 @@ other test job always run, because a docs edit can red tests outside tests/confi
 (`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
 is the three `Install test` legs: outside `INSTALL_PATHS` in that script
 they report success without installing, and `Strict install` and the macOS APFS
-step run on non-pull_request events only. `TLA+ models`
+step run on non-pull_request events only. On a pull request, `TLA+ models`
 model-checks only when `formal/` (or its checker or ci.yml) changed: its shards
-skip at job level and the aggregate still reports. A REQUIRED job never skips at
+skip at job level and the aggregate still reports. Push and merge-queue runs
+always model-check (`changes` sets `formal=true` for every non-PR event). A REQUIRED job never skips at
 job level: ci-verdict and the merge train demand a literal `success`. Implicit
 `success()` reads every ancestor, so a job behind a skippable ancestor skips even
 when its direct needs are green; `heavy-gate` therefore reads `TLA+ models` from
