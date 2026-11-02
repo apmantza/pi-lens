@@ -160,8 +160,9 @@ describe("findDriftTrackingIssue (#594)", () => {
 		});
 	});
 
-	it("exposes stable, fixed identifiers so the tracker is always found the same way", () => {
-		expect(DRIFT_ISSUE_LABEL).toBe("nightly-drift");
+	// The nightly job finds and closes its live tracker by this title; a rename
+	// would leave that issue orphaned and file a duplicate (#5177 review F1).
+	it("keeps the live tracker's title fixed", () => {
 		expect(DRIFT_ISSUE_TITLE).toBe("nightly: silentOnClean drift detected");
 	});
 });

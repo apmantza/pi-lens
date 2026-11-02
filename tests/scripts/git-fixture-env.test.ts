@@ -8,10 +8,7 @@ import {
 	gitExecFileSync,
 	gitExecSync,
 } from "../../scripts/lib/git-fixture-env.mjs";
-import {
-	gitExecFileSync as tsGitExecFileSync,
-	gitFixtureEnv,
-} from "../support/git-fixture-env.js";
+import { gitExecFileSync as tsGitExecFileSync } from "../support/git-fixture-env.js";
 
 describe("JavaScript Git fixture environment", () => {
 	const scratch: string[] = [];
@@ -182,34 +179,73 @@ describe("JavaScript Git fixture environment", () => {
 		);
 	});
 
-	it("carries the same no-background-maintenance policy in the TypeScript twin", () => {
-		const jsEnv = envFor("C:/tmp", {});
-		const tsEnv = gitFixtureEnv("C:/tmp");
-		expect(tsEnv.GIT_CONFIG_GLOBAL).toBe(jsEnv.GIT_CONFIG_GLOBAL);
-		expect(tsEnv.GIT_CONFIG_GLOBAL).toContain("git-fixture-global.gitconfig");
-		expect(fs.existsSync(tsEnv.GIT_CONFIG_GLOBAL)).toBe(true);
-		// The policy file itself, read the way git reads it.
-		expect(fs.readFileSync(tsEnv.GIT_CONFIG_GLOBAL, "utf8")).toMatch(
-			/\[maintenance\]\s*\n\s*auto = false/,
-		);
-		expect(tsEnv.GIT_CONFIG_NOSYSTEM).toBe("1");
+	// Recurrence: the TypeScript twin sets GIT_CONFIG_NOSYSTEM by hand beside the
+	// policy path, and no other case reads a system config: the two #4552 cases
+	// above go red on a lost policy file or path, not on a system config git
+	// would still read, so a fixture could inherit the host's /etc/gitconfig.
+	it("ignores a system git config through the TypeScript twin", () => {
+		const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ts-git-sys-"));
+		scratch.push(repo);
+		const system = path.join(repo, "system.gitconfig");
+		fs.writeFileSync(system, "[pilens]\n\tprobe = from-system\n");
+		// `git config --get` exits 1 for an unset key; any other failure (git
+		// missing, a spawn error) has no status 1 and fails this assertion.
+		expect(() =>
+			tsGitExecFileSync("git", ["config", "--get", "pilens.probe"], {
+				cwd: repo,
+				stdio: "ignore",
+				env: { GIT_CONFIG_SYSTEM: system },
+			}),
+		).toThrow(expect.objectContaining({ status: 1 }));
 	});
 
-	it("keeps exec and shell wrappers inside a throwaway repository", () => {
+	// Recurrence: `gitExecSync` and `gitExecFileSync` each build their own
+	// options. A wrapper that stopped passing `envFor` kept `git status` working,
+	// so the old case (a `status` line plus a `config --get user.name` that throws
+	// only on a host with no global user) stayed green; the fixture then ran on
+	// the host's Git state and config. Both wrappers must hand git the scrubbed
+	// environment and the fixture policy.
+	function expectWrapperInsideRepo(
+		run: (repo: string, env: NodeJS.ProcessEnv, args: string[]) => unknown,
+	) {
 		const repo = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-mjs-git-wrapper-"),
 		);
 		scratch.push(repo);
 		gitExecFileSync(["init", "-q"], { cwd: repo, stdio: "ignore" });
 		fs.writeFileSync(path.join(repo, "file.txt"), "fixture\n");
+		expect(String(run(repo, {}, ["status", "--porcelain"]))).toContain(
+			"file.txt",
+		);
+		// An inherited GIT_DIR pointing elsewhere must not redirect the command.
 		expect(
 			String(
-				gitExecSync("git status --porcelain", { cwd: repo, encoding: "utf8" }),
+				run(repo, { GIT_DIR: path.join(os.tmpdir(), "escape") }, [
+					"rev-parse",
+					"--git-dir",
+				]),
 			),
-		).toContain("file.txt");
-		expect(() =>
-			gitExecFileSync(["config", "--get", "user.name"], { cwd: repo }),
-		).toThrow();
+		).toBe(".git\n");
+		// The fixture policy is what git reads as global config.
+		expect(String(run(repo, {}, ["config", "--get", "maintenance.auto"]))).toBe(
+			"false\n",
+		);
+	}
+
+	it("keeps gitExecFileSync inside a throwaway repository", () => {
+		expectWrapperInsideRepo((repo, env, args) =>
+			gitExecFileSync(args, { cwd: repo, env, encoding: "utf8" }),
+		);
+	});
+
+	it("keeps gitExecSync inside a throwaway repository", () => {
+		expectWrapperInsideRepo((repo, env, args) =>
+			gitExecSync(`git ${args.join(" ")}`, {
+				cwd: repo,
+				env,
+				encoding: "utf8",
+			}),
+		);
 	});
 });
 // flake-shape: real-process-spawn — real git fixture children resolve sanitized environment variables and repository metadata
