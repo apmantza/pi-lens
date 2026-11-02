@@ -744,7 +744,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-snapshot.ts": 3,
 		"clients/python-provenance.ts": 4,
 		"clients/read-guard-logger.ts": 3,
-		"clients/read-guard-tool-lines.ts": 6,
+		"clients/read-guard-tool-lines.ts": 4,
 		"clients/read-guard.ts": 9,
 		"clients/recent-touches.ts": 2,
 		"clients/resource-sampler.ts": 2,
