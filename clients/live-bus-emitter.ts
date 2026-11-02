@@ -1,6 +1,7 @@
 import { recordDegradation } from "./degradation-ledger.js";
 import { probeCtxActive } from "./session-lifecycle.js";
 import { logBusEvent, type BusEventLogEntry } from "./bus-events-logger.js";
+import { normalizeFilePath } from "./path-utils.js";
 
 /** Resolve a pi event-bus emitter and its ctx at delivery time, not
  * subscription time. */
@@ -35,7 +36,7 @@ const STALE_CTX_MESSAGE =
 	"This extension ctx is stale after session replacement";
 
 /** Ledger a dead activation once, at the publisher's occurrence-window guard. */
-export function recordStaleBusFailure(subject: string, error: unknown): void {
+function recordStaleBusFailure(subject: string, error: unknown): void {
 	const reason = String(error);
 	if (!reason.includes(STALE_CTX_MESSAGE)) return;
 	recordDegradation({ kind: "bus-stale", subject, reason });
@@ -92,7 +93,7 @@ export function createLiveBusEmitter(): LiveBusEmitter {
  * consumed on the `stale-session` branch. Invoking the thunk only there means
  * the common `ready` path pays nothing for it.
  */
-export function resolveLiveBusEmitter(
+function resolveLiveBusEmitter(
 	liveEmitter: LiveBusEmitter,
 	entry: () => Omit<BusEventLogEntry, "ts" | "outcome" | "level">,
 ): BusEmitResolution {
@@ -106,4 +107,139 @@ export function resolveLiveBusEmitter(
 		});
 	}
 	return resolution;
+}
+
+type BusPublishEvent = BusEventLogEntry["event"];
+
+/** One publish attempt, as a producer hands it to {@link BusPublisher.publish}. */
+export interface BusPublishCall<P> {
+	event: BusPublishEvent;
+	/** The kill switch's answer (`isBusPublishEnabled()`), read by the caller. */
+	enabled?: boolean;
+	/** Raw cwd; the seam normalizes it at most once per call, and only when a record needs it. */
+	cwd: string;
+	/** Fields every skip and failure row of this producer repeats (files:touched `reason`). */
+	extra?: Pick<BusEventLogEntry, "reason">;
+	/** Work that runs only when the kill switch is on, before the emitter resolves. */
+	whenEnabled?: () => void;
+	/** Build the payload from the normalized cwd. Runs inside the failure guard. */
+	build: (cwd: string) => P;
+	/** Fields of the `emitted` row beyond event, outcome, cwd and `extra`. */
+	emittedFields?: (payload: P) => Partial<BusEventLogEntry>;
+	dbg?: ((msg: string) => void) | undefined;
+}
+
+export interface BusPublisher {
+	publish<P>(call: BusPublishCall<P>): void;
+	/** Re-arm the three once-per-process latches. Tests only: no session resets them. */
+	reset(): void;
+}
+
+export interface BusPublisherOptions {
+	/** Names the producer in the `dbg` line of a first failure. */
+	module: string;
+	/**
+	 * Replaces the default `skipped_unwired` row, once per process. `lens-events`
+	 * writes its drop to the extension log, so this seam holds the latch for it.
+	 */
+	onUnwired?: (event: BusPublishEvent) => void;
+}
+
+/**
+ * The one publish path every `pi.events` producer runs (defect shape 83: it
+ * replaced eight hand-copied bodies). One publisher is one latch scope: the
+ * three latches below are shared by every event published through it. Order,
+ * which the producers' tests pin:
+ * kill switch (one `skipped_disabled` row per process), the producer's
+ * `whenEnabled` work, the live-emitter resolve (a stale target is declined and
+ * recorded, an unwired one is recorded once per process), then payload build
+ * and emit under one guard. A throw writes `emit_failed` every time and
+ * ledgers and `dbg`-logs the first of each run of failures; a success re-arms
+ * that latch. Never throws.
+ */
+export function createBusPublisher(
+	liveEmitter: LiveBusEmitter,
+	options: BusPublisherOptions,
+): BusPublisher {
+	let failureLogged = false;
+	let unwiredLogged = false;
+	let disabledLogged = false;
+	return {
+		publish<P>(call: BusPublishCall<P>): void {
+			const { event } = call;
+			let normalized: string | undefined;
+			const cwd = (): string => {
+				normalized ??= normalizeFilePath(call.cwd);
+				return normalized;
+			};
+			const extra = call.extra ?? {};
+			if (call.enabled === false) {
+				if (!disabledLogged) {
+					disabledLogged = true;
+					logBusEvent({
+						event,
+						outcome: "skipped_disabled",
+						cwd: cwd(),
+						...extra,
+					});
+				}
+				return;
+			}
+			call.whenEnabled?.();
+			const resolution = resolveLiveBusEmitter(liveEmitter, () => ({
+				event,
+				cwd: cwd(),
+				...extra,
+			}));
+			if (resolution.outcome === "stale-session") return;
+			if (resolution.outcome === "unwired") {
+				if (!unwiredLogged) {
+					unwiredLogged = true;
+					if (options.onUnwired) options.onUnwired(event);
+					else {
+						logBusEvent({
+							event,
+							outcome: "skipped_unwired",
+							cwd: cwd(),
+							...extra,
+						});
+					}
+				}
+				return;
+			}
+			try {
+				const payload = call.build(cwd());
+				resolution.emit(event, payload);
+				failureLogged = false;
+				logBusEvent({
+					event,
+					outcome: "emitted",
+					cwd: cwd(),
+					...extra,
+					...call.emittedFields?.(payload),
+				});
+			} catch (err) {
+				logBusEvent({
+					event,
+					outcome: "emit_failed",
+					cwd: cwd(),
+					...extra,
+					error: String(err),
+					ctxSource: resolution.ctxSource,
+				});
+				if (!failureLogged) {
+					failureLogged = true;
+					recordStaleBusFailure(event, err);
+					call.dbg?.(
+						`${options.module}: ${event} emit failed (further failures suppressed): ${err}`,
+					);
+				}
+			}
+		},
+		reset() {
+			failureLogged = false;
+			unwiredLogged = false;
+			disabledLogged = false;
+		},
+	};
 }

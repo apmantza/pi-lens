@@ -24,6 +24,33 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import {
+	createBusPublisher,
+	createLiveBusEmitter,
+} from "../../clients/live-bus-emitter.js";
+import {
+	_resetDiagnosticsPublishForTests,
+	publishDiagnostics,
+	wireDiagnosticsBusEmitterGetter,
+} from "../../clients/diagnostics-publish.js";
+import {
+	_resetDispositionPublishForTests,
+	publishDisposition,
+	wireDispositionBusEmitterGetter,
+} from "../../clients/disposition-publish.js";
+import {
+	_resetFormatEventsPublishForTests,
+	publishAutofixStart,
+	publishFormatDone,
+	publishFormatQueued,
+	publishFormatStart,
+	wireFormatEventsBusEmitterGetter,
+} from "../../clients/format-events-publish.js";
+import {
+	_resetForTests as _resetLensEventsForTests,
+	emitLensTurnFindings,
+	initLensEventsGetter,
+} from "../../clients/lens-events.js";
 
 describe("bus-publish — pilens:files:touched (#482)", () => {
 	const originalEnv = process.env.PI_LENS_BUS_PUBLISH;
@@ -595,10 +622,35 @@ describe("bus-publish — pilens:files:touched (#482)", () => {
 				expect.objectContaining({
 					event: BUS_FILES_TOUCHED_EVENT,
 					outcome: "emit_failed",
+					reason: "autofix",
 					error: expect.stringContaining("bus explosion"),
 					ctxSource: "global-fallback",
 				}),
 			);
+		});
+
+		it("repeats the files:touched reason on its skip rows", () => {
+			const touch = () =>
+				publishFilesTouched({
+					reason: "autofix",
+					paths: ["/repo/a.ts"],
+					cwd: "/repo",
+				});
+			touch();
+			process.env.PI_LENS_BUS_PUBLISH = "0";
+			_resetForTests();
+			touch();
+			const skipped = logBusEvent.mock.calls
+				.map(([entry]) => entry as { outcome: string; reason?: string })
+				.filter((entry) => entry.outcome.startsWith("skipped_"));
+			expect(skipped.map((entry) => entry.outcome)).toEqual([
+				"skipped_unwired",
+				"skipped_disabled",
+			]);
+			expect(skipped.map((entry) => entry.reason)).toEqual([
+				"autofix",
+				"autofix",
+			]);
 		});
 
 		it("does not log anything for an empty paths batch", () => {
@@ -606,4 +658,276 @@ describe("bus-publish — pilens:files:touched (#482)", () => {
 			expect(logBusEvent).not.toHaveBeenCalled();
 		});
 	});
+});
+
+/**
+ * Recurrence these cells prevent (shape 83): eight publish functions in
+ * five producers each hand-copied the disabled / unwired / stale / failure-latch
+ * dance, and only some of the copies had a cell for each branch (the format
+ * start, done and autofix events, the disposition event and the lens events had
+ * none). Each producer's public caller is driven through `createBusPublisher`
+ * with its real wiring, so a fault in the shared path reds every row.
+ */
+describe("shared publish seam: every pi.events producer", () => {
+	const originalEnv = process.env.PI_LENS_BUS_PUBLISH;
+	const staleCtx = {
+		isIdle: () => {
+			throw new Error("This extension ctx is stale after session replacement");
+		},
+	};
+	const liveCtx = { isIdle: () => {} };
+
+	type Site = {
+		name: string;
+		event: string;
+		wireGetter: (getter: () => unknown) => void;
+		/** Invoke the public caller once; resolves after a deferred emit settles. */
+		call: (dbg: (msg: string) => void) => Promise<void>;
+		/** The caller writes its unwired drop to the bus log (lens-events does not). */
+		unwiredRow: boolean;
+		/** The caller honours the kill switch and takes a `dbg` callback. */
+		killSwitch: boolean;
+	};
+	const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
+	const sites: Site[] = [
+		{
+			name: "files:touched",
+			event: "pilens:files:touched",
+			wireGetter: (g) => wireBusEmitterGetter(g as never),
+			call: async (dbg) =>
+				publishFilesTouched({
+					reason: "format",
+					paths: ["/repo/a.ts"],
+					cwd: "/repo",
+					dbg,
+				}),
+			unwiredRow: true,
+			killSwitch: true,
+		},
+		{
+			name: "diagnostics",
+			event: "pilens:diagnostics",
+			wireGetter: (g) => wireDiagnosticsBusEmitterGetter(g as never),
+			call: async (dbg) =>
+				publishDiagnostics({
+					cwd: "/repo",
+					files: [{ path: "/repo/a.ts", diagnostics: [] }],
+					dbg,
+				}),
+			unwiredRow: true,
+			killSwitch: true,
+		},
+		{
+			name: "diagnostic:disposition",
+			event: "pilens:diagnostic:disposition",
+			wireGetter: (g) => wireDispositionBusEmitterGetter(g as never),
+			call: async (dbg) =>
+				publishDisposition({
+					cwd: "/repo",
+					filePath: "/repo/a.ts",
+					disposition: "suppress",
+					anchor: "x",
+					dbg,
+				}),
+			unwiredRow: true,
+			killSwitch: true,
+		},
+		{
+			name: "format:queued",
+			event: "pilens:format:queued",
+			wireGetter: (g) => wireFormatEventsBusEmitterGetter(g as never),
+			call: async (dbg) =>
+				publishFormatQueued({
+					cwd: "/repo",
+					filePath: "/repo/a.ts",
+					tool: "edit",
+					kinds: ["format"],
+					dbg,
+				}),
+			unwiredRow: true,
+			killSwitch: true,
+		},
+		{
+			name: "format:start",
+			event: "pilens:format:start",
+			wireGetter: (g) => wireFormatEventsBusEmitterGetter(g as never),
+			call: async (dbg) =>
+				publishFormatStart({ cwd: "/repo", paths: ["/repo/a.ts"], dbg }),
+			unwiredRow: true,
+			killSwitch: true,
+		},
+		{
+			name: "format:done",
+			event: "pilens:format:done",
+			wireGetter: (g) => wireFormatEventsBusEmitterGetter(g as never),
+			call: async (dbg) =>
+				publishFormatDone({ cwd: "/repo", paths: ["/repo/a.ts"], dbg }),
+			unwiredRow: true,
+			killSwitch: true,
+		},
+		{
+			name: "autofix:start",
+			event: "pilens:autofix:start",
+			wireGetter: (g) => wireFormatEventsBusEmitterGetter(g as never),
+			call: async (dbg) =>
+				publishAutofixStart({
+					cwd: "/repo",
+					paths: ["/repo/a.ts"],
+					eligibleCount: 1,
+					dbg,
+				}),
+			unwiredRow: true,
+			killSwitch: true,
+		},
+		{
+			name: "lens turn-findings",
+			event: "pi-lens/turn-findings",
+			wireGetter: (g) => initLensEventsGetter(g as never),
+			call: async () => {
+				emitLensTurnFindings({
+					cwd: "/repo",
+					filePaths: ["/repo/a.ts"],
+					sessionId: "s",
+					turnIndex: 1,
+					blockerSections: 0,
+					advisorySections: 0,
+					content: "c",
+				});
+				await tick();
+			},
+			unwiredRow: false,
+			killSwitch: false,
+		},
+	];
+
+	const resetAll = () => {
+		_resetForTests();
+		_resetDiagnosticsPublishForTests();
+		_resetDispositionPublishForTests();
+		_resetFormatEventsPublishForTests();
+		_resetLensEventsForTests();
+		resetDegradationLedger();
+		logBusEvent.mockClear();
+	};
+	const rows = (event: string, outcome: string) =>
+		logBusEvent.mock.calls
+			.map(([entry]) => entry as { event: string; outcome: string })
+			.filter((entry) => entry.event === event && entry.outcome === outcome);
+
+	beforeEach(() => {
+		delete process.env.PI_LENS_BUS_PUBLISH;
+		resetAll();
+	});
+	afterEach(() => {
+		if (originalEnv === undefined) delete process.env.PI_LENS_BUS_PUBLISH;
+		else process.env.PI_LENS_BUS_PUBLISH = originalEnv;
+		resetAll();
+	});
+
+	it("hands the first unwired publish of a process to onUnwired, with its event, instead of a bus row", () => {
+		// The lens producer writes its drop to the extension log, so the seam owns
+		// that once-per-process latch for it (the log line itself is a no-op in
+		// test mode).
+		const onUnwired = vi.fn();
+		const publisher = createBusPublisher(createLiveBusEmitter(), {
+			module: "probe",
+			onUnwired,
+		});
+		const call = (event: "pi-lens/findings" | "pi-lens/turn-findings") =>
+			publisher.publish({ event, cwd: "/repo", build: () => ({}) });
+		call("pi-lens/findings");
+		call("pi-lens/turn-findings");
+		expect(onUnwired.mock.calls).toEqual([["pi-lens/findings"]]);
+		expect(rows("pi-lens/findings", "skipped_unwired")).toHaveLength(0);
+		publisher.reset();
+		call("pi-lens/turn-findings");
+		expect(onUnwired.mock.calls).toEqual([
+			["pi-lens/findings"],
+			["pi-lens/turn-findings"],
+		]);
+	});
+
+	for (const site of sites) {
+		describe(site.name, () => {
+			it("emits to a live target and logs one emitted row", async () => {
+				const emit = vi.fn();
+				site.wireGetter(() => ({ emit, ctx: liveCtx }));
+				await site.call(() => {});
+				expect(emit).toHaveBeenCalledTimes(1);
+				expect(emit.mock.calls[0][0]).toBe(site.event);
+				expect(rows(site.event, "emitted")).toHaveLength(1);
+			});
+
+			if (site.unwiredRow) {
+				it("logs skipped_unwired once per process when no bus was wired", async () => {
+					await site.call(() => {});
+					await site.call(() => {});
+					expect(rows(site.event, "skipped_unwired")).toHaveLength(1);
+				});
+			}
+
+			if (!site.unwiredRow) {
+				it("writes its unwired drop to the extension log, never to the bus log", async () => {
+					await site.call(() => {});
+					await site.call(() => {});
+					expect(rows(site.event, "skipped_unwired")).toHaveLength(0);
+				});
+			}
+
+			if (site.killSwitch) {
+				it("logs skipped_disabled once and never emits when the kill switch is off", async () => {
+					process.env.PI_LENS_BUS_PUBLISH = "0";
+					resetAll();
+					const emit = vi.fn();
+					site.wireGetter(() => ({ emit, ctx: liveCtx }));
+					await site.call(() => {});
+					await site.call(() => {});
+					expect(emit).not.toHaveBeenCalled();
+					expect(rows(site.event, "skipped_disabled")).toHaveLength(1);
+				});
+			}
+
+			it("declines a stale-session target, logging each decline and never emitting", async () => {
+				const emit = vi.fn();
+				site.wireGetter(() => ({ emit, ctx: staleCtx }));
+				await site.call(() => {});
+				await site.call(() => {});
+				expect(emit).not.toHaveBeenCalled();
+				expect(rows(site.event, "skipped_stale_session")).toHaveLength(2);
+			});
+
+			it("logs every emit failure with its ctx source but reports the first of a run once, re-armed by a success", async () => {
+				const dbg = vi.fn();
+				let mode: "throw" | "ok" = "throw";
+				const emit = vi.fn(() => {
+					if (mode === "throw") {
+						throw new Error(
+							"This extension ctx is stale after session replacement",
+						);
+					}
+				});
+				site.wireGetter(() => ({ emit, ctx: liveCtx }));
+				await site.call(dbg);
+				await site.call(dbg);
+				expect(rows(site.event, "emit_failed")).toHaveLength(2);
+				expect(rows(site.event, "emit_failed")[0]).toMatchObject({
+					ctxSource: "own",
+					error: expect.stringContaining("stale after session replacement"),
+				});
+				expect(getDegradationSummary()).toEqual([
+					expect.objectContaining({ kind: "bus-stale", count: 1 }),
+				]);
+				if (site.killSwitch) expect(dbg).toHaveBeenCalledTimes(1);
+				mode = "ok";
+				await site.call(dbg);
+				mode = "throw";
+				await site.call(dbg);
+				expect(rows(site.event, "emit_failed")).toHaveLength(3);
+				expect(getDegradationSummary()).toEqual([
+					expect.objectContaining({ kind: "bus-stale", count: 2 }),
+				]);
+				if (site.killSwitch) expect(dbg).toHaveBeenCalledTimes(2);
+			});
+		});
+	}
 });

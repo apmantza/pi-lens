@@ -59,12 +59,10 @@
  * fields may be added under `v: 1`; a breaking change to an existing field's
  * meaning must bump `v`.
  */
-import { logBusEvent } from "./bus-events-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
 import {
+	createBusPublisher,
 	createLiveBusEmitter,
-	recordStaleBusFailure,
-	resolveLiveBusEmitter,
 	type BusEmitFn,
 	type BusEmitGetter,
 } from "./live-bus-emitter.js";
@@ -116,9 +114,9 @@ export interface PilensDiagnosticsPayload {
 }
 
 const liveEmitter = createLiveBusEmitter();
-let hasLoggedFailure = false;
-let hasLoggedUnwired = false;
-let hasLoggedDisabled = false;
+const publisher = createBusPublisher(liveEmitter, {
+	module: "diagnostics-publish",
+});
 let seqCounter = 0;
 
 /** Paths this producer has reported with at least one non-empty diagnostics array, so we know when to fire the one-time clean-transition event. */
@@ -142,9 +140,7 @@ export function wireDiagnosticsBusEmitterGetter(
 /** Test-only: reset module state between test files. */
 export function _resetDiagnosticsPublishForTests(): void {
 	liveEmitter.reset();
-	hasLoggedFailure = false;
-	hasLoggedUnwired = false;
-	hasLoggedDisabled = false;
+	publisher.reset();
 	seqCounter = 0;
 	reportedDirtyPaths.clear();
 }
@@ -210,86 +206,43 @@ function capDiagnostics(diagnostics: PilensDiagnosticEntry[]): {
 export function publishDiagnostics(args: PublishDiagnosticsArgs): void {
 	if (args.origin === "bus") return;
 	if (args.files.length === 0) return;
-	if (!isBusPublishEnabled()) {
-		if (!hasLoggedDisabled) {
-			hasLoggedDisabled = true;
-			logBusEvent({
-				event: BUS_DIAGNOSTICS_EVENT,
-				outcome: "skipped_disabled",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const resolution = resolveLiveBusEmitter(liveEmitter, () => ({
+	publisher.publish<PilensDiagnosticsPayload>({
 		event: BUS_DIAGNOSTICS_EVENT,
-		cwd: normalizeFilePath(args.cwd),
-	}));
-	if (resolution.outcome === "stale-session") return;
-	if (resolution.outcome === "unwired") {
-		if (!hasLoggedUnwired) {
-			hasLoggedUnwired = true;
-			logBusEvent({
-				event: BUS_DIAGNOSTICS_EVENT,
-				outcome: "skipped_unwired",
-				cwd: normalizeFilePath(args.cwd),
+		enabled: isBusPublishEnabled(),
+		cwd: args.cwd,
+		build: (cwd) => {
+			const fileEntries: PilensDiagnosticsFileEntry[] = args.files.map((f) => {
+				const normPath = normalizeFilePath(f.path);
+				const { capped, truncated } = capDiagnostics(f.diagnostics);
+				if (capped.length > 0) {
+					reportedDirtyPaths.add(normPath);
+				} else {
+					reportedDirtyPaths.delete(normPath);
+				}
+				const entry: PilensDiagnosticsFileEntry = {
+					path: normPath,
+					diagnostics: capped,
+				};
+				if (truncated) entry.truncated = true;
+				return entry;
 			});
-		}
-		return;
-	}
-	const busEmit = resolution.emit;
 
-	try {
-		const fileEntries: PilensDiagnosticsFileEntry[] = args.files.map((f) => {
-			const normPath = normalizeFilePath(f.path);
-			const { capped, truncated } = capDiagnostics(f.diagnostics);
-			if (capped.length > 0) {
-				reportedDirtyPaths.add(normPath);
-			} else {
-				reportedDirtyPaths.delete(normPath);
-			}
-			const entry: PilensDiagnosticsFileEntry = {
-				path: normPath,
-				diagnostics: capped,
+			seqCounter += 1;
+			return {
+				v: BUS_DIAGNOSTICS_VERSION,
+				source: "pi-lens",
+				cwd,
+				seq: seqCounter,
+				ts: Date.now(),
+				files: fileEntries,
 			};
-			if (truncated) entry.truncated = true;
-			return entry;
-		});
-
-		seqCounter += 1;
-		const payload: PilensDiagnosticsPayload = {
-			v: BUS_DIAGNOSTICS_VERSION,
-			source: "pi-lens",
-			cwd: normalizeFilePath(args.cwd),
-			seq: seqCounter,
-			ts: Date.now(),
-			files: fileEntries,
-		};
-		busEmit(BUS_DIAGNOSTICS_EVENT, payload);
-		hasLoggedFailure = false;
-		logBusEvent({
-			event: BUS_DIAGNOSTICS_EVENT,
-			outcome: "emitted",
-			cwd: payload.cwd,
+		},
+		emittedFields: (payload) => ({
 			fileCount: payload.files.length,
 			seq: payload.seq,
-		});
-	} catch (err) {
-		logBusEvent({
-			event: BUS_DIAGNOSTICS_EVENT,
-			outcome: "emit_failed",
-			cwd: normalizeFilePath(args.cwd),
-			error: String(err),
-			ctxSource: resolution.ctxSource,
-		});
-		if (!hasLoggedFailure) {
-			hasLoggedFailure = true;
-			recordStaleBusFailure(BUS_DIAGNOSTICS_EVENT, err);
-			args.dbg?.(
-				`diagnostics-publish: pilens:diagnostics emit failed (further failures suppressed): ${err}`,
-			);
-		}
-	}
+		}),
+		dbg: args.dbg,
+	});
 }
 
 /**
