@@ -510,7 +510,8 @@ describe("published manifest carries no devDependencies", () => {
 			expect(notes).toBe(
 				fs.readFileSync(path.join(root, "CHANGELOG-USER.md"), "utf8"),
 			);
-			expect(notes).toContain("## [");
+			// #5202: an Unreleased heading alone must not satisfy the packed release witness.
+			expect(notes).toMatch(/^## \[\d+\.\d+\.\d+\]/m);
 			expect(notes).not.toContain("### Internal");
 
 			const packedPaths = (

@@ -1,50 +1,5 @@
 # User changelog
 
-## [Unreleased]
-
-### Added
-
-- **Built-in Groovy language server row.** `.groovy`, `.gvy`, `.gy` and `.gsh` files get a `groovy` LSP row for `lens_diagnostics` (`source: "lsp"`) and `lsp_navigation`. groovy-language-server publishes no release, so nothing is downloaded: pi-lens runs a `groovy-language-server` launcher from `PATH`, else `java -jar` on the jar named by `GROOVY_LANGUAGE_SERVER_JAR` (build it with `./gradlew build`), on a JDK 17 or newer found the way the Java server finds one. The server publishes only for files with errors, so a file it stays silent for reads `inconclusive`, never clean; a held empty publish no longer erases an error it just reported. `.gradle` and `Jenkinsfile` stay out unless configured under `lsp.servers`. (#5123)
-
-- **Shorter extension update notes** — pi's Extension Updates view now reads a user changelog limited to the latest five releases, without Internal blocks.
-
-### Changed
-
-- **`module_report` view is now a preset** — `view` names projection ×
-  format: `summary-text` (default, metrics off, text), `summary-json`,
-  `full-text`, `full-json` (every field, JSON). Applies to `module_report`
-  and `pilens_module_report`. The text cell mirrors its JSON payload field by
-  field (metrics as `cx:`/`fan:` suffixes, flags per bracket, `used-by:`
-  lines, `IMPORTS:` / `CALL GRAPH:` / `BLAST RADIUS:` blocks, `PROVENANCE:`
-  footer), with one declared exception: a member's own `exported` flag rides
-  on its container's section and has no member-level marker. The stale
-  `summary` / `default` / `compact` names fall through to the default, and a
-  `maxRefsPerSymbol` argument promotes the projection to `full`. MCP no
-  longer wraps the payload in a fenced JSON block.
-  (refs #5137)
-
-- **`project_report` returns a line-oriented text report by default (refs #5150)** — the tool and its MCP mirror `pilens_project_report` now answer with the compact text cell on every path, warm or cold, so the first tool an agent calls no longer spends a full JSON document on an orientation read. Pass `view: "json"` to get the same engine document as before, byte-for-byte; any other value falls through to text. The MCP warm path also stops appending a fenced JSON copy and reports staleness in its own trailing block.
-
-### Fixed
-
-- **A partial edit apply now reaches other extensions' pre-write guards (closes #5120)** — When some edits of a batch matched and others did not, pi-lens wrote the matched edits itself from its `tool_call` handler, so an extension loaded after pi-lens never saw those bytes and could not refuse them. pi-lens now narrows the call's `edits` to the matched ones and lets pi's own edit tool write them, so every later `tool_call` handler sees exactly what will be written. The agent still gets the `⚠️ PARTIAL APPLY` message, now on the edit's own result. What changes for sessions with several extensions: a guard loaded after pi-lens is shown the narrowed batch, not the agent's full one, and can refuse it. A guard loaded before pi-lens still sees only the agent's batch, because pi does not re-run earlier handlers. The narrowed batch also goes through pi-lens's own read checks, so an edit to a file the agent never read is refused before anything is written. If the file changed after the check, pi's edit refuses the whole batch and the agent is told nothing was written.
-
-- **An unknown id in `lsp.disabledServers` is reported and dropped.** A misspelled server id used to stay in the deny list with no notice and match no server, so a server you meant to turn off kept running. pi-lens now prints one `PILENS_CFG_0005` notice per unknown id, as `dispatch.disabledRunners` already does. Built-in server ids and servers declared under `lsp.servers` stay valid. (refs #5141)
-
-- **PowerShell scripts with a UTF-8 BOM no longer get false syntax errors.** PowerShell Editor Services reported them because pi-lens sent the file's leading U+FEFF to the server as document text, which the server parses as a token. It now sends one space in its place, so every column and line ending stays where it is, and the file on disk is not touched. Other language servers receive the text as before. (refs #5151)
-
-- **Headless sessions exit after an LSP server stops mid-message.** Disable the unused vscode-jsonrpc partial-message timeout before listening so no pending tick delays teardown. Thanks to SlanyCukr for the analysis. (#5169)
-
-- **A blocker withheld from a script-written file now reaches the agent when its check runs long (closes #5108)** — when a file the agent wrote through a script was checked by a slow first-run analyzer (a cold Pyright, say), pi-lens stopped waiting after 10 seconds and the finding it had withheld reached nobody. The check now tells the agent at its next turn that it finished late, which file holds blockers, and where to list them, once per file.
-
-- **Cursor's replayed edit cards are no longer refused "Edit without read" (refs #5160)** — pi-cursor-sdk replays Cursor's native work as display-only tool calls (ids prefixed `cursor-replay-`) after the files are already written. pi-lens learned the neutral `cursor` replay tool as a mutating tool and then refused every later one, turning each Cursor edit card red. Calls with that id prefix are now never armed for learning, never classified from a learned name (a `cursor` entry already saved in `observed-mutating-tools.json` is ignored for them) and never checked by the read guard, including replays shown as built-in `edit`. They take no before/after diff of the project either, and a replayed `edit`, `write` or `bash` no longer re-records another writer's change as the agent's own write. Real `edit` and `write` calls, Cursor's real bridged executions (`cursor-pi-bridge-*`) and tools that really mutate are checked as before.
-
-- **An unknown or wrong-typed config key now prints its own code, not `PILENS_CFG_0001`.** A misspelled key such as `lps` prints `PILENS_CFG_0004`, and a value the schema rejects such as `format.mode: "nonsense"` prints `PILENS_CFG_0005`. `PILENS_CFG_0001` now means only that a config file is unreadable, unparsable, or not a JSON object. If you filter on `PILENS_CFG_0001` to hide these notices, filter on `PILENS_CFG_0004` and `PILENS_CFG_0005` as well, because the typo notices move to those codes. (refs #5140)
-
-### Security
-
-- **An untrusted project can no longer set `args` or other launch fields of your LSP servers (#5147)** — a `.pi-lens.json` from a project pi has not marked trusted could set `lsp.servers.<id>.args` for a server declared in your global config, and the flags reached the server's argv. Without trust a project may now set only `name`; if it sets any other field (`args`, `rootMarkers`, `covers`, `extensions`, `env`, `initializationOptions`, `command`, `enabled`, `role`, or a field pi-lens does not recognise) on a server, that server is not started for the project, so a repo cannot start your server on flags it chose or with your own flags stripped. A refused field under `lsp.serverOverrides` drops only the project's fields: your own global override for that built-in still applies, wrapper `command` included, and the built-in stays on. A server entry with no `extensions` list (such as `{"name":"x"}`) is no longer registered, so it cannot make server selection throw `server.extensions is not iterable`. One `lsp-registry-decision` record per field says so. A trusted project and a global-only config behave as before.
-
 ## [4.4.8] - 2026-11-01
 
 ### Added

@@ -29,11 +29,11 @@ function fixture() {
 	fs.mkdirSync(path.join(root, ".changelog"));
 	fs.writeFileSync(
 		path.join(root, "CHANGELOG.md"),
-		"# Changelog\n\n## [Unreleased]\n\n" +
+		"# Changelog\n\n## [Unreleased]\n\n### Added\n\n- **Unreleased feature** is pending.\n\n" +
 			Array.from(
 				{ length: 7 },
 				(_, i) =>
-					`## [1.0.${7 - i}] - 2026-01-01\n\n### Added\n\n- **Public ${7 - i}** [guide](docs/usage.md).\n\n### Internal\n\n<details>\n<summary>private</summary>\n\n- secret ${i}\n\n</details>\n\n### Fixed\n\n- **Visible fix** works.\n\n`,
+					`## [1.0.${7 - i}] - 2026-01-01\n\n### Added\n\n- **Public ${7 - i}** [guide](docs/usage.md), [root](/docs/root.md), [anchor](#usage), [external](https://example.com/guide), [cdn](//example.com/a).\n\n### Internal\n\n<details>\n<summary>private</summary>\n\n- secret ${i}\n\n</details>\n\n### Fixed\n\n- **Visible fix** works.\n\n`,
 			).join(""),
 	);
 	for (const audience of ["user", "internal"])
@@ -51,11 +51,17 @@ it("emits five public releases with absolute links readable by pi across a versi
 	expect(text).not.toMatch(
 		/secret|<details>|<summary>|### Internal|Pending internal/,
 	);
-	expect(text).toContain("Pending user");
+	expect(text).not.toMatch(/Pending|Unreleased/);
 	expect(text).not.toContain("### Deprecated");
 	expect(text).toContain(
 		"https://github.com/apmantza/pi-lens/blob/v1.0.7/docs/usage.md",
 	);
+	for (const target of ["v1.0.7/docs/root.md", "v1.0.7/CHANGELOG.md#usage"])
+		expect(text).toContain(
+			`https://github.com/apmantza/pi-lens/blob/${target}`,
+		);
+	expect(text).toContain("https://example.com/guide");
+	expect(text).toContain("https://example.com/a");
 	const entries = parseChangelog(file);
 	expect(entries.map((entry) => entry.patch)).toEqual([7, 6, 5, 4, 3]);
 	expect(
@@ -64,13 +70,19 @@ it("emits five public releases with absolute links readable by pi across a versi
 	expect(entries[0].content).toContain("Public 7");
 	expect(entries[0].content).toContain("Visible fix");
 });
-it("checks drift from both released content and pending audience fragments", () => {
+it("ignores pending fragments and checks released-file drift", () => {
 	const root = fixture();
 	rollup.writeUserChangelog({ rootDir: root });
 	expect(() => rollup.checkUserChangelog({ rootDir: root })).not.toThrow();
 	fs.appendFileSync(
 		path.join(root, ".changelog/user.md"),
 		"  more user detail\n",
+	);
+	expect(() => rollup.checkUserChangelog({ rootDir: root })).not.toThrow();
+	const source = path.join(root, "CHANGELOG.md");
+	fs.writeFileSync(
+		source,
+		fs.readFileSync(source, "utf8").replace("Public 7", "Released change"),
 	);
 	expect(() => rollup.checkUserChangelog({ rootDir: root })).toThrow(
 		/CHANGELOG-USER.md/,
@@ -126,4 +138,12 @@ it("the check CLI rejects a stale user changelog", async () => {
 		process.argv = argv;
 		process.exitCode = exitCode;
 	}
+});
+
+// #5202 F2: Unit tests must read the actual shipped artifact.
+it("the shipped user changelog matches the last five released sections", () => {
+	expect(() => rollup.checkUserChangelog()).not.toThrow();
+	expect(fs.readFileSync("CHANGELOG-USER.md", "utf8")).not.toContain(
+		"## [Unreleased]",
+	);
 });

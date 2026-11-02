@@ -153,20 +153,21 @@ function renderInternal(entries) {
 	return `### ${INTERNAL_HEADING}\n\n<details>\n<summary>${summary}</summary>\n\n${entries.join("\n\n")}\n\n</details>`;
 }
 
-function renderBody(...bodies) {
+function renderBody(bodies, sections = RELEASE_SECTIONS) {
 	const combined = new Map(RELEASE_SECTIONS.map((section) => [section, []]));
 	for (const body of bodies) {
 		const buckets = bucketSectionBody(body);
 		for (const section of RELEASE_SECTIONS)
 			combined.get(section).push(...buckets.get(section));
 	}
-	return RELEASE_SECTIONS.map((section) => {
-		const content = combined.get(section).filter(Boolean);
-		if (!content.length) return "";
-		return section === INTERNAL_HEADING
-			? renderInternal(content)
-			: `### ${section}\n\n${content.join("\n\n")}`;
-	})
+	return sections
+		.map((section) => {
+			const content = combined.get(section).filter(Boolean);
+			if (!content.length) return "";
+			return section === INTERNAL_HEADING
+				? renderInternal(content)
+				: `### ${section}\n\n${content.join("\n\n")}`;
+		})
 		.filter(Boolean)
 		.join("\n\n");
 }
@@ -179,30 +180,13 @@ export function renderUserChangelog({
 	rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
 } = {}) {
 	const source = fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8");
-	const entries = validateChangelogEntries({ rootDir });
 	const sections = parseSections(source);
-	const publicBody = (body, ref) => {
-		const buckets = bucketSectionBody(body);
-		return CHANGELOG_SECTIONS.map((section) => {
-			const content = buckets.get(section).join("\n\n");
-			return content ? `### ${section}\n\n${content}` : "";
-		})
-			.filter(Boolean)
-			.join("\n\n")
-			.replace(
-				/(!?\[[^\]\n]+\]\()([^\s)]+)([^)]*\))/g,
-				(_match, prefix, target, suffix) =>
-					`${prefix}${new URL(target, `https://github.com/apmantza/pi-lens/blob/${ref}/`).href}${suffix}`,
-			);
-	};
-	const pending = entries
-		.filter((entry) => entry.audience === "user")
-		.map((entry) => `### ${entry.section}\n\n${entry.entry}`)
-		.join("\n\n");
-	const unreleased = publicBody(
-		`${extractSection(source, "Unreleased") ?? ""}\n${pending}`,
-		"master",
-	);
+	const publicBody = (body, ref) =>
+		renderBody([body], CHANGELOG_SECTIONS).replace(
+			/(!?\[[^\]\n]+\]\()([^\s)]+)([^)]*\))/g,
+			(_match, prefix, target, suffix) =>
+				`${prefix}${new URL(target.replace(/^\/(?!\/)/, ""), `https://github.com/apmantza/pi-lens/blob/${ref}/CHANGELOG.md`).href}${suffix}`,
+		);
 	const releases = sections
 		.filter((section) => /^\d+\.\d+\.\d+$/.test(section.label))
 		.slice(0, USER_RELEASE_LIMIT)
@@ -210,7 +194,7 @@ export function renderUserChangelog({
 			(section) =>
 				`${section.heading}\n\n${publicBody(section.body, `v${section.label}`)}`,
 		);
-	return `# User changelog\n\n## [Unreleased]\n\n${unreleased}\n\n${releases.join("\n\n")}\n`;
+	return `# User changelog\n\n${releases.join("\n\n")}\n`;
 }
 
 export function writeUserChangelog(options = {}) {
@@ -264,7 +248,7 @@ export function rollupChangelog(
 
 	// An internal entry leaves its Keep a Changelog section for the Internal block.
 	const entryBody = renderBody(
-		...RELEASE_SECTIONS.map((section) => {
+		RELEASE_SECTIONS.map((section) => {
 			const content = entries
 				.filter((entry) =>
 					section === INTERNAL_HEADING
@@ -275,7 +259,7 @@ export function rollupChangelog(
 			return content.length ? `### ${section}\n\n${content.join("\n\n")}` : "";
 		}),
 	);
-	const releasedBody = renderBody(existingBody, unreleasedBody, entryBody);
+	const releasedBody = renderBody([existingBody, unreleasedBody, entryBody]);
 	if (!releasedBody)
 		throw new Error("No Unreleased or per-entry changelog content to release.");
 
@@ -328,7 +312,9 @@ if (
 	} else if (version === "--user") {
 		writeUserChangelog();
 	} else if (!version) {
-		console.error("Usage: node scripts/rollup-changelog.mjs <version>|--check");
+		console.error(
+			"Usage: node scripts/rollup-changelog.mjs <version>|--check|--user",
+		);
 		process.exitCode = 1;
 	} else {
 		try {
