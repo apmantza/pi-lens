@@ -184,13 +184,13 @@ function scriptWrite(file: string, content: string): Record<string, unknown> {
 	});
 }
 
-/** How many times the inner pipeline bound has been ledgered in the fixture's log. */
-async function innerBoundRows(): Promise<number> {
+/** How many times an inner pipeline bound has been ledgered in the fixture's log. */
+async function innerBoundRows(label = "pipeline-analysis"): Promise<number> {
 	await flushLatencyLog();
 	return readNdjsonRows(getLatencyLogPath()).rows.filter(
 		(row) =>
 			row.phase === "degradation_ledger" &&
-			row.filePath === "tool_result_edit:pipeline-analysis",
+			row.filePath === `tool_result_edit:${label}`,
 	).length;
 }
 
@@ -201,6 +201,18 @@ async function lateAdvisoryRows(): Promise<number> {
 	expect(read.skipped).toBe(0);
 	return read.rows.filter(
 		(row) => row.phase === "withheld_blocker_late_advisory",
+	).length;
+}
+
+/** How many late REJECTION disclosures the fixture's log holds (#5165 F3). */
+async function crashLateRows(): Promise<number> {
+	await flushLatencyLog();
+	const read = readNdjsonRows(getLatencyLogPath());
+	expect(read.skipped).toBe(0);
+	return read.rows.filter(
+		(row) =>
+			row.phase === "withheld_blocker_late_advisory" &&
+			(row.metadata as { crash?: boolean } | undefined)?.crash === true,
 	).length;
 }
 
@@ -625,6 +637,8 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 						open = resolve;
 					});
 				gate.pipelineReject = state === "rejected";
+				const crashRowsBefore =
+					state === "rejected" ? await crashLateRows() : 0;
 				try {
 					const repo = initRepo(`5165-${member}-${state}`);
 					const target = path.join(repo, "authored.ts");
@@ -683,6 +697,24 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 						expect(commit?.text).toContain(GATE_BLOCK);
 						expect(everyText(live.requests)).toContain("was abandoned");
 						expect(everyText(live.requests)).toContain("analysis");
+						if (state === "rejected") {
+							// #5165 F3: the late rejection discloses on the same phase as the
+							// late success, so the undercount is closed; `crash` keeps the two
+							// populations apart. One record for this call.
+							expect(await crashLateRows()).toBe(crashRowsBefore + 1);
+							const crashRow = readNdjsonRows(getLatencyLogPath())
+								.rows.filter(
+									(row) =>
+										row.phase === "withheld_blocker_late_advisory" &&
+										(row.metadata as { crash?: boolean } | undefined)?.crash ===
+											true,
+								)
+								.at(-1);
+							expect(crashRow?.metadata).toMatchObject({
+								late: "inner-bound",
+								notices: 1,
+							});
+						}
 					}
 					expect(live.errors).toEqual([]);
 				} finally {
@@ -776,6 +808,92 @@ describe("#5108: a blocker on a script-written file is never rendered clean", ()
 					expect(everyText(handle.requests)).toContain("withheld");
 					expect(copiesOfAdvisory(handle.requests)).toBe(1);
 					expect(await lateAdvisoryRows()).toBe(rowsBefore + 1);
+					expect(handle.errors).toEqual([]);
+				} finally {
+					release();
+				}
+			},
+		);
+
+		it(
+			"reports no inline delivery when the host wall discarded the result inside the inner bound",
+			{ timeout: 60_000 },
+			async () => {
+				// Recurrence (Greptile on #5196): the host's 500 ms wall for a
+				// non-edit-class tool result discards what pi-lens returns while the
+				// dispatch inside still has its own 10 s bound to run in. A pipeline
+				// that settles at 2 s logged `shownInline: true` for text the model
+				// never saw, so every opaque bash write and third-party write sat in a
+				// band of false rows up to 9.5 s wide. Defect shape 10.
+				hold("authored.ts", 2_000);
+				try {
+					const observedBoundRowsBefore = await innerBoundRows(
+						"observed-tool-result-analysis",
+					);
+					const repo = initRepo("5165-host-wall");
+					const target = path.join(repo, "authored.ts");
+					fs.writeFileSync(target, CLEAN_FILE);
+					const handle = await startPiSession({
+						root: fixture.root,
+						cwd: repo,
+						flags: new Map(GUARDED_FLAGS),
+						inlineFactory: async () => (await import("../index.js")).default,
+						customTools: [
+							{
+								name: "change_module",
+								label: "Change module",
+								description: "Change module",
+								parameters: Type.Object({ path: Type.String() }),
+								async execute() {
+									fs.writeFileSync(target, BLOCKING_FILE);
+									return {
+										content: [{ type: "text", text: "changed" }],
+										details: undefined,
+									};
+								},
+							},
+						],
+						responses: [
+							step(fauxToolCall("read", { path: target })),
+							step(fauxToolCall("change_module", { path: target })),
+							endTurn("write done"),
+							step(commitAttempt()),
+							endTurn("commit done"),
+						],
+					});
+					await handle.prompt("change the module");
+					await afterPipelines();
+					// The inner 10 s bound did NOT fire: the dispatch settled inside it,
+					// after the host's wall. Without that, the case would be testing the
+					// inner bound instead of the host's. Counted, not read: an earlier
+					// case in this file ledgers the same subject once per session.
+					expect(await innerBoundRows("observed-tool-result-analysis")).toBe(
+						observedBoundRowsBefore,
+					);
+					// The text still reaches the model: the settled dispatch recorded the
+					// blocker, so the next turn's commit gate names it.
+					await handle.prompt("commit it");
+					const commit = toolResults(handle.requests.at(-1) ?? [], "bash").at(
+						-1,
+					);
+					expect(commit?.text).toContain(GATE_BLOCK);
+					expect(commit?.text).toContain("\u{1F534} STOP");
+					await getDiagnosticLogger().flush();
+					const read = readNdjsonRows(
+						path.join(
+							getGlobalPiLensLogDir(),
+							"logs",
+							`${new Date().toISOString().slice(0, 10)}.jsonl`,
+						),
+					);
+					expect(read.skipped).toBe(0);
+					const findings = read.rows.filter(
+						(row) =>
+							row.filePath === target && row.ruleId === "debugger-statement",
+					);
+					expect(findings.length).toBeGreaterThan(0);
+					// The row is honest: pi discarded the result, so nothing was inline.
+					expect(findings.every((row) => row.shownInline === false)).toBe(true);
 					expect(handle.errors).toEqual([]);
 				} finally {
 					release();

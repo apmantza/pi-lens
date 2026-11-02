@@ -681,6 +681,16 @@ interface ToolResultDeps {
 	 */
 	withheldNotices?: string[];
 	/**
+	 * #5165 F1: the HOST's own liveness for this tool result, beside the
+	 * notices the same call collects. The host wall that abandons
+	 * `handleToolResult` is a second bound, and it can discard the returned
+	 * result while the dispatch inside is still inside its own 10 s bound, so
+	 * `delivery.abandoned` alone would let the findings row claim an inline
+	 * delivery the model never saw. The caller flips `abandoned` in the branch
+	 * where its own bound fired; absent means the caller has no such bound.
+	 */
+	hostDelivery?: { abandoned: boolean };
+	/**
 	 * #5108 F1: the session an agent advisory from this tool result is for,
 	 * captured by the caller at handler entry. The coordinator's own scope
 	 * (`writeSession`) is the primary's, while a concurrent secondary's
@@ -1675,7 +1685,8 @@ async function dispatchPipelineAnalysis(args: {
 	const pipelinePromise = runPipeline(
 		{
 			signal: deps.signal,
-			inlineDeliveryAvailable: () => !args.delivery.abandoned,
+			inlineDeliveryAvailable: () =>
+				!args.delivery.abandoned && !deps.hostDelivery?.abandoned,
 			filePath,
 			cwd: dispatchCwd,
 			projectRoot: turnStateCwd,
@@ -1839,6 +1850,21 @@ async function dispatchPipelineAnalysis(args: {
 					deps.advisoryScope ?? sessionGeneration,
 				),
 			);
+			// #5165 F3: the late REJECTION discloses on the same surface as the
+			// late success, so a reader of this phase counts both populations.
+			// `crash` separates them without a second phase name.
+			logLatency({
+				type: "phase",
+				phase: "withheld_blocker_late_advisory",
+				filePath: event.toolName,
+				durationMs: 0,
+				metadata: {
+					notices: 1,
+					budgetMs: HOOK_WALL_BUDGET_MS.tool_result_edit,
+					late: "inner-bound",
+					crash: true,
+				},
+			});
 		}
 
 		return {
