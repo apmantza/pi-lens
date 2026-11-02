@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetGeneratedArtifactCaches } from "../../clients/generated-artifacts.js";
 import {
 	collectSourceFiles,
@@ -33,10 +33,23 @@ import {
 import { removeTempDirSync } from "./test-utils.js";
 
 let tmpDir: string;
+const fsProbe = vi.hoisted(() => ({ openSyncCount: 0 }));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		openSync: ((...args: Parameters<typeof actual.openSync>) => {
+			fsProbe.openSyncCount++;
+			return actual.openSync(...args);
+		}) as typeof actual.openSync,
+	};
+});
 
 beforeEach(() => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sf-async-"));
 	_resetGeneratedArtifactCaches();
+	fsProbe.openSyncCount = 0;
 });
 
 afterEach(() => {
@@ -243,13 +256,17 @@ describe("generated-header read memo", () => {
 
 		writePinned(plain);
 		_resetGeneratedArtifactCaches();
+		fsProbe.openSyncCount = 0;
 		const first = collectSourceFiles(tmpDir);
 		expect(first).toContain(target);
+		expect(fsProbe.openSyncCount).toBeGreaterThan(0);
 
 		// Same size, same mtime, now a generated banner: only a re-read sees it.
 		writePinned(bannered);
+		fsProbe.openSyncCount = 0;
 		const second = collectSourceFiles(tmpDir);
 		expect(new Set(second)).toEqual(new Set(first));
+		expect(fsProbe.openSyncCount).toBe(0);
 
 		// Control: with the memo dropped the same bytes are read and filtered, so
 		// the file above kept its verdict because of the memo, not because the
