@@ -236,12 +236,11 @@ function withoutLaneCopies(
 	const lane = pending.result?.coveredBy;
 	if (lane === undefined) return findings;
 	const standsFor = laneCopyStandsFor(
-		(runtime.getInlineBlockerDiagnostics(pending.filePath) ?? []).flatMap(
-			(d) =>
-				d.runnerId === lane.runnerId &&
-				(lane.serverId === undefined || d.serverId === lane.serverId)
-					? [d]
-					: [],
+		(runtime.getInlineBlockerDiagnostics(pending.filePath) ?? []).flatMap((d) =>
+			d.runnerId === lane.runnerId &&
+			(lane.serverId === undefined || d.serverId === lane.serverId)
+				? [d]
+				: [],
 		),
 	);
 	return findings.flatMap((d) => (standsFor(d) ? [] : [d]));
