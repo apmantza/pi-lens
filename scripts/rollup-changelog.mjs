@@ -6,6 +6,8 @@ import {
 	INTERNAL_HEADING,
 	extractSection,
 	lintSectionBody,
+	parseSections,
+	summarizeSection,
 } from "./lib/changelog.mjs";
 
 export const CHANGELOG_SECTIONS = [
@@ -152,7 +154,7 @@ function renderInternal(entries) {
 	return `### ${INTERNAL_HEADING}\n\n<details>\n<summary>${summary}</summary>\n\n${entries.join("\n\n")}\n\n</details>`;
 }
 
-function renderBody(...bodies) {
+function renderBody(bodies) {
 	const combined = new Map(RELEASE_SECTIONS.map((section) => [section, []]));
 	for (const body of bodies) {
 		const buckets = bucketSectionBody(body);
@@ -168,6 +170,48 @@ function renderBody(...bodies) {
 	})
 		.filter(Boolean)
 		.join("\n\n");
+}
+
+// Five recent releases keep skipped-update notes useful without shipping the
+// full historical changelog to pi's uncapped Extension Updates renderer (#5198).
+export const USER_RELEASE_LIMIT = 5;
+
+export function renderUserChangelog({
+	rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+} = {}) {
+	const source = fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8");
+	const sections = parseSections(source);
+	const releases = sections
+		.filter((section) => /^\d+\.\d+\.\d+$/.test(section.label))
+		.slice(0, USER_RELEASE_LIMIT)
+		.map(
+			(section) =>
+				`${section.heading}\n\n${summarizeSection(section.body)}\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v${section.label}`,
+		);
+	return `# User changelog\n\n${releases.join("\n\n")}\n`;
+}
+
+export function writeUserChangelog(options = {}) {
+	const rootDir =
+		options.rootDir ??
+		path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+	fs.writeFileSync(
+		path.join(rootDir, "CHANGELOG-USER.md"),
+		renderUserChangelog({ rootDir }),
+	);
+}
+
+export function checkUserChangelog(options = {}) {
+	const rootDir =
+		options.rootDir ??
+		path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+	if (
+		fs.readFileSync(path.join(rootDir, "CHANGELOG-USER.md"), "utf8") !==
+		renderUserChangelog({ rootDir })
+	)
+		throw new Error(
+			"CHANGELOG-USER.md is stale; run node scripts/rollup-changelog.mjs --user",
+		);
 }
 
 export function rollupChangelog(
@@ -192,12 +236,13 @@ export function rollupChangelog(
 		existingBody !== null &&
 		!/^\s*[-*]\s/m.test(unreleasedBody)
 	) {
+		writeUserChangelog({ rootDir });
 		return { version, files: [], changelogPath };
 	}
 
 	// An internal entry leaves its Keep a Changelog section for the Internal block.
 	const entryBody = renderBody(
-		...RELEASE_SECTIONS.map((section) => {
+		RELEASE_SECTIONS.map((section) => {
 			const content = entries
 				.filter((entry) =>
 					section === INTERNAL_HEADING
@@ -208,7 +253,7 @@ export function rollupChangelog(
 			return content.length ? `### ${section}\n\n${content.join("\n\n")}` : "";
 		}),
 	);
-	const releasedBody = renderBody(existingBody, unreleasedBody, entryBody);
+	const releasedBody = renderBody([existingBody, unreleasedBody, entryBody]);
 	if (!releasedBody)
 		throw new Error("No Unreleased or per-entry changelog content to release.");
 
@@ -238,6 +283,7 @@ export function rollupChangelog(
 	const next = `${prefix}${EMPTY_UNRELEASED}\n\n## [${version}] - ${date}\n\n${releasedBody}\n\n${remainder.replace(/^\s+/, "")}`;
 	fs.writeFileSync(changelogPath, next.replace(/\s*$/, "\n"), "utf8");
 	for (const entry of entries) fs.unlinkSync(entry.file);
+	writeUserChangelog({ rootDir });
 	return { version, files: entries.map(({ file }) => file), changelogPath };
 }
 
@@ -249,6 +295,7 @@ if (
 	if (version === "--check") {
 		try {
 			const entries = validateChangelogEntries();
+			checkUserChangelog();
 			console.log(
 				`Validated ${entries.length} changelog entr${entries.length === 1 ? "y" : "ies"}.`,
 			);
@@ -256,8 +303,12 @@ if (
 			console.error(error instanceof Error ? error.message : error);
 			process.exitCode = 1;
 		}
+	} else if (version === "--user") {
+		writeUserChangelog();
 	} else if (!version) {
-		console.error("Usage: node scripts/rollup-changelog.mjs <version>|--check");
+		console.error(
+			"Usage: node scripts/rollup-changelog.mjs <version>|--check|--user",
+		);
 		process.exitCode = 1;
 	} else {
 		try {
