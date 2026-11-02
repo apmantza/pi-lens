@@ -4185,6 +4185,52 @@ describe("body caps (#5003)", () => {
 		},
 	);
 
+	// Recurrence: #5208. The cap counts the `Refs #N` and `Remaining #N:`
+	// paragraphs of the Summary section into its three sentences, and the
+	// refusal named neither the count nor the paragraphs it came from, so an
+	// author edited the summary prose and stayed red (3 retries on #5176, 4 on
+	// #5202). These cases pin the count, where it came from, and the template
+	// line that admits the counting.
+	const summaryOf = (paragraphs: string[]) =>
+		NEW_BODY.replace(
+			"## Summary\nThe lint caps what a reader scrolls past.\n\nRefs #5003\n\n",
+			`## Summary\n${paragraphs.join("\n\n")}\n\n`,
+		);
+	const COUNTED_SHAPE = [
+		"The refusal reads the bookkeeping. It counts every line. It names where each one sits.",
+		"Refs #5208",
+		"Remaining #5208: a real render of the shipped file stays unverified.",
+	];
+
+	it("names each counted Summary sentence and the paragraph it sits in (#5208)", () => {
+		expect(capError(summaryOf(COUNTED_SHAPE), "sentences")).toEqual([
+			'PR body "## Summary" must hold plain paragraphs of one to 3 sentences and at most 600 characters, with no list, table, code or HTML: it holds 4 counted sentences (3 in the summary, 1 in the Remaining line), over the 3-sentence cap. The "Refs #N" and "Remaining #N:" lines count toward the cap, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.',
+		]);
+	});
+
+	it("admits the #5202 shape, two summary sentences and a one-sentence Remaining line (#5208)", () => {
+		expect(
+			capError(
+				summaryOf([
+					"The refusal reads the bookkeeping. It names where each line sits.",
+					"Refs #5208",
+					"Remaining #5208: a real render of the shipped file stays unverified.",
+				]),
+				"sentences",
+			),
+		).toEqual([]);
+	});
+
+	it("says in the template that the bookkeeping lines count (#5208)", () => {
+		const template = readFileSync(
+			resolve(repositoryRoot, ".github/PULL_REQUEST_TEMPLATE.md"),
+			"utf8",
+		);
+		expect(template).toContain(
+			"The `Refs #NNN` and `Remaining #NNN:` lines count toward the three-sentence cap",
+		);
+	});
+
 	it.each(["Why", "Problem", "What changed"])(
 		"applies the Summary cap to a second heading that reads as summary: %s",
 		(name) => {

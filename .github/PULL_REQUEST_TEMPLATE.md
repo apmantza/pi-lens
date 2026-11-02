@@ -4,6 +4,8 @@ At most three sentences: what changed, who notices, and the risk.
 
 Closes #NNN only when every acceptance criterion is met. Otherwise Refs #NNN, and comment on the issue naming what remains. The PR title carries the same reference.
 
+The `Refs #NNN` and `Remaining #NNN:` lines count toward the three-sentence cap: a two-sentence summary with a one-sentence `Remaining` line sits at the cap.
+
 ## Notes for the reviewer
 
 - At most five bullets: decisions and risks only. Proof goes below.

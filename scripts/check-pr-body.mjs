@@ -1293,13 +1293,14 @@ function splitMarkdownSentences(text) {
 	return sentences;
 }
 
-function countSentenceTerminators(lines) {
-	let count = 0;
-	const masked = codeSpanMasked(lines.join("\n").trim());
+/** The offsets of every sentence terminator in `text`, code spans masked. */
+function sentenceEndOffsets(text) {
+	const offsets = [];
+	const masked = codeSpanMasked(text);
 	for (let index = 0; index < masked.length; index += 1) {
-		if (endsSentence(masked, index, lines.join("\n").trim())) count += 1;
+		if (endsSentence(masked, index, text)) offsets.push(index);
 	}
-	return count;
+	return offsets;
 }
 
 export function splitMarkdownUnits(body = "") {
@@ -4488,29 +4489,105 @@ function summaryText(tokens) {
 		.join("");
 }
 
+// #5208: the `Refs #N` and `Remaining #N:` paragraphs an author keeps in the
+// Summary section are bookkeeping, and they count toward the same
+// SUMMARY_MAX_SENTENCES cap as the prose. A refusal that named only the cap
+// sent the author back to the summary text while the fourth sentence sat in
+// the bookkeeping line below it (3 retries on #5176, 4 on #5202).
+const SUMMARY_BOOKKEEPING = /^(?:refs?|remaining)\b/i;
+
+function counted(count, noun) {
+	return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Every Summary paragraph holding a counted sentence, labelled by the
+ * bookkeeping keyword it opens with ("the summary" for prose), and the total.
+ * The sentences are counted over the section as one text and then attributed
+ * to the paragraph each terminator sits in, so the count keeps its
+ * abbreviation tolerance (#3262): a sentence that starts in lower case counts
+ * with the one before it, and the character cap, not the count, bounds a
+ * Summary written that way.
+ */
+function summarySentenceParts(tokens) {
+	const segments = tokens.map((token) =>
+		token.type === "paragraph" ? summaryText(token.tokens ?? []) : "",
+	);
+	const raw = segments.join("\n");
+	const lead = raw.length - raw.trimStart().length;
+	const ends = sentenceEndOffsets(raw.trim()).map((at) => at + lead);
+	const parts = [];
+	let start = 0;
+	for (const text of segments) {
+		const sentences = ends.filter(
+			(at) => at >= start && at < start + text.length,
+		).length;
+		const keyword = SUMMARY_BOOKKEEPING.exec(text.trim())?.[0];
+		if (sentences > 0)
+			parts.push({
+				label: keyword ? `the ${keyword} line` : "the summary",
+				sentences,
+			});
+		start += text.length + 1;
+	}
+	return { parts, sentences: ends.length };
+}
+
 /**
  * Does a Summary section hold what the template admits: paragraphs only, one
  * to SUMMARY_MAX_SENTENCES sentences, at most SUMMARY_MAX_CHARS characters?
  * Every other token kind refuses (a list, a table, code, raw HTML, a nested
- * heading). The sentence count keeps its abbreviation tolerance (#3262): a
- * sentence that starts in lower case counts with the one before it, so the
- * character cap, not the count, is what bounds a Summary written that way.
+ * heading). Returns the refusal, which states what it counted and where the
+ * count sits, or `null` when the section is admitted.
  */
-function summaryAdmitted(tokens) {
+function summaryRefusal(tokens, name) {
+	const rule = `PR body "## ${name}" must hold plain paragraphs of one to ${SUMMARY_MAX_SENTENCES} sentences and at most ${SUMMARY_MAX_CHARS} characters, with no list, table, code or HTML`;
 	if (
 		!tokens.every(
 			(token) => token.type === "paragraph" || token.type === "space",
 		)
 	)
-		return false;
-	const sentences = countSentenceTerminators(
-		tokens.map((token) => summaryText(token.tokens ?? [])),
-	);
-	return (
-		sentences >= 1 &&
-		sentences <= SUMMARY_MAX_SENTENCES &&
-		tallyTokens(tokens, { chars: 0, code: [] }).chars <= SUMMARY_MAX_CHARS
-	);
+		return `${rule}. See ${TEMPLATE_PATH}.`;
+	const { parts, sentences } = summarySentenceParts(tokens);
+	const chars = tallyTokens(tokens, { chars: 0, code: [] }).chars;
+	const where = parts.length
+		? ` (${parts
+				.map((part) => `${part.sentences} in ${part.label}`)
+				.join(", ")})`
+		: "";
+	const breaches = [];
+	if (sentences > SUMMARY_MAX_SENTENCES)
+		breaches.push(
+			`it holds ${counted(sentences, "counted sentence")}${where}, over the ${SUMMARY_MAX_SENTENCES}-sentence cap`,
+		);
+	if (sentences < 1)
+		breaches.push(
+			`it holds no counted sentence${where}, under the one-sentence minimum`,
+		);
+	if (chars > SUMMARY_MAX_CHARS)
+		breaches.push(
+			`${counted(chars, "visible character")}, over the ${SUMMARY_MAX_CHARS}-character cap`,
+		);
+	if (breaches.length === 0) return null;
+	const bookkeeping = parts
+		.filter((part) => part.label !== "the summary")
+		.reduce((sum, part) => sum + part.sentences, 0);
+	const advice = [];
+	if (sentences > SUMMARY_MAX_SENTENCES)
+		advice.push(
+			bookkeeping > 0 && SUMMARY_MAX_SENTENCES - bookkeeping >= 1
+				? `The "Refs #N" and "Remaining #N:" lines count toward the cap, so keep the summary prose to ${counted(SUMMARY_MAX_SENTENCES - bookkeeping, "sentence")}`
+				: `Cut ${counted(sentences - SUMMARY_MAX_SENTENCES, "sentence")} from the summary prose`,
+		);
+	if (sentences < 1)
+		advice.push(
+			`Write the summary as plain prose of one to ${SUMMARY_MAX_SENTENCES} sentences, because a "Refs #N" or "Remaining #N:" line alone does not read as one`,
+		);
+	if (chars > SUMMARY_MAX_CHARS)
+		advice.push(
+			`Cut ${counted(chars - SUMMARY_MAX_CHARS, "visible character")}`,
+		);
+	return `${rule}: ${breaches.join(" and ")}. ${advice.join(". ")}. See ${TEMPLATE_PATH}.`;
 }
 
 /**
@@ -4624,10 +4701,10 @@ function lintBodyBudgets(body) {
 			.map(({ token }) => token);
 	};
 	for (const heading of headings)
-		if (hasSection(heading, "summary") && !summaryAdmitted(tokensOf(heading)))
-			errors.push(
-				`PR body "## ${heading.name}" must hold plain paragraphs of one to ${SUMMARY_MAX_SENTENCES} sentences and at most ${SUMMARY_MAX_CHARS} characters, with no list, table, code or HTML. See ${TEMPLATE_PATH}.`,
-			);
+		if (hasSection(heading, "summary")) {
+			const refusal = summaryRefusal(tokensOf(heading), heading.name);
+			if (refusal) errors.push(refusal);
+		}
 	for (const heading of headings)
 		if (
 			hasSection(heading, "notes for the reviewer") &&
