@@ -137,7 +137,7 @@ const FROZEN_BASELINE_PATH = "tests/support/flake-shape-baseline-frozen.json";
 
 /** sha256 of the mint's canonical JSON (formatting and line endings do not count). */
 const FROZEN_BASELINE_DIGEST =
-	"db2450d7da2f0123a5bd4d366156598e709aea5a356073095ccc27ce0c9afbc2";
+	"406a80c14aa52bfc18be6170e013e4bee876c9058e40f059cd1073e55cee5ce5";
 
 const FROZEN_BASELINE_SOURCE = fs.readFileSync(
 	path.join(repoRoot, FROZEN_BASELINE_PATH),

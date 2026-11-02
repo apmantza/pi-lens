@@ -1242,7 +1242,7 @@
 		"index-drain-refresh-straddle.test.ts::clients/runtime-agent-end": 1,
 		"index-drain-refresh-straddle.test.ts::clients/runtime-session": 1,
 		"index-integration.test.ts::clients/bootstrap": 1,
-		"index-integration.test.ts::clients/bus-events-logger": 1,
+		"index-integration.test.ts::clients/bus-event-rollup": 1,
 		"index-integration.test.ts::clients/cache-observability": 1,
 		"index-integration.test.ts::clients/debug-handles": 1,
 		"index-integration.test.ts::clients/degradation-ledger": 1,

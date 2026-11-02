@@ -474,7 +474,7 @@ describe("#2981 long-lived containers are bounded or admitted", () => {
 		"clients/widget-state.ts#wireWidgetDispositionSubscriber:d8f1770a",
 		"clients/widget-state.ts#isBlocking:a2265554",
 		"clients/agent-nudge.ts#MAX_NAMES_SHOWN:9593fa6b",
-		"clients/bus-events-logger.ts#writer:f959fedf",
+		"clients/live-bus-emitter.ts#writer:f959fedf",
 		"clients/config-warn.ts#DEPRECATION_NOUN_BY_CODE:6b858980",
 		"clients/degradation-ledger.ts#OVERFLOW_KIND:8cf106dd",
 		"clients/degradation-ledger.ts#groups:218d12e1",

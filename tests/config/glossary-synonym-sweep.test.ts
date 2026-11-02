@@ -387,8 +387,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/biome-client.ts": 8,
 		"clients/bounded-pid-file-lock.ts": 9,
 		"clients/bundled-resource-health.ts": 2,
-		"clients/bus-events-logger.ts": 1,
-		"clients/bus-publish.ts": 1,
 		"clients/cascade-logger.ts": 1,
 		"clients/child-unref.ts": 5,
 		"clients/config-core/normalize.ts": 2,
@@ -399,7 +397,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dead-code-client.ts": 4,
 		"clients/degradation-ledger.ts": 10,
 		"clients/dependency-checker.ts": 4,
-		"clients/diagnostics-publish.ts": 1,
 		"clients/dispatch/dispatcher.ts": 7,
 		"clients/dispatch/integration.ts": 2,
 		"clients/dispatch/pending-runner-findings.ts": 2,
@@ -425,13 +422,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 2,
 		"clients/dispatch/runners/vale.ts": 1,
 		"clients/dispatch/runners/zig-check.ts": 1,
-		"clients/disposition-publish.ts": 1,
 		"clients/durable-store.ts": 3,
 		"clients/effective-config.ts": 2,
 		"clients/error-class.ts": 3,
 		"clients/extension-log.ts": 3,
 		"clients/file-utils.ts": 3,
-		"clients/format-events-publish.ts": 4,
 		"clients/format-service.ts": 11,
 		"clients/formatters.ts": 26,
 		"clients/generation-lock.ts": 7,
@@ -452,8 +447,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/jscpd-client.ts": 2,
 		"clients/knip-client.ts": 3,
 		"clients/lens-config.ts": 4,
-		"clients/lens-events.ts": 1,
-		"clients/live-bus-emitter.ts": 2,
+		"clients/live-bus-emitter.ts": 4,
 		"clients/lsp/cascade-tier.ts": 1,
 		"clients/lsp/client-registry.ts": 4,
 		"clients/lsp/client.ts": 13,
@@ -869,7 +863,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/ast-grep-tool-logger.ts": 1,
 		"clients/biome-client.ts": 4,
-		"clients/bus-events-logger.ts": 1,
+		"clients/live-bus-emitter.ts": 1,
 		// 10 -> 12 (#3274): `readCacheAsync` and the shared `freshAgeMs` each log
 		// their own verdict through the manager's existing verbose logger. Same
 		// sense as the ten beside them; no new logging concept.
@@ -953,7 +947,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.resolve(dir)`, mirroring `withGenerationLockSync`'s own (#3578).
 		"clients/bounded-pid-file-lock.ts": 6,
 		"clients/build-identity.ts": 3,
-		"clients/bus-events-logger.ts": 2,
+		"clients/live-bus-emitter.ts": 2,
 		"clients/bus-publish.ts": 3,
 		// 17 -> 19 (#3274): `readCacheAsync` builds the same two store paths its
 		// synchronous sibling does (`cachePath`, `metaPath`). Same sense, one more

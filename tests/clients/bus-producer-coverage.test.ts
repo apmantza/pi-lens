@@ -2,157 +2,134 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { LENS_EVENT_NAMES } from "../../clients/lens-events.js";
+import {
+	codeMatches,
+	listSourceFiles,
+	relativePosix,
+	stripSource,
+} from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
-const clientsDir = path.resolve(process.cwd(), "clients");
+const repoRoot = process.cwd();
+const clientsDir = path.resolve(repoRoot, "clients");
 
 /**
- * Files that own the shared live-emitter seam itself, not a producer that
- * routes THROUGH it. `live-bus-emitter.ts` defines `resolveLiveBusEmitter`
- * and calls `logBusEvent` directly for the `skipped_stale_session` outcome —
- * it is not expected to contain a `resolveLiveBusEmitter(` call site.
- * `bus-events-logger.ts` is the NDJSON sink every producer (and the resolver)
- * imports; it emits nothing itself.
+ * The file that owns the publish path (`createBusPublisher`): the live-emitter
+ * resolve, the once-per-process skip rows, the guarded emit, and every
+ * `bus-events.log` row a publish writes. The NDJSON writer is private to this module.
  */
-const SEAM_FILES = new Set(["live-bus-emitter.ts", "bus-events-logger.ts"]);
+const SEAM_FILE = "live-bus-emitter.ts";
 
 /**
- * M3 (#1415 review): the producer list used to be hand-maintained (a
- * third-copy antipattern per the single-source-of-truth discipline) — derive
- * it instead by sweeping `clients/*.ts` for files that import
- * `bus-events-logger.js`, the shared NDJSON trace every real producer writes
- * to on every publish attempt. A new producer that starts emitting bus
- * events but forgets to route through `resolveLiveBusEmitter` is caught
- * automatically, without anyone remembering to add it to a list here.
+ * Recurrence this file prevents (shape 83): before the fold eight
+ * publish functions in five producers each carried their own copy of the
+ * disabled / unwired / stale / emit / failure-latch dance, so a fix to one
+ * (the `ctxSource` field on `emit_failed`, #1432 S2c; the stale-session probe,
+ * #1415) left its siblings behind. A producer is admitted by routing through
+ * `createBusPublisher`; every other spelling of a publish is refused.
+ *
+ * M3 (#1415 review): the producer list is derived, never hand-maintained. A
+ * producer imports the live-emitter seam; the read-only rollup facade is excluded.
  */
 function discoverProducerFiles(): string[] {
 	return fs
 		.readdirSync(clientsDir)
-		.filter((file) => file.endsWith(".ts") && !SEAM_FILES.has(file))
+		.filter(
+			(file) =>
+				file.endsWith(".ts") &&
+				file !== SEAM_FILE &&
+				file !== "bus-event-rollup.ts",
+		)
 		.filter((file) => {
 			const source = fs.readFileSync(path.join(clientsDir, file), "utf8");
-			return /from\s+["']\.\/bus-events-logger\.js["']/.test(source);
+			return /from\s+["']\.\/live-bus-emitter\.js["']/.test(source);
 		})
 		.sort();
 }
 
-/**
- * Allowlist for a literal `.emit(` call site inside a producer file (M3b,
- * #1415 review). The ONLY sanctioned shape is `resolution.emit(...)` — the
- * value `resolveLiveBusEmitter` itself returned, already probed for a stale
- * ctx. Every other `.emit(` (a raw getter invoked and called directly, a
- * captured `pi.events` reference, a bus/target local dereferenced without
- * going through the resolver) bypasses the stale-session guard entirely,
- * which is exactly the shape the reviewer's planted `rawGetter?.().emit(...)`
- * bypass exploited while the file-existence sweep above stayed green.
- *
- * If a producer ever legitimately needs a non-bus `EventEmitter`-typed local
- * (unrelated to the pi.events bus), extend this allowlist with that
- * identifier explicitly — do not widen the regex.
- */
-const SANCTIONED_EMIT_CALLERS = new Set(["resolution"]);
-
-/**
- * Find every `<expr>.emit(` call site in `source` and return the identifier
- * (or other token) immediately before `.emit(`, so callers can check it
- * against `SANCTIONED_EMIT_CALLERS`. Returns `null` for a call site whose
- * preceding token isn't a simple identifier (e.g. `().emit(`) — those are
- * always violations since no allowlisted caller can produce that shape.
- */
-function findEmitCallSites(
-	source: string,
-): Array<{ caller: string | null; index: number }> {
-	const sites: Array<{ caller: string | null; index: number }> = [];
-	const pattern = /\.emit\(/g;
-	let match: RegExpExecArray | null;
-	// biome-ignore lint/suspicious/noAssignInExpressions: exec-loop is the standard idiom
-	while ((match = pattern.exec(source))) {
-		const before = source.slice(0, match.index);
-		const callerMatch = before.match(/([A-Za-z_$][A-Za-z0-9_$]*)$/);
-		sites.push({
-			caller: callerMatch ? callerMatch[1] : null,
-			index: match.index,
-		});
-	}
-	return sites;
+/** Every `<expr>.emit(` call in code, caller token included. */
+function findEmitCalls(source: string): string[] {
+	return [...stripSource(source, { strings: "blank" }).matchAll(/\.emit\s*\(/g)]
+		.map((m) => source.slice(0, m.index).split("\n").length)
+		.map((line) => `line ${line}`);
 }
 
 describe("bus producer guarded-seam coverage", () => {
-	it("routes every event producer through the shared live emitter resolver", () => {
-		const producers = discoverProducerFiles();
-		// Sanity: the sweep must actually find the known producer family, not
-		// silently discover zero files (a discovery bug would make every
-		// assertion below vacuously pass on an empty list).
-		expect(producers).toEqual([
-			"bus-publish.ts",
-			"diagnostics-publish.ts",
-			"disposition-publish.ts",
-			"format-events-publish.ts",
-			"lens-events.ts",
-		]);
-
-		for (const file of producers) {
-			const source = fs.readFileSync(path.join(clientsDir, file), "utf8");
-			expect(source, file).toContain("resolveLiveBusEmitter(");
-			expect(source, file).not.toMatch(/liveEmitter\.resolve\s*\(/);
-			expect(source, file).not.toMatch(
-				/(?:lensEventBusGetter|busEmitterGetter)\?\.\(/,
-			);
-		}
-
-		const productionSources = fs
-			.readdirSync(clientsDir)
-			.filter((file) => file.endsWith(".ts"))
-			.map(
-				(file) =>
-					[file, fs.readFileSync(path.join(clientsDir, file), "utf8")] as const,
-			);
-		const directResolvers = productionSources.filter(
-			([file, source]) =>
-				file !== "live-bus-emitter.ts" &&
-				/liveEmitter\.resolve\s*\(/.test(source),
-		);
-		expect(directResolvers).toEqual([]);
+	it("keeps the bus writer private to the publish seam", async () => {
+		// #5179 F1/F4/F5: imports through any spelling cannot recover a private writer.
+		const facade = await import("../../clients/bus-event-rollup.js");
+		const seam = await import("../../clients/live-bus-emitter.js");
+		expect(facade).not.toHaveProperty("logBusEvent");
+		expect(seam).not.toHaveProperty("logBusEvent");
 	});
 
-	it("has no bare .emit( call outside the resolveLiveBusEmitter path", () => {
-		const producers = discoverProducerFiles();
-		const violations: string[] = [];
-		for (const file of producers) {
-			const source = fs.readFileSync(path.join(clientsDir, file), "utf8");
-			for (const { caller, index } of findEmitCallSites(source)) {
-				if (caller && SANCTIONED_EMIT_CALLERS.has(caller)) continue;
-				const line = source.slice(0, index).split("\n").length;
-				violations.push(
-					`${file}:${line} — unsanctioned \`.emit(\` call (caller: ${caller ?? "<non-identifier>"})`,
+	it(
+		"routes every event producer through createBusPublisher",
+		() => {
+			const producers = discoverProducerFiles();
+			// Sanity: the sweep must actually find the known producer family, not
+			// silently discover zero files (a discovery bug would make every
+			// assertion below vacuously pass on an empty list).
+			expect(producers).toEqual([
+				"bus-publish.ts",
+				"diagnostics-publish.ts",
+				"disposition-publish.ts",
+				"format-events-publish.ts",
+				"lens-events.ts",
+			]);
+
+			for (const file of producers) {
+				const code = stripSource(
+					fs.readFileSync(path.join(clientsDir, file), "utf8"),
+					{ strings: "blank" },
 				);
+				expect(code, file).toMatch(/\bcreateBusPublisher\s*\(/);
+				expect(code, file).toMatch(/\.publish\s*[<(]/);
+				expect(code, file).not.toMatch(/liveEmitter\.resolve\s*\(/);
+				expect(code, file).not.toMatch(
+					/(?:lensEventBusGetter|busEmitterGetter)\?\.\(/,
+				);
+			}
+
+			const direct = listSourceFiles(clientsDir)
+				.filter((file) => path.basename(file) !== SEAM_FILE)
+				.filter((file) =>
+					/liveEmitter\.resolve\s*\(/.test(
+						stripSource(fs.readFileSync(file, "utf8"), { strings: "blank" }),
+					),
+				)
+				.map((file) => relativePosix(repoRoot, file));
+			expect(direct).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it("has no .emit( call in a producer: the seam emits through the resolved target", () => {
+		// The planted `rawGetter?.().emit(...)` bypass of #1415 M3b stayed green
+		// against a file-existence sweep; every `.emit(` in a producer is now a
+		// bypass, since the seam owns the only sanctioned one.
+		const violations: string[] = [];
+		for (const file of discoverProducerFiles()) {
+			const source = fs.readFileSync(path.join(clientsDir, file), "utf8");
+			for (const site of findEmitCalls(source)) {
+				violations.push(`${file} ${site} — .emit( outside the seam`);
 			}
 		}
 		expect(violations).toEqual([]);
 	});
 
-	it("carries ctxSource on every producer's emit_failed row", () => {
+	it("carries ctxSource on the emit_failed row the seam writes for every producer", () => {
 		// #1432 review (S2c): lens-events.ts's emit_failed row was missing
-		// ctxSource while the other four producers already carried it — a
-		// static source scan (not a runtime assertion) so a future producer
-		// that copy-pastes the emit_failed shape without ctxSource fails loud
-		// instead of silently dropping the field like this one did.
-		const producers = discoverProducerFiles();
-		for (const file of producers) {
-			const source = fs.readFileSync(path.join(clientsDir, file), "utf8");
-			const failedIndex = source.indexOf('outcome: "emit_failed"');
-			expect(
-				failedIndex,
-				`${file}: no emit_failed outcome found`,
-			).toBeGreaterThanOrEqual(0);
-			const blockEnd = source.indexOf("});", failedIndex);
-			const block = source.slice(
-				failedIndex,
-				blockEnd === -1 ? undefined : blockEnd,
-			);
-			expect(block, `${file}: emit_failed row missing ctxSource`).toMatch(
-				/ctxSource:\s*resolution\.ctxSource/,
-			);
-		}
+		// ctxSource while the other four producers carried it. The five copies
+		// are one row now; a static read of the seam (not a runtime assertion, the
+		// logger is a no-op in test mode) fails loud if the field is dropped.
+		const source = fs.readFileSync(path.join(clientsDir, SEAM_FILE), "utf8");
+		const blanked = stripSource(source, { strings: "blank" });
+		const rows = codeMatches(source, /outcome:\s*"emit_failed"/g, blanked);
+		expect(rows).toHaveLength(1);
+		const start = rows[0].index ?? 0;
+		const block = source.slice(start, source.indexOf("});", start));
+		expect(block).toMatch(/ctxSource:\s*resolution\.ctxSource/);
 	});
 
 	it("keeps the complete lens producer family in the guarded producer set", () => {

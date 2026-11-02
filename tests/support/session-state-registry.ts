@@ -1731,11 +1731,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		reason:
 			"the last timed-out lock holder per lock directory, bounded at 16 entries",
 	},
-	"bus-events-logger.ts": {
-		ownerKey:
-			"process-wide: bus event rollup counters are an observability tally of this process, never read as a verdict",
-		reason: "bus event rollup counters, an observability tally",
-	},
 	"bus-publish.ts": {
 		ownerKey:
 			"process-wide: the bus publisher is registered once per process and holds no session answer",
@@ -2003,6 +1998,11 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		ownerKey:
 			"process-wide: a lookup over the frozen LENS_FLAGS table built at import",
 		reason: "flag specs by name",
+	},
+	"live-bus-emitter.ts": {
+		ownerKey:
+			"process-wide: bus event rollup counters are an observability tally of this process, never read as a verdict",
+		reason: "bus event rollup counters, an observability tally",
 	},
 	"lsp-budget.ts": {
 		ownerKey:
@@ -2399,7 +2399,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"bounded-cache.ts": 2,
 	"bounded-pid-file-lock.ts": 1,
 	"bounded-telemetry.ts": 1,
-	"bus-events-logger.ts": 1,
 	"bus-publish.ts": 0,
 	// #4403 round 5 (V1): the primaries whose cascade line was delivered,
 	// registered above and reset by resetDispatchBaselines.
@@ -2563,6 +2562,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// the file at all.
 	"lens-events.ts": 0,
 	"lens-flag-registry.ts": 1,
+	"live-bus-emitter.ts": 1,
 	"lsp-budget.ts": 0,
 	"lsp/capabilities.ts": 1,
 	"lsp/cascade-tier.ts": 1,
