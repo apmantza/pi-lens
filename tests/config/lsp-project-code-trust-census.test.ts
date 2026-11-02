@@ -27,6 +27,7 @@ const PROJECT_CODE_SERVERS = new Set([
 	"fsharp",
 	"java",
 	"kotlin",
+	"groovy",
 	"lean",
 	"swift",
 	"dart",

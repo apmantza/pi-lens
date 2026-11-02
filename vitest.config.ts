@@ -464,6 +464,11 @@ const lspSpawnHeavyInclude = [
 	"tests/tools/diagnostics-route-switch-matrix-cols-4.test.ts",
 	"tests/tools/diagnostics-route-switch-matrix-cols-5.test.ts",
 	"tests/tools/diagnostics-route-switch-matrix.test.ts",
+	// #5123: launches the fake server THROUGH the production built-in
+	// `GroovyServer` (a PATH shim) and waits on a real initialize handshake plus
+	// a push round or a push-budget timeout per case -- the same #1022/#2332
+	// contention class as its lane siblings.
+	"tests/tools/lens-diagnostics-groovy-row-5123.test.ts",
 	// #873/#448: the dispatch LSP runner against a real stdio JSON-RPC server
 	// — a real child spawn through the production LSPService plus a
 	// `.pi-lens/lsp.json` custom server, waiting on real first-document

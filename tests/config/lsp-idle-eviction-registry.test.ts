@@ -79,6 +79,7 @@ const UNPROVEN_IDS = [
 	"elixir",
 	"fsharp",
 	"go",
+	"groovy",
 	"haskell",
 	"java",
 	"nix",

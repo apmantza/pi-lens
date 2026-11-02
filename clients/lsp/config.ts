@@ -1331,6 +1331,10 @@ export const OVERRIDE_COPY_TRAITS: {
 		keep: false,
 		why: "Reset: marks config-supplied rows; catalog rows never declare it.",
 	},
+	echoesOwnNotice: {
+		keep: false,
+		why: "Reset: the hold drops an empty publish on the catalog binary's measured recompile echo; on another binary it could keep an error the server really cleared.",
+	},
 	command: {
 		keep: false,
 		why: "Reset: the custom-row command token; the override's command lives in its spawn.",
