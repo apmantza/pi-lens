@@ -528,7 +528,7 @@ describe("round 7, F2: ONE buffer-notes-then-finalize seam, not one per loader",
 		for (const tier of ["global", "project"] as const) {
 			const { note, records } = ignoredRecordCollector(file, tier);
 			for (let index = 0; index < MAX_MIGRATION_RECORDS + 5; index += 1) {
-				note(`unknown top-level key "k${index}"`);
+				note(`unknown top-level key "k${index}"`, "PILENS_CFG_0001");
 			}
 			const finalized = records();
 			const detail = `${tier}: ${JSON.stringify(finalized)}`;

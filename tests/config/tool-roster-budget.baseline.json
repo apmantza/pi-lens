@@ -1,8 +1,8 @@
 {
 	"pi": {
-		"budget": 19014,
-		"descriptionTotal": 3474,
-		"schemaTotal": 13811,
+		"budget": 19533,
+		"descriptionTotal": 3566,
+		"schemaTotal": 14191,
 		"tools": {
 			"ast_grep_outline": {
 				"description": 357,
@@ -34,15 +34,15 @@
 			},
 			"module_report": {
 				"description": 505,
-				"schema": 1295
+				"schema": 1677
 			},
 			"pi_lens_activate_tools": {
 				"description": 97,
 				"schema": 302
 			},
 			"project_report": {
-				"description": 364,
-				"schema": 498
+				"description": 456,
+				"schema": 496
 			},
 			"read_enclosing": {
 				"description": 275,
@@ -59,9 +59,9 @@
 		}
 	},
 	"mcp": {
-		"budget": 19034,
-		"descriptionTotal": 3369,
-		"schemaTotal": 13934,
+		"budget": 19578,
+		"descriptionTotal": 3461,
+		"schemaTotal": 14337,
 		"tools": {
 			"pilens_analyze": {
 				"description": 98,
@@ -97,11 +97,11 @@
 			},
 			"pilens_module_report": {
 				"description": 509,
-				"schema": 1440
+				"schema": 1845
 			},
 			"pilens_project_report": {
-				"description": 306,
-				"schema": 522
+				"description": 398,
+				"schema": 520
 			},
 			"pilens_project_scan": {
 				"description": 101,

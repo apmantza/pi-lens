@@ -26,16 +26,6 @@ type ToolResult = {
 	isError?: boolean;
 };
 
-function stableRenderedText(
-	toolName: string,
-	text: string | undefined,
-): string {
-	if (toolName !== "project_report") return text ?? "";
-	// Each host starts its own cold graph build. The timestamp is runtime metadata,
-	// not rendered result content, so compare every other byte of the full text.
-	return (text ?? "").replace(/("when":\s*")[^"]+(")/, "$1<build-time>$2");
-}
-
 // The Windows lane declares PI_LENS_TEST_TIMEOUT_SCALE=3 for exactly this: the
 // sweep took 25.6-26.9 s there (and passed or timed out at 30 s from run to
 // run), against ~3 s on Linux (#4019).
@@ -143,8 +133,8 @@ describe("result contract across registered tool surfaces", () => {
 				lsp_navigation: { operation: "documentSymbol", path: "fixture.ts" },
 				lens_diagnostics: { source: "lsp", scope: "paths", paths: ["bad.ts"] },
 				symbol_search: { query: "fixture", paths: ["fixture.ts"] },
-				module_report: { path: "fixture.ts", view: "compact" },
-				project_report: { view: "compact", limit: 1 },
+				module_report: { path: "fixture.ts" },
+				project_report: { limit: 1 },
 				read_symbol: {
 					path: path.join(cwd, "fixture.ts"),
 					symbol: "enclosing",
@@ -205,10 +195,13 @@ describe("result contract across registered tool surfaces", () => {
 				const mcpText = (mcpResult.result as ToolResult).content?.[0]?.text;
 				const piText = piResult?.content?.[0]?.text;
 				if (EXACT_PARITY_TOOLS.has(entry.name)) {
-					expect(
-						stableRenderedText(entry.name, mcpText),
-						`${entry.name}: complete rendered text`,
-					).toBe(stableRenderedText(entry.name, piText));
+					// #5150 R2: the old project_report-only `"when"` normalization went
+					// with its JSON default, and project_report is not an
+					// EXACT_PARITY_TOOLS member. Its text parity is pinned by
+					// tests/mcp/project-report-text-parity.smoke.test.ts instead.
+					expect(mcpText ?? "", `${entry.name}: complete rendered text`).toBe(
+						piText ?? "",
+					);
 				}
 				const mcpResultValue = mcpResult.result as ToolResult;
 				expect(mcpText, `${entry.name}: MCP result`).toMatch(

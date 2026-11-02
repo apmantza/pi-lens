@@ -78,14 +78,22 @@ export {
 } from "./mcp/session.js";
 export {
 	moduleReport,
+	projectModuleReport,
 	readEnclosing,
 	readSymbol,
 	renderCompactModuleReport,
+	renderModuleReportPreset,
+	resolveModuleReportPreset,
+	type ModuleReportFormat,
+	type ModuleReportPreset,
+	type ModuleReportPresetChoice,
+	type ModuleReportProjection,
 } from "./module-report.js";
 export {
 	type ProjectReport,
 	projectReport,
 	renderCompactProjectReport,
+	renderTextProjectReport,
 } from "./project-report.js";
 // Effective-config introspection (#2427). A facade rather than a wrapper for
 // the same reason the others are: the computation reaches into the config

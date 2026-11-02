@@ -22,10 +22,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createLSPClient } from "../../../clients/lsp/client.js";
-import { applyPartiallyApplicableEdits } from "../../../clients/partial-edit-apply.js";
+import { writeFileAtomicAsync } from "../../../clients/atomic-write.js";
+import { noteAtomicReplace } from "../../../clients/path-birth.js";
 import type { launchLSP } from "../../../clients/lsp/launch.js";
 import { stopLSP } from "../../../clients/lsp/launch.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
@@ -218,9 +218,11 @@ describe("didChangeWatchedFiles type for an opened file (#4320)", () => {
 		]);
 	});
 
-	// #4320 r2 (F3): pi-lens's partial edit replaces the file through a temp
-	// file and a rename, so the edited file has a new inode born now. Round 1
-	// announced it as Created.
+	// #4320 r2 (F3): a pi-lens writer replaces the file through a temp file and
+	// a rename, so the edited file has a new inode born now. Round 1 announced
+	// it as Created. The writer here is the fix-run restore's pair
+	// (clients/fix-run-restore.ts): the atomic write, then the replace record.
+	// The partial apply's own writer was the first member; it is gone (#5120).
 	it("sends Changed for an existing file pi-lens replaced atomically", async (ctx) => {
 		const file = path.join(dir, "existing.ts");
 		try {
@@ -230,26 +232,9 @@ describe("didChangeWatchedFiles type for an opened file (#4320)", () => {
 			ctx.skip("cannot hard-link across filesystems here");
 		}
 		await startClient();
-		const raw = fs.readFileSync(file, "utf8");
-		const oldText = raw.split("\n")[0]!;
-		const start = raw.indexOf(oldText);
-		const result = await applyPartiallyApplicableEdits({
-			filePath: file,
-			edits: [
-				{
-					oldText,
-					appliedSpanText: oldText,
-					newText: "// edited",
-					originalIndex: 0,
-					snapshot: {
-						hash: createHash("sha256").update(raw, "utf8").digest("hex"),
-					},
-					spanStart: start,
-					spanEnd: start + oldText.length,
-				},
-			],
-		});
-		expect(result.appliedCount).toBe(1);
+		const before = fs.statSync(file);
+		await writeFileAtomicAsync(file, "// edited\n", { bestEffort: false });
+		noteAtomicReplace(before, fs.statSync(file));
 		if (fs.statSync(file).birthtimeMs === fs.statSync(OLD_FILE).birthtimeMs) {
 			ctx.skip("the rename kept the birth time; nothing to distinguish");
 		}

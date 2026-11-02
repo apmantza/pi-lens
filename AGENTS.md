@@ -303,6 +303,7 @@ entry's screen, or its first sentence when it has none.
 63. **Tool console output parsed unstripped:** parsing Vitest or any tool's console output: strip ANSI first, and test with `FORCE_COLOR=1`.
 80. **Single scan root:** Screen: for each detector, list the roots its subject can write in.
 83. **Rule re-derived beside its owner:** Screen: before writing a marker, pattern, bound or normaliser, grep the tree for its literal and for the matcher that applies it; does a module already own it, and does this caller route through that module?
+88. **Learned attribution keyed on a name alone:** Screen: can a call whose work already ran, or a tool that never wrote, reach the learned lookup or the arm gate on name plus path alone?
 
 </important>
 
@@ -460,7 +461,12 @@ Tier-4 mutation attribution is only for third-party tool names. Names in
 `clients/tool-config.ts`'s `PI_LENS_TOOL_NAMES` projection are never learned or
 observed as generic edits, because one pi-lens tool may mix write and read-only
 operations (for example `lsp_navigation`). MCP-only registry names remain
-third-party names on pi and retain the bounded observation path.
+third-party names on pi and retain the bounded observation path. A provider's
+display-only replay (`isProviderReplayCall` in `clients/mutating-tool.ts`,
+keyed on the `cursor-replay-` id prefix) is neither armed for observation,
+classified from a learned name, diffed by the opaque net, nor checked by the
+read guard, built-in `edit` replays included, because the work ran before the
+replay arrived. Its write credit passes `advanceAuthorship: false`.
 
 The read guard keys all path state through its normalizer. It accepts Read,
 search, LSP, bridge, bash-view, and authored-write evidence, but name-only
@@ -520,10 +526,13 @@ node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <re
                                         prints only the rows that changed head vs base
 ```
 
+The seven advisory lint tools are steps of one `Lint (advisory)` job, and the PR
+title and close-keyword checks are steps of one gating `PR metadata` job.
+
 CI cost gates (#3801). The heavy advisory jobs (`CodeQL (<language>) (advisory)`)
-start only after every required check passed on the
-head (`heavy-gate` in ci.yml; it is red when a lint.yml required check was red
-or unfinished at its deadline). ci-verdict lists them with their real state
+start only after every required check but `Hot-path latency (advisory)` passed on
+the head (`heavy-gate` in ci.yml; it is red when a required check it polls was
+red or unfinished at its deadline). ci-verdict lists them with their real state
 (PENDING, or NOT RUN with the gate's reason) before and after the verdict turns
 success. A docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
 nothing else, classified by `scripts/ci-changed-files.mjs`; every doubt runs the
@@ -532,21 +541,25 @@ other test job always run, because a docs edit can red tests outside tests/confi
 (`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
 is the three `Install test` legs: outside `INSTALL_PATHS` in that script
 they report success without installing, and `Strict install` and the macOS APFS
-step run on non-pull_request events only. `TLA+ models`
-model-checks only when `formal/` (or its checker or ci.yml) changed. A REQUIRED
-job never skips at job level: ci-verdict and the merge train demand a literal
-`success`, so `TLA+ models` starts and skips its steps.
+step run on non-pull_request events only. On a pull request, `TLA+ models`
+model-checks only when `formal/` (or its checker or ci.yml) changed: its shards
+skip at job level and the aggregate still reports. Push and merge-queue runs
+always model-check (`changes` sets `formal=true` for every non-PR event). A REQUIRED job never skips at
+job level: ci-verdict and the merge train demand a literal `success`. Implicit
+`success()` reads every ancestor, so a job behind a skippable ancestor skips even
+when its direct needs are green; `heavy-gate` therefore reads `TLA+ models` from
+check-runs.
+
+Master requires the ten contexts in `BRANCH_PROTECTION_CONTEXTS`
+(`scripts/lib/ci-checks.mjs`). ci-verdict reads the live list, and it also gates
+every other non-advisory row a run posts.
 
 The Windows unit leg (`Unit tests Windows`, job key `unit-tests-windows`) GATES
 by maintainer decision on 2026-10-17: it runs the real `win32` gates, and
 advisory reds were waved through (the incidents are in `HISTORY.md`). It
 therefore starts on every event like the Unit shards and is never behind
 `heavy-gate`, whose docs-only skip would leave a required row absent. Its name
-carries no `(advisory)` suffix, so a row it reports with a failing conclusion
-gates. A row it does not report, or reports `skipped`, does not: until the
-maintainer adds `Unit tests Windows` to master's required status checks,
-ci-verdict is the only enforcement, and it judges only the rows that are
-posted, so an absent or job-skipped Windows row reads green (shape 11). Its
+carries no `(advisory)` suffix, and it is a required context on master. Its
 population is every
 `tests/config/*` file, every `process.platform` Windows gate, and the
 shrink-only `WINDOWS_LANE_ADMISSIONS` rows

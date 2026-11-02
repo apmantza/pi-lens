@@ -8,7 +8,7 @@
 //
 // `marked` is loaded lazily, on the first call, so a script that imports this
 // module and never reads markdown structure (`scripts/check-close-keywords.mjs`
-// in the `Close-keyword syntax` and `Verify merged PR close keywords` jobs,
+// in the `PR metadata` and `Verify merged PR close keywords` jobs,
 // which run with no install) never resolves it. The `PR body (advisory)` job
 // installs marked alone, pinned by the lockfile's integrity
 // (`.github/workflows/pr-metadata.yml`). A missing install throws: a gate that

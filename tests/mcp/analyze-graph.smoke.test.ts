@@ -115,7 +115,7 @@ describe("pilens_analyze (warm) maintains the review graph over MCP", () => {
 		// the shared server, and shuffle runs cases in any order (#4561 census row).
 		const res = await harness.request(10, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: path.join(projectDir, "a.ts") },
+			arguments: { file: path.join(projectDir, "a.ts"), view: "full-json" },
 		});
 		const coldReport = parseReport(res);
 		expect(coldReport.available).toBe(true);
@@ -132,7 +132,7 @@ describe("pilens_analyze (warm) maintains the review graph over MCP", () => {
 
 		const reportRes = await harness.request(12, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: path.join(projectDir, "a.ts") },
+			arguments: { file: path.join(projectDir, "a.ts"), view: "full-json" },
 		});
 		const report = parseReport(reportRes);
 		expect(report.available).toBe(true);

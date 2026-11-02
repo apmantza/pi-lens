@@ -739,6 +739,18 @@ export interface PiSessionOptions {
 	 * (resume, restart, reload) keeps the factory it resolved.
 	 */
 	inlineFactory?: () => Promise<ExtensionFactory>;
+	/**
+	 * Other extensions, by path, that pi's own loader loads beside the built
+	 * entry: `before` ahead of it and `after` behind it, in the order given.
+	 * pi walks `tool_call` handlers in load order and stops at the first
+	 * block, so the order is what a composition case tests (#5120). Path mode
+	 * only: refused with {@link inlineFactory}, whose place in pi's load order
+	 * this helper does not pin.
+	 */
+	extraExtensions?: {
+		readonly before?: readonly string[];
+		readonly after?: readonly string[];
+	};
 }
 
 export interface PiSession {
@@ -914,6 +926,8 @@ interface SessionArgs {
 	readonly customTools?: readonly ToolDefinition[];
 	/** The resolved {@link PiSessionOptions.inlineFactory}; absent in path mode. */
 	readonly inlineFactory?: ExtensionFactory;
+	/** {@link PiSessionOptions.extraExtensions}. */
+	readonly extraExtensions?: PiSessionOptions["extraExtensions"];
 }
 
 /** One pi session before its extensions are bound, with its provider recorder. */
@@ -957,7 +971,13 @@ async function createSession(
 			resourceLoaderOptions: {
 				...(args.inlineFactory
 					? { extensionFactories: [args.inlineFactory] }
-					: { additionalExtensionPaths: [EXTENSION_ENTRY] }),
+					: {
+							additionalExtensionPaths: [
+								...(args.extraExtensions?.before ?? []),
+								EXTENSION_ENTRY,
+								...(args.extraExtensions?.after ?? []),
+							],
+						}),
 				// pi discovers skills under `$HOME/.agents/skills` as well as
 				// `agentDir`, so a host's own skills padded every system prompt
 				// (15,144 characters on one dev host, none on a CI runner) and moved
@@ -1263,12 +1283,19 @@ export async function startPiSession(
 	// start branch — the skipped work and the `mode: "quick"` row — still runs.
 	if (startupMode === "quick") process.env.PI_LENS_COLD_START_QUICK = "0";
 	else delete process.env.PI_LENS_COLD_START_QUICK;
+	if (options.extraExtensions && options.inlineFactory)
+		throw new Error(
+			"startPiSession: extraExtensions is path mode only; this helper does not pin an inline factory's place in pi's load order",
+		);
 	const args: SessionArgs = {
 		root: options.root,
 		flags: flagMap(DEFAULT_FLAGS, options.flags),
 		modelCompat: options.modelCompat ?? DEFAULT_MODEL_COMPAT,
 		...(options.captureUi ? { ui: createUiRecorder() } : {}),
 		...(options.customTools ? { customTools: options.customTools } : {}),
+		...(options.extraExtensions
+			? { extraExtensions: options.extraExtensions }
+			: {}),
 		...(options.inlineFactory
 			? { inlineFactory: await options.inlineFactory() }
 			: {}),

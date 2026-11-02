@@ -10,10 +10,26 @@ There are **two** pi-lens config files:
 Both files have the same shape, with one exception noted below the example:
 everything LSP-related lives under an `lsp` namespace inside them.
 
-Executable LSP fields from a project config are admitted only when pi has
-marked the project trusted. This includes custom `command` values, command
-overrides, `env`, and `initializationOptions`; an untrusted or older host is
-fail-closed and emits one bounded notice telling you to mark the project
+LSP fields from a project config are admitted without trust only when they
+are on a short list. On an `lsp.servers.<id>` entry an untrusted project may
+set `name` and nothing else. It may not set `command`, `args`, `extensions`,
+`rootMarkers`, `env`, `initializationOptions`, `covers`, `enabled`, `role`, or
+any field pi-lens does not recognise; on `lsp.serverOverrides.<id>` it may set
+none of `command`, `env`, `initializationOptions`, or any other field. Those
+fields need pi to have marked the project trusted. An untrusted project that
+sets one of them on an `lsp.servers.<id>` entry disables that server for the
+project: pi-lens does not start it, rather than start it on a configuration
+where the project's value replaced one you set in your global config. Under
+`serverOverrides.<id>`, the project's fields are dropped and your global
+override for that built-in applies field by field: a global wrapper `command`
+stays, a global value the project replaced comes back, and a field you did not
+set globally runs on the pi-lens default. The built-in server stays on. Look
+for the `lsp-registry-decision` record: its reason reads "project LSP <field>
+refused for <id>: pi project trust is <state>; the <id> entry is not applied
+for this project" for a server, or "...; the project's <id> override is not
+applied" for an override. An `lsp.servers.<id>` entry with no `extensions`
+list is not registered, since no file can select it. An untrusted or older host
+is fail-closed and emits one bounded notice telling you to mark the project
 trusted in pi or upgrade pi. Global config remains trusted, and a project can
 always disable a server. pi-lens does not maintain a second trust setting.
 
@@ -379,14 +395,14 @@ canonical key wins, and the keys you have not moved yet keep working.
 Only keys pi-lens actually recognizes get "move it to …" advice. A key in a
 legacy file that is not a pi-lens setting at all — a typo, or a leftover from
 another tool — cannot be migrated anywhere, so it gets the ordinary
-unrecognized-key notice (`PILENS_CFG_0001`) and is counted in ONE whole-file
+unrecognized-key notice (`PILENS_CFG_0004`) and is counted in ONE whole-file
 `PILENS_CFG_0003` notice for the file rather than being told to move.
 
 ## When a config is ignored
 
-A file that cannot be read or parsed is **ignored, never partially applied** —
-pi-lens runs on defaults for it and says so once, with the code
-`PILENS_CFG_0001`. A field whose value does not match its declared type is
+A file that is unreadable, unparsable, or not a JSON object is **ignored, never
+partially applied** — pi-lens runs on defaults for it and says so once, with the
+code `PILENS_CFG_0001`. A field whose value does not match its declared type is
 dropped on its own (`PILENS_CFG_0005`), and an unrecognized field is dropped
 with a message naming the key (`PILENS_CFG_0004`). If resolving a file fails
 internally the whole file is ignored and said so under its own code
@@ -403,7 +419,7 @@ them rather than by what they say — both are about values that were rejected:
   deprecation notices (`PILENS_CFG_0002`, `PILENS_CFG_0003`), which share this
   list;
 - what the **loader** reading the file produced on its own — unknown top-level
-  keys and settings it refused (`PILENS_CFG_0001`).
+  keys (`PILENS_CFG_0004`) and values it refused (`PILENS_CFG_0005`).
 
 Each list is bounded at 20 records: up to 19 notices plus, when the bound bit,
 a single `PILENS_CFG_0007` summary giving the count that was suppressed, so a

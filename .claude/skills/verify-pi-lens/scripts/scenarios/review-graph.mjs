@@ -42,7 +42,7 @@ export async function run(ctx, variant) {
 	);
 	const report = await ctx.call(
 		"pilens_module_report",
-		{ file: `${ctx.ws}/${MODULE}` },
+		{ file: `${ctx.ws}/${MODULE}`, view: "full-json" },
 		"module_report of the module",
 	);
 	const body = JSON.parse(

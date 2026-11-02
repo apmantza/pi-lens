@@ -9,11 +9,7 @@ import {
 	stripOldTextTrailingWhitespace,
 	tryCorrectIndentationMismatch,
 } from "../../clients/read-guard-tool-lines.js";
-import {
-	applyPartiallyApplicableEdits,
-	PartialApplyRecordStore,
-	type PartiallyApplicableEdit,
-} from "../../clients/partial-edit-apply.js";
+import { PartialApplyRecordStore } from "../../clients/partial-edit-apply.js";
 import { logReadGuardEvent } from "../../clients/read-guard-logger.js";
 import { ReadGuard } from "../../clients/read-guard.js";
 import {
@@ -598,17 +594,14 @@ describe("read-guard tool line helpers", () => {
 				newText: "ok",
 				originalIndex: 0,
 			});
-			// #1053: the carried span and snapshot identity point at the exact
-			// preflight-approved region.
+			// #1053: the carried span points at the exact preflight-approved
+			// region.
 			const lf = fs.readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n");
 			const start = lf.indexOf("function bar() {\n  return 2;\n}");
 			expect(result.partiallyApplicable?.[0]).toMatchObject({
 				spanStart: start,
 				spanEnd: start + "function bar() {\n  return 2;\n}".length,
 			});
-			expect(result.partiallyApplicable?.[0].snapshot.hash).toMatch(
-				/^[0-9a-f]{64}$/,
-			);
 		} finally {
 			env.cleanup();
 		}
@@ -1676,7 +1669,6 @@ describe("getTouchedLinesForGuard — preflight spans and exact-retry recognitio
 			expect(edit!.spanStart).toBe(lf.indexOf("const b = 2;"));
 			expect(edit!.spanEnd).toBe(edit!.spanStart + "const b = 2;".length);
 			expect(edit!.appliedSpanText).toBe("const b = 2;");
-			expect(edit!.snapshot.hash).toMatch(/^[0-9a-f]{64}$/);
 		} finally {
 			env.cleanup();
 		}
@@ -1867,38 +1859,34 @@ describe("getTouchedLinesForGuard — preflight spans and exact-retry recognitio
 		}
 	});
 
-	it("recognizes an identical retry after a formatter rewrote the file post-commit", async () => {
+	it("recognizes an identical retry after a formatter rewrote the file post-commit", () => {
 		const env = setupTestEnvironment("rg-formatter-retry-");
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
 			const raw = "const a = 1;\nconst b = 2;\n";
 			fs.writeFileSync(filePath, raw);
-			const spanStart = raw.indexOf("const b = 2;");
-			const edit: PartiallyApplicableEdit = {
-				oldText: "const b = 2;",
-				appliedSpanText: "const b = 2;",
-				newText: "const b = 20;",
-				originalIndex: 0,
-				snapshot: {
-					hash: createHash("sha256").update(raw, "utf8").digest("hex"),
-				},
-				spanStart,
-				spanEnd: spanStart + "const b = 2;".length,
-			};
 			const records = new PartialApplyRecordStore();
-
-			await applyPartiallyApplicableEdits({
+			// The commit and its record, as a host edit's tool_result writes them
+			// (#5120), then a formatter's rewrite and its after-write stamp: it
+			// appends a trailing newline, changing the raw bytes (and thus the
+			// file hash) while leaving the applied line intact.
+			const committed = raw.replace("const b = 2;", "const b = 20;");
+			fs.writeFileSync(filePath, committed);
+			const hash = (text: string) =>
+				createHash("sha256").update(text, "utf8").digest("hex");
+			records.record(
 				filePath,
-				edits: [edit],
-				recordStore: records,
-				// A formatter rewrites the file after the commit: it appends a
-				// trailing newline, changing the raw bytes (and thus the file hash)
-				// while leaving the applied line intact.
-				afterWrite: async () => {
-					fs.writeFileSync(filePath, `${fs.readFileSync(filePath, "utf-8")}\n`);
-					return undefined;
-				},
-			});
+				"const b = 2;",
+				"const b = 20;",
+				hash(committed),
+			);
+			fs.writeFileSync(filePath, `${committed}\n`);
+			records.noteAfterWriteHash(
+				filePath,
+				"const b = 2;",
+				"const b = 20;",
+				hash(`${committed}\n`),
+			);
 
 			// The post-afterWrite state was recorded alongside the post-commit one.
 			expect(

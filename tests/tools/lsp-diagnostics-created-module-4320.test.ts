@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
@@ -252,19 +252,28 @@ describe("a module created after the server started (#4320)", () => {
 	// cached finding of that server was dropped and re-checked (probe4 with
 	// Pyrefly: replay 8 ms -> 629 ms).
 	it("announces a new file only to its own server's clients", async () => {
+		// #3801: the `.tl` server publishes nothing (push-only, no provider), so
+		// each `.tl` check waited the full push window (21 s for the case). The
+		// case asserts what the Lua server heard, not the `.tl` verdict, so the
+		// window is capped for this case alone.
+		vi.stubEnv("PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS", "1500");
 		const luaFile = path.join(workspace, "own_server.lua");
 		fs.writeFileSync(luaFile, "return {}\n");
 		const seed = path.join(workspace, "seed.tl");
 		fs.writeFileSync(seed, "local s = 1\n");
-		await diagnose([luaFile, seed]);
-
 		const fresh = path.join(workspace, "fresh_other.tl");
-		fs.writeFileSync(fresh, "local f = 1\n");
-		await diagnose([fresh, luaFile]);
-		// a sentinel the stale-lookup server must hear, so its trace is current
 		const sentinel = path.join(workspace, "sentinel_module.lua");
-		fs.writeFileSync(sentinel, "return {}\n");
-		await diagnose([sentinel]);
+		try {
+			await diagnose([luaFile, seed]);
+
+			fs.writeFileSync(fresh, "local f = 1\n");
+			await diagnose([fresh, luaFile]);
+			// a sentinel the stale-lookup server must hear, so its trace is current
+			fs.writeFileSync(sentinel, "return {}\n");
+			await diagnose([sentinel]);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 
 		const watched = fs
 			.readFileSync(luaTrace, "utf8")

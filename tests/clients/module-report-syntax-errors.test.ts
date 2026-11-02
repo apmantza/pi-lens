@@ -184,9 +184,10 @@ describe("tool text renders the warning (#4949)", () => {
 	});
 
 	// Recurrence: a recovered parse that drops EVERY declaration makes the report
-	// unavailable, and the compact view's early return dropped the warning
-	// exactly there (#4949 review F1).
-	it("module_report view=compact on a zero-symbol error file keeps the warning", async () => {
+	// unavailable, and the unavailable early return dropped the warning
+	// exactly there (#4949 review F1). The stale `view: "compact"` below
+	// exercises the #5137 fall-through to the default preset on that path.
+	it("module_report stale view on a zero-symbol error file falls through and keeps the warning (#5137)", async () => {
 		const env = makeEnv();
 		createTempFile(env.tmpDir, "garbage.py", "def (:\n  x = [\n )) garbage\n");
 		const report = createModuleReportTool(() => env.tmpDir);

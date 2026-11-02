@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
-import { _resetProjectReportBuildGuardForTests } from "../../clients/project-report.js";
+import {
+	_resetProjectReportBuildGuardForTests,
+	projectReport,
+	renderTextProjectReport,
+} from "../../clients/project-report.js";
 import {
 	_setReviewGraphEntryBudgetForTests,
 	buildOrUpdateGraph,
@@ -27,12 +31,19 @@ describe("project_report tool", () => {
 			expect(result.isError).toBe(true);
 			expect(result.details.available).toBe(false);
 			expect(result.details.hint).toBeTruthy();
+			// Cold cache is the text cell too (#5150): one text block, the
+			// renderer's own unavailable layout, and no fenced JSON sidecar.
+			expect(result.content).toHaveLength(1);
+			const text = String(result.content[0]?.text);
+			expect(text).toContain("project_report — unavailable");
+			expect(text).toContain(result.details.hint);
+			expect(text).not.toContain("```json");
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("returns a navigable JSON report on a warm graph", async () => {
+	it("returns the default TEXT report on a warm graph", async () => {
 		const env = setupTestEnvironment("pi-lens-projreport-tool-");
 		try {
 			createTempFile(
@@ -52,10 +63,12 @@ describe("project_report tool", () => {
 				cwd: env.tmpDir,
 			});
 			expect(result.isError).toBeFalsy();
-			const report = JSON.parse(String(result.content[0]?.text));
-			expect(report.available).toBe(true);
-			expect(report.trust).toBeDefined();
-			expect(Array.isArray(report.hubs)).toBe(true);
+			// Default is the text cell, not JSON: the payload must not parse.
+			const text = String(result.content[0]?.text);
+			expect(() => JSON.parse(text)).toThrow();
+			expect(text).toContain("TRUST:");
+			expect(text).toContain("UNRENDERED:");
+			expect(result.details.view).toBe("default");
 			expect(result.details.hubs).toBeGreaterThanOrEqual(0);
 		} finally {
 			env.cleanup();
@@ -71,9 +84,15 @@ describe("project_report tool", () => {
 			await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
 
 			const tool = createProjectReportTool(() => env.tmpDir);
-			const result = await tool.execute("1", {}, undefined, null, {
-				cwd: env.tmpDir,
-			});
+			const result = await tool.execute(
+				"1",
+				{ view: "json" },
+				undefined,
+				null,
+				{
+					cwd: env.tmpDir,
+				},
+			);
 			const report = JSON.parse(String(result.content[0]?.text));
 			expect(result.isError).toBeFalsy();
 			expect(report.trust.persistCoverage.sourceFilesTruncated).toBe(true);
@@ -114,7 +133,7 @@ describe("project_report tool", () => {
 		}
 	});
 
-	it("supports view:compact line-oriented rendering", async () => {
+	it("falls through to the default text cell on a legacy compact view", async () => {
 		const env = setupTestEnvironment("pi-lens-projreport-tool-");
 		try {
 			createTempFile(
@@ -140,7 +159,58 @@ describe("project_report tool", () => {
 			expect(result.isError).toBeFalsy();
 			const text = String(result.content[0]?.text);
 			expect(text).toContain("TRUST:");
-			expect(result.details.view).toBe("compact");
+			// No enum: "compact" is an unknown view and falls through to text.
+			const plain = await tool.execute("1", {}, undefined, null, {
+				cwd: env.tmpDir,
+			});
+			expect(text).toBe(String(plain.content[0]?.text));
+			expect(result.details.view).toBe("default");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("#5150 R2: view:json hatch returns the byte-identical JSON document", async () => {
+		const env = setupTestEnvironment("pi-lens-projreport-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"clients/hub.ts",
+				"export function hubFn() { return 1; }\n",
+			);
+			createTempFile(
+				env.tmpDir,
+				"clients/consumer.ts",
+				"import { hubFn } from './hub';\nexport function run() { return hubFn(); }\n",
+			);
+			await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+
+			const tool = createProjectReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"1",
+				{ view: "json" },
+				undefined,
+				null,
+				{
+					cwd: env.tmpDir,
+				},
+			);
+			expect(result.isError).toBeFalsy();
+			// The hatch is the engine document itself: same bytes, same keys,
+			// no reformatting. The engine data path is untouched by the flip.
+			const report = JSON.parse(String(result.content[0]?.text));
+			expect(report.available).toBe(true);
+			expect(String(result.content[0]?.text)).toBe(
+				JSON.stringify(await projectReport(env.tmpDir)),
+			);
+			expect(result.details.view).toBe("json");
+			// And the default cell is the same report through the one renderer.
+			const text = await tool.execute("1", {}, undefined, null, {
+				cwd: env.tmpDir,
+			});
+			expect(String(text.content[0]?.text)).toBe(
+				renderTextProjectReport(await projectReport(env.tmpDir)),
+			);
 		} finally {
 			env.cleanup();
 		}

@@ -18,7 +18,10 @@
  * is no second place to remember.
  */
 
-import { DEPRECATED_CONFIG_SURFACES } from "./config-diagnostic-codes.js";
+import {
+	type ConfigDiagnosticCode,
+	DEPRECATED_CONFIG_SURFACES,
+} from "./config-diagnostic-codes.js";
 
 type LensFlagScope = "global" | "project";
 
@@ -565,7 +568,7 @@ interface FlagConfigPath {
 function resolveFlagConfigPath(
 	raw: Record<string, unknown>,
 	configKey: string,
-	warnInvalid?: (reason: string) => void,
+	warnInvalid?: (reason: string, code: ConfigDiagnosticCode) => void,
 ): FlagConfigPath | undefined {
 	const segments = configKey.split(".");
 	let source = raw;
@@ -579,7 +582,10 @@ function resolveFlagConfigPath(
 		const next = asConfigObject(object[segment]);
 		if (!next) {
 			if (warnInvalid) {
-				warnInvalid(`${segments.slice(0, i + 1).join(".")} must be an object`);
+				warnInvalid(
+					`${segments.slice(0, i + 1).join(".")} must be an object`,
+					"PILENS_CFG_0005",
+				);
 			}
 			return undefined;
 		}
@@ -652,7 +658,7 @@ export function assignFlagConfigSection(
 	raw: Record<string, unknown>,
 	out: Record<string, unknown>,
 	configKey: string,
-	warnInvalid: (reason: string) => void,
+	warnInvalid: (reason: string, code: ConfigDiagnosticCode) => void,
 ): void {
 	const path = resolveFlagConfigPath(raw, configKey, warnInvalid);
 	if (!path) return;
@@ -665,7 +671,7 @@ export function assignFlagConfigSection(
 
 	const leaf = path.segments[path.segments.length - 1];
 	if (leaf in path.source && typeof path.source[leaf] !== "boolean") {
-		warnInvalid(`${configKey} must be a boolean`);
+		warnInvalid(`${configKey} must be a boolean`, "PILENS_CFG_0005");
 		target[leaf] = undefined;
 		return;
 	}

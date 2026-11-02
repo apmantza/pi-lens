@@ -64,8 +64,9 @@ import {
 	readSymbol,
 	readTurnEndStatus,
 	recentLatency,
-	renderCompactModuleReport,
-	renderCompactProjectReport,
+	renderModuleReportPreset,
+	renderTextProjectReport,
+	resolveModuleReportPreset,
 	renderCompactSymbolSearch,
 	renderLspBrokenStatusLines,
 	resolveRebuildScript,
@@ -781,9 +782,8 @@ const ALL_TOOLS = [
 				},
 				view: {
 					type: "string",
-					enum: ["summary", "default", "compact"],
 					description:
-						"Payload tier. summary returns top-level entries/recommendedReads with heavy callback/usedBy/blast-radius payloads omitted. compact (cheapest) returns a line-oriented TEXT rendering of the full report instead of JSON.",
+						'Output preset: projection \u00d7 format. "summary-text" (default) = metric fields off (no usedBy/fanout/complexity fields), text. "summary-json" = same fields, JSON. "full-text" = every field, text. "full-json" = every field, JSON (byte-identical to the pre-#5137 default). Metrics render as a cx:/fan: suffix and flags as [flag]; every field appears in the text cell, `kind` prints raw so it can be reused as read_symbol\'s kind filter, and an unavailable module still renders its callbacks and recommended reads. A summary cell states the omission in its PROVENANCE footer. A maxRefsPerSymbol argument promotes the projection to full and keeps the format.',
 				},
 				blastRadius: {
 					type: "boolean",
@@ -811,7 +811,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_project_report",
 		description:
-			"Orient in a project from its review graph. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_project_report before choosing a file.",
+			'Orient in a project from its review graph. Returns a line-oriented TEXT report by default; pass view:"json" for the full JSON payload. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_project_report before choosing a file.',
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -828,9 +828,9 @@ const ALL_TOOLS = [
 				},
 				view: {
 					type: "string",
-					enum: ["default", "compact"],
+					// Plain string, no enum: "json" is the JSON hatch; anything else is text.
 					description:
-						"Payload tier. compact (cheapest) returns a line-oriented TEXT rendering instead of JSON. Default returns JSON.",
+						'Payload tier. "json" returns the full JSON report; any other value (or omitting view) returns the default line-oriented TEXT rendering.',
 				},
 			},
 		},
@@ -1362,61 +1362,29 @@ async function callTool(
 			Number.isFinite(args.maxCallGraphEntries)
 				? Math.max(1, Math.floor(args.maxCallGraphEntries))
 				: undefined;
-		const view =
-			args.view === "summary" || args.view === "compact"
-				? args.view
-				: undefined;
+		const choice = resolveModuleReportPreset(args.view, maxRefsPerSymbol);
 		const focus = typeof args.focus === "string" ? args.focus : undefined;
 		const report = await moduleReport(file, cwd, {
 			maxRefsPerSymbol,
+			view: args.view,
+			focus,
 			blastRadius,
 			blastRadiusDepth,
 			callGraph,
 			maxCallGraphEntries,
-			view,
-			focus,
 		});
-		if (!report.available) {
-			return {
-				...toolText(
-					`No module report for ${path.relative(cwd, path.resolve(cwd, file))} — not a symbol-bearing file, or unreadable.`,
-					report,
-					true,
-				),
-				isError: true,
-			};
-		}
-		const graphStaleness = graphStalenessNote(
-			report.graphBuiltAt,
-			"Review graph",
-		);
-		const summary =
-			`${path.relative(cwd, report.path) || report.path} [${report.staleness}] — ` +
-			`${report.summary.symbols} symbol(s), ${report.summary.exports} exported, ` +
-			`${report.api.length} in public API` +
-			(graphStaleness ? `\n\n${graphStaleness}` : "");
-		if (view === "compact") {
-			const compactText = renderCompactModuleReport(report);
-			return {
-				content: [
-					{
-						type: "text" as const,
-						text: graphStaleness
-							? `${compactText}\n\n${graphStaleness}`
-							: compactText,
-					},
-				],
-			};
-		}
-		// Compact (unindented) JSON — matches the pi tool's mirror (#512); an
-		// agent parses this payload, it doesn't read it formatted.
-		return toolText(
-			summary,
-			graphStaleness
-				? { ...report, graphStalenessNote: graphStaleness }
-				: report,
-			true,
-		);
+		// The graph-age advisory is a surface concern: pi's graph is per-edit warm,
+		// so a staleness line there would be noise, while an MCP caller sits on a
+		// cached graph. It wraps the text cell and never the JSON one (#5137 review).
+		const rendered = renderModuleReportPreset(report, choice);
+		const graphStaleness =
+			choice.format === "text"
+				? graphStalenessNote(report.graphBuiltAt, "Review graph")
+				: undefined;
+		const text = graphStaleness ? `${rendered}\n\n${graphStaleness}` : rendered;
+		if (!report.available)
+			return { content: [{ type: "text" as const, text }], isError: true };
+		return { content: [{ type: "text" as const, text }] };
 	}
 
 	if (name === "pilens_project_report") {
@@ -1426,45 +1394,44 @@ async function callTool(
 				? Math.max(1, Math.floor(args.limit))
 				: undefined;
 		const focus = typeof args.focus === "string" ? args.focus : undefined;
-		const view = args.view === "compact" ? "compact" : undefined;
-		const report = await projectReport(cwd, { limit, focus, view });
+		// #5150: default text, explicit JSON hatch. The engine call is identical
+		// either way (data never depends on the rendering), so no `view` is
+		// passed and the engine document is unchanged; the old MCP default was a
+		// summary + fenced JSON, not this bare document.
+		const report = await projectReport(cwd, { limit, focus });
 		if (!report.available) {
+			// Cold cache is still the text cell (#5150): the renderer owns the
+			// unavailable layout (hint, LAST BUILD, UNRENDERED), so no fenced
+			// JSON sidecar rides along here either.
 			return {
-				...toolText(
-					report.hint ?? "No review graph cached for this workspace yet.",
-					report,
-				),
+				content: [
+					{ type: "text" as const, text: renderTextProjectReport(report) },
+				],
 				isError: true,
 			};
 		}
-		const graphStaleness = report.trust
-			? graphStalenessNote(report.trust.graphBuiltAt, "Review graph")
-			: undefined;
-		if (view === "compact") {
-			const compactText = renderCompactProjectReport(report);
+		if (args.view === "json") {
+			// JSON hatch: the handler's payload stays a single parseable document —
+			// no staleness prose is appended to it (#5159). Staleness already
+			// lives inside the document's own trust notes. The wire still stamps
+			// the gate's universal `result ok`/usage footer onto this same block
+			// (finalizeToolResultWithDelivery), so a reader strips it before
+			// parsing. The warm-build wrapper may still append its advisory
+			// (accepted residual per #5158); that path is owned by #5159, not
+			// this tool.
 			return {
-				content: [
-					{
-						type: "text" as const,
-						text: graphStaleness
-							? `${compactText}\n\n${graphStaleness}`
-							: compactText,
-					},
-				],
+				content: [{ type: "text" as const, text: JSON.stringify(report) }],
 			};
 		}
-		const summary =
-			`Project report — ${report.hubs?.length ?? 0} hub(s), ` +
-			`${report.entryPoints?.length ?? 0} entry point(s), ` +
-			`${report.riskHotspots?.length ?? 0} risk hotspot(s)` +
-			(graphStaleness ? `\n\n${graphStaleness}` : "");
-		return toolText(
-			summary,
-			graphStaleness
-				? { ...report, graphStalenessNote: graphStaleness }
-				: report,
-			true,
-		);
+		// Default text cell: one renderer shared with the pi tool (byte-identity
+		// pinned by tests). The cell owns its trailing STALENESS block, so no
+		// graphStaleness note is appended here — and no fenced JSON sidecar
+		// rides along (renderToolText's structured payload would add one).
+		return {
+			content: [
+				{ type: "text" as const, text: renderTextProjectReport(report) },
+			],
+		};
 	}
 
 	if (name === "pilens_read_symbol") {
@@ -1885,8 +1852,8 @@ const WARN_ONLY_STALE_TOOLS = new Set([
  * Appends the warm-code-stale advisory to a tool result's text (and a
  * `warmCodeStale: true` marker line) after whatever the tool rendered. The
  * tool's own text stays byte-identical, so the advisory only ever reads last
- * (only `symbol_search` stopped fencing; `module_report` still passes a
- * structured payload, #5104).
+ * (only `symbol_search` stopped fencing; `module_report` passes a structured
+ * payload only under *-json presets, #5104).
  */
 function withStaleWarning<
 	T extends { content: { type: "text"; text: string }[] },

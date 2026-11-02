@@ -3165,7 +3165,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			cacheManager,
 			ensureLSPConfigInitialized,
 			updateLspStatus,
-			resetLSPService,
 			sessionId: getStableSessionId(ctx),
 		});
 	});

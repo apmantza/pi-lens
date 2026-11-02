@@ -426,6 +426,20 @@ file-scoped worklist and receives no project-wide scanner output.
     tell a copied rule from a coincidental literal without reading what the
     value feeds. Instances and dates: `HISTORY.md`.
 
+88. **Learned attribution keyed on a name alone:** tier 4 of
+    `classifyMutatingTool` admits any tool name that was once seen with a disk
+    change in its call window and a `path` field, then classifies every later
+    call of that name as an edit. A tool that never wrote (one operation of a
+    mixed tool, #4139) and a call whose work already ran (a provider's
+    display-only replay, #5160) both reach it on name plus path alone. Tier 4 is
+    admit-by-default with enumerated exemptions (the registry names, the
+    `cursor-replay-` id prefix); a third carve-out is the trigger to redesign it
+    fail-closed, learning only when the call, not the window, owns the change.
+    Screen: can a call whose work already ran, or a tool that never wrote, reach
+    the learned lookup or the arm gate on name plus path alone? Census: not
+    countable. Enforcer: none: judgment-only, the exempt population is whatever
+    other providers replay or mix. Instances and dates: `HISTORY.md`.
+
 </important>
 
 <important if="a test double, ratchet or sweep">

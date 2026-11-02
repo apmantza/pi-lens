@@ -1007,7 +1007,7 @@
 				},
 				"Resend": {
 					"value": "TRUE",
-					"test": "tests/clients/head-move-resync-4493.test.ts",
+					"test": "tests/clients/head-move-resync-4507.test.ts",
 					"title": "checks a dependent against its rewritten dependency when the primary re-checks dependents only after the drain reply (push diagnostics)",
 					"narrowedBy": {
 						"FALSE": {
@@ -1243,17 +1243,17 @@
 				},
 				"WritesPrimaryFirst": {
 					"value": "TRUE",
-					"test": "tests/clients/head-move-resync-4493.test.ts",
+					"test": "tests/clients/head-move-resync-4507.test.ts",
 					"title": "checks a dependent the command rewrote against its rewritten dependency"
 				},
 				"DispatchWaitsPhase": {
 					"value": "TRUE",
-					"test": "tests/clients/head-move-resync-4493.test.ts",
+					"test": "tests/clients/head-move-resync-4507.test.ts",
 					"title": "checks a dependent against its rewritten dependency when the primary phase outlasts the read-only bound (%s diagnostics)"
 				},
 				"RequireOrderedDrain": {
 					"value": "TRUE",
-					"test": "tests/clients/head-move-resync-4493.test.ts",
+					"test": "tests/clients/head-move-resync-4507.test.ts",
 					"title": "records undrained when %s replies overtake queued changes"
 				},
 				"ContentGate": {
