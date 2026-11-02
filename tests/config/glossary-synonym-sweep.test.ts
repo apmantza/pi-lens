@@ -1200,7 +1200,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// path, the `.bin/effect-tsgo` path, and `findNativeTypeScriptLsp` hands
 		// back its `node_modules` directory: three `path.join` filesystem calls.
 		// 122 -> 111 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/lsp/server.ts": 111,
+		// 111 -> 112 (#5123): Groovy resolves its configured jar from pi's cwd
+		// before launching, one filesystem path use in the reviewed fix.
+		"clients/lsp/server.ts": 112,
 		"clients/lsp/session-roots.ts": 8,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
