@@ -188,7 +188,6 @@ and `tests/packaging.test.ts` list are updated together.
 | 1.2.0 | 2026-10-16 | 9400454891d5a1beb0a4d2d9452dece276e22e71 | 15 pass / 1 skipped (git-install-loads) |
 | 1.3.0 | 2026-10-16 | 9400454891d5a1beb0a4d2d9452dece276e22e71 | 15 pass / 1 skipped (git-install-loads) |
 | 1.4.0 | 2026-10-22 | 75a1a3c893ed0ac44a3081dd3d475c1e72349099 | 15 pass / 1 skipped (git-install-loads) |
-
 | 1.5.0 | 2026-11-02 | e5017388815d476e783fc850b3d05c6ce98bd85e | Maintainer certification; release QA blocked by npm guard (17 untested) |
 
 Re-run any row with `node scripts/release-qa.mjs --pi <host>` at the listed commit.

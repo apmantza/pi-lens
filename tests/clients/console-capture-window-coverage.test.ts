@@ -1,3 +1,4 @@
+import { hostPackageDir } from "../support/pi-session.js";
 /**
  * Coverage enforcement for `withConsoleCaptureWindows` (#1434 S1a review).
  *
@@ -21,8 +22,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matchingCloseIndex } from "../support/sweep-kit.js";
 
-const TYPES_FILE = path.resolve(
-	"node_modules/@earendil-works/pi-coding-agent/dist/core/extensions/types.d.ts",
+const TYPES_FILE = path.join(
+	hostPackageDir(),
+	"dist/core/extensions/types.d.ts",
 );
 
 /** Strip `/* */ ` and `; // ...` comments so they cannot confuse brace counting. */

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { readProjectTrustFromContext } from "../clients/project-trust.js";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import semver from "semver";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
@@ -72,8 +73,8 @@ describe("pi 1.5 tool contracts (#5199)", () => {
 		expect(JSON.stringify(result?.content)).toContain("greet");
 	});
 
-	it.skipIf(hostVersion !== "1.5.0")(
-		"delivers pi-schema validation wording unchanged to the agent (requires resolved pi 1.5.0)",
+	it.skipIf(!semver.satisfies(hostVersion, ">=1.5.0 <1.6.0"))(
+		"delivers pi-schema validation wording unchanged to the agent (requires resolved pi 1.5.x)",
 		async () => {
 			const handle = await startPiSession({
 				root: fixture.root,

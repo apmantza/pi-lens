@@ -336,7 +336,8 @@ jobs:
   # the install ROOT's package.json, never from an installed dependency's. pi
   # installs `npm:pi-lens` into a generated root, `{"name":"pi-extensions",
   # "private":true}` (`PackageManager#ensureNpmProject`), with `npm install
-  # <spec> --prefix <root> --legacy-peer-deps` (`getNpmInstallArgs`), and writes
+  # <spec> --prefix <root> --legacy-peer-deps --no-audit --no-fund`
+  # (`getNpmInstallArgs`), and writes
   # no `allowScripts` there. The first step pins that consequence: strict
   # install into pi's unmodified root FAILS CLOSED on @ast-grep/cli. The second
   # installs into a root that carries pi-lens's own declared approvals, which is

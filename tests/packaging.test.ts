@@ -441,9 +441,9 @@ describe("host-provided peers are open; the supported window lives in install-sm
 	const window = workflow.env?.PI_HOST_SUPPORTED_RANGE ?? "";
 	const floor = workflow.env?.PI_HOST_FLOOR_VERSION ?? "";
 
-	// Hosts release-qa has actually passed. NOT derived from the lockfile: the
-	// lockfile's pi version is only a test host, not a promise. P1 requires one
-	// release-qa witness per minor line from 0.86 onward; #4688 removed the
+	// Certified hosts (release-QA witness, or maintainer certification recorded
+	// in the row). NOT derived from the lockfile: its pi version is only a
+	// test host, not a promise. #4688 removed the
 	// 0.80, 0.84 and 0.85 rows with the certified floor, because a pi below
 	// 0.86 emits no `context_with_system` and receives no findings at all.
 	const RELEASE_QA_VERIFIED_HOSTS = [
