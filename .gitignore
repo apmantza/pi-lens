@@ -236,3 +236,4 @@ tests/native-ts7-live-*/
 
 # TLA+ tools jar fetched by scripts/check-tla-models.mjs (#3447)
 /.cache/
+/.vitest-cache/

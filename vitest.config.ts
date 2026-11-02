@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { defineConfig } from "vitest/config";
@@ -9,17 +8,9 @@ import {
 	resolveTestWorkerBudget,
 } from "./scripts/lib/worker-budget.mjs";
 
-/** Keep Vitest's filesystem module cache out of linked node_modules (#5206). */
+/** Keep Vitest's filesystem module cache isolated per worktree (#5206). */
 export function resolveVitestCacheDir(worktreeRoot: string): string {
-	const rootKey = createHash("sha256")
-		.update(path.resolve(worktreeRoot))
-		.digest("hex")
-		.slice(0, 16);
-	return path.join(
-		process.env.TMPDIR ?? os.tmpdir(),
-		"pi-lens-vitest-cache",
-		rootKey,
-	);
+	return path.join(path.resolve(worktreeRoot), ".vitest-cache");
 }
 
 // Applies to globalSetup as well as workers: ordinary tests never install tools.
