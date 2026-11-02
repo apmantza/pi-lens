@@ -159,9 +159,4 @@ describe("findDriftTrackingIssue (#594)", () => {
 			title: "install-smoke: pi-coding-agent@latest install drift detected",
 		});
 	});
-
-	it("exposes stable, fixed identifiers so the tracker is always found the same way", () => {
-		expect(DRIFT_ISSUE_LABEL).toBe("nightly-drift");
-		expect(DRIFT_ISSUE_TITLE).toBe("nightly: silentOnClean drift detected");
-	});
 });

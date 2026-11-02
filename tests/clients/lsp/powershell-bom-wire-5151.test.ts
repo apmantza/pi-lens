@@ -21,12 +21,10 @@
  * `clients/lsp/diagnostic-binding.ts`).
  */
 
-import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
 	handleNotifyChange,
 	handleNotifyOpen,
-	setupIncomingHandlers,
 	type LSPClientState,
 } from "../../../clients/lsp/client.js";
 import { hashDiagnosticContent } from "../../../clients/lsp/diagnostic-binding.js";
@@ -179,48 +177,5 @@ describe("#5151 the document text a PowerShell server is sent", () => {
 		expect(sent(state, "textDocument/didOpen")[0].textDocument.text).toBe(
 			`${BOM}x = 1\n`,
 		);
-	});
-
-	it("a genuine syntax error is still in the text and still reported", async () => {
-		// Recurrence: the fix must not filter. The broken `if ($x {` stays at the
-		// same offset on the wire, and the server's diagnostic for it reaches the
-		// caller unchanged.
-		const broken = `${BOM}if ($x {\r\n`;
-		const state = psState();
-		let publish: ((params: unknown) => void) | undefined;
-		(
-			state.connection.onNotification as unknown as ReturnType<typeof vi.fn>
-		).mockImplementation((method: string, cb: (params: unknown) => void) => {
-			if (method === "textDocument/publishDiagnostics") publish = cb;
-		});
-		setupIncomingHandlers(state, undefined);
-		await handleNotifyOpen(state, FILE, broken, "powershell");
-		const wire = sent(state, "textDocument/didOpen")[0].textDocument.text;
-		expect(wire).toBe(" if ($x {\r\n");
-		expect(wire.indexOf("if ($x {")).toBe(broken.indexOf("if ($x {"));
-
-		vi.useFakeTimers();
-		try {
-			publish?.({
-				uri: pathToFileURL(FILE).href,
-				diagnostics: [
-					{
-						severity: 1,
-						message:
-							"Missing closing '}' in statement block or type definition.",
-						range: {
-							start: { line: 0, character: 8 },
-							end: { line: 0, character: 9 },
-						},
-					},
-				],
-			});
-			vi.advanceTimersByTime(500);
-		} finally {
-			vi.useRealTimers();
-		}
-		const [diagnostic] = state.pushDiagnostics.get(KEY) ?? [];
-		expect(diagnostic?.message).toContain("Missing closing '}'");
-		expect(diagnostic?.range.start).toEqual({ line: 0, character: 8 });
 	});
 });

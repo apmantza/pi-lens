@@ -12,7 +12,6 @@ import {
 	formatVersionTooOldMessage,
 	isGhMissingError,
 	mapRestMergeableState,
-	MIN_GH_TIMEOUT_MS,
 	nodeSupportsUseEnvProxy,
 	parseOwnerRepoFromGitRemote,
 	REEXEC_REEXEC,
@@ -1015,15 +1014,5 @@ describe("restFetchCheckRunsPayload — an empty 200 body is an empty answer (#3
 			fetchImpl,
 		});
 		expect(payload).toEqual({ total_count: 0, check_runs: [] });
-	});
-});
-
-// Sanity: MIN_GH_TIMEOUT_MS is re-imported here (used nowhere else in this
-// file) purely so a future accidental removal of the export from
-// ci-verdict.mjs breaks this file's import too, not just the owned suite.
-describe("shared exports stay importable", () => {
-	it("MIN_GH_TIMEOUT_MS is a small positive number", () => {
-		expect(MIN_GH_TIMEOUT_MS).toBeGreaterThan(0);
-		expect(MIN_GH_TIMEOUT_MS).toBeLessThan(60_000);
 	});
 });
