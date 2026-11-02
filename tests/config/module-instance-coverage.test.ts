@@ -44,6 +44,10 @@ const reviewedExceptions = new Map<string, string>([
 		"reads the live config source to verify the cache-root configuration",
 	],
 	[
+		"tests/config/vitest-cache-root.test.ts -> vitest.mutation.config.ts",
+		"reads the live mutation config source to verify its cache root",
+	],
+	[
 		"tests/config/worker-budget.test.ts -> vitest.config.ts",
 		"reads the live config source, not the stale compiled vitest.config.js",
 	],

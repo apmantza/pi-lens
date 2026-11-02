@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import vitestConfig, { resolveVitestCacheDir } from "../../vitest.config.ts";
+import mutationConfig from "../../vitest.mutation.config.ts";
 
 describe("Vitest module cache roots (#5206)", () => {
 	it("does not use the linked install's shared cache", () => {
@@ -11,6 +12,12 @@ describe("Vitest module cache roots (#5206)", () => {
 			path.join(process.cwd(), "node_modules", ".vitest-cache"),
 		);
 		expect(vitestConfig.test?.fsModuleCachePath).toBe(
+			path.join(process.cwd(), ".vitest-cache"),
+		);
+	});
+
+	it("gives the mutation campaign's config the same per-worktree cache", () => {
+		expect(mutationConfig.test?.fsModuleCachePath).toBe(
 			path.join(process.cwd(), ".vitest-cache"),
 		);
 	});
