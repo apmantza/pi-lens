@@ -190,8 +190,8 @@ jobs:
   # single job reached its 12-minute cap at 514 configs (master 623 s; PR heads
   # cancelled at 736 s, 881 s and 12m15s), because the population outgrew the
   # estimate this comment used to carry. The job id `tla-models` and the check
-  # name `TLA+ models` stay with the aggregate below (CodeQL `needs:` it, and
-  # the ruleset requires that name); the shard jobs are `tla-shards`.
+  # name `TLA+ models` stay with the aggregate below (the ruleset requires that
+  # name); the shard jobs are `tla-shards`.
   # Measured per-shard WALL time on master run 39380875926 (attempt 1):
   # 268 s, 349 s, 494 s and 726 s -- the round-robin split was unbalanced by
   # ~2.7x and shard 4 owned the tail. That shard hit the 12-minute cap TWICE,
@@ -841,11 +841,12 @@ jobs:
   #
   # `needs:` reaches `lint-and-typecheck`, the `unit-tests` aggregate, the
   # Windows leg, and every `install-test` leg. The script reads the rest from the
-  # head's check-runs (a cheap poll; all three finish long before this job is
-  # reached): lint.yml's `knip` and `oxfmt format check`, which `needs:` cannot
-  # reach, and `TLA+ models`. `tla-models` stays out of `needs:` because implicit
-  # success() reads every ancestor: its `tla-shards` need skips on most pull
-  # requests (#5082), and that skipped this gate and CodeQL with it (#5002).
+  # head's check-runs (a cheap poll): lint.yml's `knip` and `oxfmt format check`,
+  # which `needs:` cannot reach, and `TLA+ models`, which can still be running on
+  # a formal head, so the poll waits up to 300 s for it. `tla-models` stays out of
+  # `needs:` because implicit success() reads every ancestor: its `tla-shards`
+  # need skips on most pull requests (#5082), and that skipped this gate and
+  # CodeQL with it (#5002).
   # `Hot-path latency (advisory)` is required but not waited for: a master push
   # path-filters that workflow, so its row can be absent here.
   #
@@ -899,8 +900,7 @@ jobs:
   # r14's `.cmd` branch, #4551). It therefore starts on every event like the
   # Unit shards -- never behind `heavy-gate`, whose docs-only skip would leave a
   # required row absent -- and it is not named `(advisory)` any more, so
-  # ci-verdict gates it. Branch protection must still list `Unit tests Windows`
-  # as a required status check; until it does, ci-verdict is the enforcement.
+  # ci-verdict gates it, and branch protection requires it.
   unit-tests-windows:
     name: Unit tests Windows
     runs-on: windows-latest
