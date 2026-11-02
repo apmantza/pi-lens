@@ -11,6 +11,13 @@ updates:
       # pi's own floor reaches 22.22.2 (maintainer decision 2026-09-09, #2714).
       - dependency-name: typescript-language-server
         update-types: ["version-update:semver-major"]
+    groups:
+      # @stryker-mutator/vitest-runner pins an exact peer on
+      # @stryker-mutator/core, so a bump of one alone fails `npm ci` with
+      # ERESOLVE (#5183 and #5191 each bumped one to 10.1.1).
+      stryker:
+        patterns:
+          - "@stryker-mutator/*"
 
   - package-ecosystem: github-actions
     # The composite action under .github/actions pins the same actions/cache SHA
