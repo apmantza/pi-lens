@@ -144,6 +144,8 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"real child exit-cause ledger cases; the fixture self-exits on a short delay, no handshake-then-diagnostics wait to starve",
 	"tests/clients/lsp/client-retention-process-scope.test.ts":
 		"real clients across two module instances to prove process-scope retention; handshake only against the instant fixture, no contention budget",
+	"tests/clients/lsp/partial-message-timer.test.ts":
+		"#5169 natural Node host exit is measured in the fully serialized wall-clock-budget lane, after lsp-spawn-heavy; the real fixture still runs",
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts":
 		"real wedged child and CPU sampling run in the serialized wall-clock-budget phase; the lower-bound wedge assertion needs that quiet phase",
 	"tests/clients/head-move-resync-4476.test.ts":

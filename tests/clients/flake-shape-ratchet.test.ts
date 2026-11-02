@@ -780,6 +780,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real Lean elaboration and diagnostic publication require Lake and elan across the child-process boundary; the serialized wall-clock lane isolates the handshake and diagnostic wait",
 	},
+	"real-process-spawn:clients/lsp/partial-message-timer.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5169 requires natural exit of a separate Node host after a real LSP truncated message",
+	},
 	"real-process-spawn:clients/lsp/unheld-module-pyright-4742.integration.test.ts":
 		{
 			detector: "real-process-spawn",
