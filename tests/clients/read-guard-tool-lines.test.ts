@@ -1163,8 +1163,11 @@ describe("tryCorrectIndentationMismatch — Unicode punctuation drift (Tier C)",
 // Recurrence guarded: Tiers A, B and C were three hand-copied span matchers that
 // differed only in their line signature; a safety edit (unique-match, >=2
 // anchors, blank skipping) applied to one copy would leave the others behind.
-// They now share one matcher, and each cell drives one tier's signature
-// through it with the SAME safety contract.
+// They now share one matcher with the SAME safety contract. The tiers form a
+// ladder (A's matches are a subset of B's, B's of C's), so the A and B cells
+// also pass through coarser tiers: the necessity of the A and B rows is pinned
+// only by "a finer tier recovers its unique span where the coarser tiers would
+// collide", and only tier C's cells red when its row is removed.
 describe("tryCorrectIndentationMismatchFromContent — signature tiers share one matcher", () => {
 	// Each tier's drift is only bridged by its own signature (and the ones after it).
 	const TIERS = [
