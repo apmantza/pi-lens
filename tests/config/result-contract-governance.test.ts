@@ -11,7 +11,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // cwd; re-evaluating an already-transformed graph costs about 0.2 s.
 import "../../index.js";
 import { TOOL_REGISTRY } from "../../clients/tool-config.js";
-import { MAX_RESULT_BYTES } from "../../tools/render-compact.js";
+import { WARN_ONLY_STALE_TOOLS } from "../../mcp/build-staleness.js";
+import {
+	MAX_RESULT_BYTES,
+	stripContractFooter,
+} from "../../tools/render-compact.js";
 import { McpHarness } from "../mcp/harness.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
@@ -484,5 +488,147 @@ describe("result contract across registered tool surfaces", () => {
 		expect(metadata.toolResultsTruncated).toBe(
 			figures.filter((figure) => figure.truncated).length,
 		);
+	});
+
+	// #5159 D5: the warn-only stale tools' cell shapes, derived from the real set.
+	// A tool that starts returning a JSON document must be admitted here on
+	// purpose; the JSON-capable population is pinned and may not grow silently.
+	describe("warn-only stale tool cell census (#5159)", () => {
+		type CellShape = "text" | "json" | "envelope";
+
+		// `cwd` is assigned by the outer `beforeAll`; build the rows there, since
+		// the read_symbol/read_enclosing rows need an absolute path.
+		let CENSUS: ReadonlyArray<{
+			mcpName: string;
+			args: Record<string, unknown>;
+			shape: CellShape;
+		}>;
+
+		beforeAll(() => {
+			CENSUS = [
+				{
+					mcpName: "pilens_module_report",
+					args: { file: "fixture.ts" },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_module_report",
+					args: { file: "fixture.ts", view: "full-json" },
+					shape: "json",
+				},
+				{ mcpName: "pilens_project_report", args: { limit: 1 }, shape: "text" },
+				{
+					mcpName: "pilens_project_report",
+					args: { limit: 1, view: "json" },
+					shape: "json",
+				},
+				{
+					mcpName: "pilens_symbol_search",
+					args: { query: "fixture", paths: ["fixture.ts"] },
+					shape: "text",
+				},
+				{ mcpName: "pilens_project_scan", args: {}, shape: "text" },
+				{ mcpName: "pilens_health", args: {}, shape: "text" },
+				{ mcpName: "pilens_latency", args: { limit: 1 }, shape: "text" },
+				{ mcpName: "pilens_session_start", args: {}, shape: "text" },
+				{ mcpName: "pilens_turn_end", args: {}, shape: "text" },
+				{
+					mcpName: "pilens_ast_grep_search",
+					args: { pattern: "$A.sort()", lang: "typescript", paths: ["bad.ts"] },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_ast_grep_replace",
+					args: {
+						pattern: "$A.sort()",
+						rewrite: "$A.sort((a, b) => a - b)",
+						lang: "typescript",
+						paths: ["bad.ts"],
+						apply: false,
+					},
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_lsp_navigation",
+					args: { operation: "documentSymbol", path: "fixture.ts" },
+					shape: "envelope",
+				},
+				{
+					mcpName: "pilens_read_symbol",
+					args: { path: path.join(cwd, "fixture.ts"), symbol: "enclosing" },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_read_enclosing",
+					args: { path: path.join(cwd, "fixture.ts"), line: 2 },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_effective_config",
+					args: { file: "fixture.ts" },
+					shape: "text",
+				},
+			];
+		});
+
+		/** Classify a delivered MCP cell from its block 0, post owner footer strip. */
+		function classifyCell(result: ToolResult): CellShape {
+			const blocks = (result.content ?? [])
+				.filter((block) => block.type === "text")
+				.map((block) => block.text ?? "");
+			if (blocks.length === 0) return "text";
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(stripContractFooter(blocks[0]));
+			} catch {
+				return "text";
+			}
+			if (
+				typeof parsed === "object" &&
+				parsed !== null &&
+				!Array.isArray(parsed) &&
+				typeof (parsed as Record<string, unknown>).ok === "boolean" &&
+				typeof (parsed as Record<string, unknown>).status === "string"
+			) {
+				return "envelope";
+			}
+			return "json";
+		}
+
+		it(
+			"covers exactly the warn-only set and classifies each cell",
+			async () => {
+				const censusMembers = [
+					...new Set(CENSUS.map((row) => row.mcpName)),
+				].sort();
+				expect(censusMembers).toEqual([...WARN_ONLY_STALE_TOOLS].sort());
+				for (const [index, row] of CENSUS.entries()) {
+					const res = await mcp.request(300 + index, "tools/call", {
+						name: row.mcpName,
+						arguments: row.args,
+					});
+					const result = res.result as ToolResult;
+					expect(classifyCell(result), `${row.mcpName} cell shape`).toBe(
+						row.shape,
+					);
+				}
+			},
+			scaledTestTimeout(90_000),
+		);
+
+		it("pins the JSON-capable population (shrink-only)", () => {
+			const jsonCapable = [
+				...new Set(
+					CENSUS.filter((row) => row.shape !== "text").map(
+						(row) => row.mcpName,
+					),
+				),
+			].sort();
+			expect(jsonCapable).toEqual([
+				"pilens_lsp_navigation",
+				"pilens_module_report",
+				"pilens_project_report",
+			]);
+		});
 	});
 });

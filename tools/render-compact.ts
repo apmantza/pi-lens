@@ -59,6 +59,22 @@ export const RESULT_FOOTER_RESERVE_BYTES = Buffer.byteLength(
 export const RESULT_PAYLOAD_BUDGET_BYTES =
 	MAX_RESULT_BYTES - RESULT_FOOTER_RESERVE_BYTES;
 
+/** `details` key that opts a result into the JSON-cell block contract (#5159):
+ * the first text block is a machine-parsed document and later text blocks are
+ * annotations. `stripResultDetails` drops `details` before the wire, so it never
+ * leaks. */
+export const JSON_CELL_DETAILS_KEY = "jsonCell";
+
+/** True when a result opted into the JSON-cell block contract (#5159). */
+export function isJsonCell(result: CompactResultLike): boolean {
+	const details = result.details;
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		(details as Record<string, unknown>)[JSON_CELL_DETAILS_KEY] === true
+	);
+}
+
 export interface BoundedToolText {
 	text: string;
 	truncated: boolean;
@@ -189,6 +205,16 @@ export interface LensToolResult<D = unknown> extends CompactResultLike<D> {
 const CONTRACT_FOOTER_TAIL_RE =
 	/(?:^|\n)result (?:ok|error)\n(?:diag severity=[^\n]*\n)*usage tokens=\d+ elapsed-ms=\d+ bytes=(\d+) truncated=(true|false)$/;
 
+/** Remove a contract footer stamped at the tail of `text`, together with the
+ * blank-line separator the stamp introduced. A no-op when no footer is at the
+ * tail, so a payload whose footer rides another block is returned unchanged. */
+export function stripContractFooter(text: string): string {
+	const match = CONTRACT_FOOTER_TAIL_RE.exec(text);
+	if (!match) return text;
+	const before = text.slice(0, match.index);
+	return before.endsWith("\n") ? before.slice(0, -1) : before;
+}
+
 /** Optional delivery figures the footer reports when the caller has already
  * bounded the payload (#2800 item 7). Absent on a direct stamp of an unbound
  * result, where the input text IS the delivered payload. */
@@ -279,13 +305,23 @@ export function renderToolResultContract<T extends ToolResultContractLike>(
  * inside MAX_RESULT_BYTES (refs #2800 item 7): each block is bounded to the
  * result budget minus the reserved footer maximum, and the delivered byte
  * count plus the bound's truncated flag travel with the result so the footer
- * can report them. Per-block bounding is inherited from #2852; production
- * results carry a single text block (renderToolText). */
+ * can report them.
+ *
+ * A text cell keeps the pre-#5159 shape: all text blocks are joined, the joined
+ * text is bounded, and the result collapses to one text block. An opted-in JSON
+ * cell (`isJsonCell`, `details.jsonCell`) instead keeps block 0 as the payload
+ * and every later text block as an annotation; the payload budget is
+ * `RESULT_PAYLOAD_BUDGET_BYTES` minus the annotation bytes and the separators
+ * `fullTextOf` inserts, so the delivered text (payload + separators +
+ * annotations + footer) stays inside MAX_RESULT_BYTES (#5159). */
 export function boundResultPayload<T extends CompactResultLike>(
 	result: T,
 ): { result: T; deliveredBytes: number; truncated: boolean } {
 	if (!result.content) {
 		return { result, deliveredBytes: 0, truncated: false };
+	}
+	if (isJsonCell(result)) {
+		return boundJsonCellPayload(result);
 	}
 	const joined = fullTextOf(result);
 	// Reserve the widest footer once. This keeps the MAX_RESULT_BYTES invariant
@@ -316,6 +352,58 @@ export function boundResultPayload<T extends CompactResultLike>(
 	const deliveredBytes = Buffer.byteLength(fullTextOf({ content }), "utf8");
 	return {
 		result: { ...result, content },
+		deliveredBytes,
+		truncated: bound.truncated,
+	};
+}
+
+/** Bound an opted-in JSON cell (#5159): block 0 is the payload and every later
+ * text block is an annotation. The payload budget reserves the annotation bytes
+ * plus the separators `fullTextOf` inserts, so payload + separators +
+ * annotations still leave room for the footer inside MAX_RESULT_BYTES. */
+function boundJsonCellPayload<T extends CompactResultLike>(
+	result: T,
+): { result: T; deliveredBytes: number; truncated: boolean } {
+	const content = result.content ?? [];
+	const textBlocks = content
+		.map((block, index) => ({ block, index }))
+		.filter(
+			(entry) =>
+				entry.block.type === "text" && typeof entry.block.text === "string",
+		);
+	const payload = textBlocks[0];
+	if (!payload) {
+		return { result, deliveredBytes: 0, truncated: false };
+	}
+	const annotationBytes = textBlocks
+		.slice(1)
+		.reduce(
+			(sum, entry) =>
+				sum + Buffer.byteLength(entry.block.text as string, "utf8"),
+			0,
+		);
+	const separators = textBlocks.length - 1;
+	// Producers bound their annotations: the stale advisory is a fixed constant
+	// and the ignored-arguments line is capped by MAX_REPORTED_KEYS and
+	// MAX_REPORTED_KEY_CHARS, so annotation bytes plus separators stay far below
+	// the budget in production. The clamp is defensive; a future producer that
+	// emitted an annotation larger than the budget could still exceed
+	// MAX_RESULT_BYTES through boundToolText's omission marker. Accepted residual
+	// (#5159 Round 2).
+	const payloadBudget = Math.max(
+		0,
+		RESULT_PAYLOAD_BUDGET_BYTES - annotationBytes - separators,
+	);
+	const bound = boundToolText(payload.block.text as string, payloadBudget);
+	const bounded = content.map((block, index) =>
+		index === payload.index ? { ...block, text: bound.text } : block,
+	);
+	const deliveredBytes = Buffer.byteLength(
+		fullTextOf({ content: bounded }),
+		"utf8",
+	);
+	return {
+		result: { ...result, content: bounded },
 		deliveredBytes,
 		truncated: bound.truncated,
 	};

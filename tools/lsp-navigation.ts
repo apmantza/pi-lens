@@ -22,7 +22,10 @@ import {
 } from "../clients/path-utils.js";
 import { escapeRegExp } from "../clients/string-utils.js";
 import { isRecordableProjectPath } from "../clients/file-utils.js";
-import { compactRenderResult } from "./render-compact.js";
+import {
+	compactRenderResult,
+	JSON_CELL_DETAILS_KEY,
+} from "./render-compact.js";
 import {
 	applyWorkspaceEdit,
 	captureRenameExpectedContent,
@@ -1071,6 +1074,7 @@ export function createLspNavigationTool(
 					details: {
 						...payload.details,
 						failureKind: meta.failureKind,
+						[JSON_CELL_DETAILS_KEY]: true,
 					},
 				};
 			};

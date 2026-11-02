@@ -16,6 +16,7 @@ import {
 } from "../clients/lens-engine.js";
 import {
 	compactRenderResult,
+	JSON_CELL_DETAILS_KEY,
 	renderToolText,
 	type LensToolResult,
 } from "./render-compact.js";
@@ -30,6 +31,7 @@ type ProjectReportDetails = {
 	hubs?: number;
 	entryPoints?: number;
 	view?: string;
+	[JSON_CELL_DETAILS_KEY]?: boolean;
 };
 
 export function createProjectReportTool(getProjectRoot: () => string) {
@@ -123,6 +125,7 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 					hubs: report.hubs?.length ?? 0,
 					entryPoints: report.entryPoints?.length ?? 0,
 					view: params.view === "json" ? "json" : "default",
+					[JSON_CELL_DETAILS_KEY]: params.view === "json",
 				},
 			};
 		},

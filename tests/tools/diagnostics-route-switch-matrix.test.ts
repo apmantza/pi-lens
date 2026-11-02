@@ -827,9 +827,11 @@ describe("the navigation reader (#4403)", () => {
 				resultCount: 0,
 			});
 
-			expect(navigationVerdict(`${noServer}\n\nresult error`)).toBe(
-				"unconfirmed",
-			);
+			expect(
+				navigationVerdict(
+					`${noServer}\n\nresult error\nusage tokens=1 elapsed-ms=0 bytes=1 truncated=false`,
+				),
+			).toBe("unconfirmed");
 		},
 		scaledTestTimeout(10_000),
 	);

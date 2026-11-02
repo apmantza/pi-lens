@@ -20,7 +20,11 @@ import {
 	renderModuleReportPreset,
 	resolveModuleReportPreset,
 } from "../clients/module-report.js";
-import { baseName, compactRenderResult } from "./render-compact.js";
+import {
+	baseName,
+	compactRenderResult,
+	JSON_CELL_DETAILS_KEY,
+} from "./render-compact.js";
 import { resolveHostToolPath } from "../clients/path-utils.js";
 
 /**
@@ -176,6 +180,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 					callbacks: report.callbacks.length,
 					callbackSupport: report.callbackSupport,
 					view: choice.preset,
+					[JSON_CELL_DETAILS_KEY]: choice.format === "json",
 				},
 			};
 		},

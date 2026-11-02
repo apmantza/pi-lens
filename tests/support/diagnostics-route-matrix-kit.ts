@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getLSPService, resetLSPService } from "../../clients/lsp/index.js";
 import { clearWorkspaceDiagnosticsCache } from "../../clients/lsp/workspace-diagnostics-cache.js";
+import { stripContractFooter } from "../../tools/render-compact.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { McpHarness } from "../mcp/harness.js";
 import { scaledTestTimeout } from "./test-timeout-scale.js";
@@ -564,9 +565,12 @@ export function batchLines(text: string, workspace: string): string[] {
 	);
 }
 
-/** The directory scan's lines between its header and its delivery footer. */
+/**
+ * The directory scan's lines between its header and the footer
+ * `stripContractFooter` removes.
+ */
 export function directoryLines(text: string, workspace: string): string[] {
-	const lines = shownLines(text.split("\n\nresult ")[0] ?? "", workspace);
+	const lines = shownLines(stripContractFooter(text), workspace);
 	return lines.filter(
 		(line) =>
 			!line.startsWith("Directory:") && !line.startsWith("Files scanned:"),
@@ -582,13 +586,13 @@ export type NavigationEnvelope = {
 };
 
 export function navigationEnvelope(text: string): NavigationEnvelope {
-	return JSON.parse(text.split("\n\nresult ")[0] ?? "") as NavigationEnvelope;
+	return JSON.parse(stripContractFooter(text)) as NavigationEnvelope;
 }
 
 /**
- * The navigation envelope pi delivers (before the delivery footer). #4403 F5:
- * an envelope that is not `ok` never answered for the file, so it cannot be
- * clean; `no_server` used to score clean here.
+ * The navigation envelope pi delivers, with the delivery footer removed by
+ * `stripContractFooter`. #4403 F5: an envelope that is not `ok` never answered
+ * for the file, so it cannot be clean; `no_server` used to score clean here.
  */
 export function navigationVerdict(text: string): string {
 	const envelope = navigationEnvelope(text);
