@@ -513,7 +513,7 @@ assertion lines after workflow edits; the assertions remain shrink-only pins.
 npm run test:unit                     serialized unit suite
 npm run test:integration              serialized integration suite
 npm run preflight                     local merge/preflight gates
-npm run check:lockfile                lockfile consistency
+npm run check:lockfile                lockfile consistency, plus a libc field dropped against HEAD (#5207)
 npm run check:allow-scripts           allowScripts policy vs the resolved lockfile (#1185)
 npm run changelog:check               rollup check; fragments use check-changelog-fragments.mjs
 npm run docs:rule-catalogs            regenerate rule catalogs

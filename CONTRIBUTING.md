@@ -22,13 +22,17 @@ npm test
 
 Pull requests must pass `npm run lint`. Run targeted test files for touched seams locally after `npm run build`; the full `npm test` suite is CI's job. CI also runs `npm run check:lockfile` and a production `--omit=dev` build (`npm run build:dist`), so keep `package-lock.json` in sync with `package.json`.
 
+Regenerate the lockfile with the npm version `package.json`'s `packageManager` pins, never the npm on your PATH: npm older than the pin writes no `libc` field, and `npm run check:lockfile` refuses a change that drops one from a package that stays in the lock (#5207). The check compares the lock against `HEAD`'s committed copy, so the pre-commit hook catches it before the commit exists.
+
 Source builds read the exact esbuild and TypeScript versions from the root entries in `package-lock.json`. Both esbuild bundles and the TypeScript fallback retain an isolated npm exec prefix and approve only the exact package spec they install. Keep the source lockfile available when running `build:dist`; missing or invalid tool versions fail the build rather than falling back to independent pins.
 
 ## Local git hooks
 
 `npm install` wires Husky-managed hooks:
 
-- **pre-commit** — `npm run check:lockfile`, then changelog fragment
+- **pre-commit** — `npm run check:lockfile` (sync with `package.json`, plus a
+  `libc` field dropped against `HEAD`'s committed lock, #5207), then changelog
+  fragment
   validation (`npm run changelog:check`), then `npm run lint`. Also refuses to
   commit a staged handoff file (`PR_BODY.md`, `COMMIT_MSG.txt`, `REVIEW.md`,
   `INVESTIGATION.md`, `MONITOR.md`) before running any of the above — `git rm
