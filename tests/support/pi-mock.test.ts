@@ -1,3 +1,5 @@
+// flake-shape: real-process-spawn — the root afterEach's failing exit status
+// is only observable from a separate Vitest process that deliberately leaks a session.
 import * as fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import * as os from "node:os";
@@ -379,27 +381,27 @@ describe("createPiMock sessions and the shared teardown (#5146)", () => {
 		if (process.env.PI_LENS_ROOT_GATE_WITNESS === "1") {
 			const { pi } = host();
 			await pi.emit("session_start", START, ctxOf("root-gate-witness"));
-			return;
+		} else {
+			const result = spawnSync(
+				process.execPath,
+				[
+					path.resolve("node_modules/vitest/vitest.mjs"),
+					"run",
+					path.resolve(import.meta.filename),
+					"-t",
+					"the real root afterEach rejects a leaked session",
+					"--configLoader",
+					"runner",
+				],
+				{
+					cwd: path.resolve("."),
+					encoding: "utf8",
+					env: { ...process.env, PI_LENS_ROOT_GATE_WITNESS: "1" },
+				},
+			);
+			expect(result.status).not.toBe(0);
+			expect(`${result.stdout}\n${result.stderr}`).toMatch(/still open/);
 		}
-		const result = spawnSync(
-			process.execPath,
-			[
-				path.resolve("node_modules/vitest/vitest.mjs"),
-				"run",
-				path.resolve(import.meta.filename),
-				"-t",
-				"the real root afterEach rejects a leaked session",
-				"--configLoader",
-				"runner",
-			],
-			{
-				cwd: path.resolve("."),
-				encoding: "utf8",
-				env: { ...process.env, PI_LENS_ROOT_GATE_WITNESS: "1" },
-			},
-		);
-		expect(result.status).not.toBe(0);
-		expect(`${result.stdout}\n${result.stderr}`).toMatch(/still open/);
 	});
 });
 

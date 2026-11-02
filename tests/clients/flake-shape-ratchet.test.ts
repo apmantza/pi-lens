@@ -1432,6 +1432,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the stub exists so production lookups spawn real executable stand-ins; its fidelity (hermetic PATH, the served query, restore) is only observable through a real child",
 	},
+	"real-process-spawn:support/pi-mock.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the root afterEach's failing exit status is only observable from a separate Vitest process that deliberately leaks a session",
+	},
 	// 2026-09-17 (#3179): the race is cross-process by construction —
 	// readdirSync/statSync inside node's own recursive-watch polyfill are
 	// blocking syscalls on one thread, so only a separately spawned process

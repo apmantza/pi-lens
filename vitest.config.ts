@@ -1002,6 +1002,9 @@ export const wallClockBudgetInclude = [
 	// #4709 slice 3b: the PATH-probe stub's fidelity is observable only through a
 	// real child (flake-shape admission).
 	"tests/support/path-probe-stub.test.ts",
+	// #5146: the root afterEach's failing exit status is only observable from a
+	// separate Vitest process that deliberately leaks a session (flake-shape admission).
+	"tests/support/pi-mock.test.ts",
 	// #3179: the guard's #3179 fix's one real, cross-process reproduction. A
 	// separately spawned process races node's own recursive-watch readdirSync
 	// against a directory removal — the same race PR #3178 hit in CI — which

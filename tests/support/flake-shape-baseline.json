@@ -157,6 +157,7 @@
 		"support/git-config-guard.test.ts": 5,
 		"support/git-fixture-env.test.ts": 9,
 		"support/path-probe-stub.test.ts": 3,
+		"support/pi-mock.test.ts": 2,
 		"support/tests-tree-write-guard-race.test.ts": 1,
 		"support/tmp-root-teardown.test.ts": 2,
 		"support/vitest-setup-registry-teardown.test.ts": 2
