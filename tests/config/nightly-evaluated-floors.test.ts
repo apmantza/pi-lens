@@ -455,7 +455,7 @@ describe("the floors outside the LSP nightly are measured and wired (#4518)", ()
 
 	it("states why each job without a floor needs none, directly above the job", () => {
 		const lint = read(".github/workflows/lint.yml");
-		for (const job of ["jscpd", "strictness", "yamllint", "typos", "taplo"]) {
+		for (const job of ["lint-advisory"]) {
 			const at = lint.indexOf(`\n  ${job}:\n`);
 			expect(at, job).toBeGreaterThan(0);
 			const above = lint.slice(Math.max(0, at - 700), at);
@@ -587,11 +587,11 @@ describe("every continue-on-error site in the workflow and action tree is regist
 		).toEqual([]);
 	});
 
-	it("pins the six job headers the registry marks as human-facing copy", () => {
+	it("pins the two job headers the registry marks as human-facing copy", () => {
 		const headered = coeKeys.filter((key) => coeRegistry.sites[key].header);
-		expect(headered.length).toBe(6);
+		expect(headered.length).toBe(2);
 		const lint = read(".github/workflows/lint.yml");
-		for (const job of ["jscpd", "strictness", "yamllint", "typos", "taplo"]) {
+		for (const job of ["lint-advisory"]) {
 			const at = lint.indexOf(`\n  ${job}:\n`);
 			expect(at, job).toBeGreaterThan(0);
 			expect(lint.slice(Math.max(0, at - 700), at), job).toMatch(

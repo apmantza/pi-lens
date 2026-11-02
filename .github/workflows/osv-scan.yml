@@ -11,68 +11,22 @@ on:
     # Weekly sweep for advisories against dependencies already in the
     # lockfile, not just ones a PR happens to touch.
     - cron: "0 6 * * 1"
+  # The PR-triggered scan runs only for a PR that touches the lockfile (or this
+  # file, so an edit here is exercised); schedule and workflow_dispatch scan in
+  # full. GitHub diffs a PR's merge base against its head for `paths`, so a
+  # lockfile change that landed on master after the branch was cut does not fire it.
   pull_request:
     branches: [master]
+    paths:
+      - package-lock.json
+      - .github/workflows/osv-scan.yml
   workflow_dispatch: {}
 
 permissions: {}
 
 jobs:
-  # Gates the PR-triggered scan to PRs that actually touch the lockfile.
-  # "changed_files_names" is not a real event-payload field, so this uses
-  # git diff against the PR's base SHA instead. Always runs (no job-level
-  # `if`) so schedule/workflow_dispatch triggers -- which have no PR to
-  # diff -- aren't skipped as an unmet `needs` dependency downstream.
-  detect-lockfile-change:
-    name: Detect lockfile change
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 8 successful master runs (fewer than 10 exist):
-    # 8s; timeout = floor of 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    outputs:
-      changed: ${{ steps.diff.outputs.changed }}
-    steps:
-      # Pin to the PR's own head commit, NOT the default checkout ref. For
-      # pull_request events, actions/checkout defaults to GitHub's synthetic
-      # refs/pull/N/merge commit (base branch's CURRENT tip merged with the
-      # PR). Diffing that synthetic HEAD against the PR's recorded (and
-      # potentially stale, once the PR falls BEHIND) base.sha then picks up
-      # every change master accumulated in between as if the PR had made it
-      # -- caught in review verification: this PR doesn't touch
-      # package-lock.json, but the gate still fired because master gained an
-      # unrelated lockfile change after this branch was cut. Pinning `ref`
-      # to head.sha makes HEAD the PR's real, stable branch tip.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: github.event_name == 'pull_request'
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - id: diff
-        run: |
-          set -eu
-          if [ "${{ github.event_name }}" != "pull_request" ]; then
-            # Non-PR triggers (schedule, workflow_dispatch) always run the
-            # full scan; the gate only applies to PRs.
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git fetch origin "${{ github.event.pull_request.base.sha }}"
-          MERGE_BASE=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
-          if git diff --name-only "$MERGE_BASE" HEAD -- package-lock.json | grep -qx package-lock.json; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-
   osv-scan:
     name: OSV scan (advisory)
-    needs: [detect-lockfile-change]
-    if: needs.detect-lockfile-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max over last 4 successful master runs (only 4 runs of this
@@ -86,11 +40,11 @@ jobs:
     # finding should show as a red advisory check a reviewer can see and
     # choose to act on, not a silently-green one (#1917 review F2).
     steps:
-      # Same head.sha pin as detect-lockfile-change, and for the same
-      # reason: scan the PR's own lockfile, not a merge-drifted one that
-      # would make the result move whenever master changes independently of
-      # this PR. On schedule/workflow_dispatch there's no PR head, so this
-      # falls back to the default (current branch tip).
+      # Pin to the PR's own head commit, NOT the default checkout ref (GitHub's
+      # synthetic refs/pull/N/merge commit): scan the PR's own lockfile, not a
+      # merge-drifted one that would make the result move whenever master
+      # changes independently of this PR. On schedule/workflow_dispatch there's
+      # no PR head, so this falls back to the default (current branch tip).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
