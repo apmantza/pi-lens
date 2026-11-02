@@ -18,7 +18,8 @@ function readJson(file) {
 	return JSON.parse(readFileSync(file, "utf8"));
 }
 
-function getPinnedNpmVersion(cwd = process.cwd()) {
+/** The npm version package.json's `packageManager` pin wants the lock written by. */
+export function getPinnedNpmVersion(cwd = process.cwd()) {
 	const value = readJson(join(cwd, "package.json")).packageManager;
 	const match =
 		typeof value === "string" && value.match(/^npm@(\d+\.\d+\.\d+)$/);

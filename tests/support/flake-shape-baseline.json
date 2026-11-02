@@ -103,7 +103,7 @@
 		"scripts/changelog.test.ts": 3,
 		"scripts/check-allow-scripts.test.ts": 3,
 		"scripts/check-ci-job-p90.test.ts": 2,
-		"scripts/check-lockfile-sync.test.ts": 2,
+		"scripts/check-lockfile-sync.test.ts": 3,
 		"scripts/check-pr-body.test.ts": 11,
 		"scripts/ci-shuffle-changed-tests-spawn.test.ts": 3,
 		"scripts/ci-test-diff.test.ts": 2,

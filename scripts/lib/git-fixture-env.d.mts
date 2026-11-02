@@ -1,4 +1,7 @@
+type GitFixtureEnvOptions = { keep?: string[] };
+
 type GitOptions = {
+	gitFixtureEnv?: GitFixtureEnvOptions;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	encoding?: BufferEncoding;
@@ -9,6 +12,7 @@ type GitOptions = {
 export function envFor(
 	cwd: string,
 	overrides?: Record<string, string | undefined>,
+	options?: GitFixtureEnvOptions,
 ): Record<string, string | undefined>;
 export function gitExecFileSync(
 	args: string[],

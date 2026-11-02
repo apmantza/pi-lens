@@ -861,6 +861,9 @@ export const wallClockBudgetInclude = [
 	// #4691: the nightly CLI runs as a real child process, with PATH at a gh
 	// stand-in serving recorded master runs (flake-shape admission).
 	"tests/scripts/check-ci-job-p90.test.ts",
+	// #5207: the libc drift guard reads HEAD's committed lock through a real git
+	// child in a fixture repository (flake-shape admission).
+	"tests/scripts/check-lockfile-sync.test.ts",
 	"tests/scripts/check-pr-body.test.ts",
 	// #4397: the changed-test shuffle job's exit code is the contract; only a
 	// real vitest start reorders cases under `--sequence.shuffle`.
