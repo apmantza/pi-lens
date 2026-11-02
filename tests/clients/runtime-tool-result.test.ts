@@ -3619,7 +3619,7 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 									clientsReady: true,
 								}),
 							);
-							// Escape mid-check: a cancelled turn, not a late result.
+							// Escape after the bound: a cancelled turn, not a late result.
 							const escape = new AbortController();
 							const abortedHandler = handleToolResult({
 								...toolResultDeps({
@@ -3648,12 +3648,12 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 								supersededFile,
 								"export const changed = true;\n",
 							);
-							escape.abort();
+							await vi.advanceTimersByTimeAsync(10_000);
 							await abortedHandler;
+							escape.abort();
 							settle.get("aborted.ts")?.resolve();
 							await vi.advanceTimersByTimeAsync(0);
 							expect(lateRows()).toEqual([]);
-							await vi.advanceTimersByTimeAsync(10_000);
 							// Both handlers return at the inner bound with nothing collected.
 							await Promise.all([liveHandler, goneHandler, supersededHandler]);
 							settle.get("superseded.ts")?.resolve();

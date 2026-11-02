@@ -4381,6 +4381,7 @@ export async function handleToolResult(
 		if (!deps.signal?.aborted) {
 			void dispatching.then(
 				(late) => {
+					if (deps.signal?.aborted) return;
 					if (late.crashed || !late.result.withheldBlockerLine) return;
 					if (getFileStateHash(filePath) !== initialStateHash) return;
 					if (writeSession.guardedWrite(filePath, () => true) !== true) return;
