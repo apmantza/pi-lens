@@ -3,6 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import {
+	extractSection,
+	parseSections,
+	summarizeSection,
+} from "../../scripts/lib/changelog.mjs";
 import * as rollup from "../../scripts/rollup-changelog.mjs";
 import { REAL_NODE_MODULES } from "../support/lane-check-kit.js";
 const {
@@ -44,7 +49,7 @@ function fixture() {
 		);
 	return root;
 }
-it("emits five public releases with absolute links readable by pi across a version jump", () => {
+it("emits five release summaries readable by pi across a version jump", () => {
 	const root = fixture();
 	rollup.writeUserChangelog({ rootDir: root });
 	const file = path.join(root, "CHANGELOG-USER.md");
@@ -55,14 +60,8 @@ it("emits five public releases with absolute links readable by pi across a versi
 	expect(text).not.toMatch(/Pending|Unreleased/);
 	expect(text).not.toContain("### Deprecated");
 	expect(text).toContain(
-		"https://github.com/apmantza/pi-lens/blob/v1.0.7/docs/usage.md",
+		"Full notes: https://github.com/apmantza/pi-lens/releases/tag/v1.0.7",
 	);
-	for (const target of ["v1.0.7/docs/root.md", "v1.0.7/CHANGELOG.md#usage"])
-		expect(text).toContain(
-			`https://github.com/apmantza/pi-lens/blob/${target}`,
-		);
-	expect(text).toContain("https://example.com/guide");
-	expect(text).toContain("https://example.com/a");
 	const entries = parseChangelog(file);
 	expect(entries.map((entry) => entry.patch)).toEqual([7, 6, 5, 4, 3]);
 	expect(
@@ -147,54 +146,21 @@ it("the check CLI rejects a stale user changelog", async () => {
 	}
 });
 
-// #5202 F2: Unit tests must read the actual shipped artifact.
-it("the shipped user changelog matches the last five released sections", () => {
+// #5202: shipped notes must equal the GitHub release summaries.
+it("the shipped user changelog equals the last five release bodies", () => {
+	const source = fs.readFileSync("CHANGELOG.md", "utf8");
+	const releases = parseSections(source)
+		.filter((section) => /^\d+\.\d+\.\d+$/.test(section.label))
+		.slice(0, 5);
+	const expected =
+		"# User changelog\n\n" +
+		releases
+			.map(
+				(section) =>
+					`${section.heading}\n\n${summarizeSection(extractSection(source, section.label)!)}\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v${section.label}`,
+			)
+			.join("\n\n") +
+		"\n";
+	expect(fs.readFileSync("CHANGELOG-USER.md", "utf8")).toBe(expected);
 	expect(() => rollup.checkUserChangelog()).not.toThrow();
-	expect(fs.readFileSync("CHANGELOG-USER.md", "utf8")).not.toContain(
-		"## [Unreleased]",
-	);
-});
-
-// #5202 F7: code examples must survive the public release renderer literally.
-it("preserves inline and block code while resolving adjacent prose links", () => {
-	const root = fixture();
-	const code =
-		'`socket["bind"](0)` and ``[x](docs/span.md)``\n\n```js\nconst link = "[x](/docs/fenced.md)";\n```\n\n    [x](docs/indented.md)';
-	fs.writeFileSync(
-		path.join(root, "CHANGELOG.md"),
-		`# Changelog\n\n## [1.0.1] - 2026-01-02\n\n### Fixed\n\n- **Example** ${code}\n\n[real](docs/real.md)\n`,
-	);
-	const text = rollup.renderUserChangelog({ rootDir: root });
-	expect(text).toContain(code);
-	expect(text).toContain(
-		"[real](https://github.com/apmantza/pi-lens/blob/v1.0.1/docs/real.md)",
-	);
-});
-// #5202 F8: brackets delimit the whole destination, including spaces.
-it("preserves angle destination delimiters and resolves the complete path", () => {
-	const root = fixture();
-	fs.writeFileSync(
-		path.join(root, "CHANGELOG.md"),
-		'# Changelog\n\n## [1.0.1] - 2026-01-02\n\n### Fixed\n\n- **Guide** [guide](<docs/user guide.md> "Read guide") and [abs](<https://example.com/x>) and ![image](</docs/image name.png>).\n',
-	);
-	const text = rollup.renderUserChangelog({ rootDir: root });
-	expect(text).toContain(
-		'[guide](<https://github.com/apmantza/pi-lens/blob/v1.0.1/docs/user%20guide.md> "Read guide")',
-	);
-	expect(text).toContain("[abs](<https://example.com/x>)");
-	expect(text).toContain(
-		"![image](<https://github.com/apmantza/pi-lens/blob/v1.0.1/docs/image%20name.png>)",
-	);
-});
-
-// #5202 F11: an unmatched opening angle must not truncate the destination.
-it("resolves an unclosed angle destination without slicing its final character", () => {
-	const root = fixture();
-	fs.writeFileSync(
-		path.join(root, "CHANGELOG.md"),
-		"# Changelog\n\n## [1.0.1] - 2026-01-02\n\n### Fixed\n\n- **Guide** [x](<docs/a.md)\n",
-	);
-	expect(rollup.renderUserChangelog({ rootDir: root })).toContain(
-		"[x](https://github.com/apmantza/pi-lens/blob/v1.0.1/%3Cdocs/a.md)",
-	);
 });

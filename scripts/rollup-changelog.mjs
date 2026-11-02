@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { blankMarkdownRegions } from "./lib/markdown-lexer.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -8,6 +7,7 @@ import {
 	extractSection,
 	lintSectionBody,
 	parseSections,
+	summarizeSection,
 } from "./lib/changelog.mjs";
 
 export const CHANGELOG_SECTIONS = [
@@ -182,32 +182,12 @@ export function renderUserChangelog({
 } = {}) {
 	const source = fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8");
 	const sections = parseSections(source);
-	const publicBody = (body, ref) => {
-		const rendered = renderBody([body], CHANGELOG_SECTIONS);
-		const visible = blankMarkdownRegions(rendered, {
-			code: "blocks",
-			codeSpans: true,
-		});
-		return rendered.replace(
-			/(!?\[[^\]\n]+\]\()(<[^>\n]*>|[^\s)]+)([^)]*\))/g,
-			(match, prefix, target, suffix, offset) => {
-				if (visible[offset] !== rendered[offset]) return match;
-				const angle = target.startsWith("<") && target.endsWith(">");
-				const destination = angle ? target.slice(1, -1) : target;
-				const url = new URL(
-					destination.replace(/^\/(?!\/)/, ""),
-					`https://github.com/apmantza/pi-lens/blob/${ref}/CHANGELOG.md`,
-				).href;
-				return `${prefix}${angle ? `<${url}>` : url}${suffix}`;
-			},
-		);
-	};
 	const releases = sections
 		.filter((section) => /^\d+\.\d+\.\d+$/.test(section.label))
 		.slice(0, USER_RELEASE_LIMIT)
 		.map(
 			(section) =>
-				`${section.heading}\n\n${publicBody(section.body, `v${section.label}`)}`,
+				`${section.heading}\n\n${summarizeSection(section.body)}\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v${section.label}`,
 		);
 	return `# User changelog\n\n${releases.join("\n\n")}\n`;
 }

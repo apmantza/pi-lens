@@ -38,10 +38,10 @@ entry file into the new version section, then removes the entry files while
 retaining this README. The tag-time release workflow only verifies that this
 rollup has already happened.
 
-`CHANGELOG-USER.md` contains only the latest five numbered releases, without
-Internal blocks. It changes when `scripts/changelog-release.mjs` invokes the
-release rollup; ordinary fragment PRs do not regenerate it. Pi ignores
-Unreleased sections. `npm run changelog:check` and the Unit tests check the
-shipped file against the released sections of `CHANGELOG.md`. To repair drift,
-run `node scripts/rollup-changelog.mjs --user`. Historical entries outside
-Internal blocks retain their original text because their audience is unavailable.
+`CHANGELOG-USER.md` contains the latest five numbered releases: each original
+release heading, the GitHub release summary, and a Full notes link. It changes
+when `scripts/changelog-release.mjs` invokes the release rollup; ordinary
+fragment PRs do not regenerate it. Pi ignores Unreleased sections.
+`npm run changelog:check` and the Unit tests check the shipped file against the
+release summaries from `CHANGELOG.md`. To repair drift, run
+`node scripts/rollup-changelog.mjs --user`.
