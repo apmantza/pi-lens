@@ -483,7 +483,9 @@ describe("projectReport — default text cell strict census (#5150 R2)", () => {
 
 	it("renders the entry-budget-truncated graph as a partial note under TRUST", async () => {
 		const env = makeEnv("pi-lens-preport-text-partial-");
-		_setReviewGraphEntryBudgetForTests(2);
+		// The `.git` marker and `src` spend two entries, so 4 leaves room for two
+		// files; at 2 both counts were 0 and a note dropping one still passed.
+		_setReviewGraphEntryBudgetForTests(4);
 		createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;\n");
 		createTempFile(env.tmpDir, "src/b.ts", "export const b = 2;\n");
 		createTempFile(env.tmpDir, "src/c.ts", "export const c = 3;\n");
@@ -495,9 +497,10 @@ describe("projectReport — default text cell strict census (#5150 R2)", () => {
 		const note = linesUnder(text, "TRUST:").find((line) =>
 			line.includes("Partial source walk"),
 		);
-		expect(note).toBeDefined();
-		expect(note!).toContain(`${report.trust!.persistCoverage!.totalFiles}`);
-		expect(note!).toContain(`${report.trust!.persistCoverage!.persistedFiles}`);
+		expect(note).toBe(
+			"  note: Partial source walk: at least 2 source files were represented " +
+				"before the visited-entry budget stopped enumeration; 2 files are in this graph.",
+		);
 	});
 
 	it("ignores unknown fields instead of breaking (planted-key control)", async () => {
