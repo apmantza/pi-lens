@@ -13,7 +13,7 @@ import { getProcessSingleton } from "./process-singletons.js";
 // at session end instead of requiring a reader to hand-count
 // `concurrent_session_bind` lines. Process-singleton backed (AGENTS.md catalog
 // shape 25), NOT a module-scope `let` like the other `*_rollup` counters
-// (bus-events-logger.ts, path-attribution-telemetry.ts): a `let` here exists
+// (bus-event-rollup.ts, path-attribution-telemetry.ts): a `let` here exists
 // once per module EVALUATION, not once per process, and #2146 measured one pid
 // evaluating this exact graph nine times — a bare `let` would only ever see
 // the binds routed through its own copy, undercounting every rollup that

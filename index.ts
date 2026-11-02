@@ -164,7 +164,7 @@ import { wireBusEmitterGetter } from "./clients/bus-publish.js";
 import { wireDiagnosticsBusEmitterGetter } from "./clients/diagnostics-publish.js";
 import { wireDispositionBusEmitterGetter } from "./clients/disposition-publish.js";
 import { wireFormatEventsBusEmitterGetter } from "./clients/format-events-publish.js";
-import { emitBusEventRollupAtSessionEnd } from "./clients/bus-events-logger.js";
+import { emitBusEventRollupAtSessionEnd } from "./clients/bus-event-rollup.js";
 import { emitFenceRollupAtSessionEnd } from "./clients/generation-guard.js";
 import {
 	emitVerifiedPathAttributionRollup,

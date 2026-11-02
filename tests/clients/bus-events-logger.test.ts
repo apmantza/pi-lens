@@ -8,7 +8,7 @@ import {
 	emitBusEventRollupAtSessionEnd,
 	getBusEventRollupCounts,
 	resetBusEventRollupCounts,
-} from "../../clients/bus-events-logger.js";
+} from "../../clients/bus-event-rollup.js";
 
 const { latencyRows } = installBusSinkReader();
 
@@ -50,7 +50,7 @@ function publish(entry: {
 // shared seam (every producer + resolveLiveBusEmitter's own
 // skipped_stale_session write go through `logBusEvent`) rather than
 // instrumenting each producer individually.
-describe("bus-events-logger session-end rollup (S2d gap 5, #1432 review)", () => {
+describe("bus-event-rollup session-end rollup (S2d gap 5, #1432 review)", () => {
 	afterEach(() => {
 		resetBusEventRollupCounts();
 	});

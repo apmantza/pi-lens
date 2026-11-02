@@ -175,7 +175,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 // seeds).
 afterEach(async () => {
 	vi.doUnmock("../clients/bootstrap.js");
-	vi.doUnmock("../clients/bus-events-logger.js");
+	vi.doUnmock("../clients/bus-event-rollup.js");
 	vi.doUnmock("../clients/cache-observability.js");
 	vi.doUnmock("../clients/debug-handles.js");
 	vi.doUnmock("../clients/degradation-ledger.js");
@@ -1225,11 +1225,9 @@ describe("index.ts integration", () => {
 		"session_shutdown emits the bus-event session-end rollup (S2d gap 5, #1432 review)",
 		async () => {
 			const emitBusEventRollupAtSessionEnd = vi.fn();
-			vi.doMock("../clients/bus-events-logger.js", async (importActual) => {
+			vi.doMock("../clients/bus-event-rollup.js", async (importActual) => {
 				const actual =
-					await importActual<
-						typeof import("../clients/bus-events-logger.js")
-					>();
+					await importActual<typeof import("../clients/bus-event-rollup.js")>();
 				return { ...actual, emitBusEventRollupAtSessionEnd };
 			});
 

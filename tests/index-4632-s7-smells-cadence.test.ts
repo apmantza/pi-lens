@@ -22,7 +22,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { BusEventLogEntry } from "../clients/bus-events-logger.js";
+import type { BusEventLogEntry } from "../clients/bus-event-rollup.js";
 import { endTurn } from "./support/pi-session-commit-gate.js";
 import {
 	type PiFauxReply,

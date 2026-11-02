@@ -38,7 +38,7 @@ function discoverProducerFiles(): string[] {
 			(file) =>
 				file.endsWith(".ts") &&
 				file !== SEAM_FILE &&
-				file !== "bus-events-logger.ts",
+				file !== "bus-event-rollup.ts",
 		)
 		.filter((file) => {
 			const source = fs.readFileSync(path.join(clientsDir, file), "utf8");
@@ -57,7 +57,7 @@ function findEmitCalls(source: string): string[] {
 describe("bus producer guarded-seam coverage", () => {
 	it("keeps the bus writer private to the publish seam", async () => {
 		// #5179 F1/F4/F5: imports through any spelling cannot recover a private writer.
-		const facade = await import("../../clients/bus-events-logger.js");
+		const facade = await import("../../clients/bus-event-rollup.js");
 		const seam = await import("../../clients/live-bus-emitter.js");
 		expect(facade).not.toHaveProperty("logBusEvent");
 		expect(seam).not.toHaveProperty("logBusEvent");

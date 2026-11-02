@@ -6,7 +6,7 @@
   "./clients/bounded-cache.js",
   "./clients/bounded-telemetry.js",
   "./clients/build-identity.js",
-  "./clients/bus-events-logger.js",
+  "./clients/bus-event-rollup.js",
   "./clients/bus-publish.js",
   "./clients/cache-manager.js",
   "./clients/cache-observability.js",
