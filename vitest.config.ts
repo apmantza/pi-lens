@@ -1,11 +1,26 @@
 import * as fs from "node:fs";
+import { createHash } from "node:crypto";
 import * as os from "node:os";
+import * as path from "node:path";
 import { defineConfig } from "vitest/config";
 import { BalancedShardSequencer } from "./scripts/lib/balanced-shard-sequencer.mjs";
 import {
 	formatTestWorkerBudget,
 	resolveTestWorkerBudget,
 } from "./scripts/lib/worker-budget.mjs";
+
+/** Keep Vitest's filesystem module cache out of linked node_modules (#5206). */
+export function resolveVitestCacheDir(worktreeRoot: string): string {
+	const rootKey = createHash("sha256")
+		.update(path.resolve(worktreeRoot))
+		.digest("hex")
+		.slice(0, 16);
+	return path.join(
+		process.env.TMPDIR ?? os.tmpdir(),
+		"pi-lens-vitest-cache",
+		rootKey,
+	);
+}
 
 // Applies to globalSetup as well as workers: ordinary tests never install tools.
 process.env.PI_LENS_DISABLE_TOOL_INSTALL ??= "1";
@@ -1065,6 +1080,7 @@ export const tmpFixtureHygieneInclude = [
 // call site in runtime-turn-session.test.ts.
 
 export default defineConfig({
+	cacheDir: resolveVitestCacheDir(process.cwd()),
 	test: {
 		exclude: sharedExclude,
 		// Root-config-only in Vitest 4 (see the grammar-heavy project's comment
