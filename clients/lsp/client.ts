@@ -7006,17 +7006,12 @@ export async function createLSPClient(options: {
 	);
 
 	const reader = new StreamMessageReader(lspProcess.stdout);
+	// #5169: no onPartialMessage consumer; prevent the ref’d timer from arming.
+	reader.partialMessageTimeout = 0;
 	const connection = createMessageConnection(
 		reader,
 		new StreamMessageWriter(lspProcess.stdin),
 	);
-
-	// #5169: disposeClientConnection converges exit, close, error and shutdown.
-	// jsonrpc 9.x does not stop an incomplete body’s recurring timer on dispose.
-	// Its pending tick may fire once more; zero prevents it from rearming.
-	connection.onDispose(() => {
-		reader.partialMessageTimeout = 0;
-	});
 
 	// Local event emitter — signals waitForDiagnostics when new diagnostics arrive.
 	// Scoped to this client instance. setMaxListeners guards against Node.js warning

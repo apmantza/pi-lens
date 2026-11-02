@@ -19,19 +19,31 @@ const host = fileURLToPath(
 for (const mode of ["exit", "shutdown"]) {
 	it(`releases the partial-message timer after ${mode} (#5169)`, async () => {
 		pinFixtureHome("partial-message-5169");
-		// #5169: default 10s timer may fire once after cleanup, but cannot rearm.
-		const { stdout } = await run(process.execPath, [host, mode], {
-			timeout: 16_000,
+		// #5169: teardown must not retain the dependency’s pending 10s tick.
+		const pending = run(process.execPath, [host, mode], {
+			timeout: 8_000,
 			killSignal: "SIGKILL",
 			maxBuffer: 1024 * 1024,
-		}).catch((error) => {
-			expect(error.stdout).toContain(`completed:${mode}:partial-body`);
-			expect(
-				error.killed,
-				"host retained a ref’d handle after LSP teardown",
-			).toBe(false);
-			throw error;
 		});
+		let teardownDeadline: ReturnType<typeof setTimeout> | undefined;
+		pending.child.stdout?.on("data", (data) => {
+			if (data.toString().includes(`completed:${mode}:partial-body`)) {
+				teardownDeadline = setTimeout(
+					() => pending.child.kill("SIGKILL"),
+					3_000,
+				);
+			}
+		});
+		const { stdout } = await pending
+			.catch((error) => {
+				expect(error.stdout).toContain(`completed:${mode}:partial-body`);
+				expect(
+					error.killed,
+					"host retained a ref’d handle after LSP teardown",
+				).toBe(false);
+				throw error;
+			})
+			.finally(() => clearTimeout(teardownDeadline));
 		expect(stdout).toContain(`completed:${mode}:partial-body`);
 		expect(stdout).toContain("natural-exit:no-ref-timer");
 	}, 20_000);
