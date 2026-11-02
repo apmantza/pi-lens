@@ -7013,8 +7013,11 @@ export async function createLSPClient(options: {
 		streamErrorHandler("stderr"),
 	);
 
+	const reader = new StreamMessageReader(lspProcess.stdout);
+	// #5169: no onPartialMessage consumer; prevent the ref’d timer from arming.
+	reader.partialMessageTimeout = 0;
 	const connection = createMessageConnection(
-		new StreamMessageReader(lspProcess.stdout),
+		reader,
 		new StreamMessageWriter(lspProcess.stdin),
 	);
 

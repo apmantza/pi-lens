@@ -219,6 +219,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the defect is wall-clock only (super-linear ast-grep rule YAML language extraction); a fake clock measures nothing",
 	},
+	"elapsed-time-assertion:clients/lsp/partial-message-timer.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"#5173 must distinguish natural host exit within 3 seconds from the dependency’s pending 10-second tick; fake clocks cannot measure another process’s exit",
+	},
 	// 2026-09-11 (#2886 round 2): the /lens-perf occupancy row keeps one
 	// real-clock sampler assertion alongside its deterministic yield count —
 	// event-loop occupancy has no deterministic proxy; the yield count is
@@ -787,6 +792,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"real Lean elaboration and diagnostic publication require Lake and elan across the child-process boundary; the serialized wall-clock lane isolates the handshake and diagnostic wait",
+	},
+	"real-process-spawn:clients/lsp/partial-message-timer.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"#5169 requires natural exit of a separate Node host after a real LSP truncated message",
 	},
 	"real-process-spawn:clients/lsp/unheld-module-pyright-4742.integration.test.ts":
 		{
