@@ -8,6 +8,7 @@ import {
 	relocateEditRange,
 	stripOldTextTrailingWhitespace,
 	tryCorrectIndentationMismatch,
+	tryCorrectIndentationMismatchFromContent,
 } from "../../clients/read-guard-tool-lines.js";
 import { PartialApplyRecordStore } from "../../clients/partial-edit-apply.js";
 import { logReadGuardEvent } from "../../clients/read-guard-logger.js";
@@ -1156,6 +1157,94 @@ describe("tryCorrectIndentationMismatch — Unicode punctuation drift (Tier C)",
 		} finally {
 			env.cleanup();
 		}
+	});
+});
+
+// Recurrence guarded: Tiers A, B and C were three hand-copied span matchers that
+// differed only in their line signature; a safety edit (unique-match, >=2
+// anchors, blank skipping) applied to one copy would leave the others behind.
+// They now share one matcher, and each cell drives one tier's signature
+// through it with the SAME safety contract.
+describe("tryCorrectIndentationMismatchFromContent — signature tiers share one matcher", () => {
+	// Each tier's drift is only bridged by its own signature (and the ones after it).
+	const TIERS = [
+		{
+			tier: "A (indentation)",
+			file: ["\tconst a = 1;", "", "", "\tconst b = 2;"],
+			old: ["const a = 1;", "const b = 2;"],
+		},
+		{
+			tier: "B (interior whitespace)",
+			file: ["\tconst a = 1 + 2;", "   ", "\tconst b = 3 + 4;"],
+			old: ["const a=1+2;", "const b=3+4;"],
+		},
+		{
+			tier: "C (unicode punctuation)",
+			file: ['\tconst a = "x";', "", "\tconst b = 3 - 4;"],
+			old: ["const a = \u201cx\u201d;", "const b = 3 \u2014 4;"],
+		},
+	];
+
+	it.each(TIERS)(
+		"tier $tier recovers the verbatim file span across interior blank lines",
+		({ file, old }) => {
+			const content = `${file.join("\n")}\n`;
+			expect(
+				tryCorrectIndentationMismatchFromContent(old.join("\n"), content),
+			).toBe(file.join("\n"));
+		},
+	);
+
+	it.each(TIERS)(
+		"tier $tier refuses a signature that occurs twice",
+		({ file, old }) => {
+			const content = `${[...file, "gap();", ...file].join("\n")}\n`;
+			expect(
+				tryCorrectIndentationMismatchFromContent(old.join("\n"), content),
+			).toBeUndefined();
+		},
+	);
+
+	it.each(TIERS)(
+		"tier $tier refuses an oldText with one non-blank line however many blanks pad it",
+		({ file, old }) => {
+			const content = `${file.join("\n")}\n`;
+			expect(
+				tryCorrectIndentationMismatchFromContent(`${old[0]}\n\n  \n`, content),
+			).toBeUndefined();
+		},
+	);
+	// Each tier is behaviour: a finer tier answers where a coarser signature would
+	// see two spans and refuse (drop a row and this cell reds; order is not
+	// observable, since every tier refuses an ambiguous signature).
+	it("a finer tier recovers its unique span where the coarser tiers would collide", () => {
+		const byIndent = [
+			"const a = 1;",
+			"const b = 2;",
+			"gap();",
+			"const a=1;",
+			"const b = 2;",
+		].join("\n");
+		expect(
+			tryCorrectIndentationMismatchFromContent(
+				"  const a = 1;\n\n  const b = 2;",
+				byIndent,
+			),
+		).toBe("const a = 1;\nconst b = 2;");
+
+		const byWhitespace = [
+			"const a = 1 - 2;",
+			"const b = 3;",
+			"gap();",
+			"const a = 1 \u2014 2;",
+			"const b = 3;",
+		].join("\n");
+		expect(
+			tryCorrectIndentationMismatchFromContent(
+				"const a = 1-2;\nconst b = 3;",
+				byWhitespace,
+			),
+		).toBe("const a = 1 - 2;\nconst b = 3;");
 	});
 });
 

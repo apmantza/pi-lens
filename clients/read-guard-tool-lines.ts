@@ -1024,46 +1024,15 @@ export function tryCorrectIndentationMismatchFromContent(
 		return indentationInsensitiveCandidate;
 	}
 
-	// Tier A (#200): the fixed-length matchers above can't bridge a mid-block
-	// blank-line difference; fall back to a blank-line-insensitive match that
-	// recovers the real file span (unique-match guarded).
-	const blankLineCandidate = findBlankLineInsensitiveCandidate(
-		content,
-		normalized,
-	);
-	if (blankLineCandidate !== undefined) {
-		return blankLineCandidate;
-	}
-
-	// Tier B: interior-whitespace drift the earlier tiers can't bridge — the
-	// indentation- and blank-line-insensitive tiers both still require each
-	// non-blank line to match character-for-character after trimming only the
-	// OUTER edges. When whitespace drifts INSIDE a line (a formatter collapsed
-	// `a  +  b` → `a + b`, re-spaced operators/args, etc.) those tiers miss.
-	// Matching on a fully-whitespace-collapsed signature catches it. Same
-	// safety contract as Tier A: unique-match guarded, ≥2 anchors, recovers the
-	// verbatim file span.
-	const whitespaceCandidate = findWhitespaceInsensitiveCandidate(
-		content,
-		normalized,
-	);
-	if (whitespaceCandidate !== undefined) {
-		return whitespaceCandidate;
-	}
-
-	// Tier C: Unicode-punctuation drift the whitespace tiers can't bridge — the
-	// model emitted smart quotes / em-dashes / NBSP where the file has straight
-	// quotes / hyphens / regular spaces (or vice versa), common when text is
-	// pasted from rendered Markdown or the model "tidies" punctuation. Folding
-	// those to their ASCII equivalents (on top of whitespace collapse) catches it.
-	// Same safety contract as Tier B: signature-matched, unique-match guarded, ≥2
-	// anchors, recovers the verbatim file span (the file's real characters).
-	const unicodeCandidate = findUnicodePunctuationInsensitiveCandidate(
-		content,
-		normalized,
-	);
-	if (unicodeCandidate !== undefined) {
-		return unicodeCandidate;
+	// Tiers A-C: each is the same unique-span matcher under a coarser line
+	// signature; the first tier that recovers a span wins.
+	for (const tier of SIGNATURE_TIERS) {
+		const candidate = findSignatureInsensitiveCandidate(
+			content,
+			normalized,
+			tier.signature,
+		);
+		if (candidate !== undefined) return candidate;
 	}
 
 	return undefined;
@@ -1118,134 +1087,6 @@ function findIndentationInsensitiveCandidate(
 }
 
 /**
- * Tier A of the blank-line autopatch (#200): tolerate mid-block blank-line
- * divergence — a blank line added or removed *inside* the block — which the
- * fixed-length window in {@link findIndentationInsensitiveCandidate} can't (any
- * interior blank-line delta breaks its 1:1 alignment). Blank lines are
- * semantically insignificant in every supported language, so matching the
- * oldText's non-blank lines (indentation-insensitive) against consecutive
- * content while skipping interior blanks on the content side is safe.
- *
- * Safety: matches by the non-blank "signature" but **recovers and returns the
- * real file span** (first→last matched non-blank line, real interior blanks
- * included) so the applied oldText is verbatim file bytes; requires the
- * signature to match **exactly once** (returns undefined on 0 or ≥2). Anchored
- * on ≥2 non-blank lines to avoid trivial single-line collisions.
- */
-function findBlankLineInsensitiveCandidate(
-	content: string,
-	oldText: string,
-): string | undefined {
-	const stripIndent = (line: string) => line.replace(/^[\t ]+/, "").trimEnd();
-	const isBlank = (line: string) => stripIndent(line) === "";
-
-	const contentLines = content.split("\n");
-	const oldNonBlank = oldText
-		.split("\n")
-		.map(stripIndent)
-		.filter((line) => line !== "");
-	// Need ≥2 anchors to be meaningful and collision-resistant; single-line
-	// drift has no interior to differ and is handled by other tiers.
-	if (oldNonBlank.length < 2) return undefined;
-
-	const spans: Array<[number, number]> = [];
-	for (let start = 0; start < contentLines.length; start += 1) {
-		if (stripIndent(contentLines[start]) !== oldNonBlank[0]) continue;
-		let contentIdx = start + 1;
-		let oldIdx = 1;
-		let end = start;
-		let ok = true;
-		while (oldIdx < oldNonBlank.length) {
-			while (
-				contentIdx < contentLines.length &&
-				isBlank(contentLines[contentIdx])
-			)
-				contentIdx += 1;
-			if (
-				contentIdx >= contentLines.length ||
-				stripIndent(contentLines[contentIdx]) !== oldNonBlank[oldIdx]
-			) {
-				ok = false;
-				break;
-			}
-			end = contentIdx;
-			oldIdx += 1;
-			contentIdx += 1;
-		}
-		if (ok) spans.push([start, end]);
-	}
-
-	if (spans.length !== 1) return undefined;
-	const [start, end] = spans[0];
-	const candidate = contentLines.slice(start, end + 1).join("\n");
-	return candidate === oldText ? undefined : candidate;
-}
-
-/**
- * Tier B of the whitespace autopatch: tolerate INTERIOR whitespace divergence
- * that {@link findBlankLineInsensitiveCandidate} (outer-trim only) and the
- * fixed-width converters can't bridge. The signature is each non-blank line
- * with **all** whitespace removed (`/\s+/g` → ""), so re-spacing inside a line
- * — `a  +  b` ↔ `a + b`, `foo( x )` ↔ `foo(x)`, tab/space mixes mid-line — no
- * longer breaks the match. This mirrors the content-hash normalization the
- * read-guard already uses for staleness (`lineContentHash`), so a span that
- * passes here is a span the guard considers semantically identical.
- *
- * Safety mirrors Tier A exactly: matches by the collapsed signature but
- * **recovers and returns the real file span** (verbatim bytes, interior blanks
- * included) so the applied oldText is exact; requires the signature to match
- * **exactly once** (0 or ≥2 → undefined); anchored on ≥2 non-blank lines to
- * resist single-line collisions (collapsing whitespace makes single-line
- * collisions more likely, so the ≥2 floor matters more here than in Tier A).
- */
-function findWhitespaceInsensitiveCandidate(
-	content: string,
-	oldText: string,
-): string | undefined {
-	const collapse = (line: string) => line.replace(/\s+/g, "");
-	const isBlank = (line: string) => collapse(line) === "";
-
-	const contentLines = content.split("\n");
-	const oldSignature = oldText
-		.split("\n")
-		.map(collapse)
-		.filter((line) => line !== "");
-	if (oldSignature.length < 2) return undefined;
-
-	const spans: Array<[number, number]> = [];
-	for (let start = 0; start < contentLines.length; start += 1) {
-		if (collapse(contentLines[start]) !== oldSignature[0]) continue;
-		let contentIdx = start + 1;
-		let sigIdx = 1;
-		let end = start;
-		let ok = true;
-		while (sigIdx < oldSignature.length) {
-			while (
-				contentIdx < contentLines.length &&
-				isBlank(contentLines[contentIdx])
-			)
-				contentIdx += 1;
-			if (
-				contentIdx >= contentLines.length ||
-				collapse(contentLines[contentIdx]) !== oldSignature[sigIdx]
-			) {
-				ok = false;
-				break;
-			}
-			end = contentIdx;
-			sigIdx += 1;
-			contentIdx += 1;
-		}
-		if (ok) spans.push([start, end]);
-	}
-
-	if (spans.length !== 1) return undefined;
-	const [start, end] = spans[0];
-	const candidate = contentLines.slice(start, end + 1).join("\n");
-	return candidate === oldText ? undefined : candidate;
-}
-
-/**
  * Fold the Unicode punctuation that models and rendered text routinely swap for
  * ASCII (and back) to a canonical ASCII form: smart single/double quotes →
  * `'`/`"`, the dash family (hyphen, figure/en/em dash, horizontal bar, minus) →
@@ -1261,33 +1102,57 @@ function normalizeUnicodePunctuation(text: string): string {
 }
 
 /**
- * Tier C of the autopatch ladder: tolerate Unicode-punctuation divergence the
- * whitespace tiers can't bridge (smart quotes ↔ straight, em/en-dash ↔ hyphen,
- * NBSP ↔ space). The signature folds Unicode punctuation to ASCII and then
- * collapses all whitespace (so it subsumes Tier B and additionally absorbs the
- * punctuation swap). Safety mirrors Tier B exactly: matches by the folded
- * signature but **recovers and returns the verbatim file span** (the file's real
- * characters), requires the signature to match **exactly once**, and anchors on
- * ≥2 non-blank lines to resist single-line collisions.
+ * Line signatures of the signature-insensitive autopatch tiers, in ladder
+ * order. Every tier shares {@link findSignatureInsensitiveCandidate}; a tier is
+ * only how coarsely it compares a line.
+ *
+ * - Tier A (#200): blank-line drift. Indentation-insensitive (outer trim only).
+ * - Tier B: interior whitespace drift. Every whitespace run removed, so re-spacing
+ *   inside a line (`a  +  b` vs `a + b`) no longer breaks the match. Mirrors the
+ *   content-hash normalization the read-guard uses for staleness
+ *   (`lineContentHash`).
+ * - Tier C: Unicode-punctuation drift (smart quotes, em/en dashes, NBSP) folded
+ *   to ASCII on top of Tier B's whitespace collapse, so it subsumes Tier B.
  */
-function findUnicodePunctuationInsensitiveCandidate(
+const SIGNATURE_TIERS: ReadonlyArray<{
+	readonly signature: (line: string) => string;
+}> = [
+	{ signature: (line) => line.replace(/^[\t ]+/, "").trimEnd() },
+	{ signature: (line) => line.replace(/\s+/g, "") },
+	{
+		signature: (line) => normalizeUnicodePunctuation(line).replace(/\s+/g, ""),
+	},
+];
+
+/**
+ * Match `oldText`'s non-blank lines against consecutive non-blank lines of
+ * `content` by `signature`, skipping interior blank lines on the content side,
+ * and return the REAL file span (first to last matched line, verbatim bytes with
+ * the file's interior blanks) so the applied oldText is exact.
+ *
+ * Safety, identical for every tier: the signature must match **exactly once**
+ * (0 or ≥2 → undefined) and `oldText` needs ≥2 non-blank lines, so a single-line
+ * collision cannot pass. A span equal to `oldText` is no correction (undefined).
+ */
+function findSignatureInsensitiveCandidate(
 	content: string,
 	oldText: string,
+	signature: (line: string) => string,
 ): string | undefined {
-	const fold = (line: string) =>
-		normalizeUnicodePunctuation(line).replace(/\s+/g, "");
-	const isBlank = (line: string) => fold(line) === "";
+	const isBlank = (line: string) => signature(line) === "";
 
 	const contentLines = content.split("\n");
 	const oldSignature = oldText
 		.split("\n")
-		.map(fold)
+		.map(signature)
 		.filter((line) => line !== "");
+	// Need ≥2 anchors to be meaningful and collision-resistant; single-line
+	// drift has no interior to differ and is handled by other tiers.
 	if (oldSignature.length < 2) return undefined;
 
 	const spans: Array<[number, number]> = [];
 	for (let start = 0; start < contentLines.length; start += 1) {
-		if (fold(contentLines[start]) !== oldSignature[0]) continue;
+		if (signature(contentLines[start]) !== oldSignature[0]) continue;
 		let contentIdx = start + 1;
 		let sigIdx = 1;
 		let end = start;
@@ -1300,7 +1165,7 @@ function findUnicodePunctuationInsensitiveCandidate(
 				contentIdx += 1;
 			if (
 				contentIdx >= contentLines.length ||
-				fold(contentLines[contentIdx]) !== oldSignature[sigIdx]
+				signature(contentLines[contentIdx]) !== oldSignature[sigIdx]
 			) {
 				ok = false;
 				break;
