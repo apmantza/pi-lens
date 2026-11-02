@@ -116,6 +116,8 @@ let deferredApplyEdit = null;
 const HANG_PROJECT_INFO = ["1", "cancel"].includes(
 	process.env.FAKE_LSP_HANG_PROJECT_INFO ?? "",
 );
+const HANG_DEFINITION = process.env.FAKE_LSP_HANG_DEFINITION === "1";
+const HANG_DOCUMENT_SYMBOL = process.env.FAKE_LSP_HANG_DOCUMENT_SYMBOL === "1";
 let hungProjectInfoId = null;
 
 // #2450 review round 2 (F2): the target line/columns/replacement text are
@@ -1386,6 +1388,7 @@ function handle(raw) {
 
 	// Document symbol
 	if (data.method === "textDocument/documentSymbol") {
+		if (HANG_DOCUMENT_SYMBOL) return;
 		send({
 			jsonrpc: "2.0",
 			id: data.id,
@@ -1454,6 +1457,7 @@ function handle(raw) {
 	// FAKE_LSP_DEFINITION_DELAY_MS delays the reply so a test can bump the
 	// document version mid-request and exercise the stale-drop path (#276).
 	if (data.method === "textDocument/definition") {
+		if (HANG_DEFINITION) return;
 		const ln = data.params?.position?.line ?? 1;
 		const ch = data.params?.position?.character ?? 6;
 		const reply = () =>

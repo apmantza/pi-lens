@@ -2981,10 +2981,11 @@ describe("navRequest — per-request timeout ceiling (#365)", () => {
 			state.connection.sendRequest = vi.fn(() => new Promise<never>(() => {}));
 
 			const start = Date.now();
-			const result = await navRequest(state, method, {}, undefined, 120);
+			await expect(
+				navRequest(state, method, {}, undefined, 120),
+			).rejects.toThrow("LSP request timed out");
 			const elapsed = Date.now() - start;
 
-			expect(result).toBeUndefined();
 			// Went through the timeout, not an instant error return...
 			expect(elapsed).toBeGreaterThanOrEqual(100);
 			// ...and did not hang on the never-resolving request.

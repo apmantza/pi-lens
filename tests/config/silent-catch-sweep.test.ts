@@ -765,8 +765,8 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :483, :777, :767, :818, :1034, :1369, :1466, :1782
 	"clients/lsp/client.ts": {
-		silent: 35,
-		identities: "cdb169f677809664",
+		silent: 34,
+		identities: "bf780f9a41c81ff1",
 		reason: PRE_RULE,
 	}, // :1559, :1617, :1680, :1687, :1775, :3444, :3712, :4105, :4198, :4222, :4268, :4957, :5150, :5350, :5575, :5748, :5815, :5829, :5932, :5982, :6116, :6137, :6259, :6269, :6358, :6431, :6573, :7718, :7721, :7735, :7821, :8104, :8116, :8125, :8139
 	"clients/lsp/config.ts": {
@@ -1348,10 +1348,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :371, :405, :628, :861, :1026, :1084, :1184, :1405, :1452, :2477
 	"tools/lsp-navigation.ts": {
-		silent: 8,
-		identities: "7d261d33eecee18f",
-		reason: PRE_RULE,
-	}, // :529, :739, :757, :1200, :1569, :1676, :1710, :1898
+		silent: 9,
+		identities: "0ea45645359d3e6d",
+		reason:
+			PRE_RULE +
+			"; #5211 re-admits the same eight handlers after the terminal tool catch switches from instanceof to the cross-evaluation timeout brand; every arm of that catch still calls finalize, and the real service-route timeout witness plus ordinary-error cases prove delivery. The other seven inherited handlers retain the pre-rule admission. #5214 F4 admits one definition-timeout recovery catch: successful recovery is disclosed in the tool note, while misses and thrown fallbacks rethrow the original deadline to finalize; the real-child hit/miss/double-timeout witnesses prove both delivery outcomes.",
+	}, // :591, :801, :819, :1280, :1697, :1804, :1838, :2024
 	"tools/lsp-structured-output.ts": {
 		silent: 3,
 		identities: "0460d5b535aef4a2",

@@ -2,9 +2,8 @@
  * #1716: `navRequest` (`clients/lsp/client.ts` — hover/definition/references/
  * signatureHelp/documentSymbol/workspace-symbol/call-hierarchy) shares the
  * observability hole #1713 fixed for pull diagnostics. Its per-request
- * `withTimeout` throws on timeout, so the caller's `.catch` swallows it to
- * `undefined` with zero trace, and an abandoned request that answers late is
- * discarded silently.
+ * `withTimeout` previously collapsed a timeout to `undefined`, so callers
+ * rendered an unanswered request as an empty result.
  *
  * navRequest is the highest-volume LSP call site (one call per turn, often
  * several), so unlike #1713's per-event latency.log write, this fix bounds
@@ -80,15 +79,9 @@ describe("#1716 navRequest timeout emits a bounded latency.log record", () => {
 		installSendRequest(state, () => new Promise(() => {}));
 
 		const startedAt = Date.now();
-		const result = await navRequest(
-			state,
-			"textDocument/hover",
-			{},
-			TEST_FILE,
-			30,
-		);
-
-		expect(result).toBeUndefined(); // no behavior change: still resolves undefined
+		await expect(
+			navRequest(state, "textDocument/hover", {}, TEST_FILE, 30),
+		).rejects.toThrow("LSP request timed out");
 		expect(timeoutEvents()).toHaveLength(1);
 		const event = timeoutEvents()[0];
 		expect(event.filePath).toBe(TEST_KEY);
@@ -111,7 +104,9 @@ describe("#1716 navRequest timeout emits a bounded latency.log record", () => {
 		const state = createMockState();
 		installSendRequest(state, () => new Promise(() => {}));
 
-		await navRequest(state, "workspace/symbol", { query: "x" }, undefined, 30);
+		await expect(
+			navRequest(state, "workspace/symbol", { query: "x" }, undefined, 30),
+		).rejects.toThrow("LSP request timed out");
 
 		expect(timeoutEvents()).toHaveLength(1);
 		expect(timeoutEvents()[0].filePath).toBe("*no-path*");
@@ -145,9 +140,11 @@ describe("#1716 navRequest timeout emits a bounded latency.log record", () => {
 		const state = createMockState();
 		installSendRequest(state, () => new Promise(() => {}));
 
-		await navRequest(state, "textDocument/hover", {}, TEST_FILE, 20);
-		await navRequest(state, "textDocument/hover", {}, TEST_FILE, 20);
-		await navRequest(state, "textDocument/hover", {}, TEST_FILE, 20);
+		for (let i = 0; i < 3; i += 1) {
+			await expect(
+				navRequest(state, "textDocument/hover", {}, TEST_FILE, 20),
+			).rejects.toThrow("LSP request timed out");
+		}
 
 		expect(timeoutEvents()).toHaveLength(1);
 		const group = getDegradationSummary().find(
@@ -162,8 +159,12 @@ describe("#1716 navRequest timeout emits a bounded latency.log record", () => {
 		const state = createMockState();
 		installSendRequest(state, () => new Promise(() => {}));
 
-		await navRequest(state, "textDocument/hover", {}, TEST_FILE, 20);
-		await navRequest(state, "textDocument/definition", {}, TEST_FILE, 20);
+		await expect(
+			navRequest(state, "textDocument/hover", {}, TEST_FILE, 20),
+		).rejects.toThrow("LSP request timed out");
+		await expect(
+			navRequest(state, "textDocument/definition", {}, TEST_FILE, 20),
+		).rejects.toThrow("LSP request timed out");
 
 		expect(timeoutEvents()).toHaveLength(2);
 	});
@@ -177,14 +178,9 @@ describe("#1716 a late nav answer after abandonment is a bounded, traced discard
 			return { contents: "late hover" };
 		});
 
-		const result = await navRequest(
-			state,
-			"textDocument/hover",
-			{},
-			TEST_FILE,
-			20,
-		);
-		expect(result).toBeUndefined(); // caller still sees the timeout, unchanged
+		await expect(
+			navRequest(state, "textDocument/hover", {}, TEST_FILE, 20),
+		).rejects.toThrow("LSP request timed out");
 		expect(discardedEvents()).toHaveLength(0); // not discarded yet — still in flight
 
 		await wait(120); // let the abandoned request settle
@@ -218,7 +214,9 @@ describe("#1716 a late nav answer after abandonment is a bounded, traced discard
 			throw new Error("late failure");
 		});
 
-		await navRequest(state, "textDocument/hover", {}, TEST_FILE, 20);
+		await expect(
+			navRequest(state, "textDocument/hover", {}, TEST_FILE, 20),
+		).rejects.toThrow("LSP request timed out");
 		await wait(120);
 
 		expect(discardedEvents()).toHaveLength(0);
@@ -234,9 +232,13 @@ describe("#1716 a late nav answer after abandonment is a bounded, traced discard
 			return { contents: "late" };
 		});
 
-		await navRequest(state, "textDocument/hover", {}, TEST_FILE, 20);
+		await expect(
+			navRequest(state, "textDocument/hover", {}, TEST_FILE, 20),
+		).rejects.toThrow("LSP request timed out");
 		await wait(120);
-		await navRequest(state, "textDocument/hover", {}, TEST_FILE, 20);
+		await expect(
+			navRequest(state, "textDocument/hover", {}, TEST_FILE, 20),
+		).rejects.toThrow("LSP request timed out");
 		await wait(120);
 
 		expect(discardedEvents()).toHaveLength(1);
