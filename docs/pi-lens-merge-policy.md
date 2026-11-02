@@ -375,8 +375,9 @@ operator's private notes, so a different orchestrator can run the same train.
   applies to human PRs; a bump title can never carry a ref. Merge order: one
   at a time (each merge dirties the rest; dependabot rebases them itself);
   gate on Lint, Unit tests and every non-advisory check on the exact head;
-  pr-metadata.yml itself skips "PR title", "PR body (advisory)" and
-  "Close-keyword syntax" for dependabot (2026-09-09, refs #2714), so nothing
+  pr-metadata.yml itself skips "PR metadata" (the title and close-keyword
+  checks, one job since #5002) and "PR body (advisory)" for dependabot
+  (2026-09-09, refs #2714), so nothing
   needs hand-ignoring; hold anything red on a real check
   with a comment naming the check (2026-09-07: tsls 6 needs a Node-floor bump, biome
   fails the install test, vitest 5 fails four gates; a bump whose install
@@ -427,7 +428,7 @@ operator's private notes, so a different orchestrator can run the same train.
   also fine). The merge loop is
   `node scripts/ci-verdict.mjs <pr> --wait <seconds>` — read its final line:
   0 merge, 3 still pending (re-arm the wait), anything else read the table. Never
-  text-match the table for `failure`: advisory rows (PR body, Vale)
+  text-match the table for `failure`: advisory rows (PR body, Lint (advisory))
   print `failure` while the verdict is green, and on 2026-09-07 that stopped
   the #2692 loop on a green PR.
 - **Maintainer trailing commits** are for intent-free deltas only (a literal
@@ -526,7 +527,7 @@ operator's private notes, so a different orchestrator can run the same train.
   the verdict table for `failure`, because advisory rows print `failure` on a
   green PR. But "does not gate" is not "carries no information", and filtering
   advisory rows out of your attention is a different mistake from filtering
-  them out of the gate. `typos (advisory)` found a real defect in #2955's
+  them out of the gate. The typos step of `Lint (advisory)` found a real defect in #2955's
   round-12 diff — a comment in which "reading" was misspelt — which the
   gating checks had no opinion about and which would otherwise have reached
   master. (The misspelling is described rather than reproduced here: quoting

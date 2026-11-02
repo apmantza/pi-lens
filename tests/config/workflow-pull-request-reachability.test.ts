@@ -241,8 +241,6 @@ const EXEMPTIONS: Readonly<Record<string, string>> = {
 		"the tracking-issue writer for the advisory nightly drift lane above (#4077): it files, refreshes or closes one issue from that lane's outcomes, scoped to the schedule or master, so a pull request has no drift to report and must not write the issue",
 	".github/workflows/install-smoke.yml::host-latest-smoke":
 		"advisory nightly drift lane: it installs the newest published host to detect upstream drift on a schedule, a signal about the ecosystem's state at a point in time rather than about the PR's diff (#2613)",
-	".github/workflows/lint.yml::strictness":
-		"left the pull_request trigger (#5112): 2,106 runner minutes in 30 days and no real catch (#3995 slice A). It only republishes the two tsc counts that the gating tests/config/strictness-ratchet.test.ts pins on every pull request; master pushes and dispatches keep it (they run after the merge)",
 };
 
 describe("every PR-triggerable workflow job is reachable on a pull request (#3043)", () => {
@@ -578,7 +576,7 @@ describe("the reachability model itself", () => {
 		],
 		// A non-event gate is permissive: an upstream success and a truthy
 		// output are the model's reading.
-		["needs.detect-lockfile-change.outputs.changed == 'true'", true],
+		["needs.upstream.outputs.changed == 'true'", true],
 		["github.event.pull_request.user.login != 'dependabot[bot]'", true],
 		["github.event.workflow_run.conclusion == 'failure'", false],
 	])("%s -> reachable=%s", (expr, expected) => {

@@ -5,9 +5,9 @@ name: PR metadata
 # PR is edited; the rest of the PR checks read the tree and must not. While
 # `edited` lived on lint.yml, every retitle re-ran that workflow's whole job
 # graph (62 of 167 Lint PR runs in the 2026-09-30 window, 446 jobs) to refresh
-# three of them. Check-run names are unchanged (`PR title`, `PR body
-# (advisory)`, `Close-keyword syntax`): consumers key on the job name, never
-# on the workflow that hosts it.
+# three of them. Consumers key on the job name, never on the workflow that
+# hosts it: `PR metadata` (title and close-keyword syntax, #5002) and `PR body
+# (advisory)`.
 #
 # Default pull_request types omit "edited". Without it, retitling a PR to fix
 # a title-lint failure replays the STALE payload from the original "opened"
@@ -30,11 +30,16 @@ concurrency:
 permissions: {}
 
 jobs:
-  pr-title-lint:
-    name: PR title
+  # #5002: the title and close-keyword validations are two steps of one gating
+  # job. Each step runs even when the other fails, so one push still names both.
+  pr-metadata:
+    name: PR metadata
     if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # refs #3123: bounds a hang against GitHub's 360-min default. Both
+    # validations are one `node` call each; measured max of the former jobs:
+    # 14s (Close-keyword syntax); timeout = floor of 10 min.
+    timeout-minutes: 10
     permissions:
       contents: read
       pull-requests: read
@@ -49,9 +54,16 @@ jobs:
           node-version: "22"
 
       - name: Validate PR title (conventional prefix + issue ref)
+        if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/check-pr-title.mjs
+
+      - name: Validate per-issue close keywords
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-close-keywords.mjs --lint-pr
 
   pr-body-lint:
     name: PR body (advisory)
@@ -123,28 +135,3 @@ jobs:
           # block; the other prose rules only warn (#5110).
           PI_LENS_PROSE_GRACE: "1"
         run: node scripts/check-pr-body.mjs
-
-  close-keyword-lint:
-    name: Close-keyword syntax
-    if: github.event_name == 'pull_request' && github.event.pull_request.user.login != 'dependabot[bot]'
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default. This job runs
-    # on pull_request so --branch master matched no runs; measured max over the
-    # last 10 successful runs regardless of branch: 14s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      pull-requests: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-
-      - name: Validate per-issue close keywords
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/check-close-keywords.mjs --lint-pr

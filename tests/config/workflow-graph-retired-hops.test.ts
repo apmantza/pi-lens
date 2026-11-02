@@ -187,12 +187,8 @@ describe("PR metadata checks live in their own workflow (#3838)", () => {
 		expect(triggerNames(on)).toContain("push");
 	});
 
-	it("hosts the three metadata jobs only in pr-metadata.yml, with no hop", () => {
-		const metadataNames = [
-			"PR title",
-			"PR body (advisory)",
-			"Close-keyword syntax",
-		];
+	it("hosts the two metadata jobs only in pr-metadata.yml, with no hop", () => {
+		const metadataNames = ["PR metadata", "PR body (advisory)"];
 		const hosts = new Map<string, string[]>();
 		for (const { file, workflow } of all) {
 			for (const [key, job] of Object.entries(workflow.jobs ?? {})) {
@@ -203,9 +199,8 @@ describe("PR metadata checks live in their own workflow (#3838)", () => {
 			}
 		}
 		expect(Object.fromEntries(hosts)).toEqual({
-			"PR title": ["pr-metadata.yml"],
+			"PR metadata": ["pr-metadata.yml"],
 			"PR body (advisory)": ["pr-metadata.yml"],
-			"Close-keyword syntax": ["pr-metadata.yml"],
 		});
 		for (const job of Object.values(byFile("pr-metadata.yml")?.jobs ?? {})) {
 			expect(needsOf(job)).toEqual([]);

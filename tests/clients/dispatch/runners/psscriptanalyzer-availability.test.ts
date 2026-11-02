@@ -85,6 +85,7 @@ const moduleMissing = { stdout: "", stderr: "", status: 1 };
 
 const fixtureRoots = new Set<string>();
 afterEach(() => {
+	vi.unstubAllEnvs();
 	for (const root of fixtureRoots)
 		fs.rmSync(root, { recursive: true, force: true });
 	fixtureRoots.clear();
@@ -189,6 +190,30 @@ describe("psscriptanalyzer availability (#1490)", () => {
 			timeout: 30000,
 			resourceLabel: "psscriptanalyzer",
 		});
+	});
+
+	// Recurrence (the scanner temp-root fold, refs #4907): the -File script was
+	// joined onto a bare `os.tmpdir()`, so a harness that owns a scanner root
+	// (`PI_LENS_TEST_SCANNER_TMPDIR`) never saw the script a killed analysis
+	// stranded; every sibling scanner already asks `scannerReportParentDir()`.
+	it("writes the -File script under the scanner report root", async () => {
+		const scannerRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-psa-root-"),
+		);
+		fixtureRoots.add(scannerRoot);
+		vi.stubEnv("PI_LENS_TEST_SCANNER_TMPDIR", scannerRoot);
+		const scripts: Array<{ file: string; existed: boolean }> = [];
+		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
+			if (!args.includes("-File")) return ok();
+			const file = args[args.indexOf("-File") + 1];
+			scripts.push({ file, existed: fs.existsSync(file) });
+			return ok("[]");
+		});
+		const runner = await loadRunner();
+		expect((await runner.run(ctx())).status).toBe("succeeded");
+		expect(scripts).toHaveLength(1);
+		expect(path.dirname(scripts[0].file)).toBe(scannerRoot);
+		expect(scripts[0].existed).toBe(true);
 	});
 
 	it("re-probes the interpreter after a timeout once the cooldown expires", async () => {
