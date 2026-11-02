@@ -404,7 +404,21 @@ describe("package-lock libc drift guard (#5207)", () => {
 		return root;
 	}
 
-	function check(root: string, workingLock: unknown | null) {
+	// A repository git refuses to read, with an error the gate has no absence
+	// form for: the shared-checkout `safe.directory` refusal (Greptile's thread
+	// on #5213) in a form a fixture can produce without a foreign owner.
+	function breakRepository(root: string) {
+		fs.appendFileSync(
+			path.join(root, ".git", "config"),
+			"[core]\n\trepositoryFormatVersion = 99\n",
+		);
+	}
+
+	function check(
+		root: string,
+		workingLock: unknown | null,
+		args: string[] = [],
+	) {
 		if (workingLock === null)
 			fs.rmSync(path.join(root, "package-lock.json"), { force: true });
 		else
@@ -412,7 +426,41 @@ describe("package-lock libc drift guard (#5207)", () => {
 				path.join(root, "package-lock.json"),
 				JSON.stringify(workingLock),
 			);
-		return run(CHECKER, root, [], envFor(root));
+		return run(CHECKER, root, args, envFor(root));
+	}
+
+	// Git stages before it runs `pre-commit`, so the blob the commit records is
+	// the index, not the file on disk (#5213 F1).
+	function stage(root: string, lock: unknown) {
+		fs.writeFileSync(
+			path.join(root, "package-lock.json"),
+			JSON.stringify(lock),
+		);
+		probeGit(["add", "package-lock.json"], root);
+	}
+
+	function writeWorking(root: string, lock: unknown) {
+		fs.writeFileSync(
+			path.join(root, "package-lock.json"),
+			JSON.stringify(lock),
+		);
+	}
+
+	function commit(root: string, message: string) {
+		probeGit(["add", "-A"], root);
+		probeGit(
+			[
+				"-c",
+				"user.email=pi-lens-test@example.com",
+				"-c",
+				"user.name=pi-lens-test",
+				"commit",
+				"-qm",
+				message,
+			],
+			root,
+		);
+		return probeGit(["rev-parse", "HEAD"], root).trim();
 	}
 
 	it("refuses the npm-9.2 shape and names the pinned regeneration", () => {
@@ -486,13 +534,231 @@ describe("package-lock libc drift guard (#5207)", () => {
 		expect(result.stderr).toContain("... and 3 more");
 	});
 
+	it("refuses the drop the commit records, not the working copy", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const root = committedRepo(good);
+		// The incident's own order: npm 9.2 rewrites the lock, `git add` stages it,
+		// then the pinned npm restores the working copy. The commit still records
+		// the damaged blob.
+		stage(root, dropped);
+		writeWorking(root, good);
+
+		const result = run(CHECKER, root, [], envFor(root));
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			'node_modules/@rollup/rollup-linux-x64-gnu@4.52.4 recorded libc ["glibc"]',
+		);
+		expect(result.stderr).toContain(
+			"Compared HEAD → the staged package-lock.json.",
+		);
+		expect(result.stderr).toContain(
+			"npx npm@11.18.0 install --package-lock-only --ignore-scripts",
+		);
+	});
+
+	it("names the working copy it did not judge when the staged copy is clean", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const regrown = { ...good, requires: false };
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const root = committedRepo(libcLock({ kept: { version: "1.0.0" } }));
+		stage(root, regrown);
+		writeWorking(root, dropped);
+
+		const result = run(CHECKER, root, [], envFor(root));
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(
+			"the working package-lock.json differs from the staged copy",
+		);
+	});
+
+	it("reads a HEAD lock past Node's 1 MiB spawn default", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const padded = { ...good, padding: "x".repeat(2 * 1024 * 1024) };
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const result = check(committedRepo(padded), dropped);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain('recorded libc ["glibc"]');
+	});
+
+	it("refuses when HEAD's lock is past the read bound", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const oversized = { ...good, padding: "x".repeat(9 * 1024 * 1024) };
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const result = check(committedRepo(oversized), dropped);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain("package-lock libc drift: unverifiable");
+		expect(result.stderr).toContain("ENOBUFS");
+	});
+
+	it("refuses when git cannot read HEAD", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const root = committedRepo(good);
+		breakRepository(root);
+
+		const result = check(root, libcLock({ kept: { version: "1.0.0" } }));
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			"package-lock libc drift: unverifiable (git could not read HEAD: ",
+		);
+		expect(result.stderr).toContain("Expected git repo version");
+	});
+
+	it("refuses with the --complete inconclusive code when git cannot read HEAD", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const root = committedRepo(good);
+		breakRepository(root);
+
+		const result = check(root, libcLock({ kept: { version: "1.0.0" } }), [
+			"--complete",
+		]);
+
+		expect(result.status).toBe(3);
+		expect(result.stderr).toContain("package-lock libc drift: unverifiable");
+	});
+
+	it("compares a clean tree against the merge base with origin/master", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const root = committedRepo(good);
+		const base = probeGit(["rev-parse", "HEAD"], root).trim();
+		writeWorking(root, dropped);
+		commit(root, "drop libc");
+		probeGit(["update-ref", "refs/remotes/origin/master", base], root);
+
+		const result = run(CHECKER, root, [], envFor(root));
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain('recorded libc ["glibc"]');
+		expect(result.stderr).toContain(
+			"Compared the merge base with origin/master",
+		);
+	});
+
+	it("accepts a clean tree whose merge base kept every libc field", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const root = committedRepo(libcLock({ kept: { version: "1.0.0" } }));
+		const base = probeGit(["rev-parse", "HEAD"], root).trim();
+		writeWorking(root, good);
+		commit(root, "add libc");
+		probeGit(["update-ref", "refs/remotes/origin/master", base], root);
+
+		const result = run(CHECKER, root, [], envFor(root));
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(
+			`the merge base with origin/master (${base.slice(0, 7)}) recorded`,
+		);
+	});
+
+	it("records that origin/master does not resolve on a clean tree", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const result = check(committedRepo(good), good);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("libc drift: not checked (clean tree");
+		expect(result.stdout).toContain("origin/master does not resolve");
+	});
+
+	it("records that HEAD is the merge base on a clean tree", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const root = committedRepo(good);
+		probeGit(["update-ref", "refs/remotes/origin/master", "HEAD"], root);
+
+		const result = check(root, good);
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("libc drift: not checked (clean tree");
+		expect(result.stdout).toContain("is the merge base with origin/master");
+	});
+
+	it("never passes a HEAD lock with no packages map", () => {
+		const working = libcLock({ kept: { version: "1.0.0" } });
+		for (const headLock of [
+			"null",
+			{
+				name: PKG.name,
+				version: PKG.version,
+				lockfileVersion: 1,
+				dependencies: { kept: { version: "1.0.0" } },
+			},
+		]) {
+			const result = check(committedRepo(headLock), working);
+
+			expect(result.status).toBe(0);
+			expect(result.stdout).toContain("libc drift: not checked (HEAD's");
+			expect(result.stdout).toContain("no packages map");
+		}
+	});
+
+	it("records the drift when package.json carries no npm pin", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const root = committedRepo(good);
+		const unpinned = { name: PKG.name, version: PKG.version };
+		fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(unpinned));
+
+		const result = check(root, dropped);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain('recorded libc ["glibc"]');
+		expect(result.stderr).toContain("packageManager pin is unavailable");
+		expect(result.stderr).not.toContain("at file://");
+	});
+
+	it("says one package entry stays on a singular drop", () => {
+		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
+		const dropped = libcLock({
+			"@rollup/rollup-linux-x64-gnu": { version: "4.52.4" },
+		});
+		const result = check(committedRepo(good), dropped);
+
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			"from 1 package entry that stays in the lock",
+		);
+	});
+
 	it("skips the comparison when HEAD records no lockfile", () => {
 		const root = committedRepo(null);
 		const result = check(root, libcLock({ kept: { version: "1.0.0" } }));
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain(
-			"libc drift: not checked (git show HEAD:package-lock.json failed: ",
+			"libc drift: not checked (HEAD holds no package-lock.json)",
+		);
+	});
+
+	it("skips the comparison when HEAD records no commit yet", () => {
+		const root = fs.mkdtempSync(
+			path.join(REPO_ROOT, ".probe-home", "lockfile-libc-"),
+		);
+		tempDirs.push(root);
+		fs.writeFileSync(path.join(root, "package.json"), JSON.stringify(PKG));
+		probeGit(["init", "-q", "-b", "fixture-lock"], root);
+
+		const result = check(root, libcLock({ kept: { version: "1.0.0" } }));
+
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(
+			"libc drift: not checked (HEAD records no commit",
 		);
 	});
 
