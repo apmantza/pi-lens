@@ -249,14 +249,14 @@ Release(i) ==
     /\ UNCHANGED <<orphanW, lpc, lbuf, lN>>
 
 \* The handler records (blocker) or clears (clean) the inline-blocker record.
-\* An abandoned handler returned already and records nothing.
+\* #5165: abandonment ends the wait, not the ordered verdict publication.
 Record(i) ==
     /\ hpc[i] = "record"
     /\ LET b == Blocker(ct[i])
            t == wi[i]
            last == IF FixTomb THEN itok ELSE (IF inl.has THEN inl.tok ELSE 0)
            ok == IF b THEN (~FixRecord \/ t >= last) ELSE (~FixClear \/ t >= last)
-       IN IF ~aband[i] /\ ok
+       IN IF ok
             THEN /\ inl' = [has |-> b, c |-> ct[i], tok |-> t]
                  /\ itok' = Max(itok, t)
             ELSE UNCHANGED <<inl, itok>>
