@@ -63,12 +63,13 @@ function read(file) {
  * to classify, and only the forms that mean "nothing committed to compare" may
  * be read as a skip (#5213 F2).
  */
-function git(args) {
+function git(args, gitFixtureEnv) {
 	try {
 		return {
 			text: String(
 				gitExecFileSync(args, {
 					cwd: process.cwd(),
+					gitFixtureEnv,
 					encoding: "utf8",
 					stdio: ["ignore", "pipe", "pipe"],
 					timeout: GIT_TIMEOUT_MS,
@@ -131,7 +132,9 @@ function readRefFile(ref, file) {
  * exactly that object (#5213 F1).
  */
 function readStagedFile(file) {
-	const listed = git(["ls-files", "--stage", "--", file]);
+	const listed = git(["ls-files", "--stage", "--", file], {
+		keep: ["GIT_INDEX_FILE"],
+	});
 	if (listed.error) return { failure: gitFailureDetail(listed.error) };
 	const entry = listed.text.trim();
 	if (entry === "") return { absent: true };
@@ -279,19 +282,17 @@ function libcDriftOutcome(workingText, workingLock) {
 			LOCKFILE,
 			"HEAD",
 			`HEAD → ${LOCKFILE}`,
-			note,
 		);
 
 	const base = committedBase(headRef.sha);
-	if (base.unverifiable) return { unverifiable: base.unverifiable, note };
-	if (base.skipped) return { skipped: base.skipped, note };
+	if (base.unverifiable) return { unverifiable: base.unverifiable };
+	if (base.skipped) return { skipped: base.skipped };
 	return judgeLibc(
 		base.lock,
 		headLock.lock,
 		LOCKFILE,
 		base.recordedBy,
 		`${base.recordedBy} → HEAD`,
-		note,
 	);
 }
 

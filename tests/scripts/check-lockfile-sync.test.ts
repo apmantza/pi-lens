@@ -463,6 +463,97 @@ describe("package-lock libc drift guard (#5207)", () => {
 		return probeGit(["rev-parse", "HEAD"], root).trim();
 	}
 
+	// Recurrence: #5213 v2 F1, git prepares a commit-specific index.
+	it.each([
+		["plain", []],
+		["all", ["-a"]],
+		["path", ["package-lock.json"]],
+		["only", ["-o", "package-lock.json"]],
+		["include", ["-i", "package-lock.json"]],
+		["amend", ["--amend"]],
+		["merge", []],
+		["outside", []],
+	])("refuses a recorded libc drop through a real hook: %s", (form, flags) => {
+		const good = libcLock({ demo: GLYDE });
+		const root = committedRepo(good);
+		const dropped = libcLock({ demo: { version: GLYDE.version } });
+		if (form === "merge") {
+			probeGit(["checkout", "-qb", "side"], root);
+			fs.writeFileSync(path.join(root, "side"), "side");
+			commit(root, "side");
+			probeGit(["checkout", "fixture-lock"], root);
+			probeGit(
+				[
+					"-c",
+					"user.name=fixture",
+					"-c",
+					"user.email=fixture@example.test",
+					"merge",
+					"--no-commit",
+					"--no-ff",
+					"side",
+				],
+				root,
+			);
+		}
+		const hook = path.join(root, ".git/hooks/pre-commit");
+		fs.writeFileSync(
+			hook,
+			`#!/bin/sh\nexec '${process.execPath}' '${CHECKER}'\n`,
+			{ mode: 0o755 },
+		);
+		if (["plain", "amend", "merge", "outside"].includes(form)) {
+			stage(root, dropped);
+			writeWorking(root, good);
+		} else {
+			stage(root, { ...good, requires: false });
+			writeWorking(root, dropped);
+		}
+		const before = probeGit(["rev-parse", "HEAD"], root);
+		let output = "";
+		try {
+			if (form === "outside") {
+				const result = run(CHECKER, root, [], envFor(root));
+				expect(result.status).toBe(1);
+				output = result.stderr;
+			} else {
+				probeGit(
+					[
+						"-c",
+						"user.name=fixture",
+						"-c",
+						"user.email=fixture@example.test",
+						"commit",
+						"-m",
+						"drop",
+						...flags,
+					],
+					root,
+				);
+			}
+		} catch (error) {
+			expect((error as { status: number }).status).toBe(1);
+			output = String((error as { stderr: unknown }).stderr);
+		}
+		expect(output).toContain('dropped the "libc" field');
+		expect(probeGit(["rev-parse", "HEAD"], root)).toBe(before);
+		expect(
+			JSON.parse(probeGit(["show", "HEAD:package-lock.json"], root)).packages[
+				"node_modules/demo"
+			].libc,
+		).toEqual(["glibc"]);
+	});
+
+	it("does not claim a staged read when judging the working copy (#5213 F2)", () => {
+		const good = libcLock({ demo: GLYDE });
+		const result = check(
+			committedRepo(good),
+			libcLock({ demo: { version: GLYDE.version } }),
+		);
+		expect(result.status).toBe(1);
+		expect(result.stdout).not.toContain("the check reads the staged copy");
+	});
+
 	it("refuses the npm-9.2 shape and names the pinned regeneration", () => {
 		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
 		const dropped = libcLock({

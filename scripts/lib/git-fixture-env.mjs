@@ -60,9 +60,9 @@ function fixtureGitConfig() {
  * through `GIT_CONFIG_KEY_<n>` and no fixture needs a writable global config.
  * The wrappers keep passing the directory the command runs in.
  */
-export function envFor(_cwd, overrides) {
+export function envFor(_cwd, overrides, { keep = [] } = {}) {
 	const env = { ...process.env, ...overrides };
-	for (const name of SCRUBBED) delete env[name];
+	for (const name of SCRUBBED) if (!keep.includes(name)) delete env[name];
 	for (const key of Object.keys(env))
 		if (CONFIG_KV_PATTERN.test(key)) delete env[key];
 	env.GIT_CONFIG_GLOBAL = fixtureGitConfig();
@@ -74,7 +74,7 @@ export function gitExecFileSync(args, options = {}) {
 	const cwd = options.cwd ?? process.cwd();
 	return execFileSync("git", args, {
 		...options,
-		env: envFor(cwd, options.env),
+		env: envFor(cwd, options.env, options.gitFixtureEnv),
 	});
 }
 
@@ -86,6 +86,6 @@ export function gitExecSync(command, options = {}) {
 	// pi-lens-ignore: ast-grep:unchecked-throwing-call
 	return execSync(command, {
 		...options,
-		env: envFor(cwd, options.env),
+		env: envFor(cwd, options.env, options.gitFixtureEnv),
 	});
 }
