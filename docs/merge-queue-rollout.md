@@ -18,7 +18,7 @@ neither is needed. Sharded Unit tests (#3753) keep one queue run short.
   `Hot-path latency (advisory)`, `Install test (ubuntu-latest)`,
   `Install test (windows-latest)`,
   `Install test (macos-latest)`, `knip`, `oxfmt format check`, `TLA+ models`.
-- PR-only jobs (PR title, PR body, changelog fast-fail, changed tests shuffled) are
+- PR-only jobs (PR metadata, PR body, changelog fast-fail, changed tests shuffled) are
   guarded by `github.event_name == 'pull_request'` and are skipped on
   `merge_group`; none of them is required.
 - `tests/config/merge-queue-workflows.test.ts` pins the trigger, the required

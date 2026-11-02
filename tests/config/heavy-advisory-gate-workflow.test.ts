@@ -333,22 +333,22 @@ function censusPins(
 }
 
 const PINNED_PRINT = [
-	"expect(CENSUS_SITES.length).toBe(80);",
-	'expect(CENSUS_ROWS.filter((row) => row.stage !== "gate").length).toBe(83);',
-	'expect(stageJobs("A")).toBe(28);',
+	"expect(CENSUS_SITES.length).toBe(72);",
+	'expect(CENSUS_ROWS.filter((row) => row.stage !== "gate").length).toBe(75);',
+	'expect(stageJobs("A")).toBe(26);',
 	'expect(stageJobs("B")).toBe(1);',
-	'expect(stageJobs("C")).toBe(17);',
+	'expect(stageJobs("C")).toBe(11);',
 	'expect(stageJobs("D")).toBe(37);',
-	"expect(CENSUS_SITES.filter((site) => site.ref !== undefined).length).toBe(21);",
+	"expect(CENSUS_SITES.filter((site) => site.ref !== undefined).length).toBe(20);",
 	"expect(CENSUS_SITES.filter((site) => site.ref === EPHEMERAL_PULL_REF).length).toBe(17);",
 	'expect(stageRefs("A")).toBe(16);',
-	"expect(EARLY_START_MEMBERS.length).toBe(11);",
+	"expect(EARLY_START_MEMBERS.length).toBe(5);",
 ].join("\n");
 
 // Snapshot identities make a pin failure actionable. Counts alone say that a
 // row moved; these keys say which job added or removed it.
 const PINNED_ROW_KEYS =
-	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::clear-stale-verdict-labels::A|ci-infra-kill-rerun.yml::classify::A|ci-infra-kill-rerun.yml::finalize-rerun::A|ci.yml::changes::C|ci.yml::strict-install-cold-cache::A|ci.yml::dependency-boundaries::A|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::heavy-gate::gate|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|ci.yml::codeql::B|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::markdownlint::A|lint.yml::vale::C|lint.yml::oxlint-advisory::C|lint.yml::jscpd::C|lint.yml::complexity::C|lint.yml::strictness::C|lint.yml::yamllint::C|lint.yml::typos::C|lint.yml::taplo::C|osv-scan.yml::detect-lockfile-change::A|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-title-lint::A|pr-metadata.yml::pr-body-lint::C|pr-metadata.yml::close-keyword-lint::A|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
+	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::clear-stale-verdict-labels::A|ci-infra-kill-rerun.yml::classify::A|ci-infra-kill-rerun.yml::finalize-rerun::A|ci.yml::changes::C|ci.yml::strict-install-cold-cache::A|ci.yml::dependency-boundaries::A|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::heavy-gate::gate|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|ci.yml::codeql::B|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::markdownlint::A|lint.yml::oxlint-advisory::C|lint.yml::lint-advisory::C|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-metadata::A|pr-metadata.yml::pr-body-lint::C|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
 		"|",
 	);
 const PINNED_NO_CHECKOUT_KEYS = new Set([
@@ -421,7 +421,8 @@ function printPins(pins: CensusPins): string {
 	].join("\n");
 }
 
-// The eleven early-start advisory jobs whose checkout pinned the merge ref,
+// The five early-start advisory jobs whose checkout pinned the merge ref (eleven
+// until #5002 folded seven of the lint.yml jobs into `lint-advisory`),
 // by the ids the task names. Each must stay pull_request-eligible, advisory,
 // and NOT behind the gate; the census proves the trigger and the stage.
 const EARLY_START_MEMBERS = [
@@ -435,14 +436,8 @@ const EARLY_START_MEMBERS = [
 		jobId: "mise-repro",
 		name: "mise repro (#285) \u00b7 ${{ matrix.os }} \u00b7 ${{ matrix.pi_via }} (advisory)",
 	},
-	{ file: "lint.yml", jobId: "vale", name: "Vale prose lint (advisory)" },
 	{ file: "lint.yml", jobId: "oxlint-advisory", name: "oxlint (advisory)" },
-	{ file: "lint.yml", jobId: "jscpd", name: "jscpd (advisory)" },
-	{ file: "lint.yml", jobId: "complexity", name: "complexity (advisory)" },
-	{ file: "lint.yml", jobId: "strictness", name: "strictness (advisory)" },
-	{ file: "lint.yml", jobId: "yamllint", name: "yamllint (advisory)" },
-	{ file: "lint.yml", jobId: "typos", name: "typos (advisory)" },
-	{ file: "lint.yml", jobId: "taplo", name: "taplo (advisory)" },
+	{ file: "lint.yml", jobId: "lint-advisory", name: "Lint (advisory)" },
 	{
 		file: "pr-metadata.yml",
 		jobId: "pr-body-lint",
@@ -736,12 +731,12 @@ describe("#3926 a gated checkout pins the captured commit, never the merge ref",
 	});
 });
 
-// #3941: the early-start advisory population. These eleven jobs run on
+// #3941: the early-start advisory population. These five jobs run on
 // `pull_request` and are NOT behind `heavy-gate`, so a runner-queue delay can
 // start their checkout after auto-merge deletes the mutable
 // `refs/pull/<n>/merge` that `github.ref` names. This is the separate producer
 // the gate-based #3926 rule cannot cover. No field incident is claimed on
-// these eleven: the failure class is proven by the same pinned checkout
+// these five: the failure class is proven by the same pinned checkout
 // source contract (the pinned `actions/checkout` revision ci.yml's other jobs use,
 // asserted below) and the real deleted-ref / captured-SHA witness in the
 // #3926 block; the production failure (#3926) is the same checkout mechanism
@@ -856,21 +851,24 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		// `scripts/check-shard-verdict.mjs`: two new A-stage sites, 77 -> 79, and
 		// both land in A because a required job starts on every event. The
 		// manual #4756 repeat probe (`windows-repeat-probe.yml`, workflow_dispatch
-		// only) adds one checkout in D: 79 -> 80, and D grows 36 -> 37.
+		// only) adds one checkout in D: 79 -> 80, and D grows 36 -> 37. #5002 folded
+		// seven lint.yml jobs into `lint-advisory` (C 17 -> 11), PR title and
+		// close-keyword into `pr-metadata`, and dropped osv-scan's detect job for a
+		// `paths:` filter: 80 -> 72 sites, A 28 -> 26.
 		assertNonEmptyScan(
 			"early-start advisory checkout census",
 			CENSUS_SITES.length,
-			80,
+			72,
 		);
-		pinnedNumber("checkout sites", CENSUS_SITES.length, 80);
+		pinnedNumber("checkout sites", CENSUS_SITES.length, 72);
 		pinnedNumber(
 			"non-gate job rows",
 			CENSUS_ROWS.filter((row) => row.stage !== "gate").length,
-			83,
+			75,
 		);
-		pinnedNumber("stage A rows", stageJobs("A"), 28);
+		pinnedNumber("stage A rows", stageJobs("A"), 26);
 		pinnedNumber("stage B rows", stageJobs("B"), 1);
-		pinnedNumber("stage C rows", stageJobs("C"), 17);
+		pinnedNumber("stage C rows", stageJobs("C"), 11);
 		pinnedNumber("stage D rows", stageJobs("D"), 37);
 		// The gate's own checkout is its own stage and is excluded from A-D.
 		pinnedNumber("gate checkout sites", summary.get("gate")?.sites ?? 0, 1);
@@ -930,7 +928,7 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		const totalExplicit = CENSUS_SITES.filter(
 			(site) => site.ref !== undefined,
 		).length;
-		pinnedNumber("explicit refs", totalExplicit, 21);
+		pinnedNumber("explicit refs", totalExplicit, 20);
 	});
 
 	it("keeps every early-start advisory checkout on the captured commit", () => {
@@ -976,12 +974,12 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		expect(offenders).toEqual([OSV_HEAD_SCAN]);
 	});
 
-	it("names the exact eleven early-start advisory members", () => {
+	it("names the exact five early-start advisory members", () => {
 		// #3941 F3: an independent population pin. The per-member mutation cases
 		// below are generated FROM `EARLY_START_MEMBERS`, so deleting a row would
 		// delete its own witness; the count and the exact key set are the floor
 		// that reds instead.
-		pinnedNumber("early-start member rows", EARLY_START_MEMBERS.length, 11);
+		pinnedNumber("early-start member rows", EARLY_START_MEMBERS.length, 5);
 		expect(
 			EARLY_START_MEMBERS.map(
 				(member) => `${member.file}::${member.jobId}`,
@@ -990,14 +988,8 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		).toEqual([
 			"ci.yml::changed-tests-shuffled",
 			"install-smoke.yml::mise-repro",
-			"lint.yml::complexity",
-			"lint.yml::jscpd",
+			"lint.yml::lint-advisory",
 			"lint.yml::oxlint-advisory",
-			"lint.yml::strictness",
-			"lint.yml::taplo",
-			"lint.yml::typos",
-			"lint.yml::vale",
-			"lint.yml::yamllint",
 			"pr-metadata.yml::pr-body-lint",
 		]);
 		const byFileJob = new Map(
@@ -1022,7 +1014,7 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 	// The excluded defaults, named and measured: stage-A gating jobs must
 	// report before the merge, so their merge ref still exists and they keep
 	// `github.ref`; stage D never runs on a pull request. The rule must not
-	// reach into either, and it must flag only the eleven stage-C sites.
+	// reach into either, and it must flag only the five stage-C sites.
 	it("leaves the gating and other-trigger checkouts as named exclusions", () => {
 		const gatingSites = CENSUS_SITES.filter(
 			(site) => site.stage === "A" && site.ref === EPHEMERAL_PULL_REF,
@@ -1102,7 +1094,7 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		expect(earlyStartUnsafeSites(otherTrigger)).toEqual([]);
 	});
 
-	// The eleven mutations: reintroduce the old unsafe input on each member in
+	// The five mutations: reintroduce the old unsafe input on each member in
 	// a fresh in-memory copy and prove the guard reds on exactly that site and
 	// no other, without changing the site population.
 	for (const member of EARLY_START_MEMBERS) {

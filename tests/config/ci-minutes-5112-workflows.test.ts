@@ -130,16 +130,30 @@ describe("the cuts leave master, the merge queue and dispatches intact (#5112)",
 			)(),
 		);
 
-	it.each([
-		["ci.yml", "strict-install-cold-cache", ci],
-		["lint.yml", "strictness", lint],
-	] as const)(
-		"%s %s skips a pull request and runs every other event",
-		(_f, id, workflow) => {
-			const expr = workflow.jobs[id].if as string;
-			expect(evaluate(expr, "pull_request")).toBe(false);
+	it("ci.yml strict-install-cold-cache skips a pull request and runs every other event", () => {
+		const expr = ci.jobs["strict-install-cold-cache"].if as string;
+		expect(evaluate(expr, "pull_request")).toBe(false);
+		for (const event of ["push", "merge_group", "workflow_dispatch"])
+			expect(evaluate(expr, event), event).toBe(true);
+	});
+
+	// The strictness steps carry the cut as a step `if`: the guarded steps skip
+	// a pull request, and a Lint (advisory) step stays free to run on it.
+	it.each(["Generate strictness report", "Publish strictness report"])(
+		"lint.yml %s skips a pull request and runs every other event",
+		(name) => {
+			const step = lint.jobs["lint-advisory"].steps?.find(
+				(s) => s.name === name,
+			);
+			expect(step?.if, name).toBeDefined();
+			const expr = String(step?.if).replace(/^\$\{\{|\}\}$/g, "");
+			// Status functions are true while the job is live; only the event decides.
+			const live = expr
+				.replace(/!cancelled\(\)/g, "true")
+				.replace(/always\(\)/g, "true");
+			expect(evaluate(live, "pull_request")).toBe(false);
 			for (const event of ["push", "merge_group", "workflow_dispatch"])
-				expect(evaluate(expr, event), event).toBe(true);
+				expect(evaluate(live, event), event).toBe(true);
 		},
 	);
 
@@ -152,6 +166,37 @@ describe("the cuts leave master, the merge queue and dispatches intact (#5112)",
 			expect(workflow.on.merge_group).toEqual({ types: ["checks_requested"] });
 		},
 	);
+});
+
+// #5002: the lockfile gate is a trigger filter, not a detect job. A pull request
+// that touches neither path posts no OSV row; schedule and dispatch scan in full.
+describe("OSV scan starts from a lockfile paths filter, not a detect job (#5002)", () => {
+	const osv = load("osv-scan.yml");
+
+	it("filters the pull_request trigger to the lockfile and this file, leaving schedule and dispatch unfiltered", () => {
+		const on = osv.on as Record<string, { paths?: string[] } | undefined>;
+		expect(on.pull_request?.paths).toEqual([
+			"package-lock.json",
+			".github/workflows/osv-scan.yml",
+		]);
+		expect(on.schedule).toBeDefined();
+		expect(on.workflow_dispatch).toBeDefined();
+		expect(on.schedule).not.toHaveProperty("paths");
+	});
+
+	it("has the one scan job, with no needs or if, scanning the PR's own head lockfile", () => {
+		expect(Object.keys(osv.jobs)).toEqual(["osv-scan"]);
+		const job = osv.jobs["osv-scan"] as Job & { needs?: unknown };
+		expect(job.name).toBe("OSV scan (advisory)");
+		expect(job.needs).toBeUndefined();
+		expect(job.if).toBeUndefined();
+		const checkout = (job.steps ?? []).find((s) =>
+			s.uses?.startsWith("actions/checkout@"),
+		) as (Step & { with?: Record<string, string> }) | undefined;
+		expect(checkout?.with?.ref).toBe(
+			"${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}",
+		);
+	});
 });
 
 describe("the greeting job starts for every issue and for a first-time pull request author (#5112)", () => {
