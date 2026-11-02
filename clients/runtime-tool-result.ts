@@ -4382,6 +4382,7 @@ export async function handleToolResult(
 			void dispatching.then(
 				(late) => {
 					if (late.crashed || !late.result.withheldBlockerLine) return;
+					if (getFileStateHash(filePath) !== initialStateHash) return;
 					if (writeSession.guardedWrite(filePath, () => true) !== true) return;
 					queueAgentAdvisory(
 						buildWithheldAdvisory(

@@ -50,6 +50,7 @@ import { incrementDegradationCount } from "./degradation-ledger.js";
 import { hashText } from "./finding-identity.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { resolveLensToolName } from "./tool-config.js";
 import type { ReadGuard } from "./read-guard.js";
 import {
 	defineSessionStore,
@@ -194,12 +195,16 @@ export function buildWithheldAdvisory(
 	notices: readonly string[],
 	bound: WithheldAdvisoryBound,
 ): string {
+	const displayToolName =
+		(toolName === undefined
+			? undefined
+			: resolveLensToolName(toolName, "pi")) ?? "tool";
 	const more = notices.length > 5 ? `\n+${notices.length - 5} more` : "";
 	const fired =
 		bound === "host-deadline"
 			? `the host stopped waiting (${budgetMs}ms)`
 			: `the inner ${budgetMs}ms analysis bound fired`;
-	return `pi-lens's check of this ${toolName ?? "tool"} call was still running when ${fired} and was abandoned, so its tool result showed none of this:\n${notices.slice(0, 5).join("\n")}${more}`;
+	return `pi-lens's check of this ${displayToolName} call was still running when ${fired} and was abandoned, so its tool result showed none of this:\n${notices.slice(0, 5).join("\n")}${more}`;
 }
 
 /**

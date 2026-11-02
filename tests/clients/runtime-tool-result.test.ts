@@ -3586,7 +3586,17 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 							"aborted.ts",
 							"export {};\n",
 						);
-						for (const name of ["edit.ts", "gone.ts", "aborted.ts"]) {
+						const supersededFile = createTempFile(
+							tmpDir,
+							"superseded.ts",
+							"export {};\n",
+						);
+						for (const name of [
+							"edit.ts",
+							"gone.ts",
+							"aborted.ts",
+							"superseded.ts",
+						]) {
 							settle.set(name, gatedPromise<void>());
 							entered.set(name, gatedPromise<void>());
 						}
@@ -3620,11 +3630,24 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 								}),
 								signal: escape.signal,
 							});
+							const supersededHandler = handleToolResult(
+								toolResultDeps({
+									filePath: supersededFile,
+									runtime,
+									cacheManager,
+									clientsReady: true,
+								}),
+							);
 							await Promise.all([
 								entered.get("edit.ts")?.promise,
 								entered.get("gone.ts")?.promise,
 								entered.get("aborted.ts")?.promise,
+								entered.get("superseded.ts")?.promise,
 							]);
+							fs.writeFileSync(
+								supersededFile,
+								"export const changed = true;\n",
+							);
 							escape.abort();
 							await abortedHandler;
 							settle.get("aborted.ts")?.resolve();
@@ -3632,7 +3655,10 @@ describe("runtime-tool-result writers across a replacement (#3596)", () => {
 							expect(lateRows()).toEqual([]);
 							await vi.advanceTimersByTimeAsync(10_000);
 							// Both handlers return at the inner bound with nothing collected.
-							await Promise.all([liveHandler, goneHandler]);
+							await Promise.all([liveHandler, goneHandler, supersededHandler]);
+							settle.get("superseded.ts")?.resolve();
+							await vi.advanceTimersByTimeAsync(0);
+							expect(lateRows()).toEqual([]);
 							expect(lateRows()).toEqual([]);
 
 							settle.get("edit.ts")?.resolve();
