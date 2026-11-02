@@ -37,3 +37,11 @@ pushes for other docs-only changes. At version-bump time,
 entry file into the new version section, then removes the entry files while
 retaining this README. The tag-time release workflow only verifies that this
 rollup has already happened.
+
+After adding or editing a user fragment, run
+`node scripts/rollup-changelog.mjs --user` and include `CHANGELOG-USER.md` in
+the change. `npm run changelog:check` rejects a stale generated file. The
+release rollup refreshes it after consuming fragments. It contains pending user
+entries under Unreleased and the latest five releases without Internal blocks;
+pi reads only numbered releases. Historical entries outside Internal blocks
+retain their original text because their per-entry audience is unavailable.

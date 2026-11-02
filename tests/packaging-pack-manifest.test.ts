@@ -460,8 +460,11 @@ describe("published manifest carries no devDependencies", () => {
 				devDependencies?: unknown;
 				dependencies?: unknown;
 				name: string;
+				pi: { changelogPath: string };
 			};
 			expect(packed.name).toBe(pkg.name);
+			// #5198: pi must resolve the override inside the published package.
+			expect(packed.pi.changelogPath).toBe("CHANGELOG-USER.md");
 			expect(packed.devDependencies).toBeUndefined();
 			expect(packed.dependencies).toEqual(pkg.dependencies);
 			// postpack put the packed copy's manifest back, byte for byte.
@@ -497,6 +500,19 @@ describe("published manifest carries no devDependencies", () => {
 			fs.mkdirSync(unpacked, { recursive: true });
 			execFileSync("tar", ["-xzf", filename, "-C", "unpacked"], { cwd: tmp });
 			const pkgRoot = path.join(unpacked, "package");
+			const manifest = JSON.parse(
+				fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8"),
+			);
+			const notes = fs.readFileSync(
+				path.join(pkgRoot, manifest.pi.changelogPath),
+				"utf8",
+			);
+			expect(notes).toBe(
+				fs.readFileSync(path.join(root, "CHANGELOG-USER.md"), "utf8"),
+			);
+			expect(notes).toContain("## [");
+			expect(notes).not.toContain("### Internal");
+
 			const packedPaths = (
 				fs.readdirSync(pkgRoot, { recursive: true }) as string[]
 			)
