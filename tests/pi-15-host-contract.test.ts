@@ -1,17 +1,22 @@
 /** #5199: pin coercion and validation at pi's real model/tool boundary. */
 import * as fs from "node:fs";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { readProjectTrustFromContext } from "../clients/project-trust.js";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	hostPackageDir,
 	piSessionFixture,
 	startPiSession,
 } from "./support/pi-session.js";
 
 const fixture = piSessionFixture();
+const hostPackage = hostPackageDir();
+const hostVersion = JSON.parse(
+	fs.readFileSync(path.join(hostPackage, "package.json"), "utf8"),
+).version;
 
 describe("pi 1.5 tool contracts (#5199)", () => {
 	it("coerces a scalar array argument before activating a pi-lens tool", async () => {
@@ -67,53 +72,50 @@ describe("pi 1.5 tool contracts (#5199)", () => {
 		expect(JSON.stringify(result?.content)).toContain("greet");
 	});
 
-	it("delivers pi-schema validation wording unchanged to the agent", async () => {
-		const handle = await startPiSession({
-			root: fixture.root,
-			responses: [
-				fauxAssistantMessage(
-					fauxToolCall("module_report", {
-						path: "example.ts",
-						maxRefsPerSymbol: "invalid",
-					}),
-				),
-				fauxAssistantMessage("done"),
-			],
-		});
-		await handle.prompt("report with invalid limit");
-		const result = handle.requests[1]?.find(
-			(message) => message.role === "toolResult",
-		);
-		expect(result?.isError).toBe(true);
-		expect(result?.content).toEqual([
-			{
-				type: "text",
-				text: 'Validation failed for tool "module_report":\n  - maxRefsPerSymbol: expected number, got string\n\nReceived arguments:\n{\n  "path": "example.ts",\n  "maxRefsPerSymbol": "invalid"\n}',
-			},
-		]);
-	});
+	it.skipIf(hostVersion !== "1.5.0")(
+		"delivers pi-schema validation wording unchanged to the agent (requires resolved pi 1.5.0)",
+		async () => {
+			const handle = await startPiSession({
+				root: fixture.root,
+				responses: [
+					fauxAssistantMessage(
+						fauxToolCall("module_report", {
+							path: "example.ts",
+							maxRefsPerSymbol: "invalid",
+						}),
+					),
+					fauxAssistantMessage("done"),
+				],
+			});
+			await handle.prompt("report with invalid limit");
+			const result = handle.requests[1]?.find(
+				(message) => message.role === "toolResult",
+			);
+			expect(result?.isError).toBe(true);
+			expect(result?.content).toEqual([
+				{
+					type: "text",
+					text: 'Validation failed for tool "module_report":\n  - maxRefsPerSymbol: expected number, got string\n\nReceived arguments:\n{\n  "path": "example.ts",\n  "maxRefsPerSymbol": "invalid"\n}',
+				},
+			]);
+		},
+	);
 });
 
 // #5199: a saved refusal must reach pi-lens even with the host configured
 // to auto-trust by default; use pi's persisted store rather than a boolean double.
 it("reads a saved Do not trust decision despite defaultProjectTrust always", async () => {
-	const host = process.env.PI_LENS_PI_HOST_PACKAGE;
-	const dist = host
-		? path.join(host, "dist")
-		: fileURLToPath(
-				new URL(
-					"../node_modules/@earendil-works/pi-coding-agent/dist/",
-					import.meta.url,
-				),
-			);
-	const { ProjectTrustStore } = await import(
+	const dist = path.join(hostPackage, "dist");
+	const { ProjectTrustStore, hasTrustRequiringProjectResources } = await import(
 		pathToFileURL(path.join(dist, "core/trust-manager.js")).href
 	);
 	const { resolveProjectTrusted } = await import(
 		pathToFileURL(path.join(dist, "core/project-trust.js")).href
 	);
-	const cwd = path.join(fixture.root, "trust", "proj");
-	fs.mkdirSync(cwd, { recursive: true });
+	// #5200 F3: the filesystem root has no ancestors to contribute skills.
+	// Only read it; the persisted store stays inside the disposable fixture.
+	const cwd = path.parse(fixture.root).root;
+	expect(hasTrustRequiringProjectResources(cwd)).toBe(false);
 	const agentDir = path.join(fixture.root, "trust", "agent");
 	const store = new ProjectTrustStore(agentDir);
 	store.set(cwd, false);

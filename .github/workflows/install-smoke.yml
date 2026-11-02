@@ -158,7 +158,7 @@ env:
   # below 0.86 falls outside the window and needs no dedicated host. A pi below
   # 0.86 emits no `context_with_system`, so pi-lens delivers no findings there
   # since #4644 (#4688: the floor moved rather than reviving the old hosts).
-  PI_HOST_SUPPORTED_RANGE: ">=0.86.1 <1.5.0"
+  PI_HOST_SUPPORTED_RANGE: ">=0.86.1 <1.6.0"
 
 jobs:
   # #4291: classify the diff once. `smoke` is true when a pull request touches

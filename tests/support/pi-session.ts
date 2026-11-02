@@ -326,7 +326,7 @@ function packageRootOf(target: string): string {
 }
 
 /** The install the extension under test runs in: the override, or this repo's host. */
-function hostPackageDir(): string {
+export function hostPackageDir(): string {
 	const override = process.env[HOST_PACKAGE_ENV];
 	if (override) return packageRootOf(path.resolve(override));
 	const here = path.dirname(fileURLToPath(import.meta.url));
