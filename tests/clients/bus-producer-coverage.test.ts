@@ -56,6 +56,86 @@ const SINK_IMPORTERS = new Set(["index.ts"]);
 const SINK_SPECIFIER =
 	/(?:from|import|require)\s*\(?\s*["'][^"']*bus-events-logger(?:\.js)?["']/g;
 
+/** A dynamic `import(...)` or `require(...)` call, in code. */
+const DYNAMIC_LOAD_CALL = /\b(?:import|require)\s*\(/g;
+
+/**
+ * A plain quoted specifier: a `"…"` or `'…'` string literal that is the whole
+ * argument (`import("./x.js")`) or the specifier of an attributed import
+ * (`import("./x.json", { with: … })`). A template literal, an identifier, a
+ * concatenation or a call (`pathToFileURL(entry).href`) does not match: the
+ * detector cannot resolve it to a module, so it is refused. A specifier longer
+ * than this window is refused too (fail closed).
+ */
+const PLAIN_LITERAL_SPECIFIER =
+	/^\s*(?:"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')\s*[),]/;
+const SPECIFIER_WINDOW = 512;
+
+function hasPlainLiteralSpecifier(source: string, openParen: number): boolean {
+	return PLAIN_LITERAL_SPECIFIER.test(
+		source.slice(openParen + 1, openParen + 1 + SPECIFIER_WINDOW),
+	);
+}
+
+/**
+ * Lines of dynamic loads whose specifier is not a plain string literal.
+ *
+ * A specifier the detector cannot resolve is refused, not skipped: `'`/`"` is
+ * a list of the spellings someone thought of, which is exactly the gate this
+ * repository forbids (AGENTS shape 69). The Greptile thread on #5179 hit it
+ * with `await import(\`./bus-events-logger.js\`)`, and a specifier held in a
+ * variable (`const p = "./bus-events-logger.js"; import(p)`) escapes the same
+ * way. Positions come from the string-blanked text, so a call quoted in a
+ * comment or inside a literal is not a site; the argument is read from the raw
+ * text at that offset.
+ */
+function unresolvedDynamicLoadLines(source: string, blanked: string): number[] {
+	const lines: number[] = [];
+	for (const match of blanked.matchAll(DYNAMIC_LOAD_CALL)) {
+		const start = match.index ?? 0;
+		if (hasPlainLiteralSpecifier(source, start + match[0].length - 1)) continue;
+		lines.push(source.slice(0, start).split("\n").length);
+	}
+	return lines;
+}
+
+/**
+ * Files admitted to hold a dynamic load whose specifier is not a plain
+ * literal: the module's path is only known at runtime. Keyed by the file the
+ * admission is for (never by a spelling), with the site count it admits and
+ * the reason. An admitted file still answers every other needle — it may not
+ * write a bus row and may not name the sink — and a site past its count is
+ * refused (AGENTS shape 69: the population is enumerated, the form is not).
+ */
+const UNRESOLVED_SPECIFIER_ADMISSIONS = new Map<
+	string,
+	{ sites: number; reason: string }
+>([
+	[
+		"clients/deps/ast-grep-napi.ts",
+		{
+			sites: 1,
+			reason:
+				"the native addon's entry path is only known after _require.resolve at runtime: a bare specifier does not resolve under pi's bundled host, so the specifier is a computed file:// URL",
+		},
+	],
+	[
+		"clients/deps/web-tree-sitter.ts",
+		{
+			sites: 1,
+			reason:
+				"the wasm package exposes only the `.` entry, so its path is only known after _require.resolve at runtime and the specifier is a computed file:// URL",
+		},
+	],
+]);
+
+/** Test seam: the admissions, so the suite pins each one and its reason. */
+export function unresolvedSpecifierAdmissions(): Array<
+	readonly [string, { sites: number; reason: string }]
+> {
+	return [...UNRESOLVED_SPECIFIER_ADMISSIONS.entries()];
+}
+
 /**
  * Admitted: the seam writes bus rows and `index.ts` reads the rollup. Every
  * other file that names the sink writer (`logBusEvent`, under any import alias
@@ -74,6 +154,12 @@ export function findBusSinkBypasses(source: string, file: string): string[] {
 		codeMatches(source, SINK_SPECIFIER, blanked).length > 0
 	) {
 		found.push("bus-events-logger import");
+	}
+	const admittedSites = UNRESOLVED_SPECIFIER_ADMISSIONS.get(file)?.sites ?? 0;
+	for (const line of unresolvedDynamicLoadLines(source, blanked).slice(
+		admittedSites,
+	)) {
+		found.push(`unresolved dynamic load specifier at line ${line}`);
 	}
 	return found;
 }
@@ -193,15 +279,66 @@ describe("bus producer guarded-seam coverage", () => {
 				'const sink = require("./bus-events-logger.js");\nconst write = sink.logBusEvent;\nwrite({});',
 				"clients/x-publish.ts",
 			],
+			[
+				"quoted dynamic import (control: already refused)",
+				'const sink = await import("./bus-events-logger.js");\nsink["logBus" + "Event"]({});',
+				"clients/x-publish.ts",
+			],
+			[
+				"template-literal specifier",
+				'const sink = await import(`./bus-events-logger.js`);\nsink["logBus" + "Event"]({});',
+				"clients/x-publish.ts",
+			],
+			[
+				"specifier held in a variable",
+				'const p = "./bus-events-logger.js";\nconst sink = await import(p);\nsink["logBus" + "Event"]({});',
+				"clients/x-publish.ts",
+			],
+			[
+				"dynamic require through a variable",
+				'const p = "./bus-events-logger.js";\nconst sink = require(p);\nsink["logBus" + "Event"]({});',
+				"clients/x-publish.ts",
+			],
+			[
+				"concatenated specifier",
+				'const sink = await import("./bus-events" + "-logger.js");\nsink["logBus" + "Event"]({});',
+				"clients/x-publish.ts",
+			],
 		];
-		for (const [label, source, file] of planted) {
-			expect(findBusSinkBypasses(source, file), label).not.toEqual([]);
-		}
+		// Every planted spelling is refused, and one miss names itself instead of
+		// hiding behind the first failure: a fail-closed detector owes its author
+		// the whole refused set.
+		const admitted = planted
+			.filter(
+				([, source, file]) => findBusSinkBypasses(source, file).length === 0,
+			)
+			.map(([label]) => label);
+		expect(admitted).toEqual([]);
 		// Admitted, and prose never excuses or accuses.
 		expect(
 			findBusSinkBypasses(
 				'import { emitBusEventRollupAtSessionEnd } from "./clients/bus-events-logger.js";',
 				"index.ts",
+			),
+		).toEqual([]);
+		// A dynamic load of a module the detector can resolve is not a bypass;
+		// refusing plain literals would make every lazy `import()` a finding.
+		expect(
+			findBusSinkBypasses(
+				'const m = await import("./metrics-history.js");',
+				"clients/x-publish.ts",
+			),
+		).toEqual([]);
+		expect(
+			findBusSinkBypasses(
+				'const m = await import("./x.json", { with: { type: "json" } });',
+				"clients/x-publish.ts",
+			),
+		).toEqual([]);
+		expect(
+			findBusSinkBypasses(
+				"// await import(dynamicSpecifier);\nconst ok = 1;",
+				"clients/x-publish.ts",
 			),
 		).toEqual([]);
 		expect(
@@ -211,6 +348,27 @@ describe("bus producer guarded-seam coverage", () => {
 			),
 		).toEqual([]);
 		expect(findBusSinkBypasses("logBusEvent({});", SEAM_PATH)).toEqual([]);
+	});
+
+	it("admits exactly the two runtime-resolved loader sites, and refuses a second computed load in an admitted file", () => {
+		// The fail-closed branch found exactly two live sites (#5179 F1). Each is
+		// admitted by FILE with its site count and a reason, never by a spelling: a
+		// third file, or a second computed load in an admitted one, reds.
+		const admissions = unresolvedSpecifierAdmissions();
+		expect(admissions.map(([file]) => file)).toEqual([
+			"clients/deps/ast-grep-napi.ts",
+			"clients/deps/web-tree-sitter.ts",
+		]);
+		for (const [file, admission] of admissions) {
+			expect(admission.reason.length, file).toBeGreaterThan(40);
+			expect(admission.sites, file).toBe(1);
+		}
+		expect(
+			findBusSinkBypasses(
+				"const a = await import(first);\nconst b = await import(second);",
+				"clients/deps/web-tree-sitter.ts",
+			),
+		).toEqual(["unresolved dynamic load specifier at line 2"]);
 	});
 
 	it("carries ctxSource on the emit_failed row the seam writes for every producer", () => {
