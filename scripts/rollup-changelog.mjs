@@ -192,7 +192,7 @@ export function renderUserChangelog({
 			/(!?\[[^\]\n]+\]\()(<[^>\n]*>|[^\s)]+)([^)]*\))/g,
 			(match, prefix, target, suffix, offset) => {
 				if (visible[offset] !== rendered[offset]) return match;
-				const angle = target.startsWith("<");
+				const angle = target.startsWith("<") && target.endsWith(">");
 				const destination = angle ? target.slice(1, -1) : target;
 				const url = new URL(
 					destination.replace(/^\/(?!\/)/, ""),

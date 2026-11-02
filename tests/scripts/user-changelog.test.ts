@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import * as rollup from "../../scripts/rollup-changelog.mjs";
+import { REAL_NODE_MODULES } from "../support/lane-check-kit.js";
 const {
 	parseChangelog,
 }: {
@@ -111,11 +112,7 @@ it("the check CLI rejects a stale user changelog", async () => {
 	rollup.writeUserChangelog({ rootDir: root });
 	fs.appendFileSync(path.join(root, "CHANGELOG-USER.md"), "stale\n");
 	// #5202 r2b: copied scripts need dependencies even outside the repo tree.
-	fs.symlinkSync(
-		path.resolve("node_modules"),
-		path.join(root, "node_modules"),
-		"dir",
-	);
+	fs.symlinkSync(REAL_NODE_MODULES, path.join(root, "node_modules"), "dir");
 	fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
 	for (const file of [
 		"rollup-changelog.mjs",
@@ -187,5 +184,17 @@ it("preserves angle destination delimiters and resolves the complete path", () =
 	expect(text).toContain("[abs](<https://example.com/x>)");
 	expect(text).toContain(
 		"![image](<https://github.com/apmantza/pi-lens/blob/v1.0.1/docs/image%20name.png>)",
+	);
+});
+
+// #5202 F11: an unmatched opening angle must not truncate the destination.
+it("resolves an unclosed angle destination without slicing its final character", () => {
+	const root = fixture();
+	fs.writeFileSync(
+		path.join(root, "CHANGELOG.md"),
+		"# Changelog\n\n## [1.0.1] - 2026-01-02\n\n### Fixed\n\n- **Guide** [x](<docs/a.md)\n",
+	);
+	expect(rollup.renderUserChangelog({ rootDir: root })).toContain(
+		"[x](https://github.com/apmantza/pi-lens/blob/v1.0.1/%3Cdocs/a.md)",
 	);
 });
