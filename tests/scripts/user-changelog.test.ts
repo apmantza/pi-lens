@@ -110,6 +110,12 @@ it("the check CLI rejects a stale user changelog", async () => {
 	const root = fixture();
 	rollup.writeUserChangelog({ rootDir: root });
 	fs.appendFileSync(path.join(root, "CHANGELOG-USER.md"), "stale\n");
+	// #5202 r2b: copied scripts need dependencies even outside the repo tree.
+	fs.symlinkSync(
+		path.resolve("node_modules"),
+		path.join(root, "node_modules"),
+		"dir",
+	);
 	fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
 	for (const file of [
 		"rollup-changelog.mjs",
