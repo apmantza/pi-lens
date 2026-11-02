@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { blankMarkdownRegions } from "./lib/markdown-lexer.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -181,12 +182,26 @@ export function renderUserChangelog({
 } = {}) {
 	const source = fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8");
 	const sections = parseSections(source);
-	const publicBody = (body, ref) =>
-		renderBody([body], CHANGELOG_SECTIONS).replace(
-			/(!?\[[^\]\n]+\]\()([^\s)]+)([^)]*\))/g,
-			(_match, prefix, target, suffix) =>
-				`${prefix}${new URL(target.replace(/^\/(?!\/)/, ""), `https://github.com/apmantza/pi-lens/blob/${ref}/CHANGELOG.md`).href}${suffix}`,
+	const publicBody = (body, ref) => {
+		const rendered = renderBody([body], CHANGELOG_SECTIONS);
+		const visible = blankMarkdownRegions(rendered, {
+			code: "blocks",
+			codeSpans: true,
+		});
+		return rendered.replace(
+			/(!?\[[^\]\n]+\]\()(<[^>\n]*>|[^\s)]+)([^)]*\))/g,
+			(match, prefix, target, suffix, offset) => {
+				if (visible[offset] !== rendered[offset]) return match;
+				const angle = target.startsWith("<");
+				const destination = angle ? target.slice(1, -1) : target;
+				const url = new URL(
+					destination.replace(/^\/(?!\/)/, ""),
+					`https://github.com/apmantza/pi-lens/blob/${ref}/CHANGELOG.md`,
+				).href;
+				return `${prefix}${angle ? `<${url}>` : url}${suffix}`;
+			},
 		);
+	};
 	const releases = sections
 		.filter((section) => /^\d+\.\d+\.\d+$/.test(section.label))
 		.slice(0, USER_RELEASE_LIMIT)

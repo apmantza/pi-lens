@@ -111,7 +111,11 @@ it("the check CLI rejects a stale user changelog", async () => {
 	rollup.writeUserChangelog({ rootDir: root });
 	fs.appendFileSync(path.join(root, "CHANGELOG-USER.md"), "stale\n");
 	fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
-	for (const file of ["rollup-changelog.mjs", "lib/changelog.mjs"])
+	for (const file of [
+		"rollup-changelog.mjs",
+		"lib/changelog.mjs",
+		"lib/markdown-lexer.mjs",
+	])
 		fs.copyFileSync(
 			path.resolve("scripts", file),
 			path.join(root, "scripts", file),
@@ -145,5 +149,37 @@ it("the shipped user changelog matches the last five released sections", () => {
 	expect(() => rollup.checkUserChangelog()).not.toThrow();
 	expect(fs.readFileSync("CHANGELOG-USER.md", "utf8")).not.toContain(
 		"## [Unreleased]",
+	);
+});
+
+// #5202 F7: code examples must survive the public release renderer literally.
+it("preserves inline and block code while resolving adjacent prose links", () => {
+	const root = fixture();
+	const code =
+		'`socket["bind"](0)` and ``[x](docs/span.md)``\n\n```js\nconst link = "[x](/docs/fenced.md)";\n```\n\n    [x](docs/indented.md)';
+	fs.writeFileSync(
+		path.join(root, "CHANGELOG.md"),
+		`# Changelog\n\n## [1.0.1] - 2026-01-02\n\n### Fixed\n\n- **Example** ${code}\n\n[real](docs/real.md)\n`,
+	);
+	const text = rollup.renderUserChangelog({ rootDir: root });
+	expect(text).toContain(code);
+	expect(text).toContain(
+		"[real](https://github.com/apmantza/pi-lens/blob/v1.0.1/docs/real.md)",
+	);
+});
+// #5202 F8: brackets delimit the whole destination, including spaces.
+it("preserves angle destination delimiters and resolves the complete path", () => {
+	const root = fixture();
+	fs.writeFileSync(
+		path.join(root, "CHANGELOG.md"),
+		'# Changelog\n\n## [1.0.1] - 2026-01-02\n\n### Fixed\n\n- **Guide** [guide](<docs/user guide.md> "Read guide") and [abs](<https://example.com/x>) and ![image](</docs/image name.png>).\n',
+	);
+	const text = rollup.renderUserChangelog({ rootDir: root });
+	expect(text).toContain(
+		'[guide](<https://github.com/apmantza/pi-lens/blob/v1.0.1/docs/user%20guide.md> "Read guide")',
+	);
+	expect(text).toContain("[abs](<https://example.com/x>)");
+	expect(text).toContain(
+		"![image](<https://github.com/apmantza/pi-lens/blob/v1.0.1/docs/image%20name.png>)",
 	);
 });
