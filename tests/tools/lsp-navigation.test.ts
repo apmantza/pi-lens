@@ -236,8 +236,7 @@ describe("lsp_navigation tool", () => {
 		);
 
 		expect(result.isError).toBe(true);
-		expect(result.details?.failureKind).toBe("timeout");
-		expect(result.details?.status).toBe("timeout");
+		expect(result.details?.failureKind).toBe("lsp_disabled");
 		expect(parseToolJson(result)).toMatchObject({
 			tool: "lsp_navigation",
 			operation: "precheck",

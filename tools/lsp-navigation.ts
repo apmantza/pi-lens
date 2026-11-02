@@ -2063,7 +2063,6 @@ export function createLspNavigationTool(
 							content: [{ type: "text" as const, text: err.message }],
 							isError: true,
 							details: {
-								status: "timeout",
 								method: err.method,
 								timeoutMs: err.timeoutMs,
 								elapsedMs: err.elapsedMs,

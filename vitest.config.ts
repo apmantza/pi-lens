@@ -365,6 +365,7 @@ const lspSpawnHeavyInclude = [
 	"tests/clients/lsp/did-save-notification.test.ts",
 	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	"tests/clients/lsp/integration.test.ts",
+	"tests/clients/lsp/navigation-timeout.integration.test.ts",
 	// #4786: a real `createLSPClient` over stdio fake-server children that publish
 	// a finding then an unversioned empty; waits on real handshakes and debounce
 	// windows, the same #1022/#2332 contention class as its siblings.
