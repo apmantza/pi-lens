@@ -132,9 +132,17 @@ function readRefFile(ref, file) {
  * exactly that object (#5213 F1).
  */
 function readStagedFile(file) {
-	const listed = git(["ls-files", "--stage", "--", file], {
-		keep: ["GIT_INDEX_FILE"],
-	});
+	let keep = [];
+	if (process.env.GIT_INDEX_FILE) {
+		try {
+			fs.accessSync(process.env.GIT_INDEX_FILE, fs.constants.R_OK);
+			keep = ["GIT_INDEX_FILE"];
+		} catch {
+			// A hook run outside Git can retain a retired temporary index.
+			// Read the default index when that exported file is unavailable.
+		}
+	}
+	const listed = git(["ls-files", "--stage", "--", file], { keep });
 	if (listed.error) return { failure: gitFailureDetail(listed.error) };
 	const entry = listed.text.trim();
 	if (entry === "") return { absent: true };

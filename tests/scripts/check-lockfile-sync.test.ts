@@ -757,6 +757,103 @@ describe("package-lock libc drift guard (#5207)", () => {
 		);
 	});
 
+	it("falls back from a retired hook index to the default index", () => {
+		const good = libcLock({ demo: GLYDE });
+		const root = committedRepo(good);
+		stage(root, libcLock({ demo: { version: GLYDE.version } }));
+		writeWorking(root, good);
+		const result = run(CHECKER, root, [], {
+			...envFor(root),
+			GIT_INDEX_FILE: path.join(root, "retired-index"),
+		});
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain('dropped the "libc" field');
+	});
+
+	// Recurrence: #5213 v2 F3, these failure branches previously survived mutation.
+	it("refuses invalid JSON in the staged lock with a clean working copy", () => {
+		const good = libcLock({ demo: GLYDE });
+		const root = committedRepo(good);
+		fs.writeFileSync(path.join(root, "package-lock.json"), "{");
+		probeGit(["add", "package-lock.json"], root);
+		writeWorking(root, good);
+		const result = run(CHECKER, root, [], envFor(root));
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			"unverifiable (the staged package-lock.json is unreadable",
+		);
+	});
+
+	it.each(["shape", "blob"])(
+		"records an unreadable merge-base lock: %s",
+		(failure) => {
+			const root = committedRepo(
+				failure === "shape" ? {} : libcLock({ base: GLYDE }),
+			);
+			const base = probeGit(["rev-parse", "HEAD"], root).trim();
+			const blob = probeGit(
+				["rev-parse", "HEAD:package-lock.json"],
+				root,
+			).trim();
+			writeWorking(root, libcLock({ demo: GLYDE }));
+			commit(root, "valid lock");
+			probeGit(["update-ref", "refs/remotes/origin/master", base], root);
+			if (failure === "blob")
+				fs.unlinkSync(
+					path.join(root, ".git/objects", blob.slice(0, 2), blob.slice(2)),
+				);
+			const result = run(CHECKER, root, [], envFor(root));
+			if (failure === "shape") {
+				expect(result.status).toBe(0);
+				expect(result.stdout).toContain(
+					"not checked (the merge base's package-lock.json is unreadable: no packages map)",
+				);
+			} else {
+				expect(result.status).toBe(1);
+				expect(result.stderr).toContain(
+					"unverifiable (git could not read the merge base with origin/master",
+				);
+			}
+		},
+	);
+
+	it("names a failure resolving a corrupt origin/master ref", () => {
+		const root = committedRepo(libcLock({ demo: GLYDE }));
+		fs.mkdirSync(path.join(root, ".git/refs/remotes/origin"), {
+			recursive: true,
+		});
+		fs.writeFileSync(
+			path.join(root, ".git/refs/remotes/origin/master"),
+			"broken-ref",
+		);
+		const result = run(CHECKER, root, [], envFor(root));
+		expect(result.status).toBe(1);
+		expect(result.stderr).toContain(
+			"unverifiable (git could not resolve origin/master",
+		);
+	});
+
+	it("records an unrelated origin/master as no shared history", () => {
+		const root = committedRepo(libcLock({ demo: GLYDE }));
+		const unrelated = probeGit(
+			[
+				"-c",
+				"user.name=fixture",
+				"-c",
+				"user.email=fixture@example.test",
+				"commit-tree",
+				"HEAD^{tree}",
+				"-m",
+				"unrelated",
+			],
+			root,
+		).trim();
+		probeGit(["update-ref", "refs/remotes/origin/master", unrelated], root);
+		const result = run(CHECKER, root, [], envFor(root));
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("origin/master shares no history with it");
+	});
+
 	it("records that origin/master does not resolve on a clean tree", () => {
 		const good = libcLock({ "@rollup/rollup-linux-x64-gnu": GLYDE });
 		const result = check(committedRepo(good), good);
