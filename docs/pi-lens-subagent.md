@@ -236,6 +236,19 @@ before moving on; the plegma daemon's cgroup holds every worker's children
 long-lived worktree (#3180); reproduce with `--dryRunOnly`, never under a kill
 timeout.
 
+Stop only the processes you started, by the PIDs you recorded: never `pkill`,
+or a `pgrep -f` match, on a name another lane also runs. One worker killed
+another lane's `lane:check` and one reviewer killed another lane's ast-grep
+that way (2026-11-02). Never unlink, replace or re-point the linked
+`node_modules` to get past a guard; report the refusal in the hand-back. The
+orchestrator owns private installs (2026-11-02, #5199).
+
+A test that copies scripts into a temp root resolves their imports from that
+root upward. Under a `TMPDIR` inside the worktree it finds the worktree's
+`node_modules` and passes, then fails on CI and on any outside `TMPDIR`. Run
+such a test once with `TMPDIR` outside the worktree before the hand-back
+(#5202 r2: `Cannot find module 'marked'`).
+
 A sandboxed worker may find the shared `.git` and the linked `node_modules`
 read-only and the network absent (a write-confined sandbox does this; the
 runner's own notes say which mode lifts it). Run Vitest as
