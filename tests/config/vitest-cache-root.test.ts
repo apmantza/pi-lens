@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import vitestConfig, { resolveVitestCacheDir } from "../../vitest.config.ts";
 import mutationConfig from "../../vitest.mutation.config.ts";
 import { stripCommentsAndStrings } from "../support/session-state-scan.js";
+import { assertNonEmptyScan } from "../support/sweep-kit.js";
 
 describe("Vitest module cache roots (#5206)", () => {
 	it("does not use the linked install's shared cache", () => {
@@ -40,30 +41,40 @@ describe("Vitest module cache roots (#5206)", () => {
 
 	// Recurrence: the round-3 verify found two fixture configs (tmp-teardown,
 	// registry-teardown) still on the shared node_modules/.vitest-cache after both
-	// root configs were fixed. Every Vitest config in the tree must set the key;
-	// one that does not, wherever it lives, reds here.
-	it("sets fsModuleCachePath in every Vitest config in the tree", () => {
+	// root configs were fixed, and round 4 showed a key pointing back at the shared
+	// directory passed a presence check. Every Vitest or Vite config in the tree,
+	// in any spelling, must set the key to one of the two known-good forms;
+	// anything else, including a value the census cannot read, reds here.
+	it("sets a per-worktree fsModuleCachePath in every Vitest config in the tree", () => {
 		const configs: string[] = [];
 		const walk = (dir: string): void => {
 			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-				if (
-					["node_modules", "dist", ".git", ".vitest-cache"].includes(entry.name)
-				)
+				if (["node_modules", ".git", ".vitest-cache"].includes(entry.name))
 					continue;
 				const full = path.join(dir, entry.name);
 				if (entry.isDirectory()) walk(full);
-				else if (/^vitest(\.[\w-]+)?\.config\.[cm]?ts$/.test(entry.name))
+				else if (
+					/^vite(st)?(\.[\w-]+)?\.(config|workspace)\.[cm]?[jt]s$/.test(
+						entry.name,
+					)
+				)
 					configs.push(path.relative(process.cwd(), full));
 			}
 		};
 		walk(process.cwd());
-		expect(configs.length).toBeGreaterThanOrEqual(4);
-		const missing = configs.filter(
-			(file) =>
-				!/\bfsModuleCachePath\s*:/.test(
-					stripCommentsAndStrings(fs.readFileSync(file, "utf8")),
-				),
-		);
-		expect(missing).toEqual([]);
+		assertNonEmptyScan("Vitest configs in the tree", configs.length, 4);
+		const knownGood =
+			/\bfsModuleCachePath\s*:\s*(resolveVitestCacheDir\(|path\.join\(\s*root\s*,\s*["']\.vitest-cache["']\s*\))/;
+		const unpinned = configs.filter((file) => {
+			const source = fs.readFileSync(file, "utf8");
+			const code = source
+				.replace(/\/\*[\s\S]*?\*\//g, "")
+				.replace(/(^|[^:"'])\/\/.*$/gm, "$1");
+			return (
+				!/\bfsModuleCachePath\s*:/.test(stripCommentsAndStrings(source)) ||
+				!knownGood.test(code)
+			);
+		});
+		expect(unpinned).toEqual([]);
 	});
 });
