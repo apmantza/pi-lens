@@ -1,3 +1,5 @@
+// flake-shape: real-process-spawn — the real JSON-RPC deadline and cross-evaluation service delivery require a real LSP child; lsp-spawn-heavy serializes it.
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -11,9 +13,9 @@ import { createLSPClient } from "../../../clients/lsp/client.js";
 import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
 import { LSPService } from "../../../clients/lsp/index.js";
 import { stopLSP } from "../../../clients/lsp/launch.js";
-import { createLspNavigationTool } from "../../../tools/lsp-navigation.js";
+import { normalizeMapKey } from "../../../clients/path-utils.js";
+import { setupTestEnvironment } from "../test-utils.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
-import { installLspService } from "../../support/lsp-service-seam.js";
 
 afterEach(() => {
 	if (previousTimeout === undefined)
@@ -22,36 +24,46 @@ afterEach(() => {
 });
 
 it("real fake-server documentSymbol timeout is not an empty answer (#5211)", async () => {
+	const fixture = setupTestEnvironment("pi-lens-navigation-timeout-");
+	const filePath = path.join(fixture.tmpDir, "timeout-5211.ts");
+	fs.writeFileSync(filePath, "const x = 1;");
+	fs.writeFileSync(path.join(fixture.tmpDir, "package.json"), "{}");
+	fs.writeFileSync(path.join(fixture.tmpDir, "tsconfig.json"), "{}");
 	const proc = await spawnFakeLspServer({
-		cwd: process.cwd(),
+		cwd: fixture.tmpDir,
 		env: { ...process.env, FAKE_LSP_HANG_DOCUMENT_SYMBOL: "1" },
 	});
 	const client = await createLSPClient({
 		serverId: "fake-document-symbol-timeout-5211",
 		process: proc,
-		root: process.cwd(),
+		root: fixture.tmpDir,
 	});
 	try {
-		const filePath = path.join(process.cwd(), "timeout-5211.ts");
 		await client.notify.open(filePath, "const x = 1;", "typescript");
 		await expect(client.documentSymbol(filePath)).rejects.toBeInstanceOf(
 			LspRequestTimeoutError,
 		);
 
 		const service = new LSPService();
-		const realService = service as unknown as {
-			supportsLSP: (path: string) => boolean;
-			hasLSP: (path: string) => Promise<boolean>;
-			touchFile: (path: string, content: string) => Promise<void>;
-			getOperationSupport: (path: string) => Promise<unknown>;
-			documentSymbol: (path: string) => Promise<unknown>;
-		};
-		realService.supportsLSP = () => true;
-		realService.hasLSP = async () => true;
-		realService.touchFile = async () => undefined;
-		realService.getOperationSupport = async () => client.getOperationSupport();
-		realService.documentSymbol = (requestedPath) =>
-			client.documentSymbol(requestedPath);
+		// Use production server/root selection, retaining the client from the old
+		// evaluation while the tool and its timeout class are re-evaluated (#5211).
+		(
+			service as unknown as { state: { clients: Map<string, unknown> } }
+		).state.clients.set(
+			`typescript:${normalizeMapKey(fixture.tmpDir)}`,
+			client,
+		);
+		expect((await service.getClientForFile(filePath))?.client).toBe(client);
+		vi.resetModules();
+		const { createLspNavigationTool } =
+			await import("../../../tools/lsp-navigation.js");
+		const { installLspService } =
+			await import("../../support/lsp-service-seam.js");
+		const freshTimeoutModule =
+			await import("../../../clients/lsp/request-timeout-error.js");
+		expect(freshTimeoutModule.LspRequestTimeoutError).not.toBe(
+			LspRequestTimeoutError,
+		);
 		installLspService(service);
 
 		const result = await createLspNavigationTool(
@@ -61,7 +73,7 @@ it("real fake-server documentSymbol timeout is not an empty answer (#5211)", asy
 			{ operation: "documentSymbol", path: filePath },
 			new AbortController().signal,
 			null,
-			{ cwd: process.cwd() },
+			{ cwd: fixture.tmpDir },
 		);
 		const envelope = JSON.parse(String(result.content[0]?.text)) as Record<
 			string,
@@ -85,5 +97,6 @@ it("real fake-server documentSymbol timeout is not an empty answer (#5211)", asy
 			/* ignore */
 		}
 		await stopLSP(proc);
+		fixture.cleanup();
 	}
 }, 5000);

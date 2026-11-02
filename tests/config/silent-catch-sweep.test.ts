@@ -1349,9 +1349,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :371, :405, :628, :861, :1026, :1084, :1184, :1405, :1452, :2477
 	"tools/lsp-navigation.ts": {
 		silent: 8,
-		identities: "bd32955f536a05dd",
-		reason: PRE_RULE,
-	}, // :529, :739, :757, :1200, :1569, :1676, :1710, :1898
+		identities: "ef7d1e4ae5e87b4b",
+		reason:
+			PRE_RULE +
+			"; #5211 re-admits the same eight handlers after the terminal tool catch switches from instanceof to the cross-evaluation timeout brand; every arm of that catch still calls finalize, and the real service-route timeout witness plus ordinary-error cases prove delivery. The other seven inherited handlers retain the pre-rule admission.",
+	}, // :591, :801, :819, :1280, :1697, :1804, :1838, :2024
 	"tools/lsp-structured-output.ts": {
 		silent: 3,
 		identities: "0460d5b535aef4a2",

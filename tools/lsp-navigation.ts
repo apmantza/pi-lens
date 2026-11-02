@@ -15,7 +15,7 @@ import {
 	type LspMutationContext,
 } from "../clients/lsp-mutation.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
-import { LspRequestTimeoutError } from "../clients/lsp/request-timeout-error.js";
+import { isLspRequestTimeoutError } from "../clients/lsp/request-timeout-error.js";
 import {
 	resolveHostToolPath,
 	toPosix,
@@ -2057,7 +2057,7 @@ export function createLspNavigationTool(
 						{ operation, filePath, failureKind: "bad_input", resultCount: 0 },
 					);
 				}
-				if (err instanceof LspRequestTimeoutError) {
+				if (isLspRequestTimeoutError(err)) {
 					return finalize(
 						{
 							content: [{ type: "text" as const, text: err.message }],
