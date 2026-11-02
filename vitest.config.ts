@@ -1,11 +1,17 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
+import * as path from "node:path";
 import { defineConfig } from "vitest/config";
 import { BalancedShardSequencer } from "./scripts/lib/balanced-shard-sequencer.mjs";
 import {
 	formatTestWorkerBudget,
 	resolveTestWorkerBudget,
 } from "./scripts/lib/worker-budget.mjs";
+
+/** Keep Vitest's filesystem module cache isolated per worktree (#5206). */
+export function resolveVitestCacheDir(worktreeRoot: string): string {
+	return path.join(path.resolve(worktreeRoot), ".vitest-cache");
+}
 
 // Applies to globalSetup as well as workers: ordinary tests never install tools.
 process.env.PI_LENS_DISABLE_TOOL_INSTALL ??= "1";
@@ -1066,6 +1072,10 @@ export const tmpFixtureHygieneInclude = [
 
 export default defineConfig({
 	test: {
+		// Vitest's filesystem module cache (#5206). Its default is
+		// node_modules/.vitest-cache, which every worktree that links the shared
+		// install reads; Vite's cacheDir holds only results.json and is unrelated.
+		fsModuleCachePath: resolveVitestCacheDir(process.cwd()),
 		exclude: sharedExclude,
 		// Root-config-only in Vitest 4 (see the grammar-heavy project's comment
 		// below) — applies to every project's fork teardown, not just the
