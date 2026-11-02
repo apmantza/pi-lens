@@ -32,10 +32,14 @@ import { assertNonEmptyScan } from "../../support/sweep-kit.js";
 // availability fallthrough or an lsp.json override.
 const EXEMPT_PRIMARY = new Map(
 	LSP_SERVERS.filter(
-		(server) => server.role !== "auxiliary" && server.fallbackFor !== undefined,
+		(server) =>
+			(server.role !== "auxiliary" && server.fallbackFor !== undefined) ||
+			server.id === "groovy",
 	).map((server) => [
 		server.id,
-		`fallback of ${server.fallbackFor}; the preferred handshake covers the default`,
+		server.fallbackFor
+			? `fallback of ${server.fallbackFor}; the preferred handshake covers the default`
+			: "no published release artifact, and Java is unavailable on CI; the row is covered by the PATH-shim launch tests and the idle-eviction no-fixture admission (#5123)",
 	]),
 );
 

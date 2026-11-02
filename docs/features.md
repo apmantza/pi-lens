@@ -2,7 +2,7 @@
 
 ### LSP Support
 
-pi-lens includes **50 language server definitions** (including four cross-cutting *auxiliary* scanners that attach alongside the file's language server — Opengrep, ast-grep, zizmor, and typos — and one opt-in, JS/TS-only auxiliary, fallow, off unless `fallow.enabled` is set; see below). LSP is **enabled by default**; use `--no-lsp` to disable it for a session. Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server with a managed installer is not installed, pi-lens offers an interactive install prompt; toolchain-bundled servers, such as Lean's `lake`, are PATH-only, and pi-lens never installs or manages them.
+pi-lens includes **51 language server definitions** (including four cross-cutting *auxiliary* scanners that attach alongside the file's language server — Opengrep, ast-grep, zizmor, and typos — and one opt-in, JS/TS-only auxiliary, fallow, off unless `fallow.enabled` is set; see below). LSP is **enabled by default**; use `--no-lsp` to disable it for a session. Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server with a managed installer is not installed, pi-lens offers an interactive install prompt; toolchain-bundled servers, such as Lean's `lake`, are PATH-only, and pi-lens never installs or manages them.
 
 **LSP Idle Management:** LSP servers shut down after 240 seconds of inactivity (no files modified) to free resources. The timer resets when you resume editing, preventing cold-start penalties during active development.
 

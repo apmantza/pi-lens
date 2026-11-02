@@ -125,6 +125,7 @@ describe.skipIf(process.platform === "win32")(
 		beforeEach(() => {
 			fs.rmSync(shimDir, { recursive: true, force: true });
 			fs.rmSync(path.dirname(jdkHome), { recursive: true, force: true });
+			fs.rmSync(jar, { recursive: true, force: true });
 			for (const name of fs.readdirSync(base))
 				if (name.startsWith("stub-out.")) fs.rmSync(path.join(base, name));
 			fs.mkdirSync(shimDir, { recursive: true });
@@ -176,6 +177,28 @@ describe.skipIf(process.platform === "win32")(
 				argv: ["-jar", jar],
 				javaHome: null,
 			});
+		}, 30_000);
+
+		it("resolves a relative jar and rejects a jar directory", async () => {
+			writeStub(shimDir, "java");
+			const relativeJar = path.relative(process.cwd(), jar);
+			vi.stubEnv(GROOVY_LANGUAGE_SERVER_JAR_ENV, relativeJar);
+
+			const run = await spawnRow();
+			stop = run.stop;
+
+			expect(await recorded("java")).toEqual({
+				argv: ["-jar", jar],
+				javaHome: null,
+			});
+
+			await stop();
+			stop = async () => {};
+			fs.rmSync(jar);
+			fs.mkdirSync(jar);
+			vi.stubEnv(GROOVY_LANGUAGE_SERVER_JAR_ENV, relativeJar);
+			const directoryRun = await spawnRow();
+			expect(directoryRun.spawned).toBeUndefined();
 		}, 30_000);
 
 		it("runs the jar under the JVM env overlay when java is not on PATH", async () => {

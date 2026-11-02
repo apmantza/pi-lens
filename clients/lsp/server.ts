@@ -4059,9 +4059,13 @@ export const GroovyServer: LSPServerInfo = {
 		);
 		if (viaLauncher) return viaLauncher;
 		const jar = process.env[GROOVY_LANGUAGE_SERVER_JAR_ENV];
-		if (jar && existsSync(jar)) {
+		const resolvedJar = jar ? path.resolve(jar) : undefined;
+		const jarIsFile = resolvedJar
+			? (statSync(resolvedJar, { throwIfNoEntry: false })?.isFile() ?? false)
+			: false;
+		if (resolvedJar && jarIsFile) {
 			try {
-				const proc = await launchLSP("java", ["-jar", jar], {
+				const proc = await launchLSP("java", ["-jar", resolvedJar], {
 					cwd: root,
 					...(env ? { env } : {}),
 				});
@@ -4074,7 +4078,7 @@ export const GroovyServer: LSPServerInfo = {
 			}
 		}
 		logSessionStart(
-			`lsp launch groovy: not installed (no groovy-language-server on PATH; ${GROOVY_LANGUAGE_SERVER_JAR_ENV}=${jar ? `${jar} (${existsSync(jar) ? "java not found" : "no such file"})` : "unset"}). Run ./gradlew build in GroovyLanguageServer/groovy-language-server, then set ${GROOVY_LANGUAGE_SERVER_JAR_ENV} to build/libs/groovy-language-server-all.jar`,
+			`lsp launch groovy: not installed (no groovy-language-server on PATH; ${GROOVY_LANGUAGE_SERVER_JAR_ENV}=${jar ? `${jar} (${jarIsFile ? "java not found" : "no such file"})` : "unset"}). Run ./gradlew build in GroovyLanguageServer/groovy-language-server, then set ${GROOVY_LANGUAGE_SERVER_JAR_ENV} to build/libs/groovy-language-server-all.jar`,
 		);
 		return undefined;
 	},
