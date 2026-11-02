@@ -133,7 +133,7 @@
 		"@ast-grep/cli": "0.51.0",
 		"@ast-grep/napi": "^0.51.0",
 		"js-yaml": "^5.2.2",
-		"minimatch": "^11.0.1",
+		"minimatch": "^11.0.4",
 		"pidusage": "^4.0.1",
 		"vscode-jsonrpc": "^10.0.0"
 	},
@@ -205,6 +205,9 @@
 		"protobufjs@7.6.6": true
 	},
 	"overrides": {
+		"@stryker-mutator/core": {
+			"minimatch": "$minimatch"
+		},
 		"qs": "^6.15.4",
 		"undici": "^8.12.2"
 	}
