@@ -100,3 +100,87 @@ it("real fake-server documentSymbol timeout is not an empty answer (#5211)", asy
 		fixture.cleanup();
 	}
 }, 5000);
+
+// #5214 F4: definition deadlines must retain local recovery without hiding failure.
+it.each([
+	{ outcome: "hit", token: "greet", hangSymbols: false },
+	{ outcome: "miss", token: "absent", hangSymbols: false },
+	{ outcome: "both timeout", token: "greet", hangSymbols: true },
+])(
+	"definition timeout fallback $outcome (#5214 F4)",
+	async ({ outcome, token, hangSymbols }) => {
+		const fixture = setupTestEnvironment("pi-lens-definition-timeout-");
+		const filePath = path.join(fixture.tmpDir, "definition.ts");
+		const content = `function ${token}() {}\n`;
+		fs.writeFileSync(filePath, content);
+		fs.writeFileSync(path.join(fixture.tmpDir, "package.json"), "{}");
+		fs.writeFileSync(path.join(fixture.tmpDir, "tsconfig.json"), "{}");
+		const proc = await spawnFakeLspServer({
+			cwd: fixture.tmpDir,
+			env: {
+				...process.env,
+				FAKE_LSP_HANG_DEFINITION: "1",
+				FAKE_LSP_HANG_DOCUMENT_SYMBOL: hangSymbols ? "1" : "0",
+			},
+		});
+		const client = await createLSPClient({
+			serverId: "fake-definition-timeout-5214",
+			process: proc,
+			root: fixture.tmpDir,
+		});
+		try {
+			await client.notify.open(filePath, content, "typescript");
+			const service = new LSPService();
+			(
+				service as unknown as { state: { clients: Map<string, unknown> } }
+			).state.clients.set(
+				`typescript:${normalizeMapKey(fixture.tmpDir)}`,
+				client,
+			);
+			expect((await service.getClientForFile(filePath))?.client).toBe(client);
+			const { createLspNavigationTool } =
+				await import("../../../tools/lsp-navigation.js");
+			const { installLspService } =
+				await import("../../support/lsp-service-seam.js");
+			installLspService(service);
+			const result = await createLspNavigationTool(
+				(flag) => flag === "lens-lsp",
+			).execute(
+				"definition-timeout-fallback",
+				{ operation: "definition", path: filePath, line: 1, character: 11 },
+				new AbortController().signal,
+				null,
+				{ cwd: fixture.tmpDir },
+			);
+			const text = String(result.content[0]?.text);
+			const envelope = JSON.parse(text);
+			if (outcome === "hit") {
+				expect(result.isError).not.toBe(true);
+				expect(envelope.notes).toContain(
+					"served from documentSymbol fallback; definition timed out.",
+				);
+				expect(envelope.locations).toMatchObject([
+					{ filePath, range: { start: { line: 1, character: 1 } } },
+				]);
+				expect(text).toContain("definition timed out");
+				expect(text).toContain("definition.ts");
+			} else {
+				expect(result.isError).toBe(true);
+				expect(envelope).toMatchObject({
+					ok: false,
+					status: "timeout",
+					metadata: { method: "textDocument/definition" },
+				});
+			}
+		} finally {
+			try {
+				await client.shutdown();
+			} catch {
+				/* ignore */
+			}
+			await stopLSP(proc);
+			fixture.cleanup();
+		}
+	},
+	5000,
+);

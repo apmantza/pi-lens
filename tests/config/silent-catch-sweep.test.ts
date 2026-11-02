@@ -1348,11 +1348,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :371, :405, :628, :861, :1026, :1084, :1184, :1405, :1452, :2477
 	"tools/lsp-navigation.ts": {
-		silent: 8,
-		identities: "ef7d1e4ae5e87b4b",
+		silent: 9,
+		identities: "0ea45645359d3e6d",
 		reason:
 			PRE_RULE +
-			"; #5211 re-admits the same eight handlers after the terminal tool catch switches from instanceof to the cross-evaluation timeout brand; every arm of that catch still calls finalize, and the real service-route timeout witness plus ordinary-error cases prove delivery. The other seven inherited handlers retain the pre-rule admission.",
+			"; #5211 re-admits the same eight handlers after the terminal tool catch switches from instanceof to the cross-evaluation timeout brand; every arm of that catch still calls finalize, and the real service-route timeout witness plus ordinary-error cases prove delivery. The other seven inherited handlers retain the pre-rule admission. #5214 F4 admits one definition-timeout recovery catch: successful recovery is disclosed in the tool note, while misses and thrown fallbacks rethrow the original deadline to finalize; the real-child hit/miss/double-timeout witnesses prove both delivery outcomes.",
 	}, // :591, :801, :819, :1280, :1697, :1804, :1838, :2024
 	"tools/lsp-structured-output.ts": {
 		silent: 3,
