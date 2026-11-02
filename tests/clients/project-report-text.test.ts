@@ -12,6 +12,7 @@ import {
 } from "../../clients/project-report.js";
 import {
 	_resetReviewGraphBuildAttemptsForTests,
+	_setReviewGraphEntryBudgetForTests,
 	buildOrUpdateGraph,
 	clearReviewGraphWorkspaceCache,
 	flushReviewGraphPersistsForTests,
@@ -37,6 +38,7 @@ afterEach(() => {
 	clearReviewGraphWorkspaceCache();
 	_resetReviewGraphBuildAttemptsForTests();
 	_resetProjectReportBuildGuardForTests();
+	_setReviewGraphEntryBudgetForTests();
 	if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 	else process.env.PILENS_DATA_DIR = previousDataDir;
 });
@@ -470,6 +472,28 @@ describe("projectReport — default text cell strict census (#5150 R2)", () => {
 		const expand = (token: string): string[] =>
 			leaves.filter((leaf) => leaf.endsWith(`.${token}`));
 		expect(declared.flatMap(expand).sort()).toEqual(unrendered);
+	});
+
+	it("renders the entry-budget-truncated graph as a partial note under TRUST", async () => {
+		const env = makeEnv("pi-lens-preport-text-partial-");
+		// The `.git` marker and `src` spend two entries, so 4 leaves room for two
+		// files; at 2 both counts were 0 and a note dropping one still passed.
+		_setReviewGraphEntryBudgetForTests(4);
+		createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;\n");
+		createTempFile(env.tmpDir, "src/b.ts", "export const b = 2;\n");
+		createTempFile(env.tmpDir, "src/c.ts", "export const c = 3;\n");
+		await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+		const report = await projectReport(env.tmpDir);
+		expect(report.available).toBe(true);
+		expect(report.trust?.persistCoverage?.sourceFilesTruncated).toBe(true);
+		const text = renderTextProjectReport(report);
+		const note = linesUnder(text, "TRUST:").find((line) =>
+			line.includes("Partial source walk"),
+		);
+		expect(note).toBe(
+			"  note: Partial source walk: at least 2 source files were represented " +
+				"before the visited-entry budget stopped enumeration; 2 files are in this graph.",
+		);
 	});
 
 	it("ignores unknown fields instead of breaking (planted-key control)", async () => {
