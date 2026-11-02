@@ -188,8 +188,9 @@ and `[]` mean no arguments.
   `read_symbol`). Returns ranked hubs (top fan-in files), entry points,
   subsystem cycles and layering violations, risk hotspots, and low-confidence
   dead weight. `limit` scales every section's cap (default 10), `focus` re-ranks
-  toward a task hint without widening scope, and `view: "compact"` returns a
-  line-oriented text rendering instead of JSON. Read-only: a cold cache returns
+  toward a task hint without widening scope. Returns a line-oriented TEXT
+  report by default; pass `view: "json"` for the full JSON payload. Read-only:
+  a cold cache returns
   `available: false` with a retry hint and starts a non-blocking background
   build. On a project over `maxProjectFiles` that first build records a
   size-skip verdict; later calls name the cap and start no build, so raise it

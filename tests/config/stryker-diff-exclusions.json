@@ -23,6 +23,9 @@
   "tests/mcp/module-report.smoke.test.ts": {
     "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
   },
+  "tests/mcp/project-report-text-parity.smoke.test.ts": {
+    "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
+  },
   "tests/mcp/root-eviction.smoke.test.ts": {
     "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
   },

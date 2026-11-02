@@ -307,6 +307,7 @@
 		"mcp/analyze-cli.test.ts": 2,
 		"mcp/auto-session.smoke.test.ts": 1,
 		"mcp/build-staleness.smoke.test.ts": 1,
+		"mcp/project-report-text-parity.smoke.test.ts": 1,
 		"mcp/session-end.smoke.test.ts": 1,
 		"mcp/turn-end-route.smoke.test.ts": 1,
 		"monorepo/size-cliff.test.ts": 1,
