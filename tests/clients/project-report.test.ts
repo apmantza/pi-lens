@@ -5,7 +5,7 @@ import {
 	_resetProjectReportBuildGuardForTests,
 	_toDisplayPathForTests,
 	projectReport,
-	renderCompactProjectReport,
+	renderTextProjectReport,
 } from "../../clients/project-report.js";
 import {
 	_resetReviewGraphBuildAttemptsForTests,
@@ -220,7 +220,7 @@ describe("projectReport — warm path section shapes", () => {
 		expect(report.available).toBe(true);
 		expect(report.deadWeight!.disclaimer.length).toBeGreaterThan(0);
 
-		const text = renderCompactProjectReport(report);
+		const text = renderTextProjectReport(report);
 		expect(text).toContain("DEAD WEIGHT");
 		expect(text).toContain(report.deadWeight!.disclaimer);
 	});

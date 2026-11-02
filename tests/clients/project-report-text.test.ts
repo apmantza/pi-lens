@@ -449,15 +449,10 @@ describe("projectReport — default text cell strict census (#5150 R2)", () => {
 		const leaves: string[] = [];
 		collectLeafPaths(report, "report", leaves);
 		const unrendered = leaves.filter((leaf) => !RENDERED_LEAVES.has(leaf));
-		// Only navigation-hint repeats and the rendering echo may stay unnamed
-		// in the sections above.
+		// Only navigation-hint repeats may stay unnamed in the sections above.
 		expect(unrendered.sort()).toEqual(
 			leaves
-				.filter(
-					(leaf) =>
-						/(^|\.)suggestedNext\.(tool|path)$/.test(leaf) ||
-						leaf === "report.view",
-				)
+				.filter((leaf) => /(^|\.)suggestedNext\.(tool|path)$/.test(leaf))
 				.sort(),
 		);
 
@@ -473,9 +468,7 @@ describe("projectReport — default text cell strict census (#5150 R2)", () => {
 			.filter(Boolean)
 			.sort();
 		const expand = (token: string): string[] =>
-			token === "view"
-				? ["report.view"]
-				: leaves.filter((leaf) => leaf.endsWith(`.${token}`));
+			leaves.filter((leaf) => leaf.endsWith(`.${token}`));
 		expect(declared.flatMap(expand).sort()).toEqual(unrendered);
 	});
 
