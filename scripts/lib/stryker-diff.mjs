@@ -473,12 +473,15 @@ function rankRangesDeterministically(patterns, seed) {
  * O(log startCount) passes. `startCount` (the uniform-density estimate) is
  * tried first, so a sample the estimate got right costs one pass.
  *
- * When even one range exceeds `allowedMutants` the one-range sample is
- * returned with `exceedsAllowance: true`: a range is the finest unit
- * `--mutate` takes, and the run's wall-clock budget kill still bounds its time.
- * When a count pass fails (`countMutants` returns null) the smallest sample
- * known to fit, else one range, is returned unverified rather than the
- * unchecked estimate.
+ * When even one range exceeds `allowedMutants` (run 41295346200, 2026-11-01:
+ * a retry's one-range sample held 61 mutants against 8, and the budget expired
+ * after 40 of 692), the rest of the ranking is walked one range per count pass
+ * and the first range that alone fits is kept. No returned range exceeds the
+ * allowance. When no range fits, the selection is empty and the caller launches
+ * nothing. When a count pass fails (`countMutants` returns null) the smallest
+ * sample known to fit, else one range, is returned unverified rather than the
+ * unchecked estimate; a count pass that fails during the walk returns an empty,
+ * unverified selection, since the walk has no verified fit to fall back to.
  *
  * @param {{
  *   patterns: string[],
@@ -491,9 +494,9 @@ function rankRangesDeterministically(patterns, seed) {
  *   selected: string[],
  *   mutants: number | null,
  *   passes: number,
- *   exceedsAllowance: boolean,
  *   unverified: boolean,
- * }}
+ * }} `selected` is empty when no range fits; `mutants` is 0 then, or null when
+ *   unverified
  */
 export function fitSampleToMutantAllowance({
 	patterns,
@@ -514,16 +517,14 @@ export function fitSampleToMutantAllowance({
 			sampleRangesDeterministically(patterns, 1, seed).selected,
 		mutants: known?.mutants ?? null,
 		passes,
-		exceedsAllowance: false,
 		unverified: true,
 	});
 	const start = measure(startCount);
 	if (start.mutants === null) return unverified(null);
 	if (start.mutants <= allowedMutants) {
-		return { ...start, passes, exceedsAllowance: false, unverified: false };
+		return { ...start, passes, unverified: false };
 	}
 	let fit = null;
-	let smallest = start;
 	let low = 1;
 	let high = startCount - 1;
 	while (low <= high) {
@@ -534,13 +535,24 @@ export function fitSampleToMutantAllowance({
 			fit = probe;
 			low = mid + 1;
 		} else {
-			smallest = probe;
 			high = mid - 1;
 		}
 	}
-	if (fit)
-		return { ...fit, passes, exceedsAllowance: false, unverified: false };
-	return { ...smallest, passes, exceedsAllowance: true, unverified: false };
+	if (fit) return { ...fit, passes, unverified: false };
+	// #4171: no prefix fits, so the best-ranked range alone exceeds the
+	// allowance. The bisection ended on that one-range probe, so the walk starts
+	// at the second-ranked range and keeps the first that fits by itself.
+	for (const pattern of rankRangesDeterministically(patterns, seed).slice(1)) {
+		passes += 1;
+		const mutants = countMutants([pattern]);
+		if (mutants === null) {
+			return { selected: [], mutants: null, passes, unverified: true };
+		}
+		if (mutants <= allowedMutants) {
+			return { selected: [pattern], mutants, passes, unverified: false };
+		}
+	}
+	return { selected: [], mutants: 0, passes, unverified: false };
 }
 
 /**
@@ -553,13 +565,15 @@ export function fitSampleToMutantAllowance({
  * @returns {string}
  */
 export function describeSampledMutants(fit, allowedMutants) {
+	if (fit.selected.length === 0) {
+		return fit.unverified
+			? `no range verified against the allowance of ${allowedMutants} (a count pass failed; ${fit.passes} count pass(es)); Stryker is not launched`
+			: `no range fits the allowance of ${allowedMutants} (${fit.passes} count pass(es)); Stryker is not launched`;
+	}
 	if (fit.unverified) {
 		return `sampled mutants unverified against the allowance of ${allowedMutants} (a count pass failed; kept ${fit.mutants === null ? "one range" : "the largest sample known to fit"})`;
 	}
-	const counted = `sampled mutants ${fit.mutants} of ${allowedMutants} allowed (${fit.passes} count pass(es))`;
-	return fit.exceedsAllowance
-		? `${counted}; over the allowance because one range alone holds more`
-		: counted;
+	return `sampled mutants ${fit.mutants} of ${allowedMutants} allowed (${fit.passes} count pass(es))`;
 }
 
 /**
@@ -1019,7 +1033,8 @@ export function decideMutationOutcome({
  *   sample?: (patterns: string[], limit: number, seed: string) => {selected: string[]},
  * }} args `sample` picks the retry's ranges; the driver passes the
  *   mutant-bounded `fitSampleToMutantAllowance` so a retry cannot overshoot
- *   the allowance the first sample was held to (#4171)
+ *   the allowance the first sample was held to (#4171). An empty pick, which
+ *   means no untried range fits, gives up the retry.
  * @returns {{retry: false} | {retry: true, patterns: string[]}}
  */
 export function planResample({
@@ -1040,6 +1055,7 @@ export function planResample({
 		Math.min(keepRangeCount, remaining.length),
 		`${seed}:retry${attemptsSoFar}`,
 	);
+	if (selected.length === 0) return { retry: false };
 	return { retry: true, patterns: selected };
 }
 

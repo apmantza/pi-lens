@@ -884,6 +884,24 @@ if (!cost) {
 			seed: sha,
 			countMutants: countSampleMutants,
 		});
+		if (fit.selected.length === 0) {
+			// #4171: no range alone fits the allowance, so nothing is launched.
+			// The zero-mutant outcome is written the way the allowance-0 path
+			// writes it.
+			const reason = describeSampledMutants(fit, allowedMutants);
+			console.log(`mutation diff: no mutants evaluated; ${reason}`);
+			writeReport(
+				null,
+				baseMeta({
+					zeroMutants: { reason },
+					filesSkippedOverCap: skipped,
+					filesUncovered: uncovered,
+					rangesTotal: allPatterns.length,
+					testsRun: tests,
+				}),
+			);
+			process.exit(0);
+		}
 		patterns = fit.selected;
 		sampled = true;
 		console.log(

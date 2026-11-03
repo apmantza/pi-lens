@@ -95,7 +95,6 @@ export type MutantFit = {
 	selected: string[];
 	mutants: number | null;
 	passes: number;
-	exceedsAllowance: boolean;
 	unverified: boolean;
 };
 export declare function fitSampleToMutantAllowance(args: {
