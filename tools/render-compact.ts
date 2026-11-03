@@ -365,12 +365,15 @@ function boundJsonCellPayload<T extends CompactResultLike>(
 	result: T,
 ): { result: T; deliveredBytes: number; truncated: boolean } {
 	const content = result.content ?? [];
-	const textBlocks = content
-		.map((block, index) => ({ block, index }))
-		.filter(
-			(entry) =>
-				entry.block.type === "text" && typeof entry.block.text === "string",
-		);
+	const textBlocks: Array<{
+		block: { type: string; text?: string };
+		index: number;
+	}> = [];
+	for (const [index, block] of content.entries()) {
+		if (block.type === "text" && typeof block.text === "string") {
+			textBlocks.push({ block, index });
+		}
+	}
 	const payload = textBlocks[0];
 	if (!payload) {
 		return { result, deliveredBytes: 0, truncated: false };

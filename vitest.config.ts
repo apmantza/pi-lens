@@ -828,6 +828,10 @@ export const wallClockBudgetInclude = [
 	// removes the contention that makes that race likely.
 	"tests/mcp/project-report-text-parity.smoke.test.ts",
 	"tests/mcp/session-end.smoke.test.ts",
+	// #5159: the stale-cell smoke bumps the stamp file's mtime and settles
+	// before the next tools/call (flake-shape admission); serializing it removes
+	// the contention that makes that mtime race likely.
+	"tests/mcp/stale-json-advisory.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",
 	// #4133: the real pi child environment is the subject of this boundary test;

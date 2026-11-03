@@ -600,6 +600,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the real MCP child builds its own review graph in the background; a fake clock cannot advance that child's build, so the parity compare polls until it serves",
 	},
+	// #5159: the stale-cell smoke bumps the stamp file's mtime and settles
+	// before the next tools/call; the wait is a real clock in the spawned
+	// child's own process, which a fake clock here cannot advance.
+	"raw-timer-wait:mcp/stale-json-advisory.smoke.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the spawned MCP child re-stats the real stamp file; a fake clock in this process cannot advance the child's own stat, so the settle is a real timer",
+	},
 	// 2026-09-15 (#2042 cheapest probe): the sample-tail file is written by the
 	// wrapper's own real setInterval loop in a separate process; a poll waits
 	// for that file's first write rather than a fixed sleep, and one case kills

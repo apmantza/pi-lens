@@ -1,4 +1,5 @@
 // mutation-lane: exclude
+// flake-shape: raw-timer-wait — the spawned MCP child re-stats the real stamp file; a fixed settle clears the filesystem mtime a fake clock cannot advance
 /**
  * #5159 — a stale warm-build advisory must not break a JSON cell.
  *
