@@ -4550,12 +4550,22 @@ function summarySentenceCounts(tokens) {
  * them, so a refusal whose bookkeeping fills the cap does not tell the author
  * to cut prose that is already one sentence (#5215 F5).
  */
-function summaryExcessGroup(groups) {
-	const [label] = groups.reduce(
+function summaryExcessGroup(groups, excess) {
+	const [label, groupSentences] = groups.reduce(
 		(worst, group) => (group[1] > worst[1] ? group : worst),
 		[SUMMARY_SECTION, 0],
 	);
-	return label === SUMMARY_SECTION ? "the summary prose" : label;
+	if (excess > groupSentences) {
+		const labels = groups.map(([groupLabel]) =>
+			groupLabel === SUMMARY_SECTION
+				? "the summary"
+				: groupLabel.replace(/^the /, "").replace(/ line$/, ""),
+		);
+		const last = labels.pop();
+		const listed = labels.length ? `${labels.join(", ")} and ${last}` : last;
+		return `across ${listed} lines`;
+	}
+	return `from ${label === SUMMARY_SECTION ? "the summary prose" : label}`;
 }
 
 /**
@@ -4601,7 +4611,7 @@ function summaryRefusal(tokens, name) {
 		advice.push(
 			bookkeeping > 0 && spare >= 1
 				? `Counted sentences in the "Refs #N", "Remaining #N:" and "Closes #N" lines also count toward the cap, so keep the summary prose to ${counted(spare, "sentence")}`
-				: `Cut ${counted(sentences - SUMMARY_MAX_SENTENCES, "sentence")} from ${summaryExcessGroup(groups)}`,
+				: `Cut ${counted(sentences - SUMMARY_MAX_SENTENCES, "sentence")} ${summaryExcessGroup(groups, sentences - SUMMARY_MAX_SENTENCES)}`,
 		);
 	if (sentences < 1)
 		advice.push(

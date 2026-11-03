@@ -4275,6 +4275,21 @@ describe("body caps (#5003)", () => {
 		]);
 	});
 
+	it("spans groups when no one group can absorb the excess (#5215)", () => {
+		expect(
+			capError(
+				summaryOf([
+					"The refusal names the line. It counts sentences.",
+					"Refs #5208. It stays open now.",
+					"Remaining #5208: one thing. Another thing.",
+				]),
+				"sentences",
+			),
+		).toEqual([
+			`${RULE}: it holds 6 counted sentences (2 in the summary, 2 in the Refs line, 2 in the Remaining line), over the 3-sentence cap. Cut 3 sentences across the summary, Refs and Remaining lines. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
 	it("states the character count of a Summary over the character cap (#5215)", () => {
 		expect(
 			capError(
