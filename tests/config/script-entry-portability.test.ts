@@ -41,11 +41,11 @@ const ROOT = resolve(import.meta.dirname, "../..");
  * the forms below; every other occurrence is a hit:
  *
  * - `process`: a plain member other than `argv` (`process.env`); `argv` read
- *   as `.length`, `.includes(`, `.indexOf(`, `.slice(start` or `[index]`,
- *   where start and index are an integer literal of 2 or more or an
- *   identifier with an optional `+ n`/`- n`; `typeof process`; an object key
- *   (`{ process: ... }`); `import process from`; `.bind(process)`;
- *   `Object.defineProperty(process,`.
+ *   as `.length`, `.slice(start` or `[index]`, where start and index are an
+ *   integer literal of 2 or more or an identifier with an optional `+ n`/`- n`;
+ *   `argv.includes(` or `argv.indexOf(` whose first argument is a whole string
+ *   or template literal; `typeof process`; an object key (`{ process: ... }`);
+ *   `import process from`; `.bind(process)`; `Object.defineProperty(process,`.
  * - `import.meta`: `.url` as an argument of a call in URL_CALLEES (and only
  *   after the first argument of `new URL`), `.dirname` as an argument of
  *   `resolve` or `join`, and `.resolve(`; each call followed by `)`, `,`,
@@ -58,17 +58,26 @@ const ROOT = resolve(import.meta.dirname, "../..");
  *   `import process from`, or an operand of `===` / `!==`.
  *
  * Residuals (admitted forms broader than the rule): an identifier index or
- * slice start can still hold 0 or 1; `.includes` / `.indexOf` can test for
- * the script path; an admitted call's result can be compared one call out
+ * slice start can still hold 0 or 1; a literal search argument can name the
+ * script, and a template literal can interpolate it; an admitted call's
+ * result can be compared one call out
  * (`dirname(fileURLToPath(import.meta.url)) === x`); `.bind(process)` hands
  * a function `this.argv`; code built from strings (`new Function`, a
  * computed `import()` specifier) is not read.
  */
 const INDEX = String.raw`(?:[2-9]|[1-9]\d+|[A-Za-z_$][\w$]*(?:\s*[+-]\s*\d+)?)`;
 const ARGV_TAIL = new RegExp(
-	String.raw`process\s*\.\s*argv\s*(?:\.\s*(?:length\b|includes\s*\(|indexOf\s*\(|slice\s*\(\s*${INDEX}\s*[,)])|\[\s*${INDEX}\s*\])`,
+	String.raw`process\s*\.\s*argv\s*(?:\.\s*(?:length\b|slice\s*\(\s*${INDEX}\s*[,)])|\[\s*${INDEX}\s*\])`,
 	"y",
 );
+/**
+ * `argv.includes(` / `argv.indexOf(` admit a first argument only when it is one
+ * whole string or template literal (the blanked text keeps the delimiters). An
+ * identifier such as `self` is a hit: the search must name a literal, never
+ * the program path (#5228 review G1).
+ */
+const ARGV_SEARCH =
+	/process\s*\.\s*argv\s*\.\s*(?:includes|indexOf)\s*\(\s*(?:"[^"\n]*"|'[^'\n]*'|`[^`]*`)\s*[,)]/y;
 const PLAIN_MEMBER = /\s*\.\s*[A-Za-z_$]/y;
 const URL_CALLEES = new Set([
 	"isMainModule",
@@ -132,6 +141,8 @@ function admitsProcess(text: string, at: number): boolean {
 	const after = text.slice(at, at + 80);
 	ARGV_TAIL.lastIndex = 0;
 	if (ARGV_TAIL.test(after)) return true;
+	ARGV_SEARCH.lastIndex = at;
+	if (ARGV_SEARCH.test(text)) return true;
 	PLAIN_MEMBER.lastIndex = "process".length;
 	if (PLAIN_MEMBER.test(after) && !/^process\s*\.\s*argv\b/.test(after))
 		return true;
@@ -240,8 +251,8 @@ const SYMBOL_KEY_ALIAS =
 	"a typed alias of the global object to reach one Symbol.for registry key; the alias is read only through that key";
 
 /**
- * Single sites admitted outside the seam, matched by their exact source line
- * text; the rest of each file is scanned. The fourth case below reds when a
+ * Single sites admitted outside the seam, matched by their exact trimmed
+ * source line, one hit each; the rest of each file is scanned. The fourth case below reds when a
  * site stops producing the hit it admits.
  */
 export const ADMITTED_SITES: Array<{
@@ -272,9 +283,16 @@ export const ADMITTED_SITES: Array<{
 	},
 ];
 
-function admittedSite(relative: string, line: string): boolean {
-	return ADMITTED_SITES.some(
-		({ file, site }) => file === relative && line.includes(site),
+/** The source line a hit reports, as `line N: <root>: <trimmed line>`. */
+function hitSource(hit: string): string {
+	return hit.replace(/^line \d+: [^:]+: /, "");
+}
+
+/** The site whose exact trimmed line this hit reports, if any. */
+function admittedSite(relative: string, hit: string) {
+	const source = hitSource(hit);
+	return ADMITTED_SITES.find(
+		({ file, site }) => file === relative && source === site,
 	);
 }
 
@@ -292,11 +310,16 @@ export function findPrivateEntryGates(root: string, floor = 116): string[] {
 	// half is 116.
 	assertNonEmptyScan("script entry-gate census", files.length, floor);
 	const offenders: string[] = [];
+	const admitted = new Set<(typeof ADMITTED_SITES)[number]>();
 	for (const absolute of files) {
 		const relative = relativePosix(root, absolute);
 		if (relative === SEAM) continue;
-		for (const hit of scanEntryGate(readFileSync(absolute, "utf8")))
-			if (!admittedSite(relative, hit)) offenders.push(`${relative}: ${hit}`);
+		for (const hit of scanEntryGate(readFileSync(absolute, "utf8"))) {
+			const site = admittedSite(relative, hit);
+			// A site admits one hit: a verbatim copy of its line is a hit.
+			if (site && !admitted.has(site)) admitted.add(site);
+			else offenders.push(`${relative}: ${hit}`);
+		}
 	}
 	return offenders.sort();
 }
@@ -315,8 +338,8 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 	it("every admitted site still produces the hit it admits", () => {
 		for (const { file, site } of ADMITTED_SITES)
 			expect(
-				scanEntryGate(readFileSync(resolve(ROOT, file), "utf8")).filter((hit) =>
-					hit.includes(site),
+				scanEntryGate(readFileSync(resolve(ROOT, file), "utf8")).filter(
+					(hit) => hitSource(hit) === site,
 				),
 				`${file}: ${site}`,
 			).not.toEqual([]);
@@ -405,11 +428,49 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 			"if (fileURLToPath(import.meta.url).endsWith(name)) main();\n",
 			"if (Object.is(import.meta.url, entry)) main();\n",
 			"const here = (import.meta.url);\n",
+			// G1 (#5228 review r3): a search of argv admits only a string or
+			// template literal as its first argument, never an identifier.
+			"if (process.argv.includes(self)) main();\n",
+			"const hit = process.argv.indexOf(self) === 1;\n",
+			"if (process.argv.includes('--x' + self)) main();\n",
+			// The alias of argv, and the indirect call, of the same search.
+			"const argv = process.argv;\nif (argv.includes(self)) main();\n",
+			"const hit = Reflect.apply(Array.prototype.includes, process.argv, [self]);\n",
 		];
 		const passed = offenders.filter(
 			(source) => scanEntryGate(source).length === 0,
 		);
 		expect(passed).toEqual([]);
+	});
+
+	// Recurrence: review G2 on #5228, where a substring match let a same-line
+	// edit or a verbatim duplicate of an admitted line ride its admission. A
+	// site admits one hit, on the line whose trimmed text equals the site.
+	it("admits each site once, on its exact trimmed line", () => {
+		const root = mkdtempSync(resolve(tmpdir(), "pi-lens-entry-sites-"));
+		try {
+			const plant = (rel: string, source: string) => {
+				mkdirSync(resolve(root, rel, ".."), { recursive: true });
+				writeFileSync(resolve(root, rel), source);
+			};
+			const site = "realpathSync.native(process.argv[1]) ===";
+			// The admitted line, then a verbatim copy of it (the copy is a hit).
+			plant(
+				"scripts/hooks/guard-bash.mjs",
+				`if (\n\t${site}\n\tlink\n) run();\nif (\n\t${site}\n\tlink\n) run();\n`,
+			);
+			// The admitted line widened on the same line (a hit).
+			plant(
+				"tests/support/tmp-root-registry.ts",
+				"const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry }; // widened\n",
+			);
+			expect(findPrivateEntryGates(root, 1)).toEqual([
+				"scripts/hooks/guard-bash.mjs: line 6: process: realpathSync.native(process.argv[1]) ===",
+				"tests/support/tmp-root-registry.ts: line 1: globalThis: const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry }; // widened",
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	// Recurrence: a census whose exclusion list admits a whole directory reads
@@ -435,17 +496,17 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 				plant("scripts/lib/is-main-module.mjs", gate);
 				plant(
 					"scripts/hooks/guard-bash.mjs",
-					"if (realpathSync.native(process.argv[1]) === here) main();\n",
+					"if (\n\trealpathSync.native(process.argv[1]) ===\n\tlink\n) run();\n",
 				);
 				plant(
 					"tests/support/kill-guard.ts",
-					"const host = process as typeof process & {};\nconst entry = process.argv[1];\n",
+					"const host = process as typeof process & {\n\tKEY: 1,\n};\nconst entry = process.argv[1];\n",
 				);
 				expect(findPrivateEntryGates(root, 1)).toEqual([
 					"scripts/deep/nested.mjs: line 1: process: if (process.argv[1] === here) main();",
 					"scripts/private.mjs: line 1: process: if (process.argv[1] === here) main();",
 					"tests/support/helper.mjs: line 1: process: if (process.argv[1] === here) main();",
-					"tests/support/kill-guard.ts: line 2: process: const entry = process.argv[1];",
+					"tests/support/kill-guard.ts: line 4: process: const entry = process.argv[1];",
 				]);
 			} finally {
 				rmSync(root, { recursive: true, force: true });
