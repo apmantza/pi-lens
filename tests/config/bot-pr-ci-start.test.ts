@@ -306,7 +306,7 @@ export function botPrFindings(
 // Jobs that carry an opener signal and open no PR. Each reason names what the
 // job does instead. An entry that stops being flagged reds as stale.
 const NON_OPENERS: Record<string, string> = {
-	"ci-infra-kill-rerun.yml:clear-stale-verdict-labels":
+	"ci-verdict-labels.yml:clear-stale-verdict-labels":
 		"edits labels on an existing PR; `gh pr edit` needs pull-requests: write",
 	"ci-infra-kill-rerun.yml:classify":
 		"comments on an existing PR with the classifier verdict; opens none",

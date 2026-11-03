@@ -594,7 +594,10 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 		// regardless of whether stderr said anything.
 		const output = result.stdout || "";
 		if (!output.trim()) {
-			const stderr = (result.stderr || "").trim();
+			// Python tracebacks end with the exception; keep that line in both reports.
+			const stderr = firstOutputLine(
+				(result.stderr || "").trim().split("\n").at(-1),
+			);
 			// Same discriminator every dispatch/runners linter uses
 			// (`spawnFailedWithNoOutput`) rather than a parallel hand-rolled
 			// check (result.error is already handled above, so this reduces to
@@ -605,7 +608,7 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 					tool: "vulture",
 					status: result.status,
 					signal: result.signal,
-					stderr: result.stderr,
+					stderr,
 				});
 				this.log(reason);
 				incrementDegradationCount({
@@ -615,9 +618,7 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 				});
 				return {
 					...emptyResult(this.language),
-					summary: stderr
-						? `vulture error: ${firstOutputLine(stderr)}`
-						: reason,
+					summary: stderr ? `vulture error: ${stderr}` : reason,
 					durationMs,
 				};
 			}

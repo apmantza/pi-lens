@@ -14,7 +14,7 @@
  *
  *   B. **hardcoded dialect/tool-flag argv** — a runner that emits a dialect
  *      selector flag (`--shell`) without routing the value through the
- *      pinned resolver (`resolveShellFileDialect` in shellcheck.ts). The
+ *      pinned resolver (`resolveShellFileDialect` in shell-dialect.ts). The
  *      pre-fix runner hardcoded `--shell bash` on every file — the SC1071 /
  *      bash-semantics defect itself — so the census holds the flag to the
  *      resolver; a new runner gaining a dialect selector reds until it
@@ -199,15 +199,14 @@ describe("#3968 class sweep — dialect/capability ownership over the runners", 
 		// bash-lsp/bash-language-server@server-5.8.1 server/src/shellcheck/config.ts.
 		// A set that silently gains zsh (or loses a member) changes what the
 		// categorical gate skips — exactly the reported defect in reverse.
-		const mod =
-			(await import("../../clients/dispatch/runners/shellcheck.js")) as unknown as {
-				SHELLCHECK_SUPPORTED_DIALECTS: readonly string[];
-				resolveShellFileDialect: (f: string) => {
-					dialect: string;
-					shebang: string | null;
-					directive: string | null;
-				};
+		const mod = (await import("../../clients/shell-dialect.js")) as unknown as {
+			SHELLCHECK_SUPPORTED_DIALECTS: readonly string[];
+			resolveShellFileDialect: (f: string) => {
+				dialect: string;
+				shebang: string | null;
+				directive: string | null;
 			};
+		};
 		expect(mod.SHELLCHECK_SUPPORTED_DIALECTS).toEqual([
 			"sh",
 			"bash",

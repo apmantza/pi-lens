@@ -1680,9 +1680,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		for (const name of [
 			...EXTERNAL_GATING_NAMES,
 			"PR metadata",
-			"actionlint",
-			"markdownlint",
-			"Dependency boundaries",
+			"actionlint & markdownlint",
 			"Changelog fragment (fast-fail)",
 			"Install test (ubuntu-latest)",
 			"Install test (windows-latest)",

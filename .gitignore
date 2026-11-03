@@ -17,6 +17,11 @@ reports/
 .pi-lens-probe-home/
 .harness/
 .pi-subagents/
+# Local agent harness config and Vitest output (never tracked).
+.agents/
+.codex/
+.pi/
+.vitest/
 
 # Session data
 .pisessionsummaries/

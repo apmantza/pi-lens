@@ -69,7 +69,7 @@ function runCruise(): CruiseResult {
 }
 
 /**
- * The violations CI's Dependency boundaries job (`npm run depcruise:check`)
+ * The violations CI's `Lint & type-check` job (`npm run depcruise:check`)
  * would fail on: every violation in the cruise that the known-violations
  * baseline does not list. JSON mode exits 0 whatever it finds, so the
  * caller must read the summary.

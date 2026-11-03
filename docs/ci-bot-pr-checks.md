@@ -35,7 +35,7 @@ came from (#4090), so those rows count.
 
 On a bot-opened PR the dispatch runs are the PR's whole CI, so `ci-verdict`
 also gates every non-`(advisory)` check from a `workflow_dispatch` run on its
-head, such as `Dependency boundaries` and `Production install build`, exactly
+head, such as `actionlint & markdownlint` and `Production install build`, exactly
 as it gates a `pull_request` run. It reads the PR author (the `gh` `is_bot`
 flag, an `app/` or `[bot]` login; the REST user type `Bot`). #4090's advisory
 rule stays for dispatch runs on a human PR, for a bare-SHA target (no author to

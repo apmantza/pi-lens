@@ -1,10 +1,9 @@
 name: Lint
 
-# #1844: mechanical lint batch. Four independent, cheap jobs -- each stays
-# well under a minute and needs no `npm install` (actionlint, vale, and
-# markdownlint-cli2 are self-contained). Kept out of ci.yml so a lint
-# finding never blocks on -- or waits behind -- the full install/build/test
-# lanes. The OSV scan lives in its own osv-scan.yml (see that file for why).
+# #1844: mechanical lint batch. Independent, cheap jobs, kept out of ci.yml so a
+# lint finding never blocks on -- or waits behind -- the full
+# install/build/test lanes. The OSV scan lives in its own osv-scan.yml (see that
+# file for why).
 
 on:
   push:
@@ -28,12 +27,14 @@ concurrency:
 permissions: {}
 
 jobs:
-  actionlint:
-    name: actionlint
+  # #5002: one gating row for the two install-free linters. Every step after the
+  # checkout runs even when the other tool went red, so the row reports both.
+  actionlint-markdownlint:
+    name: actionlint & markdownlint
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 8s; timeout = floor of
-    # 10 min.
+    # Measured max over last 10 successful master runs of the two former jobs:
+    # 8 + 26 = 34s; timeout = floor of 10 min.
     timeout-minutes: 10
     permissions:
       contents: read
@@ -48,6 +49,7 @@ jobs:
       # action (this repo dogfoods actionlint as a runner -- see
       # clients/dispatch/runners -- so lint it with the same rigor).
       - name: Download and verify actionlint v1.7.12 (linux_amd64)
+        if: ${{ !cancelled() }}
         run: |
           set -eu
           curl -sLO --proto '=https' --tlsv1.2 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
@@ -58,7 +60,27 @@ jobs:
       # workflow under .github/workflows/, including a future .yaml
       # extension the glob would silently miss (#1917 review F5).
       - name: Lint workflows
+        if: ${{ !cancelled() }}
         run: ./actionlint -color
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !cancelled() }}
+        with:
+          node-version: "22"
+
+      # SonarCloud S6505 (#1917 review, deferred; fixed here): `npx` can
+      # install AND execute a package's lifecycle scripts. `--ignore-scripts`
+      # closes that vector; `--no-save` keeps this from touching the repo's
+      # real package.json/package-lock.json (verified locally on a bare
+      # checkout -- no node_modules, no prior install -- that both files are
+      # byte-identical to HEAD after this command). Version stays pinned.
+      - name: Install markdownlint-cli2 (no npx, no lifecycle scripts)
+        if: ${{ !cancelled() }}
+        run: npm install --no-save --no-audit --no-fund --ignore-scripts markdownlint-cli2@0.23.2
+
+      - name: Lint markdown
+        if: ${{ !cancelled() }}
+        run: ./node_modules/.bin/markdownlint-cli2
 
   oxfmt:
     name: oxfmt format check
@@ -148,37 +170,6 @@ jobs:
       # who has built locally.
       - name: Run knip
         run: node scripts/run-knip.mjs
-
-  markdownlint:
-    name: markdownlint
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 26s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.ref }}
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: "22"
-
-      # SonarCloud S6505 (#1917 review, deferred; fixed here): `npx` can
-      # install AND execute a package's lifecycle scripts. `--ignore-scripts`
-      # closes that vector; `--no-save` keeps this from touching the repo's
-      # real package.json/package-lock.json (verified locally on a bare
-      # checkout -- no node_modules, no prior install -- that both files are
-      # byte-identical to HEAD after this command). Version stays pinned.
-      - name: Install markdownlint-cli2 (no npx, no lifecycle scripts)
-        run: npm install --no-save --no-audit --no-fund --ignore-scripts markdownlint-cli2@0.23.2
-
-      - name: Lint markdown
-        run: ./node_modules/.bin/markdownlint-cli2
 
   oxlint-advisory:
     name: oxlint (advisory)
