@@ -90,7 +90,7 @@ export const TEST_FIXTURE_ROOT_MARKER =
 
 export function setupTestEnvironment(
 	prefix = "pi-lens-test-",
-	options: { rootMarker?: boolean } = {},
+	options: { rootMarker?: boolean; tmpRoot?: string } = {},
 ): {
 	tmpDir: string;
 	cleanup: () => void;
@@ -100,7 +100,7 @@ export function setupTestEnvironment(
 	// path-utils tests do not compare a pre-realpath spelling with production
 	// output (#5217).
 	const tmpDir = fs.realpathSync.native(
-		fs.mkdtempSync(path.join(os.tmpdir(), prefix)),
+		fs.mkdtempSync(path.join(options.tmpRoot ?? os.tmpdir(), prefix)),
 	);
 	if (options.rootMarker !== false) {
 		fs.mkdirSync(path.join(tmpDir, TEST_FIXTURE_ROOT_MARKER), {

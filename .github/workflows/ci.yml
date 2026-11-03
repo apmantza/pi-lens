@@ -1302,7 +1302,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          count="$(node -e 'try{const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(j.numFailedTests!==0){console.error(`APFS anchors recorded ${j.numFailedTests} failed test file(s)`);process.exit(1)}console.log(j.numPassedTests+j.numFailedTests)}catch{process.exit(1)}' "$RUNNER_TEMP/apfs-anchors.json")"
+          count="$(node -e 'try{const j=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(j.numFailedTests!==0){console.error("APFS anchors recorded "+j.numFailedTests+" failed test file(s)");process.exit(1)}console.log(j.numPassedTests+j.numFailedTests)}catch{process.exit(1)}' "$RUNNER_TEMP/apfs-anchors.json")"
           node scripts/assert-evaluated.mjs --count "apfs-anchors=${count}" --floor 100
 
       - name: Rule catalog report (non-blocking)

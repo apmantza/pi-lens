@@ -100,7 +100,13 @@ export function registerTmpRoot(
 	kind: TmpRootKind,
 	createdBy?: string,
 ): void {
-	const existing = registry.roots.get(dir);
+	let key = dir;
+	try {
+		key = realpathSync.native(dir);
+	} catch {
+		// Synthetic entries in decision tests may not exist yet.
+	}
+	const existing = registry.roots.get(key);
 	if (existing) {
 		// `setupTestEnvironment` creates through `mkdtempSync`, which the
 		// interposer already recorded as observed; the harness claim wins.
@@ -115,7 +121,7 @@ export function registerTmpRoot(
 		registry.dropped += 1;
 		return;
 	}
-	registry.roots.set(dir, { kind, sawAbsent: false, createdBy });
+	registry.roots.set(key, { kind, sawAbsent: false, createdBy });
 }
 
 /** Record a directory a TEST PROCESS created by name directly under the

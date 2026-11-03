@@ -583,6 +583,29 @@ describe("tmp-root registry wiring in the shared setup (#2912)", () => {
 		}
 	});
 
+	it("folds an aliased setup root into one native registry entry (#5217)", () => {
+		// #5217: on macOS, os.tmpdir() can spell the same root as /var while
+		// native realpath returns /private/var. Keep the interposer's observation
+		// and setupTestEnvironment's registration as one cleanup record.
+		const realTmp = os.tmpdir();
+		const alias = path.join(realTmp, `pi-lens-5217-tmp-alias-${process.pid}`);
+		fs.symlinkSync(realTmp, alias, "dir");
+		const env = setupTestEnvironment("pi-lens-5217-setup-", {
+			tmpRoot: alias,
+		});
+		try {
+			const matching = [...getTmpRootRegistry().roots.entries()].filter(
+				([dir]) => path.basename(dir) === path.basename(env.tmpDir),
+			);
+			expect(matching).toEqual([
+				[env.tmpDir, expect.objectContaining({ kind: "registered" })],
+			]);
+		} finally {
+			env.cleanup();
+			fs.unlinkSync(alias);
+		}
+	});
+
 	it("shares one registry across re-evaluated module copies", async () => {
 		const before = getTmpRootRegistry();
 		vi.resetModules();
