@@ -1248,7 +1248,7 @@ export default defineConfig({
 				test: {
 					name: "wall-clock-budget",
 					include: wallClockBudgetInclude,
-					exclude: sharedExclude,
+					exclude: [...sharedExclude, ...unitOnlyExclude],
 					globalSetup: sharedGlobalSetup,
 					setupFiles: sharedSetupFiles,
 					execArgv: sharedExecArgv,

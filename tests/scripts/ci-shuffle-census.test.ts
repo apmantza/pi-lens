@@ -473,7 +473,10 @@ describe("census plan against vitest collection", () => {
 			unplanned: [],
 		});
 		// Not vacuous: a file the plan leaves out is named, and the same config
-		// under `npm run test:unit` names the files that switch excludes.
+		// under `npm run test:unit` drops exactly the files `test:integration`
+		// names, whichever project lists them (#5227: a move into
+		// wall-clock-budget, which lacked the unit-only exclude, ran the real-LSP
+		// integration suite under `test:unit`).
 		const [first, ...rest] = files;
 		expect(
 			collectionGaps(planCensus(rest), everything, collects).unplanned,
@@ -483,7 +486,14 @@ describe("census plan against vitest collection", () => {
 			everything,
 			vitestCollector(await realConfig("test:unit")),
 		);
-		expect(unit.uncollected.length).toBeGreaterThan(0);
+		const integration = (
+			JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"))
+				.scripts["test:integration"] as string
+		)
+			.split(/\s+/)
+			.filter((word) => word.endsWith(".test.ts"));
+		expect(integration.length).toBeGreaterThan(0);
+		expect([...unit.uncollected].sort()).toEqual([...integration].sort());
 		expect(unit.unplanned).toEqual([]);
 	});
 });
