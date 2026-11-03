@@ -125,9 +125,11 @@ and `[]` mean no arguments.
   (`tools/lsp-navigation.ts` operation description). Position-based operations
   accept a `path`/`line`/`character` triple. `documentSymbol` accepts a `kinds`
   filter (e.g. `function`, `class`) and a `maxResults` cap (default 20, max 100)
-  to keep large files bounded. A request that outlasts its per-request deadline
-  (10 s by default) returns an error result that says the LSP request timed
-  out, never an empty list, so a slow server is not read as "no references".
+  to keep large files bounded. A navigation request that outlasts its
+  per-request deadline (10 s by default) returns an error result that says the
+  LSP request timed out, never an empty list, so a slow server is not read as
+  "no references". `executeCommand` has its own 30 s deadline and reports a
+  timeout as `executed: false` with a reason.
   A timed-out `definition` still tries the `documentSymbol` fallback and
   discloses the timeout in a note when the fallback answers. Full per-operation
   parameter reference:
