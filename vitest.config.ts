@@ -88,7 +88,10 @@ const sharedExclude = [
 // OS — unlike an inline `FOO=1 …` prefix, which cmd.exe cannot parse.
 // `test:integration` names these same two files positionally in package.json
 // (a positional filter DOES survive) — keep the two lists in step.
-const integrationInclude = [
+// EXPORTED so tests/config/lsp-spawn-heavy-coverage.test.ts can count these
+// files as scanned under `test:unit`, where this list is removed from
+// collection (#5227 round 3).
+export const integrationInclude = [
 	"tests/clients/lsp/integration.test.ts",
 	"tests/index-integration.test.ts",
 ];
