@@ -149,6 +149,8 @@ pi-lens enforces a **read-before-edit** policy on all file writes and edits. Bef
 
 Coverage is tracked across multiple reads: two reads of lines 1–100 and 101–200 together satisfy a full-file write. Symbol-expanded reads (small reads widened to the enclosing symbol via tree-sitter, labelled with a leading note) count toward coverage at the symbol level. Markdown files generate a warning instead of blocking (edits outside the section-expanded read range are warned, not silently passed). Plain-text (`.txt`) and log (`.log`) files remain fully exempt.
 
+A provider extension's display-only replay of work that already ran is not guarded. pi-cursor-sdk replays Cursor's native edits as tool calls whose ids start with `cursor-replay-`; the files were written before the replay arrived, so an "Edit without read" refusal would protect nothing and only turn the replayed card into an error. Such a call is never checked by the read guard, never taught to pi-lens as a mutating tool name, and never recorded as the agent's own write. A real `edit` or `write` call and Cursor's real bridged executions (`cursor-pi-bridge-*`) are checked as usual.
+
 Override for a single edit: `/lens-allow-edit <path>`
 
 Configure behavior with `--no-read-guard` to disable it entirely, or use the
