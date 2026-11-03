@@ -298,7 +298,7 @@ export function main(argv = process.argv.slice(2)) {
 				])
 			: null,
 		astgrep: run(root, "npm", ["run", "astgrep:self-scan"]),
-		// #4344 r2: CI's Dependency boundaries job, so a boundary violation
+		// #4344 r2: the boundary check in CI's Lint & type-check, so a violation
 		// reds the lane before the push rather than after it.
 		depcruise: run(root, "npm", ["run", "depcruise:check"]),
 	};

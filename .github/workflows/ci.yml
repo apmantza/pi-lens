@@ -122,35 +122,6 @@ jobs:
           npm_pin="$(node -p "require('./package.json').packageManager.replace(/^npm@/, '')")"
           npx -y "npm@${npm_pin}" install --strict-allow-scripts --no-audit --no-fund
 
-  dependency-boundaries:
-    name: Dependency boundaries
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over last 10 successful master runs: 23s; timeout = floor of
-    # 10 min.
-    timeout-minutes: 10
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.ref }}
-          persist-credentials: false
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund --ignore-scripts
-
-      - name: Build compiled clients
-        run: npm run build
-
-      - name: Check client dependency boundaries
-        run: npm run depcruise:check
-
   # #1844: the changelog-fragment format error hit four PRs in one day, each
   # costing a full ~4-minute Unit-tests lap to discover. This job runs ONLY
   # the fragment parser (no `npm install`, no `npm run build` -- it is pure
@@ -420,6 +391,16 @@ jobs:
       # under the SAME language and the twin's JS coverage was silently dead.
       - name: ast-grep rule pair audit
         run: npm run audit:astgrep-rule-pairs
+
+      # #5002: was its own `Dependency boundaries` row. `!cancelled()` keeps it
+      # reporting after a lint red, as the separate job did.
+      - name: Build compiled clients
+        if: ${{ !cancelled() }}
+        run: npm run build
+
+      - name: Check client dependency boundaries
+        if: ${{ !cancelled() }}
+        run: npm run depcruise:check
 
   # #4397: a test file that depends on case order or on a sibling file passes
   # in CI's file order and reds on a reorder or a shard split (#4390, #4391).

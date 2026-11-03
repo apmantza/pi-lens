@@ -1,0 +1,33 @@
+name: CI verdict labels
+
+# Own file (#5002): on ci-infra-kill-rerun.yml this pull_request trigger posted
+# that workflow's two workflow_run jobs as skipped rows on every pushed PR head.
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions: {}
+
+jobs:
+  clear-stale-verdict-labels:
+    name: Clear stale CI verdict labels
+    # Fork pull_request runs receive a read-only GITHUB_TOKEN. Stale labels on
+    # those PRs are acceptable because this bookkeeping check is advisory and
+    # no label state affects the correctness gate (#2993).
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # refs #3123: bounds a hang against GitHub's 360-min default. This job
+    # requires a pull_request synchronize event so --branch master matched
+    # none; measured max over the last 9 successful runs regardless of branch:
+    # 8s; timeout = floor of 10 min.
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Clear labels from the previous head
+        shell: bash
+        run: gh pr edit "$PR_NUMBER" --remove-label 'ci:infra' --remove-label 'ci:real'

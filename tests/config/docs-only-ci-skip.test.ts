@@ -286,7 +286,7 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 		expect(results[TLA_SHARDS]).toBe("skipped");
 		for (const id of [
 			"changes",
-			"dependency-boundaries",
+			"lint-and-typecheck",
 			"changelog-fragment-fastfail",
 			...TEST_JOBS,
 		]) {
