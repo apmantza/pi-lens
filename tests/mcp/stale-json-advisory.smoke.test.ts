@@ -191,7 +191,7 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		);
 	}, 60_000);
 
-	it("stale: an lsp_navigation envelope parses in block 0 and the advisory rides a trailing block", async () => {
+	it("stale: an lsp_navigation envelope parses in block 0 and the advisory rides a trailing block", async (ctx) => {
 		await initialize(staleHarness, 40, "stale-lsp-nav");
 		await armStale();
 		const res = await staleHarness.request(41, "tools/call", {
@@ -206,12 +206,16 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 			// #5159 D6: the parse invariant covers non-error cells only. This lane
 			// refuses tool installs, so the tool answers an error envelope and
 			// `withStaleWarning` skips error cells, so no advisory is delivered.
-			// Pin that shape; the live envelope is covered by lsp-spawn-heavy.
+			// Pin that shape, then skip visibly: the advisory-placement checks
+			// below did not run here; the live envelope is covered by
+			// lsp-spawn-heavy.
 			const errorBlocks = blockTexts(result);
 			expect(errorBlocks).toHaveLength(1);
 			expect(errorBlocks[0]).toMatch(/\n\nresult error\n/);
 			expect(errorBlocks[0]).not.toContain(ADVISORY_PREFIX);
-			return;
+			return ctx.skip(
+				"lsp_navigation answered an error envelope (tool installs refused); advisory placement is covered by lsp-spawn-heavy",
+			);
 		}
 		const blocks = blockTexts(result);
 		expect(blocks).toHaveLength(2);
