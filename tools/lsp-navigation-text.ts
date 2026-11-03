@@ -35,17 +35,10 @@ import {
 	createProjectRelativePathResolver,
 	uriToDiskPath,
 } from "../clients/path-utils.js";
+import { SEVERITY_NAMES } from "./lsp-diagnostics.js";
 import { lspNavigationTextSurround } from "./lsp-structured-output.js";
 
 type Rec = Record<string, unknown>;
-
-/** LSP `DiagnosticSeverity` (1..4) as the lowercase word Neovim prints. */
-const SEVERITY_LABELS: Record<number, string> = {
-	1: "error",
-	2: "warning",
-	3: "information",
-	4: "hint",
-};
 
 function rec(value: unknown): Rec | undefined {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -73,13 +66,15 @@ function stringArray(value: unknown): string[] {
 	);
 }
 
-function kindLabel(kind: unknown): string {
-	const value = num(kind);
-	// Navigation keeps a plain "symbol" fallback for an unknown kind rather than
-	// the `lsp-symbol-<n>` form the diagnostics path uses.
-	return value === undefined
-		? "symbol"
-		: (SYMBOL_KIND_NAMES[value] ?? "symbol");
+/**
+ * Single source of truth for LSP SymbolKind names (#883 doctrine; the
+ * Sonar-flagged duplicate table lived in `lsp-navigation.ts`). Navigation keeps
+ * its own "symbol" fallback for unknown kinds instead of the `lsp-symbol-<n>`
+ * form the diagnostics path uses. Lives here, not in `lsp-navigation.ts`, so
+ * the text renderer does not import the module that imports it.
+ */
+export function symbolKindLabel(kind: number | undefined): string {
+	return kind == null ? "symbol" : (SYMBOL_KIND_NAMES[kind] ?? "symbol");
 }
 
 /**
@@ -144,7 +139,7 @@ function symbolLine(entry: Rec, display: Display): string | undefined {
 	const line = locationLine(uri, range, display);
 	if (!line) return undefined;
 	const name = str(entry.name);
-	return name ? `${line}  ${kindLabel(entry.kind)} ${name}` : line;
+	return name ? `${line}  ${symbolKindLabel(num(entry.kind))} ${name}` : line;
 }
 
 function renderLocations(
@@ -258,8 +253,8 @@ function renderDocumentSymbols(
 			const end = endLine(range);
 			const name = str(entry.name) ?? "";
 			const label = start
-				? `${start.line}-${end ?? start.line} ${kindLabel(entry.kind)} ${name}`
-				: `${kindLabel(entry.kind)} ${name}`;
+				? `${start.line}-${end ?? start.line} ${symbolKindLabel(num(entry.kind))} ${name}`
+				: `${symbolKindLabel(num(entry.kind))} ${name}`;
 			lines.push(`${"  ".repeat(depth + 1)}${label}`.trimEnd());
 			const children = arr(entry.children);
 			if (children.length > 0) visit(children, depth + 1);
@@ -282,11 +277,16 @@ function renderFindSymbols(
 		const entry = rec(item);
 		if (!entry) continue;
 		const depth = num(entry.depth) ?? 1;
-		const line = num(entry.line);
-		const character = num(entry.character) ?? 1;
-		const where =
-			line === undefined ? header : `${header}:${line}:${character}`;
-		const kind = str(entry.kind) ?? kindLabel(entry.kindCode);
+		// A hierarchical answer carries `line`/`character`; a flat
+		// SymbolInformation answer (the shape pi-lens asks for, since it never
+		// declares hierarchicalDocumentSymbolSupport) only has `location.range`.
+		const ownLine = num(entry.line);
+		const at =
+			ownLine === undefined
+				? startOf(rec(entry.location)?.range)
+				: { line: ownLine, character: num(entry.character) ?? 1 };
+		const where = at ? `${header}:${at.line}:${at.character}` : header;
+		const kind = str(entry.kind) ?? symbolKindLabel(num(entry.kindCode));
 		const name = str(entry.name) ?? "";
 		lines.push(`${"  ".repeat(depth)}${where}  ${kind} ${name}`.trimEnd());
 	}
@@ -505,8 +505,7 @@ function renderWorkspaceDiagnostics(
 			const entry = rec(diagnostic);
 			if (!entry) continue;
 			const start = startOf(entry.range);
-			const severity =
-				SEVERITY_LABELS[num(entry.severity) ?? 0] ?? "diagnostic";
+			const severity = SEVERITY_NAMES[num(entry.severity) ?? 0] ?? "diagnostic";
 			const message = (str(entry.message) ?? "").replace(/\s+/g, " ").trim();
 			const code = diagnosticCode(entry.code);
 			const location = start

@@ -44,7 +44,10 @@ import {
 } from "../clients/lsp/capabilities.js";
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
 import { buildLspNavigationEnvelope } from "./lsp-structured-output.js";
-import { renderLspNavigationText } from "./lsp-navigation-text.js";
+import {
+	renderLspNavigationText,
+	symbolKindLabel,
+} from "./lsp-navigation-text.js";
 import {
 	applyProbeFindingPolicy,
 	describePrimaryUnavailable,
@@ -57,7 +60,6 @@ import {
 	formatCacheAgeLabel,
 } from "../clients/finding-delivery-gate.js";
 import { disabledPrimaries } from "../clients/lsp/session-roots.js";
-import { SYMBOL_KIND_NAMES } from "../clients/lsp-document-symbols.js";
 import {
 	detectPythonTargetVersion,
 	isJediCompileVerdict,
@@ -419,13 +421,6 @@ type SymbolMatch = {
 	location?: { uri: string; range: Record<string, unknown> };
 	range?: Record<string, unknown>;
 };
-
-function symbolKindLabel(kind: number | undefined): string {
-	// Single source of truth for LSP SymbolKind names (#883 doctrine; the
-	// Sonar-flagged duplicate table lived here). Navigation keeps its own
-	// "symbol" fallback for unknown kinds instead of the lsp-symbol-<n> form.
-	return kind == null ? "symbol" : (SYMBOL_KIND_NAMES[kind] ?? "symbol");
-}
 
 function rangeStart(range: Record<string, unknown> | undefined): {
 	line?: number;
@@ -2226,12 +2221,6 @@ export function createLspNavigationTool(
 					details: {
 						operation,
 						supported,
-						// #5224 review G1: the text view prints each item as a
-						// `callHierarchyItem:` line; the details carry them unchanged so a
-						// caller can traverse without parsing the line.
-						...(operation === "prepareCallHierarchy" && Array.isArray(result)
-							? { callHierarchyItems: result }
-							: {}),
 						searchReads: searchReads.length > 0 ? searchReads : undefined,
 						emptyReason: isEmpty
 							? emptyReasonForOperation(operation)

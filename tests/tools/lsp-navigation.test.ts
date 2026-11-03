@@ -3100,7 +3100,6 @@ describe("lsp_navigation default text view", () => {
 		// A display line alone left nothing to pass to the traversal calls, and a
 		// second prepare can answer a different item (#5224 review G1).
 		expect(lines[1]).toBe(`callHierarchyItem: ${JSON.stringify(prepared)}`);
-		expect(result.details?.callHierarchyItems).toEqual([prepared]);
 
 		// The emitted item is the operand: parsing the line and passing it back
 		// reaches the caller, `data` included.
@@ -3163,6 +3162,38 @@ describe("lsp_navigation default text view", () => {
 		});
 		expect(text.split("\n")[0]).toBe(tmpPath("sample.ts"));
 		expect(text).toContain(":1:10  function run");
+	});
+
+	it("keeps the line:col for a flat SymbolInformation findSymbol answer", async () => {
+		// Recurrence: #5224 review F1. pi-lens never declares
+		// hierarchicalDocumentSymbolSupport, so servers answer flat
+		// SymbolInformation (position only in `location.range`) and the text
+		// printed `path  function helper` with no line:col. The hierarchical
+		// fixture above never saw that shape.
+		(
+			mocked.service as { documentSymbol: ReturnType<typeof vi.fn> }
+		).documentSymbol = vi.fn().mockResolvedValue([
+			{
+				name: "helper",
+				kind: 12,
+				location: {
+					uri: tmpFileUrl("sample.ts"),
+					range: {
+						start: { line: 7, character: 4 },
+						end: { line: 8, character: 35 },
+					},
+				},
+			},
+		]);
+		const text = await runText("text-find-symbol-flat", {
+			operation: "findSymbol",
+			path: tmpPath("sample.ts"),
+			query: "helper",
+		});
+		expect(text.split("\n")).toEqual([
+			tmpPath("sample.ts"),
+			`  ${tmpPath("sample.ts")}:8:5  function helper`,
+		]);
 	});
 
 	it("renders rename as its preview summary", async () => {
@@ -3471,6 +3502,55 @@ describe("lsp_navigation default text view", () => {
 				searchReads: [
 					{ file: tmpPath("sample.ts"), startLine: 12, endLine: 12 },
 				],
+				resultCount: 1,
+			},
+		};
+		expect(String(result.content[0]?.text)).toBe(JSON.stringify(expected));
+	});
+
+	it('answers prepareCallHierarchy view:"json" with the master envelope bytes', async () => {
+		// Recurrence: #5224 review F3. The text view added
+		// `metadata.callHierarchyItems`, a second copy of `result`, to the JSON
+		// envelope (864 -> 1137 bytes on a real server), so view:"json" was no
+		// longer byte-identical to the pre-text default. The expected object is
+		// the master envelope for this call: master built `details` without the
+		// key, so its metadata held operation, supported and resultCount only.
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-json-bytes-prepare",
+			{
+				operation: "prepareCallHierarchy",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+				view: "json",
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const item = callItem("run", tmpFileUrl("sample.ts"), 11);
+		const expected = {
+			tool: "lsp_navigation",
+			operation: "prepareCallHierarchy",
+			ok: true,
+			status: "success",
+			filePath: tmpPath("sample.ts"),
+			resultCount: 1,
+			result: [item],
+			locations: [
+				{
+					uri: tmpFileUrl("sample.ts"),
+					filePath: tmpPath("sample.ts"),
+					range: {
+						start: { line: 12, character: 1 },
+						end: { line: 12, character: 6 },
+					},
+				},
+			],
+			metadata: {
+				operation: "prepareCallHierarchy",
+				supported: null,
 				resultCount: 1,
 			},
 		};
