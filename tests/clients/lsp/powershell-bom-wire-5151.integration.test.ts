@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #5151: the bytes of a PowerShell BOM file that actually leave the process.
  *

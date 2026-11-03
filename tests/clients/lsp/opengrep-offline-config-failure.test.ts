@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #4764: an offline opengrep reads as a clean scan; its rule-download error is
  * unhandled.

@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #2436 regression: `tests/fixtures/fake-lsp-server.mjs` used to have no
  * lifetime bound of its own — only whatever `afterEach`/kill the spawning

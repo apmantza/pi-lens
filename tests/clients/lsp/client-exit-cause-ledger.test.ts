@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #1969: an LSP child that closes unprompted leaves a CAUSE record.
  *

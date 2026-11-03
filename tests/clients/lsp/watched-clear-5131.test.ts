@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #5131: pi-lens's own first-open `workspace/didChangeWatchedFiles` made a
  * recompile-from-disk server (groovy-language-server) publish an EMPTY set a

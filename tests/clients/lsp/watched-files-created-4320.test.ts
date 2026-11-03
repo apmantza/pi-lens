@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #4320: Pyrefly keeps a failed `import new_module` lookup after the module is
  * created, and only a `workspace/didChangeWatchedFiles` Created (1) clears it —

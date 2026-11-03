@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #3501 over the real wire: a SIGKILLed server's touch-debounce entry does
  * not stop its respawned replacement from receiving the document.

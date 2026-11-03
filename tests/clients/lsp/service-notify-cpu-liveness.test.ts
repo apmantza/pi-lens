@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #2358 — the notify-stall breaker must not kill a BUSY server. These tests run
  * a REAL auxiliary LSP child over real stdio and real process CPU sampling; the

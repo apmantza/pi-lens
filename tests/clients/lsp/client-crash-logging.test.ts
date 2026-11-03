@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #615-followup dogfooding: an ast-grep client died 5 times mid-sweep in a real
  * project and NOTHING in latency.log recorded why — no exit code, no signal,

@@ -136,6 +136,38 @@ function isLspSpawnHeavy(source: string): boolean {
  * reds any exemption whose file stops being a candidate (#1735).
  */
 const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
+	"tests/tools/lsp-navigation-rename-first-open.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	["tests/support/fake-lsp-" + "server.test.ts"]:
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/opaque-mutation-scan.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/watched-files-created-4320.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/watched-clear-5131.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/opengrep-offline-config-failure.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/opengrep-new-file-4787.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/opengrep-late-empty-4786.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/navigation-timeout.integration.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/integration.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	["tests/clients/lsp/fake-lsp-" + "server-parent-watchdog.test.ts"]:
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/did-save-notification.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/crash-respawn-debounce-wire.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/config-section-answers-4758.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/clangd-lazy-indexing.test.ts":
 		"launches a real clangd child only when the binary is present (skipped otherwise); asserts lazy-indexing flags, not a contended diagnostics budget",
 	"tests/clients/lsp/client-crash-logging.test.ts":

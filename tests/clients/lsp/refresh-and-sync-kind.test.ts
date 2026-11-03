@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #1669: `workspace/diagnostic/refresh` handler + negotiated
  * `textDocumentSync.change` kind honored on outgoing `didChange`.

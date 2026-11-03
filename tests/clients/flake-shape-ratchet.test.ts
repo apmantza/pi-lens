@@ -78,6 +78,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import vitestConfig, { realHarnessInclude } from "../../vitest.config.ts";
 import {
+	AST_GREP_SPAWN_EXEMPTIONS,
 	admissionHeader,
 	countsByDetector,
 	type DetectorName,
@@ -649,6 +650,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-21 (#4713 R11): real `bash -c` is the oracle for which
 	// directory each generated spelling enters and where its redirect lands;
 	// the generator exists because hand-written expectations missed spellings.
+	"real-process-spawn:clients/ast-grep-replace-descendant-kind.e2e.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real sg execution proves CLI match behavior; a runner stub cannot exercise the binary.",
+	},
 	"real-process-spawn:clients/bash-word-composition.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -786,10 +792,56 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"six real Node writers must rendezvous on an OS barrier and contend through the production cross-process lock; an in-process double cannot reproduce the race",
 	},
+	"real-process-spawn:clients/lsp/client-crash-logging.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/client-exit-cause-ledger.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/client-retention-process-scope.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/config-section-answers-4758.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/crash-respawn-debounce-wire.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/did-save-notification.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	["real-process-spawn:clients/lsp/fake-lsp-" +
+	"server-parent-watchdog.test.ts"]: {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
 	"real-process-spawn:clients/lsp/headless-tool-call-keepalive.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"a real child's exit code is the observation; no in-process double can watch an event loop decide to drain",
+	},
+	"real-process-spawn:clients/lsp/initialize-timeout-backstop.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/integration.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
 	"real-process-spawn:clients/lsp/kill-process-tree-real-child.test.ts": {
 		detector: "real-process-spawn",
@@ -801,10 +853,72 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real Lean elaboration and diagnostic publication require Lake and elan across the child-process boundary; the serialized wall-clock lane isolates the handshake and diagnostic wait",
 	},
+	"real-process-spawn:clients/lsp/liveness-probe-capability-gate.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/navigation-timeout.integration.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/opengrep-late-empty-4786.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/opengrep-new-file-4787.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/opengrep-offline-config-failure.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
 	"real-process-spawn:clients/lsp/partial-message-timer.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"#5169 requires natural exit of a separate Node host after a real LSP truncated message",
+	},
+	"real-process-spawn:clients/lsp/powershell-bom-wire-5151.integration.test.ts":
+		{
+			detector: "real-process-spawn",
+			reason:
+				"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+		},
+	"real-process-spawn:clients/lsp/refresh-and-sync-kind.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/service-notify-cpu-liveness.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/service-notify-inflight-throttle-real-stream.test.ts":
+		{
+			detector: "real-process-spawn",
+			reason:
+				"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+		},
+	"real-process-spawn:clients/lsp/service-rename-file.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/shutdown-live-wedged-process.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/teardown-logging.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
 	"real-process-spawn:clients/lsp/unheld-module-pyright-4742.integration.test.ts":
 		{
@@ -820,6 +934,22 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// child so the spawn budget can kill a spinning rule; the kill, the late-throw
 	// exit and the fresh import of an edited config are properties of a real
 	// node process, driven through the runner's own spawn seam.
+	"real-process-spawn:clients/lsp/watched-clear-5131.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/watched-files-created-4320.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts":
+		{
+			detector: "real-process-spawn",
+			reason:
+				"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+		},
 	"real-process-spawn:clients/markdownlint-api.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -835,6 +965,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the resolver verdict runRebuild acts on comes from the real package-manager lookup spawning the real which and executable stand-in managers on PATH; a doubled resolver hands each case the manager it then asserts on",
 	},
+	"real-process-spawn:clients/memory-sampler-root-discriminator.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/memory-sampler.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
 	"real-process-spawn:clients/metrics-history-stderr.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -847,6 +987,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the subject is the real git status children a captured tool call spawns, counted at the spawn boundary; a stubbed git answers only the count it was given",
+	},
+	"real-process-spawn:clients/opaque-mutation-scan.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
 	"real-process-spawn:clients/project-data-dir-slug.test.ts": {
 		detector: "real-process-spawn",
@@ -1447,6 +1592,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the helper's real git fixture, node_modules symlink state, and unlink-before-remove ordering are the subject; an in-process double restates none of them",
 	},
+	["real-process-spawn:support/fake-lsp-" + "server.test.ts"]: {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
 	"real-process-spawn:support/fault-injection.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1489,6 +1639,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// 2026-10-15 (#4485): the cascade's silent-push wait, turn_end's registry
 	// peek and the expiry read each read a language-server client's publish
 	// state; a real server cannot be made to publish or stay silent on demand.
+	"real-process-spawn:tools/ast-grep-outline.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real sg execution proves CLI match behavior; a runner stub cannot exercise the binary.",
+	},
+	"real-process-spawn:tools/lsp-navigation-rename-first-open.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
 	"service-double:clients/cascade-compute.test.ts::LSPClientInfo": {
 		detector: "service-double",
 		reason:
@@ -2600,6 +2760,71 @@ describe("flake-shape scan — real-process-spawn", () => {
 			"await safeSpawnAsync(command, args);",
 		].join("\n");
 		expect(scanRealProcessSpawn("fixture.test.ts", source)).toHaveLength(1);
+	});
+});
+
+describe("#5100 known real-spawn routes", () => {
+	const fakeModule = ["fake", "lsp", "server"].join("-");
+	// Census keys are relative to tests/, including exemption identities.
+	it("uses tests-relative exemption keys with a checked reason", () => {
+		for (const [file, reason] of Object.entries(AST_GREP_SPAWN_EXEMPTIONS)) {
+			expect(file.startsWith("tests/")).toBe(false);
+			expect(reason.length).toBeGreaterThan(15);
+			const source = fs.readFileSync(
+				path.join(repoRoot, "tests", file),
+				"utf8",
+			);
+			expect(
+				scanRealProcessSpawn("unexempted.test.ts", source).some((hit) =>
+					hit.reason.includes("AstGrepClient"),
+				),
+			).toBe(true);
+			expect(
+				scanRealProcessSpawn(file, source).some((hit) =>
+					hit.reason.includes("AstGrepClient"),
+				),
+			).toBe(false);
+		}
+	});
+	it("flags an unfamiliar client use at construction", () => {
+		expect(
+			scanRealProcessSpawn(
+				"new.test.ts",
+				"new AstGrepClient().futureMethod();",
+			),
+		).toHaveLength(1);
+	});
+	it.each([
+		`import { spawnFakeLspServer as launch } from "../support/${fakeModule}.js"; launch();`,
+		`import * as server from "../support/${fakeModule}.js"; Reflect.apply(server.spawnFakeLspServer, null, []);`,
+		`import { spawnFakeLspServer } from "../support/${fakeModule}.js"; const launch = spawnFakeLspServer; launch();`,
+	])("flags the fake-server import through another spelling: %s", (source) => {
+		expect(scanRealProcessSpawn("new.test.ts", source).length).toBeGreaterThan(
+			0,
+		);
+	});
+	it("ignores prose and a mocked fake-server module", () => {
+		expect(
+			scanRealProcessSpawn(
+				"new.test.ts",
+				"// new AstGrepClient(); spawnFakeLspServer();",
+			),
+		).toEqual([]);
+		expect(
+			scanRealProcessSpawn(
+				"new.test.ts",
+				`vi.mock("../support/${fakeModule}.js"); import { spawnFakeLspServer } from "../support/${fakeModule}.js"; spawnFakeLspServer();`,
+			),
+		).toEqual([]);
+	});
+
+	// Recurrence: the static census missed these real child routes entirely.
+	it.each([
+		"clients/lsp/navigation-timeout.integration.test.ts",
+		"tools/ast-grep-outline.test.ts",
+	])("detects the repository caller %s", (file) => {
+		const source = fs.readFileSync(path.join(repoRoot, "tests", file), "utf8");
+		expect(scanRealProcessSpawn(file, source).length).toBeGreaterThan(0);
 	});
 });
 

@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
 /**
  * #2332: exercise the #2272 sweep bracket through a real JSON-RPC connection.
  * The fake server is programmable, but client creation, framing, capability
