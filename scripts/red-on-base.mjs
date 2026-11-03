@@ -12,7 +12,6 @@ import {
 } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import { scratchHomeEnv } from "./lib/scratch-home-env.mjs";
 import {
@@ -22,6 +21,7 @@ import {
 	sweepScratchDirs,
 } from "./lib/scratch-dir.mjs";
 import { acquireSharedSlot } from "./lib/suite-lock.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 // Verdicts are PER TEST (file + full name from vitest's JSON report), never per
 // file: a red test that also fails on base must not hide a sibling test in the
@@ -484,8 +484,4 @@ export async function main(argv = process.argv.slice(2)) {
 	}
 }
 
-if (
-	process.argv[1] &&
-	fileURLToPath(import.meta.url) === resolve(process.argv[1])
-)
-	process.exitCode = await main();
+if (isMainModule(import.meta.url)) process.exitCode = await main();

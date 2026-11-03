@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { blankMarkdown as blankMarkdownShared } from "./lib/defect-shapes.mjs";
 import { markdownHeadings } from "./lib/markdown-lexer.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const MAX_WORDS = 30;
 const FILLER_PATTERNS = [
@@ -192,7 +193,7 @@ export function proseSections(body = "") {
 
 export { FILLER_PATTERNS };
 
-if (process.argv[1] && process.argv[1].endsWith("check-prose.mjs")) {
+if (isMainModule(import.meta.url)) {
 	const fileIndex = process.argv.indexOf("--body-file");
 	const json = process.argv.includes("--json");
 	const input =

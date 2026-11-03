@@ -54,7 +54,6 @@
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import { renderMutationMarkdown } from "./lib/mutation-report-render.mjs";
 import {
@@ -62,6 +61,7 @@ import {
 	isQueueablePath,
 	parseQueueEntry,
 } from "./lib/stryker-diff.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const MARKER_RE = /<!-- stryker-nightly:last-report-sha=([0-9a-f]{40}) -->/;
 const PENDING_RE = /<!-- stryker-nightly:pending=([^\n]*?) -->/;
@@ -674,10 +674,7 @@ export function main(argv = process.argv.slice(2), cwd = process.cwd()) {
 	throw new Error("usage: stryker-nightly.mjs base|body|combine ...");
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		const result = main();
 		// Only `base` prints: GITHUB_OUTPUT lines for the workflow to append.

@@ -73,6 +73,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -723,9 +724,6 @@ function main() {
 	);
 }
 
-if (
-	process.argv[1] &&
-	fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
-) {
+if (isMainModule(import.meta.url)) {
 	main();
 }

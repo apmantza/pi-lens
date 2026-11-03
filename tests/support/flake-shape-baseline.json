@@ -144,6 +144,7 @@
 		"scripts/rule-catalogs.test.ts": 2,
 		"scripts/rule-language-case.test.ts": 4,
 		"scripts/scratch-home-env.test.ts": 2,
+		"scripts/script-entry-gate-cells.test.ts": 1,
 		"scripts/seed-matrix-from-bot-branch-real-git.test.ts": 1,
 		"scripts/setup-git-hooks.test.ts": 4,
 		"scripts/smoke-tools-lsp-fixture-registration.test.ts": 2,

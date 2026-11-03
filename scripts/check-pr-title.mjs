@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { githubGet } from "./lib/github-rest.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 // Repo convention: conventional-commit-style prefix, then an issue
 // reference, BOTH IN THE TITLE. Merges are merge commits from the PR title
@@ -83,7 +83,7 @@ async function lintPullRequestEvent() {
 	console.log(`PR title OK: "${title}"`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	const localTitle =
 		process.argv[2] === "--lint-local" && process.argv[3]
 			? readFileSync(process.argv[3], "utf8").split(/\r?\n/, 1)[0]

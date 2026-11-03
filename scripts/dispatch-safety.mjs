@@ -7,8 +7,8 @@
 // the two cannot disagree on what counts as a guard.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import yaml from "../clients/deps/js-yaml.js";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 // The one permission source not in workflow YAML is the repository setting
 // Actions > Workflow permissions. This repository holds "Read repository
@@ -366,10 +366,7 @@ export function runCli(argv, cwd = process.cwd()) {
 	};
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	const { code, stdout, stderr } = runCli(process.argv.slice(2));
 	for (const line of stdout) console.log(line);
 	for (const line of stderr) console.error(line);

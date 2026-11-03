@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { fetchLivePrBody } from "./check-pr-body.mjs";
 import { githubGet } from "./lib/github-rest.mjs";
 import {
@@ -15,6 +14,7 @@ import {
 	parseCloseKeywords,
 	stripNonSemanticMarkdown,
 } from "./lib/close-keywords.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export {
 	commitCloseKeywordErrors,
@@ -319,7 +319,7 @@ Post-merge close verification found issue(s) that were not closed: ${details}. G
 	process.exitCode = 1;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	(async () => {
 		if (process.argv[2] === "--lint-local") {
 			const title = readFileSync(process.argv[3], "utf8").split(/\r?\n/, 1)[0];

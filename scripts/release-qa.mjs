@@ -82,6 +82,7 @@ import { McpStdioClient } from "./lib/mcp-stdio-client.mjs";
 import { parseTable } from "./lib/md-matrix.mjs";
 import { parseNdjsonEntries } from "./lib/latency-log-phases.mjs";
 import { startRpcSession } from "./rpc-load-check.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 // ===========================================================================
 // Pure core — parsing, outcome rules, arithmetic, rendering.
@@ -3198,9 +3199,7 @@ function describePi(piBin, env) {
 	}
 }
 
-const invokedDirectly =
-	process.argv[1] &&
-	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const invokedDirectly = isMainModule(import.meta.url);
 if (invokedDirectly) {
 	main().catch((err) => {
 		console.error("[release-qa] crashed:", err);

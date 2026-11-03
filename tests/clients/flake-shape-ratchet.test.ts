@@ -1369,6 +1369,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"what a spawned child inherits (HOME, USERPROFILE, XDG dirs) is only observable in the child process",
 	},
+	// 2026-11-03 (#4096 fold): whether each script's main runs when node starts
+	// it, through a symlinked path, or on a bare import is decided from the
+	// real argv[1] and module URL of a real node process.
+	"real-process-spawn:scripts/script-entry-gate-cells.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a script's entry decision reads the real process.argv[1] and module URL, which an in-process call of isMainModule cannot show every script routes through",
+	},
 	// #3401: the seed script's default git argv (depth-2 fetch, refspec, blob
 	// specs) only means something against a real repo and a depth-1 clone.
 	"real-process-spawn:scripts/seed-matrix-from-bot-branch-real-git.test.ts": {

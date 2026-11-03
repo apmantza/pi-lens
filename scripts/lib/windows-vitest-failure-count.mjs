@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseVitestSummary } from "./vitest-summary.mjs";
+import { isMainModule } from "./is-main-module.mjs";
 
 /** Return the failed-test count from a Vitest Windows runner log, if present. */
 export function parseWindowsVitestFailureCount(log) {
@@ -20,10 +19,7 @@ export function parseWindowsVitestExecutedCount(log) {
 		: (testsPassed ?? 0) + (testsFailed ?? 0);
 }
 
-if (
-	process.argv[1] &&
-	fileURLToPath(import.meta.url) === resolve(process.argv[1])
-) {
+if (isMainModule(import.meta.url)) {
 	const parse = process.argv.includes("--executed")
 		? parseWindowsVitestExecutedCount
 		: parseWindowsVitestFailureCount;

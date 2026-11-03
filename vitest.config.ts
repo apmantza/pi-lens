@@ -979,6 +979,9 @@ export const wallClockBudgetInclude = [
 	// #4789: the child-report cases spawn REAL `node -e` children under the
 	// scratch home pin and read back the HOME and XDG dirs each one inherited.
 	"tests/scripts/scratch-home-env.test.ts",
+	// #4096 fold: every script's entry gate, started for real, linked, and
+	// imported (real node children; flake-shape admission).
+	"tests/scripts/script-entry-gate-cells.test.ts",
 	// #3401: the seed script's default git path (depth-2 fetch, refspec, blob
 	// specs) against real throwaway repos and a depth-1 clone (flake-shape
 	// admission).
