@@ -489,7 +489,7 @@ export interface LSPClientInfo {
 			 *  reading as duplicates. Defaults to "pull". */
 			pullSettleSource?: "pull" | "pull-warmup";
 		},
-	): Promise<void>;
+	): Promise<void | "answered" | "deadline-expired">;
 	/** Get all tracked diagnostics with timestamps (for cascade checking). #1095:
 	 *  each entry also carries the stored content `binding` (absent when no
 	 *  version-bearing publish set it). */
@@ -4717,7 +4717,7 @@ export async function clientWaitForDiagnostics(
 		pullOnly?: boolean;
 		pullSettleSource?: "pull" | "pull-warmup";
 	} = {},
-): Promise<void> {
+): Promise<"answered" | "deadline-expired"> {
 	const normalizedPath = normalizeMapKey(filePath);
 	const minVersion = options.minVersion;
 	const pullSettleSource = options.pullSettleSource ?? "pull";
@@ -4772,7 +4772,7 @@ export async function clientWaitForDiagnostics(
 				Date.now() - pullSettleStartedAt,
 				pullSettleSource,
 			);
-			return;
+			return "answered";
 		}
 		let sawClean = outcome.status === "clean";
 
@@ -4801,7 +4801,8 @@ export async function clientWaitForDiagnostics(
 			if (outcome.status === "clean") sawClean = true;
 		}
 		if (options.pullOnly) {
-			if (outcome.status === "found" || sawClean) {
+			const answered = outcome.status === "found" || sawClean;
+			if (answered) {
 				logTypeScriptPullSettle(
 					state,
 					normalizedPath,
@@ -4809,7 +4810,7 @@ export async function clientWaitForDiagnostics(
 					pullSettleSource,
 				);
 			}
-			return;
+			return answered ? "answered" : "deadline-expired";
 		}
 		if (outcome.status === "found" || sawClean) {
 			logTypeScriptPullSettle(
@@ -4818,7 +4819,7 @@ export async function clientWaitForDiagnostics(
 				Date.now() - pullSettleStartedAt,
 				pullSettleSource,
 			);
-			return;
+			return "answered";
 		}
 	}
 
@@ -4838,7 +4839,7 @@ export async function clientWaitForDiagnostics(
 		getMergedDiagnosticsForPath(state, normalizedPath).length > 0;
 
 	if (storedAnswerSettles() && !laterReceiptPending()) {
-		return;
+		return "answered";
 	}
 	// #4785 F4: a wait resolves before its deadline only while an answer for
 	// the path is stored. The touch reads "no answer" only from a wait that ran
@@ -4850,18 +4851,20 @@ export async function clientWaitForDiagnostics(
 		(state.pushDiagnostics.has(normalizedPath) ||
 			state.documentPullDiagnostics.has(normalizedPath));
 
-	return new Promise<void>((resolve) => {
+	return new Promise<"answered" | "deadline-expired">((resolve) => {
 		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 		/** A settle came due while a later receipt was pending: the early
 		 * return above, or the quiet window below. */
 		let settleDeferred = storedAnswerSettles();
 
-		const finish = (): void => {
+		const finish = (
+			outcome: "answered" | "deadline-expired" = "answered",
+		): void => {
 			if (debounceTimer) clearTimeout(debounceTimer);
 			state.diagnosticEmitter.off("diagnostics", onDiagnostics);
 			state.diagnosticEmitter.off(PENDING_RECEIPT_DROPPED, onReceiptDropped);
 			clearTimeout(timeout);
-			resolve();
+			resolve(outcome);
 		};
 
 		const onDiagnostics = (fp: string) => {
@@ -4903,7 +4906,10 @@ export async function clientWaitForDiagnostics(
 		state.diagnosticEmitter.on("diagnostics", onDiagnostics);
 		state.diagnosticEmitter.on(PENDING_RECEIPT_DROPPED, onReceiptDropped);
 
-		const timeout = setTimeout(finish, timeoutMs);
+		const timeout = setTimeout(
+			() => finish(answerStored() ? "answered" : "deadline-expired"),
+			timeoutMs,
+		);
 	});
 }
 

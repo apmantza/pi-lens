@@ -1388,6 +1388,11 @@ export function createLspNavigationTool(
 						pythonCompileTarget,
 					);
 					const diagnostics = policy.kept;
+					const diagnosticsTimedOut =
+						lspService.getDiagnosticsHealth(filePath)?.failureKind ===
+						"timeout";
+					const diagnosticsPartialTimeout =
+						lspService.getDiagnosticsHealth(filePath)?.partialTimeout === true;
 					const suppressedLine = dispositionSuppressedLine(policy.suppressed);
 					// #4638 r3 (N2): a row the declaration withheld is named on this route
 					// too, so an empty answer cannot read as "no findings published".
@@ -1420,9 +1425,12 @@ export function createLspNavigationTool(
 							content: [
 								{
 									type: "text" as const,
-									text: `${note}\n${JSON.stringify(result)}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
+									text: `${note}\n${JSON.stringify(result)}${diagnosticsTimedOut || diagnosticsPartialTimeout ? `\nNote: LSP diagnostics timed out for ${filePath}` : ""}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
 								},
 							],
+							...(diagnosticsTimedOut && resultCount === 0
+								? { isError: true }
+								: {}),
 							details: {
 								operation,
 								resultCount,
@@ -1443,7 +1451,12 @@ export function createLspNavigationTool(
 						{
 							operation,
 							filePath,
-							failureKind: resultCount === 0 ? "empty_result" : "success",
+							failureKind:
+								diagnosticsTimedOut && resultCount === 0
+									? "timeout"
+									: resultCount === 0
+										? "empty_result"
+										: "success",
 							resultCount,
 						},
 					);
@@ -2193,7 +2206,9 @@ export function createLspNavigationTool(
 					failureKind: isEmpty
 						? "empty_result"
 						: usedDocumentSymbolFallback
-							? "fallback_success"
+							? definitionTimeout
+								? "fallback_after_timeout"
+								: "fallback_success"
 							: "success",
 					resultCount,
 				},

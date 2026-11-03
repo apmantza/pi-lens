@@ -1417,6 +1417,40 @@ describe("lsp_navigation tool", () => {
 		}
 	});
 
+	it("renders a file diagnostic pull timeout instead of an empty envelope", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "diag.ts");
+		fs.writeFileSync(filePath, "const value = 1;\n");
+		const service = mocked.service as {
+			getWorkspaceDiagnosticsSupport: ReturnType<typeof vi.fn>;
+			getDiagnostics: ReturnType<typeof vi.fn>;
+			getDiagnosticsHealth: ReturnType<typeof vi.fn>;
+		};
+		service.getWorkspaceDiagnosticsSupport = vi
+			.fn()
+			.mockResolvedValue({ mode: "pull" });
+		service.getDiagnostics = vi.fn().mockResolvedValue([]);
+		service.getDiagnosticsHealth = vi.fn().mockReturnValue({
+			health: "timeout",
+			failureKind: "timeout",
+		});
+		try {
+			const result = await tool.execute(
+				"diagnostics-timeout",
+				{ operation: "workspaceDiagnostics", path: filePath },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			const envelope = parseToolJson(result);
+			expect(result.isError).toBe(true);
+			expect(envelope).toMatchObject({ ok: false, status: "timeout" });
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
 	it("previews LSP-aware file renames", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));

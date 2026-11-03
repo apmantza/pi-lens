@@ -4,6 +4,7 @@ import {
 	getOpenDocumentSymbols,
 	qualifiedLspSymbolName,
 } from "../../clients/lsp-document-symbols.js";
+import { LspRequestTimeoutError } from "../../clients/lsp/request-timeout-error.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import {
 	installLspService,
@@ -89,14 +90,16 @@ describe("LSP document symbols", () => {
 		expect(await getOpenDocumentSymbols("/a.ts")).toBeUndefined();
 	});
 
-	it("falls back on error and timeout", async () => {
+	it("falls back on errors but preserves typed timeouts", async () => {
 		const documentSymbol = vi
 			.fn()
 			.mockRejectedValueOnce(new Error("nope"))
 			.mockReturnValueOnce(new Promise(() => {}));
 		installOpenDocumentClient(documentSymbol);
 		expect(await getOpenDocumentSymbols("/a.ts", 5)).toBeUndefined();
-		expect(await getOpenDocumentSymbols("/a.ts", 5)).toBeUndefined();
+		await expect(getOpenDocumentSymbols("/a.ts", 5)).rejects.toBeInstanceOf(
+			LspRequestTimeoutError,
+		);
 	});
 
 	// Recurrence (shape 4, #1097/#1109): the budget is one shared `withBudget`

@@ -74,7 +74,11 @@ function finiteNumber(value: unknown): number | undefined {
 }
 
 function lspStatusFromFailureKind(failureKind: string): LspToolStatus {
-	if (failureKind === "success" || failureKind === "fallback_success") {
+	if (
+		failureKind === "success" ||
+		failureKind === "fallback_success" ||
+		failureKind === "fallback_after_timeout"
+	) {
 		return "success";
 	}
 	if (failureKind === "empty_result") return "empty";
