@@ -446,32 +446,36 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 	// Recurrence: review G2 on #5228, where a substring match let a same-line
 	// edit or a verbatim duplicate of an admitted line ride its admission. A
 	// site admits one hit, on the line whose trimmed text equals the site.
-	it("admits each site once, on its exact trimmed line", () => {
-		const root = mkdtempSync(resolve(tmpdir(), "pi-lens-entry-sites-"));
-		try {
-			const plant = (rel: string, source: string) => {
-				mkdirSync(resolve(root, rel, ".."), { recursive: true });
-				writeFileSync(resolve(root, rel), source);
-			};
-			const site = "realpathSync.native(process.argv[1]) ===";
-			// The admitted line, then a verbatim copy of it (the copy is a hit).
-			plant(
-				"scripts/hooks/guard-bash.mjs",
-				`if (\n\t${site}\n\tlink\n) run();\nif (\n\t${site}\n\tlink\n) run();\n`,
-			);
-			// The admitted line widened on the same line (a hit).
-			plant(
-				"tests/support/tmp-root-registry.ts",
-				"const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry }; // widened\n",
-			);
-			expect(findPrivateEntryGates(root, 1)).toEqual([
-				"scripts/hooks/guard-bash.mjs: line 6: process: realpathSync.native(process.argv[1]) ===",
-				"tests/support/tmp-root-registry.ts: line 1: globalThis: const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry }; // widened",
-			]);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
+	it(
+		"admits each site once, on its exact trimmed line",
+		() => {
+			const root = mkdtempSync(resolve(tmpdir(), "pi-lens-entry-sites-"));
+			try {
+				const plant = (rel: string, source: string) => {
+					mkdirSync(resolve(root, rel, ".."), { recursive: true });
+					writeFileSync(resolve(root, rel), source);
+				};
+				const site = "realpathSync.native(process.argv[1]) ===";
+				// The admitted line, then a verbatim copy of it (the copy is a hit).
+				plant(
+					"scripts/hooks/guard-bash.mjs",
+					`if (\n\t${site}\n\tlink\n) run();\nif (\n\t${site}\n\tlink\n) run();\n`,
+				);
+				// The admitted line widened on the same line (a hit).
+				plant(
+					"tests/support/tmp-root-registry.ts",
+					"const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry }; // widened\n",
+				);
+				expect(findPrivateEntryGates(root, 1)).toEqual([
+					"scripts/hooks/guard-bash.mjs: line 6: process: realpathSync.native(process.argv[1]) ===",
+					"tests/support/tmp-root-registry.ts: line 1: globalThis: const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry }; // widened",
+				]);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// Recurrence: a census whose exclusion list admits a whole directory reads
 	// green with the tree unread; the seam is the only admitted path, and an
