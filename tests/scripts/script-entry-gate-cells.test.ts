@@ -28,6 +28,7 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -265,7 +266,7 @@ async function runPool(): Promise<void> {
 				);
 				linked.set(script, { ...viaLink, out: normalize(viaLink.out) });
 				const url = JSON.stringify(
-					`file://${path.join(SCRIPTS, script).split(path.sep).join("/")}`,
+					pathToFileURL(path.join(SCRIPTS, script)).href,
 				);
 				imported.set(
 					script,
@@ -324,8 +325,11 @@ describe("scripts/ entry-gate cells (shape 44 fold onto isMainModule)", () => {
 			it("runs its main when node starts the file", () => {
 				const result = entered.get(script);
 				expect(result, `no settled run for ${script}`).toBeDefined();
+				// A timed-out run settles with `code: null`, which is not 0, so
+				// without the type check a hang would read as "main ran".
 				expect(
-					result?.code !== 0 || (result?.out.trim().length ?? 0) > 0,
+					typeof result?.code === "number" &&
+						(result.code !== 0 || result.out.trim().length > 0),
 					`main did not run: exit ${result?.code}, output ${JSON.stringify(result?.out)}`,
 				).toBe(true);
 			});
