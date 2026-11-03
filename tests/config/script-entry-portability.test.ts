@@ -206,34 +206,38 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 	// Recurrence: a census whose exclusion list admits a whole directory reads
 	// green with the tree unread; the seam and the standalone file are the only
 	// admitted paths.
-	it("reads scripts/ and tests/support/ and admits only the seam and the standalone gate", () => {
-		const root = mkdtempSync(resolve(tmpdir(), "pi-lens-entry-portability-"));
-		try {
-			const plant = (rel: string, source: string) => {
-				mkdirSync(resolve(root, rel, ".."), { recursive: true });
-				writeFileSync(resolve(root, rel), source);
-			};
-			const gate = "if (process.argv[1] === here) main();\n";
-			plant("scripts/private.mjs", gate);
-			plant("scripts/deep/nested.mjs", gate);
-			plant("tests/support/helper.mjs", gate);
-			plant(
-				"scripts/clean.mjs",
-				"if (isMainModule(import.meta.url)) main();\n",
-			);
-			plant("scripts/lib/is-main-module.mjs", gate);
-			plant("scripts/hooks/guard-bash.mjs", gate);
-			expect(
-				findPrivateEntryGates(root, 1).map((line) => line.split(":")[0]),
-			).toEqual([
-				"scripts/deep/nested.mjs",
-				"scripts/private.mjs",
-				"tests/support/helper.mjs",
-			]);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
+	it(
+		"reads scripts/ and tests/support/ and admits only the seam and the standalone gate",
+		() => {
+			const root = mkdtempSync(resolve(tmpdir(), "pi-lens-entry-portability-"));
+			try {
+				const plant = (rel: string, source: string) => {
+					mkdirSync(resolve(root, rel, ".."), { recursive: true });
+					writeFileSync(resolve(root, rel), source);
+				};
+				const gate = "if (process.argv[1] === here) main();\n";
+				plant("scripts/private.mjs", gate);
+				plant("scripts/deep/nested.mjs", gate);
+				plant("tests/support/helper.mjs", gate);
+				plant(
+					"scripts/clean.mjs",
+					"if (isMainModule(import.meta.url)) main();\n",
+				);
+				plant("scripts/lib/is-main-module.mjs", gate);
+				plant("scripts/hooks/guard-bash.mjs", gate);
+				expect(
+					findPrivateEntryGates(root, 1).map((line) => line.split(":")[0]),
+				).toEqual([
+					"scripts/deep/nested.mjs",
+					"scripts/private.mjs",
+					"tests/support/helper.mjs",
+				]);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("admits the seam call, option parsing and prose quoting the shape", () => {
 		const clean = [
