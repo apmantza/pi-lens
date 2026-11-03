@@ -252,6 +252,14 @@ once no matter which spelling each file uses. Migrating does not change the
 answer, staying un-migrated is not a way around the denial, and a half-migrated
 pair of files merges rather than one clobbering the other.
 
+An entry must name a server pi-lens knows: a built-in server id or a server
+declared under `lsp.servers`. An entry that names neither is dropped and
+reported with one `PILENS_CFG_0005` notice per distinct id, which quotes the
+entry and says it is not a recognized LSP server id. Without that notice a
+misspelled id would match no server, so the server you meant to turn off would
+keep running. Entries that are not strings are kept as written and match no
+server.
+
 Denying a file's **language server** (its primary, such as `json` or
 `typescript`) leaves that file unchecked for the language itself. Every
 diagnostics route then reports a file with no findings as **unconfirmed**, not
