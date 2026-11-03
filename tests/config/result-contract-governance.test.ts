@@ -1,3 +1,4 @@
+// flake-shape: raw-timer-wait — the census polls the real MCP child's background review-graph build before classifying the project_report JSON cell
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -11,7 +12,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // cwd; re-evaluating an already-transformed graph costs about 0.2 s.
 import "../../index.js";
 import { TOOL_REGISTRY } from "../../clients/tool-config.js";
-import { MAX_RESULT_BYTES } from "../../tools/render-compact.js";
+import { WARN_ONLY_STALE_TOOLS } from "../../mcp/build-staleness.js";
+import {
+	MAX_RESULT_BYTES,
+	stripContractFooter,
+} from "../../tools/render-compact.js";
 import { McpHarness } from "../mcp/harness.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
@@ -44,6 +49,9 @@ describe("result contract across registered tool surfaces", () => {
 	const originalCwd = process.cwd();
 	let mcp: McpHarness;
 	let pi: ReturnType<typeof createPiMock>;
+	// Env both MCP children run with (the registry tools' LSP waits). The census
+	// child needs the same waits as the shared one.
+	let mcpEnv: Record<string, string>;
 
 	beforeAll(async () => {
 		// #4019: canonicalize the fixture cwd. `os.tmpdir()` is a symlink on macOS
@@ -81,7 +89,7 @@ describe("result contract across registered tool surfaces", () => {
 		fs.writeFileSync(path.join(cwd, "big.ts"), `${bigLines.join("\n")}\n`);
 		process.chdir(cwd);
 		const parityWaitMs = String(scaledTestTimeout(10_000));
-		const env = {
+		mcpEnv = {
 			PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS: parityWaitMs,
 			PI_LENS_AUX_GRACE_MS: parityWaitMs,
 		};
@@ -91,7 +99,7 @@ describe("result contract across registered tool surfaces", () => {
 		vi.resetModules();
 		const { default: extension } = await import("../../index.js");
 		extension(pi.asExtensionAPI());
-		mcp = new McpHarness({ cwd, env });
+		mcp = new McpHarness({ cwd, env: mcpEnv });
 		await mcp.request(1, "initialize", {
 			protocolVersion: "2025-06-18",
 			capabilities: {},
@@ -429,7 +437,7 @@ describe("result contract across registered tool surfaces", () => {
 			const text = result?.content?.[0]?.text ?? "";
 			return {
 				bytes: Number(text.match(/bytes=(\d+)/)?.[1]),
-				truncated: /truncated=true$/.test(text),
+				truncated: text.endsWith("truncated=true"),
 			};
 		});
 		for (const figure of figures) {
@@ -484,5 +492,210 @@ describe("result contract across registered tool surfaces", () => {
 		expect(metadata.toolResultsTruncated).toBe(
 			figures.filter((figure) => figure.truncated).length,
 		);
+	});
+
+	// #5159 D5: the warn-only stale tools' cell shapes, derived from the real set.
+	// A tool that starts returning a JSON document must be admitted here on
+	// purpose; the JSON-capable population is pinned and may not grow silently.
+	describe("warn-only stale tool cell census (#5159)", () => {
+		type CellShape = "text" | "json" | "envelope";
+
+		// `cwd` is assigned by the outer `beforeAll`; build the rows there, since
+		// the read_symbol/read_enclosing rows need an absolute path.
+		let CENSUS: ReadonlyArray<{
+			mcpName: string;
+			args: Record<string, unknown>;
+			shape: CellShape;
+		}>;
+
+		// #5159: this census NEEDS a warm review graph (the `pilens_project_report
+		// view:"json"` row must not race the child's background build, Greptile
+		// P1), but warming the SHARED `mcp` child leaves the parity case comparing
+		// a warm MCP render against the cold in-process pi render: pi's
+		// `module_report` is a read-only consumer that never builds a graph, and
+		// the two surfaces do not share a data dir (the harness isolates the
+		// child's `PILENS_DATA_DIR`). Under shuffle this census can run before the
+		// parity case, so the census owns its own child and the shared one stays
+		// cold in every order. Its own workspace root too: the MCP warm
+		// side-channel's socket is derived from the child's cwd
+		// (`ipcPathForCwd`), so two servers on one workspace would unlink each
+		// other's endpoint.
+		let censusMcp: McpHarness;
+		let censusCwd: string;
+
+		beforeAll(async () => {
+			censusCwd = fs.realpathSync(
+				fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-result-contract-census-"),
+				),
+			);
+			for (const name of ["bad.ts", "fixture.ts"]) {
+				fs.copyFileSync(path.join(cwd, name), path.join(censusCwd, name));
+			}
+			censusMcp = new McpHarness({ cwd: censusCwd, env: mcpEnv });
+			await censusMcp.request(1, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: "result-contract-census", version: "0" },
+			});
+			CENSUS = [
+				{
+					mcpName: "pilens_module_report",
+					args: { file: "fixture.ts" },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_module_report",
+					args: { file: "fixture.ts", view: "full-json" },
+					shape: "json",
+				},
+				{ mcpName: "pilens_project_report", args: { limit: 1 }, shape: "text" },
+				{
+					mcpName: "pilens_project_report",
+					args: { limit: 1, view: "json" },
+					shape: "json",
+				},
+				{
+					mcpName: "pilens_symbol_search",
+					args: { query: "fixture", paths: ["fixture.ts"] },
+					shape: "text",
+				},
+				{ mcpName: "pilens_project_scan", args: {}, shape: "text" },
+				{ mcpName: "pilens_health", args: {}, shape: "text" },
+				{ mcpName: "pilens_latency", args: { limit: 1 }, shape: "text" },
+				{ mcpName: "pilens_session_start", args: {}, shape: "text" },
+				{ mcpName: "pilens_turn_end", args: {}, shape: "text" },
+				{
+					mcpName: "pilens_ast_grep_search",
+					args: { pattern: "$A.sort()", lang: "typescript", paths: ["bad.ts"] },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_ast_grep_replace",
+					args: {
+						pattern: "$A.sort()",
+						rewrite: "$A.sort((a, b) => a - b)",
+						lang: "typescript",
+						paths: ["bad.ts"],
+						apply: false,
+					},
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_lsp_navigation",
+					args: { operation: "documentSymbol", path: "fixture.ts" },
+					shape: "envelope",
+				},
+				{
+					mcpName: "pilens_read_symbol",
+					args: {
+						path: path.join(censusCwd, "fixture.ts"),
+						symbol: "enclosing",
+					},
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_read_enclosing",
+					args: { path: path.join(censusCwd, "fixture.ts"), line: 2 },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_effective_config",
+					args: { file: "fixture.ts" },
+					shape: "text",
+				},
+			];
+			// The first `pilens_project_report` call starts THIS child's background
+			// review-graph build and reports unavailable; the `view:"json"` census
+			// row must not race it (Greptile P1). Poll the real tool until it
+			// serves: the build is the contention model, the deadline is real.
+			const until = Date.now() + scaledTestTimeout(30_000);
+			let warm = false;
+			let pollId = 900;
+			while (!warm && Date.now() < until) {
+				const res = await censusMcp.request(pollId++, "tools/call", {
+					name: "pilens_project_report",
+					arguments: { limit: 1, view: "json" },
+				});
+				const result = res.result as ToolResult;
+				if (!result.isError) {
+					try {
+						const doc = JSON.parse(
+							stripContractFooter(result.content?.[0]?.text ?? ""),
+						) as { available?: boolean };
+						warm = doc.available === true;
+					} catch {
+						// keep polling
+					}
+				}
+				if (!warm) await new Promise((resolve) => setTimeout(resolve, 500));
+			}
+			expect(warm, "project_report graph warmed before the census").toBe(true);
+		}, scaledTestTimeout(40_000));
+
+		afterAll(() => {
+			censusMcp?.dispose();
+			removeTempDirSync(censusCwd);
+		});
+
+		/** Classify a delivered MCP cell from its block 0, post owner footer strip. */
+		function classifyCell(result: ToolResult): CellShape {
+			const blocks = (result.content ?? [])
+				.filter((block) => block.type === "text")
+				.map((block) => block.text ?? "");
+			if (blocks.length === 0) return "text";
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(stripContractFooter(blocks[0]));
+			} catch {
+				return "text";
+			}
+			if (
+				typeof parsed === "object" &&
+				parsed !== null &&
+				!Array.isArray(parsed) &&
+				typeof (parsed as Record<string, unknown>).ok === "boolean" &&
+				typeof (parsed as Record<string, unknown>).status === "string"
+			) {
+				return "envelope";
+			}
+			return "json";
+		}
+
+		it(
+			"covers exactly the warn-only set and classifies each cell",
+			async () => {
+				const censusMembers = [
+					...new Set(CENSUS.map((row) => row.mcpName)),
+				].sort();
+				expect(censusMembers).toEqual([...WARN_ONLY_STALE_TOOLS].sort());
+				for (const [index, row] of CENSUS.entries()) {
+					const res = await censusMcp.request(300 + index, "tools/call", {
+						name: row.mcpName,
+						arguments: row.args,
+					});
+					const result = res.result as ToolResult;
+					expect(classifyCell(result), `${row.mcpName} cell shape`).toBe(
+						row.shape,
+					);
+				}
+			},
+			scaledTestTimeout(90_000),
+		);
+
+		it("pins the JSON-capable population (shrink-only)", () => {
+			const jsonCapable = [
+				...new Set(
+					CENSUS.filter((row) => row.shape !== "text").map(
+						(row) => row.mcpName,
+					),
+				),
+			].sort();
+			expect(jsonCapable).toEqual([
+				"pilens_lsp_navigation",
+				"pilens_module_report",
+				"pilens_project_report",
+			]);
+		});
 	});
 });

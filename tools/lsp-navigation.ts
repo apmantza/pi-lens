@@ -26,7 +26,10 @@ import {
 } from "../clients/path-utils.js";
 import { escapeRegExp } from "../clients/string-utils.js";
 import { isRecordableProjectPath } from "../clients/file-utils.js";
-import { compactRenderResult } from "./render-compact.js";
+import {
+	compactRenderResult,
+	JSON_CELL_DETAILS_KEY,
+} from "./render-compact.js";
 import {
 	applyWorkspaceEdit,
 	captureRenameExpectedContent,
@@ -1075,6 +1078,7 @@ export function createLspNavigationTool(
 					details: {
 						...payload.details,
 						failureKind: meta.failureKind,
+						[JSON_CELL_DETAILS_KEY]: true,
 					},
 				};
 			};
@@ -1420,12 +1424,23 @@ export function createLspNavigationTool(
 						noteMap[diagnosticsMode] ??
 						"Note: workspace diagnostics mode unknown (no active capability snapshot)";
 					const resultCount = diagnostics.length;
+					const unavailableNote = primaryUnavailable
+						? `\nNote: ${primaryUnavailable}`
+						: "";
+					const suppressedNote = suppressedLine
+						? `\nNote: ${suppressedLine}`
+						: "";
+					const withheldNote = withheldLine ? `\nNote: ${withheldLine}` : "";
+					const timedOutNote =
+						diagnosticsTimedOut || diagnosticsPartialTimeout
+							? `\nNote: LSP diagnostics timed out for ${filePath}`
+							: "";
 					return finalize(
 						{
 							content: [
 								{
 									type: "text" as const,
-									text: `${note}\n${JSON.stringify(result)}${diagnosticsTimedOut || diagnosticsPartialTimeout ? `\nNote: LSP diagnostics timed out for ${filePath}` : ""}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
+									text: `${note}\n${JSON.stringify(result)}${timedOutNote}${unavailableNote}${suppressedNote}${withheldNote}`,
 								},
 							],
 							...(diagnosticsTimedOut && resultCount === 0

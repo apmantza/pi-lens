@@ -65,6 +65,10 @@
 		"tests/real-harness/*.test.ts",
 		"tests/config/*.test.ts",
 		"tests/mcp/session-end.smoke.test.ts",
+		// #5159: the stale-cell smoke is a serialized wall-clock lane member
+		// (real spawned MCP child), so the lane coverage gate (#2837)
+		// requires it as a knip entry.
+		"tests/mcp/stale-json-advisory.smoke.test.ts",
 		"tests/clients/*.test.ts",
 		"tests/clients/**/*.test.ts",
 		// #2050: the top-level real-host witnesses (a real linked worktree, a

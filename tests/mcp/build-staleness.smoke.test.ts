@@ -157,6 +157,11 @@ describe("warm build-staleness guard (real spawn)", { retry: 2 }, () => {
 		// part of the payload the bound protects, and the footer is stamped
 		// after the bound with the footer's own size reserved, so warning plus
 		// bounded payload plus footer still fit the budget.
+		//
+		// #5159 block contract: `view: "full-json"` opts this cell in, so block 0
+		// is the bounded payload alone and block 1 carries the advisory plus the
+		// footer. Text-wide assertions read the joined blocks; the payload block
+		// stays clean so a JSON reader can parse it.
 		await harness.request(10, "initialize", {
 			protocolVersion: "2025-06-18",
 			capabilities: {},
@@ -177,7 +182,17 @@ describe("warm build-staleness guard (real spawn)", { retry: 2 }, () => {
 			isError?: boolean;
 		};
 		expect(result.isError).toBeFalsy();
-		const text = result.content[0].text;
+		const blocks = result.content
+			.filter((block) => block.type === "text")
+			.map((block) => block.text);
+		// #5159: block 0 is the payload, block 1 the advisory (plus the footer).
+		expect(blocks).toHaveLength(2);
+		expect(blocks[0]).not.toContain("warmCodeStale");
+		expect(blocks[1].startsWith("warmCodeStale: true")).toBe(true);
+		// The oversized payload is truncated mid-document, so the payload block is
+		// not parseable — the advisory never promised otherwise for this cell.
+		expect(() => JSON.parse(blocks[0])).toThrow();
+		const text = blocks.join("\n");
 		expect(text).toContain("warmCodeStale: true");
 		expect(text).toContain("characters omitted");
 		expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(

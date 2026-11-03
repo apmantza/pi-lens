@@ -587,6 +587,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a cancelled timer produces no event to await; a bounded real window observes the absence, and every assertion is a count, never elapsed ms",
 		},
+	// 2026-11-03 (#5159): the census warms the real MCP child's background
+	// review-graph build before it classifies the project_report JSON cell; the
+	// build is the contention model and a fake clock cannot advance that child.
+	"raw-timer-wait:config/result-contract-governance.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the census polls the real MCP child's background review-graph build before classifying the project_report JSON cell; a fake clock cannot advance that child's build",
+	},
 	// 2026-10-31 (#5108): the read-only bound is a live wall deadline.
 	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "raw-timer-wait",
@@ -600,6 +608,17 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "raw-timer-wait",
 		reason:
 			"the real MCP child builds its own review graph in the background; a fake clock cannot advance that child's build, so the parity compare polls until it serves",
+	},
+	// #5159: the stale-cell smoke bumps the stamp file's mtime and settles
+	// before the next tools/call; the wait is a real clock in the spawned
+	// child's own process, which a fake clock here cannot advance. #5221 fold:
+	// the project_report JSON case also polls that child's background
+	// review-graph build (the second hit), the same admission the census and
+	// parity smoke carry for their graph-build polls.
+	"raw-timer-wait:mcp/stale-json-advisory.smoke.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the spawned MCP child re-stats the real stamp file and builds its review graph in the background; a fake clock in this process cannot advance either, so the settle and the bounded poll of that build are real timers",
 	},
 	// 2026-09-15 (#2042 cheapest probe): the sample-tail file is written by the
 	// wrapper's own real setInterval loop in a separate process; a poll waits

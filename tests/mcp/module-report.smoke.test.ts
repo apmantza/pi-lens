@@ -23,6 +23,7 @@ import {
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { McpHarness } from "./harness.js";
 import { createModuleReportTool } from "../../tools/module-report.js";
+import { stripContractFooter } from "../../tools/render-compact.js";
 
 interface ModuleReportShape {
 	available: boolean;
@@ -35,10 +36,7 @@ function textOf(res: Record<string, unknown>): string {
 }
 
 function parseReport(res: Record<string, unknown>): ModuleReportShape {
-	const text = textOf(res);
-	return JSON.parse(
-		text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1),
-	) as ModuleReportShape;
+	return JSON.parse(stripContractFooter(textOf(res))) as ModuleReportShape;
 }
 
 function makeTinyProject(prefix: string): string {
