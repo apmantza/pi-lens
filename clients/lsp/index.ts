@@ -1240,11 +1240,11 @@ async function collectWorkspaceDiagnosticFiles(
 				if (ignoreMatcher.isIgnored(full, true)) continue;
 				await walk(full);
 			} else if (
-				// #1974: the getServersForFileWithConfig lookup (an in-memory
-				// extension/pathFilter match against the registered LSP servers) is
-				// cheap relative to isIgnored's per-call minimatch pattern compile,
-				// so it gates first — the same order-independent shape as the four
-				// walkers fixed for #1974.
+				// #1974: the getServersForFileWithConfig lookup (an extension match
+				// against the registered LSP servers; Bash's pathFilter also reads up
+				// to 4 KB of the file from disk) still gates first, ahead of
+				// isIgnored's per-call minimatch pattern compile — the same
+				// order-independent shape as the four walkers fixed for #1974.
 				entry.isFile() &&
 				getServersForFileWithConfig(full).length > 0 &&
 				!ignoreMatcher.isIgnored(full, false)
