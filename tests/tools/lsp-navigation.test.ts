@@ -55,6 +55,7 @@ vi.mock("../../clients/python-environment.js", async (importOriginal) => {
 
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
 import { createLspNavigationTool as createRawLspNavigationTool } from "../../tools/lsp-navigation.js";
+import { LspRequestTimeoutError } from "../../clients/lsp/request-timeout-error.js";
 import { installLspService } from "../support/lsp-service-seam.js";
 
 const tmpPath = (name: string): string => path.join(os.tmpdir(), name);
@@ -264,6 +265,7 @@ describe("lsp_navigation tool", () => {
 		);
 
 		expect(result.isError).toBe(true);
+		expect(result.details?.failureKind).toBe("lsp_disabled");
 		expect(parseToolJson(result)).toMatchObject({
 			tool: "lsp_navigation",
 			operation: "precheck",
@@ -666,6 +668,36 @@ describe("lsp_navigation tool", () => {
 		expect(
 			(mocked.service as { declaration: ReturnType<typeof vi.fn> }).declaration,
 		).toHaveBeenCalled();
+	});
+
+	it("reports a navigation timeout as an error, not an empty result", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		(
+			mocked.service as { documentSymbol: ReturnType<typeof vi.fn> }
+		).documentSymbol = vi
+			.fn()
+			.mockRejectedValue(
+				new LspRequestTimeoutError("textDocument/documentSymbol", 100, 101),
+			);
+
+		const result = await tool.execute(
+			"document-symbol-timeout",
+			{
+				operation: "documentSymbol",
+				path: path.resolve("tests/tools/lsp-navigation.test.ts"),
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBe(true);
+		expect(parseToolJson(result)).toMatchObject({
+			ok: false,
+			status: "timeout",
+			resultCount: 0,
+		});
+		expect(String(result.content[0]?.text)).toContain("timed out");
 	});
 
 	it("attaches searchReads for reference locations", async () => {
@@ -1409,6 +1441,40 @@ describe("lsp_navigation tool", () => {
 				(mocked.service as { getDiagnostics: ReturnType<typeof vi.fn> })
 					.getDiagnostics,
 			).toHaveBeenCalledWith(filePath, undefined, new Set());
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("renders a file diagnostic pull timeout instead of an empty envelope", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "diag.ts");
+		fs.writeFileSync(filePath, "const value = 1;\n");
+		const service = mocked.service as {
+			getWorkspaceDiagnosticsSupport: ReturnType<typeof vi.fn>;
+			getDiagnostics: ReturnType<typeof vi.fn>;
+			getDiagnosticsHealth: ReturnType<typeof vi.fn>;
+		};
+		service.getWorkspaceDiagnosticsSupport = vi
+			.fn()
+			.mockResolvedValue({ mode: "pull" });
+		service.getDiagnostics = vi.fn().mockResolvedValue([]);
+		service.getDiagnosticsHealth = vi.fn().mockReturnValue({
+			health: "timeout",
+			failureKind: "timeout",
+		});
+		try {
+			const result = await tool.execute(
+				"diagnostics-timeout",
+				{ operation: "workspaceDiagnostics", path: filePath },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			const envelope = parseToolJson(result);
+			expect(result.isError).toBe(true);
+			expect(envelope).toMatchObject({ ok: false, status: "timeout" });
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

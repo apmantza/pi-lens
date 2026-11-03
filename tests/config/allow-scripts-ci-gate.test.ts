@@ -9,6 +9,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { hostPackageDir } from "../support/pi-session.js";
 import yaml from "../../clients/deps/js-yaml.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
@@ -246,15 +247,12 @@ describe("npm-strict packed-tarball job (#1185)", () => {
 
 	it("pins that pi's installer still shapes the root and args this way", () => {
 		const pi = readFileSync(
-			resolve(
-				REPO_ROOT,
-				"node_modules/@earendil-works/pi-coding-agent/dist/core/package-manager.js",
-			),
+			resolve(hostPackageDir(), "dist/core/package-manager.js"),
 			"utf8",
 		);
 		expect(pi).toMatch(/name: "pi-extensions", private: true/);
 		expect(pi).toMatch(
-			/\["install", \.\.\.specs, "--prefix", installRoot, "--legacy-peer-deps"\]/,
+			/\["install", \.\.\.specs, "--prefix", installRoot, "--legacy-peer-deps", "--no-audit", "--no-fund"\]/,
 		);
 		expect(pi).not.toMatch(/allowScripts|allow-scripts/);
 	});

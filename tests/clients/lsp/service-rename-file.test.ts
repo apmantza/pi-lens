@@ -9,6 +9,7 @@ import {
 } from "../../../clients/degradation-ledger.js";
 import { createLSPClient } from "../../../clients/lsp/client.js";
 import { LSPService } from "../../../clients/lsp/index.js";
+import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
 import { stopLSP } from "../../../clients/lsp/launch.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
 import type { RenameClientDouble } from "../../support/lsp-rename-client-double.js";
@@ -480,6 +481,28 @@ describe("LSPService.renameFile", () => {
 			expect(fs.existsSync(oldPath)).toBe(true);
 			expect(fs.existsSync(newPath)).toBe(false);
 			expect(failing.didRenameFiles).not.toHaveBeenCalled();
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("preserves a typed willRenameFiles timeout through the aggregate", async () => {
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lsp-rename-timeout-"),
+		);
+		const oldPath = path.join(tmpDir, "old.ts");
+		const newPath = path.join(tmpDir, "new.ts");
+		fs.writeFileSync(oldPath, "export const value = 1;\n", "utf-8");
+		const failing = makeRenameClient(tmpDir, null);
+		failing.willRenameFiles.mockRejectedValueOnce(
+			new LspRequestTimeoutError("workspace/willRenameFiles", 100, 101),
+		);
+		const service = new LSPService();
+		addRenameClient(service, "typescript", tmpDir, failing);
+		try {
+			await expect(
+				service.renameFile(oldPath, newPath, { cwd: tmpDir, apply: true }),
+			).rejects.toBeInstanceOf(LspRequestTimeoutError);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

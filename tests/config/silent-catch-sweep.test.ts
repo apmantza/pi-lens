@@ -741,7 +741,7 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :264
 	"clients/lsp-document-symbols.ts": {
 		silent: 1,
-		identities: "cf08efebeaedf178",
+		identities: "adc61c3cadb3d572",
 		reason: PRE_RULE,
 	}, // :62
 	"clients/lsp-mutation.ts": {
@@ -765,8 +765,8 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :483, :777, :767, :818, :1034, :1369, :1466, :1782
 	"clients/lsp/client.ts": {
-		silent: 35,
-		identities: "cdb169f677809664",
+		silent: 34,
+		identities: "bf780f9a41c81ff1",
 		reason: PRE_RULE,
 	}, // :1559, :1617, :1680, :1687, :1775, :3444, :3712, :4105, :4198, :4222, :4268, :4957, :5150, :5350, :5575, :5748, :5815, :5829, :5932, :5982, :6116, :6137, :6259, :6269, :6358, :6431, :6573, :7718, :7721, :7735, :7821, :8104, :8116, :8125, :8139
 	"clients/lsp/config.ts": {
@@ -794,11 +794,13 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "fe66130669c23fb1",
 		reason: PRE_RULE,
 	}, // :1248, :1280
-	// 42, re-pinned (#3734 r3): the willRenameFiles catch in `renameFile`
+	// 42, re-pinned (#3734 r3, #5216): the willRenameFiles timeout result and
+	// diagnostic timeout classification moved later handlers without changing
+	// the admitted population.
 	// (:7890) now returns its own failed flag; no handler added or removed.
 	"clients/lsp/index.ts": {
 		silent: 42,
-		identities: "375f1ae9e0f9bc6e",
+		identities: "2f98b83322bae1b4",
 		reason: SHARP_DID_SAVE,
 	}, // :239, :356, :385, :1161, :1761, :2018, :2316, :2350, :2586, :2759, :2878, :3607, :3667, :3701, :4134, :4713, :4963, :5092, :5155, :5166, :5212, :5301, :5326, :5351, :5645, :5708, :6063, :6087, :6252, :6329, :6348, :7890, :8475, :8707, :8775, :8897, :8991, :9051, :9288, :9415, :9788, :9839
 	"clients/lsp/jvm-runtime.ts": {
@@ -1348,10 +1350,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :371, :405, :628, :861, :1026, :1084, :1184, :1405, :1452, :2477
 	"tools/lsp-navigation.ts": {
-		silent: 8,
-		identities: "7d261d33eecee18f",
-		reason: PRE_RULE,
-	}, // :529, :739, :757, :1200, :1569, :1676, :1710, :1898
+		silent: 9,
+		identities: "0ea45645359d3e6d",
+		reason:
+			PRE_RULE +
+			"; #5211 re-admits the same eight handlers after the terminal tool catch switches from instanceof to the cross-evaluation timeout brand; every arm of that catch still calls finalize, and the real service-route timeout witness plus ordinary-error cases prove delivery. The other seven inherited handlers retain the pre-rule admission. #5214 F4 admits one definition-timeout recovery catch: successful recovery is disclosed in the tool note, while misses and thrown fallbacks rethrow the original deadline to finalize; the real-child hit/miss/double-timeout witnesses prove both delivery outcomes.",
+	}, // :591, :801, :819, :1280, :1697, :1804, :1838, :2024
 	"tools/lsp-structured-output.ts": {
 		silent: 3,
 		identities: "3c774b584551aa42",

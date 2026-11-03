@@ -83,6 +83,7 @@ migrate-*.js
 !HISTORY.md
 !README.md
 !CHANGELOG.md
+!CHANGELOG-USER.md
 !CODE_OF_CONDUCT.md
 !CONTRIBUTING.md
 !LICENSE
@@ -236,3 +237,6 @@ tests/native-ts7-live-*/
 
 # TLA+ tools jar fetched by scripts/check-tla-models.mjs (#3447)
 /.cache/
+
+# Vitest module cache, one per worktree (fsModuleCachePath, #5206)
+.vitest-cache/

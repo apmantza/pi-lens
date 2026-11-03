@@ -358,7 +358,8 @@ describe("the floors outside the LSP nightly are measured and wired (#4518)", ()
 		const job = loadWorkflow("ci.yml").jobs["install-test"];
 		const anchors = step(job, "POSIX case-insensitive anchors");
 		const floor = step(job, "APFS anchors evaluated floor");
-		// The results stay advisory; only "nothing ran" is gating.
+		// Results stay advisory at the test step, while the floor makes recorded
+		// failures visible without promoting the test step itself.
 		expect(anchors["continue-on-error"]).toBe(true);
 		expect(floor["continue-on-error"]).toBeUndefined();
 		expect(floor.if).toContain("macos-latest");
@@ -372,6 +373,7 @@ describe("the floors outside the LSP nightly are measured and wired (#4518)", ()
 		const floorRun = liveRunText(floor);
 		expect(floorRun).toContain('"$RUNNER_TEMP/apfs-anchors.json"');
 		expect(floorRun).toContain("j.numPassedTests+j.numFailedTests");
+		expect(floorRun).toContain("j.numFailedTests!==0");
 		expect(floorRun).toMatch(/--count "apfs-anchors=\$\{count\}"/);
 		// 100 of the measured 223 is a decision (review r1 F5): the leg is
 		// required, the step exists to catch a run that executed nothing, and a

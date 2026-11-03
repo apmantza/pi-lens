@@ -16,6 +16,10 @@ import {
 } from "../clients/lsp-mutation.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
 import {
+	isLspRequestTimeoutError,
+	type LspRequestTimeoutError,
+} from "../clients/lsp/request-timeout-error.js";
+import {
 	resolveHostToolPath,
 	toPosix,
 	uriToPath,
@@ -1420,6 +1424,11 @@ export function createLspNavigationTool(
 						pythonCompileTarget,
 					);
 					const diagnostics = policy.kept;
+					const diagnosticsTimedOut =
+						lspService.getDiagnosticsHealth(filePath)?.failureKind ===
+						"timeout";
+					const diagnosticsPartialTimeout =
+						lspService.getDiagnosticsHealth(filePath)?.partialTimeout === true;
 					const suppressedLine = dispositionSuppressedLine(policy.suppressed);
 					// #4638 r3 (N2): a row the declaration withheld is named on this route
 					// too, so an empty answer cannot read as "no findings published".
@@ -1452,9 +1461,12 @@ export function createLspNavigationTool(
 							content: [
 								{
 									type: "text" as const,
-									text: `${note}\n${JSON.stringify(result)}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
+									text: `${note}\n${JSON.stringify(result)}${diagnosticsTimedOut || diagnosticsPartialTimeout ? `\nNote: LSP diagnostics timed out for ${filePath}` : ""}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
 								},
 							],
+							...(diagnosticsTimedOut && resultCount === 0
+								? { isError: true }
+								: {}),
 							details: {
 								operation,
 								resultCount,
@@ -1475,7 +1487,12 @@ export function createLspNavigationTool(
 						{
 							operation,
 							filePath,
-							failureKind: resultCount === 0 ? "empty_result" : "success",
+							failureKind:
+								diagnosticsTimedOut && resultCount === 0
+									? "timeout"
+									: resultCount === 0
+										? "empty_result"
+										: "success",
 							resultCount,
 							result,
 						},
@@ -1987,56 +2004,76 @@ export function createLspNavigationTool(
 
 			let result: unknown;
 			let usedDocumentSymbolFallback = false;
+			let definitionTimeout: LspRequestTimeoutError | undefined;
 			try {
-				result = await runOperation();
-				const isEmptyInitial =
-					!result || (Array.isArray(result) && result.length === 0);
-				const shouldRetryOnEmpty =
-					isEmptyInitial &&
-					needsFilePath &&
-					[
-						"definition",
-						"typeDefinition",
-						"declaration",
-						"references",
-						"hover",
-						"signatureHelp",
-						"codeAction",
-						"rename",
-						"implementation",
-					].includes(operation);
-				if (shouldRetryOnEmpty) {
-					openedFileContent = await openFileBestEffort(
-						lspService,
-						filePath,
-						true,
-					);
+				try {
 					result = await runOperation();
+					const isEmptyInitial =
+						!result || (Array.isArray(result) && result.length === 0);
+					const shouldRetryOnEmpty =
+						isEmptyInitial &&
+						needsFilePath &&
+						[
+							"definition",
+							"typeDefinition",
+							"declaration",
+							"references",
+							"hover",
+							"signatureHelp",
+							"codeAction",
+							"rename",
+							"implementation",
+						].includes(operation);
+					if (shouldRetryOnEmpty) {
+						openedFileContent = await openFileBestEffort(
+							lspService,
+							filePath,
+							true,
+						);
+						result = await runOperation();
+					}
+				} catch (err) {
+					if (
+						needsFilePath &&
+						operation === "definition" &&
+						isLspRequestTimeoutError(err)
+					) {
+						definitionTimeout = err;
+					} else {
+						throw err;
+					}
 				}
 
 				const stillEmpty =
 					!result || (Array.isArray(result) && result.length === 0);
-				if (stillEmpty && needsFilePath && operation === "definition") {
-					const content = nodeFs.readFileSync(filePath, "utf-8");
-					const token =
-						line && character
-							? tokenAtPosition(content, line, character)
-							: undefined;
-					if (token) {
-						const docSymbols = (await lspService.documentSymbol(
-							filePath,
-						)) as SymbolNode[];
-						const locations = pickLocalSymbolLocation(
-							docSymbols,
-							token,
-							filePath,
-						);
-						if (locations.length > 0) {
-							result = locations;
-							usedDocumentSymbolFallback = true;
+				try {
+					if (stillEmpty && needsFilePath && operation === "definition") {
+						const content = nodeFs.readFileSync(filePath, "utf-8");
+						const token =
+							line && character
+								? tokenAtPosition(content, line, character)
+								: undefined;
+						if (token) {
+							const docSymbols = (await lspService.documentSymbol(
+								filePath,
+							)) as SymbolNode[];
+							const locations = pickLocalSymbolLocation(
+								docSymbols,
+								token,
+								filePath,
+							);
+							if (locations.length > 0) {
+								result = locations;
+								usedDocumentSymbolFallback = true;
+							}
 						}
 					}
+				} catch (err) {
+					throw definitionTimeout ?? err;
 				}
+				if (definitionTimeout && !usedDocumentSymbolFallback)
+					throw definitionTimeout;
+
 				if (
 					mutationContext &&
 					requestedApply &&
@@ -2094,6 +2131,20 @@ export function createLspNavigationTool(
 						{ operation, filePath, failureKind: "bad_input", resultCount: 0 },
 					);
 				}
+				if (isLspRequestTimeoutError(err)) {
+					return finalize(
+						{
+							content: [{ type: "text" as const, text: err.message }],
+							isError: true,
+							details: {
+								method: err.method,
+								timeoutMs: err.timeoutMs,
+								elapsedMs: err.elapsedMs,
+							},
+						},
+						{ operation, filePath, failureKind: "timeout", resultCount: 0 },
+					);
+				}
 				return finalize(
 					{
 						content: [
@@ -2136,8 +2187,9 @@ export function createLspNavigationTool(
 					"\nHint: provide path to scope workspaceSymbol to the active language server/root.";
 			}
 			if (usedDocumentSymbolFallback) {
-				output +=
-					"\nNote: served from documentSymbol fallback due to empty primary result.";
+				output += definitionTimeout
+					? "\nNote: served from documentSymbol fallback; definition timed out."
+					: "\nNote: served from documentSymbol fallback due to empty primary result.";
 			}
 			if (
 				operation === "references" &&
@@ -2192,7 +2244,9 @@ export function createLspNavigationTool(
 					failureKind: isEmpty
 						? "empty_result"
 						: usedDocumentSymbolFallback
-							? "fallback_success"
+							? definitionTimeout
+								? "fallback_after_timeout"
+								: "fallback_success"
 							: "success",
 					resultCount,
 					result,

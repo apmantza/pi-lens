@@ -1,3 +1,5 @@
+export declare function getPinnedNpmVersion(cwd?: string): string;
+
 export declare function runLockfileCompleteness(options?: {
 	cwd?: string;
 	spawn?: typeof import("node:child_process").spawnSync;

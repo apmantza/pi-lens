@@ -90,12 +90,18 @@ export const TEST_FIXTURE_ROOT_MARKER =
 
 export function setupTestEnvironment(
 	prefix = "pi-lens-test-",
-	options: { rootMarker?: boolean } = {},
+	options: { rootMarker?: boolean; tmpRoot?: string } = {},
 ): {
 	tmpDir: string;
 	cleanup: () => void;
 } {
-	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+	// macOS exposes its temporary directory through /var, while the kernel
+	// identity is /private/var. Keep fixture expectations on that identity so
+	// path-utils tests do not compare a pre-realpath spelling with production
+	// output (#5217).
+	const tmpDir = fs.realpathSync.native(
+		fs.mkdtempSync(path.join(options.tmpRoot ?? os.tmpdir(), prefix)),
+	);
 	if (options.rootMarker !== false) {
 		fs.mkdirSync(path.join(tmpDir, TEST_FIXTURE_ROOT_MARKER), {
 			recursive: true,

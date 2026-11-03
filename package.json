@@ -126,6 +126,7 @@
 		"scripts/rpc-load-check.mjs",
 		"README.md",
 		"CHANGELOG.md",
+		"CHANGELOG-USER.md",
 		"banner.svg",
 		"banner.png"
 	],
@@ -133,7 +134,7 @@
 		"@ast-grep/cli": "0.51.0",
 		"@ast-grep/napi": "^0.51.0",
 		"js-yaml": "^5.2.2",
-		"minimatch": "^11.0.1",
+		"minimatch": "^11.0.4",
 		"pidusage": "^4.0.1",
 		"vscode-jsonrpc": "^10.0.0"
 	},
@@ -159,8 +160,8 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.15",
-		"@earendil-works/pi-coding-agent": "^1.4.0",
-		"@earendil-works/pi-tui": "^1.4.0",
+		"@earendil-works/pi-coding-agent": "^1.5.0",
+		"@earendil-works/pi-tui": "^1.5.0",
 		"@jridgewell/sourcemap-codec": "^1.6.0",
 		"@jridgewell/trace-mapping": "^0.3.31",
 		"@stryker-mutator/core": "10.1.1",
@@ -190,6 +191,7 @@
 		"vitest": "^5.0.3"
 	},
 	"pi": {
+		"changelogPath": "CHANGELOG-USER.md",
 		"extensions": [
 			"./dist/index.js"
 		],
@@ -205,6 +207,9 @@
 		"protobufjs@7.6.6": true
 	},
 	"overrides": {
+		"@stryker-mutator/core": {
+			"minimatch": "$minimatch"
+		},
 		"qs": "^6.15.4",
 		"undici": "^8.12.2"
 	}

@@ -50,6 +50,7 @@ import {
 	lspSymbolKindName,
 	qualifiedLspSymbolName,
 } from "./lsp-document-symbols.js";
+import { isLspRequestTimeoutError } from "./lsp/request-timeout-error.js";
 import {
 	computeTrailingWhitespaceOldTextPatch,
 	findUniqueMatchLineRange,
@@ -1137,8 +1138,40 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				effectiveReadOffset = expansion.newOffset;
 				effectiveReadLimit = expansion.newLimit;
 				let enriched = false;
+				let lspSymbolTimedOut = false;
 				let enrichedAncestry = expansion.ancestry;
-				const lspSymbols = await getOpenDocumentSymbols(filePath);
+				let lspSymbols;
+				let lspSymbolOutcome:
+					| "outer-deadline"
+					| "caller-abort"
+					| "failed"
+					| undefined;
+				let lspSymbolError: string | undefined;
+				try {
+					const result = await bounded(
+						getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
+						{
+							ms: EXPANSION_BUDGET_MS,
+							signal: deps.ctx.signal,
+							hook: "tool_call",
+							label: "read-lsp-document-symbols",
+						},
+					);
+					lspSymbols = result?.symbols;
+					if (result === undefined)
+						lspSymbolOutcome = deps.ctx.signal?.aborted
+							? "caller-abort"
+							: "outer-deadline";
+				} catch (err) {
+					// none: ts_range_expanded below persists timeout or failure with the file identity.
+					if (isLspRequestTimeoutError(err)) lspSymbolTimedOut = true;
+					else {
+						lspSymbolOutcome = "failed";
+						lspSymbolError = String(
+							err instanceof Error ? err.message : err,
+						).slice(0, 512);
+					}
+				}
 				const located = lspSymbols
 					? findDocumentSymbolAtLine(
 							lspSymbols,
@@ -1201,6 +1234,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					symbolEndLine: expansion.enclosingSymbol.endLine,
 					metadata: {
 						enriched,
+						...(lspSymbolTimedOut && { lspSymbolTimeout: true }),
+						...(lspSymbolOutcome && { lspSymbolOutcome }),
+						...(lspSymbolError !== undefined && { lspSymbolError }),
 						durationMs: expansion.durationMs,
 						budgetMs: EXPANSION_BUDGET_MS,
 					},
