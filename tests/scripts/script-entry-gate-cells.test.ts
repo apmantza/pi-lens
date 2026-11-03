@@ -47,7 +47,7 @@ const SCRIPTS = path.join(ROOT, "scripts");
 const POOL_WIDTH = 8;
 const RUN_TIMEOUT_MS = 20_000;
 
-type Cell = { args?: string[]; stdin?: string };
+type Cell = { args?: string[]; stdin?: string; env?: Record<string, string> };
 
 const PROBE = "--entry-gate-cell-probe";
 const NO_SUCH_FILE = path.join(os.tmpdir(), "pi-lens-entry-gate-cell-absent");
@@ -62,7 +62,11 @@ const CELLS: Record<string, Cell> = {
 	"build-dist-tsc.mjs": {},
 	"capture-runner-fixtures.mjs": {},
 	"capture-runner-output.mjs": {},
-	"check-action-pins.mjs": {},
+	// The default run resolves every pinned tag over the GitHub API, so two runs
+	// see different rate-limit answers (CI run 41607001195). `GITHUB_API_URL` is
+	// the script's own base-URL seam: a base with no scheme makes every request
+	// fail to parse before any socket opens, the same way in every run.
+	"check-action-pins.mjs": { env: { GITHUB_API_URL: "offline.invalid" } },
 	// Runs its real check over the checked-in fragments; read-only.
 	"check-changelog-fragments.mjs": { args: [] },
 	"check-ci-job-p90.mjs": {},
@@ -193,7 +197,7 @@ const imported = new Map<string, Settled>();
 
 // The ambient VITEST variables belong to the outer worker, and the child gets
 // its home pinned under the scratch root (the harness keeps the real home out of reach).
-function childEnv(): NodeJS.ProcessEnv {
+function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = {
 		PATH: process.env.PATH,
 		SystemRoot: process.env.SystemRoot,
@@ -202,6 +206,7 @@ function childEnv(): NodeJS.ProcessEnv {
 		PI_LENS_HOME: path.join(HOME, ".pi-lens"),
 		PILENS_DATA_DIR: path.join(HOME, ".pi-lens"),
 		TMPDIR: tmpRoot,
+		...extra,
 	};
 	for (const key of Object.keys(env))
 		if (env[key] === undefined) delete env[key];
@@ -212,10 +217,11 @@ function childEnv(): NodeJS.ProcessEnv {
 async function settle(
 	args: string[],
 	stdin: string | undefined,
+	extraEnv?: Record<string, string>,
 ): Promise<Settled> {
 	const child = run(process.execPath, args, {
 		cwd: CWD,
-		env: childEnv(),
+		env: childEnv(extraEnv),
 		timeout: RUN_TIMEOUT_MS,
 	});
 	child.child.stdin?.end(stdin ?? "");
@@ -246,11 +252,16 @@ async function runPool(): Promise<void> {
 				const args = cell.args ?? [PROBE];
 				entered.set(
 					script,
-					await settle([path.join(SCRIPTS, script), ...args], cell.stdin),
+					await settle(
+						[path.join(SCRIPTS, script), ...args],
+						cell.stdin,
+						cell.env,
+					),
 				);
 				const viaLink = await settle(
 					[path.join(LINKED, script), ...args],
 					cell.stdin,
+					cell.env,
 				);
 				linked.set(script, { ...viaLink, out: normalize(viaLink.out) });
 				const url = JSON.stringify(
@@ -293,6 +304,18 @@ describe("scripts/ entry-gate cells (shape 44 fold onto isMainModule)", () => {
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	// Recurrence: CI run 41607001195 (shard 2/5) reddened the linked-path cell of
+	// `check-action-pins.mjs`. Its default argv ran the real check, which
+	// resolves every pinned action tag over the GitHub API; the direct and the
+	// linked run saw different rate-limit answers, so their outputs differed for
+	// a reason that has nothing to do with the entry gate.
+	it("check-action-pins resolves no tag over the network", () => {
+		const result = entered.get("check-action-pins.mjs");
+		expect(result?.out, "no settled run").toBeDefined();
+		expect(result?.out).not.toMatch(/GitHub API \d{3}|All pinned/);
+		expect(result?.out).toContain("cannot resolve");
+	});
 
 	for (const script of Object.keys(CELLS)) {
 		describe(script, () => {
