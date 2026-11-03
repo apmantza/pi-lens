@@ -66,6 +66,10 @@ import {
 } from "../dispatch/runners/utils/availability-policy.js";
 import { resolveOpengrepConfig } from "../opengrep-config.js";
 import {
+	isShellcheckDialectSupported,
+	resolveShellFileDialect,
+} from "../shell-dialect.js";
+import {
 	isZizmorAuditTarget,
 	resolveZizmorGitHubToken,
 } from "../zizmor-config.js";
@@ -4443,6 +4447,12 @@ export const BashServer: LSPServerInfo = {
 	// installed; when it is not, the shellcheck runner's dialect gate keeps
 	// zsh quiet instead of falling back to a zsh-illiterate analyzer.
 	extensions: [".bash", ".sh"],
+	// #3969 also needs the content gate: .sh/.bash may declare zsh.
+	pathFilter(filePath) {
+		return isShellcheckDialectSupported(
+			resolveShellFileDialect(filePath).dialect,
+		);
+	},
 	root: FileDirRoot,
 	// #2194 bounded the installer's own verification at 20s; the dispatch
 	// touch's client-wait floor stayed at the shared 5s default, so a cold
