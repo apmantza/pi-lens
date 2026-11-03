@@ -1142,7 +1142,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				let enrichedAncestry = expansion.ancestry;
 				let lspSymbols;
 				try {
-					lspSymbols = await getOpenDocumentSymbols(filePath);
+					lspSymbols = await bounded(getOpenDocumentSymbols(filePath), {
+						ms: EXPANSION_BUDGET_MS,
+						signal: deps.ctx.signal,
+						hook: "tool_call",
+						label: "read-lsp-document-symbols",
+					});
 				} catch (err) {
 					if (isLspRequestTimeoutError(err)) lspSymbolTimedOut = true;
 				}

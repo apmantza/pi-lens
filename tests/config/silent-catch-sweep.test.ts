@@ -741,7 +741,7 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :264
 	"clients/lsp-document-symbols.ts": {
 		silent: 1,
-		identities: "cf08efebeaedf178",
+		identities: "adc61c3cadb3d572",
 		reason: PRE_RULE,
 	}, // :62
 	"clients/lsp-mutation.ts": {
@@ -800,7 +800,7 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// (:7890) now returns its own failed flag; no handler added or removed.
 	"clients/lsp/index.ts": {
 		silent: 42,
-		identities: "291c92ed02676988",
+		identities: "2f98b83322bae1b4",
 		reason: SHARP_DID_SAVE,
 	}, // :239, :356, :385, :1161, :1761, :2018, :2316, :2350, :2586, :2759, :2878, :3607, :3667, :3701, :4134, :4713, :4963, :5092, :5155, :5166, :5212, :5301, :5326, :5351, :5645, :5708, :6063, :6087, :6252, :6329, :6348, :7890, :8475, :8707, :8775, :8897, :8991, :9051, :9288, :9415, :9788, :9839
 	"clients/lsp/jvm-runtime.ts": {
@@ -1073,8 +1073,8 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :306, :343
 	"clients/review-graph/builder.ts": {
-		silent: 19,
-		identities: "c13466bb5df2c24b",
+		silent: 20,
+		identities: "0f1af3e5d16d25a2",
 		reason: PRE_RULE,
 	}, // :1254, :1303, :1399, :1989, :2019, :2025, :2040, :2046, :2138, :2503, :2601, :2727, :2769, :3200, :4676, :5529, :5608, :6031, :6363
 	"clients/review-graph/git-identity.ts": {
@@ -1118,8 +1118,8 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :403, :648, :901, :949, :956, :1042, :1069, :1146, :1181, :1183, :1208, :1238, :1371, :1422, :1592, :2189, :2782, :2814, :2922, :2999, :3004, :3414, :3428, :3501
 	"clients/runtime-tool-call.ts": {
-		silent: 10,
-		identities: "042e838b36502579",
+		silent: 11,
+		identities: "1baac382bac581aa",
 		reason: PRE_RULE,
 	}, // :269, :502, :526, :1049, :1216, :1441, :1832 and the rest (11 -> 10, #5120: the partial-apply rejection catch went with the in-tool_call writer)
 	"clients/runtime-tool-result.ts": {
