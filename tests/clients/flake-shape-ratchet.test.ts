@@ -647,14 +647,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real git worktree metadata is written and registered by Git; an in-process double cannot prove linked-worktree ownership",
 	},
-	// 2026-10-21 (#4713 R11): real `bash -c` is the oracle for which
-	// directory each generated spelling enters and where its redirect lands;
-	// the generator exists because hand-written expectations missed spellings.
 	"real-process-spawn:clients/ast-grep-replace-descendant-kind.e2e.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"Real sg execution proves CLI match behavior; a runner stub cannot exercise the binary.",
 	},
+	// 2026-10-21 (#4713 R11): real `bash -c` is the oracle for which
+	// directory each generated spelling enters and where its redirect lands;
+	// the generator exists because hand-written expectations missed spellings.
 	"real-process-spawn:clients/bash-word-composition.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -926,14 +926,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a clean-tree HEAD move needs a real git checkout and a closed module's stale bytes live only in a real pyright-langserver child; no double reproduces what the server kept",
 		},
-	// 2026-10-31 (#5119): markdownlint-cli2's own directory-config merge and fix
-	// pass are the behaviour under test (`"fix": true` made a lint run write the
-	// file); the real module's bytes are the witness and its CLI is the parity
-	// reference; serialized in the wall-clock lane.
-	// 2026-11-01 (#5119 review r1): the no-fix wrapper runs cli2's `main` in a
-	// child so the spawn budget can kill a spinning rule; the kill, the late-throw
-	// exit and the fresh import of an edited config are properties of a real
-	// node process, driven through the runner's own spawn seam.
 	"real-process-spawn:clients/lsp/watched-clear-5131.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -950,6 +942,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 		},
+	// 2026-10-31 (#5119): markdownlint-cli2's own directory-config merge and fix
+	// pass are the behaviour under test (`"fix": true` made a lint run write the
+	// file); the real module's bytes are the witness and its CLI is the parity
+	// reference; serialized in the wall-clock lane.
+	// 2026-11-01 (#5119 review r1): the no-fix wrapper runs cli2's `main` in a
+	// child so the spawn budget can kill a spinning rule; the kill, the late-throw
+	// exit and the fresh import of an edited config are properties of a real
+	// node process, driven through the runner's own spawn seam.
 	"real-process-spawn:clients/markdownlint-api.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1636,9 +1636,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"#3617: the subject is Vitest's own fork teardown (the pool SIGTERMs the worker after the shared afterAll); no in-process double reproduces that kill or a hook timeout",
 	},
-	// 2026-10-15 (#4485): the cascade's silent-push wait, turn_end's registry
-	// peek and the expiry read each read a language-server client's publish
-	// state; a real server cannot be made to publish or stay silent on demand.
 	"real-process-spawn:tools/ast-grep-outline.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -1649,6 +1646,9 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	// 2026-10-15 (#4485): the cascade's silent-push wait, turn_end's registry
+	// peek and the expiry read each read a language-server client's publish
+	// state; a real server cannot be made to publish or stay silent on demand.
 	"service-double:clients/cascade-compute.test.ts::LSPClientInfo": {
 		detector: "service-double",
 		reason:
@@ -2793,6 +2793,26 @@ describe("#5100 known real-spawn routes", () => {
 				"new AstGrepClient().futureMethod();",
 			),
 		).toHaveLength(1);
+	});
+	// Recurrence (#5227 r1 F1): a blanket early return for exempt files kept all
+	// 131 ratchet tests green. An exemption must suppress only the construction.
+	it("an exempt file still counts another spawn spelling beside its construction", () => {
+		const exempt = "clients/ast-grep-client-replace.test.ts";
+		expect(Object.hasOwn(AST_GREP_SPAWN_EXEMPTIONS, exempt)).toBe(true);
+		const hits = scanRealProcessSpawn(
+			exempt,
+			[
+				`import { AstGrepClient } from "../../clients/ast-grep-client.js";`,
+				`import { spawnFakeLspServer } from "../support/${fakeModule}.js";`,
+				"new AstGrepClient().formatDiagnostics([]);",
+				"spawnFakeLspServer();",
+			].join("\n"),
+		);
+		const reasons = hits.map((hit) => hit.reason);
+		expect(reasons.some((reason) => reason.includes("AstGrepClient"))).toBe(
+			false,
+		);
+		expect(reasons.some((reason) => reason.includes(fakeModule))).toBe(true);
 	});
 	it.each([
 		`import { spawnFakeLspServer as launch } from "../support/${fakeModule}.js"; launch();`,
