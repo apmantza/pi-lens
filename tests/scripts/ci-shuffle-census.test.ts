@@ -493,7 +493,12 @@ describe("census plan against vitest collection", () => {
 			.split(/\s+/)
 			.filter((word) => word.endsWith(".test.ts"));
 		expect(integration.length).toBeGreaterThan(0);
-		expect([...unit.uncollected].sort()).toEqual([...integration].sort());
+		// Code-unit order, the same order `.sort()` gives, stated explicitly.
+		const byCodeUnit = (a: string, b: string): number =>
+			a < b ? -1 : a > b ? 1 : 0;
+		expect([...unit.uncollected].sort(byCodeUnit)).toEqual(
+			[...integration].sort(byCodeUnit),
+		);
 		expect(unit.unplanned).toEqual([]);
 	});
 });
