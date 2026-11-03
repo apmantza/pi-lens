@@ -4213,7 +4213,7 @@ describe("body caps (#5003)", () => {
 
 	it("names each counted Summary sentence and the paragraph it sits in (#5208)", () => {
 		expect(capError(summaryOf(COUNTED_SHAPE), "sentences")).toEqual([
-			`${RULE}: it holds 4 counted sentences (3 in the summary, 1 in the Remaining line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.`,
+			`${RULE}: it holds 4 counted sentences (3 in the summary, 1 in the Remaining #5208 line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.`,
 		]);
 	});
 
@@ -4232,7 +4232,7 @@ describe("body caps (#5003)", () => {
 				"sentences",
 			),
 		).toEqual([
-			`${RULE}: it holds 5 counted sentences (3 in the summary, 2 in the Closes line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 1 sentence. See .github/PULL_REQUEST_TEMPLATE.md.`,
+			`${RULE}: it holds 5 counted sentences (3 in the summary, 2 in the Closes #5208 line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 1 sentence. See .github/PULL_REQUEST_TEMPLATE.md.`,
 		]);
 	});
 
@@ -4260,7 +4260,7 @@ describe("body caps (#5003)", () => {
 				"sentences",
 			),
 		).toEqual([
-			`${RULE}: it holds 4 counted sentences (3 in the summary, 1 in the Remaining line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.`,
+			`${RULE}: it holds 4 counted sentences (3 in the summary, 1 in the Remaining #5208 line), over the 3-sentence cap. ${BOOKKEEPING_ADVICE}, so keep the summary prose to 2 sentences. See .github/PULL_REQUEST_TEMPLATE.md.`,
 		]);
 	});
 
@@ -4271,7 +4271,7 @@ describe("body caps (#5003)", () => {
 				"sentences",
 			),
 		).toEqual([
-			`${RULE}: it holds 4 counted sentences (1 in the summary, 3 in the Refs line), over the 3-sentence cap. Cut 1 sentence from the Refs line. See .github/PULL_REQUEST_TEMPLATE.md.`,
+			`${RULE}: it holds 4 counted sentences (1 in the summary, 3 in the Refs #5208 line), over the 3-sentence cap. Cut 1 sentence from the Refs #5208 line. See .github/PULL_REQUEST_TEMPLATE.md.`,
 		]);
 	});
 
@@ -4286,7 +4286,22 @@ describe("body caps (#5003)", () => {
 				"sentences",
 			),
 		).toEqual([
-			`${RULE}: it holds 6 counted sentences (2 in the summary, 2 in the Refs line, 2 in the Remaining line), over the 3-sentence cap. Cut 3 sentences across the summary, Refs and Remaining lines. See .github/PULL_REQUEST_TEMPLATE.md.`,
+			`${RULE}: it holds 6 counted sentences (2 in the summary, 2 in the Refs #5208 line, 2 in the Remaining #5208 line), over the 3-sentence cap. Cut 3 sentences across the summary, Refs #5208 and Remaining #5208 lines. See .github/PULL_REQUEST_TEMPLATE.md.`,
+		]);
+	});
+
+	it("spans two lines of one label (#5215)", () => {
+		expect(
+			capError(
+				summaryOf([
+					"The refusal names the line. It counts sentences.",
+					"Refs #5208. It stays open now.",
+					"Refs #5207: one thing. Another thing.",
+				]),
+				"sentences",
+			),
+		).toEqual([
+			`${RULE}: it holds 6 counted sentences (2 in the summary, 2 in the Refs #5208 line, 2 in the Refs #5207 line), over the 3-sentence cap. Cut 3 sentences across the summary, Refs #5208 and Refs #5207 lines. See .github/PULL_REQUEST_TEMPLATE.md.`,
 		]);
 	});
 

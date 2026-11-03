@@ -4496,7 +4496,7 @@ function summaryText(tokens) {
 // sentence sat in the bookkeeping line below it (3 retries on #5176, 4 on
 // #5202). The form is matched, not the first word, so prose that opens
 // "Remaining work is documented" stays prose (#5215 F2).
-const SUMMARY_BOOKKEEPING = /^(refs?|remaining|closes?)\s*#\d+/i;
+const SUMMARY_BOOKKEEPING = /^(refs?|remaining|closes?)\s*#(\d+)/i;
 const SUMMARY_SECTION = "the summary";
 
 function counted(count, noun) {
@@ -4505,16 +4505,16 @@ function counted(count, noun) {
 
 /**
  * Every counted sentence of a Summary section, aggregated per labelled line:
- * the bookkeeping keyword the line the terminator sits on opens with ("the
- * summary" for prose), in the order the labels first appear, plus the total.
+ * the bookkeeping keyword and issue the line the terminator sits on opens
+ * with ("the summary" for prose), in the order the labels first appear, plus
+ * the total.
  * The sentences are counted over the section as one text and then attributed
  * to the line each terminator sits in, so the count keeps its abbreviation
  * tolerance (#3262): a sentence that starts in lower case counts with the one
  * before it, and the character cap, not the count, bounds a Summary written
- * that way. Aggregating by label keeps one entry per place the author can
- * find, and reading the label off the terminator's own line reports
- * `Refs #N` then `Remaining #N:` inside one paragraph as the `Remaining` line
- * the sentence ends on (#5215 F1, F3).
+ * that way. Reading the label off the terminator's own line reports `Refs #N`
+ * then `Remaining #N:` inside one paragraph as the `Remaining #N` line the
+ * sentence ends on (#5215 F1, F3, F10).
  */
 function summarySentenceCounts(tokens) {
 	const text = tokens
@@ -4526,11 +4526,11 @@ function summarySentenceCounts(tokens) {
 	const lines = [];
 	let start = 0;
 	for (const line of text.split("\n")) {
-		const keyword = SUMMARY_BOOKKEEPING.exec(line.trim())?.[1];
+		const match = SUMMARY_BOOKKEEPING.exec(line.trim());
 		lines.push({
 			start,
 			end: start + line.length,
-			label: keyword ? `the ${keyword} line` : SUMMARY_SECTION,
+			label: match ? `the ${match[1]} #${match[2]} line` : SUMMARY_SECTION,
 		});
 		start += line.length + 1;
 	}
