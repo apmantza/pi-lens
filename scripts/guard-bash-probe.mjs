@@ -84,6 +84,7 @@ import { basename, dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 export const HOOK = join(ROOT, "scripts", "hooks", "guard-bash.mjs");
@@ -504,7 +505,7 @@ function report({ results, summary }, diffMode) {
 		);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	try {
 		const args = parseArgs(process.argv.slice(2));
 		const outcome = await runMatrix(args.matrixPath, args);

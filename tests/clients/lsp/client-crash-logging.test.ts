@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a child that dies unprompted must emit a real exit signal and close event; a stub never exits on its own
 /**
  * #615-followup dogfooding: an ast-grep client died 5 times mid-sweep in a real
  * project and NOTHING in latency.log recorded why — no exit code, no signal,

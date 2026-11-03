@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Real sg execution proves CLI match behavior; a runner stub cannot exercise the binary.
 /**
  * End-to-end proof that `ast_grep_replace`'s new `hasDescendantKind` param
  * (#1423) actually changes match behavior against the real ast-grep CLI —

@@ -33,8 +33,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const BOT_BRANCH = "bot/lsp-docs-refresh";
 export const MATRIX_DOC = "docs/lsp-capability-matrix.md";
@@ -143,10 +144,7 @@ export function seedMatrixFromBotBranch(deps = {}) {
 	return done(decision);
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	const repoRoot = path.resolve(
 		path.dirname(fileURLToPath(import.meta.url)),
 		"..",

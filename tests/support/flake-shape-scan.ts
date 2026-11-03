@@ -297,8 +297,9 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 	);
 }
 
-// #3801 (review F2): the test-side helpers of the two kits that spawn real
-// children. `lane-check-kit` runs the lane-check CLI and real git; the
+// #3801 (review F2), #5100: the test-side helpers of kits that spawn real
+// children. `fake-lsp-server` exports the real launchLSP boundary.
+// `lane-check-kit` runs the lane-check CLI and real git; the
 // `head-move-resync-kit` runs real git. The names are generic: `git`, `runGit`,
 // `makeRepo` and `runLane` are also local helpers in 34 other test files that
 // import no kit, so a bare-name entry in SUPPORT_SPAWN_HELPER_CALL would count
@@ -308,12 +309,21 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 // import (`runLane as run`) cannot pass unseen.
 const SPAWNING_KIT_HELPERS: Readonly<Record<string, readonly string[]>> = {
 	"lane-check-kit": ["runLane", "makeLane", "git", "worktreeCount"],
-	"head-move-resync-kit": ["runGit", "makeRepo"],
+	"head-move-resync-kit": ["runGit", "makeRepo", "holdWithAuxiliary"],
+	"fake-lsp-server": [
+		...codeMatches(
+			fs.readFileSync(
+				path.join(TESTS_ROOT, "support/fake-lsp-server.ts"),
+				"utf8",
+			),
+			/\bexport\s+(?:async\s+)?function\s+(\w+)\s*\(/g,
+		),
+	].map((match) => match[1]),
 };
 // A kit module named as a whole string: an import, a re-export, a dynamic
 // import or a require. Read over the stripped source, which keeps strings.
 const KIT_MODULE_SPECIFIER =
-	/(["'])(?:[^"'\n]*\/)?(lane-check-kit|head-move-resync-kit)(?:\.[jt]s)?\1/g;
+	/(["'])(?:[^"'\n]*\/)?(lane-check-kit|head-move-resync-kit|fake-lsp-server)(?:\.[jt]s)?\1/g;
 // An import clause, read whole: a kit helper imported by name from any module
 // (a barrel that re-exports it) names its kit too. Only the six split files
 // import these names, so the clause form reads no other file.
@@ -417,10 +427,31 @@ function importActualReadsChildProcess(
 	return CHILD_PROCESS_SPECIFIER.test(name);
 }
 
+// #5100: construction is a hit by default; these files prove no sg child runs.
+export const AST_GREP_SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
+	"clients/ast-grep-client-format-diagnostics.test.ts":
+		"Calls formatDiagnostics only; construction and formatting never execute sg.",
+	"clients/ast-grep-client-replace.test.ts":
+		"Every client replaces its SgRunner with exec or validation stubs before use.",
+	"clients/ast-grep-client-rules-health.test.ts":
+		"Constructor health checks only; the one availability scan stubs SgRunner.ensureAvailable.",
+	"clients/ast-grep-mutation-bridge.test.ts":
+		"Every client replaces its runner at the sg process boundary before tool execution.",
+	"clients/ast-grep-rule-regex-budget.test.ts":
+		"The client runner is replaced with deterministic rule-scan output; CPU regex work is real.",
+	"clients/ast-grep-severity-error.test.ts":
+		"safeSpawn and safeSpawnAsync are mocked at the process boundary.",
+	"clients/dispatch/runners/runner-helpers.test.ts":
+		"safeSpawn and safeSpawnAsync are mocked at the process boundary.",
+	"clients/runtime-tool-call.test.ts":
+		"The AstGrepClient runner is replaced before mutation-bridge tool execution.",
+};
+
 /**
  * A real child process: a `child_process` import, a call-shaped
  * `execFileSync`/`spawnSync`/`execSync`, a call of a spawning kit helper in a
- * file that names its kit (`SPAWNING_KIT_HELPERS`, #3801 F2), ANY spawn
+ * file that names its kit (`SPAWNING_KIT_HELPERS`, #3801 F2), an
+ * AstGrepClient construction unless explicitly exempted (#5100), ANY spawn
  * flavor whose argv mentions `vitest` — a test file re-launching the suite
  * inside itself —
  * or a `vi.importActual` of `child_process` behind a same-file mock (#5064):
@@ -432,7 +463,7 @@ function importActualReadsChildProcess(
  * count (see the module doc's known-limits note for the trade this makes).
  */
 export function scanRealProcessSpawn(
-	_file: string,
+	file: string,
 	source: string,
 	context?: ScanContext,
 ): FlakeHit[] {
@@ -500,6 +531,17 @@ export function scanRealProcessSpawn(
 				line: lineIdx + 1,
 				text: source.split("\n")[lineIdx]?.trim() ?? "",
 				reason: `${match[1]}( support spawn helper`,
+			});
+		}
+	}
+	// #5100: do not guess which client methods will reach sg.
+	if (!Object.hasOwn(AST_GREP_SPAWN_EXEMPTIONS, file)) {
+		for (const match of codeMatches(source, /\bnew\s+AstGrepClient\s*\(/g)) {
+			const lineIdx = source.slice(0, match.index ?? 0).split("\n").length - 1;
+			hits.set(lineIdx, {
+				line: lineIdx + 1,
+				text: lines[lineIdx]?.trim() ?? "",
+				reason: "AstGrepClient construction (potential real sg child)",
 			});
 		}
 	}

@@ -31,7 +31,6 @@
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { retryWithBackoff } from "./lib/retry.mjs";
 import {
 	pickNewestInRange,
@@ -39,6 +38,7 @@ import {
 	readSupportedRangeEnv,
 	SUPPORTED_RANGE_ENV_VAR,
 } from "./lib/resolve-newest-in-range-host.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const ATTEMPTS = 3;
 const DEFAULT_BACKOFF_MS = [0, 5_000, 15_000];
@@ -145,7 +145,7 @@ export async function main(argv, env) {
 	}
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	await main(process.argv.slice(2), process.env);
 	process.exit(process.exitCode ?? 0);
 }

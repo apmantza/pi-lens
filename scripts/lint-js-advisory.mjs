@@ -8,8 +8,8 @@ import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import semver from "semver";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const require = createRequire(import.meta.url);
 const TSGOLINT = "oxlint-tsgolint";
@@ -136,6 +136,6 @@ export function runAdvisory({
 	return result.status ?? 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
 	process.exitCode = runAdvisory();
 }

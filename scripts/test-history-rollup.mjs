@@ -35,7 +35,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const HISTORY_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 export const HISTORY_MAX_BYTES = 95 * 1024 * 1024;
@@ -645,5 +645,5 @@ export function runCli(argv) {
 	}
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+if (isMainModule(import.meta.url))
 	process.exitCode = runCli(process.argv.slice(2));

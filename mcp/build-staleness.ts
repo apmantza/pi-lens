@@ -179,3 +179,64 @@ export const STALE_WARN_ONLY =
 	"which is older than the on-disk build (a rebuild or merge landed after " +
 	"this session started). Restart the Claude session to re-warm, or use " +
 	"pilens_rebuild + a tool that supports mode=fresh if available.";
+
+// --- Warm build-staleness — per-tool warn-only set (#535) --------------------
+//
+// `pilens_analyze` is handled specially above (force-routes to the existing
+// `fresh` worker fork — it's a stateless per-file dispatch with no dependency
+// on warm-process-only state). Every OTHER tool below either:
+//   - depends on state that only exists inside THIS long-lived process (the
+//     in-memory review graph built by warm `pilens_analyze` calls, the warm
+//     LSP client fleet, the latency/diagnostic counters, the CacheManager) —
+//     a fresh fork would start with none of that and answer differently, not
+//     "more correctly"; or
+//   - is cheap/rare enough (rebuild, session_start) that building bespoke
+//     fresh-fork plumbing isn't worth it yet.
+// So the honest move for all of them is #535's "honest degrade": warn, don't
+// silently serve, and don't pretend a fresh fork would help.
+//
+//   pilens_module_report, pilens_symbol_search — warm review-graph / word-index
+//     cache is in-memory only; a fresh fork has an EMPTY graph, which is a
+//     worse answer than a stale-but-populated one with a warning attached.
+//   pilens_project_scan                        — CacheManager instance is warm-
+//     process state; scan results are cache-derived.
+//   pilens_health, pilens_latency              — these tools report ON the warm
+//     process itself (alive LSP clients, this session's latency log) — the
+//     question "is this call's ANSWER stale" doesn't quite apply, but the code
+//     answering it might still be a stale build, so still worth a note.
+//   pilens_session_start, pilens_turn_end      — mutate warm LSP/graph state;
+//     must run in-process, can't be forked fresh.
+//   pilens_ast_grep_search, pilens_ast_grep_replace,
+//   pilens_lsp_navigation, pilens_diagnostics — depend on the warm LSP
+//     fleet / ast-grep client instances; no fresh-fork machinery exists for
+//     them today (only pilens_analyze's worker.ts loads a fresh dispatch
+//     graph) and the LSP fleet specifically CANNOT be recreated cheaply per
+//     call, so warn is the only honest option.
+//   pilens_read_symbol, pilens_read_enclosing  — stateless file reads, but no
+//     existing fresh-fork path either; warn rather than silently answer with
+//     however this stale build's tree-sitter/read-symbol logic behaves.
+//   pilens_effective_config                    — derives (never reads) the
+//     LSP config for the file's directory to say which servers it selects,
+//     and the merge/deny semantics it explains are compiled code; a stale
+//     build would explain a resolution the running one no longer performs.
+//
+// `pilens_rebuild` is deliberately excluded: it doesn't answer with analysis
+// at all (it shells out to `npm run build`/`build:dist`), and it's the very
+// mechanism that CAUSES staleness — noting "stale" on the tool that fixes
+// staleness would be confusing, not honest.
+export const WARN_ONLY_STALE_TOOLS = new Set([
+	"pilens_module_report",
+	"pilens_project_report",
+	"pilens_symbol_search",
+	"pilens_project_scan",
+	"pilens_health",
+	"pilens_latency",
+	"pilens_session_start",
+	"pilens_turn_end",
+	"pilens_ast_grep_search",
+	"pilens_ast_grep_replace",
+	"pilens_lsp_navigation",
+	"pilens_read_symbol",
+	"pilens_read_enclosing",
+	"pilens_effective_config",
+]);

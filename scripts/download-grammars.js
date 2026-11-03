@@ -20,7 +20,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 // The pinned tree-sitter-wasms release. Bump this, run `--write-manifest`, and
 // commit the regenerated grammars.lock.json to move to a new grammar set.
 const TREE_SITTER_WASMS_VERSION = "0.1.13";
@@ -312,7 +313,7 @@ async function main() {
 }
 // Only run when invoked directly (not when imported by the provenance check or
 // tests) — the import guard keeps the exported helpers side-effect-free.
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule(import.meta.url)) {
     main().catch((err) => {
         // Never fail the install — tree-sitter is optional.
         console.warn("Warning: grammar download failed:", err.message);

@@ -1188,7 +1188,11 @@ function createSubagentStopFixture(agentId: string) {
 	fs.mkdirSync(path.join(repo, "scripts", "lib"), { recursive: true });
 	const cli = path.join(repo, "scripts", "prune-agent-worktrees.mjs");
 	fs.copyFileSync(path.join(scriptsDir, "prune-agent-worktrees.mjs"), cli);
-	for (const file of ["worktree-hygiene.mjs", "process-scan.mjs"]) {
+	for (const file of [
+		"worktree-hygiene.mjs",
+		"process-scan.mjs",
+		"is-main-module.mjs",
+	]) {
 		fs.copyFileSync(
 			path.join(scriptsDir, "lib", file),
 			path.join(repo, "scripts", "lib", file),

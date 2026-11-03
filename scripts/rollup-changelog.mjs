@@ -9,6 +9,7 @@ import {
 	parseSections,
 	summarizeSection,
 } from "./lib/changelog.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const CHANGELOG_SECTIONS = [
 	"Added",
@@ -287,10 +288,7 @@ export function rollupChangelog(
 	return { version, files: entries.map(({ file }) => file), changelogPath };
 }
 
-if (
-	process.argv[1] &&
-	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
 	const version = process.argv[2];
 	if (version === "--check") {
 		try {

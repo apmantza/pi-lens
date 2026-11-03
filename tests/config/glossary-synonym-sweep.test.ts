@@ -1038,7 +1038,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 8 -> 4 (#4689 item 6): `findShellcheckConfig` delegates to
 		// `findLocalToolConfig`, dropping its `path.join` / `path.resolve` /
 		// `path.dirname` loop and the `fs` pre-check.
-		"clients/dispatch/runners/shellcheck.ts": 4,
+		// 4 -> 3: dialect extension resolution moved to clients/shell-dialect.ts.
+		"clients/dispatch/runners/shellcheck.ts": 3,
 		"clients/dispatch/runners/spellcheck.ts": 6,
 		"clients/dispatch/runners/spotbugs.ts": 4,
 		"clients/dispatch/runners/sqlfluff.ts": 3,
@@ -1409,6 +1410,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.resolve(projectRoot)`, the normalization every sibling map key
 		// in this file already uses (`cachedBaselines`, `rootArtifactKey`).
 		"clients/sgconfig.ts": 25,
+		// The path namespace and extname call moved from the ShellCheck runner.
+		"clients/shell-dialect.ts": 2,
 		"clients/skills-resolver.ts": 3,
 		"clients/slow-fs.ts": 4,
 		"clients/smells-rollup.ts": 3,

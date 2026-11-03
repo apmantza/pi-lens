@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a late empty publication after the didOpen scan is the event under test; it arrives on a real server's stdio, which a stub cannot time
 /**
  * #4786: a late empty opengrep publication erases its finding, so the file
  * reads clean.

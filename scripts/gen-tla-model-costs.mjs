@@ -36,11 +36,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { median } from "./lib/test-shard-assignment.mjs";
 // The population a table must price is the checker's own: one glob here and
 // one there would let the floor below measure the wrong denominator.
 import { listModelConfigs } from "./check-tla-models.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /** One `ok`/`FAIL` line the checker prints per config. Group 1 is the config's
  * repo-relative path, group 2 its TLC seconds, group 3 its TLC distinct-state
@@ -260,9 +261,6 @@ export function main(
 	return 0;
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	process.exitCode = main(process.argv.slice(2));
 }

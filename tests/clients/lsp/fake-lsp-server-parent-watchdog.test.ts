@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the watchdog must exit after a real parent is SIGKILLed; only a live child shows it exits on stdin EOF or the ppid poll
 /**
  * #2436 regression: `tests/fixtures/fake-lsp-server.mjs` used to have no
  * lifetime bound of its own — only whatever `afterEach`/kill the spawning

@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the teardown phases are written when a real spawned client is shut down; the alive-client count reads live processes
 /**
  * #708 — LSP teardown logging
  *

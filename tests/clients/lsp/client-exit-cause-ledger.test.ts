@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the ledger records the exit code and empty stderr of a real child that closed unexpectedly; a double never produces a real close
 /**
  * #1969: an LSP child that closes unprompted leaves a CAUSE record.
  *

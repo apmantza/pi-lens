@@ -475,10 +475,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :169, :374
 	"clients/dispatch/runners/shellcheck.ts": {
-		silent: 2,
-		identities: "a5a5bb709e878c67",
+		silent: 1,
+		identities: "ebc8ac6568c8a7ac",
 		reason: PRE_RULE,
-	}, // :130, :243
+	}, // :138; the dialect sniff moved to shell-dialect.ts with its fallback reason.
 	"clients/dispatch/runners/spellcheck.ts": {
 		silent: 1,
 		identities: "42c395aa7aedc46b",

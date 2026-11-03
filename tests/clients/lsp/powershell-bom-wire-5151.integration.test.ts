@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the BOM bytes that leave the process are read from the real JSON-RPC stream; only the child's stdin shows what the server received
 /**
  * #5151: the bytes of a PowerShell BOM file that actually leave the process.
  *

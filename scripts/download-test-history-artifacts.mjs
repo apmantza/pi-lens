@@ -31,7 +31,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const MAX_ATTEMPTS = 4;
 export const MAX_RUNS_PER_NIGHT = 100;
@@ -248,10 +248,7 @@ export function downloadArtifacts({
 	return selection;
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		const parsed = options(process.argv.slice(2));
 		const selection = downloadArtifacts(parsed);

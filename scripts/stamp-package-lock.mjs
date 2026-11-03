@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const STAMP_NAME = ".pi-lens-package-lock-sha256";
 
@@ -30,9 +31,6 @@ export function stampPackageLock(root) {
 	}
 }
 
-if (
-	process.argv[1] &&
-	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
 	stampPackageLock(fileURLToPath(new URL("../", import.meta.url)));
 }

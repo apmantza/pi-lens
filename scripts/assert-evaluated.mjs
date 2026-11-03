@@ -24,7 +24,6 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
 	assertEvaluated,
 	EVALUATED_PRODUCERS,
@@ -34,6 +33,7 @@ import {
 	readEvaluatedRecord,
 } from "./lib/assert-evaluated.mjs";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /**
  * HEAD's committed text of a doc, or null when HEAD has no such file. A git
@@ -223,9 +223,6 @@ export function main(argv, headText = gitHeadText, root = ".") {
 }
 
 // Run only when executed directly: tests import checkRecords/checkDocs/main.
-if (
-	process.argv[1] &&
-	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
 	process.exit(main(process.argv.slice(2)));
 }

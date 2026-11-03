@@ -18,9 +18,10 @@
 
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import { parseEntry, validateChangelogEntries } from "./rollup-changelog.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const SCRIPT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -162,10 +163,7 @@ export function checkChangelogFragments({
 	};
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	const baseIndex = process.argv.indexOf("--base");
 	const cwdIndex = process.argv.indexOf("--cwd");
 	const base = baseIndex === -1 ? undefined : process.argv[baseIndex + 1];

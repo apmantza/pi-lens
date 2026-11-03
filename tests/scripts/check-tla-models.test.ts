@@ -697,6 +697,7 @@ describe("main() caller wiring (#3927)", () => {
 		fs.mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
 		for (const rel of [
 			"scripts/check-tla-models.mjs",
+			"scripts/lib/is-main-module.mjs",
 			"scripts/lib/test-shard-assignment.mjs",
 		]) {
 			fs.copyFileSync(path.join(REPO_ROOT, rel), path.join(root, rel));

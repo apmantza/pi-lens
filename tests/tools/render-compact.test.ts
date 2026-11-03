@@ -5,12 +5,14 @@ import {
 	finalizeToolResult,
 	finalizeToolResultWithDelivery,
 	fullTextOf,
+	JSON_CELL_DETAILS_KEY,
 	MAX_RESULT_BYTES,
 	renderToolResultContract,
 	renderToolText,
 	RESULT_FOOTER_RESERVE_BYTES,
 	RESULT_PAYLOAD_BUDGET_BYTES,
 	selectCompactText,
+	stripContractFooter,
 } from "../../tools/render-compact.js";
 
 /** Independently measures the delivered payload bytes a footer reports: the
@@ -313,6 +315,100 @@ describe("render-compact", () => {
 			expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(
 				MAX_RESULT_BYTES,
 			);
+		});
+	});
+
+	describe("stripContractFooter", () => {
+		it("is a no-op when no footer is at the tail", () => {
+			expect(stripContractFooter("plain payload")).toBe("plain payload");
+			expect(stripContractFooter('{"a":1}')).toBe('{"a":1}');
+		});
+
+		it("strips a truncated=false footer and the separator before it", () => {
+			const text =
+				'{"a":1}\n\nresult ok\nusage tokens=2 elapsed-ms=0 bytes=7 truncated=false';
+			expect(stripContractFooter(text)).toBe('{"a":1}');
+		});
+
+		it("strips a truncated=true footer with its diag section", () => {
+			const text =
+				'{"a":1}\n\nresult ok\ndiag severity=error\nusage tokens=2 elapsed-ms=0 bytes=7 truncated=true';
+			expect(stripContractFooter(text)).toBe('{"a":1}');
+		});
+	});
+
+	describe("JSON-cell block contract (#5159)", () => {
+		const textBlocks = (result: {
+			content?: { type: string; text?: string }[];
+		}): string[] =>
+			(result.content ?? [])
+				.filter(
+					(block) => block.type === "text" && typeof block.text === "string",
+				)
+				.map((block) => block.text as string);
+
+		const marked = (payload: string, annotation?: string) => ({
+			content: [
+				{ type: "text" as const, text: payload },
+				...(annotation ? [{ type: "text" as const, text: annotation }] : []),
+			],
+			isError: false,
+			details: { [JSON_CELL_DETAILS_KEY]: true },
+		});
+
+		it("keeps the annotation block and leaves the payload block byte-identical", () => {
+			const payload = JSON.stringify({ a: "x".repeat(2000) });
+			const annotation = "warmCodeStale: true\nadvice";
+			const result = finalizeToolResult(marked(payload, annotation));
+			const blocks = textBlocks(result);
+			expect(blocks).toHaveLength(2);
+			expect(blocks[0]).toBe(payload);
+			expect(blocks[1].startsWith(annotation)).toBe(true);
+			expect(JSON.parse(stripContractFooter(blocks[0]))).toEqual({
+				a: "x".repeat(2000),
+			});
+		});
+
+		it("reserves the annotation bytes so payload plus annotation plus footer stays inside MAX_RESULT_BYTES", () => {
+			const annotation = `warmCodeStale: true\n${"a".repeat(RESULT_FOOTER_RESERVE_BYTES)}`;
+			const payload = `{"a":"${"x".repeat(MAX_RESULT_BYTES * 2)}"}`;
+			const result = finalizeToolResult(marked(payload, annotation));
+			const delivered = fullTextOf(result);
+			expect(Buffer.byteLength(delivered, "utf8")).toBeLessThanOrEqual(
+				MAX_RESULT_BYTES,
+			);
+			expect(delivered).toMatch(/truncated=true$/);
+		});
+
+		it("keeps both blocks and identical figures across a second gate pass", () => {
+			const payload = JSON.stringify({ a: "x".repeat(5000) });
+			const annotation = "warmCodeStale: true\nadvice";
+			const first = finalizeToolResultWithDelivery(marked(payload, annotation));
+			expect(textBlocks(first.result)).toHaveLength(2);
+			const second = finalizeToolResultWithDelivery(first.result);
+			const secondBlocks = textBlocks(second.result);
+			expect(secondBlocks).toHaveLength(2);
+			expect(secondBlocks[0]).toBe(textBlocks(first.result)[0]);
+			expect(second.deliveredBytes).toBe(first.deliveredBytes);
+			expect(second.truncated).toBe(first.truncated);
+		});
+
+		it("parses an lsp_navigation-shaped envelope after the owner footer strip", () => {
+			const envelope = JSON.stringify({
+				ok: true,
+				status: "ok",
+				resultCount: 2,
+			});
+			const result = finalizeToolResult({
+				content: [{ type: "text" as const, text: envelope }],
+				isError: false,
+				details: { [JSON_CELL_DETAILS_KEY]: true, operation: "documentSymbol" },
+			});
+			const blocks = textBlocks(result);
+			expect(blocks).toHaveLength(1);
+			expect(
+				(JSON.parse(stripContractFooter(blocks[0])) as { ok?: boolean }).ok,
+			).toBe(true);
 		});
 	});
 });

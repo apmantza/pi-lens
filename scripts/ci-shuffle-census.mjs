@@ -82,7 +82,6 @@ import {
 	writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { assertEvaluated } from "./lib/assert-evaluated.mjs";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import { escapeMarkdownCell } from "./lib/markdown-cell.mjs";
@@ -98,6 +97,7 @@ import {
 	normalizeVitestOutput,
 	parseVitestSummary,
 } from "./lib/vitest-summary.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /** Files per shuffled start: 13-170 s at one worker over the tree (#4405), under the 10 min call cap. */
 export const CHUNK_FILES = 25;
@@ -771,5 +771,5 @@ export function run(argv, io = {}) {
 	return pending > 0 ? 3 : 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href)
+if (isMainModule(import.meta.url))
 	process.exitCode = run(process.argv.slice(2));

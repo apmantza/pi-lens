@@ -32,6 +32,9 @@
   "tests/mcp/session-end.smoke.test.ts": {
     "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
   },
+  "tests/mcp/stale-json-advisory.smoke.test.ts": {
+    "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
+  },
   "tests/mcp/symbol-search.smoke.test.ts": {
     "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
   },

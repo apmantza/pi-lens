@@ -384,11 +384,12 @@ describe("prepare chain keeps load-bearing steps load-bearing (#1926)", () => {
 			path.join(os.tmpdir(), "pi-lens-stamp-cli-"),
 		);
 		try {
-			fs.mkdirSync(path.join(scratch, "scripts"));
-			fs.copyFileSync(
-				path.join(root, "scripts", "stamp-package-lock.mjs"),
-				path.join(scratch, "scripts", "stamp-package-lock.mjs"),
-			);
+			fs.mkdirSync(path.join(scratch, "scripts", "lib"), { recursive: true });
+			for (const file of [
+				"scripts/stamp-package-lock.mjs",
+				"scripts/lib/is-main-module.mjs",
+			])
+				fs.copyFileSync(path.join(root, file), path.join(scratch, file));
 			fs.writeFileSync(path.join(scratch, "package-lock.json"), "lock");
 			const script = path.join(scratch, "scripts", "stamp-package-lock.mjs");
 			const stamped = () =>

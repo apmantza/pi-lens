@@ -11,7 +11,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { parseVitestSummary } from "./lib/vitest-summary.mjs";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import {
@@ -20,6 +19,7 @@ import {
 	resolveBaseRef,
 	worktreeChangedFiles,
 } from "./pre-push-targeted-tests.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 // Room for a 137-file governance batch: spawnSync's 1 MiB default kills the
 // child and turns a long transcript into a lost verdict.
@@ -363,8 +363,4 @@ function report(root, record, findings, { governance, changed }) {
 	return exit;
 }
 
-if (
-	process.argv[1] &&
-	fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
-)
-	process.exitCode = main();
+if (isMainModule(import.meta.url)) process.exitCode = main();

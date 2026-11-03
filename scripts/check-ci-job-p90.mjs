@@ -20,7 +20,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
 	extractRequiredCheckNames,
 	readJobTimeCaps,
@@ -33,6 +33,7 @@ import {
 	p90CapReport,
 	RUNTIME_CAP_WARN_RATIO,
 } from "./lib/ci-runtime-cap.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const DEFAULT_RUNS = 20;
 const MAX_RUNS = 100;
@@ -168,7 +169,7 @@ async function main() {
 	);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule(import.meta.url)) {
 	main().catch((error) => {
 		console.error(
 			`check-ci-job-p90: ${error instanceof Error ? error.message : String(error)}`,

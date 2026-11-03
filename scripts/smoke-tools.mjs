@@ -81,6 +81,7 @@ import {
 	describeLastTouch,
 } from "./lib/lsp-cascade-smoke.mjs";
 import { touchAnsweredDiagnostics } from "./lib/touch-result.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -4993,9 +4994,7 @@ async function main() {
 
 // Run main() only when executed directly, not when imported (the
 // smoke-fixture-coverage guard imports the fixture arrays below).
-const invokedDirectly =
-	process.argv[1] &&
-	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const invokedDirectly = isMainModule(import.meta.url);
 if (invokedDirectly) {
 	main().catch((err) => {
 		console.error(err);

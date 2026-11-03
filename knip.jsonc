@@ -65,6 +65,10 @@
 		"tests/real-harness/*.test.ts",
 		"tests/config/*.test.ts",
 		"tests/mcp/session-end.smoke.test.ts",
+		// #5159: the stale-cell smoke is a serialized wall-clock lane member
+		// (real spawned MCP child), so the lane coverage gate (#2837)
+		// requires it as a knip entry.
+		"tests/mcp/stale-json-advisory.smoke.test.ts",
 		"tests/clients/*.test.ts",
 		"tests/clients/**/*.test.ts",
 		// #2050: the top-level real-host witnesses (a real linked worktree, a
@@ -76,6 +80,7 @@
 		"tests/tools/*.test.ts",
 		// #5146: the pi-mock root-hook witness is a serialized wall-clock lane
 		// member and must remain visible to Knip as a direct test entry.
+		"tests/support/fake-lsp-server.test.ts",
 		"tests/support/pi-mock.test.ts",
 		"tests/scripts/*.test.ts"
 		// tools/*.ts and vitest's setupFiles are NOT listed here: both are

@@ -27,7 +27,6 @@
  *     Lists the tests that cover mutated code but kill no mutant.
  */
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import {
 	eligibleModules,
 	findWorthlessTests,
@@ -38,6 +37,7 @@ import {
 	splitRunnableTests,
 	summarizeReport,
 } from "./lib/stryker-pertest.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const RUNNER_DIR = "node_modules/@stryker-mutator/vitest-runner";
 
@@ -110,10 +110,7 @@ export function main(argv = process.argv.slice(2)) {
 	);
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		const result = main();
 		if (process.argv[2] === "plan") {

@@ -18,7 +18,8 @@
 //   node scripts/strip-dev-deps-for-pack.mjs --restore   (postpack)
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = path.join(root, "package.json");
@@ -81,11 +82,7 @@ export function restore() {
 const mode = process.argv[2];
 if (mode === "--strip") strip();
 else if (mode === "--restore") restore();
-else if (
-	(process.argv[1] &&
-		import.meta.url === pathToFileURL(process.argv[1]).href) ||
-	process.argv[1]?.endsWith("strip-dev-deps-for-pack.mjs")
-) {
+else if (isMainModule(import.meta.url)) {
 	console.error("usage: strip-dev-deps-for-pack.mjs --strip | --restore");
 	process.exitCode = 64;
 }

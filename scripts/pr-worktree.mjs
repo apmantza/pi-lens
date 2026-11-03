@@ -45,7 +45,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import {
 	classifyNodeModules,
 	deriveClosePlan,
@@ -54,6 +53,7 @@ import {
 	worktreeBranchName,
 } from "./lib/pr-worktree.mjs";
 import { parseWorktreeList } from "./lib/worktree-hygiene.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const USAGE = [
 	"usage:",
@@ -550,7 +550,5 @@ export function main() {
 	process.exitCode = run();
 }
 
-const ENTRY = process.argv[1]
-	? pathToFileURL(process.argv[1]).href === import.meta.url
-	: false;
+const ENTRY = isMainModule(import.meta.url);
 if (ENTRY) main();

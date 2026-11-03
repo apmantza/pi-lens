@@ -35,6 +35,7 @@ import { TREE_SITTER_EXT_TO_LANG } from "../clients/project-diagnostics/scanner.
 import { readExpansionLanguage } from "../clients/read-expansion.js";
 import { mapKindToTreeSitterLanguage } from "../clients/review-graph/builder.js";
 import { EXT_TO_LANG } from "../clients/tree-sitter-shared.js";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const SNAPSHOT_PATH = path.join(
@@ -147,9 +148,6 @@ function main() {
 	process.stdout.write(`Wrote ${SNAPSHOT_PATH}\n`);
 }
 
-if (
-	process.argv[1] &&
-	fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
-) {
+if (isMainModule(import.meta.url)) {
 	main();
 }

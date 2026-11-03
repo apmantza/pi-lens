@@ -411,6 +411,36 @@ sends two spellings naming different files is refused rather than guessed at.
 Adding a fourth spelling, or dropping one of these, changes this contract
 through section 4.
 
+### The MCP tool result block contract
+
+An MCP tool result carries a `content` array of text blocks. For an **opted-in
+JSON cell** (`module_report` `*-json`, `project_report` `view: "json"`, and
+`lsp_navigation`, whose envelope is always JSON) the contract is:
+
+- **block 0 is the payload.** It is one machine-parsed document; a stale-build
+  advisory or an ignored-arguments note never joins it.
+- **later text blocks are annotations.** The `warmCodeStale: true` advisory and
+  the `Ignored unknown argument(s)` note ride their own trailing blocks, with
+  the ignored-arguments note ahead of the advisory when both are present.
+- **the contract footer is stamped on the last text block.** `stripContractFooter`
+  (`tools/render-compact.ts`) is the single owner of `CONTRACT_FOOTER_TAIL_RE`;
+  a reader strips it before parsing block 0. The function is a no-op when no
+  footer is at the tail, so a payload whose footer rides another block is
+  returned byte-identical.
+
+The cell opts in through a `jsonCell` marker in `details`; `stripResultDetails`
+removes `details` before the wire, so the marker never leaks. Text cells keep
+the single-block shape: the advisory is appended to the payload's own block.
+
+The delivered text (all blocks joined, footer included) stays inside
+`MAX_RESULT_BYTES`; the payload budget reserves the annotation bytes and the
+block separators. A **truncated** JSON cell is not parseable by design: its
+footer reports `truncated=true` and the advisory still rides a later block.
+
+Observability: the `warmCodeStale` marker is the record; this contract adds no
+telemetry. A display-only client that renders block 0 alone hides the advisory;
+that is an accepted residual.
+
 ## 6. File I/O Lifecycle Bridge (v2)
 
 `PiLensIOBridge` is public API from day one ([RFC 3654](rfcs/3654-unified-io-bridge-v2.md)).

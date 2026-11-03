@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the CPU-liveness discriminator needs a real wedged server whose CPU burns or goes flat; a stub has no CPU time to sample
 /**
  * #2358 — the notify-stall breaker must not kill a BUSY server. These tests run
  * a REAL auxiliary LSP child over real stdio and real process CPU sampling; the

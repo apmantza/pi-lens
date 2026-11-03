@@ -242,12 +242,7 @@ function readLatencyLogEntries(logHome) {
 
 async function main() {
 	const opts = parseArgs(process.argv.slice(2));
-	const repoRoot = path.resolve(
-		path.dirname(
-			new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
-		),
-		"..",
-	);
+	const repoRoot = path.resolve(import.meta.dirname, "..");
 	const scratchRoot = fs.mkdtempSync(
 		path.join(os.tmpdir(), "pi-lens-compat-smoke-behavioral-"),
 	);

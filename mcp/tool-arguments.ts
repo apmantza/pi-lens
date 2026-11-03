@@ -20,6 +20,7 @@
  */
 
 import { FILE_PATH_KEYS } from "../tools/shared.js";
+import { isJsonCell } from "../tools/render-compact.js";
 
 /** The slice of a JSON-Schema object the check reads. */
 export interface ToolInputSchemaLike {
@@ -273,6 +274,7 @@ export function ignoredArgumentsStructured(report: ArgumentReport): {
 
 interface TextContentResult {
 	content: { type: "text"; text: string }[];
+	details?: unknown;
 }
 
 /** Put the warning line first in a finished result and attach the payload. */
@@ -280,15 +282,27 @@ export function withIgnoredArguments<T extends TextContentResult>(
 	result: T,
 	tool: string,
 	report: ArgumentReport,
-): T & { structuredContent: ReturnType<typeof ignoredArgumentsStructured> } {
+): T & {
+	structuredContent: ReturnType<typeof ignoredArgumentsStructured>;
+} {
 	const line = ignoredArgumentsLine(tool, report);
+	const structuredContent = ignoredArgumentsStructured(report);
 	const [first, ...rest] = result.content;
+	if (isJsonCell(result)) {
+		return {
+			...result,
+			content: first
+				? [first, { type: "text" as const, text: line }, ...rest]
+				: [{ type: "text" as const, text: line }],
+			structuredContent,
+		};
+	}
 	return {
 		...result,
 		content: first
 			? [{ ...first, text: `${line}\n\n${first.text}` }, ...rest]
 			: [{ type: "text" as const, text: line }],
-		structuredContent: ignoredArgumentsStructured(report),
+		structuredContent,
 	};
 }
 

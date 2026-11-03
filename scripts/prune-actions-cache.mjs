@@ -36,7 +36,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const DEFAULT_KEEP = 2;
 /** Key-family prefix -> how many newest default-branch copies survive. */
@@ -223,5 +223,4 @@ export function main(argv, gh = realGh) {
 	}
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href)
-	process.exit(main(process.argv.slice(2)));
+if (isMainModule(import.meta.url)) process.exit(main(process.argv.slice(2)));
