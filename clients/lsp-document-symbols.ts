@@ -1,6 +1,10 @@
 import type { LSPSymbol } from "./lsp/client.js";
 import { getLSPService } from "./lsp/capabilities.js";
 import { withBudget } from "./deadline-utils.js";
+import {
+	isLspRequestTimeoutError,
+	LspRequestTimeoutError,
+} from "./lsp/request-timeout-error.js";
 
 // Grounded against this repo's workspace-native TypeScript 7.0.2 server
 // (`tsc --lsp --stdio`) on 2026-07-30: 20 already-open documentSymbol calls
@@ -53,8 +57,21 @@ export async function getOpenDocumentSymbols(
 		return undefined;
 	}
 	try {
-		return await withBudget(spawned.client.documentSymbol(filePath), timeoutMs);
-	} catch {
+		const startedAt = Date.now();
+		const symbols = await withBudget(
+			spawned.client.documentSymbol(filePath),
+			timeoutMs,
+		);
+		if (symbols === undefined) {
+			throw new LspRequestTimeoutError(
+				"textDocument/documentSymbol",
+				timeoutMs,
+				Date.now() - startedAt,
+			);
+		}
+		return symbols;
+	} catch (err) {
+		if (isLspRequestTimeoutError(err)) throw err;
 		return undefined;
 	}
 }

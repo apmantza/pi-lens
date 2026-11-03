@@ -1423,12 +1423,12 @@ export function createLspNavigationTool(
 							content: [
 								{
 									type: "text" as const,
-									text: diagnosticsTimedOut
-										? `LSP diagnostics timed out for ${filePath}`
-										: `${note}\n${JSON.stringify(result)}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
+									text: `${note}\n${JSON.stringify(result)}${diagnosticsTimedOut ? `\nNote: LSP diagnostics timed out for ${filePath}` : ""}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
 								},
 							],
-							...(diagnosticsTimedOut ? { isError: true } : {}),
+							...(diagnosticsTimedOut && resultCount === 0
+								? { isError: true }
+								: {}),
 							details: {
 								operation,
 								resultCount,
@@ -1449,11 +1449,12 @@ export function createLspNavigationTool(
 						{
 							operation,
 							filePath,
-							failureKind: diagnosticsTimedOut
-								? "timeout"
-								: resultCount === 0
-									? "empty_result"
-									: "success",
+							failureKind:
+								diagnosticsTimedOut && resultCount === 0
+									? "timeout"
+									: resultCount === 0
+										? "empty_result"
+										: "success",
 							resultCount,
 						},
 					);

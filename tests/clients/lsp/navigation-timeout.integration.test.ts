@@ -55,6 +55,8 @@ it("real fake-server documentSymbol timeout is not an empty answer (#5211)", asy
 		);
 		expect((await service.getClientForFile(filePath))?.client).toBe(client);
 		vi.resetModules();
+		const { getOpenDocumentSymbols } =
+			await import("../../../clients/lsp-document-symbols.js");
 		const { createLspNavigationTool } =
 			await import("../../../tools/lsp-navigation.js");
 		const { installLspService } =
@@ -65,6 +67,13 @@ it("real fake-server documentSymbol timeout is not an empty answer (#5211)", asy
 			LspRequestTimeoutError,
 		);
 		installLspService(service);
+		let symbolError: unknown;
+		try {
+			await getOpenDocumentSymbols(filePath);
+		} catch (err) {
+			symbolError = err;
+		}
+		expect(freshTimeoutModule.isLspRequestTimeoutError(symbolError)).toBe(true);
 
 		const result = await createLspNavigationTool(
 			(flag) => flag === "lens-lsp",

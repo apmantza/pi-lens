@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { getOpenDocumentSymbols } from "../../../clients/lsp-document-symbols.js";
+import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
 import {
 	buildOrUpdateGraph,
 	clearReviewGraphWorkspaceCache,
@@ -162,6 +163,25 @@ describe("review graph LSP symbol fallback (#307)", () => {
 				expect.objectContaining({
 					phase: "lsp_symbol_fallback",
 					reason: "unavailable-or-failed",
+				}),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("discloses a document-symbol timeout separately from no client", async () => {
+		const env = setupTestEnvironment("pi-lens-graph-lsp-timeout-");
+		try {
+			const file = createTempFile(env.tmpDir, "lib/main.py", "# opaque\n");
+			vi.mocked(getOpenDocumentSymbols).mockRejectedValue(
+				new LspRequestTimeoutError("textDocument/documentSymbol", 150, 151),
+			);
+			await buildOrUpdateGraph(env.tmpDir, [file], new FactStore());
+			expect(logReviewGraph).toHaveBeenCalledWith(
+				expect.objectContaining({
+					phase: "lsp_symbol_fallback",
+					reason: "timeout",
 				}),
 			);
 		} finally {

@@ -140,6 +140,10 @@ describe("getDiagnostics early-unblock", () => {
 
 		expect(result).toHaveLength(1);
 		expect(result[0].message).toBe("fast error");
+		expect(service.getDiagnosticsHealth(FILE)).toMatchObject({
+			failureKind: "success",
+			mergedCount: 1,
+		});
 
 		// Slow client's waitForDiagnostics was started but we did not wait its full 5000ms
 		expect(slowClient.waitForDiagnostics).toHaveBeenCalled();

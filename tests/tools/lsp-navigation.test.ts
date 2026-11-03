@@ -1451,6 +1451,48 @@ describe("lsp_navigation tool", () => {
 		}
 	});
 
+	it("keeps file findings when another diagnostic server times out", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "partial.ts");
+		fs.writeFileSync(filePath, "const value = 1;\n");
+		const service = mocked.service as {
+			getWorkspaceDiagnosticsSupport: ReturnType<typeof vi.fn>;
+			getDiagnostics: ReturnType<typeof vi.fn>;
+			getDiagnosticsHealth: ReturnType<typeof vi.fn>;
+		};
+		service.getWorkspaceDiagnosticsSupport = vi
+			.fn()
+			.mockResolvedValue({ mode: "pull" });
+		service.getDiagnostics = vi.fn().mockResolvedValue([
+			{
+				message: "real diagnostic",
+				range: {
+					start: { line: 0, character: 0 },
+					end: { line: 0, character: 5 },
+				},
+			},
+		]);
+		service.getDiagnosticsHealth = vi.fn().mockReturnValue({
+			health: "ok_empty",
+			failureKind: "timeout",
+		});
+		try {
+			const result = await tool.execute(
+				"diagnostics-partial-timeout",
+				{ operation: "workspaceDiagnostics", path: filePath },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("real diagnostic");
+			expect(result.content[0]?.text).toContain("LSP diagnostics timed out");
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
 	it("previews LSP-aware file renames", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));

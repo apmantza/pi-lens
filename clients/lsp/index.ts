@@ -552,7 +552,6 @@ export interface LSPRenameFileResult {
 	willRenameFailures: Array<{
 		serverId: string;
 		error: string;
-		timeout?: LspRequestTimeoutError;
 	}>;
 	didRenameFailures: RenameNotifyFailure[];
 	droppedConflicts: number;
@@ -563,13 +562,7 @@ export interface LSPRenameFileResult {
 }
 
 export interface LSPDiagnosticsHealth {
-	health:
-		| "ok"
-		| "ok_empty"
-		| "timeout"
-		| "no_clients"
-		| "no_clients_stale"
-		| "destroyed";
+	health: "ok" | "ok_empty" | "no_clients" | "no_clients_stale" | "destroyed";
 	failureKind: string;
 	serverCountAttempted: number;
 	serverCountReady: number;
@@ -7612,26 +7605,21 @@ export class LSPService {
 		const serversWithDiagnostics = perServerFull.filter(
 			(entry) => entry.diagnosticCount > 0,
 		).length;
-		const timedOut = earlyUnblockedCount > 0;
-		const failureKind = timedOut
-			? "timeout"
-			: merged.length === 0
-				? "ok_empty"
-				: "success";
 		const unanswered = unansweredPrimaries(
 			spawned,
 			resolvedPrimaryRoots,
 			filePath,
 		);
 		const unavailablePrimaryServerIds = unanswered.serverIds;
+		const timedOut = perServer.length === 0 && earlyUnblockedCount > 0;
+		const failureKind = timedOut
+			? "timeout"
+			: merged.length === 0
+				? "ok_empty"
+				: "success";
 
 		this.lastDiagnosticsHealth.set(normalizedPath, {
-			health:
-				failureKind === "timeout"
-					? "timeout"
-					: failureKind === "success"
-						? "ok"
-						: "ok_empty",
+			health: failureKind === "success" ? "ok" : "ok_empty",
 			failureKind,
 			serverCountAttempted,
 			serverCountReady: perServerFull.length,
@@ -8297,9 +8285,9 @@ export class LSPService {
 		const willRenameFailures: Array<{
 			serverId: string;
 			error: string;
-			timeout?: LspRequestTimeoutError;
 		}> = [];
 		let firstTimeout: LspRequestTimeoutError | undefined;
+		let allWillRenameTimedOut = true;
 		const didRenameFailures: RenameNotifyFailure[] = [];
 		const willRenameClients = activeClients.filter(({ serverId, client }) => {
 			if (client.getOperationSupport().willRenameFiles === true) return true;
@@ -8333,10 +8321,10 @@ export class LSPService {
 				} catch (err) {
 					const timeout = isLspRequestTimeoutError(err) ? err : undefined;
 					if (timeout && !firstTimeout) firstTimeout = timeout;
+					if (!timeout) allWillRenameTimedOut = false;
 					willRenameFailures.push({
 						serverId,
 						error: err instanceof Error ? err.message : String(err),
-						...(timeout ? { timeout } : {}),
 					});
 					return { clientKey, serverId, edit: null, failed: true };
 				}
@@ -8350,11 +8338,7 @@ export class LSPService {
 			(result) => !result.failed,
 		);
 		if (willRenameClients.length > 0 && successfulWillResults.length === 0) {
-			if (
-				firstTimeout &&
-				willRenameFailures.every((failure) => failure.timeout !== undefined)
-			)
-				throw firstTimeout;
+			if (firstTimeout && allWillRenameTimedOut) throw firstTimeout;
 			throw new Error(
 				`workspace/willRenameFiles failed for all active LSP servers: ${willRenameFailures.map((failure) => `${failure.serverId}: ${failure.error}`).join("; ")}`,
 			);

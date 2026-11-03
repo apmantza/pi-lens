@@ -118,9 +118,6 @@ const HANG_PROJECT_INFO = ["1", "cancel"].includes(
 );
 const HANG_DEFINITION = process.env.FAKE_LSP_HANG_DEFINITION === "1";
 const HANG_DOCUMENT_SYMBOL = process.env.FAKE_LSP_HANG_DOCUMENT_SYMBOL === "1";
-const HANG_REFERENCES = process.env.FAKE_LSP_HANG_REFERENCES === "1";
-const HANG_IMPLEMENTATION = process.env.FAKE_LSP_HANG_IMPLEMENTATION === "1";
-const HANG_WILL_RENAME = process.env.FAKE_LSP_HANG_WILL_RENAME === "1";
 let hungProjectInfoId = null;
 
 // #2450 review round 2 (F2): the target line/columns/replacement text are
@@ -1011,7 +1008,6 @@ function handle(raw) {
 						? {}
 						: { hoverProvider: true }),
 					definitionProvider: true,
-					implementationProvider: true,
 					referencesProvider: true,
 					...(process.env.FAKE_LSP_NO_DOCUMENT_SYMBOL === "1"
 						? {}
@@ -1487,7 +1483,6 @@ function handle(raw) {
 
 	// References
 	if (data.method === "textDocument/references") {
-		if (HANG_REFERENCES) return;
 		send({
 			jsonrpc: "2.0",
 			id: data.id,
@@ -1507,17 +1502,6 @@ function handle(raw) {
 					},
 				},
 			],
-		});
-		return;
-	}
-
-	// Implementation
-	if (data.method === "textDocument/implementation") {
-		if (HANG_IMPLEMENTATION) return;
-		send({
-			jsonrpc: "2.0",
-			id: data.id,
-			result: [],
 		});
 		return;
 	}
@@ -1607,7 +1591,6 @@ function handle(raw) {
 	}
 
 	if (data.method === "workspace/willRenameFiles") {
-		if (HANG_WILL_RENAME) return;
 		send({ jsonrpc: "2.0", id: data.id, result: null });
 		return;
 	}

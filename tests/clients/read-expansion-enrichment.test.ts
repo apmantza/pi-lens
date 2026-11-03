@@ -232,6 +232,7 @@ describe("read-expansion LSP enrichment (#158)", () => {
 			expect(serialized).toContain("runSynthesis");
 			expect(serialized).not.toContain('"enriched":true');
 			expect(event?.symbol).toBe("runSynthesis");
+			expect(event?.metadata).toMatchObject({ lspSymbolTimeout: true });
 		} finally {
 			env.cleanup();
 		}

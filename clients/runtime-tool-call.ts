@@ -50,6 +50,7 @@ import {
 	lspSymbolKindName,
 	qualifiedLspSymbolName,
 } from "./lsp-document-symbols.js";
+import { isLspRequestTimeoutError } from "./lsp/request-timeout-error.js";
 import {
 	computeTrailingWhitespaceOldTextPatch,
 	findUniqueMatchLineRange,
@@ -1137,8 +1138,14 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				effectiveReadOffset = expansion.newOffset;
 				effectiveReadLimit = expansion.newLimit;
 				let enriched = false;
+				let lspSymbolTimedOut = false;
 				let enrichedAncestry = expansion.ancestry;
-				const lspSymbols = await getOpenDocumentSymbols(filePath);
+				let lspSymbols;
+				try {
+					lspSymbols = await getOpenDocumentSymbols(filePath);
+				} catch (err) {
+					if (isLspRequestTimeoutError(err)) lspSymbolTimedOut = true;
+				}
 				const located = lspSymbols
 					? findDocumentSymbolAtLine(
 							lspSymbols,
@@ -1201,6 +1208,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					symbolEndLine: expansion.enclosingSymbol.endLine,
 					metadata: {
 						enriched,
+						...(lspSymbolTimedOut && { lspSymbolTimeout: true }),
 						durationMs: expansion.durationMs,
 						budgetMs: EXPANSION_BUDGET_MS,
 					},
