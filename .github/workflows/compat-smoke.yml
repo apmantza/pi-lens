@@ -95,7 +95,7 @@ jobs:
           # verified — see #731).
           # pi-lens-ignore: zizmor:adhoc-packages
           npm install -g --ignore-scripts \
-            @earendil-works/pi-coding-agent@1.4.0
+            @earendil-works/pi-coding-agent@1.5.0
           echo "$(npm prefix -g)/bin" >> "$GITHUB_PATH"
 
       - name: Layer A — pinned-contract verification (no pi, no LLM)

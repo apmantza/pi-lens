@@ -2632,16 +2632,15 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep"
-					? makeClient(auxDelayMs, auxDiags, {
-							serverId: "opengrep",
-							...auxOptions,
-						})
-					: makeClient(100, [makeDiagnostic("primary error")], {
-							serverId: "ts-primary",
-						}),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep"
+				? makeClient(auxDelayMs, auxDiags, {
+						serverId: "opengrep",
+						...auxOptions,
+					})
+				: makeClient(100, [makeDiagnostic("primary error")], {
+						serverId: "ts-primary",
+					}),
 		);
 
 		const touch = service.touchFile(FILE, "probe-all", {
@@ -2758,17 +2757,16 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep"
-					? {
-							...makeClient(900, [], { serverId: "opengrep" }),
-							getDiagnosticBinding: vi.fn(() => ({
-								contentHash: hashDiagnosticContent(content),
-								boundToCurrentDisk: true,
-							})),
-						}
-					: makeClient(100, [], { serverId: "ts-primary" }),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep"
+				? {
+						...makeClient(900, [], { serverId: "opengrep" }),
+						getDiagnosticBinding: vi.fn(() => ({
+							contentHash: hashDiagnosticContent(content),
+							boundToCurrentDisk: true,
+						})),
+					}
+				: makeClient(100, [], { serverId: "ts-primary" }),
 		);
 
 		const touch = service.touchFile(FILE, content, {
@@ -2802,11 +2800,10 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep"
-					? makeClient(900, [], { serverId: "opengrep" })
-					: makeClient(100, [], { serverId: "ts-primary" }),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep"
+				? makeClient(900, [], { serverId: "opengrep" })
+				: makeClient(100, [], { serverId: "ts-primary" }),
 		);
 
 		const touch = service.touchFile(FILE, "excluded", {
@@ -2948,11 +2945,10 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep"
-					? makeClient(5000, [], { serverId: "opengrep" })
-					: makeClient(100, [], { serverId: "ts-primary" }),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep"
+				? makeClient(5000, [], { serverId: "opengrep" })
+				: makeClient(100, [], { serverId: "ts-primary" }),
 		);
 
 		const touch = service.touchFile(FILE, "per-edit", {
@@ -3003,9 +2999,8 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 			makePrimaryServer("rust-analyzer", ".rs"),
 			makeAuxServer("typos", ".rs"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "typos" ? auxClient : primaryClient,
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "typos" ? auxClient : primaryClient,
 		);
 
 		const touch = service.touchFile(file, "fn main() {}", {
@@ -3128,9 +3123,8 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep" ? auxClient : primaryClient,
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep" ? auxClient : primaryClient,
 		);
 
 		const touchOptions = {
@@ -3160,11 +3154,10 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep"
-					? makeClient(900, [], { serverId: "opengrep" })
-					: makeClient(100, [], { serverId: "ts-primary" }),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep"
+				? makeClient(900, [], { serverId: "opengrep" })
+				: makeClient(100, [], { serverId: "ts-primary" }),
 		);
 
 		const startedAt = Date.now();
@@ -3447,15 +3440,14 @@ describe("#2914 — non-demoted aux rows stay binding-only", () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep"
-					? makeClient(900, [makeDiagnostic("aux finding")], {
-							serverId: "opengrep",
-						})
-					: makeClient(100, [makeDiagnostic("primary error")], {
-							serverId: "ts-primary",
-						}),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep"
+				? makeClient(900, [makeDiagnostic("aux finding")], {
+						serverId: "opengrep",
+					})
+				: makeClient(100, [makeDiagnostic("primary error")], {
+						serverId: "ts-primary",
+					}),
 		);
 
 		const touch = service.touchFile(FILE, "stamp-only-aggregate", {
@@ -3520,11 +3512,10 @@ describe("#4763 — published-diagnostic count on lsp_aux_wait_outcome", () => {
 			makePrimaryServer("ts-primary"),
 			makeAuxServer("opengrep"),
 		]);
-		createLSPClient.mockImplementation(
-			async (options: { serverId?: string }) =>
-				options?.serverId === "opengrep"
-					? auxClient
-					: makeClient(100, [], { serverId: "ts-primary" }),
+		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
+			options?.serverId === "opengrep"
+				? auxClient
+				: makeClient(100, [], { serverId: "ts-primary" }),
 		);
 		const touch = service.touchFile(FILE, "count-probe", {
 			clientScope: "all",

@@ -1,3 +1,4 @@
+import { hostPackageDir } from "../support/pi-session.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,22 +17,6 @@ import {
  * fuzzy-match code-point sets. This test re-reads the host source from devDeps
  * and fails if the host changes its ladder, so the copy can't silently rot.
  */
-
-// The SDK's `exports` map blocks subpath + package.json + main resolution, so
-// locate the package by walking up from cwd to the node_modules entry that
-// holds it (devDep; robust to nested node_modules).
-function hostPackageDir(): string {
-	const rel = path.join("node_modules", "@earendil-works", "pi-coding-agent");
-	let dir = process.cwd();
-	for (;;) {
-		const candidate = path.join(dir, rel);
-		if (fs.existsSync(path.join(candidate, "package.json"))) return candidate;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-	throw new Error("could not locate @earendil-works/pi-coding-agent");
-}
 
 function hostEditDiffSource(): string {
 	return fs.readFileSync(

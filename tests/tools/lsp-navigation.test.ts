@@ -55,6 +55,7 @@ vi.mock("../../clients/python-environment.js", async (importOriginal) => {
 
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
 import { createLspNavigationTool } from "../../tools/lsp-navigation.js";
+import { LspRequestTimeoutError } from "../../clients/lsp/request-timeout-error.js";
 import { installLspService } from "../support/lsp-service-seam.js";
 
 const tmpPath = (name: string): string => path.join(os.tmpdir(), name);
@@ -235,6 +236,7 @@ describe("lsp_navigation tool", () => {
 		);
 
 		expect(result.isError).toBe(true);
+		expect(result.details?.failureKind).toBe("lsp_disabled");
 		expect(parseToolJson(result)).toMatchObject({
 			tool: "lsp_navigation",
 			operation: "precheck",
@@ -637,6 +639,36 @@ describe("lsp_navigation tool", () => {
 		expect(
 			(mocked.service as { declaration: ReturnType<typeof vi.fn> }).declaration,
 		).toHaveBeenCalled();
+	});
+
+	it("reports a navigation timeout as an error, not an empty result", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		(
+			mocked.service as { documentSymbol: ReturnType<typeof vi.fn> }
+		).documentSymbol = vi
+			.fn()
+			.mockRejectedValue(
+				new LspRequestTimeoutError("textDocument/documentSymbol", 100, 101),
+			);
+
+		const result = await tool.execute(
+			"document-symbol-timeout",
+			{
+				operation: "documentSymbol",
+				path: path.resolve("tests/tools/lsp-navigation.test.ts"),
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBe(true);
+		expect(parseToolJson(result)).toMatchObject({
+			ok: false,
+			status: "timeout",
+			resultCount: 0,
+		});
+		expect(String(result.content[0]?.text)).toContain("timed out");
 	});
 
 	it("attaches searchReads for reference locations", async () => {
