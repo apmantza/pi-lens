@@ -49,6 +49,9 @@ describe("result contract across registered tool surfaces", () => {
 	const originalCwd = process.cwd();
 	let mcp: McpHarness;
 	let pi: ReturnType<typeof createPiMock>;
+	// Env both MCP children run with (the registry tools' LSP waits). The census
+	// child needs the same waits as the shared one.
+	let mcpEnv: Record<string, string>;
 
 	beforeAll(async () => {
 		// #4019: canonicalize the fixture cwd. `os.tmpdir()` is a symlink on macOS
@@ -86,7 +89,7 @@ describe("result contract across registered tool surfaces", () => {
 		fs.writeFileSync(path.join(cwd, "big.ts"), `${bigLines.join("\n")}\n`);
 		process.chdir(cwd);
 		const parityWaitMs = String(scaledTestTimeout(10_000));
-		const env = {
+		mcpEnv = {
 			PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS: parityWaitMs,
 			PI_LENS_AUX_GRACE_MS: parityWaitMs,
 		};
@@ -96,7 +99,7 @@ describe("result contract across registered tool surfaces", () => {
 		vi.resetModules();
 		const { default: extension } = await import("../../index.js");
 		extension(pi.asExtensionAPI());
-		mcp = new McpHarness({ cwd, env });
+		mcp = new McpHarness({ cwd, env: mcpEnv });
 		await mcp.request(1, "initialize", {
 			protocolVersion: "2025-06-18",
 			capabilities: {},
@@ -505,7 +508,36 @@ describe("result contract across registered tool surfaces", () => {
 			shape: CellShape;
 		}>;
 
+		// #5159: this census NEEDS a warm review graph (the `pilens_project_report
+		// view:"json"` row must not race the child's background build, Greptile
+		// P1), but warming the SHARED `mcp` child leaves the parity case comparing
+		// a warm MCP render against the cold in-process pi render: pi's
+		// `module_report` is a read-only consumer that never builds a graph, and
+		// the two surfaces do not share a data dir (the harness isolates the
+		// child's `PILENS_DATA_DIR`). Under shuffle this census can run before the
+		// parity case, so the census owns its own child and the shared one stays
+		// cold in every order. Its own workspace root too: the MCP warm
+		// side-channel's socket is derived from the child's cwd
+		// (`ipcPathForCwd`), so two servers on one workspace would unlink each
+		// other's endpoint.
+		let censusMcp: McpHarness;
+		let censusCwd: string;
+
 		beforeAll(async () => {
+			censusCwd = fs.realpathSync(
+				fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-result-contract-census-"),
+				),
+			);
+			for (const name of ["bad.ts", "fixture.ts"]) {
+				fs.copyFileSync(path.join(cwd, name), path.join(censusCwd, name));
+			}
+			censusMcp = new McpHarness({ cwd: censusCwd, env: mcpEnv });
+			await censusMcp.request(1, "initialize", {
+				protocolVersion: "2025-06-18",
+				capabilities: {},
+				clientInfo: { name: "result-contract-census", version: "0" },
+			});
 			CENSUS = [
 				{
 					mcpName: "pilens_module_report",
@@ -556,12 +588,15 @@ describe("result contract across registered tool surfaces", () => {
 				},
 				{
 					mcpName: "pilens_read_symbol",
-					args: { path: path.join(cwd, "fixture.ts"), symbol: "enclosing" },
+					args: {
+						path: path.join(censusCwd, "fixture.ts"),
+						symbol: "enclosing",
+					},
 					shape: "text",
 				},
 				{
 					mcpName: "pilens_read_enclosing",
-					args: { path: path.join(cwd, "fixture.ts"), line: 2 },
+					args: { path: path.join(censusCwd, "fixture.ts"), line: 2 },
 					shape: "text",
 				},
 				{
@@ -570,7 +605,7 @@ describe("result contract across registered tool surfaces", () => {
 					shape: "text",
 				},
 			];
-			// The first `pilens_project_report` call starts the child's background
+			// The first `pilens_project_report` call starts THIS child's background
 			// review-graph build and reports unavailable; the `view:"json"` census
 			// row must not race it (Greptile P1). Poll the real tool until it
 			// serves: the build is the contention model, the deadline is real.
@@ -578,7 +613,7 @@ describe("result contract across registered tool surfaces", () => {
 			let warm = false;
 			let pollId = 900;
 			while (!warm && Date.now() < until) {
-				const res = await mcp.request(pollId++, "tools/call", {
+				const res = await censusMcp.request(pollId++, "tools/call", {
 					name: "pilens_project_report",
 					arguments: { limit: 1, view: "json" },
 				});
@@ -597,6 +632,11 @@ describe("result contract across registered tool surfaces", () => {
 			}
 			expect(warm, "project_report graph warmed before the census").toBe(true);
 		}, scaledTestTimeout(40_000));
+
+		afterAll(() => {
+			censusMcp?.dispose();
+			removeTempDirSync(censusCwd);
+		});
 
 		/** Classify a delivered MCP cell from its block 0, post owner footer strip. */
 		function classifyCell(result: ToolResult): CellShape {
@@ -630,7 +670,7 @@ describe("result contract across registered tool surfaces", () => {
 				].sort();
 				expect(censusMembers).toEqual([...WARN_ONLY_STALE_TOOLS].sort());
 				for (const [index, row] of CENSUS.entries()) {
-					const res = await mcp.request(300 + index, "tools/call", {
+					const res = await censusMcp.request(300 + index, "tools/call", {
 						name: row.mcpName,
 						arguments: row.args,
 					});
