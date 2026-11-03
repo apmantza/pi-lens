@@ -2226,6 +2226,12 @@ export function createLspNavigationTool(
 					details: {
 						operation,
 						supported,
+						// #5224 review G1: the text view prints each item as a
+						// `callHierarchyItem:` line; the details carry them unchanged so a
+						// caller can traverse without parsing the line.
+						...(operation === "prepareCallHierarchy" && Array.isArray(result)
+							? { callHierarchyItems: result }
+							: {}),
 						searchReads: searchReads.length > 0 ? searchReads : undefined,
 						emptyReason: isEmpty
 							? emptyReasonForOperation(operation)

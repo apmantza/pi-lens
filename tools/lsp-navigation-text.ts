@@ -7,11 +7,14 @@
  *   - a location list (definition / references / implementation / call
  *     hierarchy) prints one `path:line:col` entry per hit, the quickfix and
  *     picker shape `vim.lsp.util.locations_to_items` produces;
+ *   - `prepareCallHierarchy` prints the symbol line, then that item verbatim as
+ *     `callHierarchyItem: <json>`, which the traversal calls take back;
  *   - `hover` prints its markdown, `signatureHelp` the active signature;
  *   - `documentSymbol` / `findSymbol` print an indented `start-end kind name`
  *     tree, the same compact shape `ast_grep_outline` uses;
  *   - `workspaceDiagnostics` prints `path:line:col: severity: message`, the
- *     `vim.diagnostic.toqflist` line;
+ *     `vim.diagnostic.toqflist` line, under a `path (scanned 5m ago)` header
+ *     when the snapshot stamped that file's age;
  *   - a rename prints the edit summary it computed.
  *
  * `view:"json"` keeps the structured envelope (`tools/lsp-structured-output.ts`)
@@ -20,14 +23,13 @@
  * then falls back to the tool's own text (an error, a note, or the capabilities
  * table).
  *
- * Display paths are project-relative through `displayFilePath`, one resolver per
- * project root, and decode URIs through `uriToDiskPath` (never `uriToPath`,
+ * Display paths are project-relative through one resolver built per render call
+ * (`createDisplay`), and decode URIs through `uriToDiskPath` (never `uriToPath`,
  * whose `realpath` is map-key normalization and would pay filesystem I/O per
  * location). An executed command's value is the one exception: its payload is
  * the server's arbitrary value, so it renders as compact single-line JSON.
  */
 
-import { BoundedFifoMap } from "../clients/bounded-cache.js";
 import { SYMBOL_KIND_NAMES } from "../clients/lsp-document-symbols.js";
 import {
 	createProjectRelativePathResolver,
@@ -81,29 +83,25 @@ function kindLabel(kind: unknown): string {
 }
 
 /**
- * One relative-path resolver per project root, capped so a process that outlives
- * many sessions cannot accumulate them. A location list asks for hundreds of
- * display paths against one root, and the outside-root retry canonicalizes that
- * root per call without this (#1449 measurement: 500 locations, half outside
- * the root, 7.46 ms -> 5.05 ms per render).
+ * The display seam one render reads: project-relative file paths and decoded
+ * URIs for one project root.
+ *
+ * The resolver is built per render call, so a root is still canonicalized once
+ * for a whole location list (500 locations, half outside the root, 7.46 ms ->
+ * 5.05 ms per render, #1449) while nothing outlives the request: a module-level
+ * per-root map retained one resolver per project a long-lived process had ever
+ * rendered (defect shape 51, #5224 review G6).
  */
-const ROOT_RESOLVER_LIMIT = 8;
-const rootResolvers = new BoundedFifoMap<
-	string,
-	ReturnType<typeof createProjectRelativePathResolver>
->(ROOT_RESOLVER_LIMIT);
+type Display = {
+	file(filePath: string): string;
+	uri(uri: string): string;
+};
 
-function displayFilePath(filePath: string, cwd: string): string {
-	let resolveDisplay = rootResolvers.get(cwd);
-	if (!resolveDisplay) {
-		resolveDisplay = createProjectRelativePathResolver(cwd);
-		rootResolvers.set(cwd, resolveDisplay);
-	}
-	return resolveDisplay(filePath) || filePath;
-}
-
-function displayPath(uri: string, cwd: string): string {
-	return displayFilePath(uriToDiskPath(uri), cwd);
+function createDisplay(cwd: string): Display {
+	const resolveDisplay = createProjectRelativePathResolver(cwd);
+	const file = (filePath: string): string =>
+		resolveDisplay(filePath) || filePath;
+	return { file, uri: (uri: string) => file(uriToDiskPath(uri)) };
 }
 
 /** LSP positions are 0-based; the rendered line is the 1-based one Neovim shows. */
@@ -125,15 +123,15 @@ function endLine(range: unknown): number | undefined {
 function locationLine(
 	uri: string,
 	range: unknown,
-	cwd: string,
+	display: Display,
 ): string | undefined {
 	const start = startOf(range);
 	if (!start) return undefined;
-	return `${displayPath(uri, cwd)}:${start.line}:${start.character}`;
+	return `${display.uri(uri)}:${start.line}:${start.character}`;
 }
 
 /** A symbol/entry carrying `uri`+`range`, `location`, or `targetUri`+`targetRange`. */
-function symbolLine(entry: Rec, cwd: string): string | undefined {
+function symbolLine(entry: Rec, display: Display): string | undefined {
 	const location = rec(entry.location);
 	const uri = str(entry.uri) ?? str(location?.uri) ?? str(entry.targetUri);
 	const range =
@@ -143,13 +141,16 @@ function symbolLine(entry: Rec, cwd: string): string | undefined {
 		rec(entry.targetSelectionRange) ??
 		rec(entry.targetRange);
 	if (!uri || !range) return undefined;
-	const line = locationLine(uri, range, cwd);
+	const line = locationLine(uri, range, display);
 	if (!line) return undefined;
 	const name = str(entry.name);
 	return name ? `${line}  ${kindLabel(entry.kind)} ${name}` : line;
 }
 
-function renderLocations(result: unknown, cwd: string): string | undefined {
+function renderLocations(
+	result: unknown,
+	display: Display,
+): string | undefined {
 	const items = Array.isArray(result) ? result : result == null ? [] : [result];
 	const lines: string[] = [];
 	for (const item of items) {
@@ -161,19 +162,46 @@ function renderLocations(result: unknown, cwd: string): string | undefined {
 			rec(entry.targetRange) ??
 			rec(entry.range);
 		if (!uri || !range) continue;
-		const line = locationLine(uri, range, cwd);
+		const line = locationLine(uri, range, display);
 		if (line) lines.push(line);
 	}
 	return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
-function renderSymbolList(result: unknown, cwd: string): string | undefined {
+function renderSymbolList(
+	result: unknown,
+	display: Display,
+): string | undefined {
 	const lines: string[] = [];
 	for (const item of arr(result)) {
 		const entry = rec(item);
 		if (!entry) continue;
-		const line = symbolLine(entry, cwd);
+		const line = symbolLine(entry, display);
 		if (line) lines.push(line);
+	}
+	return lines.length > 0 ? lines.join("\n") : undefined;
+}
+
+/**
+ * A `prepareCallHierarchy` answer: the symbol line, then the item itself as one
+ * `callHierarchyItem: <json>` line.
+ *
+ * The traversal operations take that item back verbatim, both ranges and the
+ * server's own `data`, so a symbol line alone left the caller nothing to pass
+ * and forced a second prepare (#5224 review G1). The JSON is the item
+ * unchanged, which is exactly what the parameter accepts.
+ */
+function renderCallHierarchyPreparation(
+	result: unknown,
+	display: Display,
+): string | undefined {
+	const lines: string[] = [];
+	for (const item of arr(result)) {
+		const entry = rec(item);
+		if (!entry) continue;
+		const line = symbolLine(entry, display);
+		if (!line) continue;
+		lines.push(line, `callHierarchyItem: ${JSON.stringify(entry)}`);
 	}
 	return lines.length > 0 ? lines.join("\n") : undefined;
 }
@@ -190,7 +218,7 @@ function renderSymbolList(result: unknown, cwd: string): string | undefined {
  */
 function renderCalls(
 	result: unknown,
-	cwd: string,
+	display: Display,
 	side: "from" | "to",
 	callSiteUri: string | undefined,
 ): string | undefined {
@@ -199,13 +227,13 @@ function renderCalls(
 		const entry = rec(item);
 		const symbol = rec(entry?.[side]);
 		if (!symbol) continue;
-		const line = symbolLine(symbol, cwd);
+		const line = symbolLine(symbol, display);
 		if (!line) continue;
 		lines.push(line);
 		const siteUri = side === "from" ? str(symbol.uri) : callSiteUri;
 		if (!siteUri) continue;
 		for (const range of arr(entry?.fromRanges)) {
-			const site = locationLine(siteUri, range, cwd);
+			const site = locationLine(siteUri, range, display);
 			if (site) lines.push(`  ${site}`);
 		}
 	}
@@ -215,11 +243,11 @@ function renderCalls(
 function renderDocumentSymbols(
 	result: unknown,
 	filePath: string,
-	cwd: string,
+	display: Display,
 ): string | undefined {
 	const items = arr(result);
 	if (items.length === 0) return undefined;
-	const header = displayFilePath(filePath, cwd);
+	const header = display.file(filePath);
 	const lines: string[] = [header];
 	const visit = (entries: unknown[], depth: number): void => {
 		for (const item of entries) {
@@ -244,11 +272,11 @@ function renderDocumentSymbols(
 function renderFindSymbols(
 	result: unknown,
 	filePath: string,
-	cwd: string,
+	display: Display,
 ): string | undefined {
 	const items = arr(result);
 	if (items.length === 0) return undefined;
-	const header = displayFilePath(filePath, cwd);
+	const header = display.file(filePath);
 	const lines: string[] = [header];
 	for (const item of items) {
 		const entry = rec(item);
@@ -275,7 +303,11 @@ function markupText(contents: unknown): string | undefined {
 	}
 	const entry = rec(contents);
 	const value = str(entry?.value);
-	return value;
+	if (value === undefined) return undefined;
+	// A `MarkedString` snippet carries its language, which a bare `value` read
+	// dropped so `{ language, value }` hover rendered as prose (#5224 review G7).
+	const language = str(entry?.language);
+	return language ? `\`\`\`${language}\n${value}\n\`\`\`` : value;
 }
 
 function renderHover(result: unknown): string | undefined {
@@ -319,7 +351,7 @@ function renderCodeActions(result: unknown): string | undefined {
 	return lines.length > 0 ? lines.join("\n") : undefined;
 }
 
-function renderAppliedEdit(entry: Rec, cwd: string): string | undefined {
+function renderAppliedEdit(entry: Rec, display: Display): string | undefined {
 	const descriptions = stringArray(entry.descriptions);
 	const files = stringArray(entry.files);
 	const total = num(entry.appliedOperationTotal) ?? num(entry.operationTotal);
@@ -337,13 +369,13 @@ function renderAppliedEdit(entry: Rec, cwd: string): string | undefined {
 		for (const description of descriptions) lines.push(`  ${description}`);
 	} else {
 		for (const file of files) {
-			lines.push(`  ${displayFilePath(file, cwd)}`);
+			lines.push(`  ${display.file(file)}`);
 		}
 	}
 	return lines.length > 1 ? lines.join("\n") : undefined;
 }
 
-function renderRename(result: unknown, cwd: string): string | undefined {
+function renderRename(result: unknown, display: Display): string | undefined {
 	const entry = rec(result);
 	if (!entry) return undefined;
 	if (entry.applied !== true) {
@@ -352,7 +384,7 @@ function renderRename(result: unknown, cwd: string): string | undefined {
 		lines.push("Preview only — pass apply:true to write the edits.");
 		return lines.join("\n");
 	}
-	return renderAppliedEdit(entry, cwd);
+	return renderAppliedEdit(entry, display);
 }
 
 /** `workspace/willRenameFiles` and `didRenameFiles` failures, one line each. */
@@ -374,37 +406,72 @@ function renameFailureLines(entry: Rec): string[] {
 	return lines;
 }
 
-function renderRenameFile(result: unknown, cwd: string): string | undefined {
+function renderRenameFile(
+	result: unknown,
+	display: Display,
+): string | undefined {
 	const entry = rec(result);
 	if (!entry) return undefined;
 	const summary = stringArray(entry.summary);
+	const descriptions = stringArray(entry.descriptions);
 	const failures = renameFailureLines(entry);
+	// A conflicting edit the server dropped is a partial rename the answer has to
+	// name, or the completed summary reads as a full one (#5224 review G4).
+	const dropped = num(entry.droppedConflicts) ?? 0;
 	// #3734 r3 F5: a failing root is reported, not swallowed by the re-render.
-	const report = (lines: string[]): string =>
-		failures.length > 0
-			? [...lines, "Server errors:", ...failures].join("\n")
-			: lines.join("\n");
-	if (entry.applied === true) {
-		if (summary.length > 0) return report(summary);
-		return report([renderAppliedEdit(entry, cwd) ?? "Applied."]);
+	const report = (lines: string[]): string => {
+		const out = [...lines];
+		if (failures.length > 0) out.push("Server errors:", ...failures);
+		if (dropped > 0)
+			out.push(
+				`Warning: ${dropped} conflicting edit${dropped === 1 ? "" : "s"} dropped.`,
+			);
+		return out.join("\n");
+	};
+	if (entry.applied !== true) {
+		return report([
+			...(summary.length > 0 ? summary : ["File rename preview"]),
+			"Preview only — pass apply:true to rename.",
+		]);
 	}
-	return report([
-		...(summary.length > 0 ? summary : ["File rename preview"]),
-		"Preview only — pass apply:true to rename.",
-	]);
+	// `descriptions` is built from the edits that landed, while `summary` is built
+	// before the write, so the completed list is the applied record (#5224 G3).
+	const applied = renderAppliedEdit(entry, display);
+	if (descriptions.length > 0 && applied) return report([applied]);
+	if (summary.length > 0) return report(summary);
+	return report([applied ?? "Applied."]);
 }
 
+/** A client `reason` that names a timeout, whose edits may still be landing. */
+const TIMED_OUT_COMMAND_REASON = /\btimed out\b/i;
+
 function renderExecuteCommand(result: unknown): string | undefined {
-	if (typeof result === "string") return result.trim() || undefined;
+	// A bare string is the server's value, so it renders as JSON: `trim()` would
+	// strip its quotes, keep its newlines, and turn "" into undefined (#5224 CR2).
+	if (typeof result === "string") return JSON.stringify(result);
 	const entry = rec(result);
 	if (!entry) return undefined;
-	if (entry.dryRun === true || entry.executed === false) {
+	// Dry run: the tool reports advertisement status and runs nothing.
+	if (entry.dryRun === true) {
 		const command = str(entry.command) ?? "command";
 		const lines = [
 			`${command}: ${entry.advertised === true ? "advertised" : "NOT advertised"}`,
 		];
 		const note = str(entry.note);
 		if (note) lines.push(note);
+		return lines.join("\n");
+	}
+	// A client that refused or timed out answers `executed:false` with a `reason`;
+	// reading that as a dry run printed the advertisement line instead of the
+	// failure, and a timeout may still be writing server-side (#5224 review G2).
+	if (entry.executed === false) {
+		const reason = str(entry.reason);
+		const lines = [`Not executed: ${reason ?? "no reason reported"}`];
+		if (reason && TIMED_OUT_COMMAND_REASON.test(reason)) {
+			lines.push(
+				"Warning: the command timed out; the server may still be changing files.",
+			);
+		}
 		return lines.join("\n");
 	}
 	// An executed command returns the server's arbitrary value, which no line
@@ -419,15 +486,22 @@ function diagnosticCode(code: unknown): string | undefined {
 
 function renderWorkspaceDiagnostics(
 	result: unknown,
-	cwd: string,
+	display: Display,
 ): string | undefined {
 	const lines: string[] = [];
 	for (const item of arr(result)) {
 		const file = rec(item);
 		if (!file) continue;
 		const filePath = str(file.filePath) ?? "";
-		const where = displayFilePath(filePath, cwd);
-		for (const diagnostic of arr(file.diagnostics)) {
+		const where = display.file(filePath);
+		const diagnostics = arr(file.diagnostics);
+		if (diagnostics.length === 0) continue;
+		// The path-less snapshot replays what each client last published and stamps
+		// each file's age; only the envelope carried it, so a replayed row read as
+		// current (#1634, #5224 review G5/CR1).
+		const lag = str(file.lag);
+		if (lag) lines.push(`${where} (${lag})`);
+		for (const diagnostic of diagnostics) {
 			const entry = rec(diagnostic);
 			if (!entry) continue;
 			const start = startOf(entry.range);
@@ -450,7 +524,7 @@ function renderBody(options: {
 	operation: string;
 	result: unknown;
 	filePath: string;
-	cwd: string;
+	display: Display;
 	/** The uri of the call-hierarchy item the caller asked about. */
 	callSiteUri?: string;
 }): string | undefined {
@@ -460,15 +534,15 @@ function renderBody(options: {
 		case "declaration":
 		case "references":
 		case "implementation":
-			return renderLocations(options.result, options.cwd);
+			return renderLocations(options.result, options.display);
 		case "prepareCallHierarchy":
-			return renderSymbolList(options.result, options.cwd);
+			return renderCallHierarchyPreparation(options.result, options.display);
 		case "incomingCalls":
-			return renderCalls(options.result, options.cwd, "from", undefined);
+			return renderCalls(options.result, options.display, "from", undefined);
 		case "outgoingCalls":
 			return renderCalls(
 				options.result,
-				options.cwd,
+				options.display,
 				"to",
 				options.callSiteUri,
 			);
@@ -476,12 +550,16 @@ function renderBody(options: {
 			return renderDocumentSymbols(
 				options.result,
 				options.filePath,
-				options.cwd,
+				options.display,
 			);
 		case "findSymbol":
-			return renderFindSymbols(options.result, options.filePath, options.cwd);
+			return renderFindSymbols(
+				options.result,
+				options.filePath,
+				options.display,
+			);
 		case "workspaceSymbol":
-			return renderSymbolList(options.result, options.cwd);
+			return renderSymbolList(options.result, options.display);
 		case "hover":
 			return renderHover(options.result);
 		case "signatureHelp":
@@ -489,13 +567,13 @@ function renderBody(options: {
 		case "codeAction":
 			return renderCodeActions(options.result);
 		case "rename":
-			return renderRename(options.result, options.cwd);
+			return renderRename(options.result, options.display);
 		case "rename_file":
-			return renderRenameFile(options.result, options.cwd);
+			return renderRenameFile(options.result, options.display);
 		case "executeCommand":
 			return renderExecuteCommand(options.result);
 		case "workspaceDiagnostics":
-			return renderWorkspaceDiagnostics(options.result, options.cwd);
+			return renderWorkspaceDiagnostics(options.result, options.display);
 		default:
 			return undefined;
 	}
@@ -515,7 +593,7 @@ export function renderLspNavigationText(options: {
 	callSiteUri?: string;
 	text: string;
 }): string {
-	const body = renderBody(options);
+	const body = renderBody({ ...options, display: createDisplay(options.cwd) });
 	if (body === undefined || body.length === 0) return options.text;
 	const { leading, trailing } = lspNavigationTextSurround(options.text);
 	return [...leading, body, ...trailing].join("\n\n");

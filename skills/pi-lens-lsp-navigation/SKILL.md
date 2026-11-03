@@ -58,16 +58,16 @@ The `operation` values are `definition`, `typeDefinition`, `declaration`, `refer
 
 For `findSymbol`, pass `query`; optionally narrow with `kinds`, `exactMatch`, `topLevelOnly`, and `maxResults`. `rename_file` uses `newFilePath`. `symbol` resolves a character automatically; `character: -1` requests automatic resolution, and `symbol#N` selects a numbered symbol when the result lists one. `callHierarchyItem` is the object returned by `prepareCallHierarchy` and is required by the incoming/outgoing follow-up calls.
 
-**Output is text by default**, the shape a Neovim LSP user sees: a `path:line:col` location list for `definition`, `references`, `implementation` and call hierarchy; `hover`'s markdown; an indented `start-end kind name` symbol tree for `documentSymbol` and `findSymbol`; `path:line:col: severity: message` rows for `workspaceDiagnostics`; and the rename summary. A call-hierarchy entry prints its call sites on indented `path:line:col` lines under the symbol. Pass `view: "json"` only when you need the structured envelope (the pre-text default, byte-identical), for example to parse `locations` or `metadata.searchReads`.
+**Output is text by default**, the shape a Neovim LSP user sees: a `path:line:col` location list for `definition`, `references`, `implementation` and call hierarchy; `hover`'s markdown (a language-bearing snippet as a fenced code block); an indented `start-end kind name` symbol tree for `documentSymbol` and `findSymbol`; `path:line:col: severity: message` rows for `workspaceDiagnostics`, under a `path (scanned 5m ago)` header per file when the snapshot stamped its age; and the rename summary, or the completed edit list after applying (with a warning when the server dropped a conflicting edit). A call-hierarchy entry prints its call sites on indented `path:line:col` lines under the symbol, and `prepareCallHierarchy` adds a `callHierarchyItem: <json>` line carrying the item verbatim. Pass `view: "json"` only when you need the structured envelope (the pre-text default, byte-identical), for example to parse `locations` or `metadata.searchReads`.
 
-The one exception is an executed `executeCommand` value: its payload is the server's arbitrary JSON, so it prints as compact single-line JSON with no line shape of its own.
+An executed `executeCommand` value is the one exception: its payload is the server's arbitrary JSON, so it prints as compact single-line JSON with no line shape of its own. A command the client refused or timed out prints `Not executed: <reason>`, plus a warning that a timed-out command may still be changing files.
 
 ## Call Hierarchy Pattern
 
 ```
 // Step 1
 lsp_navigation(operation="prepareCallHierarchy", path="src/api.ts", line=42, character=10)
-// → returns callHierarchyItem
+// → symbol line, then `callHierarchyItem: <json>`: pass that JSON back verbatim
 
 // Step 2
 lsp_navigation(operation="incomingCalls", callHierarchyItem=<item from step 1>)
