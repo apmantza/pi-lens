@@ -1415,12 +1415,19 @@ export function createLspNavigationTool(
 						noteMap[diagnosticsMode] ??
 						"Note: workspace diagnostics mode unknown (no active capability snapshot)";
 					const resultCount = diagnostics.length;
+					const unavailableNote = primaryUnavailable
+						? `\nNote: ${primaryUnavailable}`
+						: "";
+					const suppressedNote = suppressedLine
+						? `\nNote: ${suppressedLine}`
+						: "";
+					const withheldNote = withheldLine ? `\nNote: ${withheldLine}` : "";
 					return finalize(
 						{
 							content: [
 								{
 									type: "text" as const,
-									text: `${note}\n${JSON.stringify(result)}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
+									text: `${note}\n${JSON.stringify(result)}${unavailableNote}${suppressedNote}${withheldNote}`,
 								},
 							],
 							details: {
