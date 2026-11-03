@@ -21,6 +21,16 @@ export function isShellcheckDialectSupported(dialect: string): boolean {
 	return SHELLCHECK_SUPPORTED_DIALECTS.includes(dialect);
 }
 
+/**
+ * True only for a resolved `zsh` dialect. The Bash language server's file
+ * filter uses this narrow predicate, not the ShellCheck set above: the LSP lane
+ * stays as it was for every other dialect (#3968 AC1) and only zsh, which the
+ * server's analyzer refuses, is kept out (#5230).
+ */
+export function isZshDialect(dialect: string): boolean {
+	return dialect === "zsh";
+}
+
 // Upstream shebang/directive parsing, pinned to
 // `bash-lsp/bash-language-server@server-5.8.1` `server/src/util/shebang.ts`
 // (defect shape 16 — test vectors generated from the real binary, not invented):

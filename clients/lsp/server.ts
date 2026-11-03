@@ -65,10 +65,7 @@ import {
 	logAvailabilityDecision,
 } from "../dispatch/runners/utils/availability-policy.js";
 import { resolveOpengrepConfig } from "../opengrep-config.js";
-import {
-	isShellcheckDialectSupported,
-	resolveShellFileDialect,
-} from "../shell-dialect.js";
+import { isZshDialect, resolveShellFileDialect } from "../shell-dialect.js";
 import {
 	isZizmorAuditTarget,
 	resolveZizmorGitHubToken,
@@ -745,6 +742,8 @@ export interface LSPServerInfo {
 	 * set but only ever reports on GitHub Actions workflow/action/dependabot
 	 * paths, #636). Keeps a guaranteed-no-op file out of the candidate list
 	 * entirely — no spawn, no notify, no diagnostics-wait budget spent.
+	 * Runs on every candidate lookup, so keep it cheap; a content-reading
+	 * filter (Bash's) does bounded file I/O per call, not an in-memory match.
 	 */
 	pathFilter?: (filePath: string) => boolean;
 	/**
@@ -4447,11 +4446,11 @@ export const BashServer: LSPServerInfo = {
 	// installed; when it is not, the shellcheck runner's dialect gate keeps
 	// zsh quiet instead of falling back to a zsh-illiterate analyzer.
 	extensions: [".bash", ".sh"],
-	// #3969 also needs the content gate: .sh/.bash may declare zsh.
+	// #3969 also needs the content gate: .sh/.bash may declare zsh. Only zsh is
+	// excluded; every other dialect keeps its pre-#3969 selection (#3968 AC1).
+	// This reads up to 4 KB of the file from disk on each candidate lookup.
 	pathFilter(filePath) {
-		return isShellcheckDialectSupported(
-			resolveShellFileDialect(filePath).dialect,
-		);
+		return !isZshDialect(resolveShellFileDialect(filePath).dialect);
 	},
 	root: FileDirRoot,
 	// #2194 bounded the installer's own verification at 20s; the dispatch
