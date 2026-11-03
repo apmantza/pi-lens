@@ -749,8 +749,8 @@ describe("pi-lens MCP result bounds", { retry: 2 }, () => {
 // The dispatcher now checks every tool's arguments against the schema it
 // advertises. Own harness, so the degradation ledger these tests read starts
 // empty.
-// The reviewed sweep output (#3809 re-pin, #5041 re-pin): all 429 refusals of
-// 4813 probes over the live tools/list schemas, every one a declared parameter
+// The reviewed sweep output (#3809 re-pin, #5041 re-pin): all 431 refusals of
+// 4812 probes over the live tools/list schemas, every one a declared parameter
 // the call did not send, written with another case, a plural `s`, or a leading
 // word that does not retarget it (`filePath`, `dir_path`, `Paths` -> `path`,
 // `kind` for `kinds`; not `cwdPath`, `maxFiles`). A new tool or key that adds a
@@ -998,6 +998,7 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_lsp_navigation {SYMBOL} -> symbol",
 	"pilens_lsp_navigation {Symbol} -> symbol",
 	"pilens_lsp_navigation {TopLevelOnly} -> topLevelOnly",
+	"pilens_lsp_navigation {View} -> view",
 	"pilens_lsp_navigation {absPath} -> path",
 	"pilens_lsp_navigation {applys} -> apply", // spellchecker:disable-line
 	"pilens_lsp_navigation {callHierarchyItems} -> callHierarchyItem",
@@ -1033,6 +1034,7 @@ const PINNED_REFUSALS: string[] = [
 	"pilens_lsp_navigation {targetPath} -> path",
 	"pilens_lsp_navigation {target_path} -> path",
 	"pilens_lsp_navigation {topLevelOnlys} -> topLevelOnly",
+	"pilens_lsp_navigation {views} -> view",
 	"pilens_lsp_navigation {workspacePath} -> path",
 	"pilens_module_report {BlastRadiusDepth} -> blastRadiusDepth",
 	"pilens_module_report {BlastRadius} -> blastRadius",

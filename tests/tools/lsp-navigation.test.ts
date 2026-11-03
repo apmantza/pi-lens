@@ -2851,7 +2851,7 @@ describe("lsp_navigation default text view", () => {
 			"utf8",
 		);
 		expect(source).not.toMatch(
-			/^(?:const|let) \w*(?:[Dd]isplay|[Rr]esolver)\w* = new /m,
+			/^(?:const|let) \w*(?:Display|display|Resolver|resolver)\w* = new /m,
 		);
 	});
 
