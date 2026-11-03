@@ -212,9 +212,9 @@ describe("ci.yml APFS floor step, executed (#4518)", () => {
 		expect(leg(report).status).toBe(1);
 	});
 
-	it("passes at the floor, and counts failed tests as executed (the results stay advisory)", () => {
+	it("passes at the floor, but reds when the report records failures", () => {
 		expect(leg(tests(floor)).status).toBe(0);
-		expect(leg(tests(floor - 10, 10)).status).toBe(0);
+		expect(leg(tests(floor - 10, 10)).status).toBe(1);
 	});
 });
 
