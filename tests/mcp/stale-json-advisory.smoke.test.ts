@@ -1,5 +1,5 @@
 // mutation-lane: exclude
-// flake-shape: raw-timer-wait — the spawned MCP child re-stats the real stamp file; a fixed settle clears the filesystem mtime a fake clock cannot advance
+// flake-shape: raw-timer-wait — the spawned MCP child re-stats the real stamp file and builds its review graph in the background; a fixed settle and a bounded poll of that build are real clocks a fake clock cannot advance
 /**
  * #5159 — a stale warm-build advisory must not break a JSON cell.
  *
@@ -10,7 +10,8 @@
  * delivered text stays inside MAX_RESULT_BYTES with no envelope allowance, an
  * ignored-argument note also rides an annotation block, a truncated cell keeps
  * the advisory and reports `truncated=true`, an `lsp_navigation` envelope parses
- * in block 0 with the advisory trailing it, and a fresh control parses too.
+ * in block 0 with the advisory trailing it, a `project_report` `view:"json"` cell
+ * does the same once its review graph is warm, and a fresh control parses too.
  */
 import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +21,7 @@ import {
 	MAX_RESULT_BYTES,
 	stripContractFooter,
 } from "../../tools/render-compact.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import { McpHarness } from "./harness.js";
 
 type ToolResult = {
@@ -234,4 +236,51 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		expect(typeof envelope.resultCount).toBe("number");
 		expect(blocks[1].startsWith(ADVISORY_PREFIX)).toBe(true);
 	}, 90_000);
+
+	// Recurrence: CodeRabbit (PRR_kwDORt8rec8AAAABV02pcg, #5221 on ef6420abc) found
+	// that dropping the JSON_CELL_DETAILS_KEY marker from the `project_report`
+	// `view:"json"` branch reds no case above, because only `pilens_module_report`
+	// and `pilens_lsp_navigation` were armed. Without the marker the advisory
+	// joins block 0 and the payload stops parsing.
+	it(
+		"stale: project_report view:json parses in block 0 and the advisory rides a trailing block",
+		async (ctx) => {
+			await initialize(staleHarness, 50, "stale-project-report");
+			await armStale();
+			// The first call starts this child's background review-graph build and
+			// answers unavailable (an error text cell). Poll the real tool until the JSON
+			// cell serves, under a bounded deadline. Readiness is `!isError`, not a parse
+			// of block 0: without the marker the advisory joins block 0, and a parse gate
+			// would then skip the case instead of failing it.
+			const deadline = Date.now() + scaledTestTimeout(30_000);
+			let answer: ToolResult = {};
+			let pollId = 51;
+			do {
+				const res = await staleHarness.request(pollId++, "tools/call", {
+					name: "pilens_project_report",
+					arguments: { limit: 1, view: "json" },
+				});
+				answer = res.result as ToolResult;
+				if (!answer.isError) break;
+				await new Promise((resolve) => setTimeout(resolve, 500));
+			} while (Date.now() < deadline);
+			if (answer.isError) {
+				const first = blockTexts(answer)[0] ?? "";
+				if (first.includes("unavailable")) {
+					return ctx.skip(
+						`review graph did not warm in this lane: ${first.slice(0, 160)}`,
+					);
+				}
+				expect(answer.isError, `project_report errored: ${first}`).toBeFalsy();
+			}
+			const blocks = blockTexts(answer);
+			expect(blocks).toHaveLength(2);
+			const doc = JSON.parse(stripContractFooter(blocks[0])) as {
+				available?: boolean;
+			};
+			expect(doc.available).toBe(true);
+			expect(blocks[1].startsWith(ADVISORY_PREFIX)).toBe(true);
+		},
+		scaledTestTimeout(90_000),
+	);
 });
