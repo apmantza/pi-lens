@@ -428,17 +428,32 @@ export function mutationRangePatterns(files, rangesByFile) {
  */
 export function sampleRangesDeterministically(patterns, limit, seed) {
 	if (patterns.length <= limit) return { selected: patterns, sampled: false };
-	const ranked = patterns
-		.map((pattern) => ({
-			pattern,
-			key: createHash("sha256").update(`${seed}:${pattern}`).digest("hex"),
-		}))
-		.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-	const keep = new Set(ranked.slice(0, limit).map((entry) => entry.pattern));
+	const keep = new Set(
+		rankRangesDeterministically(patterns, seed).slice(0, limit),
+	);
 	return {
 		selected: patterns.filter((pattern) => keep.has(pattern)),
 		sampled: true,
 	};
+}
+
+/**
+ * The patterns in sampler rank order: the total order by `sha256(seed:pattern)`
+ * that `sampleRangesDeterministically` takes its prefixes from (#4171). Shared
+ * so the over-allowance walk ranks exactly as the sampler does.
+ *
+ * @param {string[]} patterns
+ * @param {string} seed
+ * @returns {string[]} best-ranked first
+ */
+function rankRangesDeterministically(patterns, seed) {
+	return patterns
+		.map((pattern) => ({
+			pattern,
+			key: createHash("sha256").update(`${seed}:${pattern}`).digest("hex"),
+		}))
+		.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+		.map((entry) => entry.pattern);
 }
 
 /**
