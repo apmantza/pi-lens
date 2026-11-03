@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — workspace/configuration pulls are answered over the real JSON-RPC stream; a stub cannot send the pull or read back the answer
 /**
  * #4758: a server that PULLS its settings gets them, section by section.
  *

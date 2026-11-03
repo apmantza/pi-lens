@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — didCreateFiles and didOpen order to a cold auxiliary is observed on a real server's wire; a stub cannot show the order it heard them
 /**
  * #4787: an auxiliary that advertises fileOperations.didCreate must hear that
  * a file exists before its first didOpen, or opengrep's cached target list

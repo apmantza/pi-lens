@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — the server's own intake ceiling decides when it is over-full, so the throttle is proven against a real process over real stdio
 /**
  * #1714 (refs #1660) — the same throttle, proven against a REAL server process
  * over real stdio rather than a hand-rolled client double.

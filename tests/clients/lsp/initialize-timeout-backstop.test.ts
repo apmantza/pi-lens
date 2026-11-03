@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — the SIGKILL backstop races killProcessTree's SIGTERM over a real process group; a stub has no group to signal
 /**
  * #1114 follow-up (adversarial review of PR #1130) — the `initialize()`-timeout
  * catch block in `createLSPClient` (clients/lsp/client.ts) has a 2s SIGKILL

@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — root counts read live clients registered by real createLSPClient; a mock client never enters the registry the sampler counts
 /**
  * #2130: `memory_sample` must be attributable to a root.
  *

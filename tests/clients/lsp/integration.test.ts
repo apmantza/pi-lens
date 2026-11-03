@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — launchLSP and the initialize handshake run against the real fake server child; that process boundary is the integration subject
 /**
  * LSP Integration Tests
  *

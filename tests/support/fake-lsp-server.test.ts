@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — the onTestFinished backstop must kill a real fixture child the test leaves running; only a live pid shows it was reaped
 /**
  * #2436 review-round fidelity proof: `spawnFakeLspServer`'s `onTestFinished`
  * backstop kill (tests/support/fake-lsp-server.ts) had zero test pinning it —

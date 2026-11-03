@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — a rule-download failure and the empty publish after it arrive from a real server in order; a stub cannot send that sequence over stdio
 /**
  * #4764: an offline opengrep reads as a clean scan; its rule-download error is
  * unhandled.

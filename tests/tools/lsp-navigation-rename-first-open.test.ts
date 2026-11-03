@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — #3827: a real createLSPClient stamp must reach the rename capture, which needs the real initialize handshake from the fake server
 // #3827: a real language-client stamp must reach the real rename capture, so
 // this file spawns the fake LSP server through `launchLSP` and drives
 // `lsp_navigation rename` against a real `createLSPClient`. Admitted to the

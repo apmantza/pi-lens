@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — the probe's requests are read off a real server's wire; a stub cannot show that a server without the capability received none
 /**
  * #1969: the liveness probe only sends a method the server advertised.
  *

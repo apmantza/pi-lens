@@ -1,4 +1,4 @@
-// flake-shape: real-process-spawn — Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.
+// flake-shape: real-process-spawn — the teardown phases are written when a real spawned client is shut down; the alive-client count reads live processes
 /**
  * #708 — LSP teardown logging
  *
