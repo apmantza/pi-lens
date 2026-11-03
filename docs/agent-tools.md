@@ -125,14 +125,13 @@ and `[]` mean no arguments.
   (`tools/lsp-navigation.ts` operation description). Position-based operations
   accept a `path`/`line`/`character` triple. `documentSymbol` accepts a `kinds`
   filter (e.g. `function`, `class`) and a `maxResults` cap (default 20, max 100)
-  to keep large files bounded. A navigation request that outlasts its
-  per-request deadline (10 s by default) and has no fallback answer returns an
-  error result that says the LSP request timed out, never an empty list, so a
-  slow server is not read as "no references". `executeCommand` has its own 30 s deadline and reports a
-  timeout as `executed: false` with a reason.
-  A timed-out `definition` still tries the `documentSymbol` fallback and
-  discloses the timeout in a note when the fallback answers. Full per-operation
-  parameter reference:
+  to keep large files bounded. A request that outlasts its deadline (10 s by
+  default for navigation requests) is reported as a timeout, never as a silent
+  empty answer, so a slow server is not read as "no references". Depending on
+  the operation the timeout arrives as an error result, a note beside the
+  answer it does have (a `definition` that the `documentSymbol` fallback
+  answered, or a partial `workspaceDiagnostics` pull), or `executed: false`
+  with a reason (`executeCommand`). Full per-operation parameter reference:
   [skills/pi-lens-lsp-navigation/SKILL.md](../skills/pi-lens-lsp-navigation/SKILL.md).
 - **`ast_grep_search`** — AST-aware structural search across ~40 languages via
   the `sg` CLI. Supports metavariables (`$VAR`, `$$$ARGS`), `strictness`
