@@ -35,91 +35,246 @@ const ROOT = resolve(import.meta.dirname, "../..");
  *   65 scripts folded onto the seam: `check-changelog-fragments.mjs` passed
  *   without checking, and the `guard-bash` hook allowed `git stash`).
  *
- * The detector admits one form and refuses the rest. In a covered file the
- * only reads of the program path are none (the seam is the one reader), so it
- * refuses every way of getting `process.argv[0]` or `[1]` into a value:
- * a literal index, `.at`/`.shift`/`.slice` from the front, a spread, an array
- * destructure, a binding of the bare array, a bare array passed on, a
- * computed `process[...]` access, an `argv` destructured from `process` or
- * imported; and it refuses `import.meta.url` or `.filename` as an operand of a
- * comparison, as the receiver of a string method, or bound to a name without
- * a wrapping call. Identifier-valued indexes (`process.argv[i]`, the option
- * parsers' own loops) are admitted: they cannot name the program path without
- * the literal, so a gate that reaches `argv[1]` through one and compares it
- * with a self path held in another binding is the residual this detector does
- * not read.
+ * The detector fails closed (#5228 review F1: a list of refused spellings let
+ * 19 of 22 plants through). It finds every occurrence of four roots in the
+ * comment-and-string-blanked source and admits an occurrence only in one of
+ * the forms below; every other occurrence is a hit:
+ *
+ * - `process`: a plain member other than `argv` (`process.env`); `argv` read
+ *   as `.length`, `.includes(`, `.indexOf(`, `.slice(start` or `[index]`,
+ *   where start and index are an integer literal of 2 or more or an
+ *   identifier with an optional `+ n`/`- n`; `typeof process`; an object key
+ *   (`{ process: ... }`); `import process from`; `.bind(process)`;
+ *   `Object.defineProperty(process,`.
+ * - `import.meta`: `.url` as an argument of a call in URL_CALLEES (and only
+ *   after the first argument of `new URL`), `.dirname` as an argument of
+ *   `resolve` or `join`, and `.resolve(`; each call followed by `)`, `,`,
+ *   `;`, `}`, `]` or `:`, never by an operator or a member. `.resolve` bare
+ *   before `?` is a feature test and is admitted.
+ * - `globalThis` / `global`: a plain member, `declare global`, or the first
+ *   argument of `spyOn(` (a `"process"` second argument still reds below).
+ * - a `"process"` or `"node:process"` string literal (read in the raw source
+ *   at a delimiter the blanked text keeps): the specifier of
+ *   `import process from`, or an operand of `===` / `!==`.
+ *
+ * Residuals (admitted forms broader than the rule): an identifier index or
+ * slice start can still hold 0 or 1; `.includes` / `.indexOf` can test for
+ * the script path; an admitted call's result can be compared one call out
+ * (`dirname(fileURLToPath(import.meta.url)) === x`); `.bind(process)` hands
+ * a function `this.argv`; code built from strings (`new Function`, a
+ * computed `import()` specifier) is not read.
  */
-const ARGV = String.raw`\bprocess\s*\.\s*argv\b`;
-const META = String.raw`\bimport\s*\.\s*meta\s*\.\s*(?:url|filename)\b`;
-const PATTERNS: Array<{ form: string; pattern: RegExp }> = [
-	{
-		form: "argv literal 0 or 1",
-		pattern: new RegExp(`${ARGV}\\s*\\[\\s*[01]\\s*\\]`),
-	},
-	{
-		form: "argv read from the front (at, shift, slice)",
-		pattern: new RegExp(
-			`${ARGV}\\s*\\.\\s*(?:at|shift|entries|keys|values|map|forEach|reduce|flat)\\b|${ARGV}\\s*\\.\\s*slice\\s*\\(\\s*(?:[01]\\s*)?[,)]`,
-		),
-	},
-	{
-		form: "argv spread",
-		pattern: new RegExp(`\\.\\.\\.\\s*${ARGV}(?!\\s*[.\\[])`),
-	},
-	{
-		form: "argv array destructure",
-		pattern: new RegExp(`\\]\\s*=\\s*${ARGV}(?!\\s*[.\\[])`),
-	},
-	{
-		form: "bare argv bound to a name",
-		pattern: new RegExp(`=\\s*${ARGV}(?!\\s*[.\\[])`),
-	},
-	{
-		form: "bare argv passed on",
-		pattern: new RegExp(`[(,]\\s*${ARGV}\\s*[,)]`),
-	},
-	{
-		form: "computed process access, or argv destructured or imported",
-		pattern:
-			/\bprocess\s*\[|\{[^{}]*\bargv\b[^{}]*\}\s*=\s*process\b|\bimport\s*\{[^}]*\bargv\b[^}]*\}\s*from\b/,
-	},
-	{
-		form: "import.meta.url as a comparison operand",
-		pattern: new RegExp(
-			`${META}\\s*\\)*\\s*[!=]==?|[!=]==?\\s*(?:[\\w$.]+\\s*\\(\\s*)*${META}`,
-		),
-	},
-	{
-		form: "import.meta.url as a string-method receiver",
-		pattern: new RegExp(
-			`${META}\\s*\\.\\s*(?:endsWith|startsWith|includes|indexOf|localeCompare|toLowerCase|replace|slice)\\b`,
-		),
-	},
-	{
-		form: "import.meta.url bound to a name",
-		pattern: new RegExp(`(?<![=!<>])=(?!=)\\s*${META}\\s*[;,)]`),
-	},
-];
+const INDEX = String.raw`(?:[2-9]|[1-9]\d+|[A-Za-z_$][\w$]*(?:\s*[+-]\s*\d+)?)`;
+const ARGV_TAIL = new RegExp(
+	String.raw`process\s*\.\s*argv\s*(?:\.\s*(?:length\b|includes\s*\(|indexOf\s*\(|slice\s*\(\s*${INDEX}\s*[,)])|\[\s*${INDEX}\s*\])`,
+	"y",
+);
+const PLAIN_MEMBER = /\s*\.\s*[A-Za-z_$]/y;
+const URL_CALLEES = new Set([
+	"isMainModule",
+	"isEntryPoint",
+	"fileURLToPath",
+	"createRequire",
+	"createJiti",
+	"resolvePackagePath",
+	"URL",
+]);
+const DIRNAME_CALLEES = new Set(["resolve", "join"]);
+const CALL_FOLLOWER = /[),;}\]:]/;
+const OPEN = "([{";
+const CLOSE = ")]}";
+
+type Hit = { at: number; root: string };
+
+function nextNonSpace(text: string, from: number): string {
+	const match = /\S/.exec(text.slice(from));
+	return match ? match[0] : "";
+}
+
+function prevNonSpace(text: string, before: number): string {
+	for (let i = before - 1; i >= 0; i--) if (/\S/.test(text[i])) return text[i];
+	return "";
+}
+
+/** Index of the bracket that opens the innermost group around `at`, or -1. */
+function enclosingOpen(text: string, at: number): number {
+	let depth = 0;
+	for (let i = at - 1; i >= 0; i--) {
+		if (CLOSE.includes(text[i])) depth++;
+		else if (OPEN.includes(text[i])) {
+			if (depth === 0) return i;
+			depth--;
+		}
+	}
+	return -1;
+}
+
+/** Index of the bracket that closes the group opened at `open`, or -1. */
+function matchingClose(text: string, open: number): number {
+	let depth = 0;
+	for (let i = open; i < text.length; i++) {
+		if (OPEN.includes(text[i])) depth++;
+		else if (CLOSE.includes(text[i]) && --depth === 0) return i;
+	}
+	return -1;
+}
+
+/** The call's result is used as a value, never compared or dereferenced. */
+function callEndsCleanly(text: string, open: number): boolean {
+	const close = matchingClose(text, open);
+	if (close < 0) return false;
+	const follower = nextNonSpace(text, close + 1);
+	return follower === "" || CALL_FOLLOWER.test(follower);
+}
+
+function admitsProcess(text: string, at: number): boolean {
+	const before = text.slice(Math.max(0, at - 40), at);
+	const after = text.slice(at, at + 80);
+	ARGV_TAIL.lastIndex = 0;
+	if (ARGV_TAIL.test(after)) return true;
+	PLAIN_MEMBER.lastIndex = "process".length;
+	if (PLAIN_MEMBER.test(after) && !/^process\s*\.\s*argv\b/.test(after))
+		return true;
+	if (/\btypeof\s+$/.test(before)) return true;
+	if (/[{,]\s*$/.test(before) && /^process\s*:/.test(after)) return true;
+	if (/\bimport\s+$/.test(before) && /^process\s+from\b/.test(after))
+		return true;
+	if (/\.\s*bind\s*\(\s*$/.test(before) && /^process\s*\)/.test(after))
+		return true;
+	return (
+		/\bObject\s*\.\s*defineProperty\s*\(\s*$/.test(before) &&
+		/^process\s*,/.test(after)
+	);
+}
+
+function admitsImportMeta(text: string, at: number): boolean {
+	const member = /import\s*\.\s*meta\s*\.\s*(url|dirname|resolve)\b/y;
+	member.lastIndex = at;
+	const match = member.exec(text);
+	if (!match) return false;
+	const name = match[1];
+	const end = at + match[0].length;
+	if (name === "resolve") {
+		const next = /\s*(\(|\?(?![.?]))/y;
+		next.lastIndex = end;
+		const call = next.exec(text);
+		if (!call) return false;
+		return call[1] === "?" || callEndsCleanly(text, next.lastIndex - 1);
+	}
+	const previous = prevNonSpace(text, at);
+	if (!"(,".includes(previous) || previous === "") return false;
+	if (!",)".includes(nextNonSpace(text, end) || "x")) return false;
+	const open = enclosingOpen(text, at);
+	if (open < 0 || text[open] !== "(") return false;
+	const callee = /(\bnew\s+)?([A-Za-z_$][\w$]*)\s*$/.exec(text.slice(0, open));
+	if (!callee) return false;
+	const allowed =
+		name === "url"
+			? URL_CALLEES.has(callee[2]) &&
+				(callee[2] !== "URL" || (Boolean(callee[1]) && previous === ","))
+			: DIRNAME_CALLEES.has(callee[2]);
+	return allowed && callEndsCleanly(text, open);
+}
+
+function admitsGlobal(text: string, at: number, word: string): boolean {
+	const before = text.slice(Math.max(0, at - 30), at);
+	if (/\bdeclare\s+$/.test(before)) return true;
+	if (
+		/\bspyOn\s*\(\s*$/.test(before) &&
+		/^\w+\s*,/.test(text.slice(at, at + 20))
+	)
+		return true;
+	PLAIN_MEMBER.lastIndex = at + word.length;
+	return PLAIN_MEMBER.test(text);
+}
+
+function admitsProcessString(text: string, at: number, end: number): boolean {
+	const before = text.slice(Math.max(0, at - 40), at);
+	return (
+		/\bimport\s+process\s+from\s*$/.test(before) ||
+		/[!=]==\s*$/.test(before) ||
+		/^\s*[!=]==/.test(text.slice(end, end + 10))
+	);
+}
+
+function scanHits(source: string): Hit[] {
+	const text = stripSource(source);
+	const hits: Hit[] = [];
+	for (const match of text.matchAll(/\bprocess\b/g))
+		if (!admitsProcess(text, match.index))
+			hits.push({ at: match.index, root: "process" });
+	for (const match of text.matchAll(/\bimport\s*\.\s*meta\b/g))
+		if (!admitsImportMeta(text, match.index))
+			hits.push({ at: match.index, root: "import.meta" });
+	for (const match of text.matchAll(/(?<![.\w$])(globalThis|global)\b/g))
+		if (!admitsGlobal(text, match.index, match[1]))
+			hits.push({ at: match.index, root: match[1] });
+	// Strings are blank in `text`; the raw source holds the literal, and the
+	// blanked text keeps a real literal's delimiters at the same offsets.
+	for (const match of source.matchAll(/(["'`])(?:node:)?process\1/g)) {
+		const end = match.index + match[0].length;
+		if (text[match.index] !== match[1] || text[end - 1] !== match[1]) continue;
+		if (!admitsProcessString(text, match.index, end))
+			hits.push({ at: match.index, root: "a process module string" });
+	}
+	return hits.sort((a, b) => a.at - b.at);
+}
+
+function lineOf(source: string, at: number): number {
+	return source.slice(0, at).split("\n").length;
+}
+
+/** Each hit as `line N: <root>: <source line>`. */
+export function scanEntryGate(source: string): string[] {
+	const lines = source.split("\n");
+	return scanHits(source).map(({ at, root }) => {
+		const line = lineOf(source, at);
+		return `line ${line}: ${root}: ${lines[line - 1].trim()}`;
+	});
+}
 
 /** The seam itself reads `process.argv[1]`; no other file may, but for: */
 const SEAM = "scripts/lib/is-main-module.mjs";
 
-/**
- * Files that cannot import the seam and carry a standalone gate of the same
- * rule (resolve both paths natively). Each is proved at runtime by its cell in
- * `tests/scripts/script-entry-gate-cells.test.ts` (a started run through a
- * symlinked path), and the third case below reds when an entry stops needing
- * its exemption.
- */
-export const STANDALONE_GATES: Record<string, string> = {
-	"scripts/hooks/guard-bash.mjs":
-		"guard-bash-probe loads the hook from a git ref and tests copy it alone, so it cannot import scripts/lib",
-};
+const SYMBOL_KEY_ALIAS =
+	"a typed alias of the global object to reach one Symbol.for registry key; the alias is read only through that key";
 
-export function scanEntryGate(source: string): string[] {
-	const scanned = stripSource(source);
-	return PATTERNS.filter(({ pattern }) => pattern.test(scanned)).map(
-		({ form }) => form,
+/**
+ * Single sites admitted outside the seam, matched by their exact source line
+ * text; the rest of each file is scanned. The fourth case below reds when a
+ * site stops producing the hit it admits.
+ */
+export const ADMITTED_SITES: Array<{
+	file: string;
+	site: string;
+	reason: string;
+}> = [
+	{
+		file: "scripts/hooks/guard-bash.mjs",
+		site: "realpathSync.native(process.argv[1]) ===",
+		reason:
+			"standalone gate of the same rule (resolves both paths natively): guard-bash-probe loads the hook from a git ref and tests copy it alone, so it cannot import scripts/lib; its cell in tests/scripts/script-entry-gate-cells.test.ts proves it through a symlinked path",
+	},
+	{
+		file: "tests/support/kill-guard.ts",
+		site: "const host = process as typeof process & {",
+		reason: SYMBOL_KEY_ALIAS,
+	},
+	{
+		file: "tests/support/check-build-freshness.ts",
+		site: "latch: Record<symbol, unknown> = globalThis as Record<symbol, unknown>,",
+		reason: SYMBOL_KEY_ALIAS,
+	},
+	{
+		file: "tests/support/tmp-root-registry.ts",
+		site: "const holder = globalThis as { [REGISTRY_KEY]?: TmpRootRegistry };",
+		reason: SYMBOL_KEY_ALIAS,
+	},
+];
+
+function admittedSite(relative: string, line: string): boolean {
+	return ADMITTED_SITES.some(
+		({ file, site }) => file === relative && line.includes(site),
 	);
 }
 
@@ -139,9 +294,9 @@ export function findPrivateEntryGates(root: string, floor = 116): string[] {
 	const offenders: string[] = [];
 	for (const absolute of files) {
 		const relative = relativePosix(root, absolute);
-		if (relative === SEAM || relative in STANDALONE_GATES) continue;
-		const forms = scanEntryGate(readFileSync(absolute, "utf8"));
-		if (forms.length > 0) offenders.push(`${relative}: ${forms.join("; ")}`);
+		if (relative === SEAM) continue;
+		for (const hit of scanEntryGate(readFileSync(absolute, "utf8")))
+			if (!admittedSite(relative, hit)) offenders.push(`${relative}: ${hit}`);
 	}
 	return offenders.sort();
 }
@@ -155,13 +310,15 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 		TREE_WALK_TIMEOUT_MS,
 	);
 
-	// Recurrence: a standalone exemption outliving its reason hides a private gate
-	// (the exemption is data-only, shape 38).
-	it("every standalone gate still carries a private gate", () => {
-		for (const file of Object.keys(STANDALONE_GATES))
+	// Recurrence: an admission outliving its site is data that admits the next
+	// gate written on that line (the admission is data-only, shape 38).
+	it("every admitted site still produces the hit it admits", () => {
+		for (const { file, site } of ADMITTED_SITES)
 			expect(
-				scanEntryGate(readFileSync(resolve(ROOT, file), "utf8")),
-				file,
+				scanEntryGate(readFileSync(resolve(ROOT, file), "utf8")).filter((hit) =>
+					hit.includes(site),
+				),
+				`${file}: ${site}`,
 			).not.toEqual([]);
 	});
 
@@ -203,11 +360,63 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 			expect(scanEntryGate(offender), offender).not.toEqual([]);
 	});
 
+	// Recurrence: review F1 on #5228, where a denylist of spellings let 19 of 22
+	// plants through. The first block is the reviewer's plants; the second is
+	// spellings this detector's author did not design for (an alias, an
+	// indirect call, a value reached through another binding).
+	it("refuses every spelling outside the admitted forms", () => {
+		const offenders = [
+			'import proc from "node:process";\nif (proc.argv[1] === here) main();\n',
+			"const p = process;\nif (p.argv[1] === here) main();\n",
+			"const entry = process.argv.find((a) => a.endsWith('.mjs'));\n",
+			"const entry = process.argv.filter(Boolean)[1];\n",
+			'const entry = process.argv["1"];\n',
+			"const entry = process.argv[0x1];\n",
+			"const entry = process.argv[0 + 1];\n",
+			"const entry = process.argv?.[1];\n",
+			'const entry = globalThis["process"].argv[1];\n',
+			"if (new URL(import.meta.url).pathname === entry) main();\n",
+			"for (const arg of process.argv) check(arg);\n",
+			"const entry = process.argv.slice(-1)[0];\n",
+			"const all = process.argv.join(' ');\n",
+			"const entry = process.argv.findLast((a) => a.endsWith('.mjs'));\n",
+			"if (import.meta.main) main();\n",
+			"if (import.meta.dirname === dir) main();\n",
+			"if (import.meta.resolve('./self.mjs') === entry) main();\n",
+			"const { 1: entry } = process.argv;\n",
+			"const { argv: [, entry] } = process;\n",
+			"const entry = process['argv'][1];\n",
+			// An alias through a destructure, and through a binding of the global.
+			"const { process: p } = globalThis;\nconst entry = p.argv[1];\n",
+			"const g = globalThis;\nconst entry = g.process.argv[1];\n",
+			"const entry = globalThis.process.argv[1];\n",
+			// An indirect call.
+			'const entry = Reflect.get(process, "argv")[1];\n',
+			'const entry = require("node:process").argv[1];\n',
+			'const { argv } = await import("process");\n',
+			// A value reached through another binding.
+			"const m = import.meta;\nif (m.url === entry) main();\n",
+			'if (import.meta["url"] === entry) main();\n',
+			"const entry = process.argv.slice(1)[0];\n",
+			"const head = process.argv.slice(0, 2);\n",
+			"const entry = process.argv[2 - 1];\n",
+			"const copy = structuredClone(process.argv);\n",
+			"if (fileURLToPath(import.meta.url) === entry) main();\n",
+			"if (fileURLToPath(import.meta.url).endsWith(name)) main();\n",
+			"if (Object.is(import.meta.url, entry)) main();\n",
+			"const here = (import.meta.url);\n",
+		];
+		const passed = offenders.filter(
+			(source) => scanEntryGate(source).length === 0,
+		);
+		expect(passed).toEqual([]);
+	});
+
 	// Recurrence: a census whose exclusion list admits a whole directory reads
-	// green with the tree unread; the seam and the standalone file are the only
-	// admitted paths.
+	// green with the tree unread; the seam is the only admitted path, and an
+	// admitted site admits its own line, never the rest of its file.
 	it(
-		"reads scripts/ and tests/support/ and admits only the seam and the standalone gate",
+		"reads scripts/ and tests/support/ and admits only the seam and the admitted sites",
 		() => {
 			const root = mkdtempSync(resolve(tmpdir(), "pi-lens-entry-portability-"));
 			try {
@@ -224,13 +433,19 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 					"if (isMainModule(import.meta.url)) main();\n",
 				);
 				plant("scripts/lib/is-main-module.mjs", gate);
-				plant("scripts/hooks/guard-bash.mjs", gate);
-				expect(
-					findPrivateEntryGates(root, 1).map((line) => line.split(":")[0]),
-				).toEqual([
-					"scripts/deep/nested.mjs",
-					"scripts/private.mjs",
-					"tests/support/helper.mjs",
+				plant(
+					"scripts/hooks/guard-bash.mjs",
+					"if (realpathSync.native(process.argv[1]) === here) main();\n",
+				);
+				plant(
+					"tests/support/kill-guard.ts",
+					"const host = process as typeof process & {};\nconst entry = process.argv[1];\n",
+				);
+				expect(findPrivateEntryGates(root, 1)).toEqual([
+					"scripts/deep/nested.mjs: line 1: process: if (process.argv[1] === here) main();",
+					"scripts/private.mjs: line 1: process: if (process.argv[1] === here) main();",
+					"tests/support/helper.mjs: line 1: process: if (process.argv[1] === here) main();",
+					"tests/support/kill-guard.ts: line 2: process: const entry = process.argv[1];",
 				]);
 			} finally {
 				rmSync(root, { recursive: true, force: true });
@@ -239,7 +454,9 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 		TREE_WALK_TIMEOUT_MS,
 	);
 
-	it("admits the seam call, option parsing and prose quoting the shape", () => {
+	// Recurrence: an admitted form the tree uses today going unadmitted reds the
+	// census for code that reads no program path; each line is a real form.
+	it("admits the seam call, option parsing, the real process uses and prose quoting the shape", () => {
 		const clean = [
 			"if (isMainModule(import.meta.url)) main();\n",
 			"const here = fileURLToPath(import.meta.url);\n",
@@ -253,6 +470,22 @@ describe("script entry-module detection has one owner (isMainModule)", () => {
 			"// never write import.meta.url === `file://${process.argv[1]}`\nmain();\n",
 			"const note = 'import.meta.url === process.argv[1]';\n",
 			"const uri = `file://${filePath}`;\n",
+			"const at = process.argv.indexOf('--n');\nconst n = at >= 0 ? process.argv[at + 1] : undefined;\n",
+			"for (let i = 0; i < process.argv.length; i++) use(process.argv[i]);\n",
+			"const rest = process.argv.slice(separator + 1);\n",
+			"const args = process.argv\n\t.slice(2)\n\t.find((a) => a === '--x');\n",
+			"process.exitCode = 1;\nconst env = process . env;\n",
+			"const kill = process.kill.bind(process) as typeof process.kill;\n",
+			"Object.defineProperty(process, 'platform', { value: 'win32' });\n",
+			"const { process: child } = proc;\nconst o = { process: child };\n",
+			'import process from "node:process";\n',
+			'if (node.name === "process" || "node:process" !== spec) skip();\n',
+			"const f = globalThis.fetch;\ndeclare global {}\n",
+			"const root = resolve(import.meta.dirname, '..');\n",
+			"const url = import.meta.resolve\n\t? import.meta.resolve(spec)\n\t: other;\n",
+			"const jiti = createJiti(import.meta.url);\n",
+			"const p = resolvePackagePath(\n\timport.meta.url,\n\t'../x',\n);\n",
+			"if (isEntryPoint(import.meta.url)) {\n\tmain();\n}\n",
 		];
 		for (const source of clean)
 			expect(scanEntryGate(source), source).toEqual([]);

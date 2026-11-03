@@ -37,7 +37,7 @@
 import { deriveCascadeNeighbourBudget } from "../clients/cascade-budget.js";
 
 const numArg = (name, fallback) => {
-	const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
+	const hit = process.argv.slice(2).find((a) => a.startsWith(`--${name}=`));
 	return hit === undefined ? fallback : Number(hit.split("=")[1]);
 };
 
