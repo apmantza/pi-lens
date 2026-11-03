@@ -202,7 +202,17 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 			},
 		});
 		const result = res.result as ToolResult;
-		expect(result.isError).toBeFalsy();
+		if (result.isError) {
+			// #5159 D6: the parse invariant covers non-error cells only. This lane
+			// refuses tool installs, so the tool answers an error envelope and
+			// `withStaleWarning` skips error cells, so no advisory is delivered.
+			// Pin that shape; the live envelope is covered by lsp-spawn-heavy.
+			const errorBlocks = blockTexts(result);
+			expect(errorBlocks).toHaveLength(1);
+			expect(errorBlocks[0]).toMatch(/\n\nresult error\n/);
+			expect(errorBlocks[0]).not.toContain(ADVISORY_PREFIX);
+			return;
+		}
 		const blocks = blockTexts(result);
 		expect(blocks).toHaveLength(2);
 		// The envelope flows through the tool's real `finalize` and the wire. This

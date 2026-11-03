@@ -305,6 +305,7 @@
 		"clients/word-index.test.ts": 1,
 		"clients/workspace-topology.test.ts": 2,
 		"config/global-dir-probe-redirect.test.ts": 1,
+		"config/result-contract-governance.test.ts": 1,
 		"index-5108-opaque-blocker-disclosure-witness.test.ts": 5,
 		"index-integration.test.ts": 3,
 		"mcp/analyze-cli.test.ts": 2,

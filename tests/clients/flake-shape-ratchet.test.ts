@@ -586,6 +586,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a cancelled timer produces no event to await; a bounded real window observes the absence, and every assertion is a count, never elapsed ms",
 		},
+	// 2026-11-03 (#5159): the census warms the real MCP child's background
+	// review-graph build before it classifies the project_report JSON cell; the
+	// build is the contention model and a fake clock cannot advance that child.
+	"raw-timer-wait:config/result-contract-governance.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the census polls the real MCP child's background review-graph build before classifying the project_report JSON cell; a fake clock cannot advance that child's build",
+	},
 	// 2026-10-31 (#5108): the read-only bound is a live wall deadline.
 	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "raw-timer-wait",

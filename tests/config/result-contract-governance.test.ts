@@ -1,3 +1,4 @@
+// flake-shape: raw-timer-wait — the census polls the real MCP child's background review-graph build before classifying the project_report JSON cell
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -504,7 +505,7 @@ describe("result contract across registered tool surfaces", () => {
 			shape: CellShape;
 		}>;
 
-		beforeAll(() => {
+		beforeAll(async () => {
 			CENSUS = [
 				{
 					mcpName: "pilens_module_report",
@@ -569,7 +570,33 @@ describe("result contract across registered tool surfaces", () => {
 					shape: "text",
 				},
 			];
-		});
+			// The first `pilens_project_report` call starts the child's background
+			// review-graph build and reports unavailable; the `view:"json"` census
+			// row must not race it (Greptile P1). Poll the real tool until it
+			// serves: the build is the contention model, the deadline is real.
+			const until = Date.now() + scaledTestTimeout(30_000);
+			let warm = false;
+			let pollId = 900;
+			while (!warm && Date.now() < until) {
+				const res = await mcp.request(pollId++, "tools/call", {
+					name: "pilens_project_report",
+					arguments: { limit: 1, view: "json" },
+				});
+				const result = res.result as ToolResult;
+				if (!result.isError) {
+					try {
+						const doc = JSON.parse(
+							stripContractFooter(result.content?.[0]?.text ?? ""),
+						) as { available?: boolean };
+						warm = doc.available === true;
+					} catch {
+						// keep polling
+					}
+				}
+				if (!warm) await new Promise((resolve) => setTimeout(resolve, 500));
+			}
+			expect(warm, "project_report graph warmed before the census").toBe(true);
+		}, scaledTestTimeout(40_000));
 
 		/** Classify a delivered MCP cell from its block 0, post owner footer strip. */
 		function classifyCell(result: ToolResult): CellShape {
