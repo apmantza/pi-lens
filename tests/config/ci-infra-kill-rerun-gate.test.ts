@@ -519,16 +519,25 @@ describe("ci-infra-kill-rerun.yml classify label step for an advisory-only failu
 	});
 });
 
-describe("ci-infra-kill-rerun.yml synchronize label cleanup (#2856)", () => {
+describe("ci-verdict-labels.yml synchronize label cleanup (#2856)", () => {
+	// Recurrence (#5002): a pull_request trigger here posts the workflow_run jobs
+	// as two skipped rows on every pushed PR head.
+	it("leaves the classifier workflow with no pull_request trigger", () => {
+		expect(Object.keys(loadWorkflow().on ?? {})).toEqual(["workflow_run"]);
+	});
+
 	it("synchronize cleanup removes both verdict labels", () => {
-		const workflow = loadWorkflow();
+		const workflow = yaml.load(
+			readFileSync(
+				resolve(REPO_ROOT, ".github/workflows/ci-verdict-labels.yml"),
+				"utf8",
+			),
+		) as Workflow;
 		expect(workflow.on?.pull_request?.types).toEqual(["synchronize"]);
 		const job = (workflow.jobs as Record<string, WorkflowJob>)[
 			"clear-stale-verdict-labels"
 		];
 		expect(job).toBeDefined();
-		expect(job?.if).toContain("github.event_name == 'pull_request'");
-		expect(job?.if).toContain("github.event.action == 'synchronize'");
 		const run = (job!.steps as WorkflowStep[]).find((step) => step.run)?.run;
 		expect(run).toContain("--remove-label 'ci:infra'");
 		expect(run).toContain("--remove-label 'ci:real'");

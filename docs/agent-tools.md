@@ -125,7 +125,13 @@ and `[]` mean no arguments.
   (`tools/lsp-navigation.ts` operation description). Position-based operations
   accept a `path`/`line`/`character` triple. `documentSymbol` accepts a `kinds`
   filter (e.g. `function`, `class`) and a `maxResults` cap (default 20, max 100)
-  to keep large files bounded. Full per-operation parameter reference:
+  to keep large files bounded. A request that outlasts its deadline (10 s by
+  default for navigation requests) is reported as a timeout, never as a silent
+  empty answer, so a slow server is not read as "no references". Depending on
+  the operation the timeout arrives as an error result, a note beside the
+  answer it does have (a `definition` that the `documentSymbol` fallback
+  answered, or a partial `workspaceDiagnostics` pull), or `executed: false`
+  with a reason (`executeCommand`). Full per-operation parameter reference:
   [skills/pi-lens-lsp-navigation/SKILL.md](../skills/pi-lens-lsp-navigation/SKILL.md).
   Output is Neovim-style text by default (a `path:line:col` location list,
   `hover` markdown, an indented `start-end kind name` symbol tree,

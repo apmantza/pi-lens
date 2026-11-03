@@ -529,6 +529,10 @@ node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <re
 
 The seven advisory lint tools are steps of one `Lint (advisory)` job, and the PR
 title and close-keyword checks are steps of one gating `PR metadata` job.
+`actionlint` and `markdownlint` share one gating `actionlint & markdownlint` job,
+and the required `Lint & type-check` also runs `depcruise:check`.
+`ci-infra-kill-rerun.yml` has no `pull_request` trigger, so its jobs post no
+skipped rows on a PR; the label cleanup lives in `ci-verdict-labels.yml`.
 
 CI cost gates (#3801). The heavy advisory jobs (`CodeQL (<language>) (advisory)`)
 start only after every required check but `Hot-path latency (advisory)` passed on
