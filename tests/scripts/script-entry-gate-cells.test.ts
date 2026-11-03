@@ -206,8 +206,8 @@ function childEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
 		PI_LENS_HOME: path.join(HOME, ".pi-lens"),
 		PILENS_DATA_DIR: path.join(HOME, ".pi-lens"),
 		TMPDIR: tmpRoot,
-		...extra,
 	};
+	for (const [key, value] of Object.entries(extra)) env[key] = value;
 	for (const key of Object.keys(env))
 		if (env[key] === undefined) delete env[key];
 	return env;
