@@ -295,19 +295,23 @@ describe("lsp-spawn-heavy Vitest project coverage", () => {
 	// red must not turn into "stale exemptions pass". A planted exemption naming
 	// a file the scan does not flag (a real non-spawning test, and a path that
 	// does not exist) still reds through the same filter and audit.
-	it("still reds a stale exemption, whichever invocation runs it", () => {
-		const planted = {
-			"tests/config/worker-budget.test.ts":
-				"planted: a real test file that never spawns an LSP child",
-			"tests/clients/lsp/no-such-file-5227.test.ts":
-				"planted: a path that does not exist at all",
-		};
-		const audit = auditSpawnCensus(
-			{ ...SPAWN_EXEMPTIONS, ...planted },
-			lspSpawnHeavyInclude(),
-		);
-		expect(audit.staleExemptions.sort()).toEqual(Object.keys(planted).sort());
-	});
+	it(
+		"still reds a stale exemption, whichever invocation runs it",
+		() => {
+			const planted = {
+				"tests/config/worker-budget.test.ts":
+					"planted: a real test file that never spawns an LSP child",
+				"tests/clients/lsp/no-such-file-5227.test.ts":
+					"planted: a path that does not exist at all",
+			};
+			const audit = auditSpawnCensus(
+				{ ...SPAWN_EXEMPTIONS, ...planted },
+				lspSpawnHeavyInclude(),
+			);
+			expect(audit.staleExemptions.sort()).toEqual(Object.keys(planted).sort());
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it(
 		"phases or documents every test that spawns a real LSP child",
