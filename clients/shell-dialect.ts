@@ -75,10 +75,14 @@ function parseShellDirective(content: string): string | null {
 export function resolveShellFileDialect(filePath: string): ShellFileDialect {
 	let content: string;
 	try {
-		content = fs
-			.readFileSync(filePath)
-			?.subarray(0, DIALECT_SNIFF_BYTES)
-			.toString("utf8");
+		const fd = fs.openSync(filePath, "r");
+		try {
+			const head = Buffer.alloc(DIALECT_SNIFF_BYTES);
+			const bytesRead = fs.readSync(fd, head, 0, DIALECT_SNIFF_BYTES, 0);
+			content = head.subarray(0, bytesRead).toString("utf8");
+		} finally {
+			fs.closeSync(fd);
+		}
 	} catch {
 		// none: best-effort sniffing retains the bash default instead of dropping coverage.
 		return { shebang: null, directive: null, dialect: "bash" };
