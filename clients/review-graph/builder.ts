@@ -4850,10 +4850,17 @@ async function addFileToGraph(
 	if (extracted.symbols.length === 0) {
 		let lspSymbols;
 		let lspSymbolTimedOut = false;
+		let lspSymbolError: string | undefined;
 		try {
 			lspSymbols = await getOpenDocumentSymbols(file);
 		} catch (err) {
+			// none: the lsp_symbol_fallback record below persists every caught outcome.
 			if (isLspRequestTimeoutError(err)) lspSymbolTimedOut = true;
+			else
+				lspSymbolError = String(err instanceof Error ? err.message : err).slice(
+					0,
+					512,
+				);
 		}
 		const added = lspSymbols
 			? addLspFallbackSymbols(graph, file, languageId, lspSymbols)
@@ -4867,7 +4874,10 @@ async function addFileToGraph(
 					? added > 0
 						? "added"
 						: "empty-response"
-					: "unavailable-or-failed",
+					: lspSymbolError !== undefined
+						? "failed"
+						: "unavailable",
+			...(lspSymbolError !== undefined && { error: lspSymbolError }),
 			nodes: added,
 		});
 	}

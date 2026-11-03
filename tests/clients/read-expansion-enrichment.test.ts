@@ -1,8 +1,18 @@
+import { suspendAt } from "./interleaving-kit.js";
+vi.hoisted(() => {
+	vi.stubEnv("PI_LENS_READ_GUARD_LOG", "verbose");
+});
+import {
+	flushReadGuardLog,
+	getReadGuardLogPath,
+} from "../../clients/read-guard-logger.js";
+import { readNdjsonRows } from "../support/ndjson-rows.js";
 import * as fs from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { tryExpandRead } from "../../clients/read-expansion.js";
 import { lineContentHash } from "../../clients/read-guard.js";
+import { normalizeFilePath } from "../../clients/path-utils.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -51,16 +61,11 @@ beforeEach(async () => {
 	});
 });
 
-const loggedEvents: Array<Record<string, unknown>> = [];
-vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("../../clients/read-guard-logger.js")>();
-	return {
-		...actual,
-		logReadGuardEvent: (event: Record<string, unknown>) => {
-			loggedEvents.push(event);
-		},
-	};
+beforeEach(() => {
+	vi.stubEnv("PI_LENS_TEST_MODE", "0");
+});
+afterEach(() => {
+	vi.unstubAllEnvs();
 });
 
 vi.mock("../../clients/bootstrap.js", async () => {
@@ -102,8 +107,13 @@ function makeDeps(tmpDir: string, filePath: string) {
 	} as unknown as Parameters<typeof handleToolCall>[0];
 }
 
-function lastExpandedEvent(): Record<string, unknown> | undefined {
-	return [...loggedEvents]
+async function lastExpandedEvent(): Promise<
+	Record<string, unknown> | undefined
+> {
+	await flushReadGuardLog();
+	const result = readNdjsonRows(getReadGuardLogPath());
+	expect(result.skipped).toBe(0);
+	return result.rows
 		.reverse()
 		.find((event) => event.event === "ts_range_expanded");
 }
@@ -114,7 +124,6 @@ describe("read-expansion LSP enrichment (#158)", () => {
 	it("applies hierarchical enrichment: qualified name, LSP ancestry, enriched flag", async () => {
 		const env = setupTestEnvironment("pi-lens-enrich-hier-");
 		try {
-			loggedEvents.length = 0;
 			getWarmClientForFileMock.mockResolvedValue(warmClient);
 			documentSymbolMock.mockResolvedValue([
 				{
@@ -140,7 +149,7 @@ describe("read-expansion LSP enrichment (#158)", () => {
 			await runHandlerExpectingNoThrow(() =>
 				handleToolCall(makeDeps(env.tmpDir, filePath)),
 			);
-			const event = lastExpandedEvent();
+			const event = await lastExpandedEvent();
 			expect(event).toBeDefined();
 			expect(event?.symbol).toBe("ReviewManager.runSynthesis");
 			expect(JSON.stringify(event)).toContain('"enriched":true');
@@ -152,7 +161,6 @@ describe("read-expansion LSP enrichment (#158)", () => {
 	it("keeps tree-sitter ancestry and chains containerName on flat results", async () => {
 		const env = setupTestEnvironment("pi-lens-enrich-flat-");
 		try {
-			loggedEvents.length = 0;
 			dbgLines.length = 0;
 			getWarmClientForFileMock.mockResolvedValue(warmClient);
 			// Flat SymbolInformation (native-ts7's measured shape): no children,
@@ -196,7 +204,7 @@ describe("read-expansion LSP enrichment (#158)", () => {
 			await runHandlerExpectingNoThrow(() =>
 				handleToolCall(makeDeps(env.tmpDir, filePath)),
 			);
-			const event = lastExpandedEvent();
+			const event = await lastExpandedEvent();
 			expect(event).toBeDefined();
 			// Nested containerName chain fully qualifies the name…
 			expect(event?.symbol).toBe("Outer.Inner.runSynthesis");
@@ -215,7 +223,6 @@ describe("read-expansion LSP enrichment (#158)", () => {
 	it("falls back to the tree-sitter name when documentSymbol never resolves", async () => {
 		const env = setupTestEnvironment("pi-lens-enrich-timeout-");
 		try {
-			loggedEvents.length = 0;
 			getWarmClientForFileMock.mockResolvedValue(warmClient);
 			documentSymbolMock.mockReturnValue(new Promise(() => {}));
 			const filePath = createTempFile(env.tmpDir, "src/slow.ts", SOURCE);
@@ -226,7 +233,7 @@ describe("read-expansion LSP enrichment (#158)", () => {
 			// The 150ms budget bounds the enrichment; the read must complete
 			// promptly with the un-enriched tree-sitter identity.
 			expect(Date.now() - startedAt).toBeLessThan(5_000);
-			const event = lastExpandedEvent();
+			const event = await lastExpandedEvent();
 			expect(event).toBeDefined();
 			const serialized = JSON.stringify(event);
 			expect(serialized).toContain("runSynthesis");
@@ -292,3 +299,94 @@ describe("read accounting around the expansion await (#1649)", () => {
 		}
 	});
 });
+
+// #5219 r2: warm lookup rejection must carry its file identity to disk.
+it.each(["error", "string", "long"])(
+	"persists warm lookup failures on the read file %s",
+	async (mode) => {
+		const env = setupTestEnvironment("pi-lens-enrich-error-");
+		try {
+			const cause =
+				"warm lookup failed" + (mode === "long" ? "x".repeat(600) : "");
+			getWarmClientForFileMock.mockRejectedValue(
+				mode === "string" ? cause : new Error(cause),
+			);
+			const filePath = createTempFile(env.tmpDir, "src/error.ts", SOURCE);
+			await runHandlerExpectingNoThrow(() =>
+				handleToolCall(makeDeps(env.tmpDir, filePath)),
+			);
+			const event = await lastExpandedEvent();
+			expect(event?.filePath).toBe(normalizeFilePath(filePath));
+			expect(event?.metadata).toMatchObject({
+				lspSymbolOutcome: "failed",
+				lspSymbolError: cause.slice(0, 512),
+			});
+		} finally {
+			env.cleanup();
+		}
+	},
+);
+it("persists the outer symbol deadline separately", async () => {
+	const env = setupTestEnvironment("pi-lens-enrich-outer-");
+	vi.useFakeTimers();
+	const lookup = suspendAt(getWarmClientForFileMock, async () => warmClient);
+	const request = suspendAt(documentSymbolMock, async () => []);
+	try {
+		const filePath = createTempFile(env.tmpDir, "src/outer.ts", SOURCE);
+		const work = runHandlerExpectingNoThrow(() =>
+			handleToolCall(makeDeps(env.tmpDir, filePath)),
+		);
+		await lookup.admitted;
+		await vi.advanceTimersByTimeAsync(100);
+		lookup.release();
+		await request.admitted;
+		await vi.advanceTimersByTimeAsync(101);
+		await work;
+		request.release();
+		await request.completed;
+		vi.useRealTimers();
+		const event = await lastExpandedEvent();
+		expect(event?.filePath).toBe(normalizeFilePath(filePath));
+		expect(event?.metadata).toMatchObject({
+			lspSymbolOutcome: "outer-deadline",
+		});
+	} finally {
+		lookup.release();
+		request.release();
+		lookup.restore();
+		request.restore();
+		vi.useRealTimers();
+		env.cleanup();
+	}
+});
+
+// #5219 r2 T6: cancellation and a cold client must not become outer deadlines.
+it.each(["caller-abort", "unavailable"])(
+	"does not call %s a symbol deadline",
+	async (mode) => {
+		const env = setupTestEnvironment("pi-lens-enrich-control-");
+		try {
+			const controller = new AbortController();
+			getWarmClientForFileMock.mockImplementation(async () => {
+				if (mode === "caller-abort") {
+					controller.abort();
+					return undefined;
+				}
+				return undefined;
+			});
+			const filePath = createTempFile(env.tmpDir, "src/control.ts", SOURCE);
+			const deps = makeDeps(env.tmpDir, filePath);
+			deps.ctx.signal = controller.signal;
+			await runHandlerExpectingNoThrow(() => handleToolCall(deps));
+			const event = await lastExpandedEvent();
+			expect(event?.filePath).toBe(normalizeFilePath(filePath));
+			const metadata = event?.metadata as Record<string, unknown>;
+			expect(metadata.lspSymbolTimeout).toBeUndefined();
+			expect(metadata.lspSymbolOutcome).toBe(
+				mode === "caller-abort" ? "caller-abort" : undefined,
+			);
+		} finally {
+			env.cleanup();
+		}
+	},
+);

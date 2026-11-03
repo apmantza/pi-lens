@@ -1141,15 +1141,36 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				let lspSymbolTimedOut = false;
 				let enrichedAncestry = expansion.ancestry;
 				let lspSymbols;
+				let lspSymbolOutcome:
+					| "outer-deadline"
+					| "caller-abort"
+					| "failed"
+					| undefined;
+				let lspSymbolError: string | undefined;
 				try {
-					lspSymbols = await bounded(getOpenDocumentSymbols(filePath), {
-						ms: EXPANSION_BUDGET_MS,
-						signal: deps.ctx.signal,
-						hook: "tool_call",
-						label: "read-lsp-document-symbols",
-					});
+					const result = await bounded(
+						getOpenDocumentSymbols(filePath).then((symbols) => ({ symbols })),
+						{
+							ms: EXPANSION_BUDGET_MS,
+							signal: deps.ctx.signal,
+							hook: "tool_call",
+							label: "read-lsp-document-symbols",
+						},
+					);
+					lspSymbols = result?.symbols;
+					if (result === undefined)
+						lspSymbolOutcome = deps.ctx.signal?.aborted
+							? "caller-abort"
+							: "outer-deadline";
 				} catch (err) {
+					// none: ts_range_expanded below persists timeout or failure with the file identity.
 					if (isLspRequestTimeoutError(err)) lspSymbolTimedOut = true;
+					else {
+						lspSymbolOutcome = "failed";
+						lspSymbolError = String(
+							err instanceof Error ? err.message : err,
+						).slice(0, 512);
+					}
 				}
 				const located = lspSymbols
 					? findDocumentSymbolAtLine(
@@ -1214,6 +1235,8 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					metadata: {
 						enriched,
 						...(lspSymbolTimedOut && { lspSymbolTimeout: true }),
+						...(lspSymbolOutcome && { lspSymbolOutcome }),
+						...(lspSymbolError !== undefined && { lspSymbolError }),
 						durationMs: expansion.durationMs,
 						budgetMs: EXPANSION_BUDGET_MS,
 					},

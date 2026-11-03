@@ -1073,8 +1073,8 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :306, :343
 	"clients/review-graph/builder.ts": {
-		silent: 20,
-		identities: "0f1af3e5d16d25a2",
+		silent: 19,
+		identities: "c13466bb5df2c24b",
 		reason: PRE_RULE,
 	}, // :1254, :1303, :1399, :1989, :2019, :2025, :2040, :2046, :2138, :2503, :2601, :2727, :2769, :3200, :4676, :5529, :5608, :6031, :6363
 	"clients/review-graph/git-identity.ts": {
@@ -1118,8 +1118,8 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :403, :648, :901, :949, :956, :1042, :1069, :1146, :1181, :1183, :1208, :1238, :1371, :1422, :1592, :2189, :2782, :2814, :2922, :2999, :3004, :3414, :3428, :3501
 	"clients/runtime-tool-call.ts": {
-		silent: 11,
-		identities: "1baac382bac581aa",
+		silent: 10,
+		identities: "042e838b36502579",
 		reason: PRE_RULE,
 	}, // :269, :502, :526, :1049, :1216, :1441, :1832 and the rest (11 -> 10, #5120: the partial-apply rejection catch went with the in-tool_call writer)
 	"clients/runtime-tool-result.ts": {

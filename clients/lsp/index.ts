@@ -564,6 +564,7 @@ export interface LSPRenameFileResult {
 export interface LSPDiagnosticsHealth {
 	health: "ok" | "ok_empty" | "no_clients" | "no_clients_stale" | "destroyed";
 	failureKind: string;
+	partialTimeout?: boolean;
 	serverCountAttempted: number;
 	serverCountReady: number;
 	candidateServerIds: string[];
@@ -5654,7 +5655,9 @@ export class LSPService {
 					// once above, next to the sync-confirm gate that reads the same fact.
 					// #743: per-server — a server we DID push to still gets the
 					// version-baseline wait even when a sibling was debounced away.
-					const waitForDiagnostics = (): Promise<void> =>
+					const waitForDiagnostics = (): ReturnType<
+						typeof entry.client.waitForDiagnostics
+					> =>
 						!notifySkippedServerIds.has(entry.info.id) &&
 						Number.isFinite(baseline)
 							? entry.client.waitForDiagnostics(filePath, serverTimeout, {
@@ -7457,6 +7460,7 @@ export class LSPService {
 		// Per-server entries produced by client waits. Each promise resolves
 		// with a PerServerEntry; raceToCompletion collects them as they finish.
 		type PerServerEntry = {
+			answered: boolean;
 			serverId: string;
 			launchVariant?: LspLaunchVariant;
 			waitMs: number;
@@ -7469,7 +7473,7 @@ export class LSPService {
 				const waitStart = Date.now();
 				const launchVariant = entry.client.getLaunchVariant?.();
 				const strategy = getStrategy(entry.info.id, launchVariant);
-				await entry.client.waitForDiagnostics(
+				let outcome = await entry.client.waitForDiagnostics(
 					filePath,
 					strategy.aggregateWaitMs,
 				);
@@ -7480,13 +7484,14 @@ export class LSPService {
 					diagnostics.length === 0 &&
 					firstWaitMs < DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS
 				) {
-					await entry.client.waitForDiagnostics(
+					outcome = await entry.client.waitForDiagnostics(
 						filePath,
 						DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS,
 					);
 					diagnostics = entry.client.getDiagnostics(filePath);
 				}
 				return {
+					answered: outcome === "answered" || diagnostics.length > 0,
 					serverId: entry.info.id,
 					launchVariant,
 					waitMs: Date.now() - waitStart,
@@ -7571,6 +7576,7 @@ export class LSPService {
 			const found = perServer.find((r) => r.serverId === entry.info.id);
 			return (
 				found ?? {
+					answered: false,
 					serverId: entry.info.id,
 					launchVariant: entry.client.getLaunchVariant?.(),
 					waitMs: getStrategy(entry.info.id, entry.client.getLaunchVariant?.())
@@ -7585,7 +7591,9 @@ export class LSPService {
 
 		const merged: import("./client.js").LSPDiagnostic[] = [];
 		const seen = new Set<string>();
+		let answeredCount = 0;
 		for (const entry of perServerFull) {
+			if (entry.answered) answeredCount++;
 			for (const diagnostic of entry.diagnostics) {
 				const key = [
 					diagnostic.range.start.line,
@@ -7611,7 +7619,8 @@ export class LSPService {
 			filePath,
 		);
 		const unavailablePrimaryServerIds = unanswered.serverIds;
-		const timedOut = perServer.length === 0 && earlyUnblockedCount > 0;
+		const timedOut = answeredCount === 0;
+		const partialTimeout = answeredCount > 0 && answeredCount < spawned.length;
 		const failureKind = timedOut
 			? "timeout"
 			: merged.length === 0
@@ -7621,6 +7630,7 @@ export class LSPService {
 		this.lastDiagnosticsHealth.set(normalizedPath, {
 			health: failureKind === "success" ? "ok" : "ok_empty",
 			failureKind,
+			partialTimeout,
 			serverCountAttempted,
 			serverCountReady: perServerFull.length,
 			candidateServerIds,
@@ -7650,6 +7660,7 @@ export class LSPService {
 				earlyUnblockedCount,
 				diagnosticsMode,
 				failureKind,
+				partialTimeout,
 				health: failureKind === "success" ? "ok" : "ok_empty",
 				servers: perServerFull.map((entry) => ({
 					id: entry.serverId,
@@ -7671,7 +7682,7 @@ export class LSPService {
 		// the unguarded widget read still gets last-known for display.
 		if (merged.length > 0) {
 			this.lastKnownDiagnostics.set(normalizedPath, merged);
-		} else {
+		} else if (!timedOut && !partialTimeout) {
 			this.lastKnownDiagnostics.delete(normalizedPath);
 		}
 		this.lastKnownContentHash.delete(normalizedPath);

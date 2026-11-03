@@ -1,5 +1,7 @@
+import { readNdjsonRows } from "../../support/ndjson-rows.js";
 import { createHash } from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeFilePath } from "../../../clients/path-utils.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { getOpenDocumentSymbols } from "../../../clients/lsp-document-symbols.js";
 import { LspRequestTimeoutError } from "../../../clients/lsp/request-timeout-error.js";
@@ -14,7 +16,10 @@ import {
 	clearReviewGraphFileIr,
 	publishReviewGraphFileIr,
 } from "../../../clients/review-graph/shared-extraction-ir.js";
-import { logReviewGraph } from "../../../clients/review-graph-logger.js";
+import {
+	flushReviewGraphLog,
+	getReviewGraphLogPath,
+} from "../../../clients/review-graph-logger.js";
 import { createTempFile, setupTestEnvironment } from "../test-utils.js";
 
 vi.mock("../../../clients/lsp-document-symbols.js", async (importOriginal) => {
@@ -24,13 +29,15 @@ vi.mock("../../../clients/lsp-document-symbols.js", async (importOriginal) => {
 		>();
 	return { ...actual, getOpenDocumentSymbols: vi.fn() };
 });
-vi.mock("../../../clients/review-graph-logger.js", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("../../../clients/review-graph-logger.js")
-	>()),
-	logReviewGraph: vi.fn(),
-	flushReviewGraphLogSync: vi.fn(),
-}));
+beforeEach(() => {
+	vi.stubEnv("PI_LENS_TEST_MODE", "0");
+});
+async function graphRows(cwd: string) {
+	await flushReviewGraphLog();
+	const result = readNdjsonRows(getReviewGraphLogPath());
+	expect(result.skipped).toBe(0);
+	return result.rows.filter((row) => row.cwd === normalizeFilePath(cwd));
+}
 
 const range = (start: number, end: number) => ({
 	start: { line: start, character: 0 },
@@ -42,6 +49,7 @@ afterEach(() => {
 	clearReviewGraphWorkspaceCache();
 	clearReviewGraphFileIr();
 	vi.clearAllMocks();
+	vi.unstubAllEnvs();
 });
 
 // #4342: the fixtures are `.py` (python is a CORE grammar, bundled with the
@@ -85,7 +93,7 @@ describe("review graph LSP symbol fallback (#307)", () => {
 				to: child.id,
 				kind: "contains",
 			});
-			expect(logReviewGraph).toHaveBeenCalledWith(
+			expect(await graphRows(env.tmpDir)).toContainEqual(
 				expect.objectContaining({
 					phase: "lsp_symbol_fallback",
 					reason: "added",
@@ -159,10 +167,10 @@ describe("review graph LSP symbol fallback (#307)", () => {
 			expect(
 				[...graph.nodes.values()].some((node) => node.provenance === "lsp"),
 			).toBe(false);
-			expect(logReviewGraph).toHaveBeenCalledWith(
+			expect(await graphRows(env.tmpDir)).toContainEqual(
 				expect.objectContaining({
 					phase: "lsp_symbol_fallback",
-					reason: "unavailable-or-failed",
+					reason: "unavailable",
 				}),
 			);
 		} finally {
@@ -178,7 +186,7 @@ describe("review graph LSP symbol fallback (#307)", () => {
 				new LspRequestTimeoutError("textDocument/documentSymbol", 150, 151),
 			);
 			await buildOrUpdateGraph(env.tmpDir, [file], new FactStore());
-			expect(logReviewGraph).toHaveBeenCalledWith(
+			expect(await graphRows(env.tmpDir)).toContainEqual(
 				expect.objectContaining({
 					phase: "lsp_symbol_fallback",
 					reason: "timeout",
@@ -188,6 +196,31 @@ describe("review graph LSP symbol fallback (#307)", () => {
 			env.cleanup();
 		}
 	});
+
+	it.each(["error", "string", "long"])(
+		"persists warm-client lookup failure with its cause %s",
+		async (mode) => {
+			const env = setupTestEnvironment("pi-lens-graph-lsp-error-");
+			try {
+				const file = createTempFile(env.tmpDir, "lib/main.py", "# opaque\n");
+				const cause =
+					"warm lookup failed" + (mode === "long" ? "x".repeat(600) : "");
+				vi.mocked(getOpenDocumentSymbols).mockRejectedValue(
+					mode === "string" ? cause : new Error(cause),
+				);
+				await buildOrUpdateGraph(env.tmpDir, [file], new FactStore());
+				expect(await graphRows(env.tmpDir)).toContainEqual(
+					expect.objectContaining({
+						phase: "lsp_symbol_fallback",
+						reason: "failed",
+						error: cause.slice(0, 512),
+					}),
+				);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 
 	it("never requests document symbols for a productive fact extractor", async () => {
 		const env = setupTestEnvironment("pi-lens-graph-lsp-productive-");

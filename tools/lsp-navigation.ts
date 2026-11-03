@@ -1391,6 +1391,8 @@ export function createLspNavigationTool(
 					const diagnosticsTimedOut =
 						lspService.getDiagnosticsHealth(filePath)?.failureKind ===
 						"timeout";
+					const diagnosticsPartialTimeout =
+						lspService.getDiagnosticsHealth(filePath)?.partialTimeout === true;
 					const suppressedLine = dispositionSuppressedLine(policy.suppressed);
 					// #4638 r3 (N2): a row the declaration withheld is named on this route
 					// too, so an empty answer cannot read as "no findings published".
@@ -1423,7 +1425,7 @@ export function createLspNavigationTool(
 							content: [
 								{
 									type: "text" as const,
-									text: `${note}\n${JSON.stringify(result)}${diagnosticsTimedOut ? `\nNote: LSP diagnostics timed out for ${filePath}` : ""}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
+									text: `${note}\n${JSON.stringify(result)}${diagnosticsTimedOut || diagnosticsPartialTimeout ? `\nNote: LSP diagnostics timed out for ${filePath}` : ""}${primaryUnavailable ? `\nNote: ${primaryUnavailable}` : ""}${suppressedLine ? `\nNote: ${suppressedLine}` : ""}${withheldLine ? `\nNote: ${withheldLine}` : ""}`,
 								},
 							],
 							...(diagnosticsTimedOut && resultCount === 0
