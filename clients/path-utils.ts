@@ -809,6 +809,40 @@ export function toProjectRelativePath(
 	filePath: string,
 	projectRoot: string,
 ): string {
+	return relativeToProjectRoot(filePath, projectRoot, () =>
+		normalizeFilePath(projectRoot),
+	);
+}
+
+/**
+ * A `toProjectRelativePath` for one project root, with that root's canonical
+ * form computed at most once per resolver.
+ *
+ * The outside-root retry canonicalizes the root on every call, and a text
+ * renderer answers hundreds of display paths from one root in one call: 500
+ * locations, half outside the root, spent 7.46 ms per render against 5.05 ms
+ * with the root canonicalized once, and 500 outside-root locations 13.44 ms
+ * against 8.54 ms (measured on this repo's macOS host, #1449). The remaining
+ * per-row cost is the file's own canonical retry, which #4101 requires.
+ */
+export function createProjectRelativePathResolver(
+	projectRoot: string,
+): (filePath: string) => string {
+	let canonicalRoot: string | undefined;
+	return (filePath: string): string =>
+		relativeToProjectRoot(
+			filePath,
+			projectRoot,
+			() => (canonicalRoot ??= normalizeFilePath(projectRoot)),
+		);
+}
+
+/** The one relative-path rule both entry points above share. */
+function relativeToProjectRoot(
+	filePath: string,
+	projectRoot: string,
+	canonicalRoot: () => string,
+): string {
 	const p = isWindowsPath(filePath) ? win32 : path;
 	if (!p.isAbsolute(filePath)) return filePath.replace(/\\/g, "/");
 	const direct = relativeInside(projectRoot, filePath, p);
@@ -818,7 +852,7 @@ export function toProjectRelativePath(
 	// spelled differently. Canonicalize both sides before giving up; a file
 	// that really is outside the root stays outside.
 	const canonical = relativeInside(
-		normalizeFilePath(projectRoot),
+		canonicalRoot(),
 		normalizeFilePath(filePath),
 		p,
 	);

@@ -501,12 +501,12 @@ describe("#5041 `path` is the canonical single-file parameter", () => {
 			// refusal: without the forwarding `hover` answers "path is required".
 			const canonical = await run(
 				tool,
-				{ operation: "hover", path: "missing-5041.ts" },
+				{ operation: "hover", path: "missing-5041.ts", view: "json" },
 				env.tmpDir,
 			);
 			const aliased = await run(
 				tool,
-				{ operation: "hover", file: "missing-5041.ts" },
+				{ operation: "hover", file: "missing-5041.ts", view: "json" },
 				env.tmpDir,
 			);
 			// The envelope in `content` carries the resolved file; `details` keeps
@@ -677,7 +677,7 @@ describe("#5047 a workspace name is data on every tool that takes a path", () =>
 					const tool = createLspNavigationTool(() => false);
 					const result = await run(
 						tool,
-						{ operation: "hover", path: "src/a.ts" },
+						{ operation: "hover", path: "src/a.ts", view: "json" },
 						workspace,
 					);
 					const resolved = (JSON.parse(text(result)) as { filePath?: string })

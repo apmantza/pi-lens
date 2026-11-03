@@ -259,6 +259,9 @@
 				"callHierarchyItem": {
 					"type": "object",
 					"properties": {}
+				},
+				"view": {
+					"type": "string"
 				}
 			}
 		}
@@ -526,6 +529,9 @@
 				"callHierarchyItem": {
 					"type": "object",
 					"properties": {}
+				},
+				"view": {
+					"type": "string"
 				},
 				"cwd": {
 					"type": "string"

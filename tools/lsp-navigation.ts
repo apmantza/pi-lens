@@ -40,6 +40,7 @@ import {
 } from "../clients/lsp/capabilities.js";
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
 import { buildLspNavigationEnvelope } from "./lsp-structured-output.js";
+import { renderLspNavigationText } from "./lsp-navigation-text.js";
 import {
 	applyProbeFindingPolicy,
 	describePrimaryUnavailable,
@@ -850,7 +851,7 @@ export function createLspNavigationTool(
 		name: "lsp_navigation" as const,
 		label: "LSP Navigate",
 		description:
-			'Navigate source with language-server operations such as definition, references, hover, and rename. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
+			'Navigate source with language-server operations such as definition, references, hover, and rename. Returns Neovim-style TEXT by default (path:line:col locations, symbol trees, diagnostics); pass view:"json" for the structured envelope. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
 		promptSnippet: "Navigate definitions and references with LSP",
 		renderResult: compactRenderResult<{
 			operation?: string;
@@ -970,6 +971,13 @@ export function createLspNavigationTool(
 					},
 				),
 			),
+			view: Type.Optional(
+				Type.String({
+					// Plain string, no enum: "json" is the JSON hatch; anything else is text.
+					description:
+						'Output format. "json" returns the structured envelope (machine-readable, byte-identical to the pre-text default); any other value (or omitting view) returns the default Neovim-style TEXT rendering (path:line:col locations, symbol trees, diagnostics).',
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -1013,6 +1021,8 @@ export function createLspNavigationTool(
 					filePath: string;
 					failureKind: string;
 					resultCount: number;
+					result?: unknown;
+					callSiteUri?: string;
 				},
 			): typeof payload & {
 				details: typeof payload.details & {
@@ -1047,25 +1057,51 @@ export function createLspNavigationTool(
 				});
 
 				const text = payload.content[0]?.text ?? "";
-				const envelope = buildLspNavigationEnvelope({
-					operation: meta.operation,
-					filePath: meta.filePath,
-					failureKind: meta.failureKind,
-					resultCount: meta.resultCount,
-					text,
-					isError: payload.isError,
-					details: payload.details,
-				});
-
+				if (params.view === "json") {
+					const envelope = buildLspNavigationEnvelope({
+						operation: meta.operation,
+						filePath: meta.filePath,
+						failureKind: meta.failureKind,
+						resultCount: meta.resultCount,
+						text,
+						isError: payload.isError,
+						details: payload.details,
+					});
+					return {
+						...payload,
+						content: [
+							{
+								type: "text" as const,
+								// Compact JSON: omit indentation. Saves ~50% on rename / workspace-edits payloads
+								// while keeping the envelope machine-parseable. Tests use JSON.parse so
+								// they are agnostic to whitespace.
+								text: JSON.stringify(envelope),
+							},
+						],
+						details: {
+							...payload.details,
+							failureKind: meta.failureKind,
+						},
+					};
+				}
+				// Default text cell: Neovim-style lines rendered from the typed result. A
+				// result the renderer cannot read (an error, a note, the capabilities table)
+				// keeps the payload's own text.
 				return {
 					...payload,
 					content: [
 						{
 							type: "text" as const,
-							// Compact JSON: omit indentation. Saves ~50% on rename / workspace-edits payloads
-							// while keeping the envelope machine-parseable. Tests use JSON.parse so
-							// they are agnostic to whitespace.
-							text: JSON.stringify(envelope),
+							text: renderLspNavigationText({
+								operation: meta.operation,
+								result: meta.result,
+								filePath: meta.filePath,
+								cwd: ctx.cwd || ".",
+								...(meta.callSiteUri === undefined
+									? {}
+									: { callSiteUri: meta.callSiteUri }),
+								text,
+							}),
 						},
 					],
 					details: {
@@ -1441,6 +1477,7 @@ export function createLspNavigationTool(
 							filePath,
 							failureKind: resultCount === 0 ? "empty_result" : "success",
 							resultCount,
+							result,
 						},
 					);
 				}
@@ -1546,6 +1583,7 @@ export function createLspNavigationTool(
 						failureKind:
 							diagnosticsMode === "push-only" ? "tracked_snapshot" : "success",
 						resultCount: result.length,
+						result,
 					},
 				);
 			}
@@ -2157,6 +2195,12 @@ export function createLspNavigationTool(
 							? "fallback_success"
 							: "success",
 					resultCount,
+					result,
+					// Outgoing call sites are written in the item the caller asked
+					// about, whose uri the result does not carry.
+					...(isCallHierarchyTraversal && callHierarchyItem
+						? { callSiteUri: callHierarchyItem.uri }
+						: {}),
 				},
 			);
 		},

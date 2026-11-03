@@ -898,7 +898,15 @@ describe("navigation operations on a file no primary answers for (#4403 N4, V5)"
 			for (const [operation, target, params] of targets) {
 				const result = await nav.execute(
 					"matrix-4403-nav-op",
-					{ operation, path: target, line: 1, character: 2, ...params },
+					// This scan reads the envelope's fields (#1449).
+					{
+						operation,
+						path: target,
+						line: 1,
+						character: 2,
+						view: "json",
+						...params,
+					},
 					new AbortController().signal,
 					null,
 					ctx,
