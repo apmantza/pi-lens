@@ -434,7 +434,7 @@ describe("result contract across registered tool surfaces", () => {
 			const text = result?.content?.[0]?.text ?? "";
 			return {
 				bytes: Number(text.match(/bytes=(\d+)/)?.[1]),
-				truncated: /truncated=true$/.test(text),
+				truncated: text.endsWith("truncated=true"),
 			};
 		});
 		for (const figure of figures) {
