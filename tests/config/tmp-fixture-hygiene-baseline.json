@@ -1,6 +1,5 @@
 [
   {"prefix":"pi-lens-test-","owner":"tests/clients/test-utils.ts","reason":"The shared setupTestEnvironment helper creates process-owned test roots that still escape individual callers; the helper lifecycle remains tracked under #2912."},
   {"prefix":"pi-lens-index-int-","owner":"tests/index-integration.test.ts","reason":"The index integration population can outlive its worker under concurrent teardown and remains admitted under #2912."},
-  {"prefix":"pi-lens-temp-find-functions-","owner":"clients/sg-runner.ts","reason":"The SgRunner temporary scan seam allocates this find-functions root after the ast-grep client supplies the rule id; admit the observed triggering population as a shrink-only ratchet under #2912."},
   {"prefix":"pi-lens-warm-skip-notify-","owner":"tests/clients/runtime-session-warm-skip-notify.test.ts","reason":"The warm-skip entry, file, and small-project producers in tests/clients/runtime-session-warm-skip-notify.test.ts share one asynchronous cleanup shape; admit their owner-contained stem as shrink-only debt under #2912, because the file has multiple same-shape prefixes."}
 ]
