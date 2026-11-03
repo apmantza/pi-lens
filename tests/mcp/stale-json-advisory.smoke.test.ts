@@ -66,15 +66,7 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		freshWorkspace = writeWorkspace("pi-lens-5159-fresh-ws-");
 		staleWorkspace = writeWorkspace("pi-lens-5159-stale-ws-");
 		freshHarness = new McpHarness({ cwd: freshWorkspace });
-		staleHarness = new McpHarness({
-			cwd: staleWorkspace,
-			env: {
-				PI_LENS_MCP_STALENESS_STAT_PATH: stampFile,
-				PI_LENS_MCP_STALENESS_INTERVAL_MS: "0",
-				PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS: "20000",
-				PI_LENS_AUX_GRACE_MS: "20000",
-			},
-		});
+		staleHarness = new McpHarness({ cwd: staleWorkspace, env: staleEnv() });
 	});
 
 	afterAll(() => {
@@ -82,6 +74,15 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		staleHarness?.dispose();
 		rmSync(stampDir, { recursive: true, force: true });
 	});
+
+	function staleEnv(): Record<string, string> {
+		return {
+			PI_LENS_MCP_STALENESS_STAT_PATH: stampFile,
+			PI_LENS_MCP_STALENESS_INTERVAL_MS: "0",
+			PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS: "20000",
+			PI_LENS_AUX_GRACE_MS: "20000",
+		};
+	}
 
 	async function initialize(harness: McpHarness, id: number, tag: string) {
 		await harness.request(id, "initialize", {
@@ -245,41 +246,57 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 	it(
 		"stale: project_report view:json parses in block 0 and the advisory rides a trailing block",
 		async (ctx) => {
-			await initialize(staleHarness, 50, "stale-project-report");
-			await armStale();
-			// The first call starts this child's background review-graph build and
-			// answers unavailable (an error text cell). Poll the real tool until the JSON
-			// cell serves, under a bounded deadline. Readiness is `!isError`, not a parse
-			// of block 0: without the marker the advisory joins block 0, and a parse gate
-			// would then skip the case instead of failing it.
-			const deadline = Date.now() + scaledTestTimeout(30_000);
-			let answer: ToolResult = {};
-			let pollId = 51;
-			do {
-				const res = await staleHarness.request(pollId++, "tools/call", {
-					name: "pilens_project_report",
-					arguments: { limit: 1, view: "json" },
-				});
-				answer = res.result as ToolResult;
-				if (!answer.isError) break;
-				await new Promise((resolve) => setTimeout(resolve, 500));
-			} while (Date.now() < deadline);
-			if (answer.isError) {
-				const first = blockTexts(answer)[0] ?? "";
-				if (first.includes("unavailable")) {
-					return ctx.skip(
-						`review graph did not warm in this lane: ${first.slice(0, 160)}`,
-					);
+			// Own workspace and MCP child: this case warms a review graph, and
+			// the shared stale child must stay cold for the payload-equality case
+			// against the fresh control (shuffle seed 3 failed it on 8a5395fa8).
+			const graphWorkspace = writeWorkspace("pi-lens-5221-graph-ws-");
+			const graphHarness = new McpHarness({
+				cwd: graphWorkspace,
+				env: staleEnv(),
+			});
+			try {
+				await initialize(graphHarness, 50, "stale-project-report");
+				await armStale();
+				// The first call starts this child's background review-graph build and
+				// answers unavailable (an error text cell). Poll the real tool until the JSON
+				// cell serves, under a bounded deadline. Readiness is `!isError`, not a parse
+				// of block 0: without the marker the advisory joins block 0, and a parse gate
+				// would then skip the case instead of failing it.
+				const deadline = Date.now() + scaledTestTimeout(30_000);
+				let answer: ToolResult = {};
+				let pollId = 51;
+				do {
+					const res = await graphHarness.request(pollId++, "tools/call", {
+						name: "pilens_project_report",
+						arguments: { limit: 1, view: "json" },
+					});
+					answer = res.result as ToolResult;
+					if (!answer.isError) break;
+					await new Promise((resolve) => setTimeout(resolve, 500));
+				} while (Date.now() < deadline);
+				if (answer.isError) {
+					const first = blockTexts(answer)[0] ?? "";
+					if (first.includes("unavailable")) {
+						return ctx.skip(
+							`review graph did not warm in this lane: ${first.slice(0, 160)}`,
+						);
+					}
+					expect(
+						answer.isError,
+						`project_report errored: ${first}`,
+					).toBeFalsy();
 				}
-				expect(answer.isError, `project_report errored: ${first}`).toBeFalsy();
+				const blocks = blockTexts(answer);
+				expect(blocks).toHaveLength(2);
+				const doc = JSON.parse(stripContractFooter(blocks[0])) as {
+					available?: boolean;
+				};
+				expect(doc.available).toBe(true);
+				expect(blocks[1].startsWith(ADVISORY_PREFIX)).toBe(true);
+			} finally {
+				graphHarness.dispose();
+				rmSync(graphWorkspace, { recursive: true, force: true });
 			}
-			const blocks = blockTexts(answer);
-			expect(blocks).toHaveLength(2);
-			const doc = JSON.parse(stripContractFooter(blocks[0])) as {
-				available?: boolean;
-			};
-			expect(doc.available).toBe(true);
-			expect(blocks[1].startsWith(ADVISORY_PREFIX)).toBe(true);
 		},
 		scaledTestTimeout(90_000),
 	);
