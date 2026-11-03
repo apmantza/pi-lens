@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a real client with retained text must enter activeLspClients; a mock never does, so the lsp sample fields read zero whether or not they are wired
 /**
  * Tests for the periodic memory-attribution sample (#1123 item 2).
  *

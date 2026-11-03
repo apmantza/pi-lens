@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a real OS pipe stops accepting writes only once its buffer fills, so clientShutdown's bound is proven on a real wedged child pid
 /**
  * #1620 residual — clientShutdown against a REAL wedged child process.
  *

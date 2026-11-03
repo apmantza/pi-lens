@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — recovery parses real git status --porcelain -z output over real stat walks; a stubbed git cannot produce the pairs it parses
 /**
  * Opaque-mutation recovery (#2000 phase 2) — real-filesystem tests: actual
  * stat walks over temp trees and real diffs. This file pins the SEAM contract

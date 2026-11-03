@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a crash and respawn between two touches replay didOpen on the real wire; a stubbed process cannot show what the respawned server received
 /**
  * #3501 over the real wire: a SIGKILLed server's touch-debounce entry does
  * not stop its respawned replacement from receiving the document.

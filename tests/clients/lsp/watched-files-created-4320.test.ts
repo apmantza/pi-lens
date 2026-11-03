@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — Created versus Changed is read off the real didChangeWatchedFiles wire; Pyrefly's failed-lookup behavior exists only in a real server
 /**
  * #4320: Pyrefly keeps a failed `import new_module` lookup after the module is
  * created, and only a `workspace/didChangeWatchedFiles` Created (1) clears it —

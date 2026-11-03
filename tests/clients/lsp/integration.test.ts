@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — launchLSP and the initialize handshake run against the real fake server child; that process boundary is the integration subject
 /**
  * LSP Integration Tests
  *

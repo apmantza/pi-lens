@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — textDocument/didSave is gated by the server's save capability and observed on its real JSON-RPC stream; a stub cannot show what the client sent
 /**
  * #3405: `textDocument/didSave` is sent on the post-write sync, capability-gated.
  *

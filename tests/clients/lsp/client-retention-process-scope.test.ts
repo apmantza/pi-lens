@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — live-client accounting is read from real clients registered across module evaluations; a stubbed process never enters that registry
 /**
  * #2130 criterion 2: `memory_sample.subsystems.lsp.clients` must count every
  * live client, including the ones running under a SECONDARY root.

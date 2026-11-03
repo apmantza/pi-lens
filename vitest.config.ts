@@ -88,7 +88,10 @@ const sharedExclude = [
 // OS — unlike an inline `FOO=1 …` prefix, which cmd.exe cannot parse.
 // `test:integration` names these same two files positionally in package.json
 // (a positional filter DOES survive) — keep the two lists in step.
-const integrationInclude = [
+// EXPORTED so tests/config/lsp-spawn-heavy-coverage.test.ts can count these
+// files as scanned under `test:unit`, where this list is removed from
+// collection (#5227 round 3).
+export const integrationInclude = [
 	"tests/clients/lsp/integration.test.ts",
 	"tests/index-integration.test.ts",
 ];
@@ -346,15 +349,6 @@ const lspSpawnHeavyInclude = [
 	// diagnostics publish, one didChange round trip). Real child + real wire,
 	// same #1022/#2332 contention class as its lane siblings.
 	"tests/clients/dispatch/runners/shuck-lsp-smoke.test.ts",
-	// #4758: the production LSPService over a real stdio fake-server child that
-	// pulls `workspace/configuration` after `initialized`; waits on a real
-	// handshake and the answer's trace line, the same #1022/#2332 shape as its
-	// lane siblings.
-	"tests/clients/lsp/config-section-answers-4758.test.ts",
-	// #3501: two real fake-server children (the second a respawn after the
-	// first is SIGKILLed), each through a real initialize handshake, then a
-	// first-diagnostics wait on the replacement — the #1022/#2332 shape.
-	"tests/clients/lsp/crash-respawn-debounce-wire.test.ts",
 	// #4322: the production LSPService over two real stdio fake-server children
 	// (a JSON primary and a typos auxiliary); waits on real handshakes and a
 	// diagnostics round, the same #1022/#2332 shape as its lane siblings.
@@ -364,34 +358,11 @@ const lspSpawnHeavyInclude = [
 	// trip, the same contention class as the cascade twin above.
 	"tests/clients/lsp/crossfile-classic-ts-live.test.ts",
 	"tests/clients/lsp/diagnostics-health-unavailable-primary-4322.test.ts",
-	// #3405: its last describe spawns two real fake-server children through
-	// `spawnFakeLspServer` and waits on a real initialize handshake before
-	// asserting which notifications reached the server — the same #1022/#2332
-	// contention class as its lane siblings.
-	"tests/clients/lsp/did-save-notification.test.ts",
-	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
-	"tests/clients/lsp/integration.test.ts",
-	"tests/clients/lsp/navigation-timeout.integration.test.ts",
-	// #4786: a real `createLSPClient` over stdio fake-server children that publish
-	// a finding then an unversioned empty; waits on real handshakes and debounce
-	// windows, the same #1022/#2332 contention class as its siblings.
-	"tests/clients/lsp/opengrep-late-empty-4786.test.ts",
-	// #4787: a real fake-server child gates its first diagnostic on the
-	// production didCreateFiles-before-didOpen ordering.
-	"tests/clients/lsp/opengrep-new-file-4787.test.ts",
-	// #4764: the production LSPService touch and a real `createLSPClient` over
-	// stdio fake-server children that report a failed rule download
-	// (`window/showMessage`) and then publish; waits on real handshakes and
-	// debounce windows, the same #1022/#2332 contention class as its siblings.
-	"tests/clients/lsp/opengrep-offline-config-failure.test.ts",
 	// #4765: the live twin over the real Opengrep binary with the network cut
 	// (skipped, with a named reason, when none is installed). It has no
 	// launchLSP/getServerById marker, so the census cannot derive it (its known
 	// marker gap); membership is by hand.
 	"tests/clients/lsp/opengrep-offline-findings-4765.integration.test.ts",
-	// #5151: the bytes of a PowerShell BOM file over a real fixture-server stdio
-	// stream; the same #1022/#2332 handshake contention class as its lane siblings.
-	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts",
 	// #4758: a real pyright-langserver child (skipped, with a named reason, when
 	// none is installed) behind a real initialize handshake, then a first-
 	// diagnostics wait of up to 30 s per case — the #1022/#2332 shape of its
@@ -410,25 +381,7 @@ const lspSpawnHeavyInclude = [
 	"tests/clients/lsp/touch-debounce-content-gate.test.ts",
 	// #4299: real wrapper compiler-resolution security witness.
 	"tests/clients/lsp/tsserver-project-trust-wire.test.ts",
-	// #4320: the watched-files wire frames only exist on a real stdio connection
-	// to a real fake-server child; the handshake is the same #1022/#2332 shape as
-	// its lane siblings.
-	// #5131: the recompile-on-notice clear exists only on a real stdio wire to a
-	// real fake-server child; the handshake is the same #1022/#2332 shape as its
-	// lane siblings.
-	"tests/clients/lsp/watched-clear-5131.test.ts",
-	"tests/clients/lsp/watched-files-created-4320.test.ts",
 	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
-	// #2776: the real fake-server wire is the only way to reproduce the
-	// custom-primary handler verdict after pull diagnostics are ignored and a
-	// server-authored diagnostic is pushed; keep that handshake in this lane.
-	// #2344: npm test leaves this real-child integration suite in the default
-	// project unless it is explicitly phased here. `test:integration` still
-	// selects the same file positionally, while `test:unit` excludes it below.
-	"tests/clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts",
-	// #4534: the read-guard-off recovery witness drives the real LSP service
-	// on the shared fake-server child to observe the recovered bytes arrive.
-	"tests/clients/opaque-mutation-scan.test.ts",
 	// #4765: `OpengrepServer.spawn` cases launch a real PATH stub that only stays
 	// alive; no launchLSP/getServerById marker, so membership is by hand.
 	"tests/clients/opengrep-rule-pack-4765.test.ts",
@@ -457,7 +410,6 @@ const lspSpawnHeavyInclude = [
 	// LSPService, with fake-server children for the official Docker server and
 	// typos; waits on real handshakes like its lane siblings.
 	"tests/scripts/touch-result.test.ts",
-	"tests/support/fake-lsp-server.test.ts",
 	// #4403: the diagnostics route matrix. Real fake-LSP children (the JSON
 	// server, typos and an Opengrep stand-in, project command overrides) behind
 	// pi's hooks and tools, plus a real MCP server child per column; waits on
@@ -547,11 +499,6 @@ const lspSpawnHeavyInclude = [
 	// a real stdio fake-server child in its closed-file cache profile; waits on
 	// a real handshake and a push round per call, like #4346's.
 	"tests/tools/lsp-diagnostics-unheld-import-4532.test.ts",
-	// #3827: drives `lsp_navigation rename` over a REAL `createLSPClient` on the
-	// fake server (a real initialize handshake per case), so the client's own
-	// first-send stamp reaches the capture; the same #1022/#2332 contention
-	// class as its lane siblings.
-	"tests/tools/lsp-navigation-rename-first-open.test.ts",
 ];
 
 // Real pi RPC sessions execute the built extension and a real host tool. Keep
@@ -593,6 +540,7 @@ export const wallClockBudgetInclude = [
 	// #4257: the HOME ceiling witness uses a real child process to isolate the
 	// os.homedir boundary (flake-shape admission).
 	"tests/clients/analysis-root-writers.test.ts",
+	"tests/clients/ast-grep-replace-descendant-kind.e2e.test.ts",
 	// #4148: a 199K-blank-line rule is a real event-loop occupancy witness for
 	// validateRule's synchronous language extraction, so it runs serialized.
 	"tests/clients/ast-grep-rule-regex-budget.test.ts",
@@ -655,12 +603,32 @@ export const wallClockBudgetInclude = [
 	// timing-sensitive occupancy sampler; the investigation estimates ~4 s
 	// of serial cost.
 	"tests/clients/instance-registry-race.test.ts",
+	"tests/clients/lsp/client-crash-logging.test.ts",
+	"tests/clients/lsp/client-exit-cause-ledger.test.ts",
+	"tests/clients/lsp/client-retention-process-scope.test.ts",
+	// #4758: the production LSPService over a real stdio fake-server child that
+	// pulls `workspace/configuration` after `initialized`; waits on a real
+	// handshake and the answer's trace line, the same #1022/#2332 shape as its
+	// lane siblings.
+	"tests/clients/lsp/config-section-answers-4758.test.ts",
+	// #3501: two real fake-server children (the second a respawn after the
+	// first is SIGKILLed), each through a real initialize handshake, then a
+	// first-diagnostics wait on the replacement — the #1022/#2332 shape.
+	"tests/clients/lsp/crash-respawn-debounce-wire.test.ts",
+	// #3405: its last describe spawns two real fake-server children through
+	// `spawnFakeLspServer` and waits on a real initialize handshake before
+	// asserting which notifications reached the server — the same #1022/#2332
+	// contention class as its lane siblings.
+	"tests/clients/lsp/did-save-notification.test.ts",
+	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it
 	// must not drain mid `lsp_diagnostics`, and must still exit by itself
 	// afterwards. Real child spawn (flake-shape admission), and it also spawns a
 	// real LSP child inside itself, so it wants the same quiet, serialized phase
 	// its lsp-spawn-heavy siblings get.
 	"tests/clients/lsp/headless-tool-call-keepalive.test.ts",
+	"tests/clients/lsp/initialize-timeout-backstop.test.ts",
+	"tests/clients/lsp/integration.test.ts",
 	// #2042/#3091 F2: a real, live direct child is the only pid whose /proc PPid
 	// is this process, so the Linux ownership arm of the kill-by-pid predicate
 	// cannot be observed through any double (flake-shape admission).
@@ -668,10 +636,28 @@ export const wallClockBudgetInclude = [
 	// #4119: real Lake/elan process plus a pushed Lean diagnostic; phase after
 	// lsp-spawn-heavy to satisfy the flake-shape serialized-wall-clock admission.
 	"tests/clients/lsp/lean-real-smoke.test.ts",
+	"tests/clients/lsp/liveness-probe-capability-gate.test.ts",
+	"tests/clients/lsp/navigation-timeout.integration.test.ts",
+	// #4786: a real `createLSPClient` over stdio fake-server children that publish
+	// a finding then an unversioned empty; waits on real handshakes and debounce
+	// windows, the same #1022/#2332 contention class as its siblings.
+	"tests/clients/lsp/opengrep-late-empty-4786.test.ts",
+	// #4787: a real fake-server child gates its first diagnostic on the
+	// production didCreateFiles-before-didOpen ordering.
+	"tests/clients/lsp/opengrep-new-file-4787.test.ts",
+	// #4764: the production LSPService touch and a real `createLSPClient` over
+	// stdio fake-server children that report a failed rule download
+	// (`window/showMessage`) and then publish; waits on real handshakes and
+	// debounce windows, the same #1022/#2332 contention class as its siblings.
+	"tests/clients/lsp/opengrep-offline-config-failure.test.ts",
 	// #5169: natural Node exit after a real LSP partial message needs a serialized host.
 	"tests/clients/lsp/partial-message-timer.test.ts",
+	// #5151: the bytes of a PowerShell BOM file over a real fixture-server stdio
+	// stream; the same #1022/#2332 handshake contention class as its lane siblings.
+	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts",
 	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
 	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
+	"tests/clients/lsp/refresh-and-sync-kind.test.ts",
 	// #2765 round 3: fake timers exercise the live hook remainder after delayed
 	// pre-snapshot work; keep the admission beside the timer-based regression.
 	"tests/clients/lsp/service-inconclusive-per-server.test.ts",
@@ -679,11 +665,30 @@ export const wallClockBudgetInclude = [
 	// window. Keep child-process CPU sampling and this wall-clock lower bound in
 	// the fully serialized, dead-last phase.
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
+	"tests/clients/lsp/service-notify-inflight-throttle-real-stream.test.ts",
+	"tests/clients/lsp/service-rename-file.test.ts",
+	"tests/clients/lsp/shutdown-live-wedged-process.test.ts",
+	"tests/clients/lsp/teardown-logging.test.ts",
 	// #4742: a real git checkout and a real pyright-langserver child (skipped,
 	// with a named reason, when none is installed): the stale bytes live only in
 	// the server, so the handshake and two diagnostics waits of up to 30 s run
 	// in the serialized lane (flake-shape admission).
 	"tests/clients/lsp/unheld-module-pyright-4742.integration.test.ts",
+	// #4320: the watched-files wire frames only exist on a real stdio connection
+	// to a real fake-server child; the handshake is the same #1022/#2332 shape as
+	// its lane siblings.
+	// #5131: the recompile-on-notice clear exists only on a real stdio wire to a
+	// real fake-server child; the handshake is the same #1022/#2332 shape as its
+	// lane siblings.
+	"tests/clients/lsp/watched-clear-5131.test.ts",
+	"tests/clients/lsp/watched-files-created-4320.test.ts",
+	// #2776: the real fake-server wire is the only way to reproduce the
+	// custom-primary handler verdict after pull diagnostics are ignored and a
+	// server-authored diagnostic is pushed; keep that handshake in this lane.
+	// #2344: npm test leaves this real-child integration suite in the default
+	// project unless it is explicitly phased here. `test:integration` still
+	// selects the same file positionally, while `test:unit` excludes it below.
+	"tests/clients/lsp/workspace-diagnostics-sweep-attribution.integration.test.ts",
 	// #5119: the no-fix wrapper child is killed, crashed and re-imported for real (flake-shape admission).
 	"tests/clients/markdownlint-api.test.ts",
 	// #5119: a lint pass's bytes are measured through the real markdownlint-cli2 module (flake-shape admission).
@@ -692,6 +697,8 @@ export const wallClockBudgetInclude = [
 	// real package-manager lookup spawning executable stand-in managers on PATH
 	// (flake-shape admission).
 	"tests/clients/mcp/review-rebuild.test.ts",
+	"tests/clients/memory-sampler-root-discriminator.test.ts",
+	"tests/clients/memory-sampler.test.ts",
 	"tests/clients/metrics-history-stderr.test.ts",
 	// #4268 MED-8: a real `npx` child is the observation (the spawned process's
 	// own environment), so it runs in the quiet serialized phase (flake-shape
@@ -701,6 +708,9 @@ export const wallClockBudgetInclude = [
 	// captured tool call spawns, counted at the spawn boundary (flake-shape
 	// admission).
 	"tests/clients/opaque-any-tool-4732.test.ts",
+	// #4534: the read-guard-off recovery witness drives the real LSP service
+	// on the shared fake-server child to observe the recovered bytes arrive.
+	"tests/clients/opaque-mutation-scan.test.ts",
 	// #2886 round 2: the /lens-perf occupancy row keeps its real-clock
 	// sampler assertion (a yield count is O(input) and cannot see per-chunk
 	// block growth), so the file runs here, fully serialized (flake-shape
@@ -1018,6 +1028,7 @@ export const wallClockBudgetInclude = [
 	// the registry, the node_modules symlink-or-directory state and the
 	// unlink-before-remove ordering (flake-shape admission).
 	"tests/scripts/worktree-remove.test.ts",
+	"tests/support/fake-lsp-server.test.ts",
 	"tests/support/fault-injection.test.ts",
 	"tests/support/git-config-guard.test.ts",
 	"tests/support/git-fixture-env.test.ts",
@@ -1050,6 +1061,11 @@ export const wallClockBudgetInclude = [
 	// through AstGrepClient, so its ordering and byte ratio are measured on real
 	// child output (flake-shape admission).
 	"tests/tools/ast-grep-outline.test.ts",
+	// #3827: drives `lsp_navigation rename` over a REAL `createLSPClient` on the
+	// fake server (a real initialize handshake per case), so the client's own
+	// first-send stamp reaches the capture; the same #1022/#2332 contention
+	// class as its lane siblings.
+	"tests/tools/lsp-navigation-rename-first-open.test.ts",
 	// #4583: same fire-and-forget cold build as its clients sibling above; the
 	// pi-tool witness joins it with a real-time vi.waitFor (flake-shape
 	// admission).
@@ -1235,7 +1251,7 @@ export default defineConfig({
 				test: {
 					name: "wall-clock-budget",
 					include: wallClockBudgetInclude,
-					exclude: sharedExclude,
+					exclude: [...sharedExclude, ...unitOnlyExclude],
 					globalSetup: sharedGlobalSetup,
 					setupFiles: sharedSetupFiles,
 					execArgv: sharedExecArgv,

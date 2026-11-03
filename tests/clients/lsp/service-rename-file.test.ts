@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — willRenameFiles edits are merged from real clients over the wire; a stub returns only the edits it was given
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

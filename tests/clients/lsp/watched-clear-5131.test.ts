@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — a real error published by the server and the client's watched-files notice are observed on the wire; a stub cannot publish the error it then clears
 /**
  * #5131: pi-lens's own first-open `workspace/didChangeWatchedFiles` made a
  * recompile-from-disk server (groovy-language-server) publish an EMPTY set a
