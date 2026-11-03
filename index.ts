@@ -164,7 +164,7 @@ import { wireBusEmitterGetter } from "./clients/bus-publish.js";
 import { wireDiagnosticsBusEmitterGetter } from "./clients/diagnostics-publish.js";
 import { wireDispositionBusEmitterGetter } from "./clients/disposition-publish.js";
 import { wireFormatEventsBusEmitterGetter } from "./clients/format-events-publish.js";
-import { emitBusEventRollupAtSessionEnd } from "./clients/bus-events-logger.js";
+import { emitBusEventRollupAtSessionEnd } from "./clients/bus-event-rollup.js";
 import { emitFenceRollupAtSessionEnd } from "./clients/generation-guard.js";
 import {
 	emitVerifiedPathAttributionRollup,
@@ -3241,6 +3241,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// abandons the handler that result is never shown, so the lines it
 			// collects here are queued for the agent's next context call instead.
 			const withheldNotices: string[] = [];
+			// #5165 F1: the host's own liveness for this call, beside the notices it
+			// collects. `bounded` below abandons the wait, not the work: a dispatch
+			// that settles after it still runs, and what it logs as "inline" is text
+			// this wall already discarded. The callback reads this flag live.
+			const hostDelivery = { abandoned: false };
 			// #5108 F1: every advisory from this tool result is for the session
 			// that made the call, resolved as its `context` drain resolves it.
 			// The coordinator's scope is the primary's, so a concurrent
@@ -3288,6 +3293,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				// lookups must agree on one root.
 				cwd: ctx?.cwd,
 				withheldNotices,
+				hostDelivery,
 				advisoryScope,
 			});
 			let handlerSettled = false;
@@ -3318,6 +3324,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				// withheld reaches the agent at its next context call, with the
 				// abandonment stated (defect shape 10: a bound on an agent-facing
 				// path discloses its truncation on the surface).
+				hostDelivery.abandoned = true;
 				void work.then(
 					() => {
 						if (withheldNotices.length === 0) return;

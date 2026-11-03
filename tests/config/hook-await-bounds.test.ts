@@ -1257,16 +1257,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"ALWAYS undefined. Fixing it is AC4's job, not slice 1's.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:65d1c872~921c1ea5": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:6845dabe~79a8d019": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
@@ -2910,6 +2900,10 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"cap regresses: `sequenceReadBudgetMs()` caps the inner race at the same " +
 		"wall budget and its timer is armed first, so the inner arm ends the wait " +
 		"and owns the recovery (the deferred reseed and the #1785 hydration).",
+	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~37e44a1d":
+		"The document-symbol enrichment uses the tool_call's ctx.signal, absent " +
+		"only in a harness. Its inner LSP budget and the outer EXPANSION_BUDGET_MS " +
+		"wall bound are both live; the outer bound also releases the hook on Escape.",
 	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~ce33f035":
 		"The pre-edit linter capture (#4483) uses the tool_call's ctx.signal, " +
 		"absent only in a harness. #2523 gives tool_call no budget of its own, " +

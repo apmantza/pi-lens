@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const logBusEvent = vi.fn();
-vi.mock("../../clients/bus-events-logger.js", () => ({
-	logBusEvent: (...args: unknown[]) => logBusEvent(...args),
-}));
+import { installBusSinkReader } from "../support/bus-sink-reader.js";
+const { busRows, clearBusRows } = installBusSinkReader();
 
 import { _resetForTests as _resetBusPublishForTests } from "../../clients/bus-publish.js";
 import {
@@ -37,14 +35,14 @@ function diag(
 describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 	const originalEnv = process.env.PI_LENS_BUS_PUBLISH;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		_resetDiagnosticsPublishForTests();
 		_resetBusPublishForTests();
 		resetDegradationLedger();
-		logBusEvent.mockClear();
+		await clearBusRows();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		_resetDiagnosticsPublishForTests();
 		_resetBusPublishForTests();
 		if (originalEnv === undefined) {
@@ -54,7 +52,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		}
 	});
 
-	it("emits the exact payload shape: v, source, cwd, seq, ts, files", () => {
+	it("emits the exact payload shape: v, source, cwd, seq, ts, files", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -89,7 +87,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		]);
 	});
 
-	it("normalizes paths and cwd (backslashes -> forward slashes)", () => {
+	it("normalizes paths and cwd (backslashes -> forward slashes)", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -103,7 +101,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(payload.files[0].path).not.toContain("\\");
 	});
 
-	it("full-replace: an event mentioning a path carries the COMPLETE diagnostic set, not a delta", () => {
+	it("full-replace: an event mentioning a path carries the COMPLETE diagnostic set, not a delta", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -120,7 +118,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(secondPayload.files[0].diagnostics).toHaveLength(1);
 	});
 
-	it("explicit-clean: emits {path, diagnostics: []} exactly once on the dirty->clean transition", () => {
+	it("explicit-clean: emits {path, diagnostics: []} exactly once on the dirty->clean transition", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -144,7 +142,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(wasPreviouslyReportedDirty("/repo/a.ts")).toBe(false);
 	});
 
-	it("does not repeatedly fire the clean event for an already-clean file", () => {
+	it("does not repeatedly fire the clean event for an already-clean file", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -167,7 +165,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(wasPreviouslyReportedDirty("/repo/a.ts")).toBe(false);
 	});
 
-	it("seq is monotonic across multiple emissions", () => {
+	it("seq is monotonic across multiple emissions", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -190,7 +188,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(seqs).toEqual([1, 2, 3]);
 	});
 
-	it("caps diagnostics per file and marks truncated: true", () => {
+	it("caps diagnostics per file and marks truncated: true", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -214,7 +212,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(payload.files[0].truncated).toBe(true);
 	});
 
-	it("does not set truncated when under the cap", () => {
+	it("does not set truncated when under the cap", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -227,7 +225,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(payload.files[0].truncated).toBeUndefined();
 	});
 
-	it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", () => {
+	it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", async () => {
 		process.env.PI_LENS_BUS_PUBLISH = "0";
 		_resetBusPublishForTests();
 		_resetDiagnosticsPublishForTests();
@@ -242,7 +240,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(emit).not.toHaveBeenCalled();
 	});
 
-	it("does not emit for an empty files batch", () => {
+	it("does not emit for an empty files batch", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -251,7 +249,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(emit).not.toHaveBeenCalled();
 	});
 
-	it("origin-flag loop guard: events originating from an ingested bus event never re-publish", () => {
+	it("origin-flag loop guard: events originating from an ingested bus event never re-publish", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -264,7 +262,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(emit).not.toHaveBeenCalled();
 	});
 
-	it("swallows emit throws and logs once via dbg without affecting the caller", () => {
+	it("swallows emit throws and logs once via dbg without affecting the caller", async () => {
 		const emit = vi.fn(() => {
 			throw new Error("bus explosion");
 		});
@@ -290,7 +288,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(dbg).toHaveBeenCalledTimes(1);
 	});
 
-	it("batches multiple files in one event", () => {
+	it("batches multiple files in one event", async () => {
 		const emit = vi.fn();
 		wireDiagnosticsBusEmitter(emit);
 
@@ -329,7 +327,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 				diag({ severity, message: `${p}${i}` }),
 			);
 
-		it("passes exactly MAX diagnostics through untouched: same order, not truncated", () => {
+		it("passes exactly MAX diagnostics through untouched: same order, not truncated", async () => {
 			// Pins `diagnostics.length <= MAX` (survivor: `<`). At exactly MAX the
 			// mutant sent the set through the error-first reorder and set
 			// `truncated: true` though nothing was dropped. Warnings come first so a
@@ -348,7 +346,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			expect(entry.truncated).toBeUndefined();
 		});
 
-		it("over the cap, keeps every error first, then the first warnings in input order", () => {
+		it("over the cap, keeps every error first, then the first warnings in input order", async () => {
 			// Pins the `errors` / `rest` partition and the `MAX - errors.length`
 			// fill (survivors on both filter predicates and their `"error"`
 			// literals). Errors and warnings are interleaved, so a `rest` that still
@@ -391,7 +389,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			expect(entry.truncated).toBe(true);
 		});
 
-		it("with more than MAX errors, sends the first MAX errors and no warning", () => {
+		it("with more than MAX errors, sends the first MAX errors and no warning", async () => {
 			// Pins the `errors.length >= MAX` branch (survivors: `false`, and the
 			// uncovered block, object, `errors.slice(0, MAX)` and `truncated: true`
 			// inside it). Without the branch the fill count goes negative and
@@ -406,7 +404,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			expect(entry.truncated).toBe(true);
 		});
 
-		it("treats every non-error severity as rest: info and hint fill the tail behind the errors", () => {
+		it("treats every non-error severity as rest: info and hint fill the tail behind the errors", async () => {
 			// Pins `rest` as the exact complement of `errors` (survivors on the
 			// `rest` filter's `!==` and its `"error"` literal): info and hint
 			// entries must neither displace the error nor be dropped or doubled.
@@ -427,7 +425,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 	});
 
 	describe("emitter wiring (#4365)", () => {
-		it("resolves a getter-wired emitter at each publish, so a rewire is honoured", () => {
+		it("resolves a getter-wired emitter at each publish, so a rewire is honoured", async () => {
 			// Pins `wireDiagnosticsBusEmitterGetter` (uncovered: block and the
 			// `liveEmitter.wireGetter(getter)` call). Session replacement re-wires
 			// the getter; the next publish must reach the NEW emitter.
@@ -450,7 +448,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			expect(second).toHaveBeenCalledTimes(1);
 		});
 
-		it("declines a stale-session target without emitting, and logs the decline with event and cwd", () => {
+		it("declines a stale-session target without emitting, and logs the decline with event and cwd", async () => {
 			// Pins the `stale-session` early return and its log thunk (survivors:
 			// `outcome === "stale-session"` to `false` / `""`, the thunk
 			// `() => ({...})` to `() => undefined`, and the uncovered object
@@ -472,7 +470,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			});
 
 			expect(emit).not.toHaveBeenCalled();
-			expect(logBusEvent).toHaveBeenCalledWith(
+			expect(await busRows()).toContainEqual(
 				expect.objectContaining({
 					event: BUS_DIAGNOSTICS_EVENT,
 					outcome: "skipped_stale_session",
@@ -482,13 +480,13 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			// The decline is the ONLY row: no emit_failed from a fall-through to the
 			// emit path with a missing emitter.
 			expect(
-				logBusEvent.mock.calls.map(
-					(c) => (c[0] as { outcome: string }).outcome,
-				),
+				(await busRows())
+					.map((entry) => [entry])
+					.map((c) => (c[0] as { outcome: string }).outcome),
 			).toEqual(["skipped_stale_session"]);
 		});
 
-		it("logs and ledgers each stale emit failure after a successful recovery", () => {
+		it("logs and ledgers each stale emit failure after a successful recovery", async () => {
 			// Sibling of bus-publish's "logs and ledgers each stale occurrence
 			// after a successful recovery". Pins `hasLoggedFailure = false` on a
 			// successful emit (survivor: `true`, which silences every later
@@ -542,14 +540,14 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 				cwd: "/repo",
 				files: [{ path: "/repo/a.ts", diagnostics: [diag()] }],
 			};
-			const outcomes = () =>
-				logBusEvent.mock.calls.map(
-					(c) => (c[0] as { outcome: string }).outcome,
-				);
+			const outcomes = async () =>
+				(await busRows())
+					.map((entry) => [entry])
+					.map((c) => (c[0] as { outcome: string }).outcome);
 
 			// Unwired: nothing wired yet.
 			fresh.publishDiagnostics(entry);
-			expect(outcomes()).toContain("skipped_unwired");
+			expect(await outcomes()).toContain("skipped_unwired");
 
 			// Failure: a throwing emitter reports through `dbg` on the first throw.
 			const dbg = vi.fn();
@@ -563,12 +561,12 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			process.env.PI_LENS_BUS_PUBLISH = "0";
 			freshBus._resetForTests();
 			fresh.publishDiagnostics(entry);
-			expect(outcomes()).toContain("skipped_disabled");
+			expect(await outcomes()).toContain("skipped_disabled");
 		});
 	});
 
 	describe("bus-events.log (persistent trace)", () => {
-		it("logs 'emitted' with fileCount and seq on a successful emit", () => {
+		it("logs 'emitted' with fileCount and seq on a successful emit", async () => {
 			const emit = vi.fn();
 			wireDiagnosticsBusEmitter(emit);
 
@@ -577,7 +575,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 				files: [{ path: "/repo/a.ts", diagnostics: [diag()] }],
 			});
 
-			expect(logBusEvent).toHaveBeenCalledWith(
+			expect(await busRows()).toContainEqual(
 				expect.objectContaining({
 					event: BUS_DIAGNOSTICS_EVENT,
 					outcome: "emitted",
@@ -587,7 +585,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			);
 		});
 
-		it("logs 'skipped_unwired' once when busEmit was never wired", () => {
+		it("logs 'skipped_unwired' once when busEmit was never wired", async () => {
 			publishDiagnostics({
 				cwd: "/repo",
 				files: [{ path: "/repo/a.ts", diagnostics: [diag()] }],
@@ -597,17 +595,19 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 				files: [{ path: "/repo/b.ts", diagnostics: [diag()] }],
 			});
 
-			const unwiredCalls = logBusEvent.mock.calls.filter(
-				(c) => (c[0] as { outcome: string }).outcome === "skipped_unwired",
-			);
+			const unwiredCalls = (await busRows())
+				.map((entry) => [entry])
+				.filter(
+					(c) => (c[0] as { outcome: string }).outcome === "skipped_unwired",
+				);
 			expect(unwiredCalls).toHaveLength(1);
 		});
 
-		it("logs 'skipped_disabled' once when the kill switch is off", () => {
+		it("logs 'skipped_disabled' once when the kill switch is off", async () => {
 			process.env.PI_LENS_BUS_PUBLISH = "0";
 			_resetBusPublishForTests();
 			_resetDiagnosticsPublishForTests();
-			logBusEvent.mockClear();
+			await clearBusRows();
 			const emit = vi.fn();
 			wireDiagnosticsBusEmitter(emit);
 
@@ -620,13 +620,15 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 				files: [{ path: "/repo/b.ts", diagnostics: [diag()] }],
 			});
 
-			const disabledCalls = logBusEvent.mock.calls.filter(
-				(c) => (c[0] as { outcome: string }).outcome === "skipped_disabled",
-			);
+			const disabledCalls = (await busRows())
+				.map((entry) => [entry])
+				.filter(
+					(c) => (c[0] as { outcome: string }).outcome === "skipped_disabled",
+				);
 			expect(disabledCalls).toHaveLength(1);
 		});
 
-		it("logs 'emit_failed' with the error message when emit throws", () => {
+		it("logs 'emit_failed' with the error message when emit throws", async () => {
 			const emit = vi.fn(() => {
 				throw new Error("bus explosion");
 			});
@@ -637,7 +639,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 				files: [{ path: "/repo/a.ts", diagnostics: [diag()] }],
 			});
 
-			expect(logBusEvent).toHaveBeenCalledWith(
+			expect(await busRows()).toContainEqual(
 				expect.objectContaining({
 					event: BUS_DIAGNOSTICS_EVENT,
 					outcome: "emit_failed",
@@ -646,9 +648,9 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 			);
 		});
 
-		it("does not log anything for an empty files batch", () => {
+		it("does not log anything for an empty files batch", async () => {
 			publishDiagnostics({ cwd: "/repo", files: [] });
-			expect(logBusEvent).not.toHaveBeenCalled();
+			expect(await busRows()).toEqual([]);
 		});
 	});
 });

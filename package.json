@@ -126,6 +126,7 @@
 		"scripts/rpc-load-check.mjs",
 		"README.md",
 		"CHANGELOG.md",
+		"CHANGELOG-USER.md",
 		"banner.svg",
 		"banner.png"
 	],
@@ -133,9 +134,9 @@
 		"@ast-grep/cli": "0.51.0",
 		"@ast-grep/napi": "^0.51.0",
 		"js-yaml": "^5.2.2",
-		"minimatch": "^11.0.1",
+		"minimatch": "^11.0.4",
 		"pidusage": "^4.0.1",
-		"vscode-jsonrpc": "^9.0.0"
+		"vscode-jsonrpc": "^10.0.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*",
@@ -159,12 +160,12 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.15",
-		"@earendil-works/pi-coding-agent": "^1.4.0",
-		"@earendil-works/pi-tui": "^1.4.0",
+		"@earendil-works/pi-coding-agent": "^1.5.0",
+		"@earendil-works/pi-tui": "^1.5.0",
 		"@jridgewell/sourcemap-codec": "^1.6.0",
 		"@jridgewell/trace-mapping": "^0.3.31",
-		"@stryker-mutator/core": "10.0.0",
-		"@stryker-mutator/vitest-runner": "10.0.0",
+		"@stryker-mutator/core": "10.1.1",
+		"@stryker-mutator/vitest-runner": "10.1.1",
 		"@taplo/cli": "0.7.0",
 		"@types/node": "^26.6.3",
 		"@types/pidusage": "^2.0.5",
@@ -176,11 +177,11 @@
 		"husky": "^9.1.7",
 		"jscpd": "5.4.2",
 		"json5": "^2.2.3",
-		"knip": "6.42.1",
-		"marked": "18.1.1",
-		"oxc-parser": "0.155.0",
-		"oxfmt": "0.74.0",
-		"oxlint": "1.88.0",
+		"knip": "6.44.0",
+		"marked": "18.1.2",
+		"oxc-parser": "0.156.0",
+		"oxfmt": "0.75.0",
+		"oxlint": "1.90.0",
 		"oxlint-tsgolint": "7.0.2005",
 		"publint": "0.3.25",
 		"semver": "^7.8.0",
@@ -190,6 +191,7 @@
 		"vitest": "^5.0.3"
 	},
 	"pi": {
+		"changelogPath": "CHANGELOG-USER.md",
 		"extensions": [
 			"./dist/index.js"
 		],
@@ -205,6 +207,9 @@
 		"protobufjs@7.6.6": true
 	},
 	"overrides": {
+		"@stryker-mutator/core": {
+			"minimatch": "$minimatch"
+		},
 		"qs": "^6.15.4",
 		"undici": "^8.12.2"
 	}

@@ -137,7 +137,7 @@ const FROZEN_BASELINE_PATH = "tests/support/flake-shape-baseline-frozen.json";
 
 /** sha256 of the mint's canonical JSON (formatting and line endings do not count). */
 const FROZEN_BASELINE_DIGEST =
-	"db2450d7da2f0123a5bd4d366156598e709aea5a356073095ccc27ce0c9afbc2";
+	"406a80c14aa52bfc18be6170e013e4bee876c9058e40f059cd1073e55cee5ce5";
 
 const FROZEN_BASELINE_SOURCE = fs.readFileSync(
 	path.join(repoRoot, FROZEN_BASELINE_PATH),
@@ -1148,6 +1148,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the nightly CLI runs as a real child with PATH at a recorded gh stand-in; an in-process double would not prove its annotation escapes or exit codes",
+	},
+	// 2026-11-02 (#5207): the libc drift guard compares the working lock
+	// against HEAD's committed blob through real git in a fixture repository,
+	// so the split a reviewer sees is the split the guard refuses; a stub would
+	// restate the comparison.
+	"real-process-spawn:scripts/check-lockfile-sync.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the libc drift guard reads HEAD's committed lock through a real git child in a fixture repository; a stub would restate the comparison instead of proving the committed-versus-working split",
 	},
 	"real-process-spawn:scripts/check-pr-body.test.ts": {
 		detector: "real-process-spawn",

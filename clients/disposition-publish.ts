@@ -21,13 +21,11 @@
  * optional fields may be added under `v: 1`; a breaking change to an existing
  * field's meaning must bump `v`.
  */
-import { logBusEvent } from "./bus-events-logger.js";
 import { isBusPublishEnabled } from "./bus-publish.js";
 import { normalizeFilePath } from "./path-utils.js";
 import {
+	createBusPublisher,
 	createLiveBusEmitter,
-	recordStaleBusFailure,
-	resolveLiveBusEmitter,
 	type BusEmitFn,
 	type BusEmitGetter,
 } from "./live-bus-emitter.js";
@@ -51,9 +49,9 @@ export interface PilensDispositionPayload {
 }
 
 const liveEmitter = createLiveBusEmitter();
-let hasLoggedFailure = false;
-let hasLoggedUnwired = false;
-let hasLoggedDisabled = false;
+const publisher = createBusPublisher(liveEmitter, {
+	module: "disposition-publish",
+});
 
 /**
  * Wire the emit function from pi's `pi.events` bus. Called once at extension
@@ -75,9 +73,7 @@ export function wireDispositionBusEmitterGetter(
 /** Test-only: reset module state between test files. */
 export function _resetDispositionPublishForTests(): void {
 	liveEmitter.reset();
-	hasLoggedFailure = false;
-	hasLoggedUnwired = false;
-	hasLoggedDisabled = false;
+	publisher.reset();
 }
 
 export interface PublishDispositionArgs {
@@ -99,40 +95,14 @@ export interface PublishDispositionArgs {
  * markDisposition call). Fire-and-forget: never throws, never awaited.
  */
 export function publishDisposition(args: PublishDispositionArgs): void {
-	if (!isBusPublishEnabled()) {
-		if (!hasLoggedDisabled) {
-			hasLoggedDisabled = true;
-			logBusEvent({
-				event: BUS_DISPOSITION_EVENT,
-				outcome: "skipped_disabled",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const resolution = resolveLiveBusEmitter(liveEmitter, () => ({
+	publisher.publish<PilensDispositionPayload>({
 		event: BUS_DISPOSITION_EVENT,
-		cwd: normalizeFilePath(args.cwd),
-	}));
-	if (resolution.outcome === "stale-session") return;
-	if (resolution.outcome === "unwired") {
-		if (!hasLoggedUnwired) {
-			hasLoggedUnwired = true;
-			logBusEvent({
-				event: BUS_DISPOSITION_EVENT,
-				outcome: "skipped_unwired",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const busEmit = resolution.emit;
-
-	try {
-		const payload: PilensDispositionPayload = {
+		enabled: isBusPublishEnabled(),
+		cwd: args.cwd,
+		build: (cwd) => ({
 			v: BUS_DISPOSITION_VERSION,
 			source: "pi-lens",
-			cwd: normalizeFilePath(args.cwd),
+			cwd,
 			filePath: normalizeFilePath(args.filePath),
 			disposition: args.disposition,
 			tool: args.tool,
@@ -141,28 +111,7 @@ export function publishDisposition(args: PublishDispositionArgs): void {
 			anchor: args.anchor,
 			reason: args.reason,
 			message: args.message,
-		};
-		busEmit(BUS_DISPOSITION_EVENT, payload);
-		hasLoggedFailure = false;
-		logBusEvent({
-			event: BUS_DISPOSITION_EVENT,
-			outcome: "emitted",
-			cwd: payload.cwd,
-		});
-	} catch (err) {
-		logBusEvent({
-			event: BUS_DISPOSITION_EVENT,
-			outcome: "emit_failed",
-			cwd: normalizeFilePath(args.cwd),
-			error: String(err),
-			ctxSource: resolution.ctxSource,
-		});
-		if (!hasLoggedFailure) {
-			hasLoggedFailure = true;
-			recordStaleBusFailure(BUS_DISPOSITION_EVENT, err);
-			args.dbg?.(
-				`disposition-publish: pilens:diagnostic:disposition emit failed (further failures suppressed): ${err}`,
-			);
-		}
-	}
+		}),
+		dbg: args.dbg,
+	});
 }

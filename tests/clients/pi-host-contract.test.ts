@@ -1,3 +1,4 @@
+import { hostPackageDir } from "../support/pi-session.js";
 /**
  * pi host-contract regressions (#1655).
  *
@@ -64,13 +65,7 @@ const repoRoot = path.resolve(
 	"..",
 	"..",
 );
-const HOST_DIST = path.join(
-	repoRoot,
-	"node_modules",
-	"@earendil-works",
-	"pi-coding-agent",
-	"dist",
-);
+const HOST_DIST = path.join(hostPackageDir(), "dist");
 
 function readHostSource(relative: string): string {
 	const file = path.join(HOST_DIST, relative);

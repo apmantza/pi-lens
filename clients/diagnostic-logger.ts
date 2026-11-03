@@ -43,6 +43,12 @@ interface DiagnosticEntry {
 
 export interface DiagnosticLogger {
 	log(entry: DiagnosticEntry): void;
+	/**
+	 * One caught finding. `shownInline` is true only when the tool result that
+	 * carries it reached the agent: every bound that can discard that result
+	 * (the host wall, the inner analysis bound) must be able to make it false
+	 * (#5165 F1), so a caller answers liveness, never "the run finished".
+	 */
 	logCaught(d: Diagnostic, context: LogContext, shownInline?: boolean): void;
 	flush(): Promise<void>;
 }

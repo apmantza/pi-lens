@@ -9,6 +9,9 @@ issue and the requested evidence surface.
 - Keep the worktree and Git state read-only.
 - Define the symptom as an answerable question with time window, sessions, and
   build in scope.
+- Search closed issues and merged PRs for the target before the first probe;
+  a closed duplicate is the answer (a second #5123 investigation ran on
+  2026-11-02).
 - Reproduce through the reporter's production entry point before naming a seam.
 - Deliver a proven diagnosis and one concrete next step; a plausible story is
   not a diagnosis. Implement only a contained fix the brief asks for, under

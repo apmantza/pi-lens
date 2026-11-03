@@ -76,13 +76,11 @@
  * per event type on first failure so a wired caller can log it without
  * spamming.
  */
-import { logBusEvent } from "./bus-events-logger.js";
 import { isBusPublishEnabled } from "./bus-publish.js";
 import { normalizeFilePath } from "./path-utils.js";
 import {
+	createBusPublisher,
 	createLiveBusEmitter,
-	recordStaleBusFailure,
-	resolveLiveBusEmitter,
 	type BusEmitFn,
 	type BusEmitGetter,
 } from "./live-bus-emitter.js";
@@ -146,18 +144,18 @@ interface AutofixStartPayload {
 }
 
 const liveEmitter = createLiveBusEmitter();
-let hasLoggedQueuedFailure = false;
-let hasLoggedQueuedUnwired = false;
-let hasLoggedQueuedDisabled = false;
-let hasLoggedStartFailure = false;
-let hasLoggedStartUnwired = false;
-let hasLoggedStartDisabled = false;
-let hasLoggedDoneFailure = false;
-let hasLoggedDoneUnwired = false;
-let hasLoggedDoneDisabled = false;
-let hasLoggedAutofixStartFailure = false;
-let hasLoggedAutofixStartUnwired = false;
-let hasLoggedAutofixStartDisabled = false;
+const queuedPublisher = createBusPublisher(liveEmitter, {
+	module: "format-events-publish",
+});
+const startPublisher = createBusPublisher(liveEmitter, {
+	module: "format-events-publish",
+});
+const donePublisher = createBusPublisher(liveEmitter, {
+	module: "format-events-publish",
+});
+const autofixStartPublisher = createBusPublisher(liveEmitter, {
+	module: "format-events-publish",
+});
 
 /**
  * Wire the emit function from pi's `pi.events` bus. Called once at extension
@@ -180,18 +178,10 @@ export function wireFormatEventsBusEmitterGetter(
 /** Test-only: reset module state between test files. */
 export function _resetFormatEventsPublishForTests(): void {
 	liveEmitter.reset();
-	hasLoggedQueuedFailure = false;
-	hasLoggedQueuedUnwired = false;
-	hasLoggedQueuedDisabled = false;
-	hasLoggedStartFailure = false;
-	hasLoggedStartUnwired = false;
-	hasLoggedStartDisabled = false;
-	hasLoggedDoneFailure = false;
-	hasLoggedDoneUnwired = false;
-	hasLoggedDoneDisabled = false;
-	hasLoggedAutofixStartFailure = false;
-	hasLoggedAutofixStartUnwired = false;
-	hasLoggedAutofixStartDisabled = false;
+	queuedPublisher.reset();
+	startPublisher.reset();
+	donePublisher.reset();
+	autofixStartPublisher.reset();
 }
 
 export interface PublishFormatQueuedArgs {
@@ -218,41 +208,15 @@ export interface PublishFormatQueuedArgs {
  * Fire-and-forget: never throws, never awaited by the write path.
  */
 export function publishFormatQueued(args: PublishFormatQueuedArgs): void {
-	if (!isBusPublishEnabled()) {
-		if (!hasLoggedQueuedDisabled) {
-			hasLoggedQueuedDisabled = true;
-			logBusEvent({
-				event: BUS_FORMAT_QUEUED_EVENT,
-				outcome: "skipped_disabled",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const resolution = resolveLiveBusEmitter(liveEmitter, () => ({
+	queuedPublisher.publish<FormatQueuedPayload>({
 		event: BUS_FORMAT_QUEUED_EVENT,
-		cwd: normalizeFilePath(args.cwd),
-	}));
-	if (resolution.outcome === "stale-session") return;
-	if (resolution.outcome === "unwired") {
-		if (!hasLoggedQueuedUnwired) {
-			hasLoggedQueuedUnwired = true;
-			logBusEvent({
-				event: BUS_FORMAT_QUEUED_EVENT,
-				outcome: "skipped_unwired",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const busEmit = resolution.emit;
-
-	try {
-		const payload: FormatQueuedPayload = {
+		enabled: isBusPublishEnabled(),
+		cwd: args.cwd,
+		build: (cwd) => ({
 			v: BUS_FORMAT_QUEUED_VERSION,
 			source: "pi-lens",
 			filePath: normalizeFilePath(args.filePath),
-			cwd: normalizeFilePath(args.cwd),
+			cwd,
 			tool: args.tool,
 			kinds: args.kinds,
 			...(args.ownerSessionId === undefined
@@ -260,31 +224,10 @@ export function publishFormatQueued(args: PublishFormatQueuedArgs): void {
 				: { ownerSessionId: args.ownerSessionId }),
 			...(args.turnIndex === undefined ? {} : { turnIndex: args.turnIndex }),
 			...(args.batchId === undefined ? {} : { batchId: args.batchId }),
-		};
-		busEmit(BUS_FORMAT_QUEUED_EVENT, payload);
-		hasLoggedQueuedFailure = false;
-		logBusEvent({
-			event: BUS_FORMAT_QUEUED_EVENT,
-			outcome: "emitted",
-			cwd: payload.cwd,
-			fileCount: 1,
-		});
-	} catch (err) {
-		logBusEvent({
-			event: BUS_FORMAT_QUEUED_EVENT,
-			outcome: "emit_failed",
-			cwd: normalizeFilePath(args.cwd),
-			error: String(err),
-			ctxSource: resolution.ctxSource,
-		});
-		if (!hasLoggedQueuedFailure) {
-			hasLoggedQueuedFailure = true;
-			recordStaleBusFailure(BUS_FORMAT_QUEUED_EVENT, err);
-			args.dbg?.(
-				`format-events-publish: pilens:format:queued emit failed (further failures suppressed): ${err}`,
-			);
-		}
-	}
+		}),
+		emittedFields: () => ({ fileCount: 1 }),
+		dbg: args.dbg,
+	});
 }
 
 export interface PublishFormatStartArgs {
@@ -307,74 +250,29 @@ export interface PublishFormatStartArgs {
  */
 export function publishFormatStart(args: PublishFormatStartArgs): void {
 	if (args.paths.length === 0) return;
-	if (!isBusPublishEnabled()) {
-		if (!hasLoggedStartDisabled) {
-			hasLoggedStartDisabled = true;
-			logBusEvent({
-				event: BUS_FORMAT_START_EVENT,
-				outcome: "skipped_disabled",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const resolution = resolveLiveBusEmitter(liveEmitter, () => ({
+	startPublisher.publish<FormatStartPayload>({
 		event: BUS_FORMAT_START_EVENT,
-		cwd: normalizeFilePath(args.cwd),
-	}));
-	if (resolution.outcome === "stale-session") return;
-	if (resolution.outcome === "unwired") {
-		if (!hasLoggedStartUnwired) {
-			hasLoggedStartUnwired = true;
-			logBusEvent({
-				event: BUS_FORMAT_START_EVENT,
-				outcome: "skipped_unwired",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const busEmit = resolution.emit;
-
-	try {
-		const paths = args.paths.map((p) => normalizeFilePath(p));
-		const payload: FormatStartPayload = {
-			v: BUS_FORMAT_START_VERSION,
-			source: "pi-lens",
-			cwd: normalizeFilePath(args.cwd),
-			paths,
-			fileCount: paths.length,
-			kinds: args.kinds ?? ["format"],
-			...(args.ownerSessionId === undefined
-				? {}
-				: { ownerSessionId: args.ownerSessionId }),
-			...(args.turnIndex === undefined ? {} : { turnIndex: args.turnIndex }),
-			...(args.batchId === undefined ? {} : { batchId: args.batchId }),
-		};
-		busEmit(BUS_FORMAT_START_EVENT, payload);
-		hasLoggedStartFailure = false;
-		logBusEvent({
-			event: BUS_FORMAT_START_EVENT,
-			outcome: "emitted",
-			cwd: payload.cwd,
-			fileCount: payload.fileCount,
-		});
-	} catch (err) {
-		logBusEvent({
-			event: BUS_FORMAT_START_EVENT,
-			outcome: "emit_failed",
-			cwd: normalizeFilePath(args.cwd),
-			error: String(err),
-			ctxSource: resolution.ctxSource,
-		});
-		if (!hasLoggedStartFailure) {
-			hasLoggedStartFailure = true;
-			recordStaleBusFailure(BUS_FORMAT_START_EVENT, err);
-			args.dbg?.(
-				`format-events-publish: pilens:format:start emit failed (further failures suppressed): ${err}`,
-			);
-		}
-	}
+		enabled: isBusPublishEnabled(),
+		cwd: args.cwd,
+		build: (cwd) => {
+			const paths = args.paths.map((p) => normalizeFilePath(p));
+			return {
+				v: BUS_FORMAT_START_VERSION,
+				source: "pi-lens",
+				cwd,
+				paths,
+				fileCount: paths.length,
+				kinds: args.kinds ?? ["format"],
+				...(args.ownerSessionId === undefined
+					? {}
+					: { ownerSessionId: args.ownerSessionId }),
+				...(args.turnIndex === undefined ? {} : { turnIndex: args.turnIndex }),
+				...(args.batchId === undefined ? {} : { batchId: args.batchId }),
+			};
+		},
+		emittedFields: (payload) => ({ fileCount: payload.fileCount }),
+		dbg: args.dbg,
+	});
 }
 
 export interface PublishFormatDoneArgs {
@@ -395,73 +293,30 @@ export interface PublishFormatDoneArgs {
  * represented by `paths: []`. Fire-and-forget, like the other format events.
  */
 export function publishFormatDone(args: PublishFormatDoneArgs): void {
-	if (!isBusPublishEnabled()) {
-		if (!hasLoggedDoneDisabled) {
-			hasLoggedDoneDisabled = true;
-			logBusEvent({
-				event: BUS_FORMAT_DONE_EVENT,
-				outcome: "skipped_disabled",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const resolution = resolveLiveBusEmitter(liveEmitter, () => ({
+	donePublisher.publish<FormatDonePayload>({
 		event: BUS_FORMAT_DONE_EVENT,
-		cwd: normalizeFilePath(args.cwd),
-	}));
-	if (resolution.outcome === "stale-session") return;
-	if (resolution.outcome === "unwired") {
-		if (!hasLoggedDoneUnwired) {
-			hasLoggedDoneUnwired = true;
-			logBusEvent({
-				event: BUS_FORMAT_DONE_EVENT,
-				outcome: "skipped_unwired",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	try {
-		const paths = args.paths.map((p) => normalizeFilePath(p));
-		const payload: FormatDonePayload = {
-			v: BUS_FORMAT_DONE_VERSION,
-			source: "pi-lens",
-			cwd: normalizeFilePath(args.cwd),
-			paths,
-			fileCount: paths.length,
-			kinds: args.kinds ?? ["format"],
-			...(args.ownerSessionId === undefined
-				? {}
-				: { ownerSessionId: args.ownerSessionId }),
-			...(args.turnIndex === undefined ? {} : { turnIndex: args.turnIndex }),
-			...(args.batchId === undefined ? {} : { batchId: args.batchId }),
-			...(args.settled === undefined ? {} : { settled: args.settled }),
-		};
-		resolution.emit(BUS_FORMAT_DONE_EVENT, payload);
-		hasLoggedDoneFailure = false;
-		logBusEvent({
-			event: BUS_FORMAT_DONE_EVENT,
-			outcome: "emitted",
-			cwd: payload.cwd,
-			fileCount: payload.fileCount,
-		});
-	} catch (err) {
-		logBusEvent({
-			event: BUS_FORMAT_DONE_EVENT,
-			outcome: "emit_failed",
-			cwd: normalizeFilePath(args.cwd),
-			error: String(err),
-			ctxSource: resolution.ctxSource,
-		});
-		if (!hasLoggedDoneFailure) {
-			hasLoggedDoneFailure = true;
-			recordStaleBusFailure(BUS_FORMAT_DONE_EVENT, err);
-			args.dbg?.(
-				`format-events-publish: pilens:format:done emit failed (further failures suppressed): ${err}`,
-			);
-		}
-	}
+		enabled: isBusPublishEnabled(),
+		cwd: args.cwd,
+		build: (cwd) => {
+			const paths = args.paths.map((p) => normalizeFilePath(p));
+			return {
+				v: BUS_FORMAT_DONE_VERSION,
+				source: "pi-lens",
+				cwd,
+				paths,
+				fileCount: paths.length,
+				kinds: args.kinds ?? ["format"],
+				...(args.ownerSessionId === undefined
+					? {}
+					: { ownerSessionId: args.ownerSessionId }),
+				...(args.turnIndex === undefined ? {} : { turnIndex: args.turnIndex }),
+				...(args.batchId === undefined ? {} : { batchId: args.batchId }),
+				...(args.settled === undefined ? {} : { settled: args.settled }),
+			};
+		},
+		emittedFields: (payload) => ({ fileCount: payload.fileCount }),
+		dbg: args.dbg,
+	});
 }
 
 export interface PublishAutofixStartArgs {
@@ -484,67 +339,22 @@ export interface PublishAutofixStartArgs {
  */
 export function publishAutofixStart(args: PublishAutofixStartArgs): void {
 	if (args.paths.length === 0) return;
-	if (!isBusPublishEnabled()) {
-		if (!hasLoggedAutofixStartDisabled) {
-			hasLoggedAutofixStartDisabled = true;
-			logBusEvent({
-				event: BUS_AUTOFIX_START_EVENT,
-				outcome: "skipped_disabled",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const resolution = resolveLiveBusEmitter(liveEmitter, () => ({
+	autofixStartPublisher.publish<AutofixStartPayload>({
 		event: BUS_AUTOFIX_START_EVENT,
-		cwd: normalizeFilePath(args.cwd),
-	}));
-	if (resolution.outcome === "stale-session") return;
-	if (resolution.outcome === "unwired") {
-		if (!hasLoggedAutofixStartUnwired) {
-			hasLoggedAutofixStartUnwired = true;
-			logBusEvent({
-				event: BUS_AUTOFIX_START_EVENT,
-				outcome: "skipped_unwired",
-				cwd: normalizeFilePath(args.cwd),
-			});
-		}
-		return;
-	}
-	const busEmit = resolution.emit;
-
-	try {
-		const paths = args.paths.map((p) => normalizeFilePath(p));
-		const payload: AutofixStartPayload = {
-			v: BUS_AUTOFIX_START_VERSION,
-			source: "pi-lens",
-			cwd: normalizeFilePath(args.cwd),
-			paths,
-			fileCount: paths.length,
-			eligibleCount: args.eligibleCount,
-		};
-		busEmit(BUS_AUTOFIX_START_EVENT, payload);
-		hasLoggedAutofixStartFailure = false;
-		logBusEvent({
-			event: BUS_AUTOFIX_START_EVENT,
-			outcome: "emitted",
-			cwd: payload.cwd,
-			fileCount: payload.fileCount,
-		});
-	} catch (err) {
-		logBusEvent({
-			event: BUS_AUTOFIX_START_EVENT,
-			outcome: "emit_failed",
-			cwd: normalizeFilePath(args.cwd),
-			error: String(err),
-			ctxSource: resolution.ctxSource,
-		});
-		if (!hasLoggedAutofixStartFailure) {
-			hasLoggedAutofixStartFailure = true;
-			recordStaleBusFailure(BUS_AUTOFIX_START_EVENT, err);
-			args.dbg?.(
-				`format-events-publish: pilens:autofix:start emit failed (further failures suppressed): ${err}`,
-			);
-		}
-	}
+		enabled: isBusPublishEnabled(),
+		cwd: args.cwd,
+		build: (cwd) => {
+			const paths = args.paths.map((p) => normalizeFilePath(p));
+			return {
+				v: BUS_AUTOFIX_START_VERSION,
+				source: "pi-lens",
+				cwd,
+				paths,
+				fileCount: paths.length,
+				eligibleCount: args.eligibleCount,
+			};
+		},
+		emittedFields: (payload) => ({ fileCount: payload.fileCount }),
+		dbg: args.dbg,
+	});
 }

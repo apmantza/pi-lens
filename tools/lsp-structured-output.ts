@@ -11,6 +11,7 @@ type LspToolStatus =
 	| "lsp_disabled"
 	| "filepath_is_directory"
 	| "tracked_snapshot"
+	| "timeout"
 	| "error";
 
 type LspToolLocation = {
@@ -73,7 +74,11 @@ function finiteNumber(value: unknown): number | undefined {
 }
 
 function lspStatusFromFailureKind(failureKind: string): LspToolStatus {
-	if (failureKind === "success" || failureKind === "fallback_success") {
+	if (
+		failureKind === "success" ||
+		failureKind === "fallback_success" ||
+		failureKind === "fallback_after_timeout"
+	) {
 		return "success";
 	}
 	if (failureKind === "empty_result") return "empty";
@@ -89,6 +94,7 @@ function lspStatusFromFailureKind(failureKind: string): LspToolStatus {
 	if (failureKind === "lsp_disabled") return "lsp_disabled";
 	if (failureKind === "filepath_is_directory") return "filepath_is_directory";
 	if (failureKind === "tracked_snapshot") return "tracked_snapshot";
+	if (failureKind === "timeout") return "timeout";
 	return "error";
 }
 

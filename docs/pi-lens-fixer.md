@@ -251,7 +251,9 @@ rigor (#2599).
 
 - The PR body follows `.github/PULL_REQUEST_TEMPLATE.md`, which a reader must
   be able to scan (#5003): `## Summary` (at most three sentences, with the
-  closing keyword, which GitHub ignores in a title), `## Notes for the reviewer`
+  closing keyword, which GitHub ignores in a title, and with counted sentences
+  in its `Refs #NNN`, `Remaining #NNN:` and `Closes #NNN` lines counted too),
+  `## Notes for the reviewer`
   (at most five bullets, no tables or fences), `## Change outline`, and
   `## Proof and checks` with `### Tests`, `### Class sweep` (ending in one
   `Alignment:` line that names the families of `docs/alignment-families.md` the

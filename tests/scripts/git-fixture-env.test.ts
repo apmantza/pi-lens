@@ -100,6 +100,14 @@ describe("JavaScript Git fixture environment", () => {
 		).toBe(".git\n");
 	});
 
+	it("keeps a commit index only with explicit opt-in (#5213 F1)", () => {
+		const inherited = { GIT_INDEX_FILE: "commit-index", GIT_DIR: "other-repo" };
+		expect(envFor("fixture", inherited).GIT_INDEX_FILE).toBeUndefined();
+		const env = envFor("fixture", inherited, { keep: ["GIT_INDEX_FILE"] });
+		expect(env.GIT_INDEX_FILE).toBe("commit-index");
+		expect(env.GIT_DIR).toBeUndefined();
+	});
+
 	it("scrubs indexed config keys even without a count (review F1)", () => {
 		// GIT_CONFIG_COUNT is scrubbed by name, so git would ignore orphaned
 		// KEY/VALUE entries anyway; this pins the pattern loop itself so a
