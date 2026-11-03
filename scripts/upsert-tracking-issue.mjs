@@ -8,8 +8,8 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { upsertTrackingIssue } from "./lib/drift-issue.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 function valueAfter(argv, flag) {
 	const index = argv.indexOf(flag);
@@ -52,10 +52,7 @@ function main(argv = process.argv.slice(2), ghRunner = gh) {
 	return action;
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		main();
 	} catch (error) {

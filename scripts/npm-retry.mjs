@@ -28,9 +28,9 @@
  * ms) — see resolve-newest-in-range-host.mjs's identical override for why.
  */
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { NET_PATTERN } from "./lib/ci-failure-classifier.mjs";
 import { retryWithBackoff } from "./lib/retry.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const ATTEMPTS = 3;
 const DEFAULT_BACKOFF_MS = [0, 5_000, 15_000];
@@ -165,6 +165,6 @@ export async function main(args, env) {
 	return lastCode || 1;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	process.exitCode = await main(process.argv.slice(2), process.env);
 }

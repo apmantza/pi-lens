@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import {
 	normalizeVitestOutput,
 	parseVitestSummary,
 } from "./lib/vitest-summary.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const DEFAULT_REPOSITORY = "apmantza/pi-lens";
 export function stripLogDecorations(log) {
@@ -154,10 +154,7 @@ export function main(argv = process.argv.slice(2)) {
 	return diff.newFailures.length ? 1 : 0;
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		process.exitCode = main();
 	} catch (error) {

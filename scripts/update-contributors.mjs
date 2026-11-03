@@ -13,7 +13,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const BOT_LOGIN = /^app\/|\[bot\]$/;
 const DOC_FILE = /^(docs\/|\.changelog\/)|(^|\/)[^/]*\.(md|mdx)$/i;
@@ -208,6 +208,6 @@ function main(argv) {
 	});
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	main(process.argv.slice(2));
 }

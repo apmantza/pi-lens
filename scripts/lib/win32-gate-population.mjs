@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
-import { pathToFileURL } from "node:url";
 import { BoundedSet } from "../../clients/bounded-cache.js";
 import { walkFiles } from "./walk-files.mjs";
+import { isMainModule } from "./is-main-module.mjs";
 
 const TESTS_ROOT = "tests";
 const TEST_FILE = /\.test\.ts$/;
@@ -225,5 +225,4 @@ function main() {
 	} else if (args.includes("--files")) console.log(files.join("\n"));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
-	main();
+if (isMainModule(import.meta.url)) main();

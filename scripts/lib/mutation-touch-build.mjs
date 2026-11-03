@@ -19,7 +19,7 @@
  */
 import { existsSync, readdirSync, utimesSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./is-main-module.mjs";
 
 // Mirrors tests/support/check-build-freshness.ts's COMPILED_DIRS/
 // COMPILED_ROOT_FILES (that module lives under tests/, which tsconfig.build
@@ -58,9 +58,6 @@ export function refreshCompiledJsMtimes({
 	}
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	refreshCompiledJsMtimes();
 }

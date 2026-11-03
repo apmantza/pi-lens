@@ -110,7 +110,11 @@ it("the check CLI rejects a stale user changelog", async () => {
 	rollup.writeUserChangelog({ rootDir: root });
 	fs.appendFileSync(path.join(root, "CHANGELOG-USER.md"), "stale\n");
 	fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
-	for (const file of ["rollup-changelog.mjs", "lib/changelog.mjs"])
+	for (const file of [
+		"rollup-changelog.mjs",
+		"lib/changelog.mjs",
+		"lib/is-main-module.mjs",
+	])
 		fs.copyFileSync(
 			path.resolve("scripts", file),
 			path.join(root, "scripts", file),

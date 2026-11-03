@@ -12,10 +12,11 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import { GENERATED_LSP_DOCS } from "./lib/md-matrix.mjs";
 import { buildRefreshPrBody, listRefreshFlips } from "./lib/refresh-flips.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /** @param {string[]} args @param {{ cwd: string }} options */
 function defaultGit(args, options) {
@@ -72,10 +73,7 @@ export function landRefresh({ root, landing, issuesUrl, git = defaultGit }) {
 	};
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	const argv = process.argv.slice(2);
 	const flag = (name) => {
 		const i = argv.indexOf(name);

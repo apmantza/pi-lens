@@ -322,7 +322,7 @@ entry's screen, or its first sentence when it has none.
 36. **Count-based baseline laundering:** maintenance tools match content identity, not occurrence counts, and refuse replacement identities.
 37. **Raw control byte:** source fixtures encode control characters as escapes or buffers; tracked-source sweeps enforce this.
 38. **Data-only admission:** a new exemption or baseline row requires a reason in a separate checked file and a fixture that crosses the boundary.
-44. **Portable entry-module check:** compare `import.meta.url` with `pathToFileURL(process.argv[1]).href`.
+44. **Portable entry-module check:** decide the entry module only with `isMainModule(import.meta.url)` from `scripts/lib/is-main-module.mjs`; `scripts/hooks/guard-bash.mjs` is the one standalone gate.
 45. **Root wrapper drops metadata:** wrappers preserve the complete marker table and are checked against direct root resolution.
 50. **Test double's fabricated identifier reaching code that acts on it:** a pid, fd, port, lock path or handle invented by a mock reaches production code that registers, signals, writes or deletes by it (#2042, #3091).
 59. **Generated edit with unlisted consumers:** Screen: apply the generator's real output to the real tree (all-eligible case included), build, and run every test that mentions the field or the registry; this sweep is manual (#3994 F1, r3).

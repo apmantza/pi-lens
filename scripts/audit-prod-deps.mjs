@@ -17,7 +17,7 @@
 // - anything unparseable is treated as a transport error, never as clean.
 import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const ATTEMPTS = 3;
 export const ATTEMPT_TIMEOUT_MS = 120_000;
@@ -150,6 +150,6 @@ export async function main() {
 	return 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	process.exitCode = await main();
 }

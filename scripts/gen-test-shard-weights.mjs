@@ -16,9 +16,9 @@
  */
 
 import fs from "node:fs";
-import { pathToFileURL } from "node:url";
 import { rowsFromArtifacts } from "./test-history-rollup.mjs";
 import { median } from "./lib/test-shard-assignment.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /**
  * The artifact walk and the per-file duration rule are the nightly test-history
@@ -80,5 +80,4 @@ function main(argv) {
 	);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href)
-	main(process.argv.slice(2));
+if (isMainModule(import.meta.url)) main(process.argv.slice(2));

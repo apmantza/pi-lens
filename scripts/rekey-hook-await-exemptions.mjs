@@ -76,6 +76,7 @@ import * as path from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -331,9 +332,7 @@ async function main() {
 	applyPlan(source, plan, WRITE);
 }
 
-const isEntryPoint =
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href;
+const isEntryPoint = isMainModule(import.meta.url);
 if (isEntryPoint) {
 	await main();
 }

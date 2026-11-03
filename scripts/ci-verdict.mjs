@@ -231,6 +231,7 @@ import {
 	shardAggregateName,
 } from "./lib/ci-checks.mjs";
 import { isBot } from "./update-contributors.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export { REQUIRED_CHECKS };
 
@@ -3530,7 +3531,7 @@ async function main() {
 	process.exitCode = result.code;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	main().catch((error) => {
 		console.error(error);
 		// An unexpected throw is not a verdict: EXIT_FAILURE's contract is

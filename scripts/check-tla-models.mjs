@@ -50,6 +50,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { assignShards, shardLoads } from "./lib/test-shard-assignment.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const TLA_TOOLS = Object.freeze({
 	release: "v1.7.4",
@@ -887,7 +888,7 @@ async function main() {
 	}
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	main().catch((error) => {
 		console.error(error instanceof Error ? error.message : error);
 		process.exitCode = 1;

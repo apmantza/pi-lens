@@ -48,9 +48,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { load as yamlLoad } from "js-yaml";
 import { safeSpawnAsync } from "../clients/safe-spawn.js";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Use os.tmpdir() — the TMP/TEMP env vars differ across shells
@@ -129,7 +130,7 @@ const PLAYGROUND_URL = "https://ast-grep.github.io/playground.html";
 
 // ── CLI args ──────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-	const args = argv.slice(2);
+	const args = argv;
 	if (args.length === 0 || args.includes("-h") || args.includes("--help")) {
 		printUsage();
 		process.exit(0);
@@ -426,7 +427,7 @@ export function buildScrapeExpr(sentinelB64, maxLine) {
 
 // ── Main ──────────────────────────────────────────────────────────────────
 async function main() {
-	const opts = parseArgs(process.argv);
+	const opts = parseArgs(process.argv.slice(2));
 	const startMs = Date.now();
 
 	// 1) Read rule
@@ -631,8 +632,7 @@ async function main() {
 // module — tests import `runCdp`/`runChrome` directly to exercise the
 // bounded-wait fix without also parsing CLI args / spawning Chrome / calling
 // process.exit as a side effect of the import.
-const isMain =
-	process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+const isMain = isMainModule(import.meta.url);
 if (isMain) {
 	main().then(
 		() => process.exit(0),

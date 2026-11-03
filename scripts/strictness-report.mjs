@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { resolve, relative, sep } from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const REPORT_ROOTS = ["clients", "tools", "mcp", "scripts", "tests"];
 
@@ -121,10 +121,7 @@ export function main(argv = process.argv.slice(2)) {
 	process.stdout.write(`\n${JSON.stringify(summary)}\n`);
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		main();
 	} catch (error) {

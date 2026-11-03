@@ -154,6 +154,7 @@ import {
 	worktreeActivityFromSignals,
 } from "./lib/worktree-hygiene.mjs";
 import { snapshotProcesses } from "./lib/process-scan.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const isWindows = process.platform === "win32";
 
@@ -2300,18 +2301,10 @@ function deleteStaleBranches(gitBudget, removedBranchRefs) {
 }
 
 // Only run the CLI when this file is the entry point — not when a test
-// imports parseArgs/worktreeActivityMs. Mirrors with-test-lock.mjs's own
-// isEntryPoint, win32 case-insensitive fallback included (a differently-cased
-// invocation path still resolves to this file on NTFS).
-function isEntryPoint() {
-	if (!process.argv[1]) return false;
-	const invoked = path.resolve(process.argv[1]);
-	if (invoked === SELF_FILE) return true;
-	if (!isWindows) return false;
-	return invoked.toLowerCase() === SELF_FILE.toLowerCase();
-}
-
-if (isEntryPoint()) {
+// imports parseArgs/worktreeActivityMs. `isMainModule` resolves both paths
+// natively, so a differently-cased invocation path still resolves to this file
+// on NTFS.
+if (isMainModule(import.meta.url)) {
 	main(process.argv.slice(2))
 		.catch((error) => {
 			// Exit code stays 0 on purpose: this runs from Claude Code hooks,

@@ -38,7 +38,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /**
  * PROVISIONAL drift threshold on the median of SAMPLE_COUNT first-persist
@@ -232,10 +232,7 @@ export function main(argv = process.argv.slice(2), log = console.log) {
 	return 0;
 }
 
-if (
-	process.argv[1] !== undefined &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		process.exitCode = main();
 	} catch (error) {

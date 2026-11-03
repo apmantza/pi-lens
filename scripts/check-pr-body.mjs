@@ -37,6 +37,7 @@ import {
 	parseCloseKeywords,
 } from "./lib/close-keywords.mjs";
 import { checkProse, proseSections } from "./check-prose.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md";
 
@@ -5493,7 +5494,7 @@ export function lintLocalPrBody(
 	return result;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isMainModule(import.meta.url)) {
 	// Local contract: --lint-local <body-file> remains the preflight form from
 	// #2796. Optional --title text and --ref revision add the CI close-keyword
 	// and head-tree citation checks to that same local entry point.

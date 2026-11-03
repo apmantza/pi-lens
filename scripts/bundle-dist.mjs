@@ -65,13 +65,14 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
 	buildIsolatedExecInvocation,
 	createIsolatedExecPrefix,
 	readLockedToolVersion,
 } from "./lib/exec-isolation.mjs";
 import { BUNDLE_EXTERNALS } from "./lib/host-provided-deps.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ESBUILD_VERSION = readLockedToolVersion({ root, packageName: "esbuild" });
@@ -292,10 +293,6 @@ export function main() {
 	);
 }
 
-const invokedPath = process.argv[1];
-const invokedDirectly =
-	typeof invokedPath === "string" &&
-	pathToFileURL(path.resolve(invokedPath)).href === import.meta.url;
-if (invokedDirectly) {
+if (isMainModule(import.meta.url)) {
 	main();
 }

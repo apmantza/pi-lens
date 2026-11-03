@@ -45,6 +45,7 @@ import {
 	buildModuleGraph,
 	clearModuleGraphCache,
 } from "../clients/review-graph/workspace-modules.js";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.join(HERE, "..");
@@ -142,9 +143,6 @@ function main() {
 	process.stdout.write(`Wrote ${SNAPSHOT_PATH}\n`);
 }
 
-if (
-	process.argv[1] &&
-	fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
-) {
+if (isMainModule(import.meta.url)) {
 	main();
 }

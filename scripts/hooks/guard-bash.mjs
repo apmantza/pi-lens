@@ -3873,6 +3873,23 @@ export function run() {
 	}
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// STANDALONE entry gate: `guard-bash-probe` loads this file from a git ref and
+// tests copy it alone, so it cannot import `scripts/lib/is-main-module.mjs`.
+// It applies that seam's rule: resolve BOTH paths natively, because node leaves
+// `process.argv[1]` symlinked. Comparing them lexically made a hook started
+// through a linked path exit 0 without reading the command, so it allowed
+// `git stash` (shape 44; `tests/scripts/script-entry-gate-cells.test.ts`).
+function isEntryPoint() {
+	try {
+		return (
+			realpathSync.native(process.argv[1]) ===
+			realpathSync.native(fileURLToPath(import.meta.url))
+		);
+	} catch {
+		return false;
+	}
+}
+
+if (isEntryPoint()) {
 	process.exitCode = run();
 }

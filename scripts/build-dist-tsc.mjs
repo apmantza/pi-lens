@@ -77,12 +77,13 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
 	buildIsolatedExecInvocation,
 	createIsolatedExecPrefix,
 	readLockedToolVersion,
 } from "./lib/exec-isolation.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TSC_VERSION = readLockedToolVersion({ root, packageName: "typescript" });
@@ -244,10 +245,6 @@ export function main() {
 	}
 }
 
-const invokedPath = process.argv[1];
-const invokedDirectly =
-	typeof invokedPath === "string" &&
-	pathToFileURL(path.resolve(invokedPath)).href === import.meta.url;
-if (invokedDirectly) {
+if (isMainModule(import.meta.url)) {
 	main();
 }

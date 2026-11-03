@@ -25,7 +25,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
 	parseRejectedServers,
 	planPromotions,
@@ -35,6 +35,7 @@ import {
 	parseRefreshState,
 	setIdleEvictionState,
 } from "./lib/md-matrix.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /**
  * The servers of closed-unmerged promotion PRs, from the file the workflow
@@ -123,10 +124,7 @@ export function promoteFromSummary(opts) {
 	}
 }
 
-if (
-	process.argv[1] &&
-	import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+if (isMainModule(import.meta.url)) {
 	const repoRoot = path.resolve(
 		path.dirname(fileURLToPath(import.meta.url)),
 		"..",

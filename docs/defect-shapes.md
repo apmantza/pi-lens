@@ -502,8 +502,9 @@ file-scoped worklist and receives no project-wide scanner output.
 38. **Data-only admission:** a new exemption or baseline row requires a reason
     in a separate checked file and a fixture that crosses the boundary.
 
-44. **Portable entry-module check:** compare `import.meta.url` with
-    `pathToFileURL(process.argv[1]).href`.
+44. **Portable entry-module check:** decide the entry module only with
+    `isMainModule(import.meta.url)` from `scripts/lib/is-main-module.mjs`;
+    `scripts/hooks/guard-bash.mjs` is the one standalone gate.
 
 45. **Root wrapper drops metadata:** wrappers preserve the complete marker table
     and are checked against direct root resolution.

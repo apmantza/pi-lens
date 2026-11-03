@@ -28,6 +28,7 @@ import {
 	DEFAULT_THRESHOLD,
 	judge,
 } from "./lib/latency-stats.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const SAMPLER = path.join(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -196,9 +197,6 @@ export function main(argv, io = {}) {
 	return regressed.length > 0 ? 1 : 0;
 }
 
-if (
-	process.argv[1] &&
-	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isMainModule(import.meta.url)) {
 	process.exit(main(process.argv.slice(2)));
 }

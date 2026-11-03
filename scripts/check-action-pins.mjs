@@ -3,9 +3,10 @@
 import { readFile } from "node:fs/promises";
 import { readdir } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { load as loadYaml } from "js-yaml";
 import { githubHeaders } from "./lib/github-rest.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const SHA = /^[0-9a-f]{40}$/i;
 const FULL_VERSION = /^v?\d+\.\d+\.\d+$/;
@@ -456,8 +457,4 @@ export async function main() {
 	}
 }
 
-if (
-	process.argv[1] &&
-	pathToFileURL(resolve(process.argv[1])).href === import.meta.url
-)
-	await main();
+if (isMainModule(import.meta.url)) await main();

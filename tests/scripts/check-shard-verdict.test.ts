@@ -776,22 +776,21 @@ describe("#4672 the aggregate step's own boundary: argv, fetch failures, annotat
 	// point. The retired guard compared `process.argv[1]` against a FILENAME
 	// SUFFIX, so any wrapper whose name ended in `check-shard-verdict.mjs` ran
 	// `main()` with the wrapper's argv and set the wrapper's exit code. The guard
-	// now compares `import.meta.url` with `pathToFileURL(process.argv[1]).href`,
-	// the form the sibling scripts use.
+	// is now `isMainModule(import.meta.url)` (scripts/lib/is-main-module.mjs),
+	// which resolves both paths and compares them.
 	//
 	// Driven IN PROCESS: the wrapper is a path this test puts in `process.argv[1]`
 	// and the module is re-imported under it, so the platform guard itself is what
-	// answers. No child process: a real spawn here is the flake shape #2547
+	// answers. The wrapper path is a file that exists (this test): a missing file
+	// makes the seam's realpath throw and answer false before it compares
+	// (#5228 review F3), so the comparison would go untested. No child process: a real spawn here is the flake shape #2547
 	// ratchets (`real-process-spawn`), and the spawn proved nothing the guard's
 	// own comparison does not.
 	it("does not run the entry point when a wrapper imports the module", async () => {
 		const moduleUrl = pathToFileURL(
 			resolve(import.meta.dirname, "../../scripts/check-shard-verdict.mjs"),
 		).href;
-		const wrapperArgv1 = resolve(
-			import.meta.dirname,
-			"wrapper-check-shard-verdict.mjs",
-		);
+		const wrapperArgv1 = import.meta.filename;
 		const argvBefore = process.argv[1];
 		const exitCodeBefore = process.exitCode;
 		const printed: string[] = [];

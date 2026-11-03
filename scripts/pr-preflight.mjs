@@ -2,9 +2,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { CI_JOB_NAMES } from "./lib/ci-checks.mjs";
 import { scratchHomeEnv } from "./lib/scratch-home-env.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const GATES = [
 	["build", ["npm", "run", "build"], CI_JOB_NAMES.LINT_AND_TYPECHECK],
@@ -258,10 +258,7 @@ export function runPreflight({
 	return rows.some((row) => row.code !== 0 && row.code !== 3) ? 1 : 0;
 }
 
-if (
-	process.argv[1] &&
-	pathToFileURL(resolve(process.argv[1])).href === import.meta.url
-) {
+if (isMainModule(import.meta.url)) {
 	try {
 		process.exitCode = runPreflight({ argv: process.argv.slice(2) });
 	} catch (error) {

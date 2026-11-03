@@ -26,8 +26,8 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { pathToFileURL } from "node:url";
 import { resolveLatestByName } from "./lib/ci-checks.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const DEFAULT_DEADLINE_SECONDS = 300;
 export const DEFAULT_INTERVAL_SECONDS = 15;
@@ -199,5 +199,5 @@ export function run(argv, io = {}) {
 	return result.ready ? 0 : 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href)
+if (isMainModule(import.meta.url))
 	process.exitCode = run(process.argv.slice(2));

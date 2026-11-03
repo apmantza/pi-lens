@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 import { normalizeVitestOutput } from "./lib/vitest-summary.mjs";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 const MAX_FAILURE_OUTPUT_LENGTH = 12_000;
 
@@ -50,7 +50,7 @@ export function extractVitestFailureBlock(output) {
 	return rendered.join("\n\n").trim();
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+if (isMainModule(import.meta.url)) {
 	const input = process.argv[2];
 	if (!input) throw new Error("usage: extract-vitest-failures.mjs <log>");
 	const block = extractVitestFailureBlock(readFileSync(input, "utf8"));

@@ -45,7 +45,7 @@
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { pathToFileURL } from "node:url";
+import { isMainModule } from "./lib/is-main-module.mjs";
 
 /** GitHub's `pulls/{n}/files` returns at most this many files. */
 export const PR_FILES_API_CAP = 3000;
@@ -411,5 +411,5 @@ export function run(argv, io = {}) {
 	return 0;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href)
+if (isMainModule(import.meta.url))
 	process.exitCode = run(process.argv.slice(2));
