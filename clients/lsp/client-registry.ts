@@ -20,6 +20,7 @@ import {
 	recordDegradation,
 	recordDegradationOnce,
 } from "../degradation-ledger.js";
+import { isLspInstallDisabledByEnv } from "../env-utils.js";
 import { isEphemeralCheckoutRoot } from "../ephemeral-root.js";
 import { logLatency } from "../latency-logger.js";
 import {
@@ -1370,7 +1371,7 @@ export class ClientRegistry {
 
 	private shouldAllowInstall(serverId: string): boolean {
 		if (!assertInstallAllowed(`lsp install: ${serverId}`)) return false;
-		return process.env.PI_LENS_DISABLE_LSP_INSTALL !== "1";
+		return !isLspInstallDisabledByEnv();
 	}
 
 	/**

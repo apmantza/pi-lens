@@ -13,6 +13,7 @@
 
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { safeSpawnAsync } from "../../clients/safe-spawn.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
@@ -104,6 +105,10 @@ function makeDeps(ctxCwd: string) {
 
 describe("dispatch availability suppression is reset at session start (#1266)", () => {
 	let tmpDir: string;
+
+	// The harness sets the install switch for every test (vitest-setup.ts). The exhausted-`go install` case needs the install allowed.
+	// The switch's own refusal is `install-kill-switch-5231.test.ts`.
+	beforeEach(() => withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" }));
 
 	beforeEach(async () => {
 		// The real config loader walks up from the session cwd to HOME (#4709);

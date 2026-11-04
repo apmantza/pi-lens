@@ -32,6 +32,7 @@ import {
 	tryLazyInstall,
 } from "../../clients/dispatch/runners/utils/lazy-installer.js";
 import { resetLSPConfigStateForTests } from "../../clients/lsp/config.js";
+import { withEnv } from "../support/with-env.js";
 import { pinFixtureHome } from "./test-utils.js";
 
 /** The first cooldown the shared install ladder owes (#1514's list, not a formula). */
@@ -143,9 +144,14 @@ beforeEach(async () => {
 	safeSpawnAsync.mockReset();
 	resetLazyInstallAttempts();
 	setProjectTrustState("trusted");
+	// The harness sets the install switch for every test (vitest-setup.ts). This
+	// file asserts what a lazy install does when it IS allowed; the switch's own
+	// refusal is `install-kill-switch-5231.test.ts`.
+	const restoreSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	vi.useFakeTimers({ toFake: ["Date"] });
 	return () => {
 		vi.useRealTimers();
+		restoreSwitch();
 		resetProjectTrust();
 	};
 });

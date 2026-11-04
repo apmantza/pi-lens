@@ -175,6 +175,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/config/shell-dialect-ownership-sweep.test.ts",
 	"tests/config/strictness-ratchet.test.ts",
 	"tests/config/hook-await-bounds.test.ts",
+	// #5231: walks clients/tools/mcp + index.ts for a raw read of an install
+	// kill switch and for every file that mentions the trust install gate.
+	"tests/config/install-switch-seam-sweep.test.ts",
 	"tests/config/dmts-export-drift.test.ts",
 	"tests/config/vi-mock-export-sweep.test.ts",
 	"tests/config/vi-domock-undo.test.ts",

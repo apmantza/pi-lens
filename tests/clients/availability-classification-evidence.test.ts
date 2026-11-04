@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import { removeTempDirSync } from "./test-utils.js";
 import {
 	classifyProbeFailure,
@@ -95,6 +96,10 @@ class FakeScanClient extends SecurityScanClient<string[]> {
 		return this.ensureViaInstaller(["--version"]);
 	}
 }
+
+// The harness sets the install switch for every test (vitest-setup.ts). These govulncheck cases assert the `go install` outcomes, which need the install allowed.
+// The switch's own refusal is `install-kill-switch-5231.test.ts`.
+beforeEach(() => withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" }));
 
 beforeEach(async () => {
 	// The removed module double reported `getProjectTrustState() === "unknown"`,

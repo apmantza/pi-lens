@@ -764,6 +764,7 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/config/shell-dialect-ownership-sweep.test.ts",
 			"tests/config/strictness-ratchet.test.ts",
 			"tests/config/hook-await-bounds.test.ts",
+			"tests/config/install-switch-seam-sweep.test.ts",
 			"tests/config/dmts-export-drift.test.ts",
 			"tests/config/vi-mock-export-sweep.test.ts",
 			"tests/config/vi-domock-undo.test.ts",

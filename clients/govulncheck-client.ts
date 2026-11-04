@@ -27,6 +27,10 @@ import {
 	firstOutputLine,
 	spawnFailedWithNoOutput,
 } from "./dispatch/runners/utils/spawn-outcome.js";
+import {
+	isToolInstallDisabledByEnv,
+	TOOL_INSTALL_DISABLED_REASON,
+} from "./env-utils.js";
 import { assertInstallAllowed } from "./project-trust.js";
 import {
 	isUntrustedProjectPath,
@@ -149,6 +153,12 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 			// expiring verdict and its retry schedule (#1501) — re-marking it
 			// here would double-escalate the cooldown. Retry later.
 			this.log("govulncheck probe timed out; retrying later (not installing)");
+			return false;
+		}
+		if (isToolInstallDisabledByEnv()) {
+			// The operator's switch, not tool absence (#5231): not latched, like the
+			// trust denial below, so unsetting the switch lets the next call install.
+			this.log(`govulncheck not found; ${TOOL_INSTALL_DISABLED_REASON}`);
 			return false;
 		}
 		if (!assertInstallAllowed("govulncheck go install")) {

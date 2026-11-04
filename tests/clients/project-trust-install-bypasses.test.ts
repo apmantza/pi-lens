@@ -5,6 +5,7 @@ import {
 	setProjectTrustState,
 	resetProjectTrust,
 } from "../../clients/project-trust.js";
+import { withEnv } from "../support/with-env.js";
 import { setupTestEnvironment } from "./test-utils.js";
 import {
 	getDegradationSummary,
@@ -29,12 +30,20 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawnAsync,
 }));
 
+// The harness sets the install switch for every test (vitest-setup.ts). This
+// file asserts the TRUST gate, whose "permits when trusted" arms need the install
+// allowed; the switch's own refusal is `install-kill-switch-5231.test.ts`.
+let restoreSwitch: () => void;
 beforeEach(() => {
+	restoreSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	resetDegradationLedger();
 	safeSpawnAsync.mockClear();
 	notifyUserDegradation.mockClear();
 });
-afterEach(() => resetProjectTrust());
+afterEach(() => {
+	restoreSwitch();
+	resetProjectTrust();
+});
 
 describe("central project-trust install gate (#1334 review)", () => {
 	it("gates formatter gem/rustup lazy installs and permits them when trusted", async () => {

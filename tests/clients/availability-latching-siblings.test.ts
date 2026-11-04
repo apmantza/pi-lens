@@ -14,6 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import {
 	HOST_STALL_COOLDOWN_MS,
 	INSTALL_TRANSIENT_BASE_COOLDOWN_MS,
@@ -115,7 +116,13 @@ function advancePastCooldown(): void {
 	vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
 }
 
+// The harness sets the install switch for every test (vitest-setup.ts). The
+// govulncheck cases here assert the `go install` path, so the install must be
+// allowed; the switch's own refusal is `install-kill-switch-5231.test.ts`.
+let restoreInstallSwitch: () => void;
+
 beforeEach(async () => {
+	restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	(await import("../../clients/project-trust.js")).setProjectTrustState(
 		"trusted",
 	);
@@ -127,6 +134,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	restoreInstallSwitch();
 	vi.useRealTimers();
 	await resetDispatchAvailabilityState();
 	(await import("../../clients/project-trust.js")).resetProjectTrust();

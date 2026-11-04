@@ -14,6 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 // Imported through the `.js` specifiers the CLIENTS use, deliberately: vitest
 // treats `foo.ts` and `foo.js` as two module instances here, so a test that
 // resets module-level state through the `.ts` specifier resets a copy nothing
@@ -99,6 +100,10 @@ function decisions(): Record<string, unknown>[] {
 		.filter((entry) => entry.phase === "availability_decision")
 		.map((entry) => entry.metadata as Record<string, unknown>);
 }
+
+// The harness sets the install switch for every test (vitest-setup.ts). The govulncheck ceiling cases need `go install` allowed.
+// The switch's own refusal is `install-kill-switch-5231.test.ts`.
+beforeEach(() => withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" }));
 
 beforeEach(async () => {
 	logLatencySpy.mockClear();

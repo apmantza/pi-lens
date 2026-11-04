@@ -64,6 +64,10 @@ import { writeFileAtomicAsync } from "../atomic-write.js";
 import { registerBackgroundWriteDrain } from "../background-write-drains.js";
 import { BoundedLruCache } from "../bounded-cache.js";
 import { findCommandOnPath } from "../command-path.js";
+import {
+	isToolInstallDisabledByEnv,
+	TOOL_INSTALL_DISABLED_REASON,
+} from "../env-utils.js";
 import { logExtension } from "../extension-log.js";
 import {
 	isFullyQualified,
@@ -4753,10 +4757,10 @@ export interface ManagedInstallGate {
 export async function acquireManagedInstallGate(
 	context: string,
 ): Promise<ManagedInstallGate> {
-	if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
+	if (isToolInstallDisabledByEnv()) {
 		return {
 			ok: false,
-			reason: "installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
+			reason: TOOL_INSTALL_DISABLED_REASON,
 		};
 	}
 	if (!assertInstallAllowed(context)) {
@@ -6514,16 +6518,9 @@ export async function installTool(
 	 */
 	ownsLock?: () => boolean,
 ): Promise<boolean> {
-	if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
-		installFailureReasons.set(
-			toolId,
-			"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
-		);
-		noteInstallAttempt(
-			toolId,
-			"declined",
-			"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
-		);
+	if (isToolInstallDisabledByEnv()) {
+		installFailureReasons.set(toolId, TOOL_INSTALL_DISABLED_REASON);
+		noteInstallAttempt(toolId, "declined", TOOL_INSTALL_DISABLED_REASON);
 		logSessionStart(
 			`auto-install ${toolId}: refused — PI_LENS_DISABLE_TOOL_INSTALL=1`,
 		);
@@ -6740,16 +6737,9 @@ async function ensureToolResolved(
 			);
 			return cacheResolvedPath(await getToolPath(toolId));
 		}
-		if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
-			installFailureReasons.set(
-				toolId,
-				"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
-			);
-			noteInstallAttempt(
-				toolId,
-				"declined",
-				"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
-			);
+		if (isToolInstallDisabledByEnv()) {
+			installFailureReasons.set(toolId, TOOL_INSTALL_DISABLED_REASON);
+			noteInstallAttempt(toolId, "declined", TOOL_INSTALL_DISABLED_REASON);
 			logSessionStart(
 				`auto-install ensure ${toolId}: refused — PI_LENS_DISABLE_TOOL_INSTALL=1`,
 			);
@@ -6896,16 +6886,9 @@ async function ensureToolResolved(
 			);
 			return undefined;
 		}
-		if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
-			installFailureReasons.set(
-				toolId,
-				"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
-			);
-			noteInstallAttempt(
-				toolId,
-				"declined",
-				"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
-			);
+		if (isToolInstallDisabledByEnv()) {
+			installFailureReasons.set(toolId, TOOL_INSTALL_DISABLED_REASON);
+			noteInstallAttempt(toolId, "declined", TOOL_INSTALL_DISABLED_REASON);
 			logSessionStart(
 				`auto-install ensure ${toolId}: refused — PI_LENS_DISABLE_TOOL_INSTALL=1 (${Date.now() - ensureStartMs}ms)`,
 			);

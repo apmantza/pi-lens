@@ -156,6 +156,10 @@ function enterSession(dir: string): void {
 	process.chdir(dir);
 }
 
+// The harness sets the install switch for every test (vitest-setup.ts). The govulncheck $GOBIN case needs the install path open.
+// The switch's own refusal is `install-kill-switch-5231.test.ts`.
+beforeEach(() => withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" }));
+
 beforeEach(() => {
 	originalCwd = process.cwd();
 	resetProjectTrust();

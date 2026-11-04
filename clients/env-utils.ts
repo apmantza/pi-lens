@@ -23,6 +23,31 @@ export function isTestMode(): boolean {
 }
 
 /**
+ * The install kill switches (#5231). Each switch has ONE reader, here, so an
+ * install path asks the same question in the same words: a path that read the
+ * variable itself, or never read it, was how the lazy installer and
+ * govulncheck kept installing tools with `PI_LENS_DISABLE_TOOL_INSTALL=1` set.
+ *
+ * - `PI_LENS_DISABLE_TOOL_INSTALL=1`: no managed tool (formatter, linter,
+ *   scanner) is installed. Discovery of one already on disk stays on.
+ * - `PI_LENS_DISABLE_LSP_INSTALL=1`: no language server is installed.
+ *
+ * Both read `process.env` per call, never memoized: a test or a host flips
+ * them mid-process, and a refusal must not outlive the switch.
+ */
+export function isToolInstallDisabledByEnv(): boolean {
+	return process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1";
+}
+
+/** The reason text a refused tool install records, shared by every refusal. */
+export const TOOL_INSTALL_DISABLED_REASON =
+	"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1";
+
+export function isLspInstallDisabledByEnv(): boolean {
+	return process.env.PI_LENS_DISABLE_LSP_INSTALL === "1";
+}
+
+/**
  * Coerce an arbitrary input to a non-negative finite number, or 0 otherwise.
  *
  * Use this to gate config / env values before they flow into `Math.max` /

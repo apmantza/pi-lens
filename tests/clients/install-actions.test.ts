@@ -13,6 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 
 const mockSafeSpawnAsync = vi.fn();
 
@@ -129,8 +130,17 @@ describe("LSP server install actions (#197)", () => {
 describe("formatter lazy-install actions (#197)", () => {
 	let cwdSeq = 0;
 	const freshCwd = () => `/proj/install-test-${Date.now()}-${cwdSeq++}`;
+	// The harness sets the install switch for every test (vitest-setup.ts); these
+	// cases assert what an ALLOWED lazy install spawns. The switch's own refusal
+	// is `install-kill-switch-5231.test.ts`.
+	let restoreSwitch: () => void;
+
+	beforeEach(() => {
+		restoreSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
+	});
 
 	afterEach(() => {
+		restoreSwitch();
 		vi.restoreAllMocks();
 	});
 

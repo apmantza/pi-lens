@@ -897,7 +897,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/disposition-logger.ts": 1,
 		"clients/extension-log.ts": 1,
 		"clients/go-client.ts": 4,
-		"clients/govulncheck-client.ts": 12,
+		"clients/govulncheck-client.ts": 13,
 		"clients/host-ports.ts": 2,
 		"clients/jscpd-client.ts": 7,
 		"clients/knip-client.ts": 14,

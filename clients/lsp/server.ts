@@ -33,6 +33,7 @@ import {
 	KIND_EXTENSIONS,
 	LEAN_ROOT_MARKERS,
 } from "../file-kinds.js";
+import { isLspInstallDisabledByEnv } from "../env-utils.js";
 import { extensionsForLanguage } from "../language-registry.js";
 import {
 	CARGO_WORKSPACE_MEMBER_DIALECT,
@@ -818,12 +819,8 @@ export interface LSPServerInfo {
 	autoInstall?: () => Promise<boolean>;
 }
 
-function isLspInstallDisabled(): boolean {
-	return process.env.PI_LENS_DISABLE_LSP_INSTALL === "1";
-}
-
 function canInstall(allowInstall?: boolean): boolean {
-	return allowInstall !== false && !isLspInstallDisabled();
+	return allowInstall !== false && !isLspInstallDisabledByEnv();
 }
 
 const DIRECT_LSP_NEGATIVE_TTL_MS = Math.max(
@@ -1207,7 +1204,7 @@ export async function resolveAndLaunch(
 
 	if (!canInstall(allowInstall)) {
 		logSessionStart(
-			`lsp launch install blocked tool=${toolLabel} cwd=${spec.cwd} allowInstall=${allowInstall !== false} globalDisabled=${isLspInstallDisabled()}`,
+			`lsp launch install blocked tool=${toolLabel} cwd=${spec.cwd} allowInstall=${allowInstall !== false} globalDisabled=${isLspInstallDisabledByEnv()}`,
 		);
 		logLatency({
 			type: "phase",
@@ -1217,7 +1214,7 @@ export async function resolveAndLaunch(
 			metadata: {
 				tool: toolLabel,
 				allowInstall,
-				globalInstallDisabled: isLspInstallDisabled(),
+				globalInstallDisabled: isLspInstallDisabledByEnv(),
 			},
 		});
 		// A trust refusal is not tool-not-found: keep surfacing it.

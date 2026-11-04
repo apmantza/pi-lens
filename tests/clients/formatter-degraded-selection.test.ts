@@ -24,6 +24,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
 
 const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
@@ -127,6 +128,10 @@ const names = async (cwd: string, filePath: string): Promise<string[]> =>
 
 // Every probe is mocked, so nothing but this file owns these roots.
 useTrackedTempDirs("pi-lens-degraded-");
+
+// The harness sets the install switch for every test (vitest-setup.ts). The stalled-install case needs the lazy install allowed.
+// The switch's own refusal is `install-kill-switch-5231.test.ts`.
+beforeEach(() => withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" }));
 
 beforeEach(() => {
 	safeSpawnAsync.mockReset();

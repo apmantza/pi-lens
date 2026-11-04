@@ -29,6 +29,7 @@
  * re-evaluated per call and a later grant must retry (#1350).
  */
 
+import { isToolInstallDisabledByEnv } from "../../../env-utils.js";
 import { safeSpawnAsync } from "../../../safe-spawn.js";
 import { assertInstallAllowed } from "../../../project-trust.js";
 import { logExtension } from "../../../extension-log.js";
@@ -188,6 +189,10 @@ async function runLazyInstall(
 	cwd: string,
 	spec: LazyInstallSpec,
 ): Promise<boolean> {
+	// Both entry points reach here, so the operator's switch is read once (#5231).
+	// Not recorded in `attempts`: a refusal is policy, re-evaluated per call like
+	// a trust denial, so unsetting the switch lets the next call install.
+	if (isToolInstallDisabledByEnv()) return false;
 	const k = key(cwd, tool);
 	const running = inFlight.get(k);
 	// Joining, not re-answering: both callers get the outcome of the install they

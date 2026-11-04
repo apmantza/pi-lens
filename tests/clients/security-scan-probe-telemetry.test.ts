@@ -13,6 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
 
 const {
@@ -147,6 +148,10 @@ const BASELINE_KEYS = [
 function advancePastCooldown(): void {
 	vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
 }
+
+// The harness sets the install switch for every test (vitest-setup.ts). The govulncheck probe-telemetry cases need the install path open.
+// The switch's own refusal is `install-kill-switch-5231.test.ts`.
+beforeEach(() => withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" }));
 
 beforeEach(async () => {
 	(await import("../../clients/project-trust.js")).setProjectTrustState(

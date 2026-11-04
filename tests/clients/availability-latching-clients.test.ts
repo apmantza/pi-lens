@@ -10,12 +10,21 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	onTestFinished,
+	vi,
+} from "vitest";
 import {
 	INSTALL_TRANSIENT_BASE_COOLDOWN_MS,
 	TRANSIENT_BASE_COOLDOWN_MS,
 } from "../../clients/dispatch/runners/utils/availability-policy.js";
 import { resetDispatchAvailabilityState } from "../../clients/dispatch/runners/utils/runner-helpers.js";
+import { withEnv } from "../support/with-env.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 vi.mock("../../clients/safe-spawn.js", () => ({
@@ -222,6 +231,10 @@ describe("govulncheck availability (#1467)", () => {
 	});
 
 	it("stops re-running a repeatedly timing-out `go install` after the ceiling (#1497)", async () => {
+		// The harness sets the install switch for every test; this case needs the
+		// install to be allowed (the switch's refusal is install-kill-switch-5231).
+		const restoreSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
+		onTestFinished(restoreSwitch);
 		const spawn = await spawnMock();
 		// govulncheck missing on PATH; the Go toolchain answers; every
 		// `go install` eats its 60s budget without producing the binary.
