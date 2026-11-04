@@ -206,15 +206,21 @@ function registerEdit(
 	);
 }
 
-/** What the agent actually reads at this turn end — "" when it says nothing. */
+/**
+ * What a request inside one prompt reads at this turn end — "" when it says
+ * nothing. #5240: an unchanged set stays staged as a repeat for the next
+ * prompt's first request, so "not handed again" is read mid-prompt.
+ */
 function turnEndText(
 	cacheManager: CacheManager,
 	cwd: string,
 	runtime: RuntimeCoordinator,
 ): string {
 	return (
-		consumeTurnEndFindings(cacheManager, cwd, runtime)?.messages?.[0]
-			?.content ?? ""
+		consumeTurnEndFindings(cacheManager, cwd, runtime, undefined, undefined, {
+			atPromptTail: false,
+			blockersLive: true,
+		})?.messages?.[0]?.content ?? ""
 	);
 }
 

@@ -1180,6 +1180,21 @@ function suppressedByDispositionNote(suppressed: number): string {
 		: "";
 }
 
+/**
+ * The signature record of the last turn-end delivery (#4921). One reader for
+ * the dedupe and for the #5240 read-only fall-through: both ask the same
+ * record, so the synchronous-read count of this file does not move.
+ */
+function readLastDelivery(
+	cacheManager: CacheManager,
+	cwd: string,
+): { signature: string; sessionId: string } | undefined {
+	return cacheManager.readCache<{ signature: string; sessionId: string }>(
+		"turn-end-findings-last",
+		cwd,
+	)?.data;
+}
+
 export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const {
 		ctxCwd,
@@ -1402,12 +1417,17 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// #3218 criterion 2: a retirement nobody has reported (a
 		// `lens_diagnostics` confirmation lands on exactly this turn) falls
 		// through to the composer like a carried runner finding.
-		// #5240: so does a read-only turn while this session holds a blocker, or
-		// the repeat would reach the next prompt only after a turn that wrote.
+		// #5240: so does a read-only turn while this session holds a blocker the
+		// agent was already told about (this session's `turn-end-findings-last`
+		// record), or the repeat would reach the next prompt only after a turn
+		// that wrote. A held blocker nothing delivered yet keeps the early
+		// return: the cost pin of #4698 (a quiet turn pays no policy pass).
 		if (
 			pendingRunnerFindingsSize() === 0 &&
 			!runtime.hasResolvedBlockerFiles() &&
-			runtime.getInlineBlockersSnapshot({ sessionId }).length === 0
+			(runtime.getInlineBlockersSnapshot({ sessionId }).length === 0 ||
+				readLastDelivery(cacheManager, cwd)?.sessionId !==
+					(sessionId ?? runtime.telemetrySessionId))
 		)
 			return;
 		blockerOnlyFallthrough =
@@ -6487,13 +6507,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					.join("|")
 			: "";
 		const signature = `${countDrivenFileSet}::${content}`;
-		const last = cacheManager.readCache<{
-			signature: string;
-			sessionId: string;
-		}>("turn-end-findings-last", cwd);
+		const last = readLastDelivery(cacheManager, cwd);
 		const duplicate =
-			last?.data?.signature === signature &&
-			last?.data?.sessionId === deliverySessionId &&
+			last?.signature === signature &&
+			last?.sessionId === deliverySessionId &&
 			// #3813: a retirement is an event, not a persisting finding. The
 			// coordinator already consumed these entries, so an identical
 			// second retirement on consecutive turns (same file, count and
@@ -6509,8 +6526,17 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// survivors, so a resolved blocker has no part and stops repeating. The
 		// MCP host passes `deliveryAddress` and its Stop hook would loop on an
 		// identical repeat, so it keeps the plain suppression.
+		// A first delivery still waiting in the slot (no request took it yet) is
+		// never overwritten by a repeat of itself: the duplicate stays a plain
+		// suppression and the waiting record reaches the agent.
+		const waiting = duplicate
+			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
+			: undefined;
 		const repeatContent =
-			duplicate && blockerParts.length > 0 && deps.deliveryAddress === undefined
+			duplicate &&
+			blockerParts.length > 0 &&
+			deps.deliveryAddress === undefined &&
+			!(waiting && waiting.consumed !== true && waiting.repeat !== true)
 				? blockerRepeatContent(capTurnEndMessage(blockerParts.join("\n\n")))
 				: undefined;
 		// A turn that fell through only for a blocker may repeat it, never deliver
