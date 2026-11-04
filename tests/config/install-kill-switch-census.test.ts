@@ -1,71 +1,83 @@
 /**
- * #5231: every install path is pinned to the shared kill-switch check.
+ * #5231: every spawn site is pinned to the install kill switch, or classified.
  *
  * ## The recurrence this guards
  *
  * `PI_LENS_DISABLE_TOOL_INSTALL=1` was read by the managed installer only. The
  * lazy installer (`gem install rubocop`, `rustup component add`) and
- * govulncheck's `go install` checked project trust and spawned anyway
- * (alignment probe 2026-11-03: `execve("/opt/ruby-3.3.6/bin/gem", ["gem",
- * "install", "rubocop", ...])` with the switch set). The `#1759 F2` comment in
- * `clients/installer/index.ts` records the same shape one layer up: a kill
- * switch skipped by another install path. Guarding callers one at a time
- * cannot converge, so this census enumerates the population.
+ * govulncheck's `go install` checked project trust and spawned anyway, and
+ * Biome's presence probe ran `npx @biomejs/biome --version` with no spawn
+ * options, so the registry saw a download with the switch set. The `#1759 F2`
+ * comment in `clients/installer/index.ts` records the same shape one layer up:
+ * a kill switch skipped by another install path. Guarding callers one at a
+ * time cannot converge.
+ *
+ * The first version of this census enumerated installer SPELLINGS (`install`,
+ * `rustup`, shell lines). Review found the next spelling twice running (`npm
+ * i`, `go get`, a parenthesised concatenation, a `\x69` template, `inst${""}all`,
+ * `String.fromCharCode`), the "second round finds a new spelling" trigger of
+ * defect shape 34/69, so it was redesigned instead of patched.
+ *
+ * ## Fail closed: the population is every spawn, not every installer word
+ *
+ * A start is a call into the spawn seam (`safeSpawn`, `safeSpawnAsync`,
+ * `safeSpawnBatch`, `probeToolAsync`, `spawnCollectStdoutResult`) or into a
+ * FORWARDER of it. `tests/config/spawn-chokepoint-sweep.test.ts` already
+ * proves the other half: every raw `node:child_process` start in the runtime
+ * is one of its admitted sites (the chokepoint's own children and fixed
+ * `taskkill`/process-table literals), so the seam's callers ARE the population.
  *
  * ## STATE TABLE (written before the detector)
  *
- * Population: every string literal in `clients/`, `tools/`, `mcp/` and
- * `index.ts` (comments are not code; strings are kept, because the evidence IS
- * a string) whose COOKED value is install vocabulary, read off the parse tree:
+ * | form of a seam call                                    | read as            |
+ * | ------------------------------------------------------ | ------------------ |
+ * | command literal in KNOWN_GOOD, argv literal admitted   | clean (no hit)     |
+ * | command literal not in KNOWN_GOOD (`npm`, `gem`, ...)  | HIT                |
+ * | command in KNOWN_GOOD, argv first element not in its   | HIT                |
+ * |   admitted set (`go get`, `go install`)                |                    |
+ * | command computed (variable, call, member, `${}`        | HIT                |
+ * |   template, `String.fromCharCode`, `process.env`)      |                    |
+ * | argv not an array literal, or first element computed   | HIT (known-good    |
+ * |   or spread                                            | command only)      |
+ * | concatenated, parenthesised or escaped literal         | folded, then read  |
+ * |                                                        | as a literal       |
+ * | a seam name read any other way (alias, `const sp =`,   | HIT (reference)    |
+ * |   passed as a value, `.call`, object key, string name)|                    |
+ * | a function whose parameter reaches a seam's command    | a FORWARDER: its   |
+ * |   (found by fixpoint, by name)                         | callers are sites  |
+ * | everything else                                        | HIT: not admitted  |
  *
- * | literal form                                   | read as                  |
- * | ---------------------------------------------- | ------------------------ |
- * | `"gem"` `'install'` `` `install` ``            | cooked value             |
- * | `"inst\x61ll"` `"install"`                | cooked value (a hit)     |
- * | `"inst" + "all"`, `("a" + "b")` chains         | folded, then cooked      |
- * | `"pip install x"`, `` `npm install ${x}` ``    | shell line (a hit)       |
- * | an escape this reader cannot decode            | counts as a hit          |
- * | a name reached through an alias or a binding   | the literal still sits   |
- * |                                                | in the file: a hit       |
- * | the same words in a comment                    | not code: no hit         |
+ * A call of a forwarder is judged only when its command is a literal; a
+ * computed one inherits the forwarder's own (registered) site.
  *
- * Every hit must be ACCOUNTED: registered as gated, or exempt with a reason.
- * An unaccounted hit is a finding, so a new `gem`/`go install`/`rustup`/`npm
- * install`/`pip install` spawn anywhere in the shipped runtime reds this file
- * until its author classifies it. A registered row whose literal is gone is
- * stale and reds too.
+ * Every hit is ACCOUNTED: its `file#callee` row pins the exact number of hits
+ * (`rel#callee@N`), so a new site, a removed site and a stale row each red. A
+ * row is GATED (the file's entry functions are verified to consult the shared
+ * check before their first spawn token, on comment-and-string-blanked text) or
+ * carries a reason.
  *
- * "Gated" is verified, not claimed. A gated file must carry its named ENTRY
- * functions, and each entry must call the shared check (`isToolInstallDisabled`
- * or `acquireManagedInstallGate`) BEFORE its first spawn-shaped token, on
- * comment-and-string-blanked text, so a consult that exists only in a comment
- * or after the spawn does not count.
+ * ## Stated bounds
  *
- * ## Stated bounds (not silent)
- *
- * - The vocabulary is a bound: it names the installer programs and verbs the
- *   tree uses (`gem`, `rustup`, `pipx`, `npx`, ..., `install`, `update`,
- *   `upgrade`, `add`, `ci`, `component`). An installer spelled outside it
- *   (`npm i`, `go get`) is outside the census. `i` and `get` are not literal
- *   tokens here because `"i"` is a regex flag and `"get"` a config verb all
- *   over the tree (measured 4 and 2 non-install hits).
- * - A command assembled at run time from non-literal parts (read from config
- *   or the environment) holds no literal to read. The tree builds every
- *   installer argv from literals today; the census does not claim more.
- * - `scripts/` (build and smoke tooling) is not shipped runtime and is not
- *   scanned. LSP server installs follow `PI_LENS_DISABLE_LSP_INSTALL`, a
- *   different switch, and are exempt here with that reason.
- * - The npx package-runner fallbacks (`formatters.ts`, `dependency-checker.ts`,
- *   `jscpd-client.ts`, ...) can download a package and do NOT consult the
- *   tool switch today. They are registered below as `KNOWN UNGATED`, a
- *   baseline that shrinks on purpose; the PR body names the follow-up.
+ * - Names are matched by NAME, not by binding resolution. A same-named
+ *   unrelated function can add a hit (over-closed); it cannot hide one.
+ * - A computed command at a registered site is admitted once for every value
+ *   that can reach it. The census proves a new site cannot appear unclassified,
+ *   not that every value reaching an old site is benign; the value-level
+ *   guarantee for package runners is the seam itself (`getSpawnEnvironment`
+ *   sets `npm_config_offline` for `npx` under the switch), pinned below.
+ * - A file is parsed when it spells a seam name, a seam module
+ *   (`safe-spawn`, `tool-probe`, `child-unref`) or any escape. A specifier built
+ *   at run time (`import(name)`) is not a literal and no reader of source sees
+ *   it. A forwarder is followed only as a bare `name(` call and not through an
+ *   escaped spelling.
+ * - `scripts/` (build and smoke tooling) is not shipped runtime.
  */
 
 import * as path from "node:path";
 import type { SgNode } from "@ast-grep/napi";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseNodes } from "../support/ast-census.js";
-import { cookedString } from "../support/cooked-literal.js";
+import { cookedIdentifier, cookedString } from "../support/cooked-literal.js";
 import {
 	assertNonEmptyScan,
 	auditRegistry,
@@ -78,146 +90,63 @@ import {
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const RUNTIME_ROOTS = ["clients", "tools", "mcp"] as const;
 
-/** Installer programs and verbs: a literal that spells one is a hit. */
-const VOCABULARY: ReadonlySet<string> = new Set([
-	"add",
-	"apt",
-	"apt-get",
-	"asdf",
-	"brew",
-	"bunx",
-	"choco",
-	"ci",
-	"component",
-	"dlx",
-	"install",
-	"mise",
-	"npx",
-	"pipx",
-	"pnpx",
-	"rustup",
-	"scoop",
-	"update",
-	"upgrade",
-	"uvx",
-	"winget",
-]);
+/** The spawn seam: every runtime start that is not a chokepoint-internal child. */
+const SEAMS: readonly string[] = [
+	"probeToolAsync",
+	"safeSpawn",
+	"safeSpawnAsync",
+	"safeSpawnBatch",
+	"spawnCollectStdoutResult",
+];
 
-/** Programs that, followed by an install verb inside ONE string, are a shell line. */
-const SHELL_PROGRAMS: ReadonlySet<string> = new Set([
-	"apt",
-	"apt-get",
-	"brew",
-	"bun",
-	"cargo",
-	"choco",
-	"dotnet",
-	"gem",
-	"go",
-	"npm",
-	"pip",
-	"pip3",
-	"pipx",
-	"pnpm",
-	"rustup",
-	"scoop",
-	"uv",
-	"winget",
-	"yarn",
-]);
-const SHELL_VERBS: ReadonlySet<string> = new Set([
-	"add",
-	"ci",
-	"get",
-	"i",
-	"install",
-	"update",
-	"upgrade",
-]);
+/**
+ * The modules that export the seams. A file reaches a seam only by importing
+ * its module, so one that spells the module is parsed even when it never
+ * spells a seam name whole (`ns["safe" + "SpawnAsync"]`).
+ */
+const SEAM_MODULES: readonly string[] = [
+	"child-unref",
+	"safe-spawn",
+	"tool-probe",
+];
+
+/**
+ * Commands whose literal use cannot install anything, with the argv first
+ * elements admitted (`"*"`: any). A command not named here is a hit, so the
+ * list holds known-good forms only and a new spelling can never pass.
+ */
+const KNOWN_GOOD: Readonly<Record<string, "*" | readonly string[]>> = {
+	brew: ["--prefix"],
+	cargo: ["--version", "clippy"],
+	cl: [],
+	dart: ["--version", "fix"],
+	dotnet: ["csharpier"],
+	gh: ["auth"],
+	git: "*",
+	go: ["env", "version", "vet"],
+	govulncheck: ["-version"],
+	mix: ["credo"],
+	"powershell.exe": ["-NoProfile"],
+	vp: ["--version"],
+};
 
 const SHARED_CHECK =
 	/\b(?:isToolInstallDisabled|acquireManagedInstallGate)\s*\(/g;
 
-interface Hit {
-	/** 1-based line. */
-	line: number;
-	/** The cooked word or shell line that matched. */
-	word: string;
-	/** The enclosing `Class.method` / function / const, or `<module>`. */
-	symbol: string;
-}
-
-const FUNCTION_NODES = new Set([
-	"function_declaration",
-	"generator_function_declaration",
-	"method_definition",
-]);
-const FUNCTION_VALUES = new Set(["arrow_function", "function_expression"]);
-
-/**
- * The enclosing declaration chain of a node, read off the parse tree:
- * `GovulncheckClient.doEnsureAvailable`, `installTool`, `LAZY_INSTALL_SPECS`.
- * A text heuristic only sees column-zero declarations, so every method of a
- * class would share the class name and a new method would inherit its row.
- */
-function symbolOf(node: SgNode): string {
-	const names: string[] = [];
-	let constName: string | undefined;
-	for (let at = node.parent(); at; at = at.parent()) {
-		const kind = String(at.kind());
-		const name = at.field("name")?.text();
-		if (!name) continue;
-		if (FUNCTION_NODES.has(kind) || kind === "class_declaration")
-			names.unshift(name);
-		else if (kind === "variable_declarator") {
-			const value = at.field("value");
-			if (value && FUNCTION_VALUES.has(String(value.kind())))
-				names.unshift(name);
-			else constName = name;
-		}
-	}
-	if (names.length > 0) return names.join(".");
-	return constName ?? "<module>";
-}
-
-const COMPARISONS = new Set(["===", "!==", "==", "!="]);
-const MEMBERSHIP_CALLS = /\.(?:includes|has|startsWith|endsWith|indexOf)$/;
-
-/**
- * Contexts that can never start a process: a comparison operand, a `case`
- * label, the argument of a membership test, a string-literal TYPE. A literal
- * anywhere else (an array element, a property value, a variable, an argument)
- * is not proven benign and counts.
- */
-function isBenignContext(node: SgNode): boolean {
-	const parent = node.parent();
-	if (!parent) return false;
-	const kind = String(parent.kind());
-	if (kind === "literal_type" || kind === "switch_case") return true;
-	if (kind === "binary_expression")
-		return COMPARISONS.has(parent.field("operator")?.text() ?? "");
-	if (kind === "arguments") {
-		const callee = parent.parent()?.field("function")?.text() ?? "";
-		return MEMBERSHIP_CALLS.test(callee);
-	}
-	return false;
-}
-
-/**
- * A node's identity within one parse: its byte range and kind (a parent and
- * its only child can share a range, never a kind).
- */
+/** A node's identity within one parse (byte range and kind). */
 function nodeId(node: SgNode): string {
 	const { start, end } = node.range();
 	return `${start.index}:${end.index}:${String(node.kind())}`;
 }
 
-/** Direct children by parent link, so no traversal accessor is spelled here. */
 type Kids = (node: SgNode) => SgNode[];
 
-/** A string or template with no substitution, cooked; else `undefined`. */
+const kindOf = (node: SgNode | null | undefined): string =>
+	String(node?.kind());
+
+/** A string or template with no substitution, folded across `+` and parens. */
 function literalValue(node: SgNode, kids: Kids): string | undefined {
-	const kind = String(node.kind());
+	const kind = kindOf(node);
 	if (kind === "string") return cookedString(node.text());
 	if (kind === "template_string") {
 		return node.text().includes("${") ? undefined : cookedString(node.text());
@@ -238,103 +167,305 @@ function literalValue(node: SgNode, kids: Kids): string | undefined {
 	return undefined;
 }
 
-function isFoldedInto(node: SgNode, kids: Kids): boolean {
-	let parent = node.parent();
-	while (parent) {
-		const kind = String(parent.kind());
-		if (kind === "parenthesized_expression") {
-			parent = parent.parent();
-			continue;
-		}
-		return (
-			kind === "binary_expression" && literalValue(parent, kids) !== undefined
-		);
-	}
-	return false;
+const IDENT_KINDS = new Set([
+	"identifier",
+	"property_identifier",
+	"shorthand_property_identifier",
+	"shorthand_property_identifier_pattern",
+]);
+const FUNCTION_LIKE = new Set([
+	"function_declaration",
+	"generator_function_declaration",
+	"method_definition",
+	"arrow_function",
+	"function_expression",
+	"generator_function",
+]);
+const DECLARATION_NAMES = new Set([
+	"function_declaration",
+	"generator_function_declaration",
+	"method_definition",
+	"class_declaration",
+	"variable_declarator",
+	"abstract_method_signature",
+	"method_signature",
+	"public_field_definition",
+]);
+
+/** A seam call that is not clean, or a way of reading a seam name that is not a call. */
+interface Hit {
+	line: number;
+	callee: string;
+	why: string;
 }
 
-function wordsOf(value: string): string[] {
-	const hits: string[] = [];
-	if (VOCABULARY.has(value.trim())) hits.push(value.trim());
-	const tokens = value.trim().split(/\s+/);
-	const verb = tokens.slice(1).find((token) => SHELL_VERBS.has(token));
-	if (tokens.length > 1 && SHELL_PROGRAMS.has(tokens[0] as string) && verb)
-		hits.push(`${tokens[0]} ${verb}`);
-	return hits;
+interface Forward {
+	/** The enclosing function whose parameter reaches a seam's command. */
+	fn: string;
+	/** That parameter's position, which is where its callers pass a command. */
+	index: number;
+}
+
+interface FileScan {
+	hits: Hit[];
+	forwards: Forward[];
+}
+
+/** The reason one command/argv pair is not known-good, or `undefined` if it is. */
+function whyNotKnownGood(
+	command: SgNode | undefined,
+	argv: SgNode | undefined,
+	kids: Kids,
+	inheritComputed: boolean,
+): string | undefined {
+	const value = command ? literalValue(command, kids) : undefined;
+	if (value === undefined)
+		return inheritComputed ? undefined : "a computed command";
+	if (!Object.hasOwn(KNOWN_GOOD, value)) return `command ${value}`;
+	const admitted = KNOWN_GOOD[value] as "*" | readonly string[];
+	if (admitted === "*") return undefined;
+	if (!argv || kindOf(argv) !== "array") return `${value} with a computed argv`;
+	const elements = kids(argv).filter(
+		(child) => child.isNamed() && kindOf(child) !== "comment",
+	);
+	const first = elements[0];
+	if (!first) return undefined;
+	const word = literalValue(first, kids);
+	if (word === undefined) return `${value} with a computed first argument`;
+	return admitted.includes(word) ? undefined : `${value} ${word}`;
 }
 
 /**
- * Cheap narrowing, never the decision: a file with no quoted word that starts
- * a vocabulary token or a shell line, no literal concatenation and no escaped
- * literal cannot hold a hit, and skipping its parse keeps native trees off the
- * census's memory budget.
+ * Seam calls, seam references and forwarders in one source. `names` maps each
+ * seam or forwarder name to the position of its command parameter.
  */
-const QUOTED_WORD = new RegExp(
-	`["'\`]\\s*(?:${[...new Set([...VOCABULARY, ...SHELL_PROGRAMS])].join("|")})(?![\\w-])`,
-);
-function mayHoldVocabulary(source: string): boolean {
-	const code = stripSource(source, { strings: "keep" });
-	return (
-		QUOTED_WORD.test(code) ||
-		/["'`]\s*\+\s*["'`]/.test(code) ||
-		/["'`][^"'`\n]*\\[xu0-9]/.test(code)
-	);
-}
-
-/** Install-vocabulary literals in one source, by cooked value. */
-function scanHits(source: string): Hit[] {
-	if (!mayHoldVocabulary(source)) return [];
-	const hits = new Map<string, Hit>();
+function scanFile(
+	source: string,
+	names: ReadonlyMap<string, number>,
+): FileScan {
 	const nodes = parseNodes(source.replace(/\r\n/g, "\n"));
 	const kidsOf = new Map<string, SgNode[]>();
 	for (const node of nodes) {
 		const parent = node.parent();
 		if (!parent) continue;
 		const id = nodeId(parent);
-		kidsOf.set(id, [...(kidsOf.get(id) ?? []), node]);
+		const siblings = kidsOf.get(id) ?? [];
+		siblings.push(node);
+		kidsOf.set(id, siblings);
 	}
 	const kids: Kids = (node) => kidsOf.get(nodeId(node)) ?? [];
-	for (const node of nodes) {
-		const kind = String(node.kind());
-		// `string` is also the anonymous type keyword; only a quoted node is a literal.
-		if (
-			(kind !== "string" &&
-				kind !== "template_string" &&
-				kind !== "binary_expression") ||
-			(kind !== "binary_expression" && !/^["'`]/.test(node.text()))
-		)
-			continue;
-		if (isFoldedInto(node, kids) || isBenignContext(node)) continue;
-		const line = node.range().start.line + 1;
-		const record = (at: SgNode, word: string): void => {
-			const symbol = symbolOf(at);
-			const key = `${symbol}:${word}`;
-			if (!hits.has(key)) hits.set(key, { line, word, symbol });
-		};
-		const value = literalValue(node, kids);
-		if (value === undefined) {
-			if (kind === "template_string") {
-				// A template with a substitution: read it as a shell line with each
-				// `${...}` as one opaque word, so `npm install ${pkg}` counts and a
-				// prose message that merely says "install" does not.
-				const words = wordsOf(
-					node
-						.text()
-						.slice(1, -1)
-						.replace(/\$\{[^}]*\}/g, "\0"),
-				);
-				if (words.length > 0) record(node, words[0] as string);
-			} else if (kind === "string") {
-				// A string this reader cannot decode (a legacy octal escape): it
-				// may spell anything, so it counts (fail closed).
-				record(node, "undecodable");
-			}
-			continue;
+	const named = (node: SgNode): SgNode[] =>
+		kids(node).filter(
+			(child) => child.isNamed() && kindOf(child) !== "comment",
+		);
+	const lineOf = (node: SgNode): number => node.range().start.line + 1;
+	const cooked = (node: SgNode): string => cookedIdentifier(node.text());
+
+	const hits: Hit[] = [];
+	const forwards: Forward[] = [];
+	const calleeIds = new Set<string>();
+
+	/** The name node a call spells: `f(...)` or `ns.f(...)`. */
+	const calleeName = (call: SgNode): SgNode | undefined => {
+		const fn = call.field("function");
+		if (!fn) return undefined;
+		if (IDENT_KINDS.has(kindOf(fn))) return fn;
+		if (kindOf(fn) === "member_expression") {
+			const property = fn.field("property");
+			return property && IDENT_KINDS.has(kindOf(property))
+				? property
+				: undefined;
 		}
-		const words = wordsOf(value);
-		if (words.length > 0) record(node, words[0] as string);
+		return undefined;
+	};
+
+	const enclosingFunction = (node: SgNode): SgNode | undefined => {
+		for (let at = node.parent(); at; at = at.parent())
+			if (FUNCTION_LIKE.has(kindOf(at))) return at;
+		return undefined;
+	};
+
+	const functionName = (fn: SgNode): string | undefined => {
+		const own = fn.field("name");
+		if (own) return cooked(own);
+		const parent = fn.parent();
+		const label =
+			parent?.field("name") ??
+			(kindOf(parent) === "pair" ? parent?.field("key") : null);
+		return label ? cooked(label) : undefined;
+	};
+
+	/** The position of the parameter that binds `root`, or -1. */
+	const parameterIndex = (fn: SgNode, root: string): number => {
+		const binds = (top: SgNode): boolean => {
+			const seen = new Set<string>();
+			const pending = [top];
+			for (let at = pending.pop(); at; at = pending.pop()) {
+				if (seen.has(nodeId(at))) continue;
+				seen.add(nodeId(at));
+				if (IDENT_KINDS.has(kindOf(at)) && cooked(at) === root) return true;
+				pending.push(...kids(at));
+			}
+			return false;
+		};
+		const single = fn.field("parameter");
+		if (single) return binds(single) ? 0 : -1;
+		const list = fn.field("parameters");
+		return list ? named(list).findIndex(binds) : -1;
+	};
+
+	for (const node of nodes) {
+		if (kindOf(node) !== "call_expression") continue;
+		const nameNode = calleeName(node);
+		if (!nameNode) continue;
+		const name = cooked(nameNode);
+		const index = names.get(name);
+		if (index === undefined) continue;
+		// A forwarder is followed only as a plain `name(...)` call: a method or
+		// property of the same name (`flight.run(...)`) is a different function.
+		if (!SEAMS.includes(name) && kindOf(nameNode) !== "identifier") continue;
+		calleeIds.add(nodeId(nameNode));
+		const args = named(node.field("arguments") as SgNode);
+		const why = whyNotKnownGood(
+			args[index],
+			args[index + 1],
+			kids,
+			!SEAMS.includes(name),
+		);
+		if (why !== undefined) hits.push({ line: lineOf(node), callee: name, why });
+		// A parameter reaching the command makes the enclosing function a
+		// forwarder: its callers' literal commands are judged too.
+		const root =
+			args[index] && kindOf(args[index]) === "identifier"
+				? cooked(args[index] as SgNode)
+				: undefined;
+		const fn = root ? enclosingFunction(node) : undefined;
+		const fnName = fn ? functionName(fn) : undefined;
+		if (fn && fnName && root) {
+			const at = parameterIndex(fn, root);
+			if (at >= 0) forwards.push({ fn: fnName, index: at });
+		}
 	}
-	return [...hits.values()].sort((a, b) => a.line - b.line);
+
+	for (const node of nodes) {
+		const kind = kindOf(node);
+		if (IDENT_KINDS.has(kind)) {
+			const name = cooked(node);
+			if (!SEAMS.includes(name) || calleeIds.has(nodeId(node))) continue;
+			const parent = node.parent();
+			const parentKind = kindOf(parent);
+			if (
+				parentKind === "import_specifier" ||
+				parentKind === "export_specifier"
+			) {
+				// `{ safeSpawnAsync }` only; `{ safeSpawnAsync as run }` hides the name.
+				if (
+					parent?.field("alias") &&
+					parent.field("name")?.text() === node.text()
+				)
+					hits.push({
+						line: lineOf(node),
+						callee: name,
+						why: "an aliased import",
+					});
+				continue;
+			}
+			// `typeof safeSpawnAsync` in a type starts nothing and is erased.
+			if (parentKind === "type_query") continue;
+			if (
+				DECLARATION_NAMES.has(parentKind) &&
+				parent?.field("name")?.text() === node.text()
+			)
+				continue;
+			hits.push({ line: lineOf(node), callee: name, why: "read as a value" });
+		} else if (
+			kind === "binary_expression" ||
+			((kind === "string" || kind === "template_string") &&
+				/^["'`]/.test(node.text()))
+		) {
+			const value = literalValue(node, kids);
+			if (value !== undefined && SEAMS.includes(value))
+				hits.push({
+					line: lineOf(node),
+					callee: value,
+					why: "named by a string",
+				});
+		}
+	}
+	return { hits, forwards };
+}
+
+/**
+ * Whether `source` may hold one of `names`. The first pass looks for the seam
+ * names, as plain text and through any escape (an escape can spell a seam name
+ * the plain text does not hold). Later passes look for the forwarders found so
+ * far, which are followed only as bare `name(` calls (stated bound), so the
+ * narrowing is exactly that shape.
+ */
+function mayMention(
+	source: string,
+	names: ReadonlySet<string>,
+	first: boolean,
+): boolean {
+	if (first)
+		return (
+			/\\[ux]/.test(source) ||
+			[...names, ...SEAM_MODULES].some((name) => source.includes(name))
+		);
+	return new RegExp(`(?<![\\w$.])(?:${[...names].join("|")})\\s*\\(`).test(
+		source,
+	);
+}
+
+interface Census {
+	/** `rel#callee` → the hits it holds. */
+	hits: Map<string, Hit[]>;
+	names: ReadonlyMap<string, number>;
+	scanned: number;
+}
+
+/** Yield to the event loop between files so native trees are released (shape 81). */
+const yieldTurn = (): Promise<void> =>
+	new Promise((resolve) => setImmediate(resolve));
+
+/**
+ * Scan `sources` to a fixpoint: a function whose parameter reaches a seam's
+ * command joins the seam names, and files that mention it are rescanned.
+ */
+async function census(
+	sources: ReadonlyArray<{ rel: string; source: string }>,
+): Promise<Census> {
+	const names = new Map<string, number>(SEAMS.map((name) => [name, 0]));
+	const scans = new Map<string, FileScan>();
+	let fresh = new Set<string>(SEAMS);
+	let scanned = 0;
+	let pass = 0;
+	while (fresh.size > 0) {
+		const added = new Set<string>();
+		for (const { rel, source } of sources) {
+			if (!mayMention(source, fresh, pass === 0)) continue;
+			const scan = scanFile(source, names);
+			scans.set(rel, scan);
+			scanned += 1;
+			for (const forward of scan.forwards)
+				if (!names.has(forward.fn)) {
+					names.set(forward.fn, forward.index);
+					added.add(forward.fn);
+				}
+			await yieldTurn();
+		}
+		fresh = added;
+		pass += 1;
+	}
+	const hits = new Map<string, Hit[]>();
+	for (const [rel, scan] of scans)
+		for (const hit of scan.hits) {
+			const key = `${rel}#${hit.callee}`;
+			const held = hits.get(key) ?? [];
+			held.push(hit);
+			hits.set(key, held);
+		}
+	return { hits, names, scanned };
 }
 
 /**
@@ -436,151 +567,212 @@ function entryProblems(
 		}
 		for (const token of entry.before) {
 			const at = body.indexOf(token);
-			if (at >= 0 && at < (consults[0] as number)) {
+			// A token the entry no longer holds is a stale row, not a pass: the
+			// order it pinned is no longer being checked (M2).
+			if (at < 0)
+				problems.push(
+					`${file}: ${entry.symbol} no longer holds the token ${token}; the order it pinned is unchecked`,
+				);
+			else if (at < (consults[0] as number))
 				problems.push(
 					`${file}: ${entry.symbol} reaches ${token} before its first consult`,
 				);
-			}
 		}
 	}
 	return problems;
 }
 
+type Row = { sites: number } & ({ gated: true } | { reason: string });
+
 /** Everything this census judges, for one set of sources. */
-function judge(
+async function judge(
 	sources: ReadonlyArray<{ rel: string; source: string }>,
-	rows: Readonly<Record<string, string>>,
+	rows: Readonly<Record<string, Row>>,
 	gatedFiles: Readonly<Record<string, GatedFile>>,
 ) {
+	const found = await census(sources);
 	const flagged: Array<{ key: string; detail: string }> = [];
-	let scanned = 0;
-	for (const { rel, source } of sources) {
-		scanned += 1;
-		const hits = scanHits(source);
-		if (hits.length === 0) continue;
-		for (const hit of hits)
-			flagged.push({
-				key: `${rel}#${hit.symbol}:${hit.word}`,
-				detail: `${rel}:${hit.line}`,
-			});
-	}
+	for (const [key, hits] of found.hits)
+		flagged.push({
+			key: `${key}@${hits.length}`,
+			detail: hits.map((hit) => `${hit.line} ${hit.why}`).join("; "),
+		});
 	const registered: string[] = [];
 	const exemptions: Record<string, string> = {};
-	for (const [key, value] of Object.entries(rows)) {
-		if (value === GATED) registered.push(key);
-		else exemptions[key] = value;
+	for (const [key, row] of Object.entries(rows)) {
+		const id = `${key}@${row.sites}`;
+		if ("gated" in row) registered.push(id);
+		else exemptions[id] = row.reason;
 	}
 	const audit = auditRegistry({
-		sweepName: "install-kill-switch census (#5231)",
+		sweepName: "install kill-switch census (#5231)",
 		flagged,
 		registered,
 		exemptions,
-		minFlagged: 1,
-		scannedCount: scanned,
+		minFlagged: 0,
+		scannedCount: found.scanned,
 		minScanned: 1,
 		remediation:
-			"A literal spells an installer. Route the install through isToolInstallDisabled() " +
-			"(clients/env-utils.ts) and register its row as GATED in a GATED_FILES entry, or " +
-			"exempt it with the reason it is not an install spawn.",
+			"A spawn site is unclassified or its count moved. Route an install through " +
+			"isToolInstallDisabled() (clients/env-utils.ts) and register the row as gated " +
+			"with a GATED_FILES entry, or give the row the reason it cannot install.",
 	});
 	const problems = [...audit.problems];
+	// auditRegistry tolerates a registered id the scan no longer flags (a
+	// registry may cover state a heuristic cannot see). A gated row is a live
+	// claim about a site, so one with no live site is stale (M2).
+	const live = new Set(flagged.map((entry) => entry.key));
+	for (const id of registered)
+		if (!live.has(id))
+			problems.push(`${id}: a gated row matches no live site count (stale)`);
 	const sourceByRel = new Map(sources.map((s) => [s.rel, s.source]));
-	for (const key of registered) {
-		const rel = key.split("#")[0] as string;
+	const gatedRowFiles = new Set(
+		Object.entries(rows)
+			.filter(([, row]) => "gated" in row)
+			.map(([key]) => key.split("#")[0] as string),
+	);
+	for (const rel of gatedRowFiles)
 		if (!Object.hasOwn(gatedFiles, rel))
-			problems.push(
-				`${key}: registered GATED but ${rel} has no GATED_FILES entry`,
-			);
-	}
+			problems.push(`${rel}: a gated row has no GATED_FILES entry`);
 	for (const [rel, gated] of Object.entries(gatedFiles)) {
+		if (!gatedRowFiles.has(rel))
+			problems.push(`${rel}: a GATED_FILES entry has no gated row`);
 		const source = sourceByRel.get(rel);
 		if (source === undefined) problems.push(`${rel}: gated file not scanned`);
 		else problems.push(...entryProblems(rel, source, gated));
 	}
-	return { problems, flagged };
+	return { problems, flagged, found };
 }
 
-const GATED = "GATED";
+const GATED = (sites: number): Row => ({ sites, gated: true });
+const because = (reason: string, table: Record<string, number>) =>
+	Object.fromEntries(
+		Object.entries(table).map(([key, sites]): [string, Row] => [
+			key,
+			{ sites, reason },
+		]),
+	);
 
-const BUILDER =
-	"an argv builder that starts nothing: its callers (installNpmTool behind installTool, performNpmRefresh behind acquireManagedInstallGate) spawn";
-const LSP_SWITCH =
-	"an LSP server install: governed by PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts), a separate switch this census does not pin";
-const NPX_UNGATED =
-	"KNOWN UNGATED: an npx package-runner fallback that can download a package and does not consult PI_LENS_DISABLE_TOOL_INSTALL; baseline that shrinks on purpose (PR body names the follow-up)";
+const TOOL =
+	"spawns the tool binary a resolver chose, with that tool's own check, lint, format or version argv (the argv literals at every row were read: none names an installer verb); a package-runner command (npx) runs offline at the seam under the switch, pinned by tests/clients/install-kill-switch-npx-5231.test.ts";
+const SEAM =
+	"the spawn chokepoint's own forwarding between its entry points, its tool-probe wrapper, or a fixed process-table query (ps/wmic), which take their command from a caller already counted here";
+const PM =
+	"a package-manager query or run-script (config get prefix, bin -g, the repo's rebuild script), not an install verb";
+const LSP =
+	"language-server launch and install code: its installs follow PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts, a separate switch), and its probes (java finder, --version) install nothing";
 const NPX_NO =
-	"npx --no: the package runner is told to use the local/cached copy and never download, so nothing is installed";
-const LABEL =
-	"a log subsystem, hint or message string, a tag, or a candidate name: data, never an argv handed to a process";
-const PROBE_ONLY =
-	"a presence or prefix probe that installs nothing; any install it precedes is a gated row above";
+	"npx --no: the package runner is told to use the local or cached copy and never download, and the seam runs it offline under the switch as well";
 
-/** Row value: GATED, or the reason the literal is not a gated install spawn. */
-const ROWS: Readonly<Record<string, string>> = {
+const ROWS: Readonly<Record<string, Row>> = {
 	// ROWS-BEGIN
 	// -- gated: the install spawns the tool switch governs (entries verified) --
-	"clients/dispatch/runners/utils/lazy-installer.ts#LAZY_INSTALL_SPECS:add":
-		GATED,
-	"clients/dispatch/runners/utils/lazy-installer.ts#LAZY_INSTALL_SPECS:component":
-		GATED,
-	"clients/dispatch/runners/utils/lazy-installer.ts#LAZY_INSTALL_SPECS:install":
-		GATED,
-	"clients/dispatch/runners/utils/lazy-installer.ts#LAZY_INSTALL_SPECS:rustup":
-		GATED,
-	"clients/govulncheck-client.ts#GovulncheckClient.doEnsureAvailable:install":
-		GATED,
-	"clients/installer/index.ts#installGemTool:install": GATED,
-	"clients/installer/index.ts#installPipTool:install": GATED,
-	"clients/installer/index.ts#installPipTool:pipx": GATED,
-	"clients/installer/index.ts#installPipTool:upgrade": GATED,
-	// -- argv builders: the spawn is in a gated caller --
-	"clients/package-manager.ts#installArgs:add": BUILDER,
-	"clients/package-manager.ts#installArgs:install": BUILDER,
-	"clients/package-manager.ts#updateArgs:update": BUILDER,
-	"clients/package-manager.ts#updateArgs:upgrade": BUILDER,
-	// -- LSP server installs: PI_LENS_DISABLE_LSP_INSTALL, a separate switch --
-	"clients/lsp/server.ts#tryDotnetToolInstall:install": LSP_SWITCH,
-	"clients/lsp/server.ts#tryDotnetToolInstall:update": LSP_SWITCH,
-	"clients/lsp/server.ts#tryGemInstall:install": LSP_SWITCH,
-	"clients/lsp/server.ts#tryGoInstallGopls:install": LSP_SWITCH,
-	// -- KNOWN UNGATED: npx fallbacks that can download (baseline, shrinks) --
-	"clients/biome-client.ts#BiomeClient.getBiomeBinary:npx": NPX_UNGATED,
-	"clients/dependency-checker.ts#DependencyChecker.doResolveMadge:npx":
-		NPX_UNGATED,
-	"clients/formatters.ts#biomeFormatter:npx": NPX_UNGATED,
-	"clients/formatters.ts#prettierFormatter:npx": NPX_UNGATED,
-	"clients/jscpd-client.ts#JscpdClient.runScan:npx": NPX_UNGATED,
-	"clients/test-runner-client.ts#RUNNERS:npx": NPX_UNGATED,
-	// -- cache-only npx (--no): never downloads --
-	"clients/dispatch/runners/utils/runner-helpers.ts#getSgCommand:npx": NPX_NO,
-	"clients/dispatch/runners/utils/runner-helpers.ts#isSgAvailableAsync:npx":
-		NPX_NO,
-	"clients/dispatch/runners/utils/runner-helpers.ts#resolveLocalFirstAsync:npx":
-		NPX_NO,
-	"clients/sg-runner.ts#SgRunner.doEnsureAvailable:npx": NPX_NO,
-	// -- not a process start --
-	"clients/dispatch/runners/utils/lazy-installer.ts#performInstall:install":
-		LABEL,
-	"clients/dispatch/runners/utils/lazy-installer.ts#runLazyInstall:install":
-		LABEL,
-	"clients/formatters.ts#detect:rustup": PROBE_ONLY,
-	"clients/govulncheck-client.ts#GovulncheckClient.doEnsureAvailable:go install":
-		LABEL,
-	"clients/installer/index.ts#installPipTool:pip install": LABEL,
-	"clients/knip-client.ts#KnipClient.unavailableResult:npm install": LABEL,
-	"clients/lsp/server.ts#rubyBinCandidates:mise": LABEL,
-	"clients/out-of-band-changes.ts#lookOnce:install": LABEL,
-	"clients/out-of-band-changes.ts#outOfBandChange:install": LABEL,
-	"clients/python-provenance.ts#PYTHON_SQLALCHEMY_STATEMENT_BUILDERS:update":
-		LABEL,
-	"clients/sg-runner.ts#SgRunner.probeHomebrew:brew": PROBE_ONLY,
+	"clients/dispatch/runners/utils/lazy-installer.ts#safeSpawnAsync": GATED(1),
+	"clients/govulncheck-client.ts#safeSpawnAsync": GATED(2),
+	"clients/installer/index.ts#probeToolAsync": GATED(3),
+	"clients/installer/index.ts#run": GATED(2),
+	"clients/installer/index.ts#runCommand": GATED(3),
+	"clients/installer/index.ts#safeSpawnAsync": GATED(7),
+	"clients/installer/managed-tool-refresh.ts#safeSpawnAsync": GATED(2),
+	// -- the rest: classified, each count pinned --
+	...because(LSP, {
+		"clients/lsp/jvm-runtime.ts#safeSpawnAsync": 1,
+		"clients/lsp/launch.ts#safeSpawn": 1,
+		"clients/lsp/server.ts#safeSpawnAsync": 4,
+	}),
+	...because(NPX_NO, {
+		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync": 1,
+	}),
+	...because(PM, {
+		"clients/mcp/review.ts#safeSpawnAsync": 1,
+		"clients/package-manager.ts#probeToolAsync": 1,
+		"clients/package-manager.ts#safeSpawnAsync": 1,
+	}),
+	...because(SEAM, {
+		"clients/process-snapshot.ts#spawnCollectStdoutResult": 2,
+		"clients/safe-spawn.ts#safeSpawn": 2,
+		"clients/safe-spawn.ts#safeSpawnAsync": 3,
+		"clients/tool-probe.ts#safeSpawnAsync": 1,
+	}),
+	...because(TOOL, {
+		"clients/biome-client.ts#probeToolAsync": 1,
+		"clients/biome-client.ts#safeSpawnAsync": 1,
+		"clients/dead-code-client.ts#probeToolAsync": 1,
+		"clients/dead-code-client.ts#safeSpawnAsync": 1,
+		"clients/dependency-checker.ts#safeSpawnAsync": 2,
+		"clients/dispatch/dispatcher.ts#probeToolAsync": 1,
+		"clients/dispatch/runners/actionlint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/biome-check.ts#safeSpawnAsync": 2,
+		"clients/dispatch/runners/cpp-check.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/cue-vet.ts#safeSpawnAsync": 3,
+		"clients/dispatch/runners/dart-analyze.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/detekt.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/dotnet-build.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/elixir-check.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/eslint.ts#safeSpawnAsync": 2,
+		"clients/dispatch/runners/fish-indent.ts#safeSpawnAsync": 2,
+		"clients/dispatch/runners/gleam-check.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/go-vet.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/golangci-lint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/hadolint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/helm-lint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/helm-render.ts#safeSpawnAsync": 2,
+		"clients/dispatch/runners/htmlhint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/javac.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/ktlint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/markdownlint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/mypy.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/oxlint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/php-lint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/phpstan.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/prisma-validate.ts#resolveLocalFirstAsync": 1,
+		"clients/dispatch/runners/prisma-validate.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/psscriptanalyzer.ts#probeToolAsync": 2,
+		"clients/dispatch/runners/psscriptanalyzer.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/pyright.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/rubocop.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/ruff.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/rust-clippy.ts#safeSpawnAsync": 2,
+		"clients/dispatch/runners/shellcheck.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/shfmt.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/spellcheck.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/spotbugs.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/sqlfluff.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/stylelint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/swiftlint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/taplo.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/terragrunt.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/tflint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/trivy-config.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/utils/candidate-probe.ts#probeToolAsync": 1,
+		"clients/dispatch/runners/utils/runner-helpers.ts#probeToolAsync": 2,
+		"clients/dispatch/runners/utils/runner-helpers.ts#safeSpawnAsync": 4,
+		"clients/dispatch/runners/vale.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/yamllint.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/zig-check.ts#safeSpawnAsync": 1,
+		"clients/file-utils.ts#safeSpawnAsync": 1,
+		"clients/formatters.ts#probeToolAsync": 1,
+		"clients/formatters.ts#safeSpawnAsync": 2,
+		"clients/gitleaks-client.ts#safeSpawnAsync": 1,
+		"clients/jscpd-client.ts#safeSpawnAsync": 1,
+		"clients/knip-client.ts#safeSpawnAsync": 1,
+		"clients/opengrep-client.ts#safeSpawnAsync": 1,
+		"clients/pipeline.ts#safeSpawnAsync": 1,
+		"clients/ruff-client.ts#safeSpawnAsync": 2,
+		"clients/security-scan-client.ts#probeToolAsync": 1,
+		"clients/sg-runner.ts#probeToolAsync": 1,
+		"clients/sg-runner.ts#safeSpawnAsync": 7,
+		"clients/test-runner-client.ts#safeSpawn": 1,
+		"clients/test-runner-client.ts#safeSpawnAsync": 1,
+		"clients/trivy-client.ts#safeSpawnAsync": 1,
+	}),
 	// ROWS-END
 };
 
 describe("install kill-switch census (#5231)", () => {
 	let sources: Array<{ rel: string; source: string }>;
-	let verdict: ReturnType<typeof judge>;
-	beforeAll(() => {
+	let verdict: Awaited<ReturnType<typeof judge>>;
+	beforeAll(async () => {
 		const files = [
 			...RUNTIME_ROOTS.flatMap((root) =>
 				listSourceFiles(path.join(REPO_ROOT, root), { skipTests: true }),
@@ -592,144 +784,212 @@ describe("install kill-switch census (#5231)", () => {
 			source,
 		}));
 		assertNonEmptyScan("install census files", sources.length, 100);
-		verdict = judge(sources, ROWS, GATED_FILES);
-	}, 120_000);
+		verdict = await judge(sources, ROWS, GATED_FILES);
+	}, 180_000);
 
-	it("pins every install-vocabulary literal to the gate or a reason", () => {
+	it("pins every spawn site to the gate or a reason", () => {
 		expect(verdict.problems).toEqual([]);
 	});
 
-	it("keeps every row's reason a real sentence and every GATED row inside a gated file", () => {
-		const reasons = Object.values(ROWS).filter((value) => value !== GATED);
+	it("keeps every row's reason a real sentence", () => {
+		const reasons = Object.values(ROWS).flatMap((row) =>
+			"reason" in row ? [row.reason] : [],
+		);
 		expect(reasons.length).toBeGreaterThan(0);
 		for (const reason of reasons) expect(reason.length).toBeGreaterThan(30);
+	});
+
+	// H1: the value-level guarantee for package runners lives in the seam. A
+	// computed command at a registered site may be `npx`; getSpawnEnvironment
+	// must still consult the switch before it hands the environment back.
+	it("the spawn seam consults the switch before returning an environment", () => {
+		const source = sources.find((s) => s.rel === "clients/safe-spawn.ts");
+		expect(source).toBeDefined();
+		expect(
+			entryProblems("clients/safe-spawn.ts", source?.source ?? "", {
+				entries: [
+					{
+						symbol: "getSpawnEnvironment",
+						before: ["return merged", "return stripped"],
+						consults: 1,
+					},
+				],
+			}),
+		).toEqual([]);
 	});
 });
 
 // Planted spellings (AGENTS.md shape 69): each is a bypass its author did not
-// design the vocabulary for, and each must be a finding, not a pass.
+// design the census for, and each must be a finding, not a pass. The first ten
+// are the ones review found passing the spelling-enumerating version.
 describe("install kill-switch census: planted bypasses (#5231)", () => {
+	const HEAD = `import { safeSpawnAsync } from "./safe-spawn.js";\n`;
 	const plant = (source: string) => [{ rel: "clients/planted.ts", source }];
-	const flaggedBy = (source: string) =>
-		judge(plant(source), {}, {}).problems.join("\n");
+	const problemsOf = async (
+		source: string,
+		rows: Readonly<Record<string, Row>> = {},
+		gated: Readonly<Record<string, GatedFile>> = {},
+	) => (await judge(plant(source), rows, gated)).problems.join("\n");
+	const call = (args: string) =>
+		`${HEAD}export const go = () => safeSpawnAsync(${args});`;
 
-	it("a new unregistered gem install spawn is a finding", () => {
+	it.each([
+		["npm i", `"npm", ["i", "left-pad"]`],
+		["go get", `"go", ["get", "x/y"]`],
+		["pnpm i", `"pnpm", ["i"]`],
+		["gem i", `"gem", ["i", "x"]`],
+		["npm exec", `"npm", ["exec", "x"]`],
+		["run-time argv", `"go", [process.env.V as string, "x"]`],
+		["a parenthesised concatenation", `"go", [("in") + ("stall"), "x"]`],
+		["a \\x69 escape", `"go", ["\\x69nstall", "x"]`],
+		["an empty template splice", `"go", [\`inst\${""}all\`, "x"]`],
+		["String.fromCharCode", `"go", [String.fromCharCode(105, 110, 115, 116)]`],
+		["a spread argv", `"go", [...process.argv]`],
+		["a computed command", `process.env.TOOL as string, ["x"]`],
+		["a templated command", "`np${'x'}`, []"],
+	])("%s is a finding", async (_label, args) => {
+		expect(await problemsOf(call(args))).toMatch(
+			/clients\/planted\.ts#safeSpawnAsync@1/,
+		);
+	});
+
+	it("a known-good command with a known-good argv is clean", async () => {
+		expect(await problemsOf(call(`"git", ["status"]`))).not.toMatch(/planted/);
+		expect(await problemsOf(call(`"go", ["version"]`))).not.toMatch(/planted/);
+		expect(await problemsOf(call(`"go", ["ver" + "sion"]`))).not.toMatch(
+			/planted/,
+		);
+	});
+
+	it("an aliased import, an indirect binding and a seam read as a value are findings", async () => {
 		expect(
-			flaggedBy(
-				`import { safeSpawnAsync } from "./safe-spawn.js";\nexport const go = () => safeSpawnAsync("gem", ["install", "rubocop"]);`,
+			await problemsOf(
+				`import { safeSpawnAsync as run } from "./safe-spawn.js";\nexport const go = () => run("git", []);`,
 			),
-		).toMatch(/clients\/planted\.ts#go:install/);
-	});
-
-	it("an aliased import is a finding", () => {
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 		expect(
-			flaggedBy(
-				`import { safeSpawnAsync as run } from "./safe-spawn.js";\nexport function go() { return run("rustup", ["component", "add", "x"]); }`,
+			await problemsOf(
+				`${HEAD}export function go() { const sp = safeSpawnAsync; return sp("git", []); }`,
 			),
-		).toMatch(/planted\.ts#go:rustup/);
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
+		expect(
+			await problemsOf(`${HEAD}export const go = safeSpawnAsync.bind(null);`),
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 	});
 
-	it("an indirect call through a local binding is a finding", () => {
+	it("a value reached through another binding is a finding", async () => {
 		expect(
-			flaggedBy(
-				`import { safeSpawnAsync } from "./safe-spawn.js";\nexport function go() { const sp = safeSpawnAsync; return sp("pipx", ["run", "x"]); }`,
+			await problemsOf(
+				`${HEAD}export function go() { const verb = "install"; const cmd = "pip"; return safeSpawnAsync(cmd, [verb, "x"]); }`,
 			),
-		).toMatch(/planted\.ts#go:pipx/);
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 	});
 
-	it("a value reached through another binding is a finding", () => {
+	it("a seam named by a string is a finding", async () => {
 		expect(
-			flaggedBy(
-				`export function go(run: Function) { const verb = "install"; const cmd = "pip"; return run(cmd, [verb, "x"]); }`,
+			await problemsOf(
+				`import * as ns from "./safe-spawn.js";\nexport const go = () => (ns as Record<string, Function>)["safe" + "SpawnAsync"]("npm", []);`,
 			),
-		).toMatch(/planted\.ts#go:install/);
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 	});
 
-	it("an escape-spelled literal is a finding", () => {
-		expect(flaggedBy(`export const argv = ["inst\\x61ll", "x"];`)).toMatch(
-			/planted\.ts#argv:install/,
-		);
-		expect(flaggedBy(`export const argv = ["\\u0069nstall", "x"];`)).toMatch(
-			/planted\.ts#argv:install/,
-		);
-	});
-
-	it("a concatenated literal is a finding", () => {
-		expect(flaggedBy(`export const argv = ["inst" + "all", "x"];`)).toMatch(
-			/planted\.ts#argv:install/,
-		);
+	it("a forwarder is followed: its caller's literal installer command is a finding", async () => {
+		const forwarder = `${HEAD}export function launch(command: string) { return safeSpawnAsync(command, []); }\n`;
 		expect(
-			flaggedBy(`export const argv = [("in" + "st") + ("al" + "l")];`),
-		).toMatch(/planted\.ts#argv:install/);
-	});
-
-	it("a shell line and a templated shell line are findings", () => {
-		expect(flaggedBy(`export const cmd = "pip install x";`)).toMatch(
-			/planted\.ts#cmd:pip install/,
-		);
+			await problemsOf(`${forwarder}export const go = () => launch("npm");`),
+		).toMatch(/planted\.ts#launch@1/);
+		// A known-good literal through the same forwarder stays clean.
 		expect(
-			flaggedBy("export function go(p: string) { return `npm install ${p}`; }"),
-		).toMatch(/planted\.ts#go:npm install/);
+			await problemsOf(`${forwarder}export const go = () => launch("git");`),
+		).not.toMatch(/planted\.ts#launch/);
 	});
 
-	it("an undecodable string is a finding, not a pass", () => {
-		expect(flaggedBy(`export const odd = "\\07";`)).toMatch(
-			/planted\.ts#odd:undecodable/,
-		);
-	});
-
-	it("words in a comment or a comparison are not findings", () => {
-		const quiet = `// gem install rubocop; rustup component add\n/* "install" */\nexport function go(cmd: string) { return cmd === "npx" || ["a"].includes("install"); }`;
-		expect(scanHits(quiet)).toEqual([]);
-	});
-
-	it("a gated file whose entry never consults the shared check is a finding", () => {
-		const gated = {
-			"clients/planted.ts": {
-				entries: [{ symbol: "go", before: ["spawn("], consults: 1 }],
+	it("a count that moves is a finding: a second site in a classified file", async () => {
+		const row = {
+			"clients/planted.ts#safeSpawnAsync": {
+				sites: 1,
+				reason: "a reason that is long enough to count",
 			},
 		};
-		const run = (source: string) =>
-			judge(plant(source), { "clients/planted.ts#go:install": GATED }, gated)
-				.problems;
-		// No consult at all.
+		const one = `${HEAD}export const a = (c: string) => safeSpawnAsync(c, []);`;
+		expect(await problemsOf(one, row)).not.toMatch(/planted/);
 		expect(
-			run(`export function go() { return spawn("gem", ["install"]); }`),
-		).toContainEqual(expect.stringMatching(/go consults the shared check 0x/));
-		// A consult that exists only in a comment.
-		expect(
-			run(
-				`export function go() { /* isToolInstallDisabled() */ return spawn("gem", ["install"]); }`,
+			await problemsOf(
+				`${one}\nexport const b = (c: string) => safeSpawnAsync(c, []);`,
+				row,
 			),
-		).toContainEqual(expect.stringMatching(/go consults the shared check 0x/));
-		// A consult AFTER the spawn.
-		expect(
-			run(
-				`export function go() { spawn("gem", ["install"]); return isToolInstallDisabled(); }`,
-			),
-		).toContainEqual(
-			expect.stringMatching(/reaches spawn\( before its first consult/),
-		);
-		// The honest shape is clean.
-		expect(
-			run(
-				`export function go() { if (isToolInstallDisabled()) return false; return spawn("gem", ["install"]); }`,
-			),
-		).toEqual([]);
+		).toMatch(/planted\.ts#safeSpawnAsync@2/);
 	});
 
-	it("a row whose literal is gone is stale", () => {
+	it("a row whose site is gone is stale, gated or not (M2)", async () => {
+		const reason = "a reason that is long enough to count";
+		const quiet = `${HEAD}export const go = () => safeSpawnAsync("git", []);`;
 		expect(
-			judge(
-				plant(
-					`export const argv = ["gem", "x"];\nexport const w = ["install"];`,
-				),
-				{
-					"clients/planted.ts#gone:install":
-						"a reason that is long enough to count",
-				},
-				{},
-			).problems.join("\n"),
-		).toMatch(/no longer flags/);
+			await problemsOf(quiet, {
+				"clients/planted.ts#safeSpawnAsync": { sites: 1, reason },
+			}),
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
+		const gated = {
+			"clients/planted.ts": {
+				entries: [{ symbol: "go", before: ["safeSpawnAsync("], consults: 1 }],
+			},
+		};
+		expect(
+			await problemsOf(
+				quiet,
+				{ "clients/planted.ts#safeSpawnAsync": { sites: 1, gated: true } },
+				gated,
+			),
+		).toMatch(/matches no live site count/);
+	});
+
+	it("a gated file whose entry never consults the shared check is a finding", async () => {
+		const gated = {
+			"clients/planted.ts": {
+				entries: [{ symbol: "go", before: ["safeSpawnAsync("], consults: 1 }],
+			},
+		};
+		const rows = {
+			"clients/planted.ts#safeSpawnAsync": { sites: 1, gated: true },
+		} as const;
+		const run = (body: string) =>
+			problemsOf(
+				`${HEAD}export function go(c: string) { ${body} }`,
+				rows,
+				gated,
+			);
+		// No consult at all.
+		expect(await run(`return safeSpawnAsync(c, []);`)).toMatch(
+			/go consults the shared check 0x/,
+		);
+		// A consult that exists only in a comment.
+		expect(
+			await run(`/* isToolInstallDisabled() */ return safeSpawnAsync(c, []);`),
+		).toMatch(/go consults the shared check 0x/);
+		// A consult AFTER the spawn.
+		expect(
+			await run(`safeSpawnAsync(c, []); return isToolInstallDisabled();`),
+		).toMatch(/reaches safeSpawnAsync\( before its first consult/);
+		// The honest shape is clean.
+		expect(
+			await run(
+				`if (isToolInstallDisabled()) return false; return safeSpawnAsync(c, []);`,
+			),
+		).toBe("");
+	});
+
+	it("a renamed ordering token is a finding, not a silent pass (M2)", async () => {
+		const gated = {
+			"clients/planted.ts": {
+				entries: [{ symbol: "go", before: ["performInstall("], consults: 1 }],
+			},
+		};
+		expect(
+			await problemsOf(
+				`${HEAD}export function go(c: string) { if (isToolInstallDisabled()) return false; return safeSpawnAsync(c, []); }`,
+				{ "clients/planted.ts#safeSpawnAsync": { sites: 1, gated: true } },
+				gated,
+			),
+		).toMatch(/no longer holds the token performInstall\(/);
 	});
 });
