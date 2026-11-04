@@ -435,17 +435,20 @@ export function resolveDiffRange(
 
 /**
  * @param {string} range
- * @param {{ diffFilter?: string, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
+ * @param {{ diffFilter?: string, noRenames?: boolean, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  *   `diffFilter: "A"` lists only the files the range adds (the changed-test
  *   shuffle step runs them first, #4456)
+ *   `noRenames: true` turns rename detection off, so a rename lists its old
+ *   path as well as its new one (the prose selector's config check, #5249 r2)
  */
-export function changedFiles(range, { diffFilter, cwd, env } = {}) {
+export function changedFiles(range, { diffFilter, noRenames, cwd, env } = {}) {
 	try {
 		const out = execFileSync(
 			"git",
 			[
 				"diff",
 				"--name-only",
+				...(noRenames ? ["--no-renames"] : []),
 				...(diffFilter ? [`--diff-filter=${diffFilter}`] : []),
 				range,
 			],

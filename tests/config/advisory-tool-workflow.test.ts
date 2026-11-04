@@ -14,6 +14,7 @@ type Step = {
 	if?: string;
 	uses?: string;
 	run?: string;
+	with?: Record<string, unknown>;
 	"continue-on-error"?: boolean;
 };
 const workflow = yaml.load(
@@ -50,7 +51,7 @@ const GUARD = "!cancelled()";
 // `always()` so the report prints after a red generate step.
 const tools = [
 	["typos", "crate-ci/typos@", [GUARD]],
-	["vale", "./vale docs AGENTS.md", [GUARD]],
+	["vale", "scripts/lint-prose-files.mjs", [GUARD]],
 	["yamllint", "yamllint ", [GUARD]],
 	["taplo", "npm run taplo", [GUARD]],
 	[
@@ -133,6 +134,15 @@ describe("#2706 advisory tooling workflow contracts", () => {
 		).toEqual([]);
 	});
 
+	// #5249: the Lint prose step diffs against origin/master. The default depth 1
+	// checkout cannot see that base, so the step would lint the whole list on
+	// every pull request without any red: a silent loss of the narrowing.
+	it("checks the folded job out with full history so the prose diff can read the base", () => {
+		const checkout = advisorySteps[0];
+		expect(checkout?.uses).toContain("actions/checkout@");
+		expect(checkout?.with?.["fetch-depth"]).toBe(0);
+	});
+
 	it.each(tools)(
 		"keeps the %s step, guarded so one red tool does not stop the rest",
 		(_label, needle, words) => {
@@ -162,9 +172,13 @@ describe("#2706 advisory tooling workflow contracts", () => {
 			"node scripts/strictness-report.mjs",
 			"npm run taplo",
 			"yamllint ",
-			"./vale docs",
-		])
+			"scripts/lint-prose-files.mjs",
+		]) {
+			// A missing needle is -1, below the build step: it must fail here,
+			// not pass the ordering check vacuously (#5249).
+			expect(stepRunning(needle), needle).toBeGreaterThanOrEqual(0);
 			expect(stepRunning(needle), needle).toBeLessThan(build);
+		}
 		expect(stepRunning("node scripts/complexity-report.mjs")).toBeGreaterThan(
 			build,
 		);

@@ -44,7 +44,12 @@ export function changesProductionFile(file: string): boolean;
 
 export function changedFiles(
 	range: string,
-	options?: { diffFilter?: string; cwd?: string; env?: NodeJS.ProcessEnv },
+	options?: {
+		diffFilter?: string;
+		noRenames?: boolean;
+		cwd?: string;
+		env?: NodeJS.ProcessEnv;
+	},
 ): string[] | null;
 
 /** Uncommitted tracked edits plus untracked, non-ignored files (#4047). */
