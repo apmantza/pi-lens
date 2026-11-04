@@ -23,6 +23,29 @@ export function isTestMode(): boolean {
 }
 
 /**
+ * The ONE read of the tool-install kill switch (#5231). Every path that can
+ * download or run an installer (the managed installer, the lazy installer,
+ * govulncheck's `go install`) asks here and answers "unavailable" without
+ * spawning when it is true. `tests/config/install-kill-switch-census.test.ts`
+ * pins each install spawn to a consult of this function.
+ *
+ * Read per call, never memoised: a test or a host that sets the variable after
+ * import must still be honoured.
+ */
+export function isToolInstallDisabled(): boolean {
+	return process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1";
+}
+
+/**
+ * The ONE read of the language-server install kill switch. Distinct from
+ * {@link isToolInstallDisabled}: it gates LSP server installs only, so a user
+ * can keep managed formatters while freezing server downloads.
+ */
+export function isLspInstallDisabled(): boolean {
+	return process.env.PI_LENS_DISABLE_LSP_INSTALL === "1";
+}
+
+/**
  * Coerce an arbitrary input to a non-negative finite number, or 0 otherwise.
  *
  * Use this to gate config / env values before they flow into `Math.max` /

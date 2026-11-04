@@ -25,6 +25,10 @@
  * (#1500) — which is what makes "we tried and the network failed" tellable from
  * "this tool cannot be installed here".
  *
+ * `PI_LENS_DISABLE_TOOL_INSTALL=1` refuses before anything else (#5231): the
+ * kill switch is process policy, so like a trust denial it leaves no attempt
+ * record, and it answers "not installed" without spawning `gem` or `rustup`.
+ *
  * A trust denial is deliberately NOT recorded: `assertInstallAllowed` is
  * re-evaluated per call and a later grant must retry (#1350).
  */
@@ -32,6 +36,8 @@
 import { safeSpawnAsync } from "../../../safe-spawn.js";
 import { assertInstallAllowed } from "../../../project-trust.js";
 import { logExtension } from "../../../extension-log.js";
+import { recordDegradationOnce } from "../../../degradation-ledger.js";
+import { isToolInstallDisabled } from "../../../env-utils.js";
 import {
 	classifyProbeFailure,
 	installRetryDelayMs,
@@ -188,6 +194,17 @@ async function runLazyInstall(
 	cwd: string,
 	spec: LazyInstallSpec,
 ): Promise<boolean> {
+	// The one consult for both entry points (#5231). Before the join and the
+	// suppression ladder: a refused install must not wait on, or be answered by,
+	// an install some earlier caller already started.
+	if (isToolInstallDisabled()) {
+		recordDegradationOnce({
+			kind: "install-disabled",
+			subject: tool,
+			reason: "installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
+		});
+		return false;
+	}
 	const k = key(cwd, tool);
 	const running = inFlight.get(k);
 	// Joining, not re-answering: both callers get the outcome of the install they

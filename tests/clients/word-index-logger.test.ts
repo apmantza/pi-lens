@@ -8,10 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const writerLog = vi.hoisted(() => vi.fn());
 const isTestModeRef = vi.hoisted(() => ({ value: false }));
 
-vi.mock("../../clients/env-utils.js", () => ({
+vi.mock("../../clients/env-utils.js", async (importOriginal) => ({
+	// #5231: keep every real export; only the test-mode answer is doubled.
+	...(await importOriginal<typeof import("../../clients/env-utils.js")>()),
 	isTestMode: () => isTestModeRef.value,
-	// getMaxLogSizeMB (below) is resolved from log-cleanup, which imports
-	// env-utils too; keep the surface minimal but complete for this test.
 }));
 vi.mock("../../clients/ndjson-logger.js", () => ({
 	createNdjsonLogger: () => ({

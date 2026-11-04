@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	isLspInstallDisabled,
 	isTestMode,
+	isToolInstallDisabled,
 	lazyEnvNumber,
 	toPositiveFinite,
 } from "../../clients/env-utils.js";
+import { withEnv } from "../support/with-env.js";
 
 let previousTestMode: string | undefined;
 let previousVitest: string | undefined;
@@ -143,5 +146,30 @@ describe("lazyEnvNumber", () => {
 		expect(a.get()).toBe(10);
 		delete process.env[ENV_NAME];
 		expect(b.get()).toBe(2);
+	});
+});
+
+// #5231: the two install kill switches are each read in ONE place. Recurrence:
+// the tool switch was read by the managed installer only, and the LSP switch
+// by two private copies; a copy that drifts (`=== "true"`, a memo, a trim)
+// turns one switch off for one install path.
+describe("install kill switches (#5231)", () => {
+	const read = (tool: string | undefined, lsp: string | undefined) => {
+		const restore = withEnv({
+			PI_LENS_DISABLE_TOOL_INSTALL: tool,
+			PI_LENS_DISABLE_LSP_INSTALL: lsp,
+		});
+		try {
+			return [isToolInstallDisabled(), isLspInstallDisabled()];
+		} finally {
+			restore();
+		}
+	};
+
+	it("each helper honours only its own variable, only for the exact value 1, read per call", () => {
+		expect(read("1", undefined)).toEqual([true, false]);
+		expect(read("true", undefined)).toEqual([false, false]);
+		expect(read("0", "1")).toEqual([false, true]);
+		expect(read(undefined, undefined)).toEqual([false, false]);
 	});
 });

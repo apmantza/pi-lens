@@ -576,6 +576,16 @@ export type DegradationKind =
 	 */
 	| "inline-blocker-unstructured"
 	/**
+	 * #5231: an install the lazy installer or govulncheck would have run was
+	 * refused because `PI_LENS_DISABLE_TOOL_INSTALL=1` (`isToolInstallDisabled`).
+	 * Subject is the tool id (`rubocop`, `rustfmt`, `govulncheck`), recorded
+	 * ONCE per tool per session (`recordDegradationOnce`): both entry points
+	 * are reached per save, so a counted row would grow without adding
+	 * information. The managed installer reports the same refusal through its
+	 * own install-attempt record.
+	 */
+	| "install-disabled"
+	/**
 	 * #3515: the install lock's generation was no longer owned when
 	 * `installNpmTool` re-checked right before a second critical write (the
 	 * ERESOLVE `--legacy-peer-deps` retry spawn) — a competing installer

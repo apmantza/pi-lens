@@ -16,6 +16,7 @@
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
@@ -143,8 +144,12 @@ beforeEach(async () => {
 	safeSpawnAsync.mockReset();
 	resetLazyInstallAttempts();
 	setProjectTrustState("trusted");
+	// #5231: the lazy installer honours PI_LENS_DISABLE_TOOL_INSTALL, which
+	// vitest-setup defaults to "1"; these cases drive the install spawn.
+	const restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	vi.useFakeTimers({ toFake: ["Date"] });
 	return () => {
+		restoreInstallSwitch();
 		vi.useRealTimers();
 		resetProjectTrust();
 	};

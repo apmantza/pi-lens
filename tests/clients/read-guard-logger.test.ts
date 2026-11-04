@@ -169,7 +169,9 @@ describe("logReadGuardEvent filePath normalization (#2219)", () => {
 	it("normalizes a backslash-supplied filePath to the canonical slash form", async () => {
 		vi.resetModules();
 		const writerLog = vi.fn();
-		vi.doMock("../../clients/env-utils.js", () => ({
+		vi.doMock("../../clients/env-utils.js", async (importOriginal) => ({
+			// #5231: keep every real export; only the test-mode answer is doubled.
+			...(await importOriginal<typeof import("../../clients/env-utils.js")>()),
 			isTestMode: () => false,
 		}));
 		vi.doMock("../../clients/ndjson-logger.js", () => ({

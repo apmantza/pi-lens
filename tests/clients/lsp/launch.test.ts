@@ -134,7 +134,13 @@ describe("lsp launch", () => {
 			execFileSync: vi.fn(() => ""),
 			spawn: vi.fn(() => new MockChildProcess(8642)),
 		}));
-		vi.doMock("../../../clients/env-utils.js", () => ({
+		// #5231: spread the real module. safe-spawn.ts reads
+		// `isToolInstallDisabled` on the Windows registry-PATH probe, and a
+		// factory without it threw on the Windows unit lane.
+		vi.doMock("../../../clients/env-utils.js", async (importOriginal) => ({
+			...(await importOriginal<
+				typeof import("../../../clients/env-utils.js")
+			>()),
 			isTestMode: () => false,
 		}));
 		// `PI_LENS_HOME` is the knob `getGlobalPiLensDir` reads.
