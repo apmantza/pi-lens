@@ -163,14 +163,22 @@ const lspRunner: RunnerDefinition = {
 			const { disabledServerIds: disabledPrimaryServerIds } = disabledPrimaries(
 				ctx.filePath,
 			);
+			// #5238 F1: no server's file matcher selects this file and no disabled
+			// primary would have: the lane has nothing to check (a kind can be wider
+			// than its servers: groovy names `Jenkinsfile`/`build.gradle`, docker
+			// `Dockerfile.dev`). That is not a missing or failed tool, so the coverage
+			// notice must not call it "unavailable". A matched server that is merely
+			// not installed passes `supportsLSP` and is not reached here.
 			return {
 				status: "skipped",
 				diagnostics: [],
 				semantic: "none",
-				...(disabledPrimaryServerIds.length > 0 && {
-					primaryUnavailableCause: "disabled" as const,
-					disabledPrimaryServerIds,
-				}),
+				...(disabledPrimaryServerIds.length > 0
+					? {
+							primaryUnavailableCause: "disabled" as const,
+							disabledPrimaryServerIds,
+						}
+					: { skipReason: "no-files-matched" as const }),
 			};
 		}
 
