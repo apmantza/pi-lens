@@ -27,9 +27,7 @@ const seen = vi.hoisted(() => ({
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
-	return bootstrapSeamMock(async () => ({
-		metricsClient: { reset: () => {} },
-	}));
+	return bootstrapSeamMock(async () => ({}));
 });
 vi.mock("../clients/runtime-session.js", () => ({
 	handleSessionStart: async (deps: {

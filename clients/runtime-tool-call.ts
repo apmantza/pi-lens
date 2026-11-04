@@ -4,7 +4,7 @@ import { requestBootstrapClients } from "./bootstrap.js";
 import type { CacheManager } from "./cache-manager.js";
 import { resolveSessionConfigRoot } from "./analysis-root.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
-import { detectFileKind } from "./file-kinds.js";
+import { CODE_KINDS, detectFileKind } from "./file-kinds.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./git-guard.js";
 import { dropHashlineAnchorMemo } from "./hashline-anchor.js";
@@ -34,7 +34,10 @@ import {
 	noteAgentCallStart,
 } from "./fix-run-restore.js";
 import { LANGUAGE_POLICY } from "./language-policy.js";
-import { isComplexitySupportedFile } from "./tree-sitter-shared.js";
+import {
+	isComplexitySupportedFile,
+	resolveTreeSitterLanguage,
+} from "./tree-sitter-shared.js";
 import {
 	classifyMutatingTool,
 	isProviderReplayCall,
@@ -1332,7 +1335,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// produce a baseline never loads the analyzer graph. This await used to sit
 	// above them and fire on EVERY tool_call — a bash command, a grep, a read
 	// of a vendored file, a second read of an already-baselined file all paid
-	// the seventeen-module load.
+	// the analyzer-module load.
 	//
 	// `isComplexitySupportedFile` is the LAST of those guards and the one that
 	// matters most in a real repo: complexity has node mappings for six
@@ -1396,6 +1399,21 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			subject: "complexity",
 			reason: "skipped (disabled by config)",
 		});
+	} else if (
+		!getFlag("no-complexity") &&
+		!isExternalOrVendor &&
+		filePath &&
+		!isComplexitySupportedFile(filePath)
+	) {
+		const kind = detectFileKind(filePath);
+		if (kind && CODE_KINDS.has(kind)) {
+			const language = resolveTreeSitterLanguage(filePath) ?? kind;
+			recordDegradationOnce({
+				kind: "function-metrics-language-unsupported",
+				subject: language,
+				reason: `no function-metrics table for ${language}`,
+			});
+		}
 	}
 
 	// --- Read-Before-Edit Guard: check edits ---

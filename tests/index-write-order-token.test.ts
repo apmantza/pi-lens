@@ -53,9 +53,7 @@ vi.mock("../tools/lens-diagnostics.js", async (importOriginal) => {
 });
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
-	return bootstrapSeamMock(async () => ({
-		metricsClient: { reset: () => {} },
-	}));
+	return bootstrapSeamMock(async () => ({}));
 });
 
 import type { RuntimeCoordinator } from "../clients/runtime-coordinator.js";

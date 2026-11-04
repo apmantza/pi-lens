@@ -3268,7 +3268,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 				cacheManager,
 				biomeClient: resident?.biomeClient,
 				ruffClient: resident?.ruffClient,
-				metricsClient: resident?.metricsClient,
 				resetLSPService,
 				// #4942: the read guard of the session whose tool result this is.
 				readGuard: runtime.readGuardFor(getStableSessionId(ctx)),

@@ -85,7 +85,6 @@ vi.mock("../../clients/bootstrap.js", async () => {
 							isPythonFile: () => false,
 							ensureAvailable: async () => false,
 						},
-						metricsClient: {},
 					}),
 				);
 			}),
@@ -332,7 +331,6 @@ function deps(
 						isPythonFile: () => false,
 						ensureAvailable: async () => false,
 					},
-					metricsClient: {},
 				}
 			: {}),
 		resetLSPService: () => {},
@@ -1437,7 +1435,6 @@ describe("formal/dispatch-pipeline replays", () => {
 					{
 						biomeClient: noBiome as unknown as BiomeClient,
 						ruffClient: {} as never,
-						metricsClient: {} as never,
 						getFormatService: () => formatService,
 						fixedThisTurn: new Set<string>(),
 					},
@@ -1597,7 +1594,6 @@ describe("formal/dispatch-pipeline replays", () => {
 						{
 							biomeClient: noBiome as unknown as BiomeClient,
 							ruffClient: {} as never,
-							metricsClient: {} as never,
 							getFormatService: () => new FormatService("tla", true),
 							fixedThisTurn: new Set<string>(),
 						},
@@ -1648,7 +1644,6 @@ describe("formal/dispatch-pipeline replays", () => {
 						{
 							biomeClient: noBiome as unknown as BiomeClient,
 							ruffClient: {} as never,
-							metricsClient: {} as never,
 							getFormatService: () => new FormatService("tla", true),
 							fixedThisTurn: new Set<string>(),
 						},
@@ -1817,7 +1812,6 @@ describe("formal/dispatch-pipeline replays", () => {
 					{
 						biomeClient: fixer,
 						ruffClient: { isPythonFile: () => false } as never,
-						metricsClient: {} as never,
 						getFormatService: () => ({}) as FormatService,
 						fixedThisTurn: new Set<string>(),
 					},

@@ -111,7 +111,6 @@ function pipelineDeps(overrides: {
 	return {
 		biomeClient: (overrides.biomeClient ?? noBiome) as BiomeClient,
 		ruffClient: { isPythonFile: () => false } as never,
-		metricsClient: {} as never,
 		getFormatService:
 			overrides.getFormatService ??
 			(() => ({ recordRead: () => {} }) as unknown as FormatService),
@@ -130,7 +129,6 @@ function deps(runtime: RuntimeCoordinator) {
 			isPythonFile: () => false,
 			ensureAvailable: async () => false,
 		},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

@@ -61,7 +61,6 @@ function makeDeps(ctxCwd: string) {
 		dbg: () => {},
 		log: () => {},
 		runtime: makeDefaultRuntime(),
-		metricsClient: { reset: () => {} },
 		cacheManager: { writeCache: () => {}, readCache: () => null },
 		todoScanner: { scanDirectory: () => ({ items: [] }) },
 		astGrepClient: {

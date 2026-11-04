@@ -110,7 +110,6 @@ function makeSessionStartDeps(
 			cachedExports: new Map(),
 			errorDebtBaseline: { testsPassed: true, buildPassed: true },
 		},
-		metricsClient: { reset: () => {} },
 		cacheManager: { writeCache: () => {}, readCache: () => null },
 		todoScanner: { scanDirectory: () => ({ items: [] }) },
 		astGrepClient: { ...unavailable, scanExports: async () => new Map() },

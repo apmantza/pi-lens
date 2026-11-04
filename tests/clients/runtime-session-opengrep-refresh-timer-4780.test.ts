@@ -172,7 +172,6 @@ function makeDeps(
 		dbg,
 		log: () => {},
 		runtime: new RuntimeCoordinator(),
-		metricsClient: { reset: () => {} },
 		cacheManager: { writeCache: () => {}, readCache: () => null },
 		todoScanner: { scanDirectory: () => ({ items: [] }) },
 		astGrepClient: {

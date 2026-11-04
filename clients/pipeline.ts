@@ -108,7 +108,6 @@ import {
 	type PilensDiagnosticEntry,
 } from "./diagnostics-publish.js";
 import { loadLspService } from "./lsp-lazy.js";
-import type { MetricsClient } from "./metrics-client.js";
 import { clearGraphCache } from "./review-graph/builder.js";
 import { classifyTreeSitterWasmError } from "./tree-sitter-client.js";
 import { BoundedLruCache } from "./bounded-cache.js";
@@ -392,7 +391,6 @@ export interface PipelineContext {
 export interface PipelineDeps {
 	biomeClient: BiomeClient;
 	ruffClient: RuffClient;
-	metricsClient: MetricsClient;
 	getFormatService: () => FormatService;
 	fixedThisTurn: PathSetLike;
 }

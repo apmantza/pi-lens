@@ -107,7 +107,6 @@ function toolResultDeps(
 		cacheManager: new CacheManager(false),
 		biomeClient: {},
 		ruffClient: {},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

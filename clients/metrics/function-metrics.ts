@@ -1,0 +1,336 @@
+/**
+ * Per-function code metrics over the shipped tree-sitter grammars (#5086).
+ *
+ * One table per language and one walk per function body. The `function-facts`
+ * provider (and through it `high-complexity`, `unsafe-boundary` and the review
+ * graph) and `ComplexityClient` both read their numbers here.
+ */
+import type { ComplexityLanguageId, TsNode } from "../tree-sitter-shared.js";
+
+export interface FunctionMetrics {
+	/** McCabe: 1 + decision points + logical operators in the body. */
+	cyclomatic: number;
+	/** Each scored structure adds 1 + its nesting (a nested function counts as a level); each logical operator adds 1. */
+	cognitive: number;
+	/** Deepest control-structure nesting below the body; a flat body is 0. */
+	nesting: number;
+	/** Source lines the function node spans. */
+	length: number;
+	parameters: number;
+}
+
+export interface NamedFunctionMetrics extends FunctionMetrics {
+	name: string;
+	line: number;
+}
+
+export interface FileMetrics {
+	cognitive: number;
+	nesting: number;
+	/** Every function-like node, in source order, nested ones included. */
+	functions: NamedFunctionMetrics[];
+}
+
+/** Sees each body node once, during the metrics walk (#1740: one pass). */
+export type BodyVisitor = (
+	node: TsNode,
+	type: string,
+	children: TsNode[],
+) => void;
+
+interface MetricsTable {
+	functions: ReadonlySet<string>;
+	decisions: ReadonlySet<string>;
+	cognitive: ReadonlySet<string>;
+	nesting: ReadonlySet<string>;
+	/** Operator tokens of a logical `binary_expression` or `boolean_operator`. */
+	logical: ReadonlySet<string>;
+}
+
+const JSTS: MetricsTable = {
+	functions: new Set([
+		"function_declaration",
+		"function_expression",
+		"arrow_function",
+		"method_definition",
+		"generator_function",
+		"generator_function_declaration",
+	]),
+	// `switch_default` is not a decision.
+	decisions: new Set([
+		"if_statement",
+		"for_statement",
+		"for_in_statement",
+		"while_statement",
+		"do_statement",
+		"switch_case",
+		"catch_clause",
+		"ternary_expression",
+	]),
+	cognitive: new Set([
+		"if_statement",
+		"for_statement",
+		"for_in_statement",
+		"while_statement",
+		"do_statement",
+		"switch_statement",
+		"catch_clause",
+		"ternary_expression",
+	]),
+	nesting: new Set([
+		"if_statement",
+		"for_statement",
+		"for_in_statement",
+		"while_statement",
+		"do_statement",
+		"switch_statement",
+		"try_statement",
+	]),
+	logical: new Set(["&&", "||", "??"]),
+};
+
+const PYTHON: MetricsTable = {
+	functions: new Set(["function_definition", "lambda"]),
+	decisions: new Set([
+		"if_statement",
+		"elif_clause",
+		"for_statement",
+		"while_statement",
+		"case_clause",
+		"conditional_expression",
+		"except_clause",
+	]),
+	cognitive: new Set([
+		"if_statement",
+		"elif_clause",
+		"for_statement",
+		"while_statement",
+		"match_statement",
+		"conditional_expression",
+		"except_clause",
+	]),
+	nesting: new Set([
+		"if_statement",
+		"for_statement",
+		"while_statement",
+		"match_statement",
+		"try_statement",
+	]),
+	logical: new Set(["and", "or"]),
+};
+
+const GO: MetricsTable = {
+	functions: new Set([
+		"function_declaration",
+		"method_declaration",
+		"func_literal",
+	]),
+	// `default_case` is not a decision.
+	decisions: new Set([
+		"if_statement",
+		"for_statement",
+		"expression_case",
+		"type_case",
+		"communication_case",
+	]),
+	cognitive: new Set([
+		"if_statement",
+		"for_statement",
+		"expression_switch_statement",
+		"type_switch_statement",
+		"select_statement",
+	]),
+	nesting: new Set([
+		"if_statement",
+		"for_statement",
+		"expression_switch_statement",
+		"type_switch_statement",
+		"select_statement",
+	]),
+	logical: new Set(["&&", "||"]),
+};
+
+const RUST: MetricsTable = {
+	functions: new Set(["function_item", "closure_expression"]),
+	decisions: new Set([
+		"if_expression",
+		"while_expression",
+		"for_expression",
+		"loop_expression",
+		"match_arm",
+	]),
+	cognitive: new Set([
+		"if_expression",
+		"while_expression",
+		"for_expression",
+		"loop_expression",
+		"match_expression",
+	]),
+	nesting: new Set([
+		"if_expression",
+		"while_expression",
+		"for_expression",
+		"loop_expression",
+		"match_expression",
+	]),
+	logical: new Set(["&&", "||"]),
+};
+
+/** `satisfies` a `Record` over the language union, so a grammar added to
+ * `COMPLEXITY_LANGUAGE_IDS` without a table here is a compile error. */
+const TABLES = {
+	typescript: JSTS,
+	tsx: JSTS,
+	javascript: JSTS,
+	python: PYTHON,
+	go: GO,
+	rust: RUST,
+} satisfies Record<ComplexityLanguageId, MetricsTable>;
+
+/** Named children of a parameter list that are not parameters. */
+const NOT_PARAMETERS = new Set([
+	"comment",
+	"line_comment",
+	"block_comment",
+	"attribute_item",
+	"keyword_separator",
+	"positional_separator",
+]);
+
+interface Tally {
+	cyclomatic: number;
+	cognitive: number;
+	nesting: number;
+}
+
+interface Walk {
+	table: MetricsTable;
+	visit: BodyVisitor | undefined;
+	tally: Tally;
+}
+
+function isLogicalOperator(
+	type: string,
+	children: TsNode[],
+	table: MetricsTable,
+): boolean {
+	if (type !== "binary_expression" && type !== "boolean_operator") return false;
+	return children.some((c: TsNode) => table.logical.has(c?.type));
+}
+
+function step(
+	walk: Walk,
+	node: TsNode,
+	depth: number,
+	cognitiveDepth: number,
+	inFunction: boolean,
+): void {
+	const { table, tally } = walk;
+	const type: string = node.type;
+	const children: TsNode[] = node.children ?? [];
+	walk.visit?.(node, type, children);
+	tally.nesting = Math.max(tally.nesting, depth);
+	if (table.decisions.has(type)) tally.cyclomatic++;
+	if (table.cognitive.has(type)) tally.cognitive += 1 + cognitiveDepth;
+	if (isLogicalOperator(type, children, table)) {
+		tally.cyclomatic++;
+		tally.cognitive++;
+	}
+	const nests = table.nesting.has(type);
+	const isFunction = table.functions.has(type);
+	const nextDepth = nests ? depth + 1 : depth;
+	// Only a function nested in another one deepens cognitive nesting.
+	const deepens = nests || (isFunction && inFunction);
+	const nextCognitiveDepth = deepens ? cognitiveDepth + 1 : cognitiveDepth;
+	for (const child of children) {
+		if (child)
+			step(
+				walk,
+				child,
+				nextDepth,
+				nextCognitiveDepth,
+				inFunction || isFunction,
+			);
+	}
+}
+
+function tally(
+	scope: TsNode | null,
+	table: MetricsTable,
+	insideFunction: boolean,
+	visit?: BodyVisitor,
+): Tally {
+	const walk: Walk = {
+		table,
+		visit,
+		tally: { cyclomatic: 1, cognitive: 0, nesting: 0 },
+	};
+	if (scope) step(walk, scope, 0, 0, insideFunction);
+	return walk.tally;
+}
+
+/**
+ * The `body` field as one of `fn.children`'s own objects. web-tree-sitter
+ * caches a node's children on its object, and `childForFieldName` returns a
+ * fresh object, so walking it re-marshals the whole body (3x slower on
+ * `clients/review-graph/builder.ts`).
+ */
+function bodyOf(fn: TsNode): TsNode | null {
+	const id = fn.childForFieldName("body")?.id;
+	if (id === undefined) return null;
+	return (fn.children ?? []).find((c: TsNode) => c?.id === id) ?? null;
+}
+
+function countParameters(fn: TsNode): number {
+	const list = fn.childForFieldName("parameters");
+	// A bare `x => x` arrow names its one parameter in the `parameter` field.
+	if (!list) return fn.childForFieldName("parameter") ? 1 : 0;
+	let count = 0;
+	for (const param of list.namedChildren ?? []) {
+		if (!param || NOT_PARAMETERS.has(param.type)) continue;
+		// Go declares several names in one `a, b int`.
+		count += Math.max(1, param.childrenForFieldName("name").length);
+	}
+	return count;
+}
+
+/** Metrics for one function-like node of `languageId`'s grammar. */
+export function measureFunction(
+	fn: TsNode,
+	languageId: ComplexityLanguageId,
+	visit?: BodyVisitor,
+): FunctionMetrics {
+	const { cyclomatic, cognitive, nesting } = tally(
+		bodyOf(fn),
+		TABLES[languageId],
+		true,
+		visit,
+	);
+	return {
+		cyclomatic,
+		cognitive,
+		nesting,
+		length: fn.endPosition.row - fn.startPosition.row + 1,
+		parameters: countParameters(fn),
+	};
+}
+
+/** File-level nesting and cognitive complexity, plus every function's metrics. */
+export function measureFile(
+	root: TsNode,
+	languageId: ComplexityLanguageId,
+): FileMetrics {
+	const table = TABLES[languageId];
+	const functions: NamedFunctionMetrics[] = [];
+	const { cognitive, nesting } = tally(root, table, false, (node, type) => {
+		// Python's `lambda` keyword token shares its node's type name.
+		if (!table.functions.has(type) || !node.isNamed) return;
+		const line = node.startPosition.row + 1;
+		functions.push({
+			name: node.childForFieldName("name")?.text ?? `<anonymous@L${line}>`,
+			line,
+			...measureFunction(node, languageId),
+		});
+	});
+	return { cognitive, nesting, functions };
+}

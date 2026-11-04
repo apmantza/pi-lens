@@ -51,7 +51,6 @@ import type { GoClient } from "./go-client.js";
 import type { GovulncheckClient } from "./govulncheck-client.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient } from "./knip-client.js";
-import type { MetricsClient } from "./metrics-client.js";
 import type { OpengrepClient } from "./opengrep-client.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RustClient } from "./rust-client.js";
@@ -69,7 +68,6 @@ export interface BootstrapClients {
 	jscpdClient: JscpdClient;
 	depChecker: DependencyChecker;
 	testRunnerClient: TestRunnerClient;
-	metricsClient: MetricsClient;
 	complexityClient: ComplexityClient;
 	goClient: GoClient;
 	govulncheckClient: GovulncheckClient;
@@ -84,7 +82,7 @@ export interface BootstrapClients {
 /**
  * The clients of a COMPLETED load, or `null` while none has completed.
  *
- * Process-lifetime on purpose: the 17 clients are stateless constructions and
+ * Process-lifetime on purpose: the 16 clients are stateless constructions and
  * every session-scoped latch that lives ON them is re-armed at `session_start`
  * by its own registered reset (`resetInstallRetryLatches`, #1497, is the
  * canonical one). Dropping the clients at a session boundary would re-pay the
@@ -240,7 +238,7 @@ async function logBootstrapFailures(
 }
 
 /**
- * Build the 17 clients once. Every per-client load below is individually
+ * Build the 16 clients once. Every per-client load below is individually
  * fail-soft (`load`/`loadList` degrade to a stub instead of throwing), so this
  * is not expected to reject in practice — a genuinely unexpected throw (e.g.
  * `logBootstrapFailures`) is what the retryable flight above exists for.
@@ -286,7 +284,6 @@ async function buildBootstrapClients(): Promise<BootstrapClients> {
 		jscpdClient,
 		depChecker,
 		testRunnerClient,
-		metricsClient,
 		complexityClient,
 		goClient,
 		govulncheckClient,
@@ -326,10 +323,6 @@ async function buildBootstrapClients(): Promise<BootstrapClients> {
 			"test-runner",
 			async () =>
 				new (await import("./test-runner-client.js")).TestRunnerClient(),
-		),
-		load(
-			"metrics",
-			async () => new (await import("./metrics-client.js")).MetricsClient(),
 		),
 		load(
 			"complexity",
@@ -381,7 +374,6 @@ async function buildBootstrapClients(): Promise<BootstrapClients> {
 		jscpdClient,
 		depChecker,
 		testRunnerClient,
-		metricsClient,
 		complexityClient,
 		goClient,
 		govulncheckClient,
@@ -431,9 +423,9 @@ class BootstrapUnavailableError extends Error {
  * The clients a completed load produced, or `null`.
  *
  * NEVER starts a load. This is the accessor for work that must touch the
- * clients only if they already exist — session start's `metricsClient.reset()`
- * and `knipClient.resetSessionState()` are exactly that: re-arming state on a
- * client that was never constructed is vacuous, and loading 17 modules in
+ * clients only if they already exist — session start's
+ * `knipClient.resetSessionState()` is exactly that: re-arming state on a
+ * client that was never constructed is vacuous, and loading 16 modules in
  * order to reset nothing is the cost #2467 removes.
  */
 export function peekBootstrapClients(): BootstrapClients | null {
@@ -472,12 +464,12 @@ export interface SessionBootstrapAccess {
  * A {@link SessionBootstrapAccess} over clients that are ALREADY loaded.
  *
  * `clients/mcp/session.ts` builds its whole session context up front — an MCP
- * call has nothing to defer to — so it holds the seventeen clients before it
+ * call has nothing to defer to — so it holds the sixteen clients before it
  * ever calls `handleSessionStart`. This is the two-line adapter that lets the
  * handler take ONE shape instead of admitting a second, untyped one in which
  * fifteen individually-optional client fields stood in for the seam ("exactly
- * one of the two is supplied" was prose, not a type; a dropped
- * `metricsClient` compiled and silently skipped every startup scan).
+ * one of the two is supplied" was prose, not a type; a dropped client field
+ * compiled and silently skipped every startup scan).
  */
 export function residentBootstrapAccess(
 	clients: BootstrapClients,

@@ -43,7 +43,6 @@ async function editRows(runtime: RuntimeCoordinator, filePath: string) {
 			cacheManager: { addModifiedRange: () => {}, readTurnState: () => ({}) },
 			biomeClient: {},
 			ruffClient: {},
-			metricsClient: {},
 			resetLSPService: () => {},
 			agentBehaviorRecord: () => [],
 			formatBehaviorWarnings: () => "",

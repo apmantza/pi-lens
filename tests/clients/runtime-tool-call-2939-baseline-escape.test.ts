@@ -69,7 +69,6 @@ const LOADED_CLIENTS = {
 	},
 	biomeClient: {},
 	ruffClient: {},
-	metricsClient: {},
 };
 
 vi.mock("../../clients/bootstrap.js", async () => {

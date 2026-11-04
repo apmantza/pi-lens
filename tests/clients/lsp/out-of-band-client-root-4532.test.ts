@@ -97,7 +97,6 @@ async function bashResult(command: string): Promise<void> {
 		biomeClient: {},
 		ruffClient: {},
 		testRunnerClient: {},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

@@ -80,7 +80,6 @@ function makeDeps(ctxCwd: string, dbg: (msg: string) => void = () => {}) {
 			cachedExports: new Map(),
 			errorDebtBaseline: { testsPassed: true, buildPassed: true },
 		},
-		metricsClient: { reset: () => {} },
 		cacheManager: {
 			writeCache: () => {},
 			readCache: () => null,

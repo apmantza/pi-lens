@@ -74,7 +74,6 @@ function deps(
 		cacheManager,
 		biomeClient: {},
 		ruffClient: {},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

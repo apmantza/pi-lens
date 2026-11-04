@@ -26,7 +26,6 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import { MetricsClient } from "../../clients/metrics-client.js";
 import {
 	type PipelineContext,
 	type PipelineDeps,
@@ -256,7 +255,6 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 				ensureAvailable: async () => false,
 			} as unknown as RuffClient,
 			testRunnerClient: new TestRunnerClient(),
-			metricsClient: new MetricsClient(),
 			getFormatService: () => ({}) as never,
 			fixedThisTurn: new Set(),
 		} as PipelineDeps;
@@ -365,7 +363,6 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 					biomeClient: {},
 					ruffClient: {},
 					testRunnerClient: {},
-					metricsClient: {},
 					resetLSPService: () => {},
 					agentBehaviorRecord: () => [],
 					formatBehaviorWarnings: () => "",
@@ -1521,7 +1518,6 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			biomeClient: {},
 			ruffClient: {},
 			testRunnerClient: {},
-			metricsClient: {},
 			resetLSPService: () => {},
 			agentBehaviorRecord: () => [],
 			formatBehaviorWarnings: () => "",
