@@ -15,12 +15,20 @@
  * list's exact members and order (de-duplication, lowest tier first) and the
  * raw spellings single-tier configs already carry. The union, per-key
  * `select`, disable-over-select and non-string-member claims are properties
- * over generated tier stacks in `rule-policy-merge-properties.test.ts` (#5250).
+ * over generated tier stacks in `rule-policy-merge-properties.test.ts` (#5250);
+ * the notice text a bad member or value draws is pinned here, because a verdict
+ * property cannot see it.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	loadPiLensGlobalConfig,
+	resetGlobalConfigWarnCache,
+} from "../../../clients/lens-config.js";
+import { resetDegradationLedger } from "../../../clients/degradation-ledger.js";
+import { wireUserNotifier } from "../../../clients/user-notify.js";
 import { resolvePiLensConfig } from "../../../clients/config-resolve.js";
 import { rulePolicyMapFromResolution } from "../../../clients/dispatch/rule-policy.js";
 import { resetProjectLensConfigCache } from "../../../clients/project-lens-config.js";
@@ -98,6 +106,45 @@ describe("rules.<id>.disable — union across tiers (#5232)", () => {
 			}).value.rules as { k: { disable: string[] } };
 
 			expect(resolved.k.disable).toEqual(expected);
+		},
+	);
+
+	// Recurrence (#5250): `select` stayed an opaque leaf after #5237 typed
+	// `disable`, so `select: ["ra", 5]` threw in the rule filter and drew no
+	// notice. Both fields now draw the same one, in the same place.
+	it.each(["disable", "select"] as const)(
+		"%s: a non-string member and a non-array value draw PILENS_CFG_0005, siblings survive",
+		(field) => {
+			const notices: string[] = [];
+			resetGlobalConfigWarnCache();
+			resetDegradationLedger();
+			wireUserNotifier(() => (message) => {
+				notices.push(message);
+			});
+			writeGlobal({
+				rules: { k: { [field]: ["ra", 5] }, j: { [field]: "rb" } },
+			});
+
+			const loaded = loadPiLensGlobalConfig(
+				path.join(globalDir, "config.json"),
+			);
+			const resolution = resolvePiLensConfig({
+				cwd: repo,
+				globalDir,
+				globalConfigPath: path.join(globalDir, "config.json"),
+				homeDir: tmpDir,
+			});
+
+			expect(loaded).toBeDefined();
+			expect(resolution.value.rules).toEqual({ k: { [field]: ["ra"] }, j: {} });
+			expect(
+				resolution.records
+					.filter((record) => record.code === "PILENS_CFG_0005")
+					.map((record) => record.key),
+			).toEqual([`/rules/k/${field}/1`, `/rules/j/${field}`]);
+			expect(
+				notices.filter((m) => m.includes("[PILENS_CFG_0005]")).length,
+			).toBeGreaterThan(0);
 		},
 	);
 });

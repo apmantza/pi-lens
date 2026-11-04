@@ -350,6 +350,11 @@ allowlist, not a denial: per grouping key, the nearest file that sets it supplie
 the whole list. Lists under different keys are unioned, so a global `k.select:
 [x]` and a nearer file's `k2.select: [y]` keep both `x` and `y`.
 
+In both lists a member that is not a string, or a value that is not an array,
+is dropped and the valid members keep their effect. The global file reports it
+with a `PILENS_CFG_0005` notice; a project or nested file's is dropped without
+one.
+
 `ignorePaths` entries follow the same gitignore rules as the `ignore` field. Each entry is
 relative to the directory of the file that declares it: a global entry, and an entry in the
 workspace root's own file, match against the workspace root, and an entry in `pkg/.pi-lens.json`

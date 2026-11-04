@@ -31,8 +31,8 @@
  *   2. `select` replaces per grouping key: the nearest tier that sets
  *      `k.select` supplies `k`'s list and never drops another key's list.
  *   3. `disable` wins over `select` for the same rule, whatever the tiers.
- *   4. A non-string `disable` member (or a non-array value) never throws, and
- *      removing it changes no verdict.
+ *   4. A non-string `disable` or `select` member (or a non-array value) never
+ *      throws, and removing it changes no verdict.
  *
  * Determinism: fixed seed and bounded runs. Replay a failure with
  * `PI_LENS_PROP_SEED=<seed> PI_LENS_PROP_RUNS=<runs> npx vitest run <file>`;
@@ -315,6 +315,11 @@ const cleanMembers = fc.oneof(
 	{ weight: 1, arbitrary: blankMemberArb },
 );
 const idOnlyMembers = idMemberArb;
+/** Select members: a padded or blank entry would open the allowlist, so ids and junk only. */
+const dirtySelectMembers = fc.oneof(
+	{ weight: 4, arbitrary: idMemberArb },
+	{ weight: 3, arbitrary: junkMemberArb },
+);
 const dirtyMembers = fc.oneof(
 	{ weight: 4, arbitrary: idMemberArb },
 	{ weight: 1, arbitrary: paddedMemberArb },
@@ -672,23 +677,25 @@ describe("rules.<id> tier merge: properties (#5250)", () => {
 	);
 
 	it(
-		"a non-string disable member never throws and valid siblings keep their verdicts",
+		"a non-string disable or select member never throws and valid siblings keep their verdicts",
 		{ timeout: PROPERTY_TIMEOUT_MS },
 		() => {
 			assertProperty(
 				fc.property(
 					stackArb({
 						disable: true,
-						select: false,
+						select: true,
 						disableMembers: dirtyMembers,
-						selectMembers: idOnlyMembers,
+						selectMembers: dirtySelectMembers,
 						bad: true,
 					}),
 					({ stack, cwd }) => {
 						const dropped = verdictsOf(stack, cwd);
 						const clean = verdictsOf(withoutJunk(stack), cwd);
 						const docs = visibleDocs(stack, cwd);
-						const union = expectedDisabled(docs);
+						const disabled = expectedDisabled(docs);
+						const open = paddedDisabled(docs);
+						const select = expectedSelect(docs);
 						for (const base of queryBases(stack))
 							for (const id of SPELLED(base)) {
 								// Removing the junk changes no verdict (and neither call threw).
@@ -696,10 +703,11 @@ describe("rules.<id> tier merge: properties (#5250)", () => {
 									throw new Error(
 										`${id}: junk changed the verdict ${clean(id)} -> ${dropped(id)}\n${render(stack, cwd)}`,
 									);
-								// A valid sibling is still disabled.
-								if (union.has(base) && !dropped(id))
+								// Valid siblings keep the verdict the valid members alone give.
+								if (open.has(base) && !disabled.has(base)) continue;
+								if (dropped(id) !== expectedDropped(base, disabled, select))
 									throw new Error(
-										`${id}: valid sibling lost its verdict\n${render(stack, cwd)}`,
+										`${id}: valid siblings lost their verdict, expected ${expectedDropped(base, disabled, select)}\n${render(stack, cwd)}`,
 									);
 							}
 					},
@@ -723,12 +731,17 @@ function withoutJunk(stack: Stack): Stack {
 			kind: "block",
 			entries: doc.entries.flatMap(([key, value]): [string, EntryValue][] => {
 				if (value.kind !== "entry") return [];
-				const { disable, ...rest } = value.entry;
+				const { disable, select, ...rest } = value.entry;
 				const kept: Entry = { ...rest };
 				if (disable?.kind === "list")
 					kept.disable = {
 						kind: "list",
 						members: disable.members.filter((m) => m.kind !== "junk"),
+					};
+				if (select?.kind === "list")
+					kept.select = {
+						kind: "list",
+						members: select.members.filter((m) => m.kind !== "junk"),
 					};
 				return [[key, { kind: "entry", entry: kept }]];
 			}),
