@@ -284,3 +284,14 @@ and `[]` mean no arguments.
 - **`lens_diagnostics mode=full`** — full project-wide review: LSP + the cached
   heavyweight analyzers (jscpd, madge, gitleaks, govulncheck, trivy, dead-code)
   folded in via `refreshRunners`.
+
+## Codemode
+
+- Lazy pi-lens tools are not callable from a codemode script until
+  `pi_lens_activate_tools` has run. They become callable from the next turn.
+- pi's error for a lazy tool lists the available tools but not
+  `pi_lens_activate_tools`.
+- `--no-lazy-tools` makes every pi-lens tool callable from the first script.
+- Scripts receive each tool's text, including pi-lens notes such as a blocker
+  note, never `details`.
+- Nested writes are recorded like top-level ones.
