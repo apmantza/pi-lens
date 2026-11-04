@@ -388,7 +388,13 @@ export async function sampleProcesses(
 				cpuPercent: stat.cpu,
 			});
 		}
-	} catch {
+	} catch (err) {
+		// pidusage rejects with this exact message when EVERY pid in the batch has
+		// already exited (a lone short-lived child). That is the "absent, unsampled"
+		// outcome this function documents, not a failed process-table query (#5261).
+		if (err instanceof Error && err.message === "No matching pid found") {
+			return result;
+		}
 		recordQueryFailure("posix-pidusage-process-table", "spawn-error");
 		// Best-effort: sampling failure loses this tick's data for every pid in
 		// the batch, but must never throw into the heartbeat/spawn path.

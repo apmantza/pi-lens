@@ -270,6 +270,24 @@ describe("sampleProcesses (POSIX / pidusage path)", () => {
 		});
 	});
 
+	// #5261: the session-start global-bin-dir prime made a short-lived npm child
+	// the only tracked pid; it exits before the first tick and pidusage rejects
+	// with "No matching pid found" when EVERY pid is gone. That is the documented
+	// "exited, so absent" outcome, not a failed process-table query, and it was
+	// landing a resource-sampler-query-failed row in the degradation ledger (the
+	// 1892 scanner-freshness witness went red on exactly that row).
+	it("treats a batch whose every pid already exited as unsampled, not a query failure", async () => {
+		pidusageMock.mockRejectedValue(new Error("No matching pid found"));
+
+		const sampled = requireMap(await sampleProcesses([111]));
+		expect(sampled.size).toBe(0);
+		expect(
+			getDegradationSummary().find(
+				(g) => g.kind === "resource-sampler-query-failed",
+			),
+		).toBeUndefined();
+	});
+
 	it("de-duplicates and drops invalid pids before sampling", async () => {
 		pidusageMock.mockResolvedValue({ "111": { cpu: 1, memory: 1 } });
 
