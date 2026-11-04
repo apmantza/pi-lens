@@ -128,6 +128,39 @@ describe("rules.<id>.disable — union across tiers (#5232)", () => {
 		expect(dropped("y", repo)).toBe(false);
 	});
 
+	it("a non-string member is dropped by validation instead of throwing in the filter", () => {
+		// Recurrence: the opaque field passed `["rule-c", 5]` through untouched
+		// and `evaluateRulePolicy` threw `normalized.startsWith is not a function`
+		// on the first rule id compared after the number.
+		writeAt(repo, { rules: { k: { disable: ["rule-c", 5] } } });
+
+		expect(dropped("rule-c", repo)).toBe(true);
+		expect(dropped("rule-x", repo)).toBe(false);
+	});
+
+	it.each([
+		["a single-tier list", ["rule-c"], ["rule-c"]],
+		["an empty list", [], []],
+		["blank entries", ["  ", ""], ["  ", ""]],
+		["a padded entry", [" rule-c "], [" rule-c "]],
+	])(
+		"old single-tier configs resolve as before: %s",
+		(_name, disable, expected) => {
+			// Old-record parse proof (#5232): the shapes configs already carry keep
+			// the exact merged list they produced when the field was opaque.
+			writeAt(repo, { rules: { k: { disable } } });
+
+			const resolved = resolvePiLensConfig({
+				cwd: repo,
+				globalDir,
+				globalConfigPath: path.join(globalDir, "config.json"),
+				homeDir: tmpDir,
+			}).value.rules as { k: { disable: string[] } };
+
+			expect(resolved.k.disable).toEqual(expected);
+		},
+	);
+
 	it("a non-array disable is dropped as before and does not disturb the other tiers", () => {
 		writeGlobal({ rules: { k: { disable: ["rule-a"] } } });
 		writeAt(repo, { rules: { k: { disable: "rule-c" } } });

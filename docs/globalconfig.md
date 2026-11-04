@@ -265,10 +265,14 @@ Per-rule threshold overrides and policy filters. Currently honored:
   `no-eval` once and the filter covers `no-eval`, `ast-grep:no-eval`, and
   `no-eval-js`. Side effect: a rule whose real name genuinely ends in `-js`
   (e.g. `prefer-js`) is conflated with its stem (`prefer`) — disabling or
-  selecting one also disables or selects the other.
+  selecting one also disables or selects the other. The list is a denial: the
+  union of the global, project and nested files' lists, so a nearer file adds
+  rules and never re-enables one.
 - `<id>.select` — allowlist of rule ids; only the listed rule ids survive
   filtering. Disable wins over select project-wide, even when the two lists
-  are configured under different keys.
+  are configured under different keys. Unlike `disable`, the nearest file that
+  sets `select` supplies the whole list; a global `select` applies when no
+  nearer file sets one.
 
 The `<id>` key is a grouping label only — it does not scope which rules the
 `disable`/`select` list underneath it can match. Matching is **project-wide**:
