@@ -1,0 +1,31 @@
+# Qodo (v2) repo config. Every key below is defined in the Qodo v2
+# configuration and command reference:
+# https://docs.qodo.ai/configuration/configuration-and-command-reference
+# (fetched 2026-11-04). Keys the reference does not define are not set here.
+# The policy matches .coderabbit.yaml and greptile.json (#4685): no PR
+# description summary, no per-push re-review, maintainer PRs skipped.
+
+[github_app]
+# Review only. /agentic_describe is left out: PR bodies follow the template
+# and are linted, so a bot description adds a comment nobody acts on. The
+# review itself still posts its own comment (comments_location_policy
+# defaults to "both").
+pr_commands = ["/agentic_review"]
+# Drafts wait until the PR is ready.
+feedback_on_draft_pr = false
+# No per-push re-review; the orchestrator requests one review per final head.
+handle_push_trigger = false
+
+[config]
+# Maintainer PRs are not auto-reviewed. The reference does not say whether a
+# manual `/agentic_review` comment still runs on them; probe that after this
+# lands. Contributor PRs are reviewed once, on open.
+ignore_pr_authors = ["^apmantza$"]
+
+[review_agent]
+issues_user_guidelines = """
+Review the change against AGENTS.md, the numbered defect shapes in
+docs/defect-shapes.md, and the invariants in docs/invariants/. Report only
+findings that a code path or a test can demonstrate. Do not comment on style
+that the lint gates enforce.
+"""
