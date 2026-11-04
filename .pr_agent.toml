@@ -7,7 +7,9 @@
 
 [github_app]
 # Review only. /agentic_describe is left out: PR bodies follow the template
-# and are linted, so a bot summary adds a comment nobody acts on.
+# and are linted, so a bot description adds a comment nobody acts on. The
+# review itself still posts its own comment (comments_location_policy
+# defaults to "both").
 pr_commands = ["/agentic_review"]
 # Drafts wait until the PR is ready.
 feedback_on_draft_pr = false
@@ -24,6 +26,5 @@ issues_user_guidelines = """
 Review the change against AGENTS.md, the numbered defect shapes in
 docs/defect-shapes.md, and the invariants in docs/invariants/. Report only
 findings that a code path or a test can demonstrate. Do not comment on style
-that the lint gates enforce. A follow-up the PR body names as moved to another
-issue, or lists under Accepted residuals, is already decided.
+that the lint gates enforce.
 """
