@@ -958,10 +958,11 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 				`${HEAD}export function go() { const verb = "install"; const cmd = "pip"; return safeSpawnAsync(cmd, [verb, "x"]); }`,
 			),
 		).toMatch(/planted\.ts#safeSpawnAsync@1/);
-		// A carrier bound first, behind a known-good command and first word.
+		// A value-taking flag bound first, between two set words: only the
+		// binding is outside the set.
 		expect(
 			await problemsOf(
-				`${HEAD}export function go() { const flag = "-c"; return safeSpawnAsync("git", ["log", flag, "core.pager=sh"]); }`,
+				`${HEAD}export function go() { const flag = "-w"; return safeSpawnAsync("go", ["env", flag, "GOROOT"]); }`,
 			),
 		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 	});
