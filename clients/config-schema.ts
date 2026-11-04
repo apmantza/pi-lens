@@ -309,9 +309,16 @@ function rulePolicyEntryNode(): ConfigSchemaNode {
 		additionalProperties: true,
 		properties: {
 			threshold: { type: "number", [STABILITY_TIER_KEY]: "experimental" },
-			// These two legacy fields remain opaque so the project compatibility
-			// parser can preserve its established field-specific diagnostics.
-			disable: opaque("experimental"),
+			// `disable` is a denial: the union of every tier, so a nearer config
+			// adds rules and never re-enables one (#5232, #2415 AC3).
+			disable: {
+				type: "array",
+				items: { type: "string", [STABILITY_TIER_KEY]: "experimental" },
+				[DENY_KEY]: "array-union",
+				[STABILITY_TIER_KEY]: "experimental",
+			},
+			// `select` stays opaque: the project compatibility parser keeps its
+			// field-specific diagnostics, and the nearest tier's list wins.
 			select: opaque("experimental"),
 			ignorePaths: {
 				type: "array",

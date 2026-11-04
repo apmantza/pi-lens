@@ -343,6 +343,13 @@ workspace root's policy still reaches them. Every surface that filters by rule
 policy reads it this way: the per-edit dispatch, `lens_diagnostics`,
 `lsp_diagnostics`, and the turn-end advisories.
 
+`rules.<id>.disable` is a denial, like `lsp.disabledServers`: it resolves as the
+union of every tier's list. A project or nested file can add rules to what the
+global or root file disabled and can never re-enable one. `select` is an
+allowlist, not a denial: per grouping key, the nearest file that sets it supplies
+the whole list. Lists under different keys are unioned, so a global `k.select:
+[x]` and a nearer file's `k2.select: [y]` keep both `x` and `y`.
+
 `ignorePaths` entries follow the same gitignore rules as the `ignore` field. Each entry is
 relative to the directory of the file that declares it: a global entry, and an entry in the
 workspace root's own file, match against the workspace root, and an entry in `pkg/.pi-lens.json`
