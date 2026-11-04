@@ -2081,6 +2081,83 @@ describe("readSymbol — duplicate-name disambiguation (#523 item 4)", () => {
 		expect(result.found).toBe(true);
 		expect(result.ambiguous).toBeUndefined();
 	});
+
+	it("refuses an unknown kind naming the candidate kinds instead of falling back to all kinds (#5138)", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export interface Foo {",
+				"  id: number;",
+				"}",
+				"",
+				"export function Foo(): void {}",
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "Foo", env.tmpDir, {
+			kind: "nope",
+		});
+
+		expect(result.found).toBe(false);
+		expect(result.error).toContain('"nope"');
+		expect(result.error).toContain("interface");
+		expect(result.error).toContain("function");
+		expect(result.source).toBeUndefined();
+	});
+
+	it("refuses a known kind that matches no candidate rather than returning a different kind (#5138)", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			["export interface Foo {", "  id: number;", "}"].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "Foo", env.tmpDir, {
+			kind: "class",
+		});
+
+		expect(result.found).toBe(false);
+		expect(result.error).toContain('"class"');
+		expect(result.source).toBeUndefined();
+	});
+
+	it("refuses an unknown kind on a qualified member through the same selection (#5138)", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export class Foo {",
+				"  bar(): number {",
+				"    return 1;",
+				"  }",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "Foo.bar", env.tmpDir, {
+			kind: "nope",
+		});
+
+		expect(result.found).toBe(false);
+		expect(result.error).toContain('"nope"');
+		expect(result.source).toBeUndefined();
+	});
+
+	it("distinguishes an unreadable path from a missing symbol (#5138)", async () => {
+		const env = makeEnv();
+		// A directory at the requested path: it exists, but no file bytes can be read.
+		fs.mkdirSync(path.join(env.tmpDir, "sample.ts"));
+
+		const result = await readSymbol("sample.ts", "anything", env.tmpDir);
+
+		expect(result.found).toBe(false);
+		expect(result.error).toBeDefined();
+		expect(result.suggestions).toBeUndefined();
+	});
 });
 
 describe("tsLangForFile — shared grammar resolution (#887)", () => {

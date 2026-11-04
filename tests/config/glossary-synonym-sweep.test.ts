@@ -458,7 +458,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/ipc.ts": 8,
 		"clients/mcp/review.ts": 8,
 		"clients/mcp/session.ts": 1,
-		"clients/module-report.ts": 29,
+		"clients/module-report.ts": 31,
+		// 29 -> 31 (#5138): the kind-mismatch refusal and the unreadable catch
+		// both read the report's own `error` condition.
 		// 27 -> 29 (#5137): the text renderer prints the report's own `error`
 		// field twice on one line, as the guard and as the message.
 		// 3 -> 5 (#4493): readGitHead and listGitHeadDelta read the spawn
@@ -909,7 +911,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/latency-logger.ts": 1,
 		"clients/mcp/session.ts": 1,
 		"clients/metrics-client.ts": 4,
-		"clients/module-report.ts": 17,
+		// 17 -> 18 (#5138): the kind-mismatch refusal logs its miss through the
+		// same `read_symbol` phase as every other miss in this file.
+		"clients/module-report.ts": 18,
 		"clients/ndjson-logger.ts": 2,
 		"clients/opengrep-client.ts": 1,
 		"clients/process-singletons.ts": 4,
@@ -1236,7 +1240,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
-		"clients/module-report.ts": 31,
+		// 31 -> 32 (#5138): the kind-mismatch refusal returns the same `path`
+		// field as every other `readSymbol` miss.
+		"clients/module-report.ts": 32,
 		// 6 -> 9 (#3650): MutationLineResult.path field, the adapter-declared
 		// preference, and the readToolResultPathField return.
 		"clients/mutating-tool.ts": 9,

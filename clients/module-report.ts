@@ -2551,6 +2551,9 @@ export function renderCompactModuleReport(
 interface SymbolSelection {
 	match?: ExtractedSymbol;
 	ambiguous?: { count: number; kinds: string[] };
+	/** #5138 D9: `kind` was given but matched no candidate. The caller refuses
+	 * instead of falling back to a symbol of another kind. */
+	kindMismatch?: { requested: string; available: string[] };
 }
 
 // Duplicate-name disambiguation (#523 item 4). `candidates` is every symbol
@@ -2558,23 +2561,41 @@ interface SymbolSelection {
 // first, else the historical "first match" (source order) wins — unchanged
 // behavior for the common (unambiguous) case. `ambiguous` is populated only
 // when the CHOSEN pool still has more than one entry, so a kind that uniquely
-// resolves the collision reports no ambiguity.
+// resolves the collision reports no ambiguity. A `kind` that matches NO
+// candidate reports `kindMismatch` (#5138 D9): the pre-#5138 fallback silently
+// returned a symbol of a different kind.
 function selectMatch(
 	candidates: ExtractedSymbol[],
 	kind: string | undefined,
 ): SymbolSelection {
 	if (candidates.length === 0) return {};
-	const filtered = kind
-		? candidates.filter((c) => c.kind === kind)
-		: candidates;
-	const pool = filtered.length > 0 ? filtered : candidates;
-	const match = pool[0];
-	if (pool.length <= 1) return { match };
+	if (!kind) {
+		const match = candidates[0];
+		if (candidates.length <= 1) return { match };
+		return {
+			match,
+			ambiguous: {
+				count: candidates.length,
+				kinds: [...new Set(candidates.map((c) => c.kind))],
+			},
+		};
+	}
+	const filtered = candidates.filter((c) => c.kind === kind);
+	if (filtered.length === 0) {
+		return {
+			kindMismatch: {
+				requested: kind,
+				available: [...new Set(candidates.map((c) => c.kind))],
+			},
+		};
+	}
+	const match = filtered[0];
+	if (filtered.length <= 1) return { match };
 	return {
 		match,
 		ambiguous: {
-			count: pool.length,
-			kinds: [...new Set(pool.map((c) => c.kind))],
+			count: filtered.length,
+			kinds: [...new Set(filtered.map((c) => c.kind))],
 		},
 	};
 }
@@ -2697,9 +2718,16 @@ export async function readSymbol(
 	let content: string;
 	try {
 		content = fs.readFileSync(absPath, "utf-8");
-	} catch {
+	} catch (err) {
 		log(false);
-		return { found: false, path: absPath, name: symbolName };
+		// #5138 D9: an unreadable file used to return the same `found: false`
+		// shape as a genuine miss, so the caller could not tell the two apart.
+		return {
+			found: false,
+			path: absPath,
+			name: symbolName,
+			error: `Could not read ${absPath}: ${diagnosticMessage(err)}`,
+		};
 	}
 
 	const kind = detectFileKind(absPath);
@@ -2743,6 +2771,15 @@ export async function readSymbol(
 	const selection =
 		qualified ?? selectMatch(unqualifiedMatches, symbolKindFilter);
 
+	if (selection.kindMismatch) {
+		log(false);
+		return {
+			found: false,
+			path: absPath,
+			name: symbolName,
+			error: `Kind "${selection.kindMismatch.requested}" does not match "${symbolName}". Accepted kinds: ${selection.kindMismatch.available.join(", ")}.`,
+		};
+	}
 	if (selection.match) {
 		const sym = selection.match;
 		// #523 item 1: extend the returned range (and thus the read-guard
