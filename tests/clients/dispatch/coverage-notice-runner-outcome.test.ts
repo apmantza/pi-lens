@@ -787,10 +787,10 @@ describe("the verdict the write line and the clean advisory read (#4734 r3, #525
 		});
 	});
 
-	it("the pull surface never goes quiet: every pull of a slow primary states the reason (#5258 r2)", async () => {
+	it("the pull surface never goes quiet: a pull after a push of a slow primary still states the reason (#5258 r2)", async () => {
 		// Recurrence prevented: the once-only latch belongs to the push surface
 		// (`dedupeCoverageNotice`); an `analyze_file` pull is a deliberate question
-		// and must get its answer each time, like the coverage notice does.
+		// and must get its answer even when a write already printed the line.
 		const registry = new RunnerRegistry();
 		registry.register({
 			id: "lsp",
@@ -800,7 +800,7 @@ describe("the verdict the write line and the clean advisory read (#4734 r3, #525
 				return { status: "deferred", diagnostics: [], semantic: "none" };
 			},
 		});
-		const pull = () =>
+		const dispatch = (dedupeCoverageNotice: boolean) =>
 			dispatchForFile(
 				createDispatchContext(
 					"test.ts",
@@ -811,10 +811,10 @@ describe("the verdict the write line and the clean advisory read (#4734 r3, #525
 				[{ mode: "all", runnerIds: ["lsp"] }],
 				registry,
 				undefined,
-				{ dedupeCoverageNotice: false },
+				{ dedupeCoverageNotice },
 			);
-		await pull();
-		expect((await pull()).verdict).toEqual(
+		await dispatch(true);
+		expect((await dispatch(false)).verdict).toEqual(
 			notChecked(
 				"the primary check is still running (findings arrive at turn end if it lands)",
 			),
