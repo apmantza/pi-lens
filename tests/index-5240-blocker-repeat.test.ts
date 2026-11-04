@@ -155,6 +155,10 @@ describe.each([
 					);
 					// "Historical finding" means the workspace changed; this did not.
 					expect(repeat[0]).not.toContain("Historical finding");
+					// The repeat is capped, so its last line says where the full list is.
+					expect(repeat[0]?.trimEnd().split("\n").at(-1)).toContain(
+						'lens_diagnostics {source: "session", mode: "all", severity: "error"}',
+					);
 				}
 				// The blocker's own delivery is not a repeat: exactly one request names
 				// the section without the heading.
@@ -227,6 +231,57 @@ describe.each([
 					expect.stringContaining("p2"),
 				]);
 				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
+
+		it(
+			"is not delivered after the mark while another session holds a blocker",
+			async () => {
+				// RECURRENCE GUARDED: #5254 review r1 F1. The consume-time check asked
+				// whether ANY session held a blocker (the commit-gate latch), so the
+				// primary's live blocker let the secondary's staged repeat of the
+				// blocker it had just marked through at its next prompt.
+				const proj = seed(fixture.root, `marked-two-${tag}`, CLEAN_FILE).proj;
+				const sessionFlags = new Map(flags ?? GUARDED_FLAGS);
+				const theirs = path.join(proj, "src", "theirs.ts");
+				const primary = await startPiSession({
+					root: fixture.root,
+					cwd: proj,
+					flags: sessionFlags,
+					responses: [...write(proj, "mine.ts", BLOCKING_FILE), ...listen()],
+				});
+				const secondary = await startPiSession({
+					root: fixture.root,
+					cwd: proj,
+					flags: sessionFlags,
+					responses: [
+						step(writeTarget(theirs, MARKED_FILE), "writing"),
+						endTurn("turn done"),
+						...listen(),
+						step(activateMarkTool()),
+						step(markFalsePositive(theirs)),
+						endTurn("marked"),
+						...listen(),
+						...listen(),
+					],
+				});
+				try {
+					await primary.prompt("p1");
+					await run(secondary, 5);
+					// p2 and p3 open before the mark lands (p3 makes it); p4 and p5
+					// follow it and repeat nothing, though mine.ts is still live.
+					expect(repeats(secondary).map(openedBy)).toEqual([
+						expect.stringContaining("p2"),
+						expect.stringContaining("p3"),
+					]);
+					expect(naming(primary, "mine.ts")).toBeGreaterThan(0);
+					expect(primary.errors).toEqual([]);
+					expect(secondary.errors).toEqual([]);
+				} finally {
+					await secondary.dispose();
+					await primary.dispose();
+				}
 			},
 			LONG_SESSION_TIMEOUT_MS,
 		);

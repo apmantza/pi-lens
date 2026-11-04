@@ -10,6 +10,7 @@ import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapt
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import {
+	resolveLensToolName,
 	translateGuidanceToolNames,
 	type LensToolHost,
 } from "./tool-config.js";
@@ -30,10 +31,21 @@ type ContextResult = {
  * so a repeat must not borrow it.
  */
 export const BLOCKER_REPEAT_HEADING =
-	"Still unresolved from an earlier turn (already reported, not new):";
+	"Still unresolved (already reported on an earlier turn, not new):";
 
 export function blockerRepeatContent(blockers: string): string {
 	return `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+}
+
+/**
+ * #5240: the last line of a delivered repeat. The staged blocker text is
+ * capped (`capTurnEndMessage`), so the repeat names the pull that lists every
+ * blocker. Added when the repeat is rendered, never staged: `repeatBody` must
+ * stay exactly the blocker text for the retained-injection check.
+ */
+function blockerRepeatPointer(): string {
+	const tool = resolveLensToolName("lens_diagnostics", "pi");
+	return `Every unresolved 🔴 blocker: ${tool} {source: "session", mode: "all", severity: "error"}`;
 }
 
 // #1432 review (S3b): a multi-file bash write can carry hundreds of changed
@@ -166,7 +178,9 @@ export function peekTurnEndFindings(
 	return {
 		messages: [
 			turnEndMessage(
-				findings.data.content,
+				findings.data.repeat === true
+					? `${findings.data.content}\n\n${blockerRepeatPointer()}`
+					: findings.data.content,
 				validation.status === "current",
 				findings.data.provenance,
 			),
@@ -188,8 +202,8 @@ export function consumeTurnEndFindings(
 	sessionId?: string,
 	address?: string,
 	// #5240: a repeat record waits for a request that opens a prompt, and is
-	// dropped once no blocker is live; every other reader takes it as any
-	// message. pi's context hook says which.
+	// dropped once the reader's session holds no live blocker; every other
+	// reader takes it as any message. pi's context hook says which.
 	repeat: { atPromptTail: boolean; blockersLive: boolean } = {
 		atPromptTail: true,
 		blockersLive: true,
@@ -212,7 +226,9 @@ export function consumeTurnEndFindings(
 	return {
 		messages: [
 			turnEndMessage(
-				findings.data.content,
+				findings.data.repeat === true
+					? `${findings.data.content}\n\n${blockerRepeatPointer()}`
+					: findings.data.content,
 				validation.status === "current",
 				findings.data.provenance,
 			),

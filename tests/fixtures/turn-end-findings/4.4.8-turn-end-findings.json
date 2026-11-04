@@ -1,14 +1,33 @@
 {
 	"content": "Unresolved from this turn — a.ts:\n🔴 STOP — 1 issue(s) must be fixed:\n  L1: OLD-RECORD-BLOCKER",
+	"blockerContent": "Unresolved from this turn — a.ts:\n🔴 STOP — 1 issue(s) must be fixed:\n  L1: OLD-RECORD-BLOCKER",
+	"blockingFiles": ["/home/user/proj/a.ts"],
+	"blockerWrittenAt": 1761955200000,
 	"hasBlockers": true,
-	"affectedFiles": [],
+	"affectedFiles": ["/home/user/proj/a.ts"],
+	"provenance": {
+		"revision": {
+			"sessionId": "session-3813",
+			"projectSeq": 1,
+			"turnIndex": 1,
+			"generation": 0,
+			"capturedAt": 1761955200000
+		},
+		"files": [
+			{
+				"path": "/home/user/proj/a.ts",
+				"role": "affected",
+				"mtimeMs": 1761955199000,
+				"size": 20,
+				"sha256": "037ecd1db38c230c248787e60fd7bfc0cb0101b187b59535b6e7483be762d350"
+			}
+		]
+	},
 	"sessionId": "session-3813",
+	"deliverTo": "session-3813",
 	"projectSeqStart": 0,
-	"projectSeqEnd": 0,
+	"projectSeqEnd": 1,
 	"fileSeqByPath": {},
 	"fileContentHashes": {},
-	"blockerContent": "Unresolved from this turn — a.ts:\n🔴 STOP — 1 issue(s) must be fixed:\n  L1: OLD-RECORD-BLOCKER",
-	"blockingFiles": [],
-	"consumed": false,
-	"deliverTo": "session-3813"
+	"consumed": false
 }

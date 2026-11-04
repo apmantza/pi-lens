@@ -6522,8 +6522,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// MCP host passes `deliveryAddress` and its Stop hook would loop on an
 		// identical repeat, so it keeps the plain suppression.
 		// A first delivery still waiting in the slot (no request took it yet) is
-		// never overwritten by a repeat of itself: the duplicate stays a plain
-		// suppression and the waiting record reaches the agent.
+		// never overwritten by a repeat of itself: the duplicate takes the plain
+		// suppression below, as before #5240. Without `--lens-guard` the waiting
+		// record then reaches the next request; under it that branch marks the
+		// record consumed, so nothing does (unchanged by #5240). Only two turn
+		// ends with no request between reach this: pi sends one after each.
 		const waiting = duplicate
 			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
 			: undefined;

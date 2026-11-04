@@ -4944,9 +4944,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 				{
 					atPromptTail:
 						lastMessage !== undefined && isPlainUserPrompt(lastMessage),
-					// The latch is recomputed from the post-policy survivors at each
-					// turn end, so a marked or fixed blocker clears it.
-					blockersLive: runtime.gitGuardHasBlockers,
+					// The reader's own inline blockers, as its turn end judges them: a
+					// fix drops the record and a mark sets `policySuppressed`. Not the
+					// commit-gate latch, which another session's blocker keeps true
+					// (#5254 r1 F1).
+					blockersLive: runtime
+						.getInlineBlockersSnapshot({ sessionId: readerSessionId })
+						.some((entry) => entry.policySuppressed !== true),
 				},
 			);
 			// #5240 under retain: a retained entry that already carries the

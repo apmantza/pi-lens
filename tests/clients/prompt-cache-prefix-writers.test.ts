@@ -395,7 +395,7 @@ describe("#4687 prefix writers keep the provider's cached head", () => {
 			JSON.stringify(message).includes(AUTOMATION_FRAMING);
 		// The payload landed on the new prompt, and only there.
 		expect(JSON.stringify(repeating.at(-1))).toContain(
-			"Still unresolved from an earlier turn",
+			"Still unresolved (already reported on an earlier turn",
 		);
 		expect(repeating.slice(0, -1).some(injected)).toBe(false);
 		// Everything before it is what the previous request sent before ITS own

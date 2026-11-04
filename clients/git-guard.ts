@@ -1750,8 +1750,6 @@ function retireOwnPartition(
 		// #4943: the content is now the owner's blocker text, not the message
 		// the composer addressed.
 		deliverTo: undefined,
-		// #5240: and no longer a repeat.
-		repeat: undefined,
 	});
 	return false;
 }
@@ -2457,8 +2455,6 @@ export function clearGitGuardTestFailure(
 	writeGitGuardRecord(cacheManager, runtime, cwd, {
 		...existing,
 		content: blockerContent,
-		// #5240: the content is the blocker text now, not a repeat message.
-		repeat: undefined,
 		blockerContent,
 		affectedFiles,
 		testFailures: remainingFiles.length > 0,

@@ -2576,10 +2576,24 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 					),
 					"utf-8",
 				),
-			) as Record<string, unknown>;
+			) as Record<string, unknown> & {
+				affectedFiles: string[];
+				blockingFiles: string[];
+				provenance?: { files: Array<{ path: string }> };
+			};
 			expect(old).not.toHaveProperty("repeat");
+			// The 4.4.8 writer stamps absolute paths; this project stands in for
+			// the one it ran in, holding the bytes the stamp captured.
+			const file = touch(rig, "a.ts");
+			old.affectedFiles = [file];
+			old.blockingFiles = [file];
+			for (const stamped of old.provenance?.files ?? []) stamped.path = file;
 			rig.cacheManager.writeCache("turn-end-findings", old, rig.cwd);
-			expect(take(rig, false)).toContain("OLD-RECORD-BLOCKER");
+			const taken = take(rig, false);
+			expect(taken).toContain("OLD-RECORD-BLOCKER");
+			// #5254 r1 F7: the old record's provenance is validated, not skipped:
+			// it matches the file, so the message is not labelled historical.
+			expect(taken).toContain("Address 🔴 blockers before continuing");
 		} finally {
 			rig.cleanup();
 		}
