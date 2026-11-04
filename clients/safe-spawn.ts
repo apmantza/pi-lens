@@ -1659,6 +1659,9 @@ function ensureUtf8ConsoleCodePageOnce(): void {
  * without reaching into the module; it was dropped once as unrelated scope
  * creep in an earlier #1199 revision and restored on review. Do not read the
  * export as evidence of existing coverage (#1201).
+ *
+ * @public — kept by review (#1201) as this test-only seam; knip cannot see the
+ * future Windows-only test that would call it.
  */
 export function resetUtf8ConsoleCodePageStateForTests(): void {
 	utf8ConsoleCodePageApplied = false;
@@ -2810,42 +2813,6 @@ export async function safeSpawnAsync(
 }
 
 /**
- * Run multiple commands concurrently with limited concurrency.
- *
- * This prevents resource contention when running many linters.
- * Uses async spawn with concurrency limiting built-in.
- *
- * @example
- * const results = await safeSpawnBatch([
- *   { command: "biome", args: ["check", "file.ts"] },
- *   { command: "ruff", args: ["check", "file.py"] },
- * ], 3); // Max 3 concurrent
- */
-export async function safeSpawnBatch(
-	commands: Array<{
-		command: string;
-		args: string[];
-		options?: SafeSpawnOptions;
-	}>,
-	concurrency = 3,
-): Promise<SpawnResult[]> {
-	const results: SpawnResult[] = [];
-
-	// Process in batches to limit concurrent processes
-	for (let i = 0; i < commands.length; i += concurrency) {
-		const batch = commands.slice(i, i + concurrency);
-		const batchResults = await Promise.all(
-			batch.map(({ command, args, options }) =>
-				safeSpawnAsync(command, args, options),
-			),
-		);
-		results.push(...batchResults);
-	}
-
-	return results;
-}
-
-/**
  * Check if a command is available in PATH (async version)
  */
 export async function isCommandAvailableAsync(
@@ -3025,19 +2992,6 @@ export function safeSpawn(
 		error: result.error,
 		...(spawnFailure ? { failure: "spawn" as const, spawnFailure } : {}),
 	};
-}
-
-/**
- * Check if a command is available in PATH (sync version - deprecated)
- * @deprecated Use isCommandAvailableAsync
- */
-export function isCommandAvailable(command: string): boolean {
-	const result = safeSpawn(
-		process.platform === "win32" ? "where" : "which",
-		[command],
-		{ timeout: 5000 },
-	);
-	return result.status === 0;
 }
 
 /**

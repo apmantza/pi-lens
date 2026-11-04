@@ -158,7 +158,9 @@ const EXPECTED_FILES = 79;
 // 134 -> 131 (#5247): the four temp-scan spawn sites in `SgRunner`
 // (`tempScanDetailedAsync` and the three passes of `tempScanWithFixAsync`) are
 // one `spawnResolved`, the seam that takes a `ResolvedSgCommand`.
-const EXPECTED_DIRECT_SITES = 131;
+// 131 -> 129 (#5289): `safeSpawnBatch` and the sync `isCommandAvailable` had no
+// caller; each held one direct spawn site, and both are deleted.
+const EXPECTED_DIRECT_SITES = 129;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -362,20 +364,12 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`taskkill /F /T /PID <pid>` — kills a process tree by pid on Windows; it touches no file",
 	],
 	[
-		"clients/safe-spawn.ts#safeSpawnBatch:921a571e",
-		"safeSpawnBatch forwards each command's own `options` object unchanged, so the cwd belongs to whoever built that batch entry",
-	],
-	[
 		"clients/safe-spawn.ts#isCommandAvailableAsync:45a177c3",
 		"`which`/`where <command>` PATH lookup (async form)",
 	],
 	[
 		"clients/safe-spawn.ts#findCommandAsync:45a177c3",
 		"`which`/`where <command>` PATH lookup that returns the resolved path",
-	],
-	[
-		"clients/safe-spawn.ts#isCommandAvailable:acf75340",
-		"`which`/`where <command>` PATH lookup (deprecated sync form)",
 	],
 	[
 		"clients/safe-spawn.ts#findCommand:e3470221",

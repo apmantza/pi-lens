@@ -4673,7 +4673,7 @@ A 2026 audit against `@earendil-works/pi-coding-agent` confirmed a few places wh
 The sync→async spawn migration is complete; the patterns above (`safeSpawnAsync`, ambient abort signal, async-only `createAvailabilityChecker`, per-client `*Async` probes) are the steady state. What's intentionally left sync, by design — do **not** "fix" this without a real reason:
 
 - `TestRunnerClient.detectRunner`'s `which pytest` probe — cached per `(cwd, runner)`, fires once for a Python project with no config-file runner; converting it would ripple async through five methods (`findTestFile`/`getTestRunTarget`/`suggestTestFiles`/…) into the per-edit turn path for a one-time stutter.
-- The deprecated `safeSpawn`/`isCommandAvailable`/`findCommand` exports in `clients/safe-spawn.ts` stay only for the two cases above.
+- The deprecated `safeSpawn`/`findCommand` exports in `clients/safe-spawn.ts` stay only for the two cases above.
 
 For new runner tests, mock `safeSpawnAsync` (async); only mock the sync `safeSpawn` when testing one of the two legacy callers above.
 

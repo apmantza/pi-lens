@@ -116,35 +116,3 @@ export function readWorklog(cwd: string): WorklogEntry[] {
 		return [];
 	}
 }
-
-export interface WorklogStats {
-	totalAutoFixed: number;
-	totalFixable: number;
-	byRule: { rule: string; count: number; autoFixed: number }[];
-}
-
-export function summarizeWorklog(cwd: string): WorklogStats {
-	const entries = readWorklog(cwd);
-	const byRule = new Map<string, { count: number; autoFixed: number }>();
-	let totalAutoFixed = 0;
-	let totalFixable = 0;
-
-	for (const e of entries) {
-		const r = byRule.get(e.rule) ?? { count: 0, autoFixed: 0 };
-		r.count++;
-		if (e.autoFixed) {
-			r.autoFixed++;
-			totalAutoFixed++;
-		}
-		if (e.fixable) totalFixable++;
-		byRule.set(e.rule, r);
-	}
-
-	return {
-		totalAutoFixed,
-		totalFixable,
-		byRule: [...byRule.entries()]
-			.map(([rule, v]) => ({ rule, ...v }))
-			.sort((a, b) => b.count - a.count),
-	};
-}
