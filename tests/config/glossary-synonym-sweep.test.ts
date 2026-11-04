@@ -495,7 +495,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 21 -> 23 (#5257): `isCompletedPassResult` reads the result's `error`,
 		// and the JSON parser sets the unreadable-output and load-failure errors.
 		"clients/test-runner-client.ts": 23,
-		"clients/test-runner-delivery.ts": 6,
+		// 6 -> 7 (#5259): the stage-time idle read's `delivery-failed` record
+		// carries the thrown text in the record's own `error` field.
+		"clients/test-runner-delivery.ts": 7,
 		"clients/tool-agreement.ts": 2,
 		"clients/tree-sitter-cache.ts": 4,
 		// #3605: 18 -> 6. The rewritten wasm classifier, `reportWasmAbort` and
@@ -1588,7 +1590,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/runtime-turn.ts": 9,
 		"clients/search-read-registration.ts": 1,
 		"clients/test-runner-client.ts": 4,
-		"clients/test-runner-delivery.ts": 15,
+		// 15 -> 16 (#5259): the stage-time idle read writes its failure through
+		// the module's existing `record` helper.
+		"clients/test-runner-delivery.ts": 16,
 		"clients/turn-summary.ts": 4,
 		"clients/warm-attach.ts": 9,
 		"tools/lsp-diagnostics.ts": 1,

@@ -301,9 +301,9 @@ export function stageTestRunnerDelivery(args: {
 	const ctx = owner.getCtx();
 	try {
 		if (ctx.isIdle?.() !== true) return;
-	} catch (error) {
+	} catch (cause) {
 		record(deliveryKey, "delivery-failed", delivery, {
-			error: String(error).slice(0, 500),
+			error: String(cause).slice(0, 500),
 			deliveryBoundary: "published-idle",
 		});
 		return;
