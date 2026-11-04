@@ -529,6 +529,7 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 	//   1 | passed>0 failed>0          -> failed, no error
 	//   1 | errors>0 (singular/plural) -> error naming the count
 	//   1 or 3 | no summary line       -> error "no summary read"
+	//   0 | passed=0 failed=0 (skips)   -> no error, not a completed pass
 	//   5 | no tests                   -> no error, not a completed pass
 	// Recurrence prevented (r1 of #5276): the first cut errored on ANY non-zero
 	// exit that counted no failure, so a passing run under `--cov-fail-under`
@@ -547,6 +548,19 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 			else expect(result.error).toMatch(error);
 		},
 	);
+
+	it("exit 0 with only skips counted is no error and no completed pass", async () => {
+		const test = plantPython("a", "pass");
+		fake.pytest = { stdout: "1 skipped in 0.00s\n", status: 0 };
+		const detected = client.detectRunner(root, test);
+		const result = await client.runTestFileAsync(test, root, {
+			runner: "pytest",
+			config: detected!.config,
+		});
+		expect(result).toMatchObject({ passed: 0, failed: 0, skipped: 1 });
+		expect(result.error).toBeUndefined();
+		expect(isCompletedPassResult(result)).toBe(false);
+	});
 
 	it.each([1, 3])(
 		"exit %i with no summary line is an error, never a clean result",
