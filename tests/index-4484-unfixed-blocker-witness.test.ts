@@ -362,7 +362,6 @@ vi.mock("../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawn: boundary.run,
 	safeSpawnAsync: async (command: string, args: readonly string[] = []) =>
 		boundary.run(command, args),
-	isCommandAvailable: boundary.isDoubled,
 	isCommandAvailableAsync: async (command: string) =>
 		boundary.isDoubled(command),
 	findCommand: (command: string) =>

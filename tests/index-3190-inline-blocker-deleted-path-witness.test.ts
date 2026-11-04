@@ -128,7 +128,6 @@ vi.mock("../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawn: spawnRouter.run,
 	safeSpawnAsync: async (command: string, args: readonly string[] = []) =>
 		spawnRouter.run(command, args),
-	isCommandAvailable: spawnRouter.isDoubled,
 	isCommandAvailableAsync: async (command: string) =>
 		spawnRouter.isDoubled(command),
 	findCommand: (command: string) =>

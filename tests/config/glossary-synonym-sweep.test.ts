@@ -1798,7 +1798,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/runtime-context.ts": 4,
 		"clients/runtime-coordinator.ts": 4,
 		"clients/runtime-turn.ts": 6,
-		"clients/safe-spawn.ts": 25,
+		// 25 -> 24 (#5289): the deleted sync `isCommandAvailable` read the spawn
+		// result's exit `status` once.
+		"clients/safe-spawn.ts": 24,
 		"clients/security-scan-client.ts": 5,
 		"clients/sg-runner.ts": 32,
 		"clients/shared-checkout-guard.ts": 2,
