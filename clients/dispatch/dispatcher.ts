@@ -688,6 +688,8 @@ export interface RunnerLatency {
 	semantic: string;
 	/** The runner's own `failureKind`, when it set one (#3781). */
 	failureKind?: string;
+	/** #5285 r3: the run read part of the file (`RunnerResult.inconclusive`). */
+	inconclusive?: true;
 	skipReason?: RunnerSkipReason;
 	/** WHO supplied the `covered-by-primary` claim (#3968 F2). */
 	claimSource?: RunnerClaimSource;
@@ -1493,6 +1495,7 @@ async function runGroup(
 			...(result.failureKind !== undefined && {
 				failureKind: result.failureKind,
 			}),
+			...(result.inconclusive === true && { inconclusive: true as const }),
 			...(skipReason !== undefined && {
 				skipReason,
 			}),
@@ -1603,6 +1606,47 @@ async function runGroup(
 	};
 }
 
+/**
+ * The generated-file policy, or `undefined` for any other file. It runs before
+ * every dispatch return that runs nothing (#5285 r3: the `--no-lsp` and
+ * adopted-root returns came first, so a generated file there lacked
+ * `inapplicable` and the footer counted it).
+ */
+export function skipGeneratedFile(
+	ctx: DispatchContext,
+): DispatchResult | undefined {
+	if (ctx.fileRole !== "generated") return undefined;
+	// The generated short-circuit (refs #2346): never ran before this fix
+	// for name-less machine-emitted files (a scraped/minified page has no
+	// `.min.js` pattern to catch it), so the classification now also has a
+	// content-shape tier. The skip is observable — one `dispatch_skipped_generated`
+	// phase record per file per process carrying the deciding evidence tier
+	// and the measured line-shape statistic. Deliberately NOT a degradation
+	// ledger entry: skipping a generated file is healthy behavior working
+	// as designed, and the ledger's bounded kind slots are reserved for
+	// genuine degradations (#2348 review F3 — the ledger precedent at the
+	// collect-later tier flip below records an actual capability loss).
+	const evidence: GeneratedArtifactEvidence | undefined = ctx.generatedEvidence;
+	const lineShapeMean = ctx.generatedLineShapeMean;
+	if (!generatedSkipRecorded.has(ctx.filePath)) {
+		generatedSkipRecorded.add(ctx.filePath);
+		logLatency({
+			type: "phase",
+			filePath: ctx.filePath,
+			phase: "dispatch_skipped_generated",
+			durationMs: 0,
+			metadata: {
+				evidence: evidence ?? "unknown",
+				...(lineShapeMean !== undefined && { lineShapeMean }),
+			},
+		});
+	}
+	// #5258: the file is skipped by design, which is not a clean result.
+	return emptyDispatchResult(
+		unchecked("generated file (not analyzed)", { inapplicable: true }),
+	);
+}
+
 // --- Main Dispatch Function ---
 
 export async function dispatchForFile(
@@ -1618,6 +1662,8 @@ export async function dispatchForFile(
 	options?: { dedupeCoverageNotice?: boolean },
 ): Promise<DispatchResult> {
 	const _overallStart = Date.now();
+	const generated = skipGeneratedFile(ctx);
+	if (generated) return generated;
 	if (ctx.analysisRootMode === "adopted") {
 		// #4242 phase A (per-file linters): an adopted root runs ONLY the explicit
 		// admission list of config-free, code-free runners, and only from global or
@@ -1654,38 +1700,6 @@ export async function dispatchForFile(
 				),
 			);
 		}
-	}
-	if (ctx.fileRole === "generated") {
-		// The generated short-circuit (refs #2346): never ran before this fix
-		// for name-less machine-emitted files (a scraped/minified page has no
-		// `.min.js` pattern to catch it), so the classification now also has a
-		// content-shape tier. The skip is observable — one `dispatch_skipped_generated`
-		// phase record per file per process carrying the deciding evidence tier
-		// and the measured line-shape statistic. Deliberately NOT a degradation
-		// ledger entry: skipping a generated file is healthy behavior working
-		// as designed, and the ledger's bounded kind slots are reserved for
-		// genuine degradations (#2348 review F3 — the ledger precedent at the
-		// collect-later tier flip below records an actual capability loss).
-		const evidence: GeneratedArtifactEvidence | undefined =
-			ctx.generatedEvidence;
-		const lineShapeMean = ctx.generatedLineShapeMean;
-		if (!generatedSkipRecorded.has(ctx.filePath)) {
-			generatedSkipRecorded.add(ctx.filePath);
-			logLatency({
-				type: "phase",
-				filePath: ctx.filePath,
-				phase: "dispatch_skipped_generated",
-				durationMs: 0,
-				metadata: {
-					evidence: evidence ?? "unknown",
-					...(lineShapeMean !== undefined && { lineShapeMean }),
-				},
-			});
-		}
-		// #5258: the file is skipped by design, which is not a clean result.
-		return emptyDispatchResult(
-			unchecked("generated file (not analyzed)", { inapplicable: true }),
-		);
 	}
 	const allDiagnostics: Diagnostic[] = [];
 	let stopped = false;

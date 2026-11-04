@@ -9,7 +9,6 @@ import {
 } from "./diagnostic-line-freshness.js";
 import { visibleWidth } from "./deps/pi-tui.js";
 import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
-import { IN_FLIGHT_REASON } from "./dispatch/types.js";
 import { fitLine } from "./tui-fit.js";
 import { WriteOrderingGuard } from "./write-ordering-guard.js";
 import { collectForwardImportMtimes } from "./blocker-freshness.js";
@@ -323,8 +322,9 @@ interface FileRecord {
 	 * for it. Set only by {@link recordDiagnostics}, from a file a check could have
 	 * covered (never a kindless or generated file: nothing can retire that).
 	 * Cleared by a later write whose check completed, or by a scan that answers
-	 * for the file ({@link recordDiagnostics}); a full scan
-	 * ({@link reconcileCorrelatedScanDiagnostics}) clears only the in-flight reason.
+	 * for the file ({@link recordDiagnostics}). Every other commit keeps it: a
+	 * full scan's correlated write ({@link reconcileCorrelatedScanDiagnostics})
+	 * is handed files no server confirmed (#5285 r3).
 	 */
 	uncheckedReason?: string;
 	touchedAt: number;
@@ -1517,13 +1517,10 @@ export function reconcileCorrelatedScanDiagnostics(
 		observedAt: diagnostic.observedAt ?? observedTs,
 	}));
 	const rec = getOrCreate(filePath, key);
+	// #5285 r3: the unchecked reason stays. This commit is handed every file
+	// whether or not a server confirmed it; a confirmed file already lost its
+	// reason through `reconcileScanDiagnostics`, earlier in the same scan.
 	commitDiagnostics(rec, filePath, correlated, observedTs, key);
-	// #5258 r2: the scan retires the in-flight reason ("the primary check is
-	// still running" outlived the runner) and nothing else: it is handed every
-	// file whether or not LSP confirmed it, so a checkable kind whose primary
-	// never ran (`--no-lsp`) keeps its reason. A confirmed scan clears all of
-	// them through `recordDiagnostics`.
-	if (rec.uncheckedReason === IN_FLIGHT_REASON) delete rec.uncheckedReason;
 }
 
 /**

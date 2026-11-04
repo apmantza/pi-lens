@@ -2729,40 +2729,32 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 		expect(frame).not.toContain("unchecked");
 	});
 
-	it("a full scan retires the in-flight reason the write left, and only that one", () => {
-		// Recurrence prevented: #5285 review F3 and verify r1 N1. A
-		// `lens_diagnostics` full scan commits through
-		// `reconcileCorrelatedScanDiagnostics`; it left `⚠ lib.rs: the primary
-		// check is still running` after the runner finished (F3), and the first
-		// fix cleared every reason, so a `--no-lsp` scan that never type-checked
-		// `index.ts` turned `⚠ 1 unchecked` into `✓ clean` (N1).
-		recordDiagnostics(
-			"/repo/lib.rs",
-			[],
-			undefined,
-			undefined,
-			IN_FLIGHT_REASON,
-		);
-		expect(renderWidget(120, theme).join("\n")).toContain(IN_FLIGHT_REASON);
-		reconcileCorrelatedScanDiagnostics("/repo/lib.rs", []);
-		const retired = renderWidget(120, theme).join("\n");
-		expect(retired).not.toContain(IN_FLIGHT_REASON);
-		expect(retired).toContain("✓ clean");
+	it("a full scan's correlated commit keeps every unchecked reason; a confirmed scan result retires it", () => {
+		// Recurrence prevented: #5285 review F3, verify r1 N1 and r3 (CodeRabbit,
+		// Greptile). A `lens_diagnostics` full scan commits every file through
+		// `reconcileCorrelatedScanDiagnostics`, confirmed or not. Clearing every
+		// reason there turned a `--no-lsp` file's `⚠ 1 unchecked` into `✓ clean`
+		// (N1); clearing the in-flight one did the same for a file whose language
+		// server timed out in the scan (r3). F3's stale "still running" line is
+		// retired by the scan result that confirms the file.
+		for (const [file, reason] of [
+			["/repo/lib.rs", IN_FLIGHT_REASON],
+			["/repo/index.ts", noPrimaryCheckerReason(false)],
+		] as const) {
+			clearWidgetState();
+			recordDiagnostics(file, [], undefined, undefined, reason);
+			reconcileCorrelatedScanDiagnostics(file, []);
+			const kept = renderWidget(120, theme).join("\n");
+			expect(kept).toContain("1 unchecked");
+			expect(kept).toContain(`${path.basename(file)}: ${reason}`);
+			expect(kept).not.toContain("✓ clean");
 
-		clearWidgetState();
-		const noLsp = noPrimaryCheckerReason(false);
-		recordDiagnostics("/repo/index.ts", [], undefined, undefined, noLsp);
-		reconcileCorrelatedScanDiagnostics("/repo/index.ts", []);
-		const kept = renderWidget(120, theme).join("\n");
-		expect(kept).toContain("1 unchecked");
-		expect(kept).toContain(`index.ts: ${noLsp}`);
-		expect(kept).not.toContain("✓ clean");
-
-		// A scan an LSP server confirmed answers for the file: it retires the reason.
-		reconcileScanDiagnostics("/repo/index.ts", [], true);
-		const confirmed = renderWidget(120, theme).join("\n");
-		expect(confirmed).not.toContain("unchecked");
-		expect(confirmed).toContain("✓ clean");
+			// A scan an LSP server confirmed answers for the file.
+			reconcileScanDiagnostics(file, [], true);
+			const confirmed = renderWidget(120, theme).join("\n");
+			expect(confirmed).not.toContain("unchecked");
+			expect(confirmed).toContain("✓ clean");
+		}
 	});
 
 	it("marks the vertical row and the compact header, not only the wide frame", () => {

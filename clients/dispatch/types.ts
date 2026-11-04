@@ -315,14 +315,21 @@ export const widgetUncheckedReason = (
 /**
  * The `checked` arm from the runner rows that completed, or `undefined` when
  * none did. The only place the arm is built, and it takes rows, not a
- * boolean, so a `checked` verdict names the runners that earned it.
+ * boolean, so a `checked` verdict names the runners that earned it. A row
+ * flagged `inconclusive` read part of the file, whatever its status, so it
+ * earns nothing (#5285 r3).
  */
 export function checkedVerdict(
 	tier: "primary" | "fallback",
-	rows: readonly { runnerId: string; status: string; failureKind?: string }[],
+	rows: readonly {
+		runnerId: string;
+		status: string;
+		failureKind?: string;
+		inconclusive?: true;
+	}[],
 ): CoverageVerdict | undefined {
 	const [first, ...rest] = rows
-		.filter(hasUsableResult)
+		.filter((row) => row.inconclusive !== true && hasUsableResult(row))
 		.map((row) => row.runnerId);
 	if (first === undefined) return undefined;
 	// A variable, not a literal: this is a verdict's runner list, not a
@@ -354,8 +361,9 @@ export function emptyDispatchResult(verdict: CoverageVerdict): DispatchResult {
 }
 
 /**
- * The reason of a collect-later primary that has not answered yet. The widget
- * store retires it (and only it) when a full scan commits the file (#5258 r2).
+ * The reason of a collect-later primary that has not answered yet. Like every
+ * unchecked reason, a later write whose check completed or a scan that
+ * confirms the file retires it in the widget store (#5285 r3).
  */
 export const IN_FLIGHT_REASON =
 	"the primary check is still running (findings arrive at turn end if it lands)";

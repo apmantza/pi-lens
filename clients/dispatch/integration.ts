@@ -29,6 +29,7 @@ import {
 	type RunnerLatency,
 	RunnerRegistry,
 	type RunnerResultSink,
+	skipGeneratedFile,
 } from "./dispatcher.js";
 import { spawnAbortScope } from "../safe-spawn.js";
 import { emitBounded } from "../bounded-telemetry.js";
@@ -3402,8 +3403,11 @@ export async function dispatchLintWithResult(
 			// #5258: no runner exists for this kind in this mode (`--no-lsp` leaves
 			// the eleven language-server-only kinds with none), so nothing checked
 			// the file. The empty result used to read as clean.
-			return emptyDispatchResult(
-				unchecked(noPrimaryCheckerReason(!pi.getFlag("no-lsp"))),
+			return (
+				skipGeneratedFile(ctx) ??
+				emptyDispatchResult(
+					unchecked(noPrimaryCheckerReason(!pi.getFlag("no-lsp"))),
+				)
 			);
 		}
 

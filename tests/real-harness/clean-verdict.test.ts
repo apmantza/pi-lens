@@ -48,6 +48,14 @@ describe("real pi: a write no check covered never reads clean (#5258)", () => {
 				"no primary checker is enabled for this kind (--no-lsp turns off its language server)",
 		},
 		{
+			// #5285 r3: the --no-lsp return for a kind with no runner came before
+			// the generated-file policy.
+			name: "a generated build.gradle under --no-lsp",
+			script: "generated-gradle.json",
+			args: ["--no-lsp"],
+			reason: "generated file",
+		},
+		{
 			name: "a file whose kind has no analyzer",
 			script: "kindless.json",
 			args: ["--no-lsp"],

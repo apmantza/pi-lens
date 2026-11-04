@@ -16,7 +16,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearWidgetState } from "../../clients/widget-state.js";
+import { IN_FLIGHT_REASON } from "../../clients/dispatch/types.js";
+import {
+	clearWidgetState,
+	exportWidgetState,
+	recordDiagnostics,
+} from "../../clients/widget-state.js";
 import {
 	_resetDeferredForTests,
 	_resetStateCacheForTests,
@@ -246,6 +251,43 @@ describe("lens_diagnostics mode=all agrees with a same-minute mode=full (#1634 c
 		expect(fullAgain).toContain("suppressed by disposition: 2 finding(s)");
 		expect(rows(allAfter)).toEqual([]);
 		expect(allAfter).toContain("suppressed by disposition: 2 finding(s)");
+	});
+
+	// Recurrence prevented: #5285 r3 (CodeRabbit and Greptile on 548fc8d4c). The
+	// scan's correlated commit retired the in-flight reason of every file it was
+	// handed, so a file whose language server timed out in the scan read
+	// `✓ clean` in the footer while its slow primary was still running. Only a
+	// file the scan confirmed loses its reason; the sidecar is what a resume
+	// restores, so it is the record read here.
+	it("a full scan retires the unchecked reason of the file it confirmed and keeps the other's", async () => {
+		for (const p of [file, other])
+			recordDiagnostics(p, [], undefined, undefined, IN_FLIGHT_REASON);
+		const service = makeLspServiceDouble({
+			runWorkspaceDiagnostics: vi.fn(async () => [
+				{ filePath: file, diagnostics: [], count: 0 },
+				{ filePath: other, diagnostics: [], count: 0, timedOut: true },
+			]),
+		});
+		const tool = createLensDiagnosticsTool(
+			{ readCache: vi.fn(() => undefined) } as never,
+			() => tmp,
+			() => service as never,
+		);
+		await tool.execute(
+			"1",
+			{ mode: "full", paths: [file, other] },
+			new AbortController().signal,
+			null as never,
+			{ cwd: tmp } as never,
+		);
+
+		const reasons = Object.fromEntries(
+			exportWidgetState().files.map((f) => [
+				path.basename(f.filePath),
+				f.uncheckedReason ?? "none",
+			]),
+		);
+		expect(reasons).toEqual({ "a.ts": "none", "b.ts": IN_FLIGHT_REASON });
 	});
 
 	// Same review: mode=full dropped marked findings without a count, so its
