@@ -311,7 +311,10 @@ interface ToolCallEvent {
 	 * (#1642).
 	 */
 	toolCallId?: string;
-	/** Parent codemode call carrying nested tool results on the transcript. */
+	/**
+	 * Parent tool call carrying nested tool results on the transcript. Any tool
+	 * that calls `ctx.executeTool` sets it; codemode is one example.
+	 */
 	parentToolCallId?: string;
 	input?: unknown;
 	details?: unknown;
