@@ -263,6 +263,15 @@ describe("a batch with no completed, parsed result never reads as passed", () =>
 		});
 	}
 
+	it("a zero-test batch says why it did not clear (the no-completed-result record)", async () => {
+		const test = plant("a", "empty");
+		seedBlocker(test);
+		await turnEnd();
+		expect(dbgLines).toContain(
+			"turn_end: no completed test result — NOT recorded as a clean run; the test-failure blocker is untouched",
+		);
+	});
+
 	it("an unreadable report (runner printed only the notice): blocker kept", async () => {
 		const test = plant("a", undefined);
 		seedBlocker(test);
@@ -367,6 +376,8 @@ describe("TestRunnerClient parse verdict", () => {
 		"[]",
 		'"ok"',
 		"",
+		'{"numPassedTests":1}',
+		'{"numFailedTests":0}',
 		"JSON report written to /x/output.json",
 	])("output %j that is not a test report is an error result", (stdout) => {
 		const parse = (client as any).parseVitestOutput.bind(client);
