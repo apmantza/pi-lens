@@ -37,7 +37,11 @@
  * | form of a seam call                                    | read as            |
  * | ------------------------------------------------------ | ------------------ |
  * | command literal in KNOWN_GOOD, argv an array literal   | clean (no hit)     |
- * |   whose EVERY element is a word in that command's set  |                    |
+ * |   whose EVERY element is a word in that command's set, |                    |
+ * |   options absent or an object of OPTION_KEYS only      |                    |
+ * | the same, with an options key outside OPTION_KEYS      | HIT                |
+ * |   (`env`, `shell`), a computed key, a spread, options  |                    |
+ * |   not an object literal, or a 2nd argument after argv  |                    |
  * | command literal not in KNOWN_GOOD (`npm`, `gem`, `sh`, | HIT                |
  * |   `env`, `powershell.exe`, ...)                        |                    |
  * | command in KNOWN_GOOD, any element (any position) a    | HIT                |
@@ -63,12 +67,25 @@
  * check before their first spawn token, on comment-and-string-blanked text) or
  * carries a reason.
  *
+ * Review r3 found a count admits any words: once a call held a computed
+ * operand or a non-set command, a carrier added to it passed. So a reason
+ * row also pins, by text, every hit whose command is a literal:
+ *
+ * | hit in a row                         | admitted by                        |
+ * | ------------------------------------ | ---------------------------------- |
+ * | literal command, reason row          | one equal `pins` text (each pin    |
+ * |                                      | matches one hit; a spare pin is    |
+ * |                                      | stale)                             |
+ * | literal command, gated row           | the count and the verified gate    |
+ * | computed command, or a seam reference| the count (bound below)            |
+ *
  * ## Stated bounds
  *
  * - Names are matched by NAME, not by binding resolution. A same-named
  *   unrelated function can add a hit (over-closed); it cannot hide one.
  * - A computed command at a registered site is admitted once for every value
- *   that can reach it. The census proves a new site cannot appear unclassified,
+ *   that can reach it, and its argv and options are not read (no command set
+ *   applies). The census proves a new site cannot appear unclassified,
  *   not that every value reaching an old site is benign; the value-level
  *   guarantee for package runners is the seam itself (`getSpawnEnvironment`
  *   sets `npm_config_offline` for `npx` under the switch), pinned below.
@@ -239,6 +256,8 @@ interface Hit {
 	line: number;
 	callee: string;
 	why: string;
+	/** The call's text from the command on, when the command is a literal. */
+	literal?: string;
 }
 
 interface Forward {
@@ -253,10 +272,76 @@ interface FileScan {
 	forwards: Forward[];
 }
 
-/** The reason one command/argv pair is not known-good, or `undefined` if it is. */
+/**
+ * Spawn-option keys a clean call may pass. None carries a command: `env`
+ * (`GIT_EXTERNAL_DIFF`, `GOFLAGS`, `NODE_OPTIONS`) and `shell` are not here,
+ * and neither is any key no live clean call spells (review r3, M6).
+ */
+const OPTION_KEYS: readonly string[] = [
+	"cwd",
+	"ignoreAmbientSignal",
+	"maxOutputBytes",
+	"resourceLabel",
+	"timeout",
+];
+
+const nonComment = (nodes: SgNode[]): SgNode[] =>
+	nodes.filter((node) => node.isNamed() && kindOf(node) !== "comment");
+
+/** Why the arguments after argv are not an object literal of OPTION_KEYS. */
+function whyNotCleanOptions(rest: SgNode[], kids: Kids): string | undefined {
+	if (rest.length > 1) return "more than one argument after argv";
+	const options = rest[0];
+	if (!options) return undefined;
+	if (kindOf(options) !== "object") return "options that are not an object";
+	for (const member of nonComment(kids(options))) {
+		const kind = kindOf(member);
+		const key =
+			kind === "pair"
+				? member.field("key")
+				: kind === "shorthand_property_identifier"
+					? member
+					: null;
+		const name = !key
+			? undefined
+			: IDENT_KINDS.has(kindOf(key))
+				? cookedIdentifier(key.text())
+				: literalValue(key, kids);
+		if (name === undefined || !OPTION_KEYS.includes(name))
+			return `the option ${name ?? member.text()}`;
+	}
+	return undefined;
+}
+
+/**
+ * A call's arguments as one comparable text: a literal (folded) as JSON, an
+ * array element by element, anything else as its source with whitespace and
+ * trailing commas normalized, so a reformat keeps the text and any other
+ * change moves it.
+ */
+function rendered(node: SgNode, kids: Kids): string {
+	const value = literalValue(node, kids);
+	if (value !== undefined) return JSON.stringify(value);
+	if (kindOf(node) === "array")
+		return `[${nonComment(kids(node))
+			.map((element) => rendered(element, kids))
+			.join(", ")}]`;
+	return node
+		.text()
+		.replace(/\s+/g, " ")
+		.replace(/,\s*([}\])])/g, "$1")
+		.replace(/([{[(])\s+/g, "$1")
+		.replace(/\s+([}\])])/g, "$1");
+}
+
+/**
+ * The reason one call is not known-good, or `undefined` if it is. `rest` is
+ * every argument after argv (the options bag of a seam call).
+ */
 function whyNotKnownGood(
 	command: SgNode | undefined,
 	argv: SgNode | undefined,
+	rest: SgNode[],
 	kids: Kids,
 	inheritComputed: boolean,
 ): string | undefined {
@@ -274,7 +359,8 @@ function whyNotKnownGood(
 		if (word === undefined) return `${value} with a computed argument`;
 		if (!admitted.includes(word)) return `${value} with the argument ${word}`;
 	}
-	return undefined;
+	const options = whyNotCleanOptions(rest, kids);
+	return options === undefined ? undefined : `${value} with ${options}`;
 }
 
 /**
@@ -371,10 +457,25 @@ function scanFile(
 		const why = whyNotKnownGood(
 			args[index],
 			args[index + 1],
+			args.slice(index + 2),
 			kids,
 			!SEAMS.includes(name),
 		);
-		if (why !== undefined) hits.push({ line: lineOf(node), callee: name, why });
+		const command = args[index];
+		if (why !== undefined)
+			hits.push({
+				line: lineOf(node),
+				callee: name,
+				why,
+				...(command && literalValue(command, kids) !== undefined
+					? {
+							literal: args
+								.slice(index)
+								.map((arg) => rendered(arg, kids))
+								.join(" "),
+						}
+					: {}),
+			});
 		// A parameter reaching the command makes the enclosing function a
 		// forwarder: its callers' literal commands are judged too.
 		const root =
@@ -624,7 +725,40 @@ function entryProblems(
 	return problems;
 }
 
-type Row = { sites: number } & ({ gated: true } | { reason: string });
+/**
+ * A row pins `file#callee` to its hit count. A reason row also pins, by text,
+ * every hit whose command is a literal (`pins`, one per call): its reason is a
+ * claim about those words, so a changed word, operand or option is a finding
+ * (review r3, M5). A gated row's admission is its verified entry gate.
+ */
+type Row = { sites: number } & (
+	| { gated: true }
+	| { reason: string; pins?: readonly string[] }
+);
+
+/** Each literal-command hit of a reason row matches one pin, and each pin one hit. */
+function pinProblems(
+	hits: ReadonlyMap<string, Hit[]>,
+	rows: Readonly<Record<string, Row>>,
+): string[] {
+	const problems: string[] = [];
+	for (const [key, row] of Object.entries(rows)) {
+		if ("gated" in row) continue;
+		const open = [...(row.pins ?? [])];
+		for (const hit of hits.get(key) ?? []) {
+			if (hit.literal === undefined) continue;
+			const at = open.indexOf(hit.literal);
+			if (at >= 0) open.splice(at, 1);
+			else
+				problems.push(
+					`${key}: literal call not pinned: ${hit.literal} (line ${hit.line})`,
+				);
+		}
+		for (const pin of open)
+			problems.push(`${key}: pin matches no live call: ${pin}`);
+	}
+	return problems;
+}
 
 /** Everything this census judges, for one set of sources. */
 async function judge(
@@ -659,7 +793,7 @@ async function judge(
 			"isToolInstallDisabled() (clients/env-utils.ts) and register the row as gated " +
 			"with a GATED_FILES entry, or give the row the reason it cannot install.",
 	});
-	const problems = [...audit.problems];
+	const problems = [...audit.problems, ...pinProblems(found.hits, rows)];
 	// auditRegistry tolerates a registered id the scan no longer flags (a
 	// registry may cover state a heuristic cannot see). A gated row is a live
 	// claim about a site, so one with no live site is stale (M2).
@@ -687,11 +821,17 @@ async function judge(
 }
 
 const GATED = (sites: number): Row => ({ sites, gated: true });
-const because = (reason: string, table: Record<string, number>) =>
+/** Reason rows: a bare count, or a count with the pinned literal calls. */
+const because = (
+	reason: string,
+	table: Record<string, number | { sites: number; pins: readonly string[] }>,
+) =>
 	Object.fromEntries(
-		Object.entries(table).map(([key, sites]): [string, Row] => [
+		Object.entries(table).map(([key, entry]): [string, Row] => [
 			key,
-			{ sites, reason },
+			typeof entry === "number"
+				? { sites: entry, reason }
+				: { ...entry, reason },
 		]),
 	);
 
@@ -706,9 +846,9 @@ const LSP =
 const NPX_NO =
 	"npx --no: the package runner is told to use the local or cached copy and never download, and the seam runs it offline under the switch as well";
 const OPERAND =
-	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and git diff's two operands are commit ids readGitHead read from git rev-parse; neither tool installs anything";
+	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and git diff's two operands are commit ids readGitHead read from git rev-parse; neither tool installs anything. Each call's words and options are pinned by text";
 const REGISTRY_PATH =
-	"a PowerShell -Command whose script is one fixed string literal reading the Machine and User Path variables (readWindowsRegistryPath); it starts no installer, and a changed script is a reviewed edit of this one line";
+	"a PowerShell -Command whose script is one fixed string literal reading the Machine and User Path variables (readWindowsRegistryPath); it starts no installer, and its script is pinned by text, so a changed script is a finding";
 
 const ROWS: Readonly<Record<string, Row>> = {
 	// ROWS-BEGIN
@@ -724,17 +864,45 @@ const ROWS: Readonly<Record<string, Row>> = {
 	...because(LSP, {
 		"clients/lsp/jvm-runtime.ts#safeSpawnAsync": 1,
 		"clients/lsp/launch.ts#safeSpawn": 1,
-		"clients/lsp/server.ts#safeSpawnAsync": 4,
+		"clients/lsp/server.ts#safeSpawnAsync": {
+			sites: 4,
+			pins: [
+				`"dotnet" ["tool", "install", "--tool-path", PI_LENS_BIN_DIR, tool] {timeout: 180000, ignoreAmbientSignal: true}`,
+				`"dotnet" ["tool", "update", "--tool-path", PI_LENS_BIN_DIR, tool] {timeout: 180000, ignoreAmbientSignal: true}`,
+				`"gem" ["install", gem, "--bindir", binDir, "--no-document"] {timeout: 180000, ignoreAmbientSignal: true}`,
+			],
+		},
 	}),
 	...because(OPERAND, {
-		"clients/dispatch/runners/credo.ts#safeSpawnAsync": 1,
-		"clients/opaque-mutation-scan.ts#safeSpawnAsync": 1,
+		"clients/dispatch/runners/credo.ts#safeSpawnAsync": {
+			sites: 1,
+			pins: [
+				`"mix" ["credo", "--format", "json", "--strict", absPath] {timeout: 30000, cwd}`,
+			],
+		},
+		"clients/opaque-mutation-scan.ts#safeSpawnAsync": {
+			sites: 1,
+			pins: [
+				`"git" ["diff", "--name-only", "--no-renames", "-z", from, to] {cwd: root, timeout: 5000, maxOutputBytes: MAX_GIT_STATUS_OUTPUT_BYTES}`,
+			],
+		},
 	}),
 	...because(REGISTRY_PATH, {
-		"clients/lsp/launch.ts#runStderrGuardedProbe": 1,
+		"clients/lsp/launch.ts#runStderrGuardedProbe": {
+			sites: 1,
+			pins: [
+				`"powershell.exe" ["-NoProfile", "-NonInteractive", "-Command", "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')"]`,
+			],
+		},
 	}),
 	...because(NPX_NO, {
-		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync": 1,
+		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync":
+			{
+				sites: 1,
+				pins: [
+					`"npx" ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"]`,
+				],
+			},
 	}),
 	...because(PM, {
 		"clients/mcp/review.ts#safeSpawnAsync": 1,
@@ -778,7 +946,10 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/oxlint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/php-lint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/phpstan.ts#safeSpawnAsync": 1,
-		"clients/dispatch/runners/prisma-validate.ts#resolveLocalFirstAsync": 1,
+		"clients/dispatch/runners/prisma-validate.ts#resolveLocalFirstAsync": {
+			sites: 1,
+			pins: [`"prisma" cwd`],
+		},
 		"clients/dispatch/runners/prisma-validate.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/psscriptanalyzer.ts#probeToolAsync": 2,
 		"clients/dispatch/runners/psscriptanalyzer.ts#safeSpawnAsync": 1,
@@ -965,6 +1136,134 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 				`${HEAD}export function go() { const flag = "-w"; return safeSpawnAsync("go", ["env", flag, "GOROOT"]); }`,
 			),
 		).toMatch(/planted\.ts#safeSpawnAsync@1/);
+	});
+
+	// Review r3 (L3): a known-good command whose argv is not an array literal
+	// was refused, but no case reached that branch, so admitting it survived.
+	it("a known-good command whose argv is not an array literal is a finding", async () => {
+		expect(
+			await problemsOf(
+				`${HEAD}export function go() { const argv = ["install", "x"]; return safeSpawnAsync("go", argv); }`,
+			),
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
+	});
+
+	// Review r3 (M6): a clean call's options were never read, so
+	// `{ env: { GIT_EXTERNAL_DIFF: "npm i x" } }` on `git diff` passed. The
+	// options of a clean call are an object literal of admitted keys or a hit.
+	it.each([
+		["an env option", `{ env: { GIT_EXTERNAL_DIFF: "npm i x" } }`],
+		["a shorthand env", `{ cwd: "/", env }`],
+		["a quoted env key", `{ "env": {} }`],
+		["a computed key", `{ ["en" + "v"]: {} }`],
+		["a spread", `{ ...process.env }`],
+		["shell: true", `{ shell: true }`],
+		["options built by a call", `Object.assign({}, { env: {} })`],
+		["a second trailing argument", `{ timeout: 1 }, { env: {} }`],
+	])("a clean call with %s is a finding", async (_label, options) => {
+		expect(await problemsOf(call(`"git", ["status"], ${options}`))).toMatch(
+			/clients\/planted\.ts#safeSpawnAsync@1/,
+		);
+	});
+
+	it("a clean call's options reached through another binding are a finding", async () => {
+		expect(
+			await problemsOf(
+				`${HEAD}export function go() { const opts = { env: { GOFLAGS: "-toolexec=sh" } }; return safeSpawnAsync("go", ["env"], opts); }`,
+			),
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
+		// The admitted keys, any value, stay clean.
+		expect(
+			await problemsOf(
+				call(
+					`"git", ["status"], { cwd, timeout: 5000, maxOutputBytes: 1, resourceLabel: "x", ignoreAmbientSignal: true }`,
+				),
+			),
+		).not.toMatch(/planted/);
+	});
+
+	// Review r3 (M5): a row pinned a count, so once a call held a computed
+	// operand or a non-set command, its literal words were never read again.
+	// A literal-command call in a reason row must match a pinned text.
+	describe("an admitted literal call is pinned by its text (M5)", () => {
+		const reason = "a reason that is long enough to count";
+		const site = (argv: string) =>
+			`${HEAD}export const go = (absPath: string) => safeSpawnAsync("mix", ${argv}, { cwd: "/" });`;
+		const PIN = `"mix" ["credo", absPath] {cwd: "/"}`;
+		const row = (pins?: string[]) => ({
+			"clients/planted.ts#safeSpawnAsync": {
+				sites: 1,
+				reason,
+				...(pins ? { pins } : {}),
+			},
+		});
+
+		it("the pinned text is clean", async () => {
+			expect(await problemsOf(site(`["credo", absPath]`), row([PIN]))).toBe("");
+		});
+
+		it.each([
+			[
+				"a carrier before the operand",
+				`["credo", "--exec", "npm i x", absPath]`,
+			],
+			[
+				"a carrier after the operand",
+				`["credo", absPath, "--exec", "npm i x"]`,
+			],
+			["a renamed operand", `["credo", other]`],
+			["a second operand", `["credo", absPath, absPath]`],
+			["a computed respelling", '[`cre${""}do`, absPath]'],
+		])("%s is a finding", async (_label, argv) => {
+			expect(await problemsOf(site(argv), row([PIN]))).toMatch(
+				/planted\.ts#safeSpawnAsync: literal call not pinned/,
+			);
+		});
+
+		it("a literal call in a reason row with no pin is a finding", async () => {
+			expect(await problemsOf(site(`["credo", absPath]`), row())).toMatch(
+				/literal call not pinned: "mix" \["credo", absPath\]/,
+			);
+		});
+
+		it("a pin no live call matches is stale", async () => {
+			expect(
+				await problemsOf(
+					site(`["credo", absPath]`),
+					row([PIN, `"mix" ["credo"]`]),
+				),
+			).toMatch(/pin matches no live call: "mix" \["credo"\]/);
+		});
+
+		it("a pinned script that changes, or moves into a binding, is a finding", async () => {
+			const forwarder = `${HEAD}export function probe(command: string, args: string[]) { return safeSpawnAsync(command, args); }\n`;
+			const rows = {
+				"clients/planted.ts#safeSpawnAsync": { sites: 1, reason },
+				"clients/planted.ts#probe": {
+					sites: 1,
+					reason,
+					pins: [`"powershell.exe" ["-Command", "Get-Date"]`],
+				},
+			};
+			expect(
+				await problemsOf(
+					`${forwarder}export const go = () => probe("powershell.exe", ["-Command", "Get-Date"]);`,
+					rows,
+				),
+			).toBe("");
+			expect(
+				await problemsOf(
+					`${forwarder}export const go = () => probe("powershell.exe", ["-Command", "npm i left-pad"]);`,
+					rows,
+				),
+			).toMatch(/planted\.ts#probe: literal call not pinned/);
+			expect(
+				await problemsOf(
+					`${forwarder}export function go() { const script = "Get-Date"; return probe("powershell.exe", ["-Command", script]); }`,
+					rows,
+				),
+			).toMatch(/planted\.ts#probe: literal call not pinned/);
+		});
 	});
 
 	it("a seam named by a string is a finding", async () => {
