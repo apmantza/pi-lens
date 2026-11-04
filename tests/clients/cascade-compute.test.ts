@@ -522,6 +522,183 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	// #5174: the references leg asks the server for up to 3 changed symbols.
+	// It awaited them one at a time; a 3-symbol edit paid the sum of the calls
+	// (and, when the server stalled, up to two 750ms timeouts, ~1500ms, before
+	// the 1200ms ceiling broke the loop). Measured on a real tsserver the
+	// overlapped calls finish sooner, so the leg starts all three together and
+	// is bounded by ONE 750ms timeout. Recurrence guarded: the loop going back to
+	// `for … await references()`.
+	describe("references leg overlaps the changed-symbol calls (#5174)", () => {
+		const SYMBOLS = ["alpha", "beta", "gamma"];
+
+		async function threeSymbolEdit(
+			env: ReturnType<typeof setupTestEnvironment>,
+		) {
+			const primary = path.join(env.tmpDir, "src", "primary.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export const alpha = 1;\n");
+			const consumers = SYMBOLS.map((name) => {
+				const file = path.join(env.tmpDir, "src", `uses-${name}.ts`);
+				fs.writeFileSync(file, `import { ${name} } from './primary';\n`);
+				return file;
+			});
+			const graph = emptyGraph();
+			const normalizedPrimary = primary.split(path.sep).join("/");
+			graph.symbolNodesByFile.set(
+				normalizedPrimary,
+				SYMBOLS.map((name) => `${normalizedPrimary}:${name}`),
+			);
+			SYMBOLS.forEach((name, index) => {
+				const id = `${normalizedPrimary}:${name}`;
+				graph.nodes.set(id, {
+					id,
+					kind: "symbol",
+					language: "jsts",
+					filePath: normalizedPrimary,
+					symbolName: name,
+					symbolKind: "function",
+					metadata: { line: index + 1, column: 14 },
+				});
+			});
+			mocks.buildOrUpdateGraph.mockResolvedValue(graph);
+			mocks.computeImpactCascade.mockReturnValue({
+				...impact(primary, []),
+				changedSymbols: SYMBOLS,
+			});
+			return { primary, consumers };
+		}
+
+		const locationOf = (file: string) => ({
+			uri: pathToFileURL(file).href,
+			range: {
+				start: { line: 1, character: 0 },
+				end: { line: 1, character: 5 },
+			},
+		});
+
+		function install(
+			references: ReturnType<typeof vi.fn>,
+			broken: string[] = [],
+		) {
+			return installLspService({
+				...makeLspServiceDouble(),
+				getAllDiagnostics: vi
+					.fn()
+					.mockResolvedValue(
+						new Map(
+							broken.map((file) => [
+								file.split(path.sep).join("/"),
+								{ diags: [lspError("reference broken")], ts: postEditTs() },
+							]),
+						),
+					),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+				references,
+			});
+		}
+
+		it("has all three references() calls in flight before any resolves", async () => {
+			vi.useFakeTimers();
+			const env = setupTestEnvironment("cascade-lsp-refs-overlap-");
+			try {
+				const { primary } = await threeSymbolEdit(env);
+				const settle: Array<() => void> = [];
+				const references = vi.fn(
+					() =>
+						new Promise<never[]>((resolve) => {
+							settle.push(() => resolve([]));
+						}),
+				);
+				install(references);
+				const { computeCascadeForFile } =
+					await import("../../clients/dispatch/integration.js");
+				const run = computeCascadeForFile(primary, env.tmpDir, {
+					turnSeq: 1,
+					writeSeq: 1,
+				});
+				// No timer advances: only microtasks run, so a serial loop is still
+				// parked on its first call here.
+				await vi.advanceTimersByTimeAsync(0);
+				expect(references).toHaveBeenCalledTimes(3);
+				settle.forEach((resolve) => resolve());
+				await run;
+			} finally {
+				env.cleanup();
+				vi.useRealTimers();
+			}
+		});
+
+		it("bounds the whole leg by one 750ms timeout and clears every race timer (#1109)", async () => {
+			vi.useFakeTimers();
+			const env = setupTestEnvironment("cascade-lsp-refs-bound-");
+			try {
+				const { primary } = await threeSymbolEdit(env);
+				const references = vi.fn(() => new Promise<never[]>(() => {}));
+				install(references);
+				const { computeCascadeForFile } =
+					await import("../../clients/dispatch/integration.js");
+				const run = computeCascadeForFile(primary, env.tmpDir, {
+					turnSeq: 1,
+					writeSeq: 1,
+				});
+				await vi.advanceTimersByTimeAsync(749);
+				// One 750ms race timer per call, all armed together. Serial, one is.
+				expect(vi.getTimerCount()).toBe(3);
+				await vi.advanceTimersByTimeAsync(1);
+				// Every race has timed out and cleared its timer. Serial, the second
+				// call's fresh 750ms timer is still pending here.
+				expect(vi.getTimerCount()).toBe(0);
+				await run;
+			} finally {
+				env.cleanup();
+				vi.useRealTimers();
+			}
+		});
+
+		// Control for the new shape (passes on the serial loop by construction):
+		// the mapper must absorb its own rejection, and the files must be added
+		// in symbol order, not in the order the answers arrive.
+		it("keeps the files of the symbols that answered when one call rejects, in symbol order", async () => {
+			const env = setupTestEnvironment("cascade-lsp-refs-partial-");
+			try {
+				const { primary, consumers } = await threeSymbolEdit(env);
+				let releaseAlpha: (locations: unknown[]) => void = () => {};
+				const references = vi.fn(
+					(_file: string, line: number): Promise<unknown[]> => {
+						if (line === 0)
+							return new Promise((resolve) => {
+								releaseAlpha = resolve;
+							});
+						if (line === 1) return Promise.reject(new Error("server hiccup"));
+						return Promise.resolve([locationOf(consumers[2])]);
+					},
+				);
+				install(references, [consumers[0], consumers[1], consumers[2]]);
+				const { computeCascadeForFile } =
+					await import("../../clients/dispatch/integration.js");
+				const run = computeCascadeForFile(primary, env.tmpDir, {
+					turnSeq: 1,
+					writeSeq: 1,
+				});
+				// Let gamma answer first; alpha answers last.
+				await new Promise((resolve) => setImmediate(resolve));
+				releaseAlpha([locationOf(consumers[0])]);
+				const result = await run;
+				const impactKeys = (result?.result?.impact.neighborFiles ?? []).map(
+					(f) => f.split(path.sep).join("/"),
+				);
+				expect(impactKeys).toEqual([
+					consumers[0].split(path.sep).join("/"),
+					consumers[2].split(path.sep).join("/"),
+				]);
+			} finally {
+				env.cleanup();
+			}
+		});
+	});
+
 	it("active-touches non-jsts neighbors silently", async () => {
 		const env = setupTestEnvironment("cascade-python-");
 		try {

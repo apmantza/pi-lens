@@ -2310,7 +2310,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// `dispatchForFile`; its only hook caller, the tool_call capture, holds it
 	// under bounded() with ctx.signal and PRE_EDIT_CAPTURE_BUDGET_MS, so a
 	// second bound here would add a timer for the same deadline.
-	"clients/dispatch/integration.ts": 22,
+	// 22 -> 23 (#5174): the cascade's references loop became a fan-out, so its
+	// one `await Promise.race` is now the fan-out's `await mapWithConcurrency`
+	// plus the per-call `await Promise.race` inside the mapper. Both are
+	// already bounded by the per-call 750 ms race timer; a bounded() around the
+	// fan-out would add a second timer for the same deadline.
+	"clients/dispatch/integration.ts": 23,
 	// 2 → 3 (#4484 review F5): `settlePendingRunnerFindingsForTests` awaits
 	// the store's runs so a test joins a collect-later settle without polling.
 	// Only tests call it; no hook handler reaches it.
