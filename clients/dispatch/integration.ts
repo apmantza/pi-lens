@@ -161,7 +161,6 @@ import {
 } from "../word-index.js";
 import { reconcileCascadeNeighborLspErrors } from "../widget-state.js";
 import { writeOrderToken } from "../write-ordering-guard.js";
-import { mapWithConcurrency } from "../map-with-concurrency.js";
 import { findAuxiliaryProfileForSource } from "./auxiliary-lsp.js";
 // Register fact providers. All register eagerly here (the dispatch entry) — the
 // tree-sitter-backed providers included, since the parsing stack loads
@@ -1658,83 +1657,71 @@ export async function computeCascadeForFile(
 
 			// Symbol-level blast radius via LSP references (precision upgrade over
 			// file-level import edges). Only when changed symbols are detected.
-			// Bounds: max 3 symbols, 750ms per call. The calls are independent, so
-			// they start together (#5174: overlapping was measured faster on a real
-			// tsserver) and the leg ends within ONE 750ms window. The 1200ms total
-			// the serial loop enforced is subsumed: the leg cannot outlast its
-			// slowest call.
+			// Keep the budget tight: 750ms per symbol, 1200ms total, max 3 symbols.
 			if (impact.changedSymbols.length > 0) {
 				const lspService = getLSPService();
 				const symbolNodeIds =
 					graph.symbolNodesByFile.get(normalizedFileKey) ?? [];
+				const refFiles = new Set<string>();
 				const refsStart = Date.now();
-				const positions = impact.changedSymbols
-					.slice(0, 3)
-					.flatMap((symbolName) => {
-						const symbolNodeId = symbolNodeIds.find((id) => {
-							const node = graph.nodes.get(id);
-							return node?.symbolName === symbolName;
-						});
-						if (!symbolNodeId) return [];
-						const node = graph.nodes.get(symbolNodeId);
-						const line = Number(node?.metadata?.line ?? 0);
-						const column = Number(node?.metadata?.column ?? 0);
-						return line > 0 ? [{ line, column }] : [];
+				// Serial on purpose (#5174). tsserver answers one request at a time, so
+				// overlapping these calls shares one 750ms window between them and drops
+				// the later symbols' answers (a one-at-a-time double returned 1 of 3
+				// symbols). Measured gain of overlapping: 6-44 ms on tsserver, 1-3 ms on
+				// clangd; rust-analyzer and gopls were not measured. Each call keeps its
+				// own 750ms, so re-measure before overlapping these calls again.
+				for (const symbolName of impact.changedSymbols.slice(0, 3)) {
+					const symbolNodeId = symbolNodeIds.find((id) => {
+						const node = graph.nodes.get(id);
+						return node?.symbolName === symbolName;
 					});
-				// Results come back in symbol order, so the files are added in the
-				// order the serial loop added them, not in the order answers arrive.
-				const refFilesBySymbol = await mapWithConcurrency(
-					positions,
-					positions.length,
-					async ({ line, column }) => {
-						// #1109: store the timer and clear it once the race settles. Without
-						// this, when `references()` wins (the common case), the losing
-						// `setTimeout` stays a REF'D pending timer for the remaining 750ms —
-						// harmless in a long-lived session, but a keep-alive tail in a
-						// one-shot `pi --print` process (same uncleared-race-timeout class
-						// fixed for the LSP client-wait leak in clients/lsp/index.ts, #1097).
-						let refsTimer: ReturnType<typeof setTimeout> | undefined;
-						const files: string[] = [];
-						try {
-							const refs = await Promise.race([
-								lspService.references(
-									normalizedFile,
-									line - 1,
-									column - 1,
-									false,
-								),
-								new Promise<never>((_, reject) => {
-									refsTimer = setTimeout(
-										() => reject(new Error("timeout")),
-										750,
-									);
-								}),
-							]);
-							for (const ref of refs) {
-								let resolved: string;
-								try {
-									resolved = ref.uri.startsWith("file://")
-										? fileURLToPath(ref.uri)
-										: ref.uri;
-								} catch {
-									continue;
-								}
-								if (
-									normalizeMapKey(resolved) !== normalizedFileKey &&
-									nodeFs.existsSync(resolved)
-								) {
-									files.push(normalizeMapKey(resolved));
-								}
+					if (!symbolNodeId) continue;
+					const node = graph.nodes.get(symbolNodeId);
+					const line = Number(node?.metadata?.line ?? 0);
+					const column = Number(node?.metadata?.column ?? 0);
+					if (line <= 0) continue;
+					// #1109: store the timer and clear it once the race settles. Without
+					// this, when `references()` wins (the common case), the losing
+					// `setTimeout` stays a REF'D pending timer for the remaining 750ms —
+					// harmless in a long-lived session, but a keep-alive tail in a
+					// one-shot `pi --print` process (same uncleared-race-timeout class
+					// fixed for the LSP client-wait leak in clients/lsp/index.ts, #1097).
+					let refsTimer: ReturnType<typeof setTimeout> | undefined;
+					try {
+						const refs = await Promise.race([
+							lspService.references(
+								normalizedFile,
+								line - 1,
+								column - 1,
+								false,
+							),
+							new Promise<never>((_, reject) => {
+								refsTimer = setTimeout(() => reject(new Error("timeout")), 750);
+							}),
+						]);
+						for (const ref of refs) {
+							let resolved: string;
+							try {
+								resolved = ref.uri.startsWith("file://")
+									? fileURLToPath(ref.uri)
+									: ref.uri;
+							} catch {
+								continue;
 							}
-						} catch {
-							// Timeout or LSP error — fall back to import-graph neighbors
-						} finally {
-							if (refsTimer !== undefined) clearTimeout(refsTimer);
+							if (
+								normalizeMapKey(resolved) !== normalizedFileKey &&
+								nodeFs.existsSync(resolved)
+							) {
+								refFiles.add(normalizeMapKey(resolved));
+							}
 						}
-						return files;
-					},
-				);
-				const refFiles = new Set(refFilesBySymbol.flat());
+					} catch {
+						// Timeout or LSP error — fall back to import-graph neighbors
+					} finally {
+						if (refsTimer !== undefined) clearTimeout(refsTimer);
+					}
+					if (Date.now() - refsStart > 1200) break; // Hard ceiling
+				}
 				if (refFiles.size > 0) {
 					impact.neighborFiles = [
 						...new Set([...impact.neighborFiles, ...refFiles]),
