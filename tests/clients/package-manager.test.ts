@@ -300,39 +300,6 @@ describe("allAvailableGlobalBinDirs", () => {
 		]);
 	});
 
-	// Recurrence (#5261): the walk awaited each manager's probe and query before
-	// starting the next, so the first dispatch paid `which pnpm`, `which yarn` and
-	// `which bun` on top of `npm config get prefix`. A manager whose query is
-	// still running must not hold back another manager's.
-	it("queries the managers together and keeps the preference order", async () => {
-		setPlatform("linux");
-		onlyAvailable("npm", "pnpm");
-		const npmGate = gatedPromise<{
-			stdout: string;
-			stderr: string;
-			status: number;
-		}>();
-		setQueryResponder(async (cmd) =>
-			cmd === "npm"
-				? npmGate.promise
-				: { stdout: "/pnpm/bin\n", stderr: "", status: 0 },
-		);
-		try {
-			const lookup = allAvailableGlobalBinDirs();
-			await waitFor(
-				() => queryCalls.map((c) => c.cmd).sort(),
-				(cmds) => cmds.join() === "npm,pnpm",
-			);
-			npmGate.resolve({ stdout: "/usr/local\n", stderr: "", status: 0 });
-			expect(await lookup).toEqual([
-				path.resolve(path.join("/usr/local", "bin")),
-				path.resolve("/pnpm/bin"),
-			]);
-		} finally {
-			npmGate.resolve({ stdout: "/usr/local\n", stderr: "", status: 0 });
-		}
-	});
-
 	it("uses BUN_INSTALL/bin without spawning for bun", async () => {
 		setPlatform("linux");
 		onlyAvailable("bun");

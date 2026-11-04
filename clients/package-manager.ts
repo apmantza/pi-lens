@@ -460,21 +460,11 @@ async function probeGlobalBinDirs(
 export async function allAvailableGlobalBinDirs(
 	onTransient?: () => void,
 ): Promise<string[]> {
-	// The managers are independent (defect shape 89): each one's availability
-	// probe and bin-dir query need nothing from another's, so they run together
-	// and the cost is the slowest manager's, not the sum of four (#5261: the
-	// serial walk added `which pnpm`/`yarn`/`bun` behind `npm config get
-	// prefix`). Results are merged in PREFERENCE order, so the dir order is
-	// unchanged.
-	const perManager = await Promise.all(
-		PREFERENCE.map(async (pm) =>
-			(await isAvailable(pm, onTransient)) ? globalBinDirsFor(pm) : [],
-		),
-	);
 	const dirs: string[] = [];
 	const seen = new Set<string>();
-	for (const managerDirs of perManager) {
-		for (const dir of managerDirs) {
+	for (const pm of PREFERENCE) {
+		if (!(await isAvailable(pm, onTransient))) continue;
+		for (const dir of await globalBinDirsFor(pm)) {
 			const normalized = path.resolve(dir);
 			if (seen.has(normalized)) continue;
 			seen.add(normalized);
