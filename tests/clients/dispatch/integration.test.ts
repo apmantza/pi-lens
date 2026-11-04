@@ -5,6 +5,7 @@
  * with mocked dispatcher to avoid real tool spawning.
  */
 
+import { CHECKED_BY_FIXTURE } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -63,6 +64,7 @@ const emptyDispatchResult = {
 	resolvedCount: 0,
 	output: "",
 	blockerOutput: "",
+	verdict: CHECKED_BY_FIXTURE,
 	hasBlockers: false,
 };
 
@@ -177,6 +179,7 @@ describe("Dispatch Integration", () => {
 				resolvedCount: 0,
 				output: "Test error at line 1",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -285,6 +288,7 @@ describe("Dispatch Integration", () => {
 				resolvedCount: 0,
 				output: "1 warning",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 

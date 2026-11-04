@@ -8,6 +8,7 @@
  * No wall clock: every interleaving is pinned with a gate a double opens or
  * waits on.
  */
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 // pi's real per-file queue, the one its `edit`/`write` tools run under. The
@@ -165,6 +166,7 @@ function clean(label: string) {
 		resolvedCount: 0,
 		output: `analysed ${label}: clean`,
 		blockerOutput: "",
+		verdict: CHECKED_BY_FIXTURE,
 		hasBlockers: false,
 	};
 }
@@ -190,6 +192,7 @@ function blocking(filePath: string, label: string) {
 		resolvedCount: 0,
 		output: `STOP ${label}`,
 		blockerOutput: `STOP ${label}`,
+		verdict: CHECKED_BY_FIXTURE,
 		hasBlockers: true,
 	};
 }

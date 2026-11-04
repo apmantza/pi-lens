@@ -8,6 +8,7 @@
  * mocked so warm-up never spawns a real language server.
  */
 
+import { CHECKED_BY_FIXTURE } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -95,6 +96,7 @@ const emptyResult = {
 	resolvedCount: 0,
 	output: "",
 	blockerOutput: "",
+	verdict: CHECKED_BY_FIXTURE,
 	hasBlockers: false,
 };
 
@@ -138,6 +140,7 @@ describe("analyzeFile", () => {
 			resolvedCount: 0,
 			output: "1 error, 1 warning",
 			blockerOutput: "1 error",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: true,
 		});
 
@@ -854,6 +857,7 @@ describe("analyzeFile — widget cross-check key parity across writers (#3160 F1
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -935,6 +939,7 @@ describe("analyzeFile — absolute dot-segment `file` argument (#3184)", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 

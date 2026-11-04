@@ -8,12 +8,16 @@
  * - dispatchLintWithResult
  */
 
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
-import type { Diagnostic } from "../../clients/dispatch/types.js";
+import {
+	NO_ANALYZER_REASON,
+	type Diagnostic,
+} from "../../clients/dispatch/types.js";
 import { formatDiagnostics } from "../../clients/dispatch/utils/format-utils.js";
 import { getFormatService } from "../../clients/format-service.js";
 import { MetricsClient } from "../../clients/metrics-client.js";
@@ -202,6 +206,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -256,6 +261,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "unused var",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -290,6 +296,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -343,6 +350,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "blocked",
 				blockerOutput: "blocked",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			};
 		});
@@ -376,6 +384,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "clean",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		}));
 
@@ -408,6 +417,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "clean",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			}));
 
@@ -460,6 +470,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: true,
 		});
 
@@ -497,6 +508,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -529,6 +541,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 		const sessionGeneration = {
@@ -575,6 +588,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -610,6 +624,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -637,6 +652,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -683,6 +699,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "",
 					blockerOutput: "",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: false,
 				};
 			});
@@ -741,6 +758,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 			const formatFile = vi.fn(async (fp: string) => {
@@ -819,6 +837,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "OPAQUE-BLOCKER\nOPAQUE-ACTIONABLE",
 				blockerOutput: "OPAQUE-BLOCKER",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -851,6 +870,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "",
 					blockerOutput: "",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: false,
 				});
 				const deps = createMockDeps({ getFormatService: () => ({}) as any });
@@ -924,6 +944,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -975,6 +996,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1005,6 +1027,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1067,6 +1090,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1110,6 +1134,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1137,6 +1162,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1218,6 +1244,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1266,6 +1293,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1304,6 +1332,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1325,6 +1354,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1353,6 +1383,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 			await runPipeline(
@@ -1375,6 +1406,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1420,6 +1452,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1467,6 +1500,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "Type error at line 1",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -1490,6 +1524,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1527,6 +1562,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		};
 		const syncedStamp = () => {
@@ -1613,6 +1649,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 			vi.mocked(computeCascadeForFile).mockRejectedValueOnce(error);
@@ -1655,6 +1692,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1681,6 +1719,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1718,11 +1757,16 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				// #5258: the three verdicts the dispatcher builds for a no-finding run:
+				// unchecked with a reason, checked by the language server, checked by
+				// some other completed runner.
+				verdict:
+					shape.unconfirmedStatus !== undefined
+						? { checked: false, reason: shape.unconfirmedStatus }
+						: shape.primaryLspChecked
+							? { checked: true, tier: "primary", runnerIds: ["lsp"] }
+							: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
-				...(shape.unconfirmedStatus !== undefined && {
-					unconfirmedStatus: shape.unconfirmedStatus,
-				}),
-				...(shape.primaryLspChecked && { primaryLspChecked: true }),
 				...(shape.heldBackBlockers && {
 					heldBackBlockers: shape.heldBackBlockers,
 				}),
@@ -1760,9 +1804,12 @@ describe("Pipeline", () => {
 					)
 				).map((v) => (typeof v === "string" ? v.split(" — ")[0] : v)),
 				// Row 9: the dispatcher sets no language-server verdict without a kind.
-				unknown: (await verdictOf(unknownPath, cleanDispatch())).map((v) =>
-					typeof v === "string" ? v.includes("clean") : v,
-				),
+				unknown: (
+					await verdictOf(
+						unknownPath,
+						cleanDispatch({ unconfirmedStatus: NO_ANALYZER_REASON }),
+					)
+				).map((v) => (typeof v === "string" ? v.includes("clean") : v)),
 			}).toEqual({
 				clean: ["✓ JavaScript/TypeScript clean", true],
 				unconfirmed: ["⚠ JavaScript/TypeScript unconfirmed", false],
@@ -1913,6 +1960,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "errors",
 				blockerOutput: "errors",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -1965,6 +2013,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "helm error",
 				blockerOutput: "helm error",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -2018,6 +2067,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "type error",
 					blockerOutput: "type error",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: true,
 				});
 
@@ -2074,6 +2124,7 @@ describe("Pipeline", () => {
 				blockerOutput:
 					"DELETED-FILE-BLOCKER-MARKER secret in removed file\nLIVE-FILE-BLOCKER-MARKER unused var\n",
 				hasBlockers: true,
+				verdict: CHECKED_BY_FIXTURE,
 			});
 
 			const result = await runPipeline(
@@ -2113,6 +2164,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "GHOST-BLOCKER-MARKER finding in removed file",
 				blockerOutput: "GHOST-BLOCKER-MARKER finding in removed file",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -2164,6 +2216,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: `${DEAD_BLOCKER_OUTPUT}${tail}`,
 					blockerOutput: DEAD_BLOCKER_OUTPUT,
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: true,
 				};
 			}
@@ -2250,6 +2303,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "\n🔴 STOP — 2 issue(s) must be fixed:\n",
 					blockerOutput: "\n🔴 STOP — 2 issue(s) must be fixed:\n",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: true,
 				});
 
@@ -2288,6 +2342,7 @@ describe("Pipeline", () => {
 				output: blockerOutput,
 				blockerOutput,
 				hasBlockers: blockers.length > 0,
+				verdict: CHECKED_BY_FIXTURE,
 			};
 		}
 
@@ -2453,6 +2508,7 @@ describe("Pipeline", () => {
 				output: blockerOutput,
 				blockerOutput,
 				hasBlockers: blockers.length > 0,
+				verdict: CHECKED_BY_FIXTURE,
 			};
 		}
 

@@ -16,6 +16,7 @@
  * the contradiction was invisible to them.
  */
 
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -163,6 +164,7 @@ describe("#1590 post-autofix instruction has one author", () => {
 			resolvedCount: 0,
 			output: "pipeline analysis visible",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		} as never);
 	});

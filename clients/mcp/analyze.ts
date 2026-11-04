@@ -582,6 +582,8 @@ export async function analyzeFile(
 			result.diagnostics,
 			undefined,
 			observedAt,
+			// #5258: the footer reads the same verdict the dispatch gave.
+			result.verdict.checked ? undefined : result.verdict.reason,
 		);
 		if (result.diagnostics.length > 0) {
 			getDiagnosticTracker().trackShown(result.diagnostics);

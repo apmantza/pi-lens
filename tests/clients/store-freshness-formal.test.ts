@@ -14,6 +14,7 @@
  * No wall clock: `Date` is faked and pinned per step, and every mtime is set
  * with `utimesSync`.
  */
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -82,6 +83,7 @@ function blockingFrom(tool: string, filePath: string) {
 		resolvedCount: 0,
 		output: "STOP",
 		blockerOutput: "STOP",
+		verdict: CHECKED_BY_FIXTURE,
 		hasBlockers: true,
 	};
 }

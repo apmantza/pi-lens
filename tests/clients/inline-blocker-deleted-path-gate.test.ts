@@ -35,6 +35,7 @@
  * green by disagreeing with itself.
  */
 
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -118,6 +119,7 @@ function dispatchWith(blockers: Diagnostic[]) {
 		resolvedCount: 0,
 		output: blockerOutput,
 		blockerOutput,
+		verdict: CHECKED_BY_FIXTURE,
 		hasBlockers: blockers.length > 0,
 	};
 }

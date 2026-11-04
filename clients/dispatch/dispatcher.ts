@@ -88,11 +88,15 @@ import {
 import { getToolProfile } from "./tool-profile.js";
 import { classifyPreExisting, preEditSeedFactKey } from "./pre-edit-seed.js";
 import {
-	hasUsableResult,
+	checkedVerdict,
+	emptyDispatchResult,
 	isRunnerClaimSource,
 	isNotApplicableSkipReason,
 	isRunnerSkipReason,
+	NO_ANALYZER_REASON,
+	noPrimaryCheckerReason,
 	reachedNoVerdict,
+	unchecked,
 } from "./types.js";
 
 const dispatcherProbeFlights = createAvailabilityProbeFlight<
@@ -711,9 +715,11 @@ export interface DispatchLatencyReport {
 
 /**
  * Build the synthetic coverage notice for this dispatch, or `undefined` when
- * the runners covered the file. #4403: with it, `unconfirmedStatus`, set
+ * the runners covered the file. #4403: with it, the verdict, `unchecked`
  * whenever the primary group gave no usable result for the file even when the
  * latch withholds the notice, so the caller never renders that write clean.
+ * #5258: the verdict is REQUIRED on every return, built `checked` only from
+ * the rows of runners that completed (`checkedVerdict`).
  *
  * `dedupe` is the push/pull axis, always supplied by the sole caller
  * (`dispatchForFile`). `true` is the pi push surface, where the session-scoped
@@ -727,22 +733,28 @@ function buildCoverageNotice(
 	ctx: DispatchContext,
 	runnerLatencies: RunnerLatency[],
 	dedupe: boolean,
-): Pick<
-	DispatchResult,
-	"unconfirmedStatus" | "coverage" | "primaryLspChecked"
-> & {
+): Pick<DispatchResult, "verdict" | "coverage"> & {
 	notice?: Diagnostic;
 } {
-	if (!ctx.kind) return {};
+	if (!ctx.kind) return { verdict: unchecked(NO_ANALYZER_REASON) };
 	const lspEnabled = !ctx.pi.getFlag("no-lsp");
 	const primary = getPrimaryDispatchGroup(ctx.kind, lspEnabled);
 	if (!primary || primary.runnerIds.length === 0)
-		return { coverage: "unconfigured" };
+		return {
+			verdict: unchecked(noPrimaryCheckerReason(lspEnabled)),
+			coverage: "unconfigured",
+		};
 
 	const relevant = runnerLatencies.filter((r) =>
 		primary.runnerIds.includes(r.runnerId),
 	);
-	if (relevant.length === 0) return {};
+	// #5258: the kind has a primary group and no row of it exists, so no
+	// primary runner ran for these bytes. This used to return `{}`, which the
+	// all-clear line read as clean.
+	if (relevant.length === 0)
+		return {
+			verdict: unchecked("no primary runner ran for this file"),
+		};
 
 	// #1867 catalog shape 4: this is correlation, not classification. The LSP
 	// touch already decided which scanner publications were absent for these
@@ -790,13 +802,12 @@ function buildCoverageNotice(
 		const onceKey = `${ctx.kind}:${ctx.filePath}:${dedupeSet(silentServerIds)}|${dedupeSet(deferredServerIds)}`;
 		// #5008 review r2 (F1): the latch suppresses the NOTICE, never the CLAIM.
 		// This block is one of the rule's "found no full coverage" answers, so it
-		// carries `unconfirmedStatus` on BOTH returns exactly as the no-coverage
-		// paths below do (`types.ts` says the field is set whenever the rule finds
-		// no coverage). Without it, write 2..N on the same file with the same
+		// carries the unchecked verdict on BOTH returns exactly as the no-coverage
+		// paths below do. Without it, write 2..N on the same file with the same
 		// silent scanner hit the dedupe key and `buildAllClearOutput` rendered
 		// `\u2713 <lang> clean` — the reporter's 133-write session claimed a clean
 		// security lane on every edit after the first. On the notice return the
-		// field is redundant TODAY (the notice is output, so the all-clear line is
+		// verdict is redundant TODAY (the notice is output, so the all-clear line is
 		// unreachable there) and it is spelled anyway, so the rule's answer never
 		// depends on which write paid the latch.
 		const statusParts: string[] = [];
@@ -804,9 +815,11 @@ function buildCoverageNotice(
 			statusParts.push(`${markerFor(deferredServerIds)} deferred`);
 		if (silentServerIds.length > 0)
 			statusParts.push(`${markerFor(silentServerIds)} silent`);
-		const unconfirmedStatus = `${statusParts.join(", ")} (diagnostics are incomplete)`;
+		const verdict = unchecked(
+			`${statusParts.join(", ")} (diagnostics are incomplete)`,
+		);
 		if (dedupe) {
-			if (coverageNoticeSeen.has(onceKey)) return { unconfirmedStatus };
+			if (coverageNoticeSeen.has(onceKey)) return { verdict };
 			coverageNoticeSeen.add(onceKey);
 		}
 		const coverageParts: string[] = [];
@@ -829,7 +842,7 @@ function buildCoverageNotice(
 				semantic: "warning",
 				tool: "pi-lens",
 			},
-			unconfirmedStatus,
+			verdict,
 		};
 	}
 
@@ -838,19 +851,12 @@ function buildCoverageNotice(
 	// (`failureKind: "blocking_diagnostics"`). A timed-out or spawn-failed
 	// primary produced no usable result and must not suppress the notice
 	// (#3867). `hasUsableResult` owns that rule in dispatch/types.ts.
-	const primaryHasCoverage = relevant.some(hasUsableResult);
 	// #4734 r3: the one return where a language server checked these bytes, so
-	// the only one that may say so (`DispatchResult.primaryLspChecked`). A CLI
-	// primary (pyright under --no-lsp) or a fallback linter is coverage, not an
-	// answer from a language server.
-	if (primaryHasCoverage) {
-		return {
-			coverage: "primary",
-			...(relevant.some((r) => r.runnerId === "lsp" && hasUsableResult(r)) && {
-				primaryLspChecked: true,
-			}),
-		};
-	}
+	// the only one whose verdict can hold `lsp`. A CLI primary (pyright under
+	// --no-lsp) or a fallback linter is coverage, not an answer from a language
+	// server.
+	const primaryChecked = checkedVerdict("primary", relevant);
+	if (primaryChecked) return { verdict: primaryChecked, coverage: "primary" };
 
 	// A primary still in flight (collect-later) may deliver findings at turn
 	// end, so it withholds the notice. A skipped or broken primary produced
@@ -858,7 +864,15 @@ function buildCoverageNotice(
 	const primaryStillInFlight = relevant.some(
 		(r) => r.status === "pending" || r.status === "deferred",
 	);
-	if (primaryStillInFlight) return { coverage: "in_flight" };
+	// #5258: nothing of the primary group has completed yet, so the line says
+	// so; the commit gate still counts the file covered (`coverage`).
+	if (primaryStillInFlight)
+		return {
+			verdict: unchecked(
+				"the primary check is still running (findings arrive at turn end if it lands)",
+			),
+			coverage: "in_flight",
+		};
 
 	const plan = getToolPlan(ctx.kind);
 	const fallbackRunnerIds = new Set(
@@ -886,21 +900,24 @@ function buildCoverageNotice(
 	// These fallback runners provide type coverage when the primary group is
 	// unavailable. Keep this explicit until runner metadata owns this capability.
 	const TYPE_CAPABLE_FALLBACK_RUNNERS = new Set(["mypy"]);
-	const anyFallbackHasCoverage = runnerLatencies.some(
-		(r) =>
-			fallbackRunnerIds.has(r.runnerId) &&
-			!STRUCTURAL_RUNNERS.has(r.runnerId) &&
-			hasUsableResult(r) &&
-			(!plan?.capabilities.includes("types") ||
-				TYPE_CAPABLE_FALLBACK_RUNNERS.has(r.runnerId)),
+	const fallbackChecked = checkedVerdict(
+		"fallback",
+		runnerLatencies.filter(
+			(r) =>
+				fallbackRunnerIds.has(r.runnerId) &&
+				!STRUCTURAL_RUNNERS.has(r.runnerId) &&
+				(!plan?.capabilities.includes("types") ||
+					TYPE_CAPABLE_FALLBACK_RUNNERS.has(r.runnerId)),
+		),
 	);
-	if (anyFallbackHasCoverage) return { coverage: "fallback" };
+	if (fallbackChecked)
+		return { verdict: fallbackChecked, coverage: "fallback" };
 
 	// #5238 F1: the primary group is the language server alone, and it stated it
 	// has nothing to check for this file (no server's matcher selects it, see
 	// the lsp runner). No tool is missing and none failed, so the "unavailable"
-	// notice does not apply. The file is still unchecked, so it carries
-	// `unconfirmedStatus` (#5238 N1): the all-clear line reads "not analyzed",
+	// notice does not apply. The file is still unchecked, so it carries an
+	// unchecked verdict (#5238 N1): the all-clear line reads "not analyzed",
 	// never "clean". Keyed on the lsp runner, not on the bare reason:
 	// `no-files-matched` also states "a config ignored this file" (oxlint), which
 	// IS an unchecked file. A denial (`disabled-by-config`) or any other skip
@@ -911,7 +928,7 @@ function buildCoverageNotice(
 		)
 	)
 		return {
-			unconfirmedStatus: "not analyzed (no language server handles this file)",
+			verdict: unchecked("not analyzed (no language server handles this file)"),
 		};
 
 	// #4403: no primary checked this file. When the runner knows why, the
@@ -939,13 +956,15 @@ function buildCoverageNotice(
 			r.primaryUnavailableCause === "disabled" ||
 			r.primaryUnavailableCause === "disabledFallback",
 	);
-	const unconfirmedStatus = cause
-		? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
-		: deniedRunnerIds.length > 0
-			? onlySwitchedOff
-				? `not checked (${deniedNote})`
-				: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
-			: "not fully checked (a language tool is missing, timed out, or failed to run)";
+	const verdict = unchecked(
+		cause
+			? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
+			: deniedRunnerIds.length > 0
+				? onlySwitchedOff
+					? `not checked (${deniedNote})`
+					: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
+				: "not fully checked (a language tool is missing, timed out, or failed to run)",
+	);
 
 	if (
 		onlySwitchedOff &&
@@ -967,7 +986,7 @@ function buildCoverageNotice(
 		];
 		if (dedupe) {
 			if (onceKeys.every((key) => coverageNoticeSeen.has(key)))
-				return { unconfirmedStatus };
+				return { verdict };
 			for (const key of onceKeys) coverageNoticeSeen.add(key);
 		}
 		return {
@@ -986,13 +1005,13 @@ function buildCoverageNotice(
 				semantic: "warning",
 				tool: "pi-lens",
 			},
-			unconfirmedStatus,
+			verdict,
 		};
 	}
 
 	const onceKey = `${ctx.kind}:${ctx.filePath}`;
 	if (dedupe) {
-		if (coverageNoticeSeen.has(onceKey)) return { unconfirmedStatus };
+		if (coverageNoticeSeen.has(onceKey)) return { verdict };
 		coverageNoticeSeen.add(onceKey);
 	}
 
@@ -1005,7 +1024,7 @@ function buildCoverageNotice(
 			semantic: "warning",
 			tool: "pi-lens",
 		},
-		unconfirmedStatus,
+		verdict,
 	};
 }
 
@@ -1618,24 +1637,15 @@ export async function dispatchForFile(
 			},
 		});
 		if (groups.length === 0) {
-			return {
-				diagnostics: [],
-				blockers: [],
-				warnings: [],
-				baselineWarningCount: 0,
-				fixed: [],
-				resolvedCount: 0,
-				output: "",
-				blockerOutput: "",
-				hasBlockers: false,
-				// #5238 r3: runners were planned and every one is refused here, so the
-				// file was not checked. Without a status the write-time all-clear line
-				// reads "clean". A plan of nothing says nothing.
-				...(planned.length > 0 && {
-					unconfirmedStatus:
-						"not analyzed (adopted analysis root: no runner is admitted for it)",
-				}),
-			};
+			// #5238 r3: runners were planned and every one is refused here, so the
+			// file was not checked. #5258: a plan of nothing is unchecked too.
+			return emptyDispatchResult(
+				unchecked(
+					planned.length > 0
+						? "not analyzed (adopted analysis root: no runner is admitted for it)"
+						: "no runner is planned for this file",
+				),
+			);
 		}
 	}
 	if (ctx.fileRole === "generated") {
@@ -1665,17 +1675,8 @@ export async function dispatchForFile(
 				},
 			});
 		}
-		return {
-			diagnostics: [],
-			blockers: [],
-			warnings: [],
-			baselineWarningCount: 0,
-			fixed: [],
-			resolvedCount: 0,
-			output: "",
-			blockerOutput: "",
-			hasBlockers: false,
-		};
+		// #5258: the file is skipped by design, which is not a clean result.
+		return emptyDispatchResult(unchecked("generated file (not analyzed)"));
 	}
 	const allDiagnostics: Diagnostic[] = [];
 	let stopped = false;
@@ -2025,9 +2026,8 @@ export async function dispatchForFile(
 	const inlineFixed = fixedItems;
 	const {
 		notice: coverageNotice,
-		unconfirmedStatus,
+		verdict,
 		coverage,
-		primaryLspChecked,
 	} = buildCoverageNotice(
 		ctx,
 		runnerLatencies,
@@ -2165,9 +2165,8 @@ export async function dispatchForFile(
 				collectLaterRunnerIds: [...collectLaterRunnerIds],
 			},
 		}),
-		...(unconfirmedStatus !== undefined && { unconfirmedStatus }),
+		verdict,
 		...(coverage !== undefined && { coverage }),
-		...(primaryLspChecked && { primaryLspChecked }),
 	};
 }
 

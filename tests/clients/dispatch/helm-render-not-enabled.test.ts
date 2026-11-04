@@ -13,6 +13,7 @@
  * timed out, or failed to run" beside a denial, a failure no tool had.
  */
 
+import { uncheckedReason } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -170,7 +171,7 @@ describe("helm-render opt-out reads as the opt-in, not a failed tool (#5042)", (
 		expect(result.output).not.toContain("failed to run");
 		expect(result.output).toContain("dispatch.disabledRunners");
 		expect(result.output).toContain("so no runner checks these files");
-		expect(result.unconfirmedStatus).toBe(
+		expect(uncheckedReason(result)).toBe(
 			"not checked (helm-lint disabled in config by dispatch.disabledRunners)",
 		);
 		// Unconfirmed, never clean: no runner reached a usable result.
@@ -196,7 +197,7 @@ describe("helm-render opt-out reads as the opt-in, not a failed tool (#5042)", (
 		expect(result.output).toContain("failed to run");
 		expect(result.output).toContain("dispatch.disabledRunners");
 		expect(result.output).not.toContain("so no runner checks these files");
-		expect(result.unconfirmedStatus).toContain("failed to run");
+		expect(uncheckedReason(result)).toContain("failed to run");
 	});
 });
 

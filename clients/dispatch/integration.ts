@@ -46,6 +46,12 @@ import {
 	seedFromCapture,
 } from "./pre-edit-seed.js";
 import { TOOL_PLANS } from "./plan.js";
+import {
+	emptyDispatchResult,
+	NO_ANALYZER_REASON,
+	noPrimaryCheckerReason,
+	unchecked,
+} from "./types.js";
 import type {
 	DispatchContext,
 	DispatchResult,
@@ -3376,17 +3382,7 @@ export async function dispatchLintWithResult(
 	try {
 		const kind = ctx.kind;
 		if (!kind) {
-			return {
-				diagnostics: [],
-				blockers: [],
-				warnings: [],
-				baselineWarningCount: 0,
-				fixed: [],
-				resolvedCount: 0,
-				output: "",
-				blockerOutput: "",
-				hasBlockers: false,
-			};
+			return emptyDispatchResult(unchecked(NO_ANALYZER_REASON));
 		}
 
 		const groups = withSpotbugsGroup(
@@ -3395,17 +3391,12 @@ export async function dispatchLintWithResult(
 			ctx,
 		);
 		if (groups.length === 0) {
-			return {
-				diagnostics: [],
-				blockers: [],
-				warnings: [],
-				baselineWarningCount: 0,
-				fixed: [],
-				resolvedCount: 0,
-				output: "",
-				blockerOutput: "",
-				hasBlockers: false,
-			};
+			// #5258: no runner exists for this kind in this mode (`--no-lsp` leaves
+			// the eleven language-server-only kinds with none), so nothing checked
+			// the file. The empty result used to read as clean.
+			return emptyDispatchResult(
+				unchecked(noPrimaryCheckerReason(!pi.getFlag("no-lsp"))),
+			);
 		}
 
 		await runProviders(ctx);
@@ -3628,17 +3619,7 @@ export async function dispatchLintDetailed(
 		projectRoot?: string;
 	},
 ): Promise<{ result: DispatchResult; runners: RunnerOutcome[] }> {
-	const empty: DispatchResult = {
-		diagnostics: [],
-		blockers: [],
-		warnings: [],
-		baselineWarningCount: 0,
-		fixed: [],
-		resolvedCount: 0,
-		output: "",
-		blockerOutput: "",
-		hasBlockers: false,
-	};
+	const empty = emptyDispatchResult(unchecked("no runner ran for this file"));
 
 	const ctx = createDispatchContext(
 		filePath,

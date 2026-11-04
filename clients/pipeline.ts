@@ -416,7 +416,7 @@ export interface PipelineResult {
 	fileModified: boolean;
 	/**
 	 * True only when this run's whole delivery is the `✓ <lang> clean` line, a
-	 * language server answered for the file (`DispatchResult.primaryLspChecked`)
+	 * language server answered for the file (`DispatchResult.verdict` holds `lsp`)
 	 * and the run recorded no finding for it (#4734 r3 state table, row 14).
 	 * False on every other path: a finding, a fix, a format notice, an error, a
 	 * non-blocking finding behind the clean line, a run no language server
@@ -1699,8 +1699,10 @@ type DispatchResult = Awaited<
 /**
  * The line a write with nothing else to say ends with. #4403: "clean" only
  * when the file's primary group checked it; otherwise one line naming why not
- * (`DispatchResult.unconfirmedStatus`), so a write after the once-only
- * coverage notice does not read as a clean result.
+ * (`DispatchResult.verdict`), so a write after the once-only coverage notice
+ * does not read as a clean result. #5258: `checked` is the only way to the
+ * clean line; a file with no kind is unchecked too, so the label falls back to
+ * the extension (or the name) instead of dropping out of the line.
  */
 function buildAllClearOutput(
 	dispatchResult: DispatchResult,
@@ -1708,18 +1710,13 @@ function buildAllClearOutput(
 	filePath: string,
 ): string {
 	const kind = detectFileKind(filePath);
-	const langLabel = kind ? getFileKindLabel(kind) : path.extname(filePath);
-	if (kind && dispatchResult.unconfirmedStatus !== undefined) {
-		return `\u26a0 ${langLabel} unconfirmed — ${dispatchResult.unconfirmedStatus} · ${elapsed}ms`;
-	}
-	const parts: string[] = [];
-
-	if (kind) {
-		parts.push(`${langLabel} clean`);
-	}
-
-	parts.push(`${elapsed}ms`);
-	return `checkmark ${parts.join(" · ")}`.replace("checkmark", "\u2713");
+	const langLabel = kind
+		? getFileKindLabel(kind)
+		: path.extname(filePath) || path.basename(filePath);
+	const { verdict } = dispatchResult;
+	return verdict.checked
+		? `\u2713 ${langLabel} clean · ${elapsed}ms`
+		: `\u26a0 ${langLabel} unconfirmed — ${verdict.reason} · ${elapsed}ms`;
 }
 
 /**
@@ -2653,6 +2650,8 @@ async function analysePipeline(
 		storedDiagnostics,
 		widgetOrder(),
 		analysisReadAtMs,
+		// #5258: the footer reads the same verdict as the write's line.
+		dispatchResult.verdict.checked ? undefined : dispatchResult.verdict.reason,
 	);
 	// #502: emit the write batch's FINAL diagnostic state immediately after
 	// recordDiagnostics commits it — this call site runs after format,
@@ -2940,7 +2939,8 @@ async function analysePipeline(
 		// (a warning renders no text) and no blocker it keeps (a held-back one
 		// renders none in a run without authorship).
 		checkedClean =
-			dispatchResult.primaryLspChecked === true &&
+			dispatchResult.verdict.checked &&
+			dispatchResult.verdict.runnerIds.includes("lsp") &&
 			storedDiagnostics.length === 0;
 	}
 

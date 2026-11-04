@@ -11,8 +11,9 @@
  * (`tests/fixtures/runner-output/`), the production dispatcher
  * (`dispatchForFile` over a registry from `registerDefaultRunners`) runs the
  * runner against each of these tool states, and the verdict is read from the
- * dispatcher's own result (`diagnostics`, `inconclusiveSources`,
- * `unconfirmedStatus`) and its own `reachedNoVerdict` rule:
+ * dispatcher's own result (`diagnostics`, `inconclusiveSources`, and for the
+ * no-verdict cells the write line's `verdict`) and its own `reachedNoVerdict`
+ * rule:
  *
  *   clean            probe ok; the run prints nothing / the empty report
  *   dirty            probe ok; the run prints the captured real bytes
@@ -452,8 +453,7 @@ function verdictOf(
 	if (
 		outcome === undefined ||
 		reachedNoVerdict(outcome) ||
-		(dispatched.inconclusiveSources?.runnerIds ?? []).includes(runnerId) ||
-		dispatched.unconfirmedStatus !== undefined
+		(dispatched.inconclusiveSources?.runnerIds ?? []).includes(runnerId)
 	) {
 		return "no-verdict";
 	}
@@ -692,6 +692,15 @@ describe("tool-state matrix (#4522)", () => {
 									spawned.some((s) => s.call === "work"),
 									`${context}: the runner never reached its work spawn, so this cell proves nothing`,
 								).toBe(true);
+							}
+							// #5258: the end-to-end half. The group is this runner alone, so a
+							// `checked` verdict could only come from it completing: a tool that
+							// never answered must not let the write line read clean.
+							if (cell.expect === "no-verdict") {
+								expect(
+									dispatched.verdict.checked,
+									`${context}: an unanswered tool let the write line read clean`,
+								).toBe(false);
 							}
 							expect(verdict, context).toBe(cell.expect);
 						} finally {
