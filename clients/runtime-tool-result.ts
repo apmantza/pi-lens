@@ -631,7 +631,10 @@ function mergeDispositions(
 interface ToolResultEvent {
 	toolName: string;
 	toolCallId?: string | number;
-	/** Parent codemode call whose transcript result contains nested calls. */
+	/**
+	 * Parent tool call whose transcript result contains nested calls. Any tool
+	 * that calls `ctx.executeTool` sets it; codemode is one example.
+	 */
 	parentToolCallId?: string | number;
 	/** Host tool_result status; distinct from pi-lens PipelineResult.isError. */
 	isError?: boolean;
