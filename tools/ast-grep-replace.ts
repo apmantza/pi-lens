@@ -310,7 +310,11 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						details: { stalePreview: true },
+						// #5244 r4: files an earlier path already rewrote still dispatch.
+						details: {
+							stalePreview: true,
+							appliedFiles: ruleResult.appliedFiles ?? [],
+						},
 					};
 				}
 				if (ruleResult.error) {
@@ -323,7 +327,7 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						details: {},
+						details: { appliedFiles: ruleResult.appliedFiles ?? [] },
 					};
 				}
 				const output = astGrepClient.formatMatches(
@@ -340,6 +344,9 @@ export function createAstGrepReplaceTool(
 					details: {
 						matchCount: ruleResult.matches.length,
 						applied: applyFlag,
+						// #5239: the files the apply rewrote, for the `tool_result`
+						// handler's dispatch.
+						appliedFiles: ruleResult.appliedFiles ?? [],
 					},
 				};
 			}
@@ -398,6 +405,9 @@ export function createAstGrepReplaceTool(
 					totalMatches: result.totalMatches,
 					truncated: result.truncated,
 					applied: applyFlag,
+					// #5239: the files the apply rewrote, for the `tool_result`
+					// handler's dispatch.
+					appliedFiles: result.appliedFiles ?? [],
 				},
 			};
 		},

@@ -65,6 +65,7 @@ import { registerBackgroundWriteDrain } from "../background-write-drains.js";
 import { BoundedLruCache } from "../bounded-cache.js";
 import { findCommandOnPath } from "../command-path.js";
 import { logExtension } from "../extension-log.js";
+import { isToolInstallDisabled } from "../env-utils.js";
 import {
 	isFullyQualified,
 	isUnderDir,
@@ -4753,7 +4754,7 @@ export interface ManagedInstallGate {
 export async function acquireManagedInstallGate(
 	context: string,
 ): Promise<ManagedInstallGate> {
-	if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
+	if (isToolInstallDisabled()) {
 		return {
 			ok: false,
 			reason: "installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
@@ -6514,7 +6515,7 @@ export async function installTool(
 	 */
 	ownsLock?: () => boolean,
 ): Promise<boolean> {
-	if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
+	if (isToolInstallDisabled()) {
 		installFailureReasons.set(
 			toolId,
 			"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
@@ -6740,7 +6741,7 @@ async function ensureToolResolved(
 			);
 			return cacheResolvedPath(await getToolPath(toolId));
 		}
-		if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
+		if (isToolInstallDisabled()) {
 			installFailureReasons.set(
 				toolId,
 				"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
@@ -6896,7 +6897,7 @@ async function ensureToolResolved(
 			);
 			return undefined;
 		}
-		if (process.env.PI_LENS_DISABLE_TOOL_INSTALL === "1") {
+		if (isToolInstallDisabled()) {
 			installFailureReasons.set(
 				toolId,
 				"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",

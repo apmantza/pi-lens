@@ -252,7 +252,9 @@ describe("noteSpawnTimeout filePath/metadata.command split (#2229 R2-F2)", () =>
 	it("normalizes filePath but leaves metadata.command raw for an absolute-path command", async () => {
 		vi.resetModules();
 		const writerLog = vi.fn();
-		vi.doMock("../../clients/env-utils.js", () => ({
+		vi.doMock("../../clients/env-utils.js", async (importOriginal) => ({
+			// #5231: keep every real export; only the test-mode answer is doubled.
+			...(await importOriginal<typeof import("../../clients/env-utils.js")>()),
 			isTestMode: () => false,
 		}));
 		vi.doMock("../../clients/ndjson-logger.js", () => ({

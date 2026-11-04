@@ -19,6 +19,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { expect } from "vitest";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 import {
 	type PiFauxReply,
 	type PiMessage,
@@ -253,4 +254,34 @@ export async function warmGuardedSession(root: string): Promise<void> {
 	} finally {
 		await handle.dispose();
 	}
+}
+
+/** One latency-log row, as far as the dispatch witnesses read it. */
+export interface DispatchRow {
+	type?: string;
+	filePath?: string;
+	diagnostics?: Array<{ rule?: string }>;
+}
+
+/** The dispatcher's `runner` rows for one file: each is one runner's run on it. */
+export function runnerRowsFor(
+	rows: readonly DispatchRow[],
+	file: string,
+): DispatchRow[] {
+	return rows.filter(
+		(row) =>
+			row.type === "runner" &&
+			row.filePath !== undefined &&
+			normalizeMapKey(row.filePath) === normalizeMapKey(file),
+	);
+}
+
+/** Every rule the dispatcher's runners reported on one file, one entry per report. */
+export function reportedRules(
+	rows: readonly DispatchRow[],
+	file: string,
+): string[] {
+	return runnerRowsFor(rows, file).flatMap((row) =>
+		(row.diagnostics ?? []).map((d) => d.rule ?? ""),
+	);
 }

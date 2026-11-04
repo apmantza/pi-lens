@@ -84,6 +84,7 @@ const CONSUMERS = [
 	"tests/config/bounded-container-guard.test.ts",
 	"tests/config/bounded-eviction-idiom-sweep.test.ts",
 	"tests/config/flag-read-registry-sweep.test.ts",
+	"tests/config/install-kill-switch-census.test.ts",
 	"tests/config/lsp-override-copy-census.test.ts",
 	"tests/config/runner-group-id-census.test.ts",
 	"tests/config/spawn-chokepoint-sweep.test.ts",

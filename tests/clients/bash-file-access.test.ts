@@ -709,6 +709,44 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 		);
 	});
 
+	/**
+	 * #5248. Recurrence it prevents: `lsp_navigation` and `ast_grep_replace`
+	 * rewrote several files, were classed read-only, and got the 500 ms wall,
+	 * which abandoned the per-file dispatch after the first file, so the commit
+	 * gate ran before the other files published a verdict. A result naming the
+	 * files an admitted pi-lens tool wrote is edit-class; the same field on a
+	 * tool pi-lens does not own, and an admitted tool that wrote nothing, is not.
+	 */
+	it("classifies an admitted tool's result that names applied files as edit-class (#5248)", () => {
+		const applied = { appliedFiles: [pathIn("a.ts"), pathIn("b.ts")] };
+		for (const toolName of ["lsp_navigation", "ast_grep_replace"])
+			expect(
+				isEditClassToolResult({ toolName, input: {}, details: applied }, tmp),
+			).toBe(true);
+		expect(
+			isEditClassToolResult(
+				{
+					toolName: "lsp_navigation",
+					input: {},
+					details: { appliedFiles: [] },
+				},
+				tmp,
+			),
+		).toBe(false);
+		expect(
+			isEditClassToolResult(
+				{ toolName: "lsp_navigation", input: {}, details: {} },
+				tmp,
+			),
+		).toBe(false);
+		expect(
+			isEditClassToolResult(
+				{ toolName: "evil_tool", input: {}, details: applied },
+				tmp,
+			),
+		).toBe(false);
+	});
+
 	const cases: Array<[string, (f: string) => string]> = [
 		["redirect (>)", (f) => `echo "x" > ${f}`],
 		["redirect no space (>file)", (f) => `echo "x" >${f}`],

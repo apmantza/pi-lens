@@ -173,7 +173,14 @@ Set to `1` to skip auto-installing language servers. Off by default.
 ### `PI_LENS_DISABLE_TOOL_INSTALL`
 
 Set to `1` to skip auto-installing managed tools (formatters, linters,
-scanners). Off by default.
+scanners). Off by default. It stops four things: the managed installer, the
+lazy installer (`gem install rubocop`, `rustup component add clippy|rustfmt`),
+govulncheck's `go install`, and any `npx` package-runner spawn, which runs
+offline (`npm_config_offline=true`): it uses npm's cache or fails, and never
+downloads. A refused lazy or govulncheck install records one `install-disabled`
+degradation row per tool per session. It does not cover `bunx` (which ignores
+that variable; pi-lens never spawns it) or language-server installs (see
+`PI_LENS_DISABLE_LSP_INSTALL`).
 
 ## Context injection
 

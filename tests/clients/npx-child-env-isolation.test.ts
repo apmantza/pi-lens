@@ -120,6 +120,10 @@ describe("#4268 MED-8 cache-only npx child environment", () => {
 			vi.stubEnv("npm_config_registry", "http://hostile.invalid/");
 			vi.stubEnv("NPM_CONFIG_USERCONFIG", "/hostile/.npmrc");
 			vi.stubEnv("PI_LENS_NPX_PROBE_OUT", outFile);
+			// This witness is the strip, so the install kill switch (which sets
+			// `npm_config_offline` after it, #5231) stays off here; its own
+			// witness is install-kill-switch-npx-5231.test.ts.
+			vi.stubEnv("PI_LENS_DISABLE_TOOL_INSTALL", "0");
 			vi.stubEnv("PATH", `${binDir}${path.delimiter}${process.env.PATH ?? ""}`);
 
 			const mod = await import("../../clients/formatters.js");

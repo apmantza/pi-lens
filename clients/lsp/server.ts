@@ -71,6 +71,7 @@ import {
 	resolveZizmorGitHubToken,
 } from "../zizmor-config.js";
 import { logLatency } from "../latency-logger.js";
+import { isLspInstallDisabled } from "../env-utils.js";
 import { logSessionStart } from "../sessionstart-logger.js";
 import { readDirEntriesSafeAsync } from "../source-walker.js";
 import { findLocalSgconfig, resolveBaselineSgconfig } from "../sgconfig.js";
@@ -816,10 +817,6 @@ export interface LSPServerInfo {
 		| undefined
 	>;
 	autoInstall?: () => Promise<boolean>;
-}
-
-function isLspInstallDisabled(): boolean {
-	return process.env.PI_LENS_DISABLE_LSP_INSTALL === "1";
 }
 
 function canInstall(allowInstall?: boolean): boolean {

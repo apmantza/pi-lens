@@ -22,6 +22,7 @@ import {
 } from "../degradation-ledger.js";
 import { isEphemeralCheckoutRoot } from "../ephemeral-root.js";
 import { logLatency } from "../latency-logger.js";
+import { isLspInstallDisabled } from "../env-utils.js";
 import {
 	findLocalBinUpwards,
 	isProjectLocalBinPath,
@@ -1370,7 +1371,7 @@ export class ClientRegistry {
 
 	private shouldAllowInstall(serverId: string): boolean {
 		if (!assertInstallAllowed(`lsp install: ${serverId}`)) return false;
-		return process.env.PI_LENS_DISABLE_LSP_INSTALL !== "1";
+		return !isLspInstallDisabled();
 	}
 
 	/**

@@ -14,6 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 // Imported through the `.js` specifiers the CLIENTS use, deliberately: vitest
 // treats `foo.ts` and `foo.js` as two module instances here, so a test that
 // resets module-level state through the `.ts` specifier resets a copy nothing
@@ -100,7 +101,12 @@ function decisions(): Record<string, unknown>[] {
 		.map((entry) => entry.metadata as Record<string, unknown>);
 }
 
+// #5231: lazy installs and govulncheck now honour PI_LENS_DISABLE_TOOL_INSTALL,
+// which vitest-setup defaults to "1"; a case that drives the install spawn
+// turns the switch off for its own body.
+let restoreInstallSwitch: () => void = () => {};
 beforeEach(async () => {
+	restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	logLatencySpy.mockClear();
 	(await spawnMock()).mockReset();
 	resetDegradationLedger();
@@ -109,6 +115,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	restoreInstallSwitch();
 	vi.useRealTimers();
 });
 
