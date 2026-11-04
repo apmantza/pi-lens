@@ -896,6 +896,8 @@ if (!cost) {
 					zeroMutants: { reason },
 					filesSkippedOverCap: skipped,
 					filesUncovered: uncovered,
+					filesNoSourceMap: compiledSkippedNoMap,
+					filesNoMutableLines: compiledSkippedNoLines,
 					rangesTotal: allPatterns.length,
 					testsRun: tests,
 				}),

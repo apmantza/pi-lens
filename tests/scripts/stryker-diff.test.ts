@@ -71,6 +71,7 @@ import {
 	TEST_FILE_OVERHEAD_SECONDS,
 	UNKNOWN_TEST_SECONDS,
 } from "../../scripts/lib/stryker-diff.mjs";
+import { coverageGaps } from "../../scripts/stryker-nightly.mjs";
 import { stripSource } from "../support/sweep-kit.js";
 import {
 	buildLineIndex,
@@ -1466,6 +1467,51 @@ describe("driver Stryker stage, spawned for real (#3856 F3)", () => {
 			expect(report.piLensMutationDiff.zeroMutants.reason).toContain(
 				"no range fits the allowance of 10",
 			);
+		} finally {
+			fixture.cleanup();
+		}
+	}, 60_000);
+	// Recurrence this guards (#4171, run 41295346200, 2026-11-01): the no-launch
+	// report left out filesNoSourceMap and filesNoMutableLines. coverageGaps then
+	// read the compiled-skip file as unevaluated, and nextQueue re-queued it on
+	// every night the sampler found no range that fits.
+	it("carries the compiled-skip lists into the no-launch report, so the skipped file is not re-queued (#4171)", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+			manyRanges: 12,
+			skippedCompiled: true,
+		});
+		try {
+			const binary = join(fixture.root, "node_modules", ".bin", "stryker");
+			writeFileSync(
+				binary,
+				readFileSync(binary, "utf8").replace(
+					"in 1 seconds (net 12 ms",
+					"in 220 seconds (net 220000 ms",
+				),
+			);
+			mkdirSync(join(fixture.root, ".fake-stryker"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-stryker", "control.json"),
+				JSON.stringify({ defaultDensity: 12 }),
+			);
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(output).toContain("no range fits the allowance of 10");
+			expect(
+				fakeStrykerInvocations(fixture.root).filter((call) => !call.dryRun),
+			).toEqual([]);
+			const report = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(coverageGaps(report).retry).not.toContain("clients/skipped.ts");
+			expect(report.piLensMutationDiff.filesNoSourceMap).toEqual([
+				"clients/skipped.ts",
+			]);
+			expect(report.piLensMutationDiff.filesNoMutableLines).toEqual([]);
 		} finally {
 			fixture.cleanup();
 		}
@@ -3013,19 +3059,6 @@ describe("stryker diff wall-clock budget", () => {
 		expect(driver).toContain("planResample({");
 		expect(driver).toContain("decideMutationOutcome({");
 		expect(driver).toContain("MAX_RESAMPLE_ATTEMPTS");
-	});
-
-	it("never launches a first sample whose selection is empty (#4171)", () => {
-		// Recurrence: run 41295346200 (2026-11-01). When no range fits the
-		// allowance, the first sample must report the zero-mutant outcome and exit
-		// before Stryker is spawned. The driver is a top-level script this suite
-		// cannot import, so this reads its code with comments and string literals
-		// blanked, and checks the empty-selection guard precedes the launch.
-		const code = stripSource(driver);
-		const guard = code.indexOf("fit.selected.length === 0");
-		const launch = code.indexOf("patterns = fit.selected;");
-		expect(guard).toBeGreaterThan(-1);
-		expect(launch).toBeGreaterThan(guard);
 	});
 
 	it("builds the per-run Stryker config through buildRunConfig, not a hand-rolled duplicate", () => {
