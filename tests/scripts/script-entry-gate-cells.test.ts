@@ -103,6 +103,8 @@ const CELLS: Record<string, Cell> = {
 	"lib/lockfile-completeness.mjs": {},
 	"lib/win32-gate-population.mjs": {},
 	"lib/windows-vitest-failure-count.mjs": {},
+	// Default argv is an unknown flag: the usage line and exit 2, no write.
+	"lint-prose-files.mjs": {},
 	"lsp-refresh-landing.mjs": {},
 	"npm-retry.mjs": { args: [] },
 	"playground-verify-rule.mjs": { args: ["--help"] },
