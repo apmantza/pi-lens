@@ -121,13 +121,15 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 	});
 
 	// Recurrence (#5275): the PR-time `codeql` job returning to ci.yml would put
-	// the 13-minute scan back on every PR.
+	// the 13-minute scan back on every PR. Asserted on the parsed workflow, so a
+	// comment that names codeql-action is not a step (#5280 r1: a raw-text scan
+	// reded on a comment in ci.yml).
 	it("keeps ci.yml free of any CodeQL job or codeql-action step", () => {
-		const ci = load("ci.yml");
-		expect(ci.jobs.codeql).toBeUndefined();
-		const raw = readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8");
-		expect(raw).not.toContain("github/codeql-action");
-		expect(raw).not.toMatch(/^\s+name: CodeQL\b/m);
+		const jobs = Object.entries(load("ci.yml").jobs);
+		expect(
+			jobs.filter(([id, job]) => /codeql/i.test(`${id} ${job.name ?? ""}`)),
+		).toEqual([]);
+		expect(jobs.flatMap(([, job]) => codeqlSteps(job))).toEqual([]);
 	});
 
 	// Recurrence: a workflow-level `security-events: write` hands the SARIF
