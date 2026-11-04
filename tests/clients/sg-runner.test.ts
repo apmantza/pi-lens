@@ -12,14 +12,11 @@ import {
 // All hoisted: importing `spawn-shapes.js` below reaches the mocked safe-spawn
 // module, so every mock factory here runs during the import phase — a plain
 // `const` would still be in its temporal dead zone when it does.
-const { safeSpawnAsync, safeSpawn, getSgCommand, ensureTool } = vi.hoisted(
-	() => ({
-		safeSpawnAsync: vi.fn(),
-		safeSpawn: vi.fn(),
-		getSgCommand: vi.fn(),
-		ensureTool: vi.fn(),
-	}),
-);
+const { safeSpawnAsync, safeSpawn, ensureTool } = vi.hoisted(() => ({
+	safeSpawnAsync: vi.fn(),
+	safeSpawn: vi.fn(),
+	ensureTool: vi.fn(),
+}));
 const fsFault = vi.hoisted(() => ({
 	kind: "",
 	writeCall: 0,
@@ -72,7 +69,6 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		getSgCommand,
 		resolveManagedToolClient: vi.fn(async ({ acceptInstalled }) => {
 			const installed = await ensureTool("ast-grep");
 			if (!installed) return { outcome: "missing" };
@@ -112,7 +108,6 @@ describe("SgRunner", () => {
 			stderr: "",
 			error: undefined,
 		});
-		getSgCommand.mockReturnValue({ cmd: "ast-grep", args: [] });
 		ensureTool.mockResolvedValue(null);
 	});
 
@@ -314,7 +309,8 @@ describe("SgRunner", () => {
 
 		// #4233 V3-HIGH-02: both temp-scan members must use the same isolated
 		// seam the exec path uses, so a hostile project `.npmrc` never reaches the
-		// scan's npx child.
+		// scan's npx child. #5247: the command is the one THIS instance resolved,
+		// so the sweep has to run first, as every tool handler does.
 		it("runs the temp-scan npx fallback from the isolated seam (#4233 V3-HIGH-02)", async () => {
 			const env = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-sg-tempscan-"),
@@ -327,24 +323,25 @@ describe("SgRunner", () => {
 				"registry=http://127.0.0.1:9/poison\n",
 			);
 			vi.stubEnv("PI_LENS_HOME", piLensHome);
-			getSgCommand.mockReturnValue({
-				cmd: "npx",
-				args: ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"],
-			});
 			const scanOptions: Array<{ cwd?: string; stripNpmConfig?: boolean }> = [];
 			safeSpawnAsync.mockImplementation(
 				async (
 					cmd: string,
-					_args: string[],
+					args: string[],
 					options?: { cwd?: string; stripNpmConfig?: boolean },
 				) => {
-					if (cmd === "npx") scanOptions.push(options ?? {});
+					if (cmd !== "npx")
+						return { status: 1, error: undefined, stdout: "", stderr: "" };
+					if (args.includes("--version"))
+						return { status: 0, stdout: "ast-grep 0.45.3", stderr: "" };
+					scanOptions.push(options ?? {});
 					return { status: 1, error: undefined, stdout: "", stderr: "" };
 				},
 			);
 			try {
 				const { SgRunner } = await import("../../clients/sg-runner.js");
 				const runner = new SgRunner();
+				expect(await runner.ensureAvailable()).toBe(true);
 				const rule =
 					"id: r\nlanguage: TypeScript\nrule: { kind: function_declaration }\n";
 				await runner.tempScanDetailedAsync(project, "r", rule);
@@ -357,6 +354,69 @@ describe("SgRunner", () => {
 				}
 			} finally {
 				vi.unstubAllEnvs();
+				removeTempDirSync(env);
+			}
+		});
+
+		// #5247: the temp scans ran the module-level sweep's command, which falls
+		// back to `npx --no ...` before the module sweep ran and appended the npx
+		// preamble to a resolved bare binary after it. A structural ast_grep_replace
+		// (insideKind, hasKind, follows, ...) in a project without @ast-grep/cli
+		// failed with "npm ERR! canceled" / "unexpected argument '--no'". The
+		// binary here is the one pi-lens installed (the empty-prefix case): both
+		// temp-scan entry points, dry run and apply, must spawn exactly it.
+		it("spawns the instance-resolved binary with an empty prefix, never npx, from every temp-scan entry point (#5247)", async () => {
+			const env = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-managed-"));
+			const project = path.join(env, "project");
+			const managed = path.join(
+				env,
+				"tools",
+				"node_modules",
+				".bin",
+				"ast-grep",
+			);
+			fs.mkdirSync(project, { recursive: true });
+			ensureTool.mockResolvedValue(managed);
+			const spawned: Array<{ cmd: string; args: string[] }> = [];
+			safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) => {
+				spawned.push({ cmd, args });
+				if (cmd === managed)
+					return args.includes("--version")
+						? { status: 0, stdout: "ast-grep 0.45.3", stderr: "" }
+						: { status: 0, stdout: "[]", stderr: "" };
+				return { status: 1, error: undefined, stdout: "", stderr: "" };
+			});
+			try {
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				expect(await runner.ensureAvailable()).toBe(true);
+				spawned.length = 0;
+				const rule =
+					"id: r\nlanguage: TypeScript\nrule: { kind: function_declaration }\nfix: x\n";
+				const detailed = await runner.tempScanDetailedAsync(project, "r", rule);
+				const dry = await runner.tempScanWithFixAsync(
+					project,
+					"r",
+					rule,
+					false,
+				);
+				const applied = await runner.tempScanWithFixAsync(
+					project,
+					"r",
+					rule,
+					true,
+				);
+				expect(detailed.error).toBeUndefined();
+				expect(dry.error).toBeUndefined();
+				expect(applied.error).toBeUndefined();
+				// detailed + dry + (apply: json pass + --update-all pass)
+				expect(spawned).toHaveLength(4);
+				for (const call of spawned) {
+					expect(call.cmd).toBe(managed);
+					expect(call.args[0]).toBe("scan");
+					expect(call.args).not.toContain("--no");
+				}
+			} finally {
 				removeTempDirSync(env);
 			}
 		});
