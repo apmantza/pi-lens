@@ -33,6 +33,7 @@ import {
 import {
 	renderCompactSymbolSearch,
 	symbolSearch,
+	SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
 	type SymbolSearchResult,
 } from "../../clients/lens-engine.js";
 import {
@@ -1044,5 +1045,94 @@ describe("symbol_search tool", () => {
 				].join("\n"),
 			);
 		});
+	});
+});
+
+// #5135: no terms AND no scope is a refusal; a term-less call that carries a
+// scope is a listing. Both entry paths (inline filters and structured
+// `paths`/`lang`) must agree, and the refusal sentence is the one shared with
+// the MCP mirror.
+describe("symbol_search term-less calls (#5135)", () => {
+	const source = "export function authenticateUser(id) { return id; }";
+	const python = "def authenticate_user(id):\n    return id\n";
+
+	function listingFixture(env: { tmpDir: string }): void {
+		const tsFile = createTempFile(env.tmpDir, "src/auth/login.ts", source);
+		const pyFile = createTempFile(
+			env.tmpDir,
+			"scripts/authenticate.py",
+			python,
+		);
+		warmWordIndexSnapshot(env.tmpDir, [
+			{ path: tsFile, content: source },
+			{ path: pyFile, content: python },
+		]);
+	}
+
+	async function run(
+		env: { tmpDir: string },
+		params: { query: string; paths?: string[] },
+	) {
+		const tool = createSymbolSearchTool(() => env.tmpDir);
+		return tool.execute("1", params, undefined, null, { cwd: env.tmpDir });
+	}
+
+	it("refuses a query with neither terms nor scope as an isError", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-empty-");
+		try {
+			listingFixture(env);
+			const result = await run(env, { query: "" });
+			expect(result.isError).toBe(true);
+			expect(String(result.content[0]?.text)).toBe(
+				SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lists the scoped files for an empty query with structured paths", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-empty-paths-");
+		try {
+			listingFixture(env);
+			const result = await run(env, { query: "", paths: ["src"] });
+			expect(result.isError).toBeFalsy();
+			expect(rankedFiles(String(result.content[0]?.text))).toEqual([
+				"src/auth/login.ts",
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("treats a negation-only query as a scope, not a refusal", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-negation-");
+		try {
+			listingFixture(env);
+			const result = await run(env, { query: "-file:test" });
+			expect(result.isError).toBeFalsy();
+			expect(rankedFiles(String(result.content[0]?.text)).sort()).toEqual([
+				"scripts/authenticate.py",
+				"src/auth/login.ts",
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lists the same ranked set for inline `file:src/` and structured `paths: ['src']`", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-parity-");
+		try {
+			listingFixture(env);
+			const inline = await run(env, { query: "file:src/" });
+			const structured = await run(env, { query: "", paths: ["src"] });
+			const inlineFiles = rankedFiles(String(inline.content[0]?.text));
+			expect(inlineFiles).toEqual(["src/auth/login.ts"]);
+			expect(inlineFiles).toEqual(
+				rankedFiles(String(structured.content[0]?.text)),
+			);
+		} finally {
+			env.cleanup();
+		}
 	});
 });

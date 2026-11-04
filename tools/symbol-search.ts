@@ -107,6 +107,17 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 					details: { available: false, query: params.query },
 				};
 			}
+			// #5135: no terms and no scope is a malformed request, not an empty
+			// result — the engine returns the one shared refusal sentence both
+			// surfaces print.
+			if (result.refusal) {
+				return {
+					content: [{ type: "text" as const, text: result.refusal }],
+					isError: true,
+					details: { available: true, query: result.query },
+				};
+			}
+
 			if (!result.available) {
 				return {
 					content: [

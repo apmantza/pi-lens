@@ -18,6 +18,7 @@ import {
 	buildWordIndex,
 	serializeWordIndex,
 } from "../../clients/word-index.js";
+import { SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL } from "../../clients/lens-engine.js";
 import {
 	flushProjectSnapshotPersistsForTests,
 	PROJECT_SNAPSHOT_VERSION,
@@ -160,6 +161,19 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		// The footer names the top-ranked hit through the MCP tool spelling.
 		expect(text).toContain("Next: pilens_module_report auth.ts");
 		expect(text).not.toMatch(/^Next: module_report /m);
+	}, 30_000);
+
+	// #5135: an empty query with no scope is an isError refusal on MCP too,
+	// using the same sentence the pi tool returns.
+	it("refuses an empty query with no scope, using the shared sentence", async () => {
+		const res = await harness.request(13, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "", cwd: projectDir },
+		});
+		expect((res.result as { isError?: boolean }).isError).toBe(true);
+		expect(textOf(res).split("\n\n")[0]).toBe(
+			SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
+		);
 	}, 30_000);
 
 	it("returns available:false with an actionable hint when no index exists for cwd", async () => {
@@ -368,6 +382,14 @@ describe("pilens_symbol_search paths and limit shapes (#5038)", () => {
 	it("clamps `limit` to max(1, floor) like project_report", async () => {
 		expect((await hitsFor({ limit: 0 })).files.length, "limit 0").toBe(1);
 		expect((await hitsFor({ limit: -2 })).files.length, "limit -2").toBe(1);
+	}, 30_000);
+
+	// #5135 / @Don-Yin: `query: ""` with a structured scope must list the
+	// scoped files, not refuse.
+	it("lists the scoped files for an empty query with paths", async () => {
+		const result = await hitsFor({ query: "", paths: ["src"] });
+		expect(result.isError).toBeFalsy();
+		expect(result.files).toEqual(["src/login.ts"]);
 	}, 30_000);
 
 	it("refuses every entry the shared reader does not recognise", async () => {

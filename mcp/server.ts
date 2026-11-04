@@ -1316,7 +1316,6 @@ async function callTool(
 
 	if (name === "pilens_symbol_search") {
 		const query = typeof args.query === "string" ? args.query : "";
-		if (!query.trim()) return toolText("Provide a non-empty `query`.");
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
 		// #5041: one reader owns the `paths` entry rules; #5038: the engine clamps
 		// `limit` and resolves each entry as a host path (this handler used to
@@ -1331,6 +1330,11 @@ async function callTool(
 		const paths = pathsRead.entries.length > 0 ? pathsRead.entries : undefined;
 		const lang = typeof args.lang === "string" ? args.lang : undefined;
 		const result = await symbolSearch(query, cwd, limit, { paths, lang });
+		// #5135: the engine owns the one refusal sentence for a call with neither
+		// terms nor scope; a term-less call that carries `paths`/`lang` returns a
+		// listing, never this refusal.
+		if (result.refusal) return { ...toolText(result.refusal), isError: true };
+
 		if (!result.available) {
 			return toolText(
 				result.hint ??

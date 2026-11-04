@@ -47,6 +47,7 @@ import {
 import {
 	centralityFromReverseDeps,
 	getWordIndexBuildStatus,
+	isEmptyWordIndexQuery,
 	type RankedFile,
 	searchWordIndex,
 	triggerBackgroundWordIndexBuild,
@@ -485,6 +486,12 @@ function annotateSymbolSearchHitsWithGraph(
 	}
 }
 
+/** The one refusal sentence both `symbol_search` surfaces return for a call
+ * with neither search terms nor scope (#5135). Owned here so the pi tool and
+ * the MCP mirror cannot drift; `SymbolSearchResult.refusal` carries it. */
+export const SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL =
+	"Provide a non-empty `query`, or scope the search with `paths`/`lang` or an inline `lang:`/`file:`/`ext:` filter.";
+
 export interface SymbolSearchResult {
 	/** False when no word index has been built/persisted for this workspace yet. */
 	available: boolean;
@@ -506,6 +513,10 @@ export interface SymbolSearchResult {
 	 * omitted (not surfaced) on the pi tool surface, whose index is per-edit warm.
 	 */
 	snapshotGeneratedAt?: string;
+	/** Set when the call had neither terms nor scope (#5135): the surfaces
+	 * return this sentence as an isError refusal, never as an empty result.
+	 * `available` stays true — the engine could answer; the request was empty. */
+	refusal?: string;
 }
 
 function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
@@ -552,6 +563,11 @@ function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
  * profile is unchanged either way. The module is dynamic-imported (mirroring
  * module-report.ts's own lazy load of it) so an unused review graph costs
  * nothing on this hot path.
+ *
+ * A call with neither terms nor scope (#5135) returns `refusal` instead of an
+ * empty result; the surfaces turn that into an isError. A term-less call that
+ * carries a scope (inline filters, or `options.paths`/`options.lang`) returns a
+ * listing of the scoped files.
  */
 export async function symbolSearch(
 	query: string,
@@ -566,6 +582,22 @@ export async function symbolSearch(
 	const effectiveLimit = Number.isFinite(limit)
 		? Math.max(1, Math.floor(limit))
 		: 20;
+
+	// #5135: a call with neither terms nor scope is a malformed request, not an
+	// empty result. Decided HERE (one owner) so the pi tool and the MCP mirror
+	// cannot diverge; both surfaces return `refusal` as an isError.
+	if (
+		isEmptyWordIndexQuery(query) &&
+		!options.paths?.length &&
+		!options.lang?.trim()
+	) {
+		return {
+			available: true,
+			query,
+			results: [],
+			refusal: SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
+		};
+	}
 	const warmLease = acquireWarmWordIndex(cwd);
 	const snapshot = loadProjectSnapshotWithoutWordIndex(cwd);
 	const index = warmLease.index;

@@ -574,6 +574,62 @@ describe("searchWordIndex inline query filters (#1450)", () => {
 	});
 });
 
+// #5135: a query with NO terms but a scope is a listing, not an empty result.
+// The listing runs the SAME prior block and comparator as a term search, so a
+// demoted file cannot win by alphabetical tie-break.
+describe("searchWordIndex listing branch (#5135)", () => {
+	const files = [
+		{ path: "src/widget.ts", content: "function renderWidget() {}" },
+		{ path: "dist/widget.ts", content: "function renderWidget() {}" },
+	];
+
+	it("lists every in-scope file for a term-less inline filter", () => {
+		const index = buildWordIndex(files);
+		const results = searchWordIndex(index, "file:widget");
+		expect(results.map((r) => r.file).sort()).toEqual([
+			"dist/widget.ts",
+			"src/widget.ts",
+		]);
+	});
+
+	it("orders a listing by priors, not alphabetical tie-break", () => {
+		const index = buildWordIndex(files);
+		const results = searchWordIndex(index, "file:widget");
+		// "dist/…" sorts before "src/…" alphabetically, but `dist` is a vendored
+		// path and takes the 0.3 penalty; the source file must rank first.
+		expect(results.map((r) => r.file)).toEqual([
+			"src/widget.ts",
+			"dist/widget.ts",
+		]);
+		const source = results.find((r) => r.file === "src/widget.ts");
+		const vendored = results.find((r) => r.file === "dist/widget.ts");
+		expect(source?.score).toBeGreaterThan(vendored?.score ?? 0);
+	});
+
+	it("treats a negation-only query as a scope: it lists the survivors", () => {
+		const index = buildWordIndex([
+			{ path: "src/a.ts", content: "function alpha() {}" },
+			{ path: "tests/b.ts", content: "function beta() {}" },
+		]);
+		const results = searchWordIndex(index, "-file:test");
+		expect(results.map((r) => r.file)).toEqual(["src/a.ts"]);
+	});
+
+	it("still answers a bare empty query with an empty result (no scope)", () => {
+		const index = buildWordIndex(files);
+		expect(searchWordIndex(index, "")).toEqual([]);
+	});
+
+	it("lists the whole index when the scope predicate accepts everything", () => {
+		const index = buildWordIndex(files);
+		const results = searchWordIndex(index, "", { fileFilter: () => true });
+		expect(results.map((r) => r.file).sort()).toEqual([
+			"dist/widget.ts",
+			"src/widget.ts",
+		]);
+	});
+});
+
 describe("searchWordIndex priors", () => {
 	it("demotes a test-path file below an equivalent source match", () => {
 		const index = buildWordIndex([

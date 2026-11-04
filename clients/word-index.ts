@@ -1529,9 +1529,12 @@ const WORD_INDEX_FILTER_TOKEN_RE = /^(-)?([A-Za-z][A-Za-z0-9_-]*):(.+)$/;
  * ordinary token, unchanged from prior behavior — `tokenizeLine` already
  * strips the leading `-` when it extracts identifiers.
  *
- * An unrecognized `key:` (e.g. `type:foo`) throws {@link WordIndexQueryError}
- * naming the supported prefixes, rather than falling through as a literal
- * term — a typo must fail loudly, never silently rank as if the filter never
+ * An unrecognized `key:` prefix is NOT a filter: ordinary search terms
+ * legitimately contain colons (`std::vector`, `http://…`, `C:\`), so the token
+ * passes through as a plain term and this parser never throws. A KNOWN key
+ * with an unrecognized value (`lang:klingon`) still fails loudly —
+ * {@link buildWordIndexQueryFilter} throws {@link WordIndexQueryError} naming
+ * the accepted values, so a typo never silently ranks as if the filter never
  * existed. An empty value (`lang:`) is not treated as a filter token at all
  * (kept as a term) since there is nothing to filter by.
  */
@@ -1596,6 +1599,16 @@ function resolveLangMatcher(value: string): (file: string) => boolean {
 	return (file) =>
 		extensions.includes(path.extname(file).toLowerCase()) ||
 		named.some((pattern) => pattern.test(path.basename(file)));
+}
+
+/** True when a word-index query carries neither search terms nor inline
+ * filters — the query string contributes no scope of its own. `searchWordIndex`
+ * still answers a bare empty query with an empty result; `symbolSearch` layers
+ * the structured `paths`/`lang` scope on top and refuses only when BOTH are
+ * absent (#5135). */
+export function isEmptyWordIndexQuery(query: string): boolean {
+	const parsed = parseWordIndexQuery(query);
+	return parsed.filters.length === 0 && tokenizeLine(parsed.terms).length === 0;
 }
 
 /** `ext:ts` / `ext:.ts` → a single leading-dot, lowercased suffix for path-suffix comparison (#5136). */
@@ -1721,7 +1734,9 @@ function combineFileFilters(
  * applied as a `fileFilter` (composed, AND, with any caller-supplied one)
  * BEFORE scoring, same as the pre-existing `paths`/`lang` options (#771): a
  * surviving file's score is unaffected by filtering. A query with no filter
- * tokens reproduces prior output byte-for-byte.
+ * tokens reproduces prior output byte-for-byte. A query with NO terms but a
+ * scope is a listing (#5135): every in-scope indexed file is seeded at score 1
+ * and ordered by the same priors and comparator as a term search.
  *
  * DF-normalization note: BM25's per-token `idf` is computed from `docFrequency`
  * over the FULL (unfiltered) postings for that token — `fileFilter` (whether
@@ -1753,7 +1768,13 @@ export function searchWordIndex(
 	const combinedFilter = combineFileFilters(fileFilter, queryFilter);
 
 	const queryTokens = [...new Set(tokenizeLine(parsedQuery.terms))];
-	if (queryTokens.length === 0) return [];
+	// #5135: the early return answers only a call with NEITHER terms NOR scope.
+	// A term-less query that still carries a scope — inline filters, or the
+	// structured `paths`/`lang` a caller compiled into `fileFilter` — is a
+	// listing request, not an empty result. Both entry paths share this one
+	// branch, so the inline and structured forms cannot diverge.
+	const hasScope = combinedFilter !== undefined;
+	if (queryTokens.length === 0 && !hasScope) return [];
 
 	const docCount = index.docCount || 1;
 	const avgDocLength = index.totalTokens / docCount || 1;
@@ -1762,6 +1783,17 @@ export function searchWordIndex(
 		string,
 		{ score: number; hits: number; lines: Set<number> }
 	>();
+	if (queryTokens.length === 0) {
+		// Listing: no terms, but a scope. Enumerate the indexed file set —
+		// `docLengths` carries every indexed file, zero-token files included —
+		// seed each survivor at score 1, and let the SAME prior block and
+		// comparator below order it exactly as a term search would. With no
+		// terms the token loop below is a no-op, so ONE pipeline serves both.
+		for (const file of index.docLengths.keys()) {
+			if (combinedFilter && !combinedFilter(file)) continue;
+			scores.set(file, { score: 1, hits: 0, lines: new Set<number>() });
+		}
+	}
 
 	for (const token of queryTokens) {
 		const posting = index.postings.get(token);
