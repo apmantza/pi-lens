@@ -562,7 +562,11 @@
             "x-deny": "array-union",
             "x-stability": "experimental"
           },
-          "select": { "x-stability": "experimental" },
+          "select": {
+            "type": "array",
+            "items": { "type": "string", "x-stability": "experimental" },
+            "x-stability": "experimental"
+          },
           "ignorePaths": {
             "type": "array",
             "items": { "type": "string", "minLength": 1, "x-stability": "experimental" },
