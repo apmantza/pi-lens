@@ -38,6 +38,11 @@ import {
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
 import type { RunnerResult } from "../../../clients/dispatch/types.js";
+import { getFormatService } from "../../../clients/format-service.js";
+import { BiomeClient } from "../../../clients/biome-client.js";
+import { MetricsClient } from "../../../clients/metrics-client.js";
+import { runPipeline } from "../../../clients/pipeline.js";
+import { RuffClient } from "../../../clients/ruff-client.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const UNAVAILABLE = "analysis unavailable";
@@ -57,6 +62,31 @@ async function writeAndDispatch(name: string, body: string): Promise<string> {
 		undefined,
 		tmpDir,
 	);
+}
+
+// The line the agent reads for a write: the real `runPipeline`, so the
+// all-clear line (`buildAllClearOutput`) is what renders, not the notice alone.
+async function writeAndRender(name: string, body: string): Promise<string> {
+	const file = path.join(tmpDir, name);
+	fs.writeFileSync(file, body);
+	clearCoverageNoticeState();
+	const result = await runPipeline(
+		{
+			filePath: file,
+			cwd: tmpDir,
+			toolName: "write",
+			getFlag: () => false,
+			dbg: () => {},
+		},
+		{
+			biomeClient: new BiomeClient(),
+			ruffClient: new RuffClient(),
+			metricsClient: new MetricsClient(),
+			getFormatService: () => getFormatService("lsp-name-only-coverage", false),
+			fixedThisTurn: new Set<string>(),
+		},
+	);
+	return result.output;
 }
 
 beforeEach(() => {
@@ -91,6 +121,19 @@ describe("a name no language server selects is not 'analysis unavailable'", () =
 			const output = await writeAndDispatch(name, "plugins { id 'java' }\n");
 			expect(output, name).not.toContain(UNAVAILABLE);
 			expect(output, name).not.toContain("not a clean result");
+		}
+	});
+
+	it("renders those names as not analyzed, never clean", async () => {
+		// Recurrence this guards (PR #5238 verify r2, N1): the quiet answer left
+		// `unconfirmedStatus` unset, so the all-clear line read "✓ Groovy clean"
+		// for a file no tool analyzed. The rendered line is what the agent reads,
+		// so it is driven through the real runPipeline.
+		for (const name of ["Jenkinsfile", "build.gradle", "settings.gradle"]) {
+			const line = await writeAndRender(name, "plugins { id 'java' }\n");
+			expect(line, name).not.toContain("clean");
+			expect(line, name).toContain("not analyzed");
+			expect(line, name).not.toContain(UNAVAILABLE);
 		}
 	});
 
@@ -177,7 +220,9 @@ describe("only the lsp runner's no-files-matched silences the notice", () => {
 	it("stays quiet when the lsp row is the only primary row that ran", async () => {
 		const result = await dispatchCsharp([["lsp", NOT_APPLICABLE]]);
 		expect(result.output).not.toContain(UNAVAILABLE);
-		expect(result.unconfirmedStatus).toBeUndefined();
+		expect(result.unconfirmedStatus).toBe(
+			"not analyzed (no language server handles this file)",
+		);
 	});
 
 	it("keeps the notice when a non-lsp primary runner also states no-files-matched", async () => {
