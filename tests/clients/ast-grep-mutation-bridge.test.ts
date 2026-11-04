@@ -31,13 +31,15 @@ type Recorded = {
 };
 
 const recorded: Recorded[] = [];
+/** Files the capture bridge declines, as the real one does for an out-of-scope path. */
+const refused = new Set<string>();
 
 Object.defineProperty(globalThis, MUTATION_BRIDGE_KEY, {
 	value: Object.freeze({
 		version: 1 as const,
 		recordMutation(entry: Recorded): boolean {
 			recorded.push(entry);
-			return true;
+			return !refused.has(entry.filePath);
 		},
 	}),
 	writable: false,
@@ -131,6 +133,84 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 		);
 		expect(result.stalePreview).toBe(true);
 		expect(recorded).toHaveLength(0);
+	});
+});
+
+/**
+ * #5239: the apply reports the files the bridge ACCEPTED, because the
+ * `tool_result` handler dispatches exactly those.
+ *
+ * RECURRENCE GUARDED: an applied rewrite reached the bridge's bookkeeping and
+ * nothing named its files to the dispatcher, so a blocker it introduced
+ * reached neither the turn-end check nor the commit gate. The list must also
+ * not name a file the bridge refused, or the handler would dispatch a path
+ * pi-lens declined to track.
+ */
+describe("#5239 the apply names the files the bridge accepted", () => {
+	const RULE =
+		"id: agent-rule\nlanguage: typescript\nrule:\n  pattern: var $X\nfix: let $X\n";
+	const abs = (rel: string) => path.resolve(process.cwd(), rel);
+
+	it("lists every accepted file once, for the pattern apply", async () => {
+		recorded.length = 0;
+		refused.clear();
+		const client = clientWithExec(execFor(MATCHES));
+		const result = await client.replace(
+			"var $X",
+			"let $X",
+			"typescript",
+			["src"],
+			true,
+		);
+		expect(result.appliedFiles).toEqual([abs("src/a.ts"), abs("src/b.ts")]);
+	});
+
+	it("omits a file the bridge refused, for the pattern apply", async () => {
+		recorded.length = 0;
+		refused.clear();
+		refused.add(abs("src/b.ts"));
+		const client = clientWithExec(execFor(MATCHES));
+		const result = await client.replace(
+			"var $X",
+			"let $X",
+			"typescript",
+			["src"],
+			true,
+		);
+		refused.clear();
+		expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
+	});
+
+	it("lists the accepted files for the structural apply and none for a dry run", async () => {
+		recorded.length = 0;
+		refused.clear();
+		const runner = {
+			tempScanDetailedAsync: vi.fn(async () => ({
+				matches: MATCHES,
+				status: 0,
+			})),
+			tempScanWithFixAsync: vi.fn(async () => ({ matches: MATCHES })),
+		};
+		const client = new AstGrepClient();
+		(client as unknown as { runner: unknown }).runner = runner;
+		const applied = await client.replaceWithRule(RULE, ["src"], true);
+		expect(applied.appliedFiles).toEqual([abs("src/a.ts"), abs("src/b.ts")]);
+		const dry = await client.replaceWithRule(RULE, ["src"], false);
+		expect(dry.appliedFiles).toEqual([]);
+	});
+
+	it("lists none for a dry run of the pattern replace", async () => {
+		recorded.length = 0;
+		refused.clear();
+		const client = clientWithExec(execFor(MATCHES));
+		const result = await client.replace(
+			"var $X",
+			"let $X",
+			"typescript",
+			["src"],
+			false,
+		);
+		expect(result.appliedFiles).toBeUndefined();
 	});
 });
 

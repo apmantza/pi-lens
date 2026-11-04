@@ -83,15 +83,19 @@ function reportAstGrepRulesHealth(bundledRuleDir: string): void {
  * range that file's matches covered, because the bridge's contract is
  * per-file — the same shape a multi-hunk edit produces.
  *
+ * Returns the files the bridge ACCEPTED (#5239): the tool reports them in its
+ * result details so the `tool_result` handler dispatches exactly those, never a
+ * path the bridge refused (out of scope, ignored, or no bridge mounted).
+ *
  * Exported for tests: they drive it against a registered bridge instead of
  * spawning ast-grep.
  */
 function recordAstGrepApply(
 	matches: AstGrepMatch[],
 	{ lineage, toolCallId, sessionId }: AstGrepApplyProvenance = {},
-): void {
+): string[] {
 	const bridge = getMutationBridge();
-	if (!bridge || matches.length === 0) return;
+	if (!bridge || matches.length === 0) return [];
 	const rangesByFile = new Map<string, Array<[number, number]>>();
 	for (const match of matches) {
 		const start = (match.range?.start?.line ?? 0) + 1;
@@ -100,12 +104,14 @@ function recordAstGrepApply(
 		if (existing) existing.push([start, end]);
 		else rangesByFile.set(match.file, [[start, end]]);
 	}
+	const accepted: string[] = [];
 	for (const [filePath, editRanges] of rangesByFile) {
-		bridge.recordMutation({
-			// ast-grep echoes the spelling passed to its CLI. Resolve that
-			// tool-relative spelling at the producer boundary, then use the
-			// existing canonical path seam before recordability is checked (#4140).
-			filePath: normalizeFilePath(path.resolve(process.cwd(), filePath)),
+		// ast-grep echoes the spelling passed to its CLI. Resolve that
+		// tool-relative spelling at the producer boundary, then use the
+		// existing canonical path seam before recordability is checked (#4140).
+		const resolved = normalizeFilePath(path.resolve(process.cwd(), filePath));
+		const recorded = bridge.recordMutation({
+			filePath: resolved,
 			kind: "edit",
 			editRanges,
 			consumer: "ast_grep_replace",
@@ -121,7 +127,9 @@ function recordAstGrepApply(
 			// #4943: the calling session owns the deferred pass of what it rewrote.
 			...(sessionId !== undefined && { sessionId }),
 		});
+		if (recorded) accepted.push(resolved);
 	}
+	return accepted;
 }
 
 /** Who an apply ran for: the call's session scope, its id, and its session. */
@@ -363,6 +371,8 @@ export class AstGrepClient {
 		applied: boolean;
 		stalePreview?: boolean;
 		error?: string;
+		/** #5239: the files an apply rewrote and the bridge accepted. */
+		appliedFiles?: string[];
 	}> {
 		const allMatches: AstGrepMatch[] = [];
 		for (const scanPath of paths) {
@@ -406,11 +416,12 @@ export class AstGrepClient {
 		// #4140 (F9): the structural apply rewrites files with `--update-all`
 		// exactly as the pattern apply does, and no tool_result describes it, so
 		// it reaches the same bridge with the matches captured before the write.
-		if (apply) recordAstGrepApply(allMatches, options);
+		const appliedFiles = apply ? recordAstGrepApply(allMatches, options) : [];
 		return {
 			matches: allMatches,
 			totalMatches: allMatches.length,
 			applied: apply,
+			appliedFiles,
 		};
 	}
 
@@ -754,6 +765,8 @@ export class AstGrepClient {
 		applied: boolean;
 		stalePreview?: boolean;
 		error?: string;
+		/** #5239: the files an apply rewrote and the bridge accepted. */
+		appliedFiles?: string[];
 	}> {
 		const baseArgs = ["run", "-p", pattern, "-r", rewrite, "--lang", lang];
 		if (options?.strictness) {
@@ -828,13 +841,14 @@ export class AstGrepClient {
 		// the same seam an extension would use. Fire-and-forget: the bridge never
 		// throws, and a missing bridge (pi-lens not activated, guard disabled) is
 		// a silent no-op.
-		recordAstGrepApply(preCheck.matches, options);
+		const appliedFiles = recordAstGrepApply(preCheck.matches, options);
 		return {
 			matches: preCheck.matches,
 			totalMatches: preCheck.totalMatches,
 			truncated: preCheck.truncated,
 			applied: true,
 			error: undefined,
+			appliedFiles,
 		};
 	}
 

@@ -2264,6 +2264,26 @@ function composePartialApplyResult(
 	};
 }
 
+/**
+ * #5239: the files an applied `ast_grep_replace` rewrote and the mutation
+ * bridge accepted, read from the tool's own result details. A dry run, a
+ * refused apply and every other tool name none, so they dispatch nothing here.
+ */
+function appliedFilesOfOwnTool(event: {
+	toolName: string;
+	details?: unknown;
+}): string[] {
+	if (event.toolName !== "ast_grep_replace") return [];
+	const listed = (event.details as { appliedFiles?: unknown } | undefined)
+		?.appliedFiles;
+	return Array.isArray(listed)
+		? listed.filter(
+				(candidate): candidate is string =>
+					typeof candidate === "string" && path.isAbsolute(candidate),
+			)
+		: [];
+}
+
 export async function handleToolResult(
 	deps: ToolResultDeps,
 ): Promise<ToolResultReturn> {
@@ -3659,6 +3679,20 @@ export async function handleToolResult(
 				`tool_result: observation for "${event.toolName}" did not settle: ${observed.reason}`,
 			);
 		}
+	}
+	// #5239: `ast_grep_replace` is a pi-lens-owned writer the net above never
+	// arms (`isPiLensToolName`), and it names its targets in a `paths` array
+	// the classified chain cannot read, so an applied rewrite reached the
+	// bridge's bookkeeping and nothing else: no dispatch, no blocker, no
+	// commit-gate verdict. The tool reports the files the bridge accepted in
+	// its result details; they take the SAME dispatch the settle's changed
+	// paths take below (`observedReplayed` / `observedChangedPaths` name that
+	// seam, not a provenance). The tool is never armed, so the settle above
+	// recorded nothing for this call and the two sources cannot both dispatch.
+	const ownApplied = appliedFilesOfOwnTool(event);
+	if (ownApplied.length > 0) {
+		observedReplayed = ownApplied.length;
+		observedChangedPaths = ownApplied;
 	}
 	// #2464 review round 2 (S5): ONE clock, started above BOTH exits, so
 	// `edit_batch_summary.durationMs` and the `tool_result` latency row measure

@@ -340,6 +340,9 @@ export function createAstGrepReplaceTool(
 					details: {
 						matchCount: ruleResult.matches.length,
 						applied: applyFlag,
+						// #5239: the files the apply rewrote, for the `tool_result`
+						// handler's dispatch.
+						appliedFiles: ruleResult.appliedFiles ?? [],
 					},
 				};
 			}
@@ -398,6 +401,9 @@ export function createAstGrepReplaceTool(
 					totalMatches: result.totalMatches,
 					truncated: result.truncated,
 					applied: applyFlag,
+					// #5239: the files the apply rewrote, for the `tool_result`
+					// handler's dispatch.
+					appliedFiles: result.appliedFiles ?? [],
 				},
 			};
 		},
