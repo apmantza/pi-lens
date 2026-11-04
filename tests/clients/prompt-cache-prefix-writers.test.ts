@@ -48,6 +48,16 @@ import {
 import { getLatencyLogPath } from "../../clients/latency-logger.js";
 import { flushAllNdjsonWriters } from "../../clients/ndjson-logger.js";
 import { readNdjsonRows } from "../support/ndjson-rows.js";
+import { AUTOMATION_FRAMING } from "../../clients/runtime-context.js";
+import {
+	BLOCKING_FILE,
+	CLEAN_FILE,
+	endTurn,
+	openGuardedSession,
+	seed,
+	step,
+	writeTarget,
+} from "../support/pi-session-commit-gate.js";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
@@ -360,6 +370,42 @@ describe("#4687 prefix writers keep the provider's cached head", () => {
 			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
 			else process.env.PI_LENS_TEST_MODE = previousTestMode;
 		}
+	});
+
+	it("blocker repeat: the repeat rides the new prompt's tail and neither head moves (#5240)", async () => {
+		// RECURRENCE GUARDED: #5240 adds a writer, the repeat of an unresolved
+		// blocker at a later prompt's first request. A write before the newest
+		// message would re-bill the whole conversation (shape #79).
+		const { proj, target } = seed(fixture.root, "writer-repeat", CLEAN_FILE);
+		const handle = await openGuardedSession(fixture.root, proj, [
+			step(writeTarget(target, BLOCKING_FILE), "writing"),
+			endTurn("first answer"),
+			endTurn("second answer"),
+		]);
+		await handle.prompt("first question");
+		const before = handle.requests.at(-1);
+		await handle.prompt("second question");
+		const repeating = handle.requests.at(-1);
+		if (!before || !repeating)
+			throw new Error("both prompts must send a request");
+
+		const serialize = (messages: readonly unknown[]) =>
+			messages.map((message) => JSON.stringify(message));
+		const injected = (message: unknown) =>
+			JSON.stringify(message).includes(AUTOMATION_FRAMING);
+		// The payload landed on the new prompt, and only there.
+		expect(JSON.stringify(repeating.at(-1))).toContain(
+			"Still unresolved from an earlier turn",
+		);
+		expect(repeating.slice(0, -1).some(injected)).toBe(false);
+		// Everything before it is what the previous request sent before ITS own
+		// tail injection, byte for byte, and both heads agree.
+		expect(serialize(repeating.slice(0, before.length - 1))).toEqual(
+			serialize(before.slice(0, -1)),
+		);
+		expect(JSON.stringify(repeating[0])).toBe(JSON.stringify(before[0]));
+		expect(collapsedHead(repeating)).toBe(collapsedHead(before));
+		expect(handle.errors).toEqual([]);
 	});
 
 	it("reload after AGENTS.md changes names system-prompt-changed, not tool-set-changed", async () => {

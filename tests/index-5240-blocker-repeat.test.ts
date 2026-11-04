@@ -26,7 +26,10 @@ import {
 	BLOCKING_FILE,
 	CLEAN_FILE,
 	GUARDED_FLAGS,
+	MARKED_FILE,
+	activateMarkTool,
 	endTurn,
+	markFalsePositive,
 	openGuardedSession,
 	seed,
 	step,
@@ -193,6 +196,33 @@ describe.each([
 		);
 	},
 );
+
+describe("#5240: a repeat staged for the next prompt dies with its blocker", () => {
+	it(
+		"is not delivered after the model marks the blocker false-positive",
+		async () => {
+			// RECURRENCE GUARDED: #5240. A read-only turn now stages a repeat, and a
+			// mark silences the blocker with no resolved line to overwrite it. A
+			// repeat left staged would name a blocker the model just dismissed.
+			const { proj, target } = seed(fixture.root, "marked", CLEAN_FILE);
+			const handle = await openGuardedSession(fixture.root, proj, [
+				step(writeTarget(target, MARKED_FILE), "writing"),
+				endTurn("turn done"),
+				step(activateMarkTool()),
+				step(markFalsePositive(target)),
+				endTurn("marked"),
+				endTurn("listening"),
+			]);
+			await run(handle, 3);
+			// Only p2's first request repeats; the mark lands after it.
+			expect(repeats(handle).map(openedBy)).toEqual([
+				expect.stringContaining("p2"),
+			]);
+			expect(handle.errors).toEqual([]);
+		},
+		LONG_SESSION_TIMEOUT_MS,
+	);
+});
 
 describe("#5240: retained injections (--lens-retain-injections)", () => {
 	const RETAIN: ReadonlyArray<[string, boolean]> = [

@@ -1,0 +1,14 @@
+{
+	"content": "Unresolved from this turn — a.ts:\n🔴 STOP — 1 issue(s) must be fixed:\n  L1: OLD-RECORD-BLOCKER",
+	"hasBlockers": true,
+	"affectedFiles": [],
+	"sessionId": "session-3813",
+	"projectSeqStart": 0,
+	"projectSeqEnd": 0,
+	"fileSeqByPath": {},
+	"fileContentHashes": {},
+	"blockerContent": "Unresolved from this turn — a.ts:\n🔴 STOP — 1 issue(s) must be fixed:\n  L1: OLD-RECORD-BLOCKER",
+	"blockingFiles": [],
+	"consumed": false,
+	"deliverTo": "session-3813"
+}

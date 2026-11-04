@@ -114,15 +114,7 @@ function addressedElsewhere(
 	sessionId: string | undefined,
 	address: string | undefined = sessionId,
 ): string | undefined {
-	if (sessionId === undefined) return undefined;
-	const addressee =
-		data.deliverTo !== undefined
-			? data.deliverTo === address
-				? undefined
-				: data.deliverTo
-			: data.sessionId !== undefined && data.sessionId !== sessionId
-				? data.sessionId
-				: undefined;
+	const addressee = stagedAddressee(data, sessionId, address);
 	if (addressee === undefined) return undefined;
 	// Once per addressee, not per request: every request of the other session
 	// skips the same message until its owner reads it.
@@ -133,6 +125,26 @@ function addressedElsewhere(
 			"a staged turn-end message is addressed to another session; it waits for that session's next request",
 	});
 	return addressee;
+}
+
+/**
+ * The comparison `addressedElsewhere` records: who a staged message is for
+ * when it is not the reader, with no record. #5240: the composer asks it
+ * before it stages a repeat over a message another session has yet to read.
+ */
+export function stagedAddressee(
+	data: Partial<TurnEndFindingsCache>,
+	sessionId: string | undefined,
+	address: string | undefined = sessionId,
+): string | undefined {
+	if (sessionId === undefined) return undefined;
+	return data.deliverTo !== undefined
+		? data.deliverTo === address
+			? undefined
+			: data.deliverTo
+		: data.sessionId !== undefined && data.sessionId !== sessionId
+			? data.sessionId
+			: undefined;
 }
 
 /**

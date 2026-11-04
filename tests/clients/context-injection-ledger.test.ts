@@ -226,4 +226,41 @@ describe("context-injection ledger (#4743)", () => {
 		expect(ledger.size("a")).toBe(0);
 		expect(ledger.size("b")).toBe(1);
 	});
+
+	it("holds() sees text a valid entry carries and nothing a pruned or foreign entry carried (#5240)", () => {
+		// RECURRENCE GUARDED: #5240. A per-prompt repeat of an already retained
+		// blocker was retained as a new entry each prompt, until the 64-entry cap.
+		const ledger = createInjectionLedger();
+		const first = [system, user("question")];
+		const rebuild = ledger.rebuild("s1", first, append);
+		expect(rebuild.holds("BLOCKER-TEXT")).toBe(false);
+		rebuild.retain({
+			kind: "user-text",
+			text: "head\n\nBLOCKER-TEXT\nmore lines",
+		});
+		const second = [...first, assistant("answer"), user("next prompt")];
+		const next = ledger.rebuild("s1", second, append);
+		expect(next.holds("BLOCKER-TEXT\nmore lines")).toBe(true);
+		expect(next.holds("OTHER-TEXT")).toBe(false);
+		expect(ledger.rebuild("other", second, append).holds("BLOCKER-TEXT")).toBe(
+			false,
+		);
+		next.retain({
+			kind: "after",
+			messages: [user("AFTER-BLOCKER")],
+		});
+		expect(
+			ledger
+				.rebuild("s1", [...second, assistant("a2")], append)
+				.holds("AFTER-BLOCKER"),
+		).toBe(true);
+		// A compaction rewrites the prefix: the entry is pruned, so it holds nothing.
+		const compacted = ledger.rebuild(
+			"s1",
+			[system, user("summary of the conversation")],
+			append,
+		);
+		expect(compacted.holds("BLOCKER-TEXT")).toBe(false);
+		expect(compacted.holds("AFTER-BLOCKER")).toBe(false);
+	});
 });
