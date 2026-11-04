@@ -1660,9 +1660,9 @@ export async function computeCascadeForFile(
 			// file-level import edges). Only when changed symbols are detected.
 			// Bounds: max 3 symbols, 750ms per call. The calls are independent, so
 			// they start together (#5174: overlapping was measured faster on a real
-			// tsserver, table on the issue) and the leg ends within ONE 750ms
-			// window. The 1200ms total the serial loop enforced is subsumed: the
-			// leg cannot outlast its slowest call.
+			// tsserver) and the leg ends within ONE 750ms window. The 1200ms total
+			// the serial loop enforced is subsumed: the leg cannot outlast its
+			// slowest call.
 			if (impact.changedSymbols.length > 0) {
 				const lspService = getLSPService();
 				const symbolNodeIds =
