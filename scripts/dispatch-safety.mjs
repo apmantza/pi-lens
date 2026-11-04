@@ -234,8 +234,8 @@ function isEquality(expr, context, value) {
 
 const isSchedule = (e) => isEquality(e, "github.event_name", "schedule");
 const isMaster = (e) => isEquality(e, "github.ref", "refs/heads/master");
-// #5062: a job that runs only on `pull_request` never runs on a dispatch, whose
-// `github.event_name` is `workflow_dispatch` (ci.yml's PR-only CodeQL job).
+// A job that runs only on `pull_request` never runs on a dispatch, whose
+// `github.event_name` is `workflow_dispatch` (#5062: it was ci.yml's CodeQL job).
 const isPullRequest = (e) => isEquality(e, "github.event_name", "pull_request");
 
 // `schedule || master`, or either half alone: a stricter guard that a branch

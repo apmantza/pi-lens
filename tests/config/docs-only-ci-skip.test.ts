@@ -8,7 +8,7 @@ import { run as runChangedFiles } from "../../scripts/ci-changed-files.mjs";
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 // #3801: a docs-only pull request does not start the HEAVY ADVISORY jobs
-// (CodeQL, the Windows run) but runs every test job, a single non-docs file
+// (the gate) but runs every test job, a single non-docs file
 // runs everything, and no REQUIRED check can be absent or skipped. This
 // evaluates the real ci.yml: each job's `needs` and `if`, each gated step's
 // `if`, under the outputs the real classifier script produced for a diff.
@@ -252,7 +252,8 @@ const DOCS_ONLY = [
 // The jobs behind `heavy-gate`: advisory, and the only jobs a docs-only diff
 // skips. #4518 promoted the Windows Vitest subset to a gating check, so it left
 // this list: a required row that a docs-only diff skips is absent, not passing.
-const HEAVY_ADVISORY = ["heavy-gate", "codeql"];
+// #5275 removed `codeql`, the last job behind the gate; the gate itself stays.
+const HEAVY_ADVISORY = ["heavy-gate"];
 // Every test-running job: a docs edit can red these (review r1 F2), so a
 // docs-only diff runs ALL of them. `tla-shards` is the exception (#5082): its
 // four matrix jobs model-check formal/, which a diff that leaves formal/ and
@@ -436,9 +437,8 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			]) {
 				expect(results[id], id).toBe("success");
 			}
-			// CodeQL, targeted tests and the changelog fast-fail are pull_request jobs
+			// Targeted tests and the changelog fast-fail are pull_request jobs
 			for (const id of [
-				"codeql",
 				"changed-tests-shuffled",
 				"changelog-fragment-fastfail",
 			]) {

@@ -23,15 +23,18 @@ name: Cache prune
 # and the keep-1 rule for `codeql-overlay-base-database`
 # (KEEP_BY_PREFIX in scripts/prune-actions-cache.mjs) leaves one copy, about
 # 785 MB. That leaves the cap free, so the `npm-` entries the Unit shards
-# restore are never the least-recently-used victims of an eviction.
+# restore are never the least-recently-used victims of an eviction. Since #5275
+# CodeQL runs once a day (and on a dispatch) instead of per master push, so one
+# copy a day accumulates until the keep-1 rule runs; the trigger stays the
+# workflow's completion.
 #
 # A `workflow_run` workflow always runs from the DEFAULT branch's copy of this
 # file, so this trigger takes effect with the first `CodeQL` completion after
-# the merge (the merge push itself edits ci.yml and workflows, so its CodeQL
-# baseline runs); until then only the nightly run prunes. `workflows:` names the
-# workflow by its `name:` (tests/config/cache-prune-workflow.test.ts pins it
-# against codeql.yml). Neither job restores or saves a cache, and the setup-node
-# steps opt out of its automatic npm cache (tests/config/untrusted-trigger-cache.test.ts).
+# the merge (the next daily run); until then only the nightly run prunes.
+# `workflows:` names the workflow by its `name:`
+# (tests/config/cache-prune-workflow.test.ts pins it against codeql.yml).
+# Neither job restores or saves a cache, and the setup-node steps opt out of
+# its automatic npm cache (tests/config/untrusted-trigger-cache.test.ts).
 
 on:
   schedule:

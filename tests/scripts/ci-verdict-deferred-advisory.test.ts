@@ -1,15 +1,12 @@
-// #3801: ci.yml starts the heavy advisory jobs (CodeQL) only after every
-// required check passed, so until then GitHub has no check-run for them. The
-// Windows Vitest subset was one of them until #4518 promoted it to gating. ci-verdict lists each as PENDING while the verdict is
-// pending, and never lets one move an exit code.
+// #3801 / #5275: ci.yml's `heavy-gate` releases heavy advisory jobs only after
+// every required check passed, and ci-verdict lists each of them as a
+// deferred row (PENDING or NOT RUN) while GitHub has no check-run for it.
+// `DEFERRED_ADVISORY_CHECKS` is empty since #5275 moved PR-time CodeQL, the
+// last job behind the gate, to codeql.yml's daily schedule.
 //
-// Recurrences this file guards:
-//  - a deferred job reading as "absent" (indistinguishable from a lane that
-//    was deleted) while the required checks are still running;
-//  - a deferred advisory row gating: pending it must not hold a verdict that
-//    is otherwise success, and absent it must not fail one;
-//  - an older head (no heavy-gate in its workflow) being relabelled PENDING
-//    forever once its verdict is terminal.
+// Recurrence this file guards: a name left on the list after its job left
+// ci.yml. ci-verdict would then show a PENDING (or NOT RUN) row for a job that
+// never runs, on every PR head that carries the gate, forever.
 import { describe, expect, it } from "vitest";
 import {
 	computeVerdict,
@@ -46,87 +43,88 @@ function checkRun(
 const deferred = (rows: Array<{ name: string; deferred?: boolean }>) =>
 	rows.filter((row) => row.deferred).map((row) => row.name);
 
-describe("ci-verdict deferred advisory rows (#3801)", () => {
-	it("names every deferred heavy job PENDING while a required check is still running", () => {
-		const verdict = computeVerdict({
-			check_runs: [
+const green = [
+	checkRun("Unit tests", "completed", "success", 1),
+	checkRun("Lint & type-check", "completed", "success", 2),
+	checkRun(CHANGES_CHECK, "completed", "success", 3),
+];
+
+describe("ci-verdict deferred advisory rows (#3801, #5275)", () => {
+	it("lists no job behind the gate, and none of them is a CodeQL row", () => {
+		expect(DEFERRED_ADVISORY_CHECKS).toEqual([]);
+		// Retired names, pinned: a re-added entry would defer a job that no
+		// longer exists (CodeQL, #5275) or that starts on every event (the
+		// promoted Windows unit leg, #4518).
+		for (const name of [
+			"CodeQL (actions) (advisory)",
+			"CodeQL (javascript-typescript) (advisory)",
+			"Unit tests Windows",
+			"Unit tests Windows (advisory)",
+		])
+			expect(DEFERRED_ADVISORY_CHECKS).not.toContain(name);
+	});
+
+	// Every head shape a reader meets: required check running, terminal failure,
+	// success with each state of the gate's own row.
+	const heads: Array<[string, Array<ReturnType<typeof checkRun>>]> = [
+		[
+			"a required check still running",
+			[
 				checkRun("Unit tests", "completed", "success", 1),
 				checkRun("Lint & type-check", "in_progress", null, 2),
 			],
-		});
-		expect(verdict.exitCode).toBe(EXIT_PENDING);
-		expect(deferred(verdict.rows)).toEqual([...DEFERRED_ADVISORY_CHECKS]);
-		const table = formatVerdictTable(verdict.rows);
-		// Columns are CHECK / STATUS / CONCLUSION / URL, separated by 2+ spaces.
-		const columns = table
-			.split("\n")
-			.map((line) => line.split(/\s{2,}/).slice(0, 3));
-		for (const name of DEFERRED_ADVISORY_CHECKS) {
-			expect(columns).toContainEqual([name, "PENDING", "-"]);
-		}
-	});
+		],
+		[
+			"a terminal failure",
+			[
+				checkRun("Unit tests", "completed", "failure", 1),
+				checkRun("Lint & type-check", "completed", "success", 2),
+			],
+		],
+		["success, no gate row yet", green],
+		[
+			"success, gate running",
+			[...green, checkRun(HEAVY_GATE_CHECK, "in_progress", null, 4)],
+		],
+		[
+			"success, gate passed",
+			[...green, checkRun(HEAVY_GATE_CHECK, "completed", "success", 4)],
+		],
+		[
+			"success, gate skipped",
+			[...green, checkRun(HEAVY_GATE_CHECK, "completed", "skipped", 4)],
+		],
+		[
+			"success, gate red",
+			[...green, checkRun(HEAVY_GATE_CHECK, "completed", "failure", 4)],
+		],
+	];
+	it.each(heads.map(([label, check_runs]) => ({ label, check_runs })))(
+		"adds no deferred row for $label",
+		({ check_runs }) => {
+			const verdict = computeVerdict({ check_runs });
+			expect(deferred(verdict.rows)).toEqual([]);
+			expect(formatVerdictTable(verdict.rows)).not.toMatch(/NOT RUN|CodeQL/);
+		},
+	);
 
-	it("keeps them advisory: rows never gate, and a success with every heavy job absent stays success", () => {
-		const base = [
-			checkRun("Unit tests", "completed", "success", 1),
-			checkRun("Lint & type-check", "completed", "success", 2),
-		];
-		const success = computeVerdict({ check_runs: base });
-		expect(success.exitCode).toBe(EXIT_SUCCESS);
-		expect(deferred(success.rows)).toEqual([]);
-
-		const pending = computeVerdict({
-			check_runs: [base[0], checkRun("Lint & type-check", "queued", null, 2)],
+	// The gate's own advisory row never moves an exit code, whatever it reads.
+	it("keeps the gate row advisory: a red gate does not fail a green head", () => {
+		expect(isAdvisoryCheck(HEAVY_GATE_CHECK)).toBe(true);
+		const verdict = computeVerdict({
+			check_runs: [
+				...green,
+				checkRun(HEAVY_GATE_CHECK, "completed", "failure", 4),
+			],
 		});
-		const gating = pending.rows.filter(
-			(row: { gating: boolean }) => row.gating,
-		);
-		expect(gating.map((row: { name: string }) => row.name)).toEqual([
-			"Unit tests",
-			"Lint & type-check",
-		]);
-		for (const name of DEFERRED_ADVISORY_CHECKS)
-			expect(isAdvisoryCheck(name)).toBe(true);
-		// The split counts them on the advisory side only.
-		expect(formatGatingSplit(pending.rows, pending.failingRows)[0]).toBe(
+		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
+		expect(verdict.kind).toBe("success");
+		expect(formatGatingSplit(verdict.rows, verdict.failingRows)[0]).toBe(
 			"Gating: 2 checks, 0 failing",
 		);
 	});
 
-	it("does not relabel a terminal verdict: a failed head lists no deferred rows", () => {
-		const failed = computeVerdict({
-			check_runs: [
-				checkRun("Unit tests", "completed", "failure", 1),
-				checkRun("Lint & type-check", "completed", "success", 2),
-			],
-		});
-		expect(failed.exitCode).toBe(EXIT_FAILURE);
-		expect(deferred(failed.rows)).toEqual([]);
-	});
-
-	it("does not duplicate a deferred job that already has a check-run", () => {
-		// #4518: the Windows Vitest subset left this list, so the row that can
-		// already exist is CodeQL's first language.
-		const present = DEFERRED_ADVISORY_CHECKS[0];
-		const verdict = computeVerdict({
-			check_runs: [
-				checkRun("Unit tests", "completed", "success", 1),
-				checkRun("Lint & type-check", "in_progress", null, 2),
-				checkRun(present, "in_progress", null, 3),
-			],
-		});
-		expect(
-			verdict.rows.filter((row: { name: string }) => row.name === present),
-		).toHaveLength(1);
-		expect(deferred(verdict.rows)).toEqual(
-			DEFERRED_ADVISORY_CHECKS.filter((name) => name !== present),
-		);
-	});
-
-	// #4518: a promoted gating row is never deferred. The name that used to be
-	// listed here now reads as an ordinary gating check-run, so an absent one is
-	// PENDING rather than a deferred advisory row.
-	it("does not defer the promoted Windows unit leg", () => {
+	it("gates the promoted Windows unit leg as an ordinary check-run", () => {
 		const verdict = computeVerdict({
 			check_runs: [
 				checkRun("Unit tests", "completed", "success", 1),
@@ -134,91 +132,15 @@ describe("ci-verdict deferred advisory rows (#3801)", () => {
 				checkRun("Unit tests Windows", "completed", "failure", 3),
 			],
 		});
-		expect(DEFERRED_ADVISORY_CHECKS).not.toContain("Unit tests Windows");
-		// The name the list carried before the promotion, pinned as retired: a
-		// re-added entry would defer a job that now starts on every event.
-		expect(DEFERRED_ADVISORY_CHECKS).not.toContain(
-			"Unit tests Windows (advisory)",
-		);
-		// The red is a gating row now, so the head is terminally failed and no
-		// deferred row is relabelled onto it.
 		expect(verdict.exitCode).toBe(EXIT_FAILURE);
-		expect(deferred(verdict.rows)).toEqual([]);
 		const row = verdict.rows.find(
 			(entry: { name: string }) => entry.name === "Unit tests Windows",
 		);
 		expect(row?.gating).toBe(true);
 	});
 
-	// Recurrence (review r1 F3): the deferred rows vanished exactly when the
-	// verdict turned success, so "the heavy jobs start when the gate gets a runner",
-	// "the gate decided not-ready" and "they will never run" all read the
-	// same (exit 0, no rows). Every gate state must be distinguishable
-	// AFTER the required checks are green, and never move the exit code.
-	describe("after the required checks are green (the window a merger reads)", () => {
-		const green = [
-			checkRun("Unit tests", "completed", "success", 1),
-			checkRun("Lint & type-check", "completed", "success", 2),
-			checkRun(CHANGES_CHECK, "completed", "success", 3),
-		];
-		const read = (gate: ReturnType<typeof checkRun> | null) => {
-			const verdict = computeVerdict({
-				check_runs: gate ? [...green, gate] : green,
-			});
-			const table = formatVerdictTable(verdict.rows);
-			const status = (name: string) =>
-				table
-					.split("\n")
-					.map((line) => line.split(/\s{2,}/))
-					.find((columns) => columns[0] === name)?.[1];
-			return { verdict, status };
-		};
-
-		const gateStates: Array<
-			[string, ReturnType<typeof checkRun> | null, string]
-		> = [
-			["no gate row yet", null, "PENDING"],
-			["gate queued", checkRun(HEAVY_GATE_CHECK, "queued", null, 4), "PENDING"],
-			[
-				"gate running",
-				checkRun(HEAVY_GATE_CHECK, "in_progress", null, 4),
-				"PENDING",
-			],
-			[
-				"gate passed, jobs not queued yet",
-				checkRun(HEAVY_GATE_CHECK, "completed", "success", 4),
-				"PENDING",
-			],
-			[
-				"gate skipped",
-				checkRun(HEAVY_GATE_CHECK, "completed", "skipped", 4),
-				"NOT RUN",
-			],
-			[
-				"gate red (ready=false)",
-				checkRun(HEAVY_GATE_CHECK, "completed", "failure", 4),
-				"NOT RUN",
-			],
-		];
-		it.each(gateStates.map(([label, gate, state]) => ({ label, gate, state })))(
-			"$label -> $state",
-			({ gate, state }) => {
-				const { verdict, status } = read(gate);
-				expect(verdict.exitCode).toBe(EXIT_SUCCESS);
-				expect(verdict.kind).toBe("success");
-				for (const name of DEFERRED_ADVISORY_CHECKS) {
-					expect(status(name), name).toBe(state);
-				}
-			},
-		);
-
-		// An older workflow (neither the gate nor `changes` exists) must not be
-		// relabelled once its verdict is terminal.
-		it("lists nothing for a head of the older shape", () => {
-			const verdict = computeVerdict({
-				check_runs: green.filter((run) => run.name !== CHANGES_CHECK),
-			});
-			expect(deferred(verdict.rows)).toEqual([]);
-		});
+	it("still reports PENDING for a running required check", () => {
+		const verdict = computeVerdict({ check_runs: heads[0][1] });
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
 	});
 });
