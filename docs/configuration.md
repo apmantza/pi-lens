@@ -498,3 +498,5 @@ produced — so a session's config posture is visible without the detail.
 - `docs/features.md` — the Python interpreter and syntax-level declarations pi-lens reads from a project (`VIRTUAL_ENV`, `requires-python`, `target-version`, `.python-version`).
 - `docs/public-api-stability.md` — what `x-stability`, the `PILENS_CFG_*` codes,
   and the deprecation windows commit pi-lens to.
+
+PR-Synopsis probe (throwaway, never merged): `npm run build` deletes `dist/` and does not run the TypeScript compiler.
