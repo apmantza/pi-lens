@@ -390,7 +390,8 @@ export function symbolSearchFileMatchesLang(
 	// A language the registry declares by basename (Jenkinsfile, Gemfile) has no
 	// extension to match; the token is its id or its grammar name. A kind named
 	// by pattern (Dockerfile, Dockerfile.dev, Makefile) is matched by the kind
-	// token, the same predicate the inline `lang:` filter applies.
+	// token, as the inline `lang:` filter does for these names. Unlike the inline
+	// filter, this check does not match `*.dockerfile` (pre-existing on master).
 	const declared = resolveFilenameLanguage(file);
 	if (declared && (declared.id === lang || declared.grammar === lang)) {
 		return true;
