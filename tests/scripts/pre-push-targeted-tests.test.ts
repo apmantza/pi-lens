@@ -795,6 +795,8 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/config/git-fixture-governance.test.ts",
 			// #4946: walks the four production roots for flag reads.
 			"tests/config/flag-read-registry-sweep.test.ts",
+			// #5273 r1 F1: walks clients/, tools/ and mcp/ for `includeNamedFiles` callers.
+			"tests/clients/source-filter-named-files.test.ts",
 		];
 		const testScanners = [
 			"tests/clients/flake-shape-ratchet.test.ts",

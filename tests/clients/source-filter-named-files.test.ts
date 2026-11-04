@@ -6,11 +6,12 @@
  * (clients/file-kinds.ts) classifies; the index opts in, every other walk
  * consumer keeps the extension gate.
  *
- * Every case drives the real walk over a real directory tree.
+ * Every case drives the real walk over a real directory tree. Each fixture comes
+ * from `setupTestEnvironment`, which plants the project-root marker, so a
+ * checkout above `os.tmpdir()` cannot supply its ignore rules (shape 73).
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getProjectIgnoreMatcher } from "../../clients/file-utils.js";
@@ -27,17 +28,26 @@ import {
 	collectSourceFilesWithBudgetAsync,
 } from "../../clients/source-filter.js";
 import { TodoScanner } from "../../clients/todo-scanner.js";
-import { removeTempDirSync } from "./test-utils.js";
+import {
+	assertNonEmptyScan,
+	listSourceFiles,
+	relativePosix,
+	stripSource,
+} from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import { setupTestEnvironment } from "./test-utils.js";
 
+let env: ReturnType<typeof setupTestEnvironment>;
 let tmpDir: string;
 
 beforeEach(() => {
-	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-named-files-"));
+	env = setupTestEnvironment("pi-lens-named-files-");
+	tmpDir = env.tmpDir;
 });
 
 afterEach(() => {
 	vi.restoreAllMocks();
-	removeTempDirSync(tmpDir);
+	env.cleanup();
 });
 
 function write(rel: string, content = "x\n"): string {
@@ -160,7 +170,6 @@ describe("includeNamedFiles admission across the four collectors (#5273)", () =>
 	it("a gitignored named file stays out: isIgnored still runs for admitted names", () => {
 		// Recurrence: admitting by name ahead of the ignore matcher would index
 		// build output such as an ignored out/Dockerfile.
-		fs.mkdirSync(path.join(tmpDir, ".git"));
 		write(".gitignore", "generated-ci/Jenkinsfile\n");
 		write("generated-ci/Jenkinsfile");
 		write("ci/Jenkinsfile");
@@ -207,4 +216,58 @@ describe("consumers that keep the extension gate (#5273 decision per consumer)",
 			"a.groovy",
 		]);
 	});
+});
+
+describe("includeNamedFiles has one caller, the word index (#5273 census)", () => {
+	// The walk consumers that keep the extension gate. The census must reach each
+	// of them, so an empty or narrowed scan cannot pass vacuously.
+	const EXTENSION_GATED_CONSUMERS = [
+		"clients/review-graph/builder.ts",
+		"clients/project-diagnostics/scanner.ts",
+		"clients/opaque-mutation-scan.ts",
+		"clients/runtime-session.ts",
+		"clients/scan-utils.ts",
+		"clients/language-profile.ts",
+		"clients/todo-scanner.ts",
+	];
+
+	it(
+		"only source-filter.ts (definition) and word-index.ts (both walk sites) name the option",
+		() => {
+			// Recurrence: the r1 review found the PR body saying review graph, project
+			// diagnostics and the opaque scan were each pinned, when no test read them.
+			// A later edit that passes the option to one of those walks widens an
+			// analyzer with no parser for a named file, and nothing reds. Comments are
+			// blanked and strings kept: a `"includeNamedFiles"` literal is a use, a
+			// comment that names the option is prose.
+			const repoRoot = path.resolve(import.meta.dirname, "../..");
+			const scanned: string[] = [];
+			const users: string[] = [];
+			for (const dir of ["clients", "tools", "mcp"]) {
+				for (const file of listSourceFiles(path.join(repoRoot, dir))) {
+					const rel = relativePosix(repoRoot, file);
+					scanned.push(rel);
+					const code = stripSource(fs.readFileSync(file, "utf8"), {
+						strings: "keep",
+					});
+					if (/\bincludeNamedFiles\b/.test(code)) users.push(rel);
+				}
+			}
+			// Floor before trusting the result (shape 10, #1718): an empty or
+			// narrowed walk must fail, not pass with zero users.
+			assertNonEmptyScan(
+				"includeNamedFiles census (files)",
+				scanned.length,
+				300,
+			);
+			expect(scanned).toEqual(
+				expect.arrayContaining(EXTENSION_GATED_CONSUMERS),
+			);
+			expect(users.sort()).toEqual([
+				"clients/source-filter.ts",
+				"clients/word-index.ts",
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
