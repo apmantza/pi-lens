@@ -161,6 +161,10 @@ export interface WordIndex {
 export interface RankedFile {
 	file: string;
 	score: number;
+	/** Which producer shape this row is (#5135): `symbol` for a ranked
+	 * identifier match, `file` for a term-less scope listing. The renderer
+	 * branches on this; it never infers the kind from `hits` or `lines`. */
+	kind: "symbol" | "file";
 	/** Number of query-token occurrences in the file (summed term frequency). */
 	hits: number;
 	/** Distinct lines where a query token occurred, ascending. */
@@ -1845,6 +1849,9 @@ export function searchWordIndex(
 	}
 
 	const results: RankedFile[] = [];
+	// A term-less call is a scope listing (#5135): every row is a `file`. A
+	// term search ranks identifier matches: every row is a `symbol`.
+	const kind = queryTokens.length === 0 ? "file" : "symbol";
 	for (const [file, entry] of scores) {
 		let score = entry.score;
 		if (demoteTestVendor && isTestOrVendor(file)) score *= TEST_VENDOR_PENALTY;
@@ -1856,6 +1863,7 @@ export function searchWordIndex(
 		results.push({
 			file,
 			score,
+			kind,
 			hits: entry.hits,
 			lines: [...entry.lines].sort((a, b) => a - b),
 		});

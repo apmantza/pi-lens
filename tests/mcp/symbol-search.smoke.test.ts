@@ -35,18 +35,15 @@ function textOf(res: Record<string, unknown>): string {
 	return (res.result as { content: { text: string }[] }).content[0].text;
 }
 
-/** Ranked rows of the one table #5104 renders. The line number sits before
- * the detail parenthetical once the row shape moved, so the reader accepts
- * either position. */
+/** Ranked rows of the one table #5104 renders. A `symbol` row carries a
+ * `(score …)` parenthetical; a `file` listing row (#5135) is the path alone. */
 function rankedFiles(text: string): string[] {
 	return text.split("\n").flatMap((line) => {
-		const match = /^ {2}\d+\. (.*) \((score .*)\)$/.exec(line);
-		if (match === null) return [];
-		const pre = match[1];
-		const cut = pre.lastIndexOf(" ");
-		const tail = cut === -1 ? "" : pre.slice(cut + 1);
-		const file = /^\d+$/.test(tail) ? pre.slice(0, cut) : pre;
-		return [file.replace(/\\/g, "/")];
+		const prefix = /^ {2}\d+\. (.*)$/.exec(line);
+		if (prefix === null) return [];
+		const rest = prefix[1];
+		const symbol = /^(.*) \d+ \(score .*\)$/.exec(rest);
+		return [(symbol ? symbol[1] : rest).replace(/\\/g, "/")];
 	});
 }
 

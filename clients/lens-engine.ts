@@ -312,19 +312,28 @@ export function resourceFootprint(): Promise<ResourceFootprint> {
 	return getResourceFootprintSnapshot();
 }
 
-/** Slimmed wire shape (#517 conformity): `startLine`/`endLine` mark the hit's
- * best-matching line (`lines[0]`, the file's own best-scoring identifier hit);
- * a single-line span rather than a fabricated whole-file range, since the word
- * index tracks scattered per-line matches, not a symbol span. Read derivation:
- * offset=startLine, limit=endLine-startLine+1 for a one-line peek — prefer
- * module_report on `file` for the real outline. No per-hit `read` block, no
- * repeated raw `lines[]` array on the wire. */
+/** Slimmed wire shape (#517 conformity). A `symbol` row carries `hits` and a
+ * single-line `startLine`/`endLine` span marking its best-matching line
+ * (`lines[0]`, the file's own best-scoring identifier hit) rather than a
+ * fabricated whole-file range, since the word index tracks scattered per-line
+ * matches, not a symbol span. Read derivation: offset=startLine,
+ * limit=endLine-startLine+1 for a one-line peek — prefer module_report on
+ * `file` for the real outline. A `file` row (#5135) is a term-less scope
+ * listing: no `hits`, no line span, and the renderer fabricates neither. No
+ * per-hit `read` block, no repeated raw `lines[]` array on the wire. */
 interface SymbolSearchHit {
 	file: string;
 	score: number;
-	hits: number;
-	startLine: number;
-	endLine: number;
+	/** Producer-owned row shape (#5135): `symbol` for a ranked identifier
+	 * match, `file` for a term-less scope listing. The renderer branches on this
+	 * and never infers the kind from `hits` or an empty line list. */
+	kind: "symbol" | "file";
+	/** Present iff `kind === "symbol"`: query-token occurrences. */
+	hits?: number;
+	/** Present iff `kind === "symbol"`: the best-matching line, a single-line
+	 * span. A `file` row carries no line and the renderer fabricates none. */
+	startLine?: number;
+	endLine?: number;
 	/**
 	 * Graph-aware transparency for the ranking (#771): present only when the
 	 * cached review graph happens to be warm (never built/blocked on for this —
@@ -520,10 +529,16 @@ export interface SymbolSearchResult {
 }
 
 function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
+	if (result.kind === "file") {
+		// A scope listing (#5135) is a file row: no line, no hit count. The
+		// producer owns the shape; nothing is inferred or fabricated here.
+		return { file: result.file, score: result.score, kind: "file" };
+	}
 	const line = result.lines[0] ?? 1;
 	return {
 		file: result.file,
 		score: result.score,
+		kind: "symbol",
 		hits: result.hits,
 		startLine: line,
 		endLine: line,
@@ -685,16 +700,21 @@ function coverageLine(
 	return `Index covers ${coverage.files} files${coverage.truncated ? " (capped — results may be incomplete)" : ""}.`;
 }
 
-/** One ranked row: range first, one line number (`toSymbolSearchHit` sets
- * `endLine = startLine`, so `12-12` would spend bytes on nothing), then the
- * score, the hit count, and the graph annotations the hit carries. An
- * annotation prints whenever its key is present: `fanIn: 0` is an answer ("no
- * known importers"), so the gate is the type, never truthiness (#5104). */
+/** One ranked row. A `symbol` row prints the path, one line number
+ * (`toSymbolSearchHit` sets `endLine = startLine`, so `12-12` would spend bytes
+ * on nothing), the score, the hit count, and any graph annotations it carries.
+ * A `file` row (#5135) prints the path ALONE — no score, no line, no hit count.
+ * The producer sets `kind`; the renderer never infers the kind from a hit count
+ * or an empty line list and never fabricates a line. An annotation prints
+ * whenever its key is present: `fanIn: 0` is an answer ("no known importers"),
+ * so the gate is the type, never truthiness (#5104). */
 function formatSymbolSearchRow(
 	hit: SymbolSearchHit,
 	position: number,
 	cwd: string,
 ): string {
+	const file = path.relative(cwd, hit.file);
+	if (hit.kind === "file") return `  ${position}. ${file}`;
 	const annotations = hit.annotations;
 	const detail = [
 		`score ${hit.score.toFixed(2)}`,
@@ -706,18 +726,19 @@ function formatSymbolSearchRow(
 			? [`complexity ${annotations.complexity}`]
 			: []),
 	];
-	return `  ${position}. ${path.relative(cwd, hit.file)} ${hit.startLine} (${detail.join(", ")})`;
+	return `  ${position}. ${file} ${hit.startLine} (${detail.join(", ")})`;
 }
 
 /**
  * The one renderer for `symbol_search`'s model-facing text (#5104): a header,
- * one row per ranked hit (path relative to `cwd`, its line, score, hit count
- * and any graph annotations), and a footer carrying the index coverage, on MCP
- * the snapshot staleness note, and one next-step line naming the top-ranked
- * hit through the host's own outline tool name. The pi tool and the MCP mirror
- * both call this, so the surfaces cannot drift and neither appends a JSON
- * payload — the ranked table IS the answer. The empty-result path renders
- * through the same footer, so a capped index stays visible there too.
+ * one row per hit — a `symbol` row prints the path, its line, score, hit count
+ * and any graph annotations; a `file` listing row (#5135) prints the path
+ * alone — and a footer carrying the index coverage, on MCP the snapshot
+ * staleness note, and one next-step line naming the top-ranked hit through the
+ * host's own outline tool name. The pi tool and the MCP mirror both call this,
+ * so the surfaces cannot drift and neither appends a JSON payload — the ranked
+ * table IS the answer. The empty-result path renders through the same footer,
+ * so a capped index stays visible there too.
  */
 export function renderCompactSymbolSearch(
 	result: SymbolSearchResult,

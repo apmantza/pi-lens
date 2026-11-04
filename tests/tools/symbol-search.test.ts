@@ -43,27 +43,34 @@ import {
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
 /** One rendered ranked row: `  1. <path>[ <line>] (score ...)`. */
-const ROW = /^ {2}\d+\. (.*) \((score .*)\)$/;
+/** One rendered row. A `symbol` row is `  1. <path> <line> (score ...)`; a
+ * `file` listing row (#5135) is `  1. <path>`. A line that begins as a row but
+ * matches neither shape is unrecognised: throw rather than drop it, so a
+ * renderer regression cannot pass as a smaller result set. */
+const ROW_PREFIX = /^ {2}\d+\. (.*)$/;
+const SYMBOL_ROW = /^(.*) (\d+) \((score .*)\)$/;
 
 function rows(
 	text: string,
-): Array<{ file: string; line?: number; detail: string }> {
+): Array<{ file: string; line?: number; detail?: string }> {
 	return text.split("\n").flatMap((line) => {
-		const match = ROW.exec(line);
-		if (match === null) return [];
-		// The line number sits before the detail parenthetical; a path that ends
-		// in digits is not a row number (the repo's fixtures never end that way).
-		const pre = match[1];
-		const cut = pre.lastIndexOf(" ");
-		const tail = cut === -1 ? "" : pre.slice(cut + 1);
-		const numbered = /^\d+$/.test(tail);
-		return [
-			{
-				file: toPosix(numbered ? pre.slice(0, cut) : pre),
-				...(numbered ? { line: Number(tail) } : {}),
-				detail: match[2],
-			},
-		];
+		const prefix = ROW_PREFIX.exec(line);
+		if (prefix === null) return [];
+		const rest = prefix[1];
+		const symbol = SYMBOL_ROW.exec(rest);
+		if (symbol) {
+			return [
+				{
+					file: toPosix(symbol[1]),
+					line: Number(symbol[2]),
+					detail: symbol[3],
+				},
+			];
+		}
+		if (/ \(score /.test(rest)) {
+			throw new Error(`unrecognised symbol_search row: ${line}`);
+		}
+		return [{ file: toPosix(rest) }];
 	});
 }
 
@@ -959,13 +966,19 @@ describe("symbol_search tool", () => {
 		) => ({
 			file: path.join(cwd, ...relPath.split("/")),
 			score,
+			kind: "symbol" as const,
 			hits,
 			startLine: line,
 			endLine: line,
 			...(annotations ? { annotations } : {}),
 		});
+		const fileRow = (relPath: string, score = 1) => ({
+			file: path.join(cwd, ...relPath.split("/")),
+			score,
+			kind: "file" as const,
+		});
 		const result = (
-			results: ReturnType<typeof hit>[],
+			results: SymbolSearchResult["results"],
 			truncated = false,
 		): SymbolSearchResult => ({
 			available: true,
@@ -1044,6 +1057,26 @@ describe("symbol_search tool", () => {
 					"Index covers 12 files (capped — results may be incomplete).",
 				].join("\n"),
 			);
+		});
+
+		// #5135: a `file` listing row is the path ALONE. The producer set `kind`;
+		// the renderer neither infers it nor fabricates a line.
+		it("renders a `file` row as a bare path, with the top path in the footer", () => {
+			const text = renderCompactSymbolSearch(
+				result([fileRow("src/auth/login.ts")]),
+				{ cwd },
+			);
+			expect(text.split("\n")[1]).toBe("  1. src/auth/login.ts");
+			expect(text).not.toContain("score");
+			expect(text).not.toContain("hit(s)");
+			expect(text).toContain("Next: module_report src/auth/login.ts");
+			expect(rows(text)).toEqual([{ file: "src/auth/login.ts" }]);
+		});
+
+		it("throws on an unrecognised row instead of dropping it", () => {
+			expect(() =>
+				rows("  1. src/auth/login.ts (score 0.50, 1 hit(s))"),
+			).toThrow(/unrecognised symbol_search row/);
 		});
 	});
 });
@@ -1131,6 +1164,22 @@ describe("symbol_search term-less calls (#5135)", () => {
 			expect(inlineFiles).toEqual(
 				rankedFiles(String(structured.content[0]?.text)),
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lists the same rows for inline `file:`/`ext:` and structured `paths:`", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-listing-parity-");
+		try {
+			listingFixture(env);
+			const inlineFile = await run(env, { query: "file:src/" });
+			const inlineExt = await run(env, { query: "ext:ts" });
+			const structured = await run(env, { query: "", paths: ["src"] });
+			const expected = [{ file: "src/auth/login.ts" }];
+			expect(rows(String(inlineFile.content[0]?.text))).toEqual(expected);
+			expect(rows(String(inlineExt.content[0]?.text))).toEqual(expected);
+			expect(rows(String(structured.content[0]?.text))).toEqual(expected);
 		} finally {
 			env.cleanup();
 		}

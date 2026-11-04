@@ -628,6 +628,21 @@ describe("searchWordIndex listing branch (#5135)", () => {
 			"src/widget.ts",
 		]);
 	});
+
+	it("marks a listing row `file` and a term row `symbol`", () => {
+		const index = buildWordIndex(files);
+		expect(searchWordIndex(index, "file:widget").map((r) => r.kind)).toEqual([
+			"file",
+			"file",
+		]);
+		expect(
+			searchWordIndex(index, "", { fileFilter: () => true }).map((r) => r.kind),
+		).toEqual(["file", "file"]);
+		expect(searchWordIndex(index, "render widget").map((r) => r.kind)).toEqual([
+			"symbol",
+			"symbol",
+		]);
+	});
 });
 
 describe("searchWordIndex priors", () => {
