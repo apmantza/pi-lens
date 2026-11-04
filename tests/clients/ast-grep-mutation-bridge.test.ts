@@ -199,6 +199,77 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 		expect(dry.appliedFiles).toEqual([]);
 	});
 
+	// Recurrence prevented (Greptile T3 on #5244 r3): the structural apply loop
+	// returned early on a later path's stale preview or CLI error with no
+	// `appliedFiles`, so files an earlier path had already rewritten never
+	// reached the tool's details and the `tool_result` dispatch.
+	describe("a later path stops the structural apply after an earlier one wrote", () => {
+		const A = MATCHES.filter((m) => m.file === "src/a.ts");
+		function runnerOver(second: {
+			detailed: Record<string, unknown>;
+			withFix?: Record<string, unknown>;
+		}) {
+			const runner = {
+				tempScanDetailedAsync: vi.fn(async (dir: string) =>
+					dir === "src/a.ts" ? { matches: A, status: 0 } : second.detailed,
+				),
+				tempScanWithFixAsync: vi.fn(async (dir: string) =>
+					dir === "src/a.ts"
+						? { matches: A }
+						: (second.withFix ?? { matches: [] }),
+				),
+			};
+			const client = new AstGrepClient();
+			(client as unknown as { runner: unknown }).runner = runner;
+			return client;
+		}
+		const RULE =
+			"id: agent-rule\nlanguage: typescript\nrule:\n  pattern: var $X\nfix: let $X\n";
+
+		it("names the earlier file when the later path is stale", async () => {
+			recorded.length = 0;
+			refused.clear();
+			const result = await runnerOver({
+				detailed: { matches: [], status: 0 },
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			expect(result.stalePreview).toBe(true);
+			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
+			expect(recorded.map((r) => r.filePath)).toEqual([abs("src/a.ts")]);
+		});
+
+		it("names the earlier file when the later path's apply errors", async () => {
+			recorded.length = 0;
+			refused.clear();
+			const result = await runnerOver({
+				detailed: { matches: MATCHES, status: 0 },
+				withFix: { matches: [], error: "boom" },
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			expect(result.error).toBe("boom");
+			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
+		});
+
+		it("names the earlier file when the later path's preview fails", async () => {
+			recorded.length = 0;
+			refused.clear();
+			const result = await runnerOver({
+				detailed: { matches: [], status: 2, error: "no such path" },
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			expect(result.error).toBe("no such path");
+			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
+		});
+
+		it("names nothing when the first path is the one that is stale", async () => {
+			recorded.length = 0;
+			refused.clear();
+			const result = await runnerOver({
+				detailed: { matches: [], status: 0 },
+			}).replaceWithRule(RULE, ["src/b.ts", "src/a.ts"], true);
+			expect(result.stalePreview).toBe(true);
+			expect(result.appliedFiles).toEqual([]);
+			expect(recorded).toEqual([]);
+		});
+	});
+
 	it("lists none for a dry run of the pattern replace", async () => {
 		recorded.length = 0;
 		refused.clear();

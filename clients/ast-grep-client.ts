@@ -375,6 +375,11 @@ export class AstGrepClient {
 		appliedFiles?: string[];
 	}> {
 		const allMatches: AstGrepMatch[] = [];
+		// #5244 r4: each path is written as its own scan finishes, so a later
+		// path that is stale or fails still leaves the earlier ones on disk. Every
+		// exit records what was rewritten so far, never only the loop's last one.
+		const recordWritten = (): string[] =>
+			apply ? recordAstGrepApply(allMatches, options) : [];
 		for (const scanPath of paths) {
 			if (apply) {
 				// Stale-preview check: dry-run first. Preserve CLI failures instead of
@@ -386,6 +391,7 @@ export class AstGrepClient {
 						totalMatches: allMatches.length,
 						applied: false,
 						error: preCheck.error ?? "ast-grep preview failed",
+						appliedFiles: recordWritten(),
 					};
 				}
 				if (preCheck.matches.length === 0) {
@@ -394,6 +400,7 @@ export class AstGrepClient {
 						totalMatches: 0,
 						applied: false,
 						stalePreview: true,
+						appliedFiles: recordWritten(),
 					};
 				}
 			}
@@ -409,6 +416,7 @@ export class AstGrepClient {
 					totalMatches: allMatches.length,
 					applied: false,
 					error: result.error,
+					appliedFiles: recordWritten(),
 				};
 			}
 			allMatches.push(...result.matches);
@@ -416,12 +424,11 @@ export class AstGrepClient {
 		// #4140 (F9): the structural apply rewrites files with `--update-all`
 		// exactly as the pattern apply does, and no tool_result describes it, so
 		// it reaches the same bridge with the matches captured before the write.
-		const appliedFiles = apply ? recordAstGrepApply(allMatches, options) : [];
 		return {
 			matches: allMatches,
 			totalMatches: allMatches.length,
 			applied: apply,
-			appliedFiles,
+			appliedFiles: recordWritten(),
 		};
 	}
 

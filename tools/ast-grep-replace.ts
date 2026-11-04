@@ -310,7 +310,11 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						details: { stalePreview: true },
+						// #5244 r4: files an earlier path already rewrote still dispatch.
+						details: {
+							stalePreview: true,
+							appliedFiles: ruleResult.appliedFiles ?? [],
+						},
 					};
 				}
 				if (ruleResult.error) {
@@ -323,7 +327,7 @@ export function createAstGrepReplaceTool(
 							},
 						],
 						isError: true,
-						details: {},
+						details: { appliedFiles: ruleResult.appliedFiles ?? [] },
 					};
 				}
 				const output = astGrepClient.formatMatches(

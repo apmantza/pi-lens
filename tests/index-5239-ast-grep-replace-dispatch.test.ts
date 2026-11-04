@@ -59,12 +59,15 @@ function activateReplace(): Record<string, unknown> {
 function replace(
 	paths: string[] | undefined,
 	apply: boolean,
+	structural = false,
 ): Record<string, unknown> {
 	return fauxToolCall("ast_grep_replace", {
 		pattern: "return $X;",
 		rewrite: "debugger;\n\treturn $X;",
 		lang: "typescript",
 		...(paths ? { paths } : {}),
+		// `insideKind` is structural intent: the call takes `replaceWithRule`.
+		...(structural ? { insideKind: "function_declaration" } : {}),
 		apply,
 	});
 }
@@ -165,6 +168,57 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		).toHaveLength(1);
 		expect(runnerRowsFor(rows, untouched)).toEqual([]);
 	});
+
+	// Recurrence prevented (Greptile T3 on #5244 r3): the structural apply loops
+	// over `paths`, rewrites a matching file, then a later path that is stale or
+	// fails returned early with no `appliedFiles`, so the rewritten file never
+	// reached the dispatcher or the commit gate. The first path writes before
+	// the second is checked, so the failure is real on disk, not a mock.
+	it.each([
+		["a later path no longer matches (stale preview)", "stale"],
+		["a later path does not exist (CLI error)", "missing"],
+	])(
+		"dispatches the file a structural apply wrote when %s",
+		{ timeout: 180_000 },
+		async (_label, later) => {
+			const { proj, target } = seed(
+				fixture.root,
+				`structural-partial-${later}`,
+				CLEAN_FILE,
+			);
+			const second =
+				later === "stale"
+					? path.join(proj, "src", "nomatch.ts")
+					: path.join(proj, "src", "missing.ts");
+			if (later === "stale") fs.writeFileSync(second, "export const k = 1;\n");
+			const handle = await openGuardedSession(fixture.root, proj, [
+				step(activateReplace(), "activating"),
+				step(replace([target, second], true, true), "replacing"),
+				step(commitAttempt(), "committing"),
+				endTurn("done"),
+			]);
+			await handle.prompt("rewrite then fail on the second path");
+
+			// The first path really was rewritten before the second failed.
+			expect(fs.readFileSync(target, "utf8")).toBe(BLOCKING_FILE);
+			const results = toolResults(
+				handle.requests.at(-1) ?? [],
+				"ast_grep_replace",
+			);
+			expect(results).toHaveLength(1);
+			expect(results[0]?.isError).toBe(true);
+			const read = await handle.latencyRows();
+			expect(read.skipped).toBe(0);
+			expect(
+				reportedRules(read.rows as DispatchRow[], target).filter(
+					(r) => r === "debugger-statement",
+				),
+			).toHaveLength(1);
+			const commits = toolResults(handle.requests.at(-1) ?? [], "bash");
+			expect(commits).toHaveLength(1);
+			expect(commits[0]?.text).toContain(GATE_BLOCK);
+		},
+	);
 
 	// Recurrence prevented: the tool-result feed reads `details.appliedFiles`
 	// from ANY tool's result, so a tool another extension registers could make
