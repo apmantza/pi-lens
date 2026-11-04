@@ -41,6 +41,7 @@ import {
 	startHostStallSampler,
 } from "./dispatch/runners/utils/availability-policy.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { isToolInstallDisabled } from "./env-utils.js";
 
 // --- Types ---
 
@@ -156,6 +157,18 @@ export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 			// trust denial is policy, not tool absence -- a later trust grant
 			// (re-adopted at turn_start) must be able to retry the install, and
 			// the cached false in ensureAvailable() would make denial permanent.
+			return false;
+		}
+
+		if (isToolInstallDisabled()) {
+			// #5231: the kill switch is process policy, like the trust denial
+			// above: answer "unavailable" without probing `go` or installing, and
+			// do not latch `available = false` (same retry-by-construction shape).
+			recordDegradationOnce({
+				kind: "install-disabled",
+				subject: "govulncheck",
+				reason: "installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
+			});
 			return false;
 		}
 

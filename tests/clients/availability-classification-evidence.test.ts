@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import { removeTempDirSync } from "./test-utils.js";
 import {
 	classifyProbeFailure,
@@ -82,7 +83,12 @@ const decisions = () =>
 
 const tempDirs: string[] = [];
 
+// #5231: lazy installs and govulncheck now honour PI_LENS_DISABLE_TOOL_INSTALL,
+// which vitest-setup defaults to "1"; a case that drives the install spawn
+// turns the switch off for its own body.
+let restoreInstallSwitch: () => void = () => {};
 afterEach(async () => {
+	restoreInstallSwitch();
 	while (tempDirs.length > 0) removeTempDirSync(tempDirs.pop() as string);
 	(await import("../../clients/project-trust.js")).resetProjectTrust();
 });
@@ -102,6 +108,7 @@ beforeEach(async () => {
 	(await import("../../clients/project-trust.js")).setProjectTrustState(
 		"unknown",
 	);
+	restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	safeSpawnAsync.mockReset();
 	logLatencySpy.mockReset();
 	ensureTool.mockReset();

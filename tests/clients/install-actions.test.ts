@@ -13,6 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 
 const mockSafeSpawnAsync = vi.fn();
 
@@ -130,7 +131,14 @@ describe("formatter lazy-install actions (#197)", () => {
 	let cwdSeq = 0;
 	const freshCwd = () => `/proj/install-test-${Date.now()}-${cwdSeq++}`;
 
+	// #5231: the lazy installer honours PI_LENS_DISABLE_TOOL_INSTALL, which
+	// vitest-setup defaults to "1"; these cases drive the install spawn.
+	let restoreInstallSwitch: () => void = () => {};
+	beforeEach(() => {
+		restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
+	});
 	afterEach(() => {
+		restoreInstallSwitch();
 		vi.restoreAllMocks();
 	});
 

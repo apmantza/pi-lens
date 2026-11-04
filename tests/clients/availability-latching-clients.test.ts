@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import {
 	INSTALL_TRANSIENT_BASE_COOLDOWN_MS,
 	TRANSIENT_BASE_COOLDOWN_MS,
@@ -63,7 +64,12 @@ async function spawnMock() {
 	return vi.mocked(mod.safeSpawnAsync);
 }
 
+// #5231: lazy installs and govulncheck now honour PI_LENS_DISABLE_TOOL_INSTALL,
+// which vitest-setup defaults to "1"; a case that drives the install spawn
+// turns the switch off for its own body.
+let restoreInstallSwitch: () => void = () => {};
 beforeEach(async () => {
+	restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1467-home-"));
 	// `PI_LENS_HOME` is the knob `getGlobalPiLensDir` reads, so the managed
 	// tools dir resolves under `tmpHome` as in production.
@@ -75,6 +81,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	restoreInstallSwitch();
 	vi.useRealTimers();
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;

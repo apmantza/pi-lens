@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import {
 	setProjectTrustState,
 	resetProjectTrust,
@@ -34,7 +35,17 @@ beforeEach(() => {
 	safeSpawnAsync.mockClear();
 	notifyUserDegradation.mockClear();
 });
-afterEach(() => resetProjectTrust());
+// #5231: lazy installs and govulncheck honour PI_LENS_DISABLE_TOOL_INSTALL,
+// which vitest-setup defaults to "1"; the "permits when trusted" cases drive
+// the install spawn.
+let restoreInstallSwitch: () => void = () => {};
+beforeEach(() => {
+	restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
+});
+afterEach(() => {
+	restoreInstallSwitch();
+	resetProjectTrust();
+});
 
 describe("central project-trust install gate (#1334 review)", () => {
 	it("gates formatter gem/rustup lazy installs and permits them when trusted", async () => {

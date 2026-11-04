@@ -13,6 +13,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
 
 const {
@@ -148,7 +149,12 @@ function advancePastCooldown(): void {
 	vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
 }
 
+// #5231: lazy installs and govulncheck now honour PI_LENS_DISABLE_TOOL_INSTALL,
+// which vitest-setup defaults to "1"; a case that drives the install spawn
+// turns the switch off for its own body.
+let restoreInstallSwitch: () => void = () => {};
 beforeEach(async () => {
+	restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	(await import("../../clients/project-trust.js")).setProjectTrustState(
 		"trusted",
 	);
@@ -232,6 +238,7 @@ it("package-manager reset does not tear down an airborne security flight", async
 });
 
 afterEach(async () => {
+	restoreInstallSwitch();
 	vi.useRealTimers();
 	(await import("../../clients/project-trust.js")).resetProjectTrust();
 });

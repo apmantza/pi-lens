@@ -24,6 +24,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "../support/with-env.js";
 import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils/availability-policy.js";
 
 const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
@@ -132,8 +133,14 @@ beforeEach(() => {
 	safeSpawnAsync.mockReset();
 	logLatencySpy.mockReset();
 	clearFormatterCache();
+	// #5231: the lazy installer honours PI_LENS_DISABLE_TOOL_INSTALL, which
+	// vitest-setup defaults to "1"; the stalled-install case drives its spawn.
+	const restoreInstallSwitch = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" });
 	vi.useFakeTimers({ toFake: ["Date"] });
-	return () => vi.useRealTimers();
+	return () => {
+		restoreInstallSwitch();
+		vi.useRealTimers();
+	};
 });
 
 describe("a degraded formatter selection is not cached (#1539)", () => {
