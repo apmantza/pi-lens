@@ -120,14 +120,16 @@ const BATCH_IDENTITY_IGNORED_FIELDS: ReadonlySet<string> = new Set([
  * risk. The language prefix is added by `getQueryCacheKey`.
  */
 function queryBatchIdentity(queryDefs: readonly TreeSitterQuery[]): string {
-	const canonical = queryDefs.map((queryDef) =>
-		Object.entries(queryDef)
-			.filter(
-				([field, value]) =>
-					value !== undefined && !BATCH_IDENTITY_IGNORED_FIELDS.has(field),
-			)
-			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
-	);
+	const canonical = queryDefs.map((queryDef) => {
+		const fields: Array<[string, unknown]> = [];
+		for (const [field, value] of Object.entries(queryDef)) {
+			if (value === undefined || BATCH_IDENTITY_IGNORED_FIELDS.has(field)) {
+				continue;
+			}
+			fields.push([field, value]);
+		}
+		return fields.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+	});
 	return crypto
 		.createHash("sha256")
 		.update(JSON.stringify(canonical))
