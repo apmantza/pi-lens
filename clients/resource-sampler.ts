@@ -372,7 +372,16 @@ export async function sampleProcesses(
 	}
 
 	try {
-		const stats = await pidusage(valid);
+		// pidusage rejects with this exact message when EVERY pid in the batch has
+		// already exited (a lone short-lived child). That is the "absent, unsampled"
+		// outcome this function documents, not a failed process-table query (#5261).
+		const stats = await pidusage(valid).catch((err: unknown) => {
+			// none: every pid exited is the documented unsampled outcome, no failure.
+			if (err instanceof Error && err.message === "No matching pid found") {
+				return {} as Awaited<ReturnType<typeof pidusage>>;
+			}
+			throw err;
+		});
 		for (const pid of valid) {
 			const stat = stats[String(pid)];
 			if (!stat) continue; // pidusage couldn't resolve this pid — leave absent
@@ -388,13 +397,7 @@ export async function sampleProcesses(
 				cpuPercent: stat.cpu,
 			});
 		}
-	} catch (err) {
-		// pidusage rejects with this exact message when EVERY pid in the batch has
-		// already exited (a lone short-lived child). That is the "absent, unsampled"
-		// outcome this function documents, not a failed process-table query (#5261).
-		if (err instanceof Error && err.message === "No matching pid found") {
-			return result;
-		}
+	} catch {
 		recordQueryFailure("posix-pidusage-process-table", "spawn-error");
 		// Best-effort: sampling failure loses this tick's data for every pid in
 		// the batch, but must never throw into the heartbeat/spawn path.
