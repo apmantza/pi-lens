@@ -271,17 +271,10 @@ describe("per-runner failure matrix: no primary runner's failure renders clean (
 				const pending = dispatchForFile(ctx, [group], registry, undefined, {
 					dedupeCoverageNotice: false,
 				});
-				let settled = false;
-				void pending.then(() => {
-					settled = true;
-				});
-				for (let i = 0; i < 100 && !settled; i += 1) {
-					if (mode.timeoutMs !== undefined) {
-						await vi.advanceTimersByTimeAsync(1);
-					} else {
-						await Promise.resolve();
-					}
-				}
+				// A runner that never settles is cut by its own timeout: advancing the
+				// fake clock past it lets the dispatcher's timeout row land.
+				if (mode.timeoutMs !== undefined)
+					await vi.advanceTimersByTimeAsync(60_000);
 				const result = await pending;
 				if (result.verdict.checked)
 					clean.push(`${row.kind}/${row.runnerId}/lsp=${row.lspEnabled}`);
