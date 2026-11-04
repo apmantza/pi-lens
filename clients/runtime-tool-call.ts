@@ -35,6 +35,7 @@ import {
 } from "./fix-run-restore.js";
 import { LANGUAGE_POLICY } from "./language-policy.js";
 import {
+	getSharedTreeSitterClient,
 	isComplexitySupportedFile,
 	resolveTreeSitterLanguage,
 } from "./tree-sitter-shared.js";
@@ -89,7 +90,6 @@ import {
 	resolveReadEvidenceCorrelationId,
 	resolveToolCallCorrelationId,
 } from "./tool-event.js";
-import { getSharedTreeSitterClient } from "./tree-sitter-shared.js";
 import { loadDispatchIntegration } from "./dispatch/lazy.js";
 
 const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS = Math.max(

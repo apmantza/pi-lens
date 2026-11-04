@@ -10,7 +10,7 @@ import type { ComplexityLanguageId, TsNode } from "../tree-sitter-shared.js";
 export interface FunctionMetrics {
 	/** McCabe: 1 + decision points + logical operators in the body. */
 	cyclomatic: number;
-	/** Each scored structure adds 1 + its nesting (a nested function counts as a level); each logical operator adds 1. */
+	/** Each scored structure adds 1 + its nesting (a nested function counts as a level); each logical operator and each labeled break or continue adds 1. */
 	cognitive: number;
 	/** Deepest control-structure nesting below the body; a flat body is 0. */
 	nesting: number;
@@ -234,6 +234,17 @@ function step(
 	if (table.cognitive.has(type)) tally.cognitive += 1 + cognitiveDepth;
 	if (isLogicalOperator(type, children, table)) {
 		tally.cyclomatic++;
+		tally.cognitive++;
+	}
+	// A labeled jump adds 1, flat (SonarSource); a bare one adds nothing. Rust
+	// labels sit on a break_expression and are not scored.
+	if (
+		(type === "break_statement" || type === "continue_statement") &&
+		children.some(
+			(c: TsNode) =>
+				c?.type === "statement_identifier" || c?.type === "label_name",
+		)
+	) {
 		tally.cognitive++;
 	}
 	const nests = table.nesting.has(type);

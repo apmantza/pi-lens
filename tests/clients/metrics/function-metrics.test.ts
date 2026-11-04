@@ -245,6 +245,53 @@ const RUST_ROWS: Row[] = [
 	["<anonymous@L28>", 28, 2, 1, 1, 1, 1],
 ];
 
+// Labeled break/continue (#5274 F1, Greptile PRRT_kwDORt8rec6zwPCR): master's
+// subtreeCognitive scored a labeled jump; the seam dropped it and a labeled
+// loop scored the same as an unlabeled one. SonarSource: a labeled jump adds 1,
+// flat, with no nesting term; a bare break or continue adds nothing. Rust's
+// `break 'outer` is a break_expression with a loop_label, which master never
+// scored and which stays out of scope.
+const TS_LABELED = `function scan(grid: number[][]) {
+	outer: for (const row of grid) {
+		for (const cell of row) {
+			if (cell < 0) continue outer;
+			if (cell === 0) break;
+		}
+		if (row.length === 0) break outer;
+	}
+}
+`;
+const GO_LABELED = `package sample
+
+func Scan(grid [][]int) {
+outer:
+	for _, row := range grid {
+		for _, cell := range row {
+			if cell < 0 {
+				continue outer
+			}
+			if cell == 0 {
+				break
+			}
+		}
+		if len(row) == 0 {
+			break outer
+		}
+	}
+}
+`;
+// for 1, for 2, if 3, continue outer 1, if 3, bare break 0, if 2, break outer 1;
+// cyclomatic is 1 + two fors + three ifs.
+const LABELED_ROW = (name: string, line: number, length: number): Row => [
+	name,
+	line,
+	6,
+	13,
+	3,
+	length,
+	1,
+];
+
 async function rowsFor(fileName: string, content: string): Promise<Row[]> {
 	const languageId = resolveTreeSitterLanguage(fileName);
 	if (!languageId || !isComplexityLanguageId(languageId)) {
@@ -280,6 +327,16 @@ describe("measureFile corpus (#5086)", () => {
 		"measures every function in %s",
 		async (fileName, content, rows) => {
 			expect(await rowsFor(fileName, content)).toEqual(rows);
+		},
+	);
+
+	it.each([
+		["labeled.ts", TS_LABELED, LABELED_ROW("scan", 1, 9)],
+		["labeled.go", GO_LABELED, LABELED_ROW("Scan", 3, 16)],
+	] as const)(
+		"scores a labeled break or continue once, flat, in %s (#5274)",
+		async (fileName, content, row) => {
+			expect(await rowsFor(fileName, content)).toEqual([row]);
 		},
 	);
 
