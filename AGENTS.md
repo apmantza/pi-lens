@@ -146,6 +146,12 @@ The principles govern building, testing, and closes-versus-refs. pi-lens adds:
   adds a family adds its map row (#3802, #3878).
   The unaffected line never covers a change to behaviour an as-built config
   constant encodes: flip the constant and its configs in the same PR.
+  A round that writes a state-space table for a seam whose row is
+  `unmodelled`, or that no row maps, adds a model family and its map row in
+  the same PR. The table's cells become the model's states and config. The
+  only alternative is a `TLA+ deferred: <reason>` line that the maintainer
+  accepts. Screen: does this round's state table have a model that runs in
+  CI?
 
 <important if="delegating work or coordinating a lane">
 
@@ -284,6 +290,7 @@ entry's screen, or its first sentence when it has none.
 54. **One-direction filter proof:** a filter that drops stale input is proven in both directions: it never passes stale input and never drops the only fresh answer.
 79. **Prefix churn from a non-append write:** Screen: drive two real-session requests that differ only in the writer, and compare the head and pi-ai's collapsed head.
 84. **Tool-state prose blind to a posture:** Screen: render the prose under each posture combination and each host, and assert every clause is true (#4293, #4294 enabled axis; #4682 lazy axis and the hand list that dropped two tools).
+90. **Generated proof line for a step that did not run:** Screen: for each proof sentence a composer emits, which input proves the step ran, and does the failed branch render something else?
 
 </important>
 

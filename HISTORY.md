@@ -1,5 +1,18 @@
 # HISTORY
 
+## 2026-11-04 — generated proof line for a step that did not run (shape 90)
+
+The nightly LSP refresh composer (#5062, PR #5243) wrote a Tests section saying
+the flips were classified against master, also on the branch where the flip
+check had failed; the same body's Notes said the check could not run. The PR's
+lint test passed because it checked section presence, not the text. Review r1
+caught it; round 2 renders "could not run" on that branch and pins the text.
+The same session also recorded: a dropped false notice that turned an
+unchecked file "clean" (#5238, shape 10), npm logs written to the real home
+by two probes (shape 82), and a docs line that missed the enabled axis (#5242,
+shape 84). State-table rounds on `unmodelled` seams now add a TLA+ family
+(rule idea #4835).
+
 ## 2026-11-02 — serial await of independent work on a hot path (shape 89)
 
 #2540: a cold first edit blocked ~7 s because the edit hook spawned the file's

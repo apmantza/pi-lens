@@ -170,6 +170,9 @@ file-scoped worklist and receives no project-wide scanner output.
     path discloses its truncation on the rendered surface; a count recorded
     only in `latency.log` is not disclosure (#3166 r2: an 80-finding input
     bound zeroed a neighbour's genuine errors, counted only in the log).
+    Removing a false "unavailable" notice never turns the file clean: a file
+    no analyzer applies to reads "not analyzed" (#5238 r2 read
+    `build.gradle` as "Groovy clean" after its notice was dropped).
     An out-of-session-root project edit records one bounded degradation and
     uses the existing advisory notice seam; intended vendor skips and pi-owned
     OS-temp artifacts stay silent (`clients/runtime-tool-result.ts`,
@@ -288,7 +291,17 @@ file-scoped worklist and receives no project-wide scanner output.
     for). Derive the named set from the registry, never a hand list. Screen:
     render the prose under each posture combination and each host, and assert
     every clause is true (#4293, #4294 enabled axis; #4682 lazy axis and the
-    hand list that dropped two tools).
+    hand list that dropped two tools). User docs that say which tools a
+    script or user can call are in scope too (#5242: "every pi-lens tool"
+    under `--no-lazy-tools` missed the enabled axis).
+
+90. **Generated proof line for a step that did not run:** a composer that
+    writes a PR, issue or report body states what ran. A branch where the step
+    failed, was skipped or timed out renders that outcome, never the success
+    sentence (#5243 r1: the nightly refresh body said the flips were
+    classified against master when the flip check had failed). Screen: for
+    each proof sentence a composer emits, which input proves the step ran,
+    and does the failed branch render something else?
 
 </important>
 
@@ -631,6 +644,9 @@ file-scoped worklist and receives no project-wide scanner output.
     (`~/.config/.opengrep`, `~/.config/.semgrep`), and a symlinked managed `bin`
     lets an installer write through to the real `~/.pi-lens/bin`. The pin is
     the whole set, assigned once in the worker so every child inherits it.
+    npm's cache and log directory (`npm_config_cache`, default `~/.npm`) is
+    in the set: two probes on 2026-11-04 (the #5239 fixer, the #5244
+    reviewer) wrote `~/.npm/_logs` through `npx`.
     Screen: which directory does the process I run resolve from, and is every
     variable that names it pinned? Enforcer:
     `tests/clients/worker-home-pin-hermeticity.test.ts` (a real child reports
