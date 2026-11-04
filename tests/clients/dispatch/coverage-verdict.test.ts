@@ -180,6 +180,8 @@ type FailureMode = {
 	name: string;
 	run: () => Promise<RunnerResult>;
 	timeoutMs?: number;
+	/** The runner never answers; the test builds that promise under fake timers. */
+	hangs?: true;
 };
 
 // The four ways a primary runner fails to answer, each in the form the real
@@ -188,7 +190,8 @@ const FAILURE_MODES: FailureMode[] = [
 	{
 		name: "timeout",
 		timeoutMs: 1,
-		run: () => new Promise<RunnerResult>(() => {}),
+		hangs: true,
+		run: async () => ({ status: "skipped", diagnostics: [], semantic: "none" }),
 	},
 	{
 		name: "error",
@@ -251,6 +254,9 @@ describe("per-runner failure matrix: no primary runner's failure renders clean (
 	for (const mode of FAILURE_MODES) {
 		it(`${mode.name}: the verdict is unchecked for every primary runner of every kind`, async () => {
 			if (mode.timeoutMs !== undefined) vi.useFakeTimers();
+			const run = mode.hangs
+				? () => new Promise<RunnerResult>(() => {})
+				: mode.run;
 			const clean: string[] = [];
 			for (const row of rows) {
 				const registry = new RunnerRegistry();
@@ -259,7 +265,7 @@ describe("per-runner failure matrix: no primary runner's failure renders clean (
 					appliesTo: [row.kind],
 					priority: 5,
 					...(mode.timeoutMs !== undefined && { timeoutMs: mode.timeoutMs }),
-					run: mode.run,
+					run,
 				});
 				const ctx = createDispatchContext(
 					path.join("/project", row.file),

@@ -301,9 +301,11 @@ export function checkedVerdict(
 	const [first, ...rest] = rows
 		.filter(hasUsableResult)
 		.map((row) => row.runnerId);
-	return first === undefined
-		? undefined
-		: { checked: true, tier, runnerIds: [first, ...rest] };
+	if (first === undefined) return undefined;
+	// A variable, not a literal: this is a verdict's runner list, not a
+	// `RunnerGroup`, and the group-id census reads `runnerIds: [...]` literals.
+	const completed: [string, ...string[]] = [first, ...rest];
+	return { checked: true, tier, runnerIds: completed };
 }
 
 /**
