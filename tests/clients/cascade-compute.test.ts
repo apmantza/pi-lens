@@ -693,6 +693,14 @@ describe("computeCascadeForFile", () => {
 					consumers[0].split(path.sep).join("/"),
 					consumers[2].split(path.sep).join("/"),
 				]);
+				// The leg's own record counts the files of the calls that answered.
+				expect(mocks.logCascade).toHaveBeenCalledWith(
+					expect.objectContaining({
+						phase: "neighbor_snapshot",
+						neighborFile: "[lsp-references]",
+						diagnosticCount: 2,
+					}),
+				);
 			} finally {
 				env.cleanup();
 			}
