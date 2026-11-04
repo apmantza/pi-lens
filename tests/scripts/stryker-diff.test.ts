@@ -71,6 +71,7 @@ import {
 	TEST_FILE_OVERHEAD_SECONDS,
 	UNKNOWN_TEST_SECONDS,
 } from "../../scripts/lib/stryker-diff.mjs";
+import { coverageGaps } from "../../scripts/stryker-nightly.mjs";
 import { stripSource } from "../support/sweep-kit.js";
 import {
 	buildLineIndex,
@@ -265,10 +266,12 @@ if (dryRun) {
 		console.error(DRY_RUN_ERRORS[control.dryRunFails]);
 		process.exit(1);
 	}
-	// #4171: control.density maps a pattern to the mutants it holds (default 3), so
-	// a fixture can give ranges the uneven density a real Stryker run measures.
+	// #4171: control.density maps a pattern to the mutants it holds (default
+	// control.defaultDensity, else 3), so a fixture can give ranges the uneven
+	// density a real Stryker run measures.
 	const density = control.density || {};
-	const mutantTotal = patterns.reduce((sum, pattern) => sum + (density[pattern] ?? 3), 0);
+	const defaultDensity = control.defaultDensity ?? 3;
+	const mutantTotal = patterns.reduce((sum, pattern) => sum + (density[pattern] ?? defaultDensity), 0);
 	console.log("Instrumented 3 source file(s) with " + mutantTotal + " mutant(s)");
 	console.log("Initial test run succeeded. Ran 1 tests in 1 seconds (net 12 ms, overhead 0 ms).");
 	process.exit(0);
@@ -1217,6 +1220,15 @@ describe("driver Stryker stage, spawned for real (#3856 F3)", () => {
 					"in 5000 seconds (net 5000000 ms",
 				),
 			);
+			// #4171: a sampled range launches only when it fits the allowance, which
+			// is 1 here (a 5000 s dry run). Each range holds one mutant so the kept
+			// range fits and the narrowed command still runs; an over-allowance
+			// sample is refused, and that is pinned by the unit tests.
+			mkdirSync(join(fixture.root, ".fake-stryker"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-stryker", "control.json"),
+				JSON.stringify({ defaultDensity: 1 }),
+			);
 			const first = runDriver(fixture.root, ["--base", "main"], 120_000);
 			expect(first).toContain("1 of 2 measured tests retained");
 			expect(first).not.toContain("source scoping found no kept tests");
@@ -1409,6 +1421,148 @@ describe("driver Stryker stage, spawned for real (#3856 F3)", () => {
 			expect(density[retry.patterns[0]]).toBeLessThanOrEqual(allowance);
 			expect(output).toContain(
 				"retry sample of 1 range(s); sampled mutants 8 of 10 allowed",
+			);
+		} finally {
+			fixture.cleanup();
+		}
+	}, 60_000);
+	// Recurrence this guards (#4171, run 41295346200, 2026-11-01): a sampled range
+	// alone held more mutants than the allowance and the driver launched it. With
+	// no range that fits, the first sample must launch nothing and report the
+	// zero-mutant outcome.
+	it("launches nothing when no sampled range fits the allowance (#4171)", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+			manyRanges: 12,
+		});
+		try {
+			const binary = join(fixture.root, "node_modules", ".bin", "stryker");
+			writeFileSync(
+				binary,
+				readFileSync(binary, "utf8").replace(
+					"in 1 seconds (net 12 ms",
+					"in 220 seconds (net 220000 ms",
+				),
+			);
+			// 220 s a dry run and a 60-minute budget leave an allowance of 10
+			// mutants (see the uneven-density case above); every range holds 12.
+			mkdirSync(join(fixture.root, ".fake-stryker"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-stryker", "control.json"),
+				JSON.stringify({ defaultDensity: 12 }),
+			);
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(output).toContain("no range fits the allowance of 10");
+			expect(output).toContain("no mutants evaluated");
+			expect(
+				fakeStrykerInvocations(fixture.root).filter((call) => !call.dryRun),
+			).toEqual([]);
+			const report = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(report.piLensMutationDiff.zeroMutants.reason).toContain(
+				"no range fits the allowance of 10",
+			);
+		} finally {
+			fixture.cleanup();
+		}
+	}, 60_000);
+	// Recurrence this guards (#4171, run 41295346200, 2026-11-01): the no-launch
+	// report left out filesNoSourceMap and filesNoMutableLines. coverageGaps then
+	// read the compiled-skip file as unevaluated, and nextQueue re-queued it on
+	// every night the sampler found no range that fits.
+	it("carries the compiled-skip lists into the no-launch report, so the skipped file is not re-queued (#4171)", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+			manyRanges: 12,
+			skippedCompiled: true,
+		});
+		try {
+			const binary = join(fixture.root, "node_modules", ".bin", "stryker");
+			writeFileSync(
+				binary,
+				readFileSync(binary, "utf8").replace(
+					"in 1 seconds (net 12 ms",
+					"in 220 seconds (net 220000 ms",
+				),
+			);
+			mkdirSync(join(fixture.root, ".fake-stryker"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-stryker", "control.json"),
+				JSON.stringify({ defaultDensity: 12 }),
+			);
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			expect(output).toContain("no range fits the allowance of 10");
+			expect(
+				fakeStrykerInvocations(fixture.root).filter((call) => !call.dryRun),
+			).toEqual([]);
+			const report = JSON.parse(
+				readFileSync(
+					join(fixture.root, "reports", "mutation", "mutation.json"),
+					"utf8",
+				),
+			);
+			expect(coverageGaps(report).retry).not.toContain("clients/skipped.ts");
+			expect(report.piLensMutationDiff.filesNoSourceMap).toEqual([
+				"clients/skipped.ts",
+			]);
+			expect(report.piLensMutationDiff.filesNoMutableLines).toEqual([]);
+		} finally {
+			fixture.cleanup();
+		}
+	}, 60_000);
+	// Recurrence this guards (#4171, run 41295346200, 2026-11-01): the resample
+	// retry after a zero-mutant sample drew one untried range that held more than
+	// the allowance and launched it. With no untried range that fits, the retry
+	// must not launch.
+	it("does not retry when no untried range fits the allowance (#4171)", () => {
+		const fixture = buildDriverFixture({
+			covering: true,
+			includeCompiled: false,
+			manyRanges: 12,
+		});
+		try {
+			const head = String(fixture.git(["rev-parse", "HEAD"])).trim();
+			const ranges = [
+				"scripts/thing.mjs:5-6",
+				...Array.from(
+					{ length: 12 },
+					(_, i) => `scripts/many.mjs:${2 * i + 1}-${2 * i + 1}`,
+				),
+			];
+			const binary = join(fixture.root, "node_modules", ".bin", "stryker");
+			writeFileSync(
+				binary,
+				readFileSync(binary, "utf8").replace(
+					"in 1 seconds (net 12 ms",
+					"in 220 seconds (net 220000 ms",
+				),
+			);
+			// The best-ranked range holds no mutants, so the first sample runs empty
+			// and the driver retries. Every other range holds 12, over the allowance
+			// of 10, so no untried range fits the retry.
+			const empty = sampleRangesDeterministically(ranges, 1, head).selected;
+			const density = Object.fromEntries(
+				ranges.map((range) => [range, empty.includes(range) ? 0 : 12]),
+			);
+			mkdirSync(join(fixture.root, ".fake-stryker"), { recursive: true });
+			writeFileSync(
+				join(fixture.root, ".fake-stryker", "control.json"),
+				JSON.stringify({ density }),
+			);
+			const output = runDriver(fixture.root, ["--base", "main"], 120_000);
+			const realRuns = fakeStrykerInvocations(fixture.root).filter(
+				(call) => !call.dryRun,
+			);
+			expect(realRuns).toHaveLength(1);
+			expect(realRuns[0].patterns).toEqual(empty);
+			expect(output).toContain(
+				"retry sample of 0 range(s); no range fits the allowance of 10",
 			);
 		} finally {
 			fixture.cleanup();
@@ -3769,7 +3923,7 @@ describe("fitSampleToMutantAllowance (#4171)", () => {
 
 		expect(fit.selected).toEqual([first]);
 		expect(fit.mutants).toBe(20);
-		expect(fit).toMatchObject({ exceedsAllowance: false, unverified: false });
+		expect(fit).toMatchObject({ unverified: false });
 	});
 
 	it("keeps the largest prefix that fits, never fewer ranges than the allowance affords", () => {
@@ -3829,7 +3983,33 @@ describe("fitSampleToMutantAllowance (#4171)", () => {
 		expect(run(seed)).not.toEqual(run("another-head"));
 	});
 
-	it("keeps one range and says so when a single range alone exceeds the allowance", () => {
+	it("takes the next-ranked range that fits when the first-ranked one alone exceeds the allowance (#4171)", () => {
+		// Recurrence: run 41295346200 (2026-11-01) launched a one-range sample
+		// that alone held 61 mutants against an allowance of 8. The walk counts
+		// the next-ranked ranges and keeps the first that fits, one holding
+		// exactly the allowance included.
+		const [first, second] = topRanked(2);
+		const density = new Map([
+			[first, 50],
+			[second, 10],
+		]);
+		const { calls, countMutants } = counter(density, 50);
+		const fit = fitSampleToMutantAllowance({
+			patterns,
+			startCount: 3,
+			allowedMutants: 10,
+			seed,
+			countMutants,
+		});
+		expect(fit.selected).toEqual([second]);
+		expect(fit).toMatchObject({ mutants: 10, unverified: false });
+		expect(calls.length).toBe(fit.passes);
+	});
+
+	it("selects nothing when no range alone fits the allowance, counting every ranked range once (#4171)", () => {
+		// Recurrence: the 2026-11-01 retry kept its one over-allowance range
+		// because nothing bisects below one range. Nothing may launch here; the
+		// caller reports a zero-mutant outcome instead.
 		const { calls, countMutants } = counter(new Map(), 50);
 		const fit = fitSampleToMutantAllowance({
 			patterns,
@@ -3838,13 +4018,33 @@ describe("fitSampleToMutantAllowance (#4171)", () => {
 			seed,
 			countMutants,
 		});
-		expect(fit.selected).toEqual(topRanked(1));
-		expect(fit).toMatchObject({
-			mutants: 50,
-			exceedsAllowance: true,
-			unverified: false,
-		});
+		expect(fit).toMatchObject({ selected: [], mutants: 0, unverified: false });
+		// Pass 1 is the 3-range sample, pass 2 the bisection's one-range probe,
+		// then one pass per remaining ranked range: 1 + 1 + 171 = 173 passes.
 		expect(calls.length).toBe(fit.passes);
+		expect(fit.passes).toBe(patterns.length + 1);
+	});
+
+	it("selects nothing and flags it unverified when a next-ranked count pass fails (#4171)", () => {
+		// Recurrence: when a next-ranked count fails, the walk must not fall back
+		// to the one-range sample it already measured over the allowance.
+		let pass = 0;
+		const fit = fitSampleToMutantAllowance({
+			patterns,
+			startCount: 3,
+			allowedMutants: 24,
+			seed,
+			countMutants: () => {
+				pass += 1;
+				return pass <= 2 ? 50 : null;
+			},
+		});
+		expect(fit).toMatchObject({
+			selected: [],
+			mutants: null,
+			unverified: true,
+		});
+		expect(pass).toBe(3);
 	});
 
 	it("keeps one range and flags it unverified when the first count pass fails", () => {
@@ -3885,24 +4085,32 @@ describe("describeSampledMutants (#4171)", () => {
 			selected: ["a.js:1-1"],
 			mutants: 20,
 			passes: 3,
-			exceedsAllowance: false,
 			unverified: false,
 		};
 		expect(describeSampledMutants(fit, 24)).toBe(
 			"sampled mutants 20 of 24 allowed (3 count pass(es))",
 		);
 		expect(
-			describeSampledMutants(
-				{ ...fit, mutants: 50, exceedsAllowance: true },
-				24,
-			),
-		).toBe(
-			"sampled mutants 50 of 24 allowed (3 count pass(es)); over the allowance because one range alone holds more",
-		);
-		expect(
 			describeSampledMutants({ ...fit, mutants: null, unverified: true }, 24),
 		).toBe(
 			"sampled mutants unverified against the allowance of 24 (a count pass failed; kept one range)",
+		);
+	});
+
+	it("names an empty selection as no launch, never as a sample of one range (#4171)", () => {
+		// Recurrence: run 41295346200 (2026-11-01) reported an over-allowance range
+		// as a sample and launched it. An empty selection says that no range fits.
+		const none = { selected: [], mutants: 0, passes: 3, unverified: false };
+		expect(describeSampledMutants(none, 8)).toBe(
+			"no range fits the allowance of 8 (3 count pass(es)); Stryker is not launched",
+		);
+		expect(
+			describeSampledMutants(
+				{ ...none, mutants: null, passes: 4, unverified: true },
+				8,
+			),
+		).toBe(
+			"no range verified against the allowance of 8 (a count pass failed; 4 count pass(es)); Stryker is not launched",
 		);
 	});
 });
@@ -3985,6 +4193,90 @@ describe("planResample (#3531 round 3 R2-1 fix #3)", () => {
 		};
 
 		expect(planResample(args)).toEqual(planResample({ ...args }));
+	});
+
+	// The driver's retry sampler is `fitSampleToMutantAllowance` over the untried
+	// pool; these cases run that composition with the count stubbed at the
+	// module's own `countMutants` parameter (not vi.mock). `seed` is chosen so the
+	// retry's ranking (`${seed}:retry0`) is heavy, next, later, asserted below.
+	const retryThroughFit = (
+		density: Map<string, number>,
+		allPatterns: string[],
+		allowedMutants: number,
+	) => {
+		const countCalls: string[][] = [];
+		const plan = planResample({
+			allPatterns,
+			triedPatterns: [allPatterns[0]],
+			keepRangeCount: 1,
+			seed: "fixture-4171-1",
+			attemptsSoFar: 0,
+			maxAttempts: 3,
+			sample: (untried, limit, retrySeed) =>
+				fitSampleToMutantAllowance({
+					patterns: untried,
+					startCount: limit,
+					allowedMutants,
+					seed: retrySeed,
+					countMutants: (selection: string[]) => {
+						countCalls.push(selection);
+						return selection.reduce(
+							(sum, pattern) => sum + (density.get(pattern) ?? 0),
+							0,
+						);
+					},
+				}),
+		});
+		return { plan, countCalls };
+	};
+	const [empty, heavy, next, later] = [
+		"empty.js:1-1",
+		"heavy.js:1-1",
+		"next.js:1-1",
+		"later.js:1-1",
+	];
+
+	it("retries with the next-ranked range that fits when the retry's top range alone exceeds the allowance (#4171)", () => {
+		// Recurrence: run 41295346200 (2026-11-01). The first sample held 0
+		// mutants, the retry drew one range, and that range alone held 61 mutants
+		// against an allowance of 8. The retry launched it and the budget expired
+		// after 40 of 692 mutants.
+		const pool = [heavy, next, later];
+		const retrySeed = "fixture-4171-1:retry0";
+		expect(sampleRangesDeterministically(pool, 1, retrySeed).selected).toEqual([
+			heavy,
+		]);
+		expect(sampleRangesDeterministically(pool, 2, retrySeed).selected).toEqual([
+			heavy,
+			next,
+		]);
+		const { plan, countCalls } = retryThroughFit(
+			new Map([
+				[empty, 0],
+				[heavy, 61],
+				[next, 12],
+				[later, 5],
+			]),
+			[empty, heavy, next, later],
+			8,
+		);
+		expect(plan).toEqual({ retry: true, patterns: [later] });
+		expect(countCalls).toEqual([[heavy], [next], [later]]);
+	});
+
+	it("gives up without a retry when no untried range fits the allowance, so nothing over it launches (#4171)", () => {
+		// Recurrence: the same run with every untried range over the allowance.
+		const { plan, countCalls } = retryThroughFit(
+			new Map([
+				[empty, 0],
+				[heavy, 61],
+				[next, 12],
+			]),
+			[empty, heavy, next],
+			8,
+		);
+		expect(plan).toEqual({ retry: false });
+		expect(countCalls).toEqual([[heavy], [next]]);
 	});
 });
 
