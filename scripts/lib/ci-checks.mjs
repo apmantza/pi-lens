@@ -75,12 +75,14 @@ export const ADVISORY_CHECKS = new Set([
 	// "(advisory)" suffix to self-identify by, so it needs an explicit entry.
 	"SonarCloud Code Analysis",
 	// GitHub's own code-scanning summary check. Since #3801 CodeQL runs as a
-	// committed advanced setup: ci.yml's PR-time `CodeQL (<lang>) (advisory)` and
-	// codeql.yml's `CodeQL baseline (<lang>) (advisory)` are classified by the
-	// suffix, not by an entry here. The legacy default-setup `Analyze (<lang>)`
-	// rows, which a PR head older than the switch still carries, are a
-	// DIFFERENT set of names this list does NOT cover; they keep gating because
-	// an alert on such a head is a real result.
+	// committed advanced setup, and since #5275 only as codeql.yml's daily
+	// schedule: its `CodeQL baseline (<lang>) (advisory)` rows are classified by
+	// the suffix, not by an entry here. An open PR head older than #5275 still
+	// carries ci.yml's PR-time `CodeQL (<lang>) (advisory)` rows, classified the
+	// same way. The legacy default-setup `Analyze (<lang>)` rows, which a PR
+	// head older than the #3801 switch still carries, are a DIFFERENT set of
+	// names this list does NOT cover; they keep gating because an alert on such
+	// a head is a real result.
 	"CodeQL",
 	"Changed tests shuffled (advisory)",
 	// Stale verdict labels are bookkeeping only. Their cleanup asserts no
@@ -103,6 +105,10 @@ export const ADVISORY_CHECKS = new Set([
 // makes one gate. tests/config/heavy-advisory-gate-workflow.test.ts derives the
 // same set from ci.yml, so a job added behind the gate cannot be missing here.
 //
+// The list is EMPTY since #5275: PR-time CodeQL, the last job behind the gate,
+// left ci.yml for a daily codeql.yml schedule. A listed name that no job posts
+// would read as PENDING forever, so the entry left with the job.
+//
 // `Unit tests Windows (advisory)` left this list when #4518 promoted it to a
 // gating check: it starts on every event now, so a deferred row for it would
 // be a PENDING claim about a job an older head simply does not carry.
@@ -113,11 +119,7 @@ export const ADVISORY_CHECKS = new Set([
 // gated shape when either ci.yml job below has a check-run.
 export const HEAVY_GATE_CHECK = "Heavy advisory gate (advisory)";
 export const CHANGES_CHECK = "Changed files (advisory)";
-export const DEFERRED_ADVISORY_CHECKS = Object.freeze([
-	// #3801: ci.yml's PR-time CodeQL matrix (one check-run per language).
-	"CodeQL (actions) (advisory)",
-	"CodeQL (javascript-typescript) (advisory)",
-]);
+export const DEFERRED_ADVISORY_CHECKS = Object.freeze([]);
 
 // #4090: the events whose workflow runs are NOT a commit's PR/push CI. A
 // scheduled run attaches its check-runs to master's head and a dispatched run

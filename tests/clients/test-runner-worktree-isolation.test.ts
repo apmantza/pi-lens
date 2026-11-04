@@ -989,14 +989,21 @@ describe("R4/R6 real turn-end policy after checkout selection", () => {
 				const runtime = new RuntimeCoordinator();
 				const cacheManager = new CacheManager(false);
 				const client = new TestRunnerClient(false);
-				safeSpawnAsync.mockResolvedValue({
-					stdout: JSON.stringify({
-						numPassedTests: 0,
-						numFailedTests: 1,
-						testResults: [],
-					}),
-					stderr: "",
-					status: 1,
+				// #5270: vitest reports to the `--outputFile` the runner passes (a
+				// stdout report is no longer read), as the real CLI does.
+				safeSpawnAsync.mockImplementation(async (_command, args) => {
+					const flag = (args as string[]).find((arg) =>
+						arg.startsWith("--outputFile="),
+					);
+					fs.writeFileSync(
+						flag!.slice("--outputFile=".length),
+						JSON.stringify({
+							numPassedTests: 0,
+							numFailedTests: 1,
+							testResults: [],
+						}),
+					);
+					return { stdout: "", stderr: "", status: 1 };
 				});
 				if (route === "fresh") {
 					expect(

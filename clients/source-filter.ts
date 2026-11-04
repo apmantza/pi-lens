@@ -25,7 +25,11 @@ import {
 	type GeneratedArtifactClassification,
 	isDeclarationFile,
 } from "./generated-artifacts.js";
-import { isCodeKindFile, KIND_EXTENSIONS } from "./file-kinds.js";
+import {
+	isCodeKindFile,
+	KIND_EXTENSIONS,
+	SPECIAL_FILENAMES,
+} from "./file-kinds.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeEphemeralMapKey } from "./path-utils.js";
 import { isSlowFs, SLOW_FS_REDUCED_MAX_FILES } from "./slow-fs.js";
@@ -223,6 +227,18 @@ export interface SourceCollectionOptions {
 	extensions?: string[];
 	/** Whether to follow symlinks (default: false) */
 	followSymlinks?: boolean;
+	/**
+	 * Also keep a file whose kind comes from its NAME rather than its extension
+	 * (`Jenkinsfile`, `build.gradle`, `Dockerfile`, `Makefile`, ...: the names
+	 * `SPECIAL_FILENAMES` classifies), after the same ignore, build-artifact and
+	 * generated checks as an extension match (default: false, #5273).
+	 *
+	 * Opt-in because the other walk consumers key their analyzers on the
+	 * extension (review graph, project diagnostics, language profile, TODO
+	 * baseline) and have no parser or fact provider for these names; only the
+	 * word index, which is lexical, takes them.
+	 */
+	includeNamedFiles?: boolean;
 	/** Keep generated/codegen files instead of filtering them (default: false) */
 	includeGenerated?: boolean;
 	/** Keep declaration stubs such as .d.ts (default: false) */
@@ -698,7 +714,18 @@ function classifyEntry(
 		// prunable pile (e.g. wal/*.log) should never pay that cost for files
 		// the extension gate would have dropped anyway.
 		const ext = path.extname(entry.name).toLowerCase();
-		if (!extensions.has(ext)) return {};
+		// #5273: a named file (`Jenkinsfile`) has no extension the set holds. The
+		// name test is anchored regexes over the basename, so it stays as cheap as
+		// the extension gate and still runs before isIgnored.
+		if (
+			!extensions.has(ext) &&
+			!(
+				options?.includeNamedFiles === true &&
+				SPECIAL_FILENAMES.some(({ pattern }) => pattern.test(entry.name))
+			)
+		) {
+			return {};
+		}
 		if (ignoreMatcher.isIgnored(fullPath, false)) return {};
 		// Skip if this is a build artifact or generated/codegen output.
 		// #1107: counted separately (both are observability-only — neither

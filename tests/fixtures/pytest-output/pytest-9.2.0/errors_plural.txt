@@ -1,0 +1,16 @@
+EE                                                                       [100%]
+==================================== ERRORS ====================================
+___________________________ ERROR at setup of test_a ___________________________
+test_errs.py:3: in f
+    def f(): raise RuntimeError("x")
+             ^^^^^^^^^^^^^^^^^^^^^^^
+E   RuntimeError: x
+___________________________ ERROR at setup of test_b ___________________________
+test_errs.py:3: in f
+    def f(): raise RuntimeError("x")
+             ^^^^^^^^^^^^^^^^^^^^^^^
+E   RuntimeError: x
+=========================== short test summary info ============================
+ERROR test_errs.py::test_a - RuntimeError: x
+ERROR test_errs.py::test_b - RuntimeError: x
+2 errors in 0.01s

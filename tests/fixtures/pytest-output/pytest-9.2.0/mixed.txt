@@ -1,0 +1,9 @@
+.E                                                                       [100%]
+==================================== ERRORS ====================================
+_____________________ ERROR at setup of test_fixture_error _____________________
+test_mixed.py:5: in boom
+    raise RuntimeError("fixture exploded")
+E   RuntimeError: fixture exploded
+=========================== short test summary info ============================
+ERROR test_mixed.py::test_fixture_error - RuntimeError: fixture exploded
+1 passed, 1 error in 0.01s

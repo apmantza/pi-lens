@@ -11,7 +11,7 @@
  *
  *   code=true|false    false ONLY for a pull_request whose every changed path
  *                      is on the strict docs allowlist below: the heavy advisory
- *                      job (CodeQL) then skips. Every test job, the Windows
+ *                      gate then skips. Every test job, the Windows
  *                      unit leg included, still runs (#4518).
  *   formal=true|false  true when the diff touches the TLA+ models or what runs
  *                      them; `TLA+ models` model-checks only then.
