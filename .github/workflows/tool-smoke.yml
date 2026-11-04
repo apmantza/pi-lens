@@ -409,11 +409,21 @@ jobs:
       # own parsed summary still shows a failure. Pinned by
       # tests/config/tool-smoke-notify-gate.test.ts, mutation-proofed by
       # deleting this exact line.
+      #
+      # #5257: the test-runner canary rows ride this step (and its log, outcome
+      # and notifier row). Each plants one failing test (vitest and jest at
+      # their LATEST version, pytest, go test) and requires `TestRunnerClient`
+      # to report it failing; a missing toolchain is a SKIPPED row with its
+      # reason. Both commands run even when the first is red, and the step's
+      # status is the worse of the two.
       - name: Tool layer (install + run each tool through real dispatch)
         id: tool_layer
         run: |
           set -o pipefail
-          node scripts/smoke-tools.mjs --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-tool-layer.log"
+          status=0
+          node scripts/smoke-tools.mjs --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-tool-layer.log" || status=1
+          node scripts/smoke-tools.mjs --test-runners --verbose 2>&1 | tee -a "$RUNNER_TEMP/tool-smoke-tool-layer.log" || status=1
+          exit "$status"
 
       # --min-pass is the floor that keeps a green handshake honest (#4514): an
       # unavailable server reports a warning, never a failure, so a run where

@@ -37,6 +37,12 @@
  * production resolvers return THAT path.
  * No install, no network. See `runResolutionSmoke`.
  *
+ * Test-runner layer (--test-runners, #5257): plants one failing test per
+ * supported runner (vitest and jest at their LATEST version, pytest, go test) in
+ * a scratch project and requires the real `TestRunnerClient` to report it as
+ * failing. A runner whose toolchain the job lacks is a SKIPPED row with its
+ * reason. See `scripts/lib/test-runner-smoke.mjs`.
+ *
  * Usage:
  *   node scripts/smoke-tools.mjs [lang ...] [--step2] [--tier1] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --lsp [lang ...] [--install] [--verbose]
@@ -45,6 +51,7 @@
  *   node scripts/smoke-tools.mjs --lens-full [lang ...] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --format [lang ...] [--install] [--verbose]
  *   node scripts/smoke-tools.mjs --resolution [--verbose]
+ *   node scripts/smoke-tools.mjs --test-runners [--verbose]
  *   node scripts/smoke-tools.mjs --install --install-registry --installer-root=<path>
  *
  * Requires a built dist/ (run `npm run build:dist` first).
@@ -81,6 +88,10 @@ import {
 	describeLastTouch,
 } from "./lib/lsp-cascade-smoke.mjs";
 import { touchAnsweredDiagnostics } from "./lib/touch-result.mjs";
+import {
+	evaluateTestRunnerRow,
+	TEST_RUNNER_ROWS,
+} from "./lib/test-runner-smoke.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1872,6 +1883,7 @@ function parseArgs(argv) {
 	let lensFull = false;
 	let format = false;
 	let resolution = false;
+	let testRunners = false;
 	let autofix = false;
 	let tier1 = false;
 	let minPass = null;
@@ -1890,6 +1902,7 @@ function parseArgs(argv) {
 		else if (arg === "--lens-full") lensFull = true;
 		else if (arg === "--format") format = true;
 		else if (arg === "--resolution") resolution = true;
+		else if (arg === "--test-runners") testRunners = true;
 		else if (arg === "--tier1") tier1 = true;
 		else if (arg === "--install-registry") installRegistry = true;
 		else if (arg.startsWith("--installer-root="))
@@ -1911,6 +1924,7 @@ function parseArgs(argv) {
 		lensFull,
 		format,
 		resolution,
+		testRunners,
 		autofix,
 		tier1,
 		minPass,
@@ -4646,6 +4660,50 @@ export async function runResolutionSmoke({ verbose, deps } = {}) {
 }
 
 /**
+ * Test-runner layer entry (#5257). Returns the failure count.
+ *
+ * Each row gets its own scratch project, its own runner install and a fresh
+ * `TestRunnerClient`, and must see the planted failing test reported as
+ * failing. Not a `--tier1` row: vitest/jest install from npm (a registry
+ * outage is `setup-failed`, which still fails the layer) and pytest from pip.
+ */
+export async function runTestRunnerSmoke({
+	verbose,
+	rows = TEST_RUNNER_ROWS,
+} = {}) {
+	await adoptFixtureProjectTrust({ repoRoot });
+	const entry = path.join(repoRoot, "dist", "clients", "test-runner-client.js");
+	if (!fs.existsSync(entry)) {
+		console.error(
+			`dist build missing: ${entry}\nRun \`npm run build:dist\` first.`,
+		);
+		process.exit(2);
+	}
+	const { TestRunnerClient } = await import(pathToFileURL(entry).href);
+	const results = [];
+	for (const rowDef of rows) {
+		const root = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), `${TMP_PREFIX}testrunner-`)),
+		);
+		try {
+			const r = await evaluateTestRunnerRow(rowDef, {
+				root,
+				client: new TestRunnerClient(false),
+			});
+			if (verbose)
+				console.error(`[test-runners] ${rowDef.id}: ${r.state} ${r.detail}`);
+			results.push(r);
+		} finally {
+			safeRm(root);
+		}
+	}
+	return report(
+		results,
+		"Test runners (planted failing test → reported failing)",
+	);
+}
+
+/**
  * Autofix layer — drives the pipeline's safe-autofix phase (`runAutofix`, what
  * `runPipeline` calls), which applies fixable linters in fix mode (ruff --fix,
  * biome --write, eslint --fix, stylelint/sqlfluff/rubocop/ktlint/rust-clippy)
@@ -4778,6 +4836,7 @@ async function main() {
 		lensFull,
 		format,
 		resolution,
+		testRunners,
 		autofix,
 		tier1,
 		minPass,
@@ -4826,6 +4885,10 @@ async function main() {
 
 	if (resolution) {
 		process.exit((await runResolutionSmoke({ verbose })) > 0 ? 1 : 0);
+	}
+
+	if (testRunners) {
+		process.exit((await runTestRunnerSmoke({ verbose })) > 0 ? 1 : 0);
 	}
 
 	if (autofix) {
