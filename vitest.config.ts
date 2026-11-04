@@ -939,6 +939,9 @@ export const wallClockBudgetInclude = [
 	// --print-config for both npm scripts (real child process, flake-shape
 	// admission).
 	"tests/scripts/lint-js.test.ts",
+	// #5249: the Lint prose selection and its run block read real git diffs of
+	// fixture repos and real bash/node exit statuses (flake-shape admission).
+	"tests/scripts/lint-prose-files.test.ts",
 	"tests/scripts/lockfile-completeness.test.ts",
 	"tests/scripts/lsp-idle-eviction-promote.test.ts",
 	// #4717: the lexer-seam entry points run in a fresh node over a scripts

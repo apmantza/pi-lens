@@ -148,6 +148,7 @@
 		"scripts/lane-check-secondary.test.ts": 19,
 		"scripts/lane-check.test.ts": 22,
 		"scripts/lint-js.test.ts": 6,
+		"scripts/lint-prose-files.test.ts": 5,
 		"scripts/lockfile-completeness.test.ts": 1,
 		"scripts/lsp-idle-eviction-promote.test.ts": 3,
 		"scripts/markdown-lexer-entry-points.test.ts": 2,
