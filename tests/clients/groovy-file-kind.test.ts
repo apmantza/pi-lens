@@ -36,16 +36,23 @@ const GROOVY_EXTENSIONS = [".groovy", ".gvy", ".gy", ".gsh"];
 const GROOVY_FILENAMES = ["Jenkinsfile", "build.gradle", "settings.gradle"];
 
 describe("groovy file kind (#5235 slice 1)", () => {
-	it.each(GROOVY_EXTENSIONS)("classifies %s as groovy", (extension) => {
-		expect(detectFileKind(`/repo/src/Main${extension}`)).toBe("groovy");
-		expect(detectFileKind(`/repo/src/Main${extension.toUpperCase()}`)).toBe(
-			"groovy",
-		);
+	it("classifies every Groovy extension", () => {
+		for (const extension of GROOVY_EXTENSIONS) {
+			expect(detectFileKind(`/repo/src/Main${extension}`), extension).toBe(
+				"groovy",
+			);
+			expect(
+				detectFileKind(`/repo/src/Main${extension.toUpperCase()}`),
+				extension,
+			).toBe("groovy");
+		}
 	});
 
-	it.each(GROOVY_FILENAMES)("classifies the name %s as groovy", (name) => {
-		expect(detectFileKind(`/repo/${name}`)).toBe("groovy");
-		expect(detectFileKind(`/repo/app/${name}`)).toBe("groovy");
+	it("classifies every Groovy build and pipeline name", () => {
+		for (const name of GROOVY_FILENAMES) {
+			expect(detectFileKind(`/repo/${name}`), name).toBe("groovy");
+			expect(detectFileKind(`/repo/app/${name}`), name).toBe("groovy");
+		}
 	});
 
 	it("leaves the neighbours of the Groovy names where they were", () => {
