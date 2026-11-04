@@ -169,8 +169,8 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		expect(runnerRowsFor(rows, untouched)).toEqual([]);
 	});
 
-	// Recurrence prevented (Greptile T4 on #5244 r3, AGENTS.md "a language-neutral
-	// rule needs a non-TS row"): every case above is TypeScript, so a dispatch
+	// Recurrence prevented (Greptile T4 on #5244 r3: a language-neutral dispatch
+	// needs a non-TypeScript row): every case above is TypeScript, so a dispatch
 	// that only worked for the `.ts` pipeline would pass. The rewrite adds a
 	// `hashlib.md5`, which the bundled Python tree-sitter rule `python-weak-hash`
 	// blocks (severity error), so the Python file must reach the dispatcher and
