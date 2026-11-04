@@ -16,6 +16,7 @@ const ROOT = resolve(import.meta.dirname, "../..");
 type Step = { uses?: string; with?: Record<string, string | boolean> };
 type Job = {
 	name?: string;
+	uses?: string;
 	needs?: string | string[];
 	if?: string;
 	"continue-on-error"?: boolean;
@@ -123,13 +124,23 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 	// Recurrence (#5275): the PR-time `codeql` job returning to ci.yml would put
 	// the 13-minute scan back on every PR. Asserted on the parsed workflow, so a
 	// comment that names codeql-action is not a step (#5280 r1: a raw-text scan
-	// reded on a comment in ci.yml).
+	// reded on a comment in ci.yml). Any case, and job-level `uses:` too: GitHub
+	// reads action references case-insensitively, and a job that calls a
+	// reusable workflow runs that whole workflow.
 	it("keeps ci.yml free of any CodeQL job or codeql-action step", () => {
 		const jobs = Object.entries(load("ci.yml").jobs);
 		expect(
-			jobs.filter(([id, job]) => /codeql/i.test(`${id} ${job.name ?? ""}`)),
+			jobs.filter(([id, job]) =>
+				/codeql/i.test(`${id} ${job.name ?? ""} ${job.uses ?? ""}`),
+			),
 		).toEqual([]);
-		expect(jobs.flatMap(([, job]) => codeqlSteps(job))).toEqual([]);
+		expect(
+			jobs.flatMap(([, job]) =>
+				(job.steps ?? []).filter((step) =>
+					/codeql/i.test(String(step.uses ?? "")),
+				),
+			),
+		).toEqual([]);
 	});
 
 	// Recurrence: a workflow-level `security-events: write` hands the SARIF
