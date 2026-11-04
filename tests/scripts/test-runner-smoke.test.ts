@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import { stripCommentsAndStrings } from "../support/session-state-scan.js";
 import {
 	classifyPlantedFailure,
 	evaluateTestRunnerRow,
@@ -134,5 +135,19 @@ describe("scheduled workflow", () => {
 		// Both commands run; a red first command must not hide the second.
 		expect(run.match(/\|\| status=1/g)).toHaveLength(2);
 		expect(run).toContain('exit "$status"');
+	});
+});
+
+describe("smoke-tools.mjs entry", () => {
+	// Recurrence prevented: the layer exists but `main()` stops dispatching it,
+	// or exits 0 whatever the failure count, so a planted-failure row going red
+	// never fails the nightly step (the #5257 drift would stay silent).
+	it("dispatches --test-runners and exits non-zero on any failed row", () => {
+		const code = stripCommentsAndStrings(
+			readFileSync(resolve(ROOT, "scripts/smoke-tools.mjs"), "utf8"),
+		);
+		expect(code).toMatch(
+			/if \(testRunners\) \{\s*process\.exit\(\(await runTestRunnerSmoke\(\{ verbose \}\)\) > 0 \? 1 : 0\);/,
+		);
 	});
 });
