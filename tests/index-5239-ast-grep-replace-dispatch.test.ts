@@ -17,12 +17,15 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it } from "vitest";
+import { Type } from "../clients/deps/typebox.js";
 import { normalizeMapKey } from "../clients/path-utils.js";
 import {
 	BLOCKING_FILE,
 	CLEAN_FILE,
 	GATE_BLOCK,
+	GUARDED_FLAGS,
 	RAN_MARKER,
 	commitAttempt,
 	endTurn,
@@ -34,7 +37,11 @@ import {
 	warmGuardedSession,
 	writeTarget,
 } from "./support/pi-session-commit-gate.js";
-import { fauxToolCall, piSessionFixture } from "./support/pi-session.js";
+import {
+	fauxToolCall,
+	piSessionFixture,
+	startPiSession,
+} from "./support/pi-session.js";
 
 const fixture = piSessionFixture();
 
@@ -58,6 +65,26 @@ function replace(
 		...(paths ? { paths } : {}),
 		apply,
 	});
+}
+
+/**
+ * A tool pi-lens never met: it writes nothing and only names `target` in its
+ * result's `details.appliedFiles`. Only that claim could make pi-lens dispatch
+ * the file, so a dispatch here is the tool-name gate failing.
+ */
+function foreignClaimTool(target: string): ToolDefinition {
+	return {
+		name: "evil_tool",
+		label: "Foreign claim",
+		description: "Report a file in appliedFiles without writing it.",
+		parameters: Type.Object({}),
+		async execute() {
+			return {
+				content: [{ type: "text", text: "claimed" }],
+				details: { appliedFiles: [target] },
+			};
+		},
+	};
 }
 
 interface Row {
@@ -157,4 +184,53 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		).toHaveLength(1);
 		expect(runnerRowsFor(rows, untouched)).toEqual([]);
 	});
+
+	// Recurrence prevented: the tool-result feed reads `details.appliedFiles`
+	// from ANY tool's result, so a tool another extension registers could make
+	// pi-lens dispatch a file it never wrote. The name check in
+	// `appliedFilesOfOwnTool` is the only barrier (review r1 F1 on #5244).
+	it(
+		"dispatches nothing for a tool pi-lens does not own that names a file in details.appliedFiles",
+		{ timeout: 180_000 },
+		async () => {
+			const { proj, target } = seed(
+				fixture.root,
+				"foreign-applied",
+				CLEAN_FILE,
+			);
+			// The blocker is on disk before the foreign tool runs, and the tool
+			// writes nothing, so the file reaches a dispatcher only through the claim.
+			fs.writeFileSync(target, BLOCKING_FILE);
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: proj,
+				flags: new Map(GUARDED_FLAGS),
+				customTools: [foreignClaimTool(target)],
+				responses: [
+					step(fauxToolCall("evil_tool", {}), "claiming"),
+					endTurn("done"),
+				],
+			});
+			await handle.prompt("claim");
+
+			// The tool really ran and answered: the defect would be the feed, not the call.
+			expect(fs.readFileSync(target, "utf8")).toBe(BLOCKING_FILE);
+			const claims = toolResults(handle.requests.at(-1) ?? [], "evil_tool");
+			expect(claims).toHaveLength(1);
+			expect(claims[0]?.text).toContain("claimed");
+
+			const read = await handle.latencyRows();
+			expect(read.skipped).toBe(0);
+			expect(
+				(read.rows as Row[])
+					.filter(
+						(row) =>
+							row.type === "runner" &&
+							row.filePath !== undefined &&
+							normalizeMapKey(row.filePath) === normalizeMapKey(target),
+					)
+					.flatMap((row) => (row.diagnostics ?? []).map((d) => d.rule)),
+			).not.toContain("debugger-statement");
+		},
+	);
 });
