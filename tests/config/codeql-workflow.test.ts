@@ -5,9 +5,9 @@ import yaml from "../../clients/deps/js-yaml.js";
 import { isAdvisoryCheck } from "../../scripts/lib/ci-checks.mjs";
 
 // #3801 / #3869: CodeQL moved from GitHub default setup to a committed
-// advanced workflow. codeql.yml covers master pushes and the weekly scan; the
-// PR-time analysis is the advisory `codeql` job in ci.yml. Each assertion
-// names the regression it keeps out. Advisory classification itself
+// advanced workflow. Since #5275 codeql.yml is the only CodeQL entry point and
+// runs on a daily schedule or a dispatch: no master-push run and no PR-time
+// job in ci.yml. Each assertion names the regression it keeps out. Advisory classification itself
 // (`isAdvisoryCheck`) is asserted on the names EXPANDED from the YAML, never
 // on a hand-written copy of them.
 
@@ -47,7 +47,6 @@ function expandNames(job: Job): string[] {
 	);
 }
 
-const codeqlJob = () => load("ci.yml").jobs.codeql;
 const baselineJob = () => load("codeql.yml").jobs.analyze;
 const uploadJob = () => load("codeql.yml").jobs.upload;
 const codeqlSteps = (job: Job) =>
@@ -55,61 +54,30 @@ const codeqlSteps = (job: Job) =>
 		String(entry.uses).startsWith("github/codeql-action/"),
 	);
 
-function ifClauses(condition: string): string[] {
-	return condition
-		.replace(/^\$\{\{\s*|\s*\}\}$/g, "")
-		.split(" && ")
-		.map((clause) => clause.trim())
-		.sort();
-}
-
-const codeqlIfClauses = [
-	"github.event_name == 'pull_request'",
-	"needs.heavy-gate.outputs.ready == 'true'",
-].sort();
-
 describe("#3801 CodeQL advanced-setup workflow contract", () => {
 	// Recurrence: a committed workflow with no `name:` shows up in the Actions
 	// UI and in check-run groupings under its file path.
-	it("names the workflow and gives both workflows' codeql-action steps a full-SHA pin", () => {
+	it("names the workflow and gives its codeql-action steps a full-SHA pin", () => {
 		expect(load("codeql.yml").name).toBe("CodeQL");
-		for (const job of [codeqlJob(), baselineJob()]) {
-			const steps = codeqlSteps(job);
-			expect(steps.map((entry) => entry.uses?.split("@")[0])).toEqual([
-				"github/codeql-action/init",
-				"github/codeql-action/analyze",
-			]);
-		}
-		for (const file of ["codeql.yml", "ci.yml"]) {
-			const raw = readFileSync(
-				resolve(ROOT, ".github/workflows", file),
-				"utf8",
-			);
-			for (const line of raw.split("\n")) {
-				if (!/^\s*-?\s*uses:\s*github\/codeql-action\//.test(line)) continue;
-				// The same pin style ci.yml uses: `@<40 hex> # vN`.
-				expect(line).toMatch(/@[0-9a-f]{40} # v\d+(\.\d+\.\d+)?$/);
-			}
-		}
-	});
-
-	// Recurrence: bumping one workflow's codeql-action pin and not the other's
-	// leaves PR analysis and the baseline on different CodeQL engines, so a PR
-	// alert can be invisible on master (or the reverse).
-	it("pins the same codeql-action commit, language set and path filter in ci.yml and codeql.yml", () => {
-		const pr = codeqlSteps(codeqlJob());
-		const baseline = codeqlSteps(baselineJob());
-		expect(pr.map((entry) => entry.uses)).toEqual(
-			baseline.map((entry) => entry.uses),
+		expect(
+			codeqlSteps(baselineJob()).map((entry) => entry.uses?.split("@")[0]),
+		).toEqual(["github/codeql-action/init", "github/codeql-action/analyze"]);
+		const raw = readFileSync(
+			resolve(ROOT, ".github/workflows", "codeql.yml"),
+			"utf8",
 		);
-		expect(pr[0].with).toEqual(baseline[0].with);
-		expect(codeqlJob().strategy?.matrix?.language).toEqual(
-			baselineJob().strategy?.matrix?.language,
-		);
+		let pinned = 0;
+		for (const line of raw.split("\n")) {
+			if (!/^\s*-?\s*uses:\s*github\/codeql-action\//.test(line)) continue;
+			pinned += 1;
+			// The same pin style ci.yml uses: `@<40 hex> # vN`.
+			expect(line).toMatch(/@[0-9a-f]{40} # v\d+(\.\d+\.\d+)?$/);
+		}
+		expect(pinned).toBe(3);
 	});
 
 	it("analyzes actions and javascript-typescript with build-mode none and the three path ignores", () => {
-		const job = codeqlJob();
+		const job = baselineJob();
 		expect(job.strategy?.matrix?.language).toEqual([
 			"actions",
 			"javascript-typescript",
@@ -125,42 +93,52 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 		);
 	});
 
-	// Recurrence: a PR-time codeql job that also runs on master pushes uploads
-	// the same SARIF category codeql.yml already uploaded for that commit.
-	it("keeps codeql.yml off pull_request and the ci.yml job on pull_request only", () => {
-		const triggers = Object.keys(load("codeql.yml").on ?? {}).sort();
-		expect(triggers).toEqual(["push", "schedule", "workflow_dispatch"]);
-		const condition = String(codeqlJob().if);
-		expect(condition).not.toContain("||");
-		expect(ifClauses(condition)).toEqual(codeqlIfClauses);
+	// Recurrence (#5275): CodeQL ran a 13-minute scan on every master push (about
+	// 17 a day) plus a PR job whose check read "1 configuration not found". A
+	// restored `push` or `pull_request` trigger brings that cost back.
+	it("runs only on a daily schedule and on dispatch", () => {
+		const workflow = load("codeql.yml");
+		expect(Object.keys(workflow.on ?? {}).sort()).toEqual([
+			"schedule",
+			"workflow_dispatch",
+		]);
+		const schedule = (workflow.on?.schedule ?? []) as Array<{ cron: string }>;
+		const crons = schedule.map((entry) => entry.cron);
+		expect(crons).toHaveLength(1);
+		const [minute, hour, dayOfMonth, month, dayOfWeek, ...rest] =
+			crons[0].split(/\s+/);
+		// Daily: every day-of-month, month and weekday, one fixed hour.
+		expect([dayOfMonth, month, dayOfWeek, rest.length]).toEqual([
+			"*",
+			"*",
+			"*",
+			0,
+		]);
+		expect(hour).toMatch(/^\d+$/);
+		// Off the top of the hour, where scheduled runs queue.
+		expect(minute).toMatch(/^\d+$/);
+		expect(minute).not.toBe("0");
 	});
 
-	// Recurrence (#3807 second lander): the PR-time analysis is one of the heavy
-	// advisory jobs behind `heavy-gate`. A `needs:` on the four required jobs
-	// directly would start CodeQL beside the heavy gate's other jobs, on a docs-only
-	// diff (the gate is skipped there) and without the gate's lint.yml check;
-	// a missing `ready` clause would run it on a not-ready gate.
-	it("waits on heavy-gate only and runs for a ready gate on pull_request", () => {
-		const job = codeqlJob();
-		expect(asList(job.needs)).toEqual(["heavy-gate"]);
-		const condition = String(job.if);
-		expect(condition).not.toContain("||");
-		expect(ifClauses(condition)).toEqual(codeqlIfClauses);
-		// Advisory red on a fork PR (read-only token, SARIF upload refused) is
-		// accepted; a silent skip is not.
-		expect(condition).not.toMatch(/fork/);
-		expect(condition).not.toMatch(/head\.repo/);
+	// Recurrence (#5275): the PR-time `codeql` job returning to ci.yml would put
+	// the 13-minute scan back on every PR.
+	it("keeps ci.yml free of any CodeQL job or codeql-action step", () => {
+		const ci = load("ci.yml");
+		expect(ci.jobs.codeql).toBeUndefined();
+		const raw = readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8");
+		expect(raw).not.toContain("github/codeql-action");
+		expect(raw).not.toMatch(/^\s+name: CodeQL\b/m);
 	});
 
 	// Recurrence: a workflow-level `security-events: write` hands the SARIF
 	// upload scope to every job in ci.yml.
 	it("holds security-events: write at job scope only", () => {
 		expect(load("ci.yml").permissions).toBeUndefined();
-		expect(codeqlJob().permissions).toEqual({
-			"security-events": "write",
-			actions: "read",
-			contents: "read",
-		});
+		expect(
+			Object.entries(load("ci.yml").jobs)
+				.filter(([, job]) => job.permissions?.["security-events"] !== undefined)
+				.map(([id]) => id),
+		).toEqual([]);
 		expect(load("codeql.yml").permissions).toEqual({ contents: "read" });
 	});
 
@@ -184,8 +162,10 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 			contents: "read",
 		});
 		expect(asList(uploadJob().needs)).toEqual(["analyze"]);
-		expect(String(uploadJob().if)).toContain(
-			"github.event_name == 'schedule' || github.ref == 'refs/heads/master'",
+		// Admits the daily schedule and a dispatch on master, nothing else: a
+		// branch dispatch keeps the SARIF as an artifact only.
+		expect(String(uploadJob().if)).toBe(
+			"${{ !cancelled() && (github.event_name == 'schedule' || github.ref == 'refs/heads/master') }}",
 		);
 	});
 
@@ -225,14 +205,8 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 	// classify as advisory is a GATING check to ci-verdict and the merge train,
 	// so an unrelated alert or an upload refusal would block every merge.
 	it("ends every expanded CodeQL job name in (advisory) and classifies each as advisory", () => {
-		const names = [
-			...expandNames(codeqlJob()),
-			...expandNames(baselineJob()),
-			...expandNames(uploadJob()),
-		];
+		const names = [...expandNames(baselineJob()), ...expandNames(uploadJob())];
 		expect(names.sort()).toEqual([
-			"CodeQL (actions) (advisory)",
-			"CodeQL (javascript-typescript) (advisory)",
 			"CodeQL baseline (actions) (advisory)",
 			"CodeQL baseline (javascript-typescript) (advisory)",
 			"CodeQL baseline upload (actions) (advisory)",
@@ -242,15 +216,14 @@ describe("#3801 CodeQL advanced-setup workflow contract", () => {
 			expect(name.endsWith("(advisory)")).toBe(true);
 			expect(isAdvisoryCheck(name)).toBe(true);
 		}
-		// The two workflows must not post the same check name.
+		// Distinct check names, one per job and language.
 		expect(new Set(names).size).toBe(names.length);
 		// Advisory through the suffix, not through a tolerance that would hide a
 		// broken pin behind a green job.
-		expect(codeqlJob()["continue-on-error"]).not.toBe(true);
+		expect(baselineJob()["continue-on-error"]).not.toBe(true);
 	});
 
 	it("bounds both CodeQL jobs with timeout-minutes", () => {
-		expect(codeqlJob()["timeout-minutes"]).toBe(20);
 		expect(baselineJob()["timeout-minutes"]).toBe(20);
 		expect(uploadJob()["timeout-minutes"]).toBe(10);
 	});
