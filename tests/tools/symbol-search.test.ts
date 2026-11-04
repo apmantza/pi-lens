@@ -32,7 +32,10 @@ import {
 	symbolSearch,
 	type SymbolSearchResult,
 } from "../../clients/lens-engine.js";
-import { createSymbolSearchTool } from "../../tools/symbol-search.js";
+import {
+	SYMBOL_SEARCH_DESCRIPTION,
+	createSymbolSearchTool,
+} from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
 /** One rendered ranked row: `  1. <path>[ <line>] (score ...)`. */
@@ -98,6 +101,13 @@ function warmWordIndexSnapshot(
 }
 
 describe("symbol_search tool", () => {
+	it("describes the compound-suffix ext: contract, and the tool owns the sentence (#5136)", () => {
+		const tool = createSymbolSearchTool(() => "/tmp");
+		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);
+		expect(tool.description).toContain("ext:test.ts");
+		expect(tool.description).toMatch(/path suffix/i);
+	});
+
 	it("zero-hit output warns when the index is capped and exposes coverage (#928)", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-capped-");
 		try {
@@ -662,6 +672,50 @@ describe("symbol_search tool", () => {
 				const text = String(result.content[0]?.text);
 				expectOneTable(text);
 				expect(rankedFiles(text)).toEqual(["src/auth/login.ts"]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("ext: matches a compound suffix end to end, and -ext: subtracts it (#5136)", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-queryext-");
+			try {
+				const content = "export function authenticateUser(id) { return id; }";
+				const testFile = createTempFile(
+					env.tmpDir,
+					"src/auth/login.test.ts",
+					content,
+				);
+				const sourceFile = createTempFile(
+					env.tmpDir,
+					"src/auth/login.ts",
+					content,
+				);
+				warmWordIndexSnapshot(env.tmpDir, [
+					{ path: testFile, content },
+					{ path: sourceFile, content },
+				]);
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const positive = await tool.execute(
+					"1",
+					{ query: "ext:test.ts authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(rankedFiles(String(positive.content[0]?.text))).toEqual([
+					"src/auth/login.test.ts",
+				]);
+				const negative = await tool.execute(
+					"1",
+					{ query: "-ext:test.ts authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(rankedFiles(String(negative.content[0]?.text))).toEqual([
+					"src/auth/login.ts",
+				]);
 			} finally {
 				env.cleanup();
 			}

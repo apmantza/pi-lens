@@ -283,6 +283,49 @@ describe("buildWordIndexQueryFilter (#1450)", () => {
 		expect(withDot?.("src/tool.tsx")).toBe(false);
 	});
 
+	it("ext: matches by path suffix, so a compound suffix like test.ts works (#5136)", () => {
+		const compound = buildWordIndexQueryFilter([
+			{ key: "ext", value: "test.ts", negated: false },
+		]);
+		expect(compound?.("src/tool.test.ts")).toBe(true);
+		expect(compound?.("src/tool.ts")).toBe(false);
+		// The short form reaches the compound file too — suffix, not last-segment equality.
+		const short = buildWordIndexQueryFilter([
+			{ key: "ext", value: "ts", negated: false },
+		]);
+		expect(short?.("src/tool.test.ts")).toBe(true);
+		// A longer extension that merely ends in `ts` is not a `.ts` file.
+		expect(short?.("src/tool.tss")).toBe(false);
+	});
+
+	it("ext: is case-insensitive and tolerates a leading dot on a compound suffix (#5136)", () => {
+		const upper = buildWordIndexQueryFilter([
+			{ key: "ext", value: "TS", negated: false },
+		]);
+		expect(upper?.("src/tool.ts")).toBe(true);
+		const dottedCompound = buildWordIndexQueryFilter([
+			{ key: "ext", value: ".test.ts", negated: false },
+		]);
+		expect(dottedCompound?.("src/tool.test.ts")).toBe(true);
+		expect(dottedCompound?.("src/tool.ts")).toBe(false);
+	});
+
+	it("-ext:test.ts subtracts exactly the compound-suffix files (#5136, @Don-Yin)", () => {
+		const predicate = buildWordIndexQueryFilter([
+			{ key: "ext", value: "test.ts", negated: true },
+		]);
+		expect(predicate?.("src/tool.test.ts")).toBe(false);
+		expect(predicate?.("src/tool.ts")).toBe(true);
+	});
+
+	it("-ext:ts subtracts every file whose path ends in .ts (#5136)", () => {
+		const predicate = buildWordIndexQueryFilter([
+			{ key: "ext", value: "ts", negated: true },
+		]);
+		expect(predicate?.("src/tool.test.ts")).toBe(false);
+		expect(predicate?.("src/tool.py")).toBe(true);
+	});
+
 	it("file: substring-matches the (wordIndexKey-normalized) path", () => {
 		const predicate = buildWordIndexQueryFilter([
 			{ key: "file", value: "clients/", negated: false },
