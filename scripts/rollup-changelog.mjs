@@ -180,15 +180,15 @@ export const USER_RELEASE_LIMIT = 5;
 // One count line per release for pi's Extension Updates view (#5264). Added counts
 // as features, Fixed as fixes, and every other user-facing bucket (Changed,
 // Removed, Security, Deprecated, any other heading) as other changes. Internal
-// entries are not user-facing and stay out. The counts come from
-// parseSectionEntries, the parse summarizeSection renders from.
+// entries are not user-facing: parseSectionEntries counts them apart and never
+// buckets them. The counts come from parseSectionEntries, the parse
+// summarizeSection renders from.
 export function userCountLine(body) {
 	const { buckets } = parseSectionEntries(body);
 	let features = 0;
 	let fixes = 0;
 	let other = 0;
 	for (const [heading, items] of buckets) {
-		if (heading === INTERNAL_HEADING) continue;
 		if (heading === "Added") features += items.length;
 		else if (heading === "Fixed") fixes += items.length;
 		else other += items.length;
