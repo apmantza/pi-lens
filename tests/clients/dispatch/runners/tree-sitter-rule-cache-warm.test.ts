@@ -223,3 +223,71 @@ describe("tree-sitter runner — query batch reuse across the cache round-trip (
 		expect(observedCacheHits()).toEqual([false, true, true]);
 	}, 30_000);
 });
+
+// #5278 review (Greptile P2 and CodeRabbit): a project rule that declares
+// `predicates:` got a different batch identity on the warm dispatch. The loader
+// parses the field, RuleCache does not persist it, and the identity hashed it,
+// so the cold dispatch and every later one keyed apart. Recurrence guarded: a
+// rule field that the cache projection drops and the identity still hashes
+// splits the batch again on the second dispatch.
+describe("tree-sitter runner — batch reuse for a rule that declares predicates (#5260)", () => {
+	let envPredicates: RealRunnerEnv;
+	beforeAll(async () => {
+		envPredicates = makeRealRunnerEnv();
+		await assertGrammarAvailable("typescript");
+	});
+	afterAll(() => {
+		envPredicates?.cleanup();
+		_resetSharedTreeSitterClientForTests();
+	});
+
+	it("builds the batch once for a project rule with predicates, cold, warm and third", async () => {
+		logTreeSitter.mockClear();
+		_resetSharedTreeSitterClientForTests();
+		const client = getSharedTreeSitterClient();
+		if (!client) throw new Error("tree-sitter unavailable");
+		const buildBatch = vi.spyOn(
+			client as unknown as {
+				compileQueryBatchOnce: (...args: unknown[]) => Promise<unknown>;
+			},
+			"compileQueryBatchOnce",
+		);
+		const rule = path.join(
+			envPredicates.cwd,
+			"rules",
+			"tree-sitter-queries",
+			"typescript",
+			"proj-predicates-ts.yml",
+		);
+		fs.mkdirSync(path.dirname(rule), { recursive: true });
+		fs.writeFileSync(
+			rule,
+			[
+				"id: proj-predicates",
+				"name: Project Predicates",
+				"severity: warning",
+				"category: general",
+				'message: "predicates rule"',
+				"query: |",
+				"  (debugger_statement) @DBG",
+				"metavars: [DBG]",
+				"predicates:",
+				"  - type: eq",
+				"    var: DBG",
+				'    value: "debugger"',
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const source = "debugger;\n";
+		const cold = await treeSitterRunner.run(
+			envPredicates.addFile("cold.ts", source).ctx,
+		);
+		expect(firedRuleIds(cold)).toContain("proj-predicates");
+		await treeSitterRunner.run(envPredicates.addFile("warm.ts", source).ctx);
+		await treeSitterRunner.run(envPredicates.addFile("third.ts", source).ctx);
+		expect(buildBatch).toHaveBeenCalledTimes(1);
+		expect(observedCacheHits()).toEqual([false, true, true]);
+	}, 30_000);
+});

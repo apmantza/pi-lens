@@ -92,14 +92,17 @@ const QUERY_BATCH_MAX_LOAD_FAILURES = 3;
 
 /**
  * Rule fields a combined batch neither compiles nor hands to a result
- * consumer: documentation the loader reads from the YAML, which RuleCache
- * does not persist (#5260). The first dispatch in a project builds its batch
- * from the loader's objects, every later one from the cache's projection of
- * the same rules; hashing these fields gave the two different identities and
- * recompiled the batch on the second dispatch. A field missing from this set
- * is hashed, so a new rule field can only cost a rebuild, never serve a stale
- * batch. `runQueriesOnFile`'s two consumers (the dispatch runner and the
- * project scanner) read none of these.
+ * consumer: documentation the loader reads from the YAML, plus `predicates`.
+ * RuleCache persists none of them (#5260). The first dispatch in a project
+ * builds its batch from the loader's objects, every later one from the cache's
+ * projection of the same rules; hashing these fields gave the two different
+ * identities and recompiled the batch on the second dispatch. `predicates` is
+ * parsed by the loader and read by no code after that: the batch compiles the
+ * `query` text, where native `#eq?` predicates live (#5278 review). A field
+ * missing from this set is hashed, so a new rule field can only cost a
+ * rebuild, never serve a stale batch. A future reader of `predicates` removes
+ * it from this set. `runQueriesOnFile`'s two consumers (the dispatch runner and
+ * the project scanner) read none of these.
  */
 const BATCH_IDENTITY_IGNORED_FIELDS: ReadonlySet<string> = new Set([
 	"category",
@@ -108,6 +111,7 @@ const BATCH_IDENTITY_IGNORED_FIELDS: ReadonlySet<string> = new Set([
 	"cwe",
 	"owasp",
 	"confidence",
+	"predicates",
 ]);
 
 /**
