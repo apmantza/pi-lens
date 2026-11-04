@@ -8,10 +8,7 @@
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	getSgCommand,
-	resolveManagedToolClient,
-} from "./dispatch/runners/utils/runner-helpers.js";
+import { resolveManagedToolClient } from "./dispatch/runners/utils/runner-helpers.js";
 import { getProjectIgnoreGlobs } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
 import { walkUpDirs } from "./path-utils.js";
@@ -120,6 +117,22 @@ export interface SgScanResult {
 	status: number | null;
 	error?: string;
 	failure?: SgFailureKind;
+}
+
+const resolvedSgBrand: unique symbol = Symbol("resolved-sg-command");
+/**
+ * The ast-grep command THIS runner resolved (PATH, global bin, platform
+ * package, managed install, or the probed scoped `npx`). The brand symbol is
+ * not exported and the only producer is `SgRunner.getSgCommand`, so a spawn
+ * that needs the resolved binary cannot be handed a hand-built `{ cmd, args }`
+ * or the module sweep's `npx` fallback (`SgNpxFallbackCommand`): that is a
+ * compile error, not a runtime surprise (#5247, where the temp scans ran the
+ * fallback against a binary the instance had already found).
+ */
+export interface ResolvedSgCommand {
+	readonly [resolvedSgBrand]: true;
+	readonly cmd: string;
+	readonly argsPrefix: readonly string[];
 }
 
 const DEFAULT_EXEC_TIMEOUT_MS = 30_000;
@@ -692,11 +705,28 @@ export class SgRunner {
 	/**
 	 * Get the ast-grep command to use, plus any npx prefix arguments.
 	 */
-	private getSgCommand(): { cmd: string; argsPrefix: string[] } {
+	private getSgCommand(): ResolvedSgCommand {
 		return {
+			[resolvedSgBrand]: true,
 			cmd: this.sgPath || "ast-grep",
 			argsPrefix: this.sgArgsPrefix,
 		};
+	}
+
+	/**
+	 * THE spawn for a temp-rule scan: it takes a `ResolvedSgCommand`, so the
+	 * binary and its (possibly EMPTY) prefix come from this runner's resolution
+	 * and nowhere else, and `...this.sgSpawnOptions` isolates the npx case.
+	 */
+	private spawnResolved(
+		command: ResolvedSgCommand,
+		args: readonly string[],
+		options: Parameters<typeof safeSpawnAsync>[2],
+	): ReturnType<typeof safeSpawnAsync> {
+		return safeSpawnAsync(command.cmd, [...command.argsPrefix, ...args], {
+			...this.sgSpawnOptions,
+			...options,
+		});
 	}
 
 	private failureForSpawnResult(result: {
@@ -983,11 +1013,9 @@ export class SgRunner {
 		try {
 			({ sessionDir } = this.prepareTempScan(ruleId, ruleYaml));
 			const configFile = path.join(sessionDir, ".sgconfig.yml");
-			const { cmd: sgCmd, args: sgPre } = getSgCommand();
-			const result = await safeSpawnAsync(
-				sgCmd,
+			const result = await this.spawnResolved(
+				this.getSgCommand(),
 				[
-					...sgPre,
 					"scan",
 					"--config",
 					configFile,
@@ -996,7 +1024,6 @@ export class SgRunner {
 					dir,
 				],
 				{
-					...(sgCmd === "npx" ? getIsolatedNpxSpawnOptions() : {}),
 					timeout,
 					deadlineAt: options.deadlineAt,
 					signal: options.signal,
@@ -1044,9 +1071,8 @@ export class SgRunner {
 		try {
 			({ sessionDir } = this.prepareTempScan(ruleId, ruleYaml));
 			const configFile = path.join(sessionDir, ".sgconfig.yml");
-			const { cmd: sgCmd, args: sgPre } = getSgCommand();
+			const command = this.getSgCommand();
 			const scanArgs = [
-				...sgPre,
 				"scan",
 				"--config",
 				configFile,
@@ -1055,14 +1081,17 @@ export class SgRunner {
 				dir,
 			];
 			const spawnOptions = {
-				...(sgCmd === "npx" ? getIsolatedNpxSpawnOptions() : {}),
 				timeout,
 				deadlineAt: options.deadlineAt,
 				signal: options.signal,
 				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
 			};
 			if (!applyFixes) {
-				const result = await safeSpawnAsync(sgCmd, scanArgs, spawnOptions);
+				const result = await this.spawnResolved(
+					command,
+					scanArgs,
+					spawnOptions,
+				);
 				const scan = this.interpretScanResult(result, ["scan"]);
 				return scan.failure || scan.error
 					? { matches: [], error: scan.error }
@@ -1071,15 +1100,18 @@ export class SgRunner {
 			// Apply: capture matches BEFORE writing — once --update-all applies
 			// the fix the rule no longer matches, so a post-apply json pass would
 			// report zero even on a successful apply. Count first, then write.
-			const jsonResult = await safeSpawnAsync(sgCmd, scanArgs, spawnOptions);
+			const jsonResult = await this.spawnResolved(
+				command,
+				scanArgs,
+				spawnOptions,
+			);
 			const scan = this.interpretScanResult(jsonResult, ["scan"]);
 			if (scan.failure || scan.error) {
 				return { matches: [], error: scan.error };
 			}
-			const applyResult = await safeSpawnAsync(
-				sgCmd,
+			const applyResult = await this.spawnResolved(
+				command,
 				[
-					...sgPre,
 					"scan",
 					"--config",
 					configFile,
