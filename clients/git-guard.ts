@@ -56,6 +56,13 @@ export interface TurnEndFindingsCache {
 	blockingFiles?: string[] | undefined;
 	/** Context has consumed the message, but the guard still owns the state. */
 	consumed?: boolean;
+	/**
+	 * #5240: `content` is the repeat of blockers the model was already told
+	 * about (`blockerRepeatContent`), staged by a duplicate turn end. A pi
+	 * request takes it only as the first request of a prompt; any other request
+	 * leaves it staged. Absent on every record released before #5240.
+	 */
+	repeat?: boolean | undefined;
 	testFailures?: boolean;
 	testFailureContent?: string;
 	testFailureFiles?: string[];
@@ -1743,6 +1750,8 @@ function retireOwnPartition(
 		// #4943: the content is now the owner's blocker text, not the message
 		// the composer addressed.
 		deliverTo: undefined,
+		// #5240: and no longer a repeat.
+		repeat: undefined,
 	});
 	return false;
 }
@@ -2448,6 +2457,8 @@ export function clearGitGuardTestFailure(
 	writeGitGuardRecord(cacheManager, runtime, cwd, {
 		...existing,
 		content: blockerContent,
+		// #5240: the content is the blocker text now, not a repeat message.
+		repeat: undefined,
 		blockerContent,
 		affectedFiles,
 		testFailures: remainingFiles.length > 0,

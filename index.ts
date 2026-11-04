@@ -4931,12 +4931,26 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// `telemetrySessionId`, so that id would read its own delivery as
 			// another session's (#4961 review F1).
 			const readerSessionId = prefixSessionId ?? runtime.telemetrySessionId;
-			const turnEndFindings = consumeTurnEndFindings(
+			// #5240: a repeat of blockers the model was already told about rides
+			// only the request that opens a prompt, pi's first request of the
+			// turn; the mid-run requests of one prompt keep #4921's one delivery.
+			const consumedTurnEnd = consumeTurnEndFindings(
 				cacheManager,
 				cwd,
 				runtime,
 				readerSessionId,
+				undefined,
+				existingMessages.length > 0 &&
+					isPlainUserPrompt(existingMessages[existingMessages.length - 1]),
 			);
+			// #5240 under retain: a retained entry that already carries the
+			// repeat's blockers keeps showing them, so the repeat adds nothing and
+			// spends none of the 64-entry cap.
+			const turnEndFindings =
+				consumedTurnEnd?.repeatBody !== undefined &&
+				rebuilt?.holds(consumedTurnEnd.repeatBody)
+					? undefined
+					: consumedTurnEnd;
 			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);
 			const testFindings = consumeStagedTestRunnerFindings({
 				cwd,

@@ -18,7 +18,23 @@ import {
 export const AUTOMATION_FRAMING =
 	"[pi-lens automated check — not a user request] ";
 
-type ContextResult = { messages: Array<{ role: "user"; content: string }> };
+type ContextResult = {
+	messages: Array<{ role: "user"; content: string }>;
+	/** #5240: the blocker text of a repeat message, for the retained-injection check. */
+	repeatBody?: string;
+};
+
+/**
+ * #5240: opens a turn-end message that repeats blockers the model was already
+ * told about. "Historical finding" means the workspace changed since capture,
+ * so a repeat must not borrow it.
+ */
+export const BLOCKER_REPEAT_HEADING =
+	"Still unresolved from an earlier turn (already reported, not new):";
+
+export function blockerRepeatContent(blockers: string): string {
+	return `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+}
 
 // #1432 review (S3b): a multi-file bash write can carry hundreds of changed
 // paths, one `reasons` entry apiece — logging all of them shrinks the
@@ -171,6 +187,9 @@ export function consumeTurnEndFindings(
 	runtime?: RuntimeCoordinator,
 	sessionId?: string,
 	address?: string,
+	// #5240: a repeat record waits for a request that opens a prompt (pi's
+	// context hook says which); every other reader takes it as any message.
+	atPromptTail = true,
 ): ContextResult | undefined {
 	const findings = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
 		"turn-end-findings",
@@ -179,24 +198,10 @@ export function consumeTurnEndFindings(
 	if (!findings?.data?.content || findings.data.consumed === true) return;
 	if (addressedElsewhere(findings.data, sessionId, address) !== undefined)
 		return;
+	if (findings.data.repeat === true && !atPromptTail) return;
 	const validation = validateAdvisoryProvenance(findings.data, cwd, runtime);
 	logProvenanceDecision(validation, findings.data.provenance, "turn-end", cwd);
-
-	// A blocker record is also the opt-in commit gate's durable state. Mark the
-	// context message consumed without deleting the record; clean/advisory-only
-	// records retain the historical consume-and-clear behavior.
-	if (
-		findings.data.hasBlockers === true &&
-		typeof findings.data.sessionId === "string"
-	) {
-		cacheManager.writeCache(
-			"turn-end-findings",
-			{ ...findings.data, consumed: true },
-			cwd,
-		);
-	} else {
-		cacheManager.clearCache("turn-end-findings", cwd);
-	}
+	settleStagedTurnEnd(cacheManager, cwd, findings.data);
 	if (validation.allFilesDeleted) return;
 	return {
 		messages: [
@@ -206,7 +211,56 @@ export function consumeTurnEndFindings(
 				findings.data.provenance,
 			),
 		],
+		...(findings.data.repeat === true &&
+		findings.data.content.startsWith(BLOCKER_REPEAT_HEADING)
+			? {
+					repeatBody: findings.data.content.slice(
+						BLOCKER_REPEAT_HEADING.length + 2,
+					),
+				}
+			: {}),
 	};
+}
+
+/**
+ * A blocker record is also the opt-in commit gate's durable state. Mark the
+ * context message consumed without deleting the record; clean/advisory-only
+ * records retain the historical consume-and-clear behavior.
+ */
+function settleStagedTurnEnd(
+	cacheManager: CacheManager,
+	cwd: string,
+	data: Partial<TurnEndFindingsCache>,
+): void {
+	if (data.hasBlockers === true && typeof data.sessionId === "string") {
+		cacheManager.writeCache(
+			"turn-end-findings",
+			{ ...data, consumed: true },
+			cwd,
+		);
+	} else {
+		cacheManager.clearCache("turn-end-findings", cwd);
+	}
+}
+
+/**
+ * #5240: a repeat staged for the next prompt is void once a turn end finds no
+ * blocker left, so it is retired the way a delivery would retire it. Any other
+ * record is untouched.
+ */
+export function retireStagedBlockerRepeat(
+	cacheManager: CacheManager,
+	cwd: string,
+	deliverTo: string,
+): void {
+	const staged = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
+		"turn-end-findings",
+		cwd,
+	);
+	if (staged?.data?.repeat !== true || staged.data.consumed === true) return;
+	// Another session's staged repeat is that session's to take or retire.
+	if (staged.data.deliverTo !== deliverTo) return;
+	settleStagedTurnEnd(cacheManager, cwd, staged.data);
 }
 
 /** Read test findings without consuming them; used by acknowledged IPC delivery. */
