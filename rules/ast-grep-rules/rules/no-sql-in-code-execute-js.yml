@@ -59,8 +59,7 @@ note: |
   `SELECT` and `WITH` arms carry no word boundary, so
   `job.execute("selected from " + source)` still flags there, and its
   skip accepts real whitespace only, so an escaped `"\nSELECT ..."` is a
-  miss there. tests/config/sql-injection-alternation-drift.test.ts keeps
-  the rest of the alternation byte-identical to the sibling's copy.
+  miss there.
 
   Cost (#4804 review, measured on this head for the shared statement
   test): 2.2 to 23.7 ms per scanned file, 231 to 468 of 2,687 JS/TS files

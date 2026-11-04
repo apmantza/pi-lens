@@ -728,7 +728,7 @@ const DECLARED_EXCLUSIONS: Array<{ file: string; reason: string }> = [
 	{
 		file: path.join(CLIENTS_DIR, "format-events-publish.ts"),
 		reason:
-			'published v1 bus payload: `tool: "write" | "edit"` is the DECLARED type of pilens:format:queued, pinned by tests/config/files-touched-bus-conformance.test.ts. Widening it is #2421.',
+			'published v1 bus payload: `tool: "write" | "edit"` is the DECLARED type of pilens:format:queued. Widening it is #2421.',
 	},
 ];
 

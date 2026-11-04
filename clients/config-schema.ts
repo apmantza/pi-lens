@@ -4,11 +4,7 @@
  * A plain JSON-Schema-shaped object, per `config-core/schema.ts`: the same
  * value the validator runs on is the value #2416 publishes as
  * `docs/schema/pi-lens-config-v1.json`, so there is no compiler between the two
- * for drift to hide in. It is the FIRST real schema through the #2418 harness —
- * `tests/config/pi-lens-config-schema.test.ts` runs `assertSchemaStabilityTiers`
- * and `assertSchemaIdentityAnchor` over this object rather than over the
- * placeholder fixture, which is what makes those two assertions load-bearing
- * instead of self-referential.
+ * for drift to hide in.
  *
  * Three deliberate shapes:
  *
@@ -93,9 +89,7 @@ function opaque(tier: StabilityTier): ConfigSchemaNode {
  * inferred from the key's name: this is the ONE piece of validation the slice
  * adds, and it earns its place — pre-#2426 a `disabledServers` that was a
  * STRING reached `new Set(config.disabledServers)` and disabled one server per
- * CHARACTER. `tests/config/pi-lens-config-schema.test.ts` asserts every
- * `LEGACY_ROOT_LSP_KEYS` member has an entry here, so a new registry row cannot
- * land untyped.
+ * CHARACTER.
  */
 const LSP_KEY_TYPES: Readonly<Record<string, "object" | "array">> = {
 	servers: "object",
