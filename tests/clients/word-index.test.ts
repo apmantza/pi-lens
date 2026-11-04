@@ -296,6 +296,9 @@ describe("buildWordIndexQueryFilter (#1450)", () => {
 		expect(short?.("src/tool.test.ts")).toBe(true);
 		// A longer extension that merely ends in `ts` is not a `.ts` file.
 		expect(short?.("src/tool.tss")).toBe(false);
+		// The leading dot is the boundary: an extensionless name that ends in `ts`
+		// is not a `.ts` file (drop the dot and `ext:ts` matches `hints`).
+		expect(short?.("src/hints")).toBe(false);
 	});
 
 	it("ext: is case-insensitive and tolerates a leading dot on a compound suffix (#5136)", () => {
@@ -303,6 +306,8 @@ describe("buildWordIndexQueryFilter (#1450)", () => {
 			{ key: "ext", value: "TS", negated: false },
 		]);
 		expect(upper?.("src/tool.ts")).toBe(true);
+		// The file side folds too: an upper-case extension on disk still matches.
+		expect(upper?.("src/Tool.TS")).toBe(true);
 		const dottedCompound = buildWordIndexQueryFilter([
 			{ key: "ext", value: ".test.ts", negated: false },
 		]);

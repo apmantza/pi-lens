@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { stripSource } from "../support/sweep-kit.js";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { toPosix } from "../../clients/path-utils.js";
 import {
@@ -114,8 +115,17 @@ describe("symbol_search tool", () => {
 			new URL("../../mcp/server.ts", import.meta.url),
 			"utf8",
 		);
-		expect(serverSource).toMatch(
+		// Comment-blanked code, string contents kept: the specifier is itself a
+		// string literal. A commented-out import or call must not pass (Greptile,
+		// #5282: the raw-source regex accepted `// import { ... }`).
+		const serverCode = stripSource(serverSource, { strings: "keep" });
+		expect(serverCode).toMatch(
 			/import \{[^}]*SYMBOL_SEARCH_DESCRIPTION[^}]*\} from "\.\.\/tools\/symbol-search\.js";/,
+		);
+		// The MCP description is the pi constant routed through the MCP name
+		// translator, so it names pilens_* tools (#5136 F1).
+		expect(serverCode).toMatch(
+			/translateGuidanceToolNames\(\s*SYMBOL_SEARCH_DESCRIPTION\s*,\s*"mcp"\s*\)/,
 		);
 		// No second literal of the sentence: the MCP surface resolves to the same
 		// exported constant the pi tool uses, so the two cannot drift.

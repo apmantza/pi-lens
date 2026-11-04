@@ -101,6 +101,7 @@ import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
 import {
 	resolveLensToolEnabled,
 	toolRegistryEntryForMcp,
+	translateGuidanceToolNames,
 } from "../clients/tool-config.js";
 import {
 	endSituationalToolTelemetry,
@@ -728,7 +729,7 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_symbol_search",
-		description: SYMBOL_SEARCH_DESCRIPTION,
+		description: translateGuidanceToolNames(SYMBOL_SEARCH_DESCRIPTION, "mcp"),
 		inputSchema: {
 			type: "object",
 			properties: {
