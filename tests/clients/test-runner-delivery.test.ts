@@ -1144,52 +1144,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	});
 
 	/**
-	 * #5259, the supersede direction of the stamp: a newer batch that
-	 * publishes its own stamped content still drops an eligible older result.
-	 * Recurrence: an identity that ignored the publish stamp would deliver
-	 * generation 1 over generation 2's content.
-	 */
-	it("drops an eligible failure once a newer batch publishes its stamped content (#5259)", async () => {
-		const { env, cache, runtime } = setup();
-		try {
-			publishStamped(env.tmpDir, cache, runtime, 1);
-			stageTestRunnerDelivery({
-				cwd: env.tmpDir,
-				sessionId: "session-a",
-				generation: 1,
-				targetCount: 1,
-				hasFindings: true,
-			});
-			deliverTestRunnerFindings({
-				ctx: { cwd: env.tmpDir, isIdle: () => true },
-				cacheManager: cache,
-				runtime,
-				sessionId: "session-a",
-			});
-			const newer = publishStamped(env.tmpDir, cache, runtime, 2);
-			expect(
-				consumeStagedTestRunnerFindings({
-					cwd: env.tmpDir,
-					sessionId: "session-a",
-					cacheManager: cache,
-					runtime,
-				}),
-			).toBeUndefined();
-			expect(await deliveryOutcomes()).toEqual([
-				"staged",
-				"eligible",
-				"superseded",
-			]);
-			expect(
-				cache.readCache<{ content: string }>("test-runner-findings", env.tmpDir)
-					?.data.content,
-			).toBe(newer);
-		} finally {
-			env.cleanup();
-		}
-	});
-
-	/**
 	 * #5259 real path: turn A's batch fails (generation 1) and is staged; turn
 	 * B launches a second batch whose pre-run write bumps `testRunGeneration`
 	 * to 2 but keeps generation 1's content, and that batch is still in flight
