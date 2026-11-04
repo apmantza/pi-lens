@@ -351,7 +351,9 @@ the whole list. Lists under different keys are unioned, so a global `k.select:
 [x]` and a nearer file's `k2.select: [y]` keep both `x` and `y`.
 
 In both lists a member that is not a string, or a value that is not an array,
-is dropped and the valid members keep their effect. The global file reports
+is dropped and the valid members keep their effect. A string member is trimmed
+before it is matched, so `" ra "` names `ra`, and a blank member is dropped. The
+global file reports
 each one with a `PILENS_CFG_0005` notice. A project or nested file reports a
 value that is not an array, or a list whose members are all dropped, with the
 same notice; a non-string member beside a valid string is dropped without one.

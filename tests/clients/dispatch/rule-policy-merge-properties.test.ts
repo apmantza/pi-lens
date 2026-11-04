@@ -315,7 +315,11 @@ const cleanMembers = fc.oneof(
 	{ weight: 1, arbitrary: blankMemberArb },
 );
 const idOnlyMembers = idMemberArb;
-/** Select members: a padded or blank entry would open the allowlist, so ids and junk only. */
+/**
+ * Select members: ids and junk only. The map trims a padded member and drops a
+ * blank one (#5250 round 3). rule-disable-union.test.ts pins that, because this
+ * oracle does not model padded or blank members.
+ */
 const dirtySelectMembers = fc.oneof(
 	{ weight: 4, arbitrary: idMemberArb },
 	{ weight: 3, arbitrary: junkMemberArb },
@@ -425,10 +429,10 @@ function expectedDisabled(docs: readonly RulesValue[]): Set<string> {
 }
 
 /**
- * The bases a padded `disable` member names. A hand-padded id (`" ra "`) does
- * not match `ra` in the resolved value today (the legacy project parser trims,
- * the dispatch path does not), so the oracle leaves those verdicts open rather
- * than pinning either reading.
+ * The bases a padded `disable` member names. A hand-padded id (`" ra "`) names
+ * `ra` on the dispatch path since #5250 round 3: the map trims it, as the legacy
+ * project parser does. The oracle still leaves those verdicts open, and
+ * rule-disable-union.test.ts pins them.
  */
 function paddedDisabled(docs: readonly RulesValue[]): Set<string> {
 	const out = new Set<string>();
