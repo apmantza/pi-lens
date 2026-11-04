@@ -55,6 +55,11 @@ const PYTEST_RUNS = {
 	fail_and_error: 1,
 	collect: 2,
 	empty: 5,
+	// #5270 r1: exit 1 with no error term (a coverage threshold, a plain failure).
+	cov_fail_under: 1,
+	errors_plural: 1,
+	failed_and_passed: 1,
+	failed_only: 1,
 } as const;
 type PytestRun = keyof typeof PYTEST_RUNS;
 function pytestRun(name: PytestRun): { stdout: string; status: number } {
@@ -516,17 +521,48 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 		expect(result.error).toBeUndefined();
 	});
 
-	it("a non-zero exit whose counts show no failure is an error even with passes counted", async () => {
-		const test = plantPython("a", "pass");
-		fake.pytest = { stdout: "1 passed in 0.01s\n", status: 1 };
-		const detected = client.detectRunner(root, test);
-		const result = await client.runTestFileAsync(test, root, {
-			runner: "pytest",
-			config: detected!.config,
-		});
-		expect(result.passed).toBe(1);
-		expect(result.error).toMatch(/exited with 1/);
-	});
+	// State table (exit x summary terms -> verdict), after exit 4 (config error)
+	// and exit 2 (interrupted), which keep their own messages:
+	//   0 | passed>0                   -> pass
+	//   1 | passed>0 failed=0 errors=0 -> pass (pytest-cov --cov-fail-under)
+	//   1 | passed=0 failed>0          -> failed, no error
+	//   1 | passed>0 failed>0          -> failed, no error
+	//   1 | errors>0 (singular/plural) -> error naming the count
+	//   1 or 3 | no summary line       -> error "no summary read"
+	//   5 | no tests                   -> no error, not a completed pass
+	// Recurrence prevented (r1 of #5276): the first cut errored on ANY non-zero
+	// exit that counted no failure, so a passing run under `--cov-fail-under`
+	// (exit 1) became a permanent runner error and kept the commit blocker.
+	it.each([
+		["cov_fail_under", 1, 0, undefined],
+		["failed_only", 0, 1, undefined],
+		["failed_and_passed", 1, 1, undefined],
+		["errors_plural", 0, 0, /^Pytest reported 2 errors /],
+	] as const)(
+		"%s (exit 1): passed=%i failed=%i, error %s",
+		async (run, passed, failed, error) => {
+			const result = await parse(run);
+			expect(result).toMatchObject({ passed, failed });
+			if (error === undefined) expect(result.error).toBeUndefined();
+			else expect(result.error).toMatch(error);
+		},
+	);
+
+	it.each([1, 3])(
+		"exit %i with no summary line is an error, never a clean result",
+		async (status) => {
+			const test = plantPython("a", "pass");
+			fake.pytest = { stdout: "garbled output\n", status };
+			const detected = client.detectRunner(root, test);
+			const result = await client.runTestFileAsync(test, root, {
+				runner: "pytest",
+				config: detected!.config,
+			});
+			expect(result.error).toBe(
+				`Pytest exited with ${status} (no summary read)`,
+			);
+		},
+	);
 
 	it("exit 5 (no tests collected) is not an error and is not a completed pass", async () => {
 		const result = await parse("empty");
@@ -560,32 +596,52 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 		expect(blocked()).toBe(false);
 	});
 
-	// Class sweep of #5270: PHPUnit and mix test carried the same pass-count
-	// guard (`passed === 0 && failed === 0`) as pytest, so a non-zero exit that
-	// counted passes and no failure (phpunit `--fail-on-warning`, a mix coverage
-	// threshold) read as a clean pass. The outputs are hand-shaped: no PHP or
-	// Elixir toolchain on the lane host (does not prove a real phpunit/mix run).
+	it("turn-end: a pass under --cov-fail-under (exit 1) still clears its blocker", async () => {
+		const test = plantPython("a", "cov_fail_under");
+		seedBlocker(test);
+		await turnEnd();
+		expect(dbgLines.join("\n")).toContain("all tests passed");
+		expect(blocked()).toBe(false);
+	});
+
+	// Class sweep of #5270: PHPUnit and mix test share pytest's guard shape
+	// (`exit !== 0 && passed === 0 && failed === 0`). It stays as on master:
+	// a non-zero exit that counted passes is the run's own threshold, not a
+	// runner error. The outputs are hand-shaped (no PHP or Elixir toolchain on
+	// the lane host; does not prove a real phpunit/mix run). Recurrence
+	// prevented: dropping the `failed === 0` arm marks every all-failing run
+	// (passed=0, failed>0) a runner error, which no other test pinned (F1 of
+	// r1 of #5276).
 	it.each([
 		[
 			"phpunit",
 			"parsePhpunitOutput",
 			"Tests: 3, Assertions: 3, Warnings: 1.\n",
+			"Tests: 1, Assertions: 1, Failures: 1.\n",
+			"PHP Fatal error: boom\n",
 			/PHPUnit runner error/,
 		],
 		[
 			"mix",
 			"parseMixTestOutput",
 			"3 tests, 0 failures\n",
+			"1 test, 1 failure\n",
+			"** (CompileError) boom\n",
 			/mix test runner error/,
 		],
 	])(
-		"%s: a non-zero exit with passes counted and no failure is an error result",
-		(runner, method, stdout, message) => {
+		"%s: exit 1 reads passes and failures as counted, no summary as an error",
+		(runner, method, passes, failing, noSummary, message) => {
 			const parse = (client as any)[method].bind(client);
-			const failing = parse(stdout, "", 1, "/p/x_test", runner);
-			expect(failing.passed).toBe(3);
-			expect(failing.error).toMatch(message);
-			expect(parse(stdout, "", 0, "/p/x_test", runner).error).toBeUndefined();
+			const passing = parse(passes, "", 1, "/p/x_test", runner);
+			expect(passing).toMatchObject({ passed: 3, failed: 0 });
+			expect(passing.error).toBeUndefined();
+			const failed = parse(failing, "", 1, "/p/x_test", runner);
+			expect(failed).toMatchObject({ passed: 0, failed: 1 });
+			expect(failed.error).toBeUndefined();
+			expect(parse(noSummary, "", 1, "/p/x_test", runner).error).toMatch(
+				message,
+			);
 		},
 	);
 });

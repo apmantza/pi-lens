@@ -2525,13 +2525,16 @@ export class TestRunnerClient {
 							// that test never ran, so `1 passed, 1 error` is no pass.
 							errors > 0
 							? `Pytest reported ${errors} error${errors === 1 ? "" : "s"} (collection or fixture)`
-							: // #5257/#5270: any other non-zero exit that counted no failure
-								// is a run whose outcome was not read (exit 3 internal error,
-								// exit 1 with an unrecognised summary), never a clean result.
-								// Exit 5 is pytest's own "no tests collected", a zero-test run
-								// `isCompletedPassResult` already refuses to count as a pass.
-								exitCode !== 0 && exitCode !== 5 && failed === 0
-								? `Pytest exited with ${exitCode} but counted no failure`
+							: // #5257: any other non-zero exit with no counted pass or failure
+								// is a run whose summary was not read (exit 3 internal error,
+								// exit 1 with an unrecognised summary), never a clean zero. A
+								// summary that counted passes and no failure is the run's own
+								// threshold (`--cov-fail-under` exits 1): a pass, not a runner
+								// error (#5276 r1). Exit 5 is pytest's own "no tests
+								// collected", a zero-test run `isCompletedPassResult` already
+								// refuses to count as a pass.
+								exitCode !== 0 && exitCode !== 5 && passed === 0 && failed === 0
+								? `Pytest exited with ${exitCode} (no summary read)`
 								: undefined,
 		};
 	}
@@ -2660,7 +2663,9 @@ export class TestRunnerClient {
 			failures,
 			duration,
 			error:
-				exitCode !== 0 && failed === 0 ? "PHPUnit runner error" : undefined,
+				exitCode !== 0 && passed === 0 && failed === 0
+					? "PHPUnit runner error"
+					: undefined,
 		};
 	}
 
@@ -2744,7 +2749,9 @@ export class TestRunnerClient {
 			failures,
 			duration,
 			error:
-				exitCode !== 0 && failed === 0 ? "mix test runner error" : undefined,
+				exitCode !== 0 && passed === 0 && failed === 0
+					? "mix test runner error"
+					: undefined,
 		};
 	}
 
