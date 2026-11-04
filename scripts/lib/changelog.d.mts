@@ -14,6 +14,15 @@ export function summarizeSection(
 	body: string,
 	opts?: { maxGist?: number; gist?: boolean },
 ): string;
+export interface SectionEntries {
+	order: string[];
+	buckets: Map<string, string[]>;
+	internalCount: number;
+}
+export function parseSectionEntries(
+	body: string,
+	opts?: { maxGist?: number; gist?: boolean },
+): SectionEntries;
 export function normalizeVersion(version: string): string;
 export function extractSection(text: string, version: string): string | null;
 export function hasSection(text: string, version: string): boolean;

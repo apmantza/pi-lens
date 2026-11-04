@@ -6,8 +6,8 @@ import {
 	INTERNAL_HEADING,
 	extractSection,
 	lintSectionBody,
+	parseSectionEntries,
 	parseSections,
-	summarizeSection,
 } from "./lib/changelog.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 
@@ -177,6 +177,32 @@ function renderBody(bodies) {
 // full historical changelog to pi's uncapped Extension Updates renderer (#5198).
 export const USER_RELEASE_LIMIT = 5;
 
+// One count line per release for pi's Extension Updates view (#5264). Added counts
+// as features, Fixed as fixes, and every other user-facing bucket (Changed,
+// Removed, Security, Deprecated, any other heading) as other changes. Internal
+// entries are not user-facing: parseSectionEntries counts them apart and never
+// buckets them. The counts come from parseSectionEntries, the parse
+// summarizeSection renders from.
+export function userCountLine(body) {
+	const { buckets } = parseSectionEntries(body);
+	let features = 0;
+	let fixes = 0;
+	let other = 0;
+	for (const [heading, items] of buckets) {
+		if (heading === "Added") features += items.length;
+		else if (heading === "Fixed") fixes += items.length;
+		else other += items.length;
+	}
+	const counted = [
+		[features, "feature", "features"],
+		[fixes, "fix", "fixes"],
+		[other, "other change", "other changes"],
+	]
+		.filter(([count]) => count > 0)
+		.map(([count, one, many]) => `${count} ${count === 1 ? one : many}`);
+	return counted.length ? `${counted.join(", ")}.` : "No user-facing changes.";
+}
+
 export function renderUserChangelog({
 	rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
 } = {}) {
@@ -187,7 +213,7 @@ export function renderUserChangelog({
 		.slice(0, USER_RELEASE_LIMIT)
 		.map(
 			(section) =>
-				`${section.heading}\n\n${summarizeSection(section.body)}\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v${section.label}`,
+				`${section.heading}\n\n${userCountLine(section.body)}\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v${section.label}`,
 		);
 	return `# User changelog\n\n${releases.join("\n\n")}\n`;
 }

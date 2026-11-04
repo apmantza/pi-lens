@@ -53,21 +53,17 @@ function finalize(current) {
 }
 
 /**
- * Condense a section body into scannable release notes: keep the `### Added/
- * Changed/Fixed` subheadings and every top-level entry, trimmed to a short
- * one-liner. Bold-titled entries (`- **Title** …`) keep the title (plus a
- * short gist when one exists); plain entries (`- perf: …`) keep their whole
- * first sentence — dropping them entirely (the pre-3.8.67 behavior) made a
- * perf-heavy release body show none of its perf work. The full prose stays
- * in CHANGELOG.md; this is what the GitHub release body shows so a release
- * reads as a summary, not a wall of implementation detail. The `### Internal`
- * block (#3852) is not shown: a one-line count replaces it.
+ * Bucket a section body's top-level entries under their `### ` headings. This is
+ * the one parse behind summarizeSection and the user-changelog count line (#5264),
+ * so the release notes and the count cannot drift. Same-named headings merge and
+ * keep first-seen order; entries before the first heading are skipped; `### Internal`
+ * entries are counted, not bucketed.
  *
  * @param {string} body a section body from extractSection()
  * @param {{ maxGist?: number, gist?: boolean }} [opts]
- * @returns {string}
+ * @returns {{ order: string[], buckets: Map<string, string[]>, internalCount: number }}
  */
-export function summarizeSection(body, opts = {}) {
+export function parseSectionEntries(body, opts = {}) {
 	const maxGist = opts.maxGist ?? 220;
 	// Bucket entries under canonical subheadings, merging same-named headings
 	// (a section may carry two `### Added` blocks) and preserving first-seen order.
@@ -124,6 +120,26 @@ export function summarizeSection(body, opts = {}) {
 		if (!plain) continue;
 		buckets.get(heading).push(`- ${plainGist(plain[1])}`);
 	}
+	return { order, buckets, internalCount };
+}
+
+/**
+ * Condense a section body into scannable release notes: keep the `### Added/
+ * Changed/Fixed` subheadings and every top-level entry, trimmed to a short
+ * one-liner. Bold-titled entries (`- **Title** …`) keep the title (plus a
+ * short gist when one exists); plain entries (`- perf: …`) keep their whole
+ * first sentence — dropping them entirely (the pre-3.8.67 behavior) made a
+ * perf-heavy release body show none of its perf work. The full prose stays
+ * in CHANGELOG.md; this is what the GitHub release body shows so a release
+ * reads as a summary, not a wall of implementation detail. The `### Internal`
+ * block (#3852) is not shown: a one-line count replaces it.
+ *
+ * @param {string} body a section body from extractSection()
+ * @param {{ maxGist?: number, gist?: boolean }} [opts]
+ * @returns {string}
+ */
+export function summarizeSection(body, opts = {}) {
+	const { order, buckets, internalCount } = parseSectionEntries(body, opts);
 	const out = [];
 	for (const h of order) {
 		const items = buckets.get(h);

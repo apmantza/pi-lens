@@ -39,9 +39,10 @@ retaining this README. The tag-time release workflow only verifies that this
 rollup has already happened.
 
 `CHANGELOG-USER.md` contains the latest five numbered releases: each original
-release heading, the GitHub release summary, and a Full notes link. It changes
-when `scripts/changelog-release.mjs` invokes the release rollup; ordinary
-fragment PRs do not regenerate it. Pi ignores Unreleased sections.
+release heading, one count line (features, fixes and other changes, or `No
+user-facing changes.`), and a Full notes link. It changes when
+`scripts/changelog-release.mjs` invokes the release rollup; ordinary fragment
+PRs do not regenerate it. Pi ignores Unreleased sections.
 `npm run changelog:check` and the Unit tests check the shipped file against the
-release summaries from `CHANGELOG.md`. To repair drift, run
+release sections from `CHANGELOG.md`. To repair drift, run
 `node scripts/rollup-changelog.mjs --user`.
