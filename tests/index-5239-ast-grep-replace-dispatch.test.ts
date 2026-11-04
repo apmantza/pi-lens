@@ -128,6 +128,28 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		expect(commits[0]?.isError).toBe(true);
 	});
 
+	// Recurrence prevented (CodeRabbit on #5244 r4): the relative-`path` refusal
+	// in `handleToolResult` returned before the applied-files feed for
+	// `lsp_navigation`. `ast_grep_replace` names `paths`, not `path`, so it never
+	// takes that return; this pins that a RELATIVE entry still dispatches.
+	it("refuses a commit over the blocker a replace with a relative path introduced", async () => {
+		const { proj, target } = seed(fixture.root, "apply-relative", CLEAN_FILE);
+		const handle = await openGuardedSession(fixture.root, proj, [
+			step(readTarget(target), "reading"),
+			step(activateReplace(), "activating"),
+			step(replace([path.relative(proj, target)], true), "replacing"),
+			step(commitAttempt(), "committing"),
+			endTurn("done"),
+		]);
+		await handle.prompt("rewrite and commit");
+
+		expect(fs.readFileSync(target, "utf8")).toBe(BLOCKING_FILE);
+		const commits = toolResults(handle.requests.at(-1) ?? [], "bash");
+		expect(commits).toHaveLength(1);
+		expect(commits[0]?.text).toContain(GATE_BLOCK);
+		expect(commits[0]?.text).not.toContain(RAN_MARKER);
+	});
+
 	it("dispatches each file a multi-file replace changed once, and a dry run none", async () => {
 		const { proj, target } = seed(fixture.root, "apply-counts", CLEAN_FILE);
 		const second = path.join(proj, "src", "second.ts");

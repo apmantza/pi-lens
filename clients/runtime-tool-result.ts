@@ -2498,7 +2498,11 @@ export async function handleToolResult(
 			durationMs: 0,
 			metadata: { toolCallId, rawFilePath, guessedPath },
 		});
-		if (!opaqueNonBash)
+		// #5239, #5248 r5: an admitted pi-lens writer (`appliedFilesOfOwnTool`)
+		// reports the ABSOLUTE files it wrote, so the refused relative path
+		// stays refused as a path (`filePath` unset below, every step keyed on it
+		// closed) while the applied-files feed still dispatches what was written.
+		if (!opaqueNonBash && appliedFilesOfOwnTool(event).length === 0)
 			return readNote.length > 0
 				? {
 						content: [...readNote, ...event.content],

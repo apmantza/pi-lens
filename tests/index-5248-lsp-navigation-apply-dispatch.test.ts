@@ -199,6 +199,56 @@ describe("#5248 an applied lsp_navigation write dispatches what it wrote", () =>
 		},
 	);
 
+	// Recurrence prevented (CodeRabbit on #5244 r4): a RELATIVE `path` on an
+	// applied rename took the `path_attribution_missing` early return in
+	// `handleToolResult` before the applied-files feed, so the written files
+	// never reached the dispatcher or the commit gate.
+	it(
+		"refuses a commit over the blocker a rename with a relative path introduced",
+		{ timeout: 120_000 },
+		async () => {
+			const { proj, a, b } = seedPair(
+				"rename-rel",
+				RENAMEABLE(1),
+				RENAMEABLE(2),
+			);
+			const handle = await openLspSession(proj, [
+				step(activateNavigation(), "activating"),
+				step(readTarget(a), "reading a"),
+				step(readTarget(b), "reading b"),
+				step(
+					navigate({ operation: "hover", path: b, line: 2, character: 2 }),
+					"opening b",
+				),
+				step(
+					navigate({
+						operation: "rename",
+						path: path.relative(proj, a),
+						line: 2,
+						character: 2,
+						newName: "debugger",
+						apply: true,
+					}),
+					"renaming",
+				),
+				step(commitAttempt(), "committing"),
+				endTurn("done"),
+			]);
+			await handle.prompt("rename and commit");
+
+			expect(fs.readFileSync(a, "utf8")).toBe(AFTER_RENAME(1));
+			expect(fs.readFileSync(b, "utf8")).toBe(AFTER_RENAME(2));
+			const rows = await rowsOf(handle);
+			const commit = commitResult(handle);
+			expect(commit?.text).toContain(GATE_BLOCK);
+			expect(commit?.text).not.toContain(RAN_MARKER);
+			for (const file of [a, b])
+				expect(
+					reportedRules(rows, file).filter((r) => r === "debugger-statement"),
+				).toHaveLength(1);
+		},
+	);
+
 	it(
 		"dispatches nothing for a dry-run rename, a rename at no symbol, or a rename missing its name",
 		{ timeout: 120_000 },
