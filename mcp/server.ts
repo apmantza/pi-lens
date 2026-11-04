@@ -1467,6 +1467,19 @@ async function callTool(
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
 		const kind = typeof args.kind === "string" ? args.kind : undefined;
 		const result = await readSymbol(file, symbol, cwd, { kind });
+		if (!result.found && result.error) {
+			return {
+				...toolText(
+					`Could not inspect ${path.basename(file)}: ${result.error}`,
+					{
+						found: false,
+						error: result.error,
+						...(result.warnings ? { warnings: result.warnings } : {}),
+					},
+				),
+				isError: true,
+			};
+		}
 		if (!result.found) {
 			const suggestionSuffix = result.suggestions?.length
 				? ` Did you mean: ${result.suggestions.join(", ")}?`
