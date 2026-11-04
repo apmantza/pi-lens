@@ -251,43 +251,61 @@ describe("per-runner failure matrix: no primary runner's failure renders clean (
 		expect(rows.length).toBeGreaterThan(60);
 	});
 
-	for (const mode of FAILURE_MODES) {
-		it(`${mode.name}: the verdict is unchecked for every primary runner of every kind`, async () => {
-			if (mode.timeoutMs !== undefined) vi.useFakeTimers();
-			const run = mode.hangs
-				? () => new Promise<RunnerResult>(() => {})
-				: mode.run;
-			const clean: string[] = [];
-			for (const row of rows) {
-				const registry = new RunnerRegistry();
-				registry.register({
-					id: row.runnerId,
-					appliesTo: [row.kind],
-					priority: 5,
-					...(mode.timeoutMs !== undefined && { timeoutMs: mode.timeoutMs }),
-					run,
-				});
-				const ctx = createDispatchContext(
-					path.join("/project", row.file),
-					"/project",
-					flags(!row.lspEnabled),
-					new FactStore(),
-				);
-				const group: RunnerGroup = { mode: "all", runnerIds: [row.runnerId] };
-				const pending = dispatchForFile(ctx, [group], registry, undefined, {
-					dedupeCoverageNotice: false,
-				});
-				// A runner that never settles is cut by its own timeout: advancing the
-				// fake clock past it lets the dispatcher's timeout row land.
-				if (mode.timeoutMs !== undefined)
-					await vi.advanceTimersByTimeAsync(60_000);
-				const result = await pending;
-				if (result.verdict.checked)
-					clean.push(`${row.kind}/${row.runnerId}/lsp=${row.lspEnabled}`);
-			}
-			expect(clean).toEqual([]);
-		}, 30_000);
-	}
+	// One literal `it` per mode: the title is the greppable name of each
+	// failure the matrix rules out.
+	const unchecked = async (mode: FailureMode) => {
+		if (mode.timeoutMs !== undefined) vi.useFakeTimers();
+		const run = mode.hangs
+			? () => new Promise<RunnerResult>(() => {})
+			: mode.run;
+		const clean: string[] = [];
+		for (const row of rows) {
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: row.runnerId,
+				appliesTo: [row.kind],
+				priority: 5,
+				...(mode.timeoutMs !== undefined && { timeoutMs: mode.timeoutMs }),
+				run,
+			});
+			const ctx = createDispatchContext(
+				path.join("/project", row.file),
+				"/project",
+				flags(!row.lspEnabled),
+				new FactStore(),
+			);
+			const group: RunnerGroup = { mode: "all", runnerIds: [row.runnerId] };
+			const pending = dispatchForFile(ctx, [group], registry, undefined, {
+				dedupeCoverageNotice: false,
+			});
+			// A runner that never settles is cut by its own timeout: advancing the
+			// fake clock past it lets the dispatcher's timeout row land.
+			if (mode.timeoutMs !== undefined)
+				await vi.advanceTimersByTimeAsync(60_000);
+			const result = await pending;
+			if (result.verdict.checked)
+				clean.push(`${row.kind}/${row.runnerId}/lsp=${row.lspEnabled}`);
+		}
+		return clean;
+	};
+	const modeNamed = (name: string): FailureMode => {
+		const found = FAILURE_MODES.find((mode) => mode.name === name);
+		if (found === undefined) throw new Error(`no failure mode ${name}`);
+		return found;
+	};
+
+	it("timeout: the verdict is unchecked for every primary runner of every kind", async () => {
+		expect(await unchecked(modeNamed("timeout"))).toEqual([]);
+	}, 30_000);
+	it("error: the verdict is unchecked for every primary runner of every kind", async () => {
+		expect(await unchecked(modeNamed("error"))).toEqual([]);
+	}, 30_000);
+	it("malformed output: the verdict is unchecked for every primary runner of every kind", async () => {
+		expect(await unchecked(modeNamed("malformed output"))).toEqual([]);
+	}, 30_000);
+	it("absent binary: the verdict is unchecked for every primary runner of every kind", async () => {
+		expect(await unchecked(modeNamed("absent binary"))).toEqual([]);
+	}, 30_000);
 
 	it("control: the same rows read checked when the runner succeeds, naming it", async () => {
 		const wrong: string[] = [];
