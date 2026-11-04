@@ -9,6 +9,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import treeSitterRunner from "../../../../clients/dispatch/runners/tree-sitter.js";
+import {
+	_resetSharedTreeSitterClientForTests,
+	getSharedTreeSitterClient,
+} from "../../../../clients/tree-sitter-shared.js";
 
 const { logTreeSitter } = vi.hoisted(() => ({ logTreeSitter: vi.fn() }));
 vi.mock("../../../../clients/tree-sitter-logger.js", () => ({
@@ -177,5 +181,113 @@ describe("tree-sitter runner — inherited rule-set fingerprint (#878)", () => {
 		await treeSitterRunner.run(afterUnrelatedEdit.ctx);
 
 		expect(observedCacheHits()).toEqual([false, true, false, true]);
+	}, 30_000);
+});
+
+// #5260 — the first dispatch of a project misses the rule cache and hands the
+// client the loader's full rule objects; every later one hands it the cache's
+// projection, which drops description, tags, category and the rest. The client
+// keyed its combined batch on the whole object, so the second dispatch compiled
+// the same rules again (about 430 ms of a 972 ms dispatch). Red on
+// origin/master f11775b35: `compileQueryBatchOnce` ran twice.
+describe("tree-sitter runner — query batch reuse across the cache round-trip (#5260)", () => {
+	let env5260: RealRunnerEnv;
+	beforeAll(async () => {
+		env5260 = makeRealRunnerEnv();
+		await assertGrammarAvailable("typescript");
+	});
+	afterAll(() => {
+		env5260?.cleanup();
+		_resetSharedTreeSitterClientForTests();
+	});
+
+	it("builds the TypeScript rule batch once for the cold, warm and third dispatch", async () => {
+		logTreeSitter.mockClear();
+		_resetSharedTreeSitterClientForTests();
+		const client = getSharedTreeSitterClient();
+		if (!client) throw new Error("tree-sitter unavailable");
+		const buildBatch = vi.spyOn(
+			client as unknown as {
+				compileQueryBatchOnce: (...args: unknown[]) => Promise<unknown>;
+			},
+			"compileQueryBatchOnce",
+		);
+
+		const source = "export const answer = (a: number): number => a + 1;\n";
+		await treeSitterRunner.run(env5260.addFile("first.ts", source).ctx);
+		expect(buildBatch).toHaveBeenCalledTimes(1);
+		await treeSitterRunner.run(env5260.addFile("second.ts", source).ctx);
+		await treeSitterRunner.run(env5260.addFile("third.ts", source).ctx);
+		expect(buildBatch).toHaveBeenCalledTimes(1);
+		// The warm runs really were rule-cache hits, so the client saw projections.
+		expect(observedCacheHits()).toEqual([false, true, true]);
+	}, 30_000);
+});
+
+// #5278 review (Greptile P2 and CodeRabbit): a project rule that declares
+// `predicates:` got a different batch identity on the warm dispatch. The loader
+// parses the field, RuleCache does not persist it, and the identity hashed it,
+// so the cold dispatch and every later one keyed apart. Recurrence guarded: a
+// rule field that the cache projection drops and the identity still hashes
+// splits the batch again on the second dispatch.
+describe("tree-sitter runner — batch reuse for a rule that declares predicates (#5260)", () => {
+	let envPredicates: RealRunnerEnv;
+	beforeAll(async () => {
+		envPredicates = makeRealRunnerEnv();
+		await assertGrammarAvailable("typescript");
+	});
+	afterAll(() => {
+		envPredicates?.cleanup();
+		_resetSharedTreeSitterClientForTests();
+	});
+
+	it("builds the batch once for a project rule with predicates, cold, warm and third", async () => {
+		logTreeSitter.mockClear();
+		_resetSharedTreeSitterClientForTests();
+		const client = getSharedTreeSitterClient();
+		if (!client) throw new Error("tree-sitter unavailable");
+		const buildBatch = vi.spyOn(
+			client as unknown as {
+				compileQueryBatchOnce: (...args: unknown[]) => Promise<unknown>;
+			},
+			"compileQueryBatchOnce",
+		);
+		const rule = path.join(
+			envPredicates.cwd,
+			"rules",
+			"tree-sitter-queries",
+			"typescript",
+			"proj-predicates-ts.yml",
+		);
+		fs.mkdirSync(path.dirname(rule), { recursive: true });
+		fs.writeFileSync(
+			rule,
+			[
+				"id: proj-predicates",
+				"name: Project Predicates",
+				"severity: warning",
+				"category: general",
+				'message: "predicates rule"',
+				"query: |",
+				"  (debugger_statement) @DBG",
+				"metavars: [DBG]",
+				"predicates:",
+				"  - type: eq",
+				"    var: DBG",
+				'    value: "debugger"',
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+
+		const source = "debugger;\n";
+		const cold = await treeSitterRunner.run(
+			envPredicates.addFile("cold.ts", source).ctx,
+		);
+		expect(firedRuleIds(cold)).toContain("proj-predicates");
+		await treeSitterRunner.run(envPredicates.addFile("warm.ts", source).ctx);
+		await treeSitterRunner.run(envPredicates.addFile("third.ts", source).ctx);
+		expect(buildBatch).toHaveBeenCalledTimes(1);
+		expect(observedCacheHits()).toEqual([false, true, true]);
 	}, 30_000);
 });
