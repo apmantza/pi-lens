@@ -354,6 +354,9 @@ In both lists a member that is not a string, or a value that is not an array,
 is dropped and the valid members keep their effect. The global file reports it
 with a `PILENS_CFG_0005` notice; a project or nested file's is dropped without
 one.
+A `select` array whose members are all dropped still sets that key's list: it
+is empty, so it lifts a farther file's allowlist for the key, as `select: []`
+does. A `select` that is not an array is ignored, and the farther list stands.
 
 `ignorePaths` entries follow the same gitignore rules as the `ignore` field. Each entry is
 relative to the directory of the file that declares it: a global entry, and an entry in the
