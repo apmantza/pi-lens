@@ -149,6 +149,19 @@ describe("install lock across versions (#3476)", () => {
 		}
 	});
 
+	// Recurrence this prevents (#4907): the installer copy read a pid above
+	// 2^31-1 as dead (`process.kill` refuses it with ERR_INVALID_ARG_TYPE), so a
+	// live legacy owner's lock was taken over. No `process.kill` double: the
+	// refusal is Node's own. The seam reads it alive.
+	it("keeps out of a legacy lock whose owner pid is above 2^31-1", async () => {
+		const ownerPid = 3_000_000_000;
+		writeLegacy(JSON.stringify({ pid: ownerPid, createdAt: Date.now() }));
+		const gate = await acquireManagedInstallGate("test");
+		expect(gate.ok).toBe(false);
+		expect(gate.reason).toContain("timed out after 150ms");
+		expect(JSON.parse(fs.readFileSync(LEGACY, "utf8")).pid).toBe(ownerPid);
+	});
+
 	// The pre-#3476 staleness rules, now applied only by a generation holder.
 	it.each([
 		[

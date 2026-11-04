@@ -967,12 +967,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "ece0384b1c5b417a",
 		reason: PRE_RULE,
 	}, // :130, :204, :233
-	"clients/pid-liveness.ts": {
-		silent: 1,
-		identities: "0eba51fc984f7dd1",
-		reason:
-			"moved verbatim from clients/instance-reaper.ts (pre-#4596 population): the catch is the verdict, ESRCH reads dead and every other errno reads alive, and a code other than EPERM is recorded once, so nothing is swallowed",
-	}, // :23
 	"clients/pipeline.ts": {
 		silent: 10,
 		identities: "c6617487a0244394",

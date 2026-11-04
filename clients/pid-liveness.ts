@@ -21,6 +21,7 @@ export function realIsPidAlive(pid: number): boolean {
 		process.kill(pid, 0);
 		return true; // no throw — process exists and we can signal it
 	} catch (err) {
+		// none: ESRCH is the verdict and EPERM an ordinary alive answer; any other code is recorded once per code below.
 		const code = (err as NodeJS.ErrnoException)?.code;
 		if (code === "ESRCH") return false; // definitively dead
 		// EPERM (exists, no permission) or any other/unknown errno: ambiguous —
