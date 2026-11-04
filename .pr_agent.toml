@@ -2,8 +2,8 @@
 # configuration and command reference:
 # https://docs.qodo.ai/configuration/configuration-and-command-reference
 # (fetched 2026-11-04). Keys the reference does not define are not set here.
-# The policy matches .coderabbit.yaml and greptile.json (#4685): no summaries,
-# no per-push re-review, maintainer PRs reviewed only on request.
+# The policy matches .coderabbit.yaml and greptile.json (#4685): no PR
+# description summary, no per-push re-review, maintainer PRs skipped.
 
 [github_app]
 # Review only. /agentic_describe is left out: PR bodies follow the template
@@ -17,8 +17,9 @@ feedback_on_draft_pr = false
 handle_push_trigger = false
 
 [config]
-# Maintainer PRs are reviewed on request (comment `/agentic_review`), as with
-# CodeRabbit and Greptile. Contributor PRs are reviewed once, on open.
+# Maintainer PRs are not auto-reviewed. The reference does not say whether a
+# manual `/agentic_review` comment still runs on them; probe that after this
+# lands. Contributor PRs are reviewed once, on open.
 ignore_pr_authors = ["^apmantza$"]
 
 [review_agent]
