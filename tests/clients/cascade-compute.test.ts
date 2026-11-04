@@ -522,6 +522,114 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	// #5174: the references leg asks the server for up to 3 changed symbols one
+	// at a time, and the loop stays serial on purpose (tsserver answers one
+	// request at a time). Recurrence guarded: the overlap tried in #5284 r1
+	// (5bf92b2de), where the three calls shared one 750ms window and a
+	// one-at-a-time server returned only the first symbol's files.
+	describe("references leg stays serial (#5174)", () => {
+		it("returns the files of all three changed symbols from a server that answers one request at a time", async () => {
+			vi.useFakeTimers();
+			const env = setupTestEnvironment("cascade-lsp-refs-serial-");
+			try {
+				const symbols = ["alpha", "beta", "gamma"];
+				const primary = path.join(env.tmpDir, "src", "primary.ts");
+				fs.mkdirSync(path.dirname(primary), { recursive: true });
+				fs.writeFileSync(primary, "export const alpha = 1;\n");
+				const consumers = symbols.map((name) => {
+					const file = path.join(env.tmpDir, "src", `uses-${name}.ts`);
+					fs.writeFileSync(file, `import { ${name} } from './primary';\n`);
+					return file;
+				});
+				const graph = emptyGraph();
+				const normalizedPrimary = primary.split(path.sep).join("/");
+				graph.symbolNodesByFile.set(
+					normalizedPrimary,
+					symbols.map((name) => `${normalizedPrimary}:${name}`),
+				);
+				symbols.forEach((name, index) => {
+					const id = `${normalizedPrimary}:${name}`;
+					graph.nodes.set(id, {
+						id,
+						kind: "symbol",
+						language: "jsts",
+						filePath: normalizedPrimary,
+						symbolName: name,
+						symbolKind: "function",
+						metadata: { line: index + 1, column: 14 },
+					});
+				});
+				mocks.buildOrUpdateGraph.mockResolvedValue(graph);
+				mocks.computeImpactCascade.mockReturnValue({
+					...impact(primary, []),
+					changedSymbols: symbols,
+				});
+				// One request at a time, 400ms each: a call's answer lands 400ms after
+				// the previous call's. `line` is the symbol's zero-based line, which
+				// picks its consumer file.
+				let previous: Promise<unknown> = Promise.resolve();
+				const references = vi.fn((_file: string, line: number) => {
+					const answer = previous.then(
+						() =>
+							new Promise<unknown[]>((resolve) => {
+								setTimeout(
+									() =>
+										resolve([
+											{
+												uri: pathToFileURL(consumers[line]).href,
+												range: {
+													start: { line: 1, character: 0 },
+													end: { line: 1, character: 5 },
+												},
+											},
+										]),
+									400,
+								);
+							}),
+					);
+					previous = answer.catch(() => undefined);
+					return answer;
+				});
+				installLspService({
+					...makeLspServiceDouble(),
+					getAllDiagnostics: vi
+						.fn()
+						.mockResolvedValue(
+							new Map(
+								consumers.map((file) => [
+									file.split(path.sep).join("/"),
+									{ diags: [lspError("reference broken")], ts: postEditTs() },
+								]),
+							),
+						),
+					touchFile: vi.fn(),
+					getDiagnostics: vi.fn(),
+					references,
+				});
+
+				const { computeCascadeForFile } =
+					await import("../../clients/dispatch/integration.js");
+				const run = computeCascadeForFile(primary, env.tmpDir, {
+					turnSeq: 1,
+					writeSeq: 1,
+				});
+				await vi.advanceTimersByTimeAsync(2_000);
+				const result = await run;
+
+				expect(references).toHaveBeenCalledTimes(3);
+				const impactKeys = (result?.result?.impact.neighborFiles ?? []).map(
+					(f) => f.split(path.sep).join("/"),
+				);
+				expect(impactKeys).toEqual(
+					consumers.map((f) => f.split(path.sep).join("/")),
+				);
+			} finally {
+				env.cleanup();
+				vi.useRealTimers();
+			}
+		});
+	});
+
 	it("active-touches non-jsts neighbors silently", async () => {
 		const env = setupTestEnvironment("cascade-python-");
 		try {
