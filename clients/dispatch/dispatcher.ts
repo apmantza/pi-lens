@@ -736,7 +736,8 @@ function buildCoverageNotice(
 ): Pick<DispatchResult, "verdict" | "coverage"> & {
 	notice?: Diagnostic;
 } {
-	if (!ctx.kind) return { verdict: unchecked(NO_ANALYZER_REASON) };
+	if (!ctx.kind)
+		return { verdict: unchecked(NO_ANALYZER_REASON, { inapplicable: true }) };
 	const lspEnabled = !ctx.pi.getFlag("no-lsp");
 	const primary = getPrimaryDispatchGroup(ctx.kind, lspEnabled);
 	if (!primary || primary.runnerIds.length === 0)
@@ -866,13 +867,20 @@ function buildCoverageNotice(
 	);
 	// #5258: nothing of the primary group has completed yet, so the line says
 	// so; the commit gate still counts the file covered (`coverage`).
-	if (primaryStillInFlight)
+	if (primaryStillInFlight) {
+		// #5258 r2: a slow primary reads the same on every write until its answer
+		// lands, so the line prints once per file per session (push surface only).
+		const inFlightKey = `in-flight:${ctx.kind}:${ctx.filePath}`;
+		const repeat = dedupe && coverageNoticeSeen.has(inFlightKey);
+		if (dedupe) coverageNoticeSeen.add(inFlightKey);
 		return {
 			verdict: unchecked(
 				"the primary check is still running (findings arrive at turn end if it lands)",
+				repeat ? { repeat: true } : {},
 			),
 			coverage: "in_flight",
 		};
+	}
 
 	const plan = getToolPlan(ctx.kind);
 	const fallbackRunnerIds = new Set(
@@ -1676,7 +1684,9 @@ export async function dispatchForFile(
 			});
 		}
 		// #5258: the file is skipped by design, which is not a clean result.
-		return emptyDispatchResult(unchecked("generated file (not analyzed)"));
+		return emptyDispatchResult(
+			unchecked("generated file (not analyzed)", { inapplicable: true }),
+		);
 	}
 	const allDiagnostics: Diagnostic[] = [];
 	let stopped = false;

@@ -588,9 +588,13 @@ describe("the verdict the write line and the clean advisory read (#4734 r3, #525
 		 */
 		expected: CoverageVerdict;
 	};
-	const notChecked = (reason: string): CoverageVerdict => ({
+	const notChecked = (
+		reason: string,
+		mark: { repeat?: true } = {},
+	): CoverageVerdict => ({
 		checked: false,
 		reason,
+		...mark,
 	});
 	const noPrimary = notChecked(
 		"no primary checker is enabled for this kind (--no-lsp turns off its language server)",
@@ -690,6 +694,43 @@ describe("the verdict the write line and the clean advisory read (#4734 r3, #525
 			),
 		},
 		{
+			// #5258 r2 (F6): a slow primary printed `⚠ … still running` on every
+			// clean write and nothing retired it. The first write prints it, the
+			// rest stay quiet (`repeat`) until the answer replaces it.
+			label: "row 12b: the lsp runner is deferred, second write is quiet",
+			file: "test.ts",
+			runners: {
+				lsp: async () => ({
+					status: "deferred",
+					diagnostics: [],
+					semantic: "none",
+				}),
+			},
+			groups: [{ mode: "all", runnerIds: ["lsp"] }],
+			pushes: 2,
+			expected: notChecked(
+				"the primary check is still running (findings arrive at turn end if it lands)",
+				{ repeat: true },
+			),
+		},
+		{
+			// #5258 r1 review (F4): the last latched return (`onceKey` of the plain
+			// unavailable notice) had no red. Recurrence: #5008 r2 F1, write 2..N on
+			// one file read `✓ clean` once the latch had the notice.
+			label: "row 15: the lsp runner broke, nothing stood in, second write",
+			file: "test.ts",
+			runners: {
+				lsp: async () => {
+					throw new Error("spawn lsp ENOENT");
+				},
+			},
+			groups: [{ mode: "all", runnerIds: ["lsp"] }],
+			pushes: 2,
+			expected: notChecked(
+				"not fully checked (a language tool is missing, timed out, or failed to run)",
+			),
+		},
+		{
 			label: "row 13: the lsp runner failed, a fallback linter covered",
 			file: ".github/workflow.json",
 			runners: {
@@ -744,5 +785,39 @@ describe("the verdict the write line and the clean advisory read (#4734 r3, #525
 			output: "",
 			verdict: row.expected,
 		});
+	});
+
+	it("the pull surface never goes quiet: every pull of a slow primary states the reason (#5258 r2)", async () => {
+		// Recurrence prevented: the once-only latch belongs to the push surface
+		// (`dedupeCoverageNotice`); an `analyze_file` pull is a deliberate question
+		// and must get its answer each time, like the coverage notice does.
+		const registry = new RunnerRegistry();
+		registry.register({
+			id: "lsp",
+			appliesTo: ["jsts"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				return { status: "deferred", diagnostics: [], semantic: "none" };
+			},
+		});
+		const pull = () =>
+			dispatchForFile(
+				createDispatchContext(
+					"test.ts",
+					"/project",
+					{ getFlag: () => false },
+					new FactStore(),
+				),
+				[{ mode: "all", runnerIds: ["lsp"] }],
+				registry,
+				undefined,
+				{ dedupeCoverageNotice: false },
+			);
+		await pull();
+		expect((await pull()).verdict).toEqual(
+			notChecked(
+				"the primary check is still running (findings arrive at turn end if it lands)",
+			),
+		);
 	});
 });

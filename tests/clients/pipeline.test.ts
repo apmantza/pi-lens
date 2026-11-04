@@ -9,6 +9,7 @@
  */
 
 import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1747,6 +1748,8 @@ describe("Pipeline", () => {
 		const cleanDispatch = (
 			shape: {
 				unconfirmedStatus?: string;
+				/** The surface policy the dispatcher marks an unchecked run with. */
+				mark?: { inapplicable?: true; repeat?: true };
 				primaryLspChecked?: true;
 				warnings?: Diagnostic[];
 				heldBackBlockers?: Diagnostic[];
@@ -1766,7 +1769,7 @@ describe("Pipeline", () => {
 				// some other completed runner.
 				verdict:
 					shape.unconfirmedStatus !== undefined
-						? { checked: false, reason: shape.unconfirmedStatus }
+						? { checked: false, reason: shape.unconfirmedStatus, ...shape.mark }
 						: shape.primaryLspChecked
 							? { checked: true, tier: "primary", runnerIds: ["lsp"] }
 							: CHECKED_BY_FIXTURE,
@@ -1811,7 +1814,10 @@ describe("Pipeline", () => {
 				unknown: (
 					await verdictOf(
 						unknownPath,
-						cleanDispatch({ unconfirmedStatus: NO_ANALYZER_REASON }),
+						cleanDispatch({
+							unconfirmedStatus: NO_ANALYZER_REASON,
+							mark: { inapplicable: true },
+						}),
 					)
 				).map((v) => (typeof v === "string" ? v.includes("clean") : v)),
 			}).toEqual({
@@ -1821,27 +1827,89 @@ describe("Pipeline", () => {
 			});
 		});
 
+		// Rows of the #5258 r2 state table (kind x primary x surface), read through
+		// the widget store the footer and the sidecar render from. The record is
+		// keyed by `normalizeMapKey`, not the host path (Windows, #5285 review F1).
+		const widgetRecordOf = (filePath: string) =>
+			exportWidgetState().files.find(
+				(f) => f.filePath === normalizeMapKey(filePath),
+			);
+
 		it("hands the footer the same verdict as the write line: an unchecked run is recorded with its reason, and a checked run retires it", async () => {
 			// Recurrence prevented: #5258. The write line said `⚠ unconfirmed`
 			// while the footer, fed the same run, still rendered `✓ clean`.
 			clearWidgetState();
 			const filePath = createTempFile(tmpDir, "footer.ts", "const x = 1;");
-			const reasonOf = () =>
-				exportWidgetState().files.find((f) => f.filePath === filePath)
-					?.uncheckedReason;
 
 			await verdictOf(
 				filePath,
 				cleanDispatch({ unconfirmedStatus: "no check" }),
 			);
-			const afterUnchecked = reasonOf();
+			const afterUnchecked = widgetRecordOf(filePath);
 			await verdictOf(filePath, cleanDispatch());
-			const afterChecked = reasonOf();
+			const afterChecked = widgetRecordOf(filePath);
 			clearWidgetState();
 
-			expect({ afterUnchecked, afterChecked }).toEqual({
-				afterUnchecked: "no check",
-				afterChecked: undefined,
+			// Both records exist, so an absent record can never pass as "no reason".
+			expect(afterUnchecked).toBeDefined();
+			expect(afterChecked).toBeDefined();
+			expect({
+				afterUnchecked: afterUnchecked?.uncheckedReason,
+				afterChecked: afterChecked?.uncheckedReason,
+			}).toEqual({ afterUnchecked: "no check", afterChecked: undefined });
+		});
+
+		it("a file nothing can check says so on the write line and never counts in the footer or the sidecar", async () => {
+			// Recurrence prevented: #5285 review F2. A kindless or generated file
+			// kept `⚠ 1 unchecked` for the session and across resume, because no
+			// completed check of its kind could ever retire the reason.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "notes.zzz", "x\n");
+
+			const [line] = await verdictOf(
+				filePath,
+				cleanDispatch({
+					unconfirmedStatus: NO_ANALYZER_REASON,
+					mark: { inapplicable: true },
+				}),
+			);
+			const record = widgetRecordOf(filePath);
+			clearWidgetState();
+
+			expect(line).toContain("unconfirmed");
+			expect(record).toBeDefined();
+			expect(record?.uncheckedReason).toBeUndefined();
+		});
+
+		it("a slow primary's line prints once: the repeat write ends with no line, no clean verdict, and keeps the footer reason", async () => {
+			// Recurrence prevented: #5285 review F6. Every clean write of a project
+			// with a collect-later primary ended `⚠ … the primary check is still
+			// running`, and nothing retired it.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "slow.ts", "const x = 1;");
+			const stillRunning = "the primary check is still running";
+			const pipelineRun = async (mark: { repeat?: true }) => {
+				vi.mocked(dispatchLintWithResult).mockResolvedValue(
+					cleanDispatch({ unconfirmedStatus: stillRunning, mark }),
+				);
+				return runPipeline(createMockContext(filePath), createMockDeps());
+			};
+
+			const first = await pipelineRun({});
+			const repeat = await pipelineRun({ repeat: true });
+			const reason = widgetRecordOf(filePath)?.uncheckedReason;
+			clearWidgetState();
+
+			expect({
+				first: first.output.includes(stillRunning),
+				repeat: repeat.output,
+				repeatChecked: repeat.checkedClean,
+				reason,
+			}).toEqual({
+				first: true,
+				repeat: "",
+				repeatChecked: false,
+				reason: stillRunning,
 			});
 		});
 

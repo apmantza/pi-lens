@@ -252,14 +252,33 @@ describe("analyzeFile", () => {
 		// run whether or not any check of the file's kind had completed.
 		vi.mocked(dispatchForFile).mockResolvedValue({
 			...emptyResult,
-			verdict: { checked: false, reason: "no analyzer handles this file type" },
+			verdict: { checked: false, reason: "a language tool is missing" },
 		});
 
 		await analyzeFile(tsFile, tmpDir);
 
 		expect(exportWidgetState().files.map((f) => f.uncheckedReason)).toEqual([
-			"no analyzer handles this file type",
+			"a language tool is missing",
 		]);
+	});
+
+	it("records no reason for a file nothing can check, so the footer never counts it", async () => {
+		// Recurrence prevented: #5285 review F2, on the pull surface: a kindless
+		// or generated file left `⚠ 1 unchecked` that no later check could retire.
+		vi.mocked(dispatchForFile).mockResolvedValue({
+			...emptyResult,
+			verdict: {
+				checked: false,
+				reason: "no analyzer handles this file type",
+				inapplicable: true,
+			},
+		});
+
+		await analyzeFile(tsFile, tmpDir);
+
+		const files = exportWidgetState().files;
+		expect(files).toHaveLength(1);
+		expect(files[0]?.uncheckedReason).toBeUndefined();
 	});
 
 	it("attaches the latency report appended during this dispatch", async () => {

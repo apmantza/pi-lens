@@ -83,6 +83,7 @@ import {
 	type InconclusiveSources,
 	type PiAgentAPI,
 	spanOverlapsModifiedRanges,
+	widgetUncheckedReason,
 } from "./dispatch/types.js";
 import {
 	formatDiagnostics,
@@ -1714,6 +1715,8 @@ function buildAllClearOutput(
 		? getFileKindLabel(kind)
 		: path.extname(filePath) || path.basename(filePath);
 	const { verdict } = dispatchResult;
+	// #5258 r2: a slow primary's line already printed for this file; stay quiet.
+	if (!verdict.checked && verdict.repeat) return "";
 	return verdict.checked
 		? `\u2713 ${langLabel} clean · ${elapsed}ms`
 		: `\u26a0 ${langLabel} unconfirmed — ${verdict.reason} · ${elapsed}ms`;
@@ -2651,7 +2654,7 @@ async function analysePipeline(
 		widgetOrder(),
 		analysisReadAtMs,
 		// #5258: the footer reads the same verdict as the write's line.
-		dispatchResult.verdict.checked ? undefined : dispatchResult.verdict.reason,
+		widgetUncheckedReason(dispatchResult.verdict),
 	);
 	// #502: emit the write batch's FINAL diagnostic state immediately after
 	// recordDiagnostics commits it — this call site runs after format,

@@ -22,7 +22,11 @@ import {
 } from "../dispatch/integration.js";
 import { emitBounded } from "../bounded-telemetry.js";
 import { FactStore } from "../dispatch/fact-store.js";
-import type { Diagnostic, DispatchResult } from "../dispatch/types.js";
+import {
+	type Diagnostic,
+	type DispatchResult,
+	widgetUncheckedReason,
+} from "../dispatch/types.js";
 import { detectFileKind } from "../file-kinds.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getLSPService } from "../lsp/capabilities.js";
@@ -583,7 +587,7 @@ export async function analyzeFile(
 			undefined,
 			observedAt,
 			// #5258: the footer reads the same verdict the dispatch gave.
-			result.verdict.checked ? undefined : result.verdict.reason,
+			widgetUncheckedReason(result.verdict),
 		);
 		if (result.diagnostics.length > 0) {
 			getDiagnosticTracker().trackShown(result.diagnostics);

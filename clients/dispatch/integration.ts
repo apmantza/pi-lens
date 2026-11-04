@@ -3382,7 +3382,9 @@ export async function dispatchLintWithResult(
 	try {
 		const kind = ctx.kind;
 		if (!kind) {
-			return emptyDispatchResult(unchecked(NO_ANALYZER_REASON));
+			return emptyDispatchResult(
+				unchecked(NO_ANALYZER_REASON, { inapplicable: true }),
+			);
 		}
 
 		const groups = withSpotbugsGroup(

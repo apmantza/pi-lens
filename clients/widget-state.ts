@@ -300,8 +300,10 @@ interface FileRecord {
 	 * #5258: why no check of this file's kind completed in the run that wrote
 	 * the snapshot (`DispatchResult.verdict`, unchecked arm). An empty snapshot
 	 * of such a file is not a clean result, so the footer withholds `✓ clean`
-	 * for it. Set and cleared only by {@link recordDiagnostics}: a later write
-	 * whose check completed (or a scan that answers for the file) retires it.
+	 * for it. Set only by {@link recordDiagnostics}, from a file a check could have
+	 * covered (never a kindless or generated file: nothing can retire that).
+	 * Cleared by a later write whose check completed, or by a scan that answers
+	 * for the file ({@link recordDiagnostics}, {@link reconcileCorrelatedScanDiagnostics}).
 	 */
 	uncheckedReason?: string;
 	touchedAt: number;
@@ -1483,13 +1485,12 @@ export function reconcileCorrelatedScanDiagnostics(
 		...diagnostic,
 		observedAt: diagnostic.observedAt ?? observedTs,
 	}));
-	commitDiagnostics(
-		getOrCreate(filePath, key),
-		filePath,
-		correlated,
-		observedTs,
-		key,
-	);
+	const rec = getOrCreate(filePath, key);
+	commitDiagnostics(rec, filePath, correlated, observedTs, key);
+	// #5258 r2: a full scan answers for the file, as `reconcileScanDiagnostics`
+	// (through `recordDiagnostics`) does, so it retires the run's unchecked
+	// reason ("the primary check is still running" outlived the runner).
+	delete rec.uncheckedReason;
 }
 
 /**

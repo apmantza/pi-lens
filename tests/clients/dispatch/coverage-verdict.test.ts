@@ -51,6 +51,14 @@ const unchecked = (reason: string): CoverageVerdict => ({
 	reason,
 });
 
+// #5258 r2: a file no check can ever cover (no file kind, a generated file)
+// is unchecked on the write line only; the mark keeps it out of the footer.
+const inapplicable = (reason: string): CoverageVerdict => ({
+	checked: false,
+	reason,
+	inapplicable: true,
+});
+
 describe("every producer of a dispatch result states a verdict (#5258)", () => {
 	const env = setupTestEnvironment("pi-lens-verdict-");
 	afterEach(() => env.cleanup());
@@ -72,7 +80,7 @@ describe("every producer of a dispatch result states a verdict (#5258)", () => {
 	it("a file with no kind: no analyzer handles it", async () => {
 		const file = write("notes.zzz", "plain notes\n");
 		const result = await dispatchLintWithResult(file, env.tmpDir, flags(false));
-		expect(result.verdict).toEqual(unchecked(NO_ANALYZER_REASON));
+		expect(result.verdict).toEqual(inapplicable(NO_ANALYZER_REASON));
 	});
 
 	it("a kindless file handed straight to the dispatcher is unchecked too (the coverage rule's own no-kind return)", async () => {
@@ -88,7 +96,7 @@ describe("every producer of a dispatch result states a verdict (#5258)", () => {
 			[{ mode: "all", runnerIds: ["lsp"] }],
 			new RunnerRegistry(),
 		);
-		expect(result.verdict).toEqual(unchecked(NO_ANALYZER_REASON));
+		expect(result.verdict).toEqual(inapplicable(NO_ANALYZER_REASON));
 	});
 
 	it("--no-lsp, a kind whose only primary is the language server: no runner exists (the dispatchLintWithResult groups.length === 0 return)", async () => {
@@ -129,7 +137,9 @@ describe("every producer of a dispatch result states a verdict (#5258)", () => {
 			[{ mode: "all", runnerIds: ["lsp"] }],
 			new RunnerRegistry(),
 		);
-		expect(result.verdict).toEqual(unchecked("generated file (not analyzed)"));
+		expect(result.verdict).toEqual(
+			inapplicable("generated file (not analyzed)"),
+		);
 	});
 
 	it("a kind with a primary group none of whose runners ran is unchecked", async () => {

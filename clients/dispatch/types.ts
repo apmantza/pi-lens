@@ -281,13 +281,36 @@ export type CoverageVerdict =
 			tier: "primary" | "fallback";
 			runnerIds: readonly [string, ...string[]];
 	  }
-	| { checked: false; reason: string };
+	| { checked: false; reason: string; inapplicable?: true; repeat?: true };
+
+/**
+ * Surface policy the `unchecked` arm carries (#5258 r2). `inapplicable`: no
+ * check can ever cover this file (no file kind, a generated file), so only the
+ * write's own line says so; the widget footer count and the persisted reason
+ * cover files a check could have covered but did not. `repeat`: the line for
+ * this reason was already printed for this file this session, so the write
+ * prints none until a result replaces it.
+ */
+export type UncheckedMark = { inapplicable?: true; repeat?: true };
 
 /** The `unchecked` arm; the single constructor, so the shape has one spelling. */
-export const unchecked = (reason: string): CoverageVerdict => ({
+export const unchecked = (
+	reason: string,
+	mark: UncheckedMark = {},
+): CoverageVerdict => ({
 	checked: false,
 	reason,
+	...mark,
 });
+
+/**
+ * The reason the widget footer records for a run, or `undefined` when it
+ * records none: a checked run, and a file no check can ever cover.
+ */
+export const widgetUncheckedReason = (
+	verdict: CoverageVerdict,
+): string | undefined =>
+	verdict.checked || verdict.inapplicable ? undefined : verdict.reason;
 
 /**
  * The `checked` arm from the runner rows that completed, or `undefined` when

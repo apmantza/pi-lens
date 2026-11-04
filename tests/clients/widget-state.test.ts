@@ -2725,6 +2725,22 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 		expect(frame).not.toContain("unchecked");
 	});
 
+	it("a full scan that commits the snapshot retires the reason the write left", () => {
+		// Recurrence prevented: #5285 review F3. A `lens_diagnostics` full scan
+		// commits through `reconcileCorrelatedScanDiagnostics`, which did not clear
+		// the reason, so `⚠ lib.rs: the primary check is still running` outlived
+		// the runner that had finished.
+		const still = "the primary check is still running";
+		recordDiagnostics("/repo/lib.rs", [], undefined, undefined, still);
+		expect(renderWidget(120, theme).join("\n")).toContain(still);
+
+		reconcileCorrelatedScanDiagnostics("/repo/lib.rs", []);
+		const frame = renderWidget(120, theme).join("\n");
+		expect(frame).not.toContain(still);
+		expect(frame).not.toContain("unchecked");
+		expect(frame).toContain("✓ clean");
+	});
+
 	it("marks the vertical row and the compact header, not only the wide frame", () => {
 		recordDiagnostics("/repo/open.ts", [], undefined, undefined, reason);
 		expect(renderWidget(60, theme).join("\n")).toContain("unchecked");
