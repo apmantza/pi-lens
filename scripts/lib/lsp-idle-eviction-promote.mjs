@@ -431,16 +431,37 @@ export function planPromotions({
 	};
 }
 
-/** The bot PR's body: the measured table per promoted server, and how to re-run. */
+/**
+ * The bot PR's body: the measured table per promoted server, and how to re-run.
+ * It follows .github/PULL_REQUEST_TEMPLATE.md because the PR is linted like any
+ * other (#5062); the `idle-evict-set` marker closes it, after the last section,
+ * where the body lint cuts bot markers and the next night's closed-PR scan
+ * (`parseRejectedServers`) still reads it.
+ */
 export function renderPromotionBody(promoted, skipped, runUrl) {
 	const lines = [
-		"Automated promotion from the nightly `tool-smoke` idle-eviction measurement (#3989). This PR is a draft and is never auto-merged.",
-		"No new failure path; no record added.",
-		"TLA+ unaffected: session-lifecycle — the flip changes idleEviction policy data in the registry table, not lifecycle.",
-		"TLA+ unaffected: format-drain — the flip changes idleEviction policy data in the registry table, not lifecycle.",
-		"TLA+ unaffected: lsp-idle-reset — the flip changes idleEviction policy data in the registry table, not lifecycle.",
+		"## Summary",
 		"",
-		`Each server below was measured \`eligible\` (eviction and respawn preserved every finding) on ${PROMOTE_NIGHTS} consecutive nightly runs, held idle RSS of at least ${IDLE_EVICTION_MIN_RSS_BYTES / MB} MB, and cold-started in at most ${COLD_START_MAX_MS} ms on both nights (the worse night is judged). It flips that server's \`idleEviction: "unmeasured"\` to \`"transparent"\` in \`clients/lsp/server.ts\`, adds its reason row to \`tests/config/lsp-idle-eviction-reasons.json\`, and moves its id from NEXT_PHASE_ELIGIBLE_IDS to TRANSPARENT_IDS in \`tests/config/lsp-idle-eviction-registry.test.ts\` (#3952's class pin). Nothing is ever demoted here: a declared-transparent server the measurement vetoes is the drift issue's job (#3645).`,
+		'Automated promotion from the nightly `tool-smoke` idle-eviction measurement (#3989): each server in the table flips `idleEviction` from `"unmeasured"` to `"transparent"`.',
+		"This PR is a draft and is never auto-merged.",
+		"",
+		"Refs #3989, #3645, #3622, #1332.",
+		"",
+		"## Notes for the reviewer",
+		"",
+		`- Each server measured \`eligible\` (eviction and respawn preserved every finding) on ${PROMOTE_NIGHTS} consecutive nightly runs. It held idle RSS of at least ${IDLE_EVICTION_MIN_RSS_BYTES / MB} MB and cold-started in at most ${COLD_START_MAX_MS} ms on both nights; the worse night counts.`,
+		"- Nothing is ever demoted here: a declared-transparent server the measurement vetoes is the drift issue's job (#3645).",
+		"- This PR is created with the repository `GITHUB_TOKEN`, which cannot trigger workflow runs. A maintainer must close and reopen it to arm CI.",
+		"- To trigger it: the nightly `tool-smoke` run on master, or `workflow_dispatch` of `tool-smoke` on master. Two runs on one UTC day count as one night.",
+	];
+	if (runUrl) lines.push(`- Measured by workflow run: ${runUrl}`);
+	lines.push(
+		"",
+		"## Change outline",
+		"",
+		'- `clients/lsp/server.ts`: flips that server\'s `idleEviction: "unmeasured"` to `"transparent"`.',
+		"- `lsp-idle-eviction-reasons.json` under `tests/config/`: adds its reason row.",
+		"- `tests/config/lsp-idle-eviction-registry.test.ts`: moves its id from NEXT_PHASE_ELIGIBLE_IDS to TRANSPARENT_IDS (#3952's class pin).",
 		"",
 		"| server | night 1 (day, rss MB, cold start ms) | night 2 (day, rss MB, cold start ms) | nights eligible |",
 		"|---|---|---|---|",
@@ -448,26 +469,41 @@ export function renderPromotionBody(promoted, skipped, runUrl) {
 			const cell = (n) => `${n.day}, ${n.rssMb}, ${n.coldMs}`;
 			return `| ${p.serverId} | ${cell(p.nights[0])} | ${cell(p.nights[1])} | ${p.nights.length} |`;
 		}),
-	];
+	);
 	if (skipped.length) {
 		lines.push("", "Not promoted this run:", "");
 		for (const s of skipped) lines.push(`- ${s.serverId}: ${s.reason}`);
 	}
-	if (runUrl) lines.push("", `Measured by workflow run: ${runUrl}`);
 	lines.push(
+		"",
+		"TLA+ unaffected: session-lifecycle — the flip changes idleEviction policy data in the registry table, not lifecycle.",
+		"TLA+ unaffected: format-drain — the flip changes idleEviction policy data in the registry table, not lifecycle.",
+		"TLA+ unaffected: lsp-idle-reset — the flip changes idleEviction policy data in the registry table, not lifecycle.",
+		"",
+		"## Proof and checks",
+		"",
+		"### Tests",
+		"",
+		"Control: tests/config/lsp-idle-eviction-registry.test.ts: the bot moves the promoted ids between its two class-pin lists, and that test is the pin that must stay green on this head.",
+		"",
+		"### Class sweep",
+		"",
+		"Class: registry-table promotion of `idleEviction` from unmeasured to transparent. The population is `rg -n 'idleEviction: \"unmeasured\"' clients/lsp/server.ts`; only a server measured eligible on consecutive nights is promoted, so the promotion stays distributed per server because each flip needs its own measurement.",
+		"",
+		"Alignment: none: idle-eviction policy data is not an alignment-family member",
+		"",
+		"### Observability",
+		"",
+		"No new failure path; no record added.",
+		"",
+		"### Fold check",
+		"",
+		"none: the nightly bot does not search the tracker for fold candidates.",
 		"",
 		`<!-- idle-evict-set: ${promoted
 			.map((p) => p.serverId)
 			.sort()
 			.join(",")} -->`,
-	);
-	lines.push(
-		"",
-		"To trigger it: the nightly `tool-smoke` run on master, or `workflow_dispatch` of `tool-smoke` on master. Two runs on one UTC day count as one night.",
-		"",
-		"This PR is created with the repository `GITHUB_TOKEN`, which cannot trigger workflow runs. A maintainer must close and reopen it to arm CI.",
-		"",
-		"Refs #3989, #3645, #3622, #1332.",
 	);
 	return `${lines.join("\n")}\n`;
 }
