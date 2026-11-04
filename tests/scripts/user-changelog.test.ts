@@ -174,8 +174,9 @@ it("the shipped user changelog equals the last five release counts", () => {
 // counts were taken by hand with awk over CHANGELOG.md's 4.4.8 section: Added 1,
 // Changed 6, Fixed 28. Internal (32) is not user-facing and is not counted.
 it("pins the 4.4.8 count line from the real CHANGELOG.md section", () => {
-	expect(rollup.renderUserChangelog()).toContain(
-		"## [4.4.8] - 2026-11-01\n\n1 feature, 28 fixes, 6 other changes.\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v4.4.8",
+	const source = fs.readFileSync("CHANGELOG.md", "utf8");
+	expect(rollup.userCountLine(extractSection(source, "4.4.8")!)).toBe(
+		"1 feature, 28 fixes, 6 other changes.",
 	);
 });
 
