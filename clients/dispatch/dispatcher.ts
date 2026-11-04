@@ -1628,6 +1628,13 @@ export async function dispatchForFile(
 				output: "",
 				blockerOutput: "",
 				hasBlockers: false,
+				// #5238 r3: runners were planned and every one is refused here, so the
+				// file was not checked. Without a status the write-time all-clear line
+				// reads "clean". A plan of nothing says nothing.
+				...(planned.length > 0 && {
+					unconfirmedStatus:
+						"not analyzed (adopted analysis root: no runner is admitted for it)",
+				}),
 			};
 		}
 	}
