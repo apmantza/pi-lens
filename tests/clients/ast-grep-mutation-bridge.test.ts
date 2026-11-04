@@ -211,10 +211,12 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 		}) {
 			const runner = {
 				tempScanDetailedAsync: vi.fn(async (dir: string) =>
-					dir === "src/a.ts" ? { matches: A, status: 0 } : second.detailed,
+					path.basename(dir) === "a.ts"
+						? { matches: A, status: 0 }
+						: second.detailed,
 				),
 				tempScanWithFixAsync: vi.fn(async (dir: string) =>
-					dir === "src/a.ts"
+					path.basename(dir) === "a.ts"
 						? { matches: A }
 						: (second.withFix ?? { matches: [] }),
 				),
@@ -257,6 +259,50 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 			expect(result.error).toBe("no such path");
 			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
 		});
+
+		// The tool is the only carrier from the client's result to the
+		// `tool_result` handler; a stale or error branch that drops the list
+		// dispatches nothing whatever the client returned.
+		it.each([
+			["stale", { matches: [], status: 0 }, undefined, { stalePreview: true }],
+			[
+				"error",
+				{ matches: MATCHES, status: 0 },
+				{ matches: [], error: "boom" },
+				{},
+			],
+		])(
+			"the tool's %s details carry the earlier file",
+			async (_label, detailed, withFix, expected) => {
+				recorded.length = 0;
+				refused.clear();
+				const client = runnerOver({
+					detailed,
+					...(withFix && { withFix }),
+				});
+				vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+				const tool = createAstGrepReplaceTool(client);
+				const result = await tool.execute(
+					"call-5244-r4",
+					{
+						pattern: "var $X",
+						rewrite: "let $X",
+						lang: "typescript",
+						insideKind: "function_declaration",
+						paths: ["src/a.ts", "src/b.ts"],
+						apply: true,
+					},
+					new AbortController().signal,
+					undefined,
+					{ cwd: process.cwd() },
+				);
+				expect(result.isError).toBe(true);
+				expect(result.details).toEqual({
+					...expected,
+					appliedFiles: [abs("src/a.ts")],
+				});
+			},
+		);
 
 		it("names nothing when the first path is the one that is stale", async () => {
 			recorded.length = 0;
