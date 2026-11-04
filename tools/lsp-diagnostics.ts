@@ -562,6 +562,21 @@ export function createLspDiagnosticsTool(
 				pathAlreadyResolved?: boolean;
 			};
 			const severity = (typedParams.severity ?? "all") as string;
+			// #5138 D9: an unknown tier used to fall through `applySeverityFilter`'s
+			// `?? 0` and return EVERY diagnostic, as if the requested tier had
+			// matched. Refuse before any finding is rendered.
+			if (!(LSP_SEVERITY_FILTERS as readonly string[]).includes(severity)) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Unknown severity "${severity}". Accepted tiers: ${LSP_SEVERITY_FILTERS.join(", ")}.`,
+						},
+					],
+					isError: true,
+					details: {},
+				};
+			}
 			const cwd = ctx.cwd ?? process.cwd();
 			const concurrency = boundedPositiveInt(
 				typedParams.concurrency,

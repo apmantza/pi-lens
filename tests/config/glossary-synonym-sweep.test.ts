@@ -458,7 +458,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/ipc.ts": 8,
 		"clients/mcp/review.ts": 8,
 		"clients/mcp/session.ts": 1,
-		"clients/module-report.ts": 29,
+		"clients/module-report.ts": 32,
+		// 31 -> 32 (#5138): the callback-handle kind refusal returns the report's
+		// own `error` condition too.
+		// 29 -> 31 (#5138): the kind-mismatch refusal and the unreadable catch
+		// both read the report's own `error` condition.
 		// 27 -> 29 (#5137): the text renderer prints the report's own `error`
 		// field twice on one line, as the guard and as the message.
 		// 3 -> 5 (#4493): readGitHead and listGitHeadDelta read the spawn
@@ -495,7 +499,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 21 -> 23 (#5257): `isCompletedPassResult` reads the result's `error`,
 		// and the JSON parser sets the unreadable-output and load-failure errors.
 		"clients/test-runner-client.ts": 23,
-		"clients/test-runner-delivery.ts": 6,
+		// 6 -> 7 (#5259): the stage-time idle read's `delivery-failed` record
+		// carries the thrown text in the record's own `error` field.
+		"clients/test-runner-delivery.ts": 7,
 		"clients/tool-agreement.ts": 2,
 		"clients/tree-sitter-cache.ts": 4,
 		// #3605: 18 -> 6. The rewritten wasm classifier, `reportWasmAbort` and
@@ -519,7 +525,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"tools/lsp-navigation-text.ts": 1,
 		"tools/module-report.ts": 11,
 		"mcp/analyze-cli.ts": 1,
-		"mcp/server.ts": 32,
+		// 32 -> 36 (#5138): the read_symbol handler renders `result.error` as the
+		// pi tool does (condition test, message, structured `error` field).
+		"mcp/server.ts": 36,
 	},
 	filter: {
 		"clients/actionable-warnings.ts": 10,
@@ -919,7 +927,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/latency-logger.ts": 1,
 		"clients/mcp/session.ts": 1,
 		"clients/metrics-client.ts": 4,
-		"clients/module-report.ts": 17,
+		// 18 -> 19 (#5138): the callback-handle kind refusal logs its miss too.
+		// 17 -> 18 (#5138): the kind-mismatch refusal logs its miss through the
+		// same `read_symbol` phase as every other miss in this file.
+		"clients/module-report.ts": 19,
 		"clients/ndjson-logger.ts": 2,
 		"clients/opengrep-client.ts": 1,
 		"clients/process-singletons.ts": 4,
@@ -1246,7 +1257,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
-		"clients/module-report.ts": 31,
+		// 31 -> 32 (#5138): the kind-mismatch refusal returns the same `path`
+		// field as every other `readSymbol` miss.
+		// 32 -> 33 (#5138): so does the callback-handle kind refusal.
+		"clients/module-report.ts": 33,
 		// 6 -> 9 (#3650): MutationLineResult.path field, the adapter-declared
 		// preference, and the readToolResultPathField return.
 		"clients/mutating-tool.ts": 9,
@@ -1533,7 +1547,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// payload's per-hit `path.relative`; the renderer now owns that spelling.
 		// 38 -> 33 (#5137): the module_report handler stops building its own
 		// `path.relative` summary and delegates the rendering.
-		"mcp/server.ts": 33,
+		// 33 -> 34 (#5138): the read_symbol error branch names `path.basename(file)`.
+		"mcp/server.ts": 34,
 		"index.ts": 20,
 		"clients/command-path.ts": 5,
 	},
@@ -1602,7 +1617,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/runtime-turn.ts": 9,
 		"clients/search-read-registration.ts": 1,
 		"clients/test-runner-client.ts": 4,
-		"clients/test-runner-delivery.ts": 15,
+		// 15 -> 16 (#5259): the stage-time idle read writes its failure through
+		// the module's existing `record` helper.
+		"clients/test-runner-delivery.ts": 16,
 		"clients/turn-summary.ts": 4,
 		"clients/warm-attach.ts": 9,
 		"tools/lsp-diagnostics.ts": 1,

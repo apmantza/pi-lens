@@ -1670,6 +1670,12 @@ export async function computeCascadeForFile(
 					graph.symbolNodesByFile.get(normalizedFileKey) ?? [];
 				const refFiles = new Set<string>();
 				const refsStart = Date.now();
+				// Serial on purpose (#5174). tsserver answers one request at a time, so
+				// overlapping these calls shares one 750ms window between them and drops
+				// the later symbols' answers (a one-at-a-time double returned 1 of 3
+				// symbols). Measured gain of overlapping: 6-44 ms on tsserver, 1-3 ms on
+				// clangd; rust-analyzer and gopls were not measured. Each call keeps its
+				// own 750ms, so re-measure before overlapping these calls again.
 				for (const symbolName of impact.changedSymbols.slice(0, 3)) {
 					const symbolNodeId = symbolNodeIds.find((id) => {
 						const node = graph.nodes.get(id);

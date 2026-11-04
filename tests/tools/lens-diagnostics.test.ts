@@ -6359,3 +6359,25 @@ describe("lens_diagnostics mode=full keys one file once across link spellings (#
 		expect(text).toContain("(pending)");
 	});
 });
+
+describe("lens_diagnostics severity validation (#5138 D9)", () => {
+	it("refuses an unknown severity before rendering session findings", async () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lens-sev-"));
+		try {
+			const tool = createLensDiagnosticsTool({} as never, () => tmpDir);
+			const result = (await tool.execute(
+				"lens-bad-severity",
+				{ source: "session", severity: "Warning" },
+				undefined,
+				null,
+				{ cwd: tmpDir },
+			)) as { isError?: boolean; content: { text?: string }[] };
+			expect(result.isError).toBe(true);
+			const text = String(result.content[0]?.text);
+			expect(text).toContain('Unknown severity "Warning"');
+			expect(text).toContain("error, warning, information, hint, all");
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+});

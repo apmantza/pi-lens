@@ -84,7 +84,7 @@ const FULLY_PINNED = [
  * `DEFERRED_COUNT` as pins land, and a reviewer judges every rise of either.
  */
 const DEFERRED_COUNT = 135;
-const NOT_CODE_CHOICE_COUNT = 242;
+const NOT_CODE_CHOICE_COUNT = 243;
 
 interface PinTest {
 	test: string;

@@ -894,9 +894,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :135, :184, :191
 	"clients/module-report.ts": {
 		silent: 5,
-		identities: "c5963dbdc097fc3c",
+		identities: "1bf5e063cb9257e7",
 		reason: PRE_RULE,
-	}, // :552, :1915, :1979, :2498, :2780
+	}, // :558, :1993, :2057, :2721, :3037
 	"clients/mutation-attribution.ts": {
 		silent: 2,
 		identities: "ea2c0a9a5c5916ae",
@@ -1193,10 +1193,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :358, :1071, :1121, :1137, :1181, :1211, :1256, :1355, :1556, :1962, :2043, :2310, :3458, :3467
 	"clients/test-runner-delivery.ts": {
-		silent: 2,
-		identities: "f4ada83f93d3b6b9",
-		reason: PRE_RULE,
-	}, // :319, :337
+		silent: 3,
+		identities: "4cdd627d04c0d6e1",
+		reason:
+			"Each handler records `delivery-failed` through this module's `record` helper (emitBounded `test_runner_delivery`, ledger kind test-runner-delivery), a callee the record-seam naming rule cannot see. 2 -> 3 (#5259): the stage-time idle read at a publish.",
+	}, // :304, :364, :382
 	"clients/todo-scanner.ts": {
 		silent: 2,
 		identities: "353a61a7a5f28c4e",
