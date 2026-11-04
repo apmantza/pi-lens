@@ -16,9 +16,10 @@
  * entry `lintLocalPrBody` (what `--lint-local` runs), with the diff the
  * workflow's `add-paths` produces for that PR.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { lintLocalPrBody } from "../../scripts/check-pr-body.mjs";
-import { gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { renderPromotionBody } from "../../scripts/lib/lsp-idle-eviction-promote.mjs";
 import { buildRefreshPrBody } from "../../scripts/lib/refresh-flips.mjs";
 
@@ -52,10 +53,21 @@ const postImages = (diff: string) =>
 	new Map([...diff.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((m) => [m[1], "new\n"]));
 
 function lint(body: string, title: string, diff: string) {
-	// Only the PR diff is the workflow's; the test corpus and base reads stay
-	// real so a citation in a body is judged against the tree.
-	const git = ((args: string[], options: never) =>
-		args[0] === "diff" ? diff : gitExecFileSync(args, options)) as never;
+	// Only the PR diff is the workflow's. `ls-files` answers from the working
+	// tree (the corpus a citation in a body is judged against) and every other
+	// git read throws, which the lint treats as unresolved; no git process is
+	// spawned (the real-process-spawn ratchet, tests/clients/flake-shape-ratchet.test.ts).
+	const git = ((args: string[]) => {
+		if (args[0] === "diff") return diff;
+		if (args[0] === "ls-files")
+			return args.includes("--others")
+				? ""
+				: fs
+						.readdirSync(path.join(process.cwd(), "tests"), { recursive: true })
+						.map((file) => `tests/${String(file).replaceAll("\\", "/")}`)
+						.join("\n");
+		throw new Error("git is not available in this test");
+	}) as never;
 	// The label of a referenced issue is not this file's subject: pinned at the
 	// process boundary, as tests/scripts/check-pr-body-bot-block.test.ts does.
 	return lintLocalPrBody(body, process.cwd(), git, {
