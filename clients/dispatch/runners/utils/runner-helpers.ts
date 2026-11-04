@@ -2354,14 +2354,38 @@ function noteSgUnavailable(
 	});
 }
 
-export function getSgCommand(): { cmd: string; args: string[] } {
+/** The command the availability sweep proved works (empty `args` for a bare binary). */
+export interface SgSweptCommand {
+	readonly kind: "swept";
+	readonly cmd: string;
+	readonly args: readonly string[];
+}
+
+/**
+ * What `getSgCommand` returns BEFORE any sweep ran: a guess, not a resolution.
+ * A separate type so a caller must narrow on `kind` to use it; it is never
+ * assignable to `ResolvedSgCommand` (sg-runner.ts), which is what the temp
+ * scans take (#5247).
+ */
+export interface SgNpxFallbackCommand {
+	readonly kind: "npx-fallback";
+	readonly cmd: "npx";
+	readonly args: readonly string[];
+}
+
+export function getSgCommand(): SgSweptCommand | SgNpxFallbackCommand {
 	ensureCurrentSgGeneration();
-	return {
-		cmd: sgCmd ?? "npx",
-		args: sgCmdArgs.length
-			? sgCmdArgs
-			: ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"],
-	};
+	// Decide on the command, never on the argument list: a resolved bare binary
+	// legitimately has `[]` args, and falling back on emptiness appended the npx
+	// preamble to it ("unexpected argument '--no'", #5247).
+	if (sgCmd === null) {
+		return {
+			kind: "npx-fallback",
+			cmd: "npx",
+			args: ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"],
+		};
+	}
+	return { kind: "swept", cmd: sgCmd, args: sgCmdArgs };
 }
 
 // =============================================================================
