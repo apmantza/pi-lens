@@ -18,7 +18,10 @@ import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { isReadableSourceFile } from "./file-kinds.js";
 import { normalizeHostToolPath } from "./path-utils.js";
-import { classifyMutatingTool } from "./mutating-tool.js";
+import {
+	appliedFilesOfOwnTool,
+	classifyMutatingTool,
+} from "./mutating-tool.js";
 import { countFileLines } from "./read-guard-tool-lines.js";
 import type { SearchReadLocation } from "./search-read-registration.js";
 import { stripAnsi } from "./sanitize.js";
@@ -1960,14 +1963,24 @@ export function extractDeletedPathsFromCommand(
  * `input.command` names written files. The command half carries no tool-name
  * gate on purpose: a shell that wrote files runs the same pipeline whatever
  * its tool is named, and the edit budget must cover that work.
+ *
+ * #5248: a pi-lens tool that reports the files it wrote (`details.appliedFiles`,
+ * `appliedFilesOfOwnTool`) is edit-class too. Its dispatch runs once per file,
+ * so the read-only wall abandoned a multi-file rename or replace after the
+ * first file, and the commit gate ran before the rest published a verdict.
  */
 export function isEditClassToolResult(
-	event: { toolName?: string; input?: { command?: unknown } },
+	event: {
+		toolName?: string;
+		input?: { command?: unknown };
+		details?: unknown;
+	},
 	cwd: string,
 ): boolean {
 	if (classifyMutatingTool(event, { recognizeOnly: true }) !== undefined) {
 		return true;
 	}
+	if (appliedFilesOfOwnTool(event).length > 0) return true;
 	const command = event?.input?.command;
 	return (
 		typeof command === "string" &&

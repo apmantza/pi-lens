@@ -20,17 +20,19 @@ import * as path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, expect, it } from "vitest";
 import { Type } from "../clients/deps/typebox.js";
-import { normalizeMapKey } from "../clients/path-utils.js";
 import {
 	BLOCKING_FILE,
 	CLEAN_FILE,
 	GATE_BLOCK,
 	GUARDED_FLAGS,
 	RAN_MARKER,
+	type DispatchRow,
 	commitAttempt,
 	endTurn,
 	openGuardedSession,
 	readTarget,
+	reportedRules,
+	runnerRowsFor,
 	seed,
 	step,
 	toolResults,
@@ -87,12 +89,6 @@ function foreignClaimTool(target: string): ToolDefinition {
 	};
 }
 
-interface Row {
-	type?: string;
-	filePath?: string;
-	diagnostics?: Array<{ rule?: string }>;
-}
-
 describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 	it("control: a write of the same bytes reaches the dispatcher (the row detector sees it)", async () => {
 		const { proj, target } = seed(fixture.root, "write-control", CLEAN_FILE);
@@ -104,16 +100,9 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		await handle.prompt("write it");
 		const read = await handle.latencyRows();
 		expect(read.skipped).toBe(0);
-		expect(
-			(read.rows as Row[])
-				.filter(
-					(row) =>
-						row.type === "runner" &&
-						row.filePath !== undefined &&
-						normalizeMapKey(row.filePath) === normalizeMapKey(target),
-				)
-				.flatMap((row) => (row.diagnostics ?? []).map((d) => d.rule)),
-		).toContain("debugger-statement");
+		expect(reportedRules(read.rows as DispatchRow[], target)).toContain(
+			"debugger-statement",
+		);
 	});
 
 	it("refuses a commit over the blocker an applied replace introduced", async () => {
@@ -153,27 +142,19 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		await handle.prompt("preview");
 		const afterPreview = await handle.latencyRows();
 		expect(afterPreview.skipped).toBe(0);
-		const runnerRowsFor = (rows: Row[], file: string) =>
-			rows.filter(
-				(row) =>
-					row.type === "runner" &&
-					row.filePath !== undefined &&
-					normalizeMapKey(row.filePath) === normalizeMapKey(file),
-			);
 		expect(fs.readFileSync(target, "utf8")).toBe(CLEAN_FILE);
 		for (const file of [target, second, untouched])
-			expect(runnerRowsFor(afterPreview.rows as Row[], file)).toEqual([]);
+			expect(runnerRowsFor(afterPreview.rows as DispatchRow[], file)).toEqual(
+				[],
+			);
 
 		await handle.prompt("apply");
 		const read = await handle.latencyRows();
 		expect(read.skipped).toBe(0);
-		const rows = read.rows as Row[];
+		const rows = read.rows as DispatchRow[];
 		expect(fs.readFileSync(target, "utf8")).toBe(BLOCKING_FILE);
 		expect(fs.readFileSync(second, "utf8")).toBe(BLOCKING_FILE);
-		const rules = (file: string) =>
-			runnerRowsFor(rows, file).flatMap((row) =>
-				(row.diagnostics ?? []).map((d) => d.rule),
-			);
+		const rules = (file: string) => reportedRules(rows, file);
 		// Each changed file reached the dispatcher exactly once; the file the
 		// pattern did not match reached it never.
 		expect(
@@ -221,16 +202,9 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 
 			const read = await handle.latencyRows();
 			expect(read.skipped).toBe(0);
-			expect(
-				(read.rows as Row[])
-					.filter(
-						(row) =>
-							row.type === "runner" &&
-							row.filePath !== undefined &&
-							normalizeMapKey(row.filePath) === normalizeMapKey(target),
-					)
-					.flatMap((row) => (row.diagnostics ?? []).map((d) => d.rule)),
-			).not.toContain("debugger-statement");
+			expect(reportedRules(read.rows as DispatchRow[], target)).not.toContain(
+				"debugger-statement",
+			);
 		},
 	);
 });

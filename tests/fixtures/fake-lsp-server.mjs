@@ -1009,6 +1009,9 @@ function handle(raw) {
 						: { hoverProvider: true }),
 					definitionProvider: true,
 					referencesProvider: true,
+					// #5248: a real rename only when asked, so the capability set the
+					// other suites pin does not move.
+					...(process.env.FAKE_LSP_RENAME === "1" ? { renameProvider: true } : {}),
 					...(process.env.FAKE_LSP_NO_DOCUMENT_SYMBOL === "1"
 						? {}
 						: { documentSymbolProvider: true }),
@@ -1587,6 +1590,42 @@ function handle(raw) {
 		);
 		if (delay > 0) setTimeout(reply, delay);
 		else reply();
+		return;
+	}
+
+	// #5248: `FAKE_LSP_RENAME=1`. A real single-identifier rename over the
+	// documents the client opened: every whole-word occurrence of the identifier
+	// at the requested position becomes `newName`, in every open document, so a
+	// rename that spans two files answers a two-file WorkspaceEdit.
+	if (data.method === "textDocument/rename" && process.env.FAKE_LSP_RENAME === "1") {
+		const { uri } = data.params.textDocument;
+		const { line, character } = data.params.position;
+		const lines = (openDocuments.get(uri) ?? "").split("\n");
+		const word = [...(lines[line] ?? "").matchAll(/[A-Za-z_$][\w$]*/g)].find(
+			(m) => m.index <= character && character <= m.index + m[0].length,
+		)?.[0];
+		if (!word) {
+			send({ jsonrpc: "2.0", id: data.id, result: null });
+			return;
+		}
+		const changes = {};
+		for (const [docUri, text] of openDocuments) {
+			const edits = [];
+			text.split("\n").forEach((docLine, docLineIndex) => {
+				for (const m of docLine.matchAll(/[A-Za-z_$][\w$]*/g)) {
+					if (m[0] !== word) continue;
+					edits.push({
+						range: {
+							start: { line: docLineIndex, character: m.index },
+							end: { line: docLineIndex, character: m.index + word.length },
+						},
+						newText: data.params.newName,
+					});
+				}
+			});
+			if (edits.length > 0) changes[docUri] = edits;
+		}
+		send({ jsonrpc: "2.0", id: data.id, result: { changes } });
 		return;
 	}
 

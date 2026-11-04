@@ -397,6 +397,10 @@ const lspSpawnHeavyInclude = [
 	// same project overrides, one held 8 s; the session adds pi's own turn loop
 	// on top of the wait.
 	"tests/index-4632-s7-turn-end-ordering.test.ts",
+	// #5248: lsp_navigation rename, rename_file and executeCommand through a REAL
+	// pi AgentSession over a real fake-LSP child; the commit gate reads the
+	// verdicts the multi-file dispatch publishes.
+	"tests/index-5248-lsp-navigation-apply-dispatch.test.ts",
 	"tests/mcp/analyze-cli.test.ts",
 	// #4300: the MCP witness crosses Lean's real initialize handshake.
 	"tests/mcp/server.smoke-fallback-5014.test.ts",

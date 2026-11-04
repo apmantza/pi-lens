@@ -78,6 +78,7 @@ import { PathKeyedMap } from "./path-keyed-map.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
 import {
+	appliedFilesOfOwnTool,
 	classifyMutatingTool,
 	isBashDerivedReplay,
 	isProviderReplayCall,
@@ -2267,23 +2268,6 @@ function composePartialApplyResult(
 	};
 }
 
-/**
- * #5239: the files an applied `ast_grep_replace` rewrote and the mutation
- * bridge accepted, read from the tool's own result details. A dry run, a
- * refused apply and every other tool name none, so they dispatch nothing here.
- */
-function appliedFilesOfOwnTool(event: {
-	toolName: string;
-	details?: unknown;
-}): string[] {
-	if (event.toolName !== "ast_grep_replace") return [];
-	const listed = (event.details as { appliedFiles?: unknown } | undefined)
-		?.appliedFiles;
-	return Array.isArray(listed)
-		? listed.flatMap((entry) => (typeof entry === "string" ? [entry] : []))
-		: [];
-}
-
 export async function handleToolResult(
 	deps: ToolResultDeps,
 ): Promise<ToolResultReturn> {
@@ -3680,12 +3664,13 @@ export async function handleToolResult(
 			);
 		}
 	}
-	// #5239: `ast_grep_replace` is a pi-lens-owned writer the net above never
-	// arms (`isPiLensToolName`), and it names its targets in a `paths` array
-	// the classified chain cannot read, so an applied rewrite reached the
-	// bridge's bookkeeping and nothing else: no dispatch, no blocker, no
-	// commit-gate verdict. The tool reports the files the bridge accepted in
-	// its result details; they take the SAME dispatch the settle's changed
+	// #5239, #5248: `ast_grep_replace` and `lsp_navigation` are pi-lens-owned
+	// writers the net above never arms (`isPiLensToolName`); the first names
+	// its targets in a `paths` array the classified chain cannot read and the
+	// second writes files its `path` never named (a rename's importers), so an
+	// applied rewrite reached the bridge's bookkeeping and nothing else: no
+	// dispatch, no blocker, no commit-gate verdict. The tool reports the files
+	// the bridge accepted in its result details; they take the SAME dispatch the settle's changed
 	// paths take below (`observedReplayed` / `observedChangedPaths` name that
 	// seam, not a provenance). The tool is never armed, so the settle above
 	// recorded nothing for this call and the two sources cannot both dispatch.

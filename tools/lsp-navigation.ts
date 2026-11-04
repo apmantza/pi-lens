@@ -1013,7 +1013,7 @@ export function createLspNavigationTool(
 			const workspaceScopeAttribution: LSPWorkspaceScopeAttribution = {};
 
 			const finalize = (
-				payload: {
+				unreported: {
 					content: Array<{ type: "text"; text: string }>;
 					isError?: boolean;
 					details?: Record<string, unknown>;
@@ -1027,10 +1027,24 @@ export function createLspNavigationTool(
 					callSiteUri?: string;
 				},
 			): typeof payload & {
-				details: typeof payload.details & {
+				details: typeof unreported.details & {
 					failureKind: string;
 				};
 			} => {
+				// #5248: the files the apply wrote and the mutation bridge accepted,
+				// for `handleToolResult`'s dispatch feed. A failed, skipped or
+				// dry-run call accepted none, so it reports none.
+				const payload =
+					mutationContext?.acceptedFiles &&
+					mutationContext.acceptedFiles.length > 0
+						? {
+								...unreported,
+								details: {
+									...unreported.details,
+									appliedFiles: [...mutationContext.acceptedFiles],
+								},
+							}
+						: unreported;
 				if (
 					payload.isError &&
 					requestedApply &&
@@ -1239,6 +1253,7 @@ export function createLspNavigationTool(
 					cwd,
 					sessionId: ctx.sessionManager?.getSessionId?.(),
 					correlationId: newLspMutationCorrelationId(_toolCallId),
+					acceptedFiles: [],
 					// #4187 R4-1: the call whose `tool_call` licensed the paths it
 					// named; the workspace edit's other files (a rename's importers)
 					// are unlicensed, so they end an authorship instead of advancing it.
