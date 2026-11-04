@@ -2147,6 +2147,47 @@ describe("readSymbol — duplicate-name disambiguation (#523 item 4)", () => {
 		expect(result.source).toBeUndefined();
 	});
 
+	it("refuses a mismatched kind on a callback handle instead of returning the body (#5138)", async () => {
+		// Recurrence: the callback fallback in readSymbol checked only the name, so
+		// `kind: "nope"` on `run.resetLSPService@3` returned the body (Greptile P1).
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"callbacks.ts",
+			[
+				"export async function run(ctx: any) {",
+				"  await handleTurnEnd({",
+				"    resetLSPService: () => {",
+				"      ctx.ui.setStatus('x');",
+				"    },",
+				"  });",
+				"}",
+			].join("\n"),
+		);
+
+		const refused = await readSymbol(
+			"callbacks.ts",
+			"run.resetLSPService@3",
+			env.tmpDir,
+			{ kind: "nope" },
+		);
+		expect(refused.found).toBe(false);
+		expect(refused.error).toContain('"nope"');
+		expect(refused.error).toContain("object_property_callback");
+		expect(refused.source).toBeUndefined();
+
+		for (const kind of [undefined, "object_property_callback"]) {
+			const ok = await readSymbol(
+				"callbacks.ts",
+				"run.resetLSPService@3",
+				env.tmpDir,
+				{ kind },
+			);
+			expect(ok.found).toBe(true);
+			expect(ok.source).toContain("ctx.ui.setStatus");
+		}
+	});
+
 	it("distinguishes an unreadable path from a missing symbol (#5138)", async () => {
 		const env = makeEnv();
 		// A directory at the requested path: it exists, but no file bytes can be read.
@@ -2156,6 +2197,10 @@ describe("readSymbol — duplicate-name disambiguation (#523 item 4)", () => {
 
 		expect(result.found).toBe(false);
 		expect(result.error).toBeDefined();
+		// F5: the tool prefixes "Could not inspect <file>:" already, so the client
+		// error must not repeat a "Could not read" prefix or the absolute path.
+		expect(result.error).not.toContain("Could not read");
+		expect(result.error).not.toContain(env.tmpDir);
 		expect(result.suggestions).toBeUndefined();
 	});
 });

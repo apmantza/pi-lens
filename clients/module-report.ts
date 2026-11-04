@@ -2726,7 +2726,7 @@ export async function readSymbol(
 			found: false,
 			path: absPath,
 			name: symbolName,
-			error: `Could not read ${absPath}: ${diagnosticMessage(err)}`,
+			error: diagnosticMessage(err),
 		};
 	}
 
@@ -2850,6 +2850,15 @@ export async function readSymbol(
 			name: symbolName,
 			...(callbackWarnings.length > 0 ? { warnings: callbackWarnings } : {}),
 			...(suggestions.length > 0 ? { suggestions } : {}),
+		};
+	}
+	if (symbolKindFilter && callback.kind !== symbolKindFilter) {
+		log(false);
+		return {
+			found: false,
+			path: absPath,
+			name: symbolName,
+			error: `Kind "${symbolKindFilter}" does not match "${symbolName}". Accepted kinds: ${callback.kind}.`,
 		};
 	}
 	const source = lines
