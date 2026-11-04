@@ -19,9 +19,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearCoverageNoticeState } from "../../../clients/dispatch/dispatcher.js";
+import {
+	clearCoverageNoticeState,
+	createDispatchContext,
+	dispatchForFile,
+	RunnerRegistry,
+} from "../../../clients/dispatch/dispatcher.js";
+import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { dispatchLint } from "../../../clients/dispatch/integration.js";
 import { getServersForFileWithConfig } from "../../../clients/lsp/config.js";
+import type { RunnerResult } from "../../../clients/dispatch/types.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const UNAVAILABLE = "analysis unavailable";
@@ -85,5 +92,80 @@ describe("a name no language server selects is not 'analysis unavailable'", () =
 		).toEqual(["groovy"]);
 		const output = await writeAndDispatch("A.groovy", "class A {}\n");
 		expect(output).toContain("Pi-lens groovy analysis unavailable");
+	});
+});
+
+// The quiet answer belongs to the language server's own "no server selects
+// this file", not to any runner that says `no-files-matched`. Recurrence this
+// guards: oxlint states the same reason when a config IGNORES the file, which
+// is an unchecked file and must keep its notice. A primary group is
+// `["lsp", "dotnet-build"]` for csharp; the second runner stands for any
+// non-lsp runner of a primary group.
+describe("only the lsp runner's no-files-matched silences the notice", () => {
+	const NOT_APPLICABLE: RunnerResult = {
+		status: "skipped",
+		diagnostics: [],
+		semantic: "none",
+		skipReason: "no-files-matched",
+	};
+	const BARE_SKIP: RunnerResult = {
+		status: "skipped",
+		diagnostics: [],
+		semantic: "none",
+	};
+
+	async function dispatchCsharp(
+		rows: ReadonlyArray<readonly [string, RunnerResult]>,
+	) {
+		const registry = new RunnerRegistry();
+		for (const [id, result] of rows) {
+			registry.register({
+				id,
+				appliesTo: ["csharp"],
+				priority: 10,
+				async run() {
+					return result;
+				},
+			});
+		}
+		const file = path.join(tmpDir, "Program.cs");
+		fs.writeFileSync(file, "class P {}\n");
+		const ctx = createDispatchContext(
+			file,
+			tmpDir,
+			{ getFlag: () => false },
+			new FactStore(),
+			false,
+		);
+		clearCoverageNoticeState();
+		return dispatchForFile(
+			ctx,
+			[{ mode: "all", runnerIds: rows.map(([id]) => id) }],
+			registry,
+			undefined,
+			{ dedupeCoverageNotice: false },
+		);
+	}
+
+	it("stays quiet when the lsp row is the only primary row that ran", async () => {
+		const result = await dispatchCsharp([["lsp", NOT_APPLICABLE]]);
+		expect(result.output).not.toContain(UNAVAILABLE);
+		expect(result.unconfirmedStatus).toBeUndefined();
+	});
+
+	it("keeps the notice when a non-lsp primary runner also states no-files-matched", async () => {
+		const result = await dispatchCsharp([
+			["lsp", NOT_APPLICABLE],
+			["dotnet-build", NOT_APPLICABLE],
+		]);
+		expect(result.output).toContain(UNAVAILABLE);
+	});
+
+	it("keeps the notice when a sibling primary runner skipped without a reason", async () => {
+		const result = await dispatchCsharp([
+			["lsp", NOT_APPLICABLE],
+			["dotnet-build", BARE_SKIP],
+		]);
+		expect(result.output).toContain(UNAVAILABLE);
 	});
 });
