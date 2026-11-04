@@ -139,5 +139,34 @@ describe("groovy file kind (#5235 slice 1)", () => {
 				false,
 			);
 		});
+
+		// Recurrence this guards (PR #5238 review r3, coderabbit): the changelog
+		// says the `lang:` filters match named files of every kind, but the
+		// structured filter compared the token with the registry id only, so
+		// `lang:docker` (the kind; the registry id is "dockerfile") found
+		// Dockerfile inline and missed it in symbol_search, and the registry's
+		// exact-name tier never saw `Dockerfile.dev` at all.
+		it("symbol_search matches a named file by its kind, as the inline filter does", () => {
+			const named: ReadonlyArray<readonly [string, string]> = [
+				["Dockerfile", "docker"],
+				["ci/Dockerfile.dev", "docker"],
+				["Makefile", "shell"],
+				["CMakeLists.txt", "cmake"],
+			];
+			for (const [file, kind] of named) {
+				const inline = buildWordIndexQueryFilter([
+					{ key: "lang", value: kind, negated: false },
+				]);
+				expect(inline?.(file), `inline ${kind} ${file}`).toBe(true);
+				expect(
+					symbolSearchFileMatchesLang(file, kind),
+					`structured ${kind} ${file}`,
+				).toBe(true);
+			}
+			expect(symbolSearchFileMatchesLang("Dockerfile", "shell")).toBe(false);
+			expect(symbolSearchFileMatchesLang("Dockerfile.dev", "python")).toBe(
+				false,
+			);
+		});
 	});
 });

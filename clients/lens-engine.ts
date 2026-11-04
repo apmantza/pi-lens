@@ -22,6 +22,7 @@ import {
 	type DispatchLatencyReport,
 	getLatencyReports,
 } from "./dispatch/integration.js";
+import { SPECIAL_FILENAMES } from "./file-kinds.js";
 import {
 	getResourceFootprint as getResourceFootprintSnapshot,
 	type ResourceFootprint,
@@ -386,10 +387,20 @@ export function symbolSearchFileMatchesLang(
 	file: string,
 	lang: string,
 ): boolean {
-	// A language the registry declares by basename (Jenkinsfile, Dockerfile)
-	// has no extension to match; the token is its id or its grammar name.
+	// A language the registry declares by basename (Jenkinsfile, Gemfile) has no
+	// extension to match; the token is its id or its grammar name. A kind named
+	// by pattern (Dockerfile, Dockerfile.dev, Makefile) is matched by the kind
+	// token, the same predicate the inline `lang:` filter applies.
 	const declared = resolveFilenameLanguage(file);
 	if (declared && (declared.id === lang || declared.grammar === lang)) {
+		return true;
+	}
+	const base = path.basename(file);
+	if (
+		SPECIAL_FILENAMES.some(
+			(entry) => entry.kind === lang.toLowerCase() && entry.pattern.test(base),
+		)
+	) {
 		return true;
 	}
 	const exts = extensionsForLanguageToken(lang);
