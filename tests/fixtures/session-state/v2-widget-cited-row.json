@@ -1,0 +1,71 @@
+{
+	"version": 2,
+	"sessionId": "v2-widget-cited-row",
+	"savedAt": 1790789700000,
+	"stores": {
+		"widget": {
+			"version": 3,
+			"sessionLanguages": [],
+			"files": [
+				{
+					"filePath": "/proj/chart/templates/deploy-a.yaml",
+					"runners": [],
+					"formatters": [],
+					"diagnostics": [
+						{
+							"severity": "error",
+							"semantic": "blocking",
+							"message": "bad indent",
+							"line": 1,
+							"rule": "error",
+							"tool": "helm-lint",
+							"uri": "file:///proj/chart/templates/deploy-a.yaml#L1",
+							"observedAt": 1790789610444
+						},
+						{
+							"severity": "error",
+							"semantic": "blocking",
+							"message": "nil pointer evaluating interface {}.image",
+							"line": 2,
+							"rule": "error",
+							"tool": "helm-lint",
+							"uri": "file:///proj/chart/templates/deploy-a.yaml#L2",
+							"observedAt": 1790789610444,
+							"citedFile": "/proj/chart/templates/other-b.yaml"
+						}
+					],
+					"allDiagnostics": [
+						{
+							"severity": "error",
+							"semantic": "blocking",
+							"message": "bad indent",
+							"line": 1,
+							"rule": "error",
+							"tool": "helm-lint",
+							"uri": "file:///proj/chart/templates/deploy-a.yaml#L1",
+							"observedAt": 1790789610444
+						},
+						{
+							"severity": "error",
+							"semantic": "blocking",
+							"message": "nil pointer evaluating interface {}.image",
+							"line": 2,
+							"rule": "error",
+							"tool": "helm-lint",
+							"uri": "file:///proj/chart/templates/deploy-a.yaml#L2",
+							"observedAt": 1790789610444,
+							"citedFile": "/proj/chart/templates/other-b.yaml"
+						}
+					],
+					"diagnosticCounts": {
+						"blocking": 2,
+						"errors": 2,
+						"warnings": 0
+					},
+					"hasFinalDiagnosticsSnapshot": true,
+					"touchedAt": 1790789610444
+				}
+			]
+		}
+	}
+}

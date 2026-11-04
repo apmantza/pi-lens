@@ -1,0 +1,13 @@
+.
+ERROR: Coverage failure: total of 75 is less than fail-under=100
+                                                                         [100%]
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.14.4-final-0 ________________
+
+Name     Stmts   Miss  Cover
+----------------------------
+mod.py       4      1    75%
+----------------------------
+TOTAL        4      1    75%
+FAIL Required test coverage of 100% not reached. Total coverage: 75.00%
+1 passed in 0.02s

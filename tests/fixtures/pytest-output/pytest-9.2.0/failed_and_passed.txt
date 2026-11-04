@@ -1,0 +1,9 @@
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+____________________________________ test_b ____________________________________
+test_two.py:4: in test_b
+    assert False
+E   assert False
+=========================== short test summary info ============================
+FAILED test_two.py::test_b - assert False
+1 failed, 1 passed in 0.01s
