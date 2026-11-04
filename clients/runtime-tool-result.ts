@@ -2278,8 +2278,7 @@ function appliedFilesOfOwnTool(event: {
 		?.appliedFiles;
 	return Array.isArray(listed)
 		? listed.filter(
-				(candidate): candidate is string =>
-					typeof candidate === "string" && path.isAbsolute(candidate),
+				(candidate): candidate is string => typeof candidate === "string",
 			)
 		: [];
 }
