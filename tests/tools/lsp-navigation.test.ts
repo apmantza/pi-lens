@@ -31,6 +31,7 @@ import { hashDiagnosticContent } from "../../clients/lsp/diagnostic-binding.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { isJsonCell } from "../../tools/render-compact.js";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -54,7 +55,7 @@ vi.mock("../../clients/python-environment.js", async (importOriginal) => {
 });
 
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
-import { createLspNavigationTool } from "../../tools/lsp-navigation.js";
+import { createLspNavigationTool as createRawLspNavigationTool } from "../../tools/lsp-navigation.js";
 import { LspRequestTimeoutError } from "../../clients/lsp/request-timeout-error.js";
 import { installLspService } from "../support/lsp-service-seam.js";
 
@@ -74,6 +75,35 @@ const parseToolJson = (result: {
 		);
 	}
 };
+
+/**
+ * The contract cases below assert the structured envelope, so they call the
+ * tool under the `view:"json"` hatch. The default text rendering has its own
+ * suite (`describe("lsp_navigation default text view")`), which builds the raw
+ * factory.
+ */
+function withJsonView(
+	tool: ReturnType<typeof createRawLspNavigationTool>,
+): ReturnType<typeof createRawLspNavigationTool> {
+	return {
+		...tool,
+		execute: (...args: Parameters<typeof tool.execute>) => {
+			const [toolCallId, params, signal, onUpdate, ctx] = args;
+			return tool.execute(
+				toolCallId,
+				{ view: "json", ...params },
+				signal,
+				onUpdate,
+				ctx,
+			);
+		},
+	};
+}
+
+const createLspNavigationTool: typeof createRawLspNavigationTool = (
+	getFlag,
+	deps,
+) => withJsonView(createRawLspNavigationTool(getFlag, deps));
 
 describe("lsp_navigation tool", () => {
 	beforeEach(() => {
@@ -2594,5 +2624,1005 @@ describe("lsp_navigation path resolution (#4577 M2)", () => {
 		} finally {
 			restore();
 		}
+	});
+});
+
+describe("lsp_navigation default text view", () => {
+	/** An LSP range, 0-based as the server reports it. */
+	const span = (line: number, character = 4) => ({
+		start: { line, character },
+		end: { line, character: character + 5 },
+	});
+	/**
+	 * A `CallHierarchyItem`, the operand the call-hierarchy operations traverse.
+	 * `data` is the server's own opaque handle, which the follow-up call must get
+	 * back unchanged.
+	 */
+	const callItem = (name: string, uri: string, line: number) => ({
+		name,
+		kind: 12,
+		uri,
+		range: span(line, 0),
+		selectionRange: span(line, 6),
+		data: { symbolId: 7 },
+	});
+	type NavParams = Parameters<
+		ReturnType<typeof createRawLspNavigationTool>["execute"]
+	>[1];
+	const runText = async (
+		toolCallId: string,
+		params: NavParams,
+	): Promise<string> => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			toolCallId,
+			params,
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		return String(result.content[0]?.text);
+	};
+
+	beforeEach(() => {
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				definition: vi.fn().mockResolvedValue([
+					{
+						uri: tmpFileUrl("sample.ts"),
+						range: {
+							start: { line: 11, character: 4 },
+							end: { line: 11, character: 9 },
+						},
+					},
+				]),
+				typeDefinition: vi
+					.fn()
+					.mockResolvedValue([
+						{ uri: tmpFileUrl("types.ts"), range: span(9, 0) },
+					]),
+				declaration: vi
+					.fn()
+					.mockResolvedValue([
+						{ uri: tmpFileUrl("declared.ts"), range: span(2, 2) },
+					]),
+				references: vi.fn().mockResolvedValue([
+					{ uri: tmpFileUrl("sample.ts"), range: span(2, 4) },
+					{ uri: tmpFileUrl("sample.ts"), range: span(7, 8) },
+				]),
+				implementation: vi
+					.fn()
+					.mockResolvedValue([
+						{ uri: tmpFileUrl("impl.ts"), range: span(20, 4) },
+					]),
+				hover: vi.fn().mockResolvedValue({
+					contents: {
+						kind: "markdown",
+						value: "```ts\nfunction run(): void\n```",
+					},
+				}),
+				signatureHelp: vi.fn().mockResolvedValue({
+					signatures: [
+						{
+							label: "run(a: number, b: string): void",
+							documentation: "Runs the thing.",
+							parameters: [{ label: "a" }, { label: "b" }],
+						},
+					],
+					activeSignature: 0,
+					activeParameter: 1,
+				}),
+				documentSymbol: vi.fn().mockResolvedValue([
+					{
+						name: "run",
+						kind: 12,
+						range: {
+							start: { line: 0, character: 0 },
+							end: { line: 4, character: 1 },
+						},
+						selectionRange: {
+							start: { line: 0, character: 9 },
+							end: { line: 0, character: 12 },
+						},
+					},
+				]),
+				codeAction: vi
+					.fn()
+					.mockResolvedValue([
+						{ title: "Move to new file", kind: "refactor.move.newFile" },
+					]),
+				prepareCallHierarchy: vi
+					.fn()
+					.mockResolvedValue([callItem("run", tmpFileUrl("sample.ts"), 11)]),
+				incomingCalls: vi.fn().mockResolvedValue([
+					{
+						from: callItem("caller", tmpFileUrl("caller.ts"), 3),
+						fromRanges: [span(4, 6), span(9, 6)],
+					},
+				]),
+				outgoingCalls: vi.fn().mockResolvedValue([
+					{
+						to: callItem("callee", tmpFileUrl("callee.ts"), 30),
+						fromRanges: [span(8, 2)],
+					},
+				]),
+				workspaceSymbol: vi.fn().mockResolvedValue([
+					{
+						name: "ReportProcessor",
+						kind: 12,
+						location: {
+							uri: tmpFileUrl("sample.ts"),
+							range: span(2, 0),
+						},
+					},
+				]),
+				rename: vi.fn().mockResolvedValue({
+					documentChanges: [
+						{
+							kind: "rename",
+							oldUri: tmpFileUrl("sample.ts"),
+							newUri: tmpFileUrl("renamed.ts"),
+						},
+					],
+				}),
+				renameFile: vi.fn().mockResolvedValue({
+					applied: false,
+					serverIds: ["typescript"],
+					willRenameFailures: [],
+					didRenameFailures: [],
+					droppedConflicts: 0,
+					inputEditCount: 0,
+					summary: ["Renamed src/sample.ts → src/renamed.ts"],
+				}),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
+				// LSPService.executeCommand wraps the server value (#5224 review G7).
+				executeCommand: vi.fn().mockResolvedValue({
+					executed: true,
+					result: { alpha: 1, beta: "two" },
+				}),
+				getWorkspaceDiagnosticsSupport: vi
+					.fn()
+					.mockResolvedValue({ mode: "pull" }),
+				getDiagnostics: vi.fn().mockResolvedValue([
+					{
+						range: {
+							start: { line: 0, character: 0 },
+							end: { line: 0, character: 3 },
+						},
+						severity: 1,
+						message: "boom",
+						code: "TS1",
+					},
+				]),
+			}),
+		);
+	});
+
+	it("renders a location list as Neovim path:line:col lines, not JSON", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-definition",
+			{
+				operation: "definition",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const text = String(result.content[0]?.text);
+		expect(text).toContain(`${tmpPath("sample.ts")}:12:5`);
+		expect(text.startsWith("{")).toBe(false);
+	});
+
+	it("prints a location inside the project relative to it", async () => {
+		// The Neovim shape is a project-relative path; only a hit under the cwd
+		// can show that the display resolver runs at all (a tmp fixture is
+		// outside the cwd and answers its own absolute spelling either way).
+		const insideUri = pathToFileURL(
+			path.join(process.cwd(), "tools", "lsp-navigation-text.ts"),
+		).href;
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				definition: vi
+					.fn()
+					.mockResolvedValue([{ uri: insideUri, range: span(0, 0) }]),
+			}),
+		);
+		const text = await runText("text-relative", {
+			operation: "definition",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+		});
+		expect(text).toBe("tools/lsp-navigation-text.ts:1:1");
+	});
+
+	it("builds one display resolver per render and retains none", () => {
+		// Nothing a render prints depends on whether a resolver outlives it, so the
+		// retention is observable only in the module's own shape: a process that
+		// outlived many sessions kept one resolver per project it had rendered
+		// (defect shape 51, #5224 review G6).
+		const source = fs.readFileSync(
+			path.join(process.cwd(), "tools", "lsp-navigation-text.ts"),
+			"utf8",
+		);
+		expect(source).not.toMatch(
+			/^(?:const|let) \w*(?:Display|display|Resolver|resolver)\w* = new /m,
+		);
+	});
+
+	it("renders hover as its markdown", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-hover",
+			{
+				operation: "hover",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const text = String(result.content[0]?.text);
+		expect(text).toContain("function run(): void");
+		// The default view must not fall back to the JSON envelope the pre-text
+		// default returned.
+		expect(text).not.toContain('"tool":"lsp_navigation"');
+	});
+
+	it("renders a language-bearing hover snippet as a fenced code block", async () => {
+		// A `MarkedString` snippet carries its language; dropping the fence made
+		// the snippet read as prose (#5224 review G7).
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				hover: vi.fn().mockResolvedValue({
+					contents: { language: "ts", value: "function run(): void" },
+				}),
+			}),
+		);
+		const text = await runText("text-hover-snippet", {
+			operation: "hover",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+		});
+		expect(text.split("\n")).toEqual(["```ts", "function run(): void", "```"]);
+	});
+
+	it("renders documentSymbol as an indented start-end kind name tree", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-document-symbol",
+			{ operation: "documentSymbol", path: tmpPath("sample.ts") },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		expect(String(result.content[0]?.text)).toContain("  1-5 function run");
+	});
+
+	// Recurrence: #5224 moved the #5159 JSON-cell marker from the text return
+	// to the `view:"json"` one; the stale smoke's lsp_navigation case skips in
+	// every lane (error envelope), so only this case reds a marker on the
+	// wrong return. `isJsonCell` is the predicate the MCP stale advisory reads.
+	it("marks only the view:json result as a JSON cell", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const run = (view?: "json") =>
+			tool.execute(
+				`json-cell-${view ?? "text"}`,
+				{ operation: "documentSymbol", path: tmpPath("sample.ts"), view },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+		const json = await run("json");
+		expect(JSON.parse(String(json.content[0]?.text)).ok).toBe(true);
+		expect(isJsonCell(json)).toBe(true);
+		expect(isJsonCell(await run())).toBe(false);
+	});
+
+	it("renders codeAction as kind and title lines", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-code-action",
+			{
+				operation: "codeAction",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+				endLine: 1,
+				endCharacter: 2,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const text = String(result.content[0]?.text);
+		expect(text).toContain("refactor.move.newFile  Move to new file");
+		// The payload's own Note survives the re-render (`lspNavigationTextSurround`).
+		expect(text).toContain("no diagnostic quick fixes returned");
+	});
+
+	it("keeps the tool's own error text when the operation produced no result", async () => {
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explode"]),
+				executeCommand: vi.fn().mockRejectedValue(new Error("server exploded")),
+			}),
+		);
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-error",
+			{ operation: "executeCommand", command: "test.explode", apply: true },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		// No renderer reads an undefined result, so the LSP error keeps the payload's
+		// own text instead of reading as a successful run.
+		expect(String(result.content[0]?.text)).toContain(
+			"LSP error: server exploded",
+		);
+	});
+
+	it('keeps a multi-line LSP error line and its Note apart under view:"json"', async () => {
+		// One prefix parser reads both the envelope and the text view. An error
+		// whose own message carries a note keeps the `LSP error:` line in
+		// `errors` and the note in `notes`; folding them into one entry would
+		// make the envelope's own report unreadable.
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explode"]),
+				executeCommand: vi
+					.fn()
+					.mockRejectedValue(new Error("server exploded\nNote: escalated")),
+			}),
+		);
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-error-json",
+			{
+				operation: "executeCommand",
+				command: "test.explode",
+				apply: true,
+				view: "json",
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const envelope = parseToolJson(result);
+		expect(envelope.errors).toEqual(["LSP error: server exploded"]);
+		expect(envelope.notes).toEqual(["escalated"]);
+	});
+
+	it("keeps the capabilities table, which has no text renderer", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-capabilities",
+			{ operation: "capabilities", path: tmpPath("sample.ts") },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		// No renderer reads the capabilities table, so the payload's own text is
+		// the default view's answer rather than an empty body.
+		expect(String(result.content[0]?.text)).toContain("No active LSP server");
+	});
+
+	it('returns the structured envelope under view:"json"', async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-json-hatch",
+			{
+				operation: "definition",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+				view: "json",
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const envelope = parseToolJson(result);
+		expect(envelope.tool).toBe("lsp_navigation");
+		expect(envelope.resultCount).toBe(1);
+	});
+	it("renders typeDefinition as a location line", async () => {
+		const text = await runText("text-type-definition", {
+			operation: "typeDefinition",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+		});
+		expect(text).toBe(`${tmpPath("types.ts")}:10:1`);
+	});
+
+	it("renders declaration as a location line", async () => {
+		const text = await runText("text-declaration", {
+			operation: "declaration",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+		});
+		expect(text).toBe(`${tmpPath("declared.ts")}:3:3`);
+	});
+
+	it("renders references as one line per hit and keeps the payload's hint", async () => {
+		const text = await runText("text-references", {
+			operation: "references",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+		});
+		expect(text.split("\n")).toContain(`${tmpPath("sample.ts")}:3:5`);
+		expect(text.split("\n")).toContain(`${tmpPath("sample.ts")}:8:9`);
+		// The operation's own trailing Hint survives the re-render.
+		expect(text).toContain("retry from the symbol definition");
+	});
+
+	it("renders implementation as a location line", async () => {
+		const text = await runText("text-implementation", {
+			operation: "implementation",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+		});
+		expect(text).toBe(`${tmpPath("impl.ts")}:21:5`);
+	});
+
+	it("renders signatureHelp as the active signature and parameter", async () => {
+		const text = await runText("text-signature-help", {
+			operation: "signatureHelp",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+		});
+		expect(text.split("\n")[0]).toBe("run(a: number, b: string): void");
+		expect(text).toContain("Runs the thing.");
+		// The active parameter is marked, the other one is aligned under it.
+		expect(text).toContain("→ b");
+	});
+
+	it("renders prepareCallHierarchy as its symbol line and the reusable item", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-prepare-call",
+			{
+				operation: "prepareCallHierarchy",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const prepared = callItem("run", tmpFileUrl("sample.ts"), 11);
+		const lines = String(result.content[0]?.text).split("\n");
+		expect(lines[0]).toBe(`${tmpPath("sample.ts")}:12:7  function run`);
+		// A display line alone left nothing to pass to the traversal calls, and a
+		// second prepare can answer a different item (#5224 review G1).
+		expect(lines[1]).toBe(`callHierarchyItem: ${JSON.stringify(prepared)}`);
+
+		// The emitted item is the operand: parsing the line and passing it back
+		// reaches the caller, `data` included.
+		const item = JSON.parse(
+			String(lines[1]).slice("callHierarchyItem: ".length),
+		);
+		const traversal = await runText("text-prepare-then-incoming", {
+			operation: "incomingCalls",
+			callHierarchyItem: item,
+		});
+		expect(traversal.split("\n")[0]).toBe(
+			`${tmpPath("caller.ts")}:4:7  function caller`,
+		);
+		expect(
+			(
+				mocked.service as { incomingCalls: ReturnType<typeof vi.fn> }
+			).incomingCalls.mock.calls.at(-1)?.[0],
+		).toEqual(prepared);
+	});
+
+	it("renders each incoming call site under its caller", async () => {
+		const text = await runText("text-incoming", {
+			operation: "incomingCalls",
+			callHierarchyItem: callItem("run", tmpFileUrl("sample.ts"), 11),
+		});
+		expect(text.split("\n")).toEqual([
+			`${tmpPath("caller.ts")}:4:7  function caller`,
+			`  ${tmpPath("caller.ts")}:5:7`,
+			`  ${tmpPath("caller.ts")}:10:7`,
+		]);
+	});
+
+	it("renders each outgoing call site under the callee, in the calling file", async () => {
+		// The LSP `fromRanges` of an outgoing call are written in the item the
+		// caller asked about, not in `to`; naming `to`'s file would point at the
+		// callee's declaration instead of the call site.
+		const text = await runText("text-outgoing", {
+			operation: "outgoingCalls",
+			callHierarchyItem: callItem("run", tmpFileUrl("sample.ts"), 11),
+		});
+		expect(text.split("\n")).toEqual([
+			`${tmpPath("callee.ts")}:31:7  function callee`,
+			`  ${tmpPath("sample.ts")}:9:3`,
+		]);
+	});
+
+	it("renders workspaceSymbol as symbol lines", async () => {
+		const text = await runText("text-workspace-symbol", {
+			operation: "workspaceSymbol",
+			query: "ReportProcessor",
+		});
+		expect(text).toBe(`${tmpPath("sample.ts")}:3:1  function ReportProcessor`);
+	});
+
+	it("renders findSymbol as an indented symbol line under the file", async () => {
+		const text = await runText("text-find-symbol", {
+			operation: "findSymbol",
+			path: tmpPath("sample.ts"),
+			query: "run",
+		});
+		expect(text.split("\n")[0]).toBe(tmpPath("sample.ts"));
+		expect(text).toContain(":1:10  function run");
+	});
+
+	it("keeps the line:col for a flat SymbolInformation findSymbol answer", async () => {
+		// Recurrence: #5224 review F1. pi-lens never declares
+		// hierarchicalDocumentSymbolSupport, so servers answer flat
+		// SymbolInformation (position only in `location.range`) and the text
+		// printed `path  function helper` with no line:col. The hierarchical
+		// fixture above never saw that shape.
+		(
+			mocked.service as { documentSymbol: ReturnType<typeof vi.fn> }
+		).documentSymbol = vi.fn().mockResolvedValue([
+			{
+				name: "helper",
+				kind: 12,
+				location: {
+					uri: tmpFileUrl("sample.ts"),
+					range: {
+						start: { line: 7, character: 4 },
+						end: { line: 8, character: 35 },
+					},
+				},
+			},
+		]);
+		const text = await runText("text-find-symbol-flat", {
+			operation: "findSymbol",
+			path: tmpPath("sample.ts"),
+			query: "helper",
+		});
+		expect(text.split("\n")).toEqual([
+			tmpPath("sample.ts"),
+			`  ${tmpPath("sample.ts")}:8:5  function helper`,
+		]);
+	});
+
+	it("renders rename as its preview summary", async () => {
+		const text = await runText("text-rename", {
+			operation: "rename",
+			path: tmpPath("sample.ts"),
+			line: 1,
+			character: 1,
+			newName: "renamedRun",
+		});
+		expect(text).toContain("Rename");
+		expect(text).toContain("renamed.ts");
+		expect(text).toContain(
+			"Preview only — pass apply:true to write the edits.",
+		);
+	});
+
+	it("renders rename_file as its preview summary", async () => {
+		const text = await runText("text-rename-file", {
+			operation: "rename_file",
+			path: tmpPath("sample.ts"),
+			newFilePath: tmpPath("renamed.ts"),
+		});
+		expect(text).toBe(
+			[
+				"Renamed src/sample.ts → src/renamed.ts",
+				"Preview only — pass apply:true to rename.",
+			].join("\n"),
+		);
+	});
+
+	it("prefers the completed rename_file descriptions over its earlier summary", async () => {
+		// `summary` is built before the write, so only `descriptions` confirms what
+		// landed (#5224 review G3).
+		(mocked.service as { renameFile: ReturnType<typeof vi.fn> }).renameFile = vi
+			.fn()
+			.mockResolvedValue({
+				applied: true,
+				serverIds: ["typescript"],
+				willRenameFailures: [],
+				didRenameFailures: [],
+				droppedConflicts: 0,
+				inputEditCount: 3,
+				appliedOperationTotal: 2,
+				summary: [
+					"Renamed src/sample.ts → src/renamed.ts",
+					"Planned before the write",
+				],
+				descriptions: [
+					"src/sample.ts → src/renamed.ts",
+					"imports in src/use.ts",
+				],
+				files: [],
+			});
+		const text = await runText("text-rename-file-applied", {
+			operation: "rename_file",
+			path: tmpPath("sample.ts"),
+			newFilePath: tmpPath("renamed.ts"),
+			apply: true,
+		});
+		expect(text.split("\n")).toEqual([
+			"Applied 2 edits:",
+			"  src/sample.ts → src/renamed.ts",
+			"  imports in src/use.ts",
+		]);
+	});
+
+	it("warns when a rename dropped conflicting edits, preview and applied", async () => {
+		// A dropped conflict is a partial rename; the completed list must not read
+		// as a whole one (#5224 review G4).
+		(mocked.service as { renameFile: ReturnType<typeof vi.fn> }).renameFile = vi
+			.fn()
+			.mockResolvedValue({
+				applied: false,
+				serverIds: ["typescript"],
+				willRenameFailures: [],
+				didRenameFailures: [],
+				droppedConflicts: 2,
+				inputEditCount: 3,
+				summary: ["Renamed src/sample.ts → src/renamed.ts"],
+			});
+		const preview = await runText("text-rename-file-dropped", {
+			operation: "rename_file",
+			path: tmpPath("sample.ts"),
+			newFilePath: tmpPath("renamed.ts"),
+		});
+		expect(preview.split("\n")).toEqual([
+			"Renamed src/sample.ts → src/renamed.ts",
+			"Preview only — pass apply:true to rename.",
+			"Warning: 2 conflicting edits dropped.",
+		]);
+
+		(mocked.service as { renameFile: ReturnType<typeof vi.fn> }).renameFile = vi
+			.fn()
+			.mockResolvedValue({
+				applied: true,
+				serverIds: ["typescript"],
+				willRenameFailures: [],
+				didRenameFailures: [],
+				droppedConflicts: 1,
+				inputEditCount: 2,
+				appliedOperationTotal: 1,
+				summary: ["Renamed src/sample.ts → src/renamed.ts"],
+				descriptions: ["src/sample.ts → src/renamed.ts"],
+				files: [],
+			});
+		const applied = await runText("text-rename-file-dropped-applied", {
+			operation: "rename_file",
+			path: tmpPath("sample.ts"),
+			newFilePath: tmpPath("renamed.ts"),
+			apply: true,
+		});
+		expect(applied.split("\n")).toEqual([
+			"Applied 1 edit:",
+			"  src/sample.ts → src/renamed.ts",
+			"Warning: 1 conflicting edit dropped.",
+		]);
+	});
+
+	it("keeps the payload's leading note above the rendered rows", async () => {
+		// The path-mode payload is `Note: …\n<json>`: the note is the payload's
+		// own header, so it stays above the body it introduces and the rows
+		// replace the JSON under it.
+		const text = await runText("text-workspace-diagnostics", {
+			operation: "workspaceDiagnostics",
+			path: tmpPath("sample.ts"),
+		});
+		const lines = text.split("\n");
+		expect(lines[0]).toBe(
+			"Note: path mode requests pull diagnostics for this file and returns the aggregated result",
+		);
+		expect(lines[1]).toBe("");
+		expect(lines[2]).toBe(`${tmpPath("sample.ts")}:1:1: error [TS1]: boom`);
+	});
+
+	// Recurrence: #5224 review CR3: a clean file or an empty snapshot skipped
+	// every row, so the text view fell back to the raw note and JSON array.
+	it("prints a neutral zero count for a clean file and an empty snapshot", async () => {
+		(mocked.service as { getDiagnostics: unknown }).getDiagnostics = vi
+			.fn()
+			.mockResolvedValue([]);
+		const clean = await runText("text-workspace-diagnostics-clean", {
+			operation: "workspaceDiagnostics",
+			path: tmpPath("sample.ts"),
+		});
+		expect(clean.split("\n").slice(2)).toEqual([
+			`${tmpPath("sample.ts")}: 0 diagnostics`,
+		]);
+		(mocked.service as { getAllDiagnostics: unknown }).getAllDiagnostics = vi
+			.fn()
+			.mockResolvedValue(new Map());
+		const empty = await runText("text-workspace-snapshot-empty", {
+			operation: "workspaceDiagnostics",
+		});
+		expect(empty.split("\n").slice(2)).toEqual(["0 diagnostics"]);
+	});
+
+	it("prints each snapshot file's scan age above its rows", async () => {
+		// The path-less snapshot replays what each client last published; the age
+		// label lived only in the envelope, so a replayed row read as current
+		// (#1634, #5224 review G5/CR1).
+		const scanned = tmpPath("replayed.ts");
+		(mocked.service as { getAllDiagnostics: unknown }).getAllDiagnostics = vi
+			.fn()
+			.mockResolvedValue(
+				new Map([
+					[
+						scanned,
+						{
+							diags: [
+								{
+									severity: 1,
+									message: "boom",
+									code: "TS1",
+									range: {
+										start: { line: 0, character: 0 },
+										end: { line: 0, character: 3 },
+									},
+								},
+							],
+							ts: Date.now() - 5 * 60_000,
+						},
+					],
+				]),
+			);
+		const text = await runText("text-workspace-snapshot-age", {
+			operation: "workspaceDiagnostics",
+		});
+		const lines = text.split("\n");
+		expect(lines).toContain(`${scanned} (scanned 5m ago)`);
+		expect(lines).toContain(`${scanned}:1:1: error [TS1]: boom`);
+	});
+
+	it("renders an executed command's value as compact single-line JSON", async () => {
+		// The server's value is arbitrary, so this one operation keeps the compact
+		// JSON form instead of a line shape (skills/pi-lens-lsp-navigation).
+		const text = await runText("text-execute-command", {
+			operation: "executeCommand",
+			command: "test.explain",
+			apply: true,
+		});
+		expect(text).toBe('{"alpha":1,"beta":"two"}');
+	});
+
+	it("renders an executed command's string value as JSON, quotes and all", async () => {
+		// `trim()` dropped the quotes, kept the newline, and turned "" into
+		// undefined, so the value the server sent was not the value printed
+		// (#5224 review CR2).
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
+				executeCommand: vi
+					.fn()
+					.mockResolvedValue({ executed: true, result: "done\n" }),
+			}),
+		);
+		const text = await runText("text-execute-command-string", {
+			operation: "executeCommand",
+			command: "test.explain",
+			apply: true,
+		});
+		expect(text).toBe('"done\\n"');
+	});
+
+	it("says an executed command returned nothing instead of printing the wrapper", async () => {
+		// #5224 review G7: `{ executed: true }` with no value rendered as the
+		// wrapper JSON, which reads as the server's value.
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
+				executeCommand: vi.fn().mockResolvedValue({ executed: true }),
+			}),
+		);
+		const text = await runText("text-execute-command-no-result", {
+			operation: "executeCommand",
+			command: "test.explain",
+			apply: true,
+		});
+		expect(text).toBe("Executed; the server returned no result.");
+	});
+
+	it("keeps the dry-run advertisement preview instead of a failure line", async () => {
+		const text = await runText("text-execute-command-dry", {
+			operation: "executeCommand",
+			command: "test.explain",
+		});
+		expect(text.split("\n")[0]).toBe("test.explain: advertised");
+		expect(text).toContain("Re-run with apply:true to execute.");
+	});
+
+	it("prints a failed command's reason and the timeout warning", async () => {
+		// The client answers `executed:false` plus a `reason` for a timeout or a
+		// dead client; reading that as a preview printed the advertisement line
+		// and lost the reason (#5224 review G2).
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
+				executeCommand: vi.fn().mockResolvedValue({
+					executed: false,
+					reason: "workspace/executeCommand timed out after 60000ms",
+				}),
+			}),
+		);
+		const text = await runText("text-execute-command-failed", {
+			operation: "executeCommand",
+			command: "test.explain",
+			apply: true,
+		});
+		expect(text.split("\n")).toEqual([
+			"Not executed: workspace/executeCommand timed out after 60000ms",
+			"Warning: the command timed out; the server may still be changing files.",
+		]);
+	});
+
+	it("prints a failed command's reason without the timeout warning", async () => {
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
+				executeCommand: vi.fn().mockResolvedValue({
+					executed: false,
+					reason: "lsp client not alive",
+				}),
+			}),
+		);
+		const text = await runText("text-execute-command-dead", {
+			operation: "executeCommand",
+			command: "test.explain",
+			apply: true,
+		});
+		expect(text).toBe("Not executed: lsp client not alive");
+	});
+	it('answers view:"json" with the byte-identical pre-text envelope', async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-json-bytes",
+			{
+				operation: "definition",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+				view: "json",
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		// Key order is part of the byte contract the pre-text default had, so the
+		// expectation is built in the envelope builder's own order.
+		const expected = {
+			tool: "lsp_navigation",
+			operation: "definition",
+			ok: true,
+			status: "success",
+			filePath: tmpPath("sample.ts"),
+			resultCount: 1,
+			result: [
+				{
+					uri: tmpFileUrl("sample.ts"),
+					range: {
+						start: { line: 11, character: 4 },
+						end: { line: 11, character: 9 },
+					},
+				},
+			],
+			locations: [
+				{
+					uri: tmpFileUrl("sample.ts"),
+					filePath: tmpPath("sample.ts"),
+					range: {
+						start: { line: 12, character: 5 },
+						end: { line: 12, character: 10 },
+					},
+				},
+			],
+			metadata: {
+				operation: "definition",
+				supported: null,
+				searchReads: [
+					{ file: tmpPath("sample.ts"), startLine: 12, endLine: 12 },
+				],
+				resultCount: 1,
+			},
+		};
+		expect(String(result.content[0]?.text)).toBe(JSON.stringify(expected));
+	});
+
+	it('answers prepareCallHierarchy view:"json" with the master envelope bytes', async () => {
+		// Recurrence: #5224 review F3. The text view added
+		// `metadata.callHierarchyItems`, a second copy of `result`, to the JSON
+		// envelope (864 -> 1137 bytes on a real server), so view:"json" was no
+		// longer byte-identical to the pre-text default. The expected object is
+		// the master envelope for this call: master built `details` without the
+		// key, so its metadata held operation, supported and resultCount only.
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"text-json-bytes-prepare",
+			{
+				operation: "prepareCallHierarchy",
+				path: tmpPath("sample.ts"),
+				line: 1,
+				character: 1,
+				view: "json",
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+		const item = callItem("run", tmpFileUrl("sample.ts"), 11);
+		const expected = {
+			tool: "lsp_navigation",
+			operation: "prepareCallHierarchy",
+			ok: true,
+			status: "success",
+			filePath: tmpPath("sample.ts"),
+			resultCount: 1,
+			result: [item],
+			locations: [
+				{
+					uri: tmpFileUrl("sample.ts"),
+					filePath: tmpPath("sample.ts"),
+					range: {
+						start: { line: 12, character: 1 },
+						end: { line: 12, character: 6 },
+					},
+				},
+			],
+			metadata: {
+				operation: "prepareCallHierarchy",
+				supported: null,
+				resultCount: 1,
+			},
+		};
+		expect(String(result.content[0]?.text)).toBe(JSON.stringify(expected));
 	});
 });

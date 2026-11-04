@@ -133,6 +133,10 @@ and `[]` mean no arguments.
   answered, or a partial `workspaceDiagnostics` pull), or `executed: false`
   with a reason (`executeCommand`). Full per-operation parameter reference:
   [skills/pi-lens-lsp-navigation/SKILL.md](../skills/pi-lens-lsp-navigation/SKILL.md).
+  Output is Neovim-style text by default (a `path:line:col` location list,
+  `hover` markdown, an indented `start-end kind name` symbol tree,
+  `path:line:col: severity: message` diagnostics, the rename summary); pass
+  `view: "json"` for the structured envelope (refs #1449).
 - **`ast_grep_search`** — AST-aware structural search across ~40 languages via
   the `sg` CLI. Supports metavariables (`$VAR`, `$$$ARGS`), `strictness`
   modes (`smart`, `relaxed`, `ast`, `cst`, `signature`, `template`), structural

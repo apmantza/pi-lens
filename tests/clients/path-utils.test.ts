@@ -46,6 +46,7 @@ import {
 	realpathOrResolve,
 	splitPathSegments,
 	toPosix,
+	createProjectRelativePathResolver,
 	toProjectRelativePath,
 	uriToPath,
 	walkUpDirs,
@@ -909,6 +910,45 @@ describe("toProjectRelativePath: root spelled differently from the canonical key
 		expect(toProjectRelativePath("C:\\repo\\..evil\\x.ts", "C:\\repo")).toBe(
 			"..evil/x.ts",
 		);
+	});
+});
+
+describe("createProjectRelativePathResolver answers what toProjectRelativePath does (#1449)", () => {
+	// One resolver per project root caches that root's canonical form; the rule
+	// itself is `toProjectRelativePath`'s, so every shape it distinguishes has to
+	// come back identical through the resolver.
+	it.skipIf(process.platform === "win32")(
+		"agrees on an in-root file, an aliased root, an outside file and a relative spelling",
+		(ctx) => {
+			const env = setupTestEnvironment("pi-lens-relresolver-");
+			try {
+				const fx = createCaseAliasFixture(env.tmpDir, { dirName: "proj" });
+				if (fx.skipReason) return ctx.skip(fx.skipReason);
+				const root = path.dirname(fx.rawMisCased);
+				const outside = path.join(env.tmpDir, "elsewhere.ts");
+				fs.writeFileSync(outside, "x\n");
+				const resolve = createProjectRelativePathResolver(root);
+				for (const file of [
+					fx.rawMisCased,
+					normalizeMapKey(fx.rawMisCased),
+					outside,
+					"src/relative.ts",
+				]) {
+					expect(resolve(file)).toBe(toProjectRelativePath(file, root));
+				}
+				// The inside answer is the project-relative one, not the absolute spelling.
+				expect(resolve(fx.rawMisCased)).toBe("a.ts");
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
+	it("answers the same on repeated calls and for win32-shaped input", () => {
+		const resolve = createProjectRelativePathResolver("C:\\repo");
+		expect(resolve("C:\\repo\\src\\x.ts")).toBe("src/x.ts");
+		expect(resolve("C:\\other\\y.ts")).toBe("C:/other/y.ts");
+		expect(resolve("C:\\repo\\src\\x.ts")).toBe("src/x.ts");
 	});
 });
 

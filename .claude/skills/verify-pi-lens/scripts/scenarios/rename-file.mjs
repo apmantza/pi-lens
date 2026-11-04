@@ -71,6 +71,8 @@ export async function run(ctx) {
 			path: IMPORTER,
 			line: 1,
 			symbol: "describe_source",
+			// The default view is text (#5222); this step parses the envelope.
+			view: "json",
 		},
 		"definition of describe_source from the importer",
 	);

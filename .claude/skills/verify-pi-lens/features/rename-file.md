@@ -26,7 +26,7 @@ checks the importer and asks where `describe_source` is defined.
   - Diagnostics: before the move, `probe.py` reports `missing-import`; after,
     a check of `[new_module.py, probe.py, bad.py]` has none for `probe.py` and
     still has it for `bad.py`.
-  - Definition JSON: `pilens_lsp_navigation {operation: "definition"}` from
+  - Definition JSON: `pilens_lsp_navigation {operation: "definition", view: "json"}` from
     `probe.py` returns exactly one result whose `uri` ends in
     `/src/fixturepkg/new_module.py`, not the import site in `probe.py`.
   - Wire (`lsp-wire.in`): `didChangeWatchedFiles` with `old.py` `"type":3` and

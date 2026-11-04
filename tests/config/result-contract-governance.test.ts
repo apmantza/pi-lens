@@ -581,9 +581,19 @@ describe("result contract across registered tool surfaces", () => {
 					},
 					shape: "text",
 				},
+				// #5224: text by default; the #261 envelope under view:"json".
 				{
 					mcpName: "pilens_lsp_navigation",
 					args: { operation: "documentSymbol", path: "fixture.ts" },
+					shape: "text",
+				},
+				{
+					mcpName: "pilens_lsp_navigation",
+					args: {
+						operation: "documentSymbol",
+						path: "fixture.ts",
+						view: "json",
+					},
 					shape: "envelope",
 				},
 				{

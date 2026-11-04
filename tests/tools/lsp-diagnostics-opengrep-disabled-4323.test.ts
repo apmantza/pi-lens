@@ -99,10 +99,13 @@ async function diagnose(
 /**
  * `lsp_navigation operation=workspaceDiagnostics` for one file, or the
  * path-less snapshot of every running client's rows when `file` is undefined.
+ * `view` asks for the envelope a case reads fields from; every other case takes
+ * the default text.
  */
 async function navigateDiagnostics(
 	file: string | undefined,
 	getFlag?: (name: string) => boolean,
+	view?: "json",
 ): Promise<string> {
 	const { createLspNavigationTool } =
 		await import("../../tools/lsp-navigation.js");
@@ -110,7 +113,11 @@ async function navigateDiagnostics(
 		(name) => name === "lens-lsp" || getFlag?.(name) === true,
 	).execute(
 		"nav-4323",
-		{ operation: "workspaceDiagnostics", ...(file ? { path: file } : {}) },
+		{
+			operation: "workspaceDiagnostics",
+			...(file ? { path: file } : {}),
+			...(view ? { view } : {}),
+		},
 		new AbortController().signal,
 		null,
 		{ cwd: workspace },
@@ -389,7 +396,7 @@ describe("an explicit LSP check with Opengrep switched off (#4323)", () => {
 		const before = await navigateDiagnostics(undefined);
 		expect(before).toContain(OPENGREP_FINDING);
 
-		const after = await navigateDiagnostics(undefined, noOpengrep);
+		const after = await navigateDiagnostics(undefined, noOpengrep, "json");
 
 		expect(after).not.toContain(OPENGREP_FINDING);
 		// The JSON server is not switched off: the files it tracks stay in the

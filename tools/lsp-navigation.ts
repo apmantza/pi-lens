@@ -48,6 +48,10 @@ import {
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
 import { buildLspNavigationEnvelope } from "./lsp-structured-output.js";
 import {
+	renderLspNavigationText,
+	symbolKindLabel,
+} from "./lsp-navigation-text.js";
+import {
 	applyProbeFindingPolicy,
 	describePrimaryUnavailable,
 	mergeWithheld,
@@ -59,7 +63,6 @@ import {
 	formatCacheAgeLabel,
 } from "../clients/finding-delivery-gate.js";
 import { disabledPrimaries } from "../clients/lsp/session-roots.js";
-import { SYMBOL_KIND_NAMES } from "../clients/lsp-document-symbols.js";
 import {
 	detectPythonTargetVersion,
 	isJediCompileVerdict,
@@ -421,13 +424,6 @@ type SymbolMatch = {
 	location?: { uri: string; range: Record<string, unknown> };
 	range?: Record<string, unknown>;
 };
-
-function symbolKindLabel(kind: number | undefined): string {
-	// Single source of truth for LSP SymbolKind names (#883 doctrine; the
-	// Sonar-flagged duplicate table lived here). Navigation keeps its own
-	// "symbol" fallback for unknown kinds instead of the lsp-symbol-<n> form.
-	return kind == null ? "symbol" : (SYMBOL_KIND_NAMES[kind] ?? "symbol");
-}
 
 function rangeStart(range: Record<string, unknown> | undefined): {
 	line?: number;
@@ -857,7 +853,7 @@ export function createLspNavigationTool(
 		name: "lsp_navigation" as const,
 		label: "LSP Navigate",
 		description:
-			'Navigate source with language-server operations such as definition, references, hover, and rename. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
+			'Navigate source with language-server operations such as definition, references, hover, and rename. Returns Neovim-style TEXT by default (path:line:col locations, symbol trees, diagnostics); pass view:"json" for the structured envelope. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
 		promptSnippet: "Navigate definitions and references with LSP",
 		renderResult: compactRenderResult<{
 			operation?: string;
@@ -977,6 +973,13 @@ export function createLspNavigationTool(
 					},
 				),
 			),
+			view: Type.Optional(
+				Type.String({
+					// Plain string, no enum: "json" is the JSON hatch; anything else is text.
+					description:
+						'Output format. "json" returns the structured envelope (machine-readable, byte-identical to the pre-text default); any other value (or omitting view) returns the default Neovim-style TEXT rendering (path:line:col locations, symbol trees, diagnostics).',
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -1020,6 +1023,8 @@ export function createLspNavigationTool(
 					filePath: string;
 					failureKind: string;
 					resultCount: number;
+					result?: unknown;
+					callSiteUri?: string;
 				},
 			): typeof payload & {
 				details: typeof payload.details & {
@@ -1054,31 +1059,59 @@ export function createLspNavigationTool(
 				});
 
 				const text = payload.content[0]?.text ?? "";
-				const envelope = buildLspNavigationEnvelope({
-					operation: meta.operation,
-					filePath: meta.filePath,
-					failureKind: meta.failureKind,
-					resultCount: meta.resultCount,
-					text,
-					isError: payload.isError,
-					details: payload.details,
-				});
-
+				if (params.view === "json") {
+					const envelope = buildLspNavigationEnvelope({
+						operation: meta.operation,
+						filePath: meta.filePath,
+						failureKind: meta.failureKind,
+						resultCount: meta.resultCount,
+						text,
+						isError: payload.isError,
+						details: payload.details,
+					});
+					return {
+						...payload,
+						content: [
+							{
+								type: "text" as const,
+								// Compact JSON: omit indentation. Saves ~50% on rename / workspace-edits payloads
+								// while keeping the envelope machine-parseable. Tests use JSON.parse so
+								// they are agnostic to whitespace.
+								text: JSON.stringify(envelope),
+							},
+						],
+						details: {
+							...payload.details,
+							failureKind: meta.failureKind,
+							// #5159: a JSON cell keeps block 0 parseable; a stale advisory
+							// rides a trailing block instead of joining the envelope.
+							[JSON_CELL_DETAILS_KEY]: true,
+						},
+					};
+				}
+				// Default text cell: Neovim-style lines rendered from the typed result. A
+				// result the renderer cannot read (an error, a note, the capabilities table)
+				// keeps the payload's own text.
 				return {
 					...payload,
 					content: [
 						{
 							type: "text" as const,
-							// Compact JSON: omit indentation. Saves ~50% on rename / workspace-edits payloads
-							// while keeping the envelope machine-parseable. Tests use JSON.parse so
-							// they are agnostic to whitespace.
-							text: JSON.stringify(envelope),
+							text: renderLspNavigationText({
+								operation: meta.operation,
+								result: meta.result,
+								filePath: meta.filePath,
+								cwd: ctx.cwd || ".",
+								...(meta.callSiteUri === undefined
+									? {}
+									: { callSiteUri: meta.callSiteUri }),
+								text,
+							}),
 						},
 					],
 					details: {
 						...payload.details,
 						failureKind: meta.failureKind,
-						[JSON_CELL_DETAILS_KEY]: true,
 					},
 				};
 			};
@@ -1473,6 +1506,7 @@ export function createLspNavigationTool(
 										? "empty_result"
 										: "success",
 							resultCount,
+							result,
 						},
 					);
 				}
@@ -1578,6 +1612,7 @@ export function createLspNavigationTool(
 						failureKind:
 							diagnosticsMode === "push-only" ? "tracked_snapshot" : "success",
 						resultCount: result.length,
+						result,
 					},
 				);
 			}
@@ -2226,6 +2261,12 @@ export function createLspNavigationTool(
 								: "fallback_success"
 							: "success",
 					resultCount,
+					result,
+					// Outgoing call sites are written in the item the caller asked
+					// about, whose uri the result does not carry.
+					...(isCallHierarchyTraversal && callHierarchyItem
+						? { callSiteUri: callHierarchyItem.uri }
+						: {}),
 				},
 			);
 		},

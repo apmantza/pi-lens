@@ -202,6 +202,8 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 			arguments: {
 				operation: "documentSymbol",
 				path: path.join(staleWorkspace, "small.ts"),
+				// #5224: the default is text; the JSON cell is the view this pins.
+				view: "json",
 			},
 		});
 		const result = res.result as ToolResult;
@@ -210,14 +212,14 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 			// refuses tool installs, so the tool answers an error envelope and
 			// `withStaleWarning` skips error cells, so no advisory is delivered.
 			// Pin that shape, then skip visibly: the advisory-placement checks
-			// below did not run here; the live envelope is covered by
-			// lsp-spawn-heavy.
+			// below did not run here (no lane runs them); the marker that opts the
+			// envelope in is pinned in tests/tools/lsp-navigation.test.ts.
 			const errorBlocks = blockTexts(result);
 			expect(errorBlocks).toHaveLength(1);
 			expect(errorBlocks[0]).toMatch(/\n\nresult error\n/);
 			expect(errorBlocks[0]).not.toContain(ADVISORY_PREFIX);
 			return ctx.skip(
-				"lsp_navigation answered an error envelope (tool installs refused); advisory placement is covered by lsp-spawn-heavy",
+				"lsp_navigation answered an error envelope (tool installs refused); the JSON-cell marker is pinned in tests/tools/lsp-navigation.test.ts",
 			);
 		}
 		const blocks = blockTexts(result);

@@ -998,7 +998,7 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_lsp_navigation",
 		description:
-			'Navigate source with language-server operations. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
+			'Navigate source with language-server operations. Returns Neovim-style TEXT by default (path:line:col locations, symbol trees, diagnostics); pass view:"json" for the structured envelope. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
 		inputSchema: schemaWithCwd(lspNavigationTool.parameters),
 	},
 ];

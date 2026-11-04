@@ -310,44 +310,76 @@ function parseBalancedJsonPrefix(
 	return undefined;
 }
 
+export type LspNavigationTextSurround = {
+	/** Lines before the payload's balanced JSON prefix, in payload order. */
+	leading: string[];
+	/** Lines after it, in payload order. */
+	trailing: string[];
+};
+
+/** The one splitter `parseLspNavigationTextPayload` and the renderer share. */
+function splitLspNavigationTextPayload(
+	text: string,
+): LspNavigationTextSurround &
+	({ hasResult: true; result: unknown } | { hasResult: false }) {
+	const leading: string[] = [];
+	const trimmed = text.trim();
+	if (!trimmed) return { leading, trailing: [], hasResult: false };
+	try {
+		return {
+			leading,
+			trailing: [],
+			hasResult: true,
+			result: JSON.parse(trimmed),
+		};
+	} catch {
+		// Not JSON on its own: strip a leading note, then read a balanced prefix.
+	}
+	const lines = trimmed.split(/\r?\n/);
+	if (/^Note:/i.test(lines[0] ?? "") && lines.length > 1) {
+		leading.push((lines.shift() ?? "").trim());
+	}
+	const rest = lines.join("\n").trim();
+	if (!rest) return { leading, trailing: [], hasResult: false };
+	const parsed = parseBalancedJsonPrefix(rest);
+	const tail = parsed ? parsed.rest : rest;
+	const trailing = tail
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter(Boolean);
+	return parsed
+		? { leading, trailing, hasResult: true, result: parsed.value }
+		: { leading, trailing, hasResult: false };
+}
+
 function parseLspNavigationTextPayload(text: string): ParsedTextPayload {
+	const split = splitLspNavigationTextPayload(text);
 	const notes: string[] = [];
 	const hints: string[] = [];
 	const errors: string[] = [];
-	const trimmed = text.trim();
-	if (!trimmed) return { notes, hints, errors };
-	try {
-		return { result: JSON.parse(trimmed), notes, hints, errors };
-	} catch {
-		// Continue with note/hint extraction and balanced-prefix parsing.
-	}
-
-	const lines = trimmed.split(/\r?\n/);
-	let jsonCandidate = trimmed;
-	if (/^Note:/i.test(lines[0] ?? "") && lines.length > 1) {
-		notes.push((lines.shift() ?? "").replace(/^Note:\s*/i, ""));
-		jsonCandidate = lines.join("\n").trim();
-	}
-	const parsed = parseBalancedJsonPrefix(jsonCandidate);
-	if (parsed) {
-		for (const entry of parsed.rest.split(/\r?\n/)) {
-			const line = entry.trim();
-			if (!line) continue;
-			if (/^Hint:/i.test(line)) hints.push(line.replace(/^Hint:\s*/i, ""));
-			else if (/^Note:/i.test(line)) notes.push(line.replace(/^Note:\s*/i, ""));
-			else notes.push(line);
-		}
-		return { result: parsed.value, notes, hints, errors };
-	}
-	for (const entry of lines) {
-		const line = entry.trim();
-		if (!line) continue;
+	for (const line of [...split.leading, ...split.trailing]) {
 		if (/^Hint:/i.test(line)) hints.push(line.replace(/^Hint:\s*/i, ""));
 		else if (/^Note:/i.test(line)) notes.push(line.replace(/^Note:\s*/i, ""));
-		else if (/^LSP error:/i.test(line)) errors.push(line);
+		// A line beside a JSON result is a note; only a payload with no result
+		// calls it an error, the split the pre-#1449 parser made.
+		else if (!split.hasResult && /^LSP error:/i.test(line)) errors.push(line);
 		else notes.push(line);
 	}
-	return { notes, hints, errors };
+	const payload: ParsedTextPayload = { notes, hints, errors };
+	if (split.hasResult) payload.result = split.result;
+	return payload;
+}
+
+/**
+ * The payload's own lines outside its JSON value: `leading` before the balanced
+ * prefix, `trailing` after it. The text renderer re-attaches them around a
+ * re-rendered body in that order (`tools/lsp-navigation-text.ts`).
+ */
+export function lspNavigationTextSurround(
+	text: string,
+): LspNavigationTextSurround {
+	const { leading, trailing } = splitLspNavigationTextPayload(text);
+	return { leading, trailing };
 }
 
 function withoutUndefined<T extends Record<string, unknown>>(value: T): T {

@@ -927,7 +927,12 @@ export async function runColumn(
 		await cell("lsp_navigation workspaceDiagnostics", async () => {
 			const result = await nav.execute(
 				"matrix-4403-nav",
-				{ operation: "workspaceDiagnostics", path: fx.file("nav") },
+				// The cell reads the envelope's fields, not the rendered rows (#1449).
+				{
+					operation: "workspaceDiagnostics",
+					path: fx.file("nav"),
+					view: "json",
+				},
 				new AbortController().signal,
 				null,
 				ctx,

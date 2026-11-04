@@ -103,7 +103,7 @@ it("real fake-server documentSymbol timeout is not an empty answer (#5211)", asy
 			(flag) => flag === "lens-lsp",
 		).execute(
 			"real-document-symbol-timeout",
-			{ operation: "documentSymbol", path: filePath },
+			{ operation: "documentSymbol", path: filePath, view: "json" },
 			new AbortController().signal,
 			null,
 			{ cwd: fixture.tmpDir },
@@ -180,7 +180,13 @@ it.each([
 				(flag) => flag === "lens-lsp",
 			).execute(
 				"definition-timeout-fallback",
-				{ operation: "definition", path: filePath, line: 1, character: 11 },
+				{
+					operation: "definition",
+					path: filePath,
+					line: 1,
+					character: 11,
+					view: "json",
+				},
 				new AbortController().signal,
 				null,
 				{ cwd: fixture.tmpDir },

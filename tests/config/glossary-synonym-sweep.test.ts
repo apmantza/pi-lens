@@ -510,6 +510,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"tools/lens-diagnostic-mark.ts": 4,
 		"tools/lens-diagnostics.ts": 6,
 		"tools/lsp-diagnostics.ts": 8,
+		// 1 (#1449): the LSP `RenameNotifyFailure.error` field's own name — the
+		// server's report of a failed rename notification, not a finding tier.
+		"tools/lsp-navigation-text.ts": 1,
 		"tools/module-report.ts": 11,
 		"mcp/analyze-cli.ts": 1,
 		"mcp/server.ts": 32,
@@ -837,7 +840,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// only, one `Array.prototype.filter` use, not a delivery filter.
 		// 14 -> 12 (#5128): the navigation-only tally filters left with the field.
 		"tools/lsp-diagnostics.ts": 12,
+		// 2 (#1449): the default text view's `stringArray` keeps the string
+		// entries of a heterogeneous list, an `Array.prototype.filter` call, not a
+		// delivery filter.
+		"tools/lsp-navigation-text.ts": 2,
 		"tools/lsp-navigation.ts": 6,
+		// 1 (#1449): `lspNavigationTextSurround` drops the blank lines a balanced
+		// JSON prefix leaves behind, the same array call, not a delivery filter.
+		"tools/lsp-structured-output.ts": 1,
 		"tools/render-compact.ts": 3,
 		"mcp/analyze-cli.ts": 1,
 		// 9 -> 8 (#5041): pilens_symbol_search's own entry filter is deleted; the

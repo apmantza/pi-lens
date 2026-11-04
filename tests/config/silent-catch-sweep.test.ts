@@ -1358,9 +1358,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :591, :801, :819, :1280, :1697, :1804, :1838, :2024
 	"tools/lsp-structured-output.ts": {
 		silent: 3,
-		identities: "0460d5b535aef4a2",
+		identities: "3c774b584551aa42",
 		reason: PRE_RULE,
-	}, // :129, :299, :315
+	}, // :129, :299, :329
 	"tools/module-report.ts": {
 		silent: 3,
 		identities: "ab30e249637710b7",
