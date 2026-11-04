@@ -3001,9 +3001,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					});
 					// #5261: head start for the global-bin-dir lookup that the first
 					// dispatch's tool resolution would otherwise wait on. After the
-					// await above because `handleSessionStart`'s session reset clears
-					// the lookup's memo and discards a probe started before it. A
-					// `--no-lens` session dispatches nothing and skips it.
+					// await above, so the session reset that clears the lookup's memo
+					// has already run. A `--no-lens` session dispatches nothing and
+					// skips it.
 					if (lensEnabled) primeGlobalBinDirs();
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 					// #3612: the coordinator's fresh guard is this scope's read-guard

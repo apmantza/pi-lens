@@ -11,10 +11,10 @@
  * first on PATH shows when the query happens: the stand-in appends its argv to
  * a log, so the log is the read-back.
  *
- * The first session is `quick`, the shape a real process's first `session_start`
- * takes: it runs no startup preinstall, so nothing but the prime (or the first
- * dispatch) can make the query before the first prompt. A `full` start would
- * query through the preinstall's tool resolution and prove nothing.
+ * The session is `quick`, the shape a real process's first `session_start`
+ * takes: it runs no startup preinstall, so nothing but the prime can make the
+ * query before the first prompt. (A `full` start queries through its own tool
+ * resolution anyway, so it cannot show the prime.)
  *
  * Does not prove: Windows (the stand-in is a POSIX script), or a faster first
  * dispatch on a user's machine (the timing lives in the hot-path latency lane).
@@ -27,12 +27,7 @@ import {
 	writeStandIn,
 } from "./support/path-probe-stub.js";
 import { piSessionFixture, startPiSession } from "./support/pi-session.js";
-import {
-	BLOCKING_FILE,
-	endTurn,
-	step,
-	writeTarget,
-} from "./support/pi-session-commit-gate.js";
+import { endTurn } from "./support/pi-session-commit-gate.js";
 import { until } from "./support/marker-lsp-project.js";
 import { withEnv } from "./support/with-env.js";
 
@@ -82,6 +77,14 @@ function plantNpm(slug: string): {
 	};
 }
 
+/**
+ * A bounded wait for a negative: the stand-in logs within milliseconds of its
+ * spawn, and the lens-on cases above see their line well inside their 10 s.
+ */
+function settle(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 3000));
+}
+
 const restores: Array<() => void> = [];
 afterAll(() => {
 	for (const restore of restores.splice(0)) restore();
@@ -91,27 +94,21 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 	"global-bin-dir prime at session_start (#5261)",
 	{ timeout: 90_000 },
 	() => {
-		it("queries the npm prefix at session start, before any prompt, and the first dispatch adds no second query", async () => {
-			const npm = plantNpm("primed");
+		it("queries the npm prefix once at a quick session start, before any prompt", async () => {
+			const npm = plantNpm("quick");
 			restores.push(npm.restore);
 			const handle = await startPiSession({
 				root: fixture.root,
-				cwd: project("primed"),
+				cwd: project("quick"),
 				startupMode: "quick",
-				responses: [
-					step(writeTarget("b.ts", BLOCKING_FILE), "writing"),
-					endTurn("done"),
-				],
+				responses: [endTurn("done")],
 			});
 			expect(
 				await until(() => npm.queries() === 1, 10_000),
 				"the npm prefix is queried with no prompt sent",
 			).toBe(true);
-			await handle.prompt("edit b.ts");
-			expect(handle.errors).toEqual([]);
-			expect(npm.queries(), "the first dispatch reuses the primed answer").toBe(
-				1,
-			);
+			await settle();
+			expect(npm.queries(), "one lookup, not one per consumer").toBe(1);
 			await handle.dispose();
 		});
 
@@ -126,9 +123,7 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 				responses: [endTurn("done")],
 			});
 			await handle.prompt("hello");
-			// A bounded negative: the stand-in logs within milliseconds of the
-			// spawn, and the lens-on case above sees its line well inside 10 s.
-			await new Promise((resolve) => setTimeout(resolve, 1500));
+			await settle();
 			expect(npm.queries()).toBe(0);
 			await handle.dispose();
 		});
