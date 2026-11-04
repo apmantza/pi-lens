@@ -114,7 +114,9 @@ export function listRefreshFlips(headDocs, newDocs) {
 	return flips;
 }
 
-const MAX_LISTED_FLIPS = 60;
+// The body lint caps a code fence at 20 lines (check-pr-body.mjs, #5003): all
+// the flips when they fit, else 19 and the "... N more" line.
+const MAX_FENCE_LINES = 20;
 
 /**
  * The refresh PR body. `landing` is what the workflow can do with a flip-free
@@ -122,62 +124,87 @@ const MAX_LISTED_FLIPS = 60;
  * through the App token; a maintainer merges) or `manual` (the repository
  * `GITHUB_TOKEN` opened it, so CI does not start until a close and reopen).
  *
+ * The body follows .github/PULL_REQUEST_TEMPLATE.md because the PR is linted
+ * like any other (#5062): the flips verdict and landing sit in the reviewer
+ * notes, the listed flips in the change outline, and the proof sections carry
+ * the honest docs-only answers.
+ *
  * @param {{ flips: readonly string[], landing: "automerge" | "ci-only" | "manual", issuesUrl?: string, checkFailed?: boolean }} input
  * @returns {string}
  */
 export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
+	const verdict = checkFailed
+		? "Capability flips: The flip check could not run, so this refresh is treated as having flips and is not armed for auto-merge."
+		: flips.length === 0
+			? "Capability flips: None. Only `src`, `version`, `install`, `stale`, the refresh state and the generation date differ from `master`."
+			: `Capability flips: ${flips.length} changed line(s) outside \`src\`, \`version\`, \`install\`, \`stale\`, the refresh state and the generation date. A maintainer reviews this refresh.`;
+	let landed;
+	if (landing === "automerge" && !checkFailed && flips.length === 0) {
+		landed =
+			"Landing: No flips: auto-merge is armed. CI runs on this PR because it was opened with the refresh App token, and GitHub merges it when the required checks pass.";
+	} else if (landing === "manual") {
+		landed =
+			"Landing: this PR is created with the repository `GITHUB_TOKEN`, which cannot trigger workflow runs. After the bot opens or updates it, a maintainer must close and reopen the PR to arm CI. (Configure the refresh App to remove this step.)";
+	} else {
+		landed =
+			"Landing: CI runs on this PR because it was opened with the refresh App token. A maintainer merges it.";
+	}
 	const lines = [
-		"Automated refresh of the LSP capability docs from the nightly tool-smoke run.",
+		"## Summary",
 		"",
-		"- `docs/lsp-capability-matrix.md` — `mode` (characterize-lsp) + `clean-behavior` (probe-clean-signal, Tier 2 vs 3) columns (#460) + a `## silentOnClean drift` footnote (#529, telemetry only — never a gate); `version`/`install` (what the nightly ran) and `stale` (a cell the probe did not re-observe, with the date of its first miss) per row (#4512)",
-		"- `docs/servercapabilities.md` — advertised capability inventory incl. ws-pull (#389)",
-		"- `docs/lsp-idle-eviction.md` — per-server idle-eviction safety (#3645): stable columns only (result, reason, respawn, coverage; timings live in the run log). Unlike the two docs above it is regenerated in full each night, not merged: a server the runner cannot spawn reads `unavailable`. A declared-versus-measured finding there is for a maintainer to act on in a follow-up; this refresh changes no policy",
-		"",
-		"The two matrix docs above are **merged**, never blind-overwritten: a",
-		"server this ubuntu host couldn't spawn keeps its prior (dev-box)",
-		"classification, so the nightly can't regress a richer run (#390).",
-		"`docs/lsp-idle-eviction.md` is the exception: it is regenerated in",
-		"full, so a server this host cannot spawn reads `unavailable`.",
+		"Automated nightly refresh of the LSP capability docs from the tool-smoke run: docs only, no runtime code changes.",
+		"The capability-flip verdict and the landing path are under the reviewer notes.",
 		"",
 		"Refs #460, #390, #529, #4512.",
 		"",
-		"## Capability flips",
+		"## Notes for the reviewer",
 		"",
+		`- ${verdict}`,
+		`- ${landed}`,
+		"- The two matrix docs are **merged**, never blind-overwritten: a server this ubuntu host couldn't spawn keeps its prior (dev-box) classification, so the nightly can't regress a richer run (#390). `docs/lsp-idle-eviction.md` is the exception: it is regenerated in full, so a server this host cannot spawn reads `unavailable`.",
 	];
-	if (checkFailed) {
+	if (!checkFailed && flips.length > 0 && issuesUrl)
+		lines.push(`- Open nightly drift issues: ${issuesUrl}`);
+	lines.push(
+		"",
+		"## Change outline",
+		"",
+		"- `docs/lsp-capability-matrix.md` — `mode` (characterize-lsp) + `clean-behavior` (probe-clean-signal, Tier 2 vs 3) columns (#460) + a `## silentOnClean drift` footnote (#529, telemetry only — never a gate); `version`/`install` (what the nightly ran) and `stale` (a cell the probe did not re-observe, with the date of its first miss) per row (#4512)",
+		"- `docs/servercapabilities.md` — advertised capability inventory incl. ws-pull (#389)",
+		"- `docs/lsp-idle-eviction.md` — per-server idle-eviction safety (#3645): stable columns only (result, reason, respawn, coverage; timings live in the run log). A declared-versus-measured finding there is for a maintainer to act on in a follow-up; this refresh changes no policy",
+	);
+	if (!checkFailed && flips.length > 0) {
+		const fits = flips.length <= MAX_FENCE_LINES;
+		const shown = fits ? flips : flips.slice(0, MAX_FENCE_LINES - 1);
 		lines.push(
-			"The flip check could not run, so this refresh is treated as having flips and is not armed for auto-merge.",
-		);
-	} else if (flips.length === 0) {
-		lines.push(
-			"None. Only `src`, `version`, `install`, `stale`, the refresh state and the generation date differ from `master`.",
-		);
-	} else {
-		lines.push(
-			`${flips.length} changed line(s) outside \`src\`, \`version\`, \`install\`, \`stale\`, the refresh state and the generation date. A maintainer reviews this refresh.`,
 			"",
 			"```diff",
-			...flips.slice(0, MAX_LISTED_FLIPS),
-			...(flips.length > MAX_LISTED_FLIPS
-				? [`... ${flips.length - MAX_LISTED_FLIPS} more`]
-				: []),
+			...shown,
+			...(fits ? [] : [`... ${flips.length - shown.length} more`]),
 			"```",
 		);
-		if (issuesUrl) lines.push("", `Open nightly drift issues: ${issuesUrl}`);
 	}
-	lines.push("", "## Landing", "");
-	if (landing === "automerge" && !checkFailed && flips.length === 0) {
-		lines.push(
-			"No flips: auto-merge is armed. CI runs on this PR because it was opened with the refresh App token, and GitHub merges it when the required checks pass.",
-		);
-	} else if (landing === "manual") {
-		lines.push(
-			"This PR is created with the repository `GITHUB_TOKEN`, which cannot trigger workflow runs. After the bot opens or updates it, a maintainer must close and reopen the PR to arm CI. (Configure the refresh App to remove this step.)",
-		);
-	} else {
-		lines.push(
-			"CI runs on this PR because it was opened with the refresh App token. A maintainer merges it.",
-		);
-	}
+	lines.push(
+		"",
+		"## Proof and checks",
+		"",
+		"### Tests",
+		"",
+		"Docs-only regeneration: this diff changes no test file. The PR step runs only after the nightly LSP capability census (`tests/config/lsp-first-publish-census.test.ts`, `tests/config/lsp-clean-behavior-census.test.ts`) succeeded on the regenerated docs, and `scripts/lsp-refresh-landing.mjs` classified the flips above against `master`.",
+		"",
+		"### Class sweep",
+		"",
+		"none: docs-only regeneration of generated LSP docs, no runtime code.",
+		"",
+		"Alignment: none: generated docs touch no alignment-family member",
+		"",
+		"### Observability",
+		"",
+		"none: docs-only diff with no runtime code and no new failure path.",
+		"",
+		"### Fold check",
+		"",
+		"none: bot-generated docs regeneration with no code mechanism to fold into.",
+	);
 	return `${lines.join("\n")}\n`;
 }
