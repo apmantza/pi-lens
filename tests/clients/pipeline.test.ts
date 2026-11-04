@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
 import {
 	NO_ANALYZER_REASON,
+	noPrimaryCheckerReason,
 	type Diagnostic,
 } from "../../clients/dispatch/types.js";
 import { formatDiagnostics } from "../../clients/dispatch/utils/format-utils.js";
@@ -35,6 +36,7 @@ import { TestRunnerClient } from "../../clients/test-runner-client.js";
 import {
 	clearWidgetState,
 	exportWidgetState,
+	reconcileCorrelatedScanDiagnostics,
 } from "../../clients/widget-state.js";
 import {
 	_getDegradationLedgerStateForTests,
@@ -1879,6 +1881,25 @@ describe("Pipeline", () => {
 			expect(line).toContain("unconfirmed");
 			expect(record).toBeDefined();
 			expect(record?.uncheckedReason).toBeUndefined();
+		});
+
+		it("a --no-lsp write stays counted after a full scan that never checked the file", async () => {
+			// Recurrence prevented: #5285 verify r1 N1. `lens_diagnostics mode=full`
+			// hands the widget every file whether or not a language server confirmed
+			// it, and the scan commit erased the write's reason: `⚠ 1 unchecked`
+			// became `✓ clean` for a file nothing had type-checked.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "index.ts", "const x = 1;");
+
+			await verdictOf(
+				filePath,
+				cleanDispatch({ unconfirmedStatus: noPrimaryCheckerReason(false) }),
+			);
+			reconcileCorrelatedScanDiagnostics(normalizeMapKey(filePath), []);
+			const record = widgetRecordOf(filePath);
+			clearWidgetState();
+
+			expect(record?.uncheckedReason).toBe(noPrimaryCheckerReason(false));
 		});
 
 		it("a slow primary's line prints once: the repeat write ends with no line, no clean verdict, and keeps the footer reason", async () => {

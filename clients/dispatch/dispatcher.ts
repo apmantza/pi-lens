@@ -90,6 +90,7 @@ import { classifyPreExisting, preEditSeedFactKey } from "./pre-edit-seed.js";
 import {
 	checkedVerdict,
 	emptyDispatchResult,
+	IN_FLIGHT_REASON,
 	isRunnerClaimSource,
 	isNotApplicableSkipReason,
 	isRunnerSkipReason,
@@ -870,14 +871,12 @@ function buildCoverageNotice(
 	if (primaryStillInFlight) {
 		// #5258 r2: a slow primary reads the same on every write until its answer
 		// lands, so the line prints once per file per session (push surface only).
+		// The key is never deleted: a file that is slow again later stays quiet.
 		const inFlightKey = `in-flight:${ctx.kind}:${ctx.filePath}`;
 		const repeat = dedupe && coverageNoticeSeen.has(inFlightKey);
 		if (dedupe) coverageNoticeSeen.add(inFlightKey);
 		return {
-			verdict: unchecked(
-				"the primary check is still running (findings arrive at turn end if it lands)",
-				repeat ? { repeat: true } : {},
-			),
+			verdict: unchecked(IN_FLIGHT_REASON, repeat ? { repeat: true } : {}),
 			coverage: "in_flight",
 		};
 	}

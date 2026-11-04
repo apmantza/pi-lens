@@ -353,6 +353,13 @@ export function emptyDispatchResult(verdict: CoverageVerdict): DispatchResult {
 	};
 }
 
+/**
+ * The reason of a collect-later primary that has not answered yet. The widget
+ * store retires it (and only it) when a full scan commits the file (#5258 r2).
+ */
+export const IN_FLIGHT_REASON =
+	"the primary check is still running (findings arrive at turn end if it lands)";
+
 /** No file kind: nothing in pi-lens analyses this file type. */
 export const NO_ANALYZER_REASON = "no analyzer handles this file type";
 

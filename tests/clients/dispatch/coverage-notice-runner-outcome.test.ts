@@ -787,6 +787,44 @@ describe("the verdict the write line and the clean advisory read (#4734 r3, #525
 		});
 	});
 
+	it("a slow primary's line prints once per file: a second file prints its own, a repeat of either is quiet (#5258 r2)", async () => {
+		// Recurrence prevented: #5285 verify r1 N2. A once-only key without the
+		// path would let the first slow file silence every other file of its kind.
+		const registry = new RunnerRegistry();
+		registry.register({
+			id: "lsp",
+			appliesTo: ["jsts"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				return { status: "deferred", diagnostics: [], semantic: "none" };
+			},
+		});
+		const push = async (file: string) =>
+			(
+				await dispatchForFile(
+					createDispatchContext(
+						file,
+						"/project",
+						{ getFlag: () => false },
+						new FactStore(),
+					),
+					[{ mode: "all", runnerIds: ["lsp"] }],
+					registry,
+				)
+			).verdict;
+
+		const verdicts = [
+			await push("a.ts"),
+			await push("b.ts"),
+			await push("a.ts"),
+			await push("b.ts"),
+		];
+
+		expect(
+			verdicts.map((v) => (v.checked ? "checked" : v.repeat === true)),
+		).toEqual([false, false, true, true]);
+	});
+
 	it("the pull surface never goes quiet: a pull after a push of a slow primary still states the reason (#5258 r2)", async () => {
 		// Recurrence prevented: the once-only latch belongs to the push surface
 		// (`dedupeCoverageNotice`); an `analyze_file` pull is a deliberate question
