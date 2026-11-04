@@ -32,7 +32,7 @@ import {
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import { pidFileIsStale } from "../../clients/generation-lock.js";
 import { realIsPidAlive } from "../../clients/pid-liveness.js";
-import { setupTestEnvironment } from "./test-utils.js";
+import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 
 /** Below Linux's pid_max, so it is a valid pid Node would hand to the kernel. */
 const SENTINEL_PID = 4_000_001;
@@ -228,7 +228,7 @@ describe("bounded pid-file lock owner liveness", () => {
 			expect(release).toBeNull();
 			expect(fs.existsSync(path.join(lockPath, "owner.json"))).toBe(true);
 		} finally {
-			fs.rmSync(path.dirname(lockPath), { recursive: true, force: true });
+			removeTempDirSync(path.dirname(lockPath));
 		}
 	});
 
@@ -245,7 +245,7 @@ describe("bounded pid-file lock owner liveness", () => {
 			expect(typeof release).toBe("function");
 			await release?.();
 		} finally {
-			fs.rmSync(path.dirname(lockPath), { recursive: true, force: true });
+			removeTempDirSync(path.dirname(lockPath));
 		}
 	});
 });
