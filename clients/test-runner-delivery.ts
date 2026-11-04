@@ -189,10 +189,10 @@ export interface TestRunnerDeliveryOwner {
  * stamp, and its `testRunGeneration` is the only generation it carries.
  */
 function contentGeneration(
-	record: TestRunnerFindingsCache | undefined,
+	data: TestRunnerFindingsCache | undefined,
 ): number | undefined {
-	const stamped = record?.provenance?.revision?.generation;
-	return typeof stamped === "number" ? stamped : record?.testRunGeneration;
+	const stamped = data?.provenance?.revision?.generation;
+	return typeof stamped === "number" ? stamped : data?.testRunGeneration;
 }
 
 function key(cwd: string, sessionId: string, ownerId?: string): string {

@@ -2115,6 +2115,33 @@
 				}
 			]
 		},
+		"test-runner-delivery": {
+			"pins": {
+				"Identity": {
+					"value": "\"content\"",
+					"test": "tests/clients/test-runner-delivery.test.ts",
+					"title": "delivers a staged failure at the next prompt when a newer run has launched but not published (#5259)",
+					"also": [
+						{
+							"test": "tests/clients/test-runner-delivery.test.ts",
+							"title": "rehydrates an eligible failure across a run that launched but has not published (#5259)"
+						},
+						{
+							"test": "tests/clients/test-runner-delivery.test.ts",
+							"title": "drops an eligible result if a newer generation wins before context build"
+						}
+					]
+				}
+			},
+			"notCodeChoice": [
+				{
+					"reason": "Scenario bound: it caps the launches TLC explores; no code branch reads it.",
+					"constants": [
+						"MaxGen"
+					]
+				}
+			]
+		},
 		"tree-sitter-trap-budget": {
 			"notCodeChoice": [
 				{
