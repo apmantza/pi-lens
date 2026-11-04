@@ -16,9 +16,8 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	clearCoverageNoticeState,
 	createDispatchContext,
@@ -43,11 +42,17 @@ import { BiomeClient } from "../../../clients/biome-client.js";
 import { MetricsClient } from "../../../clients/metrics-client.js";
 import { runPipeline } from "../../../clients/pipeline.js";
 import { RuffClient } from "../../../clients/ruff-client.js";
-import { removeTempDirSync } from "../test-utils.js";
+import { resetSessionScopedState } from "../../../clients/runtime-session.js";
+import {
+	flushSessionStartLog,
+	SESSIONSTART_LOG_FILE,
+} from "../../../clients/sessionstart-logger.js";
+import { setupTestEnvironment } from "../test-utils.js";
 
 const UNAVAILABLE = "analysis unavailable";
 
 let tmpDir: string;
+let cleanupTmp: () => void;
 let previousHome: string | undefined;
 let previousPath: string | undefined;
 
@@ -90,9 +95,12 @@ async function writeAndRender(name: string, body: string): Promise<string> {
 }
 
 beforeEach(() => {
-	tmpDir = fs.realpathSync(
-		fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-name-only-")),
-	);
+	// The shared setup plants the project-root marker, so the fixture is its
+	// own root and an ancestor project cannot change which server or config
+	// applies (shape 73).
+	const env = setupTestEnvironment("pi-lens-lsp-name-only-");
+	tmpDir = env.tmpDir;
+	cleanupTmp = env.cleanup;
 	// Empty home and an empty PATH: no managed or ambient language server can
 	// exist, so the "server not installed" arm is the same on every machine.
 	previousHome = process.env.PI_LENS_HOME;
@@ -104,13 +112,17 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	vi.unstubAllEnvs();
 	process.env.PATH = previousPath;
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;
+	// Config and trust are not session-scoped state (`resetSessionScopedState`
+	// leaves them to their owners), so they are reset beside it.
+	resetSessionScopedState(tmpDir);
 	resetLSPConfigStateForTests();
 	resetProjectLensConfigCache();
 	resetProjectTrust();
-	removeTempDirSync(tmpDir);
+	cleanupTmp();
 });
 
 describe("a name no language server selects is not 'analysis unavailable'", () => {
@@ -160,8 +172,25 @@ describe("a name no language server selects is not 'analysis unavailable'", () =
 				(s) => s.id,
 			),
 		).toEqual(["groovy"]);
+		// Recurrence this guards (PR #5238 review r3, greptile): the control ran
+		// on an untrusted project, where `GroovyServer` (`executesProjectCode`) is
+		// refused at the trust seam before `spawn`, so the warning proved the
+		// trust refusal and said nothing about an uninstalled server. A trusted
+		// project reaches `spawn`, which finds no launcher on the empty PATH and
+		// says so in the session log (the log is silent under test mode).
+		setProjectTrustState("trusted");
+		await initLSPConfig(tmpDir);
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
+		await flushSessionStartLog();
+		const logBefore = fs.existsSync(SESSIONSTART_LOG_FILE)
+			? fs.statSync(SESSIONSTART_LOG_FILE).size
+			: 0;
 		const output = await writeAndDispatch("A.groovy", "class A {}\n");
+		await flushSessionStartLog();
 		expect(output).toContain("Pi-lens groovy analysis unavailable");
+		expect(
+			fs.readFileSync(SESSIONSTART_LOG_FILE).subarray(logBefore).toString(),
+		).toContain("lsp launch groovy: not installed");
 	});
 });
 
