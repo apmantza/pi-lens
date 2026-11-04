@@ -139,6 +139,7 @@ vi.mock("../clients/safe-spawn.js", async (importOriginal) => ({
 
 import extension from "../index.js";
 import { getDegradationSummary } from "../clients/degradation-ledger.js";
+import { renderWidget } from "../clients/widget-state.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
 import {
 	flushLatencyLog,
@@ -624,6 +625,11 @@ async function openSession(name: string) {
 			);
 			return scrub((out.content ?? []).map((p) => p.text ?? "").join("\n"));
 		},
+		/** The footer the human reads: the real widget store through the real
+		 *  renderer, wide enough that no row is truncated. */
+		footer(): string {
+			return renderWidget(160, { fg: (_color, text) => text }).join("\n");
+		},
 		async shutdown() {
 			await pi.emit(
 				"session_shutdown",
@@ -634,6 +640,21 @@ async function openSession(name: string) {
 	};
 	liveSession = session;
 	return session;
+}
+
+/**
+ * The widget store's twin of the gate row (#5020 remainder): the row the
+ * session listing (`lens_diagnostics source=session`) and the footer both
+ * read. Soft, so one red names both surfaces.
+ */
+async function expectWidgetRowGone(s: {
+	sessionDiagnostics(): Promise<string>;
+	footer(): string;
+}): Promise<void> {
+	expect.soft(await s.sessionDiagnostics()).not.toContain("other-b.yaml");
+	expect.soft(s.footer()).not.toContain("nil pointer");
+	// The header's tally is the stored count, a separate field from the rows.
+	expect.soft(s.footer()).not.toMatch(/●\d+E/);
 }
 
 /**
@@ -662,6 +683,11 @@ describe("#5020 witness: a cross-file row retires once its cited file is clean o
 			/Still unfixed: 1 blocker reported earlier; 1 with no line in this file\./,
 		);
 		expect(await s.commitBlocked()).toBe(true);
+		// The widget store holds the same row: it is the control every retire cell
+		// below turns off, so a cell that passed because the row never reached the
+		// store (or the footer never drew it) would be vacuous.
+		expect(await s.sessionDiagnostics()).toContain("other-b.yaml");
+		expect(s.footer()).toContain("nil pointer");
 		return { ...chart, s };
 	}
 
@@ -685,12 +711,9 @@ describe("#5020 witness: a cross-file row retires once its cited file is clean o
 			durableRows: 1,
 			reasons: [expect.stringContaining("reported nothing on it")],
 		});
-		// The declared p3 residual (#5020): the widget store is a second writer
-		// and its rows carry no cited file, so it still lists the row against the
-		// WRITTEN file until that file is next dispatched. This pins the residual,
-		// not the fix: a lane that retires it here deletes this assertion with its
-		// own red.
-		expect(await s.sessionDiagnostics()).toContain("other-b.yaml");
+		// The widget store is the gate's twin (#5020 remainder): its row cites the
+		// same file, so it leaves at the same point.
+		await expectWidgetRowGone(s);
 		await s.shutdown();
 	});
 
@@ -710,6 +733,7 @@ describe("#5020 witness: a cross-file row retires once its cited file is clean o
 			durableRows: 1,
 			reasons: [expect.stringContaining("no longer exists")],
 		});
+		await expectWidgetRowGone(s);
 		await s.shutdown();
 	});
 
@@ -722,6 +746,7 @@ describe("#5020 witness: a cross-file row retires once its cited file is clean o
 		const { b, s } = await recordRowAgainstA("commit-after-delete");
 		fs.rmSync(b);
 		expect(await s.commitBlocked()).toBe(false);
+		await expectWidgetRowGone(s);
 		await s.shutdown();
 	});
 
@@ -828,6 +853,7 @@ describe("#5020 witness: a cross-file row retires once its cited file is clean o
 		spawnRouter.state.helmLintStdout = "";
 		await s.opaqueWrite(b, `${body("Service")}# regenerated\n`);
 		expect(await s.commitBlocked()).toBe(true);
+		expect(await s.sessionDiagnostics()).toContain("other-b.yaml");
 		await s.shutdown();
 	});
 
@@ -840,6 +866,7 @@ describe("#5020 witness: a cross-file row retires once its cited file is clean o
 		spawnRouter.state.helmLintStdout = "Error: could not load chart";
 		await s.write(b, body("Service"));
 		expect(await s.commitBlocked()).toBe(true);
+		expect(await s.sessionDiagnostics()).toContain("other-b.yaml");
 		await s.shutdown();
 	});
 

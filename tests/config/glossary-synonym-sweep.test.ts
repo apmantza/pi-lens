@@ -457,7 +457,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/ipc.ts": 8,
 		"clients/mcp/review.ts": 8,
 		"clients/mcp/session.ts": 1,
-		"clients/module-report.ts": 29,
+		"clients/module-report.ts": 32,
+		// 31 -> 32 (#5138): the callback-handle kind refusal returns the report's
+		// own `error` condition too.
+		// 29 -> 31 (#5138): the kind-mismatch refusal and the unreadable catch
+		// both read the report's own `error` condition.
 		// 27 -> 29 (#5137): the text renderer prints the report's own `error`
 		// field twice on one line, as the guard and as the message.
 		// 3 -> 5 (#4493): readGitHead and listGitHeadDelta read the spawn
@@ -494,7 +498,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 21 -> 23 (#5257): `isCompletedPassResult` reads the result's `error`,
 		// and the JSON parser sets the unreadable-output and load-failure errors.
 		"clients/test-runner-client.ts": 23,
-		"clients/test-runner-delivery.ts": 6,
+		// 6 -> 7 (#5259): the stage-time idle read's `delivery-failed` record
+		// carries the thrown text in the record's own `error` field.
+		"clients/test-runner-delivery.ts": 7,
 		"clients/tool-agreement.ts": 2,
 		"clients/tree-sitter-cache.ts": 4,
 		// #3605: 18 -> 6. The rewritten wasm classifier, `reportWasmAbort` and
@@ -518,7 +524,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"tools/lsp-navigation-text.ts": 1,
 		"tools/module-report.ts": 11,
 		"mcp/analyze-cli.ts": 1,
-		"mcp/server.ts": 32,
+		// 32 -> 36 (#5138): the read_symbol handler renders `result.error` as the
+		// pi tool does (condition test, message, structured `error` field).
+		"mcp/server.ts": 36,
 	},
 	filter: {
 		"clients/actionable-warnings.ts": 10,
@@ -762,9 +770,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// records, an `Array.prototype.filter` call, not a delivery gate.
 		// 4 -> 5 (#4990): the per-source row retirement keeps the rows the clean
 		// verdict did not cover, the same array call, not a delivery gate.
-		// 5 -> 6 (#5020): `retireForeignRows` keeps the rows no retire judged, the
-		// same array call, not a delivery gate.
-		"clients/runtime-coordinator.ts": 6,
+		// 5 -> 6 -> 5 (#5020): `retireForeignRows` first kept the rows no retire
+		// judged with this array call; it now splits retired from kept in one
+		// loop, because the widget store takes the retired half.
+		"clients/runtime-coordinator.ts": 5,
 		"clients/runtime-session.ts": 4,
 		// 3 -> 5 -> 3 (#4187): round 4's tool-call authorship retirement filtered
 		// the owned in-process mutation paths; round 5 folds two of its three
@@ -828,7 +837,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/turn-end/lanes/secrets.ts": 3,
 		"clients/turn-summary-render.ts": 3,
 		"clients/vanished-instance-marker.ts": 1,
-		"clients/widget-state.ts": 16,
+		// 16 -> 17 (#5020): `retireWidgetCitedRows` keeps the rows no retire named,
+		// an `Array.prototype.filter` call, not a delivery gate.
+		"clients/widget-state.ts": 17,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		"tools/activate-tools.ts": 2,
@@ -907,7 +918,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/knip-client.ts": 14,
 		"clients/latency-logger.ts": 1,
 		"clients/mcp/session.ts": 1,
-		"clients/module-report.ts": 17,
+		// 18 -> 19 (#5138): the callback-handle kind refusal logs its miss too.
+		// 17 -> 18 (#5138): the kind-mismatch refusal logs its miss through the
+		// same `read_symbol` phase as every other miss in this file.
+		"clients/module-report.ts": 19,
 		"clients/ndjson-logger.ts": 2,
 		"clients/opengrep-client.ts": 1,
 		"clients/process-singletons.ts": 4,
@@ -1233,7 +1247,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
-		"clients/module-report.ts": 31,
+		// 31 -> 32 (#5138): the kind-mismatch refusal returns the same `path`
+		// field as every other `readSymbol` miss.
+		// 32 -> 33 (#5138): so does the callback-handle kind refusal.
+		"clients/module-report.ts": 33,
 		// 6 -> 9 (#3650): MutationLineResult.path field, the adapter-declared
 		// preference, and the readToolResultPathField return.
 		"clients/mutating-tool.ts": 9,
@@ -1516,7 +1533,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// payload's per-hit `path.relative`; the renderer now owns that spelling.
 		// 38 -> 33 (#5137): the module_report handler stops building its own
 		// `path.relative` summary and delegates the rendering.
-		"mcp/server.ts": 33,
+		// 33 -> 34 (#5138): the read_symbol error branch names `path.basename(file)`.
+		"mcp/server.ts": 34,
 		"index.ts": 20,
 		"clients/command-path.ts": 5,
 	},
@@ -1585,7 +1603,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/runtime-turn.ts": 9,
 		"clients/search-read-registration.ts": 1,
 		"clients/test-runner-client.ts": 4,
-		"clients/test-runner-delivery.ts": 15,
+		// 15 -> 16 (#5259): the stage-time idle read writes its failure through
+		// the module's existing `record` helper.
+		"clients/test-runner-delivery.ts": 16,
 		"clients/turn-summary.ts": 4,
 		"clients/warm-attach.ts": 9,
 		"tools/lsp-diagnostics.ts": 1,

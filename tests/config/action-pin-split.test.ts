@@ -131,8 +131,9 @@ describe("#4350 one SHA per action repository across the workflow tree", () => {
 			uses,
 			`${uses} remote uses: lines but ${pins.length} parsed pins`,
 		).toBe(pins.length);
-		// Floor: the tree still holds the three codeql-action steps in both
-		// workflows, so an empty walk or a parser change cannot pass vacuously.
+		// Floor: the tree still holds the three codeql-action steps in
+		// codeql.yml (ci.yml's PR-time job left in #5275), so an empty walk or a
+		// parser change cannot pass vacuously.
 		const codeql = pins.filter(
 			(pin) => repoOf(pin.action) === "github/codeql-action",
 		);
@@ -144,7 +145,7 @@ describe("#4350 one SHA per action repository across the workflow tree", () => {
 			]),
 		);
 		expect(new Set(codeql.map((pin) => pin.file))).toEqual(
-			new Set([".github/workflows/ci.yml", ".github/workflows/codeql.yml"]),
+			new Set([".github/workflows/codeql.yml"]),
 		);
 		expect(pinSplits(pins)).toEqual([]);
 	});

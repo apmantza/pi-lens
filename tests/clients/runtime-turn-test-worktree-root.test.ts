@@ -69,30 +69,32 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 				};
 			}
 			const failed = runner.failing.has(path.resolve(testFile)) ? 1 : 0;
-			return {
-				stdout: JSON.stringify({
-					numFailedTests: failed,
-					numPassedTests: failed ? 0 : 1,
-					testResults: failed
-						? [
-								{
-									name: testFile,
-									status: "failed",
-									assertionResults: [
-										{
-											status: "failed",
-											title: "renders",
-											failureMessages: ["expected 1 to be 2"],
-											location: { line: 12, column: 1 },
-										},
-									],
-								},
-							]
-						: [],
-				}),
-				stderr: "",
-				status: failed ? 1 : 0,
-			};
+			const report = JSON.stringify({
+				numFailedTests: failed,
+				numPassedTests: failed ? 0 : 1,
+				testResults: failed
+					? [
+							{
+								name: testFile,
+								status: "failed",
+								assertionResults: [
+									{
+										status: "failed",
+										title: "renders",
+										failureMessages: ["expected 1 to be 2"],
+										location: { line: 12, column: 1 },
+									},
+								],
+							},
+						]
+					: [],
+			});
+			// #5270: vitest reports to the `--outputFile` the runner passes.
+			const flag = args.find((arg) => arg.startsWith("--outputFile="));
+			if (flag !== undefined) {
+				fs.writeFileSync(flag.slice("--outputFile=".length), report);
+			}
+			return { stdout: "", stderr: "", status: failed ? 1 : 0 };
 		},
 	),
 }));

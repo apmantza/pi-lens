@@ -3466,15 +3466,21 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 				cwd: tmpDir,
 				sessionId: "secondary-delivery",
 			});
+			// pi's `isIdle()` is false from a prompt until `agent_settled`, so a
+			// turn_end stages while its host is busy (#5259).
+			let idle = false;
+			(primaryCtx.isIdle as () => boolean) = () => idle;
+			(secondaryCtx.isIdle as () => boolean) = () => idle;
 
 			await primary.trigger("session_start", {}, primaryCtx);
 			await secondary.trigger("session_start", {}, secondaryCtx);
 			await primary.trigger("turn_end", {}, primaryCtx);
 			await secondary.trigger("turn_end", {}, secondaryCtx);
 
-			// Staging alone must never mark anything eligible — the idle boundary
-			// does that, per activation.
+			// Staging during a run never marks anything eligible — the idle
+			// boundary does that, per activation.
 			expect(eligible()).toBeUndefined();
+			idle = true;
 
 			await fireAgentSettled(primary.handlers, primaryCtx);
 			expect(eligible()).toMatchObject({

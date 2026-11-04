@@ -767,6 +767,22 @@ export function createLensDiagnosticsTool(
 			const repaintLspStatus = captureLspStatusRepaint?.(ctx);
 			const mode = (params.mode as string | undefined) ?? "delta";
 			const severity = (params.severity as string | undefined) ?? "all";
+			// #5138 D9: `matchesRecordSeverity`'s trailing `return true` used to
+			// answer EVERY unknown tier as a match. Refuse before any finding is
+			// rendered. The `source=lsp` route returns above and is guarded by
+			// `createLspDiagnosticsTool`'s own check.
+			if (!(LSP_SEVERITY_FILTERS as readonly string[]).includes(severity)) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: `Unknown severity "${severity}". Accepted tiers: ${LSP_SEVERITY_FILTERS.join(", ")}.`,
+						},
+					],
+					isError: true,
+					details: {},
+				};
+			}
 			const refreshRunners = params.refreshRunners;
 			const parsePositiveInt = (value: unknown): number | undefined =>
 				typeof value === "number" && Number.isFinite(value) && value > 0

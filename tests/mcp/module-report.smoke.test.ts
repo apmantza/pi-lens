@@ -12,7 +12,7 @@
  * Requires `npm run build` first (resolves mcp/server.js next to its source).
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -243,6 +243,32 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 		});
 		expect((res.result as { isError?: boolean }).isError).toBe(true);
 		expect(textOf(res)).toContain("foo");
+	}, 30_000);
+
+	// #5138 F2. Recurrence: the MCP handler ignored `result.error`, so a kind
+	// mismatch answered `Symbol "foo" not found` (the symbol exists) and an
+	// unreadable file read as a miss, where the pi tool names the condition.
+	it("pilens_read_symbol names a kind mismatch and an unreadable file instead of 'not found' (#5138)", async () => {
+		const mismatch = await harness.request(16, "tools/call", {
+			name: "pilens_read_symbol",
+			arguments: {
+				file: path.join(projectDir, "a.ts"),
+				symbol: "foo",
+				kind: "class",
+			},
+		});
+		expect((mismatch.result as { isError?: boolean }).isError).toBe(true);
+		expect(textOf(mismatch)).toContain("Could not inspect a.ts:");
+		expect(textOf(mismatch)).toContain('Kind "class" does not match "foo"');
+		expect(textOf(mismatch)).not.toContain("not found");
+		mkdirSync(path.join(projectDir, "dir.ts"));
+		const unreadable = await harness.request(17, "tools/call", {
+			name: "pilens_read_symbol",
+			arguments: { file: path.join(projectDir, "dir.ts"), symbol: "foo" },
+		});
+		expect((unreadable.result as { isError?: boolean }).isError).toBe(true);
+		expect(textOf(unreadable)).toContain("Could not inspect dir.ts:");
+		expect(textOf(unreadable)).not.toContain("not found");
 	}, 30_000);
 
 	// #4949: the pi tool appended extraction warnings on a miss but the MCP twin

@@ -1,0 +1,15 @@
+FE                                                                       [100%]
+==================================== ERRORS ====================================
+__________________________ ERROR at setup of test_err __________________________
+test_fail_and_error.py:4: in boom
+    raise RuntimeError("x")
+E   RuntimeError: x
+=================================== FAILURES ===================================
+___________________________________ test_bad ___________________________________
+test_fail_and_error.py:6: in test_bad
+    assert False
+E   assert False
+=========================== short test summary info ============================
+FAILED test_fail_and_error.py::test_bad - assert False
+ERROR test_fail_and_error.py::test_err - RuntimeError: x
+1 failed, 1 error in 0.01s

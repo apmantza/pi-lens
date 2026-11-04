@@ -230,6 +230,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// #4946: walks clients/, tools/, mcp/ and index.ts for flag names the code
 	// reads, against the flag registry; a production change arms it.
 	"tests/config/flag-read-registry-sweep.test.ts",
+	// #5273 r1 F1: walks clients/, tools/ and mcp/ for `includeNamedFiles`
+	// callers, so a production change that passes the option to another walk
+	// consumer arms it.
+	"tests/clients/source-filter-named-files.test.ts",
 ];
 
 // Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer

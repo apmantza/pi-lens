@@ -27,7 +27,7 @@ jobs:
   # #3801: classify the diff once. `code` is false ONLY for a pull_request whose
   # every changed path is on the strict docs allowlist (root *.md, docs/**,
   # .changelog/**; scripts/ci-changed-files.mjs), and then the HEAVY ADVISORY
-  # job (CodeQL) does not start. The Unit shards and every other test job
+  # gate (`heavy-gate`) does not start. The Unit shards and every other test job
   # still run for a docs-only diff (the `Install test` legs report without
   # installing, #5112): a docs edit can red tests/clients and tests/scripts (docs/public-api-stability.md,
   # docs/*_rules_catalog.md are read by them), so the suite is never skipped.
@@ -814,11 +814,13 @@ jobs:
             --repository "${GITHUB_REPOSITORY}" \
             --run "${GITHUB_RUN_ID}"
 
-  # #3801: the heavy ADVISORY jobs (CodeQL) start only after every required
-  # check passed on this head. A runner-slot pool
-  # shared by 10+ PRs made them compete with the required jobs for slots
-  # (about 40 jobs per push against about 20 concurrent slots), and on a head
-  # whose required checks are red they were pure waste.
+  # #3801: the gate for HEAVY ADVISORY jobs, which start only after every
+  # required check passed on this head. No job waits on it today: #5275 moved
+  # CodeQL out of ci.yml to a daily schedule in codeql.yml. A new heavy advisory
+  # job adds `needs: heavy-gate` and `if: needs.heavy-gate.outputs.ready == 'true'`.
+  # A runner-slot pool shared by 10+ PRs made heavy jobs compete with the
+  # required jobs for slots (about 40 jobs per push against about 20 concurrent
+  # slots), and on a head whose required checks are red they were pure waste.
   #
   # `needs:` reaches `lint-and-typecheck`, the `unit-tests` aggregate, the
   # Windows leg, and every `install-test` leg. The script reads the rest from the
@@ -827,7 +829,7 @@ jobs:
   # a formal head, so the poll waits up to 300 s for it. `tla-models` stays out of
   # `needs:` because implicit success() reads every ancestor: its `tla-shards`
   # need skips on most pull requests (#5082), and that skipped this gate and
-  # CodeQL with it (#5002).
+  # its dependents (#5002).
   # `Hot-path latency (advisory)` is required but not waited for: a master push
   # path-filters that workflow, so its row can be absent here.
   #
@@ -846,8 +848,8 @@ jobs:
       - unit-tests-windows
       - install-test
     # #3801: only a code diff starts the heavy jobs: a docs-only pull request
-    # runs every test job but not CodeQL, the one heavy job left behind this
-    # gate (#4518 promoted the Windows unit leg out of it). Every
+    # runs every test job but not this gate (#4518 promoted the Windows unit
+    # leg out of it; #5275 removed CodeQL, the last job behind it). Every
     # needed job must have succeeded (the implicit `success()`), so a red or
     # skipped one skips the gate.
     if: needs.changes.outputs.code == 'true'
@@ -893,9 +895,9 @@ jobs:
 
     steps:
       # #3926: leave `ref` unset. The pinned action then fetches the captured
-      # commit (`github.sha`, the validated test-merge tree) exactly as the
-      # gated sibling `codeql` does, so this checkout survives a merge that
-      # deletes the mutable `refs/pull/<n>/merge` while the lane is queued.
+      # commit (`github.sha`, the validated test-merge tree), so this checkout
+      # survives a merge that deletes the mutable `refs/pull/<n>/merge` while
+      # the lane is queued.
       # Do not restore `ref: ${{ github.ref }}`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -1505,45 +1507,3 @@ jobs:
             exit 1
           }
           echo "Startup loads from dist ✓"
-
-  # #3801: PR-time CodeQL (advanced setup), advisory. It is one of the heavy
-  # advisory jobs behind `heavy-gate`: it starts only after every required check
-  # passed on this head and only for a code diff, so a red required check never
-  # also pays for two CodeQL runners. `needs:` cannot cross workflows, which is
-  # why this lives here and codeql.yml covers master pushes and the weekly scan.
-  # No fork-PR guard on purpose: a fork's read-only token refuses the SARIF
-  # upload and the job goes red, which the `(advisory)` suffix makes
-  # non-gating; a silent skip would hide that CodeQL never ran.
-  codeql:
-    name: CodeQL (${{ matrix.language }}) (advisory)
-    needs: heavy-gate
-    if: github.event_name == 'pull_request' && needs.heavy-gate.outputs.ready == 'true'
-    runs-on: ubuntu-latest
-    # refs #3123: bounds a hang against GitHub's 360-min default.
-    # Measured max over the last 6 default-setup runs (javascript-typescript,
-    # the slowest language): 479s; timeout = ~2.5x.
-    timeout-minutes: 20
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [actions, javascript-typescript]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: none
-          config: |
-            paths-ignore:
-              - cases
-              - tests/fixtures
-              - dist
-      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
-        with:
-          category: "/language:${{ matrix.language }}"

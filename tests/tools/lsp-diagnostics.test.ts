@@ -2880,3 +2880,26 @@ describe("lsp_diagnostics per-rule ignores carve-out (#3041)", () => {
 		expect(text).toContain("Avoid console.log");
 	});
 });
+
+describe("lsp_diagnostics severity validation (#5138 D9)", () => {
+	it("refuses an unknown severity and names the accepted tiers", async () => {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-sev-"));
+		const file = path.join(tmpDir, "bad.ts");
+		fs.writeFileSync(file, "const value = 1;\n");
+		try {
+			const result = (await createLspDiagnosticsTool().execute(
+				"diag-bad-severity",
+				{ path: file, severity: "Warning" },
+				new AbortController().signal,
+				null,
+				{ cwd: tmpDir },
+			)) as any;
+			expect(result.isError).toBe(true);
+			const text = String(result.content[0]?.text);
+			expect(text).toContain('Unknown severity "Warning"');
+			expect(text).toContain("error, warning, information, hint, all");
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+});

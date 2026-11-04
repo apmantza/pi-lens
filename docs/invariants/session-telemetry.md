@@ -105,8 +105,8 @@
 - `pilens:files:touched` publishers are `clients/pipeline.ts` and
   `clients/runtime-agent-end.ts`; `clients/agent-nudge.ts` is the subscriber.
   `clients/lsp-mutation.ts` has an optional callback but is not a publisher until
-  it is wired. Update `tests/config/files-touched-bus-conformance.test.ts` for
-  any publisher or subscriber change.
+  it is wired. Update this bullet for any publisher or subscriber change; no
+  test enforces the list.
 - Deferred work has a bounded queue, wall budget, abort path, carry-forward
   identity, and honest partial/deferred delivery. It never publishes a false
   clean result after cutting work.

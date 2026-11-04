@@ -375,7 +375,9 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(result.details).toBeUndefined();
 	}, 25_000);
 
-	it("keeps diagnostics visible for an out-of-enum severity through MCP", async () => {
+	it("refuses an out-of-enum severity through MCP instead of disabling the filter (#5138)", async () => {
+		// Recurrence: #1634 pinned `severity: "critical"` as "all findings visible";
+		// #5138 D9 makes the unknown tier a refusal, so the old answer was a wrong one.
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mcp-severity-"));
 		fs.writeFileSync(
 			path.join(cwd, "smelly.ts"),
@@ -406,7 +408,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			const analyzedText = (analyzed.result as { content: { text: string }[] })
 				.content[0].text;
 			expect(analyzedText).toMatch(/deep-nesting|console-statement/);
-			const response = await isolated.request(42, "tools/call", {
+			const refused = await isolated.request(42, "tools/call", {
 				name: "pilens_diagnostics",
 				arguments: {
 					mode: "full",
@@ -414,13 +416,33 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 					severity: "critical",
 				},
 			});
-			const result = response.result as {
+			const refusedResult = refused.result as {
 				isError?: boolean;
 				content: { text: string }[];
 			};
-			expect(result.isError).toBeFalsy();
-			expect(result.content[0].text).not.toContain("No files diagnosed");
-			expect(result.content[0].text).toMatch(/deep-nesting|console-statement/);
+			expect(refusedResult.isError).toBe(true);
+			expect(refusedResult.content[0].text).toContain(
+				'Unknown severity "critical"',
+			);
+			expect(refusedResult.content[0].text).toContain(
+				"error, warning, information, hint, all",
+			);
+			const accepted = await isolated.request(43, "tools/call", {
+				name: "pilens_diagnostics",
+				arguments: {
+					mode: "full",
+					refreshRunners: "cheap",
+					severity: "all",
+				},
+			});
+			const acceptedResult = accepted.result as {
+				isError?: boolean;
+				content: { text: string }[];
+			};
+			expect(acceptedResult.isError).toBeFalsy();
+			expect(acceptedResult.content[0].text).toMatch(
+				/deep-nesting|console-statement/,
+			);
 		} finally {
 			isolated.dispose();
 			fs.rmSync(cwd, { recursive: true, force: true });

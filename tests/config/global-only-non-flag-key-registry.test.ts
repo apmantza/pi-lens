@@ -5,10 +5,8 @@
  * source the project loader's mixed-scope sub-key scan
  * (`clients/project-lens-config.ts`) derives its non-flag global-only
  * population from — the sibling, at KEY granularity, of the SECTION-level
- * registries `tests/config/pi-lens-config-schema.test.ts`'s "declares every
- * registry-derived section" already enforces. That section-level test has no
- * counterpart for `GLOBAL_ONLY_NON_FLAG_KEYS`: nothing verified a member is
- * actually global-only, so a wrongly-added entry naming a key the PROJECT
+ * registries. No test checks those section lists now. Nothing else verified a
+ * member is actually global-only, so a wrongly-added entry naming a key the PROJECT
  * loader genuinely honors too (e.g. `startup.mode`, parsed identically at
  * both scopes) would make the mixed-scope scan emit a false "global-only,
  * ignored" notice for a value that still takes effect — #3112 verbatim (a
