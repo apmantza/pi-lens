@@ -125,6 +125,30 @@ describe("install lock across versions (#3476)", () => {
 		await next.release?.();
 	});
 
+	// Recurrence: the installer kept its own `process.kill(pid, 0)` copy; every
+	// pid-liveness question now answers through `realIsPidAlive`
+	// (`pid-liveness-seam.test.ts`). A legacy lock owner this process may not
+	// signal (EPERM) is alive, so the lock is not taken over.
+	it("keeps out of a legacy lock whose owner pid answers EPERM", async () => {
+		const ownerPid = 4_000_001;
+		const realKill = process.kill.bind(process);
+		const kill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+			if (pid === ownerPid && signal === 0) {
+				throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+			}
+			return realKill(pid, signal as NodeJS.Signals | number);
+		});
+		try {
+			writeLegacy(JSON.stringify({ pid: ownerPid, createdAt: Date.now() }));
+			const gate = await acquireManagedInstallGate("test");
+			expect(gate.ok).toBe(false);
+			expect(gate.reason).toContain("timed out after 150ms");
+			expect(JSON.parse(fs.readFileSync(LEGACY, "utf8")).pid).toBe(ownerPid);
+		} finally {
+			kill.mockRestore();
+		}
+	});
+
 	// The pre-#3476 staleness rules, now applied only by a generation holder.
 	it.each([
 		[

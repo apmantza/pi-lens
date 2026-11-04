@@ -29,6 +29,7 @@ import {
 	incrementDegradationCount,
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
+import { realIsPidAlive } from "./pid-liveness.js";
 
 const GENERATION = /^lock\.(\d+)(\.released)?$/;
 
@@ -49,16 +50,6 @@ export function pidFileOwner(file: string): number | undefined {
 	}
 }
 
-function isPidAlive(pid: number | undefined): boolean {
-	if (pid === undefined) return false;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException | undefined)?.code !== "ESRCH";
-	}
-}
-
 /**
  * A pid lock file is stale once its mtime is `staleMs` old (the lease) or
  * its owner pid is dead. One with no readable pid is live until the lease
@@ -69,7 +60,7 @@ export function pidFileIsStale(file: string, staleMs: number): boolean {
 		const stat = fs.statSync(file);
 		if (Date.now() - stat.mtimeMs > staleMs) return true;
 		const pid = pidFileOwner(file);
-		return pid !== undefined && !isPidAlive(pid);
+		return pid !== undefined && !realIsPidAlive(pid);
 	} catch {
 		return false;
 	}
