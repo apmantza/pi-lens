@@ -34,7 +34,7 @@ async function highComplexityFindings(filePath: string, content: string) {
 }
 
 describe("high-complexity language scope (#5086)", () => {
-	it.each([".ts", ".js", ".jsx", ".mjs", ".cjs"])(
+	it.each([".ts", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"])(
 		"flags a cyclomatic-15 function in a %s file",
 		async (ext) => {
 			const findings = await highComplexityFindings(

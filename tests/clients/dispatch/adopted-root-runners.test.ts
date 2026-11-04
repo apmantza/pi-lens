@@ -747,7 +747,6 @@ describe("#4242 adopted-root runner allowlist", () => {
 					{
 						biomeClient: new BiomeClient(),
 						ruffClient: new RuffClient(),
-						metricsClient: new MetricsClient(),
 						fixedThisTurn: new Set(),
 						getFormatService: () => new FormatService("adopted-not-analyzed"),
 					},
