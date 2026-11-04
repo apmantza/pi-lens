@@ -541,12 +541,15 @@ and the required `Lint & type-check` also runs `depcruise:check`.
 `ci-infra-kill-rerun.yml` has no `pull_request` trigger, so its jobs post no
 skipped rows on a PR; the label cleanup lives in `ci-verdict-labels.yml`.
 
-CI cost gates (#3801). The heavy advisory jobs (`CodeQL (<language>) (advisory)`)
-start only after every required check but `Hot-path latency (advisory)` passed on
-the head (`heavy-gate` in ci.yml; it is red when a required check it polls was
-red or unfinished at its deadline). ci-verdict lists them with their real state
-(PENDING, or NOT RUN with the gate's reason) before and after the verdict turns
-success. A docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
+CI cost gates (#3801). Heavy advisory jobs start only after every required check
+but `Hot-path latency (advisory)` passed on the head (`heavy-gate` in ci.yml; it
+is red when a required check it polls was red or unfinished at its deadline).
+No job is behind the gate now that CodeQL has left ci.yml:
+`codeql.yml` runs once a day on a schedule and on dispatch, with no master-push
+or pull-request run, so a new alert surfaces on master up to a day after its
+change, not on its PR. ci-verdict would list any deferred job with its real
+state (PENDING, or NOT RUN with the gate's reason) before and after the verdict
+turns success. A docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
 nothing else, classified by `scripts/ci-changed-files.mjs`; every doubt runs the
 full suite) skips only those heavy advisory jobs: the Unit shards and every
 other test job always run, because a docs edit can red tests outside tests/config
@@ -598,7 +601,7 @@ of that file moves the action's `hashFiles` target in the same change
 its last install step ran, red or green, because the key is first-wins per week.
 `cache-prune.yml` runs `scripts/prune-actions-cache.mjs` nightly and when the
 `CodeQL` workflow completes on master (its overlay base database is ~785 MB per
-master push, and the nightly run starts hours late), so a closed pull request's
+run, and the nightly run starts hours late), so a closed pull request's
 caches and superseded copies never fill the cap; only its `prune` job holds
 `actions: write` and passes `--apply`
 (`tests/config/cache-prune-workflow.test.ts`).

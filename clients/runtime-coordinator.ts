@@ -50,6 +50,7 @@ import {
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
 import { WriteOrderingGuard, writeOrderToken } from "./write-ordering-guard.js";
+import { retireWidgetCitedRows } from "./widget-state.js";
 import { getProcessSingleton } from "./process-singletons.js";
 import type { GenerationHandle } from "./generation-guard.js";
 import {
@@ -2656,11 +2657,19 @@ export class RuntimeCoordinator {
 				continue;
 			const diagnostics = existing.diagnostics;
 			if (!diagnostics) continue;
-			const kept = diagnostics.filter(
-				(row) =>
-					!(isCrossFileBlocker(row, existing.filePath) && shouldRetire(row)),
-			);
-			if (kept.length === diagnostics.length) continue;
+			const retired: Diagnostic[] = [];
+			const kept: Diagnostic[] = [];
+			for (const row of diagnostics) {
+				(isCrossFileBlocker(row, existing.filePath) && shouldRetire(row)
+					? retired
+					: kept
+				).push(row);
+			}
+			if (retired.length === 0) continue;
+			// The widget store holds the same row against the same written file
+			// (`WidgetDiagnostic.citedFile`); it leaves with the gate's, in this
+			// one place, so no caller can retire the one and quote the other.
+			retireWidgetCitedRows(existing.filePath, retired);
 			changed.push({
 				filePath: existing.filePath,
 				owner: existing.session ?? this._telemetrySessionId,

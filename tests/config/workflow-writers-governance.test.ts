@@ -452,7 +452,6 @@ const WRITER_STEPS: Record<string, number> = {
 // back on a producer reds here with the re-pin printed; the unguarded direction
 // also reds `guards every dispatchable job with an effective write token`.
 const WRITE_SCOPED_JOBS: Record<string, string> = {
-	".github/workflows/ci.yml:codeql": "security-events",
 	".github/workflows/codeql.yml:upload": "security-events",
 	".github/workflows/compat-smoke.yml:compat-smoke-alert": "issues",
 	".github/workflows/install-smoke.yml:host-latest-notify": "issues",

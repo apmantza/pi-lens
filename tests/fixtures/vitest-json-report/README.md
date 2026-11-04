@@ -10,7 +10,9 @@ rewritten to `/project` and `file:///deps/`; nothing else was edited.
   Sources: `fail` (one failing and one passing test), `pass`, `empty` (no
   tests), `skipped` (`it.skip` only), `import-error` (suite fails to load).
 - `vitest-3.2.7/*.stdout.json`: the same command's stdout on vitest 3.2.7,
-  which prints the report to stdout. vitest 3.2.7 also honours `--outputFile`.
+  which prints the report to stdout when no `--outputFile` is passed. With
+  `--outputFile` (the runner always passes it) vitest 3.2.4 and 5.0.5 write the
+  report to the file and print only `JSON report written to <path>` (#5270).
   vitest 4 was not available on the capture host (no install allowed in the
   lane); `tests/clients/test-runner-client.test.ts` pins hand-shaped 4.1.10
   payloads from #1452.

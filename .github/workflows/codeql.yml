@@ -1,19 +1,19 @@
 name: CodeQL
 
-# Advanced setup (#3801). PR-time analysis is the advisory `codeql` job in
-# ci.yml (it waits on the required jobs, and `needs:` cannot cross workflows).
-# This file keeps the default-branch baseline and the weekly re-scan.
+# Advanced setup (#3801), scanned once a day (#5275). The daily schedule is the
+# only automatic trigger: there is no pull_request run (the former advisory job
+# in ci.yml is gone) and no run per master push, so a new alert surfaces on
+# master up to a day after the change that caused it, not on that change's PR.
+# `workflow_dispatch` re-scans on demand.
 #
 # Two jobs (#4077): `analyze` holds no write scope and runs on a dispatch from
 # any ref (its SARIF is a run artifact, `upload: never`); `upload` is the only
 # job with `security-events: write`, is guarded to the schedule or master, and
 # sends that SARIF to code scanning.
 on:
-  push:
-    branches: [master]
-    paths-ignore: ["**/*.md", ".changelog/**", "docs/**"]
   schedule:
-    - cron: "17 4 * * 2"
+    # Daily, off-peak and off the top of the hour.
+    - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -21,8 +21,7 @@ permissions:
 
 jobs:
   analyze:
-    # The `(advisory)` suffix is what scripts/lib/ci-checks.mjs reads; the
-    # `baseline` word keeps this name distinct from ci.yml's PR-time job.
+    # The `(advisory)` suffix is what scripts/lib/ci-checks.mjs reads.
     name: CodeQL baseline (${{ matrix.language }}) (advisory)
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default.

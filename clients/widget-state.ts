@@ -13,6 +13,7 @@ import { fitLine } from "./tui-fit.js";
 import { WriteOrderingGuard } from "./write-ordering-guard.js";
 import { collectForwardImportMtimes } from "./blocker-freshness.js";
 import { findingIdentity } from "./finding-identity.js";
+import { isCrossFileBlocker } from "./inline-blocker-fields.js";
 import { freshnessFromMtime } from "./freshness.js";
 import { PAST_EOF_STALE_MARKER } from "./diagnostic-line-freshness.js";
 import { STALE_LINE_MARKER } from "./stale-marker.js";
@@ -240,6 +241,24 @@ export interface WidgetDiagnostic {
 	 * gate / the coarse identity" rather than as a licence to keep the row.
 	 */
 	anchorSpan?: string;
+	/**
+	 * #5020: the file this row cites when that is NOT the record's own file. A
+	 * chart-wide runner (helm-lint) or an import-following one (mypy) reports a
+	 * row for `other-b.yaml` while `deploy-a.yaml` is written, and this store
+	 * keeps it in `deploy-a.yaml`'s record, like the commit gate's
+	 * `InlineBlockerRecord` does. The cited file is the only thing that can
+	 * retire it, so it is stamped here (`normalizeDiagnostics`, from the raw row's
+	 * `filePath`, through the gate's own `isCrossFileBlocker`) and read back by
+	 * {@link retireWidgetCitedRows}, which `RuntimeCoordinator.retireForeignRows`
+	 * calls beside the gate's retire.
+	 *
+	 * Absent on a row that cites no other file, and on every row persisted by an
+	 * older build: both read as "the record's own", which keeps the row (the
+	 * fail-closed direction). Additive and optional, so `WIDGET_STATE_VERSION`
+	 * does not move and a restored row keeps its cite: unlike `stale`, it is a
+	 * fact about what the row cites, not a verdict about one session's disk.
+	 */
+	citedFile?: string;
 }
 
 /**
@@ -912,6 +931,7 @@ export function recordDiagnostics(
 		column?: number;
 		severity?: string;
 		semantic?: string;
+		filePath?: string;
 	}>,
 	writeIndex?: number,
 	// #1093: when the truth was OBSERVED, not when it's being written. Defaults
@@ -959,22 +979,27 @@ export function recordDiagnostics(
 	return true;
 }
 
+/** The raw diagnostic shape callers hand the store (a dispatch `Diagnostic` fits). */
+interface RawWidgetDiagnostic {
+	tool?: string;
+	rule?: string;
+	id?: string;
+	message?: string;
+	line?: number;
+	column?: number;
+	severity?: string;
+	semantic?: string;
+	/** The file the row cites (`Diagnostic.filePath`); see `citedFile`. */
+	filePath?: string;
+}
+
 /** Map the raw diagnostic shape callers pass into stored {@link WidgetDiagnostic}s.
  * Every produced entry is stamped with `observedTs` (#1186) — the time THIS batch
  * of diagnostics was observed — so the per-entry stale gate can later drop just
  * the entries older than the file's mtime rather than the whole record. */
 function normalizeDiagnostics(
 	filePath: string,
-	diagnostics: Array<{
-		tool?: string;
-		rule?: string;
-		id?: string;
-		message?: string;
-		line?: number;
-		column?: number;
-		severity?: string;
-		semantic?: string;
-	}>,
+	diagnostics: readonly RawWidgetDiagnostic[],
 	observedTs: number,
 ): WidgetDiagnostic[] {
 	return diagnostics.map((d) => {
@@ -989,6 +1014,9 @@ function normalizeDiagnostics(
 			tool: d.tool,
 			uri: widgetDiagnosticUri(filePath, d.line, d.column),
 			observedAt: observedTs,
+			...(d.filePath !== undefined && isCrossFileBlocker(d, filePath)
+				? { citedFile: d.filePath }
+				: {}),
 		} satisfies WidgetDiagnostic;
 	});
 }
@@ -1451,6 +1479,7 @@ export function reconcileScanDiagnostics(
 		column?: number;
 		severity?: string;
 		semantic?: string;
+		filePath?: string;
 	}>,
 	confirmed: boolean,
 	writeIndex?: number,
@@ -2063,6 +2092,57 @@ export function getFileDiagnostics(
 	if (!rec) return undefined;
 	applyPastEofGate(rec);
 	return rec.allDiagnostics.map((d) => ({ ...d }));
+}
+
+/** What names one cited row: its cite, its line and its finding identity. */
+function citedRowKey(row: WidgetDiagnostic): string {
+	return JSON.stringify([
+		normalizeEphemeralMapKey(row.citedFile ?? ""),
+		row.line ?? null,
+		findingIdentity(row),
+	]);
+}
+
+/**
+ * #5020: drop from `filePath`'s record the rows that cite another file and
+ * that the commit gate has just retired from its own record of the same file.
+ * The two stores hold one row for one fact: the gate's by the written file
+ * (`InlineBlockerRecord`), this one by the written file too, so a retire of
+ * the gate's row that left this one would list a fixed or deleted file's
+ * blocker in `lens_diagnostics source=session` and the footer until the
+ * written file was next dispatched.
+ *
+ * `retired` is the gate's own rows, run through `normalizeDiagnostics`, so the
+ * match uses the derivation that built the stored row. A stored row with no
+ * `citedFile` (the record's own, or one an older build persisted) never
+ * matches: its key has no cite, and only rows that cite a file are looked up.
+ *
+ * Not a diagnostics write: it takes no write-order token, stamps no
+ * observation time and leaves `hasFinalDiagnosticsSnapshot` as it was, so a
+ * record still waiting for a snapshot keeps waiting. Counts and the capped
+ * display list are re-derived from what remains, as every other commit does.
+ *
+ * @returns how many rows left the record.
+ */
+export function retireWidgetCitedRows(
+	filePath: string,
+	retired: readonly RawWidgetDiagnostic[],
+): number {
+	const rec = files.get(fileMapKey(filePath));
+	if (!rec) return 0;
+	const gone = new Set(
+		normalizeDiagnostics(filePath, retired, 0).flatMap((row) =>
+			row.citedFile === undefined ? [] : [citedRowKey(row)],
+		),
+	);
+	const kept = rec.allDiagnostics.filter((row) => !gone.has(citedRowKey(row)));
+	const dropped = rec.allDiagnostics.length - kept.length;
+	if (dropped === 0) return 0;
+	rec.allDiagnostics = kept;
+	rec.diagnostics = capStoredDiagnostics(kept);
+	rec.diagnosticCounts = countDiagnostics(kept);
+	requestRender();
+	return dropped;
 }
 
 /** @internal Test-only helpers. Do not use in production code. */
