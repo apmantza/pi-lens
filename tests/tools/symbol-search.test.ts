@@ -22,6 +22,7 @@ import {
 } from "../../clients/review-graph/builder.js";
 import {
 	buildWordIndex,
+	collectWordIndexDocs,
 	getWordIndexBuildStatus,
 	serializeWordIndex,
 	triggerBackgroundWordIndexBuild,
@@ -211,7 +212,7 @@ describe("symbol_search tool", () => {
 		}
 	}, 10_000);
 
-	it("a cold build indexes named files, so lang:groovy returns a Jenkinsfile and build.gradle (#5273)", async () => {
+	it("an index built by the real walk holds named files, so lang:groovy returns a Jenkinsfile and build.gradle (#5273)", async () => {
 		// Recurrence: the source walk admitted by extension only, so a file whose
 		// kind comes from its name never entered the index and #5238's lang:groovy
 		// filter had nothing to return for it.
@@ -232,24 +233,10 @@ describe("symbol_search tool", () => {
 				"src/deploy.ts",
 				"export function deployStage() { return 1; }\n",
 			);
+			// The index comes from the real walk (collectWordIndexDocs), then the
+			// real tool answers from it; no build to wait on.
+			warmWordIndexSnapshot(env.tmpDir, await collectWordIndexDocs(env.tmpDir));
 			const tool = createSymbolSearchTool(() => env.tmpDir);
-			const cold = await tool.execute(
-				"1",
-				{ query: "deploy stage" },
-				undefined,
-				null,
-				{ cwd: env.tmpDir },
-			);
-			expect(cold.details).toMatchObject({
-				available: false,
-				unavailableReason: "building",
-			});
-			await vi.waitFor(
-				() => {
-					expect(loadProjectSnapshot(env.tmpDir)?.wordIndex).toBeDefined();
-				},
-				{ timeout: 5000 },
-			);
 			const inline = await tool.execute(
 				"2",
 				{ query: "lang:groovy deploy stage" },
