@@ -446,9 +446,6 @@ function renderRenameFile(
 const TIMED_OUT_COMMAND_REASON = /\btimed out\b/i;
 
 function renderExecuteCommand(result: unknown): string | undefined {
-	// A bare string is the server's value, so it renders as JSON: `trim()` would
-	// strip its quotes, keep its newlines, and turn "" into undefined (#5224 CR2).
-	if (typeof result === "string") return JSON.stringify(result);
 	const entry = rec(result);
 	if (!entry) return undefined;
 	// Dry run: the tool reports advertisement status and runs nothing.
@@ -474,8 +471,16 @@ function renderExecuteCommand(result: unknown): string | undefined {
 		}
 		return lines.join("\n");
 	}
-	// An executed command returns the server's arbitrary value, which no line
-	// shape can read, so it renders as compact single-line JSON and nothing else.
+	// An executed command returns the server's arbitrary value inside
+	// LSPService's `{ executed: true, result }` wrapper; printing the wrapper hid
+	// the value behind it (#5224 review G7). No line shape can read the value, so
+	// it renders as compact single-line JSON; a string keeps its quotes, since
+	// `trim()` stripped them and turned "" into undefined (#5224 CR2).
+	if (entry.executed === true) {
+		return entry.result === undefined
+			? "Executed; the server returned no result."
+			: JSON.stringify(entry.result);
+	}
 	return JSON.stringify(result);
 }
 
@@ -489,17 +494,24 @@ function renderWorkspaceDiagnostics(
 	display: Display,
 ): string | undefined {
 	const lines: string[] = [];
+	// A clean file or an empty snapshot skipped every row, so the text view fell
+	// back to the raw JSON (#5224 review CR3). The count stays neutral: a note
+	// above it can still say the answer timed out.
+	const empty: string[] = [];
 	for (const item of arr(result)) {
 		const file = rec(item);
 		if (!file) continue;
 		const filePath = str(file.filePath) ?? "";
 		const where = display.file(filePath);
 		const diagnostics = arr(file.diagnostics);
-		if (diagnostics.length === 0) continue;
 		// The path-less snapshot replays what each client last published and stamps
 		// each file's age; only the envelope carried it, so a replayed row read as
 		// current (#1634, #5224 review G5/CR1).
 		const lag = str(file.lag);
+		if (diagnostics.length === 0) {
+			empty.push(`${lag ? `${where} (${lag})` : where}: 0 diagnostics`);
+			continue;
+		}
 		if (lag) lines.push(`${where} (${lag})`);
 		for (const diagnostic of diagnostics) {
 			const entry = rec(diagnostic);
@@ -516,7 +528,11 @@ function renderWorkspaceDiagnostics(
 			);
 		}
 	}
-	return lines.length > 0 ? lines.join("\n") : undefined;
+	if (lines.length > 0) return lines.join("\n");
+	if (empty.length > 0) return empty.join("\n");
+	return Array.isArray(result) && result.length === 0
+		? "0 diagnostics"
+		: undefined;
 }
 
 function renderBody(options: {

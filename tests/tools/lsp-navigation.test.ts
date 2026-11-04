@@ -2778,7 +2778,11 @@ describe("lsp_navigation default text view", () => {
 					summary: ["Renamed src/sample.ts → src/renamed.ts"],
 				}),
 				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
-				executeCommand: vi.fn().mockResolvedValue({ alpha: 1, beta: "two" }),
+				// LSPService.executeCommand wraps the server value (#5224 review G7).
+				executeCommand: vi.fn().mockResolvedValue({
+					executed: true,
+					result: { alpha: 1, beta: "two" },
+				}),
 				getWorkspaceDiagnosticsSupport: vi
 					.fn()
 					.mockResolvedValue({ mode: "pull" }),
@@ -3350,6 +3354,28 @@ describe("lsp_navigation default text view", () => {
 		expect(lines[2]).toBe(`${tmpPath("sample.ts")}:1:1: error [TS1]: boom`);
 	});
 
+	// Recurrence: #5224 review CR3: a clean file or an empty snapshot skipped
+	// every row, so the text view fell back to the raw note and JSON array.
+	it("prints a neutral zero count for a clean file and an empty snapshot", async () => {
+		(mocked.service as { getDiagnostics: unknown }).getDiagnostics = vi
+			.fn()
+			.mockResolvedValue([]);
+		const clean = await runText("text-workspace-diagnostics-clean", {
+			operation: "workspaceDiagnostics",
+			path: tmpPath("sample.ts"),
+		});
+		expect(clean.split("\n").slice(2)).toEqual([
+			`${tmpPath("sample.ts")}: 0 diagnostics`,
+		]);
+		(mocked.service as { getAllDiagnostics: unknown }).getAllDiagnostics = vi
+			.fn()
+			.mockResolvedValue(new Map());
+		const empty = await runText("text-workspace-snapshot-empty", {
+			operation: "workspaceDiagnostics",
+		});
+		expect(empty.split("\n").slice(2)).toEqual(["0 diagnostics"]);
+	});
+
 	it("prints each snapshot file's scan age above its rows", async () => {
 		// The path-less snapshot replays what each client last published; the age
 		// label lived only in the envelope, so a replayed row read as current
@@ -3407,7 +3433,9 @@ describe("lsp_navigation default text view", () => {
 				hasLSP: vi.fn().mockResolvedValue(true),
 				getOperationSupport: vi.fn().mockResolvedValue(null),
 				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
-				executeCommand: vi.fn().mockResolvedValue("done\n"),
+				executeCommand: vi
+					.fn()
+					.mockResolvedValue({ executed: true, result: "done\n" }),
 			}),
 		);
 		const text = await runText("text-execute-command-string", {
@@ -3416,6 +3444,26 @@ describe("lsp_navigation default text view", () => {
 			apply: true,
 		});
 		expect(text).toBe('"done\\n"');
+	});
+
+	it("says an executed command returned nothing instead of printing the wrapper", async () => {
+		// #5224 review G7: `{ executed: true }` with no value rendered as the
+		// wrapper JSON, which reads as the server's value.
+		mocked.service = installLspService(
+			makeLspServiceDouble({
+				supportsLSP: vi.fn().mockReturnValue(true),
+				hasLSP: vi.fn().mockResolvedValue(true),
+				getOperationSupport: vi.fn().mockResolvedValue(null),
+				getAdvertisedCommands: vi.fn().mockResolvedValue(["test.explain"]),
+				executeCommand: vi.fn().mockResolvedValue({ executed: true }),
+			}),
+		);
+		const text = await runText("text-execute-command-no-result", {
+			operation: "executeCommand",
+			command: "test.explain",
+			apply: true,
+		});
+		expect(text).toBe("Executed; the server returned no result.");
 	});
 
 	it("keeps the dry-run advertisement preview instead of a failure line", async () => {
