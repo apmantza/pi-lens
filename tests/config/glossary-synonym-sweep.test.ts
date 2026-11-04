@@ -1137,7 +1137,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 9 -> 11 (#5104): the shared hit renderer prints a hit's path relative to
 		// the query cwd, and the footer's next-step line does the same for the top
 		// hit. Both are the `node:path` module, never the retired map-key sense.
-		"clients/lens-engine.ts": 11,
+		// 11 -> 12 (#5235): `symbolSearchFileMatchesLang` reads the basename of a
+		// file a kind names by pattern (`path.basename`), like the inline filter.
+		"clients/lens-engine.ts": 12,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
 		"clients/log-cleanup.ts": 9,
