@@ -21,7 +21,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
 	return bootstrapSeamMock(async () => ({
-		metricsClient: { reset: () => {} },
 		todoScanner: {},
 		biomeClient: { isAvailable: () => false },
 		ruffClient: { isAvailable: () => false },

@@ -62,7 +62,6 @@ vi.mock("../clients/latency-logger.js", async (importActual) => {
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
 	return bootstrapSeamMock(async () => ({
-		metricsClient: { reset: () => {} },
 		knipClient: { isAvailable: () => false },
 		depChecker: { isAvailable: () => false },
 		testRunnerClient: { detectRunner: () => null },

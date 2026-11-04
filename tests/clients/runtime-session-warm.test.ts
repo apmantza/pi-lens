@@ -67,7 +67,6 @@ function makeDeps(
 		dbg: overrides.dbg ?? (() => {}),
 		log: () => {},
 		runtime: makeDefaultRuntime(),
-		metricsClient: { reset: () => {} },
 		cacheManager: {
 			writeCache: () => {},
 			readCache: () => null,

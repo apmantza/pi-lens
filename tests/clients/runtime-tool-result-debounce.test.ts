@@ -35,7 +35,6 @@ function makeDeps(
 		biomeClient: {},
 		ruffClient: {},
 		testRunnerClient: {},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

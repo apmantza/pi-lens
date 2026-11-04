@@ -110,7 +110,6 @@ function toolDeps(runtime: RuntimeCoordinator, biomeClient: BiomeClient) {
 			isPythonFile: () => false,
 			ensureAvailable: async () => false,
 		},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

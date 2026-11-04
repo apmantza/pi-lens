@@ -72,7 +72,6 @@ function makeDeps(
 		dbg: () => {},
 		log: () => {},
 		runtime,
-		metricsClient: { reset: () => {} },
 		cacheManager: {
 			writeCache: hooks.writeCache,
 			readCache: () => null,

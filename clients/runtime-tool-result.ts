@@ -119,7 +119,6 @@ import {
 	notifyExternalFileChange,
 	peekLSPService,
 } from "./lsp/capabilities.js";
-import type { MetricsClient } from "./metrics-client.js";
 import { type PipelineResult, runPipeline } from "./pipeline.js";
 import {
 	type AuthoritativeAttachmentDecision,
@@ -659,7 +658,6 @@ interface ToolResultDeps {
 	cacheManager: CacheManager;
 	biomeClient?: BiomeClient;
 	ruffClient?: RuffClient;
-	metricsClient?: MetricsClient;
 	resetLSPService: (options?: LSPShutdownOptions) => void;
 	agentBehaviorRecord: (toolName: string, filePath?: string) => unknown[];
 	formatBehaviorWarnings: (warnings: unknown[]) => string;
@@ -785,7 +783,7 @@ type OwnWriteStamp = {
 function ensureToolResultClients(
 	deps: ToolResultDeps,
 ): boolean | Promise<boolean> {
-	if (deps.biomeClient && deps.ruffClient && deps.metricsClient) return true;
+	if (deps.biomeClient && deps.ruffClient) return true;
 	const request = {
 		reason: "tool-result-analysis",
 		hook: "tool_result_edit" as const,
@@ -801,7 +799,6 @@ function ensureToolResultClients(
 		if (!clients) return false;
 		deps.biomeClient = clients.biomeClient;
 		deps.ruffClient = clients.ruffClient;
-		deps.metricsClient = clients.metricsClient;
 		return true;
 	});
 }
@@ -1675,7 +1672,6 @@ async function dispatchPipelineAnalysis(args: {
 		dbg,
 		biomeClient,
 		ruffClient,
-		metricsClient,
 		resetLSPService,
 	} = deps;
 
@@ -1756,7 +1752,6 @@ async function dispatchPipelineAnalysis(args: {
 		{
 			biomeClient: biomeClient!,
 			ruffClient: ruffClient!,
-			metricsClient: metricsClient!,
 			getFormatService,
 			fixedThisTurn,
 		},

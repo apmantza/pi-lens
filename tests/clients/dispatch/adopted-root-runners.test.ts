@@ -28,7 +28,6 @@ import { BiomeClient } from "../../../clients/biome-client.js";
 import { getGlobalPiLensDir } from "../../../clients/file-utils.js";
 import { FormatService } from "../../../clients/format-service.js";
 import { clearFormatterRuntimeState } from "../../../clients/formatters.js";
-import { MetricsClient } from "../../../clients/metrics-client.js";
 import { RuffClient } from "../../../clients/ruff-client.js";
 import {
 	acquireWarmWordIndex,
@@ -594,7 +593,6 @@ describe("#4242 adopted-root runner allowlist", () => {
 					{
 						biomeClient: new BiomeClient(),
 						ruffClient: new RuffClient(),
-						metricsClient: new MetricsClient(),
 						fixedThisTurn: new Set(),
 						getFormatService: () => new FormatService("adopted-pipeline-r2"),
 					},
@@ -749,7 +747,6 @@ describe("#4242 adopted-root runner allowlist", () => {
 					{
 						biomeClient: new BiomeClient(),
 						ruffClient: new RuffClient(),
-						metricsClient: new MetricsClient(),
 						fixedThisTurn: new Set(),
 						getFormatService: () => new FormatService("adopted-not-analyzed"),
 					},
@@ -1154,7 +1151,6 @@ describe("#4242 adopted-root runner allowlist", () => {
 				{
 					biomeClient: new BiomeClient(),
 					ruffClient: new RuffClient(),
-					metricsClient: new MetricsClient(),
 					fixedThisTurn: new Set(),
 					getFormatService: () => new FormatService("adopted-word-index"),
 				},

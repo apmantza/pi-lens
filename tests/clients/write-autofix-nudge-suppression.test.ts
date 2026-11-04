@@ -80,7 +80,6 @@ function toolDeps(runtime: RuntimeCoordinator) {
 		cacheManager: { addModifiedRange: () => {}, readTurnState: () => ({}) },
 		biomeClient: {},
 		ruffClient: {},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

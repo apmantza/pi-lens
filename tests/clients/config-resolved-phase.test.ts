@@ -574,7 +574,6 @@ describe("handleSessionStart publishes nothing about config resolution (#2526 ro
 			dbg,
 			log: () => {},
 			runtime: new RuntimeCoordinator(),
-			metricsClient: { reset: () => {} },
 			cacheManager: { writeCache: () => {}, readCache: () => null },
 			todoScanner: { scanDirectory: () => ({ items: [] }) },
 			astGrepClient: {

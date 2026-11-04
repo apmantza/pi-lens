@@ -1736,12 +1736,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 			"process-wide: the bus publisher is registered once per process and holds no session answer",
 		reason: "bus publisher registration",
 	},
-	"complexity-client.ts": {
-		ownerKey:
-			"process-wide: frozen per-language node-kind tables built at import and only read",
-		reason:
-			"#5036 F1: the language tables are module objects whose members are Sets of tree-sitter node-kind names; nothing writes them after load, so a session boundary cannot change them",
-	},
 	"config-core/records.ts": {
 		ownerKey:
 			"process-wide: a call-scoped collector discarded with one config load and a frozen code vocabulary",
@@ -2085,9 +2079,11 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<
 		reason:
 			"MCP turn-end delivery chain, drained per turn; its session context is replaced, not accumulated. #2455 fix round 2: the widened detector also now flags `turnEndQueue`, a non-exported TurnEndQueue instance — the serial queue this same delivery chain drains through. It already has a reset seam (`_resetTurnEndChain`, exported above), and the same reasoning applies: at most one item is ever pending (a second enqueue is rejected busy), and each carries its own 5s unref'd timeout, so nothing accumulates across a boundary. (#2455 fix round 3, F3: an earlier draft added the clause 'and MCP has no pi session_start boundary for this file to hook into anyway'. Struck — it is false. runSessionStart in this very file calls handleSessionStart, and `mcp/server.ts` runs it at boot (:252) and from the `pilens_session_start` tool (:1631).)",
 	},
-	"metrics-client.ts": {
-		ownerKey: "project",
-		reason: "per-file content and entropy baselines keyed by file path",
+	"metrics/function-metrics.ts": {
+		ownerKey:
+			"process-wide: frozen per-language node-kind tables built at import and only read",
+		reason:
+			"#5036 F1, moved here by #5086: the language tables are module objects whose members are Sets of tree-sitter node-kind names; nothing writes them after load, so a session boundary cannot change them",
 	},
 	"module-report-lsp.ts": {
 		ownerKey:
@@ -2405,7 +2401,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// #4487: the cascade pending-error record (1 -> 2), registered above and
 	// reset by resetDispatchBaselines.
 	"cascade-format.ts": 2,
-	"complexity-client.ts": 24,
 	"config-core/records.ts": 1,
 	"config-resolve.ts": 2,
 	// #2418: the one warn-once latch behind all three config loaders, moved
@@ -2628,7 +2623,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// any export shape" predicate. See this file's EXEMPT_SESSION_STATE_FILES
 	// entry above.
 	"mcp/session.ts": 4,
-	"metrics-client.ts": 1,
+	// #5086: the frozen node-kind tables moved here from complexity-client.ts,
+	// which pinned 24.
+	"metrics/function-metrics.ts": 20,
 	// #5036 N1: `NO_LSP.byName` (a member of the module-level `NO_LSP` literal).
 	"module-report-lsp.ts": 1,
 	"module-report.ts": 3,

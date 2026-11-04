@@ -325,7 +325,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/index.ts": 13,
 		"clients/lsp/server.ts": 3,
 		"clients/mcp/session.ts": 4,
-		"clients/metrics-client.ts": 7,
 		"clients/observed-mutation.ts": 7,
 		// 12 -> 11 (#2050): the prescan's `let baseline` local moved into
 		// `captureOpaqueBaseline`'s returned `state`, so one identifier use is
@@ -919,7 +918,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/knip-client.ts": 14,
 		"clients/latency-logger.ts": 1,
 		"clients/mcp/session.ts": 1,
-		"clients/metrics-client.ts": 4,
 		// 18 -> 19 (#5138): the callback-handle kind refusal logs its miss too.
 		// 17 -> 18 (#5138): the kind-mismatch refusal logs its miss through the
 		// same `read_symbol` phase as every other miss in this file.
@@ -1246,7 +1244,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// name and the stale-socket owner marker. No path-key owner changes.
 		"clients/mcp/ipc.ts": 7,
 		"clients/mcp/session.ts": 3,
-		"clients/metrics-client.ts": 6,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.

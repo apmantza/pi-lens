@@ -219,7 +219,6 @@ describe("runtime event flow", () => {
 					dbg: () => {},
 					log: () => {},
 					runtime,
-					metricsClient: { reset: () => {} },
 					cacheManager,
 					todoScanner: { scanDirectory: () => ({ items: [] }) },
 					astGrepClient: {
@@ -276,7 +275,6 @@ describe("runtime event flow", () => {
 				biomeClient: {},
 				ruffClient: {},
 				testRunnerClient: {},
-				metricsClient: {},
 				resetLSPService: () => {},
 				agentBehaviorRecord: () => [],
 				formatBehaviorWarnings: () => "",

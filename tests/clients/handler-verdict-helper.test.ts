@@ -409,7 +409,6 @@ describe("#3518 — a swallowed handler throw fails the handler-verdict test", (
 					cacheManager: new CacheManager(false),
 					biomeClient: {},
 					ruffClient: {},
-					metricsClient: {},
 					resetLSPService: () => {},
 					agentBehaviorRecord: () => [],
 					formatBehaviorWarnings: () => "",
