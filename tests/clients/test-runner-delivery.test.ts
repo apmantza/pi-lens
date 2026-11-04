@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { snapshotAdvisoryProvenance } from "../../clients/advisory-provenance.js";
 import { resetBoundedTelemetry } from "../../clients/bounded-telemetry.js";
@@ -22,7 +22,13 @@ import {
 	resetTestRunnerDelivery,
 	stageTestRunnerDelivery,
 } from "../../clients/test-runner-delivery.js";
+import { KnipClient } from "../../clients/knip-client.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { handleTurnEnd } from "../../clients/runtime-turn.js";
+import {
+	type TestResult,
+	TestRunnerClient,
+} from "../../clients/test-runner-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 describe("automatic test-runner delivery (#2366)", () => {
@@ -85,6 +91,37 @@ describe("automatic test-runner delivery (#2366)", () => {
 			env.tmpDir,
 		);
 		return { env, cache, runtime };
+	}
+
+	/**
+	 * A batch publish as turn_end writes it: content, the launch generation,
+	 * and the provenance stamp of the generation that produced the content.
+	 */
+	function publishStamped(
+		cwd: string,
+		cache: CacheManager,
+		runtime: RuntimeCoordinator,
+		generation: number,
+	): string {
+		const file = path.join(cwd, "src", "app.ts");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "export const x = 1;\n");
+		const content = `FAIL app.test.ts generation-${generation}`;
+		cache.writeCache(
+			"test-runner-findings",
+			{
+				content,
+				testRunGeneration: generation,
+				provenance: snapshotAdvisoryProvenance({
+					cwd,
+					runtime,
+					generation,
+					files: [{ path: file, role: "test" }],
+				}),
+			},
+			cwd,
+		);
+		return content;
 	}
 
 	it("delivers once through context without appending a terminal entry", () => {
@@ -1056,6 +1093,254 @@ describe("automatic test-runner delivery (#2366)", () => {
 					?.data.content,
 			).toContain("generation-2");
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #5259, the persisted view: an eligible marker written for generation 1
+	 * survives a pre-run write that bumps `testRunGeneration` to 2 and keeps
+	 * generation 1's content. Recurrence: the resumed context build read the
+	 * bumped generation and dropped the marker as superseded.
+	 */
+	it("rehydrates an eligible failure across a run that launched but has not published (#5259)", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			const published = publishStamped(env.tmpDir, cache, runtime, 1);
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+			// The turn_end pre-run write: generation 2 launches, content kept.
+			const eligible = cache.readCache<Record<string, unknown>>(
+				"test-runner-findings",
+				env.tmpDir,
+			)?.data;
+			cache.writeCache(
+				"test-runner-findings",
+				{ ...eligible, testRunGeneration: 2 },
+				env.tmpDir,
+			);
+			resetTestRunnerDelivery();
+			const resumed = consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				cacheManager: cache,
+				runtime,
+			});
+			expect(resumed?.messages[0]?.content).toContain(published);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #5259, the supersede direction of the stamp: a newer batch that
+	 * publishes its own stamped content still drops an eligible older result.
+	 * Recurrence: an identity that ignored the publish stamp would deliver
+	 * generation 1 over generation 2's content.
+	 */
+	it("drops an eligible failure once a newer batch publishes its stamped content (#5259)", async () => {
+		const { env, cache, runtime } = setup();
+		try {
+			publishStamped(env.tmpDir, cache, runtime, 1);
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+			const newer = publishStamped(env.tmpDir, cache, runtime, 2);
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-a",
+					cacheManager: cache,
+					runtime,
+				}),
+			).toBeUndefined();
+			expect(await deliveryOutcomes()).toEqual([
+				"staged",
+				"eligible",
+				"superseded",
+			]);
+			expect(
+				cache.readCache<{ content: string }>("test-runner-findings", env.tmpDir)
+					?.data.content,
+			).toBe(newer);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #5259 real path: turn A's batch fails (generation 1) and is staged; turn
+	 * B launches a second batch whose pre-run write bumps `testRunGeneration`
+	 * to 2 but keeps generation 1's content, and that batch is still in flight
+	 * at `agent_settled`. Recurrence: the settle read the bumped generation,
+	 * dropped generation 1 as superseded, and the failure reached the model one
+	 * whole agent run late (P3, after the next settle) instead of at P2.
+	 */
+	it("delivers a staged failure at the next prompt when a newer run has launched but not published (#5259)", async () => {
+		const env = setupTestEnvironment("pi-lens-5259-");
+		try {
+			const root = env.tmpDir;
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = root;
+			runtime.setTelemetryIdentity({ sessionId: "session-a" });
+			const cache = new CacheManager(false);
+			fs.writeFileSync(
+				path.join(root, "package.json"),
+				'{"name":"fixture","version":"1.0.0"}\n',
+			);
+			fs.writeFileSync(
+				path.join(root, "vitest.config.ts"),
+				"export default {};\n",
+			);
+			const bin = path.join(root, "node_modules", ".bin");
+			fs.mkdirSync(bin, { recursive: true });
+			fs.writeFileSync(path.join(bin, "vitest"), "#!/bin/sh\nexit 0\n");
+			fs.chmodSync(path.join(bin, "vitest"), 0o755);
+			const source = path.join(root, "src/foo.ts");
+			const testFile = path.join(root, "src/foo.test.ts");
+			fs.mkdirSync(path.dirname(source), { recursive: true });
+			fs.writeFileSync(source, "export const foo = 1;\n");
+			fs.writeFileSync(testFile, "export {};\n");
+
+			// The real client; only its spawn (`runTestFileAsync`) is replaced,
+			// so each batch's completion is under the test's control.
+			const client = new TestRunnerClient();
+			const failing = (message: string): TestResult => ({
+				file: testFile,
+				sourceFile: source,
+				runner: "vitest",
+				passed: 0,
+				failed: 1,
+				skipped: 0,
+				failures: [{ name: "foo", message }],
+				duration: 5,
+			});
+			const runs: Array<(result: TestResult) => void> = [];
+			vi.spyOn(client, "runTestFileAsync").mockImplementation(
+				() => new Promise<TestResult>((resolve) => runs.push(resolve)),
+			);
+			let staged: () => void = () => {};
+			const owner = {
+				ownerId: "owner-a",
+				cacheManager: cache,
+				runtime,
+				getCtx: () => ({ cwd: root, isIdle: () => true }),
+			};
+			const turnEnd = () =>
+				handleTurnEnd({
+					ctxCwd: root,
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: cache,
+					knipClient: new KnipClient(false),
+					deadCodeClients: [],
+					depChecker: { ensureAvailable: async () => false },
+					testRunnerClient: client,
+					sessionId: "session-a",
+					onTestRunnerComplete: (
+						delivery: Parameters<typeof stageTestRunnerDelivery>[0],
+					) => {
+						stageTestRunnerDelivery({ ...delivery, owner });
+						staged();
+					},
+					resetLSPService: () => {},
+					resetFormatService: () => {},
+				} as unknown as Parameters<typeof handleTurnEnd>[0]);
+			const edit = () => {
+				runtime.recordProjectMutation({
+					filePath: source,
+					source: "agent-edit",
+				});
+				cache.addModifiedRange(
+					source,
+					{ start: 1, end: 1 },
+					false,
+					root,
+					"session-a",
+				);
+			};
+			const nextStage = () =>
+				new Promise<void>((resolve) => {
+					staged = resolve;
+				});
+			const generation = () =>
+				cache.readCache<{ testRunGeneration?: number }>(
+					"test-runner-findings",
+					root,
+				)?.data.testRunGeneration;
+			// agent_settled's quiet-window task, through the production entry.
+			const settle = () =>
+				deliverStagedTestRunnerFindings({
+					cwd: root,
+					sessionId: "session-a",
+					ownerId: "owner-a",
+				});
+			// The context build of the next prompt.
+			const contextBuild = () =>
+				consumeStagedTestRunnerFindings({
+					cwd: root,
+					sessionId: "session-a",
+					ownerId: "owner-a",
+					cacheManager: cache,
+					runtime,
+				});
+
+			// Turn A: the batch fails and is staged as generation 1.
+			edit();
+			const stagedA = nextStage();
+			await turnEnd();
+			runs.shift()?.(failing("expected 1 to be 2"));
+			await stagedA;
+			expect(generation()).toBe(1);
+
+			// Turn B of the same agent run: a second batch launches (generation 2)
+			// and is still running when the agent settles.
+			fs.writeFileSync(source, "export const foo = 2;\n");
+			runtime.beginTurn();
+			edit();
+			await turnEnd();
+			expect(runs).toHaveLength(1);
+			expect(generation()).toBe(2);
+
+			settle();
+			const atP2 = contextBuild();
+			expect(atP2?.messages[0]?.content).toContain("expected 1 to be 2");
+
+			// Batch B then fails too: it is staged as generation 2 and reaches
+			// the model after the next settle, once.
+			const stagedB = nextStage();
+			runs.shift()?.(failing("expected 2 to be 3"));
+			await stagedB;
+			expect(contextBuild()).toBeUndefined();
+			settle();
+			expect(contextBuild()?.messages[0]?.content).toContain(
+				"expected 2 to be 3",
+			);
+			expect(contextBuild()).toBeUndefined();
+		} finally {
+			vi.restoreAllMocks();
 			env.cleanup();
 		}
 	});
