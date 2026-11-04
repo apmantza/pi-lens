@@ -897,7 +897,11 @@ export function runPublishToolchainProbe(ctx) {
 	};
 }
 
-/** pi's first release with the built-in `codemode` tool. */
+/**
+ * pi's first release with the built-in `codemode` tool: the earliest pi on
+ * which the codemode row can run. It is not pi-lens's supported pi range; the
+ * devDependency pins pi-coding-agent at `^1.5.0`.
+ */
 const CODEMODE_MIN_PI_VERSION = Object.freeze([0, 99, 0]);
 
 /** The text pi-lens's read guard puts on an edit of a file the agent never read. */
