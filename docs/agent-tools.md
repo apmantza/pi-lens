@@ -287,11 +287,15 @@ and `[]` mean no arguments.
 
 ## Codemode
 
-- Lazy pi-lens tools are not callable from a codemode script until
-  `pi_lens_activate_tools` has run. They become callable from the next turn.
-- pi's error for a lazy tool lists the available tools but not
+- When lazy tool loading is active (`tools.lazy: true`, the default, or
+  `"auto"` on a model that supports mid-conversation system messages), the situational pi-lens tools are not callable from a
+  codemode script until `pi_lens_activate_tools` has run. They become
+  callable from the next turn.
+- pi's error for such a tool lists the available tools but not
   `pi_lens_activate_tools`.
-- `--no-lazy-tools` makes every enabled pi-lens tool callable from the first script.
+- `--no-lazy-tools` (`tools.lazy: false`) makes every enabled pi-lens tool
+  callable from the first script. A tool disabled with
+  `tools.<name>.enabled: false` or `--no-tool` stays unavailable.
 - Scripts receive each tool's text, including pi-lens notes such as a blocker
   note, never `details`.
 - Nested writes are recorded like top-level ones.
