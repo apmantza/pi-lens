@@ -2,25 +2,23 @@
 # configuration and command reference:
 # https://docs.qodo.ai/configuration/configuration-and-command-reference
 # (fetched 2026-11-04). Keys the reference does not define are not set here.
-# The policy matches .coderabbit.yaml and greptile.json (#4685): no PR
-# description summary, no per-push re-review, maintainer PRs skipped.
+# Label-only policy (maintainer decision 2026-11-04, #4685): no PR gets an
+# automatic review, maintainer or contributor. A review runs only when someone
+# posts a manual `/agentic_review` comment. .coderabbit.yaml and greptile.json
+# carry the same policy.
 
 [github_app]
-# Review only. /agentic_describe is left out: PR bodies follow the template
-# and are linted, so a bot description adds a comment nobody acts on. The
-# review itself still posts its own comment (comments_location_policy
-# defaults to "both").
-pr_commands = ["/agentic_review"]
+# Automatic runs are off. The reference says "Commands run automatically when a
+# PR is opened or updated" and "Remove a command to disable its trigger", so the
+# empty list turns off the automatic `/agentic_review`. The reference does not
+# say whether `[]` is accepted: check the Qodo dashboard after this lands. It
+# also does not say whether a manual `/agentic_review` still runs with
+# `pr_commands = []`: probe that after this lands.
+pr_commands = []
 # Drafts wait until the PR is ready.
 feedback_on_draft_pr = false
 # No per-push re-review; the orchestrator requests one review per final head.
 handle_push_trigger = false
-
-[config]
-# Maintainer PRs are not auto-reviewed. The reference does not say whether a
-# manual `/agentic_review` comment still runs on them; probe that after this
-# lands. Contributor PRs are reviewed once, on open.
-ignore_pr_authors = ["^apmantza$"]
 
 [review_agent]
 issues_user_guidelines = """
