@@ -392,19 +392,21 @@ export function symbolSearchFileMatchesLang(
 	// by pattern (Dockerfile, Dockerfile.dev, Makefile) is matched by the kind
 	// token, as the inline `lang:` filter does for these names. Unlike the inline
 	// filter, this check does not match `*.dockerfile` (pre-existing on master).
+	// MCP passes `lang` through as typed; normalize once so every branch agrees.
+	const token = lang.toLowerCase();
 	const declared = resolveFilenameLanguage(file);
-	if (declared && (declared.id === lang || declared.grammar === lang)) {
+	if (declared && (declared.id === token || declared.grammar === token)) {
 		return true;
 	}
 	const base = path.basename(file);
 	if (
 		SPECIAL_FILENAMES.some(
-			(entry) => entry.kind === lang.toLowerCase() && entry.pattern.test(base),
+			(entry) => entry.kind === token && entry.pattern.test(base),
 		)
 	) {
 		return true;
 	}
-	const exts = extensionsForLanguageToken(lang);
+	const exts = extensionsForLanguageToken(token);
 	if (exts.length === 0) return false;
 	return exts.includes(path.extname(file).toLowerCase());
 }
