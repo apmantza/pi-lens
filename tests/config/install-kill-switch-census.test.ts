@@ -75,6 +75,7 @@
 
 import * as path from "node:path";
 import type { SgNode } from "@ast-grep/napi";
+import fc from "fast-check";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parseNodes } from "../support/ast-census.js";
 import { cookedIdentifier, cookedString } from "../support/cooked-literal.js";
@@ -991,5 +992,177 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 				gated,
 			),
 		).toMatch(/no longer holds the token performInstall\(/);
+	});
+});
+
+/**
+ * Properties over generated source text, through the SAME entry the census
+ * uses (`judge`), so the recognizer is exercised, not restated (AGENTS.md
+ * shape 57: the generators include every input shape review found passing an
+ * earlier version: alias verbs, a parenthesised concatenation, a `\\x`
+ * escape, an empty template splice, `String.fromCharCode`, a binding).
+ *
+ * A: every installer spawn, spelled any way, is a finding.
+ * B: every known-good spawn, spelled any way that folds to its literal, is
+ * clean. A failure prints fast-check's seed and the shrunk counterexample;
+ * `numRuns` is bounded because each run parses a tiny file (RSS stays flat).
+ */
+describe("install kill-switch census: generated spellings (#5231)", () => {
+	const HEAD = `import { safeSpawnAsync } from "./safe-spawn.js";\n`;
+	const RUNS = 120;
+
+	/** Spellings that fold to the literal, and ones that are computed. */
+	const FOLDING = [
+		"plain",
+		"single",
+		"template",
+		"concat",
+		"paren",
+		"hex",
+		"unicode",
+	] as const;
+	const COMPUTED = ["splice", "charcode"] as const;
+	type Form = (typeof FOLDING)[number] | (typeof COMPUTED)[number];
+	interface Slot {
+		value: string;
+		form: Form;
+		cut: number;
+		indirect: boolean;
+	}
+
+	const quote = (text: string): string => JSON.stringify(text);
+	const spell = ({ value, form, cut }: Slot): string => {
+		const at = value.length > 1 ? 1 + (cut % (value.length - 1)) : 0;
+		const [head, tail] = [value.slice(0, at), value.slice(at)];
+		const code = (index: number): number => value.charCodeAt(index);
+		const hex = (width: number): string =>
+			code(at).toString(16).padStart(width, "0");
+		switch (form) {
+			case "plain":
+				return quote(value);
+			case "single":
+				return `'${value}'`;
+			case "template":
+				return `\`${value}\``;
+			case "concat":
+				return `${quote(head)} + ${quote(tail)}`;
+			case "paren":
+				return `(${quote(head)}) + (${quote(tail)})`;
+			case "hex":
+				return `"${value.slice(0, at)}\\x${hex(2)}${value.slice(at + 1)}"`;
+			case "unicode":
+				return `"${value.slice(0, at)}\\u${hex(4)}${value.slice(at + 1)}"`;
+			case "splice":
+				return `\`${head}\${""}${tail}\``;
+			case "charcode":
+				return `String.fromCharCode(${[...value].map((_, i) => code(i)).join(", ")})`;
+		}
+	};
+
+	/** The planted file: every `indirect` slot is bound to a const first. */
+	const plantOf = (command: Slot, argv: Slot[]): string => {
+		const bindings: string[] = [];
+		const use = (slot: Slot, name: string): string => {
+			if (!slot.indirect) return spell(slot);
+			bindings.push(`const ${name} = ${spell(slot)};`);
+			return name;
+		};
+		const cmd = use(command, "cmd");
+		const args = argv.map((slot, i) => use(slot, `arg${i}`)).join(", ");
+		return `${HEAD}export function go() {\n${bindings.join("\n")}\nreturn safeSpawnAsync(${cmd}, [${args}]);\n}`;
+	};
+	const slotOf = (
+		value: string,
+		forms: readonly Form[],
+		indirect: boolean,
+	): fc.Arbitrary<Slot> =>
+		fc.record({
+			value: fc.constant(value),
+			form: fc.constantFrom(...forms),
+			cut: fc.nat(32),
+			indirect: indirect ? fc.boolean() : fc.constant(false),
+		});
+
+	/** Installer programs with the verbs and aliases that install or download. */
+	const INSTALLERS: ReadonlyArray<readonly [string, readonly string[][]]> = [
+		["npm", [["install"], ["i"], ["add"], ["ci"], ["exec"], ["update"]]],
+		["pnpm", [["install"], ["i"], ["add"], ["dlx"], ["exec"]]],
+		["yarn", [["install"], ["add"], ["dlx"], ["up"]]],
+		["bun", [["install"], ["i"], ["add"], ["x"]]],
+		["gem", [["install"], ["i"], ["update"]]],
+		["go", [["install"], ["get"]]],
+		["pip", [["install"]]],
+		["cargo", [["install"], ["add"]]],
+		["rustup", [["component", "add"], ["toolchain", "install"], ["update"]]],
+	];
+	const installer = fc
+		.tuple(
+			fc.constantFrom(...INSTALLERS),
+			fc.nat(8),
+			fc.constantFrom("x", "left-pad", "clippy"),
+		)
+		.chain(([[program, verbs], pick, extra]) => {
+			const verb = verbs[pick % verbs.length] as string[];
+			return fc.tuple(
+				slotOf(program, [...FOLDING, ...COMPUTED], true),
+				fc.tuple(
+					...[...verb, extra].map((word) =>
+						slotOf(word, [...FOLDING, ...COMPUTED], true),
+					),
+				),
+			);
+		});
+
+	const word = fc.stringMatching(/^[a-z0-9-]{1,8}$/);
+	/** A known-good command with an argv its table admits. */
+	const knownGood = fc
+		.constantFrom(...Object.entries(KNOWN_GOOD))
+		.chain(([command, admitted]) => {
+			const first =
+				admitted === "*"
+					? fc.array(word, { maxLength: 3 })
+					: admitted.length === 0
+						? fc.constant([] as string[])
+						: fc
+								.tuple(
+									fc.constantFrom(...admitted),
+									fc.array(word, { maxLength: 2 }),
+								)
+								.map(([head, rest]) => [head, ...rest]);
+			return fc.tuple(
+				slotOf(command, FOLDING, false),
+				first.chain((words) =>
+					fc.tuple(...words.map((w) => slotOf(w, FOLDING, false))),
+				),
+			);
+		});
+
+	const verdictOf = async (command: Slot, argv: Slot[]): Promise<string> =>
+		(
+			await judge(
+				[{ rel: "clients/planted.ts", source: plantOf(command, argv) }],
+				{},
+				{},
+			)
+		).problems.join("\n");
+
+	it("A: every generated installer spawn is a finding", async () => {
+		await fc.assert(
+			fc.asyncProperty(installer, async ([command, argv]) => {
+				expect(await verdictOf(command, argv)).toMatch(
+					/clients\/planted\.ts#safeSpawnAsync@1/,
+				);
+			}),
+			{ numRuns: RUNS },
+		);
+	});
+
+	it("B: every generated known-good spawn is clean", async () => {
+		await fc.assert(
+			fc.asyncProperty(knownGood, async ([command, argv]) => {
+				expect(await verdictOf(command, argv)).not.toMatch(/planted/);
+			}),
+			{ numRuns: RUNS },
+		);
 	});
 });
