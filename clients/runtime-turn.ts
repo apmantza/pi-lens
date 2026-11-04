@@ -1354,9 +1354,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// the ordinary freshness gate and delivery cache can run. Max-cycle cleanup
 	// below intentionally remains a terminal reset; its pending work stays in
 	// the bounded handoff store for the next eligible turn.
-	// #5240: the delivery slot holds one message per project. A repeat, or a
-	// read-only turn that would compose one, never takes the place of a message
-	// another session has yet to read (#4943).
+	// #5240: the delivery slot holds one message per project. A read-only turn
+	// does not compose over a message another session has yet to read (#4943). A
+	// duplicate turn cannot meet one: the message it repeats is the slot's last.
 	const slotHoldsOthersMessage = (): boolean => {
 		const staged = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
 			"turn-end-findings",
@@ -6525,10 +6525,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// MCP host passes `deliveryAddress` and its Stop hook would loop on an
 		// identical repeat, so it keeps the plain suppression.
 		const repeatContent =
-			duplicate &&
-			blockerParts.length > 0 &&
-			deps.deliveryAddress === undefined &&
-			!slotHoldsOthersMessage()
+			duplicate && blockerParts.length > 0 && deps.deliveryAddress === undefined
 				? blockerRepeatContent(capTurnEndMessage(blockerParts.join("\n\n")))
 				: undefined;
 		if (duplicate && repeatContent === undefined) {

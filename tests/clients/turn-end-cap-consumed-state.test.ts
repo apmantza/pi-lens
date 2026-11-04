@@ -2459,6 +2459,73 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		});
 	}
 
+	it("stages no repeat for a duplicate turn that holds no blocker", async () => {
+		// RECURRENCE GUARDED: #5240. A drift-demoted blocker is an advisory, not a
+		// blocker part; its identical re-serve is suppressed as before, and a
+		// repeat for it would carry the heading and nothing under it.
+		const rig = makeRig("pi-lens-5240-advisory-");
+		try {
+			const consumer = touch(
+				rig,
+				"consumer.ts",
+				'import { other } from "./dep.js";\nexport const t = other;\n',
+			);
+			const dep = path.join(rig.cwd, "dep.ts");
+			fs.writeFileSync(dep, "export const other = 1;\n");
+			rig.runtime.recordInlineBlockers(
+				consumer,
+				"🔴 L1 a real blocker",
+				rig.runtime.nextWriteIndex(),
+				["lsp"],
+			);
+			const future = new Date(Date.now() + 60_000);
+			fs.utimesSync(dep, future, future);
+			expect(await endTurn(rig)).toContain("[stale — re-run to confirm]");
+			// The same file written again: the count-driven hold keys on the file
+			// set, so an identical turn is the duplicate.
+			rig.runtime.beginTurn();
+			touch(
+				rig,
+				"consumer.ts",
+				'import { other } from "./dep.js";\nexport const t = other;\n',
+			);
+			logLatency.mockClear();
+			await handleTurnEnd(
+				makeDeps(
+					rig.runtime,
+					rig.cacheManager,
+					rig.cwd,
+					undefined,
+					rig.lensGuard,
+				),
+			);
+			const row = logLatency.mock.calls
+				.map(([entry]) => entry)
+				.find((entry) => entry.toolName === "turn_end" && entry.result);
+			expect(row?.metadata?.deliverySuppressed).toBe("duplicate");
+			expect(take(rig, true)).toBeUndefined();
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	it("retires a staged repeat at the turn end that finds its blocker gone", async () => {
+		// RECURRENCE GUARDED: #5240. A blocker whose file is deleted leaves no
+		// part and no resolved line, so no message overwrites the staged repeat;
+		// only the turn end's own retire stops it naming the deleted file.
+		const rig = makeRig("pi-lens-5240-gone-");
+		try {
+			const file = fillerBlocker(rig, 300);
+			await endTurn(rig);
+			await readOnlyTurn(rig);
+			fs.rmSync(file);
+			await readOnlyTurn(rig);
+			expect(take(rig, true)).toBeUndefined();
+		} finally {
+			rig.cleanup();
+		}
+	});
+
 	it("retires a staged repeat when no blocker is left, and leaves another session's alone", async () => {
 		// RECURRENCE GUARDED: #5240. A mark can silence the blocker with no resolved
 		// line to overwrite the staged repeat; left staged, it names a dismissed
