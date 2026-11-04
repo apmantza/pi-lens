@@ -101,6 +101,7 @@ import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
 import {
 	resolveLensToolEnabled,
 	toolRegistryEntryForMcp,
+	translateGuidanceToolNames,
 } from "../clients/tool-config.js";
 import {
 	endSituationalToolTelemetry,
@@ -109,6 +110,7 @@ import {
 } from "../clients/situational-tool-telemetry.js";
 import { logExtension, flushExtensionLog } from "../clients/extension-log.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
+import { SYMBOL_SEARCH_DESCRIPTION } from "../tools/symbol-search.js";
 import { dispositionSuppressedLine } from "../clients/finding-delivery-gate.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -727,8 +729,7 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_symbol_search",
-		description:
-			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before pilens_module_report. Read a listed line with offset=<line>, limit=1.",
+		description: translateGuidanceToolNames(SYMBOL_SEARCH_DESCRIPTION, "mcp"),
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -759,8 +760,10 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_module_report",
-		description:
+		description: translateGuidanceToolNames(
 			"Return a navigable source-module outline with references and read handles. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_module_report on `src/app.ts` before pilens_read_symbol.",
+			"mcp",
+		),
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -813,8 +816,10 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_project_report",
-		description:
+		description: translateGuidanceToolNames(
 			'Orient in a project from its review graph. Returns a line-oriented TEXT report by default; pass view:"json" for the full JSON payload. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_project_report before choosing a file.',
+			"mcp",
+		),
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -840,8 +845,10 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_read_symbol",
-		description:
+		description: translateGuidanceToolNames(
 			"Return one symbol's verbatim source. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use pilens_read_symbol after pilens_module_report identifies `parseConfig`.",
+			"mcp",
+		),
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -869,8 +876,10 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_read_enclosing",
-		description:
+		description: translateGuidanceToolNames(
 			"Return the smallest symbol or callback enclosing a line. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use pilens_read_enclosing after a diagnostic points to line 42.",
+			"mcp",
+		),
 		inputSchema: {
 			type: "object",
 			properties: {
