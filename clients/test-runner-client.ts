@@ -220,7 +220,8 @@ export interface RunnerConfig {
 	 * only `JSON report written to <path>` for `--reporter=json` (the report
 	 * lands in `<root>/.vitest/json/output.json`), so the runner is asked for
 	 * `--outputFile=<scratch path>` and the file is parsed. A run that leaves no
-	 * file falls back to stdout (vitest 3 prints it; so does a wrapper).
+	 * file is an unreadable report (an error result): vitest 3 and 5 both print
+	 * only the notice on stdout when `--outputFile` is passed (#5270).
 	 */
 	reportToFile?: boolean;
 }
@@ -799,6 +800,8 @@ interface PytestSummary {
 	passed: number;
 	failed: number;
 	skipped: number;
+	/** #5270: collection and fixture `N error(s)` term. */
+	errors: number;
 	duration?: number;
 }
 
@@ -823,7 +826,8 @@ function parsePytestSummary(output: string): PytestSummary {
 	let passed = 0;
 	let failed = 0;
 	let skipped = 0;
-	if (!summaryLine) return { passed, failed, skipped };
+	let errors = 0;
+	if (!summaryLine) return { passed, failed, skipped, errors };
 
 	const summaryBody = summaryLine.replace(/^=+\s*|\s*=+\s*$/g, "");
 	for (const field of summaryBody.split(",")) {
@@ -840,6 +844,10 @@ function parsePytestSummary(output: string): PytestSummary {
 			case "skipped":
 				skipped = count;
 				break;
+			case "error":
+			case "errors":
+				errors = count;
+				break;
 		}
 	}
 
@@ -849,7 +857,7 @@ function parsePytestSummary(output: string): PytestSummary {
 	const duration = durationMatch
 		? toMeasuredDurationMs(Number.parseFloat(durationMatch[1]) * 1000)
 		: undefined;
-	return { passed, failed, skipped, duration };
+	return { passed, failed, skipped, errors, duration };
 }
 
 export class TestRunnerClient {
@@ -1861,15 +1869,18 @@ export class TestRunnerClient {
 
 			const stdout = result.stdout || "";
 			const stderr = result.stderr || "";
-			// #5257: the report file when the runner wrote one, else stdout. An
-			// absent or empty file is not an error here: the parser decides. A
-			// file that exists but cannot be read throws into this run's catch,
+			// #5257: the report file when the runner is asked for one
+			// (`reportToFile`). Stdout is no fallback for it: with `--outputFile`
+			// vitest 3.2.4 and 5.0.5 both print only `JSON report written to <path>`
+			// (probed #5270), so an absent or empty file is an unreadable report
+			// and the parser returns an error result.
+			// A file that exists but cannot be read throws into this run's catch,
 			// which returns an error result (never a clean one).
 			const reportText =
 				reportPath !== undefined && fs.existsSync(reportPath)
 					? fs.readFileSync(reportPath, "utf-8")
 					: "";
-			const jsonOutput = reportText === "" ? stdout : reportText;
+			const jsonOutput = reportPath === undefined ? stdout : reportText;
 
 			if (result.error) {
 				this.log(`Runner error: ${result.error.message}`);
@@ -2463,7 +2474,8 @@ export class TestRunnerClient {
 
 		// #1479: `duration` stays undefined unless pytest emits its own `in N.NNs`
 		// summary. A measured `in 0.00s` remains a real zero.
-		const { passed, failed, skipped, duration } = parsePytestSummary(output);
+		const { passed, failed, skipped, errors, duration } =
+			parsePytestSummary(output);
 
 		// Parse individual failures: "FAILED tests/test_foo.py::test_something - AssertionError: ..."
 		const failureRegex = /FAILED\s+(\S+::\S+)\s*-\s*(.+?)(?:\n|$)/g;
@@ -2509,14 +2521,27 @@ export class TestRunnerClient {
 					? "Pytest configuration error"
 					: exitCode === 2
 						? "Pytest interrupted"
-						: // #5257: any other non-zero exit that produced no counts is a run
-							// whose summary was not read (exit 3 internal error, exit 1 with an
-							// unrecognised summary), never a clean zero. Exit 5 is pytest's own
-							// "no tests collected", a zero-test run `isCompletedPassResult`
-							// already refuses to count as a pass.
-							exitCode !== 0 && exitCode !== 5 && passed === 0 && failed === 0
-							? `Pytest exited with ${exitCode} (no summary read)`
-							: undefined,
+						: // #5270: the `N error(s)` term is a collection or fixture error:
+							// that test never ran, so `1 passed, 1 error` is no pass.
+							errors > 0
+							? `Pytest reported ${errors} error${errors === 1 ? "" : "s"} (collection or fixture)`
+							: // #5257: any other non-zero exit with no counted pass or failure
+								// is a run whose summary was not read (exit 3 internal error,
+								// exit 1 with an unrecognised summary), never a clean zero. A
+								// summary that counted passes and no failure is the run's own
+								// threshold (`--cov-fail-under` exits 1): a pass, not a runner
+								// error (#5276 r1). Exit 5 is pytest's own "no tests
+								// collected", a zero-test run `isCompletedPassResult` already
+								// refuses to count as a pass.
+								exitCode !== 0 && exitCode !== 5 && passed === 0 && failed === 0
+								? `Pytest exited with ${exitCode} (no summary read)`
+								: // #5270 acceptance 2 (#5276 r2): exit 3 is an internal error or
+									// `pytest.exit(returncode=3)`. The run stopped early, so the
+									// summary it still prints (`1 passed`) is partial, whatever it
+									// counts. Exit 1 with passes stays the threshold case above.
+									exitCode === 3
+									? "Pytest internal error (exit 3)"
+									: undefined,
 		};
 	}
 

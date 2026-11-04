@@ -83,9 +83,11 @@ registered in that test as a non-opener with its reason.
 - **Dispatch from any ref.** `ci.yml`, `lint.yml` and `hot-path-latency.yml`
   are now dispatchable by anyone with write access on any branch. Their jobs
   hold read scopes only (`hot-path-latency.yml` holds `contents: read` and
-  `pull-requests: read` and reads no secret), except the PR-only CodeQL job (`security-events: write`), whose job-level
-  `if` requires a `pull_request` event and so never starts on a dispatch
-  (`scripts/dispatch-safety.mjs` reads that conjunct as a guard).
+  `pull-requests: read` and reads no secret). A job whose `if` requires a
+  `pull_request` event never starts on a dispatch, and
+  `scripts/dispatch-safety.mjs` reads that conjunct as a guard (ci.yml's PR-time
+  CodeQL job was one until #5275 removed it; CodeQL now runs from `codeql.yml`
+  on a schedule).
 - **Step order.** Both dispatch steps close the `tool-smoke-prs` job, so a
   failed `gh workflow run` never skips the auto-merge disarm failsafe or the
   promotion PR (every other step there runs under an implicit `success()`).
@@ -109,7 +111,7 @@ registered in that test as a non-opener with its reason.
   that key.
 - **Not covered.** A dispatched run is not a `pull_request` run: it tests the
   branch head, not the merge with master, and the PR-only advisory jobs (the
-  changelog fast-fail, targeted tests, CodeQL, the PR body lint) do not run.
+  changelog fast-fail, targeted tests, the PR body lint) do not run.
   The hot-path run compares the head with its first parent (`HEAD^1`), not with
   the merge ref a `pull_request` run times.
   `ci-infra-kill-rerun.yml` reacts to `pull_request` and `push` runs only, so a

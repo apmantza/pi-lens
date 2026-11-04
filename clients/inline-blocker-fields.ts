@@ -80,8 +80,15 @@ export function inlineBlockerLines(
  * (`TypeError: Cannot read properties of undefined (reading 'includes')`), so
  * every caller that can see one would have to repeat the guard (AGENTS.md
  * shape 83: one owner per rule).
+ *
+ * The widget store (`clients/widget-state.ts`) stamps the same answer on its
+ * rows (`WidgetDiagnostic.citedFile`), so it asks this function too, with the
+ * raw row it is handed: hence the structural parameter.
  */
-export function isCrossFileBlocker(d: Diagnostic, filePath: string): boolean {
+export function isCrossFileBlocker(
+	d: { filePath?: string | undefined },
+	filePath: string,
+): boolean {
 	return (
 		!!d.filePath &&
 		normalizeEphemeralMapKey(d.filePath) !== normalizeEphemeralMapKey(filePath)

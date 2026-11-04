@@ -1,0 +1,9 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___________________________________ test_bad ___________________________________
+test_bad.py:2: in test_bad
+    assert False
+E   assert False
+=========================== short test summary info ============================
+FAILED test_bad.py::test_bad - assert False
+1 failed in 0.01s

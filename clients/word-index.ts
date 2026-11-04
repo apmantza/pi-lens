@@ -1073,6 +1073,7 @@ export async function collectWordIndexDocs(
 		: await collectSourceFilesAsync(root, {
 				maxFiles,
 				prioritizeCodeKinds: true,
+				includeNamedFiles: true,
 			});
 	const truncated = preflightFiles?.truncated ?? files.length === maxFiles;
 	const docs = Object.assign(
@@ -1219,6 +1220,7 @@ export async function refreshWordIndexIncrementally(
 	const walked = await collectSourceFilesAsync(root, {
 		maxFiles,
 		prioritizeCodeKinds: true,
+		includeNamedFiles: true,
 	});
 	const sourceWalkMs = Date.now() - sourceWalkStartMs;
 	if (!shouldContinue()) throw new Error("word index refresh superseded");

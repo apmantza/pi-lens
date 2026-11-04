@@ -763,9 +763,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// records, an `Array.prototype.filter` call, not a delivery gate.
 		// 4 -> 5 (#4990): the per-source row retirement keeps the rows the clean
 		// verdict did not cover, the same array call, not a delivery gate.
-		// 5 -> 6 (#5020): `retireForeignRows` keeps the rows no retire judged, the
-		// same array call, not a delivery gate.
-		"clients/runtime-coordinator.ts": 6,
+		// 5 -> 6 -> 5 (#5020): `retireForeignRows` first kept the rows no retire
+		// judged with this array call; it now splits retired from kept in one
+		// loop, because the widget store takes the retired half.
+		"clients/runtime-coordinator.ts": 5,
 		"clients/runtime-session.ts": 4,
 		// 3 -> 5 -> 3 (#4187): round 4's tool-call authorship retirement filtered
 		// the owned in-process mutation paths; round 5 folds two of its three
@@ -829,7 +830,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/turn-end/lanes/secrets.ts": 3,
 		"clients/turn-summary-render.ts": 3,
 		"clients/vanished-instance-marker.ts": 1,
-		"clients/widget-state.ts": 16,
+		// 16 -> 17 (#5020): `retireWidgetCitedRows` keeps the rows no retire named,
+		// an `Array.prototype.filter` call, not a delivery gate.
+		"clients/widget-state.ts": 17,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		"tools/activate-tools.ts": 2,
