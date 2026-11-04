@@ -626,7 +626,8 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 	// prevented: dropping the `failed === 0` arm marks every all-failing run
 	// (passed=0, failed>0) a runner error, which no other test pinned (F1 of
 	// r1 of #5276).
-	it.each([
+	// [runner, parser method, passes only, all failing, no summary, error].
+	const TEXT_RUNNERS = [
 		[
 			"phpunit",
 			"parsePhpunitOutput",
@@ -643,7 +644,9 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 			"** (CompileError) boom\n",
 			/mix test runner error/,
 		],
-	])(
+	] as const;
+
+	it.each(TEXT_RUNNERS)(
 		"%s: exit 1 reads passes and failures as counted, no summary as an error",
 		(runner, method, passes, failing, noSummary, message) => {
 			const parse = (client as any)[method].bind(client);
