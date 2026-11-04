@@ -5230,6 +5230,14 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 								completedFiles,
 							);
 						}
+						if (completedFiles.length === 0) {
+							recordDegradationOnce({
+								kind: "test-run-no-completed-result",
+								subject: cwd,
+								reason:
+									"no test target completed with a parsed passing result; the test-failure blocker was left in place",
+							});
+						}
 						dbg(
 							completedFiles.length > 0
 								? `turn_end: all tests passed${stale ? " (stale — turn advanced while tests ran)" : ""}`

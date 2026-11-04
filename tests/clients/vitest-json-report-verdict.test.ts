@@ -82,6 +82,10 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 
 import { CacheManager } from "../../clients/cache-manager.js";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
 	evaluateGitGuard,
 	mergeGitGuardTestFailure,
 } from "../../clients/git-guard.js";
@@ -189,6 +193,7 @@ async function turnEnd(): Promise<void> {
 
 beforeEach(() => {
 	setProjectTrustState("trusted");
+	resetDegradationLedger();
 	fake.spawns.length = 0;
 	fake.fixtures.clear();
 	fake.pytest = undefined;
@@ -270,6 +275,11 @@ describe("a batch with no completed, parsed result never reads as passed", () =>
 		expect(dbgLines).toContain(
 			"turn_end: no completed test result — NOT recorded as a clean run; the test-failure blocker is untouched",
 		);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "test-run-no-completed-result",
+			)?.count,
+		).toBe(1);
 	});
 
 	it("an unreadable report (runner printed only the notice): blocker kept", async () => {
