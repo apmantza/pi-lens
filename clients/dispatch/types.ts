@@ -291,16 +291,16 @@ export type CoverageVerdict =
  * this reason was already printed for this file this session, so the write
  * prints none until a result replaces it.
  */
-export type UncheckedMark = { inapplicable?: true; repeat?: true };
+export type UncheckedSurface = { inapplicable?: true; repeat?: true };
 
 /** The `unchecked` arm; the single constructor, so the shape has one spelling. */
 export const unchecked = (
 	reason: string,
-	mark: UncheckedMark = {},
+	surface: UncheckedSurface = {},
 ): CoverageVerdict => ({
 	checked: false,
 	reason,
-	...mark,
+	...surface,
 });
 
 /**
