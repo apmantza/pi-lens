@@ -896,6 +896,24 @@ function buildCoverageNotice(
 	);
 	if (anyFallbackHasCoverage) return { coverage: "fallback" };
 
+	// #5238 F1: the primary group is the language server alone, and it stated it
+	// has nothing to check for this file (no server's matcher selects it, see
+	// the lsp runner). No tool is missing and none failed, so the "unavailable"
+	// notice does not apply. The file is still unchecked, so it carries
+	// `unconfirmedStatus` (#5238 N1): the all-clear line reads "not analyzed",
+	// never "clean". Keyed on the lsp runner, not on the bare reason:
+	// `no-files-matched` also states "a config ignored this file" (oxlint), which
+	// IS an unchecked file. A denial (`disabled-by-config`) or any other skip
+	// reason falls through to the notices below.
+	if (
+		relevant.every(
+			(r) => r.runnerId === "lsp" && r.skipReason === "no-files-matched",
+		)
+	)
+		return {
+			unconfirmedStatus: "not analyzed (no language server handles this file)",
+		};
+
 	// #4403: no primary checked this file. When the runner knows why, the
 	// status line says it; otherwise it says what the notice says.
 	const cause = combinePrimaryUnavailableCauses(
@@ -1610,6 +1628,13 @@ export async function dispatchForFile(
 				output: "",
 				blockerOutput: "",
 				hasBlockers: false,
+				// #5238 r3: runners were planned and every one is refused here, so the
+				// file was not checked. Without a status the write-time all-clear line
+				// reads "clean". A plan of nothing says nothing.
+				...(planned.length > 0 && {
+					unconfirmedStatus:
+						"not analyzed (adopted analysis root: no runner is admitted for it)",
+				}),
 			};
 		}
 	}

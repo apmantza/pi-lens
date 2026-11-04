@@ -490,6 +490,46 @@
 			"reviewGraphGrammar": null,
 			"moduleReportGrammar": null
 		},
+		".groovy": {
+			"kind": "groovy",
+			"kindLanguageId": "groovy",
+			"lspId": "groovy",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
+		".gsh": {
+			"kind": "groovy",
+			"kindLanguageId": "groovy",
+			"lspId": "groovy",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
+		".gvy": {
+			"kind": "groovy",
+			"kindLanguageId": "groovy",
+			"lspId": "groovy",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
+		".gy": {
+			"kind": "groovy",
+			"kindLanguageId": "groovy",
+			"lspId": "groovy",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
 		".h": {
 			"kind": "cxx",
 			"kindLanguageId": "cpp",
@@ -1380,6 +1420,16 @@
 			"reviewGraphGrammar": null,
 			"moduleReportGrammar": null
 		},
+		"Jenkinsfile": {
+			"kind": "groovy",
+			"kindLanguageId": "groovy",
+			"lspId": "groovy",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
 		"Makefile": {
 			"kind": "shell",
 			"kindLanguageId": "shell",
@@ -1390,10 +1440,30 @@
 			"reviewGraphGrammar": "bash",
 			"moduleReportGrammar": "bash"
 		},
+		"build.gradle": {
+			"kind": "groovy",
+			"kindLanguageId": "groovy",
+			"lspId": "groovy",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
 		"root.hcl": {
 			"kind": "terragrunt",
 			"kindLanguageId": "terragrunt",
 			"lspId": "terragrunt",
+			"treeSitterGrammar": null,
+			"scannerGrammar": null,
+			"readExpansionLang": null,
+			"reviewGraphGrammar": null,
+			"moduleReportGrammar": null
+		},
+		"settings.gradle": {
+			"kind": "groovy",
+			"kindLanguageId": "groovy",
+			"lspId": "groovy",
 			"treeSitterGrammar": null,
 			"scannerGrammar": null,
 			"readExpansionLang": null,

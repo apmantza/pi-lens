@@ -720,6 +720,55 @@ describe("#4242 adopted-root runner allowlist", () => {
 		}
 	});
 
+	// Recurrence this guards (PR #5238 review r3, coderabbit): the empty-group
+	// return carried no `unconfirmedStatus`, so a write to a file whose every
+	// planned runner the adopted root refuses read "✓ <Kind> clean" (master did
+	// the same for Python and TypeScript). Nothing checked the file.
+	it("reads an adopted file whose planned runners are all refused as not analyzed", async () => {
+		const fixture = adoptedFixture();
+		try {
+			for (const [name, label] of [
+				["Jenkinsfile", "Groovy"],
+				["main.py", "Python"],
+				["main.ts", "JavaScript/TypeScript"],
+			] as const) {
+				const file = path.join(fixture.adoptedRoot, name);
+				fs.writeFileSync(file, "x\n");
+				const result = await runPipeline(
+					{
+						filePath: file,
+						cwd: fixture.adoptedRoot,
+						projectRoot: fixture.sessionRoot,
+						analysisRootMode: "adopted",
+						toolName: "write",
+						dbg: () => {},
+						getFlag: () => false,
+					},
+					{
+						biomeClient: new BiomeClient(),
+						ruffClient: new RuffClient(),
+						metricsClient: new MetricsClient(),
+						fixedThisTurn: new Set(),
+						getFormatService: () => new FormatService("adopted-not-analyzed"),
+					},
+				);
+				expect(result.output, name).toContain(
+					`${label} unconfirmed — not analyzed (adopted analysis root`,
+				);
+				expect(result.output, name).not.toContain("clean");
+			}
+			// Control: a plan of nothing refused nothing, so it claims nothing.
+			const unplanned = await dispatchForFile(
+				makeCtx(fixture.file, fixture.sessionRoot),
+				[],
+				new RunnerRegistry(),
+			);
+			expect(unplanned.unconfirmedStatus).toBeUndefined();
+		} finally {
+			fixture.cleanup();
+		}
+	});
+
 	it("admits only the explicit allowlist and refuses an unlisted runner", () => {
 		expect(ADOPTED_ROOT_RUNNER_ALLOWLIST).toContain("php-lint");
 		expect(isAdoptedRootRunnerAdmitted("php-lint")).toBe(true);

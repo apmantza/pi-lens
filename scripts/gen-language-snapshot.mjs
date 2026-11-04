@@ -57,8 +57,11 @@ const SPECIAL_FILENAME_SAMPLES = [
 	"CMakeLists.txt",
 	"Dockerfile",
 	"Dockerfile.dev",
+	"Jenkinsfile",
 	"Makefile",
+	"build.gradle",
 	"root.hcl",
+	"settings.gradle",
 	"terragrunt.hcl",
 	"tsconfig.app.json",
 ];

@@ -22,11 +22,15 @@ import {
 	type DispatchLatencyReport,
 	getLatencyReports,
 } from "./dispatch/integration.js";
+import { SPECIAL_FILENAMES } from "./file-kinds.js";
 import {
 	getResourceFootprint as getResourceFootprintSnapshot,
 	type ResourceFootprint,
 } from "./instance-registry.js";
-import { extensionsForLanguageToken } from "./language-registry.js";
+import {
+	extensionsForLanguageToken,
+	resolveFilenameLanguage,
+} from "./language-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/capabilities.js";
 import { acquireWarmWordIndex } from "./mcp/analyze.js";
@@ -383,7 +387,26 @@ export function symbolSearchFileMatchesLang(
 	file: string,
 	lang: string,
 ): boolean {
-	const exts = extensionsForLanguageToken(lang);
+	// A language the registry declares by basename (Jenkinsfile, Gemfile) has no
+	// extension to match; the token is its id or its grammar name. A kind named
+	// by pattern (Dockerfile, Dockerfile.dev, Makefile) is matched by the kind
+	// token, as the inline `lang:` filter does for these names. Unlike the inline
+	// filter, this check does not match `*.dockerfile` (pre-existing on master).
+	// MCP passes `lang` through as typed; normalize once so every branch agrees.
+	const token = lang.toLowerCase();
+	const declared = resolveFilenameLanguage(file);
+	if (declared && (declared.id === token || declared.grammar === token)) {
+		return true;
+	}
+	const base = path.basename(file);
+	if (
+		SPECIAL_FILENAMES.some(
+			(entry) => entry.kind === token && entry.pattern.test(base),
+		)
+	) {
+		return true;
+	}
+	const exts = extensionsForLanguageToken(token);
 	if (exts.length === 0) return false;
 	return exts.includes(path.extname(file).toLowerCase());
 }
