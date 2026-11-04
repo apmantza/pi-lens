@@ -855,7 +855,9 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 	});
 
 	it("a known-good command with a known-good argv is clean", async () => {
-		expect(await problemsOf(call(`"git", ["status"]`))).not.toMatch(/planted/);
+		expect(await problemsOf(call(`"gh", ["auth", "status"]`))).not.toMatch(
+			/planted/,
+		);
 		expect(await problemsOf(call(`"go", ["version"]`))).not.toMatch(/planted/);
 		expect(await problemsOf(call(`"go", ["ver" + "sion"]`))).not.toMatch(
 			/planted/,
@@ -865,12 +867,12 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 	it("an aliased import, an indirect binding and a seam read as a value are findings", async () => {
 		expect(
 			await problemsOf(
-				`import { safeSpawnAsync as run } from "./safe-spawn.js";\nexport const go = () => run("git", []);`,
+				`import { safeSpawnAsync as run } from "./safe-spawn.js";\nexport const go = () => run("gh", ["auth"]);`,
 			),
 		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 		expect(
 			await problemsOf(
-				`${HEAD}export function go() { const sp = safeSpawnAsync; return sp("git", []); }`,
+				`${HEAD}export function go() { const sp = safeSpawnAsync; return sp("gh", ["auth"]); }`,
 			),
 		).toMatch(/planted\.ts#safeSpawnAsync@1/);
 		expect(
@@ -901,7 +903,9 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 		).toMatch(/planted\.ts#launch@1/);
 		// A known-good literal through the same forwarder stays clean.
 		expect(
-			await problemsOf(`${forwarder}export const go = () => launch("git");`),
+			await problemsOf(
+				`${forwarder}export const go = () => launch("gh", ["auth"]);`,
+			),
 		).not.toMatch(/planted\.ts#launch/);
 	});
 
@@ -924,7 +928,7 @@ describe("install kill-switch census: planted bypasses (#5231)", () => {
 
 	it("a row whose site is gone is stale, gated or not (M2)", async () => {
 		const reason = "a reason that is long enough to count";
-		const quiet = `${HEAD}export const go = () => safeSpawnAsync("git", []);`;
+		const quiet = `${HEAD}export const go = () => safeSpawnAsync("gh", ["auth"]);`;
 		expect(
 			await problemsOf(quiet, {
 				"clients/planted.ts#safeSpawnAsync": { sites: 1, reason },

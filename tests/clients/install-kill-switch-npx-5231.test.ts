@@ -27,23 +27,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BiomeClient } from "../../clients/biome-client.js";
+import { probeToolAsync } from "../../clients/tool-probe.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../clients/project-trust.js";
 import { withEnv } from "../support/with-env.js";
 import { setupTestEnvironment } from "./test-utils.js";
-
-// `resolveNpxFallback` asks the installer for a managed binary; undefined keeps
-// the formatter on the bare `npx` command so the seam is what the test
-// exercises. The spawn seam is deliberately NOT mocked.
-const ensureTool = vi.hoisted(() => vi.fn());
-vi.mock("../../clients/installer/index.js", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("../../clients/installer/index.js")
-	>()),
-	ensureTool,
-}));
 
 const CHILD_SCRIPT = `
 const fs = require("node:fs");
@@ -103,8 +93,6 @@ describe("PI_LENS_DISABLE_TOOL_INSTALL reaches the npx probe (#5231 H1)", () => 
 
 	beforeEach(() => {
 		setProjectTrustState("trusted");
-		ensureTool.mockReset();
-		ensureTool.mockResolvedValue(undefined);
 		const env = setupTestEnvironment("pi-lens-npx-offline-");
 		cleanup = env.cleanup;
 		const binDir = path.join(env.tmpDir, "fake-bin");
@@ -185,9 +173,17 @@ describe("PI_LENS_DISABLE_TOOL_INSTALL reaches the npx probe (#5231 H1)", () => 
 	});
 
 	it("leaves the child online when the switch is off (positive control)", async () => {
-		const spawned = await probeBiome("0");
+		// Not through BiomeClient: with the switch off its install path would run
+		// the real installer. The seam alone shows the variable is the switch's.
+		restores.push(withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "0" }));
+		await probeToolAsync("npx", ["@biomejs/biome", "--version"]);
 
-		expect(spawned.length).toBeGreaterThan(0);
-		for (const child of spawned) expect(child.offline).toBeNull();
+		const [child] = fs
+			.readFileSync(outFile, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as ChildRecord);
+		expect(child?.hasPath).toBe(true);
+		expect(child?.offline).toBeNull();
 	});
 });
