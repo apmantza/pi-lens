@@ -11,7 +11,7 @@ const text = (output: string, runner: string) => [
 	runner,
 ];
 const json = (suites: unknown[]) => [
-	JSON.stringify({ numPassedTests: 1, testResults: suites }),
+	JSON.stringify({ numPassedTests: 1, numFailedTests: 0, testResults: suites }),
 	"",
 	"duration.test.ts",
 	".",

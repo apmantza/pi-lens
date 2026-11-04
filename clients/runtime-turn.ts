@@ -124,6 +124,7 @@ import type { LensToolHost } from "./tool-config.js";
 import { formatRunDurationMs } from "./run-duration.js";
 import {
 	isExcludedTestTarget,
+	isCompletedPassResult,
 	isRunnerErrorResult,
 	RUNNERS,
 	type TestResult,
@@ -5039,8 +5040,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 							// runner-error, zero clean files) would otherwise
 							// clear every blocker through that fallback instead
 							// of clearing none.
+							// #5257: and `passed > 0` (`isCompletedPassResult`): a
+							// zero-test result in a batch that also failed is no more a
+							// pass than an error is.
 							const cleanFiles = resultValues
-								.filter((value) => value.failed === 0 && !value.error)
+								.filter(isCompletedPassResult)
 								.map((value) => value.file);
 							if (cleanFiles.length > 0) {
 								clearGitGuardTestFailure(
@@ -5148,10 +5152,21 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						);
 					} else if (results.length > 0) {
 						if (supersededByNewerGeneration("clean ")) return;
+						// #5257: only a run that ran, counted a passing test and
+						// reported no error is evidence of a pass. An empty, skipped-only
+						// or not-found result reaches this branch (no failure, no
+						// pushed finding) but proves nothing: it must not read as "all
+						// tests passed", clear a blocker, or erase the prior finding.
+						const completedFiles = resultValues
+							.filter(isCompletedPassResult)
+							.map((value) => value.file);
 						writeTestFindings(
 							{
 								...(priorTestCache ?? { content: "" }),
-								content: "",
+								content:
+									completedFiles.length > 0
+										? ""
+										: (priorTestCache?.content ?? ""),
 								stale: false,
 								results: resultValues,
 								testRunGeneration,
@@ -5177,6 +5192,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 							dbg(`turn_end: test delivery staging failed — ${deliveryErr}`);
 						}
 						if (
+							completedFiles.length > 0 &&
 							getFlag("lens-guard") &&
 							firedSessionId === runtime.telemetrySessionId
 						) {
@@ -5184,11 +5200,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 								cacheManager,
 								cwd,
 								runtime,
-								resultValues.map((value) => value.file),
+								completedFiles,
 							);
 						}
 						dbg(
-							`turn_end: all tests passed${stale ? " (stale — turn advanced while tests ran)" : ""}`,
+							completedFiles.length > 0
+								? `turn_end: all tests passed${stale ? " (stale — turn advanced while tests ran)" : ""}`
+								: "turn_end: no completed test result — NOT recorded as a clean run; the test-failure blocker is untouched",
 						);
 					}
 				})

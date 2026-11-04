@@ -2439,6 +2439,9 @@ describe("test-runner-client", () => {
 				...RUNNERS.vitest,
 				command: process.execPath,
 				binName: "pi-lens-failed-vitest-fixture",
+				// The fixture is `node -e`, not the vitest CLI: it prints its report to
+				// stdout and would read `--outputFile=…` as a node option.
+				reportToFile: false,
 				args: (testFile: string) => [
 					"-e",
 					`console.log(JSON.stringify({ numPassedTests: 0, numFailedTests: 1, numPendingTests: 0, testResults: [{ name: ${JSON.stringify(testFile)}, assertionResults: [{ status: "failed", title: "fixture", failureMessages: ["boom"] }] }] })); process.exitCode = 1;`,
