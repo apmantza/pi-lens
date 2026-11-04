@@ -480,7 +480,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ruff-client.ts": 7,
 		"clients/runtime-agent-end.ts": 6,
 		"clients/runtime-tool-call.ts": 7,
-		"clients/runtime-turn.ts": 10,
+		// 10 -> 9 (#5257): the clear-blocker filter reads `isCompletedPassResult`,
+		// not a local `value.error` test.
+		"clients/runtime-turn.ts": 9,
 		// 52 -> 53 (#4530): a lookup refusal builds its SpawnResult's `error`.
 		"clients/safe-spawn.ts": 53,
 		// 2 -> 6: the report-scan seam (`runReportScan`) carries the `result.error` reads
@@ -490,7 +492,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/shared-checkout-guard.ts": 1,
 		"clients/single-flight.ts": 3,
 		"clients/smells-rollup.ts": 2,
-		"clients/test-runner-client.ts": 21,
+		// 21 -> 23 (#5257): `isCompletedPassResult` reads the result's `error`,
+		// and the JSON parser sets the unreadable-output and load-failure errors.
+		"clients/test-runner-client.ts": 23,
 		"clients/test-runner-delivery.ts": 6,
 		"clients/tool-agreement.ts": 2,
 		"clients/tree-sitter-cache.ts": 4,
@@ -800,7 +804,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `Array.prototype.filter` calls, not a delivery filter.
 		// 33 -> 34 (#5055): the unresolved-reference advisory bucket selects its
 		// runs with one `Array.prototype.filter`, like the binding and budget buckets.
-		"clients/runtime-turn.ts": 34,
+		// 34 -> 35 (#5257): the empty-batch clear list filters on `isCompletedPassResult`.
+		"clients/runtime-turn.ts": 35,
 		"clients/safe-spawn.ts": 5,
 		"clients/scratch-tree-policy.ts": 2,
 		"clients/session-repository.ts": 1,
@@ -1428,7 +1433,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// for pytest, PHPUnit, Mix, and generic runner locations.
 		// 74 -> 72 (#4689 batch 2): two `path.resolve` locals dropped from the root and
 		// failed-target keys.
-		"clients/test-runner-client.ts": 68,
+		// 68 -> 70 (#5257): the per-run report scratch path (`reportDir`, `reportPath`).
+		"clients/test-runner-client.ts": 70,
 		"clients/todo-scanner.ts": 3,
 		// 4 -> 10 (#3655): the Node lockfile walk-up and supplier selection
 		// resolve pnpm/yarn evidence through `path.join`, `path.relative`,
@@ -1775,7 +1781,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/shared-checkout-guard.ts": 2,
 		"clients/skills-resolver.ts": 6,
 		"clients/spawn-timeout-cooldown.ts": 1,
-		"clients/test-runner-client.ts": 15,
+		// 15 -> 16 (#5257): the JSON parser reads the failed suite that explains an unsuccessful run.
+		"clients/test-runner-client.ts": 16,
 		"clients/tree-sitter-logger.ts": 2,
 		// 1 -> 4 (#2678): the health-check record reads the resource status
 		// twice and writes metadata.status; none denotes a delivery status.

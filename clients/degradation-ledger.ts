@@ -1931,6 +1931,13 @@ export type DegradationKind =
 	 */
 	| "test-discovery-foreign-checkout"
 	/**
+	 * #5257: a turn-end test batch ended with no completed, parsed passing
+	 * result (empty, skipped-only, unreadable report, or every target gone), so
+	 * the test-failure blocker was left alone instead of cleared as a clean run.
+	 * `runtime-turn.ts`, subject `<cwd>`; once per session and cwd.
+	 */
+	| "test-run-no-completed-result"
+	/**
 	 * #3071: a deferred turn-end test target hit `TEST_RUNNER_MAX_DEFERRALS`
 	 * and was retired from turn-end selection for the rest of the session —
 	 * `runtime-turn.ts`, subject `<cwd>:deferral-exhausted`. Counted, not

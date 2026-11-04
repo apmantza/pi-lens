@@ -990,7 +990,11 @@ describe("R4/R6 real turn-end policy after checkout selection", () => {
 				const cacheManager = new CacheManager(false);
 				const client = new TestRunnerClient(false);
 				safeSpawnAsync.mockResolvedValue({
-					stdout: JSON.stringify({ numFailedTests: 1, testResults: [] }),
+					stdout: JSON.stringify({
+						numPassedTests: 0,
+						numFailedTests: 1,
+						testResults: [],
+					}),
 					stderr: "",
 					status: 1,
 				});
