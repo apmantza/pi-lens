@@ -155,7 +155,10 @@ const EXPECTED_FILES = 79;
 // 133 -> 134 (#4765): `validateOpengrepPack` runs the installed `opengrep`
 // `scan --validate --config <candidate>` before the cached registry pack is
 // swapped in, through this seam. (#4776 landed first and moved the base to 133.)
-const EXPECTED_DIRECT_SITES = 134;
+// 134 -> 131 (#5247): the four temp-scan spawn sites in `SgRunner`
+// (`tempScanDetailedAsync` and the three passes of `tempScanWithFixAsync`) are
+// one `spawnResolved`, the seam that takes a `ResolvedSgCommand`.
+const EXPECTED_DIRECT_SITES = 131;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -399,20 +402,8 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"the scoped cache-only `npx --package @ast-grep/cli -- ast-grep --version` candidate probe: same pi-lens-owned neutral cwd supplied by `...getIsolatedNpxSpawnOptions()`, which the scan cannot follow through a call spread",
 	],
 	[
-		"clients/sg-runner.ts#SgRunner.tempScanDetailedAsync:e70984d6",
-		"`ast-grep scan --config <temp rule file> --json … <dir>`: both the rule file and the scan root are absolute arguments on dispatch (#4233 V3-HIGH-01), and when the module-level command is npx the options spread supplies the pi-lens-owned neutral cwd (#4233 V3-HIGH-02) the scan cannot follow through a call spread",
-	],
-	[
-		"clients/sg-runner.ts#SgRunner.tempScanWithFixAsync:23665a2b",
-		"the match-only pass of the same temp-rule scan, with the same absolute --config and target arguments",
-	],
-	[
-		"clients/sg-runner.ts#SgRunner.tempScanWithFixAsync:0a5b6a4d",
-		"the count-first JSON pass before --update-all, same absolute arguments",
-	],
-	[
-		"clients/sg-runner.ts#SgRunner.tempScanWithFixAsync:ed556eb8",
-		"the --update-all apply pass, same absolute arguments",
+		"clients/sg-runner.ts#SgRunner.spawnResolved:82ea3b08",
+		"the one spawn for `ast-grep scan --config <temp rule file> …` (#5247): `--config` and the scan target are absolute arguments the caller built (#4233 V3-HIGH-01), and when the resolved command is the scoped npx fallback `...this.sgSpawnOptions` supplies the pi-lens-owned neutral cwd (#4233 V3-HIGH-02) the scan cannot follow through a class-field spread",
 	],
 	[
 		"clients/test-runner-client.ts#TestRunnerClient.detectRunner:4411bf71",
