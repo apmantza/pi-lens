@@ -840,7 +840,15 @@ describe.skipIf(!POSIX)("package-manager global lookups (#4530)", () => {
 		// A `go` whose install succeeds without writing anything: the client then
 		// walks its canonical dirs for the binary.
 		stub.plantOnPath("go");
-		cleanups.push(withEnv({ GOBIN: gobin, GOPATH: undefined }));
+		// vitest-setup defaults the install kill switch on (#5231); this test
+		// needs the install path to run so the $GOBIN candidate is judged.
+		cleanups.push(
+			withEnv({
+				GOBIN: gobin,
+				GOPATH: undefined,
+				PI_LENS_DISABLE_TOOL_INSTALL: "0",
+			}),
+		);
 
 		const refused = await new GovulncheckClient().analyze(layout.main);
 		expect(refused.summary).toBe("govulncheck not installed");
