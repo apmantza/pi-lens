@@ -13,7 +13,9 @@
  *   - any event other than pull_request (push, merge_group, workflow_dispatch);
  *   - a diff git cannot compute, such as a shallow checkout without the base;
  *   - a path git quotes (a non-ASCII or control-character name this filter
- *     cannot read, which would otherwise pass unlinted).
+ *     cannot read, which would otherwise pass unlinted);
+ *   - a change to a lint config file (CONFIG_FILES, CONFIG_DIRS): a rule change
+ *     re-judges every prose file, so the diff's changed files do not bound it.
  *
  * stdout: one path per line, the arguments for vale. Empty stdout means no
  * Markdown under the prose paths changed, and the step skips with a notice. The
@@ -38,6 +40,22 @@ const PROSE_PATHS = [
 /** The checkout in lint.yml fetches full history, so the base is present. */
 const BASE = "origin/master";
 
+/** The files that configure the lint: Vale's config, its styles, this step and its script. */
+const CONFIG_FILES = [
+	".vale.ini",
+	".github/workflows/lint.yml",
+	"scripts/lint-prose-files.mjs",
+];
+const CONFIG_DIRS = [".vale/styles/"];
+
+/** A file the lint reads for its rules, so a change to it re-judges every file. */
+function isConfigPath(file) {
+	return (
+		CONFIG_FILES.includes(file) ||
+		CONFIG_DIRS.some((dir) => file.startsWith(dir))
+	);
+}
+
 /** A Markdown file that is an exact PROSE_PATHS entry or sits under a directory one. */
 function isProsePath(file) {
 	return (
@@ -55,6 +73,10 @@ function selectProseFiles(event) {
 	if (event !== "pull_request") return whole(`${event || "no"} event`);
 	const listed = changedFiles(`${BASE}...HEAD`, { diffFilter: "ACMR" });
 	if (listed === null) return whole(`cannot diff ${BASE}...HEAD`);
+	// Every status, deletions included: a removed config file changes the lint too.
+	const touched = changedFiles(`${BASE}...HEAD`);
+	if (touched === null) return whole(`cannot diff ${BASE}...HEAD`);
+	if (touched.some(isConfigPath)) return whole("a lint config file changed");
 	if (listed.some((file) => file.startsWith('"')))
 		return whole("git quoted a changed path name");
 	const files = listed.filter(isProsePath);

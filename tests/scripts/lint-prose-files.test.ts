@@ -78,6 +78,7 @@ function makeRepo(headEdits: (dir: string) => void): string {
 	write(dir, "docs/gone.md", "# Gone\n");
 	write(dir, "clients/code.ts", "export const v = 1;\n");
 	write(dir, "tests/fixtures/notes.md", "# Notes\n");
+	write(dir, ".vale.ini", "StylesPath = .vale/styles\n");
 	git(dir, ["add", "."]);
 	git(dir, ["commit", "-qm", "base"]);
 	git(dir, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
@@ -242,6 +243,51 @@ describe("the prose selection on a pull request (#5249)", () => {
 		const result = selection(dir, "pull_request");
 		expect(result.status).toBe(0);
 		expect(result.stdout).toBe("docs/guide.md\ndocs/new.md\n");
+	});
+
+	// Recurrence: a rule change in Vale's config, its style files, the workflow or
+	// the selection script re-judges every prose file. Selecting only the changed
+	// Markdown would pass inherited findings the new rule now reports. A deleted
+	// config file counts as a touch too, so the check reads the whole diff.
+	it("lints the whole list when the pull request touches a lint config file", () => {
+		const configEdits: Array<[string, (dir: string) => void]> = [
+			[
+				".vale.ini edited",
+				(dir) =>
+					write(
+						dir,
+						".vale.ini",
+						"StylesPath = .vale/styles\nMinAlertLevel = error\n",
+					),
+			],
+			[".vale.ini deleted", (dir) => fs.rmSync(path.join(dir, ".vale.ini"))],
+			[
+				".vale/styles added",
+				(dir) =>
+					write(
+						dir,
+						".vale/styles/Google/DateFormat.yml",
+						"extends: existence\n",
+					),
+			],
+			[
+				"lint.yml edited",
+				(dir) => write(dir, ".github/workflows/lint.yml", "name: Lint\n"),
+			],
+			[
+				"selection script edited",
+				(dir) => write(dir, "scripts/lint-prose-files.mjs", "// edited\n"),
+			],
+		];
+		for (const [label, edit] of configEdits) {
+			const dir = makeRepo((head) => {
+				edit(head);
+				write(head, "docs/guide.md", "# Guide\n\nEdited.\n");
+			});
+			const result = selection(dir, "pull_request");
+			expect(result.status, label).toBe(0);
+			expect(result.stdout, label).toBe(WHOLE_OUTPUT);
+		}
 	});
 });
 
