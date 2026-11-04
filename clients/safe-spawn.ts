@@ -41,6 +41,7 @@ import {
 } from "./session-repository.js";
 import { windowsExe } from "./process-snapshot.js";
 import { startSpawnUsageSampler } from "./resource-sampler.js";
+import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
 import { compareOrdinal } from "./string-utils.js";
 
@@ -1330,7 +1331,17 @@ function resolveWindowsCommand(
 	return resolveWindowsCommandForEnvironment(command, cwd, env);
 }
 
+/**
+ * Whether `command` is the npm package runner. By basename, so a managed or
+ * absolute `npx`, `npx.cmd` and `NPX.EXE` all count.
+ */
+function isNpxCommand(command: string): boolean {
+	const base = command.split(/[\\/]/).pop() ?? command;
+	return /^npx(?:\.(?:cmd|exe|bat))?$/i.test(base);
+}
+
 function getSpawnEnvironment(
+	command: string,
 	overrides: NodeJS.ProcessEnv | undefined,
 	stripNpmConfig: boolean | undefined,
 ): NodeJS.ProcessEnv {
@@ -1343,7 +1354,19 @@ function getSpawnEnvironment(
 		process.platform === "win32"
 			? mergeWindowsEnvironment(ambient, overrides)
 			: { ...ambient, ...overrides };
-	if (!stripNpmConfig) return merged;
+	// #5231: a package runner downloads whatever it cannot find, which is an
+	// install the kill switch must stop. The seam holds every spawn's command,
+	// so it is the one place that covers a caller passing no options (the
+	// presence probes). `npm_config_offline` makes npx use its cache or fail
+	// with ENOTCACHED, never a request. It is set after the strip: the strip
+	// removes every `npm_config_*` and must not remove this one. bunx ignores
+	// the variable (probed: one registry hit with it set), but the tree never
+	// spawns it; the install census flags a new literal runner.
+	const offline = isToolInstallDisabled() && isNpxCommand(command);
+	if (!stripNpmConfig) {
+		if (offline) merged.npm_config_offline = "true";
+		return merged;
+	}
 	// A copy loop rather than `Object.fromEntries(…filter(…))`: `filter` is a
 	// retired glossary identifier and a new use would move the census. This runs
 	// only on the flagged cache-only package-runner spawns, never the hot
@@ -1352,6 +1375,7 @@ function getSpawnEnvironment(
 	for (const [key, value] of Object.entries(merged)) {
 		if (!/^npm_config_/i.test(key)) stripped[key] = value;
 	}
+	if (offline) stripped.npm_config_offline = "true";
 	return stripped;
 }
 
@@ -1985,7 +2009,7 @@ export async function safeSpawnAsync(
 		const admission = admitSpawn(
 			command,
 			options?.cwd,
-			getSpawnEnvironment(options?.env, options?.stripNpmConfig),
+			getSpawnEnvironment(command, options?.env, options?.stripNpmConfig),
 		);
 		// #4530: the chokepoint runs once the environment is effective and
 		// before anything resolves or starts, so no later branch can reach
@@ -2881,7 +2905,7 @@ export function safeSpawn(
 	const admission = admitSpawn(
 		command,
 		options?.cwd,
-		getSpawnEnvironment(options?.env, options?.stripNpmConfig),
+		getSpawnEnvironment(command, options?.env, options?.stripNpmConfig),
 	);
 	if (!admission.admitted)
 		return trustRefusalResult(command, admission.executable);
