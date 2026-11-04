@@ -432,9 +432,9 @@ dispatched nightly replaces it on the first night that reaches the server.
 | python-jedi | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture jedi) |
 | opengrep | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 2 publish events. Auxiliary, not gated. | `node scripts/probe-save-verdict.mjs` (fixture opengrep) |
 | gleam | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture gleam) |
-| go | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
+| go | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
 | zig | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture zig) |
-| rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone 2 diagnostics, saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
+| rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone 1 diagnostic, saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
 | terraform | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture terraform) |
 | fsharp | `save+text` | no | Source: a save holds the source and refreshes code lenses; diagnostics come from open and change checks. Exempt: 0 findings in every run. | ionide/FsAutoComplete `8f011f1395a4`, `src/FsAutoComplete/LspServers/AdaptiveFSharpLspServer.fs` (`TextDocumentDidSave`); nightly run 39845687189 |
 | zizmor | · (registered dynamically) | no | Source: `didSave` is registered dynamically and pi-lens does not map that registration, so no save is sent. Auxiliary, not gated. | zizmor `crates/zizmor/src/lsp.rs` (`initialized`); `clients/lsp/wait-policy/strategies.ts:400-410` (#3548) |
@@ -445,7 +445,7 @@ dispatched nightly replaces it on the first night that reaches the server.
 | csharp | `save+text` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture csharp) |
 | deno | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture deno) |
 | svelte | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 2 diagnostics. Gated. | `node scripts/probe-save-verdict.mjs` (fixture svelte) |
-| powershell | `save+text` | yes (saved write) | Measured: only a saved write published — silent on didOpen and on the save alone, then 1 publish event on a diagnostic-neutral edit plus a save. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
+| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
 | cmake | `save` | inconclusive | Measured: inconclusive — no arm published, so this fixture does not distinguish a save-triggered server from one that never diagnoses it (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture cmake) |
 
 Notes.
@@ -522,5 +522,5 @@ streaks behind the `stale` column (#4512) and consecutive-night
 `idle-eviction` counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"idle-eviction":{"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987}]}}}
+{"idle-eviction":{"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
 ```
