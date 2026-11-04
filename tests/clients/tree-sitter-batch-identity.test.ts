@@ -17,14 +17,23 @@
  *
  * Every test drives a real client, real grammars and real compiled queries.
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TreeSitterClient } from "../../clients/tree-sitter-client.js";
 import type { TreeSitterQuery } from "../../clients/tree-sitter-query-loader.js";
+import {
+	_resetSharedTreeSitterClientForTests,
+	getSharedTreeSitterClient,
+} from "../../clients/tree-sitter-shared.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 const cleanups: Array<() => void> = [];
+// Each case gets a fresh warmed shared client, so its batch cache starts empty
+// and its build counts are its own. Real grammar and rule tests use the warmed
+// shared client (docs/invariants/caches-stores.md; Greptile on #5278).
+beforeEach(() => _resetSharedTreeSitterClientForTests());
 afterEach(() => {
 	vi.restoreAllMocks();
+	_resetSharedTreeSitterClientForTests();
 	while (cleanups.length) cleanups.pop()?.();
 });
 
@@ -67,15 +76,17 @@ const RULES = [
 	full("functions", "(function_declaration) @FN"),
 ];
 
-async function liveClient(): Promise<{
+async function liveClient(
+	client: TreeSitterClient | null = getSharedTreeSitterClient(),
+): Promise<{
 	client: TreeSitterClient;
 	file: string;
 	builds: ReturnType<typeof vi.spyOn>;
 }> {
+	if (!client) throw new Error("tree-sitter unavailable");
 	const env = setupTestEnvironment("pi-lens-batch-identity-");
 	cleanups.push(env.cleanup);
 	const file = createTempFile(env.tmpDir, "a.ts", SOURCE);
-	const client = new TreeSitterClient();
 	expect(await client.init()).toBe(true);
 	const builds = vi.spyOn(
 		client as unknown as {
@@ -153,8 +164,10 @@ describe("tree-sitter batch identity (#5260)", () => {
 	});
 
 	it("builds its own batch per client, which loads its own grammar (grammar axis)", async () => {
+		// The second client is the isolation check: the shared client and a
+		// fresh one each hold their own grammar and batch cache.
 		const first = await liveClient();
-		const second = await liveClient();
+		const second = await liveClient(new TreeSitterClient());
 		await first.client.runQueriesOnFile(RULES, first.file, "typescript");
 		await second.client.runQueriesOnFile(RULES, second.file, "typescript");
 		expect(first.builds).toHaveBeenCalledTimes(1);
