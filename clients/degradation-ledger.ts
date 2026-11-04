@@ -1359,6 +1359,14 @@ export type DegradationKind =
 	 */
 	| "persist-worker-message-contained"
 	/**
+	 * `realIsPidAlive` (`clients/pid-liveness.ts`) read a `process.kill(pid, 0)`
+	 * error that is neither ESRCH (dead) nor EPERM (alive, not signalable) as
+	 * alive: a pid Node refuses to signal at all, such as one above 2^31-1
+	 * (`ERR_INVALID_ARG_TYPE`). Once per code per session. Subject is the
+	 * error code.
+	 */
+	| "pid-liveness-unprobeable"
+	/**
 	 * #3311: a registry entry declares `pipConstraints`, but the constraints file
 	 * the pip ladder hands to `PIP_CONSTRAINT` could not be written. The install
 	 * then proceeds UNCONSTRAINED — the pre-#3311 resolution — so this row is the

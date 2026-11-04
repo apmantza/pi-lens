@@ -129,4 +129,26 @@ describe("acquireQuarantinePidFileLock reclaims a dead owner", () => {
 			}),
 		).rejects.toThrow("live-owner lock timed out");
 	});
+
+	// Recurrence this prevents (#4907): `process.kill` refuses a pid above 2^31-1
+	// (ERR_INVALID_ARG_TYPE), and the copy this seam replaced read it as dead, so
+	// a live owner's fresh quarantine lock was reclaimed. The seam reads it alive.
+	it("does not reclaim an owner pid above 2^31-1 that the OS refuses to signal", async () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-live-owner-"));
+		tempDirs.push(dir);
+		const lockPath = writeLock(dir, {
+			pid: 3_000_000_000,
+			createdAt: Date.now(),
+			token: "huge",
+		});
+
+		await expect(
+			acquireQuarantinePidFileLock(lockPath, {
+				waitMs: 100,
+				retryMs: 10,
+				staleMs: 3_600_000,
+				timeoutMessage: "huge-pid lock timed out",
+			}),
+		).rejects.toThrow("huge-pid lock timed out");
+	});
 });

@@ -89,6 +89,40 @@ describe("#2504 AC1 — getTurnStateAccess on an ownerless persisted state", () 
 	});
 });
 
+// Recurrence this prevents (#4907): the turn-state copy read a pid above 2^31-1
+// as "owner gone" (`process.kill` throws ERR_INVALID_ARG_TYPE), so a live
+// worklist went to the next writer. The seam reads it alive.
+describe("#4907 — a turn-state owner pid above 2^31-1 reads alive", () => {
+	it("keeps the worklist away from the next writer", () => {
+		const lastEdit = new Date().toISOString();
+		writeTurnStateFile(env.tmpDir, {
+			files: {
+				"src/a.ts": {
+					modifiedRanges: [{ start: 1, end: 3 }],
+					importsChanged: false,
+					lastEdit,
+				},
+			},
+			turnCycles: 0,
+			maxCycles: 3,
+			lastUpdated: lastEdit,
+			sessionId: "lens-other",
+			owner: {
+				kind: "pi",
+				id: "lens-other",
+				pid: 3_000_000_000,
+				lastSeen: lastEdit,
+			},
+		});
+		expect(
+			new CacheManager(false).getTurnStateAccess(env.tmpDir, {
+				kind: "pi",
+				id: "lens-next",
+			}),
+		).toBe("foreign-live");
+	});
+});
+
 describe("#2504 AC1 — clearTurnState stamps the clearing owner", () => {
 	it("records kind/id/pid so the next session can judge liveness", () => {
 		const cacheManager = new CacheManager(false);

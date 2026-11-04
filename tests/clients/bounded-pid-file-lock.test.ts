@@ -376,6 +376,18 @@ describe("acquireBoundedPidFileLock with a lock whose pid is unreadable (#3475)"
 		release?.();
 	});
 
+	// Recurrence this prevents (#4907): the plain-lock copy read a pid above
+	// 2^31-1 as dead (`process.kill` refuses it with ERR_INVALID_ARG_TYPE), so
+	// a live owner's fresh lock was unlinked and taken. The seam reads it alive.
+	it("holds a fresh lock whose token names a pid above 2^31-1 (#4907)", () => {
+		const token = `3000000000:${Date.now()}:huge`;
+		const lockPath = lockWith(token, 0);
+		const { release, logContention } = contend(lockPath);
+		expect(release).toBeNull();
+		expect(logContention).toHaveBeenCalledOnce();
+		expect(fs.readFileSync(lockPath, "utf8")).toBe(token);
+	});
+
 	it("does not enter while a real process has opened the lock but not written its token", async () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-pid-lock-"));
 		tempDirs.push(dir);

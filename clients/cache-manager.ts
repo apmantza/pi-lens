@@ -20,6 +20,7 @@ import { getProjectDataDir } from "./file-utils.js";
 import { writeFileAtomic } from "./atomic-write.js";
 import { readJsonCache, readJsonCacheAsync } from "./json-cache-read.js";
 import { isUnderDir, normalizeMapKey, relativeInside } from "./path-utils.js";
+import { realIsPidAlive } from "./pid-liveness.js";
 import type { AnalysisRootMode } from "./analysis-root.js";
 
 // --- Types ---
@@ -689,12 +690,7 @@ export class CacheManager {
 
 	private isTurnStateOwnerStale(owner: TurnStateOwner): boolean {
 		if (owner.pid > 0 && owner.pid !== process.pid) {
-			try {
-				process.kill(owner.pid, 0);
-				return false;
-			} catch {
-				return true;
-			}
+			return !realIsPidAlive(owner.pid);
 		}
 		const lastSeen = Date.parse(owner.lastSeen);
 		return (

@@ -70,6 +70,7 @@ import {
 	isUnderDir,
 	realpathOrResolve,
 } from "../path-utils.js";
+import { realIsPidAlive } from "../pid-liveness.js";
 import {
 	assertInstallAllowed,
 	getProjectTrustGeneration,
@@ -164,15 +165,6 @@ interface InstallLockHold {
 	heartbeat: GenerationHeartbeat;
 }
 
-function isProcessAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
-	}
-}
-
 /**
  * How old a lock may be before it is stale whatever its pid says: longer than
  * any legitimate install (the owner's install bound plus slack). #946 review
@@ -203,7 +195,7 @@ function legacyInstallLockIsStale(maxAgeMs: number): boolean {
 			expired ||
 			(Number.isInteger(owner.pid) &&
 				owner.pid > 0 &&
-				!isProcessAlive(owner.pid))
+				!realIsPidAlive(owner.pid))
 		);
 	} catch {
 		// An unreadable/empty lock has no createdAt to age out: fall back to the
