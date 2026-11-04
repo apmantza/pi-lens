@@ -1456,7 +1456,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/warm-attach.ts": 3,
 		"clients/widget-state.ts": 7,
 		"clients/word-index-logger.ts": 2,
-		"clients/word-index.ts": 51,
+		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
+		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
+		"clients/word-index.ts": 52,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
 		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution

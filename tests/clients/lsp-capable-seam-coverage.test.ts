@@ -35,6 +35,9 @@ const SPECIAL_FILENAME_SAMPLES: Record<string, string> = {
 	"^Dockerfile(\\.\\w+)?$": "Dockerfile.dev",
 	"^terragrunt\\.hcl$": "terragrunt.hcl",
 	"^root\\.hcl$": "root.hcl",
+	"^Jenkinsfile$": "Jenkinsfile",
+	"^build\\.gradle$": "build.gradle",
+	"^settings\\.gradle$": "settings.gradle",
 };
 
 // Every language id an lspCapable file can be announced as on didOpen.
@@ -71,6 +74,7 @@ const PINNED_LSP_LANGUAGE_IDS = [
 	"fsharp",
 	"gleam",
 	"go",
+	"groovy",
 	"haskell",
 	"html",
 	"java",
@@ -271,5 +275,9 @@ describe("lspCapable seam coverage", () => {
 		expect(getLanguageId("Dockerfile")).toBe("dockerfile");
 		expect(getLanguageId("Dockerfile.dev")).toBe("dockerfile");
 		expect(getLanguageId("Dockerfile.prod")).toBe("dockerfile");
+		// #5235: the Groovy build/pipeline names the LSP announces as `groovy`.
+		expect(getLanguageId("Jenkinsfile")).toBe("groovy");
+		expect(getLanguageId("build.gradle")).toBe("groovy");
+		expect(getLanguageId("settings.gradle")).toBe("groovy");
 	});
 });

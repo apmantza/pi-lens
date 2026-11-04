@@ -26,6 +26,7 @@ export type FileKind =
 	| "fsharp" // F#
 	| "gleam" // Gleam
 	| "go" // Go
+	| "groovy" // Groovy
 	| "haskell" // Haskell
 	| "helm-template" // Helm Go-template helper
 	| "html" // HTML
@@ -106,6 +107,7 @@ export const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
 	fsharp: [".fs", ".fsi", ".fsx"],
 	gleam: [".gleam"],
 	go: [".go"],
+	groovy: [".groovy", ".gvy", ".gy", ".gsh"],
 	haskell: [".hs", ".lhs"],
 	"helm-template": [".tpl"],
 	html: [".htm", ".html"],
@@ -263,6 +265,13 @@ export const SPECIAL_FILENAMES: Array<{ pattern: RegExp; kind: FileKind }> = [
 		pattern: new RegExp(`^${name.replaceAll(".", "\\.")}$`, "i"),
 		kind: "terragrunt" as FileKind,
 	})),
+	// Groovy files that are named, not suffixed (#5235): the Jenkins pipeline
+	// entrypoint and the Gradle build scripts. Exact basenames: `build.gradle.kts`
+	// is Kotlin (`.kts`) and other `.gradle` names are not claimed. The registry's
+	// `groovy` entry lists the same three names (language-registry.ts).
+	{ pattern: /^Jenkinsfile$/i, kind: "groovy" },
+	{ pattern: /^build\.gradle$/i, kind: "groovy" },
+	{ pattern: /^settings\.gradle$/i, kind: "groovy" },
 ];
 
 // --- Detection Functions ---
@@ -375,6 +384,7 @@ export const CODE_KINDS: ReadonlySet<FileKind> = new Set<FileKind>([
 	"fsharp",
 	"gleam",
 	"go",
+	"groovy",
 	"haskell",
 	"helm-template",
 	"java",
@@ -427,6 +437,7 @@ export function getFileKindLabel(kind: FileKind): string {
 		jsts: "JavaScript/TypeScript",
 		python: "Python",
 		go: "Go",
+		groovy: "Groovy",
 		rust: "Rust",
 		cxx: "C/C++",
 		cmake: "CMake",
@@ -475,6 +486,7 @@ export function getLanguageId(kind: FileKind): string {
 		jsts: "typescript",
 		python: "python",
 		go: "go",
+		groovy: "groovy",
 		rust: "rust",
 		cxx: "cpp",
 		cmake: "cmake",

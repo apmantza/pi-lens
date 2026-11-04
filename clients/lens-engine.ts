@@ -26,7 +26,10 @@ import {
 	getResourceFootprint as getResourceFootprintSnapshot,
 	type ResourceFootprint,
 } from "./instance-registry.js";
-import { extensionsForLanguageToken } from "./language-registry.js";
+import {
+	extensionsForLanguageToken,
+	resolveFilenameLanguage,
+} from "./language-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/capabilities.js";
 import { acquireWarmWordIndex } from "./mcp/analyze.js";
@@ -383,6 +386,12 @@ export function symbolSearchFileMatchesLang(
 	file: string,
 	lang: string,
 ): boolean {
+	// A language the registry declares by basename (Jenkinsfile, Dockerfile)
+	// has no extension to match; the token is its id or its grammar name.
+	const declared = resolveFilenameLanguage(file);
+	if (declared && (declared.id === lang || declared.grammar === lang)) {
+		return true;
+	}
 	const exts = extensionsForLanguageToken(lang);
 	if (exts.length === 0) return false;
 	return exts.includes(path.extname(file).toLowerCase());
