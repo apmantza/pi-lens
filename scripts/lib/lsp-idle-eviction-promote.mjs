@@ -449,7 +449,7 @@ export function renderPromotionBody(promoted, skipped, runUrl) {
 		"",
 		"## Notes for the reviewer",
 		"",
-		`- Each server was measured \`eligible\` (eviction and respawn preserved every finding) on ${PROMOTE_NIGHTS} consecutive nightly runs, held idle RSS of at least ${IDLE_EVICTION_MIN_RSS_BYTES / MB} MB, and cold-started in at most ${COLD_START_MAX_MS} ms on both nights (the worse night is judged).`,
+		`- Each server measured \`eligible\` (eviction and respawn preserved every finding) on ${PROMOTE_NIGHTS} consecutive nightly runs. It held idle RSS of at least ${IDLE_EVICTION_MIN_RSS_BYTES / MB} MB and cold-started in at most ${COLD_START_MAX_MS} ms on both nights; the worse night counts.`,
 		"- Nothing is ever demoted here: a declared-transparent server the measurement vetoes is the drift issue's job (#3645).",
 		"- This PR is created with the repository `GITHUB_TOKEN`, which cannot trigger workflow runs. A maintainer must close and reopen it to arm CI.",
 		"- To trigger it: the nightly `tool-smoke` run on master, or `workflow_dispatch` of `tool-smoke` on master. Two runs on one UTC day count as one night.",
