@@ -1,6 +1,7 @@
 # CodeRabbit repo config. Every key below is defined in the CodeRabbit
 # configuration reference: https://docs.coderabbit.ai/reference/configuration
-# (fetched 2026-10-20). Keys the reference does not define are not set here.
+# (fetched 2026-11-04), except reviews.request_changes_workflow: schema v2 marks
+# it deprecated and undocumented ("Legacy alias for reviews.auto_approvals.enabled").
 # The PR body of the change that added this file carries the measurements.
 
 language: en-US # https://docs.coderabbit.ai/reference/configuration
@@ -83,13 +84,13 @@ reviews:
         Flag a test only when it cannot fail on the defect it claims to prove
         (a tautology or a fake seam). Do not ask for more tests.
 
+  # Label-only policy (maintainer decision 2026-11-04, #4685): no PR is
+  # auto-reviewed, maintainer or contributor. A review runs when someone posts
+  # `@coderabbitai review`, which the command reference says "Works whether or
+  # not automatic reviews are enabled for the repository"
+  # (https://docs.coderabbit.ai/reference/review-commands).
   auto_review:
-    enabled: true # https://docs.coderabbit.ai/reference/configuration
-    # Maintainer PRs are not auto-reviewed. Contributor PRs are reviewed once,
-    # on open. Author split is by exact, case-sensitive username.
-    ignore_usernames: # https://docs.coderabbit.ai/reference/configuration
-      - "apmantza"
-      - "dependabot[bot]"
+    enabled: false # https://docs.coderabbit.ai/reference/configuration
     # No per-push re-review: incremental review is repo-wide, not per author,
     # so it is off for everyone. The orchestrator requests one review per final
     # head.

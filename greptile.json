@@ -2,13 +2,12 @@
 	"strictness": 2,
 	"commentTypes": ["logic", "syntax", "style"],
 
-	"autoReview": ["open"],
+	"autoReview": [],
 	"triggerOnDrafts": false,
-	"excludeAuthors": ["apmantza", "dependabot[bot]"],
 
 	"ignorePatterns": "package-lock.json",
 
-	"instructions": "This repo has a contract in AGENTS.md, with the numbered defect shapes in docs/defect-shapes.md and the per-seam invariants in docs/invariants/. Review against them. Do not comment on lint-enforced style. A finding needs a code path or a test that demonstrates it. Reviews run on PR open only: request a review with @greptileai when wanted.",
+	"instructions": "This repo has a contract in AGENTS.md, with the numbered defect shapes in docs/defect-shapes.md and the per-seam invariants in docs/invariants/. Review against them. Do not comment on lint-enforced style. A finding needs a code path or a test that demonstrates it. Reviews run only when requested with @greptileai.",
 
 	"customContext": {
 		"files": [

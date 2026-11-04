@@ -34,8 +34,9 @@ fence at 20 lines (#5003).
 1. **Review.** Spawn `pi-lens-reviewer` (worktree isolation) with the PR
    number, a one-paragraph summary of the claim, and any PR-specific attack
    angles. Self-authored and small PRs get reviewed too — the depth follows
-   the review tier below, never the priority label. Bots review the PR as well:
-   every bot thread (Greptile and others) gets a disposition reply, `fixed in
+   the review tier below, never the priority label. Bots review a PR when the
+   orchestrator requests it (`@coderabbitai review`, `@greptileai`,
+   `/agentic_review`), never on their own: every bot thread (Greptile and others) gets a disposition reply, `fixed in
    <sha>`, `accepted and disclosed`, or `rejected because <reason>`.
 2. **Fix rounds.** Send findings back to the PR's original author agent when
    its worktree survives (SendMessage — cheapest context); otherwise spawn
