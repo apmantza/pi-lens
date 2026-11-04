@@ -559,4 +559,33 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 		expect(dbgLines.join("\n")).toContain("all tests passed");
 		expect(blocked()).toBe(false);
 	});
+
+	// Class sweep of #5270: PHPUnit and mix test carried the same pass-count
+	// guard (`passed === 0 && failed === 0`) as pytest, so a non-zero exit that
+	// counted passes and no failure (phpunit `--fail-on-warning`, a mix coverage
+	// threshold) read as a clean pass. The outputs are hand-shaped: no PHP or
+	// Elixir toolchain on the lane host (does not prove a real phpunit/mix run).
+	it.each([
+		[
+			"phpunit",
+			"parsePhpunitOutput",
+			"Tests: 3, Assertions: 3, Warnings: 1.\n",
+			/PHPUnit runner error/,
+		],
+		[
+			"mix",
+			"parseMixTestOutput",
+			"3 tests, 0 failures\n",
+			/mix test runner error/,
+		],
+	])(
+		"%s: a non-zero exit with passes counted and no failure is an error result",
+		(runner, method, stdout, message) => {
+			const parse = (client as any)[method].bind(client);
+			const failing = parse(stdout, "", 1, "/p/x_test", runner);
+			expect(failing.passed).toBe(3);
+			expect(failing.error).toMatch(message);
+			expect(parse(stdout, "", 0, "/p/x_test", runner).error).toBeUndefined();
+		},
+	);
 });

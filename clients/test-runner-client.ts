@@ -2660,9 +2660,7 @@ export class TestRunnerClient {
 			failures,
 			duration,
 			error:
-				exitCode !== 0 && passed === 0 && failed === 0
-					? "PHPUnit runner error"
-					: undefined,
+				exitCode !== 0 && failed === 0 ? "PHPUnit runner error" : undefined,
 		};
 	}
 
@@ -2746,9 +2744,7 @@ export class TestRunnerClient {
 			failures,
 			duration,
 			error:
-				exitCode !== 0 && passed === 0 && failed === 0
-					? "mix test runner error"
-					: undefined,
+				exitCode !== 0 && failed === 0 ? "mix test runner error" : undefined,
 		};
 	}
 
