@@ -22,6 +22,7 @@ import {
 } from "../../clients/review-graph/builder.js";
 import {
 	buildWordIndex,
+	collectWordIndexDocs,
 	getWordIndexBuildStatus,
 	serializeWordIndex,
 	triggerBackgroundWordIndexBuild,
@@ -206,6 +207,56 @@ describe("symbol_search tool", () => {
 				{ cwd: env.tmpDir },
 			);
 			expect(warm.details).toMatchObject({ available: true, count: 1 });
+		} finally {
+			env.cleanup();
+		}
+	}, 10_000);
+
+	it("an index built by the real walk holds named files, so lang:groovy returns a Jenkinsfile and build.gradle (#5273)", async () => {
+		// Recurrence: the source walk admitted by extension only, so a file whose
+		// kind comes from its name never entered the index and #5238's lang:groovy
+		// filter had nothing to return for it.
+		const env = setupTestEnvironment("pi-lens-symbolsearch-named-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"Jenkinsfile",
+				"def deployStage() { echo 'deploy' }\n",
+			);
+			createTempFile(
+				env.tmpDir,
+				"build.gradle",
+				"task packageArtifacts { doLast { println 'pack' } }\n",
+			);
+			createTempFile(
+				env.tmpDir,
+				"src/deploy.ts",
+				"export function deployStage() { return 1; }\n",
+			);
+			// The index comes from the real walk (collectWordIndexDocs), then the
+			// real tool answers from it; no build to wait on.
+			warmWordIndexSnapshot(env.tmpDir, await collectWordIndexDocs(env.tmpDir));
+			const tool = createSymbolSearchTool(() => env.tmpDir);
+			const inline = await tool.execute(
+				"2",
+				{ query: "lang:groovy deploy stage" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(rankedFiles(String(inline.content[0]?.text))).toEqual([
+				"Jenkinsfile",
+			]);
+			const param = await tool.execute(
+				"3",
+				{ query: "package artifacts", lang: "groovy" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(rankedFiles(String(param.content[0]?.text))).toEqual([
+				"build.gradle",
+			]);
 		} finally {
 			env.cleanup();
 		}
