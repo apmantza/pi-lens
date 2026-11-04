@@ -247,6 +247,14 @@ remains: prefer deleting over simplifying, simplifying over optimizing, and
 optimizing over automating. If the diff survives, leave it alone; churn is not
 rigor (#2599).
 
+The hand-back summary lists scope growth first, then a `Decisions:` line: each
+default you chose and each brief line you read a particular way, with its
+reason. Each check the body or the hand-back cites as proof names what it does
+not prove in one clause (`does not prove: Windows`, `does not prove: a real
+server`), so routing reads the gap, not only the green. A reinterpretation the
+orchestrator has to discover in the diff is a finding (#5242 kept a version the
+brief misnamed; #5254 read "turn" as a prompt).
+
 ## Handoff
 
 - The PR body follows `.github/PULL_REQUEST_TEMPLATE.md`, which a reader must
