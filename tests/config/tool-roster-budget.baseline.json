@@ -1,7 +1,7 @@
 {
 	"pi": {
-		"budget": 20007,
-		"descriptionTotal": 3703,
+		"budget": 20095,
+		"descriptionTotal": 3783,
 		"schemaTotal": 14485,
 		"tools": {
 			"ast_grep_outline": {
@@ -53,14 +53,14 @@
 				"schema": 593
 			},
 			"symbol_search": {
-				"description": 359,
+				"description": 439,
 				"schema": 1043
 			}
 		}
 	},
 	"mcp": {
-		"budget": 20052,
-		"descriptionTotal": 3598,
+		"budget": 20133,
+		"descriptionTotal": 3671,
 		"schemaTotal": 14631,
 		"tools": {
 			"pilens_analyze": {
@@ -128,7 +128,7 @@
 				"schema": 56
 			},
 			"pilens_symbol_search": {
-				"description": 366,
+				"description": 439,
 				"schema": 1081
 			},
 			"pilens_turn_end": {
