@@ -109,6 +109,7 @@ import {
 } from "../clients/situational-tool-telemetry.js";
 import { logExtension, flushExtensionLog } from "../clients/extension-log.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
+import { SYMBOL_SEARCH_DESCRIPTION } from "../tools/symbol-search.js";
 import { dispositionSuppressedLine } from "../clients/finding-delivery-gate.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -727,8 +728,7 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_symbol_search",
-		description:
-			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before pilens_module_report. Read a listed line with offset=<line>, limit=1.",
+		description: SYMBOL_SEARCH_DESCRIPTION,
 		inputSchema: {
 			type: "object",
 			properties: {

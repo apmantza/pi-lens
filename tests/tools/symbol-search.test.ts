@@ -6,6 +6,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { toPosix } from "../../clients/path-utils.js";
@@ -106,6 +107,21 @@ describe("symbol_search tool", () => {
 		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);
 		expect(tool.description).toContain("ext:test.ts");
 		expect(tool.description).toMatch(/path suffix/i);
+	});
+
+	it("the MCP pilens_symbol_search description is the imported pi constant (#5136)", () => {
+		const serverSource = readFileSync(
+			new URL("../../mcp/server.ts", import.meta.url),
+			"utf8",
+		);
+		expect(serverSource).toMatch(
+			/import \{[^}]*SYMBOL_SEARCH_DESCRIPTION[^}]*\} from "\.\.\/tools\/symbol-search\.js";/,
+		);
+		// No second literal of the sentence: the MCP surface resolves to the same
+		// exported constant the pi tool uses, so the two cannot drift.
+		expect(serverSource).not.toContain(
+			"Find relevant files by ranked identifier search.",
+		);
 	});
 
 	it("zero-hit output warns when the index is capped and exposes coverage (#928)", async () => {
