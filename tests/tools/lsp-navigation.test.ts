@@ -31,6 +31,7 @@ import { hashDiagnosticContent } from "../../clients/lsp/diagnostic-binding.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { isJsonCell } from "../../tools/render-compact.js";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -2908,6 +2909,26 @@ describe("lsp_navigation default text view", () => {
 			{ cwd: "." },
 		);
 		expect(String(result.content[0]?.text)).toContain("  1-5 function run");
+	});
+
+	// Recurrence: #5224 moved the #5159 JSON-cell marker from the text return
+	// to the `view:"json"` one; the stale smoke's lsp_navigation case skips in
+	// every lane (error envelope), so only this case reds a marker on the
+	// wrong return. `isJsonCell` is the predicate the MCP stale advisory reads.
+	it("marks only the view:json result as a JSON cell", async () => {
+		const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+		const run = (view?: "json") =>
+			tool.execute(
+				`json-cell-${view ?? "text"}`,
+				{ operation: "documentSymbol", path: tmpPath("sample.ts"), view },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+		const json = await run("json");
+		expect(JSON.parse(String(json.content[0]?.text)).ok).toBe(true);
+		expect(isJsonCell(json)).toBe(true);
+		expect(isJsonCell(await run())).toBe(false);
 	});
 
 	it("renders codeAction as kind and title lines", async () => {

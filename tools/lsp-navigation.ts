@@ -1083,6 +1083,9 @@ export function createLspNavigationTool(
 						details: {
 							...payload.details,
 							failureKind: meta.failureKind,
+							// #5159: a JSON cell keeps block 0 parseable; a stale advisory
+							// rides a trailing block instead of joining the envelope.
+							[JSON_CELL_DETAILS_KEY]: true,
 						},
 					};
 				}
@@ -1109,7 +1112,6 @@ export function createLspNavigationTool(
 					details: {
 						...payload.details,
 						failureKind: meta.failureKind,
-						[JSON_CELL_DETAILS_KEY]: true,
 					},
 				};
 			};
