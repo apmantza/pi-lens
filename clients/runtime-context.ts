@@ -178,9 +178,7 @@ export function peekTurnEndFindings(
 	return {
 		messages: [
 			turnEndMessage(
-				findings.data.repeat === true
-					? `${findings.data.content}\n\n${blockerRepeatPointer()}`
-					: findings.data.content,
+				findings.data.content,
 				validation.status === "current",
 				findings.data.provenance,
 			),
