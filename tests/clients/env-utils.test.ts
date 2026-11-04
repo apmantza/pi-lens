@@ -154,22 +154,22 @@ describe("lazyEnvNumber", () => {
 // by two private copies; a copy that drifts (`=== "true"`, a memo, a trim)
 // turns one switch off for one install path.
 describe("install kill switches (#5231)", () => {
-	it("each helper honours only its own variable, only for the exact value 1, read per call", () => {
+	const read = (tool: string | undefined, lsp: string | undefined) => {
 		const restore = withEnv({
-			PI_LENS_DISABLE_TOOL_INSTALL: "1",
-			PI_LENS_DISABLE_LSP_INSTALL: undefined,
+			PI_LENS_DISABLE_TOOL_INSTALL: tool,
+			PI_LENS_DISABLE_LSP_INSTALL: lsp,
 		});
 		try {
-			expect(isToolInstallDisabled()).toBe(true);
-			expect(isLspInstallDisabled()).toBe(false);
-			process.env.PI_LENS_DISABLE_TOOL_INSTALL = "true";
-			expect(isToolInstallDisabled()).toBe(false);
-			process.env.PI_LENS_DISABLE_TOOL_INSTALL = "0";
-			process.env.PI_LENS_DISABLE_LSP_INSTALL = "1";
-			expect(isToolInstallDisabled()).toBe(false);
-			expect(isLspInstallDisabled()).toBe(true);
+			return [isToolInstallDisabled(), isLspInstallDisabled()];
 		} finally {
 			restore();
 		}
+	};
+
+	it("each helper honours only its own variable, only for the exact value 1, read per call", () => {
+		expect(read("1", undefined)).toEqual([true, false]);
+		expect(read("true", undefined)).toEqual([false, false]);
+		expect(read("0", "1")).toEqual([false, true]);
+		expect(read(undefined, undefined)).toEqual([false, false]);
 	});
 });

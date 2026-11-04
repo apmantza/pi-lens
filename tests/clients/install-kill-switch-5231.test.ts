@@ -24,7 +24,11 @@ import { withEnv } from "../support/with-env.js";
 
 const { safeSpawnAsync } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(
-		async (_command: string, _args?: string[], _options?: object) => ({
+		async (
+			_command: string,
+			_args?: string[],
+			_options?: Record<string, unknown>,
+		) => ({
 			status: 0,
 			stdout: "",
 			stderr: "",
