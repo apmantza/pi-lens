@@ -385,7 +385,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ast-grep-client.ts": 47,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/biome-client.ts": 8,
-		"clients/bounded-pid-file-lock.ts": 9,
+		"clients/bounded-pid-file-lock.ts": 7,
 		"clients/bundled-resource-health.ts": 2,
 		"clients/cascade-logger.ts": 1,
 		"clients/child-unref.ts": 5,
@@ -429,7 +429,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/file-utils.ts": 3,
 		"clients/format-service.ts": 11,
 		"clients/formatters.ts": 26,
-		"clients/generation-lock.ts": 7,
+		"clients/generation-lock.ts": 5,
 		"clients/git-tracked-ignore.ts": 2,
 		"clients/govulncheck-client.ts": 6,
 		// 2 -> 4 (#4402): the worker loop's catch answers with an `error`, and
@@ -440,7 +440,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 26 -> 28 (#4530), and the new launch.ts row:
 		// starts that moved onto the spawn seam read the spawn result's `error`
 		// field (SpawnResult.error), not a delivery tier.
-		"clients/installer/index.ts": 28,
+		"clients/installer/index.ts": 26,
 		"clients/installer/managed-tool-refresh.ts": 2,
 		"clients/instance-reaper.ts": 4,
 		"clients/instance-registry-lock.ts": 3,

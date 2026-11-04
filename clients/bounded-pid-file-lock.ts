@@ -15,6 +15,7 @@ import {
 	topGenerationHolder,
 	tryAcquireGeneration,
 } from "./generation-lock.js";
+import { realIsPidAlive } from "./pid-liveness.js";
 
 const waitArray = new Int32Array(new SharedArrayBuffer(4));
 
@@ -46,18 +47,8 @@ function generationDir(lockPath: string): string {
 function boundedLockIsStale(lockPath: string): boolean {
 	const [pidText] = fs.readFileSync(lockPath, "utf8").split(":", 1);
 	const pid = Number.parseInt(pidText ?? "", 10);
-	if (Number.isSafeInteger(pid) && pid > 0) return !ownerPidIsLive(pid);
+	if (Number.isSafeInteger(pid) && pid > 0) return !realIsPidAlive(pid);
 	return Date.now() - fs.statSync(lockPath).mtimeMs > UNREADABLE_LOCK_STALE_MS;
-}
-
-function ownerPidIsLive(pid: number): boolean {
-	if (!Number.isSafeInteger(pid) || pid <= 0) return false;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "EPERM";
-	}
 }
 
 interface QuarantinePidFileLockOptions extends BoundedPidFileLockOptions {
@@ -130,7 +121,7 @@ function quarantineOwnerIsStale(
 	// `installer/index.ts:173`'s predicate: a dead PID reclaims regardless of
 	// `createdAt`, and an aged lock reclaims regardless of what the PID says.
 	const pidUsable = Number.isInteger(owner.pid) && owner.pid > 0;
-	if (pidUsable && !ownerPidIsLive(owner.pid)) return true;
+	if (pidUsable && !realIsPidAlive(owner.pid)) return true;
 	return (
 		Number.isFinite(owner.createdAt) && Date.now() - owner.createdAt > staleMs
 	);
