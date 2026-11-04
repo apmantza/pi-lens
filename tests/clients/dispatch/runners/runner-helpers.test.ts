@@ -663,7 +663,13 @@ describe("runner-helpers availability checker", () => {
 			});
 
 			expect(await isSgAvailableAsync()).toBe(true);
-			expect(getSgCommand().cmd).toBe(homeShim);
+			// #5247: a resolved bare binary has EMPTY args. The empty list must come
+			// back as `[]`, not as the npx preamble the unresolved fallback uses.
+			expect(getSgCommand()).toEqual({
+				kind: "swept",
+				cmd: homeShim,
+				args: [],
+			});
 
 			// #2544 round 4 F4: the own-install/project distinction F1 fixed is
 			// now visible in latency.log, not only inferable from a bin's
@@ -718,7 +724,11 @@ describe("runner-helpers availability checker", () => {
 			});
 
 			expect(await isSgAvailableAsync()).toBe(true);
-			expect(getSgCommand().cmd).toBe(projectBin);
+			expect(getSgCommand()).toEqual({
+				kind: "swept",
+				cmd: projectBin,
+				args: [],
+			});
 
 			const resolutions = toolBinResolutions();
 			expect(resolutions).toHaveLength(1);
@@ -755,6 +765,7 @@ describe("runner-helpers availability checker", () => {
 		);
 		expect(await isSgAvailableAsync()).toBe(true);
 		expect(getSgCommand()).toEqual({
+			kind: "swept",
 			cmd: "npx",
 			args: ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"],
 		});
@@ -765,7 +776,7 @@ describe("runner-helpers availability checker", () => {
 			expect(options.stripNpmConfig).toBe(true);
 	});
 
-	it("keeps structural replaceWithRule on the scoped fallback before probing (#4193)", async () => {
+	it("keeps structural replaceWithRule on the scoped fallback the instance resolved (#4193)", async () => {
 		const env = setupTestEnvironment("pi-lens-scoped-rule-");
 		try {
 			const file = path.join(env.tmpDir, "a.ts");
@@ -791,13 +802,20 @@ describe("runner-helpers availability checker", () => {
 							status: 1,
 						};
 					}
+					if (args.includes("--version")) {
+						return { stdout: "ast-grep 0.45.3", stderr: "", status: 0 };
+					}
 					scanOptions.push(options ?? {});
 					return { stdout: JSON.stringify([match]), stderr: "", status: 0 };
 				},
 			);
 			const { AstGrepClient } =
 				await import("../../../../clients/ast-grep-client.js");
-			const result = await new AstGrepClient().replaceWithRule(
+			const client = new AstGrepClient();
+			// The temp scans run the command THIS instance resolved (#5247); the
+			// tool handlers sweep first, so the test does too.
+			expect(await client.ensureAvailable()).toBe(true);
+			const result = await client.replaceWithRule(
 				"id: scoped\nlanguage: TypeScript\nrule:\n  pattern: var $X = $Y\nfix: let $X = $Y\n",
 				[file],
 				false,
