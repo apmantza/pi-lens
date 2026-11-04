@@ -238,6 +238,34 @@ export function isMutatingToolName(toolName: string): boolean {
 	return BUILTIN_MUTATING_TOOLS.has(toolName);
 }
 
+/**
+ * #5239, #5248: the pi-lens tools whose result details name the files they
+ * wrote. `lsp_navigation` covers rename, rename_file and executeCommand apply.
+ */
+const APPLIED_FILES_TOOLS: ReadonlySet<string> = new Set([
+	"ast_grep_replace",
+	"lsp_navigation",
+]);
+
+/**
+ * #5239, #5248: the files an applied `ast_grep_replace` or `lsp_navigation`
+ * rewrote and the mutation bridge accepted, read from the tool's own result
+ * details. A dry run, a refused apply and every other tool name none, so they
+ * dispatch nothing here.
+ */
+export function appliedFilesOfOwnTool(event: {
+	toolName?: string;
+	details?: unknown;
+}): string[] {
+	if (event.toolName === undefined || !APPLIED_FILES_TOOLS.has(event.toolName))
+		return [];
+	const listed = (event.details as { appliedFiles?: unknown } | undefined)
+		?.appliedFiles;
+	return Array.isArray(listed)
+		? listed.flatMap((entry) => (typeof entry === "string" ? [entry] : []))
+		: [];
+}
+
 /** Built-in mutating tool names, for reports and tests. */
 export function getBuiltinMutatingToolNames(): string[] {
 	return [...BUILTIN_MUTATING_TOOLS.keys()];

@@ -78,6 +78,7 @@ import { PathKeyedMap } from "./path-keyed-map.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
 import {
+	appliedFilesOfOwnTool,
 	classifyMutatingTool,
 	isBashDerivedReplay,
 	isProviderReplayCall,
@@ -2497,7 +2498,11 @@ export async function handleToolResult(
 			durationMs: 0,
 			metadata: { toolCallId, rawFilePath, guessedPath },
 		});
-		if (!opaqueNonBash)
+		// #5239, #5248 r5: an admitted pi-lens writer (`appliedFilesOfOwnTool`)
+		// reports the ABSOLUTE files it wrote, so the refused relative path
+		// stays refused as a path (`filePath` unset below, every step keyed on it
+		// closed) while the applied-files feed still dispatches what was written.
+		if (!opaqueNonBash && appliedFilesOfOwnTool(event).length === 0)
 			return readNote.length > 0
 				? {
 						content: [...readNote, ...event.content],
@@ -3662,6 +3667,21 @@ export async function handleToolResult(
 				`tool_result: observation for "${event.toolName}" did not settle: ${observed.reason}`,
 			);
 		}
+	}
+	// #5239, #5248: `ast_grep_replace` and `lsp_navigation` are pi-lens-owned
+	// writers the net above never arms (`isPiLensToolName`); the first names
+	// its targets in a `paths` array the classified chain cannot read and the
+	// second writes files its `path` never named (a rename's importers), so an
+	// applied rewrite reached the bridge's bookkeeping and nothing else: no
+	// dispatch, no blocker, no commit-gate verdict. The tool reports the files
+	// the bridge accepted in its result details; they take the SAME dispatch the settle's changed
+	// paths take below (`observedReplayed` / `observedChangedPaths` name that
+	// seam, not a provenance). The tool is never armed, so the settle above
+	// recorded nothing for this call and the two sources cannot both dispatch.
+	const ownApplied = appliedFilesOfOwnTool(event);
+	if (ownApplied.length > 0) {
+		observedReplayed = ownApplied.length;
+		observedChangedPaths = ownApplied;
 	}
 	// #2464 review round 2 (S5): ONE clock, started above BOTH exits, so
 	// `edit_batch_summary.durationMs` and the `tool_result` latency row measure
