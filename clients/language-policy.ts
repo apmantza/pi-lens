@@ -77,6 +77,7 @@ export const LANGUAGE_POLICY: Record<FileKind, LanguagePolicy> = {
 	lua: { lspCapable: true },
 	zig: { lspCapable: true },
 	haskell: { lspCapable: true },
+	groovy: { lspCapable: true },
 	"helm-template": { lspCapable: false },
 	elixir: { lspCapable: true },
 	gleam: { lspCapable: true },
@@ -205,6 +206,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	lua: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["lua"] },
 	zig: { mode: "all", runnerIds: ["lsp", "zig-check"], filterKinds: ["zig"] },
 	haskell: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["haskell"] },
+	groovy: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["groovy"] },
 	"helm-template": {
 		mode: "all",
 		// helm-render is opt-in (`helm.renderValidation.enabled`) and skips itself

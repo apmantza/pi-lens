@@ -235,6 +235,13 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 		capabilities: ["types", "lint"],
 		writeGroups: [primary("haskell")],
 	},
+	groovy: {
+		name: "Groovy Diagnostics",
+		// groovy-language-server publishes syntax and unresolved-class errors,
+		// never type errors (#5235), so the row does not claim "types".
+		capabilities: ["lint"],
+		writeGroups: [primary("groovy")],
+	},
 	elixir: {
 		name: "Elixir Linting",
 		capabilities: ["types", "lint"],

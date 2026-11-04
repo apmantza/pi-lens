@@ -676,6 +676,24 @@ describe("consumer projections track the registry", () => {
 		 * neither css nor json has symbol queries at all.
 		 */
 		/**
+		 * #5238 CodeRabbit thread: MCP passes `lang` through unnormalized, and
+		 * `lang: "GROOVY"` matched Jenkinsfile (registry id compare) but not
+		 * `.groovy` (case-sensitive extension lookup), a partial result. One token,
+		 * normalized once, answers every branch the same way.
+		 */
+		it("treats the language token case-insensitively on every branch", () => {
+			expect(symbolSearchFileMatchesLang("ci/Jenkinsfile", "GROOVY")).toBe(
+				true,
+			);
+			expect(symbolSearchFileMatchesLang("src/App.groovy", "GROOVY")).toBe(
+				true,
+			);
+			expect(symbolSearchFileMatchesLang("src/main.ts", "TypeScript")).toBe(
+				true,
+			);
+			expect(symbolSearchFileMatchesLang("Dockerfile", "Docker")).toBe(true);
+		});
+		/**
 		 * The same reconciled rows asserted THROUGH lens-engine's own filter, so
 		 * the guard covers the seam and not only the registry projection behind
 		 * it. Red on the pre-fold head, where the local table answered:
