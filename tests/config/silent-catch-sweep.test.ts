@@ -1189,9 +1189,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :48, :73
 	"clients/test-runner-client.ts": {
 		silent: 14,
-		identities: "5966330aef56c708",
+		identities: "4cdcaf420967db23",
 		reason: PRE_RULE,
-	}, // :331, :1048, :1098, :1114, :1158, :1188, :1233, :1337, :1538, :1917, :1994, :2236, :3372, :3381
+	}, // :358, :1071, :1121, :1137, :1181, :1211, :1256, :1355, :1556, :1962, :2043, :2310, :3458, :3467
 	"clients/test-runner-delivery.ts": {
 		silent: 2,
 		identities: "f4ada83f93d3b6b9",

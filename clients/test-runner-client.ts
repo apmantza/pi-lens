@@ -65,15 +65,6 @@ import { resolveToolCwd } from "./tool-cwd.js";
 
 // --- Types ---
 
-/** The file's text, or "" when it is absent or unreadable. */
-function readFileOrEmpty(file: string): string {
-	try {
-		return fs.readFileSync(file, "utf-8");
-	} catch {
-		return "";
-	}
-}
-
 export interface TestResult {
 	file: string; // test file that was run
 	sourceFile: string; // the file the agent edited
@@ -1871,10 +1862,13 @@ export class TestRunnerClient {
 			const stdout = result.stdout || "";
 			const stderr = result.stderr || "";
 			// #5257: the report file when the runner wrote one, else stdout. An
-			// absent or empty file is not an error here: the parser decides, and
-			// an unreadable report is an error result there.
+			// absent or empty file is not an error here: the parser decides. A
+			// file that exists but cannot be read throws into this run's catch,
+			// which returns an error result (never a clean one).
 			const reportText =
-				reportPath === undefined ? "" : readFileOrEmpty(reportPath);
+				reportPath !== undefined && fs.existsSync(reportPath)
+					? fs.readFileSync(reportPath, "utf-8")
+					: "";
 			const jsonOutput = reportText === "" ? stdout : reportText;
 
 			if (result.error) {
@@ -2282,24 +2276,20 @@ export class TestRunnerClient {
 			// #5257: the run reported itself unsuccessful with no failed test to
 			// name: a suite that could not load (an import error), or an unhandled
 			// error. Counted zero and error-free that read as a clean run.
-			const unloadable =
-				json.success === false && json.numFailedTests === 0
-					? (json.testResults ?? []).find((suite) => suite.status === "failed")
-					: undefined;
-			const loadError =
-				json.success === false && json.numFailedTests === 0
-					? `Test run failed without a failed test: ${(
-							unloadable?.message ?? "the runner reported success: false"
-						)
-							.split("\n")[0]
-							.slice(0, 300)}`
-					: undefined;
+			const unsuccessful = json.success === false && json.numFailedTests === 0;
+			const unloadable = unsuccessful
+				? (json.testResults ?? []).find((suite) => suite.status === "failed")
+				: undefined;
+			const [loadMessage = ""] = (
+				unloadable?.message ?? "the runner reported success: false"
+			).split("\n", 1);
+			const loadError = `Test run failed without a failed test: ${loadMessage.slice(0, 300)}`;
 
 			return {
 				file: testFile,
 				sourceFile: "",
 				runner,
-				error: loadError,
+				...(unsuccessful ? { error: loadError } : {}),
 				passed: json.numPassedTests || 0,
 				failed: json.numFailedTests || 0,
 				// #1452: `numSkippedTests` is absent from both reporters' JSON, so
