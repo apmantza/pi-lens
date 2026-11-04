@@ -1,6 +1,7 @@
 # CodeRabbit repo config. Every key below is defined in the CodeRabbit
 # configuration reference: https://docs.coderabbit.ai/reference/configuration
-# (fetched 2026-10-20). Keys the reference does not define are not set here.
+# (fetched 2026-11-04), except reviews.request_changes_workflow: schema v2 marks
+# it deprecated and undocumented ("Legacy alias for reviews.auto_approvals.enabled").
 # The PR body of the change that added this file carries the measurements.
 
 language: en-US # https://docs.coderabbit.ai/reference/configuration

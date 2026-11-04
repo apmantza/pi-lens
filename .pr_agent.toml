@@ -9,8 +9,8 @@
 
 [github_app]
 # Automatic runs are off. The reference says "Commands run automatically when a
-# PR is opened or updated" and "Remove a command to disable its trigger", so the
-# empty list turns off the automatic `/agentic_review`. The reference does not
+# PR is opened or updated" and "Remove a command to disable its trigger". An
+# empty list is that removal; it is not yet verified. The reference does not
 # say whether `[]` is accepted: check the Qodo dashboard after this lands. It
 # also does not say whether a manual `/agentic_review` still runs with
 # `pr_commands = []`: probe that after this lands.
