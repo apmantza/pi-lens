@@ -291,7 +291,7 @@ and `[]` mean no arguments.
   `pi_lens_activate_tools` has run. They become callable from the next turn.
 - pi's error for a lazy tool lists the available tools but not
   `pi_lens_activate_tools`.
-- `--no-lazy-tools` makes every pi-lens tool callable from the first script.
+- `--no-lazy-tools` makes every enabled pi-lens tool callable from the first script.
 - Scripts receive each tool's text, including pi-lens notes such as a blocker
   note, never `details`.
 - Nested writes are recorded like top-level ones.
