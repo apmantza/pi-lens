@@ -460,7 +460,7 @@ export function renderPromotionBody(promoted, skipped, runUrl) {
 		"## Change outline",
 		"",
 		'- `clients/lsp/server.ts`: flips that server\'s `idleEviction: "unmeasured"` to `"transparent"`.',
-		"- `tests/config/lsp-idle-eviction-reasons.json`: adds its reason row.",
+		"- `lsp-idle-eviction-reasons.json` under `tests/config/`: adds its reason row.",
 		"- `tests/config/lsp-idle-eviction-registry.test.ts`: moves its id from NEXT_PHASE_ELIGIBLE_IDS to TRANSPARENT_IDS (#3952's class pin).",
 		"",
 		"| server | night 1 (day, rss MB, cold start ms) | night 2 (day, rss MB, cold start ms) | nights eligible |",
