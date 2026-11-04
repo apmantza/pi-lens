@@ -149,6 +149,11 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 		landed =
 			"Landing: CI runs on this PR because it was opened with the refresh App token. A maintainer merges it.";
 	}
+	// The Tests line says whether the flips were classified. The check can fail
+	// (landRefresh's catch), and then the body must not claim it ran.
+	const flipCheck = checkFailed
+		? "The flip check could not run, so the flips were not classified against `master`."
+		: "`scripts/lsp-refresh-landing.mjs` classified the flips above against `master`.";
 	const lines = [
 		"## Summary",
 		"",
@@ -180,7 +185,11 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 			"",
 			"```diff",
 			...shown,
-			...(fits ? [] : [`... ${flips.length - shown.length} more`]),
+			...(fits
+				? []
+				: [
+						`... ${flips.length - shown.length} more, in the Files changed diff`,
+					]),
 			"```",
 		);
 	}
@@ -190,7 +199,8 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 		"",
 		"### Tests",
 		"",
-		"Docs-only regeneration: this diff changes no test file. The PR step runs only after the nightly LSP capability census (`tests/config/lsp-first-publish-census.test.ts`, `tests/config/lsp-clean-behavior-census.test.ts`) succeeded on the regenerated docs, and `scripts/lsp-refresh-landing.mjs` classified the flips above against `master`.",
+		"Docs-only regeneration: this diff changes no test file. The PR step runs only after the nightly LSP capability census (`tests/config/lsp-first-publish-census.test.ts`, `tests/config/lsp-clean-behavior-census.test.ts`) succeeded on the regenerated docs. " +
+			flipCheck,
 		"",
 		"### Class sweep",
 		"",

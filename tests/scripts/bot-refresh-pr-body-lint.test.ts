@@ -69,6 +69,11 @@ function lint(body: string, title: string, diff: string) {
 	});
 }
 
+// The Tests section alone, so a phrase in another section (the verdict bullet
+// also says "could not run") cannot satisfy an assertion about this one.
+const testsSection = (body: string) =>
+	body.slice(body.indexOf("### Tests"), body.indexOf("### Class sweep"));
+
 const flipLines = (n: number) =>
 	Array.from(
 		{ length: n },
@@ -82,6 +87,7 @@ describe("the LSP-docs refresh PR body passes the body lint (#5062)", () => {
 		it(`flip-free, landing ${landing}`, () => {
 			const body = buildRefreshPrBody({ flips: [], landing });
 			expect(lint(body, REFRESH_TITLE, REFRESH_DIFF).errors).toEqual([]);
+			expect(testsSection(body)).toContain("classified the flips above");
 		});
 	}
 
@@ -95,15 +101,18 @@ describe("the LSP-docs refresh PR body passes the body lint (#5062)", () => {
 		expect(body).toContain("lang2");
 	});
 
-	// Recurrence: #4945 listed 25 flips in one fence (cap 20).
+	// Recurrence: #4945 listed 25 flips in one fence (cap 20). The 6 not listed
+	// are named by their exact count and by where their full rows live.
 	it("with more flips than the fence cap, naming how many are not listed", () => {
 		const body = buildRefreshPrBody({
-			flips: flipLines(70),
+			flips: flipLines(25),
 			landing: "automerge",
 			issuesUrl: "https://example.test/issues",
 		});
 		expect(lint(body, REFRESH_TITLE, REFRESH_DIFF).errors).toEqual([]);
-		expect(body).toMatch(/\.\.\. \d+ more/);
+		expect(body).toContain(
+			`\`\`\`diff\n${flipLines(19).join("\n")}\n... 6 more, in the Files changed diff\n\`\`\``,
+		);
 	});
 
 	it("with long flip lines, inside the visible-text budget", () => {
@@ -114,6 +123,8 @@ describe("the LSP-docs refresh PR body passes the body lint (#5062)", () => {
 		expect(lint(body, REFRESH_TITLE, REFRESH_DIFF).errors).toEqual([]);
 	});
 
+	// Recurrence: the Tests section said the landing script classified the flips
+	// on this path, when the flip check had not run (review r1 F1).
 	it("when the flip check could not run", () => {
 		const body = buildRefreshPrBody({
 			flips: [],
@@ -121,6 +132,8 @@ describe("the LSP-docs refresh PR body passes the body lint (#5062)", () => {
 			checkFailed: true,
 		});
 		expect(lint(body, REFRESH_TITLE, REFRESH_DIFF).errors).toEqual([]);
+		expect(testsSection(body)).not.toContain("classified the flips");
+		expect(testsSection(body)).toContain("The flip check could not run");
 	});
 });
 
