@@ -91,7 +91,9 @@ compiled twins are generated and must not be edited by hand.
 ## Maintaining this file
 
 Update this file in the same change as the behavior, structure, command, or
-invariant it documents. Keep live rules short and load-bearing. Put dated
+invariant it documents. Model-facing prose is derived: the schema constant owns
+the sentence, docs link to it, and a doc that restates behaviour is a bug. Keep
+live rules short and load-bearing. Put dated
 narratives and completed arcs in `HISTORY.md`; do not delete their decision
 record. Place new invariants in the matching subsystem section, not at the file
 end. Cite symbols and section headings, not line numbers. A defect shape that

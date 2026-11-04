@@ -23,12 +23,9 @@ import {
 	yieldIfOverBudget,
 } from "./cooperative-budget.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
-import {
-	KIND_EXTENSIONS,
-	SPECIAL_FILENAMES,
-	type FileKind,
-} from "./file-kinds.js";
+import { type FileKind, SPECIAL_FILENAMES } from "./file-kinds.js";
 import { isTestFileName } from "./file-role.js";
+import { resolveLanguageScope } from "./language-registry.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
 import {
 	isAtOrAboveHomeDir,
@@ -1578,33 +1575,23 @@ export function parseWordIndexQuery(query: string): ParsedWordIndexQuery {
 	return { terms: termParts.join(" "), filters };
 }
 
-/** `lang:X` → a path predicate for FileKind X (case-insensitive): the kind's
- * `KIND_EXTENSIONS` set (clients/file-kinds.ts) — the single source of truth
- * (#894 invariant: no second, hand-maintained language list) — or, for a file
+/** `lang:X` → a path predicate for the language token `X` (case-insensitive):
+ * the extension set {@link resolveLanguageScope} resolves (a FileKind like
+ * `jsts`, or a language id/grammar name like `typescript`), plus, for a file
  * named rather than suffixed (Jenkinsfile, Dockerfile), the SPECIAL_FILENAMES
- * pattern `detectFileKind` classifies it by (#5235). An unrecognized kind
- * throws {@link WordIndexQueryError} listing the accepted kinds
- * (KIND_EXTENSIONS' own keys), the same loud-failure contract as an
- * unsupported `key:` prefix. */
+ * pattern `detectFileKind` classifies it by (#5235). An unknown token refuses
+ * through the shared facade, naming both vocabularies (#5135). */
 function resolveLangMatcher(value: string): (file: string) => boolean {
+	const scope = resolveLanguageScope(value);
+	if ("refusal" in scope) throw new WordIndexQueryError(scope.refusal);
 	const kind = value.toLowerCase() as FileKind;
-	const extensions = KIND_EXTENSIONS[kind];
-	if (!extensions) {
-		const known = Object.keys(KIND_EXTENSIONS)
-			.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-			.join(", ");
-		throw new WordIndexQueryError(
-			`Unknown lang: "${value}" in word-index query — supported languages: ${known}.`,
-		);
-	}
 	const named = SPECIAL_FILENAMES.flatMap((entry) =>
 		entry.kind === kind ? [entry.pattern] : [],
 	);
 	return (file) =>
-		extensions.includes(path.extname(file).toLowerCase()) ||
+		scope.extensions.includes(path.extname(file).toLowerCase()) ||
 		named.some((pattern) => pattern.test(path.basename(file)));
 }
-
 /** True when a word-index query carries neither search terms nor inline
  * filters — the query string contributes no scope of its own. `searchWordIndex`
  * still answers a bare empty query with an empty result; `symbolSearch` layers

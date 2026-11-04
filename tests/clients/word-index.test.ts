@@ -645,6 +645,26 @@ describe("searchWordIndex listing branch (#5135)", () => {
 	});
 });
 
+// #5135: the filter key set is CLOSED at lang/file/ext. An unknown `key:`
+// prefix is a literal search term, never a filter and never an error — ordinary
+// identifiers contain colons (std::vector, http://…, C:\).
+describe("word-index query key set (#5135)", () => {
+	it("recognises exactly lang, file, and ext as filter keys", () => {
+		for (const key of ["lang", "file", "ext"]) {
+			expect(parseWordIndexQuery(`${key}:x`).filters).toHaveLength(1);
+		}
+		for (const key of ["kind", "path", "name", "type", "exts"]) {
+			expect(parseWordIndexQuery(`${key}:x`).filters).toHaveLength(0);
+		}
+	});
+
+	it("keeps an unknown prefix as a literal search term", () => {
+		const parsed = parseWordIndexQuery("kind:widget std::vector");
+		expect(parsed.filters).toEqual([]);
+		expect(parsed.terms).toBe("kind:widget std::vector");
+	});
+});
+
 describe("searchWordIndex priors", () => {
 	it("demotes a test-path file below an equivalent source match", () => {
 		const index = buildWordIndex([

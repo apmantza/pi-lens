@@ -290,7 +290,7 @@ Registered as pi agent tools. Verified names:
 |---|---|---|
 | `lens_diagnostics` | Session-cache or LSP-probe diagnostics with `source` and `scope` selectors. | Use `source=lsp` with `scope=paths` for targeted checks; an empty cache is not proof of clean. |
 | `lsp_navigation` | LSP navigation (definition/references/etc.). | Trace symbols semantically. |
-| `symbol_search` | Ranked identifier search over the warm word index (BM25 + priors). | Entry point of the discovery funnel. |
+| `symbol_search` | Ranked identifier search over the warm word index (BM25 + priors). Accepts inline `lang:`/`file:`/`ext:` filters and structured `paths`/`lang`; the query contract is owned by the tool description in `tools/symbol-search.ts`. | Entry point of the discovery funnel. |
 | `module_report` | Navigable outline + signatures + decorators + imports + callbacks for a file; optional `blastRadius`. | Understand a module without reading the whole body. |
 | `read_symbol` | Verbatim body of one symbol/callback handle (records read-guard coverage). | Read exactly the symbol you'll edit. |
 | `read_enclosing` | Smallest enclosing symbol/callback body for a file+line (records coverage). | Bridge a diagnostic location → exact body. |
@@ -298,6 +298,8 @@ Registered as pi agent tools. Verified names:
 | `ast_grep_search` / `ast_grep_replace` | Structural AST search / replace. | Find or rewrite by code shape, not regex. |
 | `ast_grep_outline` / `ast_grep_search` (`dump=true`) | Outline / AST dump. | Inspect structure. |
 | `lens_diagnostic_mark` | Mark a finding false-positive / suppressed / deferred / flagged-to-fix (honored across surfaces). | Triage a finding you've judged. |
+| `effective_config` | Resolved configuration and provenance for a file or the workspace. | Diagnose which LSP server or runner a file resolves to. |
+| `pi_lens_activate_tools` | Activate registered situational tools for the next turn. | Bring a situational tool (e.g. `ast_grep_search`) into the tool list. |
 
 Funnel discipline: **`symbol_search` → `module_report` → `read_symbol`/`read_enclosing`**
 (find candidates → explain one → read the body).

@@ -37,8 +37,9 @@ import {
 	type SymbolSearchResult,
 } from "../../clients/lens-engine.js";
 import {
-	SYMBOL_SEARCH_DESCRIPTION,
 	createSymbolSearchTool,
+	SYMBOL_SEARCH_DESCRIPTION,
+	SYMBOL_SEARCH_QUERY_DESCRIPTION,
 } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
@@ -1104,7 +1105,7 @@ describe("symbol_search term-less calls (#5135)", () => {
 
 	async function run(
 		env: { tmpDir: string },
-		params: { query: string; paths?: string[] },
+		params: { query: string; paths?: string[]; lang?: string },
 	) {
 		const tool = createSymbolSearchTool(() => env.tmpDir);
 		return tool.execute("1", params, undefined, null, { cwd: env.tmpDir });
@@ -1183,5 +1184,59 @@ describe("symbol_search term-less calls (#5135)", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+
+	it("resolves a lang kind and a language id to the same listing", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-parity-");
+		try {
+			listingFixture(env);
+			const inlineJsts = await run(env, { query: "lang:jsts" });
+			const structuredJsts = await run(env, { query: "", lang: "jsts" });
+			const inlineTs = await run(env, { query: "lang:typescript" });
+			const structuredTs = await run(env, { query: "", lang: "typescript" });
+			const expected = ["src/auth/login.ts"];
+			expect(rankedFiles(String(inlineJsts.content[0]?.text))).toEqual(
+				expected,
+			);
+			expect(rankedFiles(String(structuredJsts.content[0]?.text))).toEqual(
+				expected,
+			);
+			expect(rankedFiles(String(inlineTs.content[0]?.text))).toEqual(expected);
+			expect(rankedFiles(String(structuredTs.content[0]?.text))).toEqual(
+				expected,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("refuses an unknown lang, naming both vocabularies", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-unknown-");
+		try {
+			listingFixture(env);
+			for (const params of [
+				{ query: "lang:klingon" },
+				{ query: "", lang: "klingon" },
+			]) {
+				const result = await run(env, params);
+				expect(result.isError, JSON.stringify(params)).toBe(true);
+				const text = String(result.content[0]?.text);
+				expect(text).toContain("accepted file kinds:");
+				expect(text).toContain("accepted language ids:");
+				// The engine's refusal sentence, not the wrapped generic failure.
+				expect(text).not.toContain("Symbol search failed");
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("the tool's own description is the exported constant", () => {
+		const tool = createSymbolSearchTool(() => ".");
+		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);
+		const querySchema = tool.parameters.properties.query as unknown as {
+			description?: string;
+		};
+		expect(querySchema.description).toBe(SYMBOL_SEARCH_QUERY_DESCRIPTION);
 	});
 });

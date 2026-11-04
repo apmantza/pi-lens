@@ -94,6 +94,10 @@ import {
 } from "../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 import { readFilePath, readPathsArgument } from "../tools/shared.js";
+import {
+	SYMBOL_SEARCH_DESCRIPTION,
+	SYMBOL_SEARCH_QUERY_DESCRIPTION,
+} from "../tools/symbol-search.js";
 import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
 import { isUnderDir, walkUpDirs } from "../clients/path-utils.js";
 import { loadPiLensGlobalConfig } from "../clients/lens-config.js";
@@ -110,7 +114,6 @@ import {
 } from "../clients/situational-tool-telemetry.js";
 import { logExtension, flushExtensionLog } from "../clients/extension-log.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
-import { SYMBOL_SEARCH_DESCRIPTION } from "../tools/symbol-search.js";
 import { dispositionSuppressedLine } from "../clients/finding-delivery-gate.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -735,8 +738,7 @@ const ALL_TOOLS = [
 			properties: {
 				query: {
 					type: "string",
-					description:
-						"Identifier-ish query, e.g. 'authenticate user'. Mix in composable prefix filters: lang:<kind> (e.g. lang:jsts, lang:python — kinds from file-kinds.ts), file:<substr> (path substring), ext:<ext> (e.g. ext:ts or ext:.ts), each optionally negated with a leading '-' (-file:test). Filters apply before ranking; e.g. 'lang:jsts file:clients/ -file:test rank'. Unknown prefixes/kinds error with the supported list.",
+					description: SYMBOL_SEARCH_QUERY_DESCRIPTION,
 				},
 				cwd: { type: "string" },
 				limit: {

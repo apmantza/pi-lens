@@ -20,12 +20,15 @@ import {
 } from "../../clients/word-index.js";
 import { SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL } from "../../clients/lens-engine.js";
 import {
+	SYMBOL_SEARCH_DESCRIPTION,
+	SYMBOL_SEARCH_QUERY_DESCRIPTION,
+} from "../../tools/symbol-search.js";
+import {
 	flushProjectSnapshotPersistsForTests,
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
 } from "../../clients/project-snapshot.js";
 import { translateGuidanceToolNames } from "../../clients/tool-config.js";
-import { SYMBOL_SEARCH_DESCRIPTION } from "../../tools/symbol-search.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { McpHarness } from "./harness.js";
 
@@ -171,6 +174,37 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		expect(textOf(res).split("\n\n")[0]).toBe(
 			SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
 		);
+	}, 30_000);
+
+	// #5135: the MCP mirror advertises the pi tool's own description sentence.
+	it("advertises the query contract sentence", async () => {
+		const res = await harness.request(15, "tools/list");
+		const tools = (
+			res.result as {
+				tools: Array<{
+					name: string;
+					description?: string;
+					inputSchema: {
+						properties?: Record<string, { description?: string }>;
+					};
+				}>;
+			}
+		).tools;
+		const entry = tools.find((t) => t.name === "pilens_symbol_search");
+		expect(entry?.inputSchema.properties?.query?.description).toBe(
+			SYMBOL_SEARCH_QUERY_DESCRIPTION,
+		);
+	}, 30_000);
+
+	it("refuses an unknown lang, naming both vocabularies", async () => {
+		const res = await harness.request(14, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "lang:klingon", cwd: projectDir },
+		});
+		expect((res.result as { isError?: boolean }).isError).toBe(true);
+		const text = textOf(res);
+		expect(text).toContain("accepted file kinds:");
+		expect(text).toContain("accepted language ids:");
 	}, 30_000);
 
 	it("returns available:false with an actionable hint when no index exists for cwd", async () => {
@@ -387,6 +421,18 @@ describe("pilens_symbol_search paths and limit shapes (#5038)", () => {
 		const result = await hitsFor({ query: "", paths: ["src"] });
 		expect(result.isError).toBeFalsy();
 		expect(result.files).toEqual(["src/login.ts"]);
+	}, 30_000);
+
+	// #5135: a lang kind (`jsts`) and a language id (`typescript`) resolve
+	// through the one registry facade, so inline and structured agree.
+	it("resolves a lang kind and a language id to the same rows", async () => {
+		const inlineKind = await hitsFor({ query: "lang:jsts" });
+		const structuredKind = await hitsFor({ query: "", lang: "jsts" });
+		const inlineId = await hitsFor({ query: "lang:typescript" });
+		const structuredId = await hitsFor({ query: "", lang: "typescript" });
+		expect(inlineKind.files).toEqual(structuredKind.files);
+		expect(inlineId.files).toEqual(structuredId.files);
+		expect(inlineKind.files).toContain("src/login.ts");
 	}, 30_000);
 
 	it("refuses every entry the shared reader does not recognise", async () => {

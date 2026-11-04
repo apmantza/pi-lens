@@ -28,8 +28,8 @@ import {
 	type ResourceFootprint,
 } from "./instance-registry.js";
 import {
-	extensionsForLanguageToken,
 	resolveFilenameLanguage,
+	resolveLanguageScope,
 } from "./language-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/capabilities.js";
@@ -50,6 +50,7 @@ import {
 	isEmptyWordIndexQuery,
 	type RankedFile,
 	searchWordIndex,
+	WordIndexQueryError,
 	triggerBackgroundWordIndexBuild,
 } from "./word-index.js";
 
@@ -385,7 +386,9 @@ export interface SymbolSearchOptions {
  *
  * Exported so `tests/clients/language-registry-drift.test.ts` guards the SEAM
  * and not just the projection behind it: a future local table reintroduced
- * here would satisfy a registry-only assertion but fail this one.
+ * here would satisfy a registry-only assertion but fail this one. An unknown
+ * token REFUSES with {@link WordIndexQueryError} naming both vocabularies
+ * (#5135) instead of returning `false` — a typo must not read as "no match".
  */
 export function symbolSearchFileMatchesLang(
 	file: string,
@@ -398,6 +401,8 @@ export function symbolSearchFileMatchesLang(
 	// filter, this check does not match `*.dockerfile` (pre-existing on master).
 	// MCP passes `lang` through as typed; normalize once so every branch agrees.
 	const token = lang.toLowerCase();
+	const scope = resolveLanguageScope(token);
+	if ("refusal" in scope) throw new WordIndexQueryError(scope.refusal);
 	const declared = resolveFilenameLanguage(file);
 	if (declared && (declared.id === token || declared.grammar === token)) {
 		return true;
@@ -410,9 +415,7 @@ export function symbolSearchFileMatchesLang(
 	) {
 		return true;
 	}
-	const exts = extensionsForLanguageToken(token);
-	if (exts.length === 0) return false;
-	return exts.includes(path.extname(file).toLowerCase());
+	return scope.extensions.includes(path.extname(file).toLowerCase());
 }
 
 /** Same glob semantics as ast_grep_search's `paths`: a bare directory/file
@@ -659,6 +662,13 @@ export async function symbolSearch(
 			centrality,
 			fileFilter,
 		});
+	} catch (err) {
+		// #5135: an unknown `lang` token (inline or structured) refuses with
+		// the shared vocabulary sentence instead of answering "no match".
+		if (err instanceof WordIndexQueryError) {
+			return { available: true, query, results: [], refusal: err.message };
+		}
+		throw err;
 	} finally {
 		warmLease.release();
 	}
