@@ -4667,10 +4667,7 @@ export async function runResolutionSmoke({ verbose, deps } = {}) {
  * failing. Not a `--tier1` row: vitest/jest install from npm (a registry
  * outage is `setup-failed`, which still fails the layer) and pytest from pip.
  */
-export async function runTestRunnerSmoke({
-	verbose,
-	rows = TEST_RUNNER_ROWS,
-} = {}) {
+async function runTestRunnerSmoke({ verbose, rows = TEST_RUNNER_ROWS } = {}) {
 	await adoptFixtureProjectTrust({ repoRoot });
 	const entry = path.join(repoRoot, "dist", "clients", "test-runner-client.js");
 	if (!fs.existsSync(entry)) {
