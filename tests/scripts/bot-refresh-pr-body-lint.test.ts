@@ -54,10 +54,8 @@ const postImages = (diff: string) =>
 function lint(body: string, title: string, diff: string) {
 	// Only the PR diff is the workflow's; the test corpus and base reads stay
 	// real so a citation in a body is judged against the tree.
-	const git = ((args: string[], options: object) =>
-		args[0] === "diff"
-			? diff
-			: gitExecFileSync(args, options as never)) as never;
+	const git = ((args: string[], options: never) =>
+		args[0] === "diff" ? diff : gitExecFileSync(args, options)) as never;
 	// The label of a referenced issue is not this file's subject: pinned at the
 	// process boundary, as tests/scripts/check-pr-body-bot-block.test.ts does.
 	return lintLocalPrBody(body, process.cwd(), git, {
