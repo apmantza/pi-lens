@@ -346,7 +346,9 @@ policy reads it this way: the per-edit dispatch, `lens_diagnostics`,
 `rules.<id>.disable` is a denial, like `lsp.disabledServers`: it resolves as the
 union of every tier's list. A project or nested file can add rules to what the
 global or root file disabled and can never re-enable one. `select` is an
-allowlist, not a denial: the nearest file that sets it supplies the whole list.
+allowlist, not a denial: per grouping key, the nearest file that sets it supplies
+the whole list. Lists under different keys are unioned, so a global `k.select:
+[x]` and a nearer file's `k2.select: [y]` keep both `x` and `y`.
 
 `ignorePaths` entries follow the same gitignore rules as the `ignore` field. Each entry is
 relative to the directory of the file that declares it: a global entry, and an entry in the

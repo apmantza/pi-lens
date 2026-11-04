@@ -271,8 +271,10 @@ Per-rule threshold overrides and policy filters. Currently honored:
 - `<id>.select` — allowlist of rule ids; only the listed rule ids survive
   filtering. Disable wins over select project-wide, even when the two lists
   are configured under different keys. Unlike `disable`, the nearest file that
-  sets `select` supplies the whole list; a global `select` applies when no
-  nearer file sets one.
+  sets `select` supplies the whole list per grouping key; a global `select`
+  applies to a key no nearer file sets. Lists under different keys are unioned,
+  so a global `k.select: [x]` and a nearer `k2.select: [y]` keep both `x` and
+  `y`.
 
 The `<id>` key is a grouping label only — it does not scope which rules the
 `disable`/`select` list underneath it can match. Matching is **project-wide**:
