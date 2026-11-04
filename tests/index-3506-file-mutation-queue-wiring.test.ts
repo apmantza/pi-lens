@@ -38,9 +38,7 @@ import { logExtension } from "../clients/extension-log.js";
 
 vi.mock("../clients/bootstrap.js", async () => {
 	const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
-	return bootstrapSeamMock(async () => ({
-		metricsClient: { reset: () => {} },
-	}));
+	return bootstrapSeamMock(async () => ({}));
 });
 
 // A cold `import("../index.js")` plus the host SDK lookup, as the other

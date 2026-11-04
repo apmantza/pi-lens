@@ -170,7 +170,6 @@ function resultDeps(
 			isPythonFile: () => false,
 			ensureAvailable: async () => false,
 		},
-		metricsClient: {},
 		resetLSPService: () => {},
 		readGuard: runtime.readGuard,
 		agentBehaviorRecord: () => (extra.afterPipeline ? ["warning"] : []),

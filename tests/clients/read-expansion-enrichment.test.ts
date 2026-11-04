@@ -77,7 +77,6 @@ vi.mock("../../clients/bootstrap.js", async () => {
 		},
 		biomeClient: {},
 		ruffClient: {},
-		metricsClient: {},
 		agentBehaviorClient: { recordToolCall: () => {}, formatWarnings: () => "" },
 	}));
 });

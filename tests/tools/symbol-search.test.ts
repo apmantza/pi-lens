@@ -6,7 +6,9 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import * as path from "node:path";
+import { stripSource } from "../support/sweep-kit.js";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { toPosix } from "../../clients/path-utils.js";
 import {
@@ -33,7 +35,10 @@ import {
 	symbolSearch,
 	type SymbolSearchResult,
 } from "../../clients/lens-engine.js";
-import { createSymbolSearchTool } from "../../tools/symbol-search.js";
+import {
+	SYMBOL_SEARCH_DESCRIPTION,
+	createSymbolSearchTool,
+} from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
 /** One rendered ranked row: `  1. <path>[ <line>] (score ...)`. */
@@ -99,6 +104,37 @@ function warmWordIndexSnapshot(
 }
 
 describe("symbol_search tool", () => {
+	it("describes the compound-suffix ext: contract, and the tool owns the sentence (#5136)", () => {
+		const tool = createSymbolSearchTool(() => "/tmp");
+		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);
+		expect(tool.description).toContain("ext:test.ts");
+		expect(tool.description).toMatch(/path suffix/i);
+	});
+
+	it("the MCP pilens_symbol_search description is the imported pi constant (#5136)", () => {
+		const serverSource = readFileSync(
+			new URL("../../mcp/server.ts", import.meta.url),
+			"utf8",
+		);
+		// Comment-blanked code, string contents kept: the specifier is itself a
+		// string literal. A commented-out import or call must not pass (Greptile,
+		// #5282: the raw-source regex accepted `// import { ... }`).
+		const serverCode = stripSource(serverSource, { strings: "keep" });
+		expect(serverCode).toMatch(
+			/import \{[^}]*SYMBOL_SEARCH_DESCRIPTION[^}]*\} from "\.\.\/tools\/symbol-search\.js";/,
+		);
+		// The MCP description is the pi constant routed through the MCP name
+		// translator, so it names pilens_* tools (#5136 F1).
+		expect(serverCode).toMatch(
+			/translateGuidanceToolNames\(\s*SYMBOL_SEARCH_DESCRIPTION\s*,\s*"mcp"\s*\)/,
+		);
+		// No second literal of the sentence: the MCP surface resolves to the same
+		// exported constant the pi tool uses, so the two cannot drift.
+		expect(serverSource).not.toContain(
+			"Find relevant files by ranked identifier search.",
+		);
+	});
+
 	it("zero-hit output warns when the index is capped and exposes coverage (#928)", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-capped-");
 		try {
@@ -713,6 +749,50 @@ describe("symbol_search tool", () => {
 				const text = String(result.content[0]?.text);
 				expectOneTable(text);
 				expect(rankedFiles(text)).toEqual(["src/auth/login.ts"]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("ext: matches a compound suffix end to end, and -ext: subtracts it (#5136)", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-queryext-");
+			try {
+				const content = "export function authenticateUser(id) { return id; }";
+				const testFile = createTempFile(
+					env.tmpDir,
+					"src/auth/login.test.ts",
+					content,
+				);
+				const sourceFile = createTempFile(
+					env.tmpDir,
+					"src/auth/login.ts",
+					content,
+				);
+				warmWordIndexSnapshot(env.tmpDir, [
+					{ path: testFile, content },
+					{ path: sourceFile, content },
+				]);
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const positive = await tool.execute(
+					"1",
+					{ query: "ext:test.ts authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(rankedFiles(String(positive.content[0]?.text))).toEqual([
+					"src/auth/login.test.ts",
+				]);
+				const negative = await tool.execute(
+					"1",
+					{ query: "-ext:test.ts authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(rankedFiles(String(negative.content[0]?.text))).toEqual([
+					"src/auth/login.ts",
+				]);
 			} finally {
 				env.cleanup();
 			}

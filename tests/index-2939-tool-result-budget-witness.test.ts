@@ -82,7 +82,6 @@ vi.mock("../clients/bootstrap.js", async () => {
 		// #5108: the cases below start sessions, which read the full client set
 		// (the shape `tests/index-3620-sweep-scope-fence.test.ts` uses).
 		return {
-			metricsClient: { reset: () => {} },
 			todoScanner: {},
 			biomeClient: { isAvailable: () => false },
 			ruffClient: { isAvailable: () => false },

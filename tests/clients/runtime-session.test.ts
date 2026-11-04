@@ -222,7 +222,6 @@ async function runSessionStart(
 				cachedExports: new Map(),
 				errorDebtBaseline: { testsPassed: true, buildPassed: true },
 			},
-			metricsClient: { reset: () => {} },
 			cacheManager: {
 				writeCache: () => {},
 				readCache: (key: string) => {
@@ -934,7 +933,6 @@ describe(
 						dbg: () => {},
 						log: () => {},
 						runtime,
-						metricsClient: { reset: () => {} },
 						cacheManager: { writeCache: () => {}, readCache: () => null },
 						todoScanner: { scanDirectory: () => ({ items: [] }) },
 						astGrepClient: {},
@@ -1007,7 +1005,6 @@ describe(
 						dbg: () => {},
 						log: () => {},
 						runtime,
-						metricsClient: { reset: () => {} },
 						cacheManager: { writeCache: () => {}, readCache: () => null },
 						todoScanner: { scanDirectory: () => ({ items: [] }) },
 						astGrepClient: {},
@@ -1317,7 +1314,6 @@ describe(
 							cachedExports: new Map(),
 							errorDebtBaseline: { testsPassed: true, buildPassed: true },
 						},
-						metricsClient: { reset: () => {} },
 						cacheManager: { writeCache: () => {}, readCache: () => null },
 						todoScanner: {
 							scanDirectory: () => ({ items: [] }),
@@ -1422,7 +1418,6 @@ describe(
 							cachedExports: new Map(),
 							errorDebtBaseline: { testsPassed: true, buildPassed: true },
 						},
-						metricsClient: { reset: () => {} },
 						cacheManager: { writeCache: () => {}, readCache: () => null },
 						todoScanner: {
 							scanDirectory: () => ({ items: [] }),
@@ -1526,7 +1521,6 @@ describe(
 							cachedExports: new Map(),
 							errorDebtBaseline: { testsPassed: true, buildPassed: true },
 						},
-						metricsClient: { reset: () => {} },
 						cacheManager: { writeCache: () => {}, readCache: () => null },
 						todoScanner: {
 							scanDirectory: () => ({ items: [] }),

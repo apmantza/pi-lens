@@ -289,7 +289,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -2212,7 +2211,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -2328,7 +2326,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -2448,7 +2445,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -2581,7 +2577,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -2695,7 +2690,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -2804,7 +2798,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -2942,7 +2935,6 @@ describe("index.ts integration", () => {
 				const { bootstrapSeamMock } =
 					await import("./support/bootstrap-mock.js");
 				return bootstrapSeamMock(async () => ({
-					metricsClient: { reset: () => {} },
 					todoScanner: {},
 					biomeClient: { isAvailable: () => false },
 					ruffClient: { isAvailable: () => false },
@@ -3121,7 +3113,6 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 		vi.doMock("../clients/bootstrap.js", async () => {
 			const { bootstrapSeamMock } = await import("./support/bootstrap-mock.js");
 			return bootstrapSeamMock(async () => ({
-				metricsClient: { reset: () => {} },
 				todoScanner: {},
 				biomeClient: { isAvailable: () => false },
 				ruffClient: { isAvailable: () => false },

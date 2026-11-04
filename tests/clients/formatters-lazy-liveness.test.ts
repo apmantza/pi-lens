@@ -57,7 +57,6 @@ describe("formatter session warm/first-use liveness (#1394)", () => {
 			const { bootstrapSeamMock } =
 				await import("../support/bootstrap-mock.js");
 			return bootstrapSeamMock(async () => ({
-				metricsClient: { reset: () => {} },
 				todoScanner: {},
 				biomeClient: { isAvailable: () => false, isSupportedFile: () => false },
 				ruffClient: { isAvailable: () => false, isSupportedFile: () => false },

@@ -2387,7 +2387,6 @@ describe("runtime-agent-end deferred formatting", () => {
 					cacheManager: new CacheManager(false),
 					biomeClient: {},
 					ruffClient: {},
-					metricsClient: {},
 					resetLSPService: () => {},
 					agentBehaviorRecord: () => [],
 					formatBehaviorWarnings: () => "",

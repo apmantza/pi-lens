@@ -46,7 +46,6 @@ vi.mock("../../clients/bootstrap.js", async () => {
 		},
 		biomeClient: {},
 		ruffClient: {},
-		metricsClient: {},
 		agentBehaviorClient: { recordToolCall: () => [], formatWarnings: () => "" },
 	}));
 });
@@ -205,6 +204,57 @@ describe("handleToolCall", () => {
 					(entry) => entry.kind === "startup-analyzer-disabled",
 				),
 			).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("records one degradation per unmeasured code language and none for data files (#5086)", async () => {
+		resetDegradationLedger();
+		const env = setupTestEnvironment("pi-lens-runtime-tool-call-metrics-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const baselined = createTempFile(
+				env.tmpDir,
+				"src/done.ts",
+				"export {};\n",
+			);
+			runtime.complexityBaselines.add(baselined);
+			// Only the two .java reads should record: the rest are a data file, a
+			// measured file already baselined, a vendored file, and a read with
+			// complexity disabled.
+			for (const [name, content, disabled] of [
+				["src/A.java", "class A {}\n", false],
+				["src/B.java", "class B {}\n", false],
+				["config.json", "{}\n", false],
+				["src/done.ts", "export {};\n", false],
+				["node_modules/lib/V.kt", "class V\n", false],
+				["src/C.rb", "class C; end\n", true],
+			] as const) {
+				const filePath = createTempFile(env.tmpDir, name, content);
+				await runHandlerExpectingNoThrow(() =>
+					handleToolCall(
+						baseDeps({
+							runtime,
+							getFlag: (flag) => disabled && flag === "no-complexity",
+							event: { toolName: "read", input: { filePath } },
+						}),
+					),
+				);
+			}
+			expect(runtime.complexityBaselines.has(baselined)).toBe(true);
+			expect(runtime.complexityBaselines.size).toBe(1);
+			expect(
+				getDegradationSummary()
+					.filter(
+						(entry) => entry.kind === "function-metrics-language-unsupported",
+					)
+					.map((entry) => [
+						entry.count,
+						entry.latestReasons.map((row) => row.subject),
+					]),
+			).toEqual([[1, ["java"]]]);
 		} finally {
 			env.cleanup();
 		}
@@ -720,7 +770,6 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 			cacheManager: new CacheManager(false),
 			biomeClient: {},
 			ruffClient: {},
-			metricsClient: {},
 			resetLSPService: () => {},
 			agentBehaviorRecord: () => [],
 			formatBehaviorWarnings: () => "",
@@ -1216,7 +1265,6 @@ describe("#2402 partial-apply contract (mixed-validity preflight)", () => {
 				cacheManager: new CacheManager(false),
 				biomeClient: {},
 				ruffClient: {},
-				metricsClient: {},
 				resetLSPService: () => {},
 				agentBehaviorRecord: () => [],
 				formatBehaviorWarnings: () => "",

@@ -463,6 +463,13 @@ export type DegradationKind =
 	 */
 	| "formatter-unavailable"
 	/**
+	 * #5086: a read or edit touched a code file whose language has no table in
+	 * `clients/metrics/function-metrics.ts`, so it gets no complexity metrics
+	 * (none, never zeros). Subject is the grammar id, or the file kind when the
+	 * language has no grammar; once per session.
+	 */
+	| "function-metrics-language-unsupported"
+	/**
 	 * The project-snapshot persist seam detected durable meta/body evidence
 	 * failing the #2008 integrity gate — the meta's recorded gz size no longer
 	 * matches the on-disk body (torn/truncated gzip under an intact meta), or a

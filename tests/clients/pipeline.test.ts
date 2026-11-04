@@ -3,7 +3,7 @@
  *
  * Tests the core write pipeline (runPipeline) with mocked external dependencies.
  * Uses real temp files for file system operations and mocks for:
- * - BiomeClient, RuffClient, TestRunnerClient, MetricsClient
+ * - BiomeClient, RuffClient, TestRunnerClient
  * - FormatService, LSPService
  * - dispatchLintWithResult
  */
@@ -22,7 +22,6 @@ import {
 } from "../../clients/dispatch/types.js";
 import { formatDiagnostics } from "../../clients/dispatch/utils/format-utils.js";
 import { getFormatService } from "../../clients/format-service.js";
-import { MetricsClient } from "../../clients/metrics-client.js";
 import { resolvePiLensFlag } from "../../clients/lens-config.js";
 import {
 	type PipelineContext,
@@ -156,13 +155,11 @@ describe("Pipeline", () => {
 			}),
 		} as unknown as RuffClient;
 		const testRunnerClient = new TestRunnerClient();
-		const metricsClient = new MetricsClient();
 
 		return {
 			biomeClient: mockBiome,
 			ruffClient: mockRuff,
 			testRunnerClient,
-			metricsClient,
 			getFormatService: () => getFormatService("test-session", false),
 			fixedThisTurn: new Set(),
 			...overrides,

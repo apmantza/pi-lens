@@ -1,7 +1,7 @@
 {
 	"pi": {
-		"budget": 20007,
-		"descriptionTotal": 3703,
+		"budget": 20095,
+		"descriptionTotal": 3783,
 		"schemaTotal": 14485,
 		"tools": {
 			"ast_grep_outline": {
@@ -53,14 +53,14 @@
 				"schema": 593
 			},
 			"symbol_search": {
-				"description": 359,
+				"description": 439,
 				"schema": 1043
 			}
 		}
 	},
 	"mcp": {
-		"budget": 20052,
-		"descriptionTotal": 3598,
+		"budget": 20256,
+		"descriptionTotal": 3783,
 		"schemaTotal": 14631,
 		"tools": {
 			"pilens_analyze": {
@@ -96,11 +96,11 @@
 				"schema": 2234
 			},
 			"pilens_module_report": {
-				"description": 509,
+				"description": 544,
 				"schema": 1845
 			},
 			"pilens_project_report": {
-				"description": 398,
+				"description": 419,
 				"schema": 520
 			},
 			"pilens_project_scan": {
@@ -108,11 +108,11 @@
 				"schema": 401
 			},
 			"pilens_read_enclosing": {
-				"description": 282,
+				"description": 296,
 				"schema": 1108
 			},
 			"pilens_read_symbol": {
-				"description": 274,
+				"description": 288,
 				"schema": 607
 			},
 			"pilens_rebuild": {
@@ -128,7 +128,7 @@
 				"schema": 56
 			},
 			"pilens_symbol_search": {
-				"description": 366,
+				"description": 467,
 				"schema": 1081
 			},
 			"pilens_turn_end": {

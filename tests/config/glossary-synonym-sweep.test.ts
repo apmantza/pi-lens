@@ -325,7 +325,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/index.ts": 13,
 		"clients/lsp/server.ts": 3,
 		"clients/mcp/session.ts": 4,
-		"clients/metrics-client.ts": 7,
 		"clients/observed-mutation.ts": 7,
 		// 12 -> 11 (#2050): the prescan's `let baseline` local moved into
 		// `captureOpaqueBaseline`'s returned `state`, so one identifier use is
@@ -926,7 +925,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/knip-client.ts": 14,
 		"clients/latency-logger.ts": 1,
 		"clients/mcp/session.ts": 1,
-		"clients/metrics-client.ts": 4,
 		// 18 -> 19 (#5138): the callback-handle kind refusal logs its miss too.
 		// 17 -> 18 (#5138): the kind-mismatch refusal logs its miss through the
 		// same `read_symbol` phase as every other miss in this file.
@@ -1253,7 +1251,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// name and the stale-socket owner marker. No path-key owner changes.
 		"clients/mcp/ipc.ts": 7,
 		"clients/mcp/session.ts": 3,
-		"clients/metrics-client.ts": 6,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
@@ -1494,7 +1491,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
-		"clients/word-index.ts": 52,
+		// 52 -> 51 (#5136): the `ext:` predicate matches a path suffix on the
+		// display path instead of `path.extname`, dropping one `path` operation.
+		"clients/word-index.ts": 51,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
 		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution

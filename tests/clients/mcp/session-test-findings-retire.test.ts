@@ -52,7 +52,6 @@ const stubClients = vi.hoisted(() => {
 		"jscpdClient",
 		"depChecker",
 		"testRunnerClient",
-		"metricsClient",
 		"complexityClient",
 		"goClient",
 		"govulncheckClient",

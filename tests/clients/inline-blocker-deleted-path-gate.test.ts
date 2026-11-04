@@ -141,7 +141,6 @@ function toolResultDeps(
 			isPythonFile: () => false,
 			ensureAvailable: async () => false,
 		},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

@@ -2183,7 +2183,6 @@ describe("#3529: the drain's LSP sync ends on the bytes on disk", () => {
 				{
 					biomeClient: {} as never,
 					ruffClient: {} as never,
-					metricsClient: {} as never,
 					getFormatService: () => new FormatService("format-drain", true),
 					fixedThisTurn: new Set<string>(),
 				} as PipelineDeps,

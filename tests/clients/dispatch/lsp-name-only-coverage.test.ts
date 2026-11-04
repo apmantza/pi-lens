@@ -40,7 +40,6 @@ import {
 import type { RunnerResult } from "../../../clients/dispatch/types.js";
 import { getFormatService } from "../../../clients/format-service.js";
 import { BiomeClient } from "../../../clients/biome-client.js";
-import { MetricsClient } from "../../../clients/metrics-client.js";
 import { runPipeline } from "../../../clients/pipeline.js";
 import { RuffClient } from "../../../clients/ruff-client.js";
 import { resetSessionScopedState } from "../../../clients/runtime-session.js";
@@ -87,7 +86,6 @@ async function writeAndRender(name: string, body: string): Promise<string> {
 		{
 			biomeClient: new BiomeClient(),
 			ruffClient: new RuffClient(),
-			metricsClient: new MetricsClient(),
 			getFormatService: () => getFormatService("lsp-name-only-coverage", false),
 			fixedThisTurn: new Set<string>(),
 		},

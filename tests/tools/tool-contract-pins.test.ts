@@ -9,6 +9,8 @@ type ListedTool = {
 
 const READ_CONTRACT =
 	"An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage.";
+const READ_CONTRACT_MCP =
+	"An outline shows shape, not bodies, and does not satisfy read-before-edit; `pilens_read_symbol` and `pilens_read_enclosing` return body text and record read coverage.";
 const AST_OUTLINE_CONTRACT =
 	"An outline shows structure, not a symbol body, and does not satisfy read-before-edit; use read_symbol or read_enclosing for body coverage.";
 const MARK_CONTRACT =
@@ -19,6 +21,11 @@ const CONFIG_DENY =
 	"tier-denied LSP decision cannot be lifted by a nearer config";
 const COLD_CACHE =
 	"On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit.";
+// The MCP surface serves the same sentence with the names it registers: the
+// shared description and the MCP literals route through translateGuidanceToolNames
+// (#5136 F1). A substring that matches both spellings would pass either one.
+const COLD_CACHE_MCP =
+	"On a cold cache, pilens_project_report and pilens_symbol_search return available: false with a retry hint and start a non-blocking background build; pilens_module_report degrades to outline-only with cache freshness explicit.";
 const CACHE_ONLY = "Empty cache is not proof of clean";
 
 function byName(tools: ListedTool[], name: string): string {
@@ -46,11 +53,12 @@ describe("model-facing tool contract pins (#2808)", () => {
 	afterAll(() => mcp?.dispose());
 
 	it("pins the read-before-edit contract independently on each surface", () => {
-		for (const tools of [piTools, mcpTools]) {
+		for (const [tools, prefix, contract] of [
+			[piTools, "", READ_CONTRACT],
+			[mcpTools, "pilens_", READ_CONTRACT_MCP],
+		] as const) {
 			for (const name of ["module_report", "read_symbol", "read_enclosing"]) {
-				const mcpName = `pilens_${name}`;
-				const actualName = tools === piTools ? name : mcpName;
-				expect(byName(tools, actualName)).toContain(READ_CONTRACT);
+				expect(byName(tools, `${prefix}${name}`)).toContain(contract);
 			}
 		}
 	});
@@ -77,12 +85,12 @@ describe("model-facing tool contract pins (#2808)", () => {
 	});
 
 	it("pins cold-cache interpretation independently on each surface", () => {
-		for (const [tools, prefix] of [
-			[piTools, ""],
-			[mcpTools, "pilens_"],
+		for (const [tools, prefix, sentence] of [
+			[piTools, "", COLD_CACHE],
+			[mcpTools, "pilens_", COLD_CACHE_MCP],
 		] as const) {
 			for (const name of ["project_report", "symbol_search", "module_report"]) {
-				expect(byName(tools, `${prefix}${name}`)).toContain(COLD_CACHE);
+				expect(byName(tools, `${prefix}${name}`)).toContain(sentence);
 			}
 		}
 	});

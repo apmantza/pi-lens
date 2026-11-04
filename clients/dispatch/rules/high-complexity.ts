@@ -1,6 +1,7 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
+import { isJstsFactFile } from "../../file-kinds.js";
 import { isTestSuiteOrganizer } from "./framework-call-noise.js";
 
 // Defaults match the historical hardcoded values so behavior is unchanged for
@@ -12,8 +13,10 @@ const DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD = 6;
 export const highComplexityRule: FactRule = {
 	id: "high-complexity",
 	requires: ["file.functionSummaries"],
+	// The function-facts population. Python, Go and Rust wait for the
+	// per-language thresholds (#5089).
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isJstsFactFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const fns =
