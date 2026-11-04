@@ -388,7 +388,6 @@ import {
 } from "./clients/session-start-observability.js";
 import { normalizeToolDefinition } from "./clients/tool-definition.js";
 import { warmFormatters } from "./clients/formatters-lazy.js";
-import { primeGlobalBinDirs } from "./clients/package-manager.js";
 import {
 	noteHostSessionManager,
 	setHostFileMutationQueueLoader,
@@ -3004,7 +3003,17 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// await above, so the session reset that clears the lookup's memo
 					// has already run. A `--no-lens` session dispatches nothing and
 					// skips it.
-					if (lensEnabled) primeGlobalBinDirs();
+					if (lensEnabled) {
+						void import("./clients/package-manager.js")
+							.then((packageManager) => packageManager.primeGlobalBinDirs())
+							.catch((err) =>
+								logExtension({
+									subsystem: "dispatch",
+									level: "warn",
+									message: `global bin dir prime failed: ${err}`,
+								}),
+							);
+					}
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 					// #3612: the coordinator's fresh guard is this scope's read-guard
 					// cell, which the read-guard stores snapshot and restore.

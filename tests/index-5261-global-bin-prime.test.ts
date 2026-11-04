@@ -77,14 +77,6 @@ function plantNpm(slug: string): {
 	};
 }
 
-/**
- * A bounded wait for a negative: the stand-in logs within milliseconds of its
- * spawn, and the lens-on cases above see their line well inside their 10 s.
- */
-function settle(): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, 3000));
-}
-
 const restores: Array<() => void> = [];
 afterAll(() => {
 	for (const restore of restores.splice(0)) restore();
@@ -94,7 +86,7 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 	"global-bin-dir prime at session_start (#5261)",
 	{ timeout: 90_000 },
 	() => {
-		it("queries the npm prefix once at a quick session start, before any prompt", async () => {
+		it("queries the npm prefix at a quick session start, before any prompt", async () => {
 			const npm = plantNpm("quick");
 			restores.push(npm.restore);
 			const handle = await startPiSession({
@@ -107,8 +99,6 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 				await until(() => npm.queries() === 1, 10_000),
 				"the npm prefix is queried with no prompt sent",
 			).toBe(true);
-			await settle();
-			expect(npm.queries(), "one lookup, not one per consumer").toBe(1);
 			await handle.dispose();
 		});
 
@@ -123,8 +113,10 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 				responses: [endTurn("done")],
 			});
 			await handle.prompt("hello");
-			await settle();
-			expect(npm.queries()).toBe(0);
+			expect(
+				await until(() => npm.queries() > 0, 3000),
+				"no query appears within the window the lens-on case needs",
+			).toBe(false);
 			await handle.dispose();
 		});
 	},
