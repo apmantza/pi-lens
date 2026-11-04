@@ -154,6 +154,35 @@ describe("tree-sitter batch identity (#5260)", () => {
 		expect(builds).toHaveBeenCalledTimes(3);
 	});
 
+	// Recurrence guarded: a later edit adds `metavars` to
+	// BATCH_IDENTITY_IGNORED_FIELDS. The results read the captures a rule
+	// declares, so a batch built for other metavars would serve the wrong ones.
+	// The #5278 r1 mutation (ignore `metavars`) survived before this case.
+	it("builds a new batch when a rule's metavars change (metavars axis)", async () => {
+		const { client, file, builds } = await liveClient();
+		await client.runQueriesOnFile(RULES, file, "typescript");
+		await client.runQueriesOnFile(
+			[{ ...RULES[0], metavars: ["CALL"] }, RULES[1]],
+			file,
+			"typescript",
+		);
+		expect(builds).toHaveBeenCalledTimes(2);
+	});
+
+	// Recurrence guarded: a later edit adds `post_filter` (or its params) to the
+	// ignore set. The compiled batch applies the post-filter, so a batch built
+	// without it would keep reporting matches the rule now filters out.
+	it("builds a new batch when a rule's post-filter changes (post-filter axis)", async () => {
+		const { client, file, builds } = await liveClient();
+		await client.runQueriesOnFile(RULES, file, "typescript");
+		await client.runQueriesOnFile(
+			[{ ...RULES[0], post_filter: "no_terminating_statement" }, RULES[1]],
+			file,
+			"typescript",
+		);
+		expect(builds).toHaveBeenCalledTimes(2);
+	});
+
 	it("builds a batch per language for the same rules (language axis)", async () => {
 		const { client, file, builds } = await liveClient();
 		await client.runQueriesOnFile(RULES, file, "typescript");
