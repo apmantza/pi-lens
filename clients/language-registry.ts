@@ -28,7 +28,11 @@
  * synonym for the language id.
  */
 
-import { type FileKind, SPECIAL_FILENAMES } from "./file-kinds.js";
+import {
+	type FileKind,
+	GROOVY_FILENAMES,
+	SPECIAL_FILENAMES,
+} from "./file-kinds.js";
 
 /**
  * Every language pi-lens can name. PUBLIC API from #2424: adding an id without
@@ -371,7 +375,7 @@ export const LANGUAGES: readonly LanguageEntry[] = [
 		id: "groovy",
 		kind: "groovy",
 		extensions: [".groovy", ".gvy", ".gy", ".gsh"],
-		filenames: ["Jenkinsfile", "build.gradle", "settings.gradle"],
+		filenames: GROOVY_FILENAMES,
 	},
 	{ id: "haskell", kind: "haskell", extensions: [".hs", ".lhs"] },
 	{ id: "helm", kind: "helm-template", extensions: [".tpl"] },

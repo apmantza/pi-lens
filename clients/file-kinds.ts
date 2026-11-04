@@ -226,6 +226,17 @@ export const DOTNET_FSHARP_ROOT_MARKERS: readonly string[] = [
 	"*.sln",
 ];
 
+// Groovy files that are named, not suffixed (#5235): the Jenkins pipeline
+// entrypoint and the Gradle build scripts. Exact basenames: `build.gradle.kts`
+// is Kotlin (`.kts`) and other `.gradle` names are not claimed. The registry's
+// `groovy` entry takes its filenames from this list, so detection and language
+// lookup share one declaration.
+export const GROOVY_FILENAMES: readonly string[] = [
+	"Jenkinsfile",
+	"build.gradle",
+	"settings.gradle",
+];
+
 /**
  * Terragrunt's unit/root entrypoint filenames, lowercase. Single source of truth
  * for every subsystem that has to agree on what counts as a terragrunt file —
@@ -265,13 +276,10 @@ export const SPECIAL_FILENAMES: Array<{ pattern: RegExp; kind: FileKind }> = [
 		pattern: new RegExp(`^${name.replaceAll(".", "\\.")}$`, "i"),
 		kind: "terragrunt" as FileKind,
 	})),
-	// Groovy files that are named, not suffixed (#5235): the Jenkins pipeline
-	// entrypoint and the Gradle build scripts. Exact basenames: `build.gradle.kts`
-	// is Kotlin (`.kts`) and other `.gradle` names are not claimed. The registry's
-	// `groovy` entry lists the same three names (language-registry.ts).
-	{ pattern: /^Jenkinsfile$/i, kind: "groovy" },
-	{ pattern: /^build\.gradle$/i, kind: "groovy" },
-	{ pattern: /^settings\.gradle$/i, kind: "groovy" },
+	...GROOVY_FILENAMES.map((name) => ({
+		pattern: new RegExp(`^${name.replaceAll(".", "\\.")}$`, "i"),
+		kind: "groovy" as FileKind,
+	})),
 ];
 
 // --- Detection Functions ---
