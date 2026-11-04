@@ -94,7 +94,7 @@ describe("a name no language server selects is not 'analysis unavailable'", () =
 		}
 	});
 
-	it("still names an operator's lsp.disabledServers denial, not 'nothing to check'", async () => {
+	it("still names a disabled primary instead of going quiet", async () => {
 		// Recurrence this guards: the not-applicable skip rides the branch that
 		// also reports a disabled primary (#4403). A skipReason set beside the
 		// disabled cause would silence the denial's own notice.
