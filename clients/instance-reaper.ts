@@ -93,6 +93,7 @@ import {
 	readInstanceRegistry,
 } from "./instance-registry.js";
 import { logLatency } from "./latency-logger.js";
+import { realIsPidAlive } from "./pid-liveness.js";
 import {
 	isInPidNamespace,
 	type OwnerTag,
@@ -352,23 +353,10 @@ export function decideOrphanReaping(
 
 // --- Impure liveness / identity / kill helpers ---
 
-/** `process.kill(pid, 0)` liveness check: ESRCH ⇒ dead, anything else
- *  (EPERM, or no error thrown at all) ⇒ conservatively alive. Exported so
- *  other registry consumers (clients/lsp-budget.ts, #449 slice 2) reuse this
- *  exact liveness check rather than inventing a second one. */
-export function realIsPidAlive(pid: number): boolean {
-	if (!Number.isFinite(pid) || pid <= 0) return false;
-	try {
-		process.kill(pid, 0);
-		return true; // no throw — process exists and we can signal it
-	} catch (err) {
-		const code = (err as NodeJS.ErrnoException)?.code;
-		if (code === "ESRCH") return false; // definitively dead
-		// EPERM (exists, no permission) or any other/unknown errno: ambiguous —
-		// never treat as dead.
-		return true;
-	}
-}
+// The liveness check lives in the `pid-liveness.ts` leaf (importing it from
+// here would make `bounded-pid-file-lock.ts`, which this module imports, cycle
+// back); re-exported so the registry consumers keep their one import path.
+export { realIsPidAlive };
 
 const STAGE_PID_PATTERN = /\.stage-(\d+)-/;
 

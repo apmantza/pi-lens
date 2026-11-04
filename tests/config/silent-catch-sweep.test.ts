@@ -199,10 +199,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :237, :263, :275, :654
 	"clients/bounded-pid-file-lock.ts": {
-		silent: 14,
-		identities: "0db0782e5dcad821",
+		silent: 13,
+		identities: "3875eb442e2f250f",
 		reason: PRE_RULE,
-	}, // :58, :83, :99, :115, :149, :158, :161, :195, :211, :214, :336, :347, :358, :434
+	}, // :74, :90, :106, :140, :149, :152, :186, :202, :205, :327, :338, :349, :425
 	"clients/bounded-telemetry.ts": {
 		silent: 2,
 		identities: "4830315d8c37f502",
@@ -224,10 +224,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :175
 	"clients/cache-manager.ts": {
-		silent: 6,
-		identities: "208b57147636760f",
+		silent: 5,
+		identities: "43974c850f2eb8df",
 		reason: PRE_RULE,
-	}, // :299, :345, :362, :386, :400, :623
+	}, // :302, :348, :365, :389, :403
 	"clients/cache-observability.ts": {
 		silent: 10,
 		identities: "1386f1967c2c9482",
@@ -615,10 +615,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :312, :318, :345
 	"clients/generation-lock.ts": {
-		silent: 10,
-		identities: "d0111a1585665525",
+		silent: 9,
+		identities: "24fe296ec8e2bd8a",
 		reason: PRE_RULE,
-	}, // :47, :57, :73, :117, :152, :192, :215, :243, :282, :310
+	}, // :48, :64, :108, :143, :183, :206, :234, :273, :301
 	"clients/git-guard.ts": {
 		silent: 3,
 		identities: "019c17dcf7d22fe6",
@@ -665,20 +665,20 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :63, :176
 	"clients/installer/index.ts": {
-		silent: 56,
-		identities: "c9c8202f747f0522",
+		silent: 55,
+		identities: "4304fdab05acef34",
 		reason: PRE_RULE,
-	}, // :171, :208, :213, :223, :234, :247, :304, :2271, :2600, :2684, :2819, :2831, :2857, :3197, :3238, :3273, :3285, :3407, :3430, :3452, :3622, :3724, :3792, :3826, :3966, :3974, :4642, :4695, :4886, :4926, :5410
+	}, // :200, :205, :215, :226, :239, :296, :2263, :2592, :2676, :2811, :2823, :2849, :3189, :3230, :3265, :3277, :3399, :3422, :3444, :3614, :3716, :3784, :3818, :3958, :3966, :4634, :4687, :4878, :4918, :5402, :5437, :5590, :5607, :5633, :5664, :5667, :5673, :5689, :5732, :5735, :5820, :5907, :6008, :6015, :6207, :6230, :6288, :6298, :6302, :6382, :6418, :6455, :6573, :6732, :6802
 	"clients/installer/managed-tool-refresh.ts": {
 		silent: 4,
 		identities: "dbbc0961e686ccc4",
 		reason: PRE_RULE,
 	}, // :226, :235, :261, :468
 	"clients/instance-reaper.ts": {
-		silent: 18,
-		identities: "89697257f4ce69e2",
+		silent: 17,
+		identities: "8afb7aecd04a7f65",
 		reason: PRE_RULE,
-	}, // :364, :647, :653, :656, :679, :1367, :1374, :1494, :1567, :1626, :1631, :1655, :1671, :1775, :1798, :1819, :1822, :1852
+	}, // :635, :641, :644, :667, :1355, :1362, :1482, :1555, :1614, :1619, :1643, :1659, :1763, :1786, :1807, :1810, :1840
 	"clients/instance-registry-lock.ts": {
 		silent: 3,
 		identities: "adf0229e77f6e200",
