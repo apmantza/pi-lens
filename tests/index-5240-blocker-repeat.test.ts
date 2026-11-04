@@ -230,6 +230,43 @@ describe.each([
 			},
 			LONG_SESSION_TIMEOUT_MS,
 		);
+
+		it(
+			"keeps repeating the unmarked blocker after the other one is marked",
+			async () => {
+				// RECURRENCE GUARDED: #5240. A mark changes the surviving set on a
+				// read-only turn; a turn end that stages nothing for a changed set
+				// would end the repeat of the blocker the model has not dismissed.
+				const { handle } = await openCell(`partial-${tag}`, flags, (proj) => [
+					step(
+						writeTarget(path.join(proj, "src", "target.ts"), MARKED_FILE),
+						"writing",
+					),
+					endTurn("turn done"),
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					step(activateMarkTool()),
+					step(markFalsePositive(path.join(proj, "src", "target.ts"))),
+					endTurn("marked"),
+					...listen(),
+					...listen(),
+				]);
+				await run(handle, 5);
+				const bad = `${SECTION}${path.join("src", "bad.ts")}`;
+				const target = `${SECTION}${path.join("src", "target.ts")}`;
+				const later = repeats(handle).filter((request) =>
+					/p4|p5/.test(openedBy(request)),
+				);
+				// p4 and p5 follow the mark: bad.ts is still named, target.ts is not.
+				expect(later).toHaveLength(2);
+				for (const request of later) {
+					const text = injections(request).join("\n");
+					expect(text).toContain(bad);
+					expect(text).not.toContain(target);
+				}
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
 	},
 );
 

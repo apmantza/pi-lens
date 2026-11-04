@@ -1365,9 +1365,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// the ordinary freshness gate and delivery cache can run. Max-cycle cleanup
 	// below intentionally remains a terminal reset; its pending work stays in
 	// the bounded handoff store for the next eligible turn.
-	// #5240: a read-only turn that falls through only because this session holds
-	// a blocker may stage a repeat, but never composes a first delivery.
-	let blockerOnlyFallthrough = false;
 	if (files.length === 0 && !runtime.hasCascadeRuns() && !isSecondarySession) {
 		// #4698: the one action this turn may still have taken is a disposition
 		// mark, and the policy pass that reconciles the commit-gate latch with it
@@ -1430,8 +1427,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					(sessionId ?? runtime.telemetrySessionId))
 		)
 			return;
-		blockerOnlyFallthrough =
-			pendingRunnerFindingsSize() === 0 && !runtime.hasResolvedBlockerFiles();
 	}
 
 	// Cancel any pending idle reset since we're actively working. #1618: also
@@ -6539,14 +6534,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			!(waiting && waiting.consumed !== true && waiting.repeat !== true)
 				? blockerRepeatContent(capTurnEndMessage(blockerParts.join("\n\n")))
 				: undefined;
-		// A turn that fell through only for a blocker may repeat it, never deliver
-		// a changed set first: the delivery slot holds one message per project
-		// and a read-only turn must not take another session's place in it
-		// (#4943). It ends here, as it did before the fall-through.
-		if (blockerOnlyFallthrough && !duplicate) {
-			settleHolds(true);
-			return;
-		}
 		if (duplicate && repeatContent === undefined) {
 			dbg(
 				"turn_end: duplicate findings detected (same session), suppressing re-prompt",
