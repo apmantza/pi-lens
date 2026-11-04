@@ -114,7 +114,15 @@ function addressedElsewhere(
 	sessionId: string | undefined,
 	address: string | undefined = sessionId,
 ): string | undefined {
-	const addressee = stagedAddressee(data, sessionId, address);
+	if (sessionId === undefined) return undefined;
+	const addressee =
+		data.deliverTo !== undefined
+			? data.deliverTo === address
+				? undefined
+				: data.deliverTo
+			: data.sessionId !== undefined && data.sessionId !== sessionId
+				? data.sessionId
+				: undefined;
 	if (addressee === undefined) return undefined;
 	// Once per addressee, not per request: every request of the other session
 	// skips the same message until its owner reads it.
@@ -125,26 +133,6 @@ function addressedElsewhere(
 			"a staged turn-end message is addressed to another session; it waits for that session's next request",
 	});
 	return addressee;
-}
-
-/**
- * The comparison `addressedElsewhere` records: who a staged message is for
- * when it is not the reader, with no record. #5240: the composer asks it
- * before it stages a repeat over a message another session has yet to read.
- */
-export function stagedAddressee(
-	data: Partial<TurnEndFindingsCache>,
-	sessionId: string | undefined,
-	address: string | undefined = sessionId,
-): string | undefined {
-	if (sessionId === undefined) return undefined;
-	return data.deliverTo !== undefined
-		? data.deliverTo === address
-			? undefined
-			: data.deliverTo
-		: data.sessionId !== undefined && data.sessionId !== sessionId
-			? data.sessionId
-			: undefined;
 }
 
 /**
@@ -199,9 +187,13 @@ export function consumeTurnEndFindings(
 	runtime?: RuntimeCoordinator,
 	sessionId?: string,
 	address?: string,
-	// #5240: a repeat record waits for a request that opens a prompt (pi's
-	// context hook says which); every other reader takes it as any message.
-	atPromptTail = true,
+	// #5240: a repeat record waits for a request that opens a prompt, and is
+	// dropped once no blocker is live; every other reader takes it as any
+	// message. pi's context hook says which.
+	repeat: { atPromptTail: boolean; blockersLive: boolean } = {
+		atPromptTail: true,
+		blockersLive: true,
+	},
 ): ContextResult | undefined {
 	const findings = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
 		"turn-end-findings",
@@ -210,11 +202,13 @@ export function consumeTurnEndFindings(
 	if (!findings?.data?.content || findings.data.consumed === true) return;
 	if (addressedElsewhere(findings.data, sessionId, address) !== undefined)
 		return;
-	if (findings.data.repeat === true && !atPromptTail) return;
+	if (findings.data.repeat === true && !repeat.atPromptTail) return;
 	const validation = validateAdvisoryProvenance(findings.data, cwd, runtime);
 	logProvenanceDecision(validation, findings.data.provenance, "turn-end", cwd);
 	settleStagedTurnEnd(cacheManager, cwd, findings.data);
 	if (validation.allFilesDeleted) return;
+	// Marked, fixed or retired since it was staged: nothing is left to repeat.
+	if (findings.data.repeat === true && !repeat.blockersLive) return;
 	return {
 		messages: [
 			turnEndMessage(
@@ -253,26 +247,6 @@ function settleStagedTurnEnd(
 	} else {
 		cacheManager.clearCache("turn-end-findings", cwd);
 	}
-}
-
-/**
- * #5240: a repeat staged for the next prompt is void once a turn end finds no
- * blocker left, so it is retired the way a delivery would retire it. Any other
- * record is untouched.
- */
-export function retireStagedBlockerRepeat(
-	cacheManager: CacheManager,
-	cwd: string,
-	deliverTo: string,
-): void {
-	const staged = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
-		"turn-end-findings",
-		cwd,
-	);
-	if (staged?.data?.repeat !== true || staged.data.consumed === true) return;
-	// Another session's staged repeat is that session's to take or retire.
-	if (staged.data.deliverTo !== deliverTo) return;
-	settleStagedTurnEnd(cacheManager, cwd, staged.data);
 }
 
 /** Read test findings without consuming them; used by acknowledged IPC delivery. */

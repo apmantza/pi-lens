@@ -4934,14 +4934,20 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// #5240: a repeat of blockers the model was already told about rides
 			// only the request that opens a prompt, pi's first request of the
 			// turn; the mid-run requests of one prompt keep #4921's one delivery.
+			const lastMessage = existingMessages[existingMessages.length - 1];
 			const consumedTurnEnd = consumeTurnEndFindings(
 				cacheManager,
 				cwd,
 				runtime,
 				readerSessionId,
 				undefined,
-				existingMessages.length > 0 &&
-					isPlainUserPrompt(existingMessages[existingMessages.length - 1]),
+				{
+					atPromptTail:
+						lastMessage !== undefined && isPlainUserPrompt(lastMessage),
+					// The latch is recomputed from the post-policy survivors at each
+					// turn end, so a marked or fixed blocker clears it.
+					blockersLive: runtime.gitGuardHasBlockers,
+				},
 			);
 			// #5240 under retain: a retained entry that already carries the
 			// repeat's blockers keeps showing them, so the repeat adds nothing and
@@ -5020,7 +5026,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// `base` ends with that same message too: a retained span after it is
 			// an "after" entry, which only a non-prompt last message gets, so the
 			// prompt path below never meets one.
-			const lastMessage = existingMessages[existingMessages.length - 1];
 			const lastPosition = base.length - 1;
 			// #4743: a retained injection says in its own bytes that it is a
 			// snapshot, so the label is part of what every later request repeats.

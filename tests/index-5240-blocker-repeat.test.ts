@@ -18,6 +18,7 @@
  */
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { MAX_RETAINED_ENTRIES } from "../clients/context-injection-ledger.js";
 import {
 	AUTOMATION_FRAMING,
 	BLOCKER_REPEAT_HEADING,
@@ -237,26 +238,32 @@ describe("#5240: retained injections (--lens-retain-injections)", () => {
 		...UNGUARDED_FLAGS,
 		["lens-retain-injections", true],
 	];
+	/** Past MAX_RETAINED_ENTRIES (64): one retained repeat per prompt would hit it. */
+	const LISTENING_PROMPTS = MAX_RETAINED_ENTRIES + 6;
 
 	it(
-		"repeats nothing while the blocker is retained and re-injects when the set changes",
+		"repeats nothing while the blocker is retained, spends none of the cap, and re-injects when the set changes",
 		async () => {
 			// RECURRENCE GUARDED: #5240's retain clause. A per-prompt repeat would be
-			// retained as a new entry each time and reach the 64-entry cap.
+			// retained as a new entry each time, reach the 64-entry cap, and record
+			// `context-injection-retain-declined`.
 			const { handle } = await openCell("retain", RETAIN, (proj) => [
 				...write(proj, "bad.ts", BLOCKING_FILE),
-				...listen(),
-				...listen(),
-				...listen(),
+				...Array.from({ length: LISTENING_PROMPTS }, listen).flat(),
 				...write(proj, "second.ts", BLOCKING_FILE),
 				...listen(),
 			]);
-			await run(handle, 6);
+			await run(handle, LISTENING_PROMPTS + 3);
 			expect(repeats(handle)).toHaveLength(0);
 			const bad = `${SECTION}${path.join("src", "bad.ts")}`;
 			const second = `${SECTION}${path.join("src", "second.ts")}`;
+			const rows = await handle.latencyRows();
+			expect(rows.skipped).toBe(0);
+			expect(JSON.stringify(rows.rows)).not.toContain(
+				"context-injection-retain-declined",
+			);
 			// Retained, the original delivery is re-sent unchanged, once per request.
-			const request = handle.requests[3] as PiProviderRequest;
+			const request = handle.requests[LISTENING_PROMPTS] as PiProviderRequest;
 			expect(JSON.stringify(request).split(bad).length - 1).toBe(1);
 			// A new blocker is a changed set: delivered, and carried by the last
 			// request alongside the first.

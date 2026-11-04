@@ -34,11 +34,7 @@ import {
 	type BlockerPartition,
 	type TurnEndFindingsCache,
 } from "./git-guard.js";
-import {
-	blockerRepeatContent,
-	retireStagedBlockerRepeat,
-	stagedAddressee,
-} from "./runtime-context.js";
+import { blockerRepeatContent } from "./runtime-context.js";
 import { cascadeSettleWaitMs } from "./cascade-budget.js";
 import { logCascade } from "./cascade-logger.js";
 import { isUnderDir, normalizeMapKey } from "./path-utils.js";
@@ -1354,21 +1350,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// the ordinary freshness gate and delivery cache can run. Max-cycle cleanup
 	// below intentionally remains a terminal reset; its pending work stays in
 	// the bounded handoff store for the next eligible turn.
-	// #5240: the delivery slot holds one message per project. A read-only turn
-	// does not compose over a message another session has yet to read (#4943). A
-	// duplicate turn cannot meet one: the message it repeats is the slot's last.
-	const slotHoldsOthersMessage = (): boolean => {
-		const staged = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
-			"turn-end-findings",
-			cwd,
-		)?.data;
-		return (
-			!!staged?.content &&
-			staged.consumed !== true &&
-			stagedAddressee(staged, sessionId ?? runtime.telemetrySessionId) !==
-				undefined
-		);
-	};
+	// #5240: a read-only turn that falls through only because this session holds
+	// a blocker may stage a repeat, but never composes a first delivery.
+	let blockerOnlyFallthrough = false;
 	if (files.length === 0 && !runtime.hasCascadeRuns() && !isSecondarySession) {
 		// #4698: the one action this turn may still have taken is a disposition
 		// mark, and the policy pass that reconciles the commit-gate latch with it
@@ -1423,10 +1407,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		if (
 			pendingRunnerFindingsSize() === 0 &&
 			!runtime.hasResolvedBlockerFiles() &&
-			(runtime.getInlineBlockersSnapshot({ sessionId }).length === 0 ||
-				slotHoldsOthersMessage())
+			runtime.getInlineBlockersSnapshot({ sessionId }).length === 0
 		)
 			return;
+		blockerOnlyFallthrough =
+			pendingRunnerFindingsSize() === 0 && !runtime.hasResolvedBlockerFiles();
 	}
 
 	// Cancel any pending idle reset since we're actively working. #1618: also
@@ -6528,6 +6513,14 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			duplicate && blockerParts.length > 0 && deps.deliveryAddress === undefined
 				? blockerRepeatContent(capTurnEndMessage(blockerParts.join("\n\n")))
 				: undefined;
+		// A turn that fell through only for a blocker may repeat it, never deliver
+		// a changed set first: the delivery slot holds one message per project
+		// and a read-only turn must not take another session's place in it
+		// (#4943). It ends here, as it did before the fall-through.
+		if (blockerOnlyFallthrough && !duplicate) {
+			settleHolds(true);
+			return;
+		}
 		if (duplicate && repeatContent === undefined) {
 			dbg(
 				"turn_end: duplicate findings detected (same session), suppressing re-prompt",
@@ -6794,12 +6787,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	}
 	if (blockerParts.length === 0) {
 		clearOwnedTurnState();
-		// #5240: a repeat staged for the next prompt is void once nothing blocks.
-		retireStagedBlockerRepeat(
-			cacheManager,
-			cwd,
-			deps.deliveryAddress ?? deliverySessionId,
-		);
+
 		// `staleSecretParts` counts here too (#1622 review M2): clearing the
 		// findings record while a stale secret is still unverified would drop the
 		// only surviving trace of it.

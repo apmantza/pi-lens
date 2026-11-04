@@ -75,7 +75,6 @@ import { getProjectDataDir } from "../../clients/file-utils.js";
 import {
 	BLOCKER_REPEAT_HEADING,
 	consumeTurnEndFindings,
-	retireStagedBlockerRepeat,
 } from "../../clients/runtime-context.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { beginScope, retireScope } from "../../clients/session-scope.js";
@@ -2424,14 +2423,14 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 			...(deliveryAddress === undefined ? {} : { deliveryAddress }),
 		});
 	}
-	const take = (rig: Rig, atPromptTail: boolean) =>
+	const take = (rig: Rig, atPromptTail: boolean, blockersLive = true) =>
 		consumeTurnEndFindings(
 			rig.cacheManager,
 			rig.cwd,
 			rig.runtime,
 			undefined,
 			undefined,
-			atPromptTail,
+			{ atPromptTail, blockersLive },
 		)?.messages[0]?.content;
 
 	for (const lensGuard of [false, true]) {
@@ -2509,37 +2508,21 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		}
 	});
 
-	it("retires a staged repeat at the turn end that finds its blocker gone", async () => {
-		// RECURRENCE GUARDED: #5240. A blocker whose file is deleted leaves no
-		// part and no resolved line, so no message overwrites the staged repeat;
-		// only the turn end's own retire stops it naming the deleted file.
-		const rig = makeRig("pi-lens-5240-gone-");
-		try {
-			const file = fillerBlocker(rig, 300);
-			await endTurn(rig);
-			await readOnlyTurn(rig);
-			fs.rmSync(file);
-			await readOnlyTurn(rig);
-			expect(take(rig, true)).toBeUndefined();
-		} finally {
-			rig.cleanup();
-		}
-	});
-
-	it("retires a staged repeat when no blocker is left, and leaves another session's alone", async () => {
-		// RECURRENCE GUARDED: #5240. A mark can silence the blocker with no resolved
-		// line to overwrite the staged repeat; left staged, it names a dismissed
-		// blocker at the next prompt.
-		const rig = makeRig("pi-lens-5240-retire-");
+	it("drops a staged repeat once no blocker is live, and keeps it while one is", async () => {
+		// RECURRENCE GUARDED: #5240. A mark silences the blocker with no resolved
+		// line to overwrite the staged repeat; delivered, it names a dismissed
+		// blocker at the next prompt. The latch is recomputed from the post-policy
+		// survivors at every turn end.
+		const rig = makeRig("pi-lens-5240-live-");
 		try {
 			fillerBlocker(rig, 300);
 			await endTurn(rig);
 			await readOnlyTurn(rig);
-			retireStagedBlockerRepeat(rig.cacheManager, rig.cwd, "another-session");
-			expect(take(rig, true)).toContain(BLOCKER_REPEAT_HEADING);
+			expect(take(rig, true, false)).toBeUndefined();
+			// Dropped, not held: the next prompt finds nothing staged.
+			expect(take(rig, true, true)).toBeUndefined();
 			await readOnlyTurn(rig);
-			retireStagedBlockerRepeat(rig.cacheManager, rig.cwd, SESSION);
-			expect(take(rig, true)).toBeUndefined();
+			expect(take(rig, true, true)).toContain(BLOCKER_REPEAT_HEADING);
 		} finally {
 			rig.cleanup();
 		}
