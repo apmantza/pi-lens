@@ -6,8 +6,13 @@ import { afterEach, expect, it } from "vitest";
 import { extractSection, parseSections } from "../../scripts/lib/changelog.mjs";
 import * as rollup from "../../scripts/rollup-changelog.mjs";
 const {
+	getNewEntries,
 	parseChangelog,
 }: {
+	getNewEntries(
+		entries: Array<{ patch: number; content: string }>,
+		lastVersion: string,
+	): Array<{ patch: number; content: string }>;
 	parseChangelog(file: string): Array<{ patch: number; content: string }>;
 } = await import(
 	new URL(
@@ -59,12 +64,16 @@ it("emits five release summaries readable by pi across a version jump", () => {
 	);
 	const entries = parseChangelog(file);
 	expect(entries.map((entry) => entry.patch)).toEqual([7, 6, 5, 4, 3]);
-	expect(
-		entries.filter((entry) => entry.patch > 5).map((entry) => entry.patch),
-	).toEqual([7, 6]);
+	// pi's own filter for the two-release jump from 1.0.5 keeps the 1.0.7 and 1.0.6 sections.
+	const newEntries = getNewEntries(entries, "1.0.5");
+	expect(newEntries.map((entry) => entry.patch)).toEqual([7, 6]);
 	// #5264: pi prints each section whole, so it reads the heading, one count line and the link.
 	expect(entries[0].content).toBe(
 		"## [1.0.7] - 2026-01-01\n\n1 feature, 1 fix.\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v1.0.7",
+	);
+	// pi's interactive-mode joins the new entries' contents with a blank line.
+	expect(newEntries.map((entry) => entry.content).join("\n\n")).toBe(
+		"## [1.0.7] - 2026-01-01\n\n1 feature, 1 fix.\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v1.0.7\n\n## [1.0.6] - 2026-01-01\n\n1 feature, 1 fix.\n\nFull notes: https://github.com/apmantza/pi-lens/releases/tag/v1.0.6",
 	);
 });
 it("ignores pending fragments and checks released-file drift", () => {
