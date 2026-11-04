@@ -88,6 +88,17 @@ function makeRepo(headEdits: (dir: string) => void): string {
 	return dir;
 }
 
+// Moves master one commit past the branch point, as a later merge does, and
+// repoints origin/master at it. The feature branch keeps its own base.
+function advanceMaster(dir: string, edits: (dir: string) => void): void {
+	git(dir, ["checkout", "-q", "master"]);
+	edits(dir);
+	git(dir, ["add", "-A"]);
+	git(dir, ["commit", "-qm", "master"]);
+	git(dir, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
+	git(dir, ["checkout", "-q", "feature"]);
+}
+
 // Changed: a prose edit, an added prose file, a deleted prose file, and changes
 // the filter must drop (a non-Markdown doc, code, and Markdown outside the list).
 function changedRepo(): string {
@@ -129,7 +140,7 @@ function linkScripts(dir: string): void {
 // Runs the workflow's own `Lint prose` run block under the runner's shell
 // flags, with a recording `vale` stub in the working directory: the stub is
 // the one process boundary, since the real binary is downloaded in CI.
-function runProseStep(dir: string) {
+function runProseStep(dir: string, event = "pull_request") {
 	fs.writeFileSync(
 		path.join(dir, "vale"),
 		"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > vale-args.txt\n",
@@ -141,7 +152,7 @@ function runProseStep(dir: string) {
 		{
 			cwd: dir,
 			encoding: "utf8",
-			env: envFor(dir, { GITHUB_EVENT_NAME: "pull_request" }),
+			env: envFor(dir, { GITHUB_EVENT_NAME: event }),
 		},
 	);
 	const argsFile = path.join(dir, "vale-args.txt");
@@ -219,6 +230,19 @@ describe("the prose selection on a pull request (#5249)", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toBe(WHOLE_OUTPUT);
 	});
+
+	// Recurrence: a diff against master's tip (`origin/master..HEAD`) selects the
+	// prose master changed after this branch point, which the pull request never
+	// touched; the merge-base diff selects only the pull request's own files.
+	it("diffs against the merge base, not master's tip, after master moves on", () => {
+		const dir = changedRepo();
+		advanceMaster(dir, (edit) =>
+			write(edit, "AGENTS.md", "# Agents\n\nMaster edit.\n"),
+		);
+		const result = selection(dir, "pull_request");
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe("docs/guide.md\ndocs/new.md\n");
+	});
 });
 
 describe("the Lint prose step on a pull request (#5249)", () => {
@@ -251,5 +275,16 @@ describe("the Lint prose step on a pull request (#5249)", () => {
 		const step = runProseStep(dir);
 		expect(step.status).not.toBe(0);
 		expect(step.vale).toBeNull();
+	});
+
+	// Recurrence: a step that hard-codes the event (`--event pull_request`) diffs
+	// on a push to master too, where the range is empty, so Vale skipped the whole
+	// tree. The step reads the event from $GITHUB_EVENT_NAME: a push lints the list.
+	it("hands Vale the whole list on a push run", () => {
+		const dir = changedRepo();
+		linkScripts(dir);
+		const step = runProseStep(dir, "push");
+		expect(step.status).toBe(0);
+		expect(step.vale).toEqual(WHOLE_LIST);
 	});
 });
