@@ -353,8 +353,7 @@ function whyNotKnownGood(
 	if (!argv || kindOf(argv) !== "array") return `${value} with a computed argv`;
 	// Every element, not the first: a carrier (`-exec`, `-c`, `-Command`) or a
 	// computed operand anywhere in argv can run or fetch something.
-	for (const element of kids(argv)) {
-		if (!element.isNamed() || kindOf(element) === "comment") continue;
+	for (const element of nonComment(kids(argv))) {
 		const word = literalValue(element, kids);
 		if (word === undefined) return `${value} with a computed argument`;
 		if (!admitted.includes(word)) return `${value} with the argument ${word}`;
@@ -382,10 +381,7 @@ function scanFile(
 		kidsOf.set(id, siblings);
 	}
 	const kids: Kids = (node) => kidsOf.get(nodeId(node)) ?? [];
-	const named = (node: SgNode): SgNode[] =>
-		kids(node).filter(
-			(child) => child.isNamed() && kindOf(child) !== "comment",
-		);
+	const named = (node: SgNode): SgNode[] => nonComment(kids(node));
 	const lineOf = (node: SgNode): number => node.range().start.line + 1;
 	const cooked = (node: SgNode): string => cookedIdentifier(node.text());
 
