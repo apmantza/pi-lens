@@ -55,6 +55,7 @@ import { resetDispatchBaselines } from "../../../clients/dispatch/integration.js
 import { getDiagnosticTracker } from "../../../clients/diagnostic-tracker.js";
 import {
 	clearWidgetState,
+	exportWidgetState,
 	getFileDiagnosticSummaries,
 	reconcileStaleWidgetFiles,
 	recordRunner,
@@ -244,6 +245,21 @@ describe("analyzeFile", () => {
 		const result = await analyzeFile(tsFile, tmpDir);
 
 		expect(result.lsp).toMatchObject({ ran: true, status: "deferred" });
+	});
+
+	it("records an unchecked analysis with its reason, so the footer does not read it as clean", async () => {
+		// Recurrence prevented: #5258. analyze_file fed the footer a no-finding
+		// run whether or not any check of the file's kind had completed.
+		vi.mocked(dispatchForFile).mockResolvedValue({
+			...emptyResult,
+			verdict: { checked: false, reason: "no analyzer handles this file type" },
+		});
+
+		await analyzeFile(tsFile, tmpDir);
+
+		expect(exportWidgetState().files.map((f) => f.uncheckedReason)).toEqual([
+			"no analyzer handles this file type",
+		]);
 	});
 
 	it("attaches the latency report appended during this dispatch", async () => {

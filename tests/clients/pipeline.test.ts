@@ -32,6 +32,10 @@ import { loadPiLensProjectConfig } from "../../clients/project-lens-config.js";
 import type { RuffClient } from "../../clients/ruff-client.js";
 import { TestRunnerClient } from "../../clients/test-runner-client.js";
 import {
+	clearWidgetState,
+	exportWidgetState,
+} from "../../clients/widget-state.js";
+import {
 	_getDegradationLedgerStateForTests,
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -1814,6 +1818,30 @@ describe("Pipeline", () => {
 				clean: ["✓ JavaScript/TypeScript clean", true],
 				unconfirmed: ["⚠ JavaScript/TypeScript unconfirmed", false],
 				unknown: [false, false],
+			});
+		});
+
+		it("hands the footer the same verdict as the write line: an unchecked run is recorded with its reason, and a checked run retires it", async () => {
+			// Recurrence prevented: #5258. The write line said `⚠ unconfirmed`
+			// while the footer, fed the same run, still rendered `✓ clean`.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "footer.ts", "const x = 1;");
+			const reasonOf = () =>
+				exportWidgetState().files.find((f) => f.filePath === filePath)
+					?.uncheckedReason;
+
+			await verdictOf(
+				filePath,
+				cleanDispatch({ unconfirmedStatus: "no check" }),
+			);
+			const afterUnchecked = reasonOf();
+			await verdictOf(filePath, cleanDispatch());
+			const afterChecked = reasonOf();
+			clearWidgetState();
+
+			expect({ afterUnchecked, afterChecked }).toEqual({
+				afterUnchecked: "no check",
+				afterChecked: undefined,
 			});
 		});
 

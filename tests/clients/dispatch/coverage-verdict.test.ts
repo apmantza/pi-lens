@@ -75,6 +75,22 @@ describe("every producer of a dispatch result states a verdict (#5258)", () => {
 		expect(result.verdict).toEqual(unchecked(NO_ANALYZER_REASON));
 	});
 
+	it("a kindless file handed straight to the dispatcher is unchecked too (the coverage rule's own no-kind return)", async () => {
+		const file = write("notes.zzz", "plain notes\n");
+		const ctx = createDispatchContext(
+			file,
+			env.tmpDir,
+			flags(false),
+			new FactStore(),
+		);
+		const result = await dispatchForFile(
+			ctx,
+			[{ mode: "all", runnerIds: ["lsp"] }],
+			new RunnerRegistry(),
+		);
+		expect(result.verdict).toEqual(unchecked(NO_ANALYZER_REASON));
+	});
+
 	it("--no-lsp, a kind whose only primary is the language server: no runner exists (the dispatchLintWithResult groups.length === 0 return)", async () => {
 		// Groovy has `lsp` as its only runner, so --no-lsp leaves no group. This
 		// is the early return the #5238 review named: it returned before
