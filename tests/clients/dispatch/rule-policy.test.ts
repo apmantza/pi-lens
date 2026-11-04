@@ -396,4 +396,43 @@ describe("rule-policy.rulePolicyMapFromConfig", () => {
 			"no-eval": { disable: ["no-eval"], select: ["no-eval"] },
 		});
 	});
+
+	// Recurrence (#5250, round 3; CodeRabbit's outside-diff finding on this
+	// builder): the project parser trims members and drops blanks, this builder
+	// did not. A blank `select` became an allowlist that matched no rule and hid
+	// every finding for its key, and a padded `disable` never disabled its rule.
+	it("trims padded disable and select members before the matcher", () => {
+		expect(
+			rulePolicyMapFromConfig({ k: { disable: [" ra "], select: [" rb "] } }),
+		).toEqual({ k: { disable: ["ra"], select: ["rb"] } });
+		expect(
+			evaluateRulePolicy(
+				"ra",
+				rulePolicyMapFromConfig({ k: { disable: [" ra "] } }),
+			),
+		).toEqual({ dropped: true });
+	});
+
+	it("drops blank members, so a blank-only select is no allowlist", () => {
+		expect(
+			rulePolicyMapFromConfig({ k: { select: ["  ", ""] } }),
+		).toBeUndefined();
+		expect(
+			evaluateRulePolicy(
+				"rb",
+				rulePolicyMapFromConfig({ k: { select: ["  "] } }),
+			),
+		).toEqual({ dropped: false });
+	});
+
+	it("drops non-string members instead of throwing in the matcher", () => {
+		// Recurrence (#5250): a non-string member reached normalizeRuleId, which
+		// called startsWith on it and threw inside the rule filter.
+		expect(rulePolicyMapFromConfig({ k: { select: ["ra", 5] } })).toEqual({
+			k: { select: ["ra"] },
+		});
+		expect(
+			evaluateRulePolicy("rb", rulePolicyMapFromConfig({ k: { select: [5] } })),
+		).toEqual({ dropped: false });
+	});
 });

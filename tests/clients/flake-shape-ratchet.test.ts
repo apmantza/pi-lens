@@ -1405,6 +1405,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"resolves oxlint's real --print-config for lint:js and lint:js:advisory; no in-process double is faithful",
 	},
+	// #5249: the Lint prose selection diffs real fixture repos through real `git`
+	// (a shallow clone's unreadable base, git's quoted path names), and the step
+	// case runs the workflow's own run block under real `bash` and `node`; no
+	// in-process double reproduces those boundaries or the step's exit wiring.
+	"real-process-spawn:scripts/lint-prose-files.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the prose selection and the Lint prose run block are the subject; they read real git diffs of fixture repos and the step's exit status under real bash and node, which an in-process double cannot prove",
+	},
 	"real-process-spawn:scripts/lockfile-completeness.test.ts": {
 		detector: "real-process-spawn",
 		reason:

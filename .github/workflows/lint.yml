@@ -272,8 +272,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      # #5249: the Lint prose step diffs against origin/master, so the checkout
+      # needs full history. The default depth 1 cannot see the base; the step
+      # would then lint the whole list on every pull request. fetch-depth 0 also
+      # fetches every branch, origin/master included.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       # crate-ci/typos walks the checkout and exits non-zero on any finding or
@@ -296,12 +301,22 @@ jobs:
           echo "dd8519d9bdf381a3b1a30f1df7f6e589b69ec1e38a495e4bd9af8e450703dde0  vale_3.9.6_Linux_64-bit.tar.gz" | sha256sum -c -
           tar -xzf vale_3.9.6_Linux_64-bit.tar.gz vale
 
-      # Explicit path list, not a bare invocation: .vale.ini's BasedOnStyles
-      # section already scopes which paths get styles applied, but vale
-      # still needs paths on the command line to know what to walk.
+      # #5249: on a pull request, Vale reads only the Markdown the PR adds or
+      # changes under the prose paths (scripts/lint-prose-files.mjs). Every
+      # other run, and every diff the script cannot read, lints the whole list.
+      # The script's own exit status is read here: a crashed selection fails
+      # the step, it never reads as an empty list and skips Vale.
       - name: Lint prose
         if: ${{ !cancelled() }}
-        run: ./vale docs AGENTS.md CLAUDE.md README.md CONTRIBUTING.md .claude/agents .changelog
+        run: |
+          set -eu
+          files="$(node scripts/lint-prose-files.mjs --event "$GITHUB_EVENT_NAME")"
+          if [ -z "$files" ]; then
+            echo "::notice::No Markdown under the prose paths changed in this pull request; Vale skipped."
+            exit 0
+          fi
+          mapfile -t prose_files <<< "$files"
+          ./vale "${prose_files[@]}"
 
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: ${{ !cancelled() }}

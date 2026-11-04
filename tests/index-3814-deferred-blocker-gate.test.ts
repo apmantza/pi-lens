@@ -70,6 +70,7 @@ import { formatDiagnostics } from "../clients/dispatch/utils/format-utils.js";
 import { resetPendingRunnerFindings } from "../clients/dispatch/pending-runner-findings.js";
 import type { Diagnostic, RunnerResult } from "../clients/dispatch/types.js";
 import { markDisposition } from "../clients/diagnostic-dispositions.js";
+import { BLOCKER_REPEAT_HEADING } from "../clients/runtime-context.js";
 import {
 	clearLatencyLog,
 	flushLatencyLog,
@@ -528,8 +529,9 @@ describe("#3814: deferred blocking findings gate the commit", () => {
 		await settle();
 		expect((await host.gate()).block).toBe(true);
 		const delivered = await host.turnEnd();
-		// #4921: the merged set reaches the agent once; a later turn that adds
-		// nothing does not send it again, and the gate still holds it.
+		// #4921: the merged set reaches the agent once as a delivery. #5240: the
+		// next prompt names the unchanged set once more, as a repeat of the
+		// blockers alone (never a second delivery), and the gate still holds it.
 		const replay = await (async () => {
 			await host.turnStart();
 			return await host.turnEnd();
@@ -537,7 +539,10 @@ describe("#3814: deferred blocking findings gate the commit", () => {
 
 		expect(delivered).toContain("inline finding on beta");
 		expect(delivered).toContain("alpha is not a function");
-		expect(replay).toBe("");
+		expect(delivered).not.toContain(BLOCKER_REPEAT_HEADING);
+		expect(replay).toContain(BLOCKER_REPEAT_HEADING);
+		expect(replay.split("alpha is not a function")).toHaveLength(2);
+		expect(replay.split("inline finding on beta")).toHaveLength(2);
 		expect((await host.gate()).block).toBe(true);
 	});
 

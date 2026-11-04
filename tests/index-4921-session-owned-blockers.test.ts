@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getProjectDataDir } from "../clients/file-utils.js";
+import { BLOCKER_REPEAT_HEADING } from "../clients/runtime-context.js";
 import {
 	BLOCKING_FILE,
 	CLEAN_FILE,
@@ -200,9 +201,13 @@ describe("#4921: a concurrent session's turn end admits only its own inline bloc
 			);
 			// The secondary is told about its own blocker once, and only that one:
 			// its dedupe record is its own (`turn-end-findings-last`), so its
-			// unchanged second turn is not delivered again.
+			// unchanged second turn is not delivered again. #5240: the two later
+			// prompts each open with one repeat of it.
 			const theirsHeader = `Unresolved from this turn — ${path.join("src", "theirs.ts")}`;
-			expect(userTexts(secondary).split(theirsHeader)).toHaveLength(2);
+			expect(userTexts(secondary).split(theirsHeader)).toHaveLength(4);
+			expect(userTexts(secondary).split(BLOCKER_REPEAT_HEADING)).toHaveLength(
+				3,
+			);
 			expect(userTexts(secondary)).not.toContain("mine.ts");
 			expect(cacheRecord(proj, "turn-end-findings-last").sessionId).toBe(
 				secondaryId,

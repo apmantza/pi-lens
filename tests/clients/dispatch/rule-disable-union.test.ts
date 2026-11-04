@@ -10,11 +10,25 @@
  *
  * Everything below drives real config files on disk, the real resolver and
  * the real policy builder; nothing is stubbed.
+ *
+ * What stays here is what a property over verdicts cannot pin: the resolved
+ * list's exact members and order (de-duplication, lowest tier first) and the
+ * raw spellings single-tier configs already carry. The union, per-key
+ * `select`, disable-over-select and non-string-member claims are properties
+ * over generated tier stacks in `rule-policy-merge-properties.test.ts` (#5250);
+ * the notice text a bad member or value draws is pinned here, because a verdict
+ * property cannot see it.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	loadPiLensGlobalConfig,
+	resetGlobalConfigWarnCache,
+} from "../../../clients/lens-config.js";
+import { resetDegradationLedger } from "../../../clients/degradation-ledger.js";
+import { wireUserNotifier } from "../../../clients/user-notify.js";
 import { resolvePiLensConfig } from "../../../clients/config-resolve.js";
 import {
 	evaluateRulePolicy,
@@ -29,7 +43,6 @@ const setConfigPath = useConfigPath();
 let tmpDir: string;
 let globalDir: string;
 let repo: string;
-let pkg: string;
 
 function writeJson(file: string, value: unknown): void {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -54,14 +67,10 @@ function policyAt(dir: string) {
 	);
 }
 
-const dropped = (rule: string, dir: string) =>
-	evaluateRulePolicy(rule, policyAt(dir)).dropped;
-
 beforeEach(() => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-disable-union-"));
 	globalDir = path.join(tmpDir, ".pi-lens");
 	repo = path.join(tmpDir, "repo");
-	pkg = path.join(repo, "pkg");
 	fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
 	setConfigPath(path.join(globalDir, "config.json"));
 	resetProjectLensConfigCache();
@@ -73,69 +82,11 @@ afterEach(() => {
 });
 
 describe("rules.<id>.disable — union across tiers (#5232)", () => {
-	it("global + project: the project adds a rule and the global ones stay disabled", () => {
-		writeGlobal({ rules: { k: { disable: ["rule-a", "rule-b"] } } });
-		writeAt(repo, { rules: { k: { disable: ["rule-c"] } } });
-
-		expect(dropped("rule-a", repo)).toBe(true);
-		expect(dropped("rule-b", repo)).toBe(true);
-		expect(dropped("rule-c", repo)).toBe(true);
-		expect(dropped("rule-other", repo)).toBe(false);
-	});
-
-	it("root + nested: pkg/.pi-lens.json adds a rule and the root's stay disabled", () => {
-		writeAt(repo, { rules: { k: { disable: ["rule-a"] } } });
-		writeAt(pkg, { rules: { k: { disable: ["rule-c"] } } });
-
-		expect(dropped("rule-a", repo)).toBe(true);
-		expect(dropped("rule-a", pkg)).toBe(true);
-		expect(dropped("rule-c", pkg)).toBe(true);
-		// The nested file's own addition does not reach the root's files.
-		expect(dropped("rule-c", repo)).toBe(false);
-	});
-
-	it("an empty or absent nearer list lifts nothing", () => {
-		writeGlobal({ rules: { k: { disable: ["rule-a"] } } });
-		writeAt(repo, { rules: { k: { disable: [] } } });
-		writeAt(pkg, { rules: { k: {} } });
-
-		expect(dropped("rule-a", repo)).toBe(true);
-		expect(dropped("rule-a", pkg)).toBe(true);
-	});
-
-	it("a nearer tier under a different grouping key lifts nothing", () => {
-		writeGlobal({ rules: { k: { disable: ["rule-a"] } } });
-		writeAt(repo, { rules: { other: { disable: ["rule-c"] } } });
-
-		expect(dropped("rule-a", repo)).toBe(true);
-		expect(dropped("rule-c", repo)).toBe(true);
-	});
-
 	it("members are de-duplicated and keep lowest-tier-first order", () => {
 		writeGlobal({ rules: { k: { disable: ["rule-a", "rule-b"] } } });
 		writeAt(repo, { rules: { k: { disable: ["rule-b", "rule-c"] } } });
 
 		expect(policyAt(repo)?.k?.disable).toEqual(["rule-a", "rule-b", "rule-c"]);
-	});
-
-	it("select keeps its replace semantics: the nearest tier's list wins (#5232 decision)", () => {
-		writeGlobal({ rules: { k: { select: ["x"] } } });
-		expect(dropped("x", repo)).toBe(false);
-		expect(dropped("y", repo)).toBe(true);
-
-		writeAt(repo, { rules: { k: { select: ["y"] } } });
-		expect(dropped("x", repo)).toBe(true);
-		expect(dropped("y", repo)).toBe(false);
-	});
-
-	it("a non-string member is dropped by validation instead of throwing in the filter", () => {
-		// Recurrence: the opaque field passed `["rule-c", 5]` through untouched
-		// and `evaluateRulePolicy` threw `normalized.startsWith is not a function`
-		// on the first rule id compared after the number.
-		writeAt(repo, { rules: { k: { disable: ["rule-c", 5] } } });
-
-		expect(dropped("rule-c", repo)).toBe(true);
-		expect(dropped("rule-x", repo)).toBe(false);
 	});
 
 	it.each([
@@ -161,11 +112,87 @@ describe("rules.<id>.disable — union across tiers (#5232)", () => {
 		},
 	);
 
-	it("a non-array disable is dropped as before and does not disturb the other tiers", () => {
-		writeGlobal({ rules: { k: { disable: ["rule-a"] } } });
-		writeAt(repo, { rules: { k: { disable: "rule-c" } } });
+	// Recurrence (#5250): `select` stayed an opaque leaf after #5237 typed
+	// `disable`, so `select: ["ra", 5]` threw in the rule filter and drew no
+	// notice. Both fields now draw the same one, in the same place.
+	it.each(["disable", "select"] as const)(
+		"%s: a non-string member and a non-array value draw PILENS_CFG_0005, siblings survive",
+		(field) => {
+			const notices: string[] = [];
+			resetGlobalConfigWarnCache();
+			resetDegradationLedger();
+			wireUserNotifier(() => (message) => {
+				notices.push(message);
+			});
+			writeGlobal({
+				rules: { k: { [field]: ["ra", 5] }, j: { [field]: "rb" } },
+			});
 
-		expect(dropped("rule-a", repo)).toBe(true);
-		expect(dropped("rule-c", repo)).toBe(false);
+			const loaded = loadPiLensGlobalConfig(
+				path.join(globalDir, "config.json"),
+			);
+			const resolution = resolvePiLensConfig({
+				cwd: repo,
+				globalDir,
+				globalConfigPath: path.join(globalDir, "config.json"),
+				homeDir: tmpDir,
+			});
+
+			expect(loaded).toBeDefined();
+			expect(resolution.value.rules).toEqual({ k: { [field]: ["ra"] }, j: {} });
+			expect(
+				resolution.records
+					.filter((record) => record.code === "PILENS_CFG_0005")
+					.map((record) => record.key),
+			).toEqual([`/rules/k/${field}/1`, `/rules/j/${field}`]);
+			expect(
+				notices.filter((m) => m.includes("[PILENS_CFG_0005]")).length,
+			).toBeGreaterThan(0);
+		},
+	);
+
+	// Recurrence (#5250, round 3): the resolver's policy map read `select` and
+	// `disable` members as written. A blank `select` hid every rule, a padded
+	// `select` hid the rule it named, and a padded `disable` disabled nothing.
+	// Both tiers now read members the way the project parser does.
+	const memberCases = [
+		[
+			"a blank select list hides nothing",
+			{ k: { select: ["  "] } },
+			{ ra: false, rb: false },
+		],
+		[
+			"a padded select member keeps the rule it names",
+			{ k: { select: [" ra "] } },
+			{ ra: false, rb: true },
+		],
+		[
+			"a padded disable member disables the rule it names",
+			{ k: { disable: [" ra "] } },
+			{ ra: true, rb: false },
+		],
+	] as const;
+	it.each(
+		(["global", "project"] as const).flatMap((tier) =>
+			memberCases.map(
+				([name, rules, verdicts]) => [tier, name, rules, verdicts] as const,
+			),
+		),
+	)("%s tier: %s (#5250)", (tier, _name, rules, verdicts) => {
+		if (tier === "global") writeGlobal({ rules });
+		else writeAt(repo, { rules });
+		const policy = policyAt(repo);
+		expect({
+			ra: evaluateRulePolicy("ra", policy).dropped,
+			rb: evaluateRulePolicy("rb", policy).dropped,
+		}).toEqual(verdicts);
+	});
+
+	it("a blank select list in a nearer file lifts the farther file's allowlist for its key", () => {
+		writeGlobal({ rules: { k: { select: ["ra"] } } });
+		writeAt(repo, { rules: { k: { select: ["  "] } } });
+		const policy = policyAt(repo);
+		expect(evaluateRulePolicy("ra", policy)).toEqual({ dropped: false });
+		expect(evaluateRulePolicy("rb", policy)).toEqual({ dropped: false });
 	});
 });

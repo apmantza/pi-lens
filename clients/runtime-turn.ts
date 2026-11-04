@@ -34,6 +34,7 @@ import {
 	type BlockerPartition,
 	type TurnEndFindingsCache,
 } from "./git-guard.js";
+import { blockerRepeatContent } from "./runtime-context.js";
 import { cascadeSettleWaitMs } from "./cascade-budget.js";
 import { logCascade } from "./cascade-logger.js";
 import { isUnderDir, normalizeMapKey } from "./path-utils.js";
@@ -1180,6 +1181,21 @@ function suppressedByDispositionNote(suppressed: number): string {
 		: "";
 }
 
+/**
+ * The signature record of the last turn-end delivery (#4921). One reader for
+ * the dedupe and for the #5240 read-only fall-through: both ask the same
+ * record, so the synchronous-read count of this file does not move.
+ */
+function readLastDelivery(
+	cacheManager: CacheManager,
+	cwd: string,
+): { signature: string; sessionId: string } | undefined {
+	return cacheManager.readCache<{ signature: string; sessionId: string }>(
+		"turn-end-findings-last",
+		cwd,
+	)?.data;
+}
+
 export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const {
 		ctxCwd,
@@ -1399,7 +1415,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// #3218 criterion 2: a retirement nobody has reported (a
 		// `lens_diagnostics` confirmation lands on exactly this turn) falls
 		// through to the composer like a carried runner finding.
-		if (pendingRunnerFindingsSize() === 0 && !runtime.hasResolvedBlockerFiles())
+		// #5240: so does a read-only turn while this session holds a blocker the
+		// agent was already told about (this session's `turn-end-findings-last`
+		// record), or the repeat would reach the next prompt only after a turn
+		// that wrote. A held blocker nothing delivered yet keeps the early
+		// return: the cost pin of #4698 (a quiet turn pays no policy pass).
+		if (
+			pendingRunnerFindingsSize() === 0 &&
+			!runtime.hasResolvedBlockerFiles() &&
+			(runtime.getInlineBlockersSnapshot({ sessionId }).length === 0 ||
+				readLastDelivery(cacheManager, cwd)?.sessionId !==
+					(sessionId ?? runtime.telemetrySessionId))
+		)
 			return;
 	}
 
@@ -6375,7 +6402,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	];
 	const findingParts = composedParts.map((part) => part.text);
 	let heldSections = 0;
-	const logTurnEndRow = (deliverySuppressed?: "duplicate"): void => {
+	const logTurnEndRow = (delivery?: "duplicate" | "repeat"): void => {
 		// #1622 review M2: a pending stale secret is NOT a clean turn. It gets its
 		// own result rather than being promoted to `blockers_found`, which would
 		// undo the demotion the freshness gate just made.
@@ -6415,10 +6442,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				widgetDemotedFindingsRetired,
 				// #4921: a turn whose content the agent already received is not
 				// re-sent; this row, the turn's only one, is where that is visible.
-				...(deliverySuppressed ? { deliverySuppressed } : {}),
+				...(delivery === "duplicate" ? { deliverySuppressed: delivery } : {}),
+				// #5240: the blockers were staged again for the next prompt, not
+				// suppressed: this row is where a repeat is visible.
+				...(delivery === "repeat" ? { blockerRepeat: true } : {}),
 			},
 		});
 	};
+	/** #5240: this turn end staged a repeat of already-reported blockers. */
+	let repeatStaged = false;
 	if (findingParts.length > 0) {
 		dbg(
 			`turn_end: ${blockerParts.length} blocker section(s), ${advisoryParts.length} advisory section(s) found, persisting for next context`,
@@ -6488,19 +6520,42 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					.join("|")
 			: "";
 		const signature = `${countDrivenFileSet}::${content}`;
-		const last = cacheManager.readCache<{
-			signature: string;
-			sessionId: string;
-		}>("turn-end-findings-last", cwd);
-		if (
-			last?.data?.signature === signature &&
-			last?.data?.sessionId === deliverySessionId &&
+		const last = readLastDelivery(cacheManager, cwd);
+		const duplicate =
+			last?.signature === signature &&
+			last?.sessionId === deliverySessionId &&
 			// #3813: a retirement is an event, not a persisting finding. The
 			// coordinator already consumed these entries, so an identical
 			// second retirement on consecutive turns (same file, count and
 			// ordinal) would be consumed and never shown (#3776 verify r3 F6).
-			resolvedBlockerFileList.length === 0
-		) {
+			resolvedBlockerFileList.length === 0;
+		// #5240: pi rebuilds each prompt's first request from its transcript,
+		// which does not hold this turn's injection, so a blocker the model was
+		// told about once vanishes from view (a nested write's STOP note never
+		// reaches the transcript at all). A duplicate turn that still holds a
+		// blocker stages a repeat of the blockers alone, which pi takes at the
+		// first request of the next prompt (`consumeTurnEndFindings`). The
+		// blocker parts are this turn's own post-policy, post-freshness
+		// survivors, so a resolved blocker has no part and stops repeating. The
+		// MCP host passes `deliveryAddress` and its Stop hook would loop on an
+		// identical repeat, so it keeps the plain suppression.
+		// A first delivery still waiting in the slot (no request took it yet) is
+		// never overwritten by a repeat of itself: the duplicate takes the plain
+		// suppression below, as before #5240. Without `--lens-guard` the waiting
+		// record then reaches the next request; under it that branch marks the
+		// record consumed, so nothing does (unchanged by #5240). Only two turn
+		// ends with no request between reach this: pi sends one after each.
+		const waiting = duplicate
+			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
+			: undefined;
+		const repeatContent =
+			duplicate &&
+			blockerParts.length > 0 &&
+			deps.deliveryAddress === undefined &&
+			!(waiting && waiting.consumed !== true && waiting.repeat !== true)
+				? blockerRepeatContent(capTurnEndMessage(blockerParts.join("\n\n")))
+				: undefined;
+		if (duplicate && repeatContent === undefined) {
 			dbg(
 				"turn_end: duplicate findings detected (same session), suppressing re-prompt",
 			);
@@ -6569,8 +6624,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// #1950 fix-round F1: this turn's content is confirmed NOT suppressed —
 		// it is about to reach the agent — so NOW settle the holds: commit the
 		// delivery-count increments the per-blocker loop above only tentatively
-		// computed, and hand back whatever the cap cut (#3813).
-		settleHolds(false);
+		// computed, and hand back whatever the cap cut (#3813). A repeat carries
+		// the blockers only, so no one-shot part reached the agent through it.
+		settleHolds(repeatContent !== undefined);
+		const stagedContent = repeatContent ?? content;
+		repeatStaged = repeatContent !== undefined;
 		const fileSeqByPath: Record<string, number> = {};
 		for (const [filePath, seq] of runtime.getFileSeqEntries()) {
 			fileSeqByPath[normalizeMapKey(path.resolve(filePath))] = seq;
@@ -6678,7 +6736,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				: [];
 			const blockers = blockerPartitionFields([...own, ...carried]);
 			writeGitGuardRecord(cacheManager, runtime, cwd, {
-				content: [content, existingGuard?.testFailureContent]
+				content: [stagedContent, existingGuard?.testFailureContent]
 					.filter((value): value is string => !!value)
 					.join("\n\n"),
 				blockerContent: blockers.blockerContent,
@@ -6698,6 +6756,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				fileSeqByPath,
 				fileContentHashes: {},
 				consumed: false,
+				...(repeatContent === undefined ? {} : { repeat: true }),
 				testFailures: existingGuard?.testFailures,
 				testFailureContent: existingGuard?.testFailureContent,
 				testFailureFiles: existingGuard?.testFailureFiles,
@@ -6720,7 +6779,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			cacheManager.writeCache(
 				"turn-end-findings",
 				{
-					content,
+					content: stagedContent,
+					...(repeatContent === undefined ? {} : { repeat: true }),
 					affectedFiles,
 					affectedFilesTruncated,
 					provenance: stampProvenance(affectedFiles, affectedFilesTruncated),
@@ -6733,29 +6793,35 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// #4750: either write above replaced the record; it, not the read,
 		// records what it left out of the other sessions' sections.
 		logCarriedDrops(cwd, dropped);
-		cacheManager.writeCache(
-			"turn-end-findings-last",
-			{
-				signature,
-				// #4921: the dedupe is per turn session (`last.sessionId` above).
+		if (repeatContent === undefined) {
+			cacheManager.writeCache(
+				"turn-end-findings-last",
+				{
+					signature,
+					// #4921: the dedupe is per turn session (`last.sessionId` above).
+					sessionId: deliverySessionId,
+					projectSeqStart: runtime.turnStartProjectSeq,
+					projectSeqEnd: runtime.projectSeq,
+				},
+				cwd,
+			);
+			emitLensTurnFindings({
+				cwd,
+				filePaths: files.map((file) => resolveRunnerPath(cwd, file)),
 				sessionId: deliverySessionId,
-				projectSeqStart: runtime.turnStartProjectSeq,
-				projectSeqEnd: runtime.projectSeq,
-			},
-			cwd,
-		);
-		emitLensTurnFindings({
-			cwd,
-			filePaths: files.map((file) => resolveRunnerPath(cwd, file)),
-			sessionId: deliverySessionId,
-			turnIndex: runtime.turnIndex,
-			blockerSections: blockerParts.length,
-			advisorySections: advisoryParts.length,
-			content,
-		});
+				turnIndex: runtime.turnIndex,
+				blockerSections: blockerParts.length,
+				advisorySections: advisoryParts.length,
+				content,
+			});
+		} else {
+			// The duplicate path always cleared the worklist; a repeat keeps that.
+			clearOwnedTurnState();
+		}
 	}
 	if (blockerParts.length === 0) {
 		clearOwnedTurnState();
+
 		// `staleSecretParts` counts here too (#1622 review M2): clearing the
 		// findings record while a stale secret is still unverified would drop the
 		// only surviving trace of it.
@@ -6790,6 +6856,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// record it describes.
 		cacheManager.clearCache("turn-end-findings-last", cwd);
 	}
-	logTurnEndRow();
+	logTurnEndRow(repeatStaged ? "repeat" : undefined);
 	resetFormatService();
 }

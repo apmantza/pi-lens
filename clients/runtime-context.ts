@@ -10,6 +10,7 @@ import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapt
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import {
+	resolveLensToolName,
 	translateGuidanceToolNames,
 	type LensToolHost,
 } from "./tool-config.js";
@@ -18,7 +19,34 @@ import {
 export const AUTOMATION_FRAMING =
 	"[pi-lens automated check — not a user request] ";
 
-type ContextResult = { messages: Array<{ role: "user"; content: string }> };
+type ContextResult = {
+	messages: Array<{ role: "user"; content: string }>;
+	/** #5240: the blocker text of a repeat message, for the retained-injection check. */
+	repeatBody?: string;
+};
+
+/**
+ * #5240: opens a turn-end message that repeats blockers the model was already
+ * told about. "Historical finding" means the workspace changed since capture,
+ * so a repeat must not borrow it.
+ */
+export const BLOCKER_REPEAT_HEADING =
+	"Still unresolved (already reported on an earlier turn, not new):";
+
+export function blockerRepeatContent(blockers: string): string {
+	return `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+}
+
+/**
+ * #5240: the last line of a delivered repeat. The staged blocker text is
+ * capped (`capTurnEndMessage`), so the repeat names the pull that lists every
+ * blocker. Added when the repeat is rendered, never staged: `repeatBody` must
+ * stay exactly the blocker text for the retained-injection check.
+ */
+function blockerRepeatPointer(): string {
+	const tool = resolveLensToolName("lens_diagnostics", "pi");
+	return `Every unresolved 🔴 blocker: ${tool} {source: "session", mode: "all", severity: "error"}`;
+}
 
 // #1432 review (S3b): a multi-file bash write can carry hundreds of changed
 // paths, one `reasons` entry apiece — logging all of them shrinks the
@@ -171,6 +199,13 @@ export function consumeTurnEndFindings(
 	runtime?: RuntimeCoordinator,
 	sessionId?: string,
 	address?: string,
+	// #5240: a repeat record waits for a request that opens a prompt, and is
+	// dropped once the reader's session holds no live blocker; every other
+	// reader takes it as any message. pi's context hook says which.
+	repeat: { atPromptTail: boolean; blockersLive: boolean } = {
+		atPromptTail: true,
+		blockersLive: true,
+	},
 ): ContextResult | undefined {
 	const findings = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
 		"turn-end-findings",
@@ -179,34 +214,53 @@ export function consumeTurnEndFindings(
 	if (!findings?.data?.content || findings.data.consumed === true) return;
 	if (addressedElsewhere(findings.data, sessionId, address) !== undefined)
 		return;
+	if (findings.data.repeat === true && !repeat.atPromptTail) return;
 	const validation = validateAdvisoryProvenance(findings.data, cwd, runtime);
 	logProvenanceDecision(validation, findings.data.provenance, "turn-end", cwd);
+	settleStagedTurnEnd(cacheManager, cwd, findings.data);
+	if (validation.allFilesDeleted) return;
+	// Marked, fixed or retired since it was staged: nothing is left to repeat.
+	if (findings.data.repeat === true && !repeat.blockersLive) return;
+	return {
+		messages: [
+			turnEndMessage(
+				findings.data.repeat === true
+					? `${findings.data.content}\n\n${blockerRepeatPointer()}`
+					: findings.data.content,
+				validation.status === "current",
+				findings.data.provenance,
+			),
+		],
+		...(findings.data.repeat === true &&
+		findings.data.content.startsWith(BLOCKER_REPEAT_HEADING)
+			? {
+					repeatBody: findings.data.content.slice(
+						BLOCKER_REPEAT_HEADING.length + 2,
+					),
+				}
+			: {}),
+	};
+}
 
-	// A blocker record is also the opt-in commit gate's durable state. Mark the
-	// context message consumed without deleting the record; clean/advisory-only
-	// records retain the historical consume-and-clear behavior.
-	if (
-		findings.data.hasBlockers === true &&
-		typeof findings.data.sessionId === "string"
-	) {
+/**
+ * A blocker record is also the opt-in commit gate's durable state. Mark the
+ * context message consumed without deleting the record; clean/advisory-only
+ * records retain the historical consume-and-clear behavior.
+ */
+function settleStagedTurnEnd(
+	cacheManager: CacheManager,
+	cwd: string,
+	data: Partial<TurnEndFindingsCache>,
+): void {
+	if (data.hasBlockers === true && typeof data.sessionId === "string") {
 		cacheManager.writeCache(
 			"turn-end-findings",
-			{ ...findings.data, consumed: true },
+			{ ...data, consumed: true },
 			cwd,
 		);
 	} else {
 		cacheManager.clearCache("turn-end-findings", cwd);
 	}
-	if (validation.allFilesDeleted) return;
-	return {
-		messages: [
-			turnEndMessage(
-				findings.data.content,
-				validation.status === "current",
-				findings.data.provenance,
-			),
-		],
-	};
 }
 
 /** Read test findings without consuming them; used by acknowledged IPC delivery. */

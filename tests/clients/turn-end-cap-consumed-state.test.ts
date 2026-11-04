@@ -72,7 +72,10 @@ import {
 	writeGitGuardRecord,
 } from "../../clients/git-guard.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
-import { consumeTurnEndFindings } from "../../clients/runtime-context.js";
+import {
+	BLOCKER_REPEAT_HEADING,
+	consumeTurnEndFindings,
+} from "../../clients/runtime-context.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { beginScope, retireScope } from "../../clients/session-scope.js";
 import {
@@ -2399,6 +2402,198 @@ describe("#4943: the composer addresses its message to its own session", () => {
 				consumeTurnEndFindings(rig.cacheManager, rig.cwd, rig.runtime, SESSION)
 					?.messages[0]?.content,
 			).toContain(RUNNER_END);
+		} finally {
+			rig.cleanup();
+		}
+	});
+});
+
+describe("#5240: a duplicate turn end stages a repeat of its live blockers", () => {
+	/** A read-only turn: no write, the blocker still held. */
+	async function readOnlyTurn(rig: Rig, deliveryAddress?: string) {
+		rig.runtime.beginTurn();
+		await handleTurnEnd({
+			...makeDeps(
+				rig.runtime,
+				rig.cacheManager,
+				rig.cwd,
+				undefined,
+				rig.lensGuard,
+			),
+			...(deliveryAddress === undefined ? {} : { deliveryAddress }),
+		});
+	}
+	const take = (rig: Rig, atPromptTail: boolean, blockersLive = true) =>
+		consumeTurnEndFindings(
+			rig.cacheManager,
+			rig.cwd,
+			rig.runtime,
+			undefined,
+			undefined,
+			{ atPromptTail, blockersLive },
+		)?.messages[0]?.content;
+
+	for (const lensGuard of [false, true]) {
+		it(`waits for a request that opens a prompt, gives it once, and stages it again next turn (--lens-guard ${lensGuard ? "on" : "off"})`, async () => {
+			// RECURRENCE GUARDED: #5240. The repeat must not ride a mid-run request
+			// (#4921's one delivery per set inside a prompt), nor be consumed by one.
+			const rig = makeRig("pi-lens-5240-stage-");
+			rig.lensGuard = lensGuard;
+			try {
+				fillerBlocker(rig, 300);
+				expect(await endTurn(rig)).toContain("filler.ts");
+				await readOnlyTurn(rig);
+				expect(take(rig, false)).toBeUndefined();
+				const repeat = take(rig, true);
+				expect(repeat).toContain(BLOCKER_REPEAT_HEADING);
+				expect(repeat).toContain("Unresolved from this turn — filler.ts");
+				// The wording of "the workspace changed" is not borrowed.
+				expect(repeat).not.toContain("Historical finding");
+				expect(take(rig, true)).toBeUndefined();
+				await readOnlyTurn(rig);
+				expect(take(rig, true)).toContain(BLOCKER_REPEAT_HEADING);
+			} finally {
+				rig.cleanup();
+			}
+		});
+	}
+
+	it("stages no repeat for a duplicate turn that holds no blocker", async () => {
+		// RECURRENCE GUARDED: #5240. A drift-demoted blocker is an advisory, not a
+		// blocker part; its identical re-serve is suppressed as before, and a
+		// repeat for it would carry the heading and nothing under it.
+		const rig = makeRig("pi-lens-5240-advisory-");
+		try {
+			const consumer = touch(
+				rig,
+				"consumer.ts",
+				'import { other } from "./dep.js";\nexport const t = other;\n',
+			);
+			const dep = path.join(rig.cwd, "dep.ts");
+			fs.writeFileSync(dep, "export const other = 1;\n");
+			rig.runtime.recordInlineBlockers(
+				consumer,
+				"🔴 L1 a real blocker",
+				rig.runtime.nextWriteIndex(),
+				["lsp"],
+			);
+			const future = new Date(Date.now() + 60_000);
+			fs.utimesSync(dep, future, future);
+			expect(await endTurn(rig)).toContain("[stale — re-run to confirm]");
+			// The same file written again: the count-driven hold keys on the file
+			// set, so an identical turn is the duplicate.
+			rig.runtime.beginTurn();
+			touch(
+				rig,
+				"consumer.ts",
+				'import { other } from "./dep.js";\nexport const t = other;\n',
+			);
+			logLatency.mockClear();
+			await handleTurnEnd(
+				makeDeps(
+					rig.runtime,
+					rig.cacheManager,
+					rig.cwd,
+					undefined,
+					rig.lensGuard,
+				),
+			);
+			const row = logLatency.mock.calls
+				.map(([entry]) => entry)
+				.find((entry) => entry.toolName === "turn_end" && entry.result);
+			expect(row?.metadata?.deliverySuppressed).toBe("duplicate");
+			expect(take(rig, true)).toBeUndefined();
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	it("drops a staged repeat once no blocker is live, and keeps it while one is", async () => {
+		// RECURRENCE GUARDED: #5240. A mark silences the blocker with no resolved
+		// line to overwrite the staged repeat; delivered, it names a dismissed
+		// blocker at the next prompt. The latch is recomputed from the post-policy
+		// survivors at every turn end.
+		const rig = makeRig("pi-lens-5240-live-");
+		try {
+			fillerBlocker(rig, 300);
+			await endTurn(rig);
+			await readOnlyTurn(rig);
+			expect(take(rig, true, false)).toBeUndefined();
+			// Dropped, not held: the next prompt finds nothing staged.
+			expect(take(rig, true, true)).toBeUndefined();
+			await readOnlyTurn(rig);
+			expect(take(rig, true, true)).toContain(BLOCKER_REPEAT_HEADING);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	for (const lensGuard of [false, true]) {
+		it(`leaves the MCP host's duplicate turn suppressed (--lens-guard ${lensGuard ? "on" : "off"})`, async () => {
+			// RECURRENCE GUARDED: #5240. The MCP Stop hook re-prompts on whatever is
+			// staged for it; an identical repeat each stop would loop the agent.
+			const rig = makeRig("pi-lens-5240-mcp-");
+			rig.lensGuard = lensGuard;
+			try {
+				fillerBlocker(rig, 300);
+				await handleTurnEnd({
+					...makeDeps(
+						rig.runtime,
+						rig.cacheManager,
+						rig.cwd,
+						undefined,
+						lensGuard,
+					),
+					deliveryAddress: "host-address",
+				});
+				const read = () =>
+					consumeTurnEndFindings(
+						rig.cacheManager,
+						rig.cwd,
+						rig.runtime,
+						"another-process",
+						"host-address",
+					)?.messages[0]?.content;
+				expect(read()).toContain("filler.ts");
+				await readOnlyTurn(rig, "host-address");
+				expect(read()).toBeUndefined();
+			} finally {
+				rig.cleanup();
+			}
+		});
+	}
+
+	it("reads a record a release before #5240 wrote as an ordinary message", () => {
+		// RECURRENCE GUARDED: #5240 adds `repeat` to the durable record. A record
+		// without it (every shape released before) must be taken by any request.
+		const rig = makeRig("pi-lens-5240-old-");
+		try {
+			const old = JSON.parse(
+				fs.readFileSync(
+					path.join(
+						import.meta.dirname,
+						"../fixtures/turn-end-findings/4.4.8-turn-end-findings.json",
+					),
+					"utf-8",
+				),
+			) as Record<string, unknown> & {
+				affectedFiles: string[];
+				blockingFiles: string[];
+				provenance?: { files: Array<{ path: string }> };
+			};
+			expect(old).not.toHaveProperty("repeat");
+			// The 4.4.8 writer stamps absolute paths; this project stands in for
+			// the one it ran in, holding the bytes the stamp captured.
+			const file = touch(rig, "a.ts");
+			old.affectedFiles = [file];
+			old.blockingFiles = [file];
+			for (const stamped of old.provenance?.files ?? []) stamped.path = file;
+			rig.cacheManager.writeCache("turn-end-findings", old, rig.cwd);
+			const taken = take(rig, false);
+			expect(taken).toContain("OLD-RECORD-BLOCKER");
+			// #5254 r1 F7: the old record's provenance is validated, not skipped:
+			// it matches the file, so the message is not labelled historical.
+			expect(taken).toContain("Address 🔴 blockers before continuing");
 		} finally {
 			rig.cleanup();
 		}

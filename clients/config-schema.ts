@@ -317,9 +317,15 @@ function rulePolicyEntryNode(): ConfigSchemaNode {
 				[DENY_KEY]: "array-union",
 				[STABILITY_TIER_KEY]: "experimental",
 			},
-			// `select` stays opaque: the project compatibility parser keeps its
-			// field-specific diagnostics, and the nearest tier's list wins.
-			select: opaque("experimental"),
+			// `select` is a typed list, so a non-string member is dropped as in
+			// `disable` (#5250); a project file notices only a non-array or an
+			// all-dropped list. It is not a denial: the nearest tier that sets a
+			// key's list replaces it (the #5232 decision).
+			select: {
+				type: "array",
+				items: { type: "string", [STABILITY_TIER_KEY]: "experimental" },
+				[STABILITY_TIER_KEY]: "experimental",
+			},
 			ignorePaths: {
 				type: "array",
 				items: {
