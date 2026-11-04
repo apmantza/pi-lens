@@ -434,24 +434,37 @@ export function rulePolicyMapFromConfig(
 	rules: Record<string, unknown> | undefined,
 ): RulePolicyMap | undefined {
 	if (!rules) return undefined;
+	// `disable` and `select` members are read as the project parser reads them
+	// (#5250): a string is trimmed, and a blank or non-string member is dropped.
+	const members = (list: unknown): string[] =>
+		Array.isArray(list)
+			? list.flatMap((member) => {
+					const trimmed = typeof member === "string" ? member.trim() : "";
+					return trimmed.length > 0 ? [trimmed] : [];
+				})
+			: [];
 	let built: RulePolicyMap | undefined;
 	for (const [key, rawEntry] of Object.entries(rules)) {
 		if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
 			continue;
 		}
 		const entry = rawEntry as {
-			disable?: string[];
-			select?: string[];
+			disable?: unknown;
+			select?: unknown;
 			ignorePaths?: string[];
 		};
-		const hasDisable = (entry.disable?.length ?? 0) > 0;
-		const hasSelect = (entry.select?.length ?? 0) > 0;
+		// A list that is blank after trimming is no list: an all-blank `select`
+		// must not become an allowlist that matches no rule and hides every one.
+		const disable = members(entry.disable);
+		const select = members(entry.select);
 		const hasIgnorePaths = (entry.ignorePaths?.length ?? 0) > 0;
-		if (!hasDisable && !hasSelect && !hasIgnorePaths) continue;
+		if (disable.length === 0 && select.length === 0 && !hasIgnorePaths) {
+			continue;
+		}
 		built ??= {};
 		built[key] = {
-			...(hasDisable ? { disable: entry.disable } : {}),
-			...(hasSelect ? { select: entry.select } : {}),
+			...(disable.length > 0 ? { disable } : {}),
+			...(select.length > 0 ? { select } : {}),
 			...(hasIgnorePaths ? { ignorePaths: entry.ignorePaths } : {}),
 		};
 	}

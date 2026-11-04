@@ -30,7 +30,10 @@ import {
 import { resetDegradationLedger } from "../../../clients/degradation-ledger.js";
 import { wireUserNotifier } from "../../../clients/user-notify.js";
 import { resolvePiLensConfig } from "../../../clients/config-resolve.js";
-import { rulePolicyMapFromResolution } from "../../../clients/dispatch/rule-policy.js";
+import {
+	evaluateRulePolicy,
+	rulePolicyMapFromResolution,
+} from "../../../clients/dispatch/rule-policy.js";
 import { resetProjectLensConfigCache } from "../../../clients/project-lens-config.js";
 import { useConfigPath } from "../../support/global-config.js";
 import { removeTempDirSync } from "../test-utils.js";
@@ -147,4 +150,49 @@ describe("rules.<id>.disable — union across tiers (#5232)", () => {
 			).toBeGreaterThan(0);
 		},
 	);
+
+	// Recurrence (#5250, round 3): the resolver's policy map read `select` and
+	// `disable` members as written. A blank `select` hid every rule, a padded
+	// `select` hid the rule it named, and a padded `disable` disabled nothing.
+	// Both tiers now read members the way the project parser does.
+	const memberCases = [
+		[
+			"a blank select list hides nothing",
+			{ k: { select: ["  "] } },
+			{ ra: false, rb: false },
+		],
+		[
+			"a padded select member keeps the rule it names",
+			{ k: { select: [" ra "] } },
+			{ ra: false, rb: true },
+		],
+		[
+			"a padded disable member disables the rule it names",
+			{ k: { disable: [" ra "] } },
+			{ ra: true, rb: false },
+		],
+	] as const;
+	it.each(
+		(["global", "project"] as const).flatMap((tier) =>
+			memberCases.map(
+				([name, rules, verdicts]) => [tier, name, rules, verdicts] as const,
+			),
+		),
+	)("%s tier: %s (#5250)", (tier, _name, rules, verdicts) => {
+		if (tier === "global") writeGlobal({ rules });
+		else writeAt(repo, { rules });
+		const policy = policyAt(repo);
+		expect({
+			ra: evaluateRulePolicy("ra", policy).dropped,
+			rb: evaluateRulePolicy("rb", policy).dropped,
+		}).toEqual(verdicts);
+	});
+
+	it("a blank select list in a nearer file lifts the farther file's allowlist for its key", () => {
+		writeGlobal({ rules: { k: { select: ["ra"] } } });
+		writeAt(repo, { rules: { k: { select: ["  "] } } });
+		const policy = policyAt(repo);
+		expect(evaluateRulePolicy("ra", policy)).toEqual({ dropped: false });
+		expect(evaluateRulePolicy("rb", policy)).toEqual({ dropped: false });
+	});
 });
