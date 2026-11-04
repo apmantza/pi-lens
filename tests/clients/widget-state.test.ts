@@ -5,6 +5,10 @@ import { pathToFileURL } from "node:url";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	IN_FLIGHT_REASON,
+	noPrimaryCheckerReason,
+} from "../../clients/dispatch/types.js";
+import {
 	__testing,
 	clearWidgetState,
 	drainRenderedDependencyDriftFilePaths,
@@ -2686,5 +2690,95 @@ describe("renderWidget compact summary (#3959)", () => {
 
 		expect(lines.length).toBeGreaterThan(1);
 		expect(lines.join("\n")).toContain("compact-widget.ts");
+	});
+});
+
+// Recurrence prevented: #5258. The footer's `✓ clean` gated only on a stored
+// final snapshot, and a final snapshot of "no findings" is also what a file no
+// check completed on leaves behind (`--no-lsp` TypeScript, a generated file),
+// so the footer claimed clean over the very write whose tool result said
+// `⚠ … unconfirmed`. The verdict reaches the record through
+// `recordDiagnostics`'s `unchecked` argument.
+describe("a file no check completed on is not clean in the footer (#5258)", () => {
+	const reason = "no primary checker is enabled for this kind";
+
+	it("withholds ✓ clean and names the reason, until a completed check retires it", () => {
+		recordDiagnostics("/repo/checked.ts", []);
+		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+
+		recordDiagnostics("/repo/open.ts", [], undefined, undefined, reason);
+		const frame = renderWidget(120, theme).join("\n");
+		expect(frame).not.toContain("✓ clean");
+		expect(frame).toContain("1 unchecked");
+		expect(frame).toContain(`open.ts: ${reason}`);
+
+		recordDiagnostics("/repo/open.ts", []);
+		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
+	it("keeps a file's findings ahead of its unchecked mark", () => {
+		recordDiagnostics(
+			"/repo/found.ts",
+			[{ severity: "error", semantic: "blocking", message: "boom", line: 1 }],
+			undefined,
+			undefined,
+			reason,
+		);
+		const frame = renderWidget(120, theme).join("\n");
+		expect(frame).toContain("1E");
+		expect(frame).not.toContain("unchecked");
+	});
+
+	it("a full scan's correlated commit keeps every unchecked reason; a confirmed scan result retires it", () => {
+		// Recurrence prevented: #5285 review F3, verify r1 N1 and r3 (CodeRabbit,
+		// Greptile). A `lens_diagnostics` full scan commits every file through
+		// `reconcileCorrelatedScanDiagnostics`, confirmed or not. Clearing every
+		// reason there turned a `--no-lsp` file's `⚠ 1 unchecked` into `✓ clean`
+		// (N1); clearing the in-flight one did the same for a file whose language
+		// server timed out in the scan (r3). F3's stale "still running" line is
+		// retired by the scan result that confirms the file.
+		for (const [file, reason] of [
+			["/repo/lib.rs", IN_FLIGHT_REASON],
+			["/repo/index.ts", noPrimaryCheckerReason(false)],
+		] as const) {
+			clearWidgetState();
+			recordDiagnostics(file, [], undefined, undefined, reason);
+			reconcileCorrelatedScanDiagnostics(file, []);
+			const kept = renderWidget(120, theme).join("\n");
+			expect(kept).toContain("1 unchecked");
+			expect(kept).toContain(`${path.basename(file)}: ${reason}`);
+			expect(kept).not.toContain("✓ clean");
+
+			// A scan an LSP server confirmed answers for the file.
+			reconcileScanDiagnostics(file, [], true);
+			const confirmed = renderWidget(120, theme).join("\n");
+			expect(confirmed).not.toContain("unchecked");
+			expect(confirmed).toContain("✓ clean");
+		}
+	});
+
+	it("marks the vertical row and the compact header, not only the wide frame", () => {
+		recordDiagnostics("/repo/open.ts", [], undefined, undefined, reason);
+		expect(renderWidget(60, theme).join("\n")).toContain("unchecked");
+		expect(renderWidget(60, theme, { compact: true }).join("\n")).toContain(
+			"1 unchecked",
+		);
+	});
+
+	it("survives a resume, and a snapshot older than the field reads as before", () => {
+		recordDiagnostics("/repo/open.ts", [], undefined, undefined, reason);
+		const saved = JSON.parse(JSON.stringify(exportWidgetState()));
+		expect(saved.files[0].uncheckedReason).toBe(reason);
+		clearWidgetState();
+		expect(importWidgetState(saved)).toBe(true);
+		expect(renderWidget(120, theme).join("\n")).toContain("1 unchecked");
+
+		// A record the previous build saved has no such key: it parses and is
+		// read as checked, the only thing it can say.
+		clearWidgetState();
+		const older = JSON.parse(JSON.stringify(saved));
+		delete older.files[0].uncheckedReason;
+		expect(importWidgetState(older)).toBe(true);
+		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
 	});
 });

@@ -179,6 +179,22 @@ export interface TestRunnerDeliveryOwner {
 	};
 }
 
+/**
+ * #5259: the generation whose batch wrote the record's `content`. A delivery
+ * is current while this equals its own generation, and superseded once a newer
+ * batch publishes. `testRunGeneration` is the launch high-water mark: the
+ * turn_end pre-run write bumps it while the content stays the older batch's,
+ * so delivery never reads it. Every publish stamps
+ * `provenance.revision.generation`; a record without provenance predates that
+ * stamp, and its `testRunGeneration` is the only generation it carries.
+ */
+function contentGeneration(
+	data: TestRunnerFindingsCache | undefined,
+): number | undefined {
+	const stamped = data?.provenance?.revision?.generation;
+	return typeof stamped === "number" ? stamped : data?.testRunGeneration;
+}
+
 function key(cwd: string, sessionId: string, ownerId?: string): string {
 	// `cwd` comes from the same host session field at turn_end and settle. Keep
 	// that canonical value unchanged so cache reads use the identical workspace
@@ -275,9 +291,37 @@ export function stageTestRunnerDelivery(args: {
 	};
 	pending.set(deliveryKey, delivery);
 	record(deliveryKey, "staged", delivery);
+	// #5259: a delivery becomes eligible the first time its host reports idle at
+	// or after the stage. pi's `isIdle()` is false from a prompt until
+	// `agent_settled`, so during a run the settle is where that happens. A result
+	// that publishes after the settle has missed it; the host is idle now, the
+	// next context build starts the next prompt, and it is eligible at once.
+	const owner = args.owner;
+	if (!owner) return;
+	const ctx = owner.getCtx();
+	try {
+		if (ctx.isIdle?.() !== true) return;
+	} catch (cause) {
+		record(deliveryKey, "delivery-failed", delivery, {
+			error: String(cause).slice(0, 500),
+			deliveryBoundary: "published-idle",
+		});
+		return;
+	}
+	deliverTestRunnerFindings({
+		ctx,
+		cacheManager: owner.cacheManager,
+		runtime: owner.runtime,
+		sessionId: args.sessionId,
+		ownerId: owner.ownerId,
+		boundary: "published-idle",
+	});
 }
 
-/** Mark the latest staged result eligible during a host-confirmed idle window. */
+/**
+ * Mark the latest staged result eligible during a host-confirmed idle window:
+ * the `agent_settled` quiet window, or a publish that finds the host idle.
+ */
 export function deliverTestRunnerFindings(args: {
 	ctx: {
 		cwd?: string;
@@ -287,14 +331,19 @@ export function deliverTestRunnerFindings(args: {
 	runtime: RuntimeCoordinator;
 	sessionId: string;
 	ownerId?: string;
+	/** Where the host reported idle (#5259): the settle, or a publish after it. */
+	boundary?: "agent_settled" | "published-idle";
 }): void {
 	const cwd = args.ctx.cwd ?? process.cwd();
 	const deliveryKey = key(cwd, args.sessionId, args.ownerId);
 	const delivery = pending.get(deliveryKey);
 	if (!delivery) return;
-	const currentGeneration = args.cacheManager.readCache<{
-		testRunGeneration?: number;
-	}>("test-runner-findings", cwd)?.data?.testRunGeneration;
+	const currentGeneration = contentGeneration(
+		args.cacheManager.readCache<TestRunnerFindingsCache>(
+			"test-runner-findings",
+			cwd,
+		)?.data,
+	);
 	if (
 		currentGeneration !== undefined &&
 		currentGeneration > delivery.generation
@@ -337,12 +386,11 @@ export function deliverTestRunnerFindings(args: {
 		return;
 	}
 	delivery.eligible = true;
-	const current = args.cacheManager.readCache<{
-		content: string;
-		testRunGeneration?: number;
-		[key: string]: unknown;
-	}>("test-runner-findings", cwd)?.data;
-	if (!current?.content || current.testRunGeneration !== delivery.generation) {
+	const current = args.cacheManager.readCache<TestRunnerFindingsCache>(
+		"test-runner-findings",
+		cwd,
+	)?.data;
+	if (!current?.content || contentGeneration(current) !== delivery.generation) {
 		pending.delete(deliveryKey);
 		return;
 	}
@@ -360,6 +408,7 @@ export function deliverTestRunnerFindings(args: {
 	);
 	record(deliveryKey, "eligible", delivery, {
 		ageMs: Math.max(0, Date.now() - delivery.createdAt),
+		deliveryBoundary: args.boundary ?? "agent_settled",
 	});
 }
 
@@ -388,7 +437,7 @@ export function deliverStagedTestRunnerFindings(args?: {
 	});
 }
 
-/** Consume the result made eligible by the settled idle boundary. */
+/** Consume the result an idle boundary made eligible. */
 export function consumeStagedTestRunnerFindings(args: {
 	cwd: string;
 	sessionId: string;
@@ -398,15 +447,10 @@ export function consumeStagedTestRunnerFindings(args: {
 }): ReturnType<typeof consumeTestFindings> {
 	const deliveryKey = key(args.cwd, args.sessionId, args.ownerId);
 	let delivery = pending.get(deliveryKey);
-	const persisted = args.cacheManager.readCache<{
-		content: string;
-		testRunGeneration?: number;
-		deliveryEligible?: {
-			sessionId: string;
-			generation: number;
-			eligibleAt: number;
-		};
-	}>("test-runner-findings", args.cwd)?.data;
+	const persisted = args.cacheManager.readCache<TestRunnerFindingsCache>(
+		"test-runner-findings",
+		args.cwd,
+	)?.data;
 	const eligible = persisted?.deliveryEligible;
 	if (!delivery && persisted?.content && eligible) {
 		const sameSession = eligible.sessionId === args.sessionId;
@@ -440,7 +484,7 @@ export function consumeStagedTestRunnerFindings(args: {
 		pending.set(deliveryKey, delivery);
 	}
 	if (!delivery?.eligible) return undefined;
-	const currentGeneration = persisted?.testRunGeneration;
+	const currentGeneration = contentGeneration(persisted);
 	if (currentGeneration !== delivery.generation) {
 		pending.delete(deliveryKey);
 		record(deliveryKey, "superseded", delivery, { currentGeneration });

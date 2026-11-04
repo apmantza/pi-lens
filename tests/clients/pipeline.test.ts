@@ -3,20 +3,25 @@
  *
  * Tests the core write pipeline (runPipeline) with mocked external dependencies.
  * Uses real temp files for file system operations and mocks for:
- * - BiomeClient, RuffClient, TestRunnerClient, MetricsClient
+ * - BiomeClient, RuffClient, TestRunnerClient
  * - FormatService, LSPService
  * - dispatchLintWithResult
  */
 
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
-import type { Diagnostic } from "../../clients/dispatch/types.js";
+import {
+	NO_ANALYZER_REASON,
+	noPrimaryCheckerReason,
+	type Diagnostic,
+} from "../../clients/dispatch/types.js";
 import { formatDiagnostics } from "../../clients/dispatch/utils/format-utils.js";
 import { getFormatService } from "../../clients/format-service.js";
-import { MetricsClient } from "../../clients/metrics-client.js";
 import { resolvePiLensFlag } from "../../clients/lens-config.js";
 import {
 	type PipelineContext,
@@ -27,6 +32,11 @@ import { renderPostAutofixNotice } from "../../clients/post-autofix-notice.js";
 import { loadPiLensProjectConfig } from "../../clients/project-lens-config.js";
 import type { RuffClient } from "../../clients/ruff-client.js";
 import { TestRunnerClient } from "../../clients/test-runner-client.js";
+import {
+	clearWidgetState,
+	exportWidgetState,
+	reconcileCorrelatedScanDiagnostics,
+} from "../../clients/widget-state.js";
 import {
 	_getDegradationLedgerStateForTests,
 	getDegradationSummary,
@@ -145,13 +155,11 @@ describe("Pipeline", () => {
 			}),
 		} as unknown as RuffClient;
 		const testRunnerClient = new TestRunnerClient();
-		const metricsClient = new MetricsClient();
 
 		return {
 			biomeClient: mockBiome,
 			ruffClient: mockRuff,
 			testRunnerClient,
-			metricsClient,
 			getFormatService: () => getFormatService("test-session", false),
 			fixedThisTurn: new Set(),
 			...overrides,
@@ -202,6 +210,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -256,6 +265,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "unused var",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -290,6 +300,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -343,6 +354,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "blocked",
 				blockerOutput: "blocked",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			};
 		});
@@ -376,6 +388,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "clean",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		}));
 
@@ -408,6 +421,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "clean",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			}));
 
@@ -460,6 +474,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: true,
 		});
 
@@ -497,6 +512,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -529,6 +545,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 		const sessionGeneration = {
@@ -575,6 +592,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -610,6 +628,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -637,6 +656,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -683,6 +703,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "",
 					blockerOutput: "",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: false,
 				};
 			});
@@ -741,6 +762,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 			const formatFile = vi.fn(async (fp: string) => {
@@ -819,6 +841,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "OPAQUE-BLOCKER\nOPAQUE-ACTIONABLE",
 				blockerOutput: "OPAQUE-BLOCKER",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -851,6 +874,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "",
 					blockerOutput: "",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: false,
 				});
 				const deps = createMockDeps({ getFormatService: () => ({}) as any });
@@ -924,6 +948,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -975,6 +1000,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1005,6 +1031,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1067,6 +1094,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1110,6 +1138,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1137,6 +1166,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1218,6 +1248,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1266,6 +1297,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1304,6 +1336,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1325,6 +1358,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1353,6 +1387,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 			await runPipeline(
@@ -1375,6 +1410,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1420,6 +1456,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1467,6 +1504,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "Type error at line 1",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -1490,6 +1528,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1527,6 +1566,7 @@ describe("Pipeline", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		};
 		const syncedStamp = () => {
@@ -1613,6 +1653,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 			vi.mocked(computeCascadeForFile).mockRejectedValueOnce(error);
@@ -1655,6 +1696,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1681,6 +1723,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
 			});
 
@@ -1704,6 +1747,8 @@ describe("Pipeline", () => {
 		const cleanDispatch = (
 			shape: {
 				unconfirmedStatus?: string;
+				/** The surface policy the dispatcher marks an unchecked run with. */
+				mark?: { inapplicable?: true; repeat?: true };
 				primaryLspChecked?: true;
 				warnings?: Diagnostic[];
 				heldBackBlockers?: Diagnostic[];
@@ -1718,11 +1763,16 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "",
 				blockerOutput: "",
+				// #5258: the three verdicts the dispatcher builds for a no-finding run:
+				// unchecked with a reason, checked by the language server, checked by
+				// some other completed runner.
+				verdict:
+					shape.unconfirmedStatus !== undefined
+						? { checked: false, reason: shape.unconfirmedStatus, ...shape.mark }
+						: shape.primaryLspChecked
+							? { checked: true, tier: "primary", runnerIds: ["lsp"] }
+							: CHECKED_BY_FIXTURE,
 				hasBlockers: false,
-				...(shape.unconfirmedStatus !== undefined && {
-					unconfirmedStatus: shape.unconfirmedStatus,
-				}),
-				...(shape.primaryLspChecked && { primaryLspChecked: true }),
 				...(shape.heldBackBlockers && {
 					heldBackBlockers: shape.heldBackBlockers,
 				}),
@@ -1760,13 +1810,124 @@ describe("Pipeline", () => {
 					)
 				).map((v) => (typeof v === "string" ? v.split(" — ")[0] : v)),
 				// Row 9: the dispatcher sets no language-server verdict without a kind.
-				unknown: (await verdictOf(unknownPath, cleanDispatch())).map((v) =>
-					typeof v === "string" ? v.includes("clean") : v,
-				),
+				unknown: (
+					await verdictOf(
+						unknownPath,
+						cleanDispatch({
+							unconfirmedStatus: NO_ANALYZER_REASON,
+							mark: { inapplicable: true },
+						}),
+					)
+				).map((v) => (typeof v === "string" ? v.includes("clean") : v)),
 			}).toEqual({
 				clean: ["✓ JavaScript/TypeScript clean", true],
 				unconfirmed: ["⚠ JavaScript/TypeScript unconfirmed", false],
 				unknown: [false, false],
+			});
+		});
+
+		// Rows of the #5258 r2 state table (kind x primary x surface), read through
+		// the widget store the footer and the sidecar render from. The record is
+		// keyed by `normalizeMapKey`, not the host path (Windows, #5285 review F1).
+		const widgetRecordOf = (filePath: string) =>
+			exportWidgetState().files.find(
+				(f) => f.filePath === normalizeMapKey(filePath),
+			);
+
+		it("hands the footer the same verdict as the write line: an unchecked run is recorded with its reason, and a checked run retires it", async () => {
+			// Recurrence prevented: #5258. The write line said `⚠ unconfirmed`
+			// while the footer, fed the same run, still rendered `✓ clean`.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "footer.ts", "const x = 1;");
+
+			await verdictOf(
+				filePath,
+				cleanDispatch({ unconfirmedStatus: "no check" }),
+			);
+			const afterUnchecked = widgetRecordOf(filePath);
+			await verdictOf(filePath, cleanDispatch());
+			const afterChecked = widgetRecordOf(filePath);
+			clearWidgetState();
+
+			// Both records exist, so an absent record can never pass as "no reason".
+			expect(afterUnchecked).toBeDefined();
+			expect(afterChecked).toBeDefined();
+			expect({
+				afterUnchecked: afterUnchecked?.uncheckedReason,
+				afterChecked: afterChecked?.uncheckedReason,
+			}).toEqual({ afterUnchecked: "no check", afterChecked: undefined });
+		});
+
+		it("a file nothing can check says so on the write line and never counts in the footer or the sidecar", async () => {
+			// Recurrence prevented: #5285 review F2. A kindless or generated file
+			// kept `⚠ 1 unchecked` for the session and across resume, because no
+			// completed check of its kind could ever retire the reason.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "notes.zzz", "x\n");
+
+			const [line] = await verdictOf(
+				filePath,
+				cleanDispatch({
+					unconfirmedStatus: NO_ANALYZER_REASON,
+					mark: { inapplicable: true },
+				}),
+			);
+			const record = widgetRecordOf(filePath);
+			clearWidgetState();
+
+			expect(line).toContain("unconfirmed");
+			expect(record).toBeDefined();
+			expect(record?.uncheckedReason).toBeUndefined();
+		});
+
+		it("a --no-lsp write stays counted after a full scan that never checked the file", async () => {
+			// Recurrence prevented: #5285 verify r1 N1. `lens_diagnostics mode=full`
+			// hands the widget every file whether or not a language server confirmed
+			// it, and the scan commit erased the write's reason: `⚠ 1 unchecked`
+			// became `✓ clean` for a file nothing had type-checked.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "index.ts", "const x = 1;");
+
+			await verdictOf(
+				filePath,
+				cleanDispatch({ unconfirmedStatus: noPrimaryCheckerReason(false) }),
+			);
+			reconcileCorrelatedScanDiagnostics(normalizeMapKey(filePath), []);
+			const record = widgetRecordOf(filePath);
+			clearWidgetState();
+
+			expect(record?.uncheckedReason).toBe(noPrimaryCheckerReason(false));
+		});
+
+		it("a slow primary's line prints once: the repeat write ends with no line, no clean verdict, and keeps the footer reason", async () => {
+			// Recurrence prevented: #5285 review F6. Every clean write of a project
+			// with a collect-later primary ended `⚠ … the primary check is still
+			// running`, and nothing retired it.
+			clearWidgetState();
+			const filePath = createTempFile(tmpDir, "slow.ts", "const x = 1;");
+			const stillRunning = "the primary check is still running";
+			const pipelineRun = async (mark: { repeat?: true }) => {
+				vi.mocked(dispatchLintWithResult).mockResolvedValue(
+					cleanDispatch({ unconfirmedStatus: stillRunning, mark }),
+				);
+				return runPipeline(createMockContext(filePath), createMockDeps());
+			};
+
+			const first = await pipelineRun({});
+			const repeat = await pipelineRun({ repeat: true });
+			const reason = widgetRecordOf(filePath)?.uncheckedReason;
+			clearWidgetState();
+
+			expect({
+				first: first.output.includes(stillRunning),
+				repeat: repeat.output,
+				repeatChecked: repeat.checkedClean,
+				reason,
+			}).toEqual({
+				first: true,
+				repeat: "",
+				repeatChecked: false,
+				reason: stillRunning,
 			});
 		});
 
@@ -1913,6 +2074,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "errors",
 				blockerOutput: "errors",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -1965,6 +2127,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "helm error",
 				blockerOutput: "helm error",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -2018,6 +2181,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "type error",
 					blockerOutput: "type error",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: true,
 				});
 
@@ -2074,6 +2238,7 @@ describe("Pipeline", () => {
 				blockerOutput:
 					"DELETED-FILE-BLOCKER-MARKER secret in removed file\nLIVE-FILE-BLOCKER-MARKER unused var\n",
 				hasBlockers: true,
+				verdict: CHECKED_BY_FIXTURE,
 			});
 
 			const result = await runPipeline(
@@ -2113,6 +2278,7 @@ describe("Pipeline", () => {
 				resolvedCount: 0,
 				output: "GHOST-BLOCKER-MARKER finding in removed file",
 				blockerOutput: "GHOST-BLOCKER-MARKER finding in removed file",
+				verdict: CHECKED_BY_FIXTURE,
 				hasBlockers: true,
 			});
 
@@ -2164,6 +2330,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: `${DEAD_BLOCKER_OUTPUT}${tail}`,
 					blockerOutput: DEAD_BLOCKER_OUTPUT,
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: true,
 				};
 			}
@@ -2250,6 +2417,7 @@ describe("Pipeline", () => {
 					resolvedCount: 0,
 					output: "\n🔴 STOP — 2 issue(s) must be fixed:\n",
 					blockerOutput: "\n🔴 STOP — 2 issue(s) must be fixed:\n",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: true,
 				});
 
@@ -2288,6 +2456,7 @@ describe("Pipeline", () => {
 				output: blockerOutput,
 				blockerOutput,
 				hasBlockers: blockers.length > 0,
+				verdict: CHECKED_BY_FIXTURE,
 			};
 		}
 
@@ -2453,6 +2622,7 @@ describe("Pipeline", () => {
 				output: blockerOutput,
 				blockerOutput,
 				hasBlockers: blockers.length > 0,
+				verdict: CHECKED_BY_FIXTURE,
 			};
 		}
 

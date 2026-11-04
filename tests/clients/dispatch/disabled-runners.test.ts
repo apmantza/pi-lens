@@ -9,6 +9,7 @@
  * and a control arm with no config proves the counter sees a run.
  */
 
+import { uncheckedReason } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -377,7 +378,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 		expect(result.hasBlockers).toBe(false);
 		expect(result.coverage).not.toBe("fallback");
 		expect(result.coverage).not.toBe("primary");
-		expect(result.unconfirmedStatus).toBeDefined();
+		expect(uncheckedReason(result)).toBeDefined();
 	});
 
 	it("names dispatch.disabledRunners when every runner of the file is denied", async () => {
@@ -405,11 +406,11 @@ describe("dispatch.disabledRunners — dispatch", () => {
 
 		expect(first.output).toContain("dispatch.disabledRunners");
 		expect(first.output).not.toContain("lsp.disabledServers");
-		expect(first.unconfirmedStatus).toContain("dispatch.disabledRunners");
-		expect(first.unconfirmedStatus).not.toContain("lsp.disabledServers");
+		expect(uncheckedReason(first)).toContain("dispatch.disabledRunners");
+		expect(uncheckedReason(first)).not.toContain("lsp.disabledServers");
 		// One note per session, then the status line alone.
 		expect(again.output).not.toContain("dispatch.disabledRunners");
-		expect(again.unconfirmedStatus).toContain("dispatch.disabledRunners");
+		expect(uncheckedReason(again)).toContain("dispatch.disabledRunners");
 	});
 
 	it("keeps the LSP's own cause when a cold lsp and a denied runner both left the file unchecked", async () => {
@@ -439,9 +440,9 @@ describe("dispatch.disabledRunners — dispatch", () => {
 		clearCoverageNoticeState();
 		const result = await dispatchForFile(ctx, fallbackGroup, registry);
 
-		expect(result.unconfirmedStatus).toContain("could not be started");
+		expect(uncheckedReason(result)).toContain("could not be started");
 		// Both surfaces name the runner's denial beside the LSP's cause.
-		expect(result.unconfirmedStatus).toContain("dispatch.disabledRunners");
+		expect(uncheckedReason(result)).toContain("dispatch.disabledRunners");
 		expect(result.output).toContain("failed to run");
 		expect(result.output).toContain("dispatch.disabledRunners");
 	});
@@ -478,8 +479,8 @@ describe("dispatch.disabledRunners — dispatch", () => {
 		expect(result.output).toContain("failed to run");
 		expect(result.output).toContain("dispatch.disabledRunners");
 		expect(result.output).not.toContain("so no runner checks these files");
-		expect(result.unconfirmedStatus).toContain("failed to run");
-		expect(result.unconfirmedStatus).toContain("dispatch.disabledRunners");
+		expect(uncheckedReason(result)).toContain("failed to run");
+		expect(uncheckedReason(result)).toContain("dispatch.disabledRunners");
 	});
 
 	// PR #5011 thread PRRT_kwDORt8rec6yH4jk: a denied runner next to a sibling
@@ -523,7 +524,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 			expect(result.output).toContain("so no runner checks these files");
 			expect(result.output).toContain("not a clean result");
 			expect(result.output).not.toContain("failed to run");
-			expect(result.unconfirmedStatus).toBe(
+			expect(uncheckedReason(result)).toBe(
 				"not checked (lsp disabled in config by dispatch.disabledRunners)",
 			);
 		},
@@ -535,12 +536,12 @@ describe("dispatch.disabledRunners — dispatch", () => {
 
 		expect(result.output).toContain("failed to run");
 		expect(result.output).toContain("dispatch.disabledRunners");
-		expect(result.unconfirmedStatus).toContain("failed to run");
+		expect(uncheckedReason(result)).toContain("failed to run");
 	});
 
 	// Recurrence: PR #5034 (the "no primary language server answered" wording)
 	// and PR #5011 (the `deniedNote` suffix and the `onlySwitchedOff` arm) each
-	// rewrote the one `unconfirmedStatus` expression; the merge kept one side
+	// rewrote the one unchecked-reason expression; the merge kept one side
 	// and the other's wording pin (`toContain`) went stale. One exact assertion
 	// per row of the expression, so a merge that drops either side reds here.
 	// Rows: (cause set | unset) x (denied | not denied) x (only switched off).
@@ -610,7 +611,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 
 		const result = await dispatchForFile(ctx, fallbackGroup, registry);
 
-		expect(result.unconfirmedStatus).toBe(row.status);
+		expect(uncheckedReason(result)).toBe(row.status);
 	});
 
 	// Recurrence: round 4 admitted three reasons and pinned two, and nothing
@@ -639,7 +640,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 
 			expect(result.output).toContain("failed to run");
 			expect(result.output).not.toContain("so no runner checks these files");
-			expect(result.unconfirmedStatus).toContain("failed to run");
+			expect(uncheckedReason(result)).toContain("failed to run");
 		},
 	);
 
@@ -678,7 +679,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 		expect(result.output).not.toContain(
 			"so no language server checks these files",
 		);
-		expect(result.unconfirmedStatus).toContain(
+		expect(uncheckedReason(result)).toContain(
 			"no primary language server answered",
 		);
 	});
@@ -716,7 +717,7 @@ describe("dispatch.disabledRunners — dispatch", () => {
 
 		expect(result.output).toContain("lsp.disabledServers");
 		expect(result.output).toContain("dispatch.disabledRunners");
-		expect(result.unconfirmedStatus).toContain("dispatch.disabledRunners");
+		expect(uncheckedReason(result)).toContain("dispatch.disabledRunners");
 	});
 
 	it("honors a denial in a nested .pi-lens.json over the workspace root", async () => {

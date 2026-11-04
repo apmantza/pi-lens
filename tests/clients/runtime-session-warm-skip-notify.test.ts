@@ -99,7 +99,6 @@ function makeDeps(
 		dbg,
 		log: () => {},
 		runtime,
-		metricsClient: { reset: () => {} },
 		cacheManager: { writeCache: () => {}, readCache: () => null },
 		todoScanner: { scanDirectory: () => ({ items: [] }) },
 		astGrepClient: {

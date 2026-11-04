@@ -315,6 +315,18 @@ interface FileRecord {
 		warnings: number;
 	};
 	hasFinalDiagnosticsSnapshot: boolean;
+	/**
+	 * #5258: why no check of this file's kind completed in the run that wrote
+	 * the snapshot (`DispatchResult.verdict`, unchecked arm). An empty snapshot
+	 * of such a file is not a clean result, so the footer withholds `✓ clean`
+	 * for it. Set only by {@link recordDiagnostics}, from a file a check could have
+	 * covered (never a kindless or generated file: nothing can retire that).
+	 * Cleared by a later write whose check completed, or by a scan that answers
+	 * for the file ({@link recordDiagnostics}). Every other commit keeps it: a
+	 * full scan's correlated write ({@link reconcileCorrelatedScanDiagnostics})
+	 * is handed files no server confirmed (#5285 r3).
+	 */
+	uncheckedReason?: string;
 	touchedAt: number;
 }
 
@@ -632,6 +644,8 @@ export interface PersistedWidgetState {
 		allDiagnostics: WidgetDiagnostic[];
 		diagnosticCounts: { blocking: number; errors: number; warnings: number };
 		hasFinalDiagnosticsSnapshot: boolean;
+		/** #5258: absent in a snapshot older than the field, which reads as checked. */
+		uncheckedReason?: string;
 		touchedAt: number;
 	}>;
 }
@@ -653,6 +667,9 @@ export function exportWidgetState(): PersistedWidgetState {
 			allDiagnostics: rec.allDiagnostics,
 			diagnosticCounts: rec.diagnosticCounts,
 			hasFinalDiagnosticsSnapshot: rec.hasFinalDiagnosticsSnapshot,
+			...(rec.uncheckedReason !== undefined && {
+				uncheckedReason: rec.uncheckedReason,
+			}),
 			touchedAt: rec.touchedAt,
 		})),
 	};
@@ -774,6 +791,9 @@ export function importWidgetState(
 			allDiagnostics: migratedAllDiagnostics,
 			diagnosticCounts: countDiagnostics(migratedAllDiagnostics),
 			hasFinalDiagnosticsSnapshot: f.hasFinalDiagnosticsSnapshot ?? false,
+			...(typeof f.uncheckedReason === "string" && {
+				uncheckedReason: f.uncheckedReason,
+			}),
 			touchedAt: recordTouchedAt,
 		});
 	}
@@ -925,6 +945,10 @@ export function recordDiagnostics(
 	// `reconcileStaleWidgetFiles`'s `mtimeMs > touchedAt` gate so a resolved
 	// finding renders forever (the #1092 touchedAt-re-arming defect).
 	observedAt?: number,
+	// #5258: the reason no check of the file's kind completed, when the run that
+	// produced `diagnostics` was unchecked (`DispatchResult.verdict`). Omitted by
+	// a scan that answers for the file (a workspace LSP reconcile).
+	unchecked?: string,
 ): boolean {
 	// Drop a write that's superseded by a later same-turn edit to this file
 	// whose pipeline finished first (same race class as #555). No cache write,
@@ -952,6 +976,8 @@ export function recordDiagnostics(
 		observedTs,
 		key,
 	);
+	if (unchecked === undefined) delete rec.uncheckedReason;
+	else rec.uncheckedReason = unchecked;
 	return true;
 }
 
@@ -1490,13 +1516,11 @@ export function reconcileCorrelatedScanDiagnostics(
 		...diagnostic,
 		observedAt: diagnostic.observedAt ?? observedTs,
 	}));
-	commitDiagnostics(
-		getOrCreate(filePath, key),
-		filePath,
-		correlated,
-		observedTs,
-		key,
-	);
+	const rec = getOrCreate(filePath, key);
+	// #5285 r3: the unchecked reason stays. This commit is handed every file
+	// whether or not a server confirmed it; a confirmed file already lost its
+	// reason through `reconcileScanDiagnostics`, earlier in the same scan.
+	commitDiagnostics(rec, filePath, correlated, observedTs, key);
 }
 
 /**
@@ -2224,6 +2248,7 @@ export function renderWidget(
 	const totalWarnings = countTotalIn("warning", deduped);
 	const totalSuppressed = countSuppressedIn(deduped);
 	const hasPendingAnalysis = deduped.some(isPendingAnalysis);
+	const uncheckedFiles = deduped.filter(isUncheckedClean);
 	const errorChunk =
 		totalErrors > 0
 			? (totalBlocking > 0 ? red : yellow)(`●${totalErrors}E`)
@@ -2233,9 +2258,11 @@ export function renderWidget(
 		? errorChunk + (warningChunk ? " " + warningChunk : "")
 		: warningChunk
 			? warningChunk
-			: files.size > 0 && !hasPendingAnalysis
-				? green("✓ clean")
-				: "";
+			: uncheckedFiles.length > 0
+				? yellow(`⚠ ${uncheckedFiles.length} unchecked`)
+				: files.size > 0 && !hasPendingAnalysis
+					? green("✓ clean")
+					: "";
 
 	// LSP spawning — folded into the header in horizontal mode, tail line otherwise
 	const spawning = [...lspServers.values()].filter(
@@ -2278,6 +2305,20 @@ export function renderWidget(
 		for (const rec of recencySorted) {
 			lines.push(fitLine(formatFileRowVertical(rec, theme), w));
 		}
+	}
+
+	// #5258: an empty snapshot of a file no check completed on is not clean, and
+	// the header chip alone cannot say why: name the most recent one's reason.
+	const lastUnchecked = uncheckedFiles.sort(
+		(a, b) => b.touchedAt - a.touchedAt,
+	)[0];
+	if (lastUnchecked?.uncheckedReason !== undefined) {
+		lines.push(
+			fitLine(
+				` ${yellow("⚠")} ${dim(`${path.basename(lastUnchecked.filePath)}: ${lastUnchecked.uncheckedReason}`)}`,
+				w,
+			),
+		);
 	}
 
 	// Diagnostics — blocking (or dependency-drift-demoted) only, from the most
@@ -2411,7 +2452,9 @@ function formatFileRowVertical(
 				? red("x")
 				: warnings > 0 || errors > 0
 					? yellow("!")
-					: green("✓");
+					: isUncheckedClean(rec)
+						? yellow("⚠")
+						: green("✓");
 	const runnerNames = [...rec.runners.entries()]
 		.filter(([, r]) => r.status !== "skipped")
 		.map(([id]) => id)
@@ -2423,7 +2466,9 @@ function formatFileRowVertical(
 				(warnings > 0 ? " " + yellow(`${warnings}W`) : "")
 			: warnings > 0
 				? " " + yellow(`${warnings}W`)
-				: " " + dim("clean");
+				: isUncheckedClean(rec)
+					? " " + yellow("unchecked")
+					: " " + dim("clean");
 	const changedFormatters = [...rec.formatters.entries()]
 		.filter(([, f]) => f.changed && f.success)
 		.map(([name]) => name);
@@ -2523,6 +2568,7 @@ function formatFileTokenHorizontal(
 	let dotChar: string;
 	if (blocking > 0) dotChar = red("●");
 	else if (errors > 0 || warnings > 0) dotChar = yellow("!");
+	else if (isUncheckedClean(rec)) dotChar = yellow("?");
 	else if (formatterChanged) dotChar = dim("✎");
 	else dotChar = dim("·");
 
@@ -2619,6 +2665,16 @@ function hasLiveDiagnostic(rec: FileRecord): boolean {
 	return (
 		rec.diagnostics.length > 0 &&
 		(rec.hasFinalDiagnosticsSnapshot || holdsDrawableFindings(rec))
+	);
+}
+
+// #5258: a final snapshot with no finding that no check of the file's kind
+// completed for. Findings outrank it: a file with any shows them instead.
+function isUncheckedClean(rec: FileRecord): boolean {
+	return (
+		rec.uncheckedReason !== undefined &&
+		rec.hasFinalDiagnosticsSnapshot &&
+		classifyFileTier(rec) === "clean"
 	);
 }
 

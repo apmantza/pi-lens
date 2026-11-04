@@ -116,7 +116,6 @@ function makeDeps(tmpDir: string, runtime: RuntimeCoordinator, dbg = vi.fn()) {
 		dbg,
 		log: () => {},
 		runtime,
-		metricsClient: { reset: () => {} },
 		cacheManager: {
 			writeCache: () => {},
 			readCache: (key: string) => {

@@ -30,6 +30,7 @@ import {
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { resetPendingRunnerFindings } from "../../../clients/dispatch/pending-runner-findings.js";
 import {
+	type CoverageVerdict,
 	findingsResult,
 	type RunnerGroup,
 	type RunnerResult,
@@ -435,8 +436,8 @@ describe("coverage notice keys on the primary runner's usable result (#3867)", (
 	it("names which check covered the file, and only when one did (#4733 r2)", async () => {
 		// RECURRENCE GUARDED: #4733 r2 (#4734's review). The commit gate's
 		// whole-file verdict read "the primary checked the file" from an unset
-		// `unconfirmedStatus`, which also holds when a defined primary group
-		// never ran. `coverage` is the rule's positive answer, set only where it
+		// status field, which also held when a defined primary group never
+		// ran. `coverage` is the rule's positive answer, set only where it
 		// found the file checked; each cell drives the real coverage rule.
 		const succeeded = async (): Promise<RunnerResult> => ({
 			status: "succeeded",
@@ -564,12 +565,14 @@ describe("coverage notice keys on the primary runner's usable result (#3867)", (
 	});
 });
 
-// Recurrence: #4734 verify r2 F4. The clean advisory said a language server
-// checked a `--no-lsp` edit and found nothing, because an unset
-// `unconfirmedStatus` was read as "a primary answered". The dispatcher's one
-// return that knows is `primaryHasCoverage`, and only when the `lsp` runner is
-// what covered the file. Rows of the #4734 round-3 state table.
-describe("the language-server verdict the clean advisory reads (#4734 r3)", () => {
+// Recurrence: #4734 verify r2 F4 and #5258. The clean advisory said a language
+// server checked a `--no-lsp` edit and found nothing, because an unset field
+// was read as "a primary answered", and the write line read clean for every
+// row that built no `unconfirmedStatus`. The verdict is now required and
+// `checked` only from the completed runners' rows, and holds `lsp` only when
+// the `lsp` runner is what covered the file. Rows of the #4734 round-3 state
+// table, with the verdict each one builds.
+describe("the verdict the write line and the clean advisory read (#4734 r3, #5258)", () => {
 	type Row = {
 		label: string;
 		file: string;
@@ -578,14 +581,24 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 		groups: RunnerGroup[];
 		/** Dispatch this many times on the push surface; the last result counts. */
 		pushes?: number;
-		expected: true | undefined;
 		/**
-		 * #5008 review r2 (F1): the status line the latched partial notice still
-		 * owes. The latch suppresses the NOTICE, not the claim, so this row no
-		 * longer reaches the pipeline as the clean-line shape.
+		 * The verdict the row builds. #5008 review r2 (F1): a latched partial
+		 * notice still owes its status line; the latch suppresses the NOTICE, not
+		 * the claim.
 		 */
-		expectedUnconfirmed?: string;
+		expected: CoverageVerdict;
 	};
+	const notChecked = (
+		reason: string,
+		mark: { repeat?: true } = {},
+	): CoverageVerdict => ({
+		checked: false,
+		reason,
+		...mark,
+	});
+	const noPrimary = notChecked(
+		"no primary checker is enabled for this kind (--no-lsp turns off its language server)",
+	);
 	const succeeded = async (): Promise<RunnerResult> => ({
 		status: "succeeded",
 		diagnostics: [],
@@ -597,7 +610,7 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 			file: "test.ts",
 			runners: { lsp: succeeded },
 			groups: [{ mode: "all", runnerIds: ["lsp"] }],
-			expected: true,
+			expected: { checked: true, tier: "primary", runnerIds: ["lsp"] },
 		},
 		{
 			label: "row 8: --no-lsp leaves jsts no primary group",
@@ -605,7 +618,7 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 			noLsp: true,
 			runners: { oxlint: succeeded },
 			groups: [{ mode: "all", runnerIds: ["oxlint"] }],
-			expected: undefined,
+			expected: noPrimary,
 		},
 		{
 			label: "row 10: --no-lsp, the pyright CLI primary answered",
@@ -613,7 +626,7 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 			noLsp: true,
 			runners: { pyright: succeeded },
 			groups: [{ mode: "all", runnerIds: ["pyright"] }],
-			expected: undefined,
+			expected: { checked: true, tier: "primary", runnerIds: ["pyright"] },
 		},
 		{
 			label: "row 10: the lsp runner skipped, the pyright CLI answered",
@@ -627,7 +640,7 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 				pyright: succeeded,
 			},
 			groups: [{ mode: "all", runnerIds: ["lsp", "pyright"] }],
-			expected: undefined,
+			expected: { checked: true, tier: "primary", runnerIds: ["pyright"] },
 		},
 		{
 			label: "row 11: a silent server's partial notice, latched",
@@ -642,8 +655,7 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 			},
 			groups: [{ mode: "all", runnerIds: ["lsp"] }],
 			pushes: 2,
-			expected: undefined,
-			expectedUnconfirmed: "opengrep silent (diagnostics are incomplete)",
+			expected: notChecked("opengrep silent (diagnostics are incomplete)"),
 		},
 		{
 			// Review r3 (F7): the status sentence's DEFERRED half, the sibling of
@@ -664,8 +676,7 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 			},
 			groups: [{ mode: "all", runnerIds: ["lsp"] }],
 			pushes: 2,
-			expected: undefined,
-			expectedUnconfirmed: "typos deferred (diagnostics are incomplete)",
+			expected: notChecked("typos deferred (diagnostics are incomplete)"),
 		},
 		{
 			label: "row 12: the lsp runner is deferred",
@@ -678,7 +689,46 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 				}),
 			},
 			groups: [{ mode: "all", runnerIds: ["lsp"] }],
-			expected: undefined,
+			expected: notChecked(
+				"the primary check is still running (findings arrive at turn end if it lands)",
+			),
+		},
+		{
+			// #5258 r2 (F6): a slow primary printed `⚠ … still running` on every
+			// clean write and nothing retired it. The first write prints it, the
+			// rest stay quiet (`repeat`) until the answer replaces it.
+			label: "row 12b: the lsp runner is deferred, second write is quiet",
+			file: "test.ts",
+			runners: {
+				lsp: async () => ({
+					status: "deferred",
+					diagnostics: [],
+					semantic: "none",
+				}),
+			},
+			groups: [{ mode: "all", runnerIds: ["lsp"] }],
+			pushes: 2,
+			expected: notChecked(
+				"the primary check is still running (findings arrive at turn end if it lands)",
+				{ repeat: true },
+			),
+		},
+		{
+			// #5258 r1 review (F4): the last latched return (`onceKey` of the plain
+			// unavailable notice) had no red. Recurrence: #5008 r2 F1, write 2..N on
+			// one file read `✓ clean` once the latch had the notice.
+			label: "row 15: the lsp runner broke, nothing stood in, second write",
+			file: "test.ts",
+			runners: {
+				lsp: async () => {
+					throw new Error("spawn lsp ENOENT");
+				},
+			},
+			groups: [{ mode: "all", runnerIds: ["lsp"] }],
+			pushes: 2,
+			expected: notChecked(
+				"not fully checked (a language tool is missing, timed out, or failed to run)",
+			),
 		},
 		{
 			label: "row 13: the lsp runner failed, a fallback linter covered",
@@ -690,7 +740,11 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 				"trivy-config": succeeded,
 			},
 			groups: [{ mode: "all", runnerIds: ["lsp", "trivy-config"] }],
-			expected: undefined,
+			expected: {
+				checked: true,
+				tier: "fallback",
+				runnerIds: ["trivy-config"],
+			},
 		},
 	];
 
@@ -723,18 +777,85 @@ describe("the language-server verdict the clean advisory reads (#4734 r3)", () =
 			result = await dispatchForFile(ctx(), row.groups, registry);
 		}
 
-		// Every row but 14 reaches the pipeline as the clean-line shape: no text,
-		// no `unconfirmedStatus`. Only the verdict tells them apart. Row 11 is the
-		// exception since review r2: its notice is latched away on the second
-		// push, and the write must still name the silent scanner.
-		expect({
-			output: result.output,
-			unconfirmedStatus: result.unconfirmedStatus,
-			primaryLspChecked: result.primaryLspChecked,
-		}).toEqual({
+		// Every row reaches the pipeline with no text; only the verdict tells the
+		// clean line from the unconfirmed one. Row 11 is the exception since
+		// review r2: its notice is latched away on the second push, and the write
+		// must still name the silent scanner.
+		expect({ output: result.output, verdict: result.verdict }).toEqual({
 			output: "",
-			unconfirmedStatus: row.expectedUnconfirmed,
-			primaryLspChecked: row.expected,
+			verdict: row.expected,
 		});
+	});
+
+	it("a slow primary's line prints once per file: a second file prints its own, a repeat of either is quiet (#5258 r2)", async () => {
+		// Recurrence prevented: #5285 verify r1 N2. A once-only key without the
+		// path would let the first slow file silence every other file of its kind.
+		const registry = new RunnerRegistry();
+		registry.register({
+			id: "lsp",
+			appliesTo: ["jsts"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				return { status: "deferred", diagnostics: [], semantic: "none" };
+			},
+		});
+		const push = async (file: string) =>
+			(
+				await dispatchForFile(
+					createDispatchContext(
+						file,
+						"/project",
+						{ getFlag: () => false },
+						new FactStore(),
+					),
+					[{ mode: "all", runnerIds: ["lsp"] }],
+					registry,
+				)
+			).verdict;
+
+		const verdicts = [
+			await push("a.ts"),
+			await push("b.ts"),
+			await push("a.ts"),
+			await push("b.ts"),
+		];
+
+		expect(
+			verdicts.map((v) => (v.checked ? "checked" : v.repeat === true)),
+		).toEqual([false, false, true, true]);
+	});
+
+	it("the pull surface never goes quiet: a pull after a push of a slow primary still states the reason (#5258 r2)", async () => {
+		// Recurrence prevented: the once-only latch belongs to the push surface
+		// (`dedupeCoverageNotice`); an `analyze_file` pull is a deliberate question
+		// and must get its answer even when a write already printed the line.
+		const registry = new RunnerRegistry();
+		registry.register({
+			id: "lsp",
+			appliesTo: ["jsts"],
+			priority: 4,
+			async run(): Promise<RunnerResult> {
+				return { status: "deferred", diagnostics: [], semantic: "none" };
+			},
+		});
+		const dispatch = (dedupeCoverageNotice: boolean) =>
+			dispatchForFile(
+				createDispatchContext(
+					"test.ts",
+					"/project",
+					{ getFlag: () => false },
+					new FactStore(),
+				),
+				[{ mode: "all", runnerIds: ["lsp"] }],
+				registry,
+				undefined,
+				{ dedupeCoverageNotice },
+			);
+		await dispatch(true);
+		expect((await dispatch(false)).verdict).toEqual(
+			notChecked(
+				"the primary check is still running (findings arrive at turn end if it lands)",
+			),
+		);
 	});
 });

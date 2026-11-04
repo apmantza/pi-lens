@@ -12,6 +12,7 @@
  * opens or waits on, and the hook bounds run under fake timers. Each case
  * names the TLC config whose trace it replays.
  */
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 // pi's real per-file queue, the one its `edit`/`write` tools run under.
@@ -193,6 +194,7 @@ vi.mock("../../clients/dispatch/integration.js", async (importOriginal) => ({
 		resolvedCount: 0,
 		output: "",
 		blockerOutput: "",
+		verdict: CHECKED_BY_FIXTURE,
 		hasBlockers: false,
 	})),
 	computeCascadeForFile: vi.fn().mockResolvedValue(undefined),
@@ -2181,7 +2183,6 @@ describe("#3529: the drain's LSP sync ends on the bytes on disk", () => {
 				{
 					biomeClient: {} as never,
 					ruffClient: {} as never,
-					metricsClient: {} as never,
 					getFormatService: () => new FormatService("format-drain", true),
 					fixedThisTurn: new Set<string>(),
 				} as PipelineDeps,

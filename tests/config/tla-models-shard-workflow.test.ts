@@ -196,26 +196,20 @@ describe("#3918 sharded TLA+ models workflow contract", () => {
 		// Greedy LPT on the full corpus (833 configs at #4714) lands within a few seconds of the ideal; 5%
 		// admits one regenerated table's rounding without admitting a real tail.
 		expect(heaviest / lightest).toBeLessThan(1.05);
-		// And the counterfactual the fix exists for: the count-based round-robin
-		// over the same table is NOT balanced, so this assertion cannot be
-		// satisfied by a table that ignores the costs. The round-robin spread
-		// moves with each config's sorted position, not with the table: one
-		// added config took it from 2.07x (811 configs) to 2.00x, a second to
-		// 1.47x (#4704). The bound stays well clear of the 1.05 above, which is
-		// all a cost-blind table needs to fail (it lands near 1.00x).
-		const roundRobin = Array.from({ length: total }, (_, index) =>
-			listModelConfigs(ROOT)
-				.filter((_, position) => position % total === index)
-				.reduce(
-					(sum, config) =>
-						sum + (table.files[modelCostId(ROOT, config)] ?? table.max),
-					0,
-				),
-		);
+		// And the counterfactual the fix exists for: a table that ignores the
+		// costs (every config the same) packs to ~1.00x and passes the bound
+		// above vacuously, so the table must carry costs that differ. This used
+		// to be the round-robin split's spread, but that moves with each
+		// config's sorted position, not with the table: 2.07x at 811 configs,
+		// 2.00x and 1.47x one config later each (#4704), 1.05x at 845 (#5279).
+		const costs = Object.values(table.files);
+		const median = [...costs].sort((a, b) => a - b)[
+			Math.floor(costs.length / 2)
+		];
 		expect(
-			Math.max(...roundRobin) / Math.min(...roundRobin),
-			"the count-based split this PR replaced should still be measurably worse; if it is not, the table or the corpus changed shape and the note in ci.yml is stale",
-		).toBeGreaterThan(1.25);
+			Math.max(...costs) / (median ?? 1),
+			"a cost table whose heaviest config is not far above its median cannot show that the packing reads costs; regenerate the table from a real TLC run",
+		).toBeGreaterThan(10);
 	});
 
 	// A cost row for a config that no longer exists is a table that was not

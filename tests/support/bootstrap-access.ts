@@ -4,7 +4,7 @@
  *
  * `SessionStartDeps` used to carry fifteen optional analyzer-client fields
  * beside the seam, so a fixture could supply either shape — and so could a
- * production caller that forgot one: a dropped `metricsClient` compiled and
+ * production caller that forgot one: a dropped client field compiled and
  * silently skipped every startup scan. There is one shape now, and this is
  * how a caller that already HOLDS its clients presents them.
  *

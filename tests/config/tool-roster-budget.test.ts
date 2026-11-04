@@ -145,6 +145,8 @@ describe("tool roster description budget", () => {
 		// #4687 (2026-10-21) re-trimmed the lazy tools' schemas (lsp_navigation,
 		// the three ast-grep tools); the exact per-tool pins below are what
 		// catches a schema regrowing after that trim.
+		// #5136 (2026-11-04): symbol_search's description gained the compound-suffix
+		// clause, so the description total and budget grew with the diff.
 		expect(total, detail).toBeLessThanOrEqual(baseline.pi.budget);
 		expect(baseline.pi.budget).toBe(
 			Math.ceil((descriptionTotal + schemaTotal) * 1.1),
@@ -167,6 +169,8 @@ describe("tool roster description budget", () => {
 			measured,
 		);
 		// 2026-09-10: budget is the measured after-trim total plus 10%.
+		// #5136 (2026-11-04): pilens_symbol_search now resolves the shared
+		// SYMBOL_SEARCH_DESCRIPTION constant, so its total and budget grew.
 		expect(total, detail).toBeLessThanOrEqual(baseline.mcp.budget);
 		expect(baseline.mcp.budget).toBe(
 			Math.ceil((descriptionTotal + schemaTotal) * 1.1),

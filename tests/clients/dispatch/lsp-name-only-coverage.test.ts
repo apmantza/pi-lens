@@ -15,6 +15,7 @@
  * unavailable ... (not a clean result)" for a lane that could never run.
  */
 
+import { uncheckedReason } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,7 +40,6 @@ import {
 import type { RunnerResult } from "../../../clients/dispatch/types.js";
 import { getFormatService } from "../../../clients/format-service.js";
 import { BiomeClient } from "../../../clients/biome-client.js";
-import { MetricsClient } from "../../../clients/metrics-client.js";
 import { runPipeline } from "../../../clients/pipeline.js";
 import { RuffClient } from "../../../clients/ruff-client.js";
 import { resetSessionScopedState } from "../../../clients/runtime-session.js";
@@ -86,7 +86,6 @@ async function writeAndRender(name: string, body: string): Promise<string> {
 		{
 			biomeClient: new BiomeClient(),
 			ruffClient: new RuffClient(),
-			metricsClient: new MetricsClient(),
 			getFormatService: () => getFormatService("lsp-name-only-coverage", false),
 			fixedThisTurn: new Set<string>(),
 		},
@@ -249,7 +248,7 @@ describe("only the lsp runner's no-files-matched silences the notice", () => {
 	it("stays quiet when the lsp row is the only primary row that ran", async () => {
 		const result = await dispatchCsharp([["lsp", NOT_APPLICABLE]]);
 		expect(result.output).not.toContain(UNAVAILABLE);
-		expect(result.unconfirmedStatus).toBe(
+		expect(uncheckedReason(result)).toBe(
 			"not analyzed (no language server handles this file)",
 		);
 	});

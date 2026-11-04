@@ -246,11 +246,6 @@ const PINS: Readonly<Record<string, Pin>> = {
 		identities: "b261f1cff7bd1a5f",
 		reason: SPELLING_MEMO,
 	}, // :174, :187, :201, :226
-	"clients/metrics-client.ts#path-resolve-keyed": {
-		sites: 3,
-		identities: "bcca1f8df46f4cf5",
-		reason: PRE_4689,
-	}, // :51, :55, :67
 	"clients/ndjson-logger.ts#path-resolve-keyed": {
 		sites: 2,
 		identities: "6ecd966532221c9e",

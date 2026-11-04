@@ -1598,7 +1598,7 @@ function resolveLangMatcher(value: string): (file: string) => boolean {
 		named.some((pattern) => pattern.test(path.basename(file)));
 }
 
-/** `ext:ts` / `ext:.ts` → normalized to a single leading-dot, lowercased form for extname comparison. */
+/** `ext:ts` / `ext:.ts` → a single leading-dot, lowercased suffix for path-suffix comparison (#5136). */
 function normalizeExtFilterValue(value: string): string {
 	return `.${value.replace(/^\.+/, "").toLowerCase()}`;
 }
@@ -1621,11 +1621,14 @@ function resolveWordIndexFilter(
 		};
 	}
 	if (filter.key === "ext") {
-		const normalized = normalizeExtFilterValue(filter.value);
+		// Suffix match on the display path, not `path.extname` equality: a
+		// compound suffix (`.test.ts`, `.d.ts`) never equals the last dot
+		// segment `extname` returns, so `ext:test.ts` could never match (#5136).
+		const suffix = normalizeExtFilterValue(filter.value);
 		return {
 			key: filter.key,
 			negated: filter.negated,
-			test: (file) => path.extname(file).toLowerCase() === normalized,
+			test: (_file, displayPath) => displayPath.toLowerCase().endsWith(suffix),
 		};
 	}
 	// "file": substring match against the index's own normalized display path

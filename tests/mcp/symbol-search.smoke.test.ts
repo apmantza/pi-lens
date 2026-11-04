@@ -23,6 +23,8 @@ import {
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
 } from "../../clients/project-snapshot.js";
+import { translateGuidanceToolNames } from "../../clients/tool-config.js";
+import { SYMBOL_SEARCH_DESCRIPTION } from "../../tools/symbol-search.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { McpHarness } from "./harness.js";
 
@@ -129,6 +131,21 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		}
 	});
 
+	it("advertises the imported pi description (#5136)", async () => {
+		const res = await harness.request(12, "tools/list");
+		const tools = (
+			res.result as { tools: { name: string; description?: string }[] }
+		).tools;
+		const entry = tools.find((tool) => tool.name === "pilens_symbol_search");
+		expect(entry?.description).toBe(
+			translateGuidanceToolNames(SYMBOL_SEARCH_DESCRIPTION, "mcp"),
+		);
+		expect(entry?.description).toContain("ext:test.ts");
+		// MCP registers pilens_module_report; a bare module_report names no MCP
+		// tool (#5136 F1, Qodo).
+		expect(entry?.description).toContain("pilens_module_report");
+		expect(entry?.description).not.toMatch(/(?<!pilens_)module_report/);
+	});
 	it("returns one ranked table for a warm index (#5104)", async () => {
 		const res = await harness.request(10, "tools/call", {
 			name: "pilens_symbol_search",

@@ -8,6 +8,7 @@
  * No wall clock: every interleaving is pinned with a gate a double opens or
  * waits on.
  */
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 // pi's real per-file queue, the one its `edit`/`write` tools run under. The
@@ -85,7 +86,6 @@ vi.mock("../../clients/bootstrap.js", async () => {
 							isPythonFile: () => false,
 							ensureAvailable: async () => false,
 						},
-						metricsClient: {},
 					}),
 				);
 			}),
@@ -165,6 +165,7 @@ function clean(label: string) {
 		resolvedCount: 0,
 		output: `analysed ${label}: clean`,
 		blockerOutput: "",
+		verdict: CHECKED_BY_FIXTURE,
 		hasBlockers: false,
 	};
 }
@@ -190,6 +191,7 @@ function blocking(filePath: string, label: string) {
 		resolvedCount: 0,
 		output: `STOP ${label}`,
 		blockerOutput: `STOP ${label}`,
+		verdict: CHECKED_BY_FIXTURE,
 		hasBlockers: true,
 	};
 }
@@ -332,7 +334,6 @@ function deps(
 						isPythonFile: () => false,
 						ensureAvailable: async () => false,
 					},
-					metricsClient: {},
 				}
 			: {}),
 		resetLSPService: () => {},
@@ -1437,7 +1438,6 @@ describe("formal/dispatch-pipeline replays", () => {
 					{
 						biomeClient: noBiome as unknown as BiomeClient,
 						ruffClient: {} as never,
-						metricsClient: {} as never,
 						getFormatService: () => formatService,
 						fixedThisTurn: new Set<string>(),
 					},
@@ -1597,7 +1597,6 @@ describe("formal/dispatch-pipeline replays", () => {
 						{
 							biomeClient: noBiome as unknown as BiomeClient,
 							ruffClient: {} as never,
-							metricsClient: {} as never,
 							getFormatService: () => new FormatService("tla", true),
 							fixedThisTurn: new Set<string>(),
 						},
@@ -1648,7 +1647,6 @@ describe("formal/dispatch-pipeline replays", () => {
 						{
 							biomeClient: noBiome as unknown as BiomeClient,
 							ruffClient: {} as never,
-							metricsClient: {} as never,
 							getFormatService: () => new FormatService("tla", true),
 							fixedThisTurn: new Set<string>(),
 						},
@@ -1817,7 +1815,6 @@ describe("formal/dispatch-pipeline replays", () => {
 					{
 						biomeClient: fixer,
 						ruffClient: { isPythonFile: () => false } as never,
-						metricsClient: {} as never,
 						getFormatService: () => ({}) as FormatService,
 						fixedThisTurn: new Set<string>(),
 					},

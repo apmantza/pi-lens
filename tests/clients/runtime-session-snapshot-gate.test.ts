@@ -71,7 +71,6 @@ function makeDeps(ctxCwd: string, dbg: (msg: string) => void = () => {}) {
 		dbg,
 		log: () => {},
 		runtime: new RuntimeCoordinator(),
-		metricsClient: { reset: () => {} },
 		cacheManager: { writeCache: () => {}, readCache: () => null },
 		todoScanner: { scanDirectory: () => ({ items: [] }) },
 		astGrepClient: {

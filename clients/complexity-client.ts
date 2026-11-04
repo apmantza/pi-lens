@@ -1,10 +1,10 @@
 /**
  * Complexity Metrics Client for pi-lens
  *
- * Language-agnostic AST-based code complexity metrics, computed over the shared
- * tree-sitter client (#402 — no `typescript` compiler dependency). Supported
- * grammars are keyed in LANGUAGE_NODES (JS/TS, Python, Go, Rust today; adding a
- * language is one table entry).
+ * File-level code metrics over the shared tree-sitter client (#402 — no
+ * `typescript` compiler dependency). The per-function numbers and the
+ * per-language node tables come from `clients/metrics/function-metrics.ts`
+ * (#5086).
  *
  * Tracks: max nesting depth, function length, cyclomatic + cognitive complexity,
  * maintainability index (Halstead-free), LOC/comments, code entropy, and AI-slop
@@ -14,9 +14,8 @@
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { calcCyclomaticComplexity } from "./dispatch/facts/function-facts.js";
+import { measureFile } from "./metrics/function-metrics.js";
 import {
-	firstChildOfType,
 	withTreeSitterRoot,
 	type ComplexityLanguageId,
 	isComplexityLanguageId,
@@ -54,320 +53,21 @@ export interface FunctionMetrics {
 	name: string;
 	line: number;
 	length: number;
+	/** Zero-based: the decision points alone, McCabe minus one (#2697). */
 	cyclomatic: number;
 	cognitive: number;
 	nestingDepth: number;
 }
 
-// --- Per-language node categories ---
-
-interface LangNodes {
-	/** Function/method/lambda nodes. */
-	functionLike: Set<string>;
-	/** Control structures that increase nesting depth. */
-	nesting: Set<string>;
-	/** Decision points that add +1 cyclomatic (if/loops/case/ternary). */
-	decision: Set<string>;
-	/** Structures that add cognitive complexity (nesting-weighted). */
-	cognitive: Set<string>;
-	/** Node types that ARE a logical operator (e.g. Python `boolean_operator`). */
-	logicalOpNodes: Set<string>;
-	/** Operator child types inside a `binary_expression` (&& || ??). */
-	logicalBinaryOps: Set<string>;
-	/** Node type for a try/catch block, if the language has one. */
-	tryNode?: string;
-	/** Child node types to read a function's name from (in priority order). */
-	nameChildTypes: string[];
-}
-
-// JS/TS/JSX share one grammar shape.
-const JSTS: LangNodes = {
-	functionLike: new Set([
-		"function_declaration",
-		"method_definition",
-		"function_expression",
-		"arrow_function",
-		"generator_function",
-		"generator_function_declaration",
-	]),
-	nesting: new Set([
-		"if_statement",
-		"while_statement",
-		"for_statement",
-		"for_in_statement",
-		"switch_statement",
-		"function_declaration",
-		"function_expression",
-		"arrow_function",
-		"method_definition",
-		"class_declaration",
-		"try_statement",
-		"catch_clause",
-	]),
-	decision: new Set([
-		"if_statement",
-		"while_statement",
-		"for_statement",
-		"for_in_statement",
-		"switch_case",
-		"ternary_expression",
-	]),
-	cognitive: new Set([
-		"if_statement",
-		"while_statement",
-		"for_statement",
-		"for_in_statement",
-		"switch_statement",
-		"switch_case",
-		"ternary_expression",
-		"catch_clause",
-	]),
-	logicalOpNodes: new Set(),
-	logicalBinaryOps: new Set(["&&", "||", "??"]),
-	tryNode: "try_statement",
-	nameChildTypes: ["identifier", "property_identifier"],
-};
-
-const PYTHON: LangNodes = {
-	functionLike: new Set(["function_definition", "lambda"]),
-	nesting: new Set([
-		"if_statement",
-		"for_statement",
-		"while_statement",
-		"match_statement",
-		"function_definition",
-		"class_definition",
-		"try_statement",
-		"except_clause",
-		"elif_clause",
-	]),
-	decision: new Set([
-		"if_statement",
-		"elif_clause",
-		"for_statement",
-		"while_statement",
-		"case_clause",
-		"conditional_expression",
-	]),
-	cognitive: new Set([
-		"if_statement",
-		"elif_clause",
-		"for_statement",
-		"while_statement",
-		"match_statement",
-		"case_clause",
-		"conditional_expression",
-		"except_clause",
-	]),
-	logicalOpNodes: new Set(["boolean_operator"]),
-	logicalBinaryOps: new Set(),
-	tryNode: "try_statement",
-	nameChildTypes: ["identifier"],
-};
-
-const GO: LangNodes = {
-	functionLike: new Set([
-		"function_declaration",
-		"method_declaration",
-		"func_literal",
-	]),
-	nesting: new Set([
-		"if_statement",
-		"for_statement",
-		"expression_switch_statement",
-		"type_switch_statement",
-		"select_statement",
-		"function_declaration",
-		"method_declaration",
-	]),
-	decision: new Set([
-		"if_statement",
-		"for_statement",
-		"expression_case",
-		"type_case",
-		"communication_case",
-	]),
-	cognitive: new Set([
-		"if_statement",
-		"for_statement",
-		"expression_switch_statement",
-		"type_switch_statement",
-		"select_statement",
-		"expression_case",
-		"type_case",
-		"communication_case",
-	]),
-	logicalOpNodes: new Set(),
-	logicalBinaryOps: new Set(["&&", "||"]),
-	tryNode: undefined, // Go has no try/catch (error returns)
-	nameChildTypes: ["identifier", "field_identifier"],
-};
-
-const RUST: LangNodes = {
-	functionLike: new Set(["function_item", "closure_expression"]),
-	nesting: new Set([
-		"if_expression",
-		"while_expression",
-		"for_expression",
-		"loop_expression",
-		"match_expression",
-		"function_item",
-	]),
-	decision: new Set([
-		"if_expression",
-		"while_expression",
-		"for_expression",
-		"loop_expression",
-		"match_arm",
-	]),
-	cognitive: new Set([
-		"if_expression",
-		"while_expression",
-		"for_expression",
-		"loop_expression",
-		"match_expression",
-		"match_arm",
-	]),
-	logicalOpNodes: new Set(),
-	logicalBinaryOps: new Set(["&&", "||"]),
-	tryNode: undefined, // Rust uses Result/? — no try/catch
-	nameChildTypes: ["identifier"],
-};
-
-/**
- * Node configuration per grammar. Keyed by {@link ComplexityLanguageId}, whose
- * list lives in `tree-sitter-shared.ts` so `isComplexitySupportedFile` can
- * answer without loading this module (#2467). `Record` over a finite union
- * requires EXACTLY these keys, so the two cannot drift.
- */
-const LANGUAGE_NODES: Record<ComplexityLanguageId, LangNodes> = {
-	typescript: JSTS,
-	tsx: JSTS,
-	javascript: JSTS,
-	python: PYTHON,
-	go: GO,
-	rust: RUST,
-};
-
 const COMMENT_TYPES = new Set(["comment", "line_comment", "block_comment"]);
 
-// --- Metric helpers (module-level, node-config-driven) ---
+// --- Metric helpers ---
 
-function isLogicalOp(node: TsNode, nodes: LangNodes): boolean {
-	if (nodes.logicalOpNodes.has(node.type)) return true;
-	if (nodes.logicalBinaryOps.size > 0 && node.type === "binary_expression") {
-		return (node.children ?? []).some(
-			(c: TsNode) => c && nodes.logicalBinaryOps.has(c.type),
-		);
-	}
-	return false;
-}
-
-/** Cyclomatic contribution of a subtree: decision points + logical operators. */
-function subtreeCyclomatic(root: TsNode, nodes: LangNodes): number {
-	// Dispatch uses 1-based McCabe; this client exposes 0-based contributions (#2697).
-	if (nodes === JSTS) return calcCyclomaticComplexity(root) - 1;
-	let cc = 0;
-	walk(root, (n) => {
-		if (nodes.decision.has(n.type)) cc++;
-		if (isLogicalOp(n, nodes)) cc++;
-	});
-	return cc;
-}
-
-/** Cognitive complexity (SonarSource-style: base + nesting penalty). */
-function subtreeCognitive(
-	node: TsNode,
-	nesting: number,
-	nodes: LangNodes,
-): number {
-	let complexity = 0;
-	if (nodes.cognitive.has(node.type)) complexity += 1 + nesting;
-	// Labeled break/continue add complexity.
-	if (
-		(node.type === "break_statement" || node.type === "continue_statement") &&
-		(node.children ?? []).some(
-			(c: TsNode) =>
-				c &&
-				(c.type === "statement_identifier" ||
-					c.type === "identifier" ||
-					c.type === "label_name" ||
-					c.type === "label"),
-		)
-	) {
-		complexity += 1 + nesting;
-	}
-	if (isLogicalOp(node, nodes)) complexity += 1;
-	const childNesting = nodes.nesting.has(node.type) ? nesting + 1 : nesting;
-	for (const child of node.children ?? []) {
-		if (child) complexity += subtreeCognitive(child, childNesting, nodes);
-	}
-	return complexity;
-}
-
-function subtreeMaxNesting(
-	node: TsNode,
-	currentDepth: number,
-	nodes: LangNodes,
-): number {
-	let maxDepth = currentDepth;
-	if (nodes.nesting.has(node.type)) {
-		currentDepth++;
-		maxDepth = Math.max(maxDepth, currentDepth);
-	}
-	for (const child of node.children ?? []) {
-		if (child) {
-			maxDepth = Math.max(
-				maxDepth,
-				subtreeMaxNesting(child, currentDepth, nodes),
-			);
-		}
-	}
-	return maxDepth;
-}
-
-function functionName(fnNode: TsNode, nodes: LangNodes): string | undefined {
-	for (const t of nodes.nameChildTypes) {
-		const id = firstChildOfType(fnNode, t);
-		if (id) return id.text;
-	}
-	return undefined;
-}
-
-function collectFunctionMetrics(
-	root: TsNode,
-	nodes: LangNodes,
-): FunctionMetrics[] {
-	const functions: FunctionMetrics[] = [];
-	const visit = (node: TsNode, nestingLevel: number): void => {
-		if (nodes.functionLike.has(node.type)) {
-			const startLine = node.startPosition.row;
-			const endLine = node.endPosition.row;
-			functions.push({
-				name: functionName(node, nodes) ?? `<anonymous@L${startLine + 1}>`,
-				line: startLine + 1,
-				length: endLine - startLine + 1,
-				cyclomatic: subtreeCyclomatic(node, nodes),
-				cognitive: subtreeCognitive(node, nestingLevel, nodes),
-				nestingDepth: subtreeMaxNesting(node, 0, nodes),
-			});
-		}
-		const newNesting = nodes.nesting.has(node.type)
-			? nestingLevel + 1
-			: nestingLevel;
-		for (const child of node.children ?? []) {
-			if (child) visit(child, newNesting);
-		}
-	};
-	visit(root, 0);
-	return functions;
-}
-
-function countTryCatch(root: TsNode, nodes: LangNodes): number {
-	if (!nodes.tryNode) return 0;
+/** JS/TS and Python spell it `try_statement`; Go and Rust have none. */
+function countTryCatch(root: TsNode): number {
 	let count = 0;
 	walk(root, (n) => {
-		if (n.type === nodes.tryNode) count++;
+		if (n.type === "try_statement") count++;
 	});
 	return count;
 }
@@ -463,21 +163,6 @@ function calculateMaintainabilityIndex(
 	return Math.max(0, Math.min(100, mi));
 }
 
-function calculateMaxParams(functions: FunctionMetrics[]): number {
-	// Estimate from average function length (kept from the original heuristic).
-	return Math.min(
-		10,
-		Math.max(
-			2,
-			Math.round(
-				functions.reduce((a, f) => a + f.length, 0) /
-					Math.max(1, functions.length) /
-					5,
-			),
-		),
-	);
-}
-
 function countSingleUseFunctions(functions: FunctionMetrics[]): number {
 	return functions.filter(
 		(f) =>
@@ -511,11 +196,7 @@ export class ComplexityClient {
 	async analyzeFile(filePath: string): Promise<FileComplexity | null> {
 		const absolutePath = path.resolve(filePath);
 		const languageId = resolveTreeSitterLanguage(absolutePath);
-		const nodes =
-			languageId && isComplexityLanguageId(languageId)
-				? LANGUAGE_NODES[languageId]
-				: undefined;
-		if (!nodes) return null;
+		if (!languageId || !isComplexityLanguageId(languageId)) return null;
 
 		let content: string;
 		try {
@@ -530,7 +211,7 @@ export class ComplexityClient {
 			const parsed = await withTreeSitterRoot(
 				absolutePath,
 				content,
-				(root) => this.computeMetrics(absolutePath, content, root, nodes),
+				(root) => this.computeMetrics(absolutePath, content, root, languageId),
 				"complexity",
 			);
 			return parsed.parsed ? parsed.value : null;
@@ -544,23 +225,29 @@ export class ComplexityClient {
 		absolutePath: string,
 		content: string,
 		root: TsNode,
-		nodes: LangNodes,
+		languageId: ComplexityLanguageId,
 	): FileComplexity {
 		const { codeLines, commentLines } = countLines(content, root);
-		const functions = collectFunctionMetrics(root, nodes);
-		const maxNestingDepth = subtreeMaxNesting(root, 0, nodes);
-		const cognitive = subtreeCognitive(root, 0, nodes);
+		const file = measureFile(root, languageId);
+		const functions: FunctionMetrics[] = file.functions.map((f) => ({
+			name: f.name,
+			line: f.line,
+			length: f.length,
+			cyclomatic: f.cyclomatic - 1,
+			cognitive: f.cognitive,
+			nestingDepth: f.nesting,
+		}));
 		const funcStats = this.aggregateFunctionStats(functions);
 
 		return {
 			filePath: path.relative(process.cwd(), absolutePath),
-			maxNestingDepth,
+			maxNestingDepth: file.nesting,
 			avgFunctionLength: funcStats.avgLength,
 			maxFunctionLength: funcStats.maxLength,
 			functionCount: functions.length,
 			cyclomaticComplexity: funcStats.avgCyclomatic,
 			maxCyclomaticComplexity: funcStats.maxCyclomatic,
-			cognitiveComplexity: cognitive,
+			cognitiveComplexity: file.cognitive,
 			maintainabilityIndex:
 				Math.round(
 					calculateMaintainabilityIndex(
@@ -572,10 +259,13 @@ export class ComplexityClient {
 			linesOfCode: codeLines,
 			commentLines,
 			codeEntropy: Math.round(calculateCodeEntropy(content) * 100) / 100,
-			maxParamsInFunction: calculateMaxParams(functions),
+			maxParamsInFunction: Math.max(
+				0,
+				...file.functions.map((f) => f.parameters),
+			),
 			aiCommentPatterns: countAICommentPatterns(content),
 			singleUseFunctions: countSingleUseFunctions(functions),
-			tryCatchCount: countTryCatch(root, nodes),
+			tryCatchCount: countTryCatch(root),
 			functions,
 		};
 	}

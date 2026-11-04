@@ -109,6 +109,11 @@ describe("ComplexityClient.analyzeFile — degradation", () => {
 	it("returns null for unsupported languages", async () => {
 		expect(await analyze("f.md", "# hello\n")).toBeNull();
 	});
+	it("returns null, not zeros, for a code language with no metrics table", async () => {
+		expect(
+			await analyze("F.java", "class F { int f() { return 1; } }\n"),
+		).toBeNull();
+	});
 	it("returns null for a non-existent file", async () => {
 		expect(await client.analyzeFile("/nope/does-not-exist.ts")).toBeNull();
 	});

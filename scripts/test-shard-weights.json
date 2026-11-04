@@ -1435,6 +1435,7 @@
 		"tests/real-harness/bridge-reload-ts.test.ts": 3.64,
 		"tests/real-harness/bridge-reload.test.ts": 3.68,
 		"tests/real-harness/child-exit.test.ts": 10.92,
+		"tests/real-harness/clean-verdict.test.ts": 6.5,
 		"tests/real-harness/diagnostic-provenance.test.ts": 29.62,
 		"tests/real-harness/fixture-shape.test.ts": 1.34,
 		"tests/real-harness/lifecycle.test.ts": 8.79,

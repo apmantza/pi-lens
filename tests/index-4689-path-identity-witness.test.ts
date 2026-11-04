@@ -443,7 +443,9 @@ describe("#4689: a mark silences its finding under any spelling of the session r
 				expect(first?.text ?? "").toContain("STOP");
 				expect(mark?.text ?? "").toContain("marked false-positive");
 				expect(second?.text ?? "").not.toContain("STOP");
-				expect(second?.text ?? "").toContain("clean");
+				// #5258: the session runs --no-lsp, so the unsilenced-STOP check above is
+				// the claim; the line itself says no primary checker ran.
+				expect(second?.text ?? "").toMatch(/⚠ .*unconfirmed/);
 			} finally {
 				await handle.dispose();
 			}
@@ -474,7 +476,7 @@ describe("#4689: a mark silences its finding under any spelling of the session r
 			const last = handle.requests.at(-1) ?? [];
 			const [write] = toolResults(last, "write");
 			expect(write?.text ?? "").not.toContain("STOP");
-			expect(write?.text ?? "").toContain("clean");
+			expect(write?.text ?? "").toMatch(/⚠ .*unconfirmed/);
 		} finally {
 			await handle.dispose();
 		}

@@ -1,5 +1,6 @@
 import type { FactProvider } from "../fact-provider-types.js";
 import { isJstsFactFile } from "../../file-kinds.js";
+import { measureFunction } from "../../metrics/function-metrics.js";
 import { findOwnerName } from "../../symbol-containment.js";
 import {
 	extractFactsFromTree,
@@ -87,31 +88,6 @@ const FUNCTION_TYPES = new Set([
 	"function_expression",
 	"arrow_function",
 ]);
-
-// Decision points for McCabe complexity (matches the old ts.SyntaxKind set).
-const COMPLEXITY_TYPES = new Set([
-	"if_statement",
-	"for_statement",
-	"for_in_statement", // for…of and for…in both parse to for_in_statement
-	"while_statement",
-	"do_statement",
-	"switch_case", // `case` only — `default` (switch_default) is not counted
-	"catch_clause",
-	"ternary_expression",
-]);
-
-// Control structures that increase nesting depth (matches the old set).
-const NESTING_TYPES = new Set([
-	"if_statement",
-	"for_statement",
-	"for_in_statement",
-	"while_statement",
-	"do_statement",
-	"switch_statement",
-	"try_statement",
-]);
-
-const LOGICAL_OPERATORS = new Set(["&&", "||", "??"]);
 
 /** Named children excluding comments — i.e. the "real" statements/args/expressions. */
 function namedChildren(node: TsNode): TsNode[] {
@@ -221,22 +197,6 @@ function isCallPassThrough(
 	return { pass: true, target: (expr.children ?? [])[0]?.text };
 }
 
-function isDecisionPoint(type: string, children: TsNode[]): boolean {
-	if (COMPLEXITY_TYPES.has(type)) return true;
-	return (
-		type === "binary_expression" &&
-		children.some((c: TsNode) => LOGICAL_OPERATORS.has(c?.type))
-	);
-}
-
-export function calcCyclomaticComplexity(body: TsNode): number {
-	let cc = 1;
-	walk(body, (node) => {
-		if (isDecisionPoint(node.type, node.children ?? [])) cc++;
-	});
-	return cc;
-}
-
 /**
  * `obj.method()` call sites with a simple-identifier receiver (refs #655
  * phase 2). Only the plain shape `identifier.identifier(...)` is captured —
@@ -313,28 +273,25 @@ type BodySummary = Pick<
 	| "hasReturnAwaitCall"
 	| "cyclomaticComplexity"
 	| "maxNestingDepth"
+	| "parameterCount"
 	| "outgoingCalls"
 	| "memberCallSites"
 	| "receiverTypes"
 >;
 
 /**
- * Every body-derived summary field in one pre-order pass (#1740). Node `type`
- * is an uncached wasm call, so separate walks per field paid it once per field.
+ * Every body-derived summary field in one pre-order pass (#1740): the metrics
+ * seam walks the body once and hands each node here. Node `type` is an
+ * uncached wasm call, so separate walks per field paid it once per field.
  */
-function summarizeBody(body: TsNode, params: TsNode[]): BodySummary {
+function summarizeBody(fn: TsNode, params: TsNode[]): BodySummary {
 	let hasAwait = false;
 	let hasReturnAwaitCall = false;
-	let cyclomaticComplexity = 1;
-	let maxNestingDepth = 0;
 	const calls = new Set<string>();
 	const memberCallSites: MemberCallSite[] = [];
 	const receiverTypes = parameterReceiverTypes(params);
-	const visit = (node: TsNode, depth: number): void => {
-		const type: string = node.type;
-		const children: TsNode[] = node.children ?? [];
-		if (depth > maxNestingDepth) maxNestingDepth = depth;
-		if (isDecisionPoint(type, children)) cyclomaticComplexity++;
+	// JS, TS and TSX share one metrics table.
+	const metrics = measureFunction(fn, "typescript", (node, type, children) => {
 		if (type === "await_expression") {
 			hasAwait = true;
 		} else if (type === "return_statement") {
@@ -344,18 +301,13 @@ function summarizeBody(body: TsNode, params: TsNode[]): BodySummary {
 		} else if (type === "variable_declarator") {
 			addNewReceiverType(children, receiverTypes);
 		}
-		// Depth counts nesting structures between the body and the node.
-		const next = NESTING_TYPES.has(type) ? depth + 1 : depth;
-		for (const child of children) {
-			if (child) visit(child, next);
-		}
-	};
-	visit(body, 0);
+	});
 	return {
 		hasAwait,
 		hasReturnAwaitCall,
-		cyclomaticComplexity,
-		maxNestingDepth,
+		cyclomaticComplexity: metrics.cyclomatic,
+		maxNestingDepth: metrics.nesting,
+		parameterCount: metrics.parameters,
 		outgoingCalls: [...calls],
 		memberCallSites,
 		receiverTypes,
@@ -421,7 +373,7 @@ export const functionFactProvider: FactProvider = {
 						lowerTarget.startsWith(prefix),
 					);
 
-					const bodySummary = summarizeBody(body, params);
+					const bodySummary = summarizeBody(node, params);
 					summaries.push({
 						name: getFunctionName(node),
 						line: node.startPosition.row + 1,
@@ -431,7 +383,7 @@ export const functionFactProvider: FactProvider = {
 						hasAwait: bodySummary.hasAwait,
 						hasReturnAwaitCall: bodySummary.hasReturnAwaitCall,
 						statementCount,
-						parameterCount: params.length,
+						parameterCount: bodySummary.parameterCount,
 						isPassThroughWrapper: passThrough.pass,
 						passThroughTarget: passThrough.target,
 						isBoundaryWrapper,

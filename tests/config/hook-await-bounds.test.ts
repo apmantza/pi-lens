@@ -1917,7 +1917,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"whole files rather than walking reachability.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#callTool:5c4ca6a0~9ac0a7dd": {
+	"mcp/server.ts#callTool:5c4ca6a0~4f3f69c0": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:
@@ -2270,7 +2270,8 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// (`forwardImportSources`) before resolving; the parse's own two awaits
 	// moved with it unchanged.
 	"clients/blocker-freshness.ts": 14,
-	"clients/bootstrap.ts": 23,
+	// #5086: 23 -> 22. The dead metrics client's `await import(...)` load is gone.
+	"clients/bootstrap.ts": 22,
 	// #3274: `readCacheAsync`'s two `await readJsonCacheAsync(...)` — the meta
 	// envelope and then the data — which are the whole point of the method: the
 	// synchronous `readCache` beside it cannot be bounded because it never
@@ -2680,7 +2681,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// created file resolves, the same per-file extraction await its update
 	// loop already pins.
 	"clients/review-graph/builder.ts": 42,
-	"clients/safe-spawn.ts": 9,
+	// #5289: 9 -> 8. `safeSpawnBatch` (deleted, no caller) held the module's
+	// `await Promise.all(...)`; the other eight awaits are unchanged.
+	"clients/safe-spawn.ts": 8,
 	// #3612: `adoptHandoff` awaits the own and parent sidecar loads and each
 	// store's restore: the session_start sidecar I/O that read-guard-branch.ts
 	// and index.ts held before.

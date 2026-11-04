@@ -23,7 +23,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
-import { MetricsClient } from "../../clients/metrics-client.js";
 import {
 	type PipelineContext,
 	type PipelineDeps,
@@ -167,7 +166,6 @@ describe("pipeline changed-file discriminator keys by path identity (#4689)", ()
 				ensureAvailable: async () => false,
 			} as unknown as RuffClient,
 			testRunnerClient: new TestRunnerClient(),
-			metricsClient: new MetricsClient(),
 			getFormatService,
 			fixedThisTurn: new Set(),
 		} as PipelineDeps;

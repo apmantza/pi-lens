@@ -17,12 +17,17 @@ import {
 import { compactRenderResult } from "./render-compact.js";
 import { readPathsArgument } from "./shared.js";
 
+/** Model-facing description of `symbol_search`. Exported so the MCP
+ * `pilens_symbol_search` surface imports this sentence instead of restating it
+ * (#5138 D7) — the tool definition is the owner. */
+export const SYMBOL_SEARCH_DESCRIPTION =
+	"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before module_report. Read a listed line with offset=<line>, limit=1. An `ext:` filter matches a path suffix, so `ext:test.ts` matches `foo.test.ts`.";
+
 export function createSymbolSearchTool(getProjectRoot: () => string) {
 	return {
 		name: "symbol_search" as const,
 		label: "Symbol Search",
-		description:
-			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before module_report. Read a listed line with offset=<line>, limit=1.",
+		description: SYMBOL_SEARCH_DESCRIPTION,
 		promptSnippet: "Find files by identifier",
 		renderResult: compactRenderResult<{
 			available?: boolean;

@@ -122,20 +122,20 @@ export function resolveTreeSitterLanguage(
 }
 
 /**
- * The grammars `clients/complexity-client.ts` has a node mapping for.
+ * The grammars `clients/metrics/function-metrics.ts` has a table for.
  *
  * Lives HERE, beside the ext→grammar resolver, because the question "can this
  * path produce a complexity baseline?" has to be answerable WITHOUT loading
  * the analyzer graph (#2467): `clients/runtime-tool-call.ts` asks it on every
- * tool call to decide whether the seventeen-module load is worth starting, and
+ * tool call to decide whether the analyzer-module load is worth starting, and
  * the client that owns the answer is behind that very load.
  *
  * It is not a second extension table — the extension half still comes from the
  * one canonical registry through {@link resolveTreeSitterLanguage}. It is the
- * language-id half, and `LANGUAGE_NODES` is typed
+ * language-id half, and the metrics `TABLES` satisfy
  * `Record<ComplexityLanguageId, …>`, so adding a grammar there without adding
  * it here (or the reverse) is a COMPILE error rather than a predicate that
- * quietly drifts from the client it is supposed to mirror.
+ * quietly drifts from the tables it is supposed to mirror.
  */
 export const COMPLEXITY_LANGUAGE_IDS = [
 	"typescript",

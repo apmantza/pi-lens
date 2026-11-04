@@ -458,7 +458,6 @@ function bashResultDeps(h: Harness, command: string, toolCallId: string) {
 		biomeClient: {},
 		ruffClient: {},
 		testRunnerClient: {},
-		metricsClient: {},
 		resetLSPService: () => {},
 		agentBehaviorRecord: () => [],
 		formatBehaviorWarnings: () => "",

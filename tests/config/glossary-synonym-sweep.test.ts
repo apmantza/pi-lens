@@ -325,7 +325,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/index.ts": 13,
 		"clients/lsp/server.ts": 3,
 		"clients/mcp/session.ts": 4,
-		"clients/metrics-client.ts": 7,
 		"clients/observed-mutation.ts": 7,
 		// 12 -> 11 (#2050): the prescan's `let baseline` local moved into
 		// `captureOpaqueBaseline`'s returned `state`, so one identifier use is
@@ -458,7 +457,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/ipc.ts": 8,
 		"clients/mcp/review.ts": 8,
 		"clients/mcp/session.ts": 1,
-		"clients/module-report.ts": 29,
+		"clients/module-report.ts": 32,
+		// 31 -> 32 (#5138): the callback-handle kind refusal returns the report's
+		// own `error` condition too.
+		// 29 -> 31 (#5138): the kind-mismatch refusal and the unreadable catch
+		// both read the report's own `error` condition.
 		// 27 -> 29 (#5137): the text renderer prints the report's own `error`
 		// field twice on one line, as the guard and as the message.
 		// 3 -> 5 (#4493): readGitHead and listGitHeadDelta read the spawn
@@ -495,7 +498,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 21 -> 23 (#5257): `isCompletedPassResult` reads the result's `error`,
 		// and the JSON parser sets the unreadable-output and load-failure errors.
 		"clients/test-runner-client.ts": 23,
-		"clients/test-runner-delivery.ts": 6,
+		// 6 -> 7 (#5259): the stage-time idle read's `delivery-failed` record
+		// carries the thrown text in the record's own `error` field.
+		"clients/test-runner-delivery.ts": 7,
 		"clients/tool-agreement.ts": 2,
 		"clients/tree-sitter-cache.ts": 4,
 		// #3605: 18 -> 6. The rewritten wasm classifier, `reportWasmAbort` and
@@ -519,7 +524,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"tools/lsp-navigation-text.ts": 1,
 		"tools/module-report.ts": 11,
 		"mcp/analyze-cli.ts": 1,
-		"mcp/server.ts": 32,
+		// 32 -> 36 (#5138): the read_symbol handler renders `result.error` as the
+		// pi tool does (condition test, message, structured `error` field).
+		"mcp/server.ts": 36,
 	},
 	filter: {
 		"clients/actionable-warnings.ts": 10,
@@ -576,7 +583,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 21 -> 22 (#5010): `buildCoverageNotice` keeps the rows
 		// `dispatch.disabledRunners` skipped, an `Array.prototype.filter` call,
 		// not a delivery filter.
-		"clients/dispatch/dispatcher.ts": 22,
+		// 22 -> 23 (#5258): the coverage rule reads the rows the dispatcher
+		// kept for the primary group, an `Array.prototype.filter` call, not a
+		// delivery filter.
+		"clients/dispatch/dispatcher.ts": 23,
 		"clients/dispatch/fact-runner.ts": 1,
 		"clients/dispatch/fact-scheduler.ts": 2,
 		"clients/dispatch/facts/function-facts.ts": 2,
@@ -623,6 +633,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/tool-failure.ts": 2,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 1,
 		"clients/dispatch/suppress-writer.ts": 1,
+		// 0 -> 1 (#5258): `checkedVerdict` keeps the rows of runners that
+		// completed, an `Array.prototype.filter` call, not a delivery filter.
+		"clients/dispatch/types.ts": 1,
 		"clients/dispatch/utils/lsp-diagnostics.ts": 1,
 		"clients/file-kinds.ts": 1,
 		"clients/file-role.ts": 3,
@@ -830,9 +843,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/turn-end/lanes/secrets.ts": 3,
 		"clients/turn-summary-render.ts": 3,
 		"clients/vanished-instance-marker.ts": 1,
-		// 16 -> 17 (#5020): `retireWidgetCitedRows` keeps the rows no retire named,
-		// an `Array.prototype.filter` call, not a delivery gate.
-		"clients/widget-state.ts": 17,
+		// 16 -> 18 (#5258, #5020): the header counts the files no check completed
+		// on, and `retireWidgetCitedRows` keeps the rows no retire named; both are
+		// `Array.prototype.filter` calls, not delivery filters.
+		"clients/widget-state.ts": 18,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		"tools/activate-tools.ts": 2,
@@ -911,8 +925,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/knip-client.ts": 14,
 		"clients/latency-logger.ts": 1,
 		"clients/mcp/session.ts": 1,
-		"clients/metrics-client.ts": 4,
-		"clients/module-report.ts": 17,
+		// 18 -> 19 (#5138): the callback-handle kind refusal logs its miss too.
+		// 17 -> 18 (#5138): the kind-mismatch refusal logs its miss through the
+		// same `read_symbol` phase as every other miss in this file.
+		"clients/module-report.ts": 19,
 		"clients/ndjson-logger.ts": 2,
 		"clients/opengrep-client.ts": 1,
 		"clients/process-singletons.ts": 4,
@@ -1235,11 +1251,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// name and the stale-socket owner marker. No path-key owner changes.
 		"clients/mcp/ipc.ts": 7,
 		"clients/mcp/session.ts": 3,
-		"clients/metrics-client.ts": 6,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
-		"clients/module-report.ts": 31,
+		// 31 -> 32 (#5138): the kind-mismatch refusal returns the same `path`
+		// field as every other `readSymbol` miss.
+		// 32 -> 33 (#5138): so does the callback-handle kind refusal.
+		"clients/module-report.ts": 33,
 		// 6 -> 9 (#3650): MutationLineResult.path field, the adapter-declared
 		// preference, and the readToolResultPathField return.
 		"clients/mutating-tool.ts": 9,
@@ -1299,7 +1317,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 26 -> 24 (#4689 batch 3): the changed-file set is a PathKeyedMap, so two
 		// `path.resolve` calls are gone. 24 -> 22: the postMutation gate compares
 		// through `normalizeMapKey`, two more.
-		"clients/pipeline.ts": 22,
+		// 22 -> 23 (#5258): the unconfirmed line names an unknown-kind file by
+		// its extension, a filesystem path operation.
+		"clients/pipeline.ts": 23,
 		// 10 -> 12 (#4530): machineStateDir moved here from file-utils.ts.
 		"clients/probe-home-state.ts": 12,
 		"clients/project-changes.ts": 5,
@@ -1465,11 +1485,15 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// sense as the four above (a filesystem path operation).
 		"clients/trivy-client.ts": 5,
 		"clients/warm-attach.ts": 3,
-		"clients/widget-state.ts": 7,
+		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
+		// filesystem path operation.
+		"clients/widget-state.ts": 8,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
-		"clients/word-index.ts": 52,
+		// 52 -> 51 (#5136): the `ext:` predicate matches a path suffix on the
+		// display path instead of `path.extname`, dropping one `path` operation.
+		"clients/word-index.ts": 51,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
 		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution
@@ -1522,7 +1546,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// payload's per-hit `path.relative`; the renderer now owns that spelling.
 		// 38 -> 33 (#5137): the module_report handler stops building its own
 		// `path.relative` summary and delegates the rendering.
-		"mcp/server.ts": 33,
+		// 33 -> 34 (#5138): the read_symbol error branch names `path.basename(file)`.
+		"mcp/server.ts": 34,
 		"index.ts": 20,
 		"clients/command-path.ts": 5,
 	},
@@ -1591,7 +1616,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/runtime-turn.ts": 9,
 		"clients/search-read-registration.ts": 1,
 		"clients/test-runner-client.ts": 4,
-		"clients/test-runner-delivery.ts": 15,
+		// 15 -> 16 (#5259): the stage-time idle read writes its failure through
+		// the module's existing `record` helper.
+		"clients/test-runner-delivery.ts": 16,
 		"clients/turn-summary.ts": 4,
 		"clients/warm-attach.ts": 9,
 		"tools/lsp-diagnostics.ts": 1,
@@ -1729,7 +1756,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 5 -> 6 (#4484 r2): `reachedNoVerdict` reads the runner result's status.
 		// 6 -> 7 (#4733 r2): `checkedWholeFile` reads each latency row's status.
 		// 7 -> 8 (#4130): `faultResult` builds the one `failed` runner result.
-		"clients/dispatch/types.ts": 9,
+		// 9 -> 10 (#5258): `checkedVerdict` reads each row's runner status through
+		// `hasUsableResult`.
+		"clients/dispatch/types.ts": 10,
 		"clients/file-utils.ts": 2,
 		"clients/finding-delivery-gate.ts": 3,
 		"clients/formatters.ts": 8,
@@ -1782,7 +1811,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/runtime-context.ts": 4,
 		"clients/runtime-coordinator.ts": 4,
 		"clients/runtime-turn.ts": 6,
-		"clients/safe-spawn.ts": 25,
+		// 25 -> 24 (#5289): the deleted sync `isCommandAvailable` read the spawn
+		// result's exit `status` once.
+		"clients/safe-spawn.ts": 24,
 		"clients/security-scan-client.ts": 5,
 		"clients/sg-runner.ts": 32,
 		"clients/shared-checkout-guard.ts": 2,

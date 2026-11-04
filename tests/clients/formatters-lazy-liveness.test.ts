@@ -1,3 +1,4 @@
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -47,6 +48,7 @@ describe("formatter session warm/first-use liveness (#1394)", () => {
 					resolvedCount: 0,
 					output: "formatter pipeline output",
 					blockerOutput: "",
+					verdict: CHECKED_BY_FIXTURE,
 					hasBlockers: false,
 				}),
 			}),
@@ -55,7 +57,6 @@ describe("formatter session warm/first-use liveness (#1394)", () => {
 			const { bootstrapSeamMock } =
 				await import("../support/bootstrap-mock.js");
 			return bootstrapSeamMock(async () => ({
-				metricsClient: { reset: () => {} },
 				todoScanner: {},
 				biomeClient: { isAvailable: () => false, isSupportedFile: () => false },
 				ruffClient: { isAvailable: () => false, isSupportedFile: () => false },

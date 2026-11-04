@@ -243,33 +243,141 @@ export interface DispatchResult {
 	/** #4484 round 2: the runners and servers that reached no verdict. */
 	inconclusiveSources?: InconclusiveSources;
 	/**
-	 * #4403: why the file's primary group did not check it. Set whenever the
-	 * coverage notice's rule finds no coverage, whether or not the once-only
-	 * latch shows the notice, so a write the latch silences still does not
-	 * read as clean: the write-time all-clear line gives this instead.
+	 * #5258: whether a check of this file's kind completed. REQUIRED, so every
+	 * producer of a `DispatchResult` states it and the compiler finds one that
+	 * does not; the write-time all-clear line, `PipelineResult.checkedClean`
+	 * and the widget footer's `✓ clean` all read this and nothing else. It
+	 * replaces #4403's `unconfirmedStatus` and #4734's `primaryLspChecked`,
+	 * whose absence was read as clean.
 	 */
-	unconfirmedStatus?: string;
+	verdict: CoverageVerdict;
 	/**
-	 * #4733 r2 (from #4734's review): the coverage rule's positive answer for
-	 * these bytes, set only where it found the file checked: `primary` (a
-	 * runner of the primary group reached a verdict), `in_flight` (a
-	 * collect-later primary whose answer reaches this session's blocker map at
-	 * turn end), `fallback` (a fallback linter the rule accepts in its place),
-	 * or `unconfigured` (this mode defines no primary group for the file, as in
-	 * a `--no-lsp` TypeScript write). Unset otherwise, including where an unset
-	 * `unconfirmedStatus` hides that no runner of a defined primary group ran.
+	 * #4733 r2 (from #4734's review): the commit gate's answer to "did the rule
+	 * find the file covered", read only by {@link checkedWholeFile}. It is a
+	 * wider question than {@link verdict}: `in_flight` (a collect-later primary
+	 * whose answer reaches this session's blocker map at turn end) and
+	 * `unconfigured` (this mode defines no primary group for the file, as in a
+	 * `--no-lsp` TypeScript write) count as covered there and as unchecked in
+	 * `verdict`. Unset where the rule found no coverage.
 	 */
 	coverage?: "primary" | "in_flight" | "fallback" | "unconfigured";
-	/**
-	 * #4734 r3: the primary group's language server (its `lsp` runner) reached
-	 * a usable result for these bytes, with no server left unconfirmed. Absent
-	 * otherwise: no kind or primary group, `--no-lsp`, a CLI primary or a
-	 * fallback linter standing in, a primary deferred or still in flight, and a
-	 * partial notice the session latch withheld. The clean advisory's evidence
-	 * that a language server answered (`PipelineResult.checkedClean`).
-	 */
-	primaryLspChecked?: true;
 }
+
+/**
+ * #5258: the one positive answer to "did a check of this file's kind
+ * complete". `checked` carries the ids of the runners that completed
+ * ({@link hasUsableResult}); a non-empty list is the only way to build it, so
+ * a missing field, a skipped runner, a timeout, a thrown error, unparseable
+ * output and an absent binary can never produce it. Everything else is
+ * `unchecked` with the sentence the write-time line gives instead of "clean".
+ * `tier` says what stood in: `primary` (a runner of the primary group reached
+ * a verdict) or `fallback` (a fallback linter the coverage rule accepts in its
+ * place). A language server answered exactly when `runnerIds` holds `lsp`
+ * (`PipelineResult.checkedClean`).
+ */
+export type CoverageVerdict =
+	| {
+			checked: true;
+			tier: "primary" | "fallback";
+			runnerIds: readonly [string, ...string[]];
+	  }
+	| { checked: false; reason: string; inapplicable?: true; repeat?: true };
+
+/**
+ * Surface policy the `unchecked` arm carries (#5258 r2). `inapplicable`: no
+ * check can ever cover this file (no file kind, a generated file), so only the
+ * write's own line says so; the widget footer count and the persisted reason
+ * cover files a check could have covered but did not. `repeat`: the line for
+ * this reason was already printed for this file this session, so the write
+ * prints none until a result replaces it.
+ */
+export type UncheckedSurface = { inapplicable?: true; repeat?: true };
+
+/** The `unchecked` arm; the single constructor, so the shape has one spelling. */
+export const unchecked = (
+	reason: string,
+	surface: UncheckedSurface = {},
+): CoverageVerdict => ({
+	checked: false,
+	reason,
+	...surface,
+});
+
+/**
+ * The reason the widget footer records for a run, or `undefined` when it
+ * records none: a checked run, and a file no check can ever cover.
+ */
+export const widgetUncheckedReason = (
+	verdict: CoverageVerdict,
+): string | undefined =>
+	verdict.checked || verdict.inapplicable ? undefined : verdict.reason;
+
+/**
+ * The `checked` arm from the runner rows that completed, or `undefined` when
+ * none did. The only place the arm is built, and it takes rows, not a
+ * boolean, so a `checked` verdict names the runners that earned it. A row
+ * flagged `inconclusive` read part of the file, whatever its status, so it
+ * earns nothing (#5285 r3).
+ */
+export function checkedVerdict(
+	tier: "primary" | "fallback",
+	rows: readonly {
+		runnerId: string;
+		status: string;
+		failureKind?: string;
+		inconclusive?: true;
+	}[],
+): CoverageVerdict | undefined {
+	const [first, ...rest] = rows
+		.filter((row) => row.inconclusive !== true && hasUsableResult(row))
+		.map((row) => row.runnerId);
+	if (first === undefined) return undefined;
+	// A variable, not a literal: this is a verdict's runner list, not a
+	// `RunnerGroup`, and the group-id census reads `runnerIds: [...]` literals.
+	const completed: [string, ...string[]] = [first, ...rest];
+	return { checked: true, tier, runnerIds: completed };
+}
+
+/**
+ * A dispatch that ran nothing: no findings, the given verdict. The one
+ * literal for the five early returns (#5258: no kind, no runner group, an
+ * adopted root that admits none, a generated file, `dispatchLintDetailed`'s
+ * empty result), each of which used to spell the shape out with the verdict
+ * left to be read as clean.
+ */
+export function emptyDispatchResult(verdict: CoverageVerdict): DispatchResult {
+	return {
+		diagnostics: [],
+		blockers: [],
+		warnings: [],
+		baselineWarningCount: 0,
+		fixed: [],
+		resolvedCount: 0,
+		output: "",
+		blockerOutput: "",
+		hasBlockers: false,
+		verdict,
+	};
+}
+
+/**
+ * The reason of a collect-later primary that has not answered yet. Like every
+ * unchecked reason, a later write whose check completed or a scan that
+ * confirms the file retires it in the widget store (#5285 r3).
+ */
+export const IN_FLIGHT_REASON =
+	"the primary check is still running (findings arrive at turn end if it lands)";
+
+/** No file kind: nothing in pi-lens analyses this file type. */
+export const NO_ANALYZER_REASON = "no analyzer handles this file type";
+
+/**
+ * A kind with no primary checker in this mode (`--no-lsp` removes the language
+ * server, the only primary of eleven kinds). Other runners may have run, but
+ * none of them is the check the kind relies on (#5258).
+ */
+export const noPrimaryCheckerReason = (lspEnabled: boolean): string =>
+	`no primary checker is enabled for this kind${lspEnabled ? "" : " (--no-lsp turns off its language server)"}`;
 
 // --- Runner Definition ---
 
@@ -622,9 +730,8 @@ export function reachedNoVerdict(
  * session's section names no runner a per-runner carry could judge it by.
  *
  * Admitted: no language server went unanswered (`serverIds`), the coverage
- * rule found the file checked (`coverage`; #4733 r2: an unset
- * `unconfirmedStatus` also holds when a defined primary group never ran),
- * no verdict covers only the
+ * rule found the file checked (`coverage`; #4733 r2: it is unset when a
+ * defined primary group never ran), no verdict covers only the
  * edit (`editScopedRunnerIds`), at least one runner ran and answered, and
  * every runner that reached no verdict either skipped or is a collect-later
  * run still in flight (its answer joins this session's own blocker map when

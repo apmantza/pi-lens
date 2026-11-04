@@ -154,7 +154,6 @@ describe("the opaque prescan at the home root (#4905)", () => {
 			biomeClient: {},
 			ruffClient: {},
 			testRunnerClient: {},
-			metricsClient: {},
 			resetLSPService: () => {},
 			agentBehaviorRecord: () => [],
 			formatBehaviorWarnings: () => "",

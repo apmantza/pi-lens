@@ -635,6 +635,74 @@ describe("runner status/semantic edge cases", () => {
 		}
 	});
 
+	// Recurrence prevented: #5285 r3 (CodeRabbit on 548fc8d4c). A touch whose
+	// diagnostics wait lapsed without naming a server, but that still collected a
+	// finding, makes the real runner return `succeeded` flagged `inconclusive`.
+	// The latency row dropped the flag, so the coverage rule built a `checked`
+	// verdict from a primary that never answered, and the footer kept no reason.
+	it("an inconclusive touch that still delivers a finding is not a checked verdict (#5285 r3)", async () => {
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const {
+			clearCoverageNoticeState,
+			createDispatchContext,
+			dispatchForFile,
+			RunnerRegistry,
+		} = await import("../../../../clients/dispatch/dispatcher.js");
+		const env = setupTestEnvironment("pi-lens-lsp-5285-inconclusive-");
+		try {
+			clearCoverageNoticeState();
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+			touchFile.mockResolvedValue(
+				diagsResult(
+					[
+						{
+							severity: 2,
+							message: "'x' is declared but its value is never read.",
+							source: "typescript",
+							code: 6133,
+							range: {
+								start: { line: 0, character: 6 },
+								end: { line: 0, character: 7 },
+							},
+						},
+					],
+					{ inconclusive: true, inconclusiveReason: "diagnostics-wait" },
+				),
+			);
+			const registry = new RunnerRegistry();
+			registry.register(runner);
+			const dispatchCtx = createDispatchContext(
+				filePath,
+				env.tmpDir,
+				{ getFlag: (name: string) => name === "lens-lsp" },
+				new FactStore(),
+			);
+
+			const result = await dispatchForFile(
+				dispatchCtx,
+				[{ mode: "all", runnerIds: ["lsp"] }],
+				registry,
+				undefined,
+				{ dedupeCoverageNotice: false },
+			);
+
+			expect({
+				verdict: result.verdict.checked,
+				row: result.latencyReport?.runners.find((r) => r.runnerId === "lsp")
+					?.status,
+				delivered: result.warnings.map((w) => w.rule ?? w.message),
+			}).toEqual({
+				verdict: false,
+				row: "succeeded",
+				delivered: expect.arrayContaining([expect.stringContaining("6133")]),
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// #5008: the negative half of the same guard. A touch that reports neither a
 	// completed confirmation policy nor an inconclusive verdict says nothing
 	// about the primary, so a deferred auxiliary's findings must not turn it into

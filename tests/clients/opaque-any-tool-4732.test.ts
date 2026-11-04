@@ -229,7 +229,6 @@ describe("which calls pay for git status (#4732)", () => {
 			biomeClient: {},
 			ruffClient: {},
 			testRunnerClient: {},
-			metricsClient: {},
 			resetLSPService: () => {},
 			agentBehaviorRecord: () => [],
 			formatBehaviorWarnings: () => "",
@@ -638,7 +637,7 @@ describe("which calls pay for git status (#4732)", () => {
 		expect(
 			await writeAfterRemovedExport("r4-clients", (deps) => ({
 				...deps,
-				metricsClient: undefined,
+				ruffClient: undefined,
 				signal: cancelled.signal,
 			})),
 		).toEqual({ reason: undefined, renamed: seed() });

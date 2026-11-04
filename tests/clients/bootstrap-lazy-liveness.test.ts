@@ -51,7 +51,6 @@ const served: string[] = [];
 /** Stub clients that answer "nothing available" for every analyzer. */
 function stubClients(): Record<string, unknown> {
 	return {
-		metricsClient: { reset: () => {} },
 		todoScanner: { scanDirectory: () => ({ items: [] }) },
 		biomeClient: {
 			isAvailable: () => false,

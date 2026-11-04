@@ -53,8 +53,9 @@ parsed by `parseWordIndexQuery` (`clients/word-index.ts`) before tokenization:
 - `file:<substr>` — path substring match against the index's own stored path,
   normalized through `wordIndexKey` (case-folded on win32 only, matching how
   the index's own path-keyed maps already fold win32 paths, #1025).
-- `ext:<ext>` — literal extension match (`ext:ts` and `ext:.ts` are
-  equivalent).
+- `ext:<ext>` — path-suffix match on the index's display path, case-insensitive,
+  leading dot optional (`ext:ts` and `ext:.ts` are equivalent; `ext:test.ts`
+  matches `foo.test.ts`; `ext:ts` does not match `foo.tsx`).
 - Any filter may be negated with a leading `-` (`-file:test`).
 
 Example: `lang:jsts file:clients/ -file:test rank`. Multiple positive filters

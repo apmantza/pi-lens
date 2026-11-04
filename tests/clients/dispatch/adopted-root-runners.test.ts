@@ -8,6 +8,7 @@
  * seam and `createVenvFinder` are the real modules.
  */
 
+import { uncheckedReason } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +29,6 @@ import { BiomeClient } from "../../../clients/biome-client.js";
 import { getGlobalPiLensDir } from "../../../clients/file-utils.js";
 import { FormatService } from "../../../clients/format-service.js";
 import { clearFormatterRuntimeState } from "../../../clients/formatters.js";
-import { MetricsClient } from "../../../clients/metrics-client.js";
 import { RuffClient } from "../../../clients/ruff-client.js";
 import {
 	acquireWarmWordIndex,
@@ -594,7 +594,6 @@ describe("#4242 adopted-root runner allowlist", () => {
 					{
 						biomeClient: new BiomeClient(),
 						ruffClient: new RuffClient(),
-						metricsClient: new MetricsClient(),
 						fixedThisTurn: new Set(),
 						getFormatService: () => new FormatService("adopted-pipeline-r2"),
 					},
@@ -749,7 +748,6 @@ describe("#4242 adopted-root runner allowlist", () => {
 					{
 						biomeClient: new BiomeClient(),
 						ruffClient: new RuffClient(),
-						metricsClient: new MetricsClient(),
 						fixedThisTurn: new Set(),
 						getFormatService: () => new FormatService("adopted-not-analyzed"),
 					},
@@ -759,13 +757,16 @@ describe("#4242 adopted-root runner allowlist", () => {
 				);
 				expect(result.output, name).not.toContain("clean");
 			}
-			// Control: a plan of nothing refused nothing, so it claims nothing.
+			// A plan of nothing refused nothing, and checked nothing either (#5258:
+			// it used to claim nothing, which the all-clear line read as clean).
 			const unplanned = await dispatchForFile(
 				makeCtx(fixture.file, fixture.sessionRoot),
 				[],
 				new RunnerRegistry(),
 			);
-			expect(unplanned.unconfirmedStatus).toBeUndefined();
+			expect(uncheckedReason(unplanned)).toBe(
+				"no runner is planned for this file",
+			);
 		} finally {
 			fixture.cleanup();
 		}
@@ -1154,7 +1155,6 @@ describe("#4242 adopted-root runner allowlist", () => {
 				{
 					biomeClient: new BiomeClient(),
 					ruffClient: new RuffClient(),
-					metricsClient: new MetricsClient(),
 					fixedThisTurn: new Set(),
 					getFormatService: () => new FormatService("adopted-word-index"),
 				},

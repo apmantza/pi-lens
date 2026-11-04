@@ -21,7 +21,7 @@
  * ## Fail closed: the population is every spawn, not every installer word
  *
  * A start is a call into the spawn seam (`safeSpawn`, `safeSpawnAsync`,
- * `safeSpawnBatch`, `probeToolAsync`, `spawnCollectStdoutResult`) or into a
+ * `probeToolAsync`, `spawnCollectStdoutResult`) or into a
  * FORWARDER of it. `tests/config/spawn-chokepoint-sweep.test.ts` already
  * proves the other half: every raw `node:child_process` start in the runtime
  * is one of its admitted sites (the chokepoint's own children and fixed
@@ -120,7 +120,6 @@ const SEAMS: readonly string[] = [
 	"probeToolAsync",
 	"safeSpawn",
 	"safeSpawnAsync",
-	"safeSpawnBatch",
 	"spawnCollectStdoutResult",
 ];
 
@@ -907,8 +906,10 @@ const ROWS: Readonly<Record<string, Row>> = {
 	}),
 	...because(SEAM, {
 		"clients/process-snapshot.ts#spawnCollectStdoutResult": 2,
-		"clients/safe-spawn.ts#safeSpawn": 2,
-		"clients/safe-spawn.ts#safeSpawnAsync": 3,
+		// #5289: `safeSpawnBatch` and the sync `isCommandAvailable` (deleted)
+		// each held one computed-command site.
+		"clients/safe-spawn.ts#safeSpawn": 1,
+		"clients/safe-spawn.ts#safeSpawnAsync": 2,
 		"clients/tool-probe.ts#safeSpawnAsync": 1,
 	}),
 	...because(TOOL, {

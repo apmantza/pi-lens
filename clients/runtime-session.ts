@@ -221,7 +221,7 @@ interface SessionStartDeps {
 	 * lazifying it made those fifteen fields optional and added this seam
 	 * beside them, with "exactly one of the two shapes is supplied" stated in
 	 * prose; that admitted a third shape the compiler was happy with and the
-	 * handler was not — drop `metricsClient` and every startup scan silently
+	 * handler was not — drop one client field and every startup scan silently
 	 * stopped running. One required field, one shape. A caller that already
 	 * holds concrete clients (`clients/mcp/session.ts`) wraps them with
 	 * `residentBootstrapAccess`.
@@ -2879,11 +2879,6 @@ export async function handleSessionStart(
 		_phaseT = Date.now();
 	};
 
-	// #2467: `peek`, never a load. A metrics client that was never constructed
-	// holds no per-session state to re-arm, so the reset is vacuous — and
-	// loading the analyzer graph in order to reset nothing is the interactive-
-	// path cost this issue removes.
-	deps.bootstrap.peek()?.metricsClient.reset();
 	getDiagnosticTracker().reset();
 	clearFileTimeSessions();
 	runtime.complexityBaselines.clear();
@@ -2892,8 +2887,9 @@ export async function handleSessionStart(
 	// Some embedders inject a capability-shaped Knip client rather than the
 	// concrete KnipClient. Session reset is an optional lifecycle capability;
 	// its absence must not make session_start fail.
-	// #2467: `peek` for the same reason as `metricsClient.reset()` above —
-	// an unloaded knip client has no session state to clear.
+	// #2467: `peek`, never a load. An unloaded knip client has no session state
+	// to clear, and loading the analyzer graph in order to reset nothing is the
+	// interactive-path cost this issue removes.
 	deps.bootstrap.peek()?.knipClient.resetSessionState?.();
 	// #1910: the tier-3 cascade outstanding-touch registry and its
 	// sweep-scoped expired/evicted counters (clients/lsp/cascade-tier.ts) are

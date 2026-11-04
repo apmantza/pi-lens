@@ -389,7 +389,6 @@ export function session(
 			biomeClient: {},
 			ruffClient: {},
 			testRunnerClient: {},
-			metricsClient: {},
 			resetLSPService: () => {},
 			agentBehaviorRecord: () => [],
 			formatBehaviorWarnings: () => "",
