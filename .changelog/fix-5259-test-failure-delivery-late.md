@@ -3,4 +3,4 @@ section: Fixed
 audience: user
 ---
 
-- **A failing test result no longer reaches the model one agent run late**: when the agent's next edit launched another test run that was still going when the agent finished, the earlier failure was dropped from the next prompt and shown only after the following run (#5259).
+- **A failing test result reaches the model at the next prompt**: a run that finished after the agent did, or a newer run that was still going or finished before the next prompt, used to hold the failure back until the run after (#5259). A run that finishes while the agent is working still waits for that run to end.

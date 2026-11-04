@@ -291,9 +291,37 @@ export function stageTestRunnerDelivery(args: {
 	};
 	pending.set(deliveryKey, delivery);
 	record(deliveryKey, "staged", delivery);
+	// #5259: a delivery becomes eligible the first time its host reports idle at
+	// or after the stage. pi's `isIdle()` is false from a prompt until
+	// `agent_settled`, so during a run the settle is where that happens. A result
+	// that publishes after the settle has missed it; the host is idle now, the
+	// next context build starts the next prompt, and it is eligible at once.
+	const owner = args.owner;
+	if (!owner) return;
+	const ctx = owner.getCtx();
+	try {
+		if (ctx.isIdle?.() !== true) return;
+	} catch (error) {
+		record(deliveryKey, "delivery-failed", delivery, {
+			error: String(error).slice(0, 500),
+			deliveryBoundary: "published-idle",
+		});
+		return;
+	}
+	deliverTestRunnerFindings({
+		ctx,
+		cacheManager: owner.cacheManager,
+		runtime: owner.runtime,
+		sessionId: args.sessionId,
+		ownerId: owner.ownerId,
+		boundary: "published-idle",
+	});
 }
 
-/** Mark the latest staged result eligible during a host-confirmed idle window. */
+/**
+ * Mark the latest staged result eligible during a host-confirmed idle window:
+ * the `agent_settled` quiet window, or a publish that finds the host idle.
+ */
 export function deliverTestRunnerFindings(args: {
 	ctx: {
 		cwd?: string;
@@ -303,6 +331,8 @@ export function deliverTestRunnerFindings(args: {
 	runtime: RuntimeCoordinator;
 	sessionId: string;
 	ownerId?: string;
+	/** Where the host reported idle (#5259): the settle, or a publish after it. */
+	boundary?: "agent_settled" | "published-idle";
 }): void {
 	const cwd = args.ctx.cwd ?? process.cwd();
 	const deliveryKey = key(cwd, args.sessionId, args.ownerId);
@@ -378,6 +408,7 @@ export function deliverTestRunnerFindings(args: {
 	);
 	record(deliveryKey, "eligible", delivery, {
 		ageMs: Math.max(0, Date.now() - delivery.createdAt),
+		deliveryBoundary: args.boundary ?? "agent_settled",
 	});
 }
 
@@ -406,7 +437,7 @@ export function deliverStagedTestRunnerFindings(args?: {
 	});
 }
 
-/** Consume the result made eligible by the settled idle boundary. */
+/** Consume the result an idle boundary made eligible. */
 export function consumeStagedTestRunnerFindings(args: {
 	cwd: string;
 	sessionId: string;

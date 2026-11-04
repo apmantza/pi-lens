@@ -813,17 +813,20 @@ describe("automatic test-runner delivery (#2366)", () => {
 		try {
 			const secondaryRuntime = new RuntimeCoordinator();
 			secondaryRuntime.setTelemetryIdentity({ sessionId: "session-b" });
+			// Both results publish while their runs are going (pi's `isIdle()` is
+			// false until `agent_settled`); each settle then finds its host idle.
+			let idle = false;
 			const primaryOwner = {
 				ownerId: "activation-primary",
 				cacheManager: cache,
 				runtime,
-				getCtx: () => ({ cwd: env.tmpDir, isIdle: () => true }),
+				getCtx: () => ({ cwd: env.tmpDir, isIdle: () => idle }),
 			};
 			const secondaryOwner = {
 				ownerId: "activation-secondary",
 				cacheManager: cache,
 				runtime: secondaryRuntime,
-				getCtx: () => ({ cwd: env.tmpDir, isIdle: () => true }),
+				getCtx: () => ({ cwd: env.tmpDir, isIdle: () => idle }),
 			};
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
@@ -847,6 +850,7 @@ describe("automatic test-runner delivery (#2366)", () => {
 					deliveryEligible?: { sessionId: string };
 				}>("test-runner-findings", env.tmpDir)?.data.deliveryEligible
 					?.sessionId;
+			idle = true;
 			// A session staged by one activation is not delivered by another.
 			deliverStagedTestRunnerFindings({
 				cwd: env.tmpDir,
@@ -1144,65 +1148,75 @@ describe("automatic test-runner delivery (#2366)", () => {
 	});
 
 	/**
-	 * #5259 real path: turn A's batch fails (generation 1) and is staged; turn
-	 * B launches a second batch whose pre-run write bumps `testRunGeneration`
-	 * to 2 but keeps generation 1's content, and that batch is still in flight
-	 * at `agent_settled`. Recurrence: the settle read the bumped generation,
-	 * dropped generation 1 as superseded, and the failure reached the model one
-	 * whole agent run late (P3, after the next settle) instead of at P2.
+	 * #5259 real path: `handleTurnEnd` with the real `TestRunnerClient` (only
+	 * its spawn, `runTestFileAsync`, is replaced so each batch's completion is
+	 * under the test's control), the real cache and the real delivery module.
+	 * The host's `isIdle()` follows pi: false from a prompt until
+	 * `agent_settled`, true from the settle until the next prompt.
 	 */
-	it("delivers a staged failure at the next prompt when a newer run has launched but not published (#5259)", async () => {
-		const env = setupTestEnvironment("pi-lens-5259-");
-		try {
-			const root = env.tmpDir;
-			const runtime = new RuntimeCoordinator();
-			runtime.projectRoot = root;
-			runtime.setTelemetryIdentity({ sessionId: "session-a" });
-			const cache = new CacheManager(false);
-			fs.writeFileSync(
-				path.join(root, "package.json"),
-				'{"name":"fixture","version":"1.0.0"}\n',
-			);
-			fs.writeFileSync(
-				path.join(root, "vitest.config.ts"),
-				"export default {};\n",
-			);
-			const bin = path.join(root, "node_modules", ".bin");
-			fs.mkdirSync(bin, { recursive: true });
-			fs.writeFileSync(path.join(bin, "vitest"), "#!/bin/sh\nexit 0\n");
-			fs.chmodSync(path.join(bin, "vitest"), 0o755);
-			const source = path.join(root, "src/foo.ts");
-			const testFile = path.join(root, "src/foo.test.ts");
-			fs.mkdirSync(path.dirname(source), { recursive: true });
-			fs.writeFileSync(source, "export const foo = 1;\n");
-			fs.writeFileSync(testFile, "export {};\n");
+	async function realTimeline(prefix: string) {
+		const env = setupTestEnvironment(prefix);
+		const root = env.tmpDir;
+		const runtime = new RuntimeCoordinator();
+		runtime.projectRoot = root;
+		runtime.setTelemetryIdentity({ sessionId: "session-a" });
+		// The fixture has a package.json, so turn_end would start a real knip
+		// scan; this cell is about test delivery (PR #5279 review thread).
+		runtime.markStartupScanInFlight("knip", 0);
+		const cache = new CacheManager(false);
+		fs.writeFileSync(
+			path.join(root, "package.json"),
+			'{"name":"fixture","version":"1.0.0"}\n',
+		);
+		fs.writeFileSync(
+			path.join(root, "vitest.config.ts"),
+			"export default {};\n",
+		);
+		const bin = path.join(root, "node_modules", ".bin");
+		fs.mkdirSync(bin, { recursive: true });
+		fs.writeFileSync(path.join(bin, "vitest"), "#!/bin/sh\nexit 0\n");
+		fs.chmodSync(path.join(bin, "vitest"), 0o755);
+		const source = path.join(root, "src/foo.ts");
+		const testFile = path.join(root, "src/foo.test.ts");
+		fs.mkdirSync(path.dirname(source), { recursive: true });
+		fs.writeFileSync(source, "export const foo = 1;\n");
+		fs.writeFileSync(testFile, "export {};\n");
 
-			// The real client; only its spawn (`runTestFileAsync`) is replaced,
-			// so each batch's completion is under the test's control.
-			const client = new TestRunnerClient();
-			const failing = (message: string): TestResult => ({
-				file: testFile,
-				sourceFile: source,
-				runner: "vitest",
-				passed: 0,
-				failed: 1,
-				skipped: 0,
-				failures: [{ name: "foo", message }],
-				duration: 5,
-			});
-			const runs: Array<(result: TestResult) => void> = [];
-			vi.spyOn(client, "runTestFileAsync").mockImplementation(
-				() => new Promise<TestResult>((resolve) => runs.push(resolve)),
-			);
-			let staged: () => void = () => {};
-			const owner = {
-				ownerId: "owner-a",
-				cacheManager: cache,
-				runtime,
-				getCtx: () => ({ cwd: root, isIdle: () => true }),
-			};
-			const turnEnd = () =>
-				handleTurnEnd({
+		const client = new TestRunnerClient();
+		const runs: Array<(result: TestResult) => void> = [];
+		vi.spyOn(client, "runTestFileAsync").mockImplementation(
+			() => new Promise<TestResult>((resolve) => runs.push(resolve)),
+		);
+		let idle = false;
+		let staged: () => void = () => {};
+		const owner = {
+			ownerId: "owner-a",
+			cacheManager: cache,
+			runtime,
+			getCtx: () => ({ cwd: root, isIdle: () => idle }),
+		};
+		let edits = 0;
+		return {
+			env,
+			runs,
+			/** One agent turn: an edit, then its turn_end launches a batch. */
+			async editTurn() {
+				idle = false;
+				edits += 1;
+				fs.writeFileSync(source, `export const foo = ${edits};\n`);
+				runtime.beginTurn();
+				runtime.recordProjectMutation({
+					filePath: source,
+					source: "agent-edit",
+				});
+				cache.addModifiedRange(
+					source,
+					{ start: 1, end: 1 },
+					false,
+					root,
+					"session-a",
+				);
+				await handleTurnEnd({
 					ctxCwd: root,
 					getFlag: () => false,
 					dbg: () => {},
@@ -1222,79 +1236,196 @@ describe("automatic test-runner delivery (#2366)", () => {
 					resetLSPService: () => {},
 					resetFormatService: () => {},
 				} as unknown as Parameters<typeof handleTurnEnd>[0]);
-			const edit = () => {
-				runtime.recordProjectMutation({
-					filePath: source,
-					source: "agent-edit",
-				});
-				cache.addModifiedRange(
-					source,
-					{ start: 1, end: 1 },
-					false,
-					root,
-					"session-a",
-				);
-			};
-			const nextStage = () =>
-				new Promise<void>((resolve) => {
+			},
+			/** The oldest running batch fails with `message` and publishes. */
+			async fail(message: string) {
+				const published = new Promise<void>((resolve) => {
 					staged = resolve;
 				});
-			const generation = () =>
+				runs.shift()?.({
+					file: testFile,
+					sourceFile: source,
+					runner: "vitest",
+					passed: 0,
+					failed: 1,
+					skipped: 0,
+					failures: [{ name: "foo", message }],
+					duration: 5,
+				});
+				await published;
+			},
+			generation: () =>
 				cache.readCache<{ testRunGeneration?: number }>(
 					"test-runner-findings",
 					root,
-				)?.data.testRunGeneration;
-			// agent_settled's quiet-window task, through the production entry.
-			const settle = () =>
+				)?.data.testRunGeneration,
+			/** agent_settled's quiet-window task, through the production entry. */
+			settle() {
+				idle = true;
 				deliverStagedTestRunnerFindings({
 					cwd: root,
 					sessionId: "session-a",
 					ownerId: "owner-a",
 				});
-			// The context build of the next prompt.
-			const contextBuild = () =>
-				consumeStagedTestRunnerFindings({
+			},
+			/** A context build of the running agent (the first one is the prompt's). */
+			contextBuild() {
+				idle = false;
+				return consumeStagedTestRunnerFindings({
 					cwd: root,
 					sessionId: "session-a",
 					ownerId: "owner-a",
 					cacheManager: cache,
 					runtime,
-				});
+				})?.messages[0]?.content;
+			},
+		};
+	}
 
-			// Turn A: the batch fails and is staged as generation 1.
-			edit();
-			const stagedA = nextStage();
-			await turnEnd();
-			runs.shift()?.(failing("expected 1 to be 2"));
-			await stagedA;
-			expect(generation()).toBe(1);
+	/**
+	 * #5259 S0: turn A's batch fails (generation 1) and is staged; turn B
+	 * launches a second batch whose pre-run write bumps `testRunGeneration` to 2
+	 * but keeps generation 1's content, and that batch is still in flight at
+	 * `agent_settled`. Recurrence: the settle read the bumped generation, dropped
+	 * generation 1 as superseded, and the failure reached the model one whole
+	 * agent run late (P3, after the next settle) instead of at P2.
+	 */
+	it("delivers a staged failure at the next prompt when a newer run has launched but not published (#5259)", async () => {
+		const t = await realTimeline("pi-lens-5259-s0-");
+		try {
+			await t.editTurn();
+			await t.fail("expected 1 to be 2");
+			expect(t.generation()).toBe(1);
+			await t.editTurn();
+			expect(t.runs).toHaveLength(1);
+			expect(t.generation()).toBe(2);
 
-			// Turn B of the same agent run: a second batch launches (generation 2)
-			// and is still running when the agent settles.
-			fs.writeFileSync(source, "export const foo = 2;\n");
-			runtime.beginTurn();
-			edit();
-			await turnEnd();
-			expect(runs).toHaveLength(1);
-			expect(generation()).toBe(2);
+			t.settle();
+			expect(t.contextBuild()).toContain("expected 1 to be 2");
 
-			settle();
-			const atP2 = contextBuild();
-			expect(atP2?.messages[0]?.content).toContain("expected 1 to be 2");
-
-			// Batch B then fails too: it is staged as generation 2 and reaches
-			// the model after the next settle, once.
-			const stagedB = nextStage();
-			runs.shift()?.(failing("expected 2 to be 3"));
-			await stagedB;
-			expect(contextBuild()).toBeUndefined();
-			settle();
-			expect(contextBuild()?.messages[0]?.content).toContain(
-				"expected 2 to be 3",
+			// S2r: batch B fails while the next run is going. A context build of
+			// that run never takes it; the run's own settle makes it eligible.
+			await t.fail("expected 2 to be 3");
+			expect(t.contextBuild()).toBeUndefined();
+			t.settle();
+			expect(t.contextBuild()).toContain("expected 2 to be 3");
+			expect(t.contextBuild()).toBeUndefined();
+			const eligible = (await deliveryRecords()).filter(
+				(row) => row.outcome === "eligible",
 			);
-			expect(contextBuild()).toBeUndefined();
+			expect(eligible.map((row) => row.deliveryBoundary)).toEqual([
+				"agent_settled",
+				"agent_settled",
+			]);
+			// A publish during a run is not a prompt racing the settle.
+			expect(await deliveryOutcomes()).not.toContain("carried");
 		} finally {
 			vi.restoreAllMocks();
+			t.env.cleanup();
+		}
+	});
+
+	/**
+	 * #5259 S2 (PR #5279 review F2): the batch is still running at
+	 * `agent_settled` and fails before the next prompt. Recurrence: eligibility
+	 * was set only at the settle, so the failure waited for the next run's
+	 * settle and reached the model at P3.
+	 */
+	it("delivers a failure that finishes after agent_settled at the next prompt (#5259)", async () => {
+		const t = await realTimeline("pi-lens-5259-s2-");
+		try {
+			await t.editTurn();
+			t.settle();
+			await t.fail("expected 1 to be 2");
+			expect(t.contextBuild()).toContain("expected 1 to be 2");
+			t.settle();
+			expect(t.contextBuild()).toBeUndefined();
+			const eligible = (await deliveryRecords()).filter(
+				(row) => row.outcome === "eligible",
+			);
+			expect(eligible).toHaveLength(1);
+			expect(eligible[0]?.deliveryBoundary).toBe("published-idle");
+		} finally {
+			vi.restoreAllMocks();
+			t.env.cleanup();
+		}
+	});
+
+	/**
+	 * #5259 S1 (PR #5279 review F2): A fails and is eligible at the settle; the
+	 * newer batch B fails between the settle and the next prompt. Recurrence:
+	 * B's stage replaced A's eligible delivery with one that waited for the next
+	 * settle, so P2 got nothing and B arrived at P3. A stays superseded.
+	 */
+	it("delivers a newer failure that finishes between agent_settled and the next prompt instead of the older one (#5259)", async () => {
+		const t = await realTimeline("pi-lens-5259-s1-");
+		try {
+			await t.editTurn();
+			await t.fail("expected 1 to be 2");
+			await t.editTurn();
+			t.settle();
+			await t.fail("expected 2 to be 3");
+			const atP2 = t.contextBuild();
+			expect(atP2).toContain("expected 2 to be 3");
+			expect(atP2).not.toContain("expected 1 to be 2");
+			t.settle();
+			expect(t.contextBuild()).toBeUndefined();
+		} finally {
+			vi.restoreAllMocks();
+			t.env.cleanup();
+		}
+	});
+
+	/**
+	 * #5259: a publish that cannot read the host's idle state (a stale context
+	 * throws) records the failure and leaves the delivery for the settle.
+	 * Recurrence guarded: the new stage-time read must not drop a result or
+	 * throw into the batch's publish.
+	 */
+	it("leaves a result for the settle when the publish cannot read the host's idle state (#5259)", async () => {
+		const { env, cache, runtime } = setup();
+		try {
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+				owner: {
+					ownerId: "owner-a",
+					cacheManager: cache,
+					runtime,
+					getCtx: () => ({
+						cwd: env.tmpDir,
+						isIdle: () => {
+							throw new Error("stale context");
+						},
+					}),
+				},
+			});
+			const failed = (await deliveryRecords()).filter(
+				(row) => row.outcome === "delivery-failed",
+			);
+			expect(failed).toHaveLength(1);
+			expect(failed[0]?.deliveryBoundary).toBe("published-idle");
+			expect(failed[0]?.error).toContain("stale context");
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+				ownerId: "owner-a",
+			});
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-a",
+					ownerId: "owner-a",
+					cacheManager: cache,
+					runtime,
+				})?.messages[0]?.content,
+			).toContain("FAIL test/app.test.ts:1");
+		} finally {
 			env.cleanup();
 		}
 	});
