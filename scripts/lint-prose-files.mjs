@@ -74,10 +74,14 @@ function selectProseFiles(event) {
 	const listed = changedFiles(`${BASE}...HEAD`, { diffFilter: "ACMR" });
 	if (listed === null) return whole(`cannot diff ${BASE}...HEAD`);
 	// Every status, deletions included: a removed config file changes the lint too.
-	const touched = changedFiles(`${BASE}...HEAD`);
+	// No rename detection: a rename lists its old path as well as its new one,
+	// so a config file moved out of the config paths still counts (#5249 r2).
+	const touched = changedFiles(`${BASE}...HEAD`, { noRenames: true });
 	if (touched === null) return whole(`cannot diff ${BASE}...HEAD`);
 	if (touched.some(isConfigPath)) return whole("a lint config file changed");
-	if (listed.some((file) => file.startsWith('"')))
+	// A deletion is absent from `listed`, so the quoted-name guard reads both
+	// lists (#5249 r2).
+	if ([...listed, ...touched].some((file) => file.startsWith('"')))
 		return whole("git quoted a changed path name");
 	const files = listed.filter(isProsePath);
 	return {

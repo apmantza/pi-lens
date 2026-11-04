@@ -60,9 +60,13 @@ function write(dir: string, file: string, body: string): void {
 }
 
 // A base commit on `master` with `origin/master` pointing at it, then a
-// `feature` commit holding the edits under test. Fixtures live under the
+// `feature` commit holding the edits under test. `baseEdits` adds files to the
+// base commit, for a file the head deletes. Fixtures live under the
 // git-ignored `.probe-home` (#4867), never on tmpfs.
-function makeRepo(headEdits: (dir: string) => void): string {
+function makeRepo(
+	headEdits: (dir: string) => void,
+	baseEdits: (dir: string) => void = () => {},
+): string {
 	// process.cwd() is the repo root under vitest, as in changelog-entries.test.ts;
 	// the containment scan (tests/config/tmp-fixture-hygiene.test.ts) reads that
 	// spelling as a repo-rooted parent.
@@ -79,6 +83,7 @@ function makeRepo(headEdits: (dir: string) => void): string {
 	write(dir, "clients/code.ts", "export const v = 1;\n");
 	write(dir, "tests/fixtures/notes.md", "# Notes\n");
 	write(dir, ".vale.ini", "StylesPath = .vale/styles\n");
+	baseEdits(dir);
 	git(dir, ["add", "."]);
 	git(dir, ["commit", "-qm", "base"]);
 	git(dir, ["update-ref", "refs/remotes/origin/master", "HEAD"]);
@@ -288,6 +293,42 @@ describe("the prose selection on a pull request (#5249)", () => {
 			expect(result.status, label).toBe(0);
 			expect(result.stdout, label).toBe(WHOLE_OUTPUT);
 		}
+	});
+
+	// Recurrence: under rename detection `--name-only` reports a rename as its new
+	// path alone, so a config file moved out of `.vale.ini`'s place reads as an
+	// unrelated addition and the config rule never fires (#5249 r2 F4). The config
+	// check diffs without rename detection, so both sides of the rename are read.
+	it("lints the whole list when a rename moves a lint config file out of its path", () => {
+		const dir = makeRepo((head) => {
+			fs.mkdirSync(path.join(head, "config"), { recursive: true });
+			fs.renameSync(
+				path.join(head, ".vale.ini"),
+				path.join(head, "config", "vale.ini"),
+			);
+			write(head, "docs/guide.md", "# Guide\n\nEdited.\n");
+		});
+		const result = selection(dir, "pull_request");
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe(WHOLE_OUTPUT);
+	});
+
+	// Recurrence: git quotes a path with non-ASCII bytes, so a deleted style file
+	// named `café.yml` shows as `".vale/styles/Google/caf\303\251.yml"`, which the
+	// config prefix never matches. The quoted-name guard read only the ACMR list,
+	// which holds no deletions, so the removed rule passed unlinted (#5249 r2 F5).
+	it("lints the whole list when a deleted style file has a name git quotes", () => {
+		const style = ".vale/styles/Google/café.yml";
+		const dir = makeRepo(
+			(head) => {
+				fs.rmSync(path.join(head, style));
+				write(head, "docs/guide.md", "# Guide\n\nEdited.\n");
+			},
+			(base) => write(base, style, "extends: existence\n"),
+		);
+		const result = selection(dir, "pull_request");
+		expect(result.status).toBe(0);
+		expect(result.stdout).toBe(WHOLE_OUTPUT);
 	});
 });
 
