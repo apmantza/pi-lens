@@ -17,6 +17,13 @@
  * the report there, without it vitest 5 writes `.vitest/json/output.json` under
  * the child's cwd and prints only the notice, vitest 3 prints the report.
  *
+ * #5270 adds the pytest half: the same real `handleTurnEnd` path over output
+ * CAPTURED from real pytest 9.2.0 runs (`tests/fixtures/pytest-output/`), replayed
+ * by the faked pytest PROCESS. Recurrence prevented (2026-11-04 probe, real
+ * pytest 9.2.0 through `TestRunnerClient` and turn-end): `1 passed, 1 error`
+ * (a fixture raised), exit 1, parsed as passed=1 failed=0 with no error, logged
+ * "all tests passed" and cleared the `--lens-guard` blocker.
+ *
  * Boundary decision (flake-shape): no real test runner spawn and no wall-clock
  * wait; completion is awaited on the turn's own debug line.
  */
@@ -34,9 +41,35 @@ const fake = vi.hoisted(() => ({
 	/** Fixture directory root. */
 	root: "",
 	spawns: [] as Array<{ command: string; args: string[]; cwd: string }>,
+	/** #5270: ignore `--outputFile` and print the report on stdout (a wrapper). */
+	stdoutOnly: false,
 	/** Raw replacement for the pytest spawn. */
 	pytest: undefined as undefined | { stdout: string; status: number },
 }));
+
+/** Captured pytest 9.2.0 runs (fixture name -> exit code, see the README). */
+const PYTEST_RUNS = {
+	pass: 0,
+	xfail: 0,
+	mixed: 1,
+	fail_and_error: 1,
+	collect: 2,
+	empty: 5,
+} as const;
+type PytestRun = keyof typeof PYTEST_RUNS;
+function pytestRun(name: PytestRun): { stdout: string; status: number } {
+	return {
+		stdout: fs.readFileSync(
+			path.join(
+				fileURLToPath(new URL("../fixtures/pytest-output/", import.meta.url)),
+				"pytest-9.2.0",
+				`${name}.txt`,
+			),
+			"utf8",
+		),
+		status: PYTEST_RUNS[name],
+	};
+}
 
 vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
@@ -58,6 +91,7 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 					? undefined
 					: fs.readFileSync(path.join(fake.root, dir, file), "utf8");
 			const status = report?.includes('"success":false') ? 1 : 0;
+			if (fake.stdoutOnly) return { stdout: report ?? "", stderr: "", status };
 			const flag = args.find((arg) => arg.startsWith("--outputFile="));
 			let outputFile = flag?.slice("--outputFile=".length);
 			if (fake.version === "5" && outputFile === undefined) {
@@ -93,7 +127,10 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleTurnEnd } from "../../clients/runtime-turn.js";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 import { scannerReportParentDir } from "../../clients/scanner-temp-root.js";
-import { TestRunnerClient } from "../../clients/test-runner-client.js";
+import {
+	isCompletedPassResult,
+	TestRunnerClient,
+} from "../../clients/test-runner-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 fake.root = fileURLToPath(
@@ -197,6 +234,7 @@ beforeEach(() => {
 	fake.spawns.length = 0;
 	fake.fixtures.clear();
 	fake.pytest = undefined;
+	fake.stdoutOnly = false;
 	fake.version = "5";
 	env = setupTestEnvironment("pi-lens-5257-");
 	vi.stubEnv("PI_LENS_HOME", path.join(env.tmpDir, "machine"));
@@ -232,7 +270,7 @@ describe("a failing vitest test keeps the commit blocked", () => {
 		expect(findings?.content).toContain("failed");
 	});
 
-	it("vitest 3 (report on stdout): a failing test stays blocked", async () => {
+	it("vitest 3: a failing test stays blocked", async () => {
 		fake.version = "3";
 		const test = plant("a", "fail");
 		seedBlocker(test);
@@ -343,10 +381,22 @@ describe("TestRunnerClient parse verdict", () => {
 		expect(result.duration).toBeGreaterThanOrEqual(0);
 	});
 
-	it("reads vitest 3's stdout report", async () => {
+	it("reads vitest 3's report file", async () => {
 		const result = await run("fail", "3");
 		expect(result).toMatchObject({ passed: 1, failed: 1 });
 		expect(result.error).toBeUndefined();
+	});
+
+	// #5270: real vitest 3.2.4 and 5.0.5 print only `JSON report written to
+	// <path>` on stdout when `--outputFile` is passed (the runner always passes
+	// it), so there is no stdout fallback: a report on stdout with no file is an
+	// unreadable report. Recurrence prevented: a dead fallback with no test (F2
+	// of the #5268 review) that would silently re-admit stdout parsing.
+	it("a report only on stdout (no file written) is an error result, not parsed", async () => {
+		fake.stdoutOnly = true;
+		const result = await run("pass", "3");
+		expect(result.error).toMatch(/Could not read vitest test output/);
+		expect(result.passed + result.failed).toBe(0);
 	});
 
 	it("a vitest 5 import error is an error result, not a clean zero", async () => {
@@ -407,5 +457,106 @@ describe("TestRunnerClient parse verdict", () => {
 			config: detected!.config,
 		});
 		expect(result.error).toBeTruthy();
+	});
+});
+
+describe("pytest: errors beside passes never read as passed (#5270)", () => {
+	/** An edited source with its `tests/test_<name>.py`; the fake replays `run`. */
+	function plantPython(name: string, run: PytestRun): string {
+		write("pytest.ini", "[pytest]\n");
+		write(
+			process.platform === "win32"
+				? ".venv/Scripts/python.exe"
+				: ".venv/bin/python",
+			"",
+		);
+		const src = write(`${name}.py`, "x = 1\n");
+		const test = write(`tests/test_${name}.py`, "def test_a(): pass\n");
+		fake.pytest = pytestRun(run);
+		cacheManager.addModifiedRange(
+			src,
+			{ start: 1, end: 1 },
+			false,
+			root,
+			SESSION,
+		);
+		return test;
+	}
+
+	async function parse(run: PytestRun) {
+		const test = plantPython("a", run);
+		const detected = client.detectRunner(root, test);
+		expect(detected?.runner).toBe("pytest");
+		return client.runTestFileAsync(test, root, {
+			runner: "pytest",
+			config: detected!.config,
+		});
+	}
+
+	it("1 passed, 1 error (a raising fixture): an error result, not a pass", async () => {
+		const result = await parse("mixed");
+		expect(result).toMatchObject({ passed: 1, failed: 0 });
+		expect(result.error).toMatch(/1 error/);
+	});
+
+	it("1 failed, 1 error: the failure stays counted and the error is named", async () => {
+		const result = await parse("fail_and_error");
+		expect(result).toMatchObject({ passed: 0, failed: 1 });
+		expect(result.error).toMatch(/1 error/);
+	});
+
+	it("a collection error is an error result (exit 2 still says interrupted)", async () => {
+		const result = await parse("collect");
+		expect(result.error).toBe("Pytest interrupted");
+	});
+
+	it("an xfail beside a pass is still a pass", async () => {
+		const result = await parse("xfail");
+		expect(result).toMatchObject({ passed: 1, failed: 0 });
+		expect(result.error).toBeUndefined();
+	});
+
+	it("a non-zero exit whose counts show no failure is an error even with passes counted", async () => {
+		const test = plantPython("a", "pass");
+		fake.pytest = { stdout: "1 passed in 0.01s\n", status: 1 };
+		const detected = client.detectRunner(root, test);
+		const result = await client.runTestFileAsync(test, root, {
+			runner: "pytest",
+			config: detected!.config,
+		});
+		expect(result.passed).toBe(1);
+		expect(result.error).toMatch(/exited with 1/);
+	});
+
+	it("exit 5 (no tests collected) is not an error and is not a completed pass", async () => {
+		const result = await parse("empty");
+		expect(result).toMatchObject({ passed: 0, failed: 0 });
+		expect(result.error).toBeUndefined();
+		expect(isCompletedPassResult(result)).toBe(false);
+	});
+
+	it("turn-end: 1 passed, 1 error keeps the blocker and never says all tests passed", async () => {
+		const test = plantPython("a", "mixed");
+		seedBlocker(test);
+		expect(blocked()).toBe(true);
+		await turnEnd();
+		expect(dbgLines.join("\n")).not.toContain("all tests passed");
+		expect(blocked()).toBe(true);
+	});
+
+	it("turn-end: exit 5 (no tests collected) keeps the old blocker", async () => {
+		const test = plantPython("a", "empty");
+		seedBlocker(test);
+		await turnEnd();
+		expect(dbgLines.join("\n")).not.toContain("all tests passed");
+		expect(blocked()).toBe(true);
+	});
+
+	it("turn-end: a clean pytest pass still clears its blocker (the guard is not stuck)", async () => {
+		const test = plantPython("a", "pass");
+		seedBlocker(test);
+		await turnEnd();
+		expect(dbgLines.join("\n")).toContain("all tests passed");
+		expect(blocked()).toBe(false);
 	});
 });
