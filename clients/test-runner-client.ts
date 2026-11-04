@@ -2535,7 +2535,13 @@ export class TestRunnerClient {
 								// refuses to count as a pass.
 								exitCode !== 0 && exitCode !== 5 && passed === 0 && failed === 0
 								? `Pytest exited with ${exitCode} (no summary read)`
-								: undefined,
+								: // #5270 acceptance 2 (#5276 r2): exit 3 is an internal error or
+									// `pytest.exit(returncode=3)`. The run stopped early, so the
+									// summary it still prints (`1 passed`) is partial, whatever it
+									// counts. Exit 1 with passes stays the threshold case above.
+									exitCode === 3
+									? "Pytest internal error (exit 3)"
+									: undefined,
 		};
 	}
 

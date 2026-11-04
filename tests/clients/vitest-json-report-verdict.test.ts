@@ -60,6 +60,10 @@ const PYTEST_RUNS = {
 	errors_plural: 1,
 	failed_and_passed: 1,
 	failed_only: 1,
+	// #5276 r2: exit 3 (pytest.exit or INTERNALERROR) after a summary was printed.
+	exit3_pytest_exit: 3,
+	exit3_internalerror: 3,
+	exit3_after_failure: 3,
 } as const;
 type PytestRun = keyof typeof PYTEST_RUNS;
 function pytestRun(name: PytestRun): { stdout: string; status: number } {
@@ -529,6 +533,7 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 	//   1 | passed>0 failed>0          -> failed, no error
 	//   1 | errors>0 (singular/plural) -> error naming the count
 	//   1 or 3 | no summary line       -> error "no summary read"
+	//   3 | passed>0 or failed>0      -> error "internal error" (failures kept)
 	//   0 | passed=0 failed=0 (skips)   -> no error, not a completed pass
 	//   5 | no tests                   -> no error, not a completed pass
 	// Recurrence prevented (r1 of #5276): the first cut errored on ANY non-zero
@@ -546,6 +551,25 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 			expect(result).toMatchObject({ passed, failed });
 			if (error === undefined) expect(result.error).toBeUndefined();
 			else expect(result.error).toMatch(error);
+		},
+	);
+
+	// #5270 acceptance 2: exit 3 is pytest's internal error (or a
+	// `pytest.exit(returncode=3)`): the run stopped early, so the summary it
+	// still prints is partial whatever it counts. Recurrence prevented (verify
+	// r2 V1 of #5276, real pytest 9.2.0): `1 passed` then exit 3 read as a
+	// completed pass and cleared the commit blocker.
+	it.each([
+		["exit3_pytest_exit", 1, 0],
+		["exit3_internalerror", 2, 0],
+		["exit3_after_failure", 0, 1],
+	] as const)(
+		"%s (exit 3): passed=%i failed=%i is an internal error, never a completed pass",
+		async (run, passed, failed) => {
+			const result = await parse(run);
+			expect(result).toMatchObject({ passed, failed });
+			expect(result.error).toBe("Pytest internal error (exit 3)");
+			expect(isCompletedPassResult(result)).toBe(false);
 		},
 	);
 
@@ -596,6 +620,14 @@ describe("pytest: errors beside passes never read as passed (#5270)", () => {
 
 	it("turn-end: exit 5 (no tests collected) keeps the old blocker", async () => {
 		const test = plantPython("a", "empty");
+		seedBlocker(test);
+		await turnEnd();
+		expect(dbgLines.join("\n")).not.toContain("all tests passed");
+		expect(blocked()).toBe(true);
+	});
+
+	it("turn-end: 1 passed then exit 3 (pytest.exit) keeps the blocker", async () => {
+		const test = plantPython("a", "exit3_pytest_exit");
 		seedBlocker(test);
 		await turnEnd();
 		expect(dbgLines.join("\n")).not.toContain("all tests passed");
