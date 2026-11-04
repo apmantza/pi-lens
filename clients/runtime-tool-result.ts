@@ -2277,9 +2277,7 @@ function appliedFilesOfOwnTool(event: {
 	const listed = (event.details as { appliedFiles?: unknown } | undefined)
 		?.appliedFiles;
 	return Array.isArray(listed)
-		? listed.filter(
-				(candidate): candidate is string => typeof candidate === "string",
-			)
+		? listed.flatMap((entry) => (typeof entry === "string" ? [entry] : []))
 		: [];
 }
 

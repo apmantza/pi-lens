@@ -67,7 +67,7 @@ interface Row {
 }
 
 describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
-	it("control: a write of the same bytes dispatches the file once (the row detector sees it)", async () => {
+	it("control: a write of the same bytes reaches the dispatcher (the row detector sees it)", async () => {
 		const { proj, target } = seed(fixture.root, "write-control", CLEAN_FILE);
 		const handle = await openGuardedSession(fixture.root, proj, [
 			step(readTarget(target), "reading"),
