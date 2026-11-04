@@ -85,6 +85,11 @@ export interface LedgerRebuild {
 	/** Set when the rebuild could not verify the transcript. */
 	readonly declined?: DeclineReason;
 	/**
+	 * #5240: true when a still-valid retained entry already carries `text`, so
+	 * a repeat of it adds nothing a later request does not already re-send.
+	 */
+	holds(text: string): boolean;
+	/**
 	 * Add this request's NEW injection, anchored at pi's last transcript
 	 * message. Returns the decline reason when it was not retained.
 	 */
@@ -157,6 +162,7 @@ export function createInjectionLedger(): InjectionLedger {
 		reemitted: 0,
 		reemittedBytes: 0,
 		pruned: 0,
+		holds: () => false,
 		retain: () => {
 			recordDecline("<no-session>", "no-session-id");
 			return "no-session-id";
@@ -282,6 +288,17 @@ export function createInjectionLedger(): InjectionLedger {
 			return undefined;
 		};
 
+		const holds: LedgerRebuild["holds"] = (text) =>
+			valid.some((entry) =>
+				entry.kind === "user-text"
+					? entry.text.includes(text)
+					: entry.messages.some(
+							(message) =>
+								typeof message.content === "string" &&
+								message.content.includes(text),
+						),
+			);
+
 		return {
 			messages,
 			retainedPositions,
@@ -289,6 +306,7 @@ export function createInjectionLedger(): InjectionLedger {
 			reemittedBytes,
 			pruned,
 			...(declined ? { declined } : {}),
+			holds,
 			retain,
 		};
 	};

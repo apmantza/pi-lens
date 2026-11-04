@@ -377,10 +377,15 @@ describe("a cut drift advisory does not key the dedupe on the file set (#4921)",
 					sessionId,
 					turn,
 				);
+				// A request inside one prompt (#5240): the unchanged set stays staged for
+				// the next prompt's first request, never re-sent here.
 				const result = consumeTurnEndFindings(
 					cacheManager,
 					env.tmpDir,
 					runtime,
+					undefined,
+					undefined,
+					{ atPromptTail: false, blockersLive: true },
 				);
 				delivered.push(result ? JSON.stringify(result.messages) : undefined);
 			}

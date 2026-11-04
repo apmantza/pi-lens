@@ -56,6 +56,13 @@ export interface TurnEndFindingsCache {
 	blockingFiles?: string[] | undefined;
 	/** Context has consumed the message, but the guard still owns the state. */
 	consumed?: boolean;
+	/**
+	 * #5240: `content` is the repeat of blockers the model was already told
+	 * about (`blockerRepeatContent`), staged by a duplicate turn end. A pi
+	 * request takes it only as the first request of a prompt; any other request
+	 * leaves it staged. Absent on every record released before #5240.
+	 */
+	repeat?: boolean | undefined;
 	testFailures?: boolean;
 	testFailureContent?: string;
 	testFailureFiles?: string[];

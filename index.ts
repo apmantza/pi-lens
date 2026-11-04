@@ -4931,12 +4931,36 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// `telemetrySessionId`, so that id would read its own delivery as
 			// another session's (#4961 review F1).
 			const readerSessionId = prefixSessionId ?? runtime.telemetrySessionId;
-			const turnEndFindings = consumeTurnEndFindings(
+			// #5240: a repeat of blockers the model was already told about rides
+			// only the request that opens a prompt, pi's first request of the
+			// turn; the mid-run requests of one prompt keep #4921's one delivery.
+			const lastMessage = existingMessages[existingMessages.length - 1];
+			const consumedTurnEnd = consumeTurnEndFindings(
 				cacheManager,
 				cwd,
 				runtime,
 				readerSessionId,
+				undefined,
+				{
+					atPromptTail:
+						lastMessage !== undefined && isPlainUserPrompt(lastMessage),
+					// The reader's own inline blockers, as its turn end judges them: a
+					// fix drops the record and a mark sets `policySuppressed`. Not the
+					// commit-gate latch, which another session's blocker keeps true
+					// (#5254 r1 F1).
+					blockersLive: runtime
+						.getInlineBlockersSnapshot({ sessionId: readerSessionId })
+						.some((entry) => entry.policySuppressed !== true),
+				},
 			);
+			// #5240 under retain: a retained entry that already carries the
+			// repeat's blockers keeps showing them, so the repeat adds nothing and
+			// spends none of the 64-entry cap.
+			const turnEndFindings =
+				consumedTurnEnd?.repeatBody !== undefined &&
+				rebuilt?.holds(consumedTurnEnd.repeatBody)
+					? undefined
+					: consumedTurnEnd;
 			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);
 			const testFindings = consumeStagedTestRunnerFindings({
 				cwd,
@@ -5006,7 +5030,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// `base` ends with that same message too: a retained span after it is
 			// an "after" entry, which only a non-prompt last message gets, so the
 			// prompt path below never meets one.
-			const lastMessage = existingMessages[existingMessages.length - 1];
 			const lastPosition = base.length - 1;
 			// #4743: a retained injection says in its own bytes that it is a
 			// snapshot, so the label is part of what every later request repeats.

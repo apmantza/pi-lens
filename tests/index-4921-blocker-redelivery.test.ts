@@ -25,7 +25,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CacheManager } from "../clients/cache-manager.js";
-import { AUTOMATION_FRAMING } from "../clients/runtime-context.js";
+import {
+	AUTOMATION_FRAMING,
+	BLOCKER_REPEAT_HEADING,
+} from "../clients/runtime-context.js";
 import {
 	BLOCKING_FILE,
 	CLEAN_FILE,
@@ -78,12 +81,19 @@ function listen(): PiFauxReply[] {
 	return [endTurn("listening")];
 }
 
-/** The requests that carry an injected pi-lens message naming `needle`. */
+/**
+ * The requests that carry an injected pi-lens message naming `needle`. A
+ * repeat of an already-delivered blocker (#5240, the first request of a later
+ * prompt) is not a delivery: `tests/index-5240-blocker-repeat.test.ts` counts it.
+ */
 function injected(handle: PiSession, needle: string): number {
 	return handle.requests.filter((request) =>
 		request.some((message) =>
 			textBlocks(message).some(
-				(text) => text.startsWith(AUTOMATION_FRAMING) && text.includes(needle),
+				(text) =>
+					text.startsWith(AUTOMATION_FRAMING) &&
+					text.includes(needle) &&
+					!text.includes(BLOCKER_REPEAT_HEADING),
 			),
 		),
 	).length;
@@ -158,11 +168,15 @@ describe.each([
 			const read = await handle.latencyRows();
 			expect(read.skipped).toBe(0);
 			const rows = read.rows.filter((row) => row.toolName === "turn_end");
-			const suppressed = rows.filter(
-				(row) =>
-					(row.metadata as Record<string, unknown> | undefined)
-						?.deliverySuppressed === "duplicate",
-			);
+			// #5240: a duplicate turn that still holds a blocker stages a repeat for
+			// the next prompt and carries `blockerRepeat` instead.
+			const suppressed = rows.filter((row) => {
+				const metadata = row.metadata as Record<string, unknown> | undefined;
+				return (
+					metadata?.deliverySuppressed === "duplicate" ||
+					metadata?.blockerRepeat === true
+				);
+			});
 			// The three clean-file write steps repeat the delivered blocker, and
 			// the first write step, which delivered it, carries no field.
 			expect(suppressed.length).toBeGreaterThanOrEqual(3);
@@ -171,9 +185,13 @@ describe.each([
 			// The field lives on the turn_end row alone: no row of another kind
 			// (a new phase) carries it.
 			expect(
-				read.rows.filter((row) =>
-					JSON.stringify(row).includes("deliverySuppressed"),
-				).length,
+				read.rows.filter((row) => {
+					const text = JSON.stringify(row);
+					return (
+						text.includes("deliverySuppressed") ||
+						text.includes("blockerRepeat")
+					);
+				}).length,
 			).toBe(suppressed.length);
 			expect(sections(handle, "bad.ts")).toBe(1);
 			expect(handle.errors).toEqual([]);
