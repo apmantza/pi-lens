@@ -8,6 +8,7 @@
  * mocked so warm-up never spawns a real language server.
  */
 
+import { CHECKED_BY_FIXTURE } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -54,6 +55,7 @@ import { resetDispatchBaselines } from "../../../clients/dispatch/integration.js
 import { getDiagnosticTracker } from "../../../clients/diagnostic-tracker.js";
 import {
 	clearWidgetState,
+	exportWidgetState,
 	getFileDiagnosticSummaries,
 	reconcileStaleWidgetFiles,
 	recordRunner,
@@ -95,6 +97,7 @@ const emptyResult = {
 	resolvedCount: 0,
 	output: "",
 	blockerOutput: "",
+	verdict: CHECKED_BY_FIXTURE,
 	hasBlockers: false,
 };
 
@@ -138,6 +141,7 @@ describe("analyzeFile", () => {
 			resolvedCount: 0,
 			output: "1 error, 1 warning",
 			blockerOutput: "1 error",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: true,
 		});
 
@@ -241,6 +245,40 @@ describe("analyzeFile", () => {
 		const result = await analyzeFile(tsFile, tmpDir);
 
 		expect(result.lsp).toMatchObject({ ran: true, status: "deferred" });
+	});
+
+	it("records an unchecked analysis with its reason, so the footer does not read it as clean", async () => {
+		// Recurrence prevented: #5258. analyze_file fed the footer a no-finding
+		// run whether or not any check of the file's kind had completed.
+		vi.mocked(dispatchForFile).mockResolvedValue({
+			...emptyResult,
+			verdict: { checked: false, reason: "a language tool is missing" },
+		});
+
+		await analyzeFile(tsFile, tmpDir);
+
+		expect(exportWidgetState().files.map((f) => f.uncheckedReason)).toEqual([
+			"a language tool is missing",
+		]);
+	});
+
+	it("records no reason for a file nothing can check, so the footer never counts it", async () => {
+		// Recurrence prevented: #5285 review F2, on the pull surface: a kindless
+		// or generated file left `⚠ 1 unchecked` that no later check could retire.
+		vi.mocked(dispatchForFile).mockResolvedValue({
+			...emptyResult,
+			verdict: {
+				checked: false,
+				reason: "no analyzer handles this file type",
+				inapplicable: true,
+			},
+		});
+
+		await analyzeFile(tsFile, tmpDir);
+
+		const files = exportWidgetState().files;
+		expect(files).toHaveLength(1);
+		expect(files[0]?.uncheckedReason).toBeUndefined();
 	});
 
 	it("attaches the latency report appended during this dispatch", async () => {
@@ -854,6 +892,7 @@ describe("analyzeFile — widget cross-check key parity across writers (#3160 F1
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 
@@ -935,6 +974,7 @@ describe("analyzeFile — absolute dot-segment `file` argument (#3184)", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 

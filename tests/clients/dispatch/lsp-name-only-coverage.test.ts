@@ -15,6 +15,7 @@
  * unavailable ... (not a clean result)" for a lane that could never run.
  */
 
+import { uncheckedReason } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -247,7 +248,7 @@ describe("only the lsp runner's no-files-matched silences the notice", () => {
 	it("stays quiet when the lsp row is the only primary row that ran", async () => {
 		const result = await dispatchCsharp([["lsp", NOT_APPLICABLE]]);
 		expect(result.output).not.toContain(UNAVAILABLE);
-		expect(result.unconfirmedStatus).toBe(
+		expect(uncheckedReason(result)).toBe(
 			"not analyzed (no language server handles this file)",
 		);
 	});

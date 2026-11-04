@@ -1195,6 +1195,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	// with the clean edit's mtime preserved (the edit-during-scan state), and
 	// the reporter's own two-WORKTREE configuration, which needs two roots
 	// under one home and therefore two more children.
+	"real-process-spawn:real-harness/clean-verdict.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the write's tool-result line is built by the real pi host's tool_result handler; no in-process double reaches the line a model reads (#5258)",
+	},
 	"real-process-spawn:real-harness/diagnostic-provenance.test.ts": {
 		detector: "real-process-spawn",
 		reason:

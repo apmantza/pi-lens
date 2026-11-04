@@ -1,0 +1,19 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "write",
+			"id": "w1",
+			"arguments": {
+				"path": "bad.ts",
+				"content": "const n: number = \"not a number\";\nexport default n;\n"
+			}
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "written"
+		}
+	]
+]

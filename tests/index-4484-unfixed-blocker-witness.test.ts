@@ -1608,15 +1608,19 @@ describe("#4484 witness, round 5: a fallback holds only what its evidence names"
 			AST_GREP_OFF,
 		);
 		const W0 = BASE.replace("k = 1", "k = 2");
-		expect(await s.edit(W0, [6])).toMatch(/✓ .*clean/);
+		// #5258: this session runs --no-lsp, so no primary checker ran and the
+		// line says so instead of `✓ clean`. The row's claim is that no write
+		// turns the pre-existing finding into a STOP.
+		const noStop = (text: string) => {
+			expect(text).not.toContain("STOP");
+			expect(text).toMatch(/⚠ .*unconfirmed/);
+		};
+		noStop(await s.edit(W0, [6]));
 		// The skipped lines hold a copy of the pre-existing finding's own line,
 		// so owed positions must be remapped, not matched by text.
 		const COPY = AG_PRE.split("\n").slice(2, 5).join("\n");
-		const w1 = await s.edit(`${W0}${COPY}\n${OVER_CAP}\n`, [7, 8, 9, 10]);
-		expect(w1).toMatch(/✓ .*clean/);
-		const w2 = await s.edit(W0, [6]);
-		expect(w2).not.toContain("STOP");
-		expect(w2).toMatch(/✓ .*clean/);
+		noStop(await s.edit(`${W0}${COPY}\n${OVER_CAP}\n`, [7, 8, 9, 10]));
+		noStop(await s.edit(W0, [6]));
 		expect(await s.commitBlocked()).toBe(false);
 		pendingCleanup = undefined;
 	}, 120_000);

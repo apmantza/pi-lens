@@ -1,0 +1,19 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "write",
+			"id": "w1",
+			"arguments": {
+				"path": "build.gradle",
+				"content": "plugins {\n  id \"java\"\n\ndependencies {\n  implementation \"x:y:1.0\"\n"
+			}
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "written"
+		}
+	]
+]

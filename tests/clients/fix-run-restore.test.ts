@@ -14,6 +14,7 @@
  * queue cannot see (#3541's remainder), and the same edit lost silently when
  * the capture itself was already overwritten.
  */
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 // pi's real per-file queue, the one its `edit`/`write` tools run under.
@@ -229,6 +230,7 @@ describe("whole-package fixer restores agent edits (#3598)", () => {
 			resolvedCount: 0,
 			output: "",
 			blockerOutput: "",
+			verdict: CHECKED_BY_FIXTURE,
 			hasBlockers: false,
 		});
 	});

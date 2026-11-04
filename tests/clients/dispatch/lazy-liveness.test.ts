@@ -1,3 +1,4 @@
+import { CHECKED_BY_FIXTURE } from "../../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +24,7 @@ const dispatchResult = {
 	resolvedCount: 0,
 	output: "dispatch output",
 	blockerOutput: "",
+	verdict: CHECKED_BY_FIXTURE,
 	hasBlockers: false,
 };
 

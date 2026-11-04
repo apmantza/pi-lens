@@ -10,6 +10,7 @@
  * sleeps. Every write gets a fresh, strictly increasing mtime so FileTime sees
  * it; fixtures start with an mtime older than any guard.
  */
+import { CHECKED_BY_FIXTURE } from "../support/dispatch-verdict.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -96,6 +97,7 @@ const CLEAN_DISPATCH = {
 	resolvedCount: 0,
 	output: "",
 	blockerOutput: "",
+	verdict: CHECKED_BY_FIXTURE,
 	hasBlockers: false,
 };
 

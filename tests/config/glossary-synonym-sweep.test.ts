@@ -583,7 +583,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 21 -> 22 (#5010): `buildCoverageNotice` keeps the rows
 		// `dispatch.disabledRunners` skipped, an `Array.prototype.filter` call,
 		// not a delivery filter.
-		"clients/dispatch/dispatcher.ts": 22,
+		// 22 -> 23 (#5258): the coverage rule reads the rows the dispatcher
+		// kept for the primary group, an `Array.prototype.filter` call, not a
+		// delivery filter.
+		"clients/dispatch/dispatcher.ts": 23,
 		"clients/dispatch/fact-runner.ts": 1,
 		"clients/dispatch/fact-scheduler.ts": 2,
 		"clients/dispatch/facts/function-facts.ts": 2,
@@ -630,6 +633,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/tool-failure.ts": 2,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 1,
 		"clients/dispatch/suppress-writer.ts": 1,
+		// 0 -> 1 (#5258): `checkedVerdict` keeps the rows of runners that
+		// completed, an `Array.prototype.filter` call, not a delivery filter.
+		"clients/dispatch/types.ts": 1,
 		"clients/dispatch/utils/lsp-diagnostics.ts": 1,
 		"clients/file-kinds.ts": 1,
 		"clients/file-role.ts": 3,
@@ -837,9 +843,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/turn-end/lanes/secrets.ts": 3,
 		"clients/turn-summary-render.ts": 3,
 		"clients/vanished-instance-marker.ts": 1,
-		// 16 -> 17 (#5020): `retireWidgetCitedRows` keeps the rows no retire named,
-		// an `Array.prototype.filter` call, not a delivery gate.
-		"clients/widget-state.ts": 17,
+		// 16 -> 18 (#5258, #5020): the header counts the files no check completed
+		// on, and `retireWidgetCitedRows` keeps the rows no retire named; both are
+		// `Array.prototype.filter` calls, not delivery filters.
+		"clients/widget-state.ts": 18,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		"tools/activate-tools.ts": 2,
@@ -1310,7 +1317,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 26 -> 24 (#4689 batch 3): the changed-file set is a PathKeyedMap, so two
 		// `path.resolve` calls are gone. 24 -> 22: the postMutation gate compares
 		// through `normalizeMapKey`, two more.
-		"clients/pipeline.ts": 22,
+		// 22 -> 23 (#5258): the unconfirmed line names an unknown-kind file by
+		// its extension, a filesystem path operation.
+		"clients/pipeline.ts": 23,
 		// 10 -> 12 (#4530): machineStateDir moved here from file-utils.ts.
 		"clients/probe-home-state.ts": 12,
 		"clients/project-changes.ts": 5,
@@ -1476,7 +1485,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// sense as the four above (a filesystem path operation).
 		"clients/trivy-client.ts": 5,
 		"clients/warm-attach.ts": 3,
-		"clients/widget-state.ts": 7,
+		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
+		// filesystem path operation.
+		"clients/widget-state.ts": 8,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
@@ -1745,7 +1756,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 5 -> 6 (#4484 r2): `reachedNoVerdict` reads the runner result's status.
 		// 6 -> 7 (#4733 r2): `checkedWholeFile` reads each latency row's status.
 		// 7 -> 8 (#4130): `faultResult` builds the one `failed` runner result.
-		"clients/dispatch/types.ts": 9,
+		// 9 -> 10 (#5258): `checkedVerdict` reads each row's runner status through
+		// `hasUsableResult`.
+		"clients/dispatch/types.ts": 10,
 		"clients/file-utils.ts": 2,
 		"clients/finding-delivery-gate.ts": 3,
 		"clients/formatters.ts": 8,
