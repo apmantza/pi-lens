@@ -27,7 +27,16 @@ import {
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { dispatchLint } from "../../../clients/dispatch/integration.js";
-import { getServersForFileWithConfig } from "../../../clients/lsp/config.js";
+import {
+	getServersForFileWithConfig,
+	initLSPConfig,
+	resetLSPConfigStateForTests,
+} from "../../../clients/lsp/config.js";
+import { resetProjectLensConfigCache } from "../../../clients/project-lens-config.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../../clients/project-trust.js";
 import type { RunnerResult } from "../../../clients/dispatch/types.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -68,6 +77,9 @@ afterEach(() => {
 	process.env.PATH = previousPath;
 	if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = previousHome;
+	resetLSPConfigStateForTests();
+	resetProjectLensConfigCache();
+	resetProjectTrust();
 	removeTempDirSync(tmpDir);
 });
 
@@ -80,6 +92,21 @@ describe("a name no language server selects is not 'analysis unavailable'", () =
 			expect(output, name).not.toContain(UNAVAILABLE);
 			expect(output, name).not.toContain("not a clean result");
 		}
+	});
+
+	it("still names an operator's lsp.disabledServers denial, not 'nothing to check'", async () => {
+		// Recurrence this guards: the not-applicable skip rides the branch that
+		// also reports a disabled primary (#4403). A skipReason set beside the
+		// disabled cause would silence the denial's own notice.
+		setProjectTrustState("trusted");
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({ lsp: { disabledServers: ["groovy"] } }),
+		);
+		resetProjectLensConfigCache();
+		await initLSPConfig(tmpDir);
+		const output = await writeAndDispatch("A.groovy", "class A {}\n");
+		expect(output).toContain("Primary LSP (groovy) is disabled in config");
 	});
 
 	it("still warns for a .groovy file whose server is not installed", async () => {
