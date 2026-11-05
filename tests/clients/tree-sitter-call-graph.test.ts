@@ -130,6 +130,12 @@ const CALL_FIXTURES: CallFixture[] = [
 		callee: "callee.ex",
 	},
 	{
+		language: "groovy",
+		directory: "groovy",
+		caller: "Caller.groovy",
+		callee: "Callee.groovy",
+	},
+	{
 		language: "javascript",
 		directory: "javascript",
 		caller: "caller.js",

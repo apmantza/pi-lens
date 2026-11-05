@@ -93,6 +93,14 @@ const ENCLOSING_TYPES: Record<string, string[]> = {
 	ocaml: ["value_definition", "module_definition"],
 	zig: ["function_declaration"],
 	bash: ["function_definition"],
+	groovy: [
+		"method_declaration",
+		"constructor_declaration",
+		"class_declaration",
+		"interface_declaration",
+		"enum_declaration",
+		"trait_declaration",
+	],
 };
 
 interface AncestorSymbol {

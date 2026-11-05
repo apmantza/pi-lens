@@ -5536,6 +5536,7 @@ export class TreeSitterClient {
 			cpp: [".cpp", ".hpp", ".cc", ".hh"],
 			elixir: [".ex", ".exs"],
 			ruby: [".rb"],
+			groovy: [".groovy", ".gvy", ".gy", ".gsh"],
 		};
 		return mapping[languageId] || [];
 	}

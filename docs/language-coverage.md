@@ -83,6 +83,66 @@ Both are upstream grammar limitations (tracked among
 [eonpatapon/tree-sitter-cue](https://github.com/eonpatapon/tree-sitter-cue)'s
 open issues), not something a query change here can fix.
 
+### Groovy tree-sitter grammar
+
+`.groovy`, `.gvy`, `.gy` and `.gsh` files, plus `Jenkinsfile`, `build.gradle`
+and `settings.gradle`, parse under tree-sitter, so `module_report`,
+`read_symbol`, symbol search, import extraction and the call-graph refs list
+Groovy classes, traits, interfaces, enums, constructors and methods (#5235).
+The grammar is [dekobon/tree-sitter-groovy](https://github.com/dekobon/tree-sitter-groovy)
+v0.3.0, built to wasm at its tagged commit with `tree-sitter-cli@0.25.10` and
+committed to `vendor/grammars/` **as is, with no fork and no patch**. It is a
+young grammar and it is partial. Measured on 2026-11-05 over 1,353 real files
+from five public repositories (Spock, jenkinsci/pipeline-examples,
+apache/groovy, Gradle, grails-core), **70% parse with no ERROR node** and 8.1%
+of lines sit inside an error:
+
+| Sample                         | Files parsed with no ERROR node |
+| ------------------------------ | ------------------------------- |
+| `build.gradle` (Gradle, 250)   | 95%                             |
+| Jenkins pipeline-examples (53) | 73%                             |
+| Spock (400)                    | 64%                             |
+| Grails (250)                   | 56%                             |
+| apache/groovy (400)            | 69%                             |
+
+The Spock and apache/groovy samples are weighted toward language-stress tests,
+so they are harder than typical project code. "No ERROR node" is a parse
+measure, not a claim that the outline is right. Known gaps, all in the
+upstream grammar rather than in this repo's queries:
+
+- **Types nested in a class body.** A `class`, `interface`, `enum` or `trait`
+  declared inside another class produces an ERROR node and often a stray `}`
+  after it.
+- **Command calls with named arguments.** `mail to: x, subject: y`,
+  `slackSend channel: x, message: y` and `@Library('x') _` do not parse. These
+  are common in Jenkins pipelines and in Gradle dependency blocks.
+- **A field with modifiers and no type or `def`.** `static x = {` and
+  `static final X = 1` do not parse.
+- **The diamond.** `new HashMap<>()` leaves a MISSING type node.
+
+Consequences:
+
+- A file with an ERROR node still yields the declarations the parser recovered
+  around it, but may miss the ones it could not. `module_report` and the read
+  tools append their syntax-error warning ("tree-sitter could not parse part of
+  this file; the symbol list may be incomplete") on every such partial parse,
+  so an absent symbol is not proof of absence.
+- Named closures (`def handler = { ... }`) are listed only when held by a class
+  field or a top-level script variable. A method-local closure is not listed.
+- Calls that take a trailing closure (`list.each { ... }`, DSL blocks) parse as
+  sibling statements, not as invocations, so they add no call-graph edge. Only
+  `foo(1)`, `a.b(2)` and `new X()` do.
+- A Spock feature method (`def "adds two numbers"() { ... }`) is listed under
+  its quoted name.
+- `Jenkinsfile`, `build.gradle` and `settings.gradle` reach the grammar by file
+  kind, which covers `module_report` and the symbol index. Read expansion, the
+  project scanner and the directory-wide tree-sitter search key on the file
+  extension, so they see `.groovy`, `.gvy`, `.gy` and `.gsh` only; other
+  `.gradle` files are not claimed.
+- Groovy has no tuned callback rules, so `module_report` reports its
+  callbacks as `generic`, and Groovy is not in the review graph's main kinds.
+- Lint and format (npm-groovy-lint) are not part of this slice (#5235).
+
 ## Non-core grammars
 
 The `tree-sitter` runner and `symbol_search`/`module_report` structural

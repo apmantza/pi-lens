@@ -53,6 +53,13 @@
       "license": "MIT",
       "buildCommand": "npx tree-sitter-cli build --wasm",
       "sha256": "sha256:751f8cc8ccf72da760133e3d365562ff7bbf5b951e0b73568576fd159db7d601"
+    },
+    "tree-sitter-groovy.wasm": {
+      "repo": "https://github.com/dekobon/tree-sitter-groovy",
+      "commit": "654e4c2d736571dbc512043a1dc26017c7aedc85",
+      "license": "MIT OR Apache-2.0",
+      "buildCommand": "npx tree-sitter-cli@0.25.10 build --wasm",
+      "sha256": "sha256:d03e2a88789bcf02a3f6976531eadbe3f8e0328935d1c353f8a98a0813e5e9d9"
     }
   }
 }

@@ -208,6 +208,16 @@ that symbol's range passes the read-before-edit check (an outline from
 - **Looking for a textual pattern across files** → use `grep` (not `module_report`).
 - **Need exact LSP cross-file resolution** → use `lsp_navigation({operation: "definition"})`.
 
+**Groovy** (`.groovy`, `.gvy`, `.gy`, `.gsh`, `Jenkinsfile`, `build.gradle`,
+`settings.gradle`) is outlined through a vendored tree-sitter grammar that is
+partial: about 70% of 1,353 real files parse with no ERROR node (`build.gradle`
+95%, Spock 64%, Grails 56%, Jenkins pipelines 73%). Types nested in a class,
+command calls with named arguments (`mail to: x, subject: y`, `@Library('x') _`),
+a field with modifiers and no type (`static x = {`) and the diamond `<>` do not
+parse. On a partial parse `module_report` shows its syntax-error warning, and
+the symbol list may be incomplete. The measured numbers and the full list of
+limits are in [`language-coverage.md`](language-coverage.md#groovy-tree-sitter-grammar).
+
 **MCP mirror:** `pilens_module_report` and `pilens_read_symbol` in the
 pi-lens MCP server expose the same shape to Claude Code / any MCP client.
 

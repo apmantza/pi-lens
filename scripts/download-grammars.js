@@ -51,6 +51,9 @@ export const SOURCE_OVERRIDES = {
  * tree-sitter-cue: no published wasm exists — npm's `tree-sitter-cue` is a
  * native binding, the `tree-sitter-wasms` aggregator has no CUE, and upstream
  * cuts no releases — so we build it from a pinned commit (#1522).
+ *
+ * tree-sitter-groovy: no publisher ships a wasm, so dekobon v0.3.0 is built at
+ * its tagged commit with the pinned CLI, unpatched (#5235).
  */
 export const VENDORED_GRAMMARS = {
     "tree-sitter-cue.wasm": {
@@ -59,6 +62,13 @@ export const VENDORED_GRAMMARS = {
         license: "MIT",
         buildCommand: "npx tree-sitter-cli build --wasm",
         sha256: "sha256:751f8cc8ccf72da760133e3d365562ff7bbf5b951e0b73568576fd159db7d601",
+    },
+    "tree-sitter-groovy.wasm": {
+        repo: "https://github.com/dekobon/tree-sitter-groovy",
+        commit: "654e4c2d736571dbc512043a1dc26017c7aedc85",
+        license: "MIT OR Apache-2.0",
+        buildCommand: "npx tree-sitter-cli@0.25.10 build --wasm",
+        sha256: "sha256:d03e2a88789bcf02a3f6976531eadbe3f8e0328935d1c353f8a98a0813e5e9d9",
     },
 };
 /** Directory the committed grammars live in, relative to the package root. */
