@@ -475,6 +475,25 @@ export async function allAvailableGlobalBinDirs(
 }
 
 /**
+ * Start the global-bin-dir lookup without waiting for it (#5261).
+ *
+ * The lookup spawns `which <pm>` and `npm config get prefix` (about 0.35 s when
+ * the event loop is busy), and the first dispatch of a session that reaches the
+ * global rung of tool resolution paid all of it on its critical path. The
+ * result is memoized per session by {@link allAvailableGlobalBinDirs}, so
+ * starting it at `session_start`, after the session reset has cleared the memo,
+ * turns that wait into a join on a lookup already under way or finished. The
+ * lookup is the same single flight the dispatch would have started: no second
+ * spawn, no new cache, and nothing here changes what a tool resolves to.
+ */
+export function primeGlobalBinDirs(): void {
+	allAvailableGlobalBinDirs().catch(() => {
+		// none: a head start only. A failed probe is not memoized, so the first
+		// consumer runs its own lookup and sees the failure itself.
+	});
+}
+
+/**
  * Locate a globally-installed tool binary across every installed manager's
  * global bin dir (npm/pnpm/yarn/bun) by direct file lookup — no spawn, no PATH
  * reliance. Returns the full path, or `undefined` if not found.
