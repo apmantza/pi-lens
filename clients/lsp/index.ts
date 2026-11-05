@@ -5598,10 +5598,16 @@ export class LSPService {
 				});
 				const firstContactCutOffServerIds = new Set<string>();
 				const firstContactErroredServerIds = new Set<string>();
-				// #5306: servers whose client wait RETURNED "deadline-expired". The
-				// verdict below reads this outcome, never only the elapsed time: a pull
-				// request stops at its own cap (`PULL_REQUEST_TIMEOUT_MS`), which an
-				// explicit `waitMs` can put well inside the service budget.
+				// #5306: PRIMARIES whose client wait RETURNED "deadline-expired" and
+				// whose silence is not a clean answer. The verdict below reads this
+				// outcome, not only the elapsed time, which misses a lapse that ends
+				// before the slowest server's budget: a pull stops at its own 10 s cap
+				// inside a 30 s `waitMs` or after a failed pull, and a push primary
+				// lapses its own budget while opengrep's larger one still runs.
+				// A silent-on-clean (`tier3-silent`) primary is left out: its silence
+				// within its budget is its clean answer, and scope "with-auxiliary" has
+				// no silent-clean gate to restore it. An auxiliary is left out: its
+				// lapse is a named coverage gap (#1549), never the touch's timeout.
 				const expiredWaitServerIds = new Set<string>();
 				const answeredForThisTouch = (
 					entry: (typeof spawned)[number],
@@ -5708,7 +5714,11 @@ export class LSPService {
 										})
 									: entry.client.waitForDiagnostics(filePath, serverTimeout)
 						).then((outcome) => {
-							if (outcome === "deadline-expired") {
+							if (
+								outcome === "deadline-expired" &&
+								!isAuxiliary(entry.info) &&
+								!isSilentOnCleanServer(entry)
+							) {
 								expiredWaitServerIds.add(entry.info.id);
 							}
 							return outcome;
@@ -6285,11 +6295,12 @@ export class LSPService {
 					// the LSP didn't beat the cap. Diagnostics that arrive late still
 					// land in the client's cache and surface on the next edit.
 					//
-					// #5306: a client wait that RETURNED "deadline-expired" is a lapsed
-					// wait whatever the clock says (`expiredWaitServerIds`). Elapsed time
-					// alone read a pull that stopped at its 10 s cap inside a 30 s
-					// explicit `waitMs` as a confirmed clean. Whether the server still
-					// answered is decided below from evidence, as for any other lapse.
+					// #5306: a primary's client wait that RETURNED "deadline-expired" is
+					// a lapsed wait whatever the clock says (`expiredWaitServerIds`, which
+					// excludes silent-on-clean primaries and auxiliaries). Elapsed time
+					// alone read it as a confirmed clean whenever another server's budget
+					// was larger. Whether the server still answered is decided below from
+					// evidence, as for any other lapse.
 					//
 					// #1549: WHOSE budget lapsed decides the verdict. `timeoutMs` is the MAX
 					// over the servers waited on, so a slow auxiliary (opengrep declares

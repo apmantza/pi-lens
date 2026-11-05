@@ -107,7 +107,10 @@ interface FakeServer {
 /**
  * A push server that publishes `FINDING` once it is given a wait of at least
  * `publishAtMs`, and says nothing for a shorter one. `publishAtMs` of
- * `Infinity` is a server that never publishes.
+ * `Infinity` is a server that never publishes; `publishAtMs` of 0 publishes an
+ * empty answer at once (a scanner that found nothing). Like the real client
+ * (`clientWaitForDiagnostics`), the wait returns "answered" when it published
+ * and "deadline-expired" when its budget ran out with nothing stored.
  *
  * With `pullOnlyStopsAtMs` the server is pull-capable and models the real
  * client's `pullOnly` contract (`clientWaitForDiagnostics`): the pull request
@@ -161,7 +164,7 @@ function makeFakeServer(
 		},
 		waitForDiagnostics: vi.fn(
 			(filePath: string, ms: number) =>
-				new Promise<undefined | "deadline-expired">((resolve) => {
+				new Promise<"answered" | "deadline-expired">((resolve) => {
 					budgets.push(ms);
 					if (pullOnlyStopsAtMs !== undefined) {
 						setTimeout(
@@ -177,11 +180,11 @@ function makeFakeServer(
 								version += 1;
 								stampsByPath.set(filePath, version);
 								cache.set(normalizeMapKey(filePath), {
-									diags: [FINDING],
+									diags: publishAtMs === 0 ? [] : [FINDING],
 									ts: Date.now(),
 								});
 							}
-							resolve(undefined);
+							resolve(publishes ? "answered" : "deadline-expired");
 						},
 						publishes ? publishAtMs : ms,
 					);
@@ -215,12 +218,23 @@ async function runTool(
 ): Promise<any> {
 	const { createLspDiagnosticsTool } =
 		await import("../../tools/lsp-diagnostics.js");
+	return drive(
+		createLspDiagnosticsTool().execute(
+			"diag-5306",
+			args,
+			new AbortController().signal,
+			null,
+			{ cwd },
+		),
+	);
+}
+
+/** Drive the fake clock until `pending` settles (see `runTool`). */
+async function drive<T>(pending: Promise<T>): Promise<T> {
 	let settled = false;
-	const call = createLspDiagnosticsTool()
-		.execute("diag-5306", args, new AbortController().signal, null, { cwd })
-		.finally(() => {
-			settled = true;
-		});
+	const call = pending.finally(() => {
+		settled = true;
+	});
 	const realDeadline = realNow() + scaledTestTimeout(DRIVER_DEADLINE_MS);
 	const state = await waitFor(
 		() =>
@@ -240,10 +254,10 @@ async function runTool(
 			},
 		},
 	);
-	expect(state, "the tool answered before the real-clock deadline").toBe(
+	expect(state, "the call answered before the real-clock deadline").toBe(
 		"settled",
 	);
-	return (await call) as any;
+	return call;
 }
 
 /** A C++ file of `lines` lines (the trailing newline adds none). */
@@ -262,21 +276,73 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 		lang: Lang = CLANGD,
 		pullOnlyStopsAtMs?: number,
 	): void {
+		useServers(publishAtMs, lang, [], pullOnlyStopsAtMs);
+	}
+
+	/** The primary `lang` server plus auxiliary scanners on the same file. */
+	function useServers(
+		publishAtMs: number,
+		lang: Lang,
+		auxiliaries: Array<{ id: string; publishAtMs: number }>,
+		pullOnlyStopsAtMs?: number,
+	): Map<string, FakeServer> {
 		server = makeFakeServer(tmp, publishAtMs, lang.id, pullOnlyStopsAtMs);
+		const fakes = new Map([[lang.id, server]]);
+		for (const aux of auxiliaries) {
+			fakes.set(aux.id, makeFakeServer(tmp, aux.publishAtMs, aux.id));
+		}
+		const entries = [
+			{ id: lang.id },
+			...auxiliaries.map((aux) => ({ id: aux.id, role: "auxiliary" })),
+		].map((entry) => ({
+			...entry,
+			name: entry.id,
+			extensions: [lang.ext],
+			root: async () => tmp,
+			spawn: vi.fn(async () => ({ process: {}, source: "test" })),
+		}));
 		getServersForFileWithConfig.mockImplementation((fp: string) =>
-			fp.endsWith(lang.ext)
-				? [
-						{
-							id: lang.id,
-							name: lang.id,
-							extensions: [lang.ext],
-							root: async () => tmp,
-							spawn: vi.fn(async () => ({ process: {}, source: "test" })),
-						},
-					]
-				: [],
+			fp.endsWith(lang.ext) ? entries : [],
 		);
-		createLSPClient.mockImplementation(async () => server.client);
+		createLSPClient.mockImplementation(
+			async (options: { serverId: string }) =>
+				fakes.get(options.serverId)?.client,
+		);
+		return fakes;
+	}
+
+	async function underPressure(): Promise<void> {
+		const previous = process.env.PI_LENS_LSP_BUDGET_CEILING;
+		process.env.PI_LENS_LSP_BUDGET_CEILING = "1";
+		try {
+			await checkCrossProcessLspBudget({
+				registry: [
+					{
+						pid: 42,
+						startedAt: new Date().toISOString(),
+						projectRoot: tmp,
+						lspChildren: [
+							{
+								pid: 43,
+								serverId: "rust-analyzer",
+								command: "rust-analyzer",
+								spawnedAt: new Date().toISOString(),
+							},
+						],
+						lspChildCount: 1,
+						rssBytes: 1,
+						heartbeatAt: new Date().toISOString(),
+					},
+				],
+				isPidAlive: () => true,
+			});
+		} finally {
+			if (previous === undefined) {
+				delete process.env.PI_LENS_LSP_BUDGET_CEILING;
+			} else {
+				process.env.PI_LENS_LSP_BUDGET_CEILING = previous;
+			}
+		}
 	}
 
 	// The test budget sits above the driver's real deadline, so a stuck tool reds
@@ -476,40 +542,6 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 		// (10 s + 20 ms < 30 s), answered "confirmed", and the tool printed a clean
 		// file for a check that never got an answer. PR #5318 review thread
 		// PRRT_kwDORt8rec60OLnk.
-		async function underPressure(): Promise<void> {
-			const previous = process.env.PI_LENS_LSP_BUDGET_CEILING;
-			process.env.PI_LENS_LSP_BUDGET_CEILING = "1";
-			try {
-				await checkCrossProcessLspBudget({
-					registry: [
-						{
-							pid: 42,
-							startedAt: new Date().toISOString(),
-							projectRoot: tmp,
-							lspChildren: [
-								{
-									pid: 43,
-									serverId: "rust-analyzer",
-									command: "rust-analyzer",
-									spawnedAt: new Date().toISOString(),
-								},
-							],
-							lspChildCount: 1,
-							rssBytes: 1,
-							heartbeatAt: new Date().toISOString(),
-						},
-					],
-					isPidAlive: () => true,
-				});
-			} finally {
-				if (previous === undefined) {
-					delete process.env.PI_LENS_LSP_BUDGET_CEILING;
-				} else {
-					process.env.PI_LENS_LSP_BUDGET_CEILING = previous;
-				}
-			}
-		}
-
 		it("reads a pull that stopped at its own cap inside waitMs as timed out, never clean", async () => {
 			await underPressure();
 			useServer(Number.POSITIVE_INFINITY, RUST, PULL_CAP_MS);
@@ -525,6 +557,156 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			expect(text).toContain("check timed out");
 			expect(text).not.toMatch(/confirmed clean/i);
 			expect(result.details.outcome).not.toBe("clean");
+		});
+	});
+
+	describe("the touch verdict after a wait that returned deadline-expired", () => {
+		// PR #5318 r4 state table (caller x primary kind x wait outcome). Each
+		// touch runs through the real `LSPService.touchFile` with the options its
+		// production caller passes. A primary's wait that returned
+		// "deadline-expired" is a timeout even when a larger budget beside it was
+		// still running, unless the primary is silent-on-clean, whose silence is
+		// its clean answer.
+		// Recurrences: master read a lapsed clangd or a failed rust-analyzer pull
+		// beside opengrep as confirmed clean (rows 7, 12, 14, 15, 18, 21), and the
+		// r3 clause read a clean TypeScript, Markdown or Lua edit in the dispatch
+		// runner as inconclusive (rows 16, 19; review r3 F6).
+		const OPENGREP = { id: "opengrep", publishAtMs: 0 };
+		const TYPOS_SILENT = {
+			id: "typos",
+			publishAtMs: Number.POSITIVE_INFINITY,
+		};
+		const NEVER = Number.POSITIVE_INFINITY;
+		/** A rust-analyzer pull that failed (no reply) stops after its 500 ms retry budget. */
+		const FAILED_PULL_MS = 500;
+		const EXPLICIT = {
+			diagnostics: "document",
+			collectDiagnostics: true,
+			explicitQuery: true,
+			clientScope: "all",
+			source: "lsp_diagnostics",
+			saved: true,
+		} as const;
+		const BATCH = {
+			diagnostics: "document",
+			collectDiagnostics: true,
+			clientScope: "all",
+			source: "lens_diagnostics_full",
+		} as const;
+		/** clients/dispatch/runners/lsp.ts's per-edit touch. */
+		const DISPATCH = {
+			diagnostics: "document",
+			collectDiagnostics: true,
+			clientScope: "with-auxiliary",
+			maxClientWaitMs: 5000,
+			maxDiagnosticsWaitMs: 2500,
+			source: "dispatch-lsp-runner",
+		} as const;
+		/** clients/dispatch/integration.ts's cascade touch. */
+		const CASCADE = {
+			diagnostics: "document",
+			collectDiagnostics: true,
+			clientScope: "primary",
+			maxClientWaitMs: 2000,
+			source: "cascade",
+		} as const;
+
+		async function touch(
+			lang: Lang,
+			options: Record<string, unknown>,
+		): Promise<any> {
+			const file = path.join(tmp, `f${lang.ext}`);
+			fs.writeFileSync(file, "x\n");
+			return drive(service.touchFile(file, "x\n", options as any));
+		}
+
+		it("row 7: explicit query, clangd lapsed beside opengrep, reads timed out", async () => {
+			const fakes = useServers(NEVER, CLANGD, [OPENGREP]);
+			const result = await touch(CLANGD, EXPLICIT);
+			expect(fakes.get("clangd")?.budgets).toEqual([1500]);
+			expect(fakes.get("opengrep")?.budgets).toEqual([3500]);
+			expect(result.inconclusive).toBe(true);
+			expect(result.inconclusiveServerIds).toEqual(["clangd"]);
+		});
+
+		it("row 12: batch query, clangd lapsed beside opengrep, reads timed out", async () => {
+			useServers(NEVER, CLANGD, [OPENGREP]);
+			const result = await touch(CLANGD, BATCH);
+			expect(result.inconclusive).toBe(true);
+			expect(result.inconclusiveServerIds).toEqual(["clangd"]);
+		});
+
+		it("row 14: batch query, a failed rust-analyzer pull reads timed out", async () => {
+			await underPressure();
+			useServer(NEVER, RUST, FAILED_PULL_MS);
+			const result = await touch(RUST, BATCH);
+			expect(server.budgets).toEqual([3000]);
+			expect(result.inconclusive).toBe(true);
+			expect(result.inconclusiveServerIds).toEqual(["rust-analyzer"]);
+		});
+
+		it("row 15: dispatch runner, clangd lapsed beside opengrep, reads timed out", async () => {
+			const fakes = useServers(NEVER, CLANGD, [OPENGREP]);
+			const result = await touch(CLANGD, {
+				...DISPATCH,
+				auxiliaryServerIds: ["opengrep"],
+			});
+			expect(fakes.get("clangd")?.budgets).toEqual([1500]);
+			expect(fakes.get("opengrep")?.budgets).toEqual([2500]);
+			expect(result.inconclusive).toBe(true);
+			expect(result.inconclusiveServerIds).toEqual(["clangd"]);
+		});
+
+		it.each([
+			{ id: "typescript", ext: ".ts" },
+			LUA,
+			{ id: "marksman", ext: ".md" },
+		])(
+			"row 16: dispatch runner, a silent-on-clean $id beside opengrep reads clean",
+			async (lang) => {
+				useServers(NEVER, lang, [OPENGREP]);
+				const result = await touch(lang, {
+					...DISPATCH,
+					auxiliaryServerIds: ["opengrep"],
+				});
+				expect(result.inconclusive).toBeFalsy();
+				expect(result.diags).toEqual([]);
+			},
+		);
+
+		it("row 18: dispatch runner, a failed rust-analyzer pull beside opengrep reads timed out", async () => {
+			await underPressure();
+			useServers(NEVER, RUST, [OPENGREP], FAILED_PULL_MS);
+			const result = await touch(RUST, {
+				...DISPATCH,
+				auxiliaryServerIds: ["opengrep"],
+			});
+			expect(result.inconclusive).toBe(true);
+			expect(result.inconclusiveServerIds).toEqual(["rust-analyzer"]);
+		});
+
+		it("row 19: dispatch runner, a lapsed auxiliary does not time out a silent-on-clean primary", async () => {
+			const fakes = useServers(NEVER, { id: "typescript", ext: ".ts" }, [
+				TYPOS_SILENT,
+				OPENGREP,
+			]);
+			const result = await touch(
+				{ id: "typescript", ext: ".ts" },
+				{ ...DISPATCH, auxiliaryServerIds: ["typos", "opengrep"] },
+			);
+			// typos lapsed its 1500 ms inside opengrep's 2500 ms: a coverage gap,
+			// not the touch's timeout.
+			expect(fakes.get("typos")?.budgets).toEqual([1500]);
+			expect(result.inconclusive).toBeFalsy();
+		});
+
+		it("row 21: cascade touch, a failed rust-analyzer pull reads timed out", async () => {
+			await underPressure();
+			useServer(NEVER, RUST, FAILED_PULL_MS);
+			const result = await touch(RUST, CASCADE);
+			expect(server.budgets).toEqual([2000]);
+			expect(result.inconclusive).toBe(true);
+			expect(result.inconclusiveServerIds).toEqual(["rust-analyzer"]);
 		});
 	});
 });
