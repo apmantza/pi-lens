@@ -123,7 +123,8 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 		// Recurrence: the prime ran inside the `session_start` handler, and its
 		// first `which` spawn cost about 11 ms of synchronous work there
 		// (hot-path latency lane: session_start +12 ms, REGRESSION). A handler
-		// registered after pi-lens's own runs the moment its handler settles.
+		// registered after pi-lens's own runs the moment its handler settles, and
+		// drains the microtask queue before it reads the count.
 		it("starts the lookup after the session_start handler has settled, not inside it", async () => {
 			const npm = plantNpm("deferred");
 			restores.push(npm.restore);
@@ -137,7 +138,11 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 					const lens = (await import("../index.js")).default;
 					return (pi) => {
 						lens(pi);
-						pi.on("session_start", () => {
+						pi.on("session_start", async () => {
+							// Drain the microtask queue: a lookup chained on a promise
+							// (the module import) would spawn inside these turns, and only
+							// a timer holds it past them.
+							for (let turn = 0; turn < 200; turn++) await Promise.resolve();
 							lookupsWhenHandlerSettled = spawned.npmLookups;
 						});
 					};
@@ -146,7 +151,7 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 			});
 			expect(
 				lookupsWhenHandlerSettled,
-				"no npm lookup spawn has been made when the handler settles",
+				"no npm lookup spawn was made in the turns after the handler settled",
 			).toBe(0);
 			expect(
 				await until(() => npm.queries() === 1, 10_000),
