@@ -217,9 +217,17 @@ describe("check-action-pins parser (#4043)", () => {
 			}
 		});
 
+		// Recurrence: the single-tag resolver builds its own header from
+		// `env.GITHUB_TOKEN || env.GH_TOKEN`, so swapping the operands there left
+		// every row green while the matching-refs peel pinned the precedence.
 		it.each([
 			["GITHUB_TOKEN", { GITHUB_TOKEN: "gh-tok" }, "Bearer gh-tok"],
 			["GH_TOKEN", { GH_TOKEN: "cli-tok" }, "Bearer cli-tok"],
+			[
+				"GITHUB_TOKEN over GH_TOKEN",
+				{ GITHUB_TOKEN: "gh-tok", GH_TOKEN: "cli-tok" },
+				"Bearer gh-tok",
+			],
 		])("sends %s on the single-tag resolver too", async (_n, env, header) => {
 			const seen: Array<Record<string, string>> = [];
 			const fetchImpl = async (_input: unknown, init?: RequestInit) => {

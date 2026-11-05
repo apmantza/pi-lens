@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
+import { findLibcDrift } from "../../scripts/lib/package-lock-sync.mjs";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -957,5 +958,54 @@ describe("package-lock libc drift guard (#5207)", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("libc drift: not checked (HEAD's");
 		expect(result.stdout).toContain("is unreadable");
+	});
+});
+
+// Recurrence: #5207 / #5213. The CLI cases above never put an empty `libc`
+// array on either side and never list entries out of key order, so dropping
+// either emptiness test in `findLibcDrift` or its sort left all 44 cases green.
+// The function is pure, so these rows call it directly instead of spawning git.
+describe("findLibcDrift judges a recorded libc field by its content (#5207)", () => {
+	const lock = (packages: Record<string, unknown>) => ({
+		packages: Object.fromEntries(
+			Object.entries(packages).map(([key, entry]) => [
+				`node_modules/${key}`,
+				entry,
+			]),
+		),
+	});
+
+	it("counts a libc rewritten to an empty array as dropped", () => {
+		const dropped = findLibcDrift(
+			lock({ binding: { version: "1.0.0", libc: ["glibc"] } }),
+			lock({ binding: { version: "1.0.0", libc: [] } }),
+		);
+		expect(dropped).toEqual([
+			{ key: "node_modules/binding", version: "1.0.0", libc: ["glibc"] },
+		]);
+	});
+
+	it("does not count an entry that never recorded a libc value", () => {
+		expect(
+			findLibcDrift(
+				lock({ binding: { version: "1.0.0", libc: [] } }),
+				lock({ binding: { version: "1.0.0" } }),
+			),
+		).toEqual([]);
+	});
+
+	it("lists dropped entries in key order whatever order the lock stored them in", () => {
+		const before = lock({
+			zeta: { version: "1.0.0", libc: ["musl"] },
+			alpha: { version: "1.0.0", libc: ["glibc"] },
+		});
+		const after = lock({
+			zeta: { version: "1.0.0" },
+			alpha: { version: "1.0.0" },
+		});
+		expect(findLibcDrift(before, after).map((entry) => entry.key)).toEqual([
+			"node_modules/alpha",
+			"node_modules/zeta",
+		]);
 	});
 });

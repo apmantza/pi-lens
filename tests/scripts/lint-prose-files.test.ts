@@ -105,10 +105,14 @@ function advanceMaster(dir: string, edits: (dir: string) => void): void {
 	git(dir, ["checkout", "-q", "feature"]);
 }
 
-// Changed: a prose edit, an added prose file, a deleted prose file, and changes
-// the filter must drop (a non-Markdown doc, code, and Markdown outside the list).
+// Changed: a prose edit, an edit to a root file the list names exactly, an added
+// prose file, a deleted prose file, and changes the filter must drop (a
+// non-Markdown doc, code, Markdown outside the list, and a directory whose name
+// only starts with a listed one).
 function changedRepo(): string {
 	return makeRepo((dir) => {
+		write(dir, "README.md", "# Readme\n\nEdited.\n");
+		write(dir, "docsy/notes.md", "# Notes\n");
 		write(dir, "docs/guide.md", "# Guide\n\nEdited.\n");
 		write(dir, "docs/new.md", "# New\n");
 		fs.rmSync(path.join(dir, "docs/gone.md"));
@@ -175,11 +179,13 @@ describe("the prose selection on a pull request (#5249)", () => {
 	// Recurrence: the whole-tree run. A PR that touched one doc linted all 123
 	// files and inherited master's DateFormat red. Only the added or changed
 	// Markdown under the prose paths is linted; deleted and non-Markdown files
-	// and Markdown outside the list are not.
+	// and Markdown outside the list are not. A changed README.md is linted (the
+	// list names root files exactly), so a PR that edits only a root file does
+	// not skip Vale; `docsy/` is not under `docs/`.
 	it("lints only the Markdown the pull request adds or changes under the prose paths", () => {
 		const result = selection(changedRepo(), "pull_request");
 		expect(result.status).toBe(0);
-		expect(result.stdout).toBe("docs/guide.md\ndocs/new.md\n");
+		expect(result.stdout).toBe("README.md\ndocs/guide.md\ndocs/new.md\n");
 	});
 
 	// Recurrence: a PR that changes no prose must skip, not lint the whole tree
@@ -247,7 +253,7 @@ describe("the prose selection on a pull request (#5249)", () => {
 		);
 		const result = selection(dir, "pull_request");
 		expect(result.status).toBe(0);
-		expect(result.stdout).toBe("docs/guide.md\ndocs/new.md\n");
+		expect(result.stdout).toBe("README.md\ndocs/guide.md\ndocs/new.md\n");
 	});
 
 	// Recurrence: a rule change in Vale's config, its style files, the workflow or
@@ -340,7 +346,7 @@ describe("the Lint prose step on a pull request (#5249)", () => {
 		linkScripts(dir);
 		const step = runProseStep(dir);
 		expect(step.status).toBe(0);
-		expect(step.vale).toEqual(["docs/guide.md", "docs/new.md"]);
+		expect(step.vale).toEqual(["README.md", "docs/guide.md", "docs/new.md"]);
 	});
 
 	// Recurrence: a PR with no prose change ran Vale over the inherited docs and
