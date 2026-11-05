@@ -2110,7 +2110,8 @@
       "avatar_url": "https://avatars.githubusercontent.com/u/18386839?v=4",
       "profile": "https://github.com/sbscan",
       "contributions": [
-        "ideas"
+        "ideas",
+        "bug"
       ]
     },
     {
@@ -2127,6 +2128,15 @@
       "name": "ShayLu",
       "avatar_url": "https://avatars.githubusercontent.com/u/13878887?v=4",
       "profile": "https://github.com/yxlimo",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "aprudkin",
+      "name": "aprudkin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/126267327?v=4",
+      "profile": "https://github.com/aprudkin",
       "contributions": [
         "bug"
       ]

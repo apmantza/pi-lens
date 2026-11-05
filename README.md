@@ -546,11 +546,12 @@ Thanks goes to these wonderful people:
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/paymog"><img src="https://avatars.githubusercontent.com/u/1986950?v=4" width="100px;" alt=""/><br /><sub><b>Paymahn Moghadasian</b></sub></a><br /><a href="#doc-paymog" title="Documentation">📖</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/vjda"><img src="https://avatars.githubusercontent.com/u/20127271?v=4" width="100px;" alt=""/><br /><sub><b>Victor J. Diaz Ayuste</b></sub></a><br /><a href="#ideas-vjda" title="Ideas & Planning">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/GlitchOverride"><img src="https://avatars.githubusercontent.com/u/112761176?v=4" width="100px;" alt=""/><br /><sub><b>GlitchOverride</b></sub></a><br /><a href="#bug-GlitchOverride" title="Bug reports">🐛</a></td>
-      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sbscan"><img src="https://avatars.githubusercontent.com/u/18386839?v=4" width="100px;" alt=""/><br /><sub><b>Can Gürcan</b></sub></a><br /><a href="#ideas-sbscan" title="Ideas & Planning">🤔</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/sbscan"><img src="https://avatars.githubusercontent.com/u/18386839?v=4" width="100px;" alt=""/><br /><sub><b>Can Gürcan</b></sub></a><br /><a href="#ideas-sbscan" title="Ideas & Planning">🤔</a> <a href="#bug-sbscan" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/zackchiutw"><img src="https://avatars.githubusercontent.com/u/107488700?v=4" width="100px;" alt=""/><br /><sub><b>Zachary Chiu</b></sub></a><br /><a href="#bug-zackchiutw" title="Bug reports">🐛</a></td>
     </tr>
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/yxlimo"><img src="https://avatars.githubusercontent.com/u/13878887?v=4" width="100px;" alt=""/><br /><sub><b>ShayLu</b></sub></a><br /><a href="#bug-yxlimo" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aprudkin"><img src="https://avatars.githubusercontent.com/u/126267327?v=4" width="100px;" alt=""/><br /><sub><b>aprudkin</b></sub></a><br /><a href="#bug-aprudkin" title="Bug reports">🐛</a></td>
     </tr>
   </tbody>
 </table>
