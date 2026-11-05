@@ -29,6 +29,23 @@ unknown value answered "no match" instead of refusing.
 | D4 | `resolveLanguageScope(token)` in `clients/language-registry.ts` is the single `lang` owner. It accepts a FileKind (`jsts`, `cxx`) or a language id/grammar name (`typescript`, `bash`); an unknown token REFUSES, naming both vocabularies, instead of resolving to an empty match. |
 | D5 | The tool description is the owner of the model-facing prose. `tools/symbol-search.ts` exports the description and the `query` contract sentence; `mcp/server.ts` imports both. PR 3's schema projection replaces the import with the projected `parameters` object. |
 
+### `lang`, `file`, `ext`, and `paths` mapping
+
+The inline filter and the structured argument are NOT interchangeable for every
+key; only `lang` is an aligned pair.
+
+| Surface form | Semantics |
+| --- | --- |
+| inline `file:<substr>` | substring match on the index's display path (`resolveWordIndexFilter`) |
+| structured `paths: [...]` | subtree glob matched relative to `cwd` (`fileMatchesPathGlobs`) |
+| inline `ext:<ext>` | suffix match with no structured twin |
+| inline `lang:<kind\|id>` / structured `lang` | the one aligned pair, both resolved by `resolveLanguageScope` |
+
+So `file:clients/` also matches a nested `tests/clients/...`, while
+`paths: ["clients/"]` scopes only the root `clients/` subtree. The tool
+description owns the query contract; this table links to it rather than
+restating it.
+
 ## 3. Surface contract
 
 - A listing row is a `file` row: `  N. <path>` with no score, no line, and no

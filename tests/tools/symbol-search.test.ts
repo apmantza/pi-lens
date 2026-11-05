@@ -1154,33 +1154,36 @@ describe("symbol_search term-less calls (#5135)", () => {
 		}
 	});
 
-	it("lists the same ranked set for inline `file:src/` and structured `paths: ['src']`", async () => {
-		const env = setupTestEnvironment("pi-lens-symbolsearch-parity-");
+	// #5135 r2: inline `file:` and structured `paths` are NOT interchangeable.
+	// `file:` is a SUBSTRING match on the index's display path
+	// (`resolveWordIndexFilter` in clients/word-index.ts); `paths` is a SUBTREE
+	// GLOB matched relative to `cwd` (`fileMatchesPathGlobs` in
+	// clients/lens-engine.ts). So `file:clients/` also matches a nested
+	// `tests/clients/...`, while `paths: ["clients/"]` scopes only the root
+	// `clients/` subtree. This pins the difference as documentation, not a bug.
+	it("documents `file:` (substring) vs `paths` (subtree glob)", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-file-paths-");
 		try {
-			listingFixture(env);
-			const inline = await run(env, { query: "file:src/" });
-			const structured = await run(env, { query: "", paths: ["src"] });
-			const inlineFiles = rankedFiles(String(inline.content[0]?.text));
-			expect(inlineFiles).toEqual(["src/auth/login.ts"]);
-			expect(inlineFiles).toEqual(
-				rankedFiles(String(structured.content[0]?.text)),
+			const root = createTempFile(env.tmpDir, "clients/word-index.ts", source);
+			const nested = createTempFile(
+				env.tmpDir,
+				"tests/clients/word-index.test.ts",
+				source,
 			);
-		} finally {
-			env.cleanup();
-		}
-	});
-
-	it("lists the same rows for inline `file:`/`ext:` and structured `paths:`", async () => {
-		const env = setupTestEnvironment("pi-lens-symbolsearch-listing-parity-");
-		try {
-			listingFixture(env);
-			const inlineFile = await run(env, { query: "file:src/" });
-			const inlineExt = await run(env, { query: "ext:ts" });
-			const structured = await run(env, { query: "", paths: ["src"] });
-			const expected = [{ file: "src/auth/login.ts" }];
-			expect(rows(String(inlineFile.content[0]?.text))).toEqual(expected);
-			expect(rows(String(inlineExt.content[0]?.text))).toEqual(expected);
-			expect(rows(String(structured.content[0]?.text))).toEqual(expected);
+			warmWordIndexSnapshot(env.tmpDir, [
+				{ path: root, content: source },
+				{ path: nested, content: source },
+			]);
+			const inline = await run(env, { query: "file:clients/" });
+			const structured = await run(env, { query: "", paths: ["clients/"] });
+			const inlineFiles = rankedFiles(String(inline.content[0]?.text));
+			const structuredFiles = rankedFiles(String(structured.content[0]?.text));
+			expect(inlineFiles.sort()).toEqual([
+				"clients/word-index.ts",
+				"tests/clients/word-index.test.ts",
+			]);
+			expect(structuredFiles).toEqual(["clients/word-index.ts"]);
+			expect(inlineFiles).not.toEqual(structuredFiles);
 		} finally {
 			env.cleanup();
 		}
