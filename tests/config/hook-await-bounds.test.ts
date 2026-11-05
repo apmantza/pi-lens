@@ -1955,9 +1955,9 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"request; no pi hook budget applies.",
 		owner: "#2523 slice 2",
 	},
-	// #5104 moved the surrounding handler text, so the occurrence key moved
-	// with it; the awaited `symbolSearch` call is the same off-hook request.
-	"mcp/server.ts#callTool:8392a6e9~2823caec": {
+	// #5104 and #5135 moved the surrounding handler text, so the occurrence key
+	// moved with it; the awaited `symbolSearch` call is the same off-hook request.
+	"mcp/server.ts#callTool:8392a6e9~5041cd90": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:

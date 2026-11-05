@@ -663,6 +663,8 @@ export async function symbolSearch(
 			fileFilter,
 		});
 	} catch (err) {
+		// none: a `WordIndexQueryError` is a refusal RETURNED to the caller (an
+		// isError finding), and every other error rethrows — nothing is swallowed.
 		// #5135: an unknown `lang` token (inline or structured) refuses with
 		// the shared vocabulary sentence instead of answering "no match".
 		if (err instanceof WordIndexQueryError) {
