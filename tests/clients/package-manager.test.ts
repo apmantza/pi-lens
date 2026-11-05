@@ -34,6 +34,7 @@ import {
 	findNodeToolBinary,
 	installArgs,
 	pmBinary,
+	primeGlobalBinDirs,
 	resolveNodePackageManager,
 	runScriptArgs,
 	updateArgs,
@@ -619,6 +620,162 @@ describe("findGlobalBinary", () => {
 			oldQuery.reject(new Error("release pre-reset probe"));
 			newQuery.resolve({ stdout: `${newPrefix}\n`, stderr: "", status: 0 });
 		}
+	});
+});
+
+/**
+ * #5261: the first dispatch of a session waited on `which npm` plus `npm config
+ * get prefix` (230-450 ms) because nothing asked for the answer before the
+ * dispatch's own tool resolution did. `primeGlobalBinDirs` is the head start;
+ * these cases pin what it must keep true so the head start stays a head start.
+ */
+describe("primeGlobalBinDirs", () => {
+	function prefixWith(binary: string): { binDir: string } {
+		setPlatform("linux");
+		const prefix = tmpDir();
+		const binDir = path.join(prefix, "bin");
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(path.join(binDir, binary), "#!/bin/sh\n");
+		onlyAvailable("npm");
+		return { binDir };
+	}
+
+	// Recurrence: the lookup started only when the dispatch needed it, so the
+	// dispatch paid the whole spawn chain. A lookup that arrives while the primed
+	// probe is still running must join it, not start a second `npm` process.
+	it("starts the prefix query with no consumer, and a lookup arriving mid-flight joins it", async () => {
+		const { binDir } = prefixWith("prisma");
+		const prefix = path.dirname(binDir);
+		const gate = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		setQueryResponder(() => gate.promise);
+		try {
+			primeGlobalBinDirs();
+			await waitFor(
+				() => queryCalls.filter((c) => c.cmd === "npm").length,
+				(count) => count === 1,
+			);
+
+			const lookup = findGlobalBinary("prisma");
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+			await expect(lookup).resolves.toBe(
+				path.resolve(path.join(binDir, "prisma")),
+			);
+			expect(queryCalls.filter((c) => c.cmd === "npm")).toHaveLength(1);
+		} finally {
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+		}
+	});
+
+	// Recurrence: a head start that is not memoized only moves the wait. Once the
+	// primed probe settles, the dispatch-time lookup must spawn nothing at all.
+	it("leaves the dispatch-time lookup with no spawn once the primed probe has settled", async () => {
+		const { binDir } = prefixWith("prisma");
+		setQueryResponder(async () => ({
+			stdout: `${path.dirname(binDir)}\n`,
+			stderr: "",
+			status: 0,
+		}));
+		primeGlobalBinDirs();
+		await waitFor(
+			() => queryCalls.filter((c) => c.cmd === "npm").length,
+			(count) => count === 1,
+		);
+		// The memo is written after the query returns; this lookup settles only
+		// once the primed flight has, so the call count below is final.
+		await allAvailableGlobalBinDirs();
+		const spawnsAfterPrime = vi.mocked(safeSpawnAsync).mock.calls.length;
+
+		await expect(findGlobalBinary("prisma")).resolves.toBe(
+			path.resolve(path.join(binDir, "prisma")),
+		);
+		expect(vi.mocked(safeSpawnAsync).mock.calls).toHaveLength(spawnsAfterPrime);
+	});
+
+	// Recurrence: the prime moved off `session_start` to a timer, so a dispatch
+	// can arrive before it runs. The dispatch's own lookup is then the flight,
+	// and the prime that follows must join or hit the memo, never spawn again.
+	it("adds no spawn when a lookup already started before the prime ran", async () => {
+		const { binDir } = prefixWith("prisma");
+		const prefix = path.dirname(binDir);
+		const gate = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		setQueryResponder(() => gate.promise);
+		try {
+			const lookup = findGlobalBinary("prisma");
+			await waitFor(
+				() => queryCalls.filter((c) => c.cmd === "npm").length,
+				(count) => count === 1,
+			);
+			primeGlobalBinDirs();
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+			await expect(lookup).resolves.toBe(
+				path.resolve(path.join(binDir, "prisma")),
+			);
+			primeGlobalBinDirs();
+			await allAvailableGlobalBinDirs();
+			expect(queryCalls.filter((c) => c.cmd === "npm")).toHaveLength(1);
+		} finally {
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+		}
+	});
+
+	// Recurrence (#5261 r1 M6): the prime's `.catch` is the only thing between a
+	// failed probe and an unhandled rejection, and the suite saw the escape only
+	// as a run-level error that named no test. This case names it.
+	it("lets no rejection escape when the primed probe fails", async () => {
+		prefixWith("prisma");
+		let attempts = 0;
+		setQueryResponder(async () => {
+			attempts += 1;
+			throw new Error("npm query exploded");
+		});
+		const escaped: unknown[] = [];
+		const onEscape = (reason: unknown) => escaped.push(reason);
+		process.on("unhandledRejection", onEscape);
+		try {
+			primeGlobalBinDirs();
+			await waitFor(
+				() => attempts,
+				(count) => count === 1,
+			);
+			// Node reports an unhandled rejection once the microtask queue drains,
+			// before the next check phase.
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(escaped).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onEscape);
+		}
+	});
+
+	// Recurrence: the prime is fire-and-forget, so a rejected probe must neither
+	// surface as an unhandled rejection nor be memoized as an answer; the first
+	// real consumer runs its own lookup.
+	it("swallows a failed primed probe and does not memoize it", async () => {
+		const { binDir } = prefixWith("prisma");
+		let attempt = 0;
+		setQueryResponder(async () => {
+			attempt += 1;
+			if (attempt === 1) throw new Error("npm query exploded");
+			return { stdout: `${path.dirname(binDir)}\n`, stderr: "", status: 0 };
+		});
+
+		primeGlobalBinDirs();
+		await waitFor(
+			() => attempt,
+			(count) => count === 1,
+		);
+		await expect(findGlobalBinary("prisma")).resolves.toBe(
+			path.resolve(path.join(binDir, "prisma")),
+		);
+		expect(attempt).toBe(2);
 	});
 });
 

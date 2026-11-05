@@ -292,8 +292,8 @@ const REMEDIATION =
  */
 const SLASH_FOLD_PINS: Readonly<Record<string, number>> = {
 	// Held out of the 2026-10-30 fold only because an open PR edits the file
-	// (#5011 for dispatcher.ts, #4628 for index.ts); the next slice folds them.
-	"clients/dispatch/dispatcher.ts": 1,
+	// (#4628 for index.ts); the next slice folds it. dispatcher.ts folded
+	// (#5011 merged).
 	"index.ts": 1,
 };
 
