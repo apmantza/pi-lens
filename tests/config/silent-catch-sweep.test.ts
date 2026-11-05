@@ -810,9 +810,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :65
 	"clients/lsp/launch.ts": {
 		silent: 9,
-		identities: "eca31a5fa3dd4517",
+		identities: "3f213805369d1535",
 		reason: PRE_RULE,
-	}, // :105, :295, :406, :753, :759, :1012, :1237, :1248, :1259
+	}, // :110, :305, :417, :771, :777, :1030, :1255, :1266, :1277
 	"clients/lsp/lombok.ts": {
 		silent: 6,
 		identities: "a076d98b1826881f",
