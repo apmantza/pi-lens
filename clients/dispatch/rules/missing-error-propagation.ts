@@ -2,6 +2,7 @@ import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
 import type { TryCatchSummary } from "../facts/try-catch-facts.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 /**
  * Flags async functions where a catch block logs the error but doesn't
@@ -17,7 +18,7 @@ export const missingErrorPropagationRule: FactRule = {
 	id: "missing-error-propagation",
 	requires: ["file.functionSummaries", "file.tryCatchSummaries"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const fns =

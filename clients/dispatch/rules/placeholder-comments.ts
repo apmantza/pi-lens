@@ -2,6 +2,7 @@ import { isTestFile } from "../../file-utils.js";
 import type { FactRule } from "../fact-provider-types.js";
 import type { CommentSummary } from "../facts/comment-facts.js";
 import type { Diagnostic } from "../types.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 const PLACEHOLDER_PATTERNS = [
 	/add\s+more\s+validation/i,
@@ -17,7 +18,7 @@ export const placeholderCommentsRule: FactRule = {
 	id: "placeholder-comments",
 	requires: ["file.comments"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath) && !isTestFile(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath) && !isTestFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const comments = store.getFileFact<CommentSummary[]>(

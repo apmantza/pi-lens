@@ -5,6 +5,7 @@ import {
 	isTestFrameworkNoiseCall,
 	isTestSuiteOrganizer,
 } from "./framework-call-noise.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 // Default matches the historical hardcoded value so behavior is unchanged for
 // projects without a config. Project-specific overrides are read from the
@@ -15,7 +16,7 @@ export const highFanOutRule: FactRule = {
 	id: "high-fan-out",
 	requires: ["file.functionSummaries"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const fns =

@@ -1199,7 +1199,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 7 -> 8 (#4438 r2): a Go file name's `_GOOS`/`_GOARCH` suffix, read
 		// with `path.basename`, a filesystem path.
 		"clients/lsp/implicit-scope.ts": 8,
-		"clients/lsp/inferred-project.ts": 3,
+		"clients/lsp/inferred-project.ts": 2,
 		"clients/lsp/jvm-runtime.ts": 19,
 		"clients/lsp/language.ts": 3,
 		// 30 -> 31 (#4248): the project-local binary refusal records the
@@ -1233,7 +1233,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 122 -> 111 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 111 -> 112 (#5123): Groovy resolves its configured jar from pi's cwd
 		// before launching, one filesystem path use in the reviewed fix.
-		"clients/lsp/server.ts": 112,
+		"clients/lsp/server.ts": 111,
 		"clients/lsp/session-roots.ts": 8,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).

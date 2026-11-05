@@ -1,6 +1,7 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { ImportEntry } from "../facts/import-facts.js";
 import type { Diagnostic } from "../types.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 /**
  * high-import-coupling — a file importing from > 15 distinct modules. Fact-based
@@ -16,7 +17,7 @@ export const highImportCouplingRule: FactRule = {
 	id: "high-import-coupling",
 	requires: ["file.imports"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		if (IMPORT_COUPLING_EXEMPT.test(ctx.filePath)) return [];

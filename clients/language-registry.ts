@@ -773,6 +773,26 @@ export function resolveLanguage(filePath: string): LanguageEntry | undefined {
 }
 
 /**
+ * The TypeScript family (`.ts`, `.tsx`, `.mts`, `.cts`), read from the
+ * `typescript` and `typescriptreact` entries. The one answer to "is this a
+ * TypeScript file" (shape 42): a consumer that spells the family by hand
+ * (`/\.tsx?$/`) leaves `.mts` and `.cts` out. The JS/TS source family,
+ * TypeScript plus plain JavaScript, is `isJstsFactFile` in `file-kinds.ts`.
+ */
+const TYPESCRIPT_EXTENSIONS: ReadonlySet<string> = new Set(
+	LANGUAGES.flatMap((entry) =>
+		entry.id === "typescript" || entry.id === "typescriptreact"
+			? entry.extensions
+			: [],
+	),
+);
+
+/** Whether `filePath` is TypeScript source, by the registry's extensions. */
+export function isTypeScriptFile(filePath: string): boolean {
+	return TYPESCRIPT_EXTENSIONS.has(extensionOf(filePath));
+}
+
+/**
  * Extension -> LSP `languageId`, for every extension whose language has one.
  * `clients/lsp/language.ts` projects this.
  */

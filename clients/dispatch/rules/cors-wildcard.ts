@@ -1,5 +1,6 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 /**
  * cors-wildcard — Access-Control-Allow-Origin: * (TS/JS/Python/Go). Regex/line-based
@@ -9,7 +10,7 @@ export const corsWildcardRule: FactRule = {
 	id: "cors-wildcard",
 	requires: ["file.content"],
 	appliesTo(ctx) {
-		return /\.(tsx?|py|go)$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath) || /\.(py|go)$/.test(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const content = store.getFileFact<string>(ctx.filePath, "file.content");
