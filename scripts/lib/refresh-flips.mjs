@@ -157,10 +157,14 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 	const lines = [
 		"## Summary",
 		"",
-		"Automated nightly refresh of the LSP capability docs from the tool-smoke run: docs only, no runtime code changes.",
-		"The capability-flip verdict and the landing path are under the reviewer notes.",
+		"Automated nightly refresh of the LSP capability docs from the tool-smoke run (docs only, no runtime code); the flip verdict and the landing path are under the reviewer notes.",
 		"",
 		"Refs #460, #390, #529, #4512.",
+		"",
+		// #4512 stays open, and the land gate wants a remainder line for every open
+		// Refs issue; the Summary's three-sentence cap counts it, so the prose
+		// above is one sentence (#5304).
+		"Remaining #4512: this refresh only regenerates the docs; the monitoring work stays on #4512.",
 		"",
 		"## Notes for the reviewer",
 		"",
