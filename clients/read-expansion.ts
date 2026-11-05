@@ -155,6 +155,8 @@ function getSymbolName(node: any): string {
 		if (
 			child.type === "identifier" ||
 			child.type === "property_identifier" ||
+			// Groovy Spock feature method: `def "adds two numbers"()` (#5235).
+			child.type === "quoted_identifier" ||
 			child.type === "name"
 		) {
 			return child.text as string;

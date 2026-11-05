@@ -174,6 +174,37 @@ describe("read expansion on a Groovy file (#5235)", () => {
 		expect(expanded?.ancestry?.map((a) => a.name)).toEqual(["OrderService"]);
 	});
 
+	// Recurrence: a Spock feature method (`def "adds two numbers"()`) names its
+	// method with `quoted_identifier`, which `getSymbolName` did not recognise,
+	// so read notes called the enclosing symbol "method_declaration" (PR #5317
+	// review). The name keeps its quotes, as module_report's does.
+	it("names a Spock feature method by its quoted name", async () => {
+		const env = makeEnv();
+		const spec = [
+			"class CalcSpec {",
+			'    def "adds two numbers"() {',
+			"        expect:",
+			"        1 + 1 == 2",
+			"    }",
+			"}",
+			"",
+		].join("\n");
+		const file = createTempFile(env.tmpDir, "CalcSpec.groovy", spec);
+
+		// Line 4 is `1 + 1 == 2`, inside the feature method (lines 2-5).
+		const expanded = await tryExpandRead(
+			file,
+			4,
+			1,
+			spec.split("\n").length,
+			client,
+		);
+
+		expect(expanded?.enclosingSymbol.kind).toBe("method_declaration");
+		expect(expanded?.enclosingSymbol.name).toBe('"adds two numbers"');
+		expect(expanded?.ancestry?.map((a) => a.name)).toEqual(["CalcSpec"]);
+	});
+
 	// Recurrence: read expansion is keyed by extension, so a `.gradle` file must
 	// not expand under the Groovy grammar.
 	it("does not expand a .gradle file", async () => {
