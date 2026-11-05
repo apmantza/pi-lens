@@ -27,7 +27,15 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	afterEach,
+	beforeAll,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { _setServersForFileForTests } from "../../clients/lsp/config.js";
 import type { LSPService } from "../../clients/lsp/index.js";
 import {
@@ -40,6 +48,7 @@ import { waitFor } from "../clients/interleaving-kit.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
 import { useGlobalConfig } from "../support/global-config.js";
 import { installLspService } from "../support/lsp-service-seam.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 
 const getServersForFileWithConfig = vi.fn();
 const createLSPClient = vi.fn();
@@ -53,7 +62,10 @@ vi.mock("../../clients/lsp/client.js", async () => {
 
 // The tool also awaits REAL I/O (stat, read, the drift sweep) before the fake
 // server's wait begins; the driver below yields to it through this real timer.
+// The real clock is captured here, before `vi.useFakeTimers()` replaces `Date`:
+// the driver's deadline is real time (defect shape 86), the server's is fake.
 const realSetTimeout = globalThis.setTimeout;
+const realNow = Date.now.bind(Date);
 
 // Module scope (not only `beforeEach`): the fake server's wait is a timer on the
 // FAKE clock, which is what lets a 30 s cap be measured in microseconds, and the
@@ -121,7 +133,7 @@ function makeFakeServer(
 			(filePath: string) => stampsByPath.get(filePath) ?? 0,
 		),
 		isAlive: () => true,
-		shutdown: async () => {},
+		shutdown: vi.fn(async () => {}),
 		getWorkspaceDiagnosticsSupport: () =>
 			pullOnlyStopsAtMs === undefined
 				? {
@@ -183,10 +195,19 @@ function makeFakeServer(
 	return { client, budgets, opened };
 }
 
+/** Real milliseconds the driver gives the tool's real I/O, before the scale. */
+const DRIVER_DEADLINE_MS = 20_000;
+
 /**
  * Run the real tool and drive the fake clock until it answers, so a wait of any
  * length costs no wall time. Each step also yields a real millisecond, so the
  * tool's real I/O can finish before the fake wait it precedes is advanced.
+ *
+ * The driver's deadline is a REAL-clock one (`PI_LENS_TEST_TIMEOUT_SCALE`
+ * scaled), separate from the server's fake clock: `waitFor` reads `Date.now()`,
+ * which is faked here and moves 250 ms per pass, so its own deadline would count
+ * passes and run out on a slow disk while the tool is still doing valid work.
+ * Recurrence this prevents: PR #5318 thread PRRT_kwDORt8rec60OLnx (shape 86).
  */
 async function runTool(
 	args: Record<string, unknown>,
@@ -200,18 +221,27 @@ async function runTool(
 		.finally(() => {
 			settled = true;
 		});
-	// The deadline is on the fake clock too (`Date` is faked), so it is sized in
-	// fake milliseconds: well past the 30 s cap this file measures.
-	await waitFor(
-		() => settled,
-		(done) => done,
+	const realDeadline = realNow() + scaledTestTimeout(DRIVER_DEADLINE_MS);
+	const state = await waitFor(
+		() =>
+			settled
+				? "settled"
+				: realNow() >= realDeadline
+					? "real-deadline-passed"
+					: "pending",
+		(value) => value !== "pending",
 		{
-			timeoutMs: 120_000,
+			// Only the real deadline above ends the wait; this fake-clock budget is
+			// unreachable (250 ms per pass).
+			timeoutMs: Number.MAX_SAFE_INTEGER / 4,
 			yieldControl: async () => {
 				await vi.advanceTimersByTimeAsync(250);
 				await new Promise<void>((resolve) => realSetTimeout(resolve, 1));
 			},
 		},
+	);
+	expect(state, "the tool answered before the real-clock deadline").toBe(
+		"settled",
 	);
 	return (await call) as any;
 }
@@ -249,6 +279,14 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 		createLSPClient.mockImplementation(async () => server.client);
 	}
 
+	// The test budget sits above the driver's real deadline, so a stuck tool reds
+	// as the driver's named failure rather than as a bare vitest timeout.
+	beforeAll(() => {
+		vi.setConfig({
+			testTimeout: scaledTestTimeout(DRIVER_DEADLINE_MS + 10_000),
+		});
+	});
+
 	beforeEach(async () => {
 		_setServersForFileForTests(getServersForFileWithConfig);
 		clearWidgetState();
@@ -262,7 +300,13 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 	afterEach(async () => {
 		clearWidgetState();
 		_resetLspBudgetDecisionForTests();
+		const spawnedAClient = createLSPClient.mock.calls.length > 0;
 		await service.shutdown();
+		// The service really closed what it opened (PR #5318 thread
+		// PRRT_kwDORt8rec60OLn3: the old cast `destroy()` was a silent no-op).
+		if (spawnedAClient) {
+			expect(server.client.shutdown).toHaveBeenCalled();
+		}
 		removeTempDirSync(tmp);
 	});
 
