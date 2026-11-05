@@ -212,6 +212,12 @@ describe("lsp launch", () => {
 	it.runIf(process.platform === "win32")(
 		"treats delayed shell-backed startup failure as launch failure",
 		async () => {
+			// #5305: an absent `.cmd` now reads absent, so the pre-spawn gate
+			// would throw before the spawn. Plant a real non-npm shim so the cell
+			// still reaches the delayed exit 1 from a present shell-backed program.
+			const shimDir = setupTestEnvironment("pi-lens-shim-").tmpDir;
+			const shim = path.join(shimDir, "bash-language-server.cmd");
+			fs.writeFileSync(shim, "@echo off\necho hello");
 			vi.useFakeTimers();
 
 			vi.doMock("node:child_process", () => {
@@ -231,13 +237,9 @@ describe("lsp launch", () => {
 			});
 
 			const { launchLSP } = await import("../../../clients/lsp/launch.js");
-			const launchPromise = launchLSP(
-				"C:\\fake\\bash-language-server.cmd",
-				["start"],
-				{
-					cwd: "C:\\fake",
-				},
-			);
+			const launchPromise = launchLSP(shim, ["start"], {
+				cwd: "C:\\fake",
+			});
 			const rejection = expect(launchPromise).rejects.toThrow(
 				/exited immediately with code 1/i,
 			);
@@ -314,11 +316,47 @@ describe("lsp launch", () => {
 			expect(isCmdShimValid(shim)).toBe(true);
 		});
 
-		it("returns true when the file cannot be read", async () => {
+		// #5305 recurrence: a missing project-local `.cmd` read as a valid shim
+		// (the catch answered "present"), so the next candidate was never tried.
+		it("returns false when the shim file does not exist", async () => {
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
 			const { isCmdShimValid } = await import("../../../clients/lsp/launch.js");
-			expect(
-				isCmdShimValid(path.join(os.tmpdir(), "nonexistent-shim.cmd")),
-			).toBe(true);
+			expect(isCmdShimValid(path.join(dir, "nonexistent-shim.cmd"))).toBe(
+				false,
+			);
+			expect(isCmdShimValid(path.join(dir, "no-dir", "shim.cmd"))).toBe(false);
+		});
+
+		// #5305: a path that is not a file is not a shim (EISDIR on read).
+		it("returns false when the shim path is a directory", async () => {
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
+			const shim = path.join(dir, "dir.cmd");
+			fs.mkdirSync(shim);
+			const { isCmdShimValid } = await import("../../../clients/lsp/launch.js");
+			expect(isCmdShimValid(shim)).toBe(false);
+		});
+
+		// #5305 rule: a file that exists but cannot be read is PRESENT. The failure
+		// is cmd.exe's to report as a runtime error, not a missing install for the
+		// installer to overwrite. chmod 000 does not bind root or Windows.
+		it("returns true when the shim file exists but is unreadable", async ({
+			skip,
+		}) => {
+			skip(
+				process.platform === "win32" ||
+					(typeof process.getuid === "function" && process.getuid() === 0),
+			);
+			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
+			const shim = path.join(dir, "locked.cmd");
+			fs.writeFileSync(shim, `@"%~dp0\\..\\pkg\\bin\\cli.js" %*`);
+			fs.chmodSync(shim, 0o000);
+			try {
+				const { isCmdShimValid } =
+					await import("../../../clients/lsp/launch.js");
+				expect(isCmdShimValid(shim)).toBe(true);
+			} finally {
+				fs.chmodSync(shim, 0o644);
+			}
 		});
 
 		it("handles .mjs targets", async () => {
