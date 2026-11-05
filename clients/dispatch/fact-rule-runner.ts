@@ -11,6 +11,11 @@ export function clearRules(): void {
 	rules.length = 0;
 }
 
+/** Read the live rule registry: the array `evaluateRules` walks. */
+export function listRules(): readonly FactRule[] {
+	return rules;
+}
+
 export function evaluateRules(ctx: DispatchContext): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
 	for (const rule of rules) {

@@ -12,6 +12,11 @@ export function clearProviders(): void {
 	providers.length = 0;
 }
 
+/** Read the live provider registry: the array `runProviders` filters. */
+export function listProviders(): readonly FactProvider[] {
+	return providers;
+}
+
 /**
  * Run the registered fact providers for `ctx`, in dependency order.
  *
