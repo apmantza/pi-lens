@@ -40,6 +40,7 @@ import {
 	isWindowsPath,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
+	toPosix,
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { withBudget } from "../deadline-utils.js";
@@ -2202,7 +2203,7 @@ function looksLikeDiagnosticCodePath(value: string): boolean {
 	if (!value) return false;
 	const text = value.trim();
 	if (!text) return false;
-	const base = path.basename(text.replace(/\\/g, "/"));
+	const base = path.basename(toPosix(text));
 	if (/^lsp:\d+(?::\d+)?$/i.test(text) || /^lsp:\d+(?::\d+)?$/i.test(base)) {
 		return true;
 	}
