@@ -1300,17 +1300,43 @@ export async function startPiSession(
 			? { inlineFactory: await options.inlineFactory() }
 			: {}),
 	};
-	return bindSession(
+	const session = await createSession(
 		args,
-		await createSession(
-			args,
-			{
-				cwd,
-				agentDir,
-				sessionManager: hostModule().SessionManager.create(cwd, sessionsDir),
-			},
-			options.responses,
-		),
+		{
+			cwd,
+			agentDir,
+			sessionManager: hostModule().SessionManager.create(cwd, sessionsDir),
+		},
+		options.responses,
+	);
+	armBackstopCooldown();
+	return bindSession(args, session);
+}
+
+/**
+ * The loaded copy arms the orphan backstop (`scheduleUntrackedOrphanSweep`,
+ * 30 s after `session_start`) on jiti's own module graph, which the setup
+ * file's empty-table scope (#3917) does not reach. A file that outlives 30 s
+ * would enumerate the HOST's process table and SIGKILL a stale foreign
+ * orphan, and the #2042 kill guard fails the file at teardown (the slice-7
+ * ordering file, 5 first-attempt reds in a week). The machine-wide cooldown
+ * stamp is seeded in the pinned home once the session has started, so the
+ * copy's sweep reads it through the production reader and skips. Written as a
+ * file, not through `clients/instance-reaper.js`: importing that module here
+ * reshaped this side's module graph and reddened
+ * `tests/index-4913-cli-flag-timing.test.ts`. It is written AFTER the start:
+ * the author saw a file in the home before the first `session_start` redden
+ * the same case under load (`lsp_touch_file` absent after `/lens-toggle`); the
+ * review could not reproduce that (2 of 2 runs green). The stamp's name and shape are pinned by `pi-session.test.ts`, which asks the
+ * production sweep whether it is in cooldown.
+ */
+function armBackstopCooldown(): void {
+	const home = process.env.PI_LENS_HOME;
+	if (home === undefined) return;
+	fs.mkdirSync(home, { recursive: true });
+	fs.writeFileSync(
+		path.join(home, "orphan-backstop.json"),
+		JSON.stringify({ lastSweepAt: Date.now() }),
 	);
 }
 

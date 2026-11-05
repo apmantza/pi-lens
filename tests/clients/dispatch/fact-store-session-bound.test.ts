@@ -1,6 +1,7 @@
 import { afterEach, describe, it, expect } from "vitest";
 import {
 	createDispatchContext,
+	deltaBaselineFactKey,
 	dispatchForFile,
 	RunnerRegistry,
 } from "../../../clients/dispatch/dispatcher.js";
@@ -11,6 +12,7 @@ import {
 import {
 	FactStore,
 	getFactStoreEvictionReporter,
+	MAX_SESSION_FACT_RECORDS,
 	setFactStoreEvictionReporter,
 } from "../../../clients/dispatch/fact-store.js";
 import type { RunnerGroup } from "../../../clients/dispatch/types.js";
@@ -25,21 +27,26 @@ const productionEvictionReporter = getFactStoreEvictionReporter();
 
 afterEach(() => setFactStoreEvictionReporter(undefined));
 
-const MAX_SESSION_RECORDS = 4096;
-const BATCH = 3000;
+const MAX_SESSION_RECORDS = MAX_SESSION_FACT_RECORDS;
 
-function batchPaths(prefix: string, count = BATCH): string[] {
+function batchPaths(prefix: string, count: number): string[] {
 	return Array.from({ length: count }, (_, i) => `/repo/src/${prefix}-${i}.ts`);
 }
 
 describe("FactStore session-fact bound (#2282)", () => {
 	// Acceptance criteria 2 & 4: the production dispatch path (dispatcher.ts)
 	// now bounds session.baseline growth by reusing #2243's FactStore-level LRU
-	// discipline, not a hand-rolled prefix check. This test drives the REAL
-	// `dispatchForFile` entry point across a several-hundred(+)-file batch and
-	// observes a purely behavioral signal (`baselineWarningCount`) — no new API
-	// appears in this test body, so it is genuinely red on pre-#2282 dispatcher.ts
-	// (unbounded `sessionFacts.setSessionFact`) and green after.
+	// discipline, not a hand-rolled prefix check. The first file and its
+	// re-dispatch go through the REAL `dispatchForFile` entry point, and the
+	// test observes a purely behavioral signal (`baselineWarningCount`). The
+	// filler batch writes the key `deltaBaselineFactKey` builds for each path,
+	// straight into the store, instead of dispatching every filler file. That
+	// still proves the bound: eviction is decided by the store's LRU, not by the
+	// dispatch that wrote the key. A
+	// full dispatch per filler file cost about 2 ms each, so 4296 of them took
+	// about 9 s here and about 30 s on CI, at the timeout (#5307). The test
+	// is red on pre-#2282 dispatcher.ts (unbounded `sessionFacts.setSessionFact`)
+	// and green after.
 	it("stops retaining an early file's delta baseline once a large batch exceeds the session-fact cap", async () => {
 		const registry = new RunnerRegistry();
 		registry.register(
@@ -67,6 +74,7 @@ describe("FactStore session-fact bound (#2282)", () => {
 		const pi = { getFlag: () => false };
 		const cwd = "/project";
 		const firstPath = `${cwd}/src/first-touched.ts`;
+		const firstKey = deltaBaselineFactKey(firstPath);
 
 		// First dispatch of this file: no prior baseline exists yet.
 		const firstResult = await dispatchForFile(
@@ -75,19 +83,23 @@ describe("FactStore session-fact bound (#2282)", () => {
 			registry,
 		);
 		expect(firstResult.baselineWarningCount).toBe(0);
+		// The dispatcher's own write must land under the bounded key. The fill
+		// cannot show that, so this check does: a removed, unbounded or re-keyed
+		// write reds here.
+		expect(facts.hasBoundedSessionFact(firstKey)).toBe(true);
 
 		// A several-hundred(+)-file batch touches every OTHER file exactly once —
-		// the shape a large merge/checkout dispatch produces. #2489 dropped the
-		// second (relative-fallback) baseline key dispatcher.ts used to mint per
-		// file, so the batch must now exceed MAX_SESSION_RECORDS on its own (one
-		// key per filler file, not two) to force the eviction this test proves.
+		// the shape a large merge/checkout dispatch produces. The dispatcher mints
+		// one baseline key per file (#2489 dropped the second, relative-fallback
+		// key), so the batch must exceed MAX_SESSION_RECORDS on its own to force
+		// the eviction this test proves. The batch is the cap plus a margin, so
+		// the cap follows MAX_SESSION_FACT_RECORDS if it ever changes.
 		for (const p of batchPaths("filler", MAX_SESSION_RECORDS + 200)) {
-			await dispatchForFile(
-				createDispatchContext(p, cwd, pi, facts),
-				groups,
-				registry,
-			);
+			facts.setBoundedSessionFact(deltaBaselineFactKey(p), []);
 		}
+		// The fill evicted that key, so the re-dispatch below starts from
+		// first-dispatch state.
+		expect(facts.hasBoundedSessionFact(firstKey)).toBe(false);
 
 		// Re-dispatch the FIRST file. Pre-#2282, `sessionFacts` never evicts, so
 		// its baseline (1 warning, set by the first dispatch) is still there and
