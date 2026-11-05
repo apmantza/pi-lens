@@ -97,7 +97,7 @@ function plantNpm(slug: string): {
 
 const restores: Array<() => void> = [];
 afterAll(() => {
-	for (const restore of restores.splice(0)) restore();
+	for (const restore of restores.splice(0).reverse()) restore();
 });
 
 describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
