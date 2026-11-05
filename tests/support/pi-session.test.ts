@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { Type } from "../../clients/deps/typebox.js";
+import { sweepUntrackedOrphans } from "../../clients/instance-reaper.js";
 import { normalizeFilePath } from "../../clients/path-utils.js";
 import { scannerReportParentDir } from "../../clients/scanner-temp-root.js";
 import { ReadGuard } from "../../clients/read-guard.js";
@@ -622,6 +623,40 @@ describe("pi-session: the built extension in a real AgentSession (#4632)", () =>
 		// Created with the pin, so `mkdtempSync` in the scan has a parent to
 		// write under even when the file's first scan starts immediately.
 		expect(fs.existsSync(parent)).toBe(true);
+	});
+
+	it("starts a session with the orphan backstop in cooldown, so its 30 s sweep cannot reach the host", async () => {
+		// Recurrence (routine flaky-test-fixer 2026-11-05): `index.ts` arms
+		// `scheduleUntrackedOrphanSweep()` (30 s) on every primary session_start.
+		// The loaded copy runs on jiti's own module graph, so the setup file's
+		// scope of the backstop's process-table query (#3917) never reaches it.
+		// `tests/index-4632-s7-turn-end-ordering.test.ts` outlives 30 s on CI
+		// (5 first-attempt reds in a week, each re-run green), the copy then
+		// enumerates the HOST table, finds a stale `typescript-language-server`
+		// with a dead owner and SIGKILLs its group, and the #2042 kill guard fails
+		// the file at teardown with every test green. Probed: with a planted
+		// orphan the file went red 4 of 4 runs under 4-way load, 0 of 3 without
+		// one. A sweep this file runs through the SAME stamp reader reports
+		// `cooldown` only when the helper armed the machine-wide cooldown in the
+		// fixture home once the session started; this side's copy is scoped to an empty
+		// table by the setup file, so the pre-fix `clean` kills nothing.
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: path.join(fixture.root, "backstop-cooldown", "proj"),
+			responses: [fauxAssistantMessage(fauxText("ok"))],
+		});
+		// The sweep reads the machine home live. The helper already pinned it to
+		// the fixture's; the case names that pin so it never reads the run-shared
+		// home's registry or stamp (`pi-lens-home-hermeticity.test.ts`, #3042).
+		const pinnedHome = process.env.PI_LENS_HOME;
+		process.env.PI_LENS_HOME = path.join(fixture.root, "home");
+		try {
+			expect(await sweepUntrackedOrphans()).toBe("cooldown");
+		} finally {
+			if (pinnedHome === undefined) delete process.env.PI_LENS_HOME;
+			else process.env.PI_LENS_HOME = pinnedHome;
+			await handle.dispose();
+		}
 	});
 
 	it("pins the tool-loadout declaration pi builds for a request", async () => {
