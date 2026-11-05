@@ -5350,6 +5350,9 @@ export class LSPService {
 							"tier3-silent"
 						);
 					} catch {
+						// none: capability uncertainty fails closed to "not silent-on-clean":
+						// the warm-up keeps its cold floor and an expired wait stays a
+						// timeout, which `lsp_diagnostics_timeout` records.
 						return false;
 					}
 				};

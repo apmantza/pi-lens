@@ -798,9 +798,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	// diagnostic timeout classification moved later handlers without changing
 	// the admitted population.
 	// (:7890) now returns its own failed flag; no handler added or removed.
+	// 41, re-pinned (#5306 r4): the #832 warm-up's capability catch moved into
+	// touchFile's `isSilentOnCleanServer` closure and now declares `none:`.
 	"clients/lsp/index.ts": {
-		silent: 42,
-		identities: "2f98b83322bae1b4",
+		silent: 41,
+		identities: "e9b67108c56f3dcf",
 		reason: SHARP_DID_SAVE,
 	}, // :239, :356, :385, :1161, :1761, :2018, :2316, :2350, :2586, :2759, :2878, :3607, :3667, :3701, :4134, :4713, :4963, :5092, :5155, :5166, :5212, :5301, :5326, :5351, :5645, :5708, :6063, :6087, :6252, :6329, :6348, :7890, :8475, :8707, :8775, :8897, :8991, :9051, :9288, :9415, :9788, :9839
 	"clients/lsp/jvm-runtime.ts": {
