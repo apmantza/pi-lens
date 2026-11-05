@@ -303,7 +303,8 @@ export function isCmdShimValid(cmdPath: string): boolean {
 		const target = path.resolve(path.dirname(cmdPath), "..", relPath);
 		return fs.existsSync(target);
 	} catch {
-		// Fail closed (#5305): an unreadable path is present only as a file.
+		// none: fail closed (#5305). An unreadable shim is present only when
+		// statIsFile proves it is a file; cmd.exe then owns the failure.
 		return statIsFile(cmdPath);
 	}
 }
