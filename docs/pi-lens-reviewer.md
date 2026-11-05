@@ -3,7 +3,8 @@
 Read first: the engineering principles (`docs/engineering-principles.md`), then
 `AGENTS.md`, then `docs/pi-lens-subagent.md`, then this contract. Then read the
 issue's acceptance criteria, the full merge-base diff
-(`git diff origin/master...HEAD`), the PR body, and merge state. Principles §3
+(`git diff origin/master...HEAD`), the PR body (author sections only until the
+blind pass ends, see "Procedure"), and merge state. Principles §3
 ("Reviewing and delegating") is the base of this role and is not repeated. Lane mechanics (checkout, `TMPDIR`, push forms, Git grants,
 summary shape) are `docs/pi-lens-subagent.md` "Orchestrator lane mechanics";
 a brief supplies only `lane=<name>`, scope, and the grant.
@@ -20,6 +21,14 @@ a brief supplies only `lane=<name>`, scope, and the grant.
   checkout (#2693).
 
 ## Procedure
+
+**Blind pass.** On the first review of a PR, read no bot output until you write
+your findings (step 6). Bot output is a bot review or review thread, the bot
+record, a bot-written block of the PR body, and a bot-published CI check
+(CodeRabbit, Sourcery, PR-Synopsis, SonarCloud). The bot record is the
+PR-Synopsis App's record for the head (`synopsis-record.py <pr> <head>`) plus its
+PR comment. The fixer's own body sections stay readable: they are the author's
+claims. A verify round is exempt (#5319).
 
 1. Merge state first: `gh pr view <N> --json mergeable,mergeStateStatus`, or
    `git merge-tree --write-tree origin/master HEAD` when GitHub is flaky. A
@@ -45,14 +54,16 @@ a brief supplies only `lane=<name>`, scope, and the grant.
 5. Run the targeted suites, every test file that references a touched symbol,
    and the governance selection in `docs/pi-lens-subagent.md`, after
    `npm run build`.
-6. Read CI once (`docs/pi-lens-subagent.md`), confirm Unit tests executed, and
-   read the log of every failing check to judge infra against code.
-7. Blind first, on the first head you review: write `FINDINGS_<pr>.json`
-   before you read the PR-Synopsis record or any bot review. Then read the
-   record (`synopsis-record.py <pr> <head>` and the synopsis comment), probe
-   each bot finding, and fill the comparison fields below. The bots and you
-   review the same head, so the comparison measures the bots against your
-   own pass, not against a pass that already read them (#5319).
+6. Write `FINDINGS_<pr>.json` from your own probes, each row with
+   `"source": "reviewer"` and `"matched": []`. On a first review, copy it to
+   `FINDINGS_<pr>.blind.json` before your first read of bot output, and never
+   edit the copy: it proves the order and feeds the scoreboard.
+7. Read CI once (`docs/pi-lens-subagent.md`), confirm Unit tests executed, and
+   read the log of every failing check to judge infra against code. Then read
+   the bot record and the review threads, probe each bot finding, and fill in
+   `FINDINGS_<pr>.json` only: bot rows, `matched`, and `status`. The bots and
+   you review the same head, so the comparison measures the bots against your
+   own pass, not against a pass that already read them.
 8. Clean up: revert mutations, delete probes, and leave
    `git status --porcelain` empty.
 
@@ -355,7 +366,8 @@ merge-order interactions with other open PRs, plus:
   finding with its probe, or `refuted` with the probe that refutes it, so an
   item nobody probed cannot read as cleared. A missing bot review is never
   evidence of anything: never wait for one, never read its absence as a clear
-  signal, and let your own pass stand alone. No `merge-ready` verdict while
+  signal, and let your own pass stand alone. On a first review, list the
+  threads after the blind write. No `merge-ready` verdict while
   any thread or alert stays undisposed; the merge condition is
   `docs/pi-lens-merge-policy.md` "The loop, per PR" step 1 and step 4
   (`:34`, `:81`). Recurrence: #4566 and #4575 (2026-10-17), where the threads
@@ -366,17 +378,20 @@ never commit it. The orchestrator's validator reads it before routing the
 round. Shape:
 
 ```json
-{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file", "source": "reviewer|<bot>", "matched": ["<other sources>"], "status": "confirmed|refuted"}]}
+{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file", "source": "reviewer|greptile|coderabbit|qodo|sourcery", "matched": ["<other sources>"], "status": "confirmed|refuted"}]}
 ```
 
 Write one entry per finding, with the same ids as the prose. `remedy: null`
 means the fixer must design the change. `addsMechanism` is true when the
 remedy adds a guard, branch, state, record, or lifecycle step, rather than a
-fix to an existing line. `source` names who found the defect: `reviewer`
-for your blind pass, or the bot's name for a row you added from a bot finding.
-`matched` lists the other sources that found the same defect (`[]` when
-none). A bot-sourced row also carries `status`: `confirmed` or `refuted` by
-your probe. A refuted bot row still gets a row, so the comparison counts it.
+fix to an existing line. `source` is `reviewer` for your blind pass, or the
+exact bot name (`greptile`, `coderabbit`, `qodo`, `sourcery`) for a row you
+added from a bot finding. Every row with a `source` carries `matched`, the
+other sources that found the same defect (`[]` when none). Every bot row also
+carries `status`, `confirmed` or `refuted` by your probe. A refuted row still
+gets a row, so the comparison counts it, but it routes nothing and blocks
+nothing. After step 6, fill in only `FINDINGS_<pr>.json`; the scoreboard reads
+the blind copy for what you found blind.
 The prose report stays the record a human reads;
 the JSON is what routing reads, so the two must agree. This exists because
 the orchestrator re-typed each finding into a fix brief by hand, and routed
