@@ -129,6 +129,12 @@ const CASES: Record<string, ImportCase> = {
 		src: 'package a\n\nimport "strings"\n\nimport (\n\t"encoding/json"\n\talias "list"\n)\n',
 		expect: ["strings", "encoding/json", "list"],
 	},
+	// #5235: plain, static and aliased imports share the qualified_name node.
+	groovy: {
+		file: "a.groovy",
+		src: "import groovy.json.JsonSlurper\nimport static java.lang.Math.max\nimport a.b.C as D\nclass K {}\n",
+		expect: ["groovy.json.JsonSlurper", "java.lang.Math.max", "a.b.C"],
+	},
 };
 
 let client: TreeSitterClient;

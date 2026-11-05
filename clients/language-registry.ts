@@ -370,12 +370,16 @@ export const LANGUAGES: readonly LanguageEntry[] = [
 	{ id: "go-mod", extensions: [".mod", ".sum"], lspId: "go" },
 	{ id: "graphql", extensions: [".graphql", ".gql"] },
 	// Groovy source plus the two named Gradle scripts and the Jenkins pipeline
-	// entrypoint (#5235); no grammar yet, so no tree-sitter consumer sees it.
+	// entrypoint (#5235). The vendored grammar reaches `.groovy .gvy .gy .gsh`
+	// by extension and `Jenkinsfile`/`build.gradle`/`settings.gradle` by kind;
+	// `.gradle` stays out of `grammarExtensions` because it would claim every
+	// `.gradle` file, which `GROOVY_FILENAMES` deliberately does not.
 	{
 		id: "groovy",
 		kind: "groovy",
 		extensions: [".groovy", ".gvy", ".gy", ".gsh"],
 		filenames: GROOVY_FILENAMES,
+		grammar: "groovy",
 	},
 	{ id: "haskell", kind: "haskell", extensions: [".hs", ".lhs"] },
 	{ id: "helm", kind: "helm-template", extensions: [".tpl"] },

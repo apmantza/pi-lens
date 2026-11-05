@@ -453,6 +453,70 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
         name: (command_name (word) @callIdent)) @callRef
     `,
 	},
+	// #5235: tree-sitter-groovy (dekobon v0.3.0, vendored as is). Node names
+	// were probed against the committed wasm. A Spock feature name
+	// (`def "adds two numbers"()`) parses as `quoted_identifier`, so the method
+	// name keeps its quotes. Named closures are limited to class fields and
+	// top-level script variables: a method-local `def c = {}` is also a
+	// `local_variable_declaration`, and listing it would put locals in the
+	// module outline. Closure-taking calls (`list.each { }`, DSL blocks) parse
+	// as sibling statements or `command_chain`, not `method_invocation`, so
+	// they yield no call ref; only `foo(1)`, `a.b(2)` and `new X()` do. The
+	// grammar's known parse gaps are in docs/language-coverage.md.
+	groovy: {
+		defs: `
+      (class_declaration
+        name: (identifier) @className) @classDef
+
+      (trait_declaration
+        name: (identifier) @className) @classDef
+
+      (enum_declaration
+        name: (identifier) @className) @classDef
+
+      (record_declaration
+        name: (identifier) @className) @classDef
+
+      (interface_declaration
+        name: (identifier) @interfaceName) @interfaceDef
+
+      (method_declaration
+        name: [(identifier) (quoted_identifier)] @methodName
+        parameters: (formal_parameters) @methodParams) @methodDef
+
+      (constructor_declaration
+        name: (identifier) @funcName
+        parameters: (formal_parameters) @funcParams) @funcDef
+
+      (field_declaration
+        (variable_declarator
+          name: (identifier) @arrowName
+          value: (closure))) @arrowDef
+
+      (source_file
+        (local_variable_declaration
+          (variable_declarator
+            name: (identifier) @arrowName
+            value: (closure))) @arrowDef)
+    `,
+		refs: `
+      (method_invocation
+        function: (identifier) @callIdent) @callRef
+
+      (method_invocation
+        function: (field_access
+          field: (identifier) @callMethod)) @callMethodRef
+
+      (object_creation_expression
+        type: (type_identifier) @newIdent) @newRef
+
+      (object_creation_expression
+        type: (generic_type
+          base: (type_identifier) @newIdent)) @newRef
+
+      (type_identifier) @typeIdent
+    `,
+	},
 	// #1522: tree-sitter-cue (eonpatapon/tree-sitter-cue, vendored per #1520) has
 	// no `label:`/`value:` field names on `field` — verified directly against the
 	// committed wasm (`value:` fails query compilation with "Bad field name");
@@ -709,6 +773,9 @@ const IMPORT_QUERIES: Record<string, string> = {
         (word) @importSource
         (#match? @_m "^(source|\\.)$"))
     `,
+	// import a.b.C / import static a.b.C.m / import a.b.* — `name:` is the
+	// qualified_name on every form, aliases (`as X`) included (#5235).
+	groovy: `(import_declaration name: (qualified_name) @importSource)`,
 	// import "strings" / import x "encoding/json" — `import_spec`'s `path:`
 	// field is verified against the committed wasm. Block-form
 	// (`import (\n\t"strings"\n)`) nests each `import_spec` one level deeper,

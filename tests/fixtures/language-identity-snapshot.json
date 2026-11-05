@@ -10,6 +10,7 @@
 		"dart",
 		"elixir",
 		"go",
+		"groovy",
 		"html",
 		"java",
 		"javascript",
@@ -494,41 +495,41 @@
 			"kind": "groovy",
 			"kindLanguageId": "groovy",
 			"lspId": "groovy",
-			"treeSitterGrammar": null,
-			"scannerGrammar": null,
-			"readExpansionLang": null,
-			"reviewGraphGrammar": null,
-			"moduleReportGrammar": null
+			"treeSitterGrammar": "groovy",
+			"scannerGrammar": "groovy",
+			"readExpansionLang": "groovy",
+			"reviewGraphGrammar": "groovy",
+			"moduleReportGrammar": "groovy"
 		},
 		".gsh": {
 			"kind": "groovy",
 			"kindLanguageId": "groovy",
 			"lspId": "groovy",
-			"treeSitterGrammar": null,
-			"scannerGrammar": null,
-			"readExpansionLang": null,
-			"reviewGraphGrammar": null,
-			"moduleReportGrammar": null
+			"treeSitterGrammar": "groovy",
+			"scannerGrammar": "groovy",
+			"readExpansionLang": "groovy",
+			"reviewGraphGrammar": "groovy",
+			"moduleReportGrammar": "groovy"
 		},
 		".gvy": {
 			"kind": "groovy",
 			"kindLanguageId": "groovy",
 			"lspId": "groovy",
-			"treeSitterGrammar": null,
-			"scannerGrammar": null,
-			"readExpansionLang": null,
-			"reviewGraphGrammar": null,
-			"moduleReportGrammar": null
+			"treeSitterGrammar": "groovy",
+			"scannerGrammar": "groovy",
+			"readExpansionLang": "groovy",
+			"reviewGraphGrammar": "groovy",
+			"moduleReportGrammar": "groovy"
 		},
 		".gy": {
 			"kind": "groovy",
 			"kindLanguageId": "groovy",
 			"lspId": "groovy",
-			"treeSitterGrammar": null,
-			"scannerGrammar": null,
-			"readExpansionLang": null,
-			"reviewGraphGrammar": null,
-			"moduleReportGrammar": null
+			"treeSitterGrammar": "groovy",
+			"scannerGrammar": "groovy",
+			"readExpansionLang": "groovy",
+			"reviewGraphGrammar": "groovy",
+			"moduleReportGrammar": "groovy"
 		},
 		".h": {
 			"kind": "cxx",
@@ -1427,8 +1428,8 @@
 			"treeSitterGrammar": null,
 			"scannerGrammar": null,
 			"readExpansionLang": null,
-			"reviewGraphGrammar": null,
-			"moduleReportGrammar": null
+			"reviewGraphGrammar": "groovy",
+			"moduleReportGrammar": "groovy"
 		},
 		"Makefile": {
 			"kind": "shell",
@@ -1447,8 +1448,8 @@
 			"treeSitterGrammar": null,
 			"scannerGrammar": null,
 			"readExpansionLang": null,
-			"reviewGraphGrammar": null,
-			"moduleReportGrammar": null
+			"reviewGraphGrammar": "groovy",
+			"moduleReportGrammar": "groovy"
 		},
 		"root.hcl": {
 			"kind": "terragrunt",
@@ -1467,8 +1468,8 @@
 			"treeSitterGrammar": null,
 			"scannerGrammar": null,
 			"readExpansionLang": null,
-			"reviewGraphGrammar": null,
-			"moduleReportGrammar": null
+			"reviewGraphGrammar": "groovy",
+			"moduleReportGrammar": "groovy"
 		},
 		"terragrunt.hcl": {
 			"kind": "terragrunt",

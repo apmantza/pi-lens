@@ -77,6 +77,13 @@ const CASES: Record<string, SymbolCase> = {
 		src: "package a\n\n#Service: {\n\tname: string\n}\n\nlet helper = 1\n",
 		expect: ["#Service", "name", "helper"],
 	},
+	// #5235: class, constructor, method and a field closure from the vendored
+	// dekobon grammar.
+	groovy: {
+		file: "A.groovy",
+		src: "class A {\n    def run = { x -> x }\n    A() { }\n    void foo() { }\n}\n",
+		expect: ["A", "run", "foo"],
+	},
 };
 
 let client: TreeSitterClient;

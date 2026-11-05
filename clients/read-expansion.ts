@@ -93,6 +93,14 @@ const ENCLOSING_TYPES: Record<string, string[]> = {
 	ocaml: ["value_definition", "module_definition"],
 	zig: ["function_declaration"],
 	bash: ["function_definition"],
+	groovy: [
+		"method_declaration",
+		"constructor_declaration",
+		"class_declaration",
+		"interface_declaration",
+		"enum_declaration",
+		"trait_declaration",
+	],
 };
 
 interface AncestorSymbol {
@@ -147,6 +155,8 @@ function getSymbolName(node: any): string {
 		if (
 			child.type === "identifier" ||
 			child.type === "property_identifier" ||
+			// Groovy Spock feature method: `def "adds two numbers"()` (#5235).
+			child.type === "quoted_identifier" ||
 			child.type === "name"
 		) {
 			return child.text as string;

@@ -107,6 +107,12 @@ export interface VendoredGrammarSource {
  * give `.cue` structural analysis, so the artifact is committed and pinned
  * rather than fetched. Mirrored by `VENDORED_GRAMMARS` in
  * scripts/download-grammars.
+ *
+ * tree-sitter-groovy: no publisher ships a wasm for dekobon/tree-sitter-groovy
+ * (npm's `@dekobon/tree-sitter-groovy` carries no wasm), so v0.3.0 is built at
+ * its tagged commit with the pinned CLI and committed as is, unpatched (#5235).
+ * It parses 70% of a 1,353-file real corpus with no ERROR node; the gaps are
+ * in docs/language-coverage.md.
  */
 export const VENDORED_GRAMMARS: Record<string, VendoredGrammarSource> = {
 	"tree-sitter-cue.wasm": {
@@ -114,6 +120,12 @@ export const VENDORED_GRAMMARS: Record<string, VendoredGrammarSource> = {
 		commit: "dd7b90e0770ff18070c515937ba3c3d6d93db00e",
 		license: "MIT",
 		buildCommand: "npx tree-sitter-cli build --wasm",
+	},
+	"tree-sitter-groovy.wasm": {
+		repo: "https://github.com/dekobon/tree-sitter-groovy",
+		commit: "654e4c2d736571dbc512043a1dc26017c7aedc85",
+		license: "MIT OR Apache-2.0",
+		buildCommand: "npx tree-sitter-cli@0.25.10 build --wasm",
 	},
 };
 
@@ -186,6 +198,7 @@ export const LANGUAGE_TO_GRAMMAR: Record<string, string> = {
 	yaml: "tree-sitter-yaml.wasm",
 	zig: "tree-sitter-zig.wasm",
 	cue: "tree-sitter-cue.wasm",
+	groovy: "tree-sitter-groovy.wasm",
 };
 
 /** The full set of grammar wasm filenames (deduped). */

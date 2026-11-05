@@ -5520,7 +5520,11 @@ export class TreeSitterClient {
 		return files;
 	}
 
-	/** Get file extensions for a language */
+	/**
+	 * Get file extensions for a language. Hand-kept sibling of the registry
+	 * (docs/invariants/language-config.md): a new row copies
+	 * `extensionsForLanguage(id)` until the table is folded onto it.
+	 */
 	private getExtensionsForLanguage(languageId: string): string[] {
 		const mapping: Record<string, string[]> = {
 			typescript: [".ts", ".mts", ".cts"],
@@ -5536,6 +5540,7 @@ export class TreeSitterClient {
 			cpp: [".cpp", ".hpp", ".cc", ".hh"],
 			elixir: [".ex", ".exs"],
 			ruby: [".rb"],
+			groovy: [".groovy", ".gvy", ".gy", ".gsh"],
 		};
 		return mapping[languageId] || [];
 	}
