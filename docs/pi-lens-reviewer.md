@@ -47,7 +47,13 @@ a brief supplies only `lane=<name>`, scope, and the grant.
    `npm run build`.
 6. Read CI once (`docs/pi-lens-subagent.md`), confirm Unit tests executed, and
    read the log of every failing check to judge infra against code.
-7. Clean up: revert mutations, delete probes, and leave
+7. Blind first, on the first head you review: write `FINDINGS_<pr>.json`
+   before you read the PR-Synopsis record or any bot review. Then read the
+   record (`synopsis-record.py <pr> <head>` and the synopsis comment), probe
+   each bot finding, and fill the comparison fields below. The bots and you
+   review the same head, so the comparison measures the bots against your
+   own pass, not against a pass that already read them (#5319).
+8. Clean up: revert mutations, delete probes, and leave
    `git status --porcelain` empty.
 
 ## Compliance pass
@@ -360,13 +366,18 @@ never commit it. The orchestrator's validator reads it before routing the
 round. Shape:
 
 ```json
-{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file"}]}
+{"pr": 4710, "head": "<40-hex sha reviewed>", "verdict": "merge-ready|needs changes|redesign|conflicted", "oneWayDoors": ["..."], "findings": [{"id": "F1", "severity": "<one of the five severity words>", "file": "path", "line": 1, "claim": "one sentence", "probe": "command or probe name whose output proves it", "remedy": "the prescribed change, or null", "addsMechanism": true, "class": "fold|accepted residual|file", "source": "reviewer|<bot>", "matched": ["<other sources>"], "status": "confirmed|refuted"}]}
 ```
 
 Write one entry per finding, with the same ids as the prose. `remedy: null`
 means the fixer must design the change. `addsMechanism` is true when the
 remedy adds a guard, branch, state, record, or lifecycle step, rather than a
-fix to an existing line. The prose report stays the record a human reads;
+fix to an existing line. `source` names who found the defect: `reviewer`
+for your blind pass, or the bot's name for a row you added from a bot finding.
+`matched` lists the other sources that found the same defect (`[]` when
+none). A bot-sourced row also carries `status`: `confirmed` or `refuted` by
+your probe. A refuted bot row still gets a row, so the comparison counts it.
+The prose report stays the record a human reads;
 the JSON is what routing reads, so the two must agree. This exists because
 the orchestrator re-typed each finding into a fix brief by hand, and routed
 rounds by judgment instead of by the review's own data.
