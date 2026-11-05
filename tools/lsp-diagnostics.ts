@@ -98,7 +98,11 @@ import {
 	extensionsForLanguage,
 	SCAN_LANGUAGE_PRIORITY,
 } from "../clients/language-registry.js";
-import { exceedsLspSyncLimits } from "../clients/lsp/content-limits.js";
+import {
+	exceedsExplicitQueryLimits,
+	exceedsLspSyncLimits,
+} from "../clients/lsp/content-limits.js";
+import { RUNTIME_CONFIG } from "../clients/runtime-config.js";
 import {
 	goPackageFilesToAnnounce,
 	type ImportScope,
@@ -893,6 +897,13 @@ async function collectDiagnosticsForFile(
 	// #4323: auxiliaries the operator's configuration turns off. Both the touch
 	// and the clientless fallback below leave them unacquired.
 	excludeServerIds?: ReadonlySet<string>,
+	/**
+	 * #5306: true only for the explicit single-file query (`runFileDiagnostics`).
+	 * It takes the global `lsp.queryMaxFileLines` line limit and lets an explicit
+	 * `waitMs` exceed the per-server aggregate wait. Batch, directory and sweep
+	 * callers leave it unset and keep the shared 5000-line bound and budgets.
+	 */
+	explicitQuery = false,
 ): Promise<DiagnosticsCollectionResult> {
 	let timedOut = false;
 	let content: string | undefined;
@@ -912,7 +923,9 @@ async function collectDiagnosticsForFile(
 	let touched: TouchFileResult | undefined;
 	try {
 		content = fs.readFileSync(absPath, "utf-8");
-		const contentLimit = exceedsLspSyncLimits(content);
+		const contentLimit = explicitQuery
+			? exceedsExplicitQueryLimits(content)
+			: exceedsLspSyncLimits(content);
 		if (contentLimit.tooLarge) {
 			const reason = `file too large for LSP diagnostics (${contentLimit.reason})`;
 			recordDegradationOnce({
@@ -998,6 +1011,7 @@ async function collectDiagnosticsForFile(
 			diagnostics: "document",
 			collectDiagnostics: true,
 			maxClientWaitMs: waitMs,
+			...(explicitQuery && { explicitQuery }),
 			source: "lsp_diagnostics",
 			clientScope: serverScope,
 			excludeServerIds,
@@ -1953,6 +1967,7 @@ async function runFileDiagnostics(
 		waitMs,
 		serverScope,
 		excludeServerIds,
+		true,
 	);
 	if (tooLargeReason !== undefined) {
 		return {
@@ -2113,7 +2128,7 @@ async function runFileDiagnostics(
 			return (
 				"Primary LSP: check timed out — NOT the same as 0 diagnostics; the " +
 				"file may still have errors that just hadn't been reported yet. " +
-				"Re-check after the server settles, or increase waitMs."
+				`Re-check after the server settles, or pass a larger waitMs (this single-file query honours it up to ${RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs} ms).`
 			);
 		}
 		if (rootFallback) {

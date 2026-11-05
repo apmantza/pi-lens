@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getGlobalActionableWarningMaxFixes,
+	getGlobalLspQueryMaxFileLines,
 	getGlobalWidgetDefaultVisible,
 	getPiLensGlobalConfigPath,
 	loadPiLensGlobalConfig,
@@ -604,6 +605,77 @@ describe("global pi-lens config", () => {
 		});
 		expect(loadPiLensGlobalConfig(stringPath)).toEqual({
 			dispatch: { runnerTimeoutFloorMs: undefined },
+		});
+	});
+
+	// #5306: the explicit single-file diagnostics query's line limit. Recurrence:
+	// a 10,034-line file could not be queried; the key lifts the limit, and a
+	// value the loader cannot honour must be reported, never clamped into a
+	// different setting than the one the user wrote.
+	describe("lsp.queryMaxFileLines (#5306)", () => {
+		function warnedFor(substring: string): boolean {
+			return (console.error as ReturnType<typeof vi.fn>).mock.calls
+				.flat()
+				.some((arg) => typeof arg === "string" && arg.includes(substring));
+		}
+
+		it("reads a whole number in range through its accessor, beside lsp.enabled", () => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				JSON.stringify({ lsp: { enabled: true, queryMaxFileLines: 20000 } }),
+			);
+
+			expect(loadPiLensGlobalConfig(configPath)).toEqual({
+				lsp: { enabled: true, queryMaxFileLines: 20000 },
+			});
+			expect(getGlobalLspQueryMaxFileLines(configPath)).toBe(20000);
+			expect(warnedFor("queryMaxFileLines")).toBe(false);
+		});
+
+		it.each([5000, 40000])("accepts the boundary value %i", (lines) => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				JSON.stringify({ lsp: { queryMaxFileLines: lines } }),
+			);
+
+			expect(getGlobalLspQueryMaxFileLines(configPath)).toBe(lines);
+		});
+
+		it.each([
+			["below the shared bound", 4999],
+			["above the ceiling", 40001],
+			["zero", 0],
+			["negative", -20000],
+			["fractional", 12000.5],
+			["a string", "20000"],
+			["null", null],
+			["a boolean", true],
+		])("ignores %s with a warning, never clamping it", (_name, value) => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				JSON.stringify({ lsp: { queryMaxFileLines: value } }),
+			);
+
+			expect(getGlobalLspQueryMaxFileLines(configPath)).toBeUndefined();
+			expect(console.error).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"lsp.queryMaxFileLines must be a whole number from 5000 to 40000",
+				),
+			);
+		});
+
+		it("stays silent and unset when the key is absent", () => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				JSON.stringify({ lsp: { enabled: true } }),
+			);
+
+			expect(getGlobalLspQueryMaxFileLines(configPath)).toBeUndefined();
+			expect(warnedFor("queryMaxFileLines")).toBe(false);
 		});
 	});
 

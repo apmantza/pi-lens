@@ -51,6 +51,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	getGlobalActionableWarningMaxFixes,
+	getGlobalLspQueryMaxFileLines,
 	getPiLensGlobalConfigPath,
 	loadPiLensGlobalConfig,
 	resetGlobalConfigWarnCache,
@@ -126,6 +127,17 @@ const GLOBAL_HONOR_CHECKS: ReadonlyMap<string, GlobalHonorCheck> = new Map([
 			value: 483_722,
 			read: (configPath) =>
 				loadPiLensGlobalConfig(configPath)?.dispatch?.runnerTimeoutFloorMs,
+		},
+	],
+	[
+		// #5306: `lsp` is a project-recognized namespace (the LSP loader's), so a
+		// project file carrying the explicit-query line limit needs the dotted
+		// global-only notice. In range [5000, 40000], and unlike a round number it
+		// cannot collide with a default the project struct carries.
+		"lsp.queryMaxFileLines",
+		{
+			value: 23_456,
+			read: (configPath) => getGlobalLspQueryMaxFileLines(configPath),
 		},
 	],
 ]);

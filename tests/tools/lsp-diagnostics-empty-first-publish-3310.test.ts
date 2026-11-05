@@ -23,7 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	cleanupTestEnvironmentsDrained,
 	setupTestEnvironment,
@@ -212,10 +212,17 @@ describe("#3310 empty first publish from an indexing push server", () => {
 		fs.writeFileSync(file, DIRTY_PHP);
 
 		// The only publish is the held one, so this touch has no answer and must
-		// report the honest timeout — never a clean bill of health.
-		const first = await runDiagnostics(workspace, file, 800);
-		expect(first.text).toContain("check timed out");
-		expect(first.text).not.toContain("Primary LSP (php): confirmed clean.");
+		// report the honest timeout — never a clean bill of health. The explicit
+		// wait is floored at php's 8000 ms aggregate (#5306); the flat env cap
+		// keeps this touch at 800 ms of real time.
+		vi.stubEnv("PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS", "800");
+		try {
+			const first = await runDiagnostics(workspace, file, 800);
+			expect(first.text).toContain("check timed out");
+			expect(first.text).not.toContain("Primary LSP (php): confirmed clean.");
+		} finally {
+			vi.unstubAllEnvs();
+		}
 
 		// The hold is one-shot: the index has now had a full budget to build, so
 		// the next touch's empty publish resolves the wait as before.

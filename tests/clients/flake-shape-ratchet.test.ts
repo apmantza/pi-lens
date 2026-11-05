@@ -532,6 +532,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the wrapper spreads the actual module and only counts calls to the declaration resolver, which is the behaviour under test (zero I/O for a file without jedi's row)",
 		},
+	// 2026-11-05 (#5306): the explicit single-file query's wait is resolved per
+	// server inside the real touchFile, and the subject is that a server needing
+	// ~3 s to publish is waited for. The fake clock makes the 30 s cap measurable.
+	"in-process-mock:tools/lsp-diagnostics-explicit-query-limit-5306.test.ts::clients/lsp/client":
+		{
+			detector: "in-process-mock",
+			reason:
+				"a language server is a spawned process; the subject is the budget the real service hands waitForDiagnostics and a server that publishes only once given at least 3 s, which no real server can be asked to do on demand. Everything above the client (service, wait resolution, content bound, config loaders, tool) is real",
+		},
 	"in-process-mock:tools/lsp-diagnostics-opengrep-pre-rules-4763.test.ts::clients/latency-logger":
 		{
 			detector: "in-process-mock",
@@ -1737,6 +1746,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			detector: "service-double",
 			reason:
 				"a language-server client is a spawned process; the straddle needs it silent through the cascade's bounded wait so the touch is recorded outstanding",
+		},
+	// 2026-11-05 (#5306): see the in-process-mock entry for this file.
+	"service-double:tools/lsp-diagnostics-explicit-query-limit-5306.test.ts::LSPClientInfo":
+		{
+			detector: "service-double",
+			reason:
+				"a language-server client is a spawned process; the cell reads the budget the real touchFile hands the client's wait and needs a server that publishes only once given at least 3 s",
 		},
 	// 2026-09-26 (#3511 review round 3): the quick-mode warmup witness must
 	// run the real warmup timer and background word-index save, which no

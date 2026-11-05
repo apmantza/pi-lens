@@ -31,6 +31,10 @@
  * replaced (review F1).
  */
 
+import {
+	getGlobalLspQueryMaxFileLines,
+	LSP_QUERY_MAX_FILE_LINES_MAX,
+} from "../lens-config.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
 import { countLfNewlines } from "./content-scan.js";
 
@@ -41,14 +45,20 @@ export interface LspContentLimitVerdict {
 	tooLarge: boolean;
 	/** Human-readable measurement, empty when within the bound. */
 	reason: string;
+	/** Which bound tripped; absent when within both. */
+	bound?: "bytes" | "lines";
 }
 
-export function exceedsLspSyncLimits(content: string): LspContentLimitVerdict {
+export function exceedsLspSyncLimits(
+	content: string,
+	maxLines: number = LSP_MAX_FILE_LINES,
+): LspContentLimitVerdict {
 	const sizeBytes = Buffer.byteLength(content, "utf-8");
 	if (sizeBytes > LSP_MAX_FILE_BYTES) {
 		return {
 			tooLarge: true,
 			reason: `${sizeBytes} bytes > ${LSP_MAX_FILE_BYTES} limit`,
+			bound: "bytes",
 		};
 	}
 
@@ -61,12 +71,38 @@ export function exceedsLspSyncLimits(content: string): LspContentLimitVerdict {
 	// a 1.95 MB document, measured through this function); the native count
 	// allocates nothing and costs a CRLF document what it costs an LF one.
 	const lineCount = countLfNewlines(content) + 1;
-	if (lineCount > LSP_MAX_FILE_LINES) {
+	if (lineCount > maxLines) {
 		return {
 			tooLarge: true,
-			reason: `${lineCount} lines > ${LSP_MAX_FILE_LINES} limit`,
+			reason: `${lineCount} lines > ${maxLines} limit`,
+			bound: "lines",
 		};
 	}
 
 	return { tooLarge: false, reason: "" };
+}
+
+/**
+ * The bound for the explicit single-file `lens_diagnostics source=lsp` query
+ * (#5306): the shared bound, except that the line limit is the global
+ * `lsp.queryMaxFileLines` key. Read from the GLOBAL config only, so neither a
+ * tool argument nor a project file can raise it, and read only after the shared
+ * bound refused the file, so a query under it never touches the config. A
+ * refusal for lines names the key (a byte refusal cannot be raised, and a limit
+ * already at the key's ceiling has nothing left to offer).
+ */
+export function exceedsExplicitQueryLimits(
+	content: string,
+): LspContentLimitVerdict {
+	const shared = exceedsLspSyncLimits(content);
+	if (shared.bound !== "lines") return shared;
+	const maxLines = getGlobalLspQueryMaxFileLines() ?? LSP_MAX_FILE_LINES;
+	const verdict = exceedsLspSyncLimits(content, maxLines);
+	if (!verdict.tooLarge || maxLines >= LSP_QUERY_MAX_FILE_LINES_MAX) {
+		return verdict;
+	}
+	return {
+		...verdict,
+		reason: `${verdict.reason}; this single-file query can raise its line limit with lsp.queryMaxFileLines in the user-level pi-lens config (up to ${LSP_QUERY_MAX_FILE_LINES_MAX})`,
+	};
 }

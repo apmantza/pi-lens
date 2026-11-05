@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatedPromise, starveBudget } from "../support/fault-injection.js";
+import { useGlobalConfig } from "../support/global-config.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import {
 	installLspService,
@@ -380,6 +381,7 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 // resync that returned before touching anything. Each return path names what
 // it did, so a caller can record `synced` only when a touch went out.
 describe("resyncLspFile — its outcome names what it did (#3528 r1 F1)", () => {
+	const setGlobalConfig = useGlobalConfig();
 	const resync = (
 		content = "content",
 		flag: (name: string) => boolean | undefined = () => undefined,
@@ -419,6 +421,18 @@ describe("resyncLspFile — its outcome names what it did (#3528 r1 F1)", () => 
 		await expect(resync(`${"x".repeat(3 * 1024 * 1024)}\n`)).resolves.toBe(
 			"too-large",
 		);
+	});
+
+	// #5306: the global `lsp.queryMaxFileLines` key lifts only the explicit
+	// single-file query's limit. Recurrence it prevents: reading the key inside
+	// the shared predicate would feed a 20k-line document to the server on every
+	// edit (clangd re-parses it whole each time: 10 CPU-s at 20k lines).
+	it("too-large: the explicit-query line key does not lift the per-edit bound", async () => {
+		setGlobalConfig({ lsp: { queryMaxFileLines: 20_000 } });
+		const touchFile = vi.fn(async () => ({ diags: [] }));
+		mockService(touchFile);
+		await expect(resync("a\n".repeat(8000))).resolves.toBe("too-large");
+		expect(touchFile).not.toHaveBeenCalled();
 	});
 
 	it("unsupported: no server serves the file", async () => {

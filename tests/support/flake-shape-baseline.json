@@ -1235,6 +1235,7 @@
 		"tools/lens-diagnostics.test.ts::clients/widget-state": 1,
 		"tools/lsp-diagnostics-cache.test.ts::clients/widget-state": 1,
 		"tools/lsp-diagnostics-did-save-payload.test.ts::clients/lsp/client": 1,
+		"tools/lsp-diagnostics-explicit-query-limit-5306.test.ts::clients/lsp/client": 1,
 		"tools/lsp-diagnostics-inferred-project.test.ts::clients/lsp/wait-policy/index": 1,
 		"tools/lsp-diagnostics-inline-blocker-retire.test.ts::clients/lsp/client": 1,
 		"tools/lsp-diagnostics-inline-blocker-retire.test.ts::clients/widget-state": 1,
@@ -1335,6 +1336,7 @@
 		"tools/lens-diagnostics-read-stamp.test.ts::LSPClientInfo": 1,
 		"tools/lens-diagnostics.test.ts::LSPService": 8,
 		"tools/lsp-diagnostics-did-save-payload.test.ts::LSPClientInfo": 1,
+		"tools/lsp-diagnostics-explicit-query-limit-5306.test.ts::LSPClientInfo": 1,
 		"tools/lsp-diagnostics-inline-blocker-retire.test.ts::LSPClientInfo": 2,
 		"tools/lsp-diagnostics-silent-clean-flow.test.ts::LSPClientInfo": 2,
 		"tools/lsp-navigation-workspace-attribution.test.ts::LSPClientInfo": 1

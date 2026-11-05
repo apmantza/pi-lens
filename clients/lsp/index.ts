@@ -50,6 +50,7 @@ import {
 } from "../degradation-ledger.js";
 import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
+import { RUNTIME_CONFIG } from "../runtime-config.js";
 import {
 	bounded,
 	untilAborted,
@@ -788,6 +789,21 @@ export interface LSPTouchFileOptions {
 	 * and keeps the pre-existing ceiling-only semantics exactly as-is.
 	 */
 	warmupOverride?: boolean;
+	/**
+	 * #5306: this touch is the explicit single-file `lens_diagnostics
+	 * source=lsp` query, whose caller-chosen `maxClientWaitMs` is the budget the
+	 * caller asked for. `perServerTimeout` resolves `Math.min(callerCap,
+	 * strategyWait)` for every other caller, which silently shrank a `waitMs` of
+	 * 120000 back to clangd's 1500 ms aggregate while the server needed ~5.6 s.
+	 * With this flag the wait is a FLOOR over the aggregate: `max(callerCap,
+	 * strategyWait)`, capped at `RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs`.
+	 * A cap below the aggregate does not shorten it: a push-only `silentOnClean`
+	 * server (lua) that publishes after a short cap would otherwise read as
+	 * confirmed clean. Only `tools/lsp-diagnostics.ts`'s
+	 * single-file route sets it: per-edit, dispatch, batch and sweep touches keep
+	 * their budgets.
+	 */
+	explicitQuery?: boolean;
 	/**
 	 * #799: which `warmupOverride` attempt this touch is (1 = the first
 	 * round trip against a cold server, 2 = `ensureWarmForSweep`'s single
@@ -5308,6 +5324,38 @@ export class LSPService {
 				// Build this from the live spawned client's capabilities rather than
 				// server id alone. Missing/throwing capability data fails closed, so a
 				// new or ambiguous server keeps the existing generous warm-up budget.
+				const isSilentOnCleanServer = (
+					entry: (typeof spawned)[number],
+				): boolean => {
+					try {
+						const snapshot: LSPCapabilitySnapshot = {
+							serverId: entry.client.serverId,
+							root: entry.client.root,
+							operationSupport: entry.client.getOperationSupport(),
+							workspaceDiagnosticsSupport:
+								entry.client.getWorkspaceDiagnosticsSupport(),
+							customServer: entry.info.custom,
+							diagnosticsPublished: this.state.diagnosticsPublished.has(
+								entry.info.id,
+							),
+							diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(
+								entry.info.id,
+							),
+							advertisedCommands: entry.client.getAdvertisedCommands(),
+							rawCapabilityKeys: entry.client.getRawCapabilityKeys?.() ?? [],
+							launchVariant: entry.client.getLaunchVariant?.(),
+						};
+						return (
+							classifyServerWaitTier(entry.client.serverId, snapshot) ===
+							"tier3-silent"
+						);
+					} catch {
+						// none: capability uncertainty fails closed to "not silent-on-clean":
+						// the warm-up keeps its cold floor and an expired wait stays a
+						// timeout, which `lsp_diagnostics_timeout` records.
+						return false;
+					}
+				};
 				const silentCleanWarmupServers = new Set<string>();
 				if (options.warmupOverride && (options.warmupAttempt ?? 1) <= 1) {
 					for (const entry of spawned) {
@@ -5316,32 +5364,8 @@ export class LSPService {
 							entry.client.getLaunchVariant?.(),
 						);
 						if (strategy.workspaceIndexing !== true) continue;
-						try {
-							const snapshot: LSPCapabilitySnapshot = {
-								serverId: entry.client.serverId,
-								root: entry.client.root,
-								operationSupport: entry.client.getOperationSupport(),
-								workspaceDiagnosticsSupport:
-									entry.client.getWorkspaceDiagnosticsSupport(),
-								customServer: entry.info.custom,
-								diagnosticsPublished: this.state.diagnosticsPublished.has(
-									entry.info.id,
-								),
-								diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(
-									entry.info.id,
-								),
-								advertisedCommands: entry.client.getAdvertisedCommands(),
-								rawCapabilityKeys: entry.client.getRawCapabilityKeys?.() ?? [],
-								launchVariant: entry.client.getLaunchVariant?.(),
-							};
-							if (
-								classifyServerWaitTier(entry.client.serverId, snapshot) ===
-								"tier3-silent"
-							) {
-								silentCleanWarmupServers.add(entry.client.serverId);
-							}
-						} catch {
-							// Fail closed: capability uncertainty must retain the cold floor.
+						if (isSilentOnCleanServer(entry)) {
+							silentCleanWarmupServers.add(entry.client.serverId);
 						}
 					}
 				}
@@ -5370,6 +5394,12 @@ export class LSPService {
 							Math.min(300, strategyWait);
 					}
 					if (callerCap !== undefined) {
+						if (options.explicitQuery) {
+							return Math.min(
+								Math.max(callerCap, strategyWait > 0 ? strategyWait : 0),
+								RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs,
+							);
+						}
 						// #669: `ensureWarmForSweep`'s cold-server warm-up wants its cap
 						// to act as a FLOOR (give it at least this much, possibly more
 						// if the strategy already wants more) rather than the normal
@@ -5571,6 +5601,17 @@ export class LSPService {
 				});
 				const firstContactCutOffServerIds = new Set<string>();
 				const firstContactErroredServerIds = new Set<string>();
+				// #5306: PRIMARIES whose client wait RETURNED "deadline-expired" and
+				// whose silence is not a clean answer. The verdict below reads this
+				// outcome, not only the elapsed time, which misses a lapse that ends
+				// before the slowest server's budget: a pull stops at its own 10 s cap
+				// inside a 30 s `waitMs` or after a failed pull, and a push primary
+				// lapses its own budget while opengrep's larger one still runs.
+				// A silent-on-clean (`tier3-silent`) primary is left out: its silence
+				// within its budget is its clean answer, and scope "with-auxiliary" has
+				// no silent-clean gate to restore it. An auxiliary is left out: its
+				// lapse is a named coverage gap (#1549), never the touch's timeout.
+				const expiredWaitServerIds = new Set<string>();
 				const answeredForThisTouch = (
 					entry: (typeof spawned)[number],
 				): boolean => {
@@ -5658,7 +5699,7 @@ export class LSPService {
 					const waitForDiagnostics = (): ReturnType<
 						typeof entry.client.waitForDiagnostics
 					> =>
-						!notifySkippedServerIds.has(entry.info.id) &&
+						(!notifySkippedServerIds.has(entry.info.id) &&
 						Number.isFinite(baseline)
 							? entry.client.waitForDiagnostics(filePath, serverTimeout, {
 									minVersion: baseline,
@@ -5674,7 +5715,17 @@ export class LSPService {
 									? entry.client.waitForDiagnostics(filePath, serverTimeout, {
 											pullSettleSource: "pull-warmup",
 										})
-									: entry.client.waitForDiagnostics(filePath, serverTimeout);
+									: entry.client.waitForDiagnostics(filePath, serverTimeout)
+						).then((outcome) => {
+							if (
+								outcome === "deadline-expired" &&
+								!isAuxiliary(entry.info) &&
+								!isSilentOnCleanServer(entry)
+							) {
+								expiredWaitServerIds.add(entry.info.id);
+							}
+							return outcome;
+						});
 					const firstContact =
 						entry.info.custom === true &&
 						!this.state.diagnosticsPublished.has(entry.info.id) &&
@@ -6240,11 +6291,19 @@ export class LSPService {
 					});
 				} else if (
 					waitedMs + 20 >= timeoutMs ||
-					firstContactErroredServerIds.size > 0
+					firstContactErroredServerIds.size > 0 ||
+					expiredWaitServerIds.size > 0
 				) {
 					// Within ~20 ms of the configured budget we treat it as a timeout;
 					// the LSP didn't beat the cap. Diagnostics that arrive late still
 					// land in the client's cache and surface on the next edit.
+					//
+					// #5306: a primary's client wait that RETURNED "deadline-expired" is
+					// a lapsed wait whatever the clock says (`expiredWaitServerIds`, which
+					// excludes silent-on-clean primaries and auxiliaries). Elapsed time
+					// alone read it as a confirmed clean whenever another server's budget
+					// was larger. Whether the server still answered is decided below from
+					// evidence, as for any other lapse.
 					//
 					// #1549: WHOSE budget lapsed decides the verdict. `timeoutMs` is the MAX
 					// over the servers waited on, so a slow auxiliary (opengrep declares
