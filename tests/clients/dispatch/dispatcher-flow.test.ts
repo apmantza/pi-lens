@@ -682,6 +682,64 @@ describe("Dispatch Flow", () => {
 			expect(result.diagnostics[0].filePath).toContain("src/main.ts");
 		});
 
+		// Recurrence: `looksLikeDiagnosticCodePath` hand-rolled the backslash fold
+		// (`text.replace(/\\/g, "/")`, a pin in path-key-fold-sweep) beside
+		// `toPosix`. A Windows-spelled `<dir>\\<rule>:<line>` has its code-like
+		// base only after the fold, so a drifted copy of the fold lets such a
+		// path through as a file path. The dispatcher is the caller; the fold
+		// seam is `toPosix`.
+		it.each([
+			["src\\lsp:80007", true],
+			["C:\\proj\\similarity:3:4", true],
+			["lsp:80007", true],
+			["src\\main.ts", false],
+		])(
+			"treats the runner diagnostic path %j as code-like: %s",
+			async (rawPath, codeLike) => {
+				const logs: string[] = [];
+				registerRunner({
+					id: "code-path-backslash",
+					appliesTo: ["jsts"],
+					priority: 10,
+					async run() {
+						return {
+							status: "succeeded",
+							diagnostics: [
+								{
+									id: "diag-bs",
+									message: "backslash code-like path",
+									filePath: rawPath,
+									severity: "warning",
+									semantic: "warning",
+									tool: "code-path-backslash",
+								},
+							],
+							semantic: "warning",
+						};
+					},
+				});
+
+				const ctx = createMockContext("src/main.ts");
+				const baseLog = ctx.log.bind(ctx);
+				ctx.log = (message: string) => {
+					logs.push(message);
+					baseLog(message);
+				};
+				const result = await dispatchForFile(ctx, [
+					{ mode: "all", runnerIds: ["code-path-backslash"] },
+				]);
+
+				expect(result.diagnostics).toHaveLength(1);
+				const ignored = logs.some((line) =>
+					line.includes(`ignored diagnostic code-like path '${rawPath}'`),
+				);
+				expect(ignored).toBe(codeLike);
+				if (codeLike) {
+					expect(result.diagnostics[0].filePath).toContain("src/main.ts");
+				}
+			},
+		);
+
 		it("fallback mode continues after a failed runner and uses the next success", async () => {
 			const calls: string[] = [];
 			registerRunner({
