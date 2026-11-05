@@ -337,10 +337,13 @@ describe("lsp launch", () => {
 		// #5305 rule: a file that exists but cannot be read is PRESENT. The failure
 		// is cmd.exe's to report as a runtime error, not a missing install for the
 		// installer to overwrite. chmod 000 does not bind root or Windows.
-		it.skipIf(
-			process.platform === "win32" ||
-				(typeof process.getuid === "function" && process.getuid() === 0),
-		)("returns true when the shim file exists but is unreadable", async () => {
+		it("returns true when the shim file exists but is unreadable", async ({
+			skip,
+		}) => {
+			skip(
+				process.platform === "win32" ||
+					(typeof process.getuid === "function" && process.getuid() === 0),
+			);
 			const dir = setupTestEnvironment("pi-lens-shim-").tmpDir;
 			const shim = path.join(dir, "locked.cmd");
 			fs.writeFileSync(shim, `@"%~dp0\\..\\pkg\\bin\\cli.js" %*`);
