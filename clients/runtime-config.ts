@@ -53,6 +53,12 @@ export const RUNTIME_CONFIG = {
 	pipeline: {
 		lspMaxFileBytes: 2 * 1024 * 1024,
 		lspMaxFileLines: 5000,
+		// #5306: hard cap (ms) on the per-server diagnostics wait of the explicit
+		// single-file `lens_diagnostics source=lsp` query when it passes an explicit
+		// `waitMs` (`LSPTouchFileOptions.explicitQuery`). 30 s covers clangd on a
+		// 20,000-line file (~11 s measured, investigation #5306) with margin, and
+		// keeps one tool call from parking a turn for an arbitrary caller-chosen time.
+		lspExplicitQueryMaxWaitMs: 30_000,
 		cascadeMaxFiles: 5,
 		cascadeMaxDiagnosticsPerFile: 20,
 		// Hard cap on how long the pipeline will wait for an LSP client to spawn.

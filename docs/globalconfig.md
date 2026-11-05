@@ -152,6 +152,18 @@ While a 🔴 blocker the model was told about stays unresolved, the first reques
 
 `actionableWarnings.enabled` gates the turn_end report. `includeLspCodeActions` fetches LSP code actions for each warning (requires an active language server). `deltaOnly` (default `true`) limits the report to lines touched in the current turn. `autoFix.enabled` applies conservative LSP quickfixes at `agent_end`; `autoFix.maxFixes` caps the number applied per turn (default `5`, must be a non-negative whole number). `maxFixes: 0` keeps the report and applies nothing, which is a useful halfway step before enabling `autoFix` for real. Unlike the toggles in the table above there is no CLI counterpart, since it takes a number rather than being on or off.
 
+### Explicit diagnostics query line limit
+
+`lsp.queryMaxFileLines` (default `5000`, a whole number from `5000` to `40000`) sets the line limit of the explicit single-file `lens_diagnostics source=lsp` query, and of nothing else. Per-edit sync, the dispatch LSP runner, batch (`paths`) and directory queries and the workspace sweep keep the shared bound of 5000 lines and 2 MiB, which this key does not move (measured cost is the language server's: clangd needs ~2.3 s and ~+270 MB resident per 5000-line file, and an opened document stays resident). The 2 MiB byte bound is not configurable.
+
+The key is read from the user-level config only. A project `.pi-lens.json` that sets it is ignored and reported once per session as global-only, and no tool argument can raise it, so a repository or an agent cannot lift your resource policy. A value that is not a whole number in range is ignored with a warning, never clamped to a nearby value.
+
+Suggested value `20000`, which covers files of about 10,000 lines with 2x headroom. Measured on one host with synthetic C++ (investigation #5306): clangd publishes after ~11 s and holds ~+0.95 GB at 20,000 lines; 40,000 lines is 28 to 50 s and ~+1.9 GB, which is why `40000` is the ceiling. Pair it with an explicit `waitMs` on the query: a `waitMs` above the server's usual wait is honoured on this single-file query up to a hard 30000 ms cap (batch and directory queries keep their own per-server budgets). A file over the limit answers `file too large for LSP diagnostics`, and a wait that runs out answers `check timed out`; neither is a clean result.
+
+```json
+{ "lsp": { "queryMaxFileLines": 20000 } }
+```
+
 `turnEnd.madge.enabled` (default `false`) runs the per-turn-end madge circular-dependency check on import-changed files. It is off by default because that pass only writes debug output — user-facing madge diagnostics come from the session-start scan cache and the `lens_diagnostics` extractor — and its subprocess spawns dominated the turn-end latency tail (#766). Enable it with `--lens-turn-end-madge` or `turnEnd.madge.enabled: true` if you want the per-edit circular-dependency note.
 
 `fallow.enabled` (default `false`, or `--lens-fallow`) runs [fallow](https://github.com/fallow-rs/fallow)'s `fallow-lsp` beside the TypeScript server on JS/TS files (`.ts .tsx .js .jsx .mjs .cjs .mts .cts`; no other file ever attaches it). It reports unused files, exports and dependencies, duplication and cycles as advisory warnings and never blocks. It overlaps knip, jscpd and madge, which keep running either way. Only the exact value `true` turns it on: an absent, misspelled or non-boolean value leaves it off, and pi-lens installs and launches nothing. On first use pi-lens downloads the pinned fallow release into `~/.pi-lens/tools/fallow-lsp` (a `fallow-lsp` already on `PATH` wins); the install is refused on a checksum mismatch. The per-edit diagnostics path runs it; the aggregate all-server checks (`lens_diagnostics source=lsp`, workspace sweeps) do not start it.

@@ -68,6 +68,23 @@ function globalCanonicalLocation(): ConfigLocation {
 
 type PiLensFormatMode = "deferred" | "immediate";
 
+/**
+ * The accepted range of the global `lsp.queryMaxFileLines` key (#5306): the
+ * line limit of the explicit single-file `lens_diagnostics source=lsp` query.
+ *
+ * MIN is the shared 5000-line bound (`RUNTIME_CONFIG.pipeline.lspMaxFileLines`,
+ * pinned equal by `tests/clients/lsp/content-limits.test.ts`; `runtime-config.ts`
+ * imports this module, so it cannot be imported back): the key only RAISES the
+ * query's limit, never lowers it below what every other path allows.
+ *
+ * MAX is the largest size anyone measured (investigation #5306: 40,000 lines is
+ * clangd 28-50 s and +1.9 GB resident for one document). Past it no cost is
+ * known, and the 30 s wait cap (`EXPLICIT_QUERY_MAX_WAIT_MS`) could not outlast
+ * the server anyway. The docs suggest 20000 (clangd ~11 s, ~+0.95 GB).
+ */
+export const LSP_QUERY_MAX_FILE_LINES_MIN = 5000;
+export const LSP_QUERY_MAX_FILE_LINES_MAX = 40_000;
+
 /** The `{ enabled?: boolean }` section every registry flag key lives under. */
 interface PiLensToggleConfig {
 	enabled?: boolean;
@@ -101,7 +118,15 @@ export interface PiLensGlobalConfig {
 	/** Whether pi-lens runs at all this session (`--no-lens`). */
 	lens?: PiLensToggleConfig;
 	/** Whether unified LSP diagnostics run (`--no-lsp`). */
-	lsp?: PiLensToggleConfig;
+	lsp?: PiLensToggleConfig & {
+		/**
+		 * #5306: line limit of the explicit single-file `lens_diagnostics
+		 * source=lsp` query. Global-only (a project file cannot raise a user's
+		 * resource policy); a whole number in
+		 * [`LSP_QUERY_MAX_FILE_LINES_MIN`, `LSP_QUERY_MAX_FILE_LINES_MAX`].
+		 */
+		queryMaxFileLines?: number;
+	};
 	/** Whether the test runner fires on write (`--no-tests`). */
 	tests?: PiLensToggleConfig;
 	/** Whether delta mode limits diagnostics to new ones (`--no-delta`). */
@@ -406,6 +431,28 @@ export function loadPiLensGlobalConfig(
 				config.startup = startupConfig;
 		}
 
+		// #5306: `lsp.queryMaxFileLines` is a number with no CLI flag, parsed here
+		// like `actionableWarnings.autoFix.maxFixes`. Out of range is ignored with
+		// a warning, never clamped: a silently shrunken limit would be a different
+		// setting from the one the user wrote.
+		const lspSection = asConfigObject(raw.lsp);
+		if (lspSection && "queryMaxFileLines" in lspSection) {
+			const lines = lspSection.queryMaxFileLines;
+			if (
+				typeof lines === "number" &&
+				Number.isInteger(lines) &&
+				lines >= LSP_QUERY_MAX_FILE_LINES_MIN &&
+				lines <= LSP_QUERY_MAX_FILE_LINES_MAX
+			) {
+				config.lsp = { ...(config.lsp as object), queryMaxFileLines: lines };
+			} else {
+				warnInvalid(
+					`lsp.queryMaxFileLines must be a whole number from ${LSP_QUERY_MAX_FILE_LINES_MIN} to ${LSP_QUERY_MAX_FILE_LINES_MAX}; ignored`,
+					"PILENS_CFG_0005",
+				);
+			}
+		}
+
 		const dispatch = asConfigObject(raw.dispatch);
 		if (dispatch) {
 			const floor = dispatch.runnerTimeoutFloorMs;
@@ -582,6 +629,17 @@ export function getGlobalActionableWarningMaxFixes(
 ): number | undefined {
 	return loadPiLensGlobalConfig(configPath)?.actionableWarnings?.autoFix
 		?.maxFixes;
+}
+
+/**
+ * #5306: the explicit single-file diagnostics query's line limit from the
+ * global config, or undefined when unset or invalid (the query then keeps the
+ * shared bound).
+ */
+export function getGlobalLspQueryMaxFileLines(
+	configPath?: string,
+): number | undefined {
+	return loadPiLensGlobalConfig(configPath)?.lsp?.queryMaxFileLines;
 }
 
 /** Which tier decided a resolved flag's value — for provenance in debug/skip logs (#792). */

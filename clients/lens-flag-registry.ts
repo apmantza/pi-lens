@@ -425,6 +425,10 @@ export const GLOBAL_NON_FLAG_CONFIG_SECTIONS: readonly string[] = [
 export const GLOBAL_ONLY_NON_FLAG_KEYS: readonly string[] = [
 	"actionableWarnings.autoFix.maxFixes",
 	"dispatch.runnerTimeoutFloorMs",
+	// #5306: the explicit single-file diagnostics query's line limit. `lsp` is
+	// recognized at project scope (the LSP loader's namespace), so a project file
+	// carrying this is told it does nothing there.
+	"lsp.queryMaxFileLines",
 ];
 
 /**

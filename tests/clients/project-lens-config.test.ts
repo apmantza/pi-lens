@@ -1325,3 +1325,45 @@ describe("dispatch.disabledRunners at project scope", () => {
 		expect(warnedFor("global-only")).toBe(false);
 	});
 });
+
+// #5306: the explicit single-file diagnostics query's line limit is a USER
+// resource policy. Recurrence it prevents: a repository's tracked
+// `.pi-lens.json` raising how large a document the user's language server is
+// fed (clangd +0.95 GB at 20k lines). The `lsp` namespace is project-recognized
+// for the LSP loader's four keys, so without a registry row this key would be
+// dropped as an unknown-key typo notice instead of the honest scope notice.
+describe("lsp.queryMaxFileLines at project scope (#5306)", () => {
+	function warnCount(substring: string): number {
+		return (console.error as ReturnType<typeof vi.fn>).mock.calls
+			.flat()
+			.filter((arg) => typeof arg === "string" && arg.includes(substring))
+			.length;
+	}
+
+	it("is ignored with one global-only warning per session, beside the honored lsp keys", () => {
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				lsp: { disabledServers: ["go"], queryMaxFileLines: 20000 },
+			}),
+		);
+
+		const cfg = loadPiLensProjectConfig(tmpDir);
+		// A changed file is re-parsed (the cache is keyed on its content), and the
+		// same notice must not be raised a second time in the session.
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				ignore: ["dist/**"],
+				lsp: { disabledServers: ["go"], queryMaxFileLines: 20000 },
+			}),
+		);
+		loadPiLensProjectConfig(tmpDir);
+
+		expect(warnCount('"lsp.queryMaxFileLines" is a global-only')).toBe(1);
+		expect(warnCount('unknown key "lsp.queryMaxFileLines"')).toBe(0);
+		expect(warnCount("lsp.disabledServers")).toBe(0);
+		const { raw: _raw, configPath: _configPath, ...parsed } = cfg;
+		expect(JSON.stringify(parsed)).not.toContain("queryMaxFileLines");
+	});
+});

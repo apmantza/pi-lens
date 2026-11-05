@@ -96,9 +96,18 @@ and `[]` mean no arguments.
   tier. `source=lsp` reads a file's on-disk content and will not sync it to a
   language server past **2 MiB or 5000 lines** (`clients/runtime-config.ts`
   `pipeline.lspMaxFileBytes`/`lspMaxFileLines`, checked in
-  `clients/lsp/content-limits.ts`) — not env-tunable today. A file over that
+  `clients/lsp/content-limits.ts`) — not env-tunable. A file over that
   bound gets an explicit `file too large for LSP diagnostics (<N> bytes/lines
-  > <limit>)` result instead of stale or partial diagnostics. This is a
+  > <limit>)` result instead of stale or partial diagnostics. One
+  exception for the line limit: the explicit single-file query (`path`, not
+  `paths`) takes the user-level `lsp.queryMaxFileLines` config key (suggested
+  `20000`, maximum `40000`; see
+  [globalconfig](globalconfig.md#explicit-diagnostics-query-line-limit)); a
+  project config or a tool argument cannot raise it. On that same single-file
+  query an explicit `waitMs` is honoured past the language server's usual
+  per-server wait, up to 30000 ms, so a large file's server can finish; batch
+  and directory queries keep their per-server budgets. A timed-out wait
+  reports `check timed out`, never a clean file. This is a
   *different* 2 MiB from the auto-fix full-content attachment cap described in
   [agent-guide.md](agent-guide.md), section 6 ("Auto-format / auto-fix
   timing") — the two caps currently share one constant

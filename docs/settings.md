@@ -150,6 +150,7 @@ field docs.
 | `ignore` | global + project | `[]` | Gitignore-style globs excluded from every scan |
 | `widget.visible` | global | `true` | Whether the diagnostics widget shows at session start |
 | `dispatch.runnerTimeoutFloorMs` | global | none (no floor) | Minimum wall-clock budget per dispatch runner |
+| `lsp.queryMaxFileLines` | global | `5000` | Line limit of the explicit single-file `lens_diagnostics source=lsp` query only; a whole number from `5000` to `40000` (suggested `20000`). See [globalconfig](globalconfig.md#explicit-diagnostics-query-line-limit) |
 | `dispatch.disabledRunners` | global + project | `[]` | Dispatch runner ids that never run (for example `["dotnet-build"]`). A denial: the union of every tier, so a project can add but never re-enable. Unknown ids are dropped with a warning. See [configuration](configuration.md#dispatchdisabledrunners--turning-a-dispatch-runner-off) |
 | `format.mode` | global | `"deferred"` | `"deferred"` (at `agent_end`) or `"immediate"` |
 | `actionableWarnings.autoFix.maxFixes` | global | `5` | Cap on quickfixes applied per turn (`0` = report only) |
@@ -171,7 +172,7 @@ User-level. The file is selected by the [global-location table](configuration.md
 and applies to **every** project. It honors **all** flag keys from the
 table above plus the non-flag global knobs (`ignore`, `widget.visible`,
 `dispatch.runnerTimeoutFloorMs`, `dispatch.disabledRunners`, `format.mode`,
-`actionableWarnings.autoFix.maxFixes`). On Windows the path is
+`actionableWarnings.autoFix.maxFixes`, `lsp.queryMaxFileLines`). On Windows the path is
 `%USERPROFILE%\.pi-lens\config.json`.
 
 ```json
@@ -222,7 +223,8 @@ scope — pi-lens logs a one-time warning saying so (rather than silently doing
 nothing) and you should set it in `~/.pi-lens/config.json` or pass the CLI flag
 instead. `dispatch` is mixed-scope: `dispatch.disabledRunners` is honored in a
 project file, while `dispatch.runnerTimeoutFloorMs` stays global-only and is
-reported as such. Foreign LSP-loader namespaces that a shared file legitimately
+reported as such. `lsp` is mixed-scope the same way: the LSP server keys are
+honored, while `lsp.enabled` and `lsp.queryMaxFileLines` stay global-only. Foreign LSP-loader namespaces that a shared file legitimately
 carries (`servers`, `serverOverrides`, `disabledServers`, `warmFiles`) and
 `$schema` are tolerated without warning; anything else is logged once as a
 likely typo.

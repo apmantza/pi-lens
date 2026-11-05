@@ -50,6 +50,7 @@ import {
 } from "../degradation-ledger.js";
 import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
+import { RUNTIME_CONFIG } from "../runtime-config.js";
 import {
 	bounded,
 	untilAborted,
@@ -788,6 +789,19 @@ export interface LSPTouchFileOptions {
 	 * and keeps the pre-existing ceiling-only semantics exactly as-is.
 	 */
 	warmupOverride?: boolean;
+	/**
+	 * #5306: this touch is the explicit single-file `lens_diagnostics
+	 * source=lsp` query, whose caller-chosen `maxClientWaitMs` is the budget the
+	 * caller asked for. `perServerTimeout` resolves `Math.min(callerCap,
+	 * strategyWait)` for every other caller, which silently shrank a `waitMs` of
+	 * 120000 back to clangd's 1500 ms aggregate while the server needed ~5.6 s.
+	 * With this flag a caller cap ABOVE the aggregate is honoured, up to
+	 * `RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs`; a cap below it stays a ceiling, so a caller
+	 * who asked for a short wait still gets one. Only `tools/lsp-diagnostics.ts`'s
+	 * single-file route sets it: per-edit, dispatch, batch and sweep touches keep
+	 * their budgets.
+	 */
+	explicitQuery?: boolean;
 	/**
 	 * #799: which `warmupOverride` attempt this touch is (1 = the first
 	 * round trip against a cold server, 2 = `ensureWarmForSweep`'s single
@@ -5370,6 +5384,12 @@ export class LSPService {
 							Math.min(300, strategyWait);
 					}
 					if (callerCap !== undefined) {
+						if (options.explicitQuery) {
+							return Math.min(
+								callerCap,
+								RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs,
+							);
+						}
 						// #669: `ensureWarmForSweep`'s cold-server warm-up wants its cap
 						// to act as a FLOOR (give it at least this much, possibly more
 						// if the strategy already wants more) rather than the normal
