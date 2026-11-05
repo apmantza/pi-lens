@@ -95,7 +95,7 @@ const MAX_FILE_FACT_CONTENT_BYTES = 64 * 1024 * 1024;
 // covers roughly 820 distinct files before the coldest file's baseline starts
 // degrading. An evicted seed leaves the delta baseline alone in charge, which
 // already holds the file's old findings after its first dispatch.
-const MAX_SESSION_FACT_RECORDS = 4096;
+export const MAX_SESSION_FACT_RECORDS = 4096;
 
 export interface ReadonlyFactStore {
 	getFileFact<T>(filePath: string, factId: string): T | undefined;
