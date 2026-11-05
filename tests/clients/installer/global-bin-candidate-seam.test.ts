@@ -75,6 +75,21 @@ function started(): string[] {
 		.filter((command) => harness.answering.has(command));
 }
 
+/**
+ * Pin the host to POSIX for a case whose candidates are POSIX-shaped. Both
+ * platform reads are pinned: the npm rung discovers through `process.platform`,
+ * the pip rung through `installerPlatform()` (`PI_LENS_TEST_PLATFORM`), and each
+ * verify spawn reads `installerPlatform()`. Recurrence: the `Unit tests Windows`
+ * gate runs this file on win32, where an unpinned case searches `APPDATA/npm`
+ * and `Scripts` and reds. The explicit Windows cases pin their own platform.
+ */
+function pinPosixHost(): void {
+	const restorePlatform = process.platform;
+	setPlatform("linux");
+	cleanups.push(() => setPlatform(restorePlatform));
+	cleanups.push(withEnv({ PI_LENS_TEST_PLATFORM: "linux" }));
+}
+
 beforeEach(() => {
 	harness.calls.length = 0;
 	harness.failing.clear();
@@ -120,6 +135,7 @@ function addTool(strategy: "npm" | "pip", id: string): ToolDefinition {
 
 describe("npm global bin rung through getToolPath", () => {
 	it("answers with the verified candidate and starts it with the registry's argv and budget", async () => {
+		pinPosixHost();
 		const tool = addTool("npm", "pi-lens-seam-npm-tool");
 		const candidate = seed(path.join(home, ".npm-global", "bin", tool.id));
 
@@ -131,6 +147,7 @@ describe("npm global bin rung through getToolPath", () => {
 	});
 
 	it("does not answer with a candidate whose verification exits nonzero", async () => {
+		pinPosixHost();
 		const candidate = seed(path.join(home, ".npm-global", "bin", "stylelint"));
 		harness.failing.add(candidate);
 
@@ -155,6 +172,7 @@ describe("npm global bin rung through getToolPath", () => {
 
 describe("pip user-base rung through getToolPath", () => {
 	it("answers with the verified candidate and starts it with the registry's argv and budget", async () => {
+		pinPosixHost();
 		const tool = addTool("pip", "pi-lens-seam-pip-tool");
 		const candidate = seed(
 			path.join(getGlobalPiLensDir(), "pip-tools", "bin", tool.id),
@@ -168,6 +186,7 @@ describe("pip user-base rung through getToolPath", () => {
 	});
 
 	it("falls through a broken first user base to the next one, in order", async () => {
+		pinPosixHost();
 		const first = seed(
 			path.join(getGlobalPiLensDir(), "pip-tools", "bin", "yamllint"),
 		);
