@@ -87,8 +87,11 @@ open issues), not something a query change here can fix.
 
 `.groovy`, `.gvy`, `.gy` and `.gsh` files, plus `Jenkinsfile`, `build.gradle`
 and `settings.gradle`, parse under tree-sitter, so `module_report`,
-`read_symbol`, symbol search, import extraction and the call-graph refs list
-Groovy classes, traits, interfaces, enums, constructors and methods (#5235).
+`read_symbol`, symbol search, import extraction and the call-graph refs all
+support Groovy (#5235). Symbol extraction lists classes, traits, interfaces,
+enums, records, constructors and methods; import extraction reads qualified
+import names, and the call-graph refs cover calls, constructions and type
+names.
 The grammar is [dekobon/tree-sitter-groovy](https://github.com/dekobon/tree-sitter-groovy)
 v0.3.0, built to wasm at its tagged commit with `tree-sitter-cli@0.25.10` and
 committed to `vendor/grammars/` **as is, with no fork and no patch**. It is a

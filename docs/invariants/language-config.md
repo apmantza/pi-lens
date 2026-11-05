@@ -4,7 +4,12 @@
 
 - `clients/language-registry.ts` is the identity source for language ids,
   extensions, filenames, file kinds, LSP ids, and grammars. Consumers project
-  from it; they do not maintain parallel language tables.
+  from it; they do not maintain parallel language tables. Known unfolded
+  sibling: `getExtensionsForLanguage` in `clients/tree-sitter-client.ts`, the
+  structural-search walk's hand-kept extension map (14 rows, Groovy included
+  per #5235). It is not pinned to the registry, so a new row copies the
+  registry's list by hand; folding it onto `extensionsForLanguage` is its own
+  slice.
 - Agent-facing advisory text resolves names through `resolveLensToolName` with
   the delivery host: pi uses `piName`, and MCP uses `mcpName` from
   `TOOL_REGISTRY`. Known tools without a host mapping resolve to `undefined`,

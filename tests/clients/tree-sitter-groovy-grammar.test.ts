@@ -114,11 +114,18 @@ describe("Groovy grammar smoke (#5235)", () => {
 		const bad = countBadNodes(tree?.rootNode as unknown as Node);
 		expect(bad.errors + bad.missing).toBeGreaterThan(0);
 		// The #255 failure shape: a broken parse poisoning every LATER parse on
-		// the shared WASM module.
+		// the shared WASM module. A fresh path misses the tree cache that the
+		// smoke test above filled for FIXTURE, and `parserInvocations` proves
+		// this parse ran the parser instead of replaying a cached tree (PR #5317
+		// review).
+		const before = client.getParseCacheStats().parserInvocations;
 		const after = await client.parseFile(
-			FIXTURE,
+			"Recovered.groovy",
 			"groovy",
 			fs.readFileSync(FIXTURE, "utf8"),
+		);
+		expect(client.getParseCacheStats().parserInvocations).toBeGreaterThan(
+			before,
 		);
 		expect(countBadNodes(after?.rootNode as unknown as Node)).toEqual({
 			errors: 0,
@@ -245,7 +252,16 @@ describe("Groovy symbol queries (#5235)", () => {
 		const out = await extract(src);
 		const refs = out.refs.map((r) => `${r.referenceKind}:${r.symbolName}`);
 		expect(refs).toEqual(
-			expect.arrayContaining(["call:helper", "call:run", "type:Date"]),
+			expect.arrayContaining([
+				"call:helper",
+				"call:run",
+				"type:Date",
+				// `new Date()` (type_identifier) and `new HashMap<..>()` (generic_type)
+				// are separate constructor-reference patterns; each is asserted so
+				// neither can be dropped unseen (PR #5317 review).
+				"call:Date",
+				"call:HashMap",
+			]),
 		);
 		expect(out.imports.map((i) => i.source)).toEqual([
 			"java.lang.Math.max",
