@@ -21,7 +21,7 @@ const logExtension = vi.hoisted(() => vi.fn());
 // a process boundary (an npm-prefix probe), so it is the one a cell may drive
 // to hand the launcher an absolute, present program (#4532 round 4).
 const findGlobalBinary = vi.hoisted(() =>
-	vi.fn(async () => undefined as string | undefined),
+	vi.fn(async (_name: string) => undefined as string | undefined),
 );
 // The spawn double of `mockExit1Launch`, hoisted so a cell can read whether
 // the launcher spawned at all and can act inside the child's startup window.
@@ -390,6 +390,76 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 			}
 		},
 	);
+
+	// #5305 (ProphetOfDoom-PoD): `PythonServer.spawn` exhausts its project-local
+	// candidates in one `resolveAndLaunch` BEFORE the PATH one. A project-local
+	// `node_modules/.bin/pyright-langserver.cmd` that does not exist read as a
+	// present shim (`isCmdShimValid` answered "valid" when it could not read the
+	// file), so cmd.exe's exit code 1 became a runtime failure, the project tier
+	// threw it, and the PATH candidate was never tried. The spawn double is the
+	// process boundary: cmd.exe reports exit 1 for any absent program, and the
+	// PATH server (a valid non-npm shim) stays up.
+	it("PythonServer falls through absent project-local .cmd candidates to the PATH server (#5305)", async () => {
+		const originalPlatform = process.platform;
+		setPlatform("win32");
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5305-py-"));
+		const project = path.join(root, "project with spaces");
+		fs.mkdirSync(project, { recursive: true });
+		const pathServer = path.join(root, "global-bin", "pyright-langserver.cmd");
+		fs.mkdirSync(path.dirname(pathServer), { recursive: true });
+		fs.writeFileSync(pathServer, "@echo off\r\nrem simulated PATH server\r\n");
+		mockExit1Launch();
+		findGlobalBinary.mockImplementation(async (name: string) =>
+			name === "pyright-langserver" ? pathServer : undefined,
+		);
+		const alive = () => new MockChildProcess();
+		const exit1 = exitWith(1);
+		spawnDouble.mockImplementation((command: string) =>
+			String(command).includes(pathServer) ? alive() : exit1(),
+		);
+
+		try {
+			const { PythonServer } = await import("../../../clients/lsp/server.js");
+			const { withLspProjectCodePermission } =
+				await import("../../../clients/lsp/launch.js");
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState("trusted");
+			const spawned = await withLspProjectCodePermission(true, () =>
+				PythonServer.spawn(project, { allowInstall: false }),
+			);
+			expect(spawned?.source).toBe("direct");
+			expect(
+				spawnDouble.mock.calls.map(([command]) => String(command)),
+			).toEqual(expect.arrayContaining([expect.stringContaining(pathServer)]));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+			setPlatform(originalPlatform);
+		}
+	});
+
+	// #5305, same seam, a second server: `YamlServer` lists its project-local
+	// `.cmd` and the bare name in ONE `resolveAndLaunch`, so the absent `.cmd`
+	// reached the PATH candidate (it tried on) but its runtime failure made the
+	// whole set non-repairable, and the managed install never ran when the PATH
+	// candidate was absent too.
+	it("YamlServer repairs through the installer when the project-local .cmd and PATH are both absent (#5305)", async () => {
+		const originalPlatform = process.platform;
+		setPlatform("win32");
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5305-yaml-"));
+		const project = path.join(root, "project");
+		fs.mkdirSync(project, { recursive: true });
+		mockExit1Launch();
+
+		try {
+			const { YamlServer } = await import("../../../clients/lsp/server.js");
+			await YamlServer.spawn(project, { allowInstall: true });
+			expect(ensureTool).toHaveBeenCalledWith("yaml-language-server");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+			setPlatform(originalPlatform);
+		}
+	});
 
 	it("refuses an unknown-trust local missing-target shim before repair", async () => {
 		const originalPlatform = process.platform;

@@ -279,8 +279,13 @@ async function buildAugmentedPath(basePath?: string): Promise<string> {
  * like `"%~dp0\..\yaml-language-server\bin\yaml-language-server"`. If that
  * target is missing the shim will exit immediately with code 1 after a 500ms
  * startup window — pre-checking avoids the delay.
- * Returns true if the shim is valid (or we can't determine), false if the
- * target is definitively missing.
+ * Returns true when the shim is a file on disk whose target exists (or whose
+ * target we cannot determine), false when the shim itself is not a file or its
+ * target is definitively missing. A shim that cannot be READ is present only
+ * when `statIsFile` proves it is a file (EACCES on a real file: cmd.exe owns the
+ * failure, not the installer); ENOENT, ENOTDIR, a directory and every other
+ * unreadable answer are absent, so a missing project-local candidate falls
+ * through to the next one (#5305).
  */
 export function isCmdShimValid(cmdPath: string): boolean {
 	try {
@@ -298,7 +303,8 @@ export function isCmdShimValid(cmdPath: string): boolean {
 		const target = path.resolve(path.dirname(cmdPath), "..", relPath);
 		return fs.existsSync(target);
 	} catch {
-		return true; // can't read — be permissive
+		// Fail closed (#5305): an unreadable path is present only as a file.
+		return statIsFile(cmdPath);
 	}
 }
 
