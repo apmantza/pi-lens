@@ -2,12 +2,13 @@ import { isTestFile } from "../../file-utils.js";
 import type { FactRule } from "../fact-provider-types.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
 import type { Diagnostic } from "../types.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 export const asyncNoiseRule: FactRule = {
 	id: "async-noise",
 	requires: ["file.functionSummaries"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath) && !isTestFile(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath) && !isTestFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const summaries = store.getFileFact<FunctionSummary[]>(

@@ -1,12 +1,13 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 export const asyncUnnecessaryWrapperRule: FactRule = {
 	id: "async-unnecessary-wrapper",
 	requires: ["file.functionSummaries"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const fns =

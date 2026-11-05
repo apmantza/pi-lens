@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { TERRAGRUNT_FILENAMES } from "./file-kinds.js";
+import { isJstsFactFile, TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
@@ -1379,7 +1379,7 @@ export function getLinterPolicyForFile(
 ): LinterPolicy | undefined {
 	const ext = path.extname(filePath).toLowerCase();
 
-	if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
+	if (isJstsFactFile(filePath)) {
 		const policy = getJstsLintPolicy({
 			hasEslintConfig: context.hasEslintConfig,
 			hasOxlintConfig: context.hasOxlintConfig,
@@ -1708,7 +1708,7 @@ export function getAutofixPolicyForFile(
 ): AutofixPolicy | undefined {
 	const ext = path.extname(filePath).toLowerCase();
 
-	if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
+	if (isJstsFactFile(filePath)) {
 		// Mirror the JS/TS lint policy's precedence: eslint (config-first) →
 		// oxlint (config-first) → biome (smart-default). oxlint is config-gated so
 		// it never conflicts with the biome default.

@@ -3,6 +3,7 @@ import type { FactRule } from "../fact-provider-types.js";
 import type { CommentSummary } from "../facts/comment-facts.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
 import type { Diagnostic } from "../types.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 const ALIAS_COMMENT_RE =
 	/\b(alias|backward\s*compat|backwards\s*compat|compatibility|shim|adapter)\b/i;
@@ -23,7 +24,7 @@ export const passThroughWrappersRule: FactRule = {
 	id: "pass-through-wrappers",
 	requires: ["file.functionSummaries", "file.comments"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath) && !isTestFile(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath) && !isTestFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const summaries = store.getFileFact<FunctionSummary[]>(

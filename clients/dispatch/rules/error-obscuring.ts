@@ -1,12 +1,13 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { TryCatchSummary } from "../facts/try-catch-facts.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 export const errorObscuringRule: FactRule = {
 	id: "error-obscuring",
 	requires: ["file.tryCatchSummaries"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath);
 	},
 	evaluate(ctx, store) {
 		const summaries = store.getFileFact<TryCatchSummary[]>(

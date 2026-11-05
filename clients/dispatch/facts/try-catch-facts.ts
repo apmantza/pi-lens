@@ -5,6 +5,7 @@ import {
 	type TsNode,
 	walk,
 } from "./tree-sitter-facts.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 export interface TryCatchSummary {
 	line: number;
@@ -108,7 +109,7 @@ export const tryCatchFactProvider: FactProvider = {
 	provides: ["file.tryCatchSummaries"],
 	requires: ["file.content"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath);
 	},
 	async run(ctx, store) {
 		await extractFactsFromTree(

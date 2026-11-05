@@ -1,5 +1,6 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 /**
  * no-commented-credentials — password/token/secret in comments (TS/JS/Python/Go/
@@ -14,8 +15,17 @@ const CREDENTIAL_PATTERNS = [
 
 // Files that define credential patterns as code (scanners, test fixtures, etc.) —
 // their own regex literals would otherwise self-trigger this rule.
-const CREDENTIALS_EXEMPT =
-	/[/\\](secrets?[-_]?(scanner|detect|check)|scanner|fixture|mock)[^/\\]*\.(tsx?|ya?ml|json|env)$/i;
+const CREDENTIALS_EXEMPT_NAME =
+	/[/\\](secrets?[-_]?(scanner|detect|check)|scanner|fixture|mock)[^/\\]*$/i;
+const CREDENTIALS_EXEMPT_DATA_EXTENSION = /\.(ya?ml|json|env)$/i;
+
+function isCredentialsExempt(filePath: string): boolean {
+	return (
+		CREDENTIALS_EXEMPT_NAME.test(filePath) &&
+		(isTypeScriptFile(filePath) ||
+			CREDENTIALS_EXEMPT_DATA_EXTENSION.test(filePath))
+	);
+}
 
 function isCommentLine(line: string): boolean {
 	return line.startsWith("//") || line.startsWith("#") || line.startsWith("*");
@@ -26,8 +36,9 @@ export const commentedCredentialsRule: FactRule = {
 	requires: ["file.content"],
 	appliesTo(ctx) {
 		return (
-			/\.(tsx?|py|go|rb|ya?ml|json|env)$/.test(ctx.filePath) &&
-			!CREDENTIALS_EXEMPT.test(ctx.filePath)
+			(isTypeScriptFile(ctx.filePath) ||
+				/\.(py|go|rb|ya?ml|json|env)$/.test(ctx.filePath)) &&
+			!isCredentialsExempt(ctx.filePath)
 		);
 	},
 	evaluate(ctx, store) {

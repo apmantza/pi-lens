@@ -347,7 +347,12 @@ file-scoped worklist and receives no project-wide scanner output.
     Enforced by `tests/support/spawn-cwd-scan.ts` and its runner sweep.
 
 42. **Language-specific rule:** use `LANGUAGES` and registry facts; add a
-    non-TypeScript row whenever the rule is language-neutral.
+    non-TypeScript row whenever the rule is language-neutral. Enforced by
+    `tests/config/language-alias-constancy.test.ts`, which asks the live
+    registered rules, providers and policy lookups whether they answer alike
+    for every extension of one language. Consolidation verdict (#5297):
+    folded onto the registry facts `isTypeScriptFile` and `isJstsFactFile`;
+    the mixed-language tables stay distributed.
 
 48. **Fallback direction chosen without naming the user-facing obstruction:**
     "fail closed" is not a universal justification. For each fallback, catch,

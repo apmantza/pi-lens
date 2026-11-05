@@ -12,7 +12,7 @@ import {
 	loadSg,
 } from "../dispatch/runners/ast-grep-napi.js";
 import type { Diagnostic } from "../dispatch/types.js";
-import { detectFileKind } from "../file-kinds.js";
+import { detectFileKind, isJstsFactFile } from "../file-kinds.js";
 import { isTestFile } from "../file-utils.js";
 import { isAtOrAboveHomeDir, realpathOrResolve } from "../path-utils.js";
 import { getProjectDiagnosticsScannerMaxFiles } from "../project-scale.js";
@@ -59,14 +59,6 @@ const AST_GREP_MAX_FILE_BYTES = 1024 * 1024;
 // keep inline output bounded), since a project scan is an explicit, expensive call.
 const AST_GREP_SCAN_MAX_MATCHES_PER_RULE = 25;
 const AST_GREP_SCAN_MAX_DIAGNOSTICS_PER_FILE = 100;
-const FACT_RULE_EXTENSIONS = new Set([
-	".ts",
-	".tsx",
-	".js",
-	".jsx",
-	".mjs",
-	".cjs",
-]);
 // Which languages the scan runs tree-sitter rules for. Identical to the shared
 // per-edit resolver (EXT_TO_LANG), which since #2424 is itself a projection of
 // the canonical language registry — so the scan and the per-edit path cannot
@@ -311,7 +303,7 @@ async function scanFileMajorRules(
 			const grammarId = TREE_SITTER_EXT_TO_LANG[ext];
 			const langId =
 				grammarId && hasTreeSitterRules(grammarId) ? grammarId : undefined;
-			const factEligible = FACT_RULE_EXTENSIONS.has(ext);
+			const factEligible = isJstsFactFile(filePath);
 			let astGrepLang: ReturnType<typeof astGrepGetLang> | undefined;
 			if (sgModule && astGrepCanHandle(filePath)) {
 				try {

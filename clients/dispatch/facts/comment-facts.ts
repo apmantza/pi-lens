@@ -1,5 +1,6 @@
 import type { FactProvider } from "../fact-provider-types.js";
 import { extractFactsFromTree, walk } from "./tree-sitter-facts.js";
+import { isTypeScriptFile } from "../../language-registry.js";
 
 export interface CommentSummary {
 	line: number;
@@ -11,7 +12,7 @@ export const commentFactProvider: FactProvider = {
 	provides: ["file.comments"],
 	requires: ["file.content"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return isTypeScriptFile(ctx.filePath);
 	},
 	async run(ctx, store) {
 		await extractFactsFromTree(

@@ -33,7 +33,10 @@ import {
 	KIND_EXTENSIONS,
 	LEAN_ROOT_MARKERS,
 } from "../file-kinds.js";
-import { extensionsForLanguage } from "../language-registry.js";
+import {
+	extensionsForLanguage,
+	isTypeScriptFile,
+} from "../language-registry.js";
 import {
 	CARGO_WORKSPACE_MEMBER_DIALECT,
 	direntsHaveMarkerGlobMatch,
@@ -2852,14 +2855,8 @@ const TS_TOOLING_MARKERS = [
 // for a real tsconfig.json. A JS-family file accepts either: tsconfig also
 // governs plain JS via `allowJs`, so accepting tsconfig for a .js file is
 // correct, and jsconfig obviously is too.
-const TS_FAMILY_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
-
-function isTsFamilyFile(file: string): boolean {
-	return TS_FAMILY_EXTENSIONS.has(path.extname(file).toLowerCase());
-}
-
 function tsConfigMarkersForFile(file: string): readonly string[] {
-	return isTsFamilyFile(file)
+	return isTypeScriptFile(file)
 		? (["tsconfig.json"] as const)
 		: TS_CONFIG_MARKERS;
 }
@@ -2881,7 +2878,7 @@ const TypeScriptToolingRoot = IgnoreHomeRoot(
 async function findTypeScriptProjectRoot(
 	file: string,
 ): Promise<string | undefined> {
-	const configDetector = isTsFamilyFile(file)
+	const configDetector = isTypeScriptFile(file)
 		? TypeScriptConfigRootTsOnly
 		: TypeScriptConfigRootEither;
 	const [configRoot, toolingRoot] = await Promise.all([

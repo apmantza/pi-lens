@@ -29,6 +29,7 @@ import {
 	type TsserverProjectIdentity,
 	type TsserverSyncCapableService,
 } from "./tsserver-sync.js";
+import { isJstsFactFile } from "../file-kinds.js";
 import { toProjectRelativePath } from "../path-utils.js";
 import {
 	demoteEnvironmentGapDiagnostics,
@@ -47,20 +48,9 @@ import { logLatency } from "../latency-logger.js";
 export const INFERRED_PROJECT_MARKER =
 	"not in any tsconfig project — checked with inferred settings";
 
-/** Extensions tsserver owns. A file outside this set never reaches the probe. */
-const TS_PROJECT_EXTENSIONS = new Set([
-	".ts",
-	".tsx",
-	".mts",
-	".cts",
-	".js",
-	".jsx",
-	".mjs",
-	".cjs",
-]);
-
+/** Extensions tsserver owns: the JS/TS source family (`isJstsFactFile`). A file outside it never reaches the probe. */
 export function isTsProjectFile(filePath: string): boolean {
-	return TS_PROJECT_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+	return isJstsFactFile(filePath);
 }
 
 /**
