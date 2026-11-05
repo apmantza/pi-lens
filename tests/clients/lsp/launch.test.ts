@@ -212,6 +212,12 @@ describe("lsp launch", () => {
 	it.runIf(process.platform === "win32")(
 		"treats delayed shell-backed startup failure as launch failure",
 		async () => {
+			// #5305: an absent `.cmd` now reads absent, so the pre-spawn gate
+			// would throw before the spawn. Plant a real non-npm shim so the cell
+			// still reaches the delayed exit 1 from a present shell-backed program.
+			const shimDir = setupTestEnvironment("pi-lens-shim-").tmpDir;
+			const shim = path.join(shimDir, "bash-language-server.cmd");
+			fs.writeFileSync(shim, "@echo off\necho hello");
 			vi.useFakeTimers();
 
 			vi.doMock("node:child_process", () => {
@@ -231,13 +237,9 @@ describe("lsp launch", () => {
 			});
 
 			const { launchLSP } = await import("../../../clients/lsp/launch.js");
-			const launchPromise = launchLSP(
-				"C:\\fake\\bash-language-server.cmd",
-				["start"],
-				{
-					cwd: "C:\\fake",
-				},
-			);
+			const launchPromise = launchLSP(shim, ["start"], {
+				cwd: "C:\\fake",
+			});
 			const rejection = expect(launchPromise).rejects.toThrow(
 				/exited immediately with code 1/i,
 			);
