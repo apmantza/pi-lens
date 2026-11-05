@@ -841,7 +841,7 @@ export const widgetStore = defineSessionStore<PersistedWidgetState>({
 		// The v1 bus payload has no stale field, so a demoted (stale) row and a
 		// row with no recognized severity tier stay out, before the clean/dirty gate.
 		const files = getFileDiagnosticSummaries().map((f) => ({
-			path: f.filePath,
+			filePath: f.filePath,
 			diagnostics: f.diagnostics.flatMap((d): PilensDiagnosticEntry[] => {
 				const tier = classifyDiagnosticTier(d);
 				if (d.stale === true || tier === undefined) return [];
@@ -864,9 +864,12 @@ export const widgetStore = defineSessionStore<PersistedWidgetState>({
 		}));
 		publishDiagnostics({
 			cwd: ctx.cwd,
-			files: files.filter(
-				(f) => f.diagnostics.length > 0 || wasPreviouslyReportedDirty(f.path),
-			),
+			files: files
+				.filter(
+					(f) =>
+						f.diagnostics.length > 0 || wasPreviouslyReportedDirty(f.filePath),
+				)
+				.map((f) => ({ path: f.filePath, diagnostics: f.diagnostics })),
 		});
 		return { itemsIn: state.files.length, itemsKept: fresh.files.length };
 	},
