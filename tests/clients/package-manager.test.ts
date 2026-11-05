@@ -745,8 +745,10 @@ describe("primeGlobalBinDirs", () => {
 				() => attempts,
 				(count) => count === 1,
 			);
-			// Node reports an unhandled rejection after the microtask queue drains.
-			await new Promise((resolve) => setTimeout(resolve, 20));
+			// Node reports an unhandled rejection once the microtask queue drains,
+			// before the next check phase.
+			await new Promise((resolve) => setImmediate(resolve));
+			await new Promise((resolve) => setImmediate(resolve));
 			expect(escaped).toEqual([]);
 		} finally {
 			process.off("unhandledRejection", onEscape);
