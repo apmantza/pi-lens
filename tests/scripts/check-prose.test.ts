@@ -74,11 +74,26 @@ describe("checkProse", () => {
 		expect(checkProse(text)).toEqual({ valid: true, errors: [], warnings: [] });
 	});
 
-	it("keeps abbreviations, paths, versions, and list items stable", () => {
-		const result = checkProse(
-			"- Handle e.g. scripts/check-prose.mjs and version 1.2.3.\n- Run the clean test.",
-		);
-		expect(result.valid).toBe(true);
+	// Recurrence: #5110 turned every prose finding except heading case into a
+	// warning, so the old `expect(result.valid).toBe(true)` over this text could
+	// no longer fail whatever the splitter did (surviving mutations: an
+	// abbreviation list that never matches, a dropped next-character rule). The
+	// text is now one sentence of 31 to 33 words that splits into pieces under the
+	// 30-word limit exactly when the splitter wrongly ends a sentence at the dot.
+	const words = (count: number) => Array(count).fill("word").join(" ");
+	it.each([
+		["an abbreviation", `Check e.g. ${words(29)}.`],
+		["a dotted version number", `Use version 1.2.3 ${words(28)}.`],
+	])("does not end a sentence at %s", (_name, text) => {
+		expect(checkProse(text).warnings.join(" ")).toContain("sentence-length");
+	});
+
+	it("still ends a sentence at a real full stop, so the rows above can see a split", () => {
+		expect(checkProse(`Check this. ${words(29)}.`)).toEqual({
+			valid: true,
+			errors: [],
+			warnings: [],
+		});
 	});
 
 	it("splits ordered and unordered list items into sentences", () => {
@@ -90,6 +105,16 @@ describe("checkProse", () => {
 				"- This deliberately has enough ordinary words to exceed the prose limit because it never reaches a terminal sentence boundary and must remain one sentence while the checker preserves this unbroken paragraph for its length guard.",
 			).warnings.join(" "),
 		).toContain("sentence-length");
+	});
+
+	// Recurrence: the list-marker strip had no observable effect in any case, so
+	// `1)` (no sentence end at `)`) was counted as a word of its own item and a
+	// 30-word ordered item read as 31.
+	it("does not count an ordered list marker as a word of its item", () => {
+		expect(checkProse(`1) ${words(30)}.`).warnings).toEqual([]);
+		expect(checkProse(`1) ${words(31)}.`).warnings.join(" ")).toContain(
+			"found 31",
+		);
 	});
 
 	const longAfterEnd =
