@@ -89,7 +89,8 @@ open issues), not something a query change here can fix.
 and `settings.gradle`, parse under tree-sitter, so `module_report`,
 `read_symbol`, symbol search, import extraction and the call-graph refs all
 support Groovy (#5235). Symbol extraction lists classes, traits, interfaces,
-enums, records, constructors and methods; import extraction reads qualified
+enums, records, constructors, methods, and named closures held by a class
+field or a top-level script variable; import extraction reads qualified
 import names, and the call-graph refs cover calls, constructions and type
 names.
 The grammar is [dekobon/tree-sitter-groovy](https://github.com/dekobon/tree-sitter-groovy)
