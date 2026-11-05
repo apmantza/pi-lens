@@ -388,9 +388,11 @@ describe("#4512 landRefresh: the PR body and the verdict the workflow reads", ()
 
 	it("says which landing the repository is configured for", () => {
 		const flips: string[] = [];
-		expect(buildRefreshPrBody({ flips, landing: "manual" })).toContain(
-			"close and reopen the PR",
-		);
+		// Recurrence: the manual body still asked for a close and reopen after
+		// #5062 made the nightly dispatch the required checks (#5304, audit D6).
+		const manual = buildRefreshPrBody({ flips, landing: "manual" });
+		expect(manual).toContain("dispatches the required checks on its head");
+		expect(manual).not.toContain("must close and reopen");
 		expect(buildRefreshPrBody({ flips, landing: "ci-only" })).toContain(
 			"A maintainer merges it.",
 		);

@@ -144,7 +144,7 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 			"Landing: No flips: auto-merge is armed. CI runs on this PR because it was opened with the refresh App token, and GitHub merges it when the required checks pass.";
 	} else if (landing === "manual") {
 		landed =
-			"Landing: this PR is created with the repository `GITHUB_TOKEN`, which cannot trigger workflow runs. After the bot opens or updates it, a maintainer must close and reopen the PR to arm CI. (Configure the refresh App to remove this step.)";
+			"Landing: the bot opened this PR with the repository `GITHUB_TOKEN`, so the nightly dispatches the required checks on its head (#5062); no close and reopen is needed. A maintainer merges it. (Configure the refresh App to allow auto-merge.)";
 	} else {
 		landed =
 			"Landing: CI runs on this PR because it was opened with the refresh App token. A maintainer merges it.";
