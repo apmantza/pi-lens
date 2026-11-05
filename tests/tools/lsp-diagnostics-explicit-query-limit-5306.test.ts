@@ -57,6 +57,14 @@ vi.useFakeTimers();
 
 /** The cpp server's publish time, past clangd's 1500 ms aggregate wait. */
 const PUBLISH_AT_MS = 3000;
+/** The language a fake server speaks: its registry id and its file extension. */
+interface Lang {
+	id: string;
+	ext: string;
+}
+const CLANGD: Lang = { id: "clangd", ext: ".cpp" };
+/** lua is push-only and `silentOnClean` (wait-policy/strategies.ts). */
+const LUA: Lang = { id: "lua", ext: ".lua" };
 const FINDING = {
 	severity: 1 as const,
 	message: "use of undeclared identifier 'undefined_marker_a'",
@@ -80,7 +88,11 @@ interface FakeServer {
  * `publishAtMs`, and says nothing for a shorter one. `publishAtMs` of
  * `Infinity` is a server that never publishes.
  */
-function makeFakeServer(root: string, publishAtMs: number): FakeServer {
+function makeFakeServer(
+	root: string,
+	publishAtMs: number,
+	serverId: string,
+): FakeServer {
 	const budgets: number[] = [];
 	const opened: string[] = [];
 	let version = 0;
@@ -104,7 +116,7 @@ function makeFakeServer(root: string, publishAtMs: number): FakeServer {
 		getAdvertisedCommands: () => [],
 		getRawCapabilityKeys: () => [],
 		getLaunchVariant: () => undefined,
-		serverId: "clangd",
+		serverId,
 		root,
 		notify: {
 			announceCreated: () => undefined,
@@ -186,15 +198,15 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 	let server: FakeServer;
 	const setGlobalConfig = useGlobalConfig();
 
-	function useServer(publishAtMs: number): void {
-		server = makeFakeServer(tmp, publishAtMs);
+	function useServer(publishAtMs: number, lang: Lang = CLANGD): void {
+		server = makeFakeServer(tmp, publishAtMs, lang.id);
 		getServersForFileWithConfig.mockImplementation((fp: string) =>
-			fp.endsWith(".cpp")
+			fp.endsWith(lang.ext)
 				? [
 						{
-							id: "clangd",
-							name: "clangd",
-							extensions: [".cpp"],
+							id: lang.id,
+							name: lang.id,
+							extensions: [lang.ext],
 							root: async () => tmp,
 							spawn: vi.fn(async () => ({ process: {}, source: "test" })),
 						},
@@ -308,14 +320,29 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			expect(server.budgets).toEqual([30_000]);
 		});
 
-		it("keeps a waitMs below the aggregate as a ceiling", async () => {
+		it("keeps a waitMs below the aggregate as a floor: the 1500 ms aggregate still runs", async () => {
 			useServer(Number.POSITIVE_INFINITY);
 			const file = path.join(tmp, "small.cpp");
 			fs.writeFileSync(file, cppLines(50));
 
 			await runTool({ path: file, waitMs: 500 }, tmp);
 
-			expect(server.budgets).toEqual([500]);
+			expect(server.budgets).toEqual([1500]);
+		});
+
+		it("does not read a silent-on-clean server as clean when waitMs is below its aggregate", async () => {
+			// lua is push-only and silent on clean, so a wait that times out reads as
+			// confirmed clean. A short waitMs must not shorten its 2000 ms aggregate:
+			// the finding it publishes at 1000 ms would otherwise read as clean.
+			useServer(1000, LUA);
+			const file = path.join(tmp, "small.lua");
+			fs.writeFileSync(file, cppLines(50));
+
+			const result = await runTool({ path: file, waitMs: 100 }, tmp);
+
+			expect(result.content[0].text).not.toMatch(/confirmed clean/i);
+			expect(server.budgets).toEqual([2000]);
+			expect(result.details.totalDiagnostics).toBe(1);
 		});
 
 		it("leaves the per-server aggregate wait alone when no waitMs is given", async () => {

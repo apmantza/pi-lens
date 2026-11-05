@@ -212,7 +212,9 @@ describe("#3310 empty first publish from an indexing push server", () => {
 		fs.writeFileSync(file, DIRTY_PHP);
 
 		// The only publish is the held one, so this touch has no answer and must
-		// report the honest timeout — never a clean bill of health.
+		// report the honest timeout — never a clean bill of health. The explicit
+		// wait is floored at php's 8000 ms aggregate (#5306), so this touch takes
+		// that long in real time; the 30 s test timeout covers it.
 		const first = await runDiagnostics(workspace, file, 800);
 		expect(first.text).toContain("check timed out");
 		expect(first.text).not.toContain("Primary LSP (php): confirmed clean.");
@@ -223,5 +225,5 @@ describe("#3310 empty first publish from an indexing push server", () => {
 		const second = await runDiagnostics(workspace, file, 3000);
 		expect(second.text).toContain("Primary LSP (php): confirmed clean.");
 		expect(second.text).not.toContain("check timed out");
-	});
+	}, 30_000);
 });

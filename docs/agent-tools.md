@@ -104,9 +104,11 @@ and `[]` mean no arguments.
   `20000`, maximum `40000`; see
   [globalconfig](globalconfig.md#explicit-diagnostics-query-line-limit)); a
   project config or a tool argument cannot raise it. On that same single-file
-  query an explicit `waitMs` is honoured past the language server's usual
-  per-server wait, up to 30000 ms, so a large file's server can finish; batch
-  and directory queries keep their per-server budgets. A timed-out wait
+  query an explicit `waitMs` sets the wait past the language server's usual
+  per-server wait, up to 30000 ms, and a shorter one never shortens it, so a
+  large file's server can finish; batch and directory queries keep their
+  per-server budgets, except that a batch's 20 s pre-sweep warm-up still opens
+  a file past the bound (a named residual, #5306). A timed-out wait
   reports `check timed out`, never a clean file. This is a
   *different* 2 MiB from the auto-fix full-content attachment cap described in
   [agent-guide.md](agent-guide.md), section 6 ("Auto-format / auto-fix

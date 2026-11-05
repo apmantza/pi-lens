@@ -795,9 +795,11 @@ export interface LSPTouchFileOptions {
 	 * caller asked for. `perServerTimeout` resolves `Math.min(callerCap,
 	 * strategyWait)` for every other caller, which silently shrank a `waitMs` of
 	 * 120000 back to clangd's 1500 ms aggregate while the server needed ~5.6 s.
-	 * With this flag a caller cap ABOVE the aggregate is honoured, up to
-	 * `RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs`; a cap below it stays a ceiling, so a caller
-	 * who asked for a short wait still gets one. Only `tools/lsp-diagnostics.ts`'s
+	 * With this flag the wait is a FLOOR over the aggregate: `max(callerCap,
+	 * strategyWait)`, capped at `RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs`.
+	 * A cap below the aggregate does not shorten it: a push-only `silentOnClean`
+	 * server (lua) that publishes after a short cap would otherwise read as
+	 * confirmed clean. Only `tools/lsp-diagnostics.ts`'s
 	 * single-file route sets it: per-edit, dispatch, batch and sweep touches keep
 	 * their budgets.
 	 */
@@ -5386,7 +5388,7 @@ export class LSPService {
 					if (callerCap !== undefined) {
 						if (options.explicitQuery) {
 							return Math.min(
-								callerCap,
+								Math.max(callerCap, strategyWait > 0 ? strategyWait : 0),
 								RUNTIME_CONFIG.pipeline.lspExplicitQueryMaxWaitMs,
 							);
 						}
