@@ -29,6 +29,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _setServersForFileForTests } from "../../clients/lsp/config.js";
+import type { LSPService } from "../../clients/lsp/index.js";
+import {
+	_resetLspBudgetDecisionForTests,
+	checkCrossProcessLspBudget,
+} from "../../clients/lsp-budget.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import { clearWidgetState } from "../../clients/widget-state.js";
 import { waitFor } from "../clients/interleaving-kit.js";
@@ -65,6 +70,10 @@ interface Lang {
 const CLANGD: Lang = { id: "clangd", ext: ".cpp" };
 /** lua is push-only and `silentOnClean` (wait-policy/strategies.ts). */
 const LUA: Lang = { id: "lua", ext: ".lua" };
+/** rust-analyzer is pull-capable (wait-policy/strategies.ts, 3000 ms aggregate). */
+const RUST: Lang = { id: "rust-analyzer", ext: ".rs" };
+/** The real client's pull request cap (`PULL_REQUEST_TIMEOUT_MS`, client.ts). */
+const PULL_CAP_MS = 10_000;
 const FINDING = {
 	severity: 1 as const,
 	message: "use of undeclared identifier 'undefined_marker_a'",
@@ -87,11 +96,17 @@ interface FakeServer {
  * A push server that publishes `FINDING` once it is given a wait of at least
  * `publishAtMs`, and says nothing for a shorter one. `publishAtMs` of
  * `Infinity` is a server that never publishes.
+ *
+ * With `pullOnlyStopsAtMs` the server is pull-capable and models the real
+ * client's `pullOnly` contract (`clientWaitForDiagnostics`): the pull request
+ * stops at its own cap whatever budget it was given, and a pull that got no
+ * reply returns "deadline-expired" having stored nothing.
  */
 function makeFakeServer(
 	root: string,
 	publishAtMs: number,
 	serverId: string,
+	pullOnlyStopsAtMs?: number,
 ): FakeServer {
 	const budgets: number[] = [];
 	const opened: string[] = [];
@@ -107,11 +122,18 @@ function makeFakeServer(
 		),
 		isAlive: () => true,
 		shutdown: async () => {},
-		getWorkspaceDiagnosticsSupport: () => ({
-			advertised: false,
-			mode: "push-only" as const,
-			diagnosticProviderKind: "none",
-		}),
+		getWorkspaceDiagnosticsSupport: () =>
+			pullOnlyStopsAtMs === undefined
+				? {
+						advertised: false,
+						mode: "push-only" as const,
+						diagnosticProviderKind: "none",
+					}
+				: {
+						advertised: true,
+						mode: "pull" as const,
+						diagnosticProviderKind: "object",
+					},
 		getOperationSupport: () => ({}),
 		getAdvertisedCommands: () => [],
 		getRawCapabilityKeys: () => [],
@@ -127,8 +149,15 @@ function makeFakeServer(
 		},
 		waitForDiagnostics: vi.fn(
 			(filePath: string, ms: number) =>
-				new Promise<undefined>((resolve) => {
+				new Promise<undefined | "deadline-expired">((resolve) => {
 					budgets.push(ms);
+					if (pullOnlyStopsAtMs !== undefined) {
+						setTimeout(
+							() => resolve("deadline-expired"),
+							Math.min(ms, pullOnlyStopsAtMs),
+						);
+						return;
+					}
 					const publishes = ms >= publishAtMs;
 					setTimeout(
 						() => {
@@ -194,12 +223,16 @@ function cppLines(lines: number): string {
 
 describe("#5306 explicit single-file lens_diagnostics query", () => {
 	let tmp: string;
-	let service: unknown;
+	let service: LSPService;
 	let server: FakeServer;
 	const setGlobalConfig = useGlobalConfig();
 
-	function useServer(publishAtMs: number, lang: Lang = CLANGD): void {
-		server = makeFakeServer(tmp, publishAtMs, lang.id);
+	function useServer(
+		publishAtMs: number,
+		lang: Lang = CLANGD,
+		pullOnlyStopsAtMs?: number,
+	): void {
+		server = makeFakeServer(tmp, publishAtMs, lang.id, pullOnlyStopsAtMs);
 		getServersForFileWithConfig.mockImplementation((fp: string) =>
 			fp.endsWith(lang.ext)
 				? [
@@ -228,7 +261,8 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 
 	afterEach(async () => {
 		clearWidgetState();
-		await (service as { destroy?: () => Promise<void> })?.destroy?.();
+		_resetLspBudgetDecisionForTests();
+		await service.shutdown();
 		removeTempDirSync(tmp);
 	});
 
@@ -387,6 +421,66 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			// corrected text states the real ceiling.
 			expect(text).not.toContain("or increase waitMs");
 			expect(text).toContain("30000");
+		});
+	});
+
+	describe("a pull-only wait that expired", () => {
+		// Recurrence this prevents: under machine-wide LSP pressure a pull-capable
+		// server (rust-analyzer) is asked pullOnly. With waitMs=30000 the service
+		// budget is 30 s while the pull request stops at 10 s and the client returns
+		// "deadline-expired"; the touch judged timed-out from elapsed time alone
+		// (10 s + 20 ms < 30 s), answered "confirmed", and the tool printed a clean
+		// file for a check that never got an answer. PR #5318 review thread
+		// PRRT_kwDORt8rec60OLnk.
+		async function underPressure(): Promise<void> {
+			const previous = process.env.PI_LENS_LSP_BUDGET_CEILING;
+			process.env.PI_LENS_LSP_BUDGET_CEILING = "1";
+			try {
+				await checkCrossProcessLspBudget({
+					registry: [
+						{
+							pid: 42,
+							startedAt: new Date().toISOString(),
+							projectRoot: tmp,
+							lspChildren: [
+								{
+									pid: 43,
+									serverId: "rust-analyzer",
+									command: "rust-analyzer",
+									spawnedAt: new Date().toISOString(),
+								},
+							],
+							lspChildCount: 1,
+							rssBytes: 1,
+							heartbeatAt: new Date().toISOString(),
+						},
+					],
+					isPidAlive: () => true,
+				});
+			} finally {
+				if (previous === undefined) {
+					delete process.env.PI_LENS_LSP_BUDGET_CEILING;
+				} else {
+					process.env.PI_LENS_LSP_BUDGET_CEILING = previous;
+				}
+			}
+		}
+
+		it("reads a pull that stopped at its own cap inside waitMs as timed out, never clean", async () => {
+			await underPressure();
+			useServer(Number.POSITIVE_INFINITY, RUST, PULL_CAP_MS);
+			const file = path.join(tmp, "lib.rs");
+			fs.writeFileSync(file, cppLines(50));
+
+			const result = await runTool({ path: file, waitMs: 30_000 }, tmp);
+
+			// The client was asked pullOnly with the caller's full budget, and
+			// stopped at 10 s: the wait the service made ended well before 30 s.
+			expect(server.budgets).toEqual([30_000]);
+			const text: string = result.content[0].text;
+			expect(text).toContain("check timed out");
+			expect(text).not.toMatch(/confirmed clean/i);
+			expect(result.details.outcome).not.toBe("clean");
 		});
 	});
 });

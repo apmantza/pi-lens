@@ -5593,6 +5593,11 @@ export class LSPService {
 				});
 				const firstContactCutOffServerIds = new Set<string>();
 				const firstContactErroredServerIds = new Set<string>();
+				// #5306: servers whose client wait RETURNED "deadline-expired". The
+				// verdict below reads this outcome, never only the elapsed time: a pull
+				// request stops at its own cap (`PULL_REQUEST_TIMEOUT_MS`), which an
+				// explicit `waitMs` can put well inside the service budget.
+				const expiredWaitServerIds = new Set<string>();
 				const answeredForThisTouch = (
 					entry: (typeof spawned)[number],
 				): boolean => {
@@ -5680,7 +5685,7 @@ export class LSPService {
 					const waitForDiagnostics = (): ReturnType<
 						typeof entry.client.waitForDiagnostics
 					> =>
-						!notifySkippedServerIds.has(entry.info.id) &&
+						(!notifySkippedServerIds.has(entry.info.id) &&
 						Number.isFinite(baseline)
 							? entry.client.waitForDiagnostics(filePath, serverTimeout, {
 									minVersion: baseline,
@@ -5696,7 +5701,13 @@ export class LSPService {
 									? entry.client.waitForDiagnostics(filePath, serverTimeout, {
 											pullSettleSource: "pull-warmup",
 										})
-									: entry.client.waitForDiagnostics(filePath, serverTimeout);
+									: entry.client.waitForDiagnostics(filePath, serverTimeout)
+						).then((outcome) => {
+							if (outcome === "deadline-expired") {
+								expiredWaitServerIds.add(entry.info.id);
+							}
+							return outcome;
+						});
 					const firstContact =
 						entry.info.custom === true &&
 						!this.state.diagnosticsPublished.has(entry.info.id) &&
@@ -6262,11 +6273,18 @@ export class LSPService {
 					});
 				} else if (
 					waitedMs + 20 >= timeoutMs ||
-					firstContactErroredServerIds.size > 0
+					firstContactErroredServerIds.size > 0 ||
+					expiredWaitServerIds.size > 0
 				) {
 					// Within ~20 ms of the configured budget we treat it as a timeout;
 					// the LSP didn't beat the cap. Diagnostics that arrive late still
 					// land in the client's cache and surface on the next edit.
+					//
+					// #5306: a client wait that RETURNED "deadline-expired" is a lapsed
+					// wait whatever the clock says (`expiredWaitServerIds`). Elapsed time
+					// alone read a pull that stopped at its 10 s cap inside a 30 s
+					// explicit `waitMs` as a confirmed clean. Whether the server still
+					// answered is decided below from evidence, as for any other lapse.
 					//
 					// #1549: WHOSE budget lapsed decides the verdict. `timeoutMs` is the MAX
 					// over the servers waited on, so a slow auxiliary (opengrep declares
