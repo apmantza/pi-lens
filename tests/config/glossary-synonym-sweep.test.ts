@@ -1210,7 +1210,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 34 -> 32 (#4532 round 4): the three copies of the bare-spelling test
 		// (`!isFullyQualified && !includes(path.sep) && !includes("/")`) became
 		// one `isBareCommand`, so two of the three `path.sep` reads are gone.
-		"clients/lsp/launch.ts": 29,
+		// 29 -> 30 (#5305): `isCmdShimValid` resolves a bare shim name against
+		// the child's cwd with `path.resolve`; a filesystem path, not the retired
+		// `path` domain term.
+		"clients/lsp/launch.ts": 30,
 		"clients/lsp/lombok.ts": 14,
 		// #4299: 121 -> 124; OS path namespace calls for canonical compiler
 		// validation replace the wrapper-relative guess. No path-key owner changes.

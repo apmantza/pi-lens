@@ -461,6 +461,81 @@ describe("Windows LSP startup repair classification (#4263)", () => {
 		}
 	});
 
+	// #5305 round 3 (Greptile P1): a custom server whose command is a BARE
+	// `server.cmd`, absent from PATH and present in the child's cwd. The bare name
+	// stays unresolved (cmd.exe finds it in the cwd), so the presence read named
+	// "server.cmd" and read it against pi's own process.cwd(): the fail-closed
+	// catch of this PR then answered "absent" and the pre-spawn gate threw for a
+	// shim cmd.exe would have run. The presence read is the child's cwd.
+	it("launches a bare .cmd command that exists only in the child cwd (#5305)", async () => {
+		const originalPlatform = process.platform;
+		setPlatform("win32");
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5305-cwd-"));
+		const project = path.join(root, "project");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, "server.cmd"), "@echo off\r\n");
+		mockExit1Launch();
+		spawnDouble.mockImplementation(() => new MockChildProcess());
+
+		try {
+			await launchOnce("server.cmd", project, "server");
+			expect(spawnDouble).toHaveBeenCalledTimes(1);
+			expect(ensureTool).not.toHaveBeenCalled();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+			setPlatform(originalPlatform);
+		}
+	});
+
+	// The same cwd shim exiting 1 is a present program that failed, not a missing
+	// install: the post-spawn classifier reads the same child-cwd presence, so
+	// the installer is not handed a file that is on disk.
+	it("does not repair a bare .cmd command present in the child cwd that exits with code 1 (#5305)", async () => {
+		const originalPlatform = process.platform;
+		setPlatform("win32");
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5305-cwd1-"));
+		const project = path.join(root, "project");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, "server.cmd"), "@echo off\r\n");
+		mockExit1Launch();
+
+		try {
+			await expect(launchOnce("server.cmd", project, "server")).rejects.toThrow(
+				/exited immediately with code 1/,
+			);
+			expect(ensureTool).not.toHaveBeenCalled();
+			expect(spawnDouble).toHaveBeenCalledTimes(1);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+			setPlatform(originalPlatform);
+		}
+	});
+
+	// The cwd read must stay a read of the CHILD's cwd: a `server.cmd` in pi's own
+	// process.cwd() is not the shim cmd.exe runs for a child started elsewhere.
+	it("repairs a bare .cmd command absent from the child cwd even when pi's cwd holds it (#5305)", async () => {
+		const originalPlatform = process.platform;
+		const originalCwd = process.cwd();
+		setPlatform("win32");
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5305-pcwd-"));
+		fs.writeFileSync(path.join(root, "server.cmd"), "@echo off\r\n");
+		mockExit1Launch();
+		try {
+			process.chdir(root);
+			await launchOnce(
+				"server.cmd",
+				path.join(root, "project"),
+				"server",
+			).catch(() => undefined);
+			expect(ensureTool).toHaveBeenCalledWith("server");
+			expect(spawnDouble).not.toHaveBeenCalled();
+		} finally {
+			process.chdir(originalCwd);
+			fs.rmSync(root, { recursive: true, force: true });
+			setPlatform(originalPlatform);
+		}
+	});
+
 	it("refuses an unknown-trust local missing-target shim before repair", async () => {
 		const originalPlatform = process.platform;
 		setPlatform("win32");

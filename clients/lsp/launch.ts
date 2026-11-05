@@ -286,10 +286,15 @@ async function buildAugmentedPath(basePath?: string): Promise<string> {
  * failure, not the installer); ENOENT, ENOTDIR, a directory and every other
  * unreadable answer are absent, so a missing project-local candidate falls
  * through to the next one (#5305).
+ *
+ * `cwd` is the child's working directory: a bare `server.cmd` that no search
+ * resolved is the file `cmd.exe` finds in the CHILD's cwd, so it is read there,
+ * never against this process's own cwd (#5305). An absolute `cmdPath` ignores it.
  */
-export function isCmdShimValid(cmdPath: string): boolean {
+export function isCmdShimValid(cmdPath: string, cwd?: string): boolean {
+	const shimFile = cwd === undefined ? cmdPath : path.resolve(cwd, cmdPath);
 	try {
-		const content = fs.readFileSync(cmdPath, "utf-8");
+		const content = fs.readFileSync(shimFile, "utf-8");
 		// npm cmd shim pattern: "%~dp0\..\<relpath>" or "%~dp0/<relpath>"
 		// The `-` ends the char class, where it is a literal and needs no escape.
 		// oxfmt formats this repository (#1844) and rewrites no regex literal, so
@@ -300,12 +305,12 @@ export function isCmdShimValid(cmdPath: string): boolean {
 		);
 		if (!match) return true; // non-npm shim — let it through
 		const relPath = match[1].replace(/[/\\]/g, path.sep);
-		const target = path.resolve(path.dirname(cmdPath), "..", relPath);
+		const target = path.resolve(path.dirname(shimFile), "..", relPath);
 		return fs.existsSync(target);
 	} catch {
 		// none: fail closed (#5305). An unreadable shim is present only when
 		// statIsFile proves it is a file; cmd.exe then owns the failure.
-		return statIsFile(cmdPath);
+		return statIsFile(shimFile);
 	}
 }
 
@@ -342,7 +347,10 @@ function windowsCommandPresence(evidence: {
 }): "present" | "absent" {
 	const { command, spawnCommand } = evidence;
 	// The shim's own target was read on disk before the spawn.
-	if (/\.(cmd|bat)$/i.test(spawnCommand) && isCmdShimValid(spawnCommand)) {
+	if (
+		/\.(cmd|bat)$/i.test(spawnCommand) &&
+		isCmdShimValid(spawnCommand, evidence.cwd)
+	) {
 		return "present";
 	}
 	if (evidence.isBareCommand) {
@@ -370,9 +378,13 @@ function windowsCommandPresence(evidence: {
 function isMissingWindowsStartupCommand(
 	spawnCommand: string,
 	presence: "present" | "absent",
+	cwd: string,
 ): boolean {
 	if (!isWindows) return false;
-	if (/\.(cmd|bat)$/i.test(spawnCommand) && !isCmdShimValid(spawnCommand)) {
+	if (
+		/\.(cmd|bat)$/i.test(spawnCommand) &&
+		!isCmdShimValid(spawnCommand, cwd)
+	) {
 		return true;
 	}
 	return presence === "absent";
@@ -994,7 +1006,7 @@ export async function launchLSP(
 	if (
 		isWindows &&
 		/\.(cmd|bat)$/i.test(spawnCommand) &&
-		!isCmdShimValid(spawnCommand)
+		!isCmdShimValid(spawnCommand, cwd)
 	) {
 		logSessionStart(
 			`lsp cmd-shim-invalid: ${spawnCommand} target missing — skipping candidate`,
@@ -1056,7 +1068,7 @@ export async function launchLSP(
 		const failure = new Error(message);
 		if (
 			proc.exitCode === 1 &&
-			isMissingWindowsStartupCommand(spawnCommand, commandPresence)
+			isMissingWindowsStartupCommand(spawnCommand, commandPresence, cwd)
 		) {
 			throw new SpawnFailureError("tool-not-found", message, failure);
 		}
@@ -1120,7 +1132,7 @@ export async function launchLSP(
 					const failure = new Error(message);
 					if (
 						code === 1 &&
-						isMissingWindowsStartupCommand(spawnCommand, commandPresence)
+						isMissingWindowsStartupCommand(spawnCommand, commandPresence, cwd)
 					) {
 						reject(new SpawnFailureError("tool-not-found", message, failure));
 						return;
