@@ -5324,6 +5324,35 @@ export class LSPService {
 				// Build this from the live spawned client's capabilities rather than
 				// server id alone. Missing/throwing capability data fails closed, so a
 				// new or ambiguous server keeps the existing generous warm-up budget.
+				const isSilentOnCleanServer = (
+					entry: (typeof spawned)[number],
+				): boolean => {
+					try {
+						const snapshot: LSPCapabilitySnapshot = {
+							serverId: entry.client.serverId,
+							root: entry.client.root,
+							operationSupport: entry.client.getOperationSupport(),
+							workspaceDiagnosticsSupport:
+								entry.client.getWorkspaceDiagnosticsSupport(),
+							customServer: entry.info.custom,
+							diagnosticsPublished: this.state.diagnosticsPublished.has(
+								entry.info.id,
+							),
+							diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(
+								entry.info.id,
+							),
+							advertisedCommands: entry.client.getAdvertisedCommands(),
+							rawCapabilityKeys: entry.client.getRawCapabilityKeys?.() ?? [],
+							launchVariant: entry.client.getLaunchVariant?.(),
+						};
+						return (
+							classifyServerWaitTier(entry.client.serverId, snapshot) ===
+							"tier3-silent"
+						);
+					} catch {
+						return false;
+					}
+				};
 				const silentCleanWarmupServers = new Set<string>();
 				if (options.warmupOverride && (options.warmupAttempt ?? 1) <= 1) {
 					for (const entry of spawned) {
@@ -5332,32 +5361,8 @@ export class LSPService {
 							entry.client.getLaunchVariant?.(),
 						);
 						if (strategy.workspaceIndexing !== true) continue;
-						try {
-							const snapshot: LSPCapabilitySnapshot = {
-								serverId: entry.client.serverId,
-								root: entry.client.root,
-								operationSupport: entry.client.getOperationSupport(),
-								workspaceDiagnosticsSupport:
-									entry.client.getWorkspaceDiagnosticsSupport(),
-								customServer: entry.info.custom,
-								diagnosticsPublished: this.state.diagnosticsPublished.has(
-									entry.info.id,
-								),
-								diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(
-									entry.info.id,
-								),
-								advertisedCommands: entry.client.getAdvertisedCommands(),
-								rawCapabilityKeys: entry.client.getRawCapabilityKeys?.() ?? [],
-								launchVariant: entry.client.getLaunchVariant?.(),
-							};
-							if (
-								classifyServerWaitTier(entry.client.serverId, snapshot) ===
-								"tier3-silent"
-							) {
-								silentCleanWarmupServers.add(entry.client.serverId);
-							}
-						} catch {
-							// Fail closed: capability uncertainty must retain the cold floor.
+						if (isSilentOnCleanServer(entry)) {
+							silentCleanWarmupServers.add(entry.client.serverId);
 						}
 					}
 				}
