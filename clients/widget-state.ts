@@ -34,6 +34,7 @@ import { dropStaleFiles } from "./session-state-store.js";
 import {
 	publishDiagnostics,
 	type PilensDiagnosticEntry,
+	wasPreviouslyReportedDirty,
 } from "./diagnostics-publish.js";
 
 /**
@@ -836,17 +837,22 @@ export const widgetStore = defineSessionStore<PersistedWidgetState>({
 		// A resumed widget and a bus-only consumer must start from the same state.
 		publishDiagnostics({
 			cwd: ctx.cwd,
-			files: exportWidgetState().files.map((f) => ({
-				path: f.filePath,
-				diagnostics: f.allDiagnostics.map((d): PilensDiagnosticEntry => ({
-					severity: d.severity as PilensDiagnosticEntry["severity"],
-					message: d.message,
-					tool: d.tool ?? "unknown",
-					...(d.rule !== undefined && { ruleId: d.rule }),
-					...(d.line !== undefined && { line: d.line }),
-					...(d.col !== undefined && { col: d.col }),
+			files: getFileDiagnosticSummaries()
+				.filter(
+					(f) =>
+						f.diagnostics.length > 0 || wasPreviouslyReportedDirty(f.filePath),
+				)
+				.map((f) => ({
+					path: f.filePath,
+					diagnostics: f.diagnostics.map((d): PilensDiagnosticEntry => ({
+						severity: d.severity as PilensDiagnosticEntry["severity"],
+						message: d.message,
+						tool: d.tool ?? "unknown",
+						...(d.rule !== undefined && { ruleId: d.rule }),
+						...(d.line !== undefined && { line: d.line }),
+						...(d.col !== undefined && { col: d.col }),
+					})),
 				})),
-			})),
 		});
 		return { itemsIn: state.files.length, itemsKept: fresh.files.length };
 	},

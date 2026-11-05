@@ -846,7 +846,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 16 -> 18 (#5258, #5020): the header counts the files no check completed
 		// on, and `retireWidgetCitedRows` keeps the rows no retire named; both are
 		// `Array.prototype.filter` calls, not delivery filters.
-		"clients/widget-state.ts": 18,
+		// 18 -> 19 (#5301): another intrinsic Array.prototype.filter selects the
+		// restored files eligible for the existing bus publisher's clean gate.
+		"clients/widget-state.ts": 19,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		"tools/activate-tools.ts": 2,
