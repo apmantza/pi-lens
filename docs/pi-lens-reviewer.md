@@ -260,6 +260,12 @@ instead of rebuilding the probe.
   appear? Count them over a few runs on both heads. A green suite proves
   nothing here (#4366 r2: a shared-client fold swapped stdin end for SIGTERM;
   the shutdown record went from 3/3 to 0/12 and 11 sockets leaked).
+- **Store-reader parity.** When the diff makes one reader of a store match
+  another reader's view, list every per-row state the reference reader honours
+  (disposition, stale or past-EOF, unchecked, an unrecognized value) and probe
+  each through the new reader. One case per state, not one per claim (#5302:
+  verify r2 passed the marked-row and clean-file cases and missed a past-EOF
+  row the widget demotes and the restore still published).
 - **Windows path shapes.** A new test or runtime comparison of paths goes
   through `toPosix` or `path.win32` (`AGENTS.md`). A host-default separator is
   a finding even when Linux CI is green (#4356: Windows advisory red).

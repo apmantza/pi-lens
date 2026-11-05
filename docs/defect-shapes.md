@@ -42,6 +42,15 @@ fixes its members says so instead of quoting a before and after.
 
 39. **Walk-up result used as eligibility:** return ownership and start-directory
     identity separately; enumerate root-position by ambient-input cells.
+    Consolidation verdict: folded onto `walkUpDirs` (`clients/path-utils.ts`);
+    the loops left are the seam's own climbs and the URI-key ancestor index in
+    `clients/lsp/edits.ts`, which stay distributed because a key is not a
+    directory and must not reach `realpathOrResolve`. Counted climbs that go up
+    a known number of levels instead of searching also stay:
+    `collectInstallDiagnostics` (pi-lens's own install root, at most 6 levels),
+    `resolvePython` (one level per leading dot of a relative import) and
+    `anchorPrefix` in `clients/dispatch/rule-policy.ts` (one level per path
+    segment).
 
 74. **Split host-path resolution:** a path is resolved by its provenance, at one
     seam per provenance. A path a host tool was given as an argument goes
