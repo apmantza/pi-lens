@@ -846,7 +846,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 16 -> 18 (#5258, #5020): the header counts the files no check completed
 		// on, and `retireWidgetCitedRows` keeps the rows no retire named; both are
 		// `Array.prototype.filter` calls, not delivery filters.
-		"clients/widget-state.ts": 18,
+		// 18 -> 19 (#5301): another intrinsic Array.prototype.filter selects the
+		// restored files eligible for the existing bus publisher's clean gate.
+		"clients/widget-state.ts": 19,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		"tools/activate-tools.ts": 2,
@@ -1489,8 +1491,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/trivy-client.ts": 5,
 		"clients/warm-attach.ts": 3,
 		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
-		// filesystem path operation.
-		"clients/widget-state.ts": 8,
+		// filesystem path operation. 8 -> 9 (#5301): the restored state is
+		// published with each file's `path`, the bus payload's own field name.
+		"clients/widget-state.ts": 9,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
