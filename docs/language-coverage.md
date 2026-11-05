@@ -101,6 +101,7 @@ of lines sit inside an error:
 | ------------------------------ | ------------------------------- |
 | `build.gradle` (Gradle, 250)   | 95%                             |
 | Jenkins pipeline-examples (53) | 73%                             |
+| `Jenkinsfile`-named files (4)  | 50%                             |
 | Spock (400)                    | 64%                             |
 | Grails (250)                   | 56%                             |
 | apache/groovy (400)            | 69%                             |
@@ -124,9 +125,10 @@ Consequences:
 
 - A file with an ERROR node still yields the declarations the parser recovered
   around it, but may miss the ones it could not. `module_report` and the read
-  tools append their syntax-error warning ("tree-sitter could not parse part of
-  this file; the symbol list may be incomplete") on every such partial parse,
-  so an absent symbol is not proof of absence.
+  tools carry a syntax-error warning ("tree-sitter could not parse part of this
+  file; the symbol list may be incomplete"): `module_report` on every such
+  partial parse, `read_symbol` only when the name is not found. An absent
+  symbol is not proof of absence.
 - Named closures (`def handler = { ... }`) are listed only when held by a class
   field or a top-level script variable. A method-local closure is not listed.
 - Calls that take a trailing closure (`list.each { ... }`, DSL blocks) parse as

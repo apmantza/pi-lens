@@ -453,31 +453,6 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
         name: (command_name (word) @callIdent)) @callRef
     `,
 	},
-	// #1522: tree-sitter-cue (eonpatapon/tree-sitter-cue, vendored per #1520) has
-	// no `label:`/`value:` field names on `field` — verified directly against the
-	// committed wasm (`value:` fails query compilation with "Bad field name");
-	// only `let_clause`'s `left:`/`right:` and `call_expression`'s `function:`
-	// are real fields. A `#Definition` is not a distinct node kind: `#Service`
-	// parses as a plain (identifier) whose text happens to start with "#", so
-	// definitions are told apart from ordinary struct fields with a `#match?`/
-	// `#not-match?` text predicate rather than a grammar-level distinction —
-	// both predicates must sit INSIDE the pattern's own parens (this repo's
-	// tree-sitter gotcha). `#Definition`s map to `type` (the closest existing
-	// SymbolKind to a reusable CUE schema); plain fields map to `property`;
-	// `let` bindings map to `variable`.
-	//
-	// Two known upstream grammar rough edges (#1522 review round 1, F4;
-	// docs/language-coverage.md's CUE row has the same note, kept in sync):
-	// (1) an aliased field label (`X=name: value`) exposes BOTH identifiers
-	// as untagged siblings under one `label` node — `(label alias:
-	// (identifier) (identifier))` — with no field/structural way to tell the
-	// alias from the real name, so `fieldDef` spuriously captures the alias
-	// too, alongside the correct symbol for `name`. (2) a multi-hash raw
-	// string (`##"..."##`, 2+ `#` delimiters) mis-parses regardless of
-	// content — the field's value becomes a bare `identifier` instead of a
-	// `string`, which can surface as a spurious `#`-prefixed ref via the
-	// `typeIdent` pattern below. Both are grammar bugs, not query bugs — no
-	// query change here can distinguish what the parse tree doesn't.
 	// #5235: tree-sitter-groovy (dekobon v0.3.0, vendored as is). Node names
 	// were probed against the committed wasm. A Spock feature name
 	// (`def "adds two numbers"()`) parses as `quoted_identifier`, so the method
@@ -542,6 +517,31 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
       (type_identifier) @typeIdent
     `,
 	},
+	// #1522: tree-sitter-cue (eonpatapon/tree-sitter-cue, vendored per #1520) has
+	// no `label:`/`value:` field names on `field` — verified directly against the
+	// committed wasm (`value:` fails query compilation with "Bad field name");
+	// only `let_clause`'s `left:`/`right:` and `call_expression`'s `function:`
+	// are real fields. A `#Definition` is not a distinct node kind: `#Service`
+	// parses as a plain (identifier) whose text happens to start with "#", so
+	// definitions are told apart from ordinary struct fields with a `#match?`/
+	// `#not-match?` text predicate rather than a grammar-level distinction —
+	// both predicates must sit INSIDE the pattern's own parens (this repo's
+	// tree-sitter gotcha). `#Definition`s map to `type` (the closest existing
+	// SymbolKind to a reusable CUE schema); plain fields map to `property`;
+	// `let` bindings map to `variable`.
+	//
+	// Two known upstream grammar rough edges (#1522 review round 1, F4;
+	// docs/language-coverage.md's CUE row has the same note, kept in sync):
+	// (1) an aliased field label (`X=name: value`) exposes BOTH identifiers
+	// as untagged siblings under one `label` node — `(label alias:
+	// (identifier) (identifier))` — with no field/structural way to tell the
+	// alias from the real name, so `fieldDef` spuriously captures the alias
+	// too, alongside the correct symbol for `name`. (2) a multi-hash raw
+	// string (`##"..."##`, 2+ `#` delimiters) mis-parses regardless of
+	// content — the field's value becomes a bare `identifier` instead of a
+	// `string`, which can surface as a spurious `#`-prefixed ref via the
+	// `typeIdent` pattern below. Both are grammar bugs, not query bugs — no
+	// query change here can distinguish what the parse tree doesn't.
 	cue: {
 		defs: `
       (field
@@ -773,6 +773,9 @@ const IMPORT_QUERIES: Record<string, string> = {
         (word) @importSource
         (#match? @_m "^(source|\\.)$"))
     `,
+	// import a.b.C / import static a.b.C.m / import a.b.* — `name:` is the
+	// qualified_name on every form, aliases (`as X`) included (#5235).
+	groovy: `(import_declaration name: (qualified_name) @importSource)`,
 	// import "strings" / import x "encoding/json" — `import_spec`'s `path:`
 	// field is verified against the committed wasm. Block-form
 	// (`import (\n\t"strings"\n)`) nests each `import_spec` one level deeper,
@@ -780,9 +783,6 @@ const IMPORT_QUERIES: Record<string, string> = {
 	// `import_declaration` — a second pattern is needed, not a reshaped first
 	// one (#1522 review round 1, F2: the single-line-only pattern extracted
 	// zero imports from the block form).
-	// import a.b.C / import static a.b.C.m / import a.b.* — `name:` is the
-	// qualified_name on every form, aliases (`as X`) included (#5235).
-	groovy: `(import_declaration name: (qualified_name) @importSource)`,
 	cue: `
       (import_declaration (import_spec path: (string) @importSource))
       (import_declaration (import_spec_list (import_spec path: (string) @importSource)))

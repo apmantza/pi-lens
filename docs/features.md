@@ -211,8 +211,8 @@ that symbol's range passes the read-before-edit check (an outline from
 **Groovy** (`.groovy`, `.gvy`, `.gy`, `.gsh`, `Jenkinsfile`, `build.gradle`,
 `settings.gradle`) is outlined through a vendored tree-sitter grammar that is
 partial: about 70% of 1,353 real files parse with no ERROR node (`build.gradle`
-95%, Spock 64%, Grails 56%, Jenkins pipelines 73%). Types nested in a class,
-command calls with named arguments (`mail to: x, subject: y`, `@Library('x') _`),
+95%, Spock 64%, Grails 56%, Jenkins pipelines 73%, `Jenkinsfile`-named files
+50% of 4). Types nested in a class, command calls with named arguments (`mail to: x, subject: y`, `@Library('x') _`),
 a field with modifiers and no type (`static x = {`) and the diamond `<>` do not
 parse. On a partial parse `module_report` shows its syntax-error warning, and
 the symbol list may be incomplete. The measured numbers and the full list of
