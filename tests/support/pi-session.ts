@@ -1324,10 +1324,10 @@ export async function startPiSession(
  * copy's sweep reads it through the production reader and skips. Written as a
  * file, not through `clients/instance-reaper.js`: importing that module here
  * reshaped this side's module graph and reddened
- * `tests/index-4913-cli-flag-timing.test.ts`. It is written AFTER the start
- * because a file in the home before the first `session_start` reddened the
- * same case (`lsp_touch_file` absent after `/lens-toggle`, 4 of 4 runs). The
- * stamp's name and shape are pinned by `pi-session.test.ts`, which asks the
+ * `tests/index-4913-cli-flag-timing.test.ts`. It is written AFTER the start:
+ * the author saw a file in the home before the first `session_start` redden
+ * the same case under load (`lsp_touch_file` absent after `/lens-toggle`); the
+ * review could not reproduce that (2 of 2 runs green). The stamp's name and shape are pinned by `pi-session.test.ts`, which asks the
  * production sweep whether it is in cooldown.
  */
 function armBackstopCooldown(): void {
