@@ -31,6 +31,10 @@ import {
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { defineSessionStore } from "./session-scope.js";
 import { dropStaleFiles } from "./session-state-store.js";
+import {
+	publishDiagnostics,
+	type PilensDiagnosticEntry,
+} from "./diagnostics-publish.js";
 
 /**
  * Canonical key for the `files` map (and `diagnosticsWriteGuard`) — #1020.
@@ -829,6 +833,21 @@ export const widgetStore = defineSessionStore<PersistedWidgetState>({
 		// Only a sidecar reaches here (startup, resume), and it carries savedAt.
 		const fresh = await dropStaleFiles(state, ctx.savedAt as number);
 		importWidgetState(fresh);
+		// A resumed widget and a bus-only consumer must start from the same state.
+		publishDiagnostics({
+			cwd: ctx.cwd,
+			files: exportWidgetState().files.map((f) => ({
+				path: f.filePath,
+				diagnostics: f.allDiagnostics.map((d): PilensDiagnosticEntry => ({
+					severity: d.severity as PilensDiagnosticEntry["severity"],
+					message: d.message,
+					tool: d.tool ?? "unknown",
+					...(d.rule !== undefined && { ruleId: d.rule }),
+					...(d.line !== undefined && { line: d.line }),
+					...(d.col !== undefined && { col: d.col }),
+				})),
+			})),
+		});
 		return { itemsIn: state.files.length, itemsKept: fresh.files.length };
 	},
 	reset: () => clearWidgetState(),

@@ -1486,8 +1486,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/trivy-client.ts": 5,
 		"clients/warm-attach.ts": 3,
 		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
-		// filesystem path operation.
-		"clients/widget-state.ts": 8,
+		// filesystem path operation. 8 -> 9 (#5301): the restored state is
+		// published with each file's `path`, the bus payload's own field name.
+		"clients/widget-state.ts": 9,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
