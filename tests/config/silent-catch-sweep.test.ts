@@ -665,10 +665,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :63, :176
 	"clients/installer/index.ts": {
-		silent: 55,
-		identities: "4304fdab05acef34",
+		silent: 54,
+		identities: "683c0bafc1e0070e",
 		reason: PRE_RULE,
-	}, // :200, :205, :215, :226, :239, :296, :2263, :2592, :2676, :2811, :2823, :2849, :3189, :3230, :3265, :3277, :3399, :3422, :3444, :3614, :3716, :3784, :3818, :3958, :3966, :4634, :4687, :4878, :4918, :5402, :5437, :5590, :5607, :5633, :5664, :5667, :5673, :5689, :5732, :5735, :5820, :5907, :6008, :6015, :6207, :6230, :6288, :6298, :6302, :6382, :6418, :6455, :6573, :6732, :6802
+	}, // :201, :206, :216, :227, :240, :297, :2264, :2593, :2677, :2812, :2824, :2850, :3190, :3231, :3266, :3278, :3400, :3423, :3445, :3615, :3712, :3808, :3967, :3975, :4643, :4696, :4887, :4927, :5411, :5446, :5599, :5616, :5642, :5673, :5676, :5682, :5698, :5741, :5744, :5829, :5916, :6017, :6024, :6216, :6239, :6297, :6307, :6311, :6391, :6427, :6464, :6582, :6741, :6811
 	"clients/installer/managed-tool-refresh.ts": {
 		silent: 4,
 		identities: "dbbc0961e686ccc4",
@@ -1399,10 +1399,13 @@ const BASELINE: Readonly<Record<string, Admission>> = {
  * report-scan bodies onto `SecurityScanClient.runReportScan` removed four
  * silent handlers and spent one `none:` line in the one copy, so it is 1,171.
  * The PATH walk moved out of the installer into `clients/command-path.ts` with
- * its one handler spent on a `none:` line (#5119), so it is 1,170.
+ * its one handler spent on a `none:` line (#5119), so it is 1,170. Folding the
+ * installer's npm-global and pip user-base candidate loops onto
+ * `firstVerifiedBinary` removed one of two identical silent handlers, so it is
+ * 1,169.
  * It moves only downward from here.
  */
-const PINNED_TOTAL = 1170;
+const PINNED_TOTAL = 1169;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;

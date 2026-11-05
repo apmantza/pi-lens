@@ -3677,6 +3677,45 @@ function getArchiveBinaryCandidates(
 	return [...candidates];
 }
 
+/**
+ * The first of `candidates` (in order) that exists, is not the session
+ * repository's bytes while pi has not trusted the project (#4530, #4776: the
+ * verification below starts the candidate by path, so a refused one is
+ * recorded and skipped, never run), and passes `verifyToolBinary` with the
+ * caller's argv and budget. A candidate that throws is skipped. Shared by the
+ * npm global bin dirs and the pip user bases.
+ */
+async function firstVerifiedBinary(
+	candidates: readonly string[],
+	onTransient: (() => void) | undefined,
+	verificationArgs: string[],
+	verificationTimeoutMs: number,
+): Promise<string | undefined> {
+	for (const candidate of candidates) {
+		try {
+			await fs.access(candidate);
+			if (isUntrustedProjectPath(candidate)) {
+				recordProjectCommandRefusal(candidate);
+				continue;
+			}
+			if (
+				await verifyToolBinary(
+					candidate,
+					undefined,
+					onTransient,
+					verificationTimeoutMs,
+					verificationArgs,
+				)
+			) {
+				return candidate;
+			}
+		} catch {
+			// continue
+		}
+	}
+	return undefined;
+}
+
 async function findNpmGlobalToolPath(
 	binaryName: string,
 	onTransient?: () => void,
@@ -3694,30 +3733,14 @@ async function findNpmGlobalToolPath(
 				]
 			: [path.join(dir, binaryName)];
 
-		for (const candidate of candidates) {
-			try {
-				await fs.access(candidate);
-				// #4530 (#4776): a global bin dir can hold a link into the
-				// project, and the verification below starts the candidate.
-				if (isUntrustedProjectPath(candidate)) {
-					recordProjectCommandRefusal(candidate);
-					continue;
-				}
-				if (
-					await verifyToolBinary(
-						candidate,
-						undefined,
-						onTransient,
-						verificationTimeoutMs,
-						verificationArgs,
-					)
-				) {
-					return candidate;
-				}
-			} catch {
-				// continue
-			}
-		}
+		// #4530 (#4776): a global bin dir can hold a link into the project.
+		const verified = await firstVerifiedBinary(
+			candidates,
+			onTransient,
+			verificationArgs,
+			verificationTimeoutMs,
+		);
+		if (verified) return verified;
 	}
 
 	return undefined;
@@ -3796,30 +3819,15 @@ async function findPipUserToolPath(
 					]
 				: [path.join(dir, binaryName)];
 
-			for (const candidate of candidates) {
-				try {
-					await fs.access(candidate);
-					// #4530 (#4776): the Python user base is an interpreter's
-					// answer, and its scripts dir can link into the project.
-					if (isUntrustedProjectPath(candidate)) {
-						recordProjectCommandRefusal(candidate);
-						continue;
-					}
-					if (
-						await verifyToolBinary(
-							candidate,
-							undefined,
-							onTransient,
-							verificationTimeoutMs,
-							verificationArgs,
-						)
-					) {
-						return candidate;
-					}
-				} catch {
-					// continue
-				}
-			}
+			// #4530 (#4776): the Python user base is an interpreter's answer, and
+			// its scripts dir can link into the project.
+			const verified = await firstVerifiedBinary(
+				candidates,
+				onTransient,
+				verificationArgs,
+				verificationTimeoutMs,
+			);
+			if (verified) return verified;
 		}
 	}
 
