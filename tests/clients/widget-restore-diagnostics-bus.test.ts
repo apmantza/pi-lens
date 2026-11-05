@@ -224,4 +224,114 @@ describe("widget sidecar restore and diagnostics bus", () => {
 			},
 		]);
 	});
+	it("does not publish a saved row whose line is now past the end of the file", async () => {
+		// #5302: the widget demotes a past-EOF row (stale: true); the v1 bus
+		// payload has no stale field, so the restore must not send it as an error.
+		const shrunk = freshFile("shrunk.ts");
+		const onlyStale = freshFile("only-stale.ts");
+		const long = `${"export const v = 1;\n".repeat(10)}`;
+		for (const file of [shrunk, onlyStale]) {
+			writeFileSync(file, long);
+			utimesSync(file, new Date(1_000_000), new Date(1_000_000));
+		}
+		const pastEof = {
+			tool: "tsc",
+			severity: "error",
+			message: "gone",
+			line: 9,
+		};
+		const live = { tool: "tsc", severity: "warning", message: "live", line: 1 };
+		recordDiagnostics(shrunk, [pastEof, live]);
+		recordDiagnostics(onlyStale, [pastEof]);
+		const saved = exportWidgetState();
+		for (const file of [shrunk, onlyStale]) {
+			writeFileSync(file, content);
+			utimesSync(file, new Date(1_000_000), new Date(1_000_000));
+		}
+
+		await restore(saved);
+
+		const rows = getFileDiagnosticSummaries().flatMap((f) => f.diagnostics);
+		expect(rows.find((d) => d.message === "gone")).toMatchObject({
+			stale: true,
+			staleReason: "past-eof",
+		});
+		expect(received).toHaveLength(1);
+		expect(received[0].files).toEqual([
+			{
+				path: shrunk,
+				diagnostics: [
+					{ severity: "warning", message: "live", tool: "tsc", line: 1 },
+				],
+			},
+		]);
+	});
+
+	it("skips a saved row whose severity the widget does not recognize", async () => {
+		// #5302: a hand-edited or foreign sidecar can carry severity "fatal"; the
+		// widget ignores it (classifyDiagnosticTier is undefined) and the bus must not see it.
+		const mixed = freshFile("mixed-severity.ts");
+		const onlyBad = freshFile("only-bad-severity.ts");
+		recordDiagnostics(mixed, [
+			{ tool: "tsc", severity: "error", message: "bad" },
+			{ tool: "tsc", severity: "warning", message: "good" },
+		]);
+		recordDiagnostics(onlyBad, [
+			{ tool: "tsc", severity: "error", message: "bad" },
+		]);
+		const saved = JSON.parse(JSON.stringify(exportWidgetState()));
+		for (const file of saved.files)
+			for (const d of [...file.diagnostics, ...file.allDiagnostics])
+				if (d.message === "bad") d.severity = "fatal";
+
+		await restore(saved);
+
+		expect(received).toHaveLength(1);
+		expect(received[0].files).toEqual([
+			{
+				path: mixed,
+				diagnostics: [{ severity: "warning", message: "good", tool: "tsc" }],
+			},
+		]);
+	});
+
+	it("imports and publishes nothing when the scope is retired during the freshness check", async () => {
+		// #5302 (CodeRabbit): a restore that outlives its activation must not
+		// replay the old session's findings through the successor's emitter.
+		const file = freshFile("superseded.ts");
+		recordDiagnostics(file, [
+			{ severity: "error", message: "old", tool: "tsc" },
+		]);
+		const saved = exportWidgetState();
+		clearWidgetState();
+
+		const pending = widgetStore.restore(scope, saved, {
+			reason: "resume",
+			source: "own-sidecar",
+			savedAt: 2_000_000,
+			sessionManager: undefined,
+			cwd: env.tmpDir,
+		});
+		retireScope(scope, "superseded");
+		await pending;
+
+		expect(getFileDiagnosticSummaries()).toEqual([]);
+		expect(received).toEqual([]);
+	});
+	it("passes every recognized severity tier through unchanged", async () => {
+		// #5302: the severity mapping replaced a type cast; info and hint must
+		// not collapse into each other.
+		const file = freshFile("tiers.ts");
+		const tiers = ["error", "warning", "info", "hint"] as const;
+		recordDiagnostics(
+			file,
+			tiers.map((severity) => ({ tool: "t", severity, message: severity })),
+		);
+
+		await restore();
+
+		expect(
+			received[0].files[0].diagnostics.map((d) => [d.message, d.severity]),
+		).toEqual(tiers.map((t) => [t, t]));
+	});
 });

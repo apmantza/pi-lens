@@ -833,26 +833,40 @@ export const widgetStore = defineSessionStore<PersistedWidgetState>({
 		if (!state?.files) return { itemsIn: 0, itemsKept: 0 };
 		// Only a sidecar reaches here (startup, resume), and it carries savedAt.
 		const fresh = await dropStaleFiles(state, ctx.savedAt as number);
+		// A scope retired during the freshness check neither imports nor replays
+		// into the successor's emitter.
+		if (!_scope.isLive()) return { itemsIn: state.files.length, itemsKept: 0 };
 		importWidgetState(fresh);
 		// A resumed widget and a bus-only consumer must start from the same state.
-		publishDiagnostics({
-			cwd: ctx.cwd,
-			files: getFileDiagnosticSummaries()
-				.filter(
-					(f) =>
-						f.diagnostics.length > 0 || wasPreviouslyReportedDirty(f.filePath),
-				)
-				.map((f) => ({
-					path: f.filePath,
-					diagnostics: f.diagnostics.map((d): PilensDiagnosticEntry => ({
-						severity: d.severity as PilensDiagnosticEntry["severity"],
+		// The v1 bus payload has no stale field, so a demoted (stale) row and a
+		// row with no recognized severity tier stay out, before the clean/dirty gate.
+		const files = getFileDiagnosticSummaries().map((f) => ({
+			path: f.filePath,
+			diagnostics: f.diagnostics.flatMap((d): PilensDiagnosticEntry[] => {
+				const tier = classifyDiagnosticTier(d);
+				if (d.stale === true || tier === undefined) return [];
+				return [
+					{
+						severity:
+							tier === "advisory"
+								? d.severity === "info"
+									? "info"
+									: "hint"
+								: tier,
 						message: d.message,
 						tool: d.tool ?? "unknown",
 						...(d.rule !== undefined && { ruleId: d.rule }),
 						...(d.line !== undefined && { line: d.line }),
 						...(d.col !== undefined && { col: d.col }),
-					})),
-				})),
+					},
+				];
+			}),
+		}));
+		publishDiagnostics({
+			cwd: ctx.cwd,
+			files: files.filter(
+				(f) => f.diagnostics.length > 0 || wasPreviouslyReportedDirty(f.path),
+			),
 		});
 		return { itemsIn: state.files.length, itemsKept: fresh.files.length };
 	},
