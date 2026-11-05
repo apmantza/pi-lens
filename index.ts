@@ -2998,22 +2998,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 						hook: "session_start",
 						label: "handleSessionStart",
 					});
-					// #5261: head start for the global-bin-dir lookup that the first
-					// dispatch's tool resolution would otherwise wait on. After the
-					// await above, so the session reset that clears the lookup's memo
-					// has already run. A `--no-lens` session dispatches nothing and
-					// skips it.
-					if (lensEnabled) {
-						void import("./clients/package-manager.js")
-							.then((packageManager) => packageManager.primeGlobalBinDirs())
-							.catch((err) =>
-								logExtension({
-									subsystem: "dispatch",
-									level: "warn",
-									message: `global bin dir prime failed: ${err}`,
-								}),
-							);
-					}
 					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 					// #3612: the coordinator's fresh guard is this scope's read-guard
 					// cell, which the read-guard stores snapshot and restore.
@@ -3070,6 +3054,29 @@ function activateExtension(hostPi: ExtensionAPI) {
 
 					if (lensWidgetVisible) {
 						mountLensWidget(ctx.ui, readExtensionMode(ctx));
+					}
+
+					// #5261: head start for the global-bin-dir lookup that the first
+					// dispatch's tool resolution would otherwise wait on. Last in the
+					// handler and deferred to the next event-loop turn: the lookup's
+					// first `which` spawn costs about 11 ms of synchronous work, and
+					// run inside the handler it counted toward `session_start`. After
+					// the session reset, so the memo it fills is this session's. A
+					// dispatch that arrives first starts the same single-flight lookup
+					// itself and the prime joins it. A `--no-lens` session dispatches
+					// nothing and skips it.
+					if (lensEnabled) {
+						setImmediate(() => {
+							void import("./clients/package-manager.js")
+								.then((packageManager) => packageManager.primeGlobalBinDirs())
+								.catch((err) =>
+									logExtension({
+										subsystem: "dispatch",
+										level: "warn",
+										message: `global bin dir prime failed: ${err}`,
+									}),
+								);
+						});
 					}
 				} catch (sessionErr) {
 					// The stale-ctx class has ONE classifier and one record, in

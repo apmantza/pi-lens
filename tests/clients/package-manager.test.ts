@@ -695,6 +695,64 @@ describe("primeGlobalBinDirs", () => {
 		expect(vi.mocked(safeSpawnAsync).mock.calls).toHaveLength(spawnsAfterPrime);
 	});
 
+	// Recurrence: the prime moved off `session_start` to a timer, so a dispatch
+	// can arrive before it runs. The dispatch's own lookup is then the flight,
+	// and the prime that follows must join or hit the memo, never spawn again.
+	it("adds no spawn when a lookup already started before the prime ran", async () => {
+		const { binDir } = prefixWith("prisma");
+		const prefix = path.dirname(binDir);
+		const gate = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		setQueryResponder(() => gate.promise);
+		try {
+			const lookup = findGlobalBinary("prisma");
+			await waitFor(
+				() => queryCalls.filter((c) => c.cmd === "npm").length,
+				(count) => count === 1,
+			);
+			primeGlobalBinDirs();
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+			await expect(lookup).resolves.toBe(
+				path.resolve(path.join(binDir, "prisma")),
+			);
+			primeGlobalBinDirs();
+			await allAvailableGlobalBinDirs();
+			expect(queryCalls.filter((c) => c.cmd === "npm")).toHaveLength(1);
+		} finally {
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+		}
+	});
+
+	// Recurrence (#5261 r1 M6): the prime's `.catch` is the only thing between a
+	// failed probe and an unhandled rejection, and the suite saw the escape only
+	// as a run-level error that named no test. This case names it.
+	it("lets no rejection escape when the primed probe fails", async () => {
+		prefixWith("prisma");
+		let attempts = 0;
+		setQueryResponder(async () => {
+			attempts += 1;
+			throw new Error("npm query exploded");
+		});
+		const escaped: unknown[] = [];
+		const onEscape = (reason: unknown) => escaped.push(reason);
+		process.on("unhandledRejection", onEscape);
+		try {
+			primeGlobalBinDirs();
+			await waitFor(
+				() => attempts,
+				(count) => count === 1,
+			);
+			// Node reports an unhandled rejection after the microtask queue drains.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(escaped).toEqual([]);
+		} finally {
+			process.off("unhandledRejection", onEscape);
+		}
+	});
+
 	// Recurrence: the prime is fire-and-forget, so a rejected probe must neither
 	// surface as an unhandled rejection nor be memoized as an answer; the first
 	// real consumer runs its own lookup.

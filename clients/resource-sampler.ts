@@ -372,9 +372,12 @@ export async function sampleProcesses(
 	}
 
 	try {
-		// pidusage rejects with this exact message when EVERY pid in the batch has
-		// already exited (a lone short-lived child). That is the "absent, unsampled"
-		// outcome this function documents, not a failed process-table query (#5261).
+		// pidusage rejects with this exact message when the batch has no live pid
+		// to report: on Linux only a one-pid batch whose pid already exited (a lone
+		// short-lived child) rejects, a larger batch resolves with the dead pids
+		// absent; the macOS `ps` path rejects for any all-dead batch. That is the
+		// "absent, unsampled" outcome this function documents, not a failed
+		// process-table query (#5261).
 		const stats = await pidusage(valid).catch((err: unknown) => {
 			// none: every pid exited is the documented unsampled outcome, no failure.
 			if (err instanceof Error && err.message === "No matching pid found") {

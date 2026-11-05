@@ -21,7 +21,25 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+
+// A pass-through counter at the process boundary: every spawn still runs for
+// real, the counter only reads which ones were the npm lookup's.
+const spawned = vi.hoisted(() => ({ npmLookups: 0 }));
+vi.mock("../clients/safe-spawn.js", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("../clients/safe-spawn.js")>();
+	return {
+		...original,
+		safeSpawnAsync: (
+			...args: Parameters<typeof original.safeSpawnAsync>
+		): ReturnType<typeof original.safeSpawnAsync> => {
+			const [command, argv] = args;
+			if (command === "npm" || argv.includes("npm")) spawned.npmLookups += 1;
+			return original.safeSpawnAsync(...args);
+		},
+	};
+});
 import {
 	PATH_PROBE_STUB_SUPPORTED,
 	writeStandIn,
@@ -98,6 +116,41 @@ describe.skipIf(!PATH_PROBE_STUB_SUPPORTED)(
 			expect(
 				await until(() => npm.queries() === 1, 10_000),
 				"the npm prefix is queried with no prompt sent",
+			).toBe(true);
+			await handle.dispose();
+		});
+
+		// Recurrence: the prime ran inside the `session_start` handler, and its
+		// first `which` spawn cost about 11 ms of synchronous work there
+		// (hot-path latency lane: session_start +12 ms, REGRESSION). A handler
+		// registered after pi-lens's own runs the moment its handler settles.
+		it("starts the lookup after the session_start handler has settled, not inside it", async () => {
+			const npm = plantNpm("deferred");
+			restores.push(npm.restore);
+			spawned.npmLookups = 0;
+			let lookupsWhenHandlerSettled = -1;
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: project("deferred"),
+				startupMode: "quick",
+				inlineFactory: async () => {
+					const lens = (await import("../index.js")).default;
+					return (pi) => {
+						lens(pi);
+						pi.on("session_start", () => {
+							lookupsWhenHandlerSettled = spawned.npmLookups;
+						});
+					};
+				},
+				responses: [endTurn("done")],
+			});
+			expect(
+				lookupsWhenHandlerSettled,
+				"no npm lookup spawn has been made when the handler settles",
+			).toBe(0);
+			expect(
+				await until(() => npm.queries() === 1, 10_000),
+				"the lookup still runs afterwards",
 			).toBe(true);
 			await handle.dispose();
 		});
