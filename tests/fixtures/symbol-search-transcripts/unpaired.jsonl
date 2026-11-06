@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"s","timestamp":"2026-11-03T00:00:00.000Z","cwd":"/work"}
+{"type":"message","id":"a-u1","parentId":null,"timestamp":"2026-11-03T00:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"u1","name":"symbol_search","arguments":{"query":"file:clients/missing.ts x"}}]}}
+{"type":"message","id":"a-u2","parentId":null,"timestamp":"2026-11-03T00:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"u2","name":"symbol_search","arguments":{"query":"file:clients/other.ts y"}}]}}
+{"type":"message","id":"r-u2","parentId":null,"timestamp":"2026-11-03T00:00:02.100Z","message":{"role":"toolResult","toolCallId":"u2","toolName":"symbol_search","content":[{"type":"text","text":"No files matched \"file:clients/other.ts y\".\nIndex covers 10 files.\n\nresult ok\nusage tokens=4 elapsed-ms=0 bytes=20 truncated=false"}],"details":{},"isError":false}}
