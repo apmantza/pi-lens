@@ -1,24 +1,20 @@
 /**
- * #5348. Two things the nightly clean-signal probe must not do:
- *   - credit a fixture's row to a launch it did not run (the typescript7 rows
- *     ran the classic server), and
- *   - rewrite the tracked docs/lsp-capability-matrix.md from a bare run.
- * The row attribution is driven through the real `createProbeFixture`; the
- * matrix write gate is pinned on comment-blanked source because
- * scripts/probe-clean-signal.mjs executes on import and spawns servers.
+ * #5348. The nightly clean-signal probe must not credit a fixture's row to a
+ * launch it did not run (the typescript7 rows ran the classic server). The
+ * row attribution is driven through the real `createProbeFixture`. The probe's
+ * other #5348 guard, the `--write-matrix` gate, runs the real script in
+ * probe-matrix-write-gate.test.ts.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import yaml from "../../clients/deps/js-yaml.js";
 import {
 	createProbeFixture,
 	type ProbeRow,
 } from "../../scripts/lib/probe-fixture.mjs";
 import { LSP_FIXTURES } from "../../scripts/smoke-tools.mjs";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
-import { stripSource } from "../support/sweep-kit.js";
 
 describe("a probe row names the launch it measured (#5348)", () => {
 	// Recurrence it prevents: scripts/probe-clean-signal.mjs never ran a
@@ -151,47 +147,5 @@ describe("a probe row names the launch it measured (#5348)", () => {
 			["typescript7-clean", "native-ts7"],
 			["effect-tsgo", "effect-tsgo"],
 		]);
-	});
-});
-
-describe("the probe leaves the tracked matrix alone unless asked (#5348)", () => {
-	// Recurrence it prevents: the first run of scripts/probe-clean-signal.mjs in
-	// a checkout rewrote the tracked docs/lsp-capability-matrix.md (the measurement
-	// lane had to `git checkout --` it). The write is now behind `--write-matrix`,
-	// and the nightly must pass it, or the refresh PR would carry no matrix.
-	// The flag is a string literal, so strings stay; comments are blanked, so a
-	// comment quoting the gate cannot satisfy it.
-	const source = stripSource(
-		fs.readFileSync(
-			path.join(process.cwd(), "scripts/probe-clean-signal.mjs"),
-			"utf8",
-		),
-		{ strings: "keep" },
-	);
-
-	it("returns from updateMatrix before reading or writing the doc when the flag is absent", () => {
-		expect(source).toContain(
-			'const writeMatrix = argv.includes("--write-matrix");',
-		);
-		const body = source.slice(source.indexOf("function updateMatrix("));
-		const gate = body.indexOf("if (!writeMatrix) {");
-		expect(gate).toBeGreaterThan(-1);
-		expect(body.slice(gate, body.indexOf("}", gate))).toMatch(/\breturn;/);
-		expect(gate).toBeLessThan(body.indexOf("fs.readFileSync(docPath"));
-		expect(gate).toBeLessThan(body.indexOf("fs.writeFileSync(docPath"));
-	});
-
-	it("keeps the nightly step on --write-matrix", () => {
-		const workflow = yaml.load(
-			fs.readFileSync(
-				path.join(process.cwd(), ".github/workflows/tool-smoke.yml"),
-				"utf8",
-			),
-		) as { jobs: Record<string, { steps: Array<{ run?: string }> }> };
-		const probeRuns = workflow.jobs["tool-smoke"].steps
-			.map((step) => step.run ?? "")
-			.filter((run) => run.includes("probe-clean-signal.mjs"));
-		expect(probeRuns).toHaveLength(1);
-		expect(probeRuns[0]).toContain("--write-matrix");
 	});
 });

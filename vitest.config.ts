@@ -988,6 +988,9 @@ export const wallClockBudgetInclude = [
 	// selection file; the same real hook chain over a git fixture.
 	"tests/scripts/pre-push-lock-admission.test.ts",
 	"tests/scripts/pre-push-targeted-tests.test.ts",
+	// #5348: the probe's --write-matrix gate is observed by running the real
+	// script and reading the doc it leaves (flake-shape admission).
+	"tests/scripts/probe-matrix-write-gate.test.ts",
 	"tests/scripts/prune-agent-worktrees.test.ts",
 	"tests/scripts/red-on-base.test.ts",
 	// #2619 review F1: the release-QA hermeticity canary spawns a REAL child
