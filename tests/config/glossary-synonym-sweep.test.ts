@@ -1238,7 +1238,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 122 -> 111 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 111 -> 112 (#5123): Groovy resolves its configured jar from pi's cwd
 		// before launching, one filesystem path use in the reviewed fix.
-		"clients/lsp/server.ts": 111,
+		// 111 -> 112 (#5335): `TypeScriptRoot` takes the agent directory's real
+		// path for an explicit agent tsconfig, one `path.dirname` use.
+		"clients/lsp/server.ts": 112,
 		"clients/lsp/session-roots.ts": 8,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
