@@ -537,6 +537,40 @@ describe("runner-helpers availability checker", () => {
 		expect(installerMod.resetPathWalkMemo).toHaveBeenCalledOnce();
 	});
 
+	// #5345 r1 F1: the deleted sweep's test was the only pin that the session
+	// reset clears the PATH-walk memo. This drives the real installer memo: a
+	// walk answers from the memo after its file is gone, and the reset makes
+	// the next walk fresh. Deleting the `resetPathWalkMemo()` call in
+	// `resetDispatchAvailabilityState` reds the last assertion.
+	it("clears the PATH-walk memo at the session boundary (#5345 F1)", async () => {
+		const installerMod = await import("../../../../clients/installer/index.js");
+		const real = await vi.importActual<
+			typeof import("../../../../clients/installer/index.js")
+		>("../../../../clients/installer/index.js");
+		const env = setupTestEnvironment("pi-lens-path-memo-reset-");
+		const savedPath = process.env.PATH;
+		const tool = path.join(env.tmpDir, "memo-reset-tool");
+		try {
+			fs.writeFileSync(tool, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+			process.env.PATH = env.tmpDir;
+			real.resetPathWalkMemo();
+			expect(await real.isSpawnableCommand("memo-reset-tool")).toBe(true);
+			fs.rmSync(tool);
+			// The file is gone, but the memo still answers: a hit, not a walk.
+			expect(await real.isSpawnableCommand("memo-reset-tool")).toBe(true);
+			vi.mocked(installerMod.resetPathWalkMemo).mockImplementation(
+				real.resetPathWalkMemo,
+			);
+			resetDispatchAvailabilityState();
+			expect(await real.isSpawnableCommand("memo-reset-tool")).toBe(false);
+		} finally {
+			vi.mocked(installerMod.resetPathWalkMemo).mockReset();
+			if (savedPath === undefined) delete process.env.PATH;
+			else process.env.PATH = savedPath;
+			env.cleanup();
+		}
+	});
+
 	it("keeps structural replaceWithRule on the scoped fallback the instance resolved (#4193)", async () => {
 		const env = setupTestEnvironment("pi-lens-scoped-rule-");
 		try {

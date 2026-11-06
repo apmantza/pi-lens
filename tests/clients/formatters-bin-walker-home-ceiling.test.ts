@@ -31,7 +31,7 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 import {
-	findLocalBinsUpwards,
+	findLocalBinsAt,
 	findLocalBinUpwards,
 	type LocalBinWalkOptions,
 	VENV_BIN_DIRS,
@@ -285,87 +285,21 @@ describe("findLocalBinUpwards candidate order (#2544 F4)", () => {
 
 	/**
 	 * `windowsExt: ""` means "the caller already spelled every name it wants" —
-	 * the ast-grep sweep passes `ast-grep.cmd`/`ast-grep.exe`/`ast-grep` in a
-	 * shell-dependent order that a single `windowsExt` cannot express. Without
-	 * that case the expansion produces the bare name TWICE, and the collect-all
-	 * walker reports the same binary twice (one wasted `--version` spawn per
-	 * duplicate).
+	 * for names one `windowsExt` cannot express. Without that case the expansion
+	 * produces the bare name TWICE, and the collect-all arity reports the same
+	 * binary twice (one wasted `--version` spawn per duplicate). Only the
+	 * collect-all arity can show a duplicate: the first-match walk hides it.
 	 */
 	it("does not double-expand a name when windowsExt is empty", () => {
-		const { fakeHome, project } = fixture();
+		const { project } = fixture();
 		try {
 			expect(
-				findLocalBinsUpwards(["ruff"], project, {
+				findLocalBinsAt(["ruff"], project, {
 					windowsExt: "",
 					binDirs: [path.join(".venv", "Scripts")],
-					homeDir: fakeHome,
 					isWindows: true,
 				}),
 			).toEqual([path.join(project, ".venv", "Scripts", "ruff")]);
-		} finally {
-			removeTempDirSync(tmpDir);
-		}
-	});
-});
-
-/**
- * `findLocalBinsUpwards` — the collect-all arity behind the ast-grep probe
- * sweep (`runner-helpers.ts`) and vulture's venv candidates
- * (`dead-code-client.ts`). Both hand-rolled their own UNCEILINGED climb before
- * #2544 review F1 precisely because the singular helper could not say "all of
- * them": `findNodeBinRoots` returned the maintainer's real `$HOME` as an
- * ast-grep bin root on any box with a home-level `node_modules` (#2514).
- */
-describe("findLocalBinsUpwards (#2544 F1)", () => {
-	let tmpDir: string;
-
-	function fixture() {
-		const env = setupTestEnvironment("pi-lens-bin-walker-all-");
-		tmpDir = env.tmpDir;
-		const fakeHome = path.join(tmpDir, "home");
-		const project = path.join(fakeHome, "proj");
-		const nested = path.join(project, "pkg");
-		fs.mkdirSync(nested, { recursive: true });
-		return { fakeHome, project, nested };
-	}
-
-	const binName = (binary: string) => (isWin ? `${binary}.cmd` : binary);
-
-	it("returns every ancestor match, nearest first, in tools order", () => {
-		const { fakeHome, project, nested } = fixture();
-		try {
-			plantBin(nested, path.join("node_modules", ".bin", binName("sg")));
-			plantBin(nested, path.join("node_modules", ".bin", binName("ast-grep")));
-			plantBin(project, path.join("node_modules", ".bin", binName("ast-grep")));
-
-			expect(
-				findLocalBinsUpwards(["ast-grep", "sg"], nested, {
-					homeDir: fakeHome,
-				}),
-			).toEqual([
-				path.join(nested, "node_modules", ".bin", binName("ast-grep")),
-				path.join(nested, "node_modules", ".bin", binName("sg")),
-				path.join(project, "node_modules", ".bin", binName("ast-grep")),
-			]);
-		} finally {
-			removeTempDirSync(tmpDir);
-		}
-	});
-
-	it("stops at the HOME ceiling instead of collecting a home-level bin (#2514)", () => {
-		const { fakeHome, project, nested } = fixture();
-		try {
-			plantBin(project, path.join("node_modules", ".bin", binName("ast-grep")));
-			plantBin(
-				fakeHome,
-				path.join("node_modules", ".bin", binName("ast-grep")),
-			);
-
-			expect(
-				findLocalBinsUpwards(["ast-grep"], nested, { homeDir: fakeHome }),
-			).toEqual([
-				path.join(project, "node_modules", ".bin", binName("ast-grep")),
-			]);
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

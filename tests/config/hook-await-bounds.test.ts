@@ -2336,8 +2336,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// loop is bounded by the fact's fixed gate list, but like every sibling
 	// here it stays unbounded from the hook's signal until #2523 AC4.
 	// #5345: 37 -> 30 — the deleted module-level ast-grep sweep carried seven
-	// unbounded awaits (its spawn probes, `findGlobalBinary` and `ensureTool`
-	// hops); the worklist shrinks with the sweep, nothing new is unbounded.
+	// unbounded awaits (two spawns in `probeAstGrepCommandAsync`, four of its
+	// call sites and `findGlobalBinary` in `isSgAvailableAsync`); the worklist
+	// shrinks with the sweep, nothing new is unbounded.
 	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;

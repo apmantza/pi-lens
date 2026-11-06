@@ -125,9 +125,9 @@ const resolvedSgBrand: unique symbol = Symbol("resolved-sg-command");
  * package, managed install, or the probed scoped `npx`). The brand symbol is
  * not exported and the only producer is `SgRunner.getSgCommand`, so a spawn
  * that needs the resolved binary cannot be handed a hand-built `{ cmd, args }`
- * or the module sweep's `npx` fallback (`SgNpxFallbackCommand`): that is a
- * compile error, not a runtime surprise (#5247, where the temp scans ran the
- * fallback against a binary the instance had already found).
+ * or an `npx` fallback resolved outside the instance: that is a compile error,
+ * not a runtime surprise (#5247, where the temp scans ran such a fallback
+ * against a binary the instance had already found).
  */
 export interface ResolvedSgCommand {
 	readonly [resolvedSgBrand]: true;
