@@ -821,9 +821,7 @@ export class ClientRegistry {
 	async restartPrimaryClientsUnder(root: string): Promise<string[]> {
 		const rootKey = normalizeMapKey(root);
 		const overlaps = (clientRoot: string) =>
-			clientRoot === rootKey ||
-			clientRoot.startsWith(`${rootKey}/`) ||
-			rootKey.startsWith(`${clientRoot}/`);
+			isWithinForm(clientRoot, rootKey) || isWithinForm(rootKey, clientRoot);
 		return this.withClientSpawnGate(async () => {
 			if (this.isDestroyed) return [];
 			const victims: Array<[string, LSPClientInfo]> = [];

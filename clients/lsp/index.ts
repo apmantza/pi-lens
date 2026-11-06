@@ -80,6 +80,7 @@ import {
 } from "./pending-aux-coverage.js";
 import {
 	isAtOrAboveHomeDir,
+	isWithinForm,
 	normalizeMapKey,
 	realpathOrResolve,
 	toPosix,
@@ -2882,9 +2883,7 @@ export class LSPService {
 			const serverId = separator >= 0 ? key.slice(0, separator) : key;
 			const root = normalizeMapKey(client.root);
 			const sameOrNested =
-				root === normalizedCwd ||
-				root.startsWith(`${normalizedCwd}/`) ||
-				normalizedCwd.startsWith(`${root}/`);
+				isWithinForm(root, normalizedCwd) || isWithinForm(normalizedCwd, root);
 			if (!sameOrNested) continue;
 			entries.push({ clientKey: key, serverId, client });
 		}

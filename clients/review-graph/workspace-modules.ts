@@ -18,7 +18,7 @@ import {
 	isExcludedDirName,
 	type ProjectIgnoreMatcher,
 } from "../file-utils.js";
-import { normalizeMapKey, toPosix } from "../path-utils.js";
+import { isWithinForm, normalizeMapKey, toPosix } from "../path-utils.js";
 import { getWorkspaceManifestMarkers } from "../workspace-topology.js";
 
 export interface WorkspaceModule {
@@ -396,7 +396,7 @@ export function findModuleForPath(
 	const normalized = normalizeMapKey(filePath);
 	let best: WorkspaceModule | undefined;
 	for (const mod of graph.modules.values()) {
-		if (normalized === mod.root || normalized.startsWith(`${mod.root}/`)) {
+		if (isWithinForm(normalized, mod.root)) {
 			if (!best || mod.root.length > best.root.length) best = mod;
 		}
 	}
