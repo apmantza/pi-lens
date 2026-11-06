@@ -1,13 +1,14 @@
 {
-  "$comment": "PR-Synopsis risk tier paths, read from the default branch (a PR cannot lower its own tier). The App's default lists (greenfield src/tier.ts DEFAULT_CONFIG, 9c6c645) copied whole, since this file replaces them; gatePaths adds the governance census and ratchet tests, the ratchet baselines and the two TLA+ registries, which gate every later PR (2026-11-06: #5339 added a census and scored light). Globs: ** any depth, * within one segment.",
+  "$comment": "PR-Synopsis risk tier paths, read from the default branch (a PR cannot lower its own tier). The App's default lists (greenfield src/tier.ts DEFAULT_CONFIG, 9c6c645) copied whole, since this file replaces them; gatePaths adds the governance census and ratchet tests, the ratchet baselines and the two TLA+ registries, which gate every later PR. The App scores one point per flag and 0-1 is light, so this flag alone does not move a PR off light. Globs: ** any depth, * within one segment.",
   "tier": {
     "gatePaths": [
       "package.json", "package-lock.json", ".github/dependabot.yml", "tsconfig.json", "tsconfig.build.json", "tsconfig.dist.json",
       ".github/workflows/**", ".github/actions/**", ".github/release.yml", ".husky/**", ".oxlintrc.json", "knip.jsonc", ".jscpd.json",
       ".dependency-cruiser.cjs", "vitest.config.ts", "vitest.mutation.config.ts", "tsconfig.strict-indexed.json", "tsconfig.strict-optional.json",
       "tsconfig.mutation.json", "stryker.config.mjs", "stryker.pertest.config.mjs",
-      "tests/config/*governance*.test.ts", "tests/config/*census*.test.ts", "tests/config/*ratchet*.test.ts",
-      "**/*.baseline.json", "formal/coverage-map.json", "formal/switch-pins.json"
+      "tests/**/*governance*.test.ts", "tests/**/*census*.test.ts", "tests/**/*ratchet*.test.ts",
+      "**/*.baseline.json", "tests/*/*-baseline.json", "scripts/*-ratchet.json", "scripts/governance-rules/baseline.json",
+      "rules/ast-grep-rules/self-scan-baseline.json", "formal/coverage-map.json", "formal/switch-pins.json"
     ],
     "mechanismPaths": [
       "clients/**", "tools/**", "mcp/**", "index.ts", "i18n.ts", "rules/**", "config/**", "skills/**", "scripts/**", ".husky/**", ".claude/**", "formal/**", "cases/**",
