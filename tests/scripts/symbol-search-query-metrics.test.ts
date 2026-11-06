@@ -386,7 +386,7 @@ describe("symbol_search query metrics — corpus failures", () => {
 	}
 
 	it("exits non-zero and prints a zero file count for an empty directory", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ssqm-empty-"));
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ssqm-empty-"));
 		try {
 			const { code, stderr } = runMain([dir]);
 			expect(code).toBe(1);
@@ -397,7 +397,7 @@ describe("symbol_search query metrics — corpus failures", () => {
 	});
 
 	it("exits non-zero with the same message for a missing directory", () => {
-		const dir = path.join(os.tmpdir(), "ssqm-absent-corpus-dir");
+		const dir = path.join(os.tmpdir(), "pi-lens-ssqm-absent-corpus-dir");
 		const { code, stderr } = runMain([dir]);
 		expect(code).toBe(1);
 		expect(stderr).toMatch(/does not exist: .*\(0 files read\)/);
