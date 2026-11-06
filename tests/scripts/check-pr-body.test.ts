@@ -2821,7 +2821,7 @@ describe("PR body lint (#1844)", () => {
 		it("accepts #5018's helm-render respell that keeps one `return null`", () => {
 			expect(
 				observabilityErrors(
-					hunk("clients/dispatch/runners/helm-render.ts", [
+					hunk("clients/example.ts", [
 						["-", "\tif (!isWithin(chartRoot, candidate)) return null;"],
 						[
 							"+",
