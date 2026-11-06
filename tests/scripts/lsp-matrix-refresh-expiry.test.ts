@@ -1171,7 +1171,7 @@ describe("#4512 each row records the server version and install source", () => {
 		expect(cellOf(second.text, "vue", "install")).toBe("pi-lens-auto");
 	});
 
-	it("leaves the cells of a server the run could not resolve untouched, and never appends a row", () => {
+	it("leaves unresolved cells untouched and appends measured servers", () => {
 		const first = mergeCharacterization(
 			FIXTURE,
 			ROWS,
@@ -1184,8 +1184,17 @@ describe("#4512 each row records the server version and install source", () => {
 		const second = mergeCharacterization(first.text, ROWS, new Map(), "ci")!;
 		expect(cellOf(second.text, "vue", "version")).toBe("3.0.9");
 		expect(cellOf(second.text, "svelte", "version")).toBe("—");
+		const appended = mergeCharacterization(
+			FIXTURE,
+			[{ lang: "go", mode: "pull" }],
+			new Map([["go", { install: "global-path", version: "0.1.0" }]]),
+			"ci",
+		)!;
+		expect(cellOf(appended.text, "go", "mode")).toBe("pull");
+		expect(cellOf(appended.text, "go", "version")).toBe("0.1.0");
+		expect(cellOf(appended.text, "go", "install")).toBe("global-path");
 		expect(parseTable(second.text, MARKER)!.rows).toHaveLength(
-			parseTable(FIXTURE, MARKER)!.rows.length,
+			parseTable(FIXTURE, MARKER)!.rows.length + 1,
 		);
 	});
 

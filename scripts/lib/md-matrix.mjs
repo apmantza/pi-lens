@@ -1128,10 +1128,11 @@ export function describeRaisedCells(
  * Merge one characterize-lsp run into the capability matrix: the measured
  * `mode` (and the Tier 1 for a pull server) plus the #4512 provenance
  * (`version`, `install`). MERGE, don't overwrite: a row this run could not
- * measure keeps its prior value (#390), and a row absent from the doc is never
- * appended (the matrix is curated). Rows whose mode came back
+ * measure keeps its prior value (#390). Rows whose mode came back
  * `unknown`/`no-lsp`/error are not written, but their provenance still is: a
- * server that did not answer still ran some version of some install.
+ * server that did not answer still ran some version of some install. A newly
+ * measured server is appended so the nightly's measured population cannot
+ * disappear from the matrix.
  *
  * @param {string} text  the current doc
  * @param {Array<{ lang: string, mode: string }>} rows  this run's mode rows
@@ -1172,14 +1173,13 @@ export function mergeCharacterization(
 		if (p.version) cell.version = p.version;
 		cells.set(lang, cell);
 	}
-	const merged = mergeRows(
-		tbl.rows,
-		tbl.header,
-		[...cells.values()],
-		"lang",
-		["mode", "tier", "src", "version", "install"],
-		{ updateOnly: true },
-	);
+	const merged = mergeRows(tbl.rows, tbl.header, [...cells.values()], "lang", [
+		"mode",
+		"tier",
+		"src",
+		"version",
+		"install",
+	]);
 	return {
 		text: replaceTable(migrated, marker, tbl.header, tbl.sep, merged) ?? text,
 		measured,
