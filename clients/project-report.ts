@@ -322,6 +322,9 @@ function computeTrust(
 			case "name-only":
 				nameOnly += 1;
 				break;
+			// unresolved and unset edges are not in the resolution sample.
+			case "unresolved":
+			case undefined:
 			default:
 				break;
 		}

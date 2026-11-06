@@ -72,6 +72,7 @@ export function normalizeBiomeSeverity(
 			return "hint";
 		case "warning":
 			return "warning";
+		case undefined:
 		default:
 			return "warning";
 	}

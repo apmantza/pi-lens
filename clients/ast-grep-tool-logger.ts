@@ -143,6 +143,7 @@ export function astGrepRemediationHint(kind: AstGrepErrorKind): string | null {
 			return "Hint: the operation timed out — scope `paths` to specific files/folders, or narrow the pattern.";
 		case "json_parse_failed":
 			return "Hint: ast-grep produced output that could not be parsed — retry with a simpler pattern; the installed CLI version may be incompatible.";
+		case "other":
 		default:
 			return "Hint: verify the pattern is a single valid AST node for this `lang` (use ast_grep_search with dump=true to discover node kinds), or fall back to grep for plain-text search.";
 	}

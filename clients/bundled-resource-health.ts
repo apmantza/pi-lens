@@ -87,6 +87,7 @@ export function describeBundledResourceHealth(
 			return `cannot read ${dir} (${health.fsErrorCode})`;
 		case "empty":
 			return emptyDescription;
+		case "healthy":
 		default:
 			// unreachable for the "healthy" case — callers only report unhealthy ones.
 			return `${dir}: unexpected health status`;

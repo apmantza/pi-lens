@@ -935,6 +935,8 @@ function sourceTagForToolId(toolId: string): ProbeEvidence["source"] {
 			return "archive-dist";
 		case "maven":
 			return "maven-jar";
+		case "gem":
+		case undefined:
 		default:
 			// "gem" has no CLI runner behind this seam yet, and an unknown toolId
 			// means the registry lookup itself missed — either way, no tag beats

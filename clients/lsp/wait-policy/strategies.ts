@@ -32,6 +32,7 @@ function astGrepNativePackageName(
 	platform: NodeJS.Platform,
 	arch: string,
 ): string | undefined {
+	// oxlint-disable-next-line typescript/switch-exhaustiveness-check -- ast-grep ships native packages only for win32, darwin and linux (the @ast-grep/cli optionalDependencies); every other platform returns undefined by design, and a case for each of the eight others would add eight `return undefined` lines with no decision behind them.
 	switch (platform) {
 		case "win32":
 			if (arch === "x64") return "@ast-grep/cli-win32-x64-msvc";
