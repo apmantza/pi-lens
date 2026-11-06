@@ -2965,19 +2965,18 @@ async function classifyAgentLevelMarker(
 ): Promise<"config" | "other" | undefined> {
 	const agentDir = path.dirname(extensionRootKey);
 	if (!agentDir || agentDir === extensionRootKey) return undefined;
-	const exists = async (pattern: string): Promise<boolean> => {
+	const configMarkers = tsConfigMarkersForFile(file);
+	for (const pattern of [
+		...configMarkers,
+		...TS_CONFIG_MARKERS,
+		...TS_TOOLING_MARKERS,
+	]) {
 		try {
 			await stat(path.join(agentDir, pattern));
-			return true;
+			return configMarkers.includes(pattern) ? "config" : "other";
 		} catch {
-			return false;
+			/* not found, try next */
 		}
-	};
-	for (const pattern of tsConfigMarkersForFile(file)) {
-		if (await exists(pattern)) return "config";
-	}
-	for (const pattern of [...TS_CONFIG_MARKERS, ...TS_TOOLING_MARKERS]) {
-		if (await exists(pattern)) return "other";
 	}
 	return undefined;
 }
