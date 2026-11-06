@@ -6445,6 +6445,7 @@ export function extractSymbolsAndRefsFromGraph(graph: ReviewGraph): {
 			case "property":
 			case "function":
 				return node.symbolKind;
+			case undefined:
 			default:
 				return "function";
 		}

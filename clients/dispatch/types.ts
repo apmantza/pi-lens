@@ -718,6 +718,7 @@ export function reachedNoVerdict(
 				!isRunnerSkipReason(result.skipReason) ||
 				result.skipReason === "not-enabled"
 			);
+		case "succeeded":
 		default:
 			return false;
 	}

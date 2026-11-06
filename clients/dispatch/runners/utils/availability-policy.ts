@@ -271,7 +271,10 @@ export function describeInstallAttempt(
 				install: "unavailable",
 				...(reason && { installReason: reason }),
 			};
+		case "declined":
+		case "skipped":
 		default:
+			// Both leave nothing run; `reason` says which (see the doc above).
 			return {
 				install: "not-attempted",
 				...(reason && { installReason: reason }),

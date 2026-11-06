@@ -56,6 +56,7 @@ export function renderPostAutofixNotice(
 			return `⚠️ **File was modified by auto-format/fix. You MUST re-read ${notice.targetPath} before making any further edits — the authoritative content is too large to attach.**${fileList}`;
 		case "aggregate-budget-degraded":
 			return `⚠️ **File was modified by auto-format/fix. You MUST re-read ${notice.targetPath} before making any further edits — the aggregate authoritative content for this command is too large to attach.**${fileList}`;
+		case "none":
 		default:
 			return `⚠️ **File was modified by auto-format/fix. You MUST re-read modified file(s) before making any further edits — the content on disk has changed (whitespace, indentation, quotes, or code). Editing from memory will produce mismatches.**${fileList}`;
 	}

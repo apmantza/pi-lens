@@ -338,6 +338,31 @@ describe("lint:js:promises (#4402 — floating promises in shipped code)", () =>
 			"await-thenable",
 			(text: string) => text.replace("return await load()", "return load()"),
 		],
+		[
+			// #5331: a union switch whose `default` absorbs a member nobody listed.
+			// The default is not exhaustive for a union (considerDefaultExhaustiveForUnions
+			// stays off), so a new member would reach it silently; the rule reds it.
+			"a union switch whose default absorbs an unlisted member",
+			[
+				'export type Mode = "read" | "write" | "admin";',
+				"export function label(mode: Mode): string {",
+				"\tswitch (mode) {",
+				'\t\tcase "read":',
+				'\t\t\treturn "R";',
+				'\t\tcase "write":',
+				'\t\t\treturn "W";',
+				"\t\tdefault:",
+				'\t\t\treturn "?";',
+				"\t}",
+				"}",
+			],
+			"switch-exhaustiveness-check",
+			(text: string) =>
+				text.replace(
+					"\t\tdefault:",
+					'\t\tcase "admin":\n\t\t\treturn "A";\n\t\tdefault:',
+				),
+		],
 	] as const;
 
 	function readScript(): string {
@@ -359,6 +384,7 @@ describe("lint:js:promises (#4402 — floating promises in shipped code)", () =>
 		expect(script).toContain("-D typescript/await-thenable");
 		expect(script).toContain("-D typescript/no-floating-promises");
 		expect(script).toContain("-D typescript/no-misused-promises");
+		expect(script).toContain("-D typescript/switch-exhaustiveness-check");
 		expect(script.endsWith(` ${ROOTS}`)).toBe(true);
 	});
 

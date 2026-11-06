@@ -171,6 +171,7 @@ interface PyrightDiagnostic {
 export function normalizePyrightSeverity(
 	raw: PyrightDiagnostic["severity"] | undefined,
 ): Diagnostic["severity"] {
+	// oxlint-disable-next-line typescript/switch-exhaustiveness-check -- warning and an absent severity both take the deliberate warning fallback (#1802, the comment below); a case "warning" would be the redundant branch that comment declines.
 	switch (raw) {
 		case "error":
 			return "error";
