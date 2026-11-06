@@ -18,4 +18,19 @@ A `user` fragment carries an `area` and the one shape
 `- **Headline sentence.** Body. (refs #N)`; `.changelog/README.md` lists the
 rules, and internal fragments are exempt.
 
+### Release roll: duplicate entries and highlights
+
+After `npm run changelog:release` rolls the fragments into `CHANGELOG.md`, and
+before the release PR opens:
+
+1. Run `node scripts/rollup-changelog.mjs --duplicates <version>` and paste its
+   checklist into the release PR body. It flags entry pairs of one section and
+   one area whose headlines share most of their words (overlap 0.4 or more) or
+   that share three or more code spans, and it edits no file. The maintainer
+   merges, keeps or dismisses each pair in that PR; an unchecked box is not a
+   gate.
+2. The orchestrator drafts 3 to 5 highlights for `CHANGELOG-USER.md` and the
+   release body in the same PR. The maintainer approves both there. No model
+   runs in CI and no step needs a secret.
+
 </important>

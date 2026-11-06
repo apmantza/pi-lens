@@ -6,9 +6,11 @@ import {
 	EMPTY_UNRELEASED,
 	INTERNAL_HEADING,
 	extractSection,
+	findDuplicateEntries,
 	lintSectionBody,
 	parseSectionEntries,
 	parseSections,
+	renderDuplicateChecklist,
 	userEntryShapeProblems,
 } from "./lib/changelog.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
@@ -303,6 +305,25 @@ export function checkUserChangelog(options = {}) {
 		);
 }
 
+// The release PR body's duplicate checklist for one CHANGELOG.md section (#5351).
+// It reads the file and edits nothing; the maintainer resolves each box by hand.
+export function duplicateChecklist(
+	version,
+	{
+		rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+	} = {},
+) {
+	const body = extractSection(
+		fs.readFileSync(path.join(rootDir, "CHANGELOG.md"), "utf8"),
+		version,
+	);
+	if (body === null)
+		throw new Error(
+			`CHANGELOG.md has no [${version}] section; usage: node scripts/rollup-changelog.mjs --duplicates <version>`,
+		);
+	return renderDuplicateChecklist(version, findDuplicateEntries(body));
+}
+
 export function rollupChangelog(
 	version,
 	{
@@ -399,9 +420,16 @@ if (isMainModule(import.meta.url)) {
 		}
 	} else if (version === "--user") {
 		writeUserChangelog();
+	} else if (version === "--duplicates") {
+		try {
+			console.log(duplicateChecklist(process.argv[3] ?? ""));
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : error);
+			process.exitCode = 1;
+		}
 	} else if (!version) {
 		console.error(
-			"Usage: node scripts/rollup-changelog.mjs <version>|--check|--user",
+			"Usage: node scripts/rollup-changelog.mjs <version>|--check|--user|--duplicates <version>",
 		);
 		process.exitCode = 1;
 	} else {

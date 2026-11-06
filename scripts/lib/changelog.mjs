@@ -274,12 +274,14 @@ function finalize(current) {
  * keep first-seen order; entries before the first heading are skipped; `### Internal`
  * entries are counted, not bucketed. A `#### <area title>` line under a section
  * heading (#5351) names the area of the entries below it: `areas` holds, per
- * section, the area title of each bucket item (`null` before any area heading).
+ * section, the area title of each bucket item (`null` before any area heading),
+ * and `texts` holds each item's whole entry (bullet marker out, continuation
+ * lines joined) for the duplicate finder (#5351).
  * Any other `####` line is an ordinary heading, as before.
  *
  * @param {string} body a section body from extractSection()
  * @param {{ maxGist?: number, gist?: boolean }} [opts]
- * @returns {{ order: string[], buckets: Map<string, string[]>, areas: Map<string, Array<string | null>>, internalCount: number }}
+ * @returns {{ order: string[], buckets: Map<string, string[]>, areas: Map<string, Array<string | null>>, texts: Map<string, string[]>, internalCount: number }}
  */
 export function parseSectionEntries(body, opts = {}) {
 	const maxGist = opts.maxGist ?? 220;
@@ -288,6 +290,7 @@ export function parseSectionEntries(body, opts = {}) {
 	const order = [];
 	const buckets = new Map();
 	const areas = new Map();
+	const texts = new Map();
 	let heading = null;
 	let area = null;
 	let internalCount = 0;
@@ -306,6 +309,7 @@ export function parseSectionEntries(body, opts = {}) {
 			if (!buckets.has(heading)) {
 				buckets.set(heading, []);
 				areas.set(heading, []);
+				texts.set(heading, []);
 				order.push(heading);
 			}
 			continue;
@@ -346,14 +350,16 @@ export function parseSectionEntries(body, opts = {}) {
 				.get(heading)
 				.push(`${gist ? `- ${bold[1]} — ${gist}` : `- ${bold[1]}`}${ref}`);
 			areas.get(heading).push(area);
+			texts.get(heading).push(line.slice(2));
 			continue;
 		}
 		const plain = line.match(/^- (\S.*)$/);
 		if (!plain) continue;
 		buckets.get(heading).push(`- ${plainGist(plain[1])}`);
 		areas.get(heading).push(area);
+		texts.get(heading).push(plain[1]);
 	}
-	return { order, buckets, areas, internalCount };
+	return { order, buckets, areas, texts, internalCount };
 }
 
 /**
@@ -472,6 +478,113 @@ function cleanGist(rest, maxGist) {
 	const period = text.search(/\.\s/);
 	const first = period >= 0 ? text.slice(0, period) : text;
 	return first.length > 0 && first.length <= maxGist ? first : "";
+}
+
+// Likely-duplicate finder (#5351): two entries of one section and one area that
+// describe the same change. Two signals: the headlines share most of their
+// words, or the entries share enough code spans (tool names, flags, file
+// extensions). Both bars are set from the CHANGELOG sections of 4.4.5 to 4.4.9.
+// The v4.4.9 LSP-timeout headlines overlap at 0.42; the closest distinct pair
+// in 4.4.9 scores 0.27 and in 4.4.7 to 4.4.9 0.33, so the bar sits at 0.4. The
+// two v4.4.9 Groovy headlines share one word, but the entries share six code
+// spans; no other pair of 4.4.5 to 4.4.9 shares more than two.
+export const DUPLICATE_HEADLINE_OVERLAP = 0.4;
+export const DUPLICATE_SHARED_CODE_SPANS = 3;
+
+const HEADLINE_STOP_WORDS = new Set(
+	"a an and are as at be by for from in instead into is it its longer no not now of on one only or still that the then this to when with".split(
+		" ",
+	),
+);
+
+// The bold headline of an entry, else its first sentence, without references.
+function entryHeadline(text) {
+	const bold = text.match(/^\*\*(.+?)\*\*/);
+	return (bold ? bold[1] : firstSentence(text)).replace(
+		/\s*\((?:refs?|closes?)? ?#\d+(?:, #\d+)*\)/gi,
+		"",
+	);
+}
+
+// Lowercase words of a headline: code spans keep their text, punctuation, `_`
+// and `-` split words, stop words go, and a trailing `s` folds plurals.
+function headlineWords(headline) {
+	return new Set(
+		headline
+			.toLowerCase()
+			.split(/[^a-z0-9]+/)
+			.filter((word) => word.length > 1 && !HEADLINE_STOP_WORDS.has(word))
+			.map((word) =>
+				word.length > 3 && /[^s]s$/.test(word) ? word.slice(0, -1) : word,
+			),
+	);
+}
+
+/**
+ * Likely duplicate entry pairs of a section body, never an edit. Only entries
+ * under the same `###` heading and the same `####` area (or both with no area)
+ * are compared, so a pair in two sections or two areas is never reported.
+ *
+ * @param {string} body a section body from extractSection()
+ * @returns {Array<{ section: string, area: string | null, headlines: [string, string], reason: string }>}
+ */
+export function findDuplicateEntries(body) {
+	const { order, areas, texts } = parseSectionEntries(body);
+	const pairs = [];
+	for (const section of order) {
+		const entries = texts.get(section).map((text, i) => ({
+			area: areas.get(section)[i],
+			headline: entryHeadline(text),
+			words: headlineWords(entryHeadline(text)),
+			spans: new Set((text.match(CODE_SPAN) ?? []).map((span) => span.trim())),
+		}));
+		for (let i = 0; i < entries.length; i++) {
+			for (let j = i + 1; j < entries.length; j++) {
+				const [a, b] = [entries[i], entries[j]];
+				if (a.area !== b.area) continue;
+				const sharedWords = [...a.words].filter((word) =>
+					b.words.has(word),
+				).length;
+				const overlap =
+					sharedWords / (a.words.size + b.words.size - sharedWords || 1);
+				const sharedSpans = [...a.spans].filter((span) =>
+					b.spans.has(span),
+				).length;
+				const reason =
+					overlap >= DUPLICATE_HEADLINE_OVERLAP
+						? `headline overlap ${overlap.toFixed(2)}`
+						: sharedSpans >= DUPLICATE_SHARED_CODE_SPANS
+							? `${sharedSpans} shared code spans`
+							: null;
+				if (reason)
+					pairs.push({
+						section,
+						area: a.area,
+						headlines: [a.headline, b.headline],
+						reason,
+					});
+			}
+		}
+	}
+	return pairs;
+}
+
+/**
+ * The Markdown checklist the release PR body carries: one unchecked box per
+ * pair for the maintainer to merge, keep or dismiss by hand.
+ *
+ * @param {string} version
+ * @param {ReturnType<typeof findDuplicateEntries>} pairs
+ * @returns {string}
+ */
+export function renderDuplicateChecklist(version, pairs) {
+	const lines = [`### Possible duplicate changelog entries (${version})`, ""];
+	if (!pairs.length) lines.push("None found.");
+	for (const { section, area, headlines, reason } of pairs)
+		lines.push(
+			`- [ ] ${section}${area ? ` / ${area}` : ""} (${reason}): "${headlines[0]}" and "${headlines[1]}"`,
+		);
+	return lines.join("\n");
 }
 
 /**
