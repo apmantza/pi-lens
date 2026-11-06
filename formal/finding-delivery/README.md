@@ -36,7 +36,7 @@ the gate judges against, so a wrong stamp cannot excuse itself.
 
 | Action | What it abstracts | Source |
 |---|---|---|
-| `Write(lc, b)` | an outside write (git checkout, an external editor or formatter); `lc` says whether the flagged line changed, `b` is the new verdict | the filesystem; read as `mtimeMs` by `statFindingPath` |
+| `Write(c, b)` | an outside write (git checkout, an external editor or formatter); `c` is the flagged line's new content, one of two identities, so a write can restore an earlier content; `b` is the new verdict | the filesystem; read as `mtimeMs` by `statFindingPath` |
 | `Delete` | an outside deletion | the filesystem; `FindingPathFacts` `missing` |
 | `Edit(cov)` | the turn's cascade run; it observes the neighbour when `cov`, stamped with the run's read bound | `clients/dispatch/integration.ts` `computeCascadeForFile` (`checkedAt: cascadeStart`) |
 | `Scan` | the scanner takes a scan; the store's `scannedAt` is its start | `clients/advisory-provenance.ts` (store-freshness `Stamp = "start"`) |
@@ -59,7 +59,11 @@ the secrets lanes),
 finding whose mark still applies, on the live arm and, under
 `PolicyArms = "both"`, on the stale arm (#1617, #1625). A strict (false-
 positive) mark applies only while the flagged line holds the content that was
-marked (`Anchor = "line"`).
+marked (`Anchor = "line"`). The anchor is the line's content, not a count of
+edits: a mark made at content A, a write of B and a write back to A applies
+again, as `computeStrictAnchor` hashes the line
+(`clients/diagnostic-dispositions.ts:273`, `strictAnchorSpan`). The model carries two content identities (`Contents`) so
+that path is reachable; a third adds no new case for a single mark.
 
 ## Invariants
 
@@ -81,6 +85,7 @@ table names it), except `TypeOK`, which every config checks.
 | `NoCachedAfterDelete` | the cached store never delivers a finding whose file was deleted after the scan (#1460) |
 | `NoStaleCachedAtFull` | the cached store never delivers a finding at full authority (with its line) when its file was written after the scan |
 | `NoCachedStaleDrop` | the cached store demotes a written file's finding; it never drops it |
+| `CachedDelivered` | an unmarked cached finding on a present file is delivered: `full` while the file is unchanged since the scan, `demoted` once it was written; no arm silences it |
 | `TypeOK` | |
 
 ## Switches
@@ -102,6 +107,7 @@ The as-built value first, then the pre-fix value.
 | `CachedGate` | `"freshness"` | `"keepMissing"` | `MutCachedKeepMissing` | `NoCachedAfterDelete` | the secrets lanes' `onMissing: "drop"` (#1460) |
 | | | `"noStale"` | `MutCachedNoStale` | `NoStaleCachedAtFull` | the stale verdict: an edited file's finding keeps its line (#1622) |
 | | | `"dropStale"` | `MutCachedDropStale` | `NoCachedStaleDrop` | demote, never drop, a finding whose file was edited |
+| | | `"silence"` | `MutCachedSilence` | `CachedDelivered` | a live, unmarked finding delivered nowhere |
 
 `StampAt = "delivery"` and `NeighbourGate = "none" | "drop"` were the #4495
 branch's own earlier rounds, not master: master never had them (the same note
@@ -110,8 +116,8 @@ as `formal/cascade-delivery`). The other mutant values (`keepNamed`,
 `"freshness"`) are single-line deletions of a gate rule, each checked against
 the code's own test through the existing pins (`NeighbourGate`'s tests cover
 `keepNamed` and `nameDeleted`; the two new pins cover the others); `"keepMissing"`
-is also what the govulncheck lane does on purpose (`onMissing: "demote"`). `AsBuilt` sets every switch to its as-built
-value and passes. Each mutant flips one switch and checks `TypeOK` with the
+is also what the govulncheck lane does on purpose (`onMissing: "demote"`).
+`AsBuilt` sets every switch to its as-built value and passes. Each mutant flips one switch and checks `TypeOK` with the
 invariant it breaks. `Kinds`, `OutsideKinds`, `CanMark`, `MaxClk` and
 `MaxTurns` are scenario bounds. Every switch is pinned in
 `formal/switch-pins.json` to the test that drives the real code.

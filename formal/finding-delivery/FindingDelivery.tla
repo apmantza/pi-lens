@@ -33,9 +33,10 @@ StampAt = "delivery". Every violation flag is computed from `readAt` and the
 file, never from `at`, so a wrong stamp cannot excuse itself.
 
 Actions:
- - Write(lc, b): the file is written by something pi never saw (git
-   checkout, an external editor or formatter). `lc` says whether the flagged
-   line's content changed; `b` is the file's new verdict.
+ - Write(c, b): the file is written by something pi never saw (git
+   checkout, an external editor or formatter). `c` is the flagged line's new
+   content identity (one of two, so a write can restore an earlier content,
+   as git checkout or an undo does); `b` is the file's new verdict.
  - Delete: the file is deleted.
  - Edit(cov): a turn's cascade run; it observes the file when `cov`.
  - Scan: the scanner store takes a scan (stamped at its start).
@@ -71,6 +72,9 @@ Invariants (each has a mutant config that violates it):
    authority when its file was written after the scan (CachedGate).
  - NoCachedStaleDrop: a stale cached finding is demoted, never dropped
    (CachedGate).
+ - CachedDelivered: an unmarked cached finding on a present file is
+   delivered, at full authority while the file is unchanged since the scan
+   and demoted once it was written; no arm silences it (CachedGate).
  - TypeOK.
 ***************************************************************************)
 EXTENDS Naturals
@@ -120,6 +124,7 @@ CONSTANTS
                     \* "keepMissing" no missing verdict (a deleted file's
                     \*              finding is delivered)
                     \* "dropStale"  stale is dropped, not demoted
+                    \* "silence"    a live finding is delivered nowhere
 
 VARIABLES
     clk,        \* the logical clock
@@ -127,14 +132,14 @@ VARIABLES
     phase,      \* "idle" | "observed" (a cascade run happened this turn)
     exists,     \* the cited file exists
     mt,         \* its last write tick
-    gen,        \* the flagged line's content generation
+    gen,        \* the flagged line's content identity (Contents)
     bad,        \* the file's current content has the error
     rec,        \* the pending record entry
     obs,        \* this turn's run observation of the neighbour
     lastListed, \* the previous run listed the error (the Delta baseline)
     store,      \* the cached store's finding
     mark,       \* the agent marked the cached finding false-positive
-    markGen,    \* the line generation the mark anchors to
+    markGen,    \* the line content the mark anchors to
     outP,       \* what the pending record rendered last turn_end
     outC,       \* what the cached store rendered last turn_end
     v           \* [flag -> BOOLEAN]: a violation seen at some delivery
@@ -143,12 +148,17 @@ vars == <<clk, turn, phase, exists, mt, gen, bad, rec, obs, lastListed, store,
           mark, markGen, outP, outC, v>>
 
 Ticks == 0..MaxClk
-Rec == [has : BOOLEAN, readAt : Ticks, at : Ticks, gen : Ticks]
-Obs == [on : BOOLEAN, readAt : Ticks, gen : Ticks, bad : BOOLEAN]
+\* The flagged line's possible contents. computeStrictAnchor hashes the
+\* line's content (clients/diagnostic-dispositions.ts:273, strictAnchorSpan),
+\* so a mark made at A, a write of B and a write back to A leave the mark
+\* applying again; a counter of writes would never return to A.
+Contents == {0, 1}
+Rec == [has : BOOLEAN, readAt : Ticks, at : Ticks, gen : Contents]
+Obs == [on : BOOLEAN, readAt : Ticks, gen : Contents, bad : BOOLEAN]
 OutP == {"none", "full", "unresolved", "named"}
 OutC == {"none", "full", "demoted", "suppressed", "dropped"}
 Flags == {"write", "delete", "forget", "persist", "listed", "marked", "rewritten",
-          "namedGone", "namedKept", "stuck", "cGone", "cFull", "cDrop"}
+          "namedGone", "namedKept", "stuck", "cGone", "cFull", "cDrop", "cLost"}
 
 NoRec == [has |-> FALSE, readAt |-> 0, at |-> 0, gen |-> 0]
 NoObs == [on |-> FALSE, readAt |-> 0, gen |-> 0, bad |-> FALSE]
@@ -159,14 +169,14 @@ TypeOK ==
     /\ phase \in {"idle", "observed"}
     /\ exists \in BOOLEAN
     /\ mt \in Ticks
-    /\ gen \in Ticks
+    /\ gen \in Contents
     /\ bad \in BOOLEAN
     /\ rec \in Rec
     /\ obs \in Obs
     /\ lastListed \in BOOLEAN
     /\ store \in Rec
     /\ mark \in BOOLEAN
-    /\ markGen \in Ticks
+    /\ markGen \in Contents
     /\ outP \in OutP
     /\ outC \in OutC
     /\ v \in [Flags -> BOOLEAN]
@@ -191,13 +201,13 @@ Init ==
 
 Open == turn <= MaxTurns /\ clk < MaxClk
 
-\* Write(lc, b): an outside write.
-Write(lc, b) ==
+\* Write(c, b): an outside write; the flagged line takes content c.
+Write(c, b) ==
     /\ "write" \in OutsideKinds
     /\ Open /\ exists
     /\ clk' = clk + 1
     /\ mt' = clk + 1
-    /\ gen' = IF lc THEN gen + 1 ELSE gen
+    /\ gen' = c
     /\ bad' = b
     /\ UNCHANGED <<turn, phase, exists, rec, obs, lastListed, store, mark,
                    markGen, outP, outC, v>>
@@ -238,7 +248,7 @@ Scan ==
 
 \* Mark: lens_diagnostic_mark, false-positive. The tool reads the file as it
 \* is now and anchors to that content's line (tools/lens-diagnostic-mark.ts,
-\* diagnostic-dispositions.ts), so the anchor is the current generation.
+\* diagnostic-dispositions.ts), so the anchor is the current content.
 Mark ==
     /\ "cached" \in Kinds
     /\ CanMark /\ store.has /\ ~mark
@@ -301,7 +311,8 @@ TurnEnd ==
                         THEN "dropped"
                    ELSE IF applies /\ (cVerdict = "live" \/ PolicyArms = "both")
                         THEN "suppressed"
-                   ELSE IF cVerdict = "live" THEN "full"
+                   ELSE IF cVerdict = "live"
+                        THEN (IF CachedGate = "silence" THEN "none" ELSE "full")
                    ELSE "demoted"
        IN
        /\ outP' = pOut
@@ -326,7 +337,12 @@ TurnEnd ==
                 cGone |-> (v.cGone \/ (cOut \in {"full", "demoted", "suppressed"}
                                       /\ ~exists)),
                 cFull |-> (v.cFull \/ (cOut = "full" /\ writtenAfter(store.readAt))),
-                cDrop |-> (v.cDrop \/ (cOut = "dropped" /\ exists))]
+                cDrop |-> (v.cDrop \/ (cOut = "dropped" /\ exists)),
+                \* an unmarked, present finding reaches the output: full while
+                \* the file is unchanged since the scan, demoted once written
+                cLost |-> (v.cLost \/ ("cached" \in Kinds /\ store.has /\ ~mark /\ exists
+                                      /\ cOut # (IF writtenAfter(store.readAt)
+                                                  THEN "demoted" ELSE "full")))]
        /\ clk' = d
     /\ turn' = turn + 1
     /\ phase' = "idle"
@@ -334,7 +350,7 @@ TurnEnd ==
     /\ UNCHANGED <<exists, mt, gen, bad, store, mark, markGen>>
 
 Next ==
-    \/ \E lc \in BOOLEAN, b \in BOOLEAN: Write(lc, b)
+    \/ \E c \in Contents, b \in BOOLEAN: Write(c, b)
     \/ Delete
     \/ \E cov \in BOOLEAN: Edit(cov)
     \/ Scan
@@ -356,4 +372,5 @@ NoSuppressRewritten == ~v.rewritten
 NoCachedAfterDelete == ~v.cGone
 NoStaleCachedAtFull == ~v.cFull
 NoCachedStaleDrop == ~v.cDrop
+CachedDelivered == ~v.cLost
 =============================================================================
