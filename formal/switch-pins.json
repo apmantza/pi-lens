@@ -144,6 +144,122 @@
 				}
 			]
 		},
+		"finding-delivery": {
+			"pins": {
+				"StampAt": {
+					"value": "\"read\"",
+					"test": "tests/clients/cascade-turn-merge.test.ts",
+					"title": "an outside fix after the compute read and before turn_end is not left unresolved",
+					"also": [
+						{
+							"test": "tests/clients/cascade-compute.test.ts",
+							"title": "a run that lists neighbour errors carries its read time: the compute's start, before every read"
+						},
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "a late answer's errors, written over between the touch and the publish, are named as changed"
+						}
+					]
+				},
+				"NeighbourGate": {
+					"value": "\"freshness\"",
+					"test": "tests/clients/cascade-turn-merge.test.ts",
+					"title": "an outside touch that keeps the error names it once as changed, then says nothing",
+					"also": [
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "is forgotten without a line when deleted"
+						},
+						{
+							"test": "tests/clients/turn-end-cap-consumed-state.test.ts",
+							"title": "a cut changed line keeps its entry and is named on the next turn, then forgotten"
+						}
+					]
+				},
+				"Reserve": {
+					"value": "\"record\"",
+					"test": "tests/clients/cascade-turn-merge.test.ts",
+					"title": "a pending neighbour error no cascade covered this turn renders one unresolved line until a fresh observation clears it",
+					"also": [
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "a neighbour error re-observed on a later turn is labelled with the turn it was first delivered"
+						}
+					]
+				},
+				"Delta": {
+					"value": "\"none\"",
+					"test": "tests/clients/cascade-compute.test.ts",
+					"title": "#4487: three cascades over a persistent neighbour error list it each time",
+					"also": [
+						{
+							"test": "tests/clients/cascade-compute.test.ts",
+							"title": "lists a repeated cascade diagnostic on every run (no rolling delta)"
+						}
+					]
+				},
+				"PolicyArms": {
+					"value": "\"both\"",
+					"test": "tests/clients/runtime-turn-secrets-disposition.test.ts",
+					"title": "re-reports a stale gitleaks finding as ACTION NEEDED when unmarked, then drops it once marked false-positive",
+					"also": [
+						{
+							"test": "tests/clients/runtime-turn-secrets-disposition.test.ts",
+							"title": "re-reports a stale trivy-secret finding as ACTION NEEDED when unmarked, then drops it once marked false-positive"
+						}
+					]
+				},
+				"Anchor": {
+					"value": "\"line\"",
+					"test": "tests/clients/diagnostic-dispositions.test.ts",
+					"title": "false-positive RESURFACES after the flagged line's content changes semantically",
+					"also": [
+						{
+							"test": "tests/clients/diagnostic-dispositions.test.ts",
+							"title": "false-positive survives whitespace-only changes and unrelated-lines-above insertions"
+						}
+					]
+				},
+				"CachedGate": {
+					"value": "\"freshness\"",
+					"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
+					"title": "DEMOTES a finding whose file was edited after the scan — kept, no line",
+					"also": [
+						{
+							"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
+							"title": "still drops a finding whose file was deleted after the scan (#1460 holds)"
+						},
+						{
+							"test": "tests/clients/runtime-turn-session.test.ts",
+							"title": "does NOT deliver a cached finding whose file was deleted after the scan"
+						}
+					]
+				},
+				"ClearOnClean": {
+					"value": "\"clear\"",
+					"test": "tests/clients/cascade-turn-merge.test.ts",
+					"title": "a pending neighbour error no cascade covered this turn renders one unresolved line until a fresh observation clears it",
+					"also": [
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "a late clean published after the read but before the delivery clears the entry"
+						}
+					]
+				}
+			},
+			"notCodeChoice": [
+				{
+					"reason": "Scenario bound or actor set: it sizes the state space or picks which actors, inputs and steps TLC explores; no code branch reads it.",
+					"constants": [
+						"Kinds",
+						"OutsideKinds",
+						"CanMark",
+						"MaxClk",
+						"MaxTurns"
+					]
+				}
+			]
+		},
 		"dispatch-pipeline": {
 			"pins": {
 				"CarryPreRunCalls": {

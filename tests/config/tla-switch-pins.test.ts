@@ -75,6 +75,7 @@ const FULLY_PINNED = [
 	"dispatch-pipeline",
 	"blocker-pending",
 	"cascade-delivery",
+	"finding-delivery",
 ];
 /**
  * The deferred and notCodeChoice members across all families, pinned exactly
@@ -84,7 +85,7 @@ const FULLY_PINNED = [
  * `DEFERRED_COUNT` as pins land, and a reviewer judges every rise of either.
  */
 const DEFERRED_COUNT = 135;
-const NOT_CODE_CHOICE_COUNT = 243;
+const NOT_CODE_CHOICE_COUNT = 248;
 
 interface PinTest {
 	test: string;
