@@ -12,7 +12,8 @@ the project trust generation. The `TLA+ models` CI job
 Issues: #5333 (this model), #4530 and #4776 (the trust stamp), #1497 (the
 install ladder and its session scope), #1674 (the in-flight release by
 identity). The B1 reproduction is the 2026-11-04 probe; #5332 and the #5333
-comment name the ast-grep sweep as its site.
+comment name the ast-grep sweep helpers as its site. Those helpers have no
+production caller (Findings 1).
 
 ## The invariant
 
@@ -56,7 +57,7 @@ provisional.
 
 | Knob | Values |
 |---|---|
-| `NewLatchPerGen` | TRUE: the owner replaces the latch (`createCwdCachedProbe`, the checker), so an older probe holds a retired object. FALSE: one object, reset in place (the sweep, a client's own latch) |
+| `NewLatchPerGen` | TRUE: the owner replaces the latch (`createCwdCachedProbe`; the checker replaces its cache, not a latch), so an older probe holds a retired object. FALSE: one object, reset in place (the sweep, a client's own latch) |
 | `Clear` | `"touch"`: the owner clears at its next touch. `"none"`: a process-lived client latch (govulncheck, security scan): only `SettleTrust` and `SyncInst` ever reset it |
 | `SettleGuard` | `"none"`: as built, no flight re-checks a generation after its await. `"gen"`: a settle whose captured generation is not the current one is dropped (the candidate fix) |
 | `TrustStamp` | `"owed"`: #4776. `"lastRead"`: the stamp comes from the latest null read, which a joiner overwrites. `"current"`: the stamp is the trust at the note, the code before #4776 |
@@ -66,13 +67,13 @@ provisional.
 
 | Config | Verdict |
 |---|---|
-| `CwdProbe` | pass, all invariants (`createCwdCachedProbe` and the checker, trust adoption included) |
-| `SgSweep` | violated `OnlyStarterRecords` (**B1 on master**: the sweep) |
+| `CwdProbe` | pass, all invariants (`createCwdCachedProbe` only, trust adoption included; the checker has no latch and no trust stamp) |
+| `SgSweep` | violated `OnlyStarterRecords` (**B1**: the sg sweep helpers, which have no production caller) |
 | `SgSweepServed` | violated `NoStaleServed` (B1 as a caller sees it) |
 | `SgSweepTrustStamp` | violated `StampNotNewer` (B1 reopens the #4776 hole) |
-| `SgSweepGenGuard` | pass, all invariants (the candidate fix) |
+| `SgSweepGenGuard` | pass, all invariants (the candidate fix; the model's claim for that guard, not proof the fix suffices: Scope) |
 | `Pre4776TrustStamp` | violated `StampNotNewer` (stamp at the note) |
-| `Pre4776JoinedRead` | violated `StampNotNewer` (the joiner overwrites the stamp) |
+| `Pre4776JoinedRead` | violated `StampNotNewer` (the joiner overwrites the stamp; an illustrative pre-fix shape, not historical code: Scope) |
 | `Pre4530ReadNoTrust` | violated `ServedUnderTrust` (no trust generation in the latch) |
 | `ClientInstallStale` | violated `InstallOwned` (hypothesis: a client latch's install settle after a session start) |
 | `ClientInstallGenGuard` | pass (the same latch with the guard; the ladder up to the exhausted verdict is reachable) |
@@ -83,17 +84,25 @@ the first touch after a session start replaced it. Neutering that
 
 ## Findings
 
-1. **B1 is on master in the sweep.** `isSgAvailableAsync` resets one module
-   latch in place and, after its probe `await`, writes `sgCmd`, `sgCmdArgs`
+1. **B1 is reproduced by the model (`SgSweep.cfg`) and at module level in the
+   sg sweep helpers, which have no production caller.** `isSgAvailableAsync`
+   resets one module latch in place and, after its probe `await`, writes `sgCmd`, `sgCmdArgs`
    and calls `noteSgAvailable`/`noteSgUnavailable` without re-checking
    `sgAvailabilityGeneration`. `SgSweep` has the trace: touch (probe 1
    starts), session start, touch (the latch clears, probe 2 starts), probe 1
-   settles `ok` into the cleared latch. Replayed through the real module
+   settles `ok` into the cleared latch. Replayed at module level
    (`resetDispatchAvailabilityState()` between two `isSgAvailableAsync()`
    calls, the first sweep's spawn held open): after the old sweep settles, a
    third call answers `true` while the new session's own sweep is still in
    flight, and `getSgCommand()` returns the old session's command.
    `createCwdCachedProbe`, held the same way, shows no verdict.
+   No production path reaches these helpers. Dropping `SgRunner`'s own
+   `getSgCommand` calls and definition, the combined grep
+   `grep -rnE "isSgAvailableAsync|getSgCommand|\bsg\.(isAvailableAsync|getCommand)\b|^\s+sg,?\s*$|import \{[^}]*\bsg\b[^}]*\} from" clients tools mcp index.ts --include=*.ts`
+   leaves one match outside `runner-helpers.ts`: a doc comment in
+   `sg-runner.ts`. The production ast-grep path is `SgRunner`, which has its
+   own latch (`clients/sg-runner.ts:216`). So B1 is a latent defect in unused
+   code.
 2. **Hypothesis, not reproduced: a client latch's install settle.**
    `govulncheck-client.ts` settles a 60 s `go install` with
    `markTransientlyUnavailable(cause, { operationClass: "install" })` and no
@@ -108,6 +117,24 @@ the first touch after a session start replaced it. Neutering that
    `noteLatchedUnavailable` / `clearLatchedUnavailable` write
    `latchedUnavailableByCwd` after an `await` in the checker and the cwd
    probe (the log-correction bookkeeping memo, telemetry only).
+
+## Not modelled / hypothesis
+
+- **Eager reset of a process-lived latch (hypothesis; no config carries it).**
+  The production-reachable shape of B1 is an eager in-place reset at
+  `session_start` of a process-lived latch, plus a post-await settle with no
+  generation check. `resetZizmorTokenAvailability()` (`clients/zizmor-config.ts:108`)
+  calls `ghTokenLatch.reset()` (`clients/zizmor-config.ts:92`), and
+  `clients/runtime-session.ts:2297` calls it at session start. In a throwaway
+  probe from review round 1 (spawn mocked at the process boundary, not
+  committed), a `resolveGitHubToken` call parked at `gh auth token` (caller
+  `clients/lsp/server.ts:5164`), then the session reset, then the `gh` answer:
+  session 2's first call returned `undefined` after one `gh` spawn, and the
+  latch outcome was non-installable. Only zizmor was driven of the 17
+  `createAvailabilityLatch` call sites. The 5 s probe window
+  (`clients/zizmor-config.ts:97`) was not driven in a real pi session, so its
+  reachability is not shown. The model's `Clear` takes `"touch"` or `"none"`
+  only and cannot express an eager reset.
 
 ## Scope
 
@@ -126,6 +153,17 @@ Not modelled:
 - `createAvailabilityChecker`'s cache, which carries no trust stamp: the
   model covers it for the generation axis only;
 - the installer-backed resolvers (`ensureTool`, `getInstallAttempt`).
+- joined in-flight callers (`Call`, joined) are judged on the trust axis only.
+  The reviewer's mutation M6, which keeps `flight` in `Ensured`, passes every
+  config: `NoStaleServed` covers only the reads the latch serves, and no
+  invariant judges a caller that joins a flight from an older generation.
+- `Pre4776JoinedRead` (`TrustStamp = "lastRead"`) is an illustrative pre-fix
+  shape, not historical code: before #4776 the stamp was taken at the note,
+  which is `Pre4776TrustStamp`.
+- `SgSweepGenGuard` passing is the model's claim for that candidate guard, not
+  proof that the fix suffices. `sgCmd` is written before the note, and the
+  `sgSweep*` accumulators are not state, so the model cannot show the guard
+  sufficient for them.
 
 The model bumps `avGen` and `instGen` in one step because the reset block
 calls both back to back; a probe that straddles only one is not explored.
