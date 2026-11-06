@@ -88,6 +88,8 @@ provisional.
 | `ClientInstallGenGuard` | pass (the same latch with the guard; the ladder up to the exhausted verdict is reachable) |
 | `MutDenyAll` | violated `FreshSettleRecords` (a guard that drops every settle: the fresh result never lands) |
 
+On the client latches (`Clear = "none"`) `latchGen` never advances, so after the first `SessionStart` `OnlyStarterRecords` holds vacuously there. It is the cwd-latch property. The client-latch property is `InstallOwned`, which `ClientInstallStale` violates and `ClientInstallGenGuard` passes.
+
 `CwdProbe` passes because `Settle` writes the object the probe captured, and
 the first touch after a session start replaced it. Neutering that
 (`LiveLatch(p)` in `Settle`, set to TRUE) turns `CwdProbe` into `SgSweep`'s B1.
