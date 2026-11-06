@@ -47,7 +47,7 @@ The other invariants are the trust and install halves:
 |---|---|
 | `SessionStart` | `resetDispatchAvailabilityState()` bumps `availabilityGeneration` (`runner-helpers.ts`), and `resetInstallRetryLatches()` bumps `installRetryGeneration` (`availability-policy.ts`); both are called from the `session_start` reset block in `clients/runtime-session.ts`. Nothing else is cleared there: each owner clears lazily |
 | `TrustAdopt` | `setProjectTrustState` / `adoptProjectTrustFromPorts` bump `trustGeneration` (`clients/project-trust.ts`); `getProjectTrustGeneration()` reads it |
-| `Ensured` (the first part of `Call`) | `ensureCurrentGeneration()` in `createCwdCachedProbe` and `createAvailabilityChecker` (clears the latch map or cache and the in-flight map; the next `latchFor` builds a new object), and `ensureCurrentSgGeneration()` for the sweep (`sgLatch.reset()` in place, `sgAvailableInFlight = null`). `NewLatchPerGen` is that difference |
+| `Ensured` (the first part of `Call`) | `ensureCurrentGeneration()` in `createCwdCachedProbe` and `createAvailabilityChecker` (clears the latch map or cache and the in-flight map; the next `latchFor` builds a new object), and `ensureCurrentSgGeneration()` for the sweep (`sgLatch.reset()` in place, `sgAvailableInFlight = null`) until #5345 deleted the sweep. `NewLatchPerGen` is that difference |
 | `SettleTrust` | `settleTrustGeneration()`: a verdict from another trust generation is cleared (#4530) |
 | `SyncInst` | `syncInstallGeneration()`: a new install generation drops the attempts and the install cooldown, or the whole exhausted verdict |
 | `Answer` | `read()`: `true` for `available`, a provisional `true` until its cooldown ends, `null` for no verdict or an expired transient, `false` for a durable or exhausted one |
@@ -77,7 +77,7 @@ provisional.
 | Config | Verdict |
 |---|---|
 | `CwdProbe` | pass, all invariants (`createCwdCachedProbe` only, trust adoption included; the checker has no latch and no trust stamp) |
-| `SgSweep` | violated `OnlyStarterRecords` (**B1**: the sg sweep helpers, which have no production caller) |
+| `SgSweep` | violated `OnlyStarterRecords` (**B1**: the sg sweep helpers, which had no production caller; #5345 deleted the sweep, and the config stands as the as-built record) |
 | `SgSweepServed` | violated `NoStaleServed` (B1 as a caller sees it) |
 | `SgSweepTrustStamp` | violated `StampNotNewer` (B1 reopens the #4776 hole) |
 | `SgSweepGenGuard` | pass, all invariants (the candidate fix; the model's claim for that guard, not proof the fix suffices: Scope) |
@@ -115,6 +115,15 @@ the first touch after a session start replaced it. Neutering that
    `sg-runner.ts`. The production ast-grep path is `SgRunner`, which has its
    own latch (`clients/sg-runner.ts:216`). So B1 is a latent defect in unused
    code.
+   **RESOLVED by #5345:** the sweep (`isSgAvailableAsync`, `getSgCommand`, the
+   `sg` export and their helpers) was deleted from
+   `clients/dispatch/runners/utils/runner-helpers.ts` as unused, so B1 has no
+   production or module-level subject left. The `SgSweep*` configs are kept:
+   the model's `NewLatchPerGen = FALSE, Clear = "touch", SettleGuard = "none"`
+   cell — one in-place latch reset with an unguarded settle — stays executable
+   as the record of the shape, and the `CwdProbe` note above (neutering the
+   per-generation latch swap reproduces B1) keeps the shape live as a warning
+   for future flight writers.
 2. **Hypothesis, not reproduced: a client latch's install settle.**
    `govulncheck-client.ts` settles a 60 s `go install` with
    `markTransientlyUnavailable(cause, { operationClass: "install" })` and no
@@ -124,8 +133,9 @@ the first touch after a session start replaced it. Neutering that
    shape; whether any production client reaches it was not driven.
 3. **Not modelled, same shape, not driven:** the sweep's module accumulators
    (`sgSweepSawTransient`, `sgSweepTransientCause`, `sgSweepHostStallMs`,
-   `sgSweepUnreachable`, `sgSweepDurablyMissing`) are written by a stale
-   sweep's candidate probes while the new sweep reads them; and
+   `sgSweepUnreachable`, `sgSweepDurablyMissing`) were written by a stale
+   sweep's candidate probes while the new sweep read them (#5345 deleted them
+   with the sweep); and
    `noteLatchedUnavailable` / `clearLatchedUnavailable` write
    `latchedUnavailableByCwd` after an `await` in the checker and the cwd
    probe (the log-correction bookkeeping memo, telemetry only).

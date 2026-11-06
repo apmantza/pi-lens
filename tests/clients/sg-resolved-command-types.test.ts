@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { getSgCommand } from "../../clients/dispatch/runners/utils/runner-helpers.js";
 import { SgRunner } from "../../clients/sg-runner.js";
 
 // #5247: the temp scans spawned the module sweep's command, whose unswept
@@ -9,21 +8,14 @@ import { SgRunner } from "../../clients/sg-runner.js";
 // that call is a COMPILE error. The `@ts-expect-error` lines below are checked
 // by `npm run lint` (tsc over tests): removing the brand, or widening the spawn
 // parameter, turns each one into "Unused '@ts-expect-error' directive".
+// (#5345 deleted the module-level sweep, so the fixture now pins the brand
+// against hand-built objects only.)
 function typeFixture(runner: SgRunner): void {
 	const resolved = runner["getSgCommand"]();
 	void runner["spawnResolved"](resolved, ["--version"], {});
 
 	// @ts-expect-error a hand-built object has no brand
 	void runner["spawnResolved"]({ cmd: "ast-grep", argsPrefix: [] }, [], {});
-
-	// @ts-expect-error the module sweep's answer (swept or npx fallback) is not a resolved command
-	void runner["spawnResolved"](getSgCommand(), [], {});
-
-	const sweep = getSgCommand();
-	if (sweep.kind === "npx-fallback") {
-		// @ts-expect-error the fallback must be handled explicitly, never spawned as resolved
-		void runner["spawnResolved"](sweep, [], {});
-	}
 }
 void typeFixture;
 

@@ -2335,7 +2335,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// (`ctx.hasTool`), whose probe carries the dispatcher's own 5s budget; the
 	// loop is bounded by the fact's fixed gate list, but like every sibling
 	// here it stays unbounded from the hook's signal until #2523 AC4.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 37,
+	// #5345: 37 -> 30 — the deleted module-level ast-grep sweep carried seven
+	// unbounded awaits (two spawns in `probeAstGrepCommandAsync`, four of its
+	// call sites and `findGlobalBinary` in `isSgAvailableAsync`); the worklist
+	// shrinks with the sweep, nothing new is unbounded.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.

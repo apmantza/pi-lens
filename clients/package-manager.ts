@@ -615,10 +615,9 @@ export function commandSearchReachesProject(cwd: string): boolean {
 export interface LocalBinWalkOptions {
 	/**
 	 * Extension tried BEFORE the bare name on Windows. Default `.cmd`. An
-	 * EMPTY string means the caller already spelled every name it wants (the
-	 * ast-grep sweep passes `ast-grep.cmd`/`ast-grep.exe`/`ast-grep` itself, in
-	 * a shell-dependent order this option cannot express) — without that case
-	 * the bare name would be probed twice and reported twice.
+	 * EMPTY string means the caller already spelled every name it wants, in an
+	 * order this option cannot express — without that case the bare name would
+	 * be probed twice and reported twice.
 	 */
 	readonly windowsExt?: string;
 	/** HOME ceiling; injectable so tests never touch the real home. */
@@ -641,9 +640,10 @@ export interface LocalBinWalkOptions {
 	 * Whether the HOME ceiling applies to this walk. Default `true` — the
 	 * ceiling is the right default for every PROJECT-tree resolution (#2514).
 	 *
-	 * `false` is for exactly one caller: `buildSgLocalBins`' walk from
-	 * pi-lens's OWN install directory (`runner-helpers.ts`), never a project
-	 * cwd. `pi install npm:pi-lens` installs into the HOME-level manifest
+	 * `false` is for pi-lens's OWN install directory, never a project cwd. Its
+	 * only caller, the ast-grep sweep, went with #5345, so no production call
+	 * passes `false` now. `pi install npm:pi-lens` installs into the HOME-level
+	 * manifest
 	 * (`~/package.json` → `~/node_modules/pi-lens`), so the bundled
 	 * `@ast-grep/cli` shim can sit AT `~/node_modules/.bin/ast-grep` — a
 	 * directory the ceiling exists precisely to stop at. The ceiling is a
@@ -660,21 +660,18 @@ export interface LocalBinWalkOptions {
  * in `startDir` or one of its ancestors, nearest first, stopping at the HOME
  * ceiling (never the fs root — see below).
  *
- * A generator on purpose. {@link findLocalBinUpwards} takes the first match and
- * the walk suspends there — no ancestor above the hit is ever stat'd, which is
- * what a per-edit resolver needs — while {@link findLocalBinsUpwards} drains it
- * for the ast-grep probe sweep, the one caller that legitimately wants every
- * candidate above `startDir`. One walk body, two arities, no "collect-all"
- * flag whose disabled half nothing can observe.
+ * A generator on purpose: {@link findLocalBinUpwards} takes the first match and
+ * the walk suspends there, so no ancestor above the hit is ever stat'd, which
+ * is what a per-edit resolver needs.
  * `ceiling: false` opts a walk out of the HOME stop entirely (own-install
  * trees only, see {@link LocalBinWalkOptions.ceiling}); {@link findLocalBinsAt}
  * / {@link findLocalBinAt} below are the non-walking sibling for callers that
  * must check exactly one directory and never climb (`createVenvFinder`,
  * vulture's `venvCandidates`).
  *
- * `tools` is a LIST because the sweep callers probe several spellings of the
- * same tool and the preference order is per-directory: all of a directory's
- * candidates, in `tools` order, before the parent directory is looked at.
+ * `tools` is a LIST and the preference order is per-directory: all of a
+ * directory's candidates, in `tools` order, before the parent directory is
+ * looked at.
  *
  * `binDirs` makes this the ONLY such walker in the repo. Before #2544 there
  * were SIX copies of this loop — `formatters.ts`'s `findInNodeModules` /
@@ -693,8 +690,7 @@ export interface LocalBinWalkOptions {
  * Expand `tools` into the actual candidate file names for one directory,
  * EXT-OUTER: on Windows every tool's extended name is tried before any tool's
  * bare name (`windowsExt === ""` means the caller already spelled every name
- * it wants — the ast-grep sweep passes `ast-grep.cmd`/`ast-grep.exe`/`ast-grep`
- * itself in a shell-dependent order this option cannot express).
+ * it wants, in an order this option cannot express).
  */
 function expandCandidateNames(
 	tools: readonly string[],
@@ -789,38 +785,6 @@ export function findLocalBinUpwards(
 	if (getProjectTrustState() !== "trusted")
 		return refuseLocalBin(tool, startDir);
 	return match;
-}
-
-/**
- * EVERY project-local match for `tools` at or above `startDir`, nearest first.
- *
- * For the ast-grep availability sweep (`runner-helpers.ts`'s `buildSgLocalBins`,
- * which spawns `--version` against each candidate until one answers, both for
- * the project walk and — with `ceiling: false` — pi-lens's own install-tree
- * walk), which previously hand-rolled its own unceilinged climb precisely
- * because the singular `findLocalBinUpwards` could not express "all of them"
- * (#2544 review F1).
- *
- * NOT for a "project's own venv/vendor-bin first" resolver: `createVenvFinder`
- * and vulture's `venvCandidates` looked like this walk's other two callers in
- * round 3, but that was an unrequested behaviour change (round 3 introduced
- * ancestor climbing where a single cwd/root lookup existed before, with no
- * #2514 defect behind it) — reverted in round 4 F2 to {@link findLocalBinsAt}.
- */
-export function findLocalBinsUpwards(
-	tools: readonly string[],
-	startDir: string,
-	options: LocalBinWalkOptions = {},
-): LocalBinLookup[] {
-	const matches = [...localBinMatches(tools, startDir, options)];
-	if (
-		matches.length === 0 ||
-		options.ceiling === false ||
-		getProjectTrustState() === "trusted"
-	) {
-		return matches;
-	}
-	return [refuseLocalBin(tools.join(","), startDir)];
 }
 
 /**

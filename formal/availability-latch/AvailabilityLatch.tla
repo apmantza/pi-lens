@@ -3,7 +3,7 @@
 (* The runner availability latch and the probe flights that write it       *)
 (* (#5333). Latch: createAvailabilityLatch in                              *)
 (* clients/dispatch/runners/utils/availability-policy.ts. Flights: the     *)
-(* sg sweep (isSgAvailableAsync), createCwdCachedProbe and                 *)
+(* sg sweep (isSgAvailableAsync, deleted by #5345), createCwdCachedProbe  *)
 (* createAvailabilityChecker in clients/dispatch/runners/utils/            *)
 (* runner-helpers.ts. The README has the action-to-code map.               *)
 (*                                                                         *)

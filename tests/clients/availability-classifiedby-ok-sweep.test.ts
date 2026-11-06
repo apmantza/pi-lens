@@ -48,7 +48,10 @@ describe("availability_decision classifiedBy sweep (#2131)", () => {
 		expect(SITES.length).toBeGreaterThan(20);
 		// #2140/#2351: resolveAndLaunch's managed-bin fast path and force-reinstall
 		// recovery add three cause:"ok" sites, all stamped classifiedBy below.
-		expect(OK_SITES.length).toBe(21);
+		// #5345: 21 -> 20 — the deleted module-level ast-grep sweep held one
+		// stamped `cause: "ok"` site; the population and the floor above stay
+		// non-trivial.
+		expect(OK_SITES.length).toBe(20);
 	});
 
 	it('every cause:"ok" decision stamps classifiedBy', () => {

@@ -1,7 +1,9 @@
 /**
  * #1476 — the three availability consumers the #1467 class sweep missed, plus
- * the shared ast-grep memo the #1476 sweep found: biome, `SgRunner`,
- * `isSgAvailableAsync`, and govulncheck's `go install`.
+ * the shared ast-grep memo the #1476 sweep found: biome, `SgRunner`, and
+ * govulncheck's `go install`. (#5345 deleted the third ast-grep memo — the
+ * module-level `isSgAvailableAsync` sweep had no production caller — so
+ * `SgRunner` is the one ast-grep availability latch pinned here.)
  *
  * Each one latched ANY probe failure — a timeout included — as a permanent
  * "the tool is not installed" verdict, and biome and `SgRunner` ran a full
@@ -270,36 +272,6 @@ describe("SgRunner availability (#1476)", () => {
 		advancePastCooldown();
 		safeSpawnAsync.mockResolvedValue(okResult("ast-grep 0.32.3"));
 		expect(await runner.ensureAvailable()).toBe(true);
-	});
-});
-
-describe("shared ast-grep availability (#1476)", () => {
-	it("pins a genuine absence: latched false for the session", async () => {
-		safeSpawnAsync.mockResolvedValue(missingResult);
-		const { isSgAvailableAsync } =
-			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
-
-		expect(await isSgAvailableAsync()).toBe(false);
-		const probes = safeSpawnAsync.mock.calls.length;
-		expect(probes).toBeGreaterThan(0);
-		expect(await isSgAvailableAsync()).toBe(false);
-		expect(safeSpawnAsync.mock.calls.length).toBe(probes);
-	});
-
-	it("a timed-out sweep expires and re-probes after the cooldown", async () => {
-		safeSpawnAsync.mockResolvedValue(timeoutResult);
-		const { isSgAvailableAsync } =
-			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
-
-		expect(await isSgAvailableAsync()).toBe(false);
-		const probes = safeSpawnAsync.mock.calls.length;
-		// Held inside the cooldown: no probe storm while the host is still sick.
-		expect(await isSgAvailableAsync()).toBe(false);
-		expect(safeSpawnAsync.mock.calls.length).toBe(probes);
-
-		advancePastCooldown();
-		safeSpawnAsync.mockResolvedValue(okResult("ast-grep 0.32.3"));
-		expect(await isSgAvailableAsync()).toBe(true);
 	});
 });
 
