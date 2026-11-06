@@ -11,6 +11,7 @@ import {
 	COMPARABLE_FIRST_PUBLISH,
 	resolveProbeServerId,
 } from "./clean-signal.mjs";
+import { isAuxiliary } from "../../dist/clients/lsp/server-traits.js";
 import { touchAnsweredDiagnostics } from "./touch-result.mjs";
 
 // Budgets (reuse the original probe's generosity — this is off the hot path).
@@ -76,9 +77,12 @@ export function createProbeFixture(deps) {
 			repoRoot,
 			workspace: dst,
 		});
-		row.serverId = resolveProbeServerId(
-			fx,
-			getServersForFileWithConfig(absFile),
+		const servers = getServersForFileWithConfig(absFile);
+		row.serverId = resolveProbeServerId(fx, servers);
+		// #5348: the registry's own role decides, not the fixture's declaration; a
+		// server it does not list as an auxiliary stays comparable (fail closed).
+		row.auxiliary = servers.some(
+			(server) => server.id === row.serverId && isAuxiliary(server),
 		);
 		if (install && ensureTool) {
 			for (const t of fx.tools ?? [])

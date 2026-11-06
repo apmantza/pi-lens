@@ -42,8 +42,15 @@ gate — because the probe is a timing-based negative observation; a mismatch
 just tells a human the marker may need updating. `unknown` observations are
 never compared in either direction (a slow/absent server isn't evidence of
 anything). The native TS7 launch variant (`typescript7`/`typescript7-clean`,
-#524/#526) is deliberately excluded from comparison against classic's marker —
-they share a server id but not a verified clean-signal behavior.
+#524/#526) is compared against an explicit `false` expectation, not classic's
+marker (#558): they share a server id, and the marker is measured on classic
+only. A `silent-not-marked` finding for it reports that the probe saw silence
+on a clean file. The marker stays unchanged pending a maintainer decision and
+a latency measurement, because it lets the silent-confirm gate read a lapsed
+wait as clean (#5348). Auxiliary servers (ast-grep, opengrep, zizmor, typos,
+fallow) are never compared: `silentOnClean` is read in primary-scoped gates,
+and in the warm-up gate only for a server with `workspaceIndexing`, which no
+auxiliary sets.
 
 The `typescript` row has three launch variants, chosen in
 `TypeScriptServer.spawn` (`clients/lsp/server.ts`). The project's own
@@ -460,7 +467,7 @@ dispatched nightly replaces it on the first night that reaches the server.
 | python-jedi | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture jedi) |
 | opengrep | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 2 publish events. Auxiliary, not gated. | `node scripts/probe-save-verdict.mjs` (fixture opengrep) |
 | gleam | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture gleam) |
-| go | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
+| go | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: silent (6000 ms). Gated. | `node scripts/probe-save-verdict.mjs` (fixture go) |
 | zig | `save` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture zig) |
 | rust | `save` | inconclusive | Measured: inconclusive — pull mode: every arm is a textDocument/diagnostic request, so no arm has the save as its only new input (arms: no-save silent (6000 ms), save alone 1 diagnostic, saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture rust) |
 | terraform | `save` | no | Measured: answers without a save (2 publish events on didOpen); a later save alone: 1 publish event. Gated. | `node scripts/probe-save-verdict.mjs` (fixture terraform) |
@@ -550,5 +557,5 @@ streaks behind the `stale` column (#4512) and consecutive-night
 `idle-eviction` counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"idle-eviction":{"kotlin":{"nights":[{"day":"2026-11-05","rssMb":283,"coldMs":2269}]},"rust":{"nights":[{"day":"2026-11-05","rssMb":678,"coldMs":2486}]},"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
+{"clean-behavior":{"cpp":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1},"expert":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1},"fish":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"go":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1},"kotlin":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"powershell":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"typos":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1},"typst":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"zizmor":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1}},"first-publish":{"cpp":{"pendingFirstPublish":"direct","runs":1},"expert":{"pendingFirstPublish":"direct","runs":1},"fallow":{"pendingFirstPublish":"direct","runs":1},"fish":{"pendingFirstPublish":"direct","runs":1},"go":{"pendingFirstPublish":"direct","runs":1},"kotlin":{"pendingFirstPublish":"direct","runs":1},"powershell":{"pendingFirstPublish":"direct","runs":1},"typos":{"pendingFirstPublish":"direct","runs":1},"typst":{"pendingFirstPublish":"direct","runs":1},"zizmor":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-06","rssMb":205,"coldMs":2657}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511}]},"expert":{"nights":[{"day":"2026-11-06","rssMb":348,"coldMs":2815}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567}]},"kotlin":{"nights":[{"day":"2026-11-05","rssMb":283,"coldMs":2269},{"day":"2026-11-06","rssMb":264,"coldMs":2100}]},"powershell":{"nights":[{"day":"2026-11-06","rssMb":166,"coldMs":2749}]},"rust":{"nights":[{"day":"2026-11-05","rssMb":678,"coldMs":2486},{"day":"2026-11-06","rssMb":614,"coldMs":2471}]},"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
 ```

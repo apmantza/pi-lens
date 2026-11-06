@@ -11,6 +11,8 @@ export interface ProbeRow {
 	detail: string;
 	firstPublish: string;
 	cleanFixture: boolean;
+	/** #5348: the measured server is an auxiliary, set by the probe. */
+	auxiliary?: boolean;
 }
 
 export function createProbeFixture(deps: {
