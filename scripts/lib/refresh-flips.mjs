@@ -122,7 +122,8 @@ const MAX_FENCE_LINES = 20;
  * The refresh PR body. `landing` is what the workflow can do with a flip-free
  * refresh: `automerge` (armed, the repository opted in), `ci-only` (CI starts
  * through the App token; a maintainer merges) or `manual` (the repository
- * `GITHUB_TOKEN` opened it, so CI does not start until a close and reopen).
+ * `GITHUB_TOKEN` pushed it, so the nightly dispatches the required checks on
+ * its head, #5062; a maintainer merges).
  *
  * The body follows .github/PULL_REQUEST_TEMPLATE.md because the PR is linted
  * like any other (#5062): the flips verdict and landing sit in the reviewer
@@ -144,7 +145,7 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 			"Landing: No flips: auto-merge is armed. CI runs on this PR because it was opened with the refresh App token, and GitHub merges it when the required checks pass.";
 	} else if (landing === "manual") {
 		landed =
-			"Landing: this PR is created with the repository `GITHUB_TOKEN`, which cannot trigger workflow runs. After the bot opens or updates it, a maintainer must close and reopen the PR to arm CI. (Configure the refresh App to remove this step.)";
+			"Landing: the bot pushed this PR with the repository `GITHUB_TOKEN`, so the nightly dispatches the required checks on its head (#5062), so nobody needs to close and reopen it. A maintainer merges it. Auto-merge needs the refresh App (`LSP_REFRESH_APP_ID`, `LSP_REFRESH_APP_PRIVATE_KEY`) and `LSP_REFRESH_AUTOMERGE=true`.";
 	} else {
 		landed =
 			"Landing: CI runs on this PR because it was opened with the refresh App token. A maintainer merges it.";
@@ -157,10 +158,14 @@ export function buildRefreshPrBody({ flips, landing, issuesUrl, checkFailed }) {
 	const lines = [
 		"## Summary",
 		"",
-		"Automated nightly refresh of the LSP capability docs from the tool-smoke run: docs only, no runtime code changes.",
-		"The capability-flip verdict and the landing path are under the reviewer notes.",
+		"Automated nightly refresh of the LSP capability docs from the tool-smoke run (docs only, no runtime code); the flip verdict and the landing path are under the reviewer notes.",
 		"",
 		"Refs #460, #390, #529, #4512.",
+		"",
+		// #4512 stays open, and the land gate wants a remainder line for every open
+		// Refs issue; the Summary's three-sentence cap counts it, so the prose
+		// above is one sentence (#5304).
+		"Remaining #4512: this refresh only regenerates the docs; the monitoring work stays on #4512.",
 		"",
 		"## Notes for the reviewer",
 		"",

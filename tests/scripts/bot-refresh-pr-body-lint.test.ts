@@ -91,6 +91,17 @@ describe("the LSP-docs refresh PR body passes the body lint (#5062)", () => {
 		});
 	}
 
+	// Recurrence: #5304 carried no remainder line for its one open Refs issue,
+	// so the land gate refused it, and adding the line by hand put the Summary
+	// over its three-sentence cap.
+	it("names what #4512 leaves open, inside the Summary cap", () => {
+		// One landing: the remainder line does not depend on it, and each lint
+		// walks tests/ (a loop over all three timed out on CI shard 1).
+		const body = buildRefreshPrBody({ flips: flipLines(2), landing: "manual" });
+		expect(body).toMatch(/^Remaining #4512: \S.+$/m);
+		expect(lint(body, REFRESH_TITLE, REFRESH_DIFF).errors).toEqual([]);
+	});
+
 	it("with a few flips and the drift link", () => {
 		const body = buildRefreshPrBody({
 			flips: flipLines(3),
