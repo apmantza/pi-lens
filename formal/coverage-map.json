@@ -2,7 +2,9 @@
   "$comment": "Checked-in coverage map for #3802 rule 2, produced by the #3803 phase-1 audit (2026-09-30, master 1f41157ca), landed by #3802. Key = source glob relative to the repo root. Value = the formal/ families whose spec models behaviour in that file, or the string \"unmodelled\" for a lifecycle/timing/identity/concurrency file that no family models yet. A row is ANY-OF: a PR touching a mapped file must also touch a formal/<family>/*.tla or *.cfg file for ANY ONE of the row's families, or carry a `TLA+ unaffected: <family> — <reason>` line in the PR body for any one of them. A row listing 4 or more families (a hub file such as the LSP client) is too coarse for file-level matching, so an unmet hub row prints a note and never fails; a row written as {families, anchors} (index.ts) instead gates only on the families of a lifecycle hook handler a changed hunk lands in, and prints a note for a change outside every handler (#3878). `unmodelled` entries print an advisory and never gate; they keep the gap visible. Every formal/<dir> must be listed in `families` and named by at least one row; a TLA lane that adds a family adds its row in the same PR. `notes` explains the non-obvious rows and the hot files deliberately left out. Paths were checked to exist on master at audit time.",
   "version": 0,
   "families": [
+    "availability-latch",
     "dispatch-pipeline",
+    "disk-change-publisher",
     "file-locks",
     "format-drain",
     "instance-reaper",
@@ -30,7 +32,8 @@
     "lsp-ephemeral-data-dir",
     "blocker-pending",
     "cascade-delivery",
-    "test-runner-delivery"
+    "test-runner-delivery",
+    "finding-delivery"
   ],
   "map": {
     "clients/read-guard.ts": [
@@ -132,11 +135,21 @@
       "session-lifecycle"
     ],
     "clients/mcp/session.ts": "unmodelled",
-    "clients/dispatch/runners/utils/availability-policy.ts": "unmodelled",
-    "clients/dispatch/runners/utils/runner-helpers.ts": "unmodelled",
-    "clients/out-of-band-changes.ts": "unmodelled",
-    "clients/disk-changes.ts": "unmodelled",
-    "clients/disk-change-subscribers.ts": "unmodelled",
+    "clients/dispatch/runners/utils/availability-policy.ts": [
+      "availability-latch"
+    ],
+    "clients/dispatch/runners/utils/runner-helpers.ts": [
+      "availability-latch"
+    ],
+    "clients/out-of-band-changes.ts": [
+      "disk-change-publisher"
+    ],
+    "clients/disk-changes.ts": [
+      "disk-change-publisher"
+    ],
+    "clients/disk-change-subscribers.ts": [
+      "disk-change-publisher"
+    ],
     "clients/safe-spawn.ts": "unmodelled",
     "clients/installer/managed-tool-refresh.ts": "unmodelled",
     "clients/bootstrap.ts": "unmodelled",
@@ -222,7 +235,8 @@
       "file-locks"
     ],
     "clients/diagnostic-dispositions.ts": [
-      "file-locks"
+      "file-locks",
+      "finding-delivery"
     ],
     "clients/installer/index.ts": [
       "file-locks"
@@ -375,10 +389,19 @@
     "clients/dispatch/runners/ast-grep-napi.ts": [
       "blocker-pending"
     ],
-    "clients/finding-delivery-gate.ts": "unmodelled",
+    "clients/finding-delivery-gate.ts": [
+      "finding-delivery"
+    ],
     "clients/git-guard.ts": "unmodelled",
     "clients/advisory-provenance.ts": [
-      "store-freshness"
+      "store-freshness",
+      "finding-delivery"
+    ],
+    "clients/turn-end/lanes/secrets.ts": [
+      "finding-delivery"
+    ],
+    "clients/turn-end/lanes/govulncheck.ts": [
+      "finding-delivery"
     ],
     "clients/read-bridge.ts": [
       "read-guard"
@@ -470,14 +493,17 @@
     "clients/knip-client.ts": "The four heavyweight analyzers stamp scannedAt at the top of their run body, before the first read (#3690); a joined run inherits the initiator's read stamp. That is store-freshness' Stamp = \"start\" rule. The knip lane drops a late result by design and its two-sample floor and memo are not modelled (turn-end-late-scan README, \"What the model cannot see\"); only the shared `HardFailureStamps` is.",
     "clients/dead-code-client.ts": "The turn_end dead-code lane's late scan (#4117 round 2, #4120): the client's single flight `inFlight` is process-wide, so a scan parked by one session is joined by the next session's analyze (J1, `JoinedScanStale`); `HardFailureStamps` is set where a scan settles and never cleared at a session boundary. The lane itself is in clients/runtime-turn.ts, which stays at its three families: a fourth would make the row a hub (4 or more) and silence the gate for the whole file. Modelled by turn-end-late-scan; store-freshness keeps the Stamp rule.",
     "clients/hard-failure-summary.ts": "`HardFailureStamps` (stamp where a scan settles, 30 minute expiry, success lifts), shared by the knip and dead-code clients. Modelled by turn-end-late-scan (`NoRespawnWhileStamped`, `StampAtTurn`, `BackoffUnread`).",
-    "unlisted": "Runtime files touched by the 151 audited PRs and deliberately not mapped (no lifecycle, timing, identity or concurrency behaviour): bounded-telemetry, cache-observability, complexity-client, dispatch/types, dispatch/utils/format-utils, install-diagnostics, lens-config, lsp/config, lsp/session-roots, lsp/wait-policy/capability-snapshot, module-report, path-utils, persistent-reverify, probe-home-state, project-diagnostics/types, project-lens-config, python-environment, read-expansion, review-graph-logger, tool-agreement, tools/module-report. Also deliberately unmapped because nearly every PR touches them for non-lifecycle reasons: clients/degradation-ledger.ts (the DegradationKind registry; touched by most runtime PRs for a record kind, never lifecycle behaviour); clients/latency-logger.ts (telemetry sink); clients/hook-budgets.ts (budget table (data); #2523 governs it); clients/dispatch/runners/** except its utils/availability-policy.ts and utils/runner-helpers.ts, which have unmodelled rows (runner outcome parsing; the fix-run restore seam is mapped at clients/fix-run-restore.ts); clients/dispatch/facts/** (pure extractors; their tree-sitter trap accounting lives in clients/tree-sitter-client.ts).",
+    "unlisted": "Runtime files touched by the 151 audited PRs and deliberately not mapped (no lifecycle, timing, identity or concurrency behaviour): bounded-telemetry, cache-observability, complexity-client, dispatch/types, dispatch/utils/format-utils, install-diagnostics, lens-config, lsp/config, lsp/session-roots, lsp/wait-policy/capability-snapshot, module-report, path-utils, persistent-reverify, probe-home-state, project-diagnostics/types, project-lens-config, python-environment, read-expansion, review-graph-logger, tool-agreement, tools/module-report. Also deliberately unmapped because nearly every PR touches them for non-lifecycle reasons: clients/degradation-ledger.ts (the DegradationKind registry; touched by most runtime PRs for a record kind, never lifecycle behaviour); clients/latency-logger.ts (telemetry sink); clients/hook-budgets.ts (budget table (data); #2523 governs it); clients/dispatch/runners/** except its utils/availability-policy.ts and utils/runner-helpers.ts, which have rows (runner outcome parsing; the fix-run restore seam is mapped at clients/fix-run-restore.ts); clients/dispatch/facts/** (pure extractors; their tree-sitter trap accounting lives in clients/tree-sitter-client.ts).",
     "clients/turn-end/delivery-holds.ts": "The turn-end delivery holds (#3813): peek-then-commit, drain-then-restore and park-then-recheck, settled once after the cap against the kept prefix (the reach rule), fenced by isCurrentSession, with the cut-advisory park keyed by session (#4112). Modelled by turn-end-delivery-holds. The producers register their holds in clients/runtime-turn.ts (handleTurnEnd), which is deliberately not given this family: that row would reach four families and its gate would turn advisory (#3878).",
     "clients/test-runner-delivery.ts": "Automatic test-runner delivery (#2366): the in-memory pending delivery, the persisted deliveryEligible marker and the record's generations. A delivery's identity is the generation that published the record's content, not the testRunGeneration launch high-water mark (#5259), and it is eligible once its host reports idle, at agent_settled or at a publish after it. Modelled by test-runner-delivery; the idle rechecks and provenance validation are not.",
     "clients/opaque-mutation-scan.ts": "The pending opaque baseline of bash calls (OpaqueBaselineStore: one entry per tool-call id, retirement of an entry whose turn is over, the pending cap and its counted loss; #4137). Modelled by opaque-baseline-slot, together with the authority-ranked dispatch dedupe its recoveries feed (claimPipelineDispatch). The record site is clients/runtime-tool-call.ts and the take site and the dedupe are in clients/runtime-tool-result.ts, so those rows list the family too; the recovery itself (recoverOpaqueChangesViaGit, captureFileStats) is a stat or git read, not lifecycle. The per-session HEAD records and their serialized looks (headRecords, observeGitHead, serializeHeadLook; #4493) are modelled by lsp-server-content HeadMoveResync, with the resync of held documents they drive; HeadMoveHookBound models the hook bound around a look, the primary-first send and the join of every tool_call (#4493 r2).",
     "clients/deferred-runner-blockers.ts": "The commit gate's judgement of settled collect-later runner answers (`judgeDeferredRunnerFindings`). The file only reads the store through the non-draining `peekSettledRunnerFindings`, which is pending-runner-store's `PeekRead`; admission and drain live in clients/dispatch/pending-runner-findings.ts. Freshness-then-policy is not modelled.",
-    "clients/finding-delivery-gate.ts": "The gate combines freshness with disposition and policy admission; store-freshness models the underlying freshness stores, not this delivery seam. Keep it unmodelled pending the dedicated model planned by #4715.",
+    "clients/finding-delivery-gate.ts": "The delivery gate stack (#1634): the freshness verdict of a cited path against an entry's stamp, then the disposition policy over both arms, then the render. Modelled by finding-delivery for the cascade's pending neighbour record (stamp at the read, gated by freshness, kept each turn; #4495, #4487) and for a cached scanner store (demote, dispositions over live and stale, strict anchor). The file itself holds the contract and the surface registry; the gate code is in clients/advisory-provenance.ts and the stack in clients/runtime-turn.ts and clients/turn-end/lanes/. Not modelled: the project-wide admission of a secondary session, weak-anchored marks and the rule policy, and the render caps.",
     "clients/git-guard.ts": "The git guard's command classification and its writes into session state. The session latch lives in `RuntimeCoordinator` (`updateGitGuardStatus`, `markGitGuardCacheUnknown`, cleared by `resetForSession`); the latch's late writers are modelled as the `gitguard` kind of session-lifecycle's `stateW` and `debounce` writers (`StateWLate`, `Pre3759StateWUncaptured`, `DebounceCaptureAtTimer`), so the latch's reset rules stay as they are in clients/runtime-coordinator.ts. Not modelled: the persisted blocker record (`syncGitGuardRecord` writes it, with its owner sections in `carriedBlockers`) and this file's callers of the latch writer, `resyncGitGuardAfterRetire`, `retireInlineBlockerAndResyncGuard` and `markCacheUnknown`.",
-    "clients/advisory-provenance.ts": "The advisory scanners' `scannedAt` stamp (taken at runScan entry, before the spawn) is store-freshness' Stamp = \"start\" rule, listed as 'not committed' in its store map; the finding-path freshness classification (live, stale, missing, unreadable) is not modelled. The rest is pure evidence shaping.",
+    "clients/advisory-provenance.ts": "The advisory scanners' `scannedAt` stamp (taken at runScan entry, before the spawn) is store-freshness' Stamp = \"start\" rule, listed as 'not committed' in its store map. The finding-path freshness verdict (`FindingPathFreshness`, `FindingMissingPolicy`, the mtime-versus-scannedAt classification) is finding-delivery's verdict: live, stale or missing against the entry's stamp, with the fail-open `unknown` arm left out of that model. The rest is pure evidence shaping.",
+    "clients/turn-end/lanes/secrets.ts": "The secrets lane gates the gitleaks and trivy-secret caches by freshness (`onMissing: \"drop\"`, an edited file is demoted), then applies dispositions over both arms. Modelled by finding-delivery's cached store (CachedGate = freshness, PolicyArms = both, Anchor = line); the stat budget and the fail-open verdicts are not.",
+    "clients/turn-end/lanes/govulncheck.ts": "The govulncheck lane gates its cache by freshness, then applies dispositions over both arms. The stale arm and the dispositions are finding-delivery's cached store; the lane's `onMissing: \"demote\"` (a deleted trace file never drops a CVE go.mod pins, #1622) is the MutCachedKeepMissing policy as a deliberate lane choice, so the model's missing-drop rule describes the secrets lane only.",
+    "clients/diagnostic-dispositions.ts": "The disposition marks and their line-hash anchor. The store's writes are file-locks' row; finding-delivery models what the anchor decides at the gate (a false-positive survives only while the flagged line's content is unchanged, Anchor = line) and that a mark made against the current content is applied over both arms.",
     "clients/read-bridge.ts": "Out-of-band reads forwarded to io-bridge's `recordRead` as `evidence: \"disk\"`, the read guard's `recordRead`. read-guard models disk-evidence reads at the tool_result seam (`EvidenceAtResultHandler`); the bridge's own producer timing is not modelled, so a change here moves read-guard or declares it unaffected.",
     "clients/project-snapshot-persist-worker.ts": "The worker entry only serves one gzip-stage request and skips a body whose semantic fingerprint is unchanged. The Stage action and the generation-gated promotion live in clients/gzip-stage-write.ts and clients/project-snapshot.ts; the fingerprint skip itself is not modelled.",
     "clients/memory-sampler.ts": "The sessionCell turn-end sample (`recordMemoryTurnEnd`; `takeMemoryIdleGapMs` takes it) and its session reset. The nearest family is session-lifecycle, which models the session-key index (#4965, `LastMemberOwnership`), not this cell's write and take. Process-wide sampling cadence remains telemetry-only.",
@@ -486,11 +512,11 @@
     "clients/dispatch/integration.ts": "The in-lane cascade (`computeCascadeForFile`: the passive snapshot's post-edit gate, the tier branch, the bounded silent-push wait, the fallbacks, the unconfirmed marker) is modelled by cascade-delivery's `Compute`. The row stays at three families: a fourth would make it a hub and silence its gate (#3878).",
     "clients/runtime-turn.ts": "`handleTurnEnd`'s drains and the park of a cut advisory: modelled by session-lifecycle's `TurnEnd` (a turn_end drains only its own scope's work: `SecondaryTurnEnd` is master's open half of #3613 and #3758, `SecondaryTurnEndScoped` the proposed shape) and `park`/`ParkTake` (`ParkMerged`, `Pre4112ParkNoSessionKey`, `Mut4112ParkNoResetClear`, `MutParkNoFence`; the key and fence are also turn-end-delivery-holds'). The row is deliberately not given session-lifecycle: a fourth family would make it a hub and silence its gate (#3878). Its cascade sections (the registry peek, the pending and unresolved lines, the pending record) are cascade-delivery's `TurnEnd`, left off the row for the same reason.",
     "index.ts": "The hook handlers in index.ts: an edit inside one (session_start, session_shutdown, session_tree, turn_start, turn_end, agent_end, agent_settled, tool_call, tool_result, context, context_with_system) gates on that hook's families only, found by `findHookRanges` in scripts/lib/tla-coverage.mjs from the post-image the diff names (#3878). An edit outside every handler (activation setup, helpers) prints a note and never gates. `context_with_system` is the pi 0.87+ request hook that sees the full transcript; `context` injects on a pre-0.87 host and defers on 0.87+ (#4631). `model_select` re-plans the active tool set for the new model (#4687); it maps to session-lifecycle, whose LZ memory store is what the plan reads.",
-    "clients/dispatch/runners/utils/availability-policy.ts": "Availability latch state (`available`, cooldown, install attempts, trust and availability generations) changes on probes, cooldown expiry, installs, trust adoption and session reset; no family models it.",
-    "clients/dispatch/runners/utils/runner-helpers.ts": "Shared runner availability and managed-verdict flights carry in-flight probes, cooldowns and generation-scoped accumulators across callers; probe settle, reset, trust adoption and expiry are unmodelled.",
-    "clients/out-of-band-changes.ts": "Per-root bounded records, owed walks and coalesced looks change on tool calls, HEAD moves, diagnostics and subscriber publication; eviction, joined walks and publication failure are unmodelled.",
-    "clients/disk-changes.ts": "The process-singleton disk-change subscriber registry and project sequence publisher change on registration, out-of-band walks and fan-out; concurrent sessions and subscriber failures are unmodelled.",
-    "clients/disk-change-subscribers.ts": "Subscriber registration and its settled-sweep drain latch change on session/workspace events and delayed fan-out; the publisher lifecycle has no formal family.",
+    "clients/dispatch/runners/utils/availability-policy.ts": "The latch (`createAvailabilityLatch`): verdict, cooldowns, install attempts and the exhausted verdict, the trust stamp (#4530, #4776) and the install-generation sync, written by a probe's settle and read by a caller. Modelled as availability-latch's `Call`, `Settle`, `SessionStart`, `TrustAdopt` and `ExpireCooldown`. The transient cooldown ladder's lengths, the host-stall shortcut, the probe classification and the message split are not modelled.",
+    "clients/dispatch/runners/utils/runner-helpers.ts": "The probe flights that write the latch: `isSgAvailableAsync` (one latch reset in place, no generation re-check after its await: B1, `SgSweep`; a test-only export with no production caller, so B1 is latent), `createCwdCachedProbe` and `createAvailabilityChecker` (a latch or cache replaced per generation: `CwdProbe`). The sweep's module accumulators (`sgSweep*`), the latched-unavailable bookkeeping memo, the managed-shim verdict flights (`guardedWrite`) and the installer-backed resolvers are not modelled.",
+    "clients/out-of-band-changes.ts": "The look's per-root records and owed walks (both `BoundedFifoMap(MAX_ROOTS)`), the coalesced flight and its trailing pass, and the commit-before-publish order are modelled by disk-change-publisher (`Begin`, `Read`, `Commit`, `Next`; `NoLostChange`, `DemandServed`, `OneRestartPerInstall`). The FIFO eviction that loses a change is the accepted p3 B2a (`B2aEvictedInstall`, `B2aEvictedDeclaration`). Declaration-walk caps, unreadable subtrees, the HEAD baseline and the abort signal are not modelled.",
+    "clients/disk-changes.ts": "The publisher's sequence allocation before fan-out, awaited and isolated fan-out, the once-per-consumer failure record and the agent-only authorship write set are modelled by disk-change-publisher (`Alloc`, `FanOk`, `FanThrow`, `PubDone`; I2 to I5). The registry of subscribers and the per-origin policy are not modelled.",
+    "clients/disk-change-subscribers.ts": "Registration order (the diagnostics cache, then the LSP consumer) is the fan-out order of disk-change-publisher's `FanOk`; what a subscriber does with a change (the cache clock, the client restart, the watched-files events) and its settled-sweep drain latch are not modelled.",
     "clients/safe-spawn.ts": "Per-child teardown flags and timeout, abort, output-cap, close and escalation timers form a spawn lifecycle; child events and kill paths are unmodelled.",
     "clients/installer/managed-tool-refresh.ts": "Managed-tool refresh has an in-flight slot, session budget reservation and resettable tap points; session start, reset, stamp cadence and concurrent callers are unmodelled.",
     "clients/bootstrap.ts": "Analyzer bootstrap tracks resident clients, shutdown state, failure strikes, load attempts and a keyed flight; demand, session reset, shutdown and late build settlement are unmodelled.",

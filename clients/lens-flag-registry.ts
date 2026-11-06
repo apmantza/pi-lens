@@ -218,6 +218,15 @@ export const LENS_FLAGS: readonly LensFlagSpec[] = [
 		scope: "global",
 	},
 	{
+		name: "no-read-expansion",
+		description:
+			"Disable automatic read widening while keeping the read-before-edit monitor active. Also via readGuard.expandReads=false in ~/.pi-lens/config.json.",
+		configKey: "readGuard.expandReads",
+		negated: true,
+		default: false,
+		scope: "global",
+	},
+	{
 		name: "no-lens-context",
 		description:
 			"Disable automatic context injection (session-start guidance, turn-end & test findings) while keeping tools, LSP, read-guard, and formatting active. Toggle with /lens-context-toggle. Also via contextInjection.enabled=false in config or PI_LENS_NO_CONTEXT_INJECTION=1.",

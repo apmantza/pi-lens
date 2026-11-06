@@ -58,6 +58,7 @@ const DECLARED_FLAGS = [
 	"no-typos",
 	"lens-spotbugs",
 	"no-read-guard",
+	"no-read-expansion",
 	"no-lens-context",
 	"lens-retain-injections",
 	"lens-turn-summary",
