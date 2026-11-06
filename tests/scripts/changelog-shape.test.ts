@@ -214,6 +214,52 @@ describe("user entry shape", () => {
 			expect(userEntryShapeProblems(entry).join("; ")).toMatch(/one paragraph/);
 	});
 
+	// Recurrence: the continuation-line check was a deny list, and each review
+	// found the next spelling it missed (backtick fence, tilde fence, then the
+	// compact forms below). A line is admitted only when its first character
+	// starts running prose; every other first character is refused.
+	it.each([
+		["a compact quote", "  >Quoted"],
+		["a compact table row", "  |Name|Value|"],
+		["a thematic break", "  ---"],
+		["a setext underline", "  ==="],
+		["an HTML block", "  <div>"],
+		["a compact heading", "  #Title"],
+		["a lone list dash", "  -"],
+		["a compact ordered item", "  1.item"],
+		["a parenthesis ordered item", "  1) item"],
+		["an ordered item", "  1. item"],
+		["a star rule", "  ***"],
+		["a plus item", "  +item"],
+		["an emphasis opener", "  *item*"],
+		["an underscore opener", "  _item_"],
+		["a link reference definition", "  [x]: https://example.com"],
+		["an HTML comment", "  <!-- note -->"],
+		["an image", "  ![x](y)"],
+		["a double-backtick span", "  ``code`` here"],
+		["a tilde", "  ~/.pi/agent is read"],
+		["a zero-width space", "  \u200bBody"],
+		["three spaces of indent", "   Body"],
+	])("refuses %s as a continuation line", (_name, line) => {
+		expect(
+			userEntryShapeProblems(`- ${H} Body\n${line}\n  more.`).join("; "),
+		).toMatch(/one paragraph/);
+	});
+
+	it.each([
+		["a letter", "  onto a second line."],
+		["a digit", "  20 files across the tree."],
+		["a decimal", "  0.86.1 up to the next range."],
+		["a code span", "  `lens_diagnostics` reads it."],
+		["a double quote", '  "quoted" words follow.'],
+		["a single quote", "  'quoted' words follow."],
+		["a curly quote", "  \u201Cquoted\u201D words follow."],
+		["a parenthesis", "  (the second half) goes on."],
+		["a non-ASCII letter", "  \u00E9tats are kept."],
+	])("admits %s as a continuation line", (_name, line) => {
+		expect(userEntryShapeProblems(`- ${H} Body wraps\n${line}`)).toEqual([]);
+	});
+
 	it("refuses a tilde fence as it refuses a backtick fence", () => {
 		// Recurrence: `  ~~~text` between two paragraphs returned [] while the
 		// backtick form was refused.
@@ -300,6 +346,19 @@ describe("user entry shape", () => {
 			expect(userEntryShapeProblems(entry(headline)).join("; ")).toMatch(
 				/at most 100 characters/,
 			);
+		});
+
+		// Recurrence guard: the span restore must walk the spans in order; a restore
+		// that reads the first span every time counted a long second span as short.
+		it("counts each code span at its own position", () => {
+			const at = (first: string, second: string) =>
+				`The \`${first}\` and \`${second}\` options now read clean.`;
+			const rest = at("", "").replace(/`/g, "").length;
+			const long = "x".repeat(100 - rest - 1);
+			expect(
+				userEntryShapeProblems(entry(at("a", long.concat("y")))).join("; "),
+			).toMatch(/at most 100 characters/);
+			expect(userEntryShapeProblems(entry(at(long, "a")))).toEqual([]);
 		});
 
 		it("counts the rendered text, not the backticks around a code span", () => {

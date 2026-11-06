@@ -100,6 +100,15 @@ const CODE_SPAN = /`[^`]*`/g;
 // A code span collapses to one private-use character so it counts as one word
 // and its punctuation never reads as the headline's.
 const CODE_TOKEN = "\uE000";
+// A continuation line of the one-paragraph entry (#5351): two spaces, then the
+// first character of running prose. Admitted: a letter; a number (`3.5`,
+// `0.86.1`) not followed by a list marker (`1.` or `1)`); a code span (one
+// backtick, then a non-backtick, so no fence); an opening quote or parenthesis.
+// Every other first character can open a Markdown block (list, quote, table,
+// heading, rule, HTML, fence), so it is refused. A deny list missed the
+// backtick, tilde and compact forms in turn.
+const CONTINUATION_LINE =
+	/^ {2}(?:\p{L}|\d+(?:\.\d+)*(?![\d.)])|`[^`]|["'(\u201C\u2018])/u;
 const TRAILING_REFS = /\s\(refs #\d+(?:, #\d+)*\)$/;
 
 /**
@@ -130,12 +139,9 @@ export function userEntryShapeProblems(entry) {
 	if (!lines[first].startsWith("- "))
 		return ["the entry bullet must start with `- `"];
 	for (const line of lines.slice(first + 1)) {
-		if (
-			!/^ {2}\S/.test(line) ||
-			/^ {2}(?:[-*+>|#]\s|\d+\.\s|```|~~~)/.test(line)
-		)
+		if (!CONTINUATION_LINE.test(line))
 			return [
-				"the entry must be one paragraph: indent continuation lines by two spaces, with no blank line, nested list, quote, table or fence",
+				"the entry must be one paragraph: indent each continuation line by two spaces and start it with a letter, a number, a code span, a quote or an opening parenthesis (no blank line, list, quote, table, heading or fence)",
 			];
 	}
 	const text = [
