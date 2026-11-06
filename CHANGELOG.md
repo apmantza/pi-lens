@@ -16,6 +16,86 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.4.10] - 2026-11-06
+
+### Added
+
+#### Tools and reports
+
+- **`module_report` and `read_symbol` now list Groovy classes and methods.** Symbol search, imports and read expansion work for them too, and traits, interfaces, enums and constructors are listed. `.groovy`, `.gvy`, `.gy` and `.gsh` files, plus `Jenkinsfile`, `build.gradle` and `settings.gradle`, parse with a vendored tree-sitter grammar. The grammar is partial: 70% of 1,353 real files parse with no error node. Types nested in a class, command calls with named arguments and the diamond `<>` do not parse, and `module_report` shows its syntax-error warning on a partial parse. Lint and format for Groovy are not part of this change. (refs #5235)
+
+#### Configuration and flags
+
+- **Read widening can now be turned off without losing the read-before-edit guard.** Pass `--no-read-expansion` or set the global `readGuard.expandReads=false` to keep the requested read ranges while the guard stays active. Read widening stays on by default. (refs #5303)
+
+### Changed
+
+#### Language servers
+
+- **A large file can now be checked with `lens_diagnostics source=lsp` on one path.** The new user-level key `lsp.queryMaxFileLines` (5000 to 40000, suggested 20000) raises the line limit of that single-file query only; per-edit, dispatch and batch checks keep 5000 lines and 2 MiB. A project `.pi-lens.json` cannot set it, and an out-of-range value is ignored with a warning. An explicit `waitMs` now waits past the server's own wait, up to 30000 ms. A file over the limit or a wait that runs out reads as too large or timed out, never as clean, and a language server whose wait ran out now reads as timed out even while a slower scanner is still running. (refs #5306)
+
+### Fixed
+
+#### Language servers
+
+- **On Windows, a missing project-local server `.cmd` no longer blocks the PATH server or install.** When a project had no `node_modules/.bin/pyright-langserver.cmd` (or the `.cmd` for the YAML, Bash, Docker, HTML, CSS, PHP, Prisma, Vue, Svelte or Fish server), pi-lens treated the absent file as an installed server and failed with a runtime error. The Python server never reached its PATH server, and the Node-based servers never reached their managed install. An absent local `.cmd` is now skipped like any other missing candidate. Thanks to ProphetOfDoom-PoD for the report and reproduction. (refs #5305)
+
+- **An explicit `~/.pi/agent/tsconfig.json` now roots extensions that have no project of their own.** A TypeScript extension under `~/.pi/agent/extensions/` with neither a `package.json` nor a `tsconfig.json` used to get its own directory as the language-server root even when the agent directory carried a `tsconfig.json`; the server now roots at the agent directory so that config's `types` and `paths` apply. An extension-local project still wins, an agent `package.json` alone keeps the per-file root, and only the agent directory itself is read. (refs #5335)
+
+#### Rules
+
+- **`.mts` and `.cts` files now get the same checks as `.ts`.** Twelve fact rules (`error-swallowing`, `cors-wildcard`, `no-commented-credentials`, `placeholder-comments` and eight more), the comment and try/catch fact providers, the JS/TS autofix and linter policy, and the project scan each left out `.mts` and `.cts`, so those files read as unchecked with no notice. They now share one TypeScript-family check. (refs #4907)
+
+- **A nested package's `rules.<id>.threshold` now applies to its own files.** `rules.high-complexity.threshold` and `rules.high-fan-out.threshold` follow the edited file's nearest `.pi-lens.json`, field by field, like `rules.<id>.disable`: with `40` at the workspace root and `5` in `pkg/.pi-lens.json`, a function in `pkg/` is judged by `5`. A threshold in `~/.pi-lens/config.json` now applies to every file no project `.pi-lens.json` sets one for, and a project or nested file still wins over it. (refs #5292)
+
+#### Tools and reports
+
+- **Read notes now name Kotlin and Swift symbols.** A widened read named the enclosing Kotlin or Swift symbol by its node type (`function_declaration`, `class_declaration`); it now shows the real name (`greet`, `Greeter`) in the note, the read-widening record and the retry hint. Java read notes are unchanged. (refs #5320)
+
+#### Install and updates
+
+- **The first edit of a session no longer waits on an `npm config get prefix` spawn.** The lookup of the package managers' global bin dirs now starts at session start, so the first dispatch joins it instead of paying about 0.3 s for `which npm` and `npm config get prefix`. `session_start` itself costs no more than before. A tool process that exits before its first resource sample no longer records a false `resource-sampler-query-failed` record. (refs #5261)
+
+#### Hosts and integrations
+
+- **A resumed session now publishes its restored diagnostics on `pilens:diagnostics`.** An extension that listens on the bus sees the same findings as the widget, instead of nothing until the next write. (refs #5301)
+
+### Internal
+
+<details>
+<summary>14 internal changes: tests, CI, tooling, and refactors</summary>
+
+- Tier-2 pi sessions start with the orphan-backstop cooldown armed, so a long test file's 30 s sweep cannot SIGKILL a stale host process and red the #2042 kill guard (refs #4909).
+
+- Fixed nightly LSP drift notification setup, idle-eviction provisioning, and capability-matrix row coverage (refs #5323).
+
+- The type-aware lint lane enables `typescript/switch-exhaustiveness-check`, so a union switch whose `default:` would absorb a new member is flagged; the 11 runtime sites are listed explicitly or carry a reasoned disable (#5331).
+
+- The module-level ast-grep availability sweep in `clients/dispatch/runners/utils/runner-helpers.ts` (`isSgAvailableAsync`, `getSgCommand`, the `sg` export and their helpers) is deleted: it had no production caller, carried the B1 cross-session latch write, and production ast-grep runs through `SgRunner` (closes #5345).
+
+- The nightly clean-signal probe no longer credits a fixture's row to a different launch: a `typescript7` row that ran the classic server now reads `unknown` instead of `mode=push-only`, the probe rewrites the tracked LSP capability matrix only with `--write-matrix`, and the comments and matrix prose no longer say native TS7 is silent on clean (it is a pull server) (refs #5348).
+
+- The nightly `silentOnClean` drift check no longer files `silent-not-marked` for an auxiliary server (fallow, ast-grep, opengrep, zizmor, typos), and the comments and matrix prose no longer say native TS7 publishes on clean (refs #5348). The native TS7 marker stays `false`.
+
+- Changelog fragments now carry an `area:` and one fixed headline-and-body shape that `rollup-changelog.mjs --check` enforces, and the release rollup groups each section's entries by area (refs #5351).
+
+- **PR body Refs checks now match land-time requirements.** A referenced open issue must have a line-start `Remaining #N:` line, unless GitHub identifies it as a tracking or umbrella issue.
+
+- **Fact-store bound test fills the session-fact cap directly** — the large-batch case no longer dispatches 4296 real files to fill the cap, so it stops running at its timeout on CI. The test also pins the dispatcher's own baseline write (refs #5307).
+
+- The installer's npm global-bin and pip user-base rungs now verify their candidates through one `firstVerifiedBinary` loop instead of two byte-identical copies of the access, project-trust and verification steps; resolution results are unchanged (refs #4907).
+
+- Five hand-written `key === root || key.startsWith(`${root}/`)` containment tests (LSP client-root overlap in two places, the blocker sweep's root test, `findModuleForPath`, the `lens_diagnostics` directory scope) now ask `isWithinForm`, the path owner (refs #4907).
+
+- **The dispatcher's code-like diagnostic path check folds backslashes through `toPosix` (refs #4907)** — `looksLikeDiagnosticCodePath` hand-rolled `.replace(/\\/g, "/")`; it now calls the shared seam, and the `path-key-fold-sweep` pin for `clients/dispatch/dispatcher.ts` is gone. Behaviour is unchanged.
+
+- Pin five behaviours that survived hand mutation: the single-tag token precedence in `check-action-pins`, the sentence splitter and list-marker strip in `check-prose`, the libc drift predicate in `package-lock-sync`, and the exact root entries in `lint-prose-files` (refs #4907).
+
+- Governance now requires every module-level state-helper use to appear in the
+  TLA+ coverage map (refs #5330).
+
+</details>
+
 ## [4.4.9] - 2026-11-05
 
 ### Added
