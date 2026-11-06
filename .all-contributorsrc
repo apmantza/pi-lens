@@ -2140,6 +2140,24 @@
       "contributions": [
         "bug"
       ]
+    },
+    {
+      "login": "ProphetOfDoom-PoD",
+      "name": "Prophet Of Doom",
+      "avatar_url": "https://avatars.githubusercontent.com/u/260035065?v=4",
+      "profile": "https://github.com/ProphetOfDoom-PoD",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "apoapostolov",
+      "name": "Apostol Apostolov",
+      "avatar_url": "https://avatars.githubusercontent.com/u/4083812?v=4",
+      "profile": "http://www.apostolapostolov.com/",
+      "contributions": [
+        "bug"
+      ]
     }
   ]
 }
