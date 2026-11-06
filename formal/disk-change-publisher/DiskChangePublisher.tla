@@ -107,6 +107,7 @@ VARIABLES
     ran,            \* handlers that ran (answered or threw), by publish
     fails,          \* disk-change-subscriber-failed records, by consumer:root
     restarts,       \* install publishes, by root and install version
+    fresh,          \* the same, for passes that started as a fresh flight
     vInst, vDecl,   \* what the root's servers were told
     auth, edits,    \* authorship credits and agent edits
     throwsLeft
@@ -115,7 +116,7 @@ diskV == <<dInst, dDecl, extLeft>>
 lookV == <<calls, headQ, due>>
 recV == <<recs, fifo, owed>>
 flightV == <<fl, floc, rr>>
-pubV == <<pp, nPub, projSeq, alloc, dlv, ran, fails, restarts>>
+pubV == <<pp, nPub, projSeq, alloc, dlv, ran, fails, restarts, fresh>>
 viewV == <<vInst, vDecl>>
 agentV == <<auth, edits, throwsLeft>>
 vars == <<diskV, lookV, recV, flightV, pubV, viewV, agentV>>
@@ -149,8 +150,8 @@ Init ==
     /\ fifo = <<>>
     /\ owed = <<>>
     /\ fl = [r \in Roots |-> "idle"]
-    /\ floc = [r \in Roots |-> [since |-> FALSE, ep |-> NoVal, rt |-> FALSE,
-                                prior |-> NoRec, walk |-> FALSE, oi |-> 0,
+    /\ floc = [r \in Roots |-> [since |-> FALSE, ep |-> NoVal, tr |-> FALSE,
+                                rt |-> FALSE, prior |-> NoRec, walk |-> FALSE, oi |-> 0,
                                 od |-> 0, new |-> NoRec]]
     /\ rr = [r \in Roots |-> FALSE]
     /\ pp = [r \in Roots |-> NoPub]
@@ -161,6 +162,7 @@ Init ==
     /\ ran = {}
     /\ fails = [x \in SubIds \X Roots |-> 0]
     /\ restarts = [r \in Roots |-> [v \in 0..Changes |-> 0]]
+    /\ fresh = restarts
     /\ vInst = [r \in Roots |-> IF r \in SinceRoots THEN 0 ELSE NoVal]
     /\ vDecl = [r \in Roots |-> NoVal]
     /\ auth = 0
@@ -195,12 +197,13 @@ AgentEdit ==
 \* P1 of lookOnce, sync: take the owed walk (owedWalks.delete), read the
 \* record, decide walkDue. A pass with no demand and a record walks only
 \* when the interval has passed, which the model leaves open.
-Begin(r, sinceB, epB, rtB, owedIn, dueIn, recIn) ==
+Begin(r, sinceB, epB, trB, rtB, owedIn, dueIn, recIn) ==
     \E w \in (IF r \in Range(owedIn) \/ recIn = NoRec THEN {TRUE} ELSE BOOLEAN) :
         /\ owed' = RemoveVal(owedIn, r)
         /\ due' = [dueIn EXCEPT ![r] = @ /\ ~w]
         /\ fl' = [fl EXCEPT ![r] = "Read"]
-        /\ floc' = [floc EXCEPT ![r] = [since |-> sinceB, ep |-> epB, rt |-> rtB,
+        /\ floc' = [floc EXCEPT ![r] = [since |-> sinceB, ep |-> epB, tr |-> trB,
+                                        rt |-> rtB,
                                         prior |-> recIn, walk |-> w,
                                         oi |-> 0, od |-> 0, new |-> NoRec]]
 
@@ -209,7 +212,7 @@ Begin(r, sinceB, epB, rtB, owedIn, dueIn, recIn) ==
 Dispatch(r, sinceB, rtB, oweB) ==
     LET dueIn == IF oweB THEN [due EXCEPT ![r] = TRUE] ELSE due IN
     IF fl[r] = "idle"
-    THEN /\ Begin(r, sinceB, IF sinceB THEN vInst[r] ELSE NoVal, rtB,
+    THEN /\ Begin(r, sinceB, IF sinceB THEN vInst[r] ELSE NoVal, FALSE, rtB,
                   IF oweB THEN OweSeq(owed, r) ELSE owed, dueIn, recs[r])
          /\ UNCHANGED <<rr, recs, fifo>>
     ELSE /\ rr' = [rr EXCEPT ![r] = TRUE]
@@ -266,7 +269,7 @@ Commit(r) ==
     LET L == floc[r]
         prior == L.prior
         installed == IF prior = NoRec
-                        THEN L.since /\ L.ep /= NoVal /\ L.oi > L.ep
+                        THEN L.since /\ L.oi > L.ep
                         ELSE L.oi /= prior.i
         dchg == L.walk /\ prior /= NoRec /\ L.od /= prior.d
         newRec == [i |-> L.oi,
@@ -288,6 +291,9 @@ Commit(r) ==
     /\ restarts' = IF installed
                       THEN [restarts EXCEPT ![r][L.oi] = @ + 1]
                       ELSE restarts
+    /\ fresh' = IF installed /\ ~L.tr
+                  THEN [fresh EXCEPT ![r][L.oi] = @ + 1]
+                  ELSE fresh
     /\ IF publishes
        THEN /\ nPub' = nPub + 1
             /\ pp' = [pp EXCEPT ![r] = [st |-> "Fan", id |-> nPub + 1,
@@ -312,7 +318,7 @@ Alloc(r) ==
     /\ alloc' = alloc \cup {[id |-> p.id, seq |-> n]}
     /\ auth' = IF PublishCredits THEN auth + 1 ELSE auth
     /\ UNCHANGED <<diskV, lookV, recV, flightV, viewV, nPub, dlv, ran, fails,
-                   restarts, edits, throwsLeft>>
+                   restarts, fresh, edits, throwsLeft>>
 
 \* fanOut: one registered consumer at a time, in registration order.
 FanOk(r) ==
@@ -326,7 +332,7 @@ FanOk(r) ==
     /\ pp' = [pp EXCEPT ![r].idx = p.idx + 1,
                         ![r].st = IF p.idx = NSubs THEN "done" ELSE "Fan"]
     /\ UNCHANGED <<diskV, lookV, recV, flightV, viewV, nPub, projSeq, alloc,
-                   fails, restarts, agentV>>
+                   fails, restarts, fresh, agentV>>
 
 FanThrow(r) ==
     LET p == pp[r]
@@ -343,7 +349,7 @@ FanThrow(r) ==
                         ![r].st = IF p.idx = NSubs \/ ~IsolateThrows
                                      THEN "done" ELSE "Fan"]
     /\ UNCHANGED <<diskV, lookV, recV, flightV, viewV, nPub, projSeq, alloc,
-                   dlv, restarts, auth, edits>>
+                   dlv, restarts, fresh, auth, edits>>
 
 \* lookOnce returns once publishDiskChange resolved, which is after the fan-out.
 \* Not awaited, the flight moves on while the fan-out is still running.
@@ -364,7 +370,7 @@ Next(r) ==
        THEN /\ rr' = [rr EXCEPT ![r] = FALSE]
             /\ \* the trailing pass runs the first caller's closure: its
                \* `since` and its runtime, not the joiner's
-               Begin(r, floc[r].since, floc[r].ep, floc[r].rt, owed, due,
+               Begin(r, floc[r].since, floc[r].ep, TRUE, floc[r].rt, owed, due,
                      IF ~TrailingSeesFlightRecord THEN floc[r].prior
                      ELSE IF CommitBeforePublish THEN recs[r]
                      ELSE floc[r].new)
@@ -420,6 +426,13 @@ I5RecordedOnce == \A x \in SubIds \X Roots : fails[x] <= 1
 \* Two sessions on one root share the record "so one install restarts once".
 OneRestartPerInstall ==
     \A r \in Roots, v \in 0..Changes : restarts[r][v] <= 1
+
+\* The same promise for passes that started as a fresh flight, a trailing pass
+\* left out. A config under eviction checks this one, so it still proves the
+\* first-look epoch filter never passes an install the client already read
+\* (EvictedInstallTrailing owns the trailing pass, which does).
+OneFreshRestartPerInstall ==
+    \A r \in Roots, v \in 0..Changes : fresh[r][v] <= 1
 
 \* Every look of the root names the live client's spawn epoch, so an evicted
 \* record's first look still publishes an install fresher than it.

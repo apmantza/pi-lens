@@ -59,7 +59,10 @@ Three more invariants:
 - `OneRestartPerInstall`: "two sessions' looks after one install restart
   once" (the `looks` comment, `clients/out-of-band-changes.ts:151`). It holds
   while the record survives; `EvictedInstallTrailing` is the schedule where an
-  eviction breaks it (B2b).
+  eviction breaks it (B2b). `OneFreshRestartPerInstall` is the same count for
+  passes that started as a fresh flight (not a trailing pass): the eviction
+  config `EvictedInstallSince` checks it, so the first-look epoch filter is
+  still proven never to republish an install the client already read.
 - `DemandServed`: #4532 gap 6, "a joined look gets the walk it demands"
   (the `owedWalks` comment).
 - `NoLostChange` is the model's own property, not a promise a comment makes.
@@ -84,7 +87,7 @@ tests named in `formal/switch-pins.json`.
 |---|---|
 | `AsBuilt`, `AsBuiltWide`, `TwoSessions`, `ThrowingSubscriber`, `ThreeRoots` | pass, all invariants (no eviction pressure: the record cap is at least the number of roots) |
 | `OwedEvictionKeepsChanges` | pass: an evicted owed walk loses no change |
-| `EvictedInstallSince` | pass (all invariants but `OneRestartPerInstall`, which `EvictedInstallTrailing` owns): an install after a record eviction is published when the first look names the live client's spawn epoch |
+| `EvictedInstallSince` | pass (`OneFreshRestartPerInstall` in place of `OneRestartPerInstall`, which `EvictedInstallTrailing` owns): an install after a record eviction is published when the first look names the live client's spawn epoch |
 | `EvictedInstallTrailing` | violated `OneRestartPerInstall` (**B2b**, a real defect, reproduced on the code: see below) |
 | `B2aEvictedInstall` | violated `NoLostChange` (**B2a**, install: the accepted p3 residual) |
 | `B2aEvictedDeclaration` | violated `NoLostChange` (**B2a**, declaration: the epoch does not rescue it) |
@@ -167,7 +170,7 @@ keeps `ep`, the epoch captured at the call, apart from `vInst`;
 State 16 violates `OneRestartPerInstall`. The real code reproduces it
 (throwaway probe, not in the repo, built `clients/`): a subscriber of the real
 publisher joins root A's flight with a second `lookForOutOfBandChanges` call,
-then awaits first looks of N other temp roots while A's publish is held open;
+then awaits first looks of N other temp roots while A's publish is held open (A recorded first, in a fresh process);
 A names `since` 60 s old and has a `package-lock.json`. Publishes of A's
 install, counted by the subscriber: N = 1 gives 1, N = 63 gives 1, N = 64
 gives 2. A fresh look after the restart names the new spawn epoch
@@ -175,9 +178,15 @@ gives 2. A fresh look after the restart names the new spawn epoch
 republish (`EvictedInstallSince` passes, with a third call that is a fresh
 look).
 
-The trigger is B2a's: 64 other roots must record their first look inside the
-window of one root's publish (the restart can take seconds). Nobody has shown
-it. The runtime is unchanged here; the PR hand-back asks for the defect to be
+The precondition is B2a's: a saturated FIFO, that is a process that has
+recorded 64 roots with this root the oldest. Then ONE new root's first look
+inside the window of the root's publish (the restart can take seconds) evicts
+it. A probe in one process (A recorded first, then F other roots, then an
+install at A, a held publish, a joined call, M new first looks in the window)
+gave: F = 62, M = 1 gives 1 publish; F = 63, M = 0 gives 1; F = 63, M = 1
+gives 2. So it is not "64 roots inside the window": every new root evicts the
+head once the FIFO is full. Nobody has shown a process that records 64 roots.
+The runtime is unchanged here; the PR hand-back asks for the defect to be
 filed, and the config documents it. A fix is outside this PR: the trailing
 pass would have to carry the epoch the first pass left (the spawn epoch of the
 restarted client), or skip the first-look branch when the flight published.
