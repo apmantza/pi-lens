@@ -151,8 +151,10 @@ invariant it breaks. `Kinds`, `OutsideKinds`, `CanMark`, `MaxClk` and
 - More than one file, finding or neighbour; a file re-created after a delete.
 - The record's cap (`MAX_PENDING_NEIGHBORS`) and its eviction.
 - The lane that takes `onMissing: "demote"` (govulncheck pins its CVE to
-  go.mod): the model's missing-drop rule is the secrets lanes' policy, and
-  `MutCachedKeepMissing` is the govulncheck policy applied to them. The
+  go.mod): the model's missing-drop rule is the secrets lanes' policy.
+  `MutCachedKeepMissing` delivers a deleted file's finding at full authority,
+  which is not govulncheck's policy: govulncheck demotes it without a line,
+  and the model has no value for that. The
   late-auxiliary and late-runner drains drop a stale answer and re-arm
   instead of demoting (`formal/late-aux-drain`, `formal/pending-runner-store`).
 - The fail-open verdicts: an unreadable path reads `live` (`unknown`), and the
