@@ -100,14 +100,20 @@ function setup() {
 }
 
 // `labels` is the label list the double answers for any `/issues/<n>`.
-async function ci(text: string, labels: string[] = []) {
+async function ci(text: string, labels: string[] = [], trackerIssue = true) {
 	const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 	const fetchImpl = vi.fn().mockImplementation(async (url: string) => {
 		if (String(url).includes("/files"))
 			return new Response("[]", { status: 200 });
 		if (/\/issues\/\d+$/.test(String(url)))
 			return new Response(
-				JSON.stringify({ labels: labels.map((name) => ({ name })) }),
+				JSON.stringify({
+					labels: labels.map((name) => ({ name })),
+					state: "open",
+					title: trackerIssue
+						? "tracking: generated review metadata"
+						: "ordinary issue",
+				}),
 				{ status: 200 },
 			);
 		return new Response(JSON.stringify({ body: text }), { status: 200 });
@@ -123,9 +129,13 @@ async function ci(text: string, labels: string[] = []) {
 }
 // The label of a referenced issue is not this file's subject (#4968): the
 // cut is, so the reference label read is pinned at its process boundary.
+// The Refs remainder rule reads the whole body as land.sh does (#5328 r3), so
+// Greptile's quoted `(refs #43...` is a reference there too; #43 is closed,
+// which the CLI resolves through gh and this double states.
 const localResult = (text: string) =>
 	lintLocalPrBody(text, process.cwd(), (() => "") as never, {
 		bugReferenced: false,
+		refsRemainderTrackers: [43],
 	});
 const local = (text: string) => localResult(text).errors.join("\n");
 
@@ -294,6 +304,12 @@ describe("readers that own a GitHub semantic read the full body (#4778 F2)", () 
 		expect(result.errors.join("\n")).not.toContain(
 			"Invalid close-keyword placement",
 		);
+	});
+
+	it("checks a Refs line behind a bot marker through the event entry", async () => {
+		const text = `${authoredSmall}\n\n<!-- bot -->\n\nRefs #4999\n`;
+		const run = await ci(text, [], false);
+		expect(run.printed).toContain("Remaining #4999:");
 	});
 
 	// The bug-label resolvers and the "label unreadable" warning read the

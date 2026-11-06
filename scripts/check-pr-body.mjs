@@ -3773,6 +3773,49 @@ function referencedOnly(fullBody, title = "") {
 	};
 }
 
+// #5326: land.sh's refs check (refs-remainder-check.sh --pre), rule for rule.
+// It joins title + " " + body, deletes every `[^`]*` pair (its jq gsub, so a
+// fence pairs away too and a title backtick can pair with a body one), takes
+// the unique `refs #N` numbers, and skips an issue the raw body closes (its
+// line-wise closes_of grep). Any other `#N` of the title, such as
+// "(closes #N)", is not a Refs reference. Unknown metadata is no exemption.
+const REFS_REMAINDER_SCAN = /\brefs?\s+#(\d+)/gi;
+const REFS_REMAINDER_CLOSES =
+	/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[^\S\n]+#(\d+)/gi;
+const REFS_REMAINDER_LINE =
+	/^[ \t]*(?:[-*][ \t]+)?Remaining #(\d+):[ \t]*(.+\S)[ \t]*$/;
+
+function refsRemainderIssues(fullBody, title = "") {
+	const body = String(fullBody ?? "");
+	const closed = new Set(
+		[...body.matchAll(REFS_REMAINDER_CLOSES)].map((match) => Number(match[1])),
+	);
+	const source = `${String(title ?? "")} ${body}`.replace(/`[^`]*`/g, "");
+	const issues = new Set(
+		[...source.matchAll(REFS_REMAINDER_SCAN)].map((match) => Number(match[1])),
+	);
+	return [...issues].filter((number) => !closed.has(number));
+}
+
+export function lintRefsRemainders(
+	fullBody,
+	{ title = "", trackerIssues = [] } = {},
+) {
+	const trackers = new Set(trackerIssues);
+	const lines = String(fullBody ?? "").split(/\r?\n/);
+	const remainderLines = new Map();
+	for (const line of lines) {
+		const match = REFS_REMAINDER_LINE.exec(line);
+		if (match) remainderLines.set(Number(match[1]), true);
+	}
+	return refsRemainderIssues(fullBody, title).flatMap((number) => {
+		if (trackers.has(number) || remainderLines.has(number)) return [];
+		return [
+			`PR body references open issue #${number} with Refs but has no line-start "Remaining #${number}: <what is left>" line. Put the remainder on its own line (optionally as a bullet), or change Refs to Closes (#5326).`,
+		];
+	});
+}
+
 function sectionVerdict(section, text, { closes = [] } = {}) {
 	const source = String(text ?? "");
 	if (section === "fold check") {
@@ -4761,6 +4804,13 @@ export function lintPrBody(body = "", options = {}) {
 	const placeholders = templatePlaceholderLines();
 	const structure = headingLines(body, headings).name;
 	const errors = options.diff ? lintDiffCompliance(body, options) : [];
+	if (options.workingTree)
+		errors.push(
+			...lintRefsRemainders(options.refsBody ?? body, {
+				title: options.title,
+				trackerIssues: options.refsRemainderTrackers,
+			}),
+		);
 	const lead = headings.find((heading) => hasSection(heading, "summary"));
 	const firstHeading = headings[0]?.index ?? lines.length;
 	const nextSectionHeading = (heading) =>
@@ -4987,6 +5037,51 @@ export function resolveBugReferencedViaGh(
 	return anyReferencedBug(fullBody, ghIssueReader(cwd, exec), title);
 }
 
+// #5326: land.sh exempts issues whose title starts with `tracking:` or
+// `Umbrella:`, case-sensitive as its bash `=~` reads them. Resolve that title
+// when the transport is available; an unread issue returns no exemption, so
+// the body rule fails closed offline.
+export async function resolveRefsRemainderTrackers(
+	fullBody,
+	fetchImpl = globalThis.fetch,
+	title = "",
+) {
+	return refsRemainderTrackers(
+		refsRemainderIssues(fullBody, title),
+		apiIssueReader(fetchImpl),
+	);
+}
+
+export async function resolveRefsRemainderTrackersViaGh(
+	fullBody,
+	cwd = process.cwd(),
+	exec = execFileSync,
+	title = "",
+) {
+	return refsRemainderTrackers(
+		refsRemainderIssues(fullBody, title),
+		ghIssueReader(cwd, exec),
+	);
+}
+
+async function refsRemainderTrackers(issues, readIssue) {
+	const trackers = [];
+	for (const number of issues) {
+		try {
+			const data = await readIssue(number);
+			const issueTitle = typeof data?.title === "string" ? data.title : "";
+			if (
+				data?.state === "closed" ||
+				/^(?:tracking|Umbrella):/.test(issueTitle)
+			)
+				trackers.push(number);
+		} catch {
+			// Unknown metadata is deliberately not an exemption.
+		}
+	}
+	return trackers;
+}
+
 async function anyReferencedBug(fullBody, readIssue, title) {
 	const { issues, unrecognised } = referencedOnly(fullBody, title);
 	if (unrecognised.length) return null;
@@ -5145,16 +5240,23 @@ export async function lintPullRequestEvent(
 		const reason = error instanceof Error ? error.message : String(error);
 		throw new Error(`diff unavailable: ${reason}`);
 	}
+	const refsRemainderTrackers = await resolveRefsRemainderTrackers(
+		fullBody,
+		fetchImpl,
+		title,
+	);
 	const result = lintPrBody(body, {
 		bugClosing: bugClosing === true || bugReferenced === true,
 		existsOnBase: baseFileReader(),
 		shapeCatalog: shapeCatalogReader(),
 		diff,
 		workingTree: true,
+		refsBody: fullBody,
 		// Existing open bodies were authored before #4280. Set PI_LENS_PROSE_GRACE=1
 		// for the transition job; local preflight remains blocking by default.
 		proseMode: process.env.PI_LENS_PROSE_GRACE === "1" ? "warn" : "block",
 		title,
+		refsRemainderTrackers,
 	});
 	const unreadable = lintReferencedBugLabels(fullBody, bugReferenced, title);
 	if (unreadable.length) {
@@ -5428,6 +5530,8 @@ export function lintLocalPrBody(
 		git,
 		proseMode: options.proseMode,
 		title: options.title,
+		refsBody: fullBody,
+		refsRemainderTrackers: options.refsRemainderTrackers,
 	});
 	// #4288: a present section is validated whatever the label, so a prose-form
 	// answer reds here instead of at CI. `lintPrBody` already did it for a
@@ -5544,8 +5648,15 @@ if (isMainModule(import.meta.url)) {
 		// check-pr-title.mjs, but preflight passes both local input files.
 		const localBody = readFileSync(localBodyPath, "utf8");
 		const bugClosing = await resolveBugClosingViaGh(localBody);
+		const refsRemainderTrackers = await resolveRefsRemainderTrackersViaGh(
+			localBody,
+			process.cwd(),
+			execFileSync,
+			title,
+		);
 		const result = lintLocalPrBody(localBody, process.cwd(), gitExecFileSync, {
 			title,
+			refsRemainderTrackers,
 			ref,
 			proseMode,
 			bugClosing,

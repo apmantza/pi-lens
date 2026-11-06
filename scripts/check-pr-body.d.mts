@@ -35,11 +35,16 @@ export declare function lintPrBody(
 		shapeCatalog?: () => Map<number, string> | null;
 		/** PR title; a `refactor(...)` title requires "## Behavior equivalence". */
 		title?: string;
+		refsRemainderTrackers?: number[];
 	},
 ): {
 	valid: boolean;
 	errors: string[];
 };
+export declare function lintRefsRemainders(
+	fullBody: string,
+	options?: { title?: string; trackerIssues?: number[] },
+): string[];
 export declare function lintClassSweep(
 	body?: string,
 	options?: { diff?: string },
@@ -111,6 +116,21 @@ export declare function resolveBugReferencedViaGh(
 	) => string,
 	title?: string,
 ): Promise<boolean | null>;
+export declare function resolveRefsRemainderTrackers(
+	fullBody: string,
+	fetchImpl?: typeof fetch,
+	title?: string,
+): Promise<number[]>;
+export declare function resolveRefsRemainderTrackersViaGh(
+	fullBody: string,
+	cwd?: string,
+	exec?: (
+		file: string,
+		args: string[],
+		options: Record<string, unknown>,
+	) => string,
+	title?: string,
+): Promise<number[]>;
 export declare function referencedIssues(body?: string): {
 	issues: number[];
 	unrecognised: string[];
@@ -139,6 +159,7 @@ export declare function lintLocalPrBody(
 		resolveBugClosing?: (body: string) => boolean | null;
 		bugReferenced?: boolean | null;
 		resolveBugReferenced?: (body: string, title?: string) => boolean | null;
+		refsRemainderTrackers?: number[];
 	},
 ): { valid: boolean; errors: string[] };
 export declare function parseRuntimeHunks(diff: string): Array<{

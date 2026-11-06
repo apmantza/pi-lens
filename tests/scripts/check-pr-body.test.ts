@@ -3277,7 +3277,7 @@ describe("PR body lint (#1844)", () => {
 		try {
 			writeFileSync(
 				bodyPath,
-				`${body}\n\n### Test assessment\nThe targeted test covers the local CLI.`,
+				`${body}\n\nRemaining #2807: the fixture follow-up remains open.\n\n### Test assessment\nThe targeted test covers the local CLI.`,
 			);
 			writeFileSync(
 				titlePath,
@@ -3291,7 +3291,7 @@ describe("PR body lint (#1844)", () => {
 			const localBody = `${body}\n\nEvidence: \`clients/ref.ts:1\`\n\`\`\`ts\nconst local = true;\n\`\`\``;
 			writeFileSync(
 				bodyPath,
-				`${localBody}\n\n### Test assessment\nThe targeted test covers the local CLI.`,
+				`${localBody}\n\nRemaining #2807: the fixture follow-up remains open.\n\n### Test assessment\nThe targeted test covers the local CLI.`,
 			);
 			for (const args of [
 				[checker, "--lint-local", bodyPath],
@@ -3347,7 +3347,7 @@ describe("PR body lint (#1844)", () => {
 		try {
 			writeFileSync(
 				bodyPath,
-				`${body}\n\n### Test assessment\nThe targeted test covers the local CLI.`,
+				`${body}\n\nRemaining #2807: the fixture follow-up remains open.\n\n### Test assessment\nThe targeted test covers the local CLI.`,
 			);
 			const positional = run(["--lint-local", bodyPath, refactorTitle]);
 			expect(positional.status).toBe(1);
@@ -3919,7 +3919,10 @@ describe("body caps (#5003)", () => {
 		"none: this fixture searched for nothing.",
 	].join("\n");
 	const errorsOf = (text: string) =>
-		lintPrBody(text, { workingTree: true }).errors;
+		lintPrBody(text, {
+			workingTree: true,
+			refsRemainderTrackers: [5003, 5207, 5208],
+		}).errors;
 	const capError = (text: string, needle: string) =>
 		errorsOf(text).filter((error) => error.includes(needle));
 	// Every budget message: the visible-text cap and the three code caps.
@@ -7365,11 +7368,13 @@ describe("--lint-local resolves the closed issue label through gh (#4288)", () =
 	// #4968: a body that only references an issue reads its label like a closing
 	// one, and a bug or nightly-drift label owes the Detection section. Before
 	// #4968 this body linted green for a bug (the audit's 24 `Refs` PRs).
-	const referencing = `${body}\n\nRefs #4321.`;
+	const referencing = `${body}\n\nRefs #4321.\nRemaining #4321: the fixture follow-up remains open.`;
 
 	posix("requires the section for a referenced bug-labelled issue", () => {
 		const run = runLint(referencing, "bug");
-		expect(run.calls).toBe("api repos/{owner}/{repo}/issues/4321");
+		expect(run.calls).toBe(
+			"api repos/{owner}/{repo}/issues/4321\napi repos/{owner}/{repo}/issues/4321",
+		);
 		expect(run.output).toContain('missing "## Detection"');
 		expect(run.status).toBe(1);
 	});
@@ -7382,7 +7387,9 @@ describe("--lint-local resolves the closed issue label through gh (#4288)", () =
 
 	posix("does not require the section for a referenced non-bug issue", () => {
 		const run = runLint(referencing, "feature");
-		expect(run.calls).toBe("api repos/{owner}/{repo}/issues/4321");
+		expect(run.calls).toBe(
+			"api repos/{owner}/{repo}/issues/4321\napi repos/{owner}/{repo}/issues/4321",
+		);
 		expect(run.status).toBe(0);
 	});
 
@@ -7400,15 +7407,21 @@ describe("--lint-local resolves the closed issue label through gh (#4288)", () =
 	// #4968 F1: the title names the issue the body words as prose.
 	posix("requires the section for a bug named only in the title", () => {
 		const run = runLint(body, "bug", undefined, "fix: tidy it (refs #4321)");
-		expect(run.calls).toBe("api repos/{owner}/{repo}/issues/4321");
+		expect(run.calls).toBe(
+			"api repos/{owner}/{repo}/issues/4321\napi repos/{owner}/{repo}/issues/4321",
+		);
 		expect(run.output).toContain('missing "## Detection"');
 		expect(run.status).toBe(1);
 	});
 
 	posix("reads a closed and a referenced issue once each", () => {
-		const run = runLint(`${body}\n\nCloses #4321. Refs #4322.`, "feature");
+		const run = runLint(
+			`${body}\n\nCloses #4321. Refs #4322.\nRemaining #4322: the fixture follow-up remains open.`,
+			"feature",
+		);
 		expect(run.calls.split("\n")).toEqual([
 			"api repos/{owner}/{repo}/issues/4321",
+			"api repos/{owner}/{repo}/issues/4322",
 			"api repos/{owner}/{repo}/issues/4322",
 		]);
 		expect(run.status).toBe(0);
