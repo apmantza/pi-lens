@@ -30,7 +30,7 @@ every publish.
 | `Dispatch`: join the running flight (one trailing pass, the first caller's closure) or start one | `looks = createSingleFlight({ coalesceTrailing: true })` (`clients/out-of-band-changes.ts:155`), `looks.run` (`:709`) |
 | `Begin`: take the owed walk, read the record, decide `walkDue` (sync) | `lookOnce` `owedWalks.delete` (`:783`), `records.get` (`:785`), `walkDue` (`:786`) |
 | `Read`: the install stamp and the declaration walk (the await) | `lookOnce` `Promise.all([readInstallStamp, walkDeclarations])` |
-| `Commit`: commit the record, diff, decide to publish | `records.set` (`:814`), `installed` (`:853`), the first-look return (`:857`) |
+| `Commit`: commit the record, diff, decide to publish; a first look compares the install to the epoch the caller named (`ep`, captured at the call) | `records.set` (`:814`), `installed` (`:853`), `firstLookSawInstall(install, options.since)` (`:855`), the first-look return (`:857`) |
 | `Alloc`: the project sequence, only for an enumerable population and only with a runtime | `clients/disk-changes.ts:443` `allocateSequence` (called at `:275`) |
 | `FanOk`/`FanThrow`: each registered subscriber in order, isolated | `clients/disk-changes.ts:463` `fanOut`; `clients/disk-change-subscribers.ts:520` registers `diagnostics-cache`, then `lsp` |
 | `PubDone`/`Next`: `lookOnce` awaits the publish; the chain loop runs the trailing pass | `await publishDiskChange` (`clients/out-of-band-changes.ts:872`); `clients/single-flight.ts` `chain` |
@@ -57,7 +57,9 @@ I1 to I5 are the prose in `clients/disk-changes.ts` (the module comment,
 Three more invariants:
 
 - `OneRestartPerInstall`: "two sessions' looks after one install restart
-  once" (the `looks` comment, `clients/out-of-band-changes.ts:151`).
+  once" (the `looks` comment, `clients/out-of-band-changes.ts:151`). It holds
+  while the record survives; `EvictedInstallTrailing` is the schedule where an
+  eviction breaks it (B2b).
 - `DemandServed`: #4532 gap 6, "a joined look gets the walk it demands"
   (the `owedWalks` comment).
 - `NoLostChange` is the model's own property, not a promise a comment makes.
@@ -82,7 +84,8 @@ tests named in `formal/switch-pins.json`.
 |---|---|
 | `AsBuilt`, `AsBuiltWide`, `TwoSessions`, `ThrowingSubscriber`, `ThreeRoots` | pass, all invariants (no eviction pressure: the record cap is at least the number of roots) |
 | `OwedEvictionKeepsChanges` | pass: an evicted owed walk loses no change |
-| `EvictedInstallSince` | pass: an install after a record eviction is published when the first look names the live client's spawn epoch |
+| `EvictedInstallSince` | pass (all invariants but `OneRestartPerInstall`, which `EvictedInstallTrailing` owns): an install after a record eviction is published when the first look names the live client's spawn epoch |
+| `EvictedInstallTrailing` | violated `OneRestartPerInstall` (**B2b**, a real defect, reproduced on the code: see below) |
 | `B2aEvictedInstall` | violated `NoLostChange` (**B2a**, install: the accepted p3 residual) |
 | `B2aEvictedDeclaration` | violated `NoLostChange` (**B2a**, declaration: the epoch does not rescue it) |
 | `OwedEvictedDeferred` | violated `DemandServed` (admitted: an evicted owed walk defers the change to the next walk) |
@@ -126,6 +129,58 @@ whoever calls (`B2aEvictedDeclaration`).
 The trigger is one process touching more than `MAX_ROOTS` (64) roots between
 two looks of one root. Nobody has shown it, so it stays an accepted p3: the
 configs document it and the runtime is unchanged.
+
+### B2b (expected fail, a real defect, not fixed here)
+
+Greptile r1 (PRRT_kwDORt8rec60hc_X) found that the first model compared a
+first look's install with `vInst`, which moves on after a publish, while the
+code compares it with the caller's fixed `options.since`. They differ on a
+trailing pass: `createSingleFlight` re-runs the first caller's own closure
+(`clients/single-flight.ts:212`, `result = await fn()`), and that closure
+passes the original `options` (`clients/out-of-band-changes.ts:709-710`,
+`lookOnce(root, key, trigger, runtime, options, homeRoot)`). So the trailing
+pass names the epoch the live client had BEFORE the first pass restarted it.
+If the record is gone by then, the trailing pass is a first look
+(`prior === undefined`, `:854`) and `firstLookSawInstall(install,
+options.since)` (`:855`) says the install is fresher than that old epoch, so
+the same install publishes twice and restarts the clients twice. The model now
+keeps `ep`, the epoch captured at the call, apart from `vInst`;
+`EvictedInstallTrailing` then violates `OneRestartPerInstall`:
+
+```
+ 1 Init
+ 2 ExtInst    an install lands on a                         dInst = [a=1, b=0]
+ 3-5 LookCall a: client look, ep = 0 (the epoch it names)
+             a: a second caller joins the flight (earns one trailing pass)
+             b: client look                                RecCap = 1
+ 6 Read       a reads install 1
+ 7 Commit     a: first look, 1 > ep 0, so it publishes     restarts[a][1] = 1
+              a: recs[a] = (1,0), fifo = <<"a">>
+ 8-11 Alloc, FanOk, FanOk, PubDone   the publish completes
+12 Read       b reads the disk
+13 Commit     b records; the FIFO evicts a                 recs[a] = none
+14 Next       a: the trailing pass starts, prior = none, ep is still 0
+15 Read       a reads install 1
+16 Commit     a: first look again, 1 > ep 0, publishes     restarts[a][1] = 2
+```
+
+State 16 violates `OneRestartPerInstall`. The real code reproduces it
+(throwaway probe, not in the repo, built `clients/`): a subscriber of the real
+publisher joins root A's flight with a second `lookForOutOfBandChanges` call,
+then awaits first looks of N other temp roots while A's publish is held open;
+A names `since` 60 s old and has a `package-lock.json`. Publishes of A's
+install, counted by the subscriber: N = 1 gives 1, N = 63 gives 1, N = 64
+gives 2. A fresh look after the restart names the new spawn epoch
+(`entry.spawnedAt`, `clients/runtime-tool-result.ts:2992`) and does not
+republish (`EvictedInstallSince` passes, with a third call that is a fresh
+look).
+
+The trigger is B2a's: 64 other roots must record their first look inside the
+window of one root's publish (the restart can take seconds). Nobody has shown
+it. The runtime is unchanged here; the PR hand-back asks for the defect to be
+filed, and the config documents it. A fix is outside this PR: the trailing
+pass would have to carry the epoch the first pass left (the spawn epoch of the
+restarted client), or skip the first-look branch when the flight published.
 
 ## Scope
 
@@ -171,10 +226,16 @@ Not modelled:
 
 ## Known abstractions
 
-These differ from the code. Neither changes what an invariant checks: I2
-relates each delivery to the sequence its own publish allocated, and the
-restart invariants count restarts.
+These differ from the code. The runtime and installs items do not change what
+an invariant checks: I2 relates each delivery to the sequence its own publish
+allocated, and the restart invariants count restarts. The epoch item is the
+one B2b leans on, which is why B2b is also reproduced on the real code.
 
+- Epoch. `ep` is the install version a `client` look finds the servers
+  holding when it is called (`vInst[r]`); the code names the client's spawn
+  time (`entry.spawnedAt`) and compares it with the install's newest mtime
+  (`firstLookSawInstall`, `>=` with a one-second slack). The model reads
+  `install fresher than the epoch` as `oi > ep`. The slack is not modelled.
 - Runtime. The model gives `diag` a runtime (`rt` is `mode /= "client"`), but
   `tools/lsp-diagnostics.ts:631` passes none, so that look allocates no
   sequence. The model gives `client` no runtime, but

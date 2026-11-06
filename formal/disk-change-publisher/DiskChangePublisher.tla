@@ -22,7 +22,9 @@
 (*             then looks later (serializeHeadLook), owing again           *)
 (* A look joins the root's running flight (single-flight, coalesceTrailing)*)
 (* or starts one. A joiner earns exactly one trailing pass, which runs the *)
-(* FIRST caller's closure: its `since` and runtime, not the joiner's.      *)
+(* FIRST caller's closure: its `since` and runtime, not the joiner's. The *)
+(* epoch `since` names is captured at the call (`ep`): the trailing pass   *)
+(* reuses it even after the first pass restarted the clients.              *)
 (*                                                                         *)
 (* A pass (lookOnce) is: P1 take the owed walk, read the record, decide    *)
 (* walkDue (sync, atomic with the call or with the previous pass's end);   *)
@@ -40,6 +42,8 @@
 (* baseline of the root's first-ever look (by design, #4476), moved on by  *)
 (* every publish. NoLostChange is the module doc's promise that a record   *)
 (* "describes the disk": a record never gets ahead of what was published.  *)
+(* `ep` is another thing: the install version a "client" look read as its  *)
+(* epoch when it was called. A publish moves `vInst` but never `ep`.       *)
 (*                                                                         *)
 (* Two sessions are two callers: they share every record, the owed set and *)
 (* the flights, as the process does.                                       *)
@@ -145,9 +149,9 @@ Init ==
     /\ fifo = <<>>
     /\ owed = <<>>
     /\ fl = [r \in Roots |-> "idle"]
-    /\ floc = [r \in Roots |-> [since |-> FALSE, rt |-> FALSE, prior |-> NoRec,
-                                walk |-> FALSE, oi |-> 0, od |-> 0,
-                                new |-> NoRec]]
+    /\ floc = [r \in Roots |-> [since |-> FALSE, ep |-> NoVal, rt |-> FALSE,
+                                prior |-> NoRec, walk |-> FALSE, oi |-> 0,
+                                od |-> 0, new |-> NoRec]]
     /\ rr = [r \in Roots |-> FALSE]
     /\ pp = [r \in Roots |-> NoPub]
     /\ nPub = 0
@@ -191,12 +195,12 @@ AgentEdit ==
 \* P1 of lookOnce, sync: take the owed walk (owedWalks.delete), read the
 \* record, decide walkDue. A pass with no demand and a record walks only
 \* when the interval has passed, which the model leaves open.
-Begin(r, sinceB, rtB, owedIn, dueIn, recIn) ==
+Begin(r, sinceB, epB, rtB, owedIn, dueIn, recIn) ==
     \E w \in (IF r \in Range(owedIn) \/ recIn = NoRec THEN {TRUE} ELSE BOOLEAN) :
         /\ owed' = RemoveVal(owedIn, r)
         /\ due' = [dueIn EXCEPT ![r] = @ /\ ~w]
         /\ fl' = [fl EXCEPT ![r] = "Read"]
-        /\ floc' = [floc EXCEPT ![r] = [since |-> sinceB, rt |-> rtB,
+        /\ floc' = [floc EXCEPT ![r] = [since |-> sinceB, ep |-> epB, rt |-> rtB,
                                         prior |-> recIn, walk |-> w,
                                         oi |-> 0, od |-> 0, new |-> NoRec]]
 
@@ -205,8 +209,8 @@ Begin(r, sinceB, rtB, owedIn, dueIn, recIn) ==
 Dispatch(r, sinceB, rtB, oweB) ==
     LET dueIn == IF oweB THEN [due EXCEPT ![r] = TRUE] ELSE due IN
     IF fl[r] = "idle"
-    THEN /\ Begin(r, sinceB, rtB, IF oweB THEN OweSeq(owed, r) ELSE owed,
-                  dueIn, recs[r])
+    THEN /\ Begin(r, sinceB, IF sinceB THEN vInst[r] ELSE NoVal, rtB,
+                  IF oweB THEN OweSeq(owed, r) ELSE owed, dueIn, recs[r])
          /\ UNCHANGED <<rr, recs, fifo>>
     ELSE /\ rr' = [rr EXCEPT ![r] = TRUE]
          /\ owed' = IF oweB /\ JoinOwesWalk THEN OweSeq(owed, r) ELSE owed
@@ -254,12 +258,15 @@ CommitRec(r, rec) ==
          ELSE /\ recs' = [recs EXCEPT ![r] = rec]
               /\ fifo' = Append(fifo, r)
 
-\* Sync after the await: commit the record (I1), diff, publish.
+\* Sync after the await: commit the record (I1), diff, publish. A first look
+\* (no record) publishes an install fresher than the epoch the CALLER named
+\* (`firstLookSawInstall(install, options.since)`), `L.ep`, not what the
+\* servers hold now (`vInst`): a trailing pass reuses the first caller's epoch.
 Commit(r) ==
     LET L == floc[r]
         prior == L.prior
         installed == IF prior = NoRec
-                        THEN L.since /\ vInst[r] /= NoVal /\ L.oi /= vInst[r]
+                        THEN L.since /\ L.ep /= NoVal /\ L.oi > L.ep
                         ELSE L.oi /= prior.i
         dchg == L.walk /\ prior /= NoRec /\ L.od /= prior.d
         newRec == [i |-> L.oi,
@@ -357,7 +364,7 @@ Next(r) ==
        THEN /\ rr' = [rr EXCEPT ![r] = FALSE]
             /\ \* the trailing pass runs the first caller's closure: its
                \* `since` and its runtime, not the joiner's
-               Begin(r, floc[r].since, floc[r].rt, owed, due,
+               Begin(r, floc[r].since, floc[r].ep, floc[r].rt, owed, due,
                      IF ~TrailingSeesFlightRecord THEN floc[r].prior
                      ELSE IF CommitBeforePublish THEN recs[r]
                      ELSE floc[r].new)
