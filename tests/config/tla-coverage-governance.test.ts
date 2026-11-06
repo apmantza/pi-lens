@@ -18,6 +18,18 @@ import {
 	lintTlaCoverage,
 	parseRuntimeHunks,
 } from "../../scripts/check-pr-body.mjs";
+import {
+	loadAstGrepNapi,
+	type SgNode,
+} from "../../clients/deps/ast-grep-napi.js";
+import {
+	assertNonEmptyScan,
+	escapeRegExp,
+	listSourceFiles,
+	readWalkedFiles,
+	relativePosix,
+} from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 // #3902: the PR-body lint cases inject a fake git, so none may spawn a real
 // one. The child-process boundary records every `execFileSync` spawn and
@@ -45,6 +57,657 @@ vi.mock("node:child_process", async (importOriginal) => ({
 // an exact-count pin: a tree that grows a family the map never learns.
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const map = loadCoverageMap(REPO_ROOT);
+
+// #5330: the 2026-11-04 marker audit missed three large state machines because
+// it ranked prose markers instead of the helpers that actually retain state.
+// Rounds 2 and 3 scanned blanked text and kept missing spellings (an object
+// literal after any arrow, a field placed after a method, `import.meta`
+// followed by `Array.from`), so the census parses each file instead.
+//
+// Module scope is decided on the syntax tree: a reference is per call when it
+// sits in the body or parameters of a function, arrow or method, and per
+// instance when it is the value of a non-static class field. Everything else
+// runs once at module load, and a helper reference there is a hit. Static
+// fields, static blocks, decorators, computed keys and module-level blocks
+// all count. The census admits five forms, each a node kind or a binding
+// form and never a spelling: a type position (`type_identifier`, `typeof` in
+// a type), an import, a function declaration's name, and the source of a
+// derivation (`class C extends H`, `const A = H`, an export specifier,
+// `export * as N`). A derivation's product is tracked in every file, so the
+// chain is followed instead of admitted; a derivation inside a function is
+// tracked too, which can only add hits. Every other reference is a hit. A
+// boundary that holds an ERROR or a zero-width MISSING node is not trusted,
+// because a misread brace can fold a module statement into a function: 9 of
+// 544 runtime files parse with an ERROR today (`import("…").T` types).
+//
+// Not followed (#5330 F2, accepted p3): a helper built inside a function and
+// handed to a module-scope caller, as getProcessSingleton and sessionCell do.
+const STATE_HELPERS = [
+	"BoundedFifoMap",
+	"PathKeyedMap",
+	"createSingleFlight",
+	"createAvailabilityLatch",
+] as const;
+const ALL_STATE_HELPERS = [
+	"BoundedFifoMap",
+	"PathKeyedMap",
+	"createSingleFlight",
+	"createAvailabilityLatch",
+] as const;
+
+const napi = await loadAstGrepNapi();
+
+type StateHelperHit = { file: string; helper: string; line: number };
+type CensusSource = { file: string; source: string };
+
+const FUNCTION_KINDS = new Set([
+	"function_declaration",
+	"generator_function_declaration",
+	"function_expression",
+	"generator_function",
+	"arrow_function",
+	"method_definition",
+]);
+const PER_CALL_FIELDS = ["body", "parameters", "parameter"];
+
+const isFieldOf = (parent: SgNode, child: SgNode, field: string) =>
+	parent.field(field)?.id() === child.id();
+
+/** Byte offsets of the ERROR and zero-width MISSING nodes in a tree. */
+function damageOffsets(root: SgNode): number[] {
+	return root
+		.findAll({ rule: { any: [{ kind: "ERROR" }, { regex: "^$" }] } })
+		.filter((node) => node.kind() === "ERROR" || node.isLeaf())
+		.map((node) => node.range().start.index);
+}
+
+/**
+ * True unless a function boundary or an instance field encloses the node. A
+ * boundary with damage inside its range is skipped, as if it were not there.
+ */
+function atModuleScope(node: SgNode, damage: readonly number[]): boolean {
+	let child = node;
+	for (let parent = node.parent(); parent; parent = parent.parent()) {
+		const kind = String(parent.kind());
+		const { start, end } = parent.range();
+		const damaged = damage.some(
+			(offset) => offset >= start.index && offset <= end.index,
+		);
+		if (!damaged) {
+			if (
+				FUNCTION_KINDS.has(kind) &&
+				PER_CALL_FIELDS.some((field) => isFieldOf(parent, child, field))
+			)
+				return false;
+			if (
+				kind === "public_field_definition" &&
+				isFieldOf(parent, child, "value") &&
+				!parent.children().some((part) => part.kind() === "static")
+			)
+				return false;
+		}
+		child = parent;
+	}
+	return true;
+}
+
+/** The repo-relative `.ts` file a relative specifier names, if any. */
+function resolveModule(file: string, specifier: string): string | undefined {
+	if (!specifier.startsWith(".")) return undefined;
+	const joined = path.posix.join(path.posix.dirname(file), specifier);
+	return `${joined.replace(/\.[cm]?[jt]s$/, "")}.ts`;
+}
+
+const unquote = (node: SgNode | null) => node?.text().slice(1, -1) ?? "";
+
+const decodeEscapes = (text: string) =>
+	text.replace(
+		/\\u\{([0-9a-fA-F]+)\}|\\u([0-9a-fA-F]{4})/g,
+		(_, braced, plain) =>
+			String.fromCodePoint(Number.parseInt(braced ?? plain, 16)),
+	);
+
+type ModuleFacts = {
+	derived: string[];
+	helperModule: boolean;
+	hits: StateHelperHit[];
+};
+
+function analyzeModule(
+	root: SgNode,
+	file: string,
+	tracked: ReadonlySet<string>,
+	helperModules: ReadonlySet<string>,
+): ModuleFacts {
+	const fromHelperModule = (specifier: string) => {
+		const target = resolveModule(file, specifier);
+		return target !== undefined && helperModules.has(target);
+	};
+	const damage = damageOffsets(root);
+	const moduleScope = (node: SgNode) => atModuleScope(node, damage);
+	const local = new Set(tracked);
+	const admitted = new Set<number>();
+	const derived: string[] = [];
+	let helperModule = false;
+	const derive = (product: SgNode | null, source: SgNode) => {
+		admitted.add(source.id());
+		if (!product) return;
+		admitted.add(product.id());
+		derived.push(product.text());
+	};
+	for (const statement of root.findAll({
+		rule: { kind: "import_statement" },
+	})) {
+		const source = statement.field("source");
+		for (const fragment of source?.findAll({
+			rule: { kind: "string_fragment" },
+		}) ?? [])
+			admitted.add(fragment.id());
+		const fromHelper = fromHelperModule(unquote(source));
+		for (const binding of statement.findAll({
+			rule: {
+				any: [
+					{ kind: "import_specifier" },
+					{ kind: "namespace_import" },
+					{ kind: "identifier", inside: { kind: "import_clause" } },
+				],
+			},
+		})) {
+			const kind = String(binding.kind());
+			if (kind === "import_specifier") {
+				const name = binding.field("name")?.text() ?? "";
+				if (tracked.has(name))
+					local.add(binding.field("alias")?.text() ?? name);
+			} else if (fromHelper && kind === "namespace_import") {
+				const name = binding.find({ rule: { kind: "identifier" } });
+				if (name) local.add(name.text());
+			} else if (fromHelper && kind === "identifier") {
+				local.add(binding.text());
+			}
+		}
+	}
+	for (const node of root.findAll({
+		rule: {
+			any: [
+				{ kind: "class_declaration" },
+				{ kind: "abstract_class_declaration" },
+				{ kind: "function_declaration" },
+				{ kind: "generator_function_declaration" },
+				{
+					kind: "variable_declarator",
+					has: { field: "value", kind: "identifier" },
+				},
+				{ kind: "export_statement" },
+			],
+		},
+	})) {
+		const kind = String(node.kind());
+		const name = node.field("name");
+		if (kind.endsWith("class_declaration")) {
+			if (name && tracked.has(name.text())) helperModule = true;
+			const heritage = node
+				.children()
+				.find((part) => part.kind() === "class_heritage")
+				?.children()
+				.find((part) => part.kind() === "extends_clause")
+				?.field("value");
+			if (heritage?.kind() === "identifier" && local.has(heritage.text()))
+				derive(name, heritage);
+		} else if (kind.endsWith("function_declaration")) {
+			if (!name) continue;
+			admitted.add(name.id());
+			if (tracked.has(name.text())) helperModule = true;
+		} else if (kind === "variable_declarator") {
+			const value = node.field("value");
+			if (
+				value?.kind() === "identifier" &&
+				local.has(value.text()) &&
+				name?.kind() === "identifier"
+			)
+				derive(name, value);
+		} else {
+			const source = node.field("source");
+			for (const fragment of source?.findAll({
+				rule: { kind: "string_fragment" },
+			}) ?? [])
+				admitted.add(fragment.id());
+			const fromHelper = source !== null && fromHelperModule(unquote(source));
+			for (const specifier of node.findAll({
+				rule: { kind: "export_specifier" },
+			})) {
+				const exported = specifier.field("name");
+				const alias = specifier.field("alias");
+				if (!exported || !local.has(exported.text())) continue;
+				helperModule = true;
+				if (alias?.text() === "default") continue;
+				derive(alias, exported);
+			}
+			const namespace = node
+				.children()
+				.find((part) => part.kind() === "namespace_export");
+			if (namespace && fromHelper)
+				derive(namespace.find({ rule: { kind: "identifier" } }), namespace);
+			else if (
+				fromHelper &&
+				node.children().some((part) => part.kind() === "*")
+			)
+				helperModule = true;
+		}
+	}
+	const hits: StateHelperHit[] = [];
+	const hit = (node: SgNode, helper: string) =>
+		hits.push({ file, helper, line: node.range().start.line + 1 });
+	const names = [...local].map(escapeRegExp).join("|");
+	for (const leaf of root.findAll({
+		rule: { regex: `^(?:${names})$|\\\\u` },
+	})) {
+		const text = decodeEscapes(leaf.text());
+		if (!leaf.isLeaf() || !local.has(text) || admitted.has(leaf.id())) continue;
+		if (leaf.kind() === "type_identifier" || !moduleScope(leaf)) continue;
+		const ancestors = leaf.ancestors().map((node) => String(node.kind()));
+		if (
+			ancestors.includes("type_query") ||
+			ancestors.includes("import_statement")
+		)
+			continue;
+		hit(leaf, text);
+	}
+	for (const fragment of root.findAll({
+		rule: { kind: "string_fragment", regex: "^\\." },
+	})) {
+		if (admitted.has(fragment.id()) || !fromHelperModule(fragment.text()))
+			continue;
+		if (moduleScope(fragment)) hit(fragment, fragment.text());
+	}
+	for (const call of root.findAll({
+		rule: {
+			kind: "call_expression",
+			has: { field: "function", kind: "import" },
+		},
+	})) {
+		if (!moduleScope(call)) continue;
+		const args = call.field("arguments")?.namedChildren() ?? [];
+		const literal = args.length === 1 && args[0].kind() === "string";
+		if (!literal) hit(call, call.text());
+	}
+	return { derived, helperModule, hits };
+}
+
+/**
+ * Hits over a set of sources. Tracked names and helper modules grow to a fixed
+ * point, so the final pass reads every file with the final sets.
+ */
+async function stateHelperCensus(
+	sources: readonly CensusSource[],
+): Promise<StateHelperHit[]> {
+	const tracked = new Set<string>(STATE_HELPERS);
+	const helperModules = new Set<string>();
+	for (;;) {
+		const before = tracked.size + helperModules.size;
+		const hits: StateHelperHit[] = [];
+		for (const { file, source } of sources) {
+			const root = napi.parse(napi.Lang.TypeScript, source).root();
+			const facts = analyzeModule(root, file, tracked, helperModules);
+			for (const name of facts.derived) tracked.add(name);
+			if (facts.helperModule) helperModules.add(file);
+			hits.push(...facts.hits);
+			// #4736: a dropped tree's native arena is freed only once the loop
+			// turns, so the walk yields between files.
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+		if (tracked.size + helperModules.size === before) return hits;
+	}
+}
+
+function unmappedStateHelperHits(
+	hits: StateHelperHit[],
+	coverageMap: { map?: Record<string, unknown> },
+) {
+	return hits.filter((hit) => !Object.hasOwn(coverageMap.map ?? {}, hit.file));
+}
+
+/** Every non-test runtime source the census reads. */
+function censusSources(): CensusSource[] {
+	const files = ["clients", "mcp", "tools"].flatMap((entry) =>
+		listSourceFiles(path.join(REPO_ROOT, entry), {
+			extensions: [".ts"],
+			skipTests: true,
+		}),
+	);
+	files.push(path.join(REPO_ROOT, "index.ts"));
+	assertNonEmptyScan("module state-helper source files", files.length, 100);
+	return readWalkedFiles(files).map(({ file, source }) => ({
+		file: relativePosix(REPO_ROOT, file),
+		source,
+	}));
+}
+
+/** The hits as sorted `file:line helper` rows, so a case reads as one list. */
+async function censusRows(sources: Record<string, string>): Promise<string[]> {
+	const hits = await stateHelperCensus(
+		Object.entries(sources).map(([file, source]) => ({ file, source })),
+	);
+	return hits.map((hit) => `${hit.file}:${hit.line} ${hit.helper}`).sort();
+}
+
+/** A one-file fixture's hit rows. */
+const fixtureRows = (source: string) =>
+	censusRows({ "clients/fixture.ts": source });
+
+/** BoundedFifoMap's definition module, reduced to its declaration. */
+const DEFINITION_STUBS = {
+	"clients/bounded-cache.ts": "export class BoundedFifoMap {}",
+};
+
+describe("module-level state-helper coverage census (#5330)", () => {
+	// The tree walk is the census itself: real files through the real parse,
+	// checked against the checked-in map.
+	it(
+		"requires every module-level helper hit to have a map row",
+		async () => {
+			const hits = await stateHelperCensus(censusSources());
+			expect(hits.length).toBeGreaterThan(0);
+			const unmapped = unmappedStateHelperHits(hits, map);
+			expect(
+				unmapped,
+				unmapped
+					.map((hit) => `${hit.file}:${hit.line} ${hit.helper}`)
+					.join("\n"),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it("reds a new helper file until its row is admitted", async () => {
+		const hits = await stateHelperCensus([
+			{
+				file: "clients/fixture.ts",
+				source: "const f = new BoundedFifoMap(1);",
+			},
+		]);
+		const withoutRow = { map: {} };
+		const withRow = { map: { "clients/fixture.ts": "unmodelled" } };
+		expect(unmappedStateHelperHits(hits, withoutRow)).toHaveLength(1);
+		expect(unmappedStateHelperHits(hits, withRow)).toEqual([]);
+	});
+
+	// #5330 F1: an independent list, so dropping a name from STATE_HELPERS
+	// reds here instead of shrinking the loop with it.
+	it("keeps every helper name live in the fixture arm", async () => {
+		for (const helper of ALL_STATE_HELPERS) {
+			expect(STATE_HELPERS, helper).toContain(helper);
+			const expression =
+				helper[0] === helper[0].toUpperCase()
+					? `new ${helper}(1)`
+					: `${helper}()`;
+			expect(await fixtureRows(`const state = ${expression};`), helper).toEqual(
+				[`clients/fixture.ts:1 ${helper}`],
+			);
+		}
+	});
+
+	// #5330 F3, F3c, F3d and the round-1 list: every one of these returned no
+	// hit from a text scan in rounds 2 and 3. Each holds a helper reference
+	// that runs once at module load.
+	it.each([
+		[
+			"object literal after an arrow",
+			"const f = () => 1;\nconst s = { cache: new BoundedFifoMap(1) };",
+		],
+		[
+			"object literal after `classes`",
+			"const classes = 1;\nconst s = { cache: new BoundedFifoMap(1) };",
+		],
+		[
+			"object literal after `functionName`",
+			"const functionName = 1;\nconst s = { c: new PathKeyedMap(n) };",
+		],
+		[
+			"multi-line object after `subclassCount`",
+			"const subclassCount = 3;\nconst s = {\n  cache: new BoundedFifoMap(1),\n};",
+		],
+		[
+			"module `if` block after an arrow",
+			"const f = () => 1;\nif (process.env.X) { var c = new BoundedFifoMap(1); }",
+		],
+		[
+			"module `try` block after an arrow",
+			"const f = () => 1; let c; try { c = new createSingleFlight(); } catch {}",
+		],
+		[
+			"`import.meta` then `Array.from`",
+			"const here = import.meta.dirname; const c = new BoundedFifoMap(1); Array.from(y);",
+		],
+		[
+			"dynamic import then `Array.from`",
+			"const m = import('./x.js'); const c = new BoundedFifoMap(1); Array.from(y);",
+		],
+		["ternary second branch", "const a = flag ? x : BoundedFifoMap;"],
+		["ternary first branch", "const a = flag ? BoundedFifoMap : Other;"],
+		["object value", "const o = { make: BoundedFifoMap };"],
+		["object shorthand", "const o = { BoundedFifoMap };"],
+		["object-literal field", "const a = { cache: new BoundedFifoMap(1) };"],
+		["call argument", "register(BoundedFifoMap);"],
+		["export default", "export default BoundedFifoMap;"],
+		["array element", "const a = [BoundedFifoMap, PathKeyedMap];"],
+		["comma expression", "const a = (0, createAvailabilityLatch)();"],
+		["class expression heritage", "const K = class extends BoundedFifoMap {};"],
+		["static field", "class A { static cache = new BoundedFifoMap(1); }"],
+		[
+			"static field after a method",
+			"class A { m() {} static cache = new PathKeyedMap(1); }",
+		],
+		[
+			"static block",
+			"class A { static { register(createAvailabilityLatch()); } }",
+		],
+		["computed method key", "class A { [createSingleFlight.name]() {} }"],
+		[
+			"namespace body",
+			"namespace N { export const c = new BoundedFifoMap(1); }",
+		],
+		["destructured key", "const { BoundedFifoMap: B } = ns;"],
+		["string member key", "const c = new ns['BoundedFifoMap'](1);"],
+		["escaped identifier", "const c = new Bounded\\u0046ifoMap(1);"],
+		[
+			"`import D, { X as A }` alias",
+			"import D, { PathKeyedMap as A } from './map.js'; const a = new A(1);",
+		],
+		[
+			"alias with an inline comment",
+			"import { BoundedFifoMap /* cache */ as Cache } from './map.js'; const a = new Cache(1);",
+		],
+		[
+			"use after a multi-line export list",
+			"export {\n BoundedFifoMap,\n}; const a = new BoundedFifoMap(1);",
+		],
+		["default re-export", "export { BoundedFifoMap as default };"],
+		["computed dynamic import", "const m = await import(`./${name}.js`);"],
+	])("counts a module-scope reference: %s", async (_label, source) => {
+		expect(await fixtureRows(source)).not.toEqual([]);
+	});
+
+	// A boundary the grammar misread may hold a module-scope statement, so it
+	// excludes nothing. Both inputs are the tree's own damage shapes
+	// (clients/dispatch/runners/lsp.ts:119, clients/test-runner-client.ts:1261).
+	it.each([
+		[
+			"an ERROR node",
+			"class A { m(a: import('./x.js').T[], b: number) { return new BoundedFifoMap(1); } }",
+			"clients/fixture.ts:1 BoundedFifoMap",
+		],
+		[
+			"a MISSING node",
+			"function f() { let e: import('node:fs').Dirent[];\n return new BoundedFifoMap(1); }",
+			"clients/fixture.ts:2 BoundedFifoMap",
+		],
+	])(
+		"counts a function-body reference behind %s",
+		async (_label, source, row) => {
+			expect(await fixtureRows(source)).toEqual([row]);
+		},
+	);
+
+	// #5330 F3b: a per-call or per-instance construction is not module state,
+	// and the verdict does not depend on member order.
+	it.each([
+		["function body", "function f() { return new BoundedFifoMap(1); }"],
+		["arrow body", "const f = () => new BoundedFifoMap(1);"],
+		[
+			"function expression body",
+			"const f = function () { return createSingleFlight(); };",
+		],
+		[
+			"default parameter",
+			"function f(c = new BoundedFifoMap(1)) { return c; }",
+		],
+		[
+			"object method body",
+			"const o = { m() { return new PathKeyedMap(1); } };",
+		],
+		[
+			"constructor body",
+			"class A { constructor() { this.c = new BoundedFifoMap(1); } }",
+		],
+		[
+			"instance field before a method",
+			"class A { private readonly l = createAvailabilityLatch(); m() {} }",
+		],
+		[
+			"instance field after a method",
+			"class A { m() {} private readonly l = createAvailabilityLatch(); }",
+		],
+		[
+			"comment and inexact string",
+			"// new BoundedFifoMap(1)\nconst t = 'new BoundedFifoMap(2)';",
+		],
+	])(
+		"does not count a per-call or per-instance reference: %s",
+		async (_label, source) => {
+			expect(await fixtureRows(source)).toEqual([]);
+		},
+	);
+
+	// The admissions, one node kind or binding form each. A type position or an
+	// import binds no value; a declaration or a derivation names a helper and
+	// the derived name is tracked instead (the next case).
+	it.each([
+		["type annotation", "let c: BoundedFifoMap<string, number> | undefined;"],
+		["`as` type", "const y = x as PathKeyedMap<number>;"],
+		[
+			"`typeof` in a type",
+			"type Flight = ReturnType<typeof createSingleFlight>;",
+		],
+		[
+			"import specifier",
+			"import { BoundedFifoMap } from './bounded-cache.js';",
+		],
+		["function declaration name", "export function createSingleFlight() {}"],
+		["subclass declaration", "class Sub extends BoundedFifoMap {}"],
+		["identifier alias", "const Alias = BoundedFifoMap;"],
+		[
+			"re-export specifier",
+			"export { BoundedFifoMap as Cache } from './bounded-cache.js';",
+		],
+	])("admits a non-use: %s", async (_label, source) => {
+		expect(await fixtureRows(source)).toEqual([]);
+	});
+
+	// Alias resolution: every form that gives a helper a new name, in its own
+	// file or across files, is followed to the module-scope use.
+	it.each([
+		[
+			"a subclass",
+			{
+				"clients/lru.ts":
+					"import { BoundedFifoMap } from './bounded-cache.js';\nexport class Lru extends BoundedFifoMap {}",
+				"clients/user.ts":
+					"import { Lru } from './lru.js';\nconst c = new Lru(1);",
+			},
+			["clients/user.ts:2 Lru"],
+		],
+		[
+			// The tree has this order: clients/blocker-freshness.ts sorts before
+			// clients/bounded-cache.ts, which declares BoundedLruCache.
+			"a subclass declared in a later file",
+			{
+				"clients/a-user.ts":
+					"import { Lru } from './lru.js';\nconst c = new Lru(1);",
+				"clients/lru.ts":
+					"import { BoundedFifoMap } from './bounded-cache.js';\nexport class Lru extends BoundedFifoMap {}",
+			},
+			["clients/a-user.ts:2 Lru"],
+		],
+		[
+			"a re-export alias",
+			{
+				"clients/barrel.ts":
+					"export { BoundedFifoMap as Cache } from './bounded-cache.js';",
+				"clients/user.ts":
+					"import { Cache } from './barrel.js';\nconst c = new Cache(1);",
+			},
+			["clients/user.ts:2 Cache"],
+		],
+		[
+			"an exported identifier alias",
+			{
+				"clients/alias.ts":
+					"import { PathKeyedMap } from './path-keyed-map.js';\nexport const Keyed = PathKeyedMap;",
+				"clients/user.ts":
+					"import { Keyed as K } from './alias.js';\nconst c = new K(1);",
+			},
+			["clients/user.ts:2 K"],
+		],
+		[
+			"a namespace import with a computed member",
+			{
+				...DEFINITION_STUBS,
+				"clients/user.ts":
+					"import * as bc from './bounded-cache.js';\nconst c = new bc[name](1);",
+			},
+			["clients/user.ts:2 bc"],
+		],
+		[
+			"a default import of a helper module",
+			{
+				...DEFINITION_STUBS,
+				"clients/user.ts":
+					"import Cache from './bounded-cache.js';\nconst c = new Cache(1);",
+			},
+			["clients/user.ts:2 Cache"],
+		],
+		[
+			"a namespace import of a star re-export",
+			{
+				...DEFINITION_STUBS,
+				"clients/barrel.ts": "export * from './bounded-cache.js';",
+				"clients/user.ts":
+					"import * as barrel from './barrel.js';\nconst c = new barrel[name](1);",
+			},
+			["clients/user.ts:2 barrel"],
+		],
+		[
+			"a namespace re-export",
+			{
+				...DEFINITION_STUBS,
+				"clients/barrel.ts": "export * as caches from './bounded-cache.js';",
+				"clients/user.ts":
+					"import { caches } from './barrel.js';\nconst c = new caches[name](1);",
+			},
+			["clients/user.ts:2 caches"],
+		],
+		[
+			"a dynamic import of a helper module",
+			{
+				...DEFINITION_STUBS,
+				"clients/user.ts": "const m = await import('./bounded-cache.js');",
+			},
+			["clients/user.ts:1 ./bounded-cache.js"],
+		],
+	])("follows %s to its module-scope use", async (_label, sources, rows) => {
+		expect(await censusRows(sources)).toEqual(rows);
+	});
+});
 
 const READ_GUARD_MAP = {
 	families: ["read-guard"],
