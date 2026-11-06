@@ -29,6 +29,14 @@ function loadWorkflow(): any {
 }
 
 describe("nightly LSP capability refresh contract (#4277)", () => {
+	it("installs notify dependencies without lifecycle scripts (#5323)", () => {
+		const notify = loadWorkflow().jobs["tool-smoke-notify"];
+		const install = (notify.steps as any[]).find(
+			(step) => step.name === "Install dependencies",
+		);
+		expect(install?.run).toBe("npm ci --no-audit --no-fund --ignore-scripts");
+	});
+
 	it("builds dist before every notify-job script that reaches it (#5323)", () => {
 		const workflow = loadWorkflow();
 		const notify = workflow.jobs["tool-smoke-notify"];
