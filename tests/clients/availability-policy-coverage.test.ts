@@ -87,8 +87,6 @@ const KNOWN_CONSUMERS = [
 	"clients/dependency-checker.ts::DependencyChecker",
 	"clients/dispatch/dispatcher.ts::checkToolAvailability",
 	"clients/dispatch/runners/utils/runner-helpers.ts::createAvailabilityChecker",
-	// The second latch in the same file — invisible to a per-file gate.
-	"clients/dispatch/runners/utils/runner-helpers.ts::isSgAvailableAsync",
 	"clients/go-client.ts::GoClient",
 	"clients/govulncheck-client.ts::GovulncheckClient",
 	"clients/jscpd-client.ts::jscpdAvailability",

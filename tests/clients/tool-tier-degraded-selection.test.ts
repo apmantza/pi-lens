@@ -1,15 +1,15 @@
 /**
  * #1568 — `sawTransient` was consulted ONLY on the all-failed arm.
  *
- * Both ast-grep availability sweeps walk an ordered candidate list and stop at
+ * The ast-grep availability sweep walks an ordered candidate list and stops at
  * the first candidate that answers. A candidate that timed out was recorded in
  * `sawTransient`, but the flag was read only after every candidate had failed.
  * So when a preferred tier merely stalled and a LOWER tier answered, the sweep
- * took the win at face value and latched it: `sgLatch.noteAvailable()` /
- * `availabilityLatch.noteAvailable()` are durable for the session, and nothing
- * expires them. One busy second at warm-up therefore pinned the whole session
- * to `npx --no -- ast-grep` — a Node process per invocation — with a healthy
- * global ast-grep sitting on PATH the entire time.
+ * took the win at face value and latched it: `availabilityLatch.noteAvailable()`
+ * is durable for the session, and nothing expires it. One busy second at
+ * warm-up therefore pinned the whole session to `npx --no -- ast-grep` — a Node
+ * process per invocation — with a healthy global ast-grep sitting on PATH the
+ * entire time.
  *
  * This is #1539's degraded-selection shape in the tool-tier domain, and the fix
  * mirrors #1559's semantics: a selection made while a candidate ahead of the
@@ -17,9 +17,13 @@
  * current call and held only for the stalled tier's cooldown; after that the
  * next caller re-sweeps, and a recovered preferred tier wins back.
  *
- * Two sites, two scenarios. The control cases — a clean win latches, a
- * genuine absence ahead of the winner latches — are pinned beside each one,
- * because "never cache anything" would be worse than the bug.
+ * The control cases — a clean win latches, a genuine absence ahead of the
+ * winner latches — are pinned beside the win, because "never cache anything"
+ * would be worse than the bug.
+ *
+ * (#5345 deleted the second, unreachable module-level sweep in
+ * `runner-helpers.ts` and its twin suite here; `SgRunner` is the one
+ * ast-grep availability sweep, so it is the one production caller pinned.)
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,8 +31,8 @@ import { TRANSIENT_BASE_COOLDOWN_MS } from "../../clients/dispatch/runners/utils
 
 /**
  * Reset through the SAME module instance the clients load (the compiled `.js`):
- * the shared ast-grep memo is module state, and resetting a second instance of
- * the module silently resets nothing.
+ * the dispatch availability generation is module state, and resetting a second
+ * instance of the module silently resets nothing.
  */
 async function resetDispatchAvailabilityState(): Promise<void> {
 	const helpers =
@@ -159,129 +163,6 @@ afterEach(async () => {
 	vi.useRealTimers();
 	await resetDispatchAvailabilityState();
 	(await import("../../clients/project-trust.js")).resetProjectTrust();
-});
-
-describe("shared ast-grep memo: a stalled preferred tier is provisional (#1568)", () => {
-	async function loadHelpers() {
-		return await import("../../clients/dispatch/runners/utils/runner-helpers.js");
-	}
-
-	it("uses npx now, then hands the session back to ast-grep after the cooldown", async () => {
-		routeTiers({ preferred: timeoutResult, npx: astGrepOk() });
-		const { isSgAvailableAsync, getSgCommand } = await loadHelpers();
-
-		// The current call is served, as before: npx answers, so ast-grep works.
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(getSgCommand().cmd).toBe("npx");
-		const probesAfterFirst = safeSpawnAsync.mock.calls.length;
-
-		// Inside the cooldown the provisional pick holds — no re-sweep per call.
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(safeSpawnAsync.mock.calls.length).toBe(probesAfterFirst);
-
-		// After the stalled tier's cooldown the sweep runs again, and the
-		// recovered preferred tier wins. Pre-fix the npx pick was latched
-		// `available` for the life of the process, so no second sweep ever ran.
-		advancePastCooldown();
-		routeTiers({ preferred: astGrepOk(), npx: astGrepOk() });
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(safeSpawnAsync.mock.calls.length).toBeGreaterThan(probesAfterFirst);
-		expect(getSgCommand().cmd).not.toBe("npx");
-	});
-
-	it("says in the decision record that the win was provisional", async () => {
-		routeTiers({ preferred: timeoutResult, npx: astGrepOk() });
-		const { isSgAvailableAsync } = await loadHelpers();
-
-		expect(await isSgAvailableAsync()).toBe(true);
-		const metadata = lastAvailableDecision("ast-grep");
-		// Pre-fix an `available` row was always `latched: true` with no retry, so
-		// a log reader could not tell a real win from a degraded one.
-		expect(metadata.provisional).toBe(true);
-		expect(metadata.latched).toBe(false);
-		expect(metadata.retryAfterMs).toBe(TRANSIENT_BASE_COOLDOWN_MS);
-		expect(metadata.unreachablePreferred).toContain("ast-grep");
-	});
-
-	it("control: a clean win still latches for the session", async () => {
-		routeTiers({ preferred: astGrepOk(), npx: astGrepOk() });
-		const { isSgAvailableAsync } = await loadHelpers();
-
-		expect(await isSgAvailableAsync()).toBe(true);
-		const probes = safeSpawnAsync.mock.calls.length;
-		expect(lastAvailableDecision("ast-grep").latched).toBe(true);
-		expect(lastAvailableDecision("ast-grep").provisional).toBeUndefined();
-
-		// No cooldown to expire: the verdict is a durable fact.
-		advancePastCooldown();
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(safeSpawnAsync.mock.calls.length).toBe(probes);
-	});
-
-	it("control: a genuinely ABSENT preferred tier still latches the npx win", async () => {
-		// Nothing stalled, so the npx win is on the merits — re-sweeping every
-		// 30 s would be the "never cache anything" regression.
-		routeTiers({ preferred: missingResult, npx: astGrepOk() });
-		const { isSgAvailableAsync } = await loadHelpers();
-
-		expect(await isSgAvailableAsync()).toBe(true);
-		const probes = safeSpawnAsync.mock.calls.length;
-		expect(lastAvailableDecision("ast-grep").latched).toBe(true);
-
-		advancePastCooldown();
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(safeSpawnAsync.mock.calls.length).toBe(probes);
-	});
-
-	it("a still-stalled re-sweep keeps the winner instead of turning ast-grep off", async () => {
-		// #1568 review F1. The re-sweep is the point of the provisional state, and
-		// on a host that is STILL busy every candidate times out — including the
-		// npx that answered 30 s ago. Flipping to `unavailable` there runs #1476's
-		// principle backwards: a timeout says nothing about the tool, so it cannot
-		// erase a command this very process proved working. `sgCmd` is still in
-		// hand; keep serving it and re-arm the cooldown.
-		routeTiers({ preferred: timeoutResult, npx: astGrepOk() });
-		const { isSgAvailableAsync, getSgCommand } = await loadHelpers();
-
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(getSgCommand().cmd).toBe("npx");
-
-		advancePastCooldown();
-		safeSpawnAsync.mockResolvedValue(timeoutResult);
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(getSgCommand().cmd).toBe("npx");
-
-		const metadata = lastAvailableDecision("ast-grep");
-		expect(metadata.provisional).toBe(true);
-		expect(metadata.retained).toBe(true);
-		expect(metadata.latched).toBe(false);
-		// Re-armed, and escalated: attempt 2 on the transient ladder.
-		expect(metadata.retryAfterMs).toBe(TRANSIENT_BASE_COOLDOWN_MS * 2);
-
-		// Still provisional, so recovery still lands once the host settles.
-		advancePastSecondCooldown();
-		routeTiers({ preferred: astGrepOk(), npx: astGrepOk() });
-		expect(await isSgAvailableAsync()).toBe(true);
-		expect(getSgCommand().cmd).not.toBe("npx");
-		expect(lastAvailableDecision("ast-grep").latched).toBe(true);
-	});
-
-	it("logs candidate NAMES, never absolute local paths (#1568 review F3)", async () => {
-		// Tier 1 is `node_modules/.bin/<name>`, an absolute path under the user's
-		// home. Every sibling row in latency.log carries a tool name, so writing a
-		// filesystem path here both leaks it and breaks the grep.
-		routeTiers({ preferred: timeoutResult, npx: astGrepOk() });
-		const { isSgAvailableAsync } = await loadHelpers();
-
-		expect(await isSgAvailableAsync()).toBe(true);
-		const unreachable = lastAvailableDecision("ast-grep")
-			.unreachablePreferred as string[];
-		expect(unreachable.length).toBeGreaterThan(0);
-		for (const name of unreachable) {
-			expect(name).not.toMatch(/[\\/]/);
-		}
-		expect(unreachable).toContain("ast-grep");
-	});
 });
 
 describe("SgRunner.doEnsureAvailable: a stalled DIRECT tier is provisional (#1568)", () => {

@@ -160,7 +160,9 @@ const EXPECTED_FILES = 79;
 // one `spawnResolved`, the seam that takes a `ResolvedSgCommand`.
 // 131 -> 129 (#5289): `safeSpawnBatch` and the sync `isCommandAvailable` had no
 // caller; each held one direct spawn site, and both are deleted.
-const EXPECTED_DIRECT_SITES = 129;
+// 129 -> 128 (#5345): the unused module-level ast-grep sweep is deleted; its
+// `probeAstGrepCommandAsync` direct `safeSpawnAsync` site goes with it.
+const EXPECTED_DIRECT_SITES = 128;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -386,10 +388,6 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/sg-runner.ts#SgRunner.exec:577cdec8",
 		"exec is the shared ast-grep invocation (optionally through bash on Windows): same explicit-argument contract as execRaw, and the same conditional pi-lens-owned neutral cwd when the npx fallback won",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync:5eda2591",
-		"the scoped cache-only `npx --package @ast-grep/cli` availability probe: `...getIsolatedNpxSpawnOptions()` runs it in the pi-lens-owned neutral tools dir so a hostile project `.npmrc` is never read, and the scan cannot follow a call spread",
 	],
 	[
 		"clients/sg-runner.ts#SgRunner.probeCommand:4b5ea917",

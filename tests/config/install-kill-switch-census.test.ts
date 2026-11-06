@@ -838,8 +838,6 @@ const PM =
 	"a package-manager query or run-script (config get prefix, bin -g, the repo's rebuild script), not an install verb";
 const LSP =
 	"language-server launch and install code: its installs follow PI_LENS_DISABLE_LSP_INSTALL (canInstall in clients/lsp/server.ts, a separate switch), and its probes (java finder, --version) install nothing";
-const NPX_NO =
-	"npx --no: the package runner is told to use the local or cached copy and never download, and the seam runs it offline under the switch as well";
 const OPERAND =
 	"a known-good command and literal words plus one computed operand the census cannot fold: mix credo's file argument is path.resolve(cwd, file), an absolute path that cannot read as an option, and git diff's two operands are commit ids readGitHead read from git rev-parse; neither tool installs anything. Each call's words and options are pinned by text";
 const REGISTRY_PATH =
@@ -889,15 +887,6 @@ const ROWS: Readonly<Record<string, Row>> = {
 				`"powershell.exe" ["-NoProfile", "-NonInteractive", "-Command", "[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')"]`,
 			],
 		},
-	}),
-	...because(NPX_NO, {
-		"clients/dispatch/runners/utils/runner-helpers.ts#probeAstGrepCommandAsync":
-			{
-				sites: 1,
-				pins: [
-					`"npx" ["--no", "--package", "@ast-grep/cli", "--", "ast-grep"]`,
-				],
-			},
 	}),
 	...because(PM, {
 		"clients/mcp/review.ts#safeSpawnAsync": 1,
@@ -966,8 +955,8 @@ const ROWS: Readonly<Record<string, Row>> = {
 		"clients/dispatch/runners/tflint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/trivy-config.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/utils/candidate-probe.ts#probeToolAsync": 1,
-		"clients/dispatch/runners/utils/runner-helpers.ts#probeToolAsync": 2,
-		"clients/dispatch/runners/utils/runner-helpers.ts#safeSpawnAsync": 4,
+		"clients/dispatch/runners/utils/runner-helpers.ts#probeToolAsync": 1,
+		"clients/dispatch/runners/utils/runner-helpers.ts#safeSpawnAsync": 3,
 		"clients/dispatch/runners/vale.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/yamllint.ts#safeSpawnAsync": 1,
 		"clients/dispatch/runners/zig-check.ts#safeSpawnAsync": 1,

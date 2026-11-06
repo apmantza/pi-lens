@@ -417,7 +417,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/availability-policy.ts": 3,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 9,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 8,
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 2,
 		"clients/dispatch/runners/vale.ts": 1,
 		"clients/dispatch/runners/zig-check.ts": 1,
@@ -1084,7 +1084,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// path identifiers while preserving the four-rung lookup ladder.
 		// 30 -> 28 (#4268): `resolveNodeToolCommand` and `resolveLocalFirstAsync`
 		// stop building `.bin` paths by hand and route through the shared lookup.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 28,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 18,
 		// 7 -> 3 (#4689 item 6): `findValeConfig` delegates to
 		// `findLocalToolConfig`, dropping its hand-rolled `path` loop.
 		"clients/dispatch/runners/vale.ts": 3,
@@ -1753,7 +1753,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/availability-policy.ts": 5,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 8,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 7,
 		// 9 -> 10 (#4130 r2): `processCutShort` reads the exit status once.
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 10,
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.

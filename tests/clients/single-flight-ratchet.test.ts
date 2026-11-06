@@ -48,8 +48,6 @@ const EXEMPTIONS: Record<string, string> = {
 		"backlog: #1674's generation-guarded verify map, #1753",
 	"dispatch/runners/utils/runner-helpers.ts:resolveInstallInFlightByCwd":
 		"backlog: #1674's per-cwd install map, #1753",
-	"dispatch/runners/utils/runner-helpers.ts:sgAvailableInFlight":
-		"backlog: ast-grep availability dedupe, #1753",
 	"lsp/config.ts:configInFlight": "backlog: per-workspace config load, #1753",
 	"lsp/jvm-runtime.ts:inFlightJavaProbe": "backlog: single JVM probe, #1753",
 	"mcp/session.ts:inFlightIpcTurnEnds":
