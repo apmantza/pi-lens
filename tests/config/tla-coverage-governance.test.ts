@@ -18,7 +18,14 @@ import {
 	lintTlaCoverage,
 	parseRuntimeHunks,
 } from "../../scripts/check-pr-body.mjs";
-import { stripSource } from "../support/sweep-kit.js";
+import {
+	assertNonEmptyScan,
+	escapeRegExp,
+	listSourceFiles,
+	readWalkedFiles,
+	relativePosix,
+	stripSource,
+} from "../support/sweep-kit.js";
 
 // #3902: the PR-body lint cases inject a fake git, so none may spawn a real
 // one. The child-process boundary records every `execFileSync` spawn and
@@ -80,9 +87,7 @@ function moduleStateHelperHits(source: string, file: string): StateHelperHit[] {
 	const hits: StateHelperHit[] = [];
 	let depth = 0;
 	let line = 1;
-	const escaped = [...bindings.keys()].map((name) =>
-		name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-	);
+	const escaped = [...bindings.keys()].map(escapeRegExp);
 	const candidates = new RegExp(`\\b(?:${escaped.join("|")})\\b`, "g");
 	let cursor = 0;
 	for (
@@ -134,27 +139,16 @@ function moduleStateHelperHits(source: string, file: string): StateHelperHit[] {
 }
 
 function stateHelperHits(): StateHelperHit[] {
-	const files: string[] = [];
-	const collect = (directory: string) => {
-		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-			const file = path.join(directory, entry.name);
-			if (entry.isDirectory()) collect(file);
-			else if (
-				entry.isFile() &&
-				file.endsWith(".ts") &&
-				!file.endsWith(".test.ts")
-			)
-				files.push(file);
-		}
-	};
-	for (const entry of ["clients", "mcp", "tools"])
-		collect(path.join(REPO_ROOT, entry));
+	const files = ["clients", "mcp", "tools"].flatMap((entry) =>
+		listSourceFiles(path.join(REPO_ROOT, entry), {
+			extensions: [".ts"],
+			skipTests: true,
+		}),
+	);
 	files.push(path.join(REPO_ROOT, "index.ts"));
-	return files.flatMap((file) =>
-		moduleStateHelperHits(
-			fs.readFileSync(file, "utf8"),
-			path.relative(REPO_ROOT, file).replaceAll(path.sep, "/"),
-		),
+	assertNonEmptyScan("module state-helper source files", files.length, 100);
+	return readWalkedFiles(files).flatMap(({ file, source }) =>
+		moduleStateHelperHits(source, relativePosix(REPO_ROOT, file)),
 	);
 }
 
