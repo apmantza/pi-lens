@@ -261,9 +261,8 @@ describe("user entry shape", () => {
 				"a glob star",
 				"The `*.enabled` config keys now switch each server off.",
 			],
-			["a double star glob", "The `**/*.ts` files now get checked again."],
-			["a bare double star", "The `**` option now reads clean here."],
 			["a lone star", "The `*` option now reads clean here."],
+			["stars apart", "The `*/` and `/*` markers now read clean here."],
 		])("does not throw on %s inside a code span", (_name, headline) => {
 			expect(() => userEntryShapeProblems(entry(headline))).not.toThrow();
 			expect(userEntryShapeProblems(entry(headline))).toEqual([]);
@@ -281,6 +280,17 @@ describe("user entry shape", () => {
 		])("never throws on the odd headline %s", (headline) => {
 			expect(() => userEntryShapeProblems(`- ${headline} Body.`)).not.toThrow();
 			expect(userEntryShapeProblems(`- ${headline} Body.`)).not.toEqual([]);
+		});
+
+		// Recurrence: `**/*.ts` in a headline code span was admitted, and the release
+		// summary cut the bold at its first `**`: "- **The `** (refs #1)".
+		it.each([
+			"The `**/*.ts` files now get checked again.",
+			"The `**` option now reads clean here.",
+		])("refuses `**` inside a code span of the headline: %s", (headline) => {
+			expect(userEntryShapeProblems(entry(headline)).join("; ")).toMatch(
+				/must not contain `\*\*`/,
+			);
 		});
 
 		it("counts a code span in full: 20 collapsed characters can render 109", () => {

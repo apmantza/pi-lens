@@ -182,6 +182,11 @@ export function userEntryShapeProblems(entry) {
 		CODE_TOKEN,
 		() => spans[nextSpan++]?.slice(1, -1) ?? CODE_TOKEN,
 	);
+	// The release summary cuts the bold at its first `**`, code span or not.
+	if (rendered.includes("**"))
+		problems.push(
+			"the bold headline must not contain `**`, even inside a code span; move it to the body",
+		);
 	if (rendered.length > HEADLINE_MAX_CHARS)
 		problems.push(
 			`the bold headline must be at most ${HEADLINE_MAX_CHARS} characters`,
