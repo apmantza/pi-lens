@@ -441,7 +441,12 @@
     "clients/read-guard-tool-lines.ts": "unmodelled",
     "clients/review-graph/shared-extraction-ir.ts": "unmodelled",
     "clients/tool-agreement.ts": "unmodelled",
-    "clients/zizmor-config.ts": "unmodelled"
+    "clients/zizmor-config.ts": "unmodelled",
+    "clients/availability-probe-flight.ts": "unmodelled",
+    "clients/security-scan-client.ts": "unmodelled",
+    "clients/session-repository.ts": "unmodelled",
+    "clients/sg-runner.ts": "unmodelled",
+    "clients/test-runner-client.ts": "unmodelled"
   },
   "notes": {
     "clients/installer/index.ts": "Only the install lock (tryAcquireInstallLock, acquireInstallLock, assertOwnsLock, the generation heartbeat) is modelled, and only partly: file-locks has no heartbeat or ownership recheck (#3553). The rest of the installer is not lifecycle.",
@@ -501,7 +506,7 @@
     ,"clients/custom-rule-locations.ts": "The module-level bounded rule-corpus fingerprint cache changes on rule refresh and session-scoped corpus checks; its cache contents and callers are unmodelled."
     ,"clients/diagnostic-line-freshness.ts": "The module-level bounded line-count cache changes on diagnostic reads and invalidation; its entries and freshness callers are unmodelled."
     ,"clients/dispatch/runners/helm-lint.ts": "The module-level path-keyed in-flight chart map changes on Helm lint requests and settlement; concurrent runner ownership is unmodelled."
-    ,"clients/dispatch/runners/helm-render.ts": "The module-level path-keyed rendered-chart map changes on render requests and settlement; concurrent runner ownership is unmodelled."
+    ,"clients/dispatch/runners/helm-render.ts": "The module-level path-keyed in-flight Promise map changes on render requests and settlement; concurrent runner ownership is unmodelled."
     ,"clients/dispatch/runners/psscriptanalyzer.ts": "The module-level PowerShell availability latch changes on probe, cooldown and reset; runner callers and expiry are unmodelled."
     ,"clients/hashline-anchor.ts": "The module-level bounded anchor-index cache changes on hashline indexing and eviction; index reuse and invalidation are unmodelled."
     ,"clients/lsp/jvm-runtime.ts": "The module-level Java availability latch changes on probe, cooldown and reset; LSP runtime callers and expiry are unmodelled."

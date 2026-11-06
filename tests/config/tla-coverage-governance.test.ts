@@ -26,6 +26,7 @@ import {
 	relativePosix,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 // #3902: the PR-body lint cases inject a fake git, so none may spawn a real
 // one. The child-process boundary records every `execFileSync` spawn and
@@ -63,10 +64,24 @@ const STATE_HELPERS = [
 	"BoundedFifoMap",
 	"PathKeyedMap",
 	"createSingleFlight",
-	"getProcessSingleton",
-	"sessionCell",
 	"createAvailabilityLatch",
 ] as const;
+const ALL_STATE_HELPERS = [
+	"BoundedFifoMap",
+	"PathKeyedMap",
+	"createSingleFlight",
+	"createAvailabilityLatch",
+] as const;
+
+const STATE_HELPER_DEFINITION_FILES = new Map<string, string>([
+	["BoundedFifoMap", "clients/bounded-cache.ts"],
+	["PathKeyedMap", "clients/path-keyed-map.ts"],
+	["createSingleFlight", "clients/single-flight.ts"],
+	[
+		"createAvailabilityLatch",
+		"clients/dispatch/runners/utils/availability-policy.ts",
+	],
+]);
 
 type StateHelperHit = { file: string; helper: string; line: number };
 
@@ -75,8 +90,8 @@ function moduleStateHelperHits(source: string, file: string): StateHelperHit[] {
 	const bindings = new Map<string, string>(
 		STATE_HELPERS.map((helper) => [helper, helper]),
 	);
-	for (const match of source.matchAll(
-		/import\s*\{([^}]*)\}\s*from\s*["'][^"']+["']/gs,
+	for (const match of code.matchAll(
+		/import\s+(?:[^;{},]*,\s*)?\{([^}]*)\}\s*from\s*["'][^"']+["']/gs,
 	)) {
 		for (const specifier of match[1].split(",")) {
 			const [imported, local] = specifier.trim().split(/\s+as\s+/);
@@ -85,10 +100,15 @@ function moduleStateHelperHits(source: string, file: string): StateHelperHit[] {
 		}
 	}
 	const hits: StateHelperHit[] = [];
-	let depth = 0;
 	let line = 1;
 	const escaped = [...bindings.keys()].map(escapeRegExp);
 	const candidates = new RegExp(`\\b(?:${escaped.join("|")})\\b`, "g");
+	const specifierRanges = [
+		...code.matchAll(/\bimport\b[\s\S]*?\bfrom\b/g),
+		...code.matchAll(/\bexport\s*\{[\s\S]*?\}/g),
+	].map((match) => [match.index ?? 0, (match.index ?? 0) + match[0].length]);
+	const inSpecifier = (index: number) =>
+		specifierRanges.some(([start, end]) => index >= start && index < end);
 	let cursor = 0;
 	for (
 		let match = candidates.exec(code);
@@ -97,15 +117,20 @@ function moduleStateHelperHits(source: string, file: string): StateHelperHit[] {
 	) {
 		for (; cursor < match.index; cursor += 1) {
 			if (code[cursor] === "\n") line += 1;
-			if (code[cursor] === "{") depth += 1;
-			if (code[cursor] === "}") depth -= 1;
 		}
 		const index = match.index;
 		const lineStart = code.lastIndexOf("\n", index - 1) + 1;
-		const isExportList = /^\s*export\s*\{/.test(
-			code.slice(lineStart, lineStart + 24),
+		const beforeOccurrence = code.slice(0, index);
+		const lastClosedScope = beforeOccurrence.lastIndexOf("}");
+		const lastOpenedScope = beforeOccurrence.lastIndexOf("{");
+		const lastCallable = Math.max(
+			beforeOccurrence.lastIndexOf("function"),
+			beforeOccurrence.lastIndexOf("class"),
+			beforeOccurrence.lastIndexOf("=>"),
 		);
-		if (depth !== 0 && !isExportList) continue;
+		const inFunctionOrClass =
+			lastCallable > lastClosedScope && lastOpenedScope > lastCallable;
+		if (inFunctionOrClass) continue;
 		for (const [binding, helper] of bindings) {
 			const before = code[index - 1] ?? " ";
 			const after = code[index + binding.length] ?? " ";
@@ -115,27 +140,30 @@ function moduleStateHelperHits(source: string, file: string): StateHelperHit[] {
 				/[A-Za-z0-9_$]/.test(after) === false
 			) {
 				const prefix = code.slice(lineStart, index);
-				const suffix = code.slice(index + binding.length);
-				const isImport = /^\s*import\b/.test(code.slice(lineStart));
-				const isDeclaration =
-					/\b(?:class|function|interface|type)\s*$/.test(prefix) ||
-					/^\s*export\s+(?:class|function|interface|type)\b/.test(
-						code.slice(lineStart),
-					);
-				const isUse =
-					!isImport &&
-					!isDeclaration &&
-					(/\bnew\s*$/.test(prefix) ||
-						/^\s*\(/.test(suffix) ||
-						/^\s*[.[=]/.test(suffix) ||
-						/=\s*$/.test(prefix) ||
-						(/^\s*[,;}]/.test(suffix) && /\bexport\s*[{,]\s*$/.test(prefix)));
-				if (isUse) hits.push({ file, helper, line });
+				const lineEnd = code.indexOf("\n", index);
+				const lineText = code.slice(
+					lineStart,
+					lineEnd < 0 ? code.length : lineEnd,
+				);
+				const isDefinition = file === STATE_HELPER_DEFINITION_FILES.get(helper);
+				const isTypeOnly =
+					/^\s*(?:export\s+)?(?:type|interface)\b/.test(lineText) ||
+					/:\s*$/.test(prefix) ||
+					/\btypeof\s*$/.test(prefix);
+				if (!isDefinition && !isTypeOnly && !inSpecifier(index))
+					hits.push({ file, helper, line });
 			}
 		}
 		cursor = index + match[0].length;
 	}
 	return hits;
+}
+
+function unmappedStateHelperHits(
+	hits: StateHelperHit[],
+	coverageMap: { map?: Record<string, unknown> },
+) {
+	return hits.filter((hit) => !Object.hasOwn(coverageMap.map ?? {}, hit.file));
 }
 
 function stateHelperHits(): StateHelperHit[] {
@@ -155,17 +183,21 @@ function stateHelperHits(): StateHelperHit[] {
 describe("module-level state-helper coverage census (#5330)", () => {
 	// The fixture is intentionally a source file rather than a mocked scanner:
 	// it proves the real module-scope walk and the checked-in map agree.
-	it("requires every module-level helper hit to have a map row", () => {
-		const hits = stateHelperHits();
-		expect(hits.length).toBeGreaterThan(0);
-		const unmapped = hits.filter(
-			(hit) => !Object.hasOwn(map.map ?? {}, hit.file),
-		);
-		expect(
-			unmapped,
-			unmapped.map((hit) => `${hit.file}:${hit.line} ${hit.helper}`).join("\n"),
-		).toEqual([]);
-	});
+	it(
+		"requires every module-level helper hit to have a map row",
+		() => {
+			const hits = stateHelperHits();
+			expect(hits.length).toBeGreaterThan(0);
+			const unmapped = unmappedStateHelperHits(hits, map);
+			expect(
+				unmapped,
+				unmapped
+					.map((hit) => `${hit.file}:${hit.line} ${hit.helper}`)
+					.join("\n"),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("blanks comments and strings and distinguishes module scope", () => {
 		const fixture = `
@@ -188,13 +220,14 @@ class Holder { field = new BoundedFifoMap(5); }
 		const withoutRow = { map: {} };
 		const withRow = { map: { "clients/fixture.ts": "unmodelled" } };
 		const unadmitted = (candidate: typeof withoutRow) =>
-			hits.filter((hit) => !Object.hasOwn(candidate.map, hit.file));
+			unmappedStateHelperHits(hits, candidate);
 		expect(unadmitted(withoutRow)).toHaveLength(1);
 		expect(unadmitted(withRow)).toEqual([]);
 	});
 
 	it("keeps every helper name live in the fixture arm", () => {
-		for (const helper of STATE_HELPERS) {
+		for (const helper of ALL_STATE_HELPERS) {
+			expect(STATE_HELPERS, helper).toContain(helper);
 			const expression =
 				helper[0] === helper[0].toUpperCase()
 					? `new ${helper}(1)`
@@ -218,8 +251,28 @@ const c = BoundedFifoMap["prototype"];
 export { BoundedFifoMap };
 `;
 		expect(moduleStateHelperHits(fixture, "clients/fixture.ts")).toHaveLength(
-			4,
+			3,
 		);
+	});
+
+	it("counts every unadmitted helper spelling (#5330 F3)", () => {
+		const spellings = [
+			"const a = flag ? BoundedFifoMap : Other;",
+			"register(BoundedFifoMap);",
+			"export default BoundedFifoMap;",
+			"const a = [BoundedFifoMap, PathKeyedMap];",
+			"const a = (0, createAvailabilityLatch)();",
+			"class Mine extends BoundedFifoMap {}",
+			"import D, { PathKeyedMap as A } from './map.js'; const a = A;",
+			"import { BoundedFifoMap /* cache */ as Cache } from './map.js'; const a = Cache;",
+			"export {\n BoundedFifoMap,\n}; const a = BoundedFifoMap;",
+			"const a = { cache: new BoundedFifoMap(1) };",
+		];
+		for (const spelling of spellings)
+			expect(
+				moduleStateHelperHits(spelling, "clients/fixture.ts").length,
+				spelling,
+			).toBeGreaterThan(0);
 	});
 });
 
