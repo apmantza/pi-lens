@@ -45,7 +45,7 @@ function fixture() {
 	for (const audience of ["user", "internal"])
 		fs.writeFileSync(
 			path.join(root, ".changelog", `${audience}.md`),
-			`---\nsection: Added\naudience: ${audience}\n---\n\n- **Pending ${audience}** works.\n`,
+			`---\nsection: Added\naudience: ${audience}\narea: tools\n---\n\n- **Pending ${audience} entries are counted, never listed.** Detail.\n`,
 		);
 	return root;
 }

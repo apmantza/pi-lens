@@ -2,12 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+	CHANGELOG_AREAS,
 	EMPTY_UNRELEASED,
 	INTERNAL_HEADING,
 	extractSection,
 	lintSectionBody,
 	parseSectionEntries,
 	parseSections,
+	userEntryShapeProblems,
 } from "./lib/changelog.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 
@@ -27,6 +29,8 @@ const AUDIENCES = ["user", "internal"];
 
 const AUDIENCE_HINT =
 	"user = anything a pi-lens user or an agent using pi-lens can observe (tools, diagnostics, messages, config, install, performance, a fixed bug they could hit); internal = CI, tests, formal/, contributor docs, orchestration, refactors with no observable change";
+
+const AREA_HINT = `area is the part of pi-lens the change belongs to, one of ${CHANGELOG_AREAS.map((area) => area.id).join(", ")}`;
 
 export function isEntryBullet(line) {
 	return /^[-*]\s+\S/.test(line);
@@ -62,6 +66,22 @@ export function parseEntry(text, file = "entry") {
 	if (!AUDIENCES.includes(audience)) {
 		fail(file, `audience must be one of ${AUDIENCES.join(", ")}`);
 	}
+	const areaMarker = lines
+		.slice(1, end)
+		.find((line) => /^area:\s*\S+\s*$/.test(line));
+	const area = areaMarker?.replace(/^area:\s*/, "").trim();
+	if (area !== undefined && !CHANGELOG_AREAS.some(({ id }) => id === area)) {
+		fail(
+			file,
+			`area must be one of ${CHANGELOG_AREAS.map(({ id }) => id).join(", ")}`,
+		);
+	}
+	if (audience === "user" && area === undefined) {
+		fail(
+			file,
+			`missing area marker; add \`area: <id>\` to the front matter next to \`audience:\` (${AREA_HINT})`,
+		);
+	}
 	const body = lines
 		.slice(end + 1)
 		.join("\n")
@@ -87,7 +107,7 @@ export function parseEntry(text, file = "entry") {
 				: "keep the complete bold entry title on one physical line";
 		fail(file, `${problem.kind} at body line ${problem.line}: ${hint}`);
 	}
-	return { section, audience, entry: body };
+	return { section, audience, area, entry: body };
 }
 
 function readEntries(entriesDir) {
@@ -107,10 +127,19 @@ function readEntries(entriesDir) {
 		});
 }
 
+// The fail-closed shape of a user entry (#5351). Released sections are never
+// re-parsed here: only the fragments still waiting for the next release.
 export function validateChangelogEntries({
 	rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
 } = {}) {
-	return readEntries(path.join(rootDir, ".changelog"));
+	const entries = readEntries(path.join(rootDir, ".changelog"));
+	for (const entry of entries) {
+		if (entry.audience !== "user") continue;
+		const problems = userEntryShapeProblems(entry.entry);
+		if (problems.length > 0)
+			fail(path.basename(entry.file), problems.join("; "));
+	}
+	return entries;
 }
 
 // Sections CHANGELOG.md can hold per release: the Keep a Changelog ones, then
@@ -148,6 +177,39 @@ function bucketSectionBody(body) {
 	return buckets;
 }
 
+// Merge a section's chunks so each area appears under one `#### <area title>`
+// heading, in the closed list's order, with entries that carry no area (legacy
+// Unreleased content) above every heading (#5351). A chunk's area never leaks
+// into the next chunk, so re-rolling a version whose section already has area
+// headings folds a late entry into the existing heading.
+function mergeAreaGroups(chunks) {
+	const groups = new Map();
+	for (const chunk of chunks) {
+		let area = null;
+		let lines = [];
+		const flush = () => {
+			const text = lines.join("\n").trim();
+			if (text) groups.set(area, [...(groups.get(area) ?? []), text]);
+			lines = [];
+		};
+		for (const line of chunk.split(/\r?\n/)) {
+			const heading = line.match(/^#### (.+?)\s*$/);
+			const known = CHANGELOG_AREAS.find(({ title }) => title === heading?.[1]);
+			if (known) {
+				flush();
+				area = known.title;
+			} else lines.push(line);
+		}
+		flush();
+	}
+	return [
+		...(groups.get(null) ?? []),
+		...CHANGELOG_AREAS.filter(({ title }) => groups.has(title)).map(
+			({ title }) => `#### ${title}\n\n${groups.get(title).join("\n\n")}`,
+		),
+	];
+}
+
 function renderInternal(entries) {
 	// Chunks, not entries: one chunk can hold several bullets after a bucketing.
 	const count = entries.join("\n").split(/\r?\n/).filter(isEntryBullet).length;
@@ -167,7 +229,7 @@ function renderBody(bodies) {
 		if (!content.length) return "";
 		return section === INTERNAL_HEADING
 			? renderInternal(content)
-			: `### ${section}\n\n${content.join("\n\n")}`;
+			: `### ${section}\n\n${mergeAreaGroups(content).join("\n\n")}`;
 	})
 		.filter(Boolean)
 		.join("\n\n");
@@ -251,8 +313,9 @@ export function rollupChangelog(
 	if (!/^\d+\.\d+\.\d+$/.test(version))
 		throw new Error(`Invalid version "${version}"; expected X.Y.Z`);
 	const changelogPath = path.join(rootDir, "CHANGELOG.md");
-	const entriesDir = path.join(rootDir, ".changelog");
-	const entries = readEntries(entriesDir);
+	// The release refuses what the PR-time check refuses: a fragment first added
+	// in the release PR never met that check.
+	const entries = validateChangelogEntries({ rootDir });
 	const changelog = fs.readFileSync(changelogPath, "utf8");
 	const unreleasedBody = extractSection(changelog, "Unreleased");
 	if (unreleasedBody === null)
@@ -270,14 +333,21 @@ export function rollupChangelog(
 	// An internal entry leaves its Keep a Changelog section for the Internal block.
 	const entryBody = renderBody(
 		RELEASE_SECTIONS.map((section) => {
-			const content = entries
-				.filter((entry) =>
+			const picked = entries.filter((entry) =>
+				section === INTERNAL_HEADING
+					? entry.audience === "internal"
+					: entry.audience === "user" && entry.section === section,
+			);
+			if (!picked.length) return "";
+			// A user entry carries its area heading; renderBody merges the groups.
+			const content = picked.map(({ area, entry }) => {
+				const title =
 					section === INTERNAL_HEADING
-						? entry.audience === "internal"
-						: entry.audience === "user" && entry.section === section,
-				)
-				.map((entry) => entry.entry);
-			return content.length ? `### ${section}\n\n${content.join("\n\n")}` : "";
+						? undefined
+						: CHANGELOG_AREAS.find(({ id }) => id === area)?.title;
+				return title ? `#### ${title}\n\n${entry}` : entry;
+			});
+			return `### ${section}\n\n${content.join("\n\n")}`;
 		}),
 	);
 	const releasedBody = renderBody([existingBody, unreleasedBody, entryBody]);

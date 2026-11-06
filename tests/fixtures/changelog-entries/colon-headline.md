@@ -1,0 +1,7 @@
+---
+section: Fixed
+audience: user
+area: host
+---
+
+- **Pi 1.5 is supported:** the tested pi range now runs from 0.86.1 up to, but not including, 1.6.0.

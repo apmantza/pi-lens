@@ -56,11 +56,15 @@ describe("per-entry changelog rollup", () => {
 		const root = fixtureRoot();
 		fs.writeFileSync(
 			path.join(root, ".changelog", "b.md"),
-			"---\nsection: Fixed\naudience: user\n---\n\n* **B.** fixed.\n  Hard-wrapped continuation.\n  - nested consequence\n",
+			"---\nsection: Fixed\naudience: user\narea: lsp\n---\n\n- **Wrapped entries keep their line breaks.** The body wraps\n  onto a second line. (refs #1)\n",
 		);
 		fs.writeFileSync(
 			path.join(root, ".changelog", "a.md"),
-			"---\nsection: Deprecated\naudience: user\n---\n\n- Plain deprecated entry without bold\n",
+			"---\nsection: Deprecated\naudience: user\narea: config\n---\n\n- **A deprecated flag keeps its area heading.**\n",
+		);
+		fs.writeFileSync(
+			path.join(root, ".changelog", "c.md"),
+			"---\nsection: Changed\naudience: internal\n---\n\n* **C.** internal.\n  Hard-wrapped continuation.\n  - nested consequence\n",
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const output = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
@@ -71,10 +75,13 @@ describe("per-entry changelog rollup", () => {
 			"### Added\n\n- old unreleased\n  continuation text\n  - nested detail",
 		);
 		expect(output).toContain(
-			"### Deprecated\n\n- Plain deprecated entry without bold",
+			"### Deprecated\n\n#### Configuration and flags\n\n- **A deprecated flag keeps its area heading.**",
 		);
 		expect(output).toContain(
-			"### Fixed\n\n* **B.** fixed.\n  Hard-wrapped continuation.\n  - nested consequence",
+			"### Fixed\n\n#### Language servers\n\n- **Wrapped entries keep their line breaks.** The body wraps\n  onto a second line. (refs #1)",
+		);
+		expect(output).toContain(
+			"* **C.** internal.\n  Hard-wrapped continuation.\n  - nested consequence",
 		);
 		expect(output).toContain("### Security\n\n* existing security note.");
 		expect(fs.readdirSync(path.join(root, ".changelog"))).toEqual([]);
@@ -84,7 +91,7 @@ describe("per-entry changelog rollup", () => {
 		const root = fixtureRoot();
 		fs.writeFileSync(
 			path.join(root, ".changelog", "a.md"),
-			"---\nsection: Changed\naudience: user\n---\n\n- **A** — changed\n",
+			"---\nsection: Changed\naudience: user\narea: tools\n---\n\n- **A changed entry reads fine here.** Body.\n",
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const once = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
@@ -109,9 +116,18 @@ describe("per-entry changelog rollup", () => {
 		).not.toContain("2.0.0");
 	});
 
+	// Both fixtures carry a valid `area:`, so the throw can only come from the
+	// guard under test: `lintSectionBody` through `parseEntry`. Recurrence: they
+	// once threw "missing area marker" first, and a neutered guard stayed green.
 	it.each([
-		["wrapped-title.md", /wrapped-title/],
-		["orphan-bullet.md", /orphan/],
+		[
+			"wrapped-title.md",
+			/wrapped-title at body line 1: keep the complete bold entry title on one physical line/,
+		],
+		[
+			"orphan-bullet.md",
+			/orphan at body line 1: move the entry below its first Markdown heading/,
+		],
 	])("rejects the real-bug guard fixture %s", (file, problem) => {
 		const fixture = path.resolve("tests/fixtures/changelog-entries", file);
 		expect(() => parseEntry(fs.readFileSync(fixture, "utf8"), file)).toThrow(
@@ -128,8 +144,10 @@ describe("per-entry changelog rollup", () => {
 		["Security", "- security fix"],
 	])("accepts %s entries in repository styles", (section, entry) => {
 		expect(
-			parseEntry(`---\nsection: ${section}\naudience: user\n---\n\n${entry}`),
-		).toEqual({ section, audience: "user", entry });
+			parseEntry(
+				`---\nsection: ${section}\naudience: user\narea: tools\n---\n\n${entry}`,
+			),
+		).toEqual({ section, audience: "user", area: "tools", entry });
 	});
 
 	it("covers the full Keep a Changelog section order", () => {
@@ -153,12 +171,15 @@ describe("fragment audience (#3852)", () => {
 		title: string,
 		section = "Fixed",
 	) =>
-		`---\nsection: ${section}\n${audience === null ? "" : `audience: ${audience}\n`}---\n\n- **${title}** - detail.\n`;
+		`---\nsection: ${section}\n${audience === null ? "" : `audience: ${audience}\narea: lsp\n`}---\n\n- **${title}** ${audience === "user" ? "Detail." : "- detail."}\n`;
 
 	function rollMixed() {
 		const root = fixtureRoot();
 		const dir = path.join(root, ".changelog");
-		fs.writeFileSync(path.join(dir, "a.md"), fragment("user", "User fix"));
+		fs.writeFileSync(
+			path.join(dir, "a.md"),
+			fragment("user", "User fix reads fine here."),
+		);
 		fs.writeFileSync(
 			path.join(dir, "b.md"),
 			fragment("internal", "CI shard", "Changed"),
@@ -175,7 +196,7 @@ describe("fragment audience (#3852)", () => {
 	it("keeps internal entries out of the release-notes summary and counts them", () => {
 		const { released } = rollMixed();
 		const summary = summarizeSection(released);
-		expect(summary).toContain("- **User fix**");
+		expect(summary).toContain("- **User fix reads fine here.**");
 		expect(summary).not.toContain("CI shard");
 		expect(summary).not.toContain("Test flake");
 		expect(summary).not.toContain("### Internal");
@@ -195,7 +216,7 @@ describe("fragment audience (#3852)", () => {
 		expect(internal).toContain("</details>");
 		expect(internal).not.toContain("User fix");
 		const user = released.slice(0, released.indexOf("### Internal"));
-		expect(user).toContain("- **User fix** - detail.");
+		expect(user).toContain("- **User fix reads fine here.** Detail.");
 		expect(user).not.toContain("CI shard");
 		expect(user).not.toContain("Test flake");
 	});
@@ -204,15 +225,17 @@ describe("fragment audience (#3852)", () => {
 		const { root, output } = rollMixed();
 		fs.writeFileSync(
 			path.join(root, ".changelog", "d.md"),
-			fragment("user", "Late user fix"),
+			fragment("user", "Late user fix reads fine here."),
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const again = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
 		const released = extractSection(again, "2.0.0") ?? "";
-		expect(released).toContain("- **Late user fix**");
+		expect(released).toContain("- **Late user fix reads fine here.**");
 		expect(released.match(/<details>/g)).toHaveLength(1);
 		expect(released).toContain("<summary>2 internal changes");
-		expect(again.replace("- **Late user fix** - detail.\n\n", "")).toBe(output);
+		expect(
+			again.replace("- **Late user fix reads fine here.** Detail.\n\n", ""),
+		).toBe(output);
 	});
 
 	it("a release with one internal entry says 'change', and none prints no count", () => {
@@ -264,8 +287,10 @@ describe("fragment audience (#3852)", () => {
 	// Edge shapes that a naive marker regex or wrapper strip would mangle.
 	it("accepts audience with no space and with trailing whitespace, and rejects a half-marker line", () => {
 		expect(
-			parseEntry("---\nsection: Fixed\naudience:user\n---\n\n- **T**\n", "x.md")
-				.audience,
+			parseEntry(
+				"---\nsection: Fixed\naudience:user\narea: lsp\n---\n\n- **T**\n",
+				"x.md",
+			).audience,
 		).toBe("user");
 		expect(
 			parseEntry(
@@ -316,7 +341,7 @@ describe("fragment audience (#3852)", () => {
 		const root = fixtureRoot();
 		fs.writeFileSync(
 			path.join(root, ".changelog", "a.md"),
-			fragment("user", "Only fixed"),
+			fragment("user", "Only fixed entries reach the notes."),
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const released =
@@ -328,11 +353,17 @@ describe("fragment audience (#3852)", () => {
 		expect(released).not.toContain("### Removed");
 	});
 
+	// Recurrence guard: the Internal wrapper strip must not eat a `<details>` line
+	// that sits in a user section of legacy `[Unreleased]` prose.
 	it("does not strip a bare <details> line from a user section", () => {
 		const root = fixtureRoot();
 		fs.writeFileSync(
+			path.join(root, "CHANGELOG.md"),
+			"# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- legacy entry.\n\n<details>\n\n<summary>user html</summary>\n",
+		);
+		fs.writeFileSync(
 			path.join(root, ".changelog", "a.md"),
-			"---\nsection: Fixed\naudience: user\n---\n\n- **U** - uses HTML.\n\n<details>\n\n<summary>user html</summary>\n",
+			fragment("user", "Only fixed entries reach the notes."),
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const released =

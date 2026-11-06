@@ -296,7 +296,7 @@ describe("package-lock identity guard (#2043)", () => {
 		const fragment = path.join(root, ".changelog", "pending.md");
 		fs.writeFileSync(
 			fragment,
-			"---\nsection: Fixed\naudience: user\n---\n\n- pending\n",
+			"---\nsection: Fixed\naudience: user\narea: install\n---\n\n- pending\n",
 		);
 		const beforeChangelog = fs.readFileSync(
 			path.join(root, "CHANGELOG.md"),
@@ -325,14 +325,14 @@ describe("package-lock identity guard (#2043)", () => {
 		);
 		fs.writeFileSync(
 			path.join(root, ".changelog", "pending.md"),
-			"---\nsection: Fixed\naudience: user\n---\n\n- pending\n",
+			"---\nsection: Fixed\naudience: user\narea: install\n---\n\n- **The pending entry reaches the release notes.**\n",
 		);
 
 		const result = run(RELEASE, root, ["--root-dir", root]);
 
 		expect(result.status).toBe(0);
 		expect(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toContain(
-			"- pending",
+			"- **The pending entry reaches the release notes.**",
 		);
 		expect(fs.existsSync(path.join(root, ".changelog", "pending.md"))).toBe(
 			false,

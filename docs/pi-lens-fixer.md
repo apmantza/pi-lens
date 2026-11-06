@@ -298,15 +298,17 @@ brief misnamed; #5254 read "turn" as a prompt).
   included. A red `PR body (advisory)` check is a fix-before-review item.
   A changelog fragment is `---` /
   `section: <Added|Changed|Deprecated|Removed|Fixed|Security>` /
-  `audience: <user|internal>` / `---` / blank / one `- ` bullet. New
-  `audience: user` fragments must begin with a bold lead of at most 100
-  characters, excluding issue references; internal fragments are exempt.
-  `audience` is
+  `audience: <user|internal>` / `area: <id>` (user only) / `---` / blank / one
+  `- ` bullet. `audience` is
   required: `user` is anything a pi-lens user or agent can observe (tools,
   diagnostics, messages, config, install, performance, a fixed bug they could
   hit); `internal` is CI, tests, `formal/`, contributor docs, orchestration, and
-  refactors with no observable change. `npm run changelog:check` checks the
-  rollup, not fragments (#2456).
+  refactors with no observable change. A `user` fragment names an `area` from
+  the closed list in `.changelog/README.md` and has the one shape
+  `- **Headline sentence.** One short paragraph. (refs #N)`; `.changelog/README.md`
+  lists the limits, and `node scripts/check-changelog-fragments.mjs` refuses any
+  other form (#5351). Internal fragments are exempt from `area` and the shape.
+  `npm run changelog:check` runs the same shape check over the fragments (#2456).
 - A bug fix's detection lesson names the defect SHAPE and its tree-wide
   enforcer, not only a test for the instance: the `Shape:` line names the
   `AGENTS.md` "Recurring defect shapes" number (or `new: <name>`), and the

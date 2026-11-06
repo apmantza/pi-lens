@@ -114,7 +114,7 @@ export function promoteFromSummary(opts) {
 			];
 			fs.writeFileSync(
 				opts.changelogPath,
-				`---\nsection: Changed\naudience: user\n---\n\n- **Idle eviction enabled for measured servers (refs #3989)** — ${serverIds.map((serverId) => `\`${serverId}\``).join(", ")} after consecutive safe measurements.\n`,
+				`---\nsection: Changed\naudience: user\narea: lsp\n---\n\n- **Measured language servers now shut down when they are idle.** Idle eviction is enabled for ${serverIds.map((serverId) => `\`${serverId}\``).join(", ")}, each after consecutive safe measurements. (refs #3989)\n`,
 			);
 		}
 		return plan.promoted.map((p) => p.serverId);

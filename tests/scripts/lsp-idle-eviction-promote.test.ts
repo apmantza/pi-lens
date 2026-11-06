@@ -656,7 +656,7 @@ describe("the nightly driver, end to end on files (#3989)", () => {
 		});
 		expect(changelog.valid).toBe(true);
 		expect(fs.readFileSync(ws.changelogPath, "utf8")).toContain(
-			"**Idle eviction enabled for measured servers (refs #3989)**",
+			"**Measured language servers now shut down when they are idle.**",
 		);
 	});
 

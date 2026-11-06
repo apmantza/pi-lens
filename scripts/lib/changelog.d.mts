@@ -17,12 +17,25 @@ export function summarizeSection(
 export interface SectionEntries {
 	order: string[];
 	buckets: Map<string, string[]>;
+	/** Per section, the area title of each bucket item (`null`: no area heading). */
+	areas: Map<string, Array<string | null>>;
 	internalCount: number;
 }
 export function parseSectionEntries(
 	body: string,
 	opts?: { maxGist?: number; gist?: boolean },
 ): SectionEntries;
+/** The closed list of areas a user fragment names in `area:` (#5351). */
+export const CHANGELOG_AREAS: ReadonlyArray<{ id: string; title: string }>;
+export const AREA_GROUP_MIN_ITEMS: number;
+export const HEADLINE_MIN_WORDS: number;
+export const HEADLINE_MAX_WORDS: number;
+export const HEADLINE_MAX_CHARS: number;
+export const BODY_MAX_WORDS: number;
+export const HOUSE_STYLE_BANNED_TERMS: readonly string[];
+export const IMPERATIVE_OPENERS: readonly string[];
+/** Shape problems of one `audience: user` entry; `[]` when it is the one admitted form. */
+export function userEntryShapeProblems(entry: string): string[];
 export function normalizeVersion(version: string): string;
 export function extractSection(text: string, version: string): string | null;
 export function hasSection(text: string, version: string): boolean;
