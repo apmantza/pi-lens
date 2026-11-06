@@ -284,13 +284,14 @@ describe("user entry shape", () => {
 
 		// Recurrence: `**/*.ts` in a headline code span was admitted, and the release
 		// summary cut the bold at its first `**`: "- **The `** (refs #1)".
-		it.each([
-			"The `**/*.ts` files now get checked again.",
-			"The `**` option now reads clean here.",
-		])("refuses `**` inside a code span of the headline: %s", (headline) => {
-			expect(userEntryShapeProblems(entry(headline)).join("; ")).toMatch(
-				/must not contain `\*\*`/,
-			);
+		it("refuses a double star inside a headline code span", () => {
+			for (const headline of [
+				"The `**/*.ts` files now get checked again.",
+				"The `**` option now reads clean here.",
+			])
+				expect(userEntryShapeProblems(entry(headline)).join("; ")).toMatch(
+					/must not contain `\*\*`/,
+				);
 		});
 
 		it("counts a code span in full: 20 collapsed characters can render 109", () => {
@@ -397,28 +398,24 @@ describe("user entry shape", () => {
 describe("the release rollup applies the shape check", () => {
 	// Recurrence: a fragment first added in the release PR never met the PR-time
 	// check, and `rollupChangelog` consumed it as written.
-	it.each([
-		[
-			"a heading before the bullet",
+	it("refuses a fragment the shape check refuses and leaves CHANGELOG.md alone", () => {
+		for (const entry of [
 			"### Internal\n\n- **Servers now restart on crash always.** Body. (refs #1)\n",
-		],
-		[
-			"a closes reference",
 			"- **Servers now restart on crash always.** Body. (closes #1)\n",
-		],
-		["a plain opening", "- Servers restart on crash.\n"],
-	])("refuses %s and leaves CHANGELOG.md alone", (_name, entry) => {
-		const root = rootWith({
-			"a.md": `---\nsection: Fixed\naudience: user\narea: lsp\n---\n\n${entry}`,
-		});
-		const before = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
-		expect(() =>
-			rollupChangelog("2.0.0", { rootDir: root, date: "2026-11-06" }),
-		).toThrow(/Invalid changelog entry a\.md: /);
-		expect(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(
-			before,
-		);
-		expect(fs.existsSync(path.join(root, ".changelog", "a.md"))).toBe(true);
+			"- Servers restart on crash.\n",
+		]) {
+			const root = rootWith({
+				"a.md": `---\nsection: Fixed\naudience: user\narea: lsp\n---\n\n${entry}`,
+			});
+			const before = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+			expect(() =>
+				rollupChangelog("2.0.0", { rootDir: root, date: "2026-11-06" }),
+			).toThrow(/Invalid changelog entry a\.md: /);
+			expect(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(
+				before,
+			);
+			expect(fs.existsSync(path.join(root, ".changelog", "a.md"))).toBe(true);
+		}
 	});
 });
 
