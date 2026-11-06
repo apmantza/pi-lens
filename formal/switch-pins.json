@@ -2742,6 +2742,66 @@
 					]
 				}
 			]
+		},
+		"disk-change-publisher": {
+			"pins": {
+				"AllocBeforeFanOut": {
+					"value": "TRUE",
+					"test": "tests/clients/disk-changes.test.ts",
+					"title": "allocates one seq per recorded path on the existing writer, before any subscriber runs"
+				},
+				"AwaitFanOut": {
+					"value": "TRUE",
+					"test": "tests/clients/disk-change-detectors-4535.test.ts",
+					"title": "reports the restart count as -1, never as a clean zero"
+				},
+				"IsolateThrows": {
+					"value": "TRUE",
+					"test": "tests/clients/disk-changes.test.ts",
+					"title": "isolates a throwing subscriber, still reaches the next one, and records once per consumer per session"
+				},
+				"JoinOwesWalk": {
+					"value": "TRUE",
+					"test": "tests/clients/out-of-band-joined-look-4532.test.ts",
+					"title": "walks for a bash result that joined a tool_call out-of-band look"
+				},
+				"RecordOnce": {
+					"value": "TRUE",
+					"test": "tests/clients/disk-changes.test.ts",
+					"title": "isolates a throwing subscriber, still reaches the next one, and records once per consumer per session"
+				},
+				"TrailingSeesFlightRecord": {
+					"value": "TRUE",
+					"test": "tests/clients/head-move-resync-4476.test.ts",
+					"title": "restarts once at the next tool_call after an install outside pi, however many sessions look"
+				}
+			},
+			"notCodeChoice": [
+				{
+					"reason": "Scenario bound or actor set: it sizes the state space or picks which actors, inputs and steps TLC explores; no code branch reads it. RecCap and OwedCap scale MAX_ROOTS = 64 down to a handful of roots.",
+					"constants": [
+						"AgentEdits",
+						"Calls",
+						"Changes",
+						"Kinds",
+						"Modes",
+						"OwedCap",
+						"RecCap",
+						"Roots",
+						"SinceRoots",
+						"Throws"
+					]
+				}
+			],
+			"deferred": [
+				{
+					"reason": "Deferred: every `expect: pass` config agrees on one value, but no existing test observes it. I1 needs a test that reads the root's record from inside a subscriber during the fan-out, and I4 one that publishes and then reads the authorship and FileTime ledgers; neither exists, and the Mut configs are the only red for them.",
+					"constants": [
+						"CommitBeforePublish",
+						"PublishCredits"
+					]
+				}
+			]
 		}
 	}
 }
