@@ -268,7 +268,8 @@ describe("TypeScriptRoot — explicit agent-level tsconfig (#5335)", () => {
 			"src",
 			"index.ts",
 		);
-		expect(await rootOf(file)).toBe(
+		// Unfolded on purpose: the root is the identity, not the spelling.
+		expect(await getTypeScriptServer().root(file)).toBe(
 			realpathOrResolve(path.join(dotfiles, "pi", "agent")),
 		);
 	});
