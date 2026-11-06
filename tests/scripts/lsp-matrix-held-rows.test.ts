@@ -36,7 +36,7 @@ import {
 } from "../../scripts/lib/md-matrix.mjs";
 import { listRefreshFlips } from "../../scripts/lib/refresh-flips.mjs";
 import { LSP_FIXTURES } from "../../scripts/smoke-tools.mjs";
-import { stripSource } from "../support/sweep-kit.js";
+import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -160,13 +160,14 @@ describe("#5323 matrix rows for every measured server (run 42149703889)", () => 
 		const unmeasured = RUN.characterize.rows
 			.filter((r: any) => r.mode === "unknown")
 			.map((r: any) => r.lang);
-		expect(unmeasured.length).toBeGreaterThan(0);
+		assertNonEmptyScan("recorded unmeasured servers", unmeasured.length);
 		expect(unmeasured.filter((lang: string) => anyRow.has(lang))).toEqual([]);
 		// Every server lang the run measured has a row in one table or the other.
 		const measured = RUN.characterize.rows
 			.filter((r: any) => r.mode === "pull" || r.mode === "push-only")
 			.map((r: any) => r.lang)
 			.filter((lang: string) => SERVER_LANGS.includes(lang));
+		assertNonEmptyScan("recorded measured server langs", measured.length, 40);
 		expect(measured.filter((lang: string) => !anyRow.has(lang))).toEqual([]);
 		expect(held(night1).get("go")).toEqual({
 			lang: "go",
