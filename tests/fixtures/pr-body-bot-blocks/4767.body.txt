@@ -3,6 +3,7 @@
 Quoted AGENTS.md section citations named headings that no longer exist, so a reader who follows one reaches no rule.
 
 Refs #4361
+Remaining #4361: the citation sweep follow-up remains open.
 
 ## Notes for the reviewer
 
