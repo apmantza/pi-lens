@@ -90,7 +90,7 @@ provisional.
 
 `CwdProbe` passes because `Settle` writes the object the probe captured, and
 the first touch after a session start replaced it. Neutering that
-(`target == curLatch` in `Settle`) turns `CwdProbe` into `SgSweep`'s B1.
+(`LiveLatch(p)` in `Settle`, set to TRUE) turns `CwdProbe` into `SgSweep`'s B1.
 
 ## Findings
 
