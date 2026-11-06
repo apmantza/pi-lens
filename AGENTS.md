@@ -522,7 +522,7 @@ npm run test:integration              serialized integration suite
 npm run preflight                     local merge/preflight gates
 npm run check:lockfile                lockfile consistency, plus a libc field dropped against the lock a commit records (#5207)
 npm run check:allow-scripts           allowScripts policy vs the resolved lockfile (#1185)
-npm run changelog:check               rollup check; fragments use check-changelog-fragments.mjs
+npm run changelog:check               rollup check: fragment area and shape (.changelog/README.md); check-changelog-fragments.mjs runs it standalone
 npm run docs:rule-catalogs            regenerate rule catalogs
 npm run hygiene -- --dry-run          inspect worktree/process hygiene
 node scripts/ci-verdict.mjs <pr|sha>  exact-head CI verdict

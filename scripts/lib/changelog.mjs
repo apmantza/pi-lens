@@ -13,6 +13,192 @@
  */
 export const INTERNAL_HEADING = "Internal";
 
+/**
+ * The closed list of areas a user fragment belongs to (#5351). A fragment names
+ * one id in its `area:` front matter; the release rollup groups each section's
+ * entries under a `#### <title>` subheading in this order. Derived from the 98
+ * user entries of 4.4.7 to 4.4.9; there is no catch-all, so a change that fits
+ * none of them is a decision for the maintainer, not a new `other` entry.
+ */
+export const CHANGELOG_AREAS = [
+	{ id: "lsp", title: "Language servers" },
+	{ id: "blockers", title: "Blockers and sessions" },
+	{ id: "runners", title: "Runners and scanners" },
+	{ id: "rules", title: "Rules" },
+	{ id: "tools", title: "Tools and reports" },
+	{ id: "config", title: "Configuration and flags" },
+	{ id: "install", title: "Install and updates" },
+	{ id: "host", title: "Hosts and integrations" },
+	{ id: "security", title: "Security" },
+];
+
+const AREA_TITLES = new Set(CHANGELOG_AREAS.map((area) => area.title));
+
+/**
+ * A section with fewer items than this renders flat in the release summary: an
+ * area heading over one or two bullets costs more than it groups. CHANGELOG.md
+ * always keeps the headings.
+ */
+export const AREA_GROUP_MIN_ITEMS = 6;
+
+// Shape limits for `audience: user` fragments (#5351), set from the 98 user
+// entries of 4.4.7 to 4.4.9: headline words p10 6, p90 16, max 19; body words
+// p50 67, p90 119, max 239.
+export const HEADLINE_MIN_WORDS = 4;
+export const HEADLINE_MAX_WORDS = 16;
+export const HEADLINE_MAX_CHARS = 100;
+export const BODY_MAX_WORDS = 120;
+
+/** Internal terms a user entry must not use (#5351); code spans are exempt. */
+export const HOUSE_STYLE_BANNED_TERMS = [
+	"degradation",
+	"projection",
+	"metrics table",
+	"seam",
+	"latch",
+	"ledger",
+];
+
+/**
+ * Verbs a headline must not open with (#5351): a headline states what changed
+ * for the user ("X now does Y."), it does not give a command ("Keep X out of
+ * Y."). This list is style, not a trust gate, so an unlisted imperative passes
+ * and is a review finding. Verbs that double as nouns ("Read notes", "Support
+ * for") are left off on purpose.
+ */
+export const IMPERATIVE_OPENERS = [
+	"add",
+	"allow",
+	"avoid",
+	"clean",
+	"disable",
+	"drop",
+	"enable",
+	"ensure",
+	"fix",
+	"handle",
+	"improve",
+	"keep",
+	"let",
+	"make",
+	"move",
+	"prevent",
+	"refuse",
+	"remove",
+	"rename",
+	"replace",
+	"require",
+	"resolve",
+	"show",
+	"skip",
+	"stop",
+	"treat",
+	"use",
+];
+
+const CODE_SPAN = /`[^`]*`/g;
+// A code span collapses to one private-use character so it counts as one word
+// and its punctuation never reads as the headline's.
+const CODE_TOKEN = "\uE000";
+const TRAILING_REFS = /\s\(refs #\d+(?:, #\d+)*\)$/;
+
+/**
+ * Shape problems of one `audience: user` fragment entry (#5351), or `[]` when
+ * it is the known-good form and nothing else:
+ *
+ *   - **Headline sentence.** One paragraph of body. (refs #N)
+ *
+ * A bold headline of 4 to 16 words (at most 100 characters) that is one
+ * sentence ending in a period, a body that is one short paragraph starting a
+ * new sentence, and at most one reference, as the trailing `(refs #N)`.
+ * Everything else is refused: nested bullets, extra paragraphs, an em-dash or
+ * colon after the headline, any other reference form. The house-style terms
+ * and imperative openers are checked on top. Whether a headline states the
+ * effect is a review judgment; the shape cannot prove it.
+ *
+ * @param {string} entry the entry text after the front matter
+ * @returns {string[]}
+ */
+export function userEntryShapeProblems(entry) {
+	const lines = entry.split(/\r?\n/);
+	const first = lines.findIndex((line) => /^[-*]\s+\S/.test(line));
+	if (first < 0) return ["no entry bullet"];
+	if (!lines.slice(0, first).every((line) => /^(#{2,4}\s.*)?$/.test(line)))
+		return ["text before the entry bullet"];
+	if (!lines[first].startsWith("- "))
+		return ["the entry bullet must start with `- `"];
+	for (const line of lines.slice(first + 1)) {
+		if (!/^ {2}\S/.test(line) || /^ {2}(?:[-*+>|#]\s|\d+\.\s|```)/.test(line))
+			return [
+				"the entry must be one paragraph: indent continuation lines by two spaces, with no blank line, nested list, quote, table or fence",
+			];
+	}
+	const text = [
+		lines[first].slice(2),
+		...lines.slice(first + 1).map((l) => l.trim()),
+	]
+		.join(" ")
+		.trim();
+	if ((text.match(/`/g) ?? []).length % 2 !== 0) return ["unbalanced backtick"];
+	const plain = text.replace(CODE_SPAN, CODE_TOKEN);
+	const withoutRefs = plain.replace(TRAILING_REFS, "");
+	const problems = [];
+	if (/#\d|\b(?:issues|pull|discussions)\/\d|\bGH-\d/i.test(withoutRefs))
+		problems.push(
+			"references take one form: a single trailing `(refs #N)` after the body (several issues as `(refs #N, #M)`)",
+		);
+	const head = withoutRefs.match(/^\*\*([^*]+)\*\*(?=\s|$)(.*)$/);
+	if (!head) {
+		problems.push("the entry must open with a bold headline sentence");
+		return problems;
+	}
+	const [, headline, rest] = head;
+	if (!headline.endsWith("."))
+		problems.push("the bold headline must end with a period");
+	const sentence = headline.replace(/\.$/, "");
+	if (/[.!?](?=\s|$)|[:;\u2013\u2014]/.test(sentence))
+		problems.push(
+			"the bold headline must be one sentence, with no colon, semicolon or dash",
+		);
+	const words = sentence.trim().split(/\s+/);
+	if (words.length < HEADLINE_MIN_WORDS || words.length > HEADLINE_MAX_WORDS)
+		problems.push(
+			`the bold headline must be ${HEADLINE_MIN_WORDS} to ${HEADLINE_MAX_WORDS} words, found ${words.length}`,
+		);
+	if (text.match(/^\*\*([^*]+)\*\*/)[1].length > HEADLINE_MAX_CHARS)
+		problems.push(
+			`the bold headline must be at most ${HEADLINE_MAX_CHARS} characters`,
+		);
+	if (IMPERATIVE_OPENERS.includes(words[0].toLowerCase()))
+		problems.push(
+			`the headline states what changed for the user, so it must not open with the imperative "${words[0]}"`,
+		);
+	const body = rest.trim();
+	if (rest !== "" && !/^ \S/.test(rest))
+		problems.push("put one space between the headline and the body");
+	if (body) {
+		if (!new RegExp(`^[A-Z0-9${CODE_TOKEN}]`).test(body))
+			problems.push(
+				"the body must start a new sentence (no dash or colon after the headline)",
+			);
+		if (!body.endsWith("."))
+			problems.push("the body must end with a period, before any `(refs #N)`");
+		const bodyWords = body.split(/\s+/).length;
+		if (bodyWords > BODY_MAX_WORDS)
+			problems.push(
+				`the body must be at most ${BODY_MAX_WORDS} words, found ${bodyWords}`,
+			);
+	}
+	const banned = HOUSE_STYLE_BANNED_TERMS.filter((term) =>
+		new RegExp(`\\b${term.replace(" ", "\\s+")}(?:s|es)?\\b`, "i").test(plain),
+	);
+	if (banned.length)
+		problems.push(
+			`internal terms do not belong in a user entry: ${banned.join(", ")}`,
+		);
+	return problems;
+}
+
 /** A version heading looks like `## [3.8.60] - 2026-06-21` or `## [Unreleased]`. */
 const VERSION_HEADING = /^## \[([^\]]+)\]/;
 
@@ -57,11 +243,14 @@ function finalize(current) {
  * the one parse behind summarizeSection and the user-changelog count line (#5264),
  * so the release notes and the count cannot drift. Same-named headings merge and
  * keep first-seen order; entries before the first heading are skipped; `### Internal`
- * entries are counted, not bucketed.
+ * entries are counted, not bucketed. A `#### <area title>` line under a section
+ * heading (#5351) names the area of the entries below it: `areas` holds, per
+ * section, the area title of each bucket item (`null` before any area heading).
+ * Any other `####` line is an ordinary heading, as before.
  *
  * @param {string} body a section body from extractSection()
  * @param {{ maxGist?: number, gist?: boolean }} [opts]
- * @returns {{ order: string[], buckets: Map<string, string[]>, internalCount: number }}
+ * @returns {{ order: string[], buckets: Map<string, string[]>, areas: Map<string, Array<string | null>>, internalCount: number }}
  */
 export function parseSectionEntries(body, opts = {}) {
 	const maxGist = opts.maxGist ?? 220;
@@ -69,16 +258,30 @@ export function parseSectionEntries(body, opts = {}) {
 	// (a section may carry two `### Added` blocks) and preserving first-seen order.
 	const order = [];
 	const buckets = new Map();
+	const areas = new Map();
 	let heading = null;
+	let area = null;
 	let internalCount = 0;
 	const lines = body.split(/\r?\n/);
 	for (let i = 0; i < lines.length; i++) {
 		let line = lines[i].trimEnd();
-		const h = line.match(/^#{2,4}\s+(.*)$/);
+		const h = line.match(/^(#{2,4})\s+(.*)$/);
 		if (h) {
-			heading = h[1].trim();
+			const title = h[2].trim();
+			if (
+				h[1] === "####" &&
+				heading !== null &&
+				heading !== INTERNAL_HEADING &&
+				AREA_TITLES.has(title)
+			) {
+				area = title;
+				continue;
+			}
+			heading = title;
+			area = null;
 			if (!buckets.has(heading)) {
 				buckets.set(heading, []);
+				areas.set(heading, []);
 				order.push(heading);
 			}
 			continue;
@@ -111,16 +314,22 @@ export function parseSectionEntries(body, opts = {}) {
 		const bold = line.match(/^- (\*\*.+?\*\*)\s*(.*)$/);
 		if (bold) {
 			const gist = opts.gist ? cleanGist(bold[2], maxGist) : "";
+			// The shape check moves the reference out of the bold headline to the
+			// end of the entry; keep it in the summary so the release body links it.
+			let ref = trailingRefs(line);
+			if (bold[1].includes(ref.trim())) ref = "";
 			buckets
 				.get(heading)
-				.push(gist ? `- ${bold[1]} — ${gist}` : `- ${bold[1]}`);
+				.push(`${gist ? `- ${bold[1]} — ${gist}` : `- ${bold[1]}`}${ref}`);
+			areas.get(heading).push(area);
 			continue;
 		}
 		const plain = line.match(/^- (\S.*)$/);
 		if (!plain) continue;
 		buckets.get(heading).push(`- ${plainGist(plain[1])}`);
+		areas.get(heading).push(area);
 	}
-	return { order, buckets, internalCount };
+	return { order, buckets, areas, internalCount };
 }
 
 /**
@@ -139,12 +348,34 @@ export function parseSectionEntries(body, opts = {}) {
  * @returns {string}
  */
 export function summarizeSection(body, opts = {}) {
-	const { order, buckets, internalCount } = parseSectionEntries(body, opts);
+	const { order, buckets, areas, internalCount } = parseSectionEntries(
+		body,
+		opts,
+	);
 	const out = [];
 	for (const h of order) {
 		const items = buckets.get(h);
 		if (!items.length) continue;
-		out.push(`### ${h}`, "", ...items, "");
+		out.push(`### ${h}`, "");
+		const itemAreas = areas.get(h);
+		if (
+			items.length < AREA_GROUP_MIN_ITEMS ||
+			itemAreas.every((a) => a === null)
+		) {
+			out.push(...items, "");
+			continue;
+		}
+		// Area groups: entries with no area first, then each area in first-seen
+		// order, so a bullet never reads as belonging to the heading above it.
+		for (const group of [
+			null,
+			...new Set(itemAreas.filter((a) => a !== null)),
+		]) {
+			const grouped = items.filter((_, i) => itemAreas[i] === group);
+			if (!grouped.length) continue;
+			if (group !== null) out.push(`#### ${group}`, "");
+			out.push(...grouped, "");
+		}
 	}
 	if (internalCount > 0) {
 		out.push(
@@ -152,6 +383,11 @@ export function summarizeSection(body, opts = {}) {
 		);
 	}
 	return out.join("\n").replace(/^\n+/, "").replace(/\s+$/, "");
+}
+
+// The entry's trailing `(refs #N)` group as ` (refs #N)`, or "".
+function trailingRefs(line) {
+	return line.match(/\s\(refs #\d+(?:, #\d+)*\)$/)?.[0] ?? "";
 }
 
 // Condense a plain (non-bold-titled) entry to its whole first sentence.

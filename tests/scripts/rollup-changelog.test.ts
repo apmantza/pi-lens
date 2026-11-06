@@ -56,11 +56,11 @@ describe("per-entry changelog rollup", () => {
 		const root = fixtureRoot();
 		fs.writeFileSync(
 			path.join(root, ".changelog", "b.md"),
-			"---\nsection: Fixed\naudience: user\n---\n\n* **B.** fixed.\n  Hard-wrapped continuation.\n  - nested consequence\n",
+			"---\nsection: Fixed\naudience: user\narea: lsp\n---\n\n* **B.** fixed.\n  Hard-wrapped continuation.\n  - nested consequence\n",
 		);
 		fs.writeFileSync(
 			path.join(root, ".changelog", "a.md"),
-			"---\nsection: Deprecated\naudience: user\n---\n\n- Plain deprecated entry without bold\n",
+			"---\nsection: Deprecated\naudience: user\narea: config\n---\n\n- Plain deprecated entry without bold\n",
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const output = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
@@ -71,10 +71,10 @@ describe("per-entry changelog rollup", () => {
 			"### Added\n\n- old unreleased\n  continuation text\n  - nested detail",
 		);
 		expect(output).toContain(
-			"### Deprecated\n\n- Plain deprecated entry without bold",
+			"### Deprecated\n\n#### Configuration and flags\n\n- Plain deprecated entry without bold",
 		);
 		expect(output).toContain(
-			"### Fixed\n\n* **B.** fixed.\n  Hard-wrapped continuation.\n  - nested consequence",
+			"### Fixed\n\n#### Language servers\n\n* **B.** fixed.\n  Hard-wrapped continuation.\n  - nested consequence",
 		);
 		expect(output).toContain("### Security\n\n* existing security note.");
 		expect(fs.readdirSync(path.join(root, ".changelog"))).toEqual([]);
@@ -84,7 +84,7 @@ describe("per-entry changelog rollup", () => {
 		const root = fixtureRoot();
 		fs.writeFileSync(
 			path.join(root, ".changelog", "a.md"),
-			"---\nsection: Changed\naudience: user\n---\n\n- **A** — changed\n",
+			"---\nsection: Changed\naudience: user\narea: tools\n---\n\n- **A** — changed\n",
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const once = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
@@ -128,8 +128,10 @@ describe("per-entry changelog rollup", () => {
 		["Security", "- security fix"],
 	])("accepts %s entries in repository styles", (section, entry) => {
 		expect(
-			parseEntry(`---\nsection: ${section}\naudience: user\n---\n\n${entry}`),
-		).toEqual({ section, audience: "user", entry });
+			parseEntry(
+				`---\nsection: ${section}\naudience: user\narea: tools\n---\n\n${entry}`,
+			),
+		).toEqual({ section, audience: "user", area: "tools", entry });
 	});
 
 	it("covers the full Keep a Changelog section order", () => {
@@ -153,7 +155,7 @@ describe("fragment audience (#3852)", () => {
 		title: string,
 		section = "Fixed",
 	) =>
-		`---\nsection: ${section}\n${audience === null ? "" : `audience: ${audience}\n`}---\n\n- **${title}** - detail.\n`;
+		`---\nsection: ${section}\n${audience === null ? "" : `audience: ${audience}\narea: lsp\n`}---\n\n- **${title}** - detail.\n`;
 
 	function rollMixed() {
 		const root = fixtureRoot();
@@ -264,8 +266,10 @@ describe("fragment audience (#3852)", () => {
 	// Edge shapes that a naive marker regex or wrapper strip would mangle.
 	it("accepts audience with no space and with trailing whitespace, and rejects a half-marker line", () => {
 		expect(
-			parseEntry("---\nsection: Fixed\naudience:user\n---\n\n- **T**\n", "x.md")
-				.audience,
+			parseEntry(
+				"---\nsection: Fixed\naudience:user\narea: lsp\n---\n\n- **T**\n",
+				"x.md",
+			).audience,
 		).toBe("user");
 		expect(
 			parseEntry(
@@ -332,7 +336,7 @@ describe("fragment audience (#3852)", () => {
 		const root = fixtureRoot();
 		fs.writeFileSync(
 			path.join(root, ".changelog", "a.md"),
-			"---\nsection: Fixed\naudience: user\n---\n\n- **U** - uses HTML.\n\n<details>\n\n<summary>user html</summary>\n",
+			"---\nsection: Fixed\naudience: user\narea: lsp\n---\n\n- **U** - uses HTML.\n\n<details>\n\n<summary>user html</summary>\n",
 		);
 		rollupChangelog("2.0.0", { rootDir: root, date: "2026-08-13" });
 		const released =

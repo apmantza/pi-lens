@@ -1,6 +1,7 @@
 ---
 section: Added
 audience: user
+area: config
 ---
 
-- **Read widening opt-out (closes #5303)**: Use `--no-read-expansion` or global `readGuard.expandReads=false` to keep requested read ranges while the read-before-edit guard stays active. Read widening remains on by default.
+- **Read widening can now be turned off without losing the read-before-edit guard.** Pass `--no-read-expansion` or set the global `readGuard.expandReads=false` to keep the requested read ranges while the guard stays active. Read widening stays on by default. (refs #5303)

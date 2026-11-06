@@ -14,7 +14,8 @@ peer/dev dependency and must be imported type-only. Lockfiles use the pinned
 npm version. Release notes use one `.changelog/<slug>.md` fragment per PR
 (`audience: user` or `internal`; the release body lists only `user`); never
 edit `CHANGELOG.md` for ordinary PR notes.
-New user-facing fragments begin with a bold lead of at most 100 characters
-(issue references are excluded from the count); internal fragments are exempt.
+A `user` fragment carries an `area` and the one shape
+`- **Headline sentence.** Body. (refs #N)`; `.changelog/README.md` lists the
+rules, and internal fragments are exempt.
 
 </important>

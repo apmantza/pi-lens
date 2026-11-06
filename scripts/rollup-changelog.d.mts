@@ -3,7 +3,12 @@ export function isEntryBullet(line: string): boolean;
 export function parseEntry(
 	text: string,
 	file?: string,
-): { section: string; audience: "user" | "internal"; entry: string };
+): {
+	section: string;
+	audience: "user" | "internal";
+	area: string | undefined;
+	entry: string;
+};
 export function rollupChangelog(
 	version: string,
 	options?: { rootDir?: string; date?: string },
@@ -16,6 +21,7 @@ export function validateChangelogEntries(options?: {
 	file: string;
 	section: string;
 	audience: "user" | "internal";
+	area: string | undefined;
 	entry: string;
 }>;
 
