@@ -74,7 +74,11 @@ const map = loadCoverageMap(REPO_ROOT);
 // a type), an import, a function declaration's name, and the source of a
 // derivation (`class C extends H`, `const A = H`, an export specifier,
 // `export * as N`). A derivation's product is tracked in every file, so the
-// chain is followed instead of admitted. Every other reference is a hit.
+// chain is followed instead of admitted; a derivation inside a function is
+// tracked too, which can only add hits. Every other reference is a hit. A
+// boundary that holds an ERROR or a zero-width MISSING node is not trusted,
+// because a misread brace can fold a module statement into a function: 9 of
+// 544 runtime files parse with an ERROR today (`import("…").T` types).
 //
 // Not followed (#5330 F2, accepted p3): a helper built inside a function and
 // handed to a module-scope caller, as getProcessSingleton and sessionCell do.
@@ -109,22 +113,39 @@ const PER_CALL_FIELDS = ["body", "parameters", "parameter"];
 const isFieldOf = (parent: SgNode, child: SgNode, field: string) =>
 	parent.field(field)?.id() === child.id();
 
-/** True unless a function boundary or an instance field encloses the node. */
-function atModuleScope(node: SgNode): boolean {
+/** Byte offsets of the ERROR and zero-width MISSING nodes in a tree. */
+function damageOffsets(root: SgNode): number[] {
+	return root
+		.findAll({ rule: { any: [{ kind: "ERROR" }, { regex: "^$" }] } })
+		.filter((node) => node.kind() === "ERROR" || node.isLeaf())
+		.map((node) => node.range().start.index);
+}
+
+/**
+ * True unless a function boundary or an instance field encloses the node. A
+ * boundary with damage inside its range is skipped, as if it were not there.
+ */
+function atModuleScope(node: SgNode, damage: readonly number[]): boolean {
 	let child = node;
 	for (let parent = node.parent(); parent; parent = parent.parent()) {
 		const kind = String(parent.kind());
-		if (
-			FUNCTION_KINDS.has(kind) &&
-			PER_CALL_FIELDS.some((field) => isFieldOf(parent, child, field))
-		)
-			return false;
-		if (
-			kind === "public_field_definition" &&
-			isFieldOf(parent, child, "value") &&
-			!parent.children().some((part) => part.kind() === "static")
-		)
-			return false;
+		const { start, end } = parent.range();
+		const damaged = damage.some(
+			(offset) => offset >= start.index && offset <= end.index,
+		);
+		if (!damaged) {
+			if (
+				FUNCTION_KINDS.has(kind) &&
+				PER_CALL_FIELDS.some((field) => isFieldOf(parent, child, field))
+			)
+				return false;
+			if (
+				kind === "public_field_definition" &&
+				isFieldOf(parent, child, "value") &&
+				!parent.children().some((part) => part.kind() === "static")
+			)
+				return false;
+		}
 		child = parent;
 	}
 	return true;
@@ -162,6 +183,8 @@ function analyzeModule(
 		const target = resolveModule(file, specifier);
 		return target !== undefined && helperModules.has(target);
 	};
+	const damage = damageOffsets(root);
+	const moduleScope = (node: SgNode) => atModuleScope(node, damage);
 	const local = new Set(tracked);
 	const admitted = new Set<number>();
 	const derived: string[] = [];
@@ -218,7 +241,6 @@ function analyzeModule(
 			],
 		},
 	})) {
-		if (!atModuleScope(node)) continue;
 		const kind = String(node.kind());
 		const name = node.field("name");
 		if (kind.endsWith("class_declaration")) {
@@ -281,7 +303,7 @@ function analyzeModule(
 	})) {
 		const text = decodeEscapes(leaf.text());
 		if (!leaf.isLeaf() || !local.has(text) || admitted.has(leaf.id())) continue;
-		if (leaf.kind() === "type_identifier" || !atModuleScope(leaf)) continue;
+		if (leaf.kind() === "type_identifier" || !moduleScope(leaf)) continue;
 		const ancestors = leaf.ancestors().map((node) => String(node.kind()));
 		if (
 			ancestors.includes("type_query") ||
@@ -295,7 +317,7 @@ function analyzeModule(
 	})) {
 		if (admitted.has(fragment.id()) || !fromHelperModule(fragment.text()))
 			continue;
-		if (atModuleScope(fragment)) hit(fragment, fragment.text());
+		if (moduleScope(fragment)) hit(fragment, fragment.text());
 	}
 	for (const call of root.findAll({
 		rule: {
@@ -303,7 +325,7 @@ function analyzeModule(
 			has: { field: "function", kind: "import" },
 		},
 	})) {
-		if (!atModuleScope(call)) continue;
+		if (!moduleScope(call)) continue;
 		const args = call.field("arguments")?.namedChildren() ?? [];
 		const literal = args.length === 1 && args[0].kind() === "string";
 		if (!literal) hit(call, call.text());
@@ -505,6 +527,27 @@ describe("module-level state-helper coverage census (#5330)", () => {
 		expect(await fixtureRows(source)).not.toEqual([]);
 	});
 
+	// A boundary the grammar misread may hold a module-scope statement, so it
+	// excludes nothing. Both inputs are the tree's own damage shapes
+	// (clients/dispatch/runners/lsp.ts:119, clients/test-runner-client.ts:1261).
+	it.each([
+		[
+			"an ERROR node",
+			"class A { m(a: import('./x.js').T[], b: number) { return new BoundedFifoMap(1); } }",
+			"clients/fixture.ts:1 BoundedFifoMap",
+		],
+		[
+			"a MISSING node",
+			"function f() { let e: import('node:fs').Dirent[];\n return new BoundedFifoMap(1); }",
+			"clients/fixture.ts:2 BoundedFifoMap",
+		],
+	])(
+		"counts a function-body reference behind %s",
+		async (_label, source, row) => {
+			expect(await fixtureRows(source)).toEqual([row]);
+		},
+	);
+
 	// #5330 F3b: a per-call or per-instance construction is not module state,
 	// and the verdict does not depend on member order.
 	it.each([
@@ -582,6 +625,18 @@ describe("module-level state-helper coverage census (#5330)", () => {
 					"import { Lru } from './lru.js';\nconst c = new Lru(1);",
 			},
 			["clients/user.ts:2 Lru"],
+		],
+		[
+			// The tree has this order: clients/blocker-freshness.ts sorts before
+			// clients/bounded-cache.ts, which declares BoundedLruCache.
+			"a subclass declared in a later file",
+			{
+				"clients/a-user.ts":
+					"import { Lru } from './lru.js';\nconst c = new Lru(1);",
+				"clients/lru.ts":
+					"import { BoundedFifoMap } from './bounded-cache.js';\nexport class Lru extends BoundedFifoMap {}",
+			},
+			["clients/a-user.ts:2 Lru"],
 		],
 		[
 			"a re-export alias",
