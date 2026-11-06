@@ -222,19 +222,9 @@ export function renderServerCapabilitiesDoc({
  * @param {Object[]} measured     objects keyed by header name → cell value
  * @param {string} keyCol         header name of the unique key (e.g. "lang")
  * @param {string[]} ownedCols    header names this run is authoritative for
- * @param {{ updateOnly?: boolean }} [opts]  when updateOnly, a measured key with
- *   no existing row is DROPPED (the matrix is curated — new langs are added by
- *   hand, not appended by a probe). Default appends new keys.
  * @returns {string[][]}          merged rows
  */
-export function mergeRows(
-	existing,
-	header,
-	measured,
-	keyCol,
-	ownedCols,
-	opts = {},
-) {
+export function mergeRows(existing, header, measured, keyCol, ownedCols) {
 	const idx = (name) => header.indexOf(name);
 	const keyIdx = idx(keyCol);
 	const byKey = new Map();
@@ -248,7 +238,6 @@ export function mergeRows(
 		const k = m[keyCol];
 		let cells = byKey.get(k);
 		if (!cells) {
-			if (opts.updateOnly) continue; // don't append to a curated table
 			cells = header.map((h) => (m[h] !== undefined ? String(m[h]) : ""));
 			byKey.set(k, cells);
 			order.push(k);

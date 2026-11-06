@@ -21,7 +21,6 @@ export function mergeRows(
 	measured: Record<string, string | number | undefined>[],
 	keyCol: string,
 	ownedCols: string[],
-	opts?: { updateOnly?: boolean },
 ): string[][];
 
 export function mergeSrc(existing: string, measured: string): string;

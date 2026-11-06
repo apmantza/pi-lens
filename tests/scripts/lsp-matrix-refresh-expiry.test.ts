@@ -156,7 +156,6 @@ describe("#3401/#4512 first-publish misses (date-based, never expired)", () => {
 			[{ lang: "vue", src: "ci" }],
 			"lang",
 			["clean-behavior", "first-publish", "tier", "src"],
-			{ updateOnly: true },
 		);
 		const preFix = replaceTable(
 			FIXTURE,
