@@ -155,14 +155,11 @@ describe("classifyCascadeWaitTier", () => {
 		);
 	});
 
-	// #541/#558: PR #541 (2026-07-11) briefly classified native-ts7 as
-	// tier3-silent after a clean-signal probe run appeared to show it silent,
-	// same as classic. A 2026-07-12 dual-environment re-measurement (nightly
-	// CI Linux + local Windows dev, same `typescript@7.0.2` both times) found
-	// native-ts7 now publishes 2 version-less diagnostic sets on clean
-	// (`cleanPubs=2(v:0)`) — NOT silent, a drift from the #541 measurement.
-	// Classic was re-confirmed silent in the same run and is unaffected. This
-	// The shared policy stays on "waits". The cascade wrapper now uses its late
+	// #541/#558/#5348: native-ts7 is never `tier3-silent`. The probe reads it
+	// silent on a clean file (#5348), but for that tier touchFile's silent-confirm
+	// gate reads a lapsed wait as clean, and nothing shows this server publishes a
+	// file's errors inside the budget.
+	// The shared policy stays on "waits". The cascade wrapper uses its late
 	// publication through the bounded collect-later path.
 	it("classifies a native-ts7 typescript snapshot for cascade collect-later (#1444)", () => {
 		getServersForFileWithConfig.mockReturnValue([server("typescript")]);

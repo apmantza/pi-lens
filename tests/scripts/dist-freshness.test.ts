@@ -90,6 +90,7 @@ describe("dist freshness (#4239)", () => {
 		expect(imports).toEqual([
 			"dist/clients/lsp/server-traits.js",
 			"dist/clients/lsp/server-traits.js",
+			"dist/clients/lsp/server-traits.js",
 		]);
 		for (const output of imports) expect(outputs.has(output)).toBe(true);
 	});

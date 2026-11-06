@@ -121,26 +121,23 @@ if (install) {
 // identically; anything absent there falls back to identity (fixture lang ===
 // strategy key), which covers the core set without upkeep.
 
-// #524/#529/#541/#558: typescript7[-clean] shares the "typescript" server id
-// with classic, but that id's `silentOnClean: true` marker is measured
-// against the CLASSIC binary only (wait-policy/strategies.ts). PR #526 originally
-// excluded the native variant from the drift comparison entirely; #541
-// (2026-07-11) briefly routed it through the shared "typescript" key instead
-// after a probe run appeared to show it silent too. A 2026-07-12
-// dual-environment re-measurement (nightly CI Linux + local Windows dev, same
-// `typescript@7.0.2`) found native-ts7 now publishes on clean — a drift from
-// that #541 measurement — while classic stayed silent, unaffected.
+// #524/#529/#541/#558/#5348: typescript7[-clean] shares the "typescript" server
+// id with classic, but that id's `silentOnClean: true` marker is measured
+// against the CLASSIC binary only (wait-policy/strategies.ts). PR #526 excluded
+// the native variant from the comparison; #558 gave both lang keys an EXPLICIT
+// `false` expectation instead, bypassing SERVER_DIAGNOSTIC_STRATEGIES's shared
+// "typescript" entry, so the rows stay in the comparison.
 //
-// Rather than re-excluding these two lang keys from the comparison entirely
-// (losing all future signal), they get an EXPLICIT `false` expectation here,
-// bypassing SERVER_DIAGNOSTIC_STRATEGIES's shared "typescript" entry. This
-// keeps the row in the comparison with a correct expectation:
-//   - observed publishes-* (today's reality) vs expected false → "consistent",
-//     no false alarm.
-//   - if a FUTURE TS7 build goes silent again, observed silent vs expected
-//     false → "silent-not-marked", a positive signal telling a human "consider
-//     re-enabling the tier3-silent optimization for native-ts7" — more useful
-//     than the old silent exclusion, which would tell nobody anything.
+// The expectation stays `false` on purpose. #558 set it on a 2026-07-12 reading
+// of native-ts7 publishing on clean (`cleanPubs=2`), a reading that predates
+// #4615's per-document attribution of the publish trace. Since then the clean
+// fixture reads silent (#5348), so the nightly files `silent-not-marked` for it.
+// That finding is the signal this expectation exists to raise: a human decides
+// whether native TS7 may skip the wait. The expectation stays false pending a
+// maintainer decision and a latency measurement (#5348): the marker lets the
+// silent-confirm gate read a lapsed wait as clean, and the probe's small
+// fixtures do not show that native TS7 publishes a file's errors inside the
+// budget (see `silentOnClean` in wait-policy/strategies.ts).
 const NATIVE_TS7_LANGS = new Set(["typescript7", "typescript7-clean"]);
 
 function lookupSilentOnClean(lang) {
@@ -310,12 +307,14 @@ const unk = rows.filter((r) => r.behavior === "unknown").length;
 // first-publish (a clean file has no finding to publish).
 //
 // #558: the native-ts7 rows (typescript7/typescript7-clean) stay IN this
-// comparison (not re-excluded), but `lookupSilentOnClean` now gives them an
+// comparison (not re-excluded), but `lookupSilentOnClean` gives them an
 // explicit `false` expectation instead of routing to classic's shared
-// "typescript" marker — see the NATIVE_TS7_LANGS comment above for why. This
-// means today's publishes-* observation compares clean (no false alarm), and
-// a future TS7 build going silent again would surface as `silent-not-marked`
-// — a real signal, not a skipped row.
+// "typescript" marker — see the NATIVE_TS7_LANGS comment above. A silent
+// observation surfaces as `silent-not-marked`, a real signal, not a skipped row.
+// #5348: auxiliary rows (fallow, ast-grep, opengrep, zizmor, typos) are
+// not-comparable (`row.auxiliary`, set by probe-fixture.mjs): wait-policy reads
+// the marker in primary-scoped gates, and in the warm-up gate only for a
+// server with `workspaceIndexing`, which no auxiliary sets.
 // #3444: one row per strategy key (findCleanSignalDrift aggregates), so two fixtures of one
 // server (ast-grep, ast-grep-baseline) are judged together against its single
 // marker, and a degenerate silent row never counts.

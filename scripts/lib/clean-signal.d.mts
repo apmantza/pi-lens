@@ -85,6 +85,8 @@ export interface DriftInput {
 	firstPublish?: string;
 	/** #3444: a `clean: true` fixture, whose empty dirty phase is by design. */
 	cleanFixture?: boolean;
+	/** #5348: the measured server is an auxiliary; `silentOnClean` is never read for one. */
+	auxiliary?: boolean;
 }
 
 export interface DriftResult {

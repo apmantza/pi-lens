@@ -35,15 +35,15 @@
  * deferred, and 58 runs whose every neighbor was deferred read
  * `no_neighbors`.
  *
- * Native TS7 is the cascade-only exception. It is not silent on clean, but
- * its publication does not settle inside the cold-snapshot budget, so the
- * cascade classifies it as `collect-later`. The shared server policy remains
- * `waits`, so main-lane behavior does not change. A 2026-07-12
- * dual-environment re-measurement (`typescript@7.0.2`, Linux CI and Windows)
- * found native-ts7 publishes 2 version-less diagnostic sets on the clean
- * transition (`cleanPubs=2(v:0)`), so it is NOT silent; classic was confirmed
- * still silent (`cleanPubs=0(v:0)`). `scripts/probe-clean-signal.mjs`
- * watches for a TS7 build that becomes silent again.
+ * Native TS7 is the cascade-only exception. Its publication does not settle
+ * inside the cold-snapshot budget, so the cascade classifies it as
+ * `collect-later`, and the shared server policy remains `waits`, so
+ * main-lane behavior does not change. The probe reads native-ts7 silent on a
+ * clean file (#5348), which does not move it into `tier3-silent`: for that
+ * tier `touchFile`'s silent-confirm gate reads a lapsed wait as clean (the
+ * cascade lane itself leaves silence unconfirmed), and nothing shows this
+ * server publishes a file's errors inside the budget. `scripts/probe-clean-signal.mjs` reports
+ * the silence as a drift finding for a human to decide.
  */
 
 import { logCascade } from "../cascade-logger.js";

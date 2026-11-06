@@ -42,8 +42,15 @@ gate — because the probe is a timing-based negative observation; a mismatch
 just tells a human the marker may need updating. `unknown` observations are
 never compared in either direction (a slow/absent server isn't evidence of
 anything). The native TS7 launch variant (`typescript7`/`typescript7-clean`,
-#524/#526) is deliberately excluded from comparison against classic's marker —
-they share a server id but not a verified clean-signal behavior.
+#524/#526) is compared against an explicit `false` expectation, not classic's
+marker (#558): they share a server id, and the marker is measured on classic
+only. A `silent-not-marked` finding for it reports that the probe saw silence
+on a clean file. The marker stays unchanged pending a maintainer decision and
+a latency measurement, because it lets the silent-confirm gate read a lapsed
+wait as clean (#5348). Auxiliary servers (ast-grep, opengrep, zizmor, typos,
+fallow) are never compared: `silentOnClean` is read in primary-scoped gates,
+and in the warm-up gate only for a server with `workspaceIndexing`, which no
+auxiliary sets.
 
 The `typescript` row has three launch variants, chosen in
 `TypeScriptServer.spawn` (`clients/lsp/server.ts`). The project's own

@@ -34,7 +34,10 @@ import {
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createProbeFixture } from "../../scripts/lib/probe-fixture.mjs";
+import {
+	createProbeFixture,
+	type ProbeRow,
+} from "../../scripts/lib/probe-fixture.mjs";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import {
 	mergeRows,
@@ -741,18 +744,13 @@ describe("checkCleanSignalDrift (#529)", () => {
 		expect(d.kind).toBe("silent-not-marked");
 	});
 
-	// #558: PR #541 (2026-07-11) briefly routed typescript7/typescript7-clean
-	// through the shared "typescript" strategy key (`true`), on the strength of
-	// a probe run that appeared to show native-ts7 silent too. A 2026-07-12
-	// dual-environment re-measurement found native-ts7 now publishes on clean —
-	// a drift from that #541 measurement — while classic stayed silent,
-	// unaffected. Rather than re-excluding these lang keys from the comparison
-	// entirely (losing all future signal), probe-clean-signal.mjs's
-	// `lookupSilentOnClean` now gives them an explicit `false` expectation
-	// instead of classic's shared marker. These cases exercise that against the
-	// pure checker (the routing itself lives in the script's
-	// lookupSilentOnClean, out of unit-test scope — see the file header).
-	it("is consistent when native-ts7 is observed publishing on clean against its own expected-false marker (#558, today's steady state)", () => {
+	// #558: typescript7/typescript7-clean get an explicit `false` expectation
+	// instead of classic's shared "typescript" marker (probe-clean-signal.mjs's
+	// `lookupSilentOnClean`, out of unit-test scope — see the file header). #558
+	// set it on a 2026-07-12 reading of native-ts7 publishing on clean; since
+	// #4615 the clean fixture reads silent (#5348), and the second case below is
+	// what the nightly now files.
+	it("is consistent when native-ts7 is observed publishing on clean against its own expected-false marker (#558)", () => {
 		const d = checkCleanSignalDrift(
 			{ lang: "typescript7-clean", behavior: "publishes-unversioned" },
 			false,
@@ -760,11 +758,10 @@ describe("checkCleanSignalDrift (#529)", () => {
 		expect(d.kind).toBe("consistent");
 	});
 
-	it("flags silent-not-marked if a FUTURE native-ts7 build goes silent again (#558 regression watch)", () => {
-		// The safety net this change exists for: if a future TS7 build becomes
-		// silent on clean again, the explicit `false` expectation surfaces it as
-		// a positive signal ("consider re-enabling tier3-silent for native-ts7")
-		// instead of the row being silently skipped like the old full exclusion.
+	it("flags silent-not-marked when native-ts7 is observed silent (#558; the reading since 2026-10-21, #5348)", () => {
+		// The explicit `false` expectation surfaces silence as a signal for a
+		// human to decide on tier3-silent for native-ts7, instead of the row
+		// being silently skipped like the old full exclusion.
 		const d = checkCleanSignalDrift(
 			{ lang: "typescript7", behavior: "silent" },
 			false,
@@ -836,6 +833,110 @@ describe("findCleanSignalDrift (#529)", () => {
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0].lang).toBe("typescript7-clean");
 		expect(warnings[0].kind).toBe("marked-not-silent");
+	});
+});
+
+describe("auxiliary rows are not drift inputs (#5348)", () => {
+	// Recurrence it prevents: fallow-lsp (an auxiliary) published once on open
+	// and then nothing on any unsaved edit, so the probe's dirty-fixture neutral
+	// edit classified it `silent` and the nightly filed `silent-not-marked`
+	// every night from 2026-11-03. The `silentOnClean` marker is read in
+	// primary-scoped gates (cascade classifier, aggregate and silent-confirm) and
+	// in the warm-up gate only for a server with `workspaceIndexing`, which no
+	// auxiliary sets, so no marker could change an auxiliary's wait and the
+	// finding could never be acted on.
+	const fallowRow = {
+		lang: "fallow",
+		behavior: "silent",
+		firstPublish: "direct",
+		auxiliary: true,
+	};
+
+	it("does not call a silent auxiliary row silent-not-marked", () => {
+		const d = checkCleanSignalDrift(fallowRow, undefined);
+		expect(d.kind).toBe("not-comparable");
+		expect(d.detail).toContain("auxiliary");
+	});
+
+	it("drops the auxiliary row from findCleanSignalDrift but still flags a silent primary beside it", () => {
+		const warnings = findCleanSignalDrift(
+			[fallowRow, { lang: "python", behavior: "silent", auxiliary: false }],
+			() => undefined,
+		);
+		expect(warnings.map((w) => w.lang)).toEqual(["python"]);
+	});
+
+	it("keeps a row with no auxiliary flag comparable (fail closed to the old behaviour)", () => {
+		const d = checkCleanSignalDrift(
+			{ lang: "python", behavior: "silent" },
+			undefined,
+		);
+		expect(d.kind).toBe("silent-not-marked");
+	});
+
+	it("probeFixture stamps auxiliary from the registry role of the measured server", async () => {
+		// The production row construction (`createProbeFixture`) is what decides
+		// `row.auxiliary`; a unit test of the checker alone would stay green with
+		// the stamp missing (the #3665 call-site shape).
+		const dst = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-aux-row-"));
+		try {
+			const absFile = path.join(dst, "sample.ts");
+			fs.writeFileSync(absFile, "export const x = 1;\n");
+			const measure = async (
+				fx: { lang: string; file: string; auxiliaryServerIds?: string[] },
+				servers: Array<{ id: string; role?: string }>,
+			) => {
+				const probeFixture = createProbeFixture({
+					lsp: makeLspServiceDouble({
+						supportsLSP: () => true,
+						touchFile: async () => ({ diags: [], inconclusive: false }),
+						getWorkspaceDiagnosticsSupport: async () => ({ mode: "push-only" }),
+					}) as never,
+					repoRoot: process.cwd(),
+					install: false,
+					initLSPConfig: undefined,
+					getServersForFileWithConfig: () => servers,
+					bootstrapFixtureWorkspace: async () => ({ absFile }),
+					drainPublishTrace: Object.assign(() => undefined, {
+						reset: () => undefined,
+					}),
+					pubLogSize: () => 0,
+					sleep: async () => undefined,
+				});
+				const row: ProbeRow = {
+					lang: fx.lang,
+					behavior: "unknown",
+					tier: 0,
+					tierLabel: "",
+					mode: "?",
+					detail: "",
+					firstPublish: "unknown",
+					cleanFixture: false,
+				};
+				await probeFixture(fx, dst, row);
+				return row;
+			};
+			const aux = await measure(
+				{ lang: "fallow", file: "sample.ts", auxiliaryServerIds: ["fallow"] },
+				[{ id: "typescript" }, { id: "fallow", role: "auxiliary" }],
+			);
+			expect(aux.serverId).toBe("fallow");
+			expect(aux.auxiliary).toBe(true);
+			const primary = await measure({ lang: "typescript", file: "sample.ts" }, [
+				{ id: "typescript" },
+				{ id: "fallow", role: "auxiliary" },
+			]);
+			expect(primary.serverId).toBe("typescript");
+			expect(primary.auxiliary).toBe(false);
+			// A declared auxiliary the registry does not list as one is not trusted.
+			const unlisted = await measure(
+				{ lang: "fallow", file: "sample.ts", auxiliaryServerIds: ["fallow"] },
+				[{ id: "typescript" }],
+			);
+			expect(unlisted.auxiliary).toBe(false);
+		} finally {
+			fs.rmSync(dst, { recursive: true, force: true });
+		}
 	});
 });
 
