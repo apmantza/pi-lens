@@ -35,7 +35,6 @@ describe.skipIf(process.platform === "win32")(
 				"clients/lsp/index.js",
 				"clients/lsp/config.js",
 				"clients/path-utils.js",
-				"clients/project-trust.js",
 				"clients/lsp/wait-policy/strategies.js",
 			);
 			scratch = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-write-gate-"));
