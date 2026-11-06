@@ -122,8 +122,8 @@ export function fixtureWorkspaceLifecycle(
 	deps: {
 		lsp: { supportsLSP(file: string): boolean };
 		bootstrapFixtureWorkspace: (
-			fx: Record<string, any>,
-			opts: Record<string, unknown>,
+			fx: any,
+			opts: any,
 		) => Promise<{ absFile: string; workspace: string; cleanup: () => void }>;
 		initLSPConfig: (workspace: string) => Promise<unknown>;
 		repoRoot: string;
