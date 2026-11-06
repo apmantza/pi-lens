@@ -143,10 +143,13 @@ if (install) {
 // the fixture's `setup`, so the registry launched the classic server for these
 // rows. Native TS7 7.0.2 advertises `diagnosticProvider` and is a pull server
 // (`n/a (pull)`), and the row now reads `unknown` unless the native launch
-// answered (`expectLaunchVariant`, see probe-fixture.mjs). A future TS7 build
-// that is push-only and silent on clean would still surface here as
-// `silent-not-marked`, for a human to decide (the marker reads a lapsed wait
-// as clean; see `silentOnClean` in wait-policy/strategies.ts).
+// answered (`expectLaunchVariant`, see probe-fixture.mjs). Because this probe
+// never runs `setup`, the nightly never launches native TS7: typescript7,
+// typescript7-clean and effect-tsgo read `unknown` there. A push-only TS7
+// build silent on clean could surface as `silent-not-marked` only from a run
+// that does the fixture's `setup` first, for a human to decide (the marker
+// reads a lapsed wait as clean; see `silentOnClean` in
+// wait-policy/strategies.ts).
 const NATIVE_TS7_LANGS = new Set(["typescript7", "typescript7-clean"]);
 
 function lookupSilentOnClean(lang) {
@@ -319,8 +322,8 @@ const unk = rows.filter((r) => r.behavior === "unknown").length;
 // comparison (not re-excluded), but `lookupSilentOnClean` gives them an
 // explicit `false` expectation instead of routing to classic's shared
 // "typescript" marker — see the NATIVE_TS7_LANGS comment above. A silent
-// observation from a native launch would surface as `silent-not-marked`, a
-// real signal, not a skipped row.
+// observation from a native launch (this probe makes none without `setup`)
+// would surface as `silent-not-marked`, a real signal, not a skipped row.
 // #5348: auxiliary rows (fallow, ast-grep, opengrep, zizmor, typos) are
 // not-comparable (`row.auxiliary`, set by probe-fixture.mjs): wait-policy reads
 // the marker in primary-scoped gates, and in the warm-up gate only for a

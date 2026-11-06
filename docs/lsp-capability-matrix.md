@@ -54,8 +54,11 @@ now reads `unknown`. Native TS7 7.0.2 is a pull server (`diagnosticProvider`
 advertised, `mode=pull`, `clean-behavior=n/a (pull)`), and so is `effect-tsgo`
 0.62.0; neither pushes diagnostics for an edited file, so `silentOnClean` does
 not apply to them. The marker stays `false` (it lets the silent-confirm gate
-read a lapsed wait as clean) and a push-only, silent TS7 build would still
-surface as `silent-not-marked` (#5348). Auxiliary servers (ast-grep, opengrep, zizmor, typos,
+read a lapsed wait as clean). The nightly never runs `setup`, so it never
+launches native TS7: `typescript7`, `typescript7-clean` and `effect-tsgo` read
+`unknown` there and nothing compares them. A push-only, silent TS7 build
+could surface as `silent-not-marked` only from a run that does the fixture's
+`setup` first (#5348). Auxiliary servers (ast-grep, opengrep, zizmor, typos,
 fallow) are never compared: `silentOnClean` is read in primary-scoped gates,
 and in the warm-up gate only for a server with `workspaceIndexing`, which no
 auxiliary sets.
