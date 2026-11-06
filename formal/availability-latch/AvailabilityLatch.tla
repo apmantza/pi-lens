@@ -43,7 +43,8 @@
 (*    the install-generation sync ever reset it;                           *)
 (*  - SettleGuard: "none" is the code as built (no flight re-checks a      *)
 (*    generation after its await), "gen" drops a settle whose capture is   *)
-(*    not the current avGen (the candidate fix);                           *)
+(*    not the current avGen (the candidate fix), "deny" drops every settle *)
+(*    (a mutant: MutDenyAll, which FreshSettleRecords must refuse);        *)
 (*  - TrustStamp: "owed" is #4776 (a note stamps the trust of the first    *)
 (*    read that owed a probe). "lastRead" takes the stamp from the latest  *)
 (*    such read, which a caller joining the probe in flight overwrites;    *)
@@ -57,7 +58,7 @@ EXTENDS Integers
 CONSTANTS
     NewLatchPerGen,   \* TRUE: a retired latch object per generation
     Clear,            \* "touch" | "none"
-    SettleGuard,      \* "none" | "gen"
+    SettleGuard,      \* "none" | "gen" | "deny"
     TrustStamp,       \* "owed" | "lastRead" | "current"
     ReadChecksTrust,  \* TRUE: #4530
     Results,          \* SUBSET {"ok", "prov", "trans", "inst", "dur"}
@@ -73,7 +74,7 @@ VARIABLES
     flight,      \* the probe in the flight slot, 0 when empty
     lat,         \* the live latch's fields
     started,     \* probes started so far
-    pc,          \* [1..MaxProbes -> "idle" | "run" | "done"]
+    pc,          \* [1..MaxProbes -> "idle" | "run" | "done" | "dropped"]
     pGen, pTrust, pInst, pLatch,   \* what each probe captured at its start
     served       \* the last verdict a read answered with (ok = FALSE: none yet)
 
@@ -107,7 +108,7 @@ TypeOK ==
     /\ lat.v \in {"none", "avail", "prov", "trans", "dur", "exh"}
     /\ lat.att \in 0..(Ladder + 1)
     /\ started \in 0..MaxProbes
-    /\ pc \in [Probes -> {"idle", "run", "done"}]
+    /\ pc \in [Probes -> {"idle", "run", "done", "dropped"}]
 
 Init ==
     /\ avGen = 0 /\ trustGen = 0 /\ instGen = 0
@@ -246,17 +247,21 @@ Note(L, p, r) ==
        ELSE [Y EXCEPT !.v = "dur", !.cool = FALSE, !.icool = FALSE]
 
 \* A probe settles. The write reaches the live latch only when the probe
-\* holds the live object and the guard, if any, admits it. The flight slot
-\* is released by identity.
+\* holds the live object and the guard, if any, admits it; pc records
+\* whether it did ("done") or the settle was dropped ("dropped"). The flight
+\* slot is released by identity.
+\* Whether probe p holds the live latch object.
+LiveLatch(p) == (IF NewLatchPerGen THEN pLatch[p] ELSE curLatch) = curLatch
+
 Settle(p, r) ==
     /\ pc[p] = "run"
     /\ r \in Results
-    /\ LET target == IF NewLatchPerGen THEN pLatch[p] ELSE curLatch
-           lands == target = curLatch
-                    /\ (SettleGuard = "none" \/ pGen[p] = avGen)
-       IN lat' = IF lands THEN Note(lat, p, r) ELSE lat
+    /\ LET lands == LiveLatch(p)
+                    /\ (SettleGuard = "none"
+                        \/ (SettleGuard = "gen" /\ pGen[p] = avGen))
+       IN /\ lat' = IF lands THEN Note(lat, p, r) ELSE lat
+          /\ pc' = [pc EXCEPT ![p] = IF lands THEN "done" ELSE "dropped"]
     /\ flight' = IF flight = p THEN 0 ELSE flight
-    /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED <<avGen, trustGen, instGen, latchGen, curLatch, started,
                    pGen, pTrust, pInst, pLatch, served>>
 
@@ -286,6 +291,15 @@ OnlyStarterRecords ==
 (* older generation wrote.                                                  *)
 NoStaleServed ==
     served.ok => served.vGen = served.gen
+
+(* The other direction of the guard (a deny-all guard passes the invariants *)
+(* above, which only say what must not land): a probe that started in the  *)
+(* current generation and holds the live latch has its settle recorded,    *)
+(* never dropped. Neither a session start nor a latch replacement can      *)
+(* make a dropped settle fresh again, so the state right after the settle  *)
+(* is the one that fails.                                                  *)
+FreshSettleRecords ==
+    \A p \in Probes : (LiveLatch(p) /\ pGen[p] = avGen) => pc[p] # "dropped"
 
 (* #4776: a note never stamps a verdict with a trust generation newer than  *)
 (* the one its probe started under. The stamp may be older; the next read   *)

@@ -23,6 +23,15 @@ every verdict its latch holds was written by a probe that started in that
 generation. `NoStaleServed` is the same fact from the reader: a read never
 answers with a verdict an older generation's probe wrote.
 
+`FreshSettleRecords` is the other direction of the guard. The invariants above
+only say what must not land, so a guard that drops every settle satisfies them.
+A probe that started in the current availability generation and holds the live
+latch must have its settle recorded, never dropped (`pc` ends `"done"`, not
+`"dropped"`). `MutDenyAll` (`SettleGuard = "deny"`) is the deny-all guard; it
+passes `OnlyStarterRecords`, `NoStaleServed`, `StampNotNewer` and
+`ServedUnderTrust` (checked with a throwaway config) and is refused by this
+one.
+
 The other invariants are the trust and install halves:
 
 - `StampNotNewer` (#4776): a note never stamps a verdict with a trust
@@ -59,7 +68,7 @@ provisional.
 |---|---|
 | `NewLatchPerGen` | TRUE: the owner replaces the latch (`createCwdCachedProbe`; the checker replaces its cache, not a latch), so an older probe holds a retired object. FALSE: one object, reset in place (the sweep, a client's own latch) |
 | `Clear` | `"touch"`: the owner clears at its next touch. `"none"`: a process-lived client latch (govulncheck, security scan): only `SettleTrust` and `SyncInst` ever reset it |
-| `SettleGuard` | `"none"`: as built, no flight re-checks a generation after its await. `"gen"`: a settle whose captured generation is not the current one is dropped (the candidate fix) |
+| `SettleGuard` | `"none"`: as built, no flight re-checks a generation after its await. `"gen"`: a settle whose captured generation is not the current one is dropped (the candidate fix). `"deny"`: every settle is dropped (the `MutDenyAll` mutant) |
 | `TrustStamp` | `"owed"`: #4776. `"lastRead"`: the stamp comes from the latest null read, which a joiner overwrites. `"current"`: the stamp is the trust at the note, the code before #4776 |
 | `ReadChecksTrust` | TRUE: #4530. FALSE: the code before it |
 
@@ -77,6 +86,7 @@ provisional.
 | `Pre4530ReadNoTrust` | violated `ServedUnderTrust` (no trust generation in the latch) |
 | `ClientInstallStale` | violated `InstallOwned` (hypothesis: a client latch's install settle after a session start) |
 | `ClientInstallGenGuard` | pass (the same latch with the guard; the ladder up to the exhausted verdict is reachable) |
+| `MutDenyAll` | violated `FreshSettleRecords` (a guard that drops every settle: the fresh result never lands) |
 
 `CwdProbe` passes because `Settle` writes the object the probe captured, and
 the first touch after a session start replaced it. Neutering that
