@@ -445,7 +445,7 @@ dispatched nightly replaces it on the first night that reaches the server.
 | csharp | `save+text` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture csharp) |
 | deno | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture deno) |
 | svelte | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 2 diagnostics. Gated. | `node scripts/probe-save-verdict.mjs` (fixture svelte) |
-| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
+| powershell | `save+text` | yes (saved write) | Measured: only a saved write published — silent on didOpen and on the save alone, then 1 publish event on a diagnostic-neutral edit plus a save. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
 | cmake | `save` | inconclusive | Measured: inconclusive — no arm published, so this fixture does not distinguish a save-triggered server from one that never diagnoses it (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture cmake) |
 
 Notes.
@@ -522,5 +522,5 @@ streaks behind the `stale` column (#4512) and consecutive-night
 `idle-eviction` counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"idle-eviction":{"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
+{"idle-eviction":{"kotlin":{"nights":[{"day":"2026-11-05","rssMb":283,"coldMs":2269}]},"rust":{"nights":[{"day":"2026-11-05","rssMb":678,"coldMs":2486}]},"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
 ```
