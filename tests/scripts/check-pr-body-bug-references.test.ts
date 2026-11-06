@@ -79,6 +79,8 @@ describe("Refs remainder alignment (#5326)", () => {
 			title,
 			refsRemainderTrackers: [],
 		});
+	const refusesRefs = (result: { errors: string[] }) =>
+		result.errors.some((error) => error.includes("with Refs but has no"));
 
 	it("refuses Refs without a line-start Remaining line", () => {
 		const result = lint("Fixes the reader. Refs #5323 for the rest.");
@@ -108,14 +110,41 @@ describe("Refs remainder alignment (#5326)", () => {
 		).toBe(true);
 	});
 
-	it("counts fenced Refs like land.sh while ignoring inline code", () => {
-		expect(lint("Fixes the reader.\n\n```text\nRefs #5323\n```").valid).toBe(
+	// #5328 r3: land.sh deletes every `[^`]*` pair of title + " " + body (a jq
+	// gsub, not a Markdown lexer). The r2 lint blanked only lexed code spans,
+	// so it refused a fenced Refs land.sh pairs away, and passed a span glued
+	// inside a word that land.sh's deletion joins into `Refs #N`.
+	it.each([
+		[
+			"a fenced Refs, paired away",
+			"Fixes the reader.\n\n```text\nRefs #5323\n```",
+			"fix: keep the follow-up",
+			true,
+		],
+		[
+			"Refs in an inline span",
+			"Fixes the reader. Use `Refs #5323` as an example.",
+			"fix: keep the follow-up",
+			true,
+		],
+		[
+			"a span deleted from inside the word",
+			"Fixes the reader. Re`x`fs #5323.",
+			"fix: keep the follow-up",
 			false,
-		);
-		expect(
-			lint("Fixes the reader. Use `Refs #5323` as an example.").valid,
-		).toBe(true);
-	});
+		],
+		[
+			"a title backtick paired with a body one",
+			"Fixes the reader. A ` mark.",
+			"fix: keep `it (refs #5323)",
+			true,
+		],
+	])(
+		"deletes backtick pairs as land.sh does: %s",
+		(_, summary, title, valid) => {
+			expect(refusesRefs(lint(summary, title))).toBe(!valid);
+		},
+	);
 
 	it("accepts a closed issue without a remainder", async () => {
 		vi.stubEnv("GITHUB_TOKEN", "t");
@@ -181,6 +210,43 @@ describe("Refs remainder alignment (#5326)", () => {
 		expect(result.valid).toBe(false);
 		expect(result.errors.join(" ")).toContain("Remaining #5323:");
 	});
+
+	// #5328 r3 (HIGH, parity): the r2 lint added every `#N` of the title, so a
+	// conventional "(closes #N)" title demanded `Remaining #N:` and PR #5328's
+	// own body lint refused itself. land.sh reads only `refs #N` in the title.
+	it.each([
+		"fix: follow-up (closes #5323)",
+		"fix: follow-up (fixes #5323)",
+		"fix: follow-up #5323",
+	])("owes no remainder for a title that does not say Refs: %s", (title) => {
+		expect(lint("Fixes the reader.", title).valid).toBe(true);
+	});
+
+	it("passes PR #5328's own title and body shape", () => {
+		expect(
+			lint(
+				"The local PR-body lint now requires the line-start `Remaining #N:` line that land.sh requires for open `Refs #N` issues. Closes #5326",
+				"fix(check-pr-body): require a line-start Remaining line for each Refs issue (closes #5326)",
+			).valid,
+		).toBe(true);
+	});
+
+	// #5328 r3: land.sh's closes_of skips an issue the raw body closes, in any
+	// line and inside a code span too, but one line at a time and only for the
+	// exact number. The r2 lint had no such skip.
+	it.each([
+		["a Closes line", "Refs #5323 for context.\nCloses #5323.", true],
+		["a closing keyword mid-line", "This closes #5323 and refs #5323.", true],
+		["Fixes with a colon", "Refs #5323.\nFixes: #5323", true],
+		["Closes inside a code span", "Refs #5323.\n`Closes #5323`", true],
+		["Closes of a longer number", "Refs #5323.\nCloses #53230", false],
+		["Closes split over two lines", "Refs #5323.\nCloses\n#5323", false],
+	])(
+		"skips an issue the body closes as land.sh does: %s",
+		(_, summary, valid) => {
+			expect(refusesRefs(lint(`Fixes the reader. ${summary}`))).toBe(!valid);
+		},
+	);
 
 	it("accepts a tracker issue only when its title was resolved", () => {
 		expect(
@@ -251,6 +317,56 @@ describe("Refs remainder alignment (#5326)", () => {
 		expect(lint("Fixes the reader. Refs #5323.\nRemaining #5323:x").valid).toBe(
 			false,
 		);
+	});
+
+	// #5328 r3: land.sh's `:[[:space:]]*(.+[^[:space:]])` takes the space
+	// after the colon as the first character, so "Remaining #N: x" passes it.
+	// The r2 lint's `(\S.*\S)` refused that line.
+	it("accepts a one-character remainder after a space", () => {
+		expect(
+			lint("Fixes the reader. Refs #5323.\nRemaining #5323: x").valid,
+		).toBe(true);
+	});
+
+	// #5328 r3: land.sh tests the tracker prefix with a case-sensitive bash
+	// `=~`, so "Tracking:" is not exempt there. The r2 lint matched it with /i
+	// and passed a body land.sh refuses.
+	it.each([
+		["tracking: scheduled routines", [4907]],
+		["Umbrella: scheduled routines", [4907]],
+		["Tracking: scheduled routines", []],
+		["umbrella: scheduled routines", []],
+	])(
+		"exempts the tracker prefix case-sensitively: %s",
+		async (issueTitle, expected) => {
+			vi.stubEnv("GITHUB_TOKEN", "t");
+			vi.stubEnv("GITHUB_API_URL", "https://api.example");
+			vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+			const fetchImpl = vi.fn().mockResolvedValue(
+				new Response(JSON.stringify({ state: "open", title: issueTitle }), {
+					status: 200,
+				}),
+			);
+			expect(
+				await resolveRefsRemainderTrackers(
+					base("Fixes the routine. Refs #4907."),
+					fetchImpl,
+				),
+			).toEqual(expected);
+		},
+	);
+
+	// #5328 r3: land.sh reads the whole body, bot blocks included. The CI path
+	// passed `refsBody: fullBody`; the local path (pr-body.sh edit) passed only
+	// the author text, so a Refs after the cut passed locally and failed land.
+	it("reads Refs after the author-text cut in the local preflight", () => {
+		const result = lintLocalPrBody(
+			`${base("Fixes the reader.")}\n\n<!-- bot block -->\nRefs #5323 in a quoted commit.`,
+			process.cwd(),
+			noGit,
+			{ bugClosing: false, bugReferenced: false },
+		);
+		expect(result.errors.join(" ")).toContain("Remaining #5323:");
 	});
 });
 

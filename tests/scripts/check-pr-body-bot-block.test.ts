@@ -129,9 +129,13 @@ async function ci(text: string, labels: string[] = [], trackerIssue = true) {
 }
 // The label of a referenced issue is not this file's subject (#4968): the
 // cut is, so the reference label read is pinned at its process boundary.
+// The Refs remainder rule reads the whole body as land.sh does (#5328 r3), so
+// Greptile's quoted `(refs #43...` is a reference there too; #43 is closed,
+// which the CLI resolves through gh and this double states.
 const localResult = (text: string) =>
 	lintLocalPrBody(text, process.cwd(), (() => "") as never, {
 		bugReferenced: false,
+		refsRemainderTrackers: [43],
 	});
 const local = (text: string) => localResult(text).errors.join("\n");
 

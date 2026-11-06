@@ -3773,24 +3773,28 @@ function referencedOnly(fullBody, title = "") {
 	};
 }
 
-// #5326: keep the pre-merge body gate in lockstep with land.sh's Refs scan.
-// Code spans are blanked before this scan, and a resolved Closes reference is
-// is not a live Refs remainder. Unknown issue metadata is not an exemption.
+// #5326: land.sh's refs check (refs-remainder-check.sh --pre), rule for rule.
+// It joins title + " " + body, deletes every `[^`]*` pair (its jq gsub, so a
+// fence pairs away too and a title backtick can pair with a body one), takes
+// the unique `refs #N` numbers, and skips an issue the raw body closes (its
+// line-wise closes_of grep). Any other `#N` of the title, such as
+// "(closes #N)", is not a Refs reference. Unknown metadata is no exemption.
 const REFS_REMAINDER_SCAN = /\brefs?\s+#(\d+)/gi;
+const REFS_REMAINDER_CLOSES =
+	/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?[^\S\n]+#(\d+)/gi;
 const REFS_REMAINDER_LINE =
-	/^[ \t]*(?:[-*][ \t]+)?Remaining #(\d+):[ \t]*(\S.*\S)[ \t]*$/;
+	/^[ \t]*(?:[-*][ \t]+)?Remaining #(\d+):[ \t]*(.+\S)[ \t]*$/;
 
 function refsRemainderIssues(fullBody, title = "") {
-	const source = blankMarkdownRegions(String(fullBody ?? ""), {
-		codeSpans: true,
-	});
-	const issues = [...source.matchAll(REFS_REMAINDER_SCAN)].map((match) =>
-		Number(match[1]),
+	const body = String(fullBody ?? "");
+	const closed = new Set(
+		[...body.matchAll(REFS_REMAINDER_CLOSES)].map((match) => Number(match[1])),
 	);
-	for (const number of titleIssues(title)) {
-		if (!issues.includes(number)) issues.push(number);
-	}
-	return issues;
+	const source = `${String(title ?? "")} ${body}`.replace(/`[^`]*`/g, "");
+	const issues = new Set(
+		[...source.matchAll(REFS_REMAINDER_SCAN)].map((match) => Number(match[1])),
+	);
+	return [...issues].filter((number) => !closed.has(number));
 }
 
 export function lintRefsRemainders(
@@ -5034,8 +5038,9 @@ export function resolveBugReferencedViaGh(
 }
 
 // #5326: land.sh exempts issues whose title starts with `tracking:` or
-// `Umbrella:`. Resolve that title when the transport is available; an unread
-// issue returns no exemption, so the body rule fails closed offline.
+// `Umbrella:`, case-sensitive as its bash `=~` reads them. Resolve that title
+// when the transport is available; an unread issue returns no exemption, so
+// the body rule fails closed offline.
 export async function resolveRefsRemainderTrackers(
 	fullBody,
 	fetchImpl = globalThis.fetch,
@@ -5061,13 +5066,13 @@ export async function resolveRefsRemainderTrackersViaGh(
 
 async function refsRemainderTrackers(issues, readIssue) {
 	const trackers = [];
-	for (const number of new Set(issues)) {
+	for (const number of issues) {
 		try {
 			const data = await readIssue(number);
 			const issueTitle = typeof data?.title === "string" ? data.title : "";
 			if (
 				data?.state === "closed" ||
-				/^(?:tracking|Umbrella):/i.test(issueTitle)
+				/^(?:tracking|Umbrella):/.test(issueTitle)
 			)
 				trackers.push(number);
 		} catch {
@@ -5525,6 +5530,7 @@ export function lintLocalPrBody(
 		git,
 		proseMode: options.proseMode,
 		title: options.title,
+		refsBody: fullBody,
 		refsRemainderTrackers: options.refsRemainderTrackers,
 	});
 	// #4288: a present section is validated whatever the label, so a prose-form
