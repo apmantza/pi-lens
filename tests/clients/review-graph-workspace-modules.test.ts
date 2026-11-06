@@ -31,6 +31,46 @@ function write(filePath: string, content: string): void {
 	fs.writeFileSync(filePath, content);
 }
 
+// Recurrence: AGENTS.md shape 83. `findModuleForPath` carried its own
+// `key === root || key.startsWith(`${root}/`)` beside `isWithinForm`, the owner
+// of that rule; a copy is where the directory boundary (`lib` is not `library`)
+// and the deepest-owner choice drift apart.
+describe("findModuleForPath asks the path owner's containment", () => {
+	it("owns a file by the deepest module root at or above it, and by none for a text-prefix sibling", () => {
+		const env = setupTestEnvironment("pi-lens-workspace-modules-owner-");
+		try {
+			write(
+				path.join(env.tmpDir, "package.json"),
+				JSON.stringify({ workspaces: ["packages/*", "packages/lib/inner"] }),
+			);
+			write(
+				path.join(env.tmpDir, "packages/lib/package.json"),
+				JSON.stringify({ name: "lib" }),
+			);
+			write(
+				path.join(env.tmpDir, "packages/lib/inner/package.json"),
+				JSON.stringify({ name: "inner" }),
+			);
+			const inLib = path.join(env.tmpDir, "packages/lib/src/a.ts");
+			const inInner = path.join(env.tmpDir, "packages/lib/inner/src/b.ts");
+			const sibling = path.join(env.tmpDir, "packages/library/src/c.ts");
+			for (const file of [inLib, inInner, sibling]) write(file, "export {};\n");
+
+			clearModuleGraphCache();
+			const graph = buildModuleGraph(env.tmpDir)!;
+			expect(findModuleForPath(graph, inLib)?.name).toBe("lib");
+			expect(findModuleForPath(graph, inInner)?.name).toBe("inner");
+			expect(
+				findModuleForPath(graph, path.join(env.tmpDir, "packages/lib"))?.name,
+			).toBe("lib");
+			expect(findModuleForPath(graph, sibling)).toBeUndefined();
+		} finally {
+			clearModuleGraphCache();
+			env.cleanup();
+		}
+	});
+});
+
 describe("workspace module graph", () => {
 	it("expands pnpm workspace globs and computes downstream dependents", () => {
 		const env = setupTestEnvironment("pi-lens-workspace-modules-pnpm-");

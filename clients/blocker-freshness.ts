@@ -172,7 +172,11 @@ import {
 	type GlobalScopeRole,
 } from "./lsp/implicit-scope.js";
 import { notePathAppeared } from "./path-birth.js";
-import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
+import {
+	isWithinForm,
+	normalizeEphemeralMapKey,
+	normalizeMapKey,
+} from "./path-utils.js";
 import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
@@ -446,9 +450,7 @@ function createImplicitScopeCheck(
 	// by prefix: `isUnderDir` normalizing both sides cost ~2.4 ms per 459
 	// receipts per sweep.
 	const rootKey = normalizeMapKey(nodePath.resolve(cwd));
-	const rootPrefix = rootKey.endsWith("/") ? rootKey : `${rootKey}/`;
-	const inRoot = (file: string): boolean =>
-		file === rootKey || file.startsWith(rootPrefix);
+	const inRoot = (file: string): boolean => isWithinForm(file, rootKey);
 	// JS/TS entries share one newest-first scan: a receipt's role does not
 	// depend on the entry, so each receipt is classified once per sweep, and
 	// the scan reaches back only as far as the oldest JS/TS verdict asked.

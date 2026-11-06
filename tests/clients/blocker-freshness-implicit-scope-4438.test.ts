@@ -710,6 +710,29 @@ describe("inline-blocker sweep: ambient files (#4438)", () => {
 		expect(stale(runtime)).toBe(false);
 	});
 
+	// Recurrence: AGENTS.md shape 83. The sweep's `inRoot` spelled the
+	// containment rule itself beside `isWithinForm`, its owner; a copy is where
+	// the directory boundary drifts. `<dir>/app-two` shares the text `<dir>/app`
+	// but is another directory, so its ambient write is outside the sweep's root.
+	it("keeps a JS/TS blocker when the ambient file written after it sits in a sibling that shares the root's text prefix", async () => {
+		const dir = project("ambient-root-text-prefix", {
+			"app/use.ts": "export const u: number = FOO;\n",
+		});
+		const runtime = new RuntimeCoordinator();
+		block(runtime, path.join(dir, "app", "use.ts"), ["lsp"], verdictAgo());
+		const sibling = path.join(dir, "app-two", "globals.d.ts");
+		fs.mkdirSync(path.dirname(sibling), { recursive: true });
+		fs.writeFileSync(sibling, "declare const FOO: number;\n");
+		runtime.recordProjectMutation({ filePath: sibling, source: "agent-write" });
+
+		const counts = await sweepInlineBlockerFreshness(
+			runtime,
+			path.join(dir, "app"),
+		);
+		expect(counts.kept).toBe(1);
+		expect(stale(runtime)).toBe(false);
+	});
+
 	// #4438 r2 (F4, review U4): a file its name decides (a declaration file,
 	// a file that is not JS/TS) costs no parse, so 33 newer `.md` receipts do
 	// not spend the budget before the older ambient one is read.

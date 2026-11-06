@@ -69,6 +69,7 @@ import {
 } from "../clients/file-utils.js";
 import {
 	isAtOrAboveHomeDir,
+	isWithinForm,
 	normalizeEphemeralMapKey,
 	normalizeFilePath,
 	normalizeMapKey,
@@ -1597,9 +1598,7 @@ function resolvePathsScope(entries: string[]): PathsScope | undefined {
 	const includeFile = (filePath: string): boolean => {
 		const key = normalizeFilePath(path.resolve(filePath));
 		if (fileKeys.has(key)) return true;
-		return dirPrefixes.some(
-			(prefix) => key === prefix || key.startsWith(`${prefix}/`),
-		);
+		return dirPrefixes.some((prefix) => isWithinForm(key, prefix));
 	};
 
 	return {

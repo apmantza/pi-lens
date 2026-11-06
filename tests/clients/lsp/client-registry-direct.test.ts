@@ -2854,6 +2854,68 @@ describe("live primary client roots (#4532)", () => {
 	});
 });
 
+/**
+ * Recurrence: AGENTS.md shape 83 (a rule re-derived beside its owner).
+ * `LSPService.activeClientsForCwd` and `ClientRegistry.restartPrimaryClientsUnder`
+ * each spelled "this client root is at or under that one, or the reverse" by
+ * hand, while `isWithinForm` (`clients/path-utils.ts`) owns the rule and a
+ * sibling in `client-registry.ts` already asked it. A copy drifts at the
+ * directory boundary: `/w/app-two` shares the text `/w/app` and is not under
+ * it. Both cells drive the production callers over the maps a real spawn
+ * writes; only the language-server child is a double.
+ */
+describe("client-root overlap is the path owner's containment", () => {
+	const roots = {
+		same: "/w/app",
+		nested: "/w/app/pkg",
+		ancestor: "/w",
+		textPrefixSibling: "/w/app-two",
+		unrelated: "/w/elsewhere",
+	};
+
+	function serviceWithClientAtEachRoot() {
+		const service = new LSPService();
+		const registry = (service as unknown as { clientRegistry: ClientRegistry })
+			.clientRegistry;
+		const byRoot = new Map<string, FakeClient>();
+		for (const root of Object.values(roots)) {
+			const client = Object.assign(fakeClient("typescript", root), {
+				openDocumentPaths: () => [`${root}/doc.ts`],
+			});
+			registry.clients.set(`typescript:${root}`, client);
+			byRoot.set(root, client);
+		}
+		return { service, registry, byRoot };
+	}
+
+	it("getOpenDocumentPaths reads the clients at, under and above cwd, never a text-prefix sibling", () => {
+		const { service } = serviceWithClientAtEachRoot();
+
+		expect(service.getOpenDocumentPaths(roots.same).sort()).toEqual([
+			"/w/app/doc.ts",
+			"/w/app/pkg/doc.ts",
+			"/w/doc.ts",
+		]);
+	});
+
+	it("restartPrimaryClientsUnder retires the clients at, under and above the root, never a text-prefix sibling", async () => {
+		const { service, registry, byRoot } = serviceWithClientAtEachRoot();
+
+		expect(await service.restartPrimaryClientsUnder(roots.same)).toBe(3);
+
+		for (const root of [roots.same, roots.nested, roots.ancestor]) {
+			expect(registry.clients.has(`typescript:${root}`)).toBe(false);
+			expect(byRoot.get(root)?.shutdown).toHaveBeenCalledWith({
+				reason: "dependency_change",
+			});
+		}
+		for (const root of [roots.textPrefixSibling, roots.unrelated]) {
+			expect(registry.clients.has(`typescript:${root}`)).toBe(true);
+			expect(byRoot.get(root)?.shutdown).not.toHaveBeenCalled();
+		}
+	});
+});
+
 describe("mergeInitializationOptions (#4449)", () => {
 	// Recurrence (#4299): a user override reaches into nested server settings. A
 	// plain object merges key by key at every depth; an array, a primitive, a

@@ -4668,6 +4668,37 @@ describe("lens_diagnostics paths", () => {
 		expect(text).not.toContain("other.ts");
 	});
 
+	// Recurrence: AGENTS.md shape 83. `resolvePathsScope` spelled directory
+	// containment itself beside `isWithinForm`, its owner; a copy is where the
+	// directory boundary drifts. `src-extra` shares the text `src` but is not
+	// inside the directory entry.
+	it("mode=all: a directory entry scopes the files under it, not a sibling sharing its text prefix", async () => {
+		mockSummaries.length = 0;
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-diag-dirscope-"),
+		);
+		try {
+			fs.mkdirSync(path.join(cwd, "src"));
+			fs.mkdirSync(path.join(cwd, "src-extra"));
+			mockSummaries.push(
+				sum(path.join(cwd, "src", "keep.ts"), { warnings: 1 }),
+			);
+			mockSummaries.push(
+				sum(path.join(cwd, "src-extra", "other.ts"), { blocking: 1 }),
+			);
+			const result = await run(
+				makeTool(),
+				{ mode: "all", paths: [path.join(cwd, "src")] },
+				cwd,
+			);
+			const text = String(result.content[0].text);
+			expect(text).toContain("keep.ts");
+			expect(text).not.toContain("other.ts");
+		} finally {
+			removeTempDirSync(cwd);
+		}
+	});
+
 	it("mode=delta: paths filter shows only listed files' findings", async () => {
 		const tool = makeTool({
 			"actionable-warnings": {
