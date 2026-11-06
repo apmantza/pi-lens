@@ -9,6 +9,9 @@
  *  - #5325 round 1 appended them all to the curated table, with blank
  *    clean-behavior cells and fixture variants as rows, and the census redded
  *    the refresh PR (review r1 F1, F2).
+ *  - #5325 round 3 promoted a held row the night its clean-behavior settled,
+ *    so `fallow` (measured silent, no `silentOnClean` marker) would have
+ *    joined the curated table and redded the census on the refresh PR.
  *  - #5325 round 2 held them in a table that rewrote a run date every night
  *    (36 flips over two identical nights, so the refresh never landed
  *    flip-free) and dropped a held row the night its server was absent, with
@@ -23,9 +26,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { LSP_SERVERS } from "../../clients/lsp/server.js";
+import { SERVER_DIAGNOSTIC_STRATEGIES } from "../../clients/lsp/wait-policy/strategies.js";
 import {
 	buildMatrixObservations,
+	MEASURED_CLEAN_BEHAVIORS,
 	resolveTargetLangRows,
+	strategyKeyForLang,
 } from "../../scripts/lib/clean-signal.mjs";
 import { probePopulation } from "../../scripts/lib/lsp-idle-eviction-probe.mjs";
 import {
@@ -74,13 +80,18 @@ function characterize(
 	})!;
 }
 
+// The registry marker, read the way the census reads it. probe-clean-signal
+// passes its own lookup (pinned below), which differs only for typescript7.
+const silentOnClean = (lang: string) =>
+	SERVER_DIAGNOSTIC_STRATEGIES[strategyKeyForLang(lang)]?.silentOnClean;
+
 /** One nightly: characterize-lsp's merge, then probe-clean-signal's refresh. */
 function night(doc: string, run: Run, day: string): string {
 	const merged = characterize(doc, run, day).text;
 	return refreshCapabilityMatrix(
 		merged,
 		buildMatrixObservations(resolveTargetLangRows(run.clean)),
-		{ src: "ci", now: day },
+		{ src: "ci", now: day, silentOnClean },
 	).text;
 }
 
@@ -235,7 +246,61 @@ describe("#5323 matrix rows for every measured server (run 42149703889)", () => 
 			tier: "2",
 			stale: "—",
 		});
-		// A server the probe never classified stays held.
-		expect([...held(n2).keys()].sort()).toEqual(["cmake", "fsharp"]);
+		// A server the probe never classified stays held, and so does fallow
+		// (next test).
+		expect([...held(n2).keys()].sort()).toEqual(["cmake", "fallow", "fsharp"]);
+	});
+
+	// The census's both-directions rule (tests/config/lsp-clean-behavior-census.test.ts),
+	// the rule a promoted row can break, over a merged doc's curated table.
+	function markerMismatches(text: string): string[] {
+		return [...curated(text).values()]
+			.filter(
+				(row) =>
+					row.mode === "push-only" &&
+					MEASURED_CLEAN_BEHAVIORS.has(row["clean-behavior"]),
+			)
+			.filter(
+				(row) =>
+					(silentOnClean(row.lang) === true) !==
+					(row["clean-behavior"] === "silent"),
+			)
+			.map((row) => `${row.lang}: ${row["clean-behavior"]}`);
+	}
+
+	it("keeps a settled held row held while its silentOnClean marker disagrees, so the census still passes (#5323)", () => {
+		// The recorded run measures fallow silent, and the registry has no
+		// marker for it: the census would red the night it joined the matrix.
+		const fallow = RUN.cleanSignal.rows.find((r: any) => r.lang === "fallow");
+		expect(fallow?.behavior).toBe("silent");
+		expect(silentOnClean("fallow")).not.toBe(true);
+		const n1 = night(BASE, recorded(), "2026-11-06");
+		const n2 = night(n1, recorded(), "2026-11-07");
+		const n3 = night(n2, recorded(), "2026-11-08");
+		for (const doc of [n2, n3]) {
+			expect(held(doc).has("fallow")).toBe(true);
+			expect(curated(doc).has("fallow")).toBe(false);
+		}
+		// A refused row's bookkeeping is the same each night (F12).
+		expect(n3).toBe(n2);
+		// The rows that did move were checked against their markers.
+		assertNonEmptyScan(
+			"promoted held rows",
+			[...curated(n2).keys()].filter((lang) => held(n1).has(lang)).length,
+		);
+		expect(markerMismatches(n2)).toEqual([]);
+		expect(markerMismatches(n3)).toEqual([]);
+		// Without the marker lookup nothing is resolved, so nothing moves.
+		const blind = refreshCapabilityMatrix(
+			characterize(n1, recorded(), "2026-11-07").text,
+			buildMatrixObservations(resolveTargetLangRows(RUN.cleanSignal.rows)),
+			{ src: "ci", now: "2026-11-07" },
+		).text;
+		expect([...held(blind).keys()].sort()).toEqual([...held(n1).keys()].sort());
+		// probe-clean-signal.mjs runs on load and spawns servers, so its wiring
+		// is pinned on blanked source: the refresh gets the marker lookup.
+		expect(stripSource(read("scripts/probe-clean-signal.mjs"))).toMatch(
+			/refreshCapabilityMatrix\([^;]*\bsilentOnClean: lookupSilentOnClean,/,
+		);
 	});
 });

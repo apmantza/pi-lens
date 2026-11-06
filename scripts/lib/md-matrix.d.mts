@@ -219,6 +219,8 @@ export function refreshCapabilityMatrix(
 		now?: Date | number | string;
 		/** A subset probe's langs; a lang outside it keeps its bookkeeping. */
 		probedLangs?: Iterable<string>;
+		/** #5323: the registry `silentOnClean` lookup a held row must agree with to be promoted. */
+		silentOnClean?: (lang: string) => boolean | undefined;
 	},
 ): {
 	text: string;
@@ -229,6 +231,8 @@ export function refreshCapabilityMatrix(
 	/** The langs behind each count, in table order (named in the step log). */
 	pendingLangs: string[];
 	committedLangs: string[];
+	/** #5323: held langs whose clean-behavior settled but the census would refuse. */
+	gatedLangs: string[];
 	/** #4512: langs whose measured cell was not re-observed tonight (kept, marked stale). */
 	staleLangs: string[];
 	/** #4512: the stale langs that have missed `MISSED_PROBE_RAISE_RUNS` consecutive nights. */
