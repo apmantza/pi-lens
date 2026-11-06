@@ -3,7 +3,7 @@
  * Measure the `symbol_search` query surface over recorded pi session JSONL
  * (issue #5138, D8). The instrument is read-only: it walks a corpus of session
  * transcripts, discovers every `symbol_search` call, classifies the rendered
- * result, and reports four rates per time window.
+ * result, and reports five rates per time window.
  *
  * Usage:
  *   node scripts/symbol-search-query-metrics.mjs [corpusPath]
@@ -17,7 +17,8 @@
  * Bounds are inclusive on both ends, so an instant exactly on a boundary
  * belongs to every window it bounds.
  *
- * Exit codes: 0 report printed, 1 corpus or runtime failure, 2 usage error.
+ * Exit codes: 0 report printed, 1 corpus or runtime failure (a missing or
+ * empty corpus included), 2 usage error.
  *
  * A discovered call is `scanned` when its arguments are statically readable
  * (a native `symbol_search` / `pilens_symbol_search` call, or a `codemode`
@@ -65,6 +66,8 @@ const USAGE = `Usage: node scripts/symbol-search-query-metrics.mjs [corpusPath] 
 With neither --since nor --until the report prints five named windows.`;
 
 class UsageError extends Error {}
+/** The corpus cannot answer: missing or holding no session files. Exit 1. */
+class CorpusError extends Error {}
 
 /**
  * The five windows a bare run prints, so a PR body can quote them without a
@@ -297,6 +300,11 @@ function parseObjectLiteral(state) {
 		const separator = state.source[state.index];
 		if (separator === ",") {
 			state.index++;
+			skipTrivia(state);
+			if (state.source[state.index] === "}") {
+				state.index++;
+				return out;
+			}
 			continue;
 		}
 		if (separator === "}") {
@@ -321,6 +329,11 @@ function parseArrayLiteral(state) {
 		const separator = state.source[state.index];
 		if (separator === ",") {
 			state.index++;
+			skipTrivia(state);
+			if (state.source[state.index] === "]") {
+				state.index++;
+				return out;
+			}
 			continue;
 		}
 		if (separator === "]") {
@@ -522,7 +535,8 @@ export function extractListedPaths(text) {
 		}
 	}
 	if (paths.length > 0) return [...new Set(paths)];
-	const rowPattern = /^\s*\d+\.\s+(.+?)\s+\(score /gm;
+	// `path line (score ...)` (#5104), and the older `path (score ..., line N)`.
+	const rowPattern = /^\s*\d+\.\s+(.+?)(?:\s+\d+)?\s+\(score /gm;
 	let match;
 	while ((match = rowPattern.exec(value))) paths.push(match[1].trim());
 	return [...new Set(paths)];
@@ -633,6 +647,11 @@ export function bashViewPaths(command) {
 // ---------------------------------------------------------------------------
 
 function collectJsonlFiles(corpusPath) {
+	if (!fs.existsSync(corpusPath)) {
+		throw new CorpusError(
+			`corpus path does not exist: ${corpusPath} (0 files read)`,
+		);
+	}
 	const stat = fs.statSync(corpusPath);
 	if (stat.isFile()) return [corpusPath];
 	const files = [];
@@ -794,7 +813,8 @@ function emptyTotals() {
 		scopedClassified: 0,
 		scopedEmpty: 0,
 		listingTotal: 0,
-		reRead: 0,
+		listedRead: 0,
+		repeatRead: 0,
 		drilldown: 0,
 	};
 }
@@ -808,6 +828,18 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 	);
 	const calls = orderedToolCalls(windowRows);
 	const results = toolResultsById(windowRows);
+	// A call is a repeat read when it reads a path an earlier call in this
+	// session window already read (exact resolved path, no suffix matching).
+	const readBefore = new Set();
+	const isRepeatRead = calls.map((call) => {
+		let repeat = false;
+		for (const readPath of readCallPaths(call)) {
+			const key = normalizePathSpelling(readPath, cwd);
+			if (readBefore.has(key)) repeat = true;
+			readBefore.add(key);
+		}
+		return repeat;
+	});
 	for (const entry of discoverCalls(calls)) {
 		totals.discovered++;
 		if (entry.unscannable) {
@@ -835,12 +867,20 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 			entry.index + 1,
 			entry.index + 1 + FOLLOW_UP_WINDOW,
 		);
-		const reRead = followUps.some((call) =>
+		const listedRead = followUps.some((call) =>
 			readCallPaths(call).some((readPath) =>
 				listed.some((listedPath) => pathsMatch(readPath, listedPath, cwd)),
 			),
 		);
-		if (reRead) totals.reRead++;
+		if (listedRead) totals.listedRead++;
+		const followUpStart = entry.index + 1;
+		if (
+			isRepeatRead
+				.slice(followUpStart, followUpStart + FOLLOW_UP_WINDOW)
+				.some(Boolean)
+		) {
+			totals.repeatRead++;
+		}
 		if (
 			followUps.some(
 				(call) =>
@@ -858,7 +898,7 @@ function makeRate(numerator, denominator, discovered) {
 		numerator,
 		denominator,
 		excluded: Math.max(0, discovered - denominator),
-		rate: denominator === 0 ? 0 : numerator / denominator,
+		rate: denominator === 0 ? null : numerator / denominator,
 	};
 }
 
@@ -886,7 +926,16 @@ function summarizeWindow(window, totals, parseErrors) {
 			totals.scopedClassified,
 			totals.discovered,
 		),
-		reReadRate: makeRate(totals.reRead, totals.listingTotal, totals.discovered),
+		listedReadRate: makeRate(
+			totals.listedRead,
+			totals.listingTotal,
+			totals.discovered,
+		),
+		repeatReadRate: makeRate(
+			totals.repeatRead,
+			totals.listingTotal,
+			totals.discovered,
+		),
 		drilldownRate: makeRate(
 			totals.drilldown,
 			totals.listingTotal,
@@ -908,10 +957,20 @@ export function buildReport(corpusPath, windows) {
 	}));
 	const totals = windows.map(() => emptyTotals());
 	let parseErrorCount = 0;
-	for (const file of collectJsonlFiles(corpusPath)) {
+	const files = collectJsonlFiles(corpusPath);
+	if (files.length === 0) {
+		throw new CorpusError(
+			`no session files under ${corpusPath} (0 files read)`,
+		);
+	}
+	let skipped = 0;
+	for (const file of files) {
 		const read = readTranscriptRows(file);
 		parseErrorCount += read.parseErrors.length;
-		if (read.rows.length === 0) continue;
+		if (read.rows.length === 0) {
+			skipped++;
+			continue;
+		}
 		for (let index = 0; index < windows.length; index++) {
 			const counts = analyzeTranscript(
 				read.rows,
@@ -927,6 +986,7 @@ export function buildReport(corpusPath, windows) {
 		corpus: corpusPath,
 		generatedAt: new Date().toISOString(),
 		parseErrors: parseErrorCount,
+		files: { read: files.length, skipped },
 		windows: windows.map((window, index) =>
 			summarizeWindow(window, totals[index], parseErrorCount),
 		),
@@ -934,12 +994,23 @@ export function buildReport(corpusPath, windows) {
 }
 
 function rateText(rate) {
-	return `${rate.numerator}/${rate.denominator}(excluded=${rate.excluded})`;
+	const value = rate.rate === null ? "n/a" : rate.rate.toFixed(3);
+	return `${rate.numerator}/${rate.denominator}(excluded=${rate.excluded}) ${value}`;
 }
+
+const RATE_DEFINITIONS = [
+	"emptyRate = scoped searches (inline file:/ext:/lang:, paths or lang argument) that matched no file / scoped searches that listed or came back empty; errors are not in it",
+	"listedReadRate = listings followed within 3 tool calls by a read (read, read_symbol, read_enclosing, or a bash cat/head/tail/sed -n view) of a listed file / listings",
+	"repeatReadRate = listings followed within 3 tool calls by a read of a file the session had already read (a second read) / listings",
+	"drilldownRate = listings followed within 3 tool calls by module_report or lsp_navigation / listings",
+	"unscannableRate = codemode calls whose symbol_search arguments are not a static literal / discovered calls",
+	"n/a = the denominator is 0 (no rate); excluded = discovered calls outside the denominator",
+];
 
 export function formatSummary(report) {
 	const lines = [
-		`symbol_search query metrics — corpus ${report.corpus} — ${report.windows.length} window(s)`,
+		`symbol_search query metrics — corpus ${report.corpus} — ${report.files.read} file(s) read, ${report.files.skipped} skipped (no session rows) — ${report.windows.length} window(s)`,
+		...RATE_DEFINITIONS.map((line) => `  ${line}`),
 	];
 	for (const window of report.windows) {
 		lines.push(
@@ -949,7 +1020,8 @@ export function formatSummary(report) {
 				`listing=${window.results.listing} empty=${window.results.empty} ` +
 				`error=${window.results.error} unknown=${window.results.unknown} ` +
 				`emptyRate=${rateText(window.emptyRate)} ` +
-				`reReadRate=${rateText(window.reReadRate)} ` +
+				`listedReadRate=${rateText(window.listedReadRate)} ` +
+				`repeatReadRate=${rateText(window.repeatReadRate)} ` +
 				`drilldownRate=${rateText(window.drilldownRate)} ` +
 				`unscannableRate=${rateText(window.unscannableRate)}`,
 		);
@@ -974,7 +1046,14 @@ export function main(argv = process.argv.slice(2)) {
 					},
 				]
 			: defaultWindows();
-	const report = buildReport(corpus, windows);
+	let report;
+	try {
+		report = buildReport(corpus, windows);
+	} catch (error) {
+		if (!(error instanceof CorpusError)) throw error;
+		process.stderr.write(`${error.message}\n`);
+		return 1;
+	}
 	if (args.json) {
 		process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 	} else {

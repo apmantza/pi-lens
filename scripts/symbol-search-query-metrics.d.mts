@@ -8,7 +8,8 @@ export interface MetricsRate {
 	numerator: number;
 	denominator: number;
 	excluded: number;
-	rate: number;
+	/** `null` when the denominator is 0: there is no rate. */
+	rate: number | null;
 }
 
 export interface MetricsWindowReport {
@@ -29,7 +30,8 @@ export interface MetricsWindowReport {
 		unknown: number;
 	};
 	emptyRate: MetricsRate;
-	reReadRate: MetricsRate;
+	listedReadRate: MetricsRate;
+	repeatReadRate: MetricsRate;
 	drilldownRate: MetricsRate;
 	unscannableRate: MetricsRate;
 	parseErrors: number;
@@ -39,6 +41,7 @@ export interface MetricsReport {
 	corpus: string;
 	generatedAt: string;
 	parseErrors: number;
+	files: { read: number; skipped: number };
 	windows: MetricsWindowReport[];
 }
 

@@ -1,5 +1,7 @@
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import { describe, expect, it, vi } from "vitest";
 import {
 	bashViewPaths,
 	buildReport,
@@ -9,6 +11,7 @@ import {
 	extractStaticObject,
 	findCodemodeSymbolSearchArgs,
 	formatSummary,
+	main,
 	parseArgs,
 } from "../../scripts/symbol-search-query-metrics.mjs";
 
@@ -46,17 +49,17 @@ describe("symbol_search query metrics — fixture corpus", () => {
 	it("counts a listed-path read within three tool calls and not one at the fourth", () => {
 		const window = windowFor("re-read.jsonl");
 		expect(window.results.listing).toBe(2);
-		expect(window.reReadRate.numerator).toBe(1);
-		expect(window.reReadRate.denominator).toBe(2);
-		expect(window.reReadRate.excluded).toBe(0);
-		expect(window.reReadRate.rate).toBeCloseTo(0.5);
+		expect(window.listedReadRate.numerator).toBe(1);
+		expect(window.listedReadRate.denominator).toBe(2);
+		expect(window.listedReadRate.excluded).toBe(0);
+		expect(window.listedReadRate.rate).toBeCloseTo(0.5);
 	});
 
 	it("counts a bash view of a listed path but not a grep of it", () => {
 		const window = windowFor("bash-view.jsonl");
 		expect(window.results.listing).toBe(1);
-		expect(window.reReadRate.numerator).toBe(1);
-		expect(window.reReadRate.denominator).toBe(1);
+		expect(window.listedReadRate.numerator).toBe(1);
+		expect(window.listedReadRate.denominator).toBe(1);
 	});
 
 	it("reports an unpaired call and excludes it from both rates", () => {
@@ -66,8 +69,8 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.results.empty).toBe(1);
 		expect(window.emptyRate.numerator).toBe(1);
 		expect(window.emptyRate.denominator).toBe(1);
-		expect(window.reReadRate.denominator).toBe(0);
-		expect(window.reReadRate.numerator).toBe(0);
+		expect(window.listedReadRate.denominator).toBe(0);
+		expect(window.listedReadRate.numerator).toBe(0);
 	});
 
 	it("ignores a symbol_search spelling inside a comment or a string", () => {
@@ -80,7 +83,71 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		const window = windowFor("two-search.jsonl");
 		expect(window.calls.discovered).toBe(1);
 		expect(window.results.listing).toBe(1);
-		expect(window.reReadRate.denominator).toBe(1);
+		expect(window.listedReadRate.denominator).toBe(1);
+	});
+
+	it("counts a read of the top hit of a listing the real renderer printed", () => {
+		// Recurrence: #5104 changed the row to `path line (score ...)`; the parser
+		// returned "clients/a.ts 42" and every listed read read as 0. The fixture's
+		// result text comes from renderCompactSymbolSearch, and its read sends the
+		// real tool's `path` argument.
+		const window = windowFor("real-renderer.jsonl");
+		expect(window.results.listing).toBe(1);
+		expect(window.listedReadRate.numerator).toBe(1);
+		expect(window.listedReadRate.denominator).toBe(1);
+	});
+
+	it("reports a listed read and a repeat read separately", () => {
+		// repeat-read.jsonl: listing 1 is followed by two reads of an unlisted
+		// file (a repeat, no listed read); listing 2 by a first read of its
+		// listed file (a listed read, no repeat).
+		const window = windowFor("repeat-read.jsonl");
+		expect(window.results.listing).toBe(2);
+		expect(window.listedReadRate.numerator).toBe(1);
+		expect(window.listedReadRate.denominator).toBe(2);
+		expect(window.repeatReadRate.numerator).toBe(1);
+		expect(window.repeatReadRate.denominator).toBe(2);
+		expect(window.repeatReadRate.rate).toBeCloseTo(0.5);
+	});
+
+	it("does not count a first read of a listed file as a repeat read", () => {
+		const window = windowFor("re-read.jsonl");
+		expect(window.listedReadRate.numerator).toBe(1);
+		expect(window.repeatReadRate.numerator).toBe(0);
+		expect(window.repeatReadRate.denominator).toBe(2);
+	});
+
+	it("counts an isError result as an error, outside the empty-rate denominator", () => {
+		// Recurrence: D9 turns silent empties into errors; the isError arm of
+		// classifyResult had no cell (the old unit case matched the text arm).
+		const window = windowFor("error.jsonl");
+		expect(window.results.error).toBe(1);
+		expect(window.results.unknown).toBe(0);
+		expect(window.emptyRate.denominator).toBe(0);
+	});
+
+	it("includes rows exactly on the --since and --until instants", () => {
+		// Recurrence: the docblock says both bounds are inclusive; `<=`/`>=` in
+		// inWindow dropped the call row or the result row and no cell noticed.
+		const window = buildReport(path.join(FIXTURES, "windows.jsonl"), [
+			{
+				label: "edge",
+				since: "2026-11-04T22:20:00.000Z",
+				until: "2026-11-04T22:20:00.100Z",
+			},
+		]).windows[0];
+		expect(window.calls.discovered).toBe(1);
+		expect(window.calls.unpaired).toBe(0);
+		expect(window.results.empty).toBe(1);
+	});
+
+	it("skips the subagent-artifacts envelope file and says so", () => {
+		// Recurrence: an envelope file (first row has no `type`) holds
+		// symbol_search traffic that is not a session; counting it inflates
+		// every denominator.
+		const report = buildReport(path.join(FIXTURES, "envelope.jsonl"), [ALL]);
+		expect(report.windows[0].calls.discovered).toBe(0);
+		expect(report.files).toEqual({ read: 1, skipped: 1 });
 	});
 
 	it("counts a module_report follow-up as a drilldown, not a re-read", () => {
@@ -88,7 +155,7 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.results.listing).toBe(1);
 		expect(window.drilldownRate.numerator).toBe(1);
 		expect(window.drilldownRate.denominator).toBe(1);
-		expect(window.reReadRate.numerator).toBe(0);
+		expect(window.listedReadRate.numerator).toBe(0);
 	});
 
 	it("keeps pairing when a bounded window covers the fixture", () => {
@@ -185,6 +252,30 @@ describe("symbol_search query metrics — parsers", () => {
 		).toHaveLength(2);
 	});
 
+	it("classifies an isError result whose text names no known error", () => {
+		expect(classifyResult("boom", true)).toBe("error");
+		expect(classifyResult("boom", false)).toBe("unknown");
+	});
+
+	it("reads a static object and array with trailing commas", () => {
+		// Recurrence: model-written scripts end object and array literals with a
+		// comma; the parser marked those calls unscannable.
+		expect(extractStaticObject('{ query: "ext:ts a", }')).toEqual({
+			query: "ext:ts a",
+		});
+		expect(extractStaticObject("{ paths: ['a.ts',], limit: 5,\n}")).toEqual({
+			paths: ["a.ts"],
+			limit: 5,
+		});
+		expect(
+			findCodemodeSymbolSearchArgs(
+				'await tools.symbol_search({\n  query: "ext:ts a",\n  limit: 5,\n});',
+			),
+		).toEqual([{ unscannable: false, args: { query: "ext:ts a", limit: 5 } }]);
+		expect(extractStaticObject("{ query: q, }")).toBeUndefined();
+		expect(extractStaticObject("{ , }")).toBeUndefined();
+	});
+
 	it("classifies listing, empty, error and unknown results", () => {
 		expect(
 			classifyResult(
@@ -207,6 +298,15 @@ describe("symbol_search query metrics — parsers", () => {
 		expect(extractListedPaths(withoutJson)).toEqual(["a.ts", "b.ts"]);
 	});
 
+	it("extracts the path from the renderer row `path line (score ...)`", () => {
+		const current =
+			'Top 2 file(s) for "x":\n  1. clients/a.ts 42 (score 2.00, 3 hit(s), fanIn 4)\n  2. my dir/b 2.ts 7 (score 1.00, 1 hit(s))';
+		expect(extractListedPaths(current)).toEqual([
+			"clients/a.ts",
+			"my dir/b 2.ts",
+		]);
+	});
+
 	it("detects bash file views and ignores searches and in-place edits", () => {
 		expect(bashViewPaths("cat clients/a.ts")).toEqual(["clients/a.ts"]);
 		expect(bashViewPaths("sed -n '1,20p' clients/a.ts")).toEqual([
@@ -226,6 +326,25 @@ describe("symbol_search query metrics — parsers", () => {
 		});
 	});
 
+	it("prints n/a for a rate with a zero denominator and defines each rate", () => {
+		// Recurrence: a zero denominator printed rate 0, which reads as a perfect
+		// rate in a before/after diff.
+		const report = buildReport(path.join(FIXTURES, "unpaired.jsonl"), [ALL]);
+		expect(report.windows[0].listedReadRate.denominator).toBe(0);
+		expect(report.windows[0].listedReadRate.rate).toBeNull();
+		const summary = formatSummary(report);
+		expect(summary).toContain("listedReadRate=0/0(excluded=2) n/a");
+		for (const rate of [
+			"emptyRate",
+			"listedReadRate",
+			"repeatReadRate",
+			"drilldownRate",
+			"unscannableRate",
+		]) {
+			expect(summary).toMatch(new RegExp(`^  ${rate} = `, "m"));
+		}
+	});
+
 	it("names the five default windows and their bounds", () => {
 		const windows = defaultWindows(new Date("2026-11-05T12:00:00Z"));
 		expect(windows.map((window) => window.label)).toEqual([
@@ -236,5 +355,42 @@ describe("symbol_search query metrics — parsers", () => {
 			"today",
 		]);
 		expect(windows[4].since).toBe("2026-11-05T00:00:00.000Z");
+	});
+});
+
+describe("symbol_search query metrics — corpus failures", () => {
+	// Recurrence: an empty directory exited 0 with all-zero windows, which reads
+	// as a clean after-window. A missing directory died with a raw ENOENT.
+	function runMain(argv: string[]) {
+		const written: string[] = [];
+		const spy = vi
+			.spyOn(process.stderr, "write")
+			.mockImplementation((chunk: string | Uint8Array) => {
+				written.push(String(chunk));
+				return true;
+			});
+		try {
+			return { code: main(argv), stderr: written.join("") };
+		} finally {
+			spy.mockRestore();
+		}
+	}
+
+	it("exits non-zero and prints a zero file count for an empty directory", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ssqm-empty-"));
+		try {
+			const { code, stderr } = runMain([dir]);
+			expect(code).toBe(1);
+			expect(stderr).toMatch(/no session files under .*\(0 files read\)/);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("exits non-zero with the same message for a missing directory", () => {
+		const dir = path.join(os.tmpdir(), "ssqm-absent-corpus-dir");
+		const { code, stderr } = runMain([dir]);
+		expect(code).toBe(1);
+		expect(stderr).toMatch(/does not exist: .*\(0 files read\)/);
 	});
 });
