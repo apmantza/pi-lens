@@ -173,7 +173,8 @@ Helpful mechanics you can rely on:
   function/method/class (or Markdown section), and coverage is recorded at
   symbol level. The result starts with a `[pi-lens: read widened ...]` note
   naming the requested and the returned lines; ask for `limit` above 100 for
-  the exact range. It is off with the read guard (`--no-read-guard`).
+  the exact range. It is off with the read guard (`--no-read-guard`), or on its
+  own with `--no-read-expansion` / `readGuard.expandReads=false`.
 - `read_symbol` / `read_enclosing` reads count as edit coverage for that symbol range.
 - Markdown warns instead of blocking; `.txt`/`.log` are exempt.
 - Escape hatch (human): `/lens-allow-edit <path>` arms one exemption.
