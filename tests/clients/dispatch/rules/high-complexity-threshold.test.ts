@@ -23,7 +23,10 @@ function makeCtx(
 		autofix: false,
 		deltaMode: false,
 		facts,
-		projectConfig,
+		// The dispatcher hands a rule threshold from the file's config owner, and
+		// `projectConfig` is not a threshold source any more (#5292), so a
+		// hand-built context supplies it over that one seam.
+		ruleThreshold: (ruleId) => projectConfig?.rules[ruleId]?.threshold,
 		hasTool: async () => false,
 		log: () => {},
 	};

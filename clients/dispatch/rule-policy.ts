@@ -110,6 +110,36 @@ export function resolveDispatchPolicyConfigForFile(
 }
 
 /**
+ * The `rules.<id>.threshold` one rule runs with under one resolution, or
+ * `undefined` when no tier sets it (the runner's own default then applies).
+ *
+ * `rules` merges field by field, so a nested `.pi-lens.json` that sets a
+ * threshold governs the files under it and nothing else — the owner rule
+ * {@link rulePolicyMapFromResolution} already applies to `disable`, `select`
+ * and `ignorePaths` (#5292).
+ *
+ * The positive guard is the project parser's own rule for the field
+ * (`parseConfigFile`, `PILENS_CFG_0005`): the layered read must not start
+ * honouring a `0` or a negative the whole-file read dropped, or one stray value
+ * would flag every function under that package. Nothing else has to be checked
+ * here: the schema types the field as a number, and the config walk drops a
+ * non-number, a `NaN` and an infinite value before a tier is merged, so a
+ * value that reaches this line is a finite number or absent. The cast follows
+ * {@link rulePolicyMapFromResolution}: the schema types `rules` as an object of
+ * objects, so any other shape reads as no threshold at all.
+ */
+export function ruleThresholdFromResolution(
+	resolution: PiLensConfigResolution,
+	ruleId: string,
+): number | undefined {
+	const rules = resolution.value.rules as
+		| Record<string, { readonly threshold?: unknown } | undefined>
+		| undefined;
+	const threshold = rules?.[ruleId]?.threshold;
+	return typeof threshold === "number" && threshold > 0 ? threshold : undefined;
+}
+
+/**
  * The rule policy map of one resolution, ready to match paths against the
  * workspace `root`.
  *

@@ -26,8 +26,7 @@ export const highComplexityRule: FactRule = {
 			) ?? [];
 
 		const diagnostics: Diagnostic[] = [];
-		const configuredCcThreshold =
-			ctx.projectConfig?.rules["high-complexity"]?.threshold;
+		const configuredCcThreshold = ctx.ruleThreshold?.("high-complexity");
 		const activeCcThreshold =
 			configuredCcThreshold ?? DEFAULT_HIGH_COMPLEXITY_THRESHOLD;
 
