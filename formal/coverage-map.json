@@ -41,7 +41,6 @@
       "read-guard",
       "session-lifecycle"
     ],
-    "clients/analysis-root.ts": "unmodelled",
     "clients/runtime-tool-call.ts": [
       "read-guard",
       "dispatch-pipeline",
@@ -133,6 +132,19 @@
       "session-lifecycle"
     ],
     "clients/mcp/session.ts": "unmodelled",
+    "clients/dispatch/runners/utils/availability-policy.ts": "unmodelled",
+    "clients/dispatch/runners/utils/runner-helpers.ts": "unmodelled",
+    "clients/out-of-band-changes.ts": "unmodelled",
+    "clients/disk-changes.ts": "unmodelled",
+    "clients/disk-change-subscribers.ts": "unmodelled",
+    "clients/safe-spawn.ts": "unmodelled",
+    "clients/installer/managed-tool-refresh.ts": "unmodelled",
+    "clients/bootstrap.ts": "unmodelled",
+    "clients/project-trust.ts": "unmodelled",
+    "clients/deferred-lsp-work.ts": "unmodelled",
+    "clients/event-loop-hold.ts": "unmodelled",
+    "clients/recent-touches.ts": "unmodelled",
+    "mcp/server.ts": "unmodelled",
     "clients/dispatch/dispatcher.ts": [
       "blocker-pending"
     ],
@@ -344,12 +356,12 @@
     "clients/tree-sitter-client.ts": [
       "tree-sitter-trap-budget"
     ],
-    "clients/tree-sitter-shared.ts": "unmodelled",
+    "clients/tree-sitter-shared.ts": [
+      "tree-sitter-trap-budget"
+    ],
     "clients/tree-sitter-symbol-extractor.ts": [
       "tree-sitter-trap-budget"
     ],
-    "clients/workspace-topology.ts": "unmodelled",
-    "clients/test-runner-client.ts": "unmodelled",
     "clients/test-runner-delivery.ts": [
       "test-runner-delivery"
     ],
@@ -364,7 +376,6 @@
       "blocker-pending"
     ],
     "clients/finding-delivery-gate.ts": "unmodelled",
-    "clients/git-guard.ts": "unmodelled",
     "clients/advisory-provenance.ts": [
       "store-freshness"
     ],
@@ -374,7 +385,9 @@
     "clients/project-snapshot-persist-worker.ts": [
       "snapshot-promotion"
     ],
-    "clients/memory-sampler.ts": "unmodelled",
+    "clients/memory-sampler.ts": [
+      "session-lifecycle"
+    ],
     "index.ts": {
       "families": [
         "session-lifecycle",
@@ -408,6 +421,18 @@
     ],
     "clients/file-utils.ts": [
       "lsp-ephemeral-data-dir"
+    ],
+    "clients/lsp/workspace-sweep-hold.ts": [
+      "lsp-idle-reset"
+    ],
+    "clients/lsp/workspace-diagnostics-session.ts": [
+      "store-freshness"
+    ],
+    "clients/lsp/aggregation.ts": [
+      "late-aux-drain"
+    ],
+    "clients/message-end-attribution.ts": [
+      "session-lifecycle"
     ]
   },
   "notes": {
@@ -428,27 +453,41 @@
     "clients/mcp/session.ts": "MCP session refresh calls handleSessionStart (scope 'superseded'); session-lifecycle states the MCP host is out of scope, except as a stager and reader of the turn-end slot (`McpStage`, `McpTake`, #4943 R2).",
     "clients/dispatch/dispatcher.ts": "The delta split of a dispatch (`filterDelta` keyed on `d.id`, and since #4629 on a cross-tool `findingKey` too, which the model leaves out: what is new, what is held back, what is fixed) is modelled by blocker-pending (#4484): its `heldBackBlockers` is the observation's blocking set that the delta calls not new, which the pipeline's record, clean text and clear read. The rest of this note is about the coverage notice, which no family models. `buildCoverageNotice` decides per dispatch whether the synthetic model-facing coverage notice is emitted; the decision is the session-scoped `coverageNoticeSeen` latch (kind + file + sorted server sets) with the `dedupe` push/pull axis. No formal family models a model-facing coverage-notice dedupe: `dispatch-pipeline`'s `latch` is the `(file, hash)` analysed/in-flight dedupe in `clients/pipeline.ts`, and `session-lifecycle`'s `dedupe` is the #2890 duplicate-start gate. The coverage notice is unmodelled at the TLA axis.",
     "clients/dispatch/pending-runner-findings.ts": "The deferred collect-later runner store (#3758/#3813): both readers (drain, commit gate's non-draining peek) apply the owned-admission fence (ownedByLiveSession), and requeueRunnerFindings carries entry.session, so a requeued answer stays fenced to its producer scope. Modelled by pending-runner-store (#3814, #3824); the producer's captured-scope fence composed with the real lifecycle transitions is session-lifecycle's `StoreRunner` writer (SessionLifecycleF1, F1 of #3803).",
-    "clients/workspace-topology.ts": "Marker-walk miss cache keyed by start-dir mtime plus the 2 s cadence (#3456). Low value; store-freshness could host it as a gate kind.",
     "clients/knip-client.ts": "The four heavyweight analyzers stamp scannedAt at the top of their run body, before the first read (#3690); a joined run inherits the initiator's read stamp. That is store-freshness' Stamp = \"start\" rule. The knip lane drops a late result by design and its two-sample floor and memo are not modelled (turn-end-late-scan README, \"What the model cannot see\"); only the shared `HardFailureStamps` is.",
     "clients/dead-code-client.ts": "The turn_end dead-code lane's late scan (#4117 round 2, #4120): the client's single flight `inFlight` is process-wide, so a scan parked by one session is joined by the next session's analyze (J1, `JoinedScanStale`); `HardFailureStamps` is set where a scan settles and never cleared at a session boundary. The lane itself is in clients/runtime-turn.ts, which stays at its three families: a fourth would make the row a hub (4 or more) and silence the gate for the whole file. Modelled by turn-end-late-scan; store-freshness keeps the Stamp rule.",
     "clients/hard-failure-summary.ts": "`HardFailureStamps` (stamp where a scan settles, 30 minute expiry, success lifts), shared by the knip and dead-code clients. Modelled by turn-end-late-scan (`NoRespawnWhileStamped`, `StampAtTurn`, `BackoffUnread`).",
     "unlisted": "Runtime files touched by the 151 audited PRs and deliberately not mapped (no lifecycle, timing, identity or concurrency behaviour): bounded-telemetry, cache-observability, complexity-client, dispatch/types, dispatch/utils/format-utils, install-diagnostics, lens-config, lsp/config, lsp/session-roots, lsp/wait-policy/capability-snapshot, module-report, path-utils, persistent-reverify, probe-home-state, project-diagnostics/types, project-lens-config, python-environment, read-expansion, review-graph-logger, tool-agreement, tools/module-report. Also deliberately unmapped because nearly every PR touches them for non-lifecycle reasons: clients/degradation-ledger.ts (the DegradationKind registry; touched by most runtime PRs for a record kind, never lifecycle behaviour); clients/latency-logger.ts (telemetry sink); clients/hook-budgets.ts (budget table (data); #2523 governs it); clients/dispatch/runners/** (runner outcome parsing; the fix-run restore seam is mapped at clients/fix-run-restore.ts); clients/dispatch/facts/** (pure extractors; their tree-sitter trap accounting lives in clients/tree-sitter-client.ts).",
     "clients/turn-end/delivery-holds.ts": "The turn-end delivery holds (#3813): peek-then-commit, drain-then-restore and park-then-recheck, settled once after the cap against the kept prefix (the reach rule), fenced by isCurrentSession, with the cut-advisory park keyed by session (#4112). Modelled by turn-end-delivery-holds. The producers register their holds in clients/runtime-turn.ts (handleTurnEnd), which is deliberately not given this family: that row would reach four families and its gate would turn advisory (#3878).",
     "clients/test-runner-delivery.ts": "Automatic test-runner delivery (#2366): the in-memory pending delivery, the persisted deliveryEligible marker and the record's generations. A delivery's identity is the generation that published the record's content, not the testRunGeneration launch high-water mark (#5259), and it is eligible once its host reports idle, at agent_settled or at a publish after it. Modelled by test-runner-delivery; the idle rechecks and provenance validation are not.",
-    "clients/test-runner-client.ts": "Per-checkout isolation of automatic test selection (#3649). Identity keying without interleaving; unit tests suffice, listed only so the gap is visible.",
     "clients/opaque-mutation-scan.ts": "The pending opaque baseline of bash calls (OpaqueBaselineStore: one entry per tool-call id, retirement of an entry whose turn is over, the pending cap and its counted loss; #4137). Modelled by opaque-baseline-slot, together with the authority-ranked dispatch dedupe its recoveries feed (claimPipelineDispatch). The record site is clients/runtime-tool-call.ts and the take site and the dedupe are in clients/runtime-tool-result.ts, so those rows list the family too; the recovery itself (recoverOpaqueChangesViaGit, captureFileStats) is a stat or git read, not lifecycle. The per-session HEAD records and their serialized looks (headRecords, observeGitHead, serializeHeadLook; #4493) are modelled by lsp-server-content HeadMoveResync, with the resync of held documents they drive; HeadMoveHookBound models the hook bound around a look, the primary-first send and the join of every tool_call (#4493 r2).",
     "clients/deferred-runner-blockers.ts": "The commit gate's judgement of settled collect-later runner answers (`judgeDeferredRunnerFindings`). The file only reads the store through the non-draining `peekSettledRunnerFindings`, which is pending-runner-store's `PeekRead`; admission and drain live in clients/dispatch/pending-runner-findings.ts. Freshness-then-policy is not modelled.",
-    "clients/finding-delivery-gate.ts": "Delivery freshness, disposition, and policy admission are not represented by a formal family; keep this delivery seam visible as unmodelled.",
-    "clients/git-guard.ts": "The git guard's command classification. Its session latch lives in `RuntimeCoordinator` (`updateGitGuardStatus`, `markGitGuardCacheUnknown`, cleared by `resetForSession`); the latch's late writers are modelled as the `gitguard` kind of session-lifecycle's `stateW` and `debounce` writers (`StateWLate`, `Pre3759StateWUncaptured`, `DebounceCaptureAtTimer`), so the latch's reset rules stay as they are in clients/runtime-coordinator.ts. This file's classification is unmodelled.",
+    "clients/finding-delivery-gate.ts": "The gate combines freshness with disposition and policy admission; store-freshness models the underlying freshness stores, not this delivery seam. Keep it unmodelled pending the dedicated model planned by #4715.",
     "clients/advisory-provenance.ts": "The advisory scanners' `scannedAt` stamp (taken at runScan entry, before the spawn) is store-freshness' Stamp = \"start\" rule, listed as 'not committed' in its store map; the finding-path freshness classification (live, stale, missing, unreadable) is not modelled. The rest is pure evidence shaping.",
     "clients/read-bridge.ts": "Out-of-band reads forwarded to io-bridge's `recordRead` as `evidence: \"disk\"`, the read guard's `recordRead`. read-guard models disk-evidence reads at the tool_result seam (`EvidenceAtResultHandler`); the bridge's own producer timing is not modelled, so a change here moves read-guard or declares it unaffected.",
     "clients/project-snapshot-persist-worker.ts": "The worker entry only serves one gzip-stage request and skips a body whose semantic fingerprint is unchanged. The Stage action and the generation-gated promotion live in clients/gzip-stage-write.ts and clients/project-snapshot.ts; the fingerprint skip itself is not modelled.",
-    "clients/memory-sampler.ts": "Sampling cadence and heap-growth tightening are observability state, but no formal family models their session reset and timer-free turn state; keep it visible as unmodelled.",
+    "clients/memory-sampler.ts": "The sessionCell turn-end sample and its session reset are modelled by session-lifecycle; process-wide sampling cadence remains telemetry-only.",
     "tools/ast-grep-replace.ts": "`ast_grep_replace` captures the coordinator's session at `execute` entry and hands it to the apply, which sends it as the bridge entry's lineage (#3763 item 4, #3824). Modelled as session-lifecycle's `bridge` writer (`BridgeLineage`).",
     "clients/turn-summary.ts": "The run's turn summary collector: a session-scoped store `resetForSession` clears, written by `handleToolResult` and the deferred-format drain behind the handle each captured at entry (#3759 row 14). Modelled as the `summary` kind of session-lifecycle's `stateW` and `debounce` writers (`StateWLate`, `Pre3759StateWUncaptured`); the collector's content is not.",
     "clients/analysis-root.ts": "The analysis-root classifier (`resolveAnalysisRoot`, `resolveAnalysisRootPath`, `resolveSessionConfigRoot`) answers one question — which class and root own a file, and therefore whether the session registers it at all — and no family models that answer. `session-registry` models the INSTANCE registry (`instances.json`), not the LSP session-root FIFO that `resolveSessionConfigRoot` feeds; `lsp-crash` and `lsp-idle-reset` model the adopted CLIENT lifecycle behind `admitAdoptedRoot`, not the class that lets a client be admitted. Its consumers are mapped where the decision becomes state: clients/runtime-tool-call.ts (registration), clients/runtime-tool-result.ts (delivery) and clients/lsp/client-registry.ts (admission). Kept as `unmodelled` so the gap stays visible instead of silently absent (#2657, #4242).",
     "clients/dispatch/integration.ts": "The in-lane cascade (`computeCascadeForFile`: the passive snapshot's post-edit gate, the tier branch, the bounded silent-push wait, the fallbacks, the unconfirmed marker) is modelled by cascade-delivery's `Compute`. The row stays at three families: a fourth would make it a hub and silence its gate (#3878).",
     "clients/runtime-turn.ts": "`handleTurnEnd`'s drains and the park of a cut advisory: modelled by session-lifecycle's `TurnEnd` (a turn_end drains only its own scope's work: `SecondaryTurnEnd` is master's open half of #3613 and #3758, `SecondaryTurnEndScoped` the proposed shape) and `park`/`ParkTake` (`ParkMerged`, `Pre4112ParkNoSessionKey`, `Mut4112ParkNoResetClear`, `MutParkNoFence`; the key and fence are also turn-end-delivery-holds'). The row is deliberately not given session-lifecycle: a fourth family would make it a hub and silence its gate (#3878). Its cascade sections (the registry peek, the pending and unresolved lines, the pending record) are cascade-delivery's `TurnEnd`, left off the row for the same reason.",
-    "index.ts": "The hook handlers in index.ts: an edit inside one (session_start, session_shutdown, session_tree, turn_start, turn_end, agent_end, agent_settled, tool_call, tool_result, context, context_with_system) gates on that hook's families only, found by `findHookRanges` in scripts/lib/tla-coverage.mjs from the post-image the diff names (#3878). An edit outside every handler (activation setup, helpers) prints a note and never gates. `context_with_system` is the pi 0.87+ request hook that sees the full transcript; `context` injects on a pre-0.87 host and defers on 0.87+ (#4631). `model_select` re-plans the active tool set for the new model (#4687); it maps to session-lifecycle, whose LZ memory store is what the plan reads."
+    "index.ts": "The hook handlers in index.ts: an edit inside one (session_start, session_shutdown, session_tree, turn_start, turn_end, agent_end, agent_settled, tool_call, tool_result, context, context_with_system) gates on that hook's families only, found by `findHookRanges` in scripts/lib/tla-coverage.mjs from the post-image the diff names (#3878). An edit outside every handler (activation setup, helpers) prints a note and never gates. `context_with_system` is the pi 0.87+ request hook that sees the full transcript; `context` injects on a pre-0.87 host and defers on 0.87+ (#4631). `model_select` re-plans the active tool set for the new model (#4687); it maps to session-lifecycle, whose LZ memory store is what the plan reads.",
+    "clients/dispatch/runners/utils/availability-policy.ts": "Availability latch state (`available`, cooldown, install attempts, trust and availability generations) changes on probes, cooldown expiry, installs, trust adoption and session reset; no family models it.",
+    "clients/dispatch/runners/utils/runner-helpers.ts": "Shared runner availability and managed-verdict flights carry in-flight probes, cooldowns and generation-scoped accumulators across callers; probe settle, reset, trust adoption and expiry are unmodelled.",
+    "clients/out-of-band-changes.ts": "Per-root bounded records, owed walks and coalesced looks change on tool calls, HEAD moves, diagnostics and subscriber publication; eviction, joined walks and publication failure are unmodelled.",
+    "clients/disk-changes.ts": "The process-singleton disk-change subscriber registry and project sequence publisher change on registration, out-of-band walks and fan-out; concurrent sessions and subscriber failures are unmodelled.",
+    "clients/disk-change-subscribers.ts": "Subscriber registration and its settled-sweep drain latch change on session/workspace events and delayed fan-out; the publisher lifecycle has no formal family.",
+    "clients/safe-spawn.ts": "Per-child teardown flags and timeout, abort, output-cap, close and escalation timers form a spawn lifecycle; child events and kill paths are unmodelled.",
+    "clients/installer/managed-tool-refresh.ts": "Managed-tool refresh has an in-flight slot, session budget reservation and resettable tap points; session start, reset, stamp cadence and concurrent callers are unmodelled.",
+    "clients/bootstrap.ts": "Analyzer bootstrap tracks resident clients, shutdown state, failure strikes, load attempts and a keyed flight; demand, session reset, shutdown and late build settlement are unmodelled.",
+    "clients/project-trust.ts": "Process-wide trust state and trustGeneration change on adoption at session_start and turn_start; availability, LSP and installer consumers read the generation, with no formal family.",
+    "clients/deferred-lsp-work.ts": "One deferred LSP work slot moves idle to armed or aborted; turn_end, work settlement, session start/shutdown and idle reset are its actors.",
+    "clients/event-loop-hold.ts": "A process-singleton hold map and re-armed timer change on hold/release, deadline reap, session reset and timer failure; the liveness machine is unmodelled.",
+    "clients/recent-touches.ts": "Cross-process recent-touch append/read state combines a global mtime/size watermark with a per-CWD cursor; turn/session readers and concurrent producers are unmodelled.",
+    "mcp/server.ts": "MCP auto-session state and its in-flight self-heal change on tool calls, successful session start and failed retry; the host lifecycle is unmodelled.",
+    "clients/lsp/workspace-sweep-hold.ts": "Workspace sweep holds, idle waiters and age-based reap change on LSP work completion, idle reads and session reset; modelled by lsp-idle-reset.",
+    "clients/lsp/workspace-diagnostics-session.ts": "The diagnostics session clock, bounded file-creation map and all-files-changed watermark change on session start, file creation and eviction; modelled by store-freshness.",
+    "clients/lsp/aggregation.ts": "Language and auxiliary completion counts plus grace timers change as LSP promises settle; late auxiliary handling is modelled by late-aux-drain.",
+    "clients/message-end-attribution.ts": "The two-slot stable/previous session attribution anchor rotates at session boundaries for late message_end telemetry; modelled by session-lifecycle."
   }
 }
