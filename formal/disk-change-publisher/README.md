@@ -54,17 +54,22 @@ I1 to I5 are the prose in `clients/disk-changes.ts` (the module comment,
 | I4: the publisher writes the sequence and the change log only; an incoming change never credits authorship (#4131) and moves no FileTime (#3865) | `I4NoAuthorship`: the authorship credit equals the agent's edits |
 | I5: a throwing subscriber is isolated and recorded once per consumer per root per session | `I5Isolated` (every consumer of a finished fan-out ran) and `I5RecordedOnce` |
 
-Three more invariants state promises the same comments make:
+Three more invariants:
 
 - `OneRestartPerInstall`: "two sessions' looks after one install restart
   once" (the `looks` comment, `clients/out-of-band-changes.ts:151`).
 - `DemandServed`: #4532 gap 6, "a joined look gets the walk it demands"
   (the `owedWalks` comment).
-- `NoLostChange`: the module comment's "They describe the disk, not a session,
-  so a session boundary keeps them: an install made between sessions is still
-  seen" (`clients/out-of-band-changes.ts:36`). When the servers hold a stale
-  view of a stamp, the root's record still shows the difference, so a later
-  look publishes it. This is the invariant B2a violates.
+- `NoLostChange` is the model's own property, not a promise a comment makes.
+  Once the servers have been told a view (`vInst`, `vDecl`) that differs from
+  the disk, the root's record must still show the difference, or the record is
+  gone and the next look names the live server's epoch (`NextLookNamesEpoch`).
+  The module comment at `clients/out-of-band-changes.ts:36` ("They describe the
+  disk, not a session, so a session boundary keeps them") is about session
+  boundaries, which the model does not have, so it is not the source of this
+  property. Eviction is the cost: `MAX_ROOTS` (`clients/out-of-band-changes.ts:129-130`)
+  drops the oldest root's record, and that root's next look is a first look
+  that changes nothing (`:857`). This is the invariant B2a violates.
 
 I1 to I4 are structural: the as-built model satisfies them by the order of its
 steps, and each has a mutant config that reorders the step and goes red. They
@@ -147,4 +152,38 @@ Not modelled:
   kept across a session (the module comment), and the model has one session
   lifetime, so "once per consumer per root per session" is "once per run";
 - a publish that throws: `publishDiskChange` never throws for a subscriber
-  or an append failure, and nothing else in the path is known to.
+  or an append failure, and nothing else in the path is known to;
+- a subscriber added or removed while a publish runs: `fanOut` iterates a
+  snapshot taken at publish start (`clients/disk-changes.ts:468-470`), so one
+  publish reaches the subscribers it started with. The model fixes `Subs` for
+  the whole run and never changes it mid-fan-out;
+- hypothesis H1, not built: the model's `Next` step is atomic, but the real
+  single-flight loop (`clients/single-flight.ts:210`, `while
+  (flight.rerunRequested)`) exits, and the key is released (`:227`), a
+  microtask later. A joiner that sets the rerun bit in that gap sets it on a
+  flight that will not run again, so its trailing pass is dropped. The
+  joiner's owed walk stays in `owedWalks`, so the next pass serves it: the
+  walk is deferred, not lost. No production caller is shown to land in the
+  gap. A hand-shaped microtask probe on the real `createSingleFlight` drops the
+  pass at one hop (review r1, not in the repo). The cost to model is one more
+  flight state and a timing-free arm that may drop the bit. The default is no
+  mechanism; the maintainer decides whether to record it as a residual.
+
+## Known abstractions
+
+These differ from the code. Neither changes what an invariant checks: I2
+relates each delivery to the sequence its own publish allocated, and the
+restart invariants count restarts.
+
+- Runtime. The model gives `diag` a runtime (`rt` is `mode /= "client"`), but
+  `tools/lsp-diagnostics.ts:631` passes none, so that look allocates no
+  sequence. The model gives `client` no runtime, but
+  `clients/runtime-tool-result.ts:2988-2990` passes one to a session
+  bookkeeping root (`isSessionBookkeepingRoot`).
+- Installs. `Commit` sets `enum |-> ~installed` (`formal/disk-change-publisher/DiskChangePublisher.tla:288`),
+  so `Alloc` treats any pass with an install as unenumerable.
+  The code's `paths` (`clients/out-of-band-changes.ts:759-765`) lists the
+  declaration changes whenever there are any and no config change, so a pass
+  with an install and a declaration change allocates a sequence
+  (`clients/disk-changes.ts:275`). An install alone is `"unknown"`, which
+  allocates none (`clients/disk-changes.ts:272`), as modelled.

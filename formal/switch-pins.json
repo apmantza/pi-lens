@@ -154,7 +154,7 @@
 				"AwaitFanOut": {
 					"value": "TRUE",
 					"test": "tests/clients/disk-change-detectors-4535.test.ts",
-					"title": "reads the consumer's own answer back out of a real publish"
+					"title": "reports the restart count as -1, never as a clean zero"
 				},
 				"IsolateThrows": {
 					"value": "TRUE",
