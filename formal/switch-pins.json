@@ -1,6 +1,42 @@
 {
 	"$comment": "#4393: every constant a formal/<family>/*.cfg assigns (`=` or `<-`), and every module `Name == TRUE|FALSE` that is not a `<-` target, is classified here, per family. `pins`: the constant mirrors a code choice; `value` is what every `\\* expect: pass` config resolves it to (its `=` value, the definition its `<-` names, or the module's `Name == <literal>`), and `test`/`title` name a test a run reaches, in a file vitest collects, that drives the real code and asserts that behaviour, so flipping the code reds the test and flipping the model alone reds tests/config/tla-switch-pins.test.ts. `also` names further tests when one value encodes several behaviours. `narrowedBy` admits, per value, the named as-built configs (file stems) that use it only to cut the explored schedules, with its reason; a config it does not list must match `value`. `notCodeChoice` and `deferred` groups carry a reason for each member, and tests/config/tla-switch-pins.test.ts pins the counts of deferred and notCodeChoice members exactly, so every move between them is a visible edit. Flipping a model value and this value together, without the code, reds neither the gate nor the pin, so a change to a value here is a reviewer's call. A PR that changes a pinned behaviour flips the constant, its configs and this value together (AGENTS.md shape 68).",
 	"families": {
+		"availability-latch": {
+			"notCodeChoice": [
+				{
+					"reason": "Scenario bound or actor set: it sizes the state space or picks which actors, inputs and steps TLC explores; no code branch reads it.",
+					"constants": [
+						"MaxGen",
+						"MaxTrust",
+						"MaxProbes",
+						"Results"
+					]
+				}
+			],
+			"deferred": [
+				{
+					"reason": "Deferred: no single as-built value yet. This family's `expect: pass` configs set it both ways (a pass config here is not an as-built claim), so the family must first name its as-built value before a pin can agree with it.",
+					"constants": [
+						"NewLatchPerGen",
+						"Clear",
+						"SettleGuard"
+					]
+				},
+				{
+					"reason": "Deferred: every `expect: pass` config agrees on one value, but no existing dispatcher or entry-point test was matched to it in #4393, which pinned read-guard first. The latch's trust tests (tests/clients/session-repository-trust-4530.test.ts, `A11`) sit in suites that `skipIf(!POSIX)`, which the pin detector does not count.",
+					"constants": [
+						"TrustStamp",
+						"ReadChecksTrust"
+					]
+				},
+				{
+					"reason": "Deferred: a code constant at its code value, not shrunk. Every config sets `Ladder = 2`, which is `INSTALL_TRANSIENT_COOLDOWNS_MS.length` (clients/dispatch/runners/utils/availability-policy.ts), so the value mirrors the code; the existing tests use the constant symbolically, so none pins the value 2.",
+					"constants": [
+						"Ladder"
+					]
+				}
+			]
+		},
 		"cascade-delivery": {
 			"pins": {
 				"CheckStamp": {
