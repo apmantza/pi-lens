@@ -260,6 +260,25 @@ describe("user entry shape", () => {
 		expect(userEntryShapeProblems(`- ${H} Body wraps\n${line}`)).toEqual([]);
 	});
 
+	// Recurrence: a fragment whose `(refs #5303)` wrapped at 72 columns was
+	// refused as a continuation line (#5353 verify r3, F19), because a `#` opened
+	// no admitted first character. A `#` before a digit is an issue number,
+	// never an ATX heading, which needs a space after its hashes; so it is admitted.
+	it("admits a wrapped issue reference", () => {
+		expect(
+			userEntryShapeProblems(`- ${H} Body wraps and says so. (refs\n  #5303)`),
+		).toEqual([]);
+	});
+
+	// Control for the admission above: a `#` before a letter or a space is a
+	// heading spelling, so a wrapped line that starts with one stays refused.
+	it("refuses a `#` that is not followed by a digit", () => {
+		for (const line of ["  #Title", "  # Title"]) {
+			const problems = userEntryShapeProblems(`- ${H} Body\n${line}\n  more.`);
+			expect(problems.join("; ")).toMatch(/one paragraph/);
+		}
+	});
+
 	it("refuses a tilde fence as it refuses a backtick fence", () => {
 		// Recurrence: `  ~~~text` between two paragraphs returned [] while the
 		// backtick form was refused.

@@ -45,8 +45,9 @@ A `user` entry is the form above and nothing else, and
   does not open with a command ("Keep X out of Y.").
 - The body, if any, is one short paragraph (at most 120 words) that starts a
   new sentence after the headline and ends in a period. Wrap continuation lines
-  with two spaces of indent, and start each with a letter, a number, a code
-  span, a quote or an opening parenthesis. No blank line, list, quote, table,
+  with two spaces of indent, and start each with a letter, a number, an issue
+  number such as `#5303` (a wrapped `(refs #N)` may start a line), a code span,
+  a quote or an opening parenthesis. No blank line, list, quote, table,
   heading or fence can start a line.
 - At most one reference, as the last thing in the entry: `(refs #N)`, or
   `(refs #N, #M)`. No `closes`, `fixes`, bare `#N` or issue URL.
