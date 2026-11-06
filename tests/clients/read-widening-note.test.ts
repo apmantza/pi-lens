@@ -38,9 +38,7 @@ import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 
 type Content = Array<{ type: string; text?: string }>;
 
-const guardOn = (name: string) =>
-	name === "no-complexity" ||
-	resolvePiLensFlag(name, undefined, undefined) === true;
+const guardOn = (name: string) => name === "no-complexity";
 const guardOff = (name: string) =>
 	name === "no-complexity" || name === "no-read-guard";
 
