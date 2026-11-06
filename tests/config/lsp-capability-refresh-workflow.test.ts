@@ -27,7 +27,55 @@ function loadWorkflow(): any {
 	return yaml.load(readFileSync(WORKFLOW, "utf8"));
 }
 
+function importsDistFromEntry(
+	entry: string,
+	seen = new Set<string>(),
+): boolean {
+	const absolute = entry.startsWith(ROOT) ? entry : resolve(ROOT, entry);
+	if (seen.has(absolute)) return false;
+	seen.add(absolute);
+	const source = readFileSync(absolute, "utf8");
+	if (/\b(?:import|from)\s+["'][^"']*dist\//.test(source)) return true;
+	for (const match of source.matchAll(
+		/\bfrom\s+["'](\.[^"']+)["']|\bimport\s+["'](\.[^"']+)["']/g,
+	)) {
+		const relative = match[1] ?? match[2];
+		const child = resolve(absolute, "..", relative);
+		try {
+			if (importsDistFromEntry(child, seen)) return true;
+		} catch {
+			// A non-file or unsupported dynamic import is not proven safe.
+			return true;
+		}
+	}
+	return false;
+}
+
 describe("nightly LSP capability refresh contract (#4277)", () => {
+	it("builds dist before every notify-job script that reaches it (#5323)", () => {
+		const workflow = loadWorkflow();
+		const notify = workflow.jobs["tool-smoke-notify"];
+		const steps = notify.steps as any[];
+		const buildIndex = steps.findIndex(
+			(step) => String(step.run).trim() === "npm run build:dist",
+		);
+		expect(buildIndex).toBeGreaterThanOrEqual(0);
+		const scriptSteps = steps
+			.map((step, index) => ({ step, index }))
+			.filter(({ step }) => /\bnode scripts\//.test(String(step.run)));
+		const firstScript = Math.min(...scriptSteps.map(({ index }) => index));
+		expect(buildIndex).toBeLessThan(firstScript);
+		for (const { step } of scriptSteps) {
+			const run = String(step.run);
+			for (const match of run.matchAll(/node scripts\/([\w-]+\.mjs)/g)) {
+				if (importsDistFromEntry(`scripts/${match[1]}`))
+					expect(buildIndex).toBeLessThan(
+						steps.findIndex((candidate) => candidate === step),
+					);
+			}
+		}
+	});
+
 	it("builds the in-place compiled twins before the census, after the promotion edit (#4302)", () => {
 		const workflow = loadWorkflow();
 		const smoke = workflow.jobs["tool-smoke"];
