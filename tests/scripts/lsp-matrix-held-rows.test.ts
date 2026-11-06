@@ -203,10 +203,17 @@ describe("#5323 matrix rows for every measured server (run 42149703889)", () => 
 		expect(flips(n1, n3)).toEqual([]);
 		const back = characterize(n3, recorded(), "2026-11-09").text;
 		expect(held(back).get("go")?.stale).toBe("—");
-		// A subset run says nothing about the servers it did not run.
-		const subset = characterize(n1, recorded(), "2026-11-07", {
+		// A subset run (`characterize-lsp.mjs kotlin`) measures only kotlin and
+		// says nothing about the servers it did not run.
+		const onlyKotlin = recorded(
+			RUN.characterize.rows
+				.map((r: any) => r.lang)
+				.filter((lang: string) => lang !== "kotlin"),
+		);
+		const subset = characterize(n1, onlyKotlin, "2026-11-07", {
 			probedLangs: ["kotlin"],
 		}).text;
+		expect(held(subset).size).toBe(PUSH_NEW.length);
 		expect(
 			[...held(subset).values()].filter((row) => row.stale !== "—"),
 		).toEqual([]);
