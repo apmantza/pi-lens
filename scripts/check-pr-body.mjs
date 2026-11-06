@@ -4802,7 +4802,7 @@ export function lintPrBody(body = "", options = {}) {
 	const errors = options.diff ? lintDiffCompliance(body, options) : [];
 	if (options.workingTree)
 		errors.push(
-			...lintRefsRemainders(body, {
+			...lintRefsRemainders(options.refsBody ?? body, {
 				title: options.title,
 				trackerIssues: options.refsRemainderTrackers,
 			}),
@@ -5245,19 +5245,14 @@ export async function lintPullRequestEvent(
 		existsOnBase: baseFileReader(),
 		shapeCatalog: shapeCatalogReader(),
 		diff,
-		workingTree: false,
+		workingTree: true,
+		refsBody: fullBody,
 		// Existing open bodies were authored before #4280. Set PI_LENS_PROSE_GRACE=1
 		// for the transition job; local preflight remains blocking by default.
 		proseMode: process.env.PI_LENS_PROSE_GRACE === "1" ? "warn" : "block",
 		title,
 		refsRemainderTrackers,
 	});
-	const refsErrors = lintRefsRemainders(fullBody, {
-		title,
-		trackerIssues: refsRemainderTrackers,
-	});
-	result.errors.push(...refsErrors);
-	if (refsErrors.length) result.valid = false;
 	const unreadable = lintReferencedBugLabels(fullBody, bugReferenced, title);
 	if (unreadable.length) {
 		result.valid = false;

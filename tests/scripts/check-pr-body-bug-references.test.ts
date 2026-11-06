@@ -71,6 +71,8 @@ const body4924 = base(
 const noGit = (() => "") as never;
 
 describe("Refs remainder alignment (#5326)", () => {
+	afterEach(() => vi.unstubAllEnvs());
+
 	const lint = (summary: string, title = "fix: keep the follow-up") =>
 		lintPrBody(base(summary), {
 			workingTree: true,
