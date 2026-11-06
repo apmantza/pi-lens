@@ -1,9 +1,9 @@
 # symbol_search transcript fixtures
 
-Most files are hand-written session rows. Two are not, because a hand-written
+Most files are hand-written session rows. Three are not, because a hand-written
 result restates what the parser expects instead of what the renderer prints:
 
-- `real-renderer.jsonl` and `repeat-read.jsonl` carry the result text of
+- `real-renderer.jsonl`, `repeat-read.jsonl` and `repeat-late.jsonl` carry the result text of
   `renderCompactSymbolSearch` (`clients/lens-engine.ts`, the one renderer both
   `symbol_search` surfaces call), and a `read` call with the real tool's `path`
   argument.

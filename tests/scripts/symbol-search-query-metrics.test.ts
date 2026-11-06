@@ -117,6 +117,15 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.repeatReadRate.denominator).toBe(2);
 	});
 
+	it("counts a repeat read within three tool calls and not one at the fourth", () => {
+		// Recurrence: the repeat-read window must match the listed-read window;
+		// repeat-late.jsonl repeats a read as the fourth call after the listing.
+		const window = windowFor("repeat-late.jsonl");
+		expect(window.results.listing).toBe(1);
+		expect(window.repeatReadRate.numerator).toBe(0);
+		expect(window.repeatReadRate.denominator).toBe(1);
+	});
+
 	it("counts an isError result as an error, outside the empty-rate denominator", () => {
 		// Recurrence: D9 turns silent empties into errors; the isError arm of
 		// classifyResult had no cell (the old unit case matched the text arm).

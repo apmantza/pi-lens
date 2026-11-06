@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"s","timestamp":"2026-11-05T00:00:00.000Z","cwd":"/work"}
+{"type":"message","id":"a-s1","parentId":null,"timestamp":"2026-11-05T00:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"s1","name":"symbol_search","arguments":{"query":"ext:ts alpha"}}]}}
+{"type":"message","id":"r-s1","parentId":null,"timestamp":"2026-11-05T00:00:02Z","message":{"role":"toolResult","toolCallId":"s1","toolName":"symbol_search","content":[{"type":"text","text":"Top 1 file(s) for \"ext:ts alpha\":\n  1. clients/a.ts 10 (score 2.00, 1 hit(s))\n\nIndex covers 10 files.\nNext: module_report clients/a.ts"}],"details":{},"isError":false}}
+{"type":"message","id":"a-read1","parentId":null,"timestamp":"2026-11-05T00:00:03Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"read1","name":"read","arguments":{"path":"clients/other.ts"}}]}}
+{"type":"message","id":"a-bash1","parentId":null,"timestamp":"2026-11-05T00:00:04Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash1","name":"bash","arguments":{"command":"echo one"}}]}}
+{"type":"message","id":"a-bash2","parentId":null,"timestamp":"2026-11-05T00:00:05Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash2","name":"bash","arguments":{"command":"echo two"}}]}}
+{"type":"message","id":"a-read2","parentId":null,"timestamp":"2026-11-05T00:00:06Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"read2","name":"read","arguments":{"path":"clients/other.ts"}}]}}
