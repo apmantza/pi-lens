@@ -342,8 +342,10 @@ nested `.pi-lens.json` governs the files under it and no others, and the
 workspace root's policy still reaches them. Every surface that filters by rule
 policy reads it this way: the per-edit dispatch, `lens_diagnostics`,
 `lsp_diagnostics`, and the turn-end advisories. A threshold is a value, not a
-denial: for a rule the nearest file that sets one supplies it, and a file that
-sets none inherits the farther file's.
+denial: for a rule the nearest file that sets a positive one supplies it, and a
+file that sets none inherits the farther file's. A nested threshold that is not
+a positive number is dropped, and the rule's own default then applies: the
+farther file's value does not come back.
 
 `rules.<id>.disable` is a denial, like `lsp.disabledServers`: it resolves as the
 union of every tier's list. A project or nested file can add rules to what the

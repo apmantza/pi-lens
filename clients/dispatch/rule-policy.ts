@@ -118,10 +118,13 @@ export function resolveDispatchPolicyConfigForFile(
  * {@link rulePolicyMapFromResolution} already applies to `disable`, `select`
  * and `ignorePaths` (#5292).
  *
- * The positive-finite guard is the project parser's own rule for the field
+ * The positive guard is the project parser's own rule for the field
  * (`parseConfigFile`, `PILENS_CFG_0005`): the layered read must not start
- * honouring a `0`, a `NaN` or a string the whole-file read dropped, or one
- * stray value would flag every function under that package. The cast follows
+ * honouring a `0` or a negative the whole-file read dropped, or one stray value
+ * would flag every function under that package. Nothing else has to be checked
+ * here: the schema types the field as a number, and the config walk drops a
+ * non-number, a `NaN` and an infinite value before a tier is merged, so a
+ * value that reaches this line is a finite number or absent. The cast follows
  * {@link rulePolicyMapFromResolution}: the schema types `rules` as an object of
  * objects, so any other shape reads as no threshold at all.
  */
@@ -133,11 +136,7 @@ export function ruleThresholdFromResolution(
 		| Record<string, { readonly threshold?: unknown } | undefined>
 		| undefined;
 	const threshold = rules?.[ruleId]?.threshold;
-	return typeof threshold === "number" &&
-		Number.isFinite(threshold) &&
-		threshold > 0
-		? threshold
-		: undefined;
+	return typeof threshold === "number" && threshold > 0 ? threshold : undefined;
 }
 
 /**

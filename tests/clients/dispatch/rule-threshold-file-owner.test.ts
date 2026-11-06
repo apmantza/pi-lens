@@ -175,8 +175,12 @@ describe("rules.<id>.threshold — the dispatch reads the file's config owner", 
 	});
 
 	it("layers the two rules field by field across the two files", async () => {
+		// The root sets a tight complexity threshold and a loose fan-out one; the
+		// package tightens fan-out only. So each field is what makes its own rule
+		// fire: fan-out only under the package's 5, complexity only under the
+		// root's 5 (the default of 15 would leave CC 8 silent).
 		rootConfig({
-			"high-complexity": { threshold: 40 },
+			"high-complexity": { threshold: 5 },
 			"high-fan-out": { threshold: 40 },
 		});
 		writeConfig(pkg, { rules: { "high-fan-out": { threshold: 5 } } });
@@ -185,14 +189,17 @@ describe("rules.<id>.threshold — the dispatch reads the file's config owner", 
 		expect(rulesOf(fanOut)).toContain("high-fan-out");
 
 		const complex = await dispatchRules(path.join(pkg, "b.ts"), COMPLEX_SOURCE);
-		expect(rulesOf(complex)).not.toContain("high-complexity");
+		expect(rulesOf(complex)).toContain("high-complexity");
 	});
 
 	// The project parser's rule for a threshold, kept by the file-owner read: a
-	// value that is not a positive finite number falls back to the default, it
-	// does not flag every function in the package.
+	// value that is not positive falls back to the default, it does not flag
+	// every function in the package. The parser also drops a non-number or a
+	// non-finite one, and the config walk does the same before a tier merges.
 	it("falls back to the default when the nested threshold is not positive", async () => {
-		rootConfig({ "high-complexity": { threshold: 40 } });
+		// The root threshold is tight on purpose: silence below proves the value
+		// that applied is the rule default of 15, not the root's 5.
+		rootConfig({ "high-complexity": { threshold: 5 } });
 		writeConfig(pkg, { rules: { "high-complexity": { threshold: 0 } } });
 
 		const diagnostics = await dispatchRules(
@@ -201,7 +208,8 @@ describe("rules.<id>.threshold — the dispatch reads the file's config owner", 
 		);
 
 		// CC 8 is below the default of 15, so nothing is flagged: had 0 been
-		// honoured, every function would be.
+		// honoured, every function would be, and had the root's 5 survived the
+		// dropped nested value, this one would be.
 		expect(rulesOf(diagnostics)).not.toContain("high-complexity");
 	});
 });
