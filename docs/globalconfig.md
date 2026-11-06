@@ -23,6 +23,7 @@ Each runtime toggle is settable from the CLI *and* from `config.json`. The two a
 | `--no-typos` | `typos.enabled` | `true` |
 | `--lens-spotbugs` | `spotbugs.enabled` | `false` |
 | `--no-read-guard` | `readGuard.enabled` | `true` |
+| `--no-read-expansion` | `readGuard.expandReads` | `true` |
 | `--no-autoformat` | `format.enabled` | `true` |
 | `--no-autofix` | `autofix.enabled` | `true` |
 | `--no-lens-context` | `contextInjection.enabled` | `true` |

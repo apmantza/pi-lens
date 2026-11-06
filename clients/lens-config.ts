@@ -144,7 +144,10 @@ export interface PiLensGlobalConfig {
 	/** Whether SpotBugs runs on Java and Kotlin files (`--lens-spotbugs`; opt-in). */
 	spotbugs?: PiLensToggleConfig;
 	/** Whether the read-before-edit behavior monitor runs (`--no-read-guard`). */
-	readGuard?: PiLensToggleConfig;
+	readGuard?: PiLensToggleConfig & {
+		/** Widen small reads to enclosing boundaries. Defaults true (`--no-read-expansion`). */
+		expandReads?: boolean;
+	};
 	format?: {
 		/** Whether auto-formatting is enabled. */
 		enabled?: boolean;
