@@ -37,10 +37,16 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.results.empty).toBe(1);
 		expect(window.results.error).toBe(0);
 		expect(window.results.unknown).toBe(0);
-		expect(window.emptyRate.numerator).toBe(1);
-		expect(window.emptyRate.denominator).toBe(3);
-		expect(window.emptyRate.excluded).toBe(1);
-		expect(window.emptyRate.rate).toBeCloseTo(1 / 3);
+		// file:/ext: population: the file: and ext: listings; the lang: miss is
+		// structured scope, not in emptyRate.
+		expect(window.emptyRate.numerator).toBe(0);
+		expect(window.emptyRate.denominator).toBe(2);
+		expect(window.emptyRate.excluded).toBe(2);
+		expect(window.structuredScoped).toEqual({
+			classified: 1,
+			empty: 1,
+			error: 0,
+		});
 		expect(window.unscannableRate.numerator).toBe(1);
 		expect(window.unscannableRate.denominator).toBe(4);
 		expect(window.unscannableRate.excluded).toBe(0);
@@ -100,14 +106,15 @@ describe("symbol_search query metrics — fixture corpus", () => {
 	it("reports a listed read and a repeat read separately", () => {
 		// repeat-read.jsonl: listing 1 is followed by two reads of an unlisted
 		// file (a repeat, no listed read); listing 2 by a first read of its
-		// listed file (a listed read, no repeat).
+		// listed file (a listed read, no repeat). Three reads follow the first
+		// listing, one of them a repeat.
 		const window = windowFor("repeat-read.jsonl");
 		expect(window.results.listing).toBe(2);
 		expect(window.listedReadRate.numerator).toBe(1);
 		expect(window.listedReadRate.denominator).toBe(2);
 		expect(window.repeatReadRate.numerator).toBe(1);
-		expect(window.repeatReadRate.denominator).toBe(2);
-		expect(window.repeatReadRate.rate).toBeCloseTo(0.5);
+		expect(window.repeatReadRate.denominator).toBe(3);
+		expect(window.repeatReadRate.rate).toBeCloseTo(1 / 3);
 	});
 
 	it("does not count a first read of a listed file as a repeat read", () => {
@@ -117,16 +124,28 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.repeatReadRate.denominator).toBe(2);
 	});
 
+	it("counts reads, not listings: one listing and three reads with one repeat is 1/3", () => {
+		// Recurrence: the maintainer decision of 2026-11-06 on #5355. The listing
+		// unit scored this session 1/1 and tended to 1.0 in long sessions, because
+		// one late repeat made every earlier listing count. The per-read unit
+		// stays comparable across session lengths.
+		const window = windowFor("repeat-three-reads.jsonl");
+		expect(window.results.listing).toBe(1);
+		expect(window.repeatReadRate.numerator).toBe(1);
+		expect(window.repeatReadRate.denominator).toBe(3);
+		expect(window.repeatReadRate.rate).toBeCloseTo(1 / 3);
+	});
+
 	it("counts a repeat read many calls after the listing, with no window", () => {
 		// Recurrence: #5355 r1 counted a repeat read only within three calls of a
 		// listing, so a re-read later in the session scored 0. The maintainer
 		// decided on 2026-11-06 that any second read of a file the session already
 		// read counts. repeat-late.jsonl re-reads its file as the tenth call after
-		// the listing.
+		// the listing: two reads follow the listing, the second a repeat.
 		const window = windowFor("repeat-late.jsonl");
 		expect(window.results.listing).toBe(1);
 		expect(window.repeatReadRate.numerator).toBe(1);
-		expect(window.repeatReadRate.denominator).toBe(1);
+		expect(window.repeatReadRate.denominator).toBe(2);
 	});
 
 	it("never counts a first read, or a read of a different file, as a repeat", () => {
@@ -138,13 +157,13 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.results.listing).toBe(1);
 		expect(window.listedReadRate.numerator).toBe(1);
 		expect(window.repeatReadRate.numerator).toBe(0);
-		expect(window.repeatReadRate.denominator).toBe(1);
+		expect(window.repeatReadRate.denominator).toBe(3);
 	});
 
 	it("does not count a repeat read that comes before the listing", () => {
-		// Recurrence: the repeat check counts only reads after a listing. With no
-		// window, a repeat anywhere in the session would otherwise count every
-		// listing. repeat-before-listing.jsonl repeats a read before its listing;
+		// Recurrence: reads before the first listing are in neither repeatReadRate
+		// count. With no window, a repeat anywhere in the session would otherwise
+		// count. repeat-before-listing.jsonl repeats a read before its listing;
 		// the one read after the listing is a first read of a different file.
 		const window = windowFor("repeat-before-listing.jsonl");
 		expect(window.results.listing).toBe(1);
@@ -152,13 +171,56 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.repeatReadRate.denominator).toBe(1);
 	});
 
-	it("counts an isError result as an error, outside the empty-rate denominator", () => {
+	it("counts an isError result as an error; a lang-only miss is not in emptyRate", () => {
 		// Recurrence: D9 turns silent empties into errors; the isError arm of
 		// classifyResult had no cell (the old unit case matched the text arm).
+		// error.jsonl is a structured `lang` scope, so it is outside D8's
+		// file:/ext: population and counted in structuredScoped.
 		const window = windowFor("error.jsonl");
 		expect(window.results.error).toBe(1);
 		expect(window.results.unknown).toBe(0);
 		expect(window.emptyRate.denominator).toBe(0);
+		expect(window.structuredScoped).toEqual({
+			classified: 1,
+			empty: 0,
+			error: 1,
+		});
+	});
+
+	it("reports emptyRate over inline file:/ext: queries only and counts paths/lang misses apart", () => {
+		// Recurrence: #5355 r1 F2. isScoped counted any `paths`, any `lang` and
+		// inline `lang:`, so the review's census read 4/17 where D8's file:/ext:
+		// population read 0/1. scope-census.jsonl: ext: empty, file: listing,
+		// then a paths, a lang and an inline lang: miss, and an unscoped miss.
+		const window = windowFor("scope-census.jsonl");
+		expect(window.results.empty).toBe(5);
+		expect(window.emptyRate.numerator).toBe(1);
+		expect(window.emptyRate.denominator).toBe(2);
+		expect(window.structuredScoped).toEqual({
+			classified: 3,
+			empty: 3,
+			error: 0,
+		});
+		const summary = formatSummary(
+			buildReport(path.join(FIXTURES, "scope-census.jsonl"), [ALL]),
+		);
+		expect(summary).toContain("structuredScoped=empty 3 error 0 of 3");
+	});
+
+	it("keeps a scoped call that ends in an error in emptyRate's denominator", () => {
+		// Recurrence: #5355 r1 F3. D2 and D9 turn silent empties into loud
+		// errors; the error left the denominator, so the rate fell (2/2 became
+		// 0/1) while the model still got no answer. scoped-error.jsonl: an ext:
+		// miss and an ext: query with a bad lang that errored.
+		const window = windowFor("scoped-error.jsonl");
+		expect(window.results.error).toBe(1);
+		expect(window.emptyRate.numerator).toBe(1);
+		expect(window.emptyRate.denominator).toBe(2);
+		expect(window.scopedError).toBe(1);
+		const summary = formatSummary(
+			buildReport(path.join(FIXTURES, "scoped-error.jsonl"), [ALL]),
+		);
+		expect(summary).toContain("emptyRate=1/2(excluded=0) 0.500 scopedError=1");
 	});
 
 	it("includes rows exactly on the --since and --until instants", () => {
@@ -285,6 +347,215 @@ describe("symbol_search query metrics — parsers", () => {
 				'const a = await tools.symbol_search({ query: "x" });\nconst b = await tools.symbol_search({ query: "y" });',
 			),
 		).toHaveLength(2);
+	});
+
+	// Recurrence: #5355 r1 F4. The regex detector dropped ten real spellings
+	// without a count (alias, destructure, computed key, optional chain, .call,
+	// another receiver, an interpolated call, a regex literal holding a quote).
+	// The gate admits `tools.symbol_search(` and `globalThis.tools.symbol_search(`
+	// called with a static object, and every other occurrence of the identifier
+	// is unscannable. The 25 spellings are the review's table.
+	const U = { unscannable: true };
+	const S = { unscannable: false, args: { query: "ext:ts a" } };
+	const FORMS: Array<[string, string, unknown[]]> = [
+		[
+			"literal",
+			'return await tools.symbol_search({ query: "ext:ts a" });',
+			[S],
+		],
+		["comment", '// tools.symbol_search({query:"ext:ts a"})\nreturn 1;', []],
+		["string", 'const s = "tools.symbol_search({query: 1})"; return s;', []],
+		["template text", 'return `tools.symbol_search({ query: "x" })`;', []],
+		[
+			"template interpolation",
+			'return `${await tools.symbol_search({ query: "ext:ts a" })}`;',
+			[S],
+		],
+		[
+			"alias",
+			'const s = tools.symbol_search; return await s({ query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"destructure",
+			'const { symbol_search } = tools; return await symbol_search({ query: "ext:ts a" });',
+			[U, U],
+		],
+		[
+			"computed string key",
+			'return await tools["symbol_search"]({ query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"computed template key",
+			'return await tools[`symbol_search`]({ query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"optional chain",
+			'return await tools?.symbol_search({ query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"call form",
+			'return await tools.symbol_search.call(null, { query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"other receiver",
+			'const subtools = {symbol_search: async()=>1}; return await subtools.symbol_search({ query: "ext:ts a" });',
+			[U, U],
+		],
+		[
+			"regex literal with a quote",
+			'const re = /"/; return await tools.symbol_search({ query: "ext:ts a" });',
+			[S],
+		],
+		[
+			"regex literal with an apostrophe",
+			'const re = /\'/g; return await tools.symbol_search({ query: "ext:ts a" });',
+			[S],
+		],
+		[
+			"non-literal argument",
+			'const o = { query: "ext:ts a" }; return await tools.symbol_search(o);',
+			[U],
+		],
+		[
+			"spread inside the literal",
+			'return await tools.symbol_search({ ...{query:"ext:ts a"} });',
+			[U],
+		],
+		[
+			"trailing comma after the argument",
+			'return await tools.symbol_search({ query: "ext:ts a" },);',
+			[S],
+		],
+		[
+			"concatenated query",
+			'return await tools.symbol_search({ query: "ext:" + "ts a" });',
+			[U],
+		],
+		[
+			"comment holding a paren inside the argument",
+			'return await tools.symbol_search({ query: "ext:ts a" /* ) */ });',
+			[S],
+		],
+		[
+			"pilens_ name",
+			'return await tools.pilens_symbol_search({ query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"mcp receiver",
+			'return await mcp.pilens_symbol_search({ query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"arrow wrapper",
+			'const f = (a) => tools.symbol_search(a); return await f({query:"ext:ts a"});',
+			[U],
+		],
+		[
+			"apostrophe in a comment before the call",
+			'// it\'s a comment\nreturn await tools.symbol_search({ query: "ext:ts a" });',
+			[S],
+		],
+		[
+			"receiver bound to a variable",
+			'const t = tools; return await t.symbol_search({ query: "ext:ts a" });',
+			[U],
+		],
+		[
+			"globalThis receiver",
+			'return await globalThis.tools.symbol_search({ query: "ext:ts a" });',
+			[S],
+		],
+	];
+
+	it.each(FORMS)("codemode form: %s", (_name, script, expected) => {
+		expect(findCodemodeSymbolSearchArgs(script)).toEqual(expected);
+	});
+
+	it("does not read a symbol_search-suffixed or -prefixed name as the tool", () => {
+		expect(
+			findCodemodeSymbolSearchArgs(
+				"tools.mysymbol_search({ a: 1 }); tools.symbol_searcher({ a: 1 });",
+			),
+		).toEqual([]);
+	});
+
+	it("treats a script that does not parse as unscannable once per token", () => {
+		// A script the parser rejects cannot be read, so no occurrence may be
+		// dropped: two tokens, two unscannable entries (a comment's token too).
+		expect(
+			findCodemodeSymbolSearchArgs(
+				'const q = ;\n// symbol_search\nawait tools.symbol_search({ query: "ext:ts a" });',
+			),
+		).toEqual([U, U]);
+		expect(findCodemodeSymbolSearchArgs("const q = ;")).toEqual([]);
+	});
+
+	it("counts every dropped spelling as unscannable through buildReport", () => {
+		// One codemode row per form; the result text is irrelevant to scanning.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ssqm-forms-"));
+		try {
+			const rows: string[] = [
+				JSON.stringify({
+					type: "session",
+					cwd: "/work",
+					timestamp: "2026-11-01T00:00:00Z",
+				}),
+			];
+			FORMS.forEach(([, script], index) => {
+				const id = `f${index}`;
+				const at = `2026-11-01T00:00:${String(index).padStart(2, "0")}Z`;
+				rows.push(
+					JSON.stringify({
+						type: "message",
+						timestamp: at,
+						message: {
+							role: "assistant",
+							content: [
+								{
+									type: "toolCall",
+									id,
+									name: "codemode",
+									arguments: { code: script },
+								},
+							],
+						},
+					}),
+					JSON.stringify({
+						type: "message",
+						timestamp: at,
+						message: {
+							role: "toolResult",
+							toolCallId: id,
+							toolName: "codemode",
+							content: [
+								{ type: "text", text: "Script completed\nOutput:\nnull" },
+							],
+							isError: false,
+						},
+					}),
+				);
+			});
+			fs.writeFileSync(path.join(dir, "forms.jsonl"), `${rows.join("\n")}\n`);
+			const window = buildReport(dir, [ALL]).windows[0];
+			const noCall = FORMS.filter(
+				([, , expected]) => expected.length === 0,
+			).length;
+			const withUnscannable = FORMS.filter(([, , expected]) =>
+				expected.some(
+					(entry) => (entry as { unscannable: boolean }).unscannable,
+				),
+			).length;
+			expect(window.calls.discovered).toBe(FORMS.length - noCall);
+			expect(window.calls.unscannable).toBe(withUnscannable);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("classifies an isError result whose text names no known error", () => {

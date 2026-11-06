@@ -32,6 +32,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parseSync } from "oxc-parser";
 import { isMainModule } from "./lib/is-main-module.mjs";
 
 export const DEFAULT_CORPUS = path.join(
@@ -47,8 +48,8 @@ const D9_PATCH_BOUNDARY = "2026-11-04T22:13:00Z";
 const EXT_SUFFIX_BOUNDARY = "2026-11-04T22:38:00Z";
 
 const SYMBOL_SEARCH_NAMES = new Set(["symbol_search", "pilens_symbol_search"]);
-const CODEMODE_CALL = /tools\s*\.\s*symbol_search\s*\(/g;
-const INLINE_FILTER = /(^|\s)-?(?:file|ext|lang):/;
+const FILE_EXT_FILTER = /(^|\s)-?(?:file|ext):/;
+const LANG_FILTER = /(^|\s)-?lang:/;
 const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/y;
 const FOLLOW_UP_WINDOW = 3;
 const WHOLE_FILE_VIEWERS = new Set(["cat", "bat", "less", "more", "nl"]);
@@ -364,133 +365,125 @@ export function extractStaticObject(source) {
 	}
 }
 
-/** The source text of the first argument of the call opening at `openIndex`. */
-function firstArgumentSource(source, openIndex) {
-	let depth = 0;
-	let quote = null;
-	for (let index = openIndex; index < source.length; index++) {
-		const ch = source[index];
-		if (quote) {
-			if (ch === "\\") {
-				index++;
-				continue;
-			}
-			if (ch === quote) quote = null;
-			continue;
-		}
-		if (ch === '"' || ch === "'" || ch === "`") {
-			quote = ch;
-			continue;
-		}
-		if (ch === "(" || ch === "[" || ch === "{") {
-			depth++;
-			continue;
-		}
-		if (ch === ")" || ch === "]" || ch === "}") {
-			depth--;
-			if (depth === 0) return source.slice(openIndex + 1, index);
-			continue;
-		}
-		if (ch === "," && depth === 1) {
-			return source.slice(openIndex + 1, index);
-		}
+const SYMBOL_SEARCH_NAME = /^(?:pilens_)?symbol_search$/;
+const SYMBOL_SEARCH_TOKEN =
+	/(?<![A-Za-z0-9_$])(?:pilens_)?symbol_search(?![A-Za-z0-9_$])/g;
+
+function isPlainIdentifier(node, name) {
+	return node?.type === "Identifier" && node.name === name;
+}
+
+/**
+ * `tools.symbol_search(` or `globalThis.tools.symbol_search(`: a direct,
+ * non-optional call through a plain member chain. The one admitted spelling.
+ */
+function isAdmittedCall(node) {
+	if (node.type !== "CallExpression" || node.optional) return false;
+	const callee = node.callee;
+	if (
+		callee?.type !== "MemberExpression" ||
+		callee.computed ||
+		callee.optional
+	) {
+		return false;
+	}
+	if (!isPlainIdentifier(callee.property, "symbol_search")) return false;
+	const receiver = callee.object;
+	if (isPlainIdentifier(receiver, "tools")) return true;
+	return (
+		receiver?.type === "MemberExpression" &&
+		!receiver.computed &&
+		!receiver.optional &&
+		isPlainIdentifier(receiver.object, "globalThis") &&
+		isPlainIdentifier(receiver.property, "tools")
+	);
+}
+
+function computedKeyName(node) {
+	if (node?.type === "Literal" && typeof node.value === "string") {
+		return node.value.trim();
+	}
+	if (node?.type === "TemplateLiteral" && node.expressions.length === 0) {
+		return String(node.quasis[0]?.value?.cooked ?? "").trim();
 	}
 	return undefined;
 }
 
-/**
- * A same-length copy of `source` with comment bodies and string/template
- * literal bodies replaced by spaces, so a `tools.symbol_search(` spelling that
- * appears only in a comment or a string is never read as a call. Escapes keep
- * their two-character width and newlines are preserved, so every index in the
- * copy addresses the same character of the original.
- */
-function codeOnlySource(source) {
-	const text = String(source);
-	let out = "";
-	let index = 0;
-	while (index < text.length) {
-		const ch = text[index];
-		if (ch === "/" && text[index + 1] === "/") {
-			while (index < text.length && text[index] !== "\n") {
-				out += " ";
-				index++;
-			}
-			continue;
-		}
-		if (ch === "/" && text[index + 1] === "*") {
-			out += "  ";
-			index += 2;
-			while (
-				index < text.length &&
-				!(text[index] === "*" && text[index + 1] === "/")
-			) {
-				out += text[index] === "\n" ? "\n" : " ";
-				index++;
-			}
-			if (index < text.length) {
-				out += "  ";
-				index += 2;
-			}
-			continue;
-		}
-		if (ch === '"' || ch === "'" || ch === "`") {
-			out += " ";
-			index++;
-			while (index < text.length) {
-				const inner = text[index];
-				if (inner === "\\") {
-					out += "  ";
-					index += 2;
-					continue;
-				}
-				out += inner === "\n" ? "\n" : " ";
-				index++;
-				if (inner === ch) break;
-			}
-			continue;
-		}
-		out += ch;
-		index++;
+/** A call's first argument as a static object, or `{ unscannable: true }`. */
+function admittedCallEntry(call, source) {
+	if (call.arguments.length === 0) return { unscannable: false, args: {} };
+	const first = call.arguments[0];
+	if (first.type === "SpreadElement") return { unscannable: true };
+	const args = extractStaticObject(source.slice(first.start, first.end));
+	if (
+		args === undefined ||
+		args === null ||
+		typeof args !== "object" ||
+		Array.isArray(args)
+	) {
+		return { unscannable: true };
 	}
-	return out;
+	return { unscannable: false, args };
 }
 
 /**
- * Every `tools.symbol_search(...)` call in a codemode script, each reduced to
- * its static arguments or to `{ unscannable: true }` when the first argument
- * is not a static object literal.
+ * Every occurrence of the identifier `symbol_search` in a codemode script's
+ * code, each reduced to its static arguments or to `{ unscannable: true }`.
+ * Comments and string text are not code, so they are not occurrences.
+ *
+ * The gate fails closed (principles section 1): it admits `tools.symbol_search(`
+ * and `globalThis.tools.symbol_search(` called directly with a static object
+ * literal, and nothing else. Every other occurrence of the identifier is
+ * `unscannable`: an alias, a destructure, a property key, an optional chain, a
+ * `.call`, another receiver (`subtools.`), the `pilens_` name, and a computed
+ * key spelled as a string (`tools["symbol_search"]`). A script that does not
+ * parse is unscannable once per `symbol_search` token it spells, comments
+ * included. A spelling with no `symbol_search` token (a name built by
+ * concatenation, a `tools[name]` lookup) cannot be seen by an identifier gate.
  */
 export function findCodemodeSymbolSearchArgs(script) {
 	const text = String(script ?? "");
-	const code = codeOnlySource(text);
-	const found = [];
-	CODEMODE_CALL.lastIndex = 0;
-	let match;
-	while ((match = CODEMODE_CALL.exec(code))) {
-		const openIndex = match.index + match[0].length - 1;
-		const argument = firstArgumentSource(text, openIndex);
-		if (argument === undefined) {
-			found.push({ unscannable: true });
-			continue;
-		}
-		if (argument.trim() === "") {
-			found.push({ unscannable: false, args: {} });
-			continue;
-		}
-		const args = extractStaticObject(argument);
-		if (
-			args === undefined ||
-			args === null ||
-			typeof args !== "object" ||
-			Array.isArray(args)
-		) {
-			found.push({ unscannable: true });
-		} else {
-			found.push({ unscannable: false, args });
-		}
+	// A codemode script is an async function body: it may `return` and `await`.
+	const prefix = "(async () => {\n";
+	const source = `${prefix}${text}\n})`;
+	const parsed = parseSync("codemode.js", source, {
+		lang: "js",
+		sourceType: "script",
+	});
+	if (parsed.errors.length > 0) {
+		return Array.from(text.matchAll(SYMBOL_SEARCH_TOKEN), () => ({
+			unscannable: true,
+		}));
 	}
-	return found;
+	const found = new Map();
+	const handled = new Set();
+	const visit = (node) => {
+		if (Array.isArray(node)) {
+			for (const child of node) visit(child);
+			return;
+		}
+		if (node === null || typeof node !== "object") return;
+		if (isAdmittedCall(node)) {
+			handled.add(node.callee.property.start);
+			found.set(node.start, admittedCallEntry(node, source));
+		} else if (
+			node.type === "Identifier" &&
+			SYMBOL_SEARCH_NAME.test(node.name) &&
+			!handled.has(node.start)
+		) {
+			found.set(node.start, { unscannable: true });
+		} else if (
+			node.type === "MemberExpression" &&
+			node.computed &&
+			computedKeyName(node.property) !== undefined &&
+			SYMBOL_SEARCH_NAME.test(computedKeyName(node.property))
+		) {
+			found.set(node.property.start, { unscannable: true });
+		}
+		for (const value of Object.values(node)) visit(value);
+	};
+	visit(parsed.program);
+	return [...found].sort((a, b) => a[0] - b[0]).map(([, entry]) => entry);
 }
 
 // ---------------------------------------------------------------------------
@@ -776,14 +769,18 @@ function discoverCalls(calls) {
 	return discovered;
 }
 
-function isScoped(args) {
+/** D8 population: an inline `file:` or `ext:` filter in the query text. */
+function isFileExtScoped(args) {
 	if (args === null || typeof args !== "object") return false;
-	if (typeof args.query === "string" && INLINE_FILTER.test(args.query)) {
-		return true;
-	}
+	return typeof args.query === "string" && FILE_EXT_FILTER.test(args.query);
+}
+
+/** Scoped by `paths` / `lang` (argument or inline `lang:`) but not by file:/ext:. */
+function isStructuredScoped(args) {
+	if (args === null || typeof args !== "object") return false;
 	if (Array.isArray(args.paths) && args.paths.length > 0) return true;
 	if (typeof args.lang === "string" && args.lang.trim() !== "") return true;
-	return false;
+	return typeof args.query === "string" && LANG_FILTER.test(args.query);
 }
 
 function readCallPaths(call) {
@@ -812,9 +809,14 @@ function emptyTotals() {
 		unknown: 0,
 		scopedClassified: 0,
 		scopedEmpty: 0,
+		scopedError: 0,
+		structuredClassified: 0,
+		structuredEmpty: 0,
+		structuredError: 0,
 		listingTotal: 0,
 		listedRead: 0,
 		repeatRead: 0,
+		readsAfterListing: 0,
 		drilldown: 0,
 	};
 }
@@ -840,9 +842,9 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 		}
 		return repeat;
 	});
-	// A listing counts once when a repeat read comes after it, at any distance:
-	// the repeat rule has no window (#5355 maintainer decision, 2026-11-06).
-	const lastRepeatCall = isRepeatRead.lastIndexOf(true);
+	// The first listing the session got. repeatReadRate counts reads after it
+	// (a per-read unit, no window), so a long session does not drive it to 1.
+	let firstListingIndex = -1;
 	for (const entry of discoverCalls(calls)) {
 		totals.discovered++;
 		if (entry.unscannable) {
@@ -856,12 +858,22 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 		}
 		const classification = classifyResult(result.text, result.isError);
 		totals[classification]++;
+		// An error is not an answer: it stays in the denominator (D9 turns silent
+		// empties into errors, and a rate that fell by that move would mislead).
 		if (
-			(classification === "listing" || classification === "empty") &&
-			isScoped(entry.args)
+			classification === "listing" ||
+			classification === "empty" ||
+			classification === "error"
 		) {
-			totals.scopedClassified++;
-			if (classification === "empty") totals.scopedEmpty++;
+			if (isFileExtScoped(entry.args)) {
+				totals.scopedClassified++;
+				if (classification === "empty") totals.scopedEmpty++;
+				if (classification === "error") totals.scopedError++;
+			} else if (isStructuredScoped(entry.args)) {
+				totals.structuredClassified++;
+				if (classification === "empty") totals.structuredEmpty++;
+				if (classification === "error") totals.structuredError++;
+			}
 		}
 		if (classification !== "listing") continue;
 		totals.listingTotal++;
@@ -876,7 +888,9 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 			),
 		);
 		if (listedRead) totals.listedRead++;
-		if (lastRepeatCall > entry.index) totals.repeatRead++;
+		if (firstListingIndex === -1 || entry.index < firstListingIndex) {
+			firstListingIndex = entry.index;
+		}
 		if (
 			followUps.some(
 				(call) =>
@@ -884,6 +898,13 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 			)
 		) {
 			totals.drilldown++;
+		}
+	}
+	if (firstListingIndex !== -1) {
+		for (let index = firstListingIndex + 1; index < calls.length; index++) {
+			if (readCallPaths(calls[index]).length === 0) continue;
+			totals.readsAfterListing++;
+			if (isRepeatRead[index]) totals.repeatRead++;
 		}
 	}
 	return totals;
@@ -929,8 +950,8 @@ function summarizeWindow(window, totals, parseErrors) {
 		),
 		repeatReadRate: makeRate(
 			totals.repeatRead,
-			totals.listingTotal,
-			totals.discovered,
+			totals.readsAfterListing,
+			totals.readsAfterListing,
 		),
 		drilldownRate: makeRate(
 			totals.drilldown,
@@ -942,6 +963,12 @@ function summarizeWindow(window, totals, parseErrors) {
 			totals.discovered,
 			totals.discovered,
 		),
+		scopedError: totals.scopedError,
+		structuredScoped: {
+			classified: totals.structuredClassified,
+			empty: totals.structuredEmpty,
+			error: totals.structuredError,
+		},
 		parseErrors,
 	};
 }
@@ -995,9 +1022,10 @@ function rateText(rate) {
 }
 
 const RATE_DEFINITIONS = [
-	"emptyRate = scoped searches (inline file:/ext:/lang:, paths or lang argument) that matched no file / scoped searches that listed or came back empty; errors are not in it",
+	"emptyRate = searches with an inline file: or ext: filter that matched no file / those searches that listed, came back empty or errored (an error is not an answer, so it stays in the denominator; scopedError counts them)",
+	"structuredScoped = searches scoped by paths or lang (argument or inline lang:) without file:/ext:: classified, empty and error counts, not a rate (D8 does not name them)",
 	"listedReadRate = listings followed within 3 tool calls by a read (read, read_symbol, read_enclosing, or a bash cat/head/tail/sed -n view) of a listed file / listings",
-	"repeatReadRate = listings followed later in the session by a read of a file the session had already read (a second read, no window) / listings",
+	"repeatReadRate = reads after the session's first symbol_search listing that target a file the session had already read (no window) / all reads after that listing; reads before it are in neither count",
 	"drilldownRate = listings followed within 3 tool calls by module_report or lsp_navigation / listings",
 	"unscannableRate = codemode calls whose symbol_search arguments are not a static literal / discovered calls",
 	"n/a = the denominator is 0 (no rate); excluded = discovered calls outside the denominator",
@@ -1015,7 +1043,8 @@ export function formatSummary(report) {
 				`unscannable=${window.calls.unscannable} unpaired=${window.calls.unpaired} ` +
 				`listing=${window.results.listing} empty=${window.results.empty} ` +
 				`error=${window.results.error} unknown=${window.results.unknown} ` +
-				`emptyRate=${rateText(window.emptyRate)} ` +
+				`emptyRate=${rateText(window.emptyRate)} scopedError=${window.scopedError} ` +
+				`structuredScoped=empty ${window.structuredScoped.empty} error ${window.structuredScoped.error} of ${window.structuredScoped.classified} ` +
 				`listedReadRate=${rateText(window.listedReadRate)} ` +
 				`repeatReadRate=${rateText(window.repeatReadRate)} ` +
 				`drilldownRate=${rateText(window.drilldownRate)} ` +

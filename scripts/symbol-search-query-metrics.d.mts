@@ -34,6 +34,10 @@ export interface MetricsWindowReport {
 	repeatReadRate: MetricsRate;
 	drilldownRate: MetricsRate;
 	unscannableRate: MetricsRate;
+	/** Inline file:/ext: searches that ended in an error (in `emptyRate`'s denominator). */
+	scopedError: number;
+	/** Searches scoped by paths or lang without file:/ext:; not a rate. */
+	structuredScoped: { classified: number; empty: number; error: number };
 	parseErrors: number;
 }
 
