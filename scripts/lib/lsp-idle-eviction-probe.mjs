@@ -9,6 +9,7 @@
 // real child. `createServiceDriver` is the production driver over an
 // `LSPService`; tests run it over the real service class with fake clients.
 
+import * as fs from "node:fs";
 import { isAuxiliary } from "../../dist/clients/lsp/server-traits.js";
 import { touchAnsweredDiagnostics } from "./touch-result.mjs";
 
@@ -448,6 +449,62 @@ export function createServiceDriver(args) {
 				throw err;
 			}
 			return restore;
+		},
+	};
+}
+
+/**
+ * The fixture half of a nightly driver, spread into `createServiceDriver`:
+ * `prepare` copies the fixture into a scratch workspace, runs its setup and
+ * names the target file; `dispose` removes the workspace. `prepare` answers a
+ * reason only for a fixture it could not set up or a file no configured
+ * server claims.
+ *
+ * #5323: nothing here consults the installer. The LSP spawn path provisions
+ * each server through its own installer (gopls through `go install`, for
+ * one), so the old pre-gate on the installer registry marked go, ruby,
+ * csharp, fsharp and dart unavailable in run 42039488753 while the same run
+ * handshook all five.
+ *
+ * @param {Record<string, any>} fx  the smoke fixture
+ * @param {{ absFile: string, content: string }} target  filled by `prepare`
+ * @param {{
+ *   lsp: { supportsLSP(file: string): boolean },
+ *   bootstrapFixtureWorkspace: (fx: Record<string, any>, opts: Record<string, unknown>) => Promise<{ absFile: string, workspace: string, cleanup: () => void }>,
+ *   initLSPConfig: (workspace: string) => Promise<unknown>,
+ *   repoRoot: string,
+ *   runFixtureSetup: (setup: unknown, workspace: string, verbose: boolean) => { ok: boolean },
+ *   ensureSmokeLombokJar: (workspace: string, verbose: boolean) => Promise<unknown>,
+ * }} deps
+ * @returns {{ prepare: () => Promise<string | undefined>, dispose: () => Promise<void> }}
+ */
+export function fixtureWorkspaceLifecycle(fx, target, deps) {
+	let cleanup = () => {};
+	return {
+		async prepare() {
+			const boot = await deps.bootstrapFixtureWorkspace(fx, {
+				initLSPConfig: deps.initLSPConfig,
+				repoRoot: deps.repoRoot,
+				tmpPrefix: "idle-evict-",
+			});
+			cleanup = boot.cleanup;
+			target.absFile = boot.absFile;
+			if (fx.setup && !deps.runFixtureSetup(fx.setup, boot.workspace, false).ok)
+				return "setup-failed";
+			if (fx.lombokJar) {
+				try {
+					await deps.ensureSmokeLombokJar(boot.workspace, false);
+				} catch {
+					return "setup-failed";
+				}
+			}
+			target.content = fs.readFileSync(boot.absFile, "utf8");
+			return deps.lsp.supportsLSP(boot.absFile)
+				? undefined
+				: "server-not-started";
+		},
+		async dispose() {
+			cleanup();
 		},
 	};
 }

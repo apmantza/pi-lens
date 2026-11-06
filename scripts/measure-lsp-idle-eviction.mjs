@@ -46,6 +46,7 @@ import {
 } from "./lib/lsp-idle-eviction-doc.mjs";
 import {
 	createServiceDriver,
+	fixtureWorkspaceLifecycle,
 	measureRegistry,
 	probeServer,
 	residentTreeBytes,
@@ -167,7 +168,6 @@ const rows = await measureRegistry({
 			budgets,
 			createDriver: (fx) => {
 				const target = { absFile: "", content: "" };
-				let cleanup = () => {};
 				return createServiceDriver({
 					lsp,
 					server,
@@ -180,34 +180,14 @@ const rows = await measureRegistry({
 					residentBytesOf,
 					now: () => Date.now(),
 					sleep,
-					async prepare() {
-						const boot = await bootstrapFixtureWorkspace(fx, {
-							initLSPConfig,
-							repoRoot,
-							tmpPrefix: "idle-evict-",
-						});
-						cleanup = boot.cleanup;
-						target.absFile = boot.absFile;
-						if (
-							fx.setup &&
-							!runFixtureSetup(fx.setup, boot.workspace, false).ok
-						)
-							return "setup-failed";
-						if (fx.lombokJar) {
-							try {
-								await ensureSmokeLombokJar(boot.workspace, false);
-							} catch {
-								return "setup-failed";
-							}
-						}
-						target.content = fs.readFileSync(boot.absFile, "utf8");
-						return lsp.supportsLSP(boot.absFile)
-							? undefined
-							: "server-not-started";
-					},
-					async dispose() {
-						cleanup();
-					},
+					...fixtureWorkspaceLifecycle(fx, target, {
+						lsp,
+						bootstrapFixtureWorkspace,
+						initLSPConfig,
+						repoRoot,
+						runFixtureSetup,
+						ensureSmokeLombokJar,
+					}),
 				});
 			},
 		});
