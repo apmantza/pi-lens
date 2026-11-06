@@ -293,10 +293,12 @@ export function checkCleanSignalDrift(row, silentOnClean) {
 			detail: `observed=${behavior} — not a comparable classification (never collapsed into silent/not-silent)`,
 		};
 	}
-	// #5348: `silentOnClean` is read for a file's PRIMARY server only (the cascade
-	// classifier resolves the non-auxiliary server, the aggregate and silent-confirm
-	// gates are primary-scoped), so no marker can change an auxiliary's wait and
-	// a `silent-not-marked` for one is a finding nobody can act on.
+	// #5348: `silentOnClean` is read in primary-scoped gates (the cascade
+	// classifier resolves the non-auxiliary server; the aggregate and
+	// silent-confirm gates are primary-scoped) and in the warm-up gate only for a
+	// server with `workspaceIndexing`, which no auxiliary sets. So no marker can
+	// change an auxiliary's wait, and a `silent-not-marked` for one is a finding
+	// nobody can act on.
 	if (row.auxiliary === true) {
 		return {
 			lang,

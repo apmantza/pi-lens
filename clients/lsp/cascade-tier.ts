@@ -39,9 +39,10 @@
  * inside the cold-snapshot budget, so the cascade classifies it as
  * `collect-later`, and the shared server policy remains `waits`, so
  * main-lane behavior does not change. The probe reads native-ts7 silent on a
- * clean file (#5348), which does not move it into `tier3-silent`: that tier
- * reads a lapsed wait as clean, and nothing shows this server publishes a
- * file's errors inside the budget. `scripts/probe-clean-signal.mjs` reports
+ * clean file (#5348), which does not move it into `tier3-silent`: for that
+ * tier `touchFile`'s silent-confirm gate reads a lapsed wait as clean (the
+ * cascade lane itself leaves silence unconfirmed), and nothing shows this
+ * server publishes a file's errors inside the budget. `scripts/probe-clean-signal.mjs` reports
  * the silence as a drift finding for a human to decide.
  */
 

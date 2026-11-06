@@ -133,10 +133,11 @@ if (install) {
 // #4615's per-document attribution of the publish trace. Since then the clean
 // fixture reads silent (#5348), so the nightly files `silent-not-marked` for it.
 // That finding is the signal this expectation exists to raise: a human decides
-// whether native TS7 may skip the wait. It has not been decided in favour,
-// because the marker reads a lapsed wait as clean and the probe's small fixtures
-// do not show that native TS7 publishes a file's errors inside the budget (see
-// `silentOnClean` in wait-policy/strategies.ts).
+// whether native TS7 may skip the wait. The expectation stays false pending a
+// maintainer decision and a latency measurement (#5348): the marker lets the
+// silent-confirm gate read a lapsed wait as clean, and the probe's small
+// fixtures do not show that native TS7 publishes a file's errors inside the
+// budget (see `silentOnClean` in wait-policy/strategies.ts).
 const NATIVE_TS7_LANGS = new Set(["typescript7", "typescript7-clean"]);
 
 function lookupSilentOnClean(lang) {
@@ -312,7 +313,8 @@ const unk = rows.filter((r) => r.behavior === "unknown").length;
 // observation surfaces as `silent-not-marked`, a real signal, not a skipped row.
 // #5348: auxiliary rows (fallow, ast-grep, opengrep, zizmor, typos) are
 // not-comparable (`row.auxiliary`, set by probe-fixture.mjs): wait-policy reads
-// the marker for a file's primary server only.
+// the marker in primary-scoped gates, and in the warm-up gate only for a
+// server with `workspaceIndexing`, which no auxiliary sets.
 // #3444: one row per strategy key (findCleanSignalDrift aggregates), so two fixtures of one
 // server (ast-grep, ast-grep-baseline) are judged together against its single
 // marker, and a degenerate silent row never counts.

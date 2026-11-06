@@ -840,10 +840,11 @@ describe("auxiliary rows are not drift inputs (#5348)", () => {
 	// Recurrence it prevents: fallow-lsp (an auxiliary) published once on open
 	// and then nothing on any unsaved edit, so the probe's dirty-fixture neutral
 	// edit classified it `silent` and the nightly filed `silent-not-marked`
-	// every night from 2026-11-03. The `silentOnClean` marker is read for a
-	// file's PRIMARY server only (cascade classifier, aggregate and silent-confirm
-	// gates), so no marker could change an auxiliary's wait and the finding
-	// could never be acted on.
+	// every night from 2026-11-03. The `silentOnClean` marker is read in
+	// primary-scoped gates (cascade classifier, aggregate and silent-confirm) and
+	// in the warm-up gate only for a server with `workspaceIndexing`, which no
+	// auxiliary sets, so no marker could change an auxiliary's wait and the
+	// finding could never be acted on.
 	const fallowRow = {
 		lang: "fallow",
 		behavior: "silent",
