@@ -245,3 +245,6 @@ tests/native-ts7-live-*/
 
 # Vitest module cache, one per worktree (fsModuleCachePath, #5206)
 .vitest-cache/
+
+# Reviewer findings and their blind copy at the worktree root (docs/pi-lens-reviewer.md); never committed (#5319)
+/FINDINGS_*.json
