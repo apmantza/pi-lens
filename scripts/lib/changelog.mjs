@@ -483,11 +483,11 @@ function cleanGist(rest, maxGist) {
 // Likely-duplicate finder (#5351): two entries of one section and one area that
 // describe the same change. Two signals: the headlines share most of their
 // words, or the entries share enough code spans (tool names, flags, file
-// extensions). Both bars are set from the CHANGELOG sections of 4.4.5 to 4.4.9.
+// extensions). Both bars are set from the CHANGELOG sections of 4.4.7 to 4.4.9.
 // The v4.4.9 LSP-timeout headlines overlap at 0.42; the closest distinct pair
-// in 4.4.9 scores 0.27 and in 4.4.7 to 4.4.9 0.33, so the bar sits at 0.4. The
-// two v4.4.9 Groovy headlines share one word, but the entries share six code
-// spans; no other pair of 4.4.5 to 4.4.9 shares more than two.
+// of those three releases scores 0.29, so the bar sits at 0.4. The two v4.4.9
+// Groovy headlines share one word, but the entries share six code spans; no
+// other pair of the three shares more than two.
 export const DUPLICATE_HEADLINE_OVERLAP = 0.4;
 export const DUPLICATE_SHARED_CODE_SPANS = 3;
 
