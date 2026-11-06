@@ -81,6 +81,7 @@ import {
 	projectRulePolicy,
 	resolveDispatchPolicyConfigForFile,
 	rulePolicyMapFromResolution,
+	ruleThresholdFromResolution,
 } from "./rule-policy.js";
 import {
 	DISABLED_BY_CONFIG_SKIP_REASON,
@@ -434,6 +435,10 @@ export function createDispatchContext(
 		facts,
 		projectConfig,
 		rulePolicy,
+		// Same resolution as `rulePolicy`, so a rule threshold follows the
+		// edited file's nearest `.pi-lens.json` field by field (#5292).
+		ruleThreshold: (ruleId) =>
+			ruleThresholdFromResolution(policyConfig, ruleId),
 		...(disabledRunnerIds !== undefined && { disabledRunnerIds }),
 		blockingOnly,
 		modifiedRanges,

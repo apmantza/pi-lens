@@ -26,8 +26,7 @@ export const highFanOutRule: FactRule = {
 			) ?? [];
 
 		const diagnostics: Diagnostic[] = [];
-		const configuredFanOutThreshold =
-			ctx.projectConfig?.rules["high-fan-out"]?.threshold;
+		const configuredFanOutThreshold = ctx.ruleThreshold?.("high-fan-out");
 		const activeFanOutThreshold =
 			configuredFanOutThreshold ?? DEFAULT_HIGH_FAN_OUT_THRESHOLD;
 

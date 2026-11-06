@@ -226,10 +226,11 @@ registerRule(commentedCredentialsRule);
 /**
  * Load a project's `.pi-lens.json` config.
  *
- * Rule thresholds are consumed from `DispatchContext.projectConfig` during rule
- * evaluation, not applied to process-global module state. Keeping this helper as
- * a thin loader preserves the existing integration seam while avoiding
- * cross-workspace threshold bleed when multiple dispatches overlap.
+ * Rule thresholds are consumed from `DispatchContext.ruleThreshold` during rule
+ * evaluation (the file's config owner, #5292), not applied to process-global
+ * module state. Keeping this helper as a thin loader preserves the existing
+ * integration seam while avoiding cross-workspace threshold bleed when multiple
+ * dispatches overlap.
  */
 export function applyProjectLensConfig(cwd: string): PiLensProjectConfig {
 	return loadPiLensProjectConfig(cwd);
