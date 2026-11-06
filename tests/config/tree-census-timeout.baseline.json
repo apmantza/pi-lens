@@ -68,6 +68,7 @@
 	{"file":"tests/clients/toolchain-client-singleton.test.ts","title":"\"the construction scan still detects a construction site\"","reason":"pre-existing, census widened in #4967"},
 	{"file":"tests/clients/worker-message-boundary-ratchet.test.ts","title":"\"finds every message handler in the shipped trees contained\"","reason":"pre-existing, census widened in #4967"},
 	{"file":"tests/clients/worker-message-boundary-ratchet.test.ts","title":"\"pins the population in both directions\"","reason":"pre-existing, census widened in #4967"},
+	{"file":"tests/config/tla-coverage-governance.test.ts","title":"\"requires every module-level helper hit to have a map row\"","reason":"pre-existing, census widened in #4967"},
 	{"file":"tests/scripts/ci-shuffle-census.test.ts","title":"\"finds no gap between the census plan and the real vitest projects\"","reason":"pre-existing, census widened in #4967"},
 	{"file":"tests/scripts/dist-freshness.test.ts","title":"\"keeps DIST_IMPORTS complete for static scripts/lib dist imports (#4239)\"","reason":"pre-existing, census widened in #4967"},
 	{"file":"tests/scripts/markdown-lexer.test.ts","title":"\"over every markdown file in the repository and the sample characters\"","reason":"pre-existing, census widened in #4967"},
