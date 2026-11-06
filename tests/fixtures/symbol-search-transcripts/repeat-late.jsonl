@@ -4,4 +4,10 @@
 {"type":"message","id":"a-read1","parentId":null,"timestamp":"2026-11-05T00:00:03Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"read1","name":"read","arguments":{"path":"clients/other.ts"}}]}}
 {"type":"message","id":"a-bash1","parentId":null,"timestamp":"2026-11-05T00:00:04Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash1","name":"bash","arguments":{"command":"echo one"}}]}}
 {"type":"message","id":"a-bash2","parentId":null,"timestamp":"2026-11-05T00:00:05Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash2","name":"bash","arguments":{"command":"echo two"}}]}}
-{"type":"message","id":"a-read2","parentId":null,"timestamp":"2026-11-05T00:00:06Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"read2","name":"read","arguments":{"path":"clients/other.ts"}}]}}
+{"type":"message","id":"a-bash3","parentId":null,"timestamp":"2026-11-05T00:00:06Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash3","name":"bash","arguments":{"command":"echo three"}}]}}
+{"type":"message","id":"a-bash4","parentId":null,"timestamp":"2026-11-05T00:00:07Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash4","name":"bash","arguments":{"command":"echo four"}}]}}
+{"type":"message","id":"a-bash5","parentId":null,"timestamp":"2026-11-05T00:00:08Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash5","name":"bash","arguments":{"command":"echo five"}}]}}
+{"type":"message","id":"a-bash6","parentId":null,"timestamp":"2026-11-05T00:00:09Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash6","name":"bash","arguments":{"command":"echo six"}}]}}
+{"type":"message","id":"a-bash7","parentId":null,"timestamp":"2026-11-05T00:00:10Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash7","name":"bash","arguments":{"command":"echo seven"}}]}}
+{"type":"message","id":"a-bash8","parentId":null,"timestamp":"2026-11-05T00:00:11Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"bash8","name":"bash","arguments":{"command":"echo eight"}}]}}
+{"type":"message","id":"a-read2","parentId":null,"timestamp":"2026-11-05T00:00:12Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"read2","name":"read","arguments":{"path":"clients/other.ts"}}]}}

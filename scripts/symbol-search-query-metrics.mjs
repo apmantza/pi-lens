@@ -840,6 +840,9 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 		}
 		return repeat;
 	});
+	// A listing counts once when a repeat read comes after it, at any distance:
+	// the repeat rule has no window (#5355 maintainer decision, 2026-11-06).
+	const lastRepeatCall = isRepeatRead.lastIndexOf(true);
 	for (const entry of discoverCalls(calls)) {
 		totals.discovered++;
 		if (entry.unscannable) {
@@ -873,14 +876,7 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 			),
 		);
 		if (listedRead) totals.listedRead++;
-		const followUpStart = entry.index + 1;
-		if (
-			isRepeatRead
-				.slice(followUpStart, followUpStart + FOLLOW_UP_WINDOW)
-				.some(Boolean)
-		) {
-			totals.repeatRead++;
-		}
+		if (lastRepeatCall > entry.index) totals.repeatRead++;
 		if (
 			followUps.some(
 				(call) =>
@@ -1001,7 +997,7 @@ function rateText(rate) {
 const RATE_DEFINITIONS = [
 	"emptyRate = scoped searches (inline file:/ext:/lang:, paths or lang argument) that matched no file / scoped searches that listed or came back empty; errors are not in it",
 	"listedReadRate = listings followed within 3 tool calls by a read (read, read_symbol, read_enclosing, or a bash cat/head/tail/sed -n view) of a listed file / listings",
-	"repeatReadRate = listings followed within 3 tool calls by a read of a file the session had already read (a second read) / listings",
+	"repeatReadRate = listings followed later in the session by a read of a file the session had already read (a second read, no window) / listings",
 	"drilldownRate = listings followed within 3 tool calls by module_report or lsp_navigation / listings",
 	"unscannableRate = codemode calls whose symbol_search arguments are not a static literal / discovered calls",
 	"n/a = the denominator is 0 (no rate); excluded = discovered calls outside the denominator",

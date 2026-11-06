@@ -117,10 +117,36 @@ describe("symbol_search query metrics — fixture corpus", () => {
 		expect(window.repeatReadRate.denominator).toBe(2);
 	});
 
-	it("counts a repeat read within three tool calls and not one at the fourth", () => {
-		// Recurrence: the repeat-read window must match the listed-read window;
-		// repeat-late.jsonl repeats a read as the fourth call after the listing.
+	it("counts a repeat read many calls after the listing, with no window", () => {
+		// Recurrence: #5355 r1 counted a repeat read only within three calls of a
+		// listing, so a re-read later in the session scored 0. The maintainer
+		// decided on 2026-11-06 that any second read of a file the session already
+		// read counts. repeat-late.jsonl re-reads its file as the tenth call after
+		// the listing.
 		const window = windowFor("repeat-late.jsonl");
+		expect(window.results.listing).toBe(1);
+		expect(window.repeatReadRate.numerator).toBe(1);
+		expect(window.repeatReadRate.denominator).toBe(1);
+	});
+
+	it("never counts a first read, or a read of a different file, as a repeat", () => {
+		// Recurrence: the repeat check keys on the exact resolved path (#5355 r1
+		// D8). A check that counted any earlier read would score every read after
+		// a session's first as a repeat. no-repeat.jsonl reads the listed file
+		// for the first time, then two other files, each for the first time.
+		const window = windowFor("no-repeat.jsonl");
+		expect(window.results.listing).toBe(1);
+		expect(window.listedReadRate.numerator).toBe(1);
+		expect(window.repeatReadRate.numerator).toBe(0);
+		expect(window.repeatReadRate.denominator).toBe(1);
+	});
+
+	it("does not count a repeat read that comes before the listing", () => {
+		// Recurrence: the repeat check counts only reads after a listing. With no
+		// window, a repeat anywhere in the session would otherwise count every
+		// listing. repeat-before-listing.jsonl repeats a read before its listing;
+		// the one read after the listing is a first read of a different file.
+		const window = windowFor("repeat-before-listing.jsonl");
 		expect(window.results.listing).toBe(1);
 		expect(window.repeatReadRate.numerator).toBe(0);
 		expect(window.repeatReadRate.denominator).toBe(1);
