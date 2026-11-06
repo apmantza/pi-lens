@@ -6,7 +6,12 @@
 // benign surfaces below and refuses every other difference, so a new column, a
 // new section or a changed footnote is a flip until someone names it benign.
 // Pure over text, so the recorded-run tests need no git and no network.
-import { GENERATED_LSP_DOCS, parseTable, replaceTable } from "./md-matrix.mjs";
+import {
+	GENERATED_LSP_DOCS,
+	HELD_ROWS_MARKER,
+	parseTable,
+	replaceTable,
+} from "./md-matrix.mjs";
 
 const MATRIX_DOC = "docs/lsp-capability-matrix.md";
 const MATRIX_MARKER = "| lang | server |";
@@ -55,16 +60,21 @@ export function maskGeneratedDoc(docPath, text) {
 		.join("\n");
 	if (docPath !== MATRIX_DOC) return out;
 	out = maskRefreshStatePayload(out);
-	const tbl = parseTable(out, MATRIX_MARKER);
-	if (!tbl) return out;
-	const keep = tbl.header
-		.map((name, i) => [name, i])
-		.filter(([name]) => !BENIGN_MATRIX_COLUMNS.includes(name))
-		.map(([, i]) => i);
-	const header = keep.map((i) => tbl.header[i]);
-	const sep = `|${header.map(() => "---").join("|")}|`;
-	const rows = tbl.rows.map((cells) => keep.map((i) => cells[i] ?? ""));
-	return replaceTable(out, MATRIX_MARKER, header, sep, rows) ?? out;
+	// #5323: the held table records the same how-and-when columns as the
+	// curated one, so a held row's stale stamp or version is no flip either.
+	for (const marker of [MATRIX_MARKER, HELD_ROWS_MARKER]) {
+		const tbl = parseTable(out, marker);
+		if (!tbl) continue;
+		const keep = tbl.header
+			.map((name, i) => [name, i])
+			.filter(([name]) => !BENIGN_MATRIX_COLUMNS.includes(name))
+			.map(([, i]) => i);
+		const header = keep.map((i) => tbl.header[i]);
+		const sep = `|${header.map(() => "---").join("|")}|`;
+		const rows = tbl.rows.map((cells) => keep.map((i) => cells[i] ?? ""));
+		out = replaceTable(out, marker, header, sep, rows) ?? out;
+	}
+	return out;
 }
 
 /** Multiset difference `a - b` over lines (order and duplicates counted). */

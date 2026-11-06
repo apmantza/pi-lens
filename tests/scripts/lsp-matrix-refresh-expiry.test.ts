@@ -1171,7 +1171,7 @@ describe("#4512 each row records the server version and install source", () => {
 		expect(cellOf(second.text, "vue", "install")).toBe("pi-lens-auto");
 	});
 
-	it("leaves unresolved cells untouched and appends measured servers", () => {
+	it("leaves the cells of a server the run could not resolve untouched, and never appends a row", () => {
 		const first = mergeCharacterization(
 			FIXTURE,
 			ROWS,
@@ -1184,17 +1184,8 @@ describe("#4512 each row records the server version and install source", () => {
 		const second = mergeCharacterization(first.text, ROWS, new Map(), "ci")!;
 		expect(cellOf(second.text, "vue", "version")).toBe("3.0.9");
 		expect(cellOf(second.text, "svelte", "version")).toBe("—");
-		const appended = mergeCharacterization(
-			FIXTURE,
-			[{ lang: "go", mode: "pull" }],
-			new Map([["go", { install: "global-path", version: "0.1.0" }]]),
-			"ci",
-		)!;
-		expect(cellOf(appended.text, "go", "mode")).toBe("pull");
-		expect(cellOf(appended.text, "go", "version")).toBe("0.1.0");
-		expect(cellOf(appended.text, "go", "install")).toBe("global-path");
 		expect(parseTable(second.text, MARKER)!.rows).toHaveLength(
-			parseTable(FIXTURE, MARKER)!.rows.length + 1,
+			parseTable(FIXTURE, MARKER)!.rows.length,
 		);
 	});
 
@@ -1219,26 +1210,5 @@ describe("#4512 each row records the server version and install source", () => {
 		expect(cellOf(bumped.text, "ast-grep", "clean-behavior")).toBe(
 			"publishes-versioned",
 		);
-	});
-
-	it("holds a new push measurement outside the curated census until clean behavior exists", () => {
-		const result = mergeCharacterization(
-			FIXTURE,
-			[{ lang: "recorded-push", server: "recorded-lsp", mode: "push-only" }],
-			new Map([
-				["recorded-push", { install: "global-path", version: "1.2.3" }],
-			]),
-			"ci",
-			MARKER,
-			"2026-11-05",
-		)!;
-		expect(cellOf(result.text, "recorded-push", "mode")).toBeUndefined();
-		expect(result.text).toContain(
-			"## Measured, not yet characterized (nightly-generated)",
-		);
-		expect(result.text).toContain(
-			"| recorded-push | recorded-lsp | push-only | unknown | ci | 1.2.3 | global-path | 2026-11-05 |",
-		);
-		expect(result.pending).toBe(1);
 	});
 });

@@ -126,6 +126,10 @@ export function describeRaisedCells(
 	marker?: string,
 ): RaisedCell[];
 
+/** #5323: the generated held table, outside the clean-behavior census. */
+export const HELD_ROWS_HEADING: string;
+export const HELD_ROWS_MARKER: string;
+
 /** #4512: merge one characterize-lsp run (mode + provenance) into the matrix. */
 export function mergeCharacterization(
 	text: string,
@@ -133,8 +137,12 @@ export function mergeCharacterization(
 	provenance: ReadonlyMap<string, { install: string; version?: string }>,
 	src: string,
 	marker?: string,
-	runDate?: string,
-): { text: string; measured: number; rows: number; pending: number } | null;
+	opts?: {
+		serverLangs?: Iterable<string>;
+		probedLangs?: Iterable<string>;
+		now?: Date | number | string;
+	},
+): { text: string; measured: number; rows: number; held: number } | null;
 
 /** #3401: consecutive agreeing runs before a `clean-behavior`/`tier` change is written. */
 export const TIER_CHANGE_AGREE_RUNS: number;
