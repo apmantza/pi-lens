@@ -8,7 +8,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	AREA_GROUP_MIN_ITEMS,
 	CHANGELOG_AREAS,
 	extractSection,
 	parseSectionEntries,
@@ -348,39 +347,40 @@ describe("area grouping in the rollup and the release summary", () => {
 		expect(released).not.toContain("####");
 	});
 
-	const bodyWithAreas = (count: number) =>
-		[
+	// One legacy entry with no area first, then `count - 1` entries alternating
+	// between two areas: exactly `count` bullets in the section.
+	const bodyWithAreas = (count: number) => {
+		const titles = CHANGELOG_AREAS.slice(0, 2).map(({ title }) => title);
+		const entry = (i: number) =>
+			`- **Area ${i % 2} entry ${i} reads fine.** Body. (refs #${i})`;
+		const under = (a: number) =>
+			Array.from({ length: count - 1 }, (_, i) => i + 1)
+				.filter((i) => i % 2 === a)
+				.map(entry);
+		return [
 			"### Fixed",
 			"",
 			"- legacy entry first (refs #1)",
 			"",
-			...CHANGELOG_AREAS.slice(0, 2).flatMap(({ title }, a) => [
-				`#### ${title}`,
-				"",
-				...Array.from(
-					{ length: Math.ceil((count - 1) / 2) },
-					(_, i) =>
-						`- **Area ${a} entry ${i} reads fine.** Body. (refs #${a}${i})`,
-				),
-				"",
-			]),
+			...[0, 1].flatMap((a) => [`#### ${titles[a]}`, "", ...under(a), ""]),
 		].join("\n");
+	};
 
-	it(`renders area headings in the summary only from ${AREA_GROUP_MIN_ITEMS} items`, () => {
-		const grouped = summarizeSection(bodyWithAreas(AREA_GROUP_MIN_ITEMS + 1));
+	it("renders area headings in the summary from 6 items, flat below", () => {
+		const grouped = summarizeSection(bodyWithAreas(6));
 		expect(grouped).toContain("#### Language servers");
 		expect(grouped).toContain("#### Blockers and sessions");
 		// The unarea'd entry renders first, before any heading.
 		expect(grouped.indexOf("legacy entry first")).toBeLessThan(
 			grouped.indexOf("#### Language servers"),
 		);
-		const flat = summarizeSection(bodyWithAreas(AREA_GROUP_MIN_ITEMS - 2));
+		const flat = summarizeSection(bodyWithAreas(5));
 		expect(flat).not.toContain("####");
-		expect(flat).toContain("- **Area 0 entry 0 reads fine.** (refs #00)");
+		expect(flat).toContain("- **Area 1 entry 1 reads fine.** (refs #1)");
 	});
 
 	it("leaves the count line and the buckets unchanged by area headings", () => {
-		const body = bodyWithAreas(AREA_GROUP_MIN_ITEMS + 1);
+		const body = bodyWithAreas(7);
 		const { buckets, areas } = parseSectionEntries(body);
 		expect([...buckets.keys()]).toEqual(["Fixed"]);
 		expect(buckets.get("Fixed")).toHaveLength(areas.get("Fixed")?.length ?? -1);
