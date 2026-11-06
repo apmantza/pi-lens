@@ -18,6 +18,7 @@ import {
 	lintTlaCoverage,
 	parseRuntimeHunks,
 } from "../../scripts/check-pr-body.mjs";
+import { stripSource } from "../support/sweep-kit.js";
 
 // #3902: the PR-body lint cases inject a fake git, so none may spawn a real
 // one. The child-process boundary records every `execFileSync` spawn and
@@ -45,6 +46,188 @@ vi.mock("node:child_process", async (importOriginal) => ({
 // an exact-count pin: a tree that grows a family the map never learns.
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const map = loadCoverageMap(REPO_ROOT);
+
+// #5330: the 2026-11-04 marker audit missed three large state machines because
+// it ranked prose markers instead of the helpers that actually retain state.
+// The census is deliberately fail-closed: source outside a function/class is
+// scanned after comment/string blanking, and an unrecognised helper spelling
+// remains a hit for review rather than becoming a silent pass.
+const STATE_HELPERS = [
+	"BoundedFifoMap",
+	"PathKeyedMap",
+	"createSingleFlight",
+	"getProcessSingleton",
+	"sessionCell",
+	"createAvailabilityLatch",
+] as const;
+
+type StateHelperHit = { file: string; helper: string; line: number };
+
+function moduleStateHelperHits(source: string, file: string): StateHelperHit[] {
+	const code = stripSource(source, { strings: "blank" });
+	const bindings = new Map<string, string>(
+		STATE_HELPERS.map((helper) => [helper, helper]),
+	);
+	for (const match of source.matchAll(
+		/import\s*\{([^}]*)\}\s*from\s*["'][^"']+["']/gs,
+	)) {
+		for (const specifier of match[1].split(",")) {
+			const [imported, local] = specifier.trim().split(/\s+as\s+/);
+			if (STATE_HELPERS.includes(imported as (typeof STATE_HELPERS)[number]))
+				bindings.set(local ?? imported, imported);
+		}
+	}
+	const hits: StateHelperHit[] = [];
+	let depth = 0;
+	let line = 1;
+	const escaped = [...bindings.keys()].map((name) =>
+		name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+	);
+	const candidates = new RegExp(`\\b(?:${escaped.join("|")})\\b`, "g");
+	let cursor = 0;
+	for (
+		let match = candidates.exec(code);
+		match;
+		match = candidates.exec(code)
+	) {
+		for (; cursor < match.index; cursor += 1) {
+			if (code[cursor] === "\n") line += 1;
+			if (code[cursor] === "{") depth += 1;
+			if (code[cursor] === "}") depth -= 1;
+		}
+		const index = match.index;
+		const lineStart = code.lastIndexOf("\n", index - 1) + 1;
+		const isExportList = /^\s*export\s*\{/.test(
+			code.slice(lineStart, lineStart + 24),
+		);
+		if (depth !== 0 && !isExportList) continue;
+		for (const [binding, helper] of bindings) {
+			const before = code[index - 1] ?? " ";
+			const after = code[index + binding.length] ?? " ";
+			if (
+				code.startsWith(binding, index) &&
+				/[A-Za-z0-9_$]/.test(before) === false &&
+				/[A-Za-z0-9_$]/.test(after) === false
+			) {
+				const prefix = code.slice(lineStart, index);
+				const suffix = code.slice(index + binding.length);
+				const isImport = /^\s*import\b/.test(code.slice(lineStart));
+				const isDeclaration =
+					/\b(?:class|function|interface|type)\s*$/.test(prefix) ||
+					/^\s*export\s+(?:class|function|interface|type)\b/.test(
+						code.slice(lineStart),
+					);
+				const isUse =
+					!isImport &&
+					!isDeclaration &&
+					(/\bnew\s*$/.test(prefix) ||
+						/^\s*\(/.test(suffix) ||
+						/^\s*[.[=]/.test(suffix) ||
+						/=\s*$/.test(prefix) ||
+						(/^\s*[,;}]/.test(suffix) && /\bexport\s*[{,]\s*$/.test(prefix)));
+				if (isUse) hits.push({ file, helper, line });
+			}
+		}
+		cursor = index + match[0].length;
+	}
+	return hits;
+}
+
+function stateHelperHits(): StateHelperHit[] {
+	const files: string[] = [];
+	const collect = (directory: string) => {
+		for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+			const file = path.join(directory, entry.name);
+			if (entry.isDirectory()) collect(file);
+			else if (
+				entry.isFile() &&
+				file.endsWith(".ts") &&
+				!file.endsWith(".test.ts")
+			)
+				files.push(file);
+		}
+	};
+	for (const entry of ["clients", "mcp", "tools"])
+		collect(path.join(REPO_ROOT, entry));
+	files.push(path.join(REPO_ROOT, "index.ts"));
+	return files.flatMap((file) =>
+		moduleStateHelperHits(
+			fs.readFileSync(file, "utf8"),
+			path.relative(REPO_ROOT, file).replaceAll(path.sep, "/"),
+		),
+	);
+}
+
+describe("module-level state-helper coverage census (#5330)", () => {
+	// The fixture is intentionally a source file rather than a mocked scanner:
+	// it proves the real module-scope walk and the checked-in map agree.
+	it("requires every module-level helper hit to have a map row", () => {
+		const hits = stateHelperHits();
+		expect(hits.length).toBeGreaterThan(0);
+		const unmapped = hits.filter(
+			(hit) => !Object.hasOwn(map.map ?? {}, hit.file),
+		);
+		expect(
+			unmapped,
+			unmapped.map((hit) => `${hit.file}:${hit.line} ${hit.helper}`).join("\n"),
+		).toEqual([]);
+	});
+
+	it("blanks comments and strings and distinguishes module scope", () => {
+		const fixture = `
+// new BoundedFifoMap(1)
+const text = "new BoundedFifoMap(2)";
+const state = new BoundedFifoMap(3);
+function nested() { return new BoundedFifoMap(4); }
+class Holder { field = new BoundedFifoMap(5); }
+`;
+		expect(moduleStateHelperHits(fixture, "clients/fixture.ts")).toEqual([
+			{ file: "clients/fixture.ts", helper: "BoundedFifoMap", line: 4 },
+		]);
+	});
+
+	it("reds a new helper file until its row is admitted", () => {
+		const hits = moduleStateHelperHits(
+			"const fixture = new BoundedFifoMap(1);",
+			"clients/fixture.ts",
+		);
+		const withoutRow = { map: {} };
+		const withRow = { map: { "clients/fixture.ts": "unmodelled" } };
+		const unadmitted = (candidate: typeof withoutRow) =>
+			hits.filter((hit) => !Object.hasOwn(candidate.map, hit.file));
+		expect(unadmitted(withoutRow)).toHaveLength(1);
+		expect(unadmitted(withRow)).toEqual([]);
+	});
+
+	it("keeps every helper name live in the fixture arm", () => {
+		for (const helper of STATE_HELPERS) {
+			const expression =
+				helper[0] === helper[0].toUpperCase()
+					? `new ${helper}(1)`
+					: `${helper}()`;
+			expect(
+				moduleStateHelperHits(
+					`const state = ${expression};`,
+					"clients/fixture.ts",
+				),
+				helper,
+			).toHaveLength(1);
+		}
+	});
+
+	it("counts aliases, indirect bindings, computed access, and re-exports", () => {
+		const fixture = `
+import { BoundedFifoMap as Alias } from "./bounded-cache.js";
+const a = new Alias(1);
+const b = BoundedFifoMap;
+const c = BoundedFifoMap["prototype"];
+export { BoundedFifoMap };
+`;
+		expect(moduleStateHelperHits(fixture, "clients/fixture.ts")).toHaveLength(
+			4,
+		);
+	});
+});
 
 const READ_GUARD_MAP = {
 	families: ["read-guard"],
