@@ -59,6 +59,18 @@ Invariants (each has a mutant config that violates it):
    delivered on neither freshness arm (PolicyArms).
  - NoSuppressRewritten: a false-positive mark does not suppress a finding
    whose flagged line was rewritten (Anchor).
+ - NamedOnce: a "changed since checked" line forgets its entry
+   (NeighbourGate).
+ - NoNamedAfterDelete: a deleted neighbour is forgotten silently, never
+   named as changed (NeighbourGate).
+ - CleanClears: a clean observation newer than the record clears it
+   (ClearOnClean).
+ - NoCachedAfterDelete: a deleted file's cached finding is delivered on no
+   arm (CachedGate, onMissing "drop").
+ - NoStaleCachedAtFull: a cached finding is never delivered at full
+   authority when its file was written after the scan (CachedGate).
+ - NoCachedStaleDrop: a stale cached finding is demoted, never dropped
+   (CachedGate).
  - TypeOK.
 ***************************************************************************)
 EXTENDS Naturals
@@ -80,6 +92,10 @@ CONSTANTS
                     \* "drop"      both forgotten silently (#4495 round 2)
                     \* "none"      the record renders whatever happened to
                     \*             the file (#4495 round 1)
+                    \* "keepNamed"   a written neighbour is named but kept, so
+                    \*             it is named again (mutant only)
+                    \* "nameDeleted" a deleted neighbour is named as changed
+                    \*             instead of forgotten (mutant only)
     Reserve,        \* "record" a delivered error stays on the unresolved
                     \*          line until a newer observation clears it
                     \* "none"   no record (pre-#4487)
@@ -90,10 +106,20 @@ CONSTANTS
                     \*            arm (#1617, #1625: an fp-marked finding
                     \*            that goes stale must not reappear)
                     \* "liveOnly" they apply to the live arm only
-    Anchor          \* "line" a false-positive mark applies only while the
+    Anchor,         \* "line" a false-positive mark applies only while the
                     \*        flagged line's content is the one marked
                     \*        (diagnostic-dispositions.ts, strict anchor)
                     \* "none" it applies whatever the line holds
+    ClearOnClean,   \* "clear" a clean observation newer than the record
+                    \*         clears it (forgetCascadePendingNeighbor)
+                    \* "keep"  it never does
+    CachedGate      \* "freshness"  the cached store's findings pass the
+                    \*              freshness gate: missing is dropped, stale
+                    \*              is demoted, live is delivered
+                    \* "noStale"    no stale verdict (stale reads live)
+                    \* "keepMissing" no missing verdict (a deleted file's
+                    \*              finding is delivered)
+                    \* "dropStale"  stale is dropped, not demoted
 
 VARIABLES
     clk,        \* the logical clock
@@ -111,17 +137,18 @@ VARIABLES
     markGen,    \* the line generation the mark anchors to
     outP,       \* what the pending record rendered last turn_end
     outC,       \* what the cached store rendered last turn_end
-    vWrite, vDelete, vForget, vPersist, vListed, vMarked, vRewritten
+    v           \* [flag -> BOOLEAN]: a violation seen at some delivery
 
 vars == <<clk, turn, phase, exists, mt, gen, bad, rec, obs, lastListed, store,
-          mark, markGen, outP, outC, vWrite, vDelete, vForget, vPersist,
-          vListed, vMarked, vRewritten>>
+          mark, markGen, outP, outC, v>>
 
 Ticks == 0..MaxClk
 Rec == [has : BOOLEAN, readAt : Ticks, at : Ticks, gen : Ticks]
 Obs == [on : BOOLEAN, readAt : Ticks, gen : Ticks, bad : BOOLEAN]
 OutP == {"none", "full", "unresolved", "named"}
 OutC == {"none", "full", "demoted", "suppressed", "dropped"}
+Flags == {"write", "delete", "forget", "persist", "listed", "marked", "rewritten",
+          "namedGone", "namedKept", "stuck", "cGone", "cFull", "cDrop"}
 
 NoRec == [has |-> FALSE, readAt |-> 0, at |-> 0, gen |-> 0]
 NoObs == [on |-> FALSE, readAt |-> 0, gen |-> 0, bad |-> FALSE]
@@ -142,9 +169,7 @@ TypeOK ==
     /\ markGen \in Ticks
     /\ outP \in OutP
     /\ outC \in OutC
-    /\ vWrite \in BOOLEAN /\ vDelete \in BOOLEAN /\ vForget \in BOOLEAN
-    /\ vPersist \in BOOLEAN /\ vListed \in BOOLEAN /\ vMarked \in BOOLEAN
-    /\ vRewritten \in BOOLEAN
+    /\ v \in [Flags -> BOOLEAN]
 
 Init ==
     /\ clk = 0
@@ -162,9 +187,7 @@ Init ==
     /\ markGen = 0
     /\ outP = "none"
     /\ outC = "none"
-    /\ vWrite = FALSE /\ vDelete = FALSE /\ vForget = FALSE
-    /\ vPersist = FALSE /\ vListed = FALSE /\ vMarked = FALSE
-    /\ vRewritten = FALSE
+    /\ v = [f \in Flags |-> FALSE]
 
 Open == turn <= MaxTurns /\ clk < MaxClk
 
@@ -177,8 +200,7 @@ Write(lc, b) ==
     /\ gen' = IF lc THEN gen + 1 ELSE gen
     /\ bad' = b
     /\ UNCHANGED <<turn, phase, exists, rec, obs, lastListed, store, mark,
-                   markGen, outP, outC, vWrite, vDelete, vForget, vPersist,
-                   vListed, vMarked, vRewritten>>
+                   markGen, outP, outC, v>>
 
 \* Delete: an outside deletion.
 Delete ==
@@ -188,8 +210,7 @@ Delete ==
     /\ exists' = FALSE
     /\ mt' = clk + 1
     /\ UNCHANGED <<turn, phase, gen, bad, rec, obs, lastListed, store, mark,
-                   markGen, outP, outC, vWrite, vDelete, vForget, vPersist,
-                   vListed, vMarked, vRewritten>>
+                   markGen, outP, outC, v>>
 
 \* Edit(cov): the turn's cascade run (dispatch/integration.ts
 \* computeCascadeForFile). It reads the neighbour when `cov`.
@@ -203,8 +224,7 @@ Edit(cov) ==
     /\ obs' = IF cov THEN [on |-> TRUE, readAt |-> clk + 1, gen |-> gen, bad |-> bad]
               ELSE NoObs
     /\ UNCHANGED <<turn, exists, mt, gen, bad, rec, lastListed, store, mark,
-                   markGen, outP, outC, vWrite, vDelete, vForget, vPersist,
-                   vListed, vMarked, vRewritten>>
+                   markGen, outP, outC, v>>
 
 \* Scan: the scanner takes a scan; the store's scannedAt is its start.
 Scan ==
@@ -214,19 +234,18 @@ Scan ==
     /\ clk' = clk + 1
     /\ store' = [has |-> bad, readAt |-> clk + 1, at |-> clk + 1, gen |-> gen]
     /\ UNCHANGED <<turn, phase, exists, mt, gen, bad, rec, obs, lastListed,
-                   mark, markGen, outP, outC, vWrite, vDelete, vForget,
-                   vPersist, vListed, vMarked, vRewritten>>
+                   mark, markGen, outP, outC, v>>
 
-\* Mark: lens_diagnostic_mark, false-positive, anchored to the line the
-\* finding cites (diagnostic-dispositions.ts).
+\* Mark: lens_diagnostic_mark, false-positive. The tool reads the file as it
+\* is now and anchors to that content's line (tools/lens-diagnostic-mark.ts,
+\* diagnostic-dispositions.ts), so the anchor is the current generation.
 Mark ==
     /\ "cached" \in Kinds
     /\ CanMark /\ store.has /\ ~mark
     /\ mark' = TRUE
-    /\ markGen' = store.gen
+    /\ markGen' = gen
     /\ UNCHANGED <<clk, turn, phase, exists, mt, gen, bad, rec, obs,
-                   lastListed, store, outP, outC, vWrite, vDelete, vForget,
-                   vPersist, vListed, vMarked, vRewritten>>
+                   lastListed, store, outP, outC, v>>
 
 \* TurnEnd: one turn_end delivery (runtime-turn.ts handleTurnEnd).
 TurnEnd ==
@@ -237,7 +256,8 @@ TurnEnd ==
            writtenAfter(t) == exists /\ mt > t
            \* --- the pending record -------------------------------------
            runPending == "pending" \in Kinds /\ phase = "observed"
-           pVerdict == IF ~exists THEN "missing"
+           pVerdict == IF ~exists
+                          THEN (IF NeighbourGate = "nameDeleted" THEN "stale" ELSE "missing")
                        ELSE IF mt > r.at THEN "stale" ELSE "live"
            pGate == IF NeighbourGate = "none" THEN "live" ELSE pVerdict
            listed == o.on /\ o.bad /\ ~(Delta = "rolling" /\ lastListed)
@@ -245,7 +265,8 @@ TurnEnd ==
                    ELSE IF o.on THEN (IF listed THEN "full" ELSE "none")
                    ELSE IF ~r.has \/ Reserve = "none" THEN "none"
                    ELSE IF pGate = "live" THEN "unresolved"
-                   ELSE IF pGate = "stale" /\ NeighbourGate = "freshness"
+                   ELSE IF pGate = "stale"
+                           /\ NeighbourGate \in {"freshness", "keepNamed", "nameDeleted"}
                         THEN "named"
                    ELSE "none"
            \* the record takes the observation (recordDeliveredCascadeNeighbor,
@@ -258,16 +279,26 @@ TurnEnd ==
                                  THEN [has |-> TRUE, readAt |-> o.readAt,
                                        at |-> IF StampAt = "read" THEN o.readAt ELSE d,
                                        gen |-> o.gen]
-                              ELSE IF o.readAt > r.readAt THEN NoRec ELSE r)
+                              ELSE IF o.readAt > r.readAt /\ ClearOnClean = "clear"
+                                   THEN NoRec
+                              ELSE r)
                    ELSE IF ~r.has \/ Reserve = "none" THEN r
-                   ELSE IF pGate = "live" THEN r
+                   ELSE IF pGate = "live"
+                           \/ (pGate = "stale" /\ NeighbourGate = "keepNamed")
+                        THEN r
                    ELSE NoRec
            \* --- the cached store ---------------------------------------
-           cVerdict == IF ~exists THEN "missing"
+           cVerdict == IF CachedGate = "noStale"
+                          THEN (IF ~exists THEN "missing" ELSE "live")
+                       ELSE IF CachedGate = "keepMissing"
+                          THEN (IF exists /\ mt > store.at THEN "stale" ELSE "live")
+                       ELSE IF ~exists THEN "missing"
                        ELSE IF mt > store.at THEN "stale" ELSE "live"
            applies == mark /\ (Anchor = "none" \/ markGen = gen)
            cOut == IF ~("cached" \in Kinds) \/ ~store.has THEN "none"
-                   ELSE IF cVerdict = "missing" THEN "dropped"
+                   ELSE IF cVerdict = "missing"
+                           \/ (cVerdict = "stale" /\ CachedGate = "dropStale")
+                        THEN "dropped"
                    ELSE IF applies /\ (cVerdict = "live" \/ PolicyArms = "both")
                         THEN "suppressed"
                    ELSE IF cVerdict = "live" THEN "full"
@@ -277,17 +308,25 @@ TurnEnd ==
        /\ rec' = pRec
        /\ lastListed' = IF runPending THEN (o.on /\ o.bad) ELSE lastListed
        /\ outC' = cOut
-       /\ vWrite' = (vWrite \/ (pOut = "unresolved" /\ writtenAfter(r.readAt)))
-       /\ vDelete' = (vDelete \/ (pOut = "unresolved" /\ ~exists))
-       /\ vForget' = (vForget \/ (runPending /\ ~o.on /\ r.has /\ ~pRec.has
-                                  /\ writtenAfter(r.readAt) /\ pOut # "named"))
-       /\ vPersist' = (vPersist \/ (runPending /\ ~o.on /\ r.has /\ exists
-                                    /\ ~writtenAfter(r.readAt)
-                                    /\ pOut # "unresolved"))
-       /\ vListed' = (vListed \/ (runPending /\ o.on /\ o.bad /\ pOut # "full"))
-       /\ vMarked' = (vMarked \/ (cOut \in {"full", "demoted"}
-                                  /\ mark /\ markGen = gen))
-       /\ vRewritten' = (vRewritten \/ (cOut = "suppressed" /\ markGen # gen))
+       /\ v' = [write |-> (v.write \/ (pOut = "unresolved" /\ writtenAfter(r.readAt))),
+                delete |-> (v.delete \/ (pOut = "unresolved" /\ ~exists)),
+                forget |-> (v.forget \/ (runPending /\ ~o.on /\ r.has /\ ~pRec.has
+                                        /\ writtenAfter(r.readAt) /\ pOut # "named")),
+                persist |-> (v.persist \/ (runPending /\ ~o.on /\ r.has /\ exists
+                                          /\ ~writtenAfter(r.readAt)
+                                          /\ pOut # "unresolved")),
+                listed |-> (v.listed \/ (runPending /\ o.on /\ o.bad /\ pOut # "full")),
+                marked |-> (v.marked \/ (cOut \in {"full", "demoted"}
+                                        /\ mark /\ markGen = gen)),
+                rewritten |-> (v.rewritten \/ (cOut = "suppressed" /\ markGen # gen)),
+                namedGone |-> (v.namedGone \/ (pOut = "named" /\ ~exists)),
+                namedKept |-> (v.namedKept \/ (pOut = "named" /\ pRec.has)),
+                stuck |-> (v.stuck \/ (runPending /\ o.on /\ ~o.bad /\ r.has
+                                      /\ o.readAt > r.readAt /\ pRec.has)),
+                cGone |-> (v.cGone \/ (cOut \in {"full", "demoted", "suppressed"}
+                                      /\ ~exists)),
+                cFull |-> (v.cFull \/ (cOut = "full" /\ writtenAfter(store.readAt))),
+                cDrop |-> (v.cDrop \/ (cOut = "dropped" /\ exists))]
        /\ clk' = d
     /\ turn' = turn + 1
     /\ phase' = "idle"
@@ -304,11 +343,17 @@ Next ==
 
 Spec == Init /\ [][Next]_vars
 
-NoUnresolvedAfterWrite == ~vWrite
-NoUnresolvedAfterDelete == ~vDelete
-NoSilentForget == ~vForget
-PersistentListed == ~vPersist
-ListedWhenObserved == ~vListed
-MarkedNeverShown == ~vMarked
-NoSuppressRewritten == ~vRewritten
+NoUnresolvedAfterWrite == ~v.write
+NoUnresolvedAfterDelete == ~v.delete
+NoSilentForget == ~v.forget
+PersistentListed == ~v.persist
+ListedWhenObserved == ~v.listed
+NamedOnce == ~v.namedKept
+NoNamedAfterDelete == ~v.namedGone
+CleanClears == ~v.stuck
+MarkedNeverShown == ~v.marked
+NoSuppressRewritten == ~v.rewritten
+NoCachedAfterDelete == ~v.cGone
+NoStaleCachedAtFull == ~v.cFull
+NoCachedStaleDrop == ~v.cDrop
 =============================================================================

@@ -219,6 +219,32 @@
 							"title": "false-positive survives whitespace-only changes and unrelated-lines-above insertions"
 						}
 					]
+				},
+				"CachedGate": {
+					"value": "\"freshness\"",
+					"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
+					"title": "DEMOTES a finding whose file was edited after the scan — kept, no line",
+					"also": [
+						{
+							"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
+							"title": "still drops a finding whose file was deleted after the scan (#1460 holds)"
+						},
+						{
+							"test": "tests/clients/runtime-turn-session.test.ts",
+							"title": "does NOT deliver a cached finding whose file was deleted after the scan"
+						}
+					]
+				},
+				"ClearOnClean": {
+					"value": "\"clear\"",
+					"test": "tests/clients/cascade-turn-merge.test.ts",
+					"title": "a pending neighbour error no cascade covered this turn renders one unresolved line until a fresh observation clears it",
+					"also": [
+						{
+							"test": "tests/clients/cascade-turn-merge.test.ts",
+							"title": "a late clean published after the read but before the delivery clears the entry"
+						}
+					]
 				}
 			},
 			"notCodeChoice": [
