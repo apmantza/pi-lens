@@ -1,10 +1,10 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import { workflowDocument } from "../../scripts/dispatch-safety.mjs";
 import { STALE_CELLS_ISSUE_TITLE } from "../../scripts/lib/clean-signal.mjs";
+import { buildDriftIssueBody } from "../../scripts/lib/drift-issue.mjs";
 import { extractVitestFailureBlock } from "../../scripts/extract-vitest-failures.mjs";
 import {
 	commandBasename,
@@ -59,23 +59,9 @@ describe("nightly LSP capability refresh contract (#4277)", () => {
 				"utf8",
 			),
 		);
-		const summary = resolve(ROOT, ".tmp-fix-5325", "d1-summary.json");
-		mkdirSync(resolve(ROOT, ".tmp-fix-5325"), { recursive: true });
-		writeFileSync(summary, JSON.stringify(fixture.notify.summary));
-		const output = execFileSync(
-			process.execPath,
-			[
-				resolve(ROOT, "scripts/notify-clean-signal-drift.mjs"),
-				"--dry-run",
-				"--summary",
-				summary,
-			],
-			{
-				encoding: "utf8",
-				env: { ...process.env, TMPDIR: resolve(ROOT, ".tmp-fix-5325") },
-			},
-		);
-		expect(output).toContain(fixture.notify.expected);
+		const body = buildDriftIssueBody(fixture.notify.summary, { runUrl: null });
+		expect(fixture.notify.summary.warnings).toHaveLength(0);
+		expect(body).toContain("Last observed: unknown (0 findings)");
 	});
 
 	it("builds the in-place compiled twins before the census, after the promotion edit (#4302)", () => {

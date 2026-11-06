@@ -1124,7 +1124,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --ignore-scripts
       # #5323: notify-clean-signal-drift.mjs reaches scripts/lib/clean-signal.mjs,
       # whose server-traits import is compiled output. Build this fresh checkout
       # before any notifier script runs; continue-on-error belongs to the tracker,
