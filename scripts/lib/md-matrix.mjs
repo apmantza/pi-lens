@@ -1147,6 +1147,7 @@ export function mergeCharacterization(
 	provenance,
 	src,
 	marker = "| lang | server |",
+	runDate = new Date().toISOString().slice(0, 10),
 ) {
 	const migrated = ensureMatrixColumns(text, marker);
 	const tbl = parseTable(migrated, marker);
@@ -1158,31 +1159,79 @@ export function mergeCharacterization(
 	// pull => Tier 1 by protocol; push-only tier is decided by the clean-behavior
 	// probe, so `tier` stays untouched for push rows (don't clobber a probed value).
 	const cells = new Map();
+	const pending = new Map();
 	for (const r of rows) {
 		if (r.mode !== "pull" && r.mode !== "push-only") continue;
-		const cell = { lang: r.lang, mode: r.mode };
-		if (r.mode === "pull") cell.tier = "1";
 		const prior = existingByLang.get(r.lang);
+		if (!prior && r.mode === "push-only") {
+			pending.set(r.lang, {
+				lang: r.lang,
+				server: r.server,
+				mode: r.mode,
+				"clean-behavior": "unknown",
+				src,
+				"run-date": runDate,
+			});
+			continue;
+		}
+		const cell = { lang: r.lang, server: r.server, mode: r.mode };
+		if (r.mode === "pull") cell.tier = "1";
 		cell.src = mergeSrc(prior ? prior[srcIdx] : "", src);
 		cells.set(r.lang, cell);
 	}
 	const measured = cells.size;
 	for (const [lang, p] of provenance) {
+		const held = pending.get(lang);
+		if (held) {
+			held.install = p.install;
+			if (p.version) held.version = p.version;
+			continue;
+		}
 		const cell = cells.get(lang) ?? { lang };
 		cell.install = p.install;
 		if (p.version) cell.version = p.version;
 		cells.set(lang, cell);
 	}
 	const merged = mergeRows(tbl.rows, tbl.header, [...cells.values()], "lang", [
+		"server",
 		"mode",
 		"tier",
 		"src",
 		"version",
 		"install",
 	]);
+	const pendingHeading =
+		"## Measured, not yet characterized (nightly-generated)";
+	const pendingRows = [...pending.values()];
+	const pendingTable = [
+		pendingHeading,
+		"",
+		"Rows measured by characterize-lsp whose clean-signal cell is not yet resolved; these are not part of the curated census.",
+		"",
+		"| lang | server | mode | clean-behavior | src | version | install | run-date |",
+		"|---|---|---|---|---|---|---|---|",
+		...pendingRows.map(
+			(row) =>
+				`| ${row.lang} | ${row.server || "—"} | ${row.mode} | ${row["clean-behavior"]} | ${row.src} | ${row.version ?? "—"} | ${row.install ?? "—"} | ${row["run-date"]} |`,
+		),
+	].join("\n");
+	let output =
+		replaceTable(migrated, marker, tbl.header, tbl.sep, merged) ?? text;
+	const headingAt = output.indexOf(pendingHeading);
+	if (headingAt >= 0) {
+		const next = output.indexOf("\n## ", headingAt + pendingHeading.length);
+		output = `${output.slice(0, headingAt)}${pendingTable}\n${next >= 0 ? output.slice(next + 1) : ""}`;
+	} else {
+		const keyFindings = output.indexOf("\n## Key findings");
+		output =
+			keyFindings >= 0
+				? `${output.slice(0, keyFindings)}\n${pendingTable}\n${output.slice(keyFindings + 1)}`
+				: `${output.trimEnd()}\n\n${pendingTable}\n`;
+	}
 	return {
-		text: replaceTable(migrated, marker, tbl.header, tbl.sep, merged) ?? text,
+		text: output,
 		measured,
 		rows: tbl.rows.length,
+		pending: pendingRows.length,
 	};
 }

@@ -282,10 +282,37 @@ carries the named admission until then.
 **Unknown — fixture exists, mode not yet captured.** A server remains here only
 until a nightly or dev-box run observes its mode. Newly measured servers are
 appended by the matrix merge, so this list is generated evidence rather than a
-curated list of toolchain families. Any remaining unknown rows are
-characterize reports `unknown` (a non-failure ⚠). Once #241 lands they'll fill in
-the same way clojure-lsp/gleam now do (both auto-install via the github strategy
-and were characterized `push-only` in the run above).
+curated list of toolchain families. Any remaining unknown rows are characterize
+reports `unknown` (a non-failure ⚠). Rows measured by characterize-lsp but
+missing a clean-signal result are held below and enter this curated matrix only
+after every census cell is resolved.
+
+## Measured, not yet characterized (nightly-generated)
+
+Rows measured by characterize-lsp whose clean-signal cell is not yet resolved;
+these rows are not part of the curated census. The run date identifies the
+evidence a later nightly must complete.
+
+| lang | server | mode | clean-behavior | src | version | install | run-date |
+|---|---|---|---|---|---|---|---|
+| go | gopls | push-only | unknown | ci | — | — | 2026-11-05 |
+| fsharp | fsautocomplete | push-only | unknown | ci | — | — | 2026-11-05 |
+| kotlin | kotlin-language-server | push-only | unknown | ci | — | — | 2026-11-05 |
+| cpp | clangd | push-only | unknown | ci | — | — | 2026-11-05 |
+| powershell | PowerShell Editor Services | push-only | unknown | ci | — | — | 2026-11-05 |
+| expert | Expert (alternate of ElixirLS) | push-only | unknown | ci | — | — | 2026-11-05 |
+| typst | tinymist | push-only | unknown | ci | — | — | 2026-11-05 |
+| fish | fish-lsp | push-only | unknown | ci | — | — | 2026-11-05 |
+| cmake | cmake-language-server | push-only | unknown | ci | — | — | 2026-11-05 |
+| zizmor | zizmor (auxiliary) | push-only | unknown | ci | — | — | 2026-11-05 |
+| typos | typos (auxiliary) | push-only | unknown | ci | — | — | 2026-11-05 |
+| fallow | fallow-lsp (auxiliary) | push-only | unknown | ci | — | — | 2026-11-05 |
+| ast-grep-baseline | ast-grep (no-sgconfig baseline) | push-only | unknown | ci | — | — | 2026-11-05 |
+| typescript-nested-root-markers | typescript-language-server (nested rootMarkers) | push-only | unknown | ci | — | — | 2026-11-05 |
+| typescript-clean | typescript-language-server (clean file) | push-only | unknown | ci | — | — | 2026-11-05 |
+| typescript7 | typescript native (TS7+) | push-only | unknown | ci | — | — | 2026-11-05 |
+| typescript7-clean | typescript native (clean file) | push-only | unknown | ci | — | — | 2026-11-05 |
+| effect-tsgo | effect-tsgo (@effect/tsgo on TypeScript 7+) | push-only | unknown | ci | — | — | 2026-11-05 |
 
 ## Key findings
 - **Mode ≠ tier, and the split needs BOTH axes.** Push-only further splits along
@@ -495,7 +522,7 @@ for servers that either auto-install (npm/pip/github — including clojure-lsp a
 both github-strategy as of f263cf3) or whose toolchain the workflow provisions
 (Ruby/Dart/Zig + .NET→csharp). The remaining `unknown` rows are the toolchain-gated
 family (#241): until `runtimeInstall` + canonical-bin discovery land, their servers
-don't install in CI and stay ⚠. The **merge guard** means a CI run that can't reach a
+may remain in the measured-but-not-yet-characterized table. The **merge guard** means a CI run that can't reach a
 server never blanks its dev-measured row.
 
 The `clean-behavior` split (4-way: 2 publishes-versioned / 2\* publishes-unversioned /

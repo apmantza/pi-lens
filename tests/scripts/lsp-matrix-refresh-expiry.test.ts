@@ -1220,4 +1220,25 @@ describe("#4512 each row records the server version and install source", () => {
 			"publishes-versioned",
 		);
 	});
+
+	it("holds a new push measurement outside the curated census until clean behavior exists", () => {
+		const result = mergeCharacterization(
+			FIXTURE,
+			[{ lang: "recorded-push", server: "recorded-lsp", mode: "push-only" }],
+			new Map([
+				["recorded-push", { install: "global-path", version: "1.2.3" }],
+			]),
+			"ci",
+			MARKER,
+			"2026-11-05",
+		)!;
+		expect(cellOf(result.text, "recorded-push", "mode")).toBeUndefined();
+		expect(result.text).toContain(
+			"## Measured, not yet characterized (nightly-generated)",
+		);
+		expect(result.text).toContain(
+			"| recorded-push | recorded-lsp | push-only | unknown | ci | 1.2.3 | global-path | 2026-11-05 |",
+		);
+		expect(result.pending).toBe(1);
+	});
 });

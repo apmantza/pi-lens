@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
@@ -27,30 +28,6 @@ function loadWorkflow(): any {
 	return yaml.load(readFileSync(WORKFLOW, "utf8"));
 }
 
-function importsDistFromEntry(
-	entry: string,
-	seen = new Set<string>(),
-): boolean {
-	const absolute = entry.startsWith(ROOT) ? entry : resolve(ROOT, entry);
-	if (seen.has(absolute)) return false;
-	seen.add(absolute);
-	const source = readFileSync(absolute, "utf8");
-	if (/\b(?:import|from)\s+["'][^"']*dist\//.test(source)) return true;
-	for (const match of source.matchAll(
-		/\bfrom\s+["'](\.[^"']+)["']|\bimport\s+["'](\.[^"']+)["']/g,
-	)) {
-		const relative = match[1] ?? match[2];
-		const child = resolve(absolute, "..", relative);
-		try {
-			if (importsDistFromEntry(child, seen)) return true;
-		} catch {
-			// A non-file or unsupported dynamic import is not proven safe.
-			return true;
-		}
-	}
-	return false;
-}
-
 describe("nightly LSP capability refresh contract (#4277)", () => {
 	it("builds dist before every notify-job script that reaches it (#5323)", () => {
 		const workflow = loadWorkflow();
@@ -65,15 +42,32 @@ describe("nightly LSP capability refresh contract (#4277)", () => {
 			.filter(({ step }) => /\bnode scripts\//.test(String(step.run)));
 		const firstScript = Math.min(...scriptSteps.map(({ index }) => index));
 		expect(buildIndex).toBeLessThan(firstScript);
-		for (const { step } of scriptSteps) {
-			const run = String(step.run);
-			for (const match of run.matchAll(/node scripts\/([\w-]+\.mjs)/g)) {
-				if (importsDistFromEntry(`scripts/${match[1]}`))
-					expect(buildIndex).toBeLessThan(
-						steps.findIndex((candidate) => candidate === step),
-					);
-			}
-		}
+		expect(scriptSteps.length).toBeGreaterThan(0);
+		// The recorded notifier run is the behavioural witness for this contract;
+		// it proves the built entry can execute against the real summary shape.
+		const fixture = JSON.parse(
+			readFileSync(
+				resolve(ROOT, "tests/fixtures/lsp-nightly/42149703889.json"),
+				"utf8",
+			),
+		);
+		const summary = resolve(ROOT, ".tmp-fix-5325", "d1-summary.json");
+		mkdirSync(resolve(ROOT, ".tmp-fix-5325"), { recursive: true });
+		writeFileSync(summary, JSON.stringify(fixture.notify.summary));
+		const output = execFileSync(
+			process.execPath,
+			[
+				resolve(ROOT, "scripts/notify-clean-signal-drift.mjs"),
+				"--dry-run",
+				"--summary",
+				summary,
+			],
+			{
+				encoding: "utf8",
+				env: { ...process.env, TMPDIR: resolve(ROOT, ".tmp-fix-5325") },
+			},
+		);
+		expect(output).toContain(fixture.notify.expected);
 	});
 
 	it("builds the in-place compiled twins before the census, after the promotion edit (#4302)", () => {

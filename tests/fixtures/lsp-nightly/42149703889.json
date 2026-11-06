@@ -1,0 +1,9 @@
+{
+  "run": "42149703889",
+  "date": "2026-11-05",
+  "notify": { "summary": { "warnings": [] }, "expected": "0 drift warning(s)" },
+  "characterization": {
+    "measured": 48,
+    "pushOnlyPending": ["go", "fsharp", "kotlin", "cpp", "powershell", "expert", "typst", "fish", "cmake", "zizmor", "typos", "fallow", "ast-grep-baseline", "typescript-nested-root-markers", "typescript-clean", "typescript7", "typescript7-clean", "effect-tsgo"]
+  }
+}

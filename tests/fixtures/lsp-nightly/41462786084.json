@@ -1,0 +1,11 @@
+{
+  "run": "41462786084",
+  "date": "2026-11-02",
+  "characterization": {
+    "go": "push-only",
+    "ruby": "pull",
+    "csharp": "pull",
+    "fsharp": "push-only",
+    "dart": "push-only"
+  }
+}

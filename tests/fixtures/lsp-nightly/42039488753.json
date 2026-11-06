@@ -1,0 +1,8 @@
+{
+  "run": "42039488753",
+  "date": "2026-11-02",
+  "idleEviction": {
+    "handshook": ["go", "ruby", "csharp", "fsharp", "dart"],
+    "preGateReason": "tool-unavailable"
+  }
+}

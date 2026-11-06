@@ -350,7 +350,7 @@ jobs:
           sudo apt-get install --yes fish
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --ignore-scripts
 
       - name: Build dist
         run: npm run build:dist
@@ -552,7 +552,7 @@ jobs:
         id: idle_measurement
         continue-on-error: true
         timeout-minutes: 15
-        run: node scripts/measure-lsp-idle-eviction.mjs --install --budget-seconds 600 --summary "$RUNNER_TEMP/lsp-idle-eviction-summary.json" --drift-body "$RUNNER_TEMP/lsp-idle-eviction-drift.md" --drift-state "$RUNNER_TEMP/lsp-idle-eviction-drift-state"
+        run: node scripts/measure-lsp-idle-eviction.mjs --budget-seconds 600 --summary "$RUNNER_TEMP/lsp-idle-eviction-summary.json" --drift-body "$RUNNER_TEMP/lsp-idle-eviction-drift.md" --drift-state "$RUNNER_TEMP/lsp-idle-eviction-drift-state"
 
       # #3989: act on the measurement's `proposal` rows. Advances the per-server
       # consecutive-night memory in docs/lsp-capability-matrix.md's refresh-state

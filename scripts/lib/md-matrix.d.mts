@@ -129,11 +129,12 @@ export function describeRaisedCells(
 /** #4512: merge one characterize-lsp run (mode + provenance) into the matrix. */
 export function mergeCharacterization(
 	text: string,
-	rows: ReadonlyArray<{ lang: string; mode: string }>,
+	rows: ReadonlyArray<{ lang: string; server?: string; mode: string }>,
 	provenance: ReadonlyMap<string, { install: string; version?: string }>,
 	src: string,
 	marker?: string,
-): { text: string; measured: number; rows: number } | null;
+	runDate?: string,
+): { text: string; measured: number; rows: number; pending: number } | null;
 
 /** #3401: consecutive agreeing runs before a `clean-behavior`/`tier` change is written. */
 export const TIER_CHANGE_AGREE_RUNS: number;
