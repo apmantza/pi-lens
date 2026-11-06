@@ -3,6 +3,7 @@
   "version": 0,
   "families": [
     "dispatch-pipeline",
+    "disk-change-publisher",
     "file-locks",
     "format-drain",
     "instance-reaper",
@@ -134,9 +135,15 @@
     "clients/mcp/session.ts": "unmodelled",
     "clients/dispatch/runners/utils/availability-policy.ts": "unmodelled",
     "clients/dispatch/runners/utils/runner-helpers.ts": "unmodelled",
-    "clients/out-of-band-changes.ts": "unmodelled",
-    "clients/disk-changes.ts": "unmodelled",
-    "clients/disk-change-subscribers.ts": "unmodelled",
+    "clients/out-of-band-changes.ts": [
+      "disk-change-publisher"
+    ],
+    "clients/disk-changes.ts": [
+      "disk-change-publisher"
+    ],
+    "clients/disk-change-subscribers.ts": [
+      "disk-change-publisher"
+    ],
     "clients/safe-spawn.ts": "unmodelled",
     "clients/installer/managed-tool-refresh.ts": "unmodelled",
     "clients/bootstrap.ts": "unmodelled",
@@ -468,9 +475,9 @@
     "index.ts": "The hook handlers in index.ts: an edit inside one (session_start, session_shutdown, session_tree, turn_start, turn_end, agent_end, agent_settled, tool_call, tool_result, context, context_with_system) gates on that hook's families only, found by `findHookRanges` in scripts/lib/tla-coverage.mjs from the post-image the diff names (#3878). An edit outside every handler (activation setup, helpers) prints a note and never gates. `context_with_system` is the pi 0.87+ request hook that sees the full transcript; `context` injects on a pre-0.87 host and defers on 0.87+ (#4631). `model_select` re-plans the active tool set for the new model (#4687); it maps to session-lifecycle, whose LZ memory store is what the plan reads.",
     "clients/dispatch/runners/utils/availability-policy.ts": "Availability latch state (`available`, cooldown, install attempts, trust and availability generations) changes on probes, cooldown expiry, installs, trust adoption and session reset; no family models it.",
     "clients/dispatch/runners/utils/runner-helpers.ts": "Shared runner availability and managed-verdict flights carry in-flight probes, cooldowns and generation-scoped accumulators across callers; probe settle, reset, trust adoption and expiry are unmodelled.",
-    "clients/out-of-band-changes.ts": "Per-root bounded records, owed walks and coalesced looks change on tool calls, HEAD moves, diagnostics and subscriber publication; eviction, joined walks and publication failure are unmodelled.",
-    "clients/disk-changes.ts": "The process-singleton disk-change subscriber registry and project sequence publisher change on registration, out-of-band walks and fan-out; concurrent sessions and subscriber failures are unmodelled.",
-    "clients/disk-change-subscribers.ts": "Subscriber registration and its settled-sweep drain latch change on session/workspace events and delayed fan-out; the publisher lifecycle has no formal family.",
+    "clients/out-of-band-changes.ts": "The look's per-root records and owed walks (both `BoundedFifoMap(MAX_ROOTS)`), the coalesced flight and its trailing pass, and the commit-before-publish order are modelled by disk-change-publisher (`Begin`, `Read`, `Commit`, `Next`; `NoLostChange`, `DemandServed`, `OneRestartPerInstall`). The FIFO eviction that loses a change is the accepted p3 B2a (`B2aEvictedInstall`, `B2aEvictedDeclaration`). Declaration-walk caps, unreadable subtrees, the HEAD baseline and the abort signal are not modelled.",
+    "clients/disk-changes.ts": "The publisher's sequence allocation before fan-out, awaited and isolated fan-out, the once-per-consumer failure record and the agent-only authorship write set are modelled by disk-change-publisher (`Alloc`, `FanOk`, `FanThrow`, `PubDone`; I2 to I5). The registry of subscribers and the per-origin policy are not modelled.",
+    "clients/disk-change-subscribers.ts": "Registration order (the diagnostics cache, then the LSP consumer) is the fan-out order of disk-change-publisher's `FanOk`; what a subscriber does with a change (the cache clock, the client restart, the watched-files events) and its settled-sweep drain latch are not modelled.",
     "clients/safe-spawn.ts": "Per-child teardown flags and timeout, abort, output-cap, close and escalation timers form a spawn lifecycle; child events and kill paths are unmodelled.",
     "clients/installer/managed-tool-refresh.ts": "Managed-tool refresh has an in-flight slot, session budget reservation and resettable tap points; session start, reset, stamp cadence and concurrent callers are unmodelled.",
     "clients/bootstrap.ts": "Analyzer bootstrap tracks resident clients, shutdown state, failure strikes, load attempts and a keyed flight; demand, session reset, shutdown and late build settlement are unmodelled.",
