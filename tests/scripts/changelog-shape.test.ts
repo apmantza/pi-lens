@@ -186,23 +186,6 @@ describe("user entry shape", () => {
 			/references take one form/,
 		],
 		["a GH- reference", `- ${H} Fixed in GH-4.`, /references take one form/],
-		[
-			"a second paragraph",
-			`- ${H} Body.\n\n  Second paragraph.`,
-			/one paragraph/,
-		],
-		["a nested bullet", `- ${H} Body.\n  - nested.`, /one paragraph/],
-		[
-			"a tab-indented continuation",
-			`- ${H} Body\n\tcontinues.`,
-			/one paragraph/,
-		],
-		["a second bullet", `- ${H} Body.\n- Second.`, /one paragraph/],
-		[
-			"a fenced block",
-			`- ${H} Body.\n  \`\`\`\n  x\n  \`\`\``,
-			/one paragraph/,
-		],
 		["an unbalanced backtick", `- ${H} Body \`text.`, /unbalanced backtick/],
 		[
 			"a banned term",
@@ -218,6 +201,17 @@ describe("user entry shape", () => {
 	];
 	it.each(refused)("refuses %s", (_name, entry, problem) => {
 		expect(userEntryShapeProblems(entry).join("; ")).toMatch(problem);
+	});
+
+	it("refuses an entry that is more than one paragraph", () => {
+		for (const entry of [
+			`- ${H} Body.\n\n  Second paragraph.`,
+			`- ${H} Body.\n  - nested.`,
+			`- ${H} Body\n\tcontinues.`,
+			`- ${H} Body.\n- Second.`,
+			`- ${H} Body.\n  \`\`\`\n  x\n  \`\`\``,
+		])
+			expect(userEntryShapeProblems(entry).join("; ")).toMatch(/one paragraph/);
 	});
 
 	it("refuses a headline over 100 characters even within 16 words", () => {
