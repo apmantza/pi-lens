@@ -943,8 +943,8 @@ jobs:
       # maintainer's close and reopen (#4338 sat open from 2026-10-13). A GitHub
       # App installation token has no such limit: the docs-refresh PR below is
       # opened with it when the repository has the App configured, and falls
-      # back to GITHUB_TOKEN (manual close and reopen, as before) when it does
-      # not. The names `LSP_REFRESH_APP_ID` (variable) and
+      # back to GITHUB_TOKEN when it does not; the dispatch step below then
+      # starts the required checks (#5062). The names `LSP_REFRESH_APP_ID` (variable) and
       # `LSP_REFRESH_APP_PRIVATE_KEY` (secret) are the maintainer's to confirm.
       # The token is scoped to this PR's two writes and lives for the job.
       - name: Mint the refresh App token (starts CI on the refresh PR)
