@@ -31,7 +31,8 @@
     "lsp-ephemeral-data-dir",
     "blocker-pending",
     "cascade-delivery",
-    "test-runner-delivery"
+    "test-runner-delivery",
+    "finding-delivery"
   ],
   "map": {
     "clients/read-guard.ts": [
@@ -229,7 +230,8 @@
       "file-locks"
     ],
     "clients/diagnostic-dispositions.ts": [
-      "file-locks"
+      "file-locks",
+      "finding-delivery"
     ],
     "clients/installer/index.ts": [
       "file-locks"
@@ -382,10 +384,19 @@
     "clients/dispatch/runners/ast-grep-napi.ts": [
       "blocker-pending"
     ],
-    "clients/finding-delivery-gate.ts": "unmodelled",
+    "clients/finding-delivery-gate.ts": [
+      "finding-delivery"
+    ],
     "clients/git-guard.ts": "unmodelled",
     "clients/advisory-provenance.ts": [
-      "store-freshness"
+      "store-freshness",
+      "finding-delivery"
+    ],
+    "clients/turn-end/lanes/secrets.ts": [
+      "finding-delivery"
+    ],
+    "clients/turn-end/lanes/govulncheck.ts": [
+      "finding-delivery"
     ],
     "clients/read-bridge.ts": [
       "read-guard"
@@ -462,9 +473,12 @@
     "clients/test-runner-delivery.ts": "Automatic test-runner delivery (#2366): the in-memory pending delivery, the persisted deliveryEligible marker and the record's generations. A delivery's identity is the generation that published the record's content, not the testRunGeneration launch high-water mark (#5259), and it is eligible once its host reports idle, at agent_settled or at a publish after it. Modelled by test-runner-delivery; the idle rechecks and provenance validation are not.",
     "clients/opaque-mutation-scan.ts": "The pending opaque baseline of bash calls (OpaqueBaselineStore: one entry per tool-call id, retirement of an entry whose turn is over, the pending cap and its counted loss; #4137). Modelled by opaque-baseline-slot, together with the authority-ranked dispatch dedupe its recoveries feed (claimPipelineDispatch). The record site is clients/runtime-tool-call.ts and the take site and the dedupe are in clients/runtime-tool-result.ts, so those rows list the family too; the recovery itself (recoverOpaqueChangesViaGit, captureFileStats) is a stat or git read, not lifecycle. The per-session HEAD records and their serialized looks (headRecords, observeGitHead, serializeHeadLook; #4493) are modelled by lsp-server-content HeadMoveResync, with the resync of held documents they drive; HeadMoveHookBound models the hook bound around a look, the primary-first send and the join of every tool_call (#4493 r2).",
     "clients/deferred-runner-blockers.ts": "The commit gate's judgement of settled collect-later runner answers (`judgeDeferredRunnerFindings`). The file only reads the store through the non-draining `peekSettledRunnerFindings`, which is pending-runner-store's `PeekRead`; admission and drain live in clients/dispatch/pending-runner-findings.ts. Freshness-then-policy is not modelled.",
-    "clients/finding-delivery-gate.ts": "The gate combines freshness with disposition and policy admission; store-freshness models the underlying freshness stores, not this delivery seam. Keep it unmodelled pending the dedicated model planned by #4715.",
+    "clients/finding-delivery-gate.ts": "The delivery gate stack (#1634): the freshness verdict of a cited path against an entry's stamp, then the disposition policy over both arms, then the render. Modelled by finding-delivery for the cascade's pending neighbour record (stamp at the read, gated by freshness, kept each turn; #4495, #4487) and for a cached scanner store (demote, dispositions over live and stale, strict anchor). The file itself holds the contract and the surface registry; the gate code is in clients/advisory-provenance.ts and the stack in clients/runtime-turn.ts and clients/turn-end/lanes/. Not modelled: the project-wide admission of a secondary session, weak-anchored marks and the rule policy, and the render caps.",
     "clients/git-guard.ts": "The git guard's command classification and its writes into session state. The session latch lives in `RuntimeCoordinator` (`updateGitGuardStatus`, `markGitGuardCacheUnknown`, cleared by `resetForSession`); the latch's late writers are modelled as the `gitguard` kind of session-lifecycle's `stateW` and `debounce` writers (`StateWLate`, `Pre3759StateWUncaptured`, `DebounceCaptureAtTimer`), so the latch's reset rules stay as they are in clients/runtime-coordinator.ts. Not modelled: the persisted blocker record (`syncGitGuardRecord` writes it, with its owner sections in `carriedBlockers`) and this file's callers of the latch writer, `resyncGitGuardAfterRetire`, `retireInlineBlockerAndResyncGuard` and `markCacheUnknown`.",
-    "clients/advisory-provenance.ts": "The advisory scanners' `scannedAt` stamp (taken at runScan entry, before the spawn) is store-freshness' Stamp = \"start\" rule, listed as 'not committed' in its store map; the finding-path freshness classification (live, stale, missing, unreadable) is not modelled. The rest is pure evidence shaping.",
+    "clients/advisory-provenance.ts": "The advisory scanners' `scannedAt` stamp (taken at runScan entry, before the spawn) is store-freshness' Stamp = \"start\" rule, listed as 'not committed' in its store map. The finding-path freshness verdict (`FindingPathFreshness`, `FindingMissingPolicy`, the mtime-versus-scannedAt classification) is finding-delivery's verdict: live, stale or missing against the entry's stamp, with the fail-open `unknown` arm left out of that model. The rest is pure evidence shaping.",
+    "clients/turn-end/lanes/secrets.ts": "The secrets lane gates the gitleaks and trivy-secret caches by freshness (`onMissing: \"drop\"`, an edited file is demoted), then applies dispositions over both arms. Modelled by finding-delivery's cached store (CachedGate = freshness, PolicyArms = both, Anchor = line); the stat budget and the fail-open verdicts are not.",
+    "clients/turn-end/lanes/govulncheck.ts": "The govulncheck lane gates its cache by freshness, then applies dispositions over both arms. The stale arm and the dispositions are finding-delivery's cached store; the lane's `onMissing: \"demote\"` (a deleted trace file never drops a CVE go.mod pins, #1622) is the MutCachedKeepMissing policy as a deliberate lane choice, so the model's missing-drop rule describes the secrets lane only.",
+    "clients/diagnostic-dispositions.ts": "The disposition marks and their line-hash anchor. The store's writes are file-locks' row; finding-delivery models what the anchor decides at the gate (a false-positive survives only while the flagged line's content is unchanged, Anchor = line) and that a mark made against the current content is applied over both arms.",
     "clients/read-bridge.ts": "Out-of-band reads forwarded to io-bridge's `recordRead` as `evidence: \"disk\"`, the read guard's `recordRead`. read-guard models disk-evidence reads at the tool_result seam (`EvidenceAtResultHandler`); the bridge's own producer timing is not modelled, so a change here moves read-guard or declares it unaffected.",
     "clients/project-snapshot-persist-worker.ts": "The worker entry only serves one gzip-stage request and skips a body whose semantic fingerprint is unchanged. The Stage action and the generation-gated promotion live in clients/gzip-stage-write.ts and clients/project-snapshot.ts; the fingerprint skip itself is not modelled.",
     "clients/memory-sampler.ts": "The sessionCell turn-end sample (`recordMemoryTurnEnd`; `takeMemoryIdleGapMs` takes it) and its session reset. The nearest family is session-lifecycle, which models the session-key index (#4965, `LastMemberOwnership`), not this cell's write and take. Process-wide sampling cadence remains telemetry-only.",
