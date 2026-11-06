@@ -886,13 +886,11 @@ describe("auxiliary rows are not drift inputs (#5348)", () => {
 				servers: Array<{ id: string; role?: string }>,
 			) => {
 				const probeFixture = createProbeFixture({
-					lsp: {
+					lsp: makeLspServiceDouble({
 						supportsLSP: () => true,
-						async touchFile() {
-							return { diags: [], inconclusive: false };
-						},
+						touchFile: async () => ({ diags: [], inconclusive: false }),
 						getWorkspaceDiagnosticsSupport: async () => ({ mode: "push-only" }),
-					},
+					}) as never,
 					repoRoot: process.cwd(),
 					install: false,
 					initLSPConfig: undefined,
