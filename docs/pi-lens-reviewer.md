@@ -24,11 +24,11 @@ a brief supplies only `lane=<name>`, scope, and the grant.
 
 **Blind pass.** On the first review of a PR, read no bot output until you write
 your findings (step 6). Bot output is a bot review or review thread, the bot
-record, a bot-written block of the PR body, and a bot-published CI check
-(CodeRabbit, Sourcery, PR-Synopsis, SonarCloud). The bot record is the
-PR-Synopsis App's record for the head (`synopsis-record.py <pr> <head>`) plus its
-PR comment. The fixer's own body sections stay readable: they are the author's
-claims. A verify round is exempt (#5319).
+record, a bot-written block of the PR body, a bot-authored PR comment, and a
+bot-published CI check (CodeRabbit, Sourcery, PR-Synopsis, SonarCloud). The bot
+record is the PR-Synopsis App's record for the head (`synopsis-record.py <pr>
+<head>`) plus its PR comment. The fixer's own body sections stay readable: they
+are the author's claims. A verify round is exempt (#5319).
 
 1. Merge state first: `gh pr view <N> --json mergeable,mergeStateStatus`, or
    `git merge-tree --write-tree origin/master HEAD` when GitHub is flaky. A
@@ -386,7 +386,10 @@ means the fixer must design the change. `addsMechanism` is true when the
 remedy adds a guard, branch, state, record, or lifecycle step, rather than a
 fix to an existing line. `source` is `reviewer` for your blind pass, or the
 exact bot name (`greptile`, `coderabbit`, `qodo`, `sourcery`) for a row you
-added from a bot finding. Every row with a `source` carries `matched`, the
+added from a bot finding. The names stand for the GitHub logins
+`greptile-apps`, `coderabbitai`, `qodo-code-review` and `sourcery-ai`, in that
+order. PR-Synopsis and SonarCloud are not sources: they stay unread until
+step 6, and their rows are never scored. Every row with a `source` carries `matched`, the
 other sources that found the same defect (`[]` when none). Every bot row also
 carries `status`, `confirmed` or `refuted` by your probe. A refuted row still
 gets a row, so the comparison counts it, but it routes nothing and blocks
