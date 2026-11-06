@@ -1,11 +1,15 @@
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	lintLocalPrBody,
 	lintPullRequestEvent,
+	lintPrBody,
 	referencedIssues,
 	resolveBugClosing,
 	resolveBugClosingViaGh,
 	resolveBugReferenced,
+	resolveRefsRemainderTrackers,
+	resolveRefsRemainderTrackersViaGh,
 } from "../../scripts/check-pr-body.mjs";
 
 // Recurrence (#4968): the detection audit of 2026-10-29 found 24 bug-linked PRs
@@ -53,16 +57,124 @@ const base = (summary: string, tail = "") =>
 	].join("\n");
 const detection = (shape = "new: stale mirror", enforcer = "#4439") =>
 	`\n## Detection\n\nCaught by: external user\nShould have been caught by: CI unit\nGap: none: no layer would have seen it\nShape: ${shape}\nEnforcer: ${enforcer}\n`;
-const refsOnly = base("Fixes the reader. Refs #4321 for the rest.");
+const refsOnly = base(
+	"Fixes the reader. Refs #4321 for the rest.\nRemaining #4321: the follow-up stays open.",
+);
 // Recurrence (#4968 F1): merged PR #4924 carried `(refs #4532)` in its title and
 // named the bug in its body only as `Part (a) of #4532 gap 13 only`, a form no
 // keyword list reads. #4532 is `bug`, and #4924 merged with no `## Detection`.
 const title4924 =
 	"fix: sweep held-document drift before lsp answers (refs #4532)";
 const body4924 = base(
-	"Part (a) of #4532 gap 13 only: files pi (the language server) already holds. Files pi does NOT hold (part (b)) are a separate lane; `clients/out-of-band-changes.ts` is untouched.",
+	"Part (a) of #4532 gap 13 only: files pi (the language server) already holds. Files pi does NOT hold (part (b)) are a separate lane; `clients/out-of-band-changes.ts` is untouched.\nRemaining #4532: the held-document drift follow-up stays open.",
 );
 const noGit = (() => "") as never;
+
+describe("Refs remainder alignment (#5326)", () => {
+	const lint = (summary: string, title = "fix: keep the follow-up") =>
+		lintPrBody(base(summary), {
+			workingTree: true,
+			title,
+			refsRemainderTrackers: [],
+		});
+
+	it("refuses Refs without a line-start Remaining line", () => {
+		const result = lint("Fixes the reader. Refs #5323 for the rest.");
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("Remaining #5323:");
+	});
+
+	it("refuses a Remaining line placed after other text", () => {
+		const result = lint(
+			"Fixes the reader. Refs #5323. Remaining #5323: still open.",
+		);
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("on its own line");
+	});
+
+	it.each(["Remaining #5323: still open.", "- Remaining #5323: still open."])(
+		"accepts a line-start remainder: %s",
+		(remaining) => {
+			const result = lint(`Fixes the reader. Refs #5323.\n${remaining}`);
+			expect(result.errors.join(" ")).not.toContain("Remaining #5323");
+		},
+	);
+
+	it("does not count Refs inside an inline code span", () => {
+		expect(
+			lint("Fixes the reader. Use `Refs #5323` as an example.").valid,
+		).toBe(true);
+	});
+
+	it("does not require a remainder for Closes alone", () => {
+		expect(lint("Fixes the reader. Closes #5323.").valid).toBe(true);
+	});
+
+	it("counts a reference in the title", () => {
+		const result = lint("Fixes the reader.", "fix: follow-up (refs #5323)");
+		expect(result.valid).toBe(false);
+		expect(result.errors.join(" ")).toContain("Remaining #5323:");
+	});
+
+	it("accepts a tracker issue only when its title was resolved", () => {
+		expect(
+			lint("Fixes the routine. Refs #4907.", "fix: routine (refs #4907)").valid,
+		).toBe(false);
+		expect(
+			lintPrBody(base("Fixes the routine. Refs #4907."), {
+				workingTree: true,
+				title: "fix: routine (refs #4907)",
+				refsRemainderTrackers: [4907],
+			}).valid,
+		).toBe(true);
+	});
+
+	it("reads tracker titles through the same API seam as other issue metadata", async () => {
+		vi.stubEnv("GITHUB_TOKEN", "t");
+		vi.stubEnv("GITHUB_API_URL", "https://api.example");
+		vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ title: "tracking: scheduled routines" }), {
+				status: 200,
+			}),
+		);
+		try {
+			expect(
+				await resolveRefsRemainderTrackers(
+					base("Fixes the routine. Refs #4907."),
+					fetchImpl,
+					"fix: routine (refs #4907)",
+				),
+			).toEqual([4907]);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
+	it("keeps an unreadable tracker out of the exemption", async () => {
+		const exec = vi.fn().mockImplementation(() => {
+			throw new Error("offline");
+		});
+		expect(
+			await resolveRefsRemainderTrackersViaGh(
+				base("Fixes the routine. Refs #4907."),
+				process.cwd(),
+				exec as never,
+				"fix: routine (refs #4907)",
+			),
+		).toEqual([]);
+	});
+
+	it("pins the land.sh remainder expression when the orchestrator script is present", () => {
+		const path =
+			"/home/akis/.cache/pi-lens-orchestrator/bin/refs-remainder-check.sh";
+		if (!existsSync(path)) return; // named skip: local orchestrator cache is absent
+		const script = readFileSync(path, "utf8");
+		expect(script).toContain(
+			"s/^[[:space:]]*([-*][[:space:]]+)?Remaining #$1:[[:space:]]*(.+[^[:space:]])[[:space:]]*$/\\2/p",
+		);
+	});
+});
 
 describe("referencedIssues (#4968)", () => {
 	it.each([
