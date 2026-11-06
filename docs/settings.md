@@ -82,6 +82,7 @@ column is the effective behavior when nothing is set.
 | `--no-typos` | `typos.enabled` | global | typos auxiliary server **on** |
 | `--lens-spotbugs` | `spotbugs.enabled` | global | SpotBugs **off** |
 | `--no-read-guard` | `readGuard.enabled` | global | read-before-edit monitor **on** |
+| `--no-read-expansion` | `readGuard.expandReads` | global | read widening **on** (guard stays active when disabled) |
 | `--no-lens-context` | `contextInjection.enabled` | global | context injection **on** |
 | `--lens-retain-injections` | `contextInjection.retain` | global | **off** |
 | `--lens-turn-summary` | `turnSummary.enabled` | global | **off** |

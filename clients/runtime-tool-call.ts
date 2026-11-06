@@ -1117,6 +1117,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		toolName === "read" &&
 		!getFlag("no-lsp") &&
 		!getFlag("no-read-guard") &&
+		!getFlag("no-read-expansion") &&
 		!isExternalOrVendor &&
 		filePath &&
 		readInput &&

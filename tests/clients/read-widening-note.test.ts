@@ -12,7 +12,10 @@ import * as path from "node:path";
 import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
-import { resolvePiLensFlag } from "../../clients/lens-config.js";
+import {
+	loadPiLensGlobalConfig,
+	resolvePiLensFlag,
+} from "../../clients/lens-config.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
@@ -35,7 +38,9 @@ import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 
 type Content = Array<{ type: string; text?: string }>;
 
-const guardOn = (name: string) => name === "no-complexity";
+const guardOn = (name: string) =>
+	name === "no-complexity" ||
+	resolvePiLensFlag(name, undefined, undefined) === true;
 const guardOff = (name: string) =>
 	name === "no-complexity" || name === "no-read-guard";
 
@@ -581,6 +586,60 @@ describe("#3832: a widened read keeps the host's structuredContent", () => {
 });
 
 describe("#3555: the widening follows the read guard's switch", () => {
+	// #5303: an exact-range read must not require switching off the guard.
+	it.each([
+		["notes.md", ["## Section", ...lines(39)]],
+		["a.ts", lines(40)],
+	])(
+		"keeps %s reads exact with the guard active when widening is disabled",
+		async (name, source) => {
+			const env = setupTestEnvironment("rw-5303-opt-out-");
+			try {
+				const file = path.join(env.tmpDir, name);
+				fs.writeFileSync(file, source.join("\n"));
+				for (const cli of [false, true]) {
+					const configPath = path.join(env.tmpDir, "config.json");
+					fs.writeFileSync(
+						configPath,
+						JSON.stringify({ readGuard: { enabled: true, expandReads: cli } }),
+					);
+					const config = loadPiLensGlobalConfig(configPath);
+					const getFlag = (flag: string) =>
+						flag === "no-complexity" ||
+						resolvePiLensFlag(
+							flag,
+							cli && flag === "no-read-expansion",
+							config,
+						) === true;
+					const runtime = newRuntime(env.tmpDir);
+					const read = await piRead(
+						runtime,
+						{ path: file, offset: 12, limit: 3 },
+						{ getFlag, treeSitter: stubTreeSitter(9, 19, "handler") },
+					);
+					expect([read.input.offset, read.input.limit]).toEqual([12, 3]);
+					expect(read.content).toEqual(read.host);
+					expect(read.content[0]?.text).toBe(
+						`${source.slice(11, 14).join("\n")}\n\n[26 more lines in file. Use offset=15 to continue.]`,
+					);
+					expect(runtime.readGuard.getReadHistory(file).at(-1)).toMatchObject({
+						effectiveOffset: 12,
+						effectiveLimit: 3,
+					});
+					expect(runtime.readGuard.checkEdit(file, [12, 14]).action).toBe(
+						"allow",
+					);
+					expect(runtime.readGuard.checkEdit(file, [19, 19])).toMatchObject({
+						action: name.endsWith(".md") ? "warn" : "block",
+						reason: expect.stringContaining("Edit outside read range"),
+					});
+				}
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
 	it("reads exactly the requested range under --no-read-guard", async () => {
 		const env = setupTestEnvironment("rw-3555-flag-off-");
 		try {
