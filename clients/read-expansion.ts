@@ -103,6 +103,26 @@ const ENCLOSING_TYPES: Record<string, string[]> = {
 	],
 };
 
+/**
+ * Grammars whose type declaration carries its own name in a `type_identifier`
+ * child, checked one by one through `tryExpandRead` (#5320):
+ * Kotlin `class_declaration children: class, type_identifier(Greeter),
+ * primary_constructor, class_body`, Swift `class_declaration children: class,
+ * type_identifier(Greeter), class_body`.
+ *
+ * `type_identifier` is deliberately NOT a global name kind. In Java it is a
+ * method's return type and it precedes the name (`method_declaration children:
+ * modifiers, type_identifier(String), identifier(greet)`), so a global read
+ * would name `greet` "String"; in C and C++ it is a function's return type with
+ * the name nested in `function_declarator`, so a global read would name a
+ * function by its return type. Census
+ * (`grep -c -a -o type_identifier grammars/*.wasm` over the 26 shipped wasm):
+ * the node type exists in c, cpp, dart, go, java, kotlin, rust, swift, tsx and
+ * typescript; the eight unchecked grammars stay out until each is checked the
+ * same way (the named non-goal of #5320).
+ */
+const LANGUAGES_NAMING_TYPES_BY_TYPE_IDENTIFIER = new Set(["kotlin", "swift"]);
+
 interface AncestorSymbol {
 	name: string;
 	kind: string;
@@ -150,14 +170,28 @@ function findEnclosingNodeForRange(
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: tree-sitter AST node
-function getSymbolName(node: any): string {
+function getSymbolName(node: any, languageId: string): string {
 	for (const child of node.children ?? []) {
 		if (
 			child.type === "identifier" ||
 			child.type === "property_identifier" ||
 			// Groovy Spock feature method: `def "adds two numbers"()` (#5235).
 			child.type === "quoted_identifier" ||
-			child.type === "name"
+			// Kotlin and Swift spell a function name this (#5320). Census
+			// (`grep -c -a -o simple_identifier grammars/*.wasm` over the 26
+			// shipped wasm): the node type ships in exactly those two grammars, so
+			// unlike `type_identifier` it needs no per-language gate. A Kotlin
+			// extension function keeps its receiver type in a `user_type` node, so
+			// the first `simple_identifier` child is still the name
+			// (`fun String.shout()` children: fun, user_type, .,
+			// simple_identifier(shout), function_value_parameters, …).
+			child.type === "simple_identifier" ||
+			child.type === "name" ||
+			// Kotlin and Swift name a class with `type_identifier`, the same node
+			// type a Java method uses for its return type, so it is consulted only
+			// for the grammars checked for it (#5320).
+			(LANGUAGES_NAMING_TYPES_BY_TYPE_IDENTIFIER.has(languageId) &&
+				child.type === "type_identifier")
 		) {
 			return child.text as string;
 		}
@@ -170,14 +204,18 @@ function getSymbolName(node: any): string {
  * one of the enclosing symbol types. Returns them outermost-first.
  */
 // biome-ignore lint/suspicious/noExplicitAny: tree-sitter AST node
-function buildAncestryChain(node: any, types: string[]): AncestorSymbol[] {
+function buildAncestryChain(
+	node: any,
+	types: string[],
+	languageId: string,
+): AncestorSymbol[] {
 	const chain: AncestorSymbol[] = [];
 	// biome-ignore lint/suspicious/noExplicitAny: tree-sitter parent node
 	let current: any = node.parent;
 	while (current) {
 		if (types.includes(current.type as string)) {
 			chain.push({
-				name: getSymbolName(current),
+				name: getSymbolName(current, languageId),
 				kind: current.type as string,
 				startLine: (current.startPosition?.row ?? 0) + 1,
 			});
@@ -314,12 +352,12 @@ export async function tryExpandRead(
 					);
 					if (!node) return undefined;
 					return {
-						name: getSymbolName(node),
+						name: getSymbolName(node, languageId),
 						kind: node.type as string,
 						startRow: node.startPosition.row,
 						// biome-ignore lint/suspicious/noExplicitAny: endPosition not in local interface
 						endRow: (node as any).endPosition?.row ?? node.startPosition.row,
-						ancestry: buildAncestryChain(node, enclosingTypes),
+						ancestry: buildAncestryChain(node, enclosingTypes, languageId),
 					};
 				},
 				"read-expansion",
