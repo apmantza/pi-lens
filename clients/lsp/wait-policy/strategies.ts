@@ -157,14 +157,15 @@ export interface DiagnosticStrategy {
 	 * The flag is CLASSIC-ONLY: `getStrategy` answers the typescript-go
 	 * launches with `NATIVE_TS7_DIAGNOSTIC_STRATEGY` (`silentOnClean: false`)
 	 * and `wait-policy/classification.ts` also refuses a native-ts7 snapshot.
-	 * The probe's current reading is that native-ts7 IS silent on the clean
-	 * fixture (`typescript@7.0.2`: the nightly footnote carried the finding
-	 * at every refresh from 2026-10-21 to 2026-11-06, and three local runs on
-	 * 2026-11-06 saw `cleanPubs=0`); the 2026-07-12 reading of `cleanPubs=2`
-	 * predates #4615's per-document attribution of the publish trace. It
-	 * stays unmarked because silence on
-	 * a clean file does not show that the server publishes a file's errors
-	 * within the wait: the marker turns a lapsed wait into a confirmed clean.
+	 * Native TS7 7.0.2 and `effect-tsgo` are PULL servers (`diagnosticProvider`
+	 * advertised, `mode=pull`): `classifyServerWaitTier` returns before it reads
+	 * this marker, so it does not apply to them whichever way it is set. The
+	 * nightly `silent` readings for `typescript7` (2026-10-21 to 2026-11-06)
+	 * were classic's data: the probe never ran the fixture's `setup`, so the
+	 * registry launched the classic server (#5348). It stays unmarked for a
+	 * push-only TS7 build, where silence on a clean file would not show that the
+	 * server publishes a file's errors within the wait: the marker turns a
+	 * lapsed wait into a confirmed clean.
 	 */
 	silentOnClean?: boolean;
 	/**
@@ -641,11 +642,11 @@ const NATIVE_TS7_DIAGNOSTIC_STRATEGY: DiagnosticStrategy = {
 	...SERVER_DIAGNOSTIC_STRATEGIES.typescript,
 	seedFirstPush: false,
 	// #5348: the classic-only marker must not leak through the shared server id.
-	// Native TS7 reads silent on the clean fixture (see `silentOnClean`), but
-	// that is not the claim the marker makes: it turns a wait that lapses with
-	// no publish into a confirmed clean, and nothing measures that this server
-	// publishes a file's errors inside the budget. This strategy is also
-	// `effect-tsgo`'s, whose clean behavior is unmeasured.
+	// It turns a wait that lapses with no publish into a confirmed clean, and
+	// nothing measures that a push-only TS7 build publishes a file's errors
+	// inside the budget. Native TS7 7.0.2 and `effect-tsgo` (this strategy is
+	// also its) are pull servers, so the marker is not read for them today (see
+	// `silentOnClean`).
 	silentOnClean: false,
 };
 

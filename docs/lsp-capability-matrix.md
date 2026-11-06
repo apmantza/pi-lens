@@ -25,9 +25,10 @@ classify each server and pick a per-server strategy. (Background: #240; mechanis
 confirmed against Neovim's LSP client, which sidesteps this entirely by being async.)
 
 Generate/refresh this matrix with `node scripts/characterize-lsp.mjs [--install]`
-(the `mode` column) and `node scripts/probe-clean-signal.mjs [--install]` (the
-`clean-behavior` column — 4-way: 2 / 2* / 3 / unknown — and the `first-publish`
-column, #3310). Both **merge** in place: a server the
+(the `mode` column) and `node scripts/probe-clean-signal.mjs [--install]
+--write-matrix` (the `clean-behavior` column — 4-way: 2 / 2* / 3 / unknown — and
+the `first-publish` column, #3310; without `--write-matrix` the probe leaves
+this tracked file alone, #5348). Both **merge** in place: a server the
 running host couldn't spawn keeps its prior row, so an ubuntu-poor run can't
 regress a richer one (#390). The nightly **tool-smoke** workflow runs both (plus
 `server-capabilities.mjs`) and opens/updates a single auto-PR
@@ -44,10 +45,17 @@ never compared in either direction (a slow/absent server isn't evidence of
 anything). The native TS7 launch variant (`typescript7`/`typescript7-clean`,
 #524/#526) is compared against an explicit `false` expectation, not classic's
 marker (#558): they share a server id, and the marker is measured on classic
-only. A `silent-not-marked` finding for it reports that the probe saw silence
-on a clean file. The marker stays unchanged pending a maintainer decision and
-a latency measurement, because it lets the silent-confirm gate read a lapsed
-wait as clean (#5348). Auxiliary servers (ast-grep, opengrep, zizmor, typos,
+only. Those fixtures carry `expectLaunchVariant: "native-ts7"`, and the probe
+measures a row only when that launch answered it. The probe never runs a
+fixture's `setup` (`npm install typescript@7`), so before #5348 the registry
+fell back to the classic launch and the nightly's `typescript7` rows
+(`mode=push-only`, `silent`) were classic's data. A row from the wrong launch
+now reads `unknown`. Native TS7 7.0.2 is a pull server (`diagnosticProvider`
+advertised, `mode=pull`, `clean-behavior=n/a (pull)`), and so is `effect-tsgo`
+0.62.0; neither pushes diagnostics for an edited file, so `silentOnClean` does
+not apply to them. The marker stays `false` (it lets the silent-confirm gate
+read a lapsed wait as clean) and a push-only, silent TS7 build would still
+surface as `silent-not-marked` (#5348). Auxiliary servers (ast-grep, opengrep, zizmor, typos,
 fallow) are never compared: `silentOnClean` is read in primary-scoped gates,
 and in the warm-up gate only for a server with `workspaceIndexing`, which no
 auxiliary sets.

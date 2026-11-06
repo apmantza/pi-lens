@@ -68,6 +68,7 @@ import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import {
 	adoptFixtureProjectTrust,
 	bootstrapFixtureWorkspace,
+	launchVariantMismatch,
 	withScratchHome,
 } from "./lib/lsp-fixture-workspace.mjs";
 import {
@@ -3574,14 +3575,12 @@ export async function runLspCascade({
 			}
 			measured.warmMs = Date.now() - warmStart;
 			if (measured.answered && fx.expectLaunchVariant) {
-				const snapshots = await lsp.getCapabilitySnapshots(absPrimary);
-				if (
-					!snapshots.some((s) => s.launchVariant === fx.expectLaunchVariant)
-				) {
-					push(
-						"fail",
-						`expected launchVariant '${fx.expectLaunchVariant}', got [${snapshots.map((s) => s.launchVariant ?? "(unset)").join(",")}] — silent fallback?`,
-					);
+				const mismatch = launchVariantMismatch(
+					fx.expectLaunchVariant,
+					await lsp.getCapabilitySnapshots(absPrimary),
+				);
+				if (mismatch) {
+					push("fail", mismatch);
 					continue;
 				}
 			}
@@ -4207,23 +4206,17 @@ async function runLspHandshake({ langs, install, verbose, minPass = null }) {
 				// (native-ts7 and classic share the same server id).
 				if (fx.expectLaunchVariant) {
 					const snapshots = await lsp.getCapabilitySnapshots(absFile);
-					const active = snapshots.find(
-						(s) => s.launchVariant === fx.expectLaunchVariant,
-					);
-					const gotVariants = [
-						...new Set(snapshots.map((s) => s.launchVariant ?? "(unset)")),
-					];
 					if (verbose) {
 						console.error(
-							`[${fx.lang}] capability snapshots launchVariant=${JSON.stringify(gotVariants)}`,
+							`[${fx.lang}] capability snapshots launchVariant=${JSON.stringify(snapshots.map((s) => s.launchVariant ?? "(unset)"))}`,
 						);
 					}
-					if (!active) {
-						push(
-							"fail",
-							`expected launchVariant '${fx.expectLaunchVariant}', got [${gotVariants.join(",") || "(no snapshot)"}] — silent fallback?`,
-							diags,
-						);
+					const mismatch = launchVariantMismatch(
+						fx.expectLaunchVariant,
+						snapshots,
+					);
+					if (mismatch) {
+						push("fail", mismatch, diags);
 						continue;
 					}
 				}

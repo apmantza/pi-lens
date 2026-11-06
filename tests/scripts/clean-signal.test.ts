@@ -747,9 +747,10 @@ describe("checkCleanSignalDrift (#529)", () => {
 	// #558: typescript7/typescript7-clean get an explicit `false` expectation
 	// instead of classic's shared "typescript" marker (probe-clean-signal.mjs's
 	// `lookupSilentOnClean`, out of unit-test scope — see the file header). #558
-	// set it on a 2026-07-12 reading of native-ts7 publishing on clean; since
-	// #4615 the clean fixture reads silent (#5348), and the second case below is
-	// what the nightly now files.
+	// set it on a 2026-07-12 reading of native-ts7 publishing on clean. The
+	// `silent` rows the nightly filed from 2026-10-21 were classic's launch
+	// (#5348, tests/scripts/probe-launch-variant.test.ts); the second
+	// case is what a push-only silent native build would file.
 	it("is consistent when native-ts7 is observed publishing on clean against its own expected-false marker (#558)", () => {
 		const d = checkCleanSignalDrift(
 			{ lang: "typescript7-clean", behavior: "publishes-unversioned" },
@@ -758,7 +759,7 @@ describe("checkCleanSignalDrift (#529)", () => {
 		expect(d.kind).toBe("consistent");
 	});
 
-	it("flags silent-not-marked when native-ts7 is observed silent (#558; the reading since 2026-10-21, #5348)", () => {
+	it("flags silent-not-marked when a native-ts7 launch is observed silent (#558)", () => {
 		// The explicit `false` expectation surfaces silence as a signal for a
 		// human to decide on tier3-silent for native-ts7, instead of the row
 		// being silently skipped like the old full exclusion.

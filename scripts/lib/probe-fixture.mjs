@@ -12,6 +12,7 @@ import {
 	resolveProbeServerId,
 } from "./clean-signal.mjs";
 import { isAuxiliary } from "../../dist/clients/lsp/server-traits.js";
+import { launchVariantMismatch } from "./lsp-fixture-workspace.mjs";
 import { touchAnsweredDiagnostics } from "./touch-result.mjs";
 
 // Budgets (reuse the original probe's generosity — this is off the hot path).
@@ -149,6 +150,20 @@ export function createProbeFixture(deps) {
 			await sleep(SETTLE_MS);
 		} finally {
 			drainPublishTrace(cleanPubs, row.serverId, absFile);
+		}
+
+		// #5348: this probe never runs a fixture's `setup`, so a fixture that
+		// installs TypeScript 7 gets the classic launch and the trace above is
+		// classic's. A row whose launch is not the expected one cannot be
+		// attributed to the fixture's lang: it reads `unknown`, never a verdict.
+		const variantMismatch = launchVariantMismatch(
+			fx.expectLaunchVariant,
+			fx.expectLaunchVariant ? await lsp.getCapabilitySnapshots(absFile) : [],
+		);
+		if (variantMismatch) {
+			row.mode = "unknown";
+			row.detail = `not measured: ${variantMismatch}`;
+			return;
 		}
 
 		row.mode = support?.mode ?? "unknown";

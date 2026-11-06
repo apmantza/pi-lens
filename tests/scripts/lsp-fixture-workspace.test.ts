@@ -635,3 +635,58 @@ describe("adoptFixtureProjectTrust / fixtureTrustRefusal (#4514)", () => {
 		expect(await helpers.fixtureTrustRefusal(repoRoot)).toBeUndefined();
 	});
 });
+
+describe("launchVariantMismatch (#5348)", () => {
+	// Recurrence it prevents: "typescript" is one server id with three launches,
+	// so a diagnostic alone cannot say which server answered. A fixture that
+	// installs TypeScript 7 declares the launch it expects; a script that got
+	// another one (the probe, which never runs `setup`) must refuse the row, and
+	// an answer it cannot name must refuse too.
+	let helpers: {
+		launchVariantMismatch: (
+			expected: string | undefined,
+			snapshots: ReadonlyArray<{ launchVariant?: string }>,
+		) => string | undefined;
+	};
+	beforeAll(async () => {
+		helpers = await import(
+			pathToFileURL(
+				path.join(repoRoot, "scripts", "lib", "lsp-fixture-workspace.mjs"),
+			).href
+		);
+	});
+
+	it("accepts any launch when the fixture expects none", () => {
+		expect(helpers.launchVariantMismatch(undefined, [])).toBeUndefined();
+		expect(
+			helpers.launchVariantMismatch(undefined, [{ launchVariant: "classic" }]),
+		).toBeUndefined();
+	});
+
+	it("accepts a snapshot list that carries the expected launch", () => {
+		expect(
+			helpers.launchVariantMismatch("native-ts7", [
+				{ launchVariant: "classic" },
+				{ launchVariant: "native-ts7" },
+			]),
+		).toBeUndefined();
+	});
+
+	it("names the launches it saw when none is the expected one", () => {
+		expect(
+			helpers.launchVariantMismatch("native-ts7", [
+				{ launchVariant: "classic" },
+				{ launchVariant: "classic" },
+				{},
+			]),
+		).toBe(
+			"expected launchVariant 'native-ts7', got [classic,(unset)] — silent fallback?",
+		);
+	});
+
+	it("refuses an empty snapshot list", () => {
+		expect(helpers.launchVariantMismatch("effect-tsgo", [])).toBe(
+			"expected launchVariant 'effect-tsgo', got [(no snapshot)] — silent fallback?",
+		);
+	});
+});

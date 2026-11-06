@@ -20,6 +20,10 @@ export function createProbeFixture(deps: {
 		supportsLSP(file: string): boolean;
 		touchFile(file: string, content: string, options: object): Promise<unknown>;
 		getWorkspaceDiagnosticsSupport(file: string): Promise<{ mode?: string }>;
+		/** Read only for a fixture that sets `expectLaunchVariant` (#5348). */
+		getCapabilitySnapshots?(
+			file: string,
+		): Promise<ReadonlyArray<{ launchVariant?: string }>>;
 	};
 	repoRoot: string;
 	install: boolean;
@@ -52,6 +56,8 @@ export function createProbeFixture(deps: {
 		clean?: boolean;
 		tools?: string[];
 		auxiliaryServerIds?: readonly string[];
+		/** #5348: the launch the fixture's `setup` produces; a row from another launch reads `unknown`. */
+		expectLaunchVariant?: string;
 	},
 	dst: string,
 	row: ProbeRow,
