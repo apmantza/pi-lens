@@ -868,11 +868,12 @@ export function replaceRefreshStateSection(text, section) {
  * @param {Array<{ lang: string, firstPublish?: string | null, cleanBehavior?: string | null, tier?: string | null }>} observations
  *   this run's comparable observations, already resolved onto target langs by
  *   the caller (a non-comparable axis is `null`)
- * @param {{ src?: string, marker?: string, agreeRuns?: number, now?: Date | number | string, probedLangs?: Iterable<string>, silentOnClean?: (lang: string) => boolean | undefined }} [opts]
+ * @param {{ src?: string, marker?: string, agreeRuns?: number, now?: Date | number | string, probedLangs?: Iterable<string>, markers?: (lang: string) => { silentOnClean?: boolean, emptyFirstPublish?: string } | undefined }} [opts]
  *   `now` is the injected clock (default: the real one); `probedLangs` scopes a
  *   subset probe: a lang outside it keeps its bookkeeping untouched. Omitted
- *   means a full run. `silentOnClean` is the registry marker lookup a held row
- *   must agree with to be promoted; without it no held row is promoted.
+ *   means a full run. `markers` is the registry lookup (`silentOnClean`,
+ *   `emptyFirstPublish`) a held row must agree with to be promoted; without it
+ *   no held row is promoted.
  * @returns {{ text: string, changed: boolean, reason?: string, pending: number, committed: number, pendingLangs: string[], committedLangs: string[], gatedLangs: string[], staleLangs: string[], raisedLangs: string[] }}
  */
 export function refreshCapabilityMatrix(text, observations, opts = {}) {
@@ -931,15 +932,26 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 	const pendingLangs = [];
 	const committedLangs = [];
 	const gatedLangs = [];
-	// #5323: a held row joins the curated table only with every cell the
-	// clean-behavior census judges resolved: its clean-behavior (observations
-	// carry only measured classes) agrees with the server's `silentOnClean`
-	// marker. A marker the lookup cannot report reads as unmarked, as in the
-	// census; with no lookup at all nothing is resolved, so nothing is promoted.
-	const silentOnClean = opts.silentOnClean;
-	const censusAccepts = (lang, behavior) =>
-		typeof silentOnClean === "function" &&
-		(silentOnClean(lang) === true) === (behavior === "silent");
+	// #5323: a held row joins the curated table only as a row every census of
+	// that table accepts, each arm the rule a promoted row could break there.
+	// A marker the lookup cannot report reads as unmarked, as in the censuses;
+	// with no lookup at all nothing is resolved, so nothing is promoted. A
+	// promotion only adds a row with no miss stamp, so the censuses' orphan
+	// and stamp rules cannot be broken by one.
+	const markers = opts.markers;
+	const censusAccepts = (lang, behavior, firstPublish) => {
+		if (typeof markers !== "function") return false;
+		const marker = markers(lang) ?? {};
+		const indexing = marker.emptyFirstPublish === "indexing";
+		return (
+			// tests/config/lsp-clean-behavior-census.test.ts (observations carry
+			// only measured classes)
+			(marker.silentOnClean === true) === (behavior === "silent") &&
+			// tests/config/lsp-first-publish-census.test.ts
+			!(firstPublish === "empty-first" && !indexing) &&
+			!(firstPublish === "direct" && indexing)
+		);
+	};
 	// #5323: a held row's clean-behavior goes through the same two-run
 	// hysteresis as a curated `unknown` cell. The night it commits, the row
 	// moves to the curated table with that clean-behavior and tier, and the
@@ -975,7 +987,24 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 			`${observed.cleanBehavior}\u0000${observedTier}`,
 			agreeRuns,
 		);
-		if (advanced.committed && !censusAccepts(lang, observed.cleanBehavior)) {
+		// The first-publish the curated loop would commit for this row tonight:
+		// the held pending, advanced once by tonight's observation.
+		const priorPendingFp = priorFp[lang]?.pendingFirstPublish;
+		const fpTonight = MEASURED_FIRST_PUBLISHES.has(observedFp)
+			? advancePendingClass(
+					"unknown",
+					priorPendingFp
+						? { value: priorPendingFp, runs: Number(priorFp[lang].runs ?? 1) }
+						: undefined,
+					observedFp,
+					agreeRuns,
+				)
+			: null;
+		const settledFp = fpTonight?.committed ? fpTonight.confirmed : "unknown";
+		if (
+			advanced.committed &&
+			!censusAccepts(lang, observed.cleanBehavior, settledFp)
+		) {
 			// Settled but refused: stay held, one agreeing night short of a
 			// commit, so every later agreeing night checks again and the
 			// bookkeeping is the same bytes each night.
@@ -989,7 +1018,8 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 			const promoted = {
 				...row,
 				"clean-behavior": observed.cleanBehavior,
-				"first-publish": "unknown",
+				// The cell the gate judged; the curated loop finds it current.
+				"first-publish": settledFp,
 				tier: observedTier,
 				stale: MATRIX_EMPTY_CELL,
 			};

@@ -12,6 +12,10 @@
  *  - #5325 round 3 promoted a held row the night its clean-behavior settled,
  *    so `fallow` (measured silent, no `silentOnClean` marker) would have
  *    joined the curated table and redded the census on the refresh PR.
+ *  - The same fold gated only on the clean-behavior census, so a held row
+ *    settled `empty-first` with no `emptyFirstPublish` marker would have
+ *    joined the curated table and redded the first-publish census (CodeRabbit
+ *    on #5325).
  *  - #5325 round 2 held them in a table that rewrote a run date every night
  *    (36 flips over two identical nights, so the refresh never landed
  *    flip-free) and dropped a held row the night its server was absent, with
@@ -29,6 +33,7 @@ import { LSP_SERVERS } from "../../clients/lsp/server.js";
 import { SERVER_DIAGNOSTIC_STRATEGIES } from "../../clients/lsp/wait-policy/strategies.js";
 import {
 	buildMatrixObservations,
+	COMPARABLE_FIRST_PUBLISH,
 	MEASURED_CLEAN_BEHAVIORS,
 	resolveTargetLangRows,
 	strategyKeyForLang,
@@ -80,18 +85,28 @@ function characterize(
 	})!;
 }
 
-// The registry marker, read the way the census reads it. probe-clean-signal
-// passes its own lookup (pinned below), which differs only for typescript7.
-const silentOnClean = (lang: string) =>
-	SERVER_DIAGNOSTIC_STRATEGIES[strategyKeyForLang(lang)]?.silentOnClean;
+// The registry markers, read the way the censuses read them. probe-clean-signal
+// passes the same lookup (pinned below), which differs only for typescript7.
+const strategy = (lang: string) =>
+	SERVER_DIAGNOSTIC_STRATEGIES[strategyKeyForLang(lang)];
+const silentOnClean = (lang: string) => strategy(lang)?.silentOnClean;
+const markers = (lang: string) => ({
+	silentOnClean: silentOnClean(lang),
+	emptyFirstPublish: strategy(lang)?.emptyFirstPublish,
+});
 
 /** One nightly: characterize-lsp's merge, then probe-clean-signal's refresh. */
-function night(doc: string, run: Run, day: string): string {
+function night(
+	doc: string,
+	run: Run,
+	day: string,
+	lookup: typeof markers = markers,
+): string {
 	const merged = characterize(doc, run, day).text;
 	return refreshCapabilityMatrix(
 		merged,
 		buildMatrixObservations(resolveTargetLangRows(run.clean)),
-		{ src: "ci", now: day, silentOnClean },
+		{ src: "ci", now: day, markers: lookup },
 	).text;
 }
 
@@ -268,6 +283,69 @@ describe("#5323 matrix rows for every measured server (run 42149703889)", () => 
 			.map((row) => `${row.lang}: ${row["clean-behavior"]}`);
 	}
 
+	// The first-publish census's both-directions rule
+	// (tests/config/lsp-first-publish-census.test.ts) over a merged doc.
+	function firstPublishMismatches(text: string): string[] {
+		return [...curated(text).values()]
+			.filter((row) => COMPARABLE_FIRST_PUBLISH.has(row["first-publish"]))
+			.filter(
+				(row) =>
+					(SERVER_DIAGNOSTIC_STRATEGIES[strategyKeyForLang(row.lang)]
+						?.emptyFirstPublish ===
+						"indexing") !==
+					(row["first-publish"] === "empty-first"),
+			)
+			.map((row) => `${row.lang}: ${row["first-publish"]}`);
+	}
+
+	it("keeps a held row settled empty-first without an emptyFirstPublish marker held (#5323)", () => {
+		// The recorded run measures php empty-first (its marker exists). Here a
+		// held server, go, measures the same way on both nights; gopls has no
+		// marker, so the first-publish census would red the night it joined.
+		expect(
+			RUN.cleanSignal.rows.find((r: any) => r.lang === "php")?.firstPublish,
+		).toBe("empty-first");
+		expect(silentOnClean("go")).not.toBe(true);
+		expect(
+			SERVER_DIAGNOSTIC_STRATEGIES[strategyKeyForLang("go")]?.emptyFirstPublish,
+		).toBeUndefined();
+		const run = recorded();
+		run.clean = run.clean.map((r: any) =>
+			r.lang === "go" ? { ...r, firstPublish: "empty-first" } : r,
+		);
+		const n1 = night(BASE, run, "2026-11-06");
+		const n2 = night(n1, run, "2026-11-07");
+		const n3 = night(n2, run, "2026-11-08");
+		for (const doc of [n2, n3]) {
+			expect(held(doc).has("go")).toBe(true);
+			expect(curated(doc).has("go")).toBe(false);
+			expect(firstPublishMismatches(doc)).toEqual([]);
+		}
+		expect(n3).toBe(n2);
+		// The other direction: go as recorded (direct) under a registry that
+		// marks gopls `emptyFirstPublish: "indexing"`, which the census reds.
+		const marked = (lang: string) =>
+			lang === "go"
+				? { ...markers(lang), emptyFirstPublish: "indexing" as const }
+				: markers(lang);
+		const m1 = night(BASE, recorded(), "2026-11-06", marked);
+		const m2 = night(m1, recorded(), "2026-11-07", marked);
+		expect(held(m2).has("go")).toBe(true);
+		expect(
+			curated(night(m1, recorded(), "2026-11-07")).get("go"),
+		).toMatchObject({ "first-publish": "direct" });
+		// The rows that did move carry a first-publish the census compares.
+		const promoted = [...curated(n2).values()].filter((row) =>
+			held(n1).has(row.lang),
+		);
+		assertNonEmptyScan(
+			"promoted rows with a comparable first-publish",
+			promoted.filter((row) =>
+				COMPARABLE_FIRST_PUBLISH.has(row["first-publish"]),
+			).length,
+		);
+	});
+
 	it("keeps a settled held row held while its silentOnClean marker disagrees, so the census still passes (#5323)", () => {
 		// The recorded run measures fallow silent, and the registry has no
 		// marker for it: the census would red the night it joined the matrix.
@@ -300,7 +378,7 @@ describe("#5323 matrix rows for every measured server (run 42149703889)", () => 
 		// probe-clean-signal.mjs runs on load and spawns servers, so its wiring
 		// is pinned on blanked source: the refresh gets the marker lookup.
 		expect(stripSource(read("scripts/probe-clean-signal.mjs"))).toMatch(
-			/refreshCapabilityMatrix\([^;]*\bsilentOnClean: lookupSilentOnClean,/,
+			/refreshCapabilityMatrix\([^;]*\bmarkers: \(lang\) => \(\{\s*silentOnClean: lookupSilentOnClean\(lang\),\s*emptyFirstPublish:\s*SERVER_DIAGNOSTIC_STRATEGIES\[strategyKeyForLang\(lang\)\]\s*\?\.emptyFirstPublish,/,
 		);
 	});
 });
