@@ -23,8 +23,10 @@
  * A discovered call is `scanned` when its arguments are statically readable
  * (a native `symbol_search` / `pilens_symbol_search` call, or a `codemode`
  * call whose script passes a literal object to `tools.symbol_search(`), and
- * `unscannable` otherwise. `unscannable` calls are counted, excluded from the
- * other denominators, and always printed.
+ * `unscannable` otherwise: any other occurrence of the identifier
+ * `symbol_search` in a codemode script (an alias, a computed key, another
+ * receiver) is unscannable, never dropped. `unscannable` calls are counted,
+ * excluded from the other denominators, and always printed.
  * A file whose first row carries no `type` is the subagent-artifacts envelope,
  * not a session; the walk skips it on purpose, so its `symbol_search` traffic
  * stays outside the population.
