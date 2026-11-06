@@ -150,23 +150,21 @@ export interface DiagnosticStrategy {
 	 * they DO resolve the wait early at runtime, just without a proven version,
 	 * so shortening their in-lane wait would be a behavior change, not a no-op.
 	 *
-	 * #524/#529/#541/#558: this table is keyed by server ID, but "typescript"
-	 * can now launch as either the classic typescript-language-server (what
-	 * this flag was measured against) or TS7's native `tsc --lsp --stdio`
-	 * (PR #526), a different Go-native binary. PR #526 originally scoped this
-	 * flag to the classic server only; #541 (2026-07-11) briefly lifted that
-	 * scoping after a probe run appeared to show native-ts7 silent too. A
-	 * 2026-07-12 dual-environment re-measurement (nightly CI on Linux + a
-	 * live local run on Windows dev, same `typescript@7.0.2` both times)
-	 * found native-ts7 now publishes 2 version-less diagnostic sets on the
-	 * clean transition — it is NOT silent, a drift from the #541
-	 * measurement. Classic was re-confirmed silent in the same run,
-	 * unaffected. This flag is therefore effectively CLASSIC-ONLY again:
-	 * `wait-policy/classification.ts`'s classifier checks the live snapshot's
-	 * `launchVariant` and does not apply it to a native-ts7 instance (falls
-	 * back to the fail-safe full-wait path instead). The value here stays
-	 * `true` unchanged — only the runtime scoping in wait-policy/classification.ts and the
-	 * probe-clean-signal.mjs drift-check expectation change.
+	 * #524/#529/#541/#558/#5348: this table is keyed by server ID, but
+	 * "typescript" can launch as the classic typescript-language-server (what
+	 * this flag was measured against), TS7's native `tsc --lsp --stdio`
+	 * (PR #526) or `effect-tsgo` (#4914), which run the typescript-go server.
+	 * The flag is CLASSIC-ONLY: `getStrategy` answers the typescript-go
+	 * launches with `NATIVE_TS7_DIAGNOSTIC_STRATEGY` (`silentOnClean: false`)
+	 * and `wait-policy/classification.ts` also refuses a native-ts7 snapshot.
+	 * The probe's current reading is that native-ts7 IS silent on the clean
+	 * fixture (`typescript@7.0.2`: the nightly footnote carried the finding
+	 * at every refresh from 2026-10-21 to 2026-11-06, and three local runs on
+	 * 2026-11-06 saw `cleanPubs=0`); the 2026-07-12 reading of `cleanPubs=2`
+	 * predates #4615's per-document attribution of the publish trace. It
+	 * stays unmarked because silence on
+	 * a clean file does not show that the server publishes a file's errors
+	 * within the wait: the marker turns a lapsed wait into a confirmed clean.
 	 */
 	silentOnClean?: boolean;
 	/**
@@ -297,13 +295,12 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			// clean→clean edit (docs/lsp-capability-matrix.md, re-confirmed
 			// 2026-07-12). It's the lone core-set tier-3 server, which is exactly
 			// why the cascade lane's in-lane wait is worth skipping for it
-			// specifically. Applies to the CLASSIC server only (#524/#529/#558)
+			// specifically. Applies to the CLASSIC server only (#524/#529/#558/#5348)
 			// — TS7's native `tsc --lsp --stdio` variant shares this
-			// "typescript" server id but the 2026-07-12 dual-environment
-			// re-measurement found it now publishes on clean (a drift from the
-			// #541 measurement); wait-policy/classification.ts's classifier checks the live
-			// snapshot's launchVariant and never applies this flag to a
-			// native-ts7 instance.
+			// "typescript" server id; `getStrategy` answers it with
+			// NATIVE_TS7_DIAGNOSTIC_STRATEGY and wait-policy/classification.ts's
+			// classifier checks the live snapshot's launchVariant, so neither
+			// applies this flag to a native-ts7 instance.
 			silentOnClean: true,
 		},
 		"rust-analyzer": {
@@ -643,8 +640,12 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 const NATIVE_TS7_DIAGNOSTIC_STRATEGY: DiagnosticStrategy = {
 	...SERVER_DIAGNOSTIC_STRATEGIES.typescript,
 	seedFirstPush: false,
-	// Native TS7 demonstrably publishes on clean, so the classic-only marker
-	// must not leak through the shared server id.
+	// #5348: the classic-only marker must not leak through the shared server id.
+	// Native TS7 reads silent on the clean fixture (see `silentOnClean`), but
+	// that is not the claim the marker makes: it turns a wait that lapses with
+	// no publish into a confirmed clean, and nothing measures that this server
+	// publishes a file's errors inside the budget. This strategy is also
+	// `effect-tsgo`'s, whose clean behavior is unmeasured.
 	silentOnClean: false,
 };
 

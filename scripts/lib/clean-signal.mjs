@@ -258,6 +258,7 @@ export function createPublishTraceDrainer({
  * @typedef {Object} DriftInput
  * @property {string} lang            fixture/matrix key, e.g. "typescript"
  * @property {string} behavior        classifyCleanBehavior(...).behavior for this row
+ * @property {boolean} [auxiliary]     the measured server is an auxiliary (#5348)
  */
 
 /**
@@ -290,6 +291,17 @@ export function checkCleanSignalDrift(row, silentOnClean) {
 			lang,
 			kind: "not-comparable",
 			detail: `observed=${behavior} — not a comparable classification (never collapsed into silent/not-silent)`,
+		};
+	}
+	// #5348: `silentOnClean` is read for a file's PRIMARY server only (the cascade
+	// classifier resolves the non-auxiliary server, the aggregate and silent-confirm
+	// gates are primary-scoped), so no marker can change an auxiliary's wait and
+	// a `silent-not-marked` for one is a finding nobody can act on.
+	if (row.auxiliary === true) {
+		return {
+			lang,
+			kind: "not-comparable",
+			detail: `observed=${behavior} on an auxiliary server — wait-policy reads silentOnClean for a file's primary server only, so no marker could change this wait (#5348)`,
 		};
 	}
 	if (isDegenerateSilent(row)) {
