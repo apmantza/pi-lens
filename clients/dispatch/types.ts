@@ -863,6 +863,14 @@ export interface DispatchContext {
 	 */
 	readonly rulePolicy?: RulePolicyMap;
 	/**
+	 * The EDITED file's config owner's `rules.<id>.threshold`, or undefined when
+	 * no tier sets it (the rule's own default then applies). One resolution with
+	 * {@link rulePolicy}, so a nested `.pi-lens.json` tightens its own files'
+	 * thresholds and nothing above it (#5292). Ask the owner for the field
+	 * instead of reading `projectConfig.rules` at a new call site.
+	 */
+	readonly ruleThreshold?: (ruleId: string) => number | undefined;
+	/**
 	 * Runner ids the operator denied through `dispatch.disabledRunners`
 	 * (union of every config tier). Absent when nothing is denied. The
 	 * dispatcher skips these before their `when`/`run`, so the tool never spawns.
