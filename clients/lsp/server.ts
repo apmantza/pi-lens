@@ -2951,26 +2951,35 @@ async function findExtensionBoundedRoot(
 }
 
 /**
- * Check whether the directory immediately containing the extensions folder
- * (i.e. `.pi/agent/`) holds any TypeScript project marker. This narrowly
+ * Classify the directory immediately containing the extensions folder
+ * (i.e. `.pi/agent/`), reading only that directory and never walking further
+ * up. `"config"` is an explicit TypeScript config the file's family honors
+ * (#5335); `"other"` is any other TypeScript project marker, which narrowly
  * detects the #123 scenario — pi itself installs a package.json at
- * `~/.pi/agent/` and the user's extension has none of its own — without
- * picking up accidental markers further up the filesystem.
+ * `~/.pi/agent/` and the user's extension has none of its own — without picking
+ * up accidental markers further up the filesystem.
  */
-async function hasAgentLevelProjectMarker(
+async function classifyAgentLevelMarker(
 	extensionRootKey: string,
-): Promise<boolean> {
+	file: string,
+): Promise<"config" | "other" | undefined> {
 	const agentDir = path.dirname(extensionRootKey);
-	if (!agentDir || agentDir === extensionRootKey) return false;
-	for (const pattern of [...TS_CONFIG_MARKERS, ...TS_TOOLING_MARKERS]) {
+	if (!agentDir || agentDir === extensionRootKey) return undefined;
+	const exists = async (pattern: string): Promise<boolean> => {
 		try {
 			await stat(path.join(agentDir, pattern));
 			return true;
 		} catch {
-			/* not found, try next */
+			return false;
 		}
+	};
+	for (const pattern of tsConfigMarkersForFile(file)) {
+		if (await exists(pattern)) return "config";
 	}
-	return false;
+	for (const pattern of [...TS_CONFIG_MARKERS, ...TS_TOOLING_MARKERS]) {
+		if (await exists(pattern)) return "other";
+	}
+	return undefined;
 }
 
 const TypeScriptRoot: RootFunction = withRootMarkers(
@@ -2988,11 +2997,23 @@ const TypeScriptRoot: RootFunction = withRootMarkers(
 			// LSP root.
 			const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
 			if (bounded) return bounded;
-			// No marker inside the extension boundary. If pi itself has a
-			// package.json at ~/.pi/agent/ (the #123 setup), the previous code
-			// returned undefined and the LSP silently failed to start. Fall
-			// back to a per-file scope so the LSP at least runs.
-			if (await hasAgentLevelProjectMarker(extensionRootKey)) {
+			// No marker inside the extension boundary. An explicit agent-level
+			// tsconfig is the user opting the extensions into one project
+			// (#5335): it roots them, as the path identity the bounded walk
+			// returns. The decision rides the spelled extensions segment, so a
+			// linked extension takes it too. The file's membership stays
+			// tsserver's call, so presence alone is enough here.
+			const agentMarker = await classifyAgentLevelMarker(
+				extensionRootKey,
+				file,
+			);
+			if (agentMarker === "config") {
+				return realpathOrResolve(path.dirname(extensionRootKey));
+			}
+			// If pi itself has a package.json at ~/.pi/agent/ (the #123 setup),
+			// the previous code returned undefined and the LSP silently failed to
+			// start. Fall back to a per-file scope so the LSP at least runs.
+			if (agentMarker === "other") {
 				return FileDirRoot(file);
 			}
 			// Truly loose extension file with no project context anywhere
