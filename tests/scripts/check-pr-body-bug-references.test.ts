@@ -106,6 +106,70 @@ describe("Refs remainder alignment (#5326)", () => {
 		).toBe(true);
 	});
 
+	it("counts fenced Refs like land.sh while ignoring inline code", () => {
+		expect(lint("Fixes the reader.\n\n```text\nRefs #5323\n```").valid).toBe(
+			false,
+		);
+		expect(
+			lint("Fixes the reader. Use `Refs #5323` as an example.").valid,
+		).toBe(true);
+	});
+
+	it("accepts a closed issue without a remainder", async () => {
+		vi.stubEnv("GITHUB_TOKEN", "t");
+		vi.stubEnv("GITHUB_API_URL", "https://api.example");
+		vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({ state: "closed", title: "ordinary issue" }),
+				{
+					status: 200,
+				},
+			),
+		);
+		expect(
+			await resolveRefsRemainderTrackers(
+				base("Fixes the reader. Refs #5323."),
+				fetchImpl,
+			),
+		).toEqual([5323]);
+		expect(
+			lintPrBody(base("Fixes the reader. Refs #5323."), {
+				workingTree: true,
+				refsRemainderTrackers: [5323],
+			}).valid,
+		).toBe(true);
+		vi.unstubAllEnvs();
+	});
+
+	it("reads repeated references once and keeps unreadable issues unexempt", async () => {
+		vi.stubEnv("GITHUB_TOKEN", "t");
+		vi.stubEnv("GITHUB_API_URL", "https://api.example");
+		vi.stubEnv("GITHUB_REPOSITORY", "o/r");
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ state: "open", title: "ordinary issue" }), {
+				status: 200,
+			}),
+		);
+		expect(
+			await resolveRefsRemainderTrackers(
+				base("Fixes the reader. Refs #5323 and refs #5323."),
+				fetchImpl,
+			),
+		).toEqual([]);
+		expect(fetchImpl).toHaveBeenCalledTimes(1);
+		const unreadable = vi
+			.fn()
+			.mockResolvedValue(new Response("denied", { status: 500 }));
+		expect(
+			await resolveRefsRemainderTrackers(
+				base("Fixes the reader. Refs #5323."),
+				unreadable,
+			),
+		).toEqual([]);
+		vi.unstubAllEnvs();
+	});
+
 	it("does not require a remainder for Closes alone", () => {
 		expect(lint("Fixes the reader. Closes #5323.").valid).toBe(true);
 	});
@@ -165,17 +229,26 @@ describe("Refs remainder alignment (#5326)", () => {
 		).toEqual([]);
 	});
 
-	it("pins the land.sh remainder expression when the orchestrator script is present", () => {
-		const path =
-			"/home/akis/.cache/pi-lens-orchestrator/bin/refs-remainder-check.sh";
-		if (!existsSync(path)) {
-			expect("orchestrator cache absent").toBe("orchestrator cache absent");
-		} else {
+	it.skipIf(
+		!existsSync(
+			"/home/akis/.cache/pi-lens-orchestrator/bin/refs-remainder-check.sh",
+		),
+	)(
+		"pins the land.sh remainder expression when the orchestrator script is present",
+		() => {
+			const path =
+				"/home/akis/.cache/pi-lens-orchestrator/bin/refs-remainder-check.sh";
 			const script = readFileSync(path, "utf8");
 			expect(script).toContain(
 				"s/^[[:space:]]*([-*][[:space:]]+)?Remaining #$1:[[:space:]]*(.+[^[:space:]])[[:space:]]*$/\\2/p",
 			);
-		}
+		},
+	);
+
+	it("refuses a one-character remainder", () => {
+		expect(lint("Fixes the reader. Refs #5323.\nRemaining #5323:x").valid).toBe(
+			false,
+		);
 	});
 });
 

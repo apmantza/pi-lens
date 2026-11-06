@@ -159,6 +159,7 @@ export declare function lintLocalPrBody(
 		resolveBugClosing?: (body: string) => boolean | null;
 		bugReferenced?: boolean | null;
 		resolveBugReferenced?: (body: string, title?: string) => boolean | null;
+		refsRemainderTrackers?: number[];
 	},
 ): { valid: boolean; errors: string[] };
 export declare function parseRuntimeHunks(diff: string): Array<{

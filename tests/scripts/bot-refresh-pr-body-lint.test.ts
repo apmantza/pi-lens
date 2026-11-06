@@ -59,27 +59,18 @@ function lint(body: string, title: string, diff: string) {
 		if (args[0] === "diff") return diff;
 		throw new Error("git is not available in this test");
 	}) as never;
-	// The label of a referenced issue is not this file's subject: pinned at the
-	// process boundary, as tests/scripts/check-pr-body-bot-block.test.ts does.
-	const refs = [
-		...[...`${body}\n${title}`.matchAll(/\brefs?\s+#(\d+)/gi)].map(
-			(match) => match[1],
-		),
-	].filter((number, index, all) => all.indexOf(number) === index);
-	const additions = refs
-		.filter((number) => !body.includes(`Remaining #${number}:`))
-		.map(
-			(number) => `Remaining #${number}: the routine follow-up remains open.`,
-		)
-		.join("\n");
-	const aligned = additions
-		? body.replace("### Fold check", `${additions}\n\n### Fold check`)
-		: body;
-	return lintLocalPrBody(aligned, process.cwd(), git, {
+	// These are the tracker/umbrella titles returned by the real issue reader at
+	// the process boundary. No synthetic Remaining line is inserted into the
+	// composers' output.
+	const trackers = title.includes("#3217")
+		? ["460", "390", "529", "3217"]
+		: ["3989", "3645", "3622", "1332"];
+	return lintLocalPrBody(body, process.cwd(), git, {
 		title,
 		headFiles: postImages(diff),
 		bugClosing: false,
 		bugReferenced: false,
+		refsRemainderTrackers: trackers.map(Number),
 	});
 }
 

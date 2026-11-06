@@ -3775,14 +3775,13 @@ function referencedOnly(fullBody, title = "") {
 
 // #5326: keep the pre-merge body gate in lockstep with land.sh's Refs scan.
 // Code spans are blanked before this scan, and a resolved Closes reference is
-// not a live Refs remainder. Unknown issue metadata is not an exemption.
+// is not a live Refs remainder. Unknown issue metadata is not an exemption.
 const REFS_REMAINDER_SCAN = /\brefs?\s+#(\d+)/gi;
 const REFS_REMAINDER_LINE =
-	/^[ \t]*(?:[-*][ \t]+)?Remaining #(\d+):[ \t]*(\S(?:.*\S)?)[ \t]*$/;
+	/^[ \t]*(?:[-*][ \t]+)?Remaining #(\d+):[ \t]*(\S.*\S)[ \t]*$/;
 
 function refsRemainderIssues(fullBody, title = "") {
 	const source = blankMarkdownRegions(String(fullBody ?? ""), {
-		code: "blocks",
 		codeSpans: true,
 	});
 	const issues = [...source.matchAll(REFS_REMAINDER_SCAN)].map((match) =>
@@ -3791,7 +3790,7 @@ function refsRemainderIssues(fullBody, title = "") {
 	for (const number of titleIssues(title)) {
 		if (!issues.includes(number)) issues.push(number);
 	}
-	return issues.filter((number) => !closedIssues(fullBody).includes(number));
+	return issues;
 }
 
 export function lintRefsRemainders(
@@ -5062,11 +5061,15 @@ export async function resolveRefsRemainderTrackersViaGh(
 
 async function refsRemainderTrackers(issues, readIssue) {
 	const trackers = [];
-	for (const number of issues) {
+	for (const number of new Set(issues)) {
 		try {
 			const data = await readIssue(number);
 			const issueTitle = typeof data?.title === "string" ? data.title : "";
-			if (/^(?:tracking|Umbrella):/i.test(issueTitle)) trackers.push(number);
+			if (
+				data?.state === "closed" ||
+				/^(?:tracking|Umbrella):/i.test(issueTitle)
+			)
+				trackers.push(number);
 		} catch {
 			// Unknown metadata is deliberately not an exemption.
 		}
@@ -5242,13 +5245,19 @@ export async function lintPullRequestEvent(
 		existsOnBase: baseFileReader(),
 		shapeCatalog: shapeCatalogReader(),
 		diff,
-		workingTree: true,
+		workingTree: false,
 		// Existing open bodies were authored before #4280. Set PI_LENS_PROSE_GRACE=1
 		// for the transition job; local preflight remains blocking by default.
 		proseMode: process.env.PI_LENS_PROSE_GRACE === "1" ? "warn" : "block",
 		title,
 		refsRemainderTrackers,
 	});
+	const refsErrors = lintRefsRemainders(fullBody, {
+		title,
+		trackerIssues: refsRemainderTrackers,
+	});
+	result.errors.push(...refsErrors);
+	if (refsErrors.length) result.valid = false;
 	const unreadable = lintReferencedBugLabels(fullBody, bugReferenced, title);
 	if (unreadable.length) {
 		result.valid = false;
