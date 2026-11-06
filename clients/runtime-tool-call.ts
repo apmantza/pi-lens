@@ -1112,7 +1112,8 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	if (toolName === "read" && toolCallId !== undefined)
 		runtime.takeReadWidening(toolCallId);
 	// #3555: the widening serves the read guard, so it is off with the guard
-	// (`--no-read-guard`, or `readGuard.enabled=false`, lens-flag-registry.ts).
+	// (`--no-read-guard`, or `readGuard.enabled=false`, lens-flag-registry.ts),
+	// and #5303 turns it off alone (`--no-read-expansion`, `readGuard.expandReads=false`).
 	const readExpansionClient =
 		toolName === "read" &&
 		!getFlag("no-lsp") &&
