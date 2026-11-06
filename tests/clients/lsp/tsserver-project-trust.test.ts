@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { truncateForLedger } from "../../../clients/ledger-bounds.js";
 import { removeTempDirSync } from "../test-utils.js";
 
 const requireFixture = createRequire(import.meta.url);
@@ -846,12 +847,18 @@ describe.skipIf(process.platform === "win32")(
 			});
 
 			expect(spawned).toBeUndefined();
+			// The ledger RETAINS every identity field through `subjectForLedger` →
+			// `truncateForLedger` (#1366), so a TMPDIR long enough to push the PATH
+			// entry past `LEDGER_FIELD_MAX` stores the bounded form with an ellipsis,
+			// and the assertion compares that same bound (#5246).
 			expect(
 				ledger
 					.getDegradationSummary()
 					.find((group) => group.kind === "trust-refusal")
 					?.latestReasons.map((entry) => entry.subject),
-			).toEqual([`project-path-entry:${fs.realpathSync(scripts)}`]);
+			).toEqual([
+				truncateForLedger(`project-path-entry:${fs.realpathSync(scripts)}`),
+			]);
 			expect(warnMessages()).toContainEqual(
 				expect.stringMatching(/no absolute TypeScript compiler/),
 			);

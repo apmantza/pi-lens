@@ -32,6 +32,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
+import { truncateForLedger } from "../../clients/ledger-bounds.js";
 import {
 	DISK_CHANGE_MAX_RECORDED_PATHS,
 	type DiskChange,
@@ -876,7 +877,13 @@ describe("an over-cap publish keeps its send inside the change", () => {
 				"chunk 1 of 2 rejected, so its 64 recovered path(s) were never republished",
 			),
 		]);
-		expect(rows[0]?.latestReasons[0]?.subject).toBe(normalizeMapKey(dir));
+		// The ledger RETAINS every identity field through `subjectForLedger` →
+		// `truncateForLedger` (#1366), so a TMPDIR long enough to push the fixture
+		// directory past `LEDGER_FIELD_MAX` stores the bounded form with an
+		// ellipsis, and the assertion compares that same bound (#5246).
+		expect(rows[0]?.latestReasons[0]?.subject).toBe(
+			truncateForLedger(normalizeMapKey(dir)),
+		);
 	}, 60_000);
 });
 
@@ -1313,7 +1320,9 @@ describe("the pre-command dirty set is bounded and says when it is cut", () => {
 		expect(row?.latestReasons[0]?.reason).toContain(
 			"is not detected for this call",
 		);
-		expect(row?.latestReasons[0]?.subject).toBe(normalizeMapKey(dir));
+		expect(row?.latestReasons[0]?.subject).toBe(
+			truncateForLedger(normalizeMapKey(dir)),
+		);
 	}, 30_000);
 });
 
