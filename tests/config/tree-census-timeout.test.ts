@@ -66,7 +66,7 @@ import {
 	readWalkedFiles,
 	relativePosix,
 } from "../support/sweep-kit.js";
-import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TESTS_DIR = path.join(ROOT, "tests");
@@ -782,6 +782,6 @@ describe("tree census timeout (#4828)", () => {
 			expect(verdict.duplicated).toEqual([]);
 			expect(verdict.unreasoned).toEqual([]);
 		},
-		TREE_WALK_TIMEOUT_MS,
+		scaledTestTimeout(120_000),
 	);
 });
