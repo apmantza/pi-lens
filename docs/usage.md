@@ -114,6 +114,7 @@ pi --no-zizmor           # Disable the zizmor auxiliary LSP server (default-on)
 pi --no-typos            # Disable the typos auxiliary LSP server (default-on)
 pi --lens-spotbugs       # Run SpotBugs on Java and Kotlin files (opt-in; needs a Java build descriptor and compiled classes)
 pi --no-read-guard       # Disable the read-before-edit behavior monitor
+pi --no-read-expansion   # Keep exact read ranges without disabling the read guard
 pi --lens-retain-injections # Re-send injected findings unchanged in later requests, for exact-prefix (local) prompt caches
 pi --lens-turn-summary   # Persist a per-turn summary of diagnostics, autofixes, and autoformats
 pi --lens-compact-tool-line   # Render tool results as one compact, theme-aware line (closes #1327)
