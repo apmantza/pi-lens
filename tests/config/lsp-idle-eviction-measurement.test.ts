@@ -157,6 +157,17 @@ describe("idle-eviction probe population (#3645)", () => {
 		]);
 	});
 
+	it("lets the LSP spawn path provision fixture tools (#5323)", () => {
+		const source = readFileSync(
+			resolve(REPO_ROOT, "scripts/measure-lsp-idle-eviction.mjs"),
+			"utf8",
+		);
+		// Recorded run 42039488753: go, ruby, csharp, fsharp and dart handshook,
+		// but the measurement's ensureTool pre-gate labelled them unavailable.
+		expect(source).not.toContain("ensureFixtureTools");
+		expect(source).toContain("lsp.supportsLSP(boot.absFile)");
+	});
+
 	it("admits exactly the servers no fixture reaches, each with a reason", () => {
 		const unreached = probePopulation(LSP_SERVERS, LSP_FIXTURES)
 			.filter((entry) => entry.fixture === null)

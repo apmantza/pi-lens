@@ -74,7 +74,6 @@ const flagNames = new Set([
 	"--budget-seconds",
 	"--window-ms",
 ]);
-const install = argv.includes("--install");
 const serverFilter = argv.filter(
 	(a, i) => !a.startsWith("--") && !flagNames.has(argv[i - 1]),
 );
@@ -98,12 +97,9 @@ const driftStatePath = flagValue("--drift-state", undefined);
 withScratchHome();
 
 const imp = (rel) => import(pathToFileURL(path.join(repoRoot, rel)).href);
-const {
-	LSP_FIXTURES,
-	ensureFixtureTools,
-	ensureSmokeLombokJar,
-	runFixtureSetup,
-} = await imp("scripts/smoke-tools.mjs");
+const { LSP_FIXTURES, ensureSmokeLombokJar, runFixtureSetup } = await imp(
+	"scripts/smoke-tools.mjs",
+);
 const { getLSPService, resetLSPService } = await imp(
 	"dist/clients/lsp/index.js",
 );
@@ -117,13 +113,6 @@ await adoptFixtureProjectTrust({ repoRoot });
 const { sampleProcesses, walkDescendantPids } = await imp(
 	"dist/clients/resource-sampler.js",
 );
-let ensureTool;
-let getInstallAttempt;
-if (install)
-	({ ensureTool, getInstallAttempt } = await imp(
-		"dist/clients/installer/index.js",
-	));
-
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const residentBytesOf = (pid) =>
@@ -192,16 +181,6 @@ const rows = await measureRegistry({
 					now: () => Date.now(),
 					sleep,
 					async prepare() {
-						const tools = fx.tools ?? [];
-						if (install && tools.length > 0) {
-							const { unavailableTools } = await ensureFixtureTools(
-								tools,
-								ensureTool,
-								getInstallAttempt,
-							);
-							if (tools.every((t) => unavailableTools.has(t)))
-								return "tool-unavailable";
-						}
 						const boot = await bootstrapFixtureWorkspace(fx, {
 							initLSPConfig,
 							repoRoot,
