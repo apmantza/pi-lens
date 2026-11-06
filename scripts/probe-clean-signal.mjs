@@ -447,6 +447,13 @@ function updateMatrix(measuredRows) {
 		buildMatrixObservations(targetLangRows),
 		{
 			src,
+			// #5323: the markers a held row must agree with to be promoted.
+			markers: (lang) => ({
+				silentOnClean: lookupSilentOnClean(lang),
+				emptyFirstPublish:
+					SERVER_DIAGNOSTIC_STRATEGIES[strategyKeyForLang(lang)]
+						?.emptyFirstPublish,
+			}),
 			// A subset run (`probe-clean-signal.mjs typescript`) says nothing about
 			// the langs it did not probe: their expiry clock and tier holds stand.
 			...(langs.length
@@ -466,7 +473,7 @@ function updateMatrix(measuredRows) {
 	if (out !== text) {
 		fs.writeFileSync(docPath, out);
 		console.error(
-			`Updated docs/lsp-capability-matrix.md (committed: ${nameList(result.committedLangs)}; pending: ${nameList(result.pendingLangs)}; stale: ${nameList(result.staleLangs)}; raised: ${nameList(result.raisedLangs)}).`,
+			`Updated docs/lsp-capability-matrix.md (committed: ${nameList(result.committedLangs)}; pending: ${nameList(result.pendingLangs)}; held by a census: ${nameList(result.gatedLangs)}; stale: ${nameList(result.staleLangs)}; raised: ${nameList(result.raisedLangs)}).`,
 		);
 	} else {
 		console.error("matrix clean-behavior column: no changes.");

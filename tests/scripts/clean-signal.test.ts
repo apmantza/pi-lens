@@ -892,7 +892,6 @@ describe("md-matrix merge guard (#390)", () => {
 			],
 			"lang",
 			["clean-behavior", "tier", "src"],
-			{ updateOnly: true },
 		);
 		const ts = merged.find((r) => r[0] === "typescript")!;
 		expect(ts[3]).toBe("silent"); // clean-behavior updated
@@ -910,25 +909,10 @@ describe("md-matrix merge guard (#390)", () => {
 			[{ lang: "typescript", "clean-behavior": "silent", tier: "3" }],
 			"lang",
 			["clean-behavior", "tier"],
-			{ updateOnly: true },
 		);
 		expect(merged).toHaveLength(3); // never shrinks
 		expect(merged.find((r) => r[0] === "json")).toEqual(tbl.rows[0]);
 		expect(merged.find((r) => r[0] === "ast-grep")![3]).toBe("TBD"); // untouched
-	});
-
-	it("updateOnly drops a measured key with no existing row (curated table)", () => {
-		const tbl = parseTable(DOC, "| lang | server |")!;
-		const merged = mergeRows(
-			tbl.rows,
-			tbl.header,
-			[{ lang: "typescript-clean", "clean-behavior": "silent", tier: "3" }],
-			"lang",
-			["clean-behavior", "tier"],
-			{ updateOnly: true },
-		);
-		expect(merged).toHaveLength(3); // the unknown lang is NOT appended
-		expect(merged.some((r) => r[0] === "typescript-clean")).toBe(false);
 	});
 
 	it("round-trips through replaceTable, preserving surrounding text", () => {
@@ -939,7 +923,6 @@ describe("md-matrix merge guard (#390)", () => {
 			[{ lang: "json", mode: "pull", src: "dev+ci" }],
 			"lang",
 			["src"],
-			{ updateOnly: true },
 		);
 		const out = replaceTable(
 			DOC,

@@ -114,3 +114,30 @@ export function createServiceDriver(args: {
 	sleep: (ms: number) => Promise<void>;
 	env?: Record<string, string | undefined>;
 }): IdleEvictionDriver;
+
+/** #5323: the fixture half of a nightly driver; never consults the installer. */
+export function fixtureWorkspaceLifecycle(
+	fx: Record<string, any>,
+	target: { absFile: string; content: string },
+	deps: {
+		lsp: { supportsLSP(file: string): boolean };
+		bootstrapFixtureWorkspace: (
+			fx: any,
+			opts: any,
+		) => Promise<{ absFile: string; workspace: string; cleanup: () => void }>;
+		initLSPConfig: (workspace: string) => Promise<unknown>;
+		repoRoot: string;
+		runFixtureSetup: (
+			setup: unknown,
+			workspace: string,
+			verbose: boolean,
+		) => { ok: boolean };
+		ensureSmokeLombokJar: (
+			workspace: string,
+			verbose: boolean,
+		) => Promise<unknown>;
+	},
+): {
+	prepare: () => Promise<string | undefined>;
+	dispose: () => Promise<void>;
+};

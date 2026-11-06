@@ -222,19 +222,9 @@ export function renderServerCapabilitiesDoc({
  * @param {Object[]} measured     objects keyed by header name → cell value
  * @param {string} keyCol         header name of the unique key (e.g. "lang")
  * @param {string[]} ownedCols    header names this run is authoritative for
- * @param {{ updateOnly?: boolean }} [opts]  when updateOnly, a measured key with
- *   no existing row is DROPPED (the matrix is curated — new langs are added by
- *   hand, not appended by a probe). Default appends new keys.
  * @returns {string[][]}          merged rows
  */
-export function mergeRows(
-	existing,
-	header,
-	measured,
-	keyCol,
-	ownedCols,
-	opts = {},
-) {
+export function mergeRows(existing, header, measured, keyCol, ownedCols) {
 	const idx = (name) => header.indexOf(name);
 	const keyIdx = idx(keyCol);
 	const byKey = new Map();
@@ -248,7 +238,6 @@ export function mergeRows(
 		const k = m[keyCol];
 		let cells = byKey.get(k);
 		if (!cells) {
-			if (opts.updateOnly) continue; // don't append to a curated table
 			cells = header.map((h) => (m[h] !== undefined ? String(m[h]) : ""));
 			byKey.set(k, cells);
 			order.push(k);
@@ -879,11 +868,13 @@ export function replaceRefreshStateSection(text, section) {
  * @param {Array<{ lang: string, firstPublish?: string | null, cleanBehavior?: string | null, tier?: string | null }>} observations
  *   this run's comparable observations, already resolved onto target langs by
  *   the caller (a non-comparable axis is `null`)
- * @param {{ src?: string, marker?: string, agreeRuns?: number, now?: Date | number | string, probedLangs?: Iterable<string> }} [opts]
+ * @param {{ src?: string, marker?: string, agreeRuns?: number, now?: Date | number | string, probedLangs?: Iterable<string>, markers?: (lang: string) => { silentOnClean?: boolean, emptyFirstPublish?: string } | undefined }} [opts]
  *   `now` is the injected clock (default: the real one); `probedLangs` scopes a
  *   subset probe: a lang outside it keeps its bookkeeping untouched. Omitted
- *   means a full run.
- * @returns {{ text: string, changed: boolean, reason?: string, pending: number, committed: number, pendingLangs: string[], committedLangs: string[], staleLangs: string[], raisedLangs: string[] }}
+ *   means a full run. `markers` is the registry lookup (`silentOnClean`,
+ *   `emptyFirstPublish`) a held row must agree with to be promoted; without it
+ *   no held row is promoted.
+ * @returns {{ text: string, changed: boolean, reason?: string, pending: number, committed: number, pendingLangs: string[], committedLangs: string[], gatedLangs: string[], staleLangs: string[], raisedLangs: string[] }}
  */
 export function refreshCapabilityMatrix(text, observations, opts = {}) {
 	const marker = opts.marker ?? "| lang | server |";
@@ -907,6 +898,7 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 			committed: 0,
 			pendingLangs: [],
 			committedLangs: [],
+			gatedLangs: [],
 			staleLangs: [],
 			raisedLangs: [],
 		};
@@ -939,6 +931,113 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 	const raisedLangs = [];
 	const pendingLangs = [];
 	const committedLangs = [];
+	const gatedLangs = [];
+	// #5323: a held row joins the curated table only as a row every census of
+	// that table accepts, each arm the rule a promoted row could break there.
+	// A marker the lookup cannot report reads as unmarked, as in the censuses;
+	// with no lookup at all nothing is resolved, so nothing is promoted. A
+	// promotion only adds a row with no miss stamp, so the censuses' orphan
+	// and stamp rules cannot be broken by one.
+	const markers = opts.markers;
+	const censusAccepts = (lang, behavior, firstPublish) => {
+		if (typeof markers !== "function") return false;
+		const marker = markers(lang) ?? {};
+		const indexing = marker.emptyFirstPublish === "indexing";
+		return (
+			// tests/config/lsp-clean-behavior-census.test.ts (observations carry
+			// only measured classes)
+			(marker.silentOnClean === true) === (behavior === "silent") &&
+			// tests/config/lsp-first-publish-census.test.ts
+			!(firstPublish === "empty-first" && !indexing) &&
+			!(firstPublish === "direct" && indexing)
+		);
+	};
+	// #5323: a held row's clean-behavior goes through the same two-run
+	// hysteresis as a curated `unknown` cell. The night it commits, the row
+	// moves to the curated table with that clean-behavior and tier, and the
+	// loop below then treats it as any curated row. A held row's first-publish
+	// observation waits in the same bookkeeping (one run, never committed
+	// while held), so the loop commits it the promotion night when it agrees.
+	const heldRows = readHeldRows(migrated);
+	const heldBefore = heldRows.size;
+	for (const [lang, row] of heldRows) {
+		if (probed && !probed.has(lang)) {
+			if (priorCb[lang]) nextState["clean-behavior"][lang] = priorCb[lang];
+			if (priorFp[lang]) nextState["first-publish"][lang] = priorFp[lang];
+			continue;
+		}
+		const observed = byLang.get(lang);
+		const observedFp = observed?.firstPublish ?? null;
+		if (MEASURED_FIRST_PUBLISHES.has(observedFp))
+			nextState["first-publish"][lang] = {
+				pendingFirstPublish: observedFp,
+				runs: 1,
+			};
+		if (!observed?.cleanBehavior) continue;
+		const observedTier = observed.tier ?? "";
+		const pending = priorCb[lang];
+		const advanced = advancePendingClass(
+			MATRIX_EMPTY_CELL,
+			pending?.pendingBehavior && pending?.pendingTier
+				? {
+						value: `${pending.pendingBehavior}\u0000${pending.pendingTier}`,
+						runs: Number(pending.runs ?? 1),
+					}
+				: undefined,
+			`${observed.cleanBehavior}\u0000${observedTier}`,
+			agreeRuns,
+		);
+		// The first-publish the curated loop would commit for this row tonight:
+		// the held pending, advanced once by tonight's observation.
+		const priorPendingFp = priorFp[lang]?.pendingFirstPublish;
+		const fpTonight = MEASURED_FIRST_PUBLISHES.has(observedFp)
+			? advancePendingClass(
+					"unknown",
+					priorPendingFp
+						? { value: priorPendingFp, runs: Number(priorFp[lang].runs ?? 1) }
+						: undefined,
+					observedFp,
+					agreeRuns,
+				)
+			: null;
+		const settledFp = fpTonight?.committed ? fpTonight.confirmed : "unknown";
+		if (
+			advanced.committed &&
+			!censusAccepts(lang, observed.cleanBehavior, settledFp)
+		) {
+			// Settled but refused: stay held, one agreeing night short of a
+			// commit, so every later agreeing night checks again and the
+			// bookkeeping is the same bytes each night.
+			nextState["clean-behavior"][lang] = {
+				pendingBehavior: observed.cleanBehavior,
+				pendingTier: observedTier,
+				runs: Math.max(2, agreeRuns) - 1,
+			};
+			gatedLangs.push(lang);
+		} else if (advanced.committed) {
+			const promoted = {
+				...row,
+				"clean-behavior": observed.cleanBehavior,
+				// The cell the gate judged; the curated loop finds it current.
+				"first-publish": settledFp,
+				tier: observedTier,
+				stale: MATRIX_EMPTY_CELL,
+			};
+			tbl.rows.push(
+				tbl.header.map((name) => promoted[name] || MATRIX_EMPTY_CELL),
+			);
+			heldRows.delete(lang);
+			delete nextState["first-publish"][lang];
+			committedLangs.push(lang);
+		} else if (advanced.pending) {
+			nextState["clean-behavior"][lang] = {
+				pendingBehavior: observed.cleanBehavior,
+				pendingTier: observedTier,
+				runs: advanced.pending.runs,
+			};
+			pendingLangs.push(lang);
+		}
+	}
 	const measured = [];
 	for (const cells of tbl.rows) {
 		const lang = cells[langIdx];
@@ -1067,8 +1166,9 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 	]);
 	// `replaceTable` only returns null for a table `parseTable` cannot find, and
 	// this same text and marker were parsed above.
+	const table = replaceTable(migrated, marker, tbl.header, tbl.sep, merged);
 	const out = replaceRefreshStateSection(
-		replaceTable(migrated, marker, tbl.header, tbl.sep, merged),
+		heldRows.size === heldBefore ? table : writeHeldRows(table, heldRows),
 		renderRefreshStateSection(nextState),
 	);
 	return {
@@ -1078,6 +1178,7 @@ export function refreshCapabilityMatrix(text, observations, opts = {}) {
 		committed: committedLangs.length,
 		pendingLangs,
 		committedLangs,
+		gatedLangs,
 		staleLangs,
 		raisedLangs,
 	};
@@ -1125,20 +1226,114 @@ export function describeRaisedCells(
 }
 
 /**
+ * #5323: the generated table that holds a measured push server the curated
+ * matrix has no row for, until the clean-signal probe commits its
+ * `clean-behavior`. The curated matrix stays the clean-behavior census's whole
+ * population (no blank or admitted rows); this table is outside it.
+ * Its header never contains the curated marker `| lang | server |`, so no
+ * reader of the curated table can find this one instead.
+ */
+export const HELD_ROWS_HEADING =
+	"## Measured, not yet characterized (nightly-generated)";
+export const HELD_ROWS_MARKER = "| lang | mode | server |";
+const HELD_COLUMNS = [
+	"lang",
+	"mode",
+	"server",
+	"src",
+	"version",
+	"install",
+	"stale",
+];
+const HELD_ROWS_PROSE = [
+	"Generated by the nightly; not part of the clean-behavior census. A push",
+	"server the curated matrix has no row for waits here until",
+	"probe-clean-signal commits its `clean-behavior` (two agreeing nights, as for",
+	"a curated cell) and it agrees with the server's `silentOnClean` marker; that",
+	"night it moves to the matrix above. `stale` is the",
+	"first night characterize-lsp did not measure the server, kept until it does.",
+];
+
+/**
+ * The held rows of `text` by lang, in table order, each keyed by column name
+ * (a cell the table lacks reads `—`). Empty when the table is absent.
+ *
+ * @param {string} text
+ * @returns {Map<string, Record<string, string>>}
+ */
+function readHeldRows(text) {
+	const tbl = parseTable(text, HELD_ROWS_MARKER);
+	const out = new Map();
+	if (!tbl) return out;
+	for (const cells of tbl.rows) {
+		const row = {};
+		for (const col of HELD_COLUMNS) {
+			const at = tbl.header.indexOf(col);
+			row[col] = at >= 0 && cells[at] ? cells[at] : MATRIX_EMPTY_CELL;
+		}
+		out.set(row.lang, row);
+	}
+	return out;
+}
+
+/**
+ * Write `held` back as the held table. A doc without the section gains it
+ * before `## Key findings` (or at the end) only when there is a row to hold;
+ * a section that exists is kept even when it empties.
+ *
+ * @param {string} text
+ * @param {Map<string, Record<string, string>>} held
+ * @returns {string}
+ */
+function writeHeldRows(text, held) {
+	const rows = [...held.values()].map((row) =>
+		HELD_COLUMNS.map((col) => row[col] || MATRIX_EMPTY_CELL),
+	);
+	const sep = `|${HELD_COLUMNS.map(() => "---").join("|")}|`;
+	if (parseTable(text, HELD_ROWS_MARKER))
+		return replaceTable(text, HELD_ROWS_MARKER, HELD_COLUMNS, sep, rows);
+	if (rows.length === 0) return text;
+	const section = [
+		HELD_ROWS_HEADING,
+		"",
+		...HELD_ROWS_PROSE,
+		"",
+		renderRow(HELD_COLUMNS),
+		sep,
+		...rows.map(renderRow),
+		"",
+	].join("\n");
+	const keyFindings = text.indexOf("\n## Key findings");
+	return keyFindings >= 0
+		? `${text.slice(0, keyFindings + 1)}${section}\n${text.slice(keyFindings + 1)}`
+		: `${text.trimEnd()}\n\n${section}`;
+}
+
+/**
  * Merge one characterize-lsp run into the capability matrix: the measured
  * `mode` (and the Tier 1 for a pull server) plus the #4512 provenance
  * (`version`, `install`). MERGE, don't overwrite: a row this run could not
- * measure keeps its prior value (#390), and a row absent from the doc is never
- * appended (the matrix is curated). Rows whose mode came back
+ * measure keeps its prior value (#390). Rows whose mode came back
  * `unknown`/`no-lsp`/error are not written, but their provenance still is: a
  * server that did not answer still ran some version of some install.
  *
+ * #5323: a measured server with no row gets one, but only a server lang
+ * (`opts.serverLangs`: the fixture `probePopulation` picks for a registry
+ * server) can create a row, and only a measured mode does; a variant fixture
+ * or a provenance line alone never adds one. Without `serverLangs` nothing is
+ * added. A new pull server joins the curated table (pull is the whole clean
+ * answer); a new push server joins the held table until its clean-behavior
+ * commits (`refreshCapabilityMatrix`). A held row this run did not measure
+ * stays, marked `stale` from its first missed night; `probedLangs` scopes a
+ * subset run as for the refresh.
+ *
  * @param {string} text  the current doc
- * @param {Array<{ lang: string, mode: string }>} rows  this run's mode rows
+ * @param {Array<{ lang: string, server?: string, mode: string }>} rows  this run's mode rows
  * @param {Map<string, { install: string, version?: string }>} provenance  by lang
  * @param {string} src  `ci` or `dev`
  * @param {string} [marker]
- * @returns {{ text: string, measured: number, rows: number } | null}  `null` when the table is not found
+ * @param {{ serverLangs?: Iterable<string>, probedLangs?: Iterable<string>, now?: Date | number | string }} [opts]
+ * @returns {{ text: string, measured: number, rows: number, held: number } | null}  `null` when the table is not found
  */
 export function mergeCharacterization(
 	text,
@@ -1146,43 +1341,91 @@ export function mergeCharacterization(
 	provenance,
 	src,
 	marker = "| lang | server |",
+	opts = {},
 ) {
 	const migrated = ensureMatrixColumns(text, marker);
 	const tbl = parseTable(migrated, marker);
 	if (!tbl) return null;
-	const keyIdx = tbl.header.indexOf("lang");
+	const langIdx = tbl.header.indexOf("lang");
 	const srcIdx = tbl.header.indexOf("src");
-	const existingByLang = new Map(tbl.rows.map((c) => [c[keyIdx], c]));
-	// Only rows we actually measured a mode for (pull/push-only) are authoritative.
+	const existingByLang = new Map(tbl.rows.map((c) => [c[langIdx], c]));
+	const serverLangs = new Set(opts.serverLangs ?? []);
+	const probed = opts.probedLangs ? new Set(opts.probedLangs) : null;
+	const held = readHeldRows(migrated);
 	// pull => Tier 1 by protocol; push-only tier is decided by the clean-behavior
 	// probe, so `tier` stays untouched for push rows (don't clobber a probed value).
 	const cells = new Map();
+	const measuredLangs = new Set();
 	for (const r of rows) {
 		if (r.mode !== "pull" && r.mode !== "push-only") continue;
-		const cell = { lang: r.lang, mode: r.mode };
-		if (r.mode === "pull") cell.tier = "1";
+		measuredLangs.add(r.lang);
 		const prior = existingByLang.get(r.lang);
-		cell.src = mergeSrc(prior ? prior[srcIdx] : "", src);
-		cells.set(r.lang, cell);
+		if (prior) {
+			const cell = { lang: r.lang, mode: r.mode };
+			if (r.mode === "pull") cell.tier = "1";
+			cell.src = mergeSrc(prior[srcIdx], src);
+			cells.set(r.lang, cell);
+			continue;
+		}
+		const heldRow = held.get(r.lang);
+		if (!heldRow && !serverLangs.has(r.lang)) continue;
+		const server = r.server || heldRow?.server || MATRIX_EMPTY_CELL;
+		const rowSrc = mergeSrc(heldRow?.src, src);
+		if (r.mode === "push-only") {
+			held.set(r.lang, {
+				...heldRow,
+				lang: r.lang,
+				mode: r.mode,
+				server,
+				src: rowSrc,
+				stale: MATRIX_EMPTY_CELL,
+			});
+			continue;
+		}
+		held.delete(r.lang);
+		cells.set(r.lang, {
+			lang: r.lang,
+			server,
+			mode: r.mode,
+			"clean-behavior": MATRIX_EMPTY_CELL,
+			"first-publish": "n/a (pull)",
+			tier: "1",
+			src: rowSrc,
+			version: heldRow?.version ?? MATRIX_EMPTY_CELL,
+			install: heldRow?.install ?? MATRIX_EMPTY_CELL,
+			stale: MATRIX_EMPTY_CELL,
+		});
 	}
-	const measured = cells.size;
 	for (const [lang, p] of provenance) {
-		const cell = cells.get(lang) ?? { lang };
-		cell.install = p.install;
-		if (p.version) cell.version = p.version;
-		cells.set(lang, cell);
+		const target =
+			held.get(lang) ??
+			cells.get(lang) ??
+			(existingByLang.has(lang) ? { lang } : undefined);
+		if (!target) continue;
+		target.install = p.install;
+		if (p.version) target.version = p.version;
+		if (!held.has(lang)) cells.set(lang, target);
 	}
-	const merged = mergeRows(
-		tbl.rows,
-		tbl.header,
-		[...cells.values()],
-		"lang",
-		["mode", "tier", "src", "version", "install"],
-		{ updateOnly: true },
-	);
+	const today = utcDay(opts.now ?? new Date());
+	for (const [lang, row] of held) {
+		if (measuredLangs.has(lang) || (probed && !probed.has(lang))) continue;
+		if (!/^since \d{4}-\d{2}-\d{2}$/.test(row.stale))
+			row.stale = `since ${today}`;
+	}
+	const merged = mergeRows(tbl.rows, tbl.header, [...cells.values()], "lang", [
+		"mode",
+		"tier",
+		"src",
+		"version",
+		"install",
+	]);
 	return {
-		text: replaceTable(migrated, marker, tbl.header, tbl.sep, merged) ?? text,
-		measured,
+		text: writeHeldRows(
+			replaceTable(migrated, marker, tbl.header, tbl.sep, merged),
+			held,
+		),
+		measured: measuredLangs.size,
 		rows: tbl.rows.length,
+		held: held.size,
 	};
 }

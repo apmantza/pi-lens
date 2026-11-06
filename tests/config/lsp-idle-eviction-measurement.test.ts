@@ -16,6 +16,7 @@
  */
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
 import * as serverModule from "../../clients/lsp/server.js";
@@ -27,8 +28,10 @@ import {
 	RESULT_STATES,
 } from "../../scripts/lib/lsp-idle-eviction-doc.mjs";
 import {
+	fixtureWorkspaceLifecycle,
 	measureRegistry,
 	probePopulation,
+	selectFixtureForServer,
 } from "../../scripts/lib/lsp-idle-eviction-probe.mjs";
 import { GENERATED_LSP_DOCS } from "../../scripts/lib/md-matrix.mjs";
 import { LSP_FIXTURES } from "../../scripts/smoke-tools.mjs";
@@ -155,6 +158,93 @@ describe("idle-eviction probe population (#3645)", () => {
 			"const { LSP_SERVERS } = serverModule;",
 			"const declared = new Map(LSP_SERVERS.map((s) => [s.id, s.idleEviction]));",
 		]);
+	});
+
+	// #5323 D2: recorded run 42039488753 marked go, ruby, csharp, fsharp and
+	// dart `unavailable (tool-unavailable)` while its own characterize step
+	// measured all five. The measurement pre-gated on the installer registry,
+	// and those servers install through their own spawn path. This drives the
+	// measurement's real prepare (real fixture copy, real LSP config, real
+	// service lookup) on each of them; only the fixture setup command, a child
+	// process, is answered without running it. A pre-gate put back into
+	// prepare in any spelling answers a reason here and reds.
+	it("prepares every server the recorded run measured but marked tool-unavailable (#5323)", async () => {
+		const run = JSON.parse(
+			readFileSync(
+				resolve(REPO_ROOT, "tests/fixtures/lsp-nightly/42039488753.json"),
+				"utf8",
+			),
+		);
+		const measuredButGated = (
+			run.idleEviction.toolUnavailable as string[]
+		).filter((id) =>
+			["pull", "push-only"].includes(run.characterize.modes[id]),
+		);
+		expect(measuredButGated).toEqual([
+			"go",
+			"ruby",
+			"csharp",
+			"fsharp",
+			"dart",
+		]);
+		// The script's own module tree: bootstrapFixtureWorkspace checks the
+		// session-root registration against dist, so service and config come
+		// from dist too, never from the in-place twins.
+		const dist = (rel: string) =>
+			import(pathToFileURL(resolve(REPO_ROOT, "dist", rel)).href);
+		const { LSPService } = await dist("clients/lsp/index.js");
+		const { initLSPConfig } = await dist("clients/lsp/config.js");
+		const { bootstrapFixtureWorkspace } =
+			await import("../../scripts/lib/lsp-fixture-workspace.mjs");
+		const lsp = new LSPService();
+		const reasons: Record<string, string | undefined> = {};
+		const sizes: Record<string, number> = {};
+		try {
+			for (const id of measuredButGated) {
+				const server = LSP_SERVERS.find((s) => s.id === id)!;
+				const fixture = selectFixtureForServer(server, LSP_FIXTURES)!;
+				expect(fixture.tools?.length, id).toBeGreaterThan(0);
+				const target = { absFile: "", content: "" };
+				const lifecycle = fixtureWorkspaceLifecycle(fixture, target, {
+					lsp,
+					bootstrapFixtureWorkspace,
+					initLSPConfig,
+					repoRoot: REPO_ROOT,
+					runFixtureSetup: () => ({ ok: true }),
+					ensureSmokeLombokJar: async () => undefined,
+				});
+				try {
+					reasons[id] = await lifecycle.prepare();
+					sizes[id] = target.content.length;
+				} finally {
+					await lifecycle.dispose();
+				}
+			}
+		} finally {
+			await lsp.shutdown();
+		}
+		expect(reasons).toEqual({
+			go: undefined,
+			ruby: undefined,
+			csharp: undefined,
+			fsharp: undefined,
+			dart: undefined,
+		});
+		expect(Object.values(sizes).every((size) => size > 0)).toBe(true);
+	});
+
+	// The script runs on load and spawns, so the test above drives the library
+	// lifecycle; this pins that the script measures through it and defines no
+	// prepare of its own, where a pre-gate could sit beside it unseen.
+	it("measures through the library fixture lifecycle, with no prepare of the script's own (#5323)", () => {
+		const blanked = stripSource(
+			readFileSync(
+				resolve(REPO_ROOT, "scripts/measure-lsp-idle-eviction.mjs"),
+				"utf8",
+			),
+		);
+		expect(blanked).toMatch(/\.\.\.fixtureWorkspaceLifecycle\(fx, target, \{/);
+		expect(blanked.match(/\bprepare\b/g) ?? []).toEqual([]);
 	});
 
 	it("admits exactly the servers no fixture reaches, each with a reason", () => {

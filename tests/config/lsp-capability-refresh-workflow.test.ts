@@ -28,6 +28,52 @@ function loadWorkflow(): any {
 }
 
 describe("nightly LSP capability refresh contract (#4277)", () => {
+	it("installs notify dependencies without lifecycle scripts (#5323)", () => {
+		const notify = loadWorkflow().jobs["tool-smoke-notify"];
+		const install = (notify.steps as any[]).find(
+			(step) => step.name === "Install dependencies",
+		);
+		expect(install?.run).toBe("npm ci --no-audit --no-fund --ignore-scripts");
+	});
+
+	// #5323 D1: recorded run 42039488753 crashed in this job with
+	// ERR_MODULE_NOT_FOUND for dist/clients/lsp/server-traits.js, imported by
+	// scripts/lib/clean-signal.mjs, because the job never built dist and the
+	// step's continue-on-error hid it nightly from 2026-10-13. The census fails
+	// closed: before the build, only the setup actions and the install run.
+	// Any other step there is a hit, whatever it runs or however it spells a
+	// script path (`./scripts/`, `node -e`, a dynamic import, an npm script),
+	// so nothing has to be resolved to be refused.
+	it("installs and builds dist before any other notify-job step (#5323)", () => {
+		const run = JSON.parse(
+			readFileSync(
+				resolve(ROOT, "tests/fixtures/lsp-nightly/42039488753.json"),
+				"utf8",
+			),
+		);
+		const steps = loadWorkflow().jobs[run.notify.job].steps as any[];
+		const install = steps.findIndex(
+			(step) => step.run === "npm ci --no-audit --no-fund --ignore-scripts",
+		);
+		const build = steps.findIndex((step) => step.run === "npm run build:dist");
+		expect(install).toBeGreaterThanOrEqual(0);
+		expect(build).toBeGreaterThan(install);
+		const setupAction = (step: any) =>
+			["actions/checkout@", "actions/setup-node@"].some((prefix) =>
+				String(step.uses ?? "").startsWith(prefix),
+			);
+		const beforeBuild = steps
+			.slice(0, build)
+			.filter((step, index) => index !== install && !setupAction(step))
+			.map((step) => step.name ?? step.uses ?? step.run);
+		expect(beforeBuild).toEqual([]);
+		// The recorded crash's notifier is still in this job, after the build.
+		const crashed = steps.findIndex((step) =>
+			String(step.run ?? "").includes(run.notify.script.split("/").at(-1)),
+		);
+		expect(crashed).toBeGreaterThan(build);
+	});
+
 	it("builds the in-place compiled twins before the census, after the promotion edit (#4302)", () => {
 		const workflow = loadWorkflow();
 		const smoke = workflow.jobs["tool-smoke"];

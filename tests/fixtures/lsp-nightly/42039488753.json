@@ -1,0 +1,28 @@
+{
+  "run": "42039488753",
+  "date": "2026-11-05",
+  "notify": {
+    "job": "tool-smoke-notify",
+    "script": "scripts/notify-clean-signal-drift.mjs",
+    "error": "Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/home/runner/work/pi-lens/pi-lens/dist/clients/lsp/server-traits.js' imported from /home/runner/work/pi-lens/pi-lens/scripts/lib/clean-signal.mjs"
+  },
+  "idleEviction": {
+    "summary": "51 registry servers: 34 eligible, 0 vetoed, 2 inconclusive, 15 unavailable (0 not reached: budget).",
+    "toolUnavailable": ["go", "ruby", "csharp", "fsharp", "java", "swift", "dart", "haskell", "elixir", "ocaml", "nix"]
+  },
+  "characterize": {
+    "modes": {
+      "go": "push-only",
+      "ruby": "pull",
+      "csharp": "pull",
+      "fsharp": "push-only",
+      "dart": "push-only",
+      "java": "unknown",
+      "swift": "unknown",
+      "haskell": "unknown",
+      "elixir": "unknown",
+      "ocaml": "unknown",
+      "nix": "unknown"
+    }
+  }
+}

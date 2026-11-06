@@ -21,7 +21,6 @@ export function mergeRows(
 	measured: Record<string, string | number | undefined>[],
 	keyCol: string,
 	ownedCols: string[],
-	opts?: { updateOnly?: boolean },
 ): string[][];
 
 export function mergeSrc(existing: string, measured: string): string;
@@ -126,14 +125,23 @@ export function describeRaisedCells(
 	marker?: string,
 ): RaisedCell[];
 
+/** #5323: the generated held table, outside the clean-behavior census. */
+export const HELD_ROWS_HEADING: string;
+export const HELD_ROWS_MARKER: string;
+
 /** #4512: merge one characterize-lsp run (mode + provenance) into the matrix. */
 export function mergeCharacterization(
 	text: string,
-	rows: ReadonlyArray<{ lang: string; mode: string }>,
+	rows: ReadonlyArray<{ lang: string; server?: string; mode: string }>,
 	provenance: ReadonlyMap<string, { install: string; version?: string }>,
 	src: string,
 	marker?: string,
-): { text: string; measured: number; rows: number } | null;
+	opts?: {
+		serverLangs?: Iterable<string>;
+		probedLangs?: Iterable<string>;
+		now?: Date | number | string;
+	},
+): { text: string; measured: number; rows: number; held: number } | null;
 
 /** #3401: consecutive agreeing runs before a `clean-behavior`/`tier` change is written. */
 export const TIER_CHANGE_AGREE_RUNS: number;
@@ -211,6 +219,10 @@ export function refreshCapabilityMatrix(
 		now?: Date | number | string;
 		/** A subset probe's langs; a lang outside it keeps its bookkeeping. */
 		probedLangs?: Iterable<string>;
+		/** #5323: the registry markers a held row must agree with to be promoted. */
+		markers?: (
+			lang: string,
+		) => { silentOnClean?: boolean; emptyFirstPublish?: string } | undefined;
 	},
 ): {
 	text: string;
@@ -221,6 +233,8 @@ export function refreshCapabilityMatrix(
 	/** The langs behind each count, in table order (named in the step log). */
 	pendingLangs: string[];
 	committedLangs: string[];
+	/** #5323: held langs whose clean-behavior settled but a matrix census would refuse. */
+	gatedLangs: string[];
 	/** #4512: langs whose measured cell was not re-observed tonight (kept, marked stale). */
 	staleLangs: string[];
 	/** #4512: the stale langs that have missed `MISSED_PROBE_RAISE_RUNS` consecutive nights. */

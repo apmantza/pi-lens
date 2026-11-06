@@ -48,6 +48,16 @@ const { initLSPConfig } = await imp("dist/clients/lsp/config.js");
 await adoptFixtureProjectTrust({ repoRoot });
 const installer = await imp("dist/clients/installer/index.js");
 const { ensureTool } = installer;
+// #5323: only the fixture `probePopulation` picks for a registry server can
+// add a matrix row; a variant fixture (a clean file, nested roots, a baseline,
+// a custom server) measures its server but never becomes a row.
+const { LSP_SERVERS } = await imp("dist/clients/lsp/server.js");
+const { probePopulation } = await imp(
+	"scripts/lib/lsp-idle-eviction-probe.mjs",
+);
+const serverLangs = probePopulation(LSP_SERVERS, LSP_FIXTURES).flatMap(
+	({ fixture }) => (fixture ? [fixture.lang] : []),
+);
 
 const fixtures = langs.length
 	? LSP_FIXTURES.filter((f) => langs.includes(f.lang))
@@ -151,7 +161,18 @@ function updateMatrix(measuredRows, provenance) {
 		return;
 	}
 	const text = fs.readFileSync(docPath, "utf8");
-	const tbl = mergeCharacterization(text, measuredRows, provenance, src);
+	const tbl = mergeCharacterization(
+		text,
+		measuredRows,
+		provenance,
+		src,
+		undefined,
+		{
+			serverLangs,
+			// A subset run says nothing about the servers it did not run.
+			...(langs.length ? { probedLangs: fixtures.map((f) => f.lang) } : {}),
+		},
+	);
 	if (!tbl) {
 		console.error("matrix update skipped: capability table not found in doc");
 		return;
@@ -160,7 +181,7 @@ function updateMatrix(measuredRows, provenance) {
 	if (out && out !== text) {
 		fs.writeFileSync(docPath, out);
 		console.error(
-			`Updated docs/lsp-capability-matrix.md mode column (${tbl.measured} servers measured, ${tbl.rows} rows preserved).`,
+			`Updated docs/lsp-capability-matrix.md mode column (${tbl.measured} servers measured, ${tbl.rows} rows preserved, ${tbl.held} held).`,
 		);
 	} else {
 		console.error("matrix mode column: no changes.");
