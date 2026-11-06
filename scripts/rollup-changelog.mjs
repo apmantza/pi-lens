@@ -313,8 +313,9 @@ export function rollupChangelog(
 	if (!/^\d+\.\d+\.\d+$/.test(version))
 		throw new Error(`Invalid version "${version}"; expected X.Y.Z`);
 	const changelogPath = path.join(rootDir, "CHANGELOG.md");
-	const entriesDir = path.join(rootDir, ".changelog");
-	const entries = readEntries(entriesDir);
+	// The release refuses what the PR-time check refuses: a fragment first added
+	// in the release PR never met that check.
+	const entries = validateChangelogEntries({ rootDir });
 	const changelog = fs.readFileSync(changelogPath, "utf8");
 	const unreleasedBody = extractSection(changelog, "Unreleased");
 	if (unreleasedBody === null)

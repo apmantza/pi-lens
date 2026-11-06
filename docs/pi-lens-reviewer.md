@@ -248,10 +248,16 @@ instead of rebuilding the probe.
   Deprecated, Removed, Fixed, or Security, and `audience:` is `user` or
   `internal` (`user` = a pi-lens user or agent can observe it; `internal` = CI,
   tests, `formal/`, contributor docs, orchestration, refactors), followed by
-  exactly one top-level entry. A missing or unknown `audience` is an error.
-  Bullet style and a bold or plain title are the author's choice
-  (`.changelog/README.md`). `CHANGELOG.md` changes only in the rollups
-  `npm run changelog:release` generates.
+  exactly one top-level entry. A missing or unknown `audience` is an error. A
+  `user` fragment also names an `area:` from the closed list and is one bold
+  headline sentence, an optional one-paragraph body and a trailing `(refs #N)`
+  (`.changelog/README.md`); `rollup-changelog.mjs --check` refuses every other
+  shape. The check cannot tell whether the headline states the effect (a noun
+  phrase with a period passes), or whether the area fits the change. Both are
+  the reviewer's judgment: read the headline alone, as the release body shows
+  it, and name a headline that does not say what changed for the user, or an
+  area the entry does not belong to, as a finding. `CHANGELOG.md` changes only
+  in the rollups `npm run changelog:release` generates.
 - **Sort comparators.** Every new `.sort()` or `.toSorted()` has an explicit
   comparator (SonarCloud S2871); an order that feeds an identity (dedupe key,
   cache key, hash input) compares code units, not `localeCompare`.

@@ -152,7 +152,9 @@ describe("one changelog fragment per PR (#3795)", () => {
 		expect(result.message).toContain("at most 100 characters");
 	});
 
-	it("accepts a bold entry under an explicit section heading", () => {
+	// Recurrence: a `### Internal` or `### Fixed` line before the bullet passed
+	// the shape check, shipped a user change as internal and detached its area.
+	it("refuses a heading before the user entry", () => {
 		const dir = makeRepo();
 		addRawFragment(
 			dir,
@@ -165,7 +167,9 @@ describe("one changelog fragment per PR (#3795)", () => {
 			cwd: dir,
 			git: gitFor(dir),
 		});
-		expect(result.valid).toBe(true);
+		expect(result.valid).toBe(false);
+		expect(result.message).toContain("pr-a.md");
+		expect(result.message).toContain("the entry must open with its bullet");
 	});
 
 	it("accepts a new user fragment whose headline is exactly 100 characters, with a trailing reference", () => {

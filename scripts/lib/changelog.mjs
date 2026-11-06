@@ -123,12 +123,17 @@ export function userEntryShapeProblems(entry) {
 	const lines = entry.split(/\r?\n/);
 	const first = lines.findIndex((line) => /^[-*]\s+\S/.test(line));
 	if (first < 0) return ["no entry bullet"];
-	if (!lines.slice(0, first).every((line) => /^(#{2,4}\s.*)?$/.test(line)))
-		return ["text before the entry bullet"];
+	if (lines.slice(0, first).some((line) => line.trim() !== ""))
+		return [
+			"the entry must open with its bullet: no heading or other text before it",
+		];
 	if (!lines[first].startsWith("- "))
 		return ["the entry bullet must start with `- `"];
 	for (const line of lines.slice(first + 1)) {
-		if (!/^ {2}\S/.test(line) || /^ {2}(?:[-*+>|#]\s|\d+\.\s|```)/.test(line))
+		if (
+			!/^ {2}\S/.test(line) ||
+			/^ {2}(?:[-*+>|#]\s|\d+\.\s|```|~~~)/.test(line)
+		)
 			return [
 				"the entry must be one paragraph: indent continuation lines by two spaces, with no blank line, nested list, quote, table or fence",
 			];
@@ -140,6 +145,9 @@ export function userEntryShapeProblems(entry) {
 		.join(" ")
 		.trim();
 	if ((text.match(/`/g) ?? []).length % 2 !== 0) return ["unbalanced backtick"];
+	// The placeholder below stands for a code span; a literal one is unresolvable.
+	if (text.includes(CODE_TOKEN))
+		return ["the private-use character U+E000 is not allowed in an entry"];
 	const plain = text.replace(CODE_SPAN, CODE_TOKEN);
 	const withoutRefs = plain.replace(TRAILING_REFS, "");
 	const problems = [];
@@ -165,7 +173,16 @@ export function userEntryShapeProblems(entry) {
 		problems.push(
 			`the bold headline must be ${HEADLINE_MIN_WORDS} to ${HEADLINE_MAX_WORDS} words, found ${words.length}`,
 		);
-	if (text.match(/^\*\*([^*]+)\*\*/)[1].length > HEADLINE_MAX_CHARS)
+	// The cap counts the headline as a reader sees it: each code span back in,
+	// its backticks out. `headline` holds a placeholder per span, so measuring it
+	// would count a long span as one character.
+	const spans = text.match(CODE_SPAN) ?? [];
+	let nextSpan = 0;
+	const rendered = headline.replaceAll(
+		CODE_TOKEN,
+		() => spans[nextSpan++]?.slice(1, -1) ?? CODE_TOKEN,
+	);
+	if (rendered.length > HEADLINE_MAX_CHARS)
 		problems.push(
 			`the bold headline must be at most ${HEADLINE_MAX_CHARS} characters`,
 		);
@@ -268,12 +285,7 @@ export function parseSectionEntries(body, opts = {}) {
 		const h = line.match(/^(#{2,4})\s+(.*)$/);
 		if (h) {
 			const title = h[2].trim();
-			if (
-				h[1] === "####" &&
-				heading !== null &&
-				heading !== INTERNAL_HEADING &&
-				AREA_TITLES.has(title)
-			) {
+			if (h[1] === "####" && heading !== null && AREA_TITLES.has(title)) {
 				area = title;
 				continue;
 			}

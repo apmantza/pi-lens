@@ -1,6 +1,7 @@
 ---
 section: Fixed
 audience: user
+area: lsp
 ---
 
 - **A wrapped changelog title

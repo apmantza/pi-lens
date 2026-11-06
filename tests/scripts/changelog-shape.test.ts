@@ -214,6 +214,121 @@ describe("user entry shape", () => {
 			expect(userEntryShapeProblems(entry).join("; ")).toMatch(/one paragraph/);
 	});
 
+	it("refuses a tilde fence as it refuses a backtick fence", () => {
+		// Recurrence: `  ~~~text` between two paragraphs returned [] while the
+		// backtick form was refused.
+		for (const fence of ["~~~", "~~~text", "~~~~"])
+			expect(
+				userEntryShapeProblems(
+					`- ${H} Body.\n  ${fence}\n  x\n  ${fence}`,
+				).join("; "),
+			).toMatch(/one paragraph/);
+	});
+
+	// Recurrence: a heading line before the bullet was admitted, so `### Internal`
+	// shipped a user change as internal and `### Fixed` detached the area. The
+	// first line of a user entry is the bullet; every other line before it is
+	// unrecognized, including spellings nobody planned for.
+	it.each([
+		["a section heading", "### Internal"],
+		["another section heading", "### Fixed"],
+		["an area heading", "#### Rules"],
+		["a level-one heading", "# Fixed"],
+		["a setext heading", "Fixed\n====="],
+		["an HTML comment", "<!-- Internal -->"],
+		["plain text", "Note for the release."],
+		["a heading with trailing text", "### Internal changes"],
+		["a zero-width character", "\u200b"],
+	])("refuses %s before the entry bullet", (_name, before) => {
+		for (const gap of ["", "\n"])
+			expect(
+				userEntryShapeProblems(`${before}\n${gap}- ${H} Body.`).join("; "),
+			).toMatch(/open with its bullet/);
+	});
+
+	it("admits blank lines before the bullet", () => {
+		expect(userEntryShapeProblems(`\n\n- ${H} Body.`)).toEqual([]);
+	});
+
+	// Recurrence: the 100-character cap re-matched the raw text with a stricter
+	// class than the shape check, so a `*` inside a code span threw a TypeError
+	// out of `--check`, and `**` in a code span measured a 5-character prefix.
+	describe("headline length is measured as a reader sees it", () => {
+		const entry = (headline: string) => `- **${headline}** Body.`;
+
+		it.each([
+			[
+				"a glob star",
+				"The `*.enabled` config keys now switch each server off.",
+			],
+			["a double star glob", "The `**/*.ts` files now get checked again."],
+			["a bare double star", "The `**` option now reads clean here."],
+			["a lone star", "The `*` option now reads clean here."],
+		])("does not throw on %s inside a code span", (_name, headline) => {
+			expect(() => userEntryShapeProblems(entry(headline))).not.toThrow();
+			expect(userEntryShapeProblems(entry(headline))).toEqual([]);
+		});
+
+		it.each([
+			"**",
+			"****",
+			"**.**",
+			"** **",
+			"**`**`",
+			"**`*.ts`**",
+			"**a*b.**",
+			"**`a` `b` `c` `d`**",
+		])("never throws on the odd headline %s", (headline) => {
+			expect(() => userEntryShapeProblems(`- ${headline} Body.`)).not.toThrow();
+			expect(userEntryShapeProblems(`- ${headline} Body.`)).not.toEqual([]);
+		});
+
+		it("counts a code span in full: 20 collapsed characters can render 109", () => {
+			const span = `\`${"x".repeat(84)}\``;
+			const headline = `The ${span} option now reads clean.`;
+			expect(userEntryShapeProblems(entry(headline)).join("; ")).toMatch(
+				/at most 100 characters/,
+			);
+		});
+
+		it("counts the rendered text, not the backticks around a code span", () => {
+			// 100 characters rendered, 102 with the backticks: admitted. One more: refused.
+			const exact = `The \`${"x".repeat(72)}\` option now reads clean.`;
+			expect(exact.replace(/`/g, "")).toHaveLength(100);
+			expect(userEntryShapeProblems(entry(exact))).toEqual([]);
+			const over = `The \`${"x".repeat(73)}\` option now reads clean.`;
+			expect(userEntryShapeProblems(entry(over)).join("; ")).toMatch(
+				/at most 100 characters/,
+			);
+		});
+
+		// Recurrence guard: the collapse placeholder is a private-use character; an
+		// entry that carries it literally would read as a code span that is not there.
+		it("refuses the collapse placeholder written literally", () => {
+			expect(
+				userEntryShapeProblems(
+					"- **The \uE000 option now reads clean.** Body.",
+				).join("; "),
+			).toMatch(/U\+E000/);
+		});
+
+		it("refuses a `*` outside a code span as it refuses any non-headline", () => {
+			expect(
+				userEntryShapeProblems(
+					"- **The *.enabled keys now switch off.** Body.",
+				).join("; "),
+			).toMatch(/bold headline/);
+		});
+
+		it("reports the file, not a TypeError, through --check", () => {
+			const root = rootWith({
+				"star.md":
+					"---\nsection: Fixed\naudience: user\narea: config\n---\n\n- **The `*.enabled` config keys now switch each server off.** Body.\n",
+			});
+			expect(validateChangelogEntries({ rootDir: root })).toHaveLength(1);
+		});
+	});
+
 	it("refuses a headline over 100 characters even within 16 words", () => {
 		const long = `${"x".repeat(26)} ${"y".repeat(26)} ${"z".repeat(26)} ${"w".repeat(26)}.`;
 		expect(userEntryShapeProblems(`- **${long}** Body.`).join("; ")).toMatch(
@@ -266,6 +381,34 @@ describe("user entry shape", () => {
 			"# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- **Pi 1.5 is supported:** old style (closes #1)\n",
 		);
 		expect(validateChangelogEntries({ rootDir: root })).toEqual([]);
+	});
+});
+
+describe("the release rollup applies the shape check", () => {
+	// Recurrence: a fragment first added in the release PR never met the PR-time
+	// check, and `rollupChangelog` consumed it as written.
+	it.each([
+		[
+			"a heading before the bullet",
+			"### Internal\n\n- **Servers now restart on crash always.** Body. (refs #1)\n",
+		],
+		[
+			"a closes reference",
+			"- **Servers now restart on crash always.** Body. (closes #1)\n",
+		],
+		["a plain opening", "- Servers restart on crash.\n"],
+	])("refuses %s and leaves CHANGELOG.md alone", (_name, entry) => {
+		const root = rootWith({
+			"a.md": `---\nsection: Fixed\naudience: user\narea: lsp\n---\n\n${entry}`,
+		});
+		const before = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+		expect(() =>
+			rollupChangelog("2.0.0", { rootDir: root, date: "2026-11-06" }),
+		).toThrow(/Invalid changelog entry a\.md: /);
+		expect(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8")).toBe(
+			before,
+		);
+		expect(fs.existsSync(path.join(root, ".changelog", "a.md"))).toBe(true);
 	});
 });
 
@@ -364,10 +507,13 @@ describe("area grouping in the rollup and the release summary", () => {
 		const grouped = summarizeSection(bodyWithAreas(6));
 		expect(grouped).toContain("#### Language servers");
 		expect(grouped).toContain("#### Blockers and sessions");
-		// The unarea'd entry renders first, before any heading.
-		expect(grouped.indexOf("legacy entry first")).toBeLessThan(
-			grouped.indexOf("#### Language servers"),
-		);
+		// The unarea'd entry renders first, under no heading of its own.
+		expect(
+			grouped.startsWith(
+				"### Fixed\n\n- legacy entry first (refs #1)\n\n#### Language servers",
+			),
+		).toBe(true);
+		expect(grouped).not.toContain("#### null");
 		const flat = summarizeSection(bodyWithAreas(5));
 		expect(flat).not.toContain("####");
 		expect(flat).toContain("- **Area 1 entry 1 reads fine.** (refs #1)");
@@ -394,6 +540,18 @@ describe("area grouping in the rollup and the release summary", () => {
 		).toBe("### Fixed\n\n- **Sessions exit (refs #7)**");
 	});
 
+	// Recurrence guard: a hand-edited Internal block that holds an area title
+	// line must stay Internal, not open a bucket that lists its bullets as user
+	// entries in the release body.
+	it("keeps the bullets under an area title line inside the Internal block internal", () => {
+		const body =
+			"### Fixed\n\n- **A.** Body.\n\n### Internal\n\n<details>\n\n#### Language servers\n\n- **Hidden.** Body.\n\n</details>\n";
+		const { order, internalCount } = parseSectionEntries(body);
+		expect(order).toEqual(["Fixed", "Internal"]);
+		expect(internalCount).toBe(1);
+		expect(summarizeSection(body)).not.toContain("Hidden");
+	});
+
 	it("still treats any other #### line as an ordinary heading", () => {
 		const body =
 			"### Fixed\n\n- **A**\n\n#### Removed - Deprecated Commands\n\n- **B**\n";
@@ -402,12 +560,26 @@ describe("area grouping in the rollup and the release summary", () => {
 		expect(areas.get("Fixed")).toEqual([null]);
 	});
 
-	it("parses every released section of CHANGELOG.md with no area, as before", () => {
-		const text = fs.readFileSync(path.resolve("CHANGELOG.md"), "utf8");
+	// Recurrence: this test read the live CHANGELOG.md, so the first release roll
+	// (it writes `#### <area>` headings) reddened the release PR on valid output.
+	// The snapshot is sections 4.4.9 to 4.4.7 as released, before area headings.
+	it("parses every legacy section with no area, as before", () => {
+		const text = fs.readFileSync(
+			path.join(fixtureDir, "legacy-sections.md"),
+			"utf8",
+		);
 		const sections = parseSections(text);
-		expect(sections.length).toBeGreaterThan(100);
+		expect(sections.map(({ label }) => label)).toEqual([
+			"4.4.9",
+			"4.4.8",
+			"4.4.7",
+		]);
+		let entries = 0;
 		for (const { body } of sections)
-			for (const items of parseSectionEntries(body).areas.values())
+			for (const items of parseSectionEntries(body).areas.values()) {
+				entries += items.length;
 				expect(items.every((area) => area === null)).toBe(true);
+			}
+		expect(entries).toBeGreaterThan(60);
 	});
 });
