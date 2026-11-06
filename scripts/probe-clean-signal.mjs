@@ -35,10 +35,18 @@
  * tool-smoke log is the vehicle from which docs/lsp-capability-matrix.md's
  * `clean-behavior` column is refreshed (same manual mechanism as `mode`).
  *
- *   node scripts/probe-clean-signal.mjs [lang ...] [--install]
+ *   node scripts/probe-clean-signal.mjs [lang ...] [--install] [--write-matrix]
  *   PILENS_PUB_DEBUG=1 node scripts/probe-clean-signal.mjs   # also echo raw trace
  * Requires `npm run build:dist` (imports from dist/). Measures only
- * already-installed servers unless --install is passed.
+ * already-installed servers unless --install is passed. Rewrites the tracked
+ * docs/lsp-capability-matrix.md only with --write-matrix (the nightly passes
+ * it); a bare run used to dirty the checkout it ran from (#5348).
+ *
+ * A fixture that expects a launch variant (`expectLaunchVariant`, e.g.
+ * typescript7 → native-ts7) is measured only when that launch answered. This
+ * probe never runs a fixture's `setup`, so without the install the registry
+ * falls back to the classic launch; that row reads `unknown`, not classic's
+ * verdict under the native lang (#5348).
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -74,6 +82,7 @@ const repoRoot = path.resolve(
 );
 const argv = process.argv.slice(2);
 const install = argv.includes("--install");
+const writeMatrix = argv.includes("--write-matrix");
 const langs = argv.filter((a) => !a.startsWith("--"));
 const ECHO_TRACE = Boolean(process.env.PILENS_PUB_DEBUG);
 
@@ -129,15 +138,18 @@ if (install) {
 // "typescript" entry, so the rows stay in the comparison.
 //
 // The expectation stays `false` on purpose. #558 set it on a 2026-07-12 reading
-// of native-ts7 publishing on clean (`cleanPubs=2`), a reading that predates
-// #4615's per-document attribution of the publish trace. Since then the clean
-// fixture reads silent (#5348), so the nightly files `silent-not-marked` for it.
-// That finding is the signal this expectation exists to raise: a human decides
-// whether native TS7 may skip the wait. The expectation stays false pending a
-// maintainer decision and a latency measurement (#5348): the marker lets the
-// silent-confirm gate read a lapsed wait as clean, and the probe's small
-// fixtures do not show that native TS7 publishes a file's errors inside the
-// budget (see `silentOnClean` in wait-policy/strategies.ts).
+// of native-ts7 publishing on clean (`cleanPubs=2`). The `silent` readings the
+// nightly filed from 2026-10-21 (#5348) were classic's: this probe never ran
+// the fixture's `setup`, so the registry launched the classic server for these
+// rows. Native TS7 7.0.2 advertises `diagnosticProvider` and is a pull server
+// (`n/a (pull)`), and the row now reads `unknown` unless the native launch
+// answered (`expectLaunchVariant`, see probe-fixture.mjs). Because this probe
+// never runs `setup`, the nightly never launches native TS7: typescript7,
+// typescript7-clean and effect-tsgo read `unknown` there. A push-only TS7
+// build silent on clean could surface as `silent-not-marked` only from a run
+// that does the fixture's `setup` first, for a human to decide (the marker
+// reads a lapsed wait as clean; see `silentOnClean` in
+// wait-policy/strategies.ts).
 const NATIVE_TS7_LANGS = new Set(["typescript7", "typescript7-clean"]);
 
 function lookupSilentOnClean(lang) {
@@ -310,7 +322,8 @@ const unk = rows.filter((r) => r.behavior === "unknown").length;
 // comparison (not re-excluded), but `lookupSilentOnClean` gives them an
 // explicit `false` expectation instead of routing to classic's shared
 // "typescript" marker — see the NATIVE_TS7_LANGS comment above. A silent
-// observation surfaces as `silent-not-marked`, a real signal, not a skipped row.
+// observation from a native launch (this probe makes none without `setup`)
+// would surface as `silent-not-marked`, a real signal, not a skipped row.
 // #5348: auxiliary rows (fallow, ast-grep, opengrep, zizmor, typos) are
 // not-comparable (`row.auxiliary`, set by probe-fixture.mjs): wait-policy reads
 // the marker in primary-scoped gates, and in the warm-up gate only for a
@@ -420,6 +433,16 @@ function nameList(langs) {
 }
 
 function updateMatrix(measuredRows) {
+	// #5348: the matrix is a tracked file; a bare run rewrote it in the checkout
+	// the probe ran from. Without --write-matrix nothing is merged, written or
+	// declared a verdict for (the stale-cells verdict below names a matrix that
+	// was persisted).
+	if (!writeMatrix) {
+		console.error(
+			"matrix update skipped: docs/lsp-capability-matrix.md is written only with --write-matrix",
+		);
+		return;
+	}
 	const docPath = path.join(repoRoot, "docs", "lsp-capability-matrix.md");
 	if (!fs.existsSync(docPath)) {
 		console.error(

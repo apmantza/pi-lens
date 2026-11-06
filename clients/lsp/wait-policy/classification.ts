@@ -56,9 +56,9 @@ export function classifyServerWaitTier(
 	// (confirmed silent-on-clean) or TS7's native `tsc --lsp --stdio`. A
 	// native-ts7 snapshot must NOT inherit the classic verdict: fall through to
 	// "waits", the same ambiguous/fail-safe path an unmarked or non-push-only
-	// server already takes. (The probe reads native-ts7 silent on a clean file
-	// too, but that does not show it publishes a file's errors inside the wait;
-	// see `silentOnClean` in strategies.ts.) `launchVariant === "classic"` or
+	// server already takes. (Native TS7 7.0.2 is a pull server and returned at
+	// the mode check above; this guard covers a push-only build, see
+	// `silentOnClean` in strategies.ts.) `launchVariant === "classic"` or
 	// absent (older snapshots that predate the marker) keeps today's tier-3
 	// behavior exactly.
 	if (snapshot.launchVariant === "native-ts7") return "waits";

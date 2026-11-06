@@ -38,12 +38,13 @@
  * Native TS7 is the cascade-only exception. Its publication does not settle
  * inside the cold-snapshot budget, so the cascade classifies it as
  * `collect-later`, and the shared server policy remains `waits`, so
- * main-lane behavior does not change. The probe reads native-ts7 silent on a
- * clean file (#5348), which does not move it into `tier3-silent`: for that
+ * main-lane behavior does not change. It is never `tier3-silent`: for that
  * tier `touchFile`'s silent-confirm gate reads a lapsed wait as clean (the
- * cascade lane itself leaves silence unconfirmed), and nothing shows this
- * server publishes a file's errors inside the budget. `scripts/probe-clean-signal.mjs` reports
- * the silence as a drift finding for a human to decide.
+ * cascade lane itself leaves silence unconfirmed), and nothing shows that a
+ * push-only TS7 build publishes a file's errors inside the budget. Native TS7
+ * 7.0.2 is a pull server (#5348), so this path serves a push-only snapshot
+ * only. `scripts/probe-clean-signal.mjs` reports a silent native launch as a
+ * drift finding for a human to decide.
  */
 
 import { logCascade } from "../cascade-logger.js";

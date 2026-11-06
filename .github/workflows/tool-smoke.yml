@@ -495,7 +495,7 @@ jobs:
         continue-on-error: true
         env:
           PILENS_PUB_DEBUG: "1"
-        run: node scripts/probe-clean-signal.mjs --install
+        run: node scripts/probe-clean-signal.mjs --install --write-matrix
 
       # #3405 acceptance 4: per-server save verdict — does a server publish the
       # seeded finding WITHOUT a `textDocument/didSave`, or only after one? Before

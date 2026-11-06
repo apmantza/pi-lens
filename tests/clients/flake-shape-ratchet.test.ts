@@ -1515,6 +1515,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"git's pre-push stdin and the hook script's exit/skip/lock-timeout contract are the subject; the union and lock-admission witnesses need a real git fixture and the real hook chain",
 	},
+	// #5348: scripts/probe-clean-signal.mjs runs on import and exits the process, so its
+	// --write-matrix gate is observable only as a real run and the doc it leaves.
+	"real-process-spawn:scripts/probe-matrix-write-gate.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the probe executes on import and ends in process.exit, so only a real run shows whether the tracked matrix doc is rewritten; a source scan of the gate stayed green with the updateMatrix call removed",
+	},
 	"real-process-spawn:scripts/prune-agent-worktrees.test.ts": {
 		detector: "real-process-spawn",
 		reason:

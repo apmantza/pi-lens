@@ -155,10 +155,10 @@ describe("classifyCascadeWaitTier", () => {
 		);
 	});
 
-	// #541/#558/#5348: native-ts7 is never `tier3-silent`. The probe reads it
-	// silent on a clean file (#5348), but for that tier touchFile's silent-confirm
-	// gate reads a lapsed wait as clean, and nothing shows this server publishes a
-	// file's errors inside the budget.
+	// #541/#558/#5348: native-ts7 is never `tier3-silent`. For that tier
+	// touchFile's silent-confirm gate reads a lapsed wait as clean, and nothing
+	// shows that a push-only TS7 build publishes a file's errors inside the
+	// budget (native TS7 7.0.2 is a pull server, #5348).
 	// The shared policy stays on "waits". The cascade wrapper uses its late
 	// publication through the bounded collect-later path.
 	it("classifies a native-ts7 typescript snapshot for cascade collect-later (#1444)", () => {

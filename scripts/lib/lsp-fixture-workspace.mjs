@@ -181,6 +181,27 @@ export async function bootstrapFixtureWorkspace(fx, opts) {
 }
 
 /**
+ * #5348: the one "did the launch the fixture asked for answer?" check, shared by
+ * smoke-tools.mjs (#530, both lanes) and probe-clean-signal.mjs (through
+ * probe-fixture.mjs). "typescript" is one server id with three launches
+ * (classic, native-ts7, effect-tsgo), so a fixture whose `setup` installs
+ * TypeScript 7 declares `expectLaunchVariant`; a script that never ran that
+ * `setup` got the classic launch and credited its data to the native one (the
+ * nightly's typescript7 rows). Returns the refusal text, or `undefined` when the
+ * fixture expects no variant or a snapshot carries it. An empty or variant-less
+ * snapshot list is a refusal: a launch it cannot name is not the expected one.
+ *
+ * @param {string | undefined} expected the fixture's `expectLaunchVariant`
+ * @param {ReadonlyArray<{ launchVariant?: string }>} snapshots
+ */
+export function launchVariantMismatch(expected, snapshots) {
+	if (!expected) return undefined;
+	if (snapshots.some((s) => s.launchVariant === expected)) return undefined;
+	const got = [...new Set(snapshots.map((s) => s.launchVariant ?? "(unset)"))];
+	return `expected launchVariant '${expected}', got [${got.join(",") || "(no snapshot)"}] — silent fallback?`;
+}
+
+/**
  * #2670/#2506-shape. The four sibling scripts' now-unconditional
  * `initLSPConfig` (and smoke-tools.mjs's own) each emit a
  * `config_resolution_pending` + `config_resolved` pair per fixture — 49 on a

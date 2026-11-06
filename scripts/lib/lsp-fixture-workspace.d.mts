@@ -46,6 +46,15 @@ export function bootstrapFixtureWorkspace(
 	opts: BootstrapFixtureWorkspaceOptions,
 ): Promise<BootstrapFixtureWorkspaceResult>;
 
+/**
+ * #5348: the refusal text when `expected` (a fixture's `expectLaunchVariant`)
+ * is set and no snapshot carries that `launchVariant`; `undefined` otherwise.
+ */
+export function launchVariantMismatch(
+	expected: string | undefined,
+	snapshots: ReadonlyArray<{ launchVariant?: string }>,
+): string | undefined;
+
 export interface WithScratchHomeOptions {
 	/** Skip pinning even when PI_LENS_HOME is unset (no caller in this repo does today). */
 	realHome?: boolean;
