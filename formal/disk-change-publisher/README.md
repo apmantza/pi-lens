@@ -186,8 +186,8 @@ install at A, a held publish, a joined call, M new first looks in the window)
 gave: F = 62, M = 1 gives 1 publish; F = 63, M = 0 gives 1; F = 63, M = 1
 gives 2. So it is not "64 roots inside the window": every new root evicts the
 head once the FIFO is full. Nobody has shown a process that records 64 roots.
-The runtime is unchanged here; the PR hand-back asks for the defect to be
-filed, and the config documents it. A fix is outside this PR: the trailing
+The runtime is unchanged here; the defect is an accepted p3 residual (live 0
+observed), not filed, and the config documents it. A fix is outside this PR: the trailing
 pass would have to carry the epoch the first pass left (the spawn epoch of the
 restarted client), or skip the first-look branch when the flight published.
 
