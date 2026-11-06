@@ -32,7 +32,7 @@ import {
 } from "../../scripts/lib/lsp-idle-eviction-probe.mjs";
 import { GENERATED_LSP_DOCS } from "../../scripts/lib/md-matrix.mjs";
 import { LSP_FIXTURES } from "../../scripts/smoke-tools.mjs";
-import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const DOC = "docs/lsp-idle-eviction.md";
@@ -132,32 +132,29 @@ describe("idle-eviction probe population (#3645)", () => {
 		expect(rows.map((r) => r.serverId)).toEqual(["typescript", "python"]);
 	});
 
-	it("records the five handshakes that the old pre-gate misclassified", () => {
-		const run = JSON.parse(
+	// Review round 1 F2: every test above hands `measureRegistry` the registry, so
+	// a script that sliced its own argument (`LSP_SERVERS.slice(0, 4)`) stayed
+	// green while measuring four servers. The script cannot be imported (it runs
+	// on load and spawns), so its population expression is pinned on
+	// comment-and-string-blanked source: the walk is handed the registry module,
+	// and the registry array is read in exactly two places, neither a slice.
+	it("hands the nightly script's measurement the whole registry module, with no narrowed copy", () => {
+		const blanked = stripSource(
 			readFileSync(
-				resolve(REPO_ROOT, "tests/fixtures/lsp-nightly/42039488753.json"),
+				resolve(REPO_ROOT, "scripts/measure-lsp-idle-eviction.mjs"),
 				"utf8",
 			),
 		);
-		expect(run.idleEviction.handshook).toEqual([
-			"go",
-			"ruby",
-			"csharp",
-			"fsharp",
-			"dart",
-		]);
-		expect(run.idleEviction.preGateReason).toBe("tool-unavailable");
-	});
-
-	it("lets the LSP spawn path provision fixture tools (#5323)", () => {
-		const source = readFileSync(
-			resolve(REPO_ROOT, "scripts/measure-lsp-idle-eviction.mjs"),
-			"utf8",
+		expect(blanked).toMatch(
+			/measureRegistry\(\{\s*registry:\s*serverModule,\s*fixtures:\s*LSP_FIXTURES,\s*filter:\s*serverFilter,/,
 		);
-		// Recorded run 42039488753: go, ruby, csharp, fsharp and dart handshook,
-		// but the measurement's ensureTool pre-gate labelled them unavailable.
-		expect(source).not.toContain("ensureFixtureTools");
-		expect(source).toContain("lsp.supportsLSP(boot.absFile)");
+		const uses = (blanked.match(/[^\n]*\bLSP_SERVERS\b[^\n]*/g) ?? []).map(
+			(line) => line.trim(),
+		);
+		expect(uses).toEqual([
+			"const { LSP_SERVERS } = serverModule;",
+			"const declared = new Map(LSP_SERVERS.map((s) => [s.id, s.idleEviction]));",
+		]);
 	});
 
 	it("admits exactly the servers no fixture reaches, each with a reason", () => {
