@@ -93,3 +93,39 @@ export function countEntriesSince(entries, sinceIso) {
 		return Number.isFinite(ts) && ts >= sinceMs;
 	}).length;
 }
+
+/**
+ * The p-quantile of an ascending sample by the clamped floor-rank index
+ * `clamp(floor(p * n), 0, n - 1)`, so `p(0)` answers the first element, `p(1)`
+ * the last, and every reported number is an OBSERVED sample rather than an
+ * interpolation between two.
+ *
+ * The exact rule matters at small n, so it is named rather than labelled
+ * "nearest-rank": at even n the p50 is the UPPER of the two middle samples
+ * (`n = 2` → the 2nd, `n = 20` → the 11th, where nearest-rank answers the 10th),
+ * and for every `n <= 20` the p95 index `floor(0.95 * n)` is the last index, so
+ * a 20-row group reports p95 equal to max and shows no tail of its own.
+ *
+ * This is the ONE implementation for both consumers of a latency-log percentile:
+ * the published log analyzer (`scripts/analyze-pi-lens-logs.mjs`, #5263) and the
+ * hot-path gate's bootstrapped CI tails (`scripts/lib/latency-stats.mjs`, #4363).
+ * It lives here because this module is the only percentile home in `package.json`
+ * `files`: `latency-stats.mjs` is dev/CI-only, so having the analyzer import it
+ * shipped `scripts/analyze-pi-lens-logs.mjs -> './lib/latency-stats.mjs'` →
+ * `NOT FOUND` in the packed tree (the `Install test` leg runs
+ * `scripts/check-extensions.mjs` over the installed files). The two percentile
+ * siblings that stay separate are different methods on purpose:
+ * `clients/performance-report.ts` interpolates between samples for its
+ * in-session p50/p99 summary, and `scripts/bench-word-index-replacement.mjs`
+ * uses `floor((n - 1) * p)`; folding either would change shipped numbers.
+ *
+ * @param {readonly number[]} sorted ascending sample
+ * @param {number} p quantile in [0, 1]
+ */
+export function lowerRankPercentile(sorted, p) {
+	const at = Math.min(
+		sorted.length - 1,
+		Math.max(0, Math.floor(p * sorted.length)),
+	);
+	return sorted[at];
+}

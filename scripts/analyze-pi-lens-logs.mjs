@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { minimatch } from "minimatch";
+import { lowerRankPercentile } from "./lib/latency-log-phases.mjs";
 
 const DEFAULT_ROOT = path.join(os.homedir(), ".pi-lens");
 const DEFAULT_SINCE = "2d";
@@ -1921,33 +1922,11 @@ function runnerRowRan(entry) {
 }
 
 /**
- * The p-quantile of an ascending sample by the clamped lower-rank index
- * `clamp(floor(p * n), 0, n-1)`, so `p(0)` is the first element, `p(1)` the last,
- * and every reported number is an OBSERVED duration rather than an interpolation
- * between two.
- *
- * This is the same rule `scripts/lib/latency-stats.mjs` uses for the hot-path
- * gate's CI tails, kept as a second copy on purpose: that module is dev/CI-only
- * and is NOT in `package.json` `files`, while this script is published, so
- * importing it left `scripts/analyze-pi-lens-logs.mjs -> './lib/latency-stats.mjs'
- * → NOT FOUND` in the packed tree (the `Install test` leg runs
- * `scripts/check-extensions.mjs` over the installed files). The boundary index
- * where this rule differs from nearest-rank is pinned by the 10-row group in
- * `tests/fixtures/analyze-logs/phase-distribution/latency.log`, so the two
- * copies cannot drift apart silently here.
- */
-function lowerRankPercentile(sorted, p) {
-	const at = Math.min(
-		sorted.length - 1,
-		Math.max(0, Math.floor(p * sorted.length)),
-	);
-	return sorted[at];
-}
-
-/**
- * One row per group: count, the p50/p95 from `lowerRankPercentile`, the group's
- * total, and its share of the family total. The report exists to rank real work
- * for a human, so an 8.55th sample would name no row anyone can go find.
+ * One row per group: count, the p50/p95 from `lowerRankPercentile` (the shared
+ * clamped floor-rank rule in `scripts/lib/latency-log-phases.mjs`, which names
+ * the method and its small-n behaviour), the group's total, and its share of the
+ * family total. The report exists to rank real work for a human, so an 8.55th
+ * sample would name no row anyone can go find.
  *
  * The sample is the whole group: exact rather than approximate, which is what
  * an offline forensic run wants (no histogram edges, no summary state to keep
