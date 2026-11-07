@@ -255,6 +255,32 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 		]);
 	});
 
+	// #5377's failure policy: the seam publishes through a THROWING atomic
+	// write, so a commit that cannot finish surfaces as a rejection with the
+	// lock's own timeout reason instead of a silent lost append. The lock path
+	// is occupied by a regular file, so `mkdir` answers EEXIST and the owner
+	// probe cannot date the holder, which leaves it live: the append waits out
+	// RECENT_TOUCHES_LOCK_WAIT_MS and rejects.
+	it("rejects with the lock timeout when the record lock cannot be taken", async () => {
+		fs.writeFileSync(
+			`${recordFilePath()}.lock`,
+			"not a lock directory",
+			"utf-8",
+		);
+
+		const { appendRecentTouches } =
+			await import("../../clients/recent-touches.js");
+
+		await expect(
+			appendRecentTouches({
+				cwd: FAKE_CWD,
+				reason: "format",
+				paths: ["/fake/project/held.ts"],
+			}),
+		).rejects.toThrow("Timed out waiting for recent-touches record lock");
+		expect(fs.existsSync(recordFilePath())).toBe(false);
+	});
+
 	it("missing record file on first read does not throw", async () => {
 		const { readCrossProcessTouchesForSessionStart } =
 			await import("../../clients/recent-touches.js");
