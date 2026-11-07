@@ -49,7 +49,14 @@ function resample(values, random) {
 	);
 }
 
-function percentile(sorted, p) {
+/**
+ * The p-quantile of an ascending sample, by the clamped lower-rank index
+ * `floor(p * n)` (so `p(0)` is the first element and `p(1)` the last). The
+ * hot-path gate uses it for a bootstrap CI tail; `analyze-pi-lens-logs.mjs`
+ * uses it for the reported p50/p95 (#5263), so both read one rule rather than
+ * two near-copies that can drift apart on the boundary index.
+ */
+export function percentile(sorted, p) {
 	const at = Math.min(
 		sorted.length - 1,
 		Math.max(0, Math.floor(p * sorted.length)),

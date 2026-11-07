@@ -20,6 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { minimatch } from "minimatch";
+import { percentile } from "./lib/latency-stats.mjs";
 
 const DEFAULT_ROOT = path.join(os.homedir(), ".pi-lens");
 const DEFAULT_SINCE = "2d";
@@ -1921,19 +1922,22 @@ function runnerRowRan(entry) {
 }
 
 /**
- * Nearest-rank percentiles (inverted-CDF lowest-upper): p(q) is the value at
- * 1-based rank `ceil(q * n)` of the ascending sample. So a one-row group answers
- * p50 = p95 = max = that row, and every reported number is an OBSERVED duration
- * rather than an interpolation between two — the report exists to rank real
- * work for a human, and an 8.55th sample would name no row anyone can go find.
+ * One row per group: count, the clamped lower-rank percentiles the hot-path
+ * gate already uses (`percentile` in `scripts/lib/latency-stats.mjs` — p(q) is
+ * the ascending sample at index `clamp(floor(q * n))`, so every reported number
+ * is an OBSERVED duration rather than an interpolation between two, and a
+ * one-row group answers p50 = p95 = max = that row), the group's total, and its
+ * share of the family total. The report exists to rank real work for a human,
+ * so an 8.55th sample would name no row anyone can go find, and one percentile
+ * rule stays shared with `check-hot-path-latency.mjs` instead of drifting.
  *
  * The sample is the whole group: exact rather than approximate, which is what
  * an offline forensic run wants (no histogram edges, no summary state to keep
  * in sync with a late row). The retained population is one number per in-window
- * duration row; the maintainer's ~18 MB live-plus-rotation `latency.log` is on
- * the order of 10^5 rows, so this is a few MB in a process that prints one
- * report and exits. The analyzer already retains one number per row this way
- * (`latency.rowTs`, D1), so the distribution scales with the same axis the
+ * duration row; the maintainer's ~12 MB live-plus-rotation `latency.log` held
+ * 25,310 rows in its 7-day window, so this is a few MB in a process that prints
+ * one report and exits. The analyzer already retains one number per row this
+ * way (`latency.rowTs`, D1), so the distribution scales with the axis the
  * window already bounds rather than opening a new unbounded one.
  */
 function latencyDistribution(groups, cap, label) {
@@ -1951,8 +1955,8 @@ function latencyDistribution(groups, cap, label) {
 				key,
 				...(label ? label(key) : {}),
 				count: durations.length,
-				p50Ms: nearestRank(durations, 0.5),
-				p95Ms: nearestRank(durations, 0.95),
+				p50Ms: percentile(durations, 0.5),
+				p95Ms: percentile(durations, 0.95),
 				maxMs: durations[durations.length - 1],
 				totalMs: groupMs,
 				// The denominator is this family's total, so a phase's share reads as
@@ -1964,11 +1968,6 @@ function latencyDistribution(groups, cap, label) {
 		);
 	}
 	return { totalMs, rows };
-}
-
-function nearestRank(durations, q) {
-	if (durations.length === 0) return 0;
-	return durations[Math.max(0, Math.ceil(q * durations.length) - 1)];
 }
 
 /**
@@ -3034,7 +3033,7 @@ function printReport(report) {
 	if (phaseDist?.rows?.length) {
 		console.log("\nPhase latency");
 		console.log(
-			`  nearest-rank p50/p95/max per (tool, phase), share of ${formatMs(phaseDist.totalMs)}ms in-window phase time`,
+			`  p50/p95/max (clamped lower-rank percentile) per (tool, phase), share of ${formatMs(phaseDist.totalMs)}ms in-window phase time`,
 		);
 		for (const row of phaseDist.rows) console.log(`  ${formatLatencyRow(row)}`);
 	}
@@ -3042,7 +3041,7 @@ function printReport(report) {
 	if (runnerDist?.rows?.length) {
 		console.log("\nRunner latency");
 		console.log(
-			`  nearest-rank p50/p95/max per runner, share of ${formatMs(runnerDist.totalMs)}ms runner time (skip rows excluded)`,
+			`  p50/p95/max (clamped lower-rank percentile) per runner, share of ${formatMs(runnerDist.totalMs)}ms runner time (skip rows excluded)`,
 		);
 		for (const row of runnerDist.rows)
 			console.log(`  ${formatLatencyRow(row)}`);

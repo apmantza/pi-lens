@@ -678,9 +678,11 @@ describe("analyze-pi-lens-logs.mjs — unconfirmedByReason attribution (#1618 R5
  * `2026-09-29`, which is what pins the distribution to the window instead of
  * to the whole file.
  *
- * Percentiles are nearest-rank: p(q) is the value at 1-based rank
- * `ceil(q * n)` in the ascending durations, so the numbers below come from the
- * fixture table itself (9 rows `10..1000` → rank 5 = 50, rank 9 = 1000).
+ * Percentiles are the clamped lower-rank index the hot-path gate already uses
+ * (`percentile` in `scripts/lib/latency-stats.mjs`): p(q) is the ascending
+ * sample at index `clamp(floor(q * n), 0, n-1)`. The 10-row `pre_window_phase`
+ * group pins that rule at the index where it differs from nearest-rank
+ * (floor(0.5*10)=5 -> 60, where nearest-rank would answer 50).
  */
 describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () => {
 	const FIXTURES = path.resolve(
@@ -745,23 +747,26 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 		expect(
 			group(latency.phaseLatency.rows, "turn_end:pre_window_phase"),
 		).toBeUndefined();
-		// Its 1800ms must not dilute the shares of the phases that ARE in window:
-		// 1360 + 700, not 1360 + 700 + 1800.
+		// Its 550ms must not dilute the shares of the phases that ARE in window:
+		// 1360 + 700, not 1360 + 700 + 550.
 		expect(latency.phaseLatency.totalMs).toBe(2060);
 	});
 
 	it("counts the pre-window phase when --since all widens the window", () => {
 		const latency = dist("phase-distribution", "all");
+		// The 10-row group is the percentile-rule pin: durations 10..100 answer
+		// p50 = 60 (index floor(0.5*10) = 5, the 6th row), where nearest-rank would
+		// answer 50; p95 = index floor(9.5) = 9 -> 100.
 		expect(
 			group(latency.phaseLatency.rows, "turn_end:pre_window_phase"),
 		).toMatchObject({
-			count: 3,
-			p50Ms: 600,
-			p95Ms: 700,
-			maxMs: 700,
-			totalMs: 1800,
+			count: 10,
+			p50Ms: 60,
+			p95Ms: 100,
+			maxMs: 100,
+			totalMs: 550,
 		});
-		expect(latency.phaseLatency.totalMs).toBe(3860);
+		expect(latency.phaseLatency.totalMs).toBe(2610);
 	});
 
 	it("empties the distribution when the window holds no latency rows", () => {
