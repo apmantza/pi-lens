@@ -1841,10 +1841,10 @@ describe("formatVerdictTable", () => {
 		const verdict = computeVerdict({ check_runs: [] });
 		const table = formatVerdictTable(verdict.rows);
 		const lines = table.split("\n").slice(1);
-		// The two required rows come first; #3801's deferred advisory rows
-		// follow and read PENDING, never "absent".
-		for (const line of lines.slice(0, 2)) expect(line).toContain("absent");
-		for (const line of lines.slice(2)) expect(line).toContain("PENDING");
+		// The two required rows are the whole table: no deferred advisory row
+		// follows (the heavy gate and its deferred rows are retired, #3801).
+		expect(lines).toHaveLength(2);
+		for (const line of lines) expect(line).toContain("absent");
 	});
 });
 
