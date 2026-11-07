@@ -17,6 +17,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import {
+	assertNonEmptyScan,
+	listSourceFiles,
+	readWalkedFiles,
+} from "../support/sweep-kit.js";
 
 const SCRIPT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -678,11 +683,12 @@ describe("analyze-pi-lens-logs.mjs — unconfirmedByReason attribution (#1618 R5
  * `2026-09-29`, which is what pins the distribution to the window instead of
  * to the whole file.
  *
- * Percentiles are the clamped lower-rank index (`lowerRankPercentile` in
- * `scripts/analyze-pi-lens-logs.mjs`): p(q) is the ascending sample at index
- * `clamp(floor(q * n), 0, n-1)`. The 10-row `pre_window_phase` group pins that
- * rule at the index where it differs from nearest-rank (floor(0.5*10)=5 -> 60,
- * where nearest-rank would answer 50).
+ * Percentiles are the clamped floor-rank index (`lowerRankPercentile` in
+ * `scripts/lib/latency-log-phases.mjs`, shared with the hot-path gate): p(q) is
+ * the ascending sample at index `clamp(floor(q * n), 0, n-1)`. The 10-row
+ * `pre_window_phase` group pins that rule at the index where it differs from
+ * nearest-rank (floor(0.5*10)=5 -> 60, where nearest-rank would answer 50), and
+ * for any group of 20 rows or fewer it makes p95 equal to max.
  */
 describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () => {
 	const FIXTURES = path.resolve(
@@ -763,8 +769,25 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 
 	it("empties the distribution when the window holds no latency rows", () => {
 		const latency = dist("phase-distribution", "2026-10-01T00:00:00Z");
-		expect(latency.phaseLatency).toEqual({ totalMs: 0, rows: [] });
-		expect(latency.runnerLatency).toEqual({ totalMs: 0, rows: [] });
+		expect(latency.phaseLatency).toEqual({
+			totalMs: 0,
+			groups: 0,
+			shown: 0,
+			parentTotalRows: 0,
+			rows: [],
+		});
+		expect(latency.phaseAges).toEqual({
+			totalMs: 0,
+			groups: 0,
+			shown: 0,
+			rows: [],
+		});
+		expect(latency.runnerLatency).toEqual({
+			totalMs: 0,
+			groups: 0,
+			shown: 0,
+			rows: [],
+		});
 	});
 
 	it("excludes rows without a finite durationMs from the distribution", () => {
@@ -835,5 +858,317 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 		expect(runnerSection).toMatch(
 			/3\s+p50=200\s+p95=300\s+max=300\s+100\.0%\s+oxlint\s+\(skipped 2\)/,
 		);
+	});
+});
+
+/**
+ * #5263 round 2, F1 + F2: which rows may sit in the phase-time denominator.
+ *
+ * `lsp_document_drift` writes an AGE (`durationMs: event.driftAgeMs`,
+ * `clients/lsp/index.ts`): in the maintainer's 7-day field window that one phase
+ * carried 81.8% of the phase total and diluted every real share, so the report's
+ * rank 1 named a 46-minute-since-last-sync row nobody waited for. A `write:total`
+ * row sums the phases under it, which is the same double-count the `tool_result`
+ * row was already excluded for. The fixture keeps the arithmetic hand-checkable:
+ * the leaf groups are 600 + 400 + 100 ms, so their shares sum to exactly 1.
+ */
+describe("analyze-pi-lens-logs.mjs phase sample rules (#5263 r2 F1, F2)", () => {
+	const SAMPLE = path.join(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"../fixtures/analyze-logs/sample-rules",
+	);
+	let latency: any;
+
+	beforeAll(() => {
+		latency = runReport(SAMPLE).latency;
+	});
+
+	it("reports age-valued phases in their own block instead of the time denominator", () => {
+		expect(latency.phaseLatency.totalMs).toBe(1100);
+		expect(latency.phaseLatency.rows.map((row: any) => row.key)).not.toContain(
+			"unknown:lsp_document_drift",
+		);
+		expect(latency.phaseLatency.rows.map((row: any) => row.key)).not.toContain(
+			"edit:lsp_workspace_sweep_hold_force_released",
+		);
+
+		const ages = latency.phaseAges;
+		expect(ages.totalMs).toBe(1_300_000);
+		expect(ages.rows).toHaveLength(2);
+		expect(
+			ages.rows.find((row: any) => row.key === "unknown:lsp_document_drift"),
+		).toMatchObject({
+			tool: "unknown",
+			phase: "lsp_document_drift",
+			count: 1,
+			p50Ms: 900_000,
+			p95Ms: 900_000,
+			maxMs: 900_000,
+			totalMs: 900_000,
+		});
+		// The ages block has no denominator to share: an age is not a slice of any
+		// family a reader ranks, so a `share` number there is the F1 artifact again
+		// in a different block. The time block keeps it.
+		expect(ages.rows[0]).not.toHaveProperty("share");
+		expect(latency.phaseLatency.rows[0]).toHaveProperty("share");
+	});
+
+	it("keeps parent total rows out of the denominator so leaf shares sum to 1", () => {
+		const { rows, totalMs, parentTotalRows } = latency.phaseLatency;
+		expect(parentTotalRows).toBe(2);
+		expect(totalMs).toBe(1100);
+		expect(rows.map((row: any) => row.key)).toEqual([
+			"write:dispatch_lint",
+			"write:lsp_sync",
+			"unknown:no_tool_name_phase",
+		]);
+		// 1000 of the file's 6600 in-window phase ms are parent totals; if either
+		// entered the denominator the shown shares would sum to 1100/2100 instead.
+		const sum = rows.reduce((acc: number, row: any) => acc + row.share, 0);
+		expect(sum).toBeCloseTo(1, 10);
+	});
+
+	it("renders the ages block and the excluded parent count in text", () => {
+		const text = runAnalyzer(SAMPLE);
+		const agesSection = text.split("\nPhase ages")[1]?.split("\n\n")[0];
+		expect(agesSection).toBeDefined();
+		expect(agesSection).toMatch(
+			/1\s+p50=900000\s+p95=900000\s+max=900000\s+unknown:lsp_document_drift/,
+		);
+		expect(text).toMatch(/2 parent `total` rows excluded/);
+	});
+});
+
+/**
+ * #5263 round 2, F1: the age list is a claim about `clients/` producers. A
+ * rename or a removal there turns the exclusion into a silent hole (the row goes
+ * back into the denominator, the block goes stale), so every listed name must
+ * still be written by a producer and must still route to the ages block.
+ *
+ * Shape 33 exception, stated: no runtime probe can show a producer drift here —
+ * it would need a real session that reaches a multi-minute untracked-drift
+ * resync, which is the rare-but-dominant population the field report names. The
+ * scan is the closest executable check.
+ */
+describe("analyze-pi-lens-logs.mjs age-phase list stays true to its producers (#5263 r2 F1)", () => {
+	function analyzerSource(): string {
+		return fs.readFileSync(SCRIPT, "utf8");
+	}
+
+	/** The phase names in the `AGE_VALUED_PHASES` set literal, comments blanked. */
+	function agePhaseNames(): string[] {
+		const block = /const AGE_VALUED_PHASES = new Set\(\[([\s\S]*?)\]\);/.exec(
+			analyzerSource(),
+		)?.[1];
+		if (!block)
+			throw new Error(
+				"AGE_VALUED_PHASES block not found in scripts/analyze-pi-lens-logs.mjs",
+			);
+		return [...block.matchAll(/^\s*"([^"]+)",$/gm)].map((m) => m[1]);
+	}
+
+	function clientsSources(): Array<{ file: string; source: string }> {
+		const root = path.resolve(
+			path.dirname(fileURLToPath(import.meta.url)),
+			"../../clients",
+		);
+		// The registered floor of this scan, so an empty or mis-pointed walk fails
+		// instead of reading as clean. Calibration: 520 `clients/**/*.ts` files
+		// (declarations excluded) on 2026-11-07; the floor is well under that so a
+		// module move cannot red it, and far above zero so a wrong root can.
+		const files = listSourceFiles(root, { extensions: [".ts"] });
+		assertNonEmptyScan(
+			"clients/ sources scanned for age-phase producers",
+			files.length,
+			300,
+		);
+		return readWalkedFiles(files);
+	}
+
+	it("lists a non-trivial population (the scan is not vacuous)", () => {
+		expect(agePhaseNames().length).toBeGreaterThanOrEqual(4);
+	});
+
+	it("names only phases that a clients/ producer still writes", () => {
+		const sources = clientsSources();
+		const missing: string[] = [];
+		for (const name of agePhaseNames()) {
+			// The two producer spellings: a literal `phase: "<name>"`, or the
+			// bounded-telemetry emitter that takes the phase name as its first
+			// argument. Any other quoted mention (a comment, a registry entry) is
+			// not a producer and does not satisfy the scan.
+			const producer = new RegExp(
+				`(?:phase:\\s*"|emitBounded\\(\\s*")${name}"`,
+			);
+			if (!sources.some(({ source }) => producer.test(source)))
+				missing.push(name);
+		}
+		expect(missing).toEqual([]);
+	});
+
+	it("routes every listed age phase to the ages block and to nothing else", () => {
+		const names = agePhaseNames();
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-loganalyze-ages-"),
+		);
+		try {
+			const rows = names.map((name, i) =>
+				JSON.stringify({
+					type: "phase",
+					toolName: "write",
+					phase: name,
+					filePath: "/proj/a",
+					durationMs: 1000 + i,
+					ts: NOW,
+				}),
+			);
+			rows.push(
+				JSON.stringify({
+					type: "phase",
+					toolName: "write",
+					phase: "real_work_phase",
+					filePath: "/proj/a",
+					durationMs: 7,
+					ts: NOW,
+				}),
+			);
+			fs.writeFileSync(path.join(root, "latency.log"), `${rows.join("\n")}\n`);
+			const latency = runReport(root).latency;
+			expect(latency.phaseAges.rows.map((r: any) => r.phase).sort()).toEqual(
+				[...names].sort(),
+			);
+			expect(latency.phaseLatency.rows.map((r: any) => r.key)).toEqual([
+				"write:real_work_phase",
+			]);
+			expect(latency.phaseLatency.totalMs).toBe(7);
+		} finally {
+			removeTempDirSync(root);
+		}
+	});
+});
+
+/**
+ * #5263 round 2, F6: the guards the r1 mutation table left unpinned — the
+ * negative-duration rejection, the `*_skipped` status family beyond the two
+ * literal statuses, the `tool_result` exclusion the r1 body claimed, the empty
+ * status, and the `unknown` toolName fallback (97 of the 134 live groups use it).
+ * All six cells run against the `sample-rules` fixture above.
+ */
+describe("analyze-pi-lens-logs.mjs sample guards (#5263 r2 F6)", () => {
+	const SAMPLE = path.join(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"../fixtures/analyze-logs/sample-rules",
+	);
+	let latency: any;
+
+	beforeAll(() => {
+		latency = runReport(SAMPLE).latency;
+	});
+
+	it("drops a row whose durationMs is negative instead of guessing 0", () => {
+		const keys = [...latency.phaseLatency.rows, ...latency.phaseAges.rows].map(
+			(row: any) => row.key,
+		);
+		expect(keys).not.toContain("unknown:negative_duration_phase");
+		// A phantom 0 sample would still create the group; the 5ms also stays out
+		// of the denominator, which the 1100ms total above pins.
+		expect(latency.phaseLatency.totalMs).toBe(1100);
+	});
+
+	it("excludes the whole *_skipped runner status family and counts it", () => {
+		const runner = latency.runnerLatency.rows.find(
+			(row: any) => row.key === "oxlint",
+		);
+		// `test_file_skipped` and `when_skipped` are the two dispatcher statuses the
+		// r1 table proved unpinned; matching only `status === "skipped"` would put
+		// their 9999ms rows in the sample and move p50 to 200 -> 9999.
+		expect(runner).toMatchObject({
+			count: 2,
+			p50Ms: 200,
+			p95Ms: 200,
+			maxMs: 200,
+			totalMs: 300,
+			skippedRows: 2,
+		});
+	});
+
+	it("counts a runner row with an empty status as work that ran", () => {
+		const runner = latency.runnerLatency.rows.find(
+			(row: any) => row.key === "oxlint",
+		);
+		// The 200ms row is the `status: ""` one: dropping the empty-status clause
+		// from `runnerRowRan` would make it a skip and leave max at 100.
+		expect(runner.maxMs).toBe(200);
+		expect(runner.count).toBe(2);
+		expect(latency.runnerLatency.totalMs).toBe(300);
+	});
+
+	it("keeps tool_result rows out of both distributions", () => {
+		// The 5000ms `tool_result` row is the hook's total: sampling it would
+		// double-count the phases under it into the same denominator.
+		expect(latency.phaseLatency.totalMs).toBe(1100);
+		expect(latency.runnerLatency.totalMs).toBe(300);
+		expect(latency.phaseLatency.rows.map((r: any) => r.key)).not.toContain(
+			"write:undefined",
+		);
+	});
+
+	it("buckets a phase row with no toolName under unknown", () => {
+		const row = latency.phaseLatency.rows.find(
+			(r: any) => r.key === "unknown:no_tool_name_phase",
+		);
+		expect(row).toMatchObject({ tool: "unknown", count: 1, totalMs: 100 });
+	});
+});
+
+/**
+ * #5263 round 2, F3: the report renders at most `--limit` rows per section, and
+ * the r1 field run mistook the 12-row cap for the 134-group population. The
+ * totals and shares are computed over every group before the cap (which is why
+ * the shares below still read against 120000ms); what was missing is that the
+ * rendered surface never said so.
+ */
+describe("analyze-pi-lens-logs.mjs discloses the top-N cap (#5263 r2 F3)", () => {
+	const TRUNC = path.join(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"../fixtures/analyze-logs/truncation",
+	);
+
+	it("counts shown and total groups in --json and keeps the denominator whole", () => {
+		const latency = runReport(TRUNC, ["--limit", "3"]).latency;
+		expect(latency.phaseLatency.groups).toBe(15);
+		expect(latency.phaseLatency.shown).toBe(3);
+		expect(latency.phaseLatency.rows).toHaveLength(3);
+		expect(latency.phaseLatency.totalMs).toBe(120_000);
+		expect(latency.phaseLatency.rows[0].totalMs).toBe(15_000);
+		expect(latency.phaseLatency.rows[0].share).toBeCloseTo(
+			15_000 / 120_000,
+			10,
+		);
+		expect(latency.runnerLatency.groups).toBe(1);
+		expect(latency.runnerLatency.shown).toBe(1);
+	});
+
+	it("says showing N of M groups in text when the cap truncates a section", () => {
+		const text = runAnalyzer(TRUNC, ["--limit", "3"]);
+		expect(text).toMatch(/showing 3 of 15 groups/);
+		// The runner section has one group and is not truncated, so it must not
+		// claim a cap it did not apply.
+		const runnerSection = text.split("\nRunner latency\n")[1]?.split("\n\n")[0];
+		expect(runnerSection).toBeDefined();
+		expect(runnerSection).not.toMatch(/showing \d+ of \d+ groups/);
+	});
+
+	it("stays silent about the cap when every group is shown", () => {
+		// 15 groups against the default --limit 12 still truncates, so the line is
+		// there; the silence case is a fixture whose groups all fit.
+		const text = runAnalyzer(TRUNC);
+		expect(text).toMatch(/showing 12 of 15 groups/);
+		expect(runReport(TRUNC).latency.phaseLatency.shown).toBe(12);
+		const sample = path.join(
+			path.dirname(fileURLToPath(import.meta.url)),
+			"../fixtures/analyze-logs/sample-rules",
+		);
+		expect(runAnalyzer(sample)).not.toMatch(/showing \d+ of \d+ groups/);
 	});
 });

@@ -227,6 +227,12 @@ function createState(files) {
 			// only "how many rows crossed a fixed threshold". See
 			// `latencyDistribution` for the percentile method and the memory bound.
 			phaseDurations: new Map(),
+			// #5263 r2 F1: the age-valued phases of `AGE_VALUED_PHASES`, kept out of
+			// `phaseDurations` so they cannot sit in the share denominator.
+			phaseAges: new Map(),
+			// #5263 r2 F2: parent `total` phase rows, which sum the phases under them
+			// and are therefore excluded from the phase sample like `tool_result`.
+			phaseParentRows: 0,
 			runnerDurations: new Map(),
 			// Runner rows that record a plan decision instead of work (`skipped`,
 			// `not_registered`), counted per runner so a distribution count can be
@@ -1872,6 +1878,55 @@ async function analyzeExtension(files, state) {
 }
 
 /**
+ * #5263 r2 F1: the phases whose `durationMs` is an elapsed-since value rather
+ * than the span of the work the row times — the age of a record, of a
+ * force-released hold, of another writer's still-outstanding operation, or of an
+ * unrelated earlier row. Each name carries its producer line.
+ *
+ * The population is what makes this load-bearing: in the maintainer's 7-day
+ * field window `lsp_document_drift` alone was 285 rows and 11,729 s, i.e. 81.8%
+ * of the whole phase denominator, because a resync after 46 minutes of untracked
+ * disk drift reports 2,760,325 ms nobody waited for. Every real share was diluted
+ * by it (`lsp_touch_file` read 4.1% when it is 22% of the phase time that is
+ * left), and the r1 report's rank 1 was the artifact.
+ *
+ * `clients/latency-logger.ts`'s `LAST_PHASE_EXCLUDED` is the same shape and a
+ * different question — it asks which row NAMES the work in flight for stall
+ * attribution, and it admits zero-duration decision rows (`availability_decision`,
+ * `cache_usage_summary`) whose `durationMs` is an honest 0 span. Labelling those
+ * ages would hide real rows behind a wrong label, so the two lists stay
+ * separate: `clients/` owns the attribution list, this script owns the sample
+ * rule. When a producer changes what its `durationMs` means, this list and the
+ * producer scan in `tests/scripts/analyze-pi-lens-logs.test.ts` move together.
+ */
+const AGE_VALUED_PHASES = new Set([
+	// clients/lsp/index.ts: `durationMs: event.driftAgeMs`, i.e. now minus the
+	// document's last sync (`driftAgeMs` in clients/lsp/document-drift.ts).
+	"lsp_document_drift",
+	// clients/lsp/workspace-sweep-hold.ts: `durationMs: ageMs` — how long a hold
+	// had been held when the cap force-released it.
+	"lsp_workspace_sweep_hold_force_released",
+	// clients/event-loop-hold.ts: `durationMs: now - oldestAcquiredAt` — the same
+	// force-release shape for an event-loop hold.
+	"event_loop_hold_force_released",
+	// clients/lsp/index.ts: `durationMs: claim.outstandingMs` — the age of the
+	// slot ANOTHER writer holds; this caller paid `slotWaitMs`, not this.
+	"lsp_notify_resync_deferred",
+	// clients/lsp/index.ts (via `emitBounded`): `durationMs: outstandingMs` — how
+	// long a notify has been in flight at a stall sample, so it is a partial age
+	// of an operation that has not completed at all.
+	"lsp_notify_stall_cpu_busy",
+	// clients/pipeline.ts: `durationMs: Date.now() - row.startedAt` at the
+	// give-up, i.e. the formatter's age since the write, as its own entry in
+	// `LAST_PHASE_EXCLUDED`'s comment states.
+	"format_late_resync_chained",
+	// clients/pipeline.ts: the shared `common` payload of the two late-resync
+	// settle rows. Same expression: elapsed since the original write row began.
+	"inband_format_late_resync",
+	"deferred_format_late_resync",
+]);
+
+/**
  * #5263: keep one duration sample per in-window latency row, so the report can
  * state a per-(tool, phase) and per-runner distribution. Rows that carry no
  * usable `durationMs` (absent, null, non-finite, or negative — a row from a
@@ -1882,13 +1937,24 @@ async function analyzeExtension(files, state) {
  * Only the two row types with a duration that means work are sampled. A
  * `tool_result` row's `durationMs` is the whole hook's total, which is the sum
  * of the phases under it, so sampling it too would double-count the same
- * milliseconds into the same denominator.
+ * milliseconds into the same denominator. A parent `total` phase row is the same
+ * double-count one level down (#5263 r2 F2), and an age-valued row is not a
+ * duration at all (F1): those two go to their own disclosed places instead.
  */
 function recordLatencyDuration(state, entry) {
 	const ms = entry.durationMs;
 	if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return;
 	if (entry.type === "phase") {
-		const key = `${entry.toolName ?? "unknown"}:${entry.phase ?? "unknown"}`;
+		const phase = entry.phase ?? "unknown";
+		const key = `${entry.toolName ?? "unknown"}:${phase}`;
+		if (AGE_VALUED_PHASES.has(phase)) {
+			pushDurationGroup(state.latency.phaseAges, key, ms);
+			return;
+		}
+		if (phase === "total") {
+			state.latency.phaseParentRows += 1;
+			return;
+		}
 		pushDurationGroup(state.latency.phaseDurations, key, ms);
 	} else if (entry.type === "runner") {
 		const runner = entry.runnerId ?? "unknown";
@@ -1937,7 +2003,7 @@ function runnerRowRan(entry) {
  * way (`latency.rowTs`, D1), so the distribution scales with the axis the
  * window already bounds rather than opening a new unbounded one.
  */
-function latencyDistribution(groups, cap, label) {
+function latencyDistribution(groups, cap, label, shareOfFamilyTotal = true) {
 	let totalMs = 0;
 	for (const durations of groups.values()) {
 		for (const ms of durations) totalMs += ms;
@@ -1954,33 +2020,58 @@ function latencyDistribution(groups, cap, label) {
 				count: durations.length,
 				p50Ms: lowerRankPercentile(durations, 0.5),
 				p95Ms: lowerRankPercentile(durations, 0.95),
-				maxMs: durations[durations.length - 1],
+				maxMs: durations.at(-1),
 				totalMs: groupMs,
 				// The denominator is this family's total, so a phase's share reads as
-				// "of the phase time in window" and runner time never dilutes it.
-				share: totalMs > 0 ? groupMs / totalMs : 0,
+				// "of the phase time in window" and runner time never dilutes it. The
+				// ages block passes false: an age is not a slice of a family anyone
+				// ranks, so a percentage there would be the F1 artifact again.
+				share: !shareOfFamilyTotal
+					? undefined
+					: totalMs > 0
+						? groupMs / totalMs
+						: 0,
 			},
 			cap,
 			(a, b) => b.totalMs - a.totalMs || a.key.localeCompare(b.key),
 		);
 	}
-	return { totalMs, rows };
+	// `groups`/`shown` are the disclosure of the cap (#5263 r2 F3): the field run
+	// read the 12-row `--limit` as the population, because the report said
+	// nothing about the 122 groups it had hidden.
+	return { totalMs, groups: groups.size, shown: rows.length, rows };
 }
 
 /**
- * The #5263 report sections. Phase rows key on `"<toolName>:<phase>"`, so the
- * label split is on the FIRST colon: a runner id or a phase name can hold one
- * (an ast-grep rule id does not, but a future `tool:sub` phase label might),
- * while the tool name written by `logLatency` is always a bare tool name.
+ * The phase block's row label. Phase rows key on `"<toolName>:<phase>"`, so the
+ * split is on the FIRST colon: a phase name can hold one (a runner id does not,
+ * but a future `tool:sub` phase label might), while the tool name written by
+ * `logLatency` is always a bare tool name.
+ */
+function phaseKeyLabel(key) {
+	const at = key.indexOf(":");
+	return { tool: key.slice(0, at), phase: key.slice(at + 1) };
+}
+
+/**
+ * The #5263 report sections. `phaseLatency` is the ranking of real work,
+ * `phaseAges` is the disclosed time-since population that stays out of it, and
+ * `runnerLatency` is the per-runner distribution with its own denominator.
  */
 function buildLatencyDistributions(state) {
 	const phaseLatency = latencyDistribution(
 		state.latency.phaseDurations,
 		limit,
-		(key) => {
-			const at = key.indexOf(":");
-			return { tool: key.slice(0, at), phase: key.slice(at + 1) };
-		},
+		phaseKeyLabel,
+	);
+	// Disclosed rather than silently dropped: a reader needs to know the 1,000 ms
+	// they can see is not the 2,500 ms the hook path spent.
+	phaseLatency.parentTotalRows = state.latency.phaseParentRows;
+	const phaseAges = latencyDistribution(
+		state.latency.phaseAges,
+		limit,
+		phaseKeyLabel,
+		false,
 	);
 	const runnerLatency = latencyDistribution(
 		state.latency.runnerDurations,
@@ -1990,7 +2081,7 @@ function buildLatencyDistributions(state) {
 	for (const row of runnerLatency.rows) {
 		row.skippedRows = state.latency.runnerSkipped.get(row.key);
 	}
-	return { phaseLatency, runnerLatency };
+	return { phaseLatency, phaseAges, runnerLatency };
 }
 
 function countBetween(sorted, a, b) {
@@ -3030,18 +3121,47 @@ function printReport(report) {
 	if (phaseDist?.rows?.length) {
 		console.log("\nPhase latency");
 		console.log(
-			`  p50/p95/max (clamped lower-rank percentile) per (tool, phase), share of ${formatMs(phaseDist.totalMs)}ms in-window phase time`,
+			`  p50/p95/max (clamped floor-rank percentile) per (tool, phase), share of ${formatMs(phaseDist.totalMs)}ms in-window phase time`,
 		);
+		if (phaseDist.parentTotalRows) {
+			console.log(
+				`  ${phaseDist.parentTotalRows} parent \`total\` rows excluded (they sum the phases under them)`,
+			);
+		}
 		for (const row of phaseDist.rows) console.log(`  ${formatLatencyRow(row)}`);
+		const hidden = phaseDist.groups - phaseDist.shown;
+		if (hidden > 0)
+			console.log(
+				`  showing ${phaseDist.shown} of ${phaseDist.groups} groups (${hidden} hidden by --limit ${limit})`,
+			);
+	}
+	const agesDist = report.latency.phaseAges;
+	if (agesDist?.rows?.length) {
+		console.log("\nPhase ages");
+		console.log(
+			`  time-since values (drift age, force-released holds), excluded from the phase time above; ${formatMs(agesDist.totalMs)}ms in window`,
+		);
+		for (const row of agesDist.rows)
+			console.log(`  ${formatLatencyRow(row, false)}`);
+		const hidden = agesDist.groups - agesDist.shown;
+		if (hidden > 0)
+			console.log(
+				`  showing ${agesDist.shown} of ${agesDist.groups} groups (${hidden} hidden by --limit ${limit})`,
+			);
 	}
 	const runnerDist = report.latency.runnerLatency;
 	if (runnerDist?.rows?.length) {
 		console.log("\nRunner latency");
 		console.log(
-			`  p50/p95/max (clamped lower-rank percentile) per runner, share of ${formatMs(runnerDist.totalMs)}ms runner time (skip rows excluded)`,
+			`  p50/p95/max (clamped floor-rank percentile) per runner, share of ${formatMs(runnerDist.totalMs)}ms runner time (skip rows excluded)`,
 		);
 		for (const row of runnerDist.rows)
 			console.log(`  ${formatLatencyRow(row)}`);
+		const hidden = runnerDist.groups - runnerDist.shown;
+		if (hidden > 0)
+			console.log(
+				`  showing ${runnerDist.shown} of ${runnerDist.groups} groups (${hidden} hidden by --limit ${limit})`,
+			);
 	}
 	section(
 		"Read-guard events",
@@ -3173,9 +3293,11 @@ function section(title, rows, formatter) {
 	for (const row of rows.slice(0, limit)) console.log(`  ${formatter(row)}`);
 }
 
-function formatLatencyRow(row) {
+function formatLatencyRow(row, withShare = true) {
 	return (
-		`${String(row.count).padStart(6)}  p50=${formatMs(row.p50Ms)}  p95=${formatMs(row.p95Ms)}  max=${formatMs(row.maxMs)}  ${(row.share * 100).toFixed(1)}%  ${row.key}` +
+		`${String(row.count).padStart(6)}  p50=${formatMs(row.p50Ms)}  p95=${formatMs(row.p95Ms)}  max=${formatMs(row.maxMs)}` +
+		(withShare ? `  ${(row.share * 100).toFixed(1)}%` : "") +
+		`  ${row.key}` +
 		(row.skippedRows ? `  (skipped ${row.skippedRows})` : "")
 	);
 }
