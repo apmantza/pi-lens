@@ -105,12 +105,17 @@ describe("tool-set cache policy", () => {
 
 	it("reads the host's own deferred-tool capability flag", () => {
 		// Pi 0.86.1 (the supported floor) through 1.5.0 gate the host's deferred
-		// (searchable) tool definitions on TWO arms, and the field must follow
-		// both (#5361 r2, review F1):
-		//  - `api/openai-responses.js` (azure, codex share it):
-		//    `compat.supportsToolSearch` selects the "additions" tool support;
-		//  - `api/anthropic-messages.js:153,897`: `nativeToolChanges` is
-		//    `supportsMidConvoSystemMessages && supportsMidConvoToolChanges`.
+		// (searchable) tool definitions on FOUR paths, and the field must follow
+		// all of them (#5361 r2-r3; the row-per-path census is in the PR body):
+		//  - `api/openai-responses.js:242` (azure, codex share it):
+		//    `supportsToolSearch` selects the "additions" tool support;
+		//  - the shared `api/openai-responses-shared.js:74-75`:
+		//    `supportsMidConvoSystemMessages && supportsAdditionalTools` selects
+		//    "changes", where the request carries no tool list at all;
+		//  - `api/anthropic-messages.js:897`: `nativeToolChanges` is
+		//    `supportsMidConvoSystemMessages && supportsMidConvoToolChanges`;
+		//  - `api/openai-completions.js:551-553`:
+		//    `supportsMidConvoSystemMessages && supportsMidConvoToolAdditions`.
 		// Reading the pi 0.80-era `supportsToolReferences` spelling made the
 		// field lie on every supported host (#5361).
 		expect(
@@ -124,9 +129,25 @@ describe("tool-set cache policy", () => {
 				},
 			}),
 		).toBe(true);
-		// Each half of the Anthropic arm alone is not the capability: pi sends
-		// no mid-conversation tool changes when either flag is missing, so a
-		// model with one of them must still read false.
+		expect(
+			supportsDeferredTools({
+				compat: {
+					supportsMidConvoSystemMessages: true,
+					supportsAdditionalTools: true,
+				},
+			}),
+		).toBe(true);
+		expect(
+			supportsDeferredTools({
+				compat: {
+					supportsMidConvoSystemMessages: true,
+					supportsMidConvoToolAdditions: true,
+				},
+			}),
+		).toBe(true);
+		// Each half of a gated arm alone is not the capability: pi sends no
+		// mid-conversation tool changes when either flag is missing, so a model
+		// with one of them must still read false.
 		expect(
 			supportsDeferredTools({
 				compat: { supportsMidConvoSystemMessages: true },
@@ -134,6 +155,14 @@ describe("tool-set cache policy", () => {
 		).toBe(false);
 		expect(
 			supportsDeferredTools({ compat: { supportsMidConvoToolChanges: true } }),
+		).toBe(false);
+		expect(
+			supportsDeferredTools({ compat: { supportsAdditionalTools: true } }),
+		).toBe(false);
+		expect(
+			supportsDeferredTools({
+				compat: { supportsMidConvoToolAdditions: true },
+			}),
 		).toBe(false);
 		expect(
 			supportsDeferredTools({ compat: { supportsToolSearch: false } }),

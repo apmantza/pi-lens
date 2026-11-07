@@ -1,27 +1,44 @@
 /**
- * #5361 r2: the `tool_set_mutation` deferral field states the host's deferred
- * (searchable) tool capability for EVERY model that has it, not one family.
+ * #5361 r3: the `tool_set_mutation` deferral field states whether the host
+ * sends this model's tools natively or deferred, for EVERY path pi-ai uses to
+ * decide that.
  *
- * pi 1.5.0 pi-ai gates that capability in two places, and the predicate has to
- * carry both arms (review r1 F1, maintainer decision to widen):
- *  - `api/openai-responses.js` (`getResponsesToolSupport` in
- *    `openai-responses-shared.js`, shared with azure and codex):
- *    `compat.supportsToolSearch` selects the "additions" tool support;
- *  - `api/anthropic-messages.js:153,897`: `nativeToolChanges` is
- *    `compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolChanges`.
- * A model with neither gets the full inline tool list on every request, so the
+ * Round 3 opens with the state table (PR body, `STATE_TABLE.md`): a grep census
+ * over `pi-ai/dist/api/*.js` on three installed hosts (pi-0.86.1, pi-1.4.0,
+ * pi-1.5.0) enumerates every place that decides how tools reach the model. Four
+ * of those paths do NOT resend the full tool list, so the predicate has to carry
+ * four arms; the table's rows are cited per arm below.
+ *   A `api/openai-responses.js:242` → `getResponsesToolSupport`
+ *     (`api/openai-responses-shared.js:73-77`, shared with azure and codex):
+ *     `compat.supportsToolSearch` selects "additions" support, where
+ *     `resolveTranscriptTools` (`utils/transcript.js:208`) keeps only the folded
+ *     prefix in the request's tool field.
+ *   B `api/anthropic-messages.js:897`: `nativeToolChanges` is
+ *     `supportsMidConvoSystemMessages && supportsMidConvoToolChanges`, and the
+ *     request then carries the initial tools plus a deferred placeholder
+ *     (`:951`).
+ *   C `api/openai-responses-shared.js:74-75`: the same helper returns "changes"
+ *     for `supportsMidConvoSystemMessages && supportsAdditionalTools`, and
+ *     `resolveTranscriptTools` returns `requestTools: []` for "changes" — every
+ *     tool arrives in `additional_tools` items.
+ *   D `api/openai-completions.js:551-553`: "additions" for
+ *     `supportsMidConvoSystemMessages && supportsMidConvoToolAdditions`.
+ * A model matching no row gets the current tool list on every request (rows 2
+ * and 5, and `google-generative-ai.js:282`, `google-vertex.js:352`,
+ * `bedrock-converse-stream.js:151`, `mistral-conversations.js:376`), so the
  * field is false for it honestly.
  *
  * The guard reads the host install's OWN catalog
- * (`<pi-ai>/dist/providers/all.js`) and selects its models by the compat shape,
- * never by an id that a catalog refresh may drop. Recurrence it names: pi
- * renames a compat flag or moves one arm's gate, and the field silently reports
- * false on a host that supports the capability — #5361 itself read the
- * 0.80-era `supportsToolReferences`, so it was false on every supported host;
- * and the r1 fix read only the OpenAI arm, so the Anthropic models with native
- * tool changes still read false. A case that hand-shaped its own compat object
- * could not notice either drift (review r1 F2), which is why these cases read
- * real model objects and a real session row.
+ * (`<pi-ai>/dist/providers/all.js`, `getBuiltinProviders` +
+ * `getBuiltinModels` — the export the 0.86.1 floor also has, review r2 F5) and
+ * selects its models by the compat shape, never by an id that a catalog refresh
+ * may drop. Recurrence it names: pi renames a compat flag or moves an arm's
+ * gate, and the field silently reports false on a host that supports the
+ * capability — #5361 itself read the 0.80-era `supportsToolReferences`; r1 read
+ * only the OpenAI tool-search arm; and r2 still missed the "changes" arm and the
+ * `openai-completions` arm, which is 50 catalog models on pi-1.5.0. A case that
+ * hand-shaped its own compat object could not notice any of that (review r1 F2),
+ * which is why these cases read real model objects and a real session row.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -43,11 +60,13 @@ import { withGlobalConfig } from "./support/global-config.js";
 const fixture = piSessionFixture();
 const READY = fauxAssistantMessage(fauxText("ready"));
 
-/** The compat cells this seam reads, as the host spells them. */
+/** The compat cells these decision paths read, as the host spells them. */
 interface HostCompat {
 	supportsToolSearch?: boolean;
 	supportsMidConvoSystemMessages?: boolean;
 	supportsMidConvoToolChanges?: boolean;
+	supportsAdditionalTools?: boolean;
+	supportsMidConvoToolAdditions?: boolean;
 }
 
 interface HostModel {
@@ -56,6 +75,46 @@ interface HostModel {
 	api?: string;
 	compat?: HostCompat;
 }
+
+/**
+ * One state-table row in which the host does NOT resend the full tool list,
+ * spelled as the compat shape that selects it. This list is derived from the
+ * table (each row's `pi-ai` file:line is in the header), NOT from the predicate:
+ * an arm missing here cannot hide behind the "matches no row" cell either,
+ * because the row's own case then has no population to assert on the host.
+ */
+const DEFERRING_ROWS: ReadonlyArray<{
+	name: string;
+	why: string;
+	matches: (compat: HostCompat) => boolean;
+}> = [
+	{
+		name: "the Responses-family tool-search arm (table row 4)",
+		why: 'getResponsesToolSupport returns "additions" for supportsToolSearch, so the request holds only the folded prefix',
+		matches: (compat) => compat.supportsToolSearch === true,
+	},
+	{
+		name: "the Anthropic native tool-change arm (table row 1)",
+		why: "nativeToolChanges needs mid-convo system messages AND tool changes, and then the request holds initial tools plus the deferred placeholder",
+		matches: (compat) =>
+			compat.supportsMidConvoSystemMessages === true &&
+			compat.supportsMidConvoToolChanges === true,
+	},
+	{
+		name: 'the Responses-family "changes" arm (table row 3)',
+		why: 'getResponsesToolSupport returns "changes" for mid-convo system messages AND supportsAdditionalTools, and resolveTranscriptTools sends requestTools: [] with every tool in additional_tools items',
+		matches: (compat) =>
+			compat.supportsMidConvoSystemMessages === true &&
+			compat.supportsAdditionalTools === true,
+	},
+	{
+		name: "the chat-completions tool-additions arm (table row 8)",
+		why: 'openai-completions.js passes "additions" for mid-convo system messages AND supportsMidConvoToolAdditions, so later tools are anchored at their system message',
+		matches: (compat) =>
+			compat.supportsMidConvoSystemMessages === true &&
+			compat.supportsMidConvoToolAdditions === true,
+	},
+];
 
 /** The host install's built-in model catalog, or a loud failure. */
 async function hostCatalog(): Promise<HostModel[]> {
@@ -66,18 +125,21 @@ async function hostCatalog(): Promise<HostModel[]> {
 		);
 	const loaded = (await import(pathToFileURL(entry).href)) as {
 		getBuiltinProviders?(): string[];
-		getAllBuiltinModels?(provider: string): HostModel[];
+		getBuiltinModels?(provider: string): HostModel[];
 	};
+	// `getBuiltinModels` is the export all three certified hosts have;
+	// `getAllBuiltinModels` (1.4.0+) also folds in the image and classifier
+	// catalogs, which no conversation loop selects (review r2 F5).
 	if (
 		typeof loaded.getBuiltinProviders !== "function" ||
-		typeof loaded.getAllBuiltinModels !== "function"
+		typeof loaded.getBuiltinModels !== "function"
 	)
 		throw new Error(
-			`${entry} exports neither getBuiltinProviders nor getAllBuiltinModels, so the #5361 catalog guard cannot run on this host`,
+			`${entry} exports neither getBuiltinProviders nor getBuiltinModels, so the #5361 catalog guard cannot run on this host`,
 		);
 	const models: HostModel[] = [];
 	for (const provider of loaded.getBuiltinProviders())
-		models.push(...loaded.getAllBuiltinModels(provider));
+		models.push(...loaded.getBuiltinModels(provider));
 	// A catalog that came back empty would make every population assertion
 	// below vacuously true, so it fails here instead.
 	expect(models.length, `${entry} produced no model objects`).toBeGreaterThan(
@@ -91,57 +153,42 @@ function name(model: HostModel): string {
 	return `${model.provider}/${model.id}`;
 }
 
-describe("the deferred-tool capability covers both host arms (#5361 r2)", () => {
-	it("is true for every catalog model whose provider gates it on supportsToolSearch", async () => {
-		const models = await hostCatalog();
-		const armed = models.filter(
-			(model) => model.compat?.supportsToolSearch === true,
-		);
-		expect(
-			armed.length,
-			"the host catalog carries no model with compat.supportsToolSearch, so the OpenAI arm cannot be observed",
-		).toBeGreaterThan(0);
-		for (const model of armed)
-			expect(supportsDeferredTools(model), name(model)).toBe(true);
-	});
+/** The models whose compat shape selects one table row. */
+function modelsInRow(
+	models: HostModel[],
+	row: (typeof DEFERRING_ROWS)[number],
+): HostModel[] {
+	return models.filter((model) => row.matches(model.compat ?? {}));
+}
 
-	it("is true for every catalog model whose provider gates it on the Anthropic mid-convo arm", async () => {
-		const models = await hostCatalog();
-		const armed = models.filter(
-			(model) =>
-				model.compat?.supportsToolSearch !== true &&
-				model.compat?.supportsMidConvoSystemMessages === true &&
-				model.compat?.supportsMidConvoToolChanges === true,
-		);
-		expect(
-			armed.length,
-			"the host catalog carries no model with the Anthropic arm (mid-convo system messages AND tool changes) without supportsToolSearch, so that arm cannot be observed",
-		).toBeGreaterThan(0);
-		// Review r1 F1: pi-1.5.0 shipped 7 such models (Claude Fable 5 and
-		// friends) and the r1 predicate read false on all of them.
-		for (const model of armed)
-			expect(supportsDeferredTools(model), name(model)).toBe(true);
-	});
+describe("the deferred-tool capability covers every host deferral row (#5361 r3)", () => {
+	for (const row of DEFERRING_ROWS) {
+		it(`is true for every catalog model in ${row.name}`, async () => {
+			const models = await hostCatalog();
+			const armed = modelsInRow(models, row);
+			expect(
+				armed.length,
+				`the host catalog carries no model with the compat shape of ${row.name} (${row.why}), so that row cannot be observed on this host`,
+			).toBeGreaterThan(0);
+			for (const model of armed)
+				expect(supportsDeferredTools(model), name(model)).toBe(true);
+		});
+	}
 
-	it("is false for every catalog model that states neither arm", async () => {
+	it("is false for every catalog model that matches no deferral row", async () => {
 		const models = await hostCatalog();
 		const plain = models.filter(
-			(model) =>
-				model.compat?.supportsToolSearch !== true &&
-				!(
-					model.compat?.supportsMidConvoSystemMessages === true &&
-					model.compat?.supportsMidConvoToolChanges === true
-				),
+			(model) => !DEFERRING_ROWS.some((row) => row.matches(model.compat ?? {})),
 		);
 		expect(
 			plain.length,
-			"every catalog model states a deferral arm, so the unknown-as-false cell cannot be observed",
+			"every catalog model matches a deferral row, so the unknown-as-false cell cannot be observed",
 		).toBeGreaterThan(0);
 		for (const model of plain)
 			expect(supportsDeferredTools(model), name(model)).toBe(false);
 	});
 
-	it("covers both provider families, so one arm cannot drop out silently", async () => {
+	it("keeps every deferring api family in the true population", async () => {
 		const models = await hostCatalog();
 		const apis = new Set(
 			models
@@ -149,17 +196,17 @@ describe("the deferred-tool capability covers both host arms (#5361 r2)", () => 
 				.map((model) => model.api),
 		);
 		// The r1 predicate produced {"openai-responses", "openai-codex-responses"}
-		// only. Anthropic models reach the capability through
-		// anthropic-messages.js:897, so a predicate that lost that arm leaves
-		// this set at the OpenAI families.
-		expect(
-			[...apis].sort(),
-			"the true population lost the Anthropic arm",
-		).toEqual(expect.arrayContaining(["anthropic-messages"]));
-		expect(
-			[...apis].some((api) => api?.startsWith("openai")),
-			"the true population lost the OpenAI supportsToolSearch arm",
-		).toBe(true);
+		// only; r2 lost the openai-completions arm (table row 8), which reaches
+		// the capability through its own gate. A predicate that drops a row drops
+		// the family that reaches it ONLY through that row.
+		for (const api of [
+			"anthropic-messages",
+			"openai-responses",
+			"openai-completions",
+		])
+			expect(apis.has(api), `the true population lost the ${api} family`).toBe(
+				true,
+			);
 	});
 });
 
@@ -231,7 +278,7 @@ async function deferralAtSessionStart(
 	return value;
 }
 
-describe("the session_start row reports the deferral capability (#5361 r2)", () => {
+describe("the session_start row reports the deferral capability (#5361 r3)", () => {
 	it("reports true for a model with supportsToolSearch", async () => {
 		expect(
 			await deferralAtSessionStart("arm-tool-search", {
@@ -250,7 +297,29 @@ describe("the session_start row reports the deferral capability (#5361 r2)", () 
 		).toBe(true);
 	});
 
-	it("reports false for a model that states neither arm", async () => {
+	it("reports true for a model with the Responses-family additional-tools arm", async () => {
+		// Review r2 F4: 33 catalog models on pi-1.5.0 state this shape and the r2
+		// predicate read false on the 17 of them that state no other arm.
+		expect(
+			await deferralAtSessionStart("arm-additional-tools", {
+				...MID_CONVO,
+				supportsAdditionalTools: true,
+			}),
+		).toBe(true);
+	});
+
+	it("reports true for a model with the chat-completions tool-additions arm", async () => {
+		// State table row 8: 17 catalog models on pi-1.5.0 (the Kimi family) reach
+		// deferral only through openai-completions.js:551.
+		expect(
+			await deferralAtSessionStart("arm-mid-convo-tool-additions", {
+				...MID_CONVO,
+				supportsMidConvoToolAdditions: true,
+			}),
+		).toBe(true);
+	});
+
+	it("reports false for a model that matches no deferral row", async () => {
 		expect(await deferralAtSessionStart("arm-none", MID_CONVO)).toBe(false);
 	});
 });
