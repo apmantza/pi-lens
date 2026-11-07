@@ -17,7 +17,7 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { isReadableSourceFile } from "./file-kinds.js";
-import { normalizeHostToolPath } from "./path-utils.js";
+import { isWindowsPath, normalizeHostToolPath } from "./path-utils.js";
 import {
 	appliedFilesOfOwnTool,
 	classifyMutatingTool,
@@ -865,16 +865,78 @@ interface MoveOperands {
 }
 
 /**
+ * The short-option letters that take NO value for `mv` / `cp` / `install`, so a
+ * cluster of them may still end in `t` and mean `--target-directory` (#5378 R2
+ * F6). Letters these commands give a value (`-S`uffix, `install -m`ode,
+ * `-o`wner, `-g`roup) and any letter they do not define stay out: GNU hands the
+ * `t` to that option, so the word names no target directory.
+ */
+const MOVE_CLUSTER_LETTERS = new Set("abdfilnprRsvx");
+
+/**
+ * The target-directory value a word carries by itself, or null when the word is
+ * not that option (#5378). `--target-directory=DIR`, `-tDIR` and a run of
+ * valueless letters ending in `t` (`-vt DIR`, `-vtDIR`) all name it; the empty
+ * string means the value is the NEXT word (`-t`, `--target-directory`, `-vt`).
+ * getopt reads a short cluster left to right and stops at the first letter that
+ * takes a value, so the `t` there is the option and the rest of the word is its
+ * value. An attached value is a word fragment, so bash expands no `~` in it.
+ */
+function attachedTargetDirectory(text: string): string | null {
+	if (text.startsWith("--")) {
+		if (text === "--target-directory") return "";
+		return text.startsWith("--target-directory=")
+			? text.slice("--target-directory=".length)
+			: null;
+	}
+	if (!text.startsWith("-")) return null;
+	const cluster = /^-([^t]*)t(.*)$/.exec(text);
+	if (!cluster) return null;
+	for (const letter of cluster[1] ?? "") {
+		if (!MOVE_CLUSTER_LETTERS.has(letter)) return null;
+	}
+	return cluster[2] ?? "";
+}
+
+/** A word that names the target-directory option, and how much it consumes. */
+interface TargetDirectoryOption {
+	/** The directory operand, either attached to the word or the next one. */
+	value: ShellOperand;
+	/** True when the value is the NEXT word, so the loop skips it. */
+	consumesNext: boolean;
+}
+
+/**
+ * The target-directory option at `args[index]`, or null when that word is not
+ * it (#5378). An option with no word after it is null too: nothing names a
+ * directory, exactly as before this parser read `-t`.
+ */
+function targetDirectoryAt(
+	args: ShellOperand[],
+	index: number,
+): TargetDirectoryOption | null {
+	const attached = attachedTargetDirectory(args[index]?.text ?? "");
+	if (attached === null) return null;
+	if (attached !== "")
+		return {
+			value: { text: attached, tildeExpands: false },
+			consumesNext: false,
+		};
+	const next = args[index + 1];
+	return next ? { value: next, consumesNext: true } : null;
+}
+
+/**
  * Parse the operands of `mv` / `cp` / `install` / `git mv` (#5378). GNU puts
  * the destination LAST in the plain form (`mv SRC... DEST`) and FIRST in the
- * target-directory form, which is spelled `-t DIR`, `-tDIR`,
- * `--target-directory DIR` or `--target-directory=DIR`; every remaining operand
- * of that form is a source. `--` ends the option list, so `mv -- -t` moves the
- * file named `-t`.
+ * target-directory form, which `attachedTargetDirectory` recognizes; every
+ * remaining operand of that form is a source. `--` ends the option list, so
+ * `mv -- -t` moves the file named `-t`.
  *
- * `-t` is the only option recognized as taking a value. Every other leading
- * dash stays an unknown flag, so an option that carries its own value (`cp
- * -S .bak`) still reads its value as an operand, as it did before this parser.
+ * Only the target-directory option is read as taking a value. Every other
+ * leading dash stays an unknown flag, so an option that carries its own value
+ * (`cp -S .bak`) still reads its value as an operand, as it did before this
+ * parser.
  */
 function moveOperands(args: ShellOperand[]): MoveOperands {
 	const operands: ShellOperand[] = [];
@@ -891,22 +953,10 @@ function moveOperands(args: ShellOperand[]): MoveOperands {
 			options = false;
 			continue;
 		}
-		if (arg.text === "-t" || arg.text === "--target-directory") {
-			const value = args[i + 1];
-			if (value) {
-				destinationDir = value;
-				i += 1;
-			}
-			continue;
-		}
-		// `-tVALUE` and `--target-directory=VALUE`: for these commands `-t` takes
-		// a value, so GNU reads a short cluster that starts with `t` as that value.
-		const inline = arg.text.startsWith("--target-directory=")
-			? arg.text.slice("--target-directory=".length)
-			: arg.text.startsWith("-t") && arg.text.length > 2
-				? arg.text.slice(2)
-				: null;
-		if (inline !== null) destinationDir = { text: inline, tildeExpands: false };
+		const option = targetDirectoryAt(args, i);
+		if (!option) continue;
+		destinationDir = option.value;
+		if (option.consumesNext) i += 1;
 	}
 	const last = operands[operands.length - 1] ?? null;
 	return destinationDir
@@ -915,19 +965,37 @@ function moveOperands(args: ShellOperand[]): MoveOperands {
 }
 
 /**
+ * The last segment of a move operand, read with the separators ITS OWN spelling
+ * uses (#5378 R2 F4). The word model keeps a native Windows operand's
+ * backslashes (`C:\work\a.ts`), and `path.posix.basename` does not split on
+ * `\`, so it would return the whole operand and the join would name
+ * `dest/C:\work\a.ts`. Shape-based, not host-based (AGENTS.md shape 2): a
+ * Windows-SHAPED operand is parsed with `path.win32` on every platform, the
+ * same rule `basenameForShape` in `clients/generated-artifacts.ts` applies.
+ */
+function basenameForOperand(operand: string): string {
+	return isWindowsPath(operand)
+		? path.win32.basename(operand)
+		: path.posix.basename(operand);
+}
+
+/**
  * The paths a move WRITES: the plain form's trailing operand, or for the `-t`
  * form `DIR/<basename>` of each source, because the move keeps each name inside
  * the directory it moves into (#5378). Joined with `/`: bash spells its
- * operands POSIX, and `resolveCandidate` keeps that spelling (#4577 R4).
+ * operands POSIX, and `resolveCandidate` keeps that spelling (#4577 R4). The
+ * directory's own trailing separator is kept, never stripped, so `-t /` names
+ * the root and a POSIX directory spelled with a backslash keeps that character
+ * (#5378 R2 F2); the separator is added only when the spelling lacks one.
  */
 function moveDestinations(move: MoveOperands): ShellOperand[] {
 	const targetDir = move.destinationDir;
 	if (!targetDir) return move.destination ? [move.destination] : [];
-	const dir = targetDir.text.replace(/[\\/]+$/, "");
+	const dir = targetDir.text;
 	const separator =
 		dir === "" || dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
 	return move.sources.map((source) => ({
-		text: dir + separator + path.posix.basename(source.text),
+		text: dir + separator + basenameForOperand(source.text),
 		tildeExpands: targetDir.tildeExpands,
 	}));
 }

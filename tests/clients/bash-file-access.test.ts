@@ -920,17 +920,57 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 		]);
 	});
 
-	it("git mv -t DIR registers the written destination too (#5378)", () => {
+	// #5378 R2 F2 (greptile PRRT_kwDORt8rec6021vV): the join used to strip the
+	// directory's trailing separators, which turned the root `-t /` into an empty
+	// dir and reported a path under the cwd instead of `/a.ts`.
+	it("mv -t / keeps the filesystem root as the destination directory (#5378)", () => {
+		const nested = touchLines("nested/b.ts", 1);
+		expect(extractWrittenPathsFromCommand(`mv -t / ${nested}`, tmp)).toEqual([
+			"/b.ts",
+		]);
+		expect(extractDeletedPathsFromCommand(`mv -t / ${nested}`, tmp)).toEqual([
+			nested,
+		]);
+	});
+
+	// #5378 R2 F2: nothing pinned the separator rule, so both the strip and the
+	// "append /" ternary survived mutation. `-t dest` needs the separator, `-t
+	// dest/` must not double it.
+	it("mv -t DIR and mv -t DIR/ name the same destination (#5378)", () => {
 		const a = touchLines("a.ts", 1);
-		const b = touchLines("b.ts", 1);
-		expect(
-			extractWrittenPathsFromCommand(`git mv -t dest/ ${a} ${b}`, tmp),
-		).toEqual(
-			expect.arrayContaining([
+		for (const command of [`mv -t dest ${a}`, `mv -t dest/ ${a}`]) {
+			expect(extractWrittenPathsFromCommand(command, tmp), command).toEqual([
 				path.join(tmp, "dest", "a.ts"),
-				path.join(tmp, "dest", "b.ts"),
-			]),
-		);
+			]);
+		}
+	});
+
+	// #5378 R2 F3: the `-t` destination's tilde flag was propagated without a
+	// test; forcing it false survived the whole suite.
+	it("mv -t ~/dir expands the tilde into the destination (#5378)", () => {
+		const { home, restore } = pinFixtureHome("bfa-mv-t-home");
+		const a = touchLines("a.ts", 1);
+		try {
+			expect(os.homedir()).toBe(home);
+			// The join keeps `/` inside an absolute dir, so compare both spellings
+			// folded for separators and every platform runs the cell (shape 35).
+			expect(
+				extractWrittenPathsFromCommand(`mv -t ~/dir ${a}`, tmp).map(toPosix),
+			).toEqual([toPosix(path.join(home, "dir", "a.ts"))]);
+		} finally {
+			restore();
+		}
+	});
+
+	// #5378 R2 F4 (greptile PRRT_kwDORt8rec6021vU): the word model keeps a
+	// native Windows operand's backslashes, so `path.posix.basename` left
+	// `C:\work\a.ts` whole and the join produced `dest/C:\work\a.ts`. Built with
+	// `path.win32` so every platform runs it (AGENTS.md shape 35).
+	it("mv -t DIR takes a native Windows source's win32 basename (#5378)", () => {
+		const src = path.win32.join("C:\\work", "a.ts");
+		expect(extractWrittenPathsFromCommand(`mv -t dest ${src}`, tmp)).toEqual([
+			path.join(tmp, "dest", "a.ts"),
+		]);
 	});
 
 	it("cp -t DIR registers DIR/<basename> and not the source (#5378)", () => {
@@ -1072,12 +1112,39 @@ describe("extractDeletedPathsFromCommand — bash deletes (#1668)", () => {
 		}
 	});
 
-	it("git mv -t DIR registers every source (#5378)", () => {
+	// #5378 R2 F6 (greptile PRRT_kwDORt8rec6023dk): `-t` inside a short-option
+	// cluster was an unknown flag, so the directory became a source and the last
+	// operand the destination — the wrong direction. GNU reads the cluster's
+	// boolean letters, then `-t` takes the rest of the cluster or the next word;
+	// a value-taking letter first (`-S`) consumes the `t`, so `-St` names no dir.
+	it("mv -vt DIR and cp -it DIR read the cluster's -t (#5378)", () => {
 		const a = touchLines("a.ts", 1);
 		const b = touchLines("b.ts", 1);
+		const dest = path.join(tmp, "dest");
+		for (const command of [
+			`mv -vt dest ${a} ${b}`,
+			`cp -it dest ${a} ${b}`,
+			`mv -vtdest ${a} ${b}`,
+		]) {
+			expect(extractWrittenPathsFromCommand(command, tmp), command).toEqual(
+				expect.arrayContaining([
+					path.join(dest, "a.ts"),
+					path.join(dest, "b.ts"),
+				]),
+			);
+		}
+		// Only a move vanishes from the source path, so the two `mv` spellings
+		// carry the delete side too.
+		for (const command of [`mv -vt dest ${a} ${b}`, `mv -vtdest ${a} ${b}`]) {
+			expect(extractDeletedPathsFromCommand(command, tmp), command).toEqual(
+				expect.arrayContaining([a, b]),
+			);
+		}
+		// `-S` takes a value, so GNU reads `-St` as suffix `t`: `dest` is the
+		// source and `b.ts` the destination, exactly as the pre-fix parser.
 		expect(
-			extractDeletedPathsFromCommand(`git mv -k -t dest/ ${a} ${b}`, tmp),
-		).toEqual(expect.arrayContaining([a, b]));
+			extractWrittenPathsFromCommand(`cp -St dest ${a} ${b}`, tmp),
+		).toEqual([b]);
 	});
 
 	it("mv -t DEST SRC registers the source it used to miss (#5378)", () => {
