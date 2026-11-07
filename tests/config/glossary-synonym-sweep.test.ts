@@ -981,7 +981,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// after `cd` lands in that directory.
 		// 11 -> 12 (#5378): `moveDestinations` takes each source's name through
 		// `path.posix.basename`, so the module gains one `path` identifier use.
-		"clients/bash-file-access.ts": 12,
+		// 12 -> 13 (#5378 R2 F4): the basename split moved into
+		// `basenameForOperand`, which reads a Windows-SHAPED operand with
+		// `path.win32`, so the module gains a second `path` identifier use.
+		"clients/bash-file-access.ts": 13,
 		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
 		// shared `findLocalBinAt` trust seam, one construction site for the shim.
 		"clients/biome-client.ts": 7,
