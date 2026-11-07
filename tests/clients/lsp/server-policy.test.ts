@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MTIME_DRIFT_TOLERANCE_MS } from "../../../clients/freshness.js";
+import { truncateForLedger } from "../../../clients/ledger-bounds.js";
 import { removeTempDirSync, setupTestEnvironment } from "../test-utils.js";
 
 const toolNotFound = (message = "ENOENT: command not found") =>
@@ -1007,7 +1008,13 @@ describe("lsp server policy", () => {
 			(group) => group.kind === "lsp-root-declined",
 		);
 		expect(declined?.count).toBe(1);
-		expect(declined?.latestReasons[0]?.subject).toBe(fs.realpathSync(tmp));
+		// The ledger RETAINS every identity field through `subjectForLedger` →
+		// `truncateForLedger` (#1366), so a TMPDIR long enough to push the declined
+		// root past `LEDGER_FIELD_MAX` stores the bounded form with an ellipsis, and
+		// the assertion compares that same bound (#5246).
+		expect(declined?.latestReasons[0]?.subject).toBe(
+			truncateForLedger(fs.realpathSync(tmp)),
+		);
 	});
 
 	// Recurrence (#1129 F5, review probe p4): a real checkout named
