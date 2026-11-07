@@ -15,6 +15,8 @@ vi.mock("../../clients/disposition-logger.js", () => ({
 }));
 
 import { _resetForTests as _resetBusPublishForTests } from "../../clients/bus-publish.js";
+import { formatCascadeNeighborDiagnostics } from "../../clients/cascade-format.js";
+import type { Diagnostic } from "../../clients/dispatch/types.js";
 import {
 	_resetDispositionPublishForTests,
 	BUS_DISPOSITION_EVENT,
@@ -714,6 +716,221 @@ describe("F1 (#1625 review round): blocking findings require a STRICT anchor to 
 		markDisposition(cwd(), { ...finding1, content }, "suppress");
 		const kept = applyWeakDispositions([finding1, finding2], cwd(), filePath());
 		expect(kept).toEqual([finding1, finding2]);
+	});
+});
+
+// #5367: a cascade line prints `displayedMessage(message)` — first line, cut at
+// 100 characters — while the anchor hashes `normalizeMessage(message)`, which
+// folds whitespace and case but never cuts. A mark spelled from the text the
+// agent was SHOWN therefore anchored on a message no finding carried and hid
+// nothing. These cells pin the alias at the seam itself: it binds both anchor
+// kinds with no new policy, so a WEAK mark gets the same reach the strict one
+// has and the #1625 F1 blocking gate still stops it.
+describe("display-form alias for a mark spelled from a cut message (#5367)", () => {
+	const content = "const a = bad();\nconst b = alsoBad();\n";
+	/** 162 characters: only its first 100 render. */
+	const LONG = `${"x".repeat(100)}-tail-${"y".repeat(50)}`;
+	/** Two 162-character messages whose first 100 characters are identical. */
+	const SHARED = "s".repeat(100);
+	const SHARED_A = `${SHARED}-alpha-${"1".repeat(49)}`;
+	const SHARED_B = `${SHARED}-beta-${"2".repeat(49)}`;
+
+	function finding(
+		message: string,
+		line: 1 | 2,
+		semantic: "warning" | "blocking",
+	) {
+		return {
+			cwd: cwd(),
+			filePath: filePath(),
+			tool: "lsp",
+			rule: "no-bad",
+			message,
+			line,
+			semantic,
+		};
+	}
+
+	it.each([
+		["suppress", "suppress" as const],
+		["defer", "defer" as const],
+	])(
+		"a %s mark spelled from the displayed text drops the non-blocking finding it names",
+		(_label: string, disposition: "suppress" | "defer") => {
+			const target = finding(LONG, 1, "warning");
+			markDisposition(
+				cwd(),
+				{ ...target, message: LONG.slice(0, 100), content },
+				disposition,
+			);
+			const kept = applyDispositions(
+				[target, finding("unrelated", 2, "warning")],
+				cwd(),
+				filePath(),
+				content,
+			);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
+	it("a weak mark spelled from the displayed text does NOT drop a blocking finding (F1 holds through the alias)", () => {
+		const target = finding(LONG, 1, "blocking");
+		markDisposition(
+			cwd(),
+			{ ...target, message: LONG.slice(0, 100), content },
+			"suppress",
+		);
+		expect(applyDispositions([target], cwd(), filePath(), content)).toEqual([
+			target,
+		]);
+	});
+
+	it("a displayed-text mark drops neither of two findings that render the same text", () => {
+		const a = finding(SHARED_A, 1, "warning");
+		const b = finding(SHARED_B, 2, "warning");
+		markDisposition(
+			cwd(),
+			{ ...a, message: SHARED, content },
+			"false-positive",
+		);
+		expect(applyDispositions([a, b], cwd(), filePath(), content)).toEqual([
+			a,
+			b,
+		]);
+		// The alias is an alias for one message, not a wildcard over the rest:
+		// naming one message exactly still drops exactly that one.
+		markDisposition(cwd(), { ...a, content }, "false-positive");
+		expect(applyDispositions([a, b], cwd(), filePath(), content)).toEqual([b]);
+	});
+
+	it("a message that renders whole is unaffected: its own mark still drops it", () => {
+		// No cut, so no alias: this is the pre-#5367 behaviour, and the alias
+		// must not disturb it in either direction.
+		const short = finding("short message", 1, "warning");
+		markDisposition(cwd(), { ...short, content }, "false-positive");
+		expect(applyDispositions([short], cwd(), filePath(), content)).toEqual([]);
+	});
+
+	// Recurrence (#5367 r1 F1, reviewer probes p1 and p3): the owner count was
+	// filled from CUT candidates only. An UNCUT finding whose text equals a cut
+	// sibling's display form was not counted as an owner, so a mark naming the
+	// uncut finding also hid the cut sibling through the alias, and master
+	// (which has no alias) hid only the named finding. Every cell keeps what
+	// master keeps: the mark drops the finding it names and nothing else.
+	const SAME_TEXT = "error";
+	const SAME_TEXT_CUT = "error\ndetail";
+
+	it.each([
+		["suppress", "uncut first"],
+		["suppress", "uncut second"],
+		["defer", "uncut first"],
+		["defer", "uncut second"],
+	])(
+		"a %s mark on an uncut finding keeps its cut sibling that displays the same text (%s)",
+		(disposition, order) => {
+			const uncut = finding(SAME_TEXT, 1, "warning");
+			const cut = finding(SAME_TEXT_CUT, 2, "warning");
+			markDisposition(
+				cwd(),
+				{ ...uncut, content },
+				disposition as "suppress" | "defer",
+			);
+			const batch = order === "uncut first" ? [uncut, cut] : [cut, uncut];
+			const kept = applyDispositions(batch, cwd(), filePath(), content);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
+	it.each(["uncut first", "uncut second"])(
+		"a false-positive mark on an uncut blocking finding keeps its blocking cut sibling when both lines read the same (%s)",
+		(order) => {
+			// Identical line content makes the two strict anchors collide: the
+			// alias of the cut finding would hash the same as the uncut finding's
+			// own anchor, which is the drop the owner count must prevent.
+			const twins = "bad();\nbad();\n";
+			const uncut = finding(SAME_TEXT, 1, "blocking");
+			const cut = finding(SAME_TEXT_CUT, 2, "blocking");
+			markDisposition(cwd(), { ...uncut, content: twins }, "false-positive");
+			const batch = order === "uncut first" ? [uncut, cut] : [cut, uncut];
+			const kept = applyDispositions(batch, cwd(), filePath(), twins);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
+	// Recurrence (#5367 r2, the sweep of the uncut-only owner remedy): a CUT
+	// message can also equal another cut message's display form once whitespace
+	// folds. "error\ndetail" folds to "error detail", the display form of
+	// "error detail\nmore". Counting only uncut candidates left that form with
+	// one owner, so a mark spelled from it dropped the second finding too. The
+	// first finding is still dropped by its own exact anchor, as on master.
+	it.each(["folded sibling first", "folded sibling second"])(
+		"a mark spelled from a display form keeps the cut finding whose folded text is that form (%s)",
+		(order) => {
+			const folded = finding("error\ndetail", 1, "warning");
+			const displayed = finding("error detail\nmore", 2, "warning");
+			markDisposition(
+				cwd(),
+				{ ...folded, message: "error detail", content },
+				"suppress",
+			);
+			const batch =
+				order === "folded sibling first"
+					? [folded, displayed]
+					: [displayed, folded];
+			const kept = applyDispositions(batch, cwd(), filePath(), content);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
+	// Recurrence (#5367 r1 F2, reviewer mutation M9): the cascade render and the
+	// alias each cut the message, and nothing pinned them to one derivation. An
+	// inline 90-character cut in `formatCascadeNeighborDiagnostics` survived
+	// every cell above, because they spell the mark from a constant. This cell
+	// takes the mark's text from the line the render printed, so a render that
+	// drifts from `displayedMessage` leaves the mark unanchored and the finding
+	// shown.
+	it("a mark spelled from the printed cascade line hides the finding it names (render and alias agree)", () => {
+		const MULTI = "multi line error first line\nsecond line names the detail";
+		const candidates = [
+			finding(LONG, 1, "warning"),
+			finding(MULTI, 2, "warning"),
+		];
+		const rendered: Diagnostic[] = candidates.map((c) => ({
+			id: `render-${c.line}`,
+			message: c.message,
+			filePath: filePath(),
+			line: c.line,
+			column: 1,
+			severity: "warning",
+			semantic: "warning",
+			tool: c.tool,
+			rule: c.rule,
+		}));
+		const output = formatCascadeNeighborDiagnostics(cwd(), [
+			{
+				filePath: filePath(),
+				reason: "imports",
+				diagnostics: rendered,
+				lspTouched: true,
+			},
+		]);
+		const printed = (line: number): string => {
+			for (const row of output.split("\n")) {
+				const m = /^\s*line (\d+), col \d+(?: rule=\S+)?: (.*)$/.exec(row);
+				if (m && Number(m[1]) === line) return m[2];
+			}
+			throw new Error(`no printed line ${line} in:\n${output}`);
+		};
+		for (const [i, c] of candidates.entries()) {
+			markDisposition(
+				cwd(),
+				{ ...c, message: printed(i + 1), content },
+				"suppress",
+			);
+		}
+		expect(applyDispositions(candidates, cwd(), filePath(), content)).toEqual(
+			[],
+		);
 	});
 });
 
