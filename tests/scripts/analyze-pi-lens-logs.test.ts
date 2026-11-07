@@ -1036,6 +1036,35 @@ describe("analyze-pi-lens-logs.mjs discloses the top-N cap (#5263 r2 F3)", () =>
 	});
 });
 
+// Recurrence: #5263 added the per-group top-N cap, and `--limit -1` then threw
+// `RangeError: Invalid array length` from `pushTop` mid-report (a stack, exit 1)
+// while `--limit 0` silently became the default. Both are refused at parse time.
+describe("analyze-pi-lens-logs.mjs rejects --limit below 1 (#5263 C5.1)", () => {
+	const TRUNC = path.join(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"../fixtures/analyze-logs/truncation",
+	);
+
+	it.each(["-1", "0"])("refuses --limit %s with a usage error", (value) => {
+		let failure: any;
+		try {
+			runAnalyzer(TRUNC, ["--limit", value]);
+		} catch (err) {
+			failure = err;
+		}
+		expect(failure, `--limit ${value} must not succeed`).toBeDefined();
+		expect(failure.status).toBe(2);
+		expect(String(failure.stderr)).toMatch(/--limit .* at least 1/);
+		expect(String(failure.stderr)).not.toMatch(/RangeError/);
+	});
+
+	it("still accepts --limit 1", () => {
+		expect(runReport(TRUNC, ["--limit", "1"]).latency.phaseLatency.shown).toBe(
+			1,
+		);
+	});
+});
+
 describe("analyze-pi-lens-logs.mjs reads the shared span-or-age rule (#5379)", () => {
 	// Recurrence: the heartbeat's cumulative elapsed time was written to
 	// `durationMs`, and the analyzer's only consumer of it ("how far did the hung

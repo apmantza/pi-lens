@@ -38,8 +38,7 @@ const DEFAULT_EXCLUDE_GLOBS = [
 const args = parseArgs(process.argv.slice(2));
 const root = path.resolve(expandHome(args.root ?? DEFAULT_ROOT));
 const since = parseSince(args.since ?? DEFAULT_SINCE);
-const limit =
-	Number.parseInt(args.limit ?? `${DEFAULT_LIMIT}`, 10) || DEFAULT_LIMIT;
+const limit = parseLimit(args.limit);
 const outputJson = Boolean(args.json);
 const includeArchived = Boolean(args.archived);
 const excludeGlobs = [
@@ -116,6 +115,22 @@ function parseArgs(argv) {
 		}
 	}
 	return out;
+}
+
+/**
+ * `--limit` caps each section's rows through `pushTop`, which truncates with
+ * `array.length = max`: a value below 1 threw `RangeError` mid-report (-1) or
+ * silently became the default (0). A non-numeric value keeps falling back to
+ * the default, as before.
+ */
+function parseLimit(value) {
+	const parsed = Number.parseInt(value ?? `${DEFAULT_LIMIT}`, 10);
+	if (Number.isNaN(parsed)) return DEFAULT_LIMIT;
+	if (parsed < 1) {
+		console.error(`Invalid --limit value: ${value} (must be at least 1)`);
+		process.exit(2);
+	}
+	return parsed;
 }
 
 function printHelp() {
