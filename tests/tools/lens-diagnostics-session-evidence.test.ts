@@ -167,6 +167,32 @@ describe("session diagnostic evidence", () => {
 		},
 	);
 
+	// Recurrence prevented: #5287. The line that names the files no check
+	// completed on is one per call whatever the count (bounded observability):
+	// five names and a remainder, never a row per file.
+	it("names at most five unchecked files and counts the rest (#5287)", async () => {
+		const reason = "no analyzer handles this file type";
+		for (let index = 0; index < 7; index++)
+			recordDiagnostics(file(`u${index}.zzz`), [], undefined, undefined, {
+				reason,
+				inapplicable: true,
+			});
+		recordDiagnostics(file("ok.ts"), []);
+
+		const result = await run();
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).not.toContain("✓");
+		expect(text).toContain("⚠ 7 files not checked");
+		for (let index = 0; index < 5; index++)
+			expect(text).toContain(`u${index}.zzz: ${reason}`);
+		expect(text).not.toContain("u5.zzz");
+		expect(text).toContain("+2 more");
+		expect(result.details).toMatchObject({ uncheckedFileCount: 7 });
+		expect(compact(result)).toContain("7 unchecked");
+		expect(compact(result)).not.toContain("— clean");
+	});
+
 	it.each([{ mode: "all" }, { source: "session", scope: "workspace" }])(
 		"discloses pending zero evidence for %j",
 		async (params) => {

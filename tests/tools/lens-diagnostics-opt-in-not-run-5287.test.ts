@@ -14,7 +14,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearWidgetState } from "../../clients/widget-state.js";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import {
+	clearWidgetState,
+	recordDiagnostics,
+} from "../../clients/widget-state.js";
 import {
 	removeTempDirSync,
 	setupTestEnvironment,
@@ -89,5 +93,46 @@ describe("lens_diagnostics mode=full names an enabled opt-in as not run (#5287)"
 		expect(text).toContain("Switched off, not run (auxiliary LSP): opengrep.");
 		expect(text).not.toContain("Opt-in");
 		expect(excluded).toEqual(["opengrep"]);
+	});
+
+	// Recurrence prevented: #5287. mode=full has no cache verdict, so its
+	// one-line summary said `clean (1 files)` for a sweep over a file no check
+	// completed on, beside a report that named it as not checked.
+	it("renders a sweep over files no check completed on as unchecked, not clean", async () => {
+		const notes = path.join(tmp, "notes.zzz");
+		fs.writeFileSync(notes, "plain notes\n");
+		recordDiagnostics(notes, [], undefined, undefined, {
+			reason: "no analyzer handles this file type",
+			inapplicable: true,
+		});
+		const service = makeLspServiceDouble({
+			runWorkspaceDiagnostics: vi.fn(async () => []),
+		});
+		const tool = createLensDiagnosticsTool(
+			{ readCache: vi.fn(() => undefined) } as never,
+			() => tmp,
+			() => service as never,
+		);
+		const result = await tool.execute(
+			"1",
+			{ mode: "full", paths: [notes] },
+			new AbortController().signal,
+			null as never,
+			{ cwd: tmp } as never,
+		);
+		const text = (result as { content: Array<{ text: string }> }).content
+			.map((c) => c.text)
+			.join("\n");
+		const summary = tool
+			.renderResult(result as never, { expanded: false }, {} as Theme, {
+				args: { mode: "full" },
+			})
+			.render(240)
+			.join("\n");
+
+		expect(text).toContain("⚠ 1 file not checked");
+		expect(text).not.toContain("✓");
+		expect(summary).toContain("lens_diagnostics full — unchecked (1 files)");
+		expect(summary).not.toContain("clean");
 	});
 });
