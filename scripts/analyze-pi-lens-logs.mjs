@@ -1979,11 +1979,14 @@ function pushDurationGroup(groups, key, ms) {
  * ran would add a zero sample to its own distribution and drag p50 toward the
  * skip time. The status family is matched by suffix, not by an enumerated
  * list, so a new `<something>_skipped` status is excluded the way its siblings
- * are. A row with no status at all (an older build) counts as work.
+ * are. A row with no status at all, or with an empty one (an older build),
+ * counts as work: the suffix cannot match an empty string, so it needs no clause
+ * of its own — pinned by the `status: ""` cell in
+ * `tests/fixtures/analyze-logs/sample-rules/latency.log`.
  */
 function runnerRowRan(entry) {
 	const status = entry.status;
-	if (typeof status !== "string" || status === "") return true;
+	if (typeof status !== "string") return true;
 	return !/(?:^|_)skipped$/.test(status) && status !== "not_registered";
 }
 
