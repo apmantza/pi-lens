@@ -15,6 +15,7 @@
 		"commands/**/*.ts",
 		"tools/**/*.ts",
 		"mcp/**/*.ts",
+		"scripts/lib/latency-log-phases.mjs",
 		"scripts/lib/process-scan.mjs",
 		"scripts/lib/skills-predicate.mjs",
 		"scripts/lib/web-tree-sitter-dir.mjs"

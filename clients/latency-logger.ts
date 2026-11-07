@@ -27,7 +27,16 @@ export interface LatencyEntry {
 	filePath: string;
 	fullPath?: string;
 	phase?: string;
-	durationMs: number;
+	/**
+	 * The SPAN the row measures: how long the work it names took. A row whose
+	 * value is not a span (the time since an earlier event, or the partial
+	 * elapsed time of work still running) writes `ageMs` instead and omits this
+	 * field (#5379). Readers derive the difference from
+	 * `scripts/lib/latency-log-phases.mjs`, never from a phase-name list.
+	 */
+	durationMs?: number;
+	/** An AGE, not a span: time since an earlier event. Mutually exclusive with `durationMs`. */
+	ageMs?: number;
 	totalDurationMs?: number;
 	result?: string;
 	runnerId?: string;
@@ -121,9 +130,10 @@ let recentPhases: Array<{
  * whose cited file was edited after the scan.
  *
  * #1459: the three scanner-coverage records are summary rows written from inside
- * `lsp_touch_file`, and two of them carry ANOTHER write's age as `durationMs`
- * (`lsp_notify_resync_deferred`, `lsp_notify_write_late_landed`) rather than
- * their own work. `lsp_scanner_coverage_gap` reports the touch's elapsed time for
+ * `lsp_touch_file`, and two of them carry ANOTHER write's elapsed time rather
+ * than their own work (`lsp_notify_resync_deferred` as `ageMs` since #5379;
+ * `lsp_notify_write_late_landed` as `durationMs`, the landed write's span).
+ * `lsp_scanner_coverage_gap` reports the touch's elapsed time for
  * joinability. Letting any of them win `lastPhase` would attribute a `loop_block`
  * to the record instead of to the touch that is actually stalled.
  *
@@ -138,9 +148,9 @@ let recentPhases: Array<{
  *
  * #3310: `lsp_empty_first_publish_held` is the same shape as the #1459
  * scanner-coverage rows — a decision record written from inside a live
- * `lsp_touch_file` wait whose `durationMs` is ANOTHER write's age (how long
- * after `didOpen` the server's pre-index empty publish arrived), not its own
- * work. The touch it fires inside owns any real stall.
+ * `lsp_touch_file` wait whose `ageMs` (#5379) is how long after `didOpen` the
+ * server's pre-index empty publish arrived, not its own work. The touch it
+ * fires inside owns any real stall.
  *
  * #3484: `lsp_diagnostics_fence` is a decision record from the notify path
  * (no fence request to send) or from the fence bound's timer (its duration is
@@ -163,7 +173,7 @@ let recentPhases: Array<{
  * decision and rollup rows written inside the session transition that owns any
  * real stall; #4751's `session_handoff_turn_state` is the same kind of row,
  * written at turn_start. `format_late_resync_chained` marks a formatter give-up and its
- * `durationMs` is the formatter's age at the give-up, not work of its own.
+ * `ageMs` (#5379) is the formatter's age at the give-up, not work of its own.
  *
  * #4368 r1 F3: `lsp_created_import_scan_rollup` is a zero-duration session-end
  * rollup of the created-module producer.

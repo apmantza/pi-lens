@@ -296,6 +296,12 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 		expect(aux.notify.open).toHaveBeenCalledTimes(1);
 		expect(aux.stats.maxInFlight).toBe(1);
 		expect(rowsFor("lsp_notify_resync_deferred")).toHaveLength(3);
+		// #5379: the value is the age of ANOTHER writer's outstanding write, time
+		// this caller never spent; written as `durationMs` it ranked as work.
+		for (const row of rowsFor("lsp_notify_resync_deferred")) {
+			expect(row).toHaveProperty("ageMs", expect.any(Number));
+			expect(row).not.toHaveProperty("durationMs");
+		}
 
 		// The breaker never opened, and no streak survived the late landing.
 		expect(phases()).not.toContain("lsp_notify_backpressure_broken");

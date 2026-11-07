@@ -103,12 +103,19 @@ describe("event-loop hold (#2507)", () => {
 		expect(_eventLoopKeepAliveForTests().armed).toBe(false);
 		expect(loggedPhase("event_loop_hold_force_released")).toBe(true);
 		const record = logLatencyMock.mock.calls
-			.map((call) => call[0] as { phase?: string; metadata?: unknown })
+			.map(
+				(call) =>
+					call[0] as { phase?: string; metadata?: unknown; ageMs?: number },
+			)
 			.find((entry) => entry.phase === "event_loop_hold_force_released");
 		expect(record?.metadata).toMatchObject({
 			releasedHolds: 1,
 			labels: ["lsp_diagnostics"],
 		});
+		// #5379: the value is the hold's AGE at the reap, not work anyone did. A
+		// `durationMs` here ranked it as a duration in the performance report.
+		expect(record).toMatchObject({ ageMs: getEventLoopHoldMaxMs() + 1 });
+		expect(record).not.toHaveProperty("durationMs");
 	});
 
 	it("reaps only the hold that is actually stale and keeps holding for the younger one", () => {

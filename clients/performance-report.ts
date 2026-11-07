@@ -6,6 +6,10 @@ import {
 	type LatencyEntry,
 } from "./latency-logger.js";
 import { getMaxLogSizeMB } from "./log-cleanup.js";
+import {
+	latencyAgeMs,
+	latencySpanMs,
+} from "../scripts/lib/latency-log-phases.mjs";
 
 const DEFAULT_PERF_TOP_N = 5;
 const MAX_PERF_TOP_N = 50;
@@ -116,13 +120,16 @@ function isEntryObject(value: unknown): value is Partial<LatencyEntry> {
 
 function isPhaseRecord(value: unknown): value is LatencyEntry {
 	if (!isEntryObject(value)) return false;
+	// A phase row carries a span (`durationMs`) or an age (`ageMs`), told apart by
+	// the one rule in `scripts/lib/latency-log-phases.mjs` (#5379). Either must be
+	// a valid measure; an age row is a valid record, just not a duration.
+	const measure = latencySpanMs(value) ?? latencyAgeMs(value);
 	return (
 		value.type === "phase" &&
 		typeof value.phase === "string" &&
 		value.phase.trim().length > 0 &&
-		typeof value.durationMs === "number" &&
-		Number.isFinite(value.durationMs) &&
-		value.durationMs >= 0 &&
+		measure !== undefined &&
+		measure >= 0 &&
 		(value.toolName === undefined || typeof value.toolName === "string") &&
 		(value.ts === undefined || typeof value.ts === "string") &&
 		(value.startedAt === undefined || typeof value.startedAt === "string") &&
@@ -131,8 +138,9 @@ function isPhaseRecord(value: unknown): value is LatencyEntry {
 	);
 }
 
+/** A ranked sample: a valid phase row whose span is positive (an age is none). */
 function isPhaseSample(value: unknown): value is LatencyEntry {
-	return isPhaseRecord(value) && value.durationMs > 0;
+	return isPhaseRecord(value) && (latencySpanMs(value) ?? 0) > 0;
 }
 
 function phaseKey(entry: LatencyEntry): string {
@@ -191,7 +199,7 @@ export function summarizePhaseLatency(
 		if (!isPhaseSample(entry)) continue;
 		const phase = phaseKey(entry);
 		const durations = durationsByPhase.get(phase) ?? [];
-		durations.push(entry.durationMs);
+		durations.push(latencySpanMs(entry) ?? 0);
 		durationsByPhase.set(phase, durations);
 		sampleCount += 1;
 
