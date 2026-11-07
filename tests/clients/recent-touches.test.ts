@@ -231,6 +231,30 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 		expect(entries[1]).toMatchObject({ pid: process.pid, reason: "format" });
 	});
 
+	// The record's ONE parse (#5377) is also the locked commit's `deserialize`,
+	// so a body that parses but has no `entries` array must still read as an
+	// empty record: the merge spreads `disk.entries`, and a non-array there
+	// throws inside the lock instead of appending.
+	it("treats a record body without an entries array as empty", async () => {
+		fs.writeFileSync(
+			recordFilePath(),
+			JSON.stringify({ version: 2, entries: { not: "an array" } }),
+			"utf-8",
+		);
+
+		const { appendRecentTouches } =
+			await import("../../clients/recent-touches.js");
+		await appendRecentTouches({
+			cwd: FAKE_CWD,
+			reason: "format",
+			paths: ["/fake/project/recovered.ts"],
+		});
+
+		expect(readRecordEntries().map((e) => path.basename(e.path))).toEqual([
+			"recovered.ts",
+		]);
+	});
+
 	it("missing record file on first read does not throw", async () => {
 		const { readCrossProcessTouchesForSessionStart } =
 			await import("../../clients/recent-touches.js");

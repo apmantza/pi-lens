@@ -2680,7 +2680,14 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// 5 -> 3 (#3612): `resolveReadGuardStartState`'s two sidecar awaits moved
 	// to the session-scope hand-off (`adoptHandoff`, below).
 	"clients/read-guard-branch.ts": 3,
-	"clients/recent-touches.ts": 8,
+	// #5377: 8 -> 6. The fold deleted the hand-rolled write helper, so the
+	// append's `await readRecentTouchesAsync(...)` and its
+	// `await writeFileAtomicAsync(...)` are gone; the commit's awaited lock +
+	// publication is one `await commitDurableStoreAsync(...)` in `appendRecentTouches`
+	// and the `mkdir` await moved with the helper. None can be bounded here for
+	// the same reason as the rest of this table: the producer is the
+	// fire-and-forget `publishFilesTouched` path, which holds no hook signal.
+	"clients/recent-touches.ts": 6,
 	// #4346: 41 -> 42. `updateGraphFiles` re-extracts each importer a newly
 	// created file resolves, the same per-file extraction await its update
 	// loop already pins.

@@ -1362,7 +1362,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.join` inside the list the resolver and the install stamp share.
 		"clients/python-environment.ts": 13,
 		"clients/read-guard-logger.ts": 3,
-		"clients/recent-touches.ts": 5,
+		// 5 -> 6 (#5377): the locked commit's `path:` member names the record file
+		// to `commitDurableStoreAsync`; the helper it replaces took `cwd` and
+		// derived the same path internally.
+		"clients/recent-touches.ts": 6,
 		"clients/reverse-deps.ts": 8,
 		"clients/review-graph-logger.ts": 2,
 		// 33 -> 36 (#4346): the importer pass names a created file by its stem
