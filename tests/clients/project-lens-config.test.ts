@@ -15,6 +15,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { resolveLensToolEnabled } from "../../clients/tool-config.js";
+import { FRESHNESS_CADENCE_MS } from "../../clients/freshness-cadence.js";
 import { removeTempDirSync } from "./test-utils.js";
 import { useConfigPath } from "../support/global-config.js";
 
@@ -1365,5 +1366,197 @@ describe("lsp.queryMaxFileLines at project scope (#5306)", () => {
 		expect(warnCount("lsp.disabledServers")).toBe(0);
 		const { raw: _raw, configPath: _configPath, ...parsed } = cfg;
 		expect(JSON.stringify(parsed)).not.toContain("queryMaxFileLines");
+	});
+});
+
+/**
+ * #5291: `loadPiLensProjectConfig` returned the NEAREST `.pi-lens.json` as a
+ * whole, while `resolvePiLensConfig` (the dispatch-policy seam, the LSP
+ * loader, `docs/configuration.md`'s "nearest one wins PER FIELD") layers every
+ * file upward. A session started in `pkg/` therefore lost the repo root's
+ * `autofix.enabled`, `maxProjectFiles`, `tools.*.enabled` and `trivy.enabled`.
+ * The fix reads through the layered seam; turn-off lists stay unions so a
+ * nested file never re-enables a denial, and legacy `pi-lens.json` documents
+ * stay out of the merge (#2426).
+ */
+describe("layered project config from a package directory (#5291)", () => {
+	function repoWith(rootConfig: unknown, pkgConfig?: unknown): string {
+		const pkg = path.join(tmpDir, "pkg");
+		fs.mkdirSync(pkg, { recursive: true });
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify(rootConfig),
+		);
+		if (pkgConfig !== undefined) {
+			fs.writeFileSync(
+				path.join(pkg, ".pi-lens.json"),
+				JSON.stringify(pkgConfig),
+			);
+		}
+		return pkg;
+	}
+
+	it("resolves root-set keys at pkg when pkg does not set them", () => {
+		// The issue's repro: root sets the four keys, pkg exists and sets none
+		// of them. Pre-#5291 all four read as unset at pkg.
+		const pkg = repoWith(
+			{
+				autofix: { enabled: false },
+				maxProjectFiles: 777,
+				tools: { lens_diagnostics: { enabled: false } },
+				trivy: { enabled: true },
+				ignore: ["root-vendor/**"],
+			},
+			{ startup: { mode: "quick" } },
+		);
+		const cfg = loadPiLensProjectConfig(pkg);
+		expect(cfg.autofix).toEqual({ enabled: false });
+		expect(cfg.maxProjectFiles).toBe(777);
+		expect(cfg.tools?.["lens_diagnostics"]).toEqual({ enabled: false });
+		expect((cfg.raw as { trivy?: { enabled?: unknown } }).trivy?.enabled).toBe(
+			true,
+		);
+		expect(cfg.ignore).toEqual(["root-vendor/**"]);
+		// The package's own setting still applies.
+		expect(cfg.startup).toEqual({ mode: "quick" });
+	});
+
+	it("a nested file that sets a key wins for that key only", () => {
+		const pkg = repoWith(
+			{ autofix: { enabled: false }, maxProjectFiles: 777 },
+			{ maxProjectFiles: 50 },
+		);
+		const cfg = loadPiLensProjectConfig(pkg);
+		expect(cfg.maxProjectFiles).toBe(50);
+		expect(cfg.autofix).toEqual({ enabled: false });
+	});
+
+	it("keeps turn-off lists as unions so pkg never re-enables a denial", () => {
+		// Named recurrence: #5232's deny-union rule, re-applied to this loader's
+		// read. A nested file that re-listed an ancestor's denial as enabled must
+		// not lift it: `rules.<id>.disable`, `lsp.disabledServers` and
+		// `dispatch.disabledRunners` merge as the union of every tier.
+		const pkg = repoWith(
+			{
+				rules: { grp: { disable: ["root-rule"] } },
+				lsp: { disabledServers: ["root-server"] },
+				dispatch: { disabledRunners: ["root-runner"] },
+			},
+			{
+				rules: { grp: { disable: ["pkg-rule"] } },
+				lsp: { disabledServers: ["pkg-server"] },
+				dispatch: { disabledRunners: ["pkg-runner"] },
+			},
+		);
+		const cfg = loadPiLensProjectConfig(pkg);
+		expect([...(cfg.rules["grp"]?.disable ?? [])].sort()).toEqual([
+			"pkg-rule",
+			"root-rule",
+		]);
+		const raw = cfg.raw as {
+			lsp?: { disabledServers?: string[] };
+			dispatch?: { disabledRunners?: string[] };
+		};
+		expect([...(raw.lsp?.disabledServers ?? [])].sort()).toEqual([
+			"pkg-server",
+			"root-server",
+		]);
+		expect([...(raw.dispatch?.disabledRunners ?? [])].sort()).toEqual([
+			"pkg-runner",
+			"root-runner",
+		]);
+	});
+
+	it("does not merge a legacy pi-lens.json into the layered read (#2426)", () => {
+		// Named recurrence: #2426's records-only contract for legacy documents.
+		// The legacy document sits nearer than the canonical one; its values
+		// must not ride into the layered result, and the canonical root file
+		// still supplies the keys.
+		const pkg = path.join(tmpDir, "pkg");
+		fs.mkdirSync(pkg, { recursive: true });
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				maxProjectFiles: 777,
+				rules: { grp: { disable: ["root-rule"] } },
+			}),
+		);
+		fs.writeFileSync(
+			path.join(pkg, "pi-lens.json"),
+			JSON.stringify({
+				maxProjectFiles: 10,
+				rules: { grp: { disable: ["pkg-rule"] } },
+			}),
+		);
+		const cfg = loadPiLensProjectConfig(pkg);
+		expect(cfg.maxProjectFiles).toBe(777);
+		expect(cfg.rules["grp"]?.disable).toEqual(["root-rule"]);
+		expect(cfg.configPath).toBe(path.join(tmpDir, ".pi-lens.json"));
+		// Still enumerated for records: the deprecation notice fires.
+		expect(console.error).toHaveBeenCalledWith(
+			expect.stringContaining("pi-lens.json"),
+		);
+	});
+
+	it("a lone legacy pi-lens.json still supplies the whole file (#2426)", () => {
+		// The nested-directory sibling of the root-level fallback pinned above:
+		// with no canonical file anywhere in the chain, the nearest legacy file
+		// keeps supplying values exactly as it did before #5291.
+		const pkg = path.join(tmpDir, "pkg");
+		fs.mkdirSync(pkg, { recursive: true });
+		fs.writeFileSync(
+			path.join(pkg, "pi-lens.json"),
+			JSON.stringify({ ignore: ["vendor/**"] }),
+		);
+		const cfg = loadPiLensProjectConfig(pkg);
+		expect(cfg.ignore).toEqual(["vendor/**"]);
+		expect(cfg.configPath).toBe(path.join(pkg, "pi-lens.json"));
+	});
+
+	it("re-reads the layered result when the root file is edited", () => {
+		// Named recurrence: #1105's content-gate class — the layered cache must
+		// notice an edit to ANY contributing file, not just the nearest one.
+		const pkg = repoWith(
+			{ maxProjectFiles: 777 },
+			{ startup: { mode: "quick" } },
+		);
+		expect(loadPiLensProjectConfig(pkg).maxProjectFiles).toBe(777);
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({ maxProjectFiles: 888 }),
+		);
+		expect(loadPiLensProjectConfig(pkg).maxProjectFiles).toBe(888);
+	});
+
+	it("notices a config newly created above the outermost contributor after one cadence window", () => {
+		// #2483's bounded-staleness rule applied to the layered read: the
+		// warm-path dir-mtime watch is scoped to the contributing chain, so a
+		// file newly created ABOVE it is noticed at worst after one freshness
+		// cadence window (the same forced re-walk the no-config entry uses).
+		const pkg = path.join(tmpDir, "pkg");
+		fs.mkdirSync(pkg, { recursive: true });
+		fs.writeFileSync(
+			path.join(pkg, ".pi-lens.json"),
+			JSON.stringify({ maxProjectFiles: 50 }),
+		);
+		vi.useFakeTimers();
+		try {
+			expect(loadPiLensProjectConfig(pkg).maxProjectFiles).toBe(50);
+			fs.writeFileSync(
+				path.join(tmpDir, ".pi-lens.json"),
+				JSON.stringify({ autofix: { enabled: false } }),
+			);
+			// Inside the window the entry can stay stale: the new file sits
+			// above the tracked chain, and this half of the promise is exactly
+			// what #2483 accepted for the no-config case.
+			expect(loadPiLensProjectConfig(pkg).autofix).toBeUndefined();
+			vi.advanceTimersByTime(FRESHNESS_CADENCE_MS);
+			const cfg = loadPiLensProjectConfig(pkg);
+			expect(cfg.autofix).toEqual({ enabled: false });
+			// The nearer file still wins the key it sets.
+			expect(cfg.maxProjectFiles).toBe(50);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

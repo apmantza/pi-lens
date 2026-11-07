@@ -41,9 +41,16 @@
  * cached directory mtimes plus the config-file mtime, so hot paths do not repeat
  * candidate-file probes on every dispatch.
  *
- * The loader walks up from the starting directory until it finds a config file
- * (mirroring `lsp/config.ts`'s `loadLSPConfig` so project-monorepos with a
- * `.pi-lens.json` at the repo root work without per-subdir configs).
+ * The loader walks up from the starting directory to a ceiling just below
+ * `$HOME` (mirroring `lsp/config.ts`'s `loadLSPConfig` so project-monorepos
+ * with a `.pi-lens.json` at the repo root work without per-subdir configs).
+ * When more than one `.pi-lens.json` sits in that chain, the value is layered
+ * FIELD BY FIELD through `resolvePiLensConfig` — nearest wins per field, and
+ * the turn-off lists (`rules.<id>.disable`, `lsp.disabledServers`,
+ * `dispatch.disabledRunners`) stay unions across tiers so a nested file never
+ * re-enables a denial (#5291). Legacy `pi-lens.json` documents remain
+ * records-only and are never merge inputs (#2426); a legacy document is still
+ * read whole when it is the only config in the chain.
  *
  * A malformed file is treated as "no config" and logged once — we never want a
  * stray syntax error in user-edited JSON to break diagnostics.
@@ -82,6 +89,7 @@ import {
 } from "./lens-flag-registry.js";
 import {
 	type ConfigLocation,
+	CANONICAL_PROJECT_CONFIG_FILE,
 	configSearchDirs,
 	getPiLensGlobalConfigPath,
 	isResolvedGlobalConfigPath,
@@ -98,6 +106,8 @@ import {
 	reportConfigReadFailure,
 	reportPiLensConfigRecords,
 	resolveOnePiLensConfigDocument,
+	resolvePiLensConfig,
+	type PiLensConfigResolution,
 } from "./config-resolve.js";
 import {
 	finalizeRecords,
@@ -273,12 +283,32 @@ interface DiscoveryCacheEntry {
 	/** The legacy documents `legacyRecords` was derived from, for freshness. */
 	legacySources: readonly FileStamp[];
 	/**
+	 * Every canonical `.pi-lens.json` the walk saw, innermost first (#5291).
+	 * With two or more of them — or one sitting ABOVE a nearer legacy document —
+	 * the value is no longer one file's, and the load takes the layered read.
+	 */
+	canonicalSources: readonly FileStamp[];
+	/**
+	 * The layered read's parse cache (#5291), keyed on every CONTRIBUTING
+	 * document's (mtime, size): the single-file `configCache` is keyed by one
+	 * path and cannot carry a result derived from several files.
+	 */
+	layered?: LayeredEntry;
+	/**
 	 * When this entry was built (#2483 round 2). Only consulted for the
 	 * no-`info` case — see `discoveryCacheStillFresh` — where `dirMtimes` is
 	 * scoped to `startDir` alone (`bearingDirMtimes`'s no-`info` branch) and so
 	 * cannot by itself see a config file newly created further up the chain.
 	 */
 	checkedAtMs: number;
+}
+
+/** One layered parse plus the identities of the documents it merged. */
+interface LayeredEntry {
+	readonly sources: readonly FileStamp[];
+	config: PiLensProjectConfig;
+	records: readonly MigrationRecord[];
+	ignored: readonly MigrationRecord[];
 }
 
 /** Cache by absolute config path; we read each candidate's mtime before reuse. */
@@ -356,6 +386,16 @@ export function loadPiLensProjectConfig(
 	// pays, on a path called per dispatch. The entry is resolved here and both
 	// halves read it.
 	const entry = discoveryEntryFor(startDir);
+	// #5291: with more than one canonical file in the chain — or a lone
+	// canonical one above a nearer legacy document — the project settings are
+	// no longer one file's, and the read goes through the layered seam
+	// (`resolvePiLensConfig`): nearest wins per field, turn-off lists union
+	// (`config-schema.ts` deny annotations), legacy documents stay out
+	// (#2426). A single canonical file that IS the nearest file layers against
+	// nothing, so it keeps the byte-identical single-file read below.
+	if (layeredReadApplies(entry)) {
+		return loadLayeredProjectConfig(entry, path.resolve(startDir));
+	}
 	// #2426 review round 4, F4. The half-migrated notices — a legacy
 	// `pi-lens.json` sitting BESIDE or ABOVE the canonical `.pi-lens.json` this
 	// walk stops at — used to be produced only by `loadLSPConfig`, whose
@@ -378,6 +418,117 @@ export function loadPiLensProjectConfig(
 	);
 	if (!configInfo) return EMPTY_PROJECT_CONFIG;
 	return loadCachedConfigFile(configInfo);
+}
+
+/**
+ * Whether this chain's value must come from the layered read (#5291).
+ *
+ * Two canonical files: the nearer one no longer decides every field the
+ * farther one sets. One canonical file sitting ABOVE the nearest (legacy)
+ * document: the legacy whole-file read would keep winning against a canonical
+ * the maintainer decision says it loses to ("LOSE every collision with the
+ * canonical spelling", #2426). One canonical file that IS the nearest:
+ * layering would re-derive that file alone, so the single-file read stays.
+ */
+function layeredReadApplies(entry: DiscoveryCacheEntry): boolean {
+	if (entry.canonicalSources.length === 0) return false;
+	if (entry.canonicalSources.length >= 2) return true;
+	return entry.info?.path !== entry.canonicalSources[0].path;
+}
+
+/**
+ * The layered read (#5291): every canonical project document the discovery
+ * walk found, merged field by field through `resolvePiLensConfig` — the same
+ * seam the dispatch-policy owner (#5011) and the LSP loader already read
+ * through, with `excludeLegacyProjectDocuments` keeping the #2426 records-only
+ * contract for `pi-lens.json` documents.
+ *
+ * The parse is cached ON the discovery entry (the path-keyed `configCache`
+ * cannot carry a result derived from several files) and invalidated by every
+ * contributing document's (mtime, size) — the same content gate `CacheEntry`
+ * runs for one file (#1105), applied to the contributing set.
+ */
+function loadLayeredProjectConfig(
+	entry: DiscoveryCacheEntry,
+	startDir: string,
+): PiLensProjectConfig {
+	// Unlike the single-file path there is no "selected" legacy document whose
+	// records `loadCachedConfigFile` replays: layered mode loads no legacy
+	// document whole, so EVERY legacy document in the chain reports its
+	// migration records here, every load, through the once-a-session latch.
+	reportPiLensConfigRecords(entry.legacyRecords);
+	const cached = entry.layered;
+	if (
+		cached &&
+		cached.sources.length > 0 &&
+		fileStampsStillFresh(cached.sources)
+	) {
+		replayConfigNotices(cached);
+		return cached.config;
+	}
+	const resolution = resolvePiLensConfig({
+		cwd: startDir,
+		excludeLegacyProjectDocuments: true,
+		onReadError: reportConfigReadFailure,
+	});
+	if (resolution.documents.length === 0) {
+		// Every candidate raced a delete or failed to parse. The read-error
+		// half already went through `reportConfigReadFailure`; a delete moves
+		// its directory's mtime and re-discovers on the next load. Do not
+		// cache: an empty `sources` list would read as permanently fresh and
+		// pin an empty config for the process.
+		return EMPTY_PROJECT_CONFIG;
+	}
+	// Documents arrive lowest-precedence first, so the LAST is the nearest —
+	// the file a single-file read would have called `configPath`.
+	const nearest = resolution.documents[resolution.documents.length - 1];
+	const parsed = parseLayeredProjectConfig(resolution, nearest.file);
+	const sources: FileStamp[] = resolution.documents.map((document) => {
+		const stat = safeFileStat(document.file);
+		return {
+			path: document.file,
+			mtimeMs: stat?.mtimeMs ?? -1,
+			size: stat?.size ?? -1,
+		};
+	});
+	entry.layered = {
+		sources,
+		config: parsed.config,
+		records: parsed.records,
+		ignored: parsed.ignored,
+	};
+	replayConfigNotices(entry.layered);
+	return parsed.config;
+}
+
+/**
+ * Parse the merged multi-document value with this loader's own field parser.
+ *
+ * The value arrives already validated and merged by the core, so unlike
+ * `parseConfigFile` there is no single raw document to pass `rules` through
+ * from: a malformed rule entry was dropped by validation WITH a
+ * `PILENS_CFG_0005` record, which is why the single-file path's
+ * `/rules/`-record filter does not apply here — the core record is the only
+ * notice for such an entry in a layered chain.
+ */
+function parseLayeredProjectConfig(
+	resolution: PiLensConfigResolution,
+	configPath: string,
+): ParsedConfigFile {
+	const { note, records: ignoredRecords } = ignoredRecordCollector(
+		configPath,
+		"project",
+	);
+	return {
+		config: parseProjectConfigFields(
+			resolution.value,
+			note,
+			resolution.value,
+			configPath,
+		),
+		records: resolution.records,
+		ignored: ignoredRecords(),
+	};
 }
 
 /** For tests + callers that need to force a re-read (e.g. config-watcher hooks). */
@@ -519,33 +670,39 @@ function discoveryCacheStillFresh(entry: DiscoveryCacheEntry): boolean {
 	if (!dirMtimesStillFresh(entry.dirMtimes)) {
 		return false;
 	}
-	// #2483 round 2. When no config was found anywhere, `bearingDirMtimes`'s
-	// no-`info` branch scopes `dirMtimes` to `startDir` alone, so the `.every`
-	// above can only ever see churn AT `startDir` — a config file created at
-	// any ancestor above it moves nothing this entry tracks, and the entry
-	// would then read as fresh for the rest of the process (no production
-	// caller resets it, and a same-`startDir` load never rediscovers). The
-	// issue's acceptance line rules that out ("a new config file created in
-	// the chain IS noticed (bounded staleness stated)"), so a no-`info` entry
-	// is force-expired at most once per `FRESHNESS_CADENCE_MS` regardless of
-	// what `dirMtimes` says — the same negative-cache cadence bound
+	// #2483 round 2, widened by #5291. `bearingDirMtimes` scopes `dirMtimes` to
+	// the chain that decides the current value, so churn ABOVE that chain — a
+	// config file newly created at an ancestor (the no-`info` case), a new
+	// canonical tier above a layered chain, or a canonical newly appearing
+	// above a legacy-only chain (which flips the read INTO layered mode) —
+	// moves nothing this entry tracks, and the entry would then read as fresh
+	// for the rest of the process (no production caller resets it, and a
+	// same-`startDir` load never rediscovers). Every entry is therefore
+	// force-expired at most once per `FRESHNESS_CADENCE_MS` regardless of what
+	// `dirMtimes` says — the same negative-cache cadence bound
 	// `file-utils.ts`'s `patternsForDir` already applies to its own no-match
 	// case, reused rather than a second cadence mechanism invented here. The
 	// forced re-walk that follows re-stats the FULL ancestor chain (see
 	// `discoverPiLensProjectConfig`), so a config created anywhere in it is
 	// found — bounded to at most one cadence window of staleness, not
 	// unbounded.
-	if (
-		entry.info === undefined &&
-		Date.now() - entry.checkedAtMs >= FRESHNESS_CADENCE_MS
-	) {
+	if (Date.now() - entry.checkedAtMs >= FRESHNESS_CADENCE_MS) {
 		return false;
 	}
 	// A legacy document can be EDITED in place without its directory's mtime
 	// moving, and its top-level key set is what `legacyRecords` describes — so
 	// those files carry their own freshness axis, the same (mtime, size) pair
 	// `CacheEntry` uses.
-	return entry.legacySources.every((source) => {
+	return fileStampsStillFresh(entry.legacySources);
+}
+
+/**
+ * Every stamped file still exists with the stamped (mtime, size) — the
+ * content gate of #1105 (both axes: an mtime-preserving, length-changing
+ * in-place edit must not replay stale) over a set of files rather than one.
+ */
+function fileStampsStillFresh(sources: readonly FileStamp[]): boolean {
+	return sources.every((source) => {
 		const stat = safeFileStat(source.path);
 		return (
 			stat?.isFile() === true &&
@@ -562,6 +719,7 @@ function discoverPiLensProjectConfig(startDir: string): DiscoveryCacheEntry {
 	const dirMtimes: Array<{ dir: string; mtimeMs: number }> = [];
 	const legacyDocuments: ConfigDocument[] = [];
 	const legacySources: FileStamp[] = [];
+	const canonicalSources: FileStamp[] = [];
 	let info: PiLensProjectConfigFileInfo | undefined;
 	// #2426: ceiling-bounded, same rule and same shared primitive as the LSP
 	// loader and as `findNestedProjectMutationValue` below. This walk ran to the
@@ -575,6 +733,21 @@ function discoverPiLensProjectConfig(startDir: string): DiscoveryCacheEntry {
 	// they sit — beside the winning file or above it.
 	for (const dir of configSearchDirs(startDir)) {
 		dirMtimes.push({ dir, mtimeMs: safeDirMtimeMs(dir) });
+		// The canonical file is probed in EVERY directory, not just until the
+		// first hit (#5291): the layered read needs every canonical tier, and
+		// the ones above the nearest file were never stat'd before, because
+		// only the nearest file's bytes decided a value then.
+		const canonicalCandidate = path.join(dir, CANONICAL_PROJECT_CONFIG_FILE);
+		if (!isResolvedGlobalConfigPath(canonicalCandidate)) {
+			const canonicalStat = safeFileStat(canonicalCandidate);
+			if (canonicalStat?.isFile()) {
+				canonicalSources.push({
+					path: canonicalCandidate,
+					mtimeMs: canonicalStat.mtimeMs,
+					size: canonicalStat.size,
+				});
+			}
+		}
 		if (!info) {
 			for (const name of PROJECT_CONFIG_BASENAMES) {
 				const candidate = path.join(dir, name);
@@ -627,9 +800,10 @@ function discoverPiLensProjectConfig(startDir: string): DiscoveryCacheEntry {
 	}
 	return {
 		info,
-		dirMtimes: bearingDirMtimes(dirMtimes, info),
+		dirMtimes: bearingDirMtimes(dirMtimes, info, canonicalSources),
 		legacyRecords: legacyDeprecationRecords(legacyDocuments),
 		legacySources,
+		canonicalSources,
 		checkedAtMs: Date.now(),
 	};
 }
@@ -712,11 +886,26 @@ function legacyDeprecationRecords(
 function bearingDirMtimes(
 	dirMtimes: readonly { dir: string; mtimeMs: number }[],
 	info: PiLensProjectConfigFileInfo | undefined,
+	canonicalSources: readonly FileStamp[],
 ): Array<{ dir: string; mtimeMs: number }> {
+	let end = -1;
 	if (info) {
 		const bearing = dirMtimes.findIndex((entry) => entry.dir === info.dir);
-		return bearing < 0 ? [...dirMtimes] : dirMtimes.slice(0, bearing + 1);
+		if (bearing >= 0) end = bearing;
 	}
+	// #5291: in layered mode a value can come from the OUTERMOST canonical
+	// file, so its directory joins the tracked chain. The chain runs from
+	// `startDir` (index 0) upward, so the outermost canonical is the LAST
+	// stamp; churn above it is bounded by the cadence force-expiry in
+	// `discoveryCacheStillFresh` instead.
+	const outermost = canonicalSources[canonicalSources.length - 1];
+	if (outermost !== undefined) {
+		const outerIndex = dirMtimes.findIndex(
+			(entry) => entry.dir === path.dirname(outermost.path),
+		);
+		if (outerIndex > end) end = outerIndex;
+	}
+	if (end >= 0) return dirMtimes.slice(0, end + 1);
 	return dirMtimes.slice(0, 1);
 }
 
@@ -795,83 +984,22 @@ interface ParsedConfigFile {
 
 const NO_RECORDS: readonly MigrationRecord[] = [];
 
-function parseConfigFile(configPath: string): ParsedConfigFile {
-	const { note, records: ignoredRecords } = ignoredRecordCollector(
-		configPath,
-		"project",
-	);
-	const outcome = readConfigDocument(configPath);
-	if (outcome.status === "error") {
-		// `{ parseError }`, not a pre-stringified message (#2431): the raw error
-		// reaches one seam, which decides how much of a `JSON.parse`
-		// `SyntaxError#message` (which embeds a snippet of the file being parsed)
-		// survives into the sinks.
-		note(
-			{ parseError: outcome.error, sourceText: outcome.sourceText },
-			"PILENS_CFG_0001",
-		);
-		return {
-			config: EMPTY_PROJECT_CONFIG,
-			records: NO_RECORDS,
-			ignored: ignoredRecords(),
-		};
-	}
-	// The file was stat'd as present by the discovery above, so `missing` here is
-	// a delete that raced the read. Nothing to warn about — the next call
-	// re-discovers and finds no config at all.
-	if (outcome.status === "missing") {
-		return {
-			config: EMPTY_PROJECT_CONFIG,
-			records: NO_RECORDS,
-			ignored: NO_RECORDS,
-		};
-	}
-
-	if (
-		!outcome.value ||
-		typeof outcome.value !== "object" ||
-		Array.isArray(outcome.value)
-	) {
-		note("top-level value must be an object", "PILENS_CFG_0001");
-		return {
-			config: EMPTY_PROJECT_CONFIG,
-			records: NO_RECORDS,
-			ignored: ignoredRecords(),
-		};
-	}
-
-	// Through the #2425 core (#2426): the value is validated against the
-	// canonical schema before this loader's own field parsing sees it, so the
-	// depth bound, the prototype-key policy and the declared `lsp.*` types apply
-	// here exactly as they do in the LSP loader. `raw` is the VALIDATED value
-	// rather than the parse output, which is the one place the field's
-	// documented "the parsed JSON as-is" narrows: a `__proto__` key or a
-	// 4000-deep blob no longer rides into `.raw`'s consumers (`trivy-client.ts`,
-	// the helm-render runner).
-	const resolved = resolveOnePiLensConfigDocument({
-		tier: "project",
-		file: configPath,
-		location: projectLocationFor(configPath),
-		value: outcome.value,
-	});
-	// The records are RETURNED, not reported here (#2426 review round 3, F2):
-	// this function's result is what the caller caches, and a cache HIT must
-	// still report them every session — a call this function never makes on a
-	// hit. Reporting here would fire only on a cache MISS (session 1), and
-	// `resetProjectLensConfigCache` has no production caller, so every session
-	// after the first silently lost the `config-deprecated` ledger row despite
-	// the file still being the exact deprecated one on disk.
-	const raw: unknown = resolved.value;
-	// The legacy project projection owns the field-specific `rules.*` parser
-	// contract. Keep the shared validation for every other section, but let this
-	// parser see malformed rule entries so it can retain its established notices
-	// instead of replacing them with a generic config-core record.
-	const rawProject = outcome.value as Record<string, unknown>;
-	const obj: Record<string, unknown> = {
-		...resolved.value,
-		...(rawProject.rules !== undefined ? { rules: rawProject.rules } : {}),
-	};
-
+/**
+ * The shared field parsing of one project-tier config value (#5291).
+ *
+ * Both canonical reads of this loader go through it: the single-file read
+ * (`parseConfigFile`, the whole nearest file) and the layered read
+ * (`parseLayeredProjectConfig`, the merged value from `resolvePiLensConfig`).
+ * Extracting it keeps the two entry points from becoming two parsers — the
+ * `raw` a consumer sees, the mutation-flag sections, the rule-policy notices
+ * and the unknown-key scans are one contract, not two.
+ */
+function parseProjectConfigFields(
+	obj: Record<string, unknown>,
+	note: NoteIgnored,
+	raw: unknown,
+	configPath: string,
+): PiLensProjectConfig {
 	const ignore = Array.isArray(obj.ignore)
 		? obj.ignore.filter((p): p is string => typeof p === "string")
 		: [];
@@ -1170,20 +1298,101 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 	}
 
 	return {
-		config: {
-			...(toolConfig === undefined ? {} : { tools: toolConfig }),
-			...(startup === undefined ? {} : { startup }),
-			ignore,
-			rules,
-			...(mutations as Pick<
-				PiLensProjectConfig,
-				"format" | "autofix" | "actionableWarnings"
-			>),
-			maxProjectFiles,
-			reviewGraph,
-			raw,
-			configPath,
-		},
+		...(toolConfig === undefined ? {} : { tools: toolConfig }),
+		...(startup === undefined ? {} : { startup }),
+		ignore,
+		rules,
+		...(mutations as Pick<
+			PiLensProjectConfig,
+			"format" | "autofix" | "actionableWarnings"
+		>),
+		maxProjectFiles,
+		reviewGraph,
+		raw,
+		configPath,
+	};
+}
+
+function parseConfigFile(configPath: string): ParsedConfigFile {
+	const { note, records: ignoredRecords } = ignoredRecordCollector(
+		configPath,
+		"project",
+	);
+	const outcome = readConfigDocument(configPath);
+	if (outcome.status === "error") {
+		// `{ parseError }`, not a pre-stringified message (#2431): the raw error
+		// reaches one seam, which decides how much of a `JSON.parse`
+		// `SyntaxError#message` (which embeds a snippet of the file being parsed)
+		// survives into the sinks.
+		note(
+			{ parseError: outcome.error, sourceText: outcome.sourceText },
+			"PILENS_CFG_0001",
+		);
+		return {
+			config: EMPTY_PROJECT_CONFIG,
+			records: NO_RECORDS,
+			ignored: ignoredRecords(),
+		};
+	}
+	// The file was stat'd as present by the discovery above, so `missing` here is
+	// a delete that raced the read. Nothing to warn about — the next call
+	// re-discovers and finds no config at all.
+	if (outcome.status === "missing") {
+		return {
+			config: EMPTY_PROJECT_CONFIG,
+			records: NO_RECORDS,
+			ignored: NO_RECORDS,
+		};
+	}
+
+	if (
+		!outcome.value ||
+		typeof outcome.value !== "object" ||
+		Array.isArray(outcome.value)
+	) {
+		note("top-level value must be an object", "PILENS_CFG_0001");
+		return {
+			config: EMPTY_PROJECT_CONFIG,
+			records: NO_RECORDS,
+			ignored: ignoredRecords(),
+		};
+	}
+
+	// Through the #2425 core (#2426): the value is validated against the
+	// canonical schema before this loader's own field parsing sees it, so the
+	// depth bound, the prototype-key policy and the declared `lsp.*` types apply
+	// here exactly as they do in the LSP loader. `raw` is the VALIDATED value
+	// rather than the parse output, which is the one place the field's
+	// documented "the parsed JSON as-is" narrows: a `__proto__` key or a
+	// 4000-deep blob no longer rides into `.raw`'s consumers (`trivy-client.ts`,
+	// the helm-render runner).
+	const resolved = resolveOnePiLensConfigDocument({
+		tier: "project",
+		file: configPath,
+		location: projectLocationFor(configPath),
+		value: outcome.value,
+	});
+	// The records are RETURNED, not reported here (#2426 review round 3, F2):
+	// this function's result is what the caller caches, and a cache HIT must
+	// still report them every session — a call this function never makes on a
+	// hit. Reporting here would fire only on a cache MISS (session 1), and
+	// `resetProjectLensConfigCache` has no production caller, so every session
+	// after the first silently lost the `config-deprecated` ledger row despite
+	// the file still being the exact deprecated one on disk.
+	const raw: unknown = resolved.value;
+	// The legacy project projection owns the field-specific `rules.*` parser
+	// contract. Keep the shared validation for every other section, but let this
+	// parser see malformed rule entries so it can retain its established notices
+	// instead of replacing them with a generic config-core record.
+	const rawProject = outcome.value as Record<string, unknown>;
+	const obj: Record<string, unknown> = {
+		...resolved.value,
+		...(rawProject.rules !== undefined ? { rules: rawProject.rules } : {}),
+	};
+
+	const config = parseProjectConfigFields(obj, note, raw, configPath);
+	return {
+		config,
 		records: resolved.records.filter(
 			(record) => !record.key.startsWith("/rules/"),
 		),
