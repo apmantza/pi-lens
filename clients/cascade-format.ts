@@ -762,7 +762,7 @@ export function listCascadePendingNeighbors(): ReadonlyArray<{
 		filePath: entry.filePath,
 		errorCount: entry.errors.size,
 		checkedAt: entry.checkedAt,
-		errors: [...entry.errors.values()].map((error) => error.identity),
+		errors: [...entry.errors.values()].map((stored) => stored.identity),
 	}));
 }
 

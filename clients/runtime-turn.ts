@@ -2573,29 +2573,37 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// from the agent cannot still gate, and a gate that counts it cannot hide
 	// it. A policy drop never destroys the entry: a lifted mark returns the
 	// line, and a fresh observation still labels the error by its first turn.
+	type PendingNeighborEntry = (typeof pendingGate.live)[number];
 	const livePendingErrors = pendingGate.live.flatMap((entry) => entry.errors);
 	const pendingSurvivors = new Set(
 		livePendingErrors.length === 0
 			? livePendingErrors
-			: filterFindingsByDisposition(livePendingErrors, cwd, (error) => error)
+			: filterFindingsByDisposition(livePendingErrors, cwd, (stored) => stored)
 					.kept,
 	);
 	const unresolvedPending: Array<{
-		entry: (typeof pendingGate.live)[number];
+		entry: PendingNeighborEntry;
 		errors: number;
 	}> = [];
-	const disposedPending: typeof pendingGate.live = [];
+	const disposedPending: PendingNeighborEntry[] = [];
 	let disposedPendingErrors = 0;
 	for (const entry of pendingGate.live) {
 		const errors = entry.errors.reduce(
-			(count, error) => (pendingSurvivors.has(error) ? count + 1 : count),
+			(count, stored) => (pendingSurvivors.has(stored) ? count + 1 : count),
 			0,
 		);
 		disposedPendingErrors += entry.errors.length - errors;
 		if (errors === 0) disposedPending.push(entry);
 		else unresolvedPending.push({ entry, errors });
 	}
-	const unresolvedNeighbors = unresolvedPending.map((pending) => pending.entry);
+	// The rendered list stays the gate's own arm: the disposition check may
+	// only drop entries from it, never re-order or replace them.
+	const undisposedEntries = new Set(
+		unresolvedPending.map((pending) => pending.entry),
+	);
+	const unresolvedNeighbors = pendingGate.live.flatMap((entry) =>
+		undisposedEntries.has(entry) ? [entry] : [],
+	);
 	const changedNeighbors = pendingGate.stale;
 	// The forget set is the gate's own verdict (gone or rewritten outside pi),
 	// NOT the disposition-filtered list: a policy drop hides a line, it does
