@@ -872,6 +872,10 @@ export const wallClockBudgetInclude = [
 	// #3684: the wrapper's advisory scope is a real `git diff` against a real
 	// fixture repo, spawned through the real CLI (flake-shape admission).
 	"tests/scripts/astgrep-self-scan.test.ts",
+	// #5351: the `--duplicates` and `--summary` CLIs run as real children; argv
+	// wiring and the exit code the release roll acts on are the boundary under
+	// test (flake-shape admission).
+	"tests/scripts/changelog-cli.test.ts",
 	// #3795: the one-fragment-per-PR check diffs a real fixture repo through
 	// real `git` (`git diff` + `git ls-files --others`), which is the boundary
 	// under test (flake-shape admission).

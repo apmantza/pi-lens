@@ -218,11 +218,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "a05799527c99af28",
 		reason: PRE_RULE,
 	}, // :61
-	"clients/bus-publish.ts": {
-		silent: 1,
-		identities: "5942496acd59b074",
-		reason: PRE_RULE,
-	}, // :175
 	"clients/cache-manager.ts": {
 		silent: 5,
 		identities: "43974c850f2eb8df",
@@ -1060,10 +1055,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :298, :370, :382, :552, :569, :847, :910, :1926, :2578, :2607, :2832
 	"clients/recent-touches.ts": {
-		silent: 6,
-		identities: "775f4885df22095e",
+		silent: 5,
+		identities: "eab5c2f88f4f29ce",
 		reason: PRE_RULE,
-	}, // :96, :111, :182, :225, :278, :308
+	}, // :129, :234, :277, :330, :360 (#5377: 6 -> 5, the shared record parse
+	// carries a `none:` line for the corrupt-body arm the fold moved into it)
 	"clients/resource-sampler.ts": {
 		silent: 5,
 		identities: "a6c6697ae310d788",

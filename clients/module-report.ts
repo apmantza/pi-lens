@@ -951,9 +951,19 @@ const PRESET_AXES: Record<
 	"full-json": { projection: "full", format: "json" },
 };
 
+// #5372: `view:"json"` is the JSON hatch on every sibling tool
+// (project_report, lsp_navigation); here it was an unknown name that fell
+// through to the text cell. One alias map keeps the fail-closed rule: only a
+// known preset name or a listed alias selects a cell, everything else stays
+// the default.
+const PRESET_ALIASES: Record<string, ModuleReportPreset> = {
+	json: "full-json",
+};
+
 /**
  * Resolve a `view` preset name plus an optional reference-shaping argument into
- * its projection/format axes. Unknown or absent values fall through to the
+ * its projection/format axes. `PRESET_ALIASES` names are resolved first
+ * ("json" → "full-json", #5372). Unknown or absent values fall through to the
  * `summary-text` default and never throw. A finite `maxRefsPerSymbol` promotes
  * the projection to `full` (an explicit shaping argument must not be a no-op)
  * while keeping the resolved format.
@@ -962,9 +972,13 @@ export function resolveModuleReportPreset(
 	view: unknown,
 	maxRefsPerSymbol?: number,
 ): ModuleReportPresetChoice {
+	const name =
+		typeof view === "string" && Object.hasOwn(PRESET_ALIASES, view)
+			? PRESET_ALIASES[view]
+			: view;
 	const axes =
-		typeof view === "string" && Object.hasOwn(PRESET_AXES, view)
-			? PRESET_AXES[view as ModuleReportPreset]
+		typeof name === "string" && Object.hasOwn(PRESET_AXES, name)
+			? PRESET_AXES[name as ModuleReportPreset]
 			: PRESET_AXES["summary-text"];
 	if (
 		typeof maxRefsPerSymbol === "number" &&
@@ -3021,6 +3035,21 @@ export async function readEnclosing(
 	const startedAt = Date.now();
 	const absPath = path.resolve(cwd, file);
 	const targetLine = Math.max(1, Math.floor(line));
+	// #5372: one clamp for every surface. pi passes the raw number and MCP
+	// used to clamp in its adapter, so the same call answered differently
+	// (whole body vs error for 0, -5 and 2.5). Every surface lands here, so
+	// the `max(1, floor)` rule lives in the engine; non-finite values keep the
+	// existing no-cap meaning.
+	const maxLines =
+		options?.maxLines !== undefined && Number.isFinite(options.maxLines)
+			? Math.max(1, Math.floor(options.maxLines))
+			: undefined;
+	// aroundLine shares the same rule: a non-finite value keeps the fallback
+	// chain, on pi as on MCP (the MCP adapter used to guard this itself).
+	const aroundLine =
+		options?.aroundLine !== undefined && Number.isFinite(options.aroundLine)
+			? options.aroundLine
+			: undefined;
 	const log = (found: boolean): void => {
 		logLatency({
 			type: "phase",
@@ -3127,8 +3156,8 @@ export async function readEnclosing(
 
 	const lines = content.split(/\r?\n/);
 	const limit = selected.endLine - selected.startLine + 1;
-	if (options?.maxLines && limit > options.maxLines) {
-		const oversize = options.onOversize ?? "error";
+	if (maxLines !== undefined && limit > maxLines) {
+		const oversize = options?.onOversize ?? "error";
 		const base = {
 			path: absPath,
 			line: targetLine,
@@ -3143,10 +3172,7 @@ export async function readEnclosing(
 			...(warnings.length > 0 ? { warnings } : {}),
 		};
 		if (oversize === "slice") {
-			const sliceLimit = Math.max(
-				1,
-				Math.floor(options.aroundLine ?? options.maxLines ?? 80),
-			);
+			const sliceLimit = Math.max(1, Math.floor(aroundLine ?? maxLines ?? 80));
 			const slice = clampSliceRange(
 				targetLine,
 				selected.startLine,
@@ -3186,14 +3212,14 @@ export async function readEnclosing(
 					filters,
 					absPath,
 				),
-				error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${options.maxLines}`,
+				error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${maxLines}`,
 			};
 		}
 		log(false);
 		return {
 			...base,
 			found: false,
-			error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${options.maxLines}`,
+			error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${maxLines}`,
 		};
 	}
 	const source = lines

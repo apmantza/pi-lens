@@ -24,12 +24,13 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
 	extractSection,
-	summarizeSection,
+	releaseSummaryBody,
 	normalizeVersion,
 } from "./lib/changelog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
+const ROOT_DIR = join(__dirname, "..");
+const CHANGELOG_PATH = join(ROOT_DIR, "CHANGELOG.md");
 
 function parseArgs(argv) {
 	const args = { apply: false, full: false, repo: undefined, only: undefined };
@@ -78,7 +79,7 @@ function main() {
 			plan.push({ tag, action: "skip", reason: "no CHANGELOG section" });
 			continue;
 		}
-		const body = args.full ? full : summarizeSection(full);
+		const body = args.full ? full : releaseSummaryBody(ROOT_DIR, tag, full);
 		plan.push({ tag, action: "update", body });
 	}
 

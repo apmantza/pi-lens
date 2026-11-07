@@ -210,6 +210,92 @@ describe("read_enclosing tool", () => {
 		}
 	});
 
+	// Guards #5372: the maxLines >= 1 clamp lived only in the MCP adapter, so
+	// pi served the whole body for maxLines 0 and reported "above maxLines
+	// -5" / "above maxLines 2.5" where MCP answered 1 / 1 / 2.
+	it("clamps maxLines to a floored minimum of 1, as MCP does (#5372)", async () => {
+		const env = setupTestEnvironment("pi-lens-readenc-clamp-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				[
+					"export function ten(a: number) {",
+					"  const b = a + 1;",
+					"  const c = b + 1;",
+					"  const d = c + 1;",
+					"  const e = d + 1;",
+					"  return e;",
+					"}",
+				].join("\n"),
+			);
+			const tool = createReadEnclosingTool(
+				() => env.tmpDir,
+				() => undefined,
+			);
+			const cases: Array<[number, string]> = [
+				[0, "above maxLines 1"],
+				[-5, "above maxLines 1"],
+				[2.5, "above maxLines 2"],
+			];
+			for (const [maxLines, expected] of cases) {
+				const result = await tool.execute(
+					"read-enclosing",
+					{ path: "sample.ts", line: 4, maxLines },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(result.isError).toBe(true);
+				expect(String(result.content[0]?.text)).toContain(expected);
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Guards the engine-side aroundLine guard that replaces the deleted MCP
+	// adapter clamp (#5372): a non-finite aroundLine must keep the fallback
+	// chain (maxLines), not turn the slice limit into NaN.
+	it("keeps the maxLines fallback when aroundLine is not finite", async () => {
+		const env = setupTestEnvironment("pi-lens-readenc-around-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"export function big() {\n  const a = 1;\n  const b = 2;\n  const c = 3;\n  return a + b + c;\n}\n",
+			);
+			const tool = createReadEnclosingTool(
+				() => env.tmpDir,
+				() => undefined,
+			);
+			const result = await tool.execute(
+				"read-enclosing",
+				{
+					path: "sample.ts",
+					line: 4,
+					maxLines: 3,
+					aroundLine: Number.NaN,
+					onOversize: "slice",
+				},
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			// sliceLimit falls back to the clamped maxLines (3), not NaN.
+			expect(result.details).toMatchObject({
+				found: true,
+				partial: true,
+				enclosingEndLine: 6,
+			});
+			const sliced = String(result.content[0]?.text);
+			expect(sliced).toContain("const b = 2;");
+			expect(sliced).not.toContain("export function big");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("returns and records a partial slice for oversized enclosing ranges", async () => {
 		const env = setupTestEnvironment("pi-lens-readenc-tool-");
 		try {

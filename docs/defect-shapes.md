@@ -156,6 +156,22 @@ fixes its members says so instead of quoting a before and after.
     it was derived from. Tool-run caches are governed by the delivery gate
     instead. ADR: docs/adr/0006-derived-state-benchmark-first.md
 
+93. **Unlocked async read-modify-write of a shared record:** an async read, a
+    merge and a whole-file publish with no lock between them publish a snapshot,
+    not a delta, so a same-tick or cross-process sibling's entries vanish. A
+    timestamp stamped before the lock can also invert commit order against a
+    `ts > cursor` reader. `clients/recent-touches.ts` was this case: two
+    `publishFilesTouched` calls read the same record, and the second rename
+    dropped the first's batch (#5377, fixed in PR #5385, which commits through
+    `clients/durable-store.ts` and stamps `ts` inside the lock). Census: not
+    countable as one command; the 2026-11-07 sweep of the `writeFileAtomic`
+    users found this the only async read-merge-write, while
+    `clients/mutation-attribution.ts` and `clients/metrics-history.ts` are
+    synchronous (cross-process only). Enforcer: none: judgment-only, a scan
+    would have to follow a value from its read to its publish. Screen: does the
+    write's value come from a read of the same target with an await between, and
+    is any ordering field assigned outside the lock?
+
 </important>
 
 <important if="a delivery surface or lane">
@@ -485,6 +501,19 @@ file-scoped worklist and receives no project-wide scanner output.
     countable. Enforcer: none: judgment-only, the exempt population is whatever
     other providers replay or mix. Instances and dates: `HISTORY.md`.
 
+91. **Failure kind checked after the generic error branch:** a timeout or abort
+    result also carries `error`, so an `if (result.error)` placed
+    before `failure === "timeout"` makes that branch, and the state it updates,
+    unreachable. The autofix timeout in `clients/file-utils.ts` was this case:
+    it never armed the spawn-timeout cooldown, so every edit to a wedged tool
+    paid the full timeout (#5376, fixed in PR #5383). Census: not countable as
+    one command; the 2026-11-07 sweep of the `if (result.error)` sites found
+    this one the only site where that check shadowed a cooldown arm. Enforcer:
+    none: judgment-only, the order of checks is code shape, and a scan cannot
+    tell a dead branch from a deliberate fallback. Screen: does every
+    non-success exit reach the state updates the transition table gives it, or
+    does a broader check catch it first?
+
 </important>
 
 <important if="a test double, ratchet or sweep">
@@ -711,6 +740,19 @@ file-scoped worklist and receives no project-wide scanner output.
     (`for (const _ of Array.from({ length: N }))`), or a loop that compares a
     clock value for some other purpose.
     Instances and dates: `HISTORY.md`.
+
+92. **Test double with a result shape the real producer never returns:** a
+    double that combines fields the real producer never returns passes for the
+    wrong reason and pins a dead branch. The timeout double in
+    `tests/clients/spawn-timeout-cooldown.test.ts` returned
+    `{ error: null, failure: "timeout" }`, while `safeSpawnAsync` returns
+    `error: Error(...)` with the timeout, so the test stayed green on the broken
+    ordering in shape 91 (#5376, fixed in PR #5383; the double now carries the
+    real shape). Census: not countable as one command; the 2026-11-07 census met
+    this one instance. Enforcer: none: judgment-only, a scan cannot tell which
+    fields a producer returns without running it. Screen: was the double's
+    result shape copied from a real run of the producer, or driven through
+    `tests/support/fake-child.ts`, or written by hand?
 
 </important>
 

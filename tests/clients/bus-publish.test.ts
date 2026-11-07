@@ -550,6 +550,34 @@ describe("bus-publish — pilens:files:touched (#482)", () => {
 				expect.stringContaining("recent-touches append failed"),
 			);
 		});
+
+		// #5377: the append's locked commit publishes with a throwing atomic
+		// write, so a lost batch now reaches this catch instead of vanishing.
+		// The dbg line is caller-local; the degradation row is what an operator
+		// sees, bounded to one row per project per session.
+		it("records one bounded degradation row for a rejected append", async () => {
+			appendRecentTouches
+				.mockRejectedValueOnce(new Error("Timed out waiting for a lock"))
+				.mockRejectedValueOnce(new Error("Timed out waiting for a lock"));
+
+			publishFilesTouched({
+				reason: "autofix",
+				paths: ["/repo-5377/a.ts"],
+				cwd: "/repo-5377",
+			});
+			publishFilesTouched({
+				reason: "format",
+				paths: ["/repo-5377/b.ts"],
+				cwd: "/repo-5377",
+			});
+			await new Promise((r) => setImmediate(r));
+
+			const groups = getDegradationSummary().filter(
+				(group) => group.kind === "recent-touches-append-failed",
+			);
+			expect(groups).toHaveLength(1);
+			expect(groups[0].count).toBe(1);
+		});
 	});
 
 	describe("bus-events.log (persistent trace)", () => {

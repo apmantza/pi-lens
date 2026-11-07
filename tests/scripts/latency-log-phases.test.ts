@@ -8,6 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
 	countEntriesSince,
 	findPhaseEntries,
+	LEGACY_AGE_PHASES,
+	latencyAgeMs,
+	latencySpanMs,
 	noPhasesLogged,
 	parseNdjsonEntries,
 	phaseWasLogged,
@@ -206,5 +209,79 @@ describe("countEntriesSince (#2570 positive control)", () => {
 	it("is zero for an empty or mis-located log, so absence assertions cannot pass vacuously", () => {
 		expect(countEntriesSince([], "2026-07-10T10:00:00.000Z")).toBe(0);
 		expect(countEntriesSince(entries, "2099-01-01T00:00:00.000Z")).toBe(0);
+	});
+});
+
+describe("latencySpanMs / latencyAgeMs: the one span-or-age rule (#5379)", () => {
+	// Recurrence: a producer wrote an age into `durationMs` and every reader that
+	// ranks phases ranked it (`lsp_document_drift`, 81.8% of a live log's phase
+	// time). The rule is: a row is a duration only if it carries `durationMs` and
+	// no `ageMs`; readers keep no phase-name list of their own.
+	const row = (extra: Record<string, unknown>) => ({
+		type: "phase",
+		phase: "some_new_phase",
+		filePath: "x",
+		...extra,
+	});
+
+	it("reads durationMs as a span and a new-format ageMs as an age, never both", () => {
+		expect(latencySpanMs(row({ durationMs: 12 }))).toBe(12);
+		expect(latencyAgeMs(row({ durationMs: 12 }))).toBeUndefined();
+		expect(latencyAgeMs(row({ ageMs: 9 }))).toBe(9);
+		expect(latencySpanMs(row({ ageMs: 9 }))).toBeUndefined();
+	});
+
+	it("a row carrying ageMs is never a duration, even beside a durationMs", () => {
+		const both = row({ ageMs: 9, durationMs: 3_000_000 });
+		expect(latencySpanMs(both)).toBeUndefined();
+		expect(latencyAgeMs(both)).toBe(9);
+	});
+
+	it("a malformed ageMs is neither a duration nor an age", () => {
+		const bad = row({ ageMs: "soon", durationMs: 40 });
+		expect(latencySpanMs(bad)).toBeUndefined();
+		expect(latencyAgeMs(bad)).toBeUndefined();
+	});
+
+	it.each([...LEGACY_AGE_PHASES])(
+		"a pre-#5379 %s line (age in durationMs, no ageMs) reads as an age",
+		(phase) => {
+			const legacy = row({ phase, durationMs: 2_760_325 });
+			expect(latencySpanMs(legacy)).toBeUndefined();
+			expect(latencyAgeMs(legacy)).toBe(2_760_325);
+		},
+	);
+
+	it("the legacy list applies to a line without ageMs only, and to phase rows only", () => {
+		const migrated = row({ phase: "lsp_document_drift", ageMs: 5 });
+		expect(latencyAgeMs(migrated)).toBe(5);
+		const runner = { type: "runner", phase: "host_boot", durationMs: 7 };
+		expect(latencySpanMs(runner)).toBe(7);
+	});
+
+	it("pins the closed legacy list: a new age producer writes ageMs, it does not join this set", () => {
+		expect([...LEGACY_AGE_PHASES].sort()).toEqual(
+			[
+				"deferred_format_late_resync",
+				"event_loop_hold_force_released",
+				"extension_loaded",
+				"format_late_resync_chained",
+				"host_boot",
+				"inband_format_late_resync",
+				"lsp_document_drift",
+				"lsp_empty_first_publish_held",
+				"lsp_notify_resync_deferred",
+				"lsp_notify_stall_cpu_busy",
+				"lsp_workspace_diagnostics_progress",
+				"lsp_workspace_sweep_hold_force_released",
+			].sort(),
+		);
+	});
+
+	it("reads nothing from a non-object", () => {
+		for (const value of [null, undefined, 3, "x"]) {
+			expect(latencySpanMs(value)).toBeUndefined();
+			expect(latencyAgeMs(value)).toBeUndefined();
+		}
 	});
 });

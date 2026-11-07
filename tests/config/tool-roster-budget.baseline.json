@@ -1,8 +1,8 @@
 {
 	"pi": {
-		"budget": 20133,
+		"budget": 20168,
 		"descriptionTotal": 3783,
-		"schemaTotal": 14519,
+		"schemaTotal": 14551,
 		"tools": {
 			"ast_grep_outline": {
 				"description": 357,
@@ -42,7 +42,7 @@
 			},
 			"project_report": {
 				"description": 456,
-				"schema": 496
+				"schema": 528
 			},
 			"read_enclosing": {
 				"description": 275,
@@ -59,9 +59,9 @@
 		}
 	},
 	"mcp": {
-		"budget": 20293,
+		"budget": 20328,
 		"descriptionTotal": 3783,
-		"schemaTotal": 14665,
+		"schemaTotal": 14697,
 		"tools": {
 			"pilens_analyze": {
 				"description": 98,
@@ -101,7 +101,7 @@
 			},
 			"pilens_project_report": {
 				"description": 419,
-				"schema": 520
+				"schema": 552
 			},
 			"pilens_project_scan": {
 				"description": 101,

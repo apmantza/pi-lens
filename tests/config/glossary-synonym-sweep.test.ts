@@ -535,7 +535,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ast-grep-client.ts": 5,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/atomic-write-staging.ts": 1,
-		"clients/bash-file-access.ts": 5,
+		// 5 -> 2 (#5378): the three inline "last non-flag operand" move parses fold
+		// onto `moveOperands`, so their `args.filter(...)` calls are gone.
+		"clients/bash-file-access.ts": 2,
 		"clients/blocker-past-eof.ts": 2,
 		// 2 -> 3 (#4250): the secondary turn-state partition adds one bounded
 		// read/filter path; retain the semantic census rather than hiding it.
@@ -554,7 +556,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-core/deny.ts": 1,
 		"clients/config-core/merge.ts": 2,
 		"clients/config-locations.ts": 4,
-		"clients/config-resolve.ts": 1,
+		// 1 -> 2 (#5291): `CANONICAL_PROJECT_CONFIG_LOCATIONS` drops the legacy
+		// spec from the shared list, an `Array.prototype.filter` call, not a
+		// delivery filter.
+		"clients/config-resolve.ts": 2,
 		"clients/deadline-utils.ts": 1,
 		"clients/debug-handles.ts": 1,
 		"clients/debug-heap.ts": 1,
@@ -974,7 +979,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `cd` target (its own `normalizeHostToolPath` branch and its
 		// `path.isAbsolute` / `path.resolve` pair), so a relative write operand
 		// after `cd` lands in that directory.
-		"clients/bash-file-access.ts": 11,
+		// 11 -> 12 (#5378): `moveDestinations` takes each source's name through
+		// `path.posix.basename`, so the module gains one `path` identifier use.
+		// 12 -> 13 (#5378 R2 F4): the basename split moved into
+		// `basenameForOperand`, which reads a Windows-SHAPED operand with
+		// `path.win32`, so the module gains a second `path` identifier use.
+		"clients/bash-file-access.ts": 13,
 		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
 		// shared `findLocalBinAt` trust seam, one construction site for the shim.
 		"clients/biome-client.ts": 7,
@@ -1002,7 +1012,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/codebase-model.ts": 4,
 		"clients/complexity-client.ts": 3,
 		"clients/config-core/normalize.ts": 22,
-		"clients/config-locations.ts": 26,
+		// 26 -> 27 (#5291): `configSearchDirs` joins `.git` onto each walked dir to
+		// find the git root — the `node:path` host module, not a delivery lane.
+		"clients/config-locations.ts": 27,
 		"clients/config-resolve.ts": 8,
 		"clients/dead-code-client.ts": 5,
 		"clients/dead-code-logger.ts": 3,
@@ -1344,7 +1356,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-diagnostics/runner-adapters/runner-findings.ts": 4,
 		"clients/project-diagnostics/runner-adapters/trivy.ts": 5,
 		"clients/project-diagnostics/scanner.ts": 4,
-		"clients/project-lens-config.ts": 17,
+		// 17 -> 25 (#5291): the layered read and the discovery stamps build and
+		// probe candidate files through `path.join` / `path.resolve` — the
+		// `node:path` host module, not a delivery lane.
+		"clients/project-lens-config.ts": 25,
 		"clients/project-report.ts": 5,
 		"clients/project-snapshot.ts": 15,
 		// 18 -> 22 (#3871 r2, r3): ambient-environment containment uses four
@@ -1354,7 +1369,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.join` inside the list the resolver and the install stamp share.
 		"clients/python-environment.ts": 13,
 		"clients/read-guard-logger.ts": 3,
-		"clients/recent-touches.ts": 5,
+		// 5 -> 6 (#5377): the locked commit's `path:` member names the record file
+		// to `commitDurableStoreAsync`; the helper it replaces took `cwd` and
+		// derived the same path internally.
+		"clients/recent-touches.ts": 6,
 		"clients/reverse-deps.ts": 8,
 		"clients/review-graph-logger.ts": 2,
 		// 33 -> 36 (#4346): the importer pass names a created file by its stem

@@ -30,6 +30,26 @@ function recordFilePath(): string {
 	return path.join(dataDir, "recent-touches.json");
 }
 
+interface StoredTouch {
+	path: string;
+	reason: string;
+	ts: number;
+	pid: number;
+	sessionId?: string;
+}
+
+/** Read the record straight off disk, as an outside process would see it. */
+function readRecordEntries(): StoredTouch[] {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(recordFilePath(), "utf-8"));
+		return Array.isArray(parsed?.entries)
+			? (parsed.entries as StoredTouch[])
+			: [];
+	} catch {
+		return [];
+	}
+}
+
 describe("recent-touches (#492 cross-process touched-files record)", () => {
 	const originalEnv = process.env.PI_LENS_AGENT_NUDGE;
 
@@ -122,6 +142,230 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 
 		const parsed = JSON.parse(fs.readFileSync(recordFilePath(), "utf-8"));
 		expect(parsed.entries).toHaveLength(1);
+	});
+
+	// #5377: the append was an unlocked async read-modify-write, so two
+	// publishes in one tick each computed the whole file from the same
+	// snapshot and the later rename published state without the earlier
+	// entry (the state-machine census lost an entry in 5 of 5 runs on
+	// master). RED FIRST on master: this drives the REAL producer seam
+	// (`publishFilesTouched`, clients/bus-publish.ts) over real files, with no
+	// mock of the store, the lock, or the filesystem.
+	it("keeps every entry when four publishes land in one tick", async () => {
+		const { publishFilesTouched } =
+			await import("../../clients/bus-publish.js");
+		const touched: { path: string; reason: "format" | "autofix" }[] = [
+			"a.ts",
+			"b.ts",
+			"c.ts",
+			"d.ts",
+		].map((name, i) => {
+			const p = path.join(dir, name);
+			fs.writeFileSync(p, "// touched", "utf-8");
+			return { path: p, reason: i % 2 === 0 ? "format" : "autofix" };
+		});
+		// One tick: every publish is issued before the first append can settle.
+		for (const t of touched) {
+			publishFilesTouched({
+				cwd: FAKE_CWD,
+				reason: t.reason,
+				paths: [t.path],
+				sessionId: "s-5377",
+			});
+		}
+
+		// The publish is fire-and-forget, so join the record on a real-clock
+		// deadline (shape 86: the wait ends on a deadline, never on a turn count).
+		const deadline = Date.now() + 2_000;
+		let entries = readRecordEntries();
+		while (entries.length < touched.length && Date.now() < deadline) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			entries = readRecordEntries();
+		}
+
+		expect(
+			entries.map((e) => `${path.basename(e.path)}:${e.reason}`).sort(),
+		).toEqual(["a.ts:format", "b.ts:autofix", "c.ts:format", "d.ts:autofix"]);
+	});
+
+	// The fold onto `clients/durable-store.ts` (#5377) must keep the on-disk
+	// shape readable both ways: a record written by a master build is still
+	// parsed by the locked commit, and its pre-existing entries survive the
+	// append (an old writer's record is a normal merge input, not a reset).
+	it("merges onto a record written by the pre-#5377 writer", async () => {
+		const legacyTs = Date.now() - 1000;
+		fs.writeFileSync(
+			recordFilePath(),
+			JSON.stringify({
+				entries: [
+					{
+						path: "/fake/project/legacy.ts",
+						reason: "autofix",
+						ts: legacyTs,
+						pid: 999999,
+					},
+				],
+			}),
+			"utf-8",
+		);
+
+		const { appendRecentTouches } =
+			await import("../../clients/recent-touches.js");
+		await appendRecentTouches({
+			cwd: FAKE_CWD,
+			reason: "format",
+			paths: ["/fake/project/newer.ts"],
+			sessionId: "s-5377",
+		});
+
+		const entries = readRecordEntries();
+		expect(entries.map((e) => path.basename(e.path))).toEqual([
+			"legacy.ts",
+			"newer.ts",
+		]);
+		expect(entries[0]).toMatchObject({
+			pid: 999999,
+			reason: "autofix",
+			ts: legacyTs,
+		});
+		expect(entries[1]).toMatchObject({ pid: process.pid, reason: "format" });
+	});
+
+	// The record's ONE parse (#5377) is also the locked commit's `deserialize`,
+	// so a body that parses but has no `entries` array must still read as an
+	// empty record: the merge spreads `disk.entries`, and a non-array there
+	// throws inside the lock instead of appending.
+	it("treats a record body without an entries array as empty", async () => {
+		fs.writeFileSync(
+			recordFilePath(),
+			JSON.stringify({ version: 2, entries: { not: "an array" } }),
+			"utf-8",
+		);
+
+		const { appendRecentTouches } =
+			await import("../../clients/recent-touches.js");
+		await appendRecentTouches({
+			cwd: FAKE_CWD,
+			reason: "format",
+			paths: ["/fake/project/recovered.ts"],
+		});
+
+		expect(readRecordEntries().map((e) => path.basename(e.path))).toEqual([
+			"recovered.ts",
+		]);
+	});
+
+	// #5377's failure policy: the seam publishes through a THROWING atomic
+	// write, so a commit that cannot finish surfaces as a rejection with the
+	// lock's own timeout reason instead of a silent lost append. The lock path
+	// is occupied by a regular file, so `mkdir` answers EEXIST and the owner
+	// probe cannot date the holder, which leaves it live: the append waits out
+	// RECENT_TOUCHES_LOCK_WAIT_MS and rejects.
+	it("rejects with the lock timeout when the record lock cannot be taken", async () => {
+		fs.writeFileSync(
+			`${recordFilePath()}.lock`,
+			"not a lock directory",
+			"utf-8",
+		);
+
+		const { appendRecentTouches } =
+			await import("../../clients/recent-touches.js");
+
+		await expect(
+			appendRecentTouches({
+				cwd: FAKE_CWD,
+				reason: "format",
+				paths: ["/fake/project/held.ts"],
+			}),
+		).rejects.toThrow("Timed out waiting for recent-touches record lock");
+		expect(fs.existsSync(recordFilePath())).toBe(false);
+	});
+
+	// #5377 r2 (Greptile PRRT_kwDORt8rec605PhX): the batch was stamped with the
+	// clock BEFORE its lock wait, so a publish that waited out a sibling's lock
+	// could commit after a later publish while carrying an older `ts`. The
+	// turn_start reader advances its cursor to the newest `ts` it has read, so
+	// the late commit's entries failed `ts > cursor` and never surfaced. RED
+	// FIRST on d1278ce7a. This holds the REAL record lock, parks the early
+	// publish on its lock retry (a fake timer, so its wake-up is ours to fire),
+	// lets a later publish commit, reads the record as turn_start does, and only
+	// then lets the early publish commit. The wall clock steps back between the
+	// two commits (NTP): a stamp read from the clock inside the lock alone still
+	// lands below the later entry, so this also reds that variant.
+	it("surfaces a publish that waited on the record lock after a reader consumed a later commit", async () => {
+		const { appendRecentTouches, readCrossProcessTouchesForTurnStart } =
+			await import("../../clients/recent-touches.js");
+		const { acquireQuarantinePidFileLock } =
+			await import("../../clients/bounded-pid-file-lock.js");
+		const earlyPath = path.join(dir, "early.ts");
+		const latePath = path.join(dir, "late.ts");
+		fs.writeFileSync(earlyPath, "// early", "utf-8");
+		fs.writeFileSync(latePath, "// late", "utf-8");
+		// The reader is another process: no entry in this record is its own.
+		const selfPid = process.pid + 1;
+		const t0 = Date.now();
+
+		// Hold the record lock through the seam the production commit takes.
+		const release = await acquireQuarantinePidFileLock(
+			`${recordFilePath()}.lock`,
+			{
+				waitMs: 2_000,
+				retryMs: 25,
+				staleMs: 60_000,
+				timeoutMessage: "test holder could not take the record lock",
+				onContention: "throw",
+			},
+		);
+		vi.useFakeTimers({
+			toFake: ["setTimeout", "clearTimeout", "Date"],
+			now: t0,
+		});
+		try {
+			const early = appendRecentTouches({
+				cwd: FAKE_CWD,
+				reason: "format",
+				paths: [earlyPath],
+			});
+			// Park the early publish on its lock retry before the later one starts.
+			const parkDeadline = performance.now() + 5_000;
+			while (vi.getTimerCount() === 0) {
+				if (performance.now() > parkDeadline) {
+					throw new Error("early publish never waited on the record lock");
+				}
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			}
+
+			vi.setSystemTime(t0 + 100);
+			await release();
+			await appendRecentTouches({
+				cwd: FAKE_CWD,
+				reason: "format",
+				paths: [latePath],
+			});
+
+			const firstRead = await readCrossProcessTouchesForTurnStart({
+				cwd: FAKE_CWD,
+				selfPid,
+				now: t0 + 100,
+			});
+			expect(firstRead.map((e) => path.basename(e.path))).toEqual(["late.ts"]);
+
+			// The clock steps back, then the early publish's retry fires and it commits.
+			vi.setSystemTime(t0);
+			await vi.advanceTimersByTimeAsync(25);
+			await early;
+
+			const secondRead = await readCrossProcessTouchesForTurnStart({
+				cwd: FAKE_CWD,
+				selfPid,
+				now: t0 + 100,
+			});
+			expect(secondRead.map((e) => path.basename(e.path))).toEqual([
+				"early.ts",
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("missing record file on first read does not throw", async () => {

@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"s","timestamp":"2026-11-05T01:00:00.000Z","cwd":"/work"}
+{"type":"message","id":"a-e1","parentId":null,"timestamp":"2026-11-05T01:00:01Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"e1","name":"symbol_search","arguments":{"query":"alpha","lang":"nope"}}]}}
+{"type":"message","id":"r-e1","parentId":null,"timestamp":"2026-11-05T01:00:01.100Z","message":{"role":"toolResult","toolCallId":"e1","toolName":"symbol_search","content":[{"type":"text","text":"lang \"nope\" is not a supported language."}],"details":{},"isError":true}}

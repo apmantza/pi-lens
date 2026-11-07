@@ -19,12 +19,38 @@ export interface SectionEntries {
 	buckets: Map<string, string[]>;
 	/** Per section, the area title of each bucket item (`null`: no area heading). */
 	areas: Map<string, Array<string | null>>;
+	/** Per section, the whole entry text of each bucket item. */
+	texts: Map<string, string[]>;
 	internalCount: number;
 }
 export function parseSectionEntries(
 	body: string,
 	opts?: { maxGist?: number; gist?: boolean },
 ): SectionEntries;
+export const DUPLICATE_HEADLINE_OVERLAP: number;
+export const DUPLICATE_SHARED_CODE_SPANS: number;
+export interface DuplicateEntryPair {
+	section: string;
+	area: string | null;
+	headlines: [string, string];
+	reason: string;
+}
+/** Likely duplicate entry pairs of one section body (#5351); never edits. */
+export function findDuplicateEntries(body: string): DuplicateEntryPair[];
+export function renderDuplicateChecklist(
+	version: string,
+	pairs: DuplicateEntryPair[],
+): string;
+export const HIGHLIGHTS_MIN_BULLETS: number;
+export const HIGHLIGHTS_MAX_BULLETS: number;
+/** The approved `.changelog/highlights/<version>.md` block, `null` when absent; throws when malformed (#5351). */
+export function readHighlights(rootDir: string, version: string): string | null;
+/** The release body in summary form: the approved highlights block on top, then `summarizeSection(section)` (#5351, #5357 F8). Throws when the file is malformed. */
+export function releaseSummaryBody(
+	rootDir: string,
+	version: string,
+	section: string,
+): string;
 /** The closed list of areas a user fragment names in `area:` (#5351). */
 export const CHANGELOG_AREAS: ReadonlyArray<{ id: string; title: string }>;
 export const AREA_GROUP_MIN_ITEMS: number;

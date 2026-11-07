@@ -1,0 +1,16 @@
+{"type":"phase","toolName":"turn_end","phase":"group_01","filePath":"/proj/a","durationMs":15000,"ts":"2026-09-30T10:00:01.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_02","filePath":"/proj/a","durationMs":14000,"ts":"2026-09-30T10:00:02.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_03","filePath":"/proj/a","durationMs":13000,"ts":"2026-09-30T10:00:03.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_04","filePath":"/proj/a","durationMs":12000,"ts":"2026-09-30T10:00:04.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_05","filePath":"/proj/a","durationMs":11000,"ts":"2026-09-30T10:00:05.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_06","filePath":"/proj/a","durationMs":10000,"ts":"2026-09-30T10:00:06.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_07","filePath":"/proj/a","durationMs":9000,"ts":"2026-09-30T10:00:07.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_08","filePath":"/proj/a","durationMs":8000,"ts":"2026-09-30T10:00:08.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_09","filePath":"/proj/a","durationMs":7000,"ts":"2026-09-30T10:00:09.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_10","filePath":"/proj/a","durationMs":6000,"ts":"2026-09-30T10:00:10.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_11","filePath":"/proj/a","durationMs":5000,"ts":"2026-09-30T10:00:11.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_12","filePath":"/proj/a","durationMs":4000,"ts":"2026-09-30T10:00:12.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_13","filePath":"/proj/a","durationMs":3000,"ts":"2026-09-30T10:00:13.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_14","filePath":"/proj/a","durationMs":2000,"ts":"2026-09-30T10:00:14.000Z"}
+{"type":"phase","toolName":"turn_end","phase":"group_15","filePath":"/proj/a","durationMs":1000,"ts":"2026-09-30T10:00:15.000Z"}
+{"type":"runner","runnerId":"oxlint","filePath":"/proj/a","status":"succeeded","durationMs":500,"diagnosticCount":0,"ts":"2026-09-30T10:00:20.000Z"}

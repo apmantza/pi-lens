@@ -273,6 +273,7 @@ entry's screen, or its first sentence when it has none.
 46. **Long-lived container without a bound:** module-level `Map`/`Set` state is bounded, evicted, or content-keyed; a reset or TTL read is not a bound.
 47. **Retry or drain loop consumes its own work list:** a bounded retry or drain loop must not remove its tracked item from the collection it iterates on the first successful pass.
 51. **Cross-request derived-state cache where a request-local pass is affordable:** for a derived value on a hot path, measure a request-local bounded recompute first; persist it only when the fresh-process benchmark shows the recompute is the cost, and then the entry carries the generation it was derived from.
+93. **Unlocked async read-modify-write of a shared record:** Screen: does the write's value come from a read of the same target with an await between, and is any ordering field assigned outside the lock?
 
 </important>
 
@@ -314,6 +315,7 @@ entry's screen, or its first sentence when it has none.
 80. **Single scan root:** Screen: for each detector, list the roots its subject can write in.
 83. **Rule re-derived beside its owner:** Screen: before writing a marker, pattern, bound or normaliser, grep the tree for its literal and for the matcher that applies it; does a module already own it, and does this caller route through that module?
 88. **Learned attribution keyed on a name alone:** Screen: can a call whose work already ran, or a tool that never wrote, reach the learned lookup or the arm gate on name plus path alone?
+91. **Failure kind checked after the generic error branch:** Screen: does every non-success exit reach the state updates the transition table gives it, or does a broader check catch it first?
 
 </important>
 
@@ -347,6 +349,7 @@ entry's screen, or its first sentence when it has none.
 82. **One home variable pinned, the rest left at the real home:** Screen: which directory does the process I run resolve from, and is every variable that names it pinned?
 85. **Default-budget tree census:** Screen: does this case call a walker or read a binding one produced, and is its third argument one of those two forms?
 86. **Turn-count wait for real I/O:** Screen: does the wait end on the event it waits for or on a real-clock deadline, never on a count?
+92. **Test double with a result shape the real producer never returns:** Screen: was the double's result shape copied from a real run of the producer, or driven through `tests/support/fake-child.ts`, or written by hand?
 
 </important>
 

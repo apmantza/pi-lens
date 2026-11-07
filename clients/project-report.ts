@@ -36,6 +36,7 @@
 
 import * as path from "node:path";
 import type { FactStore } from "./dispatch/fact-store.js";
+import { resolveModuleReportPreset } from "./module-report.js";
 import { normalizeMapKey, toProjectRelativePath } from "./path-utils.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
 import {
@@ -945,9 +946,23 @@ export async function projectReport(
 // document's own trust notes). TRUST renders the remaining notes inline.
 //
 // View vocabulary (deliberately smaller than #5137's preset matrix): the
-// report has one projection, so `view` is a plain string — `"json"` returns
-// the full JSON document, anything else (absent, "default", unknown) returns
-// this text.
+// report has one projection, so `view` is a plain string — the module_report
+// JSON view names (`"json"`, `"summary-json"`, `"full-json"`, #5372) return
+// the full JSON document; anything else (absent, "default", unknown, even a
+// `*-json`-shaped non-name) returns this text.
+/**
+ * The `view` predicate for the project_report JSON hatch (#5372): the known
+ * JSON view names select the JSON document, derived from the module_report
+ * preset table — its `resolveModuleReportPreset` is the one owner, so the
+ * allow-list can never drift ahead of a new preset (#5372 review r1 F1,
+ * shape #83: a verdict gate admits known forms only). Everything else is the
+ * text cell. Owned here so the pi tool and the MCP adapter never diverge on
+ * which names are JSON.
+ */
+export function projectReportViewIsJson(view: unknown): boolean {
+	return resolveModuleReportPreset(view).format === "json";
+}
+
 export function renderTextProjectReport(report: ProjectReport): string {
 	if (!report.available) {
 		const lines = [

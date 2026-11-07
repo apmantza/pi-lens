@@ -2558,9 +2558,58 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				},
 			},
 		});
-	const unresolvedNeighbors = pendingGate.live;
+	// #5344: a mark made AFTER the delivery that wrote the record must clear
+	// the pending line too, or a false-positive the agent already dismissed
+	// keeps gating at blocker tier until some later turn re-observes the
+	// neighbour. The record keeps each error's disposition identity, so the
+	// render re-judges the stored errors through the SAME seam the knip,
+	// dead-code and security lanes use (`filterFindingsByDisposition`: the same
+	// anchors, plus the `tool`-omitted spelling an agent marking from the
+	// rendered cascade line carries) rather than a second filter. Only `live`
+	// entries are re-judged: a `stale` entry's claim is about bytes pi never
+	// saw, so its strict anchor cannot be re-derived from current content and
+	// its line stays (fail open — the next observation settles it). The one
+	// filtered list feeds both the text and the blocker tier, so a line hidden
+	// from the agent cannot still gate, and a gate that counts it cannot hide
+	// it. A policy drop never destroys the entry: a lifted mark returns the
+	// line, and a fresh observation still labels the error by its first turn.
+	type PendingNeighborEntry = (typeof pendingGate.live)[number];
+	const livePendingErrors = pendingGate.live.flatMap((entry) => entry.errors);
+	const pendingSurvivors = new Set(
+		filterFindingsByDisposition(livePendingErrors, cwd, (stored) => stored)
+			.kept,
+	);
+	const unresolvedPending: Array<{
+		entry: PendingNeighborEntry;
+		errors: number;
+	}> = [];
+	// Every entry with a dismissed error, fully or partly: the row names each
+	// file the drop touched, so a partial drop is not attributed to no file.
+	const disposedEntries: PendingNeighborEntry[] = [];
+	let disposedPendingErrors = 0;
+	for (const entry of pendingGate.live) {
+		const errors = entry.errors.reduce(
+			(count, stored) => (pendingSurvivors.has(stored) ? count + 1 : count),
+			0,
+		);
+		disposedPendingErrors += entry.errors.length - errors;
+		if (errors < entry.errors.length) disposedEntries.push(entry);
+		if (errors > 0) unresolvedPending.push({ entry, errors });
+	}
+	// The rendered list stays the gate's own arm: the disposition check may
+	// only drop entries from it, never re-order or replace them.
+	const undisposedEntries = new Set(
+		unresolvedPending.map((pending) => pending.entry),
+	);
+	const unresolvedNeighbors = pendingGate.live.flatMap((entry) =>
+		undisposedEntries.has(entry) ? [entry] : [],
+	);
 	const changedNeighbors = pendingGate.stale;
-	const gateKept = new Set([...unresolvedNeighbors, ...changedNeighbors]);
+	// The forget set is the gate's own verdict (gone or rewritten outside pi),
+	// NOT the disposition-filtered list: a policy drop hides a line, it does
+	// not retire the record (#5344), so an entry whose every error is marked
+	// stays pending and comes back if the mark is lifted.
+	const gateKept = new Set([...pendingGate.live, ...changedNeighbors]);
 	const deletedNeighbors: typeof pendingCandidates = [];
 	for (const entry of pendingCandidates) {
 		if (gateKept.has(entry)) continue;
@@ -2573,12 +2622,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const pendingBlocks: string[] = [];
 	let unresolvedShown = 0;
 	if (unresolvedNeighbors.length > 0) {
-		const lines = unresolvedNeighbors
+		const lines = unresolvedPending
 			.slice(-maxShown)
 			.reverse()
 			.map(
-				(entry) =>
-					`  • ${toRunnerDisplayPath(cwd, entry.filePath)}: ${entry.errorCount} error(s) unresolved (${pendingAge(entry.checkedAt)})`,
+				(pending) =>
+					`  • ${toRunnerDisplayPath(cwd, pending.entry.filePath)}: ${pending.errors} error(s) unresolved (${pendingAge(pending.entry.checkedAt)})`,
 			);
 		unresolvedShown = lines.length;
 		const more = unresolvedNeighbors.length - lines.length;
@@ -2631,15 +2680,23 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			},
 		});
 	}
-	if (changedNeighbors.length + deletedNeighbors.length > 0) {
+	if (
+		changedNeighbors.length + deletedNeighbors.length + disposedPendingErrors >
+		0
+	) {
 		logCascade({
 			phase: "cascade_pending_gated",
 			filePath: cascadeLogFilePath,
 			metadata: {
 				changed: changedNeighbors.length,
 				deleted: deletedNeighbors.length,
+				// #5344: a pending error the project has marked is dropped from
+				// the line, so the drop stays countable (#1616's suppressed
+				// bucket: a finding must not vanish with no trace).
+				disposed: disposedPendingErrors,
 				changedPaths: changedNeighbors.slice(0, 10).map((e) => e.filePath),
 				deletedPaths: deletedNeighbors.slice(0, 10).map((e) => e.filePath),
+				disposedPaths: disposedEntries.slice(0, 10).map((e) => e.filePath),
 			},
 		});
 	}

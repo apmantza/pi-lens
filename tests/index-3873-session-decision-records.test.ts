@@ -289,8 +289,15 @@ interface Row {
 	sources?: Array<{ source: string }>;
 }
 
-/** The metadata of every `phase` row in `latency.log`, in write order. */
-async function rows(phase: string): Promise<Row[]> {
+/** Every `phase` row of that name in `latency.log`, in write order. */
+async function wholeRows(phase: string): Promise<
+	Array<{
+		phase?: string;
+		metadata?: Row;
+		ageMs?: number;
+		durationMs?: number;
+	}>
+> {
 	await flushLatencyLog();
 	const text = fs.existsSync(getLatencyLogPath())
 		? fs.readFileSync(getLatencyLogPath(), "utf8")
@@ -299,8 +306,12 @@ async function rows(phase: string): Promise<Row[]> {
 		.split("\n")
 		.filter(Boolean)
 		.map((line) => JSON.parse(line) as { phase?: string; metadata?: Row })
-		.filter((row) => row.phase === phase)
-		.map((row) => row.metadata as Row);
+		.filter((row) => row.phase === phase);
+}
+
+/** The metadata of every `phase` row in `latency.log`, in write order. */
+async function rows(phase: string): Promise<Row[]> {
+	return (await wholeRows(phase)).map((row) => row.metadata as Row);
 }
 
 async function reload(runtime: AgentSessionRuntime): Promise<void> {
@@ -1196,6 +1207,16 @@ describe("#3873 F1: a formatter give-up leaves a per-file row at chain time", ()
 			for (let i = 0; i < 5000 && (await rows(late)).length === 0; i += 1)
 				await new Promise<void>((resolve) => setImmediate(resolve));
 			expect(await rows(late)).toHaveLength(1);
+			// #5379: both values are the formatter's AGE since the write row began
+			// (it overlaps the formatter phase already recorded), so neither row may
+			// carry a `durationMs` the performance report would rank.
+			for (const row of [
+				...(await wholeRows("format_late_resync_chained")),
+				...(await wholeRows(late)),
+			]) {
+				expect(row, row.phase).toHaveProperty("ageMs", expect.any(Number));
+				expect(row, row.phase).not.toHaveProperty("durationMs");
+			}
 		});
 	}
 
