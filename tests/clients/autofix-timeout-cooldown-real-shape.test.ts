@@ -36,6 +36,11 @@ const { safeSpawnAsync } = await import("../../clients/safe-spawn.js");
 describe("autofix spawn timeout arms the cooldown (#5376)", () => {
 	const realPlatform = process.platform;
 	let killSpy: ReturnType<typeof vi.spyOn>;
+	// The fake child spawned for each pid. On a host without `/proc` (macOS,
+	// Windows) safe-spawn's group branch takes the fabricated pid as its own
+	// and signals it through `process.kill`; the double below delivers that
+	// signal to this child, which then exits the way a real one would (#5376 F1).
+	const fakeChildByPid = new Map<number, ReturnType<typeof makeFakeChild>>();
 
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -45,13 +50,20 @@ describe("autofix spawn timeout arms the cooldown (#5376)", () => {
 			value: "linux",
 			configurable: true,
 		});
-		killSpy = vi
-			.spyOn(process, "kill")
-			.mockImplementation((() => true) as typeof process.kill);
+		killSpy = vi.spyOn(process, "kill").mockImplementation(((
+			pid: number,
+			signal?: string | number,
+		) => {
+			// Signal 0 is a liveness probe: nothing is delivered.
+			if (signal === 0) return true;
+			fakeChildByPid.get(Math.abs(pid))?.kill(signal);
+			return true;
+		}) as typeof process.kill);
 		resetSpawnTimeoutCooldowns();
 	});
 
 	afterEach(() => {
+		fakeChildByPid.delete(4242);
 		killSpy.mockRestore();
 		Object.defineProperty(process, "platform", {
 			value: realPlatform,
@@ -73,6 +85,7 @@ describe("autofix spawn timeout arms the cooldown (#5376)", () => {
 			});
 			return true;
 		});
+		fakeChildByPid.set(4242, child);
 		return child;
 	}
 
