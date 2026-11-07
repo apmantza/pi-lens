@@ -27,10 +27,6 @@ vi.mock("node:child_process", () => ({
 	spawnSync: () => ({ stdout: "", stderr: "", status: 0, error: undefined }),
 }));
 
-vi.mock("../../clients/resource-sampler.js", () => ({
-	startSpawnUsageSampler: () => ({ stop: () => null }),
-}));
-
 const { detectFileChangedAfterCommand } =
 	await import("../../clients/file-utils.js");
 const { isInSpawnTimeoutCooldown, resetSpawnTimeoutCooldowns } =
