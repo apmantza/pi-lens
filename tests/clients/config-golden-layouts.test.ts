@@ -224,6 +224,31 @@ const ENUMERATED_DELTAS: Readonly<
 			warmFiles: ["src/a.ts"],
 		}),
 	},
+	"nested-package.project": {
+		why:
+			"#5291: the project loader now reads through the layered seam, so a " +
+			"session in `packages/a` keeps the root's `maxProjectFiles` and the " +
+			"root's `lsp.disabledServers` (inside `raw`) unless the package sets " +
+			"them; before, the package file won every field as a whole. This is " +
+			"the same field-wise layering the `lsp` projection of this layout " +
+			"already records. `ignore` stays the nearest file's list (replace, " +
+			"not a union): nested `ignore` layering remains #783's " +
+			"per-directory walk, not this loader's merge.",
+		apply: (frozen) => {
+			const project = frozen as Record<string, unknown>;
+			const raw = project.raw as Record<string, unknown>;
+			const lsp = raw.lsp as Record<string, unknown>;
+			return {
+				...project,
+				maxProjectFiles: 9000,
+				raw: {
+					...raw,
+					maxProjectFiles: 9000,
+					lsp: { ...lsp, disabledServers: ["typos"] },
+				},
+			};
+		},
+	},
 	"global-and-project.lsp": {
 		why:
 			"Same `lsp`-section projection: `.pi-lens.json`'s `ignore` is a project " +
