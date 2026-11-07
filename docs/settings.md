@@ -146,6 +146,14 @@ These take values (numbers, arrays, strings) rather than being on/off, so they
 have no CLI flag. See the [Configuration reference](./globalconfig.md) for full
 field docs.
 
+A project-scoped key is layered across every `.pi-lens.json` from the working
+directory upward (#5291): the nearest file that sets a key wins, field by
+field, so a package that sets one key keeps the repo root's other settings;
+the turn-off lists (`rules.<id>.disable`, `lsp.disabledServers`,
+`dispatch.disabledRunners`) are the union of every file, so a nearer file can
+add a denial but never re-enable one. See
+[Which file wins](./configuration.md#which-file-wins).
+
 | Key | Where | Default | What it does |
 | --- | --- | --- | --- |
 | `ignore` | global + project | `[]` | Gitignore-style globs excluded from every scan |

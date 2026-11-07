@@ -423,6 +423,13 @@ these dates instantiate.
 A `.pi-lens.json` that mixes both spellings is fine while you migrate: the
 canonical key wins, and the keys you have not moved yet keep working.
 
+For project settings the same rule reaches across directories (#5291): a legacy
+`pi-lens.json` still supplies its values whole while it is the only config
+file in the chain from your working directory upward, and once a canonical
+`.pi-lens.json` sits anywhere in that chain the legacy file only produces its
+migration notices — its fields are not merged in, and the canonical files
+layer per field as above. Move the settings; the notices name the file.
+
 Only keys pi-lens actually recognizes get "move it to …" advice. A key in a
 legacy file that is not a pi-lens setting at all — a typo, or a leftover from
 another tool — cannot be migrated anywhere, so it gets the ordinary
