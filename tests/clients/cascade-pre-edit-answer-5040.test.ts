@@ -1181,7 +1181,32 @@ describe("a primary's touch rows follow the answer's content binding (#5051)", (
 			expect(content).not.toContain("late error");
 			expect(content).not.toContain("Cascade errors in");
 			expect(format.listCascadePendingNeighbors()).toEqual([
-				{ filePath: importer, errorCount: 2, checkedAt: 12345 },
+				{
+					filePath: importer,
+					errorCount: 2,
+					checkedAt: 12345,
+					// #5344: a recorded error keeps the identity a later
+					// disposition mark is matched against, so the pending line
+					// can drop it without a fresh observation.
+					errors: [
+						{
+							filePath: importer,
+							message: "earlier a",
+							line: 1,
+							tool: "lsp",
+							rule: "cascade:test",
+							semantic: "blocking",
+						},
+						{
+							filePath: importer,
+							message: "earlier b",
+							line: 2,
+							tool: "lsp",
+							rule: "cascade:test",
+							semantic: "blocking",
+						},
+					],
+				},
 			]);
 		} finally {
 			env.cleanup();
