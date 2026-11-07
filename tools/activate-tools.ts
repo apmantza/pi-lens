@@ -19,6 +19,7 @@
  */
 
 import { Type } from "../clients/deps/typebox.js";
+import { CONSTRAINED_JSON_SCHEMA_SAMPLING } from "./shared.js";
 
 export interface ActivatableToolInfo {
 	name: string;
@@ -79,6 +80,7 @@ export function createActivateToolsTool(
 			? `Activate registered situational tools for the next turn. Example: \`{tools: ["${exampleName}"]}\`.`
 			: "Activate registered situational tools for the next turn.",
 		promptSnippet: "Activate a situational tool",
+		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			tools: Type.Array(Type.String({ enum: lazyNames }), {
 				minItems: 1,

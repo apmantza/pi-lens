@@ -25,6 +25,7 @@ import {
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import {
+	CONSTRAINED_JSON_SCHEMA_SAMPLING,
 	defaultedCwdHomeRefusal,
 	readAstGrepLang,
 	MAX_PATHS_ENTRIES,
@@ -353,6 +354,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			const applied = details?.applied ? " (applied)" : "";
 			return `ast_grep_search — ${count}${ofTotal} match${count === 1 && !ofTotal ? "" : "es"}${applied}`;
 		}),
+		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			dump: Type.Optional(Type.Boolean()),
 			pattern: Type.Optional(Type.String({ description: "AST pattern." })),

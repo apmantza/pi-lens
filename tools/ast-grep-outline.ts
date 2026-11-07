@@ -7,6 +7,7 @@ import { Type } from "../clients/deps/typebox.js";
 import { toProjectRelativePath } from "../clients/path-utils.js";
 import { compactRenderResult } from "./render-compact.js";
 import {
+	CONSTRAINED_JSON_SCHEMA_SAMPLING,
 	MAX_PATHS_ENTRIES,
 	readAstGrepLang,
 	readPathsArgument,
@@ -66,6 +67,7 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 			const trunc = details?.truncatedFiles ? " (truncated)" : "";
 			return `ast_grep_outline — ${items} symbols across ${files} file${files === 1 ? "" : "s"}${trunc}`;
 		}),
+		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			paths: Type.Array(Type.String(), {
 				minItems: 1,

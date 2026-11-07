@@ -53,7 +53,7 @@ import { insertSuppressComment } from "../clients/dispatch/suppress-writer.js";
 import { getMutationBridge } from "../clients/mutation-bridge.js";
 import { normalizeMapKey, resolveHostToolPath } from "../clients/path-utils.js";
 import { resolveLensToolName } from "../clients/tool-config.js";
-import { readFilePath } from "./shared.js";
+import { CONSTRAINED_JSON_SCHEMA_SAMPLING, readFilePath } from "./shared.js";
 import type { LineageHandle } from "../clients/session-scope.js";
 import {
 	getFileDiagnostics,
@@ -245,6 +245,7 @@ export function createLensDiagnosticMarkTool(
 		// the same pi canonical and can only fire if the registry regresses,
 		// which the adapter-aware guard reds on first.
 		promptSnippet: `Use ${resolveLensToolName("lens_diagnostic_mark", "pi") ?? "lens_diagnostic_mark"} to dismiss a false-positive, suppress a won't-fix, defer, or flag a finding to fix later`,
+		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			path: Type.Optional(
 				Type.String({

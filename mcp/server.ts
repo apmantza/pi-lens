@@ -95,10 +95,8 @@ import {
 } from "../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 import { readFilePath, readPathsArgument } from "../tools/shared.js";
-import {
-	SYMBOL_SEARCH_DESCRIPTION,
-	SYMBOL_SEARCH_QUERY_DESCRIPTION,
-} from "../tools/symbol-search.js";
+import { createProjectReportTool } from "../tools/project-report.js";
+import { createSymbolSearchTool } from "../tools/symbol-search.js";
 import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
 import { isUnderDir, walkUpDirs } from "../clients/path-utils.js";
 import { loadPiLensGlobalConfig } from "../clients/lens-config.js";
@@ -131,6 +129,7 @@ import {
 	stalenessCheckEnabled,
 	WARN_ONLY_STALE_TOOLS,
 } from "./build-staleness.js";
+import { schemaWithCwd } from "./input-schema.js";
 
 // Any stray stdout write corrupts the JSON-RPC stream; force it onto stderr.
 console.log = (...args: unknown[]) => {
@@ -628,27 +627,22 @@ const lspNavigationTool = createLspNavigationTool((name, cwd) =>
 	createMcpHost(undefined, cwd ?? DEFAULT_CWD).getFlag(name),
 );
 
-// Wrapped pi tools already declare their params as typebox (which IS JSON
-// Schema). Emit that directly as the MCP inputSchema (+ the MCP-only `cwd`)
-// instead of hand-restating it — no drift between the tool and its schema.
-function schemaWithCwd(parameters: unknown): Record<string, unknown> {
-	const p = parameters as {
-		properties?: Record<string, unknown>;
-		required?: string[];
-	};
-	return {
-		type: "object",
-		properties: {
-			...p.properties,
-			cwd: {
-				type: "string",
-				description: "Project root (defaults to the server workspace).",
-			},
-		},
-		...(p.required ? { required: p.required } : {}),
-	};
-}
+// #5138 PR 3: the catalog's `description`/`inputSchema` come from the pi tool
+// object itself, so the wire schema cannot drift from what pi declares. These
+// two are instantiated for their definition only — the MCP entries below serve
+// their own calls, so `execute` is unreachable and the root getter is never
+// invoked (it is read inside `execute`, never at construction).
+const symbolSearchTool = createSymbolSearchTool(() => DEFAULT_CWD);
+const projectReportTool = createProjectReportTool(() => DEFAULT_CWD);
 
+// #5138 PR 3 projects an entry only when the pi definition is wire-compatible
+// with the block it replaces. `pilens_module_report`, `pilens_read_symbol`,
+// `pilens_read_enclosing` and `pilens_effective_config` still restate their
+// schema because their pi tools do not declare the MCP-only `file`/`filePath`
+// aliases and leave `path` optional where the MCP block leads with it — a
+// projection there would drop accepted parameters and require `path`, which is
+// a contract change for the maintainer. `tests/mcp/schema-projection.test.ts`
+// records each stop with its reason and reds once the cause disappears.
 const ALL_TOOLS = [
 	{
 		name: "pilens_analyze",
@@ -733,33 +727,11 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_symbol_search",
-		description: translateGuidanceToolNames(SYMBOL_SEARCH_DESCRIPTION, "mcp"),
-		inputSchema: {
-			type: "object",
-			properties: {
-				query: {
-					type: "string",
-					description: SYMBOL_SEARCH_QUERY_DESCRIPTION,
-				},
-				cwd: { type: "string" },
-				limit: {
-					type: "number",
-					description: "Max files to return (default 20).",
-				},
-				paths: {
-					type: "array",
-					items: { type: "string" },
-					description:
-						"Glob array scoping hits to matching files — same shape/semantics as pilens_ast_grep_search's `paths` (a bare directory/file entry scopes its whole subtree). Filters before ranking, so scores within the scoped set are unaffected.",
-				},
-				lang: {
-					type: "string",
-					description:
-						"Restrict hits to one language, using the same identifiers as pilens_ast_grep_search's `lang` param (e.g. 'typescript', 'python', 'go').",
-				},
-			},
-			required: ["query"],
-		},
+		description: translateGuidanceToolNames(
+			symbolSearchTool.description,
+			"mcp",
+		),
+		inputSchema: schemaWithCwd(symbolSearchTool.parameters),
 	},
 	{
 		name: "pilens_module_report",
@@ -820,32 +792,10 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_project_report",
 		description: translateGuidanceToolNames(
-			'Orient in a project from its review graph. Returns a line-oriented TEXT report by default; pass view:"json" for the full JSON payload. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_project_report before choosing a file.',
+			projectReportTool.description,
 			"mcp",
 		),
-		inputSchema: {
-			type: "object",
-			properties: {
-				cwd: { type: "string" },
-				limit: {
-					type: "number",
-					description:
-						"Scales every ranked section's cap (default 10) — a single knob for all sections.",
-				},
-				focus: {
-					type: "string",
-					description:
-						"Optional task hint used only to re-rank sections toward relevant subsystems (does not expand scope or trigger scans).",
-				},
-				view: {
-					type: "string",
-					// Plain string, no enum: "json" (or any "*-json" preset name,
-					// #5372) is the JSON hatch; anything else is text.
-					description:
-						'Payload tier. "json" (or any "*-json" preset name) returns the full JSON report; any other value (or omitting view) returns the default line-oriented TEXT rendering.',
-				},
-			},
-		},
+		inputSchema: schemaWithCwd(projectReportTool.parameters),
 	},
 	{
 		name: "pilens_read_symbol",
