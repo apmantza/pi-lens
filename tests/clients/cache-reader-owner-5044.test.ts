@@ -60,7 +60,10 @@ let previousDataDir: string | undefined;
 
 function writeProject(): void {
 	fs.mkdirSync(path.join(cwd, "chart", "templates"), { recursive: true });
-	fs.writeFileSync(path.join(cwd, CHART), `# chart\n${SHARED_LINE}`);
+	fs.writeFileSync(
+		path.join(cwd, CHART),
+		`# chart\n${SHARED_LINE}apiVersion: v1\n`,
+	);
 	fs.writeFileSync(
 		path.join(cwd, TEMPLATE),
 		`# template\n${SHARED_LINE}other: 1\n`,
@@ -231,6 +234,21 @@ describe("lens_diagnostics mode=all anchors marks on the finding's own file (#50
 		expect(rendered(text, SHARED_MSG)).toBe(1);
 	});
 
+	it("matches the strict span against the cited file's content, not the record's", async () => {
+		// Same message, same line NUMBER, but the two files hold DIFFERENT text
+		// on that line: only a content read of Chart.yaml derives the span the
+		// false-positive mark binds to. Reading the record file's line instead
+		// leaves the cited row visible.
+		recordDiagnostics(templatePath, [
+			templateRow("divergent line finding", 3),
+			chartRow("divergent line finding", 3),
+		]);
+		mark(chartPath, "divergent line finding", 3, "false-positive");
+		const text = await modeAll();
+		// The template's own row differs from the mark in path AND span: 1 left.
+		expect(rendered(text, "divergent line finding")).toBe(1);
+	});
+
 	it("applies a weak mark on a stale Chart.yaml but waits for its strict mark", async () => {
 		recordDiagnostics(templatePath, [
 			chartRow(WEAK_MSG, 1),
@@ -341,5 +359,23 @@ describe("reconcileWidgetDisposition anchors marks on the finding's own file (#5
 		);
 		const own = rows.find((d) => d.citedFile === undefined);
 		expect(own?.disposition).toBeUndefined();
+	});
+
+	it("stamps the cited row's span from the cited file's own content", () => {
+		// The two files hold DIFFERENT text on line 3, so the stamped span can
+		// only come from a content read of Chart.yaml — reading the record
+		// file's line 3 instead derives a span no mark matches.
+		recordDiagnostics(templatePath, [
+			templateRow("divergent line finding", 3),
+			chartRow("divergent line finding", 3),
+		]);
+		mark(chartPath, "divergent line finding", 3, "false-positive");
+		mark(templatePath, "unrelated template lint", 1, "suppress");
+		const rows = getFileDiagnostics(templatePath) ?? [];
+		const cited = rows.find((d) => d.citedFile !== undefined);
+		expect(cited?.disposition).toBe("false-positive");
+		expect(cited?.anchorSpan).toBe(
+			strictAnchorSpan(fs.readFileSync(chartPath, "utf8"), 3),
+		);
 	});
 });
