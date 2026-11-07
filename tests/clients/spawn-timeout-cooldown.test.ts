@@ -51,8 +51,10 @@ import { detectFileChangedAfterCommand } from "../../clients/file-utils.js";
 import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
+// The shape `safeSpawnAsync` returns on a real timeout: BOTH `error` and
+// `failure` (#5376; `error: null` here hid the autofix ordering defect).
 const TIMEOUT_RESULT = {
-	error: null,
+	error: new Error("Process timed out after 30000ms (killed with SIGTERM)"),
 	status: null,
 	stdout: "",
 	stderr: "",
