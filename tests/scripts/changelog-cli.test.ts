@@ -186,7 +186,6 @@ describe.skipIf(process.platform === "win32")(
 				"backfill-github-releases.mjs",
 				["--apply"],
 				{
-					...process.env,
 					PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
 					FAKE_GH_OUT: out,
 					TMPDIR: root,
