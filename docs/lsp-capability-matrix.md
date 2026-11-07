@@ -296,6 +296,15 @@ carries the named admission until then.
 | opengrep | opengrep (aux) | push-only | publishes-unversioned | direct | 2* | dev+ci | — | global-path | — |
 | ast-grep | ast-grep (aux) | push-only | publishes-versioned | direct | 2 | dev+ci | — | — | — |
 | cue | CUE Language Server (cue lsp serve) | push-only | publishes-versioned | direct | 2 | dev+ci | 0.17.1 | global-path | — |
+| powershell | PowerShell Editor Services (pwsh Start-EditorServices.ps1 -Stdio) | push-only | publishes-unversioned | direct | 2* | ci | — | archive-dist | — |
+| go | gopls | push-only | publishes-versioned | direct | 2 | ci | — | — | — |
+| kotlin | kotlin-language-server | push-only | publishes-unversioned | direct | 2* | ci | — | global-path | — |
+| cpp | clangd | push-only | publishes-versioned | direct | 2 | ci | — | archive-dist | — |
+| expert | Expert (alternate of ElixirLS) | push-only | publishes-unversioned | unknown | 2* | ci | 17.0.1 | global-path | — |
+| typst | tinymist | push-only | publishes-unversioned | direct | 2* | ci | 51.256320801 | global-path | — |
+| fish | fish-lsp | push-only | publishes-unversioned | direct | 2* | ci | 1.1.5 | pi-lens-auto | — |
+| zizmor | zizmor (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | 1.32.0 | global-path | — |
+| typos | typos (auxiliary) | push-only | publishes-versioned | direct | 2 | ci | — | global-path | — |
 
 **Servers without a row.** A server gets a row the first night characterize-lsp
 measures its mode (`pull` or `push-only`); a server it has never measured has
@@ -320,17 +329,8 @@ first night characterize-lsp did not measure the server, kept until it does.
 
 | lang | mode | server | src | version | install | stale |
 |---|---|---|---|---|---|---|
-| powershell | push-only | PowerShell Editor Services (pwsh Start-EditorServices.ps1 -Stdio) | ci | — | archive-dist | — |
-| go | push-only | gopls | ci | — | — | — |
 | fsharp | push-only | fsautocomplete | ci | — | — | — |
-| kotlin | push-only | kotlin-language-server | ci | — | global-path | — |
-| cpp | push-only | clangd | ci | — | archive-dist | — |
-| expert | push-only | Expert (alternate of ElixirLS) | ci | 17.0.1 | global-path | — |
-| typst | push-only | tinymist | ci | 51.256320801 | global-path | — |
-| fish | push-only | fish-lsp | ci | 1.1.5 | pi-lens-auto | — |
 | cmake | push-only | cmake-language-server | ci | 0.1.11 | global-path | — |
-| zizmor | push-only | zizmor (auxiliary) | ci | 1.32.0 | global-path | — |
-| typos | push-only | typos (auxiliary) | ci | — | global-path | — |
 | fallow | push-only | fallow-lsp (auxiliary) | ci | — | archive-dist | — |
 
 ## Key findings
@@ -491,7 +491,7 @@ dispatched nightly replaces it on the first night that reaches the server.
 | csharp | `save+text` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture csharp) |
 | deno | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 1 diagnostic. Gated. | `node scripts/probe-save-verdict.mjs` (fixture deno) |
 | svelte | `save` | no (pull) | Measured: pull mode — no save needed; a later save+request answered: 2 diagnostics. Gated. | `node scripts/probe-save-verdict.mjs` (fixture svelte) |
-| powershell | `save+text` | yes (saved write) | Measured: only a saved write published — silent on didOpen and on the save alone, then 1 publish event on a diagnostic-neutral edit plus a save. Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
+| powershell | `save+text` | no | Measured: answers without a save (1 publish event on didOpen); a later save alone: silent (6000 ms). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture powershell) |
 | cmake | `save` | inconclusive | Measured: inconclusive — no arm published, so this fixture does not distinguish a save-triggered server from one that never diagnoses it (arms: no-save silent (6000 ms), save alone silent (6000 ms), saved write silent (6000 ms)). Exempt from the clean gate. | `node scripts/probe-save-verdict.mjs` (fixture cmake) |
 
 Notes.
@@ -557,8 +557,7 @@ Telemetry only — never a CI gate. Compares each probed server's observed
 marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
-- **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "typescript7" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
-- **[silent-not-marked]** observed silent on clean transitions but wait-policy/strategies.ts has no silentOnClean marker for "fallow" — cascade is burning the full in-lane wait it could skip (the pre-#458 situation)
+_None observed as of the last probe run._
 
 ## Capability matrix refresh state (nightly-generated)
 
@@ -568,5 +567,5 @@ streaks behind the `stale` column (#4512) and consecutive-night
 `idle-eviction` counts (#3989). Regenerated every run; never a measurement.
 
 ```json
-{"clean-behavior":{"cpp":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1},"expert":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1},"fish":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"go":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1},"kotlin":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"powershell":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"typos":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1},"typst":{"pendingBehavior":"publishes-unversioned","pendingTier":"2*","runs":1},"zizmor":{"pendingBehavior":"publishes-versioned","pendingTier":"2","runs":1}},"first-publish":{"cpp":{"pendingFirstPublish":"direct","runs":1},"expert":{"pendingFirstPublish":"direct","runs":1},"fallow":{"pendingFirstPublish":"direct","runs":1},"fish":{"pendingFirstPublish":"direct","runs":1},"go":{"pendingFirstPublish":"direct","runs":1},"kotlin":{"pendingFirstPublish":"direct","runs":1},"powershell":{"pendingFirstPublish":"direct","runs":1},"typos":{"pendingFirstPublish":"direct","runs":1},"typst":{"pendingFirstPublish":"direct","runs":1},"zizmor":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"csharp":{"nights":[{"day":"2026-11-06","rssMb":205,"coldMs":2657}]},"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511}]},"expert":{"nights":[{"day":"2026-11-06","rssMb":348,"coldMs":2815}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567}]},"kotlin":{"nights":[{"day":"2026-11-05","rssMb":283,"coldMs":2269},{"day":"2026-11-06","rssMb":264,"coldMs":2100}]},"powershell":{"nights":[{"day":"2026-11-06","rssMb":166,"coldMs":2749}]},"rust":{"nights":[{"day":"2026-11-05","rssMb":678,"coldMs":2486},{"day":"2026-11-06","rssMb":614,"coldMs":2471}]},"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
+{"clean-behavior":{"fallow":{"pendingBehavior":"silent","pendingTier":"3","runs":1}},"first-publish":{"fallow":{"pendingFirstPublish":"direct","runs":1}},"idle-eviction":{"dart":{"nights":[{"day":"2026-11-06","rssMb":75,"coldMs":511},{"day":"2026-11-07","rssMb":75,"coldMs":538}]},"go":{"nights":[{"day":"2026-11-06","rssMb":89,"coldMs":567},{"day":"2026-11-07","rssMb":90,"coldMs":595}]},"kotlin":{"nights":[{"day":"2026-11-05","rssMb":283,"coldMs":2269},{"day":"2026-11-06","rssMb":264,"coldMs":2100}]},"powershell":{"nights":[{"day":"2026-11-06","rssMb":166,"coldMs":2749},{"day":"2026-11-07","rssMb":170,"coldMs":2220}]},"rust":{"nights":[{"day":"2026-11-05","rssMb":678,"coldMs":2486},{"day":"2026-11-06","rssMb":614,"coldMs":2471}]},"svelte":{"nights":[{"day":"2026-11-03","rssMb":233,"coldMs":2987},{"day":"2026-11-04","rssMb":233,"coldMs":2944}]}}}
 ```
