@@ -43,6 +43,44 @@ export function normalizeMessage(message: string): string {
 	return message.replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+/** How many characters a rendered finding line prints of its message before
+ * cutting. `displayedMessage` owns it so the render and the disposition alias
+ * cannot report two different budgets. */
+export const DISPLAYED_MESSAGE_MAX_CHARS = 100;
+
+/**
+ * The message a rendered finding LINE shows: its first line, cut at
+ * {@link DISPLAYED_MESSAGE_MAX_CHARS} characters.
+ *
+ * It lives beside {@link normalizeMessage} because it answers the same
+ * question from the other side: which spelling of a message the agent has in
+ * hand when it marks. `formatCascadeNeighborDiagnostics` renders every cascade
+ * line through it, so an agent marking what it was SHOWN spells the DISPLAYED
+ * form, while the anchor hashed the whole message — for a multiline or
+ * over-budget error those are different strings and the mark anchored on a
+ * message no finding carries (#5367). The disposition seam therefore accepts
+ * this form as an alias of the message it was cut from, through this ONE
+ * derivation: a second spelling of the 100-character, first-line rule is how
+ * the two sides drifted apart in the first place.
+ */
+export function displayedMessage(message: string): string {
+	return message.split("\n")[0].slice(0, DISPLAYED_MESSAGE_MAX_CHARS);
+}
+
+/**
+ * True when {@link displayedMessage} may say something the full message does
+ * not: the display form is a possible CUT, so a mark spelled from it needs the
+ * #5367 alias. The test is the structure that cuts — a newline, or more than
+ * the budget — never a second normalization, because `applyDispositions` runs
+ * it per finding on the per-edit dispatch path. It errs towards `true` (a
+ * trailing whitespace-only line is cut by structure and identical after
+ * folding), which costs one redundant anchor pair and can never drop a finding
+ * the message itself would have kept.
+ */
+export function messageIsCutWhenDisplayed(message: string): boolean {
+	return message.length > DISPLAYED_MESSAGE_MAX_CHARS || message.includes("\n");
+}
+
 /**
  * A finding's line-agnostic identity: `[tool, rule, normalised message]`. The
  * same finding keeps it when an edit above it moves its line, and two

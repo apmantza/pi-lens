@@ -12,6 +12,7 @@ import {
 	renderedRuleIdentities,
 } from "./dispatch/finding-policy.js";
 import { detectFileRole } from "./file-role.js";
+import { displayedMessage } from "./finding-identity.js";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import { logLatency } from "./latency-logger.js";
 import { formatCacheAgeLabel } from "./finding-delivery-gate.js";
@@ -83,7 +84,11 @@ export function formatCascadeNeighborDiagnostics(
 			const since = options.stillPresentSince?.(neighbor, d);
 			const label =
 				since === undefined ? "" : ` (still present since turn ${since})`;
-			out += `\n  line ${line}, col ${col}${rule}: ${d.message.split("\n")[0].slice(0, 100)}${label}`;
+			// #5367: the cut is `displayedMessage`'s, not a rule spelled here — the
+			// disposition seam anchors a mark made from this text through the SAME
+			// derivation, and a second copy of the 100/first-line budget is how the
+			// two drifted apart.
+			out += `\n  line ${line}, col ${col}${rule}: ${displayedMessage(d.message)}${label}`;
 		}
 		out += "\n</diagnostics>";
 	}

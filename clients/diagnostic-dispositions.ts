@@ -61,6 +61,8 @@ import { logDispositionEvent } from "./disposition-logger.js";
 import { publishDisposition } from "./disposition-publish.js";
 import { getProjectDataDir } from "./file-utils.js";
 import {
+	displayedMessage,
+	messageIsCutWhenDisplayed,
 	normalizeMessage as sharedNormalizeMessage,
 	relativeFile as sharedRelativeFile,
 	stableFindingId,
@@ -716,6 +718,55 @@ export function _resetDeferredForTests(): void {
 }
 
 /**
+ * #5367: the DISPLAY-form alias each candidate may be matched through, or
+ * nothing for that candidate.
+ *
+ * A cascade line prints `displayedMessage(d.message)` (first line, cut at 100
+ * characters), so an agent that marks what it was SHOWN spells a message no
+ * finding carries: the anchor hashes `normalizeMessage(message)`, which folds
+ * whitespace and case but never cuts. The mark hid nothing — on either cascade
+ * lane — for every multiline or over-budget error.
+ *
+ * The alias therefore re-anchors the SAME candidate on its displayed form. It
+ * is honored only while that spelling names one live message: when two live
+ * findings in this batch render to the same text, either could be the one the
+ * mark quotes, and a false-positive on a STOP-tier error must not silently
+ * silence a different error beside it (the #1625 F1 reason, one layer down).
+ * Ambiguity is counted on the NORMALIZED message, so two candidates that are
+ * the same finding under two `(tool, rule)` spellings (#3248's identity
+ * widening) are one owner, not two.
+ *
+ * Cost is bounded and cold: a candidate whose message renders whole is skipped
+ * by a length/newline test before any hashing, and the whole derivation runs
+ * only after the caller's empty-store early return, so a project with no marks
+ * pays nothing on the per-edit dispatch path.
+ */
+function displayFormAliases<T extends DispositionCandidate>(
+	candidates: T[],
+): Map<T, string> {
+	const cut = new Map<T, string>();
+	const owners = new Map<string, Set<string>>();
+	for (const candidate of candidates) {
+		if (!messageIsCutWhenDisplayed(candidate.message)) continue;
+		const form = displayedMessage(candidate.message);
+		cut.set(candidate, form);
+		const key = normalizeMessage(form);
+		const owner = owners.get(key);
+		const message = normalizeMessage(candidate.message);
+		if (owner === undefined) owners.set(key, new Set([message]));
+		else owner.add(message);
+	}
+	if (cut.size === 0) return new Map();
+	const aliases = new Map<T, string>();
+	for (const [candidate, form] of cut) {
+		if ((owners.get(normalizeMessage(form))?.size ?? 0) === 1) {
+			aliases.set(candidate, form);
+		}
+	}
+	return aliases;
+}
+
+/**
  * Drop diagnostics disposed false-positive/suppress, or deferred this session,
  * from `diagnostics`. `flagged` diagnostics are kept as-is — callers that want
  * to surface the flag (e.g. lens_diagnostics' rendering) look it up separately
@@ -743,20 +794,50 @@ export function applyDispositions<T extends DispositionCandidate>(
 	const dispositions = readState(cwd).dispositions;
 	if (nothingToApply(dispositions, cwd)) return diagnostics;
 	const deferred = deferredAnchorsFor(cwd);
+	// #5367: a mark spelled from the DISPLAYED cascade text — see
+	// `displayFormAliases`. Computed once for the batch, because its ambiguity
+	// test is over the batch's live findings, not over one candidate.
+	const aliases = displayFormAliases(diagnostics);
 	return diagnostics.filter((d) => {
 		const { strict, weak } = anchorsForDiagnostic(cwd, filePath, d, content);
+		const alias = aliases.get(d);
+		const aliasAnchors =
+			alias === undefined
+				? undefined
+				: anchorsForDiagnostic(
+						cwd,
+						filePath,
+						{ ...d, message: alias },
+						content,
+					);
 		const isBlocking = d.semantic === "blocking";
-		if (!isBlocking && deferred?.has(weak)) {
+		if (
+			!isBlocking &&
+			(deferred?.has(weak) ||
+				(aliasAnchors !== undefined &&
+					deferred?.has(aliasAnchors.weak) === true))
+		) {
 			return false;
 		}
-		if (dispositions?.[strict]?.disposition === "false-positive") return false;
+		if (
+			dispositions?.[strict]?.disposition === "false-positive" ||
+			(aliasAnchors !== undefined &&
+				dispositions?.[aliasAnchors.strict]?.disposition === "false-positive")
+		) {
+			return false;
+		}
 		// Belt-and-braces: the inline `pi-lens-ignore` comment is the real
 		// suppress enforcement (see suppress-writer.ts) and normally already
 		// dropped this finding upstream via applyInlineSuppressions. This is a
 		// harmless second cover for the store-only audit trail case — gated
 		// off blocking findings per F1 above (the inline comment, unaffected
 		// by this gate, remains the real suppress mechanism for those too).
-		if (!isBlocking && dispositions?.[weak]?.disposition === "suppress") {
+		if (
+			!isBlocking &&
+			(dispositions?.[weak]?.disposition === "suppress" ||
+				(aliasAnchors !== undefined &&
+					dispositions?.[aliasAnchors.weak]?.disposition === "suppress"))
+		) {
 			return false;
 		}
 		return true;
