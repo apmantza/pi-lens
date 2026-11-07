@@ -281,6 +281,93 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 		expect(fs.existsSync(recordFilePath())).toBe(false);
 	});
 
+	// #5377 r2 (Greptile PRRT_kwDORt8rec605PhX): the batch was stamped with the
+	// clock BEFORE its lock wait, so a publish that waited out a sibling's lock
+	// could commit after a later publish while carrying an older `ts`. The
+	// turn_start reader advances its cursor to the newest `ts` it has read, so
+	// the late commit's entries failed `ts > cursor` and never surfaced. RED
+	// FIRST on d1278ce7a. This holds the REAL record lock, parks the early
+	// publish on its lock retry (a fake timer, so its wake-up is ours to fire),
+	// lets a later publish commit, reads the record as turn_start does, and only
+	// then lets the early publish commit. The wall clock steps back between the
+	// two commits (NTP): a stamp read from the clock inside the lock alone still
+	// lands below the later entry, so this also reds that variant.
+	it("surfaces a publish that waited on the record lock after a reader consumed a later commit", async () => {
+		const { appendRecentTouches, readCrossProcessTouchesForTurnStart } =
+			await import("../../clients/recent-touches.js");
+		const { acquireQuarantinePidFileLock } =
+			await import("../../clients/bounded-pid-file-lock.js");
+		const earlyPath = path.join(dir, "early.ts");
+		const latePath = path.join(dir, "late.ts");
+		fs.writeFileSync(earlyPath, "// early", "utf-8");
+		fs.writeFileSync(latePath, "// late", "utf-8");
+		// The reader is another process: no entry in this record is its own.
+		const selfPid = process.pid + 1;
+		const t0 = Date.now();
+
+		// Hold the record lock through the seam the production commit takes.
+		const release = await acquireQuarantinePidFileLock(
+			`${recordFilePath()}.lock`,
+			{
+				waitMs: 2_000,
+				retryMs: 25,
+				staleMs: 60_000,
+				timeoutMessage: "test holder could not take the record lock",
+				onContention: "throw",
+			},
+		);
+		vi.useFakeTimers({
+			toFake: ["setTimeout", "clearTimeout", "Date"],
+			now: t0,
+		});
+		try {
+			const early = appendRecentTouches({
+				cwd: FAKE_CWD,
+				reason: "format",
+				paths: [earlyPath],
+			});
+			// Park the early publish on its lock retry before the later one starts.
+			const parkDeadline = performance.now() + 5_000;
+			while (vi.getTimerCount() === 0) {
+				if (performance.now() > parkDeadline) {
+					throw new Error("early publish never waited on the record lock");
+				}
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			}
+
+			vi.setSystemTime(t0 + 100);
+			await release();
+			await appendRecentTouches({
+				cwd: FAKE_CWD,
+				reason: "format",
+				paths: [latePath],
+			});
+
+			const firstRead = await readCrossProcessTouchesForTurnStart({
+				cwd: FAKE_CWD,
+				selfPid,
+				now: t0 + 100,
+			});
+			expect(firstRead.map((e) => path.basename(e.path))).toEqual(["late.ts"]);
+
+			// The clock steps back, then the early publish's retry fires and it commits.
+			vi.setSystemTime(t0);
+			await vi.advanceTimersByTimeAsync(25);
+			await early;
+
+			const secondRead = await readCrossProcessTouchesForTurnStart({
+				cwd: FAKE_CWD,
+				selfPid,
+				now: t0 + 100,
+			});
+			expect(secondRead.map((e) => path.basename(e.path))).toEqual([
+				"early.ts",
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("missing record file on first read does not throw", async () => {
 		const { readCrossProcessTouchesForSessionStart } =
 			await import("../../clients/recent-touches.js");

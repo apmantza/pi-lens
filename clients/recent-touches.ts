@@ -59,7 +59,7 @@ export interface RecentTouchEntry {
 	/** Normalized (forward-slash) path — see `normalizeFilePath`. */
 	path: string;
 	reason: RecentTouchReason;
-	/** Epoch ms. */
+	/** Epoch ms, stamped inside the locked commit (#5377 r2). */
 	ts: number;
 	/** Writer's pid — enables self-exclusion for the reading process. */
 	pid: number;
@@ -169,15 +169,7 @@ export async function appendRecentTouches(
 ): Promise<void> {
 	if (!isRecentTouchesEnabled()) return;
 	if (args.paths.length === 0) return;
-	const now = Date.now();
 	const pid = process.pid;
-	const newEntries: RecentTouchEntry[] = args.paths.map((p) => ({
-		path: normalizeFilePath(p),
-		reason: args.reason,
-		ts: now,
-		pid,
-		sessionId: args.sessionId,
-	}));
 	// The lock and the staging file both live in the project-data dir, so it
 	// has to exist first. Best-effort: a failed mkdir just means this batch of
 	// touches never reaches other instances (the producer seam is the
@@ -193,6 +185,22 @@ export async function appendRecentTouches(
 		path: recentTouchesPath(args.cwd),
 		deserialize: parseRecentTouchesRecord,
 		merge: (disk) => {
+			// Stamped inside the lock, strictly after every ts already on disk, so
+			// commit order is ts order (#5377 r2). A stamp taken before the lock wait
+			// let a later commit publish first: a reader that had consumed it moved
+			// its cursor past this batch's older ts, and the batch never surfaced.
+			const newestOnDisk = disk.entries.reduce(
+				(newest, e) => Math.max(newest, e.ts),
+				0,
+			);
+			const stampBase = Math.max(Date.now(), newestOnDisk + 1);
+			const newEntries: RecentTouchEntry[] = args.paths.map((p, i) => ({
+				path: normalizeFilePath(p),
+				reason: args.reason,
+				ts: stampBase + i,
+				pid,
+				sessionId: args.sessionId,
+			}));
 			const merged = [...disk.entries, ...newEntries];
 			return {
 				entries:
