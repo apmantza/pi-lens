@@ -218,11 +218,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "a05799527c99af28",
 		reason: PRE_RULE,
 	}, // :61
-	"clients/bus-publish.ts": {
-		silent: 1,
-		identities: "5942496acd59b074",
-		reason: PRE_RULE,
-	}, // :175
 	"clients/cache-manager.ts": {
 		silent: 5,
 		identities: "43974c850f2eb8df",
