@@ -2371,13 +2371,20 @@ export function recordDegradation(record: DegradationRecord): boolean {
 /** Record at most once per kind/subject during the current session. */
 export function recordDegradationOnce(record: DegradationRecord): boolean {
 	try {
-		const key = onceKey(record.kind, record.subject);
+		const {
+			kind: rawKind,
+			subject: rawSubject,
+			reason,
+			metadata,
+			code,
+		} = record;
+		const key = onceKey(rawKind, rawSubject);
 		if (onceKeys.has(key)) return false;
 		onceKeys.add(key);
-		const kind = boundedKind(record.kind);
-		const subject = subjectForLedger(record.subject);
-		if (recordDegradation({ kind, subject, reason: record.reason })) {
-			logDurableDegradation(kind, subject, 1, record.metadata, record.code);
+		const kind = boundedKind(rawKind);
+		const subject = subjectForLedger(rawSubject);
+		if (recordDegradation({ kind, subject, reason })) {
+			logDurableDegradation(kind, subject, 1, metadata, code);
 		}
 		return true;
 	} catch (error) {
