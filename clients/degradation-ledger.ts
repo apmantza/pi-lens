@@ -2435,13 +2435,27 @@ function onceKey(kind: unknown, subject: unknown): string {
  * falling back to the bounded count, read it off this return value instead
  * of hand-rolling their own parallel `Set`/latch). #1716 reuses this same
  * signal to gate `navRequest`'s detailed timeout/late-answer log writes.
+ *
+ * `tallies` is keyed through `onceKey`, the same event identity the once-path
+ * uses, so it has the same bound and the same reset: one fixed-size entry per
+ * distinct event per session, cleared by `resetDegradationLedger()` at
+ * `session_start`. There is no separate key expression to keep in sync.
  */
 export function incrementDegradationCount(record: DegradationRecord): boolean {
 	try {
-		const kind = boundedKind(record.kind);
-		const subject = subjectForLedger(record.subject);
+		const { kind: rawKind, subject: rawSubject } = record;
+		const kind = boundedKind(rawKind);
+		const subject = subjectForLedger(rawSubject);
 		const reason = truncateForLedger(record.reason);
-		const key = `${kind}\0${subject}`;
+		// The tally is keyed on the SAME event identity as the once-path (#5359
+		// review F1): `${boundedKind}\0${subjectForLedger}` merged two file paths
+		// sharing their first LEDGER_FIELD_MAX characters, and two distinct kinds
+		// past the cardinality cap on one subject, into one tally — so the second
+		// event lost the rising edge that ten callers gate a one-time log line on.
+		// The RETAINED row below stays keyed by the bounded display identity: two
+		// long subjects then share one slot showing the latest tally, and no
+		// event drops out of the group count.
+		const key = onceKey(rawKind, rawSubject);
 		const count = (tallies.get(key) ?? 0) + 1;
 		tallies.set(key, count);
 		let group = groups.get(kind);

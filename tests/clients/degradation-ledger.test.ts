@@ -824,3 +824,144 @@ describe("recordDegradationOnce keys on the full subject (#5359)", () => {
 		]);
 	});
 });
+
+// Named recurrence (#5359 review F1): `incrementDegradationCount` answers the
+// same "first occurrence of this event" question as `recordDegradationOnce`,
+// and ten call sites gate a one-time log line on its return value. Its tally
+// map was keyed on the TRUNCATED subject and the cardinality-folded kind, so
+// the rising edge was lost for exactly the two shapes #5359 fixes above — two
+// file paths sharing their first `LEDGER_FIELD_MAX` characters, and two
+// distinct kinds past the 32-kind cap on one subject. The key now goes through
+// `onceKey`; the retained row keeps the bounded display identity.
+describe("incrementDegradationCount keys on the full subject (#5359 F1)", () => {
+	// Two `subject: filePath` shapes (the read-guard form) that share their
+	// first 200 characters and differ only in the tail.
+	const tallBase = `read-guard:${"c".repeat(190)}`;
+	const tallA = `${tallBase}/first-project`;
+	const tallB = `${tallBase}/second-project`;
+
+	it("returns the rising edge for two subjects that differ only past the retained bound", () => {
+		// Precondition, asserted so the case cannot rot into a short-path one.
+		expect(tallA).not.toBe(tallB);
+		expect(tallA.length).toBeGreaterThan(LEDGER_FIELD_MAX);
+		expect(truncateForLedger(tallA)).toBe(truncateForLedger(tallB));
+
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: tallA,
+				reason: "first file",
+			}),
+		).toBe(true);
+		// Pre-fix this read `false`: the second file's one-time line never fired.
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: tallB,
+				reason: "second file",
+			}),
+		).toBe(true);
+		// A repeat of either is still not a rising edge.
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: tallA,
+				reason: "first file again",
+			}),
+		).toBe(false);
+
+		// Two tallies, so each path keeps its own count; the RETAINED row stays
+		// keyed by the bounded display identity, so the two paths share one slot
+		// and the `(count: N)` suffix carries the latest tally.
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(2);
+		const row = getDegradationSummary().find(
+			(group) => group.kind === "read-guard",
+		);
+		expect(row?.count).toBe(3);
+		expect(row?.latestReasons).toEqual([
+			{
+				subject: truncateForLedger(tallA),
+				reason: "first file again (count: 2)",
+			},
+		]);
+	});
+
+	it("returns the rising edge for two distinct kinds that both overflow the kind bound", () => {
+		for (let i = 0; i < DEGRADATION_MAX_DISTINCT_KINDS - 1; i++) {
+			recordDegradation({
+				kind: `filler-kind-${i}`,
+				subject: "filler",
+				reason: "r",
+			});
+		}
+		const filePath = "/home/dev/checkouts/project/src/app.ts";
+
+		expect(
+			incrementDegradationCount({
+				kind: "opengrep-partial-scan",
+				subject: filePath,
+				reason: "partial",
+			}),
+		).toBe(true);
+		// Pre-fix this read `false`: `boundedKind` folded both kinds into "other",
+		// so the second kind shared the first kind's tally.
+		expect(
+			incrementDegradationCount({
+				kind: "opengrep-scan-refused",
+				subject: filePath,
+				reason: "refused",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "opengrep-partial-scan",
+				subject: filePath,
+				reason: "partial again",
+			}),
+		).toBe(false);
+
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(2);
+		const row = getDegradationSummary().find((group) => group.kind === "other");
+		// The cardinality bound still holds: one overflow group, exact total count.
+		expect(row?.count).toBe(3);
+		expect(row?.latestReasons).toEqual([
+			{ subject: filePath, reason: "partial again (count: 2)" },
+		]);
+	});
+
+	it("keeps short-subject tallies and the session reset unchanged", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/a.ts",
+				reason: "a",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/b.ts",
+				reason: "b",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/a.ts",
+				reason: "a again",
+			}),
+		).toBe(false);
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(2);
+
+		// Same bound class as `onceKeys`: cleared by the `session_start` reset.
+		resetDegradationLedger();
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(0);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/a.ts",
+				reason: "next session",
+			}),
+		).toBe(true);
+	});
+});
