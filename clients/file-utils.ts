@@ -1752,7 +1752,9 @@ export async function detectFileChangedAfterCommand(
 		timeout: 30000,
 		cwd,
 	});
-	if (result.error) return 0;
+	// #5376: a real spawn timeout carries BOTH `error` and `failure: "timeout"`,
+	// so the timeout branch must precede the generic error return or the
+	// cooldown is never armed.
 	if (result.failure === "timeout") {
 		noteSpawnTimeout({
 			tool: path.basename(command).replace(/\.[^.]+$/, ""),
@@ -1763,6 +1765,7 @@ export async function detectFileChangedAfterCommand(
 		});
 		return 0;
 	}
+	if (result.error) return 0;
 	if (result.status !== 0 && !ignoreStatuses.includes(result.status ?? -1)) {
 		return 0;
 	}

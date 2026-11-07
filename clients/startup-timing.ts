@@ -132,14 +132,16 @@ export function buildStartupTimingRecords(input: {
 			type: "phase",
 			filePath: "<pi-lens>",
 			phase: "extension_loaded",
-			durationMs: input.loadMs,
+			// Milliseconds since process start (host_boot plus eval): an age (#5379).
+			ageMs: input.loadMs,
 			metadata: { loadedFrom: PI_LENS_LOADED_FROM },
 		},
 		{
 			type: "phase",
 			filePath: "<pi-lens>",
 			phase: "host_boot",
-			durationMs: PI_LENS_HOST_BOOT_MS,
+			// Milliseconds since process start until evaluation began: an age (#5379).
+			ageMs: PI_LENS_HOST_BOOT_MS,
 			metadata: {
 				loadedFrom: PI_LENS_LOADED_FROM,
 				evaluationOrdinal: PI_LENS_EVALUATION_ORDINAL,

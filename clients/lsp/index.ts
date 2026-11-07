@@ -2110,7 +2110,8 @@ export class LSPService {
 			`${key}:${normalizeMapKey(filePath)}`,
 			{
 				type: "phase",
-				durationMs: outstandingMs,
+				// A still-outstanding write's age at a stall sample (#5379).
+				ageMs: outstandingMs,
 				metadata: {
 					serverId: entry.info.id,
 					clientKey: key,
@@ -4288,7 +4289,8 @@ export class LSPService {
 						type: "phase",
 						phase: "lsp_document_drift",
 						filePath: event.filePath,
-						durationMs: event.driftAgeMs,
+						// An AGE (now minus the document's last sync), not a span (#5379).
+						ageMs: event.driftAgeMs,
 						metadata: {
 							disposition: event.disposition,
 							driftAgeMs: event.driftAgeMs,
@@ -5024,7 +5026,9 @@ export class LSPService {
 									type: "phase",
 									phase: "lsp_notify_resync_deferred",
 									filePath: normalizedPath,
-									durationMs: claim.outstandingMs,
+									// The age of ANOTHER writer's outstanding write, not time this
+									// caller spent (#5379).
+									ageMs: claim.outstandingMs,
 									metadata: {
 										serverId: entry.info.id,
 										source,
@@ -9807,7 +9811,9 @@ export class LSPService {
 					type: "phase",
 					phase: "lsp_workspace_diagnostics_progress",
 					filePath: root,
-					durationMs: Date.now() - startedAt,
+					// Cumulative elapsed at a heartbeat: the sweep has not finished, so
+					// it is an age (#5379); the completed sweep logs the span.
+					ageMs: Date.now() - startedAt,
 					metadata: {
 						completed,
 						total: files.length,

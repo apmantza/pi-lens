@@ -92,6 +92,7 @@ export {
 export {
 	type ProjectReport,
 	projectReport,
+	projectReportViewIsJson,
 	renderTextProjectReport,
 } from "./project-report.js";
 // Effective-config introspection (#2427). A facade rather than a wrapper for

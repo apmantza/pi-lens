@@ -203,7 +203,8 @@ function recordForceReleased(
 			type: "phase",
 			phase: "event_loop_hold_force_released",
 			filePath: "",
-			durationMs: now - oldestAcquiredAt,
+			// The oldest released hold's age, not work anyone did (#5379).
+			ageMs: now - oldestAcquiredAt,
 			metadata: {
 				maxHoldMs: maxMs,
 				releasedHolds: released.length,

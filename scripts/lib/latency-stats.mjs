@@ -19,6 +19,7 @@
 // the lane; the millisecond floor keeps a 40 % shift on a 2 ms path (below the
 // noise of a shared runner) from failing it.
 
+import { lowerRankPercentile } from "./latency-log-phases.mjs";
 import { median } from "./test-shard-assignment.mjs";
 
 export const DEFAULT_THRESHOLD = Object.freeze({
@@ -47,14 +48,6 @@ function resample(values, random) {
 		{ length: values.length },
 		() => values[Math.floor(random() * values.length)],
 	);
-}
-
-function percentile(sorted, p) {
-	const at = Math.min(
-		sorted.length - 1,
-		Math.max(0, Math.floor(p * sorted.length)),
-	);
-	return sorted[at];
 }
 
 /**
@@ -90,14 +83,14 @@ export function bootstrapCompare(base, head, options = {}) {
 		headMedian,
 		diff: {
 			point: headMedian - baseMedian,
-			lo: percentile(diffs, tail),
-			hi: percentile(diffs, 1 - tail),
+			lo: lowerRankPercentile(diffs, tail),
+			hi: lowerRankPercentile(diffs, 1 - tail),
 		},
 		ratio: {
 			point:
 				baseMedian > 0 ? headMedian / baseMedian : Number.POSITIVE_INFINITY,
-			lo: percentile(ratios, tail),
-			hi: percentile(ratios, 1 - tail),
+			lo: lowerRankPercentile(ratios, tail),
+			hi: lowerRankPercentile(ratios, 1 - tail),
 		},
 	};
 }

@@ -203,6 +203,21 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 		expect(report.semantic.source).toBe("none");
 	}, 30_000);
 
+	// #5372 review r1 F2: the `json` alias reached the MCP handler with no MCP
+	// cell behind it, so a handler that ignored the alias survived 43 tests
+	// (mutation M6). Recurrence: an adapter-side view branch with no test.
+	it("answers pilens_module_report with the JSON cell for the json alias (#5372)", async () => {
+		const res = await harness.request(18, "tools/call", {
+			name: "pilens_module_report",
+			arguments: { file: path.join(projectDir, "a.ts"), view: "json" },
+		});
+		// The alias serves the parseable JSON document, not the text cell:
+		// parseReport throws on the text cell's non-JSON payload.
+		const report = parseReport(res);
+		expect(report.available).toBe(true);
+		expect(report.api.some((e) => e.name === "foo")).toBe(true);
+	}, 30_000);
+
 	it("MCP default text matches pi byte for byte (no JSON fence)", async () => {
 		const res = await harness.request(15, "tools/call", {
 			name: "pilens_module_report",

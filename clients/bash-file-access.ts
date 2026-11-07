@@ -17,7 +17,7 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { isReadableSourceFile } from "./file-kinds.js";
-import { normalizeHostToolPath } from "./path-utils.js";
+import { isWindowsPath, normalizeHostToolPath } from "./path-utils.js";
 import {
 	appliedFilesOfOwnTool,
 	classifyMutatingTool,
@@ -854,6 +854,155 @@ function formatterFileArgs(
 	return files;
 }
 
+/** A move command's operands, read from either GNU argument order. */
+interface MoveOperands {
+	/** The operands that leave their original path. */
+	sources: ShellOperand[];
+	/** The trailing operand of the plain form, null when the form is `-t`. */
+	destination: ShellOperand | null;
+	/** The directory named by `-t DIR`, null for the plain order. */
+	destinationDir: ShellOperand | null;
+}
+
+/**
+ * The short-option letters that take NO value for `mv` / `cp` / `install`, so a
+ * cluster of them may still end in `t` and mean `--target-directory` (#5378 R2
+ * F6). Letters these commands give a value (`-S`uffix, `install -m`ode,
+ * `-o`wner, `-g`roup) and any letter they do not define stay out: GNU hands the
+ * `t` to that option, so the word names no target directory.
+ */
+const MOVE_CLUSTER_LETTERS = new Set("abdfilnprRsvx");
+
+/**
+ * The target-directory value a word carries by itself, or undefined when the
+ * word is not that option (#5378). `--target-directory=DIR`, `-tDIR` and a run
+ * of valueless letters ending in `t` (`-vt DIR`, `-vtDIR`) all name it; the
+ * empty string means the value is the NEXT word (`-t`, `--target-directory`,
+ * `-vt`). getopt reads a short cluster left to right and stops at the first
+ * letter that takes a value, so the `t` there is the option and the rest of the
+ * word is its value. An attached value is a word fragment, so bash expands no
+ * `~` in it. Every negative here is "this word names no target directory", a
+ * plain absent answer rather than a failure the caller must handle, so the
+ * option is reported as absent (`undefined`) instead of a null sentinel.
+ */
+function attachedTargetDirectory(text: string): string | undefined {
+	if (text.startsWith("--")) {
+		if (text === "--target-directory") return "";
+		return text.startsWith("--target-directory=")
+			? text.slice("--target-directory=".length)
+			: undefined;
+	}
+	if (!text.startsWith("-")) return;
+	const cluster = /^-([^t]*)t(.*)$/.exec(text);
+	if (!cluster) return;
+	for (const letter of cluster[1] ?? "") {
+		if (!MOVE_CLUSTER_LETTERS.has(letter)) return;
+	}
+	return cluster[2] ?? "";
+}
+
+/** A word that names the target-directory option, and how much it consumes. */
+interface TargetDirectoryOption {
+	/** The directory operand, either attached to the word or the next one. */
+	value: ShellOperand;
+	/** True when the value is the NEXT word, so the loop skips it. */
+	consumesNext: boolean;
+}
+
+/**
+ * The target-directory option at `args[index]`, or undefined when that word is
+ * not it (#5378). An option with no word after it is absent too: nothing names
+ * a directory, exactly as before this parser read `-t`.
+ */
+function targetDirectoryAt(
+	args: ShellOperand[],
+	index: number,
+): TargetDirectoryOption | undefined {
+	const attached = attachedTargetDirectory(args[index]?.text ?? "");
+	if (attached === undefined) return;
+	if (attached !== "")
+		return {
+			value: { text: attached, tildeExpands: false },
+			consumesNext: false,
+		};
+	const next = args[index + 1];
+	return next ? { value: next, consumesNext: true } : undefined;
+}
+
+/**
+ * Parse the operands of `mv` / `cp` / `install` / `git mv` (#5378). GNU puts
+ * the destination LAST in the plain form (`mv SRC... DEST`) and FIRST in the
+ * target-directory form, which `attachedTargetDirectory` recognizes; every
+ * remaining operand of that form is a source. `--` ends the option list, so
+ * `mv -- -t` moves the file named `-t`.
+ *
+ * Only the target-directory option is read as taking a value. Every other
+ * leading dash stays an unknown flag, so an option that carries its own value
+ * (`cp -S .bak`) still reads its value as an operand, as it did before this
+ * parser.
+ */
+function moveOperands(args: ShellOperand[]): MoveOperands {
+	const operands: ShellOperand[] = [];
+	let destinationDir: ShellOperand | null = null;
+	let options = true;
+	for (let i = 0; i < args.length; i += 1) {
+		const arg = args[i];
+		if (!arg) continue;
+		if (!options || !arg.text.startsWith("-")) {
+			operands.push(arg);
+			continue;
+		}
+		if (arg.text === "--") {
+			options = false;
+			continue;
+		}
+		const option = targetDirectoryAt(args, i);
+		if (!option) continue;
+		destinationDir = option.value;
+		if (option.consumesNext) i += 1;
+	}
+	const last = operands[operands.length - 1] ?? null;
+	return destinationDir
+		? { sources: operands, destination: null, destinationDir }
+		: { sources: operands.slice(0, -1), destination: last, destinationDir };
+}
+
+/**
+ * The last segment of a move operand, read with the separators ITS OWN spelling
+ * uses (#5378 R2 F4). The word model keeps a native Windows operand's
+ * backslashes (`C:\work\a.ts`), and `path.posix.basename` does not split on
+ * `\`, so it would return the whole operand and the join would name
+ * `dest/C:\work\a.ts`. Shape-based, not host-based (AGENTS.md shape 2): a
+ * Windows-SHAPED operand is parsed with `path.win32` on every platform, the
+ * same rule `basenameForShape` in `clients/generated-artifacts.ts` applies.
+ */
+function basenameForOperand(operand: string): string {
+	return isWindowsPath(operand)
+		? path.win32.basename(operand)
+		: path.posix.basename(operand);
+}
+
+/**
+ * The paths a move WRITES: the plain form's trailing operand, or for the `-t`
+ * form `DIR/<basename>` of each source, because the move keeps each name inside
+ * the directory it moves into (#5378). Joined with `/`: bash spells its
+ * operands POSIX, and `resolveCandidate` keeps that spelling (#4577 R4). The
+ * directory's own trailing separator is kept, never stripped, so `-t /` names
+ * the root and a POSIX directory spelled with a backslash keeps that character
+ * (#5378 R2 F2); the separator is added only when the spelling lacks one.
+ */
+function moveDestinations(move: MoveOperands): ShellOperand[] {
+	const targetDir = move.destinationDir;
+	if (!targetDir) return move.destination ? [move.destination] : [];
+	const dir = targetDir.text;
+	const separator =
+		dir === "" || dir.endsWith("/") || dir.endsWith("\\") ? "" : "/";
+	return move.sources.map((source) => ({
+		text: dir + separator + basenameForOperand(source.text),
+		tildeExpands: targetDir.tildeExpands,
+	}));
+}
+
 /**
  * Find redirect targets without treating quoted `>` characters as syntax.
  *
@@ -1532,16 +1681,9 @@ export function scanShellWriteScopes(
 		} else if (verb === "sed" && args.some((arg) => arg.text === "-i")) {
 			for (const a of args) add(a);
 		} else if (verb === "cp" || verb === "mv" || verb === "install") {
-			// Known miss (#1668 review F3): the GNU `-t DEST`/`--target-directory`
-			// form puts the destination BEFORE the sources — this always treats
-			// the LAST non-flag argument as the destination, so `-t DEST SRC` and
-			// multi-source `-t DEST SRC1 SRC2...` are misread. Rare in agent-
-			// authored bash (source-before-dest is the common form); documented
-			// rather than fixed, since correctly parsing `-t` means recognizing it
-			// takes a value while telling it apart from every other single-letter
-			// flag this same branch already ignores.
-			const files = args.filter((a) => !a.text.startsWith("-"));
-			if (files.length >= 1) add(files[files.length - 1]); // destination
+			// Both GNU orders name a destination: the plain form its trailing
+			// operand, `-t DIR` one destination per source (#5378).
+			for (const target of moveDestinations(moveOperands(args))) add(target);
 		} else if (verb === "biome") {
 			const sub = args[0]?.text;
 			if (
@@ -1663,11 +1805,12 @@ export function scanShellWriteScopes(
 							: []; // `git checkout` without `--` is ambiguous (ref vs path)
 				for (const a of fileArgs) add(a);
 			} else if (sub === "mv") {
-				// git mv SRC... DEST — the destination is a write, exactly like
-				// plain `mv` above (#1668 review F2). The source side is a delete,
-				// handled by extractDeletedPathsFromCommand.
-				const files = args.slice(1).filter((a) => !a.text.startsWith("-"));
-				if (files.length >= 1) add(files[files.length - 1]);
+				// git mv — the destination is a write, exactly like plain `mv`
+				// above (#1668 review F2, both argument orders since #5378). The
+				// source side is a delete, handled by
+				// extractDeletedPathsFromCommand.
+				for (const target of moveDestinations(moveOperands(args.slice(1))))
+					add(target);
 			}
 		}
 		// A heredoc's substitution runs in a subshell and joins no list: it
@@ -1909,16 +2052,11 @@ export function extractDeletedPathsFromCommand(
 		const abs = resolveCandidate(token, cwd);
 		if (abs) out.add(abs);
 	};
-	// mv SRC... DEST / git mv SRC... DEST — every argument except the last is
-	// a source that vanishes from its original path once the move lands.
-	// Known miss (#1668 review F3): the same `-t DEST`/`--target-directory`
-	// form documented in `extractWrittenPathsFromCommand` misreads here too —
-	// this assumes source-before-destination order.
+	// mv SRC... DEST / mv -t DIR SRC... / git mv — every moved operand vanishes
+	// from its original path once the move lands. `moveOperands` reads both GNU
+	// argument orders (#5378: the `-t DIR` form names the destination FIRST).
 	const addMoveSources = (args: ShellOperand[]) => {
-		const files = args.filter((a) => !a.text.startsWith("-"));
-		if (files.length >= 2) {
-			for (const src of files.slice(0, -1)) add(src);
-		}
+		for (const src of moveOperands(args).sources) add(src);
 	};
 
 	for (const range of tokenizeShellCommandWithRanges(command)) {

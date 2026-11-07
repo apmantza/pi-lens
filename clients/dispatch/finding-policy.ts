@@ -28,7 +28,6 @@ import {
 import type { FileRole } from "../file-role.js";
 import type { LSPDiagnostic } from "../lsp/client.js";
 import { isWithinIdentity, pathsEqual } from "../path-utils.js";
-import type { ProjectDiagnostic } from "../project-diagnostics/types.js";
 import { retagAuxiliaryDiagnostics } from "./auxiliary-lsp.js";
 import { applyInlineSuppressions } from "./inline-suppressions.js";
 import { readFileContent } from "./runners/utils.js";
@@ -533,6 +532,18 @@ export function applyLspFindingPolicy(
 }
 
 /**
+ * The identity {@link filterFindingsByDisposition} reads off a finding: the
+ * disposition-anchor fields plus the path a mark binds. A caller holding a
+ * full `ProjectDiagnostic` satisfies it unchanged; a caller whose own store
+ * already kept just these fields — the cascade's pending neighbour errors
+ * (#5344) — passes them through instead of fabricating the analyser-only
+ * fields (`severity`, `runner`, `source`) that no anchor reads.
+ */
+export type DispositionIdentitySource = DispositionCandidate & {
+	filePath: string;
+};
+
+/**
  * #1617: turn_end reads gitleaks/govulncheck/trivy straight from their
  * session-scan caches and formats them into advisory/blocker text — a
  * reporting lane parallel to (and, before this fix, entirely bypassing)
@@ -556,7 +567,7 @@ export function applyLspFindingPolicy(
 export function filterFindingsByDisposition<F>(
 	findings: F[],
 	cwd: string,
-	toDiagnostic: (finding: F) => ProjectDiagnostic,
+	toDiagnostic: (finding: F) => DispositionIdentitySource,
 ): { kept: F[]; suppressed: number } {
 	if (findings.length === 0) return { kept: findings, suppressed: 0 };
 	// #3248: every `(tool, rule)` spelling a mark against these findings can

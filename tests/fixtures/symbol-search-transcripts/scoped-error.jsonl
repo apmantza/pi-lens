@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"s","timestamp":"2026-11-01T00:00:00.000Z","cwd":"/work"}
+{"type":"message","id":"a-e1","parentId":null,"timestamp":"2026-11-01T00:00:01.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"e1","name":"symbol_search","arguments":{"query":"ext:ts foo"}}]}}
+{"type":"message","id":"r-e1","parentId":null,"timestamp":"2026-11-01T00:00:01.100Z","message":{"role":"toolResult","toolCallId":"e1","toolName":"symbol_search","content":[{"type":"text","text":"No files matched \"ext:ts foo\".\nIndex covers 10 files.\n\nresult ok"}],"details":{},"isError":false}}
+{"type":"message","id":"a-e2","parentId":null,"timestamp":"2026-11-01T00:00:02.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"e2","name":"symbol_search","arguments":{"query":"ext:ts lang:nope foo"}}]}}
+{"type":"message","id":"r-e2","parentId":null,"timestamp":"2026-11-01T00:00:02.100Z","message":{"role":"toolResult","toolCallId":"e2","toolName":"symbol_search","content":[{"type":"text","text":"WordIndexQueryError: unknown lang \"nope\"; supported: jsts, py"}],"details":{},"isError":true}}

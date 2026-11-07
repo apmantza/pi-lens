@@ -120,6 +120,7 @@ const CELLS: Record<string, Cell> = {
 	"strip-dev-deps-for-pack.mjs": {},
 	"stryker-nightly.mjs": {},
 	"stryker-pertest.mjs": {},
+	"symbol-search-query-metrics.mjs": {},
 	"test-history-rollup.mjs": {},
 	"update-contributors.mjs": {},
 	"upsert-tracking-issue.mjs": {},

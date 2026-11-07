@@ -2102,7 +2102,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"whole files rather than walking reachability.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#callTool:d7e00d53~d131daed": {
+	"mcp/server.ts#callTool:d7e00d53~dea419fd": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:

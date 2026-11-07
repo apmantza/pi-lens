@@ -11,6 +11,7 @@
 import { Type } from "../clients/deps/typebox.js";
 import {
 	projectReport,
+	projectReportViewIsJson,
 	renderTextProjectReport,
 	type ProjectReport,
 } from "../clients/lens-engine.js";
@@ -72,9 +73,10 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 			),
 			view: Type.Optional(
 				Type.String({
-					// Plain string, no enum: "json" is the JSON hatch; anything else is text.
+					// Plain string, no enum: "json" (or any "*-json" preset name,
+					// #5372) is the JSON hatch; anything else is text.
 					description:
-						'Payload tier. "json" returns the full JSON report; any other value (or omitting view) returns the default line-oriented TEXT rendering.',
+						'Payload tier. "json" (or any "*-json" preset name) returns the full JSON report; any other value (or omitting view) returns the default line-oriented TEXT rendering.',
 				}),
 			),
 		}),
@@ -112,11 +114,12 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 				};
 			}
 			// #5150: default text, explicit JSON hatch. Unknown views fall
-			// through to the default cell — never to JSON.
-			const text =
-				params.view === "json"
-					? JSON.stringify(report)
-					: renderTextProjectReport(report);
+			// through to the default cell — never to JSON. The hatch predicate is
+			// owned by the engine module so pi and MCP accept the same names (#5372).
+			const jsonView = projectReportViewIsJson(params.view);
+			const text = jsonView
+				? JSON.stringify(report)
+				: renderTextProjectReport(report);
 			return {
 				content: [{ type: "text" as const, text }],
 				isError: false,
@@ -124,8 +127,8 @@ export function createProjectReportTool(getProjectRoot: () => string) {
 					available: true,
 					hubs: report.hubs?.length ?? 0,
 					entryPoints: report.entryPoints?.length ?? 0,
-					view: params.view === "json" ? "json" : "default",
-					[JSON_CELL_DETAILS_KEY]: params.view === "json",
+					view: jsonView ? "json" : "default",
+					[JSON_CELL_DETAILS_KEY]: jsonView,
 				},
 			};
 		},

@@ -275,8 +275,9 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const files = ["a.ts", "b.ts", "c.ts", "d.ts"].map((f) => `${ROOT}/${f}`);
@@ -296,6 +297,12 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 		expect(aux.notify.open).toHaveBeenCalledTimes(1);
 		expect(aux.stats.maxInFlight).toBe(1);
 		expect(rowsFor("lsp_notify_resync_deferred")).toHaveLength(3);
+		// #5379: the value is the age of ANOTHER writer's outstanding write, time
+		// this caller never spent; written as `durationMs` it ranked as work.
+		for (const row of rowsFor("lsp_notify_resync_deferred")) {
+			expect(row).toHaveProperty("ageMs", expect.any(Number));
+			expect(row).not.toHaveProperty("durationMs");
+		}
 
 		// The breaker never opened, and no streak survived the late landing.
 		expect(phases()).not.toContain("lsp_notify_backpressure_broken");
@@ -674,8 +681,9 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const files = ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts", "f.ts"].map(
@@ -859,8 +867,9 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 						makeServer("opengrep", "auxiliary"),
 					],
 		);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		void service.touchFile(`${ROOT}/a.ts`, "one", {
@@ -926,8 +935,9 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 						makeServer("opengrep", "auxiliary"),
 					],
 		);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		void service.touchFile(`${ROOT}/a.ts`, "one", {
@@ -1019,8 +1029,9 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const touchOptions = {
@@ -1070,8 +1081,9 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const files = ["a.ts", "b.ts"].map((f) => `${ROOT}/${f}`);
@@ -1127,8 +1139,9 @@ describe("#1459 — sweep fan-out must not black out a scanner silently", () => 
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? auxWithBinding : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? auxWithBinding : primary,
 		);
 
 		const touchOptions = {
@@ -1309,8 +1322,9 @@ describe("#1586 — deferred-door coverage is judged at merge time", () => {
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const touchOptions = {
@@ -1454,8 +1468,9 @@ describe("#1586 — deferred-door coverage is judged at merge time", () => {
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const touchOptions = {
@@ -1555,8 +1570,9 @@ describe("#1586 — deferred-door coverage is judged at merge time", () => {
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const touch = service.touchFile(FILE, CONTENT, {
@@ -1600,8 +1616,9 @@ describe("#1586 — deferred-door coverage is judged at merge time", () => {
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const touchOptions = {
@@ -1759,8 +1776,9 @@ describe("#1586 review round (FIND-1) — publication lands between the aux wait
 			makeServer("typescript"),
 			makeServer("opengrep", "auxiliary"),
 		]);
-		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-			options?.serverId === "opengrep" ? aux : primary,
+		createLSPClient.mockImplementation(
+			async (options: { serverId?: string }) =>
+				options?.serverId === "opengrep" ? aux : primary,
 		);
 
 		const touch = service.touchFile(FILE, CONTENT, {

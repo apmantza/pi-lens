@@ -187,6 +187,26 @@ export interface ResolvePiLensConfigOptions {
 	 * subsystem from the failing DOCUMENT.
 	 */
 	readonly onReadError?: (failure: ConfigReadFailure) => void;
+	/**
+	 * Refuse the LEGACY project locations (`pi-lens.json`, `pi-lsp.json`,
+	 * `.pi-lens/lsp.json`) as merge inputs (#5291).
+	 *
+	 * `loadPiLensProjectConfig` adopted them as records-only in #2426: a legacy
+	 * document beside or above the winning file produces migration notices and
+	 * contributes no value. Layering that loader's read through this seam must
+	 * not quietly upgrade those documents to merge inputs on the way — the
+	 * maintainer decision on #5291 keeps them out. The LSP loader keeps the
+	 * default (legacy documents supply `lsp` values for their deprecation
+	 * window); the caller that owns a records-only contract opts in here.
+	 */
+	readonly excludeLegacyProjectDocuments?: boolean;
+	/**
+	 * End the project walk at the git root (#5291): no file from a folder
+	 * above the repo is a merge input. `loadPiLensProjectConfig` sets it so its
+	 * permission keys come from the repo alone; the LSP and dispatch-policy
+	 * readers keep the `$HOME`-ceiling walk.
+	 */
+	readonly stopAtGitRoot?: boolean;
 }
 
 export interface PiLensConfigResolution {
@@ -255,6 +275,14 @@ function collectDocuments(
 }
 
 /**
+ * The non-legacy project locations — the merge input set for a caller that
+ * passed `excludeLegacyProjectDocuments`. Derived from the same registry,
+ * never a second literal list (#2426 single-source rule).
+ */
+const CANONICAL_PROJECT_CONFIG_LOCATIONS: readonly ConfigLocation[] =
+	PROJECT_CONFIG_LOCATIONS.filter((location) => !location.legacy);
+
+/**
  * Assemble every config document for a resolution, lowest precedence first.
  *
  * The project walk is ceiling-bounded by `configSearchDirs`. The OUTERMOST
@@ -300,16 +328,15 @@ function collectPiLensConfigDocuments(
 		const dirs = configSearchDirs(
 			options.cwd,
 			options.homeDir ?? os.homedir(),
+			options.stopAtGitRoot === true,
 		).reverse();
+		const locations = options.excludeLegacyProjectDocuments
+			? CANONICAL_PROJECT_CONFIG_LOCATIONS
+			: PROJECT_CONFIG_LOCATIONS;
 		const bearing = dirs
 			.map((dir) => ({
 				dir,
-				found: collectDocuments(
-					dir,
-					PROJECT_CONFIG_LOCATIONS,
-					"project",
-					onReadError,
-				),
+				found: collectDocuments(dir, locations, "project", onReadError),
 			}))
 			.filter((entry) => entry.found.length > 0);
 		bearing.forEach((entry, index) => {

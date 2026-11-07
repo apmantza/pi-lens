@@ -1,0 +1,14 @@
+{"type":"phase","toolName":"write","phase":"dispatch_lint","filePath":"/proj/a","durationMs":600,"ts":"2026-09-30T10:00:01.000Z"}
+{"type":"phase","toolName":"write","phase":"lsp_sync","filePath":"/proj/a","durationMs":400,"ts":"2026-09-30T10:00:02.000Z"}
+{"type":"phase","toolName":"write","phase":"total","filePath":"/proj/a","durationMs":1000,"ts":"2026-09-30T10:00:03.000Z"}
+{"type":"phase","toolName":"edit","phase":"total","filePath":"/proj/a","durationMs":2500,"ts":"2026-09-30T10:00:04.000Z"}
+{"type":"tool_result","toolName":"write","result":"ok","filePath":"/proj/a","durationMs":5000,"ts":"2026-09-30T10:00:05.000Z"}
+{"type":"phase","phase":"no_tool_name_phase","filePath":"/proj/a","durationMs":100,"ts":"2026-09-30T10:00:06.000Z"}
+{"type":"phase","phase":"negative_duration_phase","filePath":"/proj/a","durationMs":-5,"ts":"2026-09-30T10:00:07.000Z"}
+{"type":"phase","phase":"lsp_document_drift","filePath":"/proj/a","durationMs":900000,"ts":"2026-09-30T10:00:08.000Z"}
+{"type":"phase","toolName":"edit","phase":"lsp_workspace_sweep_hold_force_released","filePath":"/proj/a","durationMs":400000,"ts":"2026-09-30T10:00:09.000Z"}
+{"type":"phase","toolName":"edit","phase":"post_5379_age_phase","filePath":"/proj/a","ageMs":500000,"durationMs":500000,"ts":"2026-09-30T10:00:09.500Z"}
+{"type":"runner","runnerId":"oxlint","filePath":"/proj/a","status":"succeeded","durationMs":100,"diagnosticCount":0,"ts":"2026-09-30T10:00:10.000Z"}
+{"type":"runner","runnerId":"oxlint","filePath":"/proj/a","status":"","durationMs":200,"diagnosticCount":0,"ts":"2026-09-30T10:00:11.000Z"}
+{"type":"runner","runnerId":"oxlint","filePath":"/proj/a","status":"test_file_skipped","durationMs":9999,"diagnosticCount":0,"ts":"2026-09-30T10:00:12.000Z"}
+{"type":"runner","runnerId":"oxlint","filePath":"/proj/a","status":"when_skipped","durationMs":9999,"diagnosticCount":0,"ts":"2026-09-30T10:00:13.000Z"}

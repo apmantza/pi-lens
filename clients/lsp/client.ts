@@ -3121,7 +3121,9 @@ export function setupIncomingHandlers(
 						type: "phase",
 						phase: "lsp_empty_first_publish_held",
 						filePath: normalizedPath,
-						durationMs: Math.max(
+						// Time from didOpen to the server's first publish: an age, not
+						// work this row did (#5379).
+						ageMs: Math.max(
 							0,
 							publishReceivedAt -
 								(state.documentOpenedAt.get(normalizedPath) ??
@@ -3365,7 +3367,9 @@ export function setupIncomingHandlers(
 					type: "phase",
 					phase: "lsp_empty_first_publish_held",
 					filePath: normalizedPath,
-					durationMs: Math.max(
+					// Time from didOpen to the server's first publish: an age, not work
+					// this row did (#5379).
+					ageMs: Math.max(
 						0,
 						publishReceivedAt -
 							(state.documentOpenedAt.get(normalizedPath) ?? publishReceivedAt),

@@ -253,6 +253,12 @@ describe("#2358 — CPU-liveness discriminator on a real wedged scanner", () => 
 		// otherwise be missed, and both counts would pass on an undrained sink.
 		await latencyLogger?.flushLatencyLog();
 		expect(rowsFor("lsp_notify_stall_cpu_busy")).toHaveLength(1);
+		// #5379: the value is a still-outstanding write's age at the stall sample
+		// (the write has not finished), so it is `ageMs`; as `durationMs` it ranked
+		// as a duration. The row is read back from the written log, not the call.
+		const [busyRow] = rowsFor("lsp_notify_stall_cpu_busy");
+		expect(busyRow).toHaveProperty("ageMs", expect.any(Number));
+		expect(busyRow).not.toHaveProperty("durationMs");
 		expect(rowsFor("lsp_notify_backpressure_broken")).toHaveLength(0);
 	}, 30_000);
 
