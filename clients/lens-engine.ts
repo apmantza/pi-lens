@@ -22,15 +22,11 @@ import {
 	type DispatchLatencyReport,
 	getLatencyReports,
 } from "./dispatch/integration.js";
-import { SPECIAL_FILENAMES } from "./file-kinds.js";
 import {
 	getResourceFootprint as getResourceFootprintSnapshot,
 	type ResourceFootprint,
 } from "./instance-registry.js";
-import {
-	resolveFilenameLanguage,
-	resolveLanguageScope,
-} from "./language-registry.js";
+import { resolveLanguageScope } from "./language-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/capabilities.js";
 import { acquireWarmWordIndex } from "./mcp/analyze.js";
@@ -48,6 +44,7 @@ import {
 	centralityFromReverseDeps,
 	getWordIndexBuildStatus,
 	isEmptyWordIndexQuery,
+	parseWordIndexQuery,
 	type RankedFile,
 	searchWordIndex,
 	WordIndexQueryError,
@@ -395,28 +392,15 @@ export function symbolSearchFileMatchesLang(
 	file: string,
 	lang: string,
 ): boolean {
-	// A language the registry declares by basename (Jenkinsfile, Gemfile) has no
-	// extension to match; the token is its id or its grammar name. A kind named
-	// by pattern (Dockerfile, Dockerfile.dev, Makefile) is matched by the kind
-	// token, as the inline `lang:` filter does for these names. Unlike the inline
-	// filter, this check does not match `*.dockerfile` (pre-existing on master).
-	// MCP passes `lang` through as typed; normalize once so every branch agrees.
-	const token = lang.toLowerCase();
-	const scope = resolveLanguageScope(token);
+	// One predicate, shared with the inline `lang:` filter: it is filename-aware
+	// (a language the registry declares by basename — Jenkinsfile, Gemfile — or a
+	// kind named by pattern — Dockerfile, Makefile — has no extension to match)
+	// and normalizes the token once (MCP passes `lang` through as typed).
+	// `symbolSearch` validates the token before it reaches here; this throw is
+	// the fail-closed answer for a direct caller.
+	const scope = resolveLanguageScope(lang);
 	if ("refusal" in scope) throw new WordIndexQueryError(scope.refusal);
-	const declared = resolveFilenameLanguage(file);
-	if (declared && (declared.id === token || declared.grammar === token)) {
-		return true;
-	}
-	const base = path.basename(file);
-	if (
-		SPECIAL_FILENAMES.some(
-			(entry) => entry.kind === token && entry.pattern.test(base),
-		)
-	) {
-		return true;
-	}
-	return scope.extensions.includes(path.extname(file).toLowerCase());
+	return scope.matches(file);
 }
 
 /** Same glob semantics as ast_grep_search's `paths`: a bare directory/file
@@ -464,6 +448,26 @@ function buildSymbolSearchFileFilter(
 		if (lang && !symbolSearchFileMatchesLang(file, lang)) return false;
 		return true;
 	};
+}
+
+/** The refusal sentence for the first unknown `lang` token a call carries —
+ * the structured `options.lang` or any inline `lang:` value — or `undefined`
+ * when every token resolves (#5135). Pure: it needs no index. */
+function unknownLangRefusal(
+	query: string,
+	lang: string | undefined,
+): string | undefined {
+	const tokens = [
+		...(lang?.trim() ? [lang] : []),
+		...parseWordIndexQuery(query)
+			.filters.filter((filter) => filter.key === "lang")
+			.map((filter) => filter.value),
+	];
+	for (const token of tokens) {
+		const scope = resolveLanguageScope(token);
+		if ("refusal" in scope) return scope.refusal;
+	}
+	return undefined;
 }
 
 /**
@@ -526,9 +530,10 @@ export interface SymbolSearchResult {
 	 * omitted (not surfaced) on the pi tool surface, whose index is per-edit warm.
 	 */
 	snapshotGeneratedAt?: string;
-	/** Set when the call had neither terms nor scope (#5135): the surfaces
-	 * return this sentence as an isError refusal, never as an empty result.
-	 * `available` stays true — the engine could answer; the request was empty. */
+	/** Set when the call was malformed (#5135): neither terms nor scope, or an
+	 * unknown `lang` token. The surfaces return this sentence as an isError
+	 * refusal, never as an empty result. `available` stays true — the engine
+	 * could answer; the request was not one. */
 	refusal?: string;
 }
 
@@ -583,8 +588,10 @@ function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
  * module-report.ts's own lazy load of it) so an unused review graph costs
  * nothing on this hot path.
  *
- * A call with neither terms nor scope (#5135) returns `refusal` instead of an
- * empty result; the surfaces turn that into an isError. A term-less call that
+ * A call with neither terms nor scope, or with an unknown `lang` token
+ * (structured or inline; checked before the index is touched), returns
+ * `refusal` instead of an empty result (#5135); the surfaces turn that into an
+ * isError. A term-less call that
  * carries a scope (inline filters, or `options.paths`/`options.lang`) returns a
  * listing of the scoped files.
  */
@@ -616,6 +623,14 @@ export async function symbolSearch(
 			results: [],
 			refusal: SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
 		};
+	}
+	// #5135: an unknown `lang` (structured option or inline `lang:`) refuses HERE,
+	// before the index is acquired, so the answer depends on neither the index
+	// being warm, nor a term having postings, nor a file reaching the per-file
+	// predicate.
+	const unknownLang = unknownLangRefusal(query, options.lang);
+	if (unknownLang) {
+		return { available: true, query, results: [], refusal: unknownLang };
 	}
 	const warmLease = acquireWarmWordIndex(cwd);
 	const snapshot = loadProjectSnapshotWithoutWordIndex(cwd);
@@ -663,15 +678,6 @@ export async function symbolSearch(
 			centrality,
 			fileFilter,
 		});
-	} catch (err) {
-		// none: a `WordIndexQueryError` is a refusal RETURNED to the caller (an
-		// isError finding), and every other error rethrows — nothing is swallowed.
-		// #5135: an unknown `lang` token (inline or structured) refuses with
-		// the shared vocabulary sentence instead of answering "no match".
-		if (err instanceof WordIndexQueryError) {
-			return { available: true, query, results: [], refusal: err.message };
-		}
-		throw err;
 	} finally {
 		warmLease.release();
 	}

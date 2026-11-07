@@ -1234,6 +1234,185 @@ describe("symbol_search term-less calls (#5135)", () => {
 		}
 	});
 
+	// #5135 r2 (F2): inline `lang:<id>` and structured `lang` are ONE predicate
+	// (clients/language-registry.ts `resolveLanguageScope`). Recurrence guarded:
+	// PR #5373 r1 found inline `lang:dockerfile` empty and `lang:bash` missing
+	// Makefile while structured `lang` found both — two copies of one question.
+	it("inline lang: and structured lang list the same files for named files", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-named-");
+		try {
+			const body = "zzfoo = 1";
+			const names = [
+				"Dockerfile",
+				"Makefile",
+				"Jenkinsfile",
+				"src/run.sh",
+				"src/app.ts",
+			];
+			warmWordIndexSnapshot(
+				env.tmpDir,
+				names.map((name) => ({
+					path: createTempFile(env.tmpDir, name, body),
+					content: body,
+				})),
+			);
+			const listed = async (params: { query: string; lang?: string }) =>
+				rankedFiles(String((await run(env, params)).content[0]?.text)).sort();
+			for (const token of ["dockerfile", "docker", "bash", "groovy"]) {
+				const inline = await listed({ query: `lang:${token}` });
+				const structured = await listed({ query: "", lang: token });
+				expect(inline, token).toEqual(structured);
+				expect(inline.length, token).toBeGreaterThan(0);
+			}
+			expect(await listed({ query: "lang:dockerfile" })).toEqual([
+				"Dockerfile",
+			]);
+			expect(await listed({ query: "lang:bash" })).toEqual([
+				"Makefile",
+				"src/run.sh",
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F1, maintainer decision): an inline token that is both a FileKind
+	// and a registry id matches the UNION, as on master; the structured `lang`
+	// keeps the registry-only decision the drift test pins (`app.scss` is not
+	// `css`). The two differ here ON PURPOSE.
+	it("inline lang:css keeps .scss; structured lang css does not", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-union-");
+		try {
+			const body = "zzfoo = 1";
+			warmWordIndexSnapshot(
+				env.tmpDir,
+				["src/x.css", "src/y.scss"].map((name) => ({
+					path: createTempFile(env.tmpDir, name, body),
+					content: body,
+				})),
+			);
+			const listed = async (params: { query: string; lang?: string }) =>
+				rankedFiles(String((await run(env, params)).content[0]?.text)).sort();
+			expect(await listed({ query: "lang:css" })).toEqual([
+				"src/x.css",
+				"src/y.scss",
+			]);
+			expect(await listed({ query: "", lang: "css" })).toEqual(["src/x.css"]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F3): the refusal must not depend on data. Recurrence guarded: PR
+	// #5373 r1 found `{query:"zzzznomatch",lang:"klingon"}` and a paths-excluded
+	// call answering empty, because a structured `lang` was only validated inside
+	// the per-file predicate.
+	it("refuses an unknown lang on a term with no postings and on a paths filter that excludes everything", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-data-");
+		try {
+			listingFixture(env);
+			for (const params of [
+				{ query: "zzzznomatch", lang: "klingon" },
+				{ query: "authenticate", paths: ["nonexistent/"], lang: "klingon" },
+				{ query: "", paths: ["nonexistent/"], lang: "klingon" },
+				{ query: "zzzznomatch lang:klingon" },
+				{ query: "authenticate lang:klingon", paths: ["nonexistent/"] },
+			]) {
+				const result = await run(env, params);
+				expect(result.isError, JSON.stringify(params)).toBe(true);
+				expect(
+					String(result.content[0]?.text),
+					JSON.stringify(params),
+				).toContain("accepted file kinds:");
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("refuses an unknown lang on a cold index without starting a build", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-cold-");
+		try {
+			createTempFile(env.tmpDir, "src/auth.ts", source);
+			for (const params of [
+				{ query: "lang:klingon" },
+				{ query: "authenticate", lang: "klingon" },
+			]) {
+				const result = await run(env, params);
+				expect(result.isError, JSON.stringify(params)).toBe(true);
+				const text = String(result.content[0]?.text);
+				expect(text, JSON.stringify(params)).toContain("accepted file kinds:");
+				expect(text).not.toMatch(/building|retry/i);
+			}
+			expect(getWordIndexBuildStatus(env.tmpDir)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F6): `constructor` / `__proto__` are prototype members, not
+	// vocabulary. They refuse like any unknown token instead of throwing a
+	// TypeError out of `extensions.includes`.
+	it.each(["constructor", "__proto__"])(
+		"refuses lang %s as unknown, on both forms",
+		async (token) => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-lang-proto-");
+			try {
+				listingFixture(env);
+				for (const params of [
+					{ query: `lang:${token}` },
+					{ query: "", lang: token },
+				]) {
+					const result = await run(env, params);
+					expect(result.isError, JSON.stringify(params)).toBe(true);
+					expect(String(result.content[0]?.text)).toContain(
+						"accepted file kinds:",
+					);
+					expect(String(result.content[0]?.text)).not.toContain(
+						"is not a function",
+					);
+				}
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
+	// #5135 r2 (F5): the engine returns a refusal ONLY for the lang vocabulary;
+	// any other error out of the search propagates. Recurrence guarded: a catch
+	// that swallowed every error stayed green across 188 tests in PR #5373 r1.
+	// A `paths` entry past minimatch's 64 KiB pattern bound throws a TypeError
+	// from inside the search.
+	it("lets an unexpected search error propagate instead of reporting a refusal", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-rethrow-");
+		try {
+			listingFixture(env);
+			await expect(
+				symbolSearch("authenticate", env.tmpDir, 20, {
+					paths: ["a".repeat(70_000)],
+				}),
+			).rejects.toThrow(/too long/i);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F4): independent literals, not a comparison of the constant with
+	// itself. Recurrence guarded: PR #5373 r1 deleted the policy sentence and only
+	// the tool-roster byte baseline reddened, which a re-pin silences.
+	it("the query description states the three keys, the literal-prefix rule and the listing rule", () => {
+		for (const needle of [
+			"lang:<kind|id>",
+			"file:<substr>",
+			"ext:<ext>",
+			"An unknown key: prefix is a literal search term, not an error",
+			"an unknown lang value refuses with the supported list",
+			"A scope with no terms lists the scoped files.",
+		]) {
+			expect(SYMBOL_SEARCH_QUERY_DESCRIPTION).toContain(needle);
+		}
+	});
+
 	it("the tool's own description is the exported constant", () => {
 		const tool = createSymbolSearchTool(() => ".");
 		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);

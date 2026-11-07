@@ -207,6 +207,45 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		expect(text).toContain("accepted language ids:");
 	}, 30_000);
 
+	// #5135 r2 (F3): the refusal does not depend on the index or on a hit.
+	// Recurrence guarded: PR #5373 r1 saw `{query:"lang:klingon"}` answer
+	// "Word index is building" on a cold cwd, and a structured unknown lang
+	// answer empty when no file reached the per-file predicate.
+	it("refuses an unknown lang with no postings, and on a cold index", async () => {
+		const warm = await harness.request(16, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "zzzznomatch", lang: "klingon", cwd: projectDir },
+		});
+		expect((warm.result as { isError?: boolean }).isError).toBe(true);
+		expect(textOf(warm)).toContain("accepted file kinds:");
+
+		const coldDir = mkdtempSync(
+			path.join(tmpdir(), "pi-lens-symbolsearch-coldlang-mcp-"),
+		);
+		try {
+			let id = 17;
+			for (const args of [
+				{ query: "lang:klingon" },
+				{ query: "", lang: "klingon" },
+			]) {
+				const res = await harness.request(id++, "tools/call", {
+					name: "pilens_symbol_search",
+					arguments: { ...args, cwd: coldDir },
+				});
+				expect((res.result as { isError?: boolean }).isError).toBe(true);
+				expect(textOf(res)).toContain("accepted file kinds:");
+				expect(textOf(res)).not.toMatch(/building|retry/i);
+			}
+		} finally {
+			rmSync(coldDir, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 200,
+			});
+		}
+	}, 30_000);
+
 	it("returns available:false with an actionable hint when no index exists for cwd", async () => {
 		const coldDir = mkdtempSync(
 			path.join(tmpdir(), "pi-lens-symbolsearch-cold-mcp-"),
