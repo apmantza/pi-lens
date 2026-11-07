@@ -945,9 +945,21 @@ export async function projectReport(
 // document's own trust notes). TRUST renders the remaining notes inline.
 //
 // View vocabulary (deliberately smaller than #5137's preset matrix): the
-// report has one projection, so `view` is a plain string — `"json"` returns
-// the full JSON document, anything else (absent, "default", unknown) returns
-// this text.
+// report has one projection, so `view` is a plain string — `"json"` (or any
+// `*-json` module_report preset name, #5372) returns the full JSON document,
+// anything else (absent, "default", unknown) returns this text.
+/**
+ * The `view` predicate for the project_report JSON hatch (#5372): `"json"` and
+ * any `*-json` module_report preset name select the JSON document; everything
+ * else is the text cell. Owned here so the pi tool and the MCP adapter never
+ * diverge on which names are JSON.
+ */
+export function projectReportViewIsJson(view: unknown): boolean {
+	return (
+		typeof view === "string" && (view === "json" || view.endsWith("-json"))
+	);
+}
+
 export function renderTextProjectReport(report: ProjectReport): string {
 	if (!report.available) {
 		const lines = [

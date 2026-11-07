@@ -210,6 +210,50 @@ describe("read_enclosing tool", () => {
 		}
 	});
 
+	// Guards #5372: the maxLines >= 1 clamp lived only in the MCP adapter, so
+	// pi served the whole body for maxLines 0 and reported "above maxLines
+	// -5" / "above maxLines 2.5" where MCP answered 1 / 1 / 2.
+	it("clamps maxLines to a floored minimum of 1, as MCP does (#5372)", async () => {
+		const env = setupTestEnvironment("pi-lens-readenc-clamp-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				[
+					"export function ten(a: number) {",
+					"  const b = a + 1;",
+					"  const c = b + 1;",
+					"  const d = c + 1;",
+					"  const e = d + 1;",
+					"  return e;",
+					"}",
+				].join("\n"),
+			);
+			const tool = createReadEnclosingTool(
+				() => env.tmpDir,
+				() => undefined,
+			);
+			const cases: Array<[number, string]> = [
+				[0, "above maxLines 1"],
+				[-5, "above maxLines 1"],
+				[2.5, "above maxLines 2"],
+			];
+			for (const [maxLines, expected] of cases) {
+				const result = await tool.execute(
+					"read-enclosing",
+					{ path: "sample.ts", line: 4, maxLines },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				expect(result.isError).toBe(true);
+				expect(String(result.content[0]?.text)).toContain(expected);
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("returns and records a partial slice for oversized enclosing ranges", async () => {
 		const env = setupTestEnvironment("pi-lens-readenc-tool-");
 		try {
