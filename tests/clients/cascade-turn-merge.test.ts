@@ -1911,7 +1911,12 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 		async function deliveredThenMarked(
 			env: ReturnType<typeof setupTestEnvironment>,
 			messages: string[],
-			marks: Array<{ message: string; line: number; tool?: string }>,
+			marks: Array<{
+				message: string;
+				line: number;
+				tool?: string;
+				disposition?: "false-positive" | "suppress" | "defer";
+			}>,
 		): Promise<string> {
 			const runtime = new RuntimeCoordinator();
 			const cacheManager = new CacheManager(false);
@@ -1952,7 +1957,7 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 						line: mark.line,
 						content,
 					},
-					"false-positive",
+					mark.disposition ?? "false-positive",
 				);
 			}
 			logCascadeMock.mockClear();
@@ -2053,6 +2058,38 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 					.map((call) => call[0] as { phase?: string; metadata?: any })
 					.filter((row) => row?.phase === "cascade_pending_gated");
 				expect(rows.map((row) => row.metadata.disposed)).toEqual([1]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// Recurrence guard (#1625 F1): a weak-anchored `suppress` or `defer` may
+		// drop only a non-blocking finding. The stored `semantic` is what keeps a
+		// pending error blocking on a later turn; without it both marks below
+		// would hide the errors the blocker tier must still name.
+		it("a weak suppress or defer mark does not hide a blocking pending error (#5344)", async () => {
+			const env = setupTestEnvironment("cascade-5344-weak-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					["suppressed error", "deferred error"],
+					[
+						{
+							message: "suppressed error",
+							line: 1,
+							tool: "lsp",
+							disposition: "suppress",
+						},
+						{
+							message: "deferred error",
+							line: 2,
+							tool: "lsp",
+							disposition: "defer",
+						},
+					],
+				);
+				expect(second).toMatch(/n1\.ts: 2 error\(s\) unresolved/);
+				expect(second).toContain("Cascade errors from an earlier turn");
 			} finally {
 				env.cleanup();
 			}

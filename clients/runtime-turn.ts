@@ -2576,10 +2576,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	type PendingNeighborEntry = (typeof pendingGate.live)[number];
 	const livePendingErrors = pendingGate.live.flatMap((entry) => entry.errors);
 	const pendingSurvivors = new Set(
-		livePendingErrors.length === 0
-			? livePendingErrors
-			: filterFindingsByDisposition(livePendingErrors, cwd, (stored) => stored)
-					.kept,
+		filterFindingsByDisposition(livePendingErrors, cwd, (stored) => stored)
+			.kept,
 	);
 	const unresolvedPending: Array<{
 		entry: PendingNeighborEntry;
