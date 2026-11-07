@@ -433,7 +433,8 @@ export function loadPiLensProjectConfig(
 function layeredReadApplies(entry: DiscoveryCacheEntry): boolean {
 	if (entry.canonicalSources.length === 0) return false;
 	if (entry.canonicalSources.length >= 2) return true;
-	return entry.info?.path !== entry.canonicalSources[0].path;
+	const only = entry.canonicalSources[0];
+	return only !== undefined && entry.info?.path !== only.path;
 }
 
 /**
@@ -482,6 +483,7 @@ function loadLayeredProjectConfig(
 	// Documents arrive lowest-precedence first, so the LAST is the nearest —
 	// the file a single-file read would have called `configPath`.
 	const nearest = resolution.documents[resolution.documents.length - 1];
+	if (nearest === undefined) return EMPTY_PROJECT_CONFIG; // unreachable: documents is non-empty here
 	const parsed = parseLayeredProjectConfig(resolution, nearest.file);
 	const sources: FileStamp[] = resolution.documents.map((document) => {
 		const stat = safeFileStat(document.file);
