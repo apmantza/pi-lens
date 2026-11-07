@@ -218,6 +218,65 @@ describe("project_report pi/MCP text parity (#5150 R2)", { retry: 2 }, () => {
 		);
 	}, 60_000);
 
+	// Guards #5372 review r1 F2: only the exact `view:"json"` name had an MCP
+	// cell, so reverting the MCP hatch to `args.view === "json"` survived the
+	// whole suite. Recurrence: an adapter-side view branch with no test.
+	it("serves the same parseable JSON document behind view:full-json (#5372)", async () => {
+		const tool = createProjectReportTool(() => env.tmpDir);
+		const piResult = (await tool.execute(
+			"1",
+			{ view: "full-json" },
+			undefined,
+			null,
+			{ cwd: env.tmpDir },
+		)) as ToolResult;
+		expect(piResult.isError).toBeFalsy();
+
+		const res = await harness.request(104, "tools/call", {
+			name: "pilens_project_report",
+			arguments: { view: "full-json" },
+		});
+		const mcpResult = res.result as ToolResult;
+		expect(mcpResult.isError).toBeFalsy();
+		const mcpPayload = stripFooter(mcpResult.content?.[0]?.text ?? "");
+		// The preset name reaches the same hatch document on both surfaces.
+		const doc = JSON.parse(mcpPayload);
+		expect(doc.available).toBe(true);
+		expect(normalizeHatch(mcpPayload)).toBe(
+			normalizeHatch(String(piResult.content?.[0]?.text)),
+		);
+	}, 60_000);
+
+	// Guards #5372 review r1 F1: the shared predicate was an open suffix match,
+	// so `view:"foo-json"` served the JSON document on both surfaces while
+	// module_report served its text cell for the same name. Unknown views
+	// never reach JSON (#5150 contract; shape #83).
+	it("serves the text cell for an unknown *-json-shaped view on both surfaces (#5372 r1 F1)", async () => {
+		const res = await harness.request(105, "tools/call", {
+			name: "pilens_project_report",
+			arguments: { view: "foo-json" },
+		});
+		const mcpResult = res.result as ToolResult;
+		expect(mcpResult.isError).toBeFalsy();
+		const mcpPayload = stripFooter(mcpResult.content?.[0]?.text ?? "");
+		// The text cell, not the JSON document: unparsable, renderer heading.
+		expect(() => JSON.parse(mcpPayload)).toThrow();
+		expect(mcpPayload).toContain("project_report —");
+
+		const tool = createProjectReportTool(() => env.tmpDir);
+		const piResult = (await tool.execute(
+			"1",
+			{ view: "foo-json" },
+			undefined,
+			null,
+			{ cwd: env.tmpDir },
+		)) as ToolResult;
+		expect(piResult.isError).toBeFalsy();
+		expect(normalizeVolatile(mcpPayload)).toBe(
+			normalizeVolatile(String(piResult.content?.[0]?.text)),
+		);
+	}, 60_000);
+
 	it("serves the cold-cache text cell on MCP, not a fenced JSON copy", async () => {
 		// A sibling fixture with its own project marker, so the child has no
 		// graph for it (a subdirectory would resolve to this fixture's root and

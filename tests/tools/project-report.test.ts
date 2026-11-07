@@ -258,4 +258,41 @@ describe("project_report tool", () => {
 			env.cleanup();
 		}
 	});
+
+	// Guards #5372 review r1 F1: the hatch predicate was an open suffix match,
+	// so `view:"foo-json"` served the full JSON document while the same name
+	// on module_report served the text cell. The #5150 contract — unknown
+	// views never reach JSON — requires the gate to admit known JSON view
+	// names only (shape #83: a verdict gate admitting an open spelling).
+	it("serves the text cell for unknown *-json-shaped views (#5372 r1 F1)", async () => {
+		const env = setupTestEnvironment("pi-lens-projreport-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"clients/hub.ts",
+				"export function hubFn() { return 1; }\n",
+			);
+			createTempFile(
+				env.tmpDir,
+				"clients/consumer.ts",
+				"import { hubFn } from './hub';\nexport function run() { return hubFn(); }\n",
+			);
+			await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+
+			const tool = createProjectReportTool(() => env.tmpDir);
+			for (const view of ["foo-json", "-json"]) {
+				const result = await tool.execute("1", { view }, undefined, null, {
+					cwd: env.tmpDir,
+				});
+				expect(result.isError).toBeFalsy();
+				// The text cell, not the JSON document: it stays unparsable and
+				// carries the renderer's own heading.
+				expect(() => JSON.parse(String(result.content[0]?.text))).toThrow();
+				expect(String(result.content[0]?.text)).toContain("project_report —");
+				expect(result.details.view).toBe("default");
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
 });
