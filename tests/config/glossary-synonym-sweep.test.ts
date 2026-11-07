@@ -535,7 +535,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/ast-grep-client.ts": 5,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/atomic-write-staging.ts": 1,
-		"clients/bash-file-access.ts": 5,
+		// 5 -> 2 (#5378): the three inline "last non-flag operand" move parses fold
+		// onto `moveOperands`, so their `args.filter(...)` calls are gone.
+		"clients/bash-file-access.ts": 2,
 		"clients/blocker-past-eof.ts": 2,
 		// 2 -> 3 (#4250): the secondary turn-state partition adds one bounded
 		// read/filter path; retain the semantic census rather than hiding it.
@@ -977,7 +979,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `cd` target (its own `normalizeHostToolPath` branch and its
 		// `path.isAbsolute` / `path.resolve` pair), so a relative write operand
 		// after `cd` lands in that directory.
-		"clients/bash-file-access.ts": 11,
+		// 11 -> 12 (#5378): `moveDestinations` takes each source's name through
+		// `path.posix.basename`, so the module gains one `path` identifier use.
+		// 12 -> 13 (#5378 R2 F4): the basename split moved into
+		// `basenameForOperand`, which reads a Windows-SHAPED operand with
+		// `path.win32`, so the module gains a second `path` identifier use.
+		"clients/bash-file-access.ts": 13,
 		// 10 -> 7 (#4268): the hand-built `path.join` candidate list folds onto the
 		// shared `findLocalBinAt` trust seam, one construction site for the shim.
 		"clients/biome-client.ts": 7,

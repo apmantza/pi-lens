@@ -894,6 +894,116 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 		expect(r).not.toContain("/other/src.ts");
 	});
 
+	// Recurrence this guards (#5378): with `-t DIR` the destination was the last
+	// operand, so none of `DIR/<basename>` paths the move actually wrote.
+	it("mv -t DIR registers DIR/<basename> for every source (#5378)", () => {
+		const a = touchLines("a.ts", 1);
+		const b = touchLines("nested/b.ts", 1);
+		for (const command of [
+			`mv -t dest/ ${a} ${b}`,
+			`mv --target-directory=dest/ ${a} ${b}`,
+		]) {
+			expect(extractWrittenPathsFromCommand(command, tmp), command).toEqual(
+				expect.arrayContaining([
+					path.join(tmp, "dest", "a.ts"),
+					path.join(tmp, "dest", "b.ts"),
+				]),
+			);
+		}
+	});
+
+	it("mv -t with an absolute trailing-slash dir keeps that dir's spelling (#5378)", () => {
+		const a = touchLines("a.ts", 1);
+		const dir = pathIn("deep/dest");
+		expect(extractWrittenPathsFromCommand(`mv -t ${dir}/ ${a}`, tmp)).toEqual([
+			`${dir}/a.ts`,
+		]);
+	});
+
+	// #5378 R2 F2 (greptile PRRT_kwDORt8rec6021vV): the join used to strip the
+	// directory's trailing separators, which turned the root `-t /` into an empty
+	// dir and reported a path under the cwd instead of `/a.ts`.
+	it("mv -t / keeps the filesystem root as the destination directory (#5378)", () => {
+		const nested = touchLines("nested/b.ts", 1);
+		expect(extractWrittenPathsFromCommand(`mv -t / ${nested}`, tmp)).toEqual([
+			"/b.ts",
+		]);
+		expect(extractDeletedPathsFromCommand(`mv -t / ${nested}`, tmp)).toEqual([
+			nested,
+		]);
+	});
+
+	// #5378 R2 F2: nothing pinned the separator rule, so both the strip and the
+	// "append /" ternary survived mutation. `-t dest` needs the separator, `-t
+	// dest/` must not double it.
+	it("mv -t DIR and mv -t DIR/ name the same destination (#5378)", () => {
+		const a = touchLines("a.ts", 1);
+		for (const command of [`mv -t dest ${a}`, `mv -t dest/ ${a}`]) {
+			expect(extractWrittenPathsFromCommand(command, tmp), command).toEqual([
+				path.join(tmp, "dest", "a.ts"),
+			]);
+		}
+	});
+
+	// #5378 R2 F3: the `-t` destination's tilde flag was propagated without a
+	// test; forcing it false survived the whole suite.
+	it("mv -t ~/dir expands the tilde into the destination (#5378)", () => {
+		const { home, restore } = pinFixtureHome("bfa-mv-t-home");
+		const a = touchLines("a.ts", 1);
+		try {
+			expect(os.homedir()).toBe(home);
+			// The join keeps `/` inside an absolute dir, so compare both spellings
+			// folded for separators and every platform runs the cell (shape 35).
+			expect(
+				extractWrittenPathsFromCommand(`mv -t ~/dir ${a}`, tmp).map(toPosix),
+			).toEqual([toPosix(path.join(home, "dir", "a.ts"))]);
+		} finally {
+			restore();
+		}
+	});
+
+	// #5378 R2 F3 (the reviewer's other half): bash expands `~` only at a word
+	// start, so the ATTACHED `-t~/dir` spelling hands mv the literal `~/dir` and
+	// the move lands under the cwd. Nothing pinned the parser's `tildeExpands:
+	// false` on that branch; flipping it to true survived the whole suite.
+	it("mv -t~/dir keeps the tilde literal under the cwd (#5378)", () => {
+		const { home, restore } = pinFixtureHome("bfa-mv-t-tilde-attached");
+		const a = touchLines("a.ts", 1);
+		try {
+			expect(os.homedir()).toBe(home);
+			expect(
+				extractWrittenPathsFromCommand(`mv -t~/dir ${a}`, tmp).map(toPosix),
+			).toEqual([toPosix(path.join(tmp, "~", "dir", "a.ts"))]);
+		} finally {
+			restore();
+		}
+	});
+
+	// #5378 R2 F4 (greptile PRRT_kwDORt8rec6021vU): the word model keeps a
+	// native Windows operand's backslashes, so `path.posix.basename` left
+	// `C:\work\a.ts` whole and the join produced `dest/C:\work\a.ts`. Built with
+	// `path.win32` so every platform runs it (AGENTS.md shape 35).
+	it("mv -t DIR takes a native Windows source's win32 basename (#5378)", () => {
+		const src = path.win32.join("C:\\work", "a.ts");
+		expect(extractWrittenPathsFromCommand(`mv -t dest ${src}`, tmp)).toEqual([
+			path.join(tmp, "dest", "a.ts"),
+		]);
+	});
+
+	it("cp -t DIR registers DIR/<basename> and not the source (#5378)", () => {
+		const a = touchLines("a.ts", 1);
+		const r = extractWrittenPathsFromCommand(`cp -t dest/ ${a}`, tmp);
+		expect(r).toEqual([path.join(tmp, "dest", "a.ts")]);
+		expect(r).not.toContain(a);
+	});
+
+	it("mv SRC DEST still registers the trailing destination (#5378)", () => {
+		const src = touchLines("a.ts", 1);
+		const dst = pathIn("b.ts");
+		const r = extractWrittenPathsFromCommand(`mv ${src} ${dst}`, tmp);
+		expect(r).toEqual([dst]);
+	});
+
 	it("whole-tree / non-content git ops are NOT registered (can't enumerate files)", () => {
 		const f = pathIn("a.ts");
 		// branch switch (no `--`), hard reset, status, diff, add, stash pop
@@ -1001,17 +1111,86 @@ describe("extractDeletedPathsFromCommand — bash deletes (#1668)", () => {
 		expect(result).toContain(b);
 	});
 
-	it("KNOWN MISS (#1668 review F3, documented not fixed): `mv -t DEST SRC` misreads the -t target-directory form", () => {
-		// GNU `-t DEST` puts the destination BEFORE the source, but this parser
-		// always treats the destination as the LAST non-flag argument — so `-t`
-		// usage is misread. Documented in extractDeletedPathsFromCommand's doc
-		// comment; this test pins the current (wrong) behavior so a future
-		// change to it is a deliberate, reviewed decision, not a silent drift.
+	// Recurrence this guards (#5378): the parser used to assume source-before-
+	// destination order, so every source but the first of a `-t DIR` move kept a
+	// stale read record while its bytes had moved.
+	it("mv -t DIR registers every source for both option spellings (#5378)", () => {
+		const a = touchLines("a.ts", 1);
+		const b = touchLines("b.ts", 1);
+		for (const command of [
+			`mv -t dest/ ${a} ${b}`,
+			`mv -tdest/ ${a} ${b}`,
+			`mv --target-directory dest/ ${a} ${b}`,
+			`mv --target-directory=dest/ ${a} ${b}`,
+		]) {
+			expect(extractDeletedPathsFromCommand(command, tmp), command).toEqual(
+				expect.arrayContaining([a, b]),
+			);
+		}
+	});
+
+	// #5378 R2 F6 (greptile PRRT_kwDORt8rec6023dk): `-t` inside a short-option
+	// cluster was an unknown flag, so the directory became a source and the last
+	// operand the destination — the wrong direction. GNU reads the cluster's
+	// boolean letters, then `-t` takes the rest of the cluster or the next word;
+	// a value-taking letter first (`-S`) consumes the `t`, so `-St` names no dir.
+	it("mv -vt DIR and cp -it DIR read the cluster's -t (#5378)", () => {
+		const a = touchLines("a.ts", 1);
+		const b = touchLines("b.ts", 1);
+		const dest = path.join(tmp, "dest");
+		for (const command of [
+			`mv -vt dest ${a} ${b}`,
+			`cp -it dest ${a} ${b}`,
+			`mv -vtdest ${a} ${b}`,
+		]) {
+			expect(extractWrittenPathsFromCommand(command, tmp), command).toEqual(
+				expect.arrayContaining([
+					path.join(dest, "a.ts"),
+					path.join(dest, "b.ts"),
+				]),
+			);
+		}
+		// Only a move vanishes from the source path, so the two `mv` spellings
+		// carry the delete side too.
+		for (const command of [`mv -vt dest ${a} ${b}`, `mv -vtdest ${a} ${b}`]) {
+			expect(extractDeletedPathsFromCommand(command, tmp), command).toEqual(
+				expect.arrayContaining([a, b]),
+			);
+		}
+		// `-S` takes a value, so GNU reads `-St` as suffix `t`: `dest` is the
+		// source and `b.ts` the destination, exactly as the pre-fix parser.
+		expect(
+			extractWrittenPathsFromCommand(`cp -St dest ${a} ${b}`, tmp),
+		).toEqual([b]);
+	});
+
+	it("mv -t DEST SRC registers the source it used to miss (#5378)", () => {
+		// The single-source spelling the old "Known miss" test pinned as WRONG
+		// (`mv -t DEST SRC` reported nothing): the destination now reads from
+		// `-t`, so SRC is the source that vanishes.
 		const src = touchLines("a.ts", 1);
 		const dst = pathIn("dest.ts");
-		const result = extractDeletedPathsFromCommand(`mv -t ${dst} ${src}`, tmp);
-		// The real source (`src`) is NOT reported as deleted — the miss.
-		expect(result).not.toContain(src);
+		expect(extractDeletedPathsFromCommand(`mv -t ${dst} ${src}`, tmp)).toEqual([
+			src,
+		]);
+	});
+
+	it("mv -t with no source operand names nothing (#5378)", () => {
+		expect(extractDeletedPathsFromCommand(`mv -t dest/`, tmp)).toEqual([]);
+	});
+
+	it("mv -- -t DEST SRC reads -- as end-of-options, not as -t (#5378)", () => {
+		// After `--`, bash takes every word positionally, so SRC is the source and
+		// DEST is the destination: `mv -- -t dest/ a.ts b.ts` moves `-t`, `dest/`
+		// and `a.ts` into `b.ts`. Reading the `-t` as the target-directory option
+		// instead would report the surviving destination `b.ts` as deleted.
+		const src = touchLines("a.ts", 1);
+		const surviving = touchLines("b.ts", 1);
+		const result = extractDeletedPathsFromCommand(
+			`mv -- -t dest/ ${src} ${surviving}`,
+			tmp,
+		);
+		expect(result).toEqual([src]);
 	});
 
 	it("bare directory rm is skipped — no explicit file, nothing to confirm", () => {
