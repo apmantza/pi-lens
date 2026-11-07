@@ -89,7 +89,7 @@ export function getRememberedLazyTools(
 /** The only part of the host model object this module reads. */
 type DeferredToolModel = {
 	compat?: {
-		supportsToolReferences?: boolean;
+		supportsToolSearch?: boolean;
 		supportsMidConvoSystemMessages?: boolean;
 	};
 };
@@ -147,7 +147,7 @@ export function supportsMidConvoSystemMessages(
  * definitions rather than the full inline list.
  *
  * Read the host's own decision off `ctx.model.compat` — pi resolves that
- * flag from the model config (`core/model-config`, `compat.supportsToolReferences`)
+ * flag from the model config (`core/model-config`, `compat.supportsToolSearch`)
  * and it is the only capability signal a consumer can honestly observe.
  * A missing flag means "unknown", which we report as false: this value only
  * annotates the `tool_set_mutation` log line, so guessing high would make the
@@ -156,7 +156,7 @@ export function supportsMidConvoSystemMessages(
 export function supportsDeferredTools(
 	model: DeferredToolModel | undefined,
 ): boolean {
-	return model?.compat?.supportsToolReferences === true;
+	return model?.compat?.supportsToolSearch === true;
 }
 
 /**

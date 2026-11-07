@@ -104,11 +104,15 @@ describe("tool-set cache policy", () => {
 	});
 
 	it("reads the host's own deferred-tool capability flag", () => {
+		// Pi 0.86.1 (the supported floor) through 1.5.0 ship the flag as
+		// `compat.supportsToolSearch`; the pi 0.80-era `supportsToolReferences`
+		// spelling survives in no supported build (#5361). Reading the old name
+		// made the `tool_set_mutation` deferral field lie on every host.
 		expect(
-			supportsDeferredTools({ compat: { supportsToolReferences: true } }),
+			supportsDeferredTools({ compat: { supportsToolSearch: true } }),
 		).toBe(true);
 		expect(
-			supportsDeferredTools({ compat: { supportsToolReferences: false } }),
+			supportsDeferredTools({ compat: { supportsToolSearch: false } }),
 		).toBe(false);
 		// Unknown (no flag / no compat / no model) is reported as false rather
 		// than guessed.
