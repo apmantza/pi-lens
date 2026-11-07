@@ -17,12 +17,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
-import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
-import {
-	assertNonEmptyScan,
-	listSourceFiles,
-	readWalkedFiles,
-} from "../support/sweep-kit.js";
 
 const SCRIPT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -777,12 +771,6 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 			parentTotalRows: 0,
 			rows: [],
 		});
-		expect(latency.phaseAges).toEqual({
-			totalMs: 0,
-			groups: 0,
-			shown: 0,
-			rows: [],
-		});
 		expect(latency.runnerLatency).toEqual({
 			totalMs: 0,
 			groups: 0,
@@ -884,33 +872,21 @@ describe("analyze-pi-lens-logs.mjs phase sample rules (#5263 r2 F1, F2)", () => 
 		latency = runReport(SAMPLE).latency;
 	});
 
-	it("reports age-valued phases in their own block instead of the time denominator", () => {
+	// Recurrence: #5263 r2 F1 ranked `lsp_document_drift` (81.8% of a live log's
+	// phase time, an age nobody waited for) first; #5379 moved the rule to the
+	// shared `latencySpanMs`, and the analyzer's own name list was deleted. A row
+	// is a span only when it carries `durationMs` and no `ageMs`.
+	it("excludes age rows from the phase sample and keeps the span rows", () => {
+		const keys = latency.phaseLatency.rows.map((row: any) => row.key);
+		// Span rows: 600 + 400 + 100.
 		expect(latency.phaseLatency.totalMs).toBe(1100);
-		expect(latency.phaseLatency.rows.map((row: any) => row.key)).not.toContain(
-			"unknown:lsp_document_drift",
-		);
-		expect(latency.phaseLatency.rows.map((row: any) => row.key)).not.toContain(
-			"edit:lsp_workspace_sweep_hold_force_released",
-		);
-
-		const ages = latency.phaseAges;
-		expect(ages.totalMs).toBe(1_300_000);
-		expect(ages.rows).toHaveLength(2);
-		expect(
-			ages.rows.find((row: any) => row.key === "unknown:lsp_document_drift"),
-		).toMatchObject({
-			tool: "unknown",
-			phase: "lsp_document_drift",
-			count: 1,
-			p50Ms: 900_000,
-			p95Ms: 900_000,
-			maxMs: 900_000,
-			totalMs: 900_000,
-		});
-		// The ages block has no denominator to share: an age is not a slice of any
-		// family a reader ranks, so a `share` number there is the F1 artifact again
-		// in a different block. The time block keeps it.
-		expect(ages.rows[0]).not.toHaveProperty("share");
+		// A legacy line (no `ageMs`, an age in `durationMs` of a legacy age name).
+		expect(keys).not.toContain("unknown:lsp_document_drift");
+		expect(keys).not.toContain("edit:lsp_workspace_sweep_hold_force_released");
+		// A post-#5379 line: `ageMs` beside a `durationMs`, under a name no list holds.
+		expect(keys).not.toContain("edit:post_5379_age_phase");
+		expect(keys).toContain("write:dispatch_lint");
+		expect(latency).not.toHaveProperty("phaseAges");
 		expect(latency.phaseLatency.rows[0]).toHaveProperty("share");
 	});
 
@@ -929,128 +905,10 @@ describe("analyze-pi-lens-logs.mjs phase sample rules (#5263 r2 F1, F2)", () => 
 		expect(sum).toBeCloseTo(1, 10);
 	});
 
-	it("renders the ages block and the excluded parent count in text", () => {
+	it("renders the excluded parent count in text and no ages block", () => {
 		const text = runAnalyzer(SAMPLE);
-		const agesSection = text.split("\nPhase ages")[1]?.split("\n\n")[0];
-		expect(agesSection).toBeDefined();
-		expect(agesSection).toMatch(
-			/1\s+p50=900000\s+p95=900000\s+max=900000\s+unknown:lsp_document_drift/,
-		);
 		expect(text).toMatch(/2 parent `total` rows excluded/);
-	});
-});
-
-/**
- * #5263 round 2, F1: the age list is a claim about `clients/` producers. A
- * rename or a removal there turns the exclusion into a silent hole (the row goes
- * back into the denominator, the block goes stale), so every listed name must
- * still be written by a producer and must still route to the ages block.
- *
- * Shape 33 exception, stated: no runtime probe can show a producer drift here —
- * it would need a real session that reaches a multi-minute untracked-drift
- * resync, which is the rare-but-dominant population the field report names. The
- * scan is the closest executable check.
- */
-describe("analyze-pi-lens-logs.mjs age-phase list stays true to its producers (#5263 r2 F1)", () => {
-	function analyzerSource(): string {
-		return fs.readFileSync(SCRIPT, "utf8");
-	}
-
-	/** The phase names in the `AGE_VALUED_PHASES` set literal, comments blanked. */
-	function agePhaseNames(): string[] {
-		const block = /const AGE_VALUED_PHASES = new Set\(\[([\s\S]*?)\]\);/.exec(
-			analyzerSource(),
-		)?.[1];
-		if (!block)
-			throw new Error(
-				"AGE_VALUED_PHASES block not found in scripts/analyze-pi-lens-logs.mjs",
-			);
-		return [...block.matchAll(/^\s*"([^"]+)",$/gm)].map((m) => m[1]);
-	}
-
-	function clientsSources(): Array<{ file: string; source: string }> {
-		const root = path.resolve(
-			path.dirname(fileURLToPath(import.meta.url)),
-			"../../clients",
-		);
-		// The registered floor of this scan, so an empty or mis-pointed walk fails
-		// instead of reading as clean. Calibration: 520 `clients/**/*.ts` files
-		// (declarations excluded) on 2026-11-07; the floor is well under that so a
-		// module move cannot red it, and far above zero so a wrong root can.
-		const files = listSourceFiles(root, { extensions: [".ts"] });
-		assertNonEmptyScan(
-			"clients/ sources scanned for age-phase producers",
-			files.length,
-			300,
-		);
-		return readWalkedFiles(files);
-	}
-
-	it("lists a non-trivial population (the scan is not vacuous)", () => {
-		expect(agePhaseNames().length).toBeGreaterThanOrEqual(4);
-	});
-
-	it(
-		"names only phases that a clients/ producer still writes",
-		() => {
-			const sources = clientsSources();
-			const missing: string[] = [];
-			for (const name of agePhaseNames()) {
-				// The two producer spellings: a literal `phase: "<name>"`, or the
-				// bounded-telemetry emitter that takes the phase name as its first
-				// argument. Any other quoted mention (a comment, a registry entry) is
-				// not a producer and does not satisfy the scan.
-				const producer = new RegExp(
-					`(?:phase:\\s*"|emitBounded\\(\\s*")${name}"`,
-				);
-				if (!sources.some(({ source }) => producer.test(source)))
-					missing.push(name);
-			}
-			expect(missing).toEqual([]);
-			// #4828: this case walks `clients/` (520 files), so it carries the shared
-			// tree-walk budget instead of the default per-test timeout.
-		},
-		TREE_WALK_TIMEOUT_MS,
-	);
-
-	it("routes every listed age phase to the ages block and to nothing else", () => {
-		const names = agePhaseNames();
-		const root = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-loganalyze-ages-"),
-		);
-		try {
-			const rows = names.map((name, i) =>
-				JSON.stringify({
-					type: "phase",
-					toolName: "write",
-					phase: name,
-					filePath: "/proj/a",
-					durationMs: 1000 + i,
-					ts: NOW,
-				}),
-			);
-			rows.push(
-				JSON.stringify({
-					type: "phase",
-					toolName: "write",
-					phase: "real_work_phase",
-					filePath: "/proj/a",
-					durationMs: 7,
-					ts: NOW,
-				}),
-			);
-			fs.writeFileSync(path.join(root, "latency.log"), `${rows.join("\n")}\n`);
-			const latency = runReport(root).latency;
-			expect(latency.phaseAges.rows.map((r: any) => r.phase).sort()).toEqual(
-				[...names].sort(),
-			);
-			expect(latency.phaseLatency.rows.map((r: any) => r.key)).toEqual([
-				"write:real_work_phase",
-			]);
-			expect(latency.phaseLatency.totalMs).toBe(7);
-		} finally {
-			removeTempDirSync(root);
-		}
+		expect(text).not.toMatch(/Phase ages/);
 	});
 });
 
@@ -1073,9 +931,7 @@ describe("analyze-pi-lens-logs.mjs sample guards (#5263 r2 F6)", () => {
 	});
 
 	it("drops a row whose durationMs is negative instead of guessing 0", () => {
-		const keys = [...latency.phaseLatency.rows, ...latency.phaseAges.rows].map(
-			(row: any) => row.key,
-		);
+		const keys = latency.phaseLatency.rows.map((row: any) => row.key);
 		expect(keys).not.toContain("unknown:negative_duration_phase");
 		// A phantom 0 sample would still create the group; the 5ms also stays out
 		// of the denominator, which the 1100ms total above pins.
