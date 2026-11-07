@@ -67,6 +67,10 @@ event per session, never one per occurrence in a loop; repeated degradations go
 through a once-only or counted record. A discriminator nothing can observe is a
 vacuous guard and does not ship.
 
+**A timeout, abort or error is a transition.** List it beside success in the
+transition table, with the same state updates or a stated reason why not. The
+census found a timed-out autofix skipping its cooldown on every edit (#5376).
+
 **Gates fail closed on what they do not recognize.** When code decides a
 verdict (a trust check, a lint, a census, a body check), it admits a short list
 of known-good forms and refuses everything else. It never enumerates known-bad
