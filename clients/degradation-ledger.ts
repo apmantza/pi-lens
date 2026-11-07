@@ -1561,6 +1561,18 @@ export type DegradationKind =
 	 */
 	| "read-guard-write-after-branch-move"
 	/**
+	 * #5377: a cross-process `recent-touches.json` append (`clients/recent-touches.ts`)
+	 * rejected, so this process's touched-file batch never reached the record and
+	 * the #485 nudge cannot fire in a sibling pi process for it. Before the
+	 * #5377 fold the append swallowed its own write failures, so a lost batch was
+	 * indistinguishable from "nothing was touched" (catalog shape 10); the fold's
+	 * throwing atomic publication makes the loss visible, and this kind is the
+	 * operator-visible half of it (the caller's `dbg` line is caller-local).
+	 * Subject is the project cwd; once per project per session, so a wedged lock
+	 * that fails every write in a long session writes one row, not one per write.
+	 */
+	| "recent-touches-append-failed"
+	/**
 	 * The tier-3 cascade's outstanding-touch registry
 	 * (`clients/lsp/cascade-tier.ts`) reached its cap before a quiet-window
 	 * reconcile drained it, so the oldest touch was dropped unanswered (#1899).
