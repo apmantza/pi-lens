@@ -174,9 +174,10 @@ invariant it breaks. `Kinds`, `OutsideKinds`, `CanMark`, `MaxClk` and
   project-wide stores, so a switch for it would have no pin.
 - Dispositions at the pending render. The live arm re-judges each stored error
   through `filterFindingsByDisposition` (`runtime-turn.ts`, #5344), so a mark
-  made after delivery clears its line. The stale arm fails open: its line stays
-  until a fresh observation settles it (accepted p3). No config here encodes
-  either arm.
+  made after delivery clears its line. The stale arm fails open for its
+  one-time "changed since checked" notice: it is not re-judged, and a successful
+  delivery forgets the entries it named, so no fresh observation is needed to
+  remove that notice (accepted p3). No config here encodes either arm.
 - The render caps (`cascadeMaxFiles`, the display and message caps).
 
 ## Trace validation (ADR 0010, #4834)

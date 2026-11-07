@@ -2058,6 +2058,12 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 					.map((call) => call[0] as { phase?: string; metadata?: any })
 					.filter((row) => row?.phase === "cascade_pending_gated");
 				expect(rows.map((row) => row.metadata.disposed)).toEqual([1]);
+				// Recurrence guard (#5366 review C3.1/C4.1): a file with only some
+				// errors dismissed is named in the row, so the drop is attributed
+				// to its file, not to the row's unrelated top-level path.
+				expect(rows.map((row) => row.metadata.disposedPaths)).toEqual([
+					[path.join(env.tmpDir, "n1.ts")],
+				]);
 			} finally {
 				env.cleanup();
 			}

@@ -2583,7 +2583,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		entry: PendingNeighborEntry;
 		errors: number;
 	}> = [];
-	const disposedPending: PendingNeighborEntry[] = [];
+	// Every entry with a dismissed error, fully or partly: the row names each
+	// file the drop touched, so a partial drop is not attributed to no file.
+	const disposedEntries: PendingNeighborEntry[] = [];
 	let disposedPendingErrors = 0;
 	for (const entry of pendingGate.live) {
 		const errors = entry.errors.reduce(
@@ -2591,8 +2593,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			0,
 		);
 		disposedPendingErrors += entry.errors.length - errors;
-		if (errors === 0) disposedPending.push(entry);
-		else unresolvedPending.push({ entry, errors });
+		if (errors < entry.errors.length) disposedEntries.push(entry);
+		if (errors > 0) unresolvedPending.push({ entry, errors });
 	}
 	// The rendered list stays the gate's own arm: the disposition check may
 	// only drop entries from it, never re-order or replace them.
@@ -2694,7 +2696,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				disposed: disposedPendingErrors,
 				changedPaths: changedNeighbors.slice(0, 10).map((e) => e.filePath),
 				deletedPaths: deletedNeighbors.slice(0, 10).map((e) => e.filePath),
-				disposedPaths: disposedPending.slice(0, 10).map((e) => e.filePath),
+				disposedPaths: disposedEntries.slice(0, 10).map((e) => e.filePath),
 			},
 		});
 	}
