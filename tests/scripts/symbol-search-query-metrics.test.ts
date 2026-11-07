@@ -738,11 +738,11 @@ describe("symbol_search query metrics — corpus failures", () => {
 		// Recurrence: #5355 verify r2 V1. A codemode script whose expression is
 		// 10,000 terms deep overflowed the AST visitor's stack. discoverCalls had
 		// no catch, so one such script ended the whole run with exit 1 and no
-		// report. The gate cannot walk that script, so it is one unscannable call;
-		// the clean symbol_search call beside it still counts.
+		// report. The gate cannot walk that script and it names the tool, so it is
+		// one unscannable call; the clean symbol_search call beside it still counts.
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ssqm-deep-"));
 		try {
-			const deep = `return ${Array.from({ length: 10000 }, () => "1").join("+")};`;
+			const deep = `await tools.symbol_search({ query: "ext:ts b" }); return ${Array.from({ length: 10000 }, () => "1").join("+")};`;
 			const clean = 'return await tools.symbol_search({ query: "ext:ts a" });';
 			const rows: string[] = [
 				JSON.stringify({
@@ -823,5 +823,308 @@ describe("symbol_search query metrics — corpus failures", () => {
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Round 4 (#5355 bot findings C8.1, C6.1, C3.1, C2.1, C12.1 and the V1 catch).
+// Transcripts are built inline: each cell needs one command, query or timestamp
+// that a shared fixture row would not isolate.
+// ---------------------------------------------------------------------------
+
+type Step = {
+	name: string;
+	args: Record<string, unknown>;
+	result?: { text: string; isError?: boolean };
+	at?: string;
+	resultAt?: string;
+};
+
+const LISTING =
+	'Top 1 file(s) for "q":\n  1. clients/a.ts 1 (score 1.00, 1 hit(s))\n\nIndex covers 10 files.';
+const EMPTY = 'No files matched "q".\nIndex covers 10 files.';
+const second = (n: number) =>
+	new Date(Date.UTC(2026, 10, 1, 0, 0, n)).toISOString();
+
+function withReport<T>(
+	steps: Step[],
+	windows: { label: string; since: string | null; until: string | null }[],
+	check: (report: ReturnType<typeof buildReport>) => T,
+): T {
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ssqm-r4-"));
+	try {
+		const rows: string[] = [
+			JSON.stringify({ type: "session", cwd: "/work", timestamp: second(0) }),
+		];
+		steps.forEach((step, index) => {
+			const id = `c${index}`;
+			rows.push(
+				JSON.stringify({
+					type: "message",
+					timestamp: step.at ?? second(2 * index + 1),
+					message: {
+						role: "assistant",
+						content: [
+							{
+								type: "toolCall",
+								id,
+								name: step.name,
+								arguments: step.args,
+							},
+						],
+					},
+				}),
+			);
+			if (step.result === undefined) return;
+			rows.push(
+				JSON.stringify({
+					type: "message",
+					timestamp: step.resultAt ?? second(2 * index + 2),
+					message: {
+						role: "toolResult",
+						toolCallId: id,
+						toolName: step.name,
+						content: [{ type: "text", text: step.result.text }],
+						isError: step.result.isError === true,
+					},
+				}),
+			);
+		});
+		fs.writeFileSync(path.join(dir, "r4.jsonl"), `${rows.join("\n")}\n`);
+		return check(buildReport(dir, windows));
+	} finally {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+}
+
+const search = (query: string, result = { text: EMPTY }): Step => ({
+	name: "symbol_search",
+	args: { query },
+	result,
+});
+const bash = (command: string): Step => ({ name: "bash", args: { command } });
+
+describe("symbol_search query metrics — round 4 folds", () => {
+	// Recurrence: #5355 C8.1. bashViewPaths kept `2>/dev/null` and `>out` as
+	// paths, so any two reads that both redirected stderr scored as a repeat of
+	// "2>/dev/null"; 2,251 of 7,793 local view calls carry a redirect token.
+	it.each([
+		["a stderr redirect", "cat clients/a.ts 2>/dev/null", ["clients/a.ts"]],
+		["an output redirect", "cat clients/a.ts >out", ["clients/a.ts"]],
+		["a spaced redirect", "cat clients/a.ts > out.txt", ["clients/a.ts"]],
+		["an append redirect", "cat clients/a.ts >> log", ["clients/a.ts"]],
+		["an fd duplication", "cat clients/a.ts 2>&1", ["clients/a.ts"]],
+		[
+			"an fd duplication before a pipe",
+			"cat clients/a.ts 2>&1 | head -5",
+			["clients/a.ts"],
+		],
+		[
+			"an all-output redirect",
+			"cat clients/a.ts &>/dev/null",
+			["clients/a.ts"],
+		],
+		["a redirect glued to the path", "cat clients/a.ts>out", ["clients/a.ts"]],
+		[
+			"an fd duplication ahead of the path",
+			"cat 2>&1 clients/a.ts",
+			["clients/a.ts"],
+		],
+		[
+			"an all-output redirect ahead of the path",
+			"cat &>/dev/null clients/a.ts",
+			["clients/a.ts"],
+		],
+		[
+			"a clobber redirect ahead of the path",
+			"cat >| out clients/a.ts",
+			["clients/a.ts"],
+		],
+		[
+			"an input redirect, whose operand is the viewed file",
+			"cat < clients/a.ts",
+			["clients/a.ts"],
+		],
+		[
+			"a trailing comment",
+			"cat clients/a.ts # cat clients/b.ts",
+			["clients/a.ts"],
+		],
+		[
+			"a comment holding a separator",
+			"cat clients/a.ts # x; cat clients/b.ts",
+			["clients/a.ts"],
+		],
+		[
+			"a # inside a word, which is no comment",
+			"cat clients/a#b.ts",
+			["clients/a#b.ts"],
+		],
+		["a quoted separator in an echo", "echo 'example; cat clients/a.ts ;'", []],
+		["a quoted path with spaces", 'cat "my dir/a b.ts"', ["my dir/a b.ts"]],
+		["a quoted path holding a semicolon", "cat 'a;b.ts'", ["a;b.ts"]],
+		[
+			"a quoted redirect character, which names a file",
+			'cat ">out.txt"',
+			[">out.txt"],
+		],
+		[
+			"a heredoc that writes a file",
+			"cat > clients/a.ts <<'EOF'\nhello\nEOF",
+			[],
+		],
+	])("reads the viewed paths of %s", (_form, command, expected) => {
+		expect(bashViewPaths(command)).toEqual(expected);
+	});
+
+	it("does not score three different files, each read once with 2>/dev/null, as repeats", () => {
+		const steps: Step[] = [
+			search("file:clients/a.ts q", { text: LISTING }),
+			bash("cat clients/a.ts 2>/dev/null"),
+			bash("cat clients/b.ts 2>/dev/null"),
+			bash("cat clients/c.ts 2>/dev/null"),
+		];
+		const window = withReport(steps, [ALL], (report) => report.windows[0]);
+		expect(window.repeatReadRate.numerator).toBe(0);
+		expect(window.repeatReadRate.denominator).toBe(3);
+	});
+
+	// Recurrence: #5355 C6.1. classifyResult read the listing and empty phrases
+	// before isError, so a failed query that echoed the tool's own phrase in its
+	// message left the error bucket and left scopedError.
+	it("classifies an isError result as an error even when its text echoes a listing or empty phrase", () => {
+		expect(
+			classifyResult(
+				'Symbol search failed for "x No files matched": bad',
+				true,
+			),
+		).toBe("error");
+		expect(
+			classifyResult('Symbol search failed for "Top 3 file(s) for": bad', true),
+		).toBe("error");
+		expect(classifyResult('No files matched "x".', false)).toBe("empty");
+	});
+
+	// Recurrence: #5355 C3.1. The scope test was case-sensitive and accepted an
+	// empty value; parseWordIndexQuery lowercases the key and keeps `ext:` and
+	// `file:  x` as plain terms, so five of ten spellings disagreed.
+	it.each([
+		["EXT:ts alpha", 1],
+		["File:clients/ x", 1],
+		["-FILE:x y", 1],
+		["ext: alpha", 0],
+		["alpha ext:", 0],
+	])("counts %j as %i file:/ext: scoped search", (query, scoped) => {
+		const window = withReport(
+			[search(query)],
+			[ALL],
+			(report) => report.windows[0],
+		);
+		expect(window.emptyRate.denominator).toBe(scoped);
+		expect(window.emptyRate.numerator).toBe(scoped);
+	});
+
+	it("reads an upper-case lang: filter as structured scope, like the engine", () => {
+		const window = withReport(
+			[search("LANG:ts alpha")],
+			[ALL],
+			(report) => report.windows[0],
+		);
+		expect(window.structuredScoped.classified).toBe(1);
+	});
+
+	// Recurrence: #5355 C2.1. Two mutations survived 68 passing cells: a
+	// requireValue that never throws, and a usage exit of 1 instead of 2.
+	it("rejects a --since or --until with no value", () => {
+		expect(() => parseArgs(["--since"])).toThrow(
+			/--since needs an ISO-8601 value/,
+		);
+		expect(() => parseArgs(["--until", "--json"])).toThrow(
+			/--until needs an ISO-8601 value/,
+		);
+	});
+
+	it("exits 2 with the usage text when started as the entry point with a bad option", async () => {
+		const script = path.resolve(
+			import.meta.dirname,
+			"../../scripts/symbol-search-query-metrics.mjs",
+		);
+		const originalArgv = process.argv;
+		const originalExit = process.exitCode;
+		const written: string[] = [];
+		const spy = vi
+			.spyOn(process.stderr, "write")
+			.mockImplementation((chunk: string | Uint8Array) => {
+				written.push(String(chunk));
+				return true;
+			});
+		try {
+			process.argv = [originalArgv[0], script, "--since"];
+			vi.resetModules();
+			await import("../../scripts/symbol-search-query-metrics.mjs");
+			expect(process.exitCode).toBe(2);
+			expect(written.join("")).toMatch(/--since needs an ISO-8601 value/);
+		} finally {
+			spy.mockRestore();
+			process.argv = originalArgv;
+			process.exitCode = originalExit;
+		}
+	});
+
+	// Recurrence: #5355 C12.1. Window filtering ran before pairing, so a call a
+	// few hundred milliseconds inside --until lost its result and counted as
+	// unpaired; the same session with no window paired it.
+	it("pairs a result that lands after --until with its call inside the window", () => {
+		const steps: Step[] = [
+			{
+				...search("ext:ts alpha", { text: LISTING }),
+				at: "2026-11-04T22:37:59.900Z",
+				resultAt: "2026-11-04T22:38:00.500Z",
+			},
+		];
+		const bounded = {
+			label: "w",
+			since: null,
+			until: "2026-11-04T22:38:00Z",
+		};
+		const window = withReport(steps, [bounded], (report) => report.windows[0]);
+		expect(window.calls.discovered).toBe(1);
+		expect(window.calls.unpaired).toBe(0);
+		expect(window.results.listing).toBe(1);
+	});
+
+	it("keeps read history per window and says so in the rate definitions", () => {
+		// The definitions line is the contract for this: a read before --since is
+		// not history for a read after it, so the window reports 0/1, not 1/1.
+		const steps: Step[] = [
+			{ ...bash("cat clients/a.ts"), at: "2026-11-01T00:00:01Z" },
+			{
+				...search("file:clients/a.ts q", { text: LISTING }),
+				at: "2026-11-02T00:00:01Z",
+				resultAt: "2026-11-02T00:00:02Z",
+			},
+			{ ...bash("cat clients/a.ts"), at: "2026-11-02T00:00:03Z" },
+		];
+		const windowed = { label: "w", since: "2026-11-02T00:00:00Z", until: null };
+		const report = withReport(steps, [ALL, windowed], (built) => built);
+		expect(report.windows[0].repeatReadRate.numerator).toBe(1);
+		expect(report.windows[1].repeatReadRate.numerator).toBe(0);
+		expect(report.windows[1].repeatReadRate.denominator).toBe(1);
+		expect(formatSummary(report)).toContain(
+			"read history and the first listing are per window",
+		);
+	});
+
+	// Recurrence: #5355 CodeRabbit review body on V1. The visitor-overflow catch
+	// counted every deep script as one unscannable call, including scripts that
+	// never name symbol_search; the parse-error branch already counts tokens only.
+	it("does not count a too-deep codemode script that never names symbol_search", () => {
+		const deep = `return ${Array.from({ length: 10000 }, () => "1").join("+")};`;
+		const steps: Step[] = [
+			{ name: "codemode", args: { code: deep }, result: { text: "null" } },
+		];
+		const window = withReport(steps, [ALL], (report) => report.windows[0]);
+		expect(window.calls.discovered).toBe(0);
+		expect(window.calls.unscannable).toBe(0);
 	});
 });

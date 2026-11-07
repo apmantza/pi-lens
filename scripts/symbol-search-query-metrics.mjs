@@ -50,13 +50,14 @@ const D9_PATCH_BOUNDARY = "2026-11-04T22:13:00Z";
 const EXT_SUFFIX_BOUNDARY = "2026-11-04T22:38:00Z";
 
 const SYMBOL_SEARCH_NAMES = new Set(["symbol_search", "pilens_symbol_search"]);
-const FILE_EXT_FILTER = /(^|\s)-?(?:file|ext):/;
-const LANG_FILTER = /(^|\s)-?lang:/;
+// The engine (`parseWordIndexQuery`) lowercases the key and keeps a token with
+// an empty value as a plain term, so a filter needs `/i` and a non-space value.
+const FILE_EXT_FILTER = /(^|\s)-?(?:file|ext):\S/i;
+const LANG_FILTER = /(^|\s)-?lang:\S/i;
 const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/y;
 const FOLLOW_UP_WINDOW = 3;
 const WHOLE_FILE_VIEWERS = new Set(["cat", "bat", "less", "more", "nl"]);
 const HEAD_TAIL_VIEWERS = new Set(["head", "tail"]);
-const SHELL_SEPARATOR = /\s*(?:&&|\|\||;|\||&)\s*/;
 
 const USAGE = `Usage: node scripts/symbol-search-query-metrics.mjs [corpusPath] [--since <ISO-8601>] [--until <ISO-8601>] [--json]
 
@@ -495,6 +496,9 @@ export function findCodemodeSymbolSearchArgs(script) {
 /** `listing`, `empty`, `error`, or `unknown` for one rendered result. */
 export function classifyResult(text, isError = false) {
 	const value = String(text ?? "");
+	// A failed query can echo the tool's own phrases in its message, so the
+	// flag decides before the text does.
+	if (isError) return "error";
 	if (
 		/Top \d+ file\(s\) for/.test(value) ||
 		/^\s*\d+\.\s+.*\(score [\d.]+/m.test(value)
@@ -502,10 +506,7 @@ export function classifyResult(text, isError = false) {
 		return "listing";
 	}
 	if (/No files matched/.test(value)) return "empty";
-	if (
-		isError ||
-		/Word index is building|unavailableReason|result error/.test(value)
-	) {
+	if (/Word index is building|unavailableReason|result error/.test(value)) {
 		return "error";
 	}
 	return "unknown";
@@ -551,16 +552,77 @@ function pathsMatch(a, b, cwd) {
 	return left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
 }
 
+/**
+ * Split a command at `&&`, `||`, `;`, `|` and `&`, outside quotes. The `&` of
+ * `2>&1`, `>&2` and `&>` is a redirection, not a separator. Text from an
+ * unquoted word-initial `#` on is dropped. Heredoc bodies are not parsed (an
+ * accepted residual).
+ */
 function splitShellSegments(command) {
-	return String(command)
-		.split(SHELL_SEPARATOR)
-		.filter((segment) => segment.trim() !== "");
+	const text = String(command);
+	const segments = [];
+	let current = "";
+	let quote = null;
+	const cut = () => {
+		if (current.trim() !== "") segments.push(current);
+		current = "";
+	};
+	for (let index = 0; index < text.length; index++) {
+		const ch = text[index];
+		if (quote) {
+			current += ch;
+			if (ch === "\\") {
+				current += text[index + 1] ?? "";
+				index++;
+			} else if (ch === quote) {
+				quote = null;
+			}
+			continue;
+		}
+		if (ch === '"' || ch === "'") {
+			quote = ch;
+			current += ch;
+			continue;
+		}
+		if (ch === "#" && (index === 0 || /\s/.test(text[index - 1]))) break;
+		const prev = text[index - 1];
+		const next = text[index + 1];
+		if (ch === ";") {
+			cut();
+		} else if (ch === "&" || ch === "|") {
+			const redirect =
+				(ch === "&" && (prev === ">" || prev === "<" || next === ">")) ||
+				(ch === "|" && prev === ">");
+			if (redirect) {
+				current += ch;
+				continue;
+			}
+			if (next === ch) index++;
+			cut();
+		} else {
+			current += ch;
+		}
+	}
+	cut();
+	return segments;
 }
 
+/**
+ * Words and redirection operators of one segment. An operator is `{ op }`
+ * (`>`, `>>`, `2>&1` reads as `>&`, `&>`, `<`, `<<`), a word is `{ word }`.
+ * A quoted `>` is part of a word. A bare digit string glued to an operator is
+ * its file descriptor and is dropped.
+ */
 function tokenizeShell(segment) {
 	const tokens = [];
 	let current = "";
+	let currentQuoted = false;
 	let quote = null;
+	const flush = () => {
+		if (current !== "" || currentQuoted) tokens.push({ word: current });
+		current = "";
+		currentQuoted = false;
+	};
 	for (let index = 0; index < segment.length; index++) {
 		const ch = segment[index];
 		if (quote) {
@@ -578,19 +640,52 @@ function tokenizeShell(segment) {
 		}
 		if (ch === '"' || ch === "'") {
 			quote = ch;
+			currentQuoted = true;
 			continue;
 		}
 		if (ch === " " || ch === "\t") {
-			if (current !== "") {
-				tokens.push(current);
-				current = "";
+			flush();
+			continue;
+		}
+		if (
+			ch === "<" ||
+			ch === ">" ||
+			(ch === "&" && segment[index + 1] === ">")
+		) {
+			if (!currentQuoted && /^\d+$/.test(current)) current = "";
+			flush();
+			let op = ch;
+			while (op.length < 3 && "<>&|".includes(segment[index + 1] ?? "\0")) {
+				op += segment[++index];
 			}
+			tokens.push({ op });
 			continue;
 		}
 		current += ch;
 	}
-	if (current !== "") tokens.push(current);
+	flush();
 	return tokens;
+}
+
+/**
+ * The words of a segment with redirections removed: an operator and its
+ * operand go, except the operand of a plain `<`, which the command reads.
+ */
+function wordsWithoutRedirects(segment) {
+	const tokens = tokenizeShell(segment);
+	const words = [];
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index];
+		if (token.op === undefined) {
+			words.push(token.word);
+			continue;
+		}
+		const operand = tokens[index + 1];
+		if (operand === undefined || operand.op !== undefined) continue;
+		index++;
+		if (token.op === "<") words.push(operand.word);
+	}
+	return words;
 }
 
 /**
@@ -601,7 +696,7 @@ function tokenizeShell(segment) {
 export function bashViewPaths(command) {
 	const paths = [];
 	for (const segment of splitShellSegments(command)) {
-		const tokens = tokenizeShell(segment);
+		const tokens = wordsWithoutRedirects(segment);
 		let start = 0;
 		while (
 			start < tokens.length &&
@@ -660,7 +755,7 @@ function collectJsonlFiles(corpusPath) {
 		}
 	};
 	walk(corpusPath);
-	return files.sort();
+	return files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /**
@@ -760,10 +855,13 @@ function discoverCalls(calls) {
 			occurrences = findCodemodeSymbolSearchArgs(call.args.code);
 		} catch {
 			// The visitor recurses once per AST level, so a script a few thousand
-			// terms deep overflows the stack. A script the gate cannot walk is one
-			// unscannable call (fail closed, the same bucket as an unreadable
-			// argument), and the rest of the run goes on.
-			occurrences = [{ unscannable: true }];
+			// terms deep overflows the stack. A script the gate cannot walk is
+			// unscannable once per `symbol_search` token it spells (fail closed,
+			// as the parse-error branch does), and the rest of the run goes on.
+			occurrences = Array.from(
+				call.args.code.matchAll(SYMBOL_SEARCH_TOKEN),
+				() => ({ unscannable: true }),
+			);
 		}
 		if (occurrences.length === 0) continue;
 		// One result blob cannot be split across queries, so a script that
@@ -840,7 +938,10 @@ function analyzeTranscript(rows, sinceMs, untilMs) {
 		(row) => row?.type !== "message" || inWindow(row, sinceMs, untilMs),
 	);
 	const calls = orderedToolCalls(windowRows);
-	const results = toolResultsById(windowRows);
+	// Results pair from the whole session: a result lands after its call, so a
+	// call near --until keeps its result. Read history and the first listing
+	// stay per window.
+	const results = toolResultsById(rows);
 	// A call is a repeat read when it reads a path an earlier call in this
 	// session window already read (exact resolved path, no suffix matching).
 	const readBefore = new Set();
@@ -1037,6 +1138,7 @@ const RATE_DEFINITIONS = [
 	"structuredScoped = searches scoped by paths or lang (argument or inline lang:) without file:/ext:: classified, empty and error counts, not a rate (D8 does not name them)",
 	"listedReadRate = listings followed within 3 tool calls by a read (read, read_symbol, read_enclosing, or a bash cat/head/tail/sed -n view) of a listed file / listings",
 	"repeatReadRate = reads after the session's first symbol_search listing that target a file the session had already read (no window) / all reads after that listing; reads before it are in neither count; a repeat includes a different offset, limit or symbol on the same target (paging) and a read after an edit, so the rate is an upper bound on wasted reads",
+	"read history and the first listing are per window: a read before --since is not history for a read after it (repeatReadRate), while a result pairs with its call across the whole session",
 	"drilldownRate = listings followed within 3 tool calls by module_report or lsp_navigation / listings",
 	"unscannableRate = codemode calls whose symbol_search arguments are not a static literal, or whose script the gate cannot walk / discovered calls",
 	"n/a = the denominator is 0 (no rate); excluded = discovered calls outside the denominator",
