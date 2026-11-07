@@ -708,6 +708,26 @@ describe("recordDegradationOnce keys on the full subject (#5359)", () => {
 		const state = _getDegradationLedgerStateForTests();
 		expect(state.retainedEntries).toBe(2);
 		expect(state.onceKeys).toBe(2);
+
+		// The durable sink sees the same two events, each with the BOUNDED subject:
+		// the fix changes the key, never what a row carries.
+		expect(
+			vi
+				.mocked(logLatency)
+				.mock.calls.filter(([row]) => row.phase === "degradation_ledger")
+				.map(([row]) => row.metadata),
+		).toEqual([
+			expect.objectContaining({
+				kind: "lsp-registry-decision",
+				subject: truncateForLedger(longA),
+				count: 1,
+			}),
+			expect.objectContaining({
+				kind: "lsp-registry-decision",
+				subject: truncateForLedger(longB),
+				count: 1,
+			}),
+		]);
 	});
 
 	it("still dedupes the same long subject within the session", () => {
