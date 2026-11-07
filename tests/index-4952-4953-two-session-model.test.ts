@@ -29,6 +29,10 @@
  * adopted/none roots (the census of 2026-11-07), so the cell is not a rule the
  * model can state.
  *
+ * Out of the #4953 model too: the out-of-band bulk stamp (`recordProjectMutations`
+ * with source `external`, called from `clients/disk-changes.ts`) is not a tool
+ * call, so its rows are not asserted by the change-log case below.
+ *
  * Lane: ubuntu Unit tests. fast-check runs a bounded `numRuns` under a fixed
  * seed, so CI generates the same sequences every time; the `examples` entries
  * are the minimal counterexamples the parent commits fail on, so the red does
@@ -246,7 +250,7 @@ describe("two sessions in one process: a model of writers P and S", () => {
 	);
 
 	it(
-		"stamps every change-log row with the session that wrote the file (#4953)",
+		"stamps every write-tool change-log row with the session that wrote the file (#4953)",
 		{ timeout: MODEL_TIMEOUT_MS },
 		async () => {
 			// RECURRENCE GUARDED: #4953. S edits a file in the primary's project and
@@ -294,10 +298,12 @@ describe("two sessions in one process: a model of writers P and S", () => {
 
 						// The model: a row's file name starts with the letter of the session
 						// that wrote it, so the owner is read off the file the row names.
+						const ownerOf = (filePath: string): Who =>
+							path.basename(filePath).startsWith("p") ? "P" : "S";
 						const wrongStamp = rows
 							.map((row) => ({
 								file: path.basename(row.filePath),
-								owner: path.basename(row.filePath).startsWith("p") ? "P" : "S",
+								owner: ownerOf(row.filePath),
 								stamp:
 									row.sessionId === ids.P
 										? "P"
@@ -306,18 +312,33 @@ describe("two sessions in one process: a model of writers P and S", () => {
 											: row.sessionId,
 							}))
 							.filter((row) => row.stamp !== row.owner);
-						// Non-vacuous: P's writes reach the log at all.
-						const pRows = rows.filter((row) =>
-							path.basename(row.filePath).startsWith("p"),
-						).length;
+						// Every writer's distinct files reach the log, under its own stamp. A
+						// write whose append is dropped leaves its set short, which the stamp
+						// check cannot see because a missing row stamps nothing wrong.
+						const loggedBy = (who: Who): string[] =>
+							[
+								...new Set(
+									rows
+										.filter((row) => ownerOf(row.filePath) === who)
+										.map((row) => path.basename(row.filePath)),
+								),
+							].sort();
+						const writtenBy = (who: Who): string[] =>
+							[
+								...new Set(
+									ops
+										.filter((op) => op.who === who)
+										.map((op) => `${who.toLowerCase()}${op.file}.ts`),
+								),
+							].sort();
 						expect({
 							ops,
 							wrongStamp,
-							pRowsLogged: pRows > 0,
+							logged: { P: loggedBy("P"), S: loggedBy("S") },
 						}).toEqual({
 							ops,
 							wrongStamp: [],
-							pRowsLogged: ops.some((op) => op.who === "P"),
+							logged: { P: writtenBy("P"), S: writtenBy("S") },
 						});
 					},
 				),

@@ -79,9 +79,13 @@ describe("#4734: touching K directories of one workspace never evicts a session 
 							],
 						});
 						await handle.prompt("read them all");
-						const { rows } = await handle.latencyRows();
+						const { rows, skipped } = await handle.latencyRows();
 						expect(handle.errors).toEqual([]);
 						await handle.dispose();
+						// The reader drops a line it cannot parse and reports the count
+						// (AGENTS.md "Test requirements"): a damaged eviction row would
+						// otherwise read as no eviction, so the count is asserted first.
+						expect({ k, skipped }).toEqual({ k, skipped: 0 });
 						const evictions = rows.filter(
 							(row) =>
 								row.phase === "degradation_ledger" &&

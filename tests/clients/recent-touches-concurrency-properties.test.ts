@@ -42,6 +42,7 @@ import {
 	_resetProjectDataDirMemoForTests,
 	getProjectDataDir,
 } from "../../clients/file-utils.js";
+import { waitFor } from "./interleaving-kit.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 const FAKE_CWD = "/fake/project";
@@ -123,12 +124,13 @@ describe("recent-touches under concurrent publishers (#5385)", () => {
 								sessionId: `c${i}`,
 							});
 						});
-						const deadline = Date.now() + 2_000;
-						let entries = readEntries();
-						while (entries.length < owed && Date.now() < deadline) {
-							await new Promise<void>((resolve) => setImmediate(resolve));
-							entries = readEntries();
-						}
+						// Shape 86: wait on the record for the count the callers owe, under the
+						// kit's real-clock budget (scaled by PI_LENS_TEST_TIMEOUT_SCALE).
+						const entries = await waitFor(
+							readEntries,
+							(read) => read.length >= owed,
+							{ timeoutMs: 2_000 },
+						);
 
 						// Model 1: the multiset of (session, reason, path) the callers owe.
 						const label = (e: {
