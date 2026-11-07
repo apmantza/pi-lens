@@ -80,7 +80,7 @@ const asList = (needs: string | string[] | undefined) =>
 
 // Jobs that read `github.event.pull_request` yet MUST run on `merge_group`, so
 // they cannot carry the `pull_request` guard. `changes` (#3801) classifies the
-// diff for the heavy gate; on every non-pull_request event (merge_group
+// diff for the TLA+ shards; on every non-pull_request event (merge_group
 // included) `scripts/ci-changed-files.mjs` takes the fail-open full-suite
 // direction and never reads `--repo`/`--pr`, so an empty
 // `github.event.pull_request` is its supported input, not an error. That

@@ -546,17 +546,15 @@ and the required `Lint & type-check` also runs `depcruise:check`.
 `ci-infra-kill-rerun.yml` has no `pull_request` trigger, so its jobs post no
 skipped rows on a PR; the label cleanup lives in `ci-verdict-labels.yml`.
 
-CI cost gates (#3801). Heavy advisory jobs start only after every required check
-but `Hot-path latency (advisory)` passed on the head (`heavy-gate` in ci.yml; it
-is red when a required check it polls was red or unfinished at its deadline).
-No job is behind the gate now that CodeQL has left ci.yml:
-`codeql.yml` runs once a day on a schedule and on dispatch, with no master-push
-or pull-request run, so a new alert surfaces on master up to a day after its
-change, not on its PR. ci-verdict would list any deferred job with its real
-state (PENDING, or NOT RUN with the gate's reason) before and after the verdict
-turns success. A docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
+CI cost gates (#3801). ci.yml has no heavy-advisory gate: its `heavy-gate` job
+and ci-verdict's deferred-row list are retired (an older head's
+`Heavy advisory gate (advisory)` row still classifies as advisory by its
+suffix and never gates). CodeQL runs only in `codeql.yml`, once a day on a
+schedule and on dispatch, with no master-push or pull-request run, so a new
+alert surfaces on master up to a day after its change, not on its PR. A
+docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
 nothing else, classified by `scripts/ci-changed-files.mjs`; every doubt runs the
-full suite) skips only those heavy advisory jobs: the Unit shards and every
+full suite) skips no test job: the Unit shards and every
 other test job always run, because a docs edit can red tests outside tests/config
 (`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
 is the three `Install test` legs: outside `INSTALL_PATHS` in that script
@@ -567,8 +565,7 @@ skip at job level and the aggregate still reports. Push and merge-queue runs
 always model-check (`changes` sets `formal=true` for every non-PR event). A REQUIRED job never skips at
 job level: ci-verdict and the merge train demand a literal `success`. Implicit
 `success()` reads every ancestor, so a job behind a skippable ancestor skips even
-when its direct needs are green; `heavy-gate` therefore reads `TLA+ models` from
-check-runs.
+when its direct needs are green.
 
 Master requires the ten contexts in `BRANCH_PROTECTION_CONTEXTS`
 (`scripts/lib/ci-checks.mjs`). ci-verdict reads the live list, and it also gates
@@ -577,8 +574,8 @@ every other non-advisory row a run posts.
 The Windows unit leg (`Unit tests Windows`, job key `unit-tests-windows`) GATES
 by maintainer decision on 2026-10-17: it runs the real `win32` gates, and
 advisory reds were waved through (the incidents are in `HISTORY.md`). It
-therefore starts on every event like the Unit shards and is never behind
-`heavy-gate`, whose docs-only skip would leave a required row absent. Its name
+therefore starts on every event like the Unit shards and never skips at job
+level. Its name
 carries no `(advisory)` suffix, and it is a required context on master. Its
 population is every
 `tests/config/*` file, every `process.platform` Windows gate, and the
