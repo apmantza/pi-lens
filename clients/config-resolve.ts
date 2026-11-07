@@ -200,6 +200,13 @@ export interface ResolvePiLensConfigOptions {
 	 * window); the caller that owns a records-only contract opts in here.
 	 */
 	readonly excludeLegacyProjectDocuments?: boolean;
+	/**
+	 * End the project walk at the git root (#5291): no file from a folder
+	 * above the repo is a merge input. `loadPiLensProjectConfig` sets it so its
+	 * permission keys come from the repo alone; the LSP and dispatch-policy
+	 * readers keep the `$HOME`-ceiling walk.
+	 */
+	readonly stopAtGitRoot?: boolean;
 }
 
 export interface PiLensConfigResolution {
@@ -321,6 +328,7 @@ function collectPiLensConfigDocuments(
 		const dirs = configSearchDirs(
 			options.cwd,
 			options.homeDir ?? os.homedir(),
+			options.stopAtGitRoot === true,
 		).reverse();
 		const locations = options.excludeLegacyProjectDocuments
 			? CANONICAL_PROJECT_CONFIG_LOCATIONS

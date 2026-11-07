@@ -147,8 +147,9 @@ have no CLI flag. See the [Configuration reference](./globalconfig.md) for full
 field docs.
 
 A project-scoped key is layered across every `.pi-lens.json` from the working
-directory upward (#5291): the nearest file that sets a key wins, field by
-field, so a package that sets one key keeps the repo root's other settings;
+directory up to the git root (#5291; the `$HOME` ceiling when there is no git
+root, and a file in a folder above the repo is never merged in): the nearest
+file that sets a key wins, field by field, so a package that sets one key keeps the repo root's other settings;
 the turn-off lists (`rules.<id>.disable`, `lsp.disabledServers`,
 `dispatch.disabledRunners`) are the union of every file, so a nearer file can
 add a denial but never re-enable one. See

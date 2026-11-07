@@ -16,6 +16,7 @@ import {
 } from "../../clients/degradation-ledger.js";
 import { resolveLensToolEnabled } from "../../clients/tool-config.js";
 import { FRESHNESS_CADENCE_MS } from "../../clients/freshness-cadence.js";
+import { isPathIgnoredByProject } from "../../clients/file-utils.js";
 import { removeTempDirSync } from "./test-utils.js";
 import { useConfigPath } from "../support/global-config.js";
 
@@ -1555,6 +1556,188 @@ describe("layered project config from a package directory (#5291)", () => {
 			expect(cfg.autofix).toEqual({ enabled: false });
 			// The nearer file still wins the key it sets.
 			expect(cfg.maxProjectFiles).toBe(50);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// #5291 round 2 (maintainer decision on PR #5374): the layered walk stops at
+	// the git root. Named recurrence: review F1 — a `.pi-lens.json` in a folder
+	// ABOVE the repo merged its permission keys (`trivy.enabled`,
+	// `helm.renderValidation.enabled`) into a repo with a config of its own, and
+	// the ignore matcher (rooted at the git root) never saw edits to it (F6).
+	describe("the layered walk stops at the git root", () => {
+		function repoBelowParentConfig(): { repo: string; pkg: string } {
+			const repo = path.join(tmpDir, "repo");
+			const pkg = path.join(repo, "pkg");
+			fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(
+				path.join(tmpDir, ".pi-lens.json"),
+				JSON.stringify({
+					autofix: { enabled: false },
+					maxProjectFiles: 1,
+					trivy: { enabled: true },
+					helm: { renderValidation: { enabled: true } },
+					rules: { grp: { disable: ["outside-rule"] } },
+				}),
+			);
+			fs.writeFileSync(
+				path.join(repo, ".pi-lens.json"),
+				JSON.stringify({ maxProjectFiles: 5 }),
+			);
+			fs.writeFileSync(
+				path.join(pkg, ".pi-lens.json"),
+				JSON.stringify({ startup: { mode: "quick" } }),
+			);
+			return { repo, pkg };
+		}
+
+		it("does not merge a .pi-lens.json above the repo into it", () => {
+			const { pkg } = repoBelowParentConfig();
+			const cfg = loadPiLensProjectConfig(pkg);
+			const raw = cfg.raw as {
+				trivy?: unknown;
+				helm?: unknown;
+			};
+			// Keys only the outside file sets stay unset.
+			expect(cfg.autofix).toBeUndefined();
+			expect(raw.trivy).toBeUndefined();
+			expect(raw.helm).toBeUndefined();
+			expect(cfg.rules["grp"]).toBeUndefined();
+			// The repo's own file still layers under the package's.
+			expect(cfg.maxProjectFiles).toBe(5);
+			expect(cfg.startup).toEqual({ mode: "quick" });
+		});
+
+		it("does not merge it at the repo root either", () => {
+			const { repo } = repoBelowParentConfig();
+			const cfg = loadPiLensProjectConfig(repo);
+			expect(cfg.autofix).toBeUndefined();
+			expect(cfg.maxProjectFiles).toBe(5);
+			expect(cfg.configPath).toBe(path.join(repo, ".pi-lens.json"));
+		});
+
+		it("still reads the nearest file above the repo whole when the repo has none of its own", () => {
+			// Master behaviour the ceiling must not change: no canonical file
+			// inside the repo means the nearest-file read, as before #5291. Two
+			// files above the repo keep the discovery from counting them as
+			// layers: counted, the layered read (bounded at the repo) would find
+			// no document and return an empty config.
+			const mid = path.join(tmpDir, "mid");
+			const pkg = path.join(mid, "repo", "pkg");
+			fs.mkdirSync(path.join(mid, "repo", ".git"), { recursive: true });
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(
+				path.join(tmpDir, ".pi-lens.json"),
+				JSON.stringify({ maxProjectFiles: 1 }),
+			);
+			fs.writeFileSync(
+				path.join(mid, ".pi-lens.json"),
+				JSON.stringify({ autofix: { enabled: false } }),
+			);
+			const cfg = loadPiLensProjectConfig(pkg);
+			expect(cfg.autofix).toEqual({ enabled: false });
+			expect(cfg.maxProjectFiles).toBeUndefined();
+			expect(cfg.configPath).toBe(path.join(mid, ".pi-lens.json"));
+		});
+
+		it("falls back to the home ceiling when there is no git root", () => {
+			// No `.git` anywhere in the chain: the walk keeps layering up to the
+			// ceiling, the documented #5291 behaviour.
+			const pkg = path.join(tmpDir, "repo", "pkg");
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(
+				path.join(tmpDir, ".pi-lens.json"),
+				JSON.stringify({ autofix: { enabled: false } }),
+			);
+			fs.writeFileSync(
+				path.join(pkg, ".pi-lens.json"),
+				JSON.stringify({ maxProjectFiles: 5 }),
+			);
+			const cfg = loadPiLensProjectConfig(pkg);
+			expect(cfg.autofix).toEqual({ enabled: false });
+			expect(cfg.maxProjectFiles).toBe(5);
+		});
+
+		it("keeps a file above the repo out of the ignore matcher (F6)", () => {
+			// Recurrence: CodeRabbit PRRT_kwDORt8rec6009oK. The matcher is rooted
+			// at the git root and keys its cache on the nearest config file, so a
+			// farther file above the root was read once and never refreshed. The
+			// ceiling leaves nothing above the matcher root to go stale: the
+			// outside file's `ignore` does not apply, before or after an edit.
+			const { repo } = repoBelowParentConfig();
+			const outside = path.join(tmpDir, ".pi-lens.json");
+			fs.writeFileSync(outside, JSON.stringify({ ignore: ["gen/**"] }));
+			const target = path.join(repo, "gen", "a.ts");
+			expect(isPathIgnoredByProject(target, repo, false)).toBe(false);
+			fs.writeFileSync(outside, JSON.stringify({ ignore: ["other/**"] }));
+			expect(
+				isPathIgnoredByProject(path.join(repo, "other", "b.ts"), repo, false),
+			).toBe(false);
+		});
+	});
+
+	// Survivors of the round 1 mutation pass (review F3).
+	it("sees a canonical file created in a middle directory at once (outermost arm of the tracked chain)", () => {
+		// Recurrence: M4. Chain a/b/c, nearest file in c, outermost in a. The
+		// middle directory b is tracked only because the walk extends the
+		// tracked chain out to the OUTERMOST canonical file; with the chain
+		// cut at the nearest file, a file created in b is invisible until the
+		// cadence window passes. Fake timers hold the cadence closed.
+		const a = tmpDir;
+		const b = path.join(a, "b");
+		const c = path.join(b, "c");
+		fs.mkdirSync(c, { recursive: true });
+		fs.writeFileSync(
+			path.join(a, ".pi-lens.json"),
+			JSON.stringify({ autofix: { enabled: false } }),
+		);
+		fs.writeFileSync(
+			path.join(c, ".pi-lens.json"),
+			JSON.stringify({ startup: { mode: "quick" } }),
+		);
+		// b's mtime pinned old so the creation below provably moves it.
+		const old = new Date("2020-01-01T00:00:00.000Z");
+		fs.utimesSync(b, old, old);
+		vi.useFakeTimers();
+		try {
+			expect(loadPiLensProjectConfig(c).maxProjectFiles).toBeUndefined();
+			fs.writeFileSync(
+				path.join(b, ".pi-lens.json"),
+				JSON.stringify({ maxProjectFiles: 42 }),
+			);
+			const cfg = loadPiLensProjectConfig(c);
+			expect(cfg.maxProjectFiles).toBe(42);
+			expect(cfg.autofix).toEqual({ enabled: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("re-parses an mtime-preserving, length-changing edit of an inherited file", () => {
+		// Recurrence: M8. The layered cache stamps every contributing document
+		// with (mtime, size); dropping the size axis replays a stale value for
+		// the #1105 class of edit, now on a FARTHER file than the nearest.
+		const pkg = repoWith(
+			{ ignore: ["alpha/**", "beta/**", "gamma/**"] },
+			{ startup: { mode: "quick" } },
+		);
+		const rootFile = path.join(tmpDir, ".pi-lens.json");
+		const pinned = new Date("2020-01-01T00:00:00.000Z");
+		fs.utimesSync(rootFile, pinned, pinned);
+		const mtimeBefore = fs.statSync(rootFile).mtimeMs;
+		vi.useFakeTimers();
+		try {
+			expect(loadPiLensProjectConfig(pkg).ignore).toEqual([
+				"alpha/**",
+				"beta/**",
+				"gamma/**",
+			]);
+			fs.writeFileSync(rootFile, JSON.stringify({ ignore: ["alpha/**"] }));
+			fs.utimesSync(rootFile, pinned, pinned);
+			expect(fs.statSync(rootFile).mtimeMs).toBe(mtimeBefore);
+			expect(loadPiLensProjectConfig(pkg).ignore).toEqual(["alpha/**"]);
 		} finally {
 			vi.useRealTimers();
 		}

@@ -1005,7 +1005,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/codebase-model.ts": 4,
 		"clients/complexity-client.ts": 3,
 		"clients/config-core/normalize.ts": 22,
-		"clients/config-locations.ts": 26,
+		// 26 -> 27 (#5291): `configSearchDirs` joins `.git` onto each walked dir to
+		// find the git root — the `node:path` host module, not a delivery lane.
+		"clients/config-locations.ts": 27,
 		"clients/config-resolve.ts": 8,
 		"clients/dead-code-client.ts": 5,
 		"clients/dead-code-logger.ts": 3,

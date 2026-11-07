@@ -11,4 +11,5 @@ area: config
   still wins each key it sets. The turn-off lists (`rules.<id>.disable`,
   `lsp.disabledServers`, `dispatch.disabledRunners`) merge as the union of
   every file, so a nested config can add a denial but never re-enable one.
-  (refs #5291)
+  The layering stops at the git root: a `.pi-lens.json` in a folder above the
+  repository is never merged in. (refs #5291)

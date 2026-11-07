@@ -44,7 +44,9 @@
  * The loader walks up from the starting directory to a ceiling just below
  * `$HOME` (mirroring `lsp/config.ts`'s `loadLSPConfig` so project-monorepos
  * with a `.pi-lens.json` at the repo root work without per-subdir configs).
- * When more than one `.pi-lens.json` sits in that chain, the value is layered
+ * When more than one `.pi-lens.json` sits in that chain INSIDE the git root,
+ * the value is layered (a `.pi-lens.json` above the repo is never a layer; the
+ * `$HOME` ceiling bounds the walk only when there is no git root; #5291)
  * FIELD BY FIELD through `resolvePiLensConfig` — nearest wins per field, and
  * the turn-off lists (`rules.<id>.disable`, `lsp.disabledServers`,
  * `dispatch.disabledRunners`) stay unions across tiers so a nested file never
@@ -470,6 +472,7 @@ function loadLayeredProjectConfig(
 	const resolution = resolvePiLensConfig({
 		cwd: startDir,
 		excludeLegacyProjectDocuments: true,
+		stopAtGitRoot: true,
 		onReadError: reportConfigReadFailure,
 	});
 	if (resolution.documents.length === 0) {
@@ -733,14 +736,23 @@ function discoverPiLensProjectConfig(startDir: string): DiscoveryCacheEntry {
 	// value this loader returns, but the walk continues to the ceiling so the
 	// legacy documents a user is being asked to migrate are enumerated wherever
 	// they sit — beside the winning file or above it.
-	for (const dir of configSearchDirs(startDir)) {
+	// The layered tiers end at the git root (#5291): `layeredDirCount` is the
+	// length of that prefix of the innermost-first walk, so a canonical file
+	// above the repo is never a layer. It is still the nearest-file `info`
+	// below when the repo holds none of its own — master's whole-file read.
+	const searchDirs = configSearchDirs(startDir);
+	const layeredDirCount = configSearchDirs(startDir, undefined, true).length;
+	for (const [dirIndex, dir] of searchDirs.entries()) {
 		dirMtimes.push({ dir, mtimeMs: safeDirMtimeMs(dir) });
-		// The canonical file is probed in EVERY directory, not just until the
-		// first hit (#5291): the layered read needs every canonical tier, and
-		// the ones above the nearest file were never stat'd before, because
-		// only the nearest file's bytes decided a value then.
+		// The canonical file is probed in EVERY layered directory, not just
+		// until the first hit (#5291): the layered read needs every canonical
+		// tier, and the ones above the nearest file were never stat'd before,
+		// because only the nearest file's bytes decided a value then.
 		const canonicalCandidate = path.join(dir, CANONICAL_PROJECT_CONFIG_FILE);
-		if (!isResolvedGlobalConfigPath(canonicalCandidate)) {
+		if (
+			dirIndex < layeredDirCount &&
+			!isResolvedGlobalConfigPath(canonicalCandidate)
+		) {
 			const canonicalStat = safeFileStat(canonicalCandidate);
 			if (canonicalStat?.isFile()) {
 				canonicalSources.push({

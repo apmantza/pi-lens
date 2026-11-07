@@ -184,15 +184,28 @@ export const REGISTERED_LEGACY_FILE_SURFACES = LEGACY_FILE_SURFACES;
  *
  * The MACHINE-GLOBAL config is not affected: it is read by absolute path from
  * `~/.pi-lens/`, never by walking into `$HOME` and finding it.
+ *
+ * `stopAtGitRoot` (#5291) ends the walk at the first directory holding a
+ * `.git` entry, that directory included: the layered project read must not
+ * merge a file from a folder above the repo (permission keys such as
+ * `trivy.enabled`). The test is the ignore matcher's own root rule
+ * (`resolveGitIgnoreRoot`), so nothing above the matcher root is read. With no
+ * `.git` in the chain the walk keeps the `$HOME` ceiling alone.
  */
 export function configSearchDirs(
 	startDir: string,
 	homeDir: string = os.homedir(),
+	stopAtGitRoot = false,
 ): string[] {
 	// #4689 item 6: the walk climbs the start's identity and stops at the
 	// home's identity, so neither a link-spelled root nor a link-spelled home
 	// moves the ceiling.
-	return [...walkUpDirs(startDir, { homeDir })];
+	const dirs: string[] = [];
+	for (const dir of walkUpDirs(startDir, { homeDir })) {
+		dirs.push(dir);
+		if (stopAtGitRoot && fs.existsSync(path.join(dir, ".git"))) break;
+	}
+	return dirs;
 }
 
 /**
