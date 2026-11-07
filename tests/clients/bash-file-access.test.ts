@@ -962,6 +962,23 @@ describe("extractWrittenPathsFromCommand — bash writes", () => {
 		}
 	});
 
+	// #5378 R2 F3 (the reviewer's other half): bash expands `~` only at a word
+	// start, so the ATTACHED `-t~/dir` spelling hands mv the literal `~/dir` and
+	// the move lands under the cwd. Nothing pinned the parser's `tildeExpands:
+	// false` on that branch; flipping it to true survived the whole suite.
+	it("mv -t~/dir keeps the tilde literal under the cwd (#5378)", () => {
+		const { home, restore } = pinFixtureHome("bfa-mv-t-tilde-attached");
+		const a = touchLines("a.ts", 1);
+		try {
+			expect(os.homedir()).toBe(home);
+			expect(
+				extractWrittenPathsFromCommand(`mv -t~/dir ${a}`, tmp).map(toPosix),
+			).toEqual([toPosix(path.join(tmp, "~", "dir", "a.ts"))]);
+		} finally {
+			restore();
+		}
+	});
+
 	// #5378 R2 F4 (greptile PRRT_kwDORt8rec6021vU): the word model keeps a
 	// native Windows operand's backslashes, so `path.posix.basename` left
 	// `C:\work\a.ts` whole and the join produced `dest/C:\work\a.ts`. Built with
