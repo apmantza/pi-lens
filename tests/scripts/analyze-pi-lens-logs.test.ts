@@ -692,19 +692,10 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 	const WINDOW = "2026-09-30T00:00:00Z";
 
 	function dist(fixture = "phase-distribution", since = WINDOW): any {
-		const out = execFileSync(
-			process.execPath,
-			[
-				SCRIPT,
-				"--root",
-				path.join(FIXTURES, fixture),
-				"--json",
-				"--since",
-				since,
-			],
-			{ encoding: "utf8", timeout: 60_000 },
-		);
-		return JSON.parse(out).latency;
+		// The file's existing subprocess seam: `--since` is repeated and the later
+		// value wins in `parseArgs`, so the window is explicit without a second
+		// spawn site (the #4362 flake-shape ratchet counts those per file).
+		return runReport(path.join(FIXTURES, fixture), ["--since", since]).latency;
 	}
 
 	function group(rows: any[], key: string): any {
@@ -715,8 +706,9 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 		const latency = dist();
 		const rows = latency.phaseLatency.rows;
 		const row = group(rows, "turn_end:inline_blocker_policy");
-		// Fixture durations 10,20,30,40,50,60,70,80,1000 (ascending):
-		// nearest-rank p50 = rank ceil(0.5*9)=5 -> 50; p95 = rank ceil(8.55)=9 -> 1000.
+		// Fixture durations 10,20,30,40,50,60,70,80,1000 (ascending): the shared
+		// percentile answers p50 at index floor(0.5*9)=4 -> 50 and p95 at
+		// index floor(0.95*9)=8 -> 1000.
 		expect(row).toMatchObject({
 			tool: "turn_end",
 			phase: "inline_blocker_policy",
@@ -826,17 +818,10 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 	});
 
 	it("renders count, percentiles and share for each phase in text output", () => {
-		const text = execFileSync(
-			process.execPath,
-			[
-				SCRIPT,
-				"--root",
-				path.join(FIXTURES, "phase-distribution"),
-				"--since",
-				WINDOW,
-			],
-			{ encoding: "utf8", timeout: 60_000 },
-		);
+		const text = runAnalyzer(path.join(FIXTURES, "phase-distribution"), [
+			"--since",
+			WINDOW,
+		]);
 		const section = text.split("\nPhase latency\n")[1]?.split("\n\n")[0];
 		expect(section).toBeDefined();
 		expect(section).toMatch(
