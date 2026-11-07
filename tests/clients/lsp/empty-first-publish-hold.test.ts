@@ -126,9 +126,16 @@ describe("#3310 empty-first-publish hold (php/intelephense class)", () => {
 		vi.advanceTimersByTime(PHP_DEBOUNCE_MS * 4);
 
 		const held = logLatency.mock.calls
-			.map(([row]) => row as { phase?: string; metadata?: unknown })
+			.map(
+				([row]) =>
+					row as { phase?: string; metadata?: unknown; ageMs?: number },
+			)
 			.filter((row) => row.phase === "lsp_empty_first_publish_held");
 		expect(held).toHaveLength(1);
+		// #5379: the value is the time since didOpen, an AGE; written as
+		// `durationMs` the performance report ranked it as a duration.
+		expect(held[0]).toHaveProperty("ageMs", expect.any(Number));
+		expect(held[0]).not.toHaveProperty("durationMs");
 		expect(held[0]?.metadata).toMatchObject({
 			serverId: "php",
 			emptyFirstPublish: "indexing",

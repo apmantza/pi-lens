@@ -81,6 +81,34 @@ describe("performance-report", () => {
 		});
 	});
 
+	it("never ranks an age: a new-format ageMs row and a pre-#5379 legacy line are both excluded (#5379)", async () => {
+		// Recurrence: `lsp_document_drift` p99 2,220,473 ms topped slowestByP99 on a
+		// live log. A line written before the field existed holds the age in
+		// `durationMs` and is told apart by the shared legacy list alone.
+		const logPath = path.join(tempDir, "latency.log");
+		const lines = [
+			phase("real_work", 120),
+			{ type: "phase", phase: "lsp_document_drift", filePath: "x", ageMs: 9e6 },
+			phase("lsp_document_drift", 2_220_473), // legacy line
+			{ type: "phase", phase: "host_boot", filePath: "x", durationMs: 52_400 },
+			phase("fresh_age_producer", 1_000_000, { ageMs: 1_000_000 }),
+		];
+		writeEntries(logPath, lines as LatencyEntry[]);
+
+		const report = await collectLatencyPerformance({
+			logPath,
+			sessionStartedAt: 0,
+			topN: 10,
+		});
+
+		expect(report.logWindow.slowestByP99.map((row) => row.phase)).toEqual([
+			"real_work",
+		]);
+		expect(report.logWindow.sampleCount).toBe(1);
+		// An age row is a valid record, not a malformed one.
+		expect(report.invalidRecords).toBe(0);
+	});
+
 	it("honors a topN above the default and falls back to it when invalid", () => {
 		const entries = Array.from({ length: 12 }, (_, index) =>
 			phase(`p${index}`, index + 1),

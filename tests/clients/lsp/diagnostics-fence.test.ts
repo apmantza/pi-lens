@@ -519,6 +519,11 @@ describe("#3484 — diagnostics fence for version-less servers", () => {
 				(entry as { phase?: string }).phase === "lsp_empty_first_publish_held",
 		);
 		expect(held).toHaveLength(1);
+		// #5379: the fence-drop producer's value is the time since didOpen, an
+		// AGE (the sibling stored-path producer is pinned in
+		// empty-first-publish-hold.test.ts); not a `durationMs` to rank.
+		expect(held[0]?.[0]).toHaveProperty("ageMs", expect.any(Number));
+		expect(held[0]?.[0]).not.toHaveProperty("durationMs");
 		h.change.resolve();
 		await touch;
 	});

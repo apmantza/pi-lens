@@ -1471,7 +1471,9 @@ export function chainLateFormatResync(
 			type: "phase" as const,
 			toolName: row.toolName,
 			filePath: row.filePath,
-			durationMs: Date.now() - row.startedAt,
+			// Time since the original write row began: it overlaps the formatter
+			// phase already recorded and is not the resync's own work (#5379).
+			ageMs: Date.now() - row.startedAt,
 			metadata: { outcome },
 		};
 		// One row per caller (#3828 the deferred drain, #3858 the in-band
@@ -1488,7 +1490,8 @@ export function chainLateFormatResync(
 		phase: "format_late_resync_chained",
 		toolName: row.toolName,
 		filePath: row.filePath,
-		durationMs: Date.now() - row.startedAt,
+		// The formatter's age at the give-up; it has not finished (#5379).
+		ageMs: Date.now() - row.startedAt,
 		metadata: { which },
 	});
 	return settled

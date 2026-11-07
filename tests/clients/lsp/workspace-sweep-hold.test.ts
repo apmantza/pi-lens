@@ -368,6 +368,14 @@ describe("workspace sweep hold — leaked-hold failsafes (#1618 review round 3)"
 			expect(
 				loggedPhase(logLatencyMock, "lsp_workspace_sweep_hold_force_released"),
 			).toBe(true);
+			// #5379: the value is the hold's age at the reap, not work anyone did.
+			const record = logLatencyMock.mock.calls
+				.map((call) => call[0] as { phase?: string; ageMs?: number })
+				.find(
+					(entry) => entry.phase === "lsp_workspace_sweep_hold_force_released",
+				);
+			expect(record).toMatchObject({ ageMs: maxAgeMs + 1 });
+			expect(record).not.toHaveProperty("durationMs");
 		} finally {
 			vi.useRealTimers();
 		}

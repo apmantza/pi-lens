@@ -107,7 +107,8 @@ function reapStaleHolds(): void {
 			type: "phase",
 			phase: "lsp_workspace_sweep_hold_force_released",
 			filePath: "",
-			durationMs: ageMs,
+			// The hold's age at the reap, not work anyone did (#5379).
+			ageMs,
 			metadata: { holdId, maxHoldAgeMs: maxAgeMs },
 		});
 	}
