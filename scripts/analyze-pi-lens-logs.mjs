@@ -3034,7 +3034,7 @@ function printReport(report) {
 	if (phaseDist?.rows?.length) {
 		console.log("\nPhase latency");
 		console.log(
-			`  nearest-rank p50/p95/max per (tool, phase), share of ${phaseDist.totalMs}ms in-window phase time`,
+			`  nearest-rank p50/p95/max per (tool, phase), share of ${formatMs(phaseDist.totalMs)}ms in-window phase time`,
 		);
 		for (const row of phaseDist.rows) console.log(`  ${formatLatencyRow(row)}`);
 	}
@@ -3042,7 +3042,7 @@ function printReport(report) {
 	if (runnerDist?.rows?.length) {
 		console.log("\nRunner latency");
 		console.log(
-			`  nearest-rank p50/p95/max per runner, share of ${runnerDist.totalMs}ms runner time (skip rows excluded)`,
+			`  nearest-rank p50/p95/max per runner, share of ${formatMs(runnerDist.totalMs)}ms runner time (skip rows excluded)`,
 		);
 		for (const row of runnerDist.rows)
 			console.log(`  ${formatLatencyRow(row)}`);
@@ -3179,9 +3179,21 @@ function section(title, rows, formatter) {
 
 function formatLatencyRow(row) {
 	return (
-		`${String(row.count).padStart(6)}  p50=${row.p50Ms}  p95=${row.p95Ms}  max=${row.maxMs}  ${(row.share * 100).toFixed(1)}%  ${row.key}` +
+		`${String(row.count).padStart(6)}  p50=${formatMs(row.p50Ms)}  p95=${formatMs(row.p95Ms)}  max=${formatMs(row.maxMs)}  ${(row.share * 100).toFixed(1)}%  ${row.key}` +
 		(row.skippedRows ? `  (skipped ${row.skippedRows})` : "")
 	);
+}
+
+/**
+ * The report is a ranking a human reads, so a duration keeps at most one
+ * decimal: several producers time with `performance.now()` and write 677.82059…
+ * (a 45-column number per row hides the ranking). `--json` keeps the exact
+ * value; only the text rendering rounds.
+ */
+function formatMs(ms) {
+	return typeof ms === "number" && Number.isInteger(ms)
+		? `${ms}`
+		: `${Number(ms).toFixed(1)}`;
 }
 
 function formatExample(ex) {
