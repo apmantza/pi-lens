@@ -717,6 +717,99 @@ describe("F1 (#1625 review round): blocking findings require a STRICT anchor to 
 	});
 });
 
+// #5367: a cascade line prints `displayedMessage(message)` — first line, cut at
+// 100 characters — while the anchor hashes `normalizeMessage(message)`, which
+// folds whitespace and case but never cuts. A mark spelled from the text the
+// agent was SHOWN therefore anchored on a message no finding carried and hid
+// nothing. These cells pin the alias at the seam itself: it binds both anchor
+// kinds with no new policy, so a WEAK mark gets the same reach the strict one
+// has and the #1625 F1 blocking gate still stops it.
+describe("display-form alias for a mark spelled from a cut message (#5367)", () => {
+	const content = "const a = bad();\nconst b = alsoBad();\n";
+	/** 162 characters: only its first 100 render. */
+	const LONG = `${"x".repeat(100)}-tail-${"y".repeat(50)}`;
+	/** Two 162-character messages whose first 100 characters are identical. */
+	const SHARED = "s".repeat(100);
+	const SHARED_A = `${SHARED}-alpha-${"1".repeat(49)}`;
+	const SHARED_B = `${SHARED}-beta-${"2".repeat(49)}`;
+
+	function finding(
+		message: string,
+		line: 1 | 2,
+		semantic: "warning" | "blocking",
+	) {
+		return {
+			cwd: cwd(),
+			filePath: filePath(),
+			tool: "lsp",
+			rule: "no-bad",
+			message,
+			line,
+			semantic,
+		};
+	}
+
+	it.each([
+		["suppress", "suppress" as const],
+		["defer", "defer" as const],
+	])(
+		"a %s mark spelled from the displayed text drops the non-blocking finding it names",
+		(_label: string, disposition: "suppress" | "defer") => {
+			const target = finding(LONG, 1, "warning");
+			markDisposition(
+				cwd(),
+				{ ...target, message: LONG.slice(0, 100), content },
+				disposition,
+			);
+			const kept = applyDispositions(
+				[target, finding("unrelated", 2, "warning")],
+				cwd(),
+				filePath(),
+				content,
+			);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
+	it("a weak mark spelled from the displayed text does NOT drop a blocking finding (F1 holds through the alias)", () => {
+		const target = finding(LONG, 1, "blocking");
+		markDisposition(
+			cwd(),
+			{ ...target, message: LONG.slice(0, 100), content },
+			"suppress",
+		);
+		expect(applyDispositions([target], cwd(), filePath(), content)).toEqual([
+			target,
+		]);
+	});
+
+	it("a displayed-text mark drops neither of two findings that render the same text", () => {
+		const a = finding(SHARED_A, 1, "warning");
+		const b = finding(SHARED_B, 2, "warning");
+		markDisposition(
+			cwd(),
+			{ ...a, message: SHARED, content },
+			"false-positive",
+		);
+		expect(applyDispositions([a, b], cwd(), filePath(), content)).toEqual([
+			a,
+			b,
+		]);
+		// The alias is an alias for one message, not a wildcard over the rest:
+		// naming one message exactly still drops exactly that one.
+		markDisposition(cwd(), { ...a, content }, "false-positive");
+		expect(applyDispositions([a, b], cwd(), filePath(), content)).toEqual([b]);
+	});
+
+	it("a message that renders whole is unaffected: its own mark still drops it", () => {
+		// No cut, so no alias: this is the pre-#5367 behaviour, and the alias
+		// must not disturb it in either direction.
+		const short = finding("short message", 1, "warning");
+		markDisposition(cwd(), { ...short, content }, "false-positive");
+		expect(applyDispositions([short], cwd(), filePath(), content)).toEqual([]);
+	});
+});
+
 describe("F3 (#1625 review round): deferredThisSession is scoped per-project, not process-global", () => {
 	// `deferredThisSession` is a single module-level Set — but a WEAK anchor
 	// only encodes a RELATIVE path (`relativeFile` derives it from
