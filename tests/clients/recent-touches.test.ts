@@ -30,6 +30,26 @@ function recordFilePath(): string {
 	return path.join(dataDir, "recent-touches.json");
 }
 
+interface StoredTouch {
+	path: string;
+	reason: string;
+	ts: number;
+	pid: number;
+	sessionId?: string;
+}
+
+/** Read the record straight off disk, as an outside process would see it. */
+function readRecordEntries(): StoredTouch[] {
+	try {
+		const parsed = JSON.parse(fs.readFileSync(recordFilePath(), "utf-8"));
+		return Array.isArray(parsed?.entries)
+			? (parsed.entries as StoredTouch[])
+			: [];
+	} catch {
+		return [];
+	}
+}
+
 describe("recent-touches (#492 cross-process touched-files record)", () => {
 	const originalEnv = process.env.PI_LENS_AGENT_NUDGE;
 
@@ -122,6 +142,93 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 
 		const parsed = JSON.parse(fs.readFileSync(recordFilePath(), "utf-8"));
 		expect(parsed.entries).toHaveLength(1);
+	});
+
+	// #5377: the append was an unlocked async read-modify-write, so two
+	// publishes in one tick each computed the whole file from the same
+	// snapshot and the later rename published state without the earlier
+	// entry (the state-machine census lost an entry in 5 of 5 runs on
+	// master). RED FIRST on master: this drives the REAL producer seam
+	// (`publishFilesTouched`, clients/bus-publish.ts) over real files, with no
+	// mock of the store, the lock, or the filesystem.
+	it("keeps every entry when four publishes land in one tick", async () => {
+		const { publishFilesTouched } =
+			await import("../../clients/bus-publish.js");
+		const touched: { path: string; reason: "format" | "autofix" }[] = [
+			"a.ts",
+			"b.ts",
+			"c.ts",
+			"d.ts",
+		].map((name, i) => {
+			const p = path.join(dir, name);
+			fs.writeFileSync(p, "// touched", "utf-8");
+			return { path: p, reason: i % 2 === 0 ? "format" : "autofix" };
+		});
+		// One tick: every publish is issued before the first append can settle.
+		for (const t of touched) {
+			publishFilesTouched({
+				cwd: FAKE_CWD,
+				reason: t.reason,
+				paths: [t.path],
+				sessionId: "s-5377",
+			});
+		}
+
+		// The publish is fire-and-forget, so join the record on a real-clock
+		// deadline (shape 86: the wait ends on a deadline, never on a turn count).
+		const deadline = Date.now() + 2_000;
+		let entries = readRecordEntries();
+		while (entries.length < touched.length && Date.now() < deadline) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			entries = readRecordEntries();
+		}
+
+		expect(
+			entries.map((e) => `${path.basename(e.path)}:${e.reason}`).sort(),
+		).toEqual(["a.ts:format", "b.ts:autofix", "c.ts:format", "d.ts:autofix"]);
+	});
+
+	// The fold onto `clients/durable-store.ts` (#5377) must keep the on-disk
+	// shape readable both ways: a record written by a master build is still
+	// parsed by the locked commit, and its pre-existing entries survive the
+	// append (an old writer's record is a normal merge input, not a reset).
+	it("merges onto a record written by the pre-#5377 writer", async () => {
+		const legacyTs = Date.now() - 1000;
+		fs.writeFileSync(
+			recordFilePath(),
+			JSON.stringify({
+				entries: [
+					{
+						path: "/fake/project/legacy.ts",
+						reason: "autofix",
+						ts: legacyTs,
+						pid: 999999,
+					},
+				],
+			}),
+			"utf-8",
+		);
+
+		const { appendRecentTouches } =
+			await import("../../clients/recent-touches.js");
+		await appendRecentTouches({
+			cwd: FAKE_CWD,
+			reason: "format",
+			paths: ["/fake/project/newer.ts"],
+			sessionId: "s-5377",
+		});
+
+		const entries = readRecordEntries();
+		expect(entries.map((e) => path.basename(e.path))).toEqual([
+			"legacy.ts",
+			"newer.ts",
+		]);
+		expect(entries[0]).toMatchObject({
+			pid: 999999,
+			reason: "autofix",
+			ts: legacyTs,
+		});
+		expect(entries[1]).toMatchObject({ pid: process.pid, reason: "format" });
 	});
 
 	it("missing record file on first read does not throw", async () => {

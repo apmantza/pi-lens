@@ -33,13 +33,25 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { writeFileAtomicAsync } from "./atomic-write.js";
+import { commitDurableStoreAsync } from "./durable-store.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { normalizeFilePath } from "./path-utils.js";
 
 export const RECENT_TOUCHES_MAX_ENTRIES = 50;
 /** Freshness window for the CHILD session_start consumer (15 minutes). */
 const RECENT_TOUCHES_FRESHNESS_MS = 15 * 60 * 1000;
+
+/**
+ * Lock budget for the append's locked commit (#5377). The commit is a read of
+ * a ≤50-entry JSON file plus one atomic rename, so contention is a same-tick
+ * sibling waiting out its in-flight write: `retryMs` is one poll per sibling,
+ * and `waitMs` is generous because the publish is fire-and-forget (nothing on
+ * the write path awaits it) and a timed-out append is a lost nudge. Same shape
+ * as `writeRefreshStamp`'s budget in clients/installer/managed-tool-refresh.ts.
+ */
+const RECENT_TOUCHES_LOCK_WAIT_MS = 2000;
+const RECENT_TOUCHES_LOCK_RETRY_MS = 25;
+const RECENT_TOUCHES_LOCK_STALE_MS = 60_000;
 
 type RecentTouchReason = "autofix" | "format";
 
@@ -85,37 +97,38 @@ export function _resetRecentTouchesForTests(): void {
 
 // --- Read (never throws — missing file, corrupt JSON, or wrong shape ⇒ empty) ---
 
-async function readRecentTouchesAsync(cwd: string): Promise<RecentTouchesFile> {
+/**
+ * The ONE parse of the on-disk record shape, shared by the readers and by the
+ * locked commit's `deserialize` (#5377): a missing file, corrupt JSON, or a
+ * body without an `entries` array reads as an empty record, so a pre-#5377
+ * writer's file — the shape master wrote, and the only shape any deployed
+ * pi-lens has written — merges instead of resetting.
+ */
+function parseRecentTouchesRecord(
+	contents: string | undefined,
+): RecentTouchesFile {
+	if (contents === undefined) return { entries: [] };
 	try {
-		const raw = await fs.promises.readFile(recentTouchesPath(cwd), "utf-8");
-		const parsed = JSON.parse(raw);
-		if (parsed && Array.isArray(parsed.entries)) {
+		const parsed = JSON.parse(contents) as unknown;
+		if (parsed && Array.isArray((parsed as RecentTouchesFile).entries)) {
 			return parsed as RecentTouchesFile;
 		}
-		return { entries: [] };
 	} catch {
-		return { entries: [] };
+		// none: the record is a best-effort cross-process nudge feed; a corrupt
+		// body reads as empty (the pre-#5377 reader's policy, unchanged by the
+		// fold) rather than throwing into an append or a turn_start read.
 	}
+	return { entries: [] };
 }
 
-// --- Write (atomic tmp + rename via clients/atomic-write.ts, #762) ---
-
-async function writeRecentTouchesAsync(
-	cwd: string,
-	file: RecentTouchesFile,
-): Promise<void> {
-	const dir = getProjectDataDir(cwd);
-	const target = recentTouchesPath(cwd);
+async function readRecentTouchesAsync(cwd: string): Promise<RecentTouchesFile> {
 	try {
-		await fs.promises.mkdir(dir, { recursive: true });
+		return parseRecentTouchesRecord(
+			await fs.promises.readFile(recentTouchesPath(cwd), "utf-8"),
+		);
 	} catch {
-		// Best-effort record — a failed mkdir just means this batch of touches
-		// never reaches other instances; never throw for the caller (the
-		// producer seam is the fire-and-forget bus-publish path).
-		return;
+		return { entries: [] };
 	}
-	// bestEffort (default): same reasoning as the mkdir failure above.
-	await writeFileAtomicAsync(target, JSON.stringify(file));
 }
 
 export interface AppendRecentTouchesArgs {
@@ -126,12 +139,30 @@ export interface AppendRecentTouchesArgs {
 }
 
 /**
- * Append this process's touched paths to the shared record (read-modify-
- * write-whole-file, ring-buffer capped at `RECENT_TOUCHES_MAX_ENTRIES` —
- * oldest entries drop first). Called from the SAME seam as
- * `publishFilesTouched` (clients/bus-publish.ts) so parent and child run
- * identical code. Never throws — callers must swallow/log failures
- * themselves (this function already does internally via the write helper).
+ * Append this process's touched paths to the shared record through the shared
+ * durable-record seam `clients/durable-store.ts` (#5377): the authoritative
+ * read, the merge, and the atomic publication all happen while the record's
+ * PID lock is held, so two `publishFilesTouched` calls in one tick each merge
+ * onto the winner's committed state and both entries survive.
+ *
+ * Before the fold this was a hand-rolled async read → merge → write-whole-file
+ * with nothing between the read and the rename, so each writer published the
+ * state it computed from its own snapshot and last-rename-wins silently
+ * discarded the other's entry (`clients/atomic-write.ts` explicitly provides
+ * no read-modify-write isolation). The deletion of that hand-rolled write is
+ * the fix; no lock is introduced here.
+ *
+ * Ring buffer: keep the newest `RECENT_TOUCHES_MAX_ENTRIES` (oldest-first
+ * array, so slice from the tail), computed inside the lock off the committed
+ * disk state.
+ *
+ * Failure policy: a failed `mkdir` (no writable project-data dir) still just
+ * drops this batch. Everything the commit itself can fail at — a lock that no
+ * sibling released inside {@link RECENT_TOUCHES_LOCK_WAIT_MS}, or a publication
+ * that could not rename — now THROWS, because the seam publishes through a
+ * throwing atomic write so a lost update cannot look like a clean append. Its
+ * only production caller, `publishFilesTouched` (clients/bus-publish.ts),
+ * already catches and dbg-logs it on the fire-and-forget path.
  */
 export async function appendRecentTouches(
 	args: AppendRecentTouchesArgs,
@@ -147,14 +178,35 @@ export async function appendRecentTouches(
 		pid,
 		sessionId: args.sessionId,
 	}));
-	const file = await readRecentTouchesAsync(args.cwd);
-	const merged = [...file.entries, ...newEntries];
-	// Ring buffer: keep the newest N (oldest-first array, so slice from the tail).
-	const capped =
-		merged.length > RECENT_TOUCHES_MAX_ENTRIES
-			? merged.slice(merged.length - RECENT_TOUCHES_MAX_ENTRIES)
-			: merged;
-	await writeRecentTouchesAsync(args.cwd, { entries: capped });
+	// The lock and the staging file both live in the project-data dir, so it
+	// has to exist first. Best-effort: a failed mkdir just means this batch of
+	// touches never reaches other instances (the producer seam is the
+	// fire-and-forget bus-publish path).
+	try {
+		await fs.promises.mkdir(getProjectDataDir(args.cwd), { recursive: true });
+	} catch {
+		// none: an uncreatable project-data dir drops this batch, exactly as the
+		// pre-#5377 write helper did; nothing else can reach the record either.
+		return;
+	}
+	await commitDurableStoreAsync<RecentTouchesFile>({
+		path: recentTouchesPath(args.cwd),
+		deserialize: parseRecentTouchesRecord,
+		merge: (disk) => {
+			const merged = [...disk.entries, ...newEntries];
+			return {
+				entries:
+					merged.length > RECENT_TOUCHES_MAX_ENTRIES
+						? merged.slice(merged.length - RECENT_TOUCHES_MAX_ENTRIES)
+						: merged,
+			};
+		},
+		serialize: (file) => JSON.stringify(file),
+		waitMs: RECENT_TOUCHES_LOCK_WAIT_MS,
+		retryMs: RECENT_TOUCHES_LOCK_RETRY_MS,
+		staleMs: RECENT_TOUCHES_LOCK_STALE_MS,
+		timeoutMessage: "Timed out waiting for recent-touches record lock",
+	});
 }
 
 // --- Shared foreign-entry filter (both consumers) ---
