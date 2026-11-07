@@ -32,8 +32,6 @@ export const DEFAULT_ITERATIONS: number;
 export const DEFAULT_CONFIDENCE: number;
 export const DEFAULT_SEED: number;
 export function mulberry32(seed: number): () => number;
-/** The p-quantile of an ascending sample, by the clamped lower-rank index. */
-export function percentile(sorted: readonly number[], p: number): number;
 export function bootstrapCompare(
 	base: readonly number[],
 	head: readonly number[],

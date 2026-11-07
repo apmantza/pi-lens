@@ -678,11 +678,11 @@ describe("analyze-pi-lens-logs.mjs — unconfirmedByReason attribution (#1618 R5
  * `2026-09-29`, which is what pins the distribution to the window instead of
  * to the whole file.
  *
- * Percentiles are the clamped lower-rank index the hot-path gate already uses
- * (`percentile` in `scripts/lib/latency-stats.mjs`): p(q) is the ascending
- * sample at index `clamp(floor(q * n), 0, n-1)`. The 10-row `pre_window_phase`
- * group pins that rule at the index where it differs from nearest-rank
- * (floor(0.5*10)=5 -> 60, where nearest-rank would answer 50).
+ * Percentiles are the clamped lower-rank index (`lowerRankPercentile` in
+ * `scripts/analyze-pi-lens-logs.mjs`): p(q) is the ascending sample at index
+ * `clamp(floor(q * n), 0, n-1)`. The 10-row `pre_window_phase` group pins that
+ * rule at the index where it differs from nearest-rank (floor(0.5*10)=5 -> 60,
+ * where nearest-rank would answer 50).
  */
 describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () => {
 	const FIXTURES = path.resolve(
@@ -706,8 +706,8 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 		const latency = dist();
 		const rows = latency.phaseLatency.rows;
 		const row = group(rows, "turn_end:inline_blocker_policy");
-		// Fixture durations 10,20,30,40,50,60,70,80,1000 (ascending): the shared
-		// percentile answers p50 at index floor(0.5*9)=4 -> 50 and p95 at
+		// Fixture durations 10,20,30,40,50,60,70,80,1000 (ascending): the rule
+		// answers p50 at index floor(0.5*9)=4 -> 50 and p95 at
 		// index floor(0.95*9)=8 -> 1000.
 		expect(row).toMatchObject({
 			tool: "turn_end",
