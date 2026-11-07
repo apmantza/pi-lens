@@ -91,6 +91,7 @@ type DeferredToolModel = {
 	compat?: {
 		supportsToolSearch?: boolean;
 		supportsMidConvoSystemMessages?: boolean;
+		supportsMidConvoToolChanges?: boolean;
 	};
 };
 
@@ -146,17 +147,30 @@ export function supportsMidConvoSystemMessages(
  * Whether the host will send this model deferred (searchable) tool
  * definitions rather than the full inline list.
  *
- * Read the host's own decision off `ctx.model.compat` — pi resolves that
- * flag from the model config (`core/model-config`, `compat.supportsToolSearch`)
- * and it is the only capability signal a consumer can honestly observe.
- * A missing flag means "unknown", which we report as false: this value only
- * annotates the `tool_set_mutation` log line, so guessing high would make the
- * log lie, while guessing low merely under-claims.
+ * Read the host's own decision off `ctx.model.compat`. pi gates that
+ * capability on TWO arms, and the predicate carries both (#5361 r2):
+ *  - the OpenAI Responses path (`pi-ai/api/openai-responses.js`, shared with
+ *    azure and codex through `getResponsesToolSupport`):
+ *    `compat.supportsToolSearch` selects "additions" tool support;
+ *  - the Anthropic path (`pi-ai/api/anthropic-messages.js:153,897` in pi
+ *    1.5.0): `nativeToolChanges` is `compat.supportsMidConvoSystemMessages &&
+ *    compat.supportsMidConvoToolChanges`.
+ * Both are pi's own resolved facts (`core/model-config` fills them from the
+ * model config) and the only capability signals a consumer can honestly
+ * observe. A model stating neither is unknown, which we report as false: this
+ * value only annotates the `tool_set_mutation` log line, so guessing high
+ * would make the log lie, while guessing low merely under-claims.
  */
 export function supportsDeferredTools(
 	model: DeferredToolModel | undefined,
 ): boolean {
-	return model?.compat?.supportsToolSearch === true;
+	const compat = model?.compat;
+	if (!compat) return false;
+	return (
+		compat.supportsToolSearch === true ||
+		(compat.supportsMidConvoSystemMessages === true &&
+			compat.supportsMidConvoToolChanges === true)
+	);
 }
 
 /**
