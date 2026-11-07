@@ -617,10 +617,39 @@ export function renderCascadeResult(
  */
 interface PendingNeighbor {
 	filePath: string;
-	/** `cascadeErrorKey` → the turn the error was first delivered. */
-	errors: Map<string, number>;
+	/** `cascadeErrorKey` → the error's first-delivered turn and its
+	 * disposition identity (#5344). */
+	errors: Map<string, PendingNeighborError>;
 	/** When the observation behind the record was made. */
 	checkedAt: number;
+}
+
+/** One recorded error: when the agent first saw it, and what a later mark
+ * has to match to retire it. */
+interface PendingNeighborError {
+	/** The turn the error was first delivered. */
+	turn: number;
+	identity: CascadePendingError;
+}
+
+/**
+ * The identity that retires a pending error: what a disposition anchor binds
+ * (#5344), not the whole diagnostic. A mark is anchored on the path, the
+ * `(tool, rule)` identity, the message and the flagged line's content, and a
+ * `"blocking"` finding can only be dropped by the strict anchor, so those are
+ * exactly the fields a later turn needs to re-judge the stored error through
+ * `filterFindingsByDisposition`. Every one is a reference to a string the
+ * record already kept inside `cascadeErrorKey`, so the record grows by one
+ * small object per error, bounded with the record itself
+ * (`MAX_PENDING_NEIGHBORS` × the per-file display cap).
+ */
+export interface CascadePendingError {
+	filePath: string;
+	message: string;
+	line?: number;
+	tool: string;
+	rule?: string;
+	semantic?: string;
 }
 
 /** Bound on the record; the oldest-written entry goes first. */
@@ -655,7 +684,7 @@ export function cascadeStillPresentSince(
 	const first = pendingNeighbors
 		.get(normalizeMapKey(filePath))
 		?.errors.get(cascadeErrorKey(diagnostic));
-	return first !== undefined && first < turn ? first : undefined;
+	return first !== undefined && first.turn < turn ? first.turn : undefined;
 }
 
 /**
@@ -671,10 +700,20 @@ export function recordDeliveredCascadeNeighbor(
 ): void {
 	const key = normalizeMapKey(filePath);
 	const previous = pendingNeighbors.get(key);
-	const errors = new Map<string, number>();
+	const errors = new Map<string, PendingNeighborError>();
 	for (const d of diagnostics) {
 		const k = cascadeErrorKey(d);
-		errors.set(k, previous?.errors.get(k) ?? turn);
+		errors.set(k, {
+			turn: previous?.errors.get(k)?.turn ?? turn,
+			identity: {
+				filePath: d.filePath,
+				message: d.message,
+				...(d.line !== undefined && { line: d.line }),
+				tool: d.tool,
+				...(d.rule !== undefined && { rule: d.rule }),
+				...(d.semantic !== undefined && { semantic: d.semantic }),
+			},
+		});
 	}
 	pendingNeighbors.delete(key);
 	if (errors.size === 0) return;
@@ -712,11 +751,18 @@ export function listCascadePendingNeighbors(): ReadonlyArray<{
 	filePath: string;
 	errorCount: number;
 	checkedAt: number;
+	/**
+	 * Each recorded error's disposition identity (#5344), so a mark made after
+	 * the delivery that wrote the record is honoured the next time the record
+	 * renders instead of waiting for a fresh observation of the neighbour.
+	 */
+	errors: readonly CascadePendingError[];
 }> {
 	return [...pendingNeighbors.values()].map((entry) => ({
 		filePath: entry.filePath,
 		errorCount: entry.errors.size,
 		checkedAt: entry.checkedAt,
+		errors: [...entry.errors.values()].map((error) => error.identity),
 	}));
 }
 
