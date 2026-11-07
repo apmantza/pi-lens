@@ -775,6 +775,7 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 			totalMs: 0,
 			groups: 0,
 			shown: 0,
+			skippedRows: 0,
 			rows: [],
 		});
 	});
@@ -1033,6 +1034,73 @@ describe("analyze-pi-lens-logs.mjs discloses the top-N cap (#5263 r2 F3)", () =>
 			"../fixtures/analyze-logs/sample-rules",
 		);
 		expect(runAnalyzer(sample)).not.toMatch(/showing \d+ of \d+ groups/);
+	});
+});
+
+// Recurrence: the dispatcher writes a `status: "pending"` runner row with
+// `durationMs: 0` for a collect-later runner (`clients/dispatch/dispatcher.ts`,
+// #2122 F1) and a settled row for the same runner at turn end. Counting the
+// pending row as work put a phantom 0 sample in that runner's p50 and a second
+// row in its count. The skipped-row total lets a reader reconcile the section
+// against `runnerStatus`, including runners that only ever had non-work rows
+// and so own no group (#5263 C4.1, C7.1).
+describe("analyze-pi-lens-logs.mjs runner non-work rows (#5263 C4.1, C7.1)", () => {
+	let root: string;
+	let latency: any;
+
+	beforeAll(() => {
+		root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-loganalyze-pending-"),
+		);
+		const runner = (runnerId: string, status: string, durationMs: number) =>
+			JSON.stringify({
+				type: "runner",
+				runnerId,
+				filePath: "/proj/a",
+				status,
+				durationMs,
+				diagnosticCount: 0,
+				ts: "2026-09-30T10:00:00.000Z",
+			});
+		fs.writeFileSync(
+			path.join(root, "latency.log"),
+			[
+				// Pending-then-settled: one measured run of 400ms, one phantom 0.
+				runner("oxlint", "pending", 0),
+				runner("oxlint", "succeeded", 400),
+				// Only ever pending, only ever skipped: no group, still counted.
+				runner("biome", "pending", 0),
+				runner("ruff", "test_file_skipped", 9999),
+			].join("\n") + "\n",
+		);
+		latency = runReport(root).latency;
+	});
+
+	afterAll(() => removeTempDirSync(root));
+
+	it("counts a pending row as non-work, not as a zero sample", () => {
+		const row = latency.runnerLatency.rows.find((r: any) => r.key === "oxlint");
+		expect(row).toMatchObject({
+			count: 1,
+			p50Ms: 400,
+			p95Ms: 400,
+			maxMs: 400,
+			totalMs: 400,
+			skippedRows: 1,
+		});
+		expect(latency.runnerLatency.rows.map((r: any) => r.key)).toEqual([
+			"oxlint",
+		]);
+	});
+
+	it("reports the total of non-work rows, including runners with no group", () => {
+		expect(latency.runnerLatency.skippedRows).toBe(3);
+	});
+
+	it("renders the total in the runner section", () => {
+		const text = runAnalyzer(root);
+		const section = text.split("\nRunner latency\n")[1]?.split("\n\n")[0];
+		expect(section).toMatch(/3 skipped or pending rows excluded/);
 	});
 });
 

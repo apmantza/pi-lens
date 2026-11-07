@@ -250,9 +250,9 @@ function createState(files) {
 			// and are therefore excluded from the phase sample like `tool_result`.
 			phaseParentRows: 0,
 			runnerDurations: new Map(),
-			// Runner rows that record a plan decision instead of work (`skipped`,
-			// `not_registered`), counted per runner so a distribution count can be
-			// reconciled against `runnerStatus`.
+			// Runner rows that record a plan decision or a placeholder instead of
+			// work (`skipped`, `not_registered`, `pending`), counted per runner so a
+			// distribution count can be reconciled against `runnerStatus`.
 			runnerSkipped: counter(),
 			skillsResolved: counter(),
 			// D1: every latency row timestamp (ms) in window, for the coverage-gap
@@ -1953,11 +1953,20 @@ function pushDurationGroup(groups, key, ms) {
  * counts as work: the suffix cannot match an empty string, so it needs no clause
  * of its own — pinned by the `status: ""` cell in
  * `tests/fixtures/analyze-logs/sample-rules/latency.log`.
+ *
+ * `pending` is the collect-later runner's placeholder (`durationMs: 0`, written
+ * by `clients/dispatch/dispatcher.ts` before the turn-end result settles it):
+ * it measures nothing, so it is non-work like the skip family and the settled
+ * row alone carries the runner's time.
  */
 function runnerRowRan(entry) {
 	const status = entry.status;
 	if (typeof status !== "string") return true;
-	return !/(?:^|_)skipped$/.test(status) && status !== "not_registered";
+	return (
+		!/(?:^|_)skipped$/.test(status) &&
+		status !== "not_registered" &&
+		status !== "pending"
+	);
 }
 
 /**
@@ -2042,6 +2051,11 @@ function buildLatencyDistributions(state) {
 	for (const row of runnerLatency.rows) {
 		row.skippedRows = state.latency.runnerSkipped.get(row.key);
 	}
+	// The per-row count cannot show a runner that only ever had non-work rows
+	// (it owns no group), so the section carries the whole total (#5263 C7.1).
+	runnerLatency.skippedRows = state.latency.runnerSkipped
+		.entries()
+		.reduce((sum, [, count]) => sum + count, 0);
 	return { phaseLatency, runnerLatency };
 }
 
@@ -3102,6 +3116,11 @@ function printReport(report) {
 		console.log(
 			`  p50/p95/max (clamped floor-rank percentile) per runner, share of ${formatMs(runnerDist.totalMs)}ms runner time (skip rows excluded)`,
 		);
+		if (runnerDist.skippedRows) {
+			console.log(
+				`  ${runnerDist.skippedRows} skipped or pending rows excluded (they record a decision or a placeholder, not work)`,
+			);
+		}
 		for (const row of runnerDist.rows)
 			console.log(`  ${formatLatencyRow(row)}`);
 		const hidden = runnerDist.groups - runnerDist.shown;
