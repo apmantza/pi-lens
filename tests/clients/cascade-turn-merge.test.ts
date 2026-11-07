@@ -7,6 +7,7 @@ import { CacheManager } from "../../clients/cache-manager.js";
 import type { CascadeResult } from "../../clients/cascade-types.js";
 import { markDisposition } from "../../clients/diagnostic-dispositions.js";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
+import type { LSPDiagnostic } from "../../clients/lsp/client.js";
 import { consumeTurnEndFindings } from "../../clients/runtime-context.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleTurnEnd } from "../../clients/runtime-turn.js";
@@ -1897,6 +1898,70 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 		}
 	});
 
+	/** Turn 1 delivers `messages` for n1; each entry of `marks` is then
+	 * marked with the real `markDisposition`; turn 2 edits an unrelated file.
+	 * Returns that turn's delivered text. Shared by the #5344 pending-render
+	 * cells and the #5367 displayed-text cells: both ask the same question of
+	 * the same two seams, a stored pending error and a real mark. */
+	async function deliveredThenMarked(
+		env: ReturnType<typeof setupTestEnvironment>,
+		messages: string[],
+		marks: Array<{
+			message: string;
+			line: number;
+			tool?: string;
+			disposition?: "false-positive" | "suppress" | "defer";
+		}>,
+	): Promise<string> {
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const a = path.join(env.tmpDir, "a.ts");
+		const other = path.join(env.tmpDir, "other.ts");
+		const n1 = path.join(env.tmpDir, "n1.ts");
+		// A neighbour whose every reported line exists on disk: a strict
+		// (false-positive) anchor hashes the flagged line's content.
+		fs.writeFileSync(
+			n1,
+			`${messages.map((_, i) => `export const n${i + 1} = 1;`).join("\n")}\n`,
+		);
+
+		runtime.beginTurn();
+		edit(cacheManager, a, env.tmpDir);
+		runtime.appendCascadeRun({
+			filePath: a,
+			result: await computedResult(env.tmpDir, a, [[n1, messages]]),
+			neighborCount: 1,
+			diagnosticCount: messages.length,
+			observedNeighborPaths: [n1],
+			checkedAt: Date.now(),
+		} as any);
+		expect(await turnEndOf(runtime, cacheManager, env.tmpDir)).toContain(
+			"Cascade errors in",
+		);
+
+		const content = fs.readFileSync(n1, "utf-8");
+		for (const mark of marks) {
+			markDisposition(
+				env.tmpDir,
+				{
+					cwd: env.tmpDir,
+					filePath: n1,
+					...(mark.tool !== undefined && { tool: mark.tool }),
+					rule: "cascade:test",
+					message: mark.message,
+					line: mark.line,
+					content,
+				},
+				mark.disposition ?? "false-positive",
+			);
+		}
+		logCascadeMock.mockClear();
+
+		runtime.beginTurn();
+		edit(cacheManager, other, env.tmpDir);
+		return turnEndOf(runtime, cacheManager, env.tmpDir);
+	}
+
 	// #5344: a neighbour error the agent marks false-positive AFTER the
 	// delivery that created the pending record kept rendering at blocker tier
 	// as "N error(s) unresolved" on every later turn: the pending render read
@@ -1905,68 +1970,6 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 	// Recurrence guard: a render of a STORED finding must apply the same
 	// disposition seam a fresh observation applies at its compute.
 	describe("#5344 pending cascade errors honour dispositions", () => {
-		/** Turn 1 delivers `messages` for n1; each entry of `marks` is then
-		 * marked false-positive with the real `markDisposition`; turn 2 edits an
-		 * unrelated file. Returns that turn's delivered text. */
-		async function deliveredThenMarked(
-			env: ReturnType<typeof setupTestEnvironment>,
-			messages: string[],
-			marks: Array<{
-				message: string;
-				line: number;
-				tool?: string;
-				disposition?: "false-positive" | "suppress" | "defer";
-			}>,
-		): Promise<string> {
-			const runtime = new RuntimeCoordinator();
-			const cacheManager = new CacheManager(false);
-			const a = path.join(env.tmpDir, "a.ts");
-			const other = path.join(env.tmpDir, "other.ts");
-			const n1 = path.join(env.tmpDir, "n1.ts");
-			// A neighbour whose every reported line exists on disk: a strict
-			// (false-positive) anchor hashes the flagged line's content.
-			fs.writeFileSync(
-				n1,
-				`${messages.map((_, i) => `export const n${i + 1} = 1;`).join("\n")}\n`,
-			);
-
-			runtime.beginTurn();
-			edit(cacheManager, a, env.tmpDir);
-			runtime.appendCascadeRun({
-				filePath: a,
-				result: await computedResult(env.tmpDir, a, [[n1, messages]]),
-				neighborCount: 1,
-				diagnosticCount: messages.length,
-				observedNeighborPaths: [n1],
-				checkedAt: Date.now(),
-			} as any);
-			expect(await turnEndOf(runtime, cacheManager, env.tmpDir)).toContain(
-				"Cascade errors in",
-			);
-
-			const content = fs.readFileSync(n1, "utf-8");
-			for (const mark of marks) {
-				markDisposition(
-					env.tmpDir,
-					{
-						cwd: env.tmpDir,
-						filePath: n1,
-						...(mark.tool !== undefined && { tool: mark.tool }),
-						rule: "cascade:test",
-						message: mark.message,
-						line: mark.line,
-						content,
-					},
-					mark.disposition ?? "false-positive",
-				);
-			}
-			logCascadeMock.mockClear();
-
-			runtime.beginTurn();
-			edit(cacheManager, other, env.tmpDir);
-			return turnEndOf(runtime, cacheManager, env.tmpDir);
-		}
-
 		it("a false-positive mark made after delivery drops the pending error from the unresolved line (#5344)", async () => {
 			const env = setupTestEnvironment("cascade-5344-marked-");
 			try {
@@ -2096,6 +2099,224 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 				);
 				expect(second).toMatch(/n1\.ts: 2 error\(s\) unresolved/);
 				expect(second).toContain("Cascade errors from an earlier turn");
+			} finally {
+				env.cleanup();
+			}
+		});
+	});
+
+	// #5367: the cascade line prints `message.split("\n")[0].slice(0, 100)`, so
+	// for a multiline or over-100-character error the text the agent is SHOWN is
+	// not the message the anchor hashes (`normalizeMessage` only folds whitespace
+	// and case). A mark spelled from that line therefore anchored on a message no
+	// finding carries: the pending line kept rendering every later turn and
+	// `suppressed` stayed 0 on the fresh lane. Recurrence guard: a mark must be
+	// honored against the RENDER the agent read, through the same display
+	// function the render uses — and never against a second error that merely
+	// shares that rendering.
+	describe("#5367 a pending error marked from the displayed cascade text is hidden", () => {
+		/** 162 characters: the line prints only its first 100. */
+		const LONG = `${"a".repeat(100)}-tail-${"z".repeat(50)}`;
+		/** Two lines: the line prints only the first. */
+		const MULTI = "multi line error first line\nsecond line names the detail";
+		/** Two 162-character errors whose first 100 characters are identical. */
+		const SHARED = "s".repeat(100);
+		const SHARED_A = `${SHARED}-alpha-${"1".repeat(49)}`;
+		const SHARED_B = `${SHARED}-beta-${"2".repeat(49)}`;
+
+		it("hides a pending error whose mark quotes the 100-character cut", async () => {
+			const env = setupTestEnvironment("cascade-5367-long-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					[LONG],
+					[{ message: LONG.slice(0, 100), line: 1, tool: "lsp" }],
+				);
+				expect(second).not.toMatch(/n1\.ts: \d+ error\(s\) unresolved/);
+				expect(second).not.toContain("Cascade errors from an earlier turn");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("hides a pending error whose mark quotes the first line of a multiline message", async () => {
+			const env = setupTestEnvironment("cascade-5367-multiline-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					[MULTI],
+					[{ message: MULTI.split("\n")[0], line: 1, tool: "lsp" }],
+				);
+				expect(second).not.toMatch(/n1\.ts: \d+ error\(s\) unresolved/);
+				expect(second).not.toContain("Cascade errors from an earlier turn");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// Controls. Both stay green before the fix, so the two cells above cannot
+		// pass because the harness never reaches the pending line, and both must
+		// stay green after it: the display form is only an alias for the message it
+		// was cut from, never a wildcard over the errors that share the cut.
+		it("hides the same errors when the mark quotes the full message", async () => {
+			const env = setupTestEnvironment("cascade-5367-full-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					[LONG, MULTI],
+					[
+						{ message: LONG, line: 1, tool: "lsp" },
+						{ message: MULTI, line: 2, tool: "lsp" },
+					],
+				);
+				expect(second).not.toMatch(/n1\.ts: \d+ error\(s\) unresolved/);
+				expect(second).not.toContain("Cascade errors from an earlier turn");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("hides neither of two pending errors that share the displayed text", async () => {
+			const env = setupTestEnvironment("cascade-5367-shared-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					[SHARED_A, SHARED_B],
+					[{ message: SHARED, line: 1, tool: "lsp" }],
+				);
+				// The mark is ambiguous: either error could be the one it quotes.
+				expect(second).toMatch(/n1\.ts: 2 error\(s\) unresolved/);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("hides exactly one of two pending errors whose mark names its full message", async () => {
+			const env = setupTestEnvironment("cascade-5367-shared-full-");
+			try {
+				// The count above is the display alias, not a pending render no mark
+				// can reach: naming one message exactly drops exactly that error.
+				const second = await deliveredThenMarked(
+					env,
+					[SHARED_A, SHARED_B],
+					[{ message: SHARED_A, line: 1, tool: "lsp" }],
+				);
+				expect(second).toMatch(/n1\.ts: 1 error\(s\) unresolved/);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// The FRESH lane (#5367 evidence: `suppressed` stayed 0 for a
+		// displayed-text mark on master, 1 for the full-message mark). Same marks,
+		// same uniqueness rule, one turn earlier: a real
+		// `markDisposition` then the production display policy the five cascade
+		// render sites run.
+		async function markedThenFresh(
+			env: ReturnType<typeof setupTestEnvironment>,
+			messages: string[],
+			marks: Array<{ message: string; line: number }>,
+		): Promise<{ survivors: number; suppressed: number }> {
+			const { applyCascadeDisplayPolicy } =
+				await import("../../clients/cascade-format.js");
+			const n1 = path.join(env.tmpDir, "n1.ts");
+			fs.writeFileSync(
+				n1,
+				`${messages.map((_, i) => `export const n${i + 1} = 1;`).join("\n")}\n`,
+			);
+			const content = fs.readFileSync(n1, "utf-8");
+			for (const mark of marks) {
+				markDisposition(
+					env.tmpDir,
+					{
+						cwd: env.tmpDir,
+						filePath: n1,
+						tool: "lsp",
+						rule: "cascade:test",
+						message: mark.message,
+						line: mark.line,
+						content,
+					},
+					"false-positive",
+				);
+			}
+			const errors: LSPDiagnostic[] = messages.map((message, i) => ({
+				severity: 1,
+				message,
+				source: "cascade",
+				code: "test",
+				range: {
+					start: { line: i, character: 0 },
+					end: { line: i, character: 1 },
+				},
+			}));
+			const result = applyCascadeDisplayPolicy(errors, {
+				cwd: env.tmpDir,
+				policyRoot: env.tmpDir,
+				filePath: n1,
+				content,
+			});
+			return {
+				survivors: result.diagnostics.length,
+				suppressed: result.suppressed,
+			};
+		}
+
+		it("hides a fresh error whose mark quotes the 100-character cut (#5367 fresh lane)", async () => {
+			const env = setupTestEnvironment("cascade-5367-fresh-long-");
+			try {
+				const result = await markedThenFresh(
+					env,
+					[LONG],
+					[{ message: LONG.slice(0, 100), line: 1 }],
+				);
+				expect(result.suppressed).toBe(1);
+				expect(result.survivors).toBe(0);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("hides a fresh error whose mark quotes the first line of a multiline message (#5367 fresh lane)", async () => {
+			const env = setupTestEnvironment("cascade-5367-fresh-multi-");
+			try {
+				const result = await markedThenFresh(
+					env,
+					[MULTI],
+					[{ message: MULTI.split("\n")[0], line: 1 }],
+				);
+				expect(result.suppressed).toBe(1);
+				expect(result.survivors).toBe(0);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("hides neither of two fresh errors that share the displayed text (#5367 fresh control)", async () => {
+			const env = setupTestEnvironment("cascade-5367-fresh-shared-");
+			try {
+				const result = await markedThenFresh(
+					env,
+					[SHARED_A, SHARED_B],
+					[{ message: SHARED, line: 1 }],
+				);
+				expect(result.suppressed).toBe(0);
+				expect(result.survivors).toBe(2);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("hides a fresh error whose mark quotes the full message (#5367 fresh control)", async () => {
+			const env = setupTestEnvironment("cascade-5367-fresh-full-");
+			try {
+				const result = await markedThenFresh(
+					env,
+					[LONG],
+					[{ message: LONG, line: 1 }],
+				);
+				expect(result.suppressed).toBe(1);
+				expect(result.survivors).toBe(0);
 			} finally {
 				env.cleanup();
 			}
