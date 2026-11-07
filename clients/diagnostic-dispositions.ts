@@ -800,29 +800,40 @@ export function applyDispositions<T extends DispositionCandidate>(
 	const aliases = displayFormAliases(diagnostics);
 	return diagnostics.filter((d) => {
 		const { strict, weak } = anchorsForDiagnostic(cwd, filePath, d, content);
-		const alias = aliases.get(d);
-		const aliasAnchors =
-			alias === undefined
-				? undefined
-				: anchorsForDiagnostic(
-						cwd,
-						filePath,
-						{ ...d, message: alias },
-						content,
-					);
 		const isBlocking = d.semantic === "blocking";
+		// #5367: the alias anchors use the same two derivations the primary pair
+		// uses, with the message replaced by its displayed form. The WEAK alias is
+		// computed only for a non-blocking candidate: #1625 F1 already guarantees a
+		// blocking finding drops on its STRICT anchor alone, so hashing the weak one
+		// there is dead work on a population where it is always taken (a cascade
+		// renders ERRORs only).
+		const alias = aliases.get(d);
+		let aliasStrict: string | undefined;
+		let aliasWeak: string | undefined;
+		if (alias !== undefined) {
+			const aliasArgs = {
+				cwd,
+				filePath,
+				tool: d.tool,
+				rule: d.rule,
+				message: alias,
+				line: d.line,
+				content,
+			};
+			aliasStrict = computeStrictAnchor(aliasArgs);
+			if (!isBlocking) aliasWeak = computeWeakAnchor(aliasArgs);
+		}
 		if (
 			!isBlocking &&
 			(deferred?.has(weak) ||
-				(aliasAnchors !== undefined &&
-					deferred?.has(aliasAnchors.weak) === true))
+				(aliasWeak !== undefined && deferred?.has(aliasWeak)))
 		) {
 			return false;
 		}
 		if (
 			dispositions?.[strict]?.disposition === "false-positive" ||
-			(aliasAnchors !== undefined &&
-				dispositions?.[aliasAnchors.strict]?.disposition === "false-positive")
+			(aliasStrict !== undefined &&
+				dispositions?.[aliasStrict]?.disposition === "false-positive")
 		) {
 			return false;
 		}
@@ -835,8 +846,8 @@ export function applyDispositions<T extends DispositionCandidate>(
 		if (
 			!isBlocking &&
 			(dispositions?.[weak]?.disposition === "suppress" ||
-				(aliasAnchors !== undefined &&
-					dispositions?.[aliasAnchors.weak]?.disposition === "suppress"))
+				(aliasWeak !== undefined &&
+					dispositions?.[aliasWeak]?.disposition === "suppress"))
 		) {
 			return false;
 		}
