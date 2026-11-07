@@ -61,6 +61,7 @@ import {
 	type McpAnalyzeResult,
 	moduleReport,
 	projectReport,
+	projectReportViewIsJson,
 	projectScan,
 	readEnclosing,
 	readSymbol,
@@ -836,9 +837,10 @@ const ALL_TOOLS = [
 				},
 				view: {
 					type: "string",
-					// Plain string, no enum: "json" is the JSON hatch; anything else is text.
+					// Plain string, no enum: "json" (or any "*-json" preset name,
+					// #5372) is the JSON hatch; anything else is text.
 					description:
-						'Payload tier. "json" returns the full JSON report; any other value (or omitting view) returns the default line-oriented TEXT rendering.',
+						'Payload tier. "json" (or any "*-json" preset name) returns the full JSON report; any other value (or omitting view) returns the default line-oriented TEXT rendering.',
 				},
 			},
 		},
@@ -1439,7 +1441,7 @@ async function callTool(
 				isError: true,
 			};
 		}
-		if (args.view === "json") {
+		if (projectReportViewIsJson(args.view)) {
 			// JSON hatch: the handler's payload stays a single parseable document —
 			// no staleness prose is appended to it (#5159). Staleness already
 			// lives inside the document's own trust notes. The wire still stamps
@@ -1541,20 +1543,19 @@ async function callTool(
 		const kinds = Array.isArray(args.kinds)
 			? args.kinds.filter((k): k is string => typeof k === "string")
 			: undefined;
+		// #5372: the max(1, floor) clamp lives in readEnclosing, so pi and MCP
+		// answer the same for 0, -5 and 2.5; non-finite values keep no-cap.
 		const maxLines =
-			typeof args.maxLines === "number" && Number.isFinite(args.maxLines)
-				? Math.max(1, Math.floor(args.maxLines))
-				: undefined;
+			typeof args.maxLines === "number" ? args.maxLines : undefined;
 		const onOversize =
 			args.onOversize === "error" ||
 			args.onOversize === "slice" ||
 			args.onOversize === "outline"
 				? args.onOversize
 				: undefined;
+		// #5372: same rule for aroundLine — the engine's slice branch clamps it.
 		const aroundLine =
-			typeof args.aroundLine === "number" && Number.isFinite(args.aroundLine)
-				? Math.max(1, Math.floor(args.aroundLine))
-				: undefined;
+			typeof args.aroundLine === "number" ? args.aroundLine : undefined;
 		const result = await readEnclosing(file, line, cwd, {
 			kinds,
 			maxLines,

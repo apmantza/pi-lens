@@ -154,6 +154,38 @@ describe("module_report presets (#5137)", () => {
 		}
 	});
 
+	// Guards #5372: `view:"json"` was an unknown preset on module_report and
+	// silently fell through to the text cell, while project_report and
+	// lsp_navigation served JSON for the same value.
+	it("view json maps to the full JSON cell (#5372)", async () => {
+		const env = await makeWarmEnv("pi-lens-preset-json-alias-");
+		try {
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"1",
+				{ path: "hub.ts", view: "json" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBe(false);
+			expect(result.details.view).toBe("full-json");
+			const text = String(result.content[0]?.text);
+			expect(() => JSON.parse(text)).not.toThrow();
+			// The same cell as the explicit full-json preset.
+			const explicit = await tool.execute(
+				"2",
+				{ path: "hub.ts", view: "full-json" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(text).toBe(String(explicit.content[0]?.text));
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("summary-json drops metrics, keeps callbacks and callback provenance", async () => {
 		const env = await makeWarmEnv("pi-lens-preset-sumjson-");
 		try {
