@@ -64,7 +64,8 @@ export const DISPLAYED_MESSAGE_MAX_CHARS = 100;
  * the two sides drifted apart in the first place.
  */
 export function displayedMessage(message: string): string {
-	return message.split("\n")[0].slice(0, DISPLAYED_MESSAGE_MAX_CHARS);
+	const [firstLine = ""] = message.split("\n");
+	return firstLine.slice(0, DISPLAYED_MESSAGE_MAX_CHARS);
 }
 
 /**

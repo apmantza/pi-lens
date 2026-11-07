@@ -811,17 +811,17 @@ export function applyDispositions<T extends DispositionCandidate>(
 		let aliasStrict: string | undefined;
 		let aliasWeak: string | undefined;
 		if (alias !== undefined) {
-			const aliasArgs = {
+			// The SAME shared derivation as the primary pair, with the message
+			// replaced by its displayed form: a second spelling of the anchor build
+			// is how a mark and a diagnostic stop converging in the first place.
+			const aliasAnchors = anchorsForDiagnostic(
 				cwd,
 				filePath,
-				tool: d.tool,
-				rule: d.rule,
-				message: alias,
-				line: d.line,
+				{ ...d, message: alias },
 				content,
-			};
-			aliasStrict = computeStrictAnchor(aliasArgs);
-			if (!isBlocking) aliasWeak = computeWeakAnchor(aliasArgs);
+			);
+			aliasStrict = aliasAnchors.strict;
+			if (!isBlocking) aliasWeak = aliasAnchors.weak;
 		}
 		if (
 			!isBlocking &&
