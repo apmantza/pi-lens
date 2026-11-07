@@ -4,12 +4,12 @@ audience: user
 area: host
 ---
 
-- **The deferred-tools log field now states the host's deferral capability.**
+- **The deferred-tools log field now states how the host sends this model's tools.**
   The `tool_set_mutation` row in `latency.log` reported that capability as
   false on every supported pi host, because it read a compat flag only the
-  long-unsupported pi 0.80.10 build shipped. It now reads pi's own two gates:
-  `compat.supportsToolSearch` for OpenAI Responses models, and
-  `compat.supportsMidConvoSystemMessages` together with
-  `compat.supportsMidConvoToolChanges` for Anthropic models. So the row
-  reports true for the models whose host really takes deferred tool
-  definitions. (refs #5361)
+  long-unsupported pi 0.80.10 build shipped. It now reports true exactly when
+  pi's own transport leaves the request's tool list empty or partial — the
+  Responses-family tool-search gate, the Responses-family additional-tools
+  gate, the Anthropic mid-conversation tool-change gate, and the
+  chat-completions tool-additions gate — and false when the host resends the
+  full tool list on every turn. (refs #5361)
