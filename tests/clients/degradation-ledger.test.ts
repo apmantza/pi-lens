@@ -965,3 +965,178 @@ describe("incrementDegradationCount keys on the full subject (#5359 F1)", () => 
 		).toBe(true);
 	});
 });
+
+// Named recurrence (#5359 review r3, Qodo C1.1-C3.1). C1.1: the once-key was
+// armed from one conversion of the raw subject, and the bounded display fields
+// converted it again afterwards, so a second conversion that threw left an
+// armed key with no record. C2.1: the key hashed the UTF-8 bytes of the text,
+// which folds a lone surrogate into U+FFFD, so two different subjects shared a
+// key. C3.1: the key joined kind and subject with a NUL byte, so a NUL inside
+// either one let two different pairs produce the same key. Both record paths
+// are covered: `recordDegradationOnce` and `incrementDegradationCount`.
+describe("the once-key is derived from one normalization pass (#5359 r3)", () => {
+	// A subject whose first conversion succeeds and whose later ones throw. The
+	// conversion count is the variable: the defect lives in the order of calls.
+	function convertsOnceThenThrows(text: string) {
+		let calls = 0;
+		return {
+			toString() {
+				calls += 1;
+				if (calls > 1) throw new Error("conversion failed after the first");
+				return text;
+			},
+		};
+	}
+
+	// A subject whose first conversion throws and whose later ones succeed.
+	function throwsThenConverts(text: string) {
+		let calls = 0;
+		return {
+			toString() {
+				calls += 1;
+				if (calls === 1) throw new Error("first conversion failed");
+				return text;
+			},
+		};
+	}
+
+	it("records a subject that converts once, even when a later conversion throws", () => {
+		// Pre-fix this read `false`: the key was armed by the first conversion,
+		// the bounded subject threw on the second, and the event was dropped.
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: convertsOnceThenThrows("/repo/once.ts"),
+				reason: "armed then thrown",
+			}),
+		).toBe(true);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "lsp-registry-decision",
+			)?.latestReasons,
+		).toEqual([{ subject: "/repo/once.ts", reason: "armed then thrown" }]);
+	});
+
+	it("arms no once-key when the first conversion throws, so an equal subject is admitted", () => {
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: throwsThenConverts("/repo/first.ts"),
+				reason: "first conversion failed",
+			}),
+		).toBe(false);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "/repo/first.ts",
+				reason: "well-behaved",
+			}),
+		).toBe(true);
+	});
+
+	it("admits a lone surrogate and a replacement character as two events", () => {
+		// Pre-fix the UTF-8 hash mapped both to the same bytes, so the second read
+		// `false`. The key now hashes a JSON encoding, which escapes the surrogate.
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "x\uD800",
+				reason: "lone surrogate",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "x�",
+				reason: "replacement character",
+			}),
+		).toBe(true);
+	});
+
+	it("admits a NUL-bearing kind/subject pair apart from a shifted pair", () => {
+		// Pre-fix both pairs hashed `k\0a\0b`, so the second read `false`.
+		expect(
+			recordDegradationOnce({
+				kind: "k\0a",
+				subject: "b",
+				reason: "first pair",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "k",
+				subject: "a\0b",
+				reason: "shifted pair",
+			}),
+		).toBe(true);
+	});
+
+	it("returns the rising edge and keeps the row when a later conversion throws", () => {
+		// Pre-fix this read `false` with no row: the tally was not reached, so
+		// the event was dropped with no record and no rising edge.
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: convertsOnceThenThrows("/repo/tally.ts"),
+				reason: "armed then thrown",
+			}),
+		).toBe(true);
+		expect(
+			getDegradationSummary().find((group) => group.kind === "read-guard")
+				?.latestReasons,
+		).toEqual([
+			{ subject: "/repo/tally.ts", reason: "armed then thrown (count: 1)" },
+		]);
+	});
+
+	it("returns the rising edge for a subject whose first conversion throws, once a later one succeeds", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: throwsThenConverts("/repo/tally-first.ts"),
+				reason: "first conversion failed",
+			}),
+		).toBe(false);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/tally-first.ts",
+				reason: "well-behaved",
+			}),
+		).toBe(true);
+	});
+
+	it("returns the rising edge for a lone surrogate and a replacement character", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "x\uD800",
+				reason: "lone surrogate",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "x�",
+				reason: "replacement character",
+			}),
+		).toBe(true);
+	});
+
+	it("returns the rising edge for a NUL-bearing kind/subject pair apart from a shifted pair", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "k\0a",
+				subject: "b",
+				reason: "first pair",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "k",
+				subject: "a\0b",
+				reason: "shifted pair",
+			}),
+		).toBe(true);
+	});
+});

@@ -2378,11 +2378,17 @@ export function recordDegradationOnce(record: DegradationRecord): boolean {
 			metadata,
 			code,
 		} = record;
-		const key = onceKey(rawKind, rawSubject);
+		// Every identity component converts ONCE, before anything is armed
+		// (#5359 r3, Qodo C1.1): the key and the bounded fields all read these
+		// strings, so a conversion that throws arms no once-key and a later equal
+		// subject is still admitted.
+		const kindText = truncateForLedger(rawKind);
+		const subjectText = subjectIdentity(rawSubject);
+		const key = onceKey(kindText, subjectText);
 		if (onceKeys.has(key)) return false;
 		onceKeys.add(key);
-		const kind = boundedKind(rawKind);
-		const subject = subjectForLedger(rawSubject);
+		const kind = boundedKind(kindText);
+		const subject = subjectForLedger(subjectText);
 		if (recordDegradation({ kind, subject, reason })) {
 			logDurableDegradation(kind, subject, 1, metadata, code);
 		}
@@ -2409,18 +2415,20 @@ export function recordDegradationOnce(record: DegradationRecord): boolean {
  *   That fold bounds the GROUP population; folding the key too merged two
  *   distinct overflowed kinds that share a subject into one once-key.
  *
- * The two components are hashed together, so an entry stays fixed-size
- * (64 hex chars) whatever length the caller's subject is: the set grows with
- * distinct events, never with subject length. Hashing is collision-safe here
- * because a collision would only re-merge two subjects this function already
- * treats as one, and the population is distinct degradation events per session.
+ * The two components are hashed together as a JSON array, which escapes NUL and
+ * lone surrogates and keeps the boundary between them, so no two different pairs
+ * share one byte string (#5359 r3). An entry stays fixed-size (64 hex chars)
+ * whatever length the caller's subject is: the set grows with distinct events,
+ * never with subject length. Hashing is collision-safe here because a collision
+ * would only re-merge two subjects this function already treats as one, and the
+ * population is distinct degradation events per session.
  *
  * Memory: one entry per distinct (kind, subject) event per session, cleared by
  * `resetDegradationLedger()` at `session_start`.
  */
-function onceKey(kind: unknown, subject: unknown): string {
+function onceKey(kindText: string, subjectText: string): string {
 	return createHash("sha256")
-		.update(`${truncateForLedger(kind)}\0${subjectIdentity(subject)}`)
+		.update(JSON.stringify([kindText, subjectText]))
 		.digest("hex");
 }
 
@@ -2444,8 +2452,12 @@ function onceKey(kind: unknown, subject: unknown): string {
 export function incrementDegradationCount(record: DegradationRecord): boolean {
 	try {
 		const { kind: rawKind, subject: rawSubject } = record;
-		const kind = boundedKind(rawKind);
-		const subject = subjectForLedger(rawSubject);
+		// Converted ONCE, before the tally is set (#5359 r3, Qodo C1.1): the key
+		// and the bounded display fields all derive from these strings.
+		const kindText = truncateForLedger(rawKind);
+		const subjectText = subjectIdentity(rawSubject);
+		const kind = boundedKind(kindText);
+		const subject = subjectForLedger(subjectText);
 		const reason = truncateForLedger(record.reason);
 		// The tally is keyed on the SAME event identity as the once-path (#5359
 		// review F1): `${boundedKind}\0${subjectForLedger}` merged two file paths
@@ -2455,7 +2467,7 @@ export function incrementDegradationCount(record: DegradationRecord): boolean {
 		// The RETAINED row below stays keyed by the bounded display identity: two
 		// long subjects then share one slot showing the latest tally, and no
 		// event drops out of the group count.
-		const key = onceKey(rawKind, rawSubject);
+		const key = onceKey(kindText, subjectText);
 		const count = (tallies.get(key) ?? 0) + 1;
 		tallies.set(key, count);
 		let group = groups.get(kind);
