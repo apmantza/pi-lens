@@ -221,6 +221,16 @@ function createState(files) {
 			toolResults: counter(),
 			phaseCounts: counter(),
 			phaseTimeouts: counter(),
+			// #5263: every in-window `durationMs` per (tool, phase) and per runner, so
+			// the report answers "how long does this phase actually take" instead of
+			// only "how many rows crossed a fixed threshold". See
+			// `latencyDistribution` for the percentile method and the memory bound.
+			phaseDurations: new Map(),
+			runnerDurations: new Map(),
+			// Runner rows that record a plan decision instead of work (`skipped`,
+			// `not_registered`), counted per runner so a distribution count can be
+			// reconciled against `runnerStatus`.
+			runnerSkipped: counter(),
 			skillsResolved: counter(),
 			// D1: every latency row timestamp (ms) in window, for the coverage-gap
 			// scan. Sorted after all files are read.
@@ -437,6 +447,7 @@ async function analyzeLatency(files, state) {
 			state.seen.inc("latency");
 			trackLatencyProject(state, entry);
 			trackLatencySignals(state, entry, ts);
+			recordLatencyDuration(state, entry);
 
 			if (entry.type === "runner") {
 				const status = entry.status ?? "unknown";
@@ -1859,6 +1870,133 @@ async function analyzeExtension(files, state) {
 	}
 }
 
+/**
+ * #5263: keep one duration sample per in-window latency row, so the report can
+ * state a per-(tool, phase) and per-runner distribution. Rows that carry no
+ * usable `durationMs` (absent, null, non-finite, or negative — a row from a
+ * build that computed it wrong) are counted out rather than guessed at as 0:
+ * a phantom 0 would move p50 without being a measurement. They stay in
+ * `phaseCounts`, which counts rows, not milliseconds.
+ *
+ * Only the two row types with a duration that means work are sampled. A
+ * `tool_result` row's `durationMs` is the whole hook's total, which is the sum
+ * of the phases under it, so sampling it too would double-count the same
+ * milliseconds into the same denominator.
+ */
+function recordLatencyDuration(state, entry) {
+	const ms = entry.durationMs;
+	if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return;
+	if (entry.type === "phase") {
+		const key = `${entry.toolName ?? "unknown"}:${entry.phase ?? "unknown"}`;
+		pushDurationGroup(state.latency.phaseDurations, key, ms);
+	} else if (entry.type === "runner") {
+		const runner = entry.runnerId ?? "unknown";
+		if (!runnerRowRan(entry)) {
+			state.latency.runnerSkipped.inc(runner);
+			return;
+		}
+		pushDurationGroup(state.latency.runnerDurations, runner, ms);
+	}
+}
+
+function pushDurationGroup(groups, key, ms) {
+	const list = groups.get(key);
+	if (list) list.push(ms);
+	else groups.set(key, [ms]);
+}
+
+/**
+ * Did this runner row measure work? The dispatcher writes `durationMs: 0`
+ * beside every plan decision (`skipped`, `test_file_skipped`, `when_skipped`,
+ * `not_registered` in `clients/dispatch/dispatcher.ts`), so a runner that never
+ * ran would add a zero sample to its own distribution and drag p50 toward the
+ * skip time. The status family is matched by suffix, not by an enumerated
+ * list, so a new `<something>_skipped` status is excluded the way its siblings
+ * are. A row with no status at all (an older build) counts as work.
+ */
+function runnerRowRan(entry) {
+	const status = entry.status;
+	if (typeof status !== "string" || status === "") return true;
+	return !/(?:^|_)skipped$/.test(status) && status !== "not_registered";
+}
+
+/**
+ * Nearest-rank percentiles (inverted-CDF lowest-upper): p(q) is the value at
+ * 1-based rank `ceil(q * n)` of the ascending sample. So a one-row group answers
+ * p50 = p95 = max = that row, and every reported number is an OBSERVED duration
+ * rather than an interpolation between two — the report exists to rank real
+ * work for a human, and an 8.55th sample would name no row anyone can go find.
+ *
+ * The sample is the whole group: exact rather than approximate, which is what
+ * an offline forensic run wants (no histogram edges, no summary state to keep
+ * in sync with a late row). The retained population is one number per in-window
+ * duration row; the maintainer's ~18 MB live-plus-rotation `latency.log` is on
+ * the order of 10^5 rows, so this is a few MB in a process that prints one
+ * report and exits. The analyzer already retains one number per row this way
+ * (`latency.rowTs`, D1), so the distribution scales with the same axis the
+ * window already bounds rather than opening a new unbounded one.
+ */
+function latencyDistribution(groups, cap, label) {
+	let totalMs = 0;
+	for (const durations of groups.values()) {
+		for (const ms of durations) totalMs += ms;
+	}
+	const rows = [];
+	for (const [key, durations] of groups) {
+		durations.sort((a, b) => a - b);
+		const groupMs = durations.reduce((acc, ms) => acc + ms, 0);
+		pushTop(
+			rows,
+			{
+				key,
+				...(label ? label(key) : {}),
+				count: durations.length,
+				p50Ms: nearestRank(durations, 0.5),
+				p95Ms: nearestRank(durations, 0.95),
+				maxMs: durations[durations.length - 1],
+				totalMs: groupMs,
+				// The denominator is this family's total, so a phase's share reads as
+				// "of the phase time in window" and runner time never dilutes it.
+				share: totalMs > 0 ? groupMs / totalMs : 0,
+			},
+			cap,
+			(a, b) => b.totalMs - a.totalMs || a.key.localeCompare(b.key),
+		);
+	}
+	return { totalMs, rows };
+}
+
+function nearestRank(durations, q) {
+	if (durations.length === 0) return 0;
+	return durations[Math.max(0, Math.ceil(q * durations.length) - 1)];
+}
+
+/**
+ * The #5263 report sections. Phase rows key on `"<toolName>:<phase>"`, so the
+ * label split is on the FIRST colon: a runner id or a phase name can hold one
+ * (an ast-grep rule id does not, but a future `tool:sub` phase label might),
+ * while the tool name written by `logLatency` is always a bare tool name.
+ */
+function buildLatencyDistributions(state) {
+	const phaseLatency = latencyDistribution(
+		state.latency.phaseDurations,
+		limit,
+		(key) => {
+			const at = key.indexOf(":");
+			return { tool: key.slice(0, at), phase: key.slice(at + 1) };
+		},
+	);
+	const runnerLatency = latencyDistribution(
+		state.latency.runnerDurations,
+		limit,
+		(key) => ({ runner: key }),
+	);
+	for (const row of runnerLatency.rows) {
+		row.skippedRows = state.latency.runnerSkipped.get(row.key);
+	}
+	return { phaseLatency, runnerLatency };
+}
+
 function countBetween(sorted, a, b) {
 	let n = 0;
 	for (const value of sorted) {
@@ -2639,6 +2777,7 @@ function buildReport(state) {
 			toolResults: state.latency.toolResults.toJSON(),
 			phaseCounts: state.latency.phaseCounts.top(limit),
 			phaseTimeouts: state.latency.phaseTimeouts.toJSON(),
+			...buildLatencyDistributions(state),
 			skillsResolved: state.latency.skillsResolved.toJSON(),
 			workspaceDiagnostics: {
 				started: ws.started,
@@ -2891,6 +3030,23 @@ function printReport(report) {
 		report.latency.runnerStatus,
 		(x) => `${x.count.toString().padStart(5)}  ${x.key}`,
 	);
+	const phaseDist = report.latency.phaseLatency;
+	if (phaseDist?.rows?.length) {
+		console.log("\nPhase latency");
+		console.log(
+			`  nearest-rank p50/p95/max per (tool, phase), share of ${phaseDist.totalMs}ms in-window phase time`,
+		);
+		for (const row of phaseDist.rows) console.log(`  ${formatLatencyRow(row)}`);
+	}
+	const runnerDist = report.latency.runnerLatency;
+	if (runnerDist?.rows?.length) {
+		console.log("\nRunner latency");
+		console.log(
+			`  nearest-rank p50/p95/max per runner, share of ${runnerDist.totalMs}ms runner time (skip rows excluded)`,
+		);
+		for (const row of runnerDist.rows)
+			console.log(`  ${formatLatencyRow(row)}`);
+	}
 	section(
 		"Read-guard events",
 		Object.entries(report.readGuard.events).map(([key, count]) => ({
@@ -3019,6 +3175,13 @@ function section(title, rows, formatter) {
 		return;
 	}
 	for (const row of rows.slice(0, limit)) console.log(`  ${formatter(row)}`);
+}
+
+function formatLatencyRow(row) {
+	return (
+		`${String(row.count).padStart(6)}  p50=${row.p50Ms}  p95=${row.p95Ms}  max=${row.maxMs}  ${(row.share * 100).toFixed(1)}%  ${row.key}` +
+		(row.skippedRows ? `  (skipped ${row.skippedRows})` : "")
+	);
 }
 
 function formatExample(ex) {

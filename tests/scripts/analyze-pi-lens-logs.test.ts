@@ -667,3 +667,183 @@ describe("analyze-pi-lens-logs.mjs — unconfirmedByReason attribution (#1618 R5
 		expect(smell?.description).not.toContain("hit the per-file budget");
 	});
 });
+
+/**
+ * Per-phase and per-runner latency percentiles (#5263).
+ *
+ * The fixture is a static NDJSON file with fixed timestamps so the `--since`
+ * edge is deterministic against a literal window instead of the wall clock.
+ * The window used below (`2026-09-30T00:00:00Z`) keeps every
+ * `2026-09-30T10:00:*` row and drops the three `pre_window_phase` rows dated
+ * `2026-09-29`, which is what pins the distribution to the window instead of
+ * to the whole file.
+ *
+ * Percentiles are nearest-rank: p(q) is the value at 1-based rank
+ * `ceil(q * n)` in the ascending durations, so the numbers below come from the
+ * fixture table itself (9 rows `10..1000` → rank 5 = 50, rank 9 = 1000).
+ */
+describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () => {
+	const FIXTURES = path.resolve(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"../fixtures/analyze-logs",
+	);
+	const WINDOW = "2026-09-30T00:00:00Z";
+
+	function dist(fixture = "phase-distribution", since = WINDOW): any {
+		const out = execFileSync(
+			process.execPath,
+			[
+				SCRIPT,
+				"--root",
+				path.join(FIXTURES, fixture),
+				"--json",
+				"--since",
+				since,
+			],
+			{ encoding: "utf8", timeout: 60_000 },
+		);
+		return JSON.parse(out).latency;
+	}
+
+	function group(rows: any[], key: string): any {
+		return rows.find((row: any) => row.key === key);
+	}
+
+	it("reports count, p50, p95 and max per (tool, phase) over the window", () => {
+		const latency = dist();
+		const rows = latency.phaseLatency.rows;
+		const row = group(rows, "turn_end:inline_blocker_policy");
+		// Fixture durations 10,20,30,40,50,60,70,80,1000 (ascending):
+		// nearest-rank p50 = rank ceil(0.5*9)=5 -> 50; p95 = rank ceil(8.55)=9 -> 1000.
+		expect(row).toMatchObject({
+			tool: "turn_end",
+			phase: "inline_blocker_policy",
+			count: 9,
+			p50Ms: 50,
+			p95Ms: 1000,
+			maxMs: 1000,
+			totalMs: 1360,
+		});
+		// The 1000ms outlier moves p95 and max but not p50 — the distribution
+		// is a distribution, not an average, which is the whole point of #5263.
+		expect(row.p50Ms).toBeLessThan(row.p95Ms);
+	});
+
+	it("reports a single-row phase with p50 equal to p95 and max", () => {
+		const row = group(dist().phaseLatency.rows, "edit:dispatch_lint");
+		expect(row).toMatchObject({
+			count: 1,
+			p50Ms: 700,
+			p95Ms: 700,
+			maxMs: 700,
+			totalMs: 700,
+		});
+	});
+
+	it("leaves a phase whose rows all precede --since out of the distribution", () => {
+		const latency = dist();
+		expect(
+			group(latency.phaseLatency.rows, "turn_end:pre_window_phase"),
+		).toBeUndefined();
+		// Its 1800ms must not dilute the shares of the phases that ARE in window:
+		// 1360 + 700, not 1360 + 700 + 1800.
+		expect(latency.phaseLatency.totalMs).toBe(2060);
+	});
+
+	it("counts the pre-window phase when --since all widens the window", () => {
+		const latency = dist("phase-distribution", "all");
+		expect(
+			group(latency.phaseLatency.rows, "turn_end:pre_window_phase"),
+		).toMatchObject({
+			count: 3,
+			p50Ms: 600,
+			p95Ms: 700,
+			maxMs: 700,
+			totalMs: 1800,
+		});
+		expect(latency.phaseLatency.totalMs).toBe(3860);
+	});
+
+	it("empties the distribution when the window holds no latency rows", () => {
+		const latency = dist("phase-distribution", "2026-10-01T00:00:00Z");
+		expect(latency.phaseLatency).toEqual({ totalMs: 0, rows: [] });
+		expect(latency.runnerLatency).toEqual({ totalMs: 0, rows: [] });
+	});
+
+	it("excludes rows without a finite durationMs from the distribution", () => {
+		const latency = dist();
+		expect(
+			group(latency.phaseLatency.rows, "turn_end:missing_duration_phase"),
+		).toBeUndefined();
+		expect(
+			group(latency.phaseLatency.rows, "turn_end:null_duration_phase"),
+		).toBeUndefined();
+		// The rows are still real phase rows: the existing counter tally keeps them.
+		const counts = Object.fromEntries(
+			latency.phaseCounts.map((entry: any) => [entry.key, entry.count]),
+		);
+		expect(counts["missing_duration_phase"]).toBe(1);
+		expect(counts["null_duration_phase"]).toBe(1);
+	});
+
+	it("reports the runner distribution without the rows that never ran", () => {
+		const runner = group(dist().runnerLatency.rows, "oxlint");
+		// 100,200,300 ran; the 9999ms `skipped` and `not_registered` rows record a
+		// decision, not work, so they would flatten p50 to the skip time.
+		expect(runner).toMatchObject({
+			runner: "oxlint",
+			count: 3,
+			p50Ms: 200,
+			p95Ms: 300,
+			maxMs: 300,
+			totalMs: 600,
+			skippedRows: 2,
+		});
+	});
+
+	it("reports each top phase's share of total in-window phase time", () => {
+		const { rows, totalMs } = dist().phaseLatency;
+		expect(totalMs).toBe(2060);
+		expect(group(rows, "turn_end:inline_blocker_policy").share).toBeCloseTo(
+			1360 / 2060,
+			10,
+		);
+		expect(group(rows, "edit:dispatch_lint").share).toBeCloseTo(700 / 2060, 10);
+		// Ranked by total time, and the rendered shares are fractions of the
+		// PHASE family only — runner time is a separate denominator.
+		expect(rows.map((row: any) => row.key)).toEqual([
+			"turn_end:inline_blocker_policy",
+			"edit:dispatch_lint",
+		]);
+		const runner = group(dist().runnerLatency.rows, "oxlint");
+		expect(runner.share).toBe(1);
+		expect(dist().runnerLatency.totalMs).toBe(600);
+	});
+
+	it("renders count, percentiles and share for each phase in text output", () => {
+		const text = execFileSync(
+			process.execPath,
+			[
+				SCRIPT,
+				"--root",
+				path.join(FIXTURES, "phase-distribution"),
+				"--since",
+				WINDOW,
+			],
+			{ encoding: "utf8", timeout: 60_000 },
+		);
+		const section = text.split("\nPhase latency\n")[1]?.split("\n\n")[0];
+		expect(section).toBeDefined();
+		expect(section).toMatch(
+			/^\s+9\s+p50=50\s+p95=1000\s+max=1000\s+66\.0%\s+turn_end:inline_blocker_policy$/m,
+		);
+		expect(section).toMatch(
+			/1\s+p50=700\s+p95=700\s+max=700\s+34\.0%\s+edit:dispatch_lint/,
+		);
+		expect(section).not.toMatch(/pre_window_phase/);
+		const runnerSection = text.split("\nRunner latency\n")[1]?.split("\n\n")[0];
+		expect(runnerSection).toMatch(
+			/3\s+p50=200\s+p95=300\s+max=300\s+100\.0%\s+oxlint\s+\(skipped 2\)/,
+		);
+	});
+});
