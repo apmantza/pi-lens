@@ -47,7 +47,6 @@ import {
 	parseWordIndexQuery,
 	type RankedFile,
 	searchWordIndex,
-	WordIndexQueryError,
 	triggerBackgroundWordIndexBuild,
 } from "./word-index.js";
 
@@ -384,9 +383,7 @@ export interface SymbolSearchOptions {
  *
  * Exported so `tests/clients/language-registry-drift.test.ts` guards the SEAM
  * and not just the projection behind it: a future local table reintroduced
- * here would satisfy a registry-only assertion but fail this one. An unknown
- * token REFUSES with {@link WordIndexQueryError} naming both vocabularies
- * (#5135) instead of returning `false` — a typo must not read as "no match".
+ * here would satisfy a registry-only assertion but fail this one.
  */
 export function symbolSearchFileMatchesLang(
 	file: string,
@@ -395,12 +392,11 @@ export function symbolSearchFileMatchesLang(
 	// One predicate, shared with the inline `lang:` filter: it is filename-aware
 	// (a language the registry declares by basename — Jenkinsfile, Gemfile — or a
 	// kind named by pattern — Dockerfile, Makefile — has no extension to match)
-	// and normalizes the token once (MCP passes `lang` through as typed).
-	// `symbolSearch` validates the token before it reaches here; this throw is
-	// the fail-closed answer for a direct caller.
+	// and normalizes the token once (MCP passes `lang` through as typed). An
+	// unknown token selects nothing here; `symbolSearch` refuses it before the
+	// index is touched (#5135), so no production call reaches this with one.
 	const scope = resolveLanguageScope(lang);
-	if ("refusal" in scope) throw new WordIndexQueryError(scope.refusal);
-	return scope.matches(file);
+	return "refusal" in scope ? false : scope.matches(file);
 }
 
 /** Same glob semantics as ast_grep_search's `paths`: a bare directory/file
@@ -457,12 +453,10 @@ function unknownLangRefusal(
 	query: string,
 	lang: string | undefined,
 ): string | undefined {
-	const tokens = [
-		...(lang?.trim() ? [lang] : []),
-		...parseWordIndexQuery(query)
-			.filters.filter((filter) => filter.key === "lang")
-			.map((filter) => filter.value),
-	];
+	const tokens = lang?.trim() ? [lang] : [];
+	for (const entry of parseWordIndexQuery(query).filters) {
+		if (entry.key === "lang") tokens.push(entry.value);
+	}
 	for (const token of tokens) {
 		const scope = resolveLanguageScope(token);
 		if ("refusal" in scope) return scope.refusal;
