@@ -1,10 +1,12 @@
 /** Bounded, process-local telemetry for behavior degraded during one session. */
 
 import type { ConfigDiagnosticCode } from "./config-diagnostic-codes.js";
+import { createHash } from "node:crypto";
 import { logExtension } from "./extension-log.js";
 import {
 	DEGRADATION_ENTRIES_PER_KIND,
 	LEDGER_FIELD_MAX,
+	normalizeForLedger,
 	truncateForLedger,
 } from "./ledger-bounds.js";
 import { logLatency } from "./latency-logger.js";
@@ -2369,11 +2371,11 @@ export function recordDegradation(record: DegradationRecord): boolean {
 /** Record at most once per kind/subject during the current session. */
 export function recordDegradationOnce(record: DegradationRecord): boolean {
 	try {
-		const kind = boundedKind(record.kind);
-		const subject = subjectForLedger(record.subject);
-		const key = `${kind}\0${subject}`;
+		const key = onceKey(record.kind, record.subject);
 		if (onceKeys.has(key)) return false;
 		onceKeys.add(key);
+		const kind = boundedKind(record.kind);
+		const subject = subjectForLedger(record.subject);
 		if (recordDegradation({ kind, subject, reason: record.reason })) {
 			logDurableDegradation(kind, subject, 1, record.metadata, record.code);
 		}
@@ -2383,6 +2385,36 @@ export function recordDegradationOnce(record: DegradationRecord): boolean {
 		// Telemetry must never break the observed path.
 		return false;
 	}
+}
+
+/**
+ * The once-key is an event IDENTITY: it answers "has this exact degradation
+ * already been told this session?". The rule (#5359) is that the key carries
+ * the FULL identity while the retained row keeps the bounded one:
+ *
+ * - subject: the full normalized subject, with `subjectForLedger`'s blank fold
+ *   (blank and missing name nothing, so they stay ONE row, #3389). Keying on
+ *   the truncated text made two events whose subjects share their first
+ *   `LEDGER_FIELD_MAX` characters dedupe, and the second was silently dropped —
+ *   the shape a path-bearing subject hits once a checkout, fixture or TMPDIR
+ *   path pushes it past 200 characters.
+ * - kind: the bounded kind TEXT, taken BEFORE `boundedKind`'s cardinality fold.
+ *   That fold bounds the GROUP population; folding the key too merged two
+ *   distinct overflowed kinds that share a subject into one once-key.
+ *
+ * The two components are hashed together, so an entry stays fixed-size
+ * (64 hex chars) whatever length the caller's subject is: the set grows with
+ * distinct events, never with subject length. Hashing is collision-safe here
+ * because a collision would only re-merge two subjects this function already
+ * treats as one, and the population is distinct degradation events per session.
+ *
+ * Memory: one entry per distinct (kind, subject) event per session, cleared by
+ * `resetDegradationLedger()` at `session_start`.
+ */
+function onceKey(kind: unknown, subject: unknown): string {
+	return createHash("sha256")
+		.update(`${truncateForLedger(kind)}\0${subjectIdentity(subject)}`)
+		.digest("hex");
 }
 
 /**
@@ -2506,6 +2538,16 @@ function isPowerOfTwo(value: number): boolean {
 function subjectForLedger(value: unknown): string {
 	const subject = truncateForLedger(value);
 	return subject.trim() === "" ? "unknown" : subject;
+}
+
+/**
+ * The subject's IDENTITY text for the once-key: `subjectForLedger`'s blank fold
+ * at FULL length. Same "blank names nothing" rule, minus the truncation that
+ * makes two different long paths look identical (#5359).
+ */
+function subjectIdentity(value: unknown): string {
+	const text = normalizeForLedger(value);
+	return text.trim() === "" ? "unknown" : text;
 }
 
 function boundedKind(value: unknown): string {

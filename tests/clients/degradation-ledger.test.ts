@@ -9,6 +9,8 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
 import {
 	DEGRADATION_ENTRIES_PER_KIND,
 	DEGRADATION_MAX_DISTINCT_KINDS,
+	LEDGER_FIELD_MAX,
+	_getDegradationLedgerStateForTests,
 	getDegradationLedgerGeneration,
 	getDegradationSummary,
 	incrementDegradationCount,
@@ -16,6 +18,7 @@ import {
 	recordDegradationOnce,
 	renderDegradationLines,
 	resetDegradationLedger,
+	truncateForLedger,
 } from "../../clients/degradation-ledger.js";
 
 beforeEach(() => {
@@ -647,5 +650,157 @@ describe("a blank subject is the same as a missing one (#3389 verify round 2)", 
 		]);
 		expect(once?.count).toBe(1);
 		expect(once?.latestReasons).toEqual([{ subject: "unknown", reason: "c" }]);
+	});
+});
+
+// Named recurrence (#5359): the once-key is an event IDENTITY and was built
+// from `subjectForLedger`, the TRUNCATED subject the retained row carries. Two
+// genuinely distinct events whose subjects share their first
+// `LEDGER_FIELD_MAX` characters therefore deduped to one and the second was
+// silently dropped — the shape the #5246 tsserver cell hit when a long TMPDIR
+// pushed two `typescript-compiler:g<n>:<cwd>` subjects past the cut. The fix
+// keys the once-set on the full subject (hashed, so an entry stays fixed-size)
+// while the retained row keeps its bounded text.
+describe("recordDegradationOnce keys on the full subject (#5359)", () => {
+	// Two path-shaped subjects of a real long-checkout length that share their
+	// first 200 characters and differ only in the tail.
+	const longBase = `typescript-compiler:g0:${"a".repeat(190)}`;
+	const longA = `${longBase}/first-project`;
+	const longB = `${longBase}/second-project`;
+
+	it("admits two events whose subjects differ only past the retained bound", () => {
+		// Precondition, asserted so the case cannot rot into a short-subject one:
+		// distinct subjects, both past the bound, identical once truncated.
+		expect(longA).not.toBe(longB);
+		expect(longA.length).toBeGreaterThan(LEDGER_FIELD_MAX);
+		expect(longB.length).toBeGreaterThan(LEDGER_FIELD_MAX);
+		expect(truncateForLedger(longA)).toBe(truncateForLedger(longB));
+
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longA,
+				reason: "first root",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longB,
+				reason: "second root",
+			}),
+		).toBe(true);
+
+		const summary = getDegradationSummary();
+		const rows = summary.filter(
+			(group) => group.kind === "lsp-registry-decision",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.count).toBe(2);
+		// The RETAINED text stays bounded: the fix changes the key, not the row.
+		expect(rows[0]?.latestReasons).toEqual([
+			{ subject: truncateForLedger(longA), reason: "first root" },
+			{ subject: truncateForLedger(longB), reason: "second root" },
+		]);
+		for (const entry of rows[0]?.latestReasons ?? []) {
+			expect(entry.subject.length).toBeLessThanOrEqual(LEDGER_FIELD_MAX + 1);
+		}
+		const state = _getDegradationLedgerStateForTests();
+		expect(state.retainedEntries).toBe(2);
+		expect(state.onceKeys).toBe(2);
+	});
+
+	it("still dedupes the same long subject within the session", () => {
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longA,
+				reason: "first",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longA,
+				reason: "repeat",
+			}),
+		).toBe(false);
+
+		const row = getDegradationSummary().find(
+			(group) => group.kind === "lsp-registry-decision",
+		);
+		expect(row?.count).toBe(1);
+		expect(row?.latestReasons).toEqual([
+			{ subject: truncateForLedger(longA), reason: "first" },
+		]);
+	});
+
+	it("keeps short-subject dedupe unchanged", () => {
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "typescript-compiler:g0:alpha",
+				reason: "a",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "typescript-compiler:g0:beta",
+				reason: "b",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "typescript-compiler:g0:alpha",
+				reason: "a again",
+			}),
+		).toBe(false);
+
+		const row = getDegradationSummary().find(
+			(group) => group.kind === "lsp-registry-decision",
+		);
+		expect(row?.count).toBe(2);
+		expect(_getDegradationLedgerStateForTests().onceKeys).toBe(2);
+	});
+
+	it("admits two distinct kinds that both overflow the kind cardinality bound", () => {
+		// Sibling of the same identity rule (#5359 step 3): `boundedKind` folds
+		// every kind past the cardinality bound into "other", which is correct for
+		// the GROUP population but must not fold the once-key — these two real
+		// opengrep kinds fire on the same cwd and are two distinct events.
+		for (let i = 0; i < DEGRADATION_MAX_DISTINCT_KINDS - 1; i++) {
+			recordDegradation({
+				kind: `filler-kind-${i}`,
+				subject: "filler",
+				reason: "r",
+			});
+		}
+		const cwd = "/home/dev/checkouts/project";
+
+		expect(
+			recordDegradationOnce({
+				kind: "opengrep-partial-scan",
+				subject: cwd,
+				reason: "partial",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "opengrep-scan-refused",
+				subject: cwd,
+				reason: "refused",
+			}),
+		).toBe(true);
+
+		const row = getDegradationSummary().find((group) => group.kind === "other");
+		// Both land in the one overflow group (the cardinality bound still holds),
+		// and both are counted.
+		expect(row?.count).toBe(2);
+		expect(row?.latestReasons).toEqual([
+			{ subject: cwd, reason: "partial" },
+			{ subject: cwd, reason: "refused" },
+		]);
 	});
 });
