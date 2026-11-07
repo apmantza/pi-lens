@@ -144,14 +144,22 @@ it("a drift age written by the real producer is not ranked as a duration (#5379)
 	});
 	await logger.flushLatencyLog();
 
-	const written = readNdjsonRows<{ phase?: string; durationMs?: number }>(
-		logger.getLatencyLogPath(),
-	);
+	const written = readNdjsonRows<{
+		phase?: string;
+		durationMs?: number;
+		ageMs?: number;
+	}>(logger.getLatencyLogPath());
 	expect(written.skipped).toBe(0);
 	const drift = written.rows.filter(
 		(row) => row.phase === "lsp_document_drift",
 	);
 	expect(drift, "the producer must have written its row").toHaveLength(1);
+	// The field the producer wrote, not only the ranking below: the legacy phase
+	// table classifies a `durationMs` drift row as an age too, so a producer that
+	// reverted to `durationMs` would pass the ranking checks alone.
+	expect(Number.isFinite(drift[0]?.ageMs)).toBe(true);
+	expect(drift[0]?.ageMs).toBeGreaterThan(0);
+	expect(drift[0]?.durationMs).toBeUndefined();
 
 	const report = await collectLatencyPerformance({
 		sessionStartedAt,
