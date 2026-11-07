@@ -554,7 +554,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-core/deny.ts": 1,
 		"clients/config-core/merge.ts": 2,
 		"clients/config-locations.ts": 4,
-		"clients/config-resolve.ts": 1,
+		// 1 -> 2 (#5291): `CANONICAL_PROJECT_CONFIG_LOCATIONS` drops the legacy
+		// spec from the shared list, an `Array.prototype.filter` call, not a
+		// delivery filter.
+		"clients/config-resolve.ts": 2,
 		"clients/deadline-utils.ts": 1,
 		"clients/debug-handles.ts": 1,
 		"clients/debug-heap.ts": 1,
@@ -1344,7 +1347,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-diagnostics/runner-adapters/runner-findings.ts": 4,
 		"clients/project-diagnostics/runner-adapters/trivy.ts": 5,
 		"clients/project-diagnostics/scanner.ts": 4,
-		"clients/project-lens-config.ts": 17,
+		// 17 -> 25 (#5291): the layered read and the discovery stamps build and
+		// probe candidate files through `path.join` / `path.resolve` — the
+		// `node:path` host module, not a delivery lane.
+		"clients/project-lens-config.ts": 25,
 		"clients/project-report.ts": 5,
 		"clients/project-snapshot.ts": 15,
 		// 18 -> 22 (#3871 r2, r3): ambient-environment containment uses four
