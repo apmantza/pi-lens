@@ -28,6 +28,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../../clients/degradation-ledger.js";
+import { truncateForLedger } from "../../../clients/ledger-bounds.js";
 import {
 	AstGrepServer,
 	OpengrepServer,
@@ -229,7 +230,15 @@ describe("auxiliary loose-file root (#4760)", () => {
 			(group) => group.kind === "lsp-root-declined",
 		);
 		expect(declined?.count).toBe(1);
-		expect(declined?.latestReasons[0]?.subject).toBe(keyFor("opengrep", home));
+		// The ledger RETAINS every identity field through `subjectForLedger` →
+		// `truncateForLedger` (#1366), so at a checkout path long enough to push
+		// the key past `LEDGER_FIELD_MAX` the record carries the bounded form with
+		// an ellipsis, and the assertion compares that same bound (#5246). The
+		// in-memory breaker keys above are the raw `keyFor` spelling: only the
+		// retained ledger record is cut.
+		expect(declined?.latestReasons[0]?.subject).toBe(
+			truncateForLedger(keyFor("opengrep", home)),
+		);
 	});
 
 	// #4769 review F1: the decline reads the RESOLVED root. A file in
@@ -252,7 +261,10 @@ describe("auxiliary loose-file root (#4760)", () => {
 			(group) => group.kind === "lsp-root-declined",
 		);
 		expect(declined?.count).toBe(1);
-		expect(declined?.latestReasons[0]?.subject).toBe(keyFor("opengrep", home));
+		// The retained subject is the bounded form, as in the case above.
+		expect(declined?.latestReasons[0]?.subject).toBe(
+			truncateForLedger(keyFor("opengrep", home)),
+		);
 	});
 
 	// #4769 review F3: `os.homedir()` answers the spelling `$HOME` holds, and a

@@ -9,6 +9,8 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => ({
 import {
 	DEGRADATION_ENTRIES_PER_KIND,
 	DEGRADATION_MAX_DISTINCT_KINDS,
+	LEDGER_FIELD_MAX,
+	_getDegradationLedgerStateForTests,
 	getDegradationLedgerGeneration,
 	getDegradationSummary,
 	incrementDegradationCount,
@@ -16,6 +18,7 @@ import {
 	recordDegradationOnce,
 	renderDegradationLines,
 	resetDegradationLedger,
+	truncateForLedger,
 } from "../../clients/degradation-ledger.js";
 
 beforeEach(() => {
@@ -647,5 +650,493 @@ describe("a blank subject is the same as a missing one (#3389 verify round 2)", 
 		]);
 		expect(once?.count).toBe(1);
 		expect(once?.latestReasons).toEqual([{ subject: "unknown", reason: "c" }]);
+	});
+});
+
+// Named recurrence (#5359): the once-key is an event IDENTITY and was built
+// from `subjectForLedger`, the TRUNCATED subject the retained row carries. Two
+// genuinely distinct events whose subjects share their first
+// `LEDGER_FIELD_MAX` characters therefore deduped to one and the second was
+// silently dropped — the shape the #5246 tsserver cell hit when a long TMPDIR
+// pushed two `typescript-compiler:g<n>:<cwd>` subjects past the cut. The fix
+// keys the once-set on the full subject (hashed, so an entry stays fixed-size)
+// while the retained row keeps its bounded text.
+describe("recordDegradationOnce keys on the full subject (#5359)", () => {
+	// Two path-shaped subjects of a real long-checkout length that share their
+	// first 200 characters and differ only in the tail.
+	const longBase = `typescript-compiler:g0:${"a".repeat(190)}`;
+	const longA = `${longBase}/first-project`;
+	const longB = `${longBase}/second-project`;
+
+	it("admits two events whose subjects differ only past the retained bound", () => {
+		// Precondition, asserted so the case cannot rot into a short-subject one:
+		// distinct subjects, both past the bound, identical once truncated.
+		expect(longA).not.toBe(longB);
+		expect(longA.length).toBeGreaterThan(LEDGER_FIELD_MAX);
+		expect(longB.length).toBeGreaterThan(LEDGER_FIELD_MAX);
+		expect(truncateForLedger(longA)).toBe(truncateForLedger(longB));
+
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longA,
+				reason: "first root",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longB,
+				reason: "second root",
+			}),
+		).toBe(true);
+
+		const summary = getDegradationSummary();
+		const rows = summary.filter(
+			(group) => group.kind === "lsp-registry-decision",
+		);
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.count).toBe(2);
+		// The RETAINED text stays bounded: the fix changes the key, not the row.
+		expect(rows[0]?.latestReasons).toEqual([
+			{ subject: truncateForLedger(longA), reason: "first root" },
+			{ subject: truncateForLedger(longB), reason: "second root" },
+		]);
+		for (const entry of rows[0]?.latestReasons ?? []) {
+			expect(entry.subject.length).toBeLessThanOrEqual(LEDGER_FIELD_MAX + 1);
+		}
+		const state = _getDegradationLedgerStateForTests();
+		expect(state.retainedEntries).toBe(2);
+		expect(state.onceKeys).toBe(2);
+
+		// The durable sink sees the same two events, each with the BOUNDED subject:
+		// the fix changes the key, never what a row carries.
+		expect(
+			vi
+				.mocked(logLatency)
+				.mock.calls.filter(([row]) => row.phase === "degradation_ledger")
+				.map(([row]) => row.metadata),
+		).toEqual([
+			expect.objectContaining({
+				kind: "lsp-registry-decision",
+				subject: truncateForLedger(longA),
+				count: 1,
+			}),
+			expect.objectContaining({
+				kind: "lsp-registry-decision",
+				subject: truncateForLedger(longB),
+				count: 1,
+			}),
+		]);
+	});
+
+	it("still dedupes the same long subject within the session", () => {
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longA,
+				reason: "first",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: longA,
+				reason: "repeat",
+			}),
+		).toBe(false);
+
+		const row = getDegradationSummary().find(
+			(group) => group.kind === "lsp-registry-decision",
+		);
+		expect(row?.count).toBe(1);
+		expect(row?.latestReasons).toEqual([
+			{ subject: truncateForLedger(longA), reason: "first" },
+		]);
+	});
+
+	it("keeps short-subject dedupe unchanged", () => {
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "typescript-compiler:g0:alpha",
+				reason: "a",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "typescript-compiler:g0:beta",
+				reason: "b",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "typescript-compiler:g0:alpha",
+				reason: "a again",
+			}),
+		).toBe(false);
+
+		const row = getDegradationSummary().find(
+			(group) => group.kind === "lsp-registry-decision",
+		);
+		expect(row?.count).toBe(2);
+		expect(_getDegradationLedgerStateForTests().onceKeys).toBe(2);
+	});
+
+	it("admits two distinct kinds that both overflow the kind cardinality bound", () => {
+		// Sibling of the same identity rule (#5359 step 3): `boundedKind` folds
+		// every kind past the cardinality bound into "other", which is correct for
+		// the GROUP population but must not fold the once-key — these two real
+		// opengrep kinds fire on the same cwd and are two distinct events.
+		for (let i = 0; i < DEGRADATION_MAX_DISTINCT_KINDS - 1; i++) {
+			recordDegradation({
+				kind: `filler-kind-${i}`,
+				subject: "filler",
+				reason: "r",
+			});
+		}
+		const cwd = "/home/dev/checkouts/project";
+
+		expect(
+			recordDegradationOnce({
+				kind: "opengrep-partial-scan",
+				subject: cwd,
+				reason: "partial",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "opengrep-scan-refused",
+				subject: cwd,
+				reason: "refused",
+			}),
+		).toBe(true);
+
+		const row = getDegradationSummary().find((group) => group.kind === "other");
+		// Both land in the one overflow group (the cardinality bound still holds),
+		// and both are counted.
+		expect(row?.count).toBe(2);
+		expect(row?.latestReasons).toEqual([
+			{ subject: cwd, reason: "partial" },
+			{ subject: cwd, reason: "refused" },
+		]);
+	});
+});
+
+// Named recurrence (#5359 review F1): `incrementDegradationCount` answers the
+// same "first occurrence of this event" question as `recordDegradationOnce`,
+// and ten call sites gate a one-time log line on its return value. Its tally
+// map was keyed on the TRUNCATED subject and the cardinality-folded kind, so
+// the rising edge was lost for exactly the two shapes #5359 fixes above — two
+// file paths sharing their first `LEDGER_FIELD_MAX` characters, and two
+// distinct kinds past the 32-kind cap on one subject. The key now goes through
+// `onceKey`; the retained row keeps the bounded display identity.
+describe("incrementDegradationCount keys on the full subject (#5359 F1)", () => {
+	// Two `subject: filePath` shapes (the read-guard form) that share their
+	// first 200 characters and differ only in the tail.
+	const tallBase = `read-guard:${"c".repeat(190)}`;
+	const tallA = `${tallBase}/first-project`;
+	const tallB = `${tallBase}/second-project`;
+
+	it("returns the rising edge for two subjects that differ only past the retained bound", () => {
+		// Precondition, asserted so the case cannot rot into a short-path one.
+		expect(tallA).not.toBe(tallB);
+		expect(tallA.length).toBeGreaterThan(LEDGER_FIELD_MAX);
+		expect(truncateForLedger(tallA)).toBe(truncateForLedger(tallB));
+
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: tallA,
+				reason: "first file",
+			}),
+		).toBe(true);
+		// Pre-fix this read `false`: the second file's one-time line never fired.
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: tallB,
+				reason: "second file",
+			}),
+		).toBe(true);
+		// A repeat of either is still not a rising edge.
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: tallA,
+				reason: "first file again",
+			}),
+		).toBe(false);
+
+		// Two tallies, so each path keeps its own count; the RETAINED row stays
+		// keyed by the bounded display identity, so the two paths share one slot
+		// and the `(count: N)` suffix carries the latest tally.
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(2);
+		const row = getDegradationSummary().find(
+			(group) => group.kind === "read-guard",
+		);
+		expect(row?.count).toBe(3);
+		expect(row?.latestReasons).toEqual([
+			{
+				subject: truncateForLedger(tallA),
+				reason: "first file again (count: 2)",
+			},
+		]);
+	});
+
+	it("returns the rising edge for two distinct kinds that both overflow the kind bound", () => {
+		for (let i = 0; i < DEGRADATION_MAX_DISTINCT_KINDS - 1; i++) {
+			recordDegradation({
+				kind: `filler-kind-${i}`,
+				subject: "filler",
+				reason: "r",
+			});
+		}
+		const filePath = "/home/dev/checkouts/project/src/app.ts";
+
+		expect(
+			incrementDegradationCount({
+				kind: "opengrep-partial-scan",
+				subject: filePath,
+				reason: "partial",
+			}),
+		).toBe(true);
+		// Pre-fix this read `false`: `boundedKind` folded both kinds into "other",
+		// so the second kind shared the first kind's tally.
+		expect(
+			incrementDegradationCount({
+				kind: "opengrep-scan-refused",
+				subject: filePath,
+				reason: "refused",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "opengrep-partial-scan",
+				subject: filePath,
+				reason: "partial again",
+			}),
+		).toBe(false);
+
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(2);
+		const row = getDegradationSummary().find((group) => group.kind === "other");
+		// The cardinality bound still holds: one overflow group, exact total count.
+		expect(row?.count).toBe(3);
+		expect(row?.latestReasons).toEqual([
+			{ subject: filePath, reason: "partial again (count: 2)" },
+		]);
+	});
+
+	it("keeps short-subject tallies and the session reset unchanged", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/a.ts",
+				reason: "a",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/b.ts",
+				reason: "b",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/a.ts",
+				reason: "a again",
+			}),
+		).toBe(false);
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(2);
+
+		// Same bound class as `onceKeys`: cleared by the `session_start` reset.
+		resetDegradationLedger();
+		expect(_getDegradationLedgerStateForTests().tallies).toBe(0);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/a.ts",
+				reason: "next session",
+			}),
+		).toBe(true);
+	});
+});
+
+// Named recurrence (#5359 review r3, Qodo C1.1-C3.1). C1.1: the once-key was
+// armed from one conversion of the raw subject, and the bounded display fields
+// converted it again afterwards, so a second conversion that threw left an
+// armed key with no record. C2.1: the key hashed the UTF-8 bytes of the text,
+// which folds a lone surrogate into U+FFFD, so two different subjects shared a
+// key. C3.1: the key joined kind and subject with a NUL byte, so a NUL inside
+// either one let two different pairs produce the same key. Both record paths
+// are covered: `recordDegradationOnce` and `incrementDegradationCount`.
+describe("the once-key is derived from one normalization pass (#5359 r3)", () => {
+	// A subject whose first conversion succeeds and whose later ones throw. The
+	// conversion count is the variable: the defect lives in the order of calls.
+	function convertsOnceThenThrows(text: string) {
+		let calls = 0;
+		return {
+			toString() {
+				calls += 1;
+				if (calls > 1) throw new Error("conversion failed after the first");
+				return text;
+			},
+		};
+	}
+
+	// A subject whose first conversion throws and whose later ones succeed.
+	function throwsThenConverts(text: string) {
+		let calls = 0;
+		return {
+			toString() {
+				calls += 1;
+				if (calls === 1) throw new Error("first conversion failed");
+				return text;
+			},
+		};
+	}
+
+	it("records a subject that converts once, even when a later conversion throws", () => {
+		// Pre-fix this read `false`: the key was armed by the first conversion,
+		// the bounded subject threw on the second, and the event was dropped.
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: convertsOnceThenThrows("/repo/once.ts"),
+				reason: "armed then thrown",
+			}),
+		).toBe(true);
+		expect(
+			getDegradationSummary().find(
+				(group) => group.kind === "lsp-registry-decision",
+			)?.latestReasons,
+		).toEqual([{ subject: "/repo/once.ts", reason: "armed then thrown" }]);
+	});
+
+	it("arms no once-key when the first conversion throws, so an equal subject is admitted", () => {
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: throwsThenConverts("/repo/first.ts"),
+				reason: "first conversion failed",
+			}),
+		).toBe(false);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "/repo/first.ts",
+				reason: "well-behaved",
+			}),
+		).toBe(true);
+	});
+
+	it("admits a lone surrogate and a replacement character as two events", () => {
+		// Pre-fix the UTF-8 hash mapped both to the same bytes, so the second read
+		// `false`. The key now hashes a JSON encoding, which escapes the surrogate.
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "x\uD800",
+				reason: "lone surrogate",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "lsp-registry-decision",
+				subject: "x�",
+				reason: "replacement character",
+			}),
+		).toBe(true);
+	});
+
+	it("admits a NUL-bearing kind/subject pair apart from a shifted pair", () => {
+		// Pre-fix both pairs hashed `k\0a\0b`, so the second read `false`.
+		expect(
+			recordDegradationOnce({
+				kind: "k\0a",
+				subject: "b",
+				reason: "first pair",
+			}),
+		).toBe(true);
+		expect(
+			recordDegradationOnce({
+				kind: "k",
+				subject: "a\0b",
+				reason: "shifted pair",
+			}),
+		).toBe(true);
+	});
+
+	it("returns the rising edge and keeps the row when a later conversion throws", () => {
+		// Pre-fix this read `false` with no row: the tally was not reached, so
+		// the event was dropped with no record and no rising edge.
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: convertsOnceThenThrows("/repo/tally.ts"),
+				reason: "armed then thrown",
+			}),
+		).toBe(true);
+		expect(
+			getDegradationSummary().find((group) => group.kind === "read-guard")
+				?.latestReasons,
+		).toEqual([
+			{ subject: "/repo/tally.ts", reason: "armed then thrown (count: 1)" },
+		]);
+	});
+
+	it("returns the rising edge for a subject whose first conversion throws, once a later one succeeds", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: throwsThenConverts("/repo/tally-first.ts"),
+				reason: "first conversion failed",
+			}),
+		).toBe(false);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "/repo/tally-first.ts",
+				reason: "well-behaved",
+			}),
+		).toBe(true);
+	});
+
+	it("returns the rising edge for a lone surrogate and a replacement character", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "x\uD800",
+				reason: "lone surrogate",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "read-guard",
+				subject: "x�",
+				reason: "replacement character",
+			}),
+		).toBe(true);
+	});
+
+	it("returns the rising edge for a NUL-bearing kind/subject pair apart from a shifted pair", () => {
+		expect(
+			incrementDegradationCount({
+				kind: "k\0a",
+				subject: "b",
+				reason: "first pair",
+			}),
+		).toBe(true);
+		expect(
+			incrementDegradationCount({
+				kind: "k",
+				subject: "a\0b",
+				reason: "shifted pair",
+			}),
+		).toBe(true);
 	});
 });

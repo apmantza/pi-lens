@@ -452,11 +452,7 @@ export function hostModule(): HostModule {
 export function piAiModule(): PiAiModule {
 	const hostDir = hostPackageDir();
 	if (loadedPiAi?.dir === hostDir) return loadedPiAi.module;
-	const piAiDir = findPackageDir(PI_AI_PACKAGE, hostDir);
-	if (piAiDir === undefined)
-		throw new Error(
-			`pi-session: the host install at ${hostDir} carries no ${PI_AI_PACKAGE}; ${HOST_PACKAGE_ENV} must name one that does`,
-		);
+	const piAiDir = piAiPackageDir();
 	const module = loadHostedModule<PiAiModule>(
 		piAiDir,
 		["fauxProvider", "fauxText", "fauxToolCall", "fauxAssistantMessage"],
@@ -464,6 +460,27 @@ export function piAiModule(): PiAiModule {
 	);
 	loadedPiAi = { dir: hostDir, module };
 	return module;
+}
+
+/**
+ * The pi-ai package directory of the host install {@link hostPackageDir}
+ * names, through the same resolver `piAiModule()` uses.
+ *
+ * Exported because a case that reads the host's own MODEL CATALOG (the built-in
+ * `dist/providers/all.js` model table) must resolve it under the same
+ * `PI_LENS_PI_HOST_PACKAGE` override; a case that imported this repo's own
+ * `node_modules` copy instead would report a host as probed whose catalog never
+ * ran. Fails loudly like `piAiModule()`: a quiet fallback would name the wrong
+ * host.
+ */
+export function piAiPackageDir(): string {
+	const hostDir = hostPackageDir();
+	const piAiDir = findPackageDir(PI_AI_PACKAGE, hostDir);
+	if (piAiDir === undefined)
+		throw new Error(
+			`pi-session: the host install at ${hostDir} carries no ${PI_AI_PACKAGE}; ${HOST_PACKAGE_ENV} must name one that does`,
+		);
+	return piAiDir;
 }
 
 /**

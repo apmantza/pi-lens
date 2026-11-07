@@ -1,10 +1,12 @@
 /** Bounded, process-local telemetry for behavior degraded during one session. */
 
 import type { ConfigDiagnosticCode } from "./config-diagnostic-codes.js";
+import { createHash } from "node:crypto";
 import { logExtension } from "./extension-log.js";
 import {
 	DEGRADATION_ENTRIES_PER_KIND,
 	LEDGER_FIELD_MAX,
+	normalizeForLedger,
 	truncateForLedger,
 } from "./ledger-bounds.js";
 import { logLatency } from "./latency-logger.js";
@@ -2369,13 +2371,26 @@ export function recordDegradation(record: DegradationRecord): boolean {
 /** Record at most once per kind/subject during the current session. */
 export function recordDegradationOnce(record: DegradationRecord): boolean {
 	try {
-		const kind = boundedKind(record.kind);
-		const subject = subjectForLedger(record.subject);
-		const key = `${kind}\0${subject}`;
+		const {
+			kind: rawKind,
+			subject: rawSubject,
+			reason,
+			metadata,
+			code,
+		} = record;
+		// Every identity component converts ONCE, before anything is armed
+		// (#5359 r3, Qodo C1.1): the key and the bounded fields all read these
+		// strings, so a conversion that throws arms no once-key and a later equal
+		// subject is still admitted.
+		const kindText = truncateForLedger(rawKind);
+		const subjectText = subjectIdentity(rawSubject);
+		const key = onceKey(kindText, subjectText);
 		if (onceKeys.has(key)) return false;
 		onceKeys.add(key);
-		if (recordDegradation({ kind, subject, reason: record.reason })) {
-			logDurableDegradation(kind, subject, 1, record.metadata, record.code);
+		const kind = boundedKind(kindText);
+		const subject = subjectForLedger(subjectText);
+		if (recordDegradation({ kind, subject, reason })) {
+			logDurableDegradation(kind, subject, 1, metadata, code);
 		}
 		return true;
 	} catch (error) {
@@ -2383,6 +2398,38 @@ export function recordDegradationOnce(record: DegradationRecord): boolean {
 		// Telemetry must never break the observed path.
 		return false;
 	}
+}
+
+/**
+ * The once-key is an event IDENTITY: it answers "has this exact degradation
+ * already been told this session?". The rule (#5359) is that the key carries
+ * the FULL identity while the retained row keeps the bounded one:
+ *
+ * - subject: the full normalized subject, with `subjectForLedger`'s blank fold
+ *   (blank and missing name nothing, so they stay ONE row, #3389). Keying on
+ *   the truncated text made two events whose subjects share their first
+ *   `LEDGER_FIELD_MAX` characters dedupe, and the second was silently dropped —
+ *   the shape a path-bearing subject hits once a checkout, fixture or TMPDIR
+ *   path pushes it past 200 characters.
+ * - kind: the bounded kind TEXT, taken BEFORE `boundedKind`'s cardinality fold.
+ *   That fold bounds the GROUP population; folding the key too merged two
+ *   distinct overflowed kinds that share a subject into one once-key.
+ *
+ * The two components are hashed together as a JSON array, which escapes NUL and
+ * lone surrogates and keeps the boundary between them, so no two different pairs
+ * share one byte string (#5359 r3). An entry stays fixed-size (64 hex chars)
+ * whatever length the caller's subject is: the set grows with distinct events,
+ * never with subject length. Hashing is collision-safe here because a collision
+ * would only re-merge two subjects this function already treats as one, and the
+ * population is distinct degradation events per session.
+ *
+ * Memory: one entry per distinct (kind, subject) event per session, cleared by
+ * `resetDegradationLedger()` at `session_start`.
+ */
+function onceKey(kindText: string, subjectText: string): string {
+	return createHash("sha256")
+		.update(JSON.stringify([kindText, subjectText]))
+		.digest("hex");
 }
 
 /**
@@ -2396,13 +2443,31 @@ export function recordDegradationOnce(record: DegradationRecord): boolean {
  * falling back to the bounded count, read it off this return value instead
  * of hand-rolling their own parallel `Set`/latch). #1716 reuses this same
  * signal to gate `navRequest`'s detailed timeout/late-answer log writes.
+ *
+ * `tallies` is keyed through `onceKey`, the same event identity the once-path
+ * uses, so it has the same bound and the same reset: one fixed-size entry per
+ * distinct event per session, cleared by `resetDegradationLedger()` at
+ * `session_start`. There is no separate key expression to keep in sync.
  */
 export function incrementDegradationCount(record: DegradationRecord): boolean {
 	try {
-		const kind = boundedKind(record.kind);
-		const subject = subjectForLedger(record.subject);
+		const { kind: rawKind, subject: rawSubject } = record;
+		// Converted ONCE, before the tally is set (#5359 r3, Qodo C1.1): the key
+		// and the bounded display fields all derive from these strings.
+		const kindText = truncateForLedger(rawKind);
+		const subjectText = subjectIdentity(rawSubject);
+		const kind = boundedKind(kindText);
+		const subject = subjectForLedger(subjectText);
 		const reason = truncateForLedger(record.reason);
-		const key = `${kind}\0${subject}`;
+		// The tally is keyed on the SAME event identity as the once-path (#5359
+		// review F1): `${boundedKind}\0${subjectForLedger}` merged two file paths
+		// sharing their first LEDGER_FIELD_MAX characters, and two distinct kinds
+		// past the cardinality cap on one subject, into one tally — so the second
+		// event lost the rising edge that ten callers gate a one-time log line on.
+		// The RETAINED row below stays keyed by the bounded display identity: two
+		// long subjects then share one slot showing the latest tally, and no
+		// event drops out of the group count.
+		const key = onceKey(kindText, subjectText);
 		const count = (tallies.get(key) ?? 0) + 1;
 		tallies.set(key, count);
 		let group = groups.get(kind);
@@ -2506,6 +2571,16 @@ function isPowerOfTwo(value: number): boolean {
 function subjectForLedger(value: unknown): string {
 	const subject = truncateForLedger(value);
 	return subject.trim() === "" ? "unknown" : subject;
+}
+
+/**
+ * The subject's IDENTITY text for the once-key: `subjectForLedger`'s blank fold
+ * at FULL length. Same "blank names nothing" rule, minus the truncation that
+ * makes two different long paths look identical (#5359).
+ */
+function subjectIdentity(value: unknown): string {
+	const text = normalizeForLedger(value);
+	return text.trim() === "" ? "unknown" : text;
 }
 
 function boundedKind(value: unknown): string {

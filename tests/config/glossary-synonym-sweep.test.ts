@@ -1569,7 +1569,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-core/normalize.ts": 12,
 		"clients/config-core/records.ts": 6,
 		"clients/config-resolve.ts": 16,
-		"clients/degradation-ledger.ts": 16,
+		// 12 -> 11 (#5359 round 2): `incrementDegradationCount` now binds
+		// `record.kind`/`record.subject` once into `rawKind`/`rawSubject` so its
+		// tally key and the retained fields share one read.
+		"clients/degradation-ledger.ts": 11,
 		// #3968 PR 2: +1 — `redactServerSpec` reads `record.covers` (the
 		// rendered claim beside the existing redacted fields).
 		// 11 -> 10 (#5127): `redactServerSpec` reads `record.command` once into
