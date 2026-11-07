@@ -484,9 +484,10 @@ function cleanGist(rest, maxGist) {
 }
 
 // Likely-duplicate finder (#5351): two entries of one section and one area that
-// describe the same change. Two signals: the headlines share most of their
-// words, or the entries share enough code spans (tool names, flags, file
-// extensions). Both bars are set from the CHANGELOG sections of 4.4.7 to 4.4.10.
+// describe the same change. Two signals: the headlines overlap by at least
+// 0.4 (shared words over the words of both, Jaccard), or the entries share
+// enough code spans (tool names, flags, file extensions). Both bars are set
+// from the CHANGELOG sections of 4.4.7 to 4.4.10.
 // The v4.4.9 LSP-timeout headlines overlap at 0.42; the closest pair of those
 // releases the bar leaves unflagged scores 0.29 (a held-file and a module
 // entry of 4.4.7), so the bar sits at 0.4. The two v4.4.9 Groovy headlines
@@ -636,6 +637,24 @@ export function readHighlights(rootDir, version) {
 			`.changelog/highlights/${bare}.md must be "### Highlights" then ${HIGHLIGHTS_MIN_BULLETS} to ${HIGHLIGHTS_MAX_BULLETS} "- " bullets and nothing else (bullets=${bullets}, other lines=${stray})`,
 		);
 	return text.trimEnd();
+}
+
+/**
+ * The release body of a version in summary form (#5351, #5357 F8): the approved
+ * highlights block (`readHighlights`) on top, then the summary of its section.
+ * Both release writers call it: `changelog-extract --summary` (release.yml) and
+ * `backfill-github-releases` without `--full`, so a backfill never drops a block
+ * a release carries. A malformed file throws, as `readHighlights` does.
+ *
+ * @param {string} rootDir the checkout holding `.changelog/`
+ * @param {string} version e.g. "4.4.10" or "v4.4.10"
+ * @param {string} section the full section body from extractSection()
+ * @returns {string}
+ */
+export function releaseSummaryBody(rootDir, version, section) {
+	const highlights = readHighlights(rootDir, version);
+	const summarized = summarizeSection(section);
+	return highlights ? `${highlights}\n\n${summarized}` : summarized;
 }
 
 /**

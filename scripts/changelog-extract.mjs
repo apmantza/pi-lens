@@ -13,11 +13,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import {
-	extractSection,
-	readHighlights,
-	summarizeSection,
-} from "./lib/changelog.mjs";
+import { extractSection, releaseSummaryBody } from "./lib/changelog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = join(__dirname, "..");
@@ -52,9 +48,7 @@ function main() {
 	// prose stays in CHANGELOG.md. `--summary` is what release.yml passes.
 	// `.changelog/highlights/<version>.md` (3 to 5 approved bullets) goes on top
 	// of the summary; a malformed file throws, which fails the release.
-	const highlights = summary ? readHighlights(ROOT_DIR, version) : null;
-	const summarized = summary ? summarizeSection(full) : full;
-	const body = highlights ? `${highlights}\n\n${summarized}` : summarized;
+	const body = summary ? releaseSummaryBody(ROOT_DIR, version, full) : full;
 	if (out) writeFileSync(out, body + "\n", "utf8");
 	else process.stdout.write(body + "\n");
 }

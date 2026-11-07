@@ -45,6 +45,12 @@ export const HIGHLIGHTS_MIN_BULLETS: number;
 export const HIGHLIGHTS_MAX_BULLETS: number;
 /** The approved `.changelog/highlights/<version>.md` block, `null` when absent; throws when malformed (#5351). */
 export function readHighlights(rootDir: string, version: string): string | null;
+/** The release body in summary form: the approved highlights block on top, then `summarizeSection(section)` (#5351, #5357 F8). Throws when the file is malformed. */
+export function releaseSummaryBody(
+	rootDir: string,
+	version: string,
+	section: string,
+): string;
 /** The closed list of areas a user fragment names in `area:` (#5351). */
 export const CHANGELOG_AREAS: ReadonlyArray<{ id: string; title: string }>;
 export const AREA_GROUP_MIN_ITEMS: number;
