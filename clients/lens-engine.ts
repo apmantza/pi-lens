@@ -28,8 +28,8 @@ import {
 	type ResourceFootprint,
 } from "./instance-registry.js";
 import {
-	extensionsForLanguageToken,
 	resolveFilenameLanguage,
+	resolveLanguageScope,
 } from "./language-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/capabilities.js";
@@ -47,8 +47,10 @@ import {
 import {
 	centralityFromReverseDeps,
 	getWordIndexBuildStatus,
+	isEmptyWordIndexQuery,
 	type RankedFile,
 	searchWordIndex,
+	WordIndexQueryError,
 	triggerBackgroundWordIndexBuild,
 } from "./word-index.js";
 
@@ -311,19 +313,28 @@ export function resourceFootprint(): Promise<ResourceFootprint> {
 	return getResourceFootprintSnapshot();
 }
 
-/** Slimmed wire shape (#517 conformity): `startLine`/`endLine` mark the hit's
- * best-matching line (`lines[0]`, the file's own best-scoring identifier hit);
- * a single-line span rather than a fabricated whole-file range, since the word
- * index tracks scattered per-line matches, not a symbol span. Read derivation:
- * offset=startLine, limit=endLine-startLine+1 for a one-line peek — prefer
- * module_report on `file` for the real outline. No per-hit `read` block, no
- * repeated raw `lines[]` array on the wire. */
+/** Slimmed wire shape (#517 conformity). A `symbol` row carries `hits` and a
+ * single-line `startLine`/`endLine` span marking its best-matching line
+ * (`lines[0]`, the file's own best-scoring identifier hit) rather than a
+ * fabricated whole-file range, since the word index tracks scattered per-line
+ * matches, not a symbol span. Read derivation: offset=startLine,
+ * limit=endLine-startLine+1 for a one-line peek — prefer module_report on
+ * `file` for the real outline. A `file` row (#5135) is a term-less scope
+ * listing: no `hits`, no line span, and the renderer fabricates neither. No
+ * per-hit `read` block, no repeated raw `lines[]` array on the wire. */
 interface SymbolSearchHit {
 	file: string;
 	score: number;
-	hits: number;
-	startLine: number;
-	endLine: number;
+	/** Producer-owned row shape (#5135): `symbol` for a ranked identifier
+	 * match, `file` for a term-less scope listing. The renderer branches on this
+	 * and never infers the kind from `hits` or an empty line list. */
+	kind: "symbol" | "file";
+	/** Present iff `kind === "symbol"`: query-token occurrences. */
+	hits?: number;
+	/** Present iff `kind === "symbol"`: the best-matching line, a single-line
+	 * span. A `file` row carries no line and the renderer fabricates none. */
+	startLine?: number;
+	endLine?: number;
 	/**
 	 * Graph-aware transparency for the ranking (#771): present only when the
 	 * cached review graph happens to be warm (never built/blocked on for this —
@@ -375,7 +386,9 @@ export interface SymbolSearchOptions {
  *
  * Exported so `tests/clients/language-registry-drift.test.ts` guards the SEAM
  * and not just the projection behind it: a future local table reintroduced
- * here would satisfy a registry-only assertion but fail this one.
+ * here would satisfy a registry-only assertion but fail this one. An unknown
+ * token REFUSES with {@link WordIndexQueryError} naming both vocabularies
+ * (#5135) instead of returning `false` — a typo must not read as "no match".
  */
 export function symbolSearchFileMatchesLang(
 	file: string,
@@ -388,6 +401,8 @@ export function symbolSearchFileMatchesLang(
 	// filter, this check does not match `*.dockerfile` (pre-existing on master).
 	// MCP passes `lang` through as typed; normalize once so every branch agrees.
 	const token = lang.toLowerCase();
+	const scope = resolveLanguageScope(token);
+	if ("refusal" in scope) throw new WordIndexQueryError(scope.refusal);
 	const declared = resolveFilenameLanguage(file);
 	if (declared && (declared.id === token || declared.grammar === token)) {
 		return true;
@@ -400,9 +415,7 @@ export function symbolSearchFileMatchesLang(
 	) {
 		return true;
 	}
-	const exts = extensionsForLanguageToken(token);
-	if (exts.length === 0) return false;
-	return exts.includes(path.extname(file).toLowerCase());
+	return scope.extensions.includes(path.extname(file).toLowerCase());
 }
 
 /** Same glob semantics as ast_grep_search's `paths`: a bare directory/file
@@ -485,6 +498,12 @@ function annotateSymbolSearchHitsWithGraph(
 	}
 }
 
+/** The one refusal sentence both `symbol_search` surfaces return for a call
+ * with neither search terms nor scope (#5135). Owned here so the pi tool and
+ * the MCP mirror cannot drift; `SymbolSearchResult.refusal` carries it. */
+export const SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL =
+	"Provide a non-empty `query`, or scope the search with `paths`/`lang` or an inline `lang:`/`file:`/`ext:` filter.";
+
 export interface SymbolSearchResult {
 	/** False when no word index has been built/persisted for this workspace yet. */
 	available: boolean;
@@ -506,13 +525,23 @@ export interface SymbolSearchResult {
 	 * omitted (not surfaced) on the pi tool surface, whose index is per-edit warm.
 	 */
 	snapshotGeneratedAt?: string;
+	/** Set when the call had neither terms nor scope (#5135): the surfaces
+	 * return this sentence as an isError refusal, never as an empty result.
+	 * `available` stays true — the engine could answer; the request was empty. */
+	refusal?: string;
 }
 
 function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
+	if (result.kind === "file") {
+		// A scope listing (#5135) is a file row: no line, no hit count. The
+		// producer owns the shape; nothing is inferred or fabricated here.
+		return { file: result.file, score: result.score, kind: "file" };
+	}
 	const line = result.lines[0] ?? 1;
 	return {
 		file: result.file,
 		score: result.score,
+		kind: "symbol",
 		hits: result.hits,
 		startLine: line,
 		endLine: line,
@@ -552,6 +581,11 @@ function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
  * profile is unchanged either way. The module is dynamic-imported (mirroring
  * module-report.ts's own lazy load of it) so an unused review graph costs
  * nothing on this hot path.
+ *
+ * A call with neither terms nor scope (#5135) returns `refusal` instead of an
+ * empty result; the surfaces turn that into an isError. A term-less call that
+ * carries a scope (inline filters, or `options.paths`/`options.lang`) returns a
+ * listing of the scoped files.
  */
 export async function symbolSearch(
 	query: string,
@@ -566,6 +600,22 @@ export async function symbolSearch(
 	const effectiveLimit = Number.isFinite(limit)
 		? Math.max(1, Math.floor(limit))
 		: 20;
+
+	// #5135: a call with neither terms nor scope is a malformed request, not an
+	// empty result. Decided HERE (one owner) so the pi tool and the MCP mirror
+	// cannot diverge; both surfaces return `refusal` as an isError.
+	if (
+		isEmptyWordIndexQuery(query) &&
+		!options.paths?.length &&
+		!options.lang?.trim()
+	) {
+		return {
+			available: true,
+			query,
+			results: [],
+			refusal: SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
+		};
+	}
 	const warmLease = acquireWarmWordIndex(cwd);
 	const snapshot = loadProjectSnapshotWithoutWordIndex(cwd);
 	const index = warmLease.index;
@@ -612,6 +662,15 @@ export async function symbolSearch(
 			centrality,
 			fileFilter,
 		});
+	} catch (err) {
+		// none: a `WordIndexQueryError` is a refusal RETURNED to the caller (an
+		// isError finding), and every other error rethrows — nothing is swallowed.
+		// #5135: an unknown `lang` token (inline or structured) refuses with
+		// the shared vocabulary sentence instead of answering "no match".
+		if (err instanceof WordIndexQueryError) {
+			return { available: true, query, results: [], refusal: err.message };
+		}
+		throw err;
 	} finally {
 		warmLease.release();
 	}
@@ -653,16 +712,21 @@ function coverageLine(
 	return `Index covers ${coverage.files} files${coverage.truncated ? " (capped — results may be incomplete)" : ""}.`;
 }
 
-/** One ranked row: range first, one line number (`toSymbolSearchHit` sets
- * `endLine = startLine`, so `12-12` would spend bytes on nothing), then the
- * score, the hit count, and the graph annotations the hit carries. An
- * annotation prints whenever its key is present: `fanIn: 0` is an answer ("no
- * known importers"), so the gate is the type, never truthiness (#5104). */
+/** One ranked row. A `symbol` row prints the path, one line number
+ * (`toSymbolSearchHit` sets `endLine = startLine`, so `12-12` would spend bytes
+ * on nothing), the score, the hit count, and any graph annotations it carries.
+ * A `file` row (#5135) prints the path ALONE — no score, no line, no hit count.
+ * The producer sets `kind`; the renderer never infers the kind from a hit count
+ * or an empty line list and never fabricates a line. An annotation prints
+ * whenever its key is present: `fanIn: 0` is an answer ("no known importers"),
+ * so the gate is the type, never truthiness (#5104). */
 function formatSymbolSearchRow(
 	hit: SymbolSearchHit,
 	position: number,
 	cwd: string,
 ): string {
+	const file = path.relative(cwd, hit.file);
+	if (hit.kind === "file") return `  ${position}. ${file}`;
 	const annotations = hit.annotations;
 	const detail = [
 		`score ${hit.score.toFixed(2)}`,
@@ -674,18 +738,19 @@ function formatSymbolSearchRow(
 			? [`complexity ${annotations.complexity}`]
 			: []),
 	];
-	return `  ${position}. ${path.relative(cwd, hit.file)} ${hit.startLine} (${detail.join(", ")})`;
+	return `  ${position}. ${file} ${hit.startLine} (${detail.join(", ")})`;
 }
 
 /**
  * The one renderer for `symbol_search`'s model-facing text (#5104): a header,
- * one row per ranked hit (path relative to `cwd`, its line, score, hit count
- * and any graph annotations), and a footer carrying the index coverage, on MCP
- * the snapshot staleness note, and one next-step line naming the top-ranked
- * hit through the host's own outline tool name. The pi tool and the MCP mirror
- * both call this, so the surfaces cannot drift and neither appends a JSON
- * payload — the ranked table IS the answer. The empty-result path renders
- * through the same footer, so a capped index stays visible there too.
+ * one row per hit — a `symbol` row prints the path, its line, score, hit count
+ * and any graph annotations; a `file` listing row (#5135) prints the path
+ * alone — and a footer carrying the index coverage, on MCP the snapshot
+ * staleness note, and one next-step line naming the top-ranked hit through the
+ * host's own outline tool name. The pi tool and the MCP mirror both call this,
+ * so the surfaces cannot drift and neither appends a JSON payload — the ranked
+ * table IS the answer. The empty-result path renders through the same footer,
+ * so a capped index stays visible there too.
  */
 export function renderCompactSymbolSearch(
 	result: SymbolSearchResult,
