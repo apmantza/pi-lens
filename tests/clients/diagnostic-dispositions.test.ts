@@ -15,6 +15,8 @@ vi.mock("../../clients/disposition-logger.js", () => ({
 }));
 
 import { _resetForTests as _resetBusPublishForTests } from "../../clients/bus-publish.js";
+import { formatCascadeNeighborDiagnostics } from "../../clients/cascade-format.js";
+import type { Diagnostic } from "../../clients/dispatch/types.js";
 import {
 	_resetDispositionPublishForTests,
 	BUS_DISPOSITION_EVENT,
@@ -807,6 +809,103 @@ describe("display-form alias for a mark spelled from a cut message (#5367)", () 
 		const short = finding("short message", 1, "warning");
 		markDisposition(cwd(), { ...short, content }, "false-positive");
 		expect(applyDispositions([short], cwd(), filePath(), content)).toEqual([]);
+	});
+
+	// Recurrence (#5367 r1 F1, reviewer probes p1 and p3): the owner count was
+	// filled from CUT candidates only. An UNCUT finding whose text equals a cut
+	// sibling's display form was not counted as an owner, so a mark naming the
+	// uncut finding also hid the cut sibling through the alias, and master
+	// (which has no alias) hid only the named finding. Every cell keeps what
+	// master keeps: the mark drops the finding it names and nothing else.
+	const SAME_TEXT = "error";
+	const SAME_TEXT_CUT = "error\ndetail";
+
+	it.each([
+		["suppress", "uncut first"],
+		["suppress", "uncut second"],
+		["defer", "uncut first"],
+		["defer", "uncut second"],
+	])(
+		"a %s mark on an uncut finding keeps its cut sibling that displays the same text (%s)",
+		(disposition, order) => {
+			const uncut = finding(SAME_TEXT, 1, "warning");
+			const cut = finding(SAME_TEXT_CUT, 2, "warning");
+			markDisposition(
+				cwd(),
+				{ ...uncut, content },
+				disposition as "suppress" | "defer",
+			);
+			const batch = order === "uncut first" ? [uncut, cut] : [cut, uncut];
+			const kept = applyDispositions(batch, cwd(), filePath(), content);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
+	it.each(["uncut first", "uncut second"])(
+		"a false-positive mark on an uncut blocking finding keeps its blocking cut sibling when both lines read the same (%s)",
+		(order) => {
+			// Identical line content makes the two strict anchors collide: the
+			// alias of the cut finding would hash the same as the uncut finding's
+			// own anchor, which is the drop the owner count must prevent.
+			const twins = "bad();\nbad();\n";
+			const uncut = finding(SAME_TEXT, 1, "blocking");
+			const cut = finding(SAME_TEXT_CUT, 2, "blocking");
+			markDisposition(cwd(), { ...uncut, content: twins }, "false-positive");
+			const batch = order === "uncut first" ? [uncut, cut] : [cut, uncut];
+			const kept = applyDispositions(batch, cwd(), filePath(), twins);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
+	// Recurrence (#5367 r1 F2, reviewer mutation M9): the cascade render and the
+	// alias each cut the message, and nothing pinned them to one derivation. An
+	// inline 90-character cut in `formatCascadeNeighborDiagnostics` survived
+	// every cell above, because they spell the mark from a constant. This cell
+	// takes the mark's text from the line the render printed, so a render that
+	// drifts from `displayedMessage` leaves the mark unanchored and the finding
+	// shown.
+	it("a mark spelled from the printed cascade line hides the finding it names (render and alias agree)", () => {
+		const MULTI = "multi line error first line\nsecond line names the detail";
+		const candidates = [
+			finding(LONG, 1, "warning"),
+			finding(MULTI, 2, "warning"),
+		];
+		const rendered: Diagnostic[] = candidates.map((c) => ({
+			id: `render-${c.line}`,
+			message: c.message,
+			filePath: filePath(),
+			line: c.line,
+			column: 1,
+			severity: "warning",
+			semantic: "warning",
+			tool: c.tool,
+			rule: c.rule,
+		}));
+		const output = formatCascadeNeighborDiagnostics(cwd(), [
+			{
+				filePath: filePath(),
+				reason: "imports",
+				diagnostics: rendered,
+				lspTouched: true,
+			},
+		]);
+		const printed = (line: number): string => {
+			for (const row of output.split("\n")) {
+				const m = /^\s*line (\d+), col \d+(?: rule=\S+)?: (.*)$/.exec(row);
+				if (m && Number(m[1]) === line) return m[2];
+			}
+			throw new Error(`no printed line ${line} in:\n${output}`);
+		};
+		for (const [i, c] of candidates.entries()) {
+			markDisposition(
+				cwd(),
+				{ ...c, message: printed(i + 1), content },
+				"suppress",
+			);
+		}
+		expect(applyDispositions(candidates, cwd(), filePath(), content)).toEqual(
+			[],
+		);
 	});
 });
 

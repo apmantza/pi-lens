@@ -757,6 +757,15 @@ function displayFormAliases<T extends DispositionCandidate>(
 		else owner.add(message);
 	}
 	if (cut.size === 0) return new Map();
+	// #5367 r1 F1: an UNCUT candidate is an owner too, of the display form its
+	// text equals. Without this, a mark naming that finding also hid a cut
+	// sibling that displays the same text, which master kept. Counted after the
+	// cut pass, so the alias set itself stays limited to cut messages.
+	for (const candidate of candidates) {
+		if (messageIsCutWhenDisplayed(candidate.message)) continue;
+		const message = normalizeMessage(candidate.message);
+		owners.get(message)?.add(message);
+	}
 	const aliases = new Map<T, string>();
 	for (const [candidate, form] of cut) {
 		if ((owners.get(normalizeMessage(form))?.size ?? 0) === 1) {
