@@ -857,6 +857,31 @@ describe("display-form alias for a mark spelled from a cut message (#5367)", () 
 		},
 	);
 
+	// Recurrence (#5367 r2, the sweep of the uncut-only owner remedy): a CUT
+	// message can also equal another cut message's display form once whitespace
+	// folds. "error\ndetail" folds to "error detail", the display form of
+	// "error detail\nmore". Counting only uncut candidates left that form with
+	// one owner, so a mark spelled from it dropped the second finding too. The
+	// first finding is still dropped by its own exact anchor, as on master.
+	it.each(["folded sibling first", "folded sibling second"])(
+		"a mark spelled from a display form keeps the cut finding whose folded text is that form (%s)",
+		(order) => {
+			const folded = finding("error\ndetail", 1, "warning");
+			const displayed = finding("error detail\nmore", 2, "warning");
+			markDisposition(
+				cwd(),
+				{ ...folded, message: "error detail", content },
+				"suppress",
+			);
+			const batch =
+				order === "folded sibling first"
+					? [folded, displayed]
+					: [displayed, folded];
+			const kept = applyDispositions(batch, cwd(), filePath(), content);
+			expect(kept.map((d) => d.line)).toEqual([2]);
+		},
+	);
+
 	// Recurrence (#5367 r1 F2, reviewer mutation M9): the cascade render and the
 	// alias each cut the message, and nothing pinned them to one derivation. An
 	// inline 90-character cut in `formatCascadeNeighborDiagnostics` survived

@@ -757,12 +757,13 @@ function displayFormAliases<T extends DispositionCandidate>(
 		else owner.add(message);
 	}
 	if (cut.size === 0) return new Map();
-	// #5367 r1 F1: an UNCUT candidate is an owner too, of the display form its
-	// text equals. Without this, a mark naming that finding also hid a cut
-	// sibling that displays the same text, which master kept. Counted after the
-	// cut pass, so the alias set itself stays limited to cut messages.
+	// #5367 r1 F1: every live candidate owns the display form its own folded
+	// text equals, cut or whole. An uncut finding does, and so does a cut one
+	// whose text folds to another's display form ("error\ndetail" and the form
+	// "error detail"). Without this, a mark naming that text also hid a sibling
+	// whose display form it is, which master kept. Counted after the cut pass,
+	// so the alias set itself stays limited to cut messages.
 	for (const candidate of candidates) {
-		if (messageIsCutWhenDisplayed(candidate.message)) continue;
 		const message = normalizeMessage(candidate.message);
 		owners.get(message)?.add(message);
 	}
