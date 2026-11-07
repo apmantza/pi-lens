@@ -27,6 +27,15 @@ export function countEntriesSince(
 	sinceIso: string,
 ): number;
 
+/**
+ * The p-quantile of an ascending sample by the clamped floor-rank index
+ * `clamp(floor(p * n), 0, n - 1)`. Every returned value is an observed sample.
+ */
+export function lowerRankPercentile(
+	sorted: readonly number[],
+	p: number,
+): number;
+
 export const LEGACY_AGE_PHASES: ReadonlySet<string>;
 
 export function latencyAgeMs(entry: unknown): number | undefined;
