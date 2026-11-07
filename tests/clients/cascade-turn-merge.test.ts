@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import type { CascadeResult } from "../../clients/cascade-types.js";
+import { markDisposition } from "../../clients/diagnostic-dispositions.js";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import { consumeTurnEndFindings } from "../../clients/runtime-context.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
@@ -1894,6 +1895,211 @@ describe("cascade delivery at turn_end (#4485, #4487)", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+
+	// #5344: a neighbour error the agent marks false-positive AFTER the
+	// delivery that created the pending record kept rendering at blocker tier
+	// as "N error(s) unresolved" on every later turn: the pending render read
+	// the record's `errorCount` and never applied dispositions, so the line
+	// cleared only when a subsequent turn re-observed the neighbour.
+	// Recurrence guard: a render of a STORED finding must apply the same
+	// disposition seam a fresh observation applies at its compute.
+	describe("#5344 pending cascade errors honour dispositions", () => {
+		/** Turn 1 delivers `messages` for n1; each entry of `marks` is then
+		 * marked false-positive with the real `markDisposition`; turn 2 edits an
+		 * unrelated file. Returns that turn's delivered text. */
+		async function deliveredThenMarked(
+			env: ReturnType<typeof setupTestEnvironment>,
+			messages: string[],
+			marks: Array<{
+				message: string;
+				line: number;
+				tool?: string;
+				disposition?: "false-positive" | "suppress" | "defer";
+			}>,
+		): Promise<string> {
+			const runtime = new RuntimeCoordinator();
+			const cacheManager = new CacheManager(false);
+			const a = path.join(env.tmpDir, "a.ts");
+			const other = path.join(env.tmpDir, "other.ts");
+			const n1 = path.join(env.tmpDir, "n1.ts");
+			// A neighbour whose every reported line exists on disk: a strict
+			// (false-positive) anchor hashes the flagged line's content.
+			fs.writeFileSync(
+				n1,
+				`${messages.map((_, i) => `export const n${i + 1} = 1;`).join("\n")}\n`,
+			);
+
+			runtime.beginTurn();
+			edit(cacheManager, a, env.tmpDir);
+			runtime.appendCascadeRun({
+				filePath: a,
+				result: await computedResult(env.tmpDir, a, [[n1, messages]]),
+				neighborCount: 1,
+				diagnosticCount: messages.length,
+				observedNeighborPaths: [n1],
+				checkedAt: Date.now(),
+			} as any);
+			expect(await turnEndOf(runtime, cacheManager, env.tmpDir)).toContain(
+				"Cascade errors in",
+			);
+
+			const content = fs.readFileSync(n1, "utf-8");
+			for (const mark of marks) {
+				markDisposition(
+					env.tmpDir,
+					{
+						cwd: env.tmpDir,
+						filePath: n1,
+						...(mark.tool !== undefined && { tool: mark.tool }),
+						rule: "cascade:test",
+						message: mark.message,
+						line: mark.line,
+						content,
+					},
+					mark.disposition ?? "false-positive",
+				);
+			}
+			logCascadeMock.mockClear();
+
+			runtime.beginTurn();
+			edit(cacheManager, other, env.tmpDir);
+			return turnEndOf(runtime, cacheManager, env.tmpDir);
+		}
+
+		it("a false-positive mark made after delivery drops the pending error from the unresolved line (#5344)", async () => {
+			const env = setupTestEnvironment("cascade-5344-marked-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					["marked error"],
+					[{ message: "marked error", line: 1, tool: "lsp" }],
+				);
+				expect(second).not.toMatch(/n1\.ts: \d+ error\(s\) unresolved/);
+				// Gate and render agree: the whole blocker section is gone, not
+				// just its line (a hidden line must not keep the tier gating).
+				expect(second).not.toContain("Cascade errors from an earlier turn");
+
+				// A render does not destroy the record: the entry stays, so a
+				// lifted mark returns the line and a fresh observation still
+				// labels the error by its first delivery turn.
+				const { cascadeStillPresentSince, listCascadePendingNeighbors } =
+					await import("../../clients/cascade-format.js");
+				const n1 = path.join(env.tmpDir, "n1.ts");
+				expect(listCascadePendingNeighbors().map((e) => e.errorCount)).toEqual([
+					1,
+				]);
+				expect(
+					cascadeStillPresentSince(n1, diagnostic(n1, "marked error", 1), 99),
+				).toBe(1);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("a mark made from the rendered cascade line (rule, no tool) clears the pending error too (#5344)", async () => {
+			const env = setupTestEnvironment("cascade-5344-tool-less-");
+			try {
+				// The delivered line prints `line L, col C rule=R: message` — no
+				// tool — so an agent marking from what it was SHOWN gives no tool.
+				// The same #3248 identity widening the other turn-end lanes use
+				// must cover this render as well.
+				const second = await deliveredThenMarked(
+					env,
+					["marked error"],
+					[{ message: "marked error", line: 1 }],
+				);
+				expect(second).not.toMatch(/n1\.ts: \d+ error\(s\) unresolved/);
+				expect(second).not.toContain("Cascade errors from an earlier turn");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("a mark on one of two pending errors drops it from the count and keeps the line (#5344)", async () => {
+			const env = setupTestEnvironment("cascade-5344-partial-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					["kept error", "marked error"],
+					[{ message: "marked error", line: 2, tool: "lsp" }],
+				);
+				expect(second).toMatch(/n1\.ts: 1 error\(s\) unresolved/);
+				expect(second).toContain("Cascade errors from an earlier turn");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("a pending error is still listed when a mark matches nothing in it (#5344 control)", async () => {
+			const env = setupTestEnvironment("cascade-5344-control-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					["kept error"],
+					[{ message: "an unrelated finding", line: 1, tool: "lsp" }],
+				);
+				expect(second).toMatch(/n1\.ts: 1 error\(s\) unresolved \(scanned/);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("a pending error dropped by a disposition is recorded, not silently silenced (#5344)", async () => {
+			const env = setupTestEnvironment("cascade-5344-record-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					["kept error", "marked error"],
+					[{ message: "marked error", line: 2, tool: "lsp" }],
+				);
+				expect(second).toMatch(/n1\.ts: 1 error\(s\) unresolved/);
+				const rows = logCascadeMock.mock.calls
+					.map((call) => call[0] as { phase?: string; metadata?: any })
+					.filter((row) => row?.phase === "cascade_pending_gated");
+				expect(rows.map((row) => row.metadata.disposed)).toEqual([1]);
+				// Recurrence guard (#5366 review C3.1/C4.1): a file with only some
+				// errors dismissed is named in the row, so the drop is attributed
+				// to its file, not to the row's unrelated top-level path.
+				expect(rows.map((row) => row.metadata.disposedPaths)).toEqual([
+					[path.join(env.tmpDir, "n1.ts")],
+				]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		// Recurrence guard (#1625 F1): a weak-anchored `suppress` or `defer` may
+		// drop only a non-blocking finding. The stored `semantic` is what keeps a
+		// pending error blocking on a later turn; without it both marks below
+		// would hide the errors the blocker tier must still name.
+		it("a weak suppress or defer mark does not hide a blocking pending error (#5344)", async () => {
+			const env = setupTestEnvironment("cascade-5344-weak-");
+			try {
+				const second = await deliveredThenMarked(
+					env,
+					["suppressed error", "deferred error"],
+					[
+						{
+							message: "suppressed error",
+							line: 1,
+							tool: "lsp",
+							disposition: "suppress",
+						},
+						{
+							message: "deferred error",
+							line: 2,
+							tool: "lsp",
+							disposition: "defer",
+						},
+					],
+				);
+				expect(second).toMatch(/n1\.ts: 2 error\(s\) unresolved/);
+				expect(second).toContain("Cascade errors from an earlier turn");
+			} finally {
+				env.cleanup();
+			}
+		});
 	});
 
 	// #5034 review r3 (F8). Recurrence: a neighbour no primary answered for is

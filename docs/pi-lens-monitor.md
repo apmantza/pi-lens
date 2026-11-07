@@ -86,7 +86,10 @@ the requested window.
    `n | timed_n | p50 | p95 | max | total_ms`, sorted by total, top 15.
    Count every row in `n`; compute
    timing columns only from numeric `durationMs`, in ms, with `timed_n`
-   showing that sample count. Show `-` when no durations exist. List count-only
+   showing that sample count. A row that carries `ageMs` is an age, not a
+   duration (#5379), and so is a pre-#5379 line of a phase in
+   `LEGACY_AGE_PHASES` (`scripts/lib/latency-log-phases.mjs`): count it in `n`,
+   never in a timing column. Show `-` when no durations exist. List count-only
    phases separately so the timing top 15 cannot hide `cascade_carry_rendered`;
    include its `metadata.carriedRunsRendered` and `metadata.labeledAdvisories`
    totals.

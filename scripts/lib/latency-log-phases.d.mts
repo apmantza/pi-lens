@@ -35,3 +35,9 @@ export function lowerRankPercentile(
 	sorted: readonly number[],
 	p: number,
 ): number;
+
+export const LEGACY_AGE_PHASES: ReadonlySet<string>;
+
+export function latencyAgeMs(entry: unknown): number | undefined;
+
+export function latencySpanMs(entry: unknown): number | undefined;

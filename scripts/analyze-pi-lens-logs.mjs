@@ -20,7 +20,11 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { minimatch } from "minimatch";
-import { lowerRankPercentile } from "./lib/latency-log-phases.mjs";
+import {
+	latencyAgeMs,
+	latencySpanMs,
+	lowerRankPercentile,
+} from "./lib/latency-log-phases.mjs";
 
 const DEFAULT_ROOT = path.join(os.homedir(), ".pi-lens");
 const DEFAULT_SINCE = "2d";
@@ -1445,7 +1449,11 @@ function summarizeWorkspaceSweep(entry) {
 	if (md.perFileMs) bits.push(`perFileMs=${md.perFileMs}`);
 	return {
 		ts: entry.ts,
-		durationMs: entry.durationMs,
+		// A finished sweep carries a span; a heartbeat carries its elapsed time so
+		// far, an age (#5379). Both read through the one shared span-or-age rule
+		// (a pre-#5379 heartbeat holds the age in `durationMs`), and this field is
+		// the elapsed time either way: it is shown, never ranked as a duration.
+		durationMs: latencySpanMs(entry) ?? latencyAgeMs(entry),
 		project: projectOf(entry.filePath),
 		filePath: shortPath(entry.filePath),
 		message: bits.join(", "),

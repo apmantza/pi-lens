@@ -1179,3 +1179,60 @@ describe("analyze-pi-lens-logs.mjs discloses the top-N cap (#5263 r2 F3)", () =>
 		expect(runAnalyzer(sample)).not.toMatch(/showing \d+ of \d+ groups/);
 	});
 });
+
+describe("analyze-pi-lens-logs.mjs reads the shared span-or-age rule (#5379)", () => {
+	// Recurrence: the heartbeat's cumulative elapsed time was written to
+	// `durationMs`, and the analyzer's only consumer of it ("how far did the hung
+	// sweep get") read that field. Producers now write `ageMs`; a log written
+	// before #5379 still holds the age in `durationMs`. Both must read as the
+	// same elapsed time, through `scripts/lib/latency-log-phases.mjs`, with no
+	// phase-name list in the analyzer.
+	let root: string;
+	let report: any;
+
+	beforeAll(() => {
+		root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-loganalyze-5379-"));
+		const heartbeat = (project: string, extra: Record<string, unknown>) => ({
+			type: "phase",
+			ts: NOW,
+			phase: "lsp_workspace_diagnostics_progress",
+			filePath: project,
+			metadata: { completed: 7, total: 90, timedOutFiles: 0, aborted: false },
+			...extra,
+		});
+		const start = (project: string) => ({
+			type: "phase",
+			ts: NOW,
+			phase: "lsp_workspace_diagnostics_start",
+			filePath: project,
+			durationMs: 0,
+			metadata: { fileCount: 90, perFileMs: 15000 },
+		});
+		const latency = [
+			start("/proj/new"),
+			heartbeat("/proj/new", { ageMs: 30000 }),
+			start("/proj/legacy"),
+			heartbeat("/proj/legacy", { durationMs: 20000 }),
+		]
+			.map((e) => JSON.stringify(e))
+			.join("\n");
+		fs.writeFileSync(path.join(root, "latency.log"), `${latency}\n`);
+		report = runReport(root);
+	});
+
+	afterAll(() => removeTempDirSync(root));
+
+	it("shows a new-format heartbeat's ageMs and a legacy heartbeat's durationMs as the elapsed time", () => {
+		const incomplete = report.smells.find(
+			(s: any) => s.id === "lsp-workspace-diagnostics-incomplete",
+		);
+		expect(incomplete?.count).toBe(2);
+		const elapsedByProject = Object.fromEntries(
+			incomplete.examples.map((ex: any) => [ex.filePath, ex.durationMs]),
+		);
+		expect(elapsedByProject).toEqual({
+			"/proj/new": 30000,
+			"/proj/legacy": 20000,
+		});
+	});
+});

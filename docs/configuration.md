@@ -149,6 +149,17 @@ whole, so setting one key never silently drops the rest of a section.
 3. **nested-project** — every `.pi-lens.json` between that root and your working
    directory, outermost first. The nearest file wins, per field.
 
+For the project settings read through the project config loader (`autofix`,
+`maxProjectFiles`, `tools.*`, `trivy`, `helm`, `ignore` and the rest), that walk
+stops at the git root: a `.pi-lens.json` in a folder above your repository is never merged into
+it, so permission keys such as `trivy.enabled` and
+`helm.renderValidation.enabled` come from the repository alone (#5291). A
+checkout with no `.git` entry anywhere above the working directory keeps the
+`$HOME` ceiling instead. A repository with no `.pi-lens.json` of its own still
+inherits the nearest one above it, whole, as before. The language-server
+section and the dispatch policy's turn-off lists are read by their own loaders,
+which still walk to the `$HOME` ceiling.
+
 Those three are the tiers the config **files** resolve through, and they are the
 only ones this resolution populates. Four more tiers are reserved in the
 precedence table — `builtin` below them, and `env`, `cli`, `host` above — and
@@ -422,6 +433,13 @@ these dates instantiate.
 
 A `.pi-lens.json` that mixes both spellings is fine while you migrate: the
 canonical key wins, and the keys you have not moved yet keep working.
+
+For project settings the same rule reaches across directories (#5291): a legacy
+`pi-lens.json` still supplies its values whole while it is the only config
+file in the chain from your working directory upward, and once a canonical
+`.pi-lens.json` sits anywhere in that chain the legacy file only produces its
+migration notices — its fields are not merged in, and the canonical files
+layer per field as above. Move the settings; the notices name the file.
 
 Only keys pi-lens actually recognizes get "move it to …" advice. A key in a
 legacy file that is not a pi-lens setting at all — a typo, or a leftover from

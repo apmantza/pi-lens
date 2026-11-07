@@ -554,7 +554,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-core/deny.ts": 1,
 		"clients/config-core/merge.ts": 2,
 		"clients/config-locations.ts": 4,
-		"clients/config-resolve.ts": 1,
+		// 1 -> 2 (#5291): `CANONICAL_PROJECT_CONFIG_LOCATIONS` drops the legacy
+		// spec from the shared list, an `Array.prototype.filter` call, not a
+		// delivery filter.
+		"clients/config-resolve.ts": 2,
 		"clients/deadline-utils.ts": 1,
 		"clients/debug-handles.ts": 1,
 		"clients/debug-heap.ts": 1,
@@ -1002,7 +1005,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/codebase-model.ts": 4,
 		"clients/complexity-client.ts": 3,
 		"clients/config-core/normalize.ts": 22,
-		"clients/config-locations.ts": 26,
+		// 26 -> 27 (#5291): `configSearchDirs` joins `.git` onto each walked dir to
+		// find the git root — the `node:path` host module, not a delivery lane.
+		"clients/config-locations.ts": 27,
 		"clients/config-resolve.ts": 8,
 		"clients/dead-code-client.ts": 5,
 		"clients/dead-code-logger.ts": 3,
@@ -1344,7 +1349,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-diagnostics/runner-adapters/runner-findings.ts": 4,
 		"clients/project-diagnostics/runner-adapters/trivy.ts": 5,
 		"clients/project-diagnostics/scanner.ts": 4,
-		"clients/project-lens-config.ts": 17,
+		// 17 -> 25 (#5291): the layered read and the discovery stamps build and
+		// probe candidate files through `path.join` / `path.resolve` — the
+		// `node:path` host module, not a delivery lane.
+		"clients/project-lens-config.ts": 25,
 		"clients/project-report.ts": 5,
 		"clients/project-snapshot.ts": 15,
 		// 18 -> 22 (#3871 r2, r3): ambient-environment containment uses four
@@ -1569,7 +1577,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-core/normalize.ts": 12,
 		"clients/config-core/records.ts": 6,
 		"clients/config-resolve.ts": 16,
-		"clients/degradation-ledger.ts": 16,
+		// 12 -> 11 (#5359 round 2): `incrementDegradationCount` now binds
+		// `record.kind`/`record.subject` once into `rawKind`/`rawSubject` so its
+		// tally key and the retained fields share one read.
+		"clients/degradation-ledger.ts": 11,
 		// #3968 PR 2: +1 — `redactServerSpec` reads `record.covers` (the
 		// rendered claim beside the existing redacted fields).
 		// 11 -> 10 (#5127): `redactServerSpec` reads `record.command` once into
