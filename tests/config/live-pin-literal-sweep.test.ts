@@ -13,7 +13,7 @@ import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 // Recurrence #4418 and #4421: a test in tests/config hard-coded the SHA a
 // workflow pins an action to (setup-node 6.5.0 in the Windows and targeted
-// lanes; checkout in the heavy-gate and writer-governance tests). Every
+// lanes; checkout in the early-start checkout census and writer-governance tests). Every
 // Dependabot bump of that action moved the workflows and left the literal
 // behind, so the bump PR went red on a test unrelated to it. A test that must
 // agree with a workflow derives the pin from the workflow

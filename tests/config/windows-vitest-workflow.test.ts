@@ -244,7 +244,7 @@ describe("Windows Vitest workflow contract (#2536)", () => {
 		const job = readWorkflow().jobs["unit-tests-windows"];
 		// #4518: promoted from `(advisory)` on 2026-10-17. The name carries no
 		// suffix, so ci-verdict gates it, and no `needs:`/`if:` scales it back
-		// behind the heavy gate -- a required row that a docs-only diff skips
+		// to a skippable job -- a required row that a docs-only diff skips
 		// would be absent forever.
 		expect(job?.name).toBe("Unit tests Windows");
 		expect(job?.["runs-on"]).toBe("windows-latest");

@@ -1599,10 +1599,6 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 	const EXTERNAL_ADVISORY_NAMES = ["CodeQL", "SonarCloud Code Analysis"];
 
 	const EXPECTED_ADVISORY = new Set([
-		// #3801: the job that releases the heavy advisory jobs after the required
-		// checks pass; it reports ready=false rather than failing, and must never
-		// gate a merge whatever it concludes.
-		"Heavy advisory gate (advisory)",
 		// #3801: classifies the diff for the docs-only skip; it falls back to the
 		// full suite on any doubt and must never gate a merge.
 		"Changed files (advisory)",
