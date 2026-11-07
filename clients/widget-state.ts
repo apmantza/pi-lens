@@ -449,15 +449,47 @@ export function reconcileWidgetDisposition(
 			source = "";
 		}
 	}
-	const active = new Set(
-		applyDispositions(current, cwd, target.filePath, source),
-	);
+	// #5044: a record can hold rows citing ANOTHER file (`citedFile`, #5020) —
+	// helm-lint's chart findings reach the template's record while the template
+	// is written. Anchor every row on the file IT names, never on the record
+	// key: anchored on the target, a mark on one file's finding tagged (or
+	// dropped) another file's row, and a mark on the cited file never reached
+	// the row. Rows without a cite — every pre-#5020 persisted row — land in
+	// the target's own group and take the pre-#5044 sequence unchanged.
+	const groups = new Map<string, WidgetDiagnostic[]>();
+	for (const diagnostic of current) {
+		const anchor = diagnostic.citedFile ?? target.filePath;
+		const group = groups.get(anchor);
+		if (group) group.push(diagnostic);
+		else groups.set(anchor, [diagnostic]);
+	}
+	const contentByAnchor = new Map<string, string>([[target.filePath, source]]);
+	const contentOf = (anchor: string): string => {
+		const hit = contentByAnchor.get(anchor);
+		if (hit !== undefined) return hit;
+		// Best-effort, like `applyDispositionsMultiFile`: an unreadable cited
+		// file anchors with "" — the documented fail-open input, where a STRICT
+		// anchor cannot match and the row stays visible; weak marks never read
+		// content and keep applying.
+		const read = readContentOrUndefined(anchor) ?? "";
+		contentByAnchor.set(anchor, read);
+		return read;
+	};
+	const active = new Set<WidgetDiagnostic>();
+	for (const [anchor, group] of groups) {
+		for (const d of applyDispositions(group, cwd, anchor, contentOf(anchor))) {
+			active.add(d);
+		}
+	}
 	const normalized: WidgetDiagnostic[] = current.flatMap((diagnostic) => {
+		const anchor = diagnostic.citedFile ?? target.filePath;
+		const anchorContent =
+			anchor === target.filePath ? source : contentOf(anchor);
 		const { strict, weak } = anchorsForDiagnostic(
 			cwd,
-			target.filePath,
+			anchor,
 			diagnostic,
-			source,
+			anchorContent,
 		);
 		const entry = getDisposition(cwd, strict) ?? getDisposition(cwd, weak);
 		if (
@@ -466,15 +498,19 @@ export function reconcileWidgetDisposition(
 				entry?.disposition === "suppress")
 		) {
 			// #3183: stamp the strict anchor's own SPAN so the row's lifetime can
-			// later ask the mark instead of the file's mtime. `source` is the content
-			// the anchors above were derived from, so the span is the one the mark
-			// itself binds to. Only the STRICT arm has a span — a weak `suppress`
-			// mark hashes no line — and re-tagging always re-derives it, so a stale
-			// span from an earlier tag can never survive into a new disposition.
+			// later ask the mark instead of the file's mtime. `anchorContent` is
+			// the content the anchors above were derived from, so the span is the
+			// one the mark itself binds to. Only the STRICT arm has a span — a weak
+			// `suppress` mark hashes no line — and re-tagging always re-derives it,
+			// so a stale span from an earlier tag can never survive into a new
+			// disposition. A CITED row's span is the cited file's span; the
+			// `reconcileStaleWidgetFiles` sweep still consults the record's own
+			// file, so the cited row's retirement stays the mtime gate plus the
+			// gate-side #5020 retire, as before this change.
 			const { anchorSpan: _previousSpan, ...base } = diagnostic;
 			const span =
 				entry.disposition === "false-positive"
-					? strictAnchorSpan(source, diagnostic.line)
+					? strictAnchorSpan(anchorContent, diagnostic.line)
 					: undefined;
 			return [
 				{

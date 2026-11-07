@@ -849,6 +849,50 @@ export function applyDispositionsMultiFile<T extends DispositionCandidate>(
 	cwd: string,
 	filePathOf: (diagnostic: T) => string,
 ): T[] {
+	return filterPerFileGroup(diagnostics, cwd, filePathOf, (group, filePath) => {
+		let content = "";
+		try {
+			content = multiFileReadFileSync(filePath, "utf-8");
+		} catch {
+			// Unreadable/missing — fail open, see doc above.
+		}
+		return applyDispositions(group, cwd, filePath, content);
+	});
+}
+
+/**
+ * WEAK-anchor variant of {@link applyDispositionsMultiFile} for cache-only
+ * readers whose per-file records can hold findings citing a DIFFERENT file
+ * (#5044: a helm-lint row for `Chart.yaml` stored under the written
+ * template's widget key). Anchoring the whole record on the store key lets a
+ * mark on the edited file hide the other file's finding and hides the
+ * finding from its own mark — the shape #5067 fixed for the dispatch path.
+ *
+ * Zero I/O: a weak anchor reads only the path component of its file, never
+ * content (see {@link applyWeakDispositions}'s contract), so each group is
+ * anchored on its own path and no file is read. Same grouping, same
+ * `nothingToApply` hoist, same order preservation — both multi-file lanes
+ * ride the one shared pass below so they cannot drift.
+ */
+export function applyWeakDispositionsMultiFile<T extends DispositionCandidate>(
+	diagnostics: T[],
+	cwd: string,
+	filePathOf: (diagnostic: T) => string,
+): T[] {
+	return filterPerFileGroup(diagnostics, cwd, filePathOf, (group, filePath) =>
+		applyWeakDispositions(group, cwd, filePath),
+	);
+}
+
+/** The one group-by-file-then-filter pass both multi-file lanes share: the
+ * #1625 F2 empty-store hoist BEFORE any per-group work, groups in first-seen
+ * order, and the caller's original order/dedup preserved by reference. */
+function filterPerFileGroup<T extends DispositionCandidate>(
+	diagnostics: T[],
+	cwd: string,
+	filePathOf: (diagnostic: T) => string,
+	applyGroup: (group: T[], filePath: string) => T[],
+): T[] {
 	if (!diagnostics.length) return diagnostics;
 	const dispositions = readState(cwd).dispositions;
 	if (nothingToApply(dispositions, cwd)) return diagnostics;
@@ -861,13 +905,7 @@ export function applyDispositionsMultiFile<T extends DispositionCandidate>(
 	}
 	const kept = new Set<T>();
 	for (const [filePath, group] of groups) {
-		let content = "";
-		try {
-			content = multiFileReadFileSync(filePath, "utf-8");
-		} catch {
-			// Unreadable/missing — fail open, see doc above.
-		}
-		for (const d of applyDispositions(group, cwd, filePath, content)) {
+		for (const d of applyGroup(group, filePath)) {
 			kept.add(d);
 		}
 	}

@@ -19,6 +19,7 @@ import {
 	anchorsForDiagnostic,
 	applyDispositions,
 	applyWeakDispositions,
+	applyWeakDispositionsMultiFile,
 	hasAnyDispositionMarks,
 	hasStrictDispositionMarks,
 	getDisposition,
@@ -1042,24 +1043,74 @@ export function _readContentForAnchorsForTests(
  * number and identical text, so the mark waits for the next real dispatch to
  * re-derive both sides against matching revisions. Weak suppress/defer marks
  * are intent-level and never look at content, so they keep applying here.
+ *
+ * #5044: a record can hold rows that cite ANOTHER file — helm-lint's chart
+ * findings are recorded under the written template's key, and `pipeline.ts`
+ * stamps them with `WidgetDiagnostic.citedFile` (#5020). Every anchor is
+ * derived on the file the finding NAMES (`citedFile`, else the record key),
+ * never on the store key: a mark on Chart.yaml hides the Chart.yaml row, and
+ * a mark on the template cannot hide it. The freshness/stat/content decision
+ * runs per anchor path, so a stale or unreadable CHART.yaml degrades only the
+ * Chart.yaml rows to the weak fallback; the store key's rows keep their own
+ * freshness verdict. All-own-file inputs (every record without a cited row)
+ * take exactly the pre-#5044 sequence.
  */
 function applyCachedDispositions<
-	T extends DispositionCandidate & { observedAt?: number },
+	T extends DispositionCandidate & {
+		observedAt?: number;
+		citedFile?: string;
+	},
 >(cachedDiagnostics: T[], cwd: string, filePath: string): T[] {
 	// Zero-I/O fast paths (#1625 F2 precedent): with no marks at all there is
 	// nothing to filter; with only weak suppress/defer marks a strict anchor
 	// can never match, so the weak filter serves them without any stat/read.
 	if (!hasAnyDispositionMarks(cwd)) return cachedDiagnostics;
+	// A mark binds to the file the finding NAMES (`citedFile`, #5020), never
+	// to the store key. Entries without a cited file — every pre-#5020
+	// persisted row and every same-file row — anchor on the record key.
+	const anchorOf = (d: T): string => d.citedFile ?? filePath;
 	if (!hasStrictDispositionMarks(cwd)) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+		return applyWeakDispositionsMultiFile(cachedDiagnostics, cwd, anchorOf);
 	}
+	// The strict path decides freshness, stat and content per anchor path
+	// (#5044): a stale or unreadable Chart.yaml degrades only the Chart.yaml
+	// rows to the weak fallback; the store key's rows keep their own verdict.
+	// All-own-file inputs take exactly the pre-#5044 sequence.
+	const groups = new Map<string, T[]>();
+	for (const d of cachedDiagnostics) {
+		const anchor = anchorOf(d);
+		const group = groups.get(anchor);
+		if (group) group.push(d);
+		else groups.set(anchor, [d]);
+	}
+	if (groups.size <= 1) {
+		const anchor = groups.keys().next().value ?? filePath;
+		const group = groups.values().next().value ?? cachedDiagnostics;
+		return applyCachedStrict(group, cwd, anchor);
+	}
+	const kept = new Set<T>();
+	for (const [anchor, group] of groups) {
+		for (const d of applyCachedStrict(group, cwd, anchor)) kept.add(d);
+	}
+	// Preserve the caller's original order, as applyDispositionsMultiFile does.
+	return cachedDiagnostics.filter((d) => kept.has(d));
+}
+
+/** The strict-immediate decision for ONE anchor path of a cached set: stat,
+ * freshness against the newest observation in `group`, memoized content read,
+ * full filter; weak fallback when the file is unreadable or moved past the
+ * observation. One sequence shared by the record key's rows and every cited
+ * file's rows (#5044). */
+function applyCachedStrict<
+	T extends DispositionCandidate & { observedAt?: number },
+>(group: T[], cwd: string, anchor: string): T[] {
 	let stat: fsSync.Stats;
 	try {
-		stat = fsSync.statSync(filePath);
+		stat = fsSync.statSync(anchor);
 	} catch {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+		return applyWeakDispositions(group, cwd, anchor);
 	}
-	const referenceMs = cachedDiagnostics.reduce<number>(
+	const referenceMs = group.reduce<number>(
 		(latest, d) => Math.max(latest, d.observedAt ?? 0),
 		0,
 	);
@@ -1068,13 +1119,13 @@ function applyCachedDispositions<
 		freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs }).verdict ===
 			"stale"
 	) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+		return applyWeakDispositions(group, cwd, anchor);
 	}
-	const content = readContentForAnchors(filePath, stat);
+	const content = readContentForAnchors(anchor, stat);
 	if (content === undefined) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+		return applyWeakDispositions(group, cwd, anchor);
 	}
-	return applyDispositions(cachedDiagnostics, cwd, filePath, content);
+	return applyDispositions(group, cwd, anchor, content);
 }
 
 /**

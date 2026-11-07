@@ -1343,10 +1343,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	"tools/lens-diagnostics.ts": {
 		// 7 -> 6 (#5041): the `paths` cap guard's try/catch is gone, because the
 		// shared reader refuses an over-cap list before the scope is built.
+		// Identity moved (#5044): the stat-failure catch arm now feeds the
+		// per-anchor weak call of the cross-file cache reader; same six sites.
 		silent: 6,
-		identities: "58466145d579efae",
+		identities: "7596923c4db70367",
 		reason: PRE_RULE,
-	}, // :276, :980, :1040, :1495, :1555, :2269
+	}, // :277, :999, :1106, :1561, :1621, :2333
 	"tools/lsp-diagnostics.ts": {
 		silent: 10,
 		identities: "2e5c32f96dcee285",
