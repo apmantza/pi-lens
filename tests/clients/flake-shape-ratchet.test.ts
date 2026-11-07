@@ -1292,6 +1292,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the wrapper's advisory scope runs a real `git diff` in a throwaway fixture repo and reads argv/env; an in-process double proves neither boundary",
 	},
+	// 2026-11-07 (#5351): the `--duplicates` and `--summary` CLIs run as real
+	// children; argv wiring and the exit code the release roll acts on are the
+	// subject, and an in-process call of the pure functions cannot prove either.
+	"real-process-spawn:scripts/changelog-cli.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the release roll and release.yml act on the CLIs' argv, stdout and exit code; an in-process call of the pure functions cannot prove that boundary",
+	},
 	// #3795: the one-fragment-per-PR check diffs a real fixture repo through
 	// real `git` (`git diff` plus `git ls-files --others`); that command
 	// boundary is the subject, and no in-process double reproduces git's own

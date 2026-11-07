@@ -30,3 +30,9 @@ export function userCountLine(body: string): string;
 export function renderUserChangelog(options?: { rootDir?: string }): string;
 export function writeUserChangelog(options?: { rootDir?: string }): void;
 export function checkUserChangelog(options?: { rootDir?: string }): void;
+
+/** The duplicate-entry checklist for one `CHANGELOG.md` section (#5351); edits nothing. */
+export function duplicateChecklist(
+	version: string,
+	options?: { rootDir?: string },
+): string;
