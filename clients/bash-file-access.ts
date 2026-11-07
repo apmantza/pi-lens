@@ -874,26 +874,29 @@ interface MoveOperands {
 const MOVE_CLUSTER_LETTERS = new Set("abdfilnprRsvx");
 
 /**
- * The target-directory value a word carries by itself, or null when the word is
- * not that option (#5378). `--target-directory=DIR`, `-tDIR` and a run of
- * valueless letters ending in `t` (`-vt DIR`, `-vtDIR`) all name it; the empty
- * string means the value is the NEXT word (`-t`, `--target-directory`, `-vt`).
- * getopt reads a short cluster left to right and stops at the first letter that
- * takes a value, so the `t` there is the option and the rest of the word is its
- * value. An attached value is a word fragment, so bash expands no `~` in it.
+ * The target-directory value a word carries by itself, or undefined when the
+ * word is not that option (#5378). `--target-directory=DIR`, `-tDIR` and a run
+ * of valueless letters ending in `t` (`-vt DIR`, `-vtDIR`) all name it; the
+ * empty string means the value is the NEXT word (`-t`, `--target-directory`,
+ * `-vt`). getopt reads a short cluster left to right and stops at the first
+ * letter that takes a value, so the `t` there is the option and the rest of the
+ * word is its value. An attached value is a word fragment, so bash expands no
+ * `~` in it. Every negative here is "this word names no target directory", a
+ * plain absent answer rather than a failure the caller must handle, so the
+ * option is reported as absent (`undefined`) instead of a null sentinel.
  */
-function attachedTargetDirectory(text: string): string | null {
+function attachedTargetDirectory(text: string): string | undefined {
 	if (text.startsWith("--")) {
 		if (text === "--target-directory") return "";
 		return text.startsWith("--target-directory=")
 			? text.slice("--target-directory=".length)
-			: null;
+			: undefined;
 	}
-	if (!text.startsWith("-")) return null;
+	if (!text.startsWith("-")) return;
 	const cluster = /^-([^t]*)t(.*)$/.exec(text);
-	if (!cluster) return null;
+	if (!cluster) return;
 	for (const letter of cluster[1] ?? "") {
-		if (!MOVE_CLUSTER_LETTERS.has(letter)) return null;
+		if (!MOVE_CLUSTER_LETTERS.has(letter)) return;
 	}
 	return cluster[2] ?? "";
 }
@@ -907,23 +910,23 @@ interface TargetDirectoryOption {
 }
 
 /**
- * The target-directory option at `args[index]`, or null when that word is not
- * it (#5378). An option with no word after it is null too: nothing names a
- * directory, exactly as before this parser read `-t`.
+ * The target-directory option at `args[index]`, or undefined when that word is
+ * not it (#5378). An option with no word after it is absent too: nothing names
+ * a directory, exactly as before this parser read `-t`.
  */
 function targetDirectoryAt(
 	args: ShellOperand[],
 	index: number,
-): TargetDirectoryOption | null {
+): TargetDirectoryOption | undefined {
 	const attached = attachedTargetDirectory(args[index]?.text ?? "");
-	if (attached === null) return null;
+	if (attached === undefined) return;
 	if (attached !== "")
 		return {
 			value: { text: attached, tildeExpands: false },
 			consumesNext: false,
 		};
 	const next = args[index + 1];
-	return next ? { value: next, consumesNext: true } : null;
+	return next ? { value: next, consumesNext: true } : undefined;
 }
 
 /**
