@@ -17,6 +17,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 import {
 	assertNonEmptyScan,
 	listSourceFiles,
@@ -989,22 +990,28 @@ describe("analyze-pi-lens-logs.mjs age-phase list stays true to its producers (#
 		expect(agePhaseNames().length).toBeGreaterThanOrEqual(4);
 	});
 
-	it("names only phases that a clients/ producer still writes", () => {
-		const sources = clientsSources();
-		const missing: string[] = [];
-		for (const name of agePhaseNames()) {
-			// The two producer spellings: a literal `phase: "<name>"`, or the
-			// bounded-telemetry emitter that takes the phase name as its first
-			// argument. Any other quoted mention (a comment, a registry entry) is
-			// not a producer and does not satisfy the scan.
-			const producer = new RegExp(
-				`(?:phase:\\s*"|emitBounded\\(\\s*")${name}"`,
-			);
-			if (!sources.some(({ source }) => producer.test(source)))
-				missing.push(name);
-		}
-		expect(missing).toEqual([]);
-	});
+	it(
+		"names only phases that a clients/ producer still writes",
+		() => {
+			const sources = clientsSources();
+			const missing: string[] = [];
+			for (const name of agePhaseNames()) {
+				// The two producer spellings: a literal `phase: "<name>"`, or the
+				// bounded-telemetry emitter that takes the phase name as its first
+				// argument. Any other quoted mention (a comment, a registry entry) is
+				// not a producer and does not satisfy the scan.
+				const producer = new RegExp(
+					`(?:phase:\\s*"|emitBounded\\(\\s*")${name}"`,
+				);
+				if (!sources.some(({ source }) => producer.test(source)))
+					missing.push(name);
+			}
+			expect(missing).toEqual([]);
+			// #4828: this case walks `clients/` (520 files), so it carries the shared
+			// tree-walk budget instead of the default per-test timeout.
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("routes every listed age phase to the ages block and to nothing else", () => {
 		const names = agePhaseNames();
