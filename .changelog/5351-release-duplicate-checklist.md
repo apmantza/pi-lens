@@ -3,4 +3,4 @@ section: Changed
 audience: internal
 ---
 
-- The release roll now runs `node scripts/rollup-changelog.mjs --duplicates <version>`, which lists likely duplicate entry pairs (one section and area, similar headlines or shared code spans) as a checklist for the release PR body and edits nothing (refs #5351).
+- The release roll (`release-roll.sh`) now runs `node scripts/rollup-changelog.mjs --duplicates <version>` and adds its checklist of likely duplicate entry pairs (one section and area, similar headlines or shared code spans) to the release PR body; it edits nothing. A release can also carry `.changelog/highlights/<version>.md`, which `changelog-extract.mjs --summary` puts on top of the release body (refs #5351).

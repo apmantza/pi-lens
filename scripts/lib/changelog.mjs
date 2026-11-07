@@ -6,6 +6,9 @@
 // `backfill-github-releases.mjs` (retroactive release-body sync) all build on
 // the pure functions here so the parsing rules stay identical everywhere.
 
+import fs from "node:fs";
+import path from "node:path";
+
 /**
  * The per-release heading for `audience: internal` fragments (#3852). CHANGELOG.md
  * keeps the entries (inside a collapsed `<details>`); the release-notes summary
@@ -483,11 +486,12 @@ function cleanGist(rest, maxGist) {
 // Likely-duplicate finder (#5351): two entries of one section and one area that
 // describe the same change. Two signals: the headlines share most of their
 // words, or the entries share enough code spans (tool names, flags, file
-// extensions). Both bars are set from the CHANGELOG sections of 4.4.7 to 4.4.9.
-// The v4.4.9 LSP-timeout headlines overlap at 0.42; the closest distinct pair
-// of those three releases scores 0.29, so the bar sits at 0.4. The two v4.4.9
-// Groovy headlines share one word, but the entries share six code spans; no
-// other pair of the three shares more than two.
+// extensions). Both bars are set from the CHANGELOG sections of 4.4.7 to 4.4.10.
+// The v4.4.9 LSP-timeout headlines overlap at 0.42; the closest pair of those
+// releases the bar leaves unflagged scores 0.29 (a held-file and a module
+// entry of 4.4.7), so the bar sits at 0.4. The two v4.4.9 Groovy headlines
+// share one word, but the entries share six code spans; no other pair of the
+// three shares more than two.
 export const DUPLICATE_HEADLINE_OVERLAP = 0.4;
 export const DUPLICATE_SHARED_CODE_SPANS = 3;
 
@@ -507,16 +511,13 @@ function entryHeadline(text) {
 }
 
 // Lowercase words of a headline: code spans keep their text, punctuation, `_`
-// and `-` split words, stop words go, and a trailing `s` folds plurals.
+// and `-` split words, and stop words go. Words are not stemmed.
 function headlineWords(headline) {
 	return new Set(
 		headline
 			.toLowerCase()
 			.split(/[^a-z0-9]+/)
-			.filter((word) => word.length > 1 && !HEADLINE_STOP_WORDS.has(word))
-			.map((word) =>
-				word.length > 3 && /[^s]s$/.test(word) ? word.slice(0, -1) : word,
-			),
+			.filter((word) => word.length > 1 && !HEADLINE_STOP_WORDS.has(word)),
 	);
 }
 
@@ -593,6 +594,48 @@ export function renderDuplicateChecklist(version, pairs) {
  */
 export function normalizeVersion(version) {
 	return String(version).trim().replace(/^v/i, "");
+}
+
+export const HIGHLIGHTS_MIN_BULLETS = 3;
+export const HIGHLIGHTS_MAX_BULLETS = 5;
+
+/**
+ * The maintainer-approved highlights block of a release (#5351):
+ * `.changelog/highlights/<version>.md`, whose first line is `### Highlights`,
+ * then 3 to 5 `- ` bullets and blank lines, nothing else. Returns the block, or
+ * `null` when the version has no file (or is not a plain `x.y.z`, so no path is
+ * built from it). A malformed file throws, so a release never ships a block the
+ * maintainer did not approve in this shape. `changelog-extract --summary`
+ * prepends it to the release body; `CHANGELOG-USER.md` stays count-only.
+ *
+ * @param {string} rootDir the checkout holding `.changelog/`
+ * @param {string} version e.g. "4.4.10" or "v4.4.10"
+ * @returns {string | null}
+ */
+export function readHighlights(rootDir, version) {
+	const bare = normalizeVersion(version);
+	if (!/^\d+\.\d+\.\d+$/.test(bare)) return null;
+	const file = path.join(rootDir, ".changelog", "highlights", `${bare}.md`);
+	let text;
+	try {
+		text = fs.readFileSync(file, "utf8");
+	} catch (error) {
+		if (error?.code === "ENOENT") return null;
+		throw error;
+	}
+	const [first, ...rest] = text.trimEnd().split("\n");
+	const bullets = rest.filter((line) => line.startsWith("- ")).length;
+	const stray = rest.filter((line) => !/^(- \S.*)?$/.test(line)).length;
+	if (
+		first !== "### Highlights" ||
+		bullets < HIGHLIGHTS_MIN_BULLETS ||
+		bullets > HIGHLIGHTS_MAX_BULLETS ||
+		stray > 0
+	)
+		throw new Error(
+			`.changelog/highlights/${bare}.md must be "### Highlights" then ${HIGHLIGHTS_MIN_BULLETS} to ${HIGHLIGHTS_MAX_BULLETS} "- " bullets and nothing else (bullets=${bullets}, other lines=${stray})`,
+		);
+	return text.trimEnd();
 }
 
 /**

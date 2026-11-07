@@ -10,6 +10,7 @@ import {
 	lintSectionBody,
 	parseSectionEntries,
 	parseSections,
+	readHighlights,
 	renderDuplicateChecklist,
 	userEntryShapeProblems,
 } from "./lib/changelog.mjs";
@@ -141,7 +142,24 @@ export function validateChangelogEntries({
 		if (problems.length > 0)
 			fail(path.basename(entry.file), problems.join("; "));
 	}
+	validateHighlights(rootDir);
 	return entries;
+}
+
+// Every file under `.changelog/highlights/` must be `<x.y.z>.md` in the shape
+// readHighlights() accepts; any other name or a subdirectory is refused (#5351).
+function validateHighlights(rootDir) {
+	const dir = path.join(rootDir, ".changelog", "highlights");
+	if (!fs.existsSync(dir)) return;
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const version = entry.name.match(/^(\d+\.\d+\.\d+)\.md$/)?.[1];
+		if (!entry.isFile() || version === undefined)
+			fail(
+				`highlights/${entry.name}`,
+				"expected a file named <x.y.z>.md in .changelog/highlights/",
+			);
+		readHighlights(rootDir, version);
+	}
 }
 
 // Sections CHANGELOG.md can hold per release: the Keep a Changelog ones, then

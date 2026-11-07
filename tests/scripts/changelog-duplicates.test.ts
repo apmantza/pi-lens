@@ -144,3 +144,43 @@ describe("duplicateChecklist (the --duplicates mode)", () => {
 		).toThrow(/no \[9\.9\.9\] section/);
 	});
 });
+
+// Recurrence: review r1 of this PR mutated `>=` to `>` on each signal and the
+// suite stayed green, so a threshold drift (a bar nudged one entry either way)
+// would have shipped unseen. Each case sits exactly on the documented bar.
+describe("the bars are inclusive", () => {
+	const area = (a: string, b: string) =>
+		`### Fixed\n\n#### Language servers\n\n- **${a}** Body.\n\n- **${b}** Body.\n`;
+
+	it("flags a headline overlap of exactly 0.40 (2 shared of 5 words)", () => {
+		const pairs = findDuplicateEntries(
+			area("Alpha beta gamma.", "Alpha beta delta epsilon."),
+		);
+		expect(pairs.map(({ reason }) => reason)).toEqual([
+			"headline overlap 0.40",
+		]);
+	});
+
+	it("does not flag a headline overlap of 0.33 (2 shared of 6 words)", () => {
+		expect(
+			findDuplicateEntries(
+				area("Alpha beta gamma delta.", "Alpha beta epsilon zeta."),
+			),
+		).toEqual([]);
+	});
+
+	const spans = (n: number) =>
+		["`one`", "`two`", "`three`"].slice(0, n).join(" ");
+	const withSpans = (n: number) =>
+		`### Fixed\n\n#### Language servers\n\n- **Kappa lambda.** ${spans(3)} and mu.\n\n- **Nu xi omicron.** ${spans(n)} and pi.\n`;
+
+	it("flags exactly 3 shared code spans", () => {
+		expect(
+			findDuplicateEntries(withSpans(3)).map(({ reason }) => reason),
+		).toEqual(["3 shared code spans"]);
+	});
+
+	it("does not flag 2 shared code spans", () => {
+		expect(findDuplicateEntries(withSpans(2))).toEqual([]);
+	});
+});

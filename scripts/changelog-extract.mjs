@@ -6,16 +6,22 @@
 //
 // Used by .github/workflows/release.yml to feed `gh release create
 // --notes-file`, so the GitHub release body IS the curated section (single
-// source of truth). Exits non-zero with a clear message if the section is
+// source of truth); `--summary` puts the version's approved highlights file
+// (`.changelog/highlights/<version>.md`) on top. Exits non-zero with a clear message if the section is
 // missing or empty, which fails the release before it tags anything.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { extractSection, summarizeSection } from "./lib/changelog.mjs";
+import {
+	extractSection,
+	readHighlights,
+	summarizeSection,
+} from "./lib/changelog.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CHANGELOG_PATH = join(__dirname, "..", "CHANGELOG.md");
+const ROOT_DIR = join(__dirname, "..");
+const CHANGELOG_PATH = join(ROOT_DIR, "CHANGELOG.md");
 
 function parseArgs(argv) {
 	const args = { version: undefined, out: undefined, summary: false };
@@ -44,7 +50,11 @@ function main() {
 	}
 	// The release body is a scannable summary (bold titles, grouped) — the full
 	// prose stays in CHANGELOG.md. `--summary` is what release.yml passes.
-	const body = summary ? summarizeSection(full) : full;
+	// `.changelog/highlights/<version>.md` (3 to 5 approved bullets) goes on top
+	// of the summary; a malformed file throws, which fails the release.
+	const highlights = summary ? readHighlights(ROOT_DIR, version) : null;
+	const summarized = summary ? summarizeSection(full) : full;
+	const body = highlights ? `${highlights}\n\n${summarized}` : summarized;
 	if (out) writeFileSync(out, body + "\n", "utf8");
 	else process.stdout.write(body + "\n");
 }

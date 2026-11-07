@@ -126,6 +126,7 @@
 		"scripts/analyze-pi-lens-logs-detectors.test.ts": 2,
 		"scripts/analyze-pi-lens-logs.test.ts": 2,
 		"scripts/astgrep-self-scan.test.ts": 5,
+		"scripts/changelog-cli.test.ts": 3,
 		"scripts/changelog-entries.test.ts": 14,
 		"scripts/changelog.test.ts": 3,
 		"scripts/check-allow-scripts.test.ts": 3,
