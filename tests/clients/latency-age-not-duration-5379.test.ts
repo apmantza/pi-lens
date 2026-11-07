@@ -1,3 +1,5 @@
+// flake-shape: in-process-mock — a language server is a spawned process; the subject is the drift and heartbeat producers above the client, which need a client that accepts a document and nothing else. The service, `logLatency`, the NDJSON sink and the performance report are real.
+// flake-shape: service-double — the client double answers `notify.open` and the capability getters the sweep reads; no real server can be told to stall past the 10 s heartbeat gate on demand.
 /**
  * #5379 — an age is not a duration, through the real producer, the real
  * latency sink and the real performance report.
@@ -27,10 +29,6 @@ const createLSPClient = vi.fn();
 vi.mock("../../clients/lsp/client.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/lsp/client.js")>()),
 	createLSPClient,
-}));
-vi.mock("../../clients/reverse-deps.js", () => ({
-	loadReverseDependencyIndexFromSnapshot: vi.fn(() => null),
-	getReverseDepsFromIndex: vi.fn(() => [] as string[]),
 }));
 
 const ORIGINAL = "export const answer = 42;\nconst unused = 1;\n";
