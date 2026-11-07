@@ -33,36 +33,45 @@ import {
 import {
 	renderCompactSymbolSearch,
 	symbolSearch,
+	SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
 	type SymbolSearchResult,
 } from "../../clients/lens-engine.js";
 import {
-	SYMBOL_SEARCH_DESCRIPTION,
 	createSymbolSearchTool,
+	SYMBOL_SEARCH_DESCRIPTION,
+	SYMBOL_SEARCH_QUERY_DESCRIPTION,
 } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
 /** One rendered ranked row: `  1. <path>[ <line>] (score ...)`. */
-const ROW = /^ {2}\d+\. (.*) \((score .*)\)$/;
+/** One rendered row. A `symbol` row is `  1. <path> <line> (score ...)`; a
+ * `file` listing row (#5135) is `  1. <path>`. A line that begins as a row but
+ * matches neither shape is unrecognised: throw rather than drop it, so a
+ * renderer regression cannot pass as a smaller result set. */
+const ROW_PREFIX = /^ {2}\d+\. (.*)$/;
+const SYMBOL_ROW = /^(.*) (\d+) \((score .*)\)$/;
 
 function rows(
 	text: string,
-): Array<{ file: string; line?: number; detail: string }> {
+): Array<{ file: string; line?: number; detail?: string }> {
 	return text.split("\n").flatMap((line) => {
-		const match = ROW.exec(line);
-		if (match === null) return [];
-		// The line number sits before the detail parenthetical; a path that ends
-		// in digits is not a row number (the repo's fixtures never end that way).
-		const pre = match[1];
-		const cut = pre.lastIndexOf(" ");
-		const tail = cut === -1 ? "" : pre.slice(cut + 1);
-		const numbered = /^\d+$/.test(tail);
-		return [
-			{
-				file: toPosix(numbered ? pre.slice(0, cut) : pre),
-				...(numbered ? { line: Number(tail) } : {}),
-				detail: match[2],
-			},
-		];
+		const prefix = ROW_PREFIX.exec(line);
+		if (prefix === null) return [];
+		const rest = prefix[1];
+		const symbol = SYMBOL_ROW.exec(rest);
+		if (symbol) {
+			return [
+				{
+					file: toPosix(symbol[1]),
+					line: Number(symbol[2]),
+					detail: symbol[3],
+				},
+			];
+		}
+		if (/ \(score /.test(rest)) {
+			throw new Error(`unrecognised symbol_search row: ${line}`);
+		}
+		return [{ file: toPosix(rest) }];
 	});
 }
 
@@ -958,13 +967,19 @@ describe("symbol_search tool", () => {
 		) => ({
 			file: path.join(cwd, ...relPath.split("/")),
 			score,
+			kind: "symbol" as const,
 			hits,
 			startLine: line,
 			endLine: line,
 			...(annotations ? { annotations } : {}),
 		});
+		const fileRow = (relPath: string, score = 1) => ({
+			file: path.join(cwd, ...relPath.split("/")),
+			score,
+			kind: "file" as const,
+		});
 		const result = (
-			results: ReturnType<typeof hit>[],
+			results: SymbolSearchResult["results"],
 			truncated = false,
 		): SymbolSearchResult => ({
 			available: true,
@@ -1044,5 +1059,366 @@ describe("symbol_search tool", () => {
 				].join("\n"),
 			);
 		});
+
+		// #5135: a `file` listing row is the path ALONE. The producer set `kind`;
+		// the renderer neither infers it nor fabricates a line.
+		it("renders a `file` row as a bare path, with the top path in the footer", () => {
+			const text = renderCompactSymbolSearch(
+				result([fileRow("src/auth/login.ts")]),
+				{ cwd },
+			);
+			expect(text.split("\n")[1]).toBe("  1. src/auth/login.ts");
+			expect(text).not.toContain("score");
+			expect(text).not.toContain("hit(s)");
+			expect(text).toContain("Next: module_report src/auth/login.ts");
+			expect(rows(text)).toEqual([{ file: "src/auth/login.ts" }]);
+		});
+
+		it("throws on an unrecognised row instead of dropping it", () => {
+			expect(() =>
+				rows("  1. src/auth/login.ts (score 0.50, 1 hit(s))"),
+			).toThrow(/unrecognised symbol_search row/);
+		});
+	});
+});
+
+// #5135: no terms AND no scope is a refusal; a term-less call that carries a
+// scope is a listing. Both entry paths (inline filters and structured
+// `paths`/`lang`) must agree, and the refusal sentence is the one shared with
+// the MCP mirror.
+describe("symbol_search term-less calls (#5135)", () => {
+	const source = "export function authenticateUser(id) { return id; }";
+	const python = "def authenticate_user(id):\n    return id\n";
+
+	function listingFixture(env: { tmpDir: string }): void {
+		const tsFile = createTempFile(env.tmpDir, "src/auth/login.ts", source);
+		const pyFile = createTempFile(
+			env.tmpDir,
+			"scripts/authenticate.py",
+			python,
+		);
+		warmWordIndexSnapshot(env.tmpDir, [
+			{ path: tsFile, content: source },
+			{ path: pyFile, content: python },
+		]);
+	}
+
+	async function run(
+		env: { tmpDir: string },
+		params: { query: string; paths?: string[]; lang?: string },
+	) {
+		const tool = createSymbolSearchTool(() => env.tmpDir);
+		return tool.execute("1", params, undefined, null, { cwd: env.tmpDir });
+	}
+
+	it("refuses a query with neither terms nor scope as an isError", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-empty-");
+		try {
+			listingFixture(env);
+			const result = await run(env, { query: "" });
+			expect(result.isError).toBe(true);
+			expect(String(result.content[0]?.text)).toBe(
+				SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lists the scoped files for an empty query with structured paths", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-empty-paths-");
+		try {
+			listingFixture(env);
+			const result = await run(env, { query: "", paths: ["src"] });
+			expect(result.isError).toBeFalsy();
+			expect(rankedFiles(String(result.content[0]?.text))).toEqual([
+				"src/auth/login.ts",
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("treats a negation-only query as a scope, not a refusal", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-negation-");
+		try {
+			listingFixture(env);
+			const result = await run(env, { query: "-file:test" });
+			expect(result.isError).toBeFalsy();
+			expect(rankedFiles(String(result.content[0]?.text)).sort()).toEqual([
+				"scripts/authenticate.py",
+				"src/auth/login.ts",
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2: inline `file:` and structured `paths` are NOT interchangeable.
+	// `file:` is a SUBSTRING match on the index's display path
+	// (`resolveWordIndexFilter` in clients/word-index.ts); `paths` is a SUBTREE
+	// GLOB matched relative to `cwd` (`fileMatchesPathGlobs` in
+	// clients/lens-engine.ts). So `file:clients/` also matches a nested
+	// `tests/clients/...`, while `paths: ["clients/"]` scopes only the root
+	// `clients/` subtree. This pins the difference as documentation, not a bug.
+	it("documents `file:` (substring) vs `paths` (subtree glob)", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-file-paths-");
+		try {
+			const root = createTempFile(env.tmpDir, "clients/word-index.ts", source);
+			const nested = createTempFile(
+				env.tmpDir,
+				"tests/clients/word-index.test.ts",
+				source,
+			);
+			warmWordIndexSnapshot(env.tmpDir, [
+				{ path: root, content: source },
+				{ path: nested, content: source },
+			]);
+			const inline = await run(env, { query: "file:clients/" });
+			const structured = await run(env, { query: "", paths: ["clients/"] });
+			const inlineFiles = rankedFiles(String(inline.content[0]?.text));
+			const structuredFiles = rankedFiles(String(structured.content[0]?.text));
+			expect(inlineFiles.sort()).toEqual([
+				"clients/word-index.ts",
+				"tests/clients/word-index.test.ts",
+			]);
+			expect(structuredFiles).toEqual(["clients/word-index.ts"]);
+			expect(inlineFiles).not.toEqual(structuredFiles);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("resolves a lang kind and a language id to the same listing", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-parity-");
+		try {
+			listingFixture(env);
+			const inlineJsts = await run(env, { query: "lang:jsts" });
+			const structuredJsts = await run(env, { query: "", lang: "jsts" });
+			const inlineTs = await run(env, { query: "lang:typescript" });
+			const structuredTs = await run(env, { query: "", lang: "typescript" });
+			const expected = ["src/auth/login.ts"];
+			expect(rankedFiles(String(inlineJsts.content[0]?.text))).toEqual(
+				expected,
+			);
+			expect(rankedFiles(String(structuredJsts.content[0]?.text))).toEqual(
+				expected,
+			);
+			expect(rankedFiles(String(inlineTs.content[0]?.text))).toEqual(expected);
+			expect(rankedFiles(String(structuredTs.content[0]?.text))).toEqual(
+				expected,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("refuses an unknown lang, naming both vocabularies", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-unknown-");
+		try {
+			listingFixture(env);
+			for (const params of [
+				{ query: "lang:klingon" },
+				{ query: "", lang: "klingon" },
+			]) {
+				const result = await run(env, params);
+				expect(result.isError, JSON.stringify(params)).toBe(true);
+				const text = String(result.content[0]?.text);
+				expect(text).toContain("accepted file kinds:");
+				expect(text).toContain("accepted language ids:");
+				// The engine's refusal sentence, not the wrapped generic failure.
+				expect(text).not.toContain("Symbol search failed");
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F2): inline `lang:<id>` and structured `lang` are ONE predicate
+	// (clients/language-registry.ts `resolveLanguageScope`). Recurrence guarded:
+	// PR #5373 r1 found inline `lang:dockerfile` empty and `lang:bash` missing
+	// Makefile while structured `lang` found both — two copies of one question.
+	it("inline lang: and structured lang list the same files for named files", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-named-");
+		try {
+			const body = "zzfoo = 1";
+			const names = [
+				"Dockerfile",
+				"Makefile",
+				"Jenkinsfile",
+				"src/run.sh",
+				"src/app.ts",
+			];
+			warmWordIndexSnapshot(
+				env.tmpDir,
+				names.map((name) => ({
+					path: createTempFile(env.tmpDir, name, body),
+					content: body,
+				})),
+			);
+			const listed = async (params: { query: string; lang?: string }) =>
+				rankedFiles(String((await run(env, params)).content[0]?.text)).sort();
+			for (const token of ["dockerfile", "docker", "bash", "groovy"]) {
+				const inline = await listed({ query: `lang:${token}` });
+				const structured = await listed({ query: "", lang: token });
+				expect(inline, token).toEqual(structured);
+				expect(inline.length, token).toBeGreaterThan(0);
+			}
+			expect(await listed({ query: "lang:dockerfile" })).toEqual([
+				"Dockerfile",
+			]);
+			expect(await listed({ query: "lang:bash" })).toEqual([
+				"Makefile",
+				"src/run.sh",
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F1, maintainer decision): an inline token that is both a FileKind
+	// and a registry id matches the UNION, as on master; the structured `lang`
+	// keeps the registry-only decision the drift test pins (`app.scss` is not
+	// `css`). The two differ here ON PURPOSE.
+	it("inline lang:css keeps .scss; structured lang css does not", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-union-");
+		try {
+			const body = "zzfoo = 1";
+			warmWordIndexSnapshot(
+				env.tmpDir,
+				["src/x.css", "src/y.scss"].map((name) => ({
+					path: createTempFile(env.tmpDir, name, body),
+					content: body,
+				})),
+			);
+			const listed = async (params: { query: string; lang?: string }) =>
+				rankedFiles(String((await run(env, params)).content[0]?.text)).sort();
+			expect(await listed({ query: "lang:css" })).toEqual([
+				"src/x.css",
+				"src/y.scss",
+			]);
+			expect(await listed({ query: "", lang: "css" })).toEqual(["src/x.css"]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F3): the refusal must not depend on data. Recurrence guarded: PR
+	// #5373 r1 found `{query:"zzzznomatch",lang:"klingon"}` and a paths-excluded
+	// call answering empty, because a structured `lang` was only validated inside
+	// the per-file predicate.
+	it("refuses an unknown lang on a term with no postings and on a paths filter that excludes everything", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-data-");
+		try {
+			listingFixture(env);
+			for (const params of [
+				{ query: "zzzznomatch", lang: "klingon" },
+				{ query: "authenticate", paths: ["nonexistent/"], lang: "klingon" },
+				{ query: "", paths: ["nonexistent/"], lang: "klingon" },
+				{ query: "zzzznomatch lang:klingon" },
+				{ query: "authenticate lang:klingon", paths: ["nonexistent/"] },
+			]) {
+				const result = await run(env, params);
+				expect(result.isError, JSON.stringify(params)).toBe(true);
+				expect(
+					String(result.content[0]?.text),
+					JSON.stringify(params),
+				).toContain("accepted file kinds:");
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("refuses an unknown lang on a cold index without starting a build", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-lang-cold-");
+		try {
+			createTempFile(env.tmpDir, "src/auth.ts", source);
+			for (const params of [
+				{ query: "lang:klingon" },
+				{ query: "authenticate", lang: "klingon" },
+			]) {
+				const result = await run(env, params);
+				expect(result.isError, JSON.stringify(params)).toBe(true);
+				const text = String(result.content[0]?.text);
+				expect(text, JSON.stringify(params)).toContain("accepted file kinds:");
+				expect(text).not.toMatch(/building|retry/i);
+			}
+			expect(getWordIndexBuildStatus(env.tmpDir)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F6): `constructor` / `__proto__` are prototype members, not
+	// vocabulary. They refuse like any unknown token instead of throwing a
+	// TypeError out of `extensions.includes`.
+	it.each(["constructor", "__proto__"])(
+		"refuses lang %s as unknown, on both forms",
+		async (token) => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-lang-proto-");
+			try {
+				listingFixture(env);
+				for (const params of [
+					{ query: `lang:${token}` },
+					{ query: "", lang: token },
+				]) {
+					const result = await run(env, params);
+					expect(result.isError, JSON.stringify(params)).toBe(true);
+					expect(String(result.content[0]?.text)).toContain(
+						"accepted file kinds:",
+					);
+					expect(String(result.content[0]?.text)).not.toContain(
+						"is not a function",
+					);
+				}
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
+	// #5135 r2 (F5): the engine returns a refusal ONLY for the lang vocabulary;
+	// any other error out of the search propagates. Recurrence guarded: a catch
+	// that swallowed every error stayed green across 188 tests in PR #5373 r1.
+	// A `paths` entry past minimatch's 64 KiB pattern bound throws a TypeError
+	// from inside the search.
+	it("lets an unexpected search error propagate instead of reporting a refusal", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-rethrow-");
+		try {
+			listingFixture(env);
+			await expect(
+				symbolSearch("authenticate", env.tmpDir, 20, {
+					paths: ["a".repeat(70_000)],
+				}),
+			).rejects.toThrow(/too long/i);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5135 r2 (F4): independent literals, not a comparison of the constant with
+	// itself. Recurrence guarded: PR #5373 r1 deleted the policy sentence and only
+	// the tool-roster byte baseline reddened, which a re-pin silences.
+	it("the query description states the three keys, the literal-prefix rule and the listing rule", () => {
+		for (const needle of [
+			"lang:<kind|id>",
+			"file:<substr>",
+			"ext:<ext>",
+			"An unknown key: prefix is a literal search term, not an error",
+			"an unknown lang value refuses with the supported list",
+			"A scope with no terms lists the scoped files.",
+		]) {
+			expect(SYMBOL_SEARCH_QUERY_DESCRIPTION).toContain(needle);
+		}
+	});
+
+	it("the tool's own description is the exported constant", () => {
+		const tool = createSymbolSearchTool(() => ".");
+		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);
+		const querySchema = tool.parameters.properties.query as unknown as {
+			description?: string;
+		};
+		expect(querySchema.description).toBe(SYMBOL_SEARCH_QUERY_DESCRIPTION);
 	});
 });

@@ -23,12 +23,8 @@ import {
 	yieldIfOverBudget,
 } from "./cooperative-budget.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
-import {
-	KIND_EXTENSIONS,
-	SPECIAL_FILENAMES,
-	type FileKind,
-} from "./file-kinds.js";
 import { isTestFileName } from "./file-role.js";
+import { resolveLanguageScope } from "./language-registry.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
 import {
 	isAtOrAboveHomeDir,
@@ -161,6 +157,10 @@ export interface WordIndex {
 export interface RankedFile {
 	file: string;
 	score: number;
+	/** Which producer shape this row is (#5135): `symbol` for a ranked
+	 * identifier match, `file` for a term-less scope listing. The renderer
+	 * branches on this; it never infers the kind from `hits` or `lines`. */
+	kind: "symbol" | "file";
 	/** Number of query-token occurrences in the file (summed term frequency). */
 	hits: number;
 	/** Distinct lines where a query token occurred, ascending. */
@@ -1529,9 +1529,12 @@ const WORD_INDEX_FILTER_TOKEN_RE = /^(-)?([A-Za-z][A-Za-z0-9_-]*):(.+)$/;
  * ordinary token, unchanged from prior behavior — `tokenizeLine` already
  * strips the leading `-` when it extracts identifiers.
  *
- * An unrecognized `key:` (e.g. `type:foo`) throws {@link WordIndexQueryError}
- * naming the supported prefixes, rather than falling through as a literal
- * term — a typo must fail loudly, never silently rank as if the filter never
+ * An unrecognized `key:` prefix is NOT a filter: ordinary search terms
+ * legitimately contain colons (`std::vector`, `http://…`, `C:\`), so the token
+ * passes through as a plain term and this parser never throws. A KNOWN key
+ * with an unrecognized value (`lang:klingon`) still fails loudly —
+ * {@link buildWordIndexQueryFilter} throws {@link WordIndexQueryError} naming
+ * the accepted values, so a typo never silently ranks as if the filter never
  * existed. An empty value (`lang:`) is not treated as a filter token at all
  * (kept as a term) since there is nothing to filter by.
  */
@@ -1571,31 +1574,28 @@ export function parseWordIndexQuery(query: string): ParsedWordIndexQuery {
 	return { terms: termParts.join(" "), filters };
 }
 
-/** `lang:X` → a path predicate for FileKind X (case-insensitive): the kind's
- * `KIND_EXTENSIONS` set (clients/file-kinds.ts) — the single source of truth
- * (#894 invariant: no second, hand-maintained language list) — or, for a file
- * named rather than suffixed (Jenkinsfile, Dockerfile), the SPECIAL_FILENAMES
- * pattern `detectFileKind` classifies it by (#5235). An unrecognized kind
- * throws {@link WordIndexQueryError} listing the accepted kinds
- * (KIND_EXTENSIONS' own keys), the same loud-failure contract as an
- * unsupported `key:` prefix. */
+/** `lang:X` → a path predicate for the language token `X` (case-insensitive),
+ * resolved by the ONE `lang` predicate the structured `symbol_search` option
+ * also uses ({@link resolveLanguageScope}): a FileKind like `jsts`, or a
+ * language id/grammar name like `typescript`, matching by extension or by a
+ * name the registry declares (Jenkinsfile, Dockerfile, Makefile; #5235). A
+ * token that is both a FileKind and a language id matches the union of the two
+ * extension sets (`css` keeps `.scss`), as this filter always did. An unknown
+ * token refuses, naming both vocabularies (#5135). */
 function resolveLangMatcher(value: string): (file: string) => boolean {
-	const kind = value.toLowerCase() as FileKind;
-	const extensions = KIND_EXTENSIONS[kind];
-	if (!extensions) {
-		const known = Object.keys(KIND_EXTENSIONS)
-			.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
-			.join(", ");
-		throw new WordIndexQueryError(
-			`Unknown lang: "${value}" in word-index query — supported languages: ${known}.`,
-		);
-	}
-	const named = SPECIAL_FILENAMES.flatMap((entry) =>
-		entry.kind === kind ? [entry.pattern] : [],
-	);
-	return (file) =>
-		extensions.includes(path.extname(file).toLowerCase()) ||
-		named.some((pattern) => pattern.test(path.basename(file)));
+	const scope = resolveLanguageScope(value, { includeKindExtensions: true });
+	if ("refusal" in scope) throw new WordIndexQueryError(scope.refusal);
+	return scope.matches;
+}
+
+/** True when a word-index query carries neither search terms nor inline
+ * filters — the query string contributes no scope of its own. `searchWordIndex`
+ * still answers a bare empty query with an empty result; `symbolSearch` layers
+ * the structured `paths`/`lang` scope on top and refuses only when BOTH are
+ * absent (#5135). */
+export function isEmptyWordIndexQuery(query: string): boolean {
+	const parsed = parseWordIndexQuery(query);
+	return parsed.filters.length === 0 && tokenizeLine(parsed.terms).length === 0;
 }
 
 /** `ext:ts` / `ext:.ts` → a single leading-dot, lowercased suffix for path-suffix comparison (#5136). */
@@ -1721,7 +1721,9 @@ function combineFileFilters(
  * applied as a `fileFilter` (composed, AND, with any caller-supplied one)
  * BEFORE scoring, same as the pre-existing `paths`/`lang` options (#771): a
  * surviving file's score is unaffected by filtering. A query with no filter
- * tokens reproduces prior output byte-for-byte.
+ * tokens reproduces prior output byte-for-byte. A query with NO terms but a
+ * scope is a listing (#5135): every in-scope indexed file is seeded at score 1
+ * and ordered by the same priors and comparator as a term search.
  *
  * DF-normalization note: BM25's per-token `idf` is computed from `docFrequency`
  * over the FULL (unfiltered) postings for that token — `fileFilter` (whether
@@ -1753,7 +1755,13 @@ export function searchWordIndex(
 	const combinedFilter = combineFileFilters(fileFilter, queryFilter);
 
 	const queryTokens = [...new Set(tokenizeLine(parsedQuery.terms))];
-	if (queryTokens.length === 0) return [];
+	// #5135: the early return answers only a call with NEITHER terms NOR scope.
+	// A term-less query that still carries a scope — inline filters, or the
+	// structured `paths`/`lang` a caller compiled into `fileFilter` — is a
+	// listing request, not an empty result. Both entry paths share this one
+	// branch, so the inline and structured forms cannot diverge.
+	const hasScope = combinedFilter !== undefined;
+	if (queryTokens.length === 0 && !hasScope) return [];
 
 	const docCount = index.docCount || 1;
 	const avgDocLength = index.totalTokens / docCount || 1;
@@ -1762,6 +1770,17 @@ export function searchWordIndex(
 		string,
 		{ score: number; hits: number; lines: Set<number> }
 	>();
+	if (queryTokens.length === 0) {
+		// Listing: no terms, but a scope. Enumerate the indexed file set —
+		// `docLengths` carries every indexed file, zero-token files included —
+		// seed each survivor at score 1, and let the SAME prior block and
+		// comparator below order it exactly as a term search would. With no
+		// terms the token loop below is a no-op, so ONE pipeline serves both.
+		for (const file of index.docLengths.keys()) {
+			if (combinedFilter && !combinedFilter(file)) continue;
+			scores.set(file, { score: 1, hits: 0, lines: new Set<number>() });
+		}
+	}
 
 	for (const token of queryTokens) {
 		const posting = index.postings.get(token);
@@ -1813,6 +1832,9 @@ export function searchWordIndex(
 	}
 
 	const results: RankedFile[] = [];
+	// A term-less call is a scope listing (#5135): every row is a `file`. A
+	// term search ranks identifier matches: every row is a `symbol`.
+	const kind = queryTokens.length === 0 ? "file" : "symbol";
 	for (const [file, entry] of scores) {
 		let score = entry.score;
 		if (demoteTestVendor && isTestOrVendor(file)) score *= TEST_VENDOR_PENALTY;
@@ -1824,6 +1846,7 @@ export function searchWordIndex(
 		results.push({
 			file,
 			score,
+			kind,
 			hits: entry.hits,
 			lines: [...entry.lines].sort((a, b) => a - b),
 		});

@@ -18,13 +18,17 @@ import {
 	buildWordIndex,
 	serializeWordIndex,
 } from "../../clients/word-index.js";
+import { SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL } from "../../clients/lens-engine.js";
+import {
+	SYMBOL_SEARCH_DESCRIPTION,
+	SYMBOL_SEARCH_QUERY_DESCRIPTION,
+} from "../../tools/symbol-search.js";
 import {
 	flushProjectSnapshotPersistsForTests,
 	PROJECT_SNAPSHOT_VERSION,
 	saveProjectSnapshot,
 } from "../../clients/project-snapshot.js";
 import { translateGuidanceToolNames } from "../../clients/tool-config.js";
-import { SYMBOL_SEARCH_DESCRIPTION } from "../../tools/symbol-search.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { McpHarness } from "./harness.js";
 
@@ -34,18 +38,15 @@ function textOf(res: Record<string, unknown>): string {
 	return (res.result as { content: { text: string }[] }).content[0].text;
 }
 
-/** Ranked rows of the one table #5104 renders. The line number sits before
- * the detail parenthetical once the row shape moved, so the reader accepts
- * either position. */
+/** Ranked rows of the one table #5104 renders. A `symbol` row carries a
+ * `(score …)` parenthetical; a `file` listing row (#5135) is the path alone. */
 function rankedFiles(text: string): string[] {
 	return text.split("\n").flatMap((line) => {
-		const match = /^ {2}\d+\. (.*) \((score .*)\)$/.exec(line);
-		if (match === null) return [];
-		const pre = match[1];
-		const cut = pre.lastIndexOf(" ");
-		const tail = cut === -1 ? "" : pre.slice(cut + 1);
-		const file = /^\d+$/.test(tail) ? pre.slice(0, cut) : pre;
-		return [file.replace(/\\/g, "/")];
+		const prefix = /^ {2}\d+\. (.*)$/.exec(line);
+		if (prefix === null) return [];
+		const rest = prefix[1];
+		const symbol = /^(.*) \d+ \(score .*\)$/.exec(rest);
+		return [(symbol ? symbol[1] : rest).replace(/\\/g, "/")];
 	});
 }
 
@@ -160,6 +161,89 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		// The footer names the top-ranked hit through the MCP tool spelling.
 		expect(text).toContain("Next: pilens_module_report auth.ts");
 		expect(text).not.toMatch(/^Next: module_report /m);
+	}, 30_000);
+
+	// #5135: an empty query with no scope is an isError refusal on MCP too,
+	// using the same sentence the pi tool returns.
+	it("refuses an empty query with no scope, using the shared sentence", async () => {
+		const res = await harness.request(13, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "", cwd: projectDir },
+		});
+		expect((res.result as { isError?: boolean }).isError).toBe(true);
+		expect(textOf(res).split("\n\n")[0]).toBe(
+			SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
+		);
+	}, 30_000);
+
+	// #5135: the MCP mirror advertises the pi tool's own description sentence.
+	it("advertises the query contract sentence", async () => {
+		const res = await harness.request(15, "tools/list");
+		const tools = (
+			res.result as {
+				tools: Array<{
+					name: string;
+					description?: string;
+					inputSchema: {
+						properties?: Record<string, { description?: string }>;
+					};
+				}>;
+			}
+		).tools;
+		const entry = tools.find((t) => t.name === "pilens_symbol_search");
+		expect(entry?.inputSchema.properties?.query?.description).toBe(
+			SYMBOL_SEARCH_QUERY_DESCRIPTION,
+		);
+	}, 30_000);
+
+	it("refuses an unknown lang, naming both vocabularies", async () => {
+		const res = await harness.request(14, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "lang:klingon", cwd: projectDir },
+		});
+		expect((res.result as { isError?: boolean }).isError).toBe(true);
+		const text = textOf(res);
+		expect(text).toContain("accepted file kinds:");
+		expect(text).toContain("accepted language ids:");
+	}, 30_000);
+
+	// #5135 r2 (F3): the refusal does not depend on the index or on a hit.
+	// Recurrence guarded: PR #5373 r1 saw `{query:"lang:klingon"}` answer
+	// "Word index is building" on a cold cwd, and a structured unknown lang
+	// answer empty when no file reached the per-file predicate.
+	it("refuses an unknown lang with no postings, and on a cold index", async () => {
+		const warm = await harness.request(16, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "zzzznomatch", lang: "klingon", cwd: projectDir },
+		});
+		expect((warm.result as { isError?: boolean }).isError).toBe(true);
+		expect(textOf(warm)).toContain("accepted file kinds:");
+
+		const coldDir = mkdtempSync(
+			path.join(tmpdir(), "pi-lens-symbolsearch-coldlang-mcp-"),
+		);
+		try {
+			let id = 17;
+			for (const args of [
+				{ query: "lang:klingon" },
+				{ query: "", lang: "klingon" },
+			]) {
+				const res = await harness.request(id++, "tools/call", {
+					name: "pilens_symbol_search",
+					arguments: { ...args, cwd: coldDir },
+				});
+				expect((res.result as { isError?: boolean }).isError).toBe(true);
+				expect(textOf(res)).toContain("accepted file kinds:");
+				expect(textOf(res)).not.toMatch(/building|retry/i);
+			}
+		} finally {
+			rmSync(coldDir, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 200,
+			});
+		}
 	}, 30_000);
 
 	it("returns available:false with an actionable hint when no index exists for cwd", async () => {
@@ -368,6 +452,26 @@ describe("pilens_symbol_search paths and limit shapes (#5038)", () => {
 	it("clamps `limit` to max(1, floor) like project_report", async () => {
 		expect((await hitsFor({ limit: 0 })).files.length, "limit 0").toBe(1);
 		expect((await hitsFor({ limit: -2 })).files.length, "limit -2").toBe(1);
+	}, 30_000);
+
+	// #5135 / @Don-Yin: `query: ""` with a structured scope must list the
+	// scoped files, not refuse.
+	it("lists the scoped files for an empty query with paths", async () => {
+		const result = await hitsFor({ query: "", paths: ["src"] });
+		expect(result.isError).toBeFalsy();
+		expect(result.files).toEqual(["src/login.ts"]);
+	}, 30_000);
+
+	// #5135: a lang kind (`jsts`) and a language id (`typescript`) resolve
+	// through the one registry facade, so inline and structured agree.
+	it("resolves a lang kind and a language id to the same rows", async () => {
+		const inlineKind = await hitsFor({ query: "lang:jsts" });
+		const structuredKind = await hitsFor({ query: "", lang: "jsts" });
+		const inlineId = await hitsFor({ query: "lang:typescript" });
+		const structuredId = await hitsFor({ query: "", lang: "typescript" });
+		expect(inlineKind.files).toEqual(structuredKind.files);
+		expect(inlineId.files).toEqual(structuredId.files);
+		expect(inlineKind.files).toContain("src/login.ts");
 	}, 30_000);
 
 	it("refuses every entry the shared reader does not recognise", async () => {

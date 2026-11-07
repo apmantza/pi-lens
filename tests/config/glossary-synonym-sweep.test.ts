@@ -1177,7 +1177,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// hit. Both are the `node:path` module, never the retired map-key sense.
 		// 11 -> 12 (#5235): `symbolSearchFileMatchesLang` reads the basename of a
 		// file a kind names by pattern (`path.basename`), like the inline filter.
-		"clients/lens-engine.ts": 12,
+		// 12 -> 10 (#5135): that basename and extname read moved into the shared
+		// `resolveLanguageScope` predicate in `clients/language-registry.ts`.
+		"clients/lens-engine.ts": 10,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
 		"clients/log-cleanup.ts": 9,
@@ -1519,7 +1521,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
 		// 52 -> 51 (#5136): the `ext:` predicate matches a path suffix on the
 		// display path instead of `path.extname`, dropping one `path` operation.
-		"clients/word-index.ts": 51,
+		// 51 -> 49 (#5135): the `lang:` predicate's `path.extname` and
+		// `path.basename` reads moved into the shared `resolveLanguageScope`.
+		"clients/word-index.ts": 49,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
 		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution

@@ -31,6 +31,7 @@
 import {
 	type FileKind,
 	GROOVY_FILENAMES,
+	KIND_EXTENSIONS,
 	SPECIAL_FILENAMES,
 } from "./file-kinds.js";
 
@@ -695,10 +696,113 @@ export const GRAMMAR_TO_EXTENSIONS: Readonly<
  * (`bash`, `tsx`, `cpp`), while languages with no grammar are only nameable by
  * their canonical id (`haskell`, `nix`, `scala`). Grammar wins on a collision,
  * which is a no-op — `cpp`/`java`/`lua` name the same entry either way. An
- * unrecognized token selects nothing, so a filter on it returns no hits.
+ * unrecognized token selects nothing here; {@link resolveLanguageScope} turns
+ * that into a refusal for the `symbol_search` `lang` filter (#5135).
  */
 export function extensionsForLanguageToken(token: string): readonly string[] {
-	return GRAMMAR_TO_EXTENSIONS[token] ?? extensionsForLanguage(token);
+	// Own keys only: `constructor` / `__proto__` are prototype members of the
+	// frozen table, not grammar names (#5135).
+	return (
+		(Object.hasOwn(GRAMMAR_TO_EXTENSIONS, token)
+			? GRAMMAR_TO_EXTENSIONS[token]
+			: undefined) ?? extensionsForLanguage(token)
+	);
+}
+
+/**
+ * The answer to "which files does this `symbol_search` `lang` token select":
+ * either the shared predicate ({@link matches}, plus the extension set it is
+ * built from) or one refusal sentence. Both `symbol_search` forms — the
+ * structured `lang` option and the inline `lang:` filter — resolve here and
+ * call `matches`, so they cannot answer the same question two ways (#5135).
+ */
+export type LanguageScopeResolution =
+	| {
+			readonly extensions: readonly string[];
+			readonly matches: (file: string) => boolean;
+	  }
+	| { readonly refusal: string };
+
+export interface LanguageScopeOptions {
+	/** Inline `lang:` only. A token that is BOTH a FileKind and a registry
+	 * language id (`css`, `json`, `terraform`, `php`) selects the UNION of the
+	 * two extension sets, as the inline filter always has; without it the
+	 * id/grammar half wins and the FileKind table is the fallback for kinds with
+	 * no language entry. The structured `lang` keeps id/grammar-wins, which the
+	 * registry drift tests pin (`app.scss` is not `css`). */
+	readonly includeKindExtensions?: boolean;
+}
+
+/**
+ * Resolve a `symbol_search` `lang` token against the canonical registry. The
+ * token may be a FileKind (`jsts`, `cxx`, `docker`) or a language id/grammar
+ * name (`typescript`, `python`, `bash`). The returned `matches` predicate is
+ * filename-aware: a file the registry DECLARES by name as that language
+ * (`Dockerfile` for `dockerfile`, `Makefile` for `bash`), a file named by a
+ * FileKind's `SPECIAL_FILENAMES` pattern (`Dockerfile.dev` for `docker`), or a
+ * file with one of the token's extensions.
+ *
+ * An unknown token REFUSES — naming both vocabularies — rather than resolving
+ * to an empty extension set, so a `lang` typo cannot read as "no match"
+ * (#5135). A token the registry knows but that selects no extension
+ * (`terragrunt`) is valid: it matches by name only.
+ */
+export function resolveLanguageScope(
+	token: string,
+	options: LanguageScopeOptions = {},
+): LanguageScopeResolution {
+	const normalized = token.trim().toLowerCase();
+	const byLanguage = extensionsForLanguageToken(normalized);
+	const byKind = Object.hasOwn(KIND_EXTENSIONS, normalized)
+		? KIND_EXTENSIONS[normalized as FileKind]
+		: undefined;
+	// A basename-declared language (Jenkinsfile, Gemfile) has an id but no
+	// extension, so an id or grammar the registry knows is a valid token even
+	// when its extension set is empty (#5235, #5135).
+	const known =
+		byLanguage.length > 0 ||
+		BY_ID.has(normalized) ||
+		Object.hasOwn(GRAMMAR_TO_EXTENSIONS, normalized);
+	if (!known && !byKind) {
+		return { refusal: unknownLanguageScopeMessage(token) };
+	}
+	const extensions =
+		byKind && (!known || options.includeKindExtensions)
+			? [...new Set([...byLanguage, ...byKind])]
+			: byLanguage;
+	const named = SPECIAL_FILENAMES.flatMap((entry) =>
+		entry.kind === normalized ? [entry.pattern] : [],
+	);
+	return {
+		extensions,
+		matches: (file) => {
+			const declared = resolveFilenameLanguage(file);
+			if (
+				declared &&
+				(declared.id === normalized || declared.grammar === normalized)
+			) {
+				return true;
+			}
+			const base = basenameOf(file);
+			return (
+				named.some((pattern) => pattern.test(base)) ||
+				extensions.includes(extensionOf(file))
+			);
+		},
+	};
+}
+
+/** The refusal sentence names BOTH vocabularies a `lang` token may use, so a
+ * typo points at the full accepted set rather than one half of it. */
+function unknownLanguageScopeMessage(token: string): string {
+	const kinds = Object.keys(KIND_EXTENSIONS).sort().join(", ");
+	const ids = LANGUAGES.map((entry) => entry.id)
+		.sort()
+		.join(", ");
+	return (
+		`Unknown lang: "${token}" — accepted file kinds: ${kinds}; ` +
+		`accepted language ids: ${ids}.`
+	);
 }
 
 function basenameOf(filePath: string): string {

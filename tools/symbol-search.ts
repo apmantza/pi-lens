@@ -17,11 +17,23 @@ import {
 import { compactRenderResult } from "./render-compact.js";
 import { readPathsArgument } from "./shared.js";
 
-/** Model-facing description of `symbol_search`. Exported so the MCP
- * `pilens_symbol_search` surface imports this sentence instead of restating it
- * (#5138 D7) — the tool definition is the owner. */
+/**
+ * `symbol_search`'s model-facing description, owned HERE (the tool definition)
+ * and imported by the MCP mirror so both surfaces resolve to one sentence
+ * (#5135). PR 3's schema projection replaces the import with the projected
+ * `parameters` object, so nothing temporary is invented in `tools/shared.ts`.
+ */
 export const SYMBOL_SEARCH_DESCRIPTION =
 	"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before module_report. Read a listed line with offset=<line>, limit=1. An `ext:` filter matches a path suffix, so `ext:test.ts` matches `foo.test.ts`.";
+
+/**
+ * The `query` parameter's contract sentence: the three filter keys, the
+ * literal-prefix rule (an unknown `key:` prefix is a search term, not an
+ * error), and the listing semantics (a scope with no terms lists the scoped
+ * files). Owned here and imported by the MCP mirror (#5135).
+ */
+export const SYMBOL_SEARCH_QUERY_DESCRIPTION =
+	"Identifier-ish query, e.g. 'authenticate user'. Scope hits before ranking with composable prefix filters: lang:<kind|id> (e.g. lang:jsts, lang:typescript), file:<substr> (path substring), ext:<ext> (e.g. ext:ts or ext:.ts), each optionally negated with a leading '-' (-file:test). An unknown key: prefix is a literal search term, not an error; an unknown lang value refuses with the supported list. A scope with no terms lists the scoped files.";
 
 export function createSymbolSearchTool(getProjectRoot: () => string) {
 	return {
@@ -43,8 +55,7 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 		}),
 		parameters: Type.Object({
 			query: Type.String({
-				description:
-					"Identifier-ish query, e.g. 'authenticate user'. Mix in composable prefix filters: lang:<kind> (e.g. lang:jsts, lang:python — kinds from file-kinds.ts), file:<substr> (path substring), ext:<ext> (e.g. ext:ts or ext:.ts), each optionally negated with a leading '-' (-file:test). Filters apply before ranking; e.g. 'lang:jsts file:clients/ -file:test rank'. Unknown prefixes/kinds error with the supported list.",
+				description: SYMBOL_SEARCH_QUERY_DESCRIPTION,
 			}),
 			limit: Type.Optional(
 				Type.Number({
@@ -107,6 +118,17 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 					details: { available: false, query: params.query },
 				};
 			}
+			// #5135: no terms and no scope is a malformed request, not an empty
+			// result — the engine returns the one shared refusal sentence both
+			// surfaces print.
+			if (result.refusal) {
+				return {
+					content: [{ type: "text" as const, text: result.refusal }],
+					isError: true,
+					details: { available: true, query: result.query },
+				};
+			}
+
 			if (!result.available) {
 				return {
 					content: [
