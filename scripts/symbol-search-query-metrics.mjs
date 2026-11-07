@@ -755,7 +755,16 @@ function discoverCalls(calls) {
 		}
 		if (call.name !== "codemode") continue;
 		if (typeof call.args?.code !== "string") continue;
-		const occurrences = findCodemodeSymbolSearchArgs(call.args.code);
+		let occurrences;
+		try {
+			occurrences = findCodemodeSymbolSearchArgs(call.args.code);
+		} catch {
+			// The visitor recurses once per AST level, so a script a few thousand
+			// terms deep overflows the stack. A script the gate cannot walk is one
+			// unscannable call (fail closed, the same bucket as an unreadable
+			// argument), and the rest of the run goes on.
+			occurrences = [{ unscannable: true }];
+		}
 		if (occurrences.length === 0) continue;
 		// One result blob cannot be split across queries, so a script that
 		// issues several `tools.symbol_search(` calls counts once, and the
@@ -1027,9 +1036,9 @@ const RATE_DEFINITIONS = [
 	"emptyRate = searches with an inline file: or ext: filter that matched no file / those searches that listed, came back empty or errored (an error is not an answer, so it stays in the denominator; scopedError counts them)",
 	"structuredScoped = searches scoped by paths or lang (argument or inline lang:) without file:/ext:: classified, empty and error counts, not a rate (D8 does not name them)",
 	"listedReadRate = listings followed within 3 tool calls by a read (read, read_symbol, read_enclosing, or a bash cat/head/tail/sed -n view) of a listed file / listings",
-	"repeatReadRate = reads after the session's first symbol_search listing that target a file the session had already read (no window) / all reads after that listing; reads before it are in neither count",
+	"repeatReadRate = reads after the session's first symbol_search listing that target a file the session had already read (no window) / all reads after that listing; reads before it are in neither count; a repeat includes a different offset, limit or symbol on the same target (paging) and a read after an edit, so the rate is an upper bound on wasted reads",
 	"drilldownRate = listings followed within 3 tool calls by module_report or lsp_navigation / listings",
-	"unscannableRate = codemode calls whose symbol_search arguments are not a static literal / discovered calls",
+	"unscannableRate = codemode calls whose symbol_search arguments are not a static literal, or whose script the gate cannot walk / discovered calls",
 	"n/a = the denominator is 0 (no rate); excluded = discovered calls outside the denominator",
 ];
 

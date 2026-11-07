@@ -309,6 +309,40 @@ describe("symbol_search query metrics — fixture corpus", () => {
 			.filter((line) => line.startsWith("window "));
 		expect(lines).toHaveLength(5);
 	});
+
+	it("counts paging, a symbol read and a read after an edit as repeats", () => {
+		// Recurrence: #5355 verify r2 V2. 86% of the repeats in the local census
+		// are paging (a different offset, limit or symbol on the same file) or a
+		// read after an edit, so repeatReadRate is an upper bound on wasted reads.
+		// paging-repeat.jsonl: the first read after the listing is a first read;
+		// the paged read, the read after the edit and the read_symbol of the same
+		// file are each a repeat.
+		const window = windowFor("paging-repeat.jsonl");
+		expect(window.results.listing).toBe(1);
+		expect(window.repeatReadRate.numerator).toBe(3);
+		expect(window.repeatReadRate.denominator).toBe(4);
+	});
+
+	it("counts a read_symbol of a listed file as a listed read", () => {
+		// Recurrence: #5355 verify r2, Attack 3. Dropping read_symbol from
+		// readCallPaths passed all 64 cells, so a symbol read after a listing was
+		// never counted as following it. symbol-read.jsonl: one listing, then a
+		// read_symbol of its top hit.
+		const window = windowFor("symbol-read.jsonl");
+		expect(window.listedReadRate.numerator).toBe(1);
+		expect(window.listedReadRate.denominator).toBe(1);
+	});
+
+	it("marks a script unscannable when any one of its symbol_search calls is unreadable", () => {
+		// Recurrence: #5355 verify r2, Attack 3. Changing `occurrences.some` to
+		// `.every` passed all 64 cells. The script's one result blob cannot be
+		// attributed to its readable call alone, so one unreadable call makes the
+		// whole script unscannable. mixed-script.jsonl has an alias and a literal.
+		const window = windowFor("mixed-script.jsonl");
+		expect(window.calls.discovered).toBe(1);
+		expect(window.calls.unscannable).toBe(1);
+		expect(window.calls.scanned).toBe(0);
+	});
 });
 
 describe("symbol_search query metrics — parsers", () => {
@@ -698,5 +732,96 @@ describe("symbol_search query metrics — corpus failures", () => {
 		const { code, stderr } = runMain([dir]);
 		expect(code).toBe(1);
 		expect(stderr).toMatch(/does not exist: .*\(0 files read\)/);
+	});
+
+	it("keeps the run when one codemode script is too deep for the visitor", () => {
+		// Recurrence: #5355 verify r2 V1. A codemode script whose expression is
+		// 10,000 terms deep overflowed the AST visitor's stack. discoverCalls had
+		// no catch, so one such script ended the whole run with exit 1 and no
+		// report. The gate cannot walk that script, so it is one unscannable call;
+		// the clean symbol_search call beside it still counts.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ssqm-deep-"));
+		try {
+			const deep = `return ${Array.from({ length: 10000 }, () => "1").join("+")};`;
+			const clean = 'return await tools.symbol_search({ query: "ext:ts a" });';
+			const rows: string[] = [
+				JSON.stringify({
+					type: "session",
+					cwd: "/work",
+					timestamp: "2026-11-01T00:00:00Z",
+				}),
+				JSON.stringify({
+					type: "message",
+					timestamp: "2026-11-01T00:00:01Z",
+					message: {
+						role: "assistant",
+						content: [
+							{
+								type: "toolCall",
+								id: "d1",
+								name: "codemode",
+								arguments: { code: deep },
+							},
+						],
+					},
+				}),
+				JSON.stringify({
+					type: "message",
+					timestamp: "2026-11-01T00:00:02Z",
+					message: {
+						role: "toolResult",
+						toolCallId: "d1",
+						toolName: "codemode",
+						content: [
+							{ type: "text", text: "Script completed\nOutput:\nnull" },
+						],
+						isError: false,
+					},
+				}),
+				JSON.stringify({
+					type: "message",
+					timestamp: "2026-11-01T00:00:03Z",
+					message: {
+						role: "assistant",
+						content: [
+							{
+								type: "toolCall",
+								id: "s1",
+								name: "codemode",
+								arguments: { code: clean },
+							},
+						],
+					},
+				}),
+				JSON.stringify({
+					type: "message",
+					timestamp: "2026-11-01T00:00:04Z",
+					message: {
+						role: "toolResult",
+						toolCallId: "s1",
+						toolName: "codemode",
+						content: [
+							{
+								type: "text",
+								text: 'Script completed\nOutput:\nTop 1 file(s) for "ext:ts a":\n  1. a.ts 1 (score 1.00, 1 hit(s))',
+							},
+						],
+						isError: false,
+					},
+				}),
+			];
+			fs.writeFileSync(path.join(dir, "deep.jsonl"), `${rows.join("\n")}\n`);
+			const report = buildReport(dir, [ALL]);
+			const window = report.windows[0];
+			expect(window.calls.discovered).toBe(2);
+			expect(window.calls.unscannable).toBe(1);
+			expect(window.calls.scanned).toBe(1);
+			expect(window.results.listing).toBe(1);
+			expect(window.unscannableRate.numerator).toBe(1);
+			expect(window.unscannableRate.denominator).toBe(2);
+			expect(formatSummary(report)).toContain("discovered=2 scanned=1");
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
