@@ -147,7 +147,8 @@ import { logExtension } from "../clients/extension-log.js";
 import { recordDegradationOnce } from "../clients/degradation-ledger.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import {
-	configDisabledAuxiliaryLspServerIds,
+	auxiliaryNotRunSentences,
+	auxiliaryServersNotRun,
 	findAuxiliaryProfileForSource,
 	retagAuxiliaryDiagnostics,
 } from "../clients/dispatch/auxiliary-lsp.js";
@@ -405,6 +406,7 @@ export function createLensDiagnosticsTool(
 			source?: string;
 			totalDiagnostics?: number;
 			cleanFiles?: number;
+			uncheckedFileCount?: number;
 			unconfirmedFiles?: number;
 			timedOutFiles?: number;
 			outcomeCounts?: Record<string, number>;
@@ -523,15 +525,22 @@ export function createLensDiagnosticsTool(
 					: details?.validationStatus === "findings"
 						? undefined
 						: details?.validationStatus;
+			// #5287: files no check completed on are not clean, so the word `clean`
+			// is claimed only for the others.
+			const unchecked = details?.uncheckedFileCount ?? 0;
+			const uncheckedSuffix = unchecked > 0 ? ` · ${unchecked} unchecked` : "";
 			if (b + e + w === 0) {
 				const advisorySuffix =
 					adv > 0 ? `, ${adv} hint${adv === 1 ? "" : "s"}` : "";
-				return `lens_diagnostics ${mode} — ${cacheVerdict ?? "clean"}${advisorySuffix} (${files} files)${coldSuffix}${failedSuffix}`;
+				// Every file unchecked: the word is `unchecked`, not `clean · N unchecked`.
+				if (cacheVerdict === undefined && unchecked >= files && unchecked > 0)
+					return `lens_diagnostics ${mode} — unchecked${advisorySuffix} (${files} files)${coldSuffix}${failedSuffix}`;
+				return `lens_diagnostics ${mode} — ${cacheVerdict ?? "clean"}${advisorySuffix}${uncheckedSuffix} (${files} files)${coldSuffix}${failedSuffix}`;
 			}
 			const parts = [`${b} blocking`];
 			if (b === 0 && e > 0) parts.push(`${e} errors`);
 			parts.push(`${w} warnings`);
-			return `lens_diagnostics ${mode} — ${parts.join(" · ")}${cacheVerdict === "inconclusive" || cacheVerdict === "unverified" ? ` · ${cacheVerdict}` : ""} (${files} files)${coldSuffix}${failedSuffix}`;
+			return `lens_diagnostics ${mode} — ${parts.join(" · ")}${cacheVerdict === "inconclusive" || cacheVerdict === "unverified" ? ` · ${cacheVerdict}` : ""}${uncheckedSuffix} (${files} files)${coldSuffix}${failedSuffix}`;
 		}),
 		parameters: Type.Object({
 			source: Type.Optional(
@@ -874,9 +883,9 @@ export function createLensDiagnosticsTool(
 					host: ctx.host ?? "pi",
 					// #4944: the sweep leaves an auxiliary the operator turned off
 					// (`--no-ast-grep`, `astGrep.enabled=false`) unstarted, as the
-					// `source=lsp` probe does.
+					// `source=lsp` probe does; #5287: and an opt-in one they turned on.
 					...(getFlag && {
-						excludeServerIds: configDisabledAuxiliaryLspServerIds((name) =>
+						excludeServerIds: auxiliaryServersNotRun((name) =>
 							getFlag(name, cwd),
 						),
 					}),
@@ -1879,6 +1888,9 @@ function summarizeDiagnostics(
 	filePath: string,
 	diagnostics: WidgetDiagnostic[],
 	hasFinalSnapshot: boolean,
+	// #5287: re-summarizing keeps the reason no check completed for the file; a
+	// call that drops it turns an unchecked file back into "no findings".
+	uncheckedReason?: string,
 ): FileDiagnosticSummary {
 	let blocking = 0;
 	let errors = 0;
@@ -1909,6 +1921,7 @@ function summarizeDiagnostics(
 		warnings,
 		advisories,
 		hasFinalSnapshot,
+		...(uncheckedReason !== undefined && { uncheckedReason }),
 		diagnostics,
 	};
 }
@@ -2144,6 +2157,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 				existing?.filePath ?? filePath,
 				diagnostics,
 				existing?.hasFinalSnapshot ?? true,
+				existing?.uncheckedReason,
 			),
 		);
 	};
@@ -2197,6 +2211,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 						filePath,
 						diagnostics,
 						summary.hasFinalSnapshot ?? true,
+						summary.uncheckedReason,
 					),
 		);
 		for (const diagnostic of diagnostics) {
@@ -2297,6 +2312,7 @@ async function applyInlineSuppressionsToSummaries(
 							summary.filePath,
 							policyKept,
 							summary.hasFinalSnapshot,
+							summary.uncheckedReason,
 						);
 			}
 			// #690/#3088: inline `pi-lens-ignore` → the same false-positive/
@@ -2353,6 +2369,7 @@ async function applyInlineSuppressionsToSummaries(
 				summary.filePath,
 				pythonKept.kept,
 				summary.hasFinalSnapshot,
+				summary.uncheckedReason,
 			);
 		}),
 	);
@@ -2947,6 +2964,7 @@ async function formatFullMode(
 						summary.filePath,
 						markUnreconciledFindings(summary.diagnostics),
 						summary.hasFinalSnapshot,
+						summary.uncheckedReason,
 					)
 				: summary,
 		);
@@ -3099,14 +3117,16 @@ async function formatFullMode(
 	// The switch names the auxiliary LSP server only: the project scan above
 	// still reports `ast-grep-napi` rows under `--no-ast-grep`, so the note says
 	// which ast-grep did not run. Code-unit order, for the same determinism as
-	// the lane names above.
-	const switchedOffServerIds = [...(options.excludeServerIds ?? [])].sort(
-		(a, b) => Number(a > b) - Number(a < b),
+	// the lane names above. #5287: an opt-in server the operator turned on is
+	// named too ("Opt-in, not run by this check"), as `lsp_diagnostics` does.
+	const notRunSentences = auxiliaryNotRunSentences(
+		[...(options.excludeServerIds ?? [])].sort(
+			(a, b) => Number(a > b) - Number(a < b),
+		),
+		"Switched off, not run (auxiliary LSP)",
 	);
 	const switchedOffNote =
-		switchedOffServerIds.length > 0
-			? `\n\nSwitched off, not run (auxiliary LSP): ${switchedOffServerIds.join(", ")}.`
-			: "";
+		notRunSentences.length > 0 ? `\n\n${notRunSentences.join(" ")}` : "";
 	// #646: primary-vs-auxiliary split of the raw LSP-sweep findings (before
 	// they're merged into the widget-state summaries below), mirroring
 	// `lsp_diagnostics`' "Primary findings"/"Auxiliary findings" separation —
@@ -3510,6 +3530,32 @@ async function projectResolvedCwd(
 }
 
 // @delivery-surface: lens-diagnostics:mode-all
+/** Files a report names as not checked before it says `+N more`. */
+const MAX_UNCHECKED_NAMED = 5;
+
+/**
+ * #5287: the line a file-diagnostics report ends with for files whose check
+ * never completed (`FileDiagnosticSummary.uncheckedReason`): a kind nothing
+ * can check, a generated file, `--no-lsp` TypeScript, a primary still running.
+ * "No issues" is a statement about checked files only, so these are named, with
+ * their reasons, instead of being counted into it. Empty when every file was
+ * checked. Bounded: at most {@link MAX_UNCHECKED_NAMED} files are named.
+ */
+function uncheckedFilesLine(
+	summaries: readonly FileDiagnosticSummary[],
+	cwd: string,
+): string {
+	const unchecked = summaries.filter((s) => s.uncheckedReason !== undefined);
+	if (unchecked.length === 0) return "";
+	const named = unchecked
+		.slice(0, MAX_UNCHECKED_NAMED)
+		.map(
+			(s) => `${toProjectRelativePath(s.filePath, cwd)}: ${s.uncheckedReason}`,
+		);
+	const more = unchecked.length - named.length;
+	return `⚠ ${unchecked.length} file${unchecked.length === 1 ? "" : "s"} not checked, so no findings is not a clean result: ${named.join("; ")}${more > 0 ? `; +${more} more` : ""}.`;
+}
+
 async function formatAllMode(
 	cwd: string,
 	severity: string,
@@ -3579,7 +3625,12 @@ async function formatAllMode(
 					kept.length === diagnostics.length
 				)
 					return s;
-				return summarizeDiagnostics(s.filePath, policyKept, s.hasFinalSnapshot);
+				return summarizeDiagnostics(
+					s.filePath,
+					policyKept,
+					s.hasFinalSnapshot,
+					s.uncheckedReason,
+				);
 			});
 	// #1641: the single chokepoint both mode=all (cache-only `summaries`) and
 	// mode=full (widget cache merged with a FRESH LSP sweep, above) converge
@@ -3598,7 +3649,12 @@ async function formatAllMode(
 			resync: resyncDocumentOnPastEof,
 		});
 		if (demotedCount === 0) return s;
-		return summarizeDiagnostics(s.filePath, diagnostics, s.hasFinalSnapshot);
+		return summarizeDiagnostics(
+			s.filePath,
+			diagnostics,
+			s.hasFinalSnapshot,
+			s.uncheckedReason,
+		);
 	});
 	const visibleSummaries = eofGated.filter((s) => includeFile(s.filePath));
 	// Scope and policy govern evidence notes too: a suppressed or unrelated
@@ -3649,6 +3705,14 @@ async function formatAllMode(
 		);
 	});
 
+	// #5287: the files no check completed on are not part of "No issues".
+	const uncheckedLine = uncheckedFilesLine(visibleSummaries, cwd);
+	const uncheckedNote = uncheckedLine ? `\n${uncheckedLine}` : "";
+	const uncheckedCount = visibleSummaries.filter(
+		(s) => s.uncheckedReason !== undefined,
+	).length;
+	const uncheckedDetails =
+		uncheckedCount > 0 ? { uncheckedFileCount: uncheckedCount } : {};
 	let validationStatus: string | undefined;
 	let validationNote = "";
 	let evidenceDetails: Record<string, unknown> = {};
@@ -3701,7 +3765,11 @@ async function formatAllMode(
 					? "unverified"
 					: withIssues.length > 0
 						? "findings"
-						: "no-matching-findings";
+						: // #5287: no finding in a file no check completed on is not the
+							// ✓ status; only checked files earn it.
+							uncheckedCount > 0
+							? "unverified"
+							: "no-matching-findings";
 		const nextTool = resolveLensToolName(
 			"lens_diagnostics",
 			sessionEvidence?.host ?? "pi",
@@ -3733,7 +3801,7 @@ async function formatAllMode(
 				: "";
 		validationNote =
 			validationStatus === "inconclusive" || validationStatus === "unverified"
-				? `Session cache ${validationStatus} — not a clean verdict: ${pending.length} pending file(s), ${staleDiagnosticCount} stale finding(s), ${unverified.length} requested file(s) without cached evidence${omittedClause}. Not active validation.\n` +
+				? `Session cache ${validationStatus} — not a clean verdict: ${pending.length} pending file(s), ${staleDiagnosticCount} stale finding(s), ${unverified.length} requested file(s) without cached evidence, ${uncheckedCount} file(s) no check completed on${omittedClause}. Not active validation.\n` +
 					`Next check: ${nextTool ?? "diagnostics"} source=lsp scope=paths${nextPaths.length > 0 ? ` paths=${JSON.stringify(nextPaths)}` : " with the changed paths"}.` +
 					(remainingRescanPathCount > 0
 						? ` ${remainingRescanPathCount} more path(s) need a check; narrow or batch the remaining paths.`
@@ -3772,13 +3840,16 @@ async function formatAllMode(
 		dispositionSuppressed > 0 ? { dispositionSuppressed } : {};
 
 	if (withIssues.length === 0) {
+		const checkedCount = visibleSummaries.length - uncheckedCount;
 		const text =
 			(visibleSummaries.length === 0
 				? "No files diagnosed yet this session.\n"
 				: validationStatus === "inconclusive" ||
-					  validationStatus === "unverified"
+					  validationStatus === "unverified" ||
+					  checkedCount === 0
 					? ""
-					: `No ${severity === "all" ? "" : severity + " "}issues across ${visibleSummaries.length} file${visibleSummaries.length === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+					: `No ${severity === "all" ? "" : severity + " "}issues across ${checkedCount} file${checkedCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+			(uncheckedLine ? `${uncheckedLine}\n` : "") +
 			validationNote +
 			staleNote +
 			suppressedNote +
@@ -3791,6 +3862,7 @@ async function formatAllMode(
 				filesChecked: visibleSummaries.length,
 				staleDropped,
 				...suppressedDetails,
+				...uncheckedDetails,
 			},
 		};
 	}
@@ -3918,6 +3990,7 @@ async function formatAllMode(
 					validationNote +
 					lines.join("\n") +
 					summary +
+					uncheckedNote +
 					staleNote +
 					suppressedNote,
 			},
@@ -3932,6 +4005,7 @@ async function formatAllMode(
 			totalAdvisories,
 			staleDropped,
 			...suppressedDetails,
+			...uncheckedDetails,
 		},
 	};
 }

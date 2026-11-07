@@ -323,15 +323,23 @@ interface FileRecord {
 	/**
 	 * #5258: why no check of this file's kind completed in the run that wrote
 	 * the snapshot (`DispatchResult.verdict`, unchecked arm). An empty snapshot
-	 * of such a file is not a clean result, so the footer withholds `✓ clean`
-	 * for it. Set only by {@link recordDiagnostics}, from a file a check could have
-	 * covered (never a kindless or generated file: nothing can retire that).
-	 * Cleared by a later write whose check completed, or by a scan that answers
-	 * for the file ({@link recordDiagnostics}). Every other commit keeps it: a
-	 * full scan's correlated write ({@link reconcileCorrelatedScanDiagnostics})
-	 * is handed files no server confirmed (#5285 r3).
+	 * of such a file is not a clean result, so no surface reads it as one: the
+	 * footer withholds `✓ clean`, and every cache-only report names the reason
+	 * ({@link getFileDiagnosticSummaries}, #5287). Set only by
+	 * {@link recordDiagnostics}. Cleared by a later write whose check completed,
+	 * or by a scan that answers for the file ({@link recordDiagnostics}). Every
+	 * other commit keeps it: a full scan's correlated write
+	 * ({@link reconcileCorrelatedScanDiagnostics}) is handed files no server
+	 * confirmed (#5285 r3).
 	 */
 	uncheckedReason?: string;
+	/**
+	 * #5287: no check can ever cover this file (no file kind, a generated file),
+	 * so nothing retires `uncheckedReason`. Only the write's own line and the
+	 * reports say so; the footer neither counts such a file nor lets it stand
+	 * for a clean session (#5285 r2).
+	 */
+	uncheckedInapplicable?: true;
 	touchedAt: number;
 }
 
@@ -651,6 +659,8 @@ export interface PersistedWidgetState {
 		hasFinalDiagnosticsSnapshot: boolean;
 		/** #5258: absent in a snapshot older than the field, which reads as checked. */
 		uncheckedReason?: string;
+		/** #5287: absent in a snapshot older than the field, which reads as coverable. */
+		uncheckedInapplicable?: true;
 		touchedAt: number;
 	}>;
 }
@@ -675,6 +685,7 @@ export function exportWidgetState(): PersistedWidgetState {
 			...(rec.uncheckedReason !== undefined && {
 				uncheckedReason: rec.uncheckedReason,
 			}),
+			...(rec.uncheckedInapplicable && { uncheckedInapplicable: true }),
 			touchedAt: rec.touchedAt,
 		})),
 	};
@@ -798,6 +809,9 @@ export function importWidgetState(
 			hasFinalDiagnosticsSnapshot: f.hasFinalDiagnosticsSnapshot ?? false,
 			...(typeof f.uncheckedReason === "string" && {
 				uncheckedReason: f.uncheckedReason,
+				...(f.uncheckedInapplicable === true && {
+					uncheckedInapplicable: true,
+				}),
 			}),
 			touchedAt: recordTouchedAt,
 		});
@@ -987,10 +1001,10 @@ export function recordDiagnostics(
 	// `reconcileStaleWidgetFiles`'s `mtimeMs > touchedAt` gate so a resolved
 	// finding renders forever (the #1092 touchedAt-re-arming defect).
 	observedAt?: number,
-	// #5258: the reason no check of the file's kind completed, when the run that
-	// produced `diagnostics` was unchecked (`DispatchResult.verdict`). Omitted by
-	// a scan that answers for the file (a workspace LSP reconcile).
-	unchecked?: string,
+	// #5258: why no check of the file's kind completed, when the run that
+	// produced `diagnostics` was unchecked (`recordedUnchecked(verdict)`).
+	// Omitted by a scan that answers for the file (a workspace LSP reconcile).
+	unchecked?: { reason: string; inapplicable?: true },
 ): boolean {
 	// Drop a write that's superseded by a later same-turn edit to this file
 	// whose pipeline finished first (same race class as #555). No cache write,
@@ -1018,8 +1032,14 @@ export function recordDiagnostics(
 		observedTs,
 		key,
 	);
-	if (unchecked === undefined) delete rec.uncheckedReason;
-	else rec.uncheckedReason = unchecked;
+	if (unchecked === undefined) {
+		delete rec.uncheckedReason;
+		delete rec.uncheckedInapplicable;
+	} else {
+		rec.uncheckedReason = unchecked.reason;
+		if (unchecked.inapplicable) rec.uncheckedInapplicable = true;
+		else delete rec.uncheckedInapplicable;
+	}
 	return true;
 }
 
@@ -2019,6 +2039,14 @@ export interface FileDiagnosticSummary {
 	advisories: number;
 	hasFinalSnapshot: boolean;
 	/**
+	 * #5287: why no check of this file's kind completed in the run that wrote the
+	 * snapshot (`FileRecord.uncheckedReason`), so "no findings" is not a clean
+	 * verdict. Absent for a file a check answered for. Present for a file no
+	 * check can ever cover too: a report names it once, where the footer keeps it
+	 * out of its count.
+	 */
+	uncheckedReason?: string;
+	/**
 	 * The full, uncapped LIVE diagnostics for this file (not limited by the TUI's
 	 * per-file storage cap). `blocking + errors + warnings` may exceed
 	 * `diagnostics.length` because a single diagnostic can be both blocking and
@@ -2067,6 +2095,9 @@ export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 			warnings: rec.diagnosticCounts.warnings,
 			advisories: countAdvisories(live),
 			hasFinalSnapshot: rec.hasFinalDiagnosticsSnapshot,
+			...(rec.uncheckedReason !== undefined && {
+				uncheckedReason: rec.uncheckedReason,
+			}),
 			diagnostics: live.map((d) => ({ ...d })),
 		};
 	});
@@ -2302,7 +2333,7 @@ export function renderWidget(
 			? warningChunk
 			: uncheckedFiles.length > 0
 				? yellow(`⚠ ${uncheckedFiles.length} unchecked`)
-				: files.size > 0 && !hasPendingAnalysis
+				: renderable.length > 0 && !hasPendingAnalysis
 					? green("✓ clean")
 					: "";
 
@@ -2685,7 +2716,10 @@ function hasFailedFormatter(rec: FileRecord): boolean {
 
 function shouldRenderFile(rec: FileRecord): boolean {
 	return (
-		rec.hasFinalDiagnosticsSnapshot ||
+		// #5287: a final snapshot of a file no check can ever cover is not a result
+		// to draw (`✓ notes.zzz clean`) or to count; the write line and the reports
+		// say so.
+		(rec.hasFinalDiagnosticsSnapshot && rec.uncheckedInapplicable !== true) ||
 		holdsDrawableFindings(rec) ||
 		hasChangedFormatter(rec) ||
 		hasFailedFormatter(rec)
@@ -2715,6 +2749,7 @@ function hasLiveDiagnostic(rec: FileRecord): boolean {
 function isUncheckedClean(rec: FileRecord): boolean {
 	return (
 		rec.uncheckedReason !== undefined &&
+		rec.uncheckedInapplicable !== true &&
 		rec.hasFinalDiagnosticsSnapshot &&
 		classifyFileTier(rec) === "clean"
 	);

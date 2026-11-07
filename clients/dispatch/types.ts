@@ -304,13 +304,20 @@ export const unchecked = (
 });
 
 /**
- * The reason the widget footer records for a run, or `undefined` when it
- * records none: a checked run, and a file no check can ever cover.
+ * What the widget store records for a run, or `undefined` for a checked one:
+ * the unchecked reason, and whether no check can ever cover the file. The store
+ * keeps both. The footer counts only the covered kind, and every cache-only
+ * report names the reason (#5287).
  */
-export const widgetUncheckedReason = (
+export const recordedUnchecked = (
 	verdict: CoverageVerdict,
-): string | undefined =>
-	verdict.checked || verdict.inapplicable ? undefined : verdict.reason;
+): { reason: string; inapplicable?: true } | undefined =>
+	verdict.checked
+		? undefined
+		: {
+				reason: verdict.reason,
+				...(verdict.inapplicable && { inapplicable: true as const }),
+			};
 
 /**
  * The `checked` arm from the runner rows that completed, or `undefined` when
@@ -370,6 +377,13 @@ export const IN_FLIGHT_REASON =
 
 /** No file kind: nothing in pi-lens analyses this file type. */
 export const NO_ANALYZER_REASON = "no analyzer handles this file type";
+
+/**
+ * The one wording for a file no language server's matcher selects: write time,
+ * `lsp_diagnostics` and `lsp_navigation` all say this, so the reader is never
+ * told to install a server that cannot help (#5287).
+ */
+export const NO_SERVER_REASON = "no language server handles this file";
 
 /**
  * A kind with no primary checker in this mode (`--no-lsp` removes the language

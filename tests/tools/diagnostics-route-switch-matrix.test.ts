@@ -934,7 +934,7 @@ describe("navigation operations on a file no primary answers for (#4403 N4, V5)"
 		async () => {
 			expect(await navOps("disabled, no aux", "unserved")).toEqual([
 				...noServer(NAV_DISABLED),
-				"hover ok=false status=no_server: No LSP server available for notes.unserved. Check that the language server is installed.",
+				"hover ok=false status=no_server: No LSP server available for notes.unserved: no language server handles this file.",
 			]);
 		},
 		scaledTestTimeout(120_000),

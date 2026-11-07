@@ -83,7 +83,7 @@ import {
 	type InconclusiveSources,
 	type PiAgentAPI,
 	spanOverlapsModifiedRanges,
-	widgetUncheckedReason,
+	recordedUnchecked,
 } from "./dispatch/types.js";
 import {
 	formatDiagnostics,
@@ -2655,7 +2655,7 @@ async function analysePipeline(
 		widgetOrder(),
 		analysisReadAtMs,
 		// #5258: the footer reads the same verdict as the write's line.
-		widgetUncheckedReason(dispatchResult.verdict),
+		recordedUnchecked(dispatchResult.verdict),
 	);
 	// #502: emit the write batch's FINAL diagnostic state immediately after
 	// recordDiagnostics commits it — this call site runs after format,

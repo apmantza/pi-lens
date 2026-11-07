@@ -2706,7 +2706,7 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 		recordDiagnostics("/repo/checked.ts", []);
 		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
 
-		recordDiagnostics("/repo/open.ts", [], undefined, undefined, reason);
+		recordDiagnostics("/repo/open.ts", [], undefined, undefined, { reason });
 		const frame = renderWidget(120, theme).join("\n");
 		expect(frame).not.toContain("✓ clean");
 		expect(frame).toContain("1 unchecked");
@@ -2722,7 +2722,7 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 			[{ severity: "error", semantic: "blocking", message: "boom", line: 1 }],
 			undefined,
 			undefined,
-			reason,
+			{ reason },
 		);
 		const frame = renderWidget(120, theme).join("\n");
 		expect(frame).toContain("1E");
@@ -2742,7 +2742,7 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 			["/repo/index.ts", noPrimaryCheckerReason(false)],
 		] as const) {
 			clearWidgetState();
-			recordDiagnostics(file, [], undefined, undefined, reason);
+			recordDiagnostics(file, [], undefined, undefined, { reason });
 			reconcileCorrelatedScanDiagnostics(file, []);
 			const kept = renderWidget(120, theme).join("\n");
 			expect(kept).toContain("1 unchecked");
@@ -2758,7 +2758,7 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 	});
 
 	it("marks the vertical row and the compact header, not only the wide frame", () => {
-		recordDiagnostics("/repo/open.ts", [], undefined, undefined, reason);
+		recordDiagnostics("/repo/open.ts", [], undefined, undefined, { reason });
 		expect(renderWidget(60, theme).join("\n")).toContain("unchecked");
 		expect(renderWidget(60, theme, { compact: true }).join("\n")).toContain(
 			"1 unchecked",
@@ -2766,7 +2766,7 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 	});
 
 	it("survives a resume, and a snapshot older than the field reads as before", () => {
-		recordDiagnostics("/repo/open.ts", [], undefined, undefined, reason);
+		recordDiagnostics("/repo/open.ts", [], undefined, undefined, { reason });
 		const saved = JSON.parse(JSON.stringify(exportWidgetState()));
 		expect(saved.files[0].uncheckedReason).toBe(reason);
 		clearWidgetState();
@@ -2780,5 +2780,105 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 		delete older.files[0].uncheckedReason;
 		expect(importWidgetState(older)).toBe(true);
 		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+});
+
+// Recurrence prevented: #5287 (and #5258's remaining footer case). A kindless
+// or generated file left a final snapshot with no finding, and the footer
+// counted it as a clean file: `pi-lens ✓ clean` over a session whose only file
+// no check could ever cover, plus a `✓ notes.zzz clean` row. The cache-only
+// reports read the same record through `getFileDiagnosticSummaries`, which
+// dropped the reason, so `lens_diagnostics` opened with "No issues ... ✓".
+describe("a file no check can ever cover (#5287)", () => {
+	const inapplicable = { reason: "no analyzer handles this file type" };
+	const flagged = { ...inapplicable, inapplicable: true as const };
+
+	it("neither draws a row nor stands for a clean session in the footer", () => {
+		recordDiagnostics("/repo/notes.zzz", [], undefined, undefined, flagged);
+		for (const width of [120, 60]) {
+			const frame = renderWidget(width, theme).join("\n");
+			expect(frame, `width ${width}`).not.toContain("✓");
+			expect(frame, `width ${width}`).not.toContain("notes.zzz");
+			expect(frame, `width ${width}`).not.toContain("unchecked");
+		}
+		expect(
+			renderWidget(60, theme, { compact: true }).join("\n"),
+			"compact",
+		).not.toContain("✓");
+
+		// A completed check elsewhere is what earns `✓ clean`; the kindless file
+		// still draws nothing.
+		recordDiagnostics("/repo/checked.ts", []);
+		const mixed = renderWidget(120, theme).join("\n");
+		expect(mixed).toContain("✓ clean");
+		expect(mixed).not.toContain("notes.zzz");
+	});
+
+	it("still draws a finding the file holds", () => {
+		recordDiagnostics(
+			"/repo/gen.ts",
+			[{ severity: "warning", semantic: "warning", message: "w", line: 1 }],
+			undefined,
+			undefined,
+			flagged,
+		);
+		const frame = renderWidget(120, theme).join("\n");
+		expect(frame).toContain("1W");
+		expect(frame).toContain("gen.ts");
+	});
+
+	it("projects the reason for every unchecked file, covered or not", () => {
+		recordDiagnostics("/repo/notes.zzz", [], undefined, undefined, flagged);
+		recordDiagnostics("/repo/a.lua", [], undefined, undefined, {
+			reason: "no primary checker is enabled for this kind",
+		});
+		recordDiagnostics("/repo/checked.ts", []);
+		const reasons = Object.fromEntries(
+			getFileDiagnosticSummaries().map((s) => [
+				path.basename(s.filePath),
+				s.uncheckedReason ?? "none",
+			]),
+		);
+		expect(reasons).toEqual({
+			"notes.zzz": inapplicable.reason,
+			"a.lua": "no primary checker is enabled for this kind",
+			"checked.ts": "none",
+		});
+	});
+
+	it("a later write retires the flag with the reason, and a covered reason drops it", () => {
+		recordDiagnostics("/repo/f.ts", [], undefined, undefined, flagged);
+		recordDiagnostics("/repo/f.ts", [], undefined, undefined, {
+			reason: "the primary check is still running",
+		});
+		expect(renderWidget(120, theme).join("\n")).toContain("1 unchecked");
+
+		recordDiagnostics("/repo/f.ts", []);
+		expect(getFileDiagnosticSummaries()[0]?.uncheckedReason).toBeUndefined();
+		expect(exportWidgetState().files[0]).not.toHaveProperty(
+			"uncheckedInapplicable",
+		);
+	});
+
+	it("survives a resume; a snapshot with a reason and no flag stays coverable", () => {
+		recordDiagnostics("/repo/notes.zzz", [], undefined, undefined, flagged);
+		const saved = JSON.parse(JSON.stringify(exportWidgetState()));
+		expect(saved.files[0]).toMatchObject({
+			uncheckedReason: inapplicable.reason,
+			uncheckedInapplicable: true,
+		});
+		clearWidgetState();
+		expect(importWidgetState(saved)).toBe(true);
+		expect(renderWidget(120, theme).join("\n")).not.toContain("✓");
+		expect(getFileDiagnosticSummaries()[0]?.uncheckedReason).toBe(
+			inapplicable.reason,
+		);
+
+		// The build before the flag stored a reason only for a coverable file.
+		clearWidgetState();
+		const older = JSON.parse(JSON.stringify(saved));
+		delete older.files[0].uncheckedInapplicable;
+		expect(importWidgetState(older)).toBe(true);
+		expect(renderWidget(120, theme).join("\n")).toContain("1 unchecked");
 	});
 });

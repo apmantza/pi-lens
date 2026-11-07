@@ -1053,6 +1053,9 @@ function formatAnalyze(
 		// their own label so they are no longer folded into the warning count.
 		`${result.counts.advisories} advisory(ies), ` +
 		`${result.counts.diagnostics} total` +
+		// #5287: zero counts beside a check that never completed are not a clean
+		// file, so the summary says so beside them.
+		(result.verdict.checked ? "" : ` · not checked: ${result.verdict.reason}`) +
 		(result.latency ? ` · ${result.latency.totalDurationMs}ms` : "") +
 		lspNote +
 		(result.counts.fixed > 0 ? ` · ${result.counts.fixed} auto-fixed` : "") +

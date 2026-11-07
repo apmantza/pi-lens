@@ -132,6 +132,20 @@ describe("session diagnostic evidence", () => {
 			status: "unverified",
 			readsClean: false,
 		},
+		{
+			// Recurrence prevented: #5287. A final snapshot with no finding is also
+			// what a file no check completed on leaves behind (a kind nothing can
+			// check, `--no-lsp` TypeScript); the projection dropped its reason, so
+			// this row read `✓`.
+			state: "no check completed",
+			seed: (target) =>
+				recordDiagnostics(target, [], undefined, undefined, {
+					reason: "no analyzer handles this file type",
+					inapplicable: true,
+				}),
+			status: "unverified",
+			readsClean: false,
+		},
 	];
 
 	it.each(STATES)(

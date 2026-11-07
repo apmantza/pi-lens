@@ -97,6 +97,7 @@ import {
 	isNotApplicableSkipReason,
 	isRunnerSkipReason,
 	NO_ANALYZER_REASON,
+	NO_SERVER_REASON,
 	noPrimaryCheckerReason,
 	reachedNoVerdict,
 	unchecked,
@@ -943,7 +944,7 @@ function buildCoverageNotice(
 		)
 	)
 		return {
-			verdict: unchecked("not analyzed (no language server handles this file)"),
+			verdict: unchecked(`not analyzed (${NO_SERVER_REASON})`),
 		};
 
 	// #4403: no primary checked this file. When the runner knows why, the
