@@ -3096,7 +3096,7 @@ function printReport(report) {
 	if (phaseDist?.rows?.length) {
 		console.log("\nPhase latency");
 		console.log(
-			`  p50/p95/max (clamped floor-rank percentile) per (tool, phase), share of ${formatMs(phaseDist.totalMs)}ms in-window phase time`,
+			`  p50/p95/max (clamped floor-rank percentile) per (tool, phase), share of ${formatMs(phaseDist.totalMs)}ms summed recorded phase spans (nested spans overlap)`,
 		);
 		if (phaseDist.parentTotalRows) {
 			console.log(

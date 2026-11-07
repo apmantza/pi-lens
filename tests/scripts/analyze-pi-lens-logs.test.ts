@@ -844,6 +844,12 @@ describe("analyze-pi-lens-logs.mjs per-phase latency distribution (#5263)", () =
 			/1\s+p50=700\s+p95=700\s+max=700\s+34\.0%\s+edit:dispatch_lint/,
 		);
 		expect(section).not.toMatch(/pre_window_phase/);
+		// Recurrence: the r2 label read "in-window phase time", which a reader took
+		// for wall-clock time; phases nest (a `lsp_*` span inside `dispatch_lint`),
+		// so the denominator is a sum of recorded spans, not elapsed time (C1.1, C3.1).
+		expect(section).toContain(
+			"share of 2060ms summed recorded phase spans (nested spans overlap)",
+		);
 		const runnerSection = text.split("\nRunner latency\n")[1]?.split("\n\n")[0];
 		expect(runnerSection).toMatch(
 			/3\s+p50=200\s+p95=300\s+max=300\s+100\.0%\s+oxlint\s+\(skipped 2\)/,
