@@ -83,6 +83,23 @@ describe("pilens_ast_grep_search and pilens_symbol_search expand a `paths` glob 
 		expect(answer).not.toContain("path not found");
 	}, 60_000);
 
+	// `pilens_symbol_search` only filters an index, so the file-list cap that
+	// guards the tools receiving a target list must not refuse it (#5393 F7).
+	it("scopes a glob matching more files than the file-list cap on symbol_search", async () => {
+		for (let index = 0; index < 120; index += 1) {
+			const file = path.join(projectDir, "many", `f${index}.ts`);
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, `export const v${index} = ${index};\n`);
+		}
+		const res = await harness.request(nextId++, "tools/call", {
+			name: "pilens_symbol_search",
+			arguments: { query: "v1", paths: ["many/**/*.ts"], cwd: projectDir },
+		});
+		const answer = textOf(res);
+		expect(answer).not.toContain("names more than");
+		expect(answer).not.toContain("no file matches");
+	}, 60_000);
+
 	it("resolves the glob against the call's own `cwd`, not the process root", async () => {
 		// The same entry means a different tree under a different root: with the
 		// tool's cwd at `src/`, `src/**/*.ts` names `src/src/**`, which is empty.

@@ -176,7 +176,6 @@ export async function expandPathsEntry(
 	}
 	const root = literalRoot(cwdAbsolute, relative);
 	const { signal } = options;
-	if (signal?.aborted) return { entries: [], refusal: "aborted", root };
 
 	// Keyed at the call's own root, not the walk root: a `.gitignore` or
 	// `.pi-lens.json` between `cwd` and the prefix directory still applies.

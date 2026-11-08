@@ -26,15 +26,18 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetTrackedFilesCacheForTests } from "../../clients/git-tracked-ignore.js";
 import { expandPathsEntry } from "../../clients/path-globs.js";
 import {
 	clearWidgetState,
 	recordDiagnostics,
 } from "../../clients/widget-state.js";
+import { createAstGrepOutlineTool } from "../../tools/ast-grep-outline.js";
+import { createAstGrepSearchTool } from "../../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
 import { MAX_PATHS_ENTRIES, readPathsArgument } from "../../tools/shared.js";
+import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { execFileSync } from "../support/git-fixture-env.js";
 
@@ -131,6 +134,50 @@ describe("#5371 r2 the reader decides literal-vs-glob and the walk root by rule"
 				"src/b1.ts",
 				"src/b{1,2}.ts",
 			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// F2, the other half: the glob character test reads the part of the entry
+	// BELOW cwd. A workspace directory named `ws[1]` is a directory; a missing
+	// file under it is a missing LITERAL (its own `path not found` downstream),
+	// not a glob that "matches no file".
+	it("never reads the workspace's own name as glob syntax (F2)", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r2-wsname-", {
+			rootMarker: false,
+		});
+		try {
+			const cwd = path.join(env.tmpDir, "ws[1]");
+			mk(cwd, ["src/a.ts"]);
+			expect(await names(cwd, ["gone.ts"])).toEqual(["gone.ts"]);
+			expect(await names(cwd, [path.join(cwd, "gone.ts")])).toEqual([
+				"gone.ts",
+			]);
+			expect(await names(cwd, ["src/*.ts"])).toEqual(["src/a.ts"]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// F2, the probe's three answers: `ENOENT`/`ENOTDIR` mean absent (a glob);
+	// any other refusal means "cannot prove absent", which stays a literal.
+	it("treats ENOTDIR as absent and any other refusal as a literal (F2)", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r2-probe-", {
+			rootMarker: false,
+		});
+		try {
+			mk(env.tmpDir, ["afile.ts"]);
+			// `afile.ts` is a file, so `afile.ts/[x]` answers ENOTDIR: absent.
+			expect(await names(env.tmpDir, ["afile.ts/[x]"])).toEqual({
+				refusal: expect.stringContaining("no file matches"),
+			});
+			if (process.platform !== "win32") {
+				// A self-referential link answers ELOOP for anything beneath it: the
+				// kernel refused, nothing proves the entry absent.
+				fs.symlinkSync("loop", path.join(env.tmpDir, "loop"));
+				expect(await names(env.tmpDir, ["loop/[x]"])).toEqual(["loop/[x]"]);
+			}
 		} finally {
 			env.cleanup();
 		}
@@ -302,6 +349,99 @@ describe("#5371 r2 the reader decides literal-vs-glob and the walk root by rule"
 		}
 	});
 
+	// The reader hands its signal to the walk: a tool call the host aborted
+	// (Esc) must not start reading a tree.
+	it("hands the call's signal to the expansion (F8)", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r2-signal-", {
+			rootMarker: false,
+		});
+		try {
+			mk(env.tmpDir, ["a.ts"]);
+			const controller = new AbortController();
+			controller.abort();
+			const read = await readPathsArgument(["*.ts"], {
+				cwd: env.tmpDir,
+				signal: controller.signal,
+			});
+			expect(read.refusal).toContain("aborted");
+			expect(read.entries).toEqual([]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The walk itself stops: a signal that fires after the first directory read
+	// must leave the other directories unread, not merely change the verdict.
+	it("stops reading directories once the signal fires mid-walk (F8)", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r2-midwalk-", {
+			rootMarker: false,
+		});
+		const controller = new AbortController();
+		const real = fs.promises.readdir.bind(fs.promises);
+		let reads = 0;
+		const spy = vi.spyOn(fs.promises, "readdir").mockImplementation(((
+			...args: Parameters<typeof real>
+		) => {
+			reads += 1;
+			const answer = real(...args);
+			controller.abort();
+			return answer;
+		}) as typeof fs.promises.readdir);
+		try {
+			mk(
+				env.tmpDir,
+				Array.from({ length: 12 }, (_, index) => `d${index}/f.zzz`),
+			);
+			const walked = await expandPathsEntry(
+				path.join(env.tmpDir, "**", "*.ts"),
+				env.tmpDir,
+				MAX_PATHS_ENTRIES,
+				{ signal: controller.signal },
+			);
+			expect(walked.refusal).toBe("aborted");
+			// The root listing is the one read made before the first entry saw the
+			// fired signal; twelve more would mean the walk went on.
+			expect(reads).toBe(1);
+		} finally {
+			spy.mockRestore();
+			env.cleanup();
+		}
+	});
+
+	// The match budget ends the walk too: a glob that passes the cap is refused
+	// after a handful of directory reads, not after the whole tree. (r1's
+	// `shouldStop` carried this and a `() => false` mutation survived.)
+	it("stops reading directories once the matches pass the budget (F8)", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r2-budget-", {
+			rootMarker: false,
+		});
+		const real = fs.promises.readdir.bind(fs.promises);
+		let reads = 0;
+		const spy = vi.spyOn(fs.promises, "readdir").mockImplementation(((
+			...args: Parameters<typeof real>
+		) => {
+			reads += 1;
+			return real(...args);
+		}) as typeof fs.promises.readdir);
+		try {
+			mk(
+				env.tmpDir,
+				Array.from({ length: 30 }, (_, index) => `d${index}/f.ts`),
+			);
+			const walked = await expandPathsEntry(
+				path.join(env.tmpDir, "**", "*.ts"),
+				env.tmpDir,
+				2,
+			);
+			expect(walked.refusal).toBe("over-cap");
+			// Root, then at most the directories holding the three matches.
+			expect(reads).toBeLessThanOrEqual(5);
+		} finally {
+			spy.mockRestore();
+			env.cleanup();
+		}
+	});
+
 	it("does not walk once the call's signal has fired (F8)", async () => {
 		const env = setupTestEnvironment("pi-lens-5371r2-abort-", {
 			rootMarker: false,
@@ -318,6 +458,78 @@ describe("#5371 r2 the reader decides literal-vs-glob and the walk root by rule"
 			);
 			expect(aborted.refusal).toBe("aborted");
 			expect(aborted.entries).toEqual([]);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+// The tools that hold the call's abort signal hand it to the reader, so Esc ends
+// a glob's directory walk. `ast_grep_replace` (its signal plumbing belongs to
+// #5392) and the MCP mirror (no signal at `callTool`) are the named gaps.
+describe("#5371 r2 the tools hand their abort signal to the paths reader (F8)", () => {
+	it("refuses a glob once the signal fired, in every tool that holds one", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r2-toolsignal-", {
+			rootMarker: false,
+		});
+		try {
+			mk(env.tmpDir, ["src/a.ts"]);
+			const client = {
+				ensureAvailable: async () => true,
+				search: vi.fn().mockResolvedValue({ matches: [], totalMatches: 0 }),
+				outline: vi.fn().mockResolvedValue({ output: [] }),
+				validatePattern: vi.fn().mockResolvedValue({ valid: true }),
+				formatMatches: () => "",
+			} as never;
+			const subjects: Array<{
+				name: string;
+				tool: { execute: (...args: never[]) => Promise<unknown> };
+				params: Record<string, unknown>;
+			}> = [
+				{
+					name: "symbol_search",
+					tool: createSymbolSearchTool(() => env.tmpDir),
+					params: { query: "hello" },
+				},
+				{
+					name: "ast_grep_search",
+					tool: createAstGrepSearchTool(client),
+					params: { pattern: "foo($X)", lang: "typescript" },
+				},
+				{
+					name: "ast_grep_outline",
+					tool: createAstGrepOutlineTool(client),
+					params: { lang: "typescript" },
+				},
+				{
+					name: "lens_diagnostics",
+					tool: createLensDiagnosticsTool(
+						{ readCache: () => undefined } as never,
+						() => env.tmpDir,
+					),
+					params: { mode: "all" },
+				},
+			];
+			for (const subject of subjects) {
+				const controller = new AbortController();
+				controller.abort();
+				const result = (await (
+					subject.tool.execute as unknown as (
+						...args: unknown[]
+					) => Promise<{ isError?: boolean; content: { text: string }[] }>
+				)(
+					"5371",
+					{ ...subject.params, paths: ["src/*.ts"] },
+					controller.signal,
+					null,
+					{ cwd: env.tmpDir },
+				)) as { isError?: boolean; content: { text: string }[] };
+				expect(result.isError, subject.name).toBe(true);
+				expect(
+					result.content.map((part) => part.text).join("\n"),
+					subject.name,
+				).toContain("aborted");
+			}
 		} finally {
 			env.cleanup();
 		}
