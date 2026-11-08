@@ -1346,9 +1346,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		// declares its own `none:` reason rather than adding a silent handler to
 		// that file. A move, not a new swallow.
 		silent: 5,
-		identities: "aa10e0f3bceb1d53",
+		identities: "ca582e7c96beadc4",
 		reason: PRE_RULE,
-	}, // :280, :1016, :1612, :1672, :2390
+	}, // :280, :1016, :1612, :1672, :2400
 	"tools/lsp-diagnostics.ts": {
 		silent: 10,
 		identities: "2e5c32f96dcee285",

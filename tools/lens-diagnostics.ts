@@ -1977,9 +1977,14 @@ function summarizeDiagnostics(
 	filePath: string,
 	diagnostics: WidgetDiagnostic[],
 	hasFinalSnapshot: boolean,
-	// #5287: re-summarizing keeps the reason no check completed for the file; a
-	// call that drops it turns an unchecked file back into "no findings".
-	uncheckedReason?: string,
+	// #5287: a re-summary carries the unchecked state of the summary it rebuilds:
+	// the reason no check completed and whether no check can ever cover the file.
+	// Dropping the reason reads the file as "no findings"; dropping the flag
+	// reads a generated file as coverable again (#5391 V1, a policy re-summary).
+	carried?: Pick<
+		FileDiagnosticSummary,
+		"uncheckedReason" | "uncheckedInapplicable"
+	>,
 ): FileDiagnosticSummary {
 	let blocking = 0;
 	let errors = 0;
@@ -2010,7 +2015,12 @@ function summarizeDiagnostics(
 		warnings,
 		advisories,
 		hasFinalSnapshot,
-		...(uncheckedReason !== undefined && { uncheckedReason }),
+		...(carried?.uncheckedReason !== undefined && {
+			uncheckedReason: carried.uncheckedReason,
+		}),
+		...(carried?.uncheckedInapplicable === true && {
+			uncheckedInapplicable: true as const,
+		}),
 		diagnostics,
 	};
 }
@@ -2246,7 +2256,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 				existing?.filePath ?? filePath,
 				diagnostics,
 				existing?.hasFinalSnapshot ?? true,
-				existing?.uncheckedReason,
+				existing,
 			),
 		);
 	};
@@ -2300,7 +2310,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 						filePath,
 						diagnostics,
 						summary.hasFinalSnapshot ?? true,
-						summary.uncheckedReason,
+						summary,
 					),
 		);
 		for (const diagnostic of diagnostics) {
@@ -2401,7 +2411,7 @@ async function applyInlineSuppressionsToSummaries(
 							summary.filePath,
 							policyKept,
 							summary.hasFinalSnapshot,
-							summary.uncheckedReason,
+							summary,
 						);
 			}
 			// #690/#3088: inline `pi-lens-ignore` → the same false-positive/
@@ -2458,7 +2468,7 @@ async function applyInlineSuppressionsToSummaries(
 				summary.filePath,
 				pythonKept.kept,
 				summary.hasFinalSnapshot,
-				summary.uncheckedReason,
+				summary,
 			);
 		}),
 	);
@@ -3053,7 +3063,7 @@ async function formatFullMode(
 						summary.filePath,
 						markUnreconciledFindings(summary.diagnostics),
 						summary.hasFinalSnapshot,
-						summary.uncheckedReason,
+						summary,
 					)
 				: summary,
 		);
@@ -3718,7 +3728,7 @@ async function formatAllMode(
 					s.filePath,
 					policyKept,
 					s.hasFinalSnapshot,
-					s.uncheckedReason,
+					s,
 				);
 			});
 	// #1641: the single chokepoint both mode=all (cache-only `summaries`) and
@@ -3738,12 +3748,7 @@ async function formatAllMode(
 			resync: resyncDocumentOnPastEof,
 		});
 		if (demotedCount === 0) return s;
-		return summarizeDiagnostics(
-			s.filePath,
-			diagnostics,
-			s.hasFinalSnapshot,
-			s.uncheckedReason,
-		);
+		return summarizeDiagnostics(s.filePath, diagnostics, s.hasFinalSnapshot, s);
 	});
 	const visibleSummaries = eofGated.filter((s) => includeFile(s.filePath));
 	// Scope and policy govern evidence notes too: a suppressed or unrelated

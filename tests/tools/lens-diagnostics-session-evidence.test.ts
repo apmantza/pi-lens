@@ -223,6 +223,53 @@ describe("session diagnostic evidence", () => {
 		expect(result.details).not.toHaveProperty("nextCheck");
 	});
 
+	// Recurrence prevented: #5391 review V1 (Greptile thread PRRT_kwDORt8rec608xZN).
+	// A `.pi-lens.json` rule policy drops a finding and re-summarizes the file,
+	// and that re-summary rebuilt the record from the reason alone: a generated
+	// file no check can cover read as coverable again, so the session reopened
+	// as unverified and named it as the next check.
+	it("a policy re-summary keeps a generated file no check can cover (#5391 V1)", async () => {
+		fs.writeFileSync(
+			path.join(cwd, ".pi-lens.json"),
+			JSON.stringify({ rules: { "no-eval": { disable: ["no-eval"] } } }),
+		);
+		for (const name of ["a.ts", "b.ts", "c.ts"])
+			recordDiagnostics(file(name), []);
+		recordDiagnostics(
+			file("gen2.ts"),
+			[
+				{
+					severity: "warning",
+					semantic: "advisory",
+					tool: "example",
+					rule: "no-eval",
+					message: "eval in generated code",
+					line: 1,
+				},
+			],
+			undefined,
+			undefined,
+			{ reason: "generated file", inapplicable: true },
+		);
+
+		const result = await run();
+		const text = result.content[0]?.text ?? "";
+
+		// Premise: the policy drops the only finding, so the file is re-summarized.
+		expect(text).not.toContain("eval in generated code");
+		expect(text).toContain(
+			"No issues across 3 files diagnosed this session. ✓",
+		);
+		expect(text).toContain("⚠ 1 file not checked");
+		expect(text).not.toContain("Session cache unverified");
+		expect(text).not.toContain("Next check");
+		expect(result.details).toMatchObject({
+			validationStatus: "no-matching-findings",
+			uncheckedFileCount: 1,
+		});
+		expect(result.details).not.toHaveProperty("nextCheck");
+	});
+
 	// Recurrence prevented: #5391 review B6. The next check skipped a file a
 	// check could still cover, listing only stale and pending paths.
 	it("a coverable unchecked file is a next check; a file nothing can check is not", async () => {

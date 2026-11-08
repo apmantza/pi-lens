@@ -304,12 +304,6 @@ export const unchecked = (
 });
 
 /**
- * What the widget store records for a run, or `undefined` for a checked one:
- * the unchecked reason, and whether no check can ever cover the file. The store
- * keeps both. The footer counts only the covered kind, and every cache-only
- * report names the reason (#5287).
- */
-/**
  * #5287: why no check of the analysed file's kind completed, or `undefined`
  * when one did. A reply from a worker or warm server built before the verdict
  * field carries none, which is not a completed check either, so the verdict is
@@ -326,6 +320,12 @@ export const verdictUncheckedReason = (
 			? undefined
 			: verdict.reason;
 
+/**
+ * What the widget store records for a run, or `undefined` for a checked one:
+ * the unchecked reason, and whether no check can ever cover the file. The store
+ * keeps both. The footer counts only the covered kind, and every cache-only
+ * report names the reason (#5287).
+ */
 export const recordedUnchecked = (
 	verdict: CoverageVerdict,
 ): { reason: string; inapplicable?: true } | undefined =>
