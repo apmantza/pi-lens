@@ -111,19 +111,22 @@ const ruffRunner: RunnerDefinition = {
 			{ cwd, timeout: 30000 },
 		);
 
-		const raw = stripAnsi(checkResult.stdout + checkResult.stderr);
 		// EXIT TABLE (Ruff 0.6 docs https://docs.astral.sh/ruff/linter/): 0 = clean, 1 = findings, 2 = findings/error or
 		// tool error. A nonzero exit with valid findings stays findings; empty or
 		// unparsable output must never become clean (#1816).
 		const run = parseToolRun(
 			"ruff",
-			{ result: checkResult, output: raw, exitCodes: { ran: [1, 2] } },
-			(output) => {
+			{ result: checkResult, exitCodes: { ran: [1, 2] } },
+			(rawOutput) => {
+				// The report is stdout: ruff prints deprecation notices on stderr
+				// beside a valid JSON document (#5411).
+				const output = stripAnsi(rawOutput);
 				const diagnostics = parseRuffJson(output, ctx.filePath);
 				return diagnostics.length > 0
 					? diagnostics
 					: parseRuffOutput(output, ctx.filePath, cwd);
 			},
+			{ parseStreams: "stdout-else-stderr" },
 		);
 		if (run.skipped) return run.skipped;
 		return finishParsedRun({

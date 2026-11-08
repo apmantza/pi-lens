@@ -12,7 +12,6 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { findingsResult } from "../types.js";
 import {
 	createAvailabilityChecker,
 	coveringLaneAvailable,
@@ -20,7 +19,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
-import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
 
 const taplo = createAvailabilityChecker("taplo", ".exe");
@@ -71,12 +70,20 @@ const LOCATION_PATTERN = /^\s*┌─\s+(.+?):(\d+):(\d+)$/;
  * (#1937 round 2). The exit-code table in the runner is the primary guard;
  * this is the structural one, and each covers a case the other does not.
  */
+/**
+ * `null` is "this output is not a taplo report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 export function parseTaploOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
+	// A located codespan for ANY file is a taplo report; a header with no
+	// location (clap's own failures, #1937 round 2) is not.
+	let located = 0;
+	if (!raw.trim()) return diagnostics;
 	const absTarget = path.resolve(cwd, filePath);
 	const lines = stripAnsi(raw ?? "").split(/\r?\n/);
 
@@ -105,6 +112,7 @@ export function parseTaploOutput(
 			if (!lines[j].includes(LOCATION_LEAD)) continue;
 			const location = LOCATION_PATTERN.exec(lines[j].trimEnd());
 			if (!location) continue;
+			located += 1;
 			if (!pathsEqual(path.resolve(cwd, location[1]!.trim()), absTarget))
 				continue;
 			line = Number.parseInt(location[2]!, 10) || 1;
@@ -128,7 +136,7 @@ export function parseTaploOutput(
 		});
 	}
 
-	return diagnostics;
+	return located > 0 ? diagnostics : null;
 }
 
 const taploRunner: RunnerDefinition = {
@@ -208,25 +216,24 @@ const taploRunner: RunnerDefinition = {
 		// taplo exits 1 only when a file is INVALID, and it does not always draw
 		// a codespan block when it does: a schema it could not load is reported
 		// through its tracing output alone. Claiming that file clean would be an
-		// outright lie, so taplo opts into `skipWhenParsedNothing` (#1948). This
-		// replaces a hand-rolled per-runner copy of the same rule, which wrote
-		// its own `runner-empty-result` row with its own wording.
+		// outright lie (#1948); `finishParsedRun` reports it as
+		// failed/parser_error, the verdict every JSON runner gives a nonzero exit
+		// whose output cannot be read (#5411, which replaced taplo's own
+		// `skipWhenParsedNothing` skip).
 		const run = parseToolRun(
 			"taplo",
 			{ result, output: raw, exitCodes: TAPLO_EXIT_CODES },
 			(out) => parseTaploOutput(out, ctx.filePath, cwd),
-			{ skipWhenParsedNothing: true },
 		);
 		if (run.skipped) return run.skipped;
 
-		const diagnostics = run.diagnostics;
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		return findingsResult(diagnostics, {
-			status: "failed",
-			semantic: "blocking",
+		return finishParsedRun({
+			tool: "taplo",
+			ctx,
+			result,
+			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
+			classify: () => ({ status: "failed", semantic: "blocking" }),
 		});
 	},
 };
