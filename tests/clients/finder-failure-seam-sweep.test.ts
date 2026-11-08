@@ -17,18 +17,24 @@
  * ## What is scanned, and what is admitted
  *
  * Every production file under `clients/`, `tools/`, `mcp/`, `scripts/` (`.mjs`)
- * and `index.ts`, with comments blanked and string contents KEPT (the finder
- * name is itself a string literal, and so is a bracket access to the
- * classifier). A file is a finder file when its code holds the string literal
- * `"where"` or `"which"`. Each finder file must be a row below, in one of two
- * forms, and every other file with the needle fails:
+ * and `index.ts` is read. Comments are always blanked. The finder name is
+ * itself a string literal, and so is a bracket access to the raw classifier,
+ * so those two needles read string contents KEPT. A file is a finder file when
+ * its code holds the string literal `"where"` or `"which"`. Each finder file
+ * must be a row below, in one of two forms, and every other file with the
+ * needle fails:
  *
- * - `seam`: the file mentions `classifyFinderFailure` and never mentions
- *   `classifyProbeFailure` (a call, an alias, a destructure, a namespace
- *   member or a bracket string all mention it).
- * - `status-only`: the file mentions neither classifier and creates no
- *   availability latch, so the finder's result is read per call and never
- *   parked as a verdict.
+ * - `seam`: the file CALLS `classifyFinderFailure(` in code, and never
+ *   mentions `classifyProbeFailure`. The call is read with strings blanked, so
+ *   a name held in a string, a template literal, a comment or an import does
+ *   not satisfy the row. An alias that never spells the call fails too: the
+ *   call form is the one known-good form.
+ * - `status-only`: the file mentions neither classifier in code and creates no
+ *   availability latch in code, so the finder's result is read per call and
+ *   never parked as a verdict.
+ *
+ * The seam row reads that a call is present in code, not that it runs: a call
+ * under `if (false)` passes.
  *
  * A row whose file no longer holds the needle fails too, so a retired site
  * cannot leave dead scaffolding behind.
@@ -43,6 +49,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	assertNonEmptyScan,
+	codeMatches,
 	listSourceFiles,
 	readWalkedFiles,
 	relativePosix,
@@ -101,9 +108,13 @@ const FINDER_FILES: ReadonlyArray<readonly [string, FinderForm, string]> = [
 	],
 ];
 
+// String-literal evidence: the finder name and the raw classifier's bracket access.
 const FINDER_NEEDLE = /(["'`])(?:where|which)\1/;
-const SEAM = /\bclassifyFinderFailure\b/;
 const RAW_CLASSIFIER = /\bclassifyProbeFailure\b/;
+// Code evidence, read with strings blanked (codeMatches): a name in a string,
+// a template literal, a comment or an import is not a call.
+const SEAM_CALL = /\bclassifyFinderFailure\s*\(/;
+const SEAM_MENTION = /\bclassifyFinderFailure\b/;
 const LATCH = /\bcreateAvailabilityLatch\b/;
 
 interface Verdict {
@@ -117,8 +128,8 @@ function judge(
 	source: string,
 	table: ReadonlyArray<readonly [string, FinderForm, string]>,
 ): Verdict {
-	const code = stripSource(source, { strings: "keep" });
-	if (!FINDER_NEEDLE.test(code)) return { isFinderFile: false, problems: [] };
+	const kept = stripSource(source, { strings: "keep" });
+	if (!FINDER_NEEDLE.test(kept)) return { isFinderFile: false, problems: [] };
 	const row = table.find(([name]) => name === file);
 	if (!row) {
 		return {
@@ -131,24 +142,28 @@ function judge(
 		};
 	}
 	const [, form] = row;
+	// The seam, latch and mention reads blank strings and comments: a name in
+	// a string literal is not code. codeMatches takes the blanked text as a
+	// precomputed argument, so it is stripped once per finder file.
+	const blank = stripSource(source);
+	const inCode = (regex: RegExp): boolean =>
+		codeMatches(source, regex, blank).length > 0;
 	const problems: string[] = [];
-	if (RAW_CLASSIFIER.test(code)) {
+	if (RAW_CLASSIFIER.test(kept)) {
 		problems.push(
 			`${file}: a finder file mentions classifyProbeFailure; the finder's failure is read by classifyFinderFailure only`,
 		);
 	}
-	if (form === "seam" && !SEAM.test(code)) {
-		problems.push(
-			`${file}: a \`seam\` row never mentions classifyFinderFailure`,
-		);
+	if (form === "seam" && !inCode(SEAM_CALL)) {
+		problems.push(`${file}: a \`seam\` row never calls classifyFinderFailure(`);
 	}
 	if (form === "status-only") {
-		if (SEAM.test(code)) {
+		if (inCode(SEAM_MENTION)) {
 			problems.push(
 				`${file}: a \`status-only\` row mentions classifyFinderFailure; make it a \`seam\` row`,
 			);
 		}
-		if (LATCH.test(code)) {
+		if (inCode(LATCH)) {
 			problems.push(
 				`${file}: a \`status-only\` row creates an availability latch; its verdict must go through the seam`,
 			);
@@ -280,5 +295,35 @@ describe("finder sweep detector self-test (shape 69 plants)", () => {
 			isFinderFile: false,
 			problems: [],
 		});
+	});
+
+	// Review r1 F1 (Greptile P2 on #5403): the seam row read the strings-kept
+	// text, so a name held in a string, a template literal or an import
+	// satisfied the row. Each plant has no call, so each must red.
+	it.each([
+		["a string literal", 'const n = "classifyFinderFailure";\n'],
+		["a template literal", "const n = `classifyFinderFailure`;\n"],
+		["a log string", 'log("uses classifyFinderFailure");\n'],
+		[
+			"an unused import",
+			'import { classifyFinderFailure } from "./utils.js";\n',
+		],
+		["a comment (control)", "// classifyFinderFailure(r)\n"],
+	])(
+		"reds a seam row that names the classifier only as %s",
+		(_label, plant) => {
+			const hand = `${finder}latch.noteUnavailable("missing", "not-found");\n`;
+			expect(
+				judge("seam.ts", `${finder}${plant}${hand}`, table).problems,
+			).toHaveLength(1);
+		},
+	);
+
+	// Review r1 F2: a seam file that hand-rolls the missing verdict with no
+	// classifier call is the shape-83 defect the sweep exists for (#1495). The
+	// seam predicate must red it; neutering that predicate leaves this plant green.
+	it('reds a seam row that hand-rolls noteUnavailable("missing") with no classifier call', () => {
+		const hand = `${finder}latch.noteUnavailable("missing", "not-found");\n`;
+		expect(judge("seam.ts", hand, table).problems).toHaveLength(1);
 	});
 });
