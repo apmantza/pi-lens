@@ -364,7 +364,7 @@ export class AstGrepClient {
 		ruleYaml: string,
 		paths: string[],
 		apply: boolean,
-		options?: AstGrepApplyProvenance & { signal?: AbortSignal },
+		options?: AstGrepApplyProvenance & { signal?: AbortSignal | undefined },
 	): Promise<{
 		matches: AstGrepMatch[];
 		totalMatches: number;
@@ -375,6 +375,9 @@ export class AstGrepClient {
 		appliedFiles?: string[];
 	}> {
 		const allMatches: AstGrepMatch[] = [];
+		const sg: SgExecutionOptions = options?.signal
+			? { signal: options.signal }
+			: {};
 		// #5244 r4: each path is written as its own scan finishes, so a later
 		// path that is stale or fails still leaves the earlier ones on disk. Every
 		// exit records what was rewritten so far, never only the loop's last one.
@@ -384,9 +387,7 @@ export class AstGrepClient {
 			if (apply) {
 				// Stale-preview check: dry-run first. Preserve CLI failures instead of
 				// treating an invalid rule as a stale, no-match preview.
-				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml, {
-					signal: options?.signal,
-				});
+				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml, sg);
 				if (preCheck.failure || preCheck.error) {
 					return {
 						matches: allMatches,
@@ -414,7 +415,7 @@ export class AstGrepClient {
 				ruleYaml,
 				apply,
 				undefined,
-				{ signal: options?.signal },
+				sg,
 			);
 			if (result.error) {
 				return {
@@ -772,7 +773,7 @@ export class AstGrepClient {
 		apply = false,
 		options?: AstGrepApplyProvenance & {
 			strictness?: string;
-			signal?: AbortSignal;
+			signal?: AbortSignal | undefined;
 		},
 	): Promise<{
 		matches: AstGrepMatch[];
@@ -790,11 +791,12 @@ export class AstGrepClient {
 		}
 
 		const signal = options?.signal;
+		const sg: SgExecutionOptions = signal ? { signal } : {};
 		if (!apply) {
 			// Dry-run: --json=compact shows what would change without writing
 			const result = await this.runner.exec(
 				[...baseArgs, "--json=compact", ...paths],
-				{ signal },
+				sg,
 			);
 			return {
 				matches: result.matches,
@@ -809,7 +811,7 @@ export class AstGrepClient {
 		// If the pattern no longer matches, the files changed since the preview.
 		const preCheck = await this.runner.exec(
 			[...baseArgs, "--json=compact", ...paths],
-			{ signal },
+			sg,
 		);
 		if (preCheck.error) {
 			return {

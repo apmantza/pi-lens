@@ -1051,7 +1051,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:clients/safe-spawn-ambient-signal.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"real children receive ambient abort signals through the OS boundary, not an in-process double; #3375 adds two more - the default output cap needs a real pipe delivering tens of megabytes, and killTree's POSIX group arm is selected by /proc verifying that a REAL pid is this process's child, which no fabricated pid can satisfy",
+			"real children receive ambient abort signals through the OS boundary, not an in-process double; #3375 adds two more - the default output cap needs a real pipe delivering tens of megabytes, and killTree's POSIX group arm is selected by /proc verifying that a REAL pid is this process's child, which no fabricated pid can satisfy; #5097 adds two more - an install spawn inside an aborted tool-call scope, and a single flight's spawn started from one, must each run a real child to exit",
 	},
 	"real-process-spawn:clients/safe-spawn-failure-taxonomy.test.ts": {
 		detector: "real-process-spawn",
@@ -1719,6 +1719,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	// 2026-11-08 (#5097): whether a tool call's abort kills its ast-grep child,
+	// and whether an apply leaves a file set half rewritten, are facts about a
+	// real child process.
+	"real-process-spawn:tools/tool-abort-scope-5097.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the defect is a signal that never reaches a real ast-grep child; only a real child shows it killed or left running",
 	},
 	// 2026-10-15 (#4485): the cascade's silent-push wait, turn_end's registry
 	// peek and the expiry read each read a language-server client's publish

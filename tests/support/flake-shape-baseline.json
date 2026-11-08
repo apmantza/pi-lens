@@ -79,7 +79,7 @@
 		"clients/ruff-target-version-real.test.ts": 3,
 		"clients/runtime-turn-knip-checkout-root.test.ts": 1,
 		"clients/runtime-turn-test-worktree-root.test.ts": 1,
-		"clients/safe-spawn-ambient-signal.test.ts": 10,
+		"clients/safe-spawn-ambient-signal.test.ts": 12,
 		"clients/safe-spawn-failure-taxonomy.test.ts": 4,
 		"clients/safe-spawn-input.test.ts": 4,
 		"clients/safe-spawn-kill-ownership.test.ts": 1,
@@ -195,7 +195,8 @@
 		"support/tmp-root-teardown.test.ts": 2,
 		"support/vitest-setup-registry-teardown.test.ts": 2,
 		"tools/ast-grep-outline.test.ts": 2,
-		"tools/lsp-navigation-rename-first-open.test.ts": 2
+		"tools/lsp-navigation-rename-first-open.test.ts": 2,
+		"tools/tool-abort-scope-5097.test.ts": 1
 	},
 	"elapsed-time-assertion": {
 		"clients/actionable-warnings-bounds.test.ts": 1,

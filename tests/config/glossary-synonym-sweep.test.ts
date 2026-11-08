@@ -381,7 +381,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	error: {
 		"clients/actionable-warnings.ts": 1,
 		"clients/advisory-provenance.ts": 8,
-		"clients/ast-grep-client.ts": 47,
+		// 47 -> 48 (#5097): the `error` of an apply refused after an abort.
+		"clients/ast-grep-client.ts": 48,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/biome-client.ts": 8,
 		"clients/bounded-pid-file-lock.ts": 7,
@@ -491,7 +492,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 2 -> 6: the report-scan seam (`runReportScan`) carries the `result.error` reads
 		// gitleaks (3) and trivy (3) each had, plus the failure record; net 8 -> 6.
 		"clients/security-scan-client.ts": 6,
-		"clients/sg-runner.ts": 32,
+		// 32 -> 33 (#5097): the `error` of an apply refused after an abort.
+		"clients/sg-runner.ts": 33,
 		"clients/shared-checkout-guard.ts": 1,
 		"clients/single-flight.ts": 3,
 		"clients/smells-rollup.ts": 2,

@@ -282,8 +282,10 @@ import {
 	registerQuietWindowTask,
 	runQuietWindow,
 } from "./clients/quiet-window.js";
-import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
-import { spawnAbortScope } from "./clients/spawn-abort-scope.js";
+import {
+	setAmbientAbortSignal,
+	spawnAbortScope,
+} from "./clients/safe-spawn.js";
 import { initI18n, t } from "./i18n.js";
 import {
 	createActivateToolsTool,

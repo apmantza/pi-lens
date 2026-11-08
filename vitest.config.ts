@@ -1096,6 +1096,9 @@ export const wallClockBudgetInclude = [
 	// pi-tool witness joins it with a real-time vi.waitFor (flake-shape
 	// admission).
 	"tests/tools/symbol-search.test.ts",
+	// #5097: a real ast-grep child (through a wrapper) parked, killed and left
+	// writing per phase of a tool call (flake-shape admission).
+	"tests/tools/tool-abort-scope-5097.test.ts",
 ];
 
 // #2912: the tmp-fixture governance sweep compares the real process-wide
