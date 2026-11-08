@@ -1292,14 +1292,15 @@ describe("pi-lens MCP unknown arguments (#3749)", { retry: 2 }, () => {
 			"constructor",
 			"toString",
 		]);
-		const flood = await call("pilens_diagnostics", {
-			...Object.fromEntries(
+		const flood = await call(
+			"pilens_diagnostics",
+			Object.fromEntries(
 				Array.from({ length: 50 }, (_, index) => [
 					`${"k".repeat(200)}${index}`,
 					index,
 				]),
 			),
-		});
+		);
 		expect(flood.structuredContent?.ignoredArgumentCount).toBe(50);
 		expect(flood.structuredContent?.ignoredArguments).toHaveLength(8);
 		expect(firstLine(flood).length).toBeLessThan(1000);
