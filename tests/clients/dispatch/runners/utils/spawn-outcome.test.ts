@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { spawnFailedWithNoOutput } from "../../../../../clients/dispatch/runners/utils/spawn-outcome.js";
+import {
+	spawnFailedWithNoOutput,
+	spawnTimedOut,
+} from "../../../../../clients/dispatch/runners/utils/spawn-outcome.js";
 import type { SpawnResult } from "../../../../../clients/safe-spawn.js";
 
 function spawnResult(partial: Partial<SpawnResult>): SpawnResult {
@@ -63,5 +66,27 @@ describe("spawnFailedWithNoOutput", () => {
 		expect(
 			spawnFailedWithNoOutput(result, `${result.stdout}${result.stderr}`),
 		).toBe(true);
+	});
+});
+
+// Recurrence (#5411): helm-lint, rust-clippy and helm-render each spelled the
+// timeout test their own way and reported `failed/timeout` where the seam
+// reports a skipped run. safe-spawn carries a timeout both as the legacy
+// `failure` and as the typed `spawnFailure.kind`, and a runner must not need to
+// know which one a given spawn path set.
+describe("spawnTimedOut", () => {
+	it.each([
+		["the legacy failure alone", { failure: "timeout" }],
+		["the typed kind alone", { spawnFailure: { kind: "timeout" } }],
+	])("is true for %s", (_label, shape) => {
+		expect(spawnTimedOut(shape)).toBe(true);
+	});
+
+	it.each([
+		["an abort", { failure: "aborted", spawnFailure: { kind: "killed" } }],
+		["a missing tool", { spawnFailure: { kind: "tool-not-found" } }],
+		["a normal exit", {}],
+	])("is false for %s", (_label, shape) => {
+		expect(spawnTimedOut(shape)).toBe(false);
 	});
 });
