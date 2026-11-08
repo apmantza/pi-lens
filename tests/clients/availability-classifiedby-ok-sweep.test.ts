@@ -27,6 +27,7 @@ import {
 	scanAvailabilityDecisionSites,
 	scanSource,
 } from "../support/availability-classifiedby-scan.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -42,44 +43,56 @@ function evidence(sites: AvailabilityDecisionSite[]): string[] {
 }
 
 describe("availability_decision classifiedBy sweep (#2131)", () => {
-	it("scans a non-trivial population, so a broken scanner cannot pass vacuously", () => {
-		// A regex typo that matched nothing would make the assertion below
-		// trivially true. Pin a floor, not the exact count, which churns.
-		expect(SITES.length).toBeGreaterThan(20);
-		// #2140/#2351: resolveAndLaunch's managed-bin fast path and force-reinstall
-		// recovery add three cause:"ok" sites, all stamped classifiedBy below.
-		// #5345: 21 -> 20 — the deleted module-level ast-grep sweep held one
-		// stamped `cause: "ok"` site; the population and the floor above stay
-		// non-trivial.
-		expect(OK_SITES.length).toBe(20);
-	});
+	it(
+		"scans a non-trivial population, so a broken scanner cannot pass vacuously",
+		() => {
+			// A regex typo that matched nothing would make the assertion below
+			// trivially true. Pin a floor, not the exact count, which churns.
+			expect(SITES.length).toBeGreaterThan(20);
+			// #2140/#2351: resolveAndLaunch's managed-bin fast path and force-reinstall
+			// recovery add three cause:"ok" sites, all stamped classifiedBy below.
+			// #5345: 21 -> 20 — the deleted module-level ast-grep sweep held one
+			// stamped `cause: "ok"` site; the population and the floor above stay
+			// non-trivial.
+			expect(OK_SITES.length).toBe(20);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it('every cause:"ok" decision stamps classifiedBy', () => {
-		const unstamped = OK_SITES.filter((site) => !site.hasClassifiedBy);
-		expect(
-			evidence(unstamped),
-			[
-				'A cause:"ok" availability_decision emit is missing classifiedBy.',
-				"Every arm reaching this cause is either a direct probe success",
-				'(classifiedBy: "probe") or an install/join-repaired verdict the caller',
-				'asserted (classifiedBy: "caller"/"joined") — read the sibling failure',
-				"arm in the same function for which one applies.",
-			].join(" "),
-		).toEqual([]);
-	});
+	it(
+		'every cause:"ok" decision stamps classifiedBy',
+		() => {
+			const unstamped = OK_SITES.filter((site) => !site.hasClassifiedBy);
+			expect(
+				evidence(unstamped),
+				[
+					'A cause:"ok" availability_decision emit is missing classifiedBy.',
+					"Every arm reaching this cause is either a direct probe success",
+					'(classifiedBy: "probe") or an install/join-repaired verdict the caller',
+					'asserted (classifiedBy: "caller"/"joined") — read the sibling failure',
+					"arm in the same function for which one applies.",
+				].join(" "),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every logAvailabilityDecision call stamps classifiedBy (#2209)", () => {
-		const unstamped = SITES.filter((site) => !site.hasClassifiedBy);
-		expect(
-			evidence(unstamped),
-			[
-				"An availability_decision emit is missing classifiedBy.",
-				'Stamp classifiedBy: "probe" when classifyProbeFailure derived the',
-				'outcome/cause, or "caller" when the call site asserts it directly —',
-				"see availability-policy.ts's AvailabilityDecision.classifiedBy doc.",
-			].join(" "),
-		).toEqual([]);
-	});
+	it(
+		"every logAvailabilityDecision call stamps classifiedBy (#2209)",
+		() => {
+			const unstamped = SITES.filter((site) => !site.hasClassifiedBy);
+			expect(
+				evidence(unstamped),
+				[
+					"An availability_decision emit is missing classifiedBy.",
+					'Stamp classifiedBy: "probe" when classifyProbeFailure derived the',
+					'outcome/cause, or "caller" when the call site asserts it directly —',
+					"see availability-policy.ts's AvailabilityDecision.classifiedBy doc.",
+				].join(" "),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("availability-classifiedby scanner self-test", () => {

@@ -51,6 +51,7 @@ import {
 	relativePosix,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
@@ -192,45 +193,57 @@ describe("data-handler bounds sweep (#3383)", () => {
 		).toHaveLength(2);
 	});
 
-	it("registers every file that attaches a stream data handler", () => {
-		assertNonEmptyScan("data-handler bounds", sites.length, 9);
-		const audit = auditRegistry({
-			sweepName: "data-handler bounds",
-			flagged: sites.map((site) => ({
-				key: site.relPath,
-				detail: `${site.relPath} (${site.count} handler(s))`,
-			})),
-			registered: Object.keys(REGISTRY),
-			scannedCount: filesScanned,
-			minScanned: 200,
-			minFlagged: 9,
-			remediation:
-				"A new stream `data` handler must state what bounds its accumulation: add the file to REGISTRY in this sweep with the handler count, the bound, and a needle proving the bound is in the file. If nothing bounds it, that is the defect #3375/#3383 exist to prevent — bound it first.",
-		});
-		expect(audit.problems).toEqual([]);
-	});
+	it(
+		"registers every file that attaches a stream data handler",
+		() => {
+			assertNonEmptyScan("data-handler bounds", sites.length, 9);
+			const audit = auditRegistry({
+				sweepName: "data-handler bounds",
+				flagged: sites.map((site) => ({
+					key: site.relPath,
+					detail: `${site.relPath} (${site.count} handler(s))`,
+				})),
+				registered: Object.keys(REGISTRY),
+				scannedCount: filesScanned,
+				minScanned: 200,
+				minFlagged: 9,
+				remediation:
+					"A new stream `data` handler must state what bounds its accumulation: add the file to REGISTRY in this sweep with the handler count, the bound, and a needle proving the bound is in the file. If nothing bounds it, that is the defect #3375/#3383 exist to prevent — bound it first.",
+			});
+			expect(audit.problems).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("pins how many handlers each registered file attaches", () => {
-		const counts = Object.fromEntries(
-			sites.map((site) => [site.relPath, site.count]),
-		);
-		const expected = Object.fromEntries(
-			Object.entries(REGISTRY).map(([file, entry]) => [file, entry.handlers]),
-		);
-		expect(counts).toEqual(expected);
-	});
+	it(
+		"pins how many handlers each registered file attaches",
+		() => {
+			const counts = Object.fromEntries(
+				sites.map((site) => [site.relPath, site.count]),
+			);
+			const expected = Object.fromEntries(
+				Object.entries(REGISTRY).map(([file, entry]) => [file, entry.handlers]),
+			);
+			expect(counts).toEqual(expected);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("keeps each registered bound's evidence present in its own file", () => {
-		const missing: string[] = [];
-		for (const site of sites) {
-			const entry = REGISTRY[site.relPath];
-			if (!entry) continue;
-			const code = stripSource(site.source);
-			for (const needle of entry.evidence) {
-				if (!code.includes(needle))
-					missing.push(`${site.relPath}: bound evidence "${needle}" is gone`);
+	it(
+		"keeps each registered bound's evidence present in its own file",
+		() => {
+			const missing: string[] = [];
+			for (const site of sites) {
+				const entry = REGISTRY[site.relPath];
+				if (!entry) continue;
+				const code = stripSource(site.source);
+				for (const needle of entry.evidence) {
+					if (!code.includes(needle))
+						missing.push(`${site.relPath}: bound evidence "${needle}" is gone`);
+				}
 			}
-		}
-		expect(missing).toEqual([]);
-	});
+			expect(missing).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });

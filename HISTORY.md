@@ -1,5 +1,23 @@
 # HISTORY
 
+## 2026-11-08 — a walk the census could not see through a helper (shape 85)
+
+The #4828 census read a walker only where the test file named it, so a case that
+paid a whole-tree walk inside `clientSourceFiles()`, `testSourceFiles()` or
+`censusSourceFiles()` shipped at the 5 s default. `tests/config/tree-census-timeout.test.ts`
+now derives each `tests/` helper module's verdicts from its source to a fixed
+point (import aliases, `export *` shims, namespace members, re-exports, a git
+spawner behind a module-local wrapper), and an unresolvable call fails closed as a
+walk, a default import included. The `it(title, { timeout }, fn)` form is
+read too, so its `timeout` pair is judged as a budget. On one tree the census
+counts 399 members where master's detector counts 259; every new member is
+budgeted, none baselined. A binding that shadows a walked suite name hides only
+the reads inside its own scope, which retires 39 false positives. The audit
+read its helpers by hand first; the derived verdicts and that table (12
+name verdicts across 8 helper modules) are pinned in the same test, so a
+helper that stops walking reds there. A test file's own
+wrapper is still the accepted residual (#4967, PR #5430).
+
 ## 2026-11-07 — a non-success exit that skips its transition (shape 91)
 
 The 2026-11-07 state-machine census found an autofix timeout that never armed

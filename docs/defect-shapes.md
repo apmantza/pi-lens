@@ -721,20 +721,30 @@ file-scoped worklist and receives no project-wide scanner output.
     times out there. The gate enforces that the third argument is an identifier
     named `TREE_WALK_TIMEOUT_MS` (the shared constant, read by name, not by
     binding) or a `scaledTestTimeout(...)` call (the reason goes in a comment the
-    gate does not read). A raw number or a file-local constant does not follow
+    gate does not read); in vitest's `it(title, { timeout }, fn)` form the
+    `timeout` pair is the budget. A raw number or a file-local constant does not follow
     the lane's timeout scale and is refused; a same-named local constant is
     admitted and an import alias of the shared one is refused (no live member
     either way). Screen: does this case call a walker or read a binding one
-    produced, and is its third argument one of those two forms? Census: 244
-    under `tests/` (154 in `tests/config`, all budgeted; 90 outside it, of which
+    produced, and is its budget one of those two forms? Census: 399
+    under `tests/` (158 in `tests/config`, all budgeted; 241 outside it, of which
     87 are refused and admitted by name in
-    `tests/config/tree-census-timeout.baseline.json`, and 3 budgeted). Enforcer:
+    `tests/config/tree-census-timeout.baseline.json`, and 154 budgeted). Enforcer:
     `tests/config/tree-census-timeout.test.ts` (it derives the declaration
-    callee from the file's vitest imports, resolves walker aliases, and counts a
-    test-shaped call it cannot trace as a census).
-    It does not read a walker reached through a helper in another module, a
-    variable-bound arrow-function walker, a local spawn wrapper, or a walk named
-    only by an enclosing `describe.each` or loop; `Unit tests Windows` is the
+    callee from the file's vitest imports, resolves walker aliases, reads a walk
+    reached through a helper module under `tests/` — its verdict derived from
+    source to a fixed point over the helper graph, an unresolvable call failing
+    closed as a walk — and counts a test-shaped call it cannot trace as a
+    census).
+    It does not read a walker reached through runtime source outside `tests/`,
+    through a wrapper the test file itself declares, as a variable-bound
+    arrow-function walker, through an enclosing `describe.each` or loop, or
+    through an indirect form (a dynamic `import()`, an object, array, callback or
+    `.call` reference, a class or object-literal member, a helper's own alias of
+    an imported walker; no live member); a
+    helper's own walk behind an `unknown`-verdict call reaches the census as a
+    member, not as its own reason record (`tests/` source always parses; the
+    fail-closed branch itself is planted). `Unit tests Windows` is the
     backstop. Instances and dates: `HISTORY.md`.
 
 86. **Turn-count wait for real I/O:** a test waits for a file write, a child
