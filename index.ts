@@ -123,7 +123,7 @@ import {
 	rebindableProcessBridgeDeps,
 	type BridgeActivation,
 } from "./clients/process-bridge.js";
-import { isExternalOrVendorFile } from "./clients/path-utils.js";
+import { isExternalOrVendorFile, toPosix } from "./clients/path-utils.js";
 import {
 	isPathIgnoredByProject,
 	isRecordableProjectPath,
@@ -1843,9 +1843,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				for (const v of diagStats.topViolations.slice(0, 5)) {
 					const samplePath =
 						v.samplePaths.length > 0
-							? path
-									.relative(runtime.projectRoot, v.samplePaths[0])
-									.replace(/\\/g, "/")
+							? toPosix(path.relative(runtime.projectRoot, v.samplePaths[0]))
 							: "";
 					const pathSuffix = samplePath ? ` (e.g. ${samplePath})` : "";
 					lines.push(`  ${v.ruleId}: ${v.count}${pathSuffix}`);
