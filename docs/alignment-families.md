@@ -15,7 +15,7 @@ The family name is the text before the first colon in the Family column. Names c
 | 5 | Tool parameter shapes across pi tools and MCP tools: names, defaults and accepted spellings of path / paths / scope / severity / wait parameters | `tools/`, `clients/mcp/` |
 | 6 | Closed vocabularies: skip reasons (`RUNNER_SKIP_REASONS`), owner keys, degradation codes, `PILENS_CFG_*` diagnostic codes; one idea with two names, or one name with two meanings | `clients/config-diagnostic-codes.ts`, `clients/degradation-ledger.ts`, `tests/support/session-state-registry.ts` |
 | 7 | Env tunables: `PI_LENS_*` variables, how each is parsed (int, bool, list), clamped and defaulted, and what an unparseable value does | `git grep -n "process.env.PI_LENS_" clients tools index.ts` |
-| 8 | One object with different keys: a file, finding, session, turn, runner run, LSP document or blocker keyed by two spellings, or by a key that is not stable across its life (raw vs normalized path, URI vs path, display text, list position, a per-session counter) | `clients/path-utils.ts` (`PathKeyedMap` and the normalizers), `clients/finding-identity.ts`, `docs/invariants/`, `docs/defect-shapes.md` shape 1 |
+| 8 | One object with different keys: a file, finding, session, turn, runner run, LSP document or blocker keyed by two spellings, or by a key that is not stable across its life (raw vs normalized path, URI vs path, display text, list position, a per-session counter) | `clients/path-keyed-map.ts` (`PathKeyedMap`), `clients/path-utils.ts` (the normalizers), `clients/finding-identity.ts`, `docs/invariants/`, `docs/defect-shapes.md` shape 1 |
 
 ## What touches means
 
