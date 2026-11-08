@@ -1177,6 +1177,34 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		);
 	});
 
+	it.each([
+		[
+			"reusable workflow job",
+			{ steps: [], jobUses: "./.github/workflows/o.yml" },
+		],
+		["docker action", { steps: ["      - uses: docker://alpine:3"] }],
+		[
+			"missing local action",
+			{ steps: ["      - uses: ./.github/actions/nope"] },
+		],
+		[
+			"local action with a ref",
+			{ steps: ["      - uses: ./.github/actions/x@v1"] },
+		],
+		["unlisted remote action", { steps: ["      - uses: some/new-action@v1"] }],
+	])("a planted %s has no verdict and reds the verdict gate", (_name, opts) => {
+		// Fail closed: every `uses:` the table cannot place is a violation, and
+		// a local path counts only when it resolves to an action file.
+		const planted = workflow(opts);
+		expect(
+			actionVerdictViolations(
+				"planted.yml",
+				planted,
+				(path) => path === "./.github/actions/x@v1",
+			),
+		).toHaveLength(1);
+	});
+
 	it("a planted setup-bun action reds the verdict gate until it is admitted", () => {
 		// Recurrence #5420: the four oven-sh/setup-bun sites had no recorded
 		// verdict, so nothing asked whether they could reach a GitHub release.
