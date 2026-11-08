@@ -283,10 +283,11 @@ const REMEDIATION =
 
 /**
  * The raw-separator-fold census at #1193 P3, file → occurrence count. Empty:
- * every scanned file routes its separator fold through `toPosix`, and the last
+ * no scanned file keeps the literal `.replace(/\\/g, "/")` fold, and the last
  * row (`index.ts`, the `lens-health` sample path) folded in #5401. `auditSymbolCounts`
- * still reds on any fold in `clients/`, `tools/`, `mcp/` or `index.ts` outside
- * the canonical leaf, so a row can only come back with a written reason.
+ * reds on that literal spelling in `clients/`, `tools/`, `mcp/` or `index.ts`
+ * outside the canonical leaf; other spellings (`split(path.sep).join("/")`) are
+ * not counted.
  */
 const SLASH_FOLD_PINS: Readonly<Record<string, number>> = {};
 
