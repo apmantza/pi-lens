@@ -625,10 +625,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :108, :205
 	"clients/gitleaks-client.ts": {
-		silent: 7,
-		identities: "b7d8104671a0bad6",
+		silent: 6,
+		identities: "98091fc66b02229a",
 		reason: PRE_RULE,
-	}, // :156, :267, :285, :299, :321, :489, :556
+	}, // :162, :273, :291, :305, :327, :501
 	"clients/govulncheck-client.ts": {
 		silent: 5,
 		identities: "e7742f12d2580226",
@@ -1247,10 +1247,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :848
 	"clients/trivy-client.ts": {
-		silent: 6,
-		identities: "7437ffe9ed1a72cd",
+		silent: 3,
+		identities: "6dfcef6e98de4d57",
 		reason: PRE_RULE,
-	}, // :163, :184, :218, :407, :461, :504
+	}, // :182, :240, :274
 	"clients/tui-fit.ts": {
 		silent: 1,
 		identities: "bdb9736abc0aae9d",
