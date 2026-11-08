@@ -2577,10 +2577,11 @@ export async function handleToolResult(
 	// must not push that real call out of the BLIND WRITE knowledge window.
 	// #5429: the progress signal is the two fields this path already holds — the
 	// host's own `isError` and the `input` the host parsed — so the tracker can
-	// tell a retried call from a fresh one. The failed result still counts:
-	// a thrash warning is never rendered on a failed result (the mutation chain
-	// returns before the warnings are appended), but the streak a failed call
-	// leaves is what makes the later retried call warn.
+	// tell a retried call from a fresh one. A failed result counts too, and #5434
+	// renders its warning on that same result: the tracker raises one warning per
+	// streak crossing, the append below serves every return after this point
+	// including the two failed-result exits, and the streak a failed call leaves
+	// is still what makes a later retried call warn.
 	const behaviorWarnings = isBashDerivedReplay(event)
 		? []
 		: agentBehaviorRecord(
@@ -2590,6 +2591,32 @@ export async function handleToolResult(
 					event as { isError?: unknown; input?: unknown; toolName?: unknown },
 				),
 			);
+	/**
+	 * The ONE append for the returns below that hand back the host's content
+	 * verbatim, the two failed-result exits included (#5434). A warning raised
+	 * while handling a call now reaches the agent on that call, whichever return
+	 * it takes. It appends a block after the host's own text, never rewrites it.
+	 * `hasBlockers` carries over the rule the success path has always had: a
+	 * result with blocking findings delivers those alone. The success path keeps
+	 * appending the same formatted text to its own `output` string, because that
+	 * string also drives the no-output exit and the telemetry row; one formatter
+	 * and one rule serve all three, so the text is not spelled twice.
+	 */
+	const withBehaviorWarnings = <
+		T extends { content: Array<{ type: string; text?: string }> },
+	>(
+		response: T,
+		hasBlockers: boolean,
+	): T =>
+		behaviorWarnings.length === 0 || hasBlockers
+			? response
+			: {
+					...response,
+					content: [
+						...response.content,
+						{ type: "text", text: formatBehaviorWarnings(behaviorWarnings) },
+					],
+				};
 	const syntheticWriteContent: Array<{ type: string; text?: string }> = [];
 	// #1590: one shared authoritative-content budget for every path this bash
 	// command wrote. It is handed DOWN to each synthetic call so the single
@@ -4091,11 +4118,15 @@ export async function handleToolResult(
 				}),
 			},
 		});
-		return {
-			content: event.content,
-			isError: true,
-			structuredContent: event.structuredContent,
-		};
+		return withBehaviorWarnings(
+			{
+				content: event.content,
+				isError: true,
+				structuredContent: event.structuredContent,
+			},
+			// No pipeline ran, so this result has no blockers of its own.
+			false,
+		);
 	}
 
 	// One post-result raw-byte hash, reused for the applied-edit records below and
@@ -4767,14 +4798,19 @@ export async function handleToolResult(
 	}
 
 	if (result.isError) {
-		return {
-			content: [...event.content, { type: "text", text: result.output }],
-			isError: true,
-			structuredContent: event.structuredContent,
-		};
+		return withBehaviorWarnings(
+			{
+				content: [...event.content, { type: "text", text: result.output }],
+				isError: true,
+				structuredContent: event.structuredContent,
+			},
+			result.hasBlockers,
+		);
 	}
 
 	let output = result.output;
+	// The success path's own append: same formatter, same `hasBlockers` rule as
+	// `withBehaviorWarnings`, which serves the two failed-result returns (#5434).
 	if (behaviorWarnings.length > 0 && !result.hasBlockers) {
 		output += `\n\n${formatBehaviorWarnings(behaviorWarnings)}`;
 	}

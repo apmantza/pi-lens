@@ -4880,6 +4880,167 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		}
 	});
 
+	// #5434: the loop the report is about — a stuck retry of ONE failing edit.
+	// The tracker raises its warning on the third failed result, but the failed
+	// result returns before the warning append, so four identical failures
+	// rendered no 🔴 at all: the warning existed only in the return value nobody
+	// appended. The warning must arrive at the failure that crosses the
+	// threshold, and the tracker's once-per-streak guard must keep it from
+	// repeating on every later call of the loop.
+	it("renders THRASHING on the third identical failed edit", async () => {
+		const env = setupTestEnvironment("pi-lens-thrash-failed-loop-");
+		try {
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "diagnostics complete",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+				checkedClean: false,
+			});
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const behavior = new AgentBehaviorClient();
+			const base: Omit<Parameters<typeof handleToolResult>[0], "event"> = {
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				agentBehaviorRecord: (name, filePath, progress) =>
+					behavior.recordToolCall(name, filePath, progress),
+				formatBehaviorWarnings: (warnings) =>
+					behavior.formatWarnings(warnings as BehaviorWarning[]),
+			};
+			const filePath = createTempFile(
+				env.tmpDir,
+				"stuck-loop.ts",
+				"export const value = 0;\n",
+			);
+			// One argument set, repeated: the same failing edit resubmitted.
+			const failingInput = {
+				path: filePath,
+				edits: [
+					{
+						oldText: "export const value = 100;",
+						newText: "export const value = 200;",
+					},
+				],
+			};
+			const texts: string[] = [];
+			const errors: Array<boolean | undefined> = [];
+			for (let index = 0; index < 4; index++) {
+				const returned = await handleToolResult({
+					...base,
+					event: {
+						toolName: "edit",
+						input: failingInput,
+						content: [{ type: "text", text: "oldText not found" }],
+						isError: true,
+					},
+				});
+				texts.push(returned?.content.map((part) => part.text).join("\n") ?? "");
+				errors.push(returned?.isError);
+			}
+			expect(texts[0]).not.toContain("THRASHING");
+			expect(texts[1]).not.toContain("THRASHING");
+			expect(texts[2]).toContain("🔴 THRASHING — 3 consecutive `edit`");
+			expect(texts[3]).not.toContain("THRASHING");
+			// The append does not replace the host's own failure text, and every
+			// call stays a failed result for the host.
+			expect(texts[2]).toContain("oldText not found");
+			expect(errors).toEqual([true, true, true, true]);
+			// Nothing landed on the four attempts: the loop left the file untouched.
+			expect(fs.readFileSync(filePath, "utf8")).toBe(
+				"export const value = 0;\n",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The other failed-result exit of the same handler: the host reported the
+	// retried edit as a success and pi-lens' own analysis came back failed. The
+	// warning raised on that call used to be dropped with it. `!hasBlockers` owns
+	// the append there too, so a result carrying blocking findings still delivers
+	// those alone.
+	it.each<[string, boolean, boolean]>([
+		["no blockers", false, true],
+		["blocking findings", true, false],
+	])(
+		"renders the thrash warning on a failed analysis result with %s",
+		async (_label, hasBlockers, showsWarning) => {
+			const env = setupTestEnvironment("pi-lens-thrash-pipeline-error-");
+			try {
+				vi.mocked(runPipeline).mockResolvedValue({
+					output: "analysis failed",
+					hasBlockers,
+					isError: true,
+					fileModified: false,
+					checkedClean: false,
+				});
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				const behavior = new AgentBehaviorClient();
+				const base: Omit<Parameters<typeof handleToolResult>[0], "event"> = {
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: new CacheManager(false),
+					resetLSPService: () => {},
+					agentBehaviorRecord: (name, filePath, progress) =>
+						behavior.recordToolCall(name, filePath, progress),
+					formatBehaviorWarnings: (warnings) =>
+						behavior.formatWarnings(warnings as BehaviorWarning[]),
+				};
+				const filePath = createTempFile(
+					env.tmpDir,
+					"stuck-analysis.ts",
+					"export const value = 0;\n",
+				);
+				// The same argument set three times: the tracker has no evidence of
+				// progress, so the third call crosses the threshold.
+				const retryInput = {
+					path: filePath,
+					edits: [
+						{
+							oldText: "export const value = 0;",
+							newText: "export const value = 1;",
+						},
+					],
+				};
+				let text = "";
+				let isError: boolean | undefined;
+				for (let index = 0; index < 3; index++) {
+					// Disk bytes move between the calls, so each one earns its own
+					// pipeline dispatch (the dispatch claim keys on file+hash); the
+					// identical arguments are what keep the streak alive.
+					fs.writeFileSync(
+						filePath,
+						`export const value = ${index};\n`,
+						"utf8",
+					);
+					const returned = await handleToolResult({
+						...base,
+						event: {
+							toolName: "edit",
+							input: retryInput,
+							content: [{ type: "text", text: "applied" }],
+						},
+					});
+					text = returned?.content.map((part) => part.text).join("\n") ?? "";
+					isError = returned?.isError;
+				}
+				expect(text).toContain("analysis failed");
+				expect(isError).toBe(true);
+				if (showsWarning)
+					expect(text).toContain("🔴 THRASHING — 3 consecutive `edit`");
+				else expect(text).not.toContain("THRASHING");
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
 	// #4623: the guard asks `mutating-tool.ts` which results are bash replays, and
 	// only the exact marker keeps a result out of the behavior history. A
 	// look-alike marker is still the host call it is: all three writes below
