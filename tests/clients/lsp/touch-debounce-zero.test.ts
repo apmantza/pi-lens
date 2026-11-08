@@ -1,3 +1,5 @@
+// flake-shape: in-process-mock — createLSPClient spawns a language-server process; the double it returns runs the real handleNotifyOpen and reads content identity through the real sentContentFor and hasNotifyInFlightFor, and a real server cannot be made to report whether it holds exactly the debounce gate's bytes on demand
+// flake-shape: service-double — a language-server client is a spawned process; only its alive-answers are scripted; the notify queue and content identity gate are the real ones over a real state
 /**
  * Issue #5419: drives the `TOUCH_DEBOUNCE_MS <= 0` branch of `shouldSkipNotify`.
  *
