@@ -33,6 +33,7 @@ import {
 	recordDiagnostics,
 } from "../../clients/widget-state.js";
 import { createAstGrepOutlineTool } from "../../tools/ast-grep-outline.js";
+import { createAstGrepReplaceTool } from "../../tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "../../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
 import { MAX_PATHS_ENTRIES, readPathsArgument } from "../../tools/shared.js";
@@ -548,6 +549,64 @@ describe("#5371 r2 ast_grep_search's walk ends when the call is aborted mid-expa
 			)(
 				"5371",
 				{ pattern: "foo($X)", lang: "typescript", paths: ["**/*.ts"] },
+				undefined,
+				null,
+				{ cwd: env.tmpDir, signal: controller.signal },
+			);
+			expect(reads).toBe(1);
+		} finally {
+			spy.mockRestore();
+			env.cleanup();
+		}
+	});
+});
+
+// N4 (#5393 verify r2). #5392 gave `ast_grep_replace` a call-scoped signal, and
+// its paths read did not take it: a call aborted mid-walk read every directory
+// of the tree. This is the ast_grep_search cell above, for replace.
+// RECURRENCE GUARDED: a tool that holds a call signal and hands the paths
+// reader none (the #5393 r2 N4 gap, the same seam as the search cell).
+describe("#5371 r3 ast_grep_replace's walk ends when the call is aborted mid-expansion (N4)", () => {
+	it("hands its combined signal to the walk, not just to the child", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r3-replacesignal-", {
+			rootMarker: false,
+		});
+		const controller = new AbortController();
+		const real = fs.promises.readdir.bind(fs.promises);
+		let reads = 0;
+		const spy = vi.spyOn(fs.promises, "readdir").mockImplementation(((
+			...args: Parameters<typeof real>
+		) => {
+			// Only the fixture tree's own listings count: the tool reads other
+			// directories before it reaches the reader.
+			if (String(args[0]).startsWith(env.tmpDir)) {
+				reads += 1;
+				controller.abort();
+			}
+			return real(...args);
+		}) as typeof fs.promises.readdir);
+		try {
+			mk(
+				env.tmpDir,
+				Array.from({ length: 12 }, (_, index) => `d${index}/f.zzz`),
+			);
+			const client = {
+				ensureAvailable: async () => true,
+				replace: vi.fn().mockResolvedValue({ matches: [], totalMatches: 0 }),
+				validatePattern: vi.fn().mockResolvedValue({ valid: true }),
+				formatMatches: () => "",
+			} as never;
+			const tool = createAstGrepReplaceTool(client);
+			await (
+				tool.execute as unknown as (...args: unknown[]) => Promise<unknown>
+			)(
+				"5371",
+				{
+					pattern: "var $X",
+					rewrite: "let $X",
+					lang: "typescript",
+					paths: ["**/*.ts"],
+				},
 				undefined,
 				null,
 				{ cwd: env.tmpDir, signal: controller.signal },

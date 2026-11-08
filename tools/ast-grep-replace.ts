@@ -247,6 +247,7 @@ export function createAstGrepReplaceTool(
 			const pathsRead = await readPathsArgument(paths, {
 				cwd: ctx.cwd,
 				absent: "cwd",
+				signal,
 			});
 			if (pathsRead.refusal) {
 				logOutcome("error", { errorRaw: pathsRead.refusal });
