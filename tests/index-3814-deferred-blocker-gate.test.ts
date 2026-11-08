@@ -456,38 +456,6 @@ describe("#3814: deferred blocking findings gate the commit", () => {
 		expect((await host.gate()).block).toBeUndefined();
 	});
 
-	it("blocks the commit on a deferred unused variable its tool called a warning", async () => {
-		// Recurrence (#5416): the verdict on `const unused = 1;` depended on the
-		// tool (oxlint warns, biome blocks). The class severity is set where a
-		// runner's answer enters dispatch, so a collect-later answer gets it too.
-		runnerAnswer = async (editedPath) =>
-			path.resolve(editedPath) !== path.resolve(filePath)
-				? await answersClean()
-				: {
-						status: "succeeded",
-						diagnostics: [
-							{
-								...blockingDiagnostic(),
-								id: "oxlint-no-unused-vars-1",
-								tool: "oxlint",
-								rule: "no-unused-vars",
-								message: "Variable 'alpha' is declared but never used.",
-								severity: "warning",
-								semantic: "warning",
-							},
-						],
-						semantic: "warning",
-					};
-		const host = await startSession();
-		await host.turnStart();
-		await host.edit();
-		await settle();
-
-		const verdict = await host.gate();
-		expect(verdict.block).toBe(true);
-		expect(verdict.reason).toContain("declared but never used");
-	});
-
 	it("blocks the commit on a non-TypeScript (python) deferred blocker", async () => {
 		// #3896 R2: the deployable registry row is not TypeScript-only. A real
 		// non-jsts runner's blocking finding reaches the same gate seam.

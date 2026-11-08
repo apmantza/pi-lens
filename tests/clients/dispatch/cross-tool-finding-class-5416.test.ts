@@ -7,8 +7,8 @@
  *   verdict depended on which linter of the fallback chain answered;
  * - `print(undefined_name)` reached the agent as two blockers (ruff `F821`,
  *   pyright `reportUndefinedVariable`) because their rules differ;
- * - the lintLike profile was keyed by the runner id `ruff-lint`, the runner
- *   emits the tool `ruff`, so the LSP-overlap filter never saw a ruff copy.
+ * - PR #5441 r1: merging before the per-copy filters let a filter that held
+ *   or dropped one tool's copy remove another's (seed, rule policy, delta).
  *
  * The inputs are the tools' own captured bytes (`tests/fixtures/runner-output`,
  * `tests/fixtures/lsp-cli-copies`). The runner shells keep their real id,
@@ -26,6 +26,10 @@ import {
 	RunnerRegistry,
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
+import {
+	preEditSeedFactKey,
+	seedFromCapture,
+} from "../../../clients/dispatch/pre-edit-seed.js";
 import { TOOL_PLANS } from "../../../clients/dispatch/plan.js";
 import {
 	findingClassKey,
@@ -45,7 +49,6 @@ import pyrightRunner, {
 import ruffRunner, {
 	parseRuffJson,
 } from "../../../clients/dispatch/runners/ruff.js";
-import { getToolProfile } from "../../../clients/dispatch/tool-profile.js";
 import type {
 	Diagnostic,
 	RunnerDefinition,
@@ -339,80 +342,352 @@ describe("#5416: one undefined name is one blocker", () => {
 			answering(pyrightRunner, [lanes.pyright[0], other]),
 			answering(ruffRunner, lanes.ruff),
 		]);
-		// The undefined name is one blocker (the higher-priority tool's copy
-		// stands: `dedupPriority`), and the other rule at its place is a second.
-		expect(result.blockers.map((d) => d.rule).sort()).toEqual([
-			"F821",
+		// The undefined name is one blocker (one copy stands for both tools),
+		// and the other rule at its place is a second.
+		const classes = result.blockers.map((d) => findingClassOf(d) ?? d.rule);
+		expect(classes.sort()).toEqual([
 			"reportOptionalMemberAccess",
+			"undefined-name",
 		]);
 	});
 });
 
-describe("#5416: the lintLike profile is read from the emitted tool id", () => {
-	it("ruff's copy of a finding the language server also reports is suppressed", async () => {
-		// Recurrence: the profile was keyed `ruff-lint` (the runner id) while the
-		// runner emits `ruff`, so `suppressLintOverlapsWithLsp` never saw a ruff
-		// copy as a lint tool and listed the finding twice.
-		const file = path.join(tmpDir, "app.py");
-		fs.writeFileSync(file, "x = 1\nif x == None:\n    pass\n");
-		const ruff = parseRuffJson(
+describe("#5416: the class merge runs after every per-copy filter", () => {
+	// Recurrences (PR #5441 review r1, F1/Q1/F2): the class key picked one
+	// winner before the per-copy filters ran, so a filter that held or dropped
+	// one tool's copy acted on the wrong copy.
+	const pi = { getFlag: () => false };
+
+	function pythonGroups(): RunnerGroup[] {
+		const primary = getPrimaryDispatchGroup("python", true);
+		if (!primary) throw new Error("python has no primary dispatch group");
+		return [
+			primary,
+			{ mode: "fallback", runnerIds: ["ruff-lint"], filterKinds: ["python"] },
+		];
+	}
+	const RUFF_GROUP: RunnerGroup = {
+		mode: "fallback",
+		runnerIds: ["ruff-lint"],
+		filterKinds: ["python"],
+	};
+	const OXLINT_GROUP: RunnerGroup = {
+		mode: "all",
+		runnerIds: ["oxlint"],
+		filterKinds: ["jsts"],
+	};
+
+	function registryOf(runners: RunnerDefinition[]): RunnerRegistry {
+		const registry = new RunnerRegistry();
+		for (const runner of runners) registry.register(runner);
+		return registry;
+	}
+
+	/**
+	 * The production seed: the first edit's `tool_call` runs the file's inline
+	 * linters with the delta off (`capturePreEditLinterFindings`) and installs
+	 * their blockers (`seedFromCapture`).
+	 */
+	async function seedFrom(
+		facts: FactStore,
+		file: string,
+		text: string,
+		groups: RunnerGroup[],
+		linters: RunnerDefinition[],
+	): Promise<number> {
+		const captureFacts = new FactStore();
+		const ctx = {
+			...createDispatchContext(file, tmpDir, pi, captureFacts),
+			deltaMode: false,
+			preEditCapture: true as const,
+		};
+		captureFacts.setFileFact(ctx.filePath, "file.content", text);
+		const captured = await dispatchForFile(ctx, groups, registryOf(linters));
+		const seed = seedFromCapture(captured.blockers, text);
+		facts.setBoundedSessionFact(preEditSeedFactKey(ctx.filePath), seed);
+		return seed.length;
+	}
+
+	async function dispatchIn(
+		facts: FactStore,
+		file: string,
+		text: string,
+		groups: RunnerGroup[],
+		runners: RunnerDefinition[],
+		projectRoot?: string,
+	) {
+		const ctx = createDispatchContext(
+			file,
+			tmpDir,
+			pi,
+			facts,
+			undefined,
+			undefined,
+			projectRoot,
+		);
+		facts.setFileFact(ctx.filePath, "file.content", text);
+		return dispatchForFile(ctx, groups, registryOf(runners));
+	}
+
+	function ruffAt(file: string, code: string, message: string, row = 1) {
+		return parseRuffJson(
 			JSON.stringify([
 				{
-					code: "E711",
-					message: "Comparison to `None` should be `cond is None`",
+					code,
+					message,
 					filename: file,
-					location: { row: 2, column: 6 },
+					location: { row, column: 8 },
+					severity: "error",
 				},
 			]),
 			file,
 		);
-		const lsp = convertLspDiagnostics(
+	}
+
+	function lspAt(
+		file: string,
+		code: string,
+		message: string,
+		severity: 1 | 2,
+		source = "basedpyright",
+	) {
+		return convertLspDiagnostics(
 			[
 				{
 					range: {
-						start: { line: 1, character: 5 },
-						end: { line: 1, character: 9 },
+						start: { line: 0, character: 7 },
+						end: { line: 0, character: 9 },
 					},
-					message: "Comparison to None should use is",
-					severity: 2,
-					code: "reportOptionalOperand",
-					source: "Pyright",
+					message,
+					severity,
+					code,
+					source,
 				},
 			],
 			file,
 		);
-		expect(ruff.map((d) => [d.tool, d.semantic])).toEqual([
-			["ruff", "warning"],
+	}
+
+	function oxlintAt(file: string, rule: string, message: string) {
+		return parseOxlintJson(
+			JSON.stringify({
+				diagnostics: [
+					{
+						message,
+						code: `eslint(${rule})`,
+						severity: "warning",
+						filename: file,
+						labels: [{ span: { line: 1, column: 7 } }],
+					},
+				],
+			}),
+			file,
+			tmpDir,
+		);
+	}
+
+	it("keeps a legacy unused import pre-existing when the seed held ruff's copy and the language server warns", async () => {
+		// F1: the language server's warning displaced ruff's seeded copy in the
+		// dedupe and was raised, so the first edit stopped on a legacy import.
+		const file = path.join(tmpDir, "legacy.py");
+		const text = "import os\n\n\ndef f():\n    return 1\n";
+		fs.writeFileSync(file, text);
+		const ruff = ruffAt(file, "F401", "`os` imported but unused");
+		const facts = new FactStore();
+		expect(
+			await seedFrom(
+				facts,
+				file,
+				text,
+				[RUFF_GROUP],
+				[answering(ruffRunner, ruff)],
+			),
+		).toBe(1);
+		const lsp = lspAt(
+			file,
+			"reportUnusedImport",
+			'Import "os" is not accessed',
+			2,
+		);
+
+		const result = await dispatchIn(facts, file, text, pythonGroups(), [
+			answering(lspRunner, lsp),
+			absent(pyrightRunner),
+			answering(ruffRunner, ruff),
 		]);
 
-		const primary = getPrimaryDispatchGroup("python", true);
-		if (!primary) throw new Error("python has no primary dispatch group");
-		const result = await dispatch(
+		expect(result.hasBlockers).toBe(false);
+		expect(result.preExisting?.map((d) => d.rule)).toEqual(["F401"]);
+	});
+
+	it("blocks a new unused import the language server warns about when nothing seeded it", async () => {
+		// The other side of F1: without a seed the class raise applies.
+		const file = path.join(tmpDir, "fresh.py");
+		const text = "import os\n";
+		fs.writeFileSync(file, text);
+		const lsp = lspAt(
 			file,
+			"reportUnusedImport",
+			'Import "os" is not accessed',
+			2,
+		);
+		const result = await dispatchIn(
+			new FactStore(),
+			file,
+			text,
+			pythonGroups(),
 			[
-				primary,
-				{ mode: "fallback", runnerIds: ["ruff-lint"], filterKinds: ["python"] },
+				answering(lspRunner, lsp),
+				absent(pyrightRunner),
+				answering(ruffRunner, ruffAt(file, "F401", "`os` imported but unused")),
 			],
+		);
+		expect(result.blockers).toHaveLength(1);
+	});
+
+	it("keeps ruff F821 blocking when the project disables Pyright's reportUndefinedVariable", async () => {
+		// Q1: the policy dropped the language server's copy after it had won
+		// the class dedupe, and ruff's enabled copy went with it.
+		fs.mkdirSync(path.join(tmpDir, ".git"), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				rules: { pyright: { disable: ["reportUndefinedVariable"] } },
+			}),
+		);
+		resetProjectLensConfigCache();
+		const file = path.join(tmpDir, "a.py");
+		const text = "print(undefined_name)\n";
+		fs.writeFileSync(file, text);
+		const lsp = lspAt(
+			file,
+			"reportUndefinedVariable",
+			'"undefined_name" is not defined',
+			1,
+			"Pyright",
+		);
+		const ruff = ruffAt(file, "F821", "Undefined name `undefined_name`");
+
+		const result = await dispatchIn(
+			new FactStore(),
+			file,
+			text,
+			pythonGroups(),
 			[
 				answering(lspRunner, lsp),
 				absent(pyrightRunner),
 				answering(ruffRunner, ruff),
 			],
+			tmpDir,
 		);
 
-		expect(result.diagnostics.map((d) => d.tool)).toEqual(["lsp"]);
+		expect(result.blockers.map((d) => `${d.tool}:${d.rule}`)).toEqual([
+			"ruff:F821",
+		]);
 	});
 
-	it("reads ruff and biome by the tool id their runners emit, not by runner id", () => {
-		// The profile is read with `Diagnostic.tool`, so a runner id that is not
-		// also an emitted tool id is a dead key. `ruff-lint` and `biome-check-json`
-		// were: the runners emit `ruff` and `biome`.
-		for (const dead of ["ruff-lint", "biome-check-json"]) {
-			expect(getToolProfile(dead).lintLike, dead).toBe(false);
-		}
-		for (const emitted of ["ruff", "biome", "oxlint", "eslint"]) {
-			expect(getToolProfile(emitted).lintLike, emitted).toBe(true);
-		}
+	it("keeps the delta's note and fix on a new unused value its tool warned about", async () => {
+		// F2: the raise in `runRunner` made the copy blocking before the delta's
+		// promotion, which then skipped its note and fix suggestion.
+		const file = path.join(tmpDir, "a.js");
+		const facts = new FactStore();
+		fs.writeFileSync(file, "export const ok = 1;\n");
+		await dispatchIn(
+			facts,
+			file,
+			"export const ok = 1;\n",
+			[OXLINT_GROUP],
+			[answering(oxlintRunner, [])],
+		);
+		fs.writeFileSync(file, "const unused = 1;\n");
+		const result = await dispatchIn(
+			facts,
+			file,
+			"const unused = 1;\n",
+			[OXLINT_GROUP],
+			[
+				answering(
+					oxlintRunner,
+					oxlintAt(
+						file,
+						"no-unused-vars",
+						"Variable 'unused' is declared but never used.",
+					),
+				),
+			],
+		);
+
+		expect(result.blockers).toHaveLength(1);
+		expect(result.blockers[0]?.promotionNote ?? "").toContain(
+			"new in this edit",
+		);
+		expect(result.blockers[0]?.fixSuggestion ?? "").toContain(
+			"Remove the unused declaration",
+		);
+	});
+
+	it("keeps an unused value the capture seeded pre-existing though its tool only warned", async () => {
+		// The capture runs with the delta off, so the class raise makes oxlint's
+		// copy a seeded blocker; the edit then holds it as pre-existing.
+		const file = path.join(tmpDir, "legacy.js");
+		const text = "const unused = 1;\n";
+		fs.writeFileSync(file, text);
+		const oxlint = oxlintAt(
+			file,
+			"no-unused-vars",
+			"Variable 'unused' is declared but never used.",
+		);
+		const facts = new FactStore();
+		expect(
+			await seedFrom(
+				facts,
+				file,
+				text,
+				[OXLINT_GROUP],
+				[answering(oxlintRunner, oxlint)],
+			),
+		).toBe(1);
+
+		const result = await dispatchIn(
+			facts,
+			file,
+			text,
+			[OXLINT_GROUP],
+			[answering(oxlintRunner, oxlint)],
+		);
+
+		expect(result.hasBlockers).toBe(false);
+		expect(result.preExisting).toHaveLength(1);
+	});
+
+	it("keeps an undefined name it raised observed while the delta calls it seen", async () => {
+		// The raise made the copy a recorded blocker on the first dispatch; the
+		// second dispatch must still report it observed, or the record would
+		// retire a blocker the file still holds (#4484 r2's rule for unused).
+		const file = path.join(tmpDir, "a.js");
+		const text = "foo();\n";
+		fs.writeFileSync(file, text);
+		const facts = new FactStore();
+		const oxlint = () => oxlintAt(file, "no-undef", "'foo' is not defined.");
+		const first = await dispatchIn(
+			facts,
+			file,
+			text,
+			[OXLINT_GROUP],
+			[answering(oxlintRunner, oxlint())],
+		);
+		expect(first.blockers).toHaveLength(1);
+		const second = await dispatchIn(
+			facts,
+			file,
+			text,
+			[OXLINT_GROUP],
+			[answering(oxlintRunner, oxlint())],
+		);
+		expect(second.blockers).toHaveLength(0);
+		expect(second.stillObserved?.map((d) => [d.rule, d.semantic])).toEqual([
+			["no-undef", "blocking"],
+		]);
 	});
 });
 

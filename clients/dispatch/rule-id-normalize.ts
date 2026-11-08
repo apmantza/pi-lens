@@ -93,11 +93,12 @@ export function normalizeRuleId(ruleId: string): string {
  * their own rule ids. `const unused = 1;` is oxlint `no-unused-vars` (a
  * warning), biome `noUnusedVariables` (an error) and ruff `F841`; one
  * undefined name is ruff `F821` and pyright `reportUndefinedVariable`. A
- * class gives its members one dedupe key (`findingClassKey`, read by the
- * dispatcher's dedupe and delta) and one severity (`withClassSeverity`, read
- * where a runner's answer enters dispatch), so the verdict no longer depends on
- * which tool of a fallback chain answered, and a tool that runs beside another
- * reports the finding once.
+ * class gives its members one key (`findingClassKey`) and one severity
+ * (`withClassSeverity`), both read by the dispatcher's class merge after the
+ * per-copy filters, the delta and the pre-edit seed, and by the blocker
+ * record's merge. So the verdict no longer depends on which tool of a fallback
+ * chain answered, and a tool that runs beside another reports the finding
+ * once.
  *
  * The table is closed and keyed by the EMITTED `tool` and the rule exactly as
  * that tool spells it. A pair not listed is no member: it keeps its own key and
@@ -165,7 +166,7 @@ export function findingClassOf(
 ): FindingClass | undefined {
 	const rule = d.rule;
 	if (!rule) return undefined;
-	const tool = d.tool.toLowerCase();
+	const tool = d.tool;
 	if (tool === "lsp") {
 		const code = PYRIGHT_LSP_SOURCE.exec(rule)?.[1];
 		return code === undefined
@@ -192,9 +193,10 @@ export function findingClassKey(
 /**
  * A class member at a non-blocking tier, raised to the class's one severity:
  * `error`, a blocker. The delta already blocks a new unused value whatever its
- * tool says (`promoteDeltaUnusedToBlockers`); this makes the first dispatch of
- * a file, and `--no-delta`, answer the same way for every tool. A blocker, a
- * runner fault and any other tier (`fixed`, `silent`) pass unchanged.
+ * tool says, with its note (`promoteDeltaUnusedToBlockers`, which runs first);
+ * this makes the first dispatch of a file, and `--no-delta`, answer the same
+ * way for every tool. A blocker, a runner fault and any other tier (`fixed`,
+ * `silent`) pass unchanged, as the same object.
  */
 export function withClassSeverity<T extends Diagnostic>(d: T): T {
 	if (d.runnerFault === true) return d;
