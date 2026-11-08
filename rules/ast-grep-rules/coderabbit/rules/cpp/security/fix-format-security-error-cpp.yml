@@ -4,7 +4,8 @@ severity: warning
 message: >-
   The Format String exploit occurs when the submitted data of an input string is evaluated as a command by the
   application.
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   pattern: $PRINTF($S, $VAR)
 constraints:

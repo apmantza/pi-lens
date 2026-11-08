@@ -16,10 +16,11 @@ constraints:
   METHOD:
     regex: '^[A-Za-z_][A-Za-z0-9_]*[?!=]?$'
 fix: "$LIST.$ITER(&:$METHOD)"
-tags:
-  - ruby
-  - style
-  - modernization
-examples:
-  bad: "names.map { |name| name.upcase }"
-  good: "names.map(&:upcase)"
+metadata:
+  tags:
+    - ruby
+    - style
+    - modernization
+  examples:
+    bad: "names.map { |name| name.upcase }"
+    good: "names.map(&:upcase)"

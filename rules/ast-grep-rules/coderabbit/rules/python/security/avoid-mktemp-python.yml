@@ -8,7 +8,8 @@ note: |-
   [CWE-377]: Insecure Temporary File [OWASP A01:2021]: Broken Access Control [REFERENCES]
        https://docs.python.org/3/library/tempfile.html#tempfile.mktemp
        https://owasp.org/Top10/A01_2021-Broken_Access_Control
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   match_call:
     kind: call

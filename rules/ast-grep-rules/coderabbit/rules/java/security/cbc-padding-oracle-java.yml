@@ -9,7 +9,8 @@ message: |-
 note: |-
   [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
       - https://capec.mitre.org/data/definitions/463.html
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   pattern: Cipher.getInstance($MODE)
 constraints:

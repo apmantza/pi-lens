@@ -9,7 +9,8 @@ note: >-
   A02:2021]: Cryptographic Failures [REFERENCES]
        https://golang.org/doc/go1.14#crypto/tls
        https://www.us-cert.gov/ncas/alerts/TA14-290A
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   match_version:
     kind: composite_literal

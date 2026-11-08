@@ -33,18 +33,48 @@ Screen: can the author name the production sequence that triggers it, with
 evidence?
 
 **Climb the minimalism ladder before writing code.** Be lazy about the
-solution, never about reading. Trace the real flow, then ask in order: does this
-need to exist at all; does the codebase already do it (reuse the seam); does the
-platform or stdlib do it; does an installed dependency do it; is it one line.
-Only then write the minimum that works. Validation, error handling, security and
-bounded observability are never skipped in the name of minimalism.
+solution, never about reading. Trace the real flow, then ask in order: does
+this need to exist at all; does the codebase already do it (reuse the seam);
+does the platform or stdlib do it; does an installed dependency do it; can the
+interface change so the case cannot arise; is it one line. Only then write the
+minimum that works.
 
-**Net-count rule for shared helpers.** A change that introduces a shared helper
-while same-shape siblings exist deletes at least one sibling in the same change.
-The helper count never goes up. Deferring the fold is allowed only when the
-brief names every sibling, states why folding them together is unsafe, and
-links the follow-up. This binds whoever writes the brief as much as whoever
-implements it.
+**Define the error out only where the API owns the contract.** Before adding a
+catch, guard or error branch, ask whether the interface can change so the case
+cannot arise: deleting something already gone succeeds because the
+postcondition holds, a slice with an out-of-range end clips, a lookup of a
+missing key returns its documented empty. This is right when the caller wants
+the postcondition and the interface is yours to change. It never applies where
+the failure is itself the verdict: a trust boundary, a gate, an identity or
+ownership check, an availability or freshness answer, a data-loss path. There
+the refusal, the unavailable and the errored stay distinct from the clean
+result and keep their record, and validation, error handling, security and
+bounded observability are never skipped in the name of minimalism. Where a real
+difference collapses (absent versus failed to delete), the collapsed case still
+lands in the degradation record. The reason: each handler for a case the API
+could have removed is a branch every caller and test must carry, while an error
+silently turned into success at a boundary is the silent-swallow defect.
+Screen: after the change, can a caller still tell "nothing to do" from "could
+not do it" wherever that difference decides a verdict?
+
+**Deepen the module, keep the net count.** Put complexity inside the module
+that owns it, so the callers above stay simple: one narrow entry point that
+absorbs the ordering, retries, cleanup and edge cases its callers used to
+repeat, not a new parameter, flag or wrapper per case. A layer earns its place
+by offering a different abstraction from the one below it; a wrapper that
+forwards its arguments under another name is deleted, not added. A change that
+introduces a shared helper while same-shape siblings exist deletes at least one
+sibling in the same change, so the helper count never goes up; deferring the
+fold is allowed only when the brief names every sibling, states why folding
+them together is unsafe, and links the follow-up. A change that adds or
+reshapes a seam with two or more callers states in the brief or PR body one
+rival interface it considered and why it lost, one sentence, written before the
+first edit; it is a comparison, not a second implementation. This binds whoever
+writes the brief as much as whoever implements it. The reason: each caller that
+must know its callee's mess re-derives it, and a pass-through layer adds a name
+to learn and a place to drift while hiding nothing. Screen: can a caller be
+written without knowing the order, retry or cleanup the callee needs, and does
+each new layer change the vocabulary of the one below it?
 
 **A fix's pattern matters more than its instance.** When a root cause is
 understood, name the defect shape and sweep the whole tree for other members

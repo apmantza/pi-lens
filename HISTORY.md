@@ -521,6 +521,11 @@ aliased import, a missing store and `sendUserMessage`. The remedy in both was
 to key the needle on the seam, not on the spellings. Enforcer: the contract
 bullet; an advisory survivor list is #4467.
 
+Recurrence, 2026-11-08: #5396's packed-import gate (refs #5365) first admitted
+any specifier its regex did not read. Its r2 redesign on an AST walk still
+admitted a computed member key (`module["require"](x)`, from Greptile) and
+esbuild's `__require`. Both plants joined the shape 69 screen.
+
 ## 2026-10-15 — joined single flight (shape 70)
 
 Shape 70 entered the catalog on its second instance. #4154 settled J1 as

@@ -8,7 +8,8 @@ note: |-
   [CWE-416: Use After Free. [REFERENCES]
       - https://wiki.sei.cmu.edu/confluence/display/c/MEM30-C.+Do+not+access+freed+memory
       - https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP54-CPP.+Do+not+access+an+object+outside+of+its+lifetime
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   kind: call_expression
   all:
