@@ -64,6 +64,16 @@ const { safeSpawnAsync, spawnCalls } = vi.hoisted(() => {
 				path.basename(cmd) === "mypy" &&
 				cmd.includes(`${path.sep}.venv${path.sep}`)
 			) {
+				if (process.env.PI_LENS_5410_VENV_TIMEOUT === "1") {
+					return {
+						error: new Error("timed out"),
+						status: null,
+						stdout: "",
+						stderr: "",
+						failure: "timeout",
+						spawnFailure: { kind: "timeout" },
+					};
+				}
 				return {
 					error: null,
 					status: 126,
@@ -281,5 +291,38 @@ describe("#5410 one tool-binary resolver through the real dispatcher", () => {
 		// The skipped project rung writes no row of its own: one verdict.
 		const rows = (await decisionRows("mypy")).slice(rowsBefore);
 		expect(rows.map((row) => row.metadata.verdict)).toEqual(["available"]);
+	});
+
+	// The fall-through is for a project shim that is broken for good; a slow
+	// one is transient, keeps its rung and retries, so a timeout never swaps
+	// in a different binary for the session.
+	it("keeps a timed-out trusted venv mypy on its rung instead of running PATH mypy", async () => {
+		vi.stubEnv("PI_LENS_5410_VENV_TIMEOUT", "1");
+		setProjectTrustState("trusted");
+		const venvBin = path.join(project.tmpDir, ".venv", "bin");
+		fs.mkdirSync(venvBin, { recursive: true });
+		const venvMypy = path.join(venvBin, "mypy");
+		fs.writeFileSync(venvMypy, "#!/bin/sh\n");
+		fs.chmodSync(venvMypy, 0o755);
+		const pathMypy = path.join(pathEnv.tmpDir, "mypy");
+		fs.writeFileSync(pathMypy, "#!/bin/sh\n");
+		fs.chmodSync(pathMypy, 0o755);
+		fs.writeFileSync(path.join(project.tmpDir, "mypy.ini"), "[mypy]\n");
+		const file = path.join(project.tmpDir, "m.py");
+		fs.writeFileSync(file, "x = 1\n");
+		const registry = new RunnerRegistry();
+		registry.register(
+			(await import("../../../clients/dispatch/runners/mypy.js")).default,
+		);
+		await dispatchForFile(
+			makeCtx(file, project.tmpDir),
+			[{ mode: "all", runnerIds: ["mypy"] }],
+			registry,
+		);
+		expect(
+			spawnCalls
+				.filter((call) => path.basename(call.cmd) === "mypy")
+				.map((call) => call.cmd),
+		).toEqual([venvMypy]);
 	});
 });
