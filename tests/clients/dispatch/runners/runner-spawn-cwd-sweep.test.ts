@@ -332,7 +332,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"the analysis root reaches runAnalyze as `key` (path.resolve(targetDir)); the name carries no `cwd`, so the wrapper rule reads it as unsupplied. Same #2894 verdict as dead-code-client: the input is a directory, and `resolveToolCwd` dirnames its `file` argument",
 	],
 	[
-		"clients/lsp/jvm-runtime.ts#runJavaProbe:68fcecd0",
+		"clients/lsp/jvm-runtime.ts#runJavaProbe:41cf49b2",
 		"`which java` / `where java` PATH lookup for the JVM language servers",
 	],
 	[
@@ -364,11 +364,11 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`taskkill /F /T /PID <pid>` — kills a process tree by pid on Windows; it touches no file",
 	],
 	[
-		"clients/safe-spawn.ts#isCommandAvailableAsync:6360069f",
+		"clients/safe-spawn.ts#isCommandAvailableAsync:45a177c3",
 		"`which`/`where <command>` PATH lookup (async form)",
 	],
 	[
-		"clients/safe-spawn.ts#findCommandAsync:6360069f",
+		"clients/safe-spawn.ts#findCommandAsync:45a177c3",
 		"`which`/`where <command>` PATH lookup that returns the resolved path",
 	],
 	[
@@ -498,7 +498,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"renderAndValidate forwards its own `cwd` parameter into runIacPass",
 	],
 	[
-		"clients/dispatch/runners/oxlint.ts#resolveVitePlusCommand:0994f711~dbf27697",
+		"clients/dispatch/runners/oxlint.ts#resolveVitePlusCommand:7b703741~dbf27697",
 		"`vp --version` probe inside resolveVitePlusCommand, whose own `cwd` parameter it passes; the checked site is its caller in this file",
 	],
 	[

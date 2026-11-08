@@ -39,6 +39,7 @@ import {
 	isInSpawnTimeoutCooldown,
 	resetSpawnTimeoutCooldowns,
 } from "../../../clients/spawn-timeout-cooldown.js";
+import { resolveCommandArgsWithInstallFallback } from "../../../clients/dispatch/runners/utils/runner-helpers.js";
 import { probeToolAsync } from "../../../clients/tool-probe.js";
 import { setupTestEnvironment } from "../test-utils.js";
 
@@ -200,6 +201,22 @@ describe("which runner spawns arm the cooldown (#5413)", () => {
 		);
 		expect(runs).toBe(2);
 		expect(isInSpawnTimeoutCooldown("probe-runner")).toBe(false);
+	}, 30_000);
+
+	it("the runner-helpers version checks (cooldown: false) that time out arm nothing", async () => {
+		// Both version checks hang: the bundler-form check and the on-disk
+		// verify it falls back to, so neutering either opt-out arms the runner.
+		const runs = await dispatchTwice("version-check-runner", () =>
+			resolveCommandArgsWithInstallFallback(
+				{ cmd: process.execPath, args: [] },
+				"version-check-runner",
+				env.tmpDir,
+				HANG,
+				300,
+			),
+		);
+		expect(runs).toBe(2);
+		expect(isInSpawnTimeoutCooldown("version-check-runner")).toBe(false);
 	}, 30_000);
 
 	it("a timeout inside a shared single flight arms nothing", async () => {

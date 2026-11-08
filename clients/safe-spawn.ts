@@ -2838,7 +2838,6 @@ export async function safeSpawnAsync(
 	if (
 		cooldown &&
 		result.failure === "timeout" &&
-		timeout > 0 &&
 		timeout === configuredTimeout
 	) {
 		noteSpawnTimeout({
@@ -2860,10 +2859,7 @@ export async function isCommandAvailableAsync(
 	command: string,
 ): Promise<boolean> {
 	const finder = process.platform === "win32" ? "where" : "which";
-	const result = await safeSpawnAsync(finder, [command], {
-		timeout: 5000,
-		cooldown: false,
-	});
+	const result = await safeSpawnAsync(finder, [command], { timeout: 5000 });
 	return result.status === 0 && !result.error;
 }
 
@@ -2874,10 +2870,7 @@ export async function findCommandAsync(
 	command: string,
 ): Promise<string | null> {
 	const finder = process.platform === "win32" ? "where" : "which";
-	const result = await safeSpawnAsync(finder, [command], {
-		timeout: 5000,
-		cooldown: false,
-	});
+	const result = await safeSpawnAsync(finder, [command], { timeout: 5000 });
 
 	if (result.status !== 0 || result.error) return null;
 
