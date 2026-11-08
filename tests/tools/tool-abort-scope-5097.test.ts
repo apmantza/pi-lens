@@ -32,8 +32,11 @@ const PARK_LIMIT_MS = 8_000;
 
 /** The wrapper's control protocol, read from `<ctl>/plan.json` per call. */
 interface Plan {
-	/** What each `--json`/`--json=compact` call does, by call index (0-based). */
-	json?: Array<"pass" | "park" | "linger">;
+	/**
+	 * What each `--json`/`--json=compact` call does, by call index (0-based).
+	 * `fail` exits 2 with a stderr line, a real failure that is not the abort.
+	 */
+	json?: Array<"pass" | "park" | "linger" | "fail">;
 	/** `outline`: park, or pass straight to the real binary. */
 	outline?: "pass" | "park";
 	/**
@@ -100,6 +103,10 @@ if (args.includes("--update-all")) {
 	process.exit(0);
 }
 const mode = (plan.json ?? [])[counter("json")] ?? "pass";
+if (mode === "fail") {
+	process.stderr.write("wrapper: scan failed, not an abort\n");
+	process.exit(2);
+}
 if (mode === "park") parkUntilReleased("json.pid");
 if (mode === "linger") {
 	const r = runReal(args);
@@ -261,7 +268,8 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			toolName: string,
 			params: Record<string, unknown>,
 			root: string,
-			abortOn: string,
+			/** The marker to abort on; `null` runs the call with no abort. */
+			abortOn: string | null,
 			/** `ctx` passes the signal only through `ctx.signal`, positional undefined. */
 			via: "both" | "ctx" = "both",
 		): Promise<ToolResult> {
@@ -280,6 +288,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				undefined,
 				{ cwd: root, signal: ac.signal },
 			);
+			if (abortOn === null) return call;
 			// A call that settles before its marker never reached the phase the
 			// case aborts in; fail with its text instead of waiting out the poll.
 			const early = call.then((result) => {
@@ -343,9 +352,9 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			const pid = Number(fs.readFileSync(path.join(ctl, "json.pid"), "utf8"));
 			expect(result.isError).toBe(true);
 			// The pattern hint would send the model to fix a pattern that was fine.
-			expect(result.content?.[0]?.text).toMatch(
-				/^Error: operation aborted(\n|$)/,
-			);
+			const text = result.content?.[0]?.text ?? "";
+			expect(text).toMatch(/^Error: operation aborted(\n|$)/);
+			expect(text).not.toMatch(/Hint|write had started/);
 			expect(isAlive(pid)).toBe(false);
 		});
 
@@ -357,9 +366,9 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				root,
 				"json.pid",
 			);
-			expect(result.content?.[0]?.text).toMatch(
-				/^Error: operation aborted(\n|$)/,
-			);
+			const text = result.content?.[0]?.text ?? "";
+			expect(text).toMatch(/^Error: operation aborted(\n|$)/);
+			expect(text).not.toMatch(/Hint|write had started/);
 			expect(rewritten(root)).toBe(0);
 		});
 
@@ -374,9 +383,10 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				root,
 				"lingering",
 			);
-			expect(result.content?.[0]?.text).toMatch(
-				/^Error: operation aborted(\n|$)/,
-			);
+			// N1 (r3): the prefix alone also matches a trailing pattern hint.
+			const text = result.content?.[0]?.text ?? "";
+			expect(text).toMatch(/^Error: operation aborted(\n|$)/);
+			expect(text).not.toMatch(/Hint|write had started/);
 			expect(rewritten(root)).toBe(0);
 		});
 
@@ -419,9 +429,10 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				root,
 				"lingering",
 			);
-			expect(result.content?.[0]?.text).toMatch(
-				/^Error: operation aborted(\n|$)/,
-			);
+			// N1 (r3): the prefix alone also matches a trailing pattern hint.
+			const text = result.content?.[0]?.text ?? "";
+			expect(text).toMatch(/^Error: operation aborted(\n|$)/);
+			expect(text).not.toMatch(/Hint|write had started/);
 			expect(rewritten(root)).toBe(0);
 		});
 
@@ -466,6 +477,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				/^Error: operation aborted\n3 file\(s\) were already rewritten/,
 			);
 			expect(text).toContain("f0.ts");
+			expect(text).not.toMatch(/Hint|write had started/);
 		});
 
 		it("rule dry run: abort is plain aborted", async () => {
@@ -476,9 +488,9 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				root,
 				"json.pid",
 			);
-			expect(result.content?.[0]?.text).toMatch(
-				/^Error: operation aborted(\n|$)/,
-			);
+			const text = result.content?.[0]?.text ?? "";
+			expect(text).toMatch(/^Error: operation aborted(\n|$)/);
+			expect(text).not.toMatch(/Hint|write had started/);
 		});
 
 		it("rule apply: count-scan abort writes nothing", async () => {
@@ -490,9 +502,9 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				root,
 				"json.pid",
 			);
-			expect(result.content?.[0]?.text).toMatch(
-				/^Error: operation aborted(\n|$)/,
-			);
+			const text = result.content?.[0]?.text ?? "";
+			expect(text).toMatch(/^Error: operation aborted(\n|$)/);
+			expect(text).not.toMatch(/Hint|write had started/);
 			expect(rewritten(root)).toBe(0);
 		});
 
@@ -512,5 +524,56 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(text).not.toMatch(/operation aborted/);
 			expect(text).toMatch(/some files may already be rewritten/);
 		});
+
+		/**
+		 * N2 (#5097 r3): `aborted` is admitted only for the spawn's own abort or
+		 * the re-check. A real failure on a scan or precheck keeps its stderr and
+		 * the pattern hint; a flag set on any failure would hide both.
+		 */
+		async function expectRealFailure(
+			name: string,
+			plan: Plan,
+			params: Record<string, unknown>,
+		): Promise<void> {
+			const root = setup(name, plan);
+			const result = await run("ast_grep_replace", params, root, null);
+			const text = result.content?.[0]?.text ?? "";
+			expect(result.isError).toBe(true);
+			expect(text).toMatch(/^Error: wrapper: scan failed, not an abort/);
+			expect(text).toMatch(/\n\nHint: /);
+			expect(text).not.toMatch(/operation aborted|write had started/);
+			expect(rewritten(root)).toBe(0);
+		}
+
+		it("pattern dry run: a real failure keeps its text and hint", () =>
+			expectRealFailure("dry-fail", { json: ["fail"] }, REPLACE));
+
+		it("pattern precheck: a real failure keeps its text and hint", () =>
+			expectRealFailure(
+				"precheck-fail",
+				{ json: ["fail"] },
+				{ ...REPLACE, apply: true },
+			));
+
+		it("rule dry run: a real failure keeps its text and hint", () =>
+			expectRealFailure(
+				"rule-dry-fail",
+				{ json: ["fail"] },
+				{ ...REPLACE, insideKind: "program" },
+			));
+
+		it("rule precheck: a real failure keeps its text and hint", () =>
+			expectRealFailure(
+				"rule-precheck-fail",
+				{ json: ["fail"] },
+				{ ...REPLACE, apply: true, insideKind: "program" },
+			));
+
+		it("rule count scan: a real failure keeps its text and hint", () =>
+			expectRealFailure(
+				"rule-count-fail",
+				{ json: ["pass", "fail"] },
+				{ ...REPLACE, apply: true, insideKind: "program" },
+			));
 	},
 );

@@ -855,7 +855,7 @@ export class AstGrepClient {
 		// preCheck above already captured exactly what matched and was rewritten.
 		// #5097: an abort lands before the write or not at all. A killed
 		// `--update-all` leaves part of the files rewritten, so the write runs to
-		// completion once started.
+		// completion once started. `aborted` keeps the pattern hint off the reply.
 		if (signal?.aborted) {
 			return {
 				matches: [],
@@ -863,6 +863,7 @@ export class AstGrepClient {
 				truncated: false,
 				applied: false,
 				error: "operation aborted",
+				aborted: true,
 			};
 		}
 		const applyResult = await this.runner.exec(
