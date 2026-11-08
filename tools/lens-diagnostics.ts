@@ -19,13 +19,15 @@ import {
 	anchorsForDiagnostic,
 	applyDispositions,
 	applyWeakDispositions,
+	applyWeakDispositionsMultiFile,
+	cachedAnchorMarks,
 	hasAnyDispositionMarks,
 	hasStrictDispositionMarks,
 	getDisposition,
+	type CachedAnchorMarks,
 	type DispositionCandidate,
 } from "../clients/diagnostic-dispositions.js";
 import { DEPENDENCY_DRIFT_MAX_DELIVERIES } from "../clients/blocker-freshness.js";
-import { freshnessFromMtime } from "../clients/freshness.js";
 import {
 	applyFindingPolicy,
 	loadProjectRulePolicy,
@@ -986,7 +988,7 @@ const cachedContentMemo = new BoundedLruCache<
 
 function readContentForAnchors(
 	filePath: string,
-	stat: fsSync.Stats,
+	stat: { mtimeMs: number; size: number },
 ): string | undefined {
 	const key = normalizeEphemeralMapKey(filePath);
 	const hit = cachedContentMemo.get(key);
@@ -1042,39 +1044,106 @@ export function _readContentForAnchorsForTests(
  * number and identical text, so the mark waits for the next real dispatch to
  * re-derive both sides against matching revisions. Weak suppress/defer marks
  * are intent-level and never look at content, so they keep applying here.
+ *
+ * #5044: a record can hold rows that cite ANOTHER file — helm-lint's chart
+ * findings are recorded under the written template's key, and `pipeline.ts`
+ * stamps them with `WidgetDiagnostic.citedFile` (#5020). Every anchor is
+ * derived on the file the finding NAMES (`citedFile`, else the record key),
+ * never on the store key: a mark on Chart.yaml hides the Chart.yaml row, and
+ * a mark on the template cannot hide it. The stat/freshness/content decision
+ * runs per anchor path through the ONE shared gate
+ * (`cachedAnchorMarks`), so a stale or unreadable CHART.yaml degrades only the
+ * Chart.yaml rows to the weak fallback; the store key's rows keep their own
+ * freshness verdict. And a CITED anchor the project does not contain, or whose
+ * bytes this process cannot read, is refused outright (#5044 round 2 F2, the
+ * rule #5067 established for the dispatch stack): no mark of any kind is
+ * consulted for those rows, because a full LSP sweep keeps the same finding
+ * and a cache query that hid it was the disagreement the agent read as clean.
+ * All-own-file inputs (every record without a cited row) take exactly the
+ * pre-#5044 sequence.
  */
 function applyCachedDispositions<
-	T extends DispositionCandidate & { observedAt?: number },
+	T extends DispositionCandidate & {
+		observedAt?: number;
+		citedFile?: string;
+	},
 >(cachedDiagnostics: T[], cwd: string, filePath: string): T[] {
 	// Zero-I/O fast paths (#1625 F2 precedent): with no marks at all there is
 	// nothing to filter; with only weak suppress/defer marks a strict anchor
 	// can never match, so the weak filter serves them without any stat/read.
 	if (!hasAnyDispositionMarks(cwd)) return cachedDiagnostics;
-	if (!hasStrictDispositionMarks(cwd)) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	// A mark binds to the file the finding NAMES (`citedFile`, #5020), never
+	// to the store key. Entries without a cited file — every pre-#5020
+	// persisted row and every same-file row — anchor on the record key.
+	const anchorOf = (d: T): string => d.citedFile ?? filePath;
+	const strictAnchors = hasStrictDispositionMarks(cwd);
+	if (!strictAnchors && !cachedDiagnostics.some((d) => d.citedFile)) {
+		return applyWeakDispositionsMultiFile(cachedDiagnostics, cwd, anchorOf);
 	}
-	let stat: fsSync.Stats;
-	try {
-		stat = fsSync.statSync(filePath);
-	} catch {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	// The shared gate decides stat, freshness and content per anchor path
+	// (#5044): a stale or unreadable Chart.yaml degrades only the Chart.yaml
+	// rows to the weak fallback, and an untrusted one refuses every mark on its
+	// rows, while the store key's rows keep their own verdict. All-own-file
+	// inputs take exactly the pre-#5044 sequence.
+	const groups = new Map<string, T[]>();
+	for (const d of cachedDiagnostics) {
+		const anchor = anchorOf(d);
+		const group = groups.get(anchor);
+		if (group) group.push(d);
+		else groups.set(anchor, [d]);
 	}
-	const referenceMs = cachedDiagnostics.reduce<number>(
-		(latest, d) => Math.max(latest, d.observedAt ?? 0),
-		0,
-	);
-	if (
-		referenceMs > 0 &&
-		freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs }).verdict ===
-			"stale"
-	) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	if (groups.size <= 1) {
+		const anchor = groups.keys().next().value ?? filePath;
+		const group = groups.values().next().value ?? cachedDiagnostics;
+		return applyCachedStrict(group, cwd, anchor, {
+			cited: anchor !== filePath,
+			strictAnchors,
+		});
 	}
-	const content = readContentForAnchors(filePath, stat);
-	if (content === undefined) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	const kept = new Set<T>();
+	for (const [anchor, group] of groups) {
+		for (const d of applyCachedStrict(group, cwd, anchor, {
+			cited: anchor !== filePath,
+			strictAnchors,
+		})) {
+			kept.add(d);
+		}
 	}
-	return applyDispositions(cachedDiagnostics, cwd, filePath, content);
+	// Preserve the caller's original order, as applyDispositionsMultiFile does.
+	return cachedDiagnostics.filter((d) => kept.has(d));
+}
+
+/** The shared per-anchor decision for ONE anchor path of a cached set, mapped
+ * onto the filter it admits ({@link cachedAnchorMarks}): full strict+weak on
+ * the anchor's current bytes, weak-only when the anchor is unreadable (own
+ * rows) or moved past the newest observation here, and no mark at all for the
+ * rows of a cited file this process must not trust (#5044). */
+function applyCachedStrict<
+	T extends DispositionCandidate & { observedAt?: number },
+>(
+	group: T[],
+	cwd: string,
+	anchor: string,
+	options: { cited: boolean; strictAnchors: boolean },
+): T[] {
+	const decision: CachedAnchorMarks = cachedAnchorMarks({
+		cwd,
+		anchor,
+		rows: group,
+		cited: options.cited,
+		strictAnchors: options.strictAnchors,
+		readContent: readContentForAnchors,
+	});
+	switch (decision.marks) {
+		case "refused":
+			// #5067's fail-closed owner rule on the cache side: the rows pass
+			// exactly as the dispatch stack passes the same finding.
+			return group;
+		case "weak-only":
+			return applyWeakDispositions(group, cwd, anchor);
+		case "strict":
+			return applyDispositions(group, cwd, anchor, decision.content);
+	}
 }
 
 /**
