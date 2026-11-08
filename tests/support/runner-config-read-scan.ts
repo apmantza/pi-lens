@@ -116,6 +116,7 @@ const ADMITTED_CLIENT_MODULES: Readonly<
 	"extension-log": "*",
 	"file-kinds": "*",
 	"file-utils": "*",
+	"finding-identity": "*",
 	"generation-guard": "*",
 	"go-client": "*",
 	"installer/index": "*",
