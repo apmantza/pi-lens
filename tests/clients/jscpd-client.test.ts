@@ -996,39 +996,43 @@ describe("#5446 walk gate answers JS/TS through the registry", () => {
 		findNodeToolBinary.mockResolvedValue(null);
 	});
 
-	for (const ext of [".mts", ".cts"]) {
-		it(`scans when only ${ext} source files exist (#5446)`, async () => {
-			const { JscpdClient } = await import("../../clients/jscpd-client.js");
-			const safeSpawnMod = await import("../../clients/safe-spawn.js");
+	async function scanRootWithFile(file: string): Promise<void> {
+		const { JscpdClient } = await import("../../clients/jscpd-client.js");
+		const safeSpawnMod = await import("../../clients/safe-spawn.js");
 
-			const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
-			try {
-				const srcFile = path.join(tmpDir, "src", `dup${ext}`);
-				fs.mkdirSync(path.dirname(srcFile), { recursive: true });
-				fs.writeFileSync(srcFile, "export const a = 1;\nexport const b = 2;\n");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
+		try {
+			const srcFile = path.join(tmpDir, "src", file);
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "export const a = 1;\nexport const b = 2;\n");
 
-				const client = new JscpdClient(false) as unknown as {
-					scan: (
-						cwd: string,
-						minLines: number,
-						minTokens: number,
-						isTsProject: boolean,
-					) => Promise<unknown>;
-					ensureAvailable: () => Promise<boolean>;
-				};
-				await client.ensureAvailable();
-				vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
+			const client = new JscpdClient(false) as unknown as {
+				scan: (
+					cwd: string,
+					minLines: number,
+					minTokens: number,
+					isTsProject: boolean,
+				) => Promise<unknown>;
+				ensureAvailable: () => Promise<boolean>;
+			};
+			await client.ensureAvailable();
+			vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
 
-				await client.scan(tmpDir, 5, 50, false);
+			await client.scan(tmpDir, 5, 50, false);
 
-				// Pre-#5446 an .mts/.cts-only project bailed at
-				// `hasSourceFilesRecursive` without ever invoking jscpd.
-				expect(safeSpawnMod.safeSpawnAsync).toHaveBeenCalled();
-			} finally {
-				await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
-			}
-		});
+			// Pre-#5446 an .mts/.cts-only project bailed at
+			// `hasSourceFilesRecursive` without ever invoking jscpd.
+			expect(safeSpawnMod.safeSpawnAsync).toHaveBeenCalled();
+		} finally {
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
+		}
 	}
+
+	it("scans a project with only a dup.mts source file (#5446)", () =>
+		scanRootWithFile("dup.mts"));
+
+	it("scans a project with only a dup.cts source file (#5446)", () =>
+		scanRootWithFile("dup.cts"));
 
 	it("does NOT scan a declarations-only root (.d.ts/.d.mts/.d.cts) (#5446)", async () => {
 		const { JscpdClient } = await import("../../clients/jscpd-client.js");
