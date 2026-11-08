@@ -27,9 +27,11 @@
  * - a report that exists is parsed whatever the exit code: the run's verdict is
  *   the report's own content, which is each client's `parse` to judge;
  * - `parse` runs inside the guard, so its own throw lands in the same
- *   unsuccessful result and the same record, not in a client-side catch.
+ *   unsuccessful result and the same record, not in a client-side catch. A
+ *   report that is not JSON (cut short by a killed CLI, or garbage) is such a
+ *   throw (`parseReportJson`): it never reads as a scan that found nothing.
  *
- * Refs: #130, #131, #584, #1736, #1816, #4133, #5411
+ * Refs: #130, #131, #584, #1736, #1816, #4133, #5411, #5447
  */
 
 import * as fs from "node:fs";
@@ -109,6 +111,24 @@ export type ReportScanSpec<TResult> = {
 	/** The client's verbose logger; every failure is logged before it is failed. */
 	log?: (msg: string) => void;
 };
+
+/**
+ * Parse a report's bytes as JSON, or throw `unreadable <tool> report: <why>`.
+ * The throw is the verdict (#5447): a parser that returned `[]` for bytes it
+ * could not read made `runReportScan` record an analysed success with zero
+ * findings, so a truncated secrets or vulnerability report read as clean. Called
+ * inside a `parse`, the throw lands in the guard below as one failed scan and
+ * one record. Callers keep their own `!raw.trim()` arm: an empty file is an
+ * empty run, not an unreadable report.
+ */
+export function parseReportJson(toolName: string, raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		throw new Error(`unreadable ${toolName} report: ${message}`);
+	}
+}
 
 /**
  * Scan with a CLI that writes a JSON report file. See the module doc for the
