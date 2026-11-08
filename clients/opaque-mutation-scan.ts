@@ -45,9 +45,9 @@ import {
 	sameCheckoutOtherRoot,
 } from "./review-graph/git-identity.js";
 import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
-import { createHash } from "node:crypto";
 
 import { BoundedFifoMap } from "./bounded-cache.js";
+import { hashContentBytes } from "./content-stamp.js";
 import { scanShellWriteScopes } from "./bash-file-access.js";
 import {
 	incrementDegradationCount,
@@ -293,9 +293,7 @@ export async function captureFileStatsForPaths(
 				size: stat.size,
 			};
 			if (options.withHashes && hashBytesSpent + stat.size <= hashBudget) {
-				entry.hash = createHash("sha256")
-					.update(await fs.promises.readFile(file))
-					.digest("hex");
+				entry.hash = hashContentBytes(await fs.promises.readFile(file));
 				hashBytesSpent += stat.size;
 			}
 			snapshot.set(normalizeMapKey(path.resolve(file)), entry);
