@@ -88,19 +88,6 @@ export function removeTempDirSync(dir: string): void {
 export const TEST_FIXTURE_ROOT_MARKER =
 	".git" satisfies (typeof PROJECT_ROOT_MARKERS)[number];
 
-/**
- * A fixture root under the OS temp root, returned in its kernel identity
- * (#5439). macOS spells `os.tmpdir()` through `/var`, a link to
- * `/private/var`, and a symlinked `TMPDIR` is spelled through its link.
- * Production canonicalises the paths it reports and keys (`normalizeMapKey`,
- * `realpathSync.native`), so a fixture built under the spelled root compares a
- * different string than the code returns. Same identity rule as
- * {@link setupTestEnvironment} (#5217).
- */
-export function mkdtempRealSync(prefix: string): string {
-	return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
-}
-
 export function setupTestEnvironment(
 	prefix = "pi-lens-test-",
 	options: { rootMarker?: boolean; tmpRoot?: string } = {},
