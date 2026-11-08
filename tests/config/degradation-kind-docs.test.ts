@@ -10,7 +10,8 @@ const LEDGER = path.join(process.cwd(), "clients/degradation-ledger.ts");
  * The kinds that have no doc block, by name. The pin compares this list exactly
  * with the members whose doc block is empty, so a kind that gains a doc, loses
  * one, or leaves the union must move its own entry here: the list shrinks on
- * purpose. `mode-suppression` and `grammar-blocked` are undocumented by design
+ * purpose, and the exact count in the assertion below moves with it in the same
+ * change. `mode-suppression` and `grammar-blocked` are undocumented by design
  * (#5400); the other 34 predate #5401 and have no doc yet.
  */
 const UNDOCUMENTED_KINDS: readonly string[] = [
@@ -117,12 +118,17 @@ describe("DegradationKind doc blocks name their own kind (#5401)", () => {
 	// A kind with an empty block must be listed in UNDOCUMENTED_KINDS, so a doc
 	// stacked onto a neighbour or deleted (which leaves its own kind empty) reds it.
 	it("requires each kind's doc block to lead with that kind", () => {
-		// Ceiling: the list may shrink (a kind gains its doc) but never grows past
-		// its current 36. Recurrence: the #5407 verify r2 probe moved a bin doc below
-		// the writer-skipped doc and added one name here; the exact match below went
-		// green, so a new kind's doc could be silenced by a list line. Lower this
-		// number when an entry leaves UNDOCUMENTED_KINDS.
-		expect(UNDOCUMENTED_KINDS.length).toBeLessThanOrEqual(36);
+		// Count: exact, so the list and this number move together. A kind that gains
+		// its doc leaves UNDOCUMENTED_KINDS and lowers this number in the same change;
+		// a kind that loses its doc joins the list and raises it. Recurrence: the
+		// #5407 verify r2 probe moved a bin doc below the writer-skipped doc and added
+		// one name here, and the exact match went green, so a new kind's doc could be
+		// silenced by a list line. Verify r3 (F10): under `<= 36` a doc gain freed a
+		// slot that a later silent name filled, so the count is `toBe` now.
+		expect(
+			UNDOCUMENTED_KINDS.length,
+			"lower the count when a kind gains docs: remove its entry from UNDOCUMENTED_KINDS and set this number to the new length",
+		).toBe(36);
 		const members = readUnionMembers(fs.readFileSync(LEDGER, "utf8"));
 		// Floor: the union had 311 members when this pin landed. A parse that finds
 		// far fewer must fail rather than pass over an empty population.
