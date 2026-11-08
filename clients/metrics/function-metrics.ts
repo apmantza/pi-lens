@@ -5,7 +5,12 @@
  * provider (and through it `high-complexity`, `unsafe-boundary` and the review
  * graph) and `ComplexityClient` both read their numbers here.
  */
-import type { ComplexityLanguageId, TsNode } from "../tree-sitter-shared.js";
+import { buildQualifiedName, findOwnerName } from "../symbol-containment.js";
+import {
+	type ComplexityLanguageId,
+	firstChildOfType,
+	type TsNode,
+} from "../tree-sitter-shared.js";
 
 export interface FunctionMetrics {
 	/** McCabe: 1 + decision points + logical operators in the body. */
@@ -22,6 +27,15 @@ export interface FunctionMetrics {
 export interface NamedFunctionMetrics extends FunctionMetrics {
 	name: string;
 	line: number;
+	/** 1-based last line of the function node. */
+	endLine: number;
+	/**
+	 * Identity that survives an edit which only moves the function (#5087):
+	 * the owner-qualified name (`Class.method`, `outer.inner`), `<anonymous>`
+	 * for an unnamed function, and `#2`, `#3` on later same-key siblings in
+	 * source order. No line number takes part in it.
+	 */
+	key: string;
 }
 
 export interface FileMetrics {
@@ -40,6 +54,8 @@ export type BodyVisitor = (
 
 interface MetricsTable {
 	functions: ReadonlySet<string>;
+	/** Declarations that own the functions inside them (classes, impls). */
+	containers: ReadonlySet<string>;
 	decisions: ReadonlySet<string>;
 	cognitive: ReadonlySet<string>;
 	nesting: ReadonlySet<string>;
@@ -55,6 +71,12 @@ const JSTS: MetricsTable = {
 		"method_definition",
 		"generator_function",
 		"generator_function_declaration",
+	]),
+	containers: new Set([
+		"class_declaration",
+		"abstract_class_declaration",
+		"class",
+		"interface_declaration",
 	]),
 	// `switch_default` is not a decision.
 	decisions: new Set([
@@ -91,6 +113,7 @@ const JSTS: MetricsTable = {
 
 const PYTHON: MetricsTable = {
 	functions: new Set(["function_definition", "lambda"]),
+	containers: new Set(["class_definition"]),
 	decisions: new Set([
 		"if_statement",
 		"elif_clause",
@@ -125,6 +148,8 @@ const GO: MetricsTable = {
 		"method_declaration",
 		"func_literal",
 	]),
+	// A Go method's owner is its receiver type (`ownerOf`), not a container.
+	containers: new Set<string>(),
 	// `default_case` is not a decision.
 	decisions: new Set([
 		"if_statement",
@@ -152,6 +177,7 @@ const GO: MetricsTable = {
 
 const RUST: MetricsTable = {
 	functions: new Set(["function_item", "closure_expression"]),
+	containers: new Set(["impl_item", "trait_item", "mod_item"]),
 	decisions: new Set([
 		"if_expression",
 		"while_expression",
@@ -326,22 +352,155 @@ export function measureFunction(
 	};
 }
 
+/**
+ * The name a function-like node declares or is bound to, or `undefined` for
+ * an anonymous one. Moved here from `function-facts.ts` (#5087) so the
+ * provider and the metrics name a function the same way: a JS/TS arrow or
+ * function expression takes its binding site (`const f = () => …`,
+ * `{ prop: () => … }`), a Python lambda its assignment target, anything else
+ * its grammar's `name` field.
+ */
+export function functionName(node: TsNode): string | undefined {
+	const type: string = node.type;
+	if (type === "function_declaration") {
+		return firstChildOfType(node, "identifier")?.text;
+	}
+	if (type === "method_definition") {
+		// The name is the child just before formal_parameters (property_identifier /
+		// private / computed / string / number); skip async/get/set modifiers.
+		const kids = node.children ?? [];
+		const paramsIdx = kids.findIndex(
+			(c: TsNode) => c?.type === "formal_parameters",
+		);
+		for (let i = paramsIdx - 1; i >= 0; i -= 1) {
+			const t = kids[i]?.type;
+			if (
+				t === "property_identifier" ||
+				t === "private_property_identifier" ||
+				t === "computed_property_name" ||
+				t === "string" ||
+				t === "number"
+			) {
+				return kids[i].text;
+			}
+		}
+		return undefined;
+	}
+	if (type === "arrow_function" || type === "function_expression") {
+		const parent = node.parent;
+		if (parent?.type === "variable_declarator") {
+			return firstChildOfType(parent, "identifier")?.text;
+		}
+		if (parent?.type === "pair") return (parent.children ?? [])[0]?.text;
+		return undefined;
+	}
+	if (type === "lambda") {
+		const parent = node.parent;
+		return parent?.type === "assignment"
+			? parent.childForFieldName("left")?.text
+			: undefined;
+	}
+	return node.childForFieldName("name")?.text;
+}
+
+/** A Go method's receiver type: `func (s *Server) Run()` is `Server`'s. */
+function receiverType(fn: TsNode): string | undefined {
+	const receiver = fn.childForFieldName("receiver");
+	if (!receiver) return undefined;
+	let found: string | undefined;
+	const visit = (node: TsNode): void => {
+		if (found !== undefined) return;
+		if (node.type === "type_identifier") {
+			found = node.text;
+			return;
+		}
+		for (const child of node.children ?? []) if (child) visit(child);
+	};
+	visit(receiver);
+	return found;
+}
+
+/** A container's own name: a class's `name`, a Rust impl's `type`. */
+function containerName(node: TsNode): string | undefined {
+	return (
+		node.childForFieldName("name")?.text ?? node.childForFieldName("type")?.text
+	);
+}
+
+interface Span {
+	name: string;
+	startLine: number;
+	endLine: number;
+}
+
+/**
+ * Give each function its {@link NamedFunctionMetrics.key}: the shared
+ * containment rule (`findOwnerName`, the one `function-facts.ts`, the review
+ * graph and module_report use) finds the nearest owning class, impl or named
+ * function, and same-key siblings are numbered in source order.
+ */
+function assignKeys(
+	functions: Array<Omit<NamedFunctionMetrics, "key">>,
+	nodes: TsNode[],
+	containers: Span[],
+	languageId: ComplexityLanguageId,
+): NamedFunctionMetrics[] {
+	const owners: Span[] = [...containers];
+	const declared = nodes.map((node) => functionName(node));
+	functions.forEach((fn, i) => {
+		const name = declared[i];
+		if (name !== undefined)
+			owners.push({ name, startLine: fn.line, endLine: fn.endLine });
+	});
+	const seen = new Map<string, number>();
+	return functions.map((fn, i) => {
+		const node = nodes[i]!;
+		const base = declared[i] ?? "<anonymous>";
+		const owner =
+			languageId === "go" && node.type === "method_declaration"
+				? receiverType(node)
+				: findOwnerName(owners, fn.line, fn.endLine);
+		const qualified = buildQualifiedName(owner, base) ?? base;
+		const count = (seen.get(qualified) ?? 0) + 1;
+		seen.set(qualified, count);
+		return { ...fn, key: count === 1 ? qualified : `${qualified}#${count}` };
+	});
+}
+
 /** File-level nesting and cognitive complexity, plus every function's metrics. */
 export function measureFile(
 	root: TsNode,
 	languageId: ComplexityLanguageId,
 ): FileMetrics {
 	const table = TABLES[languageId];
-	const functions: NamedFunctionMetrics[] = [];
+	const functions: Array<Omit<NamedFunctionMetrics, "key">> = [];
+	const nodes: TsNode[] = [];
+	const containers: Span[] = [];
 	const { cognitive, nesting } = tally(root, table, false, (node, type) => {
+		if (table.containers.has(type)) {
+			const name = containerName(node);
+			if (name !== undefined)
+				containers.push({
+					name,
+					startLine: node.startPosition.row + 1,
+					endLine: node.endPosition.row + 1,
+				});
+			return;
+		}
 		// Python's `lambda` keyword token shares its node's type name.
 		if (!table.functions.has(type) || !node.isNamed) return;
 		const line = node.startPosition.row + 1;
+		nodes.push(node);
 		functions.push({
-			name: node.childForFieldName("name")?.text ?? `<anonymous@L${line}>`,
+			name: functionName(node) ?? `<anonymous@L${line}>`,
 			line,
+			endLine: node.endPosition.row + 1,
 			...measureFunction(node, languageId),
 		});
 	});
-	return { cognitive, nesting, functions };
+	return {
+		cognitive,
+		nesting,
+		functions: assignKeys(functions, nodes, containers, languageId),
+	};
 }

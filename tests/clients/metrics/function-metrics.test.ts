@@ -12,6 +12,8 @@ import {
 // One corpus per metrics table, each value worked out by hand from the
 // tables in clients/metrics/function-metrics.ts. A row is
 // [name, line, cyclomatic, cognitive, nesting, length, parameters].
+// A bound arrow, function expression or lambda takes its binding's name
+// (#5087); an unbound one stays `<anonymous@L<line>>`.
 type Row = [string, number, number, number, number, number, number];
 
 const TS = `export function pick(a: number, b?: string, ...rest: number[]): number {
@@ -41,7 +43,7 @@ const TS_ROWS: Row[] = [
 	// catch, ??; the catch sits inside the try, so it scores 2.
 	["get", 11, 3, 3, 1, 7, 2],
 	// The callback's ternary counts here too, one function level deeper.
-	["<anonymous@L20>", 20, 2, 2, 0, 1, 1],
+	["total", 20, 2, 2, 0, 1, 1],
 	["<anonymous@L20>", 20, 2, 1, 0, 1, 2],
 ];
 
@@ -75,7 +77,7 @@ const TSX_ROWS: Row[] = [
 	["List", 1, 3, 3, 1, 8, 1],
 	["<anonymous@L5>", 5, 2, 1, 0, 1, 1],
 	// An expression body is its own scope: the ternary scores 1, && scores 1.
-	["<anonymous@L10>", 10, 3, 2, 0, 2, 1],
+	["Badge", 10, 3, 2, 0, 2, 1],
 	// while, one case (default is not a decision); switch scores 1 + 1.
 	["useToggle", 13, 3, 3, 2, 13, 1],
 ];
@@ -104,8 +106,8 @@ export const id = x => x;
 const JS_ROWS: Row[] = [
 	["walk", 1, 4, 3, 1, 7, 3],
 	// do, catch, if, ||; the catch and the if both sit under do + try.
-	["<anonymous@L9>", 9, 5, 8, 3, 10, 2],
-	["<anonymous@L20>", 20, 1, 0, 0, 1, 1],
+	["retry", 9, 5, 8, 3, 10, 2],
+	["id", 20, 1, 0, 0, 1, 1],
 ];
 
 const PY = `def classify(value, *, strict=False, **extra):
@@ -148,7 +150,7 @@ const PY_ROWS: Row[] = [
 	["read", 13, 4, 6, 2, 10, 3],
 	// Two cases; match scores 1, the lambda's or scores 1.
 	["route", 25, 4, 2, 1, 8, 1],
-	["<anonymous@L31>", 31, 2, 1, 0, 1, 1],
+	["handler", 31, 2, 1, 0, 1, 1],
 ];
 
 const GO = `package sample
@@ -357,5 +359,82 @@ describe("measureFile corpus (#5086)", () => {
 			nesting: 2,
 			functions: 1,
 		});
+	});
+});
+
+async function keysFor(fileName: string, content: string): Promise<string[]> {
+	const languageId = resolveTreeSitterLanguage(fileName);
+	if (!languageId || !isComplexityLanguageId(languageId)) {
+		throw new Error(`${fileName} has no metrics table`);
+	}
+	const parsed = await withTreeSitterRoot(
+		`/virtual/${fileName}`,
+		content,
+		(root) => measureFile(root, languageId).functions.map((f) => f.key),
+		"function-metrics-test",
+	);
+	expect(parsed.parsed).toBe(true);
+	return parsed.parsed ? parsed.value : [];
+}
+
+// #5087: the complexity delta pairs a function before and after an edit by
+// this key, so it carries the owner and never the line.
+describe("measureFile function keys (#5087)", () => {
+	it("qualifies a method by its class, and numbers same-key siblings", async () => {
+		const keys = await keysFor(
+			"keys.ts",
+			[
+				"class A {",
+				"\trun(): void {}",
+				"}",
+				"class B {",
+				"\trun(): void {",
+				"\t\tconst step = () => 1;",
+				"\t\t[1].map((x) => x);",
+				"\t\t[2].map((y) => y);",
+				"\t}",
+				"}",
+				"export const run = () => 0;",
+				"",
+			].join("\n"),
+		);
+		expect(keys).toEqual([
+			"A.run",
+			"B.run",
+			"run.step",
+			"run.<anonymous>",
+			"run.<anonymous>#2",
+			"run",
+		]);
+	});
+
+	it("does not move when an edit shifts every line", async () => {
+		const body =
+			"const total = (xs: number[]) => xs.length;\nclass S {\n\tget(): number {\n\t\treturn [1].map((v) => v)[0];\n\t}\n}\n";
+		const before = await keysFor("shift.ts", body);
+		const after = await keysFor("shift.ts", `// one\n// two\n\n${body}`);
+		expect(after).toEqual(before);
+		expect(before).toEqual(["total", "S.get", "get.<anonymous>"]);
+	});
+
+	it("qualifies Python methods, Go methods by receiver, and Rust impl items", async () => {
+		expect(
+			await keysFor(
+				"keys.py",
+				"class Q:\n    def push(self, x):\n        return x\n\nsquare = lambda v: v * v\n",
+			),
+		).toEqual(["Q.push", "square"]);
+		expect(
+			await keysFor(
+				"keys.go",
+				"package p\n\ntype Server struct{}\n\nfunc (s *Server) Run() {}\n\nfunc Run() {}\n",
+			),
+		).toEqual(["Server.Run", "Run"]);
+		expect(
+			await keysFor(
+				"keys.rs",
+				"struct C;\nimpl C {\n    fn new() -> Self { C }\n}\nfn new() {}\n",
+			),
+		).toEqual(["C.new", "new"]);
 	});
 });

@@ -2624,8 +2624,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// entry above.
 	"mcp/session.ts": 4,
 	// #5086: the frozen node-kind tables moved here from complexity-client.ts,
-	// which pinned 24.
-	"metrics/function-metrics.ts": 20,
+	// which pinned 24. #5087: 20 -> 24, each table's `containers` set (the
+	// classes and impls that own a function key), frozen like the others.
+	"metrics/function-metrics.ts": 24,
 	// #5036 N1: `NO_LSP.byName` (a member of the module-level `NO_LSP` literal).
 	"module-report-lsp.ts": 1,
 	"module-report.ts": 3,
