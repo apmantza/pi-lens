@@ -176,6 +176,17 @@ export async function readPathsArgument(
 			};
 		if (!entry.trim())
 			return { entries: [], refusal: `paths entry ${index + 1} is blank` };
+		// A leading `!` is a minimatch NEGATION: on the matcher it names every
+		// file the pattern excludes. That is workable while one consumer filters
+		// a list it already holds, and a false promise once the entry is expanded
+		// into a target list — the same entry would name everything the caller
+		// wanted left out (#5371). `paths` names entries to include; leaving
+		// files out belongs to the project ignore config.
+		if (entry.trimStart().startsWith("!"))
+			return {
+				entries: [],
+				refusal: `paths entry ${index + 1} starts with "!": \`paths\` names the entries to include, not the ones to leave out, and a negated entry names every other file. Name the entries you want, or ignore what you do not want through the project ignore config.`,
+			};
 		const resolved = resolveHostToolPath(entry, base);
 		if (!hasGlobMagic(entry)) {
 			entries.push(resolved);

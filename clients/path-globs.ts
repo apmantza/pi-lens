@@ -58,11 +58,14 @@ export function fileMatchesPathGlobs(
 	});
 }
 
-/** Glob syntax in a caller's entry. `*`, `?`, `[` and `{` are minimatch magic;
- * a leading `!` is a negation. Other characters (a `+`, a literal `!` mid-name)
- * stay literal, so a file named `foo!.ts` is still a literal path. */
+/** Glob syntax in a caller's entry: `*`, `?`, `[` and `{` are minimatch magic.
+ * Other characters (a `+`, a `!` mid-name) stay literal, so a file named
+ * `foo!.ts` is still a literal path. A LEADING `!` is not handled here: it is a
+ * negation, and the reader refuses it before it can be expanded (#5371) — on the
+ * matcher a negated entry names everything the pattern excludes, which is the
+ * opposite of a target list. */
 export function hasGlobMagic(entry: string): boolean {
-	return /[*?[{]/.test(entry) || entry.startsWith("!");
+	return /[*?[{]/.test(entry);
 }
 
 /** How one glob entry resolved. `refusal` is the reason a caller must be told

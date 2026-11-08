@@ -81,6 +81,9 @@ function makeTree(ws: string): { inScope: string[]; outside: string } {
 		// `.gitignore` entry: pruning it is `shouldRecurseIntoDir`'s decision, not
 		// the ignore matcher's, and the glob answers the same way the walkers do.
 		["src/coverage/covered.ts", "export function hello() { return 6; }\n"],
+		// A `.gitignore` entry naming a FILE, not a directory: nothing prunes it
+		// on the way down, so only the file-level ignore decision can leave it out.
+		["src/secret.ts", "export function hello() { return 7; }\n"],
 		["outside.ts", "export function hello() { return 5; }\n"],
 	];
 	for (const [relative, content] of files) {
@@ -88,7 +91,7 @@ function makeTree(ws: string): { inScope: string[]; outside: string } {
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, content);
 	}
-	fs.writeFileSync(path.join(ws, ".gitignore"), "generated/\n");
+	fs.writeFileSync(path.join(ws, ".gitignore"), "generated/\nsecret.ts\n");
 	return {
 		inScope: [
 			path.join(ws, "src", "a.ts"),
@@ -232,6 +235,9 @@ describe("#5371 the shared `paths` reader expands a glob once for every tool", (
 			// The other half of the walkers' decision: a directory the shared
 			// excluded names cover is pruned before its files are even looked at.
 			expect(targets.some((target) => target.includes("coverage"))).toBe(false);
+			// The other axis of the same matcher: an ignore entry naming one FILE,
+			// which no directory prune can reach.
+			expect(targets.some((target) => target.includes("secret"))).toBe(false);
 		} finally {
 			env.cleanup();
 		}
@@ -394,18 +400,40 @@ describe("#5371 the shared `paths` reader expands a glob once for every tool", (
 		try {
 			const ws = path.join(env.tmpDir, "a[b]");
 			makeTree(ws);
+			// A file outside the workspace but inside the directory an unclamped
+			// climb lands on. It is the witness: if the walk starts above `cwd`,
+			// `**` matches its `../` spelling and it joins the answer.
+			fs.writeFileSync(
+				path.join(env.tmpDir, "decoy.ts"),
+				"export const x = 1;\n",
+			);
 			const astGrep = astGrepDouble();
 			const result = await run(
 				createAstGrepOutlineTool(astGrep.client),
-				{ lang: "typescript", paths: ["src/**/*.ts"] },
+				{ lang: "typescript", paths: ["**/*.ts"] },
 				ws,
 			);
 			const answer = text(result);
 			expect(result.isError, answer).toBeFalsy();
-			expect((astGrep.outline.mock.calls[0][0] as string[]).sort()).toEqual([
-				path.join(ws, "src", "a.ts"),
-				path.join(ws, "src", "sub", "b.ts"),
-			]);
+			const targets = astGrep.outline.mock.calls[0][0] as string[];
+			expect(
+				targets.some((target) => target.includes("decoy")),
+				answer,
+			).toBe(false);
+			expect(targets).toContain(path.join(ws, "src", "a.ts"));
+
+			// The other half of the clamp: the refusal names the directory the
+			// pattern was searched under, and that is the call's root, never the
+			// directory an unclamped climb lands on above it.
+			astGrep.outline.mockClear();
+			const empty = await run(
+				createAstGrepOutlineTool(astGrep.client),
+				{ lang: "typescript", paths: ["**/*.zzz"] },
+				ws,
+			);
+			const refusal = text(empty);
+			expect(refusal).toContain("no file matches");
+			expect(refusal, refusal).toContain(path.join("a[b]"));
 		} finally {
 			env.cleanup();
 		}
@@ -429,6 +457,30 @@ describe("#5371 the shared `paths` reader expands a glob once for every tool", (
 			expect(astGrep.outline.mock.calls[0][0]).toEqual([
 				path.join(env.tmpDir, "src", "sub"),
 			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("refuses a negated entry instead of expanding it to everything else", async () => {
+		// On the matcher a leading `!` NEGATES: the entry names every file the
+		// pattern excludes. That is survivable while one consumer filters a list
+		// it already holds, and a false promise once the entry becomes a target
+		// list — the caller would scan exactly what it asked to leave out.
+		const env = setupTestEnvironment("pi-lens-5371-negate-");
+		try {
+			makeTree(env.tmpDir);
+			const astGrep = astGrepDouble();
+			const result = await run(
+				createAstGrepSearchTool(astGrep.client),
+				{ pattern: "foo($X)", lang: "typescript", paths: ["!src/**/*.ts"] },
+				env.tmpDir,
+			);
+			const answer = text(result);
+			expect(result.isError).toBe(true);
+			expect(answer).toContain('starts with "!"');
+			expect(answer).toContain("ignore config");
+			expect(astGrep.search.mock.calls.length, "no child dispatch").toBe(0);
 		} finally {
 			env.cleanup();
 		}
