@@ -15,7 +15,7 @@ respawned server reports every finding it reported before eviction; the
 content-bound coverage check the auxiliary freeze depends on. A server that
 cannot demonstrate it is never proposed for eviction on perf grounds alone.
 
-_Last generated: 2026-11-07 on linux; 51 registry servers: 38 eligible, 0 vetoed, 3 inconclusive, 10 unavailable (0 not reached: budget)._
+_Last generated: 2026-11-08 on linux; 51 registry servers: 38 eligible, 0 vetoed, 3 inconclusive, 10 unavailable (0 not reached: budget)._
 
 ## Per-server rows
 
