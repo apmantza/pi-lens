@@ -112,6 +112,15 @@ export type ReportScanSpec<TResult> = {
 	log?: (msg: string) => void;
 };
 
+/** What `JSON.parse` can return: the shapes a report's root may take. */
+export type ReportJson =
+	| null
+	| boolean
+	| number
+	| string
+	| ReportJson[]
+	| { [key: string]: ReportJson };
+
 /**
  * Parse a report's bytes as JSON, or throw `unreadable <tool> report: <why>`.
  * The throw is the verdict (#5447): a parser that returned `[]` for bytes it
@@ -121,9 +130,9 @@ export type ReportScanSpec<TResult> = {
  * one record. Callers keep their own `!raw.trim()` arm: an empty file is an
  * empty run, not an unreadable report.
  */
-export function parseReportJson(toolName: string, raw: string): unknown {
+export function parseReportJson(toolName: string, raw: string): ReportJson {
 	try {
-		return JSON.parse(raw);
+		return JSON.parse(raw) as ReportJson;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		throw new Error(`unreadable ${toolName} report: ${message}`);
