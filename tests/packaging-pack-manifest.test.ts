@@ -403,7 +403,9 @@ describe("published manifest carries no devDependencies", () => {
 			const { filename } = packTarballOnce();
 			const unpacked = path.join(tmp, "unpacked-imports");
 			fs.mkdirSync(unpacked, { recursive: true });
-			execFileSync("tar", ["-xzf", filename, "-C", "unpacked"], { cwd: tmp });
+			execFileSync("tar", ["-xzf", filename, "-C", "unpacked-imports"], {
+				cwd: tmp,
+			});
 			const pkgRoot = path.join(unpacked, "package");
 			const packedPaths = (
 				fs.readdirSync(pkgRoot, { recursive: true }) as string[]
