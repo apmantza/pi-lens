@@ -14,7 +14,6 @@
  * - To: await safeSpawnAsync(cmd, args, opts)
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import {
 	type ChildProcess,
 	type SpawnOptions,
@@ -44,6 +43,7 @@ import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
 import { compareOrdinal } from "./string-utils.js";
+import { spawnAbortScope } from "./spawn-abort-scope.js";
 
 export interface SpawnResourceUsage {
 	sampleCount: number;
@@ -1699,8 +1699,7 @@ const SPAWN_SAMPLER_TEARDOWN_GRACE_MS = 5_000;
 // ASYNC VERSION (Recommended - Non-blocking)
 // ============================================================================
 
-/** Capture-local cancellation; async context prevents interference with concurrent dispatch. */
-export const spawnAbortScope = new AsyncLocalStorage<AbortSignal>();
+export { spawnAbortScope };
 
 /**
  * Async spawn with timeout and proper process cleanup.
