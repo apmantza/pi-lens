@@ -46,6 +46,7 @@ import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 const ctl = process.env.PI_LENS_TEST_SG_CTL;
 const real = process.env.PI_LENS_TEST_SG_REAL;
+const host = process.env.PI_LENS_TEST_SG_HOST;
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
 	process.stdout.write("ast-grep 0.0.0-wrapper\n");
@@ -96,13 +97,37 @@ if (mode === "park") parkUntilReleased("json.pid");
 if (mode === "linger") {
 	const r = runReal(args);
 	process.stdout.write(r.stdout ?? "");
-	// A grandchild keeps stdout open after this process exits, writing a
-	// space every 50 ms, so the parent's pipe-idle wait stays open.
+	// A grandchild keeps stdout open after this process exits, so the parent
+	// sits in its post-exit pipe-idle wait. Each step is ordered by a marker,
+	// never a clock: the grandchild writes before this process exits (so the
+	// 100 ms idle grace never lapses on a slow start), writes lingering only
+	// once every process between this one and the test host is gone (the npx
+	// fallback puts npm and a shell in between; an abort while they live
+	// lands in the scan instead of the idle wait), and keeps writing every
+	// 10 ms until the test writes release after its abort.
+	const chain = [process.pid];
+	for (let pid = process.ppid; pid > 1 && String(pid) !== host; ) {
+		chain.push(pid);
+		pid = Number(spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim() || 0);
+		if (pid <= 1) throw new Error("linger: test host not among the ancestors");
+	}
+	const started = path.join(ctl, "linger-started");
 	spawn(process.execPath, ["-e", [
 		"const fs = require('node:fs');",
-		"fs.writeFileSync(process.argv[1], 'x');",
-		"let n = 0; const t = setInterval(() => { process.stdout.write(' '); if (++n > 30) clearInterval(t); }, 50);",
-	].join(""), path.join(ctl, "lingering")], { stdio: ["ignore", "inherit", "ignore"], detached: true }).unref();
+		"const [started, marker, release, chain, limit] = process.argv.slice(1);",
+		"const until = Date.now() + Number(limit);",
+		"process.stdout.write(' '); fs.writeFileSync(started, 'x');",
+		"const alive = () => chain.split(',').some((pid) => { try { process.kill(Number(pid), 0); return true; } catch { return false; } });",
+		"const t = setInterval(() => {",
+		"  if (fs.existsSync(release) || Date.now() > until) { clearInterval(t); return; }",
+		"  process.stdout.write(' ');",
+		"  if (!alive() && !fs.existsSync(marker)) fs.writeFileSync(marker, 'x');",
+		"}, 10);",
+	].join(""), started, path.join(ctl, "lingering"), path.join(ctl, "release"), chain.join(","), String(${PARK_LIMIT_MS})], { stdio: ["ignore", "inherit", "ignore"], detached: true }).unref();
+	const until = Date.now() + ${PARK_LIMIT_MS};
+	while (!fs.existsSync(started) && Date.now() < until) {
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+	}
 	process.exit(r.status ?? 1);
 }
 passThrough(args);
@@ -184,6 +209,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				path.join(tools, "node_modules", ".bin", "ast-grep"),
 			);
 			process.env.PI_LENS_TEST_SG_REAL = REAL_SG;
+			process.env.PI_LENS_TEST_SG_HOST = String(process.pid);
 		});
 
 		// A parked wrapper left behind by a failed case releases itself now.
@@ -194,6 +220,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 
 		afterAll(() => {
 			delete process.env.PI_LENS_TEST_SG_REAL;
+			delete process.env.PI_LENS_TEST_SG_HOST;
 		});
 
 		/** A fresh project tree and control dir for one case. */
@@ -251,6 +278,11 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			await Promise.race([waitForFile(path.join(ctl, abortOn)), early]);
 			early.catch(() => {});
 			ac.abort();
+			// The lingering pipe holds the call until release; write it only
+			// once the abort is in, so the re-check is what decides (#5097).
+			if (abortOn === "lingering") {
+				fs.writeFileSync(path.join(ctl, "release"), "");
+			}
 			return call;
 		}
 
