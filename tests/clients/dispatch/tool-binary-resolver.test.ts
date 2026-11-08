@@ -197,4 +197,33 @@ describe("#5410 one tool-binary resolver through the real dispatcher", () => {
 			spawnCalls.filter((call) => call.cmd === venvRuff).map((c) => c.args[0]),
 		).toEqual(["--version", "check"]);
 	});
+	// The memo-less fallback the double probe used to run looked for an npm
+	// tool's shim in the project's own `node_modules/.bin`; the resolver keeps
+	// that rung (trusted, exactly the runner cwd) so folding the pair onto one
+	// probe does not drop a project-installed stylelint.
+	it("runs a trusted project's node_modules stylelint through the one resolver", async () => {
+		setProjectTrustState("trusted");
+		const shimDir = path.join(project.tmpDir, "node_modules", ".bin");
+		fs.mkdirSync(shimDir, { recursive: true });
+		const shim = path.join(
+			shimDir,
+			process.platform === "win32" ? "stylelint.cmd" : "stylelint",
+		);
+		fs.writeFileSync(shim, "#!/bin/sh\n");
+		fs.chmodSync(shim, 0o755);
+		const file = path.join(project.tmpDir, "site.css");
+		fs.writeFileSync(file, "a { color: red; }\n");
+		const registry = new RunnerRegistry();
+		registry.register(
+			(await import("../../../clients/dispatch/runners/stylelint.js")).default,
+		);
+		await dispatchForFile(
+			makeCtx(file, project.tmpDir),
+			[{ mode: "all", runnerIds: ["stylelint"] }],
+			registry,
+		);
+		expect(
+			spawnCalls.filter((call) => call.cmd === shim).map((c) => c.args[0]),
+		).toEqual(["--version", "--formatter"]);
+	});
 });

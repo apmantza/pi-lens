@@ -74,6 +74,8 @@ vi.mock("../../clients/installer/index.js", () => ({
 	// an attempt that failed is distinguishable from one that never ran.
 	getInstallAttempt: vi.fn(() => undefined),
 	findManagedToolBinary: vi.fn(async () => undefined),
+	// #5410: a managed answer's evidence names the install strategy.
+	getToolInstallStrategy: vi.fn(() => undefined),
 	isSpawnableCommand: vi.fn(async () => true),
 	resetPathWalkMemo: vi.fn(),
 	getToolEnvironment: vi.fn(async () => ({})),
@@ -462,6 +464,31 @@ describe("dispatch hasTool availability (#1476)", () => {
 		const dispatcher = await import("../../clients/dispatch/dispatcher.js");
 		return { checkToolAvailability: dispatcher.checkToolAvailability };
 	}
+
+	// #5410: `hasTool` callers (shellcheck, the covering-lane gate) spawn the
+	// BARE command, so a managed-only binary must not read as present: the
+	// runner would then spawn a name PATH cannot find.
+	it("answers for PATH only: a managed-only binary reads unavailable", async () => {
+		const fs = await import("node:fs");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		// A managed release binary that exists and answers its probe.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5410-managed-"));
+		const managed = path.join(dir, "sometool");
+		fs.writeFileSync(managed, "#!/bin/sh\n");
+		try {
+			const installer = await import("../../clients/installer/index.js");
+			vi.mocked(installer.findManagedToolBinary).mockResolvedValue(managed);
+			safeSpawnAsync.mockImplementation(async (cmd: string) =>
+				cmd === "sometool" ? missingResult : okResult("1.2.3"),
+			);
+			const { checkToolAvailability } = await load();
+
+			expect(await checkToolAvailability("sometool")).toBe(false);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
 
 	// #5410: the dispatcher's own copy caught a thrown probe and wrote a durable
 	// `false` session fact, so one host hiccup disabled the tool for the session.
