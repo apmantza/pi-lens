@@ -24,14 +24,15 @@ rule:
     - pattern: conn.execute($QUERY + $REST)
     - pattern: connection.execute($QUERY + $REST)
     - pattern: self.cursor.execute($QUERY + $REST)
-has_fix: false
-tags:
-  - python
-  - security
-  - sql-injection
-  - cwe-89
-examples:
-  bad: |
-    cursor.execute("SELECT * FROM users WHERE id = " + user_id)
-  good: |
-    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
+metadata:
+  has_fix: false
+  tags:
+    - python
+    - security
+    - sql-injection
+    - cwe-89
+  examples:
+    bad: |
+      cursor.execute("SELECT * FROM users WHERE id = " + user_id)
+    good: |
+      cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))

@@ -5,7 +5,8 @@ message: The `$SOURCE` function returns NULL on error and this line dereferences
 note: |-
   [CWE-476] NULL Pointer Dereference. [REFERENCES]
       - https://wiki.sei.cmu.edu/confluence/display/c/EXP34-C.+Do+not+dereference+null+pointers
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   all:
     - not:
