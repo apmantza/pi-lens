@@ -218,6 +218,12 @@ describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 				stderr: "",
 			});
 			expect(observed.status).toBe("skipped");
+			// The availability verdict, not the lint spawn's own failure, skips it.
+			expect(
+				safeSpawnAsync.mock.calls.filter(
+					([, args]) => !(args as string[]).includes("--version"),
+				),
+			).toEqual([]);
 		});
 
 		it(`${tool}: nonzero empty output is one bounded ledger row across two files`, async () => {
