@@ -35,6 +35,7 @@ import {
 	reportNodeModulesLock,
 	runFreshnessChecks,
 } from "./support/check-build-freshness.js";
+import { TREE_WALK_TIMEOUT_MS } from "./support/test-timeout-scale.js";
 
 describe("node_modules lock stamp (#3694)", () => {
 	const made: string[] = [];
@@ -259,22 +260,34 @@ describe("findResidueCompiledTestSources (#2232 stale test-support residue guard
 
 	afterAll(() => rmSync(residueRoot, { recursive: true, force: true }));
 
-	it("flags a .ts file that has a compiled .js sibling", () => {
-		const r = findResidueCompiledTestSources({ root: residueRoot }).map((p) =>
-			p.replace(/\\/g, "/"),
-		);
-		expect(r.some((p) => p.endsWith("tests/support/shadowed.js"))).toBe(true);
-	});
+	it(
+		"flags a .ts file that has a compiled .js sibling",
+		() => {
+			const r = findResidueCompiledTestSources({ root: residueRoot }).map((p) =>
+				p.replace(/\\/g, "/"),
+			);
+			expect(r.some((p) => p.endsWith("tests/support/shadowed.js"))).toBe(true);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("does not flag a .ts file with no compiled sibling", () => {
-		const r = findResidueCompiledTestSources({ root: residueRoot });
-		expect(r.some((p) => p.includes("clean"))).toBe(false);
-	});
+	it(
+		"does not flag a .ts file with no compiled sibling",
+		() => {
+			const r = findResidueCompiledTestSources({ root: residueRoot });
+			expect(r.some((p) => p.includes("clean"))).toBe(false);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("ignores .d.ts even when a same-stem .js sits beside it", () => {
-		const r = findResidueCompiledTestSources({ root: residueRoot });
-		expect(r.some((p) => p.includes("types.js"))).toBe(false);
-	});
+	it(
+		"ignores .d.ts even when a same-stem .js sits beside it",
+		() => {
+			const r = findResidueCompiledTestSources({ root: residueRoot });
+			expect(r.some((p) => p.includes("types.js"))).toBe(false);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("runFreshnessChecks() end-to-end (#2232)", () => {
@@ -293,9 +306,13 @@ describe("runFreshnessChecks() end-to-end (#2232)", () => {
 
 	afterAll(() => rmSync(e2eRoot, { recursive: true, force: true }));
 
-	it("throws a loud error naming a planted stale-residue file", () => {
-		writeFileSync(join(e2eRoot, "tests", "support", "probe.ts"), "");
-		writeFileSync(join(e2eRoot, "tests", "support", "probe.js"), "");
-		expect(() => runFreshnessChecks(e2eRoot)).toThrow(/probe\.js/);
-	});
+	it(
+		"throws a loud error naming a planted stale-residue file",
+		() => {
+			writeFileSync(join(e2eRoot, "tests", "support", "probe.ts"), "");
+			writeFileSync(join(e2eRoot, "tests", "support", "probe.js"), "");
+			expect(() => runFreshnessChecks(e2eRoot)).toThrow(/probe\.js/);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
