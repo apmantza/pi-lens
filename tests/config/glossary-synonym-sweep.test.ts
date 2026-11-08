@@ -558,8 +558,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/config-locations.ts": 4,
 		// 1 -> 2 (#5291): `CANONICAL_PROJECT_CONFIG_LOCATIONS` drops the legacy
 		// spec from the shared list, an `Array.prototype.filter` call, not a
-		// delivery filter.
-		"clients/config-resolve.ts": 2,
+		// delivery filter; 2 -> 1: the bearing walk folds into the digest loop.
+		"clients/config-resolve.ts": 1,
 		"clients/deadline-utils.ts": 1,
 		"clients/debug-handles.ts": 1,
 		"clients/debug-heap.ts": 1,

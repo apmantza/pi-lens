@@ -7,6 +7,7 @@
  * files are read at all, in what order, and what the user is told about it.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -447,5 +448,47 @@ describe("location table agrees with the deprecation registry (#2418/#2426)", ()
 				expect(location.surface).toBeUndefined();
 			}
 		}
+	});
+});
+
+describe("contributingConfigSources read-time digests", () => {
+	it("records sha256 and byteLength for existing files and exists:false for absent candidates", () => {
+		const root = tmpRoot();
+		const home = path.join(root, "home");
+		const globalDir = path.join(home, ".pi-lens");
+		const projectRoot = path.join(home, "proj");
+		fs.mkdirSync(projectRoot, { recursive: true });
+		const projectFile = path.join(projectRoot, CANONICAL_PROJECT_CONFIG_FILE);
+		write(projectFile, { lsp: { warmFiles: ["src/index.ts"] } });
+		const rawBytes = fs.readFileSync(projectFile);
+		const expectedSha = createHash("sha256").update(rawBytes).digest("hex");
+
+		const resolved = resolvePiLensConfig({
+			cwd: projectRoot,
+			globalDir,
+			globalConfigPath: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
+			homeDir: home,
+		});
+
+		const present = resolved.contributingConfigSources.find(
+			(entry) => entry.file === projectFile,
+		);
+		expect(present).toEqual({
+			file: projectFile,
+			tier: "project",
+			exists: true,
+			sha256: expectedSha,
+			byteLength: rawBytes.byteLength,
+		});
+
+		const absentGlobal = resolved.contributingConfigSources.find(
+			(entry) =>
+				entry.file === path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
+		);
+		expect(absentGlobal).toEqual({
+			file: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
+			tier: "global",
+			exists: false,
+		});
 	});
 });

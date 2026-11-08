@@ -25,6 +25,7 @@ vi.mock("../../../clients/ast-grep-client.js", () => ({
 import {
 	_resetMcpSessionContext,
 	getMcpSessionContext,
+	peekMcpSessionRuntime,
 } from "../../../clients/mcp/session.js";
 
 beforeEach(async () => {
@@ -57,6 +58,40 @@ describe("getMcpSessionContext memo eviction (#1570)", () => {
 		// the loader.
 		const again = await getMcpSessionContext();
 		expect(again).toBe(context);
+		expect(loadBootstrapClients).toHaveBeenCalledTimes(2);
+	});
+
+	it("prevents an in-flight bootstrap interrupted by _resetMcpSessionContext from republishing resolvedRuntime or evicting a successor memo", async () => {
+		_resetMcpSessionContext();
+
+		let resolveFirst!: (value: unknown) => void;
+		loadBootstrapClients.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveFirst = resolve;
+				}),
+		);
+		const first = getMcpSessionContext();
+		expect(peekMcpSessionRuntime()).toBeUndefined();
+
+		// Reset while the first bootstrap is still awaiting loadBootstrapClients,
+		// then start a successor bootstrap BEFORE the stale first promise settles.
+		_resetMcpSessionContext();
+		loadBootstrapClients.mockResolvedValueOnce({ __stub: "successor" });
+		const successorPromise = getMcpSessionContext();
+
+		resolveFirst({ __stub: "stale" });
+		await expect(first).rejects.toThrow(
+			/MCP session context reset during bootstrap/,
+		);
+
+		const successor = await successorPromise;
+		expect(successor.clients).toEqual({ __stub: "successor" });
+		expect(peekMcpSessionRuntime()).toBe(successor.runtime);
+		expect(successor.runtime.sessionScope.retiredBy()).toBeUndefined();
+		expect(successor.runtime.captureSessionGeneration().isCurrent()).toBe(true);
+		// Stale catch handler must not have cleared the successor contextPromise.
+		expect(await getMcpSessionContext()).toBe(successor);
 		expect(loadBootstrapClients).toHaveBeenCalledTimes(2);
 	});
 });
