@@ -1212,7 +1212,7 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 	],
 	[
 		// No managedToolId: no installer entry for `phpstan` exists, so the
-		// pointer resolved to nothing (auto-install is #5410's decision, #5418).
+		// pointer resolved to nothing (#5418; auto-install stays an open decision).
 		"phpstan",
 		{
 			command: "phpstan",

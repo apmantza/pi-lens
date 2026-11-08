@@ -18,9 +18,11 @@
  *
  * FAIL CLOSED. A check that finds nothing is a broken check, so each one carries
  * a floor (`assertNonEmptyScan`). A doc cell that is neither a runner list nor an
- * exempted prose cell is a violation; a CLI argument that is neither a string
- * literal nor the one spec-driven form is a violation. The known-bad spellings
- * are never enumerated — the good set is admitted and everything else is refused.
+ * exempted prose cell is a violation; a reference to `createAvailabilityChecker`
+ * that is not a classified direct call, a plain import, its definition or a
+ * `typeof` is a violation, and so is a call argument that is neither a string
+ * literal nor the bound command-spec form. The known-bad spellings are never
+ * enumerated — the good set is admitted and everything else is refused.
  *
  * RIVAL CONSIDERED (the issue's): generate the docs tables from the registries.
  * Rejected — `docs/language-coverage.md` interleaves prose in the same cells it
@@ -44,7 +46,8 @@ import {
 	TOOL_COMMAND_SPECS,
 	TOOL_EXECUTION_POLICY,
 } from "../../clients/tool-policy.js";
-import { censusSourceFiles, parseRoot } from "../support/ast-census.js";
+import type { SgNode } from "@ast-grep/napi";
+import { censusSourceFiles, parseNodes } from "../support/ast-census.js";
 import {
 	assertNonEmptyScan,
 	auditRegistry,
@@ -155,7 +158,7 @@ describe("Tool registry parity (#5418)", () => {
 				.filter(([cli]) => !installerIds.has(cli))
 				.map(([cli, files]) => ({
 					key: cli,
-					detail: `${cli} probed by ${[...files].sort().join(", ")}`,
+					detail: `${cli} probed by ${[...files].sort((a, b) => a.localeCompare(b)).join(", ")}`,
 				}));
 			expect(
 				problems,
@@ -183,9 +186,7 @@ describe("Tool registry parity (#5418)", () => {
 
 /**
  * The CLIs a dispatch runner probes through `createAvailabilityChecker`, with
- * the files that probe each one, plus every argument the scanner could not
- * classify (shape 69: an alias, an indirect call, a value through another
- * binding must red, never be skipped).
+ * the files that probe each one, plus every reference the classifier refused.
  */
 function runnerCliCommands(): {
 	names: Map<string, Set<string>>;
@@ -200,38 +201,113 @@ function runnerCliCommands(): {
 	);
 	for (const { file, source } of readWalkedFiles(files)) {
 		const relative = path.relative(ROOT, file).split(path.sep).join("/");
-		for (const call of parseRoot(source).findAll({
-			rule: { pattern: "createAvailabilityChecker($$$)" },
-		})) {
-			const [argument] =
-				call
-					.field("arguments")
-					?.children()
-					.filter((node) => node.isNamed()) ?? [];
-			if (!argument) {
-				problems.push(
-					`${relative}: createAvailabilityChecker with no argument`,
-				);
-				continue;
-			}
-			if (argument.kind() === "string") {
-				const cli = JSON5.parse<string>(argument.text());
-				const seen = names.get(cli) ?? new Set<string>();
-				seen.add(relative);
-				names.set(cli, seen);
-				continue;
-			}
-			// The one non-literal form: the id-keyed checker built from a
-			// TOOL_COMMAND_SPECS entry. Its CLI is `spec.command`, and the
-			// command-spec parity check above owns that population.
-			if (argument.text() === "spec.command") continue;
-			problems.push(
-				`${relative}: unclassified createAvailabilityChecker argument ${argument.text()}`,
-			);
+		const result = classifyAvailabilityProbes(source, relative);
+		problems.push(...result.problems);
+		for (const cli of result.clis) {
+			const seen = names.get(cli) ?? new Set<string>();
+			seen.add(relative);
+			names.set(cli, seen);
 		}
 	}
 	return { names, problems, scanned: files.length };
 }
+
+const CHECKER = "createAvailabilityChecker";
+const CHECKER_HOME = "clients/dispatch/runners/utils/runner-helpers.ts";
+
+/**
+ * Classify every reference to `createAvailabilityChecker` in one source file
+ * (shape 69: fail closed on the reference, not only on the argument).
+ *
+ * The population is every AST leaf whose text is exactly the name, so a comment
+ * never counts and a string that only quotes a call never counts, while an
+ * identifier, a member name or a bare `"createAvailabilityChecker"` key does.
+ * Admitted: a direct call with a bare callee whose first argument is a string
+ * literal (its CLI) or the command-spec form; a plain import specifier; the
+ * definition in its home file; `typeof` in a type position. Every other
+ * reference (an import-as alias, a const alias, a namespace member, a
+ * parenthesized callee, `.call`, a re-export) is a problem.
+ */
+function classifyAvailabilityProbes(
+	source: string,
+	relative: string,
+): { clis: string[]; problems: string[] } {
+	const clis: string[] = [];
+	const problems: string[] = [];
+	for (const leaf of parseNodes(source)) {
+		if (!leaf.isLeaf() || leaf.text() !== CHECKER) continue;
+		const parent = leaf.parent();
+		const at = `${relative}:${leaf.range().start.line + 1}`;
+		const isField = (name: string) =>
+			parent?.field(name)?.range().start.index === leaf.range().start.index;
+		if (parent?.kind() === "call_expression" && isField("function")) {
+			const verdict = classifyProbeArgument(parent);
+			if (typeof verdict === "string") clis.push(verdict);
+			else if (verdict === null) {
+				problems.push(
+					`${at}: unclassified ${CHECKER} argument ${parent.field("arguments")?.text() ?? "()"}`,
+				);
+			}
+			continue;
+		}
+		if (parent?.kind() === "import_specifier" && !parent.field("alias")) {
+			continue;
+		}
+		if (
+			parent?.kind() === "function_declaration" &&
+			isField("name") &&
+			relative === CHECKER_HOME
+		) {
+			continue;
+		}
+		if (parent?.kind() === "type_query") continue;
+		problems.push(
+			`${at}: unclassified reference to ${CHECKER} (${parent?.kind() ?? "root"}): ${parent?.text() ?? leaf.text()}`,
+		);
+	}
+	return { clis, problems };
+}
+
+/**
+ * A direct call's first argument: its CLI for a string literal, `true` for the
+ * command-spec form (the command-spec pointer test owns that population), or
+ * `null` for anything else. The spec form counts only where every `spec`
+ * binding in the enclosing function is `const spec = getToolCommandSpec(...)`,
+ * so a local object literal named `spec` is refused.
+ */
+function classifyProbeArgument(call: SgNode): string | true | null {
+	const [argument] =
+		call
+			.field("arguments")
+			?.children()
+			.filter((node) => node.isNamed()) ?? [];
+	if (argument?.kind() === "string")
+		return JSON5.parse<string>(argument.text());
+	if (argument?.text() !== "spec.command") return null;
+	let scope = call.parent();
+	while (scope && !FUNCTION_KINDS.has(String(scope.kind())))
+		scope = scope.parent();
+	if (!scope) return null;
+	const bindings = scope.findAll({
+		rule: {
+			kind: "variable_declarator",
+			has: { field: "name", regex: "^spec$" },
+		},
+	});
+	const fromSpecs = scope.findAll({
+		rule: { pattern: "const spec = getToolCommandSpec($$$)" },
+	});
+	return bindings.length > 0 && bindings.length === fromSpecs.length
+		? true
+		: null;
+}
+
+const FUNCTION_KINDS = new Set([
+	"function_declaration",
+	"function_expression",
+	"arrow_function",
+	"method_definition",
+]);
 
 /**
  * A CLI a runner probes that the installer registry has no entry for is a
@@ -241,8 +317,8 @@ function runnerCliCommands(): {
 const HOST_TOOLCHAIN =
 	"Host toolchain the project or image provides; pi-lens never installs a compiler, interpreter or shell.";
 
-const INSTALL_OWNED_BY_5410 =
-	"Install decision owned by #5410: the runner skips while the CLI is absent, and no installer entry exists today.";
+const NO_INSTALLER_ENTRY =
+	"No installer entry exists today and the runner skips while the CLI is absent; whether pi-lens installs it is an open install-opt-in decision with no owning issue.";
 
 const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
 	cl: HOST_TOOLCHAIN,
@@ -263,14 +339,13 @@ const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
 	fish_indent: HOST_TOOLCHAIN,
 	mix: HOST_TOOLCHAIN,
 	elixirc: HOST_TOOLCHAIN,
-	// The project's own detekt build (Gradle/Maven plugin) supplies this CLI; the
-	// installer registry has no detekt entry and the runner skips without it.
-	detekt: HOST_TOOLCHAIN,
+	detekt:
+		"Standalone detekt-cli the user installs (Homebrew, SDKMAN or the release archive); the installer registry has no detekt entry and the runner skips without it.",
 	// #5418's two rows: both runners skip while their CLI is absent, and the
 	// installer registry has no entry for either name (`typos-lsp` is the
 	// separate LSP server binary, not the `typos` CLI).
-	phpstan: INSTALL_OWNED_BY_5410,
-	typos: INSTALL_OWNED_BY_5410,
+	phpstan: NO_INSTALLER_ENTRY,
+	typos: NO_INSTALLER_ENTRY,
 };
 
 /**
@@ -280,55 +355,110 @@ const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
  */
 const COMMAND_SPEC_INSTALL_REASONS: Record<string, string> = {
 	"eslint->eslint":
-		"The runner resolves the project's own node_modules/.bin eslint first; pi-lens has no eslint installer entry, and that install decision is #5410's.",
-	"phpstan->phpstan": INSTALL_OWNED_BY_5410,
+		"The runner resolves the project's own node_modules/.bin eslint first; pi-lens has no eslint installer entry, and whether it should is an open install-opt-in decision.",
+	"phpstan->phpstan": NO_INSTALLER_ENTRY,
 };
 
 describe("Runner CLI scanner (#5418)", () => {
-	it("refuses a CLI argument that is not a literal or the spec form", () => {
-		// Shape 69: an alias, an indirect call and a value through another
-		// binding must reach the census as unclassified, not as a miss.
+	const FIXTURE = "clients/dispatch/runners/fixture.ts";
+	const IMPORT = `import { createAvailabilityChecker } from "./utils/runner-helpers.js";`;
+
+	// Shape 69: each spelling below reaches the probe without the bare call the
+	// first version matched (review r1 F1 planted every one and saw 11 passed).
+	it.each([
+		[
+			"an import-as alias",
+			`import { createAvailabilityChecker as cac } from "./utils/runner-helpers.js";\ncac("phantom");`,
+		],
+		[
+			"a const alias",
+			`${IMPORT}\nconst make = createAvailabilityChecker;\nmake("phantom");`,
+		],
+		[
+			"a namespace member",
+			`import * as h from "./utils/runner-helpers.js";\nh.createAvailabilityChecker("phantom");`,
+		],
+		[
+			"a parenthesized callee",
+			`${IMPORT}\n(createAvailabilityChecker)("phantom");`,
+		],
+		[
+			"a .call indirection",
+			`${IMPORT}\ncreateAvailabilityChecker.call(null, "phantom");`,
+		],
+		[
+			"a local spec object",
+			`${IMPORT}\nfunction f() { const spec = { command: "phantom" }; return createAvailabilityChecker(spec.command); }`,
+		],
+		[
+			"a spec parameter",
+			`${IMPORT}\nfunction f(spec: { command: string }) { return createAvailabilityChecker(spec.command); }`,
+		],
+		[
+			"an identifier argument",
+			`${IMPORT}\nconst a = "phantom";\ncreateAvailabilityChecker(a, ".exe");`,
+		],
+		[
+			"a call argument",
+			`${IMPORT}\nconst get = () => "phantom";\ncreateAvailabilityChecker(get(), ".exe");`,
+		],
+		[
+			"a member argument",
+			`${IMPORT}\nconst holder = { cli: "phantom" };\ncreateAvailabilityChecker(holder.cli, ".exe");`,
+		],
+		[
+			"a re-export",
+			`export { createAvailabilityChecker } from "./utils/runner-helpers.js";`,
+		],
+		[
+			"a quoted key",
+			`import * as h from "./utils/runner-helpers.js";\nh["createAvailabilityChecker"]("phantom");`,
+		],
+	])("refuses %s", (_label, source) => {
+		const { clis, problems } = classifyAvailabilityProbes(source, FIXTURE);
+		expect(problems).toHaveLength(1);
+		expect(clis).toEqual([]);
+	});
+
+	it("admits the literal call, the command-spec form and typeof", () => {
 		expect(
-			cliProblems(`
-				const a = "phantom";
-				createAvailabilityChecker(a, ".exe");
-				const get = () => "phantom";
-				createAvailabilityChecker(get(), ".exe");
-				const holder = { cli: "phantom" };
-				createAvailabilityChecker(holder.cli, ".exe");
-			`),
-		).toHaveLength(3);
+			classifyAvailabilityProbes(
+				`${IMPORT}
+				const phantom = createAvailabilityChecker("phantom", ".exe");
+				type Checker = ReturnType<typeof createAvailabilityChecker>;
+				function byId(toolId: string) {
+					const spec = getToolCommandSpec(toolId);
+					if (!spec) return null;
+					return createAvailabilityChecker(spec.command);
+				}`,
+				FIXTURE,
+			),
+		).toEqual({ clis: ["phantom"], problems: [] });
+	});
+
+	it("admits the definition only in its home file", () => {
+		const source =
+			"export function createAvailabilityChecker(command: string) {}";
+		expect(classifyAvailabilityProbes(source, CHECKER_HOME).problems).toEqual(
+			[],
+		);
+		expect(classifyAvailabilityProbes(source, FIXTURE).problems).toHaveLength(
+			1,
+		);
 	});
 
 	it("counts neither a comment nor a string that only quotes the call", () => {
 		expect(
-			cliProblems(
+			classifyAvailabilityProbes(
 				`
 				// createAvailabilityChecker("phantom")
 				const prose = 'createAvailabilityChecker("phantom")';
 			`,
+				FIXTURE,
 			),
-		).toEqual([]);
+		).toEqual({ clis: [], problems: [] });
 	});
 });
-
-function cliProblems(source: string): string[] {
-	const problems: string[] = [];
-	for (const call of parseRoot(source).findAll({
-		rule: { pattern: "createAvailabilityChecker($$$)" },
-	})) {
-		const [argument] =
-			call
-				.field("arguments")
-				?.children()
-				.filter((node) => node.isNamed()) ?? [];
-		if (argument?.kind() === "string" || argument?.text() === "spec.command") {
-			continue;
-		}
-		problems.push(argument?.text() ?? "<none>");
-	}
-	return problems;
-}
 
 // ---------------------------------------------------------------------------
 // Docs surfaces
@@ -445,7 +575,7 @@ function splitAtDepthZero(text: string): string[] {
 const DOC_FILES = fs
 	.readdirSync(path.join(ROOT, "docs"))
 	.filter((name) => name.endsWith(".md"))
-	.sort()
+	.sort((a, b) => a.localeCompare(b))
 	.map((name) => `docs/${name}`);
 
 /** One doc file's text, read fresh so no check inherits another's content. */
