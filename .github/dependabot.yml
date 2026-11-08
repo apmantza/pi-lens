@@ -43,11 +43,13 @@ updates:
           - "*"
 
   - package-ecosystem: github-actions
-    # The composite action under .github/actions pins the same actions/cache SHA
+    # The composite actions under .github/actions pin the same actions/cache SHA
     # as ci.yml; tests/config/action-pin-split.test.ts reds when a bump reaches
-    # only one of them (#4358).
+    # only one of them (#4358). Every composite that pins an action is listed;
+    # tests/config/dependabot-groups.test.ts derives the list from the tree (#5409).
     directories:
       - /
+      - /.github/actions/fetch-verified
       - /.github/actions/tool-tree-cache
     schedule:
       interval: weekly
