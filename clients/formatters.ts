@@ -17,12 +17,12 @@ import * as path from "node:path";
 import { BoundedLruCache } from "./bounded-cache.js";
 import { createGenerationSource } from "./generation-guard.js";
 import {
-	findNearestContaining,
 	normalizeMapKey,
 	realpathOrResolve,
 	walkUpDirs,
 } from "./path-utils.js";
 import { resolveToolCwd } from "./tool-cwd.js";
+import { hasToolConfig } from "./tool-config-presence.js";
 import { resolveCargoPackageEdition } from "./cargo-manifest.js";
 import { resolveKtfmtGradleStyle } from "./gradle-ktfmt-style.js";
 import { resolvePhpCsFixerConfig } from "./php-cs-fixer-config.js";
@@ -873,7 +873,7 @@ export const FORMATTERS_WITH_EXPLICIT_CONFIG_CHECK = new Set<string>(
 // --- Formatter Definitions ---
 
 async function hasEditorConfig(cwd: string): Promise<boolean> {
-	return findNearestContaining(cwd, [".editorconfig"]) !== undefined;
+	return hasToolConfig("editorconfig", cwd);
 }
 
 async function indentationArgs(

@@ -167,6 +167,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/config/glossary-synonym-sweep.test.ts",
 	// #4312: literal runner references must resolve after registry renames.
 	"tests/config/runner-group-id-census.test.ts",
+	// #5408: walks clients/dispatch/runners for modules that read the
+	// filesystem or climb directories instead of asking the config-presence seam.
+	"tests/config/runner-config-presence-census.test.ts",
 	// #3968: walks the custom-server config fields and the LSP_SERVERS
 	// projection for config claims gating runtime behavior without fail-closed
 	// enum validation (the covers validation row is the pinned member).

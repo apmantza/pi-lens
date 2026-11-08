@@ -1,8 +1,8 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { pathsEqual } from "../../path-utils.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { findToolConfig, hasToolConfig } from "../../tool-config-presence.js";
 import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -16,13 +16,6 @@ import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 
 const detekt = createAvailabilityChecker("detekt", ".bat");
-
-const DETEKT_CONFIG_CANDIDATES = [
-	"detekt.yml",
-	".detekt.yml",
-	path.join("config", "detekt", "detekt.yml"),
-	path.join("detekt", "detekt.yml"),
-];
 
 // Rules that `detekt --auto-correct` rewrites deterministically. Detekt's
 // formatting ruleset wraps ktlint, whose rules are all autocorrectable; a
@@ -94,14 +87,6 @@ const DETEKT_FIXABLE_RULES = new Set<string>([
 	"RedundantVisibilityModifierRule",
 ]);
 
-export function findDetektConfig(cwd: string): string | undefined {
-	for (const candidate of DETEKT_CONFIG_CANDIDATES) {
-		const full = path.join(cwd, candidate);
-		if (fs.existsSync(full)) return full;
-	}
-	return undefined;
-}
-
 // detekt text output: /path/file.kt:10:5: Message [RuleId] — no severity token
 //
 // The level is therefore optional, and a finding that carries none is a warning
@@ -154,6 +139,7 @@ const detektRunner: RunnerDefinition = {
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	timeoutMs: 90_000,
 	skipTestFiles: false,
+	requiresConfig: (cwd) => hasToolConfig("detekt", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "detekt");
@@ -163,7 +149,7 @@ const detektRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const configPath = findDetektConfig(cwd);
+		const configPath = findToolConfig("detekt", cwd)?.file;
 		if (!configPath) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}

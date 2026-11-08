@@ -75,7 +75,7 @@ import {
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
 } from "./dispatch/runners/utils/runner-helpers.js";
-import { findDetektConfig } from "./dispatch/runners/detekt.js";
+import { findToolConfig } from "./tool-config-presence.js";
 import {
 	verdictRunnerIds,
 	checkedWholeFile,
@@ -838,7 +838,7 @@ async function tryDetektFix(
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
-	const configPath = findDetektConfig(cwd);
+	const configPath = findToolConfig("detekt", cwd)?.file;
 	if (!configPath) return 0;
 	if (!(await detektAutofixChecker.isAvailableAsync(cwd))) return 0;
 	const cmd = detektAutofixChecker.getCommand(cwd);

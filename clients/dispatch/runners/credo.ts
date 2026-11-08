@@ -1,7 +1,7 @@
 import * as path from "node:path";
-import * as fs from "node:fs";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -77,10 +77,6 @@ export function parseCredoJson(
 	}
 }
 
-function hasMixExs(cwd: string): boolean {
-	return fs.existsSync(path.join(cwd, "mix.exs"));
-}
-
 const credoRunner: RunnerDefinition = {
 	id: "credo",
 	appliesTo: ["elixir"],
@@ -90,7 +86,7 @@ const credoRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "credo");
 
-		if (!hasMixExs(cwd)) {
+		if (!hasToolConfig("mix", cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

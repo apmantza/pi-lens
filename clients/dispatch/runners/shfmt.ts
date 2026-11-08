@@ -1,5 +1,5 @@
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { findNearestContaining } from "../../path-utils.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -21,10 +21,6 @@ const shfmt = createAvailabilityChecker("shfmt", ".exe");
 // opt-in for the (non-error) format-diff warning, so out of the box shfmt only
 // reports genuine parse errors instead of nagging every unformatted shell file
 // against shfmt's built-in defaults (#211).
-function hasEditorConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".editorconfig"]) !== undefined;
-}
-
 /**
  * shfmt runner — checks shell script formatting.
  * Reports files that differ from shfmt's canonical output as a single warning.
@@ -100,7 +96,7 @@ const shfmtRunner: RunnerDefinition = {
 		// Needs formatting (exit 1). Only warn if the project opted into shfmt via
 		// .editorconfig — otherwise this nags on every shell write against shfmt's
 		// defaults (#211). Parse errors (above) are always reported.
-		if (!hasEditorConfig(cwd)) {
+		if (!hasToolConfig("editorconfig", cwd)) {
 			// #211: without project opt-in, do not nag about formatting. But
 			// shfmt DID exit 1 — differences exist — so this is "chose not to
 			// check", reported as skipped, never as a clean result (#1839).

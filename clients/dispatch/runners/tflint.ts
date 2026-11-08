@@ -2,8 +2,8 @@ import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { findToolConfig } from "../../tool-config-presence.js";
 import { getLinterPolicyForCwd } from "../../tool-policy.js";
-import { findNearestDirWithAnyBasename } from "../../workspace-topology.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -19,22 +19,6 @@ import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 
 const tflint = createAvailabilityChecker("tflint", ".exe");
-
-const TFLINT_CONFIG = ".tflint.hcl";
-
-/**
- * tflint resolves `.tflint.hcl` from its own working directory and never walks
- * parents (its only fallback is `~/.tflint.hcl`). We run it from the edited
- * file's directory, so a repo-root config would govern nothing beneath the
- * root unless we name it explicitly. Returns null when `TFLINT_CONFIG_FILE` is
- * set: `--config` outranks the env var in tflint's own precedence, so passing
- * one would override a deliberate choice.
- */
-function findTflintConfig(fileDir: string): string | null {
-	if (process.env.TFLINT_CONFIG_FILE) return null;
-	const dir = findNearestDirWithAnyBasename(fileDir, [TFLINT_CONFIG]);
-	return dir ? path.join(dir, TFLINT_CONFIG) : null;
-}
 
 interface TflintIssue {
 	rule: { name: string; severity: string };
@@ -121,7 +105,15 @@ const tflintRunner: RunnerDefinition = {
 			"--no-color",
 			`--filter=${path.basename(absPath)}`,
 		];
-		const configPath = findTflintConfig(fileDir);
+		// tflint resolves `.tflint.hcl` from its own working directory and never
+		// walks parents (its only fallback is `~/.tflint.hcl`). We run it from the
+		// edited file's directory, so a repo-root config would govern nothing
+		// beneath the root unless we name it. The seam is the same one the policy
+		// asks. `TFLINT_CONFIG_FILE` set means no `--config`: it outranks the env
+		// var in tflint's own precedence and would override a deliberate choice.
+		const configPath = process.env.TFLINT_CONFIG_FILE
+			? undefined
+			: findToolConfig("tflint", fileDir)?.file;
 		if (configPath) args.push(`--config=${configPath}`);
 
 		const result = await safeSpawnAsync(cmd, args, {

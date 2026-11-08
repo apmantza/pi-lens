@@ -109,6 +109,15 @@ describe("autofix policy ↔ capabilities ↔ lint policy consistency", () => {
 			const lint = getLinterPolicyForFile(c.file, c.ctx);
 			if (!autofix || !lint) continue; // some langs (rs/dart) have no lint policy
 			if (lint.gate === "mixed") continue;
+			// sql is the one deliberate split (#5408): the sqlfluff runner lints an
+			// unconfigured project on the ANSI dialect (#1937), so its lint label is
+			// smart-default, while `sqlfluff fix` writes and stays config-first.
+			if (
+				c.label === "sql" &&
+				lint.gate === "smart-default" &&
+				autofix.gate === "config-first"
+			)
+				continue;
 			expect(
 				autofix.gate,
 				`${c.label}: autofix ${autofix.gate} vs lint ${lint.gate}`,

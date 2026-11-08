@@ -458,7 +458,6 @@
 		"clients/agent-nudge.test.ts::clients/latency-logger": 1,
 		"clients/agent-nudge.test.ts::clients/read-guard-logger": 1,
 		"clients/ast-grep-client-rules-health.test.ts::clients/latency-logger": 1,
-		"clients/autofix-queue-entry.test.ts::clients/dispatch/runners/detekt": 1,
 		"clients/autofix-queue-entry.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,
 		"clients/autofix-queue-entry.test.ts::clients/file-utils": 1,
 		"clients/autofix-queue-entry.test.ts::clients/tool-agreement": 1,

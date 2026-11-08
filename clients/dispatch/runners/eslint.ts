@@ -131,13 +131,13 @@ const eslintRunner: RunnerDefinition = {
 	id: "eslint",
 	appliesTo: ["jsts"],
 	priority: PRIORITY.LINT_SECONDARY,
+	requiresConfig: (cwd) => hasEslintConfig(cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "eslint");
-		const userHasConfig = hasEslintConfig(cwd);
 
 		// Only run if project has an ESLint config.
-		if (!userHasConfig) {
+		if (!eslintRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
