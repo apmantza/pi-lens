@@ -1,5 +1,13 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentBehaviorClient } from "../../clients/agent-behavior-client.js";
+import {
+	AgentBehaviorClient,
+	toolCallProgress,
+} from "../../clients/agent-behavior-client.js";
+import { getGlobalPiLensLogDir } from "../../clients/probe-home-state.js";
+import { flushLatencyLog } from "../../clients/latency-logger.js";
+import { readNdjsonRows } from "../support/ndjson-rows.js";
 
 const FORT = "/repo/roblox-project/blender/build_fort.py";
 const OTHER_A = "/repo/src/server/LayoutStore.luau";
@@ -207,5 +215,50 @@ describe("AgentBehaviorClient edit counts", () => {
 		client.recordToolCall("edit", "C:\\Repo\\SRC\\File.ts");
 
 		expect(client.getEditCount("c:/repo/src/file.ts")).toBe(1);
+	});
+});
+
+describe("toolCallProgress", () => {
+	// The one unavailable result this module produces, read back from the real
+	// sink: arguments that cannot be serialized give the call no identity, and
+	// the bounded row is what says so.
+	it("records a call whose arguments cannot be serialized", async () => {
+		const previousTestMode = process.env.PI_LENS_TEST_MODE;
+		// latency.log writes are off under PI_LENS_TEST_MODE (#1742).
+		process.env.PI_LENS_TEST_MODE = "0";
+		const log = path.join(getGlobalPiLensLogDir(), "latency.log");
+		const fromByte = fs.existsSync(log) ? fs.statSync(log).size : 0;
+		try {
+			const circular: Record<string, unknown> = { path: FORT, offset: 1 };
+			circular.self = circular;
+			expect(toolCallProgress({ toolName: "edit", input: circular })).toEqual(
+				{},
+			);
+			expect(
+				toolCallProgress({
+					toolName: "edit",
+					input: circular,
+					isError: true,
+				}),
+			).toEqual({ failed: true });
+			await flushLatencyLog();
+			const { rows, skipped } = readNdjsonRows<{
+				phase?: string;
+				toolName?: string;
+				result?: string;
+			}>(log, fromByte);
+			expect(skipped).toBe(0);
+			expect(
+				rows
+					.filter((row) => row.phase === "behavior_args_unserializable")
+					.map((row) => ({ toolName: row.toolName, result: row.result })),
+			).toEqual([
+				{ toolName: "edit", result: "no-args-key" },
+				{ toolName: "edit", result: "no-args-key" },
+			]);
+		} finally {
+			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previousTestMode;
+		}
 	});
 });

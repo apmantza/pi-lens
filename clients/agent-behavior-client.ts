@@ -6,11 +6,13 @@
  *   write/edit of the same path counts as file knowledge)
  * - Thrashing: repeated identical tool calls with no progress
  *
- * No external dependencies — purely tracks tool call history.
+ * No third-party dependencies — purely tracks tool call history, and records
+ * its one unavailable result through the shared latency sink.
  */
 
 import { createHash } from "node:crypto";
 import { isMutatingToolName } from "./mutating-tool.js";
+import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 // --- Types ---
@@ -63,8 +65,11 @@ export interface ToolCallProgress {
 export function toolCallProgress(event: {
 	isError?: unknown;
 	input?: unknown;
+	toolName?: unknown;
 }): ToolCallProgress {
 	const failed = event.isError === true;
+	const toolName =
+		typeof event.toolName === "string" ? event.toolName : undefined;
 	if (event.input === undefined || event.input === null) {
 		return failed ? { failed: true } : {};
 	}
@@ -72,11 +77,17 @@ export function toolCallProgress(event: {
 	try {
 		serialized = JSON.stringify(event.input);
 	} catch {
-		// none: a cycle, a BigInt or a throwing getter leaves this call without
-		// an argument identity; the gap IS the return value, and the one caller
-		// reads it as the documented no-evidence case the tracker's own test
-		// pins ("counts a call whose progress the caller could not see as
-		// before"), so no result is dropped and nothing is left quiet.
+		// A cycle, a BigInt or a throwing getter in a tool's arguments: this call
+		// gets no argument identity, and the bounded row says so for the streams
+		// that read latency.log.
+		logLatency({
+			type: "phase",
+			phase: "behavior_args_unserializable",
+			filePath: "<unknown>",
+			toolName,
+			durationMs: 0,
+			result: "no-args-key",
+		});
 		return failed ? { failed: true } : {};
 	}
 	const argsKey = createHash("sha256").update(serialized).digest("hex");

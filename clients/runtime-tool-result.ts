@@ -2586,7 +2586,9 @@ export async function handleToolResult(
 		: agentBehaviorRecord(
 				event.toolName,
 				filePath,
-				toolCallProgress(event as { isError?: unknown; input?: unknown }),
+				toolCallProgress(
+					event as { isError?: unknown; input?: unknown; toolName?: unknown },
+				),
 			);
 	const syntheticWriteContent: Array<{ type: string; text?: string }> = [];
 	// #1590: one shared authoritative-content budget for every path this bash
