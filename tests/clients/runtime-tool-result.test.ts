@@ -4880,6 +4880,263 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		}
 	});
 
+	// #5434: the loop the report is about — a stuck retry of ONE failing edit.
+	// The tracker raises its warning on the third failed result, but the failed
+	// result returns before the warning append, so four identical failures
+	// rendered no 🔴 at all: the warning existed only in the return value nobody
+	// appended. The warning must arrive at the failure that crosses the
+	// threshold, and the tracker's once-per-streak guard must keep it from
+	// repeating on every later call of the loop.
+	it("renders THRASHING on the third identical failed edit", async () => {
+		const env = setupTestEnvironment("pi-lens-thrash-failed-loop-");
+		try {
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "diagnostics complete",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+				checkedClean: false,
+			});
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const behavior = new AgentBehaviorClient();
+			const base: Omit<Parameters<typeof handleToolResult>[0], "event"> = {
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				agentBehaviorRecord: (name, filePath, progress) =>
+					behavior.recordToolCall(name, filePath, progress),
+				formatBehaviorWarnings: (warnings) =>
+					behavior.formatWarnings(warnings as BehaviorWarning[]),
+			};
+			const filePath = createTempFile(
+				env.tmpDir,
+				"stuck-loop.ts",
+				"export const value = 0;\n",
+			);
+			// One argument set, repeated: the same failing edit resubmitted.
+			const failingInput = {
+				path: filePath,
+				edits: [
+					{
+						oldText: "export const value = 100;",
+						newText: "export const value = 200;",
+					},
+				],
+			};
+			const texts: string[] = [];
+			const errors: Array<boolean | undefined> = [];
+			for (let index = 0; index < 4; index++) {
+				const returned = await handleToolResult({
+					...base,
+					event: {
+						toolName: "edit",
+						input: failingInput,
+						content: [{ type: "text", text: "oldText not found" }],
+						isError: true,
+					},
+				});
+				texts.push(returned?.content.map((part) => part.text).join("\n") ?? "");
+				errors.push(returned?.isError);
+			}
+			expect(texts[0]).not.toContain("THRASHING");
+			expect(texts[1]).not.toContain("THRASHING");
+			expect(texts[2]).toContain("🔴 THRASHING — 3 consecutive `edit`");
+			expect(texts[3]).not.toContain("THRASHING");
+			// The append does not replace the host's own failure text, and every
+			// call stays a failed result for the host.
+			expect(texts[2]).toContain("oldText not found");
+			expect(errors).toEqual([true, true, true, true]);
+			// Nothing landed on the four attempts: the loop left the file untouched.
+			expect(fs.readFileSync(filePath, "utf8")).toBe(
+				"export const value = 0;\n",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5434 r2: a failed edit takes the early `return;` exits too — a mutation
+	// with no resolvable path, and one outside the session root or under
+	// node_modules — and those handed the host's bare error text back, so a
+	// stuck loop on such a call never rendered the warning the report is about.
+	// Each exit returns the host's own failed result plus the block only when a
+	// warning was raised; every other call, and every NON-failed call, keeps
+	// returning undefined (flipping a successful outside-root edit to an error
+	// would tell the agent a landed edit failed).
+	describe("early exits of a stuck edit loop (#5434)", () => {
+		const exits = [
+			["no path", () => ({ edits: [{ oldText: "a", newText: "b" }] })],
+			["an empty path", () => ({ path: "", edits: [] })],
+			[
+				"outside the session root",
+				(env: { tmpDir: string }) => ({
+					path: path.join(
+						env.tmpDir,
+						"..",
+						`thrash-5434-${process.pid}`,
+						"x.ts",
+					),
+					edits: [{ oldText: "a", newText: "b" }],
+				}),
+			],
+			[
+				"a node_modules path",
+				(env: { tmpDir: string }) => ({
+					path: path.join(env.tmpDir, "node_modules", "pkg", "index.js"),
+					edits: [{ oldText: "a", newText: "b" }],
+				}),
+			],
+		] as const;
+
+		const driveLoop = async (
+			env: { tmpDir: string },
+			input: unknown,
+			calls: number,
+			failed: boolean,
+		) => {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const behavior = new AgentBehaviorClient();
+			const returned: Array<
+				Awaited<ReturnType<typeof handleToolResult>> | undefined
+			> = [];
+			for (let index = 0; index < calls; index++) {
+				returned.push(
+					await handleToolResult({
+						getFlag: () => false,
+						dbg: () => {},
+						runtime,
+						cacheManager: new CacheManager(false),
+						resetLSPService: () => {},
+						agentBehaviorRecord: (name, filePath, progress) =>
+							behavior.recordToolCall(name, filePath, progress),
+						formatBehaviorWarnings: (warnings) =>
+							behavior.formatWarnings(warnings as BehaviorWarning[]),
+						event: {
+							toolName: "edit",
+							input,
+							content: [
+								{
+									type: "text",
+									text: failed ? "oldText not found" : "applied",
+								},
+							],
+							...(failed ? { isError: true } : {}),
+						},
+					}),
+				);
+			}
+			return returned;
+		};
+
+		it.each(exits)(
+			"renders THRASHING on the third identical failed edit with %s",
+			async (_label, makeInput) => {
+				const env = setupTestEnvironment("pi-lens-thrash-early-exit-");
+				try {
+					const returned = await driveLoop(env, makeInput(env), 4, true);
+					const texts = returned.map(
+						(result) =>
+							result?.content.map((part) => part.text).join("\n") ?? "",
+					);
+					expect(texts[2]).toContain("🔴 THRASHING — 3 consecutive `edit`");
+					// Original content first, still a failed result for the host.
+					expect(texts[2].startsWith("oldText not found")).toBe(true);
+					expect(returned[2]?.isError).toBe(true);
+					// No warning, nothing to add: the host's own result passes through.
+					expect([returned[0], returned[1]]).toEqual([undefined, undefined]);
+					// The streak latch holds: the fourth call repeats no THRASHING (it
+					// may carry the unlatched BLIND WRITE warning, accepted residual).
+					expect(texts[3]).not.toContain("THRASHING");
+				} finally {
+					env.cleanup();
+				}
+			},
+		);
+
+		it.each(exits)(
+			"leaves a successful identical edit with %s untouched",
+			async (_label, makeInput) => {
+				const env = setupTestEnvironment("pi-lens-thrash-early-exit-ok-");
+				try {
+					const returned = await driveLoop(env, makeInput(env), 4, false);
+					expect(returned).toEqual([
+						undefined,
+						undefined,
+						undefined,
+						undefined,
+					]);
+				} finally {
+					env.cleanup();
+				}
+			},
+		);
+	});
+
+	// The failed-result exit that production reaches after the host reported the
+	// retried edit as a success: pi-lens' own analysis threw. The warning raised
+	// on that call used to be dropped with the crash response.
+	it("renders the thrash warning on a pipeline-crash response", async () => {
+		const env = setupTestEnvironment("pi-lens-thrash-pipeline-crash-");
+		try {
+			vi.mocked(runPipeline).mockRejectedValue(new Error("boom"));
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const behavior = new AgentBehaviorClient();
+			const filePath = createTempFile(
+				env.tmpDir,
+				"stuck-crash.ts",
+				"export const value = 0;\n",
+			);
+			const retryInput = {
+				path: filePath,
+				edits: [
+					{
+						oldText: "export const value = 0;",
+						newText: "export const value = 1;",
+					},
+				],
+			};
+			const texts: string[] = [];
+			const errors: Array<boolean | undefined> = [];
+			for (let index = 0; index < 4; index++) {
+				// Disk bytes move between the calls, so each one earns its own
+				// pipeline dispatch (the dispatch claim keys on file+hash); the
+				// identical arguments are what keep the streak alive.
+				fs.writeFileSync(filePath, `export const value = ${index};\n`, "utf8");
+				const returned = await handleToolResult({
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: new CacheManager(false),
+					resetLSPService: () => {},
+					agentBehaviorRecord: (name, fp, progress) =>
+						behavior.recordToolCall(name, fp, progress),
+					formatBehaviorWarnings: (warnings) =>
+						behavior.formatWarnings(warnings as BehaviorWarning[]),
+					event: {
+						toolName: "edit",
+						input: retryInput,
+						content: [{ type: "text", text: "applied" }],
+					},
+				});
+				texts.push(returned?.content.map((part) => part.text).join("\n") ?? "");
+				errors.push(returned?.isError);
+			}
+			expect(errors).toEqual([true, true, true, true]);
+			expect(texts[0]).not.toContain("THRASHING");
+			expect(texts[1]).not.toContain("THRASHING");
+			expect(texts[2]).toContain("🔴 THRASHING — 3 consecutive `edit`");
+			expect(texts[2]?.startsWith("applied")).toBe(true);
+			expect(texts[3]).not.toContain("THRASHING");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	// #4623: the guard asks `mutating-tool.ts` which results are bash replays, and
 	// only the exact marker keeps a result out of the behavior history. A
 	// look-alike marker is still the host call it is: all three writes below
