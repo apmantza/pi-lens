@@ -90,15 +90,15 @@ function hasGlobMagic(text: string): boolean {
 async function isGlobEntry(resolved: string, cwd: string): Promise<boolean> {
 	const spelled = relativeInside(path.resolve(cwd), resolved) ?? resolved;
 	if (!hasGlobMagic(spelled)) return false;
-	try {
-		await fs.promises.lstat(resolved);
-		return false;
-	} catch (refusal) {
-		// none: `ENOENT`/`ENOTDIR` is the probe's answer ("absent"), not a failure
-		// to report; every other refusal answers "literal", the cautious side.
-		const code = (refusal as NodeJS.ErrnoException).code;
-		return code === "ENOENT" || code === "ENOTDIR";
-	}
+	return fs.promises.lstat(resolved).then(
+		() => false,
+		(refusal: NodeJS.ErrnoException) => {
+			// none: `ENOENT`/`ENOTDIR` is this probe's answer ("absent"), not a failure
+			// to report; every other refusal answers "literal", the cautious side, and
+			// the tool then reports the path itself.
+			return refusal.code === "ENOENT" || refusal.code === "ENOTDIR";
+		},
+	);
 }
 
 /** How one `paths` entry resolved. `refusal` is the reason a caller must be told
