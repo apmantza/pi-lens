@@ -172,7 +172,7 @@ export async function readPathsArgument(
 		 * own visited bound still does. */
 		filterOnly?: boolean;
 		/** The call's abort signal, handed to a glob's directory walk. */
-		signal?: AbortSignal;
+		signal?: AbortSignal | undefined;
 	},
 ): Promise<PathsRead> {
 	const base = options.cwd || ".";

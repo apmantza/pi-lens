@@ -116,7 +116,7 @@ export interface ExpandPathsEntryOptions {
 	 * shared scan ceiling every project walker already honours. */
 	maxVisited?: number;
 	/** The call's abort signal: a fired signal ends the walk with `aborted`. */
-	signal?: AbortSignal;
+	signal?: AbortSignal | undefined;
 }
 
 /**

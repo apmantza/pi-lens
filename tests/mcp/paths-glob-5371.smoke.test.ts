@@ -96,7 +96,7 @@ describe("pilens_ast_grep_search and pilens_symbol_search expand a `paths` glob 
 			arguments: { query: "v1", paths: ["many/**/*.ts"], cwd: projectDir },
 		});
 		const answer = textOf(res);
-		expect(answer).not.toContain("names more than");
+		expect(answer).not.toMatch(/more than \d+ files/);
 		expect(answer).not.toContain("no file matches");
 	}, 60_000);
 

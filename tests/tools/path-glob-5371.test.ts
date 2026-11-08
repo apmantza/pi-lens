@@ -306,6 +306,42 @@ describe("#5371 the shared `paths` reader expands a glob once for every tool", (
 		}
 	});
 
+	it("hands the reader's resolved entries to the lsp route unchanged (#5047 F2)", async () => {
+		// Recurrence: the lsp route re-ran the host resolver over an entry the
+		// reader had already resolved. The resolver folds a no-break space in a
+		// name to an ASCII space, so a file the glob matched became "path not
+		// found" on the second pass.
+		const env = setupTestEnvironment("pi-lens-5371-lsp-nbsp-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, "src"), { recursive: true });
+			fs.writeFileSync(
+				path.join(env.tmpDir, "src", "shot 1.ts"),
+				"export const a = 1;\n",
+			);
+			const tool = createLensDiagnosticsTool(
+				{ readCache: vi.fn(() => undefined) } as never,
+				() => env.tmpDir,
+				() => lspDouble() as never,
+			);
+			const result = await run(
+				tool,
+				{
+					source: "lsp",
+					mode: "full",
+					paths: ["src/*.ts"],
+					severity: "all",
+				},
+				env.tmpDir,
+			);
+			const answer = text(result);
+			expect(result.isError, answer).toBeFalsy();
+			expect(answer).not.toContain("path not found");
+			expect(result.details?.filesChecked).toBe(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("refuses a glob that matches nothing with a glob-specific message, never `path not found`", async () => {
 		const env = setupTestEnvironment("pi-lens-5371-nomatch-");
 		try {

@@ -12,8 +12,7 @@
  *       (`app/[id]`, `src/[id].ts`, `src/b{1,2}.ts`);
  * - F4  an ignored, gitignored or excluded directory is never returned for a
  *       glob that matches its name;
- * - F5  a cold call and a warm call return the same set (the tracked index is
- *       primed before the walk);
+ * - F5  lives in path-glob-5371-tracked-index.test.ts (it needs a real Git index);
  * - F6  literals and expanded entries are counted against ONE cap, in any order;
  * - F7  a filter-only caller (`symbol_search`) has no file-list cap;
  * - F8  the walk is bounded by visited entries, honours an abort signal, and a
@@ -39,7 +38,6 @@ import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
 import { MAX_PATHS_ENTRIES, readPathsArgument } from "../../tools/shared.js";
 import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
-import { execFileSync } from "../support/git-fixture-env.js";
 
 function mk(ws: string, files: readonly string[]): void {
 	for (const relative of files) {
@@ -207,32 +205,6 @@ describe("#5371 r2 the reader decides literal-vs-glob and the walk root by rule"
 				"src/real",
 			]);
 			expect(await names(env.tmpDir, ["*"])).toEqual([".gitignore", "src"]);
-		} finally {
-			env.cleanup();
-		}
-	});
-
-	// F5. Before: the walk never awaited `ensureTrackedIndex()`, so a tracked file
-	// that a `.gitignore` pattern also matched was dropped on a cold call and kept
-	// on a warm one — the answer depended on process warmth.
-	it("returns the same set cold and warm: a tracked-but-ignored file is kept (F5)", async () => {
-		const env = setupTestEnvironment("pi-lens-5371r2-tracked-", {
-			rootMarker: false,
-		});
-		try {
-			const cwd = env.tmpDir;
-			execFileSync("git", ["init", "-q"], { cwd });
-			execFileSync("git", ["config", "user.email", "t@example.com"], { cwd });
-			execFileSync("git", ["config", "user.name", "T"], { cwd });
-			mk(cwd, ["src/a.ts", "src/tracked.ts"]);
-			fs.writeFileSync(path.join(cwd, ".gitignore"), "src/tracked.ts\n");
-			execFileSync("git", ["add", "-f", "src/tracked.ts", "src/a.ts"], { cwd });
-			execFileSync("git", ["commit", "-q", "-m", "x"], { cwd });
-			_resetTrackedFilesCacheForTests();
-			const cold = await names(cwd, ["src/*.ts"]);
-			const warm = await names(cwd, ["src/*.ts"]);
-			expect(cold).toEqual(["src/a.ts", "src/tracked.ts"]);
-			expect(warm).toEqual(cold);
 		} finally {
 			env.cleanup();
 		}

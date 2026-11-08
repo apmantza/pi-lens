@@ -196,7 +196,8 @@
 		"support/tmp-root-teardown.test.ts": 2,
 		"support/vitest-setup-registry-teardown.test.ts": 2,
 		"tools/ast-grep-outline.test.ts": 2,
-		"tools/lsp-navigation-rename-first-open.test.ts": 2
+		"tools/lsp-navigation-rename-first-open.test.ts": 2,
+		"tools/path-glob-5371-tracked-index.test.ts": 5
 	},
 	"elapsed-time-assertion": {
 		"clients/actionable-warnings-bounds.test.ts": 1,

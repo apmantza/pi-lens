@@ -1725,6 +1725,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:tools/path-glob-5371-tracked-index.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"The cold-vs-warm tracked-index cell needs an index a real Git process wrote; a stub would restate the set the cell asserts.",
+	},
 	// 2026-10-15 (#4485): the cascade's silent-push wait, turn_end's registry
 	// peek and the expiry read each read a language-server client's publish
 	// state; a real server cannot be made to publish or stay silent on demand.
