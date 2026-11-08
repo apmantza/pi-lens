@@ -72,8 +72,11 @@ export function toolCallProgress(event: {
 	try {
 		serialized = JSON.stringify(event.input);
 	} catch {
-		// A circular or throwing getter: no argument identity, so the tracker
-		// keeps its pre-#5429 conservative reading for this call.
+		// none: a cycle, a BigInt or a throwing getter leaves this call without
+		// an argument identity; the gap IS the return value, and the one caller
+		// reads it as the documented no-evidence case the tracker's own test
+		// pins ("counts a call whose progress the caller could not see as
+		// before"), so no result is dropped and nothing is left quiet.
 		return failed ? { failed: true } : {};
 	}
 	const argsKey = createHash("sha256").update(serialized).digest("hex");
