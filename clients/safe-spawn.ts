@@ -43,7 +43,12 @@ import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
 import { compareOrdinal } from "./string-utils.js";
-import { spawnAbortScope } from "./spawn-abort-scope.js";
+import {
+	type SpawnCooldownIdentity,
+	spawnAbortScope,
+	spawnCooldownScope,
+} from "./spawn-abort-scope.js";
+import { noteSpawnTimeout } from "./spawn-timeout-cooldown.js";
 
 export interface SpawnResourceUsage {
 	sampleCount: number;
@@ -394,6 +399,14 @@ export interface SafeSpawnOptions {
 	matchWhileStreaming?: RegExp;
 	/** Optional stdin payload. Supplying it always writes and closes stdin. */
 	input?: string;
+	/**
+	 * Who pays when this spawn times out (#5413). A timeout of the spawn's own
+	 * budget arms the spawn-timeout cooldown for this identity. Omitted, the
+	 * runner scope the dispatcher entered applies (`spawnCooldownScope`),
+	 * except under `ignoreAmbientSignal`; `false` opts out (a probe, whose
+	 * slow answer is transient evidence, #1467).
+	 */
+	cooldown?: SpawnCooldownIdentity | false;
 	/**
 	 * Couple a long-lived, side-effecting child to this Node process. Registered
 	 * children are synchronously tree-killed during process exit/signals.
@@ -1770,8 +1783,12 @@ export async function safeSpawnAsync(
 		scopedSignal && callerSignal
 			? AbortSignal.any([scopedSignal, callerSignal])
 			: (scopedSignal ?? callerSignal);
+	// #5413: captured at call time, beside the abort scope it mirrors.
+	const cooldown =
+		options?.cooldown ??
+		(options?.ignoreAmbientSignal ? undefined : spawnCooldownScope.getStore());
 
-	return new Promise((resolve) => {
+	const result = await new Promise<SpawnResult>((resolve) => {
 		// Check for early abort
 		if (abortSignal?.aborted) {
 			const cause = new Error("Spawn aborted before start");
@@ -2815,6 +2832,25 @@ export async function safeSpawnAsync(
 			}
 		});
 	});
+	// #5413: a child that used up its OWN budget is negative evidence about the
+	// tool, so the next edit does not hand it another one. A budget a deadline
+	// cut short, or one gone before the child started, says nothing about it.
+	if (
+		cooldown &&
+		result.failure === "timeout" &&
+		timeout > 0 &&
+		timeout === configuredTimeout
+	) {
+		noteSpawnTimeout({
+			tool: cooldown.tool,
+			command,
+			subject: cooldown.subject,
+			phase: cooldown.phase,
+			durationMs: timeout,
+			...(result.timeoutTeardown && { teardown: result.timeoutTeardown }),
+		});
+	}
+	return result;
 }
 
 /**
@@ -2824,7 +2860,10 @@ export async function isCommandAvailableAsync(
 	command: string,
 ): Promise<boolean> {
 	const finder = process.platform === "win32" ? "where" : "which";
-	const result = await safeSpawnAsync(finder, [command], { timeout: 5000 });
+	const result = await safeSpawnAsync(finder, [command], {
+		timeout: 5000,
+		cooldown: false,
+	});
 	return result.status === 0 && !result.error;
 }
 
@@ -2835,7 +2874,10 @@ export async function findCommandAsync(
 	command: string,
 ): Promise<string | null> {
 	const finder = process.platform === "win32" ? "where" : "which";
-	const result = await safeSpawnAsync(finder, [command], { timeout: 5000 });
+	const result = await safeSpawnAsync(finder, [command], {
+		timeout: 5000,
+		cooldown: false,
+	});
 
 	if (result.status !== 0 || result.error) return null;
 

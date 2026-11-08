@@ -96,6 +96,7 @@ async function resolveVitePlusCommand(cwd: string): Promise<string | null> {
 	const version = await safeSpawnAsync("vp", ["--version"], {
 		timeout: 5000,
 		cwd,
+		cooldown: false,
 	});
 	return !version.error && version.status === 0 ? "vp" : null;
 }

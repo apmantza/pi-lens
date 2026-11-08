@@ -62,6 +62,9 @@ const FINITE_REASONS: Readonly<Record<string, string>> = {
 	// #5410: one resolver checker per registry tool id.
 	"clients/dispatch/runners/utils/runner-helpers.ts#resolveVendorToolCommand:b63e705b":
 		"keys are tool ids with a TOOL_COMMAND_SPECS entry (finite, ~20; an id without a spec stores nothing); values are checkers whose per-cwd latches the session generation clears",
+	// #5413: the collect-later run in flight per (project, runner).
+	"clients/dispatch/collect-later-tier.ts#observeRunnerLatency:d31792ad":
+		"keys are (project root, runner id) pairs with a collect-later run in flight: runner ids are the dispatch registry's closed vocabulary and roots are the session's own; drainQueue deletes the key when the run and its queue settle, and resetObservedRunnerLatency clears it at session_start",
 	"clients/session-scope.ts#toStartReason:e2e4ae2a":
 		"#3612 `sessionStores`: keyed by store name, one entry per `defineSessionStore` call at module load (a second declaration of a name throws); four stores today, and the session-scope sweep pins every name",
 };

@@ -735,6 +735,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a clean-tree HEAD move is a real git checkout; a stubbed git cannot produce the delta the look publishes",
 	},
+	// #5413: the cooldown is armed by safeSpawnAsync's own timeout, so the
+	// child that uses up its budget is real.
+	"real-process-spawn:clients/dispatch/runner-spawn-timeout-cooldown.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a real child must use up its own spawn budget: the cooldown is armed by safeSpawnAsync's own timeout and teardown, which no double reproduces",
+	},
 	"real-process-spawn:clients/dispatch/runners/ast-grep-playground-verify.test.ts":
 		{
 			detector: "real-process-spawn",

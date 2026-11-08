@@ -8,13 +8,17 @@
  * command's ability to COMPLETE. Total post-edit cost: 52-60 seconds.
  *
  * This seam is the shared negative evidence:
- * - `noteSpawnTimeout` records that a resolved command timed out, in which
- *   phase, and what wrapper kind it had; every record emits one bounded
- *   latency row so the session stays auditable.
- * - `isInSpawnTimeoutCooldown` is consulted by every invocation path for that
- *   command — verification, autofix, and lint — so ONE wedged executable
- *   consumes at most ONE bounded failure budget per edit (invariant 1) and a
- *   timeout/skipped result is never re-reported as clean (invariant 4).
+ * - `noteSpawnTimeout` records that a spawn timed out, in which phase, and
+ *   what wrapper kind it had; every record emits one bounded latency row so
+ *   the session stays auditable. Its one production caller is
+ *   `safeSpawnAsync` (#5413), for a spawn that carries a cooldown identity:
+ *   the runner scope the dispatcher enters around `runner.run` (keyed by
+ *   runner id) or the autofix lane's explicit option (keyed by command).
+ * - `isInSpawnTimeoutCooldown` is consulted before a runner runs (dispatcher,
+ *   by runner id), before an availability probe and before an autofix spawn
+ *   (by command), so ONE wedged executable consumes at most ONE bounded
+ *   failure budget per lane per session (invariant 1) and a timeout/skipped
+ *   result is never re-reported as clean (invariant 4).
  *
  * Durability contract: SESSION. A hot loop of edits must not retry (a wedged
  * `.cmd` shim does not heal between edits), but a new session may — the
@@ -67,6 +71,12 @@ export interface NoteSpawnTimeoutInput {
 	tool: string;
 	/** The RESOLVED command (absolute where the caller knows it). */
 	command: string;
+	/**
+	 * What the cooldown is keyed by, when it is not `command` (#5413): a
+	 * runner id. A runner often spawns a launcher (`node`, `java`, `mix`), and
+	 * keying a launcher would cool every tool it launches.
+	 */
+	subject?: string;
 	/** Which lane paid the budget: "availability" | "autofix" | "lint" | ... */
 	phase: string;
 	/** The timeout budget that was consumed, when known. */
@@ -98,7 +108,7 @@ function cooldownKey(command: string): string {
 }
 
 export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
-	const key = cooldownKey(input.command);
+	const key = cooldownKey(input.subject ?? input.command);
 	timedOutByCommand.set(key, {
 		tool: input.tool,
 		command: input.command,
@@ -127,6 +137,7 @@ export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
 		status: "cooldown_armed",
 		metadata: {
 			command: input.command,
+			...(input.subject !== undefined && { subject: input.subject }),
 			wrapperKind: wrapperKindOf(input.command),
 			timeoutPhase: input.phase,
 			...(input.durationMs !== undefined && {
