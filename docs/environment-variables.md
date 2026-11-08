@@ -146,6 +146,16 @@ Minimum wall-clock budget (ms) for every dispatch runner; the effective timeout
 is `max(runner budget, floor)`. **Default:** `0` (no floor). Also settable via
 the `dispatch.runnerTimeoutFloorMs` config key, which wins when both are set.
 
+### `PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS`
+
+Per-request ceiling (ms) for language-server navigation requests: definition,
+references, hover, signature help, symbols, rename, code actions and call
+hierarchy. A server that accepts a request and never replies stops holding the
+tool call after this window. Each timeout counts in the `lsp-nav-request-timeout`
+degradation ledger, keyed by method and file, and writes an
+`lsp_nav_request_timeout` latency entry. A value that is missing, not numeric or
+not positive falls back to the default. **Default:** 10 seconds (`10000`).
+
 ### `PI_LENS_WORD_INDEX_MEMO_BACKSTOP_MS`
 
 Backstop (ms) for the word index's serialized memo, which is also its
