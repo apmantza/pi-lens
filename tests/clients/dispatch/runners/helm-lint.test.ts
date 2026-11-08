@@ -10,6 +10,10 @@ import {
 } from "../../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../../clients/degradation-ledger.js";
+import {
 	capFastExitSpawnResult,
 	capKilledSpawnResult,
 	capThenAbortedSpawnResult,
@@ -225,6 +229,7 @@ describe("helm-lint runner", () => {
 	// #5411: a timeout is the budget ending the run, the same `did-not-run` skip
 	// swiftlint and every other seam runner reports; it was `failed/timeout`.
 	it("reports a timed-out lint as a did-not-run skip, like every seam runner", async () => {
+		resetDegradationLedger();
 		const filePath = createChart(workspace, "values.yaml");
 		safeSpawnAsync.mockResolvedValue({
 			status: null,
@@ -242,6 +247,13 @@ describe("helm-lint runner", () => {
 			skipFault: "did-not-run",
 			diagnostics: [],
 		});
+		// The skip leaves the one bounded `runner-empty-result` row the seam
+		// writes for every tool that did not run, naming the tool.
+		expect(
+			getDegradationSummary()
+				.find((entry) => entry.kind === "runner-empty-result")
+				?.latestReasons.map((entry) => entry.subject),
+		).toEqual(["helm-lint"]);
 	});
 
 	it.each([

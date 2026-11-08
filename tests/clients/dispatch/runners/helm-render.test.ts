@@ -15,6 +15,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../../clients/degradation-ledger.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import {
 	capKilledOnWindowsSpawnResult,
@@ -430,6 +434,7 @@ describe("helm-render failure semantics", () => {
 	// #5411: a timeout is the budget ending the run: the `did-not-run` skip every
 	// seam runner reports, never a broken chart and no longer `failed/timeout`.
 	it("reports a timed-out render as a did-not-run skip, never as a broken chart", async () => {
+		resetDegradationLedger();
 		const chart = installChart("valid-chart");
 		optIn({ helm: { renderValidation: { enabled: true } } });
 		stubSpawns({
@@ -456,6 +461,11 @@ describe("helm-render failure semantics", () => {
 			skipFault: "did-not-run",
 			diagnostics: [],
 		});
+		expect(
+			getDegradationSummary()
+				.find((entry) => entry.kind === "runner-empty-result")
+				?.latestReasons.map((entry) => entry.subject),
+		).toEqual(["helm-render"]);
 	});
 
 	it.each([
