@@ -107,7 +107,9 @@ describe("eslint runner", () => {
 		const env = setupTestEnvironment("pi-lens-eslint-fallback-stop-");
 		try {
 			const filePath = path.join(env.tmpDir, "sample.ts");
-			fs.writeFileSync(filePath, "const unused = 1;\n");
+			// #5416: not an unused variable: that class is a blocker whichever tool
+			// reports it, and this case is about a run that only warns.
+			fs.writeFileSync(filePath, "console.log(1);\n");
 
 			safeSpawnAsync.mockResolvedValue({
 				error: null,
@@ -117,11 +119,11 @@ describe("eslint runner", () => {
 						filePath,
 						messages: [
 							{
-								ruleId: "no-unused-vars",
+								ruleId: "no-console",
 								severity: 1,
-								message: "'unused' is assigned a value but never used.",
+								message: "Unexpected console statement.",
 								line: 1,
-								column: 7,
+								column: 1,
 							},
 						],
 						errorCount: 0,

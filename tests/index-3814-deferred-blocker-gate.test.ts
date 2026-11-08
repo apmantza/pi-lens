@@ -546,6 +546,45 @@ describe("#3814: deferred blocking findings gate the commit", () => {
 		expect((await host.gate()).block).toBe(true);
 	});
 
+	it("lists one finding once when an inline lane and a deferred lane both blocked on it", async () => {
+		// Recurrence (#5416): the record merged on tool + rule, so the language
+		// server's `Pyright:reportUndefinedVariable` and the slow `pyright` CLI's
+		// `reportUndefinedVariable` for one name were two blockers, and the STOP
+		// read "2 issue(s)" for one problem.
+		inlineBlocker = {
+			...blockingDiagnostic(1),
+			id: "lsp:reportUndefinedVariable:1",
+			tool: "lsp",
+			rule: "Pyright:reportUndefinedVariable",
+			message: "alpha is not defined",
+		};
+		runnerAnswer = async (editedPath) =>
+			path.resolve(editedPath) !== path.resolve(filePath)
+				? await answersClean()
+				: {
+						status: "succeeded",
+						diagnostics: [
+							{
+								...blockingDiagnostic(1),
+								id: "pyright-reportUndefinedVariable",
+								tool: "pyright",
+								rule: "reportUndefinedVariable",
+								message: "alpha is not defined",
+							},
+						],
+						semantic: "blocking",
+					};
+		const host = await startSession();
+		await host.turnStart();
+		await host.edit();
+		await settle();
+		const verdict = await host.gate();
+		const delivered = await host.turnEnd();
+		expect(verdict.block).toBe(true);
+		expect(verdict.reason).toContain("1 issue(s) must be fixed");
+		expect(delivered.split("alpha is not defined")).toHaveLength(2);
+	});
+
 	for (const order of ["gate-first", "turn-end-first"] as const) {
 		it(`delivers the finding once at the delivering turn end, ${order}`, async () => {
 			// Recurrence (r1 M2): with the gate recording first, the replay section and

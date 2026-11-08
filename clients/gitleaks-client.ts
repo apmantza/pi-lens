@@ -438,7 +438,15 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 					scannedAt,
 				};
 			},
-			fail: (failure) => ({ ...EMPTY_RESULT, ...failure }),
+			// Only master's three fields: the failure's raw parts (stderr, status,
+			// outcome) stay in the ledger lane, never in a result that is cached
+			// on success (round-1 review of #5440, F1).
+			fail: ({ success, scannedAt, summary }) => ({
+				...EMPTY_RESULT,
+				success: success === true,
+				scannedAt,
+				summary,
+			}),
 		});
 	}
 }
