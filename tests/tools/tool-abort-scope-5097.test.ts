@@ -35,8 +35,10 @@ interface Plan {
 	/**
 	 * What each `--json`/`--json=compact` call does, by call index (0-based).
 	 * `fail` exits 2 with a stderr line, a real failure that is not the abort.
+	 * `kill` SIGKILLs the test host's direct child, as the OOM killer would: a
+	 * spawn-level failure (`failure: "signal"`) that is not the abort either.
 	 */
-	json?: Array<"pass" | "park" | "linger" | "fail">;
+	json?: Array<"pass" | "park" | "linger" | "fail" | "kill">;
 	/** `outline`: park, or pass straight to the real binary. */
 	outline?: "pass" | "park";
 	/**
@@ -105,6 +107,15 @@ if (args.includes("--update-all")) {
 const mode = (plan.json ?? [])[counter("json")] ?? "pass";
 if (mode === "fail") {
 	process.stderr.write("wrapper: scan failed, not an abort\n");
+	process.exit(2);
+}
+if (mode === "kill") {
+	let top = process.pid;
+	for (let pid = process.ppid; pid > 1 && String(pid) !== host; ) {
+		top = pid;
+		pid = Number(spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim() || 0);
+	}
+	process.kill(top, "SIGKILL");
 	process.exit(2);
 }
 if (mode === "park") parkUntilReleased("json.pid");
@@ -525,34 +536,40 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(text).toMatch(/some files may already be rewritten/);
 		});
 
+		const KILLED = /^Error: Process killed by signal: SIGKILL/;
+
 		/**
 		 * N2 (#5097 r3): `aborted` is admitted only for the spawn's own abort or
-		 * the re-check. A real failure on a scan or precheck keeps its stderr and
-		 * the pattern hint; a flag set on any failure would hide both.
+		 * the re-check. A real failure on a scan or precheck keeps its text and
+		 * the pattern hint; a flag set on any failure would hide both. The pattern
+		 * path reports an exit failure with no `failure` kind, so its cases use
+		 * `kill`, which sets one; the rule path sets `cli-failure` on either.
 		 */
 		async function expectRealFailure(
 			name: string,
 			plan: Plan,
 			params: Record<string, unknown>,
+			own = /^Error: wrapper: scan failed, not an abort/,
 		): Promise<void> {
 			const root = setup(name, plan);
 			const result = await run("ast_grep_replace", params, root, null);
 			const text = result.content?.[0]?.text ?? "";
 			expect(result.isError).toBe(true);
-			expect(text).toMatch(/^Error: wrapper: scan failed, not an abort/);
+			expect(text).toMatch(own);
 			expect(text).toMatch(/\n\nHint: /);
 			expect(text).not.toMatch(/operation aborted|write had started/);
 			expect(rewritten(root)).toBe(0);
 		}
 
 		it("pattern dry run: a real failure keeps its text and hint", () =>
-			expectRealFailure("dry-fail", { json: ["fail"] }, REPLACE));
+			expectRealFailure("dry-fail", { json: ["kill"] }, REPLACE, KILLED));
 
 		it("pattern precheck: a real failure keeps its text and hint", () =>
 			expectRealFailure(
 				"precheck-fail",
-				{ json: ["fail"] },
+				{ json: ["kill"] },
 				{ ...REPLACE, apply: true },
+				KILLED,
 			));
 
 		it("rule dry run: a real failure keeps its text and hint", () =>
