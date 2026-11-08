@@ -387,50 +387,6 @@ describe("published manifest carries no devDependencies", () => {
 
 	const packTarballOnce = createTarballMemo(tmp);
 
-	// #5365: the same real tarball is the only population that answers "does
-	// every file a published script imports ship with it". `npm run check` runs
-	// `scripts/check-extensions.mjs` over the SOURCE tree, so it resolves an
-	// import of an unpacked file against the checkout and passes; every earlier
-	// member of that shape (#4789, #2626, #3409, #5364) reached CI's install leg
-	// first and was pinned by one `files[]` assertion afterwards. The Unit shards
-	// run this case, so the next one stops here.
-	// 180 s like the cases above: the first one in the run pays the real
-	// `npm pack` through `packTarballOnce`.
-	it(
-		"every relative import a packed file names is itself packed (#5365)",
-		{ timeout: 180_000 },
-		() => {
-			const { filename } = packTarballOnce();
-			const unpacked = path.join(tmp, "unpacked-imports");
-			fs.mkdirSync(unpacked, { recursive: true });
-			execFileSync("tar", ["-xzf", filename, "-C", "unpacked-imports"], {
-				cwd: tmp,
-			});
-			const pkgRoot = path.join(unpacked, "package");
-			const packedPaths = (
-				fs.readdirSync(pkgRoot, { recursive: true }) as string[]
-			)
-				.map((entry) => entry.split(path.sep).join("/"))
-				.filter((entry) => fs.statSync(path.join(pkgRoot, entry)).isFile());
-			// Dead-sweep floor, same shape as the #3219 case: 1184 files packed on
-			// 2026-09-25, half, rounded down.
-			assertNonEmptyScan("packed files", packedPaths.length, 592);
-			// 147 packed .js/.mjs/.cjs files measured on 4.4.10; half, rounded down.
-			// Without this a pack that produced no JavaScript at all would let the
-			// resolution rule pass over an empty population.
-			assertNonEmptyScan(
-				"packed JavaScript files",
-				packedPaths.filter((entry) => /\.c?m?js$/.test(entry)).length,
-				73,
-			);
-			expect(
-				packedImportResolutionViolations(packedPaths, (entry) =>
-					fs.readFileSync(path.join(pkgRoot, entry), "utf8"),
-				),
-			).toEqual([]);
-		},
-	);
-
 	// #4561 review r2 (Greptile P2 on LOW-6): the retry branch had no failing
 	// witness — with and without the `rmSync` the suite reported the same
 	// counts, and only the error text differed. This drives the failure through
@@ -574,6 +530,33 @@ describe("published manifest carries no devDependencies", () => {
 					fs.readFileSync(path.join(pkgRoot, entry), "utf8"),
 				),
 			).toEqual([]);
+			// #5365: the same unpacked tarball answers "does every file a published
+			// script imports ship with it". `npm run check` runs
+			// `scripts/check-extensions.mjs` over the SOURCE tree, so it resolves an
+			// import of an unpacked file against the checkout and passes; every
+			// earlier member of that shape (#4789, #2626, #3409, #5364) reached CI's
+			// install leg first and was pinned by one `files[]` assertion afterwards.
+			// 147 packed .js/.mjs/.cjs files measured on 4.4.10; half, rounded down.
+			assertNonEmptyScan(
+				"packed JavaScript files",
+				packedPaths.filter((entry) => /\.c?m?js$/.test(entry)).length,
+				73,
+			);
+			const specifiers = { relative: 0 };
+			expect(
+				packedImportResolutionViolations(
+					packedPaths,
+					(entry) => fs.readFileSync(path.join(pkgRoot, entry), "utf8"),
+					specifiers,
+				),
+			).toEqual([]);
+			// 1650 relative specifiers examined on 4.4.10; half, rounded down. A
+			// walker that reads nothing would otherwise pass over every file.
+			assertNonEmptyScan(
+				"relative specifiers examined",
+				specifiers.relative,
+				825,
+			);
 			for (const entry of [
 				"dist/index.js",
 				"dist/mcp/cli.js",

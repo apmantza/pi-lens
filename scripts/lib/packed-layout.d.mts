@@ -8,4 +8,5 @@ export function packedLayoutViolations(
 export function packedImportResolutionViolations(
 	packedPaths: readonly string[],
 	readText: (packedPath: string) => string,
+	tally?: { relative: number },
 ): string[];

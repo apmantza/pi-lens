@@ -73,6 +73,8 @@ describe("packedImportResolutionViolations (#5365)", () => {
 			(p) => files[p] ?? "",
 		);
 	}
+	const missing = (file: string, spec = "./missing.js") =>
+		`${file}: import "${spec}" is not in the package`;
 
 	it("accepts a pack whose every relative specifier names a packed file", () => {
 		expect(
@@ -100,47 +102,70 @@ describe("packedImportResolutionViolations (#5365)", () => {
 				"scripts/lib/other.mjs": "export const o = 1;",
 			}),
 		).toEqual([
-			'scripts/analyze-pi-lens-logs.mjs: import "./lib/latency-stats.mjs" is not in the package',
+			missing("scripts/analyze-pi-lens-logs.mjs", "./lib/latency-stats.mjs"),
 		]);
 	});
 
 	it.each([
 		["an export-from", 'export * from "./missing.js";'],
+		["an export-as-namespace", 'export * as ns from "./missing.js";'],
+		["a named export-from", 'export { a } from "./missing.js";'],
 		["a side-effect import", 'import "./missing.js";'],
+		["a minified side-effect import", 'import"./missing.js";'],
 		["a dynamic import", 'await import("./missing.js");'],
+		["a template-literal dynamic import", "await import(`./missing.js`);"],
 		["a require", 'const m = require("./missing.js");'],
+		["a module.require", 'const m = module.require("./missing.js");'],
 		["a require.resolve", 'require.resolve("./missing.js");'],
+		["an import.meta.resolve", 'import.meta.resolve("./missing.js");'],
+		["an escaped specifier", 'await import("\\u002e/missing.js");'],
 	])("flags %s of an unpacked file", (_name, text) => {
 		expect(
 			checkImports({ "scripts/a.mjs": text, "package.json": "{}" }),
-		).toEqual(['scripts/a.mjs: import "./missing.js" is not in the package']);
+		).toEqual([missing("scripts/a.mjs")]);
 	});
 
-	it("resolves an extensionless and a directory specifier inside the pack", () => {
+	// F2 (PR #5396 review): Node ESM resolves a specifier to exactly one file.
+	// `import "./mod"` with only mod.mjs present throws ERR_MODULE_NOT_FOUND, so
+	// a gate that guesses an extension, an index file or a `.json` passes an
+	// import that fails in the installed package.
+	it.each([
+		["an extensionless file", "./lib/mod", { "scripts/lib/mod.mjs": "" }],
+		["a directory", "./lib/dir", { "scripts/lib/dir/index.js": "" }],
+		[
+			"a trailing-slash directory",
+			"./lib/dir/",
+			{ "scripts/lib/dir/index.js": "" },
+		],
+		["a bare directory dot", ".", { "scripts/index.js": "" }],
+		["an extensionless json", "./lib/data", { "scripts/lib/data.json": "" }],
+		["a query suffix", "./lib/mod.mjs?v=1", { "scripts/lib/mod.mjs": "" }],
+	])("does not guess: %s is not a packed file", (_name, spec, extra) => {
 		expect(
 			checkImports({
-				"scripts/a.mjs":
-					'import { x } from "./lib/mod";\nimport { d } from "./lib/dir";',
-				"scripts/lib/mod.mjs": "export const x = 1;",
-				"scripts/lib/dir/index.js": "export const d = 1;",
+				"scripts/a.mjs": `import { x } from "${spec}";`,
+				...extra,
+			}),
+		).toEqual([missing("scripts/a.mjs", spec)]);
+	});
+
+	it("resolves a specifier to its exact packed path, through . and ..", () => {
+		expect(
+			checkImports({
+				"dist/mcp/cli.js": 'import "../chunk-A.js";\nimport "./../mcp/x.js";',
+				"dist/chunk-A.js": "export {};",
+				"dist/mcp/x.js": "export {};",
 			}),
 		).toEqual([]);
-		// A TS twin is not a published twin: the pack ships no .ts file, so an
-		// import that only resolves to one is exactly the #5365 defect.
-		expect(
-			checkImports({
-				"scripts/a.mjs": 'import { x } from "./lib/mod";',
-				"scripts/lib/mod.ts": "export const x = 1;",
-			}),
-		).toEqual(['scripts/a.mjs: import "./lib/mod" is not in the package']);
 	});
 
-	it("ignores bare specifiers and specifiers inside comments", () => {
+	it("ignores bare and node: specifiers and specifiers inside comments", () => {
 		expect(
 			checkImports({
 				"dist/index.js": [
 					'import { readFileSync } from "node:fs";',
 					'import { a } from "@modelcontextprotocol/sdk/client/index.js";',
+					'import b from "minimatch";',
 					'// a doc comment: from "../providers/cline/cline-auth"',
 					"/* block: import './missing.js' */",
 				].join("\n"),
@@ -149,54 +174,190 @@ describe("packedImportResolutionViolations (#5365)", () => {
 		).toEqual([]);
 	});
 
-	it("flags a computed specifier as a failure instead of passing it", () => {
-		// #4314: 4.4.2 shipped `import(["./lsp", "capabilities.js"].join("/"))`, a
-		// file no build ever produced. An argument the check cannot read as a
-		// literal is a finding, never a silent skip.
+	// F3 (PR #5396 review; Greptile zxj, CodeRabbit 0T0): a string must not
+	// hide an import, and a comment-looking sequence inside a string or a regex
+	// literal must not swallow one. These are the review's probes.
+	it.each([
+		[
+			"a `//` inside a string literal",
+			'const u = "https://x.y"; await import("./missing.js");',
+		],
+		[
+			"a glob string whose `/*` and `*/` bracket the import",
+			'const a = "dist/*"; await import("./missing.js"); const b = "**/*.js";',
+		],
+		[
+			"a regex literal holding a quote",
+			'const r = /"/; const a = "dist/*"; await import("./missing.js"); const b = "x*/";',
+		],
+		[
+			"a template literal with a `//`",
+			'const t = `//`; await import("./missing.js");',
+		],
+	])("sees an import after %s", (_name, text) => {
 		expect(
-			checkImports({
-				"dist/index.js": 'import(["./lsp", "capabilities.js"].join("/"));',
-				"package.json": "{}",
-			}),
-		).toEqual([
-			'dist/index.js: computed dynamic import (["./lsp", "capabilities.js"].join("/"))',
-		]);
-		expect(
-			checkImports({
-				"dist/index.js": "const n = x; await import(`./lsp/${n}.js`);",
-				"package.json": "{}",
-			}),
-		).toEqual(["dist/index.js: computed dynamic import (`./lsp/${n}.js`)"]);
+			checkImports({ "scripts/a.mjs": text, "package.json": "{}" }),
+		).toEqual([missing("scripts/a.mjs")]);
 	});
 
-	it("admits the computed arguments that name no packed file, and no other", () => {
-		// Every computed `import`/`require` argument in the 4.4.10 pack, as the
-		// probe over `npm pack --dry-run` lists them. None names a `./`-shaped
-		// path: `pathToFileURL(…).href` loads a package `createRequire` resolved,
-		// `install-selftest.mjs` probes absolute `file://` URLs inside the install
-		// and bare package specifiers, and `warm-loader-cache.mjs` resolves through
-		// jiti. The admission is a SHAPE, not a file: a relative-shaped computed
-		// specifier in the very same file is still a finding.
+	it("does not read import text that sits inside a string", () => {
+		expect(
+			checkImports({
+				"scripts/a.mjs": "const s = 'import x from \"./missing.js\"';",
+				"package.json": "{}",
+			}),
+		).toEqual([]);
+	});
+
+	// F1 (PR #5396 review): the deleted #4314 pin refused every `import(...)`
+	// argument that was not a string literal or a `pathToFileURL(...)` call. These
+	// are its cases; the first version of this gate passed all but one.
+	it.each([
+		['["lsp", "capabilities.js"].join("/")'],
+		['["..", "lsp", "c.js"].join("/")'],
+		['path.join(dir, "lsp", "capabilities.js")'],
+		['dir + "/lsp/c.js"'],
+		['"." + "/lsp/c.js"'],
+		["someUnknown"],
+		['["./lsp", "capabilities.js"].join("/")'],
+		["`./lsp/${n}.js`"],
+		['new URL("./x.js", import.meta.url)'],
+	])("flags the computed dynamic import(%s)", (argument) => {
+		expect(
+			checkImports({
+				"dist/index.js": `import(${argument});`,
+				"package.json": "{}",
+			}),
+		).toEqual([`dist/index.js: computed import(${argument})`]);
+	});
+
+	it.each([
+		["require", "require(name)"],
+		["require.resolve", "require.resolve(name)"],
+		["import.meta.resolve", "import.meta.resolve(name)"],
+	])("flags a computed %s argument", (kind, call) => {
+		expect(
+			checkImports({ "dist/index.js": `${call};`, "package.json": "{}" }),
+		).toEqual([`dist/index.js: computed ${kind}(name)`]);
+	});
+
+	it("admits only the pathToFileURL(<identifier>) form, anywhere", () => {
+		// esbuild renames a colliding import `pathToFileURL2`, `pathToFileURL3`.
 		expect(
 			checkImports({
 				"dist/index.js":
-					"await import(pathToFileURL2(entry).href);\nawait import(pathToFileURL(mod).href);",
-				"scripts/install-selftest.mjs":
-					"await import(url.href);\nawait import(installerUrl);\nrequire.resolve(spec);\nrequire.resolve(`${tool.packageName}/package.json`);",
-				"scripts/warm-loader-cache.mjs":
-					"await import(url);\nawait jiti.import(entry, { default: true });\npathToFileURL(require.resolve(specifier)).href;",
+					"await import(pathToFileURL(entry).href);\nawait import(pathToFileURL2(entry).href);\nawait import(pathToFileURL3(entry));",
 				"package.json": "{}",
+			}),
+		).toEqual([]);
+		// Not the same shape: an argument that builds a path is the #4314 bug
+		// wearing the admitted callee.
+		expect(
+			checkImports({
+				"dist/index.js": [
+					'await import(pathToFileURL(dir + "/lsp/c.js").href);',
+					'await import(pathToFileURL(["lsp", "c.js"].join("/")).href);',
+					"await import(pathToFileURL(entry).href + suffix);",
+					"await import(other(entry).href);",
+				].join("\n"),
+				"package.json": "{}",
+			}),
+		).toEqual([
+			"dist/index.js: computed import(other(entry).href)",
+			'dist/index.js: computed import(pathToFileURL(["lsp", "c.js"].join("/")).href)',
+			'dist/index.js: computed import(pathToFileURL(dir + "/lsp/c.js").href)',
+			"dist/index.js: computed import(pathToFileURL(entry).href + suffix)",
+		]);
+	});
+
+	it("admits the install scripts' computed arguments by exact file and text, and no other", () => {
+		// Each is a bare package specifier or an absolute `file://` URL the
+		// script resolves at run time inside the installed package. The
+		// admission is the (file, call, argument text) triple.
+		expect(
+			checkImports({
+				"scripts/install-selftest.mjs": [
+					"await import(url.href);",
+					"await import(installerUrl);",
+					"require.resolve(spec);",
+					"require.resolve(`${tool.packageName}/package.json`);",
+					"require.resolve(specifier);",
+				].join("\n"),
+				"scripts/warm-loader-cache.mjs":
+					"import.meta.resolve(specifier);\nrequire.resolve(specifier);\nawait import(url);",
+				"package.json": "{}",
+			}),
+		).toEqual([]);
+		// The same text in another file, a different argument in an admitted
+		// file, and a different call over an admitted argument are all findings.
+		expect(
+			checkImports({
+				"scripts/other.mjs": "await import(url.href);",
+				"scripts/install-selftest.mjs":
+					"await import(url.hrefs);\nrequire(spec);",
+				"package.json": "{}",
+			}),
+		).toEqual([
+			"scripts/install-selftest.mjs: computed import(url.hrefs)",
+			"scripts/install-selftest.mjs: computed require(spec)",
+			"scripts/other.mjs: computed import(url.href)",
+		]);
+	});
+
+	it.each([
+		["an absolute path", "/etc/x.js"],
+		["a file: URL", "file:///x.js"],
+		["an https: URL", "https://x.test/a.js"],
+		["a data: URL", "data:text/javascript,0"],
+	])("flags a literal %s: it names nothing in the package", (_name, spec) => {
+		expect(
+			checkImports({
+				"scripts/a.mjs": `await import("${spec}");`,
+				"package.json": "{}",
+			}),
+		).toEqual([missing("scripts/a.mjs", spec)]);
+	});
+
+	it("fails a packed JavaScript file it cannot parse", () => {
+		expect(
+			checkImports({
+				"scripts/a.mjs": "import {{{ from",
+				"package.json": "{}",
+			}),
+		).toEqual([expect.stringMatching(/^scripts\/a\.mjs: does not parse/)]);
+	});
+
+	it("reads .cjs as CommonJS and .js and .mjs as ESM, as a type:module package does", () => {
+		// Top-level `return` is legal in CommonJS only; a module parse refuses it.
+		expect(
+			checkImports({
+				"scripts/a.cjs": 'if (x) return;\nrequire("./b.cjs");',
+				"scripts/b.cjs": "module.exports = 1;",
+				"scripts/d.js": 'import "./b.cjs";',
 			}),
 		).toEqual([]);
 		expect(
 			checkImports({
-				"scripts/install-selftest.mjs":
-					"await import(url.href);\nawait import(`./probes/${name}.js`);",
-				"package.json": "{}",
+				"scripts/c.js": "if (x) return;",
+				"scripts/e.mjs": "return;",
 			}),
 		).toEqual([
-			"scripts/install-selftest.mjs: computed dynamic import (`./probes/${name}.js`)",
+			expect.stringMatching(/^scripts\/c\.js: does not parse/),
+			expect.stringMatching(/^scripts\/e\.mjs: does not parse/),
 		]);
+	});
+
+	it("tallies the relative specifiers it examined", () => {
+		const tally = { relative: 0 };
+		packedImportResolutionViolations(
+			["scripts/a.mjs", "scripts/b.mjs"],
+			(p) =>
+				p === "scripts/a.mjs"
+					? 'import "./b.mjs";\nimport "node:fs";\nawait import("./gone.js");'
+					: "export {};",
+			tally,
+		);
+		expect(tally).toEqual({ relative: 2 });
 	});
 
 	it("fails a pack list that carries no JavaScript file", () => {

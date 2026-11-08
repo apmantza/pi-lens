@@ -7,11 +7,13 @@
  * unbundled tree through `new URL("./clients/…", import.meta.url)`.
  *
  * Pure (paths and a text reader in, findings out) so a unit test can pin it on
- * fixed lists; tests/packaging-bundled-only.test.ts runs it over
- * `npm pack --dry-run --json`, and scripts/check-packed-layout.mjs over the
- * real tarball in CI's production-install lane.
+ * fixed lists. Its only importers are tests/scripts/packed-layout.test.ts (fixed
+ * lists) and tests/packaging-pack-manifest.test.ts (the real tarball), so the
+ * `oxc-parser` devDependency below is always installed where it runs; no
+ * published file and no install-leg script imports this module.
  */
 import * as path from "node:path";
+import { parseSync, Visitor } from "oxc-parser";
 
 export const UNBUNDLED_PREFIXES = ["dist/clients/", "dist/tools/"];
 
@@ -20,17 +22,9 @@ export const UNBUNDLED_PREFIXES = ["dist/clients/", "dist/tools/"];
 const RELATIVE_REFERENCE =
 	/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\bnew\s+URL\(\s*)(["'`])(\.{1,2}\/[^"'`]+)\1/g;
 
-// The same, minus `new URL` (a runtime asset path, see
-// `packedImportResolutionViolations`), plus the CommonJS forms.
-const PACKED_RELATIVE_SPECIFIER =
-	/(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire(?:\.resolve)?\s*\(\s*)(["'`])(\.{1,2}\/[^"'`]+)\1/g;
-
 // The shipped JavaScript population: every one of these files' relative
 // specifiers has to land on another member of the pack list.
 const JS_SUFFIXES = [".js", ".mjs", ".cjs"];
-
-// Opening of an `import(…)` / `require(…)` call, for the computed-argument pass.
-const CALL_WITH_ARG = /\b(?:import|require(?:\.resolve)?)\s*\(\s*/g;
 
 function isUnbundled(packedPath) {
 	return UNBUNDLED_PREFIXES.some((prefix) => packedPath.startsWith(prefix));
@@ -62,28 +56,71 @@ export function packedLayoutViolations(packedPaths, readText) {
 }
 
 /**
+ * Computed `import()` / `require()` arguments the live pack carries, each
+ * admitted by exact (file, call, argument text) and nothing broader. Every one
+ * is a bare package specifier or an absolute `file://` URL the script resolves
+ * at run time inside the INSTALLED package, so none names a packed path. A
+ * rename or a new computed argument in these files reds the gate on purpose:
+ * the author reads the argument and adds a row with its reason.
+ */
+const COMPUTED_ADMISSIONS = [
+	// install-selftest.mjs probes the installed package's dependencies.
+	["scripts/install-selftest.mjs", "import", "url.href"], // file:// URL of a resolved dependency
+	["scripts/install-selftest.mjs", "import", "installerUrl"], // file:// URL inside the install
+	["scripts/install-selftest.mjs", "require.resolve", "spec"], // bare package specifier
+	[
+		"scripts/install-selftest.mjs",
+		"require.resolve",
+		"`${tool.packageName}/package.json`", // bare package name
+	],
+	["scripts/install-selftest.mjs", "require.resolve", "specifier"], // bare package specifier
+	// warm-loader-cache.mjs resolves jiti and the extension entry.
+	["scripts/warm-loader-cache.mjs", "import.meta.resolve", "specifier"], // bare package specifier
+	["scripts/warm-loader-cache.mjs", "require.resolve", "specifier"], // bare package specifier
+	["scripts/warm-loader-cache.mjs", "import", "url"], // file:// URL it just resolved
+].map(([file, kind, argument]) => `${file}\n${kind}\n${argument}`);
+
+// A literal specifier outside the package: a Node builtin or an npm package
+// name (optionally scoped, optionally with a subpath). A colon anywhere else
+// (`file:`, `https:`, `data:`) or a leading slash does not match.
+const PACKAGE_SPECIFIER =
+	/^(?:node:[\w/.-]+|(?:@[\w.~-]+\/)?[\w~-][\w.~-]*(?:\/\S*)?)$/;
+
+const PATH_TO_FILE_URL = /^pathToFileURL\d*$/;
+
+/**
  * #5365: every relative specifier a packed file names must be in that SAME
  * list. `scripts/check-extensions.mjs` run from the source tree resolves
  * against the source tree, so a packaged file that imports a file `files[]`
  * omits passes locally and fails only in CI's install leg; every occurrence of
  * that shape (#4789, #2626, #3409, #5364) was caught there and pinned by one
  * hand-written `files[]` assertion per file afterwards. This is the generic
- * version: one pass over the pack list, every shipped file, four specifier
- * forms.
+ * version: each packed file is PARSED (oxc-parser, so a string, a comment or a
+ * regex literal can neither hide nor fake an import) and every module
+ * reference in it is judged.
  *
- * `new URL("./…", import.meta.url)` is deliberately absent: that form names a
- * runtime asset path (a worker, a grammar, a wasm), the bundle rewrites its
- * base, and `packedLayoutViolations` already owns it. A computed specifier is
- * judged by what it names: text that carries a `./` or `../` reference is a
- * relative import the check cannot resolve, so it is a finding (#4314 shipped
- * `import(["./lsp", "capabilities.js"].join("/"))`, a file no build produces);
- * text that names no relative path at all is not a reference to a packed file.
- * All 15 computed `import`/`require` arguments in the 4.4.10 pack (a probe over
- * `npm pack --dry-run`) are of the second kind: `pathToFileURL(<resolved>).href`
- * loads a package `createRequire` resolved, `install-selftest.mjs` probes
- * absolute `file://` URLs inside the install, `warm-loader-cache.mjs` resolves a
- * bare package specifier, and `$$$ARGS` is esbuild's own placeholder inside a
- * bundled doc string.
+ * Known-good forms, everything else is a finding:
+ * - a literal specifier that is relative: it must equal a packed path exactly
+ *   (Node ESM guesses no extension, index file or `.json`; a query suffix,
+ *   a trailing slash or `.` is not a file);
+ * - a literal that is a Node builtin or an npm package name: out of scope;
+ * - `import(pathToFileURL(<identifier>)[.href])`, the form the deleted #4314
+ *   pin admitted (esbuild renames a colliding import `pathToFileURL2`);
+ * - the exact (file, call, argument) rows of `COMPUTED_ADMISSIONS`.
+ * A computed argument, a literal outside the package (`file:`, `/abs`), and a
+ * file that does not parse are findings. #4314 shipped
+ * `import(["./lsp", "capabilities.js"].join("/"))`, a file no build produces.
+ *
+ * Forms read: `import … from`, `export … from`, `import()`, `require()`,
+ * `module.require()`, `require.resolve()`, `import.meta.resolve()` (the parser
+ * also reads the minified `import"./x"` and escaped spellings). Not read:
+ * `new URL("./…", import.meta.url)` (a runtime asset path whose base the bundle
+ * rewrites; `packedLayoutViolations` only checks its `dist/clients|tools`
+ * prefix, not that the target exists), a `createRequire(…)` result bound to
+ * another name, and `Worker` path strings.
+ *
+ * `tally.relative` (optional out-parameter) receives the number of relative
+ * specifiers examined, so the real-tarball case can floor a dead matcher.
  *
  * Pure like `packedLayoutViolations`, so `tests/scripts/packed-layout.test.ts`
  * pins it on fixed lists while `tests/packaging-pack-manifest.test.ts` runs it
@@ -91,9 +128,15 @@ export function packedLayoutViolations(packedPaths, readText) {
  *
  * @param {readonly string[]} packedPaths  package-relative POSIX paths
  * @param {(packedPath: string) => string} readText
+ * @param {{ relative: number }} [tally]
  * @returns {string[]} one line per finding, sorted
  */
-export function packedImportResolutionViolations(packedPaths, readText) {
+export function packedImportResolutionViolations(
+	packedPaths,
+	readText,
+	tally = { relative: 0 },
+) {
+	tally.relative = 0;
 	const shipped = packedPaths.filter((p) =>
 		JS_SUFFIXES.some((s) => p.endsWith(s)),
 	);
@@ -101,82 +144,104 @@ export function packedImportResolutionViolations(packedPaths, readText) {
 	const packed = new Set(packedPaths);
 	const findings = new Set();
 	for (const packedPath of shipped) {
-		// Comments blanked: the bundle carries esbuild banner comments and doc
-		// comments that quote import paths their target never shipped with
-		// (dist/index.js quotes `from "../providers/cline/cline-auth"`). Strings
-		// are kept, because the specifier is the evidence.
-		const text = readText(packedPath)
-			.replace(/\/\/[^\r\n]*/g, "")
-			.replace(/\/\*[\s\S]*?\*\//g, "");
-		for (const match of text.matchAll(PACKED_RELATIVE_SPECIFIER)) {
-			const specifier = match[2];
-			// A template with an interpolation is not a literal path: the computed
-			// pass below reports it, once.
-			if (specifier.includes("${")) continue;
-			const base = relativeTarget(packedPath, specifier).replace(/\/+$/, "");
-			const candidates = [
-				base,
-				...[".js", ".mjs", ".cjs", ".json"].map((ext) => base + ext),
-				...["/index.js", "/index.mjs", "/index.cjs"].map((idx) => base + idx),
-			];
-			if (!candidates.some((candidate) => packed.has(candidate))) {
-				findings.add(
-					`${packedPath}: import "${specifier}" is not in the package`,
+		const text = readText(packedPath);
+		// package.json is `"type": "module"`: Node reads .js and .mjs as ESM and
+		// only .cjs as CommonJS.
+		const parsed = parseSync(packedPath, text, {
+			sourceType: packedPath.endsWith(".cjs") ? "commonjs" : "module",
+			preserveParens: false,
+		});
+		const syntax = parsed.errors.find((e) => e.severity === "Error");
+		if (syntax) {
+			findings.add(`${packedPath}: does not parse (${syntax.message})`);
+			continue;
+		}
+		const literal = (specifier) => {
+			if (isRelative(specifier)) {
+				tally.relative += 1;
+				const target = path.posix.normalize(
+					path.posix.join(path.posix.dirname(packedPath), specifier),
 				);
-			}
-		}
-		for (const computed of computedSpecifiers(text)) {
-			findings.add(`${packedPath}: computed dynamic import (${computed})`);
-		}
+				if (packed.has(target)) return;
+			} else if (PACKAGE_SPECIFIER.test(specifier)) return;
+			findings.add(
+				`${packedPath}: import "${specifier}" is not in the package`,
+			);
+		};
+		const argument = (kind, node) => {
+			const value = stringValue(node);
+			if (value !== null) return literal(value);
+			const source = node ? text.slice(node.start, node.end) : "";
+			const argumentText = source.replace(/\s+/g, " ");
+			if (kind === "import" && isPathToFileUrl(node)) return;
+			if (
+				COMPUTED_ADMISSIONS.includes(`${packedPath}\n${kind}\n${argumentText}`)
+			)
+				return;
+			findings.add(`${packedPath}: computed ${kind}(${argumentText})`);
+		};
+		new Visitor({
+			ImportDeclaration: (node) => literal(node.source.value),
+			ExportAllDeclaration: (node) => literal(node.source.value),
+			ExportNamedDeclaration: (node) => {
+				if (node.source) literal(node.source.value);
+			},
+			ImportExpression: (node) => argument("import", node.source),
+			CallExpression: (node) => {
+				const kind = referenceCall(node.callee);
+				if (kind !== null) argument(kind, node.arguments[0]);
+			},
+		}).visit(parsed.program);
 	}
-	return [...findings].sort((a, b) => a.localeCompare(b));
+	return [...findings].sort();
 }
 
-/** Package-relative POSIX target a relative specifier names, unresolved. */
-function relativeTarget(fromPath, specifier) {
-	return path.posix.normalize(
-		path.posix.join(path.posix.dirname(fromPath), specifier),
+function isRelative(specifier) {
+	return (
+		specifier === "." ||
+		specifier === ".." ||
+		specifier.startsWith("./") ||
+		specifier.startsWith("../")
 	);
 }
 
-/**
- * The arguments of `import(…)` / `require(…)` calls that name a `./`-shaped
- * path without being a plain string literal. Balanced scan (a nested call's
- * `)` is part of the argument), bounded at 300 characters.
- */
-function* computedSpecifiers(text) {
-	for (const match of text.matchAll(CALL_WITH_ARG)) {
-		const arg = readArgument(text, match.index + match[0].length);
-		const literal = /^("|'|`)([^"'`]*)\1$/.exec(arg);
-		if (literal && !literal[2].includes("${")) continue;
-		if (!arg.includes("./") && !arg.includes("../")) continue;
-		yield arg;
-	}
+/** The value of a string literal or an interpolation-free template, else null. */
+function stringValue(node) {
+	if (node?.type === "Literal" && typeof node.value === "string")
+		return node.value;
+	if (node?.type === "TemplateLiteral" && node.expressions.length === 0)
+		return node.quasis[0].value.cooked ?? null;
+	return null;
 }
 
-/** The balanced text of a call argument starting at `from`. */
-function readArgument(text, from) {
-	let depth = 1;
-	let quote = null;
-	let out = "";
-	for (let i = from; i < text.length && depth > 0 && out.length < 300; i++) {
-		const char = text[i];
-		if (quote !== null) {
-			out += char;
-			if (char === quote && text[i - 1] !== "\\") quote = null;
-			continue;
-		}
-		if (char === '"' || char === "'" || char === "`") {
-			quote = char;
-			out += char;
-			continue;
-		}
-		if (char === "(") depth += 1;
-		else if (char === ")") {
-			depth -= 1;
-			if (depth === 0) break;
-		}
-		out += char;
-	}
-	return out.trim();
+/** `pathToFileURL(<identifier>)`, optionally `.href`: a path the caller resolved. */
+function isPathToFileUrl(node) {
+	const call =
+		node.type === "MemberExpression" &&
+		!node.computed &&
+		node.property.name === "href"
+			? node.object
+			: node;
+	return (
+		call.type === "CallExpression" &&
+		call.callee.type === "Identifier" &&
+		PATH_TO_FILE_URL.test(call.callee.name) &&
+		call.arguments.length === 1 &&
+		call.arguments[0].type === "Identifier"
+	);
+}
+
+/** The call kinds that load a module by specifier, else null. */
+function referenceCall(callee) {
+	if (callee.type === "Identifier")
+		return callee.name === "require" ? "require" : null;
+	if (callee.type !== "MemberExpression" || callee.computed) return null;
+	const { object, property } = callee;
+	if (object.type === "Identifier" && object.name === "require")
+		return property.name === "resolve" ? "require.resolve" : null;
+	if (object.type === "Identifier" && object.name === "module")
+		return property.name === "require" ? "module.require" : null;
+	if (object.type === "MetaProperty" && object.meta.name === "import")
+		return property.name === "resolve" ? "import.meta.resolve" : null;
+	return null;
 }
