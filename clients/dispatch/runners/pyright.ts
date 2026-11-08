@@ -13,6 +13,7 @@ import {
 	augmentPythonEnvironment,
 	detectPythonEnvironment,
 } from "../../python-environment.js";
+import { hashText } from "../../finding-identity.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
@@ -22,7 +23,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { faultSkip } from "../types.js";
+import { faultSkip, semanticFor } from "../types.js";
 import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
@@ -203,16 +204,26 @@ export function parsePyrightOutput(data: any, _filePath: string): Diagnostic[] {
 		// convert to (`range.start.line + 1`). `range` itself is omitted when
 		// pyright has nothing to point at, so both fall back to line 1.
 		const start = diag.range?.start;
+		const message = diag.message || "Type error";
+		const severity = normalizePyrightSeverity(diag.severity);
+		const line = (start?.line ?? 0) + 1;
 		diagnostics.push({
-			id: `pyright-${diag.rule || start?.line || "unknown"}`,
-			message: diag.message || "Type error",
+			// #5412: a rule-less finding (a syntax error, say) keys its id on its
+			// line and its message, as go vet's id does (`go-vet-<line>-<hash>`).
+			// A message-only id gave two identical messages on different lines one
+			// id, and the delta reads `Diagnostic.id` alone, so the second line was
+			// held back as already seen.
+			id: diag.rule
+				? `pyright-${diag.rule}`
+				: `pyright-${line}-${hashText(message)}`,
+			message,
 			filePath: diag.file || _filePath,
-			line: (start?.line ?? 0) + 1,
+			line,
 			column: (start?.character ?? 0) + 1,
-			severity: normalizePyrightSeverity(diag.severity),
+			severity,
 			// Blocking classification stays error-only — reviving the info tier
-			// must never widen what fails a turn.
-			semantic: diag.severity === "error" ? "blocking" : "warning",
+			// must never widen what fails a turn (`semanticFor`).
+			semantic: semanticFor(severity),
 			tool: "pyright",
 			rule: diag.rule,
 		});

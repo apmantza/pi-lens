@@ -7,7 +7,8 @@ message: >-
 note: |-
   [CWE-467]: Use of sizeof() on a Pointer Type [REFERENCES]
       - https://wiki.sei.cmu.edu/confluence/display/c/ARR01-C.+Do+not+apply+the+sizeof+operator+to+a+pointer+when+taking+the+size+of+an+array
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   match_sizeof_this:
     kind: sizeof_expression

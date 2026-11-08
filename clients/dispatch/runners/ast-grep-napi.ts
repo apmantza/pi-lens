@@ -50,6 +50,7 @@ import {
 	MAX_BLOCKING_RULE_COMPLEXITY,
 	type YamlRule,
 } from "./yaml-rule-parser.js";
+import { semanticFor } from "../types.js";
 
 const defaultUnsupportedLanguageLog = new Set<string>();
 const UNSUPPORTED_RULE_ID_SAMPLE_SIZE = 5;
@@ -1317,7 +1318,7 @@ export function evaluateAstGrepRules(
 					// gate is unchanged and deliberately narrower: only `error`
 					// blocks, so hint and info stay advisory exactly like warning.
 					const severity = normalizeRuleSeverity(rule.severity);
-					const semantic = severity === "error" ? "blocking" : "warning";
+					const semantic = semanticFor(severity);
 					const defectClass = classifyDefect(
 						rule.id,
 						"ast-grep-napi",

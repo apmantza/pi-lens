@@ -43,6 +43,7 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const shellcheck = createAvailabilityChecker("shellcheck", ".exe");
 
@@ -127,7 +128,7 @@ function parseShellcheckOutput(
 				line: item.line,
 				column: item.column || 1,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: "shellcheck",
 				rule: ruleCode,
 				fixable: !!item.fix,
@@ -247,11 +248,11 @@ const shellcheckRunner: RunnerDefinition = {
 		// A shellcheck that was killed, timed out, or exited without a word did
 		// not analyse the file; `finishParsedRun` alone reads that as clean
 		// (#4522: the tool-state matrix's crashed and unanswered cells).
-		const raw = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 		const parsed = parseToolRun(
 			"shellcheck",
-			{ result, output: raw, exitCodes: SHELLCHECK_EXIT_CODES },
+			{ result, exitCodes: SHELLCHECK_EXIT_CODES },
 			(output) => parseShellcheckOutput(output, ctx.filePath, cwd),
+			{ parseStreams: "stdout-else-stderr" },
 		);
 		if (parsed.skipped) return parsed.skipped;
 

@@ -525,6 +525,14 @@ describe("secondary language fallback runners", () => {
 			expect(hasUsableResult(result)).toBe(true);
 		});
 
+		// `beforeEach` resets the module registry, so the ledger the runner writes
+		// to is the instance imported after that reset, not a static import.
+		async function freshLedger() {
+			const ledger = await import("../../../../clients/degradation-ledger.js");
+			ledger.resetDegradationLedger();
+			return ledger;
+		}
+
 		async function runPrisma(spawn: SpawnShape) {
 			const env = setupTestEnvironment("pi-lens-prisma-cut-short-");
 			try {
@@ -546,6 +554,7 @@ describe("secondary language fallback runners", () => {
 		}
 
 		it("prisma faults a killed run whose partial output has no diagnostics", async () => {
+			const { getDegradationSummary } = await freshLedger();
 			const result = await runPrisma({
 				error: null,
 				status: null,
@@ -555,6 +564,12 @@ describe("secondary language fallback runners", () => {
 			});
 			expect(result.status).toBe("skipped");
 			expect(result.skipFault).toBe("did-not-run");
+			// The cut-short skip leaves the seam's one row (#5426 review F2 shape).
+			expect(
+				getDegradationSummary().find(
+					(entry) => entry.kind === "runner-empty-result",
+				)?.count,
+			).toBe(1);
 		});
 
 		it("prisma never counts a killed run's non-validation output as findings", async () => {
@@ -587,15 +602,42 @@ describe("secondary language fallback runners", () => {
 			expect(hasUsableResult(result)).toBe(false);
 		});
 
-		it("prisma leaves a completed run with nothing parsed as the existing plain skip", async () => {
-			// The residual `skipWhenParsedNothing` family (PR body), unchanged here.
+		// Recurrence (#5426 review F8): dropping the runner's early skip let a
+		// nonzero `prisma validate` that printed NOTHING reach `finishParsedRun`,
+		// which answers `succeeded` for blank output. A tool that exited 1 and said
+		// nothing did not validate the schema: skipped, with the seam's one row.
+		it("prisma never reads a nonzero exit that printed nothing as clean", async () => {
+			const { getDegradationSummary } = await freshLedger();
+			const result = await runPrisma({
+				error: null,
+				status: 1,
+				stdout: "",
+				stderr: "",
+			});
+			expect(result).toMatchObject({
+				status: "skipped",
+				skipFault: "did-not-run",
+				diagnostics: [],
+			});
+			expect(
+				getDegradationSummary()
+					.find((entry) => entry.kind === "runner-empty-result")
+					?.latestReasons.map((entry) => entry.subject),
+			).toEqual(["prisma-validate"]);
+		});
+
+		// #5411: a completed nonzero run whose output yields nothing is
+		// failed/parser_error, the verdict every other runner gives it; the plain
+		// skip this runner kept disagreed with its own parse-error arm.
+		it("prisma reports a completed run with nothing parsed as failed/parser_error", async () => {
 			const result = await runPrisma({
 				error: null,
 				status: 1,
 				stdout: "Prisma schema loaded from schema.prisma",
 				stderr: "",
 			});
-			expect(result.status).toBe("skipped");
+			expect(result.status).toBe("failed");
+			expect(result.failureKind).toBe("parser_error");
 			expect(result.skipFault).toBeUndefined();
 		});
 	});

@@ -16,6 +16,7 @@ import {
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const htmlhint = createAvailabilityChecker("htmlhint");
 
@@ -57,7 +58,7 @@ function parseHtmlhintOutput(
 			line: lineNum,
 			column: col,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "htmlhint",
 			rule,
 			fixable: false,

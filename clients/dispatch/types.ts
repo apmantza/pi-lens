@@ -171,6 +171,16 @@ export interface Diagnostic {
 }
 
 /**
+ * The output tier of a finding at this severity (#5412). Only `error` blocks.
+ * `warning`, `info` and `hint` are advisory warnings: the tier every CLI runner
+ * gives a non-error finding (#1777, #1802). The LSP converter keeps its raw
+ * `none` for a `hint` (`convertLspDiagnostics`); the auxiliary profile raises it.
+ */
+export function semanticFor(severity: Diagnostic["severity"]): OutputSemantic {
+	return severity === "error" ? "blocking" : "warning";
+}
+
+/**
  * #4484 round 2: which sources reached no verdict in one dispatch. A recorded
  * blocker from one of them stays: its absence from the run is not evidence
  * that it is gone.

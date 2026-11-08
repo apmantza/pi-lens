@@ -22,6 +22,7 @@ import {
 	logAvailabilityDecision,
 	startHostStallSampler,
 } from "./utils/availability-policy.js";
+import { semanticFor } from "../types.js";
 
 interface PSAnalyzerResult {
 	RuleName?: string;
@@ -328,7 +329,7 @@ function parsePSAnalyzerOutput(
 				line: item.Line!,
 				column: item.Column ?? 1,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: "psscriptanalyzer",
 				rule,
 				fixable: false,

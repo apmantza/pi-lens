@@ -1755,17 +1755,20 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/credo.ts": 2,
 		"clients/dispatch/runners/cue-vet.ts": 6,
 		"clients/dispatch/runners/dart-analyze.ts": 1,
-		"clients/dispatch/runners/detekt.ts": 6,
+		// 6 -> 5 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/detekt.ts": 5,
 		"clients/dispatch/runners/dotnet-build.ts": 4,
 		"clients/dispatch/runners/elixir-check.ts": 2,
-		"clients/dispatch/runners/eslint.ts": 3,
+		// 3 -> 2 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
+		"clients/dispatch/runners/eslint.ts": 2,
 		"clients/dispatch/runners/fact-rules.ts": 2,
 		// #4309: folded unavailable/absent-command exits remove one status use.
 		// 5 -> 6 (#4522): the exitless-run guard reads the exit status once.
 		"clients/dispatch/runners/fish-indent.ts": 6,
 		"clients/dispatch/runners/gleam-check.ts": 5,
 		"clients/dispatch/runners/go-vet.ts": 5,
-		"clients/dispatch/runners/golangci-lint.ts": 4,
+		// 4 -> 3 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
+		"clients/dispatch/runners/golangci-lint.ts": 3,
 		"clients/dispatch/runners/hadolint.ts": 3,
 		"clients/dispatch/runners/helm-lint.ts": 5,
 		"clients/dispatch/runners/helm-render.ts": 7,
@@ -1781,7 +1784,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/oxlint.ts": 11,
 		"clients/dispatch/runners/php-lint.ts": 2,
 		"clients/dispatch/runners/phpstan.ts": 4,
-		"clients/dispatch/runners/prisma-validate.ts": 4,
+		// 4 -> 3 (#5411): the plain skip leaves; `finishParsedRun` owns that verdict.
+		"clients/dispatch/runners/prisma-validate.ts": 3,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 14,
 		"clients/dispatch/runners/pyright.ts": 3,
 		"clients/dispatch/runners/rubocop.ts": 2,
@@ -1791,12 +1795,15 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// existing skipped/no-cmd returns — the same `status:` member sense.
 		"clients/dispatch/runners/shellcheck.ts": 5,
 		"clients/dispatch/runners/shfmt.ts": 8,
-		"clients/dispatch/runners/spellcheck.ts": 3,
+		// 3 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/spellcheck.ts": 2,
 		"clients/dispatch/runners/spotbugs.ts": 8,
 		"clients/dispatch/runners/sqlfluff.ts": 3,
 		"clients/dispatch/runners/stylelint.ts": 2,
-		"clients/dispatch/runners/swiftlint.ts": 3,
-		"clients/dispatch/runners/taplo.ts": 5,
+		// 3 -> 1 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/swiftlint.ts": 1,
+		// 5 -> 4 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/taplo.ts": 4,
 		"clients/dispatch/runners/terragrunt.ts": 2,
 		"clients/dispatch/runners/tflint.ts": 3,
 		// 14 -> 15 (#4226): the early-return runner result preserves the existing
@@ -1812,7 +1819,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 10,
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.
 		"clients/dispatch/runners/utils/tool-failure.ts": 20,
-		"clients/dispatch/runners/vale.ts": 4,
+		// 4 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/vale.ts": 2,
 		"clients/dispatch/runners/yamllint.ts": 2,
 		"clients/dispatch/runners/zig-check.ts": 2,
 		// 5 -> 6 (#4484 r2): `reachedNoVerdict` reads the runner result's status.
@@ -1859,7 +1867,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 26 -> 27 (#4502): readGitStatusEntries checks the spawn result's exit
 		// `status` once for every porcelain read it now serves.
 		"clients/opaque-mutation-scan.ts": 27,
-		"clients/opengrep-client.ts": 9,
+		// 9 -> 7 (#5411): a report is judged by its content, not the exit status.
+		"clients/opengrep-client.ts": 7,
 		"clients/package-manager.ts": 2,
 		"clients/pipeline.ts": 4,
 		"clients/process-snapshot.ts": 14,

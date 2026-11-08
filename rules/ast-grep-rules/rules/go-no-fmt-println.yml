@@ -28,16 +28,17 @@ ignores:
   - "**/examples/**"
   - "**/tests/fixtures/**"
   - "**/cases/**"
-tags:
-  - go
-  - idiom
-  - logging
-examples:
-  bad: |
-    func main() {
-        fmt.Println("hello")
-    }
-  good: |
-    func main() {
-        slog.Info("hello")
-    }
+metadata:
+  tags:
+    - go
+    - idiom
+    - logging
+  examples:
+    bad: |
+      func main() {
+          fmt.Println("hello")
+      }
+    good: |
+      func main() {
+          slog.Info("hello")
+      }

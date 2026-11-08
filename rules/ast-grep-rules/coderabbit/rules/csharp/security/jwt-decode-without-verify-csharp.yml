@@ -8,7 +8,8 @@ message: >-
 note: |-
   [CWE-345] Insufficient Verification of Data Authenticity. [REFERENCES]
       - https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   IJwtDecoder_D_Decode_X_verify-false:
     kind: invocation_expression

@@ -7,7 +7,8 @@ message: >-
 note: |-
   [CWE-489] Active Debug Code. [REFERENCES]
       - https://www.php.net/manual/en/function.setcookie.php
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   Match_pattern_one:
     kind: function_call_expression

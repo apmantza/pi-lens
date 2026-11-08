@@ -7,7 +7,8 @@ message: >-
 note: |-
   [CWE-367]: Time-of-check Time-of-use (TOCTOU) Race Condition [REFERENCES]
       - https://wiki.sei.cmu.edu/confluence/display/c/FIO45-C.+Avoid+TOCTOU+race+conditions+while+accessing+files
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   PATTERN_1_identifier:
     kind: identifier

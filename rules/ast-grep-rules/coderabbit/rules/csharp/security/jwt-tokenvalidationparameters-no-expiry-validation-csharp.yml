@@ -10,7 +10,8 @@ note: |-
       - https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/
       - https://cwe.mitre.org/data/definitions/613.html
       - https://docs.microsoft.com/en-us/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters?view=azure-dotnet
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   MATCH_PATTERN_ONE:
     kind: boolean_literal

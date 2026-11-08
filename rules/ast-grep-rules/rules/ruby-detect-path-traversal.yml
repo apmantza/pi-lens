@@ -18,16 +18,17 @@ rule:
     - pattern: File.join($$$ARGS)
     - pattern: send_file $VAR
 fix: ""
-tags:
-  - ruby
-  - security
-  - path-traversal
-  - cwe-22
-  - rails
-examples:
-  bad: |
-    Rails.root.join('uploads', params[:filename])
-    send_file params[:file]
-  good: |
-    Rails.root.join('uploads', 'safe.png')
-    send_file 'public/index.html'
+metadata:
+  tags:
+    - ruby
+    - security
+    - path-traversal
+    - cwe-22
+    - rails
+  examples:
+    bad: |
+      Rails.root.join('uploads', params[:filename])
+      send_file params[:file]
+    good: |
+      Rails.root.join('uploads', 'safe.png')
+      send_file 'public/index.html'

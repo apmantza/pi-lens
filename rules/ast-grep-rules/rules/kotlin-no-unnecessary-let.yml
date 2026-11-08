@@ -17,12 +17,13 @@ rule:
   pattern: $RECEIVER.let { $$$BODY }
 files:
   - "**/*.kt"
-tags:
-  - kotlin
-  - idiom
-  - readability
-examples:
-  bad: |
-    val length = name.let { it.length }
-  good: |
-    val length = name.length
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - readability
+  examples:
+    bad: |
+      val length = name.let { it.length }
+    good: |
+      val length = name.length
