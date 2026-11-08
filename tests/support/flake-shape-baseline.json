@@ -106,7 +106,7 @@
 		"index-5108-opaque-blocker-disclosure-witness.test.ts": 1,
 		"mcp/analyze-cli.test.ts": 1,
 		"mcp/build-graph-cli.test.ts": 1,
-		"packaging-pack-manifest.test.ts": 6,
+		"packaging-pack-manifest.test.ts": 7,
 		"real-harness/bridge-reload-ts.test.ts": 1,
 		"real-harness/bridge-reload.test.ts": 1,
 		"real-harness/child-exit.test.ts": 7,
