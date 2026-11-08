@@ -14,7 +14,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import {
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../clients/latency-logger.js";
 import { installLspServiceDouble } from "./support/lsp-service-seam.js";
+import { readNdjsonRows } from "./support/ndjson-rows.js";
 import { gitExecFileSync } from "./support/git-fixture-env.js";
 import {
 	endTurn,
@@ -43,7 +48,10 @@ function fn(name: string, branches: number): string {
  * A repository whose `main` holds `svc.ts` with `handle` at cyclomatic 4,
  * then one session that reads it and edits it to `next`. The edit's text.
  */
-async function editTo(slug: string, next: string): Promise<string> {
+async function editTo(
+	slug: string,
+	next: string,
+): Promise<{ out: string; rows: Array<Record<string, unknown>> }> {
 	await installLspServiceDouble({
 		supportsLSP: () => false,
 		hasLSP: async () => false,
@@ -82,17 +90,44 @@ async function editTo(slug: string, next: string): Promise<string> {
 	expect(handle.errors).toEqual([]);
 	const edits = toolResults(handle.requests.at(-1) ?? [], "edit");
 	expect(edits).toHaveLength(1);
-	return edits[0]?.text ?? "";
+	// The latency logger keeps its own queue; inline mode shares the module,
+	// so the test drains it before reading this file's rows.
+	await flushLatencyLog();
+	const read = readNdjsonRows(getLatencyLogPath());
+	expect(read.skipped).toBe(0);
+	const rows = read.rows.filter(
+		(r) => r.filePath === target && r.phase === "complexity_delta",
+	);
+	return { out: edits[0]?.text ?? "", rows };
 }
 
 describe("#5087 witness: the edit's tool result names a function it made worse than main", () => {
 	it("names the function, main's value and the threshold", async () => {
-		const out = await editTo("worse", fn("handle", 17));
+		const { out, rows } = await editTo("worse", fn("handle", 17));
 		expect(out).toContain("⚠ complexity vs main: handle cc 4→18 (≥15)");
+		// The decision record of the judged edit.
+		expect(rows.map((r) => r.metadata)).toEqual([
+			{
+				against: "main",
+				main: "file",
+				functions: 1,
+				worsened: 1,
+				advised: true,
+			},
+		]);
 	});
 
 	it("says nothing for an edit that stays under the threshold", async () => {
-		const out = await editTo("under", fn("handle", 6));
+		const { out, rows } = await editTo("under", fn("handle", 6));
 		expect(out).not.toContain("complexity vs");
+		expect(rows.map((r) => r.metadata)).toEqual([
+			{
+				against: "main",
+				main: "file",
+				functions: 1,
+				worsened: 0,
+				advised: false,
+			},
+		]);
 	});
 });

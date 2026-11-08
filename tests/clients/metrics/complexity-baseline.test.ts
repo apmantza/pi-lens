@@ -188,7 +188,8 @@ describe("formatComplexityAdvisory (#5087)", () => {
 		);
 	});
 
-	it(`stays within ${MAX_ADVISORY_BYTES} bytes and counts what it leaves out`, () => {
+	it("stays within 240 bytes and counts what it leaves out", () => {
+		expect(MAX_ADVISORY_BYTES).toBe(240);
 		const line = formatComplexityAdvisory(worse(10), "main");
 		expect(line).toBeDefined();
 		expect(Buffer.byteLength(line ?? "", "utf-8")).toBeLessThanOrEqual(
