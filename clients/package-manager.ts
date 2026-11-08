@@ -152,8 +152,9 @@ const PROBE_TIMEOUT_MS = 5_000;
  * into pi-lens's own managed tools directory and `pilens_rebuild` on a
  * pi-lens source checkout, never a user project's lockfile (#1496). Each
  * manager now sits behind the shared transient-aware latch (#1467/#1476):
- * only a genuine absence (`where`/`which` exits non-zero, or ENOENT) latches;
- * a timeout, abort or host stall expires on a cooldown and is re-probed.
+ * only a genuine absence (`where`/`which` ran and exited non-zero) latches; a
+ * finder that cannot spawn, ENOENT included, and a timeout, abort or host
+ * stall expire on a cooldown and are re-probed.
  */
 const availabilityLatches = new Map<NodePackageManager, AvailabilityLatch>();
 
