@@ -6,9 +6,9 @@
  * PI_LENS_LSP_TOUCH_DEBOUNCE_MS is read once at module load (clients/lsp/index.ts
  * line 352). When set to "0", `shouldSkipNotify` returns `false` unconditionally
  * (the debounce switch is off), so two identical-content touches for one file
- * both reach the client. With the default (1500 > 0), the second identical touch
- * is debounced: `shouldSkipNotify` returns `true` and `notify.open` is NOT called
- * a second time.
+ * both reach the client. With the default (any non-zero value: the constant is
+ * an on/off switch, not a time window), the second identical touch is skipped:
+ * `shouldSkipNotify` returns `true` and `notify.open` is NOT called a second time.
  *
  * Production chain: the REAL `LSPService.touchFile` and the REAL
  * `handleNotifyOpen` notify queue per client, over a mock `MessageConnection`
