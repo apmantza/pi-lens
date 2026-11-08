@@ -14,7 +14,6 @@
  * - To: await safeSpawnAsync(cmd, args, opts)
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import {
 	type ChildProcess,
 	type SpawnOptions,
@@ -44,6 +43,7 @@ import { startSpawnUsageSampler } from "./resource-sampler.js";
 import { isToolInstallDisabled } from "./env-utils.js";
 import { DEFAULT_MAX_OUTPUT_BYTES } from "./spawn-output-cap.js";
 import { compareOrdinal } from "./string-utils.js";
+import { spawnAbortScope } from "./spawn-abort-scope.js";
 
 export interface SpawnResourceUsage {
 	sampleCount: number;
@@ -367,7 +367,8 @@ export interface SafeSpawnOptions {
 	stripNpmConfig?: boolean;
 	signal?: AbortSignal;
 	/**
-	 * Opt out of the ambient turn abort signal (which is otherwise the default).
+	 * Opt out of the ambient turn abort signal (which is otherwise the default)
+	 * and of the tool call's `spawnAbortScope`.
 	 * Set this for long, side-effecting operations like tool installs that should
 	 * run to completion even if the agent turn is interrupted — matching the old
 	 * uncancellable sync `safeSpawn` they replaced (so a half-finished
@@ -772,10 +773,11 @@ export function setAmbientAbortSignal(signal: AbortSignal | undefined): void {
  * The current turn's abort signal, for in-process awaits that aren't child
  * spawns (e.g. an LSP JSON-RPC write that can backpressure on a wedged server).
  * Child spawns read the ambient signal internally; this getter lets the
- * interactive pipeline honor Escape on non-spawn LSP calls too.
+ * interactive pipeline honor Escape on non-spawn LSP calls too. Inside a
+ * `spawnAbortScope` (a tool call, #5097) the scope's signal answers first.
  */
 export function getAmbientAbortSignal(): AbortSignal | undefined {
-	return ambientAbortSignal;
+	return spawnAbortScope.getStore() ?? ambientAbortSignal;
 }
 
 // ============================================================================
@@ -1699,8 +1701,7 @@ const SPAWN_SAMPLER_TEARDOWN_GRACE_MS = 5_000;
 // ASYNC VERSION (Recommended - Non-blocking)
 // ============================================================================
 
-/** Capture-local cancellation; async context prevents interference with concurrent dispatch. */
-export const spawnAbortScope = new AsyncLocalStorage<AbortSignal>();
+export { spawnAbortScope };
 
 /**
  * Async spawn with timeout and proper process cleanup.
@@ -1760,7 +1761,11 @@ export async function safeSpawnAsync(
 	const callerSignal =
 		options?.signal ??
 		(options?.ignoreAmbientSignal ? undefined : ambientAbortSignal);
-	const scopedSignal = spawnAbortScope.getStore();
+	// #5097: the opt-out covers the scope too, so an install or a file write
+	// started inside a tool call survives Esc.
+	const scopedSignal = options?.ignoreAmbientSignal
+		? undefined
+		: spawnAbortScope.getStore();
 	const abortSignal =
 		scopedSignal && callerSignal
 			? AbortSignal.any([scopedSignal, callerSignal])

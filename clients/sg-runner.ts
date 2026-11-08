@@ -85,6 +85,8 @@ export interface SgResult {
 	totalMatches: number;
 	truncated: boolean;
 	error?: string;
+	/** Why the spawn itself failed, when it did (#5097: `aborted` is the call's Esc). */
+	failure?: SgFailureKind;
 }
 
 export type SgFailureKind =
@@ -98,6 +100,11 @@ export interface SgExecutionOptions {
 	signal?: AbortSignal;
 	/** Absolute wall-clock deadline shared by a multi-path search. */
 	deadlineAt?: number;
+	/**
+	 * #5097: run to completion through Esc (safe-spawn's opt-out from the turn
+	 * signal and the tool scope). Set only for a spawn that writes files.
+	 */
+	ignoreAmbientSignal?: boolean;
 }
 
 export interface SgRawResult {
@@ -826,6 +833,7 @@ export class SgRunner {
 				timeout: DEFAULT_EXEC_TIMEOUT_MS,
 				deadlineAt: options.deadlineAt,
 				signal: options.signal,
+				ignoreAmbientSignal: options.ignoreAmbientSignal,
 				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
 			},
 		);
@@ -849,6 +857,7 @@ export class SgRunner {
 		if (spawnFailure) {
 			return {
 				...empty(),
+				failure: spawnFailure,
 				error:
 					spawnFailure === "unavailable"
 						? "ast-grep CLI not found. Install: npm i -D @ast-grep/cli"
@@ -1066,7 +1075,14 @@ export class SgRunner {
 		applyFixes: boolean,
 		timeout = DEFAULT_EXEC_TIMEOUT_MS,
 		options: SgExecutionOptions = {},
-	): Promise<{ matches: SgMatch[]; error?: string }> {
+	): Promise<{
+		matches: SgMatch[];
+		error?: string;
+		/** #5097: the call's abort stopped it before any write. */
+		aborted?: boolean;
+		/** #5097: the error came from `--update-all`, which may have written files. */
+		writeStarted?: boolean;
+	}> {
 		let sessionDir: string | undefined;
 		try {
 			({ sessionDir } = this.prepareTempScan(ruleId, ruleYaml));
@@ -1094,7 +1110,11 @@ export class SgRunner {
 				);
 				const scan = this.interpretScanResult(result, ["scan"]);
 				return scan.failure || scan.error
-					? { matches: [], error: scan.error }
+					? {
+							matches: [],
+							error: scan.error,
+							...(scan.failure === "aborted" ? { aborted: true } : {}),
+						}
 					: { matches: scan.matches };
 			}
 			// Apply: capture matches BEFORE writing — once --update-all applies
@@ -1107,7 +1127,17 @@ export class SgRunner {
 			);
 			const scan = this.interpretScanResult(jsonResult, ["scan"]);
 			if (scan.failure || scan.error) {
-				return { matches: [], error: scan.error };
+				return {
+					matches: [],
+					error: scan.error,
+					...(scan.failure === "aborted" ? { aborted: true } : {}),
+				};
+			}
+			// #5097: an abort lands before the write or not at all. A killed
+			// `--update-all` leaves part of the files rewritten. `aborted` keeps
+			// the pattern hint off the reply.
+			if (options.signal?.aborted) {
+				return { matches: [], error: "operation aborted", aborted: true };
 			}
 			const applyResult = await this.spawnResolved(
 				command,
@@ -1119,7 +1149,7 @@ export class SgRunner {
 					...sgExcludeArgsForProject(dir),
 					dir,
 				],
-				spawnOptions,
+				{ ...spawnOptions, signal: undefined, ignoreAmbientSignal: true },
 			);
 			if (
 				applyResult.error ||
@@ -1128,6 +1158,7 @@ export class SgRunner {
 			) {
 				return {
 					matches: [],
+					writeStarted: true,
 					error:
 						applyResult.error?.message ||
 						`ast-grep apply failed with exit code ${applyResult.status}`,

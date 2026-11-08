@@ -365,6 +365,8 @@ describe("#4140 the structural ast_grep_replace apply records through the bridge
 			"agent-rule",
 			RULE,
 			true,
+			undefined,
+			{ signal: undefined },
 		);
 		expect(recorded).toEqual([
 			expect.objectContaining({
