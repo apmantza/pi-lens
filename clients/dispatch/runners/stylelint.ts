@@ -13,16 +13,11 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const stylelint = createAvailabilityChecker("stylelint", ".cmd");
 
 // stylelint exit codes (its "Exit codes" docs page): 0 = no problems, 1 = a
 // fatal error, 2 = lint problems found, 78 = a configuration error.
@@ -182,12 +177,7 @@ const stylelintRunner: RunnerDefinition = {
 			);
 		}
 
-		let cmd: string | null = null;
-		if (await stylelint.isAvailableAsync(cwd)) {
-			cmd = stylelint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 

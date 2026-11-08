@@ -2357,7 +2357,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// unbounded awaits (two spawns in `probeAstGrepCommandAsync`, four of its
 	// call sites and `findGlobalBinary` in `isSgAvailableAsync`); the worklist
 	// shrinks with the sweep, nothing new is unbounded.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
+	// #5410: 30 -> 31 — a project shim whose probe says it is broken falls
+	// through to the managed and PATH rungs (`findBeyondProject`), at most
+	// once per probe; those rungs stat and verify under their own probe
+	// budget, unbounded from the hook signal like the first resolution.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.

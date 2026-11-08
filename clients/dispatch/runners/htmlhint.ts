@@ -10,15 +10,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const htmlhint = createAvailabilityChecker("htmlhint");
 
 const HTMLHINT_RULES = {
 	"tag-pair": true,
@@ -81,12 +76,7 @@ const htmlhintRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		let cmd: string | null = null;
-		if (await htmlhint.isAvailableAsync(cwd)) {
-			cmd = htmlhint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "htmlhint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "htmlhint");
 
 		if (!cmd) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };

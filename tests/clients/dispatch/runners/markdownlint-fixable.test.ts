@@ -5,11 +5,6 @@ import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawnAsync = vi.fn();
-const createAvailabilityCheckerMock = vi.fn(() => ({
-	isAvailable: () => true,
-	isAvailableAsync: async () => true,
-	getCommand: () => "markdownlint-cli2",
-}));
 const hasMarkdownlintConfigMock = vi.fn(() => true);
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({
@@ -23,7 +18,6 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: createAvailabilityCheckerMock,
 		resolveToolCommandWithInstallFallback: vi.fn(
 			async () => "markdownlint-cli2",
 		),
@@ -57,7 +51,6 @@ describe("markdownlint runner — fixable metadata", () => {
 		vi.stubEnv("PATH", "");
 		vi.resetModules();
 		safeSpawnAsync.mockReset();
-		createAvailabilityCheckerMock.mockClear();
 		hasMarkdownlintConfigMock.mockReset().mockReturnValue(true);
 	});
 
@@ -65,13 +58,34 @@ describe("markdownlint runner — fixable metadata", () => {
 		vi.unstubAllEnvs();
 	});
 
+	// markdownlint-cli2 has no `--version`; a probe that asks for one reads
+	// stdin until its budget expires. Since #5410 the runner resolves through
+	// the registry-driven resolver, so the real resolver must send the bounded
+	// stdin probe.
 	it("constructs the bounded stdin availability probe", async () => {
-		await import("../../../../clients/dispatch/runners/markdownlint.js");
-		expect(createAvailabilityCheckerMock).toHaveBeenCalledWith(
-			"markdownlint-cli2",
-			".cmd",
-			["--no-globs", "-"],
-		);
+		const helpers = await vi.importActual<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>("../../../../clients/dispatch/runners/utils/runner-helpers.js");
+		const env = setupTestEnvironment("pi-lens-markdownlint-probe-");
+		try {
+			safeSpawnAsync.mockResolvedValue({
+				error: null,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			});
+			await helpers.resolveToolCommandWithInstallFallback(
+				env.tmpDir,
+				"markdownlint",
+			);
+			expect(safeSpawnAsync).toHaveBeenCalledWith(
+				"markdownlint-cli2",
+				["--no-globs", "-"],
+				expect.objectContaining({ input: "" }),
+			);
+		} finally {
+			env.cleanup();
+		}
 	});
 
 	it("marks known-fixable MD rules as fixable with a fixSuggestion", async () => {

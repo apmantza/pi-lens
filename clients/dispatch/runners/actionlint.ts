@@ -9,13 +9,8 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
-
-const actionlint = createAvailabilityChecker("actionlint", ".exe");
 
 type ActionlintIssue = {
 	message?: string;
@@ -109,11 +104,7 @@ const actionlintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "actionlint");
 		let cmd: string | null = null;
 
-		if (await actionlint.isAvailableAsync(cwd)) {
-			cmd = actionlint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "actionlint");
-		}
+		cmd = await resolveToolCommandWithInstallFallback(cwd, "actionlint");
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 

@@ -78,7 +78,6 @@ vi.mock("../../clients/rust-client.js", async (importOriginal) => {
 });
 
 import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
-import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 import { probeToolAsync } from "../../clients/tool-probe.js";
 import { makeRunnerCtx } from "../support/runner-ctx.js";
@@ -158,7 +157,7 @@ describe("#2894 probe seam: a tool probe never carries a cwd", () => {
 		try {
 			// `node` is on PATH in every lane, so the on-disk pre-check that guards
 			// the probe passes and the spawn is actually reached.
-			expect(await checkToolAvailability("node", new FactStore())).toBe(true);
+			expect(await checkToolAvailability("node")).toBe(true);
 		} finally {
 			process.chdir(previous);
 		}

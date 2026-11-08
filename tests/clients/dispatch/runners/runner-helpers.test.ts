@@ -8,7 +8,6 @@ import {
 	findManagedNodeToolBinary,
 	lspPrimaryCoversFile,
 	resolveCommandArgsWithInstallFallback,
-	resolveCommandWithInstallFallback,
 	resolveAvailableOrInstall,
 	resolveLocalFirstAsync,
 	resolveNodeToolCommand,
@@ -220,15 +219,22 @@ describe("runner-helpers availability checker", () => {
 		}
 	});
 
-	it("resolves installed command after version check fallback", async () => {
+	it("resolves the installed command after a typed missing probe", async () => {
+		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
 		const installerMod = await import("../../../../clients/installer/index.js");
-		vi.mocked(installerMod.isSpawnableCommand).mockResolvedValueOnce(false);
+		vi.mocked(safeSpawnMod.safeSpawnAsync).mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			status: null,
+			error: Object.assign(new Error("missing"), { code: "ENOENT" }),
+			failure: "spawn",
+			spawnFailure: missingSpawnFailure(),
+		});
 		vi.mocked(installerMod.ensureTool).mockResolvedValue("stylelint");
 
-		const resolved = await resolveCommandWithInstallFallback(
-			"stylelint",
-			"stylelint",
+		const resolved = await resolveToolCommandWithInstallFallback(
 			process.cwd(),
+			"stylelint",
 		);
 
 		expect(installerMod.ensureTool).toHaveBeenCalledWith("stylelint");
@@ -290,8 +296,8 @@ describe("runner-helpers availability checker", () => {
 			status: 1,
 		});
 
-		const resolved = await resolveCommandWithInstallFallback(
-			"eslint",
+		const resolved = await resolveCommandArgsWithInstallFallback(
+			{ cmd: "eslint", args: [] },
 			"eslint",
 			process.cwd(),
 		);
@@ -1125,7 +1131,7 @@ describe("resolveToolCommandWithInstallFallback / resolveCommandArgsWithInstallF
 		resetDispatchAvailabilityState();
 	});
 
-	it("resolveToolCommandWithInstallFallback: probe-ENOENT-then-fallback-success logs two rows, last available", async () => {
+	it("resolveToolCommandWithInstallFallback: one probe, then install, logs two rows, last available", async () => {
 		const installerMod = await import("../../../../clients/installer/index.js");
 		vi.mocked(installerMod.isSpawnableCommand).mockResolvedValue(false);
 		vi.mocked(installerMod.ensureTool).mockResolvedValue(
@@ -1137,9 +1143,8 @@ describe("resolveToolCommandWithInstallFallback / resolveCommandArgsWithInstallF
 		});
 		vi.mocked(installerMod.getToolInstallStrategy).mockReturnValue("npm");
 
-		// The runner's own checker probes first (mirrors markdownlint.ts:113-116)
-		// and latches "unavailable" — row 1.
-		const checker = createAvailabilityChecker("stylelint");
+		// The resolver's own checker probes (#5410: runners no longer probe a
+		// checker of their own first) and latches "unavailable" — row 1.
 		const { safeSpawnAsync } =
 			await import("../../../../clients/safe-spawn.js");
 		vi.mocked(safeSpawnAsync).mockResolvedValue({
@@ -1150,11 +1155,10 @@ describe("resolveToolCommandWithInstallFallback / resolveCommandArgsWithInstallF
 			failure: "spawn",
 			spawnFailure: missingSpawnFailure(),
 		});
-		expect(await checker.isAvailableAsync(process.cwd())).toBe(false);
 
-		// The runner then falls back to the install-repair helper, which must
-		// recover AND log the compensating row — pre-fix, this second row never
-		// fired, leaving the durable log stuck on "unavailable".
+		// The install then recovers the tool AND logs the compensating row —
+		// pre-#1636 this second row never fired, leaving the durable log stuck
+		// on "unavailable".
 		const resolved = await resolveToolCommandWithInstallFallback(
 			process.cwd(),
 			"stylelint",
@@ -1239,6 +1243,16 @@ describe("resolveToolCommandWithInstallFallback / resolveCommandArgsWithInstallF
 		vi.mocked(installerMod.getLastEnsureResolutionSource).mockReturnValue(
 			"path",
 		);
+		vi.mocked(
+			(await import("../../../../clients/safe-spawn.js")).safeSpawnAsync,
+		).mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			status: null,
+			error: Object.assign(new Error("missing"), { code: "ENOENT" }),
+			failure: "spawn",
+			spawnFailure: missingSpawnFailure(),
+		});
 
 		const resolved = await resolveToolCommandWithInstallFallback(
 			process.cwd(),
@@ -1268,6 +1282,16 @@ describe("resolveToolCommandWithInstallFallback / resolveCommandArgsWithInstallF
 		vi.mocked(installerMod.getLastEnsureResolutionSource).mockReturnValue(
 			"path",
 		);
+		vi.mocked(
+			(await import("../../../../clients/safe-spawn.js")).safeSpawnAsync,
+		).mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			status: null,
+			error: Object.assign(new Error("missing"), { code: "ENOENT" }),
+			failure: "spawn",
+			spawnFailure: missingSpawnFailure(),
+		});
 
 		await resolveToolCommandWithInstallFallback(process.cwd(), "stylelint");
 
@@ -1320,9 +1344,11 @@ describe("resolveToolCommandWithInstallFallback / resolveCommandArgsWithInstallF
 /**
  * #1657 — the once-per-correction memo is not a "this pair emitted a row"
  * memo. `verifyOrInstallCommand` emits through the same seam with NO latched
- * row behind it: biome-check and oxlint call
- * `resolveToolCommandWithInstallFallback` directly, with no checker probe of
- * their own, so nothing has been latched when the installer resolves the tool.
+ * row behind it: the bundler-form `resolveCommandArgsWithInstallFallback`
+ * (rubocop) reaches it with no checker probe at all, so nothing has been
+ * latched when the installer resolves the tool. (#5410 moved biome-check and
+ * oxlint onto the checker-backed resolver; `noLatchEmission` is the shape
+ * that is left.)
  *
  * Burning the shared memo on that no-op emission silenced the NEXT genuine
  * latch-then-recover for the same (cwd, toolId) — the #1606 defect reachable
@@ -1337,6 +1363,10 @@ describe("compensating row: the memo burns only on a genuine correction (#1657)"
 		failure: "spawn" as const,
 		spawnFailure: missingSpawnFailure(),
 	};
+
+	/** The probe-less install path: a rejected bundler probe, then install. */
+	const noLatchEmission = (cwd: string, cmd = "stylelint") =>
+		resolveCommandArgsWithInstallFallback({ cmd, args: [] }, "stylelint", cwd);
 
 	beforeEach(async () => {
 		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
@@ -1364,9 +1394,9 @@ describe("compensating row: the memo burns only on a genuine correction (#1657)"
 		});
 		const cwd = process.cwd();
 
-		// (a) The biome-check/oxlint shape: straight to the install seam, no
+		// (a) The probe-less shape: straight to the install seam, no checker
 		// probe, so nothing is latched. The row it emits corrects nothing.
-		await resolveToolCommandWithInstallFallback(cwd, "stylelint");
+		await noLatchEmission(cwd);
 
 		// (b) A genuine latch: the checker probes, misses, and writes a latched
 		// `unavailable` row. The installer then brings the tool back.
@@ -1393,9 +1423,9 @@ describe("compensating row: the memo burns only on a genuine correction (#1657)"
 		vi.mocked(installerMod.getInstallAttempt).mockReturnValue(undefined);
 		const cwd = process.cwd();
 
-		await resolveToolCommandWithInstallFallback(cwd, "stylelint");
-		await resolveToolCommandWithInstallFallback(cwd, "stylelint");
-		await resolveToolCommandWithInstallFallback(cwd, "stylelint");
+		await noLatchEmission(cwd);
+		await noLatchEmission(cwd);
+		await noLatchEmission(cwd);
 
 		// The uncorrected scope dedupes on its own: a runner that reaches this
 		// seam on every dispatch must not re-log the same non-correction.
@@ -1494,7 +1524,7 @@ describe("compensating row: the memo burns only on a genuine correction (#1657)"
 		vi.mocked(installerMod.getInstallAttempt).mockReturnValue(undefined);
 		const cwd = process.cwd();
 
-		await resolveToolCommandWithInstallFallback(cwd, "stylelint");
+		await noLatchEmission(cwd);
 		vi.mocked(safeSpawnMod.safeSpawnAsync).mockResolvedValue(missingProbe);
 		await resolveAvailableOrInstall(
 			createAvailabilityChecker("stylelint"),
@@ -1543,7 +1573,12 @@ describe("compensating row: the memo burns only on a genuine correction (#1657)"
 		checker.reset();
 		expect(await checker.isAvailableAsync(cwd)).toBe(true);
 
-		await resolveToolCommandWithInstallFallback(cwd, "stylelint");
+		vi.mocked(safeSpawnMod.safeSpawnAsync).mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			status: 1,
+		});
+		await noLatchEmission(cwd);
 
 		const available = availabilityDecisions().filter(
 			(record) => record.metadata.verdict === "available",
@@ -1578,7 +1613,7 @@ describe("compensating row: the memo burns only on a genuine correction (#1657)"
 		expect(await createAvailabilityChecker(command).isAvailableAsync(cwd)).toBe(
 			false,
 		);
-		await resolveCommandWithInstallFallback(command, "stylelint", cwd);
+		await noLatchEmission(cwd, command);
 
 		const available = availabilityDecisions().filter(
 			(record) => record.metadata.verdict === "available",
@@ -1621,7 +1656,7 @@ describe("compensating row: the memo burns only on a genuine correction (#1657)"
 		probe.reset();
 		expect(await probe(cwd)).toBe(true);
 
-		await resolveToolCommandWithInstallFallback(cwd, "stylelint");
+		await noLatchEmission(cwd);
 
 		const available = availabilityDecisions().filter(
 			(record) => record.metadata.verdict === "available",
