@@ -5,7 +5,8 @@ message: RSA keys should be at least 2048 bits.
 note: |-
   [CWE-326] Inadequate Encryption Strength. [REFERENCES]
       - https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#algorithms
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   statement_match_pattern_int_literal:
     kind: int_literal

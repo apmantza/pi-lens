@@ -11,14 +11,15 @@ note: |
   most dangerous deserializer in the standard library.
 rule:
   pattern: marshal.$FN($$$ARGS)
-has_fix: false
-tags:
-  - python
-  - security
-  - deserialization
-  - cwe-502
-examples:
-  bad: |
-    obj = marshal.loads(request.body)
-  good: |
-    obj = json.loads(request.body)
+metadata:
+  has_fix: false
+  tags:
+    - python
+    - security
+    - deserialization
+    - cwe-502
+  examples:
+    bad: |
+      obj = marshal.loads(request.body)
+    good: |
+      obj = json.loads(request.body)

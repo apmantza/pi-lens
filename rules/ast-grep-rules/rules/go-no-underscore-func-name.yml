@@ -20,16 +20,17 @@ constraints:
     regex: "^[a-z_]*_[a-z]"
 ignores:
   - "**/*_test.go"
-tags:
-  - go
-  - idiom
-  - naming-convention
-examples:
-  bad: |
-    func get_user_name(id int) string {
-        return ""
-    }
-  good: |
-    func getUserName(id int) string {
-        return ""
-    }
+metadata:
+  tags:
+    - go
+    - idiom
+    - naming-convention
+  examples:
+    bad: |
+      func get_user_name(id int) string {
+          return ""
+      }
+    good: |
+      func getUserName(id int) string {
+          return ""
+      }

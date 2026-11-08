@@ -10,7 +10,8 @@ note: |-
   [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
       - https://cwe.mitre.org/data/definitions/326.html
       - https://www.pycryptodome.org/src/cipher/cipher
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   MATCH_PATTERN_arc4_new:
     kind: call

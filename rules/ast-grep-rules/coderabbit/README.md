@@ -7,3 +7,5 @@ License: Apache-2.0 (see ./LICENSE).
 The rules are included in pi-lens's synthesized baseline `sgconfig` when a target repository does not provide its own `sgconfig.yml` / `sgconfig.yaml`. If a repository supplies its own sgconfig, pi-lens respects that project config instead.
 
 Compatibility note: ast-grep rejects utility ids containing reserved characters. Some upstream utility names include characters such as parentheses, dots, commas, and spaces. During vendoring, those utility ids were normalized to ast-grep-safe identifiers and matching `matches:` references were rewritten. Rule ids, languages, messages, notes, and severities are preserved.
+
+The upstream top-level `ast-grep-essentials: true` marker sits under `metadata:` in every vendored rule (#5424). ast-grep 0.51.1 refuses top-level keys outside its rule schema, and `metadata` is the schema's free-form slot.

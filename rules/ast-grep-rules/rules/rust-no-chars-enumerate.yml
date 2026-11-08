@@ -9,11 +9,12 @@ note: |
   consumer requires byte offsets.
 rule:
   pattern: $TEXT.chars().enumerate()
-has_fix: false
-tags:
-  - rust
-  - correctness
-  - unicode
-examples:
-  bad: "for (index, character) in text.chars().enumerate() {}"
-  good: "for (index, character) in text.char_indices() {}"
+metadata:
+  has_fix: false
+  tags:
+    - rust
+    - correctness
+    - unicode
+  examples:
+    bad: "for (index, character) in text.chars().enumerate() {}"
+    good: "for (index, character) in text.char_indices() {}"

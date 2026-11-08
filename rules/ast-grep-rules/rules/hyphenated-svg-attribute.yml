@@ -21,12 +21,13 @@ rule:
         has:
           field: name
           regex: '^(svg|path|circle|rect|line|polyline|polygon|ellipse|g|defs|use|symbol|clipPath|mask|pattern|marker|linearGradient|radialGradient|stop|text|tspan|foreignObject)$'
-has_fix: false
-tags:
-  - tsx
-  - jsx
-  - svg
-  - modernization
-examples:
-  bad: "const icon = <svg stroke-width=\"2\" />;"
-  good: "const icon = <svg strokeWidth=\"2\" />;"
+metadata:
+  has_fix: false
+  tags:
+    - tsx
+    - jsx
+    - svg
+    - modernization
+  examples:
+    bad: "const icon = <svg stroke-width=\"2\" />;"
+    good: "const icon = <svg strokeWidth=\"2\" />;"

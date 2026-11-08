@@ -8,7 +8,8 @@ note: |-
   [CWE-209] Generation of Error Message Containing Sensitive Information. [REFERENCES]
     - https://cwe.mitre.org/data/definitions/209.html
     - https://owasp.org/Top10/A04_2021-Insecure_Design/
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   kind_invocation_expression:
     kind: invocation_expression

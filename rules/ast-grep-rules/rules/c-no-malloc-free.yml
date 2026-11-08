@@ -25,15 +25,16 @@ rule:
     field: function
     kind: identifier
     regex: "^(malloc|calloc|realloc|free)$"
-tags:
-  - c
-  - idiom
-  - memory-safety
-examples:
-  bad: |
-    int *buf = malloc(sizeof(int) * count);
-    /* ... */
-    free(buf);
-  good: |
-    /* Same call sites, reviewed for a matching free on every path and a
-       NULL check on the allocation. */
+metadata:
+  tags:
+    - c
+    - idiom
+    - memory-safety
+  examples:
+    bad: |
+      int *buf = malloc(sizeof(int) * count);
+      /* ... */
+      free(buf);
+    good: |
+      /* Same call sites, reviewed for a matching free on every path and a
+         NULL check on the allocation. */
