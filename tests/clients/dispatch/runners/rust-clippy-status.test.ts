@@ -13,6 +13,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../../clients/degradation-ledger.js";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { resetDispatchAvailabilityState } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
 import type { RunnerResult } from "../../../../clients/dispatch/types.js";
@@ -255,6 +259,7 @@ describe("rust-clippy status is the execution outcome (#3751)", () => {
 	// #5411: nothing parsed before the timeout is a `did-not-run` skip, the verdict
 	// swiftlint and every other seam runner give a timeout.
 	it("a timeout with nothing parsed is a did-not-run skip", async () => {
+		resetDegradationLedger();
 		const env = setupTestEnvironment("pi-lens-clippy-timeout-empty-");
 		try {
 			const filePath = writeCrate(env.tmpDir);
@@ -274,6 +279,14 @@ describe("rust-clippy status is the execution outcome (#3751)", () => {
 
 			expect(observed?.status).toBe("skipped");
 			expect(observed?.skipFault).toBe("did-not-run");
+			// Recurrence (#5426 review F2): the skip left no record at all, so a 60 s
+			// cold-crate timeout was invisible to anything reading the ledger. The
+			// seam writes the one bounded `runner-empty-result` row, as helm does.
+			expect(
+				getDegradationSummary()
+					.find((entry) => entry.kind === "runner-empty-result")
+					?.latestReasons.map((entry) => entry.subject),
+			).toEqual(["rust-clippy"]);
 		} finally {
 			env.cleanup();
 		}

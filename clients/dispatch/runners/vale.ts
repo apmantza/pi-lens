@@ -68,11 +68,15 @@ interface ValeAlert {
 
 type ValeOutput = Record<string, ValeAlert[]>;
 
+/**
+ * `null` is "this output is not a vale report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 export function parseValeOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
 
 	if (!raw.trim()) return diagnostics;
@@ -80,7 +84,8 @@ export function parseValeOutput(
 
 	try {
 		const parsed = JSON.parse(raw) as ValeOutput;
-		if (!parsed || typeof parsed !== "object") return diagnostics;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+			return null;
 
 		// #3295: vale's top level is keyed BY the linted file's path — the only
 		// place the reported path appears. `Object.values` dropped it, so a
@@ -118,8 +123,7 @@ export function parseValeOutput(
 			}
 		}
 	} catch {
-		// JSON parse failed, return empty
-		return diagnostics;
+		return null;
 	}
 
 	return diagnostics;
@@ -185,6 +189,7 @@ const valeRunner: RunnerDefinition = {
 			ctx,
 			result,
 			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
 		});
 	},
 };

@@ -10,7 +10,11 @@ import type {
 } from "../types.js";
 import { resolveLocalFirstAsync } from "./utils/runner-helpers.js";
 import { getIsolatedNpxSpawnOptions } from "../../tool-probe.js";
-import { faultIfCutShort, finishParsedRun } from "./utils/tool-failure.js";
+import {
+	faultIfCutShort,
+	finishParsedRun,
+	skipUnlessToolRan,
+} from "./utils/tool-failure.js";
 
 /**
  * The trailer of prisma's own validation report, measured on prisma 6.16.2:
@@ -88,6 +92,14 @@ const prismaValidateRunner: RunnerDefinition = {
 		// validation report (below); any other output goes to the shared
 		// parse-error arm.
 		const findings = PRISMA_VALIDATION_REPORT.test(output) ? diagnostics : [];
+		// #5411: a run that produced no findings AND no output (exit 1 with
+		// nothing printed, or killed first) never validated the schema. The seam
+		// answers it as a did-not-run skip with its one row; `finishParsedRun`
+		// alone would call blank output clean.
+		if (findings.length === 0) {
+			const skipped = skipUnlessToolRan("prisma-validate", { result, output });
+			if (skipped) return skipped;
+		}
 		const cutShort = faultIfCutShort(result, findings);
 		if (cutShort) return cutShort;
 

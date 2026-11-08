@@ -294,6 +294,13 @@ export interface ParsedToolRun<D> {
 	/** Non-null when the runner must return it verbatim and stop. */
 	skipped: RunnerResult | null;
 	diagnostics: D[];
+	/**
+	 * True when the parser answered `null`: nothing in the output was a report
+	 * this tool prints (#5411). An EMPTY array is a different answer, a report
+	 * that was read and holds nothing for this file (the #3295 filters), and
+	 * `finishParsedRun` must not call it a parse error.
+	 */
+	unreadable: boolean;
 	/** True when this run tripped the #1948 rule above (record only, not a verdict). */
 	parsedNothing: boolean;
 }
@@ -317,7 +324,7 @@ export interface ParsedToolRun<D> {
 export function parseToolRun<D>(
 	tool: string,
 	input: ClassifyRunOutcomeInput,
-	parse: (output: string) => readonly D[],
+	parse: (output: string) => readonly D[] | null,
 	options: ParseToolRunOptions = {},
 ): ParsedToolRun<D> {
 	const streamed =
@@ -327,7 +334,13 @@ export function parseToolRun<D>(
 	const classified =
 		streamed === undefined ? input : { ...input, output: streamed };
 	const skipped = skipUnlessToolRan(tool, classified, options.fields);
-	if (skipped) return { skipped, diagnostics: [], parsedNothing: false };
+	if (skipped)
+		return {
+			skipped,
+			diagnostics: [],
+			unreadable: false,
+			parsedNothing: false,
+		};
 
 	const output =
 		streamed ??
@@ -335,7 +348,8 @@ export function parseToolRun<D>(
 		input.output ??
 		input.result.stdout ??
 		"";
-	const diagnostics = [...parse(output)];
+	const parsed = parse(output);
+	const diagnostics = [...(parsed ?? [])];
 	const parsedNothing = recordParsedNothing({
 		tool,
 		status: input.result.status ?? null,
@@ -343,7 +357,12 @@ export function parseToolRun<D>(
 		parsedCount: diagnostics.length,
 		fields: options.fields,
 	});
-	return { skipped: null, diagnostics, parsedNothing };
+	return {
+		skipped: null,
+		diagnostics,
+		unreadable: parsed === null,
+		parsedNothing,
+	};
 }
 
 /** `parseStreams: "stdout-else-stderr"` (#5411): see {@link ParseToolRunOptions}. */
@@ -372,6 +391,10 @@ function stdoutElseStderr(result: SpawnResult): string {
  *                             (`findingsResult` in types.ts, #3781).
  * - no findings, exit 0     → clean: `succeeded`/`none`.
  * - no findings, nonzero exit,
+ *   report read, nothing
+ *   for this file           → clean: `succeeded`/`none` (`unreadable: false`,
+ *                             #5411: a valid report of OTHER files, #3295).
+ * - no findings, nonzero exit,
  *   bytes emitted           → `failed` + one parse-error warning diagnostic,
  *                             `failureKind: "parser_error"` (not findings,
  *                             #3796). Never clean (#1781 shape). A runner whose tool
@@ -391,6 +414,15 @@ export interface FinishParsedRunInput {
 	};
 	diagnostics: Diagnostic[];
 	/**
+	 * Whether the output was NOT a report this tool prints (#5411): pass
+	 * `ParsedToolRun.unreadable`. Omitted, the answer is inferred from the bytes
+	 * (any output that yielded nothing is unreadable), the rule for parsers that
+	 * return `[]` for both an unreadable and an empty report. A parser that
+	 * returns `null` when it cannot read the output supplies the real answer, so
+	 * a valid report naming only other files reads clean instead of a parse error.
+	 */
+	unreadable?: boolean;
+	/**
 	 * Override the default findings mapping when the runner's convention
 	 * differs (e.g. phpstan always reports `failed`/`blocking`). Receives the
 	 * non-empty diagnostics array.
@@ -405,7 +437,8 @@ export function finishParsedRun(input: FinishParsedRunInput): RunnerResult {
 	const status = input.result.status ?? null;
 
 	if (input.diagnostics.length === 0) {
-		if (status !== 0 && raw.trim().length > 0) {
+		const unreadable = input.unreadable ?? raw.trim().length > 0;
+		if (status !== 0 && unreadable) {
 			const message = `${input.tool} exited ${status} but its output could not be parsed`;
 			return faultResult(
 				{ kind: "parser_error", failureMessage: message },

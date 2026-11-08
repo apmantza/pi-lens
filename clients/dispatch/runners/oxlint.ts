@@ -29,6 +29,7 @@ import {
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
+import { spawnTimedOut } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 
 // One file's JSON report. Nothing legitimate approaches 8 MiB here, so this is
@@ -290,8 +291,7 @@ interface OxlintProcessEvidence {
 function oxlintProcessState(result: OxlintProcessEvidence): OxlintProcessState {
 	const failureKind = result.spawnFailure?.kind;
 	if (truncatedByOutputCap(result)) return "truncated";
-	if (result.failure === "timeout" || failureKind === "timeout")
-		return "timeout";
+	if (spawnTimedOut(result)) return "timeout";
 	if (result.failure === "aborted" || failureKind === "killed") return "killed";
 	if (result.signal || result.failure === "signal") return "signal";
 	if (result.failure === "spawn" || result.error) return "spawn";

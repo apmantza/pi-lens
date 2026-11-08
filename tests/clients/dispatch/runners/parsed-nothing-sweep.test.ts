@@ -85,6 +85,17 @@ const EXEMPT: Record<string, string> = {
 		"consults the primitive only for a timeout (#5411). A `helm template` " +
 		"that exits nonzero is a chart finding parsed from its Error: lines, " +
 		"and an unreadable trivy report is a coverage-gap diagnostic.",
+	"rust-clippy.ts":
+		"consults the primitive only for a timeout with nothing parsed (#5411), " +
+		"so that skip leaves the ledger row; partial findings are kept by " +
+		"faultIfCutShort. Its other outcomes are parsed from cargo's own message " +
+		"stream, where a sibling file's diagnostic filters to zero for the edited " +
+		"file (the go-vet shape).",
+	"prisma-validate.ts":
+		"consults the primitive only to skip a run that produced no findings and " +
+		"no output (#5411); finishParsedRun alone would call blank output clean. " +
+		"Output that is not prisma's own validation report already goes to the " +
+		"shared parse-error arm.",
 	"cue-vet.ts":
 		"already answers this question, and more loudly than a ledger row: on " +
 		"a nonzero exit whose output attributes to NO file, filterToTouchedFile " +

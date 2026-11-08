@@ -108,18 +108,22 @@ const SWIFTLINT_FIXABLE_RULES = new Set<string>([
 	"yoda_condition",
 ]);
 
+/**
+ * `null` is "this output is not a SwiftLint report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 function parseSwiftLintOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
 	if (!raw.trim()) return diagnostics;
 	const absTarget = path.resolve(cwd, filePath);
 
 	try {
 		const parsed = JSON.parse(raw) as SwiftLintViolation[];
-		if (!Array.isArray(parsed)) return diagnostics;
+		if (!Array.isArray(parsed)) return null;
 
 		for (const item of parsed) {
 			if (!item.reason) continue;
@@ -155,7 +159,7 @@ function parseSwiftLintOutput(
 			});
 		}
 	} catch {
-		return diagnostics;
+		return null;
 	}
 
 	return diagnostics;
@@ -210,6 +214,7 @@ const swiftlintRunner: RunnerDefinition = {
 			ctx,
 			result,
 			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
 		});
 	},
 };

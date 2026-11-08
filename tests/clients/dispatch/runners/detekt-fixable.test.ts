@@ -37,7 +37,7 @@ describe("parseDetektOutput — fixable propagation (#112 slice)", () => {
 			}),
 		].join("\n");
 
-		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd());
+		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd()) ?? [];
 		expect(diags).toHaveLength(2);
 		for (const d of diags) {
 			expect(d.tool).toBe("detekt");
@@ -56,7 +56,7 @@ describe("parseDetektOutput — fixable propagation (#112 slice)", () => {
 			message: "Unnecessary `Unit` return type.",
 			rule: "OptionalUnit",
 		});
-		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd());
+		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd()) ?? [];
 		expect(diags).toHaveLength(1);
 		expect(diags[0].fixable).toBe(true);
 	});
@@ -81,7 +81,7 @@ describe("parseDetektOutput — fixable propagation (#112 slice)", () => {
 			}),
 		].join("\n");
 
-		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd());
+		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd()) ?? [];
 		expect(diags).toHaveLength(2);
 		for (const d of diags) {
 			expect(d.fixable).toBe(false);
@@ -109,7 +109,7 @@ describe("parseDetektOutput — fixable propagation (#112 slice)", () => {
 			}),
 		].join("\n");
 
-		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd());
+		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd()) ?? [];
 		expect(diags).toHaveLength(1);
 		expect(diags[0].message).toContain("right file");
 	});
@@ -117,7 +117,7 @@ describe("parseDetektOutput — fixable propagation (#112 slice)", () => {
 	it("treats a finding with no rule bracket as non-fixable", () => {
 		const raw =
 			"src/Main.kt:1:1: warning: Unrecognised diagnostic without a rule id";
-		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd());
+		const diags = parseDetektOutput(raw, "src/Main.kt", process.cwd()) ?? [];
 		expect(diags).toHaveLength(1);
 		expect(diags[0].rule).toBe("detekt");
 		expect(diags[0].fixable).toBe(false);

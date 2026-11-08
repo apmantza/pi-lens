@@ -85,7 +85,7 @@ import {
 	getProjectTrustState,
 	projectTrustDenialReason,
 } from "../../project-trust.js";
-import { safeSpawnAsync } from "../../safe-spawn.js";
+import { type SpawnResult, safeSpawnAsync } from "../../safe-spawn.js";
 import { scannerReportParentDir } from "../../scanner-temp-root.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
@@ -558,6 +558,22 @@ function failedResult(kind: string, message: string): RunnerResult {
 }
 
 /**
+ * The verdict for a spawn that never produced one about the chart. A timeout is
+ * the budget ending the run, the same `did-not-run` skip (and ledger row) every
+ * seam runner reports (#5411); the other kinds stay typed failures.
+ */
+function startupFailureResult(kind: string, render: SpawnResult): RunnerResult {
+	const timedOut =
+		kind === "timeout"
+			? skipUnlessToolRan("helm-render", { result: render })
+			: null;
+	return (
+		timedOut ??
+		failedResult(kind, render.error?.message || `helm template ${kind}`)
+	);
+}
+
+/**
  * The flags pi-lens itself puts on the command line. If helm complains about one
  * of THESE, the complaint is about us, not about the chart.
  */
@@ -975,16 +991,6 @@ async function renderAndValidate(
 		}
 
 		const startupFailure = spawnFailureKind(render);
-		if (startupFailure === "timeout") {
-			// The budget ended the run: the same `did-not-run` skip every seam
-			// runner reports for a timeout (#5411), with the latency row kept.
-			logRenderPass(filePath, chartRoot, startedAt, {
-				outcome: "runner-failed",
-				failureKind: startupFailure,
-			});
-			const timedOut = skipUnlessToolRan("helm-render", { result: render });
-			if (timedOut) return timedOut;
-		}
 		if (startupFailure) {
 			// The runner never got a verdict about the chart. Reporting this as a
 			// chart finding would blame the user's chart for our own missing tool
@@ -993,10 +999,7 @@ async function renderAndValidate(
 				outcome: "runner-failed",
 				failureKind: startupFailure,
 			});
-			return failedResult(
-				startupFailure,
-				render.error?.message || `helm template ${startupFailure}`,
-			);
+			return startupFailureResult(startupFailure, render);
 		}
 		if (render.status !== 0) {
 			// Before blaming the chart: did helm reject OUR OWN command line? An old

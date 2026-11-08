@@ -69,12 +69,20 @@ const LOCATION_PATTERN = /^\s*┌─\s+(.+?):(\d+):(\d+)$/;
  * (#1937 round 2). The exit-code table in the runner is the primary guard;
  * this is the structural one, and each covers a case the other does not.
  */
+/**
+ * `null` is "this output is not a taplo report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 export function parseTaploOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
+	// A located codespan for ANY file is a taplo report; a header with no
+	// location (clap's own failures, #1937 round 2) is not.
+	let located = 0;
+	if (!raw.trim()) return diagnostics;
 	const absTarget = path.resolve(cwd, filePath);
 	const lines = stripAnsi(raw ?? "").split(/\r?\n/);
 
@@ -103,6 +111,7 @@ export function parseTaploOutput(
 			if (!lines[j].includes(LOCATION_LEAD)) continue;
 			const location = LOCATION_PATTERN.exec(lines[j].trimEnd());
 			if (!location) continue;
+			located += 1;
 			if (!pathsEqual(path.resolve(cwd, location[1]!.trim()), absTarget))
 				continue;
 			line = Number.parseInt(location[2]!, 10) || 1;
@@ -126,7 +135,7 @@ export function parseTaploOutput(
 		});
 	}
 
-	return diagnostics;
+	return located > 0 ? diagnostics : null;
 }
 
 const taploRunner: RunnerDefinition = {
@@ -222,6 +231,7 @@ const taploRunner: RunnerDefinition = {
 			ctx,
 			result,
 			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
 			classify: () => ({ status: "failed", semantic: "blocking" }),
 		});
 	},

@@ -242,6 +242,74 @@ describe("one run-outcome verdict (#5411)", () => {
 		},
 	);
 
+	// Recurrence (#5426 review F1): moving these runners onto `finishParsedRun`
+	// read a VALID report that names only another file (the #3295 filters: a
+	// `.swiftlint.yml` `included:`, a `.vale.ini` glob, a typos or taplo or
+	// detekt argv that widens the run) as "its output could not be parsed",
+	// `failed/parser_error`. The report parsed; it holds nothing for THIS file,
+	// which is a clean run exactly as before. Only unreadable output is a parse
+	// error, so the parser, which alone knows the difference, says so.
+	it.each([
+		[
+			"vale",
+			JSON.stringify({
+				"other.md": [
+					{
+						Message: "x",
+						Line: 1,
+						Check: "Vale.Spelling",
+						Severity: "error",
+						Span: [1, 2],
+					},
+				],
+			}),
+		],
+		[
+			"swiftlint",
+			JSON.stringify([
+				{
+					file: "/elsewhere/other.swift",
+					line: 1,
+					character: 1,
+					reason: "x",
+					rule_id: "r",
+					severity: "Error",
+				},
+			]),
+		],
+		[
+			"spellcheck",
+			JSON.stringify({
+				type: "typo",
+				path: "other.md",
+				line_num: 1,
+				byte_offset: 0,
+				typo: "teh",
+				corrections: ["the"],
+			}),
+		],
+		["taplo", "error: invalid TOML\n  \u250c\u2500 other.toml:2:9\n"],
+		["detekt", "/elsewhere/Other.kt:3:5: Some message [RuleName]\n"],
+	] as const)(
+		"%s: a valid report naming only another file is a clean run",
+		async (name, report) => {
+			const result = await runTool(name, {
+				status: TOOLS[name].ranStatus,
+				// taplo prints its codespans on stderr
+				...(name === "taplo" ? { stderr: report } : { stdout: report }),
+			});
+			expect({
+				status: result.status,
+				failureKind: result.failureKind,
+				diagnostics: result.diagnostics,
+			}).toEqual({
+				status: "succeeded",
+				failureKind: undefined,
+				diagnostics: [],
+			});
+		},
+	);
+
 	// Before: a tool that timed out was `skipped` (did not run) through the seam
 	// and `failed/timeout` through helm-lint, rust-clippy and helm-render.
 	it("swiftlint: a timeout is a skipped run that did not run", async () => {
@@ -329,6 +397,19 @@ describe("one run-outcome verdict (#5411)", () => {
 				status: "failed",
 				failureKind: "parser_error",
 			});
+		});
+
+		// Recurrence (#5426 review F3): the stderr fallback is for a FAILING tool.
+		// A tool that exits 0 and prints its notes on stderr is clean; without the
+		// exit-0 guard in the stream choice, ruff's text fallback read a stderr
+		// line as a finding on a clean file.
+		it("ruff exit 0 with empty stdout stays clean beside stderr text", async () => {
+			const result = await runTool("ruff", {
+				status: 0,
+				stdout: "",
+				stderr: "sample.py:1:8: F401 `os` imported but unused\n",
+			});
+			expect(result).toMatchObject({ status: "succeeded", diagnostics: [] });
 		});
 	});
 });

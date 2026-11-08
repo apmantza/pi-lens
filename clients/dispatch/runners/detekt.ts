@@ -91,18 +91,25 @@ const DETEKT_FIXABLE_RULES = new Set<string>([
 // The level is therefore optional, and a finding that carries none is a warning
 // (#4522). The comment here is the one place the shape is stated; the captured
 // replay (`detekt/real`) is what proves it.
+/**
+ * `null` is "this output is not a detekt report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 function parseDetektOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
+	if (!raw.trim()) return diagnostics;
+	let located = 0;
 	const pattern =
 		/^(.+?):(\d+):(\d+): (?:(error|warning): )?(.+?)(?:\s+\[([^\]]+)\])?$/gm;
 
 	const absTarget = path.resolve(cwd, filePath);
 	for (const match of raw.matchAll(pattern)) {
 		const [, file, lineStr, colStr, level, message, rule] = match;
+		located += 1;
 		// #3278: one seam for reported-path attribution — see javac.ts.
 		if (!pathsEqual(path.resolve(cwd, file.trim()), absTarget)) continue;
 
@@ -129,7 +136,7 @@ function parseDetektOutput(
 				: undefined,
 		});
 	}
-	return diagnostics;
+	return located > 0 ? diagnostics : null;
 }
 
 const detektRunner: RunnerDefinition = {
@@ -192,6 +199,7 @@ const detektRunner: RunnerDefinition = {
 			ctx,
 			result,
 			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
 			classify: (diagnostics) => {
 				const hasErrors = diagnostics.some((d) => d.severity === "error");
 				return {

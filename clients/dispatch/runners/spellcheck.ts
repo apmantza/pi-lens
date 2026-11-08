@@ -54,12 +54,19 @@ const TYPOS_EXIT_CODES: ToolExitCodes = { ran: [2] };
  *   "corrections": ["receive"]
  * }
  */
+/**
+ * `null` is "this output is not a typos report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 function parseTyposOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
+	// A line that parsed as a JSON object is a typos record, whatever file it
+	// names; none at all means the output was not typos JSONL.
+	let readRecords = 0;
 	const absTarget = path.resolve(cwd, filePath);
 
 	if (!raw.trim()) {
@@ -81,6 +88,7 @@ function parseTyposOutput(
 				corrections?: string[];
 			};
 
+			if (parsed && typeof parsed === "object") readRecords += 1;
 			if (!parsed.typo || !parsed.line_num) continue;
 			// #3295: every typos JSONL record names its own `path`; a `typos.toml`
 			// `files.extend-exclude` or a directory argv makes that a second file.
@@ -110,7 +118,7 @@ function parseTyposOutput(
 		}
 	}
 
-	return diagnostics;
+	return diagnostics.length > 0 || readRecords > 0 ? diagnostics : null;
 }
 
 const spellcheckRunner: RunnerDefinition = {
@@ -158,6 +166,7 @@ const spellcheckRunner: RunnerDefinition = {
 			ctx,
 			result,
 			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
 			classify: () => ({ status: "failed", semantic: "warning" }),
 		});
 	},
