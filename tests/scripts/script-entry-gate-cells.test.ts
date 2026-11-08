@@ -81,7 +81,6 @@ const CELLS: Record<string, Cell> = {
 	"check-snapshot-persist-ratio.mjs": {},
 	"check-tla-models.mjs": {},
 	"ci-changed-files.mjs": {},
-	"ci-heavy-gate.mjs": {},
 	"ci-shuffle-census.mjs": {},
 	"ci-shuffle-changed-tests.mjs": {},
 	"ci-test-diff.mjs": {},

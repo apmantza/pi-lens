@@ -7,9 +7,9 @@ import { run as runChangedFiles } from "../../scripts/ci-changed-files.mjs";
 
 const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
-// #3801: a docs-only pull request does not start the HEAVY ADVISORY jobs
-// (the gate) but runs every test job, a single non-docs file
-// runs everything, and no REQUIRED check can be absent or skipped. This
+// #3801: a docs-only pull request runs every test job (only the `tla-shards`
+// matrix skips, #5082), a single non-docs file runs everything, and no
+// REQUIRED check can be absent or skipped. This
 // evaluates the real ci.yml: each job's `needs` and `if`, each gated step's
 // `if`, under the outputs the real classifier script produced for a diff.
 // Every case names the recurrence it keeps out.
@@ -143,12 +143,7 @@ function ancestorsOf(id: string, seen = new Set<string>()): Set<string> {
 }
 
 /** Run the job graph for one event and diff; every job that runs succeeds. */
-function simulate(
-	event: string,
-	files: string[],
-	gateReady = "true",
-	changesFails = false,
-) {
+function simulate(event: string, files: string[], changesFails = false) {
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-docs-skip-"));
 	const output = path.join(dir, "output");
 	try {
@@ -174,10 +169,7 @@ function simulate(
 		const results: Record<string, string> = changesFails
 			? { changes: "failure" }
 			: {};
-		const outputs: Record<string, Record<string, string>> = {
-			changes,
-			"heavy-gate": { ready: gateReady },
-		};
+		const outputs: Record<string, Record<string, string>> = { changes };
 		const remaining = Object.keys(CI).filter((id) => !(id in results));
 		while (remaining.length) {
 			const id = remaining.find((candidate) =>
@@ -249,11 +241,6 @@ const DOCS_ONLY = [
 	"README.md",
 	".changelog/3801-x.md",
 ];
-// The jobs behind `heavy-gate`: advisory, and the only jobs a docs-only diff
-// skips. #4518 promoted the Windows Vitest subset to a gating check, so it left
-// this list: a required row that a docs-only diff skips is absent, not passing.
-// #5275 removed `codeql`, the last job behind the gate; the gate itself stays.
-const HEAVY_ADVISORY = ["heavy-gate"];
 // Every test-running job: a docs edit can red these (review r1 F2), so a
 // docs-only diff runs ALL of them. `tla-shards` is the exception (#5082): its
 // four matrix jobs model-check formal/, which a diff that leaves formal/ and
@@ -271,8 +258,8 @@ const TEST_JOBS = [
 ];
 const TLA_SHARDS = "tla-shards";
 
-describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () => {
-	it("skips the heavy advisory jobs for a docs-only diff and runs every test job", () => {
+describe("#3801 docs-only pull requests skip only the TLA+ shards", () => {
+	it("skips only the TLA+ shards for a docs-only diff and runs every test job", () => {
 		const { changes, results } = simulate("pull_request", DOCS_ONLY);
 		expect(changes).toEqual({
 			code: "false",
@@ -281,7 +268,6 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			hotpath: "false",
 			install: "false",
 		});
-		for (const id of HEAVY_ADVISORY) expect(results[id], id).toBe("skipped");
 		// Recurrence (#5082): the four shard jobs of a diff that cannot change
 		// formal/ held a runner slot each (72 of 73 audited pull requests).
 		expect(results[TLA_SHARDS]).toBe("skipped");
@@ -405,8 +391,7 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 	])("runs everything when %s joins a docs diff", (file) => {
 		const { changes, results } = simulate("pull_request", [...DOCS_ONLY, file]);
 		expect(changes.code).toBe("true");
-		for (const id of [...HEAVY_ADVISORY, ...TEST_JOBS])
-			expect(results[id], id).toBe("success");
+		for (const id of TEST_JOBS) expect(results[id], id).toBe("success");
 		// formal/, the checker and ci.yml itself are the formal triggers
 		expect(results[TLA_SHARDS], TLA_SHARDS).toBe(
 			["formal/file-locks/FileLock.tla", ".github/workflows/ci.yml"].includes(
@@ -433,7 +418,6 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			for (const id of [
 				...TEST_JOBS.filter((id) => id !== "changed-tests-shuffled"),
 				TLA_SHARDS,
-				"heavy-gate",
 			]) {
 				expect(results[id], id).toBe("success");
 			}
@@ -512,21 +496,13 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 	});
 
 	// Recurrence: a FAILED classification reading as docs-only or as code. The
-	// heavy jobs depend on `changes`, so a failed one skips them (a visible red
-	// `Changed files` row; they are advisory); the test jobs never depended on
-	// it and still run. `TLA+ models` is REQUIRED and is the exception that must
+	// test jobs never depended on `changes` and still run. `TLA+ models` is REQUIRED and is the exception that must
 	// not skip (verify r2 V1): GitHub reads a needs-skipped required check as
 	// passing, so it starts anyway, and with no `formal` output its steps run the
 	// FULL model check (an empty output is not 'false').
-	it("never reads a failed classification as docs-only: heavy jobs skip, test jobs still run, TLA+ runs in full", () => {
-		const { changes, results } = simulate(
-			"pull_request",
-			DOCS_ONLY,
-			"true",
-			true,
-		);
+	it("never reads a failed classification as docs-only: test jobs still run, TLA+ runs in full", () => {
+		const { changes, results } = simulate("pull_request", DOCS_ONLY, true);
 		expect(results.changes).toBe("failure");
-		for (const id of HEAVY_ADVISORY) expect(results[id], id).toBe("skipped");
 		for (const id of [
 			"test",
 			"unit-tests",
@@ -600,11 +576,11 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 		}
 	});
 
-	// Recurrence: a new job gated on `changes` without being a heavy advisory or
-	// TLA+ job would reintroduce a docs-only skip of tests. The TLA+ aggregate
+	// Recurrence: a new job gated on `changes` without being a TLA+ job would
+	// reintroduce a docs-only skip of tests. The TLA+ aggregate
 	// reads `changes` only to tell "nothing needed" from "a shard is missing"
 	// (#5082); it still runs on every event (`if: always()`).
-	it("lets only tla-shards, tla-models and heavy-gate depend on `changes`", () => {
+	it("lets only tla-shards and tla-models depend on `changes`", () => {
 		const dependents = Object.entries(CI)
 			.filter(
 				([id, job]) =>
@@ -612,8 +588,7 @@ describe("#3801 docs-only pull requests skip only the heavy advisory jobs", () =
 			)
 			.map(([id]) => id)
 			.sort(byCodeUnit);
-		expect(dependents).toEqual(["heavy-gate", "tla-models", "tla-shards"]);
+		expect(dependents).toEqual(["tla-models", "tla-shards"]);
 		expect(CI["tla-models"].if).toBe("always()");
-		expect(CI["heavy-gate"].if).toBe("needs.changes.outputs.code == 'true'");
 	});
 });
