@@ -271,12 +271,10 @@ function helperCall(
  *  `import walk, { x } from`), else undefined. #5430 review F2: it reads as the
  *  module's `default` export, so a missing one fails closed like a named one. */
 function defaultImportName(statement: SgNode): string | undefined {
-	const clause = statement
-		.children()
-		.find((child) => child.kind() === "import_clause");
-	return clause
-		?.children()
-		.find((child) => child.kind() === "identifier")
+	// `inside` matches the direct parent only, so a name inside `{ … }` or
+	// `* as ns` is not the default binding.
+	return statement
+		.find({ rule: { kind: "identifier", inside: { kind: "import_clause" } } })
 		?.text();
 }
 
@@ -423,7 +421,7 @@ function createResolver(sources: HelperSources): HelperResolver {
 			if (!statement.isNamed()) continue;
 			const exportsDefault =
 				statement.kind() === "export_statement" &&
-				statement.children().some((child) => child.kind() === "default");
+				/^\s*export\s+default\b/.test(statement.text());
 			// #5430 review F2: `export default <declaration | expression>` defines
 			// the name `default`; `export default name` points at `name`.
 			const value = exportsDefault ? statement.field("value") : null;
@@ -1011,13 +1009,10 @@ function bodyAndBudget(args: SgNode[]): {
 	if (!FUNCTION_KINDS.has(String(third.kind())))
 		return { body: second, budget: third };
 	if (second.kind() !== "object") return { body: third, budget: undefined };
-	const timeout = second
-		.children()
-		.find(
-			(pair) =>
-				pair.kind() === "pair" &&
-				unquote(pair.field("key")?.text() ?? "") === "timeout",
-		);
+	const pairs = second.children().filter((node) => node.kind() === "pair");
+	const timeout = pairs.find(
+		(pair) => unquote(pair.field("key")?.text() ?? "") === "timeout",
+	);
 	return { body: third, budget: timeout?.field("value") ?? undefined };
 }
 

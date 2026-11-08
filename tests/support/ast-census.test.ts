@@ -261,10 +261,17 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 	},
 	{
 		file: "tests/config/tree-census-timeout.test.ts",
-		text: "for (const child of holder.children())",
+		text: "for (const parameter of holder.children())",
 		count: 1,
 		reason:
-			"`boundWithin` reads one binding holder's direct children for its name; one level, no recursive traversal",
+			"`bindingScopes` reads one parameter list's direct children for the names they bind; one level, no recursive traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: 'const pairs = second.children().filter((node) => node.kind() === "pair");',
+		count: 1,
+		reason:
+			"`bodyAndBudget` reads one options object's direct pairs for its `timeout`; one level, no recursive traversal",
 	},
 	{
 		file: "tests/config/tree-census-timeout.test.ts",

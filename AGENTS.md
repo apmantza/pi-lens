@@ -347,7 +347,7 @@ entry's screen, or its first sentence when it has none.
 78. **A dependency's cache directory attributed to the fixture that triggered it:** a loader that materialises `os.tmpdir()/<tool>` on the caller's own stack looks like a fixture sibling, so the creator recorded for it is accurate per process and wrong per cause, and the sweep reds a file that never created it.
 81. **Synchronous native-tree walk holds every tree:** Screen: does the loop's body parse, and does it reach a `setImmediate` or a real I/O await per iteration?
 82. **One home variable pinned, the rest left at the real home:** Screen: which directory does the process I run resolve from, and is every variable that names it pinned?
-85. **Default-budget tree census:** Screen: does this case call a walker or read a binding one produced, and is its third argument one of those two forms?
+85. **Default-budget tree census:** Screen: does this case call a walker or read a binding one produced, and is its budget one of those two forms?
 86. **Turn-count wait for real I/O:** Screen: does the wait end on the event it waits for or on a real-clock deadline, never on a count?
 92. **Test double with a result shape the real producer never returns:** Screen: was the double's result shape copied from a real run of the producer, or driven through `tests/support/fake-child.ts`, or written by hand?
 
