@@ -51,6 +51,10 @@ import {
 } from "../clients/diagnostic-dispositions.js";
 import { insertSuppressComment } from "../clients/dispatch/suppress-writer.js";
 import { getMutationBridge } from "../clients/mutation-bridge.js";
+import {
+	refuseOutOfRootWrites,
+	writeSourceFile,
+} from "../clients/write-source-file.js";
 import { normalizeMapKey, resolveHostToolPath } from "../clients/path-utils.js";
 import { resolveLensToolName } from "../clients/tool-config.js";
 import { readFilePath } from "./shared.js";
@@ -348,75 +352,81 @@ export function createLensDiagnosticMarkTool(
 			// failed to read a file that does exist (#4576).
 			const absPath = resolveHostToolPath(filePathArg, cwd);
 
-			let content: string;
-			try {
-				content = await fs.readFile(absPath, "utf-8");
-			} catch (err) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: `Could not read ${absPath}: ${err instanceof Error ? err.message : String(err)}`,
-						},
-					],
-					isError: true,
-					details: {},
-				};
-			}
-
-			// #802: verify/reanchor before anything is written. `verifyLine` never
-			// throws by construction (see its doc), but this is still wrapped so an
-			// unforeseen failure can never leave `verifiedLine` in an inconsistent
-			// state — on any exception here, suppress refuses to write (the failure
-			// mode that must stay safe) while false-positive/defer/flagged fall back
-			// to trusting the caller's line, matching today's pre-#802 behavior.
-			let verifiedLine = line;
-			let reanchorNote: string | undefined;
-			try {
-				const verification = verifyLine(
-					content,
-					absPath,
-					tool,
-					rule,
-					message,
-					line,
-				);
-				if ("error" in verification) {
-					if (disposition === "suppress") {
-						return {
-							content: [
-								{
-									type: "text" as const,
-									text: `Refusing to suppress at ${path.relative(cwd, absPath)}:${line} — ${verification.error}`,
-								},
-							],
-							isError: true,
-							details: {},
-						};
-					}
-					// false-positive/defer/flagged: same worst-case as before #802 — a
-					// stale line produces a rotted (never-matching) anchor rather than a
-					// blocked mark.
-				} else {
-					verifiedLine = verification.line;
-					reanchorNote = verification.note;
-				}
-			} catch {
-				if (disposition === "suppress") {
+			// The read, the line check and (for suppress) the write are ONE
+			// read-modify-write: it runs inside pi's mutation queue for suppress, so a
+			// concurrent agent edit or deferred format cannot land between this read
+			// and the write-back and be erased by it (#5417). The other dispositions
+			// only read and run unqueued.
+			const refuse = (text: string) => ({
+				content: [{ type: "text" as const, text }],
+				isError: true as const,
+				details: {},
+			});
+			const readVerifyWrite = async (): Promise<
+				| { refusal: ReturnType<typeof refuse> }
+				| {
+						content: string;
+						verifiedLine: number;
+						reanchorNote: string | undefined;
+						wrote: boolean;
+				  }
+			> => {
+				let content: string;
+				try {
+					content = await fs.readFile(absPath, "utf-8");
+				} catch (err) {
 					return {
-						content: [
-							{
-								type: "text" as const,
-								text: `Refusing to suppress at ${path.relative(cwd, absPath)}:${line} — could not verify the line; re-run lens_diagnostics and retry.`,
-							},
-						],
-						isError: true,
-						details: {},
+						refusal: refuse(
+							`Could not read ${absPath}: ${err instanceof Error ? err.message : String(err)}`,
+						),
 					};
 				}
-			}
 
-			if (disposition === "suppress") {
+				// #802: verify/reanchor before anything is written. `verifyLine` never
+				// throws by construction (see its doc), but this is still wrapped so an
+				// unforeseen failure can never leave `verifiedLine` in an inconsistent
+				// state — on any exception here, suppress refuses to write (the failure
+				// mode that must stay safe) while false-positive/defer/flagged fall back
+				// to trusting the caller's line, matching today's pre-#802 behavior.
+				let verifiedLine = line;
+				let reanchorNote: string | undefined;
+				try {
+					const verification = verifyLine(
+						content,
+						absPath,
+						tool,
+						rule,
+						message,
+						line,
+					);
+					if ("error" in verification) {
+						if (disposition === "suppress") {
+							return {
+								refusal: refuse(
+									`Refusing to suppress at ${path.relative(cwd, absPath)}:${line} — ${verification.error}`,
+								),
+							};
+						}
+						// false-positive/defer/flagged: same worst-case as before #802 — a
+						// stale line produces a rotted (never-matching) anchor rather than a
+						// blocked mark.
+					} else {
+						verifiedLine = verification.line;
+						reanchorNote = verification.note;
+					}
+				} catch {
+					if (disposition === "suppress") {
+						return {
+							refusal: refuse(
+								`Refusing to suppress at ${path.relative(cwd, absPath)}:${line} — could not verify the line; re-run lens_diagnostics and retry.`,
+							),
+						};
+					}
+				}
+
+				if (disposition !== "suppress") {
+					return { content, verifiedLine, reanchorNote, wrote: false };
+				}
 				let updated: string;
 				try {
 					updated = insertSuppressComment(
@@ -428,32 +438,57 @@ export function createLensDiagnosticMarkTool(
 					);
 				} catch (err) {
 					return {
-						content: [
-							{
-								type: "text" as const,
-								text: err instanceof Error ? err.message : String(err),
-							},
-						],
-						isError: true,
-						details: {},
+						refusal: refuse(err instanceof Error ? err.message : String(err)),
 					};
 				}
 				await fs.writeFile(absPath, updated, "utf-8");
-				getMutationBridge()?.recordMutation({
-					filePath: absPath,
-					kind: "edit",
-					editRanges: [[Math.max(1, verifiedLine - 1), verifiedLine]],
-					consumer: "lens_diagnostic_mark",
-					provenance: "observed",
-					...(lineage && { lineage }),
-					...(sessionId !== undefined && { sessionId }),
-					// #4187 R4-1: this suppress wrote the file its own `tool_call`
-					// checked, so it may advance that file's authorship. Without
-					// the id the guard cannot tell it from a write no call
-					// produced, and ends the authorship instead.
-					toolCallId: _toolCallId,
-				});
+				return { content, verifiedLine, reanchorNote, wrote: true };
+			};
+
+			let step: Awaited<ReturnType<typeof readVerifyWrite>>;
+			if (disposition === "suppress") {
+				// A suppress comment is a source write: the workspace root is the one
+				// this tool resolves its cwd from, and a file outside the session's
+				// writable roots (a sibling repo, a vendor path) is refused and the
+				// refusal recorded, as the formatter and autofix do.
+				if (
+					refuseOutOfRootWrites([absPath], getCwd(), "lens_diagnostic_mark")
+						.length > 0
+				) {
+					return refuse(
+						`Refusing to suppress at ${path.relative(cwd, absPath)}:${line} — the file is outside the session's writable roots.`,
+					);
+				}
+				step = await writeSourceFile(
+					{
+						filePaths: [absPath],
+						record: (exit) => {
+							if (!exit.ok || !("wrote" in exit.value) || !exit.value.wrote)
+								return;
+							const { verifiedLine } = exit.value;
+							getMutationBridge()?.recordMutation({
+								filePath: absPath,
+								kind: "edit",
+								editRanges: [[Math.max(1, verifiedLine - 1), verifiedLine]],
+								consumer: "lens_diagnostic_mark",
+								provenance: "observed",
+								...(lineage && { lineage }),
+								...(sessionId !== undefined && { sessionId }),
+								// #4187 R4-1: this suppress wrote the file its own `tool_call`
+								// checked, so it may advance that file's authorship. Without
+								// the id the guard cannot tell it from a write no call
+								// produced, and ends the authorship instead.
+								toolCallId: _toolCallId,
+							});
+						},
+					},
+					readVerifyWrite,
+				);
+			} else {
+				step = await readVerifyWrite();
 			}
+			if ("refusal" in step) return step.refusal;
+			const { content, verifiedLine, reanchorNote } = step;
 
 			const anchor = markDisposition(
 				cwd,

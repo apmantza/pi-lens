@@ -2035,6 +2035,9 @@ export class ReadGuard {
 			/**
 			 * The write's transcript entry (#3603). A writer that names none (a
 			 * pi-lens writer) keeps the id of the write its bytes descend from.
+			 * A producer passes the host's raw id: the record keeps it in
+			 * `sanitizeCorrelationId` form, the form the branch import compares
+			 * against (#5405), as {@link noteCheckedPaths} does for its key.
 			 */
 			toolCallId?: string;
 			/** sha256 (hex) of the bytes on disk the caller already read for this write. */
@@ -2533,7 +2536,8 @@ export class ReadGuard {
 						observed.authoredLineCount,
 					)
 				: nextRanges;
-		const toolCallId = opts?.toolCallId ?? existing?.toolCallId;
+		const toolCallId =
+			sanitizeCorrelationId(opts?.toolCallId) ?? existing?.toolCallId;
 		// Re-inserted, so the map's order is credit order for the cap.
 		this.writtenThisSession.delete(filePath);
 		this.writtenThisSession.set(filePath, {

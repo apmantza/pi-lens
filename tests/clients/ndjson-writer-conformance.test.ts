@@ -36,6 +36,7 @@ import {
 	matchingCloseIndex,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const CREATE_LOGGER_IMPORT =
 	/import\s*\{[^}]*\bcreateNdjsonLogger\b[^}]*\}\s*from\s*["']\.\/ndjson-logger\.js["']/;
@@ -121,25 +122,33 @@ function createLoggerCallerModules(): string[] {
 }
 
 describe("NDJSON writer conformance (#2505)", () => {
-	it("every *-logger.ts module (except ndjson-logger.ts itself) delegates to createNdjsonLogger", () => {
-		const population = loggerModules();
+	it(
+		"every *-logger.ts module (except ndjson-logger.ts itself) delegates to createNdjsonLogger",
+		() => {
+			const population = loggerModules();
 
-		// Floor, not an exact count: a derived population that silently drops
-		// to zero (e.g. after a mass rename) would make every assertion below
-		// vacuously true. Currently 13 files match; keep some margin below
-		// that so an unrelated future removal does not make this test flaky.
-		assertNonEmptyScan("clients/*-logger.ts population", population.length, 10);
+			// Floor, not an exact count: a derived population that silently drops
+			// to zero (e.g. after a mass rename) would make every assertion below
+			// vacuously true. Currently 13 files match; keep some margin below
+			// that so an unrelated future removal does not make this test flaky.
+			assertNonEmptyScan(
+				"clients/*-logger.ts population",
+				population.length,
+				10,
+			);
 
-		const violations = population
-			.map((file) => ({
-				file: relativeToClients(file),
-				source: fs.readFileSync(file, "utf8"),
-			}))
-			.filter(({ source }) => !hasCreateLoggerImport(source))
-			.map(({ file }) => file);
+			const violations = population
+				.map((file) => ({
+					file: relativeToClients(file),
+					source: fs.readFileSync(file, "utf8"),
+				}))
+				.filter(({ source }) => !hasCreateLoggerImport(source))
+				.map(({ file }) => file);
 
-		expect(violations).toEqual([]);
-	});
+			expect(violations).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("known non-suffix ndjson producers also delegate to createNdjsonLogger", () => {
 		const clientsRoot = path.join(repoRoot, "clients");
@@ -152,77 +161,85 @@ describe("NDJSON writer conformance (#2505)", () => {
 		}
 	});
 
-	it("every createNdjsonLogger call site under clients/ configures a maxBytes bound", () => {
-		const sites = clientSourceFiles()
-			.filter((file) => path.basename(file) !== "ndjson-logger.ts")
-			.flatMap((file) => loggerCallSites(file));
+	it(
+		"every createNdjsonLogger call site under clients/ configures a maxBytes bound",
+		() => {
+			const sites = clientSourceFiles()
+				.filter((file) => path.basename(file) !== "ndjson-logger.ts")
+				.flatMap((file) => loggerCallSites(file));
 
-		assertNonEmptyScan(
-			"clients/ createNdjsonLogger call sites",
-			sites.length,
-			12,
-		);
+			assertNonEmptyScan(
+				"clients/ createNdjsonLogger call sites",
+				sites.length,
+				12,
+			);
 
-		const unbounded = sites
-			.filter((site) => !/\bmaxBytes\s*:/.test(site.text))
-			.map((site) => `${site.file}:${site.line}`);
+			const unbounded = sites
+				.filter((site) => !/\bmaxBytes\s*:/.test(site.text))
+				.map((site) => `${site.file}:${site.line}`);
 
-		// An unbounded sink is the #2505 defect itself: no size check runs on
-		// the write path at all, so the file grows until the once-per-process
-		// session-start sweep happens to look at it — which, in a long-lived
-		// process (the warm MCP server), may be never.
-		expect(unbounded).toEqual([]);
-	});
+			// An unbounded sink is the #2505 defect itself: no size check runs on
+			// the write path at all, so the file grows until the once-per-process
+			// session-start sweep happens to look at it — which, in a long-lived
+			// process (the warm MCP server), may be never.
+			expect(unbounded).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every createNdjsonLogger caller resolves its directory through getGlobalPiLensLogDir, never getGlobalPiLensDir (#2516)", () => {
-		// #2506 split machine-global state into two resolvers:
-		// `getGlobalPiLensDir()` for state a session must KEEP across restarts
-		// (installed tools, the instance registry), and
-		// `getGlobalPiLensLogDir()` for the log family, which alone gets the
-		// per-worktree/tmpdir probe redirect. A new logger wired to the wrong
-		// resolver silently loses that redirect and leaks straight into the
-		// maintainer's real `~/.pi-lens` the moment it runs as an ad-hoc probe
-		// — the exact #2506 shape, one module at a time. The population is
-		// DERIVED (every `createNdjsonLogger` caller under `clients/`), so a new
-		// logger is covered automatically without a hand-maintained list.
-		const population = createLoggerCallerModules();
+	it(
+		"every createNdjsonLogger caller resolves its directory through getGlobalPiLensLogDir, never getGlobalPiLensDir (#2516)",
+		() => {
+			// #2506 split machine-global state into two resolvers:
+			// `getGlobalPiLensDir()` for state a session must KEEP across restarts
+			// (installed tools, the instance registry), and
+			// `getGlobalPiLensLogDir()` for the log family, which alone gets the
+			// per-worktree/tmpdir probe redirect. A new logger wired to the wrong
+			// resolver silently loses that redirect and leaks straight into the
+			// maintainer's real `~/.pi-lens` the moment it runs as an ad-hoc probe
+			// — the exact #2506 shape, one module at a time. The population is
+			// DERIVED (every `createNdjsonLogger` caller under `clients/`), so a new
+			// logger is covered automatically without a hand-maintained list.
+			const population = createLoggerCallerModules();
 
-		assertNonEmptyScan(
-			"clients/ createNdjsonLogger caller population",
-			population.length,
-			12,
-		);
+			assertNonEmptyScan(
+				"clients/ createNdjsonLogger caller population",
+				population.length,
+				12,
+			);
 
-		const sources = population.map((file) => ({
-			file: relativeToClients(file),
-			source: fs.readFileSync(file, "utf8"),
-		}));
+			const sources = population.map((file) => ({
+				file: relativeToClients(file),
+				source: fs.readFileSync(file, "utf8"),
+			}));
 
-		const wrongResolver = sources
-			.filter(({ source }) =>
-				/\bgetGlobalPiLensDir\s*\(/.test(
-					stripSource(source, { strings: "blank" }),
-				),
-			)
-			.map(({ file }) => file);
-		expect(wrongResolver).toEqual([]);
-
-		// #2516 round 2, F4: banning the WRONG resolver is only half the rule.
-		// A logger that hand-rolls `path.join(os.homedir(), ".pi-lens")` — or
-		// takes any other route to a log root — names neither resolver and
-		// passed the ban above while missing the redirect entirely. Require the
-		// RIGHT one positively, so the only way into this population is through
-		// the seam that carries the redirect.
-		const noResolver = sources
-			.filter(
-				({ source }) =>
-					!/\bgetGlobalPiLensLogDir\s*\(/.test(
+			const wrongResolver = sources
+				.filter(({ source }) =>
+					/\bgetGlobalPiLensDir\s*\(/.test(
 						stripSource(source, { strings: "blank" }),
 					),
-			)
-			.map(({ file }) => file);
-		expect(noResolver).toEqual([]);
-	});
+				)
+				.map(({ file }) => file);
+			expect(wrongResolver).toEqual([]);
+
+			// #2516 round 2, F4: banning the WRONG resolver is only half the rule.
+			// A logger that hand-rolls `path.join(os.homedir(), ".pi-lens")` — or
+			// takes any other route to a log root — names neither resolver and
+			// passed the ban above while missing the redirect entirely. Require the
+			// RIGHT one positively, so the only way into this population is through
+			// the seam that carries the redirect.
+			const noResolver = sources
+				.filter(
+					({ source }) =>
+						!/\bgetGlobalPiLensLogDir\s*\(/.test(
+							stripSource(source, { strings: "blank" }),
+						),
+				)
+				.map(({ file }) => file);
+			expect(noResolver).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("does not count a commented-out logger import", () => {
 		expect(

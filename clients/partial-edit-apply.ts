@@ -1,6 +1,6 @@
 import type { EditToolInput } from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import * as fs from "node:fs";
+import { hashFileBytes } from "./content-stamp.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { ReadGuardEditBatchSummary } from "./read-guard-logger.js";
@@ -273,7 +273,7 @@ export class PartialApplyRecordStore {
 
 function hashFile(filePath: string): string | undefined {
 	try {
-		return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+		return hashFileBytes(filePath);
 	} catch {
 		return undefined;
 	}

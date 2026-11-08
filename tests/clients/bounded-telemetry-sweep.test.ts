@@ -31,6 +31,7 @@ import {
 	scanSource,
 	UNBOUNDED_FAILURE_PHASE_REASONS,
 } from "../support/bounded-telemetry-scan.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -47,31 +48,39 @@ function evidence(sites: EmissionSite[]): string[] {
 }
 
 describe("bounded-telemetry sweep (#1743)", () => {
-	it("scans a non-trivial population, so a broken scanner cannot pass vacuously", () => {
-		// A regex typo that matched nothing would make every assertion below
-		// trivially true. Pin the floor instead of the exact count, which churns.
-		expect(RAW_SITES.length).toBeGreaterThan(100);
-		expect(HELPER_SITES.length).toBeGreaterThanOrEqual(6);
-	});
+	it(
+		"scans a non-trivial population, so a broken scanner cannot pass vacuously",
+		() => {
+			// A regex typo that matched nothing would make every assertion below
+			// trivially true. Pin the floor instead of the exact count, which churns.
+			expect(RAW_SITES.length).toBeGreaterThan(100);
+			expect(HELPER_SITES.length).toBeGreaterThanOrEqual(6);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every failure-path record is either helper-emitted or has a stated reason", () => {
-		const unaccounted = RAW_SITES.filter(
-			(site) =>
-				site.phase !== undefined &&
-				isFailureShapedPhase(site.phase) &&
-				!(site.phase in UNBOUNDED_FAILURE_PHASE_REASONS),
-		);
-		expect(
-			evidence(unaccounted),
-			[
-				"A failure-path `logLatency` is unaccounted for.",
-				"Either route it through `emitBounded` (clients/bounded-telemetry.ts)",
-				"and add its phase to BOUNDED_TELEMETRY_PHASES, or add the phase to",
-				"UNBOUNDED_FAILURE_PHASE_REASONS with the MECHANISM that already",
-				"bounds its volume.",
-			].join(" "),
-		).toEqual([]);
-	});
+	it(
+		"every failure-path record is either helper-emitted or has a stated reason",
+		() => {
+			const unaccounted = RAW_SITES.filter(
+				(site) =>
+					site.phase !== undefined &&
+					isFailureShapedPhase(site.phase) &&
+					!(site.phase in UNBOUNDED_FAILURE_PHASE_REASONS),
+			);
+			expect(
+				evidence(unaccounted),
+				[
+					"A failure-path `logLatency` is unaccounted for.",
+					"Either route it through `emitBounded` (clients/bounded-telemetry.ts)",
+					"and add its phase to BOUNDED_TELEMETRY_PHASES, or add the phase to",
+					"UNBOUNDED_FAILURE_PHASE_REASONS with the MECHANISM that already",
+					"bounds its volume.",
+				].join(" "),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("every stated reason is non-empty and names a mechanism", () => {
 		for (const [phase, reason] of Object.entries(
@@ -84,46 +93,58 @@ describe("bounded-telemetry sweep (#1743)", () => {
 		}
 	});
 
-	it("a registered phase is never also written by a raw logLatency", () => {
-		const registered = new Set<string>(BOUNDED_TELEMETRY_PHASES);
-		const leaked = RAW_SITES.filter(
-			(site) => site.phase !== undefined && registered.has(site.phase),
-		);
-		expect(
-			evidence(leaked),
-			"A phase in BOUNDED_TELEMETRY_PHASES is still written by a raw logLatency. One seam per phase: route it through emitBounded.",
-		).toEqual([]);
-	});
+	it(
+		"a registered phase is never also written by a raw logLatency",
+		() => {
+			const registered = new Set<string>(BOUNDED_TELEMETRY_PHASES);
+			const leaked = RAW_SITES.filter(
+				(site) => site.phase !== undefined && registered.has(site.phase),
+			);
+			expect(
+				evidence(leaked),
+				"A phase in BOUNDED_TELEMETRY_PHASES is still written by a raw logLatency. One seam per phase: route it through emitBounded.",
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every registered phase has a live helper call site", () => {
-		const emitted = new Set(
-			HELPER_SITES.map((site) => site.phase).filter(
-				(phase): phase is string => phase !== undefined,
-			),
-		);
-		const dead = BOUNDED_TELEMETRY_PHASES.filter(
-			(phase) => !emitted.has(phase),
-		);
-		expect(
-			dead,
-			"A registry entry has no emitBounded/admitBounded call site. Remove it, or the registry stops describing the code.",
-		).toEqual([]);
-	});
+	it(
+		"every registered phase has a live helper call site",
+		() => {
+			const emitted = new Set(
+				HELPER_SITES.map((site) => site.phase).filter(
+					(phase): phase is string => phase !== undefined,
+				),
+			);
+			const dead = BOUNDED_TELEMETRY_PHASES.filter(
+				(phase) => !emitted.has(phase),
+			);
+			expect(
+				dead,
+				"A registry entry has no emitBounded/admitBounded call site. Remove it, or the registry stops describing the code.",
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every stated reason still has a live raw call site", () => {
-		const rawPhases = new Set(
-			RAW_SITES.map((site) => site.phase).filter(
-				(phase): phase is string => phase !== undefined,
-			),
-		);
-		const stale = Object.keys(UNBOUNDED_FAILURE_PHASE_REASONS).filter(
-			(phase) => !rawPhases.has(phase),
-		);
-		expect(
-			stale,
-			"A phase with a stated reason no longer has a raw logLatency site. It was migrated or deleted — drop the entry.",
-		).toEqual([]);
-	});
+	it(
+		"every stated reason still has a live raw call site",
+		() => {
+			const rawPhases = new Set(
+				RAW_SITES.map((site) => site.phase).filter(
+					(phase): phase is string => phase !== undefined,
+				),
+			);
+			const stale = Object.keys(UNBOUNDED_FAILURE_PHASE_REASONS).filter(
+				(phase) => !rawPhases.has(phase),
+			);
+			expect(
+				stale,
+				"A phase with a stated reason no longer has a raw logLatency site. It was migrated or deleted — drop the entry.",
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("every stated reason is for a phase the predicate can actually see", () => {
 		// Couples the two halves. Narrowing the predicate would otherwise leave
@@ -186,13 +207,17 @@ describe("bounded-telemetry scanner self-test", () => {
 		expect(found.some((site) => site.line === 4)).toBe(false);
 	});
 
-	it("scans every root that emits records, including tools/", () => {
-		// MUTATION PROOF for the SCAN_ROOTS addition (#1743 review F2): drop
-		// "tools" and this reds. `tools/*.ts` call `logLatency` directly, so a
-		// failure record added there would otherwise never be swept.
-		expect(SCAN_ROOTS).toContain("tools");
-		expect(SITES.some((site) => site.file.startsWith("tools/"))).toBe(true);
-	});
+	it(
+		"scans every root that emits records, including tools/",
+		() => {
+			// MUTATION PROOF for the SCAN_ROOTS addition (#1743 review F2): drop
+			// "tools" and this reds. `tools/*.ts` call `logLatency` directly, so a
+			// failure record added there would otherwise never be swept.
+			expect(SCAN_ROOTS).toContain("tools");
+			expect(SITES.some((site) => site.file.startsWith("tools/"))).toBe(true);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("classifies failure-shaped phase names by outcome suffix, not by topic", () => {
 		expect(isFailureShapedPhase("lsp_pull_diagnostic_timeout")).toBe(true);

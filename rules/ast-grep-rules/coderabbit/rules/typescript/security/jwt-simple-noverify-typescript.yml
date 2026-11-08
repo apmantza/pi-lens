@@ -13,7 +13,8 @@ note: >-
       - https://cwe.mitre.org/data/definitions/287
       - https://cwe.mitre.org/data/definitions/345
       - https://cwe.mitre.org/data/definitions/347
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   pattern: $JWT.decode($TOKEN, $SECRET, $NOVERIFY $$$)
   inside:

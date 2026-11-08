@@ -6,7 +6,8 @@ note: |-
   [CWE-295]: Improper Certificate [REFERENCES]
       - https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.danger_accept_invalid_hostnames
       - https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.danger_accept_invalid_certs
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   match_call_expression:
     kind: call_expression

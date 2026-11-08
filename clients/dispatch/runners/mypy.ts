@@ -16,6 +16,7 @@ import {
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const mypy = createAvailabilityChecker("mypy", "");
 
@@ -66,7 +67,7 @@ export function parseMypyOutput(
 			line: Number(lineNum),
 			column: col ? Number(col) : 1,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "mypy",
 			rule,
 			defectClass: "correctness",
@@ -80,12 +81,13 @@ const mypyRunner: RunnerDefinition = {
 	appliesTo: ["python"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
+	requiresConfig: (cwd) => hasMypyConfig(cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "mypy");
 
 		// Only run if mypy config exists — avoids false positives in untyped projects
-		if (!hasMypyConfig(cwd)) {
+		if (!mypyRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

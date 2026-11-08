@@ -23,13 +23,14 @@ rule:
     regex: "^var$"
 files:
   - "**/*.kt"
-tags:
-  - kotlin
-  - idiom
-  - immutability
-examples:
-  bad: |
-    var total = 0
-    total = total + price
-  good: |
-    val total = prices.sum()
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - immutability
+  examples:
+    bad: |
+      var total = 0
+      total = total + price
+    good: |
+      val total = prices.sum()

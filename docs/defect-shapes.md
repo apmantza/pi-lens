@@ -19,11 +19,9 @@ fixes its members says so instead of quoting a before and after.
    A normalizer change tables every writer and reader of the map with the
    normalizer each uses; a claim that one normalizer subsumes another is
    measured per transformation (separators, dot segments, case, symlinks,
-   existence), never asserted (#3178: four rounds, two inverted arms, one
-   unmeasured swap). Never put `path.resolve` in front of an identity key:
-   it folds `..` lexically before the link resolves, so `/repo/link/../f.ts`
-   keys a different file than the kernel does (three instances on
-   2026-10-25, listed in `HISTORY.md`). Screen: does
+   existence), never asserted. Never put `path.resolve` in front of an
+   identity key: it folds `..` lexically before the link resolves, so
+   `/repo/link/../f.ts` keys a different file than the kernel does. Screen: does
    any spelling reach `normalizeMapKey` or `realpathOrResolve` through a
    `path.resolve` first? Enforced by `tests/config/path-identity-sweep.test.ts`
    (partial: a raw realpath or a raw `path.resolve` key outside
@@ -65,17 +63,14 @@ fixes its members says so instead of quoting a before and after.
     hold for every path the tool WRITES; enumerate the written set (a rename's
     importers, an `ast_grep_replace` folder or its project default, a
     server-initiated `workspace/applyEdit` with no call at all) and key the
-    permission per call, never per path. Three rounds on the read guard's
-    authorship seam (#4187 R2-3, R4-1, R5): the pre-write retire covered the
-    named path while the post-write advance covered every recorded one, so a
-    file nothing checked was re-baselined over another writer's bytes. The
-    screen: for each writer, table named-at-call against actually-written, and
-    ask which rule answers for a path in the second column only.
+    permission per call, never per path. The screen: for each writer, table
+    named-at-call against actually-written, and ask which rule answers for a
+    path in the second column only.
     A first credit from a bridge is range-scoped to the bytes it reports, and
-    settled-sweep drift never creates authorship (#4210); screen the next
-    positional edit both inside and outside the reported range. This is the
-    bridge/LSP/native-edit rule only: recognized bash (#4131 R2), pipeline
-    sibling files, and agent_end are pinned whole-file exceptions.
+    settled-sweep drift never creates authorship; screen the next positional
+    edit both inside and outside the reported range. This is the
+    bridge/LSP/native-edit rule only: recognized bash, pipeline sibling files,
+    and agent_end are pinned whole-file exceptions.
 
 65. **Unknown authorship range:** a producer that cannot recover a truthful
     range must carry UNKNOWN to `ReadGuard.creditAuthorship`; UNKNOWN
@@ -103,6 +98,11 @@ fixes its members says so instead of quoting a before and after.
    failure as well as success. Teardown does not await a dead resource forever.
    Enforced by `tests/config/hook-await-bounds.test.ts` (partial: hook awaits
    and timeout races only; timer handles have no detector).
+   Consolidation verdict: stay distributed. Every named timer in clients/,
+   tools/, mcp/ and index.ts is cleared or unref'd in its own file, and the
+   anonymous awaited sleeps settle on their own timers. A `sleep(ms)` helper
+   would relocate one line per site and must stay ref'd, because an unref'd
+   awaited sleep lets a CLI exit mid-await.
 
 6. **Incomplete freshness:** use the right content, size, mtime, dependency,
    and existence axes. Missing finding paths are not current findings.
@@ -160,15 +160,10 @@ fixes its members says so instead of quoting a before and after.
     merge and a whole-file publish with no lock between them publish a snapshot,
     not a delta, so a same-tick or cross-process sibling's entries vanish. A
     timestamp stamped before the lock can also invert commit order against a
-    `ts > cursor` reader. `clients/recent-touches.ts` was this case: two
-    `publishFilesTouched` calls read the same record, and the second rename
-    dropped the first's batch (#5377, fixed in PR #5385, which commits through
-    `clients/durable-store.ts` and stamps `ts` inside the lock). Census: not
-    countable as one command; the 2026-11-07 sweep of the `writeFileAtomic`
-    users found this the only async read-merge-write, while
-    `clients/mutation-attribution.ts` and `clients/metrics-history.ts` are
-    synchronous (cross-process only). Enforcer: none: judgment-only, a scan
-    would have to follow a value from its read to its publish. Screen: does the
+    `ts > cursor` reader. Commit through `clients/durable-store.ts` and stamp
+    `ts` inside the lock. Census: not countable as one command. Enforcer: none:
+    judgment-only, a scan would have to follow a value from its read to its
+    publish. Instance and sweep: `HISTORY.md`. Screen: does the
     write's value come from a read of the same target with an await between, and
     is any ordering field assigned outside the lock?
 
@@ -193,11 +188,9 @@ file-scoped worklist and receives no project-wide scanner output.
 10. **Silencing as fixing:** distinguish clean, filtered, unavailable, errored,
     suppressed, deferred, and partial results. Any bound on an agent-facing
     path discloses its truncation on the rendered surface; a count recorded
-    only in `latency.log` is not disclosure (#3166 r2: an 80-finding input
-    bound zeroed a neighbour's genuine errors, counted only in the log).
-    Removing a false "unavailable" notice never turns the file clean: a file
-    no analyzer applies to reads "not analyzed" (#5238 r2 read
-    `build.gradle` as "Groovy clean" after its notice was dropped).
+    only in `latency.log` is not disclosure. Removing a false "unavailable"
+    notice never turns the file clean: a file no analyzer applies to reads
+    "not analyzed". Instances: `HISTORY.md`.
     An out-of-session-root project edit records one bounded degradation and
     uses the existing advisory notice seam; intended vendor skips and pi-owned
     OS-temp artifacts stay silent (`clients/runtime-tool-result.ts`,
@@ -254,7 +247,7 @@ file-scoped worklist and receives no project-wide scanner output.
     session, lifecycle or delivery seam names its record, cites an existing one,
     or says `none: <reason>` naming each file (`check-pr-body` prompts for it);
     a test reads a record back, and a reason is judged by the reviewer
-    (#3875; recurrence #3873: the S2/S3 fixes could not be shown to fire live).
+    (#3875).
     A new or changed `catch` handler in `clients/`, `mcp/`, `tools/` or
     `index.ts` is judged by `tests/config/silent-catch-sweep.test.ts`: a record
     seam on every path, an unconditional `throw`, or a `none: <reason>` marker,
@@ -278,9 +271,7 @@ file-scoped worklist and receives no project-wide scanner output.
     before it existed) and opaque (no rule word matches it, no path resolves
     through it), denying if either reading denies. Enforced by `findDeny` in
     `scripts/hooks/guard-bash.mjs`, pinned by the "substitution next to a rule
-    word (#3997)" rows in `tests/scripts/guard-bash-hook.test.ts`. Recurrence:
-    #3997 round 3 stripped the mark at three call sites and left
-    `checkUngated`, `mktemp` flags, and `git $(:) stash` open.
+    word (#3997)" rows in `tests/scripts/guard-bash-hook.test.ts`.
 
 49. **Whitespace counted as structure when it is alignment:** a leading run can
     be alignment, not one nesting unit (call continuations, block-comment and
@@ -292,9 +283,7 @@ file-scoped worklist and receives no project-wide scanner output.
     in both directions: it never passes stale input and never drops the only
     fresh answer. The model carries a no-drop invariant beside the safety one,
     and the test double emits in the real server's measured order, not the
-    order the fix assumes (#3484 r1: the fence dropped docker-langserver's only
-    publish; the model checked `FreshResult` alone and the fake published after
-    the fence reply).
+    order the fix assumes (#3484).
 
 79. **Prefix churn from a non-append write:** a provider caches the request in
     order (tools, then system, then messages), so a write that changes bytes
@@ -323,8 +312,7 @@ file-scoped worklist and receives no project-wide scanner output.
 90. **Generated proof line for a step that did not run:** a composer that
     writes a PR, issue or report body states what ran. A branch where the step
     failed, was skipped or timed out renders that outcome, never the success
-    sentence (#5243 r1: the nightly refresh body said the flips were
-    classified against master when the flip check had failed). Screen: for
+    sentence (#5243). Screen: for
     each proof sentence a composer emits, which input proves the step ran,
     and does the failed branch render something else?
 
@@ -389,28 +377,23 @@ file-scoped worklist and receives no project-wide scanner output.
 89. **Serial await of independent work on a hot path:** a `for` loop or a run
     of `await`s on the edit, write or turn-end path waits for each call before
     starting the next, though no call needs another's result. The cost is the
-    sum of the calls instead of the slowest one: LSP servers spawned one after
-    another made a cold first edit block ~7 s (#2540), and a serial stat walk
-    took 8 s on a slow filesystem (#1409). Overlapping is not always a win:
-    some servers answer one request at a time (typescript-language-server
-    forwards to one tsserver; #387, #631), and a write-ordered loop
+    sum of the calls instead of the slowest one. Overlapping is not always a
+    win: some servers answer one request at a time (typescript-language-server
+    forwards to one tsserver), and a write-ordered loop
     (`runtime.nextWriteIndex()`, a pipeline claim) must stay serial. Screen: do
     the calls this loop or sequence awaits one at a time need each other's
     results, share a write order, or go to one server that answers one request
     at a time? If none, overlap them through `clients/map-with-concurrency.ts`;
     if one does, a comment at the loop names it. Measure before overlapping
-    calls to one server. #5174 is the open instance. Census: not
-    countable. Enforcer: none: judgment-only; a scan cannot tell an
-    independent await from an ordered one without reading what each call
-    feeds. Instances and dates: `HISTORY.md`.
+    calls to one server. Census: not countable. Enforcer: none:
+    judgment-only; a scan cannot tell an independent await from an ordered one
+    without reading what each call feeds. Instances and dates: `HISTORY.md`.
 
 60. **Wasm failure outside the #3605 containment:** every failure thrown out
     of web-tree-sitter classifies through `classifyTreeSitterWasmError`, and a
     `catch` inside a `withParsedTree` consumer calls `reportWasmAbort` before it
     swallows the error. An unclassified or swallowed trap is never counted,
-    charged or recycled, and the runtime later fails elsewhere (#3996: the
-    bash wasm's unresolved `isalpha` import threw an unclassified `TypeError`
-    on every `[ a == b ]`, and a callback-traversal trap surfaced raw).
+    charged or recycled, and the runtime later fails elsewhere (#3996).
     `tests/clients/grammar-runtime-imports.test.ts` reds on a shipped grammar
     that imports a function the runtime does not export.
 
@@ -424,24 +407,21 @@ file-scoped worklist and receives no project-wide scanner output.
     `scripts/hooks/guard-bash.mjs`) is the catalog: a new verb alias or
     package manager (pnpm, yarn, bun) needs its own entry, and the hook binds
     Claude lanes only, so a codex worker's half is the plegma shim
-    (apmantza/plegma#693). Sweep 2026-10-07, clean in the repo's own scripts
-    (`grep -rnE "rmSync\(.*node_modules|rm -rf .*node_modules|npm ci"
-    scripts clients tools`): no script runs a writer in a lane tree.
-    Deletes are the second member, measured with GNU coreutils on 2026-10-07:
-    `rm -rf node_modules/`, `rm -rf node_modules/*`, `find node_modules/
+    (apmantza/plegma#693). Deletes are the second member, measured with GNU
+    coreutils: `rm -rf node_modules/`, `rm -rf node_modules/*`, `find node_modules/
     -delete`, `find -L|-H node_modules -delete`, `find node_modules/ -exec rm`
     and `cd node_modules && rm -rf ./*` empty the link target, while `rm -rf
     node_modules` (no slash) removes only the link. `classifyNodeModulesDelete`
     denies the first set through the same `hasNodeModulesSymlinkOutside` seam;
     that seam follows the complete symlink chain with a fail-closed fallback
-    when the target cannot be resolved (#4080).
+    when the target cannot be resolved. Sweep and instances: `HISTORY.md`.
     a lane unlinks without a slash or glob. Consolidation verdict: two rules on
     one classifier seam, kept apart because the npm rule judges a verb and the
     delete rule a path operand (deleting the delete rule relocates nothing the
     npm rule could absorb). Both share one path test,
     `operandThroughNodeModulesLink` (npm's is `<prefix>/node_modules/`, or its
-    cwd plus the project its walk-up finds), and one rule for every value form
-    (#4054 round 4, after round 3 regressed `--prefix "$(pwd)"`): a directory
+    cwd plus the project its walk-up finds), and one rule for every value form:
+    a directory
     is tested where the program lands (the holder of each `node_modules`
     component physically, as the kernel follows a link before `..`; npm's
     `--prefix` lexically; npm's walk-up from the physical cwd), and a part
@@ -455,18 +435,12 @@ file-scoped worklist and receives no project-wide scanner output.
     console output: strip ANSI first, and test with `FORCE_COLOR=1`. CI runs
     Vitest with colour, and escape codes split `Tests` from its counts and
     `FAIL` from its file, so a parser reads "no tests", "no red" or the wrong
-    class (#4074, #4075, #4079, #4087: the pre-push hook recorded `failed: 0`
-    for a red run). Read a Vitest transcript only through `parseVitestSummary`
+    class. Read a Vitest transcript only through `parseVitestSummary`
     in `scripts/lib/vitest-summary.mjs` (pure, so importing it does not make a
     script a workflow writer); its consumers are guarded over a real coloured
     run by `tests/scripts/vitest-summary-consumers.test.ts`.
     Consolidation verdict: folded onto that seam (deleting it would send seven
-    scripts back to private regexes). Sweep 2026-10-07 over `scripts/`,
-    `scripts/lib/`, `tests/support/` and `.github/`
-    (`grep -rnE "Tests\s|Test Files|stripVTControl|u001b|x1b"`): the other
-    hits are the classifier's own already-normalized patterns, `ci-verdict`'s
-    line classifier (strips before it matches), `check-pr-body`'s lint of pasted
-    body text, and readers of Vitest's JSON report.
+    scripts back to private regexes). Instances and sweep: `HISTORY.md`.
 80. **Single scan root:** a detector takes its population from one root while
     its subject can write in several, so a clean answer from the wrong root
     reads as a complete negative. Screen: for each detector, list the roots its
@@ -486,6 +460,12 @@ file-scoped worklist and receives no project-wide scanner output.
     Census: not countable yet. Enforcer: none: judgment-only. A scan cannot
     tell a copied rule from a coincidental literal without reading what the
     value feeds. Instances and dates: `HISTORY.md`.
+    Consolidation verdict: stay distributed for the two copies of the
+    glob-to-RegExp rule (`globToRegExp` in clients/file-utils.ts and
+    `matchesPattern` in clients/read-guard.ts differ in case and `?` handling,
+    and read-guard's production input is its fixed defaults) and for the inline
+    regex-escape one-offs in scripts/ (escape-regexp-fold-sweep admits them; an
+    unbuilt script cannot import clients/string-utils.js).
 
 88. **Learned attribution keyed on a name alone:** tier 4 of
     `classifyMutatingTool` admits any tool name that was once seen with a disk
@@ -506,10 +486,8 @@ file-scoped worklist and receives no project-wide scanner output.
     before `failure === "timeout"` makes that branch, and the state it updates,
     unreachable. The autofix timeout in `clients/file-utils.ts` was this case:
     it never armed the spawn-timeout cooldown, so every edit to a wedged tool
-    paid the full timeout (#5376, fixed in PR #5383). Census: not countable as
-    one command; the 2026-11-07 sweep of the `if (result.error)` sites found
-    this one the only site where that check shadowed a cooldown arm. Enforcer:
-    none: judgment-only, the order of checks is code shape, and a scan cannot
+    paid the full timeout (#5376). Census: not countable as one command.
+    Sweep and fix: `HISTORY.md`. Enforcer: none: judgment-only, the order of checks is code shape, and a scan cannot
     tell a dead branch from a deliberate fallback. Screen: does every
     non-success exit reach the state updates the transition table gives it, or
     does a broader check catch it first?
@@ -621,8 +599,9 @@ file-scoped worklist and receives no project-wide scanner output.
     the sink) and fail closed on an unrecognised form. Screen: plant an
     alias, an indirect call and a value reached through another binding,
     and quote each result; every green plant is fixed or named as a residual.
-    On 2026-10-18 five detector PRs took two to six rounds each because
-    every verify found one more spelling. A detector's first round therefore lists its admitted forms
+    For a call-site scanner add a computed member key (`module["require"](x)`)
+    and a renamed callee (`__require`).
+    A detector's first round therefore lists its admitted forms
     and refuses everything else; a residual names an admitted form that is
     too broad, never a spelling the detector does not read.
 
@@ -688,8 +667,7 @@ file-scoped worklist and receives no project-wide scanner output.
     lets an installer write through to the real `~/.pi-lens/bin`. The pin is
     the whole set, assigned once in the worker so every child inherits it.
     npm's cache and log directory (`npm_config_cache`, default `~/.npm`) is
-    in the set: two probes on 2026-11-04 (the #5239 fixer, the #5244
-    reviewer) wrote `~/.npm/_logs` through `npx`.
+    in the set: an unpinned `npx` writes `~/.npm/_logs`.
     Screen: which directory does the process I run resolve from, and is every
     variable that names it pinned? Enforcer:
     `tests/clients/worker-home-pin-hermeticity.test.ts` (a real child reports
@@ -708,20 +686,30 @@ file-scoped worklist and receives no project-wide scanner output.
     times out there. The gate enforces that the third argument is an identifier
     named `TREE_WALK_TIMEOUT_MS` (the shared constant, read by name, not by
     binding) or a `scaledTestTimeout(...)` call (the reason goes in a comment the
-    gate does not read). A raw number or a file-local constant does not follow
+    gate does not read); in vitest's `it(title, { timeout }, fn)` form the
+    `timeout` pair is the budget. A raw number or a file-local constant does not follow
     the lane's timeout scale and is refused; a same-named local constant is
     admitted and an import alias of the shared one is refused (no live member
     either way). Screen: does this case call a walker or read a binding one
-    produced, and is its third argument one of those two forms? Census: 244
-    under `tests/` (154 in `tests/config`, all budgeted; 90 outside it, of which
+    produced, and is its budget one of those two forms? Census: 399
+    under `tests/` (158 in `tests/config`, all budgeted; 241 outside it, of which
     87 are refused and admitted by name in
-    `tests/config/tree-census-timeout.baseline.json`, and 3 budgeted). Enforcer:
+    `tests/config/tree-census-timeout.baseline.json`, and 154 budgeted). Enforcer:
     `tests/config/tree-census-timeout.test.ts` (it derives the declaration
-    callee from the file's vitest imports, resolves walker aliases, and counts a
-    test-shaped call it cannot trace as a census).
-    It does not read a walker reached through a helper in another module, a
-    variable-bound arrow-function walker, a local spawn wrapper, or a walk named
-    only by an enclosing `describe.each` or loop; `Unit tests Windows` is the
+    callee from the file's vitest imports, resolves walker aliases, reads a walk
+    reached through a helper module under `tests/` — its verdict derived from
+    source to a fixed point over the helper graph, an unresolvable call failing
+    closed as a walk — and counts a test-shaped call it cannot trace as a
+    census).
+    It does not read a walker reached through runtime source outside `tests/`,
+    through a wrapper the test file itself declares, as a variable-bound
+    arrow-function walker, through an enclosing `describe.each` or loop, or
+    through an indirect form (a dynamic `import()`, an object, array, callback or
+    `.call` reference, a class or object-literal member, a helper's own alias of
+    an imported walker; no live member); a
+    helper's own walk behind an `unknown`-verdict call reaches the census as a
+    member, not as its own reason record (`tests/` source always parses; the
+    fail-closed branch itself is planted). `Unit tests Windows` is the
     backstop. Instances and dates: `HISTORY.md`.
 
 86. **Turn-count wait for real I/O:** a test waits for a file write, a child
@@ -747,9 +735,8 @@ file-scoped worklist and receives no project-wide scanner output.
     `tests/clients/spawn-timeout-cooldown.test.ts` returned
     `{ error: null, failure: "timeout" }`, while `safeSpawnAsync` returns
     `error: Error(...)` with the timeout, so the test stayed green on the broken
-    ordering in shape 91 (#5376, fixed in PR #5383; the double now carries the
-    real shape). Census: not countable as one command; the 2026-11-07 census met
-    this one instance. Enforcer: none: judgment-only, a scan cannot tell which
+    ordering in shape 91 (#5376). Census: not countable as one command.
+    Enforcer: none: judgment-only, a scan cannot tell which
     fields a producer returns without running it. Screen: was the double's
     result shape copied from a real run of the producer, or driven through
     `tests/support/fake-child.ts`, or written by hand?
@@ -798,6 +785,13 @@ file-scoped worklist and receives no project-wide scanner output.
 
 30. **Load-time platform constant:** use a live platform read or an isolated
     fresh import for every platform branch test.
+    Consolidation verdict: stay distributed, because the rule admits an isolated
+    fresh import and the seam is the one-line read `process.platform`, inline at
+    136 production sites; a helper relocates the read. Five production
+    module-load reads remain (`JAVA_EXE` in jvm-runtime.ts, `isWindows` in
+    lsp/launch.ts and instance-reaper.ts, `gitignoreGlobOptions` in
+    file-utils.ts, `RUNNERS.gradle.command` in test-runner-client.ts).
+    Enforcer: none: judgment-only; a census would only pin these five.
 
 55. **Field inherited across entry kinds:** when a coalescing queue carries a
     field from a replaced entry into its replacement (a read stamp, a save
@@ -836,7 +830,7 @@ file-scoped worklist and receives no project-wide scanner output.
     session's value for the whole process answers for whichever session wrote
     last, so a second live session overwrites what another one read. Key the
     state by session identity, or decide from live membership. Instances:
-    #4554 (fixed by #4563, still open) and #4564. Screen: whose data is the
+    `HISTORY.md`. Screen: whose data is the
     store, not what its key is? Seam: a session's state lives on a scope cell
     (`scopeCell`, `clients/session-scope.ts`, #3609); a caller that holds only
     a session id reaches the cell through `sessionCell`, which names live

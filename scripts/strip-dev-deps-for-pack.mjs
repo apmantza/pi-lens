@@ -49,7 +49,7 @@ function strip() {
 		const src = path.join(root, f);
 		if (fs.existsSync(src)) fs.copyFileSync(src, path.join(backupDir, f));
 	}
-	const indent = /^	/m.test(raw) ? "	" : 2;
+	const indent = /^\t/m.test(raw) ? "\t" : 2;
 	fs.writeFileSync(
 		manifest,
 		`${JSON.stringify(stripForPack(pkg), null, indent)}

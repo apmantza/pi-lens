@@ -12,11 +12,12 @@ note: |
 rule:
   kind: type
   regex: '^(Optional|typing\.Optional|t\.Optional)\['
-has_fix: false
-tags:
-  - python
-  - typing
-  - modernization
-examples:
-  bad: "value: Optional[str]"
-  good: "value: str | None"
+metadata:
+  has_fix: false
+  tags:
+    - python
+    - typing
+    - modernization
+  examples:
+    bad: "value: Optional[str]"
+    good: "value: str | None"

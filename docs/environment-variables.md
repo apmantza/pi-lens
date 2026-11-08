@@ -1,8 +1,18 @@
 # Environment Variables
 
-The complete pi-lens environment-variable reference. Every variable here is read
-at process start; set it in the shell that launches pi (`export …` in bash,
+The complete pi-lens environment-variable reference. Most variables here are read
+once, at process start; set them in the shell that launches pi (`export …` in bash,
 `$env:VAR = "…"` / `setx …` in PowerShell), your process manager, or CI config.
+The variables read on each use (`PI_LENS_CASCADE_SETTLE_WAIT_MS`, `PI_LENS_LSP_DRIFT_CHECK_MS`,
+`PI_LENS_DECLARATION_LOOK_MS`, `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH`,
+`PI_LENS_SNAPSHOT_PERSIST_SYNC`, `PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS`,
+`PI_LENS_GRAPH_CHECKPOINT_MIN_INTERVAL_MS`, `PI_LENS_WORD_INDEX_PERSIST_DEBOUNCE_MS`,
+`PI_LENS_TOOL_REFRESH_INTERVAL_MS`, `PI_LENS_TOOL_REFRESH_RETRY_MS`,
+`PI_LENS_TOOL_REFRESH_MAX_PER_SESSION`, `PI_LENS_TOOL_REFRESH_DELAY_MS`,
+`PI_LENS_INSTALL_TIMEOUT_MS`, `PI_LENS_REVIEW_GRAPH_MAX_FILES` and
+`PI_LENS_WARMUP_DELAY_MS` (read when the warmup is scheduled: once per process,
+unless a warmup fails) also apply a value a host sets on `process.env`
+after start.
 
 Boolean-style variables are compared literally against `"1"` or `"0"` — only the
 exact string flips the switch.
@@ -145,6 +155,19 @@ only a ranked partial snapshot instead of the whole graph.
 Minimum wall-clock budget (ms) for every dispatch runner; the effective timeout
 is `max(runner budget, floor)`. **Default:** `0` (no floor). Also settable via
 the `dispatch.runnerTimeoutFloorMs` config key, which wins when both are set.
+
+### `PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS`
+
+Per-request ceiling (ms) for language-server navigation requests: definition,
+declaration, implementation, type definition, references, hover, signature help,
+symbols, rename, code actions, call hierarchy and file-rename requests. A server
+that accepts a request and never replies stops holding the tool call after this
+window. Each timeout counts in the `lsp-nav-request-timeout` degradation ledger,
+keyed by method and file. Only the first timeout per method and file in a
+session writes an `lsp_nav_request_timeout` latency entry. A missing or empty
+value, a value with no leading integer, or a zero or negative value falls back
+to the default. The parser reads the leading integer, so `10s` sets a 10 ms
+ceiling. **Default:** 10 seconds (`10000`).
 
 ### `PI_LENS_WORD_INDEX_MEMO_BACKSTOP_MS`
 

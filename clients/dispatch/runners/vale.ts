@@ -9,12 +9,12 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { findingsResult } from "../types.js";
 import {
 	createAvailabilityChecker,
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
-import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const vale = createAvailabilityChecker("vale", ".exe");
 
@@ -69,11 +69,15 @@ interface ValeAlert {
 
 type ValeOutput = Record<string, ValeAlert[]>;
 
+/**
+ * `null` is "this output is not a vale report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 export function parseValeOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
 
 	if (!raw.trim()) return diagnostics;
@@ -81,7 +85,8 @@ export function parseValeOutput(
 
 	try {
 		const parsed = JSON.parse(raw) as ValeOutput;
-		if (!parsed || typeof parsed !== "object") return diagnostics;
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+			return null;
 
 		// #3295: vale's top level is keyed BY the linted file's path — the only
 		// place the reported path appears. `Object.values` dropped it, so a
@@ -111,7 +116,7 @@ export function parseValeOutput(
 					line: alert.Line ?? 1,
 					column: alert.Span?.[0] ?? 1,
 					severity,
-					semantic: severity === "error" ? "blocking" : "warning",
+					semantic: semanticFor(severity),
 					tool: "vale",
 					rule: alert.Check ?? "vale",
 					fixable: false,
@@ -119,8 +124,7 @@ export function parseValeOutput(
 			}
 		}
 	} catch {
-		// JSON parse failed, return empty
-		return diagnostics;
+		return null;
 	}
 
 	return diagnostics;
@@ -131,12 +135,13 @@ const valeRunner: RunnerDefinition = {
 	appliesTo: ["markdown"],
 	priority: PRIORITY.DOC_QUALITY,
 	skipTestFiles: false,
+	requiresConfig: (cwd) => findValeConfig(cwd) !== undefined,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "vale");
 
 		// Config-gated: skip unless a .vale.ini is found
-		if (!findValeConfig(cwd)) {
+		if (!valeRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
@@ -149,7 +154,8 @@ const valeRunner: RunnerDefinition = {
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
-		// Vale exits 0 even on findings, non-zero only on errors
+		// Vale exits 1 when a run reports an error-level alert and 0 for
+		// warning or suggestion alerts alone (exit table below).
 		const result = await safeSpawnAsync(
 			cmd,
 			["--output", "JSON", ctx.filePath],
@@ -158,35 +164,33 @@ const valeRunner: RunnerDefinition = {
 
 		// #1816: this runner read `result.status` zero times, so a Vale that
 		// rejected its config exited nonzero with an empty stdout, parsed to
-		// zero alerts, and reported clean prose. No exit-code table: Vale's
-		// nonzero codes vary with --minAlertLevel, so the conservative
-		// nothing-to-parse rule is the only safe discriminator here.
+		// zero alerts, and reported clean prose.
 		//
 		// #1948: `parseToolRun` adds the second gate. Vale's `Data.Files`
 		// envelope bug produced exactly this shape — exit 1, a full JSON
-		// report on stdout, zero alerts parsed — and left no record.
+		// report on stdout, zero alerts parsed — and left no record. Since
+		// #5411 `finishParsedRun` also gives that run its verdict,
+		// failed/parser_error, the same as every other JSON runner.
 		const run = parseToolRun(
 			"vale",
 			{
 				result,
 				// EXIT TABLE (Vale 3.9.6 docs https://vale.sh/docs/topics/metrics/): 0 clean; 1 findings; 2 error; other nonzero rejected.
+				// 2 is admitted although it is an error: its output is then read by
+				// the parser, so a run that printed nothing parseable is a parse
+				// error, never a clean file (#5411).
 				exitCodes: { ran: [1, 2] },
 			},
 			(raw) => parseValeOutput(raw, ctx.filePath, cwd),
 		);
 		if (run.skipped) return run.skipped;
 
-		const diagnostics = run.diagnostics;
-
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
-
-		return findingsResult(diagnostics, {
-			status: hasBlocking ? "failed" : "succeeded",
-			semantic: hasBlocking ? "blocking" : "warning",
+		return finishParsedRun({
+			tool: "vale",
+			ctx,
+			result,
+			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
 		});
 	},
 };

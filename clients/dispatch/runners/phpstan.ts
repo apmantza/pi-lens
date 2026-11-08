@@ -131,6 +131,7 @@ const phpstanRunner: RunnerDefinition = {
 	appliesTo: ["php"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
+	requiresConfig: (cwd) => hasPhpstanConfig(cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "phpstan");
@@ -140,7 +141,7 @@ const phpstanRunner: RunnerDefinition = {
 		}
 
 		// Only run if phpstan config present — avoids noisy defaults on unconfigured projects
-		if (!hasPhpstanConfig(cwd)) {
+		if (!phpstanRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

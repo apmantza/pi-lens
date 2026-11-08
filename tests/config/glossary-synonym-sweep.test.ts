@@ -384,7 +384,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/actionable-warnings.ts": 1,
 		"clients/advisory-provenance.ts": 8,
 		// 47 -> 48 (#5097): the `error` of an apply refused after an abort.
-		"clients/ast-grep-client.ts": 48,
+		// 48 -> 54 (#5417): the `error` of a refused or failed `applyRewrite`.
+		"clients/ast-grep-client.ts": 54,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/biome-client.ts": 8,
 		"clients/bounded-pid-file-lock.ts": 7,
@@ -417,7 +418,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/swiftlint.ts": 1,
 		"clients/dispatch/runners/tree-sitter.ts": 2,
 		"clients/dispatch/runners/trivy-config.ts": 2,
-		"clients/dispatch/runners/utils/availability-policy.ts": 3,
+		"clients/dispatch/runners/utils/availability-policy.ts": 4,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
 		"clients/dispatch/runners/utils/runner-helpers.ts": 8,
@@ -428,9 +429,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/effective-config.ts": 2,
 		"clients/error-class.ts": 3,
 		"clients/extension-log.ts": 3,
-		"clients/file-utils.ts": 3,
+		// 3 -> 4 (#5417): the `error` of `resolveWriteResult`'s run.
+		"clients/file-utils.ts": 4,
 		"clients/format-service.ts": 11,
-		"clients/formatters.ts": 26,
+		// 25 -> 24 (#5417): the changed-on-failure compare shed an error branch.
+		"clients/formatters.ts": 24,
 		"clients/generation-lock.ts": 5,
 		"clients/git-tracked-ignore.ts": 2,
 		"clients/govulncheck-client.ts": 6,
@@ -473,7 +476,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/opengrep-client.ts": 11,
 		"clients/package-manager.ts": 2,
 		"clients/performance-report.ts": 3,
-		"clients/pipeline.ts": 13,
+		// 13 -> 12 (#5417): the whole-package diff no longer reads `result.error`.
+		"clients/pipeline.ts": 12,
 		"clients/project-diagnostics/fresh-fetch.ts": 4,
 		"clients/project-diagnostics/runner-adapters/call-graph-impact.ts": 1,
 		"clients/project-diagnostics/runner-adapters/runner-findings.ts": 4,
@@ -515,6 +519,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/warm-attach.ts": 14,
 		"clients/word-index-logger.ts": 1,
 		"clients/word-index.ts": 2,
+		// #5417: `SourceWriteExit`'s thrown `error`.
+		"clients/write-source-file.ts": 4,
 		"clients/zizmor-config.ts": 2,
 		"tools/ast-grep-outline.ts": 3,
 		"tools/ast-grep-replace.ts": 6,
@@ -536,7 +542,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/actionable-warnings.ts": 10,
 		"clients/agent-behavior-client.ts": 1,
 		"clients/agent-nudge.ts": 2,
-		"clients/ast-grep-client.ts": 5,
+		// 5 -> 7 (#5417): `applyRewrite` filters the matches by changed file and the
+		// files by their hash change.
+		"clients/ast-grep-client.ts": 7,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/atomic-write-staging.ts": 1,
 		// 5 -> 2 (#5378): the three inline "last non-flag operand" move parses fold
@@ -863,6 +871,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/widget-state.ts": 19,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
+		// #5417: `refuseOutOfRootWrites` keeps the paths whose class refuses a write.
+		"clients/write-source-file.ts": 1,
 		"tools/activate-tools.ts": 2,
 		"tools/effective-config.ts": 4,
 		"tools/lens-diagnostic-mark.ts": 1,
@@ -1062,12 +1072,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/ast-grep-napi.ts": 4,
 		"clients/dispatch/runners/biome-check.ts": 6,
 		"clients/dispatch/runners/cpp-check.ts": 7,
-		"clients/dispatch/runners/credo.ts": 5,
+		"clients/dispatch/runners/credo.ts": 4,
 		"clients/dispatch/runners/cue-vet.ts": 6,
 		"clients/dispatch/runners/dart-analyze.ts": 4,
-		"clients/dispatch/runners/detekt.ts": 7,
+		"clients/dispatch/runners/detekt.ts": 4,
 		"clients/dispatch/runners/dotnet-build.ts": 3,
-		"clients/dispatch/runners/elixir-check.ts": 6,
+		"clients/dispatch/runners/elixir-check.ts": 5,
 		"clients/dispatch/runners/eslint.ts": 3,
 		"clients/dispatch/runners/gleam-check.ts": 3,
 		"clients/dispatch/runners/golangci-lint.ts": 3,
@@ -1099,7 +1109,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/swiftlint.ts": 4,
 		"clients/dispatch/runners/taplo.ts": 4,
 		"clients/dispatch/runners/terragrunt.ts": 6,
-		"clients/dispatch/runners/tflint.ts": 7,
+		"clients/dispatch/runners/tflint.ts": 6,
 		"clients/dispatch/runners/tree-sitter.ts": 2,
 		"clients/dispatch/runners/trivy-config.ts": 4,
 		"clients/dispatch/runners/utils/diagnostic-parsers.ts": 3,
@@ -1519,11 +1529,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// and `path.resolve` — six more `path` operations, same sense
 		// (a path operation).
 		"clients/tool-agreement.ts": 10,
+		// New in #5408: the config-presence seam's path joins and walks.
+		"clients/tool-config-presence.ts": 7,
 		// 13 -> 12 (#4689 item 6): the file is resolved by `realpathOrResolve`.
 		// 12 -> 10 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		"clients/tool-cwd.ts": 10,
 		// 64 -> 62 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/tool-policy.ts": 62,
+		// 62 -> 50 (#5408): the seven bespoke config walks leave for the config-presence seam.
+		"clients/tool-policy.ts": 50,
 		// 19 -> 18 (#4689 batch 7): the grammar write probe climbs `walkUpDirs`, so
 		// its own `path.dirname` step is the seam's.
 		"clients/tree-sitter-client.ts": 18,
@@ -1558,12 +1571,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 5 -> 1 (#5071 r2 F1): the header and the sort read the project-relative
 		// header, not each file's absolute `file.path`; one `file.path` read remains.
 		"tools/ast-grep-outline.ts": 1,
+		"tools/ast-grep-replace.ts": 2,
 		"tools/ast-grep-search.ts": 2,
 		"tools/effective-config.ts": 6,
 		// 6 -> 4 (#4577 M2): the `path` argument folds onto
 		// `resolveHostToolPath`, dropping the `path.isAbsolute`/`path.resolve`
 		// pair.
-		"tools/lens-diagnostic-mark.ts": 6,
+		"tools/lens-diagnostic-mark.ts": 7,
 		// 30 -> 27 (#4576): `resolvePathsScope` folds onto
 		// `resolveHostToolPath`, dropping three `path.*` calls.
 		// 27 -> 26 (#4689 r2): mode=all renders a row's file through
@@ -1614,6 +1628,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 8 -> 9 (#4617): the well-formed check reads the new `filelessParts`
 		// flag on the record it validates, so one more `record.` use exists.
 		"clients/advisory-provenance.ts": 9,
+		"clients/ast-grep-client.ts": 1,
 		"clients/cache-observability.ts": 2,
 		"clients/config-core/merge.ts": 3,
 		"clients/config-core/normalize.ts": 12,
@@ -1643,6 +1658,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/io-bridge-contract.ts": 2,
 		"clients/io-bridge.ts": 2,
 		"clients/lsp/document-drift.ts": 19,
+		"clients/lsp/edits.ts": 1,
 		"clients/lsp/index.ts": 36,
 		// #2416: migration records are the public config diagnostic rows; the
 		// glossary's retired noun is intentional in this record-owning module.
@@ -1682,6 +1698,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/test-runner-delivery.ts": 16,
 		"clients/turn-summary.ts": 4,
 		"clients/warm-attach.ts": 9,
+		"clients/write-source-file.ts": 2,
+		"tools/lens-diagnostic-mark.ts": 1,
 		"tools/lsp-diagnostics.ts": 1,
 		"tools/lsp-navigation.ts": 12,
 		"tools/lsp-structured-output.ts": 13,
@@ -1754,17 +1772,20 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/credo.ts": 2,
 		"clients/dispatch/runners/cue-vet.ts": 6,
 		"clients/dispatch/runners/dart-analyze.ts": 1,
-		"clients/dispatch/runners/detekt.ts": 6,
+		// 6 -> 5 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/detekt.ts": 5,
 		"clients/dispatch/runners/dotnet-build.ts": 4,
 		"clients/dispatch/runners/elixir-check.ts": 2,
-		"clients/dispatch/runners/eslint.ts": 3,
+		// 3 -> 2 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
+		"clients/dispatch/runners/eslint.ts": 2,
 		"clients/dispatch/runners/fact-rules.ts": 2,
 		// #4309: folded unavailable/absent-command exits remove one status use.
 		// 5 -> 6 (#4522): the exitless-run guard reads the exit status once.
 		"clients/dispatch/runners/fish-indent.ts": 6,
 		"clients/dispatch/runners/gleam-check.ts": 5,
 		"clients/dispatch/runners/go-vet.ts": 5,
-		"clients/dispatch/runners/golangci-lint.ts": 4,
+		// 4 -> 3 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
+		"clients/dispatch/runners/golangci-lint.ts": 3,
 		"clients/dispatch/runners/hadolint.ts": 3,
 		"clients/dispatch/runners/helm-lint.ts": 5,
 		"clients/dispatch/runners/helm-render.ts": 7,
@@ -1780,7 +1801,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/oxlint.ts": 11,
 		"clients/dispatch/runners/php-lint.ts": 2,
 		"clients/dispatch/runners/phpstan.ts": 4,
-		"clients/dispatch/runners/prisma-validate.ts": 4,
+		// 4 -> 3 (#5411): the plain skip leaves; `finishParsedRun` owns that verdict.
+		"clients/dispatch/runners/prisma-validate.ts": 3,
 		"clients/dispatch/runners/psscriptanalyzer.ts": 14,
 		"clients/dispatch/runners/pyright.ts": 3,
 		"clients/dispatch/runners/rubocop.ts": 2,
@@ -1790,12 +1812,15 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// existing skipped/no-cmd returns — the same `status:` member sense.
 		"clients/dispatch/runners/shellcheck.ts": 5,
 		"clients/dispatch/runners/shfmt.ts": 8,
-		"clients/dispatch/runners/spellcheck.ts": 3,
+		// 3 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/spellcheck.ts": 2,
 		"clients/dispatch/runners/spotbugs.ts": 8,
 		"clients/dispatch/runners/sqlfluff.ts": 3,
 		"clients/dispatch/runners/stylelint.ts": 2,
-		"clients/dispatch/runners/swiftlint.ts": 3,
-		"clients/dispatch/runners/taplo.ts": 5,
+		// 3 -> 1 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/swiftlint.ts": 1,
+		// 5 -> 4 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/taplo.ts": 4,
 		"clients/dispatch/runners/terragrunt.ts": 2,
 		"clients/dispatch/runners/tflint.ts": 3,
 		// 14 -> 15 (#4226): the early-return runner result preserves the existing
@@ -1811,7 +1836,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/utils/spawn-outcome.ts": 10,
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.
 		"clients/dispatch/runners/utils/tool-failure.ts": 20,
-		"clients/dispatch/runners/vale.ts": 4,
+		// 4 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
+		"clients/dispatch/runners/vale.ts": 2,
 		"clients/dispatch/runners/yamllint.ts": 2,
 		"clients/dispatch/runners/zig-check.ts": 2,
 		// 5 -> 6 (#4484 r2): `reachedNoVerdict` reads the runner result's status.
@@ -1820,9 +1846,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 9 -> 10 (#5258): `checkedVerdict` reads each row's runner status through
 		// `hasUsableResult`.
 		"clients/dispatch/types.ts": 10,
-		"clients/file-utils.ts": 2,
+		"clients/file-utils.ts": 3,
 		"clients/finding-delivery-gate.ts": 3,
-		"clients/formatters.ts": 8,
+		"clients/formatters.ts": 5,
 		"clients/git-tracked-ignore.ts": 2,
 		"clients/govulncheck-client.ts": 5,
 		"clients/grammar-source.ts": 2,
@@ -1843,7 +1869,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp-mutation.ts": 7,
 		"clients/lsp/client-registry.ts": 1,
 		"clients/lsp/client.ts": 31,
-		"clients/lsp/edits.ts": 2,
+		"clients/lsp/edits.ts": 1,
 		"clients/lsp/index.ts": 4,
 		"clients/lsp/jvm-runtime.ts": 1,
 		"clients/lsp/launch.ts": 1,
@@ -1861,9 +1887,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 26 -> 27 (#4502): readGitStatusEntries checks the spawn result's exit
 		// `status` once for every porcelain read it now serves.
 		"clients/opaque-mutation-scan.ts": 27,
-		"clients/opengrep-client.ts": 9,
+		// 9 -> 7 (#5411): a report is judged by its content, not the exit status.
+		"clients/opengrep-client.ts": 7,
 		"clients/package-manager.ts": 2,
-		"clients/pipeline.ts": 4,
+		"clients/pipeline.ts": 3,
 		"clients/process-snapshot.ts": 14,
 		"clients/project-diagnostics/runner-adapters/runner-findings.ts": 2,
 		"clients/project-diagnostics/scanner.ts": 1,

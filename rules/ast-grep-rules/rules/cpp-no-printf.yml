@@ -30,12 +30,13 @@ rule:
           field: name
           kind: identifier
           regex: "^printf$"
-tags:
-  - cpp
-  - idiom
-  - type-safety
-examples:
-  bad: |
-    printf("count: %d\n", count);
-  good: |
-    std::cout << "count: " << count << "\n";
+metadata:
+  tags:
+    - cpp
+    - idiom
+    - type-safety
+  examples:
+    bad: |
+      printf("count: %d\n", count);
+    good: |
+      std::cout << "count: " << count << "\n";

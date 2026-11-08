@@ -1090,12 +1090,12 @@ export function getProjectSnapshotPersistWorkerHeapStatistics(): PersistWorkerHe
 	return _snapshotPersistWorkerHeapStatistics;
 }
 
-function snapshotWorkerEnabled(): boolean {
+export function snapshotWorkerEnabled(): boolean {
 	// The synchronous fallback writer is a legitimate degraded mode (hosts that
 	// can't spawn a worker); tests also force it so a save→load is fully
 	// synchronous. Production defaults to the worker.
-	const raw = process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC;
-	return !(raw === "1" || raw === "true");
+	// Only the literal `"1"` selects the synchronous writer (#5419).
+	return process.env.PI_LENS_SNAPSHOT_PERSIST_SYNC !== "1";
 }
 
 function pendingSnapshotIsCurrent(pending: PendingSnapshotBody): boolean {

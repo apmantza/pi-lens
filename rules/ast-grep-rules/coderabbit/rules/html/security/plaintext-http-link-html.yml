@@ -5,7 +5,8 @@ message: "\"This link points to a plaintext HTTP URL. Prefer an encrypted HTTPS 
 note: |-
   [CWE-319] Authentication Bypass by Primary Weakness [REFERENCES]
       -  https://cwe.mitre.org/data/definitions/319.html
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   not:
     has:

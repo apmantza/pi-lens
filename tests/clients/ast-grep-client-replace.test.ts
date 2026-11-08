@@ -54,6 +54,7 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			"typescript",
 			["a.ts"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 
 		expect(result.applied).toBe(true);
@@ -84,6 +85,7 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			"typescript",
 			["a.ts"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 		expect(result.stalePreview).toBe(true);
 		expect(result.applied).toBe(false);
@@ -111,6 +113,7 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			"id: bad\nlanguage: TypeScript\nrule: { kind: definitely_not_a_kind }",
 			["a.ts"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 
 		expect(result.applied).toBe(false);

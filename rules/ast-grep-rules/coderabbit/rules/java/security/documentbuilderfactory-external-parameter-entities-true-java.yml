@@ -7,7 +7,8 @@ message: >-
 note: |-
   [CWE-611] Improper Restriction of XML External Entity Reference. [REFERENCES]
       - https://blog.sonarsource.com/secure-xml-processor
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   match_expression_statement:
     kind: method_invocation

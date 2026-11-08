@@ -164,6 +164,7 @@ See [`rules/ast-grep-rules/rule-schema.json`](../rules/ast-grep-rules/rule-schem
 | `fix` | — | string | Suggested replacement |
 | `metadata.weight` | — | number | Priority weight |
 | `metadata.category` | — | string | |
+| `metadata.*` | — | any | Free-form author data (`tags`, `examples`, `has_fix`, `sonar`). ast-grep 0.51.1 and later refuse a top-level key outside the rule schema, so extra keys go under `metadata`. |
 | `constraints` | — | Record\<string, {regex}\> | Metavariable regex — `KEY: { regex: "..." }` narrows what `$KEY` will match. Supported by the napi engine + the ast-grep CLI/LSP. |
 
 Valid `language` values: `TypeScript` `JavaScript` `Python` `Go` `Rust` `Java` `C` `Cpp` `CSharp` `Kotlin` `Ruby` `Php`

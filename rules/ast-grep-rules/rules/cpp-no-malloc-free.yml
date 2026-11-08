@@ -33,13 +33,14 @@ rule:
           field: name
           kind: identifier
           regex: "^(malloc|calloc|realloc|free)$"
-tags:
-  - cpp
-  - idiom
-  - memory-safety
-examples:
-  bad: |
-    int* buf = static_cast<int*>(malloc(sizeof(int) * count));
-    free(buf);
-  good: |
-    auto buf = std::make_unique<int[]>(count);
+metadata:
+  tags:
+    - cpp
+    - idiom
+    - memory-safety
+  examples:
+    bad: |
+      int* buf = static_cast<int*>(malloc(sizeof(int) * count));
+      free(buf);
+    good: |
+      auto buf = std::make_unique<int[]>(count);

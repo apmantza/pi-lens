@@ -381,6 +381,41 @@ describe("tree-sitter runner — batched per-edit queries (#888)", () => {
 			"Hallucinated import 'JSONResponse' from 'django'",
 		);
 	});
+
+	// #5412: an `info` query finding is an advisory warning, the tier the CLI
+	// runners and the ast-grep tier cells (#1777) give every non-error finding.
+	// The tree-sitter mapping gave it `none`, which the warnings tally and the
+	// actionable-warnings gate (`semantic === "warning"`) do not treat alike.
+	it("gives an info-severity query finding the advisory warning semantic (#5412)", async () => {
+		const query = {
+			...fakeQuery,
+			id: "fake-info",
+			name: "fake-info",
+			severity: "info",
+		};
+		const { runner, runQueriesOnFile } = await loadRunnerWithQueries([query]);
+		runQueriesOnFile.mockResolvedValueOnce([
+			{
+				queryDef: query,
+				match: {
+					line: 1,
+					column: 1,
+					captures: {},
+					matchedText: "import os",
+					nodeType: "import_statement",
+				},
+			},
+		]);
+
+		const result = await runner.run({
+			...createCtx("/fake/file.ts"),
+			modifiedRanges: [{ start: 1, end: 1 }],
+		} as any);
+
+		expect(result.diagnostics).toHaveLength(1);
+		expect(result.diagnostics[0]?.severity).toBe("info");
+		expect(result.diagnostics[0]?.semantic).toBe("warning");
+	});
 });
 
 /**

@@ -17,12 +17,12 @@ import * as path from "node:path";
 import { BoundedLruCache } from "./bounded-cache.js";
 import { createGenerationSource } from "./generation-guard.js";
 import {
-	findNearestContaining,
 	normalizeMapKey,
 	realpathOrResolve,
 	walkUpDirs,
 } from "./path-utils.js";
 import { resolveToolCwd } from "./tool-cwd.js";
+import { hasToolConfig } from "./tool-config-presence.js";
 import { resolveCargoPackageEdition } from "./cargo-manifest.js";
 import { resolveKtfmtGradleStyle } from "./gradle-ktfmt-style.js";
 import { resolvePhpCsFixerConfig } from "./php-cs-fixer-config.js";
@@ -36,7 +36,7 @@ import { logLatency } from "./latency-logger.js";
 import { compareOrdinal } from "./string-utils.js";
 import {
 	type AvailabilityLatch,
-	classifyProbeFailure,
+	classifyFinderFailure,
 	createAvailabilityLatch,
 	logAvailabilityDecision,
 	startHostStallSampler,
@@ -48,6 +48,7 @@ import {
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "./package-manager.js";
+import { resolveWriteResult } from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { admittedLookupAnswer } from "./session-repository.js";
 import { establishToolAgreement } from "./tool-agreement.js";
@@ -563,29 +564,13 @@ async function which(command: string): Promise<string | null> {
 	// A `which`/`where` that RAN and found nothing exits nonzero with NO spawn
 	// error, and only that is a genuine absence an install would fix.
 	//
-	// An UNSPAWNABLE prober is the opposite (#1495 review): EACCES, `spawn
-	// UNKNOWN`, EMFILE, an unresolvable cwd, or `where`/`which` itself missing
-	// says nothing about the tool that was asked for. Claiming `missing` there
-	// was the worst version of this bug, because the prober is shared by every
-	// which-gated formatter — one EACCES would have latched a dozen of them off
-	// for the session. So the `missing` override is granted only to a prober that
-	// ran, and anything that stopped it from running stays transient.
-	const proberRan = !result.error;
-	const classified = classifyProbeFailure(result, {
+	// An UNSPAWNABLE prober says nothing about the tool asked for, and
+	// `classifyFinderFailure` owns that reading (#1495 review): a forced row is
+	// a caller assertion over the classifier's answer, so it logs
+	// `classifiedBy: "caller"` (#2226 review F1).
+	const { outcome, cause, forced } = classifyFinderFailure(result, {
 		hostStallMs,
-		...(proberRan && { unclassifiedFailureOutcome: "missing" as const }),
 	});
-	let { outcome, cause } = classified;
-	// This call site OVERRIDES classifyProbeFailure's own answer below, so a
-	// row it forced is a caller assertion, not a probe classification — the
-	// scrutiny availability-policy.ts:253-258 reserves for "caller" rows must
-	// not be laundered away by mislabeling this one "probe" (#2226 review F1).
-	let outcomeForced = false;
-	if (!proberRan && outcome !== "transient") {
-		outcome = "transient";
-		cause = "probe-rejected";
-		outcomeForced = true;
-	}
 	const retryAfterMs = entry.latch.noteUnavailable(outcome, cause);
 	if (outcome === "transient") whichTransientCommands.add(command);
 	else whichTransientCommands.delete(command);
@@ -602,7 +587,7 @@ async function which(command: string): Promise<string | null> {
 		hostStallMs,
 		...(retryAfterMs > 0 && { retryAfterMs }),
 		budgetMs: WHICH_BUDGET_MS,
-		classifiedBy: outcomeForced ? "caller" : "probe",
+		classifiedBy: forced ? "caller" : "probe",
 	});
 	return null;
 }
@@ -873,7 +858,7 @@ export const FORMATTERS_WITH_EXPLICIT_CONFIG_CHECK = new Set<string>(
 // --- Formatter Definitions ---
 
 async function hasEditorConfig(cwd: string): Promise<boolean> {
-	return findNearestContaining(cwd, [".editorconfig"]) !== undefined;
+	return hasToolConfig("editorconfig", cwd);
 }
 
 async function indentationArgs(
@@ -2519,17 +2504,32 @@ export async function formatFile(
 
 		// Strict by default (#1337): only a formatter with a documented
 		// benign-nonzero mode (`lenientExitCode`) may exit nonzero and still be
-		// read as a successful run. Everything else that exits nonzero never
-		// rewrote the file, and reporting {success: true, changed: false} there is
-		// indistinguishable from "already formatted" — the #1336 silent no-op.
-		const lenientOk =
-			formatter.lenientExitCode !== undefined &&
-			result.status !== null &&
-			(formatter.lenientStatuses ?? []).includes(result.status);
-		if (result.error || (result.status !== 0 && !lenientOk)) {
+		// read as a successful run. Everything else that exits nonzero is a
+		// failure, never {success: true, changed: false}, which is
+		// indistinguishable from "already formatted" (the #1336 silent no-op).
+		// `changed` is the bytes, not the exit code (#5417): a formatter that
+		// rewrites the file and then exits nonzero is a failed run that changed it,
+		// and the pipeline must refresh what it read.
+		let contentAfter: string | undefined;
+		let readBackError: unknown;
+		try {
+			contentAfter = await fs.readFile(absolutePath, "utf-8");
+		} catch (readError) {
+			// none: rethrown below, after the exit status has had its verdict.
+			readBackError = readError;
+		}
+		const { changed, success } = resolveWriteResult(
+			contentBefore,
+			contentAfter,
+			result,
+			formatter.lenientExitCode === undefined
+				? [0]
+				: [0, ...(formatter.lenientStatuses ?? [])],
+		);
+		if (!success) {
 			return {
 				success: false,
-				changed: false,
+				changed,
 				outcome: "failed",
 				error:
 					result.error?.message ||
@@ -2541,10 +2541,7 @@ export async function formatFile(
 					`${formatter.name} exited with status ${result.status}`,
 			};
 		}
-
-		// Check if content changed
-		const contentAfter = await fs.readFile(absolutePath, "utf-8");
-		const changed = contentBefore !== contentAfter;
+		if (readBackError !== undefined) throw readBackError;
 
 		return {
 			success: true,

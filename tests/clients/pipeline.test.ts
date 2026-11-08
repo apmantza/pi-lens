@@ -82,7 +82,10 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => {
 });
 
 // Mock the dispatch integration to avoid side effects
-vi.mock("../../clients/dispatch/integration.js", () => ({
+vi.mock("../../clients/dispatch/integration.js", async (importActual) => ({
+	...(await importActual<
+		typeof import("../../clients/dispatch/integration.js")
+	>()),
 	dispatchLintWithResult: vi.fn(),
 	computeCascadeForFile: vi.fn().mockResolvedValue(undefined),
 }));

@@ -2774,9 +2774,14 @@ describe("#3758 pending runner findings and session scope", () => {
 describe("#3763 ast_grep_replace is wired to the live session", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
+		FLAGS.set("no-autofix", true);
 	});
 
 	it("passes the session scope the call ran in to the apply", async () => {
+		// #5417: an apply under `no-autofix` is refused before the client is
+		// reached; this file's flag default is on, and pi reads a boolean flag's
+		// presence, so the apply needs the entry gone.
+		FLAGS.delete("no-autofix");
 		const seen = coordinators();
 		const runtime = await startRuntime(SessionManager.inMemory(cwd));
 		vi.spyOn(AstGrepClient.prototype, "ensureAvailable").mockResolvedValue(

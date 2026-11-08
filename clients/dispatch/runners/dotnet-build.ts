@@ -16,6 +16,7 @@ import type {
 } from "../types.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const dotnet = createAvailabilityChecker("dotnet", ".exe");
 
@@ -145,7 +146,7 @@ function parseDotnetBuildOutput(
 			line: lineNum,
 			column: colNum,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "dotnet-build",
 			rule,
 			fixable: false,

@@ -91,6 +91,19 @@
   sibling package of a monorepo session cwd, say) is refused as well; a caller
   that must format it passes that root as `sessionRoot`. Proven by
   `tests/clients/format-service-symlink-identity.test.ts`.
+- Every other writer of source files takes the same two seams from
+  `clients/write-source-file.ts` (#5417). `refuseOutOfRootWrites` is the root
+  guard: `ast_grep_replace` (the files its dry run matched, plus the
+  `no-autofix` flag), `applyWorkspaceEdit` and `lens_diagnostic_mark` refuse an
+  `adopted` or `none` identity, write nothing and record one
+  `adopted-root-writer-skipped` row per (file, writer). `writeSourceFile` runs
+  the writer inside pi's per-file mutation queue and calls its authorship
+  record on every exit, a throw included, so an interrupted write records the
+  files it reached. A fixer's write result is `resolveWriteResult`
+  (`clients/file-utils.ts`): `changed` is the bytes, `success` is the exit code,
+  and a nonzero exit that rewrote the file is still a change. Proven by
+  `tests/clients/write-source-file-5417.test.ts` and
+  `tests/clients/autofix-exit-status-5417.test.ts`.
 - Formatter and autofix policy is config-first where the registry says so.
   Formatting is strict by default. Autofix must carry per-diagnostic fixability
   or a conservative capability allowlist.

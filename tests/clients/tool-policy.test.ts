@@ -341,8 +341,8 @@ describe("tool-policy", () => {
 		});
 		expect(getLinterPolicyForFile("/tmp/file.sql", {})).toMatchObject({
 			preferredRunners: ["sqlfluff"],
-			defaultWhenUnconfigured: false,
-			gate: "config-first",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
 		});
 		expect(getLinterPolicyForFile("/tmp/file.yaml", {})).toMatchObject({
 			preferredRunners: ["yamllint"],

@@ -1,7 +1,7 @@
 import * as path from "node:path";
-import * as fs from "node:fs";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -77,20 +77,18 @@ export function parseCredoJson(
 	}
 }
 
-function hasMixExs(cwd: string): boolean {
-	return fs.existsSync(path.join(cwd, "mix.exs"));
-}
-
 const credoRunner: RunnerDefinition = {
 	id: "credo",
 	appliesTo: ["elixir"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
+	// mix never walks up, so the seam answers for `cwd` alone.
+	requiresConfig: (cwd) => hasToolConfig("mix", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "credo");
 
-		if (!hasMixExs(cwd)) {
+		if (!credoRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
@@ -106,16 +104,15 @@ const credoRunner: RunnerDefinition = {
 			{ timeout: 30000, cwd },
 		);
 
-		const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 		const parsed = parseToolRun(
 			"credo",
 			{
 				result,
-				output,
 				// EXIT TABLE (Credo 1.7 measured fixture): 0 clean; 1 findings; 2 error; other nonzero rejected.
 				exitCodes: { ran: [1, 2] },
 			},
 			(raw) => parseCredoJson(raw, ctx.filePath, cwd),
+			{ parseStreams: "stdout-else-stderr" },
 		);
 		if (parsed.skipped) return parsed.skipped;
 		return finishParsedRun({

@@ -36,13 +36,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { TREE_WALK_TIMEOUT_MS } from "./test-timeout-scale.js";
 import { isUnderIndex2992Scratch } from "./tests-tree-write-guard-setup.js";
 import { installTestsTreeWriteGuard } from "./tests-tree-write-guard.js";
 
 describe("tests-tree write guard — real cross-process race (#3179)", () => {
 	it(
 		"survives a real cross-process create/remove race under an allowed prefix",
-		{ timeout: 15_000 },
+		{ timeout: TREE_WALK_TIMEOUT_MS },
 		async () => {
 			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-3179-race-"));
 			fs.mkdirSync(path.join(root, "support"), { recursive: true });

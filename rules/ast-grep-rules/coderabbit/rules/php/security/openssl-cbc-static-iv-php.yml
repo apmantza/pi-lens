@@ -5,7 +5,8 @@ message: Static IV used with AES in CBC mode. Static IVs enable chosen-plaintext
 note: |-
   [CWE-329] Generation of Predictable IV with CBC Mode. [REFERENCES]
       - https://csrc.nist.gov/publications/detail/sp/800-38a/final
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   Match_pattern_directly_with_prefix_openssl_encryptpart2:
     kind: function_call_expression

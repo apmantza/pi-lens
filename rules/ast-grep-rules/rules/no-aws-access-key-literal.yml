@@ -22,8 +22,8 @@ note: |-
     the opening quote.
   - The total length check (4 prefix + 16 chars = 20) matches the
     AWS access key canonical format.
-ast-grep-essentials: true
 metadata:
+  ast-grep-essentials: true
   sonar: S7625
 rule:
   kind: string

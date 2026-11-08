@@ -73,15 +73,16 @@ constraints:
                 has:
                   stopBy: end
                   pattern: $SRC = ast.$METHOD($$$A)
-has_fix: false
-tags:
-  - python
-  - security
-  - code-injection
-  - cwe-78
-examples:
-  bad: |
-    code = compile(user_input, "<user>", "exec")
-    exec(code)
-  good: |
-    tree = ast.parse(static_source)
+metadata:
+  has_fix: false
+  tags:
+    - python
+    - security
+    - code-injection
+    - cwe-78
+  examples:
+    bad: |
+      code = compile(user_input, "<user>", "exec")
+      exec(code)
+    good: |
+      tree = ast.parse(static_source)

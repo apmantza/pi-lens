@@ -25,6 +25,7 @@ import {
 	type PendingOpaqueBaseline,
 } from "./opaque-mutation-scan.js";
 import { bounded } from "./deadline-utils.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import { normalizeForGuardMatch } from "./host-edit-normalize.js";
 import { retargetReplacementIndentation } from "./indent-retarget.js";
@@ -96,15 +97,16 @@ import {
 } from "./tool-event.js";
 import { loadDispatchIntegration } from "./dispatch/lazy.js";
 
-const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_TOOLCALL_NAV_TOUCH_MS ??
-			process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS ??
-			"1500",
-		10,
-	) || 1500,
-);
+// #5419 F1: the same positive-or-default read as lsp/index.ts
+// NAV_CLIENT_WAIT_TIMEOUT_MS. The tool-call knob wins when it is set, and the nav
+// knob is read otherwise; 0, blank, negative and non-numeric give 1500.
+export const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS =
+	nonNegativeIntEnv(
+		process.env.PI_LENS_TOOLCALL_NAV_TOUCH_MS === undefined
+			? "PI_LENS_LSP_NAV_CLIENT_WAIT_MS"
+			: "PI_LENS_TOOLCALL_NAV_TOUCH_MS",
+		1500,
+	) || 1500;
 const LSP_TOOLCALL_TOUCH_BUDGET_MS = Math.max(
 	0,
 	Number.parseInt(process.env.PI_LENS_TOOLCALL_TOUCH_MS ?? "750", 10) || 750,

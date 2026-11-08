@@ -279,20 +279,29 @@ export interface ParseToolRunOptions {
 	 */
 	parseOutput?: string;
 	/**
-	 * Return `skipped` — rather than letting the caller report a clean file —
-	 * when the run failed and the parser read nothing. Opt-in per tool: it is
-	 * correct only where a nonzero exit means "this file is bad", so claiming
-	 * clean would be an outright lie (taplo). Elsewhere the record alone is the
-	 * fix, and the status stays whatever the runner decided.
+	 * Which stream a tool's report arrives on (#5411). `"stdout-else-stderr"`:
+	 * the report is stdout; stderr stands in only when stdout is empty and the
+	 * run did not exit 0, so a failing tool's own error text still reaches the
+	 * parser while a warning printed beside a valid report cannot corrupt it
+	 * (real ruff prints its deprecation notice on stderr next to the JSON).
+	 * The classifier and the parser judge the same string. Overrides
+	 * `input.output` and `parseOutput`.
 	 */
-	skipWhenParsedNothing?: boolean;
+	parseStreams?: "stdout-else-stderr";
 }
 
 export interface ParsedToolRun<D> {
 	/** Non-null when the runner must return it verbatim and stop. */
 	skipped: RunnerResult | null;
 	diagnostics: D[];
-	/** True when this run tripped the #1948 rule above. */
+	/**
+	 * True when the parser answered `null`: nothing in the output was a report
+	 * this tool prints (#5411). An EMPTY array is a different answer, a report
+	 * that was read and holds nothing for this file (the #3295 filters), and
+	 * `finishParsedRun` must not call it a parse error.
+	 */
+	unreadable: boolean;
+	/** True when this run tripped the #1948 rule above (record only, not a verdict). */
 	parsedNothing: boolean;
 }
 
@@ -306,19 +315,41 @@ export interface ParsedToolRun<D> {
  * parsing on their own, so the second gate cannot be forgotten by whoever
  * writes runner 53. `tests/clients/dispatch/runners/parsed-nothing-sweep.test.ts`
  * enforces that.
+ *
+ * This seam records and hands back the diagnostics; the VERDICT for a nonzero
+ * exit whose output yielded nothing is `finishParsedRun`'s (failed/parser_error)
+ * and no runner picks its own (#5411: vale, swiftlint and spellcheck returned
+ * `succeeded`, taplo and detekt `skipped`). The sweep enforces that too.
  */
 export function parseToolRun<D>(
 	tool: string,
 	input: ClassifyRunOutcomeInput,
-	parse: (output: string) => readonly D[],
+	parse: (output: string) => readonly D[] | null,
 	options: ParseToolRunOptions = {},
 ): ParsedToolRun<D> {
-	const skipped = skipUnlessToolRan(tool, input, options.fields);
-	if (skipped) return { skipped, diagnostics: [], parsedNothing: false };
+	const streamed =
+		options.parseStreams === undefined
+			? undefined
+			: stdoutElseStderr(input.result);
+	const classified =
+		streamed === undefined ? input : { ...input, output: streamed };
+	const skipped = skipUnlessToolRan(tool, classified, options.fields);
+	if (skipped)
+		return {
+			skipped,
+			diagnostics: [],
+			unreadable: false,
+			parsedNothing: false,
+		};
 
 	const output =
-		options.parseOutput ?? input.output ?? input.result.stdout ?? "";
-	const diagnostics = [...parse(output)];
+		streamed ??
+		options.parseOutput ??
+		input.output ??
+		input.result.stdout ??
+		"";
+	const parsed = parse(output);
+	const diagnostics = [...(parsed ?? [])];
 	const parsedNothing = recordParsedNothing({
 		tool,
 		status: input.result.status ?? null,
@@ -326,15 +357,19 @@ export function parseToolRun<D>(
 		parsedCount: diagnostics.length,
 		fields: options.fields,
 	});
+	return {
+		skipped: null,
+		diagnostics,
+		unreadable: parsed === null,
+		parsedNothing,
+	};
+}
 
-	if (parsedNothing && options.skipWhenParsedNothing) {
-		return {
-			skipped: { status: "skipped", diagnostics: [], semantic: "none" },
-			diagnostics: [],
-			parsedNothing,
-		};
-	}
-	return { skipped: null, diagnostics, parsedNothing };
+/** `parseStreams: "stdout-else-stderr"` (#5411): see {@link ParseToolRunOptions}. */
+function stdoutElseStderr(result: SpawnResult): string {
+	const stdout = result.stdout ?? "";
+	if (stdout.length > 0 || result.status === 0) return stdout;
+	return result.stderr ?? "";
 }
 
 /**
@@ -356,6 +391,10 @@ export function parseToolRun<D>(
  *                             (`findingsResult` in types.ts, #3781).
  * - no findings, exit 0     → clean: `succeeded`/`none`.
  * - no findings, nonzero exit,
+ *   report read, nothing
+ *   for this file           → clean: `succeeded`/`none` (`unreadable: false`,
+ *                             #5411: a valid report of OTHER files, #3295).
+ * - no findings, nonzero exit,
  *   bytes emitted           → `failed` + one parse-error warning diagnostic,
  *                             `failureKind: "parser_error"` (not findings,
  *                             #3796). Never clean (#1781 shape). A runner whose tool
@@ -375,6 +414,15 @@ export interface FinishParsedRunInput {
 	};
 	diagnostics: Diagnostic[];
 	/**
+	 * Whether the output was NOT a report this tool prints (#5411): pass
+	 * `ParsedToolRun.unreadable`. Omitted, the answer is inferred from the bytes
+	 * (any output that yielded nothing is unreadable), the rule for parsers that
+	 * return `[]` for both an unreadable and an empty report. A parser that
+	 * returns `null` when it cannot read the output supplies the real answer, so
+	 * a valid report naming only other files reads clean instead of a parse error.
+	 */
+	unreadable?: boolean;
+	/**
 	 * Override the default findings mapping when the runner's convention
 	 * differs (e.g. phpstan always reports `failed`/`blocking`). Receives the
 	 * non-empty diagnostics array.
@@ -389,7 +437,8 @@ export function finishParsedRun(input: FinishParsedRunInput): RunnerResult {
 	const status = input.result.status ?? null;
 
 	if (input.diagnostics.length === 0) {
-		if (status !== 0 && raw.trim().length > 0) {
+		const unreadable = input.unreadable ?? raw.trim().length > 0;
+		if (status !== 0 && unreadable) {
 			const message = `${input.tool} exited ${status} but its output could not be parsed`;
 			return faultResult(
 				{ kind: "parser_error", failureMessage: message },

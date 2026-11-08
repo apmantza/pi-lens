@@ -8,7 +8,8 @@ message: >-
 note: |-
   [CWE-614] Sensitive Cookie in HTTPS Session Without 'Secure' Attribute. [REFERENCES]
       - https://owasp.org/www-community/controls/SecureCookieAttribute
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   MATCH_RESPONSE_COOKIE_STATEMENT:
     kind: expression_statement

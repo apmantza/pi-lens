@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { toPosix } from "../../clients/path-utils.js";
 import yaml from "../../clients/deps/js-yaml.js";
+import { workflowFiles } from "../../scripts/check-action-pins.mjs";
+import { assertNonEmptyScan } from "../support/sweep-kit.js";
 
 // #5275: Dependabot opened about 12 PRs every Monday because only the stryker
 // pair shared a group. Each case names the regression it keeps out. The real
@@ -33,6 +36,31 @@ const ecosystem = (name: string) => {
 	expect(entries, `one ${name} entry`).toHaveLength(1);
 	return entries[0];
 };
+
+// Dependabot directory of every composite action under .github/actions whose
+// steps use a remote action. A `./` step is local and a `docker://` image has
+// no tag for Dependabot to move, so neither counts. Any other `uses:` is a
+// remote pin: the gate fails closed on a spelling it does not recognize.
+async function pinningComposites(): Promise<string[]> {
+	const dirs: string[] = [];
+	for (const file of await workflowFiles(ROOT)) {
+		const rel = toPosix(relative(ROOT, file));
+		if (!rel.startsWith(".github/actions/") || !/\/action\.ya?ml$/.test(rel)) {
+			continue;
+		}
+		const doc = yaml.load(readFileSync(file, "utf8")) as {
+			runs?: { steps?: Array<{ uses?: unknown }> };
+		};
+		const remote = (doc.runs?.steps ?? []).some(
+			(step) =>
+				typeof step.uses === "string" &&
+				!step.uses.startsWith("./") &&
+				!step.uses.startsWith("docker://"),
+		);
+		if (remote) dirs.push(`/${toPosix(relative(ROOT, dirname(file)))}`);
+	}
+	return dirs.sort();
+}
 
 describe("#5275 dependabot grouping", () => {
 	// Recurrence: #5183 and #5191 each bumped one of the two stryker packages to
@@ -78,13 +106,24 @@ describe("#5275 dependabot grouping", () => {
 
 	// Recurrence: #4358, a bump that reached only ci.yml or only the composite
 	// action's actions/cache pin split the SHA (tests/config/action-pin-split).
-	// One entry with both directories and one `*` group bumps them together.
-	it("bumps every action in one group across both pin directories", () => {
+	// One entry with every pin directory and one `*` group bumps them together.
+	// Recurrence: #5409 (Qodo r1), the fetch-verified composite pinned
+	// actions/cache but was missing from `directories`, so a bump left it behind.
+	// The expected list is derived from the tree, so a new composite cannot skip
+	// it. `/` stays hard-coded: it is the directory of .github/workflows.
+	it("bumps every action in one group across every composite that pins one", async () => {
 		const entry = ecosystem("github-actions");
-		expect(entry.directories).toEqual([
-			"/",
-			"/.github/actions/tool-tree-cache",
-		]);
+		const pinning = await pinningComposites();
+		assertNonEmptyScan(
+			"composite actions that pin a remote action",
+			pinning.length,
+		);
+		const directories = entry.directories ?? [];
+		expect(
+			pinning.filter((dir) => !directories.includes(dir)),
+			"composite actions that pin an action but are missing from the github-actions directories",
+		).toEqual([]);
+		expect([...directories].sort()).toEqual(["/", ...pinning].sort());
 		expect(Object.keys(entry.groups ?? {})).toEqual(["actions"]);
 		expect(entry.groups?.actions.patterns).toEqual(["*"]);
 	});

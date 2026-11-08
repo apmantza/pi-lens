@@ -30,6 +30,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 interface BiomeDiagnostic {
 	severity: "error" | "warning" | "info" | "hint";
@@ -130,8 +131,7 @@ export function parseBiomeJson(
 							line: d.location.start.line,
 							column: d.location.start.column,
 							severity: normalizeBiomeSeverity(d.severity),
-							semantic:
-								d.severity === "error" ? "blocking" : ("warning" as const),
+							semantic: semanticFor(normalizeBiomeSeverity(d.severity)),
 							tool: "biome",
 							rule: d.category,
 							fixable: isFixable,

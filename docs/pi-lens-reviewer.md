@@ -45,7 +45,13 @@ are the author's claims. A verify round is exempt (#5319).
    worktree (`<worktree>/../probes-<pr>` or the lane's `$TMPDIR`): an untracked `.mjs`
    inside it reds `tests/scripts/lint-js.test.ts` (#2865). Attack inversions
    (real failures downgraded, healthy paths narrowed); concurrency (shared
-   state, retained settled promises, check-then-act across an await); session
+   state, retained settled promises, check-then-act across an await); liveness
+   and retry (every non-terminal state a probe can reach has an exit the
+   production path takes, and running an operation twice, by retry, resume or
+   a second `session_start`, ends in the same state with no second side
+   effect; name each state you could not drive to an exit); silent swallow
+   (every catch or default-returning fallthrough on a touched path shows where
+   its failure is recorded); session
    boundaries (once-only state after `resetDegradationLedger()` or
    `session_start`, probed with the SAME cached object); cadence (cooldowns
    against the caller's real retry interval, both directions); input channels,
@@ -82,7 +88,7 @@ does not ship.
 | A file under `clients/lsp/`, `formal/`, or any path `formal/switch-pins.json` names | The model moves with the code: a `.tla`/`.cfg` hunk and its TLC verdict, or a `TLA+ unaffected:` line; a flipped constant flips its config and its pin (AGENTS shape 68) | The line, or the model diff plus the verdict, and the pin's test name for a flipped constant | #4575 (Greptile r4304045020: the model did not move with the code), #4387, #4393 |
 | A spawn, shell or path seam: `clients/package-manager.ts`, `clients/lsp/launch.ts`, `clients/path-utils.ts`, `clients/safe-spawn.ts`, or any `trySpawn` caller | Read the Windows lane, and keep a shim cell that asserts the platform command (AGENTS "Test requirements"; `docs/invariants/dispatch-runners.md` "Dispatch, runners, formatters, and installers") | The `Unit tests Windows` row on the head, or the shim cell's platform assertion | #4566 (Greptile r4304149666: the `.cmd` cells), #4356, #4263 |
 | A rung that can execute project code | Judge the rung by the resolved target under every trust state, never by the name it was called with (`docs/invariants/lsp-trust-exec.md` "LSP, trust, and process execution") | The target table: each spelling, its resolved path, and the verdict under trusted, unknown and denied | #4566 (an empty `PATH` and a global link each ran project code), #4530 |
-| A new shared helper | Net-count rule: delete a same-shape sibling in this change (principles §1 "Net-count rule for shared helpers") | The deleted sibling in `Change outline`, or the unsafe-to-fold reason with its follow-up link | #2585 r1, #2617 r1 (an existing override and scan set bypassed or recopied), #3064, #3065, #3066, #3068 (a fold's newly sole predicate left untested) |
+| A new shared helper | Net-count rule: delete a same-shape sibling in this change (principles §1 "Deepen the module, keep the net count") | The deleted sibling in `Change outline`, or the unsafe-to-fold reason with its follow-up link | #2585 r1, #2617 r1 (an existing override and scan set bypassed or recopied), #3064, #3065, #3066, #3068 (a fold's newly sole predicate left untested) |
 | A second writer, reader or mirror of one shared record | Design shared state once, with a reason or kind discriminator per writer (principles §1 "Design shared state once"; AGENTS shape 24) | The writers-by-axis table, and the discriminator each writer carries | #1631/#1641 (the `stale` collision that was green alone), #1633, #1703 |
 | A durable record whose shape changes, or a new version of one | Keep the fixture corpus: every version that produced the record still parses (principles §2 "Keep fixture corpora") | The fixture path and the parser test that replays it | #3594 R2-F1 (AGENTS shape 57) |
 | A cache or memo key | Key every input the value depends on, trust scope and install state included (AGENTS shape 6) | The key's input list beside the value's dependencies, and the mutation that changes one input | #4562 (a large update left a cached answer), #4566 (a trust change left tools missing) |

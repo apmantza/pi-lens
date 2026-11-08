@@ -9,7 +9,8 @@ message: |-
 note: |-
   [CWE-200] Exposure of Sensitive Information to an Unauthorized Actor [REFERENCES]
       -  https://owasp.org/Top10/A01_2021-Broken_Access_Control
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   not:
     has:

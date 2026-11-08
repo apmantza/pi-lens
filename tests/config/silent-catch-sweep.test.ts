@@ -496,9 +496,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :156
 	"clients/dispatch/runners/swiftlint.ts": {
 		silent: 1,
-		identities: "102fe3fe1a609dfd",
+		identities: "e8e154dc40dff426",
 		reason: PRE_RULE,
-	}, // :158
+	}, // :161; now `return null` (#5411): the unreadable verdict is finishParsedRun's.
 	"clients/dispatch/runners/terragrunt.ts": {
 		silent: 1,
 		identities: "53f0ed4e5a760b9e",
@@ -541,9 +541,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :334, :382, :506, :545, :698, :1328, :1638
 	"clients/dispatch/runners/vale.ts": {
 		silent: 1,
-		identities: "ebc8ac6568c8a7ac",
+		identities: "e8e154dc40dff426",
 		reason: PRE_RULE,
-	}, // :134
+	}, // :125; now `return null` (#5411): the unreadable verdict is finishParsedRun's.
 	"clients/dispatch/runners/yaml-rule-parser.ts": {
 		silent: 5,
 		identities: "eaafa0a2a75a5c2a",
@@ -580,10 +580,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :168 (2 -> 1, #5120: the write lock's swallow went with withLock)
 	"clients/file-utils.ts": {
-		silent: 10,
-		identities: "6ae9ab1bab948b4e",
+		silent: 9,
+		identities: "158d7e24bb01d82f",
 		reason: PRE_RULE,
-	}, // :339, :359, :377, :381, :384, :511, :939, :1399, :1686, :1717 (#4689 batch 8: dataDirCanonicalRoot's realpath-probe catch is gone with the probe; the adoption's handlers declare their none)
+	}, // :341, :361, :379, :383, :386, :513, :1010, :1455, :1764 (#4689 batch 8: dataDirCanonicalRoot's realpath-probe catch is gone with the probe; the adoption's handlers declare their none; 10 -> 9 #5417: detectFileChangedAfterCommand's read-back declares its none)
 	"clients/fix-run-restore.ts": {
 		silent: 10,
 		identities: "24b4689d533166d4",
@@ -1212,10 +1212,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :162
 	"clients/tool-policy.ts": {
-		silent: 29,
-		identities: "b5570d8af2930d78",
+		silent: 18,
+		identities: "1658ee10420ff18e",
 		reason: PRE_RULE,
-	}, // :1969, :1985, :2009, :2047, :2099, :2111, :2127, :2142, :2149, :2163, :2180, :2194, :2201, :2219, :2226, :2240, :2260, :2273, :2284, :2301, :2822, :2878, :2904, :2924, :2960, :3019, :3036, :3055, :3063
+	}, // :1946, :1962, :1986, :2024, :2076, :2088, :2104, :2124, :2151, :2669, :2725, :2751, :2771, :2807, :2866, :2883, :2902, :2910
 	"clients/tool-render.ts": {
 		silent: 2,
 		identities: "bf1a83100ccaa695",
@@ -1333,9 +1333,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :517, :524
 	"tools/lens-diagnostic-mark.ts": {
 		silent: 6,
-		identities: "1af53558e8a5be76",
+		identities: "c6e91437fd931389",
 		reason: PRE_RULE,
-	}, // :110, :188, :222, :337, :387, :412
+	}, // :115, :193, :227, :377, :417, :439 (#5417: same six handlers, re-indented into the queued read-verify-write)
 	"tools/lens-diagnostics.ts": {
 		// 7 -> 6 (#5041): the `paths` cap guard's try/catch is gone, because the
 		// shared reader refuses an over-cap list before the scope is built.

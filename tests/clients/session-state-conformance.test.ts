@@ -50,6 +50,7 @@ import {
 	auditRegistry,
 	auditSymbolCounts,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 afterEach(() => _resetRegistryProbeState());
 
@@ -86,22 +87,26 @@ describe("session-state registry — shape", () => {
 		}
 	});
 
-	it("every registered reset name resolves to exactly one clients/ module", () => {
-		const definitions = resetNameDefinitions();
-		for (const entry of SESSION_STATE_REGISTRY) {
-			const files = definitions.get(entry.resetName);
-			expect(
-				files,
-				`${entry.id}: no exported ${entry.resetName}`,
-			).toBeDefined();
-			// A duplicated reset name would make the reachability walk below
-			// ambiguous — it resolves by name, so two definitions is a real hazard.
-			expect(
-				files,
-				`${entry.id}: ${entry.resetName} is defined twice`,
-			).toHaveLength(1);
-		}
-	});
+	it(
+		"every registered reset name resolves to exactly one clients/ module",
+		() => {
+			const definitions = resetNameDefinitions();
+			for (const entry of SESSION_STATE_REGISTRY) {
+				const files = definitions.get(entry.resetName);
+				expect(
+					files,
+					`${entry.id}: no exported ${entry.resetName}`,
+				).toBeDefined();
+				// A duplicated reset name would make the reachability walk below
+				// ambiguous — it resolves by name, so two definitions is a real hazard.
+				expect(
+					files,
+					`${entry.id}: ${entry.resetName} is defined twice`,
+				).toHaveLength(1);
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("session-state registry — re-arm conformance", () => {
@@ -335,13 +340,17 @@ describe("session-state registry — session_start wiring", () => {
 	const wired = sessionStartResetNames();
 	const closureWired = sessionStartClosureResetNames();
 
-	it("derives a non-trivial reset chain from handleSessionStart", () => {
-		// A silent derivation failure (renamed entry point, broken brace match)
-		// would make every wiring assertion below vacuously... fail, but this
-		// names the cause directly instead of scattering it across 20 tests.
-		expect(wired.size).toBeGreaterThan(15);
-		expect(wired.has("resetDegradationLedger")).toBe(true);
-	});
+	it(
+		"derives a non-trivial reset chain from handleSessionStart",
+		() => {
+			// A silent derivation failure (renamed entry point, broken brace match)
+			// would make every wiring assertion below vacuously... fail, but this
+			// names the cause directly instead of scattering it across 20 tests.
+			expect(wired.size).toBeGreaterThan(15);
+			expect(wired.has("resetDegradationLedger")).toBe(true);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("derives the session_start closure resets from index.ts (#2319)", () => {
 		// The closure-site entries below depend on THIS derivation, so a silent
@@ -362,22 +371,26 @@ describe("session-state registry — session_start wiring", () => {
 	for (const entry of SESSION_STATE_REGISTRY) {
 		if (entry.policy !== "session_start" || entry.gap) continue;
 		const sessionStartName = entry.sessionStartResetName ?? entry.resetName;
-		it(`${entry.id}: ${sessionStartName} runs at session_start`, () => {
-			// #2319: entries whose reset deliberately lives in index.ts's
-			// session_start CLOSURE (not handleSessionStart's reachable graph)
-			// are checked against the closure derivation. Every other entry
-			// keeps the handleSessionStart walk, unchanged.
-			const reached = entry.sessionStartClosureReset ? closureWired : wired;
-			const site = entry.sessionStartClosureReset
-				? "index.ts's session_start closure"
-				: "handleSessionStart";
-			expect(
-				reached.has(sessionStartName),
-				`${sessionStartName} is not reachable from ${site}. ` +
-					"Either wire it in, change the entry's policy and say why, or drop " +
-					"the sessionStartClosureReset marker.",
-			).toBe(true);
-		});
+		it(
+			`${entry.id}: ${sessionStartName} runs at session_start`,
+			() => {
+				// #2319: entries whose reset deliberately lives in index.ts's
+				// session_start CLOSURE (not handleSessionStart's reachable graph)
+				// are checked against the closure derivation. Every other entry
+				// keeps the handleSessionStart walk, unchanged.
+				const reached = entry.sessionStartClosureReset ? closureWired : wired;
+				const site = entry.sessionStartClosureReset
+					? "index.ts's session_start closure"
+					: "handleSessionStart";
+				expect(
+					reached.has(sessionStartName),
+					`${sessionStartName} is not reachable from ${site}. ` +
+						"Either wire it in, change the entry's policy and say why, or drop " +
+						"the sessionStartClosureReset marker.",
+				).toBe(true);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	}
 
 	// The mirror image, and the more valuable half: a declared gap must still
@@ -385,14 +398,18 @@ describe("session-state registry — session_start wiring", () => {
 	// forces the registry to stop claiming it is broken.
 	for (const entry of SESSION_STATE_REGISTRY) {
 		if (!entry.gap) continue;
-		it(`${entry.id}: the declared gap is still real`, () => {
-			expect(entry.gap && entry.gap.length).toBeGreaterThan(40);
-			expect(
-				wired.has(entry.sessionStartResetName ?? entry.resetName),
-				`${entry.sessionStartResetName ?? entry.resetName} IS wired at session_start now — delete this entry's ` +
-					"`gap` field; the registry must not keep claiming a fixed bug.",
-			).toBe(false);
-		});
+		it(
+			`${entry.id}: the declared gap is still real`,
+			() => {
+				expect(entry.gap && entry.gap.length).toBeGreaterThan(40);
+				expect(
+					wired.has(entry.sessionStartResetName ?? entry.resetName),
+					`${entry.sessionStartResetName ?? entry.resetName} IS wired at session_start now — delete this entry's ` +
+						"`gap` field; the registry must not keep claiming a fixed bug.",
+				).toBe(false);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	}
 
 	it("records the gaps this registry currently declares", () => {
@@ -444,36 +461,56 @@ describe("session-state sweep — coverage", () => {
 				"with the reason.",
 		});
 
-	it("every session-state-shaped file is registered or exempted with a reason", () => {
-		const { unaccounted, problems } = audit();
-		if (unaccounted.length > 0) expect.fail(problems.join("\n\n"));
-	});
+	it(
+		"every session-state-shaped file is registered or exempted with a reason",
+		() => {
+			const { unaccounted, problems } = audit();
+			if (unaccounted.length > 0) expect.fail(problems.join("\n\n"));
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("no exemption names a file the sweep no longer flags", () => {
-		expect(audit().staleExemptions).toEqual([]);
-	});
+	it(
+		"no exemption names a file the sweep no longer flags",
+		() => {
+			expect(audit().staleExemptions).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every exemption carries a reason", () => {
-		expect(audit().reasonlessExemptions).toEqual([]);
-	});
+	it(
+		"every exemption carries a reason",
+		() => {
+			expect(audit().reasonlessExemptions).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the sweep still flags files — an empty scan must fail, not read as clean", () => {
-		const { flaggedCount, problems } = audit();
-		expect(
-			problems.filter((p) => p.includes("declared floor")),
-			problems.join("\n"),
-		).toEqual([]);
-		expect(flaggedCount).toBeGreaterThanOrEqual(40);
-	});
+	it(
+		"the sweep still flags files — an empty scan must fail, not read as clean",
+		() => {
+			const { flaggedCount, problems } = audit();
+			expect(
+				problems.filter((p) => p.includes("declared floor")),
+				problems.join("\n"),
+			).toEqual([]);
+			expect(flaggedCount).toBeGreaterThanOrEqual(40);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the walk itself still finds source files — a dead walk fails separately (F4)", () => {
-		// Distinct from the test above: that one proves the DETECTOR matches,
-		// this one proves the WALK has something to look at. A moved clients/
-		// root reds here and names the walk; a broken container regex reds there
-		// and names the detector.
-		expect(clientSourceFiles().length).toBeGreaterThanOrEqual(100);
-		expect(audit().scannedCount).toBe(clientSourceFiles().length);
-	});
+	it(
+		"the walk itself still finds source files — a dead walk fails separately (F4)",
+		() => {
+			// Distinct from the test above: that one proves the DETECTOR matches,
+			// this one proves the WALK has something to look at. A moved clients/
+			// root reds here and names the walk; a broken container regex reds there
+			// and names the detector.
+			expect(clientSourceFiles().length).toBeGreaterThanOrEqual(100);
+			expect(audit().scannedCount).toBe(clientSourceFiles().length);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("documents the heuristic's blind spots rather than claiming full coverage", () => {
 		// The sweep is a floor. This asserts that the boundary stays written
@@ -489,33 +526,41 @@ describe("session-state sweep — coverage", () => {
 	// review F1 shape. This pins each flagged file's detected-symbol COUNT and
 	// diffs it against a live scan every run, so a new (or removed) module-level
 	// Map/Set/PathKeyedMap changes the file's id and reds as an unaccounted item.
-	it("every flagged file's stateful-symbol count matches its pin (#1817)", () => {
-		const counts: Record<string, number> = {};
-		for (const candidate of scanSessionStateCandidates()) {
-			counts[candidate.file] = symbolCount(candidate);
-		}
-		const { problems } = auditSymbolCounts({
-			sweepName: "session-state symbol-count pin",
-			counts,
-			pinned: SESSION_STATE_SYMBOL_COUNTS,
-		});
-		if (problems.length > 0) expect.fail(problems.join("\n\n"));
-	});
+	it(
+		"every flagged file's stateful-symbol count matches its pin (#1817)",
+		() => {
+			const counts: Record<string, number> = {};
+			for (const candidate of scanSessionStateCandidates()) {
+				counts[candidate.file] = symbolCount(candidate);
+			}
+			const { problems } = auditSymbolCounts({
+				sweepName: "session-state symbol-count pin",
+				counts,
+				pinned: SESSION_STATE_SYMBOL_COUNTS,
+			});
+			if (problems.length > 0) expect.fail(problems.join("\n\n"));
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the symbol-count pin names every file the sweep currently flags", () => {
-		// The pin table is only a backstop if it actually covers the flagged
-		// population — an entry silently missing from SESSION_STATE_SYMBOL_COUNTS
-		// would make that file's count invisible rather than pinned. Distinct
-		// from the drift check above: that one proves the NUMBERS agree, this one
-		// proves every flagged FILE has a number to agree with in the first place.
-		const flaggedFiles = new Set(
-			scanSessionStateCandidates().map((c) => c.file),
-		);
-		const missing = [...flaggedFiles].filter(
-			(file) => !Object.hasOwn(SESSION_STATE_SYMBOL_COUNTS, file),
-		);
-		expect(missing, missing.join("\n")).toEqual([]);
-	});
+	it(
+		"the symbol-count pin names every file the sweep currently flags",
+		() => {
+			// The pin table is only a backstop if it actually covers the flagged
+			// population — an entry silently missing from SESSION_STATE_SYMBOL_COUNTS
+			// would make that file's count invisible rather than pinned. Distinct
+			// from the drift check above: that one proves the NUMBERS agree, this one
+			// proves every flagged FILE has a number to agree with in the first place.
+			const flaggedFiles = new Set(
+				scanSessionStateCandidates().map((c) => c.file),
+			);
+			const missing = [...flaggedFiles].filter(
+				(file) => !Object.hasOwn(SESSION_STATE_SYMBOL_COUNTS, file),
+			);
+			expect(missing, missing.join("\n")).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// The mirror of the test above (review round 1, G1): a PIN row naming a
 	// file the scan does NOT currently flag is silent dead weight — the pin's
@@ -523,15 +568,19 @@ describe("session-state sweep — coverage", () => {
 	// never becomes an `unaccounted` item and `auditRegistry`'s `staleExemptions`
 	// never fires either, because `auditSymbolCounts` never passes exemptions.
 	// Nothing structurally catches a made-up filename without this test.
-	it("every symbol-count pin entry names a file the sweep still flags — no phantom rows", () => {
-		const flaggedFiles = new Set(
-			scanSessionStateCandidates().map((c) => c.file),
-		);
-		const phantom = Object.keys(SESSION_STATE_SYMBOL_COUNTS).filter(
-			(file) => !flaggedFiles.has(file),
-		);
-		expect(phantom, phantom.join("\n")).toEqual([]);
-	});
+	it(
+		"every symbol-count pin entry names a file the sweep still flags — no phantom rows",
+		() => {
+			const flaggedFiles = new Set(
+				scanSessionStateCandidates().map((c) => c.file),
+			);
+			const phantom = Object.keys(SESSION_STATE_SYMBOL_COUNTS).filter(
+				(file) => !flaggedFiles.has(file),
+			);
+			expect(phantom, phantom.join("\n")).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 // #1817: the symbol-count pin's own correctness, against a synthetic fixture
@@ -573,87 +622,103 @@ describe("session-state sweep — symbol-count pin regression (#1817)", () => {
 		"",
 	].join("\n");
 
-	it("file-level coverage alone cannot see the new symbol landing in an already-registered file", () => {
-		withFixtureTree(
-			{ "already-registered.ts": REGISTERED_FILE_AFTER },
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				expect(candidates.map((c) => c.file)).toEqual([
-					"already-registered.ts",
-				]);
-				expect(candidates[0].containers).toEqual([
-					"existingLatch",
-					"newUnclearedLatch",
-				]);
-				// This is the bug #1817 reports: the FILE is still registered, so a
-				// file-granular audit reads clean even though a second, uncleared
-				// latch landed inside it.
-				const fileLevel = auditRegistry({
-					sweepName: "fixture file-level audit",
-					flagged: candidates.map((c) => c.file),
-					registered: ["already-registered.ts"],
-				});
-				expect(fileLevel.problems).toEqual([]);
-			},
-		);
-	});
+	it(
+		"file-level coverage alone cannot see the new symbol landing in an already-registered file",
+		() => {
+			withFixtureTree(
+				{ "already-registered.ts": REGISTERED_FILE_AFTER },
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					expect(candidates.map((c) => c.file)).toEqual([
+						"already-registered.ts",
+					]);
+					expect(candidates[0].containers).toEqual([
+						"existingLatch",
+						"newUnclearedLatch",
+					]);
+					// This is the bug #1817 reports: the FILE is still registered, so a
+					// file-granular audit reads clean even though a second, uncleared
+					// latch landed inside it.
+					const fileLevel = auditRegistry({
+						sweepName: "fixture file-level audit",
+						flagged: candidates.map((c) => c.file),
+						registered: ["already-registered.ts"],
+					});
+					expect(fileLevel.problems).toEqual([]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the symbol-count pin reds when a registered file's detected-symbol count drifts", () => {
-		withFixtureTree(
-			{ "already-registered.ts": REGISTERED_FILE_AFTER },
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const counts: Record<string, number> = {};
-				for (const c of candidates) counts[c.file] = c.containers.length;
+	it(
+		"the symbol-count pin reds when a registered file's detected-symbol count drifts",
+		() => {
+			withFixtureTree(
+				{ "already-registered.ts": REGISTERED_FILE_AFTER },
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const counts: Record<string, number> = {};
+					for (const c of candidates) counts[c.file] = c.containers.length;
 
-				// Pin captured BEFORE the second latch landed — one container, as
-				// REGISTERED_FILE_BEFORE has.
-				const pinAudit = auditSymbolCounts({
-					sweepName: "fixture symbol-count audit",
-					counts,
-					pinned: { "already-registered.ts": 1 },
-				});
-				expect(pinAudit.problems.length).toBeGreaterThan(0);
-				expect(pinAudit.unaccounted).toEqual(["already-registered.ts@2"]);
-			},
-		);
-	});
+					// Pin captured BEFORE the second latch landed — one container, as
+					// REGISTERED_FILE_BEFORE has.
+					const pinAudit = auditSymbolCounts({
+						sweepName: "fixture symbol-count audit",
+						counts,
+						pinned: { "already-registered.ts": 1 },
+					});
+					expect(pinAudit.problems.length).toBeGreaterThan(0);
+					expect(pinAudit.unaccounted).toEqual(["already-registered.ts@2"]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the symbol-count pin passes when the live count matches the pin", () => {
-		withFixtureTree(
-			{ "already-registered.ts": REGISTERED_FILE_BEFORE },
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const counts: Record<string, number> = {};
-				for (const c of candidates) counts[c.file] = c.containers.length;
-				const pinAudit = auditSymbolCounts({
-					sweepName: "fixture symbol-count audit",
-					counts,
-					pinned: { "already-registered.ts": 1 },
-				});
-				expect(pinAudit.problems).toEqual([]);
-			},
-		);
-	});
+	it(
+		"the symbol-count pin passes when the live count matches the pin",
+		() => {
+			withFixtureTree(
+				{ "already-registered.ts": REGISTERED_FILE_BEFORE },
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const counts: Record<string, number> = {};
+					for (const c of candidates) counts[c.file] = c.containers.length;
+					const pinAudit = auditSymbolCounts({
+						sweepName: "fixture symbol-count audit",
+						counts,
+						pinned: { "already-registered.ts": 1 },
+					});
+					expect(pinAudit.problems).toEqual([]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("also reds when a symbol is REMOVED without updating the pin", () => {
-		withFixtureTree(
-			{ "already-registered.ts": REGISTERED_FILE_BEFORE },
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const counts: Record<string, number> = {};
-				for (const c of candidates) counts[c.file] = c.containers.length;
-				const pinAudit = auditSymbolCounts({
-					sweepName: "fixture symbol-count audit",
-					counts,
-					// Pin still claims 2, as if a symbol had been removed without
-					// updating the table.
-					pinned: { "already-registered.ts": 2 },
-				});
-				expect(pinAudit.problems.length).toBeGreaterThan(0);
-			},
-		);
-	});
+	it(
+		"also reds when a symbol is REMOVED without updating the pin",
+		() => {
+			withFixtureTree(
+				{ "already-registered.ts": REGISTERED_FILE_BEFORE },
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const counts: Record<string, number> = {};
+					for (const c of candidates) counts[c.file] = c.containers.length;
+					const pinAudit = auditSymbolCounts({
+						sweepName: "fixture symbol-count audit",
+						counts,
+						// Pin still claims 2, as if a symbol had been removed without
+						// updating the table.
+						pinned: { "already-registered.ts": 2 },
+					});
+					expect(pinAudit.problems.length).toBeGreaterThan(0);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("session-state scan — repo container classes are containers (#2442 F2, #2455)", () => {
@@ -733,66 +798,78 @@ describe("session-state scan — repo container classes are containers (#2442 F2
 		"",
 	].join("\n");
 
-	it("flags a module-level `new BoundedFifoMap()` / `new BoundedLruCache()`", () => {
-		withFixtureTree(
-			{
-				"bounded-holder.ts": BOUNDED_MODULE,
-				"container-classes.ts": CONTAINER_CLASSES_MODULE,
-			},
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const holder = candidates.find((c) => c.file === "bounded-holder.ts");
-				expect(holder?.containers).toEqual(["fifoLatch", "lruLatch"]);
-			},
-		);
-	});
+	it(
+		"flags a module-level `new BoundedFifoMap()` / `new BoundedLruCache()`",
+		() => {
+			withFixtureTree(
+				{
+					"bounded-holder.ts": BOUNDED_MODULE,
+					"container-classes.ts": CONTAINER_CLASSES_MODULE,
+				},
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const holder = candidates.find((c) => c.file === "bounded-holder.ts");
+					expect(holder?.containers).toEqual(["fifoLatch", "lruLatch"]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("counts them for the symbol-count pin, so a new bounded latch reds", () => {
-		withFixtureTree(
-			{
-				"bounded-holder.ts": BOUNDED_MODULE,
-				"container-classes.ts": CONTAINER_CLASSES_MODULE,
-			},
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const counts: Record<string, number> = {};
-				for (const c of candidates) counts[c.file] = c.containers.length;
-				// A pin captured when the file held only the FIFO latch.
-				const pinAudit = auditSymbolCounts({
-					sweepName: "fixture symbol-count audit",
-					counts,
-					pinned: { "bounded-holder.ts": 1, "container-classes.ts": 0 },
-				});
-				expect(pinAudit.unaccounted).toEqual(["bounded-holder.ts@2"]);
-			},
-		);
-	});
+	it(
+		"counts them for the symbol-count pin, so a new bounded latch reds",
+		() => {
+			withFixtureTree(
+				{
+					"bounded-holder.ts": BOUNDED_MODULE,
+					"container-classes.ts": CONTAINER_CLASSES_MODULE,
+				},
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const counts: Record<string, number> = {};
+					for (const c of candidates) counts[c.file] = c.containers.length;
+					// A pin captured when the file held only the FIFO latch.
+					const pinAudit = auditSymbolCounts({
+						sweepName: "fixture symbol-count audit",
+						counts,
+						pinned: { "bounded-holder.ts": 1, "container-classes.ts": 0 },
+					});
+					expect(pinAudit.unaccounted).toEqual(["bounded-holder.ts@2"]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("still ignores a bounded container declared inside a function", () => {
-		// Column zero is the module-scope signal; a per-call container is
-		// re-armed by construction and must not be flagged.
-		withFixtureTree(
-			{
-				"container-classes.ts": CONTAINER_CLASSES_MODULE,
-				"per-call.ts": [
-					'import { BoundedFifoMap } from "./container-classes.js";',
-					"",
-					"export function makeCache(): unknown {",
-					"\tconst perCall = new BoundedFifoMap<string, number>(8);",
-					"\treturn perCall;",
-					"}",
-					"",
-					"export function resetNothing(): void {}",
-					"",
-				].join("\n"),
-			},
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const perCall = candidates.find((c) => c.file === "per-call.ts");
-				expect(perCall?.containers ?? []).toEqual([]);
-			},
-		);
-	});
+	it(
+		"still ignores a bounded container declared inside a function",
+		() => {
+			// Column zero is the module-scope signal; a per-call container is
+			// re-armed by construction and must not be flagged.
+			withFixtureTree(
+				{
+					"container-classes.ts": CONTAINER_CLASSES_MODULE,
+					"per-call.ts": [
+						'import { BoundedFifoMap } from "./container-classes.js";',
+						"",
+						"export function makeCache(): unknown {",
+						"\tconst perCall = new BoundedFifoMap<string, number>(8);",
+						"\treturn perCall;",
+						"}",
+						"",
+						"export function resetNothing(): void {}",
+						"",
+					].join("\n"),
+				},
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const perCall = candidates.find((c) => c.file === "per-call.ts");
+					expect(perCall?.containers ?? []).toEqual([]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 // #2455: the detector must recognise a BRAND NEW repo-local collection class
@@ -849,77 +926,89 @@ describe("session-state scan — new repo-local collection classes need no detec
 		"",
 	].join("\n");
 
-	it("flags a module-level `new SomeRepoLocalCollection()` without editing the detector", () => {
-		withFixtureTree(
-			{
-				"new-collection-class.ts": NEW_CLASS_MODULE,
-				"holder.ts": HOLDER_MODULE,
-			},
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const holder = candidates.find((c) => c.file === "holder.ts");
-				expect(holder?.containers).toEqual(["sessionLatch"]);
-			},
-		);
-	});
+	it(
+		"flags a module-level `new SomeRepoLocalCollection()` without editing the detector",
+		() => {
+			withFixtureTree(
+				{
+					"new-collection-class.ts": NEW_CLASS_MODULE,
+					"holder.ts": HOLDER_MODULE,
+				},
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const holder = candidates.find((c) => c.file === "holder.ts");
+					expect(holder?.containers).toEqual(["sessionLatch"]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("resolves the container class through an `extends` chain too", () => {
-		const subclassModule = [
-			NEW_CLASS_MODULE,
-			// Owns neither `clear()` nor `delete()` in its own body — only
-			// through the `extends` chain, same shape as `BoundedLruCache`.
-			"export class SomeRepoLocalSubclass<K, V> extends SomeRepoLocalCollection<K, V> {",
-			"\toverride set(key: K, value: V): void {",
-			"\t\tsuper.set(key, value);",
-			"\t}",
-			"}",
-			"",
-		].join("\n");
-		withFixtureTree(
-			{
-				"new-collection-class.ts": subclassModule,
-				"holder.ts": [
-					'import { SomeRepoLocalSubclass } from "./new-collection-class.js";',
-					"",
-					"const sessionLatch = new SomeRepoLocalSubclass<string, number>();",
-					"",
-					"export function resetSessionLatch(): void {",
-					'\tsessionLatch.delete("k");',
-					"}",
-					"",
-				].join("\n"),
-			},
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const holder = candidates.find((c) => c.file === "holder.ts");
-				expect(holder?.containers).toEqual(["sessionLatch"]);
-			},
-		);
-	});
+	it(
+		"resolves the container class through an `extends` chain too",
+		() => {
+			const subclassModule = [
+				NEW_CLASS_MODULE,
+				// Owns neither `clear()` nor `delete()` in its own body — only
+				// through the `extends` chain, same shape as `BoundedLruCache`.
+				"export class SomeRepoLocalSubclass<K, V> extends SomeRepoLocalCollection<K, V> {",
+				"\toverride set(key: K, value: V): void {",
+				"\t\tsuper.set(key, value);",
+				"\t}",
+				"}",
+				"",
+			].join("\n");
+			withFixtureTree(
+				{
+					"new-collection-class.ts": subclassModule,
+					"holder.ts": [
+						'import { SomeRepoLocalSubclass } from "./new-collection-class.js";',
+						"",
+						"const sessionLatch = new SomeRepoLocalSubclass<string, number>();",
+						"",
+						"export function resetSessionLatch(): void {",
+						'\tsessionLatch.delete("k");',
+						"}",
+						"",
+					].join("\n"),
+				},
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const holder = candidates.find((c) => c.file === "holder.ts");
+					expect(holder?.containers).toEqual(["sessionLatch"]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("still ignores the new class declared inside a function (module scope still required)", () => {
-		withFixtureTree(
-			{
-				"new-collection-class.ts": NEW_CLASS_MODULE,
-				"per-call.ts": [
-					'import { SomeRepoLocalCollection } from "./new-collection-class.js";',
-					"",
-					"export function makeLatch(): unknown {",
-					"\tconst perCall = new SomeRepoLocalCollection<string, number>();",
-					"\treturn perCall;",
-					"}",
-					"",
-					"export function resetNothing(): void {}",
-					"",
-				].join("\n"),
-			},
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const perCall = candidates.find((c) => c.file === "per-call.ts");
-				expect(perCall?.containers ?? []).toEqual([]);
-			},
-		);
-	});
+	it(
+		"still ignores the new class declared inside a function (module scope still required)",
+		() => {
+			withFixtureTree(
+				{
+					"new-collection-class.ts": NEW_CLASS_MODULE,
+					"per-call.ts": [
+						'import { SomeRepoLocalCollection } from "./new-collection-class.js";',
+						"",
+						"export function makeLatch(): unknown {",
+						"\tconst perCall = new SomeRepoLocalCollection<string, number>();",
+						"\treturn perCall;",
+						"}",
+						"",
+						"export function resetNothing(): void {}",
+						"",
+					].join("\n"),
+				},
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const perCall = candidates.find((c) => c.file === "per-call.ts");
+					expect(perCall?.containers ?? []).toEqual([]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("session-state scan — class-declaration shape matrix (#2455 fix round 2, F2)", () => {
@@ -1038,30 +1127,34 @@ describe("session-state scan — class-declaration shape matrix (#2455 fix round
 		"",
 	].join("\n");
 
-	it("flags a module-level `new` for every class-declaration export shape", () => {
-		withFixtureTree(
-			{
-				"named-classes.ts": NAMED_CLASSES_MODULE,
-				"default-class.ts": DEFAULT_CLASS_MODULE,
-				"default-abstract-class.ts": DEFAULT_ABSTRACT_CLASS_MODULE,
-				"holder.ts": HOLDER_MODULE,
-			},
-			(dir) => {
-				const candidates = scanSessionStateCandidates(dir);
-				const holder = candidates.find((c) => c.file === "holder.ts");
-				expect(holder?.containers).toEqual([
-					"a",
-					"b",
-					"c",
-					"d",
-					"e",
-					"f",
-					"g",
-					"h",
-				]);
-			},
-		);
-	});
+	it(
+		"flags a module-level `new` for every class-declaration export shape",
+		() => {
+			withFixtureTree(
+				{
+					"named-classes.ts": NAMED_CLASSES_MODULE,
+					"default-class.ts": DEFAULT_CLASS_MODULE,
+					"default-abstract-class.ts": DEFAULT_ABSTRACT_CLASS_MODULE,
+					"holder.ts": HOLDER_MODULE,
+				},
+				(dir) => {
+					const candidates = scanSessionStateCandidates(dir);
+					const holder = candidates.find((c) => c.file === "holder.ts");
+					expect(holder?.containers).toEqual([
+						"a",
+						"b",
+						"c",
+						"d",
+						"e",
+						"f",
+						"g",
+						"h",
+					]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("MUTATION: reverting to the round-1 `^export class` regex misses every shape but the first", () => {
 		// Named directly rather than imported, so this test cannot silently stop
@@ -1098,94 +1191,117 @@ describe("session-state scan — CONTAINER_CLASS_EXCLUSIONS guards (#2455 fix ro
 		}
 	}
 
-	it("the real CONTAINER_CLASS_EXCLUSIONS table has no problems (empty today)", () => {
-		expect(auditContainerClassExclusions()).toEqual([]);
-	});
+	it(
+		"the real CONTAINER_CLASS_EXCLUSIONS table has no problems (empty today)",
+		() => {
+			expect(auditContainerClassExclusions()).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("reds on a stale entry — a class name the live scan does not find", () => {
-		// The reviewer's exact probe: before this guard existed, a nonexistent
-		// class name paired with an empty-string reason changed nothing
-		// observable, because the exclusion deleted a key that was never in the
-		// declared-class Set to begin with — the sweep stayed green.
-		withFixtureTree(
-			{
-				"real-class.ts": [
-					"export class RealClass {",
-					"\tclear(): void {}",
-					"}",
-					"",
-				].join("\n"),
-			},
-			(dir) => {
-				const problems = auditContainerClassExclusions(
-					{ NonexistentClass: "a real reason, just naming the wrong class" },
-					dir,
-				);
-				expect(problems).toEqual([
-					'CONTAINER_CLASS_EXCLUSIONS names "NonexistentClass", which the live class scan does not find — stale entry (renamed, deleted, or never existed)',
-				]);
-			},
-		);
-	});
+	it(
+		"reds on a stale entry — a class name the live scan does not find",
+		() => {
+			// The reviewer's exact probe: before this guard existed, a nonexistent
+			// class name paired with an empty-string reason changed nothing
+			// observable, because the exclusion deleted a key that was never in the
+			// declared-class Set to begin with — the sweep stayed green.
+			withFixtureTree(
+				{
+					"real-class.ts": [
+						"export class RealClass {",
+						"\tclear(): void {}",
+						"}",
+						"",
+					].join("\n"),
+				},
+				(dir) => {
+					const problems = auditContainerClassExclusions(
+						{ NonexistentClass: "a real reason, just naming the wrong class" },
+						dir,
+					);
+					expect(problems).toEqual([
+						'CONTAINER_CLASS_EXCLUSIONS names "NonexistentClass", which the live class scan does not find — stale entry (renamed, deleted, or never existed)',
+					]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("reds on an empty reason, even for a class the scan genuinely finds", () => {
-		withFixtureTree(
-			{
-				"real-class.ts": [
-					"export class RealClass {",
-					"\tclear(): void {}",
-					"}",
-					"",
-				].join("\n"),
-			},
-			(dir) => {
-				const problems = auditContainerClassExclusions({ RealClass: "" }, dir);
-				expect(problems).toEqual([
-					'CONTAINER_CLASS_EXCLUSIONS["RealClass"] has an empty reason',
-				]);
-			},
-		);
-	});
+	it(
+		"reds on an empty reason, even for a class the scan genuinely finds",
+		() => {
+			withFixtureTree(
+				{
+					"real-class.ts": [
+						"export class RealClass {",
+						"\tclear(): void {}",
+						"}",
+						"",
+					].join("\n"),
+				},
+				(dir) => {
+					const problems = auditContainerClassExclusions(
+						{ RealClass: "" },
+						dir,
+					);
+					expect(problems).toEqual([
+						'CONTAINER_CLASS_EXCLUSIONS["RealClass"] has an empty reason',
+					]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the reviewer's exact probe: a nonexistent class with an EMPTY reason reds on BOTH counts", () => {
-		withFixtureTree(
-			{
-				"real-class.ts": [
-					"export class RealClass {",
-					"\tclear(): void {}",
-					"}",
-					"",
-				].join("\n"),
-			},
-			(dir) => {
-				const problems = auditContainerClassExclusions(
-					{ NonexistentClass: "" },
-					dir,
-				);
-				expect(problems).toHaveLength(2);
-			},
-		);
-	});
+	it(
+		"the reviewer's exact probe: a nonexistent class with an EMPTY reason reds on BOTH counts",
+		() => {
+			withFixtureTree(
+				{
+					"real-class.ts": [
+						"export class RealClass {",
+						"\tclear(): void {}",
+						"}",
+						"",
+					].join("\n"),
+				},
+				(dir) => {
+					const problems = auditContainerClassExclusions(
+						{ NonexistentClass: "" },
+						dir,
+					);
+					expect(problems).toHaveLength(2);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("passes clean for a real class name with a real reason", () => {
-		withFixtureTree(
-			{
-				"real-class.ts": [
-					"export class RealClass {",
-					"\tclear(): void {}",
-					"}",
-					"",
-				].join("\n"),
-			},
-			(dir) => {
-				const problems = auditContainerClassExclusions(
-					{ RealClass: "proven stateless — no instance fields at all" },
-					dir,
-				);
-				expect(problems).toEqual([]);
-			},
-		);
-	});
+	it(
+		"passes clean for a real class name with a real reason",
+		() => {
+			withFixtureTree(
+				{
+					"real-class.ts": [
+						"export class RealClass {",
+						"\tclear(): void {}",
+						"}",
+						"",
+					].join("\n"),
+				},
+				(dir) => {
+					const problems = auditContainerClassExclusions(
+						{ RealClass: "proven stateless — no instance fields at all" },
+						dir,
+					);
+					expect(problems).toEqual([]);
+				},
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 // #4965 (defect shape 72): seven bug fixes in one week (#4961, #4955, #4952,
@@ -1313,9 +1429,13 @@ describe("session-state registry — owner key (#4965)", () => {
 			).toHaveLength(1);
 	});
 
-	it("every shipped scope cell is pinned, and every pin is a live use", () => {
-		expect(scanScopeCellKeys()).toEqual(SESSION_CELL_KEYS);
-	});
+	it(
+		"every shipped scope cell is pinned, and every pin is a live use",
+		() => {
+			expect(scanScopeCellKeys()).toEqual(SESSION_CELL_KEYS);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	describe("the cell census reads code, not prose, and not one spelling", () => {
 		let root: string | undefined;
@@ -1337,58 +1457,70 @@ describe("session-state registry — owner key (#4965)", () => {
 		const IMPORT =
 			'import { scopeCell, sessionCell } from "./session-scope.js";\n';
 
-		it("reads a literal key, a const key and an imported key", () => {
-			expect(
-				scanPlanted({
-					"literal.ts": `${IMPORT}scopeCell<Map<string, number>>(scope, "a", () => new Map());`,
-					"const.ts": `${IMPORT}const KEY = "b";\nsessionCell(id, KEY);`,
-					"imported.ts": `${IMPORT}import { OTHER_KEY } from "./o.js";\nscopeCell(scope, OTHER_KEY);`,
-				}),
-			).toEqual({
-				"literal.ts": ["a"],
-				"const.ts": ["b"],
-				"imported.ts": ["ident:OTHER_KEY"],
-			});
-		});
-
-		it("lists an alias, an indirect call and a value through another binding instead of missing them", () => {
-			// Plants the author did not design for: each lands a `?` token, which
-			// no pin contains, so the census test reds until the spelling is read.
-			const tokens = scanPlanted({
-				"alias.ts":
-					'import { scopeCell as sc } from "./session-scope.js";\nsc(scope, "x");',
-				"indirect.ts": `${IMPORT}const open = scopeCell;\nopen(scope, "x");`,
-				"binding.ts": `${IMPORT}const OTHER = "x";\nconst KEY = OTHER;\nscopeCell(scope, KEY);`,
-				"member.ts":
-					'import * as seam from "./session-scope.js";\nseam.scopeCell(scope, "x");',
-				"reexport.ts": 'export { scopeCell } from "./session-scope.js";',
-				"computed.ts": `${IMPORT}scopeCell(scope, "a" + suffix);`,
-				"parameter.ts": `${IMPORT}function f(key: string) { return scopeCell(scope, key); }`,
-			});
-			for (const [file, found] of Object.entries(tokens))
+		it(
+			"reads a literal key, a const key and an imported key",
+			() => {
 				expect(
-					found.some((token) => token.startsWith("?")),
-					`${file}: ${JSON.stringify(found)}`,
-				).toBe(true);
-			expect(Object.keys(tokens).sort()).toEqual([
-				"alias.ts",
-				"binding.ts",
-				"computed.ts",
-				"indirect.ts",
-				"member.ts",
-				"parameter.ts",
-				"reexport.ts",
-			]);
-		});
+					scanPlanted({
+						"literal.ts": `${IMPORT}scopeCell<Map<string, number>>(scope, "a", () => new Map());`,
+						"const.ts": `${IMPORT}const KEY = "b";\nsessionCell(id, KEY);`,
+						"imported.ts": `${IMPORT}import { OTHER_KEY } from "./o.js";\nscopeCell(scope, OTHER_KEY);`,
+					}),
+				).toEqual({
+					"literal.ts": ["a"],
+					"const.ts": ["b"],
+					"imported.ts": ["ident:OTHER_KEY"],
+				});
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("ignores a name that only a comment or a string carries", () => {
-			expect(
-				scanPlanted({
-					"prose.ts":
-						'// scopeCell(scope, "x")\nconst note = "sessionCell(id, \\"y\\")";',
-				}),
-			).toEqual({});
-		});
+		it(
+			"lists an alias, an indirect call and a value through another binding instead of missing them",
+			() => {
+				// Plants the author did not design for: each lands a `?` token, which
+				// no pin contains, so the census test reds until the spelling is read.
+				const tokens = scanPlanted({
+					"alias.ts":
+						'import { scopeCell as sc } from "./session-scope.js";\nsc(scope, "x");',
+					"indirect.ts": `${IMPORT}const open = scopeCell;\nopen(scope, "x");`,
+					"binding.ts": `${IMPORT}const OTHER = "x";\nconst KEY = OTHER;\nscopeCell(scope, KEY);`,
+					"member.ts":
+						'import * as seam from "./session-scope.js";\nseam.scopeCell(scope, "x");',
+					"reexport.ts": 'export { scopeCell } from "./session-scope.js";',
+					"computed.ts": `${IMPORT}scopeCell(scope, "a" + suffix);`,
+					"parameter.ts": `${IMPORT}function f(key: string) { return scopeCell(scope, key); }`,
+				});
+				for (const [file, found] of Object.entries(tokens))
+					expect(
+						found.some((token) => token.startsWith("?")),
+						`${file}: ${JSON.stringify(found)}`,
+					).toBe(true);
+				expect(Object.keys(tokens).sort()).toEqual([
+					"alias.ts",
+					"binding.ts",
+					"computed.ts",
+					"indirect.ts",
+					"member.ts",
+					"parameter.ts",
+					"reexport.ts",
+				]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
+
+		it(
+			"ignores a name that only a comment or a string carries",
+			() => {
+				expect(
+					scanPlanted({
+						"prose.ts":
+							'// scopeCell(scope, "x")\nconst note = "sessionCell(id, \\"y\\")";',
+					}),
+				).toEqual({});
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	});
 });
 
@@ -1514,32 +1646,40 @@ describe("session-state scan — containers with no reset, and class fields (#50
 
 	// The planted Map of #5027: a camelCase container in clients/read-guard.ts
 	// with no exported reset survived the pairing rule (150 passed on 62ef6a14a).
-	it("a reset-less camelCase Map is a candidate", () => {
-		expect(
-			flagged({
-				"read-guard.ts":
-					"const plantedBySession = new Map<string, string>();\nexport function note(): void {}\n",
-			}),
-		).toEqual(["read-guard.ts"]);
-	});
+	it(
+		"a reset-less camelCase Map is a candidate",
+		() => {
+			expect(
+				flagged({
+					"read-guard.ts":
+						"const plantedBySession = new Map<string, string>();\nexport function note(): void {}\n",
+				}),
+			).toEqual(["read-guard.ts"]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// Class sweep of #5027: five files kept their state in a process singleton
 	// cell (disk-changes.ts, instance-registry-lock.ts, instance-registry-tail.ts,
 	// lsp/created-import-targets.ts, process-bridge.ts) and exported no reset, so
 	// the pairing rule never asked whose it was.
-	it("a process singleton cell with no reset is a candidate", () => {
-		expect(
-			flagged({
-				"cell.ts": [
-					'import { getProcessSingleton } from "./process-singletons.js";',
-					"export function tally(): { calls: number } {",
-					'\treturn getProcessSingleton("tally", 1, () => ({ calls: 0 }));',
-					"}",
-					"",
-				].join("\n"),
-			}),
-		).toEqual(["cell.ts"]);
-	});
+	it(
+		"a process singleton cell with no reset is a candidate",
+		() => {
+			expect(
+				flagged({
+					"cell.ts": [
+						'import { getProcessSingleton } from "./process-singletons.js";',
+						"export function tally(): { calls: number } {",
+						'\treturn getProcessSingleton("tally", 1, () => ({ calls: 0 }));',
+						"}",
+						"",
+					].join("\n"),
+				}),
+			).toEqual(["cell.ts"]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	describe("the one admitted constant: an UPPER_SNAKE built-in never mutated", () => {
 		const READ_ONLY = [
@@ -1555,16 +1695,20 @@ describe("session-state scan — containers with no reset, and class fields (#50
 		const withUse = (use: string) =>
 			READ_ONLY + `export function extra(): unknown {\n\t${use}\n}\n`;
 
-		it("is not a candidate when every use is a read", () => {
-			expect(flagged({ "lookup.ts": READ_ONLY })).toEqual([]);
-			expect(
-				flagged({
-					"lookup.ts": withUse(
-						"for (const op of READ_OPS) void op; return Array.from(READ_OPS).length + READ_OPS.size;",
-					),
-				}),
-			).toEqual([]);
-		});
+		it(
+			"is not a candidate when every use is a read",
+			() => {
+				expect(flagged({ "lookup.ts": READ_ONLY })).toEqual([]);
+				expect(
+					flagged({
+						"lookup.ts": withUse(
+							"for (const op of READ_OPS) void op; return Array.from(READ_OPS).length + READ_OPS.size;",
+						),
+					}),
+				).toEqual([]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		it.each([
 			["add", 'READ_OPS.add("write");'],
@@ -1576,88 +1720,116 @@ describe("session-state scan — containers with no reset, and class fields (#50
 			["a value reached through another binding", "return { set: READ_OPS };"],
 			["a reassignment", "READ_OPS = new Set();"],
 			["a typeof use", "return typeof READ_OPS;"],
-		])("is a candidate when a use is %s", (_name, use) => {
-			expect(flagged({ "lookup.ts": withUse(use) })).toEqual(["lookup.ts"]);
-		});
+		])(
+			"is a candidate when a use is %s",
+			(_name, use) => {
+				expect(flagged({ "lookup.ts": withUse(use) })).toEqual(["lookup.ts"]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("ignores a mutation named only in a comment or a string", () => {
-			expect(
-				flagged({
-					"lookup.ts": withUse(
-						'// READ_OPS.add("write") would be a mutation\n\treturn "READ_OPS.clear()";',
-					),
-				}),
-			).toEqual([]);
-		});
+		it(
+			"ignores a mutation named only in a comment or a string",
+			() => {
+				expect(
+					flagged({
+						"lookup.ts": withUse(
+							'// READ_OPS.add("write") would be a mutation\n\treturn "READ_OPS.clear()";',
+						),
+					}),
+				).toEqual([]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("is a candidate when declared let, in lower case, or built by a clients/ class", () => {
-			expect(
-				flagged({
-					"a.ts": READ_ONLY.replace("const READ_OPS", "let READ_OPS"),
-				}),
-			).toEqual(["a.ts"]);
-			expect(
-				flagged({ "b.ts": READ_ONLY.replaceAll("READ_OPS", "readOps") }),
-			).toEqual(["b.ts"]);
-			expect(
-				flagged({
-					"c.ts": READ_ONLY.replace(
-						'new Set(["read", "grep"])',
-						"new Registry()",
-					),
-					"registry.ts": "export class Registry { add(): void {} }\n",
-				}),
-			).toEqual(["c.ts"]);
-		});
+		it(
+			"is a candidate when declared let, in lower case, or built by a clients/ class",
+			() => {
+				expect(
+					flagged({
+						"a.ts": READ_ONLY.replace("const READ_OPS", "let READ_OPS"),
+					}),
+				).toEqual(["a.ts"]);
+				expect(
+					flagged({ "b.ts": READ_ONLY.replaceAll("READ_OPS", "readOps") }),
+				).toEqual(["b.ts"]);
+				expect(
+					flagged({
+						"c.ts": READ_ONLY.replace(
+							'new Set(["read", "grep"])',
+							"new Registry()",
+						),
+						"registry.ts": "export class Registry { add(): void {} }\n",
+					}),
+				).toEqual(["c.ts"]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		describe("when exported, every shipped source is read", () => {
 			const EXPORTED = READ_ONLY.replace(
 				"const READ_OPS",
 				"export const READ_OPS",
 			);
-			it("stays admitted when an importer only reads", () => {
-				expect(
-					flagged({
-						"lookup.ts": EXPORTED,
-						"user.ts":
-							'import { READ_OPS } from "./lookup.js";\nexport const hit = READ_OPS.has("x");\n',
-					}),
-				).toEqual([]);
-			});
+			it(
+				"stays admitted when an importer only reads",
+				() => {
+					expect(
+						flagged({
+							"lookup.ts": EXPORTED,
+							"user.ts":
+								'import { READ_OPS } from "./lookup.js";\nexport const hit = READ_OPS.has("x");\n',
+						}),
+					).toEqual([]);
+				},
+				TREE_WALK_TIMEOUT_MS,
+			);
 			it.each([
 				["mutates it", 'READ_OPS.add("x");'],
 				["passes it on", "consume(READ_OPS);"],
-			])("is a candidate when an importer %s", (_name, use) => {
-				expect(
-					flagged({
-						"lookup.ts": EXPORTED,
-						"user.ts": `import { READ_OPS } from "./lookup.js";\nexport function f(): void {\n\t${use}\n}\n`,
-					}),
-				).toEqual(["lookup.ts"]);
-			});
-			it("is a candidate when an importer renames it or re-exports it under another name", () => {
-				expect(
-					flagged({
-						"lookup.ts": EXPORTED,
-						"user.ts":
-							'import { READ_OPS as ops } from "./lookup.js";\nexport const n = ops.size;\n',
-					}),
-				).toEqual(["lookup.ts"]);
-				expect(
-					flagged({
-						"lookup.ts": READ_ONLY + "export { READ_OPS as OPS };\n",
-					}),
-				).toEqual(["lookup.ts"]);
-			});
-			it("treats an unrenamed export list as exported", () => {
-				expect(
-					flagged({
-						"lookup.ts": READ_ONLY + "export { READ_OPS };\n",
-						"user.ts":
-							'import { READ_OPS } from "./lookup.js";\nexport function f(): void {\n\tREAD_OPS.delete("x");\n}\n',
-					}),
-				).toEqual(["lookup.ts"]);
-			});
+			])(
+				"is a candidate when an importer %s",
+				(_name, use) => {
+					expect(
+						flagged({
+							"lookup.ts": EXPORTED,
+							"user.ts": `import { READ_OPS } from "./lookup.js";\nexport function f(): void {\n\t${use}\n}\n`,
+						}),
+					).toEqual(["lookup.ts"]);
+				},
+				TREE_WALK_TIMEOUT_MS,
+			);
+			it(
+				"is a candidate when an importer renames it or re-exports it under another name",
+				() => {
+					expect(
+						flagged({
+							"lookup.ts": EXPORTED,
+							"user.ts":
+								'import { READ_OPS as ops } from "./lookup.js";\nexport const n = ops.size;\n',
+						}),
+					).toEqual(["lookup.ts"]);
+					expect(
+						flagged({
+							"lookup.ts": READ_ONLY + "export { READ_OPS as OPS };\n",
+						}),
+					).toEqual(["lookup.ts"]);
+				},
+				TREE_WALK_TIMEOUT_MS,
+			);
+			it(
+				"treats an unrenamed export list as exported",
+				() => {
+					expect(
+						flagged({
+							"lookup.ts": READ_ONLY + "export { READ_OPS };\n",
+							"user.ts":
+								'import { READ_OPS } from "./lookup.js";\nexport function f(): void {\n\tREAD_OPS.delete("x");\n}\n',
+						}),
+					).toEqual(["lookup.ts"]);
+				},
+				TREE_WALK_TIMEOUT_MS,
+			);
 		});
 	});
 
@@ -1676,32 +1848,36 @@ describe("session-state scan — containers with no reset, and class fields (#50
 		// #4955 recurrence, the declaration and assignment exactly as
 		// RuntimeCoordinator carried them at d472a99c9: a nullable field filled
 		// by a `??= new <clients/ class>`, which no module-scope scan can see.
-		it("reads a null-initialised field the coordinator fills with a new store (#4955)", () => {
-			withScanTree(
-				{
-					"read-guard.ts": "export class ReadGuard { reads = new Map(); }\n",
-					"runtime-coordinator.ts": [
-						'import { ReadGuard } from "./read-guard.js";',
-						"export class RuntimeCoordinator {",
-						"\tprivate _readGuard: ReadGuard | null = null;",
-						"\tgetReadGuard(): ReadGuard {",
-						"\t\tthis._readGuard ??= new ReadGuard();",
-						"\t\treturn this._readGuard;",
-						"\t}",
-						"}",
-						"",
-					].join("\n"),
-				},
-				(dir) => {
-					const coordinator = scanSessionStateCandidates(dir).find(
-						(c) => c.file === "runtime-coordinator.ts",
-					);
-					expect(coordinator?.instanceFields.map((f) => f.name)).toEqual([
-						"RuntimeCoordinator._readGuard",
-					]);
-				},
-			);
-		});
+		it(
+			"reads a null-initialised field the coordinator fills with a new store (#4955)",
+			() => {
+				withScanTree(
+					{
+						"read-guard.ts": "export class ReadGuard { reads = new Map(); }\n",
+						"runtime-coordinator.ts": [
+							'import { ReadGuard } from "./read-guard.js";',
+							"export class RuntimeCoordinator {",
+							"\tprivate _readGuard: ReadGuard | null = null;",
+							"\tgetReadGuard(): ReadGuard {",
+							"\t\tthis._readGuard ??= new ReadGuard();",
+							"\t\treturn this._readGuard;",
+							"\t}",
+							"}",
+							"",
+						].join("\n"),
+					},
+					(dir) => {
+						const coordinator = scanSessionStateCandidates(dir).find(
+							(c) => c.file === "runtime-coordinator.ts",
+						);
+						expect(coordinator?.instanceFields.map((f) => f.name)).toEqual([
+							"RuntimeCoordinator._readGuard",
+						]);
+					},
+				);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		it.each([
 			[
@@ -1733,11 +1909,15 @@ describe("session-state scan — containers with no reset, and class fields (#50
 				["Holder.late"],
 			],
 			["a ||= assignment", "start() { this.lazy ||= []; }", ["Holder.lazy"]],
-		])("flags %s", (_name, member, expected) => {
-			expect(fieldsOf(`export class Holder {\n\t${member}\n}\n`)).toEqual(
-				expected,
-			);
-		});
+		])(
+			"flags %s",
+			(_name, member, expected) => {
+				expect(fieldsOf(`export class Holder {\n\t${member}\n}\n`)).toEqual(
+					expected,
+				);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		it.each([
 			["a scalar", "private count = 0;"],
@@ -1750,67 +1930,83 @@ describe("session-state scan — containers with no reset, and class fields (#50
 			["a comparison", "check() { return this.x == new Map(); }"],
 			["a name in a comment", "// private cache = new Map();"],
 			["a name in a string", 'private note = "this.cache = new Map()";'],
-		])("does not flag %s", (_name, member) => {
-			expect(fieldsOf(`export class Holder {\n\t${member}\n}\n`)).toEqual([]);
-		});
+		])(
+			"does not flag %s",
+			(_name, member) => {
+				expect(fieldsOf(`export class Holder {\n\t${member}\n}\n`)).toEqual([]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("counts fields with the module containers in the one symbol pin", () => {
-			withScanTree(
-				{
-					"holder.ts":
-						"const knownBySession = new Map<string, string>();\nexport class Holder {\n\tprivate a = new Set<string>();\n}\n",
-				},
-				(dir) => {
-					const [candidate] = scanSessionStateCandidates(dir);
-					expect(candidate?.containers).toEqual(["knownBySession"]);
-					expect(candidate?.instanceFields.map((f) => f.name)).toEqual([
-						"Holder.a",
-					]);
-					expect(symbolCount(candidate!)).toBe(2);
-				},
-			);
-		});
+		it(
+			"counts fields with the module containers in the one symbol pin",
+			() => {
+				withScanTree(
+					{
+						"holder.ts":
+							"const knownBySession = new Map<string, string>();\nexport class Holder {\n\tprivate a = new Set<string>();\n}\n",
+					},
+					(dir) => {
+						const [candidate] = scanSessionStateCandidates(dir);
+						expect(candidate?.containers).toEqual(["knownBySession"]);
+						expect(candidate?.instanceFields.map((f) => f.name)).toEqual([
+							"Holder.a",
+						]);
+						expect(symbolCount(candidate!)).toBe(2);
+					},
+				);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		// A file with a row must not need a new pin for a constant that is proven
 		// read-only, and must for the same constant once a use mutates it.
-		it("pins an admitted constant at zero and the same constant, once mutated, at one", () => {
-			const lookup = [
-				'const PLANTED_LOOKUP = new Map<string, string>([["a", "b"]]);',
-				'export const has = PLANTED_LOOKUP.has("a");',
-				"export function reset(): void {}",
-				"",
-			].join("\n");
-			const countOf = (source: string): number | undefined => {
-				let out: number | undefined;
-				withScanTree({ "planted.ts": source }, (dir) => {
-					const found = scanSessionStateCandidates(dir)[0];
-					out = found && symbolCount(found);
-				});
-				return out;
-			};
-			expect(countOf(lookup)).toBe(0);
-			expect(countOf(`${lookup}PLANTED_LOOKUP.set("c", "d");\n`)).toBe(1);
-		});
+		it(
+			"pins an admitted constant at zero and the same constant, once mutated, at one",
+			() => {
+				const lookup = [
+					'const PLANTED_LOOKUP = new Map<string, string>([["a", "b"]]);',
+					'export const has = PLANTED_LOOKUP.has("a");',
+					"export function reset(): void {}",
+					"",
+				].join("\n");
+				const countOf = (source: string): number | undefined => {
+					let out: number | undefined;
+					withScanTree({ "planted.ts": source }, (dir) => {
+						const found = scanSessionStateCandidates(dir)[0];
+						out = found && symbolCount(found);
+					});
+					return out;
+				};
+				expect(countOf(lookup)).toBe(0);
+				expect(countOf(`${lookup}PLANTED_LOOKUP.set("c", "d");\n`)).toBe(1);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("states the spellings it does not read, rather than claiming them", () => {
-			// Residual, named in SWEEP_HEURISTIC_LIMITS: a value built by a factory
-			// call, reached through another binding, or by an aliased constructor.
-			expect(
-				fieldsOf(
-					[
-						"const make = () => new Map();",
-						"const Store = Map;",
-						"export class Holder {",
-						"\tprivate viaFactory = make();",
-						"\tprivate viaAlias = new Store();",
-						"\tconstructor(seed: Map<string, string>) { const m = new Map(); this.viaBinding = m; this.fromParam = seed; }",
-						"}",
-						"",
-					].join("\n"),
-				),
-			).toEqual([]);
-			expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain("CLASS FIELD");
-		});
+		it(
+			"states the spellings it does not read, rather than claiming them",
+			() => {
+				// Residual, named in SWEEP_HEURISTIC_LIMITS: a value built by a factory
+				// call, reached through another binding, or by an aliased constructor.
+				expect(
+					fieldsOf(
+						[
+							"const make = () => new Map();",
+							"const Store = Map;",
+							"export class Holder {",
+							"\tprivate viaFactory = make();",
+							"\tprivate viaAlias = new Store();",
+							"\tconstructor(seed: Map<string, string>) { const m = new Map(); this.viaBinding = m; this.fromParam = seed; }",
+							"}",
+							"",
+						].join("\n"),
+					),
+				).toEqual([]);
+				expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain("CLASS FIELD");
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	});
 
 	// #5036 F1. clients/file-time.ts kept `reads` and `locks` as members of the
@@ -1850,32 +2046,44 @@ describe("session-state scan — containers with no reset, and class fields (#50
 				"const s = {\n\tcfg: { a: 1, b: new Map() },\n\tn: make(1, 2),\n\tseen: new Map<string, number>(),\n\tlate: new WeakSet(),\n};\n",
 				["s.seen", "s.late"],
 			],
-		])("flags %s", (_name, source, expected) => {
-			expect(membersOf({ "holder.ts": source })).toEqual(expected);
-		});
+		])(
+			"flags %s",
+			(_name, source, expected) => {
+				expect(membersOf({ "holder.ts": source })).toEqual(expected);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("flags a member built by a clients/ container class", () => {
-			expect(
-				membersOf({
-					"read-guard.ts": "export class ReadGuard { reads = new Map(); }\n",
-					"holder.ts":
-						'import { ReadGuard } from "./read-guard.js";\nconst holder = { guard: new ReadGuard() };\n',
-				}),
-			).toEqual(["holder.guard"]);
-		});
+		it(
+			"flags a member built by a clients/ container class",
+			() => {
+				expect(
+					membersOf({
+						"read-guard.ts": "export class ReadGuard { reads = new Map(); }\n",
+						"holder.ts":
+							'import { ReadGuard } from "./read-guard.js";\nconst holder = { guard: new ReadGuard() };\n',
+					}),
+				).toEqual(["holder.guard"]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("counts a member in the one symbol pin, with the module containers", () => {
-			withScanTree(
-				{
-					"holder.ts":
-						"const knownBySession = new Map<string, string>();\nconst hub = { a: new Set<string>() };\n",
-				},
-				(dir) => {
-					const [candidate] = scanSessionStateCandidates(dir);
-					expect(symbolCount(candidate!)).toBe(2);
-				},
-			);
-		});
+		it(
+			"counts a member in the one symbol pin, with the module containers",
+			() => {
+				withScanTree(
+					{
+						"holder.ts":
+							"const knownBySession = new Map<string, string>();\nconst hub = { a: new Set<string>() };\n",
+					},
+					(dir) => {
+						const [candidate] = scanSessionStateCandidates(dir);
+						expect(symbolCount(candidate!)).toBe(2);
+					},
+				);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		it.each([
 			["an array member", "const cfg = { items: [] };"],
@@ -1903,27 +2111,35 @@ describe("session-state scan — containers with no reset, and class fields (#50
 				"a member named in a string",
 				'const note = "const cfg = { m: new Map() }";',
 			],
-		])("does not read %s", (_name, source) => {
-			expect(membersOf({ "holder.ts": `${source}\n` })).toEqual([]);
-		});
+		])(
+			"does not read %s",
+			(_name, source) => {
+				expect(membersOf({ "holder.ts": `${source}\n` })).toEqual([]);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		// The three spellings the detector's author did not design for: an
 		// alias, an indirect call and a value reached through another binding.
 		// None is read; each is named in SWEEP_HEURISTIC_LIMITS.
-		it("states the member spellings it does not read, rather than claiming them", () => {
-			expect(
-				membersOf({
-					"holder.ts": [
-						"const Store = Map;",
-						"const make = () => new Map();",
-						"const hub = { aliased: new Store(), made: make(), later: undefined };",
-						"hub.later = new Map();",
-						"",
-					].join("\n"),
-				}),
-			).toEqual([]);
-			expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain("OBJECT LITERAL");
-		});
+		it(
+			"states the member spellings it does not read, rather than claiming them",
+			() => {
+				expect(
+					membersOf({
+						"holder.ts": [
+							"const Store = Map;",
+							"const make = () => new Map();",
+							"const hub = { aliased: new Store(), made: make(), later: undefined };",
+							"hub.later = new Map();",
+							"",
+						].join("\n"),
+					}),
+				).toEqual([]);
+				expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain("OBJECT LITERAL");
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	});
 
 	// #5036 F2. Three spellings the declaration regex could not read, live in
@@ -1964,9 +2180,13 @@ describe("session-state scan — containers with no reset, and class fields (#50
 				"let cache = host.cache! ?? new Map();\n",
 				["cache"],
 			],
-		])("reads %s", (_name, source, expected) => {
-			expect(containersOf(source)).toEqual(expected);
-		});
+		])(
+			"reads %s",
+			(_name, source, expected) => {
+				expect(containersOf(source)).toEqual(expected);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
 		it.each([
 			[
@@ -1986,9 +2206,13 @@ describe("session-state scan — containers with no reset, and class fields (#50
 			],
 			["an || chain", "const x = a || new Map();\n", []],
 			["a ternary", "const x = flag ? new Map() : other;\n", []],
-		])("does not read %s", (_name, source, expected) => {
-			expect(containersOf(source)).toEqual(expected);
-		});
+		])(
+			"does not read %s",
+			(_name, source, expected) => {
+				expect(containersOf(source)).toEqual(expected);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	});
 
 	// #5036 F3 (greptile PRRT_kwDORt8rec6yJBG-, coderabbit PRRT_kwDORt8rec6yJChX).
@@ -2006,30 +2230,38 @@ describe("session-state scan — containers with no reset, and class fields (#50
 			return out;
 		};
 
-		it("admits a container emptied through the forEach callback's third argument", () => {
-			expect(
-				countOf(
-					'const READ_OPS = new Set<string>(["a"]);\nexport function drop(): void {\n\tREAD_OPS.forEach((value, _key, set) => set.delete(value));\n}\nexport function reset(): void {}\n',
-				),
-			).toBe(0);
-			expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain("forEach");
-		});
+		it(
+			"admits a container emptied through the forEach callback's third argument",
+			() => {
+				expect(
+					countOf(
+						'const READ_OPS = new Set<string>(["a"]);\nexport function drop(): void {\n\tREAD_OPS.forEach((value, _key, set) => set.delete(value));\n}\nexport function reset(): void {}\n',
+					),
+				).toBe(0);
+				expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain("forEach");
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 
-		it("admits a value mutated in place after get, values, entries, keys or forEach", () => {
-			expect(
-				countOf(
-					'const COUNTS_BY_KIND = new Map<string, { n: number }>();\nexport function bump(): void {\n\tCOUNTS_BY_KIND.get("a")!.n++;\n}\nexport function reset(): void {}\n',
-				),
-			).toBe(0);
-			expect(
-				countOf(
-					'const LOOKUP = new Map<string, Set<string>>();\nexport function add(): void {\n\tLOOKUP.forEach((s) => s.add("x"));\n}\nexport function reset(): void {}\n',
-				),
-			).toBe(0);
-			expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain(
-				"stored VALUE mutated in place",
-			);
-		});
+		it(
+			"admits a value mutated in place after get, values, entries, keys or forEach",
+			() => {
+				expect(
+					countOf(
+						'const COUNTS_BY_KIND = new Map<string, { n: number }>();\nexport function bump(): void {\n\tCOUNTS_BY_KIND.get("a")!.n++;\n}\nexport function reset(): void {}\n',
+					),
+				).toBe(0);
+				expect(
+					countOf(
+						'const LOOKUP = new Map<string, Set<string>>();\nexport function add(): void {\n\tLOOKUP.forEach((s) => s.add("x"));\n}\nexport function reset(): void {}\n',
+					),
+				).toBe(0);
+				expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain(
+					"stored VALUE mutated in place",
+				);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	});
 
 	// #5036 N2 (greptile PRRT_kwDORt8rec6yJr0B, coderabbit PRRT_kwDORt8rec6yJuxG).
@@ -2063,15 +2295,22 @@ describe("session-state scan — containers with no reset, and class fields (#50
 					fieldsOf(`export class Holder {\n\t${field}\n}\n`),
 				).toBeUndefined();
 			},
+			TREE_WALK_TIMEOUT_MS,
 		);
 
-		it("reads the plain annotation, and states the parenthesis miss", () => {
-			expect(
-				fieldsOf("export class Holder {\n\tprivate queue: string[] = [];\n}\n"),
-			).toEqual(["Holder.queue"]);
-			expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain(
-				"whose type annotation is parenthesised",
-			);
-		});
+		it(
+			"reads the plain annotation, and states the parenthesis miss",
+			() => {
+				expect(
+					fieldsOf(
+						"export class Holder {\n\tprivate queue: string[] = [];\n}\n",
+					),
+				).toEqual(["Holder.queue"]);
+				expect(SWEEP_HEURISTIC_LIMITS.join(" ")).toContain(
+					"whose type annotation is parenthesised",
+				);
+			},
+			TREE_WALK_TIMEOUT_MS,
+		);
 	});
 });

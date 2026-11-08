@@ -51,6 +51,7 @@ import {
 	relativePosix,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 /**
  * Every `clients/` file that still compares a generation/epoch/sequence by
@@ -191,42 +192,50 @@ function scanHandRolledGuards(): { flagged: string[]; scanned: number } {
 describe("generation-guard ratchet (#1754)", () => {
 	const { flagged, scanned } = scanHandRolledGuards();
 
-	it("actually walked clients/ and matched something", () => {
-		// Defect shape 10, #1718: a sweep that scanned nothing, or matched
-		// nothing, must FAIL rather than read as clean. Two separate floors,
-		// because "walked 0 files" and "walked 400 and matched 0" are different
-		// bugs with different fixes.
-		assertNonEmptyScan("generation-guard sweep: files walked", scanned, 200);
-		assertNonEmptyScan(
-			"generation-guard sweep: files flagged",
-			flagged.length,
-			8,
-		);
-	});
+	it(
+		"actually walked clients/ and matched something",
+		() => {
+			// Defect shape 10, #1718: a sweep that scanned nothing, or matched
+			// nothing, must FAIL rather than read as clean. Two separate floors,
+			// because "walked 0 files" and "walked 400 and matched 0" are different
+			// bugs with different fixes.
+			assertNonEmptyScan("generation-guard sweep: files walked", scanned, 200);
+			assertNonEmptyScan(
+				"generation-guard sweep: files flagged",
+				flagged.length,
+				8,
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every hand-rolled generation guard is accounted for", () => {
-		const audit = auditRegistry({
-			sweepName: "generation-guard ratchet (#1754)",
-			flagged,
-			// Nothing is "registered" here: a file either guards through the
-			// primitive, in which case the scan does not flag it, or it carries
-			// an exemption reason. There is no third state to declare.
-			registered: [],
-			exemptions: partitionExemptions().present,
-			minReasonLength: 60,
-			minFlagged: 8,
-			scannedCount: scanned,
-			minScanned: 200,
-			remediation:
-				"Use clients/generation-guard.ts (createGenerationSource / " +
-				"createGenerationMap), or add the file to " +
-				"HAND_ROLLED_GENERATION_GUARDS with the reason it cannot.",
-		});
-		// `auditRegistry` reports unaccounted files, reasonless exemptions AND
-		// stale ones in a single pass, so the reverse lock comes from the kit
-		// rather than from a second hand-written check.
-		expect(audit.problems.join("\n")).toBe("");
-	});
+	it(
+		"every hand-rolled generation guard is accounted for",
+		() => {
+			const audit = auditRegistry({
+				sweepName: "generation-guard ratchet (#1754)",
+				flagged,
+				// Nothing is "registered" here: a file either guards through the
+				// primitive, in which case the scan does not flag it, or it carries
+				// an exemption reason. There is no third state to declare.
+				registered: [],
+				exemptions: partitionExemptions().present,
+				minReasonLength: 60,
+				minFlagged: 8,
+				scannedCount: scanned,
+				minScanned: 200,
+				remediation:
+					"Use clients/generation-guard.ts (createGenerationSource / " +
+					"createGenerationMap), or add the file to " +
+					"HAND_ROLLED_GENERATION_GUARDS with the reason it cannot.",
+			});
+			// `auditRegistry` reports unaccounted files, reasonless exemptions AND
+			// stale ones in a single pass, so the reverse lock comes from the kit
+			// rather than from a second hand-written check.
+			expect(audit.problems.join("\n")).toBe("");
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("does not treat a file absent from the tree as a stale exemption", () => {
 		// clients/single-flight.ts arrives with #1762. Its exemption is written

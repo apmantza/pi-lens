@@ -320,6 +320,190 @@ function mkdtempPrefixArg(
 	return {};
 }
 
+// #5072: the owner-population case used to feed its own assertion — it created
+// `<prefix>population-` for every baseline row and then checked that the census
+// saw each prefix — so a row whose producer had already been deleted still
+// passed, because the setup supplied the value the assertion read. The
+// replacement asks the tree instead. A row is LIVE when its owner file, or a
+// module that file names in an import, still spells the family as the argument
+// of a call that creates a tmp root, in one of the three shapes the tree really
+// uses (each measured on a checked-in row):
+//
+//   1. `setupTestEnvironment("pi-lens-x-")` — the tmp helper's argument;
+//   2. `mkdtempSync(path.join(os.tmpdir(), "pi-lens-x-"))` — the call's own literal;
+//   3. `function f(prefix = "pi-lens-x-") { … mkdtempSync(…) … }` — a tmp helper's
+//       DEFAULT PARAMETER, which is how tests/clients/test-utils.ts produces its
+//       `pi-lens-test-` family and which neither argument-position needle
+//       reaches, because the literal follows `=`, not `(` or `,`.
+//
+// The call is read from CODE (`stripSource` blanks comments AND strings and
+// preserves offsets), and only the literal's body comes from the raw text, at
+// the delimiter the blanked code located — the split `literalHeadAt` documents.
+// A commented-out call or an ordinary string that spells one therefore cannot
+// keep a dead admission alive.
+//
+// `buildTmpOwnerIndex` reads each file through this same scan, so the census's
+// owner set and this check cannot drift apart. That widens the index by the
+// default-parameter producers its argument-position needles could not see; #3314
+// makes ONE candidate owner enough to spare a sibling invocation's live root,
+// and the "credits a default-parameter producer" case pins that a widened owner
+// still spares only what its own run never loaded.
+//
+// Two boundaries are decisions, not gaps. A prefix assembled at runtime
+// (`pi-lens-${tool}-`) has the static head `pi-lens-`, so no specific family
+// matches it and the row is refused: an unmatchable spelling counts as NOT live
+// and needs a named admission. And a helper that takes the prefix as a bare
+// identifier is only credited inside the file that both declares the mkdtemp
+// call and spells the literals — the same per-file rule `buildTmpOwnerIndex`
+// applies — so a row whose evidence is a call-site literal in another file names
+// the producing file as its owner.
+/** `from` followed by a specifier's opening quote, located in blanked code so a
+ *  string or comment spelling an import names no module. The specifier is read
+ *  with {@link literalHeadAt}; relative ones are what a test tree names. */
+const IMPORT_FROM = /\bfrom\s*["']/g;
+/** How many files one owner row may pull in through imports before the answer
+ *  is "not proven". A test file names more modules than a row needs, so the
+ *  walk asks the owner first and stops the moment a producer answers. */
+const OWNER_IMPORT_FILE_CAP = 24;
+
+/** A parameter's default literal: `function f(prefix = "pi-lens-x-")`. The
+ *  literal's opening delimiter is the match's last character, so its head is
+ *  read the way the argument-position needles read theirs. */
+const PARAMETER_DEFAULT = /[(,]\s*([A-Za-z_$][\w$]*)\s*=\s*["'`]/g;
+
+/** The default literals of this file's parameters named `name` — the value of
+ *  `function f(prefix = "pi-lens-x-")`. */
+function parameterDefaultHeads(
+	code: string,
+	raw: string,
+	name: string,
+): string[] {
+	const heads: string[] = [];
+	for (const match of code.matchAll(PARAMETER_DEFAULT)) {
+		if (match[1] !== name) continue;
+		const head = literalHeadAt(code, raw, match.index + match[0].length - 1);
+		if (head !== undefined && head.startsWith("pi-lens-")) heads.push(head);
+	}
+	return heads;
+}
+
+/** Every `pi-lens-` family one source file spells where a tmp-root call can read
+ *  it: a helper's argument, a mkdtemp call's own literal, or that call's
+ *  identifier prefix resolved through the file's parameter defaults and its own
+ *  argument literals. Only that namespace is returned because it is the only one
+ *  the census observes at all (`snapshotTmpPiLensEntries`), and the admission case
+ *  already refuses a row naming anything else. The argument-literal widening is
+ *  the census's long-standing per-file rule; it can credit a family a file only
+ *  names in an assertion, so a row that leans on it is a human removal, not a
+ *  silent pass. Shared with {@link buildTmpOwnerIndex}: one scan
+ *  per file, so the census and the baseline check read the same producers. */
+function tmpProducerPrefixesInSource(raw: string): Set<string> {
+	const code = stripSource(raw);
+	const found = new Set<string>();
+	const addHeadAt = (open: number): void => {
+		const head = literalHeadAt(code, raw, open);
+		if (head !== undefined && head.startsWith("pi-lens-")) found.add(head);
+	};
+	for (const match of code.matchAll(SETUP_ENV_CALL))
+		addHeadAt(match.index + match[0].length - 1);
+	// A per-file helper takes the prefix as an identifier and its callers spell
+	// the literals in the SAME file, so the file's own argument literals are its
+	// family set. A file with none cannot produce an entry the census observes
+	// (`snapshotTmpPiLensEntries` only sees `pi-lens-` names), so there is
+	// nothing to attribute — measured: tests/scripts/lsp-fixture-workspace.test.ts:49
+	// passes `WORKSPACE_TEST_PREFIX = "lsp-fixture-workspace-test-"`.
+	const argumentHeads: string[] = [];
+	for (const match of code.matchAll(ARGUMENT_LITERAL)) {
+		const head = literalHeadAt(code, raw, match.index + match[0].length - 1);
+		if (head?.startsWith("pi-lens-")) argumentHeads.push(head);
+	}
+	const lines = code.split("\n");
+	let lineStart = 0;
+	for (const [index, line] of lines.entries()) {
+		const windowStart = lineStart;
+		lineStart += line.length + 1;
+		MKTEMP_CALLEE.lastIndex = 0;
+		if (!MKTEMP_CALLEE.test(line)) continue;
+		const window = lines.slice(index, index + 3).join("\n");
+		if (!TMPDIR_SOURCE.test(window) && !TMPDIR_ENV_SOURCE.test(window))
+			continue;
+		const { literal, ident } = mkdtempPrefixArg(code, raw, windowStart, window);
+		if (literal !== undefined) {
+			if (literal.startsWith("pi-lens-")) found.add(literal);
+			continue;
+		}
+		if (ident === undefined) continue;
+		// The prefix reaches the call as an identifier. Either this file gives that
+		// parameter a `pi-lens-` default — tests/clients/test-utils.ts's
+		// `setupTestEnvironment(prefix = "pi-lens-test-")`, which creates the
+		// `pi-lens-test-` family no argument-position needle can see — or its
+		// callers spell the literals in the SAME file.
+		for (const head of parameterDefaultHeads(code, raw, ident)) found.add(head);
+		for (const head of argumentHeads) found.add(head);
+	}
+	return found;
+}
+
+/** The families the baseline row's owner population produces: the owner file
+ *  first, then the modules its imports name, up to {@link OWNER_IMPORT_FILE_CAP}
+ *  files. The walk stops as soon as one produced family is in `prefix`'s family,
+ *  so a live row never pays for the owner's import list. */
+function tmpOwnerProducerPrefixes(
+	owner: string,
+	prefix: string,
+	root: string = REPO_ROOT,
+): Set<string> {
+	const found = new Set<string>();
+	const seen = new Set<string>();
+	const pending = [owner.replace(/\\/g, "/")];
+	const live = (): boolean => [...found].some((p) => p.startsWith(prefix));
+	while (pending.length > 0 && seen.size < OWNER_IMPORT_FILE_CAP && !live()) {
+		const relative = pending.pop() as string;
+		if (seen.has(relative)) continue;
+		seen.add(relative);
+		let raw: string;
+		try {
+			raw = fs.readFileSync(path.join(root, relative), "utf8");
+		} catch {
+			// A module the owner names that is not there produces nothing.
+			continue;
+		}
+		for (const produced of tmpProducerPrefixesInSource(raw))
+			found.add(produced);
+		const code = stripSource(raw);
+		for (const match of code.matchAll(IMPORT_FROM)) {
+			const specifier = literalHeadAt(
+				code,
+				raw,
+				match.index + match[0].length - 1,
+			);
+			if (specifier?.startsWith("."))
+				pending.push(
+					path.normalize(
+						path.join(
+							path.dirname(relative),
+							specifier.replace(/\.js$/, ".ts"),
+						),
+					),
+				);
+		}
+	}
+	return found;
+}
+
+/** Why one baseline row is removable, or `undefined` when its owner still
+ *  produces it. The owner-population case delivers this as its failure text, so
+ *  the wording is user-facing prose and the planted-stale cell pins it. */
+function tmpBaselineRowStaleness(
+	row: { prefix: string; owner: string },
+	root: string = REPO_ROOT,
+): string | undefined {
+	const produced = tmpOwnerProducerPrefixes(row.owner, row.prefix, root);
+	for (const family of produced)
+		if (family.startsWith(row.prefix)) return undefined;
+	return `${row.prefix}: no live producer in ${row.owner}; remove the admission`;
+}
+
 function buildTmpOwnerIndex(
 	root: string = path.join(REPO_ROOT, "tests"),
 	/** Population floors, so the scan cannot silently go empty. Parameters
@@ -347,47 +531,7 @@ function buildTmpOwnerIndex(
 	)) {
 		fileCount += 1;
 		const owner = path.relative(root, file).replace(/\\/g, "/");
-		const code = stripSource(raw);
-		for (const match of code.matchAll(SETUP_ENV_CALL))
-			add(literalHeadAt(code, raw, match.index + match[0].length - 1), owner);
-		const harvested: string[] = [];
-		for (const match of code.matchAll(ARGUMENT_LITERAL)) {
-			const head = literalHeadAt(code, raw, match.index + match[0].length - 1);
-			if (head?.startsWith("pi-lens-")) harvested.push(head);
-		}
-		const lines = code.split("\n");
-		let lineStart = 0;
-		for (const [index, line] of lines.entries()) {
-			const windowStart = lineStart;
-			lineStart += line.length + 1;
-			MKTEMP_CALLEE.lastIndex = 0;
-			if (!MKTEMP_CALLEE.test(line)) continue;
-			// Multi-line calls carry path.join(os.tmpdir(), …) on the following
-			// lines; read the call window, the way the sibling sweep above does.
-			const window = lines.slice(index, index + 3).join("\n");
-			if (!TMPDIR_SOURCE.test(window) && !TMPDIR_ENV_SOURCE.test(window))
-				continue;
-			const { literal, ident } = mkdtempPrefixArg(
-				code,
-				raw,
-				windowStart,
-				window,
-			);
-			if (literal !== undefined) {
-				add(literal, owner);
-				continue;
-			}
-			// The prefix is an identifier: these sites sit in a per-file helper
-			// (`freshTmpDir(prefix)`), and its callers spell the literals in the
-			// SAME file, so the file's own `pi-lens-` literals are the family set.
-			// A file with none cannot produce an entry this census observes
-			// (`snapshotTmpPiLensEntries` only sees `pi-lens-` names), so there is
-			// nothing to attribute and nothing to enforce — measured:
-			// tests/scripts/lsp-fixture-workspace.test.ts:49 passes
-			// `WORKSPACE_TEST_PREFIX = "lsp-fixture-workspace-test-"`.
-			if (ident !== undefined)
-				for (const prefix of harvested) add(prefix, owner);
-		}
+		for (const prefix of tmpProducerPrefixesInSource(raw)) add(prefix, owner);
 	}
 	assertNonEmptyScan(
 		"tmp owner prefix population",
@@ -803,82 +947,104 @@ describe("tmp-fixture-hygiene", () => {
 		}
 	});
 
-	it("classifies a new repo-root entry by git: an untracked stray is a leak; a tracked or ignored one is not", () => {
-		const stray = `.probe-3715-stray-${process.pid}`;
-		const ignored = `probe-3715-${process.pid}-ignored.js`;
-		fs.mkdirSync(path.join(REPO_ROOT, stray));
-		fs.writeFileSync(path.join(REPO_ROOT, ignored), "");
-		try {
-			expect(
-				untrackedUnignoredEntries(
-					[stray, ignored, "package.json", ".probe-home"],
-					REPO_ROOT,
-				),
-			).toEqual([stray]);
-		} finally {
-			fs.rmSync(path.join(REPO_ROOT, stray), { recursive: true, force: true });
-			fs.rmSync(path.join(REPO_ROOT, ignored), { force: true });
-		}
-	});
+	it(
+		"classifies a new repo-root entry by git: an untracked stray is a leak; a tracked or ignored one is not",
+		() => {
+			const stray = `.probe-3715-stray-${process.pid}`;
+			const ignored = `probe-3715-${process.pid}-ignored.js`;
+			fs.mkdirSync(path.join(REPO_ROOT, stray));
+			fs.writeFileSync(path.join(REPO_ROOT, ignored), "");
+			try {
+				expect(
+					untrackedUnignoredEntries(
+						[stray, ignored, "package.json", ".probe-home"],
+						REPO_ROOT,
+					),
+				).toEqual([stray]);
+			} finally {
+				fs.rmSync(path.join(REPO_ROOT, stray), {
+					recursive: true,
+					force: true,
+				});
+				fs.rmSync(path.join(REPO_ROOT, ignored), { force: true });
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #4003 recurrence: `tests/packaging-pack-manifest.test.ts` ran a real
 	// `npm pack` in the checkout, whose `prepare` built `dist/` there; git
 	// ignores `dist/`, so the census above passed while every dist-dependent
 	// file became order-dependent. A new build-output name is a leak even when
 	// ignored, and a pre-existing one is not.
-	it("flags a new dist/ or .pack-backup/ in the repo root even though git ignores it", () => {
-		const env = setupTestEnvironment("pi-lens-4003-build-output-", {
-			rootMarker: false,
-		});
-		try {
-			for (const name of ["dist", ".pack-backup", "kept-dist"])
-				fs.mkdirSync(path.join(env.tmpDir, name));
-			const census = unadmittedRepoRootEntries(["kept-dist"], env.tmpDir);
-			expect(census.unknown).toBeUndefined();
-			expect(census.leaked).toEqual([".pack-backup", "dist"]);
-			expect(
-				unadmittedRepoRootEntries(["dist", ".pack-backup"], env.tmpDir).leaked,
-			).toEqual([]);
-		} finally {
-			env.cleanup();
-		}
-	});
+	it(
+		"flags a new dist/ or .pack-backup/ in the repo root even though git ignores it",
+		() => {
+			const env = setupTestEnvironment("pi-lens-4003-build-output-", {
+				rootMarker: false,
+			});
+			try {
+				for (const name of ["dist", ".pack-backup", "kept-dist"])
+					fs.mkdirSync(path.join(env.tmpDir, name));
+				const census = unadmittedRepoRootEntries(["kept-dist"], env.tmpDir);
+				expect(census.unknown).toBeUndefined();
+				expect(census.leaked).toEqual([".pack-backup", "dist"]);
+				expect(
+					unadmittedRepoRootEntries(["dist", ".pack-backup"], env.tmpDir)
+						.leaked,
+				).toEqual([]);
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #4003: a build-output leak must survive the cell where git cannot answer
 	// for the OTHER new entries; reporting only `unknown` there would let a new
 	// dist/ pass in a tree git cannot read.
-	it("still flags a new dist/ when git cannot classify another new entry", () => {
-		const env = setupTestEnvironment("pi-lens-4003-build-output-unknown-", {
-			rootMarker: false,
-		});
-		try {
-			for (const name of ["dist", "stray"])
-				fs.mkdirSync(path.join(env.tmpDir, name));
-			const census = unadmittedRepoRootEntries([], env.tmpDir);
-			expect(census.leaked).toEqual(["dist"]);
-			expect(census.unknown).toContain("stray");
-		} finally {
-			env.cleanup();
-		}
-	});
+	it(
+		"still flags a new dist/ when git cannot classify another new entry",
+		() => {
+			const env = setupTestEnvironment("pi-lens-4003-build-output-unknown-", {
+				rootMarker: false,
+			});
+			try {
+				for (const name of ["dist", "stray"])
+					fs.mkdirSync(path.join(env.tmpDir, name));
+				const census = unadmittedRepoRootEntries([], env.tmpDir);
+				expect(census.leaked).toEqual(["dist"]);
+				expect(census.unknown).toContain("stray");
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("reports unknown, never clean, when git cannot classify, and when the baseline predates the census", () => {
-		const env = setupTestEnvironment("pi-lens-3715-no-git-", {
-			rootMarker: false,
-		});
-		try {
-			fs.mkdirSync(path.join(env.tmpDir, "stray"));
-			expect(untrackedUnignoredEntries(["stray"], env.tmpDir)).toBeUndefined();
-			const unknown = unadmittedRepoRootEntries([], env.tmpDir);
-			expect(unknown.leaked).toEqual([]);
-			expect(unknown.unknown).toContain("stray");
-			expect(unadmittedRepoRootEntries(undefined).unknown).toContain(
-				"predates",
-			);
-		} finally {
-			env.cleanup();
-		}
-	});
+	it(
+		"reports unknown, never clean, when git cannot classify, and when the baseline predates the census",
+		() => {
+			const env = setupTestEnvironment("pi-lens-3715-no-git-", {
+				rootMarker: false,
+			});
+			try {
+				fs.mkdirSync(path.join(env.tmpDir, "stray"));
+				expect(
+					untrackedUnignoredEntries(["stray"], env.tmpDir),
+				).toBeUndefined();
+				const unknown = unadmittedRepoRootEntries([], env.tmpDir);
+				expect(unknown.leaked).toEqual([]);
+				expect(unknown.unknown).toContain("stray");
+				expect(unadmittedRepoRootEntries(undefined).unknown).toContain(
+					"predates",
+				);
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #4864 F4 (CodeRabbit's thread): the repo-root ledger records a `mkdir`
 	// creation, so the entry is a DIRECTORY even though the creating cell has
@@ -890,41 +1056,52 @@ describe("tmp-fixture-hygiene", () => {
 	// did: every name below carries a directory-only rule, and the cell picks one
 	// the checkout does not currently hold, so the measured case is the removed
 	// directory (a stray one in a developer's tree cannot satisfy or break it).
-	it("admits a recorded directory through a directory-only ignore rule after its bytes are gone (#4864)", () => {
-		const absentIgnoredDir = [
-			".pack-backup",
-			"coverage",
-			"reports",
-			"out",
-		].find((name) => !fs.existsSync(path.join(REPO_ROOT, name)));
-		expect(
-			absentIgnoredDir,
-			"every candidate directory-only rule has a directory in this checkout",
-		).toBeDefined();
-		const name = absentIgnoredDir as string;
-		// No kind and no bytes: git cannot match the directory-only rule, which is
-		// the pre-fix answer this arm keeps beside the fix.
-		expect(untrackedUnignoredEntries([name], REPO_ROOT)).toEqual([name]);
-		// The ledger's kind: the same name is admitted.
-		expect(
-			untrackedUnignoredEntries([name], REPO_ROOT, new Set([name])),
-		).toEqual([]);
-	});
+	it(
+		"admits a recorded directory through a directory-only ignore rule after its bytes are gone (#4864)",
+		() => {
+			const absentIgnoredDir = [
+				".pack-backup",
+				"coverage",
+				"reports",
+				"out",
+			].find((name) => !fs.existsSync(path.join(REPO_ROOT, name)));
+			expect(
+				absentIgnoredDir,
+				"every candidate directory-only rule has a directory in this checkout",
+			).toBeDefined();
+			const name = absentIgnoredDir as string;
+			// No kind and no bytes: git cannot match the directory-only rule, which is
+			// the pre-fix answer this arm keeps beside the fix.
+			expect(untrackedUnignoredEntries([name], REPO_ROOT)).toEqual([name]);
+			// The ledger's kind: the same name is admitted.
+			expect(
+				untrackedUnignoredEntries([name], REPO_ROOT, new Set([name])),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("the run's real baseline sees a stray planted in the repo root, and not once it is removed", () => {
-		const stray = `.probe-3715-live-${process.pid}`;
-		fs.mkdirSync(path.join(REPO_ROOT, stray));
-		try {
-			const during = unadmittedRepoRootEntries(repoRootBaseline());
-			expect(during.unknown).toBeUndefined();
-			expect(during.leaked).toContain(stray);
-		} finally {
-			fs.rmSync(path.join(REPO_ROOT, stray), { recursive: true, force: true });
-		}
-		expect(unadmittedRepoRootEntries(repoRootBaseline()).leaked).not.toContain(
-			stray,
-		);
-	});
+	it(
+		"the run's real baseline sees a stray planted in the repo root, and not once it is removed",
+		() => {
+			const stray = `.probe-3715-live-${process.pid}`;
+			fs.mkdirSync(path.join(REPO_ROOT, stray));
+			try {
+				const during = unadmittedRepoRootEntries(repoRootBaseline());
+				expect(during.unknown).toBeUndefined();
+				expect(during.leaked).toContain(stray);
+			} finally {
+				fs.rmSync(path.join(REPO_ROOT, stray), {
+					recursive: true,
+					force: true,
+				});
+			}
+			expect(
+				unadmittedRepoRootEntries(repoRootBaseline()).leaked,
+			).not.toContain(stray);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3721 (the #3880 flake): the log sinks bind their path from PI_LENS_HOME at
 	// module load, and one home for every worker made the 33 files that run with
@@ -1173,28 +1350,291 @@ describe("tmp-fixture-hygiene", () => {
 	});
 
 	it("keeps every live baseline prefix within its checked-in owner population", () => {
+		// #5072: this case used to `mkdtempSync(<prefix>population-)` for every row
+		// and then assert that the census saw each prefix, so the setup supplied the
+		// value the assertion checked and a stale row could never red. It reads the
+		// owners' source instead, and creates nothing.
 		const baseline = JSON.parse(
 			fs.readFileSync(
 				path.join(REPO_ROOT, "tests/config/tmp-fixture-hygiene-baseline.json"),
 				"utf8",
 			),
-		) as Array<{ prefix: string }>;
-		const created = baseline.map((row) =>
-			fs.mkdtempSync(path.join(os.tmpdir(), `${row.prefix}population-`)),
-		);
-		try {
-			const observed = tmpHygieneObservedEntries();
-			for (const row of baseline) {
-				expect(
-					observed.some((entry) => entry.startsWith(row.prefix)),
-					`${row.prefix} disappeared from its owner population; remove the admission`,
-				).toBe(true);
-			}
-		} finally {
-			for (const dir of created)
-				fs.rmSync(dir, { recursive: true, force: true });
+		) as Array<{ prefix: string; owner: string }>;
+		expect(baseline.length).toBeGreaterThan(0);
+		for (const row of baseline) {
+			const stale = tmpBaselineRowStaleness(row);
+			expect(stale, stale ?? "").toBeUndefined();
 		}
 	});
+
+	it("reds a baseline row whose owner no longer produces its prefix (#5072)", () => {
+		// The population verdict, on a row this file invents: a `pi-lens-` family
+		// nothing produces any more, pointing at a real owner file. The old case
+		// passed this row because it created the directory the assertion read; the
+		// replacement has no directories of its own, so the row reports itself.
+		const planted = {
+			prefix: "pi-lens-5072-owner-population-stale-",
+			owner: "tests/index-integration.test.ts",
+		};
+		expect(tmpBaselineRowStaleness(planted)).toBe(
+			"pi-lens-5072-owner-population-stale-: no live producer in " +
+				"tests/index-integration.test.ts; remove the admission",
+		);
+		// The rule is not vacuously red: the owner of a checked-in row still
+		// answers for its family through the same call.
+		const baseline = JSON.parse(
+			fs.readFileSync(
+				path.join(REPO_ROOT, "tests/config/tmp-fixture-hygiene-baseline.json"),
+				"utf8",
+			),
+		) as Array<{ prefix: string; owner: string }>;
+		expect(tmpBaselineRowStaleness(baseline[0])).toBeUndefined();
+	});
+
+	it("counts only a real tmp-root producer as an owner population (#5072)", () => {
+		// Each form of the rule, and the two refusals, through planted fixtures so
+		// the shapes are not read off the real tree the rule also has to accept.
+		// The source texts sit in string literals, so the blanked-code scans this
+		// file runs over its own tree never see them as calls.
+		const env = setupTestEnvironment("pi-lens-5072-producer-forms-");
+		// The fixture bodies below are string literals, so the scans this suite runs
+		// over the tree read them as strings, never as calls. FAM is the shared head
+		// of every planted family; each full family is `FAM` plus a suffix.
+		const FAM = "pi-lens-5072-fixture-";
+		try {
+			const write = (name: string, body: string): void => {
+				fs.writeFileSync(path.join(env.tmpDir, name), body, "utf8");
+			};
+			write(
+				"direct.ts",
+				[
+					"import * as fs from 'node:fs';",
+					"import * as os from 'node:os';",
+					"import * as path from 'node:path';",
+					"export function direct(): string {",
+					"\treturn fs.mkdtempSync(path.join(os.tmpdir(), '" +
+						FAM +
+						"direct-'));",
+					"}",
+				].join("\n"),
+			);
+			write(
+				"helper.ts",
+				[
+					"import * as fs from 'node:fs';",
+					"import * as os from 'node:os';",
+					"import * as path from 'node:path';",
+					"export function scratchRoot(prefix = '" + FAM + "param-') {",
+					"\treturn fs.mkdtempSync(path.join(os.tmpdir(), prefix));",
+					"}",
+				].join("\n"),
+			);
+			write(
+				"via-import.ts",
+				[
+					"import { scratchRoot } from './helper.js';",
+					"export const root = scratchRoot();",
+				].join("\n"),
+			);
+			write(
+				"prose-only.ts",
+				[
+					"// return fs.mkdtempSync(path.join(os.tmpdir(), '" +
+						FAM +
+						"comment-'));",
+					"export const decoy = \"return fs.mkdtempSync(path.join(os.tmpdir(), '" +
+						FAM +
+						"string-'));\";",
+				].join("\n"),
+			);
+			const live = (owner: string, prefix: string): boolean =>
+				tmpBaselineRowStaleness({ prefix, owner }, env.tmpDir) === undefined;
+			// Form 2: the call's own literal.
+			expect(live("direct.ts", FAM + "direct-")).toBe(true);
+			// Form 3: the default parameter of a function whose body creates the root.
+			expect(live("helper.ts", FAM + "param-")).toBe(true);
+			// A module the owner names counts, and so does its family alone.
+			expect(live("via-import.ts", FAM + "param-")).toBe(true);
+			// Refusals: a commented-out call and a string that spells one are the
+			// #3306 decoys, and neither is a producer. Nor is an unrelated family
+			// in a file that does produce something, nor a missing owner.
+			expect(live("prose-only.ts", FAM + "comment-")).toBe(false);
+			expect(live("prose-only.ts", FAM + "string-")).toBe(false);
+			expect(live("direct.ts", FAM + "comment-")).toBe(false);
+			// A missing owner is not a producer either.
+			expect(live("absent.ts", FAM + "direct-")).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("refuses what is not a tmp-root producer, and bounds the owner walk (#5072)", () => {
+		// The cells of r1 review F1 and F3: a stale row must not read live because of
+		// a string that spells an import, a runtime-assembled prefix, a helper whose
+		// literals sit in another file, a repo-rooted mkdtemp parent, or a producer
+		// past the import cap. Source texts sit in string literals, so the scans this
+		// suite runs over its own tree never see them as calls.
+		const env = setupTestEnvironment("pi-lens-5072-refusal-cells-");
+		const FAM = "pi-lens-5072-cell-";
+		try {
+			const write = (name: string, body: string): void => {
+				fs.writeFileSync(path.join(env.tmpDir, name), body, "utf8");
+			};
+			const live = (owner: string, prefix: string): boolean =>
+				tmpBaselineRowStaleness({ prefix, owner }, env.tmpDir) === undefined;
+			const HEAD = [
+				"import * as fs from 'node:fs';",
+				"import * as os from 'node:os';",
+				"import * as path from 'node:path';",
+			];
+			// F1: an import is read from CODE. A string or a comment spelling one
+			// names no module, so the producer it points at is not this owner's.
+			write(
+				"prod.ts",
+				[
+					...HEAD,
+					"export const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), '" +
+						FAM +
+						"imported-'));",
+				].join("\n"),
+			);
+			write("real-import.ts", "import { mk } from './prod.js';\nmk();");
+			write(
+				"string-import.ts",
+				"export const s = \"import { mk } from './prod.js'\";",
+			);
+			write(
+				"comment-import.ts",
+				"// import { mk } from './prod.js';\nexport {};",
+			);
+			expect(live("real-import.ts", FAM + "imported-")).toBe(true);
+			expect(live("string-import.ts", FAM + "imported-")).toBe(false);
+			expect(live("comment-import.ts", FAM + "imported-")).toBe(false);
+			// F3a: a runtime-assembled prefix has the static head `pi-lens-`. It
+			// matches no family, so it credits no row; and a row LONGER than a family
+			// the owner really produces is not that family's.
+			write(
+				"template.ts",
+				[
+					...HEAD,
+					"export const mk = (tool: string) =>",
+					"\tfs.mkdtempSync(path.join(os.tmpdir(), `pi-lens-${tool}-`));",
+				].join("\n"),
+			);
+			expect(live("template.ts", FAM + "assembled-")).toBe(false);
+			expect(live("prod.ts", FAM + "imported-longer-row-")).toBe(false);
+			// F3b: a helper taking a bare identifier counts only beside the literals
+			// that name the family. A call-site literal in another file is the
+			// caller's evidence, not the helper's.
+			write(
+				"same-file.ts",
+				[
+					...HEAD,
+					"function make(prefix: string) {",
+					"\treturn fs.mkdtempSync(path.join(os.tmpdir(), prefix));",
+					"}",
+					"make('" + FAM + "same-');",
+				].join("\n"),
+			);
+			write(
+				"helper-only.ts",
+				[
+					...HEAD,
+					"export function make(prefix: string) {",
+					"\treturn fs.mkdtempSync(path.join(os.tmpdir(), prefix));",
+					"}",
+				].join("\n"),
+			);
+			write(
+				"caller.ts",
+				"import { make } from './helper-only.js';\nmake('" + FAM + "other-');",
+			);
+			expect(live("same-file.ts", FAM + "same-")).toBe(true);
+			expect(live("helper-only.ts", FAM + "other-")).toBe(false);
+			expect(live("caller.ts", FAM + "other-")).toBe(false);
+			// The tmp-root window: an mkdtemp under a repo-rooted parent never enters
+			// /tmp, so the census cannot observe its family.
+			write(
+				"repo-rooted.ts",
+				[
+					"import * as fs from 'node:fs';",
+					"import * as path from 'node:path';",
+					"export const mk = (root: string) =>",
+					"\tfs.mkdtempSync(path.join(root, '" + FAM + "repo-'));",
+				].join("\n"),
+			);
+			expect(live("repo-rooted.ts", FAM + "repo-")).toBe(false);
+			// The cap: the owner plus the modules it names, 24 files at most. A chain
+			// whose producer is the 24th file is proven, the 25th is "not proven".
+			for (let i = 0; i <= 24; i += 1)
+				write(
+					`chain-${i}.ts`,
+					i === 24
+						? [
+								...HEAD,
+								"export const mk = () => fs.mkdtempSync(path.join(os.tmpdir(), '" +
+									FAM +
+									"chain-'));",
+							].join("\n")
+						: `import './chain-${i + 1}.js';\nexport { next } from './chain-${i + 1}.js';`,
+				);
+			expect(live("chain-1.ts", FAM + "chain-")).toBe(true);
+			expect(live("chain-0.ts", FAM + "chain-")).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it(
+		"credits a default-parameter producer to the owner index without sparing a judged root (#5072, #3314)",
+		() => {
+			// F2: the owner index and the baseline check share one per-file producer
+			// scan, so a family only a default parameter spells (the shape of
+			// tests/clients/test-utils.ts) has its helper as a candidate owner. #3314:
+			// one candidate that ran here keeps the entry judged, and an owner that did
+			// not run leaves it another invocation's. The widening must change neither.
+			const env = setupTestEnvironment("pi-lens-5072-owner-widening-");
+			const FAM = "pi-lens-5072-widen-";
+			try {
+				fs.writeFileSync(
+					path.join(env.tmpDir, "helper.ts"),
+					[
+						"import * as fs from 'node:fs';",
+						"import * as os from 'node:os';",
+						"import * as path from 'node:path';",
+						"export function scratchRoot(prefix = '" + FAM + "param-') {",
+						"\treturn fs.mkdtempSync(path.join(os.tmpdir(), prefix));",
+						"}",
+					].join("\n"),
+					"utf8",
+				);
+				fs.writeFileSync(
+					path.join(env.tmpDir, "other.test.ts"),
+					"import * as fs from 'node:fs';\nimport * as os from 'node:os';\nimport * as path from 'node:path';\nfs.mkdtempSync(path.join(os.tmpdir(), '" +
+						FAM +
+						"direct-'));",
+					"utf8",
+				);
+				const index = buildTmpOwnerIndex(env.tmpDir, { prefixes: 1, files: 2 });
+				const entry = FAM + "param-AbC123";
+				expect(ownersForTmpEntry(entry, index)).toEqual(["helper.ts"]);
+				const judged = (ran: string[]): string[] =>
+					tmpHygieneForeignRunEntries(
+						[entry],
+						(e) => ownersForTmpEntry(e, index),
+						new Set(ran),
+						NO_CREATORS,
+					);
+				// The sibling invocation's root: this run never loaded the owner.
+				expect(judged(["other.test.ts"])).toEqual([entry]);
+				// This run loaded the owner: the entry is judged, not spared.
+				expect(judged(["helper.ts"])).toEqual([]);
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("reds new prefixes and removal of an admitted prefix from the real namespace", () => {
 		const baseline = JSON.parse(
