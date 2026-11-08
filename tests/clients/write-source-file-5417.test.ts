@@ -340,37 +340,38 @@ describe("applyWorkspaceEdit honors the session's writable roots (#5417)", () =>
 		};
 	}
 
-	it.each([
-		["sessionRoot", (root: string) => ({ sessionRoot: root })],
-		[
-			"the mutation context's project root",
-			(root: string) => ({
-				mutationContext: {
-					cwd: root,
-					correlationId: "5417",
-					tool: "lsp-rename",
-					source: "lsp-rename" as const,
-					runtime: { projectRoot: root },
-				},
-				observe: false,
-			}),
-		],
-	])(
-		"refuses a server edit of a sibling repo's file (root from %s)",
-		async (_label, optionsFor) => {
-			// The language server runs in the sibling repo, so its own workspace
-			// confinement admits the file; only the session's roots refuse it.
-			const file = path.join(sibling, "lib.ts");
-			fs.writeFileSync(file, "value = 1;\n");
+	// The language server runs in the sibling repo, so its own workspace
+	// confinement admits the file; only the session's roots refuse it.
+	async function expectSiblingEditRefused(
+		options: Parameters<typeof applyWorkspaceEdit>[2],
+	) {
+		const file = path.join(sibling, "lib.ts");
+		fs.writeFileSync(file, "value = 1;\n");
 
-			await expect(
-				applyWorkspaceEdit(edit(file), sibling, optionsFor(sessionRoot)),
-			).rejects.toThrow(/writable roots/);
+		await expect(
+			applyWorkspaceEdit(edit(file), sibling, options),
+		).rejects.toThrow(/writable roots/);
 
-			expect(fs.readFileSync(file, "utf8")).toBe("value = 1;\n");
-			expect(refusalSubjects()).toEqual([`${file}:lsp-edit`]);
-		},
-	);
+		expect(fs.readFileSync(file, "utf8")).toBe("value = 1;\n");
+		expect(refusalSubjects()).toEqual([`${file}:lsp-edit`]);
+	}
+
+	it("refuses a server edit of a sibling repo's file named by sessionRoot", async () => {
+		await expectSiblingEditRefused({ sessionRoot });
+	});
+
+	it("refuses a server edit of a sibling repo's file named by the mutation context's project root", async () => {
+		await expectSiblingEditRefused({
+			mutationContext: {
+				cwd: sessionRoot,
+				correlationId: "5417",
+				tool: "lsp-rename",
+				source: "lsp-rename" as const,
+				runtime: { projectRoot: sessionRoot },
+			},
+			observe: false,
+		});
+	});
 
 	it("applies the same edit to a file inside the session", async () => {
 		const file = path.join(sessionRoot, "lib.ts");
