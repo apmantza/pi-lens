@@ -149,7 +149,6 @@ export function packedImportResolutionViolations(
 		// only .cjs as CommonJS.
 		const parsed = parseSync(packedPath, text, {
 			sourceType: packedPath.endsWith(".cjs") ? "commonjs" : "module",
-			preserveParens: false,
 		});
 		const syntax = parsed.errors.find((e) => e.severity === "Error");
 		if (syntax) {
