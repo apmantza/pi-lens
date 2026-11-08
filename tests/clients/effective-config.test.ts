@@ -671,7 +671,9 @@ describe("effectiveConfig — why is X running (#2415 AC)", () => {
 				const tool = createEffectiveConfigTool(() => projectDir);
 				const result = await tool.execute(
 					"t",
-					{ file: "Program.cs" },
+					// The advertised spelling; a legacy `file` send is covered on the
+					// MCP surface in tests/mcp/server.smoke.test.ts.
+					{ path: "Program.cs" },
 					undefined,
 					undefined,
 					{},

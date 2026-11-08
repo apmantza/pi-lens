@@ -1,8 +1,8 @@
 {
 	"pi": {
-		"budget": 20766,
+		"budget": 20701,
 		"descriptionTotal": 3783,
-		"schemaTotal": 15095,
+		"schemaTotal": 15036,
 		"tools": {
 			"ast_grep_outline": {
 				"description": 357,
@@ -18,7 +18,7 @@
 			},
 			"effective_config": {
 				"description": 308,
-				"schema": 457
+				"schema": 398
 			},
 			"lens_diagnostic_mark": {
 				"description": 303,
@@ -59,9 +59,9 @@
 		}
 	},
 	"mcp": {
-		"budget": 21005,
-		"descriptionTotal": 3855,
-		"schemaTotal": 15240,
+		"budget": 20819,
+		"descriptionTotal": 3878,
+		"schemaTotal": 15048,
 		"tools": {
 			"pilens_analyze": {
 				"description": 98,
@@ -80,8 +80,8 @@
 				"schema": 2292
 			},
 			"pilens_effective_config": {
-				"description": 295,
-				"schema": 578
+				"description": 308,
+				"schema": 487
 			},
 			"pilens_health": {
 				"description": 86,
@@ -96,8 +96,8 @@
 				"schema": 2234
 			},
 			"pilens_module_report": {
-				"description": 544,
-				"schema": 1845
+				"description": 554,
+				"schema": 1766
 			},
 			"pilens_project_report": {
 				"description": 491,
@@ -109,11 +109,11 @@
 			},
 			"pilens_read_enclosing": {
 				"description": 296,
-				"schema": 1108
+				"schema": 1011
 			},
 			"pilens_read_symbol": {
 				"description": 288,
-				"schema": 607
+				"schema": 682
 			},
 			"pilens_rebuild": {
 				"description": 102,

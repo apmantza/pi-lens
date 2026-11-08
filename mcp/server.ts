@@ -97,6 +97,12 @@ import {
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 import { readFilePath, readPathsArgument } from "../tools/shared.js";
 import { createProjectReportTool } from "../tools/project-report.js";
+import { createEffectiveConfigTool } from "../tools/effective-config.js";
+import {
+	createModuleReportTool,
+	createReadEnclosingTool,
+	createReadSymbolTool,
+} from "../tools/module-report.js";
 import { createSymbolSearchTool } from "../tools/symbol-search.js";
 import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
 import { isUnderDir, walkUpDirs } from "../clients/path-utils.js";
@@ -630,20 +636,22 @@ const lspNavigationTool = createLspNavigationTool((name, cwd) =>
 
 // #5138 PR 3: the catalog's `description`/`inputSchema` come from the pi tool
 // object itself, so the wire schema cannot drift from what pi declares. These
-// two are instantiated for their definition only — the MCP entries below serve
-// their own calls, so `execute` is unreachable and the root getter is never
-// invoked (it is read inside `execute`, never at construction).
+// are instantiated for their definition only — the MCP entries below serve
+// their own calls, so `execute` is unreachable and neither the root getter nor
+// the read recorder is ever invoked (both are read inside `execute`).
 const symbolSearchTool = createSymbolSearchTool(() => DEFAULT_CWD);
 const projectReportTool = createProjectReportTool(() => DEFAULT_CWD);
+const moduleReportTool = createModuleReportTool(() => DEFAULT_CWD);
+const effectiveConfigTool = createEffectiveConfigTool(() => DEFAULT_CWD);
+// This surface has no read guard to credit, and its `execute` never runs; the
+// recorder exists only because the pi factory requires one.
+const noReadCoverage = () => {};
+const readSymbolTool = createReadSymbolTool(() => DEFAULT_CWD, noReadCoverage);
+const readEnclosingTool = createReadEnclosingTool(
+	() => DEFAULT_CWD,
+	noReadCoverage,
+);
 
-// #5138 PR 3 projects an entry only when the pi definition is wire-compatible
-// with the block it replaces. `pilens_module_report`, `pilens_read_symbol`,
-// `pilens_read_enclosing` and `pilens_effective_config` still restate their
-// schema because their pi tools do not declare the MCP-only `file`/`filePath`
-// aliases and leave `path` optional where the MCP block leads with it — a
-// projection there would drop accepted parameters and require `path`, which is
-// a contract change for the maintainer. `tests/mcp/schema-projection.test.ts`
-// records each stop with its reason and reds once the cause disappears.
 const ALL_TOOLS = [
 	{
 		name: "pilens_analyze",
@@ -737,58 +745,10 @@ const ALL_TOOLS = [
 	{
 		name: "pilens_module_report",
 		description: translateGuidanceToolNames(
-			"Return a navigable source-module outline with references and read handles. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: use pilens_module_report on `src/app.ts` before pilens_read_symbol.",
+			moduleReportTool.description,
 			"mcp",
 		),
-		inputSchema: {
-			type: "object",
-			properties: {
-				file: {
-					type: "string",
-					description: "File to report on (absolute or relative to cwd).",
-				},
-				path: {
-					type: "string",
-					description: "File to report on (the canonical spelling of `file`).",
-				},
-				filePath: { type: "string", description: "Alias for `path`." },
-				cwd: { type: "string" },
-				maxRefsPerSymbol: {
-					type: "number",
-					description: "Cap who-uses-this entries per symbol (default 10).",
-				},
-				focus: {
-					type: "string",
-					description:
-						"Optional task hint used only to rank recommendedReads (does not expand scope or trigger scans).",
-				},
-				view: {
-					type: "string",
-					description:
-						'Output preset: projection \u00d7 format. "summary-text" (default) = metric fields off (no usedBy/fanout/complexity fields), text. "summary-json" = same fields, JSON. "full-text" = every field, text. "full-json" = every field, JSON (byte-identical to the pre-#5137 default). Metrics render as a cx:/fan: suffix and flags as [flag]; every field appears in the text cell, `kind` prints raw so it can be reused as read_symbol\'s kind filter, and an unavailable module still renders its callbacks and recommended reads. A summary cell states the omission in its PROVENANCE footer. A maxRefsPerSymbol argument promotes the projection to full and keeps the format.',
-				},
-				blastRadius: {
-					type: "boolean",
-					description:
-						"Include the cross-file blast radius: transitive dependents aggregated to ranked file reads. Read-only over the cached graph (omitted when cold).",
-				},
-				blastRadiusDepth: {
-					type: "number",
-					description:
-						"Max hops for the blast-radius walk (default 3). Only used with blastRadius.",
-				},
-				callGraph: {
-					type: "boolean",
-					description:
-						"Include bounded derived callers/callees from the cached FunctionCallGraph; cold or stale cache state is explicit.",
-				},
-				maxCallGraphEntries: {
-					type: "number",
-					description:
-						"Per-direction cap for call-graph relations (default 20).",
-				},
-			},
-		},
+		inputSchema: schemaWithCwd(moduleReportTool.parameters),
 	},
 	{
 		name: "pilens_project_report",
@@ -800,86 +760,16 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_read_symbol",
-		description: translateGuidanceToolNames(
-			"Return one symbol's verbatim source. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use pilens_read_symbol after pilens_module_report identifies `parseConfig`.",
-			"mcp",
-		),
-		inputSchema: {
-			type: "object",
-			properties: {
-				file: { type: "string", description: "File containing the symbol." },
-				path: {
-					type: "string",
-					description:
-						"File containing the symbol (the canonical spelling of `file`).",
-				},
-				filePath: { type: "string", description: "Alias for `path`." },
-				symbol: {
-					type: "string",
-					description:
-						"Exact symbol name to read, or a dotted `Class.method` to disambiguate a member.",
-				},
-				kind: {
-					type: "string",
-					description:
-						"Optional kind filter (e.g. function, interface, class) to disambiguate when multiple same-file symbols share the requested name.",
-				},
-				cwd: { type: "string" },
-			},
-			required: ["symbol"],
-		},
+		description: translateGuidanceToolNames(readSymbolTool.description, "mcp"),
+		inputSchema: schemaWithCwd(readSymbolTool.parameters),
 	},
 	{
 		name: "pilens_read_enclosing",
 		description: translateGuidanceToolNames(
-			"Return the smallest symbol or callback enclosing a line. An outline shows shape, not bodies, and does not satisfy read-before-edit; `read_symbol` and `read_enclosing` return body text and record read coverage. Example: use pilens_read_enclosing after a diagnostic points to line 42.",
+			readEnclosingTool.description,
 			"mcp",
 		),
-		inputSchema: {
-			type: "object",
-			properties: {
-				file: {
-					type: "string",
-					description:
-						"Absolute or workspace-relative path to the source file.",
-				},
-				path: {
-					type: "string",
-					description:
-						"Absolute or workspace-relative path to the source file (the canonical spelling of `file`).",
-				},
-				filePath: { type: "string", description: "Alias for `path`." },
-				line: {
-					type: "number",
-					description:
-						"1-based line number inside the desired symbol/callback.",
-				},
-				cwd: { type: "string" },
-				kinds: {
-					type: "array",
-					items: { type: "string" },
-					description:
-						"Optional kind filter, e.g. function, method, callback, class.",
-				},
-				maxLines: {
-					type: "number",
-					description:
-						"Optional maximum body size to return. Oversized matches obey onOversize.",
-				},
-				onOversize: {
-					type: "string",
-					enum: ["error", "slice", "outline"],
-					description:
-						"Behavior when the enclosing body exceeds maxLines. error (default) returns metadata only; slice returns a bounded partial read around line; outline returns nested symbols/callbacks with read handles.",
-				},
-				aroundLine: {
-					type: "number",
-					description:
-						"Maximum lines for onOversize=slice; defaults to maxLines, then 80.",
-				},
-			},
-			required: ["line"],
-		},
+		inputSchema: schemaWithCwd(readEnclosingTool.parameters),
 	},
 	{
 		name: "pilens_health",
@@ -889,28 +779,11 @@ const ALL_TOOLS = [
 	},
 	{
 		name: "pilens_effective_config",
-		description:
-			"Explain resolved configuration and provenance. Response is redacted by construction: it contains no environment values, no command arguments beyond the binary, and home-relative paths; a tier-denied LSP decision cannot be lifted by a nearer config. Example: pass `file` to explain one selection.",
-		inputSchema: {
-			type: "object",
-			properties: {
-				cwd: { type: "string" },
-				file: {
-					type: "string",
-					description:
-						"Path to explain: adds the resolved language plus the per-server and " +
-						"per-runner selection decisions for it. Must resolve inside `cwd` " +
-						"(a sibling package in the same monorepo does not count) — a file " +
-						"outside it is rejected with the `cwd` it was measured against; " +
-						"re-query with `cwd` set to that file's own workspace instead.",
-				},
-				path: {
-					type: "string",
-					description: "Path to explain (the canonical spelling of `file`).",
-				},
-				filePath: { type: "string", description: "Alias for `path`." },
-			},
-		},
+		description: translateGuidanceToolNames(
+			effectiveConfigTool.description,
+			"mcp",
+		),
+		inputSchema: schemaWithCwd(effectiveConfigTool.parameters),
 	},
 	{
 		name: "pilens_session_start",

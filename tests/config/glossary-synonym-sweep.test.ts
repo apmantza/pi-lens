@@ -1606,7 +1606,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 38 -> 33 (#5137): the module_report handler stops building its own
 		// `path.relative` summary and delegates the rendering.
 		// 33 -> 34 (#5138): the read_symbol error branch names `path.basename(file)`.
-		"mcp/server.ts": 34,
+		// 34 -> 30 (#5138 PR 3): four hand-written schema blocks leave the catalog
+		// for the projected pi definitions, so their `path:` keys stop being spelled
+		// here.
+		"mcp/server.ts": 30,
 		"index.ts": 20,
 		"clients/command-path.ts": 5,
 	},
