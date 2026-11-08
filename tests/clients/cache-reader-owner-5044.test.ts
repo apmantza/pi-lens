@@ -373,6 +373,27 @@ describe("lens_diagnostics mode=all anchors marks on the finding's own file (#50
 		expect(rendered(text, "outside cited finding")).toBe(1);
 	});
 
+	it("refuses a weak mark on a cited file the project does not contain", async () => {
+		// #5044 r2 (F2), the WEAK half of the same refusal. A weak suppress mark
+		// is intent about a finding the project never reported, and the dispatch
+		// stack passes it: `applyFindingPolicyByOwner` fails the whole group
+		// closed, weak marks included. So `applyCachedStrict`'s `refused` lane may
+		// not fall back to the weak filter either — that fallback is exactly the
+		// cache-only suppression a full sweep contradicts.
+		recordDiagnostics(templatePath, [
+			chartRow(
+				"outside weak finding",
+				2,
+				"warning",
+				"warning",
+				outsideChartPath,
+			),
+		]);
+		mark(outsideChartPath, "outside weak finding", 2, "suppress");
+		const text = await modeAll();
+		expect(rendered(text, "outside weak finding")).toBe(1);
+	});
+
 	it("restores a master-shape record and honors a mark on the cited file", async () => {
 		recordDiagnostics(templatePath, [
 			templateRow("own finding", 3),
@@ -524,6 +545,29 @@ describe("reconcileWidgetDisposition anchors marks on the finding's own file (#5
 		]);
 		mark(chartPath, SHARED_MSG, 2, "suppress");
 		fs.rmSync(chartPath);
+		mark(templatePath, "template lint", 1, "false-positive");
+		const rows = getFileDiagnostics(templatePath) ?? [];
+		const cited = rows.find((d) => d.citedFile !== undefined);
+		expect(cited).toBeDefined();
+		expect(cited?.disposition).toBeUndefined();
+		expect(
+			summaryFor(templatePath)?.diagnostics.map((d) => d.message),
+		).toContain(SHARED_MSG);
+	});
+
+	it("refuses a cited row's mark when its file cannot be read", () => {
+		// #5044 r2 (F2), the readable axis: the anchor still STATS, so the
+		// refusal comes from the failed content read rather than the missing file
+		// (a directory stands in for an EACCES-shaped failure). The pass before
+		// anchored on "" here — the documented fail-open input, where a weak mark
+		// still matches and takes the row out of the footer's live projection.
+		recordDiagnostics(templatePath, [
+			templateRow("template lint", 1, "warning", "warning"),
+			chartRow(SHARED_MSG, 2, "warning", "warning"),
+		]);
+		mark(chartPath, SHARED_MSG, 2, "suppress");
+		fs.rmSync(chartPath);
+		fs.mkdirSync(chartPath);
 		mark(templatePath, "template lint", 1, "false-positive");
 		const rows = getFileDiagnostics(templatePath) ?? [];
 		const cited = rows.find((d) => d.citedFile !== undefined);
