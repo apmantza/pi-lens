@@ -1365,7 +1365,7 @@ export function createAvailabilityChecker(
 						options.pathOnly
 							? probeToolAsync(cmd, versionArgs, {
 									timeout: options.probeTimeout ?? 5000,
-									env,
+									...(env !== undefined && { env }),
 									input: "",
 								})
 							: safeSpawnAsync(cmd, versionArgs, {

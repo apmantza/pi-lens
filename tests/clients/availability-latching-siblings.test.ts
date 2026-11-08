@@ -74,8 +74,6 @@ vi.mock("../../clients/installer/index.js", () => ({
 	// an attempt that failed is distinguishable from one that never ran.
 	getInstallAttempt: vi.fn(() => undefined),
 	findManagedToolBinary: vi.fn(async () => undefined),
-	// #5410: a managed answer's evidence names the install strategy.
-	getToolInstallStrategy: vi.fn(() => undefined),
 	isSpawnableCommand: vi.fn(async () => true),
 	resetPathWalkMemo: vi.fn(),
 	getToolEnvironment: vi.fn(async () => ({})),
@@ -485,6 +483,9 @@ describe("dispatch hasTool availability (#1476)", () => {
 			const { checkToolAvailability } = await load();
 
 			expect(await checkToolAvailability("sometool")).toBe(false);
+			expect(safeSpawnAsync.mock.calls.map((call) => call[0])).toEqual([
+				"sometool",
+			]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -492,11 +493,14 @@ describe("dispatch hasTool availability (#1476)", () => {
 
 	// #5410: the dispatcher's own copy caught a thrown probe and wrote a durable
 	// `false` session fact, so one host hiccup disabled the tool for the session.
+	// The throw now reaches the caller (a runner failure, not a silent skip).
 	it("a probe that throws latches nothing, and the next call asks again", async () => {
 		safeSpawnAsync.mockRejectedValueOnce(new Error("spawn hiccup"));
 		const { checkToolAvailability } = await load();
 
-		expect(await checkToolAvailability("sometool")).toBe(false);
+		await expect(checkToolAvailability("sometool")).rejects.toThrow(
+			"spawn hiccup",
+		);
 		safeSpawnAsync.mockResolvedValue(okResult("1.2.3"));
 		expect(await checkToolAvailability("sometool")).toBe(true);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(2);

@@ -54,7 +54,9 @@ describe("availability_decision classifiedBy sweep (#2131)", () => {
 			// #5345: 21 -> 20 — the deleted module-level ast-grep sweep held one
 			// stamped `cause: "ok"` site; the population and the floor above stay
 			// non-trivial.
-			expect(OK_SITES.length).toBe(20);
+			// #5410: 20 -> 19 — the dispatcher's own `hasTool` probe now
+			// delegates to the checker, whose `cause: "ok"` site already counts.
+			expect(OK_SITES.length).toBe(19);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);

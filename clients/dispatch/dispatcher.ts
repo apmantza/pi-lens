@@ -197,7 +197,8 @@ const commandCheckers = new Map<
  * ladder (#1467/#1476), the trust stamp and the decision row are the shared
  * checker's (#5410); this keeps only the PATH-only contract of `hasTool`,
  * whose callers spawn the bare name. A command not on disk is refused without
- * a spawn, and a probe that throws latches nothing: the next call asks again.
+ * a spawn, and a probe that throws latches nothing: the throw reaches the
+ * caller and the next call asks again.
  */
 export async function checkToolAvailability(command: string): Promise<boolean> {
 	if (!(await isSpawnableCommand(command))) return false;
@@ -213,11 +214,7 @@ export async function checkToolAvailability(command: string): Promise<boolean> {
 		});
 		commandCheckers.set(key, checker);
 	}
-	try {
-		return await checker.isAvailableAsync();
-	} catch {
-		return false;
-	}
+	return checker.isAvailableAsync();
 }
 
 // --- Dispatch Context Factory ---

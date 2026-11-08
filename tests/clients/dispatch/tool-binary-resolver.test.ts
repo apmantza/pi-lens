@@ -2,8 +2,8 @@
  * #5410: one tool-binary resolver. Two audit probes, run through the real
  * dispatch entry (`dispatchForFile`) and the real runners, the real checker,
  * the real trust seam and the real latency sink. Only the child process
- * (`safe-spawn`) and the network installer (`ensureTool`) are doubled: both
- * are host boundaries.
+ * (`safe-spawn`) is doubled; installs stay off through the suite's
+ * `PI_LENS_DISABLE_TOOL_INSTALL` default.
  *
  * Recurrences pinned:
  * - run-e: yamllint asked its checker, then probed again through
@@ -74,13 +74,6 @@ vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../clients/safe-spawn.js")>()),
 	safeSpawnAsync,
 }));
-vi.mock("../../../clients/installer/index.js", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("../../../clients/installer/index.js")
-	>()),
-	ensureTool: vi.fn(async () => undefined),
-}));
-
 function makeCtx(file: string, root: string) {
 	return createDispatchContext(
 		file,
