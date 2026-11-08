@@ -1692,6 +1692,23 @@ describe("tree census timeout (#4828)", () => {
 			{ "helper.ts": WALKING_HELPER },
 		],
 		[
+			"a helper that walks through a default import of another helper",
+			'import { outer } from "./helper.js";\nit("c", () => { outer(ROOT); });',
+			{
+				"helper.ts":
+					'import inner from "./inner.js";\nexport function outer(dir) { return inner(dir); }\n',
+				"inner.ts":
+					"export default function (dir) { return listSourceFiles(dir); }\n",
+			},
+		],
+		[
+			// A parameter's default value is a read, not a binding: calling `f()`
+			// evaluates it (the `ownerIndex()` default in tmp-fixture-hygiene).
+			"a walked read in a parameter default",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { const f = (x = files) => x; expect(f()).toBeTruthy(); });',
+			{ "helper.ts": WALKING_HELPER },
+		],
+		[
 			"a walked read in a suite binding beside a nested parameter of the same name",
 			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nconst keys = files.map((files) => files);\nit("c", () => { expect(keys).toBeTruthy(); });',
 			{ "helper.ts": WALKING_HELPER },
@@ -1814,6 +1831,46 @@ describe("tree census timeout (#4828)", () => {
 		[
 			"a nested parameter that binds the walked name the case reads only there",
 			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { expect([1].map((files) => files)).toEqual([1]); });',
+			{ "helper.ts": WALKING_HELPER },
+		],
+		[
+			"a default import of a quiet binding exported as default",
+			'import count from "./helper.js";\nit("c", () => { expect(count(1)).toBe(2); });',
+			{ "helper.ts": `${QUIET_HELPER}export default countUpTo;\n` },
+		],
+		[
+			"a default import of a quiet named default function",
+			'import count from "./helper.js";\nit("c", () => { expect(count(1)).toBe(2); });',
+			{ "helper.ts": "export default function named(n) { return n + 1; }\n" },
+		],
+		[
+			// The `tests/support/` facade pair: `x.ts` holds `export * from
+			// "./x.mjs"`, and the twin order lists `x.ts` for `./x.mjs` first.
+			"a quiet name behind a `.ts` facade of a `.mjs` module",
+			'import { countUpTo } from "./helper.js";\nit("c", () => { expect(countUpTo(1)).toBe(2); });',
+			{
+				"helper.ts": 'export * from "./helper.mjs";\n',
+				"helper.mjs": QUIET_HELPER,
+			},
+		],
+		[
+			"a quiet `.mts` helper behind a `.mjs` specifier",
+			'import { countUpTo } from "./helper.mjs";\nit("c", () => { expect(countUpTo(1)).toBe(2); });',
+			{ "helper.mts": QUIET_HELPER },
+		],
+		[
+			"a nested lone parameter that binds the walked name",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { expect([1].map(files => files)).toEqual([1]); });',
+			{ "helper.ts": WALKING_HELPER },
+		],
+		[
+			"a loop binding of the walked name",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { for (const files of [1]) expect(files).toBe(1); });',
+			{ "helper.ts": WALKING_HELPER },
+		],
+		[
+			"a catch binding of the walked name",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { try { throw 1; } catch (files) { expect(files).toBe(1); } });',
 			{ "helper.ts": WALKING_HELPER },
 		],
 		[
