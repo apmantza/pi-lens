@@ -154,6 +154,26 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 			expect(mcpTool?.inputSchema).toEqual(
 				schemaWithCwd(piDefinition?.parameters),
 			);
+			// Independently of the wrapper: the wire must carry the pi tool's own
+			// `required` list and every pi property, and add only `cwd`. Without
+			// this, a `schemaWithCwd` that dropped `required` would match itself.
+			const piParams = (piDefinition?.parameters ?? {}) as {
+				properties?: Record<string, unknown>;
+				required?: string[];
+			};
+			const wire = (mcpTool?.inputSchema ?? {}) as {
+				properties?: Record<string, unknown>;
+				required?: string[];
+			};
+			expect(wire.required ?? []).toEqual(piParams.required ?? []);
+			for (const [key, value] of Object.entries(piParams.properties ?? {})) {
+				expect(wire.properties?.[key], `${mcpName}.${key}`).toEqual(value);
+			}
+			expect(
+				Object.keys(wire.properties ?? {}).filter(
+					(key) => !(key in (piParams.properties ?? {})),
+				),
+			).toEqual(["cwd"]);
 			if (admittedDescription) {
 				expect(admittedDescription.length).toBeGreaterThan(40);
 				expect(mcpTool?.description).not.toBe(
