@@ -26,6 +26,7 @@ import type {
 } from "../types.js";
 import { resolveCommandArgsWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 interface RubocopOffense {
 	severity: string;
@@ -80,7 +81,7 @@ function parseRubocopJson(
 					line: offense.location.line,
 					column: offense.location.column,
 					severity,
-					semantic: severity === "error" ? "blocking" : "warning",
+					semantic: semanticFor(severity),
 					tool: "rubocop",
 					rule: offense.cop_name,
 					fixable: offense.correctable,

@@ -28,6 +28,7 @@ import {
 	resolveAvailableOrInstall,
 	resolveRunnerCwd,
 } from "./utils/runner-helpers.js";
+import { semanticFor } from "../types.js";
 
 const ruff = createAvailabilityChecker("ruff", ".exe");
 
@@ -55,7 +56,7 @@ function parseRuffJson(raw: string, filePath: string): Diagnostic[] {
 				line: item.location?.row ?? 1,
 				column: item.location?.column ?? 1,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: "ruff",
 				rule: code,
 				fixable: toolFixable,

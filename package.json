@@ -131,7 +131,7 @@
 		"banner.png"
 	],
 	"dependencies": {
-		"@ast-grep/cli": "0.51.0",
+		"@ast-grep/cli": "0.51.1",
 		"@ast-grep/napi": "^0.51.0",
 		"js-yaml": "^5.2.2",
 		"minimatch": "^11.0.4",
@@ -200,7 +200,7 @@
 		]
 	},
 	"allowScripts": {
-		"@ast-grep/cli@0.51.0": true,
+		"@ast-grep/cli@0.51.1": true,
 		"@google/genai@2.21.0": true,
 		"esbuild@0.28.2": true,
 		"fsevents@2.3.3": false,

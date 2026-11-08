@@ -14,6 +14,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const vale = createAvailabilityChecker("vale", ".exe");
 
@@ -115,7 +116,7 @@ export function parseValeOutput(
 					line: alert.Line ?? 1,
 					column: alert.Span?.[0] ?? 1,
 					severity,
-					semantic: severity === "error" ? "blocking" : "warning",
+					semantic: semanticFor(severity),
 					tool: "vale",
 					rule: alert.Check ?? "vale",
 					fixable: false,

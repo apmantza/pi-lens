@@ -20,6 +20,7 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const taplo = createAvailabilityChecker("taplo", ".exe");
 
@@ -128,7 +129,7 @@ export function parseTaploOutput(
 			line,
 			column,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "taplo",
 			rule: `taplo/${severity}`,
 			fixable: false,

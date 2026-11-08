@@ -116,6 +116,9 @@ const ADMITTED_CLIENT_MODULES: Readonly<
 	"extension-log": "*",
 	"file-kinds": "*",
 	"file-utils": "*",
+	// Only the digest: `relativeFile` and `stableFindingId` canonicalize through
+	// `normalizeMapKey`, which realpaths the filesystem (#5412 review F3).
+	"finding-identity": ["hashText"],
 	"generation-guard": "*",
 	"go-client": "*",
 	"installer/index": "*",

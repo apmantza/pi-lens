@@ -20,6 +20,7 @@ import {
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const stylelint = createAvailabilityChecker("stylelint", ".cmd");
 
@@ -142,7 +143,7 @@ function parseStylelintJson(
 					line: w.line,
 					column: w.column,
 					severity,
-					semantic: severity === "error" ? "blocking" : "warning",
+					semantic: semanticFor(severity),
 					tool: "stylelint",
 					rule: w.rule,
 					fixable,

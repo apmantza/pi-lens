@@ -28,6 +28,7 @@ import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { createCwdCachedProbe } from "./utils/runner-helpers.js";
 import { spawnTimedOut } from "./utils/spawn-outcome.js";
 import { faultIfCutShort, skipUnlessToolRan } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 // Cached per-cwd `cargo clippy --version` probe (#120). Before this, the
 // probe fired on every Rust file save in a project where clippy was already
@@ -375,7 +376,7 @@ export function parseClippyOutput(
 				line: span.line_start || 0,
 				column: span.column_start || 0,
 				severity: normalizedSeverity,
-				semantic: normalizedSeverity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(normalizedSeverity),
 				tool: "rust-clippy",
 				rule: message.code?.code,
 				defectClass: "correctness",

@@ -17,6 +17,7 @@ import {
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const tflint = createAvailabilityChecker("tflint", ".exe");
 
@@ -63,7 +64,7 @@ function parseTflintOutput(
 					line: issue.range.start.line,
 					column: issue.range.start.column,
 					severity,
-					semantic: severity === "error" ? "blocking" : "warning",
+					semantic: semanticFor(severity),
 					tool: "tflint",
 					rule: issue.rule.name,
 					fixable: false,

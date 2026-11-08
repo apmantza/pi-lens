@@ -31,6 +31,7 @@ import {
 } from "./utils/runner-helpers.js";
 import { spawnTimedOut } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 // One file's JSON report. Nothing legitimate approaches 8 MiB here, so this is
 // a blast-radius bound on a runaway or wedged oxlint rather than a working
@@ -476,7 +477,7 @@ function parseOxlintJson(
 			line: lineNum,
 			column: colNum,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "oxlint",
 			rule,
 			// Oxlint's help text is rule-specific guidance ("Remove the debugger

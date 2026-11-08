@@ -6,11 +6,13 @@
  */
 
 import * as path from "node:path";
+import { hashText } from "../../../finding-identity.js";
 import { pathsEqual } from "../../../path-utils.js";
 import { stripAnsi } from "../../../sanitize.js";
 
 import { getAutofixCapability } from "../../../tool-policy.js";
 import type { DefectClass, Diagnostic } from "../../types.js";
+import { semanticFor } from "../../types.js";
 
 export interface LineParserConfig {
 	/** Tool name for diagnostic identification */
@@ -92,16 +94,23 @@ function createLineParser(config: LineParserConfig) {
 					? config.fixKind(match)
 					: config.fixKind;
 
+			const rule = config.extractRule?.(match);
+			const message = config.extractMessage(match);
 			diagnostics.push({
-				id: config.generateId(match),
-				message: config.extractMessage(match),
+				// #5412: a finding with no rule keys its id on its message too. The
+				// line alone gave two go vet findings at one position one id, and the
+				// dispatcher's `findingKey` (rule || id) kept only one of them.
+				id: rule
+					? config.generateId(match)
+					: `${config.generateId(match)}-${hashText(message)}`,
+				message,
 				filePath,
 				line: lineNum,
 				column: colNum,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: config.tool,
-				rule: config.extractRule?.(match),
+				rule,
 				defectClass: config.defectClass,
 				fixable,
 				autoFixAvailable,
