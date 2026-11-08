@@ -363,8 +363,6 @@ describe("workspace-topology sweep — registered-or-fail coverage", () => {
 		// `resetWorkspaceTopology` already clears), or (b) is invalidated by the
 		// module's own registered reset or by its own mtime/size/file-key.
 		const EXEMPT = {
-			"dispatch/runners/tflint.ts":
-				"per-run `.tflint.hcl` discovery through findNearestDirWithAnyBasename — the result feeds one arg set and holds no module-level memo; the walk itself is cached inside workspace-topology's own walkCache, which resetWorkspaceTopology clears.",
 			"dispatch/runners/helm-lint.ts":
 				"per-edit Chart.yaml discovery through findNearestDirWithMarker — resolved to a chartRoot used once, no downstream memo; the walked index clears with resetWorkspaceTopology.",
 			"file-kinds.ts":

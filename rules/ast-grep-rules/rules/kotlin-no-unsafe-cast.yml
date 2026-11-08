@@ -17,12 +17,13 @@ rule:
   pattern: $VALUE as $TYPE
 files:
   - "**/*.kt"
-tags:
-  - kotlin
-  - idiom
-  - null-safety
-examples:
-  bad: |
-    val name = value as String
-  good: |
-    val name = value as? String ?: return
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - null-safety
+  examples:
+    bad: |
+      val name = value as String
+    good: |
+      val name = value as? String ?: return

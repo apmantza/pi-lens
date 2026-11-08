@@ -5,7 +5,8 @@ message: The RSA key size $SIZE is insufficent by NIST standards. It is recommen
 note: |-
   [CWE-326] Inadequate Encryption Strength. [REFERENCES]
       - https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-57Pt3r1.pdf
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   OpenSSL_PKey_RSA_generate_SIZE:
     kind: call

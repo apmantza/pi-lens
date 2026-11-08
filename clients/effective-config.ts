@@ -148,6 +148,7 @@ export interface EffectiveServerDecision {
 type ToolSelectionReason =
 	| "selected"
 	| "disabled-by-config"
+	| "no-project-config"
 	| "not-registered-for-kind"
 	| "no-dispatch-plan";
 
@@ -566,9 +567,11 @@ export async function effectiveConfig(
 function toolReason(
 	selected: boolean,
 	disabled: boolean,
+	lacksConfig: boolean,
 	kind: ReturnType<typeof detectFileKind>,
 ): ToolSelectionReason {
 	if (disabled) return "disabled-by-config";
+	if (selected && lacksConfig) return "no-project-config";
 	if (selected) return "selected";
 	return kind === undefined ? "no-dispatch-plan" : "not-registered-for-kind";
 }
@@ -671,19 +674,31 @@ async function fileView(
 	// order the same ids differently under a different ICU build (#2427 review
 	// round 2, F3; SonarCloud S2871).
 	const ids = [...new Set([...planned, ...available])].sort(compareOrdinal);
-	const tools: EffectiveToolDecision[] = ids.map((id) => ({
-		id,
-		selected: available.has(id) && !disabledRunners.has(id),
-		reason: toolReason(available.has(id), disabledRunners.has(id), kind),
-		...decidedByOrNothing(viewOf(disabledRunners.get(id)?.decidedBy, homeDir)),
-		resolvedCwd: homeRelativePath(
-			resolveToolCwd("runner", id, absolute, {
-				cwd: workspaceCwd,
-				suppressTelemetry: true,
-			}).cwd,
-			homeDir,
-		),
-	}));
+	// The cwd a runner runs in: the one its `requiresConfig` gate is asked at.
+	const runnerCwdOf = (id: string): string =>
+		resolveToolCwd("runner", id, absolute, {
+			cwd: workspaceCwd,
+			suppressTelemetry: true,
+		}).cwd;
+	// Selected means the runner would run: in the plan, not denied, and not a
+	// runner that skips for want of project config (#5408). The config check is
+	// the runner's own declared predicate, so the answers cannot drift apart.
+	const wouldRun = new Set(
+		await getAvailableRunners(absolute, { configCwd: runnerCwdOf }),
+	);
+	const tools: EffectiveToolDecision[] = ids.map((id) => {
+		const denied = disabledRunners.has(id);
+		const lacksConfig = available.has(id) && !wouldRun.has(id);
+		return {
+			id,
+			selected: available.has(id) && !denied && !lacksConfig,
+			reason: toolReason(available.has(id), denied, lacksConfig, kind),
+			...decidedByOrNothing(
+				viewOf(disabledRunners.get(id)?.decidedBy, homeDir),
+			),
+			resolvedCwd: homeRelativePath(runnerCwdOf(id), homeDir),
+		};
+	});
 
 	return {
 		path: homeRelativePath(absolute, homeDir),

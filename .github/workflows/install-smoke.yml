@@ -258,7 +258,7 @@ jobs:
 
       - name: Setup pnpm
         if: matrix.pm == 'pnpm'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 11.21.0
 
@@ -491,7 +491,7 @@ jobs:
 
       - name: Setup pnpm
         if: matrix.pi_install == 'pnpm-global'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 11.21.0
 
@@ -770,27 +770,25 @@ jobs:
         with:
           persist-credentials: false
 
+      # Pinned deliberately (bump by hand after checking
+      # https://github.com/jdx/mise/releases and recomputing the sha256
+      # below — see #731): avoids `curl | sh`-ing an unpinned, unverified
+      # installer script straight off the network. #5409: the fetch-verified
+      # helper checks the digest (sha256sum on Linux, shasum on macOS) and
+      # retries a 504 instead of saving the error page.
+      - name: Download and verify the mise installer (pinned)
+        uses: ./.github/actions/fetch-verified
+        with:
+          tool: mise
+          version: v2026.7.7
+          url: https://github.com/jdx/mise/releases/download/v2026.7.7/install.sh
+          sha256: 0b98c2dc48edc807be860a76e14209afcfe36684c591f92337c5d9ff909e7740
+          path: ${{ runner.temp }}/mise-install.sh
+
       - name: Install mise (pinned + checksum-verified)
         shell: bash
-        env:
-          # Pinned deliberately (bump by hand after checking
-          # https://github.com/jdx/mise/releases and recomputing the sha256
-          # below — see #731): avoids `curl | sh`-ing an unpinned, unverified
-          # installer script straight off the network.
-          MISE_INSTALL_VERSION: v2026.7.7
-          MISE_INSTALL_SHA256: 0b98c2dc48edc807be860a76e14209afcfe36684c591f92337c5d9ff909e7740
         run: |
           set -uxo pipefail
-          curl --proto '=https' --tlsv1.2 -fsSL \
-            -o "$RUNNER_TEMP/mise-install.sh" \
-            "https://github.com/jdx/mise/releases/download/${MISE_INSTALL_VERSION}/install.sh"
-          # sha256sum (Linux) vs shasum -a 256 (macOS default) — both runner
-          # images ship one or the other; prefer sha256sum when present.
-          if command -v sha256sum >/dev/null 2>&1; then
-            echo "${MISE_INSTALL_SHA256}  $RUNNER_TEMP/mise-install.sh" | sha256sum -c -
-          else
-            echo "${MISE_INSTALL_SHA256}  $RUNNER_TEMP/mise-install.sh" | shasum -a 256 -c -
-          fi
           sh "$RUNNER_TEMP/mise-install.sh"
           # Expose the mise binary AND its shim dir so later steps see the
           # mise-managed node/npm/pnpm/pi as shims (realpath-through-shim = the

@@ -7,7 +7,8 @@ message: >-
 note: |-
   [CWE-416] Use After Free. [REFERENCES]
       - https://wiki.sei.cmu.edu/confluence/display/cplusplus/MEM50-CPP.+Do+not+access+freed+memory
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   VAR_std_to_string:
     kind: expression_statement

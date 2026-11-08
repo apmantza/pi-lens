@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { resolve as resolvePath } from "node:path";
 import {
 	type AvailabilityLatch,
-	classifyProbeFailure,
+	classifyFinderFailure,
 	createAvailabilityLatch,
 	isTransientDecision,
 	logAvailabilityDecision,
@@ -152,8 +152,9 @@ const PROBE_TIMEOUT_MS = 5_000;
  * into pi-lens's own managed tools directory and `pilens_rebuild` on a
  * pi-lens source checkout, never a user project's lockfile (#1496). Each
  * manager now sits behind the shared transient-aware latch (#1467/#1476):
- * only a genuine absence (`where`/`which` exits non-zero, or ENOENT) latches;
- * a timeout, abort or host stall expires on a cooldown and is re-probed.
+ * only a genuine absence (`where`/`which` ran and exited non-zero) latches; a
+ * finder that cannot spawn, ENOENT included, and a timeout, abort or host
+ * stall expire on a cooldown and are re-probed.
  */
 const availabilityLatches = new Map<NodePackageManager, AvailabilityLatch>();
 
@@ -196,11 +197,8 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
 		return true;
 	}
 
-	const { outcome, cause, evidence } = classifyProbeFailure(result, {
+	const { outcome, cause, evidence, forced } = classifyFinderFailure(result, {
 		hostStallMs,
-		// Preserve pre-#1496 meaning for anything the classifier can't place: a
-		// present manager that rejects its probe is durable, same as before.
-		unclassifiedFailureOutcome: "missing",
 	});
 	const retryAfterMs = latch.noteUnavailable(outcome, cause);
 	logAvailabilityDecision({
@@ -213,7 +211,7 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
 		hostStallMs,
 		...(retryAfterMs > 0 && { retryAfterMs }),
 		budgetMs: PROBE_TIMEOUT_MS,
-		classifiedBy: "probe",
+		classifiedBy: forced ? "caller" : "probe",
 		evidence,
 	});
 	return false;

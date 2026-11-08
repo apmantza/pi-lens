@@ -141,6 +141,7 @@ export const CI_ONLY_PRE_PUSH_TESTS = {
 	"tests/real-harness/bridge-reload.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/child-exit.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/clean-verdict.test.ts": REAL_HARNESS_CI_ONLY,
+	"tests/real-harness/unchecked-report.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/diagnostic-provenance.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/lifecycle.test.ts": REAL_HARNESS_CI_ONLY,
 	"tests/real-harness/negative.test.ts": REAL_HARNESS_CI_ONLY,
@@ -166,6 +167,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/config/glossary-synonym-sweep.test.ts",
 	// #4312: literal runner references must resolve after registry renames.
 	"tests/config/runner-group-id-census.test.ts",
+	// #5408: walks clients/dispatch/runners for modules that read the
+	// filesystem or climb directories instead of asking the config-presence seam.
+	"tests/config/runner-config-presence-census.test.ts",
 	// #3968: walks the custom-server config fields and the LSP_SERVERS
 	// projection for config claims gating runtime behavior without fail-closed
 	// enum validation (the covers validation row is the pinned member).
@@ -254,6 +258,7 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	"tests/real-harness/bridge-reload.test.ts",
 	"tests/real-harness/child-exit.test.ts",
 	"tests/real-harness/clean-verdict.test.ts",
+	"tests/real-harness/unchecked-report.test.ts",
 	"tests/real-harness/diagnostic-provenance.test.ts",
 	"tests/real-harness/lifecycle.test.ts",
 	"tests/real-harness/negative.test.ts",

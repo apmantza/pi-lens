@@ -24,12 +24,13 @@ rule:
     - pattern: $RECEIVER.length == 0
 files:
   - "**/*.kt"
-tags:
-  - kotlin
-  - idiom
-  - readability
-examples:
-  bad: |
-    if (items.size == 0) return
-  good: |
-    if (items.isEmpty()) return
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - readability
+  examples:
+    bad: |
+      if (items.size == 0) return
+    good: |
+      if (items.isEmpty()) return

@@ -103,6 +103,7 @@ import { createHash } from "node:crypto";
 
 import { BoundedFifoMap, BoundedSet } from "./bounded-cache.js";
 import { emitBounded } from "./bounded-telemetry.js";
+import { hashContentBytes } from "./content-stamp.js";
 import { freshnessFromMtime } from "./freshness.js";
 import { logLatency } from "./latency-logger.js";
 import {
@@ -1477,7 +1478,7 @@ async function scanTrackedIncrementally(
 				const content = await readBytesSafe(filePath);
 				if (content !== undefined) {
 					hashBytesLeft -= stat.size;
-					next.hash = createHash("sha256").update(content).digest("hex");
+					next.hash = hashContentBytes(content);
 					next.hashKind = "content";
 				}
 			}
@@ -1518,7 +1519,7 @@ async function scanTrackedIncrementally(
 			const content = await readBytesSafe(filePath);
 			if (content !== undefined) {
 				hashBytesLeft -= stat.size;
-				const contentHash = createHash("sha256").update(content).digest("hex");
+				const contentHash = hashContentBytes(content);
 				if (previous.hash === undefined) {
 					verdict = sizeChanged ? "drift" : "unverifiable";
 				} else if (previous.hashKind === "lines") {

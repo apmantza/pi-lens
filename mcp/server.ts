@@ -40,6 +40,7 @@ import {
 	recordDegradationOnce,
 	renderDegradationLines,
 } from "../clients/degradation-ledger.js";
+import { verdictUncheckedReason } from "../clients/dispatch/types.js";
 import {
 	acknowledgeTurnEnd,
 	analyzeFile,
@@ -996,6 +997,7 @@ function formatAnalyze(
 	const lspNote = result.lsp
 		? ` · lsp ${result.lsp.diagnosticCount} (${result.lsp.status}${result.lsp.failureKind ? `: ${result.lsp.failureKind}` : ""}, ${result.lsp.durationMs}ms)`
 		: "";
+	const notChecked = verdictUncheckedReason(result.verdict);
 	const summary =
 		`${path.relative(cwd, result.filePath) || result.filePath} [${mode}] — ` +
 		`${result.counts.blockers} blocking, ${result.counts.warnings} warning(s), ` +
@@ -1003,6 +1005,11 @@ function formatAnalyze(
 		// their own label so they are no longer folded into the warning count.
 		`${result.counts.advisories} advisory(ies), ` +
 		`${result.counts.diagnostics} total` +
+		// #5287: zero counts beside a check that never completed are not a clean
+		// file, so the summary says so beside them.
+		// A worker reply from an older build carries no verdict (the facade casts
+		// it unvalidated), which the shared reader also treats as unchecked.
+		(notChecked === undefined ? "" : ` · not checked: ${notChecked}`) +
 		(result.latency ? ` · ${result.latency.totalDurationMs}ms` : "") +
 		lspNote +
 		(result.counts.fixed > 0 ? ` · ${result.counts.fixed} auto-fixed` : "") +
@@ -1274,7 +1281,10 @@ async function callTool(
 		// #5041: one reader owns the `paths` entry rules; #5038: the engine clamps
 		// `limit` and resolves each entry as a host path (this handler used to
 		// drop a non-string entry and clamp a second time).
-		const pathsRead = readPathsArgument(args.paths, { cwd });
+		const pathsRead = await readPathsArgument(args.paths, {
+			cwd,
+			filterOnly: true,
+		});
 		if (pathsRead.refusal)
 			return { ...toolText(pathsRead.refusal), isError: true };
 		const limit =

@@ -5,11 +5,13 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as os from "node:os";
 import * as path from "node:path";
+import { expandPathsEntry } from "../clients/path-globs.js";
 import {
 	isAtOrAboveHomeDir,
 	realpathOrResolve,
 	resolveHostToolPath,
 } from "../clients/path-utils.js";
+import { DEFAULT_MAX_SCAN_ENTRIES } from "../clients/source-filter.js";
 
 /**
  * The `paths` cap every tool shares (#5041): one reader, one bound. Every entry
@@ -99,10 +101,28 @@ export function readFilePath(
 }
 
 export interface PathsRead {
-	/** Host-resolved entries. Empty when the caller sent no `paths`. */
+	/** Host-resolved entries. Empty when the caller sent no `paths`. A glob
+	 * entry is replaced by the files and directories it names (#5371). */
 	entries: string[];
 	/** Set when the argument must be refused. */
 	refusal?: string;
+}
+
+/**
+ * The glob sentence every `paths` parameter carries (#5371). One owner, so no
+ * surface can advertise a meaning another does not honour: `symbol_search`
+ * documented "the same shape/semantics as `ast_grep_search`'s `paths`" while
+ * only `symbol_search` expanded a glob.
+ */
+export const PATHS_GLOB_CLAUSE =
+	"A glob entry (e.g. `src/**/*.ts`) expands to the files it matches; one matching none is refused (`no file matches`).";
+
+function overCapRefusal(entry: string | undefined): PathsRead {
+	const what = entry === undefined ? "`paths`" : `the glob \`${entry}\``;
+	return {
+		entries: [],
+		refusal: `${what} names more than ${MAX_PATHS_ENTRIES} files — narrow the pattern, or pass a directory entry`,
+	};
 }
 
 function describeEntryType(value: unknown): string {
@@ -117,8 +137,30 @@ function describeEntryType(value: unknown): string {
  * list and a list over {@link MAX_PATHS_ENTRIES} are refused, and every
  * admitted entry is resolved through the same host-path seam the read, edit,
  * write and ast-grep tools use (so `~`, `@` and unicode-space spellings behave
- * identically). A glob entry (`src/**\/*.ts`) resolves as a path-shaped glob, so
- * the glob matching a consumer does afterwards still sees a full pattern.
+ * identically).
+ *
+ * #5371 added the third rule, and it lives HERE rather than in a consumer
+ * because the failure was one parameter with three meanings: a glob entry
+ * (`src/**\/*.ts`) is expanded once, through `clients/path-globs.ts`, into the
+ * files and directories it names, so the literal-argv tools, the `stat`-based
+ * scope, the LSP batch and the word-index filter all receive the same set.
+ * Four rules the expansion owns, each stated by what it admits (r2, #5393):
+ * - an entry is a LITERAL, untouched, when its cwd-relative spelling has no
+ *   glob characters (a missing path keeps its own `path not found` answer and a
+ *   deleted file from git output still gets its cached findings) OR when it
+ *   exists on disk, whatever characters it has (`app/[id]`, `src/b{1,2}.ts`);
+ *   everything else is a glob;
+ * - a glob that matches nothing is refused with `no file matches <entry>`,
+ *   never an empty result that reads as a clean answer (AGENTS.md shape 10); one
+ *   that reaches outside `cwd`, or walks more than the scan ceiling, is refused
+ *   by name too;
+ * - the entries a tool receives as a file list (literals and expansions
+ *   together, in any order) are bounded by {@link MAX_PATHS_ENTRIES}, the cap
+ *   this reader already enforced and the one `lens_diagnostics source=lsp`
+ *   answers for (`MAX_BATCH_FILES`). An over-large scope is refused, not
+ *   narrowed. `filterOnly` lifts that cap for `symbol_search`, which filters an
+ *   index and hands no tool a list;
+ * - `!` leading an entry is refused.
  *
  * Before #5041 each tool had its own copy: search refused a non-string entry,
  * outline and lens_diagnostics dropped it, replace never looked. The silenced
@@ -130,11 +172,23 @@ function describeEntryType(value: unknown): string {
  * stage (#4577 R2-2: a generated cwd holding U+00A0 was folded to a sibling
  * directory that does not exist); "none" leaves the list empty so the caller's
  * own "no restriction" path runs.
+ *
+ * Async because a glob is answered by a directory walk: it yields to the event
+ * loop per slice so a wide pattern never holds pi's TUI (#1137).
  */
-export function readPathsArgument(
+export async function readPathsArgument(
 	raw: unknown,
-	options: { cwd: string | undefined; absent?: "none" | "cwd" },
-): PathsRead {
+	options: {
+		cwd: string | undefined;
+		absent?: "none" | "cwd";
+		/** The entries scope a FILTER over an index (`symbol_search`) and reach no
+		 * tool as a target list, so the file-list cap does not apply; the walk's
+		 * own visited bound still does. */
+		filterOnly?: boolean;
+		/** The call's abort signal, handed to a glob's directory walk. */
+		signal?: AbortSignal | undefined;
+	},
+): Promise<PathsRead> {
 	const base = options.cwd || ".";
 	const absent = options.absent ?? "none";
 	if (raw === undefined || raw === null) {
@@ -162,8 +216,54 @@ export function readPathsArgument(
 			};
 		if (!entry.trim())
 			return { entries: [], refusal: `paths entry ${index + 1} is blank` };
-		entries.push(resolveHostToolPath(entry, base));
+		// A leading `!` is a minimatch NEGATION: on the matcher it names every
+		// file the pattern excludes. That is workable while one consumer filters
+		// a list it already holds, and a false promise once the entry is expanded
+		// into a target list — the same entry would name everything the caller
+		// wanted left out (#5371). `paths` names entries to include; leaving
+		// files out belongs to the project ignore config.
+		if (entry.trimStart().startsWith("!"))
+			return {
+				entries: [],
+				refusal: `paths entry ${index + 1} starts with "!": \`paths\` names the entries to include, not the ones to leave out, and a negated entry names every other file. Name the entries you want, or ignore what you do not want through the project ignore config.`,
+			};
+		const resolved = resolveHostToolPath(entry, base);
+		const expanded = await expandPathsEntry(
+			resolved,
+			base,
+			options.filterOnly
+				? Number.POSITIVE_INFINITY
+				: MAX_PATHS_ENTRIES - entries.length,
+			{ signal: options.signal },
+		);
+		if (expanded.refusal === "no-match") {
+			return {
+				entries: [],
+				refusal: `no file matches \`${entry}\` — the glob matched no file under ${expanded.root}`,
+			};
+		}
+		if (expanded.refusal === "over-cap") return overCapRefusal(entry);
+		if (expanded.refusal === "over-walk") {
+			return {
+				entries: [],
+				refusal: `the glob \`${entry}\` walked more than ${DEFAULT_MAX_SCAN_ENTRIES} entries under ${expanded.root} without finishing — name a deeper directory, or narrow the pattern`,
+			};
+		}
+		if (expanded.refusal === "outside") {
+			return {
+				entries: [],
+				refusal: `the glob \`${entry}\` reaches outside the workspace ${expanded.root} — a glob expands inside the workspace only; name a file or directory outside it literally`,
+			};
+		}
+		if (expanded.refusal === "aborted") {
+			return { entries: [], refusal: "paths expansion aborted" };
+		}
+		entries.push(...expanded.entries);
 	}
+	// Literals that FOLLOW an expanded glob were never part of its budget, so the
+	// total is judged here, once, whatever order the entries came in (#5393 F6).
+	if (!options.filterOnly && entries.length > MAX_PATHS_ENTRIES)
+		return overCapRefusal(undefined);
 	return { entries };
 }
 

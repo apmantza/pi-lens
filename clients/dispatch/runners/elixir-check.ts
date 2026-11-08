@@ -4,6 +4,7 @@ import { getProjectDataDir } from "../../file-utils.js";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -13,16 +14,13 @@ import type {
 } from "../types.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 // Per-cwd cached `--version` probes (#120). Before this, each dispatch
 // invocation fired a fresh `safeSpawnAsync` per command — once per Elixir
 // file save.
 const mix = createAvailabilityChecker("mix", ".bat");
 const elixirc = createAvailabilityChecker("elixirc", ".bat");
-
-function hasMixExs(cwd: string): boolean {
-	return fs.existsSync(path.join(cwd, "mix.exs"));
-}
 
 // Elixir 1.16+ emits diagnostics in a multi-line "code snippet" format where
 // the file:line:col lives on a trailing `└─ path:line:col` line, several lines
@@ -121,7 +119,7 @@ function parseElixirOutput(
 						line: Number.parseInt(lineStr, 10) || 1,
 						column: Number.parseInt(colStr || "1", 10) || 1,
 						severity,
-						semantic: severity === "error" ? "blocking" : "warning",
+						semantic: semanticFor(severity),
 						tool: "elixir-check",
 						rule: severity === "error" ? "error" : "warning",
 						fixable: false,
@@ -146,7 +144,7 @@ function parseElixirOutput(
 			line: Number.parseInt(lineStr, 10) || 1,
 			column: Number.parseInt(colStr || "1", 10) || 1,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "elixir-check",
 			rule: severity === "error" ? "error" : "warning",
 			fixable: false,
@@ -167,7 +165,7 @@ const elixirCheckRunner: RunnerDefinition = {
 
 		let command: string | undefined;
 		let args: string[] = [];
-		if (hasMixExs(cwd) && (await mix.isAvailableAsync(cwd))) {
+		if (hasToolConfig("mix", cwd) && (await mix.isAvailableAsync(cwd))) {
 			command = "mix";
 			args = ["compile", "--warnings-as-errors"];
 		} else if (await elixirc.isAvailableAsync(cwd)) {

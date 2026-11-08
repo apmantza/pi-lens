@@ -75,7 +75,7 @@ import {
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
 } from "./dispatch/runners/utils/runner-helpers.js";
-import { findDetektConfig } from "./dispatch/runners/detekt.js";
+import { findToolConfig } from "./tool-config-presence.js";
 import {
 	verdictRunnerIds,
 	checkedWholeFile,
@@ -83,7 +83,7 @@ import {
 	type InconclusiveSources,
 	type PiAgentAPI,
 	spanOverlapsModifiedRanges,
-	widgetUncheckedReason,
+	recordedUnchecked,
 } from "./dispatch/types.js";
 import {
 	formatDiagnostics,
@@ -838,7 +838,7 @@ async function tryDetektFix(
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
-	const configPath = findDetektConfig(cwd);
+	const configPath = findToolConfig("detekt", cwd)?.file;
 	if (!configPath) return 0;
 	if (!(await detektAutofixChecker.isAvailableAsync(cwd))) return 0;
 	const cmd = detektAutofixChecker.getCommand(cwd);
@@ -2655,7 +2655,7 @@ async function analysePipeline(
 		widgetOrder(),
 		analysisReadAtMs,
 		// #5258: the footer reads the same verdict as the write's line.
-		widgetUncheckedReason(dispatchResult.verdict),
+		recordedUnchecked(dispatchResult.verdict),
 	);
 	// #502: emit the write batch's FINAL diagnostic state immediately after
 	// recordDiagnostics commits it — this call site runs after format,

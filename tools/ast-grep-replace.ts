@@ -6,6 +6,7 @@
 
 import { Type } from "../clients/deps/typebox.js";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
+import { combineAbortSignals } from "../clients/deadline-utils.js";
 import type { LineageHandle } from "../clients/session-scope.js";
 import {
 	astGrepRemediationHint,
@@ -32,6 +33,7 @@ function errorTextWithHint(raw: string): string {
 import {
 	CONSTRAINED_JSON_SCHEMA_SAMPLING,
 	defaultedCwdHomeRefusal,
+	PATHS_GLOB_CLAUSE,
 	readAstGrepLang,
 	readPathsArgument,
 } from "./shared.js";
@@ -86,7 +88,9 @@ export function createAstGrepReplaceTool(
 				description: "Language id, e.g. typescript, tsx, python, go.",
 			}),
 			paths: Type.Optional(
-				Type.Array(Type.String(), { description: "Specific files/folders" }),
+				Type.Array(Type.String(), {
+					description: `Specific files/folders. ${PATHS_GLOB_CLAUSE}`,
+				}),
 			),
 			insideKind: Type.Optional(
 				Type.String({
@@ -126,15 +130,42 @@ export function createAstGrepReplaceTool(
 		async execute(
 			_toolCallId: string,
 			params: Record<string, unknown>,
-			_signal: AbortSignal,
+			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: {
 				cwd?: string;
 				resultMaxItems?: number;
 				sessionManager?: { getSessionId?: () => string };
+				signal?: AbortSignal;
 			},
 		) {
 			const lineage = captureLineage?.();
+			const signal = combineAbortSignals(_signal, ctx.signal);
+			// #5097: the plain aborted text only when the client says the abort
+			// stopped it (the pattern hint would send the model to fix a pattern
+			// that was never wrong); any other error keeps its own text. Files
+			// already written are named, so a failed reply never implies no change.
+			const failureText = (
+				failure: { error?: string; aborted?: boolean; writeStarted?: boolean },
+				written: readonly string[] = [],
+			): string => {
+				const lines = [
+					failure.aborted
+						? "Error: operation aborted"
+						: errorTextWithHint(failure.error ?? ""),
+				];
+				if (written.length > 0) {
+					lines.push(
+						`${written.length} file(s) were already rewritten before it stopped: ${written.join(", ")}`,
+					);
+				}
+				if (failure.writeStarted) {
+					lines.push(
+						"The write had started, so some files may already be rewritten.",
+					);
+				}
+				return lines.join("\n");
+			};
 			// #4943: the calling session owns the deferred pass of the apply.
 			const sessionId = ctx.sessionManager?.getSessionId?.();
 			const startedAt = Date.now();
@@ -215,9 +246,10 @@ export function createAstGrepReplaceTool(
 			}
 			// #5041: replace used to forward `paths` unchecked, so a non-string
 			// entry, a blank entry or an over-cap list reached the CLI as argv.
-			const pathsRead = readPathsArgument(paths, {
+			const pathsRead = await readPathsArgument(paths, {
 				cwd: ctx.cwd,
 				absent: "cwd",
+				signal,
 			});
 			if (pathsRead.refusal) {
 				logOutcome("error", { errorRaw: pathsRead.refusal });
@@ -300,7 +332,7 @@ export function createAstGrepReplaceTool(
 					ruleYaml,
 					searchPaths,
 					applyFlag,
-					{ lineage, toolCallId: _toolCallId, sessionId },
+					{ lineage, toolCallId: _toolCallId, sessionId, signal },
 				);
 				if (ruleResult.stalePreview) {
 					logOutcome("error", { errorRaw: "stale_preview" });
@@ -325,7 +357,12 @@ export function createAstGrepReplaceTool(
 						content: [
 							{
 								type: "text" as const,
-								text: errorTextWithHint(ruleResult.error),
+								text: failureText(
+									ruleResult,
+									applyFlag
+										? [...new Set(ruleResult.matches.map((m) => m.file))]
+										: [],
+								),
 							},
 						],
 						isError: true,
@@ -359,7 +396,7 @@ export function createAstGrepReplaceTool(
 				lang,
 				searchPaths,
 				applyFlag,
-				{ strictness, lineage, toolCallId: _toolCallId, sessionId },
+				{ strictness, lineage, toolCallId: _toolCallId, sessionId, signal },
 			);
 
 			if (result.stalePreview) {
@@ -379,9 +416,7 @@ export function createAstGrepReplaceTool(
 			if (result.error) {
 				logOutcome("error", { errorRaw: result.error });
 				return {
-					content: [
-						{ type: "text" as const, text: errorTextWithHint(result.error) },
-					],
+					content: [{ type: "text" as const, text: failureText(result) }],
 					isError: true,
 					details: {},
 				};

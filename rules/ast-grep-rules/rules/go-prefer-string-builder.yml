@@ -23,21 +23,22 @@ rule:
     - pattern: $VAR += "$OTHER"
 ignores:
   - "**/*_test.go"
-tags:
-  - go
-  - idiom
-  - performance
-examples:
-  bad: |
-    func concat(a string, b string) string {
-        a = a + b
-        return a
-    }
-  good: |
-    func build(parts []string) string {
-        var b strings.Builder
-        for _, p := range parts {
-            b.WriteString(p)
-        }
-        return b.String()
-    }
+metadata:
+  tags:
+    - go
+    - idiom
+    - performance
+  examples:
+    bad: |
+      func concat(a string, b string) string {
+          a = a + b
+          return a
+      }
+    good: |
+      func build(parts []string) string {
+          var b strings.Builder
+          for _, p := range parts {
+              b.WriteString(p)
+          }
+          return b.String()
+      }

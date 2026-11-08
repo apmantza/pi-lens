@@ -26,10 +26,10 @@ concurrency:
 jobs:
   # #3801: classify the diff once. `code` is false ONLY for a pull_request whose
   # every changed path is on the strict docs allowlist (root *.md, docs/**,
-  # .changelog/**; scripts/ci-changed-files.mjs), and then the HEAVY ADVISORY
-  # gate (`heavy-gate`) does not start. The Unit shards and every other test job
-  # still run for a docs-only diff (the `Install test` legs report without
-  # installing, #5112): a docs edit can red tests/clients and tests/scripts (docs/public-api-stability.md,
+  # .changelog/**; scripts/ci-changed-files.mjs); it is not a job output because no job reads it. The
+  # Unit shards and every other test job run for a docs-only diff (the
+  # `Install test` legs report without installing, #5112): a docs edit can red
+  # tests/clients and tests/scripts (docs/public-api-stability.md,
   # docs/*_rules_catalog.md are read by them), so the suite is never skipped.
   # `formal` is true when the diff touches formal/ (or what runs it), and then
   # the `tla-shards` matrix model-checks. Push and any other event
@@ -55,7 +55,6 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      code: ${{ steps.classify.outputs.code }}
       formal: ${{ steps.classify.outputs.formal }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -243,8 +242,20 @@ jobs:
         with:
           node-version: '22'
 
-      # The runner image ships a JDK on PATH; the checker downloads the pinned
-      # tla2tools.jar and verifies its sha256 before running it.
+      # #5409: the jar comes through the fetch-verified helper (cache, --fail,
+      # retries) before the checker runs. The checker keeps its own sha256 check
+      # and its Node fetch, which only a run with no jar at .cache/ reaches.
+      - name: Fetch and verify tla2tools.jar (pinned like scripts/check-tla-models.mjs)
+        uses: ./.github/actions/fetch-verified
+        with:
+          tool: tla2tools
+          version: v1.7.4
+          url: https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          sha256: 936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+          path: .cache/tla2tools.jar
+
+      # The runner image ships a JDK on PATH; the checker reads the jar and
+      # verifies its sha256 before running it.
       - name: Model-check formal/ against each config's expected verdict
         run: |
           java -version
@@ -814,75 +825,10 @@ jobs:
             --repository "${GITHUB_REPOSITORY}" \
             --run "${GITHUB_RUN_ID}"
 
-  # #3801: the gate for HEAVY ADVISORY jobs, which start only after every
-  # required check passed on this head. No job waits on it today: #5275 moved
-  # CodeQL out of ci.yml to a daily schedule in codeql.yml. A new heavy advisory
-  # job adds `needs: heavy-gate` and `if: needs.heavy-gate.outputs.ready == 'true'`.
-  # A runner-slot pool shared by 10+ PRs made heavy jobs compete with the
-  # required jobs for slots (about 40 jobs per push against about 20 concurrent
-  # slots), and on a head whose required checks are red they were pure waste.
-  #
-  # `needs:` reaches `lint-and-typecheck`, the `unit-tests` aggregate, the
-  # Windows leg, and every `install-test` leg. The script reads the rest from the
-  # head's check-runs (a cheap poll): lint.yml's `knip` and `oxfmt format check`,
-  # which `needs:` cannot reach, and `TLA+ models`, which can still be running on
-  # a formal head, so the poll waits up to 300 s for it. `tla-models` stays out of
-  # `needs:` because implicit success() reads every ancestor: its `tla-shards`
-  # need skips on most pull requests (#5082), and that skipped this gate and
-  # its dependents (#5002).
-  # `Hot-path latency (advisory)` is required but not waited for: a master push
-  # path-filters that workflow, so its row can be absent here.
-  #
-  # If any needed job is red or skipped this job is skipped and so are its
-  # dependents. If the check-runs show a red or never-finished check, the gate
-  # step reports `ready=false` and FAILS, so the row is red and a run that was
-  # deferred for that reason is visible and distinguishable from a dropped one
-  # (ci-verdict reads it). The job name ends in `(advisory)` so ci-verdict never
-  # gates on it, red or not.
-  heavy-gate:
-    name: Heavy advisory gate (advisory)
-    needs:
-      - changes
-      - lint-and-typecheck
-      - unit-tests
-      - unit-tests-windows
-      - install-test
-    # #3801: only a code diff starts the heavy jobs: a docs-only pull request
-    # runs every test job but not this gate (#4518 promoted the Windows unit
-    # leg out of it; #5275 removed CodeQL, the last job behind it). Every
-    # needed job must have succeeded (the implicit `success()`), so a red or
-    # skipped one skips the gate.
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    # Polls at most 300 s (the script's deadline) after a few seconds of setup;
-    # 10 min is the repo's floor (refs #3123).
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      checks: read
-    outputs:
-      ready: ${{ steps.gate.outputs.ready }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-          sparse-checkout: |
-            scripts
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-      - name: Require the checks `needs` cannot prove, then release the heavy advisory jobs
-        id: gate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/ci-heavy-gate.mjs --repo "$GITHUB_REPOSITORY" --sha "$HEAD_SHA" --context knip --context "oxfmt format check" --context "TLA+ models"
-
   # GATING since #4518 (maintainer decision, 2026-10-17): the Windows unit leg
   # runs the real `win32` gates, and advisory reds were waved through (#4566
   # r14's `.cmd` branch, #4551). It therefore starts on every event like the
-  # Unit shards -- never behind `heavy-gate`, whose docs-only skip would leave a
-  # required row absent -- and it is not named `(advisory)` any more, so
+  # Unit shards, and it is not named `(advisory)` any more, so
   # ci-verdict gates it, and branch protection requires it.
   unit-tests-windows:
     name: Unit tests Windows

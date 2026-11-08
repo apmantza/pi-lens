@@ -24,14 +24,15 @@ rule:
       regex: "^lateinit$"
 files:
   - "**/*.kt"
-tags:
-  - kotlin
-  - idiom
-  - null-safety
-examples:
-  bad: |
-    class UserRepository {
-        lateinit var apiClient: ApiClient
-    }
-  good: |
-    class UserRepository(private val apiClient: ApiClient)
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - null-safety
+  examples:
+    bad: |
+      class UserRepository {
+          lateinit var apiClient: ApiClient
+      }
+    good: |
+      class UserRepository(private val apiClient: ApiClient)

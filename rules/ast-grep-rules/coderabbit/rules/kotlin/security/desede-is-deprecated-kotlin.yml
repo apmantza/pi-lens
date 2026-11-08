@@ -7,7 +7,8 @@ note: >-
   Failures [REFERENCES]
       - https://find-sec-bugs.github.io/bugs.htm#TDES_USAGE
       - https://csrc.nist.gov/News/2017/Update-to-Current-Use-and-Deprecation-of-TDEA
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   match_call_expression:
     kind: call_expression

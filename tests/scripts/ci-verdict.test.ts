@@ -1599,10 +1599,6 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 	const EXTERNAL_ADVISORY_NAMES = ["CodeQL", "SonarCloud Code Analysis"];
 
 	const EXPECTED_ADVISORY = new Set([
-		// #3801: the job that releases the heavy advisory jobs after the required
-		// checks pass; it reports ready=false rather than failing, and must never
-		// gate a merge whatever it concludes.
-		"Heavy advisory gate (advisory)",
 		// #3801: classifies the diff for the docs-only skip; it falls back to the
 		// full suite on any doubt and must never gate a merge.
 		"Changed files (advisory)",
@@ -1845,10 +1841,10 @@ describe("formatVerdictTable", () => {
 		const verdict = computeVerdict({ check_runs: [] });
 		const table = formatVerdictTable(verdict.rows);
 		const lines = table.split("\n").slice(1);
-		// The two required rows come first; #3801's deferred advisory rows
-		// follow and read PENDING, never "absent".
-		for (const line of lines.slice(0, 2)) expect(line).toContain("absent");
-		for (const line of lines.slice(2)) expect(line).toContain("PENDING");
+		// The two required rows are the whole table: no deferred advisory row
+		// follows (the heavy gate and its deferred rows are retired, #3801).
+		expect(lines).toHaveLength(2);
+		for (const line of lines) expect(line).toContain("absent");
 	});
 });
 

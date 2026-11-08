@@ -60,12 +60,15 @@ import { commitDurableStore } from "./durable-store.js";
 import { logDispositionEvent } from "./disposition-logger.js";
 import { publishDisposition } from "./disposition-publish.js";
 import { getProjectDataDir } from "./file-utils.js";
+import { freshnessFromMtime } from "./freshness.js";
 import {
+	displayedMessage,
+	messageIsCutWhenDisplayed,
 	normalizeMessage as sharedNormalizeMessage,
 	relativeFile as sharedRelativeFile,
 	stableFindingId,
 } from "./finding-identity.js";
-import { normalizeMapKey } from "./path-utils.js";
+import { isWithinIdentity, normalizeMapKey } from "./path-utils.js";
 import { lineContentHash } from "./read-guard.js";
 
 /** Minimal shape a diagnostic needs for anchoring/filtering — deliberately
@@ -716,6 +719,65 @@ export function _resetDeferredForTests(): void {
 }
 
 /**
+ * #5367: the DISPLAY-form alias each candidate may be matched through, or
+ * nothing for that candidate.
+ *
+ * A cascade line prints `displayedMessage(d.message)` (first line, cut at 100
+ * characters), so an agent that marks what it was SHOWN spells a message no
+ * finding carries: the anchor hashes `normalizeMessage(message)`, which folds
+ * whitespace and case but never cuts. The mark hid nothing — on either cascade
+ * lane — for every multiline or over-budget error.
+ *
+ * The alias therefore re-anchors the SAME candidate on its displayed form. It
+ * is honored only while that spelling names one live message: when two live
+ * findings in this batch render to the same text, either could be the one the
+ * mark quotes, and a false-positive on a STOP-tier error must not silently
+ * silence a different error beside it (the #1625 F1 reason, one layer down).
+ * Ambiguity is counted on the NORMALIZED message, so two candidates that are
+ * the same finding under two `(tool, rule)` spellings (#3248's identity
+ * widening) are one owner, not two.
+ *
+ * Cost is bounded and cold: a candidate whose message renders whole is skipped
+ * by a length/newline test before any hashing, and the whole derivation runs
+ * only after the caller's empty-store early return, so a project with no marks
+ * pays nothing on the per-edit dispatch path.
+ */
+function displayFormAliases<T extends DispositionCandidate>(
+	candidates: T[],
+): Map<T, string> {
+	const cut = new Map<T, string>();
+	const owners = new Map<string, Set<string>>();
+	for (const candidate of candidates) {
+		if (!messageIsCutWhenDisplayed(candidate.message)) continue;
+		const form = displayedMessage(candidate.message);
+		cut.set(candidate, form);
+		const key = normalizeMessage(form);
+		const owner = owners.get(key);
+		const message = normalizeMessage(candidate.message);
+		if (owner === undefined) owners.set(key, new Set([message]));
+		else owner.add(message);
+	}
+	if (cut.size === 0) return new Map();
+	// #5367 r1 F1: every live candidate owns the display form its own folded
+	// text equals, cut or whole. An uncut finding does, and so does a cut one
+	// whose text folds to another's display form ("error\ndetail" and the form
+	// "error detail"). Without this, a mark naming that text also hid a sibling
+	// whose display form it is, which master kept. Counted after the cut pass,
+	// so the alias set itself stays limited to cut messages.
+	for (const candidate of candidates) {
+		const message = normalizeMessage(candidate.message);
+		owners.get(message)?.add(message);
+	}
+	const aliases = new Map<T, string>();
+	for (const [candidate, form] of cut) {
+		if ((owners.get(normalizeMessage(form))?.size ?? 0) === 1) {
+			aliases.set(candidate, form);
+		}
+	}
+	return aliases;
+}
+
+/**
  * Drop diagnostics disposed false-positive/suppress, or deferred this session,
  * from `diagnostics`. `flagged` diagnostics are kept as-is — callers that want
  * to surface the flag (e.g. lens_diagnostics' rendering) look it up separately
@@ -743,20 +805,61 @@ export function applyDispositions<T extends DispositionCandidate>(
 	const dispositions = readState(cwd).dispositions;
 	if (nothingToApply(dispositions, cwd)) return diagnostics;
 	const deferred = deferredAnchorsFor(cwd);
+	// #5367: a mark spelled from the DISPLAYED cascade text — see
+	// `displayFormAliases`. Computed once for the batch, because its ambiguity
+	// test is over the batch's live findings, not over one candidate.
+	const aliases = displayFormAliases(diagnostics);
 	return diagnostics.filter((d) => {
 		const { strict, weak } = anchorsForDiagnostic(cwd, filePath, d, content);
 		const isBlocking = d.semantic === "blocking";
-		if (!isBlocking && deferred?.has(weak)) {
+		// #5367: the alias anchors use the same two derivations the primary pair
+		// uses, with the message replaced by its displayed form. The WEAK alias is
+		// computed only for a non-blocking candidate: #1625 F1 already guarantees a
+		// blocking finding drops on its STRICT anchor alone, so hashing the weak one
+		// there is dead work on a population where it is always taken (a cascade
+		// renders ERRORs only).
+		const alias = aliases.get(d);
+		let aliasStrict: string | undefined;
+		let aliasWeak: string | undefined;
+		if (alias !== undefined) {
+			// The SAME shared derivation as the primary pair, with the message
+			// replaced by its displayed form: a second spelling of the anchor build
+			// is how a mark and a diagnostic stop converging in the first place.
+			const aliasAnchors = anchorsForDiagnostic(
+				cwd,
+				filePath,
+				{ ...d, message: alias },
+				content,
+			);
+			aliasStrict = aliasAnchors.strict;
+			if (!isBlocking) aliasWeak = aliasAnchors.weak;
+		}
+		if (
+			!isBlocking &&
+			(deferred?.has(weak) ||
+				(aliasWeak !== undefined && deferred?.has(aliasWeak)))
+		) {
 			return false;
 		}
-		if (dispositions?.[strict]?.disposition === "false-positive") return false;
+		if (
+			dispositions?.[strict]?.disposition === "false-positive" ||
+			(aliasStrict !== undefined &&
+				dispositions?.[aliasStrict]?.disposition === "false-positive")
+		) {
+			return false;
+		}
 		// Belt-and-braces: the inline `pi-lens-ignore` comment is the real
 		// suppress enforcement (see suppress-writer.ts) and normally already
 		// dropped this finding upstream via applyInlineSuppressions. This is a
 		// harmless second cover for the store-only audit trail case — gated
 		// off blocking findings per F1 above (the inline comment, unaffected
 		// by this gate, remains the real suppress mechanism for those too).
-		if (!isBlocking && dispositions?.[weak]?.disposition === "suppress") {
+		if (
+			!isBlocking &&
+			(dispositions?.[weak]?.disposition === "suppress" ||
+				(aliasWeak !== undefined &&
+					dispositions?.[aliasWeak]?.disposition === "suppress"))
+		) {
 			return false;
 		}
 		return true;
@@ -849,6 +952,192 @@ export function applyDispositionsMultiFile<T extends DispositionCandidate>(
 	cwd: string,
 	filePathOf: (diagnostic: T) => string,
 ): T[] {
+	return filterPerFileGroup(diagnostics, cwd, filePathOf, (group, filePath) => {
+		let content = "";
+		try {
+			content = multiFileReadFileSync(filePath, "utf-8");
+		} catch {
+			// Unreadable/missing — fail open, see doc above.
+		}
+		return applyDispositions(group, cwd, filePath, content);
+	});
+}
+
+/**
+ * WEAK-anchor variant of {@link applyDispositionsMultiFile} for cache-only
+ * readers whose per-file records can hold findings citing a DIFFERENT file
+ * (#5044: a helm-lint row for `Chart.yaml` stored under the written
+ * template's widget key). Anchoring the whole record on the store key lets a
+ * mark on the edited file hide the other file's finding and hides the
+ * finding from its own mark — the shape #5067 fixed for the dispatch path.
+ *
+ * Zero I/O: a weak anchor reads only the path component of its file, never
+ * content (see {@link applyWeakDispositions}'s contract), so each group is
+ * anchored on its own path and no file is read. Same grouping, same
+ * `nothingToApply` hoist, same order preservation — both multi-file lanes
+ * ride the one shared pass below so they cannot drift.
+ */
+export function applyWeakDispositionsMultiFile<T extends DispositionCandidate>(
+	diagnostics: T[],
+	cwd: string,
+	filePathOf: (diagnostic: T) => string,
+): T[] {
+	return filterPerFileGroup(diagnostics, cwd, filePathOf, (group, filePath) =>
+		applyWeakDispositions(group, cwd, filePath),
+	);
+}
+
+/**
+ * The bytes a stored mark may be matched against for a file the caller does
+ * NOT hold in hand, or `undefined` when this process must not trust that file
+ * to suppress anything. #5067 wrote the rule for the dispatch stack; #5044
+ * round 2 (F2) moves it here so the stack and the two cache-only readers ask
+ * the same question and cannot answer it differently:
+ *
+ * - a cited owner outside the project root on the IDENTITY axis
+ *   ({@link isWithinIdentity} — a `..` spelling or a link out is outside);
+ * - or one whose current bytes this process cannot read.
+ *
+ * `applyFindingPolicyByOwner` maps `undefined` onto fail-closed: the group's
+ * findings pass the inline and disposition steps — weak-anchored marks
+ * included — and only the rule policy, which reads no content, still applies.
+ * The cache-only readers map it onto keeping every row of the group and
+ * looking up no mark at all ({@link cachedAnchorMarks}'s `refused` lane).
+ *
+ * Cited owners are the whole population. A record's own key is the file the
+ * session wrote and its content is the caller's own input, so it keeps the
+ * documented fail-open weak fallback (#1617 F1) — callers pass `cited: false`
+ * for it, or read their supplied content past this check.
+ *
+ * The bytes come from a THUNK, not an argument: the identity answer is decided
+ * before anything is opened, so a file the project does not contain is never
+ * read (`applyFindingPolicyByOwner`'s pre-#5044 short-circuit, which an eager
+ * argument would have quietly widened).
+ */
+export function trustedCitedOwnerContent(
+	anchor: string,
+	cwd: string,
+	read: () => string | undefined,
+): string | undefined {
+	if (!isWithinIdentity(anchor, cwd)) return undefined;
+	return read();
+}
+
+/** What the marks stored against ONE anchor path may do to the cached rows
+ *  anchored on it ({@link cachedAnchorMarks}). */
+export type CachedAnchorMarks =
+	/** The anchor's current bytes still describe the revision these rows were
+	 * observed against, so both anchor halves may be derived from them. */
+	| { marks: "strict"; content: string }
+	/** The anchor moved after the newest observation among the group's rows, or
+	 * the store holds only weak marks: intent-level marks apply, and a STRICT
+	 * anchor waits for the next real dispatch to re-derive both sides against
+	 * matching revisions. */
+	| { marks: "weak-only" }
+	/** A file the record only CITES (`WidgetDiagnostic.citedFile`, #5020) that
+	 * this process must not trust to suppress anything — outside the project
+	 * root, or unreadable ({@link trustedCitedOwnerContent}, #5067). No
+	 * disposition of any kind is looked up for these rows; all of them pass. */
+	| { marks: "refused" };
+
+/**
+ * The ONE per-anchor decision a cache-only reader runs before it lets a stored
+ * mark touch a cached row: stat the anchor, ask the freshness kernel whether
+ * it moved past the newest observation among the rows anchored on it, and read
+ * its current bytes through the caller's reader. Both cache-only readers used
+ * to own a copy: `tools/lens-diagnostics.ts` gated its strict-immediate path
+ * this way, while `clients/widget-state.ts`'s reconcile pass re-derived a
+ * STRICT anchor from a cited file's CURRENT bytes with no gate at all — so one
+ * `lens_diagnostic_mark` took a STOP-tier finding out of the footer while
+ * `lens_diagnostics mode=all` still listed the same row (#5044 round 2 F1). A
+ * stale cited anchor gets `""`'s semantics here: `marks: "weak-only"`, the
+ * same answer the cached reader has always given.
+ *
+ * `rows` carries each row's own observation stamp; the newest of them is the
+ * reference the anchor's mtime is compared against (the newest, because one
+ * group can hold rows recorded by different runs, and the freshest of them is
+ * the youngest revision the bytes may still describe). The comparison itself
+ * is the freshness kernel's, drift tolerance included (#1710's 50 ms).
+ *
+ * `strictAnchors: false` is a store that holds only weak suppress/defer marks:
+ * the record key's own rows then need neither stat nor read (#1625 F2's
+ * zero-I/O hoist, which is what makes a marks-only query on a clean project
+ * cheap). A CITED group is still checked, because the refusal a weak mark
+ * cannot be trusted with is exactly what an unowned file must not get.
+ */
+export function cachedAnchorMarks<T extends { observedAt?: number }>(input: {
+	cwd: string;
+	anchor: string;
+	rows: readonly T[];
+	/** True when `anchor` is a file the record only CITES, so #5067's owner rule
+	 *  applies to it; false for the record key's own rows. */
+	cited: boolean;
+	/** True when the store holds a STRICT (false-positive) mark, so the bytes
+	 *  are needed to derive the strict anchor; false serves the weak filter. */
+	strictAnchors: boolean;
+	/** Reads the anchor's current bytes given the stat taken here, or `undefined`
+	 *  when it cannot. Each reader keeps its registered reader: the bounded
+	 *  per-revision content memo in `tools/lens-diagnostics.ts`, the
+	 *  once-per-reconcile read (with its degradation record) in
+	 *  `clients/widget-state.ts`. */
+	readContent: (
+		anchor: string,
+		stat: { mtimeMs: number; size: number },
+	) => string | undefined;
+}): CachedAnchorMarks {
+	const { anchor, cwd, rows, cited, strictAnchors } = input;
+	if (!cited && !strictAnchors) return { marks: "weak-only" };
+	let stat: fs.Stats;
+	try {
+		stat = fs.statSync(anchor);
+	} catch {
+		// none: an unstatable anchor is the expected shape of a deleted or
+		// unreadable file, not a degradation this call hides: a CITED owner is
+		// refused outright, so every row of its group stays visible (fail closed,
+		// #5067), and the record key's own rows take #1617 F1's documented weak
+		// fallback, where the intent-level mark still applies. Both outcomes are
+		// visible to the caller as the returned `marks` mode.
+		return cited ? { marks: "refused" } : { marks: "weak-only" };
+	}
+	let content: string | undefined;
+	if (cited) {
+		// #5067's owner rule, asked once and by its owner: outside the project
+		// root on the identity axis, or unreadable, and this cited group is
+		// refused outright. The reader stays behind the thunk so an unowned file
+		// is never opened.
+		content = trustedCitedOwnerContent(anchor, cwd, () =>
+			input.readContent(anchor, stat),
+		);
+		if (content === undefined) return { marks: "refused" };
+	}
+	if (!strictAnchors) return { marks: "weak-only" };
+	const referenceMs = rows.reduce<number>(
+		(latest, row) => Math.max(latest, row.observedAt ?? 0),
+		0,
+	);
+	if (
+		referenceMs > 0 &&
+		freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs }).verdict ===
+			"stale"
+	) {
+		return { marks: "weak-only" };
+	}
+	content ??= input.readContent(anchor, stat);
+	if (content === undefined) {
+		return { marks: "weak-only" };
+	}
+	return { marks: "strict", content };
+}
+
+/** The one group-by-file-then-filter pass both multi-file lanes share: the
+ * #1625 F2 empty-store hoist BEFORE any per-group work, groups in first-seen
+ * order, and the caller's original order/dedup preserved by reference. */
+function filterPerFileGroup<T extends DispositionCandidate>(
+	diagnostics: T[],
+	cwd: string,
+	filePathOf: (diagnostic: T) => string,
+	applyGroup: (group: T[], filePath: string) => T[],
+): T[] {
 	if (!diagnostics.length) return diagnostics;
 	const dispositions = readState(cwd).dispositions;
 	if (nothingToApply(dispositions, cwd)) return diagnostics;
@@ -861,13 +1150,7 @@ export function applyDispositionsMultiFile<T extends DispositionCandidate>(
 	}
 	const kept = new Set<T>();
 	for (const [filePath, group] of groups) {
-		let content = "";
-		try {
-			content = multiFileReadFileSync(filePath, "utf-8");
-		} catch {
-			// Unreadable/missing — fail open, see doc above.
-		}
-		for (const d of applyDispositions(group, cwd, filePath, content)) {
+		for (const d of applyGroup(group, filePath)) {
 			kept.add(d);
 		}
 	}

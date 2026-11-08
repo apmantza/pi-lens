@@ -521,6 +521,7 @@ export const realHarnessInclude = [
 	"tests/real-harness/bridge-reload.test.ts",
 	"tests/real-harness/bridge-reload-ts.test.ts",
 	"tests/real-harness/clean-verdict.test.ts",
+	"tests/real-harness/unchecked-report.test.ts",
 	"tests/real-harness/diagnostic-provenance.test.ts",
 	"tests/real-harness/provider-compatibility.test.ts",
 	"tests/real-harness/read-guard-moves.test.ts",
@@ -912,6 +913,9 @@ export const wallClockBudgetInclude = [
 	// #4030: the real `gh` process boundary is the subject of the retry test;
 	// serialize it with other child-process admissions.
 	"tests/scripts/download-test-history-artifacts.test.ts",
+	// #5409: the fetch-verified helper's fetch step runs under a real bash with
+	// a fake curl on PATH; no in-process stand-in can show the verify-before-move order.
+	"tests/scripts/fetch-verified-action.test.ts",
 	// #4518: the evaluated-floor steps are shell text; only a real bash running
 	// the extracted `run:` shows the exit-code mapping, `set +e` and pipefail.
 	"tests/scripts/floor-steps-executed.test.ts",
@@ -1087,15 +1091,24 @@ export const wallClockBudgetInclude = [
 	// through AstGrepClient, so its ordering and byte ratio are measured on real
 	// child output (flake-shape admission).
 	"tests/tools/ast-grep-outline.test.ts",
+	// #5097 r2: a real madge child killed by lens_diagnostics' abort, polled
+	// until gone, then the cache row polled for a write (flake-shape admission).
+	"tests/tools/lens-diagnostics-abort-5097.test.ts",
 	// #3827: drives `lsp_navigation rename` over a REAL `createLSPClient` on the
 	// fake server (a real initialize handshake per case), so the client's own
 	// first-send stamp reaches the capture; the same #1022/#2332 contention
 	// class as its lane siblings.
 	"tests/tools/lsp-navigation-rename-first-open.test.ts",
+	// #5371 r2 F5: the cold-vs-warm tracked-index cell needs a repository Git
+	// itself wrote, so it runs real `git` (flake-shape admission).
+	"tests/tools/path-glob-5371-tracked-index.test.ts",
 	// #4583: same fire-and-forget cold build as its clients sibling above; the
 	// pi-tool witness joins it with a real-time vi.waitFor (flake-shape
 	// admission).
 	"tests/tools/symbol-search.test.ts",
+	// #5097: a real ast-grep child (through a wrapper) parked, killed and left
+	// writing per phase of a tool call (flake-shape admission).
+	"tests/tools/tool-abort-scope-5097.test.ts",
 ];
 
 // #2912: the tmp-fixture governance sweep compares the real process-wide

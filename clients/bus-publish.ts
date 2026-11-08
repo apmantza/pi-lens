@@ -18,6 +18,7 @@
  * it without spamming.
  */
 import { normalizeFilePath } from "./path-utils.js";
+import { recordDegradationOnce } from "./degradation-ledger.js";
 import { appendRecentTouches } from "./recent-touches.js";
 import {
 	createBusPublisher,
@@ -161,6 +162,16 @@ export function publishFilesTouched(args: PublishFilesTouchedArgs): void {
 				paths: args.paths,
 				sessionId: args.sessionId,
 			}).catch((err) => {
+				// #5377: the append now publishes through the durable-record seam's
+				// THROWING atomic write, so a rejection here is a batch that never
+				// reached the cross-process record — a silent loss before the fold.
+				// Bounded: one row per project per session (the ledger's once-key), so
+				// a wedged record lock cannot write a row per write.
+				recordDegradationOnce({
+					kind: "recent-touches-append-failed",
+					subject: args.cwd,
+					reason: String(err),
+				});
 				args.dbg?.(`bus-publish: recent-touches append failed: ${err}`);
 			});
 		},

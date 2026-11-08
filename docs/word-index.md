@@ -47,10 +47,9 @@ each through `splitIdentifier`; queries are tokenized the same way so
 The query string can mix plain terms with composable `key:value` filters,
 parsed by `parseWordIndexQuery` (`clients/word-index.ts`) before tokenization:
 
-- `lang:<kind|id>` — restrict to a file kind's extensions (`KIND_EXTENSIONS` in
-  `clients/file-kinds.ts`) or a language id/grammar name's extensions
-  (`LANGUAGES` in `clients/language-registry.ts`), resolved by the one
-  `resolveLanguageScope` facade so the two vocabularies cannot drift.
+- `lang:<kind|id>` — resolved by `resolveLanguageScope`
+  (`clients/language-registry.ts`), the one owner shared with the structured
+  `lang`.
 - `file:<substr>` — path substring match against the index's own stored path,
   normalized through `wordIndexKey` (case-folded on win32 only, matching how
   the index's own path-keyed maps already fold win32 paths, #1025).
@@ -65,16 +64,12 @@ Filters are applied as a `fileFilter` predicate BEFORE BM25/priors/centrality
 scoring (same seam as the pre-existing `paths`/`lang` structured options,
 #771), so a surviving file's score is unaffected by filtering. An unrecognized
 `key:` token passes through as an ordinary search term (colon-bearing terms
-like `std::vector`, URLs, and Windows paths search normally). A recognized key
-with an unrecognized value (`lang:klingon`) refuses with the accepted
-vocabularies — never silently falls through as a literal search term. The
-query contract (the three keys, the literal-prefix rule, and the listing
-semantics) is owned by the tool description
-(`createSymbolSearchTool` in `tools/symbol-search.ts`); this page links to it
-rather than restating it. Both the pi `symbol_search` tool and the MCP
-`pilens_symbol_search` mirror inherit the syntax for free since both pass their
-`query` argument straight through to `searchWordIndex` (the entry point where
-parsing happens).
+like `std::vector`, URLs, and Windows paths search normally). The query
+contract is owned by the tool description (`SYMBOL_SEARCH_QUERY_DESCRIPTION`
+in `tools/symbol-search.ts`); this page does not restate it. Both the pi
+`symbol_search` tool and the MCP `pilens_symbol_search` mirror inherit the
+syntax for free since both pass their `query` argument straight through to
+`searchWordIndex` (the entry point where parsing happens).
 
 DF-normalization: BM25's per-token `idf` is computed from the FULL,
 unfiltered posting for that token before `fileFilter` is applied per

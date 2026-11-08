@@ -281,10 +281,10 @@ describe("runner-parsed-nothing (#1948)", () => {
 		}
 	});
 
-	// taplo opts into `skipWhenParsedNothing`: its exit 1 means "this file is
-	// INVALID", so claiming clean would be an outright lie. This replaced a
-	// hand-rolled per-runner copy of the rule that wrote its own row.
-	it("taplo skips AND records when its failing output parses to nothing", async () => {
+	// taplo's exit 1 means "this file is INVALID", so claiming clean would be an
+	// outright lie. Since #5411 it gets the verdict every JSON runner gets
+	// (failed/parser_error) and still leaves the #1948 row.
+	it("taplo fails with a parse error AND records when its failing output parses to nothing", async () => {
 		const env = setupTestEnvironment("pi-lens-1948-taplo-");
 		try {
 			const summary = await ledger();
@@ -305,8 +305,11 @@ describe("runner-parsed-nothing (#1948)", () => {
 				createCtx("toml", filePath, env.tmpDir) as never,
 			);
 
-			expect(result.status).toBe("skipped");
-			expect(result.diagnostics).toEqual([]);
+			expect(result.status).toBe("failed");
+			expect(result.failureKind).toBe("parser_error");
+			expect(result.diagnostics.map((d) => d.id)).toEqual([
+				"taplo:parse-error:1",
+			]);
 			const { row } = parsedNothingRow(summary, "taplo");
 			expect(row?.reason).toContain("exited 1");
 			expect(row?.reason).toContain("failed to load schema");
@@ -410,8 +413,8 @@ describe("runners that reached the gate through spawnFailedWithNoOutput (#1948 F
 		}
 	});
 
-	// #4522 review F2: exit 1 is admitted and skipWhenParsedNothing skips it
-	// when the parser reads nothing, so the record is runner-parsed-nothing.
+	// #4522 review F2: exit 1 is admitted and fails as parser_error (#5411, was a
+	// skip) when the parser reads nothing, so the record is runner-parsed-nothing.
 	it("detekt records when a config failure yields no parsable finding", async () => {
 		const env = setupTestEnvironment("pi-lens-1948-detekt-");
 		try {
@@ -432,8 +435,8 @@ describe("runners that reached the gate through spawnFailedWithNoOutput (#1948 F
 				createCtx("kotlin", filePath, env.tmpDir) as never,
 			);
 
-			expect(result.status).toBe("skipped");
-			expect(result.diagnostics).toEqual([]);
+			expect(result.status).toBe("failed");
+			expect(result.failureKind).toBe("parser_error");
 			const { row } = parsedNothingRow(summary, "detekt");
 			expect(
 				row,
@@ -525,7 +528,7 @@ describe("detekt captured exit-code matrix (#4522)", () => {
 		return new URL(relative, import.meta.url);
 	}
 
-	it("skips, never reads clean, when detekt exits 1 on a malformed config", async () => {
+	it("fails with a parse error, never reads clean, when detekt exits 1 on a malformed config", async () => {
 		const env = setupTestEnvironment("pi-lens-4522-detekt-exit1-");
 		try {
 			const summary = await ledger();
@@ -561,14 +564,16 @@ describe("detekt captured exit-code matrix (#4522)", () => {
 			expect(
 				result.status,
 				"detekt exit 1 on a malformed config reads as a completed analysis: an unanswered tool read clean",
-			).toBe("skipped");
-			expect(result.diagnostics).toEqual([]);
-			// #4522 T4: the skip's own record, not any degradation row. A different
+			).toBe("failed");
+			// #5411: the same verdict every JSON runner gives a nonzero exit whose
+			// output cannot be read; it was a skip before.
+			expect(result.failureKind).toBe("parser_error");
+			// #4522 T4: the run's own record, not any degradation row. A different
 			// kind (another tool's, or a different detekt record) must red here.
 			const { group, row } = parsedNothingRow(summary, "detekt");
 			expect(
 				group,
-				"the skip is recorded as runner-parsed-nothing",
+				"the failed run is recorded as runner-parsed-nothing",
 			).toBeDefined();
 			expect(row, "the record names detekt").toBeDefined();
 		} finally {

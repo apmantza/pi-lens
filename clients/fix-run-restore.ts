@@ -165,10 +165,10 @@
  *   in-order delivery -- what pi's batch produces -- is quiet
  *   (`SiblingRestoreOverlap`).
  */
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 
 import { writeFileAtomicAsync } from "./atomic-write.js";
+import { hashContentBytes } from "./content-stamp.js";
 import { noteAtomicReplace } from "./path-birth.js";
 import {
 	incrementDegradationCount,
@@ -314,10 +314,6 @@ function registry(): Registry {
 	);
 }
 
-function sha256(bytes: Buffer): string {
-	return createHash("sha256").update(bytes).digest("hex");
-}
-
 /**
  * Hash the tool's rewritable files and start capturing agent mutations of
  * them. Never throws: a file that cannot be read is simply not covered.
@@ -365,7 +361,7 @@ export async function beginFixRun(args: {
 			hashedBytes += entry.bytes.length;
 			files.set(normalizeMapKey(entry.candidate), {
 				filePath: entry.candidate,
-				hash: sha256(entry.bytes),
+				hash: hashContentBytes(entry.bytes),
 			});
 		}
 	}
@@ -787,7 +783,7 @@ export function noteAgentMutation(
 		try {
 			const bytes = fs.readFileSync(file.filePath);
 			// Bytes equal to the pre-run bytes are not an agent change to protect.
-			if (sha256(bytes) === file.hash) {
+			if (hashContentBytes(bytes) === file.hash) {
 				delete file.capture;
 				continue;
 			}

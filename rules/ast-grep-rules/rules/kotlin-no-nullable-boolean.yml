@@ -21,13 +21,14 @@ rule:
       regex: "^Boolean$"
 files:
   - "**/*.kt"
-tags:
-  - kotlin
-  - idiom
-  - null-safety
-examples:
-  bad: |
-    fun isEligible(): Boolean? = null
-  good: |
-    enum class Eligibility { ELIGIBLE, INELIGIBLE, UNKNOWN }
-    fun eligibility(): Eligibility = Eligibility.UNKNOWN
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - null-safety
+  examples:
+    bad: |
+      fun isEligible(): Boolean? = null
+    good: |
+      enum class Eligibility { ELIGIBLE, INELIGIBLE, UNKNOWN }
+      fun eligibility(): Eligibility = Eligibility.UNKNOWN

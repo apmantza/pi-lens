@@ -23,7 +23,7 @@
  *
  * KNOWN LIMITATIONS:
  * - shape 6: stat-diff identity is size+mtimeMs PLUS a budgeted content-hash
- *   confirm (withHashes captures sha1 up to OPAQUE_HASH_BUDGET_BYTES); a
+ *   confirm (withHashes captures sha256 up to OPAQUE_HASH_BUDGET_BYTES); a
  *   same-tick/same-size rewrite is detected when both sides hashed the file,
  *   and degrades to mtime+size for files past the hash budget. The git path
  *   detects any content change regardless.
@@ -45,9 +45,9 @@ import {
 	sameCheckoutOtherRoot,
 } from "./review-graph/git-identity.js";
 import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
-import { createHash } from "node:crypto";
 
 import { BoundedFifoMap } from "./bounded-cache.js";
+import { hashContentBytes } from "./content-stamp.js";
 import { scanShellWriteScopes } from "./bash-file-access.js";
 import {
 	incrementDegradationCount,
@@ -206,7 +206,7 @@ export interface CaptureOptions {
 	/** Internal test seam for making an absent-evidence verdict reachable. */
 	forcedUnknownReason?: OpaqueUnknownReason;
 	/**
-	 * Read file contents and record sha1 hashes alongside mtime/size. Used on
+	 * Read file contents and record sha256 hashes alongside mtime/size. Used on
 	 * the stat-diff path so the post-side diff can detect same-tick same-size
 	 * rewrites. Bounded by OPAQUE_HASH_BUDGET_BYTES; files past the budget
 	 * simply carry no hash (comparison degrades to mtime+size for them).
@@ -293,9 +293,7 @@ export async function captureFileStatsForPaths(
 				size: stat.size,
 			};
 			if (options.withHashes && hashBytesSpent + stat.size <= hashBudget) {
-				entry.hash = createHash("sha256")
-					.update(await fs.promises.readFile(file))
-					.digest("hex");
+				entry.hash = hashContentBytes(await fs.promises.readFile(file));
 				hashBytesSpent += stat.size;
 			}
 			snapshot.set(normalizeMapKey(path.resolve(file)), entry);

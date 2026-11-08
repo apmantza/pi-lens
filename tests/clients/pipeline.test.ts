@@ -36,6 +36,7 @@ import {
 	clearWidgetState,
 	exportWidgetState,
 	reconcileCorrelatedScanDiagnostics,
+	renderWidget,
 } from "../../clients/widget-state.js";
 import {
 	_getDegradationLedgerStateForTests,
@@ -1858,7 +1859,7 @@ describe("Pipeline", () => {
 			}).toEqual({ afterUnchecked: "no check", afterChecked: undefined });
 		});
 
-		it("a file nothing can check says so on the write line and never counts in the footer or the sidecar", async () => {
+		it("a file nothing can check says so on the write line, is flagged inapplicable in the sidecar, and never counts in the footer", async () => {
 			// Recurrence prevented: #5285 review F2. A kindless or generated file
 			// kept `⚠ 1 unchecked` for the session and across resume, because no
 			// completed check of its kind could ever retire the reason.
@@ -1873,11 +1874,18 @@ describe("Pipeline", () => {
 				}),
 			);
 			const record = widgetRecordOf(filePath);
+			const footer = renderWidget(120, { fg: (_c, text) => text }).join("\n");
 			clearWidgetState();
 
 			expect(line).toContain("unconfirmed");
-			expect(record).toBeDefined();
-			expect(record?.uncheckedReason).toBeUndefined();
+			// #5287: the record keeps the reason, flagged, so a report can name the
+			// file; the footer neither counts it nor draws it.
+			expect(record).toMatchObject({
+				uncheckedReason: NO_ANALYZER_REASON,
+				uncheckedInapplicable: true,
+			});
+			expect(footer).not.toContain("unchecked");
+			expect(footer).not.toContain("✓");
 		});
 
 		it("a --no-lsp write stays counted after a full scan that never checked the file", async () => {

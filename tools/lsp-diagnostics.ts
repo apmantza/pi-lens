@@ -46,8 +46,8 @@ import {
 } from "../clients/deadline-utils.js";
 import {
 	applyAuxiliarySuppressions,
-	configDisabledAuxiliaryLspServerIds,
-	enabledOptInAuxiliaryLspServerIds,
+	auxiliaryNotRunSentences,
+	auxiliaryServersNotRun,
 	isOptInAuxiliaryServerId,
 	dropExcludedServers,
 	retagAuxiliaryDiagnostics,
@@ -57,6 +57,7 @@ import {
 	loadProjectRulePolicy,
 } from "../clients/dispatch/finding-policy.js";
 import { readFileContent } from "../clients/dispatch/runners/utils.js";
+import { NO_SERVER_REASON } from "../clients/dispatch/types.js";
 import { lookForOutOfBandChanges } from "../clients/out-of-band-changes.js";
 import { hasStrictDispositionMarks } from "../clients/diagnostic-dispositions.js";
 import { dispositionSuppressedLine } from "../clients/finding-delivery-gate.js";
@@ -395,7 +396,7 @@ function lspUnavailableMessage(
 		: "";
 	const reason =
 		(health.serverCountAttempted ?? 0) === 0
-			? "no LSP server configured"
+			? NO_SERVER_REASON
 			: "no LSP client is currently ready";
 	const stale =
 		(health.mergedCount ?? 0) > 0
@@ -564,6 +565,11 @@ export function createLspDiagnosticsTool(
 				// #4577 R2-2: internal provenance, set only by
 				// `tools/lens-diagnostics.ts` when it injects its own cwd default.
 				pathAlreadyResolved?: boolean;
+				// #5371: the same provenance for `paths`. Set only by
+				// `tools/lens-diagnostics.ts`, which reads the list through the shared
+				// reader — host-resolved once, and with any glob entry already expanded
+				// into the files it names. Re-resolving an expanded entry is #5047 F2.
+				pathsAlreadyResolved?: boolean;
 			};
 			const severity = (typedParams.severity ?? "all") as string;
 			// #5138 D9: an unknown tier used to fall through `applySeverityFilter`'s
@@ -598,12 +604,7 @@ export function createLspDiagnosticsTool(
 			// operator switched off, and an opt-in one they turned on (the all-server
 			// door never starts it), so the report names both as not run.
 			const excludeServerIds = getFlag
-				? new Set([
-						...configDisabledAuxiliaryLspServerIds((name) =>
-							getFlag(name, cwd),
-						),
-						...enabledOptInAuxiliaryLspServerIds((name) => getFlag(name, cwd)),
-					])
+				? auxiliaryServersNotRun((name) => getFlag(name, cwd))
 				: undefined;
 
 			const lspService = getService();
@@ -688,7 +689,11 @@ export function createLspDiagnosticsTool(
 				// then adopts on-disk CASING so an agent-typed, possibly mis-cased
 				// entry keys `reconcileScanDiagnostics`'s widget-state write the same
 				// way a canonical writer (clients/pipeline.ts's ctx.filePath) does.
-				const expanded = await expandPathsToFiles(cwd, rawPaths);
+				const expanded = await expandPathsToFiles(
+					cwd,
+					rawPaths,
+					typedParams.pathsAlreadyResolved === true,
+				);
 				if (expanded.files.length === 0) {
 					// A requested directory with no eligible file (empty, unreadable,
 					// or fully excluded) is a real "nothing to check" answer, not a
@@ -2185,20 +2190,9 @@ async function runFileDiagnostics(
 			: [];
 	// #4956 F2: an enabled opt-in server is not "switched off"; the all-server
 	// door simply does not start it (its findings arrive with edits).
-	const switchedOffServerIds = notRunServerIds.flatMap((id) =>
-		isOptInAuxiliaryServerId(id) ? [] : [id],
-	);
-	const optInNotRunServerIds = notRunServerIds.flatMap((id) =>
-		isOptInAuxiliaryServerId(id) ? [id] : [],
-	);
 	const noAuxiliaryLine = [
 		"No auxiliary findings.",
-		...(switchedOffServerIds.length > 0
-			? [`Switched off, not run: ${switchedOffServerIds.join(", ")}.`]
-			: []),
-		...(optInNotRunServerIds.length > 0
-			? [`Opt-in, not run by this check: ${optInNotRunServerIds.join(", ")}.`]
-			: []),
+		...auxiliaryNotRunSentences(notRunServerIds),
 	].join(" ");
 
 	let text: string;
@@ -2724,6 +2718,10 @@ async function collectBatchDiagnostics(
 async function expandPathsToFiles(
 	cwd: string,
 	rawPaths: string[],
+	// #5371: entries the shared reader already resolved (and expanded from a
+	// glob) skip the host resolver — running `resolveHostToolPath` twice on a
+	// path it produced is the #5047 F2 fold.
+	pathsAlreadyResolved = false,
 ): Promise<{
 	files: string[];
 	directoriesWithoutFiles: string[];
@@ -2733,7 +2731,9 @@ async function expandPathsToFiles(
 	const directories: string[] = [];
 	const seenFileKeys = new Set<string>();
 	for (const entry of rawPaths) {
-		const abs = normalizeMapKey(resolveHostToolPath(entry, cwd));
+		const abs = normalizeMapKey(
+			pathsAlreadyResolved ? entry : resolveHostToolPath(entry, cwd),
+		);
 		let stat: fs.Stats | undefined;
 		try {
 			stat = fs.statSync(abs);

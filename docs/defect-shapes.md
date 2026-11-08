@@ -103,6 +103,11 @@ fixes its members says so instead of quoting a before and after.
    failure as well as success. Teardown does not await a dead resource forever.
    Enforced by `tests/config/hook-await-bounds.test.ts` (partial: hook awaits
    and timeout races only; timer handles have no detector).
+   Consolidation verdict: stay distributed. Every named timer in clients/,
+   tools/, mcp/ and index.ts is cleared or unref'd in its own file, and the
+   anonymous awaited sleeps settle on their own timers. A `sleep(ms)` helper
+   would relocate one line per site and must stay ref'd, because an unref'd
+   awaited sleep lets a CLI exit mid-await.
 
 6. **Incomplete freshness:** use the right content, size, mtime, dependency,
    and existence axes. Missing finding paths are not current findings.
@@ -155,6 +160,22 @@ fixes its members says so instead of quoting a before and after.
     shows the recompute is the cost, and then the entry carries the generation
     it was derived from. Tool-run caches are governed by the delivery gate
     instead. ADR: docs/adr/0006-derived-state-benchmark-first.md
+
+93. **Unlocked async read-modify-write of a shared record:** an async read, a
+    merge and a whole-file publish with no lock between them publish a snapshot,
+    not a delta, so a same-tick or cross-process sibling's entries vanish. A
+    timestamp stamped before the lock can also invert commit order against a
+    `ts > cursor` reader. `clients/recent-touches.ts` was this case: two
+    `publishFilesTouched` calls read the same record, and the second rename
+    dropped the first's batch (#5377, fixed in PR #5385, which commits through
+    `clients/durable-store.ts` and stamps `ts` inside the lock). Census: not
+    countable as one command; the 2026-11-07 sweep of the `writeFileAtomic`
+    users found this the only async read-merge-write, while
+    `clients/mutation-attribution.ts` and `clients/metrics-history.ts` are
+    synchronous (cross-process only). Enforcer: none: judgment-only, a scan
+    would have to follow a value from its read to its publish. Screen: does the
+    write's value come from a read of the same target with an await between, and
+    is any ordering field assigned outside the lock?
 
 </important>
 
@@ -470,6 +491,12 @@ file-scoped worklist and receives no project-wide scanner output.
     Census: not countable yet. Enforcer: none: judgment-only. A scan cannot
     tell a copied rule from a coincidental literal without reading what the
     value feeds. Instances and dates: `HISTORY.md`.
+    Consolidation verdict: stay distributed for the two copies of the
+    glob-to-RegExp rule (`globToRegExp` in clients/file-utils.ts and
+    `matchesPattern` in clients/read-guard.ts differ in case and `?` handling,
+    and read-guard's production input is its fixed defaults) and for the inline
+    regex-escape one-offs in scripts/ (escape-regexp-fold-sweep admits them; an
+    unbuilt script cannot import clients/string-utils.js).
 
 88. **Learned attribution keyed on a name alone:** tier 4 of
     `classifyMutatingTool` admits any tool name that was once seen with a disk
@@ -484,6 +511,19 @@ file-scoped worklist and receives no project-wide scanner output.
     the learned lookup or the arm gate on name plus path alone? Census: not
     countable. Enforcer: none: judgment-only, the exempt population is whatever
     other providers replay or mix. Instances and dates: `HISTORY.md`.
+
+91. **Failure kind checked after the generic error branch:** a timeout or abort
+    result also carries `error`, so an `if (result.error)` placed
+    before `failure === "timeout"` makes that branch, and the state it updates,
+    unreachable. The autofix timeout in `clients/file-utils.ts` was this case:
+    it never armed the spawn-timeout cooldown, so every edit to a wedged tool
+    paid the full timeout (#5376, fixed in PR #5383). Census: not countable as
+    one command; the 2026-11-07 sweep of the `if (result.error)` sites found
+    this one the only site where that check shadowed a cooldown arm. Enforcer:
+    none: judgment-only, the order of checks is code shape, and a scan cannot
+    tell a dead branch from a deliberate fallback. Screen: does every
+    non-success exit reach the state updates the transition table gives it, or
+    does a broader check catch it first?
 
 </important>
 
@@ -592,6 +632,8 @@ file-scoped worklist and receives no project-wide scanner output.
     the sink) and fail closed on an unrecognised form. Screen: plant an
     alias, an indirect call and a value reached through another binding,
     and quote each result; every green plant is fixed or named as a residual.
+    For a call-site scanner add a computed member key (`module["require"](x)`)
+    and a renamed callee (`__require`).
     On 2026-10-18 five detector PRs took two to six rounds each because
     every verify found one more spelling. A detector's first round therefore lists its admitted forms
     and refuses everything else; a residual names an admitted form that is
@@ -712,6 +754,19 @@ file-scoped worklist and receives no project-wide scanner output.
     clock value for some other purpose.
     Instances and dates: `HISTORY.md`.
 
+92. **Test double with a result shape the real producer never returns:** a
+    double that combines fields the real producer never returns passes for the
+    wrong reason and pins a dead branch. The timeout double in
+    `tests/clients/spawn-timeout-cooldown.test.ts` returned
+    `{ error: null, failure: "timeout" }`, while `safeSpawnAsync` returns
+    `error: Error(...)` with the timeout, so the test stayed green on the broken
+    ordering in shape 91 (#5376, fixed in PR #5383; the double now carries the
+    real shape). Census: not countable as one command; the 2026-11-07 census met
+    this one instance. Enforcer: none: judgment-only, a scan cannot tell which
+    fields a producer returns without running it. Screen: was the double's
+    result shape copied from a real run of the producer, or driven through
+    `tests/support/fake-child.ts`, or written by hand?
+
 </important>
 
 <important if="session, turn or generation lifecycle">
@@ -756,6 +811,13 @@ file-scoped worklist and receives no project-wide scanner output.
 
 30. **Load-time platform constant:** use a live platform read or an isolated
     fresh import for every platform branch test.
+    Consolidation verdict: stay distributed, because the rule admits an isolated
+    fresh import and the seam is the one-line read `process.platform`, inline at
+    136 production sites; a helper relocates the read. Five production
+    module-load reads remain (`JAVA_EXE` in jvm-runtime.ts, `isWindows` in
+    lsp/launch.ts and instance-reaper.ts, `gitignoreGlobOptions` in
+    file-utils.ts, `RUNNERS.gradle.command` in test-runner-client.ts).
+    Enforcer: none: judgment-only; a census would only pin these five.
 
 55. **Field inherited across entry kinds:** when a coalescing queue carries a
     field from a replaced entry into its replacement (a read stamp, a save

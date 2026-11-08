@@ -114,7 +114,7 @@
     },
     "metadata": {
       "type": "object",
-      "additionalProperties": false,
+      "description": "Free-form data, as in ast-grep's own schema. pi-lens reads weight and category; other keys (tags, examples, has_fix, sonar, the vendored ast-grep-essentials marker) are carried for authors and never change what a rule matches. ast-grep 0.51.1 refuses unknown top-level keys, so extra data belongs here (#5424).",
       "properties": {
         "weight": {
           "type": "number",

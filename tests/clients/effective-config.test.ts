@@ -91,6 +91,8 @@ afterEach(() => {
 interface Layout {
 	/** Files written relative to the FAKE HOME. */
 	readonly files: Readonly<Record<string, unknown>>;
+	/** Verbatim text files (project config of other tools), relative to the home. */
+	readonly raw?: Readonly<Record<string, string>>;
 	/** Project directory, relative to the fake home. */
 	readonly startDir: string;
 }
@@ -115,6 +117,11 @@ async function viewFor(
 		const target = path.join(home, relative);
 		fs.mkdirSync(path.dirname(target), { recursive: true });
 		fs.writeFileSync(target, JSON.stringify(content, null, 2));
+	}
+	for (const [relative, text] of Object.entries(layout.raw ?? {})) {
+		const target = path.join(home, relative);
+		fs.mkdirSync(path.dirname(target), { recursive: true });
+		fs.writeFileSync(target, text);
 	}
 	const projectDir = path.join(home, layout.startDir);
 	fs.mkdirSync(projectDir, { recursive: true });
@@ -486,8 +493,103 @@ describe("effectiveConfig — why is X running (#2415 AC)", () => {
 				"selected",
 				"not-registered-for-kind",
 				"no-dispatch-plan",
+				"no-project-config",
 			]).toContain(tool.reason);
 		}
+	});
+
+	// #5408 divergence 5: `selected` came from the dispatch plan alone, so a
+	// runner that skips for want of project config (eslint, mypy, detekt,
+	// golangci-lint, phpstan) was reported selected while the dispatcher ran it
+	// to a silent skip. The view now asks the runner's own declared predicate.
+	describe("runners that skip for want of project config (#5408)", () => {
+		const tool = (view: EffectiveConfigView, id: string) =>
+			resolvedFile(view)?.tools.find((entry) => entry.id === id);
+
+		it("reports eslint as not selected, with the reason, when no eslint config exists", async () => {
+			const { view } = await viewFor(
+				{ files: {}, raw: { "proj/package.json": "{}" }, startDir: "proj" },
+				{ file: "a.ts" },
+			);
+			expect(tool(view, "eslint")?.selected).toBe(false);
+			expect(tool(view, "eslint")?.reason).toBe("no-project-config");
+			// A runner with no config requirement stays selected.
+			expect(tool(view, "biome-check-json")?.reason).toBe("selected");
+		});
+
+		it("reports eslint as selected once the project has a flat config", async () => {
+			const { view } = await viewFor(
+				{
+					files: {},
+					raw: { "proj/eslint.config.js": "export default [];\n" },
+					startDir: "proj",
+				},
+				{ file: "a.ts" },
+			);
+			expect(tool(view, "eslint")?.selected).toBe(true);
+			expect(tool(view, "eslint")?.reason).toBe("selected");
+		});
+
+		it("answers per runner: mypy needs [tool.mypy], ruff-lint does not", async () => {
+			const bare = await viewFor(
+				{
+					files: {},
+					raw: { "proj/pyproject.toml": "# [tool.mypy]\n" },
+					startDir: "proj",
+				},
+				{ file: "a.py" },
+			);
+			expect(tool(bare.view, "mypy")?.reason).toBe("no-project-config");
+			expect(tool(bare.view, "ruff-lint")?.selected).toBe(true);
+			const real = await viewFor(
+				{
+					files: {},
+					raw: { "proj/pyproject.toml": "[tool.mypy]\n" },
+					startDir: "proj",
+				},
+				{ file: "a.py" },
+			);
+			expect(tool(real.view, "mypy")?.selected).toBe(true);
+		});
+
+		it("answers credo by mix.exs in the runner's own directory and vale by .vale.ini (#5414 F2)", async () => {
+			// Recurrence: both skipped in dispatch while the view said `selected`.
+			const bare = await viewFor(
+				{ files: {}, raw: { "proj/mix.exs.bak": "" }, startDir: "proj" },
+				{ file: "a.ex" },
+			);
+			expect(tool(bare.view, "credo")?.reason).toBe("no-project-config");
+			const real = await viewFor(
+				{ files: {}, raw: { "proj/mix.exs": "" }, startDir: "proj" },
+				{ file: "a.ex" },
+			);
+			expect(tool(real.view, "credo")?.selected).toBe(true);
+			const noVale = await viewFor(
+				{ files: {}, raw: { "proj/README": "" }, startDir: "proj" },
+				{ file: "a.md" },
+			);
+			expect(tool(noVale.view, "vale")?.reason).toBe("no-project-config");
+			const vale = await viewFor(
+				{ files: {}, raw: { "proj/.vale.ini": "" }, startDir: "proj" },
+				{ file: "a.md" },
+			);
+			expect(tool(vale.view, "vale")?.selected).toBe(true);
+		});
+
+		it("a denied runner still reports the denial, not the missing config", async () => {
+			const { view } = await viewFor(
+				{
+					files: {
+						".pi-lens/config.json": {
+							dispatch: { disabledRunners: ["eslint"] },
+						},
+					},
+					startDir: "proj",
+				},
+				{ file: "a.ts" },
+			);
+			expect(tool(view, "eslint")?.reason).toBe("disabled-by-config");
+		});
 	});
 
 	// `dispatch.disabledRunners`: the runner-level sibling of

@@ -218,11 +218,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "a05799527c99af28",
 		reason: PRE_RULE,
 	}, // :61
-	"clients/bus-publish.ts": {
-		silent: 1,
-		identities: "5942496acd59b074",
-		reason: PRE_RULE,
-	}, // :175
 	"clients/cache-manager.ts": {
 		silent: 5,
 		identities: "43974c850f2eb8df",
@@ -501,9 +496,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :156
 	"clients/dispatch/runners/swiftlint.ts": {
 		silent: 1,
-		identities: "102fe3fe1a609dfd",
+		identities: "e8e154dc40dff426",
 		reason: PRE_RULE,
-	}, // :158
+	}, // :161; now `return null` (#5411): the unreadable verdict is finishParsedRun's.
 	"clients/dispatch/runners/terragrunt.ts": {
 		silent: 1,
 		identities: "53f0ed4e5a760b9e",
@@ -546,9 +541,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :334, :382, :506, :545, :698, :1328, :1638
 	"clients/dispatch/runners/vale.ts": {
 		silent: 1,
-		identities: "ebc8ac6568c8a7ac",
+		identities: "e8e154dc40dff426",
 		reason: PRE_RULE,
-	}, // :134
+	}, // :125; now `return null` (#5411): the unreadable verdict is finishParsedRun's.
 	"clients/dispatch/runners/yaml-rule-parser.ts": {
 		silent: 5,
 		identities: "eaafa0a2a75a5c2a",
@@ -1060,10 +1055,11 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :298, :370, :382, :552, :569, :847, :910, :1926, :2578, :2607, :2832
 	"clients/recent-touches.ts": {
-		silent: 6,
-		identities: "775f4885df22095e",
+		silent: 5,
+		identities: "eab5c2f88f4f29ce",
 		reason: PRE_RULE,
-	}, // :96, :111, :182, :225, :278, :308
+	}, // :129, :234, :277, :330, :360 (#5377: 6 -> 5, the shared record parse
+	// carries a `none:` line for the corrupt-body arm the fold moved into it)
 	"clients/resource-sampler.ts": {
 		silent: 5,
 		identities: "a6c6697ae310d788",
@@ -1216,10 +1212,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :162
 	"clients/tool-policy.ts": {
-		silent: 29,
-		identities: "b5570d8af2930d78",
+		silent: 18,
+		identities: "1658ee10420ff18e",
 		reason: PRE_RULE,
-	}, // :1969, :1985, :2009, :2047, :2099, :2111, :2127, :2142, :2149, :2163, :2180, :2194, :2201, :2219, :2226, :2240, :2260, :2273, :2284, :2301, :2822, :2878, :2904, :2924, :2960, :3019, :3036, :3055, :3063
+	}, // :1946, :1962, :1986, :2024, :2076, :2088, :2104, :2124, :2151, :2669, :2725, :2751, :2771, :2807, :2866, :2883, :2902, :2910
 	"clients/tool-render.ts": {
 		silent: 2,
 		identities: "bf1a83100ccaa695",
@@ -1343,10 +1339,16 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	"tools/lens-diagnostics.ts": {
 		// 7 -> 6 (#5041): the `paths` cap guard's try/catch is gone, because the
 		// shared reader refuses an over-cap list before the scope is built.
-		silent: 6,
-		identities: "58466145d579efae",
+		// Identity moved (#5044): the stat-failure catch arm now feeds the
+		// per-anchor weak call of the cross-file cache reader; same six sites.
+		// 6 -> 5 (#5044 r2): the stat-failure arm moved into the shared per-anchor
+		// gate `cachedAnchorMarks` (clients/diagnostic-dispositions.ts), which
+		// declares its own `none:` reason rather than adding a silent handler to
+		// that file. A move, not a new swallow.
+		silent: 5,
+		identities: "ca582e7c96beadc4",
 		reason: PRE_RULE,
-	}, // :276, :980, :1040, :1495, :1555, :2269
+	}, // :280, :1016, :1612, :1672, :2400
 	"tools/lsp-diagnostics.ts": {
 		silent: 10,
 		identities: "2e5c32f96dcee285",

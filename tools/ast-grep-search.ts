@@ -29,6 +29,7 @@ import {
 	defaultedCwdHomeRefusal,
 	readAstGrepLang,
 	MAX_PATHS_ENTRIES,
+	PATHS_GLOB_CLAUSE,
 	readPathsArgument,
 } from "./shared.js";
 
@@ -364,7 +365,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
 					maxItems: MAX_PATHS_ENTRIES,
-					description: "Files or directories to search.",
+					description: `Files or directories to search. ${PATHS_GLOB_CLAUSE}`,
 				}),
 			),
 			selector: Type.Optional(
@@ -558,9 +559,10 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				const hasNodeKind = normalizedNodeKind.length > 0;
 				const rawPaths = params.paths;
 				// #5041: one reader owns the `paths` entry rules for every tool.
-				const pathsRead = readPathsArgument(rawPaths, {
+				const pathsRead = await readPathsArgument(rawPaths, {
 					cwd: ctx.cwd,
 					absent: "cwd",
+					signal: abortSignal,
 				});
 				if (pathsRead.refusal) {
 					const errorRaw = pathsRead.refusal;

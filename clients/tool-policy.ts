@@ -9,6 +9,7 @@ import {
 	normalizeMapKey,
 	walkUpDirs,
 } from "./path-utils.js";
+import { hasToolConfig } from "./tool-config-presence.js";
 import type { ProjectConventions } from "./project-conventions.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
 
@@ -1252,25 +1253,7 @@ const STYLELINT_CONFIGS = [
 	"stylelint.config.mjs",
 ];
 
-const SQLFLUFF_CONFIGS = [
-	".sqlfluff",
-	"pyproject.toml",
-	"setup.cfg",
-	"tox.ini",
-];
-
 const RUBOCOP_CONFIGS = [".rubocop.yml", ".rubocop.yaml"];
-
-const MYPY_CONFIGS = ["mypy.ini", ".mypy.ini", "setup.cfg", "pyproject.toml"];
-
-const YAMLLINT_CONFIGS = [
-	".yamllint",
-	".yamllint.yml",
-	".yamllint.yaml",
-	"pyproject.toml",
-	"setup.cfg",
-	"tox.ini",
-];
 
 const MARKDOWNLINT_CONFIGS = [
 	// markdownlint-cli2's built-in config names (keep this list in sync with
@@ -1304,8 +1287,6 @@ const PRETTIER_CONFIGS = [
 	"prettier.config.mjs",
 	"prettier.config.ts",
 ];
-
-const RUFF_PROJECT_CONFIGS = ["ruff.toml", ".ruff.toml"];
 
 const GOLANGCI_CONFIGS = [
 	".golangci.yml",
@@ -1418,12 +1399,15 @@ export function getLinterPolicyForFile(
 	}
 
 	if (ext === ".sql") {
+		// The runner lints an unconfigured project on the ANSI dialect (#1937),
+		// so the label states that. The formatter is the config-gated surface:
+		// `sqlfluff fix` writes, and refuses a project with no `hasSqlfluffConfig`.
 		return {
 			runnerNames: ["sqlfluff"],
 			preferredRunners: ["sqlfluff"],
 			defaultRunner: "sqlfluff",
-			defaultWhenUnconfigured: false,
-			gate: "config-first",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
 		};
 	}
 
@@ -2124,40 +2108,7 @@ export function hasStylelintConfig(cwd: string): boolean {
 }
 
 export function hasSqlfluffConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of SQLFLUFF_CONFIGS) {
-			const cfgPath = path.join(dir, cfg);
-			if (!fs.existsSync(cfgPath)) continue;
-			if (cfg === "pyproject.toml") {
-				try {
-					const content = fs.readFileSync(cfgPath, "utf-8");
-					if (content.includes("[tool.sqlfluff]")) return true;
-				} catch {}
-				continue;
-			}
-			if (cfg === "setup.cfg" || cfg === "tox.ini") {
-				try {
-					const content = fs.readFileSync(cfgPath, "utf-8");
-					if (content.includes("[sqlfluff]")) return true;
-				} catch {}
-				continue;
-			}
-			return true;
-		}
-	}
-
-	for (const dir of walkUpDirs(cwd)) {
-		for (const depFile of ["requirements.txt", "Pipfile", "pyproject.toml"]) {
-			const depPath = path.join(dir, depFile);
-			if (!fs.existsSync(depPath)) continue;
-			try {
-				const content = fs.readFileSync(depPath, "utf-8").toLowerCase();
-				if (content.includes("sqlfluff")) return true;
-			} catch {}
-		}
-	}
-
-	return false;
+	return hasToolConfig("sqlfluff", cwd);
 }
 
 export function hasRubocopConfig(cwd: string): boolean {
@@ -2177,64 +2128,11 @@ export function hasRubocopConfig(cwd: string): boolean {
 }
 
 export function hasMypyConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of MYPY_CONFIGS) {
-			const cfgPath = path.join(dir, cfg);
-			if (!fs.existsSync(cfgPath)) continue;
-			if (cfg === "setup.cfg") {
-				try {
-					if (fs.readFileSync(cfgPath, "utf-8").includes("[mypy]")) return true;
-				} catch {}
-				continue;
-			}
-			if (cfg === "pyproject.toml") {
-				try {
-					if (fs.readFileSync(cfgPath, "utf-8").includes("[tool.mypy]"))
-						return true;
-				} catch {}
-				continue;
-			}
-			return true;
-		}
-	}
-	return false;
+	return hasToolConfig("mypy", cwd);
 }
 
 export function hasYamllintConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of YAMLLINT_CONFIGS) {
-			const cfgPath = path.join(dir, cfg);
-			if (!fs.existsSync(cfgPath)) continue;
-			if (cfg === "pyproject.toml") {
-				try {
-					const content = fs.readFileSync(cfgPath, "utf-8");
-					if (content.includes("[tool.yamllint]")) return true;
-				} catch {}
-				continue;
-			}
-			if (cfg === "setup.cfg" || cfg === "tox.ini") {
-				try {
-					const content = fs.readFileSync(cfgPath, "utf-8");
-					if (content.includes("[yamllint]")) return true;
-				} catch {}
-				continue;
-			}
-			return true;
-		}
-	}
-
-	for (const dir of walkUpDirs(cwd)) {
-		for (const depFile of ["requirements.txt", "Pipfile", "pyproject.toml"]) {
-			const depPath = path.join(dir, depFile);
-			if (!fs.existsSync(depPath)) continue;
-			try {
-				const content = fs.readFileSync(depPath, "utf-8").toLowerCase();
-				if (content.includes("yamllint")) return true;
-			} catch {}
-		}
-	}
-
-	return false;
+	return hasToolConfig("yamllint", cwd);
 }
 
 export function hasMarkdownlintConfig(cwd: string): boolean {
@@ -2257,44 +2155,11 @@ export function hasPrettierConfig(cwd: string): boolean {
 }
 
 export function hasBlackConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		const pyproject = path.join(dir, "pyproject.toml");
-		if (fs.existsSync(pyproject)) {
-			try {
-				if (fs.readFileSync(pyproject, "utf-8").includes("[tool.black]"))
-					return true;
-			} catch {}
-		}
-	}
-
-	for (const dir of walkUpDirs(cwd)) {
-		for (const depFile of ["requirements.txt", "Pipfile"]) {
-			const depPath = path.join(dir, depFile);
-			if (!fs.existsSync(depPath)) continue;
-			try {
-				if (fs.readFileSync(depPath, "utf-8").toLowerCase().includes("black"))
-					return true;
-			} catch {}
-		}
-	}
-
-	return false;
+	return hasToolConfig("black", cwd);
 }
 
 export function hasRuffConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of RUFF_PROJECT_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-		const pyproject = path.join(dir, "pyproject.toml");
-		if (fs.existsSync(pyproject)) {
-			try {
-				if (fs.readFileSync(pyproject, "utf-8").includes("[tool.ruff]"))
-					return true;
-			} catch {}
-		}
-	}
-	return false;
+	return hasToolConfig("ruff", cwd);
 }
 
 /**
@@ -2374,7 +2239,7 @@ export function hasGolangciConfig(cwd: string): boolean {
 // per-directory: callers pass the EDITED FILE's directory so this agrees with
 // what the runner will actually hand tflint via `--config`.
 export function hasTflintConfig(startDir: string): boolean {
-	return findNearestContaining(startDir, [".tflint.hcl"]) !== undefined;
+	return hasToolConfig("tflint", startDir);
 }
 
 export function hasClangFormatConfig(cwd: string): boolean {
@@ -2537,19 +2402,8 @@ export function hasPhpstanConfig(cwd: string): boolean {
 	return findNearestContaining(cwd, PHPSTAN_CONFIGS) !== undefined;
 }
 
-const DETEKT_CONFIGS = [
-	"detekt.yml",
-	".detekt.yml",
-	path.join("config", "detekt", "detekt.yml"),
-	path.join("detekt", "detekt.yml"),
-];
-
 export function hasDetektConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (DETEKT_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg))))
-			return true;
-	}
-	return false;
+	return hasToolConfig("detekt", cwd);
 }
 
 // ktfmt has no native config file format; these are pi-lens opt-in markers plus

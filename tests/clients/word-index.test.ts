@@ -665,6 +665,75 @@ describe("word-index query key set (#5135)", () => {
 	});
 });
 
+// #5135 r2 (F1/F2/F6): an inline `lang:` token answers the SAME question as the
+// structured `lang`, over the same filename-aware registry predicate. Recurrence
+// guarded: PR #5373 r1 found inline `lang:css|json|terraform` narrowed against
+// master (`.scss/.less/.sass`, `.jsonc`, `.tfvars` lost), inline
+// `lang:dockerfile`/`lang:bash` missing `Dockerfile`/`Makefile` that structured
+// `lang` finds, and `lang:constructor` throwing a TypeError off the prototype.
+describe("inline lang: vocabulary (#5135)", () => {
+	const named = buildWordIndex([
+		{ path: "src/x.css", content: "zzfoo" },
+		{ path: "src/y.scss", content: "zzfoo" },
+		{ path: "src/z.less", content: "zzfoo" },
+		{ path: "src/w.sass", content: "zzfoo" },
+		{ path: "cfg/a.json", content: "zzfoo" },
+		{ path: "cfg/tsconfig.jsonc", content: "zzfoo" },
+		{ path: "infra/main.tf", content: "zzfoo" },
+		{ path: "infra/env.tfvars", content: "zzfoo" },
+		{ path: "Dockerfile", content: "zzfoo" },
+		{ path: "Makefile", content: "zzfoo" },
+		{ path: "src/run.sh", content: "zzfoo" },
+		{ path: "src/app.ts", content: "zzfoo" },
+	]);
+	const listed = (query: string) =>
+		searchWordIndex(named, query)
+			.map((r) => r.file)
+			.sort();
+
+	// F1: a token that is BOTH a FileKind and a registry language id matches the
+	// union of the two extension sets, as it did on master.
+	it("lang:css keeps .scss/.less/.sass, as on master", () => {
+		expect(listed("lang:css")).toEqual([
+			"src/w.sass",
+			"src/x.css",
+			"src/y.scss",
+			"src/z.less",
+		]);
+	});
+
+	it("lang:json keeps .jsonc, as on master", () => {
+		expect(listed("lang:json")).toEqual(["cfg/a.json", "cfg/tsconfig.jsonc"]);
+	});
+
+	it("lang:terraform keeps .tfvars, as on master", () => {
+		expect(listed("lang:terraform")).toEqual([
+			"infra/env.tfvars",
+			"infra/main.tf",
+		]);
+	});
+
+	// F2: the filename-aware half of the predicate is shared with the structured
+	// filter, so a named file is found by the language id that declares it.
+	it("lang:dockerfile finds Dockerfile", () => {
+		expect(listed("lang:dockerfile")).toEqual(["Dockerfile"]);
+	});
+
+	it("lang:bash finds Makefile and the .sh file", () => {
+		expect(listed("lang:bash")).toEqual(["Makefile", "src/run.sh"]);
+	});
+
+	// F6: `constructor` / `__proto__` are not own keys of any vocabulary table.
+	it.each(["constructor", "__proto__"])(
+		"lang:%s refuses as an unknown language, not a TypeError",
+		(token) => {
+			expect(() => searchWordIndex(named, `lang:${token}`)).toThrow(
+				WordIndexQueryError,
+			);
+		},
+	);
+});
+
 describe("searchWordIndex priors", () => {
 	it("demotes a test-path file below an equivalent source match", () => {
 		const index = buildWordIndex([

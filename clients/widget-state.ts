@@ -21,10 +21,12 @@ import type { FormatterOutcomeKind } from "./formatters.js";
 import {
 	anchorsForDiagnostic,
 	applyDispositions,
+	cachedAnchorMarks,
 	getDisposition,
 	registerWidgetDispositionReconciler,
 	strictAnchorSpan,
 	strictAnchorSpansIn,
+	type CachedAnchorMarks,
 	type Disposition,
 	type DispositionMarkTarget,
 } from "./diagnostic-dispositions.js";
@@ -323,15 +325,23 @@ interface FileRecord {
 	/**
 	 * #5258: why no check of this file's kind completed in the run that wrote
 	 * the snapshot (`DispatchResult.verdict`, unchecked arm). An empty snapshot
-	 * of such a file is not a clean result, so the footer withholds `✓ clean`
-	 * for it. Set only by {@link recordDiagnostics}, from a file a check could have
-	 * covered (never a kindless or generated file: nothing can retire that).
-	 * Cleared by a later write whose check completed, or by a scan that answers
-	 * for the file ({@link recordDiagnostics}). Every other commit keeps it: a
-	 * full scan's correlated write ({@link reconcileCorrelatedScanDiagnostics})
-	 * is handed files no server confirmed (#5285 r3).
+	 * of such a file is not a clean result, so no surface reads it as one: the
+	 * footer withholds `✓ clean`, and every cache-only report names the reason
+	 * ({@link getFileDiagnosticSummaries}, #5287). Set only by
+	 * {@link recordDiagnostics}. Cleared by a later write whose check completed,
+	 * or by a scan that answers for the file ({@link recordDiagnostics}). Every
+	 * other commit keeps it: a full scan's correlated write
+	 * ({@link reconcileCorrelatedScanDiagnostics}) is handed files no server
+	 * confirmed (#5285 r3).
 	 */
 	uncheckedReason?: string;
+	/**
+	 * #5287: no check can ever cover this file (no file kind, a generated file),
+	 * so nothing retires `uncheckedReason`. Only the write's own line and the
+	 * reports say so; the footer neither counts such a file nor lets it stand
+	 * for a clean session (#5285 r2).
+	 */
+	uncheckedInapplicable?: true;
 	touchedAt: number;
 }
 
@@ -449,32 +459,121 @@ export function reconcileWidgetDisposition(
 			source = "";
 		}
 	}
-	const active = new Set(
-		applyDispositions(current, cwd, target.filePath, source),
-	);
+	// #5044: a record can hold rows citing ANOTHER file (`citedFile`, #5020) —
+	// helm-lint's chart findings reach the template's record while the template
+	// is written. Anchor every row on the file IT names, never on the record
+	// key: anchored on the target, a mark on one file's finding tagged (or
+	// dropped) another file's row, and a mark on the cited file never reached
+	// the row. Rows without a cite — every pre-#5020 persisted row — land in
+	// the target's own group and take the pre-#5044 sequence unchanged.
+	const groups = new Map<string, WidgetDiagnostic[]>();
+	for (const diagnostic of current) {
+		const anchor = diagnostic.citedFile ?? target.filePath;
+		const group = groups.get(anchor);
+		if (group) group.push(diagnostic);
+		else groups.set(anchor, [diagnostic]);
+	}
+	// #5044 round 2: one verdict per CITED anchor, taken from the ONE gate the
+	// cached reader runs (`cachedAnchorMarks`), so the two readers cannot
+	// disagree about the same mark on the same row:
+	//  - F1: a cited anchor's freshness is judged against the newest observation
+	//    among the rows citing it. Re-deriving a STRICT anchor from bytes NEWER
+	//    than the row "confirmed" a mark hashed on a different revision — two
+	//    identical line texts across a revision boundary are a coincidence, not
+	//    a finding's location — and hid a STOP-tier finding from the footer while
+	//    `lens_diagnostics mode=all` still listed it. A stale anchor now anchors
+	//    weak marks only, exactly as the cached reader has always done.
+	//  - F2: a cited anchor outside the project root on the identity axis, or one
+	//    this process cannot read, is refused outright — #5067's owner rule, which
+	//    `applyFindingPolicyByOwner` already fails closed. No mark of any kind is
+	//    looked up for its rows, because a full LSP sweep keeps that finding and a
+	//    footer that hid it was the disagreement the agent read as clean.
+	// The target's own anchor keeps the content the mark was made against (the
+	// revision the mark hashed), so no gate applies to it; its unreadable case is
+	// the `source = ""` fallback above, unchanged from master.
+	const citedMarks = new Map<string, CachedAnchorMarks>();
+	const citedAnchorMarks = (
+		anchor: string,
+		group: readonly WidgetDiagnostic[],
+	): CachedAnchorMarks => {
+		const hit = citedMarks.get(anchor);
+		if (hit) return hit;
+		const decision = cachedAnchorMarks({
+			cwd,
+			anchor,
+			rows: group,
+			cited: true,
+			strictAnchors: true,
+			// Best-effort like `applyDispositionsMultiFile`'s read, and through
+			// this module's own reader so an anchor whose bytes cannot be had
+			// still leaves its bounded `widget-mark-anchor-unreadable` record.
+			readContent: (filePath) => readContentOrUndefined(filePath),
+		});
+		citedMarks.set(anchor, decision);
+		return decision;
+	};
+	const active = new Set<WidgetDiagnostic>();
+	for (const [anchor, group] of groups) {
+		if (anchor === target.filePath) {
+			for (const d of applyDispositions(group, cwd, anchor, source)) {
+				active.add(d);
+			}
+			continue;
+		}
+		const decision = citedAnchorMarks(anchor, group);
+		// A refused anchor feeds no bytes to the filter pass, and the ONE place
+		// that enforces the refusal is the lookup in `normalized` below: a
+		// refused group still runs the filter, so its rows keep the same
+		// `active` bookkeeping as any other group, and no disposition of any
+		// kind is looked up for them (a row the store held ONLY because a mark
+		// suppressed it is still retired — #3158 rule 3).
+		// Skipping the pass here instead was tried and is not the enforcement:
+		// neutering that `continue` left every test green, because a row the
+		// filter dropped is kept live by the lookup guard anyway (#5044 r2).
+		const anchorContent = decision.marks === "strict" ? decision.content : "";
+		for (const d of applyDispositions(group, cwd, anchor, anchorContent)) {
+			active.add(d);
+		}
+	}
 	const normalized: WidgetDiagnostic[] = current.flatMap((diagnostic) => {
+		const anchor = diagnostic.citedFile ?? target.filePath;
+		const decision =
+			anchor === target.filePath ? undefined : citedMarks.get(anchor);
+		const refused = decision?.marks === "refused";
+		const anchorContent =
+			decision === undefined
+				? source
+				: decision.marks === "strict"
+					? decision.content
+					: "";
 		const { strict, weak } = anchorsForDiagnostic(
 			cwd,
-			target.filePath,
+			anchor,
 			diagnostic,
-			source,
+			anchorContent,
 		);
-		const entry = getDisposition(cwd, strict) ?? getDisposition(cwd, weak);
+		const entry = refused
+			? undefined
+			: (getDisposition(cwd, strict) ?? getDisposition(cwd, weak));
 		if (
 			!active.has(diagnostic) &&
 			(entry?.disposition === "false-positive" ||
 				entry?.disposition === "suppress")
 		) {
 			// #3183: stamp the strict anchor's own SPAN so the row's lifetime can
-			// later ask the mark instead of the file's mtime. `source` is the content
-			// the anchors above were derived from, so the span is the one the mark
-			// itself binds to. Only the STRICT arm has a span — a weak `suppress`
-			// mark hashes no line — and re-tagging always re-derives it, so a stale
-			// span from an earlier tag can never survive into a new disposition.
+			// later ask the mark instead of the file's mtime. `anchorContent` is
+			// the content the anchors above were derived from, so the span is the
+			// one the mark itself binds to. Only the STRICT arm has a span — a weak
+			// `suppress` mark hashes no line — and re-tagging always re-derives it,
+			// so a stale span from an earlier tag can never survive into a new
+			// disposition. A CITED row's span is the cited file's span; the
+			// `reconcileStaleWidgetFiles` sweep still consults the record's own
+			// file, so the cited row's retirement stays the mtime gate plus the
+			// gate-side #5020 retire, as before this change.
 			const { anchorSpan: _previousSpan, ...base } = diagnostic;
 			const span =
 				entry.disposition === "false-positive"
-					? strictAnchorSpan(source, diagnostic.line)
+					? strictAnchorSpan(anchorContent, diagnostic.line)
 					: undefined;
 			return [
 				{
@@ -651,6 +750,8 @@ export interface PersistedWidgetState {
 		hasFinalDiagnosticsSnapshot: boolean;
 		/** #5258: absent in a snapshot older than the field, which reads as checked. */
 		uncheckedReason?: string;
+		/** #5287: absent in a snapshot older than the field, which reads as coverable. */
+		uncheckedInapplicable?: true;
 		touchedAt: number;
 	}>;
 }
@@ -675,6 +776,7 @@ export function exportWidgetState(): PersistedWidgetState {
 			...(rec.uncheckedReason !== undefined && {
 				uncheckedReason: rec.uncheckedReason,
 			}),
+			...(rec.uncheckedInapplicable && { uncheckedInapplicable: true }),
 			touchedAt: rec.touchedAt,
 		})),
 	};
@@ -798,6 +900,9 @@ export function importWidgetState(
 			hasFinalDiagnosticsSnapshot: f.hasFinalDiagnosticsSnapshot ?? false,
 			...(typeof f.uncheckedReason === "string" && {
 				uncheckedReason: f.uncheckedReason,
+				...(f.uncheckedInapplicable === true && {
+					uncheckedInapplicable: true,
+				}),
 			}),
 			touchedAt: recordTouchedAt,
 		});
@@ -987,10 +1092,10 @@ export function recordDiagnostics(
 	// `reconcileStaleWidgetFiles`'s `mtimeMs > touchedAt` gate so a resolved
 	// finding renders forever (the #1092 touchedAt-re-arming defect).
 	observedAt?: number,
-	// #5258: the reason no check of the file's kind completed, when the run that
-	// produced `diagnostics` was unchecked (`DispatchResult.verdict`). Omitted by
-	// a scan that answers for the file (a workspace LSP reconcile).
-	unchecked?: string,
+	// #5258: why no check of the file's kind completed, when the run that
+	// produced `diagnostics` was unchecked (`recordedUnchecked(verdict)`).
+	// Omitted by a scan that answers for the file (a workspace LSP reconcile).
+	unchecked?: { reason: string; inapplicable?: true },
 ): boolean {
 	// Drop a write that's superseded by a later same-turn edit to this file
 	// whose pipeline finished first (same race class as #555). No cache write,
@@ -1018,8 +1123,14 @@ export function recordDiagnostics(
 		observedTs,
 		key,
 	);
-	if (unchecked === undefined) delete rec.uncheckedReason;
-	else rec.uncheckedReason = unchecked;
+	if (unchecked === undefined) {
+		delete rec.uncheckedReason;
+		delete rec.uncheckedInapplicable;
+	} else {
+		rec.uncheckedReason = unchecked.reason;
+		if (unchecked.inapplicable) rec.uncheckedInapplicable = true;
+		else delete rec.uncheckedInapplicable;
+	}
 	return true;
 }
 
@@ -2019,6 +2130,16 @@ export interface FileDiagnosticSummary {
 	advisories: number;
 	hasFinalSnapshot: boolean;
 	/**
+	 * #5287: why no check of this file's kind completed in the run that wrote the
+	 * snapshot (`FileRecord.uncheckedReason`), so "no findings" is not a clean
+	 * verdict. Absent for a file a check answered for. Present for a file no
+	 * check can ever cover too: a report names it once, where the footer keeps it
+	 * out of its count.
+	 */
+	uncheckedReason?: string;
+	/** #5287: set with `uncheckedReason` when no check can ever cover the file. */
+	uncheckedInapplicable?: true;
+	/**
 	 * The full, uncapped LIVE diagnostics for this file (not limited by the TUI's
 	 * per-file storage cap). `blocking + errors + warnings` may exceed
 	 * `diagnostics.length` because a single diagnostic can be both blocking and
@@ -2067,6 +2188,12 @@ export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 			warnings: rec.diagnosticCounts.warnings,
 			advisories: countAdvisories(live),
 			hasFinalSnapshot: rec.hasFinalDiagnosticsSnapshot,
+			...(rec.uncheckedReason !== undefined && {
+				uncheckedReason: rec.uncheckedReason,
+			}),
+			...(rec.uncheckedInapplicable === true && {
+				uncheckedInapplicable: true,
+			}),
 			diagnostics: live.map((d) => ({ ...d })),
 		};
 	});
@@ -2302,7 +2429,10 @@ export function renderWidget(
 			? warningChunk
 			: uncheckedFiles.length > 0
 				? yellow(`⚠ ${uncheckedFiles.length} unchecked`)
-				: files.size > 0 && !hasPendingAnalysis
+				: // #5287: a formatter row for a file no check can cover (a generated
+					// file) is not a completed check; `✓ clean` needs one that is.
+					renderable.some((rec) => rec.uncheckedInapplicable !== true) &&
+					  !hasPendingAnalysis
 					? green("✓ clean")
 					: "";
 
@@ -2685,7 +2815,10 @@ function hasFailedFormatter(rec: FileRecord): boolean {
 
 function shouldRenderFile(rec: FileRecord): boolean {
 	return (
-		rec.hasFinalDiagnosticsSnapshot ||
+		// #5287: a final snapshot of a file no check can ever cover is not a result
+		// to draw (`✓ notes.zzz clean`) or to count; the write line and the reports
+		// say so.
+		(rec.hasFinalDiagnosticsSnapshot && rec.uncheckedInapplicable !== true) ||
 		holdsDrawableFindings(rec) ||
 		hasChangedFormatter(rec) ||
 		hasFailedFormatter(rec)
@@ -2715,6 +2848,7 @@ function hasLiveDiagnostic(rec: FileRecord): boolean {
 function isUncheckedClean(rec: FileRecord): boolean {
 	return (
 		rec.uncheckedReason !== undefined &&
+		rec.uncheckedInapplicable !== true &&
 		rec.hasFinalDiagnosticsSnapshot &&
 		classifyFileTier(rec) === "clean"
 	);

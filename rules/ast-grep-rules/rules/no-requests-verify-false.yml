@@ -13,15 +13,16 @@ rule:
     - pattern: requests.$FN($$$ARGS, verify=False, $$$REST)
     - pattern: requests.$FN($$$ARGS, $$$BEFORE, verify=False)
     - pattern: requests.$FN(verify=False)
-has_fix: false
-tags:
-  - python
-  - security
-  - tls
-  - verification
-  - cwe-295
-examples:
-  bad: |
-    r = requests.get("https://api.example.com", verify=False)
-  good: |
-    r = requests.get("https://api.example.com")
+metadata:
+  has_fix: false
+  tags:
+    - python
+    - security
+    - tls
+    - verification
+    - cwe-295
+  examples:
+    bad: |
+      r = requests.get("https://api.example.com", verify=False)
+    good: |
+      r = requests.get("https://api.example.com")

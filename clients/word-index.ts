@@ -23,7 +23,6 @@ import {
 	yieldIfOverBudget,
 } from "./cooperative-budget.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
-import { type FileKind, SPECIAL_FILENAMES } from "./file-kinds.js";
 import { isTestFileName } from "./file-role.js";
 import { resolveLanguageScope } from "./language-registry.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
@@ -1575,23 +1574,20 @@ export function parseWordIndexQuery(query: string): ParsedWordIndexQuery {
 	return { terms: termParts.join(" "), filters };
 }
 
-/** `lang:X` → a path predicate for the language token `X` (case-insensitive):
- * the extension set {@link resolveLanguageScope} resolves (a FileKind like
- * `jsts`, or a language id/grammar name like `typescript`), plus, for a file
- * named rather than suffixed (Jenkinsfile, Dockerfile), the SPECIAL_FILENAMES
- * pattern `detectFileKind` classifies it by (#5235). An unknown token refuses
- * through the shared facade, naming both vocabularies (#5135). */
+/** `lang:X` → a path predicate for the language token `X` (case-insensitive),
+ * resolved by the ONE `lang` predicate the structured `symbol_search` option
+ * also uses ({@link resolveLanguageScope}): a FileKind like `jsts`, or a
+ * language id/grammar name like `typescript`, matching by extension or by a
+ * name the registry declares (Jenkinsfile, Dockerfile, Makefile; #5235). A
+ * token that is both a FileKind and a language id matches the union of the two
+ * extension sets (`css` keeps `.scss`), as this filter always did. An unknown
+ * token refuses, naming both vocabularies (#5135). */
 function resolveLangMatcher(value: string): (file: string) => boolean {
-	const scope = resolveLanguageScope(value);
+	const scope = resolveLanguageScope(value, { includeKindExtensions: true });
 	if ("refusal" in scope) throw new WordIndexQueryError(scope.refusal);
-	const kind = value.toLowerCase() as FileKind;
-	const named = SPECIAL_FILENAMES.flatMap((entry) =>
-		entry.kind === kind ? [entry.pattern] : [],
-	);
-	return (file) =>
-		scope.extensions.includes(path.extname(file).toLowerCase()) ||
-		named.some((pattern) => pattern.test(path.basename(file)));
+	return scope.matches;
 }
+
 /** True when a word-index query carries neither search terms nor inline
  * filters — the query string contributes no scope of its own. `searchWordIndex`
  * still answers a bare empty query with an empty result; `symbolSearch` layers

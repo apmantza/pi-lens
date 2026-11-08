@@ -9,6 +9,7 @@ import { compactRenderResult } from "./render-compact.js";
 import {
 	CONSTRAINED_JSON_SCHEMA_SAMPLING,
 	MAX_PATHS_ENTRIES,
+	PATHS_GLOB_CLAUSE,
 	readAstGrepLang,
 	readPathsArgument,
 } from "./shared.js";
@@ -72,8 +73,7 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 			paths: Type.Array(Type.String(), {
 				minItems: 1,
 				maxItems: MAX_PATHS_ENTRIES,
-				description:
-					"Files or directories to outline (workspace-relative or absolute).",
+				description: `Files or directories to outline (workspace-relative or absolute). ${PATHS_GLOB_CLAUSE}`,
 			}),
 			lang: Type.Optional(
 				Type.String({
@@ -138,7 +138,10 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 			const cwd = ctx.cwd || ".";
 			// #5041: the shared `paths` reader owns the entry rules (non-string,
 			// blank, empty list, cap) and the host-path spelling for every tool.
-			const pathsRead = readPathsArgument(params.paths, { cwd });
+			const pathsRead = await readPathsArgument(params.paths, {
+				cwd,
+				signal: _signal,
+			});
 			if (pathsRead.refusal) return errorResult(`Error: ${pathsRead.refusal}`);
 			if (pathsRead.entries.length === 0)
 				return errorResult("paths is required");

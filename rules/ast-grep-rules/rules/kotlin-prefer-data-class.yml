@@ -55,12 +55,13 @@ rule:
                       kind: setter
 files:
   - "**/*.kt"
-tags:
-  - kotlin
-  - idiom
-  - readability
-examples:
-  bad: |
-    class Point(val x: Int, val y: Int)
-  good: |
-    data class Point(val x: Int, val y: Int)
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - readability
+  examples:
+    bad: |
+      class Point(val x: Int, val y: Int)
+    good: |
+      data class Point(val x: Int, val y: Int)

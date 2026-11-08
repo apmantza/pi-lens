@@ -13,7 +13,8 @@ message: >-
 note: |-
   [CWE-352] Cross-Site Request Forgery (CSRF). [REFERENCES]
       - https://stackoverflow.com/questions/42717210/samesite-cookie-in-java-application
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   any:
     - pattern: $RESP.setHeader("Set-Cookie", $T);

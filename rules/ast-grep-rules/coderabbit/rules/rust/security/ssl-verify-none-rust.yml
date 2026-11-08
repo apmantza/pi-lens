@@ -5,7 +5,8 @@ message: SSL verification disabled, this allows for MitM attacks
 note: |-
   [CWE-295]: Improper Certificate Validation [REFERENCES]
     - https://docs.rs/openssl/latest/openssl/ssl/struct.SslContextBuilder.html#method.set_verify
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   kind: call_expression
   any:

@@ -34,6 +34,7 @@ interface AnalyzeShape {
 		fixed: number;
 	};
 	diagnostics: Array<{ message: string }>;
+	verdict: { checked: boolean; reason?: string };
 }
 
 function parseAnalyze(res: Record<string, unknown>): AnalyzeShape {
@@ -109,5 +110,30 @@ describe("pilens_analyze coverage notice across repeat warm pulls (#3791)", () =
 				`${label} pull must carry the coverage warning`,
 			).toBeGreaterThanOrEqual(1);
 		}
+	}, 60_000);
+
+	// Recurrence prevented: #5287. The summary line of a file no check could
+	// cover read `0 blocking, 0 warning(s), 0 advisory(ies), 0 total`, which is
+	// what a clean file reads; the verdict was not on the result at all.
+	it("says a file no check can cover was not checked, in the summary and the verdict", async () => {
+		writeFileSync(path.join(projectDir, "notes.zzz"), "plain notes\n");
+		const res = await harness.request(20, "tools/call", {
+			name: "pilens_analyze",
+			arguments: {
+				file: path.join(projectDir, "notes.zzz"),
+				cwd: projectDir,
+				flags: { "no-lsp": true },
+			},
+		});
+		const text = (res.result as { content: { text: string }[] }).content[0]
+			.text;
+
+		expect(text.split("\n")[0]).toContain(
+			"0 total · not checked: no analyzer handles this file type",
+		);
+		expect(parseAnalyze(res).verdict).toMatchObject({
+			checked: false,
+			reason: "no analyzer handles this file type",
+		});
 	}, 60_000);
 });

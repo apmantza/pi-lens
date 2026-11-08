@@ -10,10 +10,10 @@
  *    mirror — guarded against drift by `tests/clients/grammar-source.test.ts`.
  */
 
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomic } from "./atomic-write.js";
+import { hashContentBytes } from "./content-stamp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { getPackageRoot } from "./package-root.js";
 
@@ -458,7 +458,7 @@ export function _setGrammarManifestForTests(
 
 /** `sha256:<hex>` digest of `data`, matching the manifest's format. */
 function sha256Hex(data: Buffer): string {
-	return `sha256:${createHash("sha256").update(data).digest("hex")}`;
+	return `sha256:${hashContentBytes(data)}`;
 }
 
 /**

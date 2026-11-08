@@ -357,7 +357,7 @@ describe("stryker-nightly.yml (#4005)", () => {
 	});
 
 	// Recurrence (#3801 -> #4005): the lane returned as a `mutation` job in
-	// ci.yml, where it queues behind the heavy gate on every code PR.
+	// ci.yml, where it queued behind the (since retired) heavy gate on every code PR.
 	it("leaves no mutation job and no sticky-comment script in ci.yml", () => {
 		const ci = load(readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8"));
 		expect(

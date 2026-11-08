@@ -58,11 +58,12 @@
  * returns whatever has already settled — the same "partial is OK, a hang is
  * not" shape `clients/deadline-utils.ts`'s `withDeadline(..., onTimeout:
  * "undefined")` and `clients/lsp/index.ts`'s `runWorkspaceDiagnostics` already
- * use. Already-spawned analyzer processes are NOT killed: they keep running in
- * the background (bounded by their own `SCAN_TIMEOUT_MS`/`ANALYSIS_TIMEOUT_MS`)
- * and still write their result to cache when they finish, so nothing already
- * in flight is wasted — the NEXT caller (or a background session_start/
- * turn_end pass) benefits from it. Analyzers that hadn't settled yet when the
+ * use. The analyzer spawns take safe-spawn's ambient default, which inside the
+ * `lens_diagnostics` call is the call's abort scope (#5097), so an Esc kills
+ * the processes already running; the wall-clock ceiling alone does not, and
+ * those keep running in the background (bounded by their own
+ * `SCAN_TIMEOUT_MS`/`ANALYSIS_TIMEOUT_MS`) and still write their result to
+ * cache when they finish. Analyzers that hadn't settled yet when the
  * abort fired are reported in both `cold` (so they don't silently read as
  * "ran clean") and `abortedIds` (so a caller can render a more honest reason
  * than "not applicable").
@@ -617,9 +618,13 @@ export async function fetchFreshProjectDiagnostics(
 			}
 			const startMs = Date.now();
 			const result = await clients.depChecker.scanProject(analysisRoot);
-			cacheManager.writeCache("madge", result, analysisRoot, {
-				scanDurationMs: Date.now() - startMs,
-			});
+			// #5097: a killed madge (Esc now reaches it) returns the same empty
+			// shape as "no cycles"; only a parsed scan may replace the saved row.
+			if (result.analyzed === true) {
+				cacheManager.writeCache("madge", result, analysisRoot, {
+					scanDurationMs: Date.now() - startMs,
+				});
+			}
 			record(
 				"madge",
 				circularDepsToProjectDiagnostics(analysisRoot, result.circular ?? []),

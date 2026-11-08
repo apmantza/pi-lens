@@ -5,7 +5,8 @@ message: Using RSA without OAEP mode weakens the encryption.
 note: |-
   [CWE-326] Inadequate Encryption Strength [REFERENCES]
       - https://rdist.root.org/2009/10/06/why-rsa-encryption-padding-is-critical/
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   pattern: $YST.getInstance($MODE)
 constraints:

@@ -52,7 +52,6 @@ import { mapKindToTreeSitterLanguage } from "../../clients/review-graph/builder.
 import { FORMATTER_POLICY_BY_EXTENSION } from "../../clients/tool-policy.js";
 import { EXT_TO_LANG } from "../../clients/tree-sitter-shared.js";
 import { getSymbolQueryLanguages } from "../../clients/tree-sitter-symbol-extractor.js";
-import { WordIndexQueryError } from "../../clients/word-index.js";
 
 /**
  * Extensions the registry owns that file-kinds.ts does NOT classify into a
@@ -707,11 +706,9 @@ describe("consumer projections track the registry", () => {
 			expect(symbolSearchFileMatchesLang("cfg/tsconfig.jsonc", "json")).toBe(
 				false,
 			);
-			// A token with no registry entry REFUSES (#5135) instead of answering
-			// `false` — the old "no match" reading that hid a typo.
-			expect(() =>
+			expect(
 				symbolSearchFileMatchesLang("contracts/Token.sol", "solidity"),
-			).toThrow(WordIndexQueryError);
+			).toBe(false);
 			// Unchanged rows still match.
 			expect(symbolSearchFileMatchesLang("src/App.tsx", "tsx")).toBe(true);
 			expect(symbolSearchFileMatchesLang("scripts/run.sh", "bash")).toBe(true);

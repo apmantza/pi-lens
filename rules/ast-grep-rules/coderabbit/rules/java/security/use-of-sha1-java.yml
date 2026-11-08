@@ -8,7 +8,8 @@ message: >-
 note: |-
   [CWE-328] Use of Weak Hash. [REFERENCES]
       - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   java_security_MessageDigest_getInstance_SHA-1:
     kind: method_invocation
