@@ -11,6 +11,7 @@
 
 import type { AnalysedRootSignal } from "./analysed-root.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { isJstsDeclarationFile, isJstsFactFile } from "./file-kinds.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1073,8 +1074,12 @@ export class DependencyChecker {
 			return { circular: [], count: 0 };
 		}
 		const entries = fs.readdirSync(projectRoot);
+		// #5446: the JS/TS family answers through the registry seam
+		// (`isJstsFactFile`); hand-spelling `ts|tsx|js|jsx` left `.mts`/`.cts`
+		// roots unscanned. The declaration gate keeps `.d.ts` and its
+		// `.d.mts`/`.d.cts` twins out.
 		const hasSourceFiles = entries.some(
-			(e) => /\.(ts|tsx|js|jsx)$/.test(e) && !e.endsWith(".d.ts"),
+			(e) => isJstsFactFile(e) && !isJstsDeclarationFile(e),
 		);
 		if (!hasSourceFiles) {
 			return { circular: [], count: 0 };
