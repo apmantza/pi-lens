@@ -91,6 +91,93 @@ describe("#5408 config presence: policy and runner agree", () => {
 		vi.unstubAllEnvs();
 	});
 
+	describe("a runner's declared requiresConfig is the gate its run() applies (#5408)", () => {
+		// Recurrence: `effective_config` read the dispatch plan alone and reported
+		// eslint selected while `run()` skipped. It now asks the runner's own
+		// `requiresConfig`; this proves the declaration and the gate are one.
+		it.each([
+			["eslint", "a.ts", "jsts"],
+			["mypy", "a.py", "python"],
+			["detekt", "A.kt", "kotlin"],
+			["golangci-lint", "a.go", "go"],
+			["phpstan", "a.php", "php"],
+		])(
+			"%s declares it and skips an unconfigured project without a spawn",
+			async (name, file, kind) => {
+				const env = setupTestEnvironment(`pi-lens-5408-gate-${name}-`);
+				try {
+					const filePath = write(path.join(env.tmpDir, file), "x\n");
+					const mod = await load<{
+						default: Runner & { requiresConfig?: (cwd: string) => boolean };
+					}>(`../../../../clients/dispatch/runners/${name}.js`);
+					expect(mod.default.requiresConfig?.(env.tmpDir)).toBe(false);
+
+					const result = await mod.default.run(
+						makeRunnerCtx(filePath, env.tmpDir, { kind } as never) as never,
+					);
+
+					expect(result.status).toBe("skipped");
+					expect(safeSpawn).not.toHaveBeenCalled();
+				} finally {
+					env.cleanup();
+				}
+			},
+		);
+	});
+
+	describe("mix.exs, one answer for credo and elixir-check (#5408 hand-rolled gates)", () => {
+		// Recurrence: credo.ts and elixir-check.ts each carried their own
+		// `hasMixExs` (the same one-line `existsSync`), so a fix to one left the
+		// other. Both now ask the seam.
+		const calledCommands = () => safeSpawn.mock.calls.map((c) => String(c[0]));
+
+		it("credo skips a project with no mix.exs and probes one that has it", async () => {
+			const bare = setupTestEnvironment("pi-lens-5408-credo-bare-");
+			try {
+				const file = write(path.join(bare.tmpDir, "a.ex"), "x\n");
+				const result = await runRunner("credo", file, bare.tmpDir, "elixir");
+				expect(result.status).toBe("skipped");
+				expect(safeSpawn).not.toHaveBeenCalled();
+			} finally {
+				bare.cleanup();
+			}
+			const project = setupTestEnvironment("pi-lens-5408-credo-mix-");
+			try {
+				write(path.join(project.tmpDir, "mix.exs"), "");
+				const file = write(path.join(project.tmpDir, "a.ex"), "x\n");
+				await runRunner("credo", file, project.tmpDir, "elixir");
+				expect(calledCommands().length).toBeGreaterThan(0);
+			} finally {
+				project.cleanup();
+			}
+		});
+
+		it("elixir-check compiles with mix only where mix.exs exists", async () => {
+			const bare = setupTestEnvironment("pi-lens-5408-ex-bare-");
+			try {
+				const file = write(path.join(bare.tmpDir, "a.ex"), "x\n");
+				await runRunner("elixir-check", file, bare.tmpDir, "elixir");
+				expect(
+					calledCommands().some((c) => /(^|[\\/])mix(\.\w+)?$/.test(c)),
+				).toBe(false);
+			} finally {
+				bare.cleanup();
+			}
+			safeSpawn.mockClear();
+			const project = setupTestEnvironment("pi-lens-5408-ex-mix-");
+			try {
+				write(path.join(project.tmpDir, "mix.exs"), "");
+				const file = write(path.join(project.tmpDir, "a.ex"), "x\n");
+				await runRunner("elixir-check", file, project.tmpDir, "elixir");
+				expect(
+					calledCommands().some((c) => /(^|[\\/])mix(\.\w+)?$/.test(c)),
+				).toBe(true);
+			} finally {
+				project.cleanup();
+			}
+		});
+	});
+
 	describe("divergence 1: detekt walks up in the policy, the runner checked only the cwd", () => {
 		it("runs detekt with the repo-root config when the nearest build file is a module", async () => {
 			const env = setupTestEnvironment("pi-lens-5408-detekt-");
