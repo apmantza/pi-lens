@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
-import { setupTestEnvironment } from "../../test-utils.js";
+import { pinFixtureHome, setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawn = vi.fn();
 const safeSpawnAsync = vi.fn((...args: Parameters<typeof safeSpawn>) =>
@@ -89,6 +89,89 @@ describe("#5408 config presence: policy and runner agree", () => {
 	});
 	afterEach(() => {
 		vi.unstubAllEnvs();
+	});
+
+	describe("mix never walks up, so neither does the gate (#5408 r2 F1)", () => {
+		// Recurrence: the seam climbs to $HOME, and credo/elixir-check asked it
+		// for mix.exs, so a file whose workspace dir has no mix.exs under an
+		// ancestor that has one ran `mix compile` where mix cannot find a
+		// project (master: the elixirc fallback; r1: `failed parser_error`).
+		const mixCommands = () =>
+			safeSpawn.mock.calls
+				.map((c) => String(c[0]))
+				.filter((c) => /(^|[\\/])mix(\.\w+)?$/.test(c));
+
+		it("elixir-check and credo do not run mix from a directory below the one holding mix.exs", async () => {
+			const env = setupTestEnvironment("pi-lens-5408-mix-up-");
+			try {
+				write(path.join(env.tmpDir, "umbrella", "mix.exs"), "");
+				const file = write(
+					path.join(env.tmpDir, "umbrella", "tools", "lib", "a.ex"),
+					"x\n",
+				);
+				const { dispatchLintDetailed } = await load<
+					typeof import("../../../../clients/dispatch/integration.js")
+				>("../../../../clients/dispatch/integration.js");
+				const { runners } = await dispatchLintDetailed(
+					file,
+					path.join(env.tmpDir, "umbrella", "tools"),
+					{
+						getFlag: (flag: string) =>
+							flag === "no-lsp" || flag === "no-ast-grep",
+					} as never,
+				);
+				expect(runners.map((r) => r.runnerId)).toContain("elixir-check");
+				expect(mixCommands()).toEqual([]);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("the seam answers mix at the exact directory only", async () => {
+			const { hasToolConfig } = await load<
+				typeof import("../../../../clients/tool-config-presence.js")
+			>("../../../../clients/tool-config-presence.js");
+			const env = setupTestEnvironment("pi-lens-5408-mix-exact-");
+			try {
+				write(path.join(env.tmpDir, "umbrella", "mix.exs"), "");
+				const below = path.join(env.tmpDir, "umbrella", "apps", "web");
+				fs.mkdirSync(below, { recursive: true });
+				expect(hasToolConfig("mix", below)).toBe(false);
+				expect(hasToolConfig("mix", path.join(env.tmpDir, "umbrella"))).toBe(
+					true,
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+	});
+
+	describe("credo and vale report what dispatch will do (#5408 r2 F2)", () => {
+		// Recurrence: effective_config said `selected` for credo and vale while
+		// their run() skipped for want of mix.exs / .vale.ini.
+		it.each([
+			["credo", "a.ex", "elixir"],
+			["vale", "a.md", "markdown"],
+		])(
+			"%s declares requiresConfig and skips without it",
+			async (name, file, kind) => {
+				const env = setupTestEnvironment(`pi-lens-5408-r2gate-${name}-`);
+				try {
+					const filePath = write(path.join(env.tmpDir, file), "x\n");
+					const mod = await load<{
+						default: Runner & { requiresConfig?: (cwd: string) => boolean };
+					}>(`../../../../clients/dispatch/runners/${name}.js`);
+					expect(mod.default.requiresConfig?.(env.tmpDir)).toBe(false);
+					const result = await mod.default.run(
+						makeRunnerCtx(filePath, env.tmpDir, { kind } as never) as never,
+					);
+					expect(result.status).toBe("skipped");
+					expect(safeSpawn).not.toHaveBeenCalled();
+				} finally {
+					env.cleanup();
+				}
+			},
+		);
 	});
 
 	describe("a runner's declared requiresConfig is the gate its run() applies (#5408)", () => {
@@ -227,19 +310,18 @@ describe("#5408 config presence: policy and runner agree", () => {
 	});
 
 	describe("divergence 3: tflint stop rule", () => {
-		function layout(root: string) {
-			const home = path.join(root, "home");
+		// HOME is pinned by `pinFixtureHome` (AGENTS.md: a test that pins HOME
+		// uses it); the project lives under that home.
+		function layout(slug: string) {
+			const { home } = pinFixtureHome(slug);
 			const tf = write(path.join(home, "proj", "main.tf"), "");
 			return { home, tf };
 		}
 
 		it("passes --config for a .tflint.hcl in $HOME, the same config the policy reports", async () => {
-			const env = setupTestEnvironment("pi-lens-5408-tflint-home-");
-			try {
-				const { home, tf } = layout(env.tmpDir);
+			{
+				const { home, tf } = layout("5408-tflint-home");
 				write(path.join(home, ".tflint.hcl"), "");
-				vi.stubEnv("HOME", home);
-				vi.stubEnv("USERPROFILE", home);
 				vi.stubEnv("TFLINT_CONFIG_FILE", "");
 
 				const { hasTflintConfig } = await load<
@@ -252,18 +334,14 @@ describe("#5408 config presence: policy and runner agree", () => {
 				// Red on master: the runner's finder stops BEFORE $HOME.
 				const argv = spawnedArgs()[0] ?? [];
 				expect(argv.some((a) => a.startsWith("--config="))).toBe(true);
-			} finally {
-				env.cleanup();
 			}
 		});
 
 		it("ignores a .tflint.hcl ABOVE $HOME in both the policy and the runner", async () => {
-			const env = setupTestEnvironment("pi-lens-5408-tflint-above-");
+			const { home, tf } = layout("5408-tflint-above");
+			// The directory above the pinned home is this worker's own scratch.
+			const above = write(path.join(path.dirname(home), ".tflint.hcl"), "");
 			try {
-				const { home, tf } = layout(env.tmpDir);
-				write(path.join(env.tmpDir, ".tflint.hcl"), "");
-				vi.stubEnv("HOME", home);
-				vi.stubEnv("USERPROFILE", home);
 				vi.stubEnv("TFLINT_CONFIG_FILE", "");
 
 				const { hasTflintConfig } = await load<
@@ -276,7 +354,7 @@ describe("#5408 config presence: policy and runner agree", () => {
 				const argv = spawnedArgs()[0] ?? [];
 				expect(argv.some((a) => a.startsWith("--config="))).toBe(false);
 			} finally {
-				env.cleanup();
+				fs.rmSync(above, { force: true });
 			}
 		});
 	});

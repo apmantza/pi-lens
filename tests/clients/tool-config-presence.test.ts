@@ -20,7 +20,7 @@ import {
 	hasSqlfluffConfig,
 	hasYamllintConfig,
 } from "../../clients/tool-policy.js";
-import { setupTestEnvironment } from "./test-utils.js";
+import { pinFixtureHome, setupTestEnvironment } from "./test-utils.js";
 
 function write(file: string, content = ""): string {
 	fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -263,14 +263,15 @@ describe("tool-config-presence: one stop rule", () => {
 	});
 
 	it("reads $HOME from the environment when no homeDir is given", () => {
-		withDir((root) => {
-			const home = path.join(root, "home");
-			const start = path.join(home, "proj");
-			fs.mkdirSync(start, { recursive: true });
-			write(path.join(root, ".tflint.hcl"));
-			vi.stubEnv("HOME", home);
-			vi.stubEnv("USERPROFILE", home);
+		const { home } = pinFixtureHome("5408-seam-env-home");
+		const start = path.join(home, "proj");
+		fs.mkdirSync(start, { recursive: true });
+		// The directory above the pinned home is this worker's own scratch.
+		const above = write(path.join(path.dirname(home), ".tflint.hcl"));
+		try {
 			expect(hasToolConfig("tflint", start)).toBe(false);
-		});
+		} finally {
+			fs.rmSync(above, { force: true });
+		}
 	});
 });

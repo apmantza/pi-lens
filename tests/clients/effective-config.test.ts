@@ -552,6 +552,30 @@ describe("effectiveConfig — why is X running (#2415 AC)", () => {
 			expect(tool(real.view, "mypy")?.selected).toBe(true);
 		});
 
+		it("answers credo by mix.exs in the runner's own directory and vale by .vale.ini (#5414 F2)", async () => {
+			// Recurrence: both skipped in dispatch while the view said `selected`.
+			const bare = await viewFor(
+				{ files: {}, raw: { "proj/mix.exs.bak": "" }, startDir: "proj" },
+				{ file: "a.ex" },
+			);
+			expect(tool(bare.view, "credo")?.reason).toBe("no-project-config");
+			const real = await viewFor(
+				{ files: {}, raw: { "proj/mix.exs": "" }, startDir: "proj" },
+				{ file: "a.ex" },
+			);
+			expect(tool(real.view, "credo")?.selected).toBe(true);
+			const noVale = await viewFor(
+				{ files: {}, raw: { "proj/README": "" }, startDir: "proj" },
+				{ file: "a.md" },
+			);
+			expect(tool(noVale.view, "vale")?.reason).toBe("no-project-config");
+			const vale = await viewFor(
+				{ files: {}, raw: { "proj/.vale.ini": "" }, startDir: "proj" },
+				{ file: "a.md" },
+			);
+			expect(tool(vale.view, "vale")?.selected).toBe(true);
+		});
+
 		it("a denied runner still reports the denial, not the missing config", async () => {
 			const { view } = await viewFor(
 				{

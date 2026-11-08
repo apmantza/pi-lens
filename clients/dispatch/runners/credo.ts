@@ -82,11 +82,13 @@ const credoRunner: RunnerDefinition = {
 	appliesTo: ["elixir"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
+	// mix never walks up, so the seam answers for `cwd` alone.
+	requiresConfig: (cwd) => hasToolConfig("mix", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "credo");
 
-		if (!hasToolConfig("mix", cwd)) {
+		if (!credoRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

@@ -22,6 +22,10 @@
  * read. What sits above `$HOME` is never project config. `homeDir` is
  * injectable for tests; the default is `os.homedir()`, read per call.
  *
+ * A spec marked `exactDir` (mix, which never walks up) looks at `startDir`
+ * alone: the climb is a property of the tool, so the seam owns it and a caller
+ * cannot forget it.
+ *
  * ## What counts as config
  *
  * Only the forms a spec names. A file, a TOML table, an INI section, or a
@@ -71,6 +75,12 @@ interface ToolConfigSpec {
 	tomlTables?: readonly { file: string; table: string }[];
 	/** An INI section in a named file, at a line start (a comment never counts). */
 	iniSections?: readonly { file: string; section: string }[];
+	/**
+	 * The tool runs only in the directory that holds the descriptor and never
+	 * walks up (mix: "Could not find a Mix.Project"), so only `startDir` itself
+	 * counts. A climb here would report a project the tool cannot open.
+	 */
+	exactDir?: true;
 	/** The tool's own package named as a dependency of the project. */
 	dependency?: { name: string; files: readonly DependencyFile[] };
 }
@@ -129,7 +139,7 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 		iniSections: [{ file: "setup.cfg", section: "mypy" }],
 	},
 	// The Mix project descriptor, the evidence credo and `mix compile` need.
-	mix: { files: ["mix.exs"] },
+	mix: { files: ["mix.exs"], exactDir: true },
 	// shfmt's only config source, and the formatters' indentation opt-out.
 	editorconfig: { files: [".editorconfig"] },
 };
@@ -330,6 +340,7 @@ export function findToolConfig(
 	options: ToolConfigOptions = {},
 ): ToolConfigHit | undefined {
 	const spec = TOOL_CONFIG_SPECS[tool];
+	if (spec.exactDir) return findInDir(spec, realpathOrResolve(startDir));
 	const home = realpathOrResolve(options.homeDir ?? os.homedir());
 	for (const dir of walkUpDirs(startDir)) {
 		const hit = findInDir(spec, dir);

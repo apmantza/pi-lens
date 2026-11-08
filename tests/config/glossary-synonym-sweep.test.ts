@@ -1517,8 +1517,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// and `path.resolve` — six more `path` operations, same sense
 		// (a path operation).
 		"clients/tool-agreement.ts": 10,
-		// 13 -> 12 (#4689 item 6): the file is resolved by `realpathOrResolve`.
+		// New in #5408: the config-presence seam's path joins and walks.
 		"clients/tool-config-presence.ts": 7,
+		// 13 -> 12 (#4689 item 6): the file is resolved by `realpathOrResolve`.
 		// 12 -> 10 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		"clients/tool-cwd.ts": 10,
 		// 64 -> 62 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
