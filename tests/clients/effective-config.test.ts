@@ -111,7 +111,9 @@ async function viewFor(
 	home: string;
 	projectDir: string;
 }> {
-	const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-effcfg-"));
+	const home = fs.realpathSync.native(
+		fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-effcfg-")),
+	);
 	tempRoots.push(home);
 	for (const [relative, content] of Object.entries(layout.files)) {
 		const target = path.join(home, relative);
@@ -938,7 +940,9 @@ describe("effectiveConfig — asking changes no session state (#2427 round 3)", 
 	 * registry each time could not observe it.
 	 */
 	function rootScenario(): RootScenario {
-		const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-effcfg-r-"));
+		const home = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-effcfg-r-")),
+		);
 		tempRoots.push(home);
 		const globalConfig = path.join(home, ".pi-lens", "config.json");
 		const liveRoot = path.join(home, "live");
@@ -1328,8 +1332,8 @@ function outsideCwdError(homeRelativeCwd: string): { error: string } {
 
 describe("effectiveConfig — a file outside cwd is rejected, not silently resolved (#2520)", () => {
 	it("returns an informative { error } instead of a foreign tree's answer", async () => {
-		const home = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-effcfg-confine-"),
+		const home = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-effcfg-confine-")),
 		);
 		tempRoots.push(home);
 		const ws = path.join(home, "ws");
