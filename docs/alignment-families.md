@@ -1,6 +1,6 @@
 # Alignment families
 
-Seven user-facing ideas that pi-lens implements in more than one place. The same idea has drifted into different meanings before: PR #5011 found one ignore pattern read three ways. This file is the single list. The daily alignment routine reads it to pick a family, and `scripts/check-pr-body.mjs` reads it to validate the `Alignment:` line in `### Class sweep`.
+Nine user-facing ideas that pi-lens implements in more than one place. The same idea has drifted into different meanings before: PR #5011 found one ignore pattern read three ways. This file is the single list. The daily alignment routine reads it to pick a family, and `scripts/check-pr-body.mjs` reads it to validate the `Alignment:` line in `### Class sweep`.
 
 ## Families
 
@@ -15,6 +15,8 @@ The family name is the text before the first colon in the Family column. Names c
 | 5 | Tool parameter shapes across pi tools and MCP tools: names, defaults and accepted spellings of path / paths / scope / severity / wait parameters | `tools/`, `clients/mcp/` |
 | 6 | Closed vocabularies: skip reasons (`RUNNER_SKIP_REASONS`), owner keys, degradation codes, `PILENS_CFG_*` diagnostic codes; one idea with two names, or one name with two meanings | `clients/config-diagnostic-codes.ts`, `clients/degradation-ledger.ts`, `tests/support/session-state-registry.ts` |
 | 7 | Env tunables: `PI_LENS_*` variables, how each is parsed (int, bool, list), clamped and defaulted, and what an unparseable value does | `git grep -n "process.env.PI_LENS_" clients tools index.ts` |
+| 8 | One object with different keys: a file, finding, session, turn, runner run, LSP document or blocker keyed by two spellings, or by a key that is not stable across its life (raw vs normalized path, URI vs path, display text, list position, a per-session counter) | `clients/path-keyed-map.ts` (`PathKeyedMap`), `clients/path-utils.ts` (the normalizers), `clients/finding-identity.ts`, `docs/invariants/`, `docs/defect-shapes.md` shape 1 |
+| 9 | Tool config presence: whether tool X counts as configured for a file, answered by the tool policy (`hasXConfig` helpers), each runner's own gate, the formatter's explicit-config check and effective-config; where each looks, how far it walks, and what counts as config | `clients/tool-policy.ts` (`getLinterPolicyForCwd`, the `hasXConfig` helpers), `clients/dispatch/runners/`, `clients/formatters.ts`, `clients/effective-config.ts`; known divergences are #5408 |
 
 ## What touches means
 
@@ -27,3 +29,5 @@ A change touches a family when it adds or edits a member of that family. Naming 
 5. **Tool parameter shapes across pi tools and MCP tools.** Touched when the change adds or edits one of these: names, defaults and accepted spellings of path / paths / scope / severity / wait parameters.
 6. **Closed vocabularies.** Touched when the change adds or edits one of these: skip reasons (`RUNNER_SKIP_REASONS`), owner keys, degradation codes, `PILENS_CFG_*` diagnostic codes; one idea with two names, or one name with two meanings.
 7. **Env tunables.** Touched when the change adds or edits one of these: `PI_LENS_*` variables, how each is parsed (int, bool, list), clamped and defaulted, and what an unparseable value does.
+8. **One object with different keys.** Touched when the change adds or edits one of these: a key, map, cache or record that identifies a file, finding, session, turn, runner run, LSP document or blocker.
+9. **Tool config presence.** Touched when the change adds or edits one of these: a config-file check, walk or stop rule that decides whether a linter, formatter or runner counts as configured.
