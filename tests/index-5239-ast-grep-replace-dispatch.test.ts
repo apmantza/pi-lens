@@ -45,6 +45,33 @@ import {
 	startPiSession,
 } from "./support/pi-session.js";
 
+/**
+ * #5417: `ast_grep_replace` refuses `apply: true` under `no-autofix`, which
+ * the session helper turns on by default. The cases below apply a rewrite, so
+ * their sessions run the guarded set with that flag off: a `false` entry
+ * deletes the default key (`flagMap` in support/pi-session.ts); an absent one
+ * leaves it on.
+ */
+const APPLY_FLAGS: ReadonlyArray<[string, boolean]> = GUARDED_FLAGS.map(
+	([name, value]): [string, boolean] => [
+		name,
+		name === "no-autofix" ? false : value,
+	],
+);
+
+function openApplySession(
+	root: string,
+	proj: string,
+	responses: Parameters<typeof openGuardedSession>[2],
+) {
+	return startPiSession({
+		root,
+		cwd: proj,
+		flags: new Map(APPLY_FLAGS),
+		responses,
+	});
+}
+
 const fixture = piSessionFixture();
 
 beforeAll(() => warmGuardedSession(fixture.root));
@@ -110,7 +137,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 
 	it("refuses a commit over the blocker an applied replace introduced", async () => {
 		const { proj, target } = seed(fixture.root, "apply-gate", CLEAN_FILE);
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(readTarget(target), "reading"),
 			step(activateReplace(), "activating"),
 			step(replace([target], true), "replacing"),
@@ -134,7 +161,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 	// takes that return; this pins that a RELATIVE entry still dispatches.
 	it("refuses a commit over the blocker a replace with a relative path introduced", async () => {
 		const { proj, target } = seed(fixture.root, "apply-relative", CLEAN_FILE);
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(readTarget(target), "reading"),
 			step(activateReplace(), "activating"),
 			step(replace([path.relative(proj, target)], true), "replacing"),
@@ -156,7 +183,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		const untouched = path.join(proj, "src", "untouched.ts");
 		fs.writeFileSync(second, CLEAN_FILE);
 		fs.writeFileSync(untouched, "export const keep = 1;\n");
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(activateReplace(), "activating"),
 			// A dry run first: it writes nothing and must dispatch nothing.
 			step(replace([path.join(proj, "src")], false), "previewing"),
@@ -203,7 +230,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 		const target = path.join(proj, "src", "target.py");
 		const clean = "import hashlib\n\ndef f(d):\n    return hashlib.sha256(d)\n";
 		fs.writeFileSync(target, clean);
-		const handle = await openGuardedSession(fixture.root, proj, [
+		const handle = await openApplySession(fixture.root, proj, [
 			step(readTarget(target), "reading"),
 			step(activateReplace(), "activating"),
 			step(
@@ -255,7 +282,7 @@ describe("#5239 an applied ast_grep_replace dispatches what it wrote", () => {
 			);
 			const second = path.join(proj, "src", "nomatch.ts");
 			fs.writeFileSync(second, "export const k = 1;\n");
-			const handle = await openGuardedSession(fixture.root, proj, [
+			const handle = await openApplySession(fixture.root, proj, [
 				step(activateReplace(), "activating"),
 				step(replace([target, second], true, true), "replacing"),
 				step(commitAttempt(), "committing"),

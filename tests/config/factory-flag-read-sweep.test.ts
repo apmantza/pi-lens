@@ -56,9 +56,9 @@ const ADMITTED: FactoryFlagAdmission = {
 			"closures handed to the tool constructors (`createLensDiagnosticsTool`), which store them and call them per tool execution",
 	},
 	"activateExtension:lazyTools:getLensFlag:call": {
-		count: 1,
+		count: 2,
 		reason:
-			"the closure handed to `createLspNavigationTool`, which stores it and calls it per tool execution",
+			"the closures handed to `createLspNavigationTool` and `createAstGrepReplaceTool` (#5417: its `no-autofix` refusal), which store them and call them per tool execution",
 	},
 	"activateExtension:<top>:pi:initI18n()": {
 		count: 1,

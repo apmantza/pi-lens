@@ -94,6 +94,7 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 			"typescript",
 			["src"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 
 		expect(result.applied).toBe(true);
@@ -130,6 +131,7 @@ describe("#2423 ast_grep_replace records its applied rewrites", () => {
 			"typescript",
 			["src"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 		expect(result.stalePreview).toBe(true);
 		expect(recorded).toHaveLength(0);
@@ -161,6 +163,7 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 			"typescript",
 			["src"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 		expect(result.appliedFiles).toEqual([abs("src/a.ts"), abs("src/b.ts")]);
 	});
@@ -176,6 +179,7 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 			"typescript",
 			["src"],
 			true,
+			{ sessionRoot: process.cwd() },
 		);
 		refused.clear();
 		expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
@@ -193,7 +197,9 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 		};
 		const client = new AstGrepClient();
 		(client as unknown as { runner: unknown }).runner = runner;
-		const applied = await client.replaceWithRule(RULE, ["src"], true);
+		const applied = await client.replaceWithRule(RULE, ["src"], true, {
+			sessionRoot: process.cwd(),
+		});
 		expect(applied.appliedFiles).toEqual([abs("src/a.ts"), abs("src/b.ts")]);
 		const dry = await client.replaceWithRule(RULE, ["src"], false);
 		expect(dry.appliedFiles).toEqual([]);
@@ -233,7 +239,9 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 			refused.clear();
 			const result = await runnerOver({
 				detailed: { matches: [], status: 0 },
-			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.stalePreview).toBe(true);
 			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
 			expect(recorded.map((r) => r.filePath)).toEqual([abs("src/a.ts")]);
@@ -245,7 +253,9 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 			const result = await runnerOver({
 				detailed: { matches: MATCHES, status: 0 },
 				withFix: { matches: [], error: "boom" },
-			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.error).toBe("boom");
 			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
 		});
@@ -255,7 +265,9 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 			refused.clear();
 			const result = await runnerOver({
 				detailed: { matches: [], status: 2, error: "no such path" },
-			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true);
+			}).replaceWithRule(RULE, ["src/a.ts", "src/b.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.error).toBe("no such path");
 			expect(result.appliedFiles).toEqual([abs("src/a.ts")]);
 		});
@@ -309,7 +321,9 @@ describe("#5239 the apply names the files the bridge accepted", () => {
 			refused.clear();
 			const result = await runnerOver({
 				detailed: { matches: [], status: 0 },
-			}).replaceWithRule(RULE, ["src/b.ts", "src/a.ts"], true);
+			}).replaceWithRule(RULE, ["src/b.ts", "src/a.ts"], true, {
+				sessionRoot: process.cwd(),
+			});
 			expect(result.stalePreview).toBe(true);
 			expect(result.appliedFiles).toEqual([]);
 			expect(recorded).toEqual([]);
@@ -358,7 +372,9 @@ describe("#4140 the structural ast_grep_replace apply records through the bridge
 	it("records one mutation per rewritten file with 1-based ranges, like the pattern apply", async () => {
 		recorded.length = 0;
 		const { client, runner } = clientWithRunner(MATCHES);
-		const result = await client.replaceWithRule(RULE, ["src"], true);
+		const result = await client.replaceWithRule(RULE, ["src"], true, {
+			sessionRoot: process.cwd(),
+		});
 		expect(result.applied).toBe(true);
 		expect(runner.tempScanWithFixAsync).toHaveBeenCalledWith(
 			"src",
@@ -400,6 +416,7 @@ describe("#4140 the structural ast_grep_replace apply records through the bridge
 		recorded.length = 0;
 		const { client } = clientWithRunner(MATCHES);
 		await client.replaceWithRule(RULE, ["src"], true, {
+			sessionRoot: process.cwd(),
 			sessionId: "session-sub",
 		});
 		expect(recorded.map((entry) => entry.sessionId)).toEqual([

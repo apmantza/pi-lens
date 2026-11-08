@@ -84,7 +84,7 @@ export type DegradationKind =
 	| "actionable-warnings-quickfix-uncredited"
 	/** `adopted-root-binary-refused`: #4309: a resolved executable belongs to the adopted or session project. */
 	| "adopted-root-binary-refused"
-	/** `adopted-root-writer-skipped`: #4309: an autonomous formatter or fixer is disabled for an adopted file. */
+	/** `adopted-root-writer-skipped`: #4309, #5417: a write outside the session's writable roots (a formatter, fixer, `ast_grep_replace`, a language-server edit or `lens_diagnostic_mark`) is refused. */
 	| "adopted-root-writer-skipped"
 	/**
 	 * `agent-advisory-dropped`: #3748: a model-facing advisory (`clients/agent-nudge.ts`'s queue) never

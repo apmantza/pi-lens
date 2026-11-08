@@ -126,7 +126,6 @@ describe("detectFileChangedAfterCommand consults the seam", () => {
 				wedged,
 				["--fix", filePath],
 				env.tmpDir,
-				[1],
 			);
 
 			expect(fixed).toBe(0);
@@ -149,7 +148,6 @@ describe("detectFileChangedAfterCommand consults the seam", () => {
 				cmd,
 				["--fix", filePath],
 				env.tmpDir,
-				[1],
 			);
 
 			const { isInSpawnTimeoutCooldown } = await seam();

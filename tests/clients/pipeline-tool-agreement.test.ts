@@ -123,7 +123,6 @@ describe("runAutofix tool agreement seam (#3005)", () => {
 			"markdownlint-cli2",
 			expect.arrayContaining(["--fix", file]),
 			env.tmpDir,
-			[1],
 		);
 		expect(getDegradationSummary()).toEqual([]);
 	});

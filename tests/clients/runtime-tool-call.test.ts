@@ -2177,7 +2177,7 @@ describe("#4187 R4-1 — a bytes-less write advances only what its own call name
 				"typescript",
 				[path.join(env.tmpDir, "src")],
 				true,
-				{ toolCallId: "call-ast-grep-dir" },
+				{ toolCallId: "call-ast-grep-dir", sessionRoot: env.tmpDir },
 			);
 			expect(runtime.readGuard.checkEdit(target, [2, 2]).action).toBe("block");
 		} finally {
@@ -2209,7 +2209,7 @@ describe("#4187 R4-1 — a bytes-less write advances only what its own call name
 				"typescript",
 				[env.tmpDir],
 				true,
-				{ toolCallId: "call-ast-grep-none" },
+				{ toolCallId: "call-ast-grep-none", sessionRoot: env.tmpDir },
 			);
 			expect(runtime.readGuard.checkEdit(target, [2, 2]).action).toBe("block");
 		} finally {
@@ -2240,7 +2240,7 @@ describe("#4187 R4-1 — a bytes-less write advances only what its own call name
 				"typescript",
 				[target],
 				true,
-				{ toolCallId: "call-ast-grep-file" },
+				{ toolCallId: "call-ast-grep-file", sessionRoot: env.tmpDir },
 			);
 			// No other writer moved the file, so the licensed advance stands and
 			// the next positional edit needs no read.
