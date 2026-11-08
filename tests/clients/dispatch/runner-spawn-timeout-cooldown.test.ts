@@ -193,6 +193,10 @@ describe("which runner spawns arm the cooldown (#5413)", () => {
 		expect(runs).toBe(1);
 		expect(isInSpawnTimeoutCooldown("launched-runner")).toBe(true);
 		expect(isInSpawnTimeoutCooldown(process.execPath)).toBe(false);
+		const skip = getDegradationSummary().find(
+			(group) => group.kind === "runner-spawn-timeout-cooldown",
+		);
+		expect(skip?.latestReasons[0]?.subject).toBe("launched-runner");
 	}, 30_000);
 
 	it("a probe (cooldown: false) that times out arms nothing (#1467)", async () => {
