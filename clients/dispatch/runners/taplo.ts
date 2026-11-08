@@ -174,15 +174,15 @@ const taploRunner: RunnerDefinition = {
 			};
 		}
 
-		// Project binary first (#1731, discipline B): the shared resolver
-		// (`resolveToolCommandWithInstallFallback`) resolves through `findManagedNodeToolBinary`, pi-lens's own managed
-		// shim — checked BEFORE any project-local candidate, so a project's own
-		// `node_modules/.bin/taplo` (npm `@taplo/cli`) never won once the managed
-		// copy answered. `findLocalBinUpwards` defaults to `.cmd` on Windows,
-		// matching that npm shim; the resolver's `.exe` extension (the registry spec) is
-		// correct for pi-lens's OWN managed install (a GitHub-release binary,
-		// `clients/installer/index.ts` taplo entry), a different artifact with a
-		// different extension, so it stays as the resolver's fallback only.
+		// Project binary first (#1731, discipline B): the project's own
+		// `node_modules/.bin/taplo` (npm `@taplo/cli`), found by the upward walk,
+		// wins outright. `findLocalBinUpwards` defaults to `.cmd` on Windows,
+		// matching that npm shim. Only when it is absent does the shared
+		// resolver (`resolveToolCommandWithInstallFallback`) run its ladder:
+		// the project rung at exactly `cwd` (trusted), then pi-lens's managed
+		// install, then PATH. Its `.exe` (the registry spec) matches pi-lens's
+		// OWN managed install, a GitHub-release binary
+		// (`clients/installer/index.ts` taplo entry), a different artifact.
 		let cmd: string | null =
 			localBinPath(findLocalBinUpwards("taplo", cwd)) ?? null;
 		if (!cmd) {
