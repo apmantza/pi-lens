@@ -1368,7 +1368,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		// late write would otherwise put this session's file in the
 		// successor's store, which then never takes its own baseline.
 		const baselineSession = runtime.captureSessionGeneration();
-		const baseline = await bounded(
+		const firstTouch = await bounded(
 			captureComplexityBaseline(filePath, deps.ctx.signal),
 			{
 				ms: COMPLEXITY_BASELINE_BUDGET_MS,
@@ -1377,11 +1377,11 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				label: "complexity-baseline",
 			},
 		);
-		if (baseline) {
+		if (firstTouch) {
 			baselineSession.guardedWrite(filePath, () =>
 				runtime.complexityBaselines.set(
 					complexityBaselineKey(filePath),
-					baseline,
+					firstTouch,
 				),
 			);
 		}
@@ -1408,19 +1408,19 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				signal: deps.ctx.signal,
 			})
 		)?.complexityClient;
-		const snapshot = baseline
+		const analysis = firstTouch
 			? await complexityClient?.analyzeFile(filePath)
 			: undefined;
-		if (snapshot && baselineSession.isCurrent()) {
+		if (analysis && baselineSession.isCurrent()) {
 			const { captureSnapshot } = await import("./metrics-history.js");
 			baselineSession.guardedWrite(filePath, () =>
 				captureSnapshot(filePath, {
-					maintainabilityIndex: snapshot.maintainabilityIndex,
-					cognitiveComplexity: snapshot.cognitiveComplexity,
-					maxNestingDepth: snapshot.maxNestingDepth,
-					linesOfCode: snapshot.linesOfCode,
-					maxCyclomatic: snapshot.maxCyclomaticComplexity,
-					entropy: snapshot.codeEntropy,
+					maintainabilityIndex: analysis.maintainabilityIndex,
+					cognitiveComplexity: analysis.cognitiveComplexity,
+					maxNestingDepth: analysis.maxNestingDepth,
+					linesOfCode: analysis.linesOfCode,
+					maxCyclomatic: analysis.maxCyclomaticComplexity,
+					entropy: analysis.codeEntropy,
 				}),
 			);
 		}

@@ -18,9 +18,16 @@
  * it, and the advice names that baseline instead.
  */
 import * as fs from "node:fs";
-import * as path from "node:path";
+import * as nodePath from "node:path";
+import type { BoundedLruCache } from "../bounded-cache.js";
+import type { GenerationHandle } from "../generation-guard.js";
+import { logLatency } from "../latency-logger.js";
 import { measureFile } from "./function-metrics.js";
-import { normalizeMapKey, realpathOrResolve } from "../path-utils.js";
+import {
+	normalizeMapKey,
+	realpathOrResolve,
+	walkUpDirs,
+} from "../path-utils.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 import {
 	getSharedTreeSitterClient,
@@ -47,7 +54,12 @@ export type MainBaseline =
 	| { kind: "unavailable"; reason: string };
 
 export interface ComplexityBaseline {
-	main: MainBaseline;
+	/**
+	 * The default branch's table, read at the file's first edit (most first
+	 * touches are reads that never edit, and the read costs two `git`
+	 * spawns); undefined until then.
+	 */
+	main: MainBaseline | undefined;
 	/** Undefined when the file could not be measured (unparsable, missing). */
 	last: FunctionTable | undefined;
 }
@@ -64,7 +76,7 @@ const GIT_TIMEOUT_MS = 2_000;
 
 /** The key a session's baseline store uses for `filePath`. */
 export function complexityBaselineKey(filePath: string): string {
-	return normalizeMapKey(path.resolve(filePath));
+	return normalizeMapKey(nodePath.resolve(filePath));
 }
 
 /**
@@ -101,19 +113,15 @@ export async function measureFunctionTable(
 	return table;
 }
 
-/** The nearest existing directory at or above `start`. */
+/**
+ * The nearest existing directory at or above `start`: a file a write is about
+ * to create may sit in a directory that does not exist yet.
+ */
 function existingDir(start: string): string | undefined {
-	let dir = start;
-	for (;;) {
-		try {
-			if (fs.statSync(dir).isDirectory()) return dir;
-		} catch {
-			// Not there yet (a file a write is about to create): climb.
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) return undefined;
-		dir = parent;
+	for (const dir of walkUpDirs(start)) {
+		if (fs.existsSync(dir)) return dir;
 	}
+	return undefined;
 }
 
 /** Preference order for the default branch when `origin/HEAD` is unset. */
@@ -144,7 +152,12 @@ async function resolveDefaultBranch(
 			"refs/remotes/origin/HEAD",
 			...DEFAULT_BRANCH_REFS,
 		],
-		{ cwd, timeout: GIT_TIMEOUT_MS, signal, resourceLabel: "complexity-main" },
+		{
+			cwd,
+			timeout: GIT_TIMEOUT_MS,
+			...(signal && { signal }),
+			resourceLabel: "complexity-main",
+		},
 	);
 	if (result.status !== 0) return { unavailable: "not-a-git-repository" };
 	const rows = new Map<string, string>();
@@ -172,19 +185,19 @@ export async function readAtDefaultBranch(
 	| { kind: "unavailable"; reason: string }
 > {
 	const target = realpathOrResolve(filePath);
-	const cwd = existingDir(path.dirname(target));
+	const cwd = existingDir(nodePath.dirname(target));
 	if (!cwd) return { kind: "unavailable", reason: "no-directory" };
 	const branch = await resolveDefaultBranch(cwd, signal);
 	if ("unavailable" in branch)
 		return { kind: "unavailable", reason: branch.unavailable };
-	const relative = path.relative(cwd, target).split(path.sep).join("/");
+	const relative = nodePath.relative(cwd, target).split(nodePath.sep).join("/");
 	const shown = await safeSpawnAsync(
 		"git",
 		["show", `${branch.ref}:./${relative}`],
 		{
 			cwd,
 			timeout: GIT_TIMEOUT_MS,
-			signal,
+			...(signal && { signal }),
 			maxOutputBytes: MAX_BLOB_BYTES,
 			resourceLabel: "complexity-main",
 		},
@@ -203,32 +216,30 @@ export async function readAtDefaultBranch(
 }
 
 /**
- * The first-touch baseline of `filePath`: the file on disk now (before the
- * tool runs) and the file on the default branch. Never rejects; a file
- * neither side can measure still gets an entry, so the session asks once.
+ * The first-touch baseline of `filePath`: the file on disk now, before the
+ * tool runs. The default branch's copy waits for the first edit
+ * ({@link adviseOnEdit}). A file that cannot be measured still gets an
+ * entry, so the session asks once.
  */
 export async function captureComplexityBaseline(
 	filePath: string,
 	signal?: AbortSignal,
 ): Promise<ComplexityBaseline | undefined> {
 	if (signal?.aborted) return undefined;
+	let onDisk: string | undefined;
 	try {
-		let onDisk: string | undefined;
-		try {
-			onDisk = fs.readFileSync(filePath, "utf-8");
-		} catch {
-			onDisk = undefined;
-		}
-		const last =
-			onDisk === undefined
-				? undefined
-				: await measureFunctionTable(filePath, onDisk);
-		const main = await mainBaselineOf(filePath, signal);
-		if (signal?.aborted) return undefined;
-		return { main, last };
+		onDisk = fs.readFileSync(filePath, "utf-8");
 	} catch {
-		return undefined;
+		// none: a file a write is about to create has no bytes yet, and an
+		// unreadable one has none to measure; `last: undefined` is the answer.
+		onDisk = undefined;
 	}
+	const last =
+		onDisk === undefined
+			? undefined
+			: await measureFunctionTable(filePath, onDisk);
+	if (signal?.aborted) return undefined;
+	return { main: undefined, last };
 }
 
 async function mainBaselineOf(
@@ -280,12 +291,12 @@ export interface WorsenedFunction {
  * improved function is never returned.
  */
 export function worsenedFunctions(
-	baseline: ComplexityBaseline | undefined,
+	entry: ComplexityBaseline | undefined,
 	after: FunctionTable,
 	thresholds: Thresholds,
 ): WorsenedFunction[] {
-	const last = baseline?.last;
-	const main = baseline?.main;
+	const last = entry?.last;
+	const main = entry?.main;
 	const out: WorsenedFunction[] = [];
 	for (const [key, now] of after) {
 		const prior = last?.get(key);
@@ -317,10 +328,8 @@ export function worsenedFunctions(
 }
 
 /** The label the advisory names its baseline by. */
-export function baselineLabel(
-	baseline: ComplexityBaseline | undefined,
-): string {
-	const main = baseline?.main;
+export function baselineLabel(entry: ComplexityBaseline | undefined): string {
+	const main = entry?.main;
 	if (main?.kind === "file" || main?.kind === "absent") return main.ref;
 	return "session start";
 }
@@ -359,4 +368,71 @@ export function formatComplexityAdvisory(
 		return bytes(only) <= maxBytes ? only : undefined;
 	}
 	return `${head}${shown.join("; ")}${rest > 0 ? `; +${rest} more` : ""}`;
+}
+
+/** What {@link adviseOnEdit} decided, for its caller and its log row. */
+export interface EditComplexityVerdict {
+	/** The tool-result line, when a function got worse. */
+	advisory: string | undefined;
+	/** Functions the edit made worse, shown or not. */
+	worsened: number;
+	/** What the edit was judged against: a ref or `session start`. */
+	against: string;
+}
+
+/**
+ * Judge an edit that has landed on disk: measure `filePath` now, compare it
+ * with its baseline (taken at first touch, or now for a file the session
+ * never touched before), and store the new table as the file's `last`
+ * through `session`, so the next edit is judged on its own change.
+ * `undefined` when the file cannot be measured.
+ */
+export async function adviseOnEdit(args: {
+	filePath: string;
+	store: BoundedLruCache<string, ComplexityBaseline>;
+	session: Pick<GenerationHandle, "guardedWrite">;
+	thresholds: Thresholds;
+	signal?: AbortSignal | undefined;
+}): Promise<EditComplexityVerdict | undefined> {
+	const { filePath, store, session, thresholds, signal } = args;
+	const startedAt = Date.now();
+	let content: string;
+	try {
+		content = fs.readFileSync(filePath, "utf-8");
+	} catch {
+		// none: the edit removed or moved the file before this read; there is
+		// no function left to judge, and the next edit of it measures afresh.
+		return undefined;
+	}
+	const after = await measureFunctionTable(filePath, content);
+	if (!after || signal?.aborted) return undefined;
+	const key = complexityBaselineKey(filePath);
+	const held = store.get(key);
+	const entry: ComplexityBaseline = {
+		main: held?.main ?? (await mainBaselineOf(filePath, signal)),
+		last: held?.last,
+	};
+	const worsened = worsenedFunctions(entry, after, thresholds);
+	const label = baselineLabel(entry);
+	const advisory = formatComplexityAdvisory(worsened, label);
+	session.guardedWrite(filePath, () =>
+		store.set(key, { main: entry.main, last: after }),
+	);
+	logLatency({
+		type: "phase",
+		phase: "complexity_delta",
+		filePath,
+		durationMs: Date.now() - startedAt,
+		metadata: {
+			against: label,
+			main:
+				entry.main?.kind === "unavailable"
+					? `unavailable:${entry.main.reason}`
+					: entry.main?.kind,
+			functions: after.size,
+			worsened: worsened.length,
+			advised: advisory !== undefined,
+		},
+	});
+	return { advisory, worsened: worsened.length, against: label };
 }

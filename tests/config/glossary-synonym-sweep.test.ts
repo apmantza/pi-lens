@@ -330,8 +330,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `captureOpaqueBaseline`'s returned `state`, so one identifier use is
 		// gone. Every remaining use is the pending opaque baseline, which the
 		// glossary does not retire (it retires `baseline` where a freshness
-		// reference is meant).
-		"clients/runtime-tool-call.ts": 11,
+		// reference is meant). 11 -> 3 (#5087): the complexity baseline block's
+		// `baseline` local (the analyzer result, 8 uses) is gone; the delta's
+		// first-touch value is named `firstTouch`.
+		"clients/runtime-tool-call.ts": 3,
 		"clients/sgconfig.ts": 6,
 		"clients/widget-state.ts": 2,
 	},
@@ -1848,6 +1850,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lsp/server.ts": 4,
 		"clients/mcp/analyze.ts": 9,
 		"clients/mcp/review.ts": 1,
+		// #5087: `SpawnResult.status`, the git exit code of the default-branch
+		// read (for-each-ref, show); the spawn seam names the field.
+		"clients/metrics/complexity-baseline.ts": 2,
 		// 6 -> 9 (#5137): the text cell prints call-graph coverage `status` and
 		// the report's own staleness line.
 		"clients/module-report.ts": 9,

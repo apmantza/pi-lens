@@ -130,7 +130,7 @@ pi --no-madge            # Disable the madge session-start analyzer
 pi --no-gitleaks         # Disable the gitleaks session-start analyzer
 pi --no-govulncheck      # Disable the govulncheck session-start analyzer
 pi --no-dead-code        # Disable the dead-code session-start analyzer
-pi --no-complexity       # Disable the complexity session-start analyzer
+pi --no-complexity       # Disable the complexity analyzer and the per-edit complexity line
 
 # Actionable warnings (all default off)
 pi --lens-actionable-warnings          # Report fixable warnings at turn end

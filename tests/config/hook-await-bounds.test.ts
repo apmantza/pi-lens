@@ -1217,7 +1217,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:021bed00~f352777b": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:021bed00~ad8f1d0b": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1288,7 +1288,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~bf3fc280": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~fa835faa": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -2354,12 +2354,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// call sites and `findGlobalBinary` in `isSgAvailableAsync`); the worklist
 	// shrinks with the sweep, nothing new is unbounded.
 	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
-	// #5087: the first-touch baseline and the edit's re-measure. Its awaits are
+	// #5087: the first-touch measure and the edit's re-measure plus its one
+	// default-branch read (10 in all). Its awaits are
 	// the shared parser (init, parse) and two leaf-bounded `git` spawns
 	// (GIT_TIMEOUT_MS); both hook callers hold the whole capture under bounded()
 	// with the hook's signal, so a second bound here would add a timer for the
 	// same deadline.
-	"clients/metrics/complexity-baseline.ts": 9,
+	"clients/metrics/complexity-baseline.ts": 10,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -2981,6 +2982,11 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:clients/runtime-tool-result.ts#handleToolResult:19412575~b4f8a98d":
 		"Observed tool analysis uses ToolResultDeps.signal and the edit budget; " +
 		"a missing signal is an explicit standalone-harness case.",
+	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~51bbeb13":
+		"The edit's complexity delta (#5087) uses the tool_result signal, " +
+		"threaded from ctx.signal and absent only in a harness; the edit " +
+		"budget (HOOK_WALL_BUDGET_MS.tool_result_edit) stays live without it, " +
+		"and a delta it abandons appends nothing to the result.",
 	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~b4f8a98d":
 		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
 		"edit budget; a missing signal is an explicit harness case.",

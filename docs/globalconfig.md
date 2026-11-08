@@ -273,7 +273,9 @@ Note: `maxProjectFiles` (below) is discovered differently — via an upward walk
 
 Per-rule threshold overrides and policy filters. Currently honored:
 
-- `high-complexity.threshold` — cyclomatic complexity (default `15`)
+- `high-complexity.threshold` — cyclomatic complexity (default `15`). The
+  same number judges the per-edit complexity line (`⚠ complexity vs main: …`),
+  which names a function an edit made worse than the default branch has it.
 - `high-fan-out.threshold` — distinct function calls (default `20`)
 - `<id>.disable` — disable diagnostics for the listed rule ids (output-only
   filter). Same rule-id normalization as `pi-lens-ignore`: a user lists

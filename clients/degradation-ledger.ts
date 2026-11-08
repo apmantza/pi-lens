@@ -472,6 +472,12 @@ export type DegradationKind =
 	 */
 	| "function-metrics-language-unsupported"
 	/**
+	 * #5087: an edit's complexity delta threw (a parser or store failure),
+	 * so its tool result carries no delta; the edit's own output is
+	 * unaffected. Subject is the edited file; once per file per session.
+	 */
+	| "complexity-delta-failed"
+	/**
 	 * The project-snapshot persist seam detected durable meta/body evidence
 	 * failing the #2008 integrity gate — the meta's recorded gz size no longer
 	 * matches the on-disk body (torn/truncated gzip under an intact meta), or a
