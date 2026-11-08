@@ -1889,7 +1889,7 @@ describe("tree census timeout (#4828)", () => {
 	// Recurrence (#4967): the helper verdicts are DERIVED, so nothing rots the
 	// way a named list does — but the derivation itself can. This pins the audit
 	// table of #4967: the helpers the detection audit read by hand, with the
-	// verdict the audit recorded (14 name verdicts across 8 helper modules). A helper that stops walking, moves, or
+	// verdict the audit recorded (12 name verdicts across 8 helper modules). A helper that stops walking, moves, or
 	// changes its import path reds here, where a reader can re-read the body.
 	// `no-walk` helpers are pinned too: a helper that starts walking joins the
 	// census, and that must be a decision, not a surprise.

@@ -12,8 +12,8 @@ walk, a default import included. The `it(title, { timeout }, fn)` form is
 read too, so its `timeout` pair is judged as a budget. On one tree the census
 counts 399 members where master's detector counts 259; every new member is
 budgeted, none baselined. A binding that shadows a walked suite name hides only
-the reads inside its own scope, which retired 34 false positives. The audit
-read its helpers by hand first; the derived verdicts and that table (14
+the reads inside its own scope, which retires 39 false positives. The audit
+read its helpers by hand first; the derived verdicts and that table (12
 name verdicts across 8 helper modules) are pinned in the same test, so a
 helper that stops walking reds there. A test file's own
 wrapper is still the accepted residual (#4967, PR #5430).
