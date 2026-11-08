@@ -17,10 +17,13 @@
  * - a spawn error, a throw, or a non-zero exit that left no report is an
  *   unsuccessful empty result and one `recordFailure` call;
  * - a CLI that exits 0 without writing its report is a successful empty one
- *   carrying stderr's first line — every one of these CLIs writes the report
- *   file even when it finds nothing, so a missing file after a clean exit is an
- *   empty run, while a non-zero exit before the report means the scan never ran
- *   and must not be cached as clean;
+ *   carrying stderr's first line: a missing file after a clean exit is an empty
+ *   run for all four. Whether a clean run writes the report is per CLI and is
+ *   not assumed: gitleaks and trivy write it, as their clients assume (not
+ *   re-measured here); opengrep's clean run is unmeasured (no binary on the
+ *   host this was written on); jscpd writes none (measured on 3.5.10, #1736).
+ *   A non-zero exit before the report means the scan never ran and must not be
+ *   cached as clean;
  * - a report that exists is parsed whatever the exit code: the run's verdict is
  *   the report's own content, which is each client's `parse` to judge;
  * - `parse` runs inside the guard, so its own throw lands in the same
@@ -50,7 +53,11 @@ export type ReportScanFailure = {
 	outcome: ReportScanOutcome;
 	/** Stamped before the report directory exists, so it is the run's own read time. */
 	scannedAt: string;
-	/** The child's exit status, or `null` when it never ran or never ended. */
+	/**
+	 * The child's exit status, or `null` when it never ran or never ended. A
+	 * crashed outcome always carries `null`, even when the child ran before the
+	 * throw.
+	 */
 	status: number | null;
 	/** The signal that ended the child, when one did. */
 	signal: NodeJS.Signals | undefined;
