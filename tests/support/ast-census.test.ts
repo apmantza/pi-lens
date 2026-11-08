@@ -260,6 +260,34 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 			"enumerates one call's direct argument nodes to find its callback and budget; no recursive traversal",
 	},
 	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const child of holder.children())",
+		count: 1,
+		reason:
+			"`boundWithin` reads one binding holder's direct children for its name; one level, no recursive traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const child of node.children()) {",
+		count: 1,
+		reason:
+			"`declarationNames` reads a declaration's direct children for its `variable_declarator`s; one level, no recursive traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const child of pattern.children())",
+		count: 1,
+		reason:
+			"`boundNames` recurses a destructuring pattern's own parts to the names it binds; bounded by the pattern, no file traversal",
+	},
+	{
+		file: "tests/config/tree-census-timeout.test.ts",
+		text: "for (const statement of root.children()) {",
+		count: 1,
+		reason:
+			"`readShape` enumerates a module's top-level statements, one level, to seed its shape table",
+	},
+	{
 		file: "tests/config/runner-group-id-census.test.ts",
 		text: "? raw.children().find((node) => node.isNamed())",
 		count: 1,
