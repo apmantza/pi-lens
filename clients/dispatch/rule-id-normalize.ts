@@ -95,10 +95,10 @@ export function normalizeRuleId(ruleId: string): string {
  * undefined name is ruff `F821` and pyright `reportUndefinedVariable`. A
  * class gives its members one key (`findingClassKey`) and one severity
  * (`withClassSeverity`), both read by the dispatcher's class merge after the
- * per-copy filters, the delta and the pre-edit seed, and by the blocker
- * record's merge. So the verdict no longer depends on which tool of a fallback
- * chain answered, and a tool that runs beside another reports the finding
- * once.
+ * per-copy filters, the delta and the pre-edit seed; the blocker record's merge
+ * reads the key too. So the verdict no longer depends on which tool of a
+ * fallback chain answered, and a tool that runs beside another reports the
+ * finding once.
  *
  * The table is closed and keyed by the EMITTED `tool` and the rule exactly as
  * that tool spells it. A pair not listed is no member: it keeps its own key and
