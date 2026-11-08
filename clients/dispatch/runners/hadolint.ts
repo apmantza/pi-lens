@@ -10,15 +10,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const hadolint = createAvailabilityChecker("hadolint", ".exe");
 
 interface HadolintResult {
 	line: number;
@@ -78,12 +73,7 @@ const hadolintRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		let cmd: string | null = null;
-		if (await hadolint.isAvailableAsync(cwd)) {
-			cmd = hadolint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "hadolint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "hadolint");
 
 		if (!cmd) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };

@@ -11,15 +11,12 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
 	resolveRunnerCwd,
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const yamllint = createAvailabilityChecker("yamllint", ".exe");
 
 export { hasYamllintConfig };
 
@@ -76,12 +73,7 @@ const yamllintRunner: RunnerDefinition = {
 			);
 		}
 
-		let cmd: string | null = null;
-		if (await yamllint.isAvailableAsync(cwd)) {
-			cmd = yamllint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 

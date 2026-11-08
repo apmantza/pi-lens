@@ -13,7 +13,6 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
 	coveringLaneAvailable,
 	lspPrimaryCoversFile,
 	resolveToolCommandWithInstallFallback,
@@ -21,8 +20,6 @@ import {
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const taplo = createAvailabilityChecker("taplo", ".exe");
 
 // Verified against taplo 0.10.0: 0 = clean, 1 = the file is invalid (lint
 // findings, or a schema it could not load), 2 = clap rejected the invocation.
@@ -177,23 +174,19 @@ const taploRunner: RunnerDefinition = {
 			};
 		}
 
-		// Project binary first (#1731, discipline B): `taplo.isAvailableAsync`
-		// resolves through `findManagedNodeToolBinary`, pi-lens's own managed
+		// Project binary first (#1731, discipline B): the shared resolver
+		// (`resolveToolCommandWithInstallFallback`) resolves through `findManagedNodeToolBinary`, pi-lens's own managed
 		// shim — checked BEFORE any project-local candidate, so a project's own
 		// `node_modules/.bin/taplo` (npm `@taplo/cli`) never won once the managed
 		// copy answered. `findLocalBinUpwards` defaults to `.cmd` on Windows,
-		// matching that npm shim; the availability checker's `.exe` extension is
+		// matching that npm shim; the resolver's `.exe` extension (the registry spec) is
 		// correct for pi-lens's OWN managed install (a GitHub-release binary,
 		// `clients/installer/index.ts` taplo entry), a different artifact with a
-		// different extension, so it stays as the checker's fallback only.
+		// different extension, so it stays as the resolver's fallback only.
 		let cmd: string | null =
 			localBinPath(findLocalBinUpwards("taplo", cwd)) ?? null;
 		if (!cmd) {
-			if (await taplo.isAvailableAsync(cwd)) {
-				cmd = taplo.getCommand(cwd);
-			} else {
-				cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");
-			}
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");
 		}
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };

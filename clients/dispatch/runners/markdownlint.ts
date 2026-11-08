@@ -13,10 +13,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { markdownlintNoFixInvocation } from "./utils/markdownlint-api.js";
 import { parseToolRun } from "./utils/tool-failure.js";
@@ -25,11 +22,6 @@ import {
 	noteSpawnTimeout,
 } from "../../spawn-timeout-cooldown.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
-
-const markdownlint = createAvailabilityChecker("markdownlint-cli2", ".cmd", [
-	"--no-globs",
-	"-",
-]);
 
 // EXIT TABLE (markdownlint-cli2 0.17 README https://github.com/DavidAnson/markdownlint-cli2#exit-codes): 0 = no
 // findings, 1 = lint findings, 2 = unexpected error (unreadable config, bad
@@ -136,12 +128,10 @@ const markdownlintRunner: RunnerDefinition = {
 		if (policy && !policy.preferredRunners.includes("markdownlint")) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
-		let cmd: string | null = null;
-		if (await markdownlint.isAvailableAsync(cwd)) {
-			cmd = markdownlint.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "markdownlint");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(
+			cwd,
+			"markdownlint",
+		);
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 

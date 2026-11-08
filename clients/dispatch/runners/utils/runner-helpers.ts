@@ -49,6 +49,7 @@ import {
 	findLocalBinAt,
 	findLocalBinUpwards,
 	localBinPath,
+	NODE_MODULES_BIN_DIRS,
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "../../../package-manager.js";
@@ -79,7 +80,6 @@ import {
 	isLatchingOutcome,
 	logAvailabilityDecision,
 	startHostStallSampler,
-	transientRetryDelayMs,
 } from "./availability-policy.js";
 
 export type {
@@ -559,13 +559,20 @@ export function createVenvFinder(
 	 * The default (`true`) preserves every session-root caller unchanged.
 	 */
 	allowProjectLocal = true,
+	/**
+	 * The project-local bin dirs looked up at exactly `cwd`, in order (#5410).
+	 * The registry-driven resolver passes the venv dirs then
+	 * `node_modules/.bin`, so an npm-strategy tool's project shim is found
+	 * without the memo-less second probe that used to look for it.
+	 */
+	projectBinDirs: readonly string[] = VENV_BIN_DIRS,
 ): (cwd: string) => Promise<VenvResolution> {
 	return async (cwd: string): Promise<VenvResolution> => {
 		if (allowProjectLocal) {
 			const venvBin = localBinPath(
 				findLocalBinAt(command, cwd, {
 					windowsExt,
-					binDirs: VENV_BIN_DIRS,
+					binDirs: projectBinDirs,
 				}),
 			);
 			if (venvBin) return { path: venvBin, rung: "venv" };
@@ -629,17 +636,17 @@ export async function resolveManagedToolClient<T>(options: {
 	return { outcome: "success", value };
 }
 
+/**
+ * One cwd's verdict (#5410). The verdict, its cooldown ladder and its trust
+ * stamp live in the shared latch (#4530), so a trust change drops it at the
+ * next read; the checker keeps only the command the verdict resolved and the
+ * probe's elapsed time for the unavailable message.
+ */
 type AvailabilityCache = {
-	available: boolean | null;
+	latch: AvailabilityLatch;
 	command: string | null;
-	outcome: AvailabilityOutcome | null;
-	cause: AvailabilityCause | null;
 	/** How long the last probe took, ms — surfaced in the unavailable message. */
 	elapsedMs: number;
-	/** Epoch ms after which a transient `false` may be re-probed; 0 = latched. */
-	retryAtMs: number;
-	/** Consecutive transient failures, for the bounded exponential cooldown. */
-	transientAttempts: number;
 };
 
 export interface AvailabilityCheckerOptions {
@@ -654,6 +661,14 @@ export interface AvailabilityCheckerOptions {
 	 * never a project-local `.venv` one. Omitted keeps the session default.
 	 */
 	allowProjectLocal?: boolean;
+	/** Project-local bin dirs at exactly `cwd`; see `createVenvFinder`. */
+	projectBinDirs?: readonly string[];
+	/**
+	 * Resolve the bare command on PATH only, for a caller that spawns it by
+	 * that bare name (`DispatchContext.hasTool`, #5410): a managed or venv
+	 * answer would pass a binary the caller then cannot find.
+	 */
+	pathOnly?: boolean;
 }
 
 /**
@@ -723,8 +738,9 @@ const resolveInstallInFlightByCwd = new PathKeyedMap<
 //
 // A correction is genuine only when a latched `unavailable` row for the same
 // pair stood before it. `verifyOrInstallCommand` also emits through this seam
-// with NO prior latch behind it (biome-check and oxlint reach it with no
-// checker probe at all), and burning this memo on such a row silences the
+// with NO prior latch behind it (the bundler-form
+// `resolveCommandArgsWithInstallFallback` reaches it with no checker probe at
+// all), and burning this memo on such a row silences the
 // LATER genuine latch-then-recover for the same pair — the #1606 defect back
 // through the #1612 seam (#1657). Those rows dedupe against
 // `uncorrectedEmissionsByCwd` instead, so repeats stay suppressed without
@@ -1078,7 +1094,6 @@ export function resetDispatchAvailabilityState(): void {
 	availabilityGeneration.bump();
 	checkerProbeFlights.clear();
 	cwdProbeFlights.clear();
-	// The generation bump invalidates dispatcherProbeFlights in its owner module.
 }
 
 /** What the last probe for a cwd decided, for messaging and telemetry (#1467). */
@@ -1130,12 +1145,15 @@ export function createAvailabilityChecker(
 	let checkerGeneration = availabilityGeneration.current();
 	let checkerFlightGeneration = 0;
 
-	const findCommand = createVenvFinder(
-		command,
-		windowsExt,
-		versionArgs,
-		options.allowProjectLocal !== false,
-	);
+	const findCommand = options.pathOnly
+		? async (): Promise<VenvResolution> => ({ path: command, rung: "path" })
+		: createVenvFinder(
+				command,
+				windowsExt,
+				versionArgs,
+				options.allowProjectLocal !== false,
+				options.projectBinDirs,
+			);
 
 	function ensureCurrentGeneration(): void {
 		if (checkerGeneration === availabilityGeneration.current()) return;
@@ -1158,13 +1176,9 @@ export function createAvailabilityChecker(
 		const existing = cacheByCwd.get(key);
 		if (existing) return existing;
 		const created: AvailabilityCache = {
-			available: null,
+			latch: createAvailabilityLatch(),
 			command: null,
-			outcome: null,
-			cause: null,
 			elapsedMs: 0,
-			retryAtMs: 0,
-			transientAttempts: 0,
 		};
 		cacheByCwd.set(key, created);
 		return created;
@@ -1185,24 +1199,14 @@ export function createAvailabilityChecker(
 			evidence?: ProbeEvidence;
 		},
 	): void {
-		cache.available = verdict.available;
-		cache.outcome = verdict.outcome;
-		cache.cause = verdict.cause;
 		cache.elapsedMs = verdict.elapsedMs;
 		let retryAfterMs: number | undefined;
 		if (verdict.available) {
-			cache.retryAtMs = 0;
-			cache.transientAttempts = 0;
-		} else if (isLatchingOutcome(verdict.outcome)) {
-			cache.retryAtMs = 0;
-			cache.transientAttempts = 0;
+			cache.latch.noteAvailable(verdict.cause);
 		} else {
-			cache.transientAttempts += 1;
-			retryAfterMs = transientRetryDelayMs(
-				cache.transientAttempts,
-				verdict.cause,
-			);
-			cache.retryAtMs = Date.now() + retryAfterMs;
+			cache.command = null;
+			const delay = cache.latch.noteUnavailable(verdict.outcome, verdict.cause);
+			if (delay > 0) retryAfterMs = delay;
 		}
 		const latched = verdict.available || isLatchingOutcome(verdict.outcome);
 		// Remember the pair whose durable row now says "unavailable and staying
@@ -1243,23 +1247,22 @@ export function createAvailabilityChecker(
 		ensureCurrentGeneration();
 		const resolvedCwd = cwd || process.cwd();
 		const cache = getCache(resolvedCwd);
-		if (cache.available === false) {
-			// A durable "this machine does not have the tool" stays cached; a
-			// transient probe failure only holds until its cooldown expires, so an
-			// installed tool cannot be disabled for the life of the process by one
-			// slow second at warm-up (#1467).
-			if (cache.outcome !== "transient") return false;
-			if (Date.now() < cache.retryAtMs) return false;
-			cache.available = null;
-		}
-		if (cache.available === true && cache.command) {
-			if (await isSpawnableCommand(cache.command)) return true;
+		// A durable "this machine does not have the tool" stays cached; a
+		// transient probe failure only holds until its cooldown expires, so an
+		// installed tool cannot be disabled for the life of the process by one
+		// slow second at warm-up (#1467). A verdict written under another pi
+		// trust answer reads as `null` and is probed again (#4530, #5410): the
+		// project venv rung is refused or admitted by trust.
+		const answer = cache.latch.read();
+		if (answer === false) return false;
+		if (answer === true) {
+			if (cache.command && (await isSpawnableCommand(cache.command))) {
+				return true;
+			}
 			// Cached-positive spawn feedback: a removed absolute path or vanished
 			// PATH command must fall through to a fresh probe immediately.
-			cache.available = null;
+			cache.latch.reset();
 			cache.command = null;
-			cache.outcome = null;
-			cache.cause = null;
 		}
 
 		const key = path.resolve(resolvedCwd);
@@ -1357,12 +1360,20 @@ export function createAvailabilityChecker(
 				const shared = checkerProbeFlights.run(
 					`checker:${command}|${versionArgs.join("|")}|${key}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
 					() =>
-						safeSpawnAsync(cmd, versionArgs, {
-							timeout: options.probeTimeout ?? 5000,
-							cwd: resolvedCwd,
-							env,
-							input: "",
-						}),
+						// A bare PATH-only probe goes through the cwd-less probe seam
+						// (#2894): nothing it answers is read out of a project.
+						options.pathOnly
+							? probeToolAsync(cmd, versionArgs, {
+									timeout: options.probeTimeout ?? 5000,
+									env,
+									input: "",
+								})
+							: safeSpawnAsync(cmd, versionArgs, {
+									timeout: options.probeTimeout ?? 5000,
+									cwd: resolvedCwd,
+									env,
+									input: "",
+								}),
 				);
 				probeJoined = shared.joined;
 				result = await shared.promise;
@@ -1437,20 +1448,19 @@ export function createAvailabilityChecker(
 
 	function getOutcome(cwd?: string): AvailabilityOutcome | null {
 		ensureCurrentGeneration();
-		return getCache(cwd || process.cwd()).outcome;
+		return getCache(cwd || process.cwd()).latch.getOutcome();
 	}
 
 	function getVerdict(cwd?: string): AvailabilityVerdict {
 		ensureCurrentGeneration();
-		const cache = getCache(cwd || process.cwd());
+		const { latch, elapsedMs } = getCache(cwd || process.cwd());
+		const outcome = latch.getOutcome();
 		return {
-			outcome: cache.outcome,
-			cause: cache.cause,
-			elapsedMs: cache.elapsedMs,
-			latched:
-				cache.available !== false ||
-				isLatchingOutcome(cache.outcome ?? "missing"),
-			retryAtMs: cache.retryAtMs,
+			outcome,
+			cause: latch.getCause(),
+			elapsedMs,
+			latched: outcome === null || isLatchingOutcome(outcome),
+			retryAtMs: latch.getRetryAtMs(),
 		};
 	}
 
@@ -1742,19 +1752,49 @@ export function resolveVendorToolCommand(
 	);
 }
 
+type AvailabilityChecker = ReturnType<typeof createAvailabilityChecker>;
+
+/**
+ * One checker per registry tool id (#5410), shared by every runner and
+ * autofix lane that resolves the tool by id. It holds only per-cwd latches,
+ * which the session generation and the trust generation clear.
+ */
+const toolBinaryCheckers = new Map<string, AvailabilityChecker>();
+
+function toolBinaryChecker(toolId: string): AvailabilityChecker | null {
+	const existing = toolBinaryCheckers.get(toolId);
+	if (existing) return existing;
+	const spec = getToolCommandSpec(toolId);
+	if (!spec) return null;
+	const checker = createAvailabilityChecker(
+		spec.command,
+		spec.windowsExt ?? "",
+		spec.versionArgs ?? ["--version"],
+		{ projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS] },
+	);
+	toolBinaryCheckers.set(toolId, checker);
+	return checker;
+}
+
+/**
+ * THE tool-binary resolver for a registry tool id (#5410): the project's own
+ * venv or `node_modules/.bin` at exactly `cwd` (trust-gated, never an
+ * ancestor, #2544 r4 F2), then the managed installs, then PATH, each answer
+ * proven by a version probe, the verdict held in the shared latch (#4530), and
+ * an install only for a typed `missing` verdict. Runners and autofix lanes
+ * call this once; a second probe of their own is the double probe #5410
+ * removed.
+ */
 export async function resolveToolCommandWithInstallFallback(
 	cwd: string,
 	toolId: string,
-	timeout = 5000,
 ): Promise<string | null> {
-	const spec = getToolCommandSpec(toolId);
-	if (!spec) return null;
-	return resolveCommandWithInstallFallback(
-		resolveToolCommand(cwd, toolId) ?? spec.command,
-		spec.managedToolId ?? toolId,
+	const checker = toolBinaryChecker(toolId);
+	if (!checker) return null;
+	return resolveAvailableOrInstall(
+		checker,
+		getToolCommandSpec(toolId)?.managedToolId ?? toolId,
 		cwd,
-		spec.versionArgs ?? ["--version"],
-		timeout,
 	);
 }
 
@@ -1791,9 +1831,9 @@ async function verifyOrInstallCommand(
 		noteInstallSuccess(toolId, cwd);
 		// A latched `unavailable` row MAY stand here, written by whatever probe
 		// the caller ran first — but not always. The on-disk pre-check above
-		// logs nothing, and two runners reach this seam with no checker probe at
-		// all (biome-check and oxlint call
-		// `resolveToolCommandWithInstallFallback` directly, #1657). So the row is
+		// logs nothing, and the bundler form (rubocop's
+		// `resolveCommandArgsWithInstallFallback`) reaches this seam with no
+		// checker probe at all (#1657). So the row is
 		// emitted either way, and only a call that really clears a latched row is
 		// recorded as a correction. Without the row, the durable log keeps saying
 		// the tool is off after the installer just brought it back — the third
@@ -1840,16 +1880,6 @@ export async function resolveCommandArgsWithInstallFallback(
 		return command;
 	}
 	return { cmd: installed, args: [] };
-}
-
-export async function resolveCommandWithInstallFallback(
-	command: string,
-	toolId: string,
-	cwd: string,
-	versionArgs: string[] = ["--version"],
-	timeout = 5000,
-): Promise<string | null> {
-	return verifyOrInstallCommand(command, toolId, cwd, versionArgs, timeout);
 }
 
 async function resolveAvailableOrInstallUnshared(
