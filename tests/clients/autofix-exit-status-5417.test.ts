@@ -173,7 +173,7 @@ describe("a fixer that rewrites then exits nonzero is recorded as changed (#5417
 
 	// The whole-package fixers (`cargo clippy --fix`, `dart fix --apply`) read
 	// the project diff, and gated that diff on exit code 0: the same shape.
-	it("rust-clippy: the files a nonzero `cargo clippy --fix` rewrote are recorded", async () => {
+	it("rust-clippy: the files a nonzero cargo clippy --fix rewrote are recorded", async () => {
 		fs.writeFileSync(
 			path.join(env.tmpDir, "Cargo.toml"),
 			'[package]\nname = "fixture"\nversion = "0.1.0"\nedition = "2021"\n',
