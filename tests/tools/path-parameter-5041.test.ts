@@ -212,14 +212,16 @@ describe("#5041 the shared `paths` reader's entry rules", () => {
 				expect(result.isError, entry).toBeFalsy();
 			}
 			// Every entry reached the child host-resolved, so a relative `src`,
-			// `./src` and the absolute directory are one target.
+			// `./src` and the absolute directory are one target. The GLOB entry
+			// reaches it as the file it names (#5371), not as a pattern the CLI
+			// reads as a file name and answers "No matches found" for.
 			const targets = astGrep.search.mock.calls.map(
 				(call) => (call[2] as string[])[0],
 			);
 			expect(targets).toEqual([
 				path.join(env.tmpDir, "src"),
 				path.join(env.tmpDir, "src"),
-				path.join(env.tmpDir, "src", "**", "*.ts"),
+				path.join(env.tmpDir, "src", "a.ts"),
 				path.join(env.tmpDir, "src"),
 			]);
 		} finally {

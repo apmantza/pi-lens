@@ -15,7 +15,6 @@
  */
 
 import * as path from "node:path";
-import { minimatch } from "./deps/minimatch.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { applyPushedFindingPolicyByFile } from "./dispatch/finding-policy.js";
 import {
@@ -30,7 +29,11 @@ import { resolveLanguageScope } from "./language-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/capabilities.js";
 import { acquireWarmWordIndex } from "./mcp/analyze.js";
-import { normalizeMapKey, relativeInside, toPosix } from "./path-utils.js";
+import {
+	normalizeEphemeralMapKey,
+	normalizeMapKey,
+	toPosix,
+} from "./path-utils.js";
 import { scanProjectDiagnostics } from "./project-diagnostics/scanner.js";
 import type { ProjectDiagnosticsSnapshot } from "./project-diagnostics/types.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
@@ -353,10 +356,11 @@ interface SymbolSearchHit {
  */
 export interface SymbolSearchOptions {
 	/**
-	 * Glob array scoping hits to matching files — same shape/semantics as
-	 * `ast_grep_search`'s `paths` param: a bare directory/file entry scopes its
-	 * whole subtree, a full glob pattern (`src/**\/*.ts`) is matched as-is.
-	 * Matched against each candidate file's path relative to `cwd`.
+	 * Files and directories scoping hits: the entries `readPathsArgument` returns
+	 * (#5371), where a glob has already been expanded to the paths it names. A
+	 * file entry scopes that file, a directory entry its whole subtree, and an
+	 * entry is compared as a path, never read as a pattern, so a file named
+	 * `[id].ts` is that file. A relative entry resolves against `cwd`.
 	 */
 	paths?: string[];
 	/**
@@ -399,37 +403,6 @@ export function symbolSearchFileMatchesLang(
 	return "refusal" in scope ? false : scope.matches(file);
 }
 
-/** Same glob semantics as ast_grep_search's `paths`: a bare directory/file
- * entry scopes its whole subtree (via a `/**` suffix match), a full glob
- * pattern is matched as-is. `paths` entries arrive host-resolved (#5038), so
- * `src`, `./src` and the absolute directory scope the same files. An entry at
- * or under `cwd` is matched as its `cwd`-relative spelling: the workspace
- * prefix is a literal, never glob syntax, so a directory named `app[1]` or
- * `app{a,b}` keeps its scope (#5047 F1), while the part the caller wrote after
- * it (`src/**\/*.ts`) is still a pattern. Any other entry (outside `cwd`, or a
- * relative glob) is also tried against the candidate's absolute spelling. */
-function fileMatchesPathGlobs(
-	file: string,
-	cwd: string,
-	globs: readonly string[],
-): boolean {
-	const rel = path.relative(cwd, file).split(path.sep).join("/");
-	const abs = path.resolve(file).split(path.sep).join("/");
-	const options = { dot: true, nocase: process.platform === "win32" };
-	const matches = (candidate: string, pattern: string) =>
-		minimatch(candidate, pattern, options) ||
-		minimatch(candidate, `${pattern}/**`, options);
-	return globs.some((raw) => {
-		const within = path.isAbsolute(raw) ? relativeInside(cwd, raw) : undefined;
-		// An entry at or under `cwd` is matched on the relative spelling alone,
-		// never against the absolute candidate, whose workspace prefix is not a
-		// pattern. `cwd` itself relativizes to "", which scopes the whole workspace.
-		if (within !== undefined) return matches(rel, toPosix(within) || "**");
-		const pattern = toPosix(raw);
-		return matches(rel, pattern) || (abs !== rel && matches(abs, pattern));
-	});
-}
-
 function buildSymbolSearchFileFilter(
 	cwd: string,
 	options: SymbolSearchOptions,
@@ -439,11 +412,38 @@ function buildSymbolSearchFileFilter(
 	const paths = options.paths;
 	const lang = options.lang?.trim();
 	if (!paths?.length && !lang) return undefined;
+	// #5371 r2: the reader already expanded every glob, so each entry is a
+	// CONCRETE file or directory. It is compared as text, never read as a pattern:
+	// a file named `[id].ts` or `b{1,2}.ts` is a name, and the engine used to hand
+	// it back to minimatch and drop it (#5393 F9).
+	const scope = paths?.length ? scopeEntryKeys(cwd, paths) : undefined;
 	return (file: string) => {
-		if (paths?.length && !fileMatchesPathGlobs(file, cwd, paths)) return false;
+		if (scope && !fileIsInScope(file, scope)) return false;
 		if (lang && !symbolSearchFileMatchesLang(file, lang)) return false;
 		return true;
 	};
+}
+
+/** Lexical, slash-folded keys for the entries (a relative spelling resolves
+ * against `cwd`). Lexical on purpose: this runs once per indexed file. */
+function scopeEntryKeys(cwd: string, paths: readonly string[]): Set<string> {
+	return new Set(
+		paths.map((entry) => normalizeEphemeralMapKey(path.resolve(cwd, entry))),
+	);
+}
+
+/** A file is in scope when it IS an entry or sits under an entry directory:
+ * the file's own key, then each ancestor, is looked up in the entry set. */
+function fileIsInScope(file: string, scope: ReadonlySet<string>): boolean {
+	let key = normalizeEphemeralMapKey(path.resolve(file));
+	for (;;) {
+		if (scope.has(key)) return true;
+		const cut = key.lastIndexOf("/");
+		if (cut < 0) return false;
+		key = key.slice(0, cut);
+		// Up to the root: "" on POSIX, "c:" on a drive; the root entry spells "/".
+		if (!key.includes("/")) return scope.has(`${key}/`);
+	}
 }
 
 /** The refusal sentence for the first unknown `lang` token a call carries —

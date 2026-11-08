@@ -15,7 +15,10 @@ const astClient = {
 
 const expected = {
 	ast_grep_search: {
-		total: 1473,
+		// 1473 -> 1590 (#5371): the `paths` entry carries the shared glob clause
+		// (`PATHS_GLOB_CLAUSE`, tools/shared.ts) so the parameter stops advertising
+		// a meaning the tool did not have.
+		total: 1590,
 		maximum: 2995,
 		keys: [
 			"dump",
@@ -41,7 +44,8 @@ const expected = {
 	lens_diagnostics: {
 		// 1964 -> 2086 (#5041): `file` and `filePath` are declared aliases of
 		// `path` on this tool, because the MCP mirror shares this schema.
-		total: 2086,
+		// 2086 -> 2203 (#5371): the `paths` entry carries the shared glob clause.
+		total: 2203,
 		maximum: 2594,
 		keys: [
 			"source",

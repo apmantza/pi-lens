@@ -61,6 +61,7 @@ import {
 import { compactRenderResult } from "./render-compact.js";
 import {
 	MAX_PATHS_ENTRIES,
+	PATHS_GLOB_CLAUSE,
 	readFilePath,
 	readPathsArgument,
 } from "./shared.js";
@@ -645,7 +646,7 @@ export function createLensDiagnosticsTool(
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
 					maxItems: MAX_PATHS_ENTRIES,
-					description: "Files or directories to filter.",
+					description: `Files or directories to filter. ${PATHS_GLOB_CLAUSE}`,
 				}),
 			),
 		}),
@@ -681,20 +682,37 @@ export function createLensDiagnosticsTool(
 			}
 			// #5041: one reader owns the `paths` entry rules (non-string, blank,
 			// empty list, cap) and the host-path spelling, on both routes below.
-			const pathsRead = readPathsArgument(params.paths, { cwd });
-			if (pathsRead.refusal) {
+			const pathsSignal = ctx.signal ?? signal;
+			const pathsRead = await readPathsArgument(params.paths, {
+				cwd,
+				signal: pathsSignal,
+			});
+			// The single `path` goes through the same reader and its refusal is
+			// surfaced the same way: a refused read used to give `[]`, and an empty
+			// scope is "no restriction", so a glob `path` answered for every cached
+			// file (#5393 F3, the #5041 "accepted alias never widens" rule).
+			const singleRead =
+				!pathsRead.refusal && singlePath.path
+					? await readPathsArgument([singlePath.path], {
+							cwd,
+							signal: pathsSignal,
+						})
+					: undefined;
+			const pathsRefusal = pathsRead.refusal ?? singleRead?.refusal;
+			if (pathsRefusal) {
 				return {
-					content: [{ type: "text" as const, text: pathsRead.refusal }],
+					content: [{ type: "text" as const, text: pathsRefusal }],
 					isError: true,
 					details: { mode: legacyMode ?? "delta", pathsError: true },
 				};
 			}
-			// The `source=lsp` route gets the caller's own, reader-validated `paths`,
-			// not `pathsRead.entries`: that route resolves each entry itself
-			// (`expandPathsToFiles`), and `resolveHostToolPath` is not idempotent for
-			// an absolute entry holding a host-unicode space, so a second pass named a
-			// sibling directory that does not exist (#5047 F2). The cache routes below
-			// read `pathEntries`, resolved exactly once.
+			// The `source=lsp` route below gets the READER's entries, not the caller's
+			// own list: #5371 put glob expansion in the reader, so a forwarded raw
+			// entry would still be a pattern there. The reader resolves each entry
+			// exactly once, and `resolveHostToolPath` is not idempotent for an absolute
+			// entry holding a host-unicode space, so the forwarding carries its own
+			// provenance flag and the route skips its second pass (#5047 F2). The cache
+			// routes below read `pathEntries`, resolved exactly once.
 			params = {
 				...params,
 				...(singlePath.path ? { path: singlePath.path } : {}),
@@ -705,15 +723,19 @@ export function createLensDiagnosticsTool(
 			// route returns below and keeps its file route (a directory `path` under
 			// `scope=workspace` still scans that directory, #2052).
 			const pathEntries = singlePath.path
-				? [
-						...pathsRead.entries,
-						...readPathsArgument([singlePath.path], { cwd }).entries,
-					]
+				? [...pathsRead.entries, ...(singleRead?.entries ?? [])]
 				: pathsRead.entries;
 			if (source === "lsp") {
 				const lspParams = { ...params };
 				delete lspParams.source;
 				delete lspParams.scope;
+				// #5371: a glob entry exists only in the reader, so this route receives
+				// the expanded list and the provenance that says so. A single `path` is
+				// NOT folded in here: it keeps the file/directory route below (#2052).
+				if (pathsRead.entries.length > 0) {
+					lspParams.paths = pathsRead.entries;
+					lspParams.pathsAlreadyResolved = true;
+				}
 				// #2860: explicit `path`/`paths` always win. `scope=workspace`
 				// only supplies a `cwd` default (a full workspace sweep) when the
 				// caller gave NEITHER — it must never override an explicit

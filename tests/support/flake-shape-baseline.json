@@ -197,6 +197,7 @@
 		"support/vitest-setup-registry-teardown.test.ts": 2,
 		"tools/ast-grep-outline.test.ts": 2,
 		"tools/lsp-navigation-rename-first-open.test.ts": 2,
+		"tools/path-glob-5371-tracked-index.test.ts": 5,
 		"tools/tool-abort-scope-5097.test.ts": 1
 	},
 	"elapsed-time-assertion": {

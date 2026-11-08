@@ -1381,17 +1381,19 @@ describe("symbol_search term-less calls (#5135)", () => {
 	// #5135 r2 (F5): the engine returns a refusal ONLY for the lang vocabulary;
 	// any other error out of the search propagates. Recurrence guarded: a catch
 	// that swallowed every error stayed green across 188 tests in PR #5373 r1.
-	// A `paths` entry past minimatch's 64 KiB pattern bound throws a TypeError
-	// from inside the search.
+	// A non-string `paths` entry (the reader refuses one; a direct caller can
+	// still hand it over) throws a TypeError from inside the search. #5371 r2:
+	// the engine compares entries as concrete paths now, so minimatch's 64 KiB
+	// pattern bound, this case's earlier trigger, no longer exists here.
 	it("lets an unexpected search error propagate instead of reporting a refusal", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-rethrow-");
 		try {
 			listingFixture(env);
 			await expect(
 				symbolSearch("authenticate", env.tmpDir, 20, {
-					paths: ["a".repeat(70_000)],
+					paths: [null as unknown as string],
 				}),
-			).rejects.toThrow(/too long/i);
+			).rejects.toThrow(/must be of type string/i);
 		} finally {
 			env.cleanup();
 		}
@@ -1420,5 +1422,79 @@ describe("symbol_search term-less calls (#5135)", () => {
 			description?: string;
 		};
 		expect(querySchema.description).toBe(SYMBOL_SEARCH_QUERY_DESCRIPTION);
+	});
+});
+
+// #5371 r2. The reader hands the engine CONCRETE entries (a literal or a file
+// or directory a glob expanded to), so the engine's filter must match them
+// exactly and never read a file NAME as a pattern. RECURRENCE GUARDED (#5393
+// F9/F7): the engine re-fed `pages/[id].ts` and `pages/b{1,2}.ts` to minimatch
+// and silently dropped them, and the reader's 100-entry file-list cap refused
+// `clients/**/*.ts` for a tool that only filters an index.
+describe("symbol_search paths: concrete entries from the shared reader (#5371)", () => {
+	const body = "export function zzquuxMarker() { return 1; }";
+
+	async function listing(
+		env: { tmpDir: string },
+		files: string[],
+		paths: string[],
+	): Promise<string[]> {
+		warmWordIndexSnapshot(
+			env.tmpDir,
+			files.map((name) => ({
+				path: createTempFile(env.tmpDir, name, body),
+				content: body,
+			})),
+		);
+		const tool = createSymbolSearchTool(() => env.tmpDir);
+		const result = await tool.execute(
+			"1",
+			{ query: "", paths, limit: 500 },
+			undefined,
+			null,
+			{ cwd: env.tmpDir },
+		);
+		return rankedFiles(String(result.content[0]?.text)).sort();
+	}
+
+	it("keeps an expanded file whose NAME holds glob syntax, and a literal bracket entry exact (F9)", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-5371-brackets-", {
+			rootMarker: false,
+		});
+		try {
+			const files = [
+				"pages/[id].ts",
+				"pages/b{1,2}.ts",
+				"pages/index.ts",
+				"pages/i.ts",
+			];
+			expect(await listing(env, files, ["pages/*.ts"])).toEqual(
+				[...files].sort(),
+			);
+			// `[id]` as a minimatch class would also admit `pages/i.ts`.
+			expect(await listing(env, files, ["pages/[id].ts"])).toEqual([
+				"pages/[id].ts",
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("scopes a glob matching more files than the file-list cap (F7)", async () => {
+		const env = setupTestEnvironment("pi-lens-symbolsearch-5371-bigglob-", {
+			rootMarker: false,
+		});
+		try {
+			const files = Array.from(
+				{ length: 120 },
+				(_, index) => `big/f${index}.ts`,
+			);
+			files.push("other/o.ts");
+			const scoped = await listing(env, files, ["big/**/*.ts"]);
+			expect(scoped).toHaveLength(120);
+			expect(scoped).not.toContain("other/o.ts");
+		} finally {
+			env.cleanup();
+		}
 	});
 });

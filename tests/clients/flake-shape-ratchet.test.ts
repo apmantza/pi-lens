@@ -1733,6 +1733,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:tools/path-glob-5371-tracked-index.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"The cold-vs-warm tracked-index cell needs an index a real Git process wrote; a stub would restate the set the cell asserts.",
+	},
 	// 2026-11-08 (#5097): whether a tool call's abort kills its ast-grep child,
 	// and whether an apply leaves a file set half rewritten, are facts about a
 	// real child process.
