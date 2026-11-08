@@ -671,10 +671,7 @@ Use `tests/support/fault-injection.ts` for wedged children, seam delays,
 starved budgets, and gates; `makeRunnerCtx`, `makeLspServiceDouble`, and
 `makeRealRunnerEnv` for dispatch, LSP, and rule behavior. Check `tests/support/`
 before writing a helper: a host case uses a pi tier, and a JSON-lines sink is
-read through `readNdjsonRows` (`tests/support/ndjson-rows.ts`), never a local
-`JSON.parse` loop; a claim that needs the complete output asserts its
-`skipped === 0`, because the reader drops a line it cannot parse and reports
-the count instead of throwing. Mock only external binaries, network, host SDK
+read through `readNdjsonRows` (`docs/pi-lens-fixer.md` "Before code"). Mock only external binaries, network, host SDK
 seams (not pi's own behaviour: see the pi tiers above), clocks, or fault
 injection; an in-process store, registry or coordinator is never replaced by a
 fake.
