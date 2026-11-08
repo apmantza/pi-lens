@@ -22,6 +22,11 @@
 				"scope": ["**/*"]
 			},
 			{
+				"path": "docs/ci.md",
+				"description": "CI jobs, caches, shard weights, the Windows leg and the pre-push gate (moved from AGENTS.md \"Commands and gates\").",
+				"scope": ["**/*"]
+			},
+			{
 				"path": "docs/invariants/language-config.md",
 				"description": "Standing invariants: languages and configuration.",
 				"scope": ["**/*"]
