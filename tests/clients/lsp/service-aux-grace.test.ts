@@ -3614,3 +3614,78 @@ describe("#4763 — published-diagnostic count on lsp_aux_wait_outcome", () => {
 		]);
 	});
 });
+
+// #5419 F2: PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS=0 disables early unblock in full
+// mode. The race finalized at the first answer (1 of 2 results here), which the
+// knob's comment, the issue and the changelog all say it must not do.
+describe("#5419 PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS: 0 disables early unblock", () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		logLatency.mockReset();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+		delete process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS;
+	});
+
+	/**
+	 * Two language servers with a finding each: `ts-fast` answers at 50 ms and
+	 * `ts-slow` at 300 ms. Returns the messages of the merged result in `mode`
+	 * (full unless a row passes "document", #5419 V1).
+	 */
+	async function fullModeMessages(
+		grace: string,
+		mode: "full" | "document" = "full",
+	): Promise<string[]> {
+		process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS = grace;
+		vi.resetModules();
+		(await import("../../../clients/lsp/config.js"))._setServersForFileForTests(
+			getServersForFileWithConfig,
+		);
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const clients: Record<string, ReturnType<typeof makeClient>> = {
+			"ts-fast": makeClient(50, [makeDiagnostic("fast server finding")], {
+				serverId: "ts-fast",
+			}),
+			"ts-slow": makeClient(300, [makeDiagnostic("slow server finding")], {
+				serverId: "ts-slow",
+			}),
+		};
+		getServersForFileWithConfig.mockReturnValue([
+			makePrimaryServer("ts-fast"),
+			makePrimaryServer("ts-slow"),
+		]);
+		createLSPClient.mockImplementation(
+			async (options: { serverId: string }) => clients[options.serverId],
+		);
+		const pending = new LSPService().getDiagnostics(FILE, mode);
+		await vi.runAllTimersAsync();
+		return (await pending).map((diagnostic) => diagnostic.message);
+	}
+
+	it("waits for the slow client when the grace is 0 (2 of 2 results)", async () => {
+		expect(await fullModeMessages("0")).toEqual(
+			expect.arrayContaining(["fast server finding", "slow server finding"]),
+		);
+	});
+
+	it("keeps the 400 ms early-unblock window: both clients answer in time (2 of 2 results)", async () => {
+		expect(await fullModeMessages("400")).toEqual(
+			expect.arrayContaining(["fast server finding", "slow server finding"]),
+		);
+	});
+
+	// #5419 V1: the document-mode arm of `earlyUnblockOn` (clients/lsp/index.ts).
+	// With the knob at 0 only that arm finalizes at the first answer, so dropping
+	// it makes document mode wait for the slow client. No other row runs document
+	// mode with the knob at 0.
+	it("document mode finalizes at the first answer when the grace is 0 (1 of 2 results)", async () => {
+		expect(await fullModeMessages("0", "document")).toEqual([
+			"fast server finding",
+		]);
+	});
+});

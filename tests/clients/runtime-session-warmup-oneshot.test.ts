@@ -281,4 +281,59 @@ describe("quick-mode warmup one-shot retention (#1154)", () => {
 			env.cleanup();
 		}
 	});
+
+	// #5419 warmup row: the warmup timer's delay is the PI_LENS_WARMUP_DELAY_MS
+	// read (a fraction floors, a non-numeric value takes the 2000 ms default). A
+	// reader that returned its default for every value would arm 2000 ms for the
+	// fractional case, and a `Number(raw)` reader armed NaN (a 1 ms timer) for "abc".
+	describe("warmup timer delay reads PI_LENS_WARMUP_DELAY_MS (#5419)", () => {
+		const armWarmupAndCollectDelays = async (
+			value: string,
+			armedValue: number,
+		) => {
+			const env = setupTestEnvironment("pi-lens-warmup-oneshot-delay-");
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			process.env.PI_LENS_WARMUP_DELAY_MS = value;
+			process.argv = prevArgv.filter((a) => a !== "--print" && a !== "-p");
+			const realSetTimeout = globalThis.setTimeout;
+			const delays: unknown[] = [];
+			const scheduled: NodeJS.Timeout[] = [];
+			const setTimeoutSpy = vi
+				.spyOn(globalThis, "setTimeout")
+				.mockImplementation(((fn: () => void, ms?: number) => {
+					const timer = realSetTimeout(fn, ms) as NodeJS.Timeout;
+					delays.push(ms);
+					if (ms === armedValue) scheduled.push(timer);
+					return timer;
+				}) as unknown as typeof setTimeout);
+			try {
+				await handleSessionStart(makeDeps(makeWarmableProject(env)));
+				return { delays, scheduled };
+			} finally {
+				for (const t of scheduled) clearTimeout(t);
+				setTimeoutSpy.mockRestore();
+				env.cleanup();
+			}
+		};
+
+		it("arms the warmup at the floored value of a fractional delay", async () => {
+			// A distinctive large value keeps the warmup body from firing during the test.
+			const { delays, scheduled } = await armWarmupAndCollectDelays(
+				"123457.9",
+				123457,
+			);
+			expect(delays).toContain(123457);
+			expect(scheduled).toHaveLength(1);
+		});
+
+		it("arms the 2000 ms default for a non-numeric value, never a NaN or 1 ms timer", async () => {
+			const { delays } = await armWarmupAndCollectDelays("abc", 2000);
+			expect(delays).toContain(2000);
+			expect(
+				delays.filter(
+					(ms) => typeof ms === "number" && (Number.isNaN(ms) || ms < 2),
+				),
+			).toEqual([]);
+		});
+	});
 });

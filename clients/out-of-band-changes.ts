@@ -58,6 +58,7 @@ import {
 	LSP_CONSUMER,
 } from "./disk-change-subscribers.js";
 import { untilAborted } from "./deadline-utils.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
 import { isExcludedDirName } from "./file-utils.js";
 import { logLatency } from "./latency-logger.js";
 import {
@@ -130,9 +131,8 @@ const DECLARATION_FILE = /(?:\.d\.[cm]?ts|\.pyi)$/i;
 const MAX_ROOTS = 64;
 
 /** Least time between two tool_call walks of one root (bash results always walk). */
-function declarationLookIntervalMs(): number {
-	const raw = Number(process.env.PI_LENS_DECLARATION_LOOK_MS);
-	return Number.isFinite(raw) && raw >= 0 ? raw : 2000;
+export function declarationLookIntervalMs(): number {
+	return nonNegativeIntEnv("PI_LENS_DECLARATION_LOOK_MS", 2000);
 }
 
 interface RootRecord {
