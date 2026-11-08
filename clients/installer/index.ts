@@ -55,7 +55,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import fs from "node:fs/promises";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import https from "node:https";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -63,6 +63,7 @@ import path from "node:path";
 import { writeFileAtomicAsync } from "../atomic-write.js";
 import { registerBackgroundWriteDrain } from "../background-write-drains.js";
 import { BoundedLruCache } from "../bounded-cache.js";
+import { hashContentBytes } from "../content-stamp.js";
 import { findCommandOnPath } from "../command-path.js";
 import { logExtension } from "../extension-log.js";
 import { isToolInstallDisabled } from "../env-utils.js";
@@ -5486,7 +5487,7 @@ async function installArchiveTool(
 	// extraction one): `recordDegradationOnce` keys on kind+subject, so sharing
 	// `${id}:${format}` would let an earlier extraction row swallow this one.
 	const pinned = spec.sha256?.[url];
-	const digest = createHash("sha256").update(archiveBuffer).digest("hex");
+	const digest = hashContentBytes(archiveBuffer);
 	if (digest !== pinned) {
 		const reason = pinned === undefined ? "sha256-unpinned" : "sha256-mismatch";
 		recordDegradationOnce({

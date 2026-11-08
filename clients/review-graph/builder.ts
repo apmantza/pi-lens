@@ -6,6 +6,7 @@ import { Worker } from "node:worker_threads";
 import { constants as zlibConstants, gunzipSync, gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { writeFileAtomic } from "../atomic-write.js";
+import { hashContentBytes, hashFileBytes } from "../content-stamp.js";
 import {
 	type GzipStageWorkerResult,
 	readGzipStageWorkerResult,
@@ -1307,9 +1308,7 @@ function sourceSignatureFromMap(signatures: Map<string, string>): string {
 
 function contentHashEntry(file: string): string {
 	try {
-		// sha256, not for security — a content fingerprint for change detection;
-		// avoids SonarCloud's weak-hash (sha1/md5) flag.
-		return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+		return hashFileBytes(file);
 	} catch {
 		return "missing";
 	}
@@ -6056,7 +6055,7 @@ async function _doBuildGraph(
 			try {
 				const bytes = fs.readFileSync(file);
 				content = bytes.toString("utf-8");
-				fileHashes.set(file, createHash("sha256").update(bytes).digest("hex"));
+				fileHashes.set(file, hashContentBytes(bytes));
 			} catch {
 				content = null;
 				fileHashes.set(file, "missing");
