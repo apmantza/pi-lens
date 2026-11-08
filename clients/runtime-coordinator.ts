@@ -19,6 +19,7 @@ import {
 	foldedFindingIdentity,
 	retainRecordedFindings,
 } from "./finding-identity.js";
+import { findingClassKey } from "./dispatch/rule-id-normalize.js";
 import { formatDiagnostics } from "./dispatch/utils/format-utils.js";
 import {
 	inlineBlockerLines,
@@ -2001,7 +2002,10 @@ export class RuntimeCoordinator {
 		// #4484 round 5 (K3): not the id. A carry that moves a blocker's line
 		// keeps its line-bound id (`lsp:<code>:<line>`), so the settled copy at
 		// the same line has another one.
+		// #5416: a class member (`findingClassKey`) is the one finding whichever
+		// tool's copy the record holds, as the dispatcher's dedupe reads it.
 		const identity = (d: Diagnostic) =>
+			findingClassKey(d) ??
 			JSON.stringify([foldedFindingIdentity(d), d.line, d.column]);
 		const known = new Set((existing?.diagnostics ?? []).map(identity));
 		const added = blocking.flatMap((d) => (known.has(identity(d)) ? [] : [d]));

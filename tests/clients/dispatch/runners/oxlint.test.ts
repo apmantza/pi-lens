@@ -774,7 +774,9 @@ describe("oxlint runner", () => {
 		const env = setupTestEnvironment("pi-lens-oxlint-fallback-stop-");
 		try {
 			const filePath = path.join(env.tmpDir, "sample.ts");
-			fs.writeFileSync(filePath, "const unused = 1;\n");
+			// #5416: not an unused variable: that class is a blocker whichever tool
+			// reports it, and this case is about a run that only warns.
+			fs.writeFileSync(filePath, "console.log(1);\n");
 
 			safeSpawnAsync.mockResolvedValue({
 				error: null,
@@ -782,11 +784,11 @@ describe("oxlint runner", () => {
 				stdout: JSON.stringify({
 					diagnostics: [
 						{
-							message: "Variable 'unused' is declared but never used",
-							code: "eslint(no-unused-vars)",
+							message: "Unexpected console statement",
+							code: "eslint(no-console)",
 							severity: "warning",
 							filename: filePath,
-							labels: [{ span: { line: 1, column: 7 } }],
+							labels: [{ span: { line: 1, column: 1 } }],
 						},
 					],
 				}),

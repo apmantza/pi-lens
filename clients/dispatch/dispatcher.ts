@@ -75,7 +75,11 @@ import {
 } from "./adopted-root-runners.js";
 
 import { laneCopyStandsFor, semanticRank } from "./lane-copies.js";
-import { normalizeRuleId } from "./rule-id-normalize.js";
+import {
+	findingClassKey,
+	normalizeRuleId,
+	withClassSeverity,
+} from "./rule-id-normalize.js";
 import {
 	applyRulePolicy,
 	projectRulePolicy,
@@ -536,6 +540,9 @@ function findingKey(
 	d: Diagnostic,
 	defectClass: string = d.defectClass ?? classifyDiagnostic(d),
 ): string {
+	// #5416: a class member's key names the class, not its tool's rule.
+	const classKey = findingClassKey(d);
+	if (classKey !== undefined) return classKey;
 	const line = d.line ?? 1;
 	const column = d.column ?? 1;
 	const ruleKey = normalizeRuleId(d.rule || d.id || "unknown");
@@ -2296,10 +2303,14 @@ async function runRunner(
 		}
 		const result = outcome.value;
 
-		const diagnostics = result.diagnostics.map((d) => ({
-			...d,
-			filePath: normalizeDiagnosticFilePath(ctx, d.filePath),
-		}));
+		// #5416: the class severity is set here, where both the inline answer and
+		// a collect-later answer enter dispatch.
+		const diagnostics = result.diagnostics.map((d) =>
+			withClassSeverity({
+				...d,
+				filePath: normalizeDiagnosticFilePath(ctx, d.filePath),
+			}),
+		);
 
 		return {
 			...result,
