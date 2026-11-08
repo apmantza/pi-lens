@@ -79,7 +79,7 @@
 		"clients/ruff-target-version-real.test.ts": 3,
 		"clients/runtime-turn-knip-checkout-root.test.ts": 1,
 		"clients/runtime-turn-test-worktree-root.test.ts": 1,
-		"clients/safe-spawn-ambient-signal.test.ts": 10,
+		"clients/safe-spawn-ambient-signal.test.ts": 12,
 		"clients/safe-spawn-failure-taxonomy.test.ts": 4,
 		"clients/safe-spawn-input.test.ts": 4,
 		"clients/safe-spawn-kill-ownership.test.ts": 1,
@@ -122,6 +122,7 @@
 		"real-harness/scenario-2.test.ts": 3,
 		"real-harness/scenario-3.test.ts": 1,
 		"real-harness/tools-enabled.test.ts": 11,
+		"real-harness/unchecked-report.test.ts": 1,
 		"scripts/analyze-config-resolution-smell.test.ts": 2,
 		"scripts/analyze-pi-lens-logs-detectors.test.ts": 2,
 		"scripts/analyze-pi-lens-logs.test.ts": 2,
@@ -195,7 +196,8 @@
 		"support/tmp-root-teardown.test.ts": 2,
 		"support/vitest-setup-registry-teardown.test.ts": 2,
 		"tools/ast-grep-outline.test.ts": 2,
-		"tools/lsp-navigation-rename-first-open.test.ts": 2
+		"tools/lsp-navigation-rename-first-open.test.ts": 2,
+		"tools/tool-abort-scope-5097.test.ts": 1
 	},
 	"elapsed-time-assertion": {
 		"clients/actionable-warnings-bounds.test.ts": 1,
@@ -359,6 +361,7 @@
 		"support/marker-lsp-project.ts": 1,
 		"support/real-pi-harness.ts": 2,
 		"support/tests-tree-write-guard.test.ts": 2,
+		"tools/lens-diagnostics-abort-5097.test.ts": 1,
 		"tools/lens-diagnostics.test.ts": 1,
 		"tools/lsp-diagnostics-inline-blocker-retire.test.ts": 1,
 		"tools/lsp-diagnostics-per-server-concurrency.test.ts": 1,

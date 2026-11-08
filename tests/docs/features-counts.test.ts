@@ -23,6 +23,10 @@ const featuresMd = readFileSync(
 	"utf8",
 );
 const mcpMd = readFileSync(path.join(repoRoot, "docs/mcp.md"), "utf8");
+const agentGuideMd = readFileSync(
+	path.join(repoRoot, "docs/agent-guide.md"),
+	"utf8",
+);
 
 /** The single number in a `**<n> ...**` claim, or undefined if the claim moved. */
 function claimedCount(pattern: RegExp): number | undefined {
@@ -174,6 +178,31 @@ describe("docs/mcp.md tool table matches TOOL_REGISTRY", () => {
 			throw new Error("docs MCP tool table has no parseable rows");
 		const registry = TOOL_REGISTRY.flatMap((e) =>
 			e.mcpName === undefined ? [] : [e.mcpName],
+		);
+		const { missing, extra } = diffByName(docs, registry);
+		expect({ missing, extra }).toEqual({ missing: [], extra: [] });
+	});
+});
+
+/**
+ * `docs/agent-guide.md`'s pi tool table is the second prose roster (#5135):
+ * its first column names the pi tools, so it must list every registered
+ * `piName` and no stale one. The first cell may carry two names
+ * (`ast_grep_search` / `ast_grep_replace`); a parenthetical (`(\`dump=true\`)`)
+ * is stripped before the names are read.
+ */
+describe("docs/agent-guide.md tool table matches TOOL_REGISTRY", () => {
+	it("names every registered pi tool and no stale member", () => {
+		const rows = docsSectionLines(agentGuideMd, "### Agent tools");
+		const docs = rows.flatMap((line) => {
+			if (!line.startsWith("| `")) return [];
+			const cell = (line.split("|")[1] ?? "").replace(/\([^)]*\)/g, "");
+			return [...cell.matchAll(/`([a-z_]+)`/g)].map((match) => match[1]!);
+		});
+		if (docs.length === 0)
+			throw new Error("docs agent-guide tool table has no parseable rows");
+		const registry = TOOL_REGISTRY.flatMap((entry) =>
+			entry.piName === undefined ? [] : [entry.piName],
 		);
 		const { missing, extra } = diffByName(docs, registry);
 		expect({ missing, extra }).toEqual({ missing: [], extra: [] });

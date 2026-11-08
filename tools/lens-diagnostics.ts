@@ -19,13 +19,15 @@ import {
 	anchorsForDiagnostic,
 	applyDispositions,
 	applyWeakDispositions,
+	applyWeakDispositionsMultiFile,
+	cachedAnchorMarks,
 	hasAnyDispositionMarks,
 	hasStrictDispositionMarks,
 	getDisposition,
+	type CachedAnchorMarks,
 	type DispositionCandidate,
 } from "../clients/diagnostic-dispositions.js";
 import { DEPENDENCY_DRIFT_MAX_DELIVERIES } from "../clients/blocker-freshness.js";
-import { freshnessFromMtime } from "../clients/freshness.js";
 import {
 	applyFindingPolicy,
 	loadProjectRulePolicy,
@@ -147,7 +149,8 @@ import { logExtension } from "../clients/extension-log.js";
 import { recordDegradationOnce } from "../clients/degradation-ledger.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import {
-	configDisabledAuxiliaryLspServerIds,
+	auxiliaryNotRunSentences,
+	auxiliaryServersNotRun,
 	findAuxiliaryProfileForSource,
 	retagAuxiliaryDiagnostics,
 } from "../clients/dispatch/auxiliary-lsp.js";
@@ -405,6 +408,7 @@ export function createLensDiagnosticsTool(
 			source?: string;
 			totalDiagnostics?: number;
 			cleanFiles?: number;
+			uncheckedFileCount?: number;
 			unconfirmedFiles?: number;
 			timedOutFiles?: number;
 			outcomeCounts?: Record<string, number>;
@@ -491,8 +495,10 @@ export function createLensDiagnosticsTool(
 				const aw = details?.actionableWarnings ?? 0;
 				const cq = details?.qualityIssues ?? 0;
 				const pd = details?.projectDiagnostics ?? 0;
-				if (aw + cq + pd === 0)
-					return `lens_diagnostics delta — clean${coldSuffix}${failedSuffix}`;
+				if (aw + cq + pd === 0) {
+					const uncheckedDelta = details?.uncheckedFileCount ?? 0;
+					return `lens_diagnostics delta — clean${uncheckedDelta > 0 ? ` · ${uncheckedDelta} unchecked` : ""}${coldSuffix}${failedSuffix}`;
+				}
 				return `lens_diagnostics delta — ${aw} actionable · ${cq} quality · ${pd} project${coldSuffix}${failedSuffix}`;
 			}
 			// #1799: `semantic === "blocking"` iff `severity === "error"` holds for
@@ -523,15 +529,26 @@ export function createLensDiagnosticsTool(
 					: details?.validationStatus === "findings"
 						? undefined
 						: details?.validationStatus;
+			// #5287: files no check completed on are not clean, so the word `clean`
+			// is claimed only for the others.
+			const unchecked = details?.uncheckedFileCount ?? 0;
+			const uncheckedSuffix = unchecked > 0 ? ` · ${unchecked} unchecked` : "";
 			if (b + e + w === 0) {
 				const advisorySuffix =
 					adv > 0 ? `, ${adv} hint${adv === 1 ? "" : "s"}` : "";
-				return `lens_diagnostics ${mode} — ${cacheVerdict ?? "clean"}${advisorySuffix} (${files} files)${coldSuffix}${failedSuffix}`;
+				// Every file unchecked: the word is `unchecked`, not `clean · N unchecked`.
+				if (
+					cacheVerdict === undefined &&
+					unchecked > 0 &&
+					unchecked >= (details?.filesChecked ?? files)
+				)
+					return `lens_diagnostics ${mode} — unchecked${advisorySuffix} (${files} files)${coldSuffix}${failedSuffix}`;
+				return `lens_diagnostics ${mode} — ${cacheVerdict ?? "clean"}${advisorySuffix}${uncheckedSuffix} (${files} files)${coldSuffix}${failedSuffix}`;
 			}
 			const parts = [`${b} blocking`];
 			if (b === 0 && e > 0) parts.push(`${e} errors`);
 			parts.push(`${w} warnings`);
-			return `lens_diagnostics ${mode} — ${parts.join(" · ")}${cacheVerdict === "inconclusive" || cacheVerdict === "unverified" ? ` · ${cacheVerdict}` : ""} (${files} files)${coldSuffix}${failedSuffix}`;
+			return `lens_diagnostics ${mode} — ${parts.join(" · ")}${cacheVerdict === "inconclusive" || cacheVerdict === "unverified" ? ` · ${cacheVerdict}` : ""}${uncheckedSuffix} (${files} files)${coldSuffix}${failedSuffix}`;
 		}),
 		parameters: Type.Object({
 			source: Type.Optional(
@@ -874,9 +891,9 @@ export function createLensDiagnosticsTool(
 					host: ctx.host ?? "pi",
 					// #4944: the sweep leaves an auxiliary the operator turned off
 					// (`--no-ast-grep`, `astGrep.enabled=false`) unstarted, as the
-					// `source=lsp` probe does.
+					// `source=lsp` probe does; #5287: and an opt-in one they turned on.
 					...(getFlag && {
-						excludeServerIds: configDisabledAuxiliaryLspServerIds((name) =>
+						excludeServerIds: auxiliaryServersNotRun((name) =>
 							getFlag(name, cwd),
 						),
 					}),
@@ -986,7 +1003,7 @@ const cachedContentMemo = new BoundedLruCache<
 
 function readContentForAnchors(
 	filePath: string,
-	stat: fsSync.Stats,
+	stat: { mtimeMs: number; size: number },
 ): string | undefined {
 	const key = normalizeEphemeralMapKey(filePath);
 	const hit = cachedContentMemo.get(key);
@@ -1042,39 +1059,106 @@ export function _readContentForAnchorsForTests(
  * number and identical text, so the mark waits for the next real dispatch to
  * re-derive both sides against matching revisions. Weak suppress/defer marks
  * are intent-level and never look at content, so they keep applying here.
+ *
+ * #5044: a record can hold rows that cite ANOTHER file — helm-lint's chart
+ * findings are recorded under the written template's key, and `pipeline.ts`
+ * stamps them with `WidgetDiagnostic.citedFile` (#5020). Every anchor is
+ * derived on the file the finding NAMES (`citedFile`, else the record key),
+ * never on the store key: a mark on Chart.yaml hides the Chart.yaml row, and
+ * a mark on the template cannot hide it. The stat/freshness/content decision
+ * runs per anchor path through the ONE shared gate
+ * (`cachedAnchorMarks`), so a stale or unreadable CHART.yaml degrades only the
+ * Chart.yaml rows to the weak fallback; the store key's rows keep their own
+ * freshness verdict. And a CITED anchor the project does not contain, or whose
+ * bytes this process cannot read, is refused outright (#5044 round 2 F2, the
+ * rule #5067 established for the dispatch stack): no mark of any kind is
+ * consulted for those rows, because a full LSP sweep keeps the same finding
+ * and a cache query that hid it was the disagreement the agent read as clean.
+ * All-own-file inputs (every record without a cited row) take exactly the
+ * pre-#5044 sequence.
  */
 function applyCachedDispositions<
-	T extends DispositionCandidate & { observedAt?: number },
+	T extends DispositionCandidate & {
+		observedAt?: number;
+		citedFile?: string;
+	},
 >(cachedDiagnostics: T[], cwd: string, filePath: string): T[] {
 	// Zero-I/O fast paths (#1625 F2 precedent): with no marks at all there is
 	// nothing to filter; with only weak suppress/defer marks a strict anchor
 	// can never match, so the weak filter serves them without any stat/read.
 	if (!hasAnyDispositionMarks(cwd)) return cachedDiagnostics;
-	if (!hasStrictDispositionMarks(cwd)) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	// A mark binds to the file the finding NAMES (`citedFile`, #5020), never
+	// to the store key. Entries without a cited file — every pre-#5020
+	// persisted row and every same-file row — anchor on the record key.
+	const anchorOf = (d: T): string => d.citedFile ?? filePath;
+	const strictAnchors = hasStrictDispositionMarks(cwd);
+	if (!strictAnchors && !cachedDiagnostics.some((d) => d.citedFile)) {
+		return applyWeakDispositionsMultiFile(cachedDiagnostics, cwd, anchorOf);
 	}
-	let stat: fsSync.Stats;
-	try {
-		stat = fsSync.statSync(filePath);
-	} catch {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	// The shared gate decides stat, freshness and content per anchor path
+	// (#5044): a stale or unreadable Chart.yaml degrades only the Chart.yaml
+	// rows to the weak fallback, and an untrusted one refuses every mark on its
+	// rows, while the store key's rows keep their own verdict. All-own-file
+	// inputs take exactly the pre-#5044 sequence.
+	const groups = new Map<string, T[]>();
+	for (const d of cachedDiagnostics) {
+		const anchor = anchorOf(d);
+		const group = groups.get(anchor);
+		if (group) group.push(d);
+		else groups.set(anchor, [d]);
 	}
-	const referenceMs = cachedDiagnostics.reduce<number>(
-		(latest, d) => Math.max(latest, d.observedAt ?? 0),
-		0,
-	);
-	if (
-		referenceMs > 0 &&
-		freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs }).verdict ===
-			"stale"
-	) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	if (groups.size <= 1) {
+		const anchor = groups.keys().next().value ?? filePath;
+		const group = groups.values().next().value ?? cachedDiagnostics;
+		return applyCachedStrict(group, cwd, anchor, {
+			cited: anchor !== filePath,
+			strictAnchors,
+		});
 	}
-	const content = readContentForAnchors(filePath, stat);
-	if (content === undefined) {
-		return applyWeakDispositions(cachedDiagnostics, cwd, filePath);
+	const kept = new Set<T>();
+	for (const [anchor, group] of groups) {
+		for (const d of applyCachedStrict(group, cwd, anchor, {
+			cited: anchor !== filePath,
+			strictAnchors,
+		})) {
+			kept.add(d);
+		}
 	}
-	return applyDispositions(cachedDiagnostics, cwd, filePath, content);
+	// Preserve the caller's original order, as applyDispositionsMultiFile does.
+	return cachedDiagnostics.filter((d) => kept.has(d));
+}
+
+/** The shared per-anchor decision for ONE anchor path of a cached set, mapped
+ * onto the filter it admits ({@link cachedAnchorMarks}): full strict+weak on
+ * the anchor's current bytes, weak-only when the anchor is unreadable (own
+ * rows) or moved past the newest observation here, and no mark at all for the
+ * rows of a cited file this process must not trust (#5044). */
+function applyCachedStrict<
+	T extends DispositionCandidate & { observedAt?: number },
+>(
+	group: T[],
+	cwd: string,
+	anchor: string,
+	options: { cited: boolean; strictAnchors: boolean },
+): T[] {
+	const decision: CachedAnchorMarks = cachedAnchorMarks({
+		cwd,
+		anchor,
+		rows: group,
+		cited: options.cited,
+		strictAnchors: options.strictAnchors,
+		readContent: readContentForAnchors,
+	});
+	switch (decision.marks) {
+		case "refused":
+			// #5067's fail-closed owner rule on the cache side: the rows pass
+			// exactly as the dispatch stack passes the same finding.
+			return group;
+		case "weak-only":
+			return applyWeakDispositions(group, cwd, anchor);
+		case "strict":
+			return applyDispositions(group, cwd, anchor, decision.content);
+	}
 }
 
 /**
@@ -1485,10 +1569,24 @@ function formatDeltaMode(
 		if (carried.length > 0) {
 			text += ` ${carriedIssues} finding${carriedIssues === 1 ? "" : "s"} across ${carried.length} file${carried.length === 1 ? "" : "s"} carried over from earlier this session — use mode=all to see them.`;
 		}
+		// #5287: an empty delta after a write no check completed on is a statement
+		// about the delta only; the unchecked file is named beside it.
+		const uncheckedSummaries = getFileDiagnosticSummaries().filter(
+			(f) => includeFile(f.filePath) && f.uncheckedReason !== undefined,
+		);
+		const uncheckedDeltaLine = uncheckedFilesLine(uncheckedSummaries, cwd);
+		if (uncheckedDeltaLine) text += `\n${uncheckedDeltaLine}`;
 		text += pathsScopeCacheOnlyNote(pathsScope);
 		return {
 			content: [{ type: "text" as const, text }],
-			details: { mode: "delta", warnings: 0, carriedOverFiles: carried.length },
+			details: {
+				mode: "delta",
+				warnings: 0,
+				carriedOverFiles: carried.length,
+				...(uncheckedSummaries.length > 0 && {
+					uncheckedFileCount: uncheckedSummaries.length,
+				}),
+			},
 		};
 	}
 
@@ -1879,6 +1977,14 @@ function summarizeDiagnostics(
 	filePath: string,
 	diagnostics: WidgetDiagnostic[],
 	hasFinalSnapshot: boolean,
+	// #5287: a re-summary carries the unchecked state of the summary it rebuilds:
+	// the reason no check completed and whether no check can ever cover the file.
+	// Dropping the reason reads the file as "no findings"; dropping the flag
+	// reads a generated file as coverable again (#5391 V1, a policy re-summary).
+	carried?: Pick<
+		FileDiagnosticSummary,
+		"uncheckedReason" | "uncheckedInapplicable"
+	>,
 ): FileDiagnosticSummary {
 	let blocking = 0;
 	let errors = 0;
@@ -1909,6 +2015,12 @@ function summarizeDiagnostics(
 		warnings,
 		advisories,
 		hasFinalSnapshot,
+		...(carried?.uncheckedReason !== undefined && {
+			uncheckedReason: carried.uncheckedReason,
+		}),
+		...(carried?.uncheckedInapplicable === true && {
+			uncheckedInapplicable: true as const,
+		}),
 		diagnostics,
 	};
 }
@@ -2144,6 +2256,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 				existing?.filePath ?? filePath,
 				diagnostics,
 				existing?.hasFinalSnapshot ?? true,
+				existing,
 			),
 		);
 	};
@@ -2197,6 +2310,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 						filePath,
 						diagnostics,
 						summary.hasFinalSnapshot ?? true,
+						summary,
 					),
 		);
 		for (const diagnostic of diagnostics) {
@@ -2297,6 +2411,7 @@ async function applyInlineSuppressionsToSummaries(
 							summary.filePath,
 							policyKept,
 							summary.hasFinalSnapshot,
+							summary,
 						);
 			}
 			// #690/#3088: inline `pi-lens-ignore` → the same false-positive/
@@ -2353,6 +2468,7 @@ async function applyInlineSuppressionsToSummaries(
 				summary.filePath,
 				pythonKept.kept,
 				summary.hasFinalSnapshot,
+				summary,
 			);
 		}),
 	);
@@ -2947,6 +3063,7 @@ async function formatFullMode(
 						summary.filePath,
 						markUnreconciledFindings(summary.diagnostics),
 						summary.hasFinalSnapshot,
+						summary,
 					)
 				: summary,
 		);
@@ -3099,14 +3216,16 @@ async function formatFullMode(
 	// The switch names the auxiliary LSP server only: the project scan above
 	// still reports `ast-grep-napi` rows under `--no-ast-grep`, so the note says
 	// which ast-grep did not run. Code-unit order, for the same determinism as
-	// the lane names above.
-	const switchedOffServerIds = [...(options.excludeServerIds ?? [])].sort(
-		(a, b) => Number(a > b) - Number(a < b),
+	// the lane names above. #5287: an opt-in server the operator turned on is
+	// named too ("Opt-in, not run by this check"), as `lsp_diagnostics` does.
+	const notRunSentences = auxiliaryNotRunSentences(
+		[...(options.excludeServerIds ?? [])].sort(
+			(a, b) => Number(a > b) - Number(a < b),
+		),
+		"Switched off, not run (auxiliary LSP)",
 	);
 	const switchedOffNote =
-		switchedOffServerIds.length > 0
-			? `\n\nSwitched off, not run (auxiliary LSP): ${switchedOffServerIds.join(", ")}.`
-			: "";
+		notRunSentences.length > 0 ? `\n\n${notRunSentences.join(" ")}` : "";
 	// #646: primary-vs-auxiliary split of the raw LSP-sweep findings (before
 	// they're merged into the widget-state summaries below), mirroring
 	// `lsp_diagnostics`' "Primary findings"/"Auxiliary findings" separation —
@@ -3509,6 +3628,32 @@ async function projectResolvedCwd(
 	};
 }
 
+/** Files a report names as not checked before it says `+N more`. */
+const MAX_UNCHECKED_NAMED = 5;
+
+/**
+ * #5287: the line a file-diagnostics report ends with for files whose check
+ * never completed (`FileDiagnosticSummary.uncheckedReason`): a kind nothing
+ * can check, a generated file, `--no-lsp` TypeScript, a primary still running.
+ * "No issues" is a statement about checked files only, so these are named, with
+ * their reasons, instead of being counted into it. Empty when every file was
+ * checked. Bounded: at most {@link MAX_UNCHECKED_NAMED} files are named.
+ */
+function uncheckedFilesLine(
+	summaries: readonly FileDiagnosticSummary[],
+	cwd: string,
+): string {
+	const unchecked = summaries.filter((s) => s.uncheckedReason !== undefined);
+	if (unchecked.length === 0) return "";
+	const named = unchecked
+		.slice(0, MAX_UNCHECKED_NAMED)
+		.map(
+			(s) => `${toProjectRelativePath(s.filePath, cwd)}: ${s.uncheckedReason}`,
+		);
+	const more = unchecked.length - named.length;
+	return `⚠ ${unchecked.length} file${unchecked.length === 1 ? "" : "s"} not checked, so no findings is not a clean result: ${named.join("; ")}${more > 0 ? `; +${more} more` : ""}.`;
+}
+
 // @delivery-surface: lens-diagnostics:mode-all
 async function formatAllMode(
 	cwd: string,
@@ -3579,7 +3724,12 @@ async function formatAllMode(
 					kept.length === diagnostics.length
 				)
 					return s;
-				return summarizeDiagnostics(s.filePath, policyKept, s.hasFinalSnapshot);
+				return summarizeDiagnostics(
+					s.filePath,
+					policyKept,
+					s.hasFinalSnapshot,
+					s,
+				);
 			});
 	// #1641: the single chokepoint both mode=all (cache-only `summaries`) and
 	// mode=full (widget cache merged with a FRESH LSP sweep, above) converge
@@ -3598,7 +3748,7 @@ async function formatAllMode(
 			resync: resyncDocumentOnPastEof,
 		});
 		if (demotedCount === 0) return s;
-		return summarizeDiagnostics(s.filePath, diagnostics, s.hasFinalSnapshot);
+		return summarizeDiagnostics(s.filePath, diagnostics, s.hasFinalSnapshot, s);
 	});
 	const visibleSummaries = eofGated.filter((s) => includeFile(s.filePath));
 	// Scope and policy govern evidence notes too: a suppressed or unrelated
@@ -3649,6 +3799,21 @@ async function formatAllMode(
 		);
 	});
 
+	// #5287: the files no check completed on are not part of "No issues".
+	const uncheckedLine = uncheckedFilesLine(visibleSummaries, cwd);
+	const uncheckedNote = uncheckedLine ? `\n${uncheckedLine}` : "";
+	const uncheckedCount = visibleSummaries.filter(
+		(s) => s.uncheckedReason !== undefined,
+	).length;
+	// A file no check can ever cover is named in the line above, once, and is
+	// not a state a re-check can change: only the coverable ones hold the
+	// session unverified or earn a next check (the #5285 footer policy).
+	const coverableUnchecked = visibleSummaries.filter(
+		(s) => s.uncheckedReason !== undefined && s.uncheckedInapplicable !== true,
+	);
+	const checkedCount = visibleSummaries.length - uncheckedCount;
+	const uncheckedDetails =
+		uncheckedCount > 0 ? { uncheckedFileCount: uncheckedCount } : {};
 	let validationStatus: string | undefined;
 	let validationNote = "";
 	let evidenceDetails: Record<string, unknown> = {};
@@ -3686,6 +3851,7 @@ async function formatAllMode(
 				...pending.map((s) => s.filePath),
 				...stale.map((s) => s.filePath),
 				...unverified,
+				...coverableUnchecked.map((s) => s.filePath),
 			]),
 		];
 		// #4522's rule at the session layer: only a clean read reads clean. A final
@@ -3701,7 +3867,13 @@ async function formatAllMode(
 					? "unverified"
 					: withIssues.length > 0
 						? "findings"
-						: "no-matching-findings";
+						: // #5287: no finding in a file a check can cover but did not is not
+							// the ✓ status, nor is a session in which nothing was checked. A
+							// file no check can ever cover is named by the report's line and
+							// does not hold the others back (the #5285 footer policy).
+							coverableUnchecked.length > 0 || checkedCount === 0
+							? "unverified"
+							: "no-matching-findings";
 		const nextTool = resolveLensToolName(
 			"lens_diagnostics",
 			sessionEvidence?.host ?? "pi",
@@ -3733,7 +3905,7 @@ async function formatAllMode(
 				: "";
 		validationNote =
 			validationStatus === "inconclusive" || validationStatus === "unverified"
-				? `Session cache ${validationStatus} — not a clean verdict: ${pending.length} pending file(s), ${staleDiagnosticCount} stale finding(s), ${unverified.length} requested file(s) without cached evidence${omittedClause}. Not active validation.\n` +
+				? `Session cache ${validationStatus} — not a clean verdict: ${pending.length} pending file(s), ${staleDiagnosticCount} stale finding(s), ${unverified.length} requested file(s) without cached evidence, ${coverableUnchecked.length} file(s) no check completed on${omittedClause}. Not active validation.\n` +
 					`Next check: ${nextTool ?? "diagnostics"} source=lsp scope=paths${nextPaths.length > 0 ? ` paths=${JSON.stringify(nextPaths)}` : " with the changed paths"}.` +
 					(remainingRescanPathCount > 0
 						? ` ${remainingRescanPathCount} more path(s) need a check; narrow or batch the remaining paths.`
@@ -3776,9 +3948,11 @@ async function formatAllMode(
 			(visibleSummaries.length === 0
 				? "No files diagnosed yet this session.\n"
 				: validationStatus === "inconclusive" ||
-					  validationStatus === "unverified"
+					  validationStatus === "unverified" ||
+					  checkedCount === 0
 					? ""
-					: `No ${severity === "all" ? "" : severity + " "}issues across ${visibleSummaries.length} file${visibleSummaries.length === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+					: `No ${severity === "all" ? "" : severity + " "}issues across ${checkedCount} file${checkedCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+			(uncheckedLine ? `${uncheckedLine}\n` : "") +
 			validationNote +
 			staleNote +
 			suppressedNote +
@@ -3791,6 +3965,7 @@ async function formatAllMode(
 				filesChecked: visibleSummaries.length,
 				staleDropped,
 				...suppressedDetails,
+				...uncheckedDetails,
 			},
 		};
 	}
@@ -3918,6 +4093,7 @@ async function formatAllMode(
 					validationNote +
 					lines.join("\n") +
 					summary +
+					uncheckedNote +
 					staleNote +
 					suppressedNote,
 			},
@@ -3926,12 +4102,14 @@ async function formatAllMode(
 			...detailOverrides,
 			...evidenceDetails,
 			filesWithIssues: withIssues.length,
+			filesChecked: visibleSummaries.length,
 			totalBlocking,
 			totalErrors,
 			totalWarnings,
 			totalAdvisories,
 			staleDropped,
 			...suppressedDetails,
+			...uncheckedDetails,
 		},
 	};
 }

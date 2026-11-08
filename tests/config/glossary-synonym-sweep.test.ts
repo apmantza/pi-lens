@@ -381,7 +381,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	error: {
 		"clients/actionable-warnings.ts": 1,
 		"clients/advisory-provenance.ts": 8,
-		"clients/ast-grep-client.ts": 47,
+		// 47 -> 48 (#5097): the `error` of an apply refused after an abort.
+		"clients/ast-grep-client.ts": 48,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/biome-client.ts": 8,
 		"clients/bounded-pid-file-lock.ts": 7,
@@ -491,7 +492,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 2 -> 6: the report-scan seam (`runReportScan`) carries the `result.error` reads
 		// gitleaks (3) and trivy (3) each had, plus the failure record; net 8 -> 6.
 		"clients/security-scan-client.ts": 6,
-		"clients/sg-runner.ts": 32,
+		// 32 -> 33 (#5097): the `error` of an apply refused after an abort.
+		"clients/sg-runner.ts": 33,
 		"clients/shared-checkout-guard.ts": 1,
 		"clients/single-flight.ts": 3,
 		"clients/smells-rollup.ts": 2,
@@ -577,7 +579,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 3 -> 5 (#4944): `dropExcludedServers` keeps the rows and the
 		// coverage-gap names of servers that are not switched off, two
 		// `Array.prototype.filter` calls, not a delivery filter.
-		"clients/dispatch/auxiliary-lsp.ts": 5,
+		// 5 -> 7 (#5287): `auxiliaryNotRunSentences` splits the not-run servers
+		// into switched-off and opt-in ones, two `Array.prototype.filter` calls,
+		// not a delivery filter.
+		"clients/dispatch/auxiliary-lsp.ts": 7,
 		// 16 -> 17 (#4484): `heldBackBlockers` keeps the blocking findings the
 		// delta calls not new, an `Array.prototype.filter` call, not a delivery
 		// filter.
@@ -863,7 +868,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// these are Array.prototype.filter calls, not new delivery-policy seams.
 		// 43 -> 42 (#5041): the `paths` entry filter moved into tools/shared.ts's
 		// one reader, which every tool now calls.
-		"tools/lens-diagnostics.ts": 42,
+		// 42 -> 43 (#5044): the cross-file cache reader merges its anchor groups
+		// back into input order with one Array.prototype.filter, not a
+		// delivery-policy seam.
+		// 43 -> 47 (#5287): the unchecked-file projections of the summaries
+		// (`uncheckedFilesLine`, the unchecked tally, the coverable subset, the
+		// empty delta's unchecked set), four `Array.prototype.filter` calls, not
+		// delivery filters.
+		"tools/lens-diagnostics.ts": 47,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
@@ -1177,7 +1189,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// hit. Both are the `node:path` module, never the retired map-key sense.
 		// 11 -> 12 (#5235): `symbolSearchFileMatchesLang` reads the basename of a
 		// file a kind names by pattern (`path.basename`), like the inline filter.
-		"clients/lens-engine.ts": 12,
+		// 12 -> 10 (#5135): that basename and extname read moved into the shared
+		// `resolveLanguageScope` predicate in `clients/language-registry.ts`.
+		"clients/lens-engine.ts": 10,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
 		"clients/log-cleanup.ts": 9,
@@ -1519,7 +1533,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
 		// 52 -> 51 (#5136): the `ext:` predicate matches a path suffix on the
 		// display path instead of `path.extname`, dropping one `path` operation.
-		"clients/word-index.ts": 51,
+		// 51 -> 49 (#5135): the `lang:` predicate's `path.extname` and
+		// `path.basename` reads moved into the shared `resolveLanguageScope`.
+		"clients/word-index.ts": 49,
 		"clients/workspace-topology.ts": 7,
 		"clients/zizmor-config.ts": 4,
 		// 8 -> 5 (#4233): the ast-grep tools fold their relative-path resolution

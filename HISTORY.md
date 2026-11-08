@@ -1,5 +1,29 @@
 # HISTORY
 
+## 2026-11-07 — a non-success exit that skips its transition (shape 91)
+
+The 2026-11-07 state-machine census found an autofix timeout that never armed
+the spawn-timeout cooldown. `clients/file-utils.ts` tested `result.error`
+before `failure === "timeout"`, and a real timeout carries both, so every edit
+to a wedged autofix tool paid the full timeout. Fixed in PR #5383 (#5376).
+
+## 2026-11-07 — a test double with an impossible result shape (shape 92)
+
+The timeout double in `tests/clients/spawn-timeout-cooldown.test.ts` returned
+`error: null`, while `safeSpawnAsync` returns `error: Error(...)` on a timeout.
+The test passed on the broken ordering from shape 91. PR #5383 replaced the
+double with the real result shape (#5376).
+
+## 2026-11-07 — unlocked async read-modify-write of a shared record (shape 93)
+
+Two `publishFilesTouched` calls in one tick each read the recent-touches record,
+merged their entries and renamed; the second rename dropped the first's batch
+(#5377). PR #5385 commits the append through `clients/durable-store.ts` and
+stamps `ts` inside the lock. The same sweep found no other async
+read-merge-write among the `writeFileAtomic` users;
+`clients/mutation-attribution.ts` and `clients/metrics-history.ts` are
+synchronous and race only across processes.
+
 ## 2026-11-04 — generated proof line for a step that did not run (shape 90)
 
 The nightly LSP refresh composer (#5062, PR #5243) wrote a Tests section saying

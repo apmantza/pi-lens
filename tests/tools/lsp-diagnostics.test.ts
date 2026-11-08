@@ -109,6 +109,42 @@ function resetServiceDouble() {
 describe("lsp_diagnostics tool", () => {
 	beforeEach(resetServiceDouble);
 
+	// Recurrence prevented: #5287 (alignment routine, family 4). The same
+	// no-server state had three wordings: write time said "no language server
+	// handles this file", this tool said "no LSP server configured", and
+	// `lsp_navigation` told the reader to install a server that cannot help.
+	it("says no language server handles the file, in the write-time wording (#5287)", async () => {
+		(mocked.service as any).getDiagnosticsHealth = vi.fn().mockReturnValue({
+			health: "no_clients",
+			serverCountAttempted: 0,
+			serverCountReady: 0,
+			mergedCount: 0,
+		});
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lsp-diag-unserved-"),
+		);
+		const file = path.join(tmpDir, "notes.unserved");
+		fs.writeFileSync(file, "plain text\n");
+
+		try {
+			const result = (await createLspDiagnosticsTool().execute(
+				"diag-unserved",
+				{ path: file },
+				new AbortController().signal,
+				null,
+				{ cwd: tmpDir },
+			)) as any;
+			const text = String(result.content[0]?.text);
+
+			expect(text).toContain(
+				`LSP unavailable for ${file}: no language server handles this file; ready=0/0.`,
+			);
+			expect(text).not.toContain("no LSP server configured");
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it("uses attached diagnostics for a batch without local warm-up or touches", async () => {
 		const touchFile = vi.fn();
 		const ensureWarmForSweep = vi.fn();

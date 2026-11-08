@@ -139,8 +139,8 @@ jobs:
             if grep -q -- '-> infra-' <<<"$output"; then
               gh pr edit "$PR_NUMBER" --add-label 'ci:infra' --remove-label 'ci:real'
             elif grep -q -- '^CI failure classifier skipped:.*only advisory jobs failed' <<<"$output"; then
-              # #3801: a run that failed only on advisory jobs (a not-ready heavy
-              # gate, or an older head's CodeQL leg) is neither infra nor a real
+              # #3801: a run that failed only on advisory jobs (an older head's
+              # heavy gate or CodeQL leg) is neither infra nor a real
               # failure of the change: neither verdict label, and any stale one is
               # cleared.
               # #4518: `Unit tests Windows` is not on that list any more; it gates.

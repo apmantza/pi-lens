@@ -59,8 +59,10 @@ import {
 	getFileDiagnosticSummaries,
 	reconcileStaleWidgetFiles,
 	recordRunner,
+	renderWidget,
 } from "../../../clients/widget-state.js";
 import { analyzeFile } from "../../../clients/mcp/analyze.js";
+import { verdictUncheckedReason } from "../../../clients/dispatch/types.js";
 import { createLensDiagnosticMarkTool } from "../../../tools/lens-diagnostic-mark.js";
 import { createCaseAliasFixture } from "../test-utils.js";
 
@@ -262,9 +264,10 @@ describe("analyzeFile", () => {
 		]);
 	});
 
-	it("records no reason for a file nothing can check, so the footer never counts it", async () => {
+	it("records a file nothing can check as inapplicable, so the footer never counts it but a report still names it", async () => {
 		// Recurrence prevented: #5285 review F2, on the pull surface: a kindless
 		// or generated file left `⚠ 1 unchecked` that no later check could retire.
+		// #5287: the reason is kept (flagged) so lens_diagnostics can name the file.
 		vi.mocked(dispatchForFile).mockResolvedValue({
 			...emptyResult,
 			verdict: {
@@ -278,7 +281,35 @@ describe("analyzeFile", () => {
 
 		const files = exportWidgetState().files;
 		expect(files).toHaveLength(1);
-		expect(files[0]?.uncheckedReason).toBeUndefined();
+		expect(files[0]).toMatchObject({
+			uncheckedReason: "no analyzer handles this file type",
+			uncheckedInapplicable: true,
+		});
+		expect(
+			renderWidget(120, { fg: (_color: string, text: string) => text }).join(
+				"\n",
+			),
+		).not.toContain("unchecked");
+	});
+
+	it("returns the dispatch verdict, so a consumer never reads zero counts as a clean file (#5287)", async () => {
+		// Recurrence prevented: #5287. `analyzeFile` dropped the verdict, and
+		// mcp/analyze-cli.ts exited silent on `counts.diagnostics === 0`.
+		const checked = {
+			checked: true,
+			tier: "primary",
+			runnerIds: ["lsp"],
+		} as const;
+		const unchecked = {
+			checked: false,
+			reason: "a language tool is missing",
+		} as const;
+		for (const verdict of [checked, unchecked]) {
+			vi.mocked(dispatchForFile).mockResolvedValue({ ...emptyResult, verdict });
+			const result = await analyzeFile(tsFile, tmpDir);
+			expect(result.counts.diagnostics).toBe(0);
+			expect(result.verdict).toEqual(verdict);
+		}
 	});
 
 	it("attaches the latency report appended during this dispatch", async () => {
@@ -1078,5 +1109,26 @@ describe("analyzeFile stamps its widget row at the analysis read (#3573)", () =>
 		expect(rows()).toEqual([
 			expect.objectContaining({ message: "Type error", observedAt: T_READ }),
 		]);
+	});
+});
+
+// Recurrence prevented: #5391 review B1 and B2. `formatAnalyze` read
+// `result.verdict.checked` on a worker reply cast without validation, so a
+// reply from a build before the field threw instead of reading as not checked.
+describe("verdictUncheckedReason (#5287)", () => {
+	it("reads a reply without a verdict as unchecked, never as clean", () => {
+		expect(verdictUncheckedReason(undefined)).toContain(
+			"did not report whether a check completed",
+		);
+	});
+
+	it("names the reason of an unchecked verdict and is silent for a checked one", () => {
+		expect(
+			verdictUncheckedReason({
+				checked: false,
+				reason: "no analyzer handles this file type",
+			}),
+		).toBe("no analyzer handles this file type");
+		expect(verdictUncheckedReason(CHECKED_BY_FIXTURE)).toBeUndefined();
 	});
 });

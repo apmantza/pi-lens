@@ -1,3 +1,9 @@
+// The file name is historical: ci.yml's `heavy-gate` job is retired (#3801), and
+// what remains is the checkout-pin census for early-start advisory jobs
+// (#3941), the required-context census, and the #3926 Windows-summary and
+// deleted-merge-ref witnesses. The name stays because the flake-shape
+// admission, the frozen baseline and the vitest serial list key on the path.
+//
 // flake-shape: real-process-spawn — #3926 executes the real `Record Windows
 // Vitest outcome` bash block at its true process boundary under GitHub's
 // `bash --noprofile --norc -eo pipefail` flags. A fixture Node program at the
@@ -25,19 +31,14 @@ import { assertNonEmptyScan } from "../support/sweep-kit.js";
 import { provesNotPullRequestEligible } from "../support/workflow-pull-request-reachability.js";
 import {
 	BRANCH_PROTECTION_CONTEXTS as REQUIRED_CONTEXTS,
-	CHANGES_CHECK,
-	DEFERRED_ADVISORY_CHECKS,
-	HEAVY_GATE_CHECK,
 	isAdvisoryCheck,
 } from "../../scripts/lib/ci-checks.mjs";
-import { DEFAULT_DEADLINE_SECONDS } from "../../scripts/ci-heavy-gate.mjs";
 
 const byCodeUnit = (a = "", b = "") => (a < b ? -1 : a > b ? 1 : 0);
 
-// #3801: the heavy advisory jobs start only after the required checks passed
-// on the same head (none is left since #5275 moved CodeQL to codeql.yml). Each case names the regression it keeps out; the real
-// YAML is loaded, never a source regex. #4518 promoted the Windows Vitest subset
-// out of this gate, so it has its own contract in windows-vitest-workflow.test.ts.
+// Each case names the regression it keeps out; the real YAML is loaded, never
+// a source regex. The Windows Vitest subset has its own contract in
+// windows-vitest-workflow.test.ts.
 
 const ROOT = resolve(import.meta.dirname, "../..");
 
@@ -64,12 +65,6 @@ type Workflow = { on: Record<string, unknown>; jobs: Record<string, Job> };
 
 const load = (file: string) =>
 	yaml.load(readFileSync(resolve(ROOT, file), "utf8")) as Workflow;
-const asList = (needs: Job["needs"]) =>
-	Array.isArray(needs) ? needs : needs ? [needs] : [];
-
-const canSkipAtJobLevel = (condition: string | undefined) =>
-	condition !== undefined &&
-	!/^\s*(?:\$\{\{\s*)?always\(\)(?:\s*\}\})?\s*$/.test(condition);
 
 /** Every check-run name a job can produce (a matrix expands its `name`). */
 function checkNamesOf(job: Job): string[] {
@@ -87,11 +82,6 @@ function checkNamesOf(job: Job): string[] {
 const CI = load(".github/workflows/ci.yml");
 const LINT = load(".github/workflows/lint.yml");
 const HOT_PATH = load(".github/workflows/hot-path-latency.yml");
-const gate = CI.jobs["heavy-gate"];
-const gated = Object.entries(CI.jobs).filter(
-	([id, job]) =>
-		id !== "heavy-gate" && asList(job.needs).includes("heavy-gate"),
-);
 
 // #3941: ONE checkout census over every workflow file, parsed from the real
 // YAML (never a text scan -- a comment or a string that happens to spell a
@@ -99,17 +89,15 @@ const gated = Object.entries(CI.jobs).filter(
 // fields, so a member can never be satisfied by a name-shaped comment:
 //
 //   A gating/dependencies   pull_request-eligible, not an early advisory site
-//   B heavy-gated           `needs:` includes the heavy gate (#3926)
 //   C early-start advisory  pull_request-eligible, advisory, with a checkout
 //   D other triggers        not pull_request-eligible
-//   gate                    the heavy gate itself, excluded from A-D above
 //
-// The #3926 stage-B rule and the #3941 stage-C rule both read this one seam.
-// Only stages B and C can start after a merge deletes `refs/pull/<n>/merge`;
-// stage A must report before the merge and stage D never runs on a pull
-// request. `github.ref` names the mutable merge ref, so a B or C checkout
-// that pins it fetches a ref the merge may already have deleted. Stages A and
-// D keep their inputs and are the named excluded defaults.
+// (Stage B, the jobs behind the retired heavy gate, is gone with the gate.)
+// Only stage C can start after a merge deletes `refs/pull/<n>/merge`; stage A
+// must report before the merge and stage D never runs on a pull request.
+// `github.ref` names the mutable merge ref, so a C checkout that pins it
+// fetches a ref the merge may already have deleted. Stages A and D keep their
+// inputs and are the named excluded defaults.
 //
 // `pull_request-eligible` (stages A and C) is the shared event-only exclusion
 // projection, never a negative regex (#3941 F1):
@@ -124,9 +112,9 @@ const CAPTURED_COMMIT = "${{ github.sha }}";
 // the action. Derive it from ci.yml's other jobs (called inside a test, because
 // siblingPin asserts).
 const pinnedCheckout = () =>
-	siblingPin(CI.jobs, "actions/checkout", "heavy-gate");
+	siblingPin(CI.jobs, "actions/checkout", "changed-tests-shuffled");
 
-type Stage = "A" | "B" | "C" | "D" | "gate";
+type Stage = "A" | "C" | "D";
 type CensusRow = {
 	file: string;
 	jobId: string;
@@ -160,14 +148,7 @@ function checkoutStepsOf(job: Job): Step[] {
 	);
 }
 
-function classifyStage(
-	file: string,
-	jobId: string,
-	job: Job,
-	events: Set<string>,
-): Stage {
-	if (file === "ci.yml" && jobId === "heavy-gate") return "gate";
-	if (asList(job.needs).includes("heavy-gate")) return "B";
+function classifyStage(jobId: string, job: Job, events: Set<string>): Stage {
 	// A workflow that can trigger on `pull_request` at all, whose job `if:`
 	// does not PROVE it runs only off `pull_request`. The projection is the
 	// shared event-only one (#3941 F1): `host-latest-smoke`'s
@@ -205,7 +186,7 @@ function censusRows(sources: ReadonlyMap<string, string>): CensusRow[] {
 				file,
 				jobId,
 				jobName: job.name ?? jobId,
-				stage: classifyStage(file, jobId, job, events),
+				stage: classifyStage(jobId, job, events),
 				events: [...events],
 				uses: steps.map((step) => step.uses ?? ""),
 				refs: steps.map((step) => step.with?.ref),
@@ -257,8 +238,7 @@ function stageSummary(sites: CheckoutSite[]) {
 	return summary;
 }
 
-// The ONE captured-commit predicate, used by BOTH the stage-B and stage-C
-// rules (#3941 F2): a checkout is on the captured source event commit when it
+// The ONE captured-commit predicate for the stage-C rule (#3941 F2): a checkout is on the captured source event commit when it
 // leaves `ref` unset (the pinned action's default is `github.sha`) or names
 // `${{ github.sha }}` explicitly. Those are the only two proven-equivalent
 // spellings; every other explicit ref is treated as unsafe rather than matched
@@ -298,8 +278,8 @@ const CENSUS_SITES = sitesOf(CENSUS_ROWS);
 
 type CensusPins = {
 	checkoutSites: number;
-	nonGateRows: number;
-	stageRows: Record<Exclude<Stage, "gate">, number>;
+	rows: number;
+	stageRows: Record<Stage, number>;
 	explicitRefs: number;
 	githubRefSites: number;
 	gatingSites: number;
@@ -315,10 +295,9 @@ function censusPins(
 	const summary = stageSummary(sites);
 	return {
 		checkoutSites: sites.length,
-		nonGateRows: rows.filter((row) => row.stage !== "gate").length,
+		rows: rows.length,
 		stageRows: {
 			A: jobs.get("A") ?? 0,
-			B: jobs.get("B") ?? 0,
 			C: jobs.get("C") ?? 0,
 			D: jobs.get("D") ?? 0,
 		},
@@ -333,10 +312,9 @@ function censusPins(
 }
 
 const PINNED_PRINT = [
-	"expect(CENSUS_SITES.length).toBe(69);",
-	'expect(CENSUS_ROWS.filter((row) => row.stage !== "gate").length).toBe(72);',
+	"expect(CENSUS_SITES.length).toBe(68);",
+	"expect(CENSUS_ROWS.length).toBe(72);",
 	'expect(stageJobs("A")).toBe(22);',
-	'expect(stageJobs("B")).toBe(0);',
 	'expect(stageJobs("C")).toBe(11);',
 	'expect(stageJobs("D")).toBe(39);',
 	"expect(CENSUS_SITES.filter((site) => site.ref !== undefined).length).toBe(18);",
@@ -348,7 +326,7 @@ const PINNED_PRINT = [
 // Snapshot identities make a pin failure actionable. Counts alone say that a
 // row moved; these keys say which job added or removed it.
 const PINNED_ROW_KEYS =
-	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::classify::D|ci-infra-kill-rerun.yml::finalize-rerun::D|ci-verdict-labels.yml::clear-stale-verdict-labels::A|ci.yml::changes::C|ci.yml::strict-install-cold-cache::A|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::heavy-gate::gate|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint-markdownlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::oxlint-advisory::C|lint.yml::lint-advisory::C|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-metadata::A|pr-metadata.yml::pr-body-lint::C|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
+	"action-pins.yml::check::A|cache-prune.yml::plan::A|cache-prune.yml::prune::A|ci-infra-kill-rerun.yml::classify::D|ci-infra-kill-rerun.yml::finalize-rerun::D|ci-verdict-labels.yml::clear-stale-verdict-labels::A|ci.yml::changes::C|ci.yml::strict-install-cold-cache::A|ci.yml::changelog-fragment-fastfail::A|ci.yml::tla-shards::A|ci.yml::tla-models::A|ci.yml::lint-and-typecheck::A|ci.yml::changed-tests-shuffled::C|ci.yml::test::A|ci.yml::unit-tests::A|ci.yml::unit-tests-windows::A|ci.yml::prod-install-build::A|ci.yml::install-test::A|close-keyword-verification.yml::verify::D|codeql.yml::analyze::D|codeql.yml::upload::D|compat-smoke.yml::compat-smoke::D|compat-smoke.yml::compat-smoke-alert::D|grammar-health.yml::guard::D|grammar-health.yml::swift-crash-watch::D|greetings.yml::greeting::D|hot-path-latency.yml::latency::C|install-smoke.yml::scope::C|install-smoke.yml::smoke::A|install-smoke.yml::npm-strict::A|install-smoke.yml::pi-load::A|install-smoke.yml::lsp-handshake::C|install-smoke.yml::mise-repro::C|install-smoke.yml::host-range-smoke::A|install-smoke.yml::host-latest-smoke::D|install-smoke.yml::host-latest-notify::C|labels.yml::sync::D|lifecycle-smoke.yml::psscriptanalyzer-classification::D|lifecycle-smoke.yml::availability-lifecycle::D|lifecycle-smoke.yml::gitleaks-scratch-exclusion::D|lint.yml::actionlint-markdownlint::A|lint.yml::oxfmt::A|lint.yml::knip::A|lint.yml::oxlint-advisory::C|lint.yml::lint-advisory::C|osv-scan.yml::osv-scan::C|parser-smoke.yml::parser-smoke::D|pr-metadata.yml::pr-metadata::A|pr-metadata.yml::pr-body-lint::C|release.yml::prepare::D|release.yml::release::D|release.yml::publish-npm::D|shuffle-census-nightly.yml::census::D|shuffle-census-nightly.yml::confirm-report::D|shuffle-census-nightly.yml::publish-issue::D|stale-open-issues.yml::detect::D|stale.yml::stale::D|stryker-nightly.yml::prepare::D|stryker-nightly.yml::mutate::D|stryker-nightly.yml::publish::D|stryker-nightly.yml::publish-issue::D|stryker-pertest.yml::mutate::D|tool-smoke.yml::test-history-rollup::D|tool-smoke.yml::test-history-publish::D|tool-smoke.yml::test-history-notify::D|tool-smoke.yml::tool-smoke::D|tool-smoke.yml::tool-smoke-prs::D|tool-smoke.yml::tool-smoke-notify::D|tool-smoke.yml::snapshot-persist-bench::D|tool-smoke.yml::snapshot-persist-notify::D|untriaged-issues.yml::detect::D|windows-repeat-probe.yml::repeat::D".split(
 		"|",
 	);
 const PINNED_NO_CHECKOUT_KEYS = new Set([
@@ -409,8 +387,8 @@ function pinnedNumber(
 function printPins(pins: CensusPins): string {
 	return [
 		`expect(CENSUS_SITES.length).toBe(${pins.checkoutSites});`,
-		`expect(CENSUS_ROWS.filter((row) => row.stage !== "gate").length).toBe(${pins.nonGateRows});`,
-		...(["A", "B", "C", "D"] as const).map(
+		`expect(CENSUS_ROWS.length).toBe(${pins.rows});`,
+		...(["A", "C", "D"] as const).map(
 			(stage) =>
 				`expect(stageJobs("${stage}")).toBe(${pins.stageRows[stage]});`,
 		),
@@ -424,7 +402,7 @@ function printPins(pins: CensusPins): string {
 // The five early-start advisory jobs whose checkout pinned the merge ref (eleven
 // until #5002 folded seven of the lint.yml jobs into `lint-advisory`),
 // by the ids the task names. Each must stay pull_request-eligible, advisory,
-// and NOT behind the gate; the census proves the trigger and the stage.
+// and early-start (the census proves the trigger and the stage).
 const EARLY_START_MEMBERS = [
 	{
 		file: "ci.yml",
@@ -453,10 +431,10 @@ if (
 		printPins(censusPins(CENSUS_ROWS, CENSUS_SITES, EARLY_START_MEMBERS)),
 	);
 
-describe("#3801 heavy advisory jobs wait for the required checks", () => {
+describe("required-context and CI-shape census", () => {
 	// Recurrence: a required check renamed or dropped from the workflows makes
 	// its branch-protection context absent, which GitHub reads as never
-	// reported. The gate can only wait on what exists.
+	// reported.
 	it("keeps every required context produced by exactly one workflow job", () => {
 		const hosted = new Map<string, string>();
 		for (const [file, workflow] of [
@@ -473,99 +451,6 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 				true,
 			);
 		}
-	});
-
-	// Recurrence: a required job omitted from the gate's needs (for example a
-	// new install-test leg job id) lets the heavy lane start while that check
-	// is still red or running.
-	it("needs every required job hosted by ci.yml except the TLA+ aggregate", () => {
-		const needs = asList(gate.needs);
-		const ciRequired = REQUIRED_CONTEXTS.flatMap((context) =>
-			Object.entries(CI.jobs)
-				.filter(([, job]) => checkNamesOf(job).includes(context))
-				.map(([id]) => id),
-		);
-		expect([...new Set(ciRequired)].sort(byCodeUnit)).toEqual([
-			"install-test",
-			"lint-and-typecheck",
-			"tla-models",
-			"unit-tests",
-			"unit-tests-windows",
-		]);
-		for (const id of ciRequired) {
-			if (id === "tla-models") expect(needs).not.toContain(id);
-			else expect(needs).toContain(id);
-		}
-	});
-
-	// Recurrence (#5002): #5082 made `tla-shards` skip at job level, and the gate
-	// reached it through `tla-models`. Implicit success() reads every ancestor, so
-	// the gate and its dependents skipped on every pull request that left formal/ alone.
-	it("has no ancestor that can skip at job level", () => {
-		const ancestors = new Set<string>();
-		const visit = (id: string) => {
-			for (const need of asList(CI.jobs[id]?.needs)) {
-				if (ancestors.has(need)) continue;
-				ancestors.add(need);
-				visit(need);
-			}
-		};
-		visit("heavy-gate");
-		expect(ancestors.size).toBeGreaterThanOrEqual(asList(gate.needs).length);
-		const skippable = [...ancestors].filter((id) =>
-			canSkipAtJobLevel(CI.jobs[id]?.if),
-		);
-		expect(skippable).toEqual([]);
-	});
-
-	it("treats only a bare always() as unable to skip", () => {
-		for (const condition of [undefined, "always()", "${{ always() }}"])
-			expect(canSkipAtJobLevel(condition), String(condition)).toBe(false);
-		for (const condition of [
-			"always() && github.event_name == 'push'",
-			"${{ always() && needs.changes.outputs.formal != 'false' }}",
-			"!cancelled()",
-			"github.event_name != 'pull_request'",
-		])
-			expect(canSkipAtJobLevel(condition), condition).toBe(true);
-	});
-
-	// Recurrence (#3801 docs-only scope): a gate that starts on a docs-only diff
-	// would launch a heavy job for a change the maintainer wants spared it. And a status function in the gate's `if` (always(),
-	// cancelled(), failure()) would replace the implicit success() over its
-	// needs, releasing the heavy jobs on a head whose required job is red.
-	it("starts only for a code diff, and only when every needed job succeeded", () => {
-		expect(asList(gate.needs)).toContain("changes");
-		expect(gate.if).toBe("needs.changes.outputs.code == 'true'");
-		expect(gate.if).not.toMatch(/\b(always|cancelled|failure|success)\(\)/);
-	});
-
-	// Recurrence (review r1 F3): ci-verdict reads the gate's and the changes
-	// job's rows by name to tell a deferred run from a dropped one; a renamed
-	// job silently reads every head as "older workflow".
-	it("names the two jobs ci-verdict reads the deferred state from", () => {
-		expect(gate.name).toBe(HEAVY_GATE_CHECK);
-		expect(CI.jobs.changes.name).toBe(CHANGES_CHECK);
-	});
-
-	// Recurrence: `needs:` cannot reach lint.yml, so a required check hosted
-	// there (knip, oxfmt) was simply not waited for. The gate step names each
-	// one, plus `TLA+ models`, which `needs:` must not reach (#5002). Hot-path is
-	// out on purpose: a master push path-filters it, so its row can be absent.
-	it("waits, through the script, for lint.yml's required contexts and TLA+ models", () => {
-		const step = gate.steps?.find((entry) => entry.id === "gate");
-		const args = [
-			...String(step?.run).matchAll(/--context (?:"([^"]+)"|(\S+))/g),
-		].map((match) => match[1] ?? match[2]);
-		const lintHosted = REQUIRED_CONTEXTS.filter((context) =>
-			Object.values(LINT.jobs).some((job) =>
-				checkNamesOf(job).includes(context),
-			),
-		);
-		expect(lintHosted.length).toBeGreaterThan(0);
-		expect([...args].sort(byCodeUnit)).toEqual(
-			[...lintHosted, "TLA+ models"].sort(byCodeUnit),
-		);
 	});
 
 	// Recurrence (#3807 head 46f5f5ebf, knip RED): knip reads every workflow
@@ -590,115 +475,40 @@ describe("#3801 heavy advisory jobs wait for the required checks", () => {
 		expect(offenders).toEqual([]);
 	});
 
-	// Recurrence: the output key or step id drifting makes every dependent's
-	// `if:` false forever, so the heavy lanes silently never run.
-	it("wires the job output `ready` to the script step and reads it in every dependent", () => {
-		expect(gate.outputs?.ready).toBe("${{ steps.gate.outputs.ready }}");
-		expect(gate.steps?.some((entry) => entry.id === "gate")).toBe(true);
-		// No job is behind the gate since #5275; this walks whatever is added.
-		for (const [id, job] of gated) {
-			expect(job.if, `${id} must test the gate's output`).toContain(
-				"needs.heavy-gate.outputs.ready == 'true'",
-			);
-		}
-	});
-
-	// Recurrence: the deferred-row list in ci-checks.mjs (what ci-verdict shows
-	// as PENDING) drifting from the jobs actually behind the gate.
-	it("lists exactly the gated jobs as ci-verdict's deferred advisory checks", () => {
-		expect(
-			gated.flatMap(([, job]) => checkNamesOf(job)).sort(byCodeUnit),
-		).toEqual([...DEFERRED_ADVISORY_CHECKS].sort(byCodeUnit));
-	});
-
-	// Recurrence (AGENTS.md shape 38): a heavy or gate row that gates. ci-verdict
-	// and the merge train gate every non-advisory check-run.
-	it("keeps the gate and everything behind it advisory and non-blocking", () => {
-		expect(isAdvisoryCheck(gate.name ?? "")).toBe(true);
-		for (const [, job] of gated)
-			expect(isAdvisoryCheck(job.name ?? "")).toBe(true);
-	});
-
-	// Recurrence: a gate that polls a merge-ref sha finds no check-runs (they
-	// hang on the PR head), reads "absent" for the full deadline and skips the
-	// heavy lane on every PR.
-	it("reads check-runs at the PR head sha, not the merge commit", () => {
-		const step = gate.steps?.find((entry) => entry.id === "gate");
-		expect(step?.env?.HEAD_SHA).toContain("github.event.pull_request.head.sha");
-		expect(step?.env?.HEAD_SHA).toContain("|| github.sha");
-		expect(gate.permissions?.checks).toBe("read");
-	});
-
-	// Recurrence: a gate job whose own ceiling is below its poll deadline is
-	// killed mid-wait and reads as a red advisory row.
-	it("bounds the gate's poll below its job timeout", () => {
-		expect((gate["timeout-minutes"] ?? 0) * 60).toBeGreaterThan(
-			DEFAULT_DEADLINE_SECONDS + 120,
-		);
-	});
-
 	// Recurrence (#4005): the Stryker mutation lane came back onto the pull_request
 	// path (a `mutation` job in ci.yml or its own workflow) and bought 11-18% of CI
 	// job-minutes per push for no product defect. It is the nightly report in
 	// stryker-nightly.yml; tests/config/stryker-nightly-workflow.test.ts pins that
-	// shape, and this pins the absence from the PR path and the gate.
-	it("has no mutation job behind the gate and no mutation workflow on the pull_request path", () => {
+	// shape, and this pins the absence from the PR path.
+	it("has no mutation job in ci.yml and no mutation workflow on the pull_request path", () => {
 		expect(Object.keys(CI.jobs).filter((id) => /mutation/i.test(id))).toEqual(
 			[],
 		);
-		// #4518: the Windows Vitest subset is no longer behind the gate, and #5275
-		// moved CodeQL, the last job there, to codeql.yml's daily schedule.
-		expect(gated.map(([id]) => id).sort(byCodeUnit)).toEqual([]);
 		expect(existsSync(resolve(ROOT, ".github/workflows/mutation.yml"))).toBe(
 			false,
 		);
 	});
 
 	// Recurrence: #3756's aggregate lesson. A skipped required check counts as
-	// passing, so the gate must never be (or replace) a required context.
-	it("does not rename or replace any required context", () => {
-		expect(REQUIRED_CONTEXTS).not.toContain(gate.name);
+	// passing, so the `Unit tests` aggregate must keep its name and `always()`.
+	it("keeps the Unit tests aggregate name and always()", () => {
 		expect(CI.jobs["unit-tests"].name).toBe("Unit tests");
 		expect(CI.jobs["unit-tests"].if).toBe("always()");
 	});
 });
 
-// #3926: the heavy advisory jobs start only after the required checks pass, so
-// auto-merge may already have deleted the mutable `refs/pull/<n>/merge` that
-// `github.ref` names. A gated checkout must rely on the action's default
-// captured commit (`github.sha`, the validated test-merge tree), never on the
-// ephemeral ref.
-// The rule is derived from `needs`, so a future gated job is covered.
-describe("#3926 a gated checkout pins the captured commit, never the merge ref", () => {
-	const checkoutSteps = (id: string): Step[] =>
-		(CI.jobs[id]?.steps ?? []).filter(
-			(step) => step.uses?.startsWith("actions/checkout@") === true,
-		);
+// #3926: auto-merge may delete the mutable `refs/pull/<n>/merge` that
+// `github.ref` names before a late-starting job checks out. A checkout must
+// rely on the action's default captured commit (`github.sha`, the validated
+// test-merge tree), never on the ephemeral ref.
+describe("#3926 the Windows unit job's checkout pins the captured commit", () => {
 	const checkoutRefs = (id: string): Array<string | undefined> =>
-		checkoutSteps(id).map((step) => step.with?.ref);
+		checkoutStepsOf(CI.jobs[id] ?? {}).map((step) => step.with?.ref);
 
-	// Recurrence (#3807/#3924): a gated job (or this one) restores
-	// `ref: ${{ github.ref }}` and its checkout fetches a ref the merge deleted.
-	// Reads the shared census (stage B), not a second checkout sweep.
-	it("keeps every checkout behind heavy-gate off the ephemeral pull ref", () => {
-		// Empty since #5275 (no job is behind the gate); the rule below covers a
-		// future gated job, so there is deliberately no population floor.
-		const gatedSites = CENSUS_SITES.filter((site) => site.stage === "B");
-		for (const [id] of gated)
-			expect(
-				gatedSites.some((site) => site.jobId === id),
-				`${id} must still check out the repository`,
-			).toBe(true);
-		const offenders = gatedSites
-			.filter((site) => !onCapturedCommit(site.ref))
-			.map((site) => `${site.file}::${site.jobId}: ref=${site.ref}`);
-		expect(offenders).toEqual([]);
-	});
-
-	// #4518: `unit-tests-windows` left stage B, but its checkout keeps the
-	// default (`github.sha`), so promotion did not trade a deleted merge ref for
-	// a required row that cannot find its tree.
-	it("keeps the promoted Windows job's checkout on the captured commit", () => {
+	// #4518: `unit-tests-windows` is a required row, so a checkout that cannot
+	// find its tree leaves the row red. Its checkout keeps the default
+	// (`github.sha`), not a deleted merge ref.
+	it("keeps the Windows job's checkout on the captured commit", () => {
 		expect(checkoutRefs("unit-tests-windows")).not.toContain(
 			"${{ github.ref }}",
 		);
@@ -708,30 +518,19 @@ describe("#3926 a gated checkout pins the captured commit, never the merge ref",
 			),
 		).toBe(true);
 	});
-
-	// The action's default is what makes the captured commit reachable; the
-	// evaluated revision must stay pinned, not drift to a floating tag.
-	it("keeps the pinned checkout revision", () => {
-		for (const [id, job] of gated) {
-			for (const step of job.steps ?? []) {
-				if (!step.uses?.startsWith("actions/checkout@")) continue;
-				expect(step.uses, `${id} checkout revision`).toBe(pinnedCheckout());
-			}
-		}
-	});
 });
 
 // #3941: the early-start advisory population. These five jobs run on
-// `pull_request` and are NOT behind `heavy-gate`, so a runner-queue delay can
-// start their checkout after auto-merge deletes the mutable
-// `refs/pull/<n>/merge` that `github.ref` names. This is the separate producer
-// the gate-based #3926 rule cannot cover. No field incident is claimed on
-// these five: the failure class is proven by the same pinned checkout
-// source contract (the pinned `actions/checkout` revision ci.yml's other jobs use,
-// asserted below) and the real deleted-ref / captured-SHA witness in the
-// #3926 block; the production failure (#3926) is the same checkout mechanism
-// on the one gated Windows site. The rule folds onto the shared census, so a
-// future early-start advisory job is covered without a second resolver.
+// `pull_request` and start without waiting for the required checks, so a
+// runner-queue delay can start their checkout after auto-merge deletes the
+// mutable `refs/pull/<n>/merge` that `github.ref` names. No field incident is
+// claimed on these five: the failure class is proven by the same pinned
+// checkout source contract (the pinned `actions/checkout` revision ci.yml's
+// other jobs use, asserted below) and the real deleted-ref / captured-SHA
+// witness in the #3926 block; the production failure (#3926) was the same
+// checkout mechanism on a late-starting Windows site. The rule folds onto the
+// shared census, so a future early-start advisory job is covered without a
+// second resolver.
 //
 // Mutation harness: reintroduce `ref: <ref>` on the named job's first
 // checkout in an in-memory copy of the real file text, then re-parse. The
@@ -849,24 +648,19 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		// lint-and-typecheck (72 -> 70 sites, A 26 -> 24), and classify and
 		// finalize-rerun lost the pull_request trigger (A 24 -> 22, D 37 -> 39).
 		// #5275 removed ci.yml's PR-time `codeql` job, the last stage-B member:
-		// 70 -> 69 sites, B 1 -> 0, 73 -> 72 non-gate rows.
+		// 70 -> 69 sites, B 1 -> 0, 73 -> 72 non-gate rows. Retiring `heavy-gate`
+		// removed the gate stage and its one checkout: 69 -> 68 sites, and the 72
+		// rows are all rows now.
 		assertNonEmptyScan(
 			"early-start advisory checkout census",
 			CENSUS_SITES.length,
-			69,
+			68,
 		);
-		pinnedNumber("checkout sites", CENSUS_SITES.length, 69);
-		pinnedNumber(
-			"non-gate job rows",
-			CENSUS_ROWS.filter((row) => row.stage !== "gate").length,
-			72,
-		);
+		pinnedNumber("checkout sites", CENSUS_SITES.length, 68);
+		pinnedNumber("job rows", CENSUS_ROWS.length, 72);
 		pinnedNumber("stage A rows", stageJobs("A"), 22);
-		pinnedNumber("stage B rows", stageJobs("B"), 0);
 		pinnedNumber("stage C rows", stageJobs("C"), 11);
 		pinnedNumber("stage D rows", stageJobs("D"), 39);
-		// The gate's own checkout is its own stage and is excluded from A-D.
-		pinnedNumber("gate checkout sites", summary.get("gate")?.sites ?? 0, 1);
 		// #3941 F1: the schedule/dispatch-only advisory job is NOT early-start,
 		// even though its workflow also triggers on pull_request.
 		const hostLatest = CENSUS_SITES.find(
@@ -914,7 +708,6 @@ describe("#3941 early-start advisory checkouts pin the captured commit", () => {
 		// stage-A `npm-strict` job adds one gating site (17 and 20); #5002's two
 		// gating folds remove two (15 and 18).
 		pinnedNumber("stage A explicit github.ref sites", stageRefs("A"), 14);
-		pinnedNumber("stage B explicit github.ref sites", stageRefs("B"), 0);
 		pinnedNumber("stage C explicit github.ref sites", stageRefs("C"), 0);
 		pinnedNumber("stage D explicit github.ref sites", stageRefs("D"), 1);
 		const totalGithubRef = CENSUS_SITES.filter(

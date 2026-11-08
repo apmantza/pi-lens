@@ -36,6 +36,7 @@ import {
 	summarizeWorkspaceEdit,
 } from "../clients/lsp/edits.js";
 import { configDisabledAuxiliaryLspServerIds } from "../clients/dispatch/auxiliary-lsp.js";
+import { NO_SERVER_REASON } from "../clients/dispatch/types.js";
 import { readFileContent } from "../clients/dispatch/runners/utils.js";
 import {
 	PRIMARY_UNAVAILABLE_CAUSE,
@@ -1390,7 +1391,7 @@ export function createLspNavigationTool(
 								content: [
 									{
 										type: "text" as const,
-										text: `No LSP server available for ${path.basename(filePath)}. Check that the language server is installed.`,
+										text: `No LSP server available for ${path.basename(filePath)}: ${NO_SERVER_REASON}.`,
 									},
 								],
 								isError: true,
@@ -1665,7 +1666,7 @@ export function createLspNavigationTool(
 								text:
 									disabledPrimaries(filePath).disabledServerIds.length > 0
 										? noServerAnsweredText(filePath)
-										: `No LSP server available for ${path.basename(filePath)}. Check that the language server is installed.`,
+										: `No LSP server available for ${path.basename(filePath)}: ${NO_SERVER_REASON}.`,
 							},
 						],
 						isError: true,

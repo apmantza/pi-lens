@@ -716,6 +716,9 @@ describe("consumer projections track the registry", () => {
 				true,
 			);
 			expect(symbolSearchFileMatchesLang("src/main.ts", "python")).toBe(false);
+			// A FileKind with no language entry resolves through the kind table.
+			expect(symbolSearchFileMatchesLang("src/main.ts", "jsts")).toBe(true);
+			expect(symbolSearchFileMatchesLang("src/main.cpp", "cxx")).toBe(true);
 		});
 
 		it("pins the reconciled lang -> extension decisions", () => {

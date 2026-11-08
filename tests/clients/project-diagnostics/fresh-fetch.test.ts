@@ -958,6 +958,8 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 				[path.join(tmp, "src", "a.ts"), path.join(tmp, "src", "b.ts")],
 			],
 			count: 1,
+			// #5097: only a parsed scan carries the flag, and only it is cached.
+			analyzed: true as const,
 		};
 		const clients = makeClients({ madgeAvailable: true, madgeResult });
 
