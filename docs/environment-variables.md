@@ -3,9 +3,13 @@
 The complete pi-lens environment-variable reference. Most variables here are read
 once, at process start; set them in the shell that launches pi (`export …` in bash,
 `$env:VAR = "…"` / `setx …` in PowerShell), your process manager, or CI config.
-The few read on each use (`PI_LENS_CASCADE_SETTLE_WAIT_MS`, `PI_LENS_LSP_DRIFT_CHECK_MS`,
-`PI_LENS_DECLARATION_LOOK_MS`, `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH`
-and `PI_LENS_SNAPSHOT_PERSIST_SYNC`) also apply a value a host sets on `process.env`
+The variables read on each use (`PI_LENS_CASCADE_SETTLE_WAIT_MS`, `PI_LENS_LSP_DRIFT_CHECK_MS`,
+`PI_LENS_DECLARATION_LOOK_MS`, `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH`,
+`PI_LENS_SNAPSHOT_PERSIST_SYNC`, `PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS`,
+`PI_LENS_GRAPH_CHECKPOINT_MIN_INTERVAL_MS`, `PI_LENS_WORD_INDEX_PERSIST_DEBOUNCE_MS`,
+`PI_LENS_TOOL_REFRESH_INTERVAL_MS`, `PI_LENS_TOOL_REFRESH_RETRY_MS`,
+`PI_LENS_TOOL_REFRESH_MAX_PER_SESSION`, `PI_LENS_INSTALL_TIMEOUT_MS` and
+`PI_LENS_REVIEW_GRAPH_MAX_FILES`) also apply a value a host sets on `process.env`
 after start.
 
 Boolean-style variables are compared literally against `"1"` or `"0"` — only the

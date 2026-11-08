@@ -74,8 +74,12 @@ const RAW_VALUES: ReadonlyArray<
  * integer, and every other value (unset, blank, non-numeric, negative,
  * non-finite) is the default.
  */
-function expectedFor(raw: string | undefined, defaultValue: number): number {
-	if (raw === "0") return 0;
+function expectedFor(
+	raw: string | undefined,
+	defaultValue: number,
+	zeroIsDefault = false,
+): number {
+	if (raw === "0") return zeroIsDefault ? defaultValue : 0;
 	if (raw === "7" || raw === "7.9") return 7;
 	return defaultValue;
 }
@@ -163,10 +167,22 @@ describe("#5419 numeric knobs read blank as unset and 0 as a value", () => {
 describe("#5419 the touch, settle and early-unblock constants read the same contract", () => {
 	// Module-load constants: each row re-imports the built module under the
 	// row's environment. The five knobs share the row's raw value.
+	// The nav wait is the one positive-or-default knob (#5419 F1): a 0 budget
+	// reaches getClientForFile as "no timeout", so 0 reads as the default.
 	const LSP_KNOBS: ReadonlyArray<
-		readonly [env: string, constant: string, defaultValue: number]
+		readonly [
+			env: string,
+			constant: string,
+			defaultValue: number,
+			zeroIsDefault?: boolean,
+		]
 	> = [
-		["PI_LENS_LSP_NAV_CLIENT_WAIT_MS", "NAV_CLIENT_WAIT_TIMEOUT_MS", 1500],
+		[
+			"PI_LENS_LSP_NAV_CLIENT_WAIT_MS",
+			"NAV_CLIENT_WAIT_TIMEOUT_MS",
+			1500,
+			true,
+		],
 		["PI_LENS_LSP_TOUCH_DEBOUNCE_MS", "TOUCH_DEBOUNCE_MS", 1500],
 		[
 			"PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_THRESHOLD_MS",
@@ -191,9 +207,31 @@ describe("#5419 the touch, settle and early-unblock constants read the same cont
 					string,
 					number
 				>;
-			for (const [, constant, defaultValue] of LSP_KNOBS) {
-				expect(lsp[constant], constant).toBe(expectedFor(raw, defaultValue));
+			for (const [, constant, defaultValue, zeroIsDefault] of LSP_KNOBS) {
+				expect(lsp[constant], constant).toBe(
+					expectedFor(raw, defaultValue, zeroIsDefault),
+				);
 			}
+		},
+	);
+
+	// The tool-call nav budget reads the same knob (#5419 F1). Its own knob
+	// PI_LENS_TOOLCALL_NAV_TOUCH_MS, when set, takes precedence; this row leaves
+	// it unset so the shared knob is the one read.
+	it.each(RAW_VALUES)(
+		"LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS reads %s as the nav knob's positive rule",
+		async (_label, raw) => {
+			setKnob("PI_LENS_TOOLCALL_NAV_TOUCH_MS", undefined);
+			setKnob("PI_LENS_LSP_NAV_CLIENT_WAIT_MS", raw);
+			vi.resetModules();
+			const toolCall =
+				(await import("../../clients/runtime-tool-call.js")) as unknown as Record<
+					string,
+					number
+				>;
+			expect(toolCall.LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS).toBe(
+				expectedFor(raw, 1500, true),
+			);
 		},
 	);
 });

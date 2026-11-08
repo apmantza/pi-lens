@@ -335,10 +335,12 @@ export interface LSPState {
 // stop re-paying its notify budget on every file. A single successful write
 // resets the streak.
 const NOTIFY_BACKPRESSURE_BROKEN_AFTER = 3;
-export const NAV_CLIENT_WAIT_TIMEOUT_MS = nonNegativeIntEnv(
-	"PI_LENS_LSP_NAV_CLIENT_WAIT_MS",
-	1500,
-);
+// #5419 F1: positive-or-default, not "0 means no wait". A 0 budget reaches
+// getClientForFile as maxWaitMs 0, its no-timeout branch, so a server that never
+// initializes would block the navigation call without a bound. runtime-tool-call.ts
+// reads the same knob with the same `|| 1500`.
+export const NAV_CLIENT_WAIT_TIMEOUT_MS =
+	nonNegativeIntEnv("PI_LENS_LSP_NAV_CLIENT_WAIT_MS", 1500) || 1500;
 /**
  * #4532 gap 9: the touch debounce's ONLY remaining job is to switch the skip
  * off (`0` disables it). It no longer bounds how long an entry stays useful,
@@ -7556,6 +7558,13 @@ export class LSPService {
 		// Document mode: 0ms grace — return as soon as any client has results.
 		// Full mode: 400ms grace — wait a bit for other clients to catch up.
 		const graceMs = diagnosticsMode === "document" ? 0 : EARLY_UNBLOCK_GRACE_MS;
+		// #5419 F2: PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS=0 disables early unblock in
+		// full mode: no answer finalizes the race, so every client is waited for,
+		// each already bounded by its own aggregateWaitMs. raceToCompletion keeps its
+		// own graceMs 0 ("finalize at the first answer") for document mode and
+		// client.ts, so the disable is this caller's predicate, not that contract.
+		const earlyUnblockOn =
+			diagnosticsMode === "document" || EARLY_UNBLOCK_GRACE_MS > 0;
 
 		// R8 (#714) / #1458 S2: per-promise role descriptors so raceToCompletion
 		// can apply a bounded aux grace once every language-role promise has
@@ -7599,6 +7608,7 @@ export class LSPService {
 		const perServer = await raceToCompletion(
 			clientWaits,
 			(results) =>
+				earlyUnblockOn &&
 				results.some(
 					(r) =>
 						r.diagnosticCount > 0 ||
