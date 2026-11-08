@@ -26,7 +26,10 @@ import {
 	dispatchForFile,
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
-import { resetDispatchAvailabilityState } from "../../../clients/dispatch/runners/utils/runner-helpers.js";
+import {
+	resetDispatchAvailabilityState,
+	resolveToolCommandWithInstallFallback,
+} from "../../../clients/dispatch/runners/utils/runner-helpers.js";
 import {
 	flushLatencyLog,
 	getLatencyLogPath,
@@ -325,4 +328,30 @@ describe("#5410 one tool-binary resolver through the real dispatcher", () => {
 				.map((call) => call.cmd),
 		).toEqual([venvMypy]);
 	});
+
+	// #5437 review F3: the runner-local checkers these specs replaced passed
+	// `.exe` (swiftlint) and the old project probe defaulted to `.cmd`
+	// (htmlhint); specs without `windowsExt` lost the Windows shim name.
+	it.each([
+		["htmlhint", "htmlhint.cmd"],
+		["swiftlint", "swiftlint.exe"],
+	])(
+		"resolves a trusted project's Windows %s shim (%s)",
+		async (toolId, shimName) => {
+			const platform = Object.getOwnPropertyDescriptor(process, "platform");
+			Object.defineProperty(process, "platform", { value: "win32" });
+			try {
+				setProjectTrustState("trusted");
+				const shimDir = path.join(project.tmpDir, "node_modules", ".bin");
+				fs.mkdirSync(shimDir, { recursive: true });
+				const shim = path.join(shimDir, shimName);
+				fs.writeFileSync(shim, "@echo off\r\n");
+				expect(
+					await resolveToolCommandWithInstallFallback(project.tmpDir, toolId),
+				).toBe(shim);
+			} finally {
+				if (platform) Object.defineProperty(process, "platform", platform);
+			}
+		},
+	);
 });
