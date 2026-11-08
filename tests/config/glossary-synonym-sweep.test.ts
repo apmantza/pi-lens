@@ -1182,7 +1182,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// file a kind names by pattern (`path.basename`), like the inline filter.
 		// 12 -> 10 (#5135): that basename and extname read moved into the shared
 		// `resolveLanguageScope` predicate in `clients/language-registry.ts`.
-		"clients/lens-engine.ts": 10,
+		// 10 -> 5 (#5371): `fileMatchesPathGlobs` and its comment move to
+		// `clients/path-globs.ts`, taking five `node:path` module uses with them.
+		"clients/lens-engine.ts": 5,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
 		"clients/log-cleanup.ts": 9,
@@ -1312,6 +1314,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// session-repository.ts, below the spawn seam.
 		"clients/package-manager.ts": 16,
 		"clients/package-root.ts": 4,
+		// #5371: the `paths` glob matcher and its bounded walk arrive from
+		// `clients/lens-engine.ts` with their `node:path` uses — the namespace
+		// import, the `dirname`/`resolve` of an entry, the pattern's literal-prefix
+		// climb, and the ignored-path check's separator. All of them are the
+		// `node:path` module on a spelled glob entry, never the retired map-key
+		// sense: the module keys nothing, and its callers key what it returns.
+		"clients/path-globs.ts": 10,
 		"clients/path-keyed-map.ts": 11,
 		// 30 -> 34: findNearestMarkerRootDetailed (#3691) adds its own marker/root
 		// path locals; the legacy walker body is back to its pre-#3649 text.

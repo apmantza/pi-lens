@@ -4,6 +4,7 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
+import { hasGlobMagic, expandPathGlob } from "../clients/path-globs.js";
 import {
 	isAtOrAboveHomeDir,
 	realpathOrResolve,
@@ -85,11 +86,21 @@ export function readFilePath(
 }
 
 export interface PathsRead {
-	/** Host-resolved entries. Empty when the caller sent no `paths`. */
+	/** Host-resolved entries. Empty when the caller sent no `paths`. A glob
+	 * entry is replaced by the files and directories it names (#5371). */
 	entries: string[];
 	/** Set when the argument must be refused. */
 	refusal?: string;
 }
+
+/**
+ * The glob sentence every `paths` parameter carries (#5371). One owner, so no
+ * surface can advertise a meaning another does not honour: `symbol_search`
+ * documented "the same shape/semantics as `ast_grep_search`'s `paths`" while
+ * only `symbol_search` expanded a glob.
+ */
+export const PATHS_GLOB_CLAUSE =
+	"A glob entry (e.g. `src/**/*.ts`) expands to the files it matches; one matching none is refused (`no file matches`).";
 
 function describeEntryType(value: unknown): string {
 	if (value === null) return "null";
@@ -103,8 +114,22 @@ function describeEntryType(value: unknown): string {
  * list and a list over {@link MAX_PATHS_ENTRIES} are refused, and every
  * admitted entry is resolved through the same host-path seam the read, edit,
  * write and ast-grep tools use (so `~`, `@` and unicode-space spellings behave
- * identically). A glob entry (`src/**\/*.ts`) resolves as a path-shaped glob, so
- * the glob matching a consumer does afterwards still sees a full pattern.
+ * identically).
+ *
+ * #5371 added the third rule, and it lives HERE rather than in a consumer
+ * because the failure was one parameter with three meanings: a glob entry
+ * (`src/**\/*.ts`) is expanded once, through `clients/path-globs.ts`, into the
+ * files and directories it names, so the literal-argv tools, the `stat`-based
+ * scope, the LSP batch and the word-index filter all receive the same set.
+ * Three rules the expansion owns:
+ * - an entry with no glob characters is untouched, so a missing literal path
+ *   keeps its own `path not found` answer and a caller that names a deleted
+ *   file (git output) still gets its cached findings;
+ * - a glob that matches nothing is refused with `no file matches <entry>`,
+ *   never an empty result that reads as a clean answer (AGENTS.md shape 10);
+ * - the expansion is bounded by {@link MAX_PATHS_ENTRIES}, the cap this reader
+ *   already enforced and the one `lens_diagnostics source=lsp` answers for
+ *   (`MAX_BATCH_FILES`). An over-large scope is refused, not narrowed.
  *
  * Before #5041 each tool had its own copy: search refused a non-string entry,
  * outline and lens_diagnostics dropped it, replace never looked. The silenced
@@ -116,11 +141,14 @@ function describeEntryType(value: unknown): string {
  * stage (#4577 R2-2: a generated cwd holding U+00A0 was folded to a sibling
  * directory that does not exist); "none" leaves the list empty so the caller's
  * own "no restriction" path runs.
+ *
+ * Async because a glob is answered by a directory walk: it yields to the event
+ * loop per slice so a wide pattern never holds pi's TUI (#1137).
  */
-export function readPathsArgument(
+export async function readPathsArgument(
 	raw: unknown,
 	options: { cwd: string | undefined; absent?: "none" | "cwd" },
-): PathsRead {
+): Promise<PathsRead> {
 	const base = options.cwd || ".";
 	const absent = options.absent ?? "none";
 	if (raw === undefined || raw === null) {
@@ -148,7 +176,29 @@ export function readPathsArgument(
 			};
 		if (!entry.trim())
 			return { entries: [], refusal: `paths entry ${index + 1} is blank` };
-		entries.push(resolveHostToolPath(entry, base));
+		const resolved = resolveHostToolPath(entry, base);
+		if (!hasGlobMagic(entry)) {
+			entries.push(resolved);
+			continue;
+		}
+		const expanded = await expandPathGlob(
+			resolved,
+			base,
+			MAX_PATHS_ENTRIES - entries.length,
+		);
+		if (expanded.refusal === "no-match") {
+			return {
+				entries: [],
+				refusal: `no file matches \`${entry}\` — the glob matched no file under ${expanded.root}`,
+			};
+		}
+		if (expanded.refusal === "over-cap") {
+			return {
+				entries: [],
+				refusal: `the glob \`${entry}\` matches more than ${MAX_PATHS_ENTRIES} files — narrow the pattern, or pass a directory entry`,
+			};
+		}
+		entries.push(...expanded.entries);
 	}
 	return { entries };
 }

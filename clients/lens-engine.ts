@@ -15,7 +15,6 @@
  */
 
 import * as path from "node:path";
-import { minimatch } from "./deps/minimatch.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { applyPushedFindingPolicyByFile } from "./dispatch/finding-policy.js";
 import {
@@ -30,7 +29,8 @@ import { resolveLanguageScope } from "./language-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/capabilities.js";
 import { acquireWarmWordIndex } from "./mcp/analyze.js";
-import { normalizeMapKey, relativeInside, toPosix } from "./path-utils.js";
+import { normalizeMapKey, toPosix } from "./path-utils.js";
+import { fileMatchesPathGlobs } from "./path-globs.js";
 import { scanProjectDiagnostics } from "./project-diagnostics/scanner.js";
 import type { ProjectDiagnosticsSnapshot } from "./project-diagnostics/types.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
@@ -353,10 +353,12 @@ interface SymbolSearchHit {
  */
 export interface SymbolSearchOptions {
 	/**
-	 * Glob array scoping hits to matching files — same shape/semantics as
-	 * `ast_grep_search`'s `paths` param: a bare directory/file entry scopes its
-	 * whole subtree, a full glob pattern (`src/**\/*.ts`) is matched as-is.
-	 * Matched against each candidate file's path relative to `cwd`.
+	 * Glob array scoping hits to matching files — the same meaning every tool
+	 * that takes `paths` now has, because one reader expands a glob entry before
+	 * it reaches here (#5371, `clients/path-globs.ts`). A bare directory/file
+	 * entry scopes its whole subtree; an entry that arrived here still holds glob
+	 * syntax names the files that match it. Matched against each candidate file's
+	 * path relative to `cwd`.
 	 */
 	paths?: string[];
 	/**
@@ -397,37 +399,6 @@ export function symbolSearchFileMatchesLang(
 	// index is touched (#5135), so no production call reaches this with one.
 	const scope = resolveLanguageScope(lang);
 	return "refusal" in scope ? false : scope.matches(file);
-}
-
-/** Same glob semantics as ast_grep_search's `paths`: a bare directory/file
- * entry scopes its whole subtree (via a `/**` suffix match), a full glob
- * pattern is matched as-is. `paths` entries arrive host-resolved (#5038), so
- * `src`, `./src` and the absolute directory scope the same files. An entry at
- * or under `cwd` is matched as its `cwd`-relative spelling: the workspace
- * prefix is a literal, never glob syntax, so a directory named `app[1]` or
- * `app{a,b}` keeps its scope (#5047 F1), while the part the caller wrote after
- * it (`src/**\/*.ts`) is still a pattern. Any other entry (outside `cwd`, or a
- * relative glob) is also tried against the candidate's absolute spelling. */
-function fileMatchesPathGlobs(
-	file: string,
-	cwd: string,
-	globs: readonly string[],
-): boolean {
-	const rel = path.relative(cwd, file).split(path.sep).join("/");
-	const abs = path.resolve(file).split(path.sep).join("/");
-	const options = { dot: true, nocase: process.platform === "win32" };
-	const matches = (candidate: string, pattern: string) =>
-		minimatch(candidate, pattern, options) ||
-		minimatch(candidate, `${pattern}/**`, options);
-	return globs.some((raw) => {
-		const within = path.isAbsolute(raw) ? relativeInside(cwd, raw) : undefined;
-		// An entry at or under `cwd` is matched on the relative spelling alone,
-		// never against the absolute candidate, whose workspace prefix is not a
-		// pattern. `cwd` itself relativizes to "", which scopes the whole workspace.
-		if (within !== undefined) return matches(rel, toPosix(within) || "**");
-		const pattern = toPosix(raw);
-		return matches(rel, pattern) || (abs !== rel && matches(abs, pattern));
-	});
 }
 
 function buildSymbolSearchFileFilter(

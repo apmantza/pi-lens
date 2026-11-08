@@ -564,6 +564,11 @@ export function createLspDiagnosticsTool(
 				// #4577 R2-2: internal provenance, set only by
 				// `tools/lens-diagnostics.ts` when it injects its own cwd default.
 				pathAlreadyResolved?: boolean;
+				// #5371: the same provenance for `paths`. Set only by
+				// `tools/lens-diagnostics.ts`, which reads the list through the shared
+				// reader — host-resolved once, and with any glob entry already expanded
+				// into the files it names. Re-resolving an expanded entry is #5047 F2.
+				pathsAlreadyResolved?: boolean;
 			};
 			const severity = (typedParams.severity ?? "all") as string;
 			// #5138 D9: an unknown tier used to fall through `applySeverityFilter`'s
@@ -688,7 +693,11 @@ export function createLspDiagnosticsTool(
 				// then adopts on-disk CASING so an agent-typed, possibly mis-cased
 				// entry keys `reconcileScanDiagnostics`'s widget-state write the same
 				// way a canonical writer (clients/pipeline.ts's ctx.filePath) does.
-				const expanded = await expandPathsToFiles(cwd, rawPaths);
+				const expanded = await expandPathsToFiles(
+					cwd,
+					rawPaths,
+					typedParams.pathsAlreadyResolved === true,
+				);
 				if (expanded.files.length === 0) {
 					// A requested directory with no eligible file (empty, unreadable,
 					// or fully excluded) is a real "nothing to check" answer, not a
@@ -2724,6 +2733,10 @@ async function collectBatchDiagnostics(
 async function expandPathsToFiles(
 	cwd: string,
 	rawPaths: string[],
+	// #5371: entries the shared reader already resolved (and expanded from a
+	// glob) skip the host resolver — running `resolveHostToolPath` twice on a
+	// path it produced is the #5047 F2 fold.
+	pathsAlreadyResolved = false,
 ): Promise<{
 	files: string[];
 	directoriesWithoutFiles: string[];
@@ -2733,7 +2746,9 @@ async function expandPathsToFiles(
 	const directories: string[] = [];
 	const seenFileKeys = new Set<string>();
 	for (const entry of rawPaths) {
-		const abs = normalizeMapKey(resolveHostToolPath(entry, cwd));
+		const abs = normalizeMapKey(
+			pathsAlreadyResolved ? entry : resolveHostToolPath(entry, cwd),
+		);
 		let stat: fs.Stats | undefined;
 		try {
 			stat = fs.statSync(abs);

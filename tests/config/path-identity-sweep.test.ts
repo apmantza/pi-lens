@@ -134,6 +134,9 @@ const PYTHON_RELATIVE_LEVELS =
 const ANCHOR_PREFIX_COUNTED_CLIMB =
 	"clients/dispatch/rule-policy.ts anchorPrefix climbs a COUNTED number of segments: one dirname per segment of the config location's relativePath (its spelling below the directory that owns the file, such as `.pi-lens.json`), so the owning directory is a count fixed by that location, not a walk to a marker or a root; walkUpDirs stops on a marker or a root and cannot express the count, and the result is a spelled prefix for ignorePaths anchoring, with no identity taken";
 
+const GLOB_LITERAL_PREFIX_CLIMB =
+	"clients/path-globs.ts literalPrefixDir (#5371) climbs the segments of a GLOB PATTERN, not of a path on disk: it stops at the last segment that spells no glob syntax, and that prefix is only the directory a walk may START under — never a key, never a verdict, never compared with another path. `walkUpDirs` cannot serve it: the seam starts at a path IDENTITY (`realpathOrResolve`), and the segments here (`**`, `*.ts`) exist nowhere for the kernel to resolve, so an identity climb either fails on the missing tail or answers below the pattern. The entries the walk then yields are keyed by the consumers through their own identity seams (#5041's reader and `expandPathsToFiles`), not by this prefix";
+
 interface Pin {
 	sites: number;
 	identities: string;
@@ -366,6 +369,11 @@ const PINS: Readonly<Record<string, Pin>> = {
 		identities: "70c171ce33765a1f",
 		reason: ANCHOR_PREFIX_COUNTED_CLIMB,
 	}, // :176
+	"clients/path-globs.ts#hand-rolled-upward-walk": {
+		sites: 1,
+		identities: "19c94117c5ba2e18",
+		reason: GLOB_LITERAL_PREFIX_CLIMB,
+	}, // :91
 };
 
 interface Occurrence {

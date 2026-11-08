@@ -2112,6 +2112,19 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"whole files rather than walking reachability.",
 		owner: "#2523 slice 2",
 	},
+	"mcp/server.ts#callTool:e80d40ed~bc68e76f": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_symbol_search for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability. #5371 added it when " +
+			"the shared `paths` reader became async to expand a glob entry " +
+			"(clients/path-globs.ts) — the same await every pi-tool `paths` " +
+			"reader now has, registered once here for the MCP mirror.",
+		owner: "#5371",
+	},
 	"mcp/server.ts#ensureReady:9d37dcc9~2d2d543a": {
 		family: "hook-await",
 		site: "session_start",
@@ -2726,11 +2739,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/widget-state.ts": 4,
 	"clients/word-index.ts": 24,
 	"clients/zizmor-config.ts": 2,
-	"tools/ast-grep-outline.ts": 2,
-	"tools/ast-grep-replace.ts": 3,
+	"tools/ast-grep-outline.ts": 3,
+	"tools/ast-grep-replace.ts": 4,
 	// #2800: dump mode adds one awaited AstGrepClient.dumpAst call to the
 	// existing search handler; it shares the handler's availability/abort path.
-	"tools/ast-grep-search.ts": 6,
+	// #5371: +1, the one await on the shared `paths` reader (see the #5371 note
+	// under `tools/shared.ts`).
+	"tools/ast-grep-search.ts": 7,
 	"tools/effective-config.ts": 1,
 	"tools/lens-diagnostic-mark.ts": 2,
 	// #2846/#2800: the folded LSP probe adds one awaited internal tool path;
@@ -2745,7 +2760,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// rule. The three sites now share one helper, whose own await plus the three
 	// guarded calls make 20; the helper skips the walk entirely for a file without
 	// jedi's row, so the count is calls, not new I/O.
-	"tools/lens-diagnostics.ts": 20,
+	// #5371: 20 -> 22, the two awaits on the shared `paths` reader (the caller's
+	// list, and the one `path` read folded into it). See the #5371 note under
+	// `tools/shared.ts`.
+	"tools/lens-diagnostics.ts": 22,
 	// #2598 lowered both by one: `collectDiagnosticsForFile` and
 	// `openFileBestEffort` each dropped their `await lspService.openFile(…)`
 	// arm — the fallback for "a service shape without touchFile", which the
@@ -2766,7 +2784,22 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"tools/lsp-navigation.ts": 36,
 	"tools/module-report.ts": 3,
 	"tools/project-report.ts": 1,
-	"tools/symbol-search.ts": 1,
+	// #5371 (this table's five `tools/*` bumps and this new row share one
+	// cause): `readPathsArgument` now AWaits its glob expansion, because a glob
+	// entry is answered by a directory walk and the walk must yield — the sync
+	// twin measured 1279 ms over this repository's 107,682 entries (probe on the
+	// 2026-11-08 head), which is the #1137 stall this repo forbids on an
+	// interactive path. Every tool that reads `paths` therefore gained exactly
+	// the one await that calls the reader. None is a hook await: the reader is
+	// reached only from a tool `execute` handler and from the MCP `callTool`
+	// mirror, where an agent is waiting on its own request (the fact the
+	// `mcp/server.ts#callTool` `off-hook` entries state); the scan counts per
+	// module and cannot see that. `bounded()` is not the remedy here — it needs a
+	// `HOOK_WALL_BUDGET_MS` number and a hook signal, and this path has neither,
+	// while swallowing a `paths` refusal into `undefined` would turn a named
+	// refusal into a silent empty scope (shape 10).
+	"tools/shared.ts": 1,
+	"tools/symbol-search.ts": 2,
 };
 
 /**
