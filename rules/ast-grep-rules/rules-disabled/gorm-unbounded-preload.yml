@@ -33,9 +33,10 @@ rule:
     has:
       kind: func_literal
       stopBy: end
-has_fix: false
-tags:
-  - go
-  - orm
-  - gorm
-  - performance
+metadata:
+  has_fix: false
+  tags:
+    - go
+    - orm
+    - gorm
+    - performance

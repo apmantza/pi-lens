@@ -7,7 +7,8 @@ message: >-
 note: |-
   [CWE-416: Use After Free. [REFERENCES]
       - https://wiki.sei.cmu.edu/confluence/display/c/DCL30-C.+Declare+objects+with+appropriate+storage+durations
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   kind: return_statement
   pattern: return $VAR.data();

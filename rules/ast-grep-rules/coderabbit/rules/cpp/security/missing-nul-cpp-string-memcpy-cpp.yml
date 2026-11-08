@@ -7,7 +7,8 @@ message: >-
 note: |-
   [CWE-125]: Out-of-bounds Read [REFERENCES]
       - https://wiki.sei.cmu.edu/confluence/display/c/STR31-C.+Guarantee+that+storage+for+strings+has+sufficient+space+for+character+data+and+the+null+terminator
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   any:
     - kind: qualified_identifier

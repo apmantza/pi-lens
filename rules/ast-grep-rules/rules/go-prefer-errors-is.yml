@@ -25,16 +25,17 @@ constraints:
     regex: "^(Err|err|[A-Z].*[Ee]rror|os\\.Err)"
 ignores:
   - "**/*_test.go"
-tags:
-  - go
-  - idiom
-  - error-handling
-examples:
-  bad: |
-    if err == os.ErrNotExist {
-        return nil
-    }
-  good: |
-    if errors.Is(err, os.ErrNotExist) {
-        return nil
-    }
+metadata:
+  tags:
+    - go
+    - idiom
+    - error-handling
+  examples:
+    bad: |
+      if err == os.ErrNotExist {
+          return nil
+      }
+    good: |
+      if errors.Is(err, os.ErrNotExist) {
+          return nil
+      }

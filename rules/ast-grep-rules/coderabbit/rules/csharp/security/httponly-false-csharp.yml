@@ -18,7 +18,8 @@ note: |-
       - https://learn.microsoft.com/en-us/aspnet/core/security/authentication/cookie?view=aspnetcore-8.0#cookie-policy-middleware
       - https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.http.cookieoptions
       - https://owasp.org/Top10/A05_2021-Security_Misconfiguration
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   kind: boolean_literal
   pattern: $LITERAL

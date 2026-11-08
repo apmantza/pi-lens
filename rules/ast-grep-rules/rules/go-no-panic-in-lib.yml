@@ -20,22 +20,23 @@ rule:
 ignores:
   - "**/*_test.go"
   - "**/cmd/**"
-tags:
-  - go
-  - idiom
-  - error-handling
-examples:
-  bad: |
-    func mustDivide(a, b int) int {
-        if b == 0 {
-            panic("division by zero")
-        }
-        return a / b
-    }
-  good: |
-    func divide(a, b int) (int, error) {
-        if b == 0 {
-            return 0, errors.New("division by zero")
-        }
-        return a / b, nil
-    }
+metadata:
+  tags:
+    - go
+    - idiom
+    - error-handling
+  examples:
+    bad: |
+      func mustDivide(a, b int) int {
+          if b == 0 {
+              panic("division by zero")
+          }
+          return a / b
+      }
+    good: |
+      func divide(a, b int) (int, error) {
+          if b == 0 {
+              return 0, errors.New("division by zero")
+          }
+          return a / b, nil
+      }

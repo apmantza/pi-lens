@@ -19,16 +19,17 @@ rule:
     selector: defer_statement
     context: 'defer $FN(t, failpoint.$METHOD($$$ARGS))'
 fix: ""
-tags:
-  - go
-  - testing
-  - defer
-  - antipattern
-examples:
-  bad: |
-    defer require.NoError(t, failpoint.Enable("..."))
-    defer require.NoError(t, failpoint.Disable("..."))
-  good: |
-    // Move Enable/Disable out of defer args
-    failpoint.Enable("...")
-    defer require.NoError(t, failpoint.Disable("..."))
+metadata:
+  tags:
+    - go
+    - testing
+    - defer
+    - antipattern
+  examples:
+    bad: |
+      defer require.NoError(t, failpoint.Enable("..."))
+      defer require.NoError(t, failpoint.Disable("..."))
+    good: |
+      // Move Enable/Disable out of defer args
+      failpoint.Enable("...")
+      defer require.NoError(t, failpoint.Disable("..."))

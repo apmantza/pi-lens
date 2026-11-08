@@ -15,7 +15,8 @@ note: >-
   A05:2021 - Security Misconfiguration] [REFERENCES]
        https://blog.sonarsource.com/secure-xml-processor
        https://xerces.apache.org/xerces2-j/features.html
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   match_expression_statement:
     kind: expression_statement

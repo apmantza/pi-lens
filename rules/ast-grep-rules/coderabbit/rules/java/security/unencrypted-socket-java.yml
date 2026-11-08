@@ -9,7 +9,8 @@ message: |-
 note: |-
   [CWE-319] Cleartext Transmission of Sensitive Information [REFERENCES]
       - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   any:
     - pattern: new ServerSocket($$$)

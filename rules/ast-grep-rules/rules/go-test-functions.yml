@@ -17,16 +17,17 @@ rule:
     field: name
     regex: "^Test.*"
 fix: ""
-tags:
-  - go
-  - testing
-  - naming-convention
-examples:
-  bad: |
-    func testAbs(t *testing.T) {  // lowercase - go test won't pick up
-        ...
-    }
-  good: |
-    func TestAbs(t *testing.T) {
-        ...
-    }
+metadata:
+  tags:
+    - go
+    - testing
+    - naming-convention
+  examples:
+    bad: |
+      func testAbs(t *testing.T) {  // lowercase - go test won't pick up
+          ...
+      }
+    good: |
+      func TestAbs(t *testing.T) {
+          ...
+      }

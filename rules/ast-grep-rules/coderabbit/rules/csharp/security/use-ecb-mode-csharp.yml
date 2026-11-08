@@ -10,7 +10,8 @@ note: |-
       - https://learn.microsoft.com/en-gb/dotnet/api/system.security.cryptography.aesgcm?view=net-6.0
       - https://learn.microsoft.com/en-gb/dotnet/api/system.security.cryptography.ciphermode?view=net-6.0
       - https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#cipher-modes
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   use_of_instance:
     any:
