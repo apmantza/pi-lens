@@ -869,10 +869,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 42 -> 43 (#5044): the cross-file cache reader merges its anchor groups
 		// back into input order with one Array.prototype.filter, not a
 		// delivery-policy seam.
-		// 43 -> 45 (#5287): the unchecked-file projections of the summaries
-		// (`uncheckedFilesLine`, the unchecked tally), two `Array.prototype.filter`
-		// calls, not delivery filters.
-		"tools/lens-diagnostics.ts": 45,
+		// 43 -> 47 (#5287): the unchecked-file projections of the summaries
+		// (`uncheckedFilesLine`, the unchecked tally, the coverable subset, the
+		// empty delta's unchecked set), four `Array.prototype.filter` calls, not
+		// delivery filters.
+		"tools/lens-diagnostics.ts": 47,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
