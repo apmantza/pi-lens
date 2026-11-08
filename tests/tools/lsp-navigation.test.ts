@@ -11,6 +11,7 @@ import {
 	pinFixtureHome,
 	removeTempDirSync,
 	setupTestEnvironment,
+	mkdtempRealSync,
 } from "../clients/test-utils.js";
 import {
 	addRenameClient,
@@ -1632,9 +1633,7 @@ describe("lsp_navigation tool", () => {
 	});
 
 	it("#2450: a two-file rename leaves both files in turn-state.json with LSP-rename provenance", async () => {
-		const tmpDir = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-lsp-nav-2450-"),
-		);
+		const tmpDir = mkdtempRealSync("pi-lens-lsp-nav-2450-");
 		const fileA = path.join(tmpDir, "a.ts");
 		const fileB = path.join(tmpDir, "b.ts");
 		// #2450 review round 2 (F2): the renamed identifier sits on line 6
@@ -2270,7 +2269,7 @@ describe("lsp_navigation workspaceDiagnostics delivery gate (#1634)", () => {
 	];
 
 	beforeEach(async () => {
-		cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1634-nav-"));
+		cwd = mkdtempRealSync("pi-lens-1634-nav-");
 		filePath = path.join(cwd, "app.ts");
 		fs.writeFileSync(
 			filePath,

@@ -27,6 +27,7 @@ import {
 	pinFixtureHome,
 	removeTempDirSync,
 	createPathIdentityFixture,
+	mkdtempRealSync,
 } from "../clients/test-utils.js";
 import { STALE_LINE_MARKER } from "../../clients/stale-marker.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
@@ -491,7 +492,7 @@ describe("lens_diagnostics source and scope routing", () => {
 	});
 
 	it("routes source=lsp through the real probe implementation", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-lsp-"));
+		const cwd = mkdtempRealSync("pi-lens-fold-lsp-");
 		const file = path.join(cwd, "bad.ts");
 		fs.writeFileSync(file, "const value: number = 'bad';\n");
 		const service = {
@@ -564,7 +565,7 @@ describe("lens_diagnostics source and scope routing", () => {
 		// Round 2 unconditionally deleted `path`/`paths` under scope=workspace
 		// and substituted `cwd`, silently widening a directory-scoped request
 		// into a whole-project sweep.
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-dir-"));
+		const cwd = mkdtempRealSync("pi-lens-fold-dir-");
 		const sub = path.join(cwd, "src");
 		fs.mkdirSync(sub);
 		fs.writeFileSync(path.join(sub, "a.ts"), "const a = 1;\n");
@@ -598,7 +599,7 @@ describe("lens_diagnostics source and scope routing", () => {
 		// Two DIFFERENT files (not the same path reused across calls) so a
 		// process-level per-file result cache cannot mask the second call's
 		// own routing decision.
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fold-delta-"));
+		const cwd = mkdtempRealSync("pi-lens-fold-delta-");
 		const fileA = path.join(cwd, "a.ts");
 		const fileB = path.join(cwd, "b.ts");
 		fs.writeFileSync(fileA, "const a = 1;\n");
@@ -5937,9 +5938,7 @@ describe("lens_diagnostics mode=delta — per-entry freshness on a merged report
  */
 describe("lens_diagnostics injected workspace default (#4577 R2-2)", () => {
 	it("scans a cwd holding a host-unicode space instead of a folded sibling", async () => {
-		const parent = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-diag-ws-nbsp-"),
-		);
+		const parent = mkdtempRealSync("pi-lens-diag-ws-nbsp-");
 		const cwd = path.join(parent, "proj\u00A0x");
 		fs.mkdirSync(cwd);
 		const file = path.join(cwd, "a.ts");

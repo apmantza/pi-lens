@@ -24,13 +24,14 @@ import {
 	createCaseAliasFixture,
 	pinFixtureHome,
 	removeTempDirSync,
+	mkdtempRealSync,
 } from "../clients/test-utils.js";
 
 let tmpDir: string;
 let previousDataDir: string | undefined;
 
 beforeEach(() => {
-	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-mark-tool-"));
+	tmpDir = mkdtempRealSync("pi-lens-mark-tool-");
 	previousDataDir = process.env.PILENS_DATA_DIR;
 	process.env.PILENS_DATA_DIR = path.join(tmpDir, "data");
 	_resetDeferredForTests();
