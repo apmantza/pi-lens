@@ -84,7 +84,7 @@ export function toolCallProgress(event: {
 			type: "phase",
 			phase: "behavior_args_unserializable",
 			filePath: "<unknown>",
-			toolName,
+			toolName: toolName ?? "<unknown>",
 			durationMs: 0,
 			result: "no-args-key",
 		});

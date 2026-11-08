@@ -227,8 +227,11 @@ describe("toolCallProgress", () => {
 		// latency.log writes are off under PI_LENS_TEST_MODE (#1742).
 		process.env.PI_LENS_TEST_MODE = "0";
 		const log = path.join(getGlobalPiLensLogDir(), "latency.log");
-		const fromByte = fs.existsSync(log) ? fs.statSync(log).size : 0;
 		try {
+			// Drain what earlier cases queued, then take the offset with no await
+			// in between: a sink read must follow a drain (#4381).
+			await flushLatencyLog();
+			const fromByte = fs.statSync(log, { throwIfNoEntry: false })?.size ?? 0;
 			const circular: Record<string, unknown> = { path: FORT, offset: 1 };
 			circular.self = circular;
 			expect(toolCallProgress({ toolName: "edit", input: circular })).toEqual(
