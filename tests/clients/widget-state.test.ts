@@ -2814,6 +2814,22 @@ describe("a file no check can ever cover (#5287)", () => {
 		expect(mixed).not.toContain("notes.zzz");
 	});
 
+	// Recurrence prevented: #5391 review B3. format-service records a formatter
+	// run for a generated file, which earns a row, and the header then read
+	// `✓ clean` with no completed check anywhere in the session.
+	it("a formatter row for a file no check can cover does not earn the header's clean", () => {
+		recordFormatter("/repo/gen.ts", "biome", true, true);
+		recordDiagnostics("/repo/gen.ts", [], undefined, undefined, flagged);
+		for (const opts of [undefined, { compact: true }]) {
+			const frame = renderWidget(120, theme, opts).join("\n");
+			expect(frame, JSON.stringify(opts)).not.toContain("✓ clean");
+		}
+		expect(renderWidget(120, theme).join("\n")).toContain("gen.ts");
+
+		recordDiagnostics("/repo/checked.ts", []);
+		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
 	it("still draws a finding the file holds", () => {
 		recordDiagnostics(
 			"/repo/gen.ts",
@@ -2869,7 +2885,11 @@ describe("a file no check can ever cover (#5287)", () => {
 		});
 		clearWidgetState();
 		expect(importWidgetState(saved)).toBe(true);
-		expect(renderWidget(120, theme).join("\n")).not.toContain("✓");
+		// Recurrence prevented: #5391 review F7. An import that dropped the flag
+		// read the kindless file back as coverable, drawing `⚠ 1 unchecked`.
+		const resumed = renderWidget(120, theme).join("\n");
+		expect(resumed).not.toContain("✓");
+		expect(resumed).not.toContain("unchecked");
 		expect(getFileDiagnosticSummaries()[0]?.uncheckedReason).toBe(
 			inapplicable.reason,
 		);

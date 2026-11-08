@@ -2137,6 +2137,8 @@ export interface FileDiagnosticSummary {
 	 * out of its count.
 	 */
 	uncheckedReason?: string;
+	/** #5287: set with `uncheckedReason` when no check can ever cover the file. */
+	uncheckedInapplicable?: true;
 	/**
 	 * The full, uncapped LIVE diagnostics for this file (not limited by the TUI's
 	 * per-file storage cap). `blocking + errors + warnings` may exceed
@@ -2188,6 +2190,9 @@ export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 			hasFinalSnapshot: rec.hasFinalDiagnosticsSnapshot,
 			...(rec.uncheckedReason !== undefined && {
 				uncheckedReason: rec.uncheckedReason,
+			}),
+			...(rec.uncheckedInapplicable === true && {
+				uncheckedInapplicable: true,
 			}),
 			diagnostics: live.map((d) => ({ ...d })),
 		};
@@ -2424,7 +2429,10 @@ export function renderWidget(
 			? warningChunk
 			: uncheckedFiles.length > 0
 				? yellow(`⚠ ${uncheckedFiles.length} unchecked`)
-				: renderable.length > 0 && !hasPendingAnalysis
+				: // #5287: a formatter row for a file no check can cover (a generated
+					// file) is not a completed check; `✓ clean` needs one that is.
+					renderable.some((rec) => rec.uncheckedInapplicable !== true) &&
+					  !hasPendingAnalysis
 					? green("✓ clean")
 					: "";
 

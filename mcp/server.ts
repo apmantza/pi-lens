@@ -44,6 +44,7 @@ import {
 	acknowledgeTurnEnd,
 	analyzeFile,
 	analyzeFileFresh,
+	analyzeUncheckedReason,
 	canRebuildPiLens,
 	createMcpHost,
 	createWarmIpcLineReader,
@@ -1046,6 +1047,7 @@ function formatAnalyze(
 	const lspNote = result.lsp
 		? ` · lsp ${result.lsp.diagnosticCount} (${result.lsp.status}${result.lsp.failureKind ? `: ${result.lsp.failureKind}` : ""}, ${result.lsp.durationMs}ms)`
 		: "";
+	const notChecked = analyzeUncheckedReason(result);
 	const summary =
 		`${path.relative(cwd, result.filePath) || result.filePath} [${mode}] — ` +
 		`${result.counts.blockers} blocking, ${result.counts.warnings} warning(s), ` +
@@ -1055,7 +1057,9 @@ function formatAnalyze(
 		`${result.counts.diagnostics} total` +
 		// #5287: zero counts beside a check that never completed are not a clean
 		// file, so the summary says so beside them.
-		(result.verdict.checked ? "" : ` · not checked: ${result.verdict.reason}`) +
+		// A worker reply from an older build carries no verdict (the facade casts
+		// it unvalidated), which the shared reader also treats as unchecked.
+		(notChecked === undefined ? "" : ` · not checked: ${notChecked}`) +
 		(result.latency ? ` · ${result.latency.totalDurationMs}ms` : "") +
 		lspNote +
 		(result.counts.fixed > 0 ? ` · ${result.counts.fixed} auto-fixed` : "") +

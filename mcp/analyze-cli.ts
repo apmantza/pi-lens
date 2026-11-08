@@ -38,8 +38,10 @@ import { withBudget } from "../clients/deadline-utils.js";
 import * as path from "node:path";
 import { flushExtensionLog, logExtension } from "../clients/extension-log.js";
 import { redactSecrets } from "../clients/redact/secrets.js";
-import type { McpAnalyzeResult } from "../clients/mcp/analyze.js";
-import type { CoverageVerdict } from "../clients/dispatch/types.js";
+import {
+	analyzeUncheckedReason,
+	type McpAnalyzeResult,
+} from "../clients/mcp/analyze.js";
 import {
 	recordTurnEndOutcome,
 	requestWarmAnalyze,
@@ -64,23 +66,9 @@ async function readStdin(): Promise<string> {
 	return Buffer.concat(chunks).toString("utf8");
 }
 
-/**
- * #5287: why no check of the file's kind completed, or `undefined` when one
- * did. Silence is reserved for that answer: zero findings with no completed
- * check (a cold `--no-lsp` TypeScript edit, a kind nothing can check) is not a
- * clean file. A reply from a warm server built before the field carries no
- * verdict, which is not a completed check either.
- */
-function uncheckedReason(result: McpAnalyzeResult): string | undefined {
-	const verdict = result.verdict as CoverageVerdict | undefined;
-	if (verdict === undefined)
-		return "the answering pi-lens server did not report whether a check completed — restart it if it predates this build";
-	return verdict.checked ? undefined : verdict.reason;
-}
-
 function formatReport(result: McpAnalyzeResult, cwd: string): string {
 	const rel = path.relative(cwd, result.filePath) || result.filePath;
-	const notChecked = uncheckedReason(result);
+	const notChecked = analyzeUncheckedReason(result);
 	const lines = [
 		// #2420: advisories (hint/info-tier style opinions) reported under their
 		// own label — no longer folded into the warning count on this surface.
@@ -344,7 +332,7 @@ async function main(): Promise<void> {
 		// A checked file with no findings is the one silent answer (clean → no noise).
 		if (
 			result.counts.diagnostics === 0 &&
-			uncheckedReason(result) === undefined
+			analyzeUncheckedReason(result) === undefined
 		)
 			process.exit(0);
 		await writeReport(formatReport(result, cwd), hookMode);

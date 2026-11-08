@@ -61,7 +61,10 @@ import {
 	recordRunner,
 	renderWidget,
 } from "../../../clients/widget-state.js";
-import { analyzeFile } from "../../../clients/mcp/analyze.js";
+import {
+	analyzeFile,
+	analyzeUncheckedReason,
+} from "../../../clients/mcp/analyze.js";
 import { createLensDiagnosticMarkTool } from "../../../tools/lens-diagnostic-mark.js";
 import { createCaseAliasFixture } from "../test-utils.js";
 
@@ -1108,5 +1111,30 @@ describe("analyzeFile stamps its widget row at the analysis read (#3573)", () =>
 		expect(rows()).toEqual([
 			expect.objectContaining({ message: "Type error", observedAt: T_READ }),
 		]);
+	});
+});
+
+// Recurrence prevented: #5391 review B1 and B2. `formatAnalyze` read
+// `result.verdict.checked` on a worker reply cast without validation, so a
+// reply from a build before the field threw instead of reading as not checked.
+describe("analyzeUncheckedReason (#5287)", () => {
+	it("reads a reply without a verdict as unchecked, never as clean", () => {
+		expect(analyzeUncheckedReason({})).toContain(
+			"did not report whether a check completed",
+		);
+	});
+
+	it("names the reason of an unchecked verdict and is silent for a checked one", () => {
+		expect(
+			analyzeUncheckedReason({
+				verdict: {
+					checked: false,
+					reason: "no analyzer handles this file type",
+				},
+			}),
+		).toBe("no analyzer handles this file type");
+		expect(
+			analyzeUncheckedReason({ verdict: CHECKED_BY_FIXTURE }),
+		).toBeUndefined();
 	});
 });

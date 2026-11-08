@@ -495,8 +495,10 @@ export function createLensDiagnosticsTool(
 				const aw = details?.actionableWarnings ?? 0;
 				const cq = details?.qualityIssues ?? 0;
 				const pd = details?.projectDiagnostics ?? 0;
-				if (aw + cq + pd === 0)
-					return `lens_diagnostics delta — clean${coldSuffix}${failedSuffix}`;
+				if (aw + cq + pd === 0) {
+					const uncheckedDelta = details?.uncheckedFileCount ?? 0;
+					return `lens_diagnostics delta — clean${uncheckedDelta > 0 ? ` · ${uncheckedDelta} unchecked` : ""}${coldSuffix}${failedSuffix}`;
+				}
 				return `lens_diagnostics delta — ${aw} actionable · ${cq} quality · ${pd} project${coldSuffix}${failedSuffix}`;
 			}
 			// #1799: `semantic === "blocking"` iff `severity === "error"` holds for
@@ -535,7 +537,11 @@ export function createLensDiagnosticsTool(
 				const advisorySuffix =
 					adv > 0 ? `, ${adv} hint${adv === 1 ? "" : "s"}` : "";
 				// Every file unchecked: the word is `unchecked`, not `clean · N unchecked`.
-				if (cacheVerdict === undefined && unchecked >= files && unchecked > 0)
+				if (
+					cacheVerdict === undefined &&
+					unchecked > 0 &&
+					unchecked >= (details?.filesChecked ?? files)
+				)
 					return `lens_diagnostics ${mode} — unchecked${advisorySuffix} (${files} files)${coldSuffix}${failedSuffix}`;
 				return `lens_diagnostics ${mode} — ${cacheVerdict ?? "clean"}${advisorySuffix}${uncheckedSuffix} (${files} files)${coldSuffix}${failedSuffix}`;
 			}
@@ -1563,10 +1569,24 @@ function formatDeltaMode(
 		if (carried.length > 0) {
 			text += ` ${carriedIssues} finding${carriedIssues === 1 ? "" : "s"} across ${carried.length} file${carried.length === 1 ? "" : "s"} carried over from earlier this session — use mode=all to see them.`;
 		}
+		// #5287: an empty delta after a write no check completed on is a statement
+		// about the delta only; the unchecked file is named beside it.
+		const uncheckedSummaries = getFileDiagnosticSummaries().filter(
+			(f) => includeFile(f.filePath) && f.uncheckedReason !== undefined,
+		);
+		const uncheckedDeltaLine = uncheckedFilesLine(uncheckedSummaries, cwd);
+		if (uncheckedDeltaLine) text += `\n${uncheckedDeltaLine}`;
 		text += pathsScopeCacheOnlyNote(pathsScope);
 		return {
 			content: [{ type: "text" as const, text }],
-			details: { mode: "delta", warnings: 0, carriedOverFiles: carried.length },
+			details: {
+				mode: "delta",
+				warnings: 0,
+				carriedOverFiles: carried.length,
+				...(uncheckedSummaries.length > 0 && {
+					uncheckedFileCount: uncheckedSummaries.length,
+				}),
+			},
 		};
 	}
 
@@ -3780,6 +3800,13 @@ async function formatAllMode(
 	const uncheckedCount = visibleSummaries.filter(
 		(s) => s.uncheckedReason !== undefined,
 	).length;
+	// A file no check can ever cover is named in the line above, once, and is
+	// not a state a re-check can change: only the coverable ones hold the
+	// session unverified or earn a next check (the #5285 footer policy).
+	const coverableUnchecked = visibleSummaries.filter(
+		(s) => s.uncheckedReason !== undefined && s.uncheckedInapplicable !== true,
+	);
+	const checkedCount = visibleSummaries.length - uncheckedCount;
 	const uncheckedDetails =
 		uncheckedCount > 0 ? { uncheckedFileCount: uncheckedCount } : {};
 	let validationStatus: string | undefined;
@@ -3819,6 +3846,7 @@ async function formatAllMode(
 				...pending.map((s) => s.filePath),
 				...stale.map((s) => s.filePath),
 				...unverified,
+				...coverableUnchecked.map((s) => s.filePath),
 			]),
 		];
 		// #4522's rule at the session layer: only a clean read reads clean. A final
@@ -3834,9 +3862,11 @@ async function formatAllMode(
 					? "unverified"
 					: withIssues.length > 0
 						? "findings"
-						: // #5287: no finding in a file no check completed on is not the
-							// ✓ status; only checked files earn it.
-							uncheckedCount > 0
+						: // #5287: no finding in a file a check can cover but did not is not
+							// the ✓ status, nor is a session in which nothing was checked. A
+							// file no check can ever cover is named by the report's line and
+							// does not hold the others back (the #5285 footer policy).
+							coverableUnchecked.length > 0 || checkedCount === 0
 							? "unverified"
 							: "no-matching-findings";
 		const nextTool = resolveLensToolName(
@@ -3870,7 +3900,7 @@ async function formatAllMode(
 				: "";
 		validationNote =
 			validationStatus === "inconclusive" || validationStatus === "unverified"
-				? `Session cache ${validationStatus} — not a clean verdict: ${pending.length} pending file(s), ${staleDiagnosticCount} stale finding(s), ${unverified.length} requested file(s) without cached evidence, ${uncheckedCount} file(s) no check completed on${omittedClause}. Not active validation.\n` +
+				? `Session cache ${validationStatus} — not a clean verdict: ${pending.length} pending file(s), ${staleDiagnosticCount} stale finding(s), ${unverified.length} requested file(s) without cached evidence, ${coverableUnchecked.length} file(s) no check completed on${omittedClause}. Not active validation.\n` +
 					`Next check: ${nextTool ?? "diagnostics"} source=lsp scope=paths${nextPaths.length > 0 ? ` paths=${JSON.stringify(nextPaths)}` : " with the changed paths"}.` +
 					(remainingRescanPathCount > 0
 						? ` ${remainingRescanPathCount} more path(s) need a check; narrow or batch the remaining paths.`
@@ -3909,7 +3939,6 @@ async function formatAllMode(
 		dispositionSuppressed > 0 ? { dispositionSuppressed } : {};
 
 	if (withIssues.length === 0) {
-		const checkedCount = visibleSummaries.length - uncheckedCount;
 		const text =
 			(visibleSummaries.length === 0
 				? "No files diagnosed yet this session.\n"
@@ -4068,6 +4097,7 @@ async function formatAllMode(
 			...detailOverrides,
 			...evidenceDetails,
 			filesWithIssues: withIssues.length,
+			filesChecked: visibleSummaries.length,
 			totalBlocking,
 			totalErrors,
 			totalWarnings,
