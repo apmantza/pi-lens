@@ -174,10 +174,9 @@ export function applyFindingPolicyByOwner<
 		// `clients/diagnostic-dispositions.ts` so the two cache-only readers
 		// answer it the same way): outside the project root on the identity
 		// axis, or unreadable, and this process trusts the file to suppress
-		// nothing.
-		const content = trustedCitedOwnerContent(
-			owner,
-			options.cwd,
+		// nothing. The read stays behind the thunk, as the pre-#5044 ternary
+		// had it, so a file outside the root is never opened.
+		const content = trustedCitedOwnerContent(owner, options.cwd, () =>
 			readFileContent(owner),
 		);
 		if (content === undefined) {

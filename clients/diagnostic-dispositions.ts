@@ -906,14 +906,19 @@ export function applyWeakDispositionsMultiFile<T extends DispositionCandidate>(
  * session wrote and its content is the caller's own input, so it keeps the
  * documented fail-open weak fallback (#1617 F1) — callers pass `cited: false`
  * for it, or read their supplied content past this check.
+ *
+ * The bytes come from a THUNK, not an argument: the identity answer is decided
+ * before anything is opened, so a file the project does not contain is never
+ * read (`applyFindingPolicyByOwner`'s pre-#5044 short-circuit, which an eager
+ * argument would have quietly widened).
  */
 export function trustedCitedOwnerContent(
 	anchor: string,
 	cwd: string,
-	content: string | undefined,
+	read: () => string | undefined,
 ): string | undefined {
 	if (!isWithinIdentity(anchor, cwd)) return undefined;
-	return content;
+	return read();
 }
 
 /** What the marks stored against ONE anchor path may do to the cached rows
@@ -979,9 +984,6 @@ export function cachedAnchorMarks<T extends { observedAt?: number }>(input: {
 	) => string | undefined;
 }): CachedAnchorMarks {
 	const { anchor, cwd, rows, cited, strictAnchors } = input;
-	// #5067's identity-axis half first: it is pure path math, and a cited owner
-	// the project does not contain is never read, so it never suppresses.
-	if (cited && !isWithinIdentity(anchor, cwd)) return { marks: "refused" };
 	if (!cited && !strictAnchors) return { marks: "weak-only" };
 	let stat: fs.Stats;
 	try {
@@ -997,9 +999,11 @@ export function cachedAnchorMarks<T extends { observedAt?: number }>(input: {
 	}
 	let content: string | undefined;
 	if (cited) {
-		content = trustedCitedOwnerContent(
-			anchor,
-			cwd,
+		// #5067's owner rule, asked once and by its owner: outside the project
+		// root on the identity axis, or unreadable, and this cited group is
+		// refused outright. The reader stays behind the thunk so an unowned file
+		// is never opened.
+		content = trustedCitedOwnerContent(anchor, cwd, () =>
 			input.readContent(anchor, stat),
 		);
 		if (content === undefined) return { marks: "refused" };
