@@ -310,6 +310,8 @@ describe("#5416: one undefined name is one blocker", () => {
 
 		expect(result.blockers).toHaveLength(1);
 		expect(result.blockers[0]?.line).toBe(UNDEFINED_LINE);
+		// The copy the overlap dedupe would prefer stands (`dedupPriority`).
+		expect(result.blockers[0]?.tool).toBe("lsp");
 		expect(result.output.match(/undefined_name/g) ?? []).toHaveLength(1);
 	});
 
