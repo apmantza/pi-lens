@@ -13,8 +13,7 @@
 
 import { logExtension } from "./extension-log.js";
 import * as path from "node:path";
-import { canWriteAnalysisRoot, resolveAnalysisRoot } from "./analysis-root.js";
-import { recordDegradationOnce } from "./degradation-ledger.js";
+import { refuseOutOfRootWrites } from "./write-source-file.js";
 import { realpathOrResolve } from "./path-utils.js";
 import { recordFormatter } from "./widget-state.js";
 import { FileTime } from "./file-time.js";
@@ -117,14 +116,12 @@ export class FormatService {
 
 		// A link inside the session can lead outside it; the class is decided on
 		// the identity, so the target of such a link is never rewritten here.
-		const mode = resolveAnalysisRoot(absolutePath, options.sessionRoot);
-		if (!canWriteAnalysisRoot(mode)) {
-			recordDegradationOnce({
-				kind: "adopted-root-writer-skipped",
-				subject: `${absolutePath}:format`,
-				reason: `formatter refused: the file's identity is outside the session's writable roots (${mode})`,
-				metadata: { writer: "format", mode },
-			});
+		const refused = refuseOutOfRootWrites(
+			[absolutePath],
+			options.sessionRoot,
+			"format",
+		);
+		if (refused.length > 0) {
 			return {
 				filePath: absolutePath,
 				formatters: [],

@@ -2279,7 +2279,10 @@ const HELPER_EXEMPTION_REASON =
  */
 const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/actionable-warnings.ts": 14,
-	"clients/ast-grep-client.ts": 15,
+	// #5417: 15 -> 17. The two apply paths await `applyRewrite` (the queued
+	// `--update-all`) in place of the bare runner call; an apply is an
+	// `ast_grep_replace` tool call, bounded by the tool-call lifecycle, not a hook.
+	"clients/ast-grep-client.ts": 17,
 	// #4346: 13 -> 14. `extractForwardImportPaths` awaits its memoized parse
 	// (`forwardImportSources`) before resolving; the parse's own two awaits
 	// moved with it unchanged.
@@ -2748,7 +2751,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// under `tools/shared.ts`).
 	"tools/ast-grep-search.ts": 7,
 	"tools/effective-config.ts": 1,
-	"tools/lens-diagnostic-mark.ts": 2,
+	// #5417: 2 -> 4. The suppress write now awaits `writeSourceFile` (pi's
+	// per-file queue) and the read-verify-write step inside it; both belong to
+	// the `lens_diagnostic_mark` tool call, bounded by its lifecycle, not a hook.
+	"tools/lens-diagnostic-mark.ts": 4,
 	// #2846/#2800: the folded LSP probe adds one awaited internal tool path;
 	// it remains bounded by the tool call lifecycle.
 	// #3573: `getProjectDiagnosticsSnapshotForFullMode` now awaits the fresh

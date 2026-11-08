@@ -2515,6 +2515,7 @@ export async function formatFile(
 		try {
 			contentAfter = await fs.readFile(absolutePath, "utf-8");
 		} catch (readError) {
+			// none: rethrown below, after the exit status has had its verdict.
 			readBackError = readError;
 		}
 		const { changed, success } = resolveWriteResult(

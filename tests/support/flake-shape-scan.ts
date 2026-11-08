@@ -445,6 +445,8 @@ export const AST_GREP_SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"safeSpawn and safeSpawnAsync are mocked at the process boundary.",
 	"clients/runtime-tool-call.test.ts":
 		"The AstGrepClient runner is replaced before mutation-bridge tool execution.",
+	"clients/write-source-file-5417.test.ts":
+		"Every client replaces its runner with an exec or scan stub at the sg process boundary before the tool executes.",
 };
 
 /**

@@ -580,10 +580,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :168 (2 -> 1, #5120: the write lock's swallow went with withLock)
 	"clients/file-utils.ts": {
-		silent: 10,
-		identities: "6ae9ab1bab948b4e",
+		silent: 9,
+		identities: "158d7e24bb01d82f",
 		reason: PRE_RULE,
-	}, // :339, :359, :377, :381, :384, :511, :939, :1399, :1686, :1717 (#4689 batch 8: dataDirCanonicalRoot's realpath-probe catch is gone with the probe; the adoption's handlers declare their none)
+	}, // :341, :361, :379, :383, :386, :513, :1010, :1455, :1764 (#4689 batch 8: dataDirCanonicalRoot's realpath-probe catch is gone with the probe; the adoption's handlers declare their none; 10 -> 9 #5417: detectFileChangedAfterCommand's read-back declares its none)
 	"clients/fix-run-restore.ts": {
 		silent: 10,
 		identities: "24b4689d533166d4",
@@ -1333,9 +1333,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :517, :524
 	"tools/lens-diagnostic-mark.ts": {
 		silent: 6,
-		identities: "1af53558e8a5be76",
+		identities: "c6e91437fd931389",
 		reason: PRE_RULE,
-	}, // :110, :188, :222, :337, :387, :412
+	}, // :115, :193, :227, :377, :417, :439 (#5417: same six handlers, re-indented into the queued read-verify-write)
 	"tools/lens-diagnostics.ts": {
 		// 7 -> 6 (#5041): the `paths` cap guard's try/catch is gone, because the
 		// shared reader refuses an over-cap list before the scope is built.

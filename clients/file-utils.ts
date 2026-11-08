@@ -1791,6 +1791,7 @@ export async function detectFileChangedAfterCommand(
 	try {
 		after = fs.readFileSync(filePath, "utf-8");
 	} catch {
+		// none: an unreadable file reads back as unknown, never as changed.
 		after = undefined;
 	}
 	return resolveWriteResult(before, after, result).changed ? 1 : 0;
