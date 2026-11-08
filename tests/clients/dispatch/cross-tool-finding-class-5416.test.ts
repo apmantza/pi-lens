@@ -156,40 +156,49 @@ describe("#5416: the blocking verdict does not depend on which JS linter answers
 		return parseBiomeJson(JSON.stringify(report), file, tmpDir).diagnostics;
 	}
 
-	const BIOME_SEVERITIES = ["warning", "error"] as const;
-
-	for (const biomeSeverity of BIOME_SEVERITIES) {
-		it(`an unused variable blocks with oxlint present and with oxlint absent (biome reports ${biomeSeverity})`, async () => {
-			const file = path.join(tmpDir, "bad.js");
-			fs.writeFileSync(file, "const unused = 1;\n");
-
-			const withOxlint = await dispatch(
-				file,
-				[jsChain()],
-				[
-					absent(eslintRunner),
-					answering(oxlintRunner, oxlintUnused(file)),
-					answering(biomeRunner, biomeUnused(file, biomeSeverity)),
-				],
-			);
-			const withoutOxlint = await dispatch(
-				file,
-				[jsChain()],
-				[
-					absent(eslintRunner),
-					absent(oxlintRunner),
-					answering(biomeRunner, biomeUnused(file, biomeSeverity)),
-				],
-			);
-
-			expect(withOxlint.diagnostics.map((d) => d.tool)).toEqual(["oxlint"]);
-			expect(withoutOxlint.diagnostics.map((d) => d.tool)).toEqual(["biome"]);
-			expect(withOxlint.hasBlockers).toBe(true);
-			expect(withoutOxlint.hasBlockers).toBe(true);
-			expect(withOxlint.blockers).toHaveLength(1);
-			expect(withoutOxlint.blockers).toHaveLength(1);
-		});
+	/** The same file answered once with oxlint present, once with it absent. */
+	async function dispatchBothWays(biomeSeverity: "warning" | "error") {
+		const file = path.join(tmpDir, "bad.js");
+		fs.writeFileSync(file, "const unused = 1;\n");
+		const withOxlint = await dispatch(
+			file,
+			[jsChain()],
+			[
+				absent(eslintRunner),
+				answering(oxlintRunner, oxlintUnused(file)),
+				answering(biomeRunner, biomeUnused(file, biomeSeverity)),
+			],
+		);
+		const withoutOxlint = await dispatch(
+			file,
+			[jsChain()],
+			[
+				absent(eslintRunner),
+				absent(oxlintRunner),
+				answering(biomeRunner, biomeUnused(file, biomeSeverity)),
+			],
+		);
+		// Each run was answered by the one tool its chain reached.
+		expect(withOxlint.diagnostics.map((d) => d.tool)).toEqual(["oxlint"]);
+		expect(withoutOxlint.diagnostics.map((d) => d.tool)).toEqual(["biome"]);
+		return { withOxlint, withoutOxlint };
 	}
+
+	it("blocks an unused variable with oxlint present and absent when biome reports a warning", async () => {
+		const { withOxlint, withoutOxlint } = await dispatchBothWays("warning");
+		expect(withOxlint.hasBlockers).toBe(true);
+		expect(withoutOxlint.hasBlockers).toBe(true);
+		expect(withOxlint.blockers).toHaveLength(1);
+		expect(withoutOxlint.blockers).toHaveLength(1);
+	});
+
+	it("blocks an unused variable with oxlint present and absent when biome reports an error", async () => {
+		const { withOxlint, withoutOxlint } = await dispatchBothWays("error");
+		expect(withOxlint.hasBlockers).toBe(true);
+		expect(withoutOxlint.hasBlockers).toBe(true);
+		expect(withOxlint.blockers).toHaveLength(1);
+		expect(withoutOxlint.blockers).toHaveLength(1);
+	});
 
 	it("keeps the first-seen tier of a rule outside every class (no class swallows an unknown rule)", async () => {
 		// A rule the table does not list keeps the severity its tool gave it, so
@@ -434,6 +443,23 @@ describe("#5416: the class table", () => {
 		["lsp", "basedpyright:reportUndefinedVariable", "undefined-name"],
 	] as const)("%s %s is %s", (tool, rule, cls) => {
 		expect(findingClassOf({ tool, rule })).toBe(cls);
+	});
+
+	it("keeps a language server that is not Pyright out of the undefined-name class", () => {
+		// Recurrence: stripping every `<source>:` merged another analyzer's
+		// same-named code into Pyright's finding (#4629's closed prefix list).
+		expect(
+			findingClassOf({
+				tool: "lsp",
+				rule: "other-server:reportUndefinedVariable",
+			}),
+		).toBeUndefined();
+		expect(
+			findingClassOf({
+				tool: "lsp",
+				rule: "basedpyright:reportUndefinedVariable",
+			}),
+		).toBe("undefined-name");
 	});
 
 	it.each([
