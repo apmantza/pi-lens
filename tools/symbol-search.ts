@@ -90,7 +90,11 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 			// #5041: one reader owns the `paths` entry rules and the host-path
 			// spelling. #5038: the entries reach the engine as host paths, so `src`,
 			// `./src` and the absolute directory now scope the same files.
-			const pathsRead = await readPathsArgument(params.paths, { cwd });
+			const pathsRead = await readPathsArgument(params.paths, {
+				cwd,
+				filterOnly: true,
+				signal: _signal,
+			});
 			if (pathsRead.refusal) {
 				return {
 					content: [{ type: "text" as const, text: pathsRead.refusal }],

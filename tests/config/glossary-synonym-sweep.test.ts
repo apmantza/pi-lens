@@ -1191,7 +1191,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `resolveLanguageScope` predicate in `clients/language-registry.ts`.
 		// 10 -> 5 (#5371): `fileMatchesPathGlobs` and its comment move to
 		// `clients/path-globs.ts`, taking five `node:path` module uses with them.
-		"clients/lens-engine.ts": 5,
+		// 5 -> 7 (#5371 r2): the symbol_search scope filter compares each entry
+		// and each candidate's ancestors as paths (`path.resolve` twice), instead
+		// of handing the entries to the glob matcher.
+		"clients/lens-engine.ts": 7,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
 		"clients/log-cleanup.ts": 9,
@@ -1565,7 +1568,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `toProjectRelativePath` too.
 		// 25 -> 19 (#4689 batch 4): mode=full's merge keys its Sets, dedup key and
 		// per-file map by `normalizeMapKey`, dropping six `path.resolve` calls.
-		"tools/lens-diagnostics.ts": 22,
+		// 22 -> 23 (#5371 r2): the single `path` argument is read through the
+		// shared reader once, ahead of the refusal check (`singlePath.path`).
+		"tools/lens-diagnostics.ts": 23,
 		// 10 -> 8 (#4577 M2): the scalar and batch `path`/`paths` arguments fold
 		// onto `resolveHostToolPath`, dropping one `path.resolve` each.
 		"tools/lsp-diagnostics.ts": 8,

@@ -136,7 +136,10 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 			const cwd = ctx.cwd || ".";
 			// #5041: the shared `paths` reader owns the entry rules (non-string,
 			// blank, empty list, cap) and the host-path spelling for every tool.
-			const pathsRead = await readPathsArgument(params.paths, { cwd });
+			const pathsRead = await readPathsArgument(params.paths, {
+				cwd,
+				signal: _signal,
+			});
 			if (pathsRead.refusal) return errorResult(`Error: ${pathsRead.refusal}`);
 			if (pathsRead.entries.length === 0)
 				return errorResult("paths is required");

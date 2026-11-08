@@ -560,6 +560,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				const pathsRead = await readPathsArgument(rawPaths, {
 					cwd: ctx.cwd,
 					absent: "cwd",
+					signal: abortSignal,
 				});
 				if (pathsRead.refusal) {
 					const errorRaw = pathsRead.refusal;

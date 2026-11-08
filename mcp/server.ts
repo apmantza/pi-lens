@@ -1334,7 +1334,10 @@ async function callTool(
 		// #5041: one reader owns the `paths` entry rules; #5038: the engine clamps
 		// `limit` and resolves each entry as a host path (this handler used to
 		// drop a non-string entry and clamp a second time).
-		const pathsRead = await readPathsArgument(args.paths, { cwd });
+		const pathsRead = await readPathsArgument(args.paths, {
+			cwd,
+			filterOnly: true,
+		});
 		if (pathsRead.refusal)
 			return { ...toolText(pathsRead.refusal), isError: true };
 		const limit =

@@ -682,10 +682,26 @@ export function createLensDiagnosticsTool(
 			}
 			// #5041: one reader owns the `paths` entry rules (non-string, blank,
 			// empty list, cap) and the host-path spelling, on both routes below.
-			const pathsRead = await readPathsArgument(params.paths, { cwd });
-			if (pathsRead.refusal) {
+			const pathsSignal = ctx.signal ?? signal;
+			const pathsRead = await readPathsArgument(params.paths, {
+				cwd,
+				signal: pathsSignal,
+			});
+			// The single `path` goes through the same reader and its refusal is
+			// surfaced the same way: a refused read used to give `[]`, and an empty
+			// scope is "no restriction", so a glob `path` answered for every cached
+			// file (#5393 F3, the #5041 "accepted alias never widens" rule).
+			const singleRead =
+				!pathsRead.refusal && singlePath.path
+					? await readPathsArgument([singlePath.path], {
+							cwd,
+							signal: pathsSignal,
+						})
+					: undefined;
+			const pathsRefusal = pathsRead.refusal ?? singleRead?.refusal;
+			if (pathsRefusal) {
 				return {
-					content: [{ type: "text" as const, text: pathsRead.refusal }],
+					content: [{ type: "text" as const, text: pathsRefusal }],
 					isError: true,
 					details: { mode: legacyMode ?? "delta", pathsError: true },
 				};
@@ -707,10 +723,7 @@ export function createLensDiagnosticsTool(
 			// route returns below and keeps its file route (a directory `path` under
 			// `scope=workspace` still scans that directory, #2052).
 			const pathEntries = singlePath.path
-				? [
-						...pathsRead.entries,
-						...(await readPathsArgument([singlePath.path], { cwd })).entries,
-					]
+				? [...pathsRead.entries, ...(singleRead?.entries ?? [])]
 				: pathsRead.entries;
 			if (source === "lsp") {
 				const lspParams = { ...params };

@@ -2112,7 +2112,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"whole files rather than walking reachability.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#callTool:e80d40ed~bc68e76f": {
+	"mcp/server.ts#callTool:e0f71170~52c6c9d7": {
 		family: "hook-await",
 		site: "off-hook",
 		reason:
@@ -2122,7 +2122,8 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"whole files rather than walking reachability. #5371 added it when " +
 			"the shared `paths` reader became async to expand a glob entry " +
 			"(clients/path-globs.ts) — the same await every pi-tool `paths` " +
-			"reader now has, registered once here for the MCP mirror.",
+			"reader now has, registered once here for the MCP mirror. Re-keyed " +
+			"at #5393 r2: the same await, its call text gained `filterOnly`.",
 		owner: "#5371",
 	},
 	"mcp/server.ts#ensureReady:9d37dcc9~2d2d543a": {
