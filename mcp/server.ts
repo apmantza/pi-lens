@@ -622,7 +622,12 @@ const lensDiagnosticsTool = createLensDiagnosticsTool(
 );
 const astGrepClient = new AstGrepClient();
 const astGrepSearchTool = createAstGrepSearchTool(astGrepClient);
-const astGrepReplaceTool = createAstGrepReplaceTool(astGrepClient);
+const astGrepReplaceTool = createAstGrepReplaceTool(
+	astGrepClient,
+	undefined,
+	// #5417: resolved against the call's own project, like `lspNavigationTool`.
+	(name, cwd) => createMcpHost(undefined, cwd ?? DEFAULT_CWD).getFlag(name),
+);
 // #792: unlike every other per-request `cwd` resolution in this file, this
 // tool used to be built ONCE at module load with `createMcpHost().getFlag`,
 // which freezes `projectRoot` at the server's own launch directory — a

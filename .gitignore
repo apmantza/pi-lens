@@ -112,6 +112,7 @@ migrate-*.js
 !docs/pi-lens-release.md
 !docs/merge-queue-rollout.md
 !docs/ci-bot-pr-checks.md
+!docs/ci.md
 !docs/pi-lens-monitor.md
 !docs/real-harness.md
 !docs/audit1.md

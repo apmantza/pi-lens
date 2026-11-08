@@ -138,6 +138,7 @@ import {
 	relativePosix,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -2279,7 +2280,10 @@ const HELPER_EXEMPTION_REASON =
  */
 const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/actionable-warnings.ts": 14,
-	"clients/ast-grep-client.ts": 15,
+	// #5417: 15 -> 17. The two apply paths await `applyRewrite` (the queued
+	// `--update-all`) in place of the bare runner call; an apply is an
+	// `ast_grep_replace` tool call, bounded by the tool-call lifecycle, not a hook.
+	"clients/ast-grep-client.ts": 17,
 	// #4346: 13 -> 14. `extractForwardImportPaths` awaits its memoized parse
 	// (`forwardImportSources`) before resolving; the parse's own two awaits
 	// moved with it unchanged.
@@ -2748,7 +2752,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// under `tools/shared.ts`).
 	"tools/ast-grep-search.ts": 7,
 	"tools/effective-config.ts": 1,
-	"tools/lens-diagnostic-mark.ts": 2,
+	// #5417: 2 -> 4. The suppress write now awaits `writeSourceFile` (pi's
+	// per-file queue) and the read-verify-write step inside it; both belong to
+	// the `lens_diagnostic_mark` tool call, bounded by its lifecycle, not a hook.
+	"tools/lens-diagnostic-mark.ts": 4,
 	// #2846/#2800: the folded LSP probe adds one awaited internal tool path;
 	// it remains bounded by the tool call lifecycle.
 	// #3573: `getProjectDiagnosticsSnapshotForFullMode` now awaits the fresh
@@ -3272,14 +3279,18 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		assertSortedRegistry("BOUNDED_CALL_SITES", Object.keys(BOUNDED_CALL_SITES));
 		assertSortedRegistry("SYNC_HOOK_READS", Object.keys(SYNC_HOOK_READS));
 	});
-	it("scans both file groups and finds both families (a dead scan is not a clean one)", () => {
-		// Two floors, two failure modes (#1755 review F4): a broken walk and a
-		// broken detector must not share a message.
-		expect(awaits.scanned).toBeGreaterThanOrEqual(8);
-		expect(races.scanned).toBeGreaterThanOrEqual(200);
-		expect(awaits.occurrences.length).toBeGreaterThanOrEqual(1);
-		expect(races.occurrences.length).toBeGreaterThanOrEqual(1);
-	});
+	it(
+		"scans both file groups and finds both families (a dead scan is not a clean one)",
+		() => {
+			// Two floors, two failure modes (#1755 review F4): a broken walk and a
+			// broken detector must not share a message.
+			expect(awaits.scanned).toBeGreaterThanOrEqual(8);
+			expect(races.scanned).toBeGreaterThanOrEqual(200);
+			expect(awaits.occurrences.length).toBeGreaterThanOrEqual(1);
+			expect(races.occurrences.length).toBeGreaterThanOrEqual(1);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("recognises a real bound and nothing else", () => {
 		// Mutation guard on the DETECTOR (defect shape 10): each fixture is a
@@ -3536,41 +3547,45 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		);
 	});
 
-	it("derives the helper set from the import graph, not from a list of names", () => {
-		// #2557 review F4. The round-1 shape was six hand-written module names,
-		// which is defect shape 34: it could not see `clients/observed-mutation.ts`
-		// or `clients/lsp/index.ts` — modules this PR itself labels hook-reached.
-		const helpers = hookHelperModules(REPO_ROOT).map((absolute) =>
-			relativePosix(REPO_ROOT, absolute),
-		);
-		// A dead walk is not a clean one: the resolver returning [] (a stray
-		// `strings: "blank"` erases every specifier, which it did on the first
-		// cut) would make every count below vacuously correct.
-		expect(helpers.length).toBeGreaterThanOrEqual(100);
-		// The facade is now the one-hop LSP boundary; its implementation module
-		// remains behind that adapter and is covered by the LSP population.
-		expect(helpers).toContain("clients/observed-mutation.ts");
-		expect(helpers).toContain("clients/lsp/capabilities.ts");
-		expect(helpers).toContain("clients/formatters.ts");
-		// ...and one it WRONGLY included: `clients/dispatch/dispatcher.ts` is
-		// two hops out, through `clients/dispatch/integration.ts`.
-		expect(helpers).not.toContain("clients/dispatch/dispatcher.ts");
-		expect(
-			localImportTargets(
-				path.join(REPO_ROOT, "clients/dispatch/integration.ts"),
-			).map((absolute) => relativePosix(REPO_ROOT, absolute)),
-		).toContain("clients/dispatch/dispatcher.ts");
-		// ...and one the TYPE-ONLY exclusion above wrongly included before this
-		// PR: `clients/lsp/client.ts` is reached from a hook handler only for
-		// its exported TYPES (`LSPDiagnostic`/`LSPCodeAction` in signatures);
-		// the actual value-level LSP client is `clients/lsp/index.ts`'s
-		// `getLSPService()`.
-		expect(helpers).not.toContain("clients/lsp/client.ts");
-		// A hook handler is not its own helper.
-		for (const handler of hookPathFiles(REPO_ROOT)) {
-			expect(helpers).not.toContain(relativePosix(REPO_ROOT, handler));
-		}
-	});
+	it(
+		"derives the helper set from the import graph, not from a list of names",
+		() => {
+			// #2557 review F4. The round-1 shape was six hand-written module names,
+			// which is defect shape 34: it could not see `clients/observed-mutation.ts`
+			// or `clients/lsp/index.ts` — modules this PR itself labels hook-reached.
+			const helpers = hookHelperModules(REPO_ROOT).map((absolute) =>
+				relativePosix(REPO_ROOT, absolute),
+			);
+			// A dead walk is not a clean one: the resolver returning [] (a stray
+			// `strings: "blank"` erases every specifier, which it did on the first
+			// cut) would make every count below vacuously correct.
+			expect(helpers.length).toBeGreaterThanOrEqual(100);
+			// The facade is now the one-hop LSP boundary; its implementation module
+			// remains behind that adapter and is covered by the LSP population.
+			expect(helpers).toContain("clients/observed-mutation.ts");
+			expect(helpers).toContain("clients/lsp/capabilities.ts");
+			expect(helpers).toContain("clients/formatters.ts");
+			// ...and one it WRONGLY included: `clients/dispatch/dispatcher.ts` is
+			// two hops out, through `clients/dispatch/integration.ts`.
+			expect(helpers).not.toContain("clients/dispatch/dispatcher.ts");
+			expect(
+				localImportTargets(
+					path.join(REPO_ROOT, "clients/dispatch/integration.ts"),
+				).map((absolute) => relativePosix(REPO_ROOT, absolute)),
+			).toContain("clients/dispatch/dispatcher.ts");
+			// ...and one the TYPE-ONLY exclusion above wrongly included before this
+			// PR: `clients/lsp/client.ts` is reached from a hook handler only for
+			// its exported TYPES (`LSPDiagnostic`/`LSPCodeAction` in signatures);
+			// the actual value-level LSP client is `clients/lsp/index.ts`'s
+			// `getLSPService()`.
+			expect(helpers).not.toContain("clients/lsp/client.ts");
+			// A hook handler is not its own helper.
+			for (const handler of hookPathFiles(REPO_ROOT)) {
+				expect(helpers).not.toContain(relativePosix(REPO_ROOT, handler));
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #2557 review friction: 9 modules / 128 awaits (`clients/lsp/client.ts`
 	// alone contributing 75) reached the one-hop set ONLY through an
@@ -3624,63 +3639,71 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		}
 	});
 
-	it("pins every one-hop helper module's unbounded-await count", () => {
-		const measured = measureHelperModules();
-		// Vacuity floor: an empty measurement would make the audit below pass on
-		// nothing at all.
-		expect(Object.keys(measured).length).toBeGreaterThanOrEqual(50);
-		expect(
-			Object.values(measured).reduce((total, n) => total + n, 0),
-		).toBeGreaterThan(0);
-		const audit = auditSymbolCounts({
-			sweepName: "hook helper unbounded-await pin (#2523 slice 3 worklist)",
-			counts: measured,
-			pinned: HELPER_UNBOUNDED,
-			remediation:
-				"A module a registered hook handler imports DIRECTLY gained or lost " +
-				"an unbounded await. Wrap it in bounded() (clients/deadline-utils.ts) " +
-				"and lower the pinned number, or raise the number here and say why it " +
-				"had to grow. A module that appears with no pin at all is new to the " +
-				"one-hop set — add it. " +
-				HELPER_EXEMPTION_REASON,
-		});
-		expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
-		expect(HELPER_EXEMPTION_REASON.length).toBeGreaterThan(120);
-	});
+	it(
+		"pins every one-hop helper module's unbounded-await count",
+		() => {
+			const measured = measureHelperModules();
+			// Vacuity floor: an empty measurement would make the audit below pass on
+			// nothing at all.
+			expect(Object.keys(measured).length).toBeGreaterThanOrEqual(50);
+			expect(
+				Object.values(measured).reduce((total, n) => total + n, 0),
+			).toBeGreaterThan(0);
+			const audit = auditSymbolCounts({
+				sweepName: "hook helper unbounded-await pin (#2523 slice 3 worklist)",
+				counts: measured,
+				pinned: HELPER_UNBOUNDED,
+				remediation:
+					"A module a registered hook handler imports DIRECTLY gained or lost " +
+					"an unbounded await. Wrap it in bounded() (clients/deadline-utils.ts) " +
+					"and lower the pinned number, or raise the number here and say why it " +
+					"had to grow. A module that appears with no pin at all is new to the " +
+					"one-hop set — add it. " +
+					HELPER_EXEMPTION_REASON,
+			});
+			expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
+			expect(HELPER_EXEMPTION_REASON.length).toBeGreaterThan(120);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("pins every hook-path file's synchronous readCache count", () => {
-		// Recurrence prevented (#3274): `turn_end` ran three synchronous
-		// `CacheManager.readCache` calls per delivery — 2 existsSync + 2
-		// readFileSync/JSON.parse each — that NO population here could see,
-		// because both scan async constructs. `bounded()` cannot bound one: the
-		// read finishes during argument evaluation, before bounded() receives a
-		// promise. A new one must red, and a migrated one must lower a number.
-		const measured = measureSyncHookReads();
-		// Vacuity floor: an empty measurement would make the audit pass on
-		// nothing at all, which is how #1718 read clean for months.
-		expect(Object.keys(measured).length).toBeGreaterThanOrEqual(5);
-		const audit = auditSymbolCounts({
-			sweepName: "sync-hook-read ratchet (#3274, umbrella #3300)",
-			counts: measured,
-			pinned: SYNC_HOOK_READS,
-			remediation:
-				"A hook-path file gained or lost a synchronous CacheManager.readCache " +
-				"call. A NEW one is refused: it cannot be bounded (bounded() takes a " +
-				"promise; the read completes during argument evaluation), so use " +
-				"`readCacheAsync` and await it under bounded() with the hook's budget " +
-				"and ctx.signal — the shape `readScannerCache` in clients/runtime-turn.ts " +
-				"uses. A MIGRATED one lowers its file's pin and SYNC_HOOK_READ_CEILING " +
-				"in the same PR; #3300 is the umbrella that walks this table to zero " +
-				"and then deletes the synchronous method.",
-		});
-		expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
-		// The ratchet itself: the total only ever goes down.
-		const total = Object.values(measured).reduce((sum, n) => sum + n, 0);
-		expect(total).toBeLessThanOrEqual(SYNC_HOOK_READ_CEILING);
-		expect(
-			Object.values(SYNC_HOOK_READS).reduce((sum, n) => sum + n, 0),
-		).toBeLessThanOrEqual(SYNC_HOOK_READ_CEILING);
-	});
+	it(
+		"pins every hook-path file's synchronous readCache count",
+		() => {
+			// Recurrence prevented (#3274): `turn_end` ran three synchronous
+			// `CacheManager.readCache` calls per delivery — 2 existsSync + 2
+			// readFileSync/JSON.parse each — that NO population here could see,
+			// because both scan async constructs. `bounded()` cannot bound one: the
+			// read finishes during argument evaluation, before bounded() receives a
+			// promise. A new one must red, and a migrated one must lower a number.
+			const measured = measureSyncHookReads();
+			// Vacuity floor: an empty measurement would make the audit pass on
+			// nothing at all, which is how #1718 read clean for months.
+			expect(Object.keys(measured).length).toBeGreaterThanOrEqual(5);
+			const audit = auditSymbolCounts({
+				sweepName: "sync-hook-read ratchet (#3274, umbrella #3300)",
+				counts: measured,
+				pinned: SYNC_HOOK_READS,
+				remediation:
+					"A hook-path file gained or lost a synchronous CacheManager.readCache " +
+					"call. A NEW one is refused: it cannot be bounded (bounded() takes a " +
+					"promise; the read completes during argument evaluation), so use " +
+					"`readCacheAsync` and await it under bounded() with the hook's budget " +
+					"and ctx.signal — the shape `readScannerCache` in clients/runtime-turn.ts " +
+					"uses. A MIGRATED one lowers its file's pin and SYNC_HOOK_READ_CEILING " +
+					"in the same PR; #3300 is the umbrella that walks this table to zero " +
+					"and then deletes the synchronous method.",
+			});
+			expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
+			// The ratchet itself: the total only ever goes down.
+			const total = Object.values(measured).reduce((sum, n) => sum + n, 0);
+			expect(total).toBeLessThanOrEqual(SYNC_HOOK_READ_CEILING);
+			expect(
+				Object.values(SYNC_HOOK_READS).reduce((sum, n) => sum + n, 0),
+			).toBeLessThanOrEqual(SYNC_HOOK_READ_CEILING);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("MUTATION: the sync-read detector sees calls, not prose or spellings", () => {
 		// The self-excuse direction is the dangerous one for a ratchet that
@@ -3710,33 +3733,39 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		).toBe(0);
 	});
 
-	it("registers every shipped bounded() call with the provenance of its signal", () => {
-		// #2557 review F2. `bounded()` reads a missing signal as one that never
-		// aborts, so a seam with an optional signal runs on ONE live bound
-		// whenever its caller had none. Round 1 made that greppable with a
-		// `NEVER_ABORTED` sentinel — a second concept for behaviour bounded()
-		// already had. Registering the CALLS instead covers the same seams
-		// without one, and covers sites that would never have named a sentinel.
-		const audit = auditRegistry({
-			sweepName: "bounded() call-site registry (#2523)",
-			flagged: boundedCalls.occurrences,
-			registered: [],
-			exemptions: BOUNDED_CALL_SITES,
-			scannedCount: boundedCalls.scanned,
-			minScanned: 200,
-			minFlagged: 1,
-			remediation:
-				"A new bounded() call site. Add an entry here keyed by the printed " +
-				"occurrence key, saying WHERE its `signal` comes from and whether " +
-				"that source can be undefined — if it can, this call runs on the " +
-				"wall clock alone whenever it is, which is weaker than #2523's " +
-				"contract and has to be a written decision rather than a default.",
-		});
-		expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
-		for (const [key, reason] of Object.entries(BOUNDED_CALL_SITES)) {
-			expect(reason.length, `${key}: provenance too thin`).toBeGreaterThan(80);
-		}
-	});
+	it(
+		"registers every shipped bounded() call with the provenance of its signal",
+		() => {
+			// #2557 review F2. `bounded()` reads a missing signal as one that never
+			// aborts, so a seam with an optional signal runs on ONE live bound
+			// whenever its caller had none. Round 1 made that greppable with a
+			// `NEVER_ABORTED` sentinel — a second concept for behaviour bounded()
+			// already had. Registering the CALLS instead covers the same seams
+			// without one, and covers sites that would never have named a sentinel.
+			const audit = auditRegistry({
+				sweepName: "bounded() call-site registry (#2523)",
+				flagged: boundedCalls.occurrences,
+				registered: [],
+				exemptions: BOUNDED_CALL_SITES,
+				scannedCount: boundedCalls.scanned,
+				minScanned: 200,
+				minFlagged: 1,
+				remediation:
+					"A new bounded() call site. Add an entry here keyed by the printed " +
+					"occurrence key, saying WHERE its `signal` comes from and whether " +
+					"that source can be undefined — if it can, this call runs on the " +
+					"wall clock alone whenever it is, which is weaker than #2523's " +
+					"contract and has to be a written decision rather than a default.",
+			});
+			expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
+			for (const [key, reason] of Object.entries(BOUNDED_CALL_SITES)) {
+				expect(reason.length, `${key}: provenance too thin`).toBeGreaterThan(
+					80,
+				);
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("MUTATION: the bounded() call detector sees calls and nothing that merely looks like one", () => {
 		expect(
@@ -3785,29 +3814,33 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		}
 	});
 
-	it("every hook-path await and every hand-rolled race is bounded or exempted", () => {
-		const audit = auditRegistry({
-			sweepName: "hook-await-bounds sweep (#2523 AC1)",
-			flagged: [...awaits.occurrences, ...races.occurrences],
-			registered: [],
-			exemptions: exemptionReasons(),
-			scannedCount: awaits.scanned + races.scanned,
-			// index.ts + mcp/server.ts + clients/mcp/session.ts + eight
-			// clients/runtime-*.ts, plus ~450 shipped files for the race scan.
-			minScanned: 208,
-			minFlagged: 1,
-			remediation:
-				"An await: wrap it in bounded() from clients/deadline-utils.ts — it " +
-				"takes the hook's budget from HOOK_WALL_BUDGET_MS " +
-				"(clients/hook-budgets.ts) AND the hook's ctx.signal, and its type " +
-				"refuses one without the other. A `race:` key: use bounded() (or " +
-				"withDeadline for a signal-less leaf) instead of hand-rolling the " +
-				"timer arm. Otherwise add an EXEMPT_SITES entry here keyed by the " +
-				"printed occurrence key, with its family, the hook whose budget it " +
-				"spends, a real reason, and the issue that owns closing it.",
-		});
-		expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
-	});
+	it(
+		"every hook-path await and every hand-rolled race is bounded or exempted",
+		() => {
+			const audit = auditRegistry({
+				sweepName: "hook-await-bounds sweep (#2523 AC1)",
+				flagged: [...awaits.occurrences, ...races.occurrences],
+				registered: [],
+				exemptions: exemptionReasons(),
+				scannedCount: awaits.scanned + races.scanned,
+				// index.ts + mcp/server.ts + clients/mcp/session.ts + eight
+				// clients/runtime-*.ts, plus ~450 shipped files for the race scan.
+				minScanned: 208,
+				minFlagged: 1,
+				remediation:
+					"An await: wrap it in bounded() from clients/deadline-utils.ts — it " +
+					"takes the hook's budget from HOOK_WALL_BUDGET_MS " +
+					"(clients/hook-budgets.ts) AND the hook's ctx.signal, and its type " +
+					"refuses one without the other. A `race:` key: use bounded() (or " +
+					"withDeadline for a signal-less leaf) instead of hand-rolling the " +
+					"timer arm. Otherwise add an EXEMPT_SITES entry here keyed by the " +
+					"printed occurrence key, with its family, the hook whose budget it " +
+					"spends, a real reason, and the issue that owns closing it.",
+			});
+			expect(audit.problems, audit.problems.join("\n\n")).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("#3938 a harmless insertion inside a long hook handler does not re-key its await", () => {
 		// The REAL detector over the built seam: a compile-valid handler whose
@@ -3862,67 +3895,74 @@ describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled rac
 		expect(afterKey).toBe(beforeKey);
 	});
 
-	it("#3938 comment/template padding does not re-key the registered runtime-tool-result await", () => {
-		// The REAL scan (module-level `awaits`) already keyed every hook-path
-		// await. Take the live registered occurrence from it, not a hand-typed
-		// hash, and prove below that it is a real exemption.
-		const rel = "clients/runtime-tool-result.ts";
-		const registeredKey = `${rel}#handleToolResult:a1bef279~57385903`;
-		const registered = awaits.occurrences.find((o) => o.key === registeredKey);
-		expect(
-			registered,
-			"the real scan no longer derives the registered #handleToolResult await",
-		).toBeDefined();
-		expect(Object.hasOwn(EXEMPT_SITES, registered!.key)).toBe(true);
-
-		const rawLines = fs
-			.readFileSync(path.join(REPO_ROOT, rel), "utf8")
-			.split("\n");
-		const flaggedIndex = Number(registered!.detail.match(/:(\d+)\s/)?.[1]) - 1;
-		expect(awaitOccurrenceKey(rel, rawLines, flaggedIndex)).toBe(
-			registered!.key,
-		);
-
-		// Insert far from the await (right after handleToolResult's own
-		// `} = deps;`) so the flagged line's `~context` neighbours are untouched.
-		const declIndex = rawLines.findIndex((l) =>
-			/^(?:export\s+)?(?:async\s+)?function\s+handleToolResult\b/.test(l),
-		);
-		let insertAt = -1;
-		for (let i = declIndex; i < flaggedIndex; i++) {
-			if (rawLines[i].trim() === "} = deps;") {
-				insertAt = i + 1;
-				break;
-			}
-		}
-		expect(declIndex).toBeGreaterThanOrEqual(0);
-		expect(insertAt).toBeGreaterThan(declIndex);
-
-		// Both shapes were verified byte-identical under `oxfmt` (#3938 r2):
-		// the column-0 interior line is stable, so the formatter would not move
-		// the fixture that triggers the re-key.
-		const paddings: Record<string, string[]> = {
-			"template-literal interior": [
-				"\tconst noise = `",
-				"function fakeFromString() {",
-				"`;",
-			],
-			"block-comment interior": ["/*", "function fakeFromComment() {", "*/"],
-		};
-		for (const [label, padding] of Object.entries(paddings)) {
-			const padded = [
-				...rawLines.slice(0, insertAt),
-				...padding,
-				...rawLines.slice(insertAt),
-			];
-			const paddedIndex = flaggedIndex + padding.length;
-			// The flagged line's own hash and neighbourhood are byte-identical;
-			// only the owner derivation could re-key it.
-			expect(padded[paddedIndex]).toBe(rawLines[flaggedIndex]);
+	it(
+		"#3938 comment/template padding does not re-key the registered runtime-tool-result await",
+		() => {
+			// The REAL scan (module-level `awaits`) already keyed every hook-path
+			// await. Take the live registered occurrence from it, not a hand-typed
+			// hash, and prove below that it is a real exemption.
+			const rel = "clients/runtime-tool-result.ts";
+			const registeredKey = `${rel}#handleToolResult:a1bef279~57385903`;
+			const registered = awaits.occurrences.find(
+				(o) => o.key === registeredKey,
+			);
 			expect(
-				awaitOccurrenceKey(rel, padded, paddedIndex),
-				`${label} must not re-key the registered await`,
-			).toBe(registered!.key);
-		}
-	});
+				registered,
+				"the real scan no longer derives the registered #handleToolResult await",
+			).toBeDefined();
+			expect(Object.hasOwn(EXEMPT_SITES, registered!.key)).toBe(true);
+
+			const rawLines = fs
+				.readFileSync(path.join(REPO_ROOT, rel), "utf8")
+				.split("\n");
+			const flaggedIndex =
+				Number(registered!.detail.match(/:(\d+)\s/)?.[1]) - 1;
+			expect(awaitOccurrenceKey(rel, rawLines, flaggedIndex)).toBe(
+				registered!.key,
+			);
+
+			// Insert far from the await (right after handleToolResult's own
+			// `} = deps;`) so the flagged line's `~context` neighbours are untouched.
+			const declIndex = rawLines.findIndex((l) =>
+				/^(?:export\s+)?(?:async\s+)?function\s+handleToolResult\b/.test(l),
+			);
+			let insertAt = -1;
+			for (let i = declIndex; i < flaggedIndex; i++) {
+				if (rawLines[i].trim() === "} = deps;") {
+					insertAt = i + 1;
+					break;
+				}
+			}
+			expect(declIndex).toBeGreaterThanOrEqual(0);
+			expect(insertAt).toBeGreaterThan(declIndex);
+
+			// Both shapes were verified byte-identical under `oxfmt` (#3938 r2):
+			// the column-0 interior line is stable, so the formatter would not move
+			// the fixture that triggers the re-key.
+			const paddings: Record<string, string[]> = {
+				"template-literal interior": [
+					"\tconst noise = `",
+					"function fakeFromString() {",
+					"`;",
+				],
+				"block-comment interior": ["/*", "function fakeFromComment() {", "*/"],
+			};
+			for (const [label, padding] of Object.entries(paddings)) {
+				const padded = [
+					...rawLines.slice(0, insertAt),
+					...padding,
+					...rawLines.slice(insertAt),
+				];
+				const paddedIndex = flaggedIndex + padding.length;
+				// The flagged line's own hash and neighbourhood are byte-identical;
+				// only the owner derivation could re-key it.
+				expect(padded[paddedIndex]).toBe(rawLines[flaggedIndex]);
+				expect(
+					awaitOccurrenceKey(rel, padded, paddedIndex),
+					`${label} must not re-key the registered await`,
+				).toBe(registered!.key);
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });

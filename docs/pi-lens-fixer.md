@@ -18,8 +18,9 @@ A new test starts from `tests/support/`: a registration question (flags,
 tools, commands, declarations) goes through tier 1
 (`tests/support/pi-runner.ts`, a real `ExtensionRunner`), a session-flow case
 through tier 2 (`tests/support/pi-session.ts`), and a JSON-lines sink through
-`readNdjsonRows` (`tests/support/ndjson-rows.ts`), asserting `skipped === 0`
-when the claim needs the complete output. No fake of an in-process store or
+`readNdjsonRows` (`tests/support/ndjson-rows.ts`), never a local `JSON.parse`
+loop, asserting `skipped === 0` when the claim needs the complete output,
+because the reader drops a line it cannot parse. No fake of an in-process store or
 registry; other doubles only as `AGENTS.md` admits them.
 
 - Trace the production entry point and reproduce the defect through it

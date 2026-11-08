@@ -604,14 +604,26 @@ describe("lens_diagnostic_mark path resolution (#4577 M2)", () => {
 		fs.writeFileSync(homeFile, "const a = 1;\nconst target = bad();\n");
 		try {
 			expect(os.homedir()).toBe(home);
-			const result = await run({
-				filePath: "~/proj/tilde.ts",
-				line: 2,
-				message: "bad call",
-				rule: "no-bad",
-				tool: "eslint",
-				disposition: "suppress",
-			});
+			// #5417: a suppress is a source write, so the HOME project is the
+			// session here (the call's cwd stays the fixture root, which `~` must
+			// not resolve under).
+			const homeTool = createLensDiagnosticMarkTool(() =>
+				path.dirname(homeFile),
+			);
+			const result = await homeTool.execute(
+				"call-1",
+				{
+					filePath: "~/proj/tilde.ts",
+					line: 2,
+					message: "bad call",
+					rule: "no-bad",
+					tool: "eslint",
+					disposition: "suppress",
+				},
+				undefined,
+				() => {},
+				{ cwd: tmpDir },
+			);
 			expect(result.isError).toBeFalsy();
 			// The comment landed in the HOME file the agent named: the pre-fix
 			// join edited `<cwd>/~/proj/tilde.ts`, which does not exist, so the

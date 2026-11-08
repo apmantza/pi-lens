@@ -42,6 +42,7 @@ import {
 	clientsRelative,
 } from "../support/session-state-scan.js";
 import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 describe("parseTomlStringArray comment stripping (review round 2, F1)", () => {
 	it("does not harvest a quoted string from a commented-out array entry", () => {
@@ -339,21 +340,28 @@ describe("no hand-rolled [workspace]-table regex outside cargo-manifest.ts (#249
 		).toBe(false);
 	});
 
-	it("clients/ carries the reader in cargo-manifest.ts only", () => {
-		const files = clientSourceFiles().filter(
-			(file) => clientsRelative(file) !== "cargo-manifest.ts",
-		);
-		assertNonEmptyScan("clients/*.ts (minus cargo-manifest.ts)", files.length);
-		const offenders = files
-			.filter((file) => {
-				const stripped = stripSource(fs.readFileSync(file, "utf-8"), {
-					strings: "keep",
-				});
-				return hasWorkspaceRegexLiteral(stripped);
-			})
-			.map(clientsRelative);
-		expect(offenders).toEqual([]);
-	});
+	it(
+		"clients/ carries the reader in cargo-manifest.ts only",
+		() => {
+			const files = clientSourceFiles().filter(
+				(file) => clientsRelative(file) !== "cargo-manifest.ts",
+			);
+			assertNonEmptyScan(
+				"clients/*.ts (minus cargo-manifest.ts)",
+				files.length,
+			);
+			const offenders = files
+				.filter((file) => {
+					const stripped = stripSource(fs.readFileSync(file, "utf-8"), {
+						strings: "keep",
+					});
+					return hasWorkspaceRegexLiteral(stripped);
+				})
+				.map(clientsRelative);
+			expect(offenders).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 /**
@@ -391,19 +399,26 @@ describe("every workspace-table presence check names hasCargoWorkspaceTable (#24
 		).toBe(false);
 	});
 
-	it("clients/ names hasCargoWorkspaceTable for presence, never the inline reimplementation", () => {
-		const files = clientSourceFiles().filter(
-			(file) => clientsRelative(file) !== "cargo-manifest.ts",
-		);
-		assertNonEmptyScan("clients/*.ts (minus cargo-manifest.ts)", files.length);
-		const offenders = files
-			.filter((file) => {
-				const stripped = stripSource(fs.readFileSync(file, "utf-8"), {
-					strings: "keep",
-				});
-				return hasInlinePresenceCheck(stripped);
-			})
-			.map(clientsRelative);
-		expect(offenders).toEqual([]);
-	});
+	it(
+		"clients/ names hasCargoWorkspaceTable for presence, never the inline reimplementation",
+		() => {
+			const files = clientSourceFiles().filter(
+				(file) => clientsRelative(file) !== "cargo-manifest.ts",
+			);
+			assertNonEmptyScan(
+				"clients/*.ts (minus cargo-manifest.ts)",
+				files.length,
+			);
+			const offenders = files
+				.filter((file) => {
+					const stripped = stripSource(fs.readFileSync(file, "utf-8"), {
+						strings: "keep",
+					});
+					return hasInlinePresenceCheck(stripped);
+				})
+				.map(clientsRelative);
+			expect(offenders).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });

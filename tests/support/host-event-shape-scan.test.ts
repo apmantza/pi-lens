@@ -5,6 +5,7 @@ import {
 	scanSourceForHostEventShapeViolations,
 } from "./host-event-shape-scan.ts";
 import { assertNonEmptyScan } from "./sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "./test-timeout-scale.js";
 
 /**
  * #1681: pins every `session_start`/`tool_result` test fixture to the real
@@ -15,16 +16,20 @@ import { assertNonEmptyScan } from "./sweep-kit.js";
  * silently until someone notices the fixture masked something.
  */
 describe("host event-shape scan (#1681)", () => {
-	it("finds no fixture that puts sessionId/provider/model on a session_start or tool_result event", () => {
-		assertNonEmptyScan(
-			"host event-shape production walk",
-			hostEventShapeScanFileCount(),
-			// Calibration: 830 files walked on 2026-08-26; half rounds to 400.
-			400,
-		);
-		const violations = scanHostEventShapeViolations();
-		expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
-	});
+	it(
+		"finds no fixture that puts sessionId/provider/model on a session_start or tool_result event",
+		() => {
+			assertNonEmptyScan(
+				"host event-shape production walk",
+				hostEventShapeScanFileCount(),
+				// Calibration: 830 files walked on 2026-08-26; half rounds to 400.
+				400,
+			);
+			const violations = scanHostEventShapeViolations();
+			expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// ── Mutation-proof probes: the scan itself must actually catch the shape
 	// it claims to, on synthetic source, independent of what tests/ currently

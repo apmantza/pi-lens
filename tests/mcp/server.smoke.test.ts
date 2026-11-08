@@ -764,6 +764,43 @@ describe("pi-lens MCP result bounds", { retry: 2 }, () => {
 			fs.rmSync(workspace, { recursive: true, force: true });
 		}
 	}, 45_000);
+
+	// #5417: the pi host passes the flag resolver to the replace tool; the MCP
+	// route did not, so `autofix.enabled=false` never reached an MCP apply.
+	it("refuses an AST replacement apply under autofix.enabled=false and leaves the file alone", async () => {
+		const workspace = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-noautofix-"),
+		);
+		fs.writeFileSync(
+			path.join(workspace, ".pi-lens.json"),
+			JSON.stringify({ autofix: { enabled: false } }),
+		);
+		const sourcePath = path.join(workspace, "a.ts");
+		fs.writeFileSync(sourcePath, "const a = 1;\n");
+		const harness = new McpHarness({ cwd: workspace });
+		try {
+			const res = await harness.request(1, "tools/call", {
+				name: "pilens_ast_grep_replace",
+				arguments: {
+					pattern: "const $X = $Y;",
+					rewrite: "let $X = $Y;",
+					lang: "typescript",
+					paths: [sourcePath],
+					apply: true,
+				},
+			});
+			const result = res.result as {
+				isError?: boolean;
+				content: { text: string }[];
+			};
+			expect(result.isError).toBe(true);
+			expect(result.content[0].text).toContain("no-autofix");
+			expect(fs.readFileSync(sourcePath, "utf8")).toBe("const a = 1;\n");
+		} finally {
+			harness.dispose();
+			fs.rmSync(workspace, { recursive: true, force: true });
+		}
+	}, 45_000);
 });
 
 // #3749: `pilens_diagnostics {"filePath": ...}` (the schema says `path`) ran on

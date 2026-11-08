@@ -53,7 +53,7 @@ import { hashContentBytes } from "../content-stamp.js";
 import { bounded } from "../deadline-utils.js";
 import { recordDegradationOnce } from "../degradation-ledger.js";
 import { commitDurableStoreAsync } from "../durable-store.js";
-import { isTestMode } from "../env-utils.js";
+import { isTestMode, nonNegativeIntEnv } from "../env-utils.js";
 import {
 	pmBinary,
 	resolveNodePackageManager,
@@ -99,30 +99,29 @@ const DEFAULT_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_PER_SESSION = 1;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-function numericEnv(name: string, fallback: number): number {
-	const raw = process.env[name];
-	if (raw === undefined) return fallback;
-	const parsed = Number(raw);
-	return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+export function refreshIntervalMs(): number {
+	return nonNegativeIntEnv(
+		"PI_LENS_TOOL_REFRESH_INTERVAL_MS",
+		DEFAULT_INTERVAL_MS,
+	);
 }
 
-function refreshIntervalMs(): number {
-	return numericEnv("PI_LENS_TOOL_REFRESH_INTERVAL_MS", DEFAULT_INTERVAL_MS);
+export function retryIntervalMs(): number {
+	return nonNegativeIntEnv(
+		"PI_LENS_TOOL_REFRESH_RETRY_MS",
+		DEFAULT_RETRY_INTERVAL_MS,
+	);
 }
 
-function retryIntervalMs(): number {
-	return numericEnv("PI_LENS_TOOL_REFRESH_RETRY_MS", DEFAULT_RETRY_INTERVAL_MS);
-}
-
-function maxPerSession(): number {
-	return numericEnv(
+export function maxPerSession(): number {
+	return nonNegativeIntEnv(
 		"PI_LENS_TOOL_REFRESH_MAX_PER_SESSION",
 		DEFAULT_MAX_PER_SESSION,
 	);
 }
 
-function refreshTimeoutMs(): number {
-	return numericEnv("PI_LENS_INSTALL_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
+export function refreshTimeoutMs(): number {
+	return nonNegativeIntEnv("PI_LENS_INSTALL_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
 }
 
 // --- Persisted state ---

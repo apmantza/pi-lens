@@ -23,6 +23,9 @@ function catalogText(): string {
 	return fs.readFileSync(path.join(REPO_ROOT, "docs/defect-shapes.md"), "utf8");
 }
 
+/** Issue and PR references `docs/defect-shapes.md` may carry; shrink-only (#4361). */
+const CATALOG_REF_CEILING = 47;
+
 /** A screen states a rule: it ends a sentence, so it cannot be empty or cut. */
 const SENTENCE_END = /[.!?]$/;
 
@@ -156,6 +159,26 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		expect(issueRefs(agentsText())).toBeLessThanOrEqual(55);
 	});
 
+	// #4361: the retro contract (`docs/pi-lens-retro.md` step 4) keeps a shape's
+	// issues, PRs, rounds and dated sweeps in HISTORY.md under a heading that
+	// names the shape, so a catalog entry stays a lean screen. Before this pin
+	// the ratchet above read AGENTS.md alone, and `docs/defect-shapes.md` grew
+	// 75 references and nine dated sweeps ("Sweep 2026-10-07 ...", "On
+	// 2026-10-18 five detector PRs took two to six rounds ...", "Three rounds
+	// on the read guard's authorship seam (#4187 ...)") that no check read.
+	// A reference that names a guard's tracker or a census stays; a story moves.
+	it("keeps incident stories out of docs/defect-shapes.md (#4361)", () => {
+		const catalog = catalogText();
+		const dated = [
+			...blankMarkdown(catalog).matchAll(/\b20\d\d-\d\d-\d\d\b/g),
+		].map((match) => match[0]);
+		expect(
+			dated,
+			"a dated sweep or incident belongs in HISTORY.md under a heading naming the shape",
+		).toEqual([]);
+		expect(issueRefs(catalog)).toBeLessThanOrEqual(CATALOG_REF_CEILING);
+	});
+
 	it("counts a reference and not a heading anchor", () => {
 		// Recurrence: the #4565 digest links heading anchors such as
 		// `docs/engineering-principles.md#1-building`, which `#\d+\b` read as
@@ -177,6 +200,7 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		const required = [
 			"AGENTS.md",
 			"docs/defect-shapes.md",
+			"docs/ci.md",
 			...fs
 				.readdirSync(path.join(REPO_ROOT, "docs/invariants"))
 				.filter((name) => name.endsWith(".md"))
