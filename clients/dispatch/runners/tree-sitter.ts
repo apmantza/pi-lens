@@ -42,7 +42,11 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { findingsResult, spanOverlapsModifiedRanges } from "../types.js";
+import {
+	findingsResult,
+	semanticFor,
+	spanOverlapsModifiedRanges,
+} from "../types.js";
 
 const blastCooldownByFile = new Map<string, number>();
 const BLAST_COOLDOWN_MS = 5_000;
@@ -582,13 +586,8 @@ const treeSitterRunner: RunnerDefinition = {
 					isSeverityBlocking &&
 					!spanOverlapsModifiedRanges(line, endLine, ctx.modifiedRanges);
 
-				// Map severity to semantic
-				const semantic =
-					query.severity === "error"
-						? "blocking"
-						: query.severity === "warning"
-							? "warning"
-							: "none";
+				// Map severity to semantic (`info` is the warning tier too, #5412)
+				const semantic = semanticFor(query.severity);
 				const defectClass =
 					(query.defect_class as any) ??
 					classifyDefect(query.id, "tree-sitter", query.message);

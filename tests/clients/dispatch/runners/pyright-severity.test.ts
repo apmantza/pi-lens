@@ -3,6 +3,7 @@ import {
 	normalizePyrightSeverity,
 	parsePyrightOutput,
 } from "../../../../clients/dispatch/runners/pyright.js";
+import { convertLspDiagnostics } from "../../../../clients/dispatch/utils/lsp-diagnostics.js";
 
 /**
  * #1802: pyright's `--outputjson` output declares three severities on
@@ -117,5 +118,80 @@ describe("parsePyrightOutput", () => {
 		const diags = parsePyrightOutput(data, "/proj/example.py");
 		expect(diags[0].line).toBe(1);
 		expect(diags[0].column).toBe(1);
+	});
+});
+
+/**
+ * #5412: one pyright "information" finding reached two semantics. The CLI
+ * parser gave it `warning` (the advisory tier the CLI runners share), and the
+ * LSP converter gave the same severity-3 finding `none`, so the copy the
+ * dispatcher kept depended on which lane answered first. Recurrence: the
+ * 2026-11-08 tool-alignment audit, `parsePyrightOutput` against
+ * `convertLspDiagnostics` on one finding (origin/master 90724817f).
+ */
+describe("pyright information tier agrees across the CLI and the LSP (#5412)", () => {
+	const message = 'Import "os" is not accessed';
+	const range = {
+		start: { line: 2, character: 4 },
+		end: { line: 2, character: 10 },
+	};
+
+	it("gives one information finding the same semantic through both paths", () => {
+		const cli = parsePyrightOutput(
+			{
+				generalDiagnostics: [
+					{
+						severity: "information",
+						message,
+						file: "/proj/example.py",
+						rule: "reportUnusedImport",
+						range,
+					},
+				],
+			},
+			"/proj/example.py",
+		);
+		const lsp = convertLspDiagnostics(
+			[
+				{
+					severity: 3,
+					code: "reportUnusedImport",
+					source: "Pyright",
+					message,
+					range,
+				},
+			] as never,
+			"/proj/example.py",
+		);
+		expect(cli[0]?.semantic).toBe("warning");
+		expect(lsp[0]?.semantic).toBe(cli[0]?.semantic);
+	});
+});
+
+/**
+ * #5412: a pyright finding with no rule (a syntax error, say) took its id from
+ * the line alone, `pyright-<line>`. Two such findings on one line therefore
+ * shared an id, and the dispatcher's `findingKey` (which reads `rule || id`)
+ * kept one. Recurrence: the same audit, `pyright-${rule || line}` in pyright.ts.
+ */
+describe("rule-less pyright findings keep distinct identities (#5412)", () => {
+	it("gives two rule-less findings on one line two different ids", () => {
+		const range = {
+			start: { line: 4, character: 0 },
+			end: { line: 4, character: 1 },
+		};
+		const diags = parsePyrightOutput(
+			{
+				generalDiagnostics: [
+					{ severity: "error", message: "Expected expression", range },
+					{ severity: "error", message: "Unexpected indentation", range },
+				],
+			},
+			"/proj/example.py",
+		);
+		expect(diags).toHaveLength(2);
+		expect(diags[0]?.rule).toBeUndefined();
+		expect(diags[1]?.rule).toBeUndefined();
+		expect(diags[0]?.id).not.toBe(diags[1]?.id);
 	});
 });
