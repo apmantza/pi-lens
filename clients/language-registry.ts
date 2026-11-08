@@ -34,6 +34,7 @@ import {
 	KIND_EXTENSIONS,
 	SPECIAL_FILENAMES,
 } from "./file-kinds.js";
+import { compareOrdinal } from "./string-utils.js";
 
 /**
  * Every language pi-lens can name. PUBLIC API from #2424: adding an id without
@@ -795,9 +796,9 @@ export function resolveLanguageScope(
 /** The refusal sentence names BOTH vocabularies a `lang` token may use, so a
  * typo points at the full accepted set rather than one half of it. */
 function unknownLanguageScopeMessage(token: string): string {
-	const kinds = Object.keys(KIND_EXTENSIONS).sort().join(", ");
+	const kinds = Object.keys(KIND_EXTENSIONS).sort(compareOrdinal).join(", ");
 	const ids = LANGUAGES.map((entry) => entry.id)
-		.sort()
+		.sort(compareOrdinal)
 		.join(", ");
 	return (
 		`Unknown lang: "${token}" — accepted file kinds: ${kinds}; ` +
