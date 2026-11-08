@@ -839,7 +839,8 @@ Every agent `Bash` call under Claude Code runs through
 "Local git hooks" is the human-facing version. Fix the command; never route
 around it. The denied families: `git stash` outside the read-only `list` and
 `show`; `git reset --soft`/`--hard`; a double-force `git worktree remove`, or
-any remove over a symlinked or unresolvable `node_modules` (every refusal names
+any remove over a symlinked `node_modules` or a path it cannot resolve
+statically (every refusal names
 `node scripts/worktree-remove.mjs <path> [--force]`; #3988); a mutating `npm`
 verb where `node_modules` is a symlink out of the project, or a delete through
 that link (`rm node_modules` without a slash or glob stays allowed; #4044); an

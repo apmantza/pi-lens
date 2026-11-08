@@ -200,6 +200,7 @@ describe("AGENTS.md trigger-block governance (#3259)", () => {
 		const required = [
 			"AGENTS.md",
 			"docs/defect-shapes.md",
+			"docs/ci.md",
 			...fs
 				.readdirSync(path.join(REPO_ROOT, "docs/invariants"))
 				.filter((name) => name.endsWith(".md"))
