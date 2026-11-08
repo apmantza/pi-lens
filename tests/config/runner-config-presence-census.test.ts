@@ -193,6 +193,9 @@ describe("runner config-read detector: plants it was not designed around", () =>
 		expect(flagged("const p = process; p.getBuiltinModule('fs');")).toBe(true);
 		expect(flagged("const { getBuiltinModule } = process;")).toBe(true);
 		expect(flagged("const fs = globalThis.process;")).toBe(true);
+		// A property of process that is not on the short list reaches fs too.
+		expect(flagged('const b = process.binding("fs");')).toBe(true);
+		expect(flagged("const r = process.mainModule?.require;")).toBe(true);
 	});
 
 	it("flags a module it was never told about, and admits one it was", () => {
