@@ -1,0 +1,39 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "write",
+			"id": "w1",
+			"arguments": {
+				"path": "notes.zzz",
+				"content": "plain notes\n"
+			}
+		}
+	],
+	[
+		{
+			"type": "toolCall",
+			"name": "lens_diagnostics",
+			"id": "d1",
+			"arguments": {
+				"mode": "full"
+			}
+		}
+	],
+	[
+		{
+			"type": "toolCall",
+			"name": "lens_diagnostics",
+			"id": "d2",
+			"arguments": {
+				"mode": "all"
+			}
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "done"
+		}
+	]
+]

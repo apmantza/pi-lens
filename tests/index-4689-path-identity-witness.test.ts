@@ -266,13 +266,16 @@ describe("#4689: a clean write reads clean under any spelling of the session or 
 	// nothing finished. `lens_diagnostics` then read "inconclusive, 1 pending
 	// file" every turn for every file of a session rooted at a link (master
 	// read "No issues"), and for a write through a file link.
-	const CLEAN_VERDICT = "No issues across 1 file diagnosed this session";
+	// #5287: the session runs --no-lsp, so no check completed on the clean file
+	// and the report says "1 file not checked" instead of "No issues". The
+	// identity claim is the count: one record per file, never one per spelling.
+	const ONE_FILE_VERDICT = "⚠ 1 file not checked";
 	for (const [name, rooted, relativeTarget] of [
 		["a session rooted at a link to the repo", "alias", "src/clean.ts"],
 		["a write through a file link", "repo", "src/link.ts"],
 		["the real root and path (control)", "repo", "src/clean.ts"],
 	] as const) {
-		it(`${name}: lens_diagnostics reads clean in the writing turn and the next`, async (ctx) => {
+		it(`${name}: lens_diagnostics counts one file in the writing turn and the next`, async (ctx) => {
 			const fx = family(
 				`clean-${rooted}-${relativeTarget.replace(/\W/g, "-")}`,
 			);
@@ -300,8 +303,9 @@ describe("#4689: a clean write reads clean under any spelling of the session or 
 				);
 				expect(both).toHaveLength(2);
 				for (const result of both) {
-					expect(result.text).toContain(CLEAN_VERDICT);
-					expect(result.text).not.toContain("pending file");
+					expect(result.text).toContain(ONE_FILE_VERDICT);
+					expect(result.text).not.toContain("2 files not checked");
+					expect(result.text).not.toMatch(/[1-9]\d* pending file/);
 				}
 			} finally {
 				await handle.dispose();
@@ -332,7 +336,7 @@ describe("#4689: a blocker raised through a link clears when the real file is re
 			"src/link.ts",
 		],
 	] as const) {
-		it(`${name}: lens_diagnostics reads clean`, async (ctx) => {
+		it(`${name}: lens_diagnostics counts one file`, async (ctx) => {
 			const fx = family(`stale-${first.replace(/\W/g, "-")}`);
 			if (fx.skipReason) return ctx.skip(fx.skipReason);
 			const handle = await startPiSession({
@@ -358,10 +362,10 @@ describe("#4689: a blocker raised through a link clears when the real file is re
 				expect(raised?.text ?? "").toContain("STOP");
 				expect(cleared?.text ?? "").not.toContain("STOP");
 				const [verdict] = toolResults(last, "lens_diagnostics");
-				expect(verdict?.text ?? "").toContain(
-					"No issues across 1 file diagnosed this session",
-				);
-				expect(verdict?.text ?? "").not.toContain("pending file");
+				// #5287: --no-lsp, so the rewritten file is unchecked, once.
+				expect(verdict?.text ?? "").toContain("⚠ 1 file not checked");
+				expect(verdict?.text ?? "").not.toContain("2 files not checked");
+				expect(verdict?.text ?? "").not.toMatch(/[1-9]\d* pending file/);
 			} finally {
 				await handle.dispose();
 			}

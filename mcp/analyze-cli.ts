@@ -27,7 +27,10 @@
  * all, so an open-but-idle pipe cannot hang the hook (#1271).
  * Output: a concise report on stdout; with `--hook`, a PostToolUse JSON
  * envelope that injects the report as context. Hooks exit 0 (advisory); plain
- * CLI failures exit 2. Clean scans and findings still exit 0.
+ * CLI failures exit 2. Clean scans and findings still exit 0. Only a file a
+ * check completed on prints nothing when clean; one no check completed on
+ * (the default `--no-lsp` pass over TypeScript) prints a `not checked` line
+ * (#5287).
  */
 
 import { setProjectTrustState } from "../clients/project-trust.js";
@@ -36,6 +39,7 @@ import * as path from "node:path";
 import { flushExtensionLog, logExtension } from "../clients/extension-log.js";
 import { redactSecrets } from "../clients/redact/secrets.js";
 import type { McpAnalyzeResult } from "../clients/mcp/analyze.js";
+import { verdictUncheckedReason } from "../clients/dispatch/types.js";
 import {
 	recordTurnEndOutcome,
 	requestWarmAnalyze,
@@ -62,10 +66,14 @@ async function readStdin(): Promise<string> {
 
 function formatReport(result: McpAnalyzeResult, cwd: string): string {
 	const rel = path.relative(cwd, result.filePath) || result.filePath;
+	const notChecked = verdictUncheckedReason(result.verdict);
 	const lines = [
 		// #2420: advisories (hint/info-tier style opinions) reported under their
 		// own label — no longer folded into the warning count on this surface.
 		`🔎 pi-lens: ${rel} — ${result.counts.blockers} blocking, ${result.counts.warnings} warning(s), ${result.counts.advisories} advisory(ies)`,
+		...(notChecked === undefined
+			? []
+			: [`  ⚠ not checked: ${notChecked} (no findings is not a clean result)`]),
 	];
 	for (const d of result.diagnostics.slice(0, 30)) {
 		const marker = d.semantic === "blocking" ? "🔴" : "⚠";
@@ -319,7 +327,12 @@ async function main(): Promise<void> {
 		const { flushProbeCache } = await import("../clients/installer/index.js");
 		await flushProbeCache();
 
-		if (result.counts.diagnostics === 0) process.exit(0); // clean → no noise
+		// A checked file with no findings is the one silent answer (clean → no noise).
+		if (
+			result.counts.diagnostics === 0 &&
+			verdictUncheckedReason(result.verdict) === undefined
+		)
+			process.exit(0);
 		await writeReport(formatReport(result, cwd), hookMode);
 		process.exit(0);
 	} catch (err) {

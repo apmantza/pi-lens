@@ -23,9 +23,10 @@ import {
 import { emitBounded } from "../bounded-telemetry.js";
 import { FactStore } from "../dispatch/fact-store.js";
 import {
+	type CoverageVerdict,
 	type Diagnostic,
 	type DispatchResult,
-	widgetUncheckedReason,
+	recordedUnchecked,
 } from "../dispatch/types.js";
 import { detectFileKind } from "../file-kinds.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
@@ -340,6 +341,13 @@ export interface McpAnalyzeResult {
 	/** Wall-clock time the facade spent in dispatch (includes provider warmup). */
 	durationMs: number;
 	hasBlockers: boolean;
+	/**
+	 * #5287: whether a check of this file's kind completed
+	 * (`DispatchResult.verdict`). `counts.diagnostics === 0` with an unchecked
+	 * verdict is not a clean file, and a consumer that reads zero counts as
+	 * clean (the CLI's silent exit) must read this first.
+	 */
+	verdict: CoverageVerdict;
 	counts: {
 		diagnostics: number;
 		blockers: number;
@@ -587,7 +595,7 @@ export async function analyzeFile(
 			undefined,
 			observedAt,
 			// #5258: the footer reads the same verdict the dispatch gave.
-			widgetUncheckedReason(result.verdict),
+			recordedUnchecked(result.verdict),
 		);
 		if (result.diagnostics.length > 0) {
 			getDiagnosticTracker().trackShown(result.diagnostics);
@@ -733,6 +741,7 @@ export async function analyzeFile(
 		fileKind: latencyReport?.fileKind,
 		durationMs,
 		hasBlockers: result.hasBlockers,
+		verdict: result.verdict,
 		counts: {
 			diagnostics: listedDiagnostics.length,
 			blockers: result.blockers.length,

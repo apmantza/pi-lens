@@ -891,6 +891,9 @@ describe("navigation operations on a file no primary answers for (#4403 N4, V5)"
 				const unserved = path.join(fx.workspace, "notes.unserved");
 				fs.writeFileSync(unserved, "plain text\n");
 				targets.push(["hover", unserved]);
+				// #5287: the workspaceDiagnostics gate words a file no server serves
+				// as the read-time gate above does.
+				targets.push(["workspaceDiagnostics", unserved]);
 			}
 			// The fake answers every request it advertises; a name it has no
 			// symbol for is an empty answer from a running server.
@@ -934,7 +937,8 @@ describe("navigation operations on a file no primary answers for (#4403 N4, V5)"
 		async () => {
 			expect(await navOps("disabled, no aux", "unserved")).toEqual([
 				...noServer(NAV_DISABLED),
-				"hover ok=false status=no_server: No LSP server available for notes.unserved. Check that the language server is installed.",
+				"hover ok=false status=no_server: No LSP server available for notes.unserved: no language server handles this file.",
+				"workspaceDiagnostics ok=false status=no_server: No LSP server available for notes.unserved: no language server handles this file.",
 			]);
 		},
 		scaledTestTimeout(120_000),
