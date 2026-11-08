@@ -45,7 +45,13 @@ are the author's claims. A verify round is exempt (#5319).
    worktree (`<worktree>/../probes-<pr>` or the lane's `$TMPDIR`): an untracked `.mjs`
    inside it reds `tests/scripts/lint-js.test.ts` (#2865). Attack inversions
    (real failures downgraded, healthy paths narrowed); concurrency (shared
-   state, retained settled promises, check-then-act across an await); session
+   state, retained settled promises, check-then-act across an await); liveness
+   and retry (every non-terminal state a probe can reach has an exit the
+   production path takes, and running an operation twice, by retry, resume or
+   a second `session_start`, ends in the same state with no second side
+   effect; name each state you could not drive to an exit); silent swallow
+   (every catch or default-returning fallthrough on a touched path shows where
+   its failure is recorded); session
    boundaries (once-only state after `resetDegradationLedger()` or
    `session_start`, probed with the SAME cached object); cadence (cooldowns
    against the caller's real retry interval, both directions); input channels,
