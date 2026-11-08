@@ -2579,9 +2579,10 @@ export async function handleToolResult(
 	// host's own `isError` and the `input` the host parsed — so the tracker can
 	// tell a retried call from a fresh one. A failed result counts too, and #5434
 	// renders its warning on that same result: the tracker raises one warning per
-	// streak crossing, the append below serves every return after this point
-	// including the two failed-result exits, and the streak a failed call leaves
-	// is still what makes a later retried call warn.
+	// streak crossing, the closure below serves the returns that hand back the
+	// host's content (the failed-result exits and the pipeline-crash response),
+	// and the streak a failed call leaves is still what makes a later retried
+	// call warn.
 	const behaviorWarnings = isBashDerivedReplay(event)
 		? []
 		: agentBehaviorRecord(
@@ -2593,22 +2594,21 @@ export async function handleToolResult(
 			);
 	/**
 	 * The ONE append for the returns below that hand back the host's content
-	 * verbatim, the two failed-result exits included (#5434). A warning raised
-	 * while handling a call now reaches the agent on that call, whichever return
-	 * it takes. It appends a block after the host's own text, never rewrites it.
-	 * `hasBlockers` carries over the rule the success path has always had: a
-	 * result with blocking findings delivers those alone. The success path keeps
-	 * appending the same formatted text to its own `output` string, because that
-	 * string also drives the no-output exit and the telemetry row; one formatter
-	 * and one rule serve all three, so the text is not spelled twice.
+	 * verbatim: the failed-result exits and the pipeline-crash response (#5434).
+	 * A warning raised while handling a call reaches the agent on that call,
+	 * whichever of those returns it takes. It appends a block after the host's
+	 * own text, never rewrites it. None of the three carries blocking findings,
+	 * so the success path's `!hasBlockers` rule has no cell here. The success
+	 * path keeps appending the same formatted text to its own `output` string,
+	 * because that string also drives the no-output exit and the telemetry row;
+	 * one formatter serves all of them, so the text is not spelled twice.
 	 */
 	const withBehaviorWarnings = <
 		T extends { content: Array<{ type: string; text?: string }> },
 	>(
 		response: T,
-		hasBlockers: boolean,
 	): T =>
-		behaviorWarnings.length === 0 || hasBlockers
+		behaviorWarnings.length === 0
 			? response
 			: {
 					...response,
@@ -2617,6 +2617,27 @@ export async function handleToolResult(
 						{ type: "text", text: formatBehaviorWarnings(behaviorWarnings) },
 					],
 				};
+	// The host's own verdict on its result, read before the handler's early
+	// returns so every failed-edit exit answers the same question (#5434).
+	const hostToolResultFailed =
+		event.isError === true ||
+		(event.details as { isError?: unknown } | undefined)?.isError === true;
+	/**
+	 * The early `return;` exits a failed edit can take before the failed-result
+	 * return (no resolvable path, outside the session root or under
+	 * node_modules): the host's own failed result plus the warning when one was
+	 * raised, otherwise `undefined` so the host's result passes through exactly
+	 * as before. Never for a successful result: that would mark a landed edit as
+	 * an error.
+	 */
+	const failedHostResultWithWarnings = () =>
+		hostToolResultFailed && behaviorWarnings.length > 0
+			? withBehaviorWarnings({
+					content: event.content,
+					isError: true as const,
+					structuredContent: event.structuredContent,
+				})
+			: undefined;
 	const syntheticWriteContent: Array<{ type: string; text?: string }> = [];
 	// #1590: one shared authoritative-content budget for every path this bash
 	// command wrote. It is handed DOWN to each synthetic call so the single
@@ -4037,7 +4058,7 @@ export async function handleToolResult(
 		dbg(
 			`tool_result: skipped turn tracking - no filePath for toolName="${event.toolName}"`,
 		);
-		return;
+		return failedHostResultWithWarnings();
 	}
 	if (analysisRootMode === "none") {
 		if (
@@ -4060,7 +4081,7 @@ export async function handleToolResult(
 		dbg(
 			`tool_result: skipped pipeline - file outside project root or in node_modules: ${filePath}`,
 		);
-		return;
+		return failedHostResultWithWarnings();
 	}
 	if (analysisRootMode === "adopted") {
 		const adoptedRoot = analysisRoot.root;
@@ -4083,7 +4104,6 @@ export async function handleToolResult(
 	// same bytes as unexplained drift.
 	noteMutationHandled(filePath);
 	const readGuardCorrelationId = getReadGuardCorrelationId(event);
-	const resultDetails = (event.details ?? {}) as Record<string, unknown>;
 	const requestedEditIndexes = getRequestedEditIndexes(event, mutation.kind);
 	const requestedEditTotal = getRequestedEditCount(event, mutation.kind);
 	const participantIds = [
@@ -4093,8 +4113,6 @@ export async function handleToolResult(
 	const participantTotal =
 		(deps._telemetryParticipantTotal ?? 0) +
 		(deps._telemetryParticipantIds?.includes(readGuardCorrelationId) ? 0 : 1);
-	const hostToolResultFailed =
-		event.isError === true || resultDetails.isError === true;
 	if (hostToolResultFailed) {
 		logReadGuardEvent({
 			event: "edit_batch_summary",
@@ -4118,15 +4136,11 @@ export async function handleToolResult(
 				}),
 			},
 		});
-		return withBehaviorWarnings(
-			{
-				content: event.content,
-				isError: true,
-				structuredContent: event.structuredContent,
-			},
-			// No pipeline ran, so this result has no blockers of its own.
-			false,
-		);
+		return withBehaviorWarnings({
+			content: event.content,
+			isError: true,
+			structuredContent: event.structuredContent,
+		});
 	}
 
 	// One post-result raw-byte hash, reused for the applied-edit records below and
@@ -4537,7 +4551,7 @@ export async function handleToolResult(
 	delivery.abandoned = !dispatchOutcome;
 	if (!dispatchOutcome) return;
 	if (dispatchOutcome.crashed) {
-		return dispatchOutcome.response;
+		return withBehaviorWarnings(dispatchOutcome.response);
 	}
 	// #2464 review round 2 (S1): the three post-pipeline post-conditions that
 	// used to be written out here — the already-analysed latch, the #2402
@@ -4798,19 +4812,16 @@ export async function handleToolResult(
 	}
 
 	if (result.isError) {
-		return withBehaviorWarnings(
-			{
-				content: [...event.content, { type: "text", text: result.output }],
-				isError: true,
-				structuredContent: event.structuredContent,
-			},
-			result.hasBlockers,
-		);
+		return {
+			content: [...event.content, { type: "text", text: result.output }],
+			isError: true,
+			structuredContent: event.structuredContent,
+		};
 	}
 
 	let output = result.output;
-	// The success path's own append: same formatter, same `hasBlockers` rule as
-	// `withBehaviorWarnings`, which serves the two failed-result returns (#5434).
+	// The success path's own append: same formatter as `withBehaviorWarnings`,
+	// which serves the failed-result and pipeline-crash returns (#5434).
 	if (behaviorWarnings.length > 0 && !result.hasBlockers) {
 		output += `\n\n${formatBehaviorWarnings(behaviorWarnings)}`;
 	}
