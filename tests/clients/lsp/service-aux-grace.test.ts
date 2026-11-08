@@ -3634,9 +3634,13 @@ describe("#5419 PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS: 0 disables early unblock", (
 
 	/**
 	 * Two language servers with a finding each: `ts-fast` answers at 50 ms and
-	 * `ts-slow` at 300 ms. Returns the messages of the merged full-mode result.
+	 * `ts-slow` at 300 ms. Returns the messages of the merged result in `mode`
+	 * (full unless a row passes "document", #5419 V1).
 	 */
-	async function fullModeMessages(grace: string): Promise<string[]> {
+	async function fullModeMessages(
+		grace: string,
+		mode: "full" | "document" = "full",
+	): Promise<string[]> {
 		process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS = grace;
 		vi.resetModules();
 		(await import("../../../clients/lsp/config.js"))._setServersForFileForTests(
@@ -3658,7 +3662,7 @@ describe("#5419 PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS: 0 disables early unblock", (
 		createLSPClient.mockImplementation(
 			async (options: { serverId: string }) => clients[options.serverId],
 		);
-		const pending = new LSPService().getDiagnostics(FILE);
+		const pending = new LSPService().getDiagnostics(FILE, mode);
 		await vi.runAllTimersAsync();
 		return (await pending).map((diagnostic) => diagnostic.message);
 	}
@@ -3673,5 +3677,15 @@ describe("#5419 PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS: 0 disables early unblock", (
 		expect(await fullModeMessages("400")).toEqual(
 			expect.arrayContaining(["fast server finding", "slow server finding"]),
 		);
+	});
+
+	// #5419 V1: the document-mode arm of `earlyUnblockOn` (clients/lsp/index.ts).
+	// With the knob at 0 only that arm finalizes at the first answer, so dropping
+	// it makes document mode wait for the slow client. No other row runs document
+	// mode with the knob at 0.
+	it("document mode finalizes at the first answer when the grace is 0 (1 of 2 results)", async () => {
+		expect(await fullModeMessages("0", "document")).toEqual([
+			"fast server finding",
+		]);
 	});
 });
