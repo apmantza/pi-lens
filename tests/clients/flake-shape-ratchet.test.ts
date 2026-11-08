@@ -679,6 +679,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real recursive fs.watch delivery is the subject; no fake clock delivers an inotify event and a stubbed watcher proves nothing",
 	},
+	// 2026-11-08 (#5097 r2): whether Esc kills a real madge child and whether
+	// its killed run then overwrites the saved cycle row; the child's death and
+	// the absent write are only observable by polling across real time.
+	"raw-timer-wait:tools/lens-diagnostics-abort-5097.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"a killed real madge child and the cache write that must not follow it have no event to await; a bounded poll observes both",
+	},
 	"real-process-spawn:clients/analysis-root-writers.test.ts": {
 		detector: "real-process-spawn",
 		reason:

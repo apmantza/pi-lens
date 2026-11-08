@@ -136,10 +136,31 @@ export function createAstGrepReplaceTool(
 		) {
 			const lineage = captureLineage?.();
 			const signal = combineAbortSignals(_signal, ctx.signal);
-			// #5097: an error that lands after an abort is the abort; the pattern
-			// hint would send the model to fix a pattern that was never wrong.
-			const failureText = (raw: string): string =>
-				signal?.aborted ? "Error: operation aborted" : errorTextWithHint(raw);
+			// #5097: the plain aborted text only when the client says the abort
+			// stopped it (the pattern hint would send the model to fix a pattern
+			// that was never wrong); any other error keeps its own text. Files
+			// already written are named, so a failed reply never implies no change.
+			const failureText = (
+				failure: { error?: string; aborted?: boolean; writeStarted?: boolean },
+				written: readonly string[] = [],
+			): string => {
+				const lines = [
+					failure.aborted
+						? "Error: operation aborted"
+						: errorTextWithHint(failure.error ?? ""),
+				];
+				if (written.length > 0) {
+					lines.push(
+						`${written.length} file(s) were already rewritten before it stopped: ${written.join(", ")}`,
+					);
+				}
+				if (failure.writeStarted) {
+					lines.push(
+						"The write had started, so some files may already be rewritten.",
+					);
+				}
+				return lines.join("\n");
+			};
 			// #4943: the calling session owns the deferred pass of the apply.
 			const sessionId = ctx.sessionManager?.getSessionId?.();
 			const startedAt = Date.now();
@@ -330,7 +351,12 @@ export function createAstGrepReplaceTool(
 						content: [
 							{
 								type: "text" as const,
-								text: failureText(ruleResult.error),
+								text: failureText(
+									ruleResult,
+									applyFlag
+										? [...new Set(ruleResult.matches.map((m) => m.file))]
+										: [],
+								),
 							},
 						],
 						isError: true,
@@ -384,7 +410,7 @@ export function createAstGrepReplaceTool(
 			if (result.error) {
 				logOutcome("error", { errorRaw: result.error });
 				return {
-					content: [{ type: "text" as const, text: failureText(result.error) }],
+					content: [{ type: "text" as const, text: failureText(result) }],
 					isError: true,
 					details: {},
 				};

@@ -1088,6 +1088,9 @@ export const wallClockBudgetInclude = [
 	// through AstGrepClient, so its ordering and byte ratio are measured on real
 	// child output (flake-shape admission).
 	"tests/tools/ast-grep-outline.test.ts",
+	// #5097 r2: a real madge child killed by lens_diagnostics' abort, polled
+	// until gone, then the cache row polled for a write (flake-shape admission).
+	"tests/tools/lens-diagnostics-abort-5097.test.ts",
 	// #3827: drives `lsp_navigation rename` over a REAL `createLSPClient` on the
 	// fake server (a real initialize handshake per case), so the client's own
 	// first-send stamp reaches the capture; the same #1022/#2332 contention

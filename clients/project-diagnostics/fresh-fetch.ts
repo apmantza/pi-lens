@@ -618,9 +618,13 @@ export async function fetchFreshProjectDiagnostics(
 			}
 			const startMs = Date.now();
 			const result = await clients.depChecker.scanProject(analysisRoot);
-			cacheManager.writeCache("madge", result, analysisRoot, {
-				scanDurationMs: Date.now() - startMs,
-			});
+			// #5097: a killed madge (Esc now reaches it) returns the same empty
+			// shape as "no cycles"; only a parsed scan may replace the saved row.
+			if (result.analyzed === true) {
+				cacheManager.writeCache("madge", result, analysisRoot, {
+					scanDurationMs: Date.now() - startMs,
+				});
+			}
 			record(
 				"madge",
 				circularDepsToProjectDiagnostics(analysisRoot, result.circular ?? []),

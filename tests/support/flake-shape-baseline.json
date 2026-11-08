@@ -361,6 +361,7 @@
 		"support/marker-lsp-project.ts": 1,
 		"support/real-pi-harness.ts": 2,
 		"support/tests-tree-write-guard.test.ts": 2,
+		"tools/lens-diagnostics-abort-5097.test.ts": 1,
 		"tools/lens-diagnostics.test.ts": 1,
 		"tools/lsp-diagnostics-inline-blocker-retire.test.ts": 1,
 		"tools/lsp-diagnostics-per-server-concurrency.test.ts": 1,

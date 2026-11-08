@@ -371,6 +371,10 @@ export class AstGrepClient {
 		applied: boolean;
 		stalePreview?: boolean;
 		error?: string;
+		/** #5097: the call's abort stopped the current path before its write. */
+		aborted?: boolean;
+		/** #5097: the error came from a `--update-all` that may have written files. */
+		writeStarted?: boolean;
 		/** #5239: the files an apply rewrote and the bridge accepted. */
 		appliedFiles?: string[];
 	}> {
@@ -387,13 +391,16 @@ export class AstGrepClient {
 			if (apply) {
 				// Stale-preview check: dry-run first. Preserve CLI failures instead of
 				// treating an invalid rule as a stale, no-match preview.
-				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml, sg);
+				// No explicit signal: the tool call's scope already kills it, and
+				// the count scan right after carries `sg` and refuses (#5097 F5).
+				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml);
 				if (preCheck.failure || preCheck.error) {
 					return {
 						matches: allMatches,
 						totalMatches: allMatches.length,
 						applied: false,
 						error: preCheck.error ?? "ast-grep preview failed",
+						...(preCheck.failure === "aborted" ? { aborted: true } : {}),
 						appliedFiles: recordWritten(),
 					};
 				}
@@ -423,6 +430,8 @@ export class AstGrepClient {
 					totalMatches: allMatches.length,
 					applied: false,
 					error: result.error,
+					...(result.aborted ? { aborted: true } : {}),
+					...(result.writeStarted ? { writeStarted: true } : {}),
 					appliedFiles: recordWritten(),
 				};
 			}
@@ -782,6 +791,10 @@ export class AstGrepClient {
 		applied: boolean;
 		stalePreview?: boolean;
 		error?: string;
+		/** #5097: the call's abort stopped it before the write. */
+		aborted?: boolean;
+		/** #5097: the error came from a `--update-all` that may have written files. */
+		writeStarted?: boolean;
 		/** #5239: the files an apply rewrote and the bridge accepted. */
 		appliedFiles?: string[];
 	}> {
@@ -804,6 +817,7 @@ export class AstGrepClient {
 				truncated: result.truncated,
 				applied: false,
 				error: result.error,
+				...(result.failure === "aborted" ? { aborted: true } : {}),
 			};
 		}
 
@@ -820,6 +834,7 @@ export class AstGrepClient {
 				truncated: false,
 				applied: false,
 				error: preCheck.error,
+				...(preCheck.failure === "aborted" ? { aborted: true } : {}),
 			};
 		}
 		if (preCheck.matches.length === 0) {
@@ -848,6 +863,7 @@ export class AstGrepClient {
 				truncated: false,
 				applied: false,
 				error: "operation aborted",
+				aborted: true,
 			};
 		}
 		const applyResult = await this.runner.exec(
@@ -861,6 +877,7 @@ export class AstGrepClient {
 				truncated: false,
 				applied: false,
 				error: applyResult.error,
+				writeStarted: true,
 			};
 		}
 		// #2423: `--update-all` just rewrote these files, and no `tool_result`

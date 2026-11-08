@@ -36,8 +36,11 @@ interface Plan {
 	json?: Array<"pass" | "park" | "linger">;
 	/** `outline`: park, or pass straight to the real binary. */
 	outline?: "pass" | "park";
-	/** `--update-all`: one file per step, parking after the first. */
-	updateAll?: "pass" | "stepwise";
+	/**
+	 * `--update-all`: one file per step, parking after the first; `fail`
+	 * then exits 2 instead of writing the rest.
+	 */
+	updateAll?: "pass" | "stepwise" | "fail";
 }
 
 const WRAPPER = String.raw`
@@ -79,7 +82,7 @@ if (args[0] === "outline") {
 	passThrough(args);
 }
 if (args.includes("--update-all")) {
-	if (plan.updateAll !== "stepwise") passThrough(args);
+	if (plan.updateAll !== "stepwise" && plan.updateAll !== "fail") passThrough(args);
 	const isScan = args[0] === "scan";
 	const target = args[args.length - 1];
 	const listArgs = args.filter((a) => a !== "--update-all");
@@ -89,6 +92,10 @@ if (args.includes("--update-all")) {
 		const step = [...args.slice(0, -1), path.isAbsolute(file) ? file : path.join(target, file)];
 		runReal(step);
 		if (i === 0) parkUntilReleased("applied-1");
+		if (i === 0 && plan.updateAll === "fail") {
+			process.stderr.write("wrapper: disk full after the first file\n");
+			process.exit(2);
+		}
 	});
 	process.exit(0);
 }
@@ -255,6 +262,8 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			params: Record<string, unknown>,
 			root: string,
 			abortOn: string,
+			/** `ctx` passes the signal only through `ctx.signal`, positional undefined. */
+			via: "both" | "ctx" = "both",
 		): Promise<ToolResult> {
 			const tool = pi
 				.getAllRegisteredTools()
@@ -264,10 +273,13 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				...args: unknown[]
 			) => Promise<ToolResult>;
 			const ac = new AbortController();
-			const call = execute("call-5097", params, ac.signal, undefined, {
-				cwd: root,
-				signal: ac.signal,
-			});
+			const call = execute(
+				"call-5097",
+				params,
+				via === "ctx" ? undefined : ac.signal,
+				undefined,
+				{ cwd: root, signal: ac.signal },
+			);
 			// A call that settles before its marker never reached the phase the
 			// case aborts in; fail with its text instead of waiting out the poll.
 			const early = call.then((result) => {
@@ -307,6 +319,22 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(result.isError).toBe(true);
 			expect(result.content?.[0]?.text).toMatch(/^Error: Spawn aborted/);
 			expect(isAlive(pid)).toBe(false);
+		});
+
+		it("ast_grep_outline: an abort that arrives only through ctx.signal kills the child", async () => {
+			const root = setup("outline-ctx", { outline: "park" });
+			const result = await run(
+				"ast_grep_outline",
+				{ paths: ["src"] },
+				root,
+				"outline.pid",
+				"ctx",
+			);
+			const pid = Number(
+				fs.readFileSync(path.join(ctl, "outline.pid"), "utf8"),
+			);
+			expect(isAlive(pid)).toBe(false);
+			expect(result.isError).toBe(true);
 		});
 
 		it("ast_grep_replace dry run: an abort kills the child and returns a plain aborted result", async () => {
@@ -395,6 +423,94 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 				/^Error: operation aborted(\n|$)/,
 			);
 			expect(rewritten(root)).toBe(0);
+		});
+
+		it("ast_grep_replace apply: a write that fails after an abort reports its own error and that files may be written", async () => {
+			const root = setup("apply-fail", { updateAll: "fail" });
+			const pending = run(
+				"ast_grep_replace",
+				{ ...REPLACE, apply: true },
+				root,
+				"applied-1",
+			);
+			await waitForFile(path.join(ctl, "applied-1"));
+			fs.writeFileSync(path.join(ctl, "release"), "");
+			const result = await pending;
+			const text = result.content?.[0]?.text ?? "";
+			expect(rewritten(root)).toBe(1);
+			expect(result.isError).toBe(true);
+			expect(text).not.toMatch(/operation aborted/);
+			expect(text).toMatch(/some files may already be rewritten/);
+		});
+
+		it("ast_grep_replace structural apply: an abort at the second path names the files the first path rewrote", async () => {
+			// Path 1: precheck (json 0), count scan (json 1), write. Path 2's
+			// precheck (json 2) parks and the abort kills it.
+			const root = setup("rule-two-paths", { json: ["pass", "pass", "park"] });
+			fs.mkdirSync(path.join(root, "src2"));
+			fs.writeFileSync(path.join(root, "src2", "g.ts"), "legacyCall(9);\n");
+			const result = await run(
+				"ast_grep_replace",
+				{
+					...REPLACE,
+					apply: true,
+					insideKind: "program",
+					paths: ["src", "src2"],
+				},
+				root,
+				"json.pid",
+			);
+			const text = result.content?.[0]?.text ?? "";
+			expect(rewritten(root)).toBe(3);
+			expect(text).toMatch(
+				/^Error: operation aborted\n3 file\(s\) were already rewritten/,
+			);
+			expect(text).toContain("f0.ts");
+		});
+
+		it("ast_grep_replace structural dry run: an abort kills the scan and returns a plain aborted result", async () => {
+			const root = setup("rule-dry", { json: ["park"] });
+			const result = await run(
+				"ast_grep_replace",
+				{ ...REPLACE, insideKind: "program" },
+				root,
+				"json.pid",
+			);
+			expect(result.content?.[0]?.text).toMatch(
+				/^Error: operation aborted(\n|$)/,
+			);
+		});
+
+		it("ast_grep_replace structural apply: an abort that kills the count scan rewrites no file", async () => {
+			// Call 0 is the precheck, call 1 the runner's count scan, parked here.
+			const root = setup("rule-count", { json: ["pass", "park"] });
+			const result = await run(
+				"ast_grep_replace",
+				{ ...REPLACE, apply: true, insideKind: "program" },
+				root,
+				"json.pid",
+			);
+			expect(result.content?.[0]?.text).toMatch(
+				/^Error: operation aborted(\n|$)/,
+			);
+			expect(rewritten(root)).toBe(0);
+		});
+
+		it("ast_grep_replace structural apply: a write that fails after an abort says files may be written", async () => {
+			const root = setup("rule-fail", { updateAll: "fail" });
+			const pending = run(
+				"ast_grep_replace",
+				{ ...REPLACE, apply: true, insideKind: "program" },
+				root,
+				"applied-1",
+			);
+			await waitForFile(path.join(ctl, "applied-1"));
+			fs.writeFileSync(path.join(ctl, "release"), "");
+			const result = await pending;
+			const text = result.content?.[0]?.text ?? "";
+			expect(rewritten(root)).toBe(1);
+			expect(text).not.toMatch(/operation aborted/);
+			expect(text).toMatch(/some files may already be rewritten/);
 		});
 	},
 );
