@@ -536,6 +536,58 @@ describe("#5371 r2 the tools hand their abort signal to the paths reader (F8)", 
 	});
 });
 
+describe("#5371 r2 ast_grep_search's walk ends when the call is aborted mid-expansion (F8)", () => {
+	// The pre-aborted case above cannot tell this tool's signal from the reader's
+	// (the tool refuses an aborted call before it reads `paths`), so the signal
+	// fires DURING the expansion: only a signal the tool handed to the walk can
+	// stop the other eleven directory reads.
+	it("hands its combined signal to the walk, not just to the child", async () => {
+		const env = setupTestEnvironment("pi-lens-5371r2-searchsignal-", {
+			rootMarker: false,
+		});
+		const controller = new AbortController();
+		const real = fs.promises.readdir.bind(fs.promises);
+		let reads = 0;
+		const spy = vi.spyOn(fs.promises, "readdir").mockImplementation(((
+			...args: Parameters<typeof real>
+		) => {
+			// Only the fixture tree's own listings count: the tool reads other
+			// directories before it reaches the reader.
+			if (String(args[0]).startsWith(env.tmpDir)) {
+				reads += 1;
+				controller.abort();
+			}
+			return real(...args);
+		}) as typeof fs.promises.readdir);
+		try {
+			mk(
+				env.tmpDir,
+				Array.from({ length: 12 }, (_, index) => `d${index}/f.zzz`),
+			);
+			const client = {
+				ensureAvailable: async () => true,
+				search: vi.fn().mockResolvedValue({ matches: [], totalMatches: 0 }),
+				validatePattern: vi.fn().mockResolvedValue({ valid: true }),
+				formatMatches: () => "",
+			} as never;
+			const tool = createAstGrepSearchTool(client);
+			await (
+				tool.execute as unknown as (...args: unknown[]) => Promise<unknown>
+			)(
+				"5371",
+				{ pattern: "foo($X)", lang: "typescript", paths: ["**/*.ts"] },
+				undefined,
+				null,
+				{ cwd: env.tmpDir, signal: controller.signal },
+			);
+			expect(reads).toBe(1);
+		} finally {
+			spy.mockRestore();
+			env.cleanup();
+		}
+	});
+});
+
 // F3. Before: the single `path` read kept only `.entries`, so a refused read
 // gave `[]` and `resolvePathsScope([])` is "no restriction": a glob `path`
 // answered for every cached file, and an existing bracket path answered for its
