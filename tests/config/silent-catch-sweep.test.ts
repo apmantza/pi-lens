@@ -355,10 +355,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 			"#4535 slice 2 moved both here verbatim from `clients/runtime-tool-result.ts`'s held-primary pass, and they are the same two best-effort reads they were there: a document whose disk bytes cannot be read is still a held document whose server view may be stale (the caller reports it as a target), and a primary send that throws is reported to the detector as `failed: true`, which is the row that surfaces it (`bash_write_primary_resync`, `opaque_mutation_head_moved`). Neither is a dropped failure: the first arms the delivery, the second is a classification the caller reads.",
 	}, // :193, :207
 	"clients/dispatch/dispatcher.ts": {
-		silent: 7,
-		identities: "0cbf028fed5fa5bf",
+		silent: 6,
+		identities: "1a6f3d3e73b42750",
 		reason: PRE_RULE,
-	}, // :316, :331, :337, :1102, :1807, :1815, :2039
+	}, // :229, :235, :1201, :1927, :1935, :2192 (#5410 removed the hasTool probe's catch)
 	"clients/dispatch/facts/file-content.ts": {
 		silent: 1,
 		identities: "f187250a34b04dec",

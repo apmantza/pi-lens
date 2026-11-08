@@ -10,15 +10,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
-
-const sqlfluff = createAvailabilityChecker("sqlfluff", ".exe");
 
 // sqlfluff exit codes (its CLI docs): 0 = clean, 1 = violations found, 2 = a
 // user error that stopped the lint (unknown dialect, unreadable config).
@@ -173,12 +168,7 @@ const sqlfluffRunner: RunnerDefinition = {
 			);
 		}
 
-		let cmd: string | null = null;
-		if (await sqlfluff.isAvailableAsync(cwd)) {
-			cmd = sqlfluff.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 

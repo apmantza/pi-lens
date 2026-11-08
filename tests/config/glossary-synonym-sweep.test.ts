@@ -338,7 +338,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	cache: {
 		"clients/diagnostic-line-freshness.ts": 5,
 		"clients/dispatch/runners/tree-sitter.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 41,
+		"clients/dispatch/runners/utils/runner-helpers.ts": 21,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 6,
 		"clients/installer/index.ts": 8,
 		"clients/lsp/inferred-project.ts": 4,
@@ -1118,7 +1118,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// path identifiers while preserving the four-rung lookup ladder.
 		// 30 -> 28 (#4268): `resolveNodeToolCommand` and `resolveLocalFirstAsync`
 		// stop building `.bin` paths by hand and route through the shared lookup.
-		"clients/dispatch/runners/utils/runner-helpers.ts": 18,
+		// #5410: 18 -> 19, the PATH-only resolution's `{ path, rung }` value
+		// (the existing VenvResolution shape).
+		"clients/dispatch/runners/utils/runner-helpers.ts": 19,
 		// 7 -> 3 (#4689 item 6): `findValeConfig` delegates to
 		// `findLocalToolConfig`, dropping its hand-rolled `path` loop.
 		"clients/dispatch/runners/vale.ts": 3,
@@ -1760,7 +1762,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/child-unref.ts": 6,
 		"clients/config-resolve.ts": 11,
 		"clients/dead-code-client.ts": 3,
-		"clients/dispatch/dispatcher.ts": 35,
+		"clients/dispatch/dispatcher.ts": 34,
 		"clients/dispatch/integration.ts": 1,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 2,
