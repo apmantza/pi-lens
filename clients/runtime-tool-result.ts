@@ -1,6 +1,10 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import {
+	toolCallProgress,
+	type ToolCallProgress,
+} from "./agent-behavior-client.js";
+import {
 	buildWithheldAdvisory,
 	noteAuthoritativeContentAttachment,
 	queueAgentAdvisory,
@@ -659,7 +663,11 @@ interface ToolResultDeps {
 	biomeClient?: BiomeClient;
 	ruffClient?: RuffClient;
 	resetLSPService: (options?: LSPShutdownOptions) => void;
-	agentBehaviorRecord: (toolName: string, filePath?: string) => unknown[];
+	agentBehaviorRecord: (
+		toolName: string,
+		filePath?: string,
+		progress?: ToolCallProgress,
+	) => unknown[];
 	formatBehaviorWarnings: (warnings: unknown[]) => string;
 	readGuard?: ReadGuard;
 	/**
@@ -2567,9 +2575,21 @@ export async function handleToolResult(
 	}
 	// The parent bash call is already recorded. Its per-file diagnostic replays
 	// must not push that real call out of the BLIND WRITE knowledge window.
+	// #5429: the progress signal is the two fields this path already holds — the
+	// host's own `isError` and the `input` the host parsed — so the tracker can
+	// tell a retried call from a fresh one. The failed result still counts:
+	// a thrash warning is never rendered on a failed result (the mutation chain
+	// returns before the warnings are appended), but the streak a failed call
+	// leaves is what makes the later retried call warn.
 	const behaviorWarnings = isBashDerivedReplay(event)
 		? []
-		: agentBehaviorRecord(event.toolName, filePath);
+		: agentBehaviorRecord(
+				event.toolName,
+				filePath,
+				toolCallProgress(
+					event as { isError?: unknown; input?: unknown; toolName?: unknown },
+				),
+			);
 	const syntheticWriteContent: Array<{ type: string; text?: string }> = [];
 	// #1590: one shared authoritative-content budget for every path this bash
 	// command wrote. It is handed DOWN to each synthetic call so the single
