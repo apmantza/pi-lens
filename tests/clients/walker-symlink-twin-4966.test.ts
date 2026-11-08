@@ -68,6 +68,7 @@ import {
 } from "../../clients/project-lens-config.js";
 import { detectPythonTargetVersion } from "../../clients/python-environment.js";
 import { findLocalSgconfig } from "../../clients/sgconfig.js";
+import { findToolConfig } from "../../clients/tool-config-presence.js";
 import { resolveToolCwd } from "../../clients/tool-cwd.js";
 import { hasNearestPackageJsonDependency } from "../../clients/tool-policy.js";
 import { findLocalTyposConfig } from "../../clients/typos-config.js";
@@ -289,6 +290,16 @@ const WALKERS: readonly Walker[] = [
 		run: (start) => {
 			const found = findLocalTyposConfig(start);
 			return found && path.dirname(found);
+		},
+	},
+	{
+		id: "findToolConfig",
+		files: ["clients/tool-config-presence.ts"],
+		input: "dir",
+		markers: { ".tflint.hcl": "# t\n" },
+		run: (start) => {
+			const found = findToolConfig("tflint", start);
+			return found && path.dirname(found.file);
 		},
 	},
 	{
@@ -595,11 +606,6 @@ const EXEMPT: Readonly<Record<string, { reason: string; pinnedBy: string }>> = {
 	"clients/dispatch/runners/shellcheck.ts": {
 		reason:
 			"`findLocalToolConfig` (registered) from the dispatch context's cwd, an identity",
-		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
-	},
-	"clients/dispatch/runners/shfmt.ts": {
-		reason:
-			"`findNearestContaining` (registered) from the dispatch context's cwd, an identity",
 		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
 	},
 	"clients/dispatch/runners/vale.ts": {
