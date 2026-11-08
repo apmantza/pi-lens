@@ -1154,6 +1154,13 @@ export function createAvailabilityChecker(
 				options.allowProjectLocal !== false,
 				options.projectBinDirs,
 			);
+	// The rungs beyond the project: where a broken project shim falls through.
+	const findBeyondProject = createVenvFinder(
+		command,
+		windowsExt,
+		versionArgs,
+		false,
+	);
 
 	function ensureCurrentGeneration(): void {
 		if (checkerGeneration === availabilityGeneration.current()) return;
@@ -1323,108 +1330,122 @@ export function createAvailabilityChecker(
 			// `durationMs` would instead charge the probe budget for work that
 			// budget does not govern, so the two spans are reported side by side.
 			const resolveStartedAt = Date.now();
-			const resolution = await findCommand(resolvedCwd);
-			const cmd = resolution.path;
-			const resolveMs = Date.now() - resolveStartedAt;
-			// #1995: a command cooling down after a RUNTIME timeout (lint or
-			// autofix lane blew its real budget) must not re-probe on every
-			// edit - the positive verdict is effectively cooled. Consult-only:
-			// probe timeouts do NOT arm the cooldown here, because a single
-			// slow --version under host stall (#1467) is transient evidence,
-			// and session-long suppression from it would contradict the
-			// #1494 retry ladder this classification exists for.
-			if (isInSpawnTimeoutCooldown(cmd)) {
+			let resolution = await findCommand(resolvedCwd);
+			let resolveMs = Date.now() - resolveStartedAt;
+			// A project shim whose probe says it is broken for good (missing or
+			// non-installable: a stale venv interpreter) falls through to the
+			// rungs beyond the project, managed then PATH, as a managed shim
+			// does (#1657, #5437 F1). A transient answer stays on the project
+			// rung and retries. Those rungs never answer "venv", so the loop
+			// runs at most twice and still writes one verdict and one row.
+			for (;;) {
+				const cmd = resolution.path;
+				// #1995: a command cooling down after a RUNTIME timeout (lint or
+				// autofix lane blew its real budget) must not re-probe on every
+				// edit - the positive verdict is effectively cooled. Consult-only:
+				// probe timeouts do NOT arm the cooldown here, because a single
+				// slow --version under host stall (#1467) is transient evidence,
+				// and session-long suppression from it would contradict the
+				// #1494 retry ladder this classification exists for.
+				if (isInSpawnTimeoutCooldown(cmd)) {
+					noteDecision(cache, resolvedCwd, {
+						available: false,
+						outcome: "transient",
+						cause: "probe-timeout",
+						elapsedMs: 0,
+						classifiedBy: "caller",
+						evidence: {
+							command: cmd,
+							status: null,
+						},
+					});
+					return false;
+				}
+				const env = await options.environment?.(resolvedCwd);
+				// The probe budget is enforced by a HOST-side timer, so host event-loop
+				// stalls are charged to the child. Measure the stall that overlapped the
+				// window and hand it to the classifier (#1467).
+				const stallSampler = startHostStallSampler();
+				const startedAt = Date.now();
+				let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
+				let hostStallMs: number;
+				let probeJoined = false;
+				try {
+					const shared = checkerProbeFlights.run(
+						`checker:${command}|${versionArgs.join("|")}|${key}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
+						() =>
+							// A bare PATH-only probe goes through the cwd-less probe seam
+							// (#2894): nothing it answers is read out of a project.
+							options.pathOnly
+								? probeToolAsync(cmd, versionArgs, {
+										timeout: options.probeTimeout ?? 5000,
+										...(env !== undefined && { env }),
+										input: "",
+									})
+								: safeSpawnAsync(cmd, versionArgs, {
+										timeout: options.probeTimeout ?? 5000,
+										cwd: resolvedCwd,
+										env,
+										input: "",
+									}),
+					);
+					probeJoined = shared.joined;
+					result = await shared.promise;
+				} finally {
+					hostStallMs = stallSampler.stop();
+				}
+				const elapsedMs = Date.now() - startedAt;
+				recordAvailabilityProbeOverrun(
+					command,
+					resolvedCwd,
+					elapsedMs,
+					options.probeTimeout ?? 5000,
+					result.failure,
+				);
+
+				if (!result.error && result.status === 0) {
+					cache.command = cmd;
+					noteDecision(cache, resolvedCwd, {
+						available: true,
+						outcome: "success",
+						cause: "ok",
+						elapsedMs,
+						hostStallMs,
+						classifiedBy: probeJoined ? "joined" : "probe",
+						evidence: {
+							...describeProbeEvidence(result),
+							...describeManagedResolution(command, resolution),
+							resolveMs,
+						},
+					});
+					return true;
+				}
+
+				const { outcome, cause, evidence } = classifyProbeFailure(result, {
+					hostStallMs,
+					unclassifiedFailureOutcome: options.unclassifiedFailureOutcome,
+				});
+				if (resolution.rung === "venv" && isLatchingOutcome(outcome)) {
+					const fallStartedAt = Date.now();
+					resolution = await findBeyondProject(resolvedCwd);
+					resolveMs += Date.now() - fallStartedAt;
+					continue;
+				}
+				// Only a TYPED tool-not-found invalidates the PATH walk memo; an
+				// `unclassifiedFailureOutcome: "missing"` compatibility verdict is a
+				// guess, not evidence that PATH changed.
+				if (result.spawnFailure?.kind === "tool-not-found") resetPathWalkMemo();
 				noteDecision(cache, resolvedCwd, {
 					available: false,
-					outcome: "transient",
-					cause: "probe-timeout",
-					elapsedMs: 0,
-					classifiedBy: "caller",
-					evidence: {
-						command: cmd,
-						status: null,
-					},
-				});
-				return false;
-			}
-			const env = await options.environment?.(resolvedCwd);
-			// The probe budget is enforced by a HOST-side timer, so host event-loop
-			// stalls are charged to the child. Measure the stall that overlapped the
-			// window and hand it to the classifier (#1467).
-			const stallSampler = startHostStallSampler();
-			const startedAt = Date.now();
-			let result: Awaited<ReturnType<typeof safeSpawnAsync>>;
-			let hostStallMs: number;
-			let probeJoined = false;
-			try {
-				const shared = checkerProbeFlights.run(
-					`checker:${command}|${versionArgs.join("|")}|${key}|${checkerFlightGeneration}|${windowsExt}|${cmd}|${JSON.stringify(Object.entries(env ?? {}).sort(([a], [b]) => compareOrdinal(a, b)))}`,
-					() =>
-						// A bare PATH-only probe goes through the cwd-less probe seam
-						// (#2894): nothing it answers is read out of a project.
-						options.pathOnly
-							? probeToolAsync(cmd, versionArgs, {
-									timeout: options.probeTimeout ?? 5000,
-									...(env !== undefined && { env }),
-									input: "",
-								})
-							: safeSpawnAsync(cmd, versionArgs, {
-									timeout: options.probeTimeout ?? 5000,
-									cwd: resolvedCwd,
-									env,
-									input: "",
-								}),
-				);
-				probeJoined = shared.joined;
-				result = await shared.promise;
-			} finally {
-				hostStallMs = stallSampler.stop();
-			}
-			const elapsedMs = Date.now() - startedAt;
-			recordAvailabilityProbeOverrun(
-				command,
-				resolvedCwd,
-				elapsedMs,
-				options.probeTimeout ?? 5000,
-				result.failure,
-			);
-
-			if (!result.error && result.status === 0) {
-				cache.command = cmd;
-				noteDecision(cache, resolvedCwd, {
-					available: true,
-					outcome: "success",
-					cause: "ok",
+					outcome,
+					cause,
 					elapsedMs,
 					hostStallMs,
 					classifiedBy: probeJoined ? "joined" : "probe",
-					evidence: {
-						...describeProbeEvidence(result),
-						...describeManagedResolution(command, resolution),
-						resolveMs,
-					},
+					evidence,
 				});
-				return true;
+				return false;
 			}
-
-			const { outcome, cause, evidence } = classifyProbeFailure(result, {
-				hostStallMs,
-				unclassifiedFailureOutcome: options.unclassifiedFailureOutcome,
-			});
-			// Only a TYPED tool-not-found invalidates the PATH walk memo; an
-			// `unclassifiedFailureOutcome: "missing"` compatibility verdict is a
-			// guess, not evidence that PATH changed.
-			if (result.spawnFailure?.kind === "tool-not-found") resetPathWalkMemo();
-			noteDecision(cache, resolvedCwd, {
-				available: false,
-				outcome,
-				cause,
-				elapsedMs,
-				hostStallMs,
-				classifiedBy: probeJoined ? "joined" : "probe",
-				evidence,
-			});
-			return false;
 		})().finally(() => {
 			// A session reset clears this map and a caller may immediately start a
 			// replacement probe for the same cwd. The old promise must not delete

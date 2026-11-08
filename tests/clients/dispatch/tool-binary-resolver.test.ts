@@ -58,6 +58,19 @@ const { safeSpawnAsync, spawnCalls } = vi.hoisted(() => {
 					spawnFailure: { kind: "tool-not-found" },
 				};
 			}
+			// A project venv mypy whose interpreter is gone (exit 126, as a
+			// stale `.venv` shebang gives) beside a working PATH mypy.
+			if (
+				path.basename(cmd) === "mypy" &&
+				cmd.includes(`${path.sep}.venv${path.sep}`)
+			) {
+				return {
+					error: null,
+					status: 126,
+					stdout: "",
+					stderr: "bad interpreter\n",
+				};
+			}
 			// A yamllint whose interpreter is broken: present, rejects `--version`.
 			if (path.basename(cmd) === "yamllint") {
 				return { error: null, status: 1, stdout: "", stderr: "Traceback\n" };
@@ -218,5 +231,55 @@ describe("#5410 one tool-binary resolver through the real dispatcher", () => {
 		expect(
 			spawnCalls.filter((call) => call.cmd === shim).map((c) => c.args[0]),
 		).toEqual(["--version", "--formatter"]);
+	});
+
+	// #5437 review F1: folding the double probe onto one resolver dropped the
+	// memo-less second probe that used to fall through to PATH, so a project
+	// venv mypy whose interpreter is gone skipped the runner for the session
+	// even with a working mypy on PATH.
+	it("falls through a broken trusted venv mypy to the working PATH mypy", async () => {
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
+		setProjectTrustState("trusted");
+		const venvBin = path.join(project.tmpDir, ".venv", "bin");
+		fs.mkdirSync(venvBin, { recursive: true });
+		const venvMypy = path.join(venvBin, "mypy");
+		fs.writeFileSync(venvMypy, "#!/bin/sh\nexit 126\n");
+		fs.chmodSync(venvMypy, 0o755);
+		const pathMypy = path.join(pathEnv.tmpDir, "mypy");
+		fs.writeFileSync(pathMypy, "#!/bin/sh\n");
+		fs.chmodSync(pathMypy, 0o755);
+		fs.writeFileSync(path.join(project.tmpDir, "mypy.ini"), "[mypy]\n");
+		const file = path.join(project.tmpDir, "m.py");
+		fs.writeFileSync(file, "x = 1\n");
+		const registry = new RunnerRegistry();
+		registry.register(
+			(await import("../../../clients/dispatch/runners/mypy.js")).default,
+		);
+		const rowsBefore = (await decisionRows("mypy")).length;
+		for (let i = 0; i < 2; i++) {
+			await dispatchForFile(
+				makeCtx(file, project.tmpDir),
+				[{ mode: "all", runnerIds: ["mypy"] }],
+				registry,
+			);
+		}
+		const mypyCalls = spawnCalls.filter(
+			(call) => path.basename(call.cmd) === "mypy",
+		);
+		// One probe per rung, once per session; the PATH mypy then runs twice.
+		expect(
+			mypyCalls.map((call) => [
+				call.cmd === venvMypy ? "venv" : "path",
+				call.args.includes("--version") ? "probe" : "run",
+			]),
+		).toEqual([
+			["venv", "probe"],
+			["path", "probe"],
+			["path", "run"],
+			["path", "run"],
+		]);
+		// The skipped project rung writes no row of its own: one verdict.
+		const rows = (await decisionRows("mypy")).slice(rowsBefore);
+		expect(rows.map((row) => row.metadata.verdict)).toEqual(["available"]);
 	});
 });
