@@ -3529,7 +3529,6 @@ async function projectResolvedCwd(
 	};
 }
 
-// @delivery-surface: lens-diagnostics:mode-all
 /** Files a report names as not checked before it says `+N more`. */
 const MAX_UNCHECKED_NAMED = 5;
 
@@ -3556,6 +3555,7 @@ function uncheckedFilesLine(
 	return `⚠ ${unchecked.length} file${unchecked.length === 1 ? "" : "s"} not checked, so no findings is not a clean result: ${named.join("; ")}${more > 0 ? `; +${more} more` : ""}.`;
 }
 
+// @delivery-surface: lens-diagnostics:mode-all
 async function formatAllMode(
 	cwd: string,
 	severity: string,

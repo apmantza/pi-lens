@@ -1340,9 +1340,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		// 7 -> 6 (#5041): the `paths` cap guard's try/catch is gone, because the
 		// shared reader refuses an over-cap list before the scope is built.
 		silent: 6,
-		identities: "58466145d579efae",
+		identities: "95f00e0f7b94047b",
 		reason: PRE_RULE,
-	}, // :276, :980, :1040, :1495, :1555, :2269
+	}, // :278, :1008, :1068, :1523, :1583, :2301
 	"tools/lsp-diagnostics.ts": {
 		silent: 10,
 		identities: "2e5c32f96dcee285",
