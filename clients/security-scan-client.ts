@@ -13,7 +13,6 @@
  * Refs: #130, #131, #132
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import { createSubsystemLogger } from "./extension-log.js";
@@ -31,9 +30,10 @@ import {
 } from "./dispatch/runners/utils/availability-policy.js";
 import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
 import { createSingleFlight } from "./single-flight.js";
-import { formatToolFailure } from "./dispatch/runners/utils/tool-failure.js";
-import { scannerReportParentDir } from "./scanner-temp-root.js";
-import type { SpawnResult } from "./safe-spawn.js";
+import {
+	type ReportScanSpec,
+	runReportScan as runReportScanLifecycle,
+} from "./report-scan.js";
 
 type SecurityProbeResult = {
 	probe: Awaited<ReturnType<typeof probeToolAsync>>;
@@ -42,27 +42,6 @@ type SecurityProbeResult = {
 
 const securityProbeFlights =
 	createAvailabilityProbeFlight<SecurityProbeResult>();
-
-/** What a failed/empty report scan reports back; the client adds its own empty fields. */
-type ReportScanFailure = {
-	success?: boolean;
-	scannedAt: string;
-	summary: string;
-};
-
-/**
- * One report-file scan: `spawn` runs the CLI against `reportPath`, `parse`
- * turns the report it wrote into the client's result, and `fail` builds the
- * client's empty result carrying a failure summary.
- */
-export type ReportScanSpec<TResult> = {
-	spawn: (paths: {
-		outDir: string;
-		reportPath: string;
-	}) => Promise<SpawnResult>;
-	parse: (raw: string, scannedAt: string) => TResult | Promise<TResult>;
-	fail: (failure: ReportScanFailure) => TResult;
-};
 
 export abstract class SecurityScanClient<TResult> {
 	/**
@@ -436,76 +415,19 @@ export abstract class SecurityScanClient<TResult> {
 	}
 
 	/**
-	 * Shared body of a scan whose CLI writes a JSON report file (gitleaks,
-	 * trivy): a private report directory under the scanner temp root, the spawn,
-	 * the three non-parse outcomes (spawn error, no report written, a throw) and
-	 * the directory's removal on every path.
-	 *
-	 * Result policy: a spawn error, a throw, or a non-zero exit that left no
-	 * report is an unsuccessful empty result (`success` false) and one
-	 * `security-scan-report-failed` row; a CLI that exits 0 without writing its
-	 * report is a successful empty one carrying stderr's first line (both CLIs
-	 * write the report even when nothing is found, so a missing file after a
-	 * clean exit is an empty run, while a non-zero exit before the report means
-	 * the scan never ran and must not be cached as clean). A report that exists
-	 * is parsed whatever the exit code. `spec.parse` runs inside the guard, so
-	 * its own throw lands in the same unsuccessful result.
+	 * The security clients' lane onto the one report-file scan lifecycle
+	 * (`clients/report-scan.ts`, #5411): it binds the tool name, this client's
+	 * verbose logger, and the shared `security-scan-report-failed` record, so
+	 * GitleaksClient and TrivyClient keep their result shape and their ledger
+	 * lane. The lifecycle itself is shared with `OpengrepClient` and
+	 * `JscpdClient`, which keep their own record kinds.
 	 */
-	protected async runReportScan(
-		spec: ReportScanSpec<TResult>,
-	): Promise<TResult> {
-		const scannedAt = new Date().toISOString();
-		const outDir = fs.mkdtempSync(
-			path.join(scannerReportParentDir(), `pi-lens-${this.toolName}-`),
-		);
-		const reportPath = path.join(outDir, `${this.toolName}-report.json`);
-		try {
-			const result = await spec.spawn({ outDir, reportPath });
-
-			if (result.error) {
-				this.log(`Scan error: ${result.error.message}`);
-				this.recordReportScanFailure(result.error.message);
-				return spec.fail({
-					scannedAt,
-					summary: result.error.message.slice(0, 200),
-				});
-			}
-
-			if (!fs.existsSync(reportPath)) {
-				// Shape 10: a CLI that stopped with a non-zero exit before writing
-				// its report did not scan, so it is not a clean scan (jscpd and
-				// opengrep make the same call, jscpd with this same wording).
-				if (result.status !== 0) {
-					const reason = formatToolFailure({
-						tool: this.toolName,
-						status: result.status,
-						stderr: result.stderr,
-						reportMissing: true,
-					});
-					this.recordReportScanFailure(reason);
-					// `formatToolFailure` already bounds `reason` for the ledger.
-					return spec.fail({ scannedAt, summary: reason });
-				}
-				return spec.fail({
-					success: true,
-					scannedAt,
-					summary:
-						(result.stderr ?? "").trim().split("\n")[0] || "no report produced",
-				});
-			}
-
-			return await spec.parse(fs.readFileSync(reportPath, "utf-8"), scannedAt);
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			this.recordReportScanFailure(message);
-			return spec.fail({ scannedAt, summary: message.slice(0, 200) });
-		} finally {
-			try {
-				fs.rmSync(outDir, { recursive: true, force: true });
-			} catch {
-				// none: a report directory left under the scanner temp root is inert and the scan's result is already built
-			}
-		}
+	protected runReportScan(spec: ReportScanSpec<TResult>): Promise<TResult> {
+		return runReportScanLifecycle(this.toolName, {
+			...spec,
+			log: this.log,
+			recordFailure: (failure) => this.recordReportScanFailure(failure.summary),
+		});
 	}
 
 	/**
