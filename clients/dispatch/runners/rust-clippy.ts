@@ -26,6 +26,9 @@ import type {
 import { PRIORITY } from "../priorities.js";
 import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { createCwdCachedProbe } from "./utils/runner-helpers.js";
+import { spawnTimedOut } from "./utils/spawn-outcome.js";
+import { faultIfCutShort, skipUnlessToolRan } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 // Cached per-cwd `cargo clippy --version` probe (#120). Before this, the
 // probe fired on every Rust file save in a project where clippy was already
@@ -190,16 +193,25 @@ const rustClippyRunner: RunnerDefinition = {
 				? "warning"
 				: "none";
 
+		// A timeout is the budget ending the run: the cut-short rule every seam
+		// runner follows (#5411), findings kept as `failed/did-not-run`, nothing
+		// parsed as a `did-not-run` skip. It was `failed/timeout`.
+		if (spawnTimedOut(result)) {
+			// Nothing parsed leaves the seam's one `runner-empty-result` row, as
+			// helm does; partial findings are kept as failed/did-not-run.
+			const skipped =
+				diagnostics.length === 0
+					? skipUnlessToolRan("rust-clippy", { result })
+					: null;
+			const cut = skipped ?? faultIfCutShort(result, diagnostics);
+			if (cut) return cut;
+		}
 		if (result.error || result.failure) {
 			return {
 				status: "failed",
 				diagnostics,
 				semantic,
-				failureKind:
-					result.failure === "timeout" ||
-					result.spawnFailure?.kind === "timeout"
-						? "timeout"
-						: "server_error",
+				failureKind: "server_error",
 				rawOutput: raw.substring(0, 500),
 			};
 		}
@@ -364,7 +376,7 @@ export function parseClippyOutput(
 				line: span.line_start || 0,
 				column: span.column_start || 0,
 				severity: normalizedSeverity,
-				semantic: normalizedSeverity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(normalizedSeverity),
 				tool: "rust-clippy",
 				rule: message.code?.code,
 				defectClass: "correctness",

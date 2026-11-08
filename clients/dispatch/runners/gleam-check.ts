@@ -13,6 +13,7 @@ import type {
 import { faultResult, findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 import { faultIfCutShort } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const gleam = createAvailabilityChecker("gleam", ".exe");
 
@@ -120,7 +121,7 @@ function parseGleamOutput(
 			line: Number.parseInt(lineStr, 10) || 1,
 			column: Number.parseInt(colStr, 10) || 1,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "gleam",
 			rule: "gleam-check",
 			fixable: false,

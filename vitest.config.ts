@@ -913,6 +913,9 @@ export const wallClockBudgetInclude = [
 	// #4030: the real `gh` process boundary is the subject of the retry test;
 	// serialize it with other child-process admissions.
 	"tests/scripts/download-test-history-artifacts.test.ts",
+	// #5409: the fetch-verified helper's fetch step runs under a real bash with
+	// a fake curl on PATH; no in-process stand-in can show the verify-before-move order.
+	"tests/scripts/fetch-verified-action.test.ts",
 	// #4518: the evaluated-floor steps are shell text; only a real bash running
 	// the extracted `run:` shows the exit-code mapping, `set +e` and pipefail.
 	"tests/scripts/floor-steps-executed.test.ts",

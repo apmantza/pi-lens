@@ -9,12 +9,12 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { findingsResult } from "../types.js";
 import {
 	createAvailabilityChecker,
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
-import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const swiftlint = createAvailabilityChecker("swiftlint", ".exe");
 
@@ -109,18 +109,22 @@ const SWIFTLINT_FIXABLE_RULES = new Set<string>([
 	"yoda_condition",
 ]);
 
+/**
+ * `null` is "this output is not a SwiftLint report" (#5411); `[]` is a report that
+ * was read and holds nothing for this file. `finishParsedRun` tells them apart.
+ */
 function parseSwiftLintOutput(
 	raw: string,
 	filePath: string,
 	cwd: string,
-): Diagnostic[] {
+): Diagnostic[] | null {
 	const diagnostics: Diagnostic[] = [];
 	if (!raw.trim()) return diagnostics;
 	const absTarget = path.resolve(cwd, filePath);
 
 	try {
 		const parsed = JSON.parse(raw) as SwiftLintViolation[];
-		if (!Array.isArray(parsed)) return diagnostics;
+		if (!Array.isArray(parsed)) return null;
 
 		for (const item of parsed) {
 			if (!item.reason) continue;
@@ -145,7 +149,7 @@ function parseSwiftLintOutput(
 				line: item.line ?? 1,
 				column: item.character ?? 1,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: "swiftlint",
 				rule: ruleId,
 				defectClass: "style",
@@ -156,7 +160,7 @@ function parseSwiftLintOutput(
 			});
 		}
 	} catch {
-		return diagnostics;
+		return null;
 	}
 
 	return diagnostics;
@@ -187,35 +191,31 @@ const swiftlintRunner: RunnerDefinition = {
 		);
 
 		// #1816: this runner read `result.status` zero times, so a SwiftLint
-		// that refused the invocation reported a clean Swift file. No exit-code
-		// table is declared: SwiftLint's nonzero codes are not documented
-		// stably enough to call any of them a rejection, so classification
-		// rests on the conservative rule — a nonzero exit with nothing to parse
-		// never ran.
+		// that refused the invocation reported a clean Swift file. A nonzero
+		// exit with nothing to parse never ran.
 		// SwiftLint exits non-zero on violations — stdout still has the JSON, so
-		// a nonzero exit whose JSON yields nothing is a parser break (#1948).
+		// a nonzero exit whose JSON yields nothing is a parser break (#1948),
+		// which `finishParsedRun` reports as failed/parser_error (#5411).
 		const run = parseToolRun(
 			"swiftlint",
 			{
 				result,
 				// EXIT TABLE (SwiftLint 0.56 measured fixture): 0 clean; 1 findings; 2 error; other nonzero rejected.
+				// 2 is admitted although it is an error: its output is then read by
+				// the parser, and a run that printed nothing parseable is a parse
+				// error (failed/parser_error), never a clean file (#5411).
 				exitCodes: { ran: [1, 2] },
 			},
 			(out) => parseSwiftLintOutput(out, ctx.filePath, cwd),
 		);
 		if (run.skipped) return run.skipped;
 
-		const diagnostics = run.diagnostics;
-
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
-
-		return findingsResult(diagnostics, {
-			status: hasBlocking ? "failed" : "succeeded",
-			semantic: hasBlocking ? "blocking" : "warning",
+		return finishParsedRun({
+			tool: "swiftlint",
+			ctx,
+			result,
+			diagnostics: run.diagnostics,
+			unreadable: run.unreadable,
 		});
 	},
 };

@@ -534,6 +534,45 @@ export function classifyProbeFailure(
 }
 
 /**
+ * Classify a failed `where`/`which <tool>` probe: the ONE reading of what the
+ * finder's own failure says about the tool it was asked for.
+ *
+ * `classifyProbeFailure` reads a probe of the tool itself, where a spawn error
+ * (EACCES, EINVAL, `spawn UNKNOWN`) means a present command rejected its probe.
+ * The finder is a different subject. A finder that RAN and exited non-zero
+ * found nothing, which is a genuine absence (`missing`). A finder that could
+ * not run, whether EACCES, EMFILE, an unresolvable cwd or the finder itself
+ * absent, says nothing about the tool (#1495 review: one EACCES latched a
+ * dozen formatters off for the session). That outcome is `transient` with cause
+ * `probe-rejected`, and `forced` is true: the row is the caller's assertion
+ * over the classifier's answer, so it logs `classifiedBy: "caller"`.
+ *
+ * `formatters.ts`, `package-manager.ts` and `jvm-runtime.ts` each classified
+ * the finder on their own; only the first kept the unspawnable-finder guard
+ * (shape 83). A timeout, abort or stall already classifies as `transient` and
+ * is left to `classifyProbeFailure`.
+ */
+export function classifyFinderFailure(
+	result: ProbeFailureShape,
+	options: Pick<ClassifyOptions, "hostStallMs" | "command"> = {},
+): ReturnType<typeof classifyProbeFailure> & { forced: boolean } {
+	const finderRan = !result.error;
+	const classified = classifyProbeFailure(result, {
+		...options,
+		...(finderRan && { unclassifiedFailureOutcome: "missing" as const }),
+	});
+	if (!finderRan && classified.outcome !== "transient") {
+		return {
+			...classified,
+			outcome: "transient",
+			cause: "probe-rejected",
+			forced: true,
+		};
+	}
+	return { ...classified, forced: false };
+}
+
+/**
  * Accumulate how long the host event loop was blocked while something else was
  * in flight. A timer scheduled every `intervalMs` that fires late by L ms means
  * the loop was unavailable for L ms of the window — exactly the time the probe

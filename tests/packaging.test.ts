@@ -16,7 +16,6 @@ import { readLockedToolVersion } from "../scripts/lib/exec-isolation.mjs";
 // start disagreeing about which rows count.
 import { parseVerifiedHostRows } from "../scripts/lib/pi-host-spread.mjs";
 import yaml from "../clients/deps/js-yaml.js";
-import { stripSource } from "./support/sweep-kit.js";
 import { USER_PROFILE_PATH_RE } from "./support/user-profile-path-pattern.js";
 
 // These tests pin the published-package contract: pi-lens ships a precompiled
@@ -210,67 +209,15 @@ describe("host-provided packages are not vendored (#1926)", () => {
 		expect(HOST_PROVIDED_PACKAGES.length).toBeGreaterThan(0);
 	});
 
-	it("ships the shared list, because install-selftest.mjs imports it", () => {
-		// scripts/install-selftest.mjs runs FROM THE INSTALLED PACKAGE in the
-		// install-smoke job (`require.resolve("pi-lens/scripts/install-selftest.mjs")`)
-		// and imports the list to subtract host-provided specifiers. If the module
-		// is not in files[], that import throws in the tarball and the whole
-		// selftest dies (#1926).
-		const files = pkg.files ?? [];
-		expect(files).toContain("scripts/lib/host-provided-deps.mjs");
-		const selftest = fs.readFileSync(
-			path.join(root, "scripts", "install-selftest.mjs"),
-			"utf8",
-		);
-		expect(selftest).toContain("lib/host-provided-deps.mjs");
-	});
-
-	it("ships scripts/lib/scratch-home-env.mjs, because the shipped rpc-load-check.mjs imports it (#4789)", () => {
-		// Recurrence: PR #4821 round 1 shipped rpc-load-check.mjs, which imports the
-		// shared home pin, without the helper in files[]. The installed package's
-		// check-extensions then reported "imports './lib/scratch-home-env.mjs' → NOT FOUND"
-		// (CI Install test, ubuntu and macos).
-		const files = pkg.files ?? [];
-		expect(files).toContain("scripts/lib/scratch-home-env.mjs");
-		const rpc = fs.readFileSync(
-			path.join(root, "scripts", "rpc-load-check.mjs"),
-			"utf8",
-		);
-		expect(rpc).toContain("./lib/scratch-home-env.mjs");
-	});
-
-	it("ships scripts/lib/skills-predicate.mjs, because install-selftest.mjs imports it too (#2626)", () => {
-		// Same shape as host-provided-deps.mjs above, one module later: the
-		// shared skill-discovery predicate (#2626 review round 2, F2) folds
-		// `install-selftest.mjs`'s manifest-resolution probe AND
-		// `clients/skills-resolver.ts`'s health check onto ONE walk. If this
-		// file is missing from files[], the installed selftest's import throws
-		// in the tarball, same failure mode #1926 guards for the sibling list.
-		const files = pkg.files ?? [];
-		expect(files).toContain("scripts/lib/skills-predicate.mjs");
-		const selftest = fs.readFileSync(
-			path.join(root, "scripts", "install-selftest.mjs"),
-			"utf8",
-		);
-		expect(selftest).toContain("lib/skills-predicate.mjs");
-	});
-
-	it("ships scripts/lib/web-tree-sitter-dir.mjs, because install-selftest.mjs imports it too (#3409)", () => {
-		// Third instance of the same shape, one module later: the shared
-		// web-tree-sitter package-directory ladder (#3409 round 1, R3418-2) folds
-		// `install-selftest.mjs`'s grammar-asset probe, `clients/install-diagnostics.ts`'s
-		// fingerprint probe and `clients/tree-sitter-client.ts`'s read/write dirs
-		// onto ONE resolution. If this file is missing from files[], the installed
-		// selftest's import throws in the tarball — the failure mode #1926 and
-		// #2626 guard for its two siblings above.
-		const files = pkg.files ?? [];
-		expect(files).toContain("scripts/lib/web-tree-sitter-dir.mjs");
-		const selftest = fs.readFileSync(
-			path.join(root, "scripts", "install-selftest.mjs"),
-			"utf8",
-		);
-		expect(selftest).toContain("lib/web-tree-sitter-dir.mjs");
-	});
+	// #5365: the "ships <file> because a packed file imports it" pins that used
+	// to live here (#1926 host-provided-deps, #4789 scratch-home-env, #2626
+	// skills-predicate, #3409 web-tree-sitter-dir) are gone. Each guarded one
+	// edge: a packed script importing a `scripts/lib/*.mjs` that `files[]` had
+	// dropped, so the import threw in the tarball. Every such edge is now one
+	// finding from `packedImportResolutionViolations`, which
+	// tests/packaging-pack-manifest.test.ts runs over the real `npm pack`
+	// tarball, so the next import of an unpacked file is caught without a new
+	// pin.
 
 	it("splits host-provided packages into runtime and type-only, with no overlap", () => {
 		// CI installs the RUNTIME half before a bare `node dist/index.js` smoke
@@ -849,67 +796,13 @@ describe("bundled dist entry shape (#335)", () => {
 		expect(matches).toEqual([]);
 	});
 
-	// #4314: 4.4.2 shipped `import(["./lsp", "capabilities.js"].join("/"))`.
-	// esbuild cannot inline a computed specifier, so the bundle loaded
-	// dist/lsp/capabilities.js at runtime, a file no build has ever produced,
-	// and LSP warm failed in every session. Every dynamic import in a shipped
-	// file must be a literal that resolves inside the tarball, or an absolute
-	// pathToFileURL(...) load of a native/wasm package.
-	it.runIf(built)(
-		"every dynamic import in a shipped file resolves inside the tarball",
-		() => {
-			const distRoot = path.join(root, "dist");
-			const globToRegExp = (glob: string) =>
-				new RegExp(
-					`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")}$`,
-				);
-			const shippedPatterns = (pkg.files ?? [])
-				.filter((f) => f.startsWith("dist/"))
-				.map((f) => f.slice("dist/".length));
-			const isShipped = (rel: string) =>
-				shippedPatterns.some((p) =>
-					p.endsWith("/") ? rel.startsWith(p) : globToRegExp(p).test(rel),
-				);
-			const shippedJs = (
-				fs.readdirSync(distRoot, { recursive: true }) as string[]
-			)
-				.map((f) => f.split(path.sep).join("/"))
-				.filter((rel) => rel.endsWith(".js") && isShipped(rel));
-			expect(shippedJs).toContain("index.js");
-
-			const problems: string[] = [];
-			for (const rel of shippedJs) {
-				// Comments blanked (bundled doc comments say "a dynamic `import()`");
-				// string contents kept, because the specifier is the evidence.
-				const code = stripSource(
-					fs.readFileSync(path.join(distRoot, rel), "utf8"),
-					{ strings: "keep" },
-				);
-				for (const m of code.matchAll(/\bimport\(\s*([^)]{0,80})/g)) {
-					const arg = m[1] ?? "";
-					const literal = /^(["'`])([^"'`]*)\1/.exec(arg);
-					if (!literal) {
-						if (!/^pathToFileURL\d*\(/.test(arg)) {
-							problems.push(`${rel}: computed import(${arg.slice(0, 40)})`);
-						}
-						continue;
-					}
-					const spec = literal[2] ?? "";
-					if (!spec.startsWith(".")) continue;
-					const target = path.posix.normalize(
-						path.posix.join(path.posix.dirname(rel), spec),
-					);
-					if (
-						!isShipped(target) ||
-						!fs.existsSync(path.join(distRoot, target))
-					) {
-						problems.push(`${rel}: import("${spec}") is not in the tarball`);
-					}
-				}
-			}
-			expect(problems).toEqual([]);
-		},
-	);
+	// #5365: the #4314 pin ("every dynamic import in a shipped file resolves
+	// inside the tarball") is gone. `packedImportResolutionViolations` covers the
+	// same contract over the whole pack list instead of dist/ alone: a literal
+	// dynamic import of a file the pack does not carry, and a computed specifier
+	// that names a `./`-shaped path (`import(["./lsp", "capabilities.js"].join("/"))`,
+	// the 4.4.2 failure #4314 records), are each a finding there, with the
+	// pathToFileURL runtime loads admitted by shape.
 });
 
 describe("tsconfig.dist.json", () => {

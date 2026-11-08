@@ -8,7 +8,8 @@ message: >-
 note: |-
   [CWE-489] Active Debug Code. [REFERENCES]
       - https://labs.detectify.com/2015/10/02/how-patreon-got-hacked-publicly-exposed-werkzeug-debugger/
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   MATCH_PATTERN_debug_True:
     kind: call

@@ -20,7 +20,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // pin closed (#2619 review F1; reused here rather than re-typing the same env
 // map, #2634).
 import { scratchEnv } from "../scripts/release-qa.mjs";
-import { packedLayoutViolations } from "../scripts/lib/packed-layout.mjs";
+import {
+	packedImportResolutionViolations,
+	packedLayoutViolations,
+} from "../scripts/lib/packed-layout.mjs";
 import { assertNonEmptyScan } from "./support/sweep-kit.js";
 import {
 	restore as restorePackBackup,
@@ -527,6 +530,33 @@ describe("published manifest carries no devDependencies", () => {
 					fs.readFileSync(path.join(pkgRoot, entry), "utf8"),
 				),
 			).toEqual([]);
+			// #5365: the same unpacked tarball answers "does every file a published
+			// script imports ship with it". `npm run check` runs
+			// `scripts/check-extensions.mjs` over the SOURCE tree, so it resolves an
+			// import of an unpacked file against the checkout and passes; every
+			// earlier member of that shape (#4789, #2626, #3409, #5364) reached CI's
+			// install leg first and was pinned by one `files[]` assertion afterwards.
+			// 147 packed .js/.mjs/.cjs files measured on 4.4.10; half, rounded down.
+			assertNonEmptyScan(
+				"packed JavaScript files",
+				packedPaths.filter((entry) => /\.c?m?js$/.test(entry)).length,
+				73,
+			);
+			const specifiers = { relative: 0 };
+			expect(
+				packedImportResolutionViolations(
+					packedPaths,
+					(entry) => fs.readFileSync(path.join(pkgRoot, entry), "utf8"),
+					specifiers,
+				),
+			).toEqual([]);
+			// 1650 relative specifiers examined on 4.4.10; half, rounded down. A
+			// walker that reads nothing would otherwise pass over every file.
+			assertNonEmptyScan(
+				"relative specifiers examined",
+				specifiers.relative,
+				825,
+			);
 			for (const entry of [
 				"dist/index.js",
 				"dist/mcp/cli.js",

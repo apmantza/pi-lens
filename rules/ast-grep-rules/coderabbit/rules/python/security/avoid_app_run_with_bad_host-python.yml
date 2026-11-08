@@ -5,7 +5,8 @@ message: Running flask app with host 0.0.0.0 could expose the server publicly.
 note: |-
   [CWE-668]: Exposure of Resource to Wrong Sphere [OWASP A01:2021]: Broken Access Control [REFERENCES]
        https://owasp.org/Top10/A01_2021-Broken_Access_Control
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   MATCH_PATTERN_app_run:
     kind: call

@@ -16,6 +16,7 @@ import {
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const hadolint = createAvailabilityChecker("hadolint", ".exe");
 
@@ -52,7 +53,7 @@ function parseHadolintOutput(
 					line: item.line,
 					column: item.column ?? 1,
 					severity,
-					semantic: severity === "error" ? "blocking" : "warning",
+					semantic: semanticFor(severity),
 					tool: "hadolint",
 					rule: item.code,
 					fixable: false,

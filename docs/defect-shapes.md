@@ -103,6 +103,11 @@ fixes its members says so instead of quoting a before and after.
    failure as well as success. Teardown does not await a dead resource forever.
    Enforced by `tests/config/hook-await-bounds.test.ts` (partial: hook awaits
    and timeout races only; timer handles have no detector).
+   Consolidation verdict: stay distributed. Every named timer in clients/,
+   tools/, mcp/ and index.ts is cleared or unref'd in its own file, and the
+   anonymous awaited sleeps settle on their own timers. A `sleep(ms)` helper
+   would relocate one line per site and must stay ref'd, because an unref'd
+   awaited sleep lets a CLI exit mid-await.
 
 6. **Incomplete freshness:** use the right content, size, mtime, dependency,
    and existence axes. Missing finding paths are not current findings.
@@ -486,6 +491,12 @@ file-scoped worklist and receives no project-wide scanner output.
     Census: not countable yet. Enforcer: none: judgment-only. A scan cannot
     tell a copied rule from a coincidental literal without reading what the
     value feeds. Instances and dates: `HISTORY.md`.
+    Consolidation verdict: stay distributed for the two copies of the
+    glob-to-RegExp rule (`globToRegExp` in clients/file-utils.ts and
+    `matchesPattern` in clients/read-guard.ts differ in case and `?` handling,
+    and read-guard's production input is its fixed defaults) and for the inline
+    regex-escape one-offs in scripts/ (escape-regexp-fold-sweep admits them; an
+    unbuilt script cannot import clients/string-utils.js).
 
 88. **Learned attribution keyed on a name alone:** tier 4 of
     `classifyMutatingTool` admits any tool name that was once seen with a disk
@@ -621,6 +632,8 @@ file-scoped worklist and receives no project-wide scanner output.
     the sink) and fail closed on an unrecognised form. Screen: plant an
     alias, an indirect call and a value reached through another binding,
     and quote each result; every green plant is fixed or named as a residual.
+    For a call-site scanner add a computed member key (`module["require"](x)`)
+    and a renamed callee (`__require`).
     On 2026-10-18 five detector PRs took two to six rounds each because
     every verify found one more spelling. A detector's first round therefore lists its admitted forms
     and refuses everything else; a residual names an admitted form that is
@@ -798,6 +811,13 @@ file-scoped worklist and receives no project-wide scanner output.
 
 30. **Load-time platform constant:** use a live platform read or an isolated
     fresh import for every platform branch test.
+    Consolidation verdict: stay distributed, because the rule admits an isolated
+    fresh import and the seam is the one-line read `process.platform`, inline at
+    136 production sites; a helper relocates the read. Five production
+    module-load reads remain (`JAVA_EXE` in jvm-runtime.ts, `isWindows` in
+    lsp/launch.ts and instance-reaper.ts, `gitignoreGlobOptions` in
+    file-utils.ts, `RUNNERS.gradle.command` in test-runner-client.ts).
+    Enforcer: none: judgment-only; a census would only pin these five.
 
 55. **Field inherited across entry kinds:** when a coalescing queue carries a
     field from a replaced entry into its replacement (a read stamp, a save

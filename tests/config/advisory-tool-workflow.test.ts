@@ -212,8 +212,12 @@ describe("#2706 advisory tooling workflow contracts", () => {
 			.slice(start)
 			.split("\n")
 			.filter((line) => /^\s+- uses:/.test(line));
+		// #5409: a local composite action (the fetch-verified helper, `uses:
+		// ./...`) is this repository's own code, not a third-party action with
+		// a release to pin, so it is outside this count and the SHA pattern.
 		expect(uses.length, "the job must retain its action steps").toBe(
-			advisorySteps.filter((step) => step.uses).length,
+			advisorySteps.filter((step) => step.uses && !step.uses.startsWith("./"))
+				.length,
 		);
 		expect(uses.length).toBeGreaterThan(0);
 		for (const line of uses) {

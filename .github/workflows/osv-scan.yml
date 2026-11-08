@@ -53,12 +53,16 @@ jobs:
       # Pinned release + checksum verification, matching the actionlint job
       # in lint.yml -- no third-party GitHub Action, no unpinned install
       # script piped to a shell.
+      # #5409: the fetch-verified helper caches the verified binary and retries
+      # a 504 instead of saving the error page.
       - name: Download and verify osv-scanner v2.5.1 (linux_amd64)
-        run: |
-          set -eu
-          curl -sLO --proto '=https' --tlsv1.2 https://github.com/google/osv-scanner/releases/download/v2.5.1/osv-scanner_linux_amd64
-          echo "f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be  osv-scanner_linux_amd64" | sha256sum -c -
-          chmod +x osv-scanner_linux_amd64
+        uses: ./.github/actions/fetch-verified
+        with:
+          tool: osv-scanner
+          version: v2.5.1
+          url: https://github.com/google/osv-scanner/releases/download/v2.5.1/osv-scanner_linux_amd64
+          sha256: f9f25499a2c8cc367b3af45df2ea7eeca7fbccceab9c35079968f4b3652194be
+          path: ${{ runner.temp }}/osv-scanner_linux_amd64
 
       # Markdown-format output is written to both the step log and the job
       # summary so a finding is visible in either place (#1917 review F2).
@@ -66,8 +70,9 @@ jobs:
       # makes the job red.
       - name: Scan package-lock.json
         run: |
+          chmod +x "$RUNNER_TEMP/osv-scanner_linux_amd64"
           set +e
-          ./osv-scanner_linux_amd64 --format=markdown --lockfile=./package-lock.json \
+          "$RUNNER_TEMP/osv-scanner_linux_amd64" --format=markdown --lockfile=./package-lock.json \
             | tee -a "$GITHUB_STEP_SUMMARY"
           status=${PIPESTATUS[0]}
           set -e

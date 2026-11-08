@@ -16,7 +16,7 @@ import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-	classifyProbeFailure,
+	classifyFinderFailure,
 	createAvailabilityLatch,
 	logAvailabilityDecision,
 	startHostStallSampler,
@@ -277,12 +277,11 @@ async function runJavaProbe(): Promise<boolean | undefined> {
 		return true;
 	}
 
-	// A `where`/`which` that ran fine and found nothing is a genuine absence,
-	// same as a pre-existing #1496/#1467 sibling; anything else (timeout,
-	// abort, host stall) is transient and must not latch.
-	const { outcome, cause } = classifyProbeFailure(result, {
+	// A `where`/`which` that ran fine and found nothing is a genuine absence;
+	// anything else (timeout, abort, host stall, a finder that could not spawn)
+	// is transient and must not latch.
+	const { outcome, cause, forced } = classifyFinderFailure(result, {
 		hostStallMs,
-		unclassifiedFailureOutcome: "missing",
 	});
 	const retryAfterMs = javaAvailabilityLatch.noteUnavailable(outcome, cause);
 	logAvailabilityDecision({
@@ -295,7 +294,7 @@ async function runJavaProbe(): Promise<boolean | undefined> {
 		hostStallMs,
 		...(retryAfterMs > 0 && { retryAfterMs }),
 		budgetMs: JAVA_PROBE_TIMEOUT_MS,
-		classifiedBy: "probe",
+		classifiedBy: forced ? "caller" : "probe",
 	});
 	return outcome === "transient" ? undefined : false;
 }

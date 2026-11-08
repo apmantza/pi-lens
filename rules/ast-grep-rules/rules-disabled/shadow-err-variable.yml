@@ -31,8 +31,9 @@ rule:
       - kind: for_statement
       - kind: expression_switch_statement
     stopBy: end
-has_fix: false
-tags:
-  - go
-  - error-handling
-  - limited
+metadata:
+  has_fix: false
+  tags:
+    - go
+    - error-handling
+    - limited

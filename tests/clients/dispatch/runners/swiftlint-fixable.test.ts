@@ -46,7 +46,7 @@ describe("parseSwiftLintOutput — fixable propagation (#112 slice)", () => {
 				line: 20,
 			},
 		]);
-		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".");
+		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".") ?? [];
 		expect(diags).toHaveLength(3);
 		for (const d of diags) {
 			expect(d.tool).toBe("swiftlint");
@@ -74,7 +74,7 @@ describe("parseSwiftLintOutput — fixable propagation (#112 slice)", () => {
 				line: 42,
 			},
 		]);
-		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".");
+		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".") ?? [];
 		expect(diags).toHaveLength(3);
 		for (const d of diags) {
 			expect(d.fixable).toBe(false);
@@ -91,7 +91,7 @@ describe("parseSwiftLintOutput — fixable propagation (#112 slice)", () => {
 				severity: "Error",
 			},
 		]);
-		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".");
+		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".") ?? [];
 		expect(diags).toHaveLength(1);
 		expect(diags[0].severity).toBe("error");
 		expect(diags[0].semantic).toBe("blocking");
@@ -99,13 +99,15 @@ describe("parseSwiftLintOutput — fixable propagation (#112 slice)", () => {
 		expect(diags[0].fixable).toBe(true);
 	});
 
-	it("handles empty and malformed JSON gracefully", () => {
+	// #5411: `[]` is a report that was read and holds nothing; `null` is output
+	// that is not a SwiftLint report, which `finishParsedRun` calls a parse error.
+	it("tells an empty report from output that is not a report", () => {
 		expect(parseSwiftLintOutput("", "Sources/Main.swift", ".")).toEqual([]);
-		expect(parseSwiftLintOutput("not json", "Sources/Main.swift", ".")).toEqual(
-			[],
-		);
 		expect(parseSwiftLintOutput("[]", "Sources/Main.swift", ".")).toEqual([]);
-		expect(parseSwiftLintOutput("{}", "Sources/Main.swift", ".")).toEqual([]);
+		expect(parseSwiftLintOutput("not json", "Sources/Main.swift", ".")).toBe(
+			null,
+		);
+		expect(parseSwiftLintOutput("{}", "Sources/Main.swift", ".")).toBe(null);
 	});
 
 	it("falls back to rule_id 'swiftlint' when missing — and that fallback is not fixable", () => {
@@ -118,7 +120,7 @@ describe("parseSwiftLintOutput — fixable propagation (#112 slice)", () => {
 				file: "Sources/Main.swift",
 			},
 		]);
-		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".");
+		const diags = parseSwiftLintOutput(raw, "Sources/Main.swift", ".") ?? [];
 		expect(diags).toHaveLength(1);
 		expect(diags[0].rule).toBe("swiftlint");
 		expect(diags[0].fixable).toBe(false);

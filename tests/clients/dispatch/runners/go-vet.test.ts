@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
+import { parseGoVetOutput } from "../../../../clients/dispatch/runners/utils/diagnostic-parsers.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 // vi.hoisted keeps these available when the mock factories run below.
@@ -215,6 +216,8 @@ async function dispatchGoVet(
 	status: string | undefined;
 	semantic: string | undefined;
 	diagnostics: Array<{ line?: number; filePath?: string; message?: string }>;
+	/** #5412: what the dispatcher delivers after its dedupe, not the runner's list. */
+	delivered: Array<{ line?: number; column?: number; message?: string }>;
 	dispatchedPath: string;
 }> {
 	vi.resetModules();
@@ -246,7 +249,7 @@ async function dispatchGoVet(
 			{ getFlag: () => false },
 			new FactStore(),
 		);
-		await dispatchForFile(
+		const dispatched = await dispatchForFile(
 			ctx,
 			[{ mode: "all", runnerIds: ["go-vet"] }],
 			registry,
@@ -260,6 +263,7 @@ async function dispatchGoVet(
 			status: observedStatus,
 			semantic: observedSemantic,
 			diagnostics: observedDiagnostics,
+			delivered: dispatched.diagnostics,
 			dispatchedPath: ctx.filePath,
 		};
 	} finally {
@@ -301,5 +305,38 @@ describe("go-vet path identity through dispatch (#3277)", () => {
 		);
 		expect(observed.diagnostics).toHaveLength(HOST_FOLDS_PATH_CASE ? 1 : 0);
 		expect(observed.status).toBe(HOST_FOLDS_PATH_CASE ? "failed" : "succeeded");
+	});
+});
+
+/**
+ * #5412: two go vet findings on one line:column. The parser gave both the same
+ * line-only id (`go-vet-<line>`) and no rule, so `findingKey` (which reads
+ * `rule || id`) made them one key and the dispatcher's dedupe kept one. The
+ * tool printed both lines; the agent saw one. Recurrence: the 2026-11-08
+ * tool-alignment audit (origin/master 90724817f).
+ */
+describe("go vet findings on one position keep distinct identities (#5412)", () => {
+	const sameSpot = [
+		"sub/b.go:3:5: fmt.Sprintf format %d has arg x of wrong type int",
+		"sub/b.go:3:5: result of fmt.Sprintf call not used",
+	].join("\n");
+
+	beforeEach(() => {
+		goExePath.current = "/usr/local/bin/go";
+		safeSpawnAsync.mockReset();
+	});
+
+	it("gives the two rule-less findings two different ids", () => {
+		const diags = parseGoVetOutput(`${sameSpot}\n`, "/proj/sub/b.go", "/proj");
+		expect(diags).toHaveLength(2);
+		expect(diags[0]?.id).not.toBe(diags[1]?.id);
+	});
+
+	it("delivers both findings through the real dispatcher dedupe", async () => {
+		const observed = await dispatchGoVet("same-spot", `${sameSpot}\n`);
+		expect(observed.delivered.map((d) => d.message).sort()).toEqual([
+			"fmt.Sprintf format %d has arg x of wrong type int",
+			"result of fmt.Sprintf call not used",
+		]);
 	});
 });

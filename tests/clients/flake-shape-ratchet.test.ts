@@ -1379,6 +1379,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"a real gh child is required to prove transient API failure recovery, persistent failure, and a ZIP over the default spawn buffer at the process boundary",
 	},
+	// 2026-11-08 (#5409): the helper fetch step is bash that runs curl, sha256sum and mv
+	// on real files; only a real bash shows that a failed verify leaves no file behind,
+	// and the one fake is curl at the network boundary.
+	"real-process-spawn:scripts/fetch-verified-action.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the helper bash fetch step runs curl, sha256sum and mv on real files, and only a real bash shows a failed verify leaves no file behind; the one fake is curl at the network boundary",
+	},
 	// #4518: the evaluated-floor steps of grammar-health.yml, ci.yml and lint.yml
 	// are shell text; the exit-code mapping, `set +e`, a step output read by the
 	// next step and `| tee` under pipefail are observable only by running bash.

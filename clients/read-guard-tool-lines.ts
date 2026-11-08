@@ -1,7 +1,7 @@
 import type { EditToolInput } from "@earendil-works/pi-coding-agent";
-import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
 import { BoundedFifoMap } from "./bounded-cache.js";
+import { hashContentBytes } from "./content-stamp.js";
 import {
 	hostWouldApplyOldText,
 	normalizeForGuardMatch,
@@ -442,7 +442,7 @@ function resolveOldTextEdits(
 	// The identity the spans below are resolved against, which exact-retry
 	// recognition compares with an applied record's hash (#2402).
 	const snapshot: EditSnapshotIdentity = {
-		hash: createHash("sha256").update(rawBytes).digest("hex"),
+		hash: hashContentBytes(rawBytes),
 	};
 	const errors: string[] = [];
 	const failureKinds: string[] = [];

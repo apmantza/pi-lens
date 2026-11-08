@@ -49,6 +49,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
 import { writeFileAtomicAsync } from "../atomic-write.js";
+import { hashContentBytes } from "../content-stamp.js";
 import { bounded } from "../deadline-utils.js";
 import { recordDegradationOnce } from "../degradation-ledger.js";
 import { commitDurableStoreAsync } from "../durable-store.js";
@@ -1302,7 +1303,7 @@ export async function refreshOpengrepRulePack(
 			await fs.mkdir(path.dirname(finalPath), { recursive: true });
 			await sweepStaleCandidates(finalPath);
 			const bytes = await downloadOpengrepPack(url);
-			const digest = crypto.createHash("sha256").update(bytes).digest("hex");
+			const digest = hashContentBytes(bytes);
 			let current: Buffer | undefined;
 			try {
 				current = await fs.readFile(finalPath);
@@ -1311,10 +1312,7 @@ export async function refreshOpengrepRulePack(
 				// any other read error is rethrown to the refresh's failure record.
 				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
 			}
-			if (
-				current &&
-				crypto.createHash("sha256").update(current).digest("hex") === digest
-			) {
+			if (current && hashContentBytes(current) === digest) {
 				await writeRefreshStamp(OPENGREP_PACK_STAMP_ID, {
 					checkedAt: now,
 					version: digest.slice(0, 12),
