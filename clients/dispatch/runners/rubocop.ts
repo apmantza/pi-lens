@@ -136,15 +136,9 @@ const rubocopRunner: RunnerDefinition = {
 		// exit with empty or unparsable JSON is never clean (#1816).
 		const run = parseToolRun(
 			"rubocop",
-			{
-				result,
-				// Classify both streams so stderr-only failures reach the parse-error
-				// path, while parseOutput keeps RuboCop's native JSON parser on stdout.
-				output: `${result.stdout}${result.stderr}`,
-				exitCodes: { ran: [1, 2] },
-			},
+			{ result, exitCodes: { ran: [1, 2] } },
 			(output) => parseRubocopJson(output, ctx.filePath, cwd),
-			{ parseOutput: result.stdout },
+			{ parseStreams: "stdout-else-stderr" },
 		);
 		if (run.skipped) return run.skipped;
 		return finishParsedRun({

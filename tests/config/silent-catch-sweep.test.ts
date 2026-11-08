@@ -496,9 +496,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :156
 	"clients/dispatch/runners/swiftlint.ts": {
 		silent: 1,
-		identities: "102fe3fe1a609dfd",
+		identities: "e8e154dc40dff426",
 		reason: PRE_RULE,
-	}, // :158
+	}, // :161; now `return null` (#5411): the unreadable verdict is finishParsedRun's.
 	"clients/dispatch/runners/terragrunt.ts": {
 		silent: 1,
 		identities: "53f0ed4e5a760b9e",
@@ -541,9 +541,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	}, // :334, :382, :506, :545, :698, :1328, :1638
 	"clients/dispatch/runners/vale.ts": {
 		silent: 1,
-		identities: "ebc8ac6568c8a7ac",
+		identities: "e8e154dc40dff426",
 		reason: PRE_RULE,
-	}, // :134
+	}, // :125; now `return null` (#5411): the unreadable verdict is finishParsedRun's.
 	"clients/dispatch/runners/yaml-rule-parser.ts": {
 		silent: 5,
 		identities: "eaafa0a2a75a5c2a",

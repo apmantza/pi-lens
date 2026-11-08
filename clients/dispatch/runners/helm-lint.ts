@@ -17,6 +17,8 @@ import {
 	resolveAvailableOrInstall,
 	type AvailabilityOutcome,
 } from "./utils/runner-helpers.js";
+import { spawnTimedOut } from "./utils/spawn-outcome.js";
+import { skipUnlessToolRan } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
 
 // helm 4 has no --version flag ("Error: unknown flag: --version", exit 1);
@@ -152,6 +154,12 @@ async function lintChart(
 			"helm lint output was truncated before parsing completed",
 		);
 	}
+	// A timeout is the budget ending the run, the same `did-not-run` skip every
+	// seam runner reports (#5411); it was `failed/timeout` here.
+	const timedOut = spawnTimedOut(result)
+		? skipUnlessToolRan("helm-lint", { result })
+		: null;
+	if (timedOut) return timedOut;
 	const output = [result.stdout, result.stderr].filter(Boolean).join("\n");
 	const diagnostics = parseHelmLintOutput(output, chartRoot);
 	const typedFailure = result.spawnFailure?.kind;
@@ -159,11 +167,9 @@ async function lintChart(
 		const failureKind =
 			typedFailure === "tool-not-found"
 				? "unavailable"
-				: typedFailure === "timeout"
-					? "timeout"
-					: typedFailure === "killed" && result.failure === "aborted"
-						? "aborted"
-						: "server_error";
+				: typedFailure === "killed" && result.failure === "aborted"
+					? "aborted"
+					: "server_error";
 		return failedResult(
 			failureKind,
 			result.error?.message || `helm lint ${typedFailure}`,
@@ -171,7 +177,7 @@ async function lintChart(
 	}
 	if (result.failure) {
 		return failedResult(
-			result.failure === "timeout" ? "timeout" : result.failure,
+			result.failure,
 			result.error?.message || `helm lint ${result.failure}`,
 		);
 	}
