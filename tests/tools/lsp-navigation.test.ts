@@ -1632,8 +1632,8 @@ describe("lsp_navigation tool", () => {
 	});
 
 	it("#2450: a two-file rename leaves both files in turn-state.json with LSP-rename provenance", async () => {
-		const tmpDir = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-lsp-nav-2450-"),
+		const tmpDir = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-2450-")),
 		);
 		const fileA = path.join(tmpDir, "a.ts");
 		const fileB = path.join(tmpDir, "b.ts");
@@ -2270,7 +2270,9 @@ describe("lsp_navigation workspaceDiagnostics delivery gate (#1634)", () => {
 	];
 
 	beforeEach(async () => {
-		cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1634-nav-"));
+		cwd = fs.realpathSync.native(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-1634-nav-")),
+		);
 		filePath = path.join(cwd, "app.ts");
 		fs.writeFileSync(
 			filePath,
