@@ -1106,6 +1106,23 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		expect(registryEnvViolations("planted.yml", withEnv, read)).toEqual([]);
 	});
 
+	it("a readable local composite action with no registry command needs no retry env", () => {
+		// Recurrence #5420: an unreadable local action counts as a hit, so the
+		// readable-and-clean case is what proves the scan really reads it.
+		const action = [
+			"runs:",
+			"  using: composite",
+			"  steps:",
+			"    - shell: bash",
+			"      run: echo hello",
+			"",
+		].join("\n");
+		const planted = workflow({ steps: ["      - uses: ./.github/actions/x"] });
+		const read = (path: string) =>
+			path === "./.github/actions/x" ? action : undefined;
+		expect(registryEnvViolations("planted.yml", planted, read)).toEqual([]);
+	});
+
 	it.each([
 		[
 			"an expression",
