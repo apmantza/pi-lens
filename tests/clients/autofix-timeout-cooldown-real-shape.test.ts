@@ -115,7 +115,6 @@ describe("autofix spawn timeout arms the cooldown (#5376)", () => {
 				cmd,
 				["--fix", filePath],
 				env.tmpDir,
-				[1],
 			);
 			await vi.advanceTimersByTimeAsync(31_000);
 			expect(await pending).toBe(0);
@@ -129,7 +128,6 @@ describe("autofix spawn timeout arms the cooldown (#5376)", () => {
 					cmd,
 					["--fix", filePath],
 					env.tmpDir,
-					[1],
 				),
 			).toBe(0);
 			expect(spawnMock).not.toHaveBeenCalled();

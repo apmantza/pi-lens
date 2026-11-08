@@ -502,6 +502,45 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 		}
 	});
 
+	// #5417 recurrence: `changed:false` on every nonzero exit reported a
+	// formatter that rewrote the file and then exited nonzero as "no change", so
+	// the pipeline kept the bytes it read before the rewrite. Success is the exit
+	// code, changed is the bytes.
+	it.each([
+		{ status: 2, sentence: "an undocumented status (2)" },
+		{ status: 255, sentence: "a crash status (255)" },
+	])(
+		"lenient formatter: $sentence after a rewrite is a failed run that changed the file",
+		async ({ status }) => {
+			const env = setupTestEnvironment("pi-lens-format-file-");
+			try {
+				fs.writeFileSync(path.join(env.tmpDir, "Gemfile"), 'gem "rubocop"\n');
+				const filePath = path.join(env.tmpDir, "a.rb");
+				fs.writeFileSync(filePath, "x = 1\n");
+				// Only the formatter call names the file; the resolver's probes
+				// answer without touching it.
+				safeSpawnAsync.mockImplementation(
+					async (_cmd: string, args: string[]) => {
+						if (!args.includes(filePath))
+							return { status: 0, stdout: "", stderr: "" };
+						fs.writeFileSync(filePath, "x = 1 # rewritten\n");
+						return { status, stdout: "", stderr: "partial failure" };
+					},
+				);
+
+				const { formatFile, rubocop } = await loadFormatFile();
+				const result = await formatFile(filePath, rubocop);
+
+				expect(result.success).toBe(false);
+				expect(result.outcome).toBe("failed");
+				expect(result.changed).toBe(true);
+				expect(result.error).toBe("partial failure");
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+
 	it("does not let an unavailable primary reach the npx fallback when gated", async () => {
 		const env = setupTestEnvironment("pi-lens-format-npx-gated-");
 		try {

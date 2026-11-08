@@ -48,6 +48,7 @@ import {
 	VENDOR_BIN_DIRS,
 	VENV_BIN_DIRS,
 } from "./package-manager.js";
+import { resolveWriteResult } from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { admittedLookupAnswer } from "./session-repository.js";
 import { establishToolAgreement } from "./tool-agreement.js";
@@ -2503,17 +2504,31 @@ export async function formatFile(
 
 		// Strict by default (#1337): only a formatter with a documented
 		// benign-nonzero mode (`lenientExitCode`) may exit nonzero and still be
-		// read as a successful run. Everything else that exits nonzero never
-		// rewrote the file, and reporting {success: true, changed: false} there is
-		// indistinguishable from "already formatted" — the #1336 silent no-op.
-		const lenientOk =
-			formatter.lenientExitCode !== undefined &&
-			result.status !== null &&
-			(formatter.lenientStatuses ?? []).includes(result.status);
-		if (result.error || (result.status !== 0 && !lenientOk)) {
+		// read as a successful run. Everything else that exits nonzero is a
+		// failure, never {success: true, changed: false}, which is
+		// indistinguishable from "already formatted" (the #1336 silent no-op).
+		// `changed` is the bytes, not the exit code (#5417): a formatter that
+		// rewrites the file and then exits nonzero is a failed run that changed it,
+		// and the pipeline must refresh what it read.
+		let contentAfter: string | undefined;
+		let readBackError: unknown;
+		try {
+			contentAfter = await fs.readFile(absolutePath, "utf-8");
+		} catch (readError) {
+			readBackError = readError;
+		}
+		const { changed, success } = resolveWriteResult(
+			contentBefore,
+			contentAfter,
+			result,
+			formatter.lenientExitCode === undefined
+				? [0]
+				: [0, ...(formatter.lenientStatuses ?? [])],
+		);
+		if (!success) {
 			return {
 				success: false,
-				changed: false,
+				changed,
 				outcome: "failed",
 				error:
 					result.error?.message ||
@@ -2525,10 +2540,7 @@ export async function formatFile(
 					`${formatter.name} exited with status ${result.status}`,
 			};
 		}
-
-		// Check if content changed
-		const contentAfter = await fs.readFile(absolutePath, "utf-8");
-		const changed = contentBefore !== contentAfter;
+		if (readBackError !== undefined) throw readBackError;
 
 		return {
 			success: true,
