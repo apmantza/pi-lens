@@ -1096,6 +1096,9 @@ export const wallClockBudgetInclude = [
 	// first-send stamp reaches the capture; the same #1022/#2332 contention
 	// class as its lane siblings.
 	"tests/tools/lsp-navigation-rename-first-open.test.ts",
+	// #5371 r2 F5: the cold-vs-warm tracked-index cell needs a repository Git
+	// itself wrote, so it runs real `git` (flake-shape admission).
+	"tests/tools/path-glob-5371-tracked-index.test.ts",
 	// #4583: same fire-and-forget cold build as its clients sibling above; the
 	// pi-tool witness joins it with a real-time vi.waitFor (flake-shape
 	// admission).

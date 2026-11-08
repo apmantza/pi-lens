@@ -32,6 +32,7 @@ function errorTextWithHint(raw: string): string {
 }
 import {
 	defaultedCwdHomeRefusal,
+	PATHS_GLOB_CLAUSE,
 	readAstGrepLang,
 	readPathsArgument,
 } from "./shared.js";
@@ -85,7 +86,9 @@ export function createAstGrepReplaceTool(
 				description: "Language id, e.g. typescript, tsx, python, go.",
 			}),
 			paths: Type.Optional(
-				Type.Array(Type.String(), { description: "Specific files/folders" }),
+				Type.Array(Type.String(), {
+					description: `Specific files/folders. ${PATHS_GLOB_CLAUSE}`,
+				}),
 			),
 			insideKind: Type.Optional(
 				Type.String({
@@ -241,9 +244,10 @@ export function createAstGrepReplaceTool(
 			}
 			// #5041: replace used to forward `paths` unchecked, so a non-string
 			// entry, a blank entry or an over-cap list reached the CLI as argv.
-			const pathsRead = readPathsArgument(paths, {
+			const pathsRead = await readPathsArgument(paths, {
 				cwd: ctx.cwd,
 				absent: "cwd",
+				signal,
 			});
 			if (pathsRead.refusal) {
 				logOutcome("error", { errorRaw: pathsRead.refusal });

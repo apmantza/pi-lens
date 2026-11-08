@@ -95,7 +95,11 @@ import {
 	createAstGrepSearchTool,
 } from "../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
-import { readFilePath, readPathsArgument } from "../tools/shared.js";
+import {
+	PATHS_GLOB_CLAUSE,
+	readFilePath,
+	readPathsArgument,
+} from "../tools/shared.js";
 import {
 	SYMBOL_SEARCH_DESCRIPTION,
 	SYMBOL_SEARCH_QUERY_DESCRIPTION,
@@ -750,8 +754,7 @@ const ALL_TOOLS = [
 				paths: {
 					type: "array",
 					items: { type: "string" },
-					description:
-						"Glob array scoping hits to matching files — same shape/semantics as pilens_ast_grep_search's `paths` (a bare directory/file entry scopes its whole subtree). Filters before ranking, so scores within the scoped set are unaffected.",
+					description: `Files, directories or globs scoping hits to matching files (a bare directory entry scopes its whole subtree). ${PATHS_GLOB_CLAUSE} Filters before ranking, so scores within the scoped set are unaffected.`,
 				},
 				lang: {
 					type: "string",
@@ -1331,7 +1334,10 @@ async function callTool(
 		// #5041: one reader owns the `paths` entry rules; #5038: the engine clamps
 		// `limit` and resolves each entry as a host path (this handler used to
 		// drop a non-string entry and clamp a second time).
-		const pathsRead = readPathsArgument(args.paths, { cwd });
+		const pathsRead = await readPathsArgument(args.paths, {
+			cwd,
+			filterOnly: true,
+		});
 		if (pathsRead.refusal)
 			return { ...toolText(pathsRead.refusal), isError: true };
 		const limit =

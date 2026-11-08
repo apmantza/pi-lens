@@ -15,7 +15,7 @@ import {
 	type SymbolSearchResult,
 } from "../clients/lens-engine.js";
 import { compactRenderResult } from "./render-compact.js";
-import { readPathsArgument } from "./shared.js";
+import { PATHS_GLOB_CLAUSE, readPathsArgument } from "./shared.js";
 
 /**
  * `symbol_search`'s model-facing description, owned HERE (the tool definition)
@@ -64,8 +64,7 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 			),
 			paths: Type.Optional(
 				Type.Array(Type.String(), {
-					description:
-						"Glob array scoping hits to matching files — same shape/semantics as ast_grep_search's `paths` (a bare directory/file entry scopes its whole subtree). Filters before ranking, so scores within the scoped set are unaffected.",
+					description: `Files, directories or globs scoping hits to matching files (a bare directory entry scopes its whole subtree). ${PATHS_GLOB_CLAUSE} Filters before ranking, so scores within the scoped set are unaffected.`,
 				}),
 			),
 			lang: Type.Optional(
@@ -91,7 +90,11 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 			// #5041: one reader owns the `paths` entry rules and the host-path
 			// spelling. #5038: the entries reach the engine as host paths, so `src`,
 			// `./src` and the absolute directory now scope the same files.
-			const pathsRead = readPathsArgument(params.paths, { cwd });
+			const pathsRead = await readPathsArgument(params.paths, {
+				cwd,
+				filterOnly: true,
+				signal: _signal,
+			});
 			if (pathsRead.refusal) {
 				return {
 					content: [{ type: "text" as const, text: pathsRead.refusal }],

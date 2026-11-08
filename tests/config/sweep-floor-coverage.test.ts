@@ -115,6 +115,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"server policy behavior cases, not the LSP fixture population sweep",
 	"tests/clients/ephemeral-root.test.ts":
 		"temporary-checkout behavior cases (#1129); it lists one fixture checkout and one sweep directory, not a source population sweep",
+	"tests/tools/path-glob-5371-reader.test.ts":
+		"reader behaviour cells over temp trees (#5371); its readdir spy and empty-result assertions probe one function, not a production population sweep",
 	"tests/tools/lens-diagnostics.test.ts":
 		"diagnostic projection behavior cases, not a production population sweep",
 	"tests/clients/ast-grep-rule-precedence-followups.test.ts":
