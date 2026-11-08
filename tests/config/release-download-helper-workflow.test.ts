@@ -458,7 +458,7 @@ const ACTION_VERDICTS: Record<string, { registry?: true; why: string }> = {
 	},
 };
 
-type UsesSite = { where: string; uses: string; job: boolean };
+type UsesSite = { where: string; uses: string };
 
 /** Every `uses:` in a workflow (job-level reusable workflows too) or composite action. */
 function usesSites(file: string, source: string): UsesSite[] {
@@ -470,7 +470,6 @@ function usesSites(file: string, source: string): UsesSite[] {
 				sites.push({
 					where: `${file}: ${scope}.steps[${index}]`,
 					uses: String(step.uses),
-					job: false,
 				});
 	};
 	for (const [job, body] of Object.entries(doc.jobs ?? {})) {
@@ -479,7 +478,6 @@ function usesSites(file: string, source: string): UsesSite[] {
 			sites.push({
 				where: `${file}: jobs.${job}`,
 				uses: String(reusable),
-				job: true,
 			});
 		addSteps(`jobs.${job}`, body.steps);
 	}
@@ -490,9 +488,10 @@ function usesSites(file: string, source: string): UsesSite[] {
 const actionKey = (uses: string) => uses.split("@")[0];
 
 /**
- * A `uses:` with no recorded verdict is a violation. Fail closed: a reusable
- * workflow, a docker:// reference, a local path that does not resolve to an
- * action file, and a remote action missing from `verdicts` all count.
+ * A `uses:` with no recorded verdict is a violation. Fail closed: a local path
+ * that does not resolve to an action file counts (a reusable workflow path
+ * included), and so does every other form missing from `verdicts` (a remote
+ * reusable workflow, a docker:// reference, an unlisted action).
  */
 export function actionVerdictViolations(
 	file: string,
@@ -501,14 +500,8 @@ export function actionVerdictViolations(
 	verdicts: Record<string, { registry?: true; why: string }> = ACTION_VERDICTS,
 ): string[] {
 	const violations: string[] = [];
-	for (const { where, uses, job } of usesSites(file, source)) {
-		if (job)
-			violations.push(
-				`${where}: reusable workflow ${uses} cannot be classified`,
-			);
-		else if (uses.startsWith("docker://"))
-			violations.push(`${where}: docker action ${uses} cannot be classified`);
-		else if (uses.startsWith("./")) {
+	for (const { where, uses } of usesSites(file, source)) {
+		if (uses.startsWith("./")) {
 			if (!LOCAL_ACTION.test(uses) || !localExists(uses))
 				violations.push(
 					`${where}: local action ${uses} does not resolve to an action file`,
@@ -1121,6 +1114,24 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		const read = (path: string) =>
 			path === "./.github/actions/x" ? action : undefined;
 		expect(registryEnvViolations("planted.yml", planted, read)).toEqual([]);
+	});
+
+	it("a local composite action that calls itself is a hit, not a loop", () => {
+		// The scan recurses into local actions; a cycle must end as an unreadable
+		// action (a hit) instead of overflowing the stack.
+		const action = [
+			"runs:",
+			"  using: composite",
+			"  steps:",
+			"    - uses: ./.github/actions/x",
+			"",
+		].join("\n");
+		const planted = workflow({ steps: ["      - uses: ./.github/actions/x"] });
+		const read = (path: string) =>
+			path === "./.github/actions/x" ? action : undefined;
+		expect(
+			registryEnvViolations("planted.yml", planted, read).length,
+		).toBeGreaterThan(0);
 	});
 
 	it.each([
