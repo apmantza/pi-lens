@@ -863,7 +863,6 @@ export class AstGrepClient {
 				truncated: false,
 				applied: false,
 				error: "operation aborted",
-				aborted: true,
 			};
 		}
 		const applyResult = await this.runner.exec(

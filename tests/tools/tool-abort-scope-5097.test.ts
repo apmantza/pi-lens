@@ -321,7 +321,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(isAlive(pid)).toBe(false);
 		});
 
-		it("ast_grep_outline: an abort that arrives only through ctx.signal kills the child", async () => {
+		it("outline: ctx.signal alone kills the child", async () => {
 			const root = setup("outline-ctx", { outline: "park" });
 			const result = await run(
 				"ast_grep_outline",
@@ -425,7 +425,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(rewritten(root)).toBe(0);
 		});
 
-		it("ast_grep_replace apply: a write that fails after an abort reports its own error and that files may be written", async () => {
+		it("pattern apply: a failed write keeps its error", async () => {
 			const root = setup("apply-fail", { updateAll: "fail" });
 			const pending = run(
 				"ast_grep_replace",
@@ -443,7 +443,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(text).toMatch(/some files may already be rewritten/);
 		});
 
-		it("ast_grep_replace structural apply: an abort at the second path names the files the first path rewrote", async () => {
+		it("rule apply: abort at path 2 names path 1 files", async () => {
 			// Path 1: precheck (json 0), count scan (json 1), write. Path 2's
 			// precheck (json 2) parks and the abort kills it.
 			const root = setup("rule-two-paths", { json: ["pass", "pass", "park"] });
@@ -468,7 +468,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(text).toContain("f0.ts");
 		});
 
-		it("ast_grep_replace structural dry run: an abort kills the scan and returns a plain aborted result", async () => {
+		it("rule dry run: abort is plain aborted", async () => {
 			const root = setup("rule-dry", { json: ["park"] });
 			const result = await run(
 				"ast_grep_replace",
@@ -481,7 +481,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			);
 		});
 
-		it("ast_grep_replace structural apply: an abort that kills the count scan rewrites no file", async () => {
+		it("rule apply: count-scan abort writes nothing", async () => {
 			// Call 0 is the precheck, call 1 the runner's count scan, parked here.
 			const root = setup("rule-count", { json: ["pass", "park"] });
 			const result = await run(
@@ -496,7 +496,7 @@ describe.skipIf(process.platform === "win32" || !fs.existsSync(REAL_SG))(
 			expect(rewritten(root)).toBe(0);
 		});
 
-		it("ast_grep_replace structural apply: a write that fails after an abort says files may be written", async () => {
+		it("rule apply: a failed write keeps its error", async () => {
 			const root = setup("rule-fail", { updateAll: "fail" });
 			const pending = run(
 				"ast_grep_replace",

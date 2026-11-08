@@ -1136,7 +1136,7 @@ export class SgRunner {
 			// #5097: an abort lands before the write or not at all. A killed
 			// `--update-all` leaves part of the files rewritten.
 			if (options.signal?.aborted) {
-				return { matches: [], error: "operation aborted", aborted: true };
+				return { matches: [], error: "operation aborted" };
 			}
 			const applyResult = await this.spawnResolved(
 				command,

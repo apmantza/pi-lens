@@ -117,7 +117,7 @@ describe.skipIf(process.platform === "win32")(
 			);
 		};
 
-		it("kills the scan child within 2 s and leaves the saved cycle row in place", async () => {
+		it("kills madge in 2 s and keeps the saved row", async () => {
 			await call(new AbortController().signal);
 			const saved = madgeRow();
 			expect(saved).toContain("a.ts");
