@@ -513,11 +513,15 @@ export function reconcileWidgetDisposition(
 			continue;
 		}
 		const decision = citedAnchorMarks(anchor, group);
-		// A refused anchor marks nothing at all: its rows stay live, and
-		// `normalized` re-tags nothing because it looks no disposition up for
-		// them (it still retires a row the store held ONLY because a mark
-		// suppressed it — #3158 rule 3, and `mode=all` never lists those rows).
-		if (decision.marks === "refused") continue;
+		// A refused anchor feeds no bytes to the filter pass, and the ONE place
+		// that enforces the refusal is the lookup in `normalized` below: a
+		// refused group still runs the filter, so its rows keep the same
+		// `active` bookkeeping as any other group, and no disposition of any
+		// kind is looked up for them (a row the store held ONLY because a mark
+		// suppressed it is still retired — #3158 rule 3).
+		// Skipping the pass here instead was tried and is not the enforcement:
+		// neutering that `continue` left every test green, because a row the
+		// filter dropped is kept live by the lookup guard anyway (#5044 r2).
 		const anchorContent = decision.marks === "strict" ? decision.content : "";
 		for (const d of applyDispositions(group, cwd, anchor, anchorContent)) {
 			active.add(d);
