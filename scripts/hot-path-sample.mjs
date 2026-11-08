@@ -30,6 +30,13 @@
  *                    `createWorkspaceDiagnosticsCacheContext` loading a
  *                    persisted cache of 200 / 2000 entries, then one `lookup`
  *                    per file.
+ *   tool_call_first_touch /
+ *   tool_result_edit the registered `tool_call` of the first read of a
+ *                    42-line TypeScript file the process has not seen (the
+ *                    first touch, where the complexity baseline is taken,
+ *                    #5087), and the `tool_result` of an edit to it after
+ *                    the bytes change on disk. The row checks that a
+ *                    `tool_result` latency row for the file reached the log.
  *   tool_call_bash_home_overcap
  *                    three consecutive `bash` calls through the registered
  *                    `tool_call` handler, in a session whose cwd is a non-git
@@ -247,12 +254,97 @@ async function sample(tree, scratch) {
 			throw new Error(`${metric}: replay served ${served} of ${count} entries`);
 		}
 	}
+	Object.assign(result, await timeEditRoundTrip(imp, handlers, project));
 	result.tool_call_bash_home_overcap = await timeToolCallsAtOvercapHome(
 		imp,
 		handlers,
 		scratch,
 	);
 	return result;
+}
+
+/**
+ * Time one agent edit through the registered hooks, on a file the process has
+ * not seen: the `tool_call` of its first read (the first touch, where the
+ * per-file complexity baseline is taken, #5087), then the edit's `tool_result`
+ * after the bytes change on disk. The `edit` call's own `tool_call` runs
+ * between them, untimed. The row checks that a `tool_result` latency row for
+ * the file reached the log, so a tree whose handler skips the edit path is a
+ * harness failure, not a fast row.
+ */
+async function timeEditRoundTrip(imp, handlers, project) {
+	const toolCall = handlers.get("tool_call")?.[0];
+	const toolResult = handlers.get("tool_result")?.[0];
+	if (!toolCall || !toolResult)
+		throw new Error("no tool_call or tool_result handler registered");
+	const file = path.join(project, "src", "edited.ts");
+	const before = fixtureSource(SMALL_LINES);
+	fs.writeFileSync(file, before);
+	const ctx = makeCtx(project);
+	const latency = await imp("clients/latency-logger.js");
+	await latency.flushLatencyLog();
+	const logPath = latency.getLatencyLogPath();
+	const logStart = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0;
+
+	const tool_call_first_touch = await timed(() =>
+		toolCall(
+			{
+				type: "tool_call",
+				toolName: "read",
+				toolCallId: "hot-path-read",
+				input: { path: file },
+			},
+			ctx,
+		),
+	);
+	await toolResult(
+		{
+			type: "tool_result",
+			toolName: "read",
+			toolCallId: "hot-path-read",
+			input: { path: file },
+			content: [{ type: "text", text: before }],
+		},
+		ctx,
+	);
+	const edit = { oldText: "\treturn b;\n}", newText: "\treturn b + a;\n}" };
+	await toolCall(
+		{
+			type: "tool_call",
+			toolName: "edit",
+			toolCallId: "hot-path-edit",
+			input: { path: file, edits: [edit] },
+		},
+		ctx,
+	);
+	fs.writeFileSync(file, before.replace(edit.oldText, edit.newText));
+	const tool_result_edit = await timed(() =>
+		toolResult(
+			{
+				type: "tool_result",
+				toolName: "edit",
+				toolCallId: "hot-path-edit",
+				input: { path: file, edits: [edit] },
+				content: [{ type: "text", text: "Successfully replaced text." }],
+			},
+			ctx,
+		),
+	);
+	await latency.flushLatencyLog();
+	const rows = fs
+		.readFileSync(logPath, "utf8")
+		.slice(logStart)
+		.split("\n")
+		.filter(
+			(line) =>
+				line.includes('"type":"tool_result"') && line.includes("edited.ts"),
+		).length;
+	if (rows === 0) {
+		throw new Error(
+			"tool_result_edit: no tool_result latency row for the edit",
+		);
+	}
+	return { tool_call_first_touch, tool_result_edit };
 }
 
 /**
