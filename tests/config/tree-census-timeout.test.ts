@@ -77,7 +77,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SgNode } from "@ast-grep/napi";
 import { describe, expect, it } from "vitest";
-import { isWithinForm } from "../../clients/path-utils.js";
+import {
+	isWithinForm,
+	normalizeEphemeralMapKey,
+} from "../../clients/path-utils.js";
 import { parseRoot } from "../support/ast-census.js";
 import {
 	assertNonEmptyScan,
@@ -180,10 +183,21 @@ type NamespaceRef =
  * Is this file inside `tests/`, the only tree whose helpers the census reads?
  * The owner's text-only form check (`clients/path-utils.ts`) and not
  * `isUnderDir`: these paths include plant modules that never exist on disk, so
- * the identity axis has nothing to resolve.
+ * the identity axis has nothing to resolve. Both operands take the owner's
+ * slash form first, because `path.resolve` spells a win32 helper as
+ * `C:\checkout\tests\config\helper.ts` and `isWithinForm` compares forward
+ * slashes: on the Windows leg that spelling read as a boundary, every helper
+ * import went `quiet`, and the helper plants found nothing (#4967).
  */
+function underTestsForm(child: string, testsDir: string): boolean {
+	return isWithinForm(
+		normalizeEphemeralMapKey(child),
+		normalizeEphemeralMapKey(testsDir),
+	);
+}
+
 function underTests(absolute: string): boolean {
-	return isWithinForm(absolute, TESTS_DIR + path.sep);
+	return underTestsForm(absolute, TESTS_DIR);
 }
 
 /** The source file a specifier names, or `null` when nothing readable is there. */
@@ -1642,6 +1656,16 @@ describe("tree census timeout (#4828)", () => {
 		title: '"c"',
 		reason: "pre-existing, census widened in #4967",
 	};
+	it("keeps a win32-spelled helper module inside the tests/ tree (#4967)", () => {
+		// `path.resolve` spells a win32 helper with backslashes and
+		// `isWithinForm` compares forward slashes, so the raw host form read as
+		// a boundary and every helper import went quiet. Pinned as text, so a
+		// posix lane catches it too.
+		const dir = "C:\\checkout\\tests";
+		expect(underTestsForm(`${dir}\\config\\helper.ts`, dir)).toBe(true);
+		expect(underTestsForm("C:\\checkout\\clients\\lsp.ts", dir)).toBe(false);
+	});
+
 	it("plants: flags a refused member no baseline row names, admits one a row names", () => {
 		expect(admissionVerdict([KEY], []).unadmitted).toEqual([KEY]);
 		expect(admissionVerdict([KEY], [ROW]).unadmitted).toEqual([]);
