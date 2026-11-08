@@ -84,6 +84,10 @@ vi.mock("../../clients/bootstrap.js", async () => {
 
 import { CacheManager } from "../../clients/cache-manager.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import {
+	complexityBaselineKey,
+	MAX_BASELINE_FILES,
+} from "../../clients/metrics/complexity-baseline.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
@@ -172,8 +176,10 @@ describe("#2939 M7 — Escape releases the complexity-baseline demand", () => {
 	});
 });
 
-describe("#4125 S3 — the baseline memo keeps the path, not the analysis", () => {
-	it("analyzes a file once and holds only its path", async () => {
+// #5087 reversed #4125 S3's "path, not the analysis": the store now holds the
+// file's function tables, bounded by an LRU instead.
+describe("#4125 S3 — the baseline store analyzes each file once, under a bound", () => {
+	it("analyzes a file once and holds one entry for it", async () => {
 		vi.useFakeTimers();
 		for (let call = 0; call < 2; call++) {
 			const pending = runHandlerExpectingNoThrow(() =>
@@ -185,6 +191,12 @@ describe("#4125 S3 — the baseline memo keeps the path, not the analysis", () =
 		}
 
 		expect(analyzedPaths).toEqual([filePath]);
-		expect([...runtime.complexityBaselines]).toEqual([filePath]);
+		expect(runtime.complexityBaselines.size).toBe(1);
+		expect(
+			runtime.complexityBaselines.has(complexityBaselineKey(filePath)),
+		).toBe(true);
+		expect(runtime.complexityBaselines.getMaxEntries()).toBe(
+			MAX_BASELINE_FILES,
+		);
 	});
 });

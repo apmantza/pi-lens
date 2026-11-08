@@ -17,6 +17,7 @@ import {
 } from "../../clients/mutation-bridge.js";
 import { countFileLines } from "../../clients/read-guard-tool-lines.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { complexityBaselineKey } from "../../clients/metrics/complexity-baseline.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import type { TreeSitterClient } from "../../clients/tree-sitter-client.js";
 import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
@@ -198,7 +199,9 @@ describe("handleToolCall", () => {
 					}),
 				),
 			);
-			expect(runtime.complexityBaselines.has(filePath)).toBe(false);
+			expect(
+				runtime.complexityBaselines.has(complexityBaselineKey(filePath)),
+			).toBe(false);
 			expect(
 				getDegradationSummary().some(
 					(entry) => entry.kind === "startup-analyzer-disabled",
@@ -220,7 +223,10 @@ describe("handleToolCall", () => {
 				"src/done.ts",
 				"export {};\n",
 			);
-			runtime.complexityBaselines.add(baselined);
+			runtime.complexityBaselines.set(complexityBaselineKey(baselined), {
+				main: { kind: "unavailable", reason: "test" },
+				last: undefined,
+			});
 			// Only the two .java reads should record: the rest are a data file, a
 			// measured file already baselined, a vendored file, and a read with
 			// complexity disabled.
@@ -243,7 +249,9 @@ describe("handleToolCall", () => {
 					),
 				);
 			}
-			expect(runtime.complexityBaselines.has(baselined)).toBe(true);
+			expect(
+				runtime.complexityBaselines.has(complexityBaselineKey(baselined)),
+			).toBe(true);
 			expect(runtime.complexityBaselines.size).toBe(1);
 			expect(
 				getDegradationSummary()

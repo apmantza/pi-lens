@@ -40,6 +40,10 @@ import {
 	resolveTreeSitterLanguage,
 } from "./tree-sitter-shared.js";
 import {
+	captureComplexityBaseline,
+	complexityBaselineKey,
+} from "./metrics/complexity-baseline.js";
+import {
 	classifyMutatingTool,
 	isProviderReplayCall,
 	readMutationPathField,
@@ -1330,8 +1334,11 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		);
 	}
 
-	// Record complexity baseline for historical tracking (booboo/tdi).
-	// Not shown inline - just captured for delta analysis.
+	// Record the file's complexity baseline at its first touch (#5087): the
+	// function table of the bytes on disk before this tool runs, and of the
+	// file on the default branch. The edit's `tool_result` judges its delta
+	// against them. The metrics-history snapshot (`/lens-tdi`) is taken here
+	// too, until #5090 retires it.
 	//
 	// #2467: every client-free guard runs FIRST, so a tool call that cannot
 	// produce a baseline never loads the analyzer graph. This await used to sit
@@ -1352,12 +1359,35 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		!getFlag("no-complexity") &&
 		!isExternalOrVendor &&
 		filePath &&
-		!runtime.complexityBaselines.has(filePath) &&
+		!runtime.complexityBaselines.has(complexityBaselineKey(filePath)) &&
 		isComplexitySupportedFile(filePath)
 	) {
-		// Fail open: no clients means no baseline for this call, counted once in
-		// the ledger. A complexity baseline is delta-analysis bookkeeping — it
-		// must never be the reason a user's tool call fails or stalls.
+		// #4220: the session is captured before the first await, and every
+		// write below lands in it or nowhere. A `/new` inside these awaits
+		// retires it; the successor's session_start clears the store, and a
+		// late write would otherwise put this session's file in the
+		// successor's store, which then never takes its own baseline.
+		const baselineSession = runtime.captureSessionGeneration();
+		const baseline = await bounded(
+			captureComplexityBaseline(filePath, deps.ctx.signal),
+			{
+				ms: COMPLEXITY_BASELINE_BUDGET_MS,
+				signal: deps.ctx.signal,
+				hook: "tool_call",
+				label: "complexity-baseline",
+			},
+		);
+		if (baseline) {
+			baselineSession.guardedWrite(filePath, () =>
+				runtime.complexityBaselines.set(
+					complexityBaselineKey(filePath),
+					baseline,
+				),
+			);
+		}
+		// Fail open: no clients means no snapshot for this call, counted once
+		// in the ledger. A complexity baseline is delta-analysis bookkeeping —
+		// it must never be the reason a user's tool call fails or stalls.
 		const complexityClient = (
 			await requestBootstrapClients({
 				reason: "tool-call-complexity-baseline",
@@ -1378,18 +1408,21 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				signal: deps.ctx.signal,
 			})
 		)?.complexityClient;
-		const baseline = await complexityClient?.analyzeFile(filePath);
-		if (baseline) {
-			runtime.complexityBaselines.add(filePath);
+		const snapshot = baseline
+			? await complexityClient?.analyzeFile(filePath)
+			: undefined;
+		if (snapshot && baselineSession.isCurrent()) {
 			const { captureSnapshot } = await import("./metrics-history.js");
-			captureSnapshot(filePath, {
-				maintainabilityIndex: baseline.maintainabilityIndex,
-				cognitiveComplexity: baseline.cognitiveComplexity,
-				maxNestingDepth: baseline.maxNestingDepth,
-				linesOfCode: baseline.linesOfCode,
-				maxCyclomatic: baseline.maxCyclomaticComplexity,
-				entropy: baseline.codeEntropy,
-			});
+			baselineSession.guardedWrite(filePath, () =>
+				captureSnapshot(filePath, {
+					maintainabilityIndex: snapshot.maintainabilityIndex,
+					cognitiveComplexity: snapshot.cognitiveComplexity,
+					maxNestingDepth: snapshot.maxNestingDepth,
+					linesOfCode: snapshot.linesOfCode,
+					maxCyclomatic: snapshot.maxCyclomaticComplexity,
+					entropy: snapshot.codeEntropy,
+				}),
+			);
 		}
 	} else if (
 		getFlag("no-complexity") &&
@@ -1956,6 +1989,14 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
  * is the per-await bound. Measured in PR #4483's body.
  */
 export const PRE_EDIT_CAPTURE_BUDGET_MS = 500;
+
+/**
+ * #5087: how long a `tool_call` waits for a file's first-touch complexity
+ * baseline (one parse of the file, one `git for-each-ref`, one `git show` and
+ * one parse of the default branch's copy). A capture past it is dropped and
+ * the next touch tries again. Per-await, like {@link PRE_EDIT_CAPTURE_BUDGET_MS}.
+ */
+export const COMPLEXITY_BASELINE_BUDGET_MS = 500;
 
 type PreEditCaptureResult =
 	| Awaited<

@@ -34,6 +34,10 @@ import {
 } from "./path-utils.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
 import { BoundedFifoMap, BoundedLruCache } from "./bounded-cache.js";
+import {
+	type ComplexityBaseline,
+	MAX_BASELINE_FILES,
+} from "./metrics/complexity-baseline.js";
 import { type AnalysisAnchor, owedByContentOnly } from "./line-alignment.js";
 import {
 	type PartialApplyPending,
@@ -629,7 +633,15 @@ export class RuntimeCoordinator {
 		diagnosticsSurfaced: 0,
 		coldSnapshotTouches: 0,
 	};
-	private _complexityBaselines = new Set<string>();
+	/**
+	 * #5087: per-file complexity baselines, keyed by
+	 * `complexityBaselineKey`. Bounded (LRU), and every write goes through a
+	 * session handle captured before the write's first await (#4220).
+	 */
+	private _complexityBaselines = new BoundedLruCache<
+		string,
+		ComplexityBaseline
+	>(MAX_BASELINE_FILES);
 	private readonly _fixedThisTurn = new PathKeyedMap<true>(normalizeMapKey);
 	private readonly _writtenThisTurn = new PathKeyedMap<true>(normalizeMapKey);
 	private readonly _autofixDemotedThisTurn = new PathKeyedMap<true>(
@@ -2937,7 +2949,7 @@ export class RuntimeCoordinator {
 		return this._turnSummary;
 	}
 
-	get complexityBaselines(): Set<string> {
+	get complexityBaselines(): BoundedLruCache<string, ComplexityBaseline> {
 		return this._complexityBaselines;
 	}
 

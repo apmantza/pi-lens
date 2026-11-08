@@ -1217,7 +1217,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:0c4f0c61~51275360": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:021bed00~f352777b": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1227,7 +1227,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:171055f5~9e0a2421": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:0c4f0c61~51275360": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1288,7 +1288,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~eab210c1": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~bf3fc280": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -2354,6 +2354,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// call sites and `findGlobalBinary` in `isSgAvailableAsync`); the worklist
 	// shrinks with the sweep, nothing new is unbounded.
 	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
+	// #5087: the first-touch baseline and the edit's re-measure. Its awaits are
+	// the shared parser (init, parse) and two leaf-bounded `git` spawns
+	// (GIT_TIMEOUT_MS); both hook callers hold the whole capture under bounded()
+	// with the hook's signal, so a second bound here would add a timer for the
+	// same deadline.
+	"clients/metrics/complexity-baseline.ts": 9,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -2952,6 +2958,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The document-symbol enrichment uses the tool_call's ctx.signal, absent " +
 		"only in a harness. Its inner LSP budget and the outer EXPANSION_BUDGET_MS " +
 		"wall bound are both live; the outer bound also releases the hook on Escape.",
+	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~bae397dc":
+		"The first-touch complexity baseline (#5087) uses the tool_call's " +
+		"ctx.signal, absent only in a harness. #2523 gives tool_call no budget " +
+		"of its own, so the capture carries COMPLEXITY_BASELINE_BUDGET_MS " +
+		"(500 ms); that wall bound is always live, and a capture it abandons " +
+		"writes nothing (the next touch tries again).",
 	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~ce33f035":
 		"The pre-edit linter capture (#4483) uses the tool_call's ctx.signal, " +
 		"absent only in a harness. #2523 gives tool_call no budget of its own, " +

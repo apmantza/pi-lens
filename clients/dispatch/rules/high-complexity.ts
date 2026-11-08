@@ -7,8 +7,8 @@ import { isTestSuiteOrganizer } from "./framework-call-noise.js";
 // Defaults match the historical hardcoded values so behavior is unchanged for
 // projects without a config. The complexity override is read from the
 // per-dispatch context.
-const DEFAULT_HIGH_COMPLEXITY_THRESHOLD = 15;
-const DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD = 6;
+export const DEFAULT_HIGH_COMPLEXITY_THRESHOLD = 15;
+export const DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD = 6;
 
 export const highComplexityRule: FactRule = {
 	id: "high-complexity",
