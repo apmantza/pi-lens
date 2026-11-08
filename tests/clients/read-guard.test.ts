@@ -26,7 +26,10 @@ import { setupTestEnvironment } from "./test-utils.js";
 const fileTimeState = vi.hoisted(() => ({ hasChanged: false }));
 
 // Suppress log writes — tests care about verdicts, not log output
-vi.mock("../../clients/read-guard-logger.js", () => ({
+vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../clients/read-guard-logger.js")
+	>()),
 	logReadGuardEvent: vi.fn(),
 	getReadGuardLogPath: vi.fn(() => "/dev/null"),
 }));
