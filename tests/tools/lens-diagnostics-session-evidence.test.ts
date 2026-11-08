@@ -132,6 +132,20 @@ describe("session diagnostic evidence", () => {
 			status: "unverified",
 			readsClean: false,
 		},
+		{
+			// Recurrence prevented: #5287. A final snapshot with no finding is also
+			// what a file no check completed on leaves behind (a kind nothing can
+			// check, `--no-lsp` TypeScript); the projection dropped its reason, so
+			// this row read `✓`.
+			state: "no check completed",
+			seed: (target) =>
+				recordDiagnostics(target, [], undefined, undefined, {
+					reason: "no analyzer handles this file type",
+					inapplicable: true,
+				}),
+			status: "unverified",
+			readsClean: false,
+		},
 	];
 
 	it.each(STATES)(
@@ -152,6 +166,171 @@ describe("session diagnostic evidence", () => {
 			);
 		},
 	);
+
+	// Recurrence prevented: #5287. The line that names the files no check
+	// completed on is one per call whatever the count (bounded observability):
+	// five names and a remainder, never a row per file.
+	it("names at most five unchecked files and counts the rest (#5287)", async () => {
+		const reason = "no analyzer handles this file type";
+		for (let index = 0; index < 7; index++)
+			recordDiagnostics(file(`u${index}.zzz`), [], undefined, undefined, {
+				reason,
+				inapplicable: true,
+			});
+		recordDiagnostics(file("ok.ts"), []);
+
+		const result = await run();
+		const text = result.content[0]?.text ?? "";
+
+		// ok.ts is a completed check; the seven kindless files neither hold it
+		// back nor count into it (#5391 review F1).
+		expect(text).toContain("No issues across 1 file diagnosed this session. ✓");
+		expect(text).toContain("⚠ 7 files not checked");
+		for (let index = 0; index < 5; index++)
+			expect(text).toContain(`u${index}.zzz: ${reason}`);
+		expect(text).not.toContain("u5.zzz");
+		expect(text).toContain("+2 more");
+		expect(result.details).toMatchObject({ uncheckedFileCount: 7 });
+		expect(compact(result)).toContain("7 unchecked");
+		expect(compact(result)).not.toContain("— clean");
+	});
+
+	// Recurrence prevented: #5391 review F1 and F3. One kindless file (notes.txt,
+	// LICENSE, .env) flipped the whole session to `unverified`, dropped the ✓
+	// for the checked files and printed a "Next check" no check could answer;
+	// mode=full kept the ✓. The count in the ✓ line also read every visible
+	// file, unchecked ones included.
+	it("one file no check can cover does not hold the checked files back", async () => {
+		for (const name of ["a.ts", "b.ts", "c.ts"])
+			recordDiagnostics(file(name), []);
+		recordDiagnostics(file("notes.zzz"), [], undefined, undefined, {
+			reason: "no analyzer handles this file type",
+			inapplicable: true,
+		});
+
+		const result = await run();
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain(
+			"No issues across 3 files diagnosed this session. ✓",
+		);
+		expect(text).toContain("⚠ 1 file not checked");
+		expect(text).not.toContain("Next check");
+		expect(result.details).toMatchObject({
+			validationStatus: "no-matching-findings",
+			uncheckedFileCount: 1,
+		});
+		expect(result.details).not.toHaveProperty("nextCheck");
+	});
+
+	// Recurrence prevented: #5391 review V1 (Greptile thread PRRT_kwDORt8rec608xZN).
+	// A `.pi-lens.json` rule policy drops a finding and re-summarizes the file,
+	// and that re-summary rebuilt the record from the reason alone: a generated
+	// file no check can cover read as coverable again, so the session reopened
+	// as unverified and named it as the next check.
+	it("a policy re-summary keeps a generated file no check can cover (#5391 V1)", async () => {
+		fs.writeFileSync(
+			path.join(cwd, ".pi-lens.json"),
+			JSON.stringify({ rules: { "no-eval": { disable: ["no-eval"] } } }),
+		);
+		for (const name of ["a.ts", "b.ts", "c.ts"])
+			recordDiagnostics(file(name), []);
+		recordDiagnostics(
+			file("gen2.ts"),
+			[
+				{
+					severity: "warning",
+					semantic: "advisory",
+					tool: "example",
+					rule: "no-eval",
+					message: "eval in generated code",
+					line: 1,
+				},
+			],
+			undefined,
+			undefined,
+			{ reason: "generated file", inapplicable: true },
+		);
+
+		const result = await run();
+		const text = result.content[0]?.text ?? "";
+
+		// Premise: the policy drops the only finding, so the file is re-summarized.
+		expect(text).not.toContain("eval in generated code");
+		expect(text).toContain(
+			"No issues across 3 files diagnosed this session. ✓",
+		);
+		expect(text).toContain("⚠ 1 file not checked");
+		expect(text).not.toContain("Session cache unverified");
+		expect(text).not.toContain("Next check");
+		expect(result.details).toMatchObject({
+			validationStatus: "no-matching-findings",
+			uncheckedFileCount: 1,
+		});
+		expect(result.details).not.toHaveProperty("nextCheck");
+	});
+
+	// Recurrence prevented: #5391 review B6. The next check skipped a file a
+	// check could still cover, listing only stale and pending paths.
+	it("a coverable unchecked file is a next check; a file nothing can check is not", async () => {
+		const coverable = file("a.lua");
+		recordDiagnostics(coverable, [], undefined, undefined, {
+			reason: "no primary checker is enabled for this kind",
+		});
+		recordDiagnostics(file("notes.zzz"), [], undefined, undefined, {
+			reason: "no analyzer handles this file type",
+			inapplicable: true,
+		});
+
+		const result = await run();
+
+		expect(result.details).toMatchObject({
+			validationStatus: "unverified",
+			nextCheck: { paths: [coverable] },
+		});
+	});
+
+	// Recurrence prevented: #5391 review F2 and B4. mode=delta, the tool's
+	// default, answered "No issues in the current turn delta." and `delta —
+	// clean` right after a write no check completed on.
+	it("an empty delta names the file no check completed on", async () => {
+		recordDiagnostics(file("notes.zzz"), [], undefined, undefined, {
+			reason: "no analyzer handles this file type",
+			inapplicable: true,
+		});
+
+		const result = await run({ mode: "delta" });
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("⚠ 1 file not checked");
+		expect(text).toContain("notes.zzz: no analyzer handles this file type");
+		expect(result.details).toMatchObject({ uncheckedFileCount: 1 });
+		expect(compact(result)).toContain("1 unchecked");
+	});
+
+	// Recurrence prevented: #5391 review B5. A checked file holding only a hint
+	// beside an unchecked one made `unchecked >= filesWithIssues` true, so the
+	// one-liner said `unchecked` for a session with a checked file.
+	it("a hint-only checked file keeps the one-liner from reading all unchecked", async () => {
+		recordDiagnostics(file("hint.ts"), [
+			{
+				severity: "hint",
+				semantic: "none",
+				tool: "example",
+				message: "a hint",
+				line: 1,
+			},
+		]);
+		recordDiagnostics(file("notes.zzz"), [], undefined, undefined, {
+			reason: "no analyzer handles this file type",
+			inapplicable: true,
+		});
+
+		const line = compact(await run());
+
+		expect(line).toContain("1 unchecked");
+		expect(line).not.toContain("— unchecked");
+	});
 
 	it.each([{ mode: "all" }, { source: "session", scope: "workspace" }])(
 		"discloses pending zero evidence for %j",

@@ -805,6 +805,7 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/real-harness/bridge-reload.test.ts",
 			"tests/real-harness/child-exit.test.ts",
 			"tests/real-harness/clean-verdict.test.ts",
+			"tests/real-harness/unchecked-report.test.ts",
 			"tests/real-harness/diagnostic-provenance.test.ts",
 			"tests/real-harness/lifecycle.test.ts",
 			"tests/real-harness/negative.test.ts",

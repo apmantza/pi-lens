@@ -261,7 +261,9 @@ describe("lens_diagnostics mode=all agrees with a same-minute mode=full (#1634 c
 	// restores, so it is the record read here.
 	it("a full scan retires the unchecked reason of the file it confirmed and keeps the other's", async () => {
 		for (const p of [file, other])
-			recordDiagnostics(p, [], undefined, undefined, IN_FLIGHT_REASON);
+			recordDiagnostics(p, [], undefined, undefined, {
+				reason: IN_FLIGHT_REASON,
+			});
 		const service = makeLspServiceDouble({
 			runWorkspaceDiagnostics: vi.fn(async () => [
 				{ filePath: file, diagnostics: [], count: 0 },

@@ -155,7 +155,7 @@ describe("widget sidecar restore and diagnostics bus", () => {
 					[],
 					undefined,
 					undefined,
-					state === "unchecked" ? "checker unavailable" : undefined,
+					state === "unchecked" ? { reason: "checker unavailable" } : undefined,
 				);
 
 			await restore();

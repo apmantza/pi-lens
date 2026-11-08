@@ -46,8 +46,8 @@ import {
 } from "../clients/deadline-utils.js";
 import {
 	applyAuxiliarySuppressions,
-	configDisabledAuxiliaryLspServerIds,
-	enabledOptInAuxiliaryLspServerIds,
+	auxiliaryNotRunSentences,
+	auxiliaryServersNotRun,
 	isOptInAuxiliaryServerId,
 	dropExcludedServers,
 	retagAuxiliaryDiagnostics,
@@ -57,6 +57,7 @@ import {
 	loadProjectRulePolicy,
 } from "../clients/dispatch/finding-policy.js";
 import { readFileContent } from "../clients/dispatch/runners/utils.js";
+import { NO_SERVER_REASON } from "../clients/dispatch/types.js";
 import { lookForOutOfBandChanges } from "../clients/out-of-band-changes.js";
 import { hasStrictDispositionMarks } from "../clients/diagnostic-dispositions.js";
 import { dispositionSuppressedLine } from "../clients/finding-delivery-gate.js";
@@ -395,7 +396,7 @@ function lspUnavailableMessage(
 		: "";
 	const reason =
 		(health.serverCountAttempted ?? 0) === 0
-			? "no LSP server configured"
+			? NO_SERVER_REASON
 			: "no LSP client is currently ready";
 	const stale =
 		(health.mergedCount ?? 0) > 0
@@ -598,12 +599,7 @@ export function createLspDiagnosticsTool(
 			// operator switched off, and an opt-in one they turned on (the all-server
 			// door never starts it), so the report names both as not run.
 			const excludeServerIds = getFlag
-				? new Set([
-						...configDisabledAuxiliaryLspServerIds((name) =>
-							getFlag(name, cwd),
-						),
-						...enabledOptInAuxiliaryLspServerIds((name) => getFlag(name, cwd)),
-					])
+				? auxiliaryServersNotRun((name) => getFlag(name, cwd))
 				: undefined;
 
 			const lspService = getService();
@@ -2185,20 +2181,9 @@ async function runFileDiagnostics(
 			: [];
 	// #4956 F2: an enabled opt-in server is not "switched off"; the all-server
 	// door simply does not start it (its findings arrive with edits).
-	const switchedOffServerIds = notRunServerIds.flatMap((id) =>
-		isOptInAuxiliaryServerId(id) ? [] : [id],
-	);
-	const optInNotRunServerIds = notRunServerIds.flatMap((id) =>
-		isOptInAuxiliaryServerId(id) ? [id] : [],
-	);
 	const noAuxiliaryLine = [
 		"No auxiliary findings.",
-		...(switchedOffServerIds.length > 0
-			? [`Switched off, not run: ${switchedOffServerIds.join(", ")}.`]
-			: []),
-		...(optInNotRunServerIds.length > 0
-			? [`Opt-in, not run by this check: ${optInNotRunServerIds.join(", ")}.`]
-			: []),
+		...auxiliaryNotRunSentences(notRunServerIds),
 	].join(" ");
 
 	let text: string;

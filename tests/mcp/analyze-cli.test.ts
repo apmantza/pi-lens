@@ -206,13 +206,21 @@ describe("pi-lens-analyze bin", { retry: 2 }, () => {
 		expect(parsed.hookSpecificOutput?.additionalContext).toContain("pi-lens:");
 	}, 45_000);
 
-	it("stays silent (no output) on a clean file", async () => {
+	// Recurrence prevented: #5287. Zero findings exited 0 with no output, which
+	// is also what the default cold `--no-lsp` pass over TypeScript produces: no
+	// check of the kind runs there, so silence read as "clean". The default pass
+	// now says what it did not check; silence is for a file a check completed on
+	// (the warm-route test below).
+	it("names a file no check completed on instead of staying silent (#5287)", async () => {
 		const { stdout, code } = await runBin([
 			`--file=${cleanFile}`,
 			`--cwd=${tmpDir}`,
 		]);
 		expect(code).toBe(0);
-		expect(stdout.trim()).toBe("");
+		expect(stdout).toContain("pi-lens: clean.ts");
+		expect(stdout).toContain(
+			"not checked: no primary checker is enabled for this kind",
+		);
 	}, 45_000);
 
 	// #1271: `main()` used to await the stdin read BEFORE looking at `--file`,
@@ -1299,6 +1307,80 @@ describe("pi-lens-analyze warm hook route", { retry: 2 }, () => {
 			removeTempDirSync(cwd);
 		}
 	}, 45_000);
+});
+
+// Recurrence prevented: #5287. The CLI exited silent on `counts.diagnostics ===
+// 0` alone. The verdict is the only thing that makes zero findings a clean file:
+// a completed check is silent, an unchecked one is named, and a reply from a
+// warm server built before the field (no verdict at all) is named too.
+describe("pi-lens-analyze warm route: silence needs a completed check (#5287)", () => {
+	const noFindings = {
+		counts: {
+			diagnostics: 0,
+			blockers: 0,
+			warnings: 0,
+			advisories: 0,
+			fixed: 0,
+		},
+		diagnostics: [],
+	};
+	const rows = [
+		{
+			name: "a completed check is silent",
+			verdict: { checked: true, tier: "primary", runnerIds: ["lsp"] },
+			expected: undefined,
+		},
+		{
+			name: "an unchecked verdict is named with its reason",
+			verdict: { checked: false, reason: "no analyzer handles this file type" },
+			expected: "not checked: no analyzer handles this file type",
+		},
+		{
+			name: "a reply with no verdict is not clean",
+			verdict: undefined,
+			expected: "did not report whether a check completed",
+		},
+	] as const;
+
+	it.each(rows)(
+		"$name",
+		async (row) => {
+			const cwd = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-cli-verdict-"),
+			);
+			const file = path.join(cwd, "notes.zzz");
+			fs.writeFileSync(file, "plain notes\n");
+			const stub = await startWarmAnalyzeStub(cwd, {
+				filePath: file,
+				cwd,
+				...noFindings,
+				...(row.verdict !== undefined && { verdict: row.verdict }),
+			});
+			try {
+				const { stdout, code } = await runBin([
+					`--file=${file}`,
+					`--cwd=${cwd}`,
+					"--hook",
+				]);
+				expect(code).toBe(0);
+				expect(stub.requests).toHaveLength(1);
+				if (row.expected === undefined) {
+					expect(stdout.trim()).toBe("");
+					return;
+				}
+				const parsed = JSON.parse(stdout) as {
+					hookSpecificOutput?: { additionalContext?: string };
+				};
+				expect(parsed.hookSpecificOutput?.additionalContext).toContain(
+					row.expected,
+				);
+			} finally {
+				await stub.close();
+				removeTempDirSync(cwd);
+			}
+		},
+		45_000,
+	);
 });
 
 // #4300: invalid input still crosses the real standalone host startup policy.
