@@ -302,9 +302,23 @@ describe("observed runner collect-later tier (#2116)", () => {
 			await settleTicks();
 			// The retired session's queued rerun never starts.
 			expect(state.starts).toBe(2);
-			gates[1]?.();
-			await settlePendingRunnerFindingsForTests();
+			// Nor does the retired run, settling, release the new session's
+			// flight: a write now queues behind run 2 instead of running beside it.
+			// Run 1 settled fast and observed the runner inline; keep it slow.
+			observeRunnerLatency({
+				projectRoot,
+				runnerId: "reset-runner",
+				durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
+			});
+			await write(registry, "reset-runner", filePath, 2);
 			expect(state.starts).toBe(2);
+			gates[1]?.();
+			await settleTicks();
+			expect(state.starts).toBe(3);
+			expect(state.inFlight).toBe(1);
+			gates[2]?.();
+			await settlePendingRunnerFindingsForTests();
+			expect(state.starts).toBe(3);
 		});
 	});
 
