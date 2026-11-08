@@ -202,8 +202,12 @@ async function applyRewrite<R extends { error?: string | undefined }>(
 	};
 	// The matched files are what `--update-all` writes (a dry run whose output
 	// was cut off is an error, never a partial list), so they are judged
-	// against the session's writable roots before the first write. The root is
-	// set here: `missingRootRefusal` ran first.
+	// against the session's writable roots before this call writes. The
+	// structural apply makes one call per scan path, so with paths [in-root,
+	// sibling] the in-root file is already rewritten when the sibling path is
+	// refused; the pattern apply judges the whole list at once (#5432 review
+	// F1, accepted residual). The root is set here: `missingRootRefusal` ran
+	// first.
 	const refused = refuseOutOfRootWrites(
 		files,
 		options?.sessionRoot ?? "",
