@@ -579,7 +579,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 3 -> 5 (#4944): `dropExcludedServers` keeps the rows and the
 		// coverage-gap names of servers that are not switched off, two
 		// `Array.prototype.filter` calls, not a delivery filter.
-		"clients/dispatch/auxiliary-lsp.ts": 5,
+		// 5 -> 7 (#5287): `auxiliaryNotRunSentences` splits the not-run servers
+		// into switched-off and opt-in ones, two `Array.prototype.filter` calls,
+		// not a delivery filter.
+		"clients/dispatch/auxiliary-lsp.ts": 7,
 		// 16 -> 17 (#4484): `heldBackBlockers` keeps the blocking findings the
 		// delta calls not new, an `Array.prototype.filter` call, not a delivery
 		// filter.
@@ -868,7 +871,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 42 -> 43 (#5044): the cross-file cache reader merges its anchor groups
 		// back into input order with one Array.prototype.filter, not a
 		// delivery-policy seam.
-		"tools/lens-diagnostics.ts": 43,
+		// 43 -> 47 (#5287): the unchecked-file projections of the summaries
+		// (`uncheckedFilesLine`, the unchecked tally, the coverable subset, the
+		// empty delta's unchecked set), four `Array.prototype.filter` calls, not
+		// delivery filters.
+		"tools/lens-diagnostics.ts": 47,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.

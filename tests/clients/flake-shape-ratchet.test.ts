@@ -1285,6 +1285,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the provider wire roster and session-start log are produced by a real pi host loading the built extension; an in-process double cannot certify tools.<name>.enabled (#1416)",
 	},
+	"real-process-spawn:real-harness/unchecked-report.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the cache-only reports are built by the real pi host's lens_diagnostics tool after a real write; no in-process double reaches the text a model reads (#5287)",
+	},
 	// #3870: the detector tests drive the analyzer's real CLI entry point as a
 	// real node subprocess over redacted fixture logs; an in-process call could
 	// not prove the --root/--json/--since argv or the JSON report boundary.

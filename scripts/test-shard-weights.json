@@ -1449,6 +1449,7 @@
 		"tests/real-harness/scenario-2.test.ts": 1.55,
 		"tests/real-harness/scenario-3.test.ts": 4.37,
 		"tests/real-harness/tools-enabled.test.ts": 12.81,
+		"tests/real-harness/unchecked-report.test.ts": 6.5,
 		"tests/scripts/analyze-config-resolution-smell.test.ts": 0.83,
 		"tests/scripts/analyze-pi-lens-logs-detectors.test.ts": 2,
 		"tests/scripts/analyze-pi-lens-logs.test.ts": 0.32,

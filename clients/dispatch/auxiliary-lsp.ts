@@ -355,6 +355,43 @@ export function enabledOptInAuxiliaryLspServerIds(
 	);
 }
 
+/**
+ * #4956 F2 / #5287: every auxiliary an all-server check leaves unstarted: the
+ * ones the operator switched off and the opt-in ones they turned on. One
+ * answer for `lsp_diagnostics` and the `lens_diagnostics` mode=full sweep, so
+ * the two never name different sets.
+ */
+export function auxiliaryServersNotRun(getFlag: GetFlag): ReadonlySet<string> {
+	return new Set([
+		...configDisabledAuxiliaryLspServerIds(getFlag),
+		...enabledOptInAuxiliaryLspServerIds(getFlag),
+	]);
+}
+
+/**
+ * The sentences that name the servers a check did not run, switched-off ones
+ * first, then enabled opt-in ones (an opt-in is not "switched off": the
+ * all-server door simply does not start it, #4956 F2). `switchedOffLabel`
+ * lets a surface qualify its own noun ("Switched off, not run (auxiliary
+ * LSP)"). Empty when nothing was left out.
+ */
+export function auxiliaryNotRunSentences(
+	notRunServerIds: Iterable<string>,
+	switchedOffLabel = "Switched off, not run",
+): string[] {
+	const ids = [...notRunServerIds];
+	const switchedOff = ids.filter((id) => !isOptInAuxiliaryServerId(id));
+	const optIn = ids.filter((id) => isOptInAuxiliaryServerId(id));
+	return [
+		...(switchedOff.length > 0
+			? [`${switchedOffLabel}: ${switchedOff.join(", ")}.`]
+			: []),
+		...(optIn.length > 0
+			? [`Opt-in, not run by this check: ${optIn.join(", ")}.`]
+			: []),
+	];
+}
+
 function isEnabledByConfiguration(
 	profile: AuxiliaryLspProfile,
 	getFlag: GetFlag,
