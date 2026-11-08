@@ -32,6 +32,7 @@ import {
 	relativePosix,
 	stripSource,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -163,30 +164,38 @@ describe("#4133 scanner temp-root harness census", () => {
 	});
 	const { spawnHarnesses, ownedRoot, scanned } = runCensus();
 
-	it("finds the spawn-harness population (a dead census is not clean)", () => {
-		assertNonEmptyScan("harness census candidate files", scanned, 50);
-		assertNonEmptyScan("spawn harnesses", spawnHarnesses.length, 2);
-		expect(spawnHarnesses).toEqual(EXPECTED_SPAWN_HARNESSES);
-	});
+	it(
+		"finds the spawn-harness population (a dead census is not clean)",
+		() => {
+			assertNonEmptyScan("harness census candidate files", scanned, 50);
+			assertNonEmptyScan("spawn harnesses", spawnHarnesses.length, 2);
+			expect(spawnHarnesses).toEqual(EXPECTED_SPAWN_HARNESSES);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("covers every spawn harness or admits it with a reason", () => {
-		const audit = auditRegistry({
-			sweepName: "scanner temp-root harness census",
-			flagged: spawnHarnesses,
-			registered: ownedRoot,
-			exemptions: ADMISSIONS,
-			minFlagged: 2,
-			scannedCount: scanned,
-			minScanned: 50,
-			remediation:
-				"point the child at an owned scanner root (PI_LENS_TEST_SCANNER_TMPDIR, " +
-				"after caller env, with PI_LENS_TEST_SCANNER_HARNESS=1) or add a reasoned admission.",
-		});
-		expect(audit.problems).toEqual([]);
-		// The live coverage: both pi-lens-spawning harnesses own their root.
-		expect(ownedRoot.sort()).toEqual([
-			"tests/mcp/harness.ts",
-			"tests/support/real-pi-harness.ts",
-		]);
-	});
+	it(
+		"covers every spawn harness or admits it with a reason",
+		() => {
+			const audit = auditRegistry({
+				sweepName: "scanner temp-root harness census",
+				flagged: spawnHarnesses,
+				registered: ownedRoot,
+				exemptions: ADMISSIONS,
+				minFlagged: 2,
+				scannedCount: scanned,
+				minScanned: 50,
+				remediation:
+					"point the child at an owned scanner root (PI_LENS_TEST_SCANNER_TMPDIR, " +
+					"after caller env, with PI_LENS_TEST_SCANNER_HARNESS=1) or add a reasoned admission.",
+			});
+			expect(audit.problems).toEqual([]);
+			// The live coverage: both pi-lens-spawning harnesses own their root.
+			expect(ownedRoot.sort()).toEqual([
+				"tests/mcp/harness.ts",
+				"tests/support/real-pi-harness.ts",
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });

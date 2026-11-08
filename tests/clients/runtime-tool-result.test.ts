@@ -1284,7 +1284,14 @@ describe("bash grep searchReads registration", () => {
 				expect(runtime.readGuard.getReadHistory(filePath)).toEqual([
 					expect.objectContaining({ toolCallId: "codemode-1" }),
 				]);
-				expect(agentBehaviorRecord).toHaveBeenCalledWith("read", filePath);
+				expect(agentBehaviorRecord).toHaveBeenCalledWith("read", filePath, {
+					// #5429: the progress signal carries the call's argument identity,
+					// derived here independently of the handler so a key that stopped
+					// tracking `input` (or an omitted third argument) goes red.
+					argsKey: createHash("sha256")
+						.update(JSON.stringify({ path: "nested.ts", offset: 1, limit: 20 }))
+						.digest("hex"),
+				});
 			} finally {
 				env.cleanup();
 			}
@@ -4732,6 +4739,146 @@ describe("runtime-tool-result inline behavior warnings", () => {
 			}
 		},
 	);
+
+	// #5429: the reporter's three successful edits, driven through the real
+	// `tool_result` handler. Each result carries the edit that produced it and
+	// leaves different bytes on disk, so the streak is progress and the
+	// "no progress" warning is a false positive.
+	it("keeps THRASHING silent for three successful edits that each change the file", async () => {
+		const env = setupTestEnvironment("pi-lens-thrash-progress-");
+		try {
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "diagnostics complete",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+				checkedClean: false,
+			});
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const behavior = new AgentBehaviorClient();
+			const base: Omit<Parameters<typeof handleToolResult>[0], "event"> = {
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				agentBehaviorRecord: (name, filePath, progress) =>
+					behavior.recordToolCall(name, filePath, progress),
+				formatBehaviorWarnings: (warnings) =>
+					behavior.formatWarnings(warnings as BehaviorWarning[]),
+			};
+			const filePath = createTempFile(
+				env.tmpDir,
+				"progress.ts",
+				"export const value = 0;\n",
+			);
+			for (let index = 1; index <= 3; index++) {
+				// The host applied this result's edit: the bytes on disk move with
+				// each call, which is what makes the three calls three edits.
+				fs.writeFileSync(filePath, `export const value = ${index};\n`, "utf8");
+				const returned = await handleToolResult({
+					...base,
+					event: {
+						toolName: "edit",
+						input: {
+							path: filePath,
+							edits: [
+								{
+									oldText: `export const value = ${index - 1};`,
+									newText: `export const value = ${index};`,
+								},
+							],
+						},
+						content: [],
+					},
+				});
+				const text = returned?.content.map((part) => part.text).join("\n");
+				expect(text).not.toContain("THRASHING");
+			}
+			// Independent effect, not a mock call count: the streak never rose
+			// above one progressing call, so the file's edit count is the host's
+			// three calls.
+			expect(behavior.getEditCount(filePath)).toBe(3);
+			expect(fs.readFileSync(filePath, "utf8")).toBe(
+				"export const value = 3;\n",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The other direction of the same signal: the calls that FAILED made no
+	// progress, so the streak they leave feeds the warning the third, retried
+	// call renders. Drop the error axis and the retry storm reads as progress.
+	it("keeps THRASHING when earlier failed results precede a retried call", async () => {
+		const env = setupTestEnvironment("pi-lens-thrash-failed-");
+		try {
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "diagnostics complete",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+				checkedClean: false,
+			});
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const behavior = new AgentBehaviorClient();
+			const base: Omit<Parameters<typeof handleToolResult>[0], "event"> = {
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				resetLSPService: () => {},
+				agentBehaviorRecord: (name, filePath, progress) =>
+					behavior.recordToolCall(name, filePath, progress),
+				formatBehaviorWarnings: (warnings) =>
+					behavior.formatWarnings(warnings as BehaviorWarning[]),
+			};
+			const filePath = createTempFile(
+				env.tmpDir,
+				"stuck.ts",
+				"export const value = 0;\n",
+			);
+			const retry = {
+				path: filePath,
+				edits: [
+					{
+						oldText: "export const value = 100;",
+						newText: "export const value = 200;",
+					},
+				],
+			};
+			const events = [
+				{ path: filePath, edits: [{ oldText: "a", newText: "b" }] },
+				retry,
+				retry,
+			];
+			let text = "";
+			for (const [index, input] of events.entries()) {
+				const returned = await handleToolResult({
+					...base,
+					event: {
+						toolName: "edit",
+						input,
+						content: [
+							{ type: "text", text: index < 2 ? "oldText not found" : "ok" },
+						],
+						...(index < 2 ? { isError: true } : {}),
+					},
+				});
+				text = returned?.content.map((part) => part.text).join("\n") ?? "";
+			}
+			expect(text).toContain("THRASHING");
+			// Nothing landed on the two failed attempts: the file still holds the
+			// bytes the streak is about.
+			expect(fs.readFileSync(filePath, "utf8")).toBe(
+				"export const value = 0;\n",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
 
 	// #4623: the guard asks `mutating-tool.ts` which results are bash replays, and
 	// only the exact marker keeps a result out of the behavior history. A

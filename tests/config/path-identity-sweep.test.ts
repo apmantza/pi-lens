@@ -77,6 +77,7 @@ import {
 	relativePosix,
 	stableOccurrenceKey,
 } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -466,34 +467,38 @@ describe("path identity sweep (#4689)", () => {
 			);
 	}
 
-	it("registers every raw realpath and raw path.resolve key outside the seam", () => {
-		// Calibration on the authoring head: 530 runtime files under clients/,
-		// tools/ and mcp/ plus index.ts (seam excluded); half is 265. The live
-		// populations are 31 raw-realpath and 158 path-resolve-keyed sites,
-		// floored at 5; the hand-rolled upward walks (#4966) are floored at 1.
-		assertNonEmptyScan(
-			"path identity sweep: runtime files scanned",
-			scanned,
-			265,
-		);
-		for (const [needle, floor] of [
-			["raw-realpath", 5],
-			["path-resolve-keyed", 5],
-			// The folds of #4966 left the few climbs that stay, each with a reason.
-			["hand-rolled-upward-walk", 1],
-		] as const)
+	it(
+		"registers every raw realpath and raw path.resolve key outside the seam",
+		() => {
+			// Calibration on the authoring head: 530 runtime files under clients/,
+			// tools/ and mcp/ plus index.ts (seam excluded); half is 265. The live
+			// populations are 31 raw-realpath and 158 path-resolve-keyed sites,
+			// floored at 5; the hand-rolled upward walks (#4966) are floored at 1.
 			assertNonEmptyScan(
-				`path identity sweep: ${needle} sites`,
-				occurrences.filter((occurrence) =>
-					occurrence.row.endsWith(`#${needle}`),
-				).length,
-				floor,
+				"path identity sweep: runtime files scanned",
+				scanned,
+				265,
 			);
-		expect(
-			auditPins(occurrences, PINS),
-			"Derive the key through clients/path-utils.ts (normalizeMapKey for a map key, realpathOrResolve for a native-form identity), or pin the row with the reason it is not an identity derivation (a spelling memo, a call-local dedupe, a containment that must refuse a missing path). Refs #4689.",
-		).toEqual({ unlisted: [], mismatched: [], stale: [] });
-	});
+			for (const [needle, floor] of [
+				["raw-realpath", 5],
+				["path-resolve-keyed", 5],
+				// The folds of #4966 left the few climbs that stay, each with a reason.
+				["hand-rolled-upward-walk", 1],
+			] as const)
+				assertNonEmptyScan(
+					`path identity sweep: ${needle} sites`,
+					occurrences.filter((occurrence) =>
+						occurrence.row.endsWith(`#${needle}`),
+					).length,
+					floor,
+				);
+			expect(
+				auditPins(occurrences, PINS),
+				"Derive the key through clients/path-utils.ts (normalizeMapKey for a map key, realpathOrResolve for a native-form identity), or pin the row with the reason it is not an identity derivation (a spelling memo, a call-local dedupe, a containment that must refuse a missing path). Refs #4689.",
+			).toEqual({ unlisted: [], mismatched: [], stale: [] });
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("gives every pinned row a reason", () => {
 		const reasonless = Object.entries(PINS)
