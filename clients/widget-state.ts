@@ -21,10 +21,12 @@ import type { FormatterOutcomeKind } from "./formatters.js";
 import {
 	anchorsForDiagnostic,
 	applyDispositions,
+	cachedAnchorMarks,
 	getDisposition,
 	registerWidgetDispositionReconciler,
 	strictAnchorSpan,
 	strictAnchorSpansIn,
+	type CachedAnchorMarks,
 	type Disposition,
 	type DispositionMarkTarget,
 } from "./diagnostic-dispositions.js";
@@ -463,35 +465,84 @@ export function reconcileWidgetDisposition(
 		if (group) group.push(diagnostic);
 		else groups.set(anchor, [diagnostic]);
 	}
-	const contentByAnchor = new Map<string, string>([[target.filePath, source]]);
-	const contentOf = (anchor: string): string => {
-		const hit = contentByAnchor.get(anchor);
-		if (hit !== undefined) return hit;
-		// Best-effort, like `applyDispositionsMultiFile`: an unreadable cited
-		// file anchors with "" — the documented fail-open input, where a STRICT
-		// anchor cannot match and the row stays visible; weak marks never read
-		// content and keep applying.
-		const read = readContentOrUndefined(anchor) ?? "";
-		contentByAnchor.set(anchor, read);
-		return read;
+	// #5044 round 2: one verdict per CITED anchor, taken from the ONE gate the
+	// cached reader runs (`cachedAnchorMarks`), so the two readers cannot
+	// disagree about the same mark on the same row:
+	//  - F1: a cited anchor's freshness is judged against the newest observation
+	//    among the rows citing it. Re-deriving a STRICT anchor from bytes NEWER
+	//    than the row "confirmed" a mark hashed on a different revision — two
+	//    identical line texts across a revision boundary are a coincidence, not
+	//    a finding's location — and hid a STOP-tier finding from the footer while
+	//    `lens_diagnostics mode=all` still listed it. A stale anchor now anchors
+	//    weak marks only, exactly as the cached reader has always done.
+	//  - F2: a cited anchor outside the project root on the identity axis, or one
+	//    this process cannot read, is refused outright — #5067's owner rule, which
+	//    `applyFindingPolicyByOwner` already fails closed. No mark of any kind is
+	//    looked up for its rows, because a full LSP sweep keeps that finding and a
+	//    footer that hid it was the disagreement the agent read as clean.
+	// The target's own anchor keeps the content the mark was made against (the
+	// revision the mark hashed), so no gate applies to it; its unreadable case is
+	// the `source = ""` fallback above, unchanged from master.
+	const citedMarks = new Map<string, CachedAnchorMarks>();
+	const citedAnchorMarks = (
+		anchor: string,
+		group: readonly WidgetDiagnostic[],
+	): CachedAnchorMarks => {
+		const hit = citedMarks.get(anchor);
+		if (hit) return hit;
+		const decision = cachedAnchorMarks({
+			cwd,
+			anchor,
+			rows: group,
+			cited: true,
+			strictAnchors: true,
+			// Best-effort like `applyDispositionsMultiFile`'s read, and through
+			// this module's own reader so an anchor whose bytes cannot be had
+			// still leaves its bounded `widget-mark-anchor-unreadable` record.
+			readContent: (filePath) => readContentOrUndefined(filePath),
+		});
+		citedMarks.set(anchor, decision);
+		return decision;
 	};
 	const active = new Set<WidgetDiagnostic>();
 	for (const [anchor, group] of groups) {
-		for (const d of applyDispositions(group, cwd, anchor, contentOf(anchor))) {
+		if (anchor === target.filePath) {
+			for (const d of applyDispositions(group, cwd, anchor, source)) {
+				active.add(d);
+			}
+			continue;
+		}
+		const decision = citedAnchorMarks(anchor, group);
+		// A refused anchor marks nothing at all: its rows stay live, and
+		// `normalized` re-tags nothing because it looks no disposition up for
+		// them (it still retires a row the store held ONLY because a mark
+		// suppressed it — #3158 rule 3, and `mode=all` never lists those rows).
+		if (decision.marks === "refused") continue;
+		const anchorContent = decision.marks === "strict" ? decision.content : "";
+		for (const d of applyDispositions(group, cwd, anchor, anchorContent)) {
 			active.add(d);
 		}
 	}
 	const normalized: WidgetDiagnostic[] = current.flatMap((diagnostic) => {
 		const anchor = diagnostic.citedFile ?? target.filePath;
+		const decision =
+			anchor === target.filePath ? undefined : citedMarks.get(anchor);
+		const refused = decision?.marks === "refused";
 		const anchorContent =
-			anchor === target.filePath ? source : contentOf(anchor);
+			decision === undefined
+				? source
+				: decision.marks === "strict"
+					? decision.content
+					: "";
 		const { strict, weak } = anchorsForDiagnostic(
 			cwd,
 			anchor,
 			diagnostic,
 			anchorContent,
 		);
-		const entry = getDisposition(cwd, strict) ?? getDisposition(cwd, weak);
+		const entry = refused
+			? undefined
+			: (getDisposition(cwd, strict) ?? getDisposition(cwd, weak));
 		if (
 			!active.has(diagnostic) &&
 			(entry?.disposition === "false-positive" ||

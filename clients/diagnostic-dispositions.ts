@@ -60,12 +60,13 @@ import { commitDurableStore } from "./durable-store.js";
 import { logDispositionEvent } from "./disposition-logger.js";
 import { publishDisposition } from "./disposition-publish.js";
 import { getProjectDataDir } from "./file-utils.js";
+import { freshnessFromMtime } from "./freshness.js";
 import {
 	normalizeMessage as sharedNormalizeMessage,
 	relativeFile as sharedRelativeFile,
 	stableFindingId,
 } from "./finding-identity.js";
-import { normalizeMapKey } from "./path-utils.js";
+import { isWithinIdentity, normalizeMapKey } from "./path-utils.js";
 import { lineContentHash } from "./read-guard.js";
 
 /** Minimal shape a diagnostic needs for anchoring/filtering — deliberately
@@ -882,6 +883,144 @@ export function applyWeakDispositionsMultiFile<T extends DispositionCandidate>(
 	return filterPerFileGroup(diagnostics, cwd, filePathOf, (group, filePath) =>
 		applyWeakDispositions(group, cwd, filePath),
 	);
+}
+
+/**
+ * The bytes a stored mark may be matched against for a file the caller does
+ * NOT hold in hand, or `undefined` when this process must not trust that file
+ * to suppress anything. #5067 wrote the rule for the dispatch stack; #5044
+ * round 2 (F2) moves it here so the stack and the two cache-only readers ask
+ * the same question and cannot answer it differently:
+ *
+ * - a cited owner outside the project root on the IDENTITY axis
+ *   ({@link isWithinIdentity} — a `..` spelling or a link out is outside);
+ * - or one whose current bytes this process cannot read.
+ *
+ * `applyFindingPolicyByOwner` maps `undefined` onto fail-closed: the group's
+ * findings pass the inline and disposition steps — weak-anchored marks
+ * included — and only the rule policy, which reads no content, still applies.
+ * The cache-only readers map it onto keeping every row of the group and
+ * looking up no mark at all ({@link cachedAnchorMarks}'s `refused` lane).
+ *
+ * Cited owners are the whole population. A record's own key is the file the
+ * session wrote and its content is the caller's own input, so it keeps the
+ * documented fail-open weak fallback (#1617 F1) — callers pass `cited: false`
+ * for it, or read their supplied content past this check.
+ */
+export function trustedCitedOwnerContent(
+	anchor: string,
+	cwd: string,
+	content: string | undefined,
+): string | undefined {
+	if (!isWithinIdentity(anchor, cwd)) return undefined;
+	return content;
+}
+
+/** What the marks stored against ONE anchor path may do to the cached rows
+ *  anchored on it ({@link cachedAnchorMarks}). */
+export type CachedAnchorMarks =
+	/** The anchor's current bytes still describe the revision these rows were
+	 * observed against, so both anchor halves may be derived from them. */
+	| { marks: "strict"; content: string }
+	/** The anchor moved after the newest observation among the group's rows, or
+	 * the store holds only weak marks: intent-level marks apply, and a STRICT
+	 * anchor waits for the next real dispatch to re-derive both sides against
+	 * matching revisions. */
+	| { marks: "weak-only" }
+	/** A file the record only CITES (`WidgetDiagnostic.citedFile`, #5020) that
+	 * this process must not trust to suppress anything — outside the project
+	 * root, or unreadable ({@link trustedCitedOwnerContent}, #5067). No
+	 * disposition of any kind is looked up for these rows; all of them pass. */
+	| { marks: "refused" };
+
+/**
+ * The ONE per-anchor decision a cache-only reader runs before it lets a stored
+ * mark touch a cached row: stat the anchor, ask the freshness kernel whether
+ * it moved past the newest observation among the rows anchored on it, and read
+ * its current bytes through the caller's reader. Both cache-only readers used
+ * to own a copy: `tools/lens-diagnostics.ts` gated its strict-immediate path
+ * this way, while `clients/widget-state.ts`'s reconcile pass re-derived a
+ * STRICT anchor from a cited file's CURRENT bytes with no gate at all — so one
+ * `lens_diagnostic_mark` took a STOP-tier finding out of the footer while
+ * `lens_diagnostics mode=all` still listed the same row (#5044 round 2 F1). A
+ * stale cited anchor gets `""`'s semantics here: `marks: "weak-only"`, the
+ * same answer the cached reader has always given.
+ *
+ * `rows` carries each row's own observation stamp; the newest of them is the
+ * reference the anchor's mtime is compared against (the newest, because one
+ * group can hold rows recorded by different runs, and the freshest of them is
+ * the youngest revision the bytes may still describe). The comparison itself
+ * is the freshness kernel's, drift tolerance included (#1710's 50 ms).
+ *
+ * `strictAnchors: false` is a store that holds only weak suppress/defer marks:
+ * the record key's own rows then need neither stat nor read (#1625 F2's
+ * zero-I/O hoist, which is what makes a marks-only query on a clean project
+ * cheap). A CITED group is still checked, because the refusal a weak mark
+ * cannot be trusted with is exactly what an unowned file must not get.
+ */
+export function cachedAnchorMarks<T extends { observedAt?: number }>(input: {
+	cwd: string;
+	anchor: string;
+	rows: readonly T[];
+	/** True when `anchor` is a file the record only CITES, so #5067's owner rule
+	 *  applies to it; false for the record key's own rows. */
+	cited: boolean;
+	/** True when the store holds a STRICT (false-positive) mark, so the bytes
+	 *  are needed to derive the strict anchor; false serves the weak filter. */
+	strictAnchors: boolean;
+	/** Reads the anchor's current bytes given the stat taken here, or `undefined`
+	 *  when it cannot. Each reader keeps its registered reader: the bounded
+	 *  per-revision content memo in `tools/lens-diagnostics.ts`, the
+	 *  once-per-reconcile read (with its degradation record) in
+	 *  `clients/widget-state.ts`. */
+	readContent: (
+		anchor: string,
+		stat: { mtimeMs: number; size: number },
+	) => string | undefined;
+}): CachedAnchorMarks {
+	const { anchor, cwd, rows, cited, strictAnchors } = input;
+	// #5067's identity-axis half first: it is pure path math, and a cited owner
+	// the project does not contain is never read, so it never suppresses.
+	if (cited && !isWithinIdentity(anchor, cwd)) return { marks: "refused" };
+	if (!cited && !strictAnchors) return { marks: "weak-only" };
+	let stat: fs.Stats;
+	try {
+		stat = fs.statSync(anchor);
+	} catch {
+		// none: an unstatable anchor is the expected shape of a deleted or
+		// unreadable file, not a degradation this call hides: a CITED owner is
+		// refused outright, so every row of its group stays visible (fail closed,
+		// #5067), and the record key's own rows take #1617 F1's documented weak
+		// fallback, where the intent-level mark still applies. Both outcomes are
+		// visible to the caller as the returned `marks` mode.
+		return cited ? { marks: "refused" } : { marks: "weak-only" };
+	}
+	let content: string | undefined;
+	if (cited) {
+		content = trustedCitedOwnerContent(
+			anchor,
+			cwd,
+			input.readContent(anchor, stat),
+		);
+		if (content === undefined) return { marks: "refused" };
+	}
+	if (!strictAnchors) return { marks: "weak-only" };
+	const referenceMs = rows.reduce<number>(
+		(latest, row) => Math.max(latest, row.observedAt ?? 0),
+		0,
+	);
+	if (
+		referenceMs > 0 &&
+		freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs }).verdict ===
+			"stale"
+	) {
+		return { marks: "weak-only" };
+	}
+	content ??= input.readContent(anchor, stat);
+	if (content === undefined) {
+		return { marks: "weak-only" };
+	}
+	return { marks: "strict", content };
 }
 
 /** The one group-by-file-then-filter pass both multi-file lanes share: the

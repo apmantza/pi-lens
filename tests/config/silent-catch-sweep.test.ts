@@ -1345,10 +1345,14 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		// shared reader refuses an over-cap list before the scope is built.
 		// Identity moved (#5044): the stat-failure catch arm now feeds the
 		// per-anchor weak call of the cross-file cache reader; same six sites.
-		silent: 6,
-		identities: "7596923c4db70367",
+		// 6 -> 5 (#5044 r2): the stat-failure arm moved into the shared per-anchor
+		// gate `cachedAnchorMarks` (clients/diagnostic-dispositions.ts), which
+		// declares its own `none:` reason rather than adding a silent handler to
+		// that file. A move, not a new swallow.
+		silent: 5,
+		identities: "d824fe7b4df77bce",
 		reason: PRE_RULE,
-	}, // :277, :999, :1106, :1561, :1621, :2333
+	}, // :279, :1001, :1583, :1643, :2355
 	"tools/lsp-diagnostics.ts": {
 		silent: 10,
 		identities: "2e5c32f96dcee285",
