@@ -20,10 +20,11 @@ constraints:
   FN:
     regex: "^(any|all|sum)$"
 fix: "$FN($X for $Y in $Z)"
-tags:
-  - python
-  - performance
-  - modernization
-examples:
-  bad: "total = sum([price for price in prices])"
-  good: "total = sum(price for price in prices)"
+metadata:
+  tags:
+    - python
+    - performance
+    - modernization
+  examples:
+    bad: "total = sum([price for price in prices])"
+    good: "total = sum(price for price in prices)"

@@ -8,7 +8,8 @@ message: >-
 note: |-
   [CWE-611] Improper Restriction of XML External Entity Reference. [REFERENCES]
       - https://owasp.org/Top10/A05_2021-Security_Misconfiguration
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   Pattern_having_three_child:
     kind: call_expression

@@ -8,7 +8,8 @@ note: |-
   [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
       - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
       - https://googleprojectzero.blogspot.com/2022/10/rc4-is-still-considered-harmful.html
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   CIPHER_getInstance_RC2:
     kind: method_invocation

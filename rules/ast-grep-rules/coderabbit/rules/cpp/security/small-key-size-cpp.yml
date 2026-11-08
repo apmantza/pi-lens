@@ -7,7 +7,8 @@ note: >-
   Exposure [REFERENCES]
        https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-131Ar2.pdf
        https://owasp.org/Top10/A02_2021-Cryptographic_Failures
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 rule:
   kind: call_expression
   all:

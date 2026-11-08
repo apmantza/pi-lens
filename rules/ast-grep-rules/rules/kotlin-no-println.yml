@@ -26,17 +26,18 @@ files:
 ignores:
   - "**/*Test.kt"
   - "**/test/**"
-tags:
-  - kotlin
-  - idiom
-  - logging
-examples:
-  bad: |
-    fun main() {
-        println("starting up")
-    }
-  good: |
-    private val logger = KotlinLogging.logger {}
-    fun main() {
-        logger.info { "starting up" }
-    }
+metadata:
+  tags:
+    - kotlin
+    - idiom
+    - logging
+  examples:
+    bad: |
+      fun main() {
+          println("starting up")
+      }
+    good: |
+      private val logger = KotlinLogging.logger {}
+      fun main() {
+          logger.info { "starting up" }
+      }

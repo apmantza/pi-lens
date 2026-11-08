@@ -9,7 +9,8 @@ note: >-
   [CWE-614]: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute [OWASP A05:2021]: Security Misconfiguration
   [REFERENCES]
       - https://owasp.org/Top10/A05_2021-Security_Misconfiguration
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   commons_not_rule_parts:
     all:

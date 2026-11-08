@@ -9,7 +9,8 @@ note: |-
           Command ('OS Command Injection').
   [REFERENCES]
       - https://owasp.org/Top10/A03_2021-Injection
-ast-grep-essentials: true
+metadata:
+  ast-grep-essentials: true
 utils:
   PATTERN_SYSTEM_INSIDE_IF_STATEMENT:
     kind: call_expression
