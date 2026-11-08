@@ -206,14 +206,19 @@ export function parsePyrightOutput(data: any, _filePath: string): Diagnostic[] {
 		const start = diag.range?.start;
 		const message = diag.message || "Type error";
 		const severity = normalizePyrightSeverity(diag.severity);
+		const line = (start?.line ?? 0) + 1;
 		diagnostics.push({
 			// #5412: a rule-less finding (a syntax error, say) keys its id on its
-			// message. The line alone gave two findings on one line one id, and the
-			// dispatcher's `findingKey` (rule || id) kept only one of them.
-			id: diag.rule ? `pyright-${diag.rule}` : `pyright-${hashText(message)}`,
+			// line and its message, as go vet's id does (`go-vet-<line>-<hash>`).
+			// A message-only id gave two identical messages on different lines one
+			// id, and the delta reads `Diagnostic.id` alone, so the second line was
+			// held back as already seen.
+			id: diag.rule
+				? `pyright-${diag.rule}`
+				: `pyright-${line}-${hashText(message)}`,
 			message,
 			filePath: diag.file || _filePath,
-			line: (start?.line ?? 0) + 1,
+			line,
 			column: (start?.character ?? 0) + 1,
 			severity,
 			// Blocking classification stays error-only — reviving the info tier

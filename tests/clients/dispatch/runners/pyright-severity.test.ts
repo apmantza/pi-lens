@@ -1,9 +1,19 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	createDispatchContext,
+	dispatchForFile,
+	RunnerRegistry,
+} from "../../../../clients/dispatch/dispatcher.js";
+import { FactStore } from "../../../../clients/dispatch/fact-store.js";
+import pyrightRunner, {
 	normalizePyrightSeverity,
 	parsePyrightOutput,
 } from "../../../../clients/dispatch/runners/pyright.js";
+import type { Diagnostic } from "../../../../clients/dispatch/types.js";
 import { convertLspDiagnostics } from "../../../../clients/dispatch/utils/lsp-diagnostics.js";
+import { setupTestEnvironment } from "../../test-utils.js";
 
 /**
  * #1802: pyright's `--outputjson` output declares three severities on
@@ -166,6 +176,21 @@ describe("pyright information tier agrees across the CLI and the LSP (#5412)", (
 		expect(cli[0]?.semantic).toBe("warning");
 		expect(lsp[0]?.semantic).toBe(cli[0]?.semantic);
 	});
+
+	// Recurrence: the #5412 r1 review. The branch that gives an unset severity
+	// the warning tier (`|| !d.severity`) survived every convertLspDiagnostics
+	// test, so an LSP diagnostic with no severity could turn into a blocker
+	// candidate without a red.
+	it("keeps an LSP diagnostic with no severity at semantic none", () => {
+		const lsp = convertLspDiagnostics(
+			[
+				{ code: "reportUnusedImport", source: "Pyright", message, range },
+			] as never,
+			"/proj/example.py",
+		);
+		expect(lsp).toHaveLength(1);
+		expect(lsp[0]?.semantic).toBe("none");
+	});
 });
 
 /**
@@ -193,5 +218,81 @@ describe("rule-less pyright findings keep distinct identities (#5412)", () => {
 		expect(diags[0]?.rule).toBeUndefined();
 		expect(diags[1]?.rule).toBeUndefined();
 		expect(diags[0]?.id).not.toBe(diags[1]?.id);
+	});
+
+	it("gives the same message on two lines two different ids", () => {
+		const at = (line: number) => ({
+			severity: "error",
+			message: "Expected expression",
+			range: {
+				start: { line, character: 0 },
+				end: { line, character: 1 },
+			},
+		});
+		const diags = parsePyrightOutput(
+			{ generalDiagnostics: [at(2), at(8)] },
+			"/proj/example.py",
+		);
+		expect(diags).toHaveLength(2);
+		expect(diags[0]?.id).not.toBe(diags[1]?.id);
+	});
+});
+
+/**
+ * #5412 round 2: a rule-less id keeps its line, as go vet's does. Run 1 holds
+ * one syntax error on line 3; run 2 adds the same message on line 9. Run 2
+ * must announce line 9 and must not repeat line 3, because the delta reads
+ * `Diagnostic.id` alone. Recurrence: the r1 review probe, where
+ * `pyright-<hash(message)>` gave both lines one id and the delta held the new
+ * error back as already seen (run 2 delivered nothing).
+ */
+describe("rule-less pyright findings stay apart in delta mode (#5412)", () => {
+	it("announces the second identical message on another line on the next run", async () => {
+		const env = setupTestEnvironment("pi-lens-pyright-delta-");
+		try {
+			const file = path.join(env.tmpDir, "a.py");
+			fs.writeFileSync(file, "x = (\n");
+			const facts = new FactStore();
+			let answer: Diagnostic[] = [];
+			const registry = new RunnerRegistry();
+			registry.register({
+				...pyrightRunner,
+				run: async () => ({
+					status: "failed" as const,
+					diagnostics: answer,
+					semantic: "blocking" as const,
+				}),
+			});
+			const dispatch = () =>
+				dispatchForFile(
+					createDispatchContext(
+						file,
+						env.tmpDir,
+						{ getFlag: () => false },
+						facts,
+					),
+					[{ mode: "all", runnerIds: ["pyright"] }],
+					registry,
+				);
+			const error = (line: number) => ({
+				severity: "error",
+				message: "Expected expression",
+				file,
+				range: { start: { line, character: 0 }, end: { line, character: 1 } },
+			});
+
+			answer = parsePyrightOutput({ generalDiagnostics: [error(2)] }, file);
+			const first = await dispatch();
+			expect(first.diagnostics.map((d) => d.line)).toEqual([3]);
+
+			answer = parsePyrightOutput(
+				{ generalDiagnostics: [error(2), error(8)] },
+				file,
+			);
+			const second = await dispatch();
+			expect(second.diagnostics.map((d) => d.line)).toEqual([9]);
+		} finally {
+			env.cleanup();
+		}
 	});
 });
