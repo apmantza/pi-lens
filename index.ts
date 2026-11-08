@@ -3314,10 +3314,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 				resetLSPService,
 				// #4942: the read guard of the session whose tool result this is.
 				readGuard: runtime.readGuardFor(getStableSessionId(ctx)),
-				agentBehaviorRecord: (toolName, filePath) =>
+				agentBehaviorRecord: (toolName, filePath, progress) =>
 					(
 						resident?.agentBehaviorClient ?? getAgentBehaviorClient()
-					).recordToolCall(toolName, filePath),
+					).recordToolCall(toolName, filePath, progress),
 				formatBehaviorWarnings: (warnings) =>
 					(
 						resident?.agentBehaviorClient ?? getAgentBehaviorClient()

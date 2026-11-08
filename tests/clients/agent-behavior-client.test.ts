@@ -76,6 +76,12 @@ describe("AgentBehaviorClient blind-write detection", () => {
 	});
 });
 
+function thrashWarnings(
+	warnings: ReturnType<AgentBehaviorClient["recordToolCall"]>,
+): string[] {
+	return warnings.filter((w) => w.type === "thrashing").map((w) => w.message);
+}
+
 describe("AgentBehaviorClient thrashing detection", () => {
 	it("still flags three consecutive identical tool+file calls", () => {
 		const client = new AgentBehaviorClient();
@@ -88,6 +94,93 @@ describe("AgentBehaviorClient thrashing detection", () => {
 		expect(thrashing).toHaveLength(1);
 		// The same edit is NOT a blind write anymore (self-authored path).
 		expect(blindWriteWarnings(warnings)).toEqual([]);
+	});
+
+	// #5429: the tracker's own doc says it flags "repeated identical tool calls
+	// with no progress". Three successful edits whose arguments differ each
+	// changed the file, so they are progress, not thrashing.
+	it("does not flag three successful edits that each change the file", () => {
+		const client = new AgentBehaviorClient();
+
+		client.recordToolCall("edit", FORT, { argsKey: "edit:1" });
+		client.recordToolCall("edit", FORT, { argsKey: "edit:2" });
+		expect(
+			thrashWarnings(
+				client.recordToolCall("edit", FORT, { argsKey: "edit:3" }),
+			),
+		).toEqual([]);
+	});
+
+	it("still flags three identical retries of one call", () => {
+		const client = new AgentBehaviorClient();
+
+		client.recordToolCall("edit", FORT, { argsKey: "edit:same" });
+		client.recordToolCall("edit", FORT, { argsKey: "edit:same" });
+		expect(
+			thrashWarnings(
+				client.recordToolCall("edit", FORT, { argsKey: "edit:same" }),
+			),
+		).toHaveLength(1);
+	});
+
+	it("still flags three failed results even when their arguments differ", () => {
+		const client = new AgentBehaviorClient();
+
+		client.recordToolCall("edit", FORT, { argsKey: "edit:1", failed: true });
+		client.recordToolCall("edit", FORT, { argsKey: "edit:2", failed: true });
+		expect(
+			thrashWarnings(
+				client.recordToolCall("edit", FORT, {
+					argsKey: "edit:3",
+					failed: true,
+				}),
+			),
+		).toHaveLength(1);
+	});
+
+	it("clears the streak when a later call makes progress", () => {
+		const client = new AgentBehaviorClient();
+
+		client.recordToolCall("edit", FORT, { failed: true });
+		client.recordToolCall("edit", FORT, { failed: true });
+		// The third call finally moved: the loop is over, so the warning the
+		// pre-#5429 counter raised on its identity alone is a false positive.
+		expect(
+			thrashWarnings(
+				client.recordToolCall("edit", FORT, { argsKey: "edit:3" }),
+			),
+		).toEqual([]);
+	});
+
+	it("counts a call whose progress the caller could not see as before", () => {
+		const client = new AgentBehaviorClient();
+
+		client.recordToolCall("read", FORT);
+		client.recordToolCall("read", FORT);
+		expect(thrashWarnings(client.recordToolCall("read", FORT))).toHaveLength(1);
+	});
+
+	it("still flags blind writes across three successful edits", () => {
+		const client = new AgentBehaviorClient();
+
+		// #5429 changed only the thrash counter. BLIND WRITE asks a different
+		// question — has the agent shown knowledge of this path — so three
+		// progressing edits of never-read files still warn.
+		expect(
+			blindWriteWarnings(
+				client.recordToolCall("edit", OTHER_A, { argsKey: "edit:a" }),
+			),
+		).toEqual([]);
+		expect(
+			blindWriteWarnings(
+				client.recordToolCall("edit", OTHER_B, { argsKey: "edit:b" }),
+			),
+		).toEqual([]);
+		expect(
+			blindWriteWarnings(
+				client.recordToolCall("edit", OTHER_C, { argsKey: "edit:c" }),
+			),
+		).toHaveLength(1);
 	});
 });
 
