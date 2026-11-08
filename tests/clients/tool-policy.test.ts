@@ -1327,31 +1327,31 @@ describe("tool-policy", () => {
 
 	it("exposes centralized tool execution policy for auto-install behavior", () => {
 		expect(getToolExecutionPolicy("oxlint")).toMatchObject({
-			gate: "smart-default",
+			configEligibility: "smart-default",
 			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("eslint")).toMatchObject({
-			gate: "config-first",
+			configEligibility: "config-first",
 			autoInstall: false,
 		});
 		expect(getToolExecutionPolicy("prettier")).toMatchObject({
-			gate: "smart-default",
+			configEligibility: "smart-default",
 			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("golangci-lint")).toMatchObject({
-			gate: "config-first",
+			configEligibility: "config-first",
 			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("phpstan")).toMatchObject({
-			gate: "config-first",
+			configEligibility: "config-first",
 			autoInstall: false,
 		});
 		expect(getToolExecutionPolicy("ruff")).toMatchObject({
-			gate: "smart-default",
+			configEligibility: "smart-default",
 			autoInstall: true,
 		});
 		expect(getToolExecutionPolicy("biome")).toMatchObject({
-			gate: "smart-default",
+			configEligibility: "smart-default",
 			autoInstall: true,
 		});
 		expect(shouldAutoInstallTool("stylelint")).toBe(true);
@@ -1371,11 +1371,14 @@ describe("tool-policy", () => {
 			"--no-globs",
 			"-",
 		]);
+		// #5418: no installer entry exists for `eslint`, so the spec carries no
+		// managed install pointer at all. The resolver's `?? toolId` fallback is
+		// what the parity guard reads, and that pointer carries a written reason.
 		expect(getToolCommandSpec("eslint")).toMatchObject({
 			command: "eslint",
 			windowsExt: ".cmd",
-			managedToolId: "eslint",
 		});
+		expect(getToolCommandSpec("eslint")?.managedToolId).toBeUndefined();
 		expect(getToolCommandSpec("sqlfluff")).toMatchObject({
 			command: "sqlfluff",
 			windowsExt: ".exe",
@@ -1398,8 +1401,8 @@ describe("tool-policy", () => {
 		expect(getToolCommandSpec("phpstan")).toMatchObject({
 			command: "phpstan",
 			windowsExt: ".bat",
-			managedToolId: "phpstan",
 		});
+		expect(getToolCommandSpec("phpstan")?.managedToolId).toBeUndefined();
 		expect(getToolCommandSpec("taplo")).toMatchObject({
 			command: "taplo",
 			windowsExt: ".exe",

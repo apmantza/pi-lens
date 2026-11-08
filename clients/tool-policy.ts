@@ -954,7 +954,18 @@ export interface AutofixCapability {
 }
 
 export interface ToolExecutionPolicy {
-	gate: ToolGate;
+	/**
+	 * How this tool's invocation is decided on a project with NO config:
+	 * `smart-default` runs on pi-lens's built-in defaults, `config-first` waits
+	 * for the project's own config, `mixed` runs by default and widens with
+	 * config. This is a per-TOOL statement and is deliberately not the per-file
+	 * policy gate (`LinterPolicy.gate`, `FormatterPolicy.gate` and
+	 * `AutofixPolicy.gate` answer that for one file, and they can differ: mypy's
+	 * row is `config-first` while the Python linter policy for a
+	 * mypy-config-free project is `smart-default`). #5418 renamed the field away
+	 * from `gate` so one word does not carry both meanings.
+	 */
+	configEligibility: ToolGate;
 	autoInstall: boolean;
 }
 
@@ -1028,59 +1039,69 @@ const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
 	// Dispatch/LSP runners use the shared availability/install seam. These
 	// managed tools are missing-command repair candidates; probe failures still
 	// fail closed before this policy is consulted.
-	["pyright", { gate: "smart-default", autoInstall: true }],
-	["shellcheck", { gate: "smart-default", autoInstall: true }],
-	["shfmt", { gate: "smart-default", autoInstall: true }],
-	["tflint", { gate: "smart-default", autoInstall: true }],
-	["terragrunt", { gate: "smart-default", autoInstall: true }],
-	["trivy", { gate: "config-first", autoInstall: true }],
-	["biome", { gate: "smart-default", autoInstall: true }],
-	["ruff", { gate: "smart-default", autoInstall: true }],
-	["jscpd", { gate: "smart-default", autoInstall: true }],
-	["madge", { gate: "smart-default", autoInstall: true }],
-	["knip", { gate: "smart-default", autoInstall: true }],
-	["ast-grep", { gate: "smart-default", autoInstall: true }],
-	["oxlint", { gate: "smart-default", autoInstall: true }],
-	["stylelint", { gate: "smart-default", autoInstall: true }],
-	["sqlfluff", { gate: "smart-default", autoInstall: true }],
-	["rubocop", { gate: "smart-default", autoInstall: true }],
-	["yamllint", { gate: "smart-default", autoInstall: true }],
-	["actionlint", { gate: "smart-default", autoInstall: true }],
-	["markdownlint", { gate: "smart-default", autoInstall: true }],
-	["mypy", { gate: "config-first", autoInstall: true }],
-	["taplo", { gate: "smart-default", autoInstall: true }],
-	["hadolint", { gate: "smart-default", autoInstall: true }],
-	["helm", { gate: "smart-default", autoInstall: true }],
-	["htmlhint", { gate: "smart-default", autoInstall: true }],
-	["ktlint", { gate: "smart-default", autoInstall: true }],
+	["pyright", { configEligibility: "smart-default", autoInstall: true }],
+	["shellcheck", { configEligibility: "smart-default", autoInstall: true }],
+	["shfmt", { configEligibility: "smart-default", autoInstall: true }],
+	["tflint", { configEligibility: "smart-default", autoInstall: true }],
+	["terragrunt", { configEligibility: "smart-default", autoInstall: true }],
+	["trivy", { configEligibility: "config-first", autoInstall: true }],
+	["biome", { configEligibility: "smart-default", autoInstall: true }],
+	["ruff", { configEligibility: "smart-default", autoInstall: true }],
+	["jscpd", { configEligibility: "smart-default", autoInstall: true }],
+	["madge", { configEligibility: "smart-default", autoInstall: true }],
+	["knip", { configEligibility: "smart-default", autoInstall: true }],
+	["ast-grep", { configEligibility: "smart-default", autoInstall: true }],
+	["oxlint", { configEligibility: "smart-default", autoInstall: true }],
+	["stylelint", { configEligibility: "smart-default", autoInstall: true }],
+	["sqlfluff", { configEligibility: "smart-default", autoInstall: true }],
+	["rubocop", { configEligibility: "smart-default", autoInstall: true }],
+	["yamllint", { configEligibility: "smart-default", autoInstall: true }],
+	["actionlint", { configEligibility: "smart-default", autoInstall: true }],
+	["markdownlint", { configEligibility: "smart-default", autoInstall: true }],
+	["mypy", { configEligibility: "config-first", autoInstall: true }],
+	["taplo", { configEligibility: "smart-default", autoInstall: true }],
+	["hadolint", { configEligibility: "smart-default", autoInstall: true }],
+	["helm", { configEligibility: "smart-default", autoInstall: true }],
+	["htmlhint", { configEligibility: "smart-default", autoInstall: true }],
+	["ktlint", { configEligibility: "smart-default", autoInstall: true }],
 	// ktfmt is opt-in (a project's explicit formatting choice), so it only runs
 	// when its config marker is present — config-first, but auto-installable via
 	// the maven-JAR strategy once elected (#129).
-	["ktfmt", { gate: "config-first", autoInstall: true }],
-	["golangci-lint", { gate: "config-first", autoInstall: true }],
+	["ktfmt", { configEligibility: "config-first", autoInstall: true }],
+	["golangci-lint", { configEligibility: "config-first", autoInstall: true }],
 	// SpotBugs is opt-in (lens-spotbugs flag) + config-first (needs a Java build
 	// descriptor + compiled .class files), auto-installed via the archive
 	// strategy when elected (#133).
-	["spotbugs", { gate: "config-first", autoInstall: true }],
+	["spotbugs", { configEligibility: "config-first", autoInstall: true }],
 	// Opengrep is opt-in (lens-opengrep flag or a discovered rule file) and
 	// config-first, but auto-installable via the GitHub single-binary strategy
 	// once elected — no login/token required, unlike Semgrep (#111).
-	["opengrep", { gate: "config-first", autoInstall: true }],
-	["phpstan", { gate: "config-first", autoInstall: false }],
-	["eslint", { gate: "config-first", autoInstall: false }],
-	["prettier", { gate: "smart-default", autoInstall: true }],
-	["vale", { gate: "config-first", autoInstall: false }],
-	["swiftlint", { gate: "smart-default", autoInstall: true }],
+	["opengrep", { configEligibility: "config-first", autoInstall: true }],
+	["phpstan", { configEligibility: "config-first", autoInstall: false }],
+	["eslint", { configEligibility: "config-first", autoInstall: false }],
+	["prettier", { configEligibility: "smart-default", autoInstall: true }],
+	["vale", { configEligibility: "config-first", autoInstall: false }],
+	["swiftlint", { configEligibility: "smart-default", autoInstall: true }],
+	// typstyle is the default Typst formatter, so it carries the same
+	// smart-default/auto-install row its AUTO_INSTALLABLE_DEFAULT_FORMATTERS
+	// entry implies. The formatter path in `clients/formatters.ts` is what
+	// installs it; the row exists so the policy table does not disagree with the
+	// formatter table about a tool it names (#5418). The row states what already
+	// runs, and changes no install decision: whether typstyle should auto-install
+	// at all is an open product decision this branch deliberately leaves open.
+	["typstyle", { configEligibility: "smart-default", autoInstall: true }],
 ]);
 
 const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 	[
+		// No managedToolId: the installer registry has no `eslint` entry (the
+		// runner resolves the project's own `node_modules/.bin/eslint` first), so
+		// a pointer here named an install path that does not exist (#5418).
 		"eslint",
 		{
 			command: "eslint",
 			windowsExt: ".cmd",
 			versionArgs: ["--version"],
-			managedToolId: "eslint",
 		},
 	],
 	[
@@ -1190,12 +1211,13 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// No managedToolId: no installer entry for `phpstan` exists, so the
+		// pointer resolved to nothing (auto-install is #5410's decision, #5418).
 		"phpstan",
 		{
 			command: "phpstan",
 			windowsExt: ".bat",
 			versionArgs: ["--version"],
-			managedToolId: "phpstan",
 		},
 	],
 	[

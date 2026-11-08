@@ -17,29 +17,42 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { RunnerRegistry } from "../../../clients/dispatch/dispatcher.js";
+import { registerDefaultRunners } from "../../../clients/dispatch/runners/index.js";
 import {
 	LANGUAGE_POLICY,
 	getPrimaryDispatchGroup,
 } from "../../../clients/language-policy.js";
+import { TOOL_EXECUTION_POLICY } from "../../../clients/tool-policy.js";
+import { assertNonEmptyScan } from "../../support/sweep-kit.js";
 
-// Runner ids whose tool is classified `smart-default` in tool-policy.ts's
-// TOOL_EXECUTION_POLICY and which appear in LSP-paired primary groups.
-const SMART_DEFAULT_LINTERS = new Set([
-	"stylelint",
-	"sqlfluff",
-	"rubocop",
-	"yamllint",
-	"actionlint",
-	"markdownlint",
-	"taplo",
-	"hadolint",
-	"htmlhint",
-	"ktlint",
-	"swiftlint",
-]);
+// Derived, never hand-kept (#5418): the ids the policy table classifies
+// `smart-default` AND the runner registry actually has, so a tool-policy.ts
+// rename or a new smart-default runner lands here the moment it lands there.
+// The hand list this replaces named 11 of the 17, so a fallback group that
+// gained shellcheck (or shfmt, tflint, terragrunt, oxlint, pyright) stayed
+// green while silently losing its linter to the language server.
+const registry = new RunnerRegistry();
+registerDefaultRunners(registry);
+const SMART_DEFAULT_LINTERS = new Set(
+	[...TOOL_EXECUTION_POLICY.entries()]
+		.filter(
+			([toolId, policy]) =>
+				policy.configEligibility === "smart-default" &&
+				registry.get(toolId) !== undefined,
+		)
+		.map(([toolId]) => toolId),
+);
 
 describe("LSP↔linter dispatch coverage", () => {
 	it("no smart-default linter is suppressed behind the LSP in a fallback primary group", () => {
+		// The floor is the derivation's own liveness check: an empty or thin
+		// SMART_DEFAULT_LINTERS would make the loop below pass on nothing.
+		assertNonEmptyScan(
+			"smart-default runner ids",
+			SMART_DEFAULT_LINTERS.size,
+			15,
+		);
 		const violations: string[] = [];
 		for (const kind of Object.keys(LANGUAGE_POLICY)) {
 			const group = getPrimaryDispatchGroup(kind as never, true);

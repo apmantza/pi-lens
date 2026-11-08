@@ -122,7 +122,7 @@ describe("Tool registry parity (#5418)", () => {
 		).toEqual([]);
 	});
 
-	it("every command-spec managed tool id resolves to an installer entry", () => {
+	it("every command-spec install pointer resolves to an installer entry or a reason", () => {
 		// `resolveToolCommandWithInstallFallback` asks the installer for exactly
 		// `spec.managedToolId ?? toolId`, so a dangling pointer is a silent
 		// no-op repair path, not an error.
@@ -130,13 +130,20 @@ describe("Tool registry parity (#5418)", () => {
 			([toolId, spec]) => [toolId, spec.managedToolId ?? toolId] as const,
 		);
 		assertNonEmptyScan("command specs", pointers.length, 15);
-		const dangling = pointers
-			.filter(([, managedToolId]) => !installerIds.has(managedToolId))
-			.map(([toolId, managedToolId]) => `${toolId}->${managedToolId}`);
-		expect(
-			dangling,
-			`command specs whose managed tool id has no installer entry (drop the field, or make the install story a written reason): ${dangling.join(", ")}`,
-		).toEqual([]);
+		const audit = auditRegistry({
+			sweepName: "registry-parity:command-spec-install-pointer",
+			flagged: pointers
+				.filter(([, managedToolId]) => !installerIds.has(managedToolId))
+				.map(([toolId, managedToolId]) => ({
+					key: `${toolId}->${managedToolId}`,
+					detail: `spec ${toolId} asks the installer for "${managedToolId}"`,
+				})),
+			registered: [],
+			exemptions: COMMAND_SPEC_INSTALL_REASONS,
+			remediation:
+				"Point the spec at a real installer entry, drop the pointer, or record the install story in COMMAND_SPEC_INSTALL_REASONS.",
+		});
+		expect(audit.problems).toEqual([]);
 	});
 
 	it(
@@ -234,6 +241,9 @@ function runnerCliCommands(): {
 const HOST_TOOLCHAIN =
 	"Host toolchain the project or image provides; pi-lens never installs a compiler, interpreter or shell.";
 
+const INSTALL_OWNED_BY_5410 =
+	"Install decision owned by #5410: the runner skips while the CLI is absent, and no installer entry exists today.";
+
 const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
 	cl: HOST_TOOLCHAIN,
 	clang: HOST_TOOLCHAIN,
@@ -253,6 +263,25 @@ const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
 	fish_indent: HOST_TOOLCHAIN,
 	mix: HOST_TOOLCHAIN,
 	elixirc: HOST_TOOLCHAIN,
+	// The project's own detekt build (Gradle/Maven plugin) supplies this CLI; the
+	// installer registry has no detekt entry and the runner skips without it.
+	detekt: HOST_TOOLCHAIN,
+	// #5418's two rows: both runners skip while their CLI is absent, and the
+	// installer registry has no entry for either name (`typos-lsp` is the
+	// separate LSP server binary, not the `typos` CLI).
+	phpstan: INSTALL_OWNED_BY_5410,
+	typos: INSTALL_OWNED_BY_5410,
+};
+
+/**
+ * A command spec whose install pointer the installer registry cannot answer.
+ * `minFlagged: 0` would let an empty pointer population pass, so the audit
+ * floor is the 15-spec scan above and every dangling pointer must appear here.
+ */
+const COMMAND_SPEC_INSTALL_REASONS: Record<string, string> = {
+	"eslint->eslint":
+		"The runner resolves the project's own node_modules/.bin eslint first; pi-lens has no eslint installer entry, and that install decision is #5410's.",
+	"phpstan->phpstan": INSTALL_OWNED_BY_5410,
 };
 
 describe("Runner CLI scanner (#5418)", () => {
@@ -408,13 +437,21 @@ function splitAtDepthZero(text: string): string[] {
 	return segments;
 }
 
-const DOC_FILES = [
-	"docs/language-coverage.md",
-	"docs/features.md",
-	"docs/agent-guide.md",
-	"docs/agent-tools.md",
-	"docs/configuration.md",
-];
+/**
+ * Every markdown file in `docs/`, derived from the directory: a new doc that
+ * grows a Dispatch Runners table, or copies the autofix tool list, is covered
+ * the moment it is written, with no list here to keep current.
+ */
+const DOC_FILES = fs
+	.readdirSync(path.join(ROOT, "docs"))
+	.filter((name) => name.endsWith(".md"))
+	.sort()
+	.map((name) => `docs/${name}`);
+
+/** One doc file's text, read fresh so no check inherits another's content. */
+function readDoc(relative: string): string {
+	return fs.readFileSync(path.join(ROOT, relative), "utf8");
+}
 
 /**
  * A Dispatch Runners cell that is prose rather than a runner list. Keyed by file
@@ -434,9 +471,8 @@ describe("Docs dispatch-runner tables (#5418)", () => {
 		const malformed: string[] = [];
 		let scanned = 0;
 		for (const relative of DOC_FILES) {
-			const text = fs.readFileSync(path.join(ROOT, relative), "utf8");
 			const { cells, malformed: rows } = tableColumnCells(
-				text,
+				readDoc(relative),
 				"Dispatch Runners",
 			);
 			scanned += cells.length;
@@ -470,7 +506,6 @@ describe("Docs dispatch-runner tables (#5418)", () => {
 			flagged: [...flagged, ...proseCells],
 			registered: [],
 			exemptions: DOC_PROSE_CELLS,
-			minFlagged: proseCells.length,
 			remediation:
 				"Name a registered runner, fix the table row, or record the prose cell in DOC_PROSE_CELLS.",
 		});
@@ -479,25 +514,39 @@ describe("Docs dispatch-runner tables (#5418)", () => {
 });
 
 describe("Docs autofix tool list (#5418)", () => {
-	it("the bus-event autofix list names exactly the safe pipeline autofix tools", () => {
-		const text = fs.readFileSync(path.join(ROOT, "docs/features.md"), "utf8");
-		const lists = [...text.matchAll(/dispatch autofix \(([^)]*)\)/g)].map(
-			(match) => match[1],
+	it("every docs autofix tool list names the pipeline's safe autofix tools", () => {
+		// Every docs list of the shape `dispatch autofix (a/b/c)` must name the
+		// pipeline's own autofix tools, so a copy in another doc drifts too.
+		const lists = DOC_FILES.flatMap((relative) =>
+			[...readDoc(relative).matchAll(/dispatch autofix \(([^)]*)\)/g)].map(
+				(match) => ({ source: relative, body: match[1] }),
+			),
 		);
 		assertNonEmptyScan("docs autofix tool lists", lists.length, 1);
-		const documented = new Set(
-			lists
-				.flatMap((list) => list.split("/"))
-				.map((entry) => entry.trim().split(/\s+/)[0])
-				.filter(Boolean),
-		);
-		assertNonEmptyScan("documented autofix tools", documented.size, 10);
 		const real = new Set(listSafePipelineAutofixTools());
-		const invented = [...documented].filter((name) => !real.has(name));
-		const undocumented = [...real].filter((name) => !documented.has(name));
+		const violations: string[] = [];
+		for (const { source, body } of lists) {
+			const documented = body
+				.split("/")
+				.map((entry) => entry.trim().split(/\s+/)[0])
+				.filter(Boolean);
+			assertNonEmptyScan(
+				`documented autofix tools (${source})`,
+				documented.length,
+				10,
+			);
+			for (const name of documented.filter((name) => !real.has(name))) {
+				violations.push(`${source} invents "${name}"`);
+			}
+			for (const name of [...real].filter(
+				(name) => !documented.includes(name),
+			)) {
+				violations.push(`${source} omits "${name}"`);
+			}
+		}
 		expect(
-			[...invented, ...undocumented],
-			`docs/features.md autofix list vs AUTOFIX_CAPABILITIES — invented: ${invented.join(", ")}; missing: ${undocumented.join(", ")}`,
+			violations,
+			`docs autofix lists vs the pipeline's safe autofix tools: ${violations.join("; ")}`,
 		).toEqual([]);
 	});
 });

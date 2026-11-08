@@ -253,7 +253,7 @@ When `actionableWarnings.autoFix.enabled` is set in global or project config (or
 
 ### Bus Events — `pilens:files:touched` (#482)
 
-pi-lens writes files **outside the agent's own tool calls**: dispatch autofix (biome/ruff/eslint/stylelint/sqlfluff/rubocop/ktlint/ktfmt/rust-clippy/dart-fix/golangci-lint/detekt/markdownlint/oxlint --fix) mutates the file immediately for a `write` and at `agent_end` for a deferred `edit` (see "Formatters" above); formatter runs (immediate or deferred-at-`agent_end`) do the same; and the conservative actionable-warnings autofix above applies LSP quickfixes at `agent_end` the same way. Other extensions in the same session that track file mutations are otherwise blind to those writes — this event, published either way, is how they find out.
+pi-lens writes files **outside the agent's own tool calls**: dispatch autofix (biome/ruff/eslint/stylelint/sqlfluff/rubocop/ktlint/ktfmt/rust-clippy/dart-analyze/golangci-lint/detekt/markdownlint/oxlint --fix) mutates the file immediately for a `write` and at `agent_end` for a deferred `edit` (see "Formatters" above); formatter runs (immediate or deferred-at-`agent_end`) do the same; and the conservative actionable-warnings autofix above applies LSP quickfixes at `agent_end` the same way. Other extensions in the same session that track file mutations are otherwise blind to those writes — this event, published either way, is how they find out.
 
 pi-lens broadcasts them on pi's shared in-process event bus (`pi.events`, exposed to every extension via the `ExtensionAPI`) as a single named event:
 
