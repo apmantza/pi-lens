@@ -386,7 +386,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"execRaw is the shared raw ast-grep invocation: the rule comes from the caller's `-p`/`--config` argument and every target is an explicit path in `args`, so nothing is discovered from the child's directory. When the npx fallback won, `...this.sgSpawnOptions` adds the pi-lens-owned neutral cwd (#4193) the scan cannot follow through a class-field spread; without it the spread is empty and the child inherits the host cwd",
 	],
 	[
-		"clients/sg-runner.ts#SgRunner.exec:577cdec8",
+		"clients/sg-runner.ts#SgRunner.exec:e37d4c7a",
 		"exec is the shared ast-grep invocation (optionally through bash on Windows): same explicit-argument contract as execRaw, and the same conditional pi-lens-owned neutral cwd when the npx fallback won",
 	],
 	[

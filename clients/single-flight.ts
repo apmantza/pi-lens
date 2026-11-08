@@ -42,6 +42,8 @@
  * it rather than absorbing it.
  */
 
+import { spawnAbortScope } from "./spawn-abort-scope.js";
+
 /** Options for one {@link SingleFlight} instance. */
 export interface SingleFlightOptions {
 	/**
@@ -186,8 +188,12 @@ export function createSingleFlight<T>(
 			rerunRequested: false,
 		};
 
+		// #5097: the flight serves every caller that joins it, so no one caller's
+		// abort scope (a tool call's Esc) may cancel its spawns. An aborted
+		// availability probe left the tool reported missing for the cooldown.
+		const pass = (): Promise<T> => spawnAbortScope.exit(fn);
 		const chain = async (): Promise<T> => {
-			let result = await fn();
+			let result = await pass();
 			// KNOWN INTERACTION, `coalesceTrailing` + `generation`: a flight that
 			// gets superseded mid-pass with its rerun bit already set still runs
 			// that one trailing pass, because the bit lives on the flight and no
@@ -209,7 +215,7 @@ export function createSingleFlight<T>(
 			// burst-that-overlaps-a-pass, not one per request.
 			while (flight.rerunRequested) {
 				flight.rerunRequested = false;
-				result = await fn();
+				result = await pass();
 			}
 			return result;
 		};
