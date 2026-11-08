@@ -92,6 +92,19 @@ const notFoundResult = { stdout: "", stderr: "", status: 1 };
 
 const okResult = { stdout: "/usr/bin/java\n", stderr: "", status: 0 };
 
+/**
+ * The finder itself could not run (the shape `classifySpawnFailure` gives an
+ * EACCES): a fact about the prober, not about `java`.
+ */
+const finderUnspawnableResult = {
+	stdout: "",
+	stderr: "",
+	status: null,
+	error: Object.assign(new Error("spawn which EACCES"), { code: "EACCES" }),
+	failure: "spawn",
+	spawnFailure: { kind: "permission-denied" },
+};
+
 function finder(): string {
 	return process.platform === "win32" ? "where" : "which";
 }
@@ -358,6 +371,52 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 			([cmd, args]) => cmd === finder() && args[0] === "java",
 		).length;
 		expect(javaProbes).toBe(1);
+		// A finder that RAN and found nothing is a genuine absence, read from the
+		// probe itself: the unspawnable-finder override must not reach it.
+		expect(decisions().at(-1)?.metadata).toMatchObject({
+			tool: "java",
+			outcome: "missing",
+			cause: "not-found",
+			latched: true,
+			classifiedBy: "probe",
+		});
+	});
+
+	// Recurrence: shape 83. `formatters.ts` `which()` learned in #1495 that a
+	// `where`/`which` that could not spawn says nothing about the tool, while
+	// `runJavaProbe` kept the unconditional `missing` override, so one EACCES on
+	// the finder latched java absent until the next session.
+	it("a finder that cannot spawn is a transient rejection, retried after the cooldown", async () => {
+		safeSpawnAsync.mockImplementation(async () => finderUnspawnableResult);
+		const { resolveJavaRuntimeEnv } =
+			await import("../../../clients/lsp/jvm-runtime.js");
+
+		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
+		expect(decisions().at(-1)?.metadata).toMatchObject({
+			tool: "java",
+			verdict: "unavailable",
+			outcome: "transient",
+			cause: "probe-rejected",
+			latched: false,
+			retryAfterMs: TRANSIENT_BASE_COOLDOWN_MS,
+			classifiedBy: "caller",
+		});
+
+		advancePastCooldown();
+		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
+			cmd === finder() && args[0] === "java" ? okResult : notFoundResult,
+		);
+		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
+		expect(
+			safeSpawnAsync.mock.calls.filter(
+				([cmd, args]) => cmd === finder() && args[0] === "java",
+			),
+		).toHaveLength(2);
+		expect(decisions().at(-1)?.metadata).toMatchObject({
+			tool: "java",
+			verdict: "available",
+			outcome: "success",
+		});
 	});
 
 	it("recovers after a transient failure: a later successful probe is used, not the stall", async () => {

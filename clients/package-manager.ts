@@ -20,7 +20,7 @@ import * as path from "node:path";
 import { resolve as resolvePath } from "node:path";
 import {
 	type AvailabilityLatch,
-	classifyProbeFailure,
+	classifyFinderFailure,
 	createAvailabilityLatch,
 	isTransientDecision,
 	logAvailabilityDecision,
@@ -196,11 +196,8 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
 		return true;
 	}
 
-	const { outcome, cause, evidence } = classifyProbeFailure(result, {
+	const { outcome, cause, evidence, forced } = classifyFinderFailure(result, {
 		hostStallMs,
-		// Preserve pre-#1496 meaning for anything the classifier can't place: a
-		// present manager that rejects its probe is durable, same as before.
-		unclassifiedFailureOutcome: "missing",
 	});
 	const retryAfterMs = latch.noteUnavailable(outcome, cause);
 	logAvailabilityDecision({
@@ -213,7 +210,7 @@ async function probeAvailability(pm: NodePackageManager): Promise<boolean> {
 		hostStallMs,
 		...(retryAfterMs > 0 && { retryAfterMs }),
 		budgetMs: PROBE_TIMEOUT_MS,
-		classifiedBy: "probe",
+		classifiedBy: forced ? "caller" : "probe",
 		evidence,
 	});
 	return false;

@@ -36,7 +36,7 @@ import { logLatency } from "./latency-logger.js";
 import { compareOrdinal } from "./string-utils.js";
 import {
 	type AvailabilityLatch,
-	classifyProbeFailure,
+	classifyFinderFailure,
 	createAvailabilityLatch,
 	logAvailabilityDecision,
 	startHostStallSampler,
@@ -563,29 +563,13 @@ async function which(command: string): Promise<string | null> {
 	// A `which`/`where` that RAN and found nothing exits nonzero with NO spawn
 	// error, and only that is a genuine absence an install would fix.
 	//
-	// An UNSPAWNABLE prober is the opposite (#1495 review): EACCES, `spawn
-	// UNKNOWN`, EMFILE, an unresolvable cwd, or `where`/`which` itself missing
-	// says nothing about the tool that was asked for. Claiming `missing` there
-	// was the worst version of this bug, because the prober is shared by every
-	// which-gated formatter — one EACCES would have latched a dozen of them off
-	// for the session. So the `missing` override is granted only to a prober that
-	// ran, and anything that stopped it from running stays transient.
-	const proberRan = !result.error;
-	const classified = classifyProbeFailure(result, {
+	// An UNSPAWNABLE prober says nothing about the tool asked for, and
+	// `classifyFinderFailure` owns that reading (#1495 review): a forced row is
+	// a caller assertion over the classifier's answer, so it logs
+	// `classifiedBy: "caller"` (#2226 review F1).
+	const { outcome, cause, forced } = classifyFinderFailure(result, {
 		hostStallMs,
-		...(proberRan && { unclassifiedFailureOutcome: "missing" as const }),
 	});
-	let { outcome, cause } = classified;
-	// This call site OVERRIDES classifyProbeFailure's own answer below, so a
-	// row it forced is a caller assertion, not a probe classification — the
-	// scrutiny availability-policy.ts:253-258 reserves for "caller" rows must
-	// not be laundered away by mislabeling this one "probe" (#2226 review F1).
-	let outcomeForced = false;
-	if (!proberRan && outcome !== "transient") {
-		outcome = "transient";
-		cause = "probe-rejected";
-		outcomeForced = true;
-	}
 	const retryAfterMs = entry.latch.noteUnavailable(outcome, cause);
 	if (outcome === "transient") whichTransientCommands.add(command);
 	else whichTransientCommands.delete(command);
@@ -602,7 +586,7 @@ async function which(command: string): Promise<string | null> {
 		hostStallMs,
 		...(retryAfterMs > 0 && { retryAfterMs }),
 		budgetMs: WHICH_BUDGET_MS,
-		classifiedBy: outcomeForced ? "caller" : "probe",
+		classifiedBy: forced ? "caller" : "probe",
 	});
 	return null;
 }
