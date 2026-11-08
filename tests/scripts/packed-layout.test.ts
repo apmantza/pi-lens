@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SPLIT_ENTRIES } from "../../scripts/bundle-dist.mjs";
 import {
+	COMPUTED_ADMISSIONS,
 	packedImportResolutionViolations,
 	packedLayoutViolations,
 } from "../../scripts/lib/packed-layout.mjs";
@@ -235,10 +236,70 @@ describe("packedImportResolutionViolations (#5365)", () => {
 		["require", "require(name)"],
 		["require.resolve", "require.resolve(name)"],
 		["import.meta.resolve", "import.meta.resolve(name)"],
+		// #5365 r3 V1: a non-literal key on a loader object is a load call of
+		// its own, so its argument is judged like a bare `require(name)`.
+		["require", "require[k](name)"],
+		["module", "module[k](name)"],
+		["import.meta", "import.meta[k](name)"],
+		// A string-literal key (plain or template) reads as its dotted name, so
+		// the message names the loader member, not the object.
+		["module.require", 'module["require"](name)'],
+		["module.require", "module[`require`](name)"],
+		["require.resolve", 'require["resolve"](name)'],
+		["import.meta.resolve", 'import.meta["resolve"](name)'],
 	])("flags a computed %s argument", (kind, call) => {
 		expect(
 			checkImports({ "dist/index.js": `${call};`, "package.json": "{}" }),
 		).toEqual([`dist/index.js: computed ${kind}(name)`]);
+	});
+
+	// #5365 r3 V1 (verify round r2, Greptile thread Drw): `referenceCall` read
+	// dotted callees only, so a computed member call loaded a module the gate
+	// never judged. A string-literal key is its dotted name. Each spelling below
+	// passed the r2 head; `module.require` is the non-computed control that
+	// already reds there.
+	it.each([
+		['module["require"]("./missing.cjs")', "scripts/a.cjs", "./missing.cjs"],
+		['module[`require`]("./missing.cjs")', "scripts/a.cjs", "./missing.cjs"],
+		[
+			'const k = "require"; module[k]("./missing.cjs")',
+			"scripts/a.cjs",
+			"./missing.cjs",
+		],
+		['require["resolve"]("./missing.js")', "scripts/a.mjs", "./missing.js"],
+		['import.meta["resolve"]("./missing.js")', "scripts/a.mjs", "./missing.js"],
+		['require[k]("./m.js")', "scripts/a.cjs", "./m.js"],
+		['module.require("./missing.js")', "scripts/a.mjs", "./missing.js"],
+	])("flags the load call %s of an unpacked file", (text, file, spec) => {
+		expect(checkImports({ [file]: text, "package.json": "{}" })).toEqual([
+			missing(file, spec),
+		]);
+	});
+
+	// #5365 r3 V1 negative: the shipped bundle carries esbuild's `__require`
+	// shim, which calls `require.apply(this, arguments)` (dist/index.js). Only
+	// the loader members the gate names are load calls; a member call on
+	// `require` that loads nothing must not be read as one.
+	it("does not read esbuild's require.apply shim as a load call", () => {
+		expect(
+			checkImports({
+				"dist/index.js":
+					"function f() { return require.apply(this, arguments); }",
+				"package.json": "{}",
+			}),
+		).toEqual([]);
+	});
+
+	// #5365 r3 V1b: esbuild emits `__require` in the shipped bundle
+	// (`dist/index.js`); the callee check read only the bare name `require`, so
+	// a relative `__require("./x")` passed unjudged.
+	it("reads esbuild's __require shim as a load call", () => {
+		expect(
+			checkImports({
+				"dist/index.js": 'const m = __require("./missing.js");',
+				"package.json": "{}",
+			}),
+		).toEqual([missing("dist/index.js")]);
 	});
 
 	it("admits only the pathToFileURL(<identifier>) form, anywhere", () => {
@@ -302,6 +363,17 @@ describe("packedImportResolutionViolations (#5365)", () => {
 			"scripts/install-selftest.mjs: computed require(spec)",
 			"scripts/other.mjs: computed import(url.href)",
 		]);
+	});
+
+	// #5365 r3 V2 (Greptile thread Drx, shape 38): each admission's reason lived
+	// in a trailing comment that nothing read. A row added without a reason, or
+	// with a blank one, reds here.
+	it("gives every computed admission row a non-empty reason", () => {
+		expect(
+			COMPUTED_ADMISSIONS.filter(
+				(row) => typeof row.reason !== "string" || row.reason.trim() === "",
+			),
+		).toEqual([]);
 	});
 
 	it.each([

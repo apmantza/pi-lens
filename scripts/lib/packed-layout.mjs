@@ -61,24 +61,61 @@ export function packedLayoutViolations(packedPaths, readText) {
  * is a bare package specifier or an absolute `file://` URL the script resolves
  * at run time inside the INSTALLED package, so none names a packed path. A
  * rename or a new computed argument in these files reds the gate on purpose:
- * the author reads the argument and adds a row with its reason.
+ * the author reads the argument and adds a row with its `reason`, which the
+ * unit test requires to be a non-empty string (#5365 r3, shape 38).
  */
-const COMPUTED_ADMISSIONS = [
+export const COMPUTED_ADMISSIONS = [
 	// install-selftest.mjs probes the installed package's dependencies.
-	["scripts/install-selftest.mjs", "import", "url.href"], // file:// URL of a resolved dependency
-	["scripts/install-selftest.mjs", "import", "installerUrl"], // file:// URL inside the install
-	["scripts/install-selftest.mjs", "require.resolve", "spec"], // bare package specifier
-	[
-		"scripts/install-selftest.mjs",
-		"require.resolve",
-		"`${tool.packageName}/package.json`", // bare package name
-	],
-	["scripts/install-selftest.mjs", "require.resolve", "specifier"], // bare package specifier
+	{
+		file: "scripts/install-selftest.mjs",
+		kind: "import",
+		argument: "url.href",
+		reason: "file:// URL of a resolved dependency",
+	},
+	{
+		file: "scripts/install-selftest.mjs",
+		kind: "import",
+		argument: "installerUrl",
+		reason: "file:// URL inside the install",
+	},
+	{
+		file: "scripts/install-selftest.mjs",
+		kind: "require.resolve",
+		argument: "spec",
+		reason: "bare package specifier",
+	},
+	{
+		file: "scripts/install-selftest.mjs",
+		kind: "require.resolve",
+		argument: "`${tool.packageName}/package.json`",
+		reason: "bare package name",
+	},
+	{
+		file: "scripts/install-selftest.mjs",
+		kind: "require.resolve",
+		argument: "specifier",
+		reason: "bare package specifier",
+	},
 	// warm-loader-cache.mjs resolves jiti and the extension entry.
-	["scripts/warm-loader-cache.mjs", "import.meta.resolve", "specifier"], // bare package specifier
-	["scripts/warm-loader-cache.mjs", "require.resolve", "specifier"], // bare package specifier
-	["scripts/warm-loader-cache.mjs", "import", "url"], // file:// URL it just resolved
-].map(([file, kind, argument]) => `${file}\n${kind}\n${argument}`);
+	{
+		file: "scripts/warm-loader-cache.mjs",
+		kind: "import.meta.resolve",
+		argument: "specifier",
+		reason: "bare package specifier",
+	},
+	{
+		file: "scripts/warm-loader-cache.mjs",
+		kind: "require.resolve",
+		argument: "specifier",
+		reason: "bare package specifier",
+	},
+	{
+		file: "scripts/warm-loader-cache.mjs",
+		kind: "import",
+		argument: "url",
+		reason: "file:// URL it just resolved",
+	},
+];
 
 // A literal specifier outside the package: a Node builtin or an npm package
 // name (optionally scoped, optionally with a subpath). A colon anywhere else
@@ -87,6 +124,17 @@ const PACKAGE_SPECIFIER =
 	/^(?:node:[\w/.-]+|(?:@[\w.~-]+\/)?[\w~-][\w.~-]*(?:\/\S*)?)$/;
 
 const PATH_TO_FILE_URL = /^pathToFileURL\d*$/;
+
+// A bare load call: `require`, and esbuild's renames of it (`__require` in the
+// shipped bundle, `_require2` on a collision).
+const REQUIRE_CALLEE = /^_*require\d*$/;
+
+// The dotted loader members the gate reads (`require.resolve` and so on).
+const LOADER_MEMBERS = [
+	"require.resolve",
+	"module.require",
+	"import.meta.resolve",
+];
 
 /**
  * #5365: every relative specifier a packed file names must be in that SAME
@@ -111,9 +159,12 @@ const PATH_TO_FILE_URL = /^pathToFileURL\d*$/;
  * file that does not parse are findings. #4314 shipped
  * `import(["./lsp", "capabilities.js"].join("/"))`, a file no build produces.
  *
- * Forms read: `import … from`, `export … from`, `import()`, `require()`,
- * `module.require()`, `require.resolve()`, `import.meta.resolve()` (the parser
- * also reads the minified `import"./x"` and escaped spellings). Not read:
+ * Forms read: `import … from`, `export … from`, `import()`, `require()` (and
+ * esbuild's `__require()`), `module.require()`, `require.resolve()`,
+ * `import.meta.resolve()`, the same calls through a string-literal computed key
+ * (`module["require"]()`), and a non-literal computed key on `require`,
+ * `module` or `import.meta` as a load call. The parser also reads the minified
+ * `import"./x"` and escaped spellings. Not read:
  * `new URL("./…", import.meta.url)` (a runtime asset path whose base the bundle
  * rewrites; `packedLayoutViolations` only checks its `dist/clients|tools`
  * prefix, not that the target exists), a `createRequire(…)` result bound to
@@ -174,7 +225,12 @@ export function packedImportResolutionViolations(
 			const argumentText = source.replace(/\s+/g, " ");
 			if (kind === "import" && isPathToFileUrl(node)) return;
 			if (
-				COMPUTED_ADMISSIONS.includes(`${packedPath}\n${kind}\n${argumentText}`)
+				COMPUTED_ADMISSIONS.some(
+					(row) =>
+						row.file === packedPath &&
+						row.kind === kind &&
+						row.argument === argumentText,
+				)
 			)
 				return;
 			findings.add(`${packedPath}: computed ${kind}(${argumentText})`);
@@ -230,17 +286,35 @@ function isPathToFileUrl(node) {
 	);
 }
 
-/** The call kinds that load a module by specifier, else null. */
+/**
+ * The call kinds that load a module by specifier, else null. A string-literal
+ * computed key reads as its dotted name (`module["require"]` is
+ * `module.require`). A non-literal key on `require`, `module` or `import.meta`
+ * is a load call of that object's own kind, so its first argument is judged
+ * like any other (`require[k]("./m.js")`; #5365 r3).
+ */
 function referenceCall(callee) {
 	if (callee.type === "Identifier")
-		return callee.name === "require" ? "require" : null;
-	if (callee.type !== "MemberExpression" || callee.computed) return null;
-	const { object, property } = callee;
-	if (object.type === "Identifier" && object.name === "require")
-		return property.name === "resolve" ? "require.resolve" : null;
-	if (object.type === "Identifier" && object.name === "module")
-		return property.name === "require" ? "module.require" : null;
+		return REQUIRE_CALLEE.test(callee.name) ? "require" : null;
+	if (callee.type !== "MemberExpression") return null;
+	const owner = loaderOwner(callee.object);
+	if (owner === null) return null;
+	const key = callee.computed
+		? stringValue(callee.property)
+		: callee.property.name;
+	if (key === null) return owner;
+	const kind = `${owner}.${key}`;
+	return LOADER_MEMBERS.includes(kind) ? kind : null;
+}
+
+/** The object a loader member hangs off: `require`, `module`, `import.meta`. */
+function loaderOwner(object) {
+	if (
+		object.type === "Identifier" &&
+		(object.name === "require" || object.name === "module")
+	)
+		return object.name;
 	if (object.type === "MetaProperty" && object.meta.name === "import")
-		return property.name === "resolve" ? "import.meta.resolve" : null;
+		return "import.meta";
 	return null;
 }
