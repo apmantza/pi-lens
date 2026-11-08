@@ -5,6 +5,61 @@ import { stripSource } from "../support/sweep-kit.js";
 
 const LEDGER = path.join(process.cwd(), "clients/degradation-ledger.ts");
 
+/**
+ * The kinds that have no doc block, by name. The pin compares this list exactly
+ * with the members whose doc block is empty, so a kind that gains a doc, loses
+ * one, or leaves the union must move its own entry here: the list shrinks on
+ * purpose. `mode-suppression` and `grammar-blocked` are undocumented by design
+ * (#5400); the other 34 predate #5401 and have no doc yet.
+ */
+const UNDOCUMENTED_KINDS: readonly string[] = [
+	"ast-grep-napi-unavailable",
+	"ast-grep-rule-invalid",
+	"autofix-agreement-unavailable",
+	"aux_wait_demoted",
+	"aux_wait_repromoted",
+	"bash-view-clipped",
+	"bus-stale",
+	"cascade-budget-override-disarmed",
+	"diagnostic-retained-unreconciled",
+	"formatter-failure",
+	"formatter-skip",
+	"grammar-blocked",
+	"install-retry-exhausted",
+	"instance-registry-corrupt",
+	"lens-diagnostics-analysis-root-rejected",
+	"lsp-adopted-root-evicted",
+	"lsp-breaker",
+	"lsp-capability-skip",
+	"lsp-diagnostics-file-too-large",
+	"lsp-diagnostics-timeout",
+	"lsp-diagnostics-unsupported",
+	"lsp-notify-inflight-stall",
+	"lsp-pull-unconfirmed",
+	"lsp-scanner-coverage-gap",
+	"mode-suppression",
+	"native-read-clipped",
+	"pip-install-strategy-succeeded",
+	"pip-pep668-strategy-refused",
+	"query-predicates-invalid",
+	"self-drift-hash-budget-exhausted",
+	"spawn-failure",
+	"tool-result-adopted-project",
+	"trust-refusal",
+	"wasm-abort",
+	"widget-disposition-reconcile-fallback",
+	"workspace-glob-cap",
+];
+
+/**
+ * True when a doc block opens with its own backticked name. Comment markers and
+ * leading whitespace are skipped; any other opening (another kind's name, prose,
+ * or the name further down the block) is false.
+ */
+function docLeadsWith(doc: string, kind: string): boolean {
+	return doc.replace(/^[\s/*]+/, "").startsWith(`\`${kind}\``);
+}
+
 interface UnionMember {
 	readonly kind: string;
 	readonly line: number;
@@ -56,15 +111,22 @@ describe("DegradationKind doc blocks name their own kind (#5401)", () => {
 	// the doc blocks stayed where they were and described the kind that used to
 	// sit at their position. About 86 docs were misplaced on master (for example
 	// `mode-suppression` carried the `runner-empty-result` doc, #5401 item 1).
-	// Every kind doc now starts with its own backticked name, so a re-sort or an
-	// insertion that detaches a doc from its kind reds this pin.
-	it("requires each kind's doc block to name that kind", () => {
+	// A documented kind's block must lead with its own backticked name, so a
+	// re-sort or an insertion that detaches a doc from its kind reds this pin.
+	// A kind with an empty block must be listed in UNDOCUMENTED_KINDS, so a doc
+	// stacked onto a neighbour or deleted (which leaves its own kind empty) reds it.
+	it("requires each kind's doc block to lead with that kind", () => {
 		const members = readUnionMembers(fs.readFileSync(LEDGER, "utf8"));
 		// Floor: the union had 311 members when this pin landed. A parse that finds
 		// far fewer must fail rather than pass over an empty population.
 		expect(members.length).toBeGreaterThanOrEqual(250);
+		const undocumented = members
+			.filter((m) => m.doc.trim() === "")
+			.map((m) => m.kind)
+			.sort();
+		expect(undocumented).toEqual([...UNDOCUMENTED_KINDS].sort());
 		const misnamed = members
-			.filter((m) => m.doc.trim() !== "" && !m.doc.includes(`\`${m.kind}\``))
+			.filter((m) => m.doc.trim() !== "" && !docLeadsWith(m.doc, m.kind))
 			.map((m) => `${m.kind} (line ${m.line})`);
 		expect(misnamed).toEqual([]);
 	});
