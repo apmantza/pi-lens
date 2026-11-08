@@ -5038,18 +5038,19 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				const env = setupTestEnvironment("pi-lens-thrash-early-exit-");
 				try {
 					const returned = await driveLoop(env, makeInput(env), 4, true);
-					const texts = returned.map((result) =>
-						result?.content.map((part) => part.text).join("\n"),
+					const texts = returned.map(
+						(result) =>
+							result?.content.map((part) => part.text).join("\n") ?? "",
 					);
 					expect(texts[2]).toContain("🔴 THRASHING — 3 consecutive `edit`");
 					// Original content first, still a failed result for the host.
-					expect(texts[2]?.startsWith("oldText not found")).toBe(true);
+					expect(texts[2].startsWith("oldText not found")).toBe(true);
 					expect(returned[2]?.isError).toBe(true);
 					// No warning, nothing to add: the host's own result passes through.
 					expect([returned[0], returned[1]]).toEqual([undefined, undefined]);
 					// The streak latch holds: the fourth call repeats no THRASHING (it
 					// may carry the unlatched BLIND WRITE warning, accepted residual).
-					expect(texts[3] ?? "").not.toContain("THRASHING");
+					expect(texts[3]).not.toContain("THRASHING");
 				} finally {
 					env.cleanup();
 				}
