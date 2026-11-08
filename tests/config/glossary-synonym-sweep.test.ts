@@ -447,7 +447,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/installer/managed-tool-refresh.ts": 2,
 		"clients/instance-reaper.ts": 4,
 		"clients/instance-registry-lock.ts": 3,
-		"clients/jscpd-client.ts": 2,
 		"clients/knip-client.ts": 3,
 		"clients/lens-config.ts": 4,
 		"clients/live-bus-emitter.ts": 4,
@@ -471,8 +470,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 3 -> 5 (#4493): readGitHead and listGitHeadDelta read the spawn
 		// result's `error` field (SpawnResult.error), not a delivery tier.
 		"clients/opaque-mutation-scan.ts": 5,
-		"clients/opengrep-client.ts": 11,
+		// 11 -> 8 (#5411): opengrep's hand-rolled report lifecycle is gone, so the
+		// `result.error` read of its own spawn moved to `clients/report-scan.ts`.
+		"clients/opengrep-client.ts": 8,
 		"clients/package-manager.ts": 2,
+		// #5411: the one report lifecycle's `result.error` read, which the four
+		// report-scanning clients used to spell themselves.
+		"clients/report-scan.ts": 2,
 		"clients/performance-report.ts": 3,
 		// 13 -> 12 (#5417): the whole-package diff no longer reads `result.error`.
 		"clients/pipeline.ts": 12,
@@ -495,7 +499,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/safe-spawn.ts": 53,
 		// 2 -> 6: the report-scan seam (`runReportScan`) carries the `result.error` reads
 		// gitleaks (3) and trivy (3) each had, plus the failure record; net 8 -> 6.
-		"clients/security-scan-client.ts": 6,
+		// 6 -> 2 (#5411): the seam itself moved to `clients/report-scan.ts`, so what
+		// is left here is the delegate and the failure-record callback.
+		"clients/security-scan-client.ts": 2,
 		// 32 -> 33 (#5097): the `error` of an apply refused after an abort.
 		"clients/sg-runner.ts": 33,
 		"clients/shared-checkout-guard.ts": 1,
@@ -950,7 +956,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/go-client.ts": 4,
 		"clients/govulncheck-client.ts": 12,
 		"clients/host-ports.ts": 2,
-		"clients/jscpd-client.ts": 7,
+		// 7 -> 6 (#5411): the lifecycle's own `Scan error:` log left with its copy of
+		// the spawn handling.
+		"clients/jscpd-client.ts": 6,
 		"clients/knip-client.ts": 14,
 		"clients/latency-logger.ts": 1,
 		"clients/mcp/session.ts": 1,
@@ -959,15 +967,22 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// same `read_symbol` phase as every other miss in this file.
 		"clients/module-report.ts": 19,
 		"clients/ndjson-logger.ts": 2,
-		"clients/opengrep-client.ts": 1,
+		// 1 -> 2 (#5411): the spec's `log` binding, plus the spawn-error log the
+		// lifecycle now takes as an input instead of writing inline.
+		"clients/opengrep-client.ts": 2,
 		"clients/process-singletons.ts": 4,
 		"clients/read-guard-logger.ts": 1,
+		// #5411: the one report lifecycle's `log` input, which the four
+		// report-scanning clients used to call from their own bodies.
+		"clients/report-scan.ts": 4,
 		"clients/review-graph-logger.ts": 1,
 		"clients/review-graph/builder.ts": 1,
 		"clients/ruff-client.ts": 4,
 		"clients/runtime-session.ts": 4,
 		"clients/rust-client.ts": 4,
-		"clients/security-scan-client.ts": 9,
+		// 9 -> 10 (#5411): the delegate keeps its own `this.log` uses and adds the
+		// `log: this.log` binding it hands the shared lifecycle.
+		"clients/security-scan-client.ts": 10,
 		"clients/sg-runner.ts": 5,
 		"clients/test-runner-client.ts": 17,
 		"clients/tool-cwd.ts": 2,
@@ -1187,7 +1202,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.resolve(target)`, as its sibling records in this file spell it.
 		"clients/instance-registry-lock.ts": 9,
 		"clients/instance-registry.ts": 2,
-		"clients/jscpd-client.ts": 8,
+		"clients/jscpd-client.ts": 6,
 		"clients/json-cache-read.ts": 4,
 		"clients/knip-client.ts": 24,
 		// 14 -> 12 (#4689 r2): the language-root clamp asks `isUnderDir`
@@ -1328,7 +1343,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (a `cd` target, and a recognised write's `path.dirname`) before asking
 		// which checkout owns it, and keys the admission set on the resolved root.
 		"clients/opaque-mutation-scan.ts": 12,
-		"clients/opengrep-client.ts": 8,
+		"clients/opengrep-client.ts": 6,
 		"clients/opengrep-config.ts": 3,
 		// New (#4765): the cached pack path and the CLI id-prefix strip.
 		"clients/opengrep-rule-pack.ts": 3,
@@ -1411,6 +1426,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// to `commitDurableStoreAsync`; the helper it replaces took `cwd` and
 		// derived the same path internally.
 		"clients/recent-touches.ts": 6,
+		// #5411: the one report lifecycle's `path.join` of its report directory, and
+		// the same reads jscpd (8 -> 6) and opengrep (8 -> 6) used to make themselves.
+		"clients/report-scan.ts": 3,
 		"clients/reverse-deps.ts": 8,
 		"clients/review-graph-logger.ts": 2,
 		// 33 -> 36 (#4346): the importer pass names a created file by its stem
@@ -1491,7 +1509,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.delimiter` and resolve each entry with `path` namespace calls.
 		"clients/safe-spawn.ts": 32,
 		"clients/search-read-registration.ts": 3,
-		"clients/security-scan-client.ts": 6,
+		"clients/security-scan-client.ts": 4,
 		// #4530: the bin layouts moved here from package-manager.ts.
 		"clients/session-repository.ts": 9,
 		"clients/session-state-store.ts": 3,
@@ -1861,7 +1879,6 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// discriminant: host fields, not a pi-lens status vocabulary.
 		"clients/installer/managed-tool-refresh.ts": 14,
 		"clients/instance-reaper.ts": 15,
-		"clients/jscpd-client.ts": 3,
 		"clients/knip-client.ts": 4,
 		"clients/latency-logger.ts": 1,
 		"clients/lens-config.ts": 2,
@@ -1885,7 +1902,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `status` once for every porcelain read it now serves.
 		"clients/opaque-mutation-scan.ts": 27,
 		// 9 -> 7 (#5411): a report is judged by its content, not the exit status.
-		"clients/opengrep-client.ts": 7,
+		"clients/opengrep-client.ts": 6,
 		"clients/package-manager.ts": 2,
 		"clients/pipeline.ts": 3,
 		"clients/process-snapshot.ts": 14,
@@ -1893,6 +1910,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/project-diagnostics/scanner.ts": 1,
 		"clients/project-lens-config.ts": 4,
 		"clients/read-guard.ts": 10,
+		// #5411: the lifecycle's own `status` reads, which jscpd (3 -> 0), opengrep
+		// (7 -> 6) and the report-scan delegate (5 -> 2) used to spell themselves.
+		"clients/report-scan.ts": 14,
 		"clients/resource-sampler.ts": 7,
 		"clients/review-graph-logger.ts": 1,
 		"clients/review-graph/builder.ts": 12,
@@ -1902,7 +1922,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 25 -> 24 (#5289): the deleted sync `isCommandAvailable` read the spawn
 		// result's exit `status` once.
 		"clients/safe-spawn.ts": 24,
-		"clients/security-scan-client.ts": 5,
+		"clients/security-scan-client.ts": 2,
 		"clients/sg-runner.ts": 32,
 		"clients/shared-checkout-guard.ts": 2,
 		"clients/skills-resolver.ts": 6,
