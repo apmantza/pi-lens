@@ -1065,14 +1065,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :129, :234, :277, :330, :360 (#5377: 6 -> 5, the shared record parse
 	// carries a `none:` line for the corrupt-body arm the fold moved into it)
-	"clients/report-scan.ts": {
-		// #5411: the one report lifecycle's `rm -rf` of its own report directory. It
-		// runs on a path the lifecycle made for itself, and a failure there is a leak
-		// in a scratch parent that sweeps, not a lost scan.
-		silent: 1,
-		identities: "0a5a73b2ed4f1de1",
-		reason: PRE_RULE,
-	}, // :182
 	"clients/resource-sampler.ts": {
 		silent: 5,
 		identities: "a6c6697ae310d788",
@@ -1423,7 +1415,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 // 1169 -> 1166 (#5411): jscpd gave up three silent handlers and opengrep one
 // when their report lifecycles moved into `clients/report-scan.ts`, which
 // admits one of its own.
-const PINNED_TOTAL = 1166;
+// 1166 -> 1165 (#5440 r2): that crash guard records at its own top level now,
+// so the sweep reads it as recorded and `report-scan.ts` admits no row.
+const PINNED_TOTAL = 1165;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;

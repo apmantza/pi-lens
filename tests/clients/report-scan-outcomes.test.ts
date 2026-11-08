@@ -111,7 +111,7 @@ const JSCPD_REPORT = JSON.stringify({
 
 /** What the faked CLI does with the report path it was handed. */
 type Cli = {
-	write: "report" | "nothing" | "directory";
+	write: "report" | "nothing" | "directory" | "unreadable";
 	status: number | null;
 	signal?: NodeJS.Signals | null;
 	stderr?: string;
@@ -133,6 +133,14 @@ type Scanner = {
 	recordKind: string;
 	/** A client whose missing-report reason names the command it ran (#1816). */
 	namesCommandInReason?: boolean;
+	/**
+	 * The exact key set a non-parse result carries, for a client whose failure
+	 * result is its own empty shape plus the failure's fields. Pinned because a
+	 * success result is cached: a raw failure field (stderr, status, outcome)
+	 * spread into it lands in the cache file. The round-1 review of #5440 (F1)
+	 * found that spread in gitleaks and trivy.
+	 */
+	failedResultKeys?: readonly string[];
 	/** A client that passes its own gates with the CLI double in place. */
 	scan: (root: string) => Promise<unknown>;
 	/** Wait for work this case started, so teardown cannot strand it. */
@@ -146,6 +154,7 @@ const SCANNERS: Scanner[] = [
 		reportFileInArgvValue: false,
 		report: GITLEAKS_REPORT,
 		recordKind: "security-scan-report-failed",
+		failedResultKeys: ["findings", "scannedAt", "success", "summary"],
 		scan: async (root) => {
 			const client = new GitleaksClient(false);
 			vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
@@ -158,6 +167,14 @@ const SCANNERS: Scanner[] = [
 		reportFileInArgvValue: false,
 		report: TRIVY_REPORT,
 		recordKind: "security-scan-report-failed",
+		failedResultKeys: [
+			"findings",
+			"licenses",
+			"scannedAt",
+			"secrets",
+			"success",
+			"summary",
+		],
 		scan: async (root) => {
 			fs.writeFileSync(
 				path.join(root, ".pi-lens.json"),
@@ -255,6 +272,8 @@ const CELLS: Array<{
 	expectReason?: string;
 	/** A missing-report row, the one kind that carries #1816's `fields`. */
 	missingReportRow?: boolean;
+	/** Run the cell for these scanners only; the others have no such arm. */
+	only?: Scanner["name"][];
 }> = [
 	{
 		name: "report present, exit 0",
@@ -313,6 +332,18 @@ const CELLS: Array<{
 		cli: { write: "directory", status: 0, stderr: "" },
 		verdict: "failed",
 	},
+	{
+		// The report is there but is not JSON. jscpd's parser throws, and the guard
+		// records it as one failed scan with a `runner-empty-result` row naming the
+		// unreadable report (round-1 review of #5440, F4: the throw was unpinned).
+		// gitleaks and trivy parse the same bytes as zero findings; that is a
+		// separate finding and this cell does not pin it.
+		name: "report present but unreadable",
+		cli: { write: "unreadable", status: 0, stderr: "" },
+		verdict: "failed",
+		expectReason: "unreadable jscpd report",
+		only: ["jscpd"],
+	},
 ];
 
 describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
@@ -366,6 +397,8 @@ describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
 			expect(path.dirname(path.dirname(reportPath))).toBe(reportParent);
 			if (cli.write === "report") fs.writeFileSync(reportPath, scanner.report);
 			else if (cli.write === "directory") fs.mkdirSync(reportPath);
+			else if (cli.write === "unreadable")
+				fs.writeFileSync(reportPath, "not json {");
 			return {
 				error: cli.error,
 				status: cli.status,
@@ -376,33 +409,39 @@ describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
 		});
 	}
 
-	it.each(CELLS)(
-		"reads $name as $verdict, once in its own lane",
-		async (cell) => {
-			fakeCli(cell.cli);
+	it.each(
+		CELLS.filter((cell) => !cell.only || cell.only.includes(scanner.name)),
+	)("reads $name as $verdict, once in its own lane", async (cell) => {
+		fakeCli(cell.cli);
 
-			const result = await scanner.scan(root);
+		const result = await scanner.scan(root);
 
-			expect(verdictOf(result)).toBe(cell.verdict);
-			if (cell.parsed) {
-				const r = result as { findings?: unknown[]; clones?: unknown[] };
-				expect(r.findings ?? r.clones).toHaveLength(1);
-			}
-			expect(recordCounts()).toEqual(
-				cell.verdict === "failed" ? { [scanner.recordKind]: 1 } : {},
+		expect(verdictOf(result)).toBe(cell.verdict);
+		if (scanner.failedResultKeys && cell.verdict !== "analysed") {
+			// The non-parse result is the client's empty shape plus the failure's
+			// own fields and nothing raw (round-1 review of #5440, F1).
+			expect(Object.keys(result as object).sort()).toEqual(
+				[...scanner.failedResultKeys].sort(),
 			);
-			if (cell.expectReason) {
-				expect(reasonText()).toContain(cell.expectReason);
-			}
-			if (scanner.namesCommandInReason && cell.missingReportRow) {
-				// #1816's discriminating identity survives the shared reason builder:
-				// the row names which jscpd the run was (`npx` fallback vs a binary).
-				expect(reasonText()).toContain("command");
-			}
-			// The report directory the client created is gone on every path.
-			expect(reportDirs).toHaveLength(1);
-			expect(fs.existsSync(reportDirs[0]!)).toBe(false);
-			expect(fs.readdirSync(reportParent)).toEqual([]);
-		},
-	);
+		}
+		if (cell.parsed) {
+			const r = result as { findings?: unknown[]; clones?: unknown[] };
+			expect(r.findings ?? r.clones).toHaveLength(1);
+		}
+		expect(recordCounts()).toEqual(
+			cell.verdict === "failed" ? { [scanner.recordKind]: 1 } : {},
+		);
+		if (cell.expectReason) {
+			expect(reasonText()).toContain(cell.expectReason);
+		}
+		if (scanner.namesCommandInReason && cell.missingReportRow) {
+			// #1816's discriminating identity survives the shared reason builder:
+			// the row names which jscpd the run was (`npx` fallback vs a binary).
+			expect(reasonText()).toContain("command");
+		}
+		// The report directory the client created is gone on every path.
+		expect(reportDirs).toHaveLength(1);
+		expect(fs.existsSync(reportDirs[0]!)).toBe(false);
+		expect(fs.readdirSync(reportParent)).toEqual([]);
+	});
 });

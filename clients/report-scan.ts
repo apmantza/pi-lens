@@ -182,14 +182,18 @@ export async function runReportScan<TResult>(
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		spec.log?.(`Scan error: ${message}`);
-		return failed({
+		const failure: ReportScanFailure = {
 			outcome: "crashed",
 			scannedAt,
 			status: null,
 			signal: undefined,
 			stderr: "",
 			summary: message.slice(0, LEDGER_FIELD_MAX),
-		});
+		};
+		// Recorded here, at the handler's top level: the silent-catch sweep reads a
+		// record made through the `failed` closure as silent (#5440 r1 F3).
+		spec.recordFailure?.(failure);
+		return spec.fail(failure);
 	} finally {
 		try {
 			fs.rmSync(outDir, { recursive: true, force: true });
