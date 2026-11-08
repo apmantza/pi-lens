@@ -64,7 +64,11 @@ import {
 } from "./adopted-root-runners.js";
 
 import { laneCopyStandsFor, semanticRank } from "./lane-copies.js";
-import { normalizeRuleId } from "./rule-id-normalize.js";
+import {
+	findingClassKey,
+	normalizeRuleId,
+	withClassSeverity,
+} from "./rule-id-normalize.js";
 import {
 	applyRulePolicy,
 	projectRulePolicy,
@@ -448,6 +452,48 @@ function dedupeOverlappingDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 	}
 
 	return [...byKey.values()];
+}
+
+/** #5416: a class member the class's blocking tier raises (`withClassSeverity`). */
+function blocksAsClassMember(d: Diagnostic): boolean {
+	return d.semantic !== "blocking" && withClassSeverity(d) !== d;
+}
+
+/**
+ * #5416: one verdict and one copy per cross-tool finding class at a place.
+ * It runs on what the per-copy filters, the delta and the pre-edit seed left,
+ * so each of them read every tool's copy apart. A class the seed held a copy
+ * of keeps its other copies as their tools rated them: the finding is listed
+ * as pre-existing, and the seed's scope stays linters only. Every other
+ * member is raised to the class tier, then the copy the overlap dedupe would
+ * prefer stands. It only raises or collapses survivors, so it never lowers a
+ * verdict.
+ */
+function mergeFindingClasses(
+	visible: Diagnostic[],
+	held: readonly Diagnostic[],
+): Diagnostic[] {
+	const heldKeys = new Set(held.map(findingClassKey));
+	const score = (d: Diagnostic) =>
+		semanticRank(d.semantic) * 100 +
+		toolPriority(d.tool, d.defectClass ?? classifyDiagnostic(d));
+	const slotByKey = new Map<string, number>();
+	const merged: Diagnostic[] = [];
+	for (const d of visible) {
+		const key = findingClassKey(d);
+		if (key === undefined || heldKeys.has(key)) {
+			merged.push(d);
+			continue;
+		}
+		const raised = withClassSeverity(d);
+		const slot = slotByKey.get(key);
+		if (slot === undefined) {
+			slotByKey.set(key, merged.push(raised) - 1);
+		} else if (score(raised) > score(merged[slot] as Diagnostic)) {
+			merged[slot] = raised;
+		}
+	}
+	return merged;
 }
 
 function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
@@ -1845,17 +1891,18 @@ export async function dispatchForFile(
 		);
 		// #4484 r2: an unused value is a blocker only while the delta calls it
 		// new. Held back as already seen, it is still observed, promoted as it
-		// was when it was recorded, so the record keeps it pending.
+		// was when it was recorded, so the record keeps it pending. #5416: so is
+		// a class member the merge below raised.
 		stillObserved.push(
 			...promoteDeltaUnusedToBlockers(
 				visibleDiagnostics.flatMap((d) =>
 					!isNew.has(d) &&
 					d.semantic !== "blocking" &&
-					isUnusedValueDiagnostic(d)
+					(isUnusedValueDiagnostic(d) || blocksAsClassMember(d))
 						? [d]
 						: [],
 				),
-			),
+			).map(withClassSeverity),
 		);
 		visibleDiagnostics = promoteDeltaUnusedToBlockers(filtered.new);
 		resolvedCount = filtered.fixed.length;
@@ -1880,7 +1927,11 @@ export async function dispatchForFile(
 		const classified = classifyPreExisting(
 			preEditSeed,
 			[
-				...visibleDiagnostics.filter((d) => d.semantic === "blocking"),
+				// #5416: and a class member the merge below would raise, so the
+				// seed holds it before the raise can block on it.
+				...visibleDiagnostics.filter(
+					(d) => d.semantic === "blocking" || blocksAsClassMember(d),
+				),
 				...heldBackBlockers,
 			],
 			seedContent,
@@ -1896,6 +1947,7 @@ export async function dispatchForFile(
 		}
 		ctx.facts.setBoundedSessionFact(seedKey, classified.nextSeed);
 	}
+	visibleDiagnostics = mergeFindingClasses(visibleDiagnostics, preExisting);
 
 	// Persist full current snapshot for next run (not delta-filtered subset).
 	// Gated on `baselinePathSafe` too: a non-absolute `ctx.filePath` already

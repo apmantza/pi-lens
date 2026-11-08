@@ -437,7 +437,7 @@ function extractOxlintRule(code: string | undefined): string {
 	return code.slice(open + 1, close);
 }
 
-function parseOxlintJson(
+export function parseOxlintJson(
 	raw: string,
 	filePath: string,
 	cwd: string,

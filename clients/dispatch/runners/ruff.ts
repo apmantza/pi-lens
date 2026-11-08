@@ -32,7 +32,7 @@ import { semanticFor } from "../types.js";
 
 const ruff = createAvailabilityChecker("ruff", ".exe");
 
-function parseRuffJson(raw: string, filePath: string): Diagnostic[] {
+export function parseRuffJson(raw: string, filePath: string): Diagnostic[] {
 	try {
 		const parsed = JSON.parse(raw) as Array<{
 			code?: string;
