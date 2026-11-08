@@ -381,7 +381,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	error: {
 		"clients/actionable-warnings.ts": 1,
 		"clients/advisory-provenance.ts": 8,
-		"clients/ast-grep-client.ts": 47,
+		// 47 -> 48 (#5097): the `error` of an apply refused after an abort.
+		"clients/ast-grep-client.ts": 48,
 		"clients/ast-grep-rule-manager.ts": 4,
 		"clients/biome-client.ts": 8,
 		"clients/bounded-pid-file-lock.ts": 7,
@@ -491,7 +492,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 2 -> 6: the report-scan seam (`runReportScan`) carries the `result.error` reads
 		// gitleaks (3) and trivy (3) each had, plus the failure record; net 8 -> 6.
 		"clients/security-scan-client.ts": 6,
-		"clients/sg-runner.ts": 32,
+		// 32 -> 33 (#5097): the `error` of an apply refused after an abort.
+		"clients/sg-runner.ts": 33,
 		"clients/shared-checkout-guard.ts": 1,
 		"clients/single-flight.ts": 3,
 		"clients/smells-rollup.ts": 2,
@@ -1189,7 +1191,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// file a kind names by pattern (`path.basename`), like the inline filter.
 		// 12 -> 10 (#5135): that basename and extname read moved into the shared
 		// `resolveLanguageScope` predicate in `clients/language-registry.ts`.
-		"clients/lens-engine.ts": 10,
+		// 10 -> 5 (#5371): `fileMatchesPathGlobs` and its comment move to
+		// `clients/path-globs.ts`, taking five `node:path` module uses with them.
+		// 5 -> 7 (#5371 r2): the symbol_search scope filter compares each entry
+		// and each candidate's ancestors as paths (`path.resolve` twice), instead
+		// of handing the entries to the glob matcher.
+		"clients/lens-engine.ts": 7,
 		"clients/lens-flag-registry.ts": 13,
 		"clients/lens-map.ts": 14,
 		"clients/log-cleanup.ts": 9,
@@ -1319,6 +1326,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// session-repository.ts, below the spawn seam.
 		"clients/package-manager.ts": 16,
 		"clients/package-root.ts": 4,
+		// #5371: the `paths` glob matcher and its bounded walk arrive from
+		// `clients/lens-engine.ts` with their `node:path` uses — the namespace
+		// import, the `dirname`/`resolve` of an entry, the pattern's literal-prefix
+		// climb, and the ignored-path check's separator. All of them are the
+		// `node:path` module on a spelled glob entry, never the retired map-key
+		// sense: the module keys nothing, and its callers key what it returns.
+		"clients/path-globs.ts": 10,
 		"clients/path-keyed-map.ts": 11,
 		// 30 -> 34: findNearestMarkerRootDetailed (#3691) adds its own marker/root
 		// path locals; the legacy walker body is back to its pre-#3649 text.
@@ -1556,7 +1570,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `toProjectRelativePath` too.
 		// 25 -> 19 (#4689 batch 4): mode=full's merge keys its Sets, dedup key and
 		// per-file map by `normalizeMapKey`, dropping six `path.resolve` calls.
-		"tools/lens-diagnostics.ts": 22,
+		// 22 -> 23 (#5371 r2): the single `path` argument is read through the
+		// shared reader once, ahead of the refusal check (`singlePath.path`).
+		"tools/lens-diagnostics.ts": 23,
 		// 10 -> 8 (#4577 M2): the scalar and batch `path`/`paths` arguments fold
 		// onto `resolveHostToolPath`, dropping one `path.resolve` each.
 		"tools/lsp-diagnostics.ts": 8,

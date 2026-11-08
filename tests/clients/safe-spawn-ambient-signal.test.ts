@@ -11,10 +11,12 @@
 import { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	getAmbientAbortSignal,
 	spawnAbortScope,
 	safeSpawnAsync,
 	setAmbientAbortSignal,
 } from "../../clients/safe-spawn.js";
+import { createSingleFlight } from "../../clients/single-flight.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -94,6 +96,44 @@ describe("safeSpawnAsync ambient abort signal (#197)", () => {
 
 		expect(result.error?.message ?? "").not.toMatch(/aborted before start/i);
 		expect(result.status).not.toBeNull();
+	});
+
+	// #5097: a tool call's scope made the opt-out leaky: the 16 install sites
+	// set `ignoreAmbientSignal`, yet an Esc inside the call killed them.
+	it("ignoreAmbientSignal also opts out of an aborted tool-call scope (#5097)", async () => {
+		const result = await spawnAbortScope.run(AbortSignal.abort(), () =>
+			safeSpawnAsync(NODE, EXIT_OK, { ignoreAmbientSignal: true }),
+		);
+
+		expect(result.error?.message ?? "").not.toMatch(/aborted before start/i);
+		expect(result.status).toBe(0);
+	});
+
+	// #5097: lsp_navigation's requests default to this getter, and a tool call
+	// only sets the scope, so without the preference Esc never reached them.
+	it("getAmbientAbortSignal answers with the tool-call scope over the hook slot (#5097)", () => {
+		const hook = new AbortController().signal;
+		const call = new AbortController().signal;
+		setAmbientAbortSignal(hook);
+
+		expect(spawnAbortScope.run(call, () => getAmbientAbortSignal())).toBe(call);
+		expect(getAmbientAbortSignal()).toBe(hook);
+	});
+
+	// #5097: a single flight serves every caller that joins it, so the caller
+	// that started it must not cancel it. An Esc during a cold ast-grep
+	// availability sweep left the tool reported missing for the 30 s cooldown.
+	it("a single flight's spawn runs to completion when the starting call's scope is aborted (#5097)", async () => {
+		const flight = createSingleFlight<number | null>();
+
+		const status = await spawnAbortScope.run(AbortSignal.abort(), () =>
+			flight.run(
+				"probe",
+				async () => (await safeSpawnAsync(NODE, EXIT_OK)).status,
+			),
+		);
+
+		expect(status).toBe(0);
 	});
 
 	it("kills a noisy child when the retained output reaches its byte cap", async () => {
