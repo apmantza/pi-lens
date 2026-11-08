@@ -248,11 +248,11 @@ const shellcheckRunner: RunnerDefinition = {
 		// A shellcheck that was killed, timed out, or exited without a word did
 		// not analyse the file; `finishParsedRun` alone reads that as clean
 		// (#4522: the tool-state matrix's crashed and unanswered cells).
-		const raw = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 		const parsed = parseToolRun(
 			"shellcheck",
-			{ result, output: raw, exitCodes: SHELLCHECK_EXIT_CODES },
+			{ result, exitCodes: SHELLCHECK_EXIT_CODES },
 			(output) => parseShellcheckOutput(output, ctx.filePath, cwd),
+			{ parseStreams: "stdout-else-stderr" },
 		);
 		if (parsed.skipped) return parsed.skipped;
 

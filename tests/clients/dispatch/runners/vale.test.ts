@@ -100,11 +100,8 @@ const REAL_ERROR_OUTPUT = JSON.stringify({
 
 describe("vale parseValeOutput (real binary shape, #1933 review F1)", () => {
 	it("parses a real warning-severity alert from the flat-map shape", () => {
-		const diagnostics = parseValeOutput(
-			REAL_WARNING_SUGGESTION_OUTPUT,
-			"AGENTS.md",
-			".",
-		);
+		const diagnostics =
+			parseValeOutput(REAL_WARNING_SUGGESTION_OUTPUT, "AGENTS.md", ".") ?? [];
 
 		// Pre-fix: this was always [] -- `Data.Files` never existed on real
 		// output, so a real vale run always parsed to zero diagnostics.
@@ -120,11 +117,8 @@ describe("vale parseValeOutput (real binary shape, #1933 review F1)", () => {
 	});
 
 	it("parses a real suggestion-severity alert and maps it to 'info'", () => {
-		const diagnostics = parseValeOutput(
-			REAL_WARNING_SUGGESTION_OUTPUT,
-			"AGENTS.md",
-			".",
-		);
+		const diagnostics =
+			parseValeOutput(REAL_WARNING_SUGGESTION_OUTPUT, "AGENTS.md", ".") ?? [];
 
 		const claim = diagnostics.find((d) => d.rule === "Google.ExcessiveClaims");
 		expect(claim).toBeDefined();
@@ -133,7 +127,8 @@ describe("vale parseValeOutput (real binary shape, #1933 review F1)", () => {
 	});
 
 	it("parses a real error-severity alert and marks it blocking", () => {
-		const diagnostics = parseValeOutput(REAL_ERROR_OUTPUT, "sample.md", ".");
+		const diagnostics =
+			parseValeOutput(REAL_ERROR_OUTPUT, "sample.md", ".") ?? [];
 
 		// Pre-fix: this was also always [] -- the exact defect the reviewer
 		// flagged: a real vale run with real errors silently read as
@@ -145,9 +140,11 @@ describe("vale parseValeOutput (real binary shape, #1933 review F1)", () => {
 		expect(diagnostics[0].column).toBe(26);
 	});
 
-	it("returns no diagnostics for empty or unparseable output", () => {
+	// #5411: `null` is output that is not a vale report; `[]` is a report read.
+	it("tells an empty report from output that is not a report", () => {
 		expect(parseValeOutput("", "AGENTS.md", ".")).toEqual([]);
-		expect(parseValeOutput("not json", "AGENTS.md", ".")).toEqual([]);
+		expect(parseValeOutput("not json", "AGENTS.md", ".")).toBe(null);
+		expect(parseValeOutput("[]", "AGENTS.md", ".")).toBe(null);
 		// An empty flat map (vale ran, found nothing) is a real, valid shape.
 		expect(parseValeOutput("{}", "AGENTS.md", ".")).toEqual([]);
 	});

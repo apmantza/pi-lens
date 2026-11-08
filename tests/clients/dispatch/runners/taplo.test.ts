@@ -180,7 +180,7 @@ describe("taplo runner", () => {
 		}
 	});
 
-	it("skips when taplo exits nonzero without producing output", async () => {
+	it("fails with a parse error when taplo exits nonzero with output it cannot read", async () => {
 		const env = setupTestEnvironment("pi-lens-taplo-");
 		try {
 			const filePath = path.join(env.tmpDir, "config.toml");
@@ -203,8 +203,13 @@ describe("taplo runner", () => {
 				createTomlCtx(filePath, env.tmpDir) as never,
 			);
 
-			expect(result.status).toBe("skipped");
-			expect(result.diagnostics).toEqual([]);
+			// The `error:` line is not a codespan finding, so the only diagnostic
+			// is the runner's own parse-error fault (#5411; it was a skip).
+			expect(result.status).toBe("failed");
+			expect(result.failureKind).toBe("parser_error");
+			expect(result.diagnostics.map((d) => d.id)).toEqual([
+				"taplo:parse-error:1",
+			]);
 		} finally {
 			env.cleanup();
 		}

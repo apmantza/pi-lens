@@ -98,6 +98,21 @@ export function processCutShort(result: SpawnResult): boolean {
 }
 
 /**
+ * The spawn budget ended the run (#5411). One predicate for the typed and the
+ * legacy spelling, so a runner that must keep its own timeout wording around
+ * the verdict (a coverage-gap diagnostic, a latency row) asks the same
+ * question the classifier answers: a timed-out run is `did-not-run`.
+ */
+export function spawnTimedOut(result: {
+	failure?: string;
+	spawnFailure?: { kind?: string };
+}): boolean {
+	return (
+		result.spawnFailure?.kind === "timeout" || result.failure === "timeout"
+	);
+}
+
+/**
  * Decide whether a tool ran, and if not, why (#1816).
  *
  * The defect this closes (the #1736 class): a runner that reads only its

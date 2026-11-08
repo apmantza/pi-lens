@@ -1225,7 +1225,7 @@ describe("runner findings carry failureKind when they fail the check (#3781)", (
 	// #4522 F4: the captured exit-1 broken-config shape through the production
 	// dispatcher, not runner.run. A dispatched detekt exit 1 with no findings
 	// must never be delivered as a completed (clean or dirty) analysis.
-	it("detekt exit 1 on a malformed config is skipped through dispatch, never a clean verdict (#4522)", async () => {
+	it("detekt exit 1 on a malformed config is failed/parser_error through dispatch, never a clean verdict (#4522, #5411)", async () => {
 		const captured = JSON.parse(
 			fs.readFileSync(
 				new URL(
@@ -1243,8 +1243,8 @@ describe("runner findings carry failureKind when they fail the check (#3781)", (
 				stderr: captured.stderr,
 			}),
 		});
-		expect(observed.result?.status).toBe("skipped");
-		expect(observed.result?.diagnostics).toEqual([]);
+		expect(observed.result?.status).toBe("failed");
+		expect(observed.result?.failureKind).toBe("parser_error");
 	});
 
 	// A hand-rolled ternary's other arm: findings below the runner's threshold

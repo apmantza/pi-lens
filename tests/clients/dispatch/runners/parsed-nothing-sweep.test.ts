@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { stripSource } from "../../../support/sweep-kit.js";
 
 const RUNNER_DIR = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -75,6 +76,26 @@ const EXEMPT: Record<string, string> = {
 		"drop it. Only a run that reported no exit status is skipped, through " +
 		"skipUnlessToolRan behind a narrow test (#4522); the syntax step already " +
 		"runs on parseToolRun.",
+	"helm-lint.ts":
+		"consults the primitive only for a timeout (#5411). Its other nonzero " +
+		"exits are classified by helm lint's own report: an error diagnostic is " +
+		"the finding, and a nonzero exit with no error diagnostic is already " +
+		"failed/parser_error (or server_error with no output) in lintChart.",
+	"helm-render.ts":
+		"consults the primitive only for a timeout (#5411). A `helm template` " +
+		"that exits nonzero is a chart finding parsed from its Error: lines, " +
+		"and an unreadable trivy report is a coverage-gap diagnostic.",
+	"rust-clippy.ts":
+		"consults the primitive only for a timeout with nothing parsed (#5411), " +
+		"so that skip leaves the ledger row; partial findings are kept by " +
+		"faultIfCutShort. Its other outcomes are parsed from cargo's own message " +
+		"stream, where a sibling file's diagnostic filters to zero for the edited " +
+		"file (the go-vet shape).",
+	"prisma-validate.ts":
+		"consults the primitive only to skip a run that produced no findings and " +
+		"no output (#5411); finishParsedRun alone would call blank output clean. " +
+		"Output that is not prisma's own validation report already goes to the " +
+		"shared parse-error arm.",
 	"cue-vet.ts":
 		"already answers this question, and more loudly than a ledger row: on " +
 		"a nonzero exit whose output attributes to NO file, filterToTouchedFile " +
@@ -94,6 +115,18 @@ const DIRECT_LEDGER_WRITERS: Record<string, string> = {
 		"here is which file trivy stopped covering. `trivy config` also exits 0 " +
 		"whenever it completed, so any nonzero status is already an error and " +
 		"the #1948 rule can never apply to it.",
+};
+
+/**
+ * `parseToolRun` adopters that do not end in `finishParsedRun`, with the reason
+ * their tail is not a findings verdict.
+ */
+const NO_FINISH_TAIL: Record<string, string> = {
+	"fish-indent.ts":
+		"only its fish --no-execute syntax step reads through parseToolRun, and " +
+		"an unreadable syntax run deliberately falls through to the --check " +
+		"format step (the gap leaves a bounded ledger row). The runner's verdict " +
+		"is the --check step's exit-status protocol, not a parsed report.",
 };
 
 function runnerSources(): string[] {
@@ -188,11 +221,12 @@ describe("parsed-nothing sweep (#1948)", () => {
 			[...ratchet.matchAll(/^\s+"([a-z0-9-]+\.ts)":/gm)].map((m) => m[1]),
 		);
 		// 12 -> 11 (#4130 r2): gleam-check left NOT_YET_ON_PRIMITIVE when it
-		// took the shared cut-short rule.
+		// took the shared cut-short rule. 11 -> 8 (#5411): helm-lint, helm-render
+		// and rust-clippy took the primitive's timeout verdict.
 		expect(
 			ratchetDeclared.size,
 			"the ratchet registry scraper matched nothing",
-		).toBeGreaterThanOrEqual(11);
+		).toBeGreaterThanOrEqual(8);
 
 		const doubleDeclared = Object.keys(EXEMPT).filter((name) =>
 			ratchetDeclared.has(name),
@@ -208,5 +242,44 @@ describe("parsed-nothing sweep (#1948)", () => {
 			staleRatchet,
 			`these adopted parseToolRun but the ratchet still exempts them: ${staleRatchet.join(", ")}`,
 		).toEqual([]);
+	});
+
+	// Recurrence (#5411): vale, swiftlint and spellcheck called `parseToolRun` and
+	// then returned their own `succeeded`, taplo and detekt returned a skip, and
+	// the 29 `finishParsedRun` runners returned failed/parser_error for the same
+	// "exit 1, output the parser cannot read" run. The ledger row `parseToolRun`
+	// writes does not decide the verdict; `finishParsedRun` does, so an adopter
+	// that skips it picks its own.
+	it("every parseToolRun adopter ends in finishParsedRun, the one verdict for unreadable output", () => {
+		const callsOf = (name: string, callee: string) =>
+			new RegExp(`\\b${callee}(?:<[^>()]*>)?\\s*\\(`).test(
+				stripSource(read(name)),
+			);
+		const adoptersWithGenerics = sources.filter((name) =>
+			callsOf(name, "parseToolRun"),
+		);
+		expect(
+			adoptersWithGenerics.length,
+			"the adopter scan matched too few runners to be real",
+		).toBeGreaterThanOrEqual(30);
+
+		const withoutTail = adoptersWithGenerics.filter(
+			(name) => !callsOf(name, "finishParsedRun") && !(name in NO_FINISH_TAIL),
+		);
+		expect(
+			withoutTail,
+			`these runners parse through parseToolRun but pick their own verdict for a ` +
+				`nonzero exit with unreadable output: ${withoutTail.join(", ")}. End them ` +
+				"in finishParsedRun, or add a NO_FINISH_TAIL entry stating why.",
+		).toEqual([]);
+
+		const stale = Object.keys(NO_FINISH_TAIL).filter(
+			(name) =>
+				!adoptersWithGenerics.includes(name) ||
+				callsOf(name, "finishParsedRun"),
+		);
+		expect(stale, `stale NO_FINISH_TAIL entries: ${stale.join(", ")}`).toEqual(
+			[],
+		);
 	});
 });
