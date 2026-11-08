@@ -948,9 +948,9 @@ function setReverseDepsEntry(
 	}
 }
 
-function reverseDepsReuseEnabled(): boolean {
-	const raw = process.env.PI_LENS_REVERSE_DEPS_REUSE;
-	return raw !== "0" && raw !== "false";
+/** Only the literal `"0"` turns reuse off (#5419); every other value is the default, on. */
+export function reverseDepsReuseEnabled(): boolean {
+	return process.env.PI_LENS_REVERSE_DEPS_REUSE !== "0";
 }
 
 /** Test-reset hook — mirrors clearReviewGraphWorkspaceCache's scope. */
@@ -3541,7 +3541,7 @@ export async function capturePreEditLinterFindings(
 		...created,
 		deltaMode: false,
 		preEditCapture: true,
-		hasTool: (command) => checkToolAvailability(command, sessionFacts),
+		hasTool: (command) => checkToolAvailability(command),
 	};
 	const kind = ctx.kind;
 	if (!kind) return { outcome: "skipped", reason: "no-kind" };

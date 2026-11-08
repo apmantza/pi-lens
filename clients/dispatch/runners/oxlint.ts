@@ -25,10 +25,7 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { faultResult } from "../types.js";
-import {
-	resolveToolCommand,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { spawnTimedOut } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
@@ -124,13 +121,9 @@ const oxlintRunner: RunnerDefinition = {
 		if (cmd) {
 			args = ["lint", "--format", "json", ctx.filePath];
 		} else {
-			// Use ctx.hasTool for async availability check — avoids the synchronous
-			// spawnSync probe that blocks the event loop on first call per cwd.
-			// FactStore caches the result for the session so subsequent writes are free.
-			const oxlintCmd = resolveToolCommand(cwd, "oxlint") ?? "oxlint";
-			cmd = (await ctx.hasTool(oxlintCmd))
-				? oxlintCmd
-				: await resolveToolCommandWithInstallFallback(cwd, "oxlint");
+			// One resolver (#5410): project shim at cwd, managed, then PATH, held
+			// in the shared latch, so a second PATH-only probe is not needed.
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "oxlint");
 			args = ["--format", "json", ctx.filePath];
 		}
 		if (!cmd) {
@@ -444,7 +437,7 @@ function extractOxlintRule(code: string | undefined): string {
 	return code.slice(open + 1, close);
 }
 
-function parseOxlintJson(
+export function parseOxlintJson(
 	raw: string,
 	filePath: string,
 	cwd: string,

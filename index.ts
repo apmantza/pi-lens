@@ -123,7 +123,7 @@ import {
 	rebindableProcessBridgeDeps,
 	type BridgeActivation,
 } from "./clients/process-bridge.js";
-import { isExternalOrVendorFile } from "./clients/path-utils.js";
+import { isExternalOrVendorFile, toPosix } from "./clients/path-utils.js";
 import {
 	isPathIgnoredByProject,
 	isRecordableProjectPath,
@@ -1843,9 +1843,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				for (const v of diagStats.topViolations.slice(0, 5)) {
 					const samplePath =
 						v.samplePaths.length > 0
-							? path
-									.relative(runtime.projectRoot, v.samplePaths[0])
-									.replace(/\\/g, "/")
+							? toPosix(path.relative(runtime.projectRoot, v.samplePaths[0]))
 							: "";
 					const pathSuffix = samplePath ? ` (e.g. ${samplePath})` : "";
 					lines.push(`  ${v.ruleId}: ${v.count}${pathSuffix}`);
@@ -2136,8 +2134,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// pi-lens's behavior before this feature existed.
 	const lazyTools = [
 		createAstGrepSearchTool(astGrepClient),
-		createAstGrepReplaceTool(astGrepClient, () =>
-			runtime.captureSessionGeneration(),
+		createAstGrepReplaceTool(
+			astGrepClient,
+			() => runtime.captureSessionGeneration(),
+			(name, cwd) => getLensFlag(name, cwd),
 		),
 		createAstGrepOutlineTool(astGrepClient),
 		createLspNavigationTool((name, cwd) => getLensFlag(name, cwd), {
@@ -3314,10 +3314,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 				resetLSPService,
 				// #4942: the read guard of the session whose tool result this is.
 				readGuard: runtime.readGuardFor(getStableSessionId(ctx)),
-				agentBehaviorRecord: (toolName, filePath) =>
+				agentBehaviorRecord: (toolName, filePath, progress) =>
 					(
 						resident?.agentBehaviorClient ?? getAgentBehaviorClient()
-					).recordToolCall(toolName, filePath),
+					).recordToolCall(toolName, filePath, progress),
 				formatBehaviorWarnings: (warnings) =>
 					(
 						resident?.agentBehaviorClient ?? getAgentBehaviorClient()

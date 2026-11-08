@@ -24,7 +24,11 @@ import {
 } from "./position-encoding.js";
 import { lineTextAt } from "./content-scan.js";
 import { recordLspMutation, type LspMutationContext } from "../lsp-mutation.js";
-import { withHostFileMutationQueues } from "../file-mutation-queue.js";
+import {
+	refuseOutOfRootWrites,
+	type SourceWriteExit,
+	writeSourceFile,
+} from "../write-source-file.js";
 import { incrementDegradationCount } from "../degradation-ledger.js";
 import { hashDiagnosticContent } from "./diagnostic-binding.js";
 import { peekOwnedLspService } from "./service-singleton.js";
@@ -109,7 +113,27 @@ export interface AppliedWorkspaceEdit {
 	fileDetails: AppliedWorkspaceFileDetail[];
 }
 
+/**
+ * #5417: the edit names a path outside the session's writable roots (an
+ * adopted sibling project, a vendor path). Thrown before the first write; the
+ * refusal itself is recorded by `refuseOutOfRootWrites`.
+ */
+export class WorkspaceEditRefusedError extends Error {
+	constructor(readonly paths: readonly string[]) {
+		super(
+			`workspace edit refused: ${paths.join(", ")} ${paths.length === 1 ? "is" : "are"} outside the session's writable roots`,
+		);
+		this.name = "WorkspaceEditRefusedError";
+	}
+}
+
 export interface ApplyWorkspaceEditOptions {
+	/**
+	 * #5417: the workspace root each path's class is judged against, when the
+	 * caller knows it. Absent, the mutation context's project root, then `cwd`
+	 * (the language-server root) stand in.
+	 */
+	sessionRoot?: string;
 	/** The encoding used by the server that produced these positions. */
 	positionEncoding?: PositionEncoding;
 	/** Current client-side LSP document versions, keyed by normalized path. */
@@ -1726,13 +1750,34 @@ export async function applyWorkspaceEdit(
 		operationCounts,
 		fileDetails,
 	});
+	// #3541: the read-modify-write of every path runs inside pi's mutation
+	// queue, so an agent edit of one of them cannot land between this
+	// edit's read and its write (and be erased by it). #5417: a path outside
+	// the session's writable roots refuses the whole edit before its first
+	// write, and the edit's bookkeeping is recorded on every exit of it.
+	const queuePaths = plannedDiskPaths(planned);
+	const target = {
+		filePaths: queuePaths,
+		record: async (exit: SourceWriteExit<void>): Promise<void> => {
+			await announceResourceOperations(
+				resourceChanges,
+				options.watchedFileSink,
+			);
+			if (options.mutationContext && options.observe !== false) {
+				recordLspMutation(options.mutationContext, {
+					results: [makeResult()],
+					status: !exit.ok
+						? "failed"
+						: appliedOperationTotal > 0
+							? "success"
+							: "skipped",
+				});
+			}
+		},
+	};
 	try {
-		// #3541: the read-modify-write of every path runs inside pi's mutation
-		// queue, so an agent edit of one of them cannot land between this
-		// edit's read and its write (and be erased by it).
-		const queuePaths = plannedDiskPaths(planned);
 		const queueStart = Date.now();
-		await withHostFileMutationQueues(queuePaths, async () => {
+		await writeSourceFile(target, async () => {
 			logLatency({
 				type: "phase",
 				filePath: cwd,
@@ -1741,6 +1786,17 @@ export async function applyWorkspaceEdit(
 				metadata: { paths: queuePaths.length },
 			});
 			prepared = await preflightWorkspaceEdit(planned, cwd, options);
+			// The paths are judged after the preflight confined them to the
+			// workspace and before the first write, so a workspace-escaping path
+			// keeps its own refusal and nothing is half-applied (#5417).
+			const refused = refuseOutOfRootWrites(
+				queuePaths,
+				options.sessionRoot ??
+					options.mutationContext?.runtime?.projectRoot ??
+					cwd,
+				"lsp-edit",
+			);
+			if (refused.length > 0) throw new WorkspaceEditRefusedError(refused);
 			for (const op of planned) {
 				const size = operationSize(op);
 				if (op.kind === "text") operationCounts.textEdits += size;
@@ -1880,14 +1936,7 @@ export async function applyWorkspaceEdit(
 			}
 		});
 	} catch (err) {
-		await announceResourceOperations(resourceChanges, options.watchedFileSink);
 		const partial = makeResult();
-		if (options.mutationContext && options.observe !== false) {
-			recordLspMutation(options.mutationContext, {
-				results: [partial],
-				status: "failed",
-			});
-		}
 		const already = [...touchedFiles];
 		if (already.length > 0) {
 			const alreadyList = already
@@ -1901,13 +1950,5 @@ export async function applyWorkspaceEdit(
 		}
 		throw err;
 	}
-	await announceResourceOperations(resourceChanges, options.watchedFileSink);
-	const applied = makeResult();
-	if (options.mutationContext && options.observe !== false) {
-		recordLspMutation(options.mutationContext, {
-			results: [applied],
-			status: appliedOperationTotal > 0 ? "success" : "skipped",
-		});
-	}
-	return applied;
+	return makeResult();
 }

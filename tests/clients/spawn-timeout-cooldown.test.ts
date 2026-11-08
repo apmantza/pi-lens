@@ -34,10 +34,12 @@ vi.mock(
 			isAvailableAsync: async () => true,
 			getCommand: () => command,
 		}),
+		// The resolver answers with the registry COMMAND, which is what the
+		// cooldown map is keyed by (markdownlint's is `markdownlint-cli2`).
 		resolveToolCommandWithInstallFallback: async (
 			_cwd: string,
 			toolId: string,
-		) => toolId,
+		) => (toolId === "markdownlint" ? "markdownlint-cli2" : toolId),
 	}),
 );
 
@@ -126,7 +128,6 @@ describe("detectFileChangedAfterCommand consults the seam", () => {
 				wedged,
 				["--fix", filePath],
 				env.tmpDir,
-				[1],
 			);
 
 			expect(fixed).toBe(0);
@@ -149,7 +150,6 @@ describe("detectFileChangedAfterCommand consults the seam", () => {
 				cmd,
 				["--fix", filePath],
 				env.tmpDir,
-				[1],
 			);
 
 			const { isInSpawnTimeoutCooldown } = await seam();

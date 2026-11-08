@@ -1725,8 +1725,31 @@ export function getKnipIgnorePatterns(): string[] {
 }
 
 /**
+ * The two facts a command that rewrites a file leaves behind, kept apart
+ * (#5417). `changed` is whether the bytes differ, whatever the exit code and
+ * whatever ended the run: a fixer that rewrites the file and then exits
+ * nonzero, or is killed at its timeout, still changed it. `success` is the
+ * exit code alone (`okStatuses` names the codes a tool documents as benign).
+ * `after` is undefined when the file could not be read back: nothing is then
+ * known to have changed.
+ */
+export function resolveWriteResult(
+	before: string,
+	after: string | undefined,
+	run: { status: number | null; error?: unknown },
+	okStatuses: readonly number[] = [0],
+): { changed: boolean; success: boolean } {
+	return {
+		changed: after !== undefined && before !== after,
+		success:
+			!run.error && run.status !== null && okStatuses.includes(run.status),
+	};
+}
+
+/**
  * Spawn a command and detect whether it modified a file on disk.
- * Returns 1 if the file content changed after the command ran, 0 otherwise.
+ * Returns 1 if the file content changed after the command ran, 0 otherwise,
+ * whatever its exit code (see {@link resolveWriteResult}).
  * Useful for auto-fix tools (ESLint, Stylelint, RuboCop, etc.).
  */
 export async function detectFileChangedAfterCommand(
@@ -1734,7 +1757,6 @@ export async function detectFileChangedAfterCommand(
 	command: string,
 	args: string[],
 	cwd: string,
-	ignoreStatuses: number[] = [],
 ): Promise<number> {
 	let before = "";
 	try {
@@ -1763,19 +1785,16 @@ export async function detectFileChangedAfterCommand(
 			durationMs: 30000,
 			teardown: result.timeoutTeardown,
 		});
-		return 0;
-	}
-	if (result.error) return 0;
-	if (result.status !== 0 && !ignoreStatuses.includes(result.status ?? -1)) {
-		return 0;
 	}
 
+	let after: string | undefined;
 	try {
-		const after = fs.readFileSync(filePath, "utf-8");
-		return before !== after ? 1 : 0;
+		after = fs.readFileSync(filePath, "utf-8");
 	} catch {
-		return 0;
+		// none: an unreadable file reads back as unknown, never as changed.
+		after = undefined;
 	}
+	return resolveWriteResult(before, after, result).changed ? 1 : 0;
 }
 
 /**

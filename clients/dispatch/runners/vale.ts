@@ -9,14 +9,9 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const vale = createAvailabilityChecker("vale", ".exe");
 
 /**
  * Check for a .vale.ini config file in cwd or parent dirs.
@@ -145,12 +140,7 @@ const valeRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		let cmd: string | null = null;
-		if (await vale.isAvailableAsync(cwd)) {
-			cmd = vale.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 

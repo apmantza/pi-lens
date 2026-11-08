@@ -1173,6 +1173,7 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		"swiftlint",
 		{
 			command: "swiftlint",
+			windowsExt: ".exe",
 			versionArgs: ["--version"],
 			managedToolId: "swiftlint",
 		},
@@ -1216,6 +1217,7 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		"htmlhint",
 		{
 			command: "htmlhint",
+			windowsExt: ".cmd",
 			versionArgs: ["--version"],
 			managedToolId: "htmlhint",
 		},

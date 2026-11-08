@@ -4,6 +4,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
@@ -49,10 +50,17 @@ function lineCount(value: string): number {
 /**
  * `captureLineage`: the host's session capture (#3763). The tool takes it at
  * `execute` entry, before its first await, and the apply records under it.
+ * `getFlag`: the flag resolver the apply's `no-autofix` refusal reads.
  */
 export function createAstGrepReplaceTool(
 	astGrepClient: AstGrepClient,
 	captureLineage?: () => LineageHandle,
+	/**
+	 * Resolves a flag for a call's `cwd`, as `createLspNavigationTool`'s does:
+	 * the MCP host rebuilds it per request, pi's ignores the second argument.
+	 * An apply is refused under `no-autofix` (#5417).
+	 */
+	getFlag?: (name: string, cwd?: string) => boolean | string | undefined,
 ) {
 	return {
 		name: "ast_grep_replace" as const,
@@ -290,6 +298,21 @@ export function createAstGrepReplaceTool(
 				};
 			}
 			const searchPaths = pathsRead.entries;
+			// #5417: an apply writes source files, so it takes the autofix writer's
+			// two refusals at its entry, before any scan: `no-autofix` here, and the
+			// session's writable roots in the client (a sibling repo, a vendor path).
+			// The workspace root is the call's cwd, which `paths` resolved against.
+			const sessionRoot = path.resolve(ctx.cwd ?? process.cwd());
+			if (applyFlag && getFlag?.("no-autofix", sessionRoot)) {
+				const reason =
+					"ast_grep_replace refused: apply is disabled by the no-autofix flag (autofix.enabled=false); a preview with apply: false is still allowed";
+				logOutcome("error", { errorRaw: reason });
+				return {
+					content: [{ type: "text" as const, text: `Error: ${reason}` }],
+					isError: true,
+					details: {},
+				};
+			}
 
 			// Phase 3: structural-intent params → synthesize YAML with fix: field
 			if (
@@ -330,7 +353,7 @@ export function createAstGrepReplaceTool(
 					ruleYaml,
 					searchPaths,
 					applyFlag,
-					{ lineage, toolCallId: _toolCallId, sessionId, signal },
+					{ lineage, toolCallId: _toolCallId, sessionId, signal, sessionRoot },
 				);
 				if (ruleResult.stalePreview) {
 					logOutcome("error", { errorRaw: "stale_preview" });
@@ -394,7 +417,14 @@ export function createAstGrepReplaceTool(
 				lang,
 				searchPaths,
 				applyFlag,
-				{ strictness, lineage, toolCallId: _toolCallId, sessionId, signal },
+				{
+					strictness,
+					lineage,
+					toolCallId: _toolCallId,
+					sessionId,
+					signal,
+					sessionRoot,
+				},
 			);
 
 			if (result.stalePreview) {
@@ -416,7 +446,9 @@ export function createAstGrepReplaceTool(
 				return {
 					content: [{ type: "text" as const, text: failureText(result) }],
 					isError: true,
-					details: {},
+					// #5417: an interrupted `--update-all` rewrote files before it
+					// failed; they still dispatch, as the structural path's do.
+					details: { appliedFiles: result.appliedFiles ?? [] },
 				};
 			}
 

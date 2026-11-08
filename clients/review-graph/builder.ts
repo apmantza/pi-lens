@@ -21,7 +21,7 @@ import type {
 	ReExportEntry,
 } from "../dispatch/facts/import-facts.js";
 import type { DispatchContext } from "../dispatch/types.js";
-import { lazyEnvNumber } from "../env-utils.js";
+import { lazyEnvNumber, nonNegativeIntEnv } from "../env-utils.js";
 import { featureHintMetadata } from "../feature-hints.js";
 import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
@@ -559,9 +559,9 @@ function graphLogMetadata(
 	return makeReviewGraphBuildMetadata(graph, options);
 }
 
-function seqFastpathEnabled(): boolean {
-	const raw = process.env.PI_LENS_GRAPH_SEQ_FASTPATH;
-	return raw !== "0" && raw !== "false";
+/** Only the literal `"0"` turns the fast path off (#5419); every other value is the default, on. */
+export function seqFastpathEnabled(): boolean {
+	return process.env.PI_LENS_GRAPH_SEQ_FASTPATH !== "0";
 }
 
 let _lastGraphBuildInfo: GraphBuildInfo = {
@@ -2084,11 +2084,11 @@ export function isReviewGraphMigrationNeeded(cwd: string): boolean {
 const GRAPH_PERSIST_DEBOUNCE_MS_DEFAULT = 1500;
 export const GRAPH_PERSIST_MAX_ELEMENTS_DEFAULT = 500_000;
 
-function graphPersistDebounceMs(): number {
-	const raw = Number(process.env.PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS);
-	return Number.isFinite(raw) && raw >= 0
-		? raw
-		: GRAPH_PERSIST_DEBOUNCE_MS_DEFAULT;
+export function graphPersistDebounceMs(): number {
+	return nonNegativeIntEnv(
+		"PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS",
+		GRAPH_PERSIST_DEBOUNCE_MS_DEFAULT,
+	);
 }
 
 function graphPersistMaxElements(): number {
@@ -3106,11 +3106,11 @@ function graphCheckpointEveryFiles(): number {
 		: GRAPH_CHECKPOINT_EVERY_FILES_DEFAULT;
 }
 
-function graphCheckpointMinIntervalMs(): number {
-	const raw = Number(process.env.PI_LENS_GRAPH_CHECKPOINT_MIN_INTERVAL_MS);
-	return Number.isFinite(raw) && raw >= 0
-		? raw
-		: GRAPH_CHECKPOINT_MIN_INTERVAL_MS_DEFAULT;
+export function graphCheckpointMinIntervalMs(): number {
+	return nonNegativeIntEnv(
+		"PI_LENS_GRAPH_CHECKPOINT_MIN_INTERVAL_MS",
+		GRAPH_CHECKPOINT_MIN_INTERVAL_MS_DEFAULT,
+	);
 }
 
 interface ReviewGraphCheckpointData {

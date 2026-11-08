@@ -197,8 +197,6 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
-	"clients/dispatch/runners/utils/runner-helpers.ts:resolveCommandWithInstallFallback",
-	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
 	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
 	"clients/git-tracked-ignore.ts:fetchUntrackedIgnoredIds",
 	"clients/git-tracked-ignore.ts:fetchTrackedFiles",
@@ -536,16 +534,12 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"tryLazyInstallForFormatter forwards its own `cwd` parameter into runLazyInstall",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:8b06bf2f~d99d2124",
+		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:1fe0ada7~d99d2124",
 		"cwd is `resolvedCwd`, the availability checker's own cwd argument; the checker is the seam every runner probes through",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveToolCommandWithInstallFallback:e313e2e7~dbf27697",
-		"resolveToolCommandWithInstallFallback forwards its own `cwd` parameter into resolveCommandWithInstallFallback",
-	],
-	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand:d80f1e68~dbf27697",
-		"cwd is verifyOrInstallCommand's own `cwd` parameter; its two call sites in this file are the checked ones",
+		"cwd is verifyOrInstallCommand's own `cwd` parameter; its one call site in this file is the checked one",
 	],
 	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:0dcab07a~cb93074a",
@@ -554,10 +548,6 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:105fdbcb~dbf27697",
 		"resolveCommandArgsWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandWithInstallFallback:4a5cc9b1~4a5cc9b1",
-		"resolveCommandWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
 	],
 	[
 		"clients/file-utils.ts#detectFileChangedAfterCommand:9a4b1a12~dbf27697",

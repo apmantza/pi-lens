@@ -700,7 +700,6 @@ async function tryEslintFix(
 		cmd,
 		["--fix", "--no-error-on-unmatched-pattern", filePath],
 		cwd,
-		[1],
 	);
 }
 
@@ -718,7 +717,6 @@ async function tryStylelintFix(
 		cmd,
 		["--fix", "--allow-empty-input", filePath],
 		cwd,
-		[2],
 	);
 }
 
@@ -758,7 +756,6 @@ async function tryRubocopFix(
 		resolved.cmd,
 		[...resolved.args, "-a", "--no-color", filePath],
 		cwd,
-		[1],
 	);
 }
 
@@ -771,13 +768,7 @@ async function tryKtlintFix(
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 
-	return detectFileChangedAfterCommand(
-		filePath,
-		cmd,
-		["-F", filePath],
-		cwd,
-		[1],
-	);
+	return detectFileChangedAfterCommand(filePath, cmd, ["-F", filePath], cwd);
 }
 
 // golangci-lint/detekt/ktfmt have no TOOL_COMMAND_SPEC; resolve via availability
@@ -805,7 +796,7 @@ async function tryKtfmtFix(
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);
-	return detectFileChangedAfterCommand(filePath, cmd, [absPath], cwd, [0]);
+	return detectFileChangedAfterCommand(filePath, cmd, [absPath], cwd);
 }
 
 async function tryGolangciLintFix(
@@ -829,7 +820,6 @@ async function tryGolangciLintFix(
 		cmd,
 		["run", "--fix", filePath],
 		cwd,
-		[1, 7],
 	);
 }
 
@@ -850,7 +840,6 @@ async function tryDetektFix(
 		cmd,
 		["--auto-correct", "--input", absPath, "--config", configPath],
 		cwd,
-		[1, 2],
 	);
 }
 
@@ -872,7 +861,6 @@ async function tryMarkdownlintFix(
 		cmd,
 		[...markdownlintConfigArgs(cwd), "--fix", filePath],
 		cwd,
-		[1],
 	);
 }
 
@@ -884,13 +872,7 @@ async function tryOxlintFix(
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "oxlint");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
-	return detectFileChangedAfterCommand(
-		filePath,
-		cmd,
-		["--fix", filePath],
-		cwd,
-		[1],
-	);
+	return detectFileChangedAfterCommand(filePath, cmd, ["--fix", filePath], cwd);
 }
 
 /** What a whole-package fixer's restore could not put back, as display paths (#3598). */
@@ -948,10 +930,10 @@ interface WholePackageFixOutcome {
 async function wholePackageChangedFiles(
 	root: string,
 	before: FileSnapshot,
-	result: Awaited<ReturnType<typeof safeSpawnAsync>>,
 	agentEdited: readonly string[],
 ): Promise<string[]> {
-	if (result.error || result.status !== 0) return [];
+	// The diff is the answer whatever the tool's exit code: a fixer that
+	// rewrites files and then exits nonzero changed them (#5417).
 	const edited = new Set(agentEdited);
 	const changed = await diffProjectSnapshot(root, before);
 	return changed.flatMap((file) => (edited.has(file) ? [] : [file]));
@@ -983,8 +965,8 @@ async function tryRustClippyFix(
 				["clippy", "--fix", "--allow-dirty", "--allow-staged", "-q"],
 				{ timeout: 30000, cwd: cargoDir },
 			),
-		(result, agentEdited) =>
-			wholePackageChangedFiles(cargoDir, before, result, agentEdited),
+		(_result, agentEdited) =>
+			wholePackageChangedFiles(cargoDir, before, agentEdited),
 	);
 	return { changedFiles, restoring };
 }
@@ -1012,8 +994,8 @@ async function tryDartFix(
 				timeout: 30000,
 				cwd: pubspecDir,
 			}),
-		(result, agentEdited) =>
-			wholePackageChangedFiles(pubspecDir, before, result, agentEdited),
+		(_result, agentEdited) =>
+			wholePackageChangedFiles(pubspecDir, before, agentEdited),
 	);
 	return { changedFiles, restoring };
 }

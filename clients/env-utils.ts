@@ -68,6 +68,22 @@ export function toPositiveFinite(value: unknown): number {
 }
 
 /**
+ * The ONE read of a non-negative integer `PI_LENS_*` knob (#5419). An unset,
+ * blank or whitespace-only variable is the default, and an explicit `0` is a
+ * value: a knob whose documented setting is "0 disables" can be set to it. A
+ * non-numeric or negative value is the default. A fraction floors.
+ *
+ * Reads `process.env` on each call. A caller that stores the result keeps it
+ * for its own lifetime.
+ */
+export function nonNegativeIntEnv(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (raw === undefined || raw.trim() === "") return fallback;
+	const parsed = Number(raw);
+	return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+/**
  * Factory for the lazy-memoized "positive-finite-number env override, else a
  * default" getter pattern repeated across `startup-scan.ts` (#699, #758) and
  * originally documented as house style in `runtime-config.ts` / `slow-fs.ts` /

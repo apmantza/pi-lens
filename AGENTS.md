@@ -95,7 +95,8 @@ invariant it documents. Model-facing prose is derived: the schema constant owns
 the sentence, docs link to it, and a doc that restates behaviour is a bug. Keep
 live rules short and load-bearing. Put dated
 narratives and completed arcs in `HISTORY.md`; do not delete their decision
-record. Place new invariants in the matching subsystem section, not at the file
+record, and do not copy its detail back unless it changes a future decision.
+Place new invariants in the matching subsystem section, not at the file
 end. Cite symbols and section headings, not line numbers. A defect shape that
 claims enforcement names its guard by path; a guard that is only planned is
 named by its open issue, never described as if it runs.
@@ -115,16 +116,14 @@ The principles govern building, testing, and closes-versus-refs. pi-lens adds:
   and stays short: proof is transcripts and mutation rows, not narrative. The
   issue reference goes in the PR title; the closing keyword goes in the body,
   because GitHub ignores it in a title.
-- Mutation acceptance has one PR layer (#4005): every
-  new guard, branch, filter, cap, or fallback, and the behaviour behind every
-  relaxed or rewritten assertion, has bounded compile-valid hand-mutation
-  proof under the engineering principles, and a missing proof or a
-  demonstrated correctness gap blocks merge. There is no per-PR Stryker job,
-  comment, or `MUTATION` line to read. Stryker runs nightly on master as an
-  exploratory test-adequacy report (`.github/workflows/stryker-nightly.yml`,
-  one rolling tracking issue); its survivors are candidates for a missing
-  test, read through real callers by whoever picks them up, and never a merge
-  input or a duty of a fixer or reviewer.
+- Mutation acceptance has one PR layer (#4005): every new guard, branch,
+  filter, cap, or fallback, and the behaviour behind every relaxed or rewritten
+  assertion, has bounded compile-valid hand-mutation proof under the
+  engineering principles (rows: `docs/pi-lens-fixer.md` "Evidence"), and a
+  missing proof or a demonstrated correctness gap blocks merge. There is no
+  per-PR Stryker job, comment, or `MUTATION` line to read; the nightly Stryker
+  run on master (`.github/workflows/stryker-nightly.yml`) is an exploratory
+  report, never a merge input or a duty of a fixer or reviewer.
 - A declared behaviour-preserving refactor proves itself with an old-versus-new
   probe table through the built seam plus a shared-seam mutation that reds a
   caller-side witness; a passing pre-fix run is expected there.
@@ -139,21 +138,18 @@ The principles govern building, testing, and closes-versus-refs. pi-lens adds:
   owner. A fix that re-derives an owned rule at a consumer is wrong: extend the
   owner, or create a new one only with a stated reason (#3781, #3794, #3796).
 - A change on a lifecycle, timing, or identity seam extends or adds a TLA+
-  model in step with the code. `formal/coverage-map.json` maps source globs to
-  model families; the PR-body lint requires a `.tla`/`.cfg` change under any one
-  of a mapped row's families, or a `TLA+ unaffected: <family> — <reason>` line
-  for one of them. `unmodelled` rows and rows of 4+ families stay advisory,
-  except the `index.ts` row, which gates per lifecycle hook handler a changed
-  hunk lands in (an edit outside every handler prints a note). A TLA lane that
-  adds a family adds its map row (#3802, #3878).
+  model in step with the code (#3802, #3878). `formal/coverage-map.json` maps
+  source globs to model families; `scripts/check-pr-body.mjs` requires a
+  `.tla`/`.cfg` change under any one of a mapped row's families, or a
+  `TLA+ unaffected: <family> — <reason>` line, and `validateCoverageMap` reds a
+  family without its map row. `unmodelled` rows and rows of 4+ families stay
+  advisory, except the `index.ts` row (`docs/pi-lens-fixer.md` "Before code").
   The unaffected line never covers a change to behaviour an as-built config
-  constant encodes: flip the constant and its configs in the same PR.
-  A round that writes a state-space table for a seam whose row is
-  `unmodelled`, or that no row maps, adds a model family and its map row in
-  the same PR. The table's cells become the model's states and config. The
-  only alternative is a `TLA+ deferred: <reason>` line that the maintainer
-  accepts. Screen: does this round's state table have a model that runs in
-  CI?
+  constant encodes: flip the constant and its configs in the same PR. A round
+  that writes a state-space table for a seam whose row is `unmodelled`, or that
+  no row maps, adds a model family and its map row in the same PR; the only
+  alternative is a `TLA+ deferred: <reason>` line that the maintainer accepts.
+  Screen: does this round's state table have a model that runs in CI?
 
 <important if="delegating work or coordinating a lane">
 
@@ -347,7 +343,7 @@ entry's screen, or its first sentence when it has none.
 78. **A dependency's cache directory attributed to the fixture that triggered it:** a loader that materialises `os.tmpdir()/<tool>` on the caller's own stack looks like a fixture sibling, so the creator recorded for it is accurate per process and wrong per cause, and the sweep reds a file that never created it.
 81. **Synchronous native-tree walk holds every tree:** Screen: does the loop's body parse, and does it reach a `setImmediate` or a real I/O await per iteration?
 82. **One home variable pinned, the rest left at the real home:** Screen: which directory does the process I run resolve from, and is every variable that names it pinned?
-85. **Default-budget tree census:** Screen: does this case call a walker or read a binding one produced, and is its third argument one of those two forms?
+85. **Default-budget tree census:** Screen: does this case call a walker or read a binding one produced, and is its budget one of those two forms?
 86. **Turn-count wait for real I/O:** Screen: does the wait end on the event it waits for or on a real-clock deadline, never on a count?
 92. **Test double with a result shape the real producer never returns:** Screen: was the double's result shape copied from a real run of the producer, or driven through `tests/support/fake-child.ts`, or written by hand?
 
@@ -518,10 +514,6 @@ npm run fmt:check                     oxfmt gate
 npm run knip                          unused-code gate (CI job `knip`, gating)
 npm test                              serialized full suite
 npm run test:targeted -- <paths>      shared-slot targeted suite
-
-For `tests/config/heavy-advisory-gate-workflow.test.ts`, set
-`PI_LENS_PRINT_PINS=1` to print the current parsed census pins as pasteable
-assertion lines after workflow edits; the assertions remain shrink-only pins.
 npm run test:unit                     serialized unit suite
 npm run test:integration              serialized integration suite
 npm run preflight                     local merge/preflight gates
@@ -539,100 +531,21 @@ node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <re
                                         prints only the rows that changed head vs base
 ```
 
-The seven advisory lint tools are steps of one `Lint (advisory)` job, and the PR
-title and close-keyword checks are steps of one gating `PR metadata` job.
-`actionlint` and `markdownlint` share one gating `actionlint & markdownlint` job,
-and the required `Lint & type-check` also runs `depcruise:check`.
-`ci-infra-kill-rerun.yml` has no `pull_request` trigger, so its jobs post no
-skipped rows on a PR; the label cleanup lives in `ci-verdict-labels.yml`.
+CI jobs, required contexts, the Windows leg, caches, smoke paths, shard weights
+and the pre-push base-range logic are in [docs/ci.md](docs/ci.md). Two rules
+bind an agent who edits a workflow or a hook:
 
-CI cost gates (#3801). ci.yml has no heavy-advisory gate: its `heavy-gate` job
-and ci-verdict's deferred-row list are retired (an older head's
-`Heavy advisory gate (advisory)` row still classifies as advisory by its
-suffix and never gates). CodeQL runs only in `codeql.yml`, once a day on a
-schedule and on dispatch, with no master-push or pull-request run, so a new
-alert surfaces on master up to a day after its change, not on its PR. A
-docs-only pull request (root `*.md`, `docs/**`, `.changelog/**` and
-nothing else, classified by `scripts/ci-changed-files.mjs`; every doubt runs the
-full suite) skips no test job: the Unit shards and every
-other test job always run, because a docs edit can red tests outside tests/config
-(`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
-is the three `Install test` legs: outside `INSTALL_PATHS` in that script
-they report success without installing, and `Strict install` and the macOS APFS
-step run on non-pull_request events only. On a pull request, `TLA+ models`
-model-checks only when `formal/` (or its checker or ci.yml) changed: its shards
-skip at job level and the aggregate still reports. Push and merge-queue runs
-always model-check (`changes` sets `formal=true` for every non-PR event). A REQUIRED job never skips at
-job level: ci-verdict and the merge train demand a literal `success`. Implicit
-`success()` reads every ancestor, so a job behind a skippable ancestor skips even
-when its direct needs are green.
-
-Master requires the ten contexts in `BRANCH_PROTECTION_CONTEXTS`
-(`scripts/lib/ci-checks.mjs`). ci-verdict reads the live list, and it also gates
-every other non-advisory row a run posts.
-
-The Windows unit leg (`Unit tests Windows`, job key `unit-tests-windows`) GATES
-by maintainer decision on 2026-10-17: it runs the real `win32` gates, and
-advisory reds were waved through (the incidents are in `HISTORY.md`). It
-therefore starts on every event like the Unit shards and never skips at job
-level. Its name
-carries no `(advisory)` suffix, and it is a required context on master. Its
-population is every
-`tests/config/*` file, every `process.platform` Windows gate, and the
-shrink-only `WINDOWS_LANE_ADMISSIONS` rows
-(`scripts/lib/win32-gate-population.mjs`); a failed or under-executed subset
-reds the job, and no step of it is `continue-on-error`. The tmp-fixture
-hygiene census asserts on every lane, `win32` included, and its teardown
-prints `verdict=asserted`. A census a lane declines still leaves a record:
-it prints `verdict=declined`, so a quarantine shows in the log.
-
-The same script's `smoke` output (`PR_SMOKE_PATHS`: RPC, install, LSP launch,
-trust) makes `install-smoke.yml` run all four pi-load cells and an advisory LSP
-handshake job on a pull request; any other PR that reaches that workflow keeps
-the one pnpm-global cell (`tests/config/pr-smoke-paths.test.ts`).
-The Unit shards are packed by the per-file seconds in
-`scripts/test-shard-weights.json`; regenerate it from the shards' uploaded
-`vitest-results.json` when `tests/config/test-shard-assignment.test.ts` reds.
-
-Actions cache. The repository cache is capped at 10 GB. The nightly
-smoke workflows restore the managed tool tree through
-`.github/actions/tool-tree-cache`, keyed on the hash of
-`clients/installer/index.ts` (every pin) plus the ISO week; a pin that moves out
-of that file moves the action's `hashFiles` target in the same change
-(`tests/config/tool-tree-cache-workflow.test.ts`). A smoke saves its tree once
-its last install step ran, red or green, because the key is first-wins per week.
-`cache-prune.yml` runs `scripts/prune-actions-cache.mjs` nightly and when the
-`CodeQL` workflow completes on master (its overlay base database is ~785 MB per
-run, and the nightly run starts hours late), so a closed pull request's
-caches and superseded copies never fill the cap; only its `prune` job holds
-`actions: write` and passes `--apply`
-(`tests/config/cache-prune-workflow.test.ts`).
-A workflow that `pull_request_target` or `workflow_run` starts never restores
-or saves a cache, so a pull request cannot poison what a privileged run
-restores (`tests/config/untrusted-trigger-cache.test.ts`).
-
-A workflow job no pull request can run needs a registered reason in
-`tests/config/workflow-pull-request-reachability.test.ts`, and the branch run
-(`gh workflow run <file> --ref <branch>`) quoted with its run id (#3043). The
-same quote is enforced per file for an edit to any workflow whose post-image no
-`pull_request` run executes (no trigger, `pull_request_target` only, or a
-filter that excludes the file): `scripts/check-pr-body.mjs` reds the body
-without it. `Workflow run unaffected: <file> — <reason>` clears the rule only
-for a workflow with no `workflow_dispatch` trigger or an edit of comments and
-blank lines, verified against the merge base (#3085). The run id is quoted
-evidence, not verified provenance.
-
-The stale-build guard rejects a missing or older compiled twin. Pre-push and
-`lane:check` also rebuild the bounded `dist/` dependency population before
-governance suites when a bundled file is missing or older than its source.
-Pre-push diffs each pushed ref against `origin/master`, or `upstream/master`
-when that has commits `origin/master` lacks, and
-skips a head whose tree-bound record already passed the same selection. When
-that base range cannot be resolved it falls back to the remote-tip
-range, and to the loud build-only pass only when that cannot resolve either.
-Pre-push fails
-when its bounded test-lock wait times out (#3717); `PI_LENS_PREPUSH_LOCK_SKIP=1`
-is the only lock opt-out and is logged to `pre-push.log`. CI stays the gate.
+- A workflow job no pull request can run needs a registered reason in
+  `tests/config/workflow-pull-request-reachability.test.ts`, and the branch run
+  (`gh workflow run <file> --ref <branch>`) quoted with its run id (#3043);
+  `scripts/check-pr-body.mjs` enforces the quote per edited workflow, and
+  `Workflow run unaffected: <file> — <reason>` clears it only for a workflow
+  with no `workflow_dispatch` trigger or an edit of comments and blank lines
+  (#3085).
+- The stale-build guard (`tests/support/check-build-freshness.ts`) rejects a
+  missing or older compiled twin. Pre-push fails when its bounded test-lock
+  wait times out (#3717); `PI_LENS_PREPUSH_LOCK_SKIP=1` is the only lock
+  opt-out and is logged to `pre-push.log`. CI stays the gate.
 
 A red is "unrelated" only when `node scripts/red-on-base.mjs <test files…>
 [--base origin/master] [--repeat 3]` reports `RED-ON-BASE` for every failing
@@ -643,11 +556,8 @@ Never hand-edit generated `.js` or `dist/`. Open and close PR worktrees with
 `node scripts/pr-worktree.mjs open <PR|branch> [--merge|--head]` and
 `close <path>`; close unlinks a symlinked `node_modules` before removal
 (#2704) and refuses the main checkout, a dirty tree, or a real `node_modules`.
-Open refuses (exit 2, before any fetch or mkdir) a destination that is the main
-checkout or inside a registered non-bare checkout, symlinks resolved: a probe
-HOME pinned under the source makes the default root a child of it (#3981). An
-exact hit on another registered tree is left to git. Set `PI_LENS_WORKTREES_ROOT` to a
-directory outside every checkout.
+Open refuses a destination inside a registered checkout (#3981); set
+`PI_LENS_WORKTREES_ROOT` to a directory outside every checkout.
 
 <important if="relocating project data, machine state, or telemetry">
 
@@ -678,25 +588,19 @@ The build, packaging, and release rules live in
   `{ rootMarker: false }` is the named opt-out for a cell that asserts
   marker-less resolution, and says why. No cell plants a second marker at a
   fixture root: the shared one already supplies it, and a non-recursive
-  `mkdirSync` there throws `EEXIST` in `beforeAll`. The hygiene owner also judges
-  new non-`pi-lens-` entries at the tmp root (`path.join(fixture, "..")`) that a
-  test process created, and prints the observed count beside the judged one; a
-  child's own tmp cache is counted, not asserted. The bound is the hygiene
-  owner's own `afterAll`: a sibling a file leaves after that boundary is out of
-  scope for the census (the next run's baseline absorbs it), so fix the producer
-  rather than reading the line as clean.
+  `mkdirSync` there throws `EEXIST` in `beforeAll`. The hygiene owner
+  (`tests/config/tmp-fixture-hygiene.test.ts`) also judges new non-`pi-lens-`
+  entries at the tmp root that a test process created; a sibling a file leaves
+  after the owner's `afterAll` is out of scope for its census, so fix the
+  producer rather than reading the line as clean.
 - A test that pins `HOME`/`USERPROFILE` uses `pinFixtureHome`
   (`tests/clients/test-utils.ts`): the home lives in the worker's scratch root
   beside its worker home, never inside a fixture root the harness deletes and
-  never under `PI_LENS_HOME`, which production treats as its own housekeeping. A
-  child the test never awaits writes to its inherited HOME after teardown, and a
-  home inside the deleted root re-creates it after the file's sweep; no sweep
-  can remove that (`tests/clients/fixture-home-teardown.test.ts`). A
-  raw `process.env.HOME = …` pin in new test code is that shape. The pin
-  registers its undo with the harness, and the setup restores whatever is left
-  at the end of the case (`restorePinnedFixtureHomes` in its `afterEach`), so a
-  setup step that throws before the call site's `finally` cannot hand the next
-  case a fixture directory.
+  never under `PI_LENS_HOME`, which production treats as its own housekeeping.
+  A raw `process.env.HOME = …` pin in new test code is that shape
+  (`tests/clients/fixture-home-teardown.test.ts`); the pin registers its undo
+  with the harness, so a setup step that throws before the call site's
+  `finally` cannot hand the next case a fixture directory.
 
 Every logic change has relevant tests. New tests use fake clocks and
 `tests/clients/interleaving-kit.ts` before real time, raw sleeps, or real child
@@ -718,8 +622,8 @@ extension factory or reproduce pi lifecycle ordering.
 Two in-process pi tiers sit under that child lane. A case whose verdict
 depends on what pi does with a handler's return value, what the model
 receives, or how pi orders a session goes through one of them, never
-`tests/support/pi-mock.ts`. The double kept a `context` list as returned, pi
-rebuilt the system head, and every test passed. Tier 1,
+`tests/support/pi-mock.ts` (#4631: the double kept a `context` list as
+returned, pi rebuilt the system head, and every test passed). Tier 1,
 `tests/support/pi-runner.ts`, loads the built extension into pi's real
 `ExtensionRunner`: flags, tools, commands, declared registrations, and no
 `emit`, by design. Tier 2, `tests/support/pi-session.ts`, runs a real
@@ -727,53 +631,35 @@ rebuilt the system head, and every test passed. Tier 1,
 ids, and the request the model sees. By default it loads the built entry by
 path, so a `vi.mock` or a test-side singleton never reaches the extension; its
 opt-in inline-factory mode (`startPiSession({ inlineFactory })`) hands pi the
-factory the test imported, so the extension runs on the test graph's modules
-and a `vi.mock`, a prototype spy or a module-scope registry the test reads is
-the one it uses. Their header comments state the APIs and limits. A new tier
-capability adds a case to `pi-runner.test.ts` or `pi-session.test.ts` first. `pi-mock.ts` stays only for a test file on
-`PI_MOCK_IMPORTERS` (`tests/support/pi-mock-importers.ts`), whose row states the
-class: `process-boundary` (2 rows), `internal-seam` (35: the case interposes on
-a pi-lens `clients/` module either through `vi.mock`, which cannot reach the
-copy pi's loader builds, or through a test-side copy of a process-global
-service the loaded copy does not share, such as `clients/lsp`'s service),
-`unproducible-payload` (4: a payload a scripted provider cannot
-produce), `double-subject` (1: the double is the subject), and
-`real-ui-harness` (1: the claim is what the TUI shows or mounts, which no
-in-process tier can produce).
+factory the test imported, so a `vi.mock`, a prototype spy or a module-scope
+registry the test reads is the one the extension uses. Their header comments
+state the APIs and limits. A new tier capability adds a case to
+`pi-runner.test.ts` or `pi-session.test.ts` first.
 
-A row's class holds for the whole file only while every case in it needs that
-class. A slice that edits an admitted file re-checks it case by case, and its
-PR body records the split: moved, or stays with the class. A file whose double
-replaces a spawned process (a child spawn, a pipeline runner, or a language
-server binary) is `process-boundary`, not `internal-seam`. A test-side copy of
-the in-process `clients/lsp` service object stays `internal-seam`.
-
-No row carries a `pending slice` marker, and the sweep test refuses that
-label: slice 7 classified the last three with the probe that keeps each on the
-double, and every roadmap slice is closed, so a reopened placeholder reds
-instead of naming work no slice owns. The five classes cover the list's 43
-rows (52 at the slice 7 recording; the pi-mock L1, L2 and L3 moves took three more out, the L2 move also relabelled one `process-boundary` row `internal-seam`, and slice 7 moved the
-`index-smells-rollup-wiring` row out with its file, and the inline-factory mode
-moved six `internal-seam` files to tier 2), and this command reproduces them:
-`grep -oE '^[[:space:]]*"[^"]*": *"[^"]+"' tests/support/pi-mock-importers.ts | sed -E 's/.*": *"([^"]+)"$/\1/' | sort | uniq -c`.
-The double throws at load for a test file not on the list, so a new user fails
-however it imports it. The list only shrinks:
+`pi-mock.ts` stays only for a test file on `PI_MOCK_IMPORTERS`
+(`tests/support/pi-mock-importers.ts`), whose row states one class:
+`process-boundary`, `internal-seam` (the case interposes on a pi-lens `clients/`
+module through `vi.mock`, which cannot reach the copy pi's loader builds, or
+through a test-side copy of a process-global service the loaded copy does not
+share), `unproducible-payload` (a payload a scripted provider cannot produce),
+`double-subject` (the double is the subject), or `real-ui-harness` (the claim is
+what the TUI shows or mounts, which no in-process tier can produce). The double
+throws at load for a file not on the list, and the list only shrinks:
 `tests/config/pi-mock-importer-sweep.test.ts` fails on a row whose file no
-longer uses it. A host claim names the host it ran on, and the per-PR tiers run
-on the one installed host (`@earendil-works/pi-coding-agent`, the dev pin). The
-certified spread is a manual or nightly run, never a per-PR gate:
-`node scripts/probe-pi-host-tiers.mjs` runs tier 1 and tier 2 against every
-certified host installed on the machine, takes the certified set from the
-baseline doc's verified-host table through `scripts/lib/pi-host-spread.mjs` (the
-reader the packaging ratchet uses), and prints one line per host naming the host
-and the version it ran on. Each tier loads the SELECTED host's own code through
-`PI_LENS_PI_HOST_PACKAGE` — tier 1's entry, and tier 2's session API and
-scripted provider — so a host directory that cannot supply it fails that tier
-instead of being reported as probed. It installs nothing: a host it cannot find
-is reported `not installed` and only fails the run under `--require-all`, and an
-installed host the certified set does not name is named in a warning and not
-probed. Run `npm run build` first, because both tiers load the built extension,
-and `tests/scripts/probe-pi-host-tiers.test.ts` holds the script's own logic.
+longer uses it and refuses a `pending slice` label. A row's class holds for the
+whole file only while every case in it needs that class: a slice that edits an
+admitted file re-checks it case by case, and its PR body records the split
+(moved, or stays with the class). A file whose double replaces a spawned
+process (a child spawn, a pipeline runner, or a language server binary) is
+`process-boundary`, not `internal-seam`; a test-side copy of the in-process
+`clients/lsp` service object stays `internal-seam`. The class counts reproduce
+with `grep -oE '^[[:space:]]*"[^"]*": *"[^"]+"' tests/support/pi-mock-importers.ts | sed -E 's/.*": *"([^"]+)"$/\1/' | sort | uniq -c`.
+A host claim names the host it ran on: the per-PR tiers run on the one
+installed host (`@earendil-works/pi-coding-agent`, the dev pin), and the
+certified spread is a manual or nightly run, never a per-PR gate
+(`node scripts/probe-pi-host-tiers.mjs` after `npm run build`; its header and
+`tests/scripts/probe-pi-host-tiers.test.ts` define host selection and
+`--require-all`).
 
 When the defect is an ordering of awaits on one seam (a coalescing queue, a
 per-key serializer), or the seam has regressed before, write a scheduler
@@ -785,10 +671,7 @@ Use `tests/support/fault-injection.ts` for wedged children, seam delays,
 starved budgets, and gates; `makeRunnerCtx`, `makeLspServiceDouble`, and
 `makeRealRunnerEnv` for dispatch, LSP, and rule behavior. Check `tests/support/`
 before writing a helper: a host case uses a pi tier, and a JSON-lines sink is
-read through `readNdjsonRows` (`tests/support/ndjson-rows.ts`), never a local
-`JSON.parse` loop; a claim that needs the complete output asserts its
-`skipped === 0`, because the reader drops a line it cannot parse and reports
-the count instead of throwing. Mock only external binaries, network, host SDK
+read through `readNdjsonRows` (`docs/pi-lens-fixer.md` "Before code"). Mock only external binaries, network, host SDK
 seams (not pi's own behaviour: see the pi tiers above), clocks, or fault
 injection; an in-process store, registry or coordinator is never replaced by a
 fake.
@@ -809,36 +692,27 @@ Test authoring screens:
   timeout, a budget, a generation).
 - Restore env, timers, cwd, and module state; run the case in isolation.
 - A case never reads state a sibling case or file wrote (a file, a latch, a
-  once-per-session claim): `Changed tests shuffled (advisory)` runs a PR's
-  added or changed test files alone and under two fixed shuffle seeds
-  (`scripts/ci-shuffle-changed-tests.mjs`). The untouched tree is measured by
-  `scripts/ci-shuffle-census.mjs` (every file under seeds 202 and 424, and
-  alone; it needs `npm run build` and `npm run build:dist` first). It
-  runs nightly in `shuffle-census-nightly.yml`, not on a PR. Its known
-  members sit in `scripts/shuffle-census-ratchet.json`, keyed by file, which
-  only shrinks: a new member reds, and an entry clean two nights running
-  must be deleted.
-  A file whose subject IS the order its cases run in (a backstop that reaps
-  the previous case's process, a drain the next case observes) cannot be
-  fixed by restoring state: that `describe` opts out with `{ shuffle: false }`
-  and a header saying why order is the behaviour under test, never the whole
-  file, and is registered in the ratchet's `byDesign` rows, which
-  `tests/scripts/ci-shuffle-census.test.ts` checks both ways. The reader
-  (`tests/support/shuffle-opt-out-scan.ts`) admits only the minimal marker:
-  an options object is read as a SEQUENCE, so a spread or a computed key it
-  cannot name refuses even beside a readable `shuffle` and the last key wins;
-  and a callee resolves through any number of aliases, a binding it cannot
-  follow refusing when the call passes an options object.
-  A `vi.doMock` is undone in the file's top-level `afterEach`, not in the
-  case that mocks it: a shuffle runs the next case on the leaked mock.
-  `vi.resetModules()` does not clear `globalThis` or pre-reset singletons.
-  Per-case session cleanup calls `resetSessionScopedState` from
-  `clients/runtime-session.ts`, rather than a hand-picked subset of resets.
-  A test that proves a reset owner's own contract keeps the owner call and
-  states why.
-  After `vi.resetModules()`
-  every `await import(...)` is a second module copy; import statically what
-  the tool under test also reads.
+  once-per-session claim). `Changed tests shuffled (advisory)` runs a PR's added
+  or changed test files alone and under two fixed shuffle seeds
+  (`scripts/ci-shuffle-changed-tests.mjs`); the untouched tree is measured
+  nightly by `scripts/ci-shuffle-census.mjs` (`shuffle-census-nightly.yml`;
+  needs `npm run build` and `npm run build:dist` first). Its known members sit
+  in `scripts/shuffle-census-ratchet.json`, which only shrinks: a new member
+  reds, and an entry clean two nights running is deleted. A file whose subject
+  IS the order its cases run in cannot be fixed by restoring state: that
+  `describe` opts out with `{ shuffle: false }` and a header saying why order is
+  the behaviour under test, never the whole file, and is registered in the
+  ratchet's `byDesign` rows (`tests/scripts/ci-shuffle-census.test.ts` checks
+  both ways). `tests/support/shuffle-opt-out-scan.ts` admits only the minimal
+  marker: a spread, a computed key or a callee it cannot follow refuses.
+- A `vi.doMock` is undone in the file's top-level `afterEach`, not in the case
+  that mocks it: a shuffle runs the next case on the leaked mock.
+  `vi.resetModules()` does not clear `globalThis` or pre-reset singletons, and
+  every `await import(...)` after it is a second module copy, so import
+  statically what the tool under test also reads. Per-case session cleanup
+  calls `resetSessionScopedState` from `clients/runtime-session.ts`, rather than
+  a hand-picked subset of resets; a test that proves a reset owner's own
+  contract keeps the owner call and states why.
 - Keep performance bounds close to measured fixed and regressed values.
 - Assert real behavior, not only mock calls or `not.toThrow`.
 - Derive expected values independently; do not mirror production tables.
@@ -853,20 +727,18 @@ Test authoring screens:
 
 Governance sweeps use `tests/support/sweep-kit.ts`, explicit source roots, and
 comment/string-blanked source. Every sweep has a real floor and a checked
-exemption reason. A population-deriving scanner fails closed: a needle hit
-that matches none of its classified forms reds as an unclassified spelling
-with its file and line, never a skip, and the scanner ships a case that plants
-one. History: `HISTORY.md`, 2026-10-15. A detector that decides a test exists counts only live
-declarations (`testDeclarations` in `tests/support/sweep-kit.ts`) in files
-vitest collects (`tests/support/vitest-collection.ts`): a skipped, todo,
-conditional (`skipIf`/`runIf`, an options key, a body skip) or uncalled test
-is absent. A governance question with a data-flow answer is asked structurally,
-not by extending a spelling list: `tests/support/eviction-programs.ts` owns the
+exemption reason. A population-deriving scanner fails closed: a needle hit that
+matches none of its classified forms reds as an unclassified spelling with its
+file and line, never a skip, and the scanner ships a case that plants one.
+History: `HISTORY.md`, 2026-10-15. A detector that decides a test exists counts
+only live declarations (`testDeclarations` in `tests/support/sweep-kit.ts`) in
+files vitest collects (`tests/support/vitest-collection.ts`): a skipped, todo,
+conditional (`skipIf`/`runIf`, an options key, a body skip) or uncalled test is
+absent. A governance question with a data-flow answer is asked structurally, not
+by extending a spelling list: `tests/support/eviction-programs.ts` owns the
 eviction question over the S0 census seam's AST, admits four tabled forms, and
-refuses everything else, with the live sites it still refuses tabled beside
-them. New mock
-exports, fixture shapes, path rules, spawn lanes, and durable fields must
-update their registered-or-fail coverage tests.
+refuses everything else. New mock exports, fixture shapes, path rules, spawn
+lanes, and durable fields must update their registered-or-fail coverage tests.
 
 <important if="adding or changing a rule or analyzer">
 
@@ -888,10 +760,8 @@ process) has ONE identity seam, `ruleCorpusFingerprintForCycle` in
 per dispatch cycle, keyed on `getTurnId()`, and shared by the tree-sitter
 loader memo and the ast-grep source fingerprint, so both families refresh on
 the same boundary. A per-call walk of that corpus is a measured regression
-(#4212, 1000 warm loader calls over 170 rule files: ~1000x master for a
-per-call content hash, ~220x for a per-call stat signature, ~1.1x for the
-per-cycle memo), and a per-cycle memo that omits the turn identity never
-invalidates. A path that must see an edit inside its own
+(#4212; the numbers are in `HISTORY.md`), and a per-cycle memo that omits the
+turn identity never invalidates. A path that must see an edit inside its own
 cycle passes `force`, which recomputes and republishes into the cycle; the
 dispatch runner does, and its RuleCache key is the content fingerprint
 recomputed per dispatched file. `resolveBaselineSgconfig` forces because #497
@@ -910,12 +780,9 @@ reference, and no trailing period. Non-trivial commits explain what and why
 in a wrapped body. Keep user-facing prose active, present-tense, concise, and
 consistent. Use sentence-case headings, Oxford commas, and no em-dash chains.
 
-Issue bodies lead with evidence, then root cause, acceptance criteria,
-observability, and cross-links. Every issue has one type label and at least one
-`area:` label, plus exactly one `priority:` label. A PR body follows
-`.github/PULL_REQUEST_TEMPLATE.md`: `Summary`, `Notes for the reviewer`,
-`Change outline`, and `Proof and checks`, within the caps
-`scripts/check-pr-body.mjs` enforces.
+Issue bodies, labels, and priorities follow "Issue and PR design contract" and
+"Issue triage & labels". A PR body follows `.github/PULL_REQUEST_TEMPLATE.md`
+within the caps `scripts/check-pr-body.mjs` enforces.
 
 Observability is part of correctness. Name the record, sink, ledger, or test
 that proves a change. If no telemetry is appropriate, state why. Keep records
@@ -962,43 +829,26 @@ through `fitLine` or `fitLines` from `clients/tui-fit.ts`. Never write directly
 to the terminal from clients.
 
 </important>
-## Historical context
-
-Detailed incident narratives, completed migrations, closed design threads, and
-large evidence tables moved to `HISTORY.md` on 2026-09-14. Read that file only
-when the task needs historical rationale; do not copy its detail back into this
-live contract unless it changes a future decision.
-
 ## Contributing
 
 Bare-Node scripts import only `.js`/`.mjs`; type stripping is not assumed.
 
 Every agent `Bash` call under Claude Code runs through
-`scripts/hooks/guard-bash.mjs` (`PreToolUse`), which denies with its reason:
-`git stash` in any form but the read-only `git stash list` and `git stash show`
-(an admit list: a bare command with no `-c` or other global option than
-`-C <dir>`, no env var, and only display flags; push, save, pop, apply, drop,
-clear, create, store, branch, bare `git stash` and any spelling it cannot
-classify stay denied); `git reset --soft`/`--hard`; double-force
-`git worktree remove`, or any remove over a symlinked `node_modules` or over a
-path it cannot resolve
-statically (`$(…)`, `~user`, an unset `$VAR`, a glob; #3988), where `~`, `$HOME`
-and relative paths (against a preceding `cd`/`git -C`) are resolved first (every
-such refusal names `node scripts/worktree-remove.mjs <path> [--force]`, which
-unlinks a `node_modules` symlink, refuses a real `node_modules` directory or a
-non-worktree, then runs `git worktree remove`); a
-mutating `npm` verb (`ci`, `install`, `update`, `prune`, …, or `npx npm@… ci`)
-where `node_modules` is a symlink out of the project, `--dry-run` or not, and a
-delete through such a link (`rm -rf node_modules/`, `node_modules/*`, `find
-node_modules/ -delete`; unlinking it with `rm node_modules` stays allowed;
-#4044); an unpinned `node` probe loading
-`clients/` or `dist/`; `TMPDIR`/`TMP`/`TEMP` aimed at the harness home; bare
-`pkill`/`killall` patterns (#3556); worktrees, clones, or `mktemp -d` under
-`/tmp` (#3526); a write under `/tmp` through a redirect (`>`, `>>`, `2>`,
-`&>`), `tee`, a `cp`/`mv`/`install` target, `mkdir` or `touch` only (the
-harness's own `/tmp/claude-<uid>/` stays allowed, as do reads); a commit or push
-chained after a check with `;` or a pipe instead of `&&` (#3471); and every
-hook bypass (`--no-verify`, commit `-n`, `core.hooksPath`, `HUSKY=0`, `PI_LENS_SKIP_HOOKS=`; #3778). `kill $(pgrep -f …)`
-is a known blind spot; kill your own recorded PID. For a red that looks
-unrelated, prove it with `node scripts/red-on-base.mjs` and stop. Human-facing
-version: `CONTRIBUTING.md` "Local git hooks".
+`scripts/hooks/guard-bash.mjs` (`PreToolUse`), which denies with its reason;
+`tests/scripts/guard-bash-hook.test.ts` pins each rule, and `CONTRIBUTING.md`
+"Local git hooks" is the human-facing version. Fix the command; never route
+around it. The denied families: `git stash` outside the read-only `list` and
+`show`; `git reset --soft`/`--hard`; a double-force `git worktree remove`, or
+any remove over a symlinked `node_modules` or a path it cannot resolve
+statically (every refusal names
+`node scripts/worktree-remove.mjs <path> [--force]`; #3988); a mutating `npm`
+verb where `node_modules` is a symlink out of the project, or a delete through
+that link (`rm node_modules` without a slash or glob stays allowed; #4044); an
+unpinned `node` probe loading `clients/` or `dist/`; `TMPDIR`/`TMP`/`TEMP` aimed
+at the harness home; bare `pkill`/`killall` patterns (#3556); worktrees,
+clones, `mktemp -d` or a write under `/tmp` (#3526); a commit or push chained
+after a check with `;` or a pipe instead of `&&` (#3471); and every hook bypass
+(`--no-verify`, commit `-n`, `core.hooksPath`, `HUSKY=0`, `PI_LENS_SKIP_HOOKS=`;
+#3778). `kill $(pgrep -f …)` is a known blind spot; kill your own recorded PID.
+For a red that looks unrelated, prove it with `node scripts/red-on-base.mjs` and
+stop.

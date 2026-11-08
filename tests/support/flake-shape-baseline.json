@@ -639,7 +639,6 @@
 		"clients/dispatch/runners/runner-helpers.test.ts::clients/latency-logger": 1,
 		"clients/dispatch/runners/runner-helpers.test.ts::clients/package-manager": 1,
 		"clients/dispatch/runners/runner-helpers.test.ts::clients/sessionstart-logger": 1,
-		"clients/dispatch/runners/runner-outcome-actionlint-credo.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,
 		"clients/dispatch/runners/runner-outcome-eslint-golangci.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,
 		"clients/dispatch/runners/runner-outcome-eslint-golangci.test.ts::clients/tool-policy": 1,
 		"clients/dispatch/runners/runner-outcome-ktlint-php-lint.test.ts::clients/dispatch/runners/utils/runner-helpers": 1,

@@ -25,11 +25,6 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailable: () => true,
-			isAvailableAsync: async () => true,
-			getCommand: () => "taplo",
-		}),
 		resolveToolCommandWithInstallFallback: async () => "taplo",
 		lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
 	}),

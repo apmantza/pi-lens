@@ -106,6 +106,7 @@ import {
 import { testSourceFiles as allTestSourceFiles } from "../support/module-instance-scan.js";
 import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedRegistry } from "../support/sweep-kit.js";
+import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -2088,25 +2089,29 @@ describe("flake-shape ratchet (#2547)", () => {
 			);
 			expect(problems.map(describeProblem)).toEqual([]);
 		},
-		30_000,
+		TREE_WALK_TIMEOUT_MS,
 	);
 
 	// Whole-tree scan performs AST parsing and can exceed Vitest's default under
 	// CI contention (run 34195211598, head 5c0aa5a4).
-	it("the baseline names no file that has vanished from the live scan", async () => {
-		// Stated asymmetrically on purpose (see module doc): a count FALLING is
-		// not a failure above, but a baseline entry for a file the scan no
-		// longer touches AT ALL is dead weight worth flagging here, same as
-		// `auditRegistry`'s stale-exemption check one layer up.
-		const stale: string[] = [];
-		for (const detector of DETECTOR_NAMES) {
-			const live = await countsByDetector(detector);
-			for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
-				if (!(file in live)) stale.push(`${detector}:${file}`);
+	it(
+		"the baseline names no file that has vanished from the live scan",
+		async () => {
+			// Stated asymmetrically on purpose (see module doc): a count FALLING is
+			// not a failure above, but a baseline entry for a file the scan no
+			// longer touches AT ALL is dead weight worth flagging here, same as
+			// `auditRegistry`'s stale-exemption check one layer up.
+			const stale: string[] = [];
+			for (const detector of DETECTOR_NAMES) {
+				const live = await countsByDetector(detector);
+				for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
+					if (!(file in live)) stale.push(`${detector}:${file}`);
+				}
 			}
-		}
-		expect(stale).toEqual([]);
-	}, 30_000);
+			expect(stale).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("carries the three counts in this header (informational, kept in sync)", () => {
 		// Not asserted against a hardcoded number — this test's job is only to
@@ -2321,41 +2326,48 @@ describe("flake-shape ratchet — admission gate", () => {
 
 	// #2857: the admission sweep reads every admitted file's source and timed
 	// out at vitest's 5 s default under full-suite load; give it a real budget.
-	it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership", () => {
-		const included = new Set([
-			...wallClockBudgetInclude(),
-			...realHarnessInclude,
-		]);
-		const problems: string[] = [];
-		for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
-			const file = key
-				.slice(entry.detector.length + 1)
-				.split(IDENTITY_SEPARATOR)[0];
-			if (file.startsWith("support/") && !file.endsWith(".test.ts")) continue;
-			const absolute = path.join(repoRoot, "tests", file);
-			const source = fs.existsSync(absolute)
-				? fs.readFileSync(absolute, "utf8")
-				: undefined;
-			problems.push(...validateAdmission(key, entry, source, included, file));
-		}
-		for (const detector of DETECTOR_NAMES) {
-			for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
-				if (!file.startsWith("support/") || file.endsWith(".test.ts")) continue;
-				const key = `${detector}:${file}`;
-				const entry = ADMITTED_AFTER_BASELINE[key];
-				if (!entry) {
-					problems.push(`${key}: missing ADMITTED_AFTER_BASELINE entry`);
-					continue;
-				}
-				const source = fs.readFileSync(
-					path.join(repoRoot, "tests", file),
-					"utf8",
-				);
+	it(
+		"ADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership",
+		() => {
+			const included = new Set([
+				...wallClockBudgetInclude(),
+				...realHarnessInclude,
+			]);
+			const problems: string[] = [];
+			for (const [key, entry] of Object.entries(ADMITTED_AFTER_BASELINE)) {
+				const file = key
+					.slice(entry.detector.length + 1)
+					.split(IDENTITY_SEPARATOR)[0];
+				if (file.startsWith("support/") && !file.endsWith(".test.ts")) continue;
+				const absolute = path.join(repoRoot, "tests", file);
+				const source = fs.existsSync(absolute)
+					? fs.readFileSync(absolute, "utf8")
+					: undefined;
 				problems.push(...validateAdmission(key, entry, source, included, file));
 			}
-		}
-		expect(problems).toEqual([]);
-	}, 30_000);
+			for (const detector of DETECTOR_NAMES) {
+				for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
+					if (!file.startsWith("support/") || file.endsWith(".test.ts"))
+						continue;
+					const key = `${detector}:${file}`;
+					const entry = ADMITTED_AFTER_BASELINE[key];
+					if (!entry) {
+						problems.push(`${key}: missing ADMITTED_AFTER_BASELINE entry`);
+						continue;
+					}
+					const source = fs.readFileSync(
+						path.join(repoRoot, "tests", file),
+						"utf8",
+					);
+					problems.push(
+						...validateAdmission(key, entry, source, included, file),
+					);
+				}
+			}
+			expect(problems).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3546: the caching above is a behaviour-preserving refactor — every
 	// value it returns must equal what the uncached production calls
@@ -2363,60 +2375,74 @@ describe("flake-shape ratchet — admission gate", () => {
 	// input. Old-vs-new probe through the real seam, not a re-derived copy
 	// of the caching logic, per the behaviour-preserving-refactor proof
 	// shape.
-	it("(#3546) the cached file list and import targets equal the uncached scan", () => {
-		const uncachedFiles = allTestSourceFiles().filter((file) =>
-			file.endsWith(".test.ts"),
-		);
-		expect(cachedAllTestFiles()).toEqual(uncachedFiles);
-		for (const file of uncachedFiles) {
-			expect(cachedLocalImportTargets(file)).toEqual(localImportTargets(file));
-		}
-	});
+	it(
+		"(#3546) the cached file list and import targets equal the uncached scan",
+		() => {
+			const uncachedFiles = allTestSourceFiles().filter((file) =>
+				file.endsWith(".test.ts"),
+			);
+			expect(cachedAllTestFiles()).toEqual(uncachedFiles);
+			for (const file of uncachedFiles) {
+				expect(cachedLocalImportTargets(file)).toEqual(
+					localImportTargets(file),
+				);
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3546 MUTATION: the cache must be load-bearing, not dead code — poison
 	// it and show `supportHelperHasLaneProof`'s answer for a REAL admitted
 	// entry flips, then show it flips back once the cache is restored. This
 	// is the guard's own red-on-neuter proof (docs/engineering-principles.md "Mutation output is quoted, not ticked").
-	it("MUTATION (#3546): a poisoned import-targets cache flips supportHelperHasLaneProof's answer", () => {
-		const included = new Set([
-			...wallClockBudgetInclude(),
-			...realHarnessInclude,
-		]);
-		expect(
-			supportHelperHasLaneProof("support/fault-injection.ts", included),
-		).toBe(true);
-
-		const saved = new Map(importTargetsCache);
-		for (const key of importTargetsCache.keys())
-			importTargetsCache.set(key, []);
-		try {
+	it(
+		"MUTATION (#3546): a poisoned import-targets cache flips supportHelperHasLaneProof's answer",
+		() => {
+			const included = new Set([
+				...wallClockBudgetInclude(),
+				...realHarnessInclude,
+			]);
 			expect(
 				supportHelperHasLaneProof("support/fault-injection.ts", included),
-			).toBe(false);
-		} finally {
-			importTargetsCache.clear();
-			for (const [key, value] of saved) importTargetsCache.set(key, value);
-		}
-		expect(
-			supportHelperHasLaneProof("support/fault-injection.ts", included),
-		).toBe(true);
-	});
+			).toBe(true);
+
+			const saved = new Map(importTargetsCache);
+			for (const key of importTargetsCache.keys())
+				importTargetsCache.set(key, []);
+			try {
+				expect(
+					supportHelperHasLaneProof("support/fault-injection.ts", included),
+				).toBe(false);
+			} finally {
+				importTargetsCache.clear();
+				for (const [key, value] of saved) importTargetsCache.set(key, value);
+			}
+			expect(
+				supportHelperHasLaneProof("support/fault-injection.ts", included),
+			).toBe(true);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// #3546 planted offender: a target nothing imports must be flagged
 	// (no lane proof) — same conclusion the uncached walk would reach, since
 	// the equivalence test above proves the cache returns identical data.
-	it("ATTACK (#3546): a support/ target no test imports has no lane proof — planted offender", () => {
-		const included = new Set([
-			...wallClockBudgetInclude(),
-			...realHarnessInclude,
-		]);
-		expect(
-			supportHelperHasLaneProof(
-				"support/__3546-planted-offender-never-imported.ts",
-				included,
-			),
-		).toBe(false);
-	});
+	it(
+		"ATTACK (#3546): a support/ target no test imports has no lane proof — planted offender",
+		() => {
+			const included = new Set([
+				...wallClockBudgetInclude(),
+				...realHarnessInclude,
+			]);
+			expect(
+				supportHelperHasLaneProof(
+					"support/__3546-planted-offender-never-imported.ts",
+					included,
+				),
+			).toBe(false);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	// `ADMITTED_AFTER_BASELINE` is empty in steady state, so the test above
 	// alone never proves `validateAdmission` catches anything. These fixtures
@@ -2431,69 +2457,89 @@ describe("flake-shape ratchet — admission gate", () => {
 	};
 	const INCLUDED = new Set(["tests/clients/some-admitted-fixture.test.ts"]);
 
-	it("ATTACK: passes when the header, detector match, and membership all hold", () => {
-		expect(
-			validateAdmission(
+	it(
+		"ATTACK: passes when the header, detector match, and membership all hold",
+		() => {
+			expect(
+				validateAdmission(
+					"real-process-spawn:clients/some-admitted-fixture.test.ts",
+					GOOD_ENTRY,
+					GOOD_SOURCE,
+					INCLUDED,
+					"clients/some-admitted-fixture.test.ts",
+				),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"ATTACK: a missing header is caught",
+		() => {
+			const problems = validateAdmission(
+				"real-process-spawn:clients/some-admitted-fixture.test.ts",
+				GOOD_ENTRY,
+				"execFileSync(cmd); // no header at all\n",
+				INCLUDED,
+				"clients/some-admitted-fixture.test.ts",
+			);
+			expect(problems).toEqual([expect.stringContaining("missing")]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"ATTACK: a header naming the WRONG detector is caught",
+		() => {
+			const wrongDetectorSource =
+				"// flake-shape: raw-timer-wait — this reason talks about the wrong detector\n" +
+				"execFileSync(cmd);\n";
+			const problems = validateAdmission(
+				"real-process-spawn:clients/some-admitted-fixture.test.ts",
+				GOOD_ENTRY,
+				wrongDetectorSource,
+				INCLUDED,
+				"clients/some-admitted-fixture.test.ts",
+			);
+			expect(problems).toEqual([
+				expect.stringContaining('names detector "raw-timer-wait"'),
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"ATTACK: missing wallClockBudgetInclude membership is caught even with a good header",
+		() => {
+			const problems = validateAdmission(
 				"real-process-spawn:clients/some-admitted-fixture.test.ts",
 				GOOD_ENTRY,
 				GOOD_SOURCE,
-				INCLUDED,
+				new Set<string>(), // empty: file is not in the include list
 				"clients/some-admitted-fixture.test.ts",
-			),
-		).toEqual([]);
-	});
+			);
+			expect(problems).toEqual([
+				expect.stringContaining("wallClockBudgetInclude"),
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("ATTACK: a missing header is caught", () => {
-		const problems = validateAdmission(
-			"real-process-spawn:clients/some-admitted-fixture.test.ts",
-			GOOD_ENTRY,
-			"execFileSync(cmd); // no header at all\n",
-			INCLUDED,
-			"clients/some-admitted-fixture.test.ts",
-		);
-		expect(problems).toEqual([expect.stringContaining("missing")]);
-	});
-
-	it("ATTACK: a header naming the WRONG detector is caught", () => {
-		const wrongDetectorSource =
-			"// flake-shape: raw-timer-wait — this reason talks about the wrong detector\n" +
-			"execFileSync(cmd);\n";
-		const problems = validateAdmission(
-			"real-process-spawn:clients/some-admitted-fixture.test.ts",
-			GOOD_ENTRY,
-			wrongDetectorSource,
-			INCLUDED,
-			"clients/some-admitted-fixture.test.ts",
-		);
-		expect(problems).toEqual([
-			expect.stringContaining('names detector "raw-timer-wait"'),
-		]);
-	});
-
-	it("ATTACK: missing wallClockBudgetInclude membership is caught even with a good header", () => {
-		const problems = validateAdmission(
-			"real-process-spawn:clients/some-admitted-fixture.test.ts",
-			GOOD_ENTRY,
-			GOOD_SOURCE,
-			new Set<string>(), // empty: file is not in the include list
-			"clients/some-admitted-fixture.test.ts",
-		);
-		expect(problems).toEqual([
-			expect.stringContaining("wallClockBudgetInclude"),
-		]);
-	});
-
-	it("ATTACK: a nonexistent file is caught", () => {
-		expect(
-			validateAdmission(
-				"real-process-spawn:clients/does-not-exist.test.ts",
-				GOOD_ENTRY,
-				undefined,
-				INCLUDED,
-				"clients/does-not-exist.test.ts",
-			),
-		).toEqual([expect.stringContaining("does not exist")]);
-	});
+	it(
+		"ATTACK: a nonexistent file is caught",
+		() => {
+			expect(
+				validateAdmission(
+					"real-process-spawn:clients/does-not-exist.test.ts",
+					GOOD_ENTRY,
+					undefined,
+					INCLUDED,
+					"clients/does-not-exist.test.ts",
+				),
+			).toEqual([expect.stringContaining("does not exist")]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("flake-shape ratchet — frozen mint (#4383 review F1)", () => {
@@ -3184,24 +3230,32 @@ describe("flake-shape scan — raw-timer-wait", () => {
 		expect(scanRawTimerWait("interleaving-kit.ts", source)).toEqual([]);
 	});
 
-	it("(#2563) the live scan walks tests/support helpers: fault-injection.ts sits in the population", async () => {
-		// Mutation-sensitive population proof: dropping the support walk from
-		// countsByDetector makes this red. fault-injection.ts is the one
-		// existing helper the extended scan flags (its sanctioned delayInside
-		// timer + teardown failsafe are baselined, not admitted).
-		expect(await countsByDetector("raw-timer-wait")).toHaveProperty(
-			"support/fault-injection.ts",
-		);
-	});
+	it(
+		"(#2563) the live scan walks tests/support helpers: fault-injection.ts sits in the population",
+		async () => {
+			// Mutation-sensitive population proof: dropping the support walk from
+			// countsByDetector makes this red. fault-injection.ts is the one
+			// existing helper the extended scan flags (its sanctioned delayInside
+			// timer + teardown failsafe are baselined, not admitted).
+			expect(await countsByDetector("raw-timer-wait")).toHaveProperty(
+				"support/fault-injection.ts",
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("(#2563) the spawn detector stays test-file-only: support helpers are the sanctioned spawn boundary", async () => {
-		// git-fixture-env.ts / fake-child.ts / spawn-shapes.ts import
-		// node:child_process by design — they are the fixture boundary the
-		// test-side detector routes callers toward, not a flake shape.
-		const spawnCounts = await countsByDetector("real-process-spawn");
-		expect(spawnCounts["support/git-fixture-env.ts"]).toBeUndefined();
-		expect(spawnCounts["support/fake-child.ts"]).toBeUndefined();
-	});
+	it(
+		"(#2563) the spawn detector stays test-file-only: support helpers are the sanctioned spawn boundary",
+		async () => {
+			// git-fixture-env.ts / fake-child.ts / spawn-shapes.ts import
+			// node:child_process by design — they are the fixture boundary the
+			// test-side detector routes callers toward, not a flake shape.
+			const spawnCounts = await countsByDetector("real-process-spawn");
+			expect(spawnCounts["support/git-fixture-env.ts"]).toBeUndefined();
+			expect(spawnCounts["support/fake-child.ts"]).toBeUndefined();
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("ATTACK (#2563): a raw timer inside a tests/support helper is a NEW flagged file", () => {
 		// The acceptance-criterion scenario for the new population: a helper
@@ -3568,53 +3622,59 @@ describe("flake-shape ratchet — in-process mocks and doubles (#4362)", () => {
 		}
 	});
 
-	it("ATTACK: a mock admission needs its header but no serialized lane", () => {
-		const key = `in-process-mock:${MOCK_FIXTURE}::clients/latency-logger`;
-		const entry = {
-			detector: "in-process-mock" as const,
-			reason: "the logger's own flush order is the behaviour under test",
-		};
-		const header =
-			"// flake-shape: in-process-mock — the logger's own flush order is under test\n";
-		const body = 'vi.mock("../../clients/latency-logger.js");\n';
-		// Good header, no lane: admitted (a mock adds no contention).
-		expect(
-			validateAdmission(key, entry, header + body, new Set(), MOCK_FIXTURE),
-		).toEqual([]);
-		// No header: refused.
-		expect(
-			validateAdmission(key, entry, body, new Set(), MOCK_FIXTURE),
-		).toEqual([expect.stringContaining("missing")]);
-		// A header quoted in a comment of prose, or in a string, is no header.
-		expect(
-			validateAdmission(
-				key,
-				entry,
-				`const s = "${header.trim()}";\n${body}`,
-				new Set(),
-				MOCK_FIXTURE,
-			),
-		).toEqual([expect.stringContaining("missing")]);
-		// A spawn header first and the mock header second: both validate.
-		const twoHeaders =
-			"// flake-shape: real-process-spawn — the real CLI exit code is under test\n" +
-			header +
-			body;
-		expect(
-			validateAdmission(key, entry, twoHeaders, new Set(), MOCK_FIXTURE),
-		).toEqual([]);
-		// Only the spawn header: the mock entry names the wrong detector.
-		expect(
-			validateAdmission(
-				key,
-				entry,
+	it(
+		"ATTACK: a mock admission needs its header but no serialized lane",
+		() => {
+			const key = `in-process-mock:${MOCK_FIXTURE}::clients/latency-logger`;
+			const entry = {
+				detector: "in-process-mock" as const,
+				reason: "the logger's own flush order is the behaviour under test",
+			};
+			const header =
+				"// flake-shape: in-process-mock — the logger's own flush order is under test\n";
+			const body = 'vi.mock("../../clients/latency-logger.js");\n';
+			// Good header, no lane: admitted (a mock adds no contention).
+			expect(
+				validateAdmission(key, entry, header + body, new Set(), MOCK_FIXTURE),
+			).toEqual([]);
+			// No header: refused.
+			expect(
+				validateAdmission(key, entry, body, new Set(), MOCK_FIXTURE),
+			).toEqual([expect.stringContaining("missing")]);
+			// A header quoted in a comment of prose, or in a string, is no header.
+			expect(
+				validateAdmission(
+					key,
+					entry,
+					`const s = "${header.trim()}";\n${body}`,
+					new Set(),
+					MOCK_FIXTURE,
+				),
+			).toEqual([expect.stringContaining("missing")]);
+			// A spawn header first and the mock header second: both validate.
+			const twoHeaders =
 				"// flake-shape: real-process-spawn — the real CLI exit code is under test\n" +
-					body,
-				new Set(),
-				MOCK_FIXTURE,
-			),
-		).toEqual([expect.stringContaining('names detector "real-process-spawn"')]);
-	});
+				header +
+				body;
+			expect(
+				validateAdmission(key, entry, twoHeaders, new Set(), MOCK_FIXTURE),
+			).toEqual([]);
+			// Only the spawn header: the mock entry names the wrong detector.
+			expect(
+				validateAdmission(
+					key,
+					entry,
+					"// flake-shape: real-process-spawn — the real CLI exit code is under test\n" +
+						body,
+					new Set(),
+					MOCK_FIXTURE,
+				),
+			).toEqual([
+				expect.stringContaining('names detector "real-process-spawn"'),
+			]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });
 
 describe("flake-shape scan — in-process-mock (#4362)", () => {
