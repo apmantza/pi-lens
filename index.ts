@@ -1,6 +1,10 @@
 import "./clients/console-guard-install.js";
 import { BoundedSet } from "./clients/bounded-cache.js";
-import { bounded, withDeadline } from "./clients/deadline-utils.js";
+import {
+	bounded,
+	combineAbortSignals,
+	withDeadline,
+} from "./clients/deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "./clients/hook-budgets.js";
 import {
 	closeModuleLoadConsoleWindow,
@@ -279,6 +283,7 @@ import {
 	runQuietWindow,
 } from "./clients/quiet-window.js";
 import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
+import { spawnAbortScope } from "./clients/spawn-abort-scope.js";
 import { initI18n, t } from "./i18n.js";
 import {
 	createActivateToolsTool,
@@ -2277,8 +2282,21 @@ function activateExtension(hostPi: ExtensionAPI) {
 						// Observability must never break tool delivery.
 					}
 				};
+				// #5097: pi hands each call its abort signal (positional and
+				// `ctx.signal`), but the spawns and LSP requests a tool reaches read
+				// the ambient default. One scope per call puts the signal there, so
+				// Esc kills the call's children.
+				const scoped = (args: unknown[]): unknown => {
+					const signal = combineAbortSignals(
+						args[2] as AbortSignal | undefined,
+						(args[4] as { signal?: AbortSignal } | undefined)?.signal,
+					);
+					return signal
+						? spawnAbortScope.run(signal, () => execute(...args))
+						: execute(...args);
+				};
 				normalized.execute = (...args: unknown[]) =>
-					Promise.resolve(execute(...args)).then(
+					Promise.resolve(scoped(args)).then(
 						(result) => {
 							const delivery = finalizeToolResultWithDelivery(
 								result as Parameters<typeof finalizeToolResultWithDelivery>[0],

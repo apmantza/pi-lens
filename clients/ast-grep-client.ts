@@ -364,7 +364,7 @@ export class AstGrepClient {
 		ruleYaml: string,
 		paths: string[],
 		apply: boolean,
-		options?: AstGrepApplyProvenance,
+		options?: AstGrepApplyProvenance & { signal?: AbortSignal },
 	): Promise<{
 		matches: AstGrepMatch[];
 		totalMatches: number;
@@ -384,7 +384,9 @@ export class AstGrepClient {
 			if (apply) {
 				// Stale-preview check: dry-run first. Preserve CLI failures instead of
 				// treating an invalid rule as a stale, no-match preview.
-				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml);
+				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml, {
+					signal: options?.signal,
+				});
 				if (preCheck.failure || preCheck.error) {
 					return {
 						matches: allMatches,
@@ -404,11 +406,15 @@ export class AstGrepClient {
 					};
 				}
 			}
+			// #5097: the runner re-checks `signal` before its `--update-all` and
+			// runs that write to completion.
 			const result = await this.runner.tempScanWithFixAsync(
 				scanPath,
 				"agent-rule",
 				ruleYaml,
 				apply,
+				undefined,
+				{ signal: options?.signal },
 			);
 			if (result.error) {
 				return {
@@ -764,7 +770,10 @@ export class AstGrepClient {
 		lang: string,
 		paths: string[],
 		apply = false,
-		options?: AstGrepApplyProvenance & { strictness?: string },
+		options?: AstGrepApplyProvenance & {
+			strictness?: string;
+			signal?: AbortSignal;
+		},
 	): Promise<{
 		matches: AstGrepMatch[];
 		totalMatches: number;
@@ -780,13 +789,13 @@ export class AstGrepClient {
 			baseArgs.push("--strictness", options.strictness);
 		}
 
+		const signal = options?.signal;
 		if (!apply) {
 			// Dry-run: --json=compact shows what would change without writing
-			const result = await this.runner.exec([
-				...baseArgs,
-				"--json=compact",
-				...paths,
-			]);
+			const result = await this.runner.exec(
+				[...baseArgs, "--json=compact", ...paths],
+				{ signal },
+			);
 			return {
 				matches: result.matches,
 				totalMatches: result.totalMatches,
@@ -798,11 +807,10 @@ export class AstGrepClient {
 
 		// Stale-preview check: re-run dry-run before writing.
 		// If the pattern no longer matches, the files changed since the preview.
-		const preCheck = await this.runner.exec([
-			...baseArgs,
-			"--json=compact",
-			...paths,
-		]);
+		const preCheck = await this.runner.exec(
+			[...baseArgs, "--json=compact", ...paths],
+			{ signal },
+		);
 		if (preCheck.error) {
 			return {
 				matches: [],
@@ -828,11 +836,22 @@ export class AstGrepClient {
 		// metavariable substitutions don't round-trip into a valid search
 		// pattern, yielding a false "0 matches" even on a successful apply).
 		// preCheck above already captured exactly what matched and was rewritten.
-		const applyResult = await this.runner.exec([
-			...baseArgs,
-			"--update-all",
-			...paths,
-		]);
+		// #5097: an abort lands before the write or not at all. A killed
+		// `--update-all` leaves part of the files rewritten, so the write runs to
+		// completion once started.
+		if (signal?.aborted) {
+			return {
+				matches: [],
+				totalMatches: 0,
+				truncated: false,
+				applied: false,
+				error: "operation aborted",
+			};
+		}
+		const applyResult = await this.runner.exec(
+			[...baseArgs, "--update-all", ...paths],
+			{ ignoreAmbientSignal: true },
+		);
 		if (applyResult.error) {
 			return {
 				matches: [],

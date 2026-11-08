@@ -98,6 +98,11 @@ export interface SgExecutionOptions {
 	signal?: AbortSignal;
 	/** Absolute wall-clock deadline shared by a multi-path search. */
 	deadlineAt?: number;
+	/**
+	 * #5097: run to completion through Esc (safe-spawn's opt-out from the turn
+	 * signal and the tool scope). Set only for a spawn that writes files.
+	 */
+	ignoreAmbientSignal?: boolean;
 }
 
 export interface SgRawResult {
@@ -826,6 +831,7 @@ export class SgRunner {
 				timeout: DEFAULT_EXEC_TIMEOUT_MS,
 				deadlineAt: options.deadlineAt,
 				signal: options.signal,
+				ignoreAmbientSignal: options.ignoreAmbientSignal,
 				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
 			},
 		);
@@ -1109,6 +1115,11 @@ export class SgRunner {
 			if (scan.failure || scan.error) {
 				return { matches: [], error: scan.error };
 			}
+			// #5097: an abort lands before the write or not at all. A killed
+			// `--update-all` leaves part of the files rewritten.
+			if (options.signal?.aborted) {
+				return { matches: [], error: "operation aborted" };
+			}
 			const applyResult = await this.spawnResolved(
 				command,
 				[
@@ -1119,7 +1130,7 @@ export class SgRunner {
 					...sgExcludeArgsForProject(dir),
 					dir,
 				],
-				spawnOptions,
+				{ ...spawnOptions, signal: undefined, ignoreAmbientSignal: true },
 			);
 			if (
 				applyResult.error ||

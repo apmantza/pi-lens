@@ -6,6 +6,7 @@
 
 import { Type } from "../clients/deps/typebox.js";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
+import { combineAbortSignals } from "../clients/deadline-utils.js";
 import type { LineageHandle } from "../clients/session-scope.js";
 import {
 	astGrepRemediationHint,
@@ -124,15 +125,21 @@ export function createAstGrepReplaceTool(
 		async execute(
 			_toolCallId: string,
 			params: Record<string, unknown>,
-			_signal: AbortSignal,
+			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: {
 				cwd?: string;
 				resultMaxItems?: number;
 				sessionManager?: { getSessionId?: () => string };
+				signal?: AbortSignal;
 			},
 		) {
 			const lineage = captureLineage?.();
+			const signal = combineAbortSignals(_signal, ctx.signal);
+			// #5097: an error that lands after an abort is the abort; the pattern
+			// hint would send the model to fix a pattern that was never wrong.
+			const failureText = (raw: string): string =>
+				signal?.aborted ? "Error: operation aborted" : errorTextWithHint(raw);
 			// #4943: the calling session owns the deferred pass of the apply.
 			const sessionId = ctx.sessionManager?.getSessionId?.();
 			const startedAt = Date.now();
@@ -298,7 +305,7 @@ export function createAstGrepReplaceTool(
 					ruleYaml,
 					searchPaths,
 					applyFlag,
-					{ lineage, toolCallId: _toolCallId, sessionId },
+					{ lineage, toolCallId: _toolCallId, sessionId, signal },
 				);
 				if (ruleResult.stalePreview) {
 					logOutcome("error", { errorRaw: "stale_preview" });
@@ -323,7 +330,7 @@ export function createAstGrepReplaceTool(
 						content: [
 							{
 								type: "text" as const,
-								text: errorTextWithHint(ruleResult.error),
+								text: failureText(ruleResult.error),
 							},
 						],
 						isError: true,
@@ -357,7 +364,7 @@ export function createAstGrepReplaceTool(
 				lang,
 				searchPaths,
 				applyFlag,
-				{ strictness, lineage, toolCallId: _toolCallId, sessionId },
+				{ strictness, lineage, toolCallId: _toolCallId, sessionId, signal },
 			);
 
 			if (result.stalePreview) {
@@ -377,9 +384,7 @@ export function createAstGrepReplaceTool(
 			if (result.error) {
 				logOutcome("error", { errorRaw: result.error });
 				return {
-					content: [
-						{ type: "text" as const, text: errorTextWithHint(result.error) },
-					],
+					content: [{ type: "text" as const, text: failureText(result.error) }],
 					isError: true,
 					details: {},
 				};
