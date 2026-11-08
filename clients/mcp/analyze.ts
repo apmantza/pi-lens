@@ -334,22 +334,6 @@ interface McpRunnerLatency {
 	failureKind?: string;
 }
 
-/**
- * #5287: why no check of the analysed file's kind completed, or `undefined`
- * when one did. Silence and a clean summary are reserved for that answer. A
- * reply from a worker or warm server built before the field carries no
- * verdict, which is not a completed check either, so the type's `verdict` is
- * read as optional here.
- */
-export function analyzeUncheckedReason(
-	result: Pick<Partial<McpAnalyzeResult>, "verdict">,
-): string | undefined {
-	const verdict = result.verdict;
-	if (verdict === undefined)
-		return "the answering pi-lens server did not report whether a check completed — restart it if it predates this build";
-	return verdict.checked ? undefined : verdict.reason;
-}
-
 export interface McpAnalyzeResult {
 	filePath: string;
 	cwd: string;

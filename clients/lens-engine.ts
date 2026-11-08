@@ -52,11 +52,7 @@ import {
 
 // --- Facades (re-exported so adapters import only this module) ---------------
 
-export {
-	analyzeFile,
-	analyzeUncheckedReason,
-	type McpAnalyzeResult,
-} from "./mcp/analyze.js";
+export { analyzeFile, type McpAnalyzeResult } from "./mcp/analyze.js";
 export { createMcpHost } from "./mcp/host-shim.js";
 export {
 	createWarmIpcLineReader,

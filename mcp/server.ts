@@ -40,11 +40,11 @@ import {
 	recordDegradationOnce,
 	renderDegradationLines,
 } from "../clients/degradation-ledger.js";
+import { verdictUncheckedReason } from "../clients/dispatch/types.js";
 import {
 	acknowledgeTurnEnd,
 	analyzeFile,
 	analyzeFileFresh,
-	analyzeUncheckedReason,
 	canRebuildPiLens,
 	createMcpHost,
 	createWarmIpcLineReader,
@@ -1047,7 +1047,7 @@ function formatAnalyze(
 	const lspNote = result.lsp
 		? ` · lsp ${result.lsp.diagnosticCount} (${result.lsp.status}${result.lsp.failureKind ? `: ${result.lsp.failureKind}` : ""}, ${result.lsp.durationMs}ms)`
 		: "";
-	const notChecked = analyzeUncheckedReason(result);
+	const notChecked = verdictUncheckedReason(result.verdict);
 	const summary =
 		`${path.relative(cwd, result.filePath) || result.filePath} [${mode}] — ` +
 		`${result.counts.blockers} blocking, ${result.counts.warnings} warning(s), ` +

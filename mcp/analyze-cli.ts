@@ -38,10 +38,8 @@ import { withBudget } from "../clients/deadline-utils.js";
 import * as path from "node:path";
 import { flushExtensionLog, logExtension } from "../clients/extension-log.js";
 import { redactSecrets } from "../clients/redact/secrets.js";
-import {
-	analyzeUncheckedReason,
-	type McpAnalyzeResult,
-} from "../clients/mcp/analyze.js";
+import type { McpAnalyzeResult } from "../clients/mcp/analyze.js";
+import { verdictUncheckedReason } from "../clients/dispatch/types.js";
 import {
 	recordTurnEndOutcome,
 	requestWarmAnalyze,
@@ -68,7 +66,7 @@ async function readStdin(): Promise<string> {
 
 function formatReport(result: McpAnalyzeResult, cwd: string): string {
 	const rel = path.relative(cwd, result.filePath) || result.filePath;
-	const notChecked = analyzeUncheckedReason(result);
+	const notChecked = verdictUncheckedReason(result.verdict);
 	const lines = [
 		// #2420: advisories (hint/info-tier style opinions) reported under their
 		// own label — no longer folded into the warning count on this surface.
@@ -332,7 +330,7 @@ async function main(): Promise<void> {
 		// A checked file with no findings is the one silent answer (clean → no noise).
 		if (
 			result.counts.diagnostics === 0 &&
-			analyzeUncheckedReason(result) === undefined
+			verdictUncheckedReason(result.verdict) === undefined
 		)
 			process.exit(0);
 		await writeReport(formatReport(result, cwd), hookMode);
