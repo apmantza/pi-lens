@@ -11,8 +11,9 @@ spawner behind a module-local wrapper), and an unresolvable call fails closed as
 walk. 157 members appeared across 24 files; all budgeted, none baselined, and a
 name a subtree binds for itself stopped counting as a read of the same-named
 suite binding, which retired nine false positives (244 -> 392). The audit
-read eleven helpers by hand first; the derived verdicts and that table are pinned
-in the same test, so a helper that stops walking reds there. A test file's own
+read its helpers by hand first; the derived verdicts and that table (14
+name verdicts across 8 helper modules) are pinned in the same test, so a
+helper that stops walking reds there. A test file's own
 wrapper is still the accepted residual (#4967, PR #5409).
 
 ## 2026-11-07 — a non-success exit that skips its transition (shape 91)
