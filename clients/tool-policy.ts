@@ -799,14 +799,17 @@ const FORMATTER_POLICY_BY_FILENAME = new Map<string, FormatterPolicy>(
 	TERRAGRUNT_FILENAMES.map((name) => [name, TERRAGRUNT_FORMATTER_POLICY]),
 );
 
-// Re-exported (read-only intent) for the #1135 drift guard. Kept as a single
-// separate statement — NOT inline on the declarations above — so the touched
-// lines don't fall at the head of the pre-existing lookup-table duplication and
-// get counted as new duplicated code. Bindings are live, so position is safe.
+// Re-exported (read-only intent) for the #1135 drift guard and the #5418
+// registry-parity guard. Kept as a single separate statement — NOT inline on
+// the declarations above — so the touched lines don't fall at the head of the
+// pre-existing lookup-table duplication and get counted as new duplicated
+// code. Bindings are live, so position is safe.
 export {
 	AUTO_INSTALLABLE_DEFAULT_FORMATTERS,
 	FORMATTER_POLICY_BY_EXTENSION,
 	FORMATTER_POLICY_BY_FILENAME,
+	TOOL_COMMAND_SPECS,
+	TOOL_EXECUTION_POLICY,
 };
 
 function getFormatterPolicyForExtension(
