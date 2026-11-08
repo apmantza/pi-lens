@@ -1339,10 +1339,16 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 	"tools/lens-diagnostics.ts": {
 		// 7 -> 6 (#5041): the `paths` cap guard's try/catch is gone, because the
 		// shared reader refuses an over-cap list before the scope is built.
-		silent: 6,
-		identities: "95f00e0f7b94047b",
+		// Identity moved (#5044): the stat-failure catch arm now feeds the
+		// per-anchor weak call of the cross-file cache reader; same six sites.
+		// 6 -> 5 (#5044 r2): the stat-failure arm moved into the shared per-anchor
+		// gate `cachedAnchorMarks` (clients/diagnostic-dispositions.ts), which
+		// declares its own `none:` reason rather than adding a silent handler to
+		// that file. A move, not a new swallow.
+		silent: 5,
+		identities: "d824fe7b4df77bce",
 		reason: PRE_RULE,
-	}, // :278, :1008, :1068, :1523, :1583, :2301
+	}, // :279, :1001, :1583, :1643, :2355
 	"tools/lsp-diagnostics.ts": {
 		silent: 10,
 		identities: "2e5c32f96dcee285",

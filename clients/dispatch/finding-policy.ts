@@ -23,11 +23,12 @@ import {
 	applyDispositions,
 	applyDispositionsMultiFile,
 	hasAnyDispositionMarks,
+	trustedCitedOwnerContent,
 	type DispositionCandidate,
 } from "../diagnostic-dispositions.js";
 import type { FileRole } from "../file-role.js";
 import type { LSPDiagnostic } from "../lsp/client.js";
-import { isWithinIdentity, pathsEqual } from "../path-utils.js";
+import { pathsEqual } from "../path-utils.js";
 import { retagAuxiliaryDiagnostics } from "./auxiliary-lsp.js";
 import { applyInlineSuppressions } from "./inline-suppressions.js";
 import { readFileContent } from "./runners/utils.js";
@@ -169,9 +170,15 @@ export function applyFindingPolicyByOwner<
 	};
 	collect(applyFindingPolicy(own, options));
 	for (const [owner, group] of byOwner) {
-		const content = isWithinIdentity(owner, options.cwd)
-			? readFileContent(owner)
-			: undefined;
+		// The shared owner rule (#5044 r2 F2 moved it to
+		// `clients/diagnostic-dispositions.ts` so the two cache-only readers
+		// answer it the same way): outside the project root on the identity
+		// axis, or unreadable, and this process trusts the file to suppress
+		// nothing. The read stays behind the thunk, as the pre-#5044 ternary
+		// had it, so a file outside the root is never opened.
+		const content = trustedCitedOwnerContent(owner, options.cwd, () =>
+			readFileContent(owner),
+		);
 		if (content === undefined) {
 			collect({
 				kept: applyRulePolicy(group, options.policyMap, {

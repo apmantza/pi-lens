@@ -21,10 +21,12 @@ import type { FormatterOutcomeKind } from "./formatters.js";
 import {
 	anchorsForDiagnostic,
 	applyDispositions,
+	cachedAnchorMarks,
 	getDisposition,
 	registerWidgetDispositionReconciler,
 	strictAnchorSpan,
 	strictAnchorSpansIn,
+	type CachedAnchorMarks,
 	type Disposition,
 	type DispositionMarkTarget,
 } from "./diagnostic-dispositions.js";
@@ -457,32 +459,121 @@ export function reconcileWidgetDisposition(
 			source = "";
 		}
 	}
-	const active = new Set(
-		applyDispositions(current, cwd, target.filePath, source),
-	);
+	// #5044: a record can hold rows citing ANOTHER file (`citedFile`, #5020) —
+	// helm-lint's chart findings reach the template's record while the template
+	// is written. Anchor every row on the file IT names, never on the record
+	// key: anchored on the target, a mark on one file's finding tagged (or
+	// dropped) another file's row, and a mark on the cited file never reached
+	// the row. Rows without a cite — every pre-#5020 persisted row — land in
+	// the target's own group and take the pre-#5044 sequence unchanged.
+	const groups = new Map<string, WidgetDiagnostic[]>();
+	for (const diagnostic of current) {
+		const anchor = diagnostic.citedFile ?? target.filePath;
+		const group = groups.get(anchor);
+		if (group) group.push(diagnostic);
+		else groups.set(anchor, [diagnostic]);
+	}
+	// #5044 round 2: one verdict per CITED anchor, taken from the ONE gate the
+	// cached reader runs (`cachedAnchorMarks`), so the two readers cannot
+	// disagree about the same mark on the same row:
+	//  - F1: a cited anchor's freshness is judged against the newest observation
+	//    among the rows citing it. Re-deriving a STRICT anchor from bytes NEWER
+	//    than the row "confirmed" a mark hashed on a different revision — two
+	//    identical line texts across a revision boundary are a coincidence, not
+	//    a finding's location — and hid a STOP-tier finding from the footer while
+	//    `lens_diagnostics mode=all` still listed it. A stale anchor now anchors
+	//    weak marks only, exactly as the cached reader has always done.
+	//  - F2: a cited anchor outside the project root on the identity axis, or one
+	//    this process cannot read, is refused outright — #5067's owner rule, which
+	//    `applyFindingPolicyByOwner` already fails closed. No mark of any kind is
+	//    looked up for its rows, because a full LSP sweep keeps that finding and a
+	//    footer that hid it was the disagreement the agent read as clean.
+	// The target's own anchor keeps the content the mark was made against (the
+	// revision the mark hashed), so no gate applies to it; its unreadable case is
+	// the `source = ""` fallback above, unchanged from master.
+	const citedMarks = new Map<string, CachedAnchorMarks>();
+	const citedAnchorMarks = (
+		anchor: string,
+		group: readonly WidgetDiagnostic[],
+	): CachedAnchorMarks => {
+		const hit = citedMarks.get(anchor);
+		if (hit) return hit;
+		const decision = cachedAnchorMarks({
+			cwd,
+			anchor,
+			rows: group,
+			cited: true,
+			strictAnchors: true,
+			// Best-effort like `applyDispositionsMultiFile`'s read, and through
+			// this module's own reader so an anchor whose bytes cannot be had
+			// still leaves its bounded `widget-mark-anchor-unreadable` record.
+			readContent: (filePath) => readContentOrUndefined(filePath),
+		});
+		citedMarks.set(anchor, decision);
+		return decision;
+	};
+	const active = new Set<WidgetDiagnostic>();
+	for (const [anchor, group] of groups) {
+		if (anchor === target.filePath) {
+			for (const d of applyDispositions(group, cwd, anchor, source)) {
+				active.add(d);
+			}
+			continue;
+		}
+		const decision = citedAnchorMarks(anchor, group);
+		// A refused anchor feeds no bytes to the filter pass, and the ONE place
+		// that enforces the refusal is the lookup in `normalized` below: a
+		// refused group still runs the filter, so its rows keep the same
+		// `active` bookkeeping as any other group, and no disposition of any
+		// kind is looked up for them (a row the store held ONLY because a mark
+		// suppressed it is still retired — #3158 rule 3).
+		// Skipping the pass here instead was tried and is not the enforcement:
+		// neutering that `continue` left every test green, because a row the
+		// filter dropped is kept live by the lookup guard anyway (#5044 r2).
+		const anchorContent = decision.marks === "strict" ? decision.content : "";
+		for (const d of applyDispositions(group, cwd, anchor, anchorContent)) {
+			active.add(d);
+		}
+	}
 	const normalized: WidgetDiagnostic[] = current.flatMap((diagnostic) => {
+		const anchor = diagnostic.citedFile ?? target.filePath;
+		const decision =
+			anchor === target.filePath ? undefined : citedMarks.get(anchor);
+		const refused = decision?.marks === "refused";
+		const anchorContent =
+			decision === undefined
+				? source
+				: decision.marks === "strict"
+					? decision.content
+					: "";
 		const { strict, weak } = anchorsForDiagnostic(
 			cwd,
-			target.filePath,
+			anchor,
 			diagnostic,
-			source,
+			anchorContent,
 		);
-		const entry = getDisposition(cwd, strict) ?? getDisposition(cwd, weak);
+		const entry = refused
+			? undefined
+			: (getDisposition(cwd, strict) ?? getDisposition(cwd, weak));
 		if (
 			!active.has(diagnostic) &&
 			(entry?.disposition === "false-positive" ||
 				entry?.disposition === "suppress")
 		) {
 			// #3183: stamp the strict anchor's own SPAN so the row's lifetime can
-			// later ask the mark instead of the file's mtime. `source` is the content
-			// the anchors above were derived from, so the span is the one the mark
-			// itself binds to. Only the STRICT arm has a span — a weak `suppress`
-			// mark hashes no line — and re-tagging always re-derives it, so a stale
-			// span from an earlier tag can never survive into a new disposition.
+			// later ask the mark instead of the file's mtime. `anchorContent` is
+			// the content the anchors above were derived from, so the span is the
+			// one the mark itself binds to. Only the STRICT arm has a span — a weak
+			// `suppress` mark hashes no line — and re-tagging always re-derives it,
+			// so a stale span from an earlier tag can never survive into a new
+			// disposition. A CITED row's span is the cited file's span; the
+			// `reconcileStaleWidgetFiles` sweep still consults the record's own
+			// file, so the cited row's retirement stays the mtime gate plus the
+			// gate-side #5020 retire, as before this change.
 			const { anchorSpan: _previousSpan, ...base } = diagnostic;
 			const span =
 				entry.disposition === "false-positive"
-					? strictAnchorSpan(source, diagnostic.line)
+					? strictAnchorSpan(anchorContent, diagnostic.line)
 					: undefined;
 			return [
 				{

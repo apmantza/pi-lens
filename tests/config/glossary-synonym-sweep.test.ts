@@ -866,10 +866,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// these are Array.prototype.filter calls, not new delivery-policy seams.
 		// 43 -> 42 (#5041): the `paths` entry filter moved into tools/shared.ts's
 		// one reader, which every tool now calls.
-		// 42 -> 44 (#5287): the unchecked-file projections of the summaries
+		// 42 -> 43 (#5044): the cross-file cache reader merges its anchor groups
+		// back into input order with one Array.prototype.filter, not a
+		// delivery-policy seam.
+		// 43 -> 45 (#5287): the unchecked-file projections of the summaries
 		// (`uncheckedFilesLine`, the unchecked tally), two `Array.prototype.filter`
 		// calls, not delivery filters.
-		"tools/lens-diagnostics.ts": 44,
+		"tools/lens-diagnostics.ts": 45,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
