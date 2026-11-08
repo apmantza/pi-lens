@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { compareOrdinal } from "../../clients/string-utils.js";
 import { stripSource } from "../support/sweep-kit.js";
 
 const LEDGER = path.join(process.cwd(), "clients/degradation-ledger.ts");
@@ -116,6 +117,12 @@ describe("DegradationKind doc blocks name their own kind (#5401)", () => {
 	// A kind with an empty block must be listed in UNDOCUMENTED_KINDS, so a doc
 	// stacked onto a neighbour or deleted (which leaves its own kind empty) reds it.
 	it("requires each kind's doc block to lead with that kind", () => {
+		// Ceiling: the list may shrink (a kind gains its doc) but never grows past
+		// its current 36. Recurrence: the #5407 verify r2 probe moved a bin doc below
+		// the writer-skipped doc and added one name here; the exact match below went
+		// green, so a new kind's doc could be silenced by a list line. Lower this
+		// number when an entry leaves UNDOCUMENTED_KINDS.
+		expect(UNDOCUMENTED_KINDS.length).toBeLessThanOrEqual(36);
 		const members = readUnionMembers(fs.readFileSync(LEDGER, "utf8"));
 		// Floor: the union had 311 members when this pin landed. A parse that finds
 		// far fewer must fail rather than pass over an empty population.
@@ -123,8 +130,8 @@ describe("DegradationKind doc blocks name their own kind (#5401)", () => {
 		const undocumented = members
 			.filter((m) => m.doc.trim() === "")
 			.map((m) => m.kind)
-			.sort();
-		expect(undocumented).toEqual([...UNDOCUMENTED_KINDS].sort());
+			.sort(compareOrdinal);
+		expect(undocumented).toEqual([...UNDOCUMENTED_KINDS].sort(compareOrdinal));
 		const misnamed = members
 			.filter((m) => m.doc.trim() !== "" && !docLeadsWith(m.doc, m.kind))
 			.map((m) => `${m.kind} (line ${m.line})`);
