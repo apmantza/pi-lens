@@ -112,12 +112,6 @@ vi.mock(
 		};
 	},
 );
-vi.mock("../../clients/dispatch/runners/detekt.js", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("../../clients/dispatch/runners/detekt.js")
-	>()),
-	findDetektConfig: () => "detekt.yml",
-}));
 vi.mock("../../clients/file-utils.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/file-utils.js")>()),
 	detectFileChangedAfterCommand: async () => {
@@ -212,6 +206,8 @@ describe("each autofix branch enters pi's queue between its resolver and its wri
 				// clippy and dart run at their package root.
 				fs.writeFileSync(path.join(env.tmpDir, "Cargo.toml"), "");
 				fs.writeFileSync(path.join(env.tmpDir, "pubspec.yaml"), "");
+				// detekt's autofix needs the project's own config file.
+				fs.writeFileSync(path.join(env.tmpDir, "detekt.yml"), "");
 				const filePath = path.join(env.tmpDir, "a.src");
 				fs.writeFileSync(filePath, "a\n");
 				const agentAppend = (line: string) => {

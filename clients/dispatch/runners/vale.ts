@@ -131,12 +131,13 @@ const valeRunner: RunnerDefinition = {
 	appliesTo: ["markdown"],
 	priority: PRIORITY.DOC_QUALITY,
 	skipTestFiles: false,
+	requiresConfig: (cwd) => findValeConfig(cwd) !== undefined,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "vale");
 
 		// Config-gated: skip unless a .vale.ini is found
-		if (!findValeConfig(cwd)) {
+		if (!valeRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

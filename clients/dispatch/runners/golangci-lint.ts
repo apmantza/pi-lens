@@ -152,6 +152,7 @@ const golangciRunner: RunnerDefinition = {
 	appliesTo: ["go"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	timeoutMs: 90_000,
+	requiresConfig: (cwd) => hasGolangciConfig(cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "golangci-lint");
@@ -161,7 +162,7 @@ const golangciRunner: RunnerDefinition = {
 		}
 
 		// Only run if project has opted in via config file
-		if (!hasGolangciConfig(cwd)) {
+		if (!golangciRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

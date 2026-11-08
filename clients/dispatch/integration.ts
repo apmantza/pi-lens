@@ -3677,9 +3677,15 @@ export async function dispatchLintDetailed(
 }
 
 /**
- * Get list of available runners for a file
+ * Get list of available runners for a file. With `configCwd` (the cwd each
+ * runner runs in), a runner that declares `requiresConfig` and finds none there
+ * is left out: the list is then the runners that would actually run (#5408),
+ * decided by the same predicate the runner's own `run()` gates on.
  */
-export async function getAvailableRunners(filePath: string): Promise<string[]> {
+export async function getAvailableRunners(
+	filePath: string,
+	options: { configCwd?: (runnerId: string) => string } = {},
+): Promise<string[]> {
 	const kind = detectFileKind(filePath);
 	if (!kind) return [];
 
@@ -3687,6 +3693,10 @@ export async function getAvailableRunners(filePath: string): Promise<string[]> {
 	const pathForFilter = normalizedPath.startsWith("/")
 		? normalizedPath
 		: `/${normalizedPath}`;
-	const runners = sessionRunnerRegistry.getForKind(kind, pathForFilter);
-	return runners.map((r) => r.id);
+	const { configCwd } = options;
+	return sessionRunnerRegistry
+		.getForKind(kind, pathForFilter)
+		.flatMap((r) =>
+			configCwd && r.requiresConfig?.(configCwd(r.id)) === false ? [] : [r.id],
+		);
 }

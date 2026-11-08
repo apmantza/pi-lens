@@ -119,7 +119,7 @@ function stripTomlLineComment(line: string): string {
  * without this strip would have silently regressed that shape (review round
  * 2, F4).
  */
-function normalizeToml(content: string): string {
+export function normalizeToml(content: string): string {
 	return content
 		.replace(/^\uFEFF/, "")
 		.replace(/\r\n/g, "\n")

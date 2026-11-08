@@ -1060,12 +1060,12 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/ast-grep-napi.ts": 4,
 		"clients/dispatch/runners/biome-check.ts": 6,
 		"clients/dispatch/runners/cpp-check.ts": 7,
-		"clients/dispatch/runners/credo.ts": 5,
+		"clients/dispatch/runners/credo.ts": 4,
 		"clients/dispatch/runners/cue-vet.ts": 6,
 		"clients/dispatch/runners/dart-analyze.ts": 4,
-		"clients/dispatch/runners/detekt.ts": 7,
+		"clients/dispatch/runners/detekt.ts": 4,
 		"clients/dispatch/runners/dotnet-build.ts": 3,
-		"clients/dispatch/runners/elixir-check.ts": 6,
+		"clients/dispatch/runners/elixir-check.ts": 5,
 		"clients/dispatch/runners/eslint.ts": 3,
 		"clients/dispatch/runners/gleam-check.ts": 3,
 		"clients/dispatch/runners/golangci-lint.ts": 3,
@@ -1097,7 +1097,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/runners/swiftlint.ts": 4,
 		"clients/dispatch/runners/taplo.ts": 4,
 		"clients/dispatch/runners/terragrunt.ts": 6,
-		"clients/dispatch/runners/tflint.ts": 7,
+		"clients/dispatch/runners/tflint.ts": 6,
 		"clients/dispatch/runners/tree-sitter.ts": 2,
 		"clients/dispatch/runners/trivy-config.ts": 4,
 		"clients/dispatch/runners/utils/diagnostic-parsers.ts": 3,
@@ -1517,11 +1517,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// and `path.resolve` — six more `path` operations, same sense
 		// (a path operation).
 		"clients/tool-agreement.ts": 10,
+		// New in #5408: the config-presence seam's path joins and walks.
+		"clients/tool-config-presence.ts": 7,
 		// 13 -> 12 (#4689 item 6): the file is resolved by `realpathOrResolve`.
 		// 12 -> 10 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		"clients/tool-cwd.ts": 10,
 		// 64 -> 62 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/tool-policy.ts": 62,
+		// 62 -> 50 (#5408): the seven bespoke config walks leave for the config-presence seam.
+		"clients/tool-policy.ts": 50,
 		// 19 -> 18 (#4689 batch 7): the grammar write probe climbs `walkUpDirs`, so
 		// its own `path.dirname` step is the seam's.
 		"clients/tree-sitter-client.ts": 18,

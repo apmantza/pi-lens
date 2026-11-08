@@ -424,6 +424,13 @@ export interface RunnerDefinition {
 	timeoutMs?: number;
 	/** Check if runner should run */
 	when?: (ctx: DispatchContext) => Promise<boolean> | boolean;
+	/**
+	 * Whether the project carries the config this runner needs, asked with the
+	 * runner's resolved tool cwd. The runner's own gate and `effective_config`
+	 * both call this one predicate (#5408), so a runner that skips for want of
+	 * config is never reported as selected.
+	 */
+	requiresConfig?: (cwd: string) => boolean;
 	/** Execute the runner */
 	run(ctx: DispatchContext): Promise<RunnerResult>;
 }

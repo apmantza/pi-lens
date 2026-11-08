@@ -80,12 +80,13 @@ const mypyRunner: RunnerDefinition = {
 	appliesTo: ["python"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
+	requiresConfig: (cwd) => hasMypyConfig(cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "mypy");
 
 		// Only run if mypy config exists — avoids false positives in untyped projects
-		if (!hasMypyConfig(cwd)) {
+		if (!mypyRunner.requiresConfig?.(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
