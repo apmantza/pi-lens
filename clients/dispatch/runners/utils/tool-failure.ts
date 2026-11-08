@@ -279,20 +279,22 @@ export interface ParseToolRunOptions {
 	 */
 	parseOutput?: string;
 	/**
-	 * Return `skipped` — rather than letting the caller report a clean file —
-	 * when the run failed and the parser read nothing. Opt-in per tool: it is
-	 * correct only where a nonzero exit means "this file is bad", so claiming
-	 * clean would be an outright lie (taplo). Elsewhere the record alone is the
-	 * fix, and the status stays whatever the runner decided.
+	 * Which stream a tool's report arrives on (#5411). `"stdout-else-stderr"`:
+	 * the report is stdout; stderr stands in only when stdout is empty and the
+	 * run did not exit 0, so a failing tool's own error text still reaches the
+	 * parser while a warning printed beside a valid report cannot corrupt it
+	 * (real ruff prints its deprecation notice on stderr next to the JSON).
+	 * The classifier and the parser judge the same string. Overrides
+	 * `input.output` and `parseOutput`.
 	 */
-	skipWhenParsedNothing?: boolean;
+	parseStreams?: "stdout-else-stderr";
 }
 
 export interface ParsedToolRun<D> {
 	/** Non-null when the runner must return it verbatim and stop. */
 	skipped: RunnerResult | null;
 	diagnostics: D[];
-	/** True when this run tripped the #1948 rule above. */
+	/** True when this run tripped the #1948 rule above (record only, not a verdict). */
 	parsedNothing: boolean;
 }
 
@@ -306,6 +308,11 @@ export interface ParsedToolRun<D> {
  * parsing on their own, so the second gate cannot be forgotten by whoever
  * writes runner 53. `tests/clients/dispatch/runners/parsed-nothing-sweep.test.ts`
  * enforces that.
+ *
+ * This seam records and hands back the diagnostics; the VERDICT for a nonzero
+ * exit whose output yielded nothing is `finishParsedRun`'s (failed/parser_error)
+ * and no runner picks its own (#5411: vale, swiftlint and spellcheck returned
+ * `succeeded`, taplo and detekt `skipped`). The sweep enforces that too.
  */
 export function parseToolRun<D>(
 	tool: string,
@@ -313,11 +320,21 @@ export function parseToolRun<D>(
 	parse: (output: string) => readonly D[],
 	options: ParseToolRunOptions = {},
 ): ParsedToolRun<D> {
-	const skipped = skipUnlessToolRan(tool, input, options.fields);
+	const streamed =
+		options.parseStreams === undefined
+			? undefined
+			: stdoutElseStderr(input.result);
+	const classified =
+		streamed === undefined ? input : { ...input, output: streamed };
+	const skipped = skipUnlessToolRan(tool, classified, options.fields);
 	if (skipped) return { skipped, diagnostics: [], parsedNothing: false };
 
 	const output =
-		options.parseOutput ?? input.output ?? input.result.stdout ?? "";
+		streamed ??
+		options.parseOutput ??
+		input.output ??
+		input.result.stdout ??
+		"";
 	const diagnostics = [...parse(output)];
 	const parsedNothing = recordParsedNothing({
 		tool,
@@ -326,15 +343,14 @@ export function parseToolRun<D>(
 		parsedCount: diagnostics.length,
 		fields: options.fields,
 	});
-
-	if (parsedNothing && options.skipWhenParsedNothing) {
-		return {
-			skipped: { status: "skipped", diagnostics: [], semantic: "none" },
-			diagnostics: [],
-			parsedNothing,
-		};
-	}
 	return { skipped: null, diagnostics, parsedNothing };
+}
+
+/** `parseStreams: "stdout-else-stderr"` (#5411): see {@link ParseToolRunOptions}. */
+function stdoutElseStderr(result: SpawnResult): string {
+	const stdout = result.stdout ?? "";
+	if (stdout.length > 0 || result.status === 0) return stdout;
+	return result.stderr ?? "";
 }
 
 /**

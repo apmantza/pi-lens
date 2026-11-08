@@ -167,17 +167,26 @@ describe("opengrep report outcomes (#2943)", () => {
 			report: "{}",
 			expected: refused("refused", "unparseable opengrep report"),
 		},
+		// #5411: gitleaks and trivy parse a complete report whatever the exit
+		// status (`runReportScan`); opengrep refused it, so the same report and
+		// exit read as a scan for two scanners and as a refusal for the third.
 		{
 			name: "clean report exit 2",
 			exitCode: 2,
 			report: clean(),
-			expected: refused("refused", "opengrep exited with status 2"),
+			expected: usable(),
 		},
 		{
 			name: "clean report exit 1",
 			exitCode: 1,
 			report: clean(),
-			expected: refused("refused", "opengrep exited with status 1"),
+			expected: usable(),
+		},
+		{
+			name: "fatal error report exit 2",
+			exitCode: 2,
+			report: report([{ level: "error", message: "fatal" }]),
+			expected: refused("refused", "fatal"),
 		},
 		{
 			name: "exit 137 without report",

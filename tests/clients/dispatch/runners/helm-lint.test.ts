@@ -222,9 +222,30 @@ describe("helm-lint runner", () => {
 		expect(safeSpawnAsync).not.toHaveBeenCalled();
 	});
 
+	// #5411: a timeout is the budget ending the run, the same `did-not-run` skip
+	// swiftlint and every other seam runner reports; it was `failed/timeout`.
+	it("reports a timed-out lint as a did-not-run skip, like every seam runner", async () => {
+		const filePath = createChart(workspace, "values.yaml");
+		safeSpawnAsync.mockResolvedValue({
+			status: null,
+			stdout: "",
+			stderr: "",
+			failure: "timeout",
+			spawnFailure: { kind: "timeout" },
+			error: new Error("opaque failure"),
+		});
+
+		const result = await helmLintRunner.run(context(filePath, workspace));
+
+		expect(result).toMatchObject({
+			status: "skipped",
+			skipFault: "did-not-run",
+			diagnostics: [],
+		});
+	});
+
 	it.each([
 		["tool-not-found", "unavailable"],
-		["timeout", "timeout"],
 		["killed", "aborted"],
 	])(
 		"classifies typed %s spawn failures without errno text",
@@ -315,11 +336,15 @@ describe("helm-lint runner", () => {
 	// too — safe-spawn spreads it into every branch. Those endings own their own
 	// classification; only the cap's own kill is a truncation verdict.
 	it.each([
-		["timed out", capThenTimedOutSpawnResult, "timeout"],
-		["aborted", capThenAbortedSpawnResult, "aborted"],
+		["timed out", capThenTimedOutSpawnResult, { status: "skipped" }],
+		[
+			"aborted",
+			capThenAbortedSpawnResult,
+			{ status: "failed", failureKind: "aborted" },
+		],
 	])(
 		"keeps reporting a %s lint as such when it also hit the cap",
-		async (_label, shape, failureKind) => {
+		async (_label, shape, expected) => {
 			const filePath = createChart(workspace, "values.yaml");
 			safeSpawnAsync.mockResolvedValueOnce(
 				shape({ stdout: "[INFO] Chart.yaml: icon is recommended" }),
@@ -327,7 +352,7 @@ describe("helm-lint runner", () => {
 
 			expect(
 				await helmLintRunner.run(context(filePath, workspace)),
-			).toMatchObject({ status: "failed", failureKind });
+			).toMatchObject(expected);
 		},
 	);
 

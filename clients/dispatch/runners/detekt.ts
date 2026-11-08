@@ -11,9 +11,8 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { findingsResult } from "../types.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
-import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 
 const detekt = createAvailabilityChecker("detekt", ".bat");
 
@@ -179,26 +178,29 @@ const detektRunner: RunnerDefinition = {
 				// Exit 1 is a tool error with NO findings (captured broken-config run: an invalid detekt.yml
 				// prints InvalidConfigurationError on stderr), and also can follow printed findings (captured
 				// findings-then-exit1 run: a non-numeric build.weights value fails after the report). Exit 1 is
-				// therefore admitted, and skipWhenParsedNothing skips it only when the parser read no finding,
-				// so a printed finding is kept. Any other nonzero exit is rejected.
+				// therefore admitted, and `finishParsedRun` reports it as failed/parser_error only when the
+				// parser read no finding (#5411, was a skip), so a printed finding is kept. Any other nonzero
+				// exit is rejected.
 				exitCodes: { ran: [1, 2] },
 			},
 			(out) => parseDetektOutput(out, ctx.filePath, cwd),
-			{ skipWhenParsedNothing: true },
 		);
 		if (run.skipped) return run.skipped;
 
-		const diagnostics = run.diagnostics;
-
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		const hasErrors = diagnostics.some((d) => d.severity === "error");
-		const verdict = findingsResult(diagnostics, {
-			status: hasErrors ? "failed" : "succeeded",
-			semantic: hasErrors ? "blocking" : "warning",
+		const verdict = finishParsedRun({
+			tool: "detekt",
+			ctx,
+			result,
+			diagnostics: run.diagnostics,
+			classify: (diagnostics) => {
+				const hasErrors = diagnostics.some((d) => d.severity === "error");
+				return {
+					status: hasErrors ? "failed" : "succeeded",
+					semantic: hasErrors ? "blocking" : "warning",
+				};
+			},
 		});
+		if (run.diagnostics.length === 0) return verdict;
 		// #4522 T1: exit 1 is a tool error, and detekt can print findings before it.
 		// Those findings are kept, but the read is incomplete, so the run is flagged
 		// `inconclusive` (the existing "reached no verdict" shape, as tree-sitter's

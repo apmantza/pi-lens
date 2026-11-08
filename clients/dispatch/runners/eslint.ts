@@ -163,24 +163,19 @@ const eslintRunner: RunnerDefinition = {
 		// includes a run that found only warnings (#1954), which also prints a
 		// full JSON report. So parse stdout unconditionally and branch on the
 		// parsed diagnostic count instead of letting the exit code discard the
-		// warning case. Stderr is only a fallback for a failing run whose
-		// stdout went missing; parsing stderr noise on a healthy exit-0 run
-		// would turn deprecation chatter into spurious parse-error findings.
-		const stdout = result.stdout ?? "";
-		let raw = stdout;
-		if (raw.length === 0 && result.status !== 0) {
-			raw = result.stderr || "";
-		}
-
+		// warning case. `parseStreams` makes stderr only a fallback for a
+		// failing run whose stdout went missing; parsing stderr noise on a
+		// healthy exit-0 run would turn deprecation chatter into spurious
+		// parse-error findings.
 		const parsed = parseToolRun(
 			"eslint",
 			{
 				result,
-				output: raw,
 				// EXIT TABLE (ESLint 9.10 docs https://eslint.org/docs/latest/use/command-line-interface): 0 clean; 1 findings; 2 fatal findings/error; other nonzero rejected.
 				exitCodes: { ran: [1, 2] },
 			},
 			(rawOutput) => parseEslintJson(rawOutput, ctx.filePath, cwd).diagnostics,
+			{ parseStreams: "stdout-else-stderr" },
 		);
 		if (parsed.skipped) return parsed.skipped;
 		return finishParsedRun({

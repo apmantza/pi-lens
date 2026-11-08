@@ -232,17 +232,17 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 
 			const raw = fs.readFileSync(reportPath, "utf-8");
 			const report = readOpengrepReport(raw);
-			if (report.verdict === "refused" || result.status !== 0) {
-				const reason =
-					report.verdict === "refused"
-						? report.reason
-						: `opengrep exited with status ${result.status}`;
-				this.recordRefusal(cwd, reason, result.status);
+			// A report that exists is judged by its own content whatever the exit
+			// status, the policy `runReportScan` gives gitleaks and trivy (#5411):
+			// opengrep is run with `--no-error`, and an error that matters is in the
+			// report's `errors`, which `readOpengrepReport` refuses or marks partial.
+			if (report.verdict === "refused") {
+				this.recordRefusal(cwd, report.reason, result.status);
 				return {
 					...EMPTY_RESULT,
 					scannedAt,
 					reason: "refused",
-					summary: reason.slice(0, 200),
+					summary: report.reason.slice(0, 200),
 				};
 			}
 			if (report.partial) {

@@ -91,10 +91,6 @@ const prismaValidateRunner: RunnerDefinition = {
 		const cutShort = faultIfCutShort(result, findings);
 		if (cutShort) return cutShort;
 
-		if (diagnostics.length === 0) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
-
 		return finishParsedRun({
 			tool: "prisma-validate",
 			ctx,

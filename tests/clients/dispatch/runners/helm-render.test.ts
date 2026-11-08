@@ -427,9 +427,39 @@ describe("helm-render failure semantics", () => {
 		expect(safeSpawnAsync).not.toHaveBeenCalled();
 	});
 
+	// #5411: a timeout is the budget ending the run: the `did-not-run` skip every
+	// seam runner reports, never a broken chart and no longer `failed/timeout`.
+	it("reports a timed-out render as a did-not-run skip, never as a broken chart", async () => {
+		const chart = installChart("valid-chart");
+		optIn({ helm: { renderValidation: { enabled: true } } });
+		stubSpawns({
+			render: {
+				status: null,
+				stdout: "",
+				stderr: "",
+				failure: "timeout",
+				spawnFailure: { kind: "timeout" },
+				error: new Error("opaque failure"),
+			},
+		});
+
+		const result = await helmRenderRunner.run(
+			makeRunnerCtx(
+				path.join(chart, "templates", "deployment.yaml"),
+				workspace,
+				{ kind: "yaml", projectRoot: workspace },
+			),
+		);
+
+		expect(result).toMatchObject({
+			status: "skipped",
+			skipFault: "did-not-run",
+			diagnostics: [],
+		});
+	});
+
 	it.each([
 		["tool-not-found", "unavailable"],
-		["timeout", "timeout"],
 		["killed", "aborted"],
 	])(
 		"reports a %s render spawn failure as a runner failure, never as a broken chart",
@@ -982,11 +1012,15 @@ describe("helm-render rendered-manifest checks", () => {
 	// and those endings keep their own classification rather than becoming a
 	// truncation verdict.
 	it.each([
-		["timed out", capThenTimedOutSpawnResult, "timeout"],
-		["aborted", capThenAbortedSpawnResult, "aborted"],
+		["timed out", capThenTimedOutSpawnResult, { status: "skipped" }],
+		[
+			"aborted",
+			capThenAbortedSpawnResult,
+			{ status: "failed", failureKind: "aborted" },
+		],
 	])(
 		"keeps reporting a %s render as such when it also hit the cap",
-		async (_label, shape, failureKind) => {
+		async (_label, shape, expected) => {
 			const chart = installChart("valid-chart");
 			optIn({ helm: { renderValidation: { enabled: true } } });
 			stubSpawns({ render: shape({ stdout: "wrote a.yaml\n" }) });
@@ -999,7 +1033,7 @@ describe("helm-render rendered-manifest checks", () => {
 				),
 			);
 
-			expect(result).toMatchObject({ status: "failed", failureKind });
+			expect(result).toMatchObject(expected);
 			expect(result.diagnostics).toEqual([]);
 		},
 	);

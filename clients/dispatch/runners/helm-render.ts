@@ -102,6 +102,8 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { describeUnavailability } from "./utils/availability-policy.js";
+import { spawnTimedOut } from "./utils/spawn-outcome.js";
+import { skipUnlessToolRan } from "./utils/tool-failure.js";
 import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
@@ -594,7 +596,7 @@ function spawnFailureKind(result: {
 }): string | null {
 	const typed = result.spawnFailure?.kind;
 	if (typed === "tool-not-found") return "unavailable";
-	if (typed === "timeout" || result.failure === "timeout") return "timeout";
+	if (spawnTimedOut(result)) return "timeout";
 	if (typed === "killed" || result.failure === "aborted") return "aborted";
 	if (result.failure) return "server_error";
 	return null;
@@ -973,6 +975,16 @@ async function renderAndValidate(
 		}
 
 		const startupFailure = spawnFailureKind(render);
+		if (startupFailure === "timeout") {
+			// The budget ended the run: the same `did-not-run` skip every seam
+			// runner reports for a timeout (#5411), with the latency row kept.
+			logRenderPass(filePath, chartRoot, startedAt, {
+				outcome: "runner-failed",
+				failureKind: startupFailure,
+			});
+			const timedOut = skipUnlessToolRan("helm-render", { result: render });
+			if (timedOut) return timedOut;
+		}
 		if (startupFailure) {
 			// The runner never got a verdict about the chart. Reporting this as a
 			// chart finding would blame the user's chart for our own missing tool

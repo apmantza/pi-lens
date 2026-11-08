@@ -587,15 +587,18 @@ describe("secondary language fallback runners", () => {
 			expect(hasUsableResult(result)).toBe(false);
 		});
 
-		it("prisma leaves a completed run with nothing parsed as the existing plain skip", async () => {
-			// The residual `skipWhenParsedNothing` family (PR body), unchanged here.
+		// #5411: a completed nonzero run whose output yields nothing is
+		// failed/parser_error, the verdict every other runner gives it; the plain
+		// skip this runner kept disagreed with its own parse-error arm.
+		it("prisma reports a completed run with nothing parsed as failed/parser_error", async () => {
 			const result = await runPrisma({
 				error: null,
 				status: 1,
 				stdout: "Prisma schema loaded from schema.prisma",
 				stderr: "",
 			});
-			expect(result.status).toBe("skipped");
+			expect(result.status).toBe("failed");
+			expect(result.failureKind).toBe("parser_error");
 			expect(result.skipFault).toBeUndefined();
 		});
 	});
