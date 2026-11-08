@@ -249,6 +249,27 @@ describe("the default-branch baseline in a real repository (#5087)", () => {
 		expect(read).toEqual({ kind: "file", ref: "main", content: fn("a", 2) });
 	});
 
+	// #4966: a file link answers its target's repository, not the one beside
+	// the link.
+	it("reads a linked file from its target's repository", async () => {
+		write("src/a.ts", fn("a", 2));
+		commit();
+		const outside = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5087-link-")),
+		);
+		try {
+			const link = path.join(outside, "link.ts");
+			fs.symlinkSync(path.join(root, "src", "a.ts"), link);
+			expect(await readAtDefaultBranch(link)).toEqual({
+				kind: "file",
+				ref: "main",
+				content: fn("a", 2),
+			});
+		} finally {
+			removeTempDirSync(outside);
+		}
+	});
+
 	it("prefers origin/HEAD's target over a local main", async () => {
 		const file = write("a.ts", fn("a", 1));
 		commit();
