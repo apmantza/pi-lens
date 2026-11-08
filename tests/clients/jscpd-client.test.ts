@@ -969,3 +969,94 @@ describe("jscpd-client shutdown covers the availability probe (#4505)", () => {
 		}
 	});
 });
+
+/**
+ * #5446: the `hasSourceFilesRecursive` walk gate answered the JS/TS family
+ * with a hand-spelled regex, so an `.mts`/`.cts`-only project bailed at the
+ * gate and jscpd never ran — the pre-#126 shape, one extension family
+ * later. The family now answers through the registry seam
+ * (`isJstsFactFile`, clients/file-kinds.ts); the non-TS tail stays, and
+ * the declaration gate covers the `.d.mts`/`.d.cts` twins beside `.d.ts`.
+ */
+describe("#5446 walk gate answers JS/TS through the registry", () => {
+	beforeEach(async () => {
+		const safeSpawnMod = await import("../../clients/safe-spawn.js");
+		vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
+		vi.mocked(safeSpawnMod.safeSpawnAsync).mockResolvedValue({
+			error: undefined,
+			status: 0,
+			stdout: "",
+			stderr: "",
+		});
+		ensureTool.mockReset();
+		findNodeToolBinary.mockReset();
+		const helpers =
+			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
+		helpers.resetDispatchAvailabilityState();
+		findNodeToolBinary.mockResolvedValue(null);
+	});
+
+	for (const ext of [".mts", ".cts"]) {
+		it(`scans when only ${ext} source files exist (#5446)`, async () => {
+			const { JscpdClient } = await import("../../clients/jscpd-client.js");
+			const safeSpawnMod = await import("../../clients/safe-spawn.js");
+
+			const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
+			try {
+				const srcFile = path.join(tmpDir, "src", `dup${ext}`);
+				fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+				fs.writeFileSync(srcFile, "export const a = 1;\nexport const b = 2;\n");
+
+				const client = new JscpdClient(false) as unknown as {
+					scan: (
+						cwd: string,
+						minLines: number,
+						minTokens: number,
+						isTsProject: boolean,
+					) => Promise<unknown>;
+					ensureAvailable: () => Promise<boolean>;
+				};
+				await client.ensureAvailable();
+				vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
+
+				await client.scan(tmpDir, 5, 50, false);
+
+				// Pre-#5446 an .mts/.cts-only project bailed at
+				// `hasSourceFilesRecursive` without ever invoking jscpd.
+				expect(safeSpawnMod.safeSpawnAsync).toHaveBeenCalled();
+			} finally {
+				await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
+			}
+		});
+	}
+
+	it("does NOT scan a declarations-only root (.d.ts/.d.mts/.d.cts) (#5446)", async () => {
+		const { JscpdClient } = await import("../../clients/jscpd-client.js");
+		const safeSpawnMod = await import("../../clients/safe-spawn.js");
+		const { tmpDir } = setupTestEnvironment("pi-lens-jscpd-");
+		try {
+			for (const name of ["types.d.ts", "types.d.mts", "types.d.cts"]) {
+				fs.writeFileSync(path.join(tmpDir, name), "export type X = 1;\n");
+			}
+			const client = new JscpdClient(false) as unknown as {
+				scan: (
+					cwd: string,
+					minLines: number,
+					minTokens: number,
+					isTsProject: boolean,
+				) => Promise<{ success: boolean; clones: unknown[] }>;
+				ensureAvailable: () => Promise<boolean>;
+			};
+			await client.ensureAvailable();
+			vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
+
+			const result = await client.scan(tmpDir, 5, 50, false);
+
+			expect(result.success).toBe(true);
+			expect(result.clones).toEqual([]);
+			expect(safeSpawnMod.safeSpawnAsync).not.toHaveBeenCalled();
+		} finally {
+			await cleanupTestEnvironmentsDrained("pi-lens-jscpd-");
+		}
+	});
+});

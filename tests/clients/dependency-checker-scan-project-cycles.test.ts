@@ -315,3 +315,81 @@ describe("DependencyChecker.scanProject reads madge's cycle array (#3428)", () =
 		}
 	});
 });
+
+/**
+ * #5446: the `scanProject` root gate answered "does this root hold JS/TS
+ * source?" with a hand-spelled `/\.(ts|tsx|js|jsx)$/`, so an `.mts`-only
+ * project never even probed for madge — circular-dependency analysis
+ * silently skipped ES-module TypeScript roots. The family now answers
+ * through the registry seam (`isJstsFactFile`, clients/file-kinds.ts), and
+ * the declaration gate that already skipped `.d.ts` skips its `.d.mts`/
+ * `.d.cts` twins: a declarations-only root is still not a scannable root.
+ * Shares this file's availability/spawn mocks (process boundaries only);
+ * the scan bytes are the cycle-array shape a fixed madge 8.0.0 emits.
+ */
+describe("DependencyChecker.scanProject root gate reads the JS/TS family from the registry (#5446)", () => {
+	let tmp: string;
+
+	/** madge 8.0.0's cycle-array shape (exit 1 BECAUSE a cycle was found). */
+	function cycleJson(root: string): string {
+		return JSON.stringify([[`${root}/index.mts`, `${root}/dep.mts`]]);
+	}
+
+	beforeEach(() => {
+		vi.resetAllMocks();
+		tmp = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5446-root-gate-")),
+		);
+		findNodeToolBinary.mockResolvedValue("madge");
+		ensureTool.mockResolvedValue(undefined);
+		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
+			if (args[0] === "--version") return VERSION_OK;
+			return {
+				status: 1,
+				error: null,
+				stdout: cycleJson(tmp),
+				stderr: "",
+			};
+		});
+	});
+
+	afterEach(() => {
+		removeTempDirSync(tmp);
+	});
+
+	function writeRootFiles(names: string[]): void {
+		for (const name of names) {
+			fs.writeFileSync(path.join(tmp, name), "export const a = 1;\n");
+		}
+	}
+
+	it("scans a root whose only sources are .mts/.cts (#5446)", async () => {
+		const { DependencyChecker } =
+			await import("../../clients/dependency-checker.js");
+		writeRootFiles(["index.mts", "dep.mts", "types.cts"]);
+
+		const result = await new DependencyChecker().scanProject(tmp);
+
+		// Pre-fix: the readdir gate returned {circular: [], count: 0}
+		// without ever probing madge, so `analyzed` stayed unset.
+		expect(result.analyzed).toBe(true);
+		expect(result.count).toBe(1);
+	});
+
+	it("skips a root whose only JS/TS files are ambient declarations (#5446)", async () => {
+		const { DependencyChecker } =
+			await import("../../clients/dependency-checker.js");
+		writeRootFiles(["types.d.ts", "types.d.mts", "types.d.cts"]);
+
+		const result = await new DependencyChecker().scanProject(tmp);
+
+		expect(result.analyzed).toBeFalsy();
+		expect(result.count).toBe(0);
+		// No scan spawn: a gated root must not even pay the probe.
+		expect(
+			safeSpawnAsync.mock.calls.filter(
+				(c) => (c[1] as string[])[0] !== "--version",
+			),
+		).toHaveLength(0);
+	});
+});
