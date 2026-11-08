@@ -10,10 +10,11 @@ description: >-
 # check, and the log said "checksum did NOT match" instead of "HTTP 504".
 #
 # Flow: restore the cache entry, then verify whatever is there (a hit is checked
-# too, so a corrupt entry downloads again). A miss downloads to <path>.part with
+# too, so a corrupt entry is deleted and downloads again). A miss downloads to <path>.part with
 # --fail and retries, verifies that file, and only then moves it into place. The
 # save runs last and only after a download, so the cache never holds a file that
-# failed its digest. A composite action has no post step (tool-tree-cache says
+# failed its digest. The path holds a file only after a verified hit or a
+# verified download: every other exit leaves it absent. A composite action has no post step (tool-tree-cache says
 # the same), so the save is an in-flow step, not an actions/cache post step.
 #
 # Key: fetch-verified-<tool>-<version>-<sha256>. The digest is in the key, so a
@@ -71,6 +72,11 @@ runs:
         fi
         mkdir -p "$(dirname "$DEST")"
         tmp="$DEST.part"
+        # The restored file failed its digest (or none exists). Remove it before
+        # any download, so DEST exists only after a verified hit or a verified
+        # download: a failed re-download must not leave the rejected bytes for a
+        # later `!cancelled()` step to unpack (review r1 F1, Greptile xjE).
+        rm -f "$DEST" "$tmp"
         curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 --output "$tmp" "$URL"
         verify "$tmp"
         mv "$tmp" "$DEST"

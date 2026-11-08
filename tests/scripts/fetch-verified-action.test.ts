@@ -173,4 +173,26 @@ describe("fetch-verified fetch step", () => {
 		expect(outcome.dest?.equals(PAYLOAD)).toBe(true);
 		expect(outcome.downloaded).toBe(true);
 	});
+
+	// Recurrence #5409 r1 (Greptile xjE, review F1): a cache-restored file that
+	// failed its sha256 stayed at DEST when the re-download then failed, and the
+	// next `!cancelled()` step in lint.yml unpacked and ran it.
+	it.each([
+		["a 504 on the re-download", { status: 504, served: PAYLOAD }],
+		[
+			"a 200 whose body fails the digest",
+			{ status: 200, served: Buffer.from("html error page") },
+		],
+	])(
+		"leaves no file at DEST when a corrupt cache hit meets %s",
+		(_label, served) => {
+			const outcome = runFetch({
+				cached: Buffer.from("crafted cache entry"),
+				...served,
+			});
+			expect(outcome.status).not.toBe(0);
+			expect(outcome.dest).toBeNull();
+			expect(outcome.downloaded).toBe(false);
+		},
+	);
 });
