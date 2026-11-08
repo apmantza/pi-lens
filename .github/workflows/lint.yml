@@ -47,14 +47,24 @@ jobs:
       # Pinned release + checksum verification rather than piping a
       # third-party install script or trusting an unpinned marketplace
       # action (this repo dogfoods actionlint as a runner -- see
-      # clients/dispatch/runners -- so lint it with the same rigor).
+      # clients/dispatch/runners -- so lint it with the same rigor). #5409:
+      # the fetch-verified helper caches the verified archive and retries
+      # a 504 instead of saving the error page.
       - name: Download and verify actionlint v1.7.12 (linux_amd64)
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/fetch-verified
+        with:
+          tool: actionlint
+          version: v1.7.12
+          url: https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          sha256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+          path: ${{ runner.temp }}/actionlint_1.7.12_linux_amd64.tar.gz
+
+      - name: Unpack actionlint v1.7.12
         if: ${{ !cancelled() }}
         run: |
           set -eu
-          curl -sLO --proto '=https' --tlsv1.2 https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint_1.7.12_linux_amd64.tar.gz" | sha256sum -c -
-          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz actionlint
+          tar -xzf "$RUNNER_TEMP/actionlint_1.7.12_linux_amd64.tar.gz" actionlint
 
       # Bare invocation (no *.yml glob): actionlint auto-discovers every
       # workflow under .github/workflows/, including a future .yaml
@@ -295,11 +305,19 @@ jobs:
       # network access vale makes.
       - name: Download and verify vale v3.9.6 (Linux_64-bit)
         if: ${{ !cancelled() }}
+        uses: ./.github/actions/fetch-verified
+        with:
+          tool: vale
+          version: v3.9.6
+          url: https://github.com/errata-ai/vale/releases/download/v3.9.6/vale_3.9.6_Linux_64-bit.tar.gz
+          sha256: dd8519d9bdf381a3b1a30f1df7f6e589b69ec1e38a495e4bd9af8e450703dde0
+          path: ${{ runner.temp }}/vale_3.9.6_Linux_64-bit.tar.gz
+
+      - name: Unpack vale v3.9.6
+        if: ${{ !cancelled() }}
         run: |
           set -eu
-          curl -sLO --proto '=https' --tlsv1.2 https://github.com/errata-ai/vale/releases/download/v3.9.6/vale_3.9.6_Linux_64-bit.tar.gz
-          echo "dd8519d9bdf381a3b1a30f1df7f6e589b69ec1e38a495e4bd9af8e450703dde0  vale_3.9.6_Linux_64-bit.tar.gz" | sha256sum -c -
-          tar -xzf vale_3.9.6_Linux_64-bit.tar.gz vale
+          tar -xzf "$RUNNER_TEMP/vale_3.9.6_Linux_64-bit.tar.gz" vale
 
       # #5249: on a pull request, Vale reads only the Markdown the PR adds or
       # changes under the prose paths (scripts/lint-prose-files.mjs). Every

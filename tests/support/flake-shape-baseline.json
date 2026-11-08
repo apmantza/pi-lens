@@ -141,6 +141,7 @@
 		"scripts/dispatch-safety.test.ts": 2,
 		"scripts/download-grammars.test.ts": 2,
 		"scripts/download-test-history-artifacts.test.ts": 2,
+		"scripts/fetch-verified-action.test.ts": 2,
 		"scripts/floor-steps-executed.test.ts": 2,
 		"scripts/git-fixture-env.test.ts": 6,
 		"scripts/guard-bash-hook.test.ts": 19,

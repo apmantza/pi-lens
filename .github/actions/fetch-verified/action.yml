@@ -1,0 +1,84 @@
+name: Fetch and verify a pinned release file
+description: >-
+  Restores a pinned release file from actions/cache, keyed on its tool, version
+  and sha256, or downloads it with --fail and retries on a miss. Either way the
+  file is checked against its sha256 before the job uses it.
+
+# #5409 (2026-11-08). GitHub's release endpoint returned intermittent 504s for
+# about an hour. Four CI steps fetched a pinned file on every run with a bare
+# `curl -sLO`, so the 504 page was saved as the archive and failed its sha256
+# check, and the log said "checksum did NOT match" instead of "HTTP 504".
+#
+# Flow: restore the cache entry, then verify whatever is there (a hit is checked
+# too, so a corrupt entry downloads again). A miss downloads to <path>.part with
+# --fail and retries, verifies that file, and only then moves it into place. The
+# save runs last and only after a download, so the cache never holds a file that
+# failed its digest. A composite action has no post step (tool-tree-cache says
+# the same), so the save is an in-flow step, not an actions/cache post step.
+#
+# Key: fetch-verified-<tool>-<version>-<sha256>. The digest is in the key, so a
+# pin change misses the cache, and the digest check runs on every hit as well.
+#
+# tests/config/release-download-helper-workflow.test.ts pins this file's shape
+# and every caller's inputs. tests/scripts/fetch-verified-action.test.ts runs
+# the fetch step under bash against a fake curl.
+
+inputs:
+  tool:
+    description: Tool name, the first part of the cache key.
+    required: true
+  version:
+    description: Pinned release tag, the second part of the cache key.
+    required: true
+  url:
+    description: Literal https URL of the pinned file on github.com.
+    required: true
+  sha256:
+    description: Pinned sha256 of the file, checked on every run.
+    required: true
+  path:
+    description: Where the verified file is left for the job to use.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore the cached release file
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.path }}
+        key: fetch-verified-${{ inputs.tool }}-${{ inputs.version }}-${{ inputs.sha256 }}
+
+    - name: Verify the file, downloading it on a cache miss
+      id: fetch
+      shell: bash
+      env:
+        URL: ${{ inputs.url }}
+        SHA256: ${{ inputs.sha256 }}
+        DEST: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+        verify() {
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "$SHA256  $1" | sha256sum -c -
+          else
+            echo "$SHA256  $1" | shasum -a 256 -c -
+          fi
+        }
+        if [ -f "$DEST" ] && verify "$DEST" >/dev/null 2>&1; then
+          echo "$DEST restored from cache; sha256 verified"
+          exit 0
+        fi
+        mkdir -p "$(dirname "$DEST")"
+        tmp="$DEST.part"
+        curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 --output "$tmp" "$URL"
+        verify "$tmp"
+        mv "$tmp" "$DEST"
+        echo "downloaded=true" >> "$GITHUB_OUTPUT"
+
+    - name: Save the verified release file
+      if: ${{ steps.fetch.outputs.downloaded == 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ inputs.path }}
+        key: fetch-verified-${{ inputs.tool }}-${{ inputs.version }}-${{ inputs.sha256 }}
