@@ -22,8 +22,11 @@ import {
 	configSearchDirs,
 } from "../../clients/config-locations.js";
 import {
+	type ConfigReadFailure,
+	MAX_CONFIG_BYTES,
 	deprecationRecords,
 	lspSectionOf,
+	readConfigDocument,
 	resolvePiLensConfig,
 } from "../../clients/config-resolve.js";
 import { removeTempDirSync } from "./test-utils.js";
@@ -477,6 +480,7 @@ describe("contributingConfigSources read-time digests", () => {
 			file: projectFile,
 			tier: "project",
 			exists: true,
+			readable: true,
 			sha256: expectedSha,
 			byteLength: rawBytes.byteLength,
 		});
@@ -489,6 +493,124 @@ describe("contributingConfigSources read-time digests", () => {
 			file: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
 			tier: "global",
 			exists: false,
+		});
+	});
+
+	it("marks an existing unreadable candidate as exists:true, readable:false and invokes onReadError", () => {
+		const root = tmpRoot();
+		const home = path.join(root, "home");
+		const globalDir = path.join(home, ".pi-lens");
+		const projectRoot = path.join(home, "proj");
+		const projectFile = path.join(projectRoot, CANONICAL_PROJECT_CONFIG_FILE);
+		// Directory at the candidate path causes EISDIR on read (non-ENOENT).
+		fs.mkdirSync(projectFile, { recursive: true });
+
+		const failures: ConfigReadFailure[] = [];
+		const resolved = resolvePiLensConfig({
+			cwd: projectRoot,
+			globalDir,
+			globalConfigPath: path.join(globalDir, CANONICAL_GLOBAL_CONFIG_FILE),
+			homeDir: home,
+			onReadError: (failure) => failures.push(failure),
+		});
+
+		expect(failures).toHaveLength(1);
+		expect(failures[0]).toMatchObject({
+			file: projectFile,
+			tier: "project",
+			sourceText: undefined,
+		});
+		const unreadable = resolved.contributingConfigSources.find(
+			(entry) => entry.file === projectFile,
+		);
+		expect(unreadable).toEqual({
+			file: projectFile,
+			tier: "project",
+			exists: true,
+			readable: false,
+		});
+	});
+
+	it("accepts config files up to 1 MiB and rejects files over the cap before parsing", () => {
+		expect(MAX_CONFIG_BYTES).toBe(1_048_576);
+		const capBytes = MAX_CONFIG_BYTES;
+		const makeSizedConfigText = (targetBytes: number): string => {
+			const prefix = '{"lsp":{"warmFiles":["';
+			const suffix = '"]}}';
+			const padLength =
+				targetBytes - Buffer.byteLength(prefix + suffix, "utf8");
+			const text = `${prefix}${"a".repeat(padLength)}${suffix}`;
+			expect(Buffer.byteLength(text, "utf8")).toBe(targetBytes);
+			return text;
+		};
+
+		for (const acceptedBytes of [capBytes - 1, capBytes]) {
+			const root = tmpRoot();
+			const home = path.join(root, "home");
+			const projectRoot = path.join(home, "proj");
+			fs.mkdirSync(projectRoot, { recursive: true });
+			const projectFile = path.join(projectRoot, CANONICAL_PROJECT_CONFIG_FILE);
+			const text = makeSizedConfigText(acceptedBytes);
+			fs.writeFileSync(projectFile, text, "utf8");
+			const expectedSha = createHash("sha256")
+				.update(Buffer.from(text, "utf8"))
+				.digest("hex");
+
+			const failures: ConfigReadFailure[] = [];
+			const resolved = resolvePiLensConfig({
+				cwd: projectRoot,
+				homeDir: home,
+				onReadError: (failure) => failures.push(failure),
+			});
+
+			expect(failures).toEqual([]);
+			expect(resolved.documents.map((doc) => doc.file)).toContain(projectFile);
+			expect(
+				resolved.contributingConfigSources.find(
+					(entry) => entry.file === projectFile,
+				),
+			).toEqual({
+				file: projectFile,
+				tier: "project",
+				exists: true,
+				readable: true,
+				sha256: expectedSha,
+				byteLength: acceptedBytes,
+			});
+		}
+
+		const overRoot = tmpRoot();
+		const overHome = path.join(overRoot, "home");
+		const overProject = path.join(overHome, "proj");
+		fs.mkdirSync(overProject, { recursive: true });
+		const overFile = path.join(overProject, CANONICAL_PROJECT_CONFIG_FILE);
+		fs.writeFileSync(overFile, makeSizedConfigText(capBytes + 1), "utf8");
+
+		const overFailures: ConfigReadFailure[] = [];
+		const overResolved = resolvePiLensConfig({
+			cwd: overProject,
+			homeDir: overHome,
+			onReadError: (failure) => overFailures.push(failure),
+		});
+
+		expect(overFailures).toHaveLength(1);
+		expect(overFailures[0]).toMatchObject({
+			file: overFile,
+			tier: "project",
+			sourceText: undefined,
+		});
+		expect(String(overFailures[0]?.error)).toMatch(/exceeds maximum size/i);
+		expect(overResolved.documents).toEqual([]);
+		expect(readConfigDocument(overFile).status).toBe("error");
+		expect(
+			overResolved.contributingConfigSources.find(
+				(entry) => entry.file === overFile,
+			),
+		).toEqual({
+			file: overFile,
+			tier: "project",
+			exists: true,
+			readable: false,
 		});
 	});
 });

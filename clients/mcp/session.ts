@@ -49,9 +49,14 @@ import { handleSessionStart } from "../runtime-session.js";
 import { handleTurnEnd } from "../runtime-turn.js";
 import { createMcpHost } from "./host-shim.js";
 import { startSituationalToolTelemetrySession } from "../situational-tool-telemetry.js";
+import { createGenerationSource } from "../generation-guard.js";
 import { bounded } from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
-import { retireScope } from "../session-scope.js";
+import {
+	logScopeTransition,
+	retireScope,
+	type SessionScope,
+} from "../session-scope.js";
 
 interface McpSessionContext {
 	runtime: RuntimeCoordinator;
@@ -63,7 +68,18 @@ interface McpSessionContext {
 let contextPromise: Promise<McpSessionContext> | undefined;
 let resolvedRuntime: RuntimeCoordinator | undefined;
 let pendingRuntime: RuntimeCoordinator | undefined;
-let bootstrapTicket = 0;
+const bootstrapGeneration = createGenerationSource("mcp-session-bootstrap");
+
+function retireMcpScope(
+	scope: SessionScope,
+	reason: "mcp-session-reset" | "mcp-session-bootstrap-failed",
+): void {
+	const wasLive = scope.isLive();
+	retireScope(scope, reason);
+	if (wasLive) {
+		logScopeTransition(scope, { transition: "end", reason });
+	}
+}
 
 /**
  * Lazily build (once) the persistent session context shared across MCP
@@ -73,7 +89,7 @@ let bootstrapTicket = 0;
  */
 export function getMcpSessionContext(): Promise<McpSessionContext> {
 	if (contextPromise) return contextPromise;
-	const ticketAtStart = bootstrapTicket;
+	const generation = bootstrapGeneration.capture();
 	const runtime = new RuntimeCoordinator();
 	pendingRuntime = runtime;
 	const promise = (async () => {
@@ -83,15 +99,18 @@ export function getMcpSessionContext(): Promise<McpSessionContext> {
 			astGrepClient: new AstGrepClient(),
 			clients: await loadBootstrapClients(),
 		};
-		if (bootstrapTicket !== ticketAtStart) {
-			retireScope(runtime.sessionScope, "mcp-session-reset");
+		const published = generation.guardedWrite("bootstrap", () => {
+			if (pendingRuntime === runtime) {
+				pendingRuntime = undefined;
+			}
+			resolvedRuntime = context.runtime;
+			return context;
+		});
+		if (!published) {
+			retireMcpScope(runtime.sessionScope, "mcp-session-reset");
 			throw new Error("MCP session context reset during bootstrap");
 		}
-		if (pendingRuntime === runtime) {
-			pendingRuntime = undefined;
-		}
-		resolvedRuntime = context.runtime;
-		return context;
+		return published;
 	})().catch((err: unknown) => {
 		if (pendingRuntime === runtime) {
 			pendingRuntime = undefined;
@@ -99,7 +118,7 @@ export function getMcpSessionContext(): Promise<McpSessionContext> {
 		if (contextPromise === promise) {
 			contextPromise = undefined;
 		}
-		retireScope(runtime.sessionScope, "mcp-session-bootstrap-failed");
+		retireMcpScope(runtime.sessionScope, "mcp-session-bootstrap-failed");
 		throw err;
 	});
 	contextPromise = promise;
@@ -116,17 +135,17 @@ export function peekMcpSessionRuntime(): RuntimeCoordinator | undefined {
 
 /** Test hook -- drop the cached context so a fresh one is built next call. */
 export function _resetMcpSessionContext(): void {
-	bootstrapTicket += 1;
+	bootstrapGeneration.bump();
 	const currentResolved = resolvedRuntime;
 	const currentPending = pendingRuntime;
 	contextPromise = undefined;
 	resolvedRuntime = undefined;
 	pendingRuntime = undefined;
 	if (currentResolved) {
-		retireScope(currentResolved.sessionScope, "mcp-session-reset");
+		retireMcpScope(currentResolved.sessionScope, "mcp-session-reset");
 	}
 	if (currentPending && currentPending !== currentResolved) {
-		retireScope(currentPending.sessionScope, "mcp-session-reset");
+		retireMcpScope(currentPending.sessionScope, "mcp-session-reset");
 	}
 }
 

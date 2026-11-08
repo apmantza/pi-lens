@@ -121,6 +121,40 @@ export type ConfigReadOutcome =
 	  }
 	| { readonly status: "ok"; readonly value: unknown };
 
+/** Maximum size in bytes accepted for a single config candidate file (1 MiB). */
+export const MAX_CONFIG_BYTES = 1_048_576;
+
+function readRawConfigBytes(file: string): Buffer | ConfigReadOutcome {
+	try {
+		const stat = fs.statSync(file);
+		if (!stat.isDirectory() && stat.size > MAX_CONFIG_BYTES) {
+			throw new Error(
+				`config file exceeds maximum size of ${MAX_CONFIG_BYTES} bytes (${stat.size} bytes)`,
+			);
+		}
+		const bytes = fs.readFileSync(file);
+		if (bytes.byteLength > MAX_CONFIG_BYTES) {
+			throw new Error(
+				`config file exceeds maximum size of ${MAX_CONFIG_BYTES} bytes (${bytes.byteLength} bytes)`,
+			);
+		}
+		return bytes;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+			return { status: "missing" };
+		}
+		return { status: "error", error };
+	}
+}
+
+function parseConfigJson(text: string): ConfigReadOutcome {
+	try {
+		return { status: "ok", value: JSON.parse(text) as unknown };
+	} catch (error) {
+		return { status: "error", error, sourceText: text };
+	}
+}
+
 /**
  * Read and JSON-parse one config file.
  *
@@ -130,20 +164,7 @@ export type ConfigReadOutcome =
  * stays with the loader while the reading itself is shared.
  */
 export function readConfigDocument(file: string): ConfigReadOutcome {
-	let text: string;
-	try {
-		text = fs.readFileSync(file, "utf-8");
-	} catch (error) {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-			return { status: "missing" };
-		}
-		return { status: "error", error };
-	}
-	try {
-		return { status: "ok", value: JSON.parse(text) as unknown };
-	} catch (error) {
-		return { status: "error", error, sourceText: text };
-	}
+	return readConfigDocumentAndDigest(file, "project").outcome;
 }
 
 /** One config file that exists on disk and parsed. */
@@ -210,13 +231,26 @@ export interface ResolvePiLensConfigOptions {
 	readonly stopAtGitRoot?: boolean;
 }
 
-export interface ConfigSourceDigest {
-	readonly file: string;
-	readonly tier: SourceTier;
-	readonly exists: boolean;
-	readonly sha256?: string | undefined;
-	readonly byteLength?: number | undefined;
-}
+export type ConfigSourceDigest =
+	| {
+			readonly file: string;
+			readonly tier: SourceTier;
+			readonly exists: false;
+	  }
+	| {
+			readonly file: string;
+			readonly tier: SourceTier;
+			readonly exists: true;
+			readonly readable: false;
+	  }
+	| {
+			readonly file: string;
+			readonly tier: SourceTier;
+			readonly exists: true;
+			readonly readable: true;
+			readonly sha256: string;
+			readonly byteLength: number;
+	  };
 
 export interface PiLensConfigResolution {
 	/** Read-time candidate source digests (existing and absent candidate paths). */
@@ -258,44 +292,28 @@ function readConfigDocumentAndDigest(
 	file: string,
 	tier: SourceTier,
 ): { outcome: ConfigReadOutcome; digest: ConfigSourceDigest } {
-	let rawBytes: Buffer;
-	try {
-		rawBytes = fs.readFileSync(file);
-	} catch (thrown) {
-		if (
-			thrown instanceof Error &&
-			"code" in thrown &&
-			thrown.code === "ENOENT"
-		) {
-			return {
-				outcome: { ["status"]: "missing" },
-				digest: { file, tier, exists: false },
-			};
-		}
+	const raw = readRawConfigBytes(file);
+	if (!Buffer.isBuffer(raw)) {
 		return {
-			outcome: { ["status"]: "error", ["error"]: thrown },
-			digest: { file, tier, exists: false },
+			outcome: raw,
+			digest:
+				"error" in raw
+					? { file, tier, exists: true, readable: false }
+					: { file, tier, exists: false },
 		};
 	}
 	const digest: ConfigSourceDigest = {
 		file,
 		tier,
 		exists: true,
-		sha256: createHash("sha256").update(rawBytes).digest("hex"),
-		byteLength: rawBytes.byteLength,
+		readable: true,
+		sha256: createHash("sha256").update(raw).digest("hex"),
+		byteLength: raw.byteLength,
 	};
-	const text = rawBytes.toString("utf-8");
-	try {
-		return {
-			outcome: { ["status"]: "ok", value: JSON.parse(text) as unknown },
-			digest,
-		};
-	} catch (thrown) {
-		return {
-			outcome: { ["status"]: "error", ["error"]: thrown, sourceText: text },
-			digest,
-		};
-	}
+	return {
+		outcome: parseConfigJson(raw.toString("utf-8")),
+		digest,
+	};
 }
 
 function collectDocuments(
@@ -406,13 +424,11 @@ function collectPiLensConfigDocuments(
 		let seenBearing = false;
 		for (const entry of scanned) {
 			const tier: SourceTier = seenBearing ? "nested-project" : "project";
+			for (const d of entry.dirDigests) digests?.push({ ...d, tier });
 			if (entry.found.length > 0) {
 				seenBearing = true;
-				for (const d of entry.dirDigests) digests?.push({ ...d, tier });
 				for (const document of entry.found)
 					documents.push({ ...document, tier });
-			} else {
-				for (const d of entry.dirDigests) digests?.push({ ...d, tier });
 			}
 		}
 	}
