@@ -411,6 +411,29 @@ describe("#5371 the shared `paths` reader expands a glob once for every tool", (
 		}
 	});
 
+	it("names a directory a glob matches, and leaves its subtree to that entry", async () => {
+		// `paths` has always scoped a directory entry to its whole subtree, so a
+		// glob that lands on a directory names the DIRECTORY: the walker does not
+		// descend, and the files under it are not reported a second time.
+		const env = setupTestEnvironment("pi-lens-5371-dir-");
+		try {
+			makeTree(env.tmpDir);
+			const astGrep = astGrepDouble();
+			const result = await run(
+				createAstGrepOutlineTool(astGrep.client),
+				{ lang: "typescript", paths: ["src/s*"] },
+				env.tmpDir,
+			);
+			const answer = text(result);
+			expect(result.isError, answer).toBeFalsy();
+			expect(astGrep.outline.mock.calls[0][0]).toEqual([
+				path.join(env.tmpDir, "src", "sub"),
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("counts literal entries against the cap the next glob sees", async () => {
 		// The budget is what is LEFT of the cap, not the whole cap: 99 literal
 		// entries leave room for one, so a glob matching two is over it and the
