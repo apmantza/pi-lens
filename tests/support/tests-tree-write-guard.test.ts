@@ -287,7 +287,7 @@ describe("tests-tree write guard (#3082)", () => {
 	// call from the watch callback leaves every other case above green.
 	it(
 		"records a file created and removed mid-run, through a real recursive watch",
-		{ timeout: 30_000 },
+		{ timeout: TREE_WALK_TIMEOUT_MS },
 		async () => {
 			const root = fixtureTree();
 			const guard = installTestsTreeWriteGuard(root);

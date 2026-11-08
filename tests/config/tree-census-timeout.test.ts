@@ -12,12 +12,16 @@
  * walk produced at module or describe scope (a suite-level `files` list is a
  * walk even though the callback never names the walker), or an `it.each` /
  * `it.for` over such a table. The gate enforces one rule on every census: its
- * third argument is an identifier named `TREE_WALK_TIMEOUT_MS`
+ * budget (the third argument, or the `timeout` pair of the options object in
+ * vitest's `it(title, { timeout }, fn)` form, #5430 review F1) is an
+ * identifier named `TREE_WALK_TIMEOUT_MS`
  * (the shared constant in `tests/support/test-timeout-scale.ts`; the gate reads
  * the name, not the binding), or a `scaledTestTimeout(...)` call
  * for a census that needs more than the shared ceiling (name the reason in a
  * comment; the gate does not read it). The default two arguments, a raw number, a
- * file-local constant, an options object or any other expression is refused,
+ * file-local constant, an options object third, an options object without a
+ * `timeout` pair, an options binding or spread, or any other expression is
+ * refused,
  * because only the scaled forms follow the lane's `PI_LENS_TEST_TIMEOUT_SCALE`.
  *
  * The detector admits known-good forms and refuses the rest (AGENTS.md shape
@@ -47,7 +51,8 @@
  * - Helper (#4967): a call to a name the file imports from a module under
  *   `tests/` is a walk when that module's own definition reaches a walker,
  *   followed through that module's local helpers, its namespace-import
- *   members, its re-exports and its own imports. Verdicts settle to a fixed
+ *   members, its re-exports and its own imports. A default import reads as
+ *   the module's `default` export (#5430 review F2). Verdicts settle to a fixed
  *   point over the whole helper graph, so a verdict never depends on which
  *   file asked and a module cycle converges. The verdict is derived from
  *   source once per module per run, never from a name list, so it cannot rot;
@@ -64,10 +69,22 @@
  * first census that times out there): a walker reached through runtime source
  * outside `tests/`, or through a wrapper the TEST file itself declares (the
  * resolver follows a helper module's own wrappers, not a test file's);
- * a
- * recursive walker spelled as a variable-bound arrow function; and a walk named
- * by an enclosing `describe.each` table or `for...of` loop instead of by the
- * case. The budget
+ * a recursive walker spelled as a variable-bound arrow function, or a
+ * `readdirSync(dir, { recursive: true })`; a walk named by an enclosing
+ * `describe.each` table or `for...of` loop instead of by the case; and these
+ * indirect forms (#5430 review F3, live population 0 each): a dynamic
+ * `import()` of a helper (in a case, at module scope, or through `.then`); a
+ * call through an object property or array element (`api.w(R)`, `fns[0](R)`);
+ * a walker passed as a callback (`[R].map(walk)`) or called through `.call`;
+ * a class or object-literal member of a helper (`kit.walk(R)`, `K.run(R)`);
+ * and a helper that aliases, destructures or re-binds an imported walker
+ * (`const run = walk`, `const { walk: w } = ns`, `export const f = walk`),
+ * because a helper's definitions are read with an import-blind scope. Two
+ * further accepted residuals: a quiet name behind two levels of `export *`
+ * reads `unknown` and asks for a budget (over-refusal, the safe direction,
+ * #5430 review B3); and runtime source outside `tests/` stays a boundary even
+ * where a test walks through it (`tests/clients/git-tracked-ignore.test.ts`
+ * runs the production `git ls-files` helper; #5430 review F8). The budget
  * is admitted by name, not by binding (accepted residual, live population 0
  * each way): a same-named local `const TREE_WALK_TIMEOUT_MS = 5000` is
  * admitted, and an import alias of the shared constant is refused.
@@ -81,6 +98,7 @@ import {
 	isWithinForm,
 	normalizeEphemeralMapKey,
 } from "../../clients/path-utils.js";
+import { jsTsCandidatePaths } from "../../clients/review-graph/import-resolvers.js";
 import { parseRoot } from "../support/ast-census.js";
 import {
 	assertNonEmptyScan,
@@ -159,7 +177,7 @@ interface HelperShape {
  *  `ref` answers where a specifier's definition lives; `verdict` and `table`
  *  answer what a module's names do. */
 interface HelperResolver {
-	ref(fromDir: string, specifier: string): NamespaceRef;
+	ref(fromFile: string, specifier: string): NamespaceRef;
 	verdict(moduleFile: string, name: string): HelperVerdict;
 	table(moduleFile: string): Map<string, HelperVerdict>;
 }
@@ -200,20 +218,24 @@ function underTests(absolute: string): boolean {
 	return underTestsForm(absolute, TESTS_DIR);
 }
 
-/** The source file a specifier names, or `null` when nothing readable is there. */
+/**
+ * The source file a specifier names, or `null` when nothing readable is there.
+ * The candidates are the review graph's own `jsTsCandidatePaths`, the repo's one
+ * `./x.js` to source-twin mapping (#694; `tests/support/hook-await-scan.mjs`
+ * folded its copy the same way, #2557). Only the existence check stays here,
+ * because a plant reads a virtual module table, not the disk (#5430 review F9).
+ */
 function resolveSpecifier(
 	sources: HelperSources,
-	fromDir: string,
+	fromFile: string,
 	specifier: string,
 ): string | null {
 	if (!specifier.startsWith(".")) return null;
-	const base = path.resolve(fromDir, specifier);
-	for (const candidate of [
-		base.replace(/\.js$/, ".ts"),
-		`${base}.ts`,
-		path.join(base, "index.ts"),
-		base,
-	]) {
+	for (const candidate of jsTsCandidatePaths(fromFile, specifier)) {
+		// The twin order maps `./x.mjs` to `x.ts` first, and the `tests/support/`
+		// facades are exactly that pair (`x.ts` holds `export * from "./x.mjs"`),
+		// so a facade would resolve to itself. A module never imports itself.
+		if (candidate === fromFile) continue;
 		if (sources.read(candidate) !== undefined) return candidate;
 	}
 	return null;
@@ -221,13 +243,13 @@ function resolveSpecifier(
 
 function namespaceRef(
 	sources: HelperSources,
-	fromDir: string,
+	fromFile: string,
 	specifier: string,
 ): NamespaceRef {
-	const resolved = resolveSpecifier(sources, fromDir, specifier);
+	const resolved = resolveSpecifier(sources, fromFile, specifier);
 	if (resolved === null)
 		return specifier.startsWith(".") &&
-			underTests(path.resolve(fromDir, specifier))
+			underTests(path.resolve(path.dirname(fromFile), specifier))
 			? { unreadable: true }
 			: { external: true };
 	return underTests(resolved) ? { module: resolved } : { external: true };
@@ -236,13 +258,26 @@ function namespaceRef(
 /** The same three arms for one name imported or re-exported from `specifier`. */
 function helperCall(
 	sources: HelperSources,
-	fromDir: string,
+	fromFile: string,
 	specifier: string,
 	name: string,
 ): HelperCall {
-	const ref = namespaceRef(sources, fromDir, specifier);
+	const ref = namespaceRef(sources, fromFile, specifier);
 	if ("module" in ref) return { module: ref.module, name };
 	return "external" in ref ? { boundary: true } : { unreadable: true };
+}
+
+/** The local name of an import's default binding (`import walk from`,
+ *  `import walk, { x } from`), else undefined. #5430 review F2: it reads as the
+ *  module's `default` export, so a missing one fails closed like a named one. */
+function defaultImportName(statement: SgNode): string | undefined {
+	const clause = statement
+		.children()
+		.find((child) => child.kind() === "import_clause");
+	return clause
+		?.children()
+		.find((child) => child.kind() === "identifier")
+		?.text();
 }
 
 /** The names a module-scope declaration introduces: `function f`, `const a`,
@@ -377,7 +412,6 @@ function createResolver(sources: HelperSources): HelperResolver {
 		made: Map<string, HelperShape>,
 	): void {
 		const root = parseRoot(source);
-		const dir = path.dirname(moduleFile);
 		const scope = scopeOf(root);
 		const defs = new Map<string, SgNode>();
 		/** Names an import or a re-export stands for, and where they come from. */
@@ -387,11 +421,23 @@ function createResolver(sources: HelperSources): HelperResolver {
 		const namespaces = new Map<string, NamespaceRef>();
 		for (const statement of root.children()) {
 			if (!statement.isNamed()) continue;
+			const exportsDefault =
+				statement.kind() === "export_statement" &&
+				statement.children().some((child) => child.kind() === "default");
+			// #5430 review F2: `export default <declaration | expression>` defines
+			// the name `default`; `export default name` points at `name`.
+			const value = exportsDefault ? statement.field("value") : null;
+			if (value?.kind() === "identifier") {
+				reExported.push(`default\n${value.text()}`);
+				continue;
+			}
+			if (value && !defs.has("default")) defs.set("default", value);
 			const node =
 				statement.kind() === "export_statement"
 					? statement.field("declaration")
 					: statement;
 			if (!node || !DECLARATION_KINDS.has(String(node.kind()))) continue;
+			if (exportsDefault && !defs.has("default")) defs.set("default", node);
 			for (const name of declarationNames(node))
 				if (!defs.has(name)) defs.set(name, node);
 		}
@@ -399,19 +445,26 @@ function createResolver(sources: HelperSources): HelperResolver {
 			rule: { kind: "import_statement" },
 		})) {
 			const specifier = unquote(statement.field("source")?.text() ?? "");
+			const byDefault = defaultImportName(statement);
+			if (byDefault)
+				imports.set(
+					byDefault,
+					helperCall(sources, moduleFile, specifier, "default"),
+				);
 			for (const imported of statement.findAll({
 				rule: { kind: "import_specifier" },
 			})) {
 				const name = imported.field("name")?.text() ?? "";
 				const local = imported.field("alias")?.text() ?? name;
 				if (local)
-					imports.set(local, helperCall(sources, dir, specifier, name));
+					imports.set(local, helperCall(sources, moduleFile, specifier, name));
 			}
 			for (const space of statement.findAll({
 				rule: { kind: "namespace_import" },
 			})) {
 				const local = space.find({ rule: { kind: "identifier" } })?.text();
-				if (local) namespaces.set(local, namespaceRef(sources, dir, specifier));
+				if (local)
+					namespaces.set(local, namespaceRef(sources, moduleFile, specifier));
 			}
 		}
 		for (const statement of root.findAll({
@@ -421,7 +474,7 @@ function createResolver(sources: HelperSources): HelperResolver {
 			const specifier = sourceNode ? unquote(sourceNode.text()) : undefined;
 			if (/^\s*export\s+\*/.test(statement.text())) {
 				if (specifier === undefined) continue;
-				const call = helperCall(sources, dir, specifier, "");
+				const call = helperCall(sources, moduleFile, specifier, "");
 				if ("module" in call) {
 					const targets = stars.get(moduleFile) ?? [];
 					targets.push(call.module);
@@ -437,7 +490,7 @@ function createResolver(sources: HelperSources): HelperResolver {
 				const local = exported.field("alias")?.text() ?? name;
 				if (!local || !name) continue;
 				if (specifier !== undefined) {
-					imports.set(local, helperCall(sources, dir, specifier, name));
+					imports.set(local, helperCall(sources, moduleFile, specifier, name));
 					continue;
 				}
 				const def = defs.get(name);
@@ -569,7 +622,7 @@ function createResolver(sources: HelperSources): HelperResolver {
 	}
 
 	return {
-		ref: (fromDir, specifier) => namespaceRef(sources, fromDir, specifier),
+		ref: (fromFile, specifier) => namespaceRef(sources, fromFile, specifier),
 		verdict: (moduleFile, name) => tableOf(moduleFile).get(name) ?? "unknown",
 		table: tableOf,
 	};
@@ -598,13 +651,13 @@ interface Scope {
 	helperNamespaces: Map<string, Map<string, HelperVerdict> | null>;
 }
 
-/** Where the file under test sits, so a relative import has a directory to
- *  resolve against, and where its helper verdicts come from. A plant that
+/** The file under test, so a relative import resolves against it, and where
+ *  its helper verdicts come from. A plant that
  *  exercises helper resolution passes both; omitting them keeps the file's
  *  own imports the only source of a walker name. */
 interface HelperScope {
 	resolver: HelperResolver;
-	dir: string;
+	file: string;
 }
 
 function namedArgs(call: SgNode): SgNode[] {
@@ -648,7 +701,7 @@ function scopeOf(root: SgNode, helpers?: HelperScope): Scope {
 		// #4967: only a helper module under `tests/` is read; a package or runtime
 		// source outside it is a boundary that answers `quiet` for every name.
 		const ref = helpers
-			? helpers.resolver.ref(helpers.dir, specifier)
+			? helpers.resolver.ref(helpers.file, specifier)
 			: undefined;
 		const table =
 			ref === undefined
@@ -671,6 +724,12 @@ function scopeOf(root: SgNode, helpers?: HelperScope): Scope {
 				table === undefined ? undefined : (table?.get(name) ?? "unknown");
 			if (verdict === "walks") scope.walkers.add(local);
 			if (verdict === "unknown") scope.unresolved.add(local);
+		}
+		const byDefault = defaultImportName(statement);
+		if (byDefault && table !== undefined) {
+			const verdict = table?.get("default") ?? "unknown";
+			if (verdict === "walks") scope.walkers.add(byDefault);
+			if (verdict === "unknown") scope.unresolved.add(byDefault);
 		}
 		for (const space of statement.findAll({
 			rule: { kind: "namespace_import" },
@@ -933,6 +992,35 @@ function admittedBudget(node: SgNode | undefined): boolean {
 	return node.field("function")?.text() === "scaledTestTimeout";
 }
 
+/**
+ * The case body and the budget of one test-shaped call. Vitest takes a budget
+ * either third, `it(title, fn, budget)`, or in an options object second,
+ * `it(title, { timeout }, fn)` (#5430 review F1). In the options form the body
+ * is the third argument and the budget is the object's `timeout` pair; any
+ * other second argument (a binding, a spread, an object without that pair)
+ * leaves no budget, so the case is refused.
+ */
+function bodyAndBudget(args: SgNode[]): {
+	body: SgNode;
+	budget: SgNode | undefined;
+} {
+	const second = args[1];
+	const third = args[2];
+	if (FUNCTION_KINDS.has(String(second.kind())) || !third)
+		return { body: second, budget: third };
+	if (!FUNCTION_KINDS.has(String(third.kind())))
+		return { body: second, budget: third };
+	if (second.kind() !== "object") return { body: third, budget: undefined };
+	const timeout = second
+		.children()
+		.find(
+			(pair) =>
+				pair.kind() === "pair" &&
+				unquote(pair.field("key")?.text() ?? "") === "timeout",
+		);
+	return { body: third, budget: timeout?.field("value") ?? undefined };
+}
+
 interface Census {
 	title: string;
 	argCount: number;
@@ -963,31 +1051,95 @@ function boundNames(pattern: SgNode | null | undefined): string[] {
 }
 
 /**
- * The names a subtree binds for itself: its own `const`, `let`, parameters and
- * imports. A name a subtree binds is never a read of the same-named suite-scope
- * binding, so the walk propagation skips it (#4967: `collectUses` declares its
- * own `pin` from a regex match, and that is not the `pin` a sibling case takes
- * out of the walked `pins`).
+ * Does `node` read a walked name that no binding of the same name shadows at
+ * the read? A subtree's own `const`, `let`, parameter or catch binding is never
+ * a read of the same-named suite-scope binding (#4967: `collectUses` declares
+ * its own `pin` from a regex match, and that is not the `pin` a sibling case
+ * takes out of the walked `pins`). #5430 review B1: the binding hides only the
+ * reads inside its own scope, so a nested callback's `(files) => files` no
+ * longer hides the case's own read of the walked `files` beside it.
  */
-const BINDING_HOLDER_KINDS = [
-	"variable_declarator",
-	"formal_parameters",
-	"catch_clause",
-	"import_specifier",
-] as const;
+const BLOCK_SCOPE_KINDS = new Set<string>([
+	"statement_block",
+	"for_statement",
+	"for_in_statement",
+	"switch_body",
+	"program",
+]);
 
-function boundWithin(node: SgNode): Set<string> {
-	const names = new Set<string>();
-	for (const kind of BINDING_HOLDER_KINDS) {
-		for (const holder of node.findAll({ rule: { kind } })) {
-			const name = holder.field("name");
-			if (name) for (const bound of boundNames(name)) names.add(bound);
-			if (kind !== "variable_declarator")
-				for (const child of holder.children())
-					for (const bound of boundNames(child)) names.add(bound);
+function scopeOwner(node: SgNode, kinds: ReadonlySet<string>): SgNode | null {
+	let owner = node.parent();
+	while (owner && !kinds.has(String(owner.kind()))) owner = owner.parent();
+	return owner;
+}
+
+/** Each name a subtree binds, to the source ranges of the scopes it binds in. */
+function bindingScopes(node: SgNode): Map<string, Array<[number, number]>> {
+	const scopes = new Map<string, Array<[number, number]>>();
+	const bind = (names: string[], owner: SgNode | null) => {
+		if (!owner) return;
+		const { start, end } = owner.range();
+		for (const name of names) {
+			const ranges = scopes.get(name) ?? [];
+			ranges.push([start.index, end.index]);
+			scopes.set(name, ranges);
+		}
+	};
+	for (const holder of node.findAll({
+		rule: {
+			any: [
+				{ kind: "variable_declarator" },
+				{ kind: "formal_parameters" },
+				{ kind: "catch_clause" },
+				{ kind: "arrow_function" },
+				{ kind: "for_in_statement" },
+			],
+		},
+	})) {
+		switch (holder.kind()) {
+			case "variable_declarator":
+				bind(
+					boundNames(holder.field("name")),
+					scopeOwner(holder, BLOCK_SCOPE_KINDS),
+				);
+				break;
+			case "formal_parameters":
+				for (const parameter of holder.children())
+					if (parameter.isNamed())
+						bind(
+							boundNames(parameter.field("pattern") ?? parameter),
+							holder.parent(),
+						);
+				break;
+			case "catch_clause":
+				bind(boundNames(holder.field("parameter")), holder);
+				break;
+			case "arrow_function":
+				// `files => files`: a lone parameter with no parentheses.
+				bind(boundNames(holder.field("parameter")), holder);
+				break;
+			case "for_in_statement":
+				// `for (const file of files)`: `left` binds only under a keyword.
+				if (holder.field("kind"))
+					bind(boundNames(holder.field("left")), holder);
+				break;
 		}
 	}
-	return names;
+	return scopes;
+}
+
+function readsWalked(node: SgNode, walked: ReadonlySet<string>): boolean {
+	const reads = node
+		.findAll({ rule: { kind: "identifier" } })
+		.filter((id) => walked.has(id.text()));
+	if (reads.length === 0) return false;
+	const scopes = bindingScopes(node);
+	return reads.some((id) => {
+		const { start, end } = id.range();
+		return !(scopes.get(id.text()) ?? []).some(
+			([from, to]) => from <= start.index && end.index <= to,
+		);
+	});
 }
 
 /** Every census declaration in one test file's source (one parse). */
@@ -1018,23 +1170,14 @@ function censuses(source: string, helpers?: HelperScope): Census[] {
 		grown = false;
 		for (const { names, decl } of decls) {
 			if (names.every((name) => walked.has(name))) continue;
-			const bound = boundWithin(decl);
-			const reads = decl
-				.findAll({ rule: { kind: "identifier" } })
-				.some((id) => walked.has(id.text()) && !bound.has(id.text()));
-			if (walksTree(decl, scope) || reads) {
+			if (walksTree(decl, scope) || readsWalked(decl, walked)) {
 				for (const name of names) walked.add(name);
 				grown = true;
 			}
 		}
 	}
-	const walks = (node: SgNode) => {
-		if (walksTree(node, scope)) return true;
-		const bound = boundWithin(node);
-		return node
-			.findAll({ rule: { kind: "identifier" } })
-			.some((id) => walked.has(id.text()) && !bound.has(id.text()));
-	};
+	const walks = (node: SgNode) =>
+		walksTree(node, scope) || readsWalked(node, walked);
 	const found: Census[] = [];
 	for (const call of root.findAll({ rule: { kind: "call_expression" } })) {
 		const callee = call.field("function");
@@ -1042,7 +1185,7 @@ function censuses(source: string, helpers?: HelperScope): Census[] {
 		const args = namedArgs(call);
 		if (args.length < 2) continue;
 		const calleeRoot = rootOf(callee, scope);
-		const body = args[1];
+		const { body, budget } = bodyAndBudget(args);
 		if (isDeclarationRoot(calleeRoot, scope)) {
 			// `it.each(table)(title, fn)`: the table is walked even when the case
 			// never names it (its rows are the walked population).
@@ -1050,7 +1193,7 @@ function censuses(source: string, helpers?: HelperScope): Census[] {
 				found.push({
 					title: args[0].text(),
 					argCount: args.length,
-					refused: !admittedBudget(args[2]),
+					refused: !admittedBudget(budget),
 					how: "declaration",
 				});
 			continue;
@@ -1066,7 +1209,7 @@ function censuses(source: string, helpers?: HelperScope): Census[] {
 			found.push({
 				title: args[0].text(),
 				argCount: args.length,
-				refused: !admittedBudget(args[2]),
+				refused: !admittedBudget(budget),
 				how: "unclassified",
 			});
 	}
@@ -1299,6 +1442,49 @@ describe("tree census timeout (#4828)", () => {
 		expect(defaultBudget(source)).toEqual([]);
 	});
 
+	// Recurrence (#5430 review F1): vitest's `it(title, options, fn)` form put
+	// the body third, and the detector read the options object as the body, so
+	// `tests/scripts/ci-shuffle-census.test.ts` walked every tracked test file
+	// at an unscaled `{ timeout: 60_000 }` outside the census.
+	it.each([
+		["an options object with a raw timeout", "{ timeout: 5000 }"],
+		["an options object with no timeout", "{ retry: 1 }"],
+		["an empty options object", "{}"],
+		["a shorthand timeout", "{ timeout }"],
+		["an options object with a file-local constant", "{ timeout: CENSUS_MS }"],
+		["options through a binding", "opts"],
+		[
+			"a spread of the admitted budget",
+			"{ ...{ timeout: TREE_WALK_TIMEOUT_MS } }",
+		],
+	])(
+		"plants: refuses a census in the options form with %s",
+		(_name, options) => {
+			for (const declaration of ["it", "test", "it.skipIf(cond)"]) {
+				const source = `${VITEST}${KIT}${declaration}("c", ${options}, () => { listSourceFiles(ROOT); });`;
+				expect(censuses(source)).toHaveLength(1);
+				expect(defaultBudget(source)).toEqual(['"c"']);
+			}
+			const unclassified = `${VITEST}${KIT}censusTest("c", ${options}, () => { listSourceFiles(ROOT); });`;
+			expect(censuses(unclassified).map((entry) => entry.how)).toEqual([
+				"unclassified",
+			]);
+			expect(defaultBudget(unclassified)).toEqual(['"c"']);
+		},
+	);
+
+	it.each([
+		["the shared constant", "{ timeout: TREE_WALK_TIMEOUT_MS }"],
+		["a scaled call", "{ retry: 1, timeout: scaledTestTimeout(60_000) }"],
+	])(
+		"plants: admits a census in the options form with %s",
+		(_name, options) => {
+			const source = `${VITEST}${KIT}it("c", ${options}, () => { listSourceFiles(ROOT); });`;
+			expect(censuses(source)).toHaveLength(1);
+			expect(defaultBudget(source)).toEqual([]);
+		},
+	);
+
 	it.each([
 		[
 			"a suite alias",
@@ -1346,7 +1532,7 @@ describe("tree census timeout (#4828)", () => {
 	};
 	const plantCensuses = (body: string, files: Record<string, string>) =>
 		censuses(`${VITEST}${body}`, {
-			dir: PLANT_DIR,
+			file: path.join(PLANT_DIR, "plant.test.ts"),
 			resolver: createResolver(plantSources(files)),
 		});
 	const WALKING_HELPER =
@@ -1428,16 +1614,87 @@ describe("tree census timeout (#4828)", () => {
 			{},
 		],
 		[
-			"a helper in a cycle back to the importer (fail closed)",
+			// Absent-name arm one module down: `other.ts` exports `countUpTo`, not
+			// `fromOther`, so the helper's own import is unresolvable.
+			"a name a helper imports that its source does not export (fail closed)",
 			'import { fromHelper } from "./helper.js";\nit("c", () => { fromHelper(ROOT); });',
 			{
 				"helper.ts":
-					'import { fromTest } from "./cycle.js";\nexport function fromHelper(dir) { return fromTest(dir); }\n',
-				// The cycle arm: `helper.ts` reaches `quiet`, so this plant pins
-				// that a cycle alone does not fail closed — the walker underneath
-				// does.
-				"cycle.ts": QUIET_HELPER,
+					'import { fromOther } from "./other.js";\nexport function fromHelper(dir) { return fromOther(dir); }\n',
+				"other.ts": QUIET_HELPER,
 			},
+		],
+		[
+			// #5430 review F5: a real cycle, `a` and `b` import each other, and the
+			// walk sits on the far side. The fixed point converges to `walks`.
+			"a module cycle whose far side walks",
+			'import { fromA } from "./a.js";\nit("c", () => { fromA(ROOT); });',
+			{
+				"a.ts":
+					'import { fromB } from "./b.js";\nexport function fromA(dir) { return fromB(dir); }\nexport function quietA(n) { return n; }\n',
+				"b.ts":
+					'import { quietA } from "./a.js";\nexport function fromB(dir) { quietA(1); return listSourceFiles(dir); }\n',
+			},
+		],
+		[
+			// #5430 review F4: a helper that walks through its own namespace import
+			// of another `tests/` module (`readShape`'s namespace-member arm).
+			"a helper that walks through a namespace member of another helper",
+			'import { outer } from "./helper.js";\nit("c", () => { outer(ROOT); });',
+			{
+				"helper.ts":
+					'import * as inner from "./inner.js";\nexport function outer(dir) { return inner.walkHere(dir); }\n',
+				"inner.ts": WALKING_HELPER,
+			},
+		],
+		[
+			// #5430 review F2: a default import takes the same verdict path as a
+			// named one.
+			"a default import of a walking default export",
+			'import walk from "./helper.js";\nit("c", () => { walk(ROOT); });',
+			{
+				"helper.ts":
+					"export default function (dir) { return listSourceFiles(dir); }\n",
+			},
+		],
+		[
+			"a default import of a walking binding exported as default",
+			'import walk from "./helper.js";\nit("c", () => { walk(ROOT); });',
+			{ "helper.ts": `${WALKING_HELPER}export default walkHere;\n` },
+		],
+		[
+			"a default import beside a named one",
+			'import walk, { countUpTo } from "./helper.js";\nit("c", () => { countUpTo(1); walk(ROOT); });',
+			{
+				"helper.ts": `${QUIET_HELPER}export default function (dir) { return listSourceFiles(dir); }\n`,
+			},
+		],
+		[
+			"a default import from a module with no default export (fail closed)",
+			'import walk from "./helper.js";\nit("c", () => { walk(ROOT); });',
+			{ "helper.ts": QUIET_HELPER },
+		],
+		[
+			"a default import from a relative module with nothing behind it (fail closed)",
+			'import walk from "./gone.js";\nit("c", () => { walk(ROOT); });',
+			{},
+		],
+		[
+			// #5430 review B1: a nested callback that binds the walked name does
+			// not hide the case's own read of the suite binding.
+			"a walked read beside a nested parameter of the same name",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { expect(files.length).toBe(1); [1].map((files) => files); });',
+			{ "helper.ts": WALKING_HELPER },
+		],
+		[
+			"a walked read beside a sibling block that binds the same name",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { { const files = []; void files; } expect(files).toBeTruthy(); });',
+			{ "helper.ts": WALKING_HELPER },
+		],
+		[
+			"a walked read in a suite binding beside a nested parameter of the same name",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nconst keys = files.map((files) => files);\nit("c", () => { expect(keys).toBeTruthy(); });',
+			{ "helper.ts": WALKING_HELPER },
 		],
 		[
 			"a walked binding destructured at describe scope",
@@ -1538,6 +1795,26 @@ describe("tree census timeout (#4828)", () => {
 				"helper.ts":
 					"export function walkHere(dir) { return { files: listSourceFiles(dir) }; }\n",
 			},
+		],
+		[
+			"a module cycle where neither side walks",
+			'import { fromA } from "./a.js";\nit("c", () => { expect(fromA(1)).toBe(1); });',
+			{
+				"a.ts":
+					'import { fromB } from "./b.js";\nexport function fromA(n) { return fromB(n); }\nexport function quietA(n) { return n; }\n',
+				"b.ts":
+					'import { quietA } from "./a.js";\nexport function fromB(n) { return quietA(n); }\n',
+			},
+		],
+		[
+			"a default import of a quiet default export",
+			'import count from "./helper.js";\nit("c", () => { expect(count(1)).toBe(2); });',
+			{ "helper.ts": "export default function (n) { return n + 1; }\n" },
+		],
+		[
+			"a nested parameter that binds the walked name the case reads only there",
+			'import { walkHere } from "./helper.js";\nconst files = walkHere(ROOT);\nit("c", () => { expect([1].map((files) => files)).toEqual([1]); });',
+			{ "helper.ts": WALKING_HELPER },
 		],
 		[
 			"a walking helper named only in a comment",
@@ -1711,7 +1988,7 @@ describe("tree census timeout (#4828)", () => {
 			const resolver = createResolver(CHECKOUT_SOURCES);
 			for (const { file, source } of readWalkedFiles(files)) {
 				const rel = relativePosix(ROOT, file);
-				const helpers = { dir: path.dirname(file), resolver };
+				const helpers = { file, resolver };
 				const scanned = flagCensuses(rel, source, helpers);
 				census += scanned.census;
 				flagged.push(...scanned.flagged);
@@ -1719,15 +1996,14 @@ describe("tree census timeout (#4828)", () => {
 				// freed before the next file is parsed.
 				await new Promise<void>((resolve) => setImmediate(resolve));
 			}
-			// Calibration 2026-11-08: 392 census tests under tests/ (154 in
-			// tests/config, all budgeted since #4828; 238 outside it, of which 87
-			// are refused and admitted by the baseline since #4967 and 151 are
-			// budgeted, 148 of them members the #4967 helper resolution newly
-			// reaches). The floor is the measured count, shrink-only: a
+			// Calibration 2026-11-08: 399 census tests under tests/ (158 in
+			// tests/config, 241 outside it; 87 refused and admitted by the
+			// baseline, every other one budgeted). Master's detector counts 259
+			// on the same tree. The floor is the measured count, shrink-only: a
 			// regression in binding propagation (measured 52 in tests/config)
 			// drops the count and reds here, where a floor of 30 stayed green. A
-			// root narrowed back to tests/config counts 154 and reds here.
-			assertNonEmptyScan("tree census tests", census, 392);
+			// root narrowed back to tests/config counts 158 and reds here.
+			assertNonEmptyScan("tree census tests", census, 399);
 			const rows = JSON.parse(
 				fs.readFileSync(BASELINE_PATH, "utf8"),
 			) as BaselineRow[];

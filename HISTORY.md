@@ -8,13 +8,15 @@ paid a whole-tree walk inside `clientSourceFiles()`, `testSourceFiles()` or
 now derives each `tests/` helper module's verdicts from its source to a fixed
 point (import aliases, `export *` shims, namespace members, re-exports, a git
 spawner behind a module-local wrapper), and an unresolvable call fails closed as a
-walk. 157 members appeared across 24 files; all budgeted, none baselined, and a
-name a subtree binds for itself stopped counting as a read of the same-named
-suite binding, which retired nine false positives (244 -> 392). The audit
+walk, a default import included. The `it(title, { timeout }, fn)` form is
+read too, so its `timeout` pair is judged as a budget. On one tree the census
+counts 399 members where master's detector counts 259; every new member is
+budgeted, none baselined. A binding that shadows a walked suite name hides only
+the reads inside its own scope, which retired 34 false positives. The audit
 read its helpers by hand first; the derived verdicts and that table (14
 name verdicts across 8 helper modules) are pinned in the same test, so a
 helper that stops walking reds there. A test file's own
-wrapper is still the accepted residual (#4967, PR #5409).
+wrapper is still the accepted residual (#4967, PR #5430).
 
 ## 2026-11-07 — a non-success exit that skips its transition (shape 91)
 
