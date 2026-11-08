@@ -1,5 +1,6 @@
 import type { LSPDiagnostic } from "../../lsp/client.js";
 import type { Diagnostic } from "../types.js";
+import { semanticFor } from "../types.js";
 
 export interface ConvertLspDiagnosticsOptions {
 	tool?: string;
@@ -38,8 +39,13 @@ export function convertLspDiagnostics(
 			};
 			const severity: "error" | "warning" | "info" | "hint" =
 				severityMap[d.severity] ?? "info";
+			// LSP information (3) is the warning tier (#5412). A hint (4), an unset
+			// severity and an unknown one keep the raw `none`: the auxiliary profile
+			// raises a hint to `warning` (auxiliary-lsp-opt-in-4929.test.ts).
 			const semantic =
-				d.severity === 1 ? "blocking" : d.severity === 2 ? "warning" : "none";
+				d.severity === 1 || d.severity === 2 || d.severity === 3
+					? semanticFor(severity)
+					: "none";
 			const code = String(d.code ?? "unknown");
 			// #692: identity ALWAYS derives from the diagnostic's own source — never
 			// from a caller-supplied scan label (see `scanOrigin`'s doc comment above).

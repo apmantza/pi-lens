@@ -11,6 +11,7 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
+import { semanticFor } from "../types.js";
 
 const dart = createAvailabilityChecker("dart", ".exe");
 const flutter = createAvailabilityChecker("flutter", ".bat");
@@ -144,7 +145,7 @@ function parseDartMachineOutput(
 			line: lineNum || 1,
 			column: colNum || 1,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "dart",
 			rule: ruleId,
 			defectClass: "style",

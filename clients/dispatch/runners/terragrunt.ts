@@ -17,6 +17,7 @@ import {
 } from "./utils/runner-helpers.js";
 import { spawnFailedWithNoOutput } from "./utils/spawn-outcome.js";
 import { faultIfCutShort, finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const terragrunt = createAvailabilityChecker("terragrunt", ".exe");
 
@@ -106,7 +107,7 @@ export function parseTerragruntOutput(
 			line,
 			column,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "terragrunt",
 			fixable: false,
 		});

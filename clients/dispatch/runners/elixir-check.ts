@@ -14,6 +14,7 @@ import type {
 } from "../types.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 // Per-cwd cached `--version` probes (#120). Before this, each dispatch
 // invocation fired a fresh `safeSpawnAsync` per command — once per Elixir
@@ -118,7 +119,7 @@ function parseElixirOutput(
 						line: Number.parseInt(lineStr, 10) || 1,
 						column: Number.parseInt(colStr || "1", 10) || 1,
 						severity,
-						semantic: severity === "error" ? "blocking" : "warning",
+						semantic: semanticFor(severity),
 						tool: "elixir-check",
 						rule: severity === "error" ? "error" : "warning",
 						fixable: false,
@@ -143,7 +144,7 @@ function parseElixirOutput(
 			line: Number.parseInt(lineStr, 10) || 1,
 			column: Number.parseInt(colStr || "1", 10) || 1,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "elixir-check",
 			rule: severity === "error" ? "error" : "warning",
 			fixable: false,

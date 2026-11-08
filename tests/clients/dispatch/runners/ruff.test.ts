@@ -186,3 +186,27 @@ describe("ruff runner", () => {
 		}
 	});
 });
+
+/**
+ * #5412 round 2: a finding with a rule keeps its id, `ruff-<code>`. The message
+ * digest belongs to the rule-less branch only. Recurrence: the r1 review,
+ * where `id: rule` -> `id: (rule && message.length < 0)` survived the go-vet and
+ * ruff tests, so every ruff id, and every delta baseline keyed on it, could
+ * change without a red.
+ */
+describe("ruff findings keep their rule id (#5412)", () => {
+	it("gives a ruled ruff finding the id ruff-<code>, with no message digest", async () => {
+		// Dynamic import: the file's vi.mock factories read top-level consts, so a
+		// static import of the parser would evaluate safe-spawn too early.
+		const { parseRuffOutput } =
+			await import("../../../../clients/dispatch/runners/utils/diagnostic-parsers.js");
+		const diags = parseRuffOutput(
+			"a.py:3:1: F401 `os` imported but unused\n",
+			"/proj/a.py",
+			"/proj",
+		);
+		expect(diags).toHaveLength(1);
+		expect(diags[0]?.rule).toBe("F401");
+		expect(diags[0]?.id).toBe("ruff-F401");
+	});
+});

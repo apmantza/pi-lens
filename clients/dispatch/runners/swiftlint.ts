@@ -15,6 +15,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const swiftlint = createAvailabilityChecker("swiftlint", ".exe");
 
@@ -145,7 +146,7 @@ function parseSwiftLintOutput(
 				line: item.line ?? 1,
 				column: item.character ?? 1,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: "swiftlint",
 				rule: ruleId,
 				defectClass: "style",

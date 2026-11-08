@@ -17,6 +17,7 @@ import {
 	resolveAvailableOrInstall,
 	type AvailabilityOutcome,
 } from "./utils/runner-helpers.js";
+import { semanticFor } from "../types.js";
 
 // helm 4 has no --version flag ("Error: unknown flag: --version", exit 1);
 // the version lives under a subcommand (#4453).
@@ -97,7 +98,7 @@ ${line.trim()}`;
 			line: location.line,
 			column: 1,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "helm-lint",
 			rule: level.toLowerCase(),
 			fixable: false,

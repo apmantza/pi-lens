@@ -43,6 +43,7 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const shellcheck = createAvailabilityChecker("shellcheck", ".exe");
 
@@ -127,7 +128,7 @@ function parseShellcheckOutput(
 				line: item.line,
 				column: item.column || 1,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: "shellcheck",
 				rule: ruleCode,
 				fixable: !!item.fix,

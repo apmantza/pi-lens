@@ -17,6 +17,7 @@ import {
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const yamllint = createAvailabilityChecker("yamllint", ".exe");
 
@@ -45,7 +46,7 @@ function parseYamllintParsable(
 			line: Number(match[2]),
 			column: Number(match[3]),
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "yamllint",
 			rule: match[6],
 		});

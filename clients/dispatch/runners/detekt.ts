@@ -14,6 +14,7 @@ import type {
 import { findingsResult } from "../types.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const detekt = createAvailabilityChecker("detekt", ".bat");
 
@@ -120,7 +121,7 @@ function parseDetektOutput(
 			line: lineNum,
 			column: colNum,
 			severity,
-			semantic: severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(severity),
 			tool: "detekt",
 			rule: ruleId,
 			defectClass: "style",

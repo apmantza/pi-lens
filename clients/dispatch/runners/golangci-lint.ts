@@ -27,6 +27,7 @@ import {
 	resolveAvailableOrInstall,
 } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const golangci = createAvailabilityChecker("golangci-lint", ".exe");
 
@@ -131,7 +132,7 @@ function parseGolangciJson(
 				line: issue.Pos.Line,
 				column: issue.Pos.Column,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: "golangci-lint",
 				rule: issue.FromLinter,
 				defectClass: "correctness",
