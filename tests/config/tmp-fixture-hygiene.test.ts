@@ -1552,52 +1552,56 @@ describe("tmp-fixture-hygiene", () => {
 		}
 	});
 
-	it("credits a default-parameter producer to the owner index without sparing a judged root (#5072, #3314)", () => {
-		// F2: the owner index and the baseline check share one per-file producer
-		// scan, so a family only a default parameter spells (the shape of
-		// tests/clients/test-utils.ts) has its helper as a candidate owner. #3314:
-		// one candidate that ran here keeps the entry judged, and an owner that did
-		// not run leaves it another invocation's. The widening must change neither.
-		const env = setupTestEnvironment("pi-lens-5072-owner-widening-");
-		const FAM = "pi-lens-5072-widen-";
-		try {
-			fs.writeFileSync(
-				path.join(env.tmpDir, "helper.ts"),
-				[
-					"import * as fs from 'node:fs';",
-					"import * as os from 'node:os';",
-					"import * as path from 'node:path';",
-					"export function scratchRoot(prefix = '" + FAM + "param-') {",
-					"\treturn fs.mkdtempSync(path.join(os.tmpdir(), prefix));",
-					"}",
-				].join("\n"),
-				"utf8",
-			);
-			fs.writeFileSync(
-				path.join(env.tmpDir, "other.test.ts"),
-				"import * as fs from 'node:fs';\nimport * as os from 'node:os';\nimport * as path from 'node:path';\nfs.mkdtempSync(path.join(os.tmpdir(), '" +
-					FAM +
-					"direct-'));",
-				"utf8",
-			);
-			const index = buildTmpOwnerIndex(env.tmpDir, { prefixes: 1, files: 2 });
-			const entry = FAM + "param-AbC123";
-			expect(ownersForTmpEntry(entry, index)).toEqual(["helper.ts"]);
-			const judged = (ran: string[]): string[] =>
-				tmpHygieneForeignRunEntries(
-					[entry],
-					(e) => ownersForTmpEntry(e, index),
-					new Set(ran),
-					NO_CREATORS,
+	it(
+		"credits a default-parameter producer to the owner index without sparing a judged root (#5072, #3314)",
+		() => {
+			// F2: the owner index and the baseline check share one per-file producer
+			// scan, so a family only a default parameter spells (the shape of
+			// tests/clients/test-utils.ts) has its helper as a candidate owner. #3314:
+			// one candidate that ran here keeps the entry judged, and an owner that did
+			// not run leaves it another invocation's. The widening must change neither.
+			const env = setupTestEnvironment("pi-lens-5072-owner-widening-");
+			const FAM = "pi-lens-5072-widen-";
+			try {
+				fs.writeFileSync(
+					path.join(env.tmpDir, "helper.ts"),
+					[
+						"import * as fs from 'node:fs';",
+						"import * as os from 'node:os';",
+						"import * as path from 'node:path';",
+						"export function scratchRoot(prefix = '" + FAM + "param-') {",
+						"\treturn fs.mkdtempSync(path.join(os.tmpdir(), prefix));",
+						"}",
+					].join("\n"),
+					"utf8",
 				);
-			// The sibling invocation's root: this run never loaded the owner.
-			expect(judged(["other.test.ts"])).toEqual([entry]);
-			// This run loaded the owner: the entry is judged, not spared.
-			expect(judged(["helper.ts"])).toEqual([]);
-		} finally {
-			env.cleanup();
-		}
-	});
+				fs.writeFileSync(
+					path.join(env.tmpDir, "other.test.ts"),
+					"import * as fs from 'node:fs';\nimport * as os from 'node:os';\nimport * as path from 'node:path';\nfs.mkdtempSync(path.join(os.tmpdir(), '" +
+						FAM +
+						"direct-'));",
+					"utf8",
+				);
+				const index = buildTmpOwnerIndex(env.tmpDir, { prefixes: 1, files: 2 });
+				const entry = FAM + "param-AbC123";
+				expect(ownersForTmpEntry(entry, index)).toEqual(["helper.ts"]);
+				const judged = (ran: string[]): string[] =>
+					tmpHygieneForeignRunEntries(
+						[entry],
+						(e) => ownersForTmpEntry(e, index),
+						new Set(ran),
+						NO_CREATORS,
+					);
+				// The sibling invocation's root: this run never loaded the owner.
+				expect(judged(["other.test.ts"])).toEqual([entry]);
+				// This run loaded the owner: the entry is judged, not spared.
+				expect(judged(["helper.ts"])).toEqual([]);
+			} finally {
+				env.cleanup();
+			}
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("reds new prefixes and removal of an admitted prefix from the real namespace", () => {
 		const baseline = JSON.parse(
