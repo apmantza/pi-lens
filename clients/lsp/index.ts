@@ -58,6 +58,7 @@ import {
 	withTimeout,
 } from "../deadline-utils.js";
 import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
+import { nonNegativeIntEnv } from "../env-utils.js";
 import type { LedgerHookKey } from "../hook-budgets.js";
 import { getAmbientAbortSignal } from "../safe-spawn.js";
 import { abortDeferredLspWork } from "../deferred-lsp-work.js";
@@ -334,10 +335,9 @@ export interface LSPState {
 // stop re-paying its notify budget on every file. A single successful write
 // resets the streak.
 const NOTIFY_BACKPRESSURE_BROKEN_AFTER = 3;
-const NAV_CLIENT_WAIT_TIMEOUT_MS = Math.max(
-	0,
-	Number.parseInt(process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS ?? "1500", 10) ||
-		1500,
+export const NAV_CLIENT_WAIT_TIMEOUT_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_NAV_CLIENT_WAIT_MS",
+	1500,
 );
 /**
  * #4532 gap 9: the touch debounce's ONLY remaining job is to switch the skip
@@ -347,10 +347,9 @@ const NAV_CLIENT_WAIT_TIMEOUT_MS = Math.max(
  * container bound so a deployment that turns the feature off gets no skips at
  * all.
  */
-const TOUCH_DEBOUNCE_MS = Math.max(
-	0,
-	Number.parseInt(process.env.PI_LENS_LSP_TOUCH_DEBOUNCE_MS ?? "1500", 10) ||
-		1500,
+export const TOUCH_DEBOUNCE_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_TOUCH_DEBOUNCE_MS",
+	1500,
 );
 /**
  * #4532 gap 9 F4: the per-server touch-record cap. Entries are per
@@ -504,28 +503,19 @@ function readTsserverSyncGraceMs(): number {
 }
 /** Servers named in one no-client `lsp_touch_file` row (#3873 O9). */
 const MAX_TOUCH_CANDIDATES = 8;
-const DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_THRESHOLD_MS ?? "250",
-		10,
-	) || 250,
+export const DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_THRESHOLD_MS",
+	250,
 );
-const DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_SETTLE_MS ?? "400",
-		10,
-	) || 400,
+export const DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_DIAGNOSTICS_SEMANTIC_SETTLE_MS",
+	400,
 );
 // Once the fastest client has diagnostics, remaining clients get this window before
 // we proceed with whatever results are ready. 0 disables early-unblock.
-const EARLY_UNBLOCK_GRACE_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS ?? "400",
-		10,
-	) || 400,
+export const EARLY_UNBLOCK_GRACE_MS = nonNegativeIntEnv(
+	"PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS",
+	400,
 );
 
 type OutstandingAuxNotifyWrite = {

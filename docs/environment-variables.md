@@ -1,8 +1,12 @@
 # Environment Variables
 
-The complete pi-lens environment-variable reference. Every variable here is read
-at process start; set it in the shell that launches pi (`export …` in bash,
+The complete pi-lens environment-variable reference. Most variables here are read
+once, at process start; set them in the shell that launches pi (`export …` in bash,
 `$env:VAR = "…"` / `setx …` in PowerShell), your process manager, or CI config.
+The few read on each use (`PI_LENS_CASCADE_SETTLE_WAIT_MS`, `PI_LENS_LSP_DRIFT_CHECK_MS`,
+`PI_LENS_DECLARATION_LOOK_MS`, `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH`
+and `PI_LENS_SNAPSHOT_PERSIST_SYNC`) also apply a value a host sets on `process.env`
+after start.
 
 Boolean-style variables are compared literally against `"1"` or `"0"` — only the
 exact string flips the switch.

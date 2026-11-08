@@ -22,6 +22,7 @@
  * implementation; do not re-flag in dead-code sweeps while #236 is open.
  */
 
+import { nonNegativeIntEnv } from "./env-utils.js";
 import { withinRemaining } from "./deadline-utils.js";
 import type { LSPLocation } from "./lsp/client.js";
 import type { ModuleSymbolUsedBy } from "./module-report.js";
@@ -37,13 +38,12 @@ export function _resetModuleReportConfigForTests(): void {
 	lspEnrichmentTail = Promise.resolve();
 }
 
-function getLspBudgetMs(): number {
+export function getLspBudgetMs(): number {
 	if (_lspBudgetMs === undefined) {
-		const raw = Number(process.env.PI_LENS_MODULE_REPORT_LSP_BUDGET_MS);
 		// Default OFF (0) after the #256 OOM: the live-LSP tier is opt-in until the
 		// bounded/file-scoped path is validated in a real pi session. A finite >=0
 		// value is honored verbatim (set 3000 to enable); anything else → 0.
-		_lspBudgetMs = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+		_lspBudgetMs = nonNegativeIntEnv("PI_LENS_MODULE_REPORT_LSP_BUDGET_MS", 0);
 	}
 	return _lspBudgetMs;
 }

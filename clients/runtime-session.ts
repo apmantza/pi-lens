@@ -7,6 +7,7 @@ import { rotateMessageEndAttribution } from "./message-end-attribution.js";
 import type { CacheManager } from "./cache-manager.js";
 import { createDeadline, yieldIfOverBudget } from "./cooperative-budget.js";
 import { bounded, withBudget } from "./deadline-utils.js";
+import { nonNegativeIntEnv } from "./env-utils.js";
 import type { DeadCodeResult } from "./dead-code-client.js";
 import { deadCodeIssueCount } from "./dead-code-client.js";
 import { logDeadCodeScan } from "./dead-code-logger.js";
@@ -1143,12 +1144,13 @@ function cancelScheduledManagedToolRefresh(): void {
  * `runManagedToolRefresh` against a PERSISTED per-tool stamp, so a launch loop
  * cannot escalate the weekly cadence.
  */
-function scheduleManagedToolRefresh(
+export function scheduleManagedToolRefresh(
 	dbg: SessionStartDeps["dbg"],
 	rulePack: boolean,
 ): void {
-	const delayMs = Number(
-		process.env.PI_LENS_TOOL_REFRESH_DELAY_MS ?? MANAGED_TOOL_REFRESH_DELAY_MS,
+	const delayMs = nonNegativeIntEnv(
+		"PI_LENS_TOOL_REFRESH_DELAY_MS",
+		MANAGED_TOOL_REFRESH_DELAY_MS,
 	);
 	const timer = setTimeout(
 		() => {
@@ -2626,7 +2628,7 @@ export async function handleSessionStart(
 		!processGlobals.__piLensWarmupScheduled
 	) {
 		processGlobals.__piLensWarmupScheduled = true;
-		const warmupDelayMs = Number(process.env.PI_LENS_WARMUP_DELAY_MS ?? 2000);
+		const warmupDelayMs = nonNegativeIntEnv("PI_LENS_WARMUP_DELAY_MS", 2000);
 		const warmupCwd = deps.ctxCwd ?? process.cwd();
 		const warmupDbg = deps.dbg;
 		// #1154: `.unref()` the warmup timer so — even for a warmup that IS
