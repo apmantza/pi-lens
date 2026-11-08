@@ -5,7 +5,16 @@ import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
-let actionlintAvailable = true;
+// Drives the `--version` probe both runners make through the real
+// availability seams (the resolver for actionlint, the cwd probe for credo).
+let toolAvailable = true;
+const toolNotFound = {
+	error: new Error("spawn ENOENT"),
+	status: null,
+	stdout: "",
+	stderr: "",
+	spawnFailure: { kind: "tool-not-found" },
+};
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<
@@ -13,20 +22,6 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	>()),
 	safeSpawnAsync,
 }));
-vi.mock(
-	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
-	async (importOriginal) => ({
-		...(await importOriginal<
-			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
-		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailable: () => command !== "actionlint" || actionlintAvailable,
-			isAvailableAsync: async () =>
-				command !== "actionlint" || actionlintAvailable,
-			getCommand: () => command,
-		}),
-	}),
-);
 
 type Tool = "actionlint" | "credo";
 type SpawnResult = {
@@ -57,9 +52,10 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 			);
 		safeSpawnAsync.mockImplementation(
 			async (_command: string, args: string[]) => {
-				return args.includes("--version")
+				if (!args.includes("--version")) return result;
+				return toolAvailable
 					? { error: null, status: 0, stdout: "credo 1.7", stderr: "" }
-					: result;
+					: toolNotFound;
 			},
 		);
 		const { createDispatchContext, dispatchForFile, RunnerRegistry } =
@@ -179,7 +175,7 @@ const findings = {
 describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
-		actionlintAvailable = true;
+		toolAvailable = true;
 	});
 
 	for (const tool of ["actionlint", "credo"] as const) {
@@ -211,8 +207,10 @@ describe("actionlint and credo shared runner outcome seam (#1816)", () => {
 				expect(observed.ledger[0]?.latestReasons[0]?.subject).toBe(tool);
 		});
 
+		// #5437 review F4: this toggle used to drive a checker double the
+		// actionlint runner no longer calls, so the cell passed vacuously.
 		it(`${tool}: unavailable does not report clean`, async () => {
-			actionlintAvailable = false;
+			toolAvailable = false;
 			const observed = await dispatchOutcome(tool, {
 				error: new Error("missing"),
 				status: null,
