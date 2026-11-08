@@ -83,6 +83,26 @@ describe("pilens_ast_grep_search and pilens_symbol_search expand a `paths` glob 
 		expect(answer).not.toContain("path not found");
 	}, 60_000);
 
+	it("resolves the glob against the call's own `cwd`, not the process root", async () => {
+		// The same entry means a different tree under a different root: with the
+		// tool's cwd at `src/`, `src/**/*.ts` names `src/src/**`, which is empty.
+		// An expansion that resolved against the harness cwd instead would answer
+		// with the project's two files.
+		const res = await harness.request(nextId++, "tools/call", {
+			name: "pilens_ast_grep_search",
+			arguments: {
+				pattern: "function hello($$$ARGS) { $$$BODY }",
+				lang: "typescript",
+				paths: ["src/**/*.ts"],
+				cwd: path.join(projectDir, "src"),
+			},
+		});
+		const answer = textOf(res);
+		expect((res.result as { isError?: boolean }).isError, answer).toBe(true);
+		expect(answer).toContain("no file matches");
+		expect(answer).toContain("src/**/*.ts");
+	}, 60_000);
+
 	it("publishes the expanded-`paths` contract on both schemas", async () => {
 		const listed = (await harness.request(nextId++, "tools/list", {})) as {
 			result: {

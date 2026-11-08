@@ -122,8 +122,9 @@ function literalPrefixDir(absolute: string): string {
  * `cwd` (a workspace whose own name holds glob syntax, #5047 F1) is clamped to
  * `cwd`, because that syntax is a literal the caller never wrote.
  *
- * The walk stops at `budget + 1` matches: an over-large scope is REFUSED by the
- * caller (`tools/shared.ts`), never silently narrowed (AGENTS.md shape 10).
+ * The walk stops once it holds more than `budget` matches: an over-large scope
+ * is REFUSED by the caller (`tools/shared.ts`), never silently narrowed
+ * (AGENTS.md shape 10). The reader never hands over a budget below 1.
  */
 export async function expandPathGlob(
 	entry: string,
@@ -142,7 +143,6 @@ export async function expandPathGlob(
 	) {
 		root = cwdAbsolute;
 	}
-	if (budget < 1) return { entries: [], refusal: "over-cap", root };
 
 	// The same decision `collectSourceFilesAsync` applies to the word index
 	// `symbol_search` searches: `.gitignore`, the `.pi-lens.json` exclusions, and

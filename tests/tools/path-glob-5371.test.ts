@@ -77,6 +77,10 @@ function makeTree(ws: string): { inScope: string[]; outside: string } {
 		["src/a.js", "export function hello() { return 3; }\n"],
 		["src/notes.md", "# hello\n"],
 		["src/generated/skip.ts", "export function hello() { return 4; }\n"],
+		// A directory the shared walker's own excluded names cover, with no
+		// `.gitignore` entry: pruning it is `shouldRecurseIntoDir`'s decision, not
+		// the ignore matcher's, and the glob answers the same way the walkers do.
+		["src/coverage/covered.ts", "export function hello() { return 6; }\n"],
 		["outside.ts", "export function hello() { return 5; }\n"],
 	];
 	for (const [relative, content] of files) {
@@ -225,6 +229,9 @@ describe("#5371 the shared `paths` reader expands a glob once for every tool", (
 			expect(targets.some((target) => target.includes("generated"))).toBe(
 				false,
 			);
+			// The other half of the walkers' decision: a directory the shared
+			// excluded names cover is pruned before its files are even looked at.
+			expect(targets.some((target) => target.includes("coverage"))).toBe(false);
 		} finally {
 			env.cleanup();
 		}
@@ -372,6 +379,63 @@ describe("#5371 the shared `paths` reader expands a glob once for every tool", (
 			// GLOB entry gets the "no file matches" wording.
 			expect(answer).toContain("path not found");
 			expect(answer).not.toContain("no file matches");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps a workspace whose own name holds glob syntax inside its own root", async () => {
+		// #5047 F1, on the expansion side: the workspace directory itself is
+		// `a[b]`, so the literal prefix of `src/**/*.ts` under it carries a
+		// bracket. The prefix is a real directory only below `cwd`; above it the
+		// syntax is a literal the caller never wrote, so the walk is clamped to
+		// `cwd` instead of chasing a pattern-named directory that does not exist.
+		const env = setupTestEnvironment("pi-lens-5371-bracket-");
+		try {
+			const ws = path.join(env.tmpDir, "a[b]");
+			makeTree(ws);
+			const astGrep = astGrepDouble();
+			const result = await run(
+				createAstGrepOutlineTool(astGrep.client),
+				{ lang: "typescript", paths: ["src/**/*.ts"] },
+				ws,
+			);
+			const answer = text(result);
+			expect(result.isError, answer).toBeFalsy();
+			expect((astGrep.outline.mock.calls[0][0] as string[]).sort()).toEqual([
+				path.join(ws, "src", "a.ts"),
+				path.join(ws, "src", "sub", "b.ts"),
+			]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("counts literal entries against the cap the next glob sees", async () => {
+		// The budget is what is LEFT of the cap, not the whole cap: 99 literal
+		// entries leave room for one, so a glob matching two is over it and the
+		// call is refused rather than truncating to the one that fit.
+		const env = setupTestEnvironment("pi-lens-5371-budget-");
+		try {
+			makeTree(env.tmpDir);
+			const astGrep = astGrepDouble();
+			const literal = Array.from(
+				{ length: MAX_PATHS_ENTRIES - 1 },
+				(_, index) => `src/f${index}.ts`,
+			);
+			const result = await run(
+				createAstGrepSearchTool(astGrep.client),
+				{
+					pattern: "foo($X)",
+					lang: "typescript",
+					paths: [...literal, "src/**/*.ts"],
+				},
+				env.tmpDir,
+			);
+			const answer = text(result);
+			expect(result.isError).toBe(true);
+			expect(answer).toContain("more than 100 files");
+			expect(astGrep.search.mock.calls.length, "no child dispatch").toBe(0);
 		} finally {
 			env.cleanup();
 		}
