@@ -24,6 +24,7 @@ import {
 	resolveToolCommand,
 } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
+import { semanticFor } from "../types.js";
 
 const ESLINT_PROBE_BUDGET_MS = 5000;
 
@@ -104,7 +105,7 @@ function parseEslintJson(
 					line: msg.line ?? 1,
 					column: msg.column ?? 1,
 					severity,
-					semantic: severity === "error" ? "blocking" : "warning",
+					semantic: semanticFor(severity),
 					tool: "eslint",
 					rule: msg.ruleId ?? undefined,
 					fixable: !!msg.fix,

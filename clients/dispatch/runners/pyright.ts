@@ -22,7 +22,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { faultSkip } from "../types.js";
+import { faultSkip, semanticFor } from "../types.js";
 import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
@@ -212,7 +212,7 @@ export function parsePyrightOutput(data: any, _filePath: string): Diagnostic[] {
 			severity: normalizePyrightSeverity(diag.severity),
 			// Blocking classification stays error-only — reviving the info tier
 			// must never widen what fails a turn.
-			semantic: diag.severity === "error" ? "blocking" : "warning",
+			semantic: semanticFor(normalizePyrightSeverity(diag.severity)),
 			tool: "pyright",
 			rule: diag.rule,
 		});

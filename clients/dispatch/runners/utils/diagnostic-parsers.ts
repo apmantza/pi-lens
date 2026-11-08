@@ -11,6 +11,7 @@ import { stripAnsi } from "../../../sanitize.js";
 
 import { getAutofixCapability } from "../../../tool-policy.js";
 import type { DefectClass, Diagnostic } from "../../types.js";
+import { semanticFor } from "../../types.js";
 
 export interface LineParserConfig {
 	/** Tool name for diagnostic identification */
@@ -99,7 +100,7 @@ function createLineParser(config: LineParserConfig) {
 				line: lineNum,
 				column: colNum,
 				severity,
-				semantic: severity === "error" ? "blocking" : "warning",
+				semantic: semanticFor(severity),
 				tool: config.tool,
 				rule: config.extractRule?.(match),
 				defectClass: config.defectClass,
