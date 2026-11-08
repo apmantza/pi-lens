@@ -31,6 +31,7 @@ describe("opengrep report outcomes (#2943)", () => {
 	type Expected = {
 		success: boolean;
 		reason?: string;
+		summary?: string;
 		partial?: true;
 		findingCount: number;
 		coverageCount: number;
@@ -52,17 +53,22 @@ describe("opengrep report outcomes (#2943)", () => {
 		findingCount: 0,
 		coverageCount: 0,
 		recordKind: "refused",
-		...(recordReason ? { recordReason } : {}),
+		...(recordReason ? { recordReason, summary: recordReason } : {}),
 	});
-	const usable = (partial = false): Expected => ({
+	// The result's own `summary` and the ledger row's reason are the same string
+	// on every failure and partial lane, so each row pins both from one value.
+	const usable = (
+		partial = false,
+		partialReason = "invalid UTF-8",
+	): Expected => ({
 		success: true,
 		reason: undefined,
-		...(partial ? { partial: true as const } : {}),
+		...(partial ? { partial: true as const, summary: partialReason } : {}),
 		...(!partial ? { partial: undefined } : {}),
 		findingCount: 1,
 		coverageCount: 1,
 		recordKind: partial ? "partial" : "none",
-		...(partial ? { recordReason: "invalid UTF-8" } : {}),
+		...(partial ? { recordReason: partialReason } : {}),
 	});
 
 	const outcomeRows: Row[] = [
@@ -99,7 +105,11 @@ describe("opengrep report outcomes (#2943)", () => {
 			report: report([
 				{ level: "warn", type: "Out-of-memory", message: "memory pressure" },
 			]),
-			expected: { ...usable(true), recordReason: "memory pressure" },
+			expected: {
+				...usable(true),
+				recordReason: "memory pressure",
+				summary: "memory pressure",
+			},
 		},
 		{
 			name: "error SemgrepError",
@@ -189,32 +199,52 @@ describe("opengrep report outcomes (#2943)", () => {
 			expected: refused("refused", "fatal"),
 		},
 		{
+			// #5411: a non-zero exit that left no report did not scan, and the
+			// reason now carries the shared `formatToolFailure` wording (#1816),
+			// which names the exit status instead of whatever the CLI happened to
+			// print last.
 			name: "exit 137 without report",
 			exitCode: 137,
-			expected: { ...refused("no-report"), recordReason: "no report produced" },
+			expected: {
+				...refused("no-report"),
+				summary: "opengrep exited 137 with no report file: no report produced",
+				recordReason:
+					"opengrep exited 137 with no report file: no report produced",
+			},
 		},
 		{
+			// #5411: the cell that divided the report scanners. A CLI that exits 0
+			// without writing its report is an empty run for gitleaks, trivy and
+			// jscpd, and opengrep read it as a refusal. One verdict: a successful
+			// empty scan, with no degradation row (an empty run is not a
+			// degradation) and no coverage claim, so `fresh-fetch` still renders
+			// `opengrep — not run (no report produced)`.
 			name: "missing report",
 			exitCode: 0,
-			expected: { ...refused("no-report"), recordReason: "no report produced" },
+			expected: {
+				success: true,
+				reason: undefined,
+				partial: undefined,
+				summary: "no report produced",
+				findingCount: 0,
+				coverageCount: 0,
+				recordKind: "none",
+			},
 		},
 		{
 			name: "spawn ENOENT",
 			exitCode: null,
 			error: new Error("spawn opengrep ENOENT"),
-			expected: {
-				...refused("spawn-failed"),
-				recordReason: "spawn: spawn opengrep ENOENT",
-			},
+			expected: refused("spawn-failed", "spawn: spawn opengrep ENOENT"),
 		},
 		{
 			name: "directory report path",
 			exitCode: 0,
 			report: "directory",
-			expected: {
-				...refused("crashed"),
-				recordReason: "EISDIR: illegal operation on a directory, read",
-			},
+			expected: refused(
+				"crashed",
+				"EISDIR: illegal operation on a directory, read",
+			),
 		},
 	];
 
@@ -250,6 +280,7 @@ describe("opengrep report outcomes (#2943)", () => {
 				const actual = {
 					success: result.success,
 					reason: result.reason,
+					summary: result.summary,
 					partial: result.partial,
 					findingCount: result.findings.length,
 					coverageCount: result.analyzedFiles?.length ?? 0,

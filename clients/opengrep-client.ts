@@ -53,15 +53,15 @@
  */
 
 import type { AnalysedRootSignal } from "./analysed-root.js";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import { mkdtempSync } from "node:fs";
 import { resolveOpengrepConfig } from "./opengrep-config.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { stripPackRuleIdPrefix } from "./opengrep-rule-pack.js";
 import { getScratchTreeDirNames } from "./scratch-tree-policy.js";
+import { LEDGER_FIELD_MAX } from "./ledger-bounds.js";
 import { realpathOrResolve } from "./path-utils.js";
-import { scannerReportParentDir } from "./scanner-temp-root.js";
+import type { ReportScanFailure, ReportScanOutcome } from "./report-scan.js";
+import { runReportScan } from "./report-scan.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 
@@ -109,6 +109,16 @@ export interface OpengrepResult extends AnalysedRootSignal {
 const EMPTY_RESULT: Omit<OpengrepResult, "scannedAt"> = {
 	success: false,
 	findings: [],
+};
+
+/** How each lifecycle failure outcome spells itself in `OpengrepResult.reason`. */
+const OPENGREP_FAILURE_REASONS: Record<
+	ReportScanOutcome,
+	"spawn-failed" | "no-report" | "crashed"
+> = {
+	"spawn-error": "spawn-failed",
+	"no-report": "no-report",
+	crashed: "crashed",
 };
 
 // opengrep loads/compiles a full rule pack (1000+ rules for `auto`) before
@@ -162,147 +172,143 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 		return this.dedupeScan(targetDir, () => this.runScan(targetDir));
 	}
 
-	private async runScan(cwd: string): Promise<OpengrepResult> {
-		const scannedAt = new Date().toISOString();
+	private runScan(cwd: string): Promise<OpengrepResult> {
 		const bin = this.binaryPath ?? "opengrep";
 		const resolved = OpengrepClient.resolveConfig(cwd);
 		const packPath =
 			resolved.source === "pack" ? resolved.configArg : undefined;
-		const outDir = mkdtempSync(
-			path.join(scannerReportParentDir(), "pi-lens-opengrep-"),
-		);
-		const reportPath = path.join(outDir, "opengrep-report.json");
-		try {
-			const result = await safeSpawnAsync(
-				bin,
-				[
-					"scan",
-					"--config",
-					resolved.configArg ?? "auto",
-					"--json",
-					"--json-output",
-					reportPath,
-					// Never fail the scan on findings — this is a read, not a gate
-					// (matches gitleaks's `--exit-code 0` intent).
-					"--no-error",
-					"--quiet",
-					"--disable-version-check",
-					// #1562 class fix: opengrep's own `.gitignore` respect covers the
-					// common case (scratch trees are usually gitignored), but not a
-					// scratch/cache tree that ISN'T (e.g. an un-gitignored worktree
-					// cache) — `--exclude` is semgrep-compatible, so a slash-free
-					// pattern matches that directory name anywhere in the tree,
-					// independent of gitignore. Same `EXCLUDED_DIRS`-derived list
-					// gitleaks/trivy use, so the three scanners can't drift apart.
-					// Opengrep's git-mode walk already omits nested linked checkouts.
-					// Do not turn each registration into a wcmatch pattern: hundreds of
-					// patterns make the matcher quadratic and can hit its pattern limit.
-					...getScratchTreeDirNames().flatMap((pattern) => [
-						"--exclude",
-						pattern,
-					]),
-					cwd,
-				],
-				{ cwd, timeout: SCAN_TIMEOUT_MS },
-			);
-
-			if (result.error) {
-				this.log(`Scan error: ${result.error.message}`);
-				const reason = `${result.failure ?? "spawn-failed"}: ${result.error.message}`;
-				this.recordRefusal(cwd, reason, result.status);
-				return {
-					...EMPTY_RESULT,
-					scannedAt,
-					reason: "spawn-failed",
-					summary: reason.slice(0, 200),
-				};
-			}
-
-			if (!fs.existsSync(reportPath)) {
-				const reason =
-					(result.stderr ?? "").trim().split("\n")[0] || "no report produced";
-				this.recordRefusal(cwd, reason, result.status);
-				return {
-					...EMPTY_RESULT,
-					scannedAt,
-					reason: "no-report",
-					summary: reason,
-				};
-			}
-
-			const raw = fs.readFileSync(reportPath, "utf-8");
-			const report = readOpengrepReport(raw);
-			// A report that exists is judged by its own content whatever the exit
-			// status, the policy `runReportScan` gives gitleaks and trivy (#5411):
-			// opengrep is run with `--no-error`, and an error that matters is in the
-			// report's `errors`, which `readOpengrepReport` refuses or marks partial.
-			if (report.verdict === "refused") {
-				this.recordRefusal(cwd, report.reason, result.status);
-				return {
-					...EMPTY_RESULT,
-					scannedAt,
-					reason: "refused",
-					summary: report.reason.slice(0, 200),
-				};
-			}
-			if (report.partial) {
-				recordDegradationOnce({
-					kind: "opengrep-partial-scan",
-					subject: cwd,
-					reason: report.partial.reason,
-					metadata: { status: result.status },
-				});
-			}
-			// #2154: the one opengrep site that parsed a scan of this root.
-			return {
-				success: true,
-				// A warning-level partial report with no scanned paths proves that
-				// the producer went cold. A complete empty report still proves a
-				// genuine scan, so it is still "analysed" for the render layer's
-				// analysed-and-found-nothing state (#2970) — but it carries no
-				// FILE-level authority, which `analyzedFiles: []` below is what
-				// says.
-				analyzed: !report.partial || report.scanned.length > 0,
-				// #2962: the set is ALWAYS carried, empty included. "This producer
-				// declared its coverage and it was zero files" and "this producer
-				// declares no coverage at all" are different facts; dropping the
-				// empty array collapses them into the second, and the second is
-				// what hands a zero-file scan whole-root retirement authority
-				// downstream (`runnerRetirementDecision`, tools/lens-diagnostics.ts).
-				analyzedFiles: report.scanned.map((file) =>
-					realpathOrResolve(path.resolve(cwd, file)),
+		return runReportScan<OpengrepResult>("opengrep", {
+			spawn: ({ reportPath }) =>
+				safeSpawnAsync(
+					bin,
+					[
+						"scan",
+						"--config",
+						resolved.configArg ?? "auto",
+						"--json",
+						"--json-output",
+						reportPath,
+						// Never fail the scan on findings — this is a read, not a gate
+						// (matches gitleaks's `--exit-code 0` intent).
+						"--no-error",
+						"--quiet",
+						"--disable-version-check",
+						// #1562 class fix: opengrep's own `.gitignore` respect covers the
+						// common case (scratch trees are usually gitignored), but not a
+						// scratch/cache tree that ISN'T (e.g. an un-gitignored worktree
+						// cache) — `--exclude` is semgrep-compatible, so a slash-free
+						// pattern matches that directory name anywhere in the tree,
+						// independent of gitignore. Same `EXCLUDED_DIRS`-derived list
+						// gitleaks/trivy use, so the three scanners can't drift apart.
+						// Opengrep's git-mode walk already omits nested linked checkouts.
+						// Do not turn each registration into a wcmatch pattern: hundreds of
+						// patterns make the matcher quadratic and can hit its pattern limit.
+						...getScratchTreeDirNames().flatMap((pattern) => [
+							"--exclude",
+							pattern,
+						]),
+						cwd,
+					],
+					{ cwd, timeout: SCAN_TIMEOUT_MS },
 				),
-				...(report.partial ? { partial: true } : {}),
-				...(report.partial ? { summary: report.partial.reason } : {}),
-				...(report.partial && report.scanned.length === 0
-					? { reason: "partial-no-paths" as const }
-					: {}),
-				// The cached pack is loaded from a path, so Opengrep prefixes its rule
-				// ids with it; report the registry-form id instead.
-				findings: packPath
-					? report.findings.map((finding) => ({
-							...finding,
-							checkId: stripPackRuleIdPrefix(finding.checkId, packPath),
-						}))
-					: report.findings,
-				scannedAt,
-			};
-		} catch (err) {
-			const reason = err instanceof Error ? err.message : String(err);
-			this.recordRefusal(cwd, reason, undefined);
-			return {
-				...EMPTY_RESULT,
-				scannedAt,
-				reason: "crashed",
-				summary: reason.slice(0, 200),
-			};
-		} finally {
-			try {
-				fs.rmSync(outDir, { recursive: true, force: true });
-			} catch {
-				// non-fatal
-			}
-		}
+			// The report's own content is the verdict, whatever the exit status
+			// (#5411: the policy `runReportScan` gives gitleaks and trivy): opengrep
+			// runs with `--no-error`, and an error that matters is in the report's
+			// `errors`, which `readOpengrepReport` refuses or marks partial.
+			parse: (raw, scannedAt, run) => {
+				const report = readOpengrepReport(raw);
+				if (report.verdict === "refused") {
+					this.recordRefusal(cwd, report.reason, run.status);
+					return {
+						...EMPTY_RESULT,
+						scannedAt,
+						reason: "refused",
+						summary: report.reason.slice(0, LEDGER_FIELD_MAX),
+					};
+				}
+				if (report.partial) {
+					recordDegradationOnce({
+						kind: "opengrep-partial-scan",
+						subject: cwd,
+						reason: report.partial.reason,
+						metadata: { status: run.status },
+					});
+				}
+				// #2154: the one opengrep site that parsed a scan of this root.
+				return {
+					success: true,
+					// A warning-level partial report with no scanned paths proves that
+					// the producer went cold. A complete empty report still proves a
+					// genuine scan, so it is still "analysed" for the render layer's
+					// analysed-and-found-nothing state (#2970) — but it carries no
+					// FILE-level authority, which `analyzedFiles: []` below is what
+					// says.
+					analyzed: !report.partial || report.scanned.length > 0,
+					// #2962: the set is ALWAYS carried, empty included. "This producer
+					// declared its coverage and it was zero files" and "this producer
+					// declares no coverage at all" are different facts; dropping the
+					// empty array collapses them into the second, and the second is
+					// what hands a zero-file scan whole-root retirement authority
+					// downstream (`runnerRetirementDecision`, tools/lens-diagnostics.ts).
+					analyzedFiles: report.scanned.map((file) =>
+						realpathOrResolve(path.resolve(cwd, file)),
+					),
+					...(report.partial ? { partial: true } : {}),
+					...(report.partial ? { summary: report.partial.reason } : {}),
+					...(report.partial && report.scanned.length === 0
+						? { reason: "partial-no-paths" as const }
+						: {}),
+					// The cached pack is loaded from a path, so Opengrep prefixes its rule
+					// ids with it; report the registry-form id instead.
+					findings: packPath
+						? report.findings.map((finding) => ({
+								...finding,
+								checkId: stripPackRuleIdPrefix(finding.checkId, packPath),
+							}))
+						: report.findings,
+					scannedAt,
+				};
+			},
+			fail: (failure) =>
+				failure.success
+					? {
+							// A zero exit that wrote no report is an empty run, and it claims
+							// no coverage: `analyzed: false` and an empty declared set, so the
+							// render layer shows `opengrep — not run (<summary>)` and a zero-file
+							// scan never carries whole-root retirement authority (#2962).
+							success: true,
+							analyzed: false,
+							analyzedFiles: [],
+							findings: [],
+							scannedAt: failure.scannedAt,
+							summary: failure.summary,
+						}
+					: {
+							success: false,
+							findings: [],
+							scannedAt: failure.scannedAt,
+							reason: OPENGREP_FAILURE_REASONS[failure.outcome],
+							summary: this.failureReason(failure),
+						},
+			recordFailure: (failure) =>
+				this.recordRefusal(cwd, this.failureReason(failure), failure.status),
+			log: this.log,
+		});
+	}
+
+	/**
+	 * opengrep's reason for a scan that never reached its parse: the spawn
+	 * classification beside the spawn error's message when the child never ran,
+	 * and the lifecycle's own `formatToolFailure` reason (#1816) for every other
+	 * cell. The result's `summary` and the `opengrep-scan-refused` row carry the
+	 * same string, so both read it from here.
+	 */
+	private failureReason(failure: ReportScanFailure): string {
+		if (failure.outcome !== "spawn-error") return failure.summary;
+		return `${failure.spawnFailure ?? "spawn-failed"}: ${failure.errorMessage ?? ""}`.slice(
+			0,
+			LEDGER_FIELD_MAX,
+		);
 	}
 
 	private recordRefusal(

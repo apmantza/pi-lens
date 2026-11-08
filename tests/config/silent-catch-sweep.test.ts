@@ -695,10 +695,13 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :362, :477, :521, :528, :611
 	"clients/jscpd-client.ts": {
-		silent: 5,
-		identities: "3950a10dc006ea1a",
+		// 5 -> 2 (#5411): its parse no longer swallows a broken report and the report
+		// directory is the shared lifecycle's, so three of its five silent handlers are
+		// gone; what is left predates this round.
+		silent: 2,
+		identities: "4499d017be2fe10b",
 		reason: PRE_RULE,
-	}, // :107, :118, :507, :513, :571
+	}, // :111, :122
 	"clients/json-cache-read.ts": {
 		silent: 4,
 		identities: "83a11b3167dae771",
@@ -925,10 +928,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :224, :257, :843
 	"clients/opengrep-client.ts": {
-		silent: 3,
-		identities: "2062917950cbdb52",
+		// 3 -> 2 (#5411): its report-directory cleanup moved into the shared
+		// lifecycle, which carries its own admitted row.
+		silent: 2,
+		identities: "a8f5da5afab7117a",
 		reason: PRE_RULE,
-	}, // :291, :328, :387
+	}, // :352, :411
 	"clients/out-of-band-changes.ts": {
 		silent: 3,
 		identities: "f6a8dcd9fdd0254e",
@@ -1407,7 +1412,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
  * 1,169.
  * It moves only downward from here.
  */
-const PINNED_TOTAL = 1169;
+// 1169 -> 1166 (#5411): jscpd gave up three silent handlers and opengrep one
+// when their report lifecycles moved into `clients/report-scan.ts`, which
+// admits one of its own.
+// 1166 -> 1165 (#5440 r2): that crash guard records at its own top level now,
+// so the sweep reads it as recorded and `report-scan.ts` admits no row.
+const PINNED_TOTAL = 1165;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;
