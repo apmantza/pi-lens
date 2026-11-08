@@ -62,6 +62,16 @@ const finderUnspawnableResult = {
 	spawnFailure: { kind: "permission-denied" },
 };
 
+/** The finder is not on PATH (ENOENT, the `tool-not-found` kind): still the prober, not the manager. */
+const finderAbsentResult = {
+	stdout: "",
+	stderr: "",
+	status: null,
+	error: Object.assign(new Error("spawn which ENOENT"), { code: "ENOENT" }),
+	failure: "spawn",
+	spawnFailure: { kind: "tool-not-found" },
+};
+
 const okResult = (pm: string) => ({ stdout: `${pm}\n`, stderr: "", status: 0 });
 
 function finder(): string {
@@ -194,6 +204,33 @@ describe("package-manager availability (#1496)", () => {
 		const probesBefore = probes();
 		expect(await resolveNodePackageManager(dir)).toBe("npm");
 		expect(probes()).toBe(probesBefore);
+
+		advancePastCooldown();
+		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
+			cmd === finder() && args[0] === "pnpm"
+				? okResult("pnpm")
+				: notFoundResult,
+		);
+		expect(await resolveNodePackageManager(dir)).toBe("pnpm");
+	});
+
+	/**
+	 * Recurrence: shape 83, the finder-ENOENT direction (review r1 F3 on #5403).
+	 * An absent finder is `tool-not-found`, which `classifyFinderFailure` reads as
+	 * transient. No cell pinned that: a finder that kept `tool-not-found` as
+	 * `missing` passed the whole suite, so pnpm stayed latched absent.
+	 */
+	it("a finder that is absent (ENOENT) is a transient rejection too: pnpm is found once it runs", async () => {
+		safeSpawnAsync.mockImplementation(async () => finderAbsentResult);
+		const { resolveNodePackageManager, _resetPackageManagerCache } =
+			await import("../../clients/package-manager.js");
+		_resetPackageManagerCache();
+		const dir = await emptyProjectDir();
+		const fs = await import("node:fs");
+		const path = await import("node:path");
+		fs.writeFileSync(path.join(dir, "pnpm-lock.yaml"), "");
+
+		expect(await resolveNodePackageManager(dir)).toBe("npm");
 
 		advancePastCooldown();
 		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>

@@ -105,6 +105,16 @@ const finderUnspawnableResult = {
 	spawnFailure: { kind: "permission-denied" },
 };
 
+/** The finder is not on PATH (ENOENT, the `tool-not-found` kind): still the prober, not `java`. */
+const finderAbsentResult = {
+	stdout: "",
+	stderr: "",
+	status: null,
+	error: Object.assign(new Error("spawn which ENOENT"), { code: "ENOENT" }),
+	failure: "spawn",
+	spawnFailure: { kind: "tool-not-found" },
+};
+
 function finder(): string {
 	return process.platform === "win32" ? "where" : "which";
 }
@@ -417,6 +427,37 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 			verdict: "available",
 			outcome: "success",
 		});
+	});
+
+	// Recurrence: shape 83, the finder-ENOENT direction (review r1 F3 on #5403).
+	// An absent finder is `tool-not-found`; no cell pinned it as transient, so a
+	// finder that kept it as `missing` passed the suite and java stayed latched.
+	it("a finder that is absent (ENOENT) is a transient rejection, retried after the cooldown", async () => {
+		safeSpawnAsync.mockImplementation(async () => finderAbsentResult);
+		const { resolveJavaRuntimeEnv } =
+			await import("../../../clients/lsp/jvm-runtime.js");
+
+		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
+		expect(decisions().at(-1)?.metadata).toMatchObject({
+			tool: "java",
+			verdict: "unavailable",
+			outcome: "transient",
+			cause: "probe-rejected",
+			latched: false,
+			retryAfterMs: TRANSIENT_BASE_COOLDOWN_MS,
+			classifiedBy: "caller",
+		});
+
+		advancePastCooldown();
+		safeSpawnAsync.mockImplementation(async (cmd: string, args: string[]) =>
+			cmd === finder() && args[0] === "java" ? okResult : notFoundResult,
+		);
+		expect(await resolveJavaRuntimeEnv()).toBeUndefined();
+		expect(
+			safeSpawnAsync.mock.calls.filter(
+				([cmd, args]) => cmd === finder() && args[0] === "java",
+			),
+		).toHaveLength(2);
 	});
 
 	it("recovers after a transient failure: a later successful probe is used, not the stall", async () => {
