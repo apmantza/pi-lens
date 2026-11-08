@@ -34,6 +34,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { hasTomlTable, normalizeToml } from "./cargo-manifest.js";
+import { readFileContent } from "./dispatch/runners/utils.js";
 import { pathsEqual, realpathOrResolve, walkUpDirs } from "./path-utils.js";
 
 export type ToolConfigId =
@@ -132,16 +133,6 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 	// shfmt's only config source, and the formatters' indentation opt-out.
 	editorconfig: { files: [".editorconfig"] },
 };
-
-function readText(file: string): string | undefined {
-	try {
-		return fs.readFileSync(file, "utf8");
-	} catch {
-		// none: a missing or unreadable file is no evidence of config; the tool
-		// cannot read it either, and nothing here acts on the absence.
-		return undefined;
-	}
-}
 
 /** PEP 503 name: case-insensitive, runs of `-`, `_`, `.` are one. */
 function normalizeDistributionName(name: string): string {
@@ -300,14 +291,14 @@ function findInDir(
 	}
 	for (const { file, table } of spec.tomlTables ?? []) {
 		const candidate = path.join(dir, file);
-		const content = readText(candidate);
+		const content = readFileContent(candidate);
 		if (content !== undefined && hasTomlTable(content, table)) {
 			return { file: candidate, dir, source: "toml-table" };
 		}
 	}
 	for (const { file, section } of spec.iniSections ?? []) {
 		const candidate = path.join(dir, file);
-		const content = readText(candidate);
+		const content = readFileContent(candidate);
 		if (content !== undefined && hasIniSection(content, section)) {
 			return { file: candidate, dir, source: "ini-section" };
 		}
@@ -316,7 +307,7 @@ function findInDir(
 		const wanted = normalizeDistributionName(spec.dependency.name);
 		for (const file of spec.dependency.files) {
 			const candidate = path.join(dir, file);
-			const content = readText(candidate);
+			const content = readFileContent(candidate);
 			if (
 				content !== undefined &&
 				dependencyNames(file, content).includes(wanted)
