@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the default branch is read by real `git for-each-ref` and `git show` against a real repository; a stubbed git cannot show which ref and blob the read resolves.
 /**
  * #5087 S2: the per-edit complexity delta against the default branch.
  *

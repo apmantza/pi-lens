@@ -1,3 +1,4 @@
+// flake-shape: in-process-mock — the analyzer bootstrap (the shared seam double), the metrics-history writer and the baseline capture are held open so a session replacement can land inside each await; the coordinator, its scope and the store are real.
 /**
  * #4220 / #5087 S2a: the `tool_call` complexity baseline is written in the
  * session that took it, or not at all.

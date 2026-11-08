@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the witness's repository is made with real git, and the edit's default-branch read runs real `git` children through pi's own tool path.
 /**
  * #5087 S2 witness: an edit's tool result names a function the edit made
  * worse than the default branch.

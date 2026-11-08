@@ -209,6 +209,12 @@ export type DegradationKind =
 	 */
 	| "change-log-lock-unavailable"
 	/**
+	 * #5087: an edit's complexity delta threw (a parser or store failure),
+	 * so its tool result carries no delta; the edit's own output is
+	 * unaffected. Subject is the edited file; once per file per session.
+	 */
+	| "complexity-delta-failed"
+	/**
 	 * A per-file touch skipped a language server because that server is in the
 	 * breaker cooldown or is latched permanently broken (#1743). During an
 	 * outage this fires once per file per touch, so the count here is the exact
@@ -471,12 +477,6 @@ export type DegradationKind =
 	 * language has no grammar; once per session.
 	 */
 	| "function-metrics-language-unsupported"
-	/**
-	 * #5087: an edit's complexity delta threw (a parser or store failure),
-	 * so its tool result carries no delta; the edit's own output is
-	 * unaffected. Subject is the edited file; once per file per session.
-	 */
-	| "complexity-delta-failed"
 	/**
 	 * The project-snapshot persist seam detected durable meta/body evidence
 	 * failing the #2008 integrity gate — the meta's recorded gz size no longer

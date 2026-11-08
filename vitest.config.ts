@@ -706,6 +706,8 @@ export const wallClockBudgetInclude = [
 	"tests/clients/memory-sampler-root-discriminator.test.ts",
 	"tests/clients/memory-sampler.test.ts",
 	"tests/clients/metrics-history-stderr.test.ts",
+	// #5087: a real git read of the default branch (flake-shape admission).
+	"tests/clients/metrics/complexity-baseline.test.ts",
 	// #4268 MED-8: a real `npx` child is the observation (the spawned process's
 	// own environment), so it runs in the quiet serialized phase (flake-shape
 	// admission).
@@ -846,6 +848,8 @@ export const wallClockBudgetInclude = [
 	// with vi.waitFor; the fake shellcheck's first run sleeps past the 5 s
 	// collect-later threshold (flake-shape admission).
 	"tests/index-4943-telemetry-session-stamp.test.ts",
+	// #5087: the witness's real git repository and read (flake-shape admission).
+	"tests/index-5087-complexity-delta-witness.test.ts",
 	// #5108: a real bash write plus a handler held past the live 500 ms bound
 	// (flake-shape admission); the git children ride in the serialized lane.
 	"tests/index-5108-opaque-blocker-disclosure-witness.test.ts",

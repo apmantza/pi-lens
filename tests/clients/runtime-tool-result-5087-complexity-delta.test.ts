@@ -1,3 +1,4 @@
+// flake-shape: in-process-mock — clients/pipeline stands in for per-file dispatch (it spawns every linter), so the case decides the blocker axis; the handler, store and re-measure are real.
 /**
  * #5087 S2: when `tool_result` adds the complexity delta, and when it holds
  * it back.
