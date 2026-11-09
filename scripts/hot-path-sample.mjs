@@ -64,11 +64,11 @@
  * `PI_LENS_HOME` and `PILENS_DATA_DIR` are pinned under `--scratch` before the
  * first import, so nothing reaches the real home.
  */
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import { scratchHomeEnv } from "./lib/scratch-home-env.mjs";
 
 const SMALL_LINES = 40;
@@ -102,36 +102,27 @@ function fixtureSource(lines) {
 
 /**
  * Make `project` a git repository whose `main` holds every file in it, so the
- * edit row reads the default branch for real. `GIT_CEILING_DIRECTORIES` keeps
- * git inside `--scratch`, and the identity is passed per command, so no
- * config outside the pinned home is read or written.
+ * edit row reads the default branch for real. The fixture Git environment
+ * (`git-fixture-env.mjs`) reads only the repository's fixture config, so no
+ * user config is read and no background maintenance is forked; the identity
+ * is passed per command, and a failing command throws.
  */
 function commitFixture(project) {
-	const env = {
-		...process.env,
-		GIT_CEILING_DIRECTORIES: path.dirname(project),
-		GIT_CONFIG_NOSYSTEM: "1",
-	};
-	for (const args of [
-		["init", "-q", "-b", "main"],
-		["add", "-A"],
-		[
-			"-c",
-			"user.name=hot-path",
-			"-c",
-			"user.email=hot-path@example.invalid",
-			"-c",
-			"commit.gpgsign=false",
-			"commit",
-			"-q",
-			"-m",
-			"fixture",
-		],
-	]) {
-		const git = spawnSync("git", args, { cwd: project, env, encoding: "utf8" });
-		if (git.status !== 0)
-			throw new Error(`git ${args.at(-1)} failed: ${git.stderr ?? git.error}`);
-	}
+	const git = (args) =>
+		gitExecFileSync(args, { cwd: project, stdio: "pipe", encoding: "utf8" });
+	git(["init", "-q", "-b", "main"]);
+	git(["add", "-A"]);
+	git([
+		"-c",
+		"user.name=hot-path",
+		"-c",
+		"user.email=hot-path@example.invalid",
+		"commit",
+		"-q",
+		"--no-gpg-sign",
+		"-m",
+		"fixture",
+	]);
 }
 
 /**

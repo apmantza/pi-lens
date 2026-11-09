@@ -78,12 +78,14 @@ export const MAX_ADVISORY_BYTES = 240;
 /** A default-branch blob larger than this is not read. */
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
 /**
- * Input over this many bytes is not measured. Keying a file's functions is
- * superlinear in their count, and a parse cannot be interrupted. Measured
- * with `measureFunctionTable` on the built twin, dense one-line functions
- * (`function aN(){}`), after a warm-up call: 128 KiB 267 ms, 256 KiB 430 ms,
- * 512 KiB 1401 ms, 1 MiB 5006 ms. 256 KiB keeps the worst case near the
- * first touch's 500 ms budget and is far above a hand-written source file.
+ * An edit's file, or a default-branch blob, over this many bytes is not
+ * measured here (the first touch's table comes from the analyzer's own
+ * measure). Keying a file's functions is superlinear in their count, and a
+ * parse cannot be interrupted. Measured with `measureFunctionTable` on the
+ * built twin, dense one-line functions (`function aN(){}`), after a warm-up
+ * call: 128 KiB 267 ms, 256 KiB 430 ms, 512 KiB 1401 ms, 1 MiB 5006 ms.
+ * 256 KiB keeps the worst case near 500 ms and is far above a hand-written
+ * source file.
  */
 export const MAX_MEASURED_BYTES = 256 * 1024;
 /** The advisory names a baseline and a function at most this many bytes long. */
