@@ -60,7 +60,7 @@ const LSP_FALLBACK_PEERS: Record<string, string> = {
 	"php:php-lint":
 		"`php -l` syntax check; the PHP language server reports the same parse errors, so it runs only without the server.",
 	"php:phpstan":
-		"Config-first type checker; with the server up its type diagnostics stand in, so a second type pass is redundant.",
+		"Config-first type checker; the fallback group stops at the first succeeded runner, so it runs only when the PHP language server does not answer.",
 	"csharp:dotnet-build":
 		"Compiler build; the C# language server reports the same compiler diagnostics, so it runs only without the server.",
 	"java:javac":
