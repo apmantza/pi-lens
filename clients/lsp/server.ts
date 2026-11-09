@@ -50,6 +50,7 @@ import {
 	normalizeEphemeralMapKey,
 	pathsEqual,
 	realpathOrResolve,
+	relativeInside,
 	toPosix,
 	toProjectRelativePath,
 	walkUpDirs,
@@ -2134,11 +2135,7 @@ export function NearestRoot(
 			const stop = stopDir ? realpathOrResolve(stopDir) : fsRoot;
 
 			for (const currentDir of walkUpDirs(startDir)) {
-				if (
-					stop !== fsRoot &&
-					currentDir.startsWith(stop + path.sep) === false &&
-					currentDir !== stop
-				) {
+				if (stop !== fsRoot && relativeInside(stop, currentDir) === undefined) {
 					break;
 				}
 

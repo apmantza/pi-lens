@@ -42,6 +42,7 @@ import {
 	normalizeFilePath,
 	normalizeMapKey,
 	realpathOrResolve,
+	relativeInside,
 	toProjectRelativePath,
 } from "../path-utils.js";
 import { collectProjectSourceFilesWithBudgetAsync } from "../project-scan-policy.js";
@@ -4643,7 +4644,7 @@ function resolveCxxInclude(
 	];
 	const root = path.resolve(cwd);
 	for (const candidate of candidates) {
-		if (!candidate.startsWith(root + path.sep) && candidate !== root) continue;
+		if (relativeInside(root, candidate) === undefined) continue;
 		if (fs.existsSync(candidate) && detectFileKind(candidate) === "cxx") {
 			return normalizeMapKey(candidate);
 		}

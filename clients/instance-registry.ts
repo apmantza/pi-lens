@@ -54,7 +54,7 @@ import {
 	STALE_HEARTBEAT_MS,
 	terminateScannerChild,
 } from "./instance-reaper.js";
-import { normalizeFilePath } from "./path-utils.js";
+import { isWithinForm, normalizeFilePath } from "./path-utils.js";
 import {
 	isInPidNamespace,
 	ownPidNamespace,
@@ -1309,16 +1309,6 @@ async function deregisterInstanceRootNow(
  */
 export type PeerRootMatch = "exact" | "containment";
 
-/**
- * True when `a` and `b` are the same directory, or one contains the other.
- * Compared on SEGMENT boundaries, so `/repo-backup` never matches `/repo`.
- */
-function rootsOverlap(a: string, b: string): boolean {
-	if (a === b) return true;
-	const [shorter, longer] = a.length < b.length ? [a, b] : [b, a];
-	return longer.startsWith(shorter.endsWith("/") ? shorter : `${shorter}/`);
-}
-
 export function selectLivePeerInstances(
 	entries: readonly InstanceEntry[],
 	root: string,
@@ -1339,7 +1329,10 @@ export function selectLivePeerInstances(
 				getInstanceRoots(entry).some((entryRoot) =>
 					match === "exact"
 						? entryRoot === normalizedRoot
-						: rootsOverlap(entryRoot, normalizedRoot),
+						: // Same directory, or one contains the other, on segment
+							// boundaries: `/repo-backup` never matches `/repo`.
+							isWithinForm(entryRoot, normalizedRoot) ||
+							isWithinForm(normalizedRoot, entryRoot),
 				) &&
 				isPidAlive(entry.pid) &&
 				Number.isFinite(Date.parse(entry.heartbeatAt)) &&

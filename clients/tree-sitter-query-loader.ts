@@ -26,7 +26,7 @@ import {
 	ruleCorpusFingerprintForCycle,
 } from "./custom-rule-locations.js";
 import { compareOrdinal } from "./string-utils.js";
-import { toPosix } from "./path-utils.js";
+import { relativeInside, toPosix } from "./path-utils.js";
 
 /**
  * The bundled `rules/tree-sitter-queries` root — the ONE spelling of this
@@ -221,10 +221,7 @@ export function computeRuleFilesFingerprint(ruleFiles: string[]): string {
 		if (!fs.existsSync(resolved)) continue;
 		const stat = fs.statSync(resolved);
 		hash.update(`${file}:${stat.mtimeMs}:${stat.size}`);
-		if (
-			resolved !== BUNDLED_QUERIES_ROOT &&
-			!resolved.startsWith(BUNDLED_QUERIES_ROOT + path.sep)
-		) {
+		if (relativeInside(BUNDLED_QUERIES_ROOT, resolved) === undefined) {
 			hash.update(fs.readFileSync(resolved));
 		}
 	}
