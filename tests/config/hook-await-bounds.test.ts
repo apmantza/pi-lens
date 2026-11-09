@@ -2297,6 +2297,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// the bound belongs at the composer, where `readScannerCache` registers it
 	// in BOUNDED_CALL_SITES with the turn_end budget and `deps.signal`.
 	"clients/cache-manager.ts": 2,
+	// #5469: the lazy host SDK import has no caller budget or signal in the
+	// registry. Keep this unbounded await visible rather than inventing a
+	// hook identity or independent deadline; hook callers retain their wall.
+	"clients/project-trust.ts": 1,
 	"clients/cooperative-budget.ts": 3,
 	"clients/dead-code-client.ts": 4,
 	// #4535 slice 2: the publisher and its subscriber registry became

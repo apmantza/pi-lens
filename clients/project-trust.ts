@@ -247,11 +247,11 @@ export async function readAdoptedProjectTrust(
 					projectTrusted: false,
 				}).getGlobalSettings().defaultProjectTrust === "always");
 		return trusted ? "trusted" : "untrusted";
-	} catch (error) {
+	} catch (trustErr) {
 		recordDegradationOnce({
 			kind: "lsp-registry-decision",
 			subject: `adopted-trust:${root}`,
-			reason: `adopted project trust unavailable: ${String(error)}`,
+			reason: `adopted project trust unavailable: ${String(trustErr)}`,
 		});
 		return "untrusted";
 	}
