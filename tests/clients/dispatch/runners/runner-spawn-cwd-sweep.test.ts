@@ -630,7 +630,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is `repoRoot`, the repository the rebuild script belongs to",
 	],
 	[
-		"clients/metrics/complexity-baseline.ts#readAtDefaultBranch:8953f158~d9394988",
+		"clients/metrics/complexity-baseline.ts#readAtDefaultBranch:b56a9663~d9394988",
 		"cwd is the nearest existing directory of the file's own identity, and `git show <ref>:./<path>` names the path relative to it, so the blob resolves in the repository that holds the file (#4966); a dispatch tool-cwd would answer for another checkout (#5087)",
 	],
 	[
