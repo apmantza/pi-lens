@@ -136,6 +136,13 @@ describe("cascade tier-3 registry is reset at session_start (#1910)", () => {
 		expect(
 			cascadeTier._getOutstandingCascadeTouchesForTests().length,
 		).toBeGreaterThan(0);
+		// Precondition: both counters armed, so the zero check below can only
+		// pass if session start cleared them (review r1 F1: without this line a
+		// disabled eviction arm stayed green).
+		expect(cascadeTier._getCascadeTierSweepCountersForTests()).toEqual({
+			expired: 1,
+			evicted: 1,
+		});
 
 		// Never call resetCascadeTierSessionState directly — the whole point is
 		// to prove handleSessionStart itself reaches it.
