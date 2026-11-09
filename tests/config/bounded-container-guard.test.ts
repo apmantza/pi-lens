@@ -53,6 +53,18 @@ const FINITE_REASONS: Readonly<Record<string, string>> = {
 	// than unbounded over a closed population.
 	"clients/dispatch/known-runner-ids.ts#177da0f7":
 		"runner-id identity written once per RunnerRegistry.register'd runner definition; finite vocabulary, bounded by the dispatch registry's own population",
+	// #5410: one PATH-only availability checker per `hasTool` command — the
+	// literal commands runners and the covering-lane gate ask for, keyed
+	// through normalizeCacheKey. The checkers' per-cwd latches clear at each
+	// session's availability generation bump.
+	"clients/dispatch/dispatcher.ts#TOOL_PROBE_TIMEOUT_MS:dd9d9784":
+		"keys are the bare commands `hasTool` callers pass (string literals in runners and the LSP server catalog's covers gates), a closed vocabulary; values are checkers whose per-cwd latches the session generation clears",
+	// #5410: one resolver checker per registry tool id.
+	"clients/dispatch/runners/utils/runner-helpers.ts#resolveVendorToolCommand:b63e705b":
+		"keys are tool ids with a TOOL_COMMAND_SPECS entry (finite, ~20; an id without a spec stores nothing); values are checkers whose per-cwd latches the session generation clears",
+	// #5413: the collect-later run in flight per (project, runner).
+	"clients/dispatch/collect-later-tier.ts#observeRunnerLatency:d31792ad":
+		"keys are (project root, runner id) pairs with a collect-later run in flight: runner ids are the dispatch registry's closed vocabulary and roots are the session's own; chain deletes the key when the flight's last run settles, and resetObservedRunnerLatency clears it at session_start",
 	"clients/session-scope.ts#toStartReason:e2e4ae2a":
 		"#3612 `sessionStores`: keyed by store name, one entry per `defineSessionStore` call at module load (a second declaration of a name throws); four stores today, and the session-scope sweep pins every name",
 };

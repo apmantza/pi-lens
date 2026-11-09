@@ -29,6 +29,13 @@ on:
     - cron: '0 6 * * *' # daily 06:00 UTC
   workflow_dispatch:
 
+# #5420: one transient registry 5xx must not red npm ci or npx; npm's default
+# is 2 retries. The gate (workflow-level, literal, floored) is
+# tests/config/release-download-helper-workflow.test.ts.
+env:
+  npm_config_fetch_retries: 5
+  npm_config_fetch_retry_maxtimeout: 120000
+
 jobs:
   test-history-rollup:
     name: Roll up durable unit-test history

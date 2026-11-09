@@ -9,11 +9,9 @@
  */
 
 import type { AnalysedRootSignal } from "./analysed-root.js";
-import { formatToolFailure } from "./dispatch/runners/utils/tool-failure.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { incrementDegradationCount } from "./degradation-ledger.js";
 import * as fs from "node:fs";
-import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
@@ -29,14 +27,21 @@ import {
 	toPosix,
 } from "./path-utils.js";
 import { getJscpdMaxEntriesDerived } from "./project-scale.js";
+import { isJstsFactFile } from "./file-kinds.js";
+import { isDeclarationFile } from "./generated-artifacts.js";
+
+// Non-JS/TS source extensions jscpd's tokenizers cover; the JS/TS family
+// answers through the registry seam (`isJstsFactFile`) (#5446).
+const JSCPD_WALK_OTHER_SOURCE =
+	/\.(py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/;
 import {
 	createAvailabilityChecker,
 	findManagedNodeToolBinary,
 	resolveAvailableOrInstall,
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
+import { parseReportJson, runReportScan } from "./report-scan.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
-import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
@@ -253,11 +258,10 @@ export class JscpdClient {
 				// per-call; isIgnored recompiles minimatch patterns per ancestor dir
 				// and should only run for files that already look like source.
 				if (
-					/\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/.test(
-						entry.name,
-					)
+					isJstsFactFile(entry.name) ||
+					JSCPD_WALK_OTHER_SOURCE.test(entry.name)
 				) {
-					if (entry.name.endsWith(".d.ts")) return "skip";
+					if (isDeclarationFile(entry.name)) return "skip";
 					if (ignoreMatcher.isIgnored(fullPath, false)) return "skip";
 					return "stop";
 				}
@@ -380,152 +384,125 @@ export class JscpdClient {
 		return promise;
 	}
 
-	private async runScan(
+	private runScan(
 		cwd: string,
 		minLines: number,
 		minTokens: number,
 		isTsProject: boolean,
 	): Promise<JscpdResult> {
-		// #3600: stamp the read time at the top of the run body, before the scan
-		// reads any file a widget row's freshness is judged against.
-		const scannedAt = new Date().toISOString();
-		const outDir = mkdtempSync(
-			path.join(scannerReportParentDir(), "pi-lens-jscpd-"),
-		);
-
-		try {
-			// Build ignore pattern from shared exclusions + scanner-specific patterns.
-			// Keep setup inside this guard: the report directory already exists, and
-			// setup can read project-controlled ignore files (#4133).
-			const baseIgnores = [
-				...getExcludedDirGlobs(),
-				...getProjectIgnoreGlobs(cwd),
-				"**/*.md",
-				"**/*.txt",
-				"**/*.json",
-				"**/*.yaml",
-				"**/*.yml",
-				"**/*.toml",
-				"**/*.lock",
-				"**/*.test.*",
-				"**/*.spec.*",
-				"**/*.poc.test.*",
-				"**/__tests__/**",
-				"**/tests/**",
-			];
-			if (isTsProject) {
-				baseIgnores.push("**/*.js", "**/*.jsx");
-			}
-
-			// Prefer a local/global-installed jscpd (any manager) over npx (#375).
-			const bin = await findNodeToolBinary("jscpd", cwd);
-			const { cmd, prefix } = bin
-				? { cmd: bin, prefix: [] as string[] }
-				: this.jscpdManagedPath
-					? { cmd: this.jscpdManagedPath, prefix: [] as string[] }
-					: { cmd: "npx", prefix: ["jscpd"] };
-			// A project's own jscpd config wins outright (#1731, discipline A):
-			// these flags all override whatever it sets, so the thresholds are not
-			// passed when the project ships one and jscpd discovers it unaided.
-			// `--ignore` replaces the config's list, so under a config it is passed
-			// only to leave out linked worktrees (#4117), carrying the config's own
-			// entries; a list that cannot be read is left alone.
-			const config = readProjectJscpdConfig(cwd);
-			const worktreeGlobs = worktreeIgnoreGlobs(cwd);
-			let patterns: string[] | undefined;
-			if (config === null) {
-				patterns = [...baseIgnores, ...worktreeGlobs];
-			} else if (worktreeGlobs.length > 0) {
-				if (config.ignoreList === null) {
-					incrementDegradationCount({
-						kind: "scan-worktree-exclusion-skipped",
-						subject: "jscpd",
-						reason: `config-ignore-unreadable: ${worktreeGlobs.length} linked worktree(s) under ${cwd} not ignored`,
-					});
-				} else {
-					patterns = [...config.ignoreList, ...worktreeGlobs];
+		// The command the scan actually ran, named in the missing-report reason
+		// (#1816): a `npx` fallback and a project-local binary fail differently.
+		// Read when the reason is built, which is after `spawn` settled.
+		let command = "jscpd";
+		return runReportScan("jscpd", {
+			spawn: async ({ outDir }) => {
+				// Build ignore pattern from shared exclusions + scanner-specific patterns.
+				// Keep setup inside the guard: the report directory already exists, and
+				// setup can read project-controlled ignore files (#4133).
+				const baseIgnores = [
+					...getExcludedDirGlobs(),
+					...getProjectIgnoreGlobs(cwd),
+					"**/*.md",
+					"**/*.txt",
+					"**/*.json",
+					"**/*.yaml",
+					"**/*.yml",
+					"**/*.toml",
+					"**/*.lock",
+					"**/*.test.*",
+					"**/*.spec.*",
+					"**/*.poc.test.*",
+					"**/__tests__/**",
+					"**/tests/**",
+				];
+				if (isTsProject) {
+					baseIgnores.push("**/*.js", "**/*.jsx");
 				}
-			}
-			const result = await safeSpawnAsync(
-				cmd,
-				[
-					...prefix,
-					".",
-					...(config === null
-						? [
-								"--min-lines",
-								String(minLines),
-								"--min-tokens",
-								String(minTokens),
-							]
-						: []),
-					"--reporters",
-					"json",
-					"--output",
-					outDir,
-					...(patterns === undefined ? [] : ["--ignore", patterns.join(",")]),
-				],
-				{
-					timeout: SCAN_TIMEOUT_MS,
-					// A cache-only npx fallback must not read the project's `.npmrc`
-					// (#4268 acceptance 3); local/managed jscpd keeps the project cwd.
-					cwd,
-					...(cmd === "npx" ? getIsolatedNpxSpawnOptions() : {}),
-				},
-			);
 
-			if (result.error) {
-				this.log(`Scan error: ${result.error.message}`);
-				return { ...EMPTY_RESULT };
-			}
-
-			// Empirical exit-code table (jscpd 3.5.10, verified live for #1736's
-			// sweep): a genuinely clean run (no clones) exits 0 and writes NO
-			// report file — jscpd only writes `jscpd-report.json` when it has
-			// something to report. A crashed run (uncaught exception, e.g. a bad
-			// scan path) ALSO writes no report file, but exits nonzero. The
-			// missing-file check alone can't tell those apart, so a nonzero exit
-			// with no report file is reported as errored, never as "0 clones".
-			// (Not `spawnFailedWithNoOutput` — the parsed artifact here is a
-			// report FILE, not stdout, so the shared stdout-based discriminator
-			// doesn't apply; the underlying "nonzero exit -> not clean" rule is
-			// the same one.)
-			const reportPath = path.join(outDir, "jscpd-report.json");
-			if (!fs.existsSync(reportPath)) {
-				if (result.status !== 0) {
-					// #1816: one shared wording, one truncation, signal named.
-					// `reportMissing` is the artifact-tool arm of the same
-					// primitive — the parsed artifact here is a report FILE.
-					const reason = formatToolFailure({
-						tool: "jscpd",
-						status: result.status,
-						signal: result.signal,
-						stderr: result.stderr,
-						reportMissing: true,
-						fields: { command: cmd },
-					});
-					this.log(reason);
-					incrementDegradationCount({
-						kind: "runner-empty-result",
-						subject: "jscpd",
-						reason,
-					});
-					return { ...EMPTY_RESULT };
+				// Prefer a local/global-installed jscpd (any manager) over npx (#375).
+				const bin = await findNodeToolBinary("jscpd", cwd);
+				const { cmd, prefix } = bin
+					? { cmd: bin, prefix: [] as string[] }
+					: this.jscpdManagedPath
+						? { cmd: this.jscpdManagedPath, prefix: [] as string[] }
+						: { cmd: "npx", prefix: ["jscpd"] };
+				command = cmd;
+				// A project's own jscpd config wins outright (#1731, discipline A):
+				// these flags all override whatever it sets, so the thresholds are not
+				// passed when the project ships one and jscpd discovers it unaided.
+				// `--ignore` replaces the config's list, so under a config it is passed
+				// only to leave out linked worktrees (#4117), carrying the config's own
+				// entries; a list that cannot be read is left alone.
+				const config = readProjectJscpdConfig(cwd);
+				const worktreeGlobs = worktreeIgnoreGlobs(cwd);
+				let patterns: string[] | undefined;
+				if (config === null) {
+					patterns = [...baseIgnores, ...worktreeGlobs];
+				} else if (worktreeGlobs.length > 0) {
+					if (config.ignoreList === null) {
+						incrementDegradationCount({
+							kind: "scan-worktree-exclusion-skipped",
+							subject: "jscpd",
+							reason: `config-ignore-unreadable: ${worktreeGlobs.length} linked worktree(s) under ${cwd} not ignored`,
+						});
+					} else {
+						patterns = [...config.ignoreList, ...worktreeGlobs];
+					}
 				}
-				return { ...EMPTY_RESULT, success: true };
-			}
-
-			return { ...this.parseReport(reportPath), scannedAt };
-		} catch (err: any) {
-			this.log(`Scan error: ${err.message}`);
-			return { ...EMPTY_RESULT };
-		} finally {
-			try {
-				fs.rmSync(outDir, { recursive: true, force: true });
-			} catch (err) {
-				void err;
-			}
-		}
+				return safeSpawnAsync(
+					cmd,
+					[
+						...prefix,
+						".",
+						...(config === null
+							? [
+									"--min-lines",
+									String(minLines),
+									"--min-tokens",
+									String(minTokens),
+								]
+							: []),
+						"--reporters",
+						"json",
+						"--output",
+						outDir,
+						...(patterns === undefined ? [] : ["--ignore", patterns.join(",")]),
+					],
+					{
+						timeout: SCAN_TIMEOUT_MS,
+						// A cache-only npx fallback must not read the project's `.npmrc`
+						// (#4268 acceptance 3); local/managed jscpd keeps the project cwd.
+						cwd,
+						...(cmd === "npx" ? getIsolatedNpxSpawnOptions() : {}),
+					},
+				);
+			},
+			// #3600: the lifecycle stamps `scannedAt` before the spawn, so a widget
+			// row's freshness is judged against the run's own read time. The exit
+			// code is not part of the verdict here: #1736's measured table (jscpd
+			// 3.5.10) is now the lifecycle's, and a report that exists is parsed
+			// whatever the exit.
+			parse: (raw, scannedAt) => ({
+				...this.parseReport(raw),
+				scannedAt,
+			}),
+			// jscpd's result carries no summary: the reason an agent can read is the
+			// `runner-empty-result` row `recordFailure` writes. A zero exit that wrote
+			// no report stays a successful empty run (#1736's measured table), so the
+			// arm follows the lifecycle's verdict instead of calling every cell failed.
+			fail: (failure) => ({
+				...EMPTY_RESULT,
+				success: failure.success === true,
+			}),
+			recordFailure: (failure) =>
+				incrementDegradationCount({
+					kind: "runner-empty-result",
+					subject: "jscpd",
+					reason: failure.summary,
+				}),
+			failureFields: () => ({ command }),
+			log: this.log,
+		});
 	}
 
 	formatResult(result: JscpdResult, maxClones = 8): string {
@@ -549,46 +526,41 @@ export class JscpdClient {
 
 	// --- Internal ---
 
-	private parseReport(reportPath: string): JscpdResult {
-		try {
-			const data = JSON.parse(fs.readFileSync(reportPath, "utf-8"));
-			// Stats live in statistics.total, not statistics.clones
-			const total = data.statistics?.total ?? {};
+	/**
+	 * Turn jscpd's `jscpd-report.json` into the result shape. Input that is not a
+	 * jscpd report throws: `runReportScan` turns that into a recorded failed
+	 * scan, so a broken report never reads as a scan that ran and found nothing
+	 * (#5411). #1736: `statistics.total` holds the stats, not `statistics.clones`.
+	 */
+	private parseReport(raw: string): JscpdResult {
+		const data: any = parseReportJson("jscpd", raw);
+		// Stats live in statistics.total, not statistics.clones
+		const total = data.statistics?.total ?? {};
 
-			const duplicatedLines: number = total.duplicatedLines ?? 0;
-			const totalLines: number = total.lines ?? 0;
-			const percentage: number =
-				total.percentage ??
-				(totalLines > 0 ? (duplicatedLines / totalLines) * 100 : 0);
+		const duplicatedLines: number = total.duplicatedLines ?? 0;
+		const totalLines: number = total.lines ?? 0;
+		const percentage: number =
+			total.percentage ??
+			(totalLines > 0 ? (duplicatedLines / totalLines) * 100 : 0);
 
-			const rawClones: any[] = data.duplicates ?? [];
-			const clones: DuplicateClone[] = rawClones.map((c: any) => ({
-				fileA: c.firstFile?.name ?? "",
-				startA: c.firstFile?.start ?? 0,
-				fileB: c.secondFile?.name ?? "",
-				startB: c.secondFile?.start ?? 0,
-				lines: c.lines ?? 0,
-				tokens: c.tokens ?? 0,
-			}));
+		const rawClones: any[] = data.duplicates ?? [];
+		const clones: DuplicateClone[] = rawClones.map((c: any) => ({
+			fileA: c.firstFile?.name ?? "",
+			startA: c.firstFile?.start ?? 0,
+			fileB: c.secondFile?.name ?? "",
+			startB: c.secondFile?.start ?? 0,
+			lines: c.lines ?? 0,
+			tokens: c.tokens ?? 0,
+		}));
 
-			// #2154: the one jscpd site that parsed a scan of this root.
-			return {
-				success: true,
-				analyzed: true,
-				clones,
-				duplicatedLines,
-				totalLines,
-				percentage,
-			};
-		} catch (err) {
-			void err;
-			return {
-				success: false,
-				clones: [],
-				duplicatedLines: 0,
-				totalLines: 0,
-				percentage: 0,
-			};
-		}
+		// #2154: the one jscpd site that parsed a scan of this root.
+		return {
+			success: true,
+			analyzed: true,
+			clones,
+			duplicatedLines,
+			totalLines,
+			percentage,
+		};
 	}
 }

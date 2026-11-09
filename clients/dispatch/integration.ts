@@ -3541,7 +3541,7 @@ export async function capturePreEditLinterFindings(
 		...created,
 		deltaMode: false,
 		preEditCapture: true,
-		hasTool: (command) => checkToolAvailability(command, sessionFacts),
+		hasTool: (command) => checkToolAvailability(command),
 	};
 	const kind = ctx.kind;
 	if (!kind) return { outcome: "skipped", reason: "no-kind" };

@@ -9,10 +9,7 @@ import * as path from "node:path";
 import { Minimatch, type MinimatchOptions } from "./deps/minimatch.js";
 import { detectFileRole } from "./file-role.js";
 import { FRESHNESS_CADENCE_MS } from "./freshness-cadence.js";
-import {
-	isInSpawnTimeoutCooldown,
-	noteSpawnTimeout,
-} from "./spawn-timeout-cooldown.js";
+import { isInSpawnTimeoutCooldown } from "./spawn-timeout-cooldown.js";
 import {
 	collectTrackedFiles,
 	getTrackedFilesSnapshot,
@@ -1770,22 +1767,18 @@ export async function detectFileChangedAfterCommand(
 	// wedged .cmd shim. Return "no fix applied" (an honest not-checked).
 	if (isInSpawnTimeoutCooldown(command)) return 0;
 
+	// #5413: the autofix lane runs outside any runner scope, so it names the
+	// identity a timeout arms; `safeSpawnAsync` arms it (#5376: on the real
+	// timeout shape, which carries both `error` and `failure`).
 	const result = await safeSpawnAsync(command, args, {
 		timeout: 30000,
 		cwd,
-	});
-	// #5376: a real spawn timeout carries BOTH `error` and `failure: "timeout"`,
-	// so the timeout branch must precede the generic error return or the
-	// cooldown is never armed.
-	if (result.failure === "timeout") {
-		noteSpawnTimeout({
+		cooldown: {
 			tool: path.basename(command).replace(/\.[^.]+$/, ""),
-			command,
+			subject: command,
 			phase: "autofix",
-			durationMs: 30000,
-			teardown: result.timeoutTeardown,
-		});
-	}
+		},
+	});
 
 	let after: string | undefined;
 	try {

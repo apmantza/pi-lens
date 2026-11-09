@@ -355,10 +355,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 			"#4535 slice 2 moved both here verbatim from `clients/runtime-tool-result.ts`'s held-primary pass, and they are the same two best-effort reads they were there: a document whose disk bytes cannot be read is still a held document whose server view may be stale (the caller reports it as a target), and a primary send that throws is reported to the detector as `failed: true`, which is the row that surfaces it (`bash_write_primary_resync`, `opaque_mutation_head_moved`). Neither is a dropped failure: the first arms the delivery, the second is a classification the caller reads.",
 	}, // :193, :207
 	"clients/dispatch/dispatcher.ts": {
-		silent: 7,
-		identities: "0cbf028fed5fa5bf",
+		silent: 6,
+		identities: "1a6f3d3e73b42750",
 		reason: PRE_RULE,
-	}, // :316, :331, :337, :1102, :1807, :1815, :2039
+	}, // :229, :235, :1201, :1927, :1935, :2192 (#5410 removed the hasTool probe's catch)
 	"clients/dispatch/facts/file-content.ts": {
 		silent: 1,
 		identities: "f187250a34b04dec",
@@ -625,10 +625,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :108, :205
 	"clients/gitleaks-client.ts": {
-		silent: 7,
-		identities: "b7d8104671a0bad6",
+		silent: 6,
+		identities: "98091fc66b02229a",
 		reason: PRE_RULE,
-	}, // :156, :267, :285, :299, :321, :489, :556
+	}, // :162, :273, :291, :305, :327, :501
 	"clients/govulncheck-client.ts": {
 		silent: 5,
 		identities: "e7742f12d2580226",
@@ -695,10 +695,13 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :362, :477, :521, :528, :611
 	"clients/jscpd-client.ts": {
-		silent: 5,
-		identities: "3950a10dc006ea1a",
+		// 5 -> 2 (#5411): its parse no longer swallows a broken report and the report
+		// directory is the shared lifecycle's, so three of its five silent handlers are
+		// gone; what is left predates this round.
+		silent: 2,
+		identities: "4499d017be2fe10b",
 		reason: PRE_RULE,
-	}, // :107, :118, :507, :513, :571
+	}, // :111, :122
 	"clients/json-cache-read.ts": {
 		silent: 4,
 		identities: "83a11b3167dae771",
@@ -925,10 +928,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :224, :257, :843
 	"clients/opengrep-client.ts": {
-		silent: 3,
-		identities: "2062917950cbdb52",
+		// 3 -> 2 (#5411): its report-directory cleanup moved into the shared
+		// lifecycle, which carries its own admitted row.
+		silent: 2,
+		identities: "a8f5da5afab7117a",
 		reason: PRE_RULE,
-	}, // :291, :328, :387
+	}, // :352, :411
 	"clients/out-of-band-changes.ts": {
 		silent: 3,
 		identities: "f6a8dcd9fdd0254e",
@@ -1242,10 +1247,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :848
 	"clients/trivy-client.ts": {
-		silent: 6,
-		identities: "7437ffe9ed1a72cd",
+		silent: 3,
+		identities: "6dfcef6e98de4d57",
 		reason: PRE_RULE,
-	}, // :163, :184, :218, :407, :461, :504
+	}, // :182, :240, :274
 	"clients/tui-fit.ts": {
 		silent: 1,
 		identities: "bdb9736abc0aae9d",
@@ -1407,7 +1412,12 @@ const BASELINE: Readonly<Record<string, Admission>> = {
  * 1,169.
  * It moves only downward from here.
  */
-const PINNED_TOTAL = 1169;
+// 1169 -> 1166 (#5411): jscpd gave up three silent handlers and opengrep one
+// when their report lifecycles moved into `clients/report-scan.ts`, which
+// admits one of its own.
+// 1166 -> 1165 (#5440 r2): that crash guard records at its own top level now,
+// so the sweep reads it as recorded and `report-scan.ts` admits no row.
+const PINNED_TOTAL = 1165;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;

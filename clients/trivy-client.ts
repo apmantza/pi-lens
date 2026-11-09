@@ -51,6 +51,7 @@ import {
 	getScratchTreeGlobPatterns,
 	nestedWorktreeOffsets,
 } from "./scratch-tree-policy.js";
+import { parseReportJson } from "./report-scan.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 import type { TrivySecretFinding } from "./secret-findings.js";
@@ -431,7 +432,15 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 					scannedAt,
 				};
 			},
-			fail: (failure) => ({ ...EMPTY_RESULT, ...failure }),
+			// Only master's three fields: the failure's raw parts (stderr, status,
+			// outcome) stay in the ledger lane, never in a result that is cached
+			// on success (round-1 review of #5440, F1).
+			fail: ({ success, scannedAt, summary }) => ({
+				...EMPTY_RESULT,
+				success: success === true,
+				scannedAt,
+				summary,
+			}),
 		});
 	}
 }
@@ -451,17 +460,13 @@ function normalizeSeverity(raw: unknown): TrivySeverity {
  * `{ Results: [{ Target, Vulnerabilities: [{ VulnerabilityID, PkgName, … }] }] }`;
  * `Results` / `Vulnerabilities` are often `null` when nothing is found.
  *
- * Defensive: malformed / truncated input returns `[]` rather than throwing —
- * the session_start task must never crash the session. Exported for unit tests.
+ * Input that is not JSON throws (`parseReportJson`): a truncated report is not
+ * a clean scan, and `runReportScan` records the throw as a failed scan, so the
+ * session_start task still cannot crash (#5447). Exported for unit tests.
  */
 export function parseTrivyReport(raw: string): TrivyFinding[] {
 	if (!raw.trim()) return [];
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return [];
-	}
+	const parsed = parseReportJson("trivy", raw);
 	const results = (parsed as { Results?: unknown })?.Results;
 	if (!Array.isArray(results)) return [];
 
@@ -503,19 +508,14 @@ export function parseTrivyReport(raw: string): TrivyFinding[] {
 /**
  * Map Trivy's `Results[].Secrets[]` rows to normalized secret findings. The
  * file is the result's `Target`; each secret carries a `RuleID`, `StartLine`,
- * and `Title`. Same defensive contract as `parseTrivyReport` — malformed input
- * returns `[]`. These are collapsed against gitleaks / ast-grep downstream
+ * and `Title`. Same contract as `parseTrivyReport` — input that is not JSON
+ * throws. These are collapsed against gitleaks / ast-grep downstream
  * (`clients/secret-findings.ts`) so the same secret surfaces once. Exported for
  * unit tests.
  */
 export function parseTrivySecrets(raw: string): TrivySecretFinding[] {
 	if (!raw.trim()) return [];
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return [];
-	}
+	const parsed = parseReportJson("trivy", raw);
 	const results = (parsed as { Results?: unknown })?.Results;
 	if (!Array.isArray(results)) return [];
 
@@ -549,16 +549,12 @@ export function parseTrivySecrets(raw: string): TrivySecretFinding[] {
  * `PkgName`, `Severity`, `Category` (trivy's classification: restricted /
  * reciprocal / forbidden / …), and a `FilePath` for license-file findings.
  * `Severity` is already filtered by the scan's `--severity` floor. Same
- * defensive contract as the sibling parsers. Exported for unit tests.
+ * contract as the sibling parsers (non-JSON input throws). Exported for unit
+ * tests.
  */
 export function parseTrivyLicenses(raw: string): TrivyLicenseFinding[] {
 	if (!raw.trim()) return [];
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return [];
-	}
+	const parsed = parseReportJson("trivy", raw);
 	const results = (parsed as { Results?: unknown })?.Results;
 	if (!Array.isArray(results)) return [];
 

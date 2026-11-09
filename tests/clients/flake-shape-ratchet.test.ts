@@ -479,6 +479,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"createLSPClient spawns a language-server process; the double it returns runs the real clientWaitForDiagnostics, publish handler and clearDiagnosticsForPath, and a real server cannot be made to publish twice and receive a refresh clear inside one quiet window on demand",
 		},
+	"in-process-mock:clients/lsp/touch-debounce-zero.test.ts::clients/lsp/client":
+		{
+			detector: "in-process-mock",
+			reason:
+				"createLSPClient spawns a language-server process; the double it returns runs the real handleNotifyOpen and reads content identity through the real sentContentFor and hasNotifyInFlightFor, and a real server cannot be made to report whether it holds exactly the debounce gate's bytes on demand",
+		},
 	// 2026-10-20 (#4638): tool availability is resolved so the spawn seam records the
 	// real argv (cwd + config args) without probing or installing ruff; only that
 	// resolver is doubled, and resolveToolCwd, ruffConfigArgs, safe-spawn stay real.
@@ -570,6 +576,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "never-settling-wait",
 		reason:
 			"the interrupt witness must hold a real child open until SIGINT; replacing the wait with a settled promise would erase the lifecycle under test",
+	},
+	// #5452 r2 F2: the abort lands 200 ms into a real child's run, the one
+	// timed wait the abort case needs. Sorted before clients/lsp/.
+	"raw-timer-wait:clients/dispatch/runner-spawn-timeout-cooldown.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the abort must land while a real child is mid-run; a fake clock cannot stop a spawned process, and no double reproduces a child killed mid-run",
 	},
 	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
 	// only observable through Node's `unhandledRejection` event, which fires
@@ -728,6 +741,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"a clean-tree HEAD move is a real git checkout; a stubbed git cannot produce the delta the look publishes",
+	},
+	// #5413: the cooldown is armed by safeSpawnAsync's own timeout, so the
+	// child that uses up its budget is real.
+	"real-process-spawn:clients/dispatch/runner-spawn-timeout-cooldown.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a real child must use up its own spawn budget, be aborted mid-run, fail to launch, or exit non-zero: the cooldown is armed by safeSpawnAsync's own result, which no double reproduces",
 	},
 	"real-process-spawn:clients/dispatch/runners/ast-grep-playground-verify.test.ts":
 		{
@@ -1806,6 +1826,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a language-server client is a spawned process; this client's wait, store and clear are the real ones over a real state, and only the publish order and the mid-wait clear are scripted",
 		},
+	"service-double:clients/lsp/touch-debounce-zero.test.ts::LSPClientInfo": {
+		detector: "service-double",
+		reason:
+			"a language-server client is a spawned process; the client it returns runs the real handleNotifyOpen, sentContentFor and hasNotifyInFlightFor over a real state, and only the alive-answers are scripted",
+	},
 	// 2026-10-15 (#4485): see the cascade entries above.
 	"service-double:clients/quiet-window-session-straddle.test.ts::LSPClientInfo":
 		{

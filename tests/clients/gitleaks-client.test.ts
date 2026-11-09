@@ -186,8 +186,14 @@ describe("parseGitleaksReport (#130)", () => {
 		expect(findings[0].ruleId).toBe("valid-rule");
 	});
 
-	it("returns [] for malformed JSON rather than throwing", () => {
-		expect(parseGitleaksReport("{not valid")).toEqual([]);
+	it("throws on malformed JSON so a truncated report is not a clean scan (#5447)", () => {
+		expect(() => parseGitleaksReport("{not valid")).toThrow(
+			/unreadable gitleaks report/,
+		);
+		// A report cut mid-array is the truncation the parser's doc comment names.
+		expect(() => parseGitleaksReport('[{"RuleID":"a","File":"x.ts"')).toThrow(
+			/unreadable gitleaks report/,
+		);
 	});
 
 	it("preserves multiple findings in order", () => {

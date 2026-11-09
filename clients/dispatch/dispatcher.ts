@@ -44,20 +44,11 @@ import {
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { withBudget } from "../deadline-utils.js";
+import { spawnCooldownScope } from "../spawn-abort-scope.js";
+import { isInSpawnTimeoutCooldown } from "../spawn-timeout-cooldown.js";
 import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
-import { probeToolAsync } from "../tool-probe.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
-import {
-	classifyProbeFailure,
-	logAvailabilityDecision,
-	startHostStallSampler,
-	transientRetryDelayMs,
-} from "./runners/utils/availability-policy.js";
-import {
-	recordAvailabilityProbeOverrun,
-	getDispatchAvailabilityGeneration,
-} from "./runners/utils/runner-helpers.js";
-import { createAvailabilityProbeFlight } from "../availability-probe-flight.js";
+import { createAvailabilityChecker } from "./runners/utils/runner-helpers.js";
 import type { FactStore } from "./fact-store.js";
 import { linesOfRanges, rangesOfLines } from "../line-alignment.js";
 import { applyFindingPolicyByOwner } from "./finding-policy.js";
@@ -67,6 +58,8 @@ import {
 	classifyObservedRunner,
 	COLLECT_LATER_THRESHOLD_MS,
 	observeRunnerLatency,
+	runCollectLater,
+	type CollectLaterTier,
 } from "./collect-later-tier.js";
 import { deferRunnerFindings } from "./pending-runner-findings.js";
 import {
@@ -75,7 +68,11 @@ import {
 } from "./adopted-root-runners.js";
 
 import { laneCopyStandsFor, semanticRank } from "./lane-copies.js";
-import { normalizeRuleId } from "./rule-id-normalize.js";
+import {
+	findingClassKey,
+	normalizeRuleId,
+	withClassSeverity,
+} from "./rule-id-normalize.js";
 import {
 	applyRulePolicy,
 	projectRulePolicy,
@@ -103,9 +100,6 @@ import {
 	unchecked,
 } from "./types.js";
 
-const dispatcherProbeFlights = createAvailabilityProbeFlight<
-	Awaited<ReturnType<typeof probeToolAsync>>
->({ generation: () => getDispatchAvailabilityGeneration() });
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -198,140 +192,37 @@ export function normalizeCacheKey(cmd: string): string {
 const TOOL_PROBE_TIMEOUT_MS = 5000;
 
 /**
- * Session fact holding the epoch ms after which a TRANSIENT verdict for a
- * command may be re-probed. Kept beside the boolean fact so both share the
- * session's lifetime — no second global to reset (#1476).
+ * One PATH-only checker per command (#5410), keyed like the session fact key
+ * it replaces, so `ruff` and `ruff.exe` share one verdict.
  */
-function transientRetryKey(command: string): string {
-	return `${normalizeCacheKey(command)}.retryAt`;
-}
+const commandCheckers = new Map<
+	string,
+	ReturnType<typeof createAvailabilityChecker>
+>();
 
 /**
- * Consecutive transient verdicts for a command, so the cooldown ESCALATES the
- * way the policy documents (30 s, 60 s, 120 s … capped at 5 min) instead of
- * sitting flat at 30 s.
- *
- * This is the highest-traffic availability consumer in the product. A flat
- * cooldown here means a permanently sick host is re-probed every 30 s per
- * command for the whole session — ten times the storm the policy claims to
- * bound, and the one place the bound matters most. `createAvailabilityChecker`
- * tracks the same counter; this keeps the two seams telling one story.
+ * Is `command` usable on PATH right now? The verdict, its transient cooldown
+ * ladder (#1467/#1476), the trust stamp and the decision row are the shared
+ * checker's (#5410); this keeps only the PATH-only contract of `hasTool`,
+ * whose callers spawn the bare name. A command not on disk is refused without
+ * a spawn, and a probe that throws latches nothing: the throw reaches the
+ * caller and the next call asks again.
  */
-function transientAttemptsKey(command: string): string {
-	return `${normalizeCacheKey(command)}.transientAttempts`;
-}
-
-/**
- * Is `command` usable right now? Cached per session.
- *
- * Latch policy (#1467/#1476): a `false` from a genuine absence is durable and
- * is remembered for the session. A `false` from a TIMED-OUT probe is not — this
- * is the highest-traffic availability consumer in the codebase, and caching a
- * host stall here silently disabled a healthy tool for every later dispatch in
- * the session. A transient verdict instead holds only for a bounded cooldown,
- * which also stops a sick host from being re-probed on every dispatch.
- */
-export async function checkToolAvailability(
-	command: string,
-	facts: FactStore,
-): Promise<boolean> {
+export async function checkToolAvailability(command: string): Promise<boolean> {
+	if (!(await isSpawnableCommand(command))) return false;
 	const key = normalizeCacheKey(command);
-	const cached = facts.getSessionFact<boolean>(key);
-	if (cached !== undefined) {
-		return cached;
-	}
-	const retryAt = facts.getSessionFact<number>(transientRetryKey(command));
-	if (retryAt !== undefined && Date.now() < retryAt) return false;
-	// A command that isn't even on disk can't pass a --version probe; the ~μs
-	// stat/PATH walk saves a guaranteed-to-fail spawn round-trip per cold tool.
-	if (!(await isSpawnableCommand(command))) {
-		facts.setSessionFact(key, false);
-		return false;
-	}
-	try {
-		// The budget is enforced by a HOST-side timer, so measure the loop stall
-		// that overlapped the window and let the shared classifier read it.
-		const sampler = startHostStallSampler();
-		const startedAt = Date.now();
-		let result: Awaited<ReturnType<typeof probeToolAsync>>;
-		let hostStallMs: number;
-		let probeJoined = false;
-		try {
-			const shared = dispatcherProbeFlights.run(`dispatcher:${key}`, () =>
-				probeToolAsync(command, ["--version"], {
-					timeout: TOOL_PROBE_TIMEOUT_MS,
-				}),
-			);
-			probeJoined = shared.joined;
-			result = await shared.promise;
-		} finally {
-			hostStallMs = sampler.stop();
-		}
-		const elapsedMs = Date.now() - startedAt;
-		recordAvailabilityProbeOverrun(
-			command,
-			key,
-			elapsedMs,
-			TOOL_PROBE_TIMEOUT_MS,
-			result.failure,
-		);
-		if (result.status === 0) {
-			facts.setSessionFact(key, true);
-			// The tool answered: retire the cooldown facts rather than leaving a
-			// stale retry deadline behind a `true`.
-			facts.setSessionFact(transientRetryKey(command), 0);
-			facts.setSessionFact(transientAttemptsKey(command), 0);
-			logAvailabilityDecision({
-				tool: command,
-				verdict: "available",
-				outcome: "success",
-				cause: "ok",
-				elapsedMs,
-				latched: true,
-				classifiedBy: probeJoined ? "joined" : "probe",
-				hostStallMs,
-				budgetMs: TOOL_PROBE_TIMEOUT_MS,
-			});
-			return true;
-		}
-		// `missing` for anything unclassified preserves the pre-#1476 meaning of
-		// a non-zero exit: durable, cached for the session.
-		const { outcome, cause, evidence } = classifyProbeFailure(result, {
-			hostStallMs,
+	let checker = commandCheckers.get(key);
+	if (!checker) {
+		checker = createAvailabilityChecker(command, "", ["--version"], {
+			pathOnly: true,
+			probeTimeout: TOOL_PROBE_TIMEOUT_MS,
+			// A non-zero exit with no typed failure keeps its pre-#1476 meaning:
+			// durable, cached for the session.
 			unclassifiedFailureOutcome: "missing",
 		});
-		let retryAfterMs: number | undefined;
-		if (outcome === "transient") {
-			const attempts =
-				(facts.getSessionFact<number>(transientAttemptsKey(command)) ?? 0) + 1;
-			facts.setSessionFact(transientAttemptsKey(command), attempts);
-			retryAfterMs = transientRetryDelayMs(attempts, cause);
-			facts.setSessionFact(
-				transientRetryKey(command),
-				Date.now() + retryAfterMs,
-			);
-		} else {
-			facts.setSessionFact(key, false);
-			facts.setSessionFact(transientAttemptsKey(command), 0);
-		}
-		logAvailabilityDecision({
-			tool: command,
-			verdict: "unavailable",
-			outcome,
-			cause,
-			elapsedMs,
-			latched: outcome !== "transient",
-			hostStallMs,
-			...(retryAfterMs !== undefined && { retryAfterMs }),
-			budgetMs: TOOL_PROBE_TIMEOUT_MS,
-			classifiedBy: probeJoined ? "joined" : "probe",
-			evidence,
-		});
-		return false;
-	} catch {
-		facts.setSessionFact(key, false);
-		return false;
+		commandCheckers.set(key, checker);
 	}
+	return checker.isAvailableAsync();
 }
 
 // --- Dispatch Context Factory ---
@@ -451,7 +342,7 @@ export function createDispatchContext(
 		toolCwdMemo: {},
 
 		async hasTool(command: string): Promise<boolean> {
-			return checkToolAvailability(command, facts);
+			return checkToolAvailability(command);
 		},
 
 		log(message: string, level?: ExtensionLogLevel): void {
@@ -565,6 +456,48 @@ function dedupeOverlappingDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 	}
 
 	return [...byKey.values()];
+}
+
+/** #5416: a class member the class's blocking tier raises (`withClassSeverity`). */
+function blocksAsClassMember(d: Diagnostic): boolean {
+	return d.semantic !== "blocking" && withClassSeverity(d) !== d;
+}
+
+/**
+ * #5416: one verdict and one copy per cross-tool finding class at a place.
+ * It runs on what the per-copy filters, the delta and the pre-edit seed left,
+ * so each of them read every tool's copy apart. A class the seed held a copy
+ * of keeps its other copies as their tools rated them: the finding is listed
+ * as pre-existing, and the seed's scope stays linters only. Every other
+ * member is raised to the class tier, then the copy the overlap dedupe would
+ * prefer stands. It only raises or collapses survivors, so it never lowers a
+ * verdict.
+ */
+function mergeFindingClasses(
+	visible: Diagnostic[],
+	held: readonly Diagnostic[],
+): Diagnostic[] {
+	const heldKeys = new Set(held.map(findingClassKey));
+	const score = (d: Diagnostic) =>
+		semanticRank(d.semantic) * 100 +
+		toolPriority(d.tool, d.defectClass ?? classifyDiagnostic(d));
+	const slotByKey = new Map<string, number>();
+	const merged: Diagnostic[] = [];
+	for (const d of visible) {
+		const key = findingClassKey(d);
+		if (key === undefined || heldKeys.has(key)) {
+			merged.push(d);
+			continue;
+		}
+		const raised = withClassSeverity(d);
+		const slot = slotByKey.get(key);
+		if (slot === undefined) {
+			slotByKey.set(key, merged.push(raised) - 1);
+		} else if (score(raised) > score(merged[slot] as Diagnostic)) {
+			merged[slot] = raised;
+		}
+	}
+	return merged;
 }
 
 function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
@@ -1356,40 +1289,26 @@ async function runGroup(
 				: classifyObservedRunner(projectRoot, runner.id);
 		if (observedTier === "collect-later") {
 			const markedAtMs = Date.now();
-			const deferred = runRunner(runnerCtx, runner, semantic).then((result) => {
-				const durationMs = Date.now() - markedAtMs;
-				const tier = observeRunnerLatency({
+			// #5413: at most one run of this runner in flight per project; a
+			// write meanwhile owes one rerun for its file. The run's latency is
+			// measured from its own start, never from a queued write's mark.
+			const run = async (): Promise<RunnerResult> => {
+				const startedAtMs = Date.now();
+				const result = await runRunner(runnerCtx, runner, semantic);
+				const durationMs = Date.now() - startedAtMs;
+				observeRunnerTier({
+					filePath: ctx.filePath,
 					projectRoot,
 					runnerId: runner.id,
+					observedTier,
 					durationMs,
-					timedOut: result.failureKind === "timeout",
+					result,
 				});
-				if (tier !== observedTier) {
-					logLatency({
-						type: "phase",
-						filePath: ctx.filePath,
-						phase: "runner_collect_later_tier_flip",
-						durationMs: 0,
-						metadata: {
-							runnerId: runner.id,
-							from: observedTier,
-							to: tier,
-							projectRoot,
-						},
-					});
-				}
-				if (tier === "collect-later") {
-					incrementDegradationCount({
-						kind: "runner-collect-later",
-						subject: `${projectRoot}:${runner.id}`,
-						reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
-					});
-				}
 				logLatency({
 					type: "runner",
 					filePath: ctx.filePath,
 					runnerId: runner.id,
-					startedAt: new Date(markedAtMs).toISOString(),
+					startedAt: new Date(startedAtMs).toISOString(),
 					durationMs,
 					status: result.status,
 					diagnosticCount: result.diagnostics.length,
@@ -1401,6 +1320,12 @@ async function runGroup(
 					},
 				});
 				return result;
+			};
+			const { promise: deferred, coalesced } = runCollectLater({
+				projectRoot,
+				runnerId: runner.id,
+				filePath: ctx.filePath,
+				start: run,
 			});
 			deferRunnerFindings({
 				filePath: ctx.filePath,
@@ -1437,7 +1362,11 @@ async function runGroup(
 				status: "pending",
 				diagnosticCount: 0,
 				semantic,
-				metadata: { tier: "collect-later", delivered: "turn_end" },
+				metadata: {
+					tier: "collect-later",
+					delivered: "turn_end",
+					...(coalesced && { coalesced: true }),
+				},
 			});
 			continue;
 		}
@@ -1446,34 +1375,16 @@ async function runGroup(
 		onRunnerResult?.(runnerId, result);
 		const runnerEnd = Date.now();
 		const duration = runnerEnd - runnerStart;
-		const tier =
-			ctx.writeIndex === undefined
-				? "inline"
-				: observeRunnerLatency({
-						projectRoot,
-						runnerId: runner.id,
-						durationMs: duration,
-						timedOut: result.failureKind === "timeout",
-					});
-		if (tier !== observedTier) {
-			logLatency({
-				type: "phase",
+		// Only post-write dispatches observe: a project scan or direct API call
+		// has no tier to flip (`observedTier` is "inline" for it).
+		if (ctx.writeIndex !== undefined) {
+			observeRunnerTier({
 				filePath: ctx.filePath,
-				phase: "runner_collect_later_tier_flip",
-				durationMs: 0,
-				metadata: {
-					runnerId: runner.id,
-					from: observedTier,
-					to: tier,
-					projectRoot,
-				},
-			});
-		}
-		if (tier === "collect-later") {
-			incrementDegradationCount({
-				kind: "runner-collect-later",
-				subject: `${projectRoot}:${runner.id}`,
-				reason: `observed ${duration}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+				projectRoot,
+				runnerId: runner.id,
+				observedTier,
+				durationMs: duration,
+				result,
 			});
 		}
 		// Runner definitions are a typed API, but embedders/plugins can still
@@ -1962,17 +1873,18 @@ export async function dispatchForFile(
 		);
 		// #4484 r2: an unused value is a blocker only while the delta calls it
 		// new. Held back as already seen, it is still observed, promoted as it
-		// was when it was recorded, so the record keeps it pending.
+		// was when it was recorded, so the record keeps it pending. #5416: so is
+		// a class member the merge below raised.
 		stillObserved.push(
 			...promoteDeltaUnusedToBlockers(
 				visibleDiagnostics.flatMap((d) =>
 					!isNew.has(d) &&
 					d.semantic !== "blocking" &&
-					isUnusedValueDiagnostic(d)
+					(isUnusedValueDiagnostic(d) || blocksAsClassMember(d))
 						? [d]
 						: [],
 				),
-			),
+			).map(withClassSeverity),
 		);
 		visibleDiagnostics = promoteDeltaUnusedToBlockers(filtered.new);
 		resolvedCount = filtered.fixed.length;
@@ -1997,7 +1909,11 @@ export async function dispatchForFile(
 		const classified = classifyPreExisting(
 			preEditSeed,
 			[
-				...visibleDiagnostics.filter((d) => d.semantic === "blocking"),
+				// #5416: and a class member the merge below would raise, so the
+				// seed holds it before the raise can block on it.
+				...visibleDiagnostics.filter(
+					(d) => d.semantic === "blocking" || blocksAsClassMember(d),
+				),
 				...heldBackBlockers,
 			],
 			seedContent,
@@ -2013,6 +1929,7 @@ export async function dispatchForFile(
 		}
 		ctx.facts.setBoundedSessionFact(seedKey, classified.nextSeed);
 	}
+	visibleDiagnostics = mergeFindingClasses(visibleDiagnostics, preExisting);
 
 	// Persist full current snapshot for next run (not delta-filtered subset).
 	// Gated on `baselinePathSafe` too: a non-absolute `ctx.filePath` already
@@ -2264,11 +2181,61 @@ function failureRowMetadata(result: RunnerResult):
 	return result.inconclusive === true ? inconclusive : undefined;
 }
 
+/**
+ * Record one finished runner run against the observed tier: the latency
+ * observation itself, one `runner_collect_later_tier_flip` row when it moved
+ * the runner's tier, and one `runner-collect-later` count while it is (still)
+ * slow. Shared by the collect-later run and the inline run.
+ */
+function observeRunnerTier(options: {
+	filePath: string;
+	projectRoot: string;
+	runnerId: string;
+	observedTier: CollectLaterTier;
+	durationMs: number;
+	result: RunnerResult;
+}): void {
+	const { filePath, projectRoot, runnerId, observedTier, durationMs } = options;
+	const tier = observeRunnerLatency({
+		projectRoot,
+		runnerId,
+		durationMs,
+		timedOut: options.result.failureKind === "timeout",
+	});
+	if (tier !== observedTier) {
+		logLatency({
+			type: "phase",
+			filePath,
+			phase: "runner_collect_later_tier_flip",
+			durationMs: 0,
+			metadata: { runnerId, from: observedTier, to: tier, projectRoot },
+		});
+	}
+	if (tier === "collect-later") {
+		incrementDegradationCount({
+			kind: "runner-collect-later",
+			subject: `${projectRoot}:${runnerId}`,
+			reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+		});
+	}
+}
+
 async function runRunner(
 	ctx: DispatchContext,
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
 ): Promise<RunnerResult> {
+	// #5413: a runner whose own spawn timed out this session is not run again,
+	// not even for its availability probe: a wedged binary does not heal between
+	// edits. "Not checked", never clean; the skip is recorded once per session.
+	if (isInSpawnTimeoutCooldown(runner.id)) {
+		recordDegradationOnce({
+			kind: "runner-spawn-timeout-cooldown",
+			subject: runner.id,
+			reason: "skipped: its spawn timed out earlier this session",
+		});
+		return { status: "skipped", diagnostics: [], semantic: "none" };
+	}
 	const timeoutMs = Math.max(
 		runner.timeoutMs ?? RUNNER_TIMEOUT_MS,
 		getRunnerTimeoutFloorMs(),
@@ -2287,8 +2254,13 @@ async function runRunner(
 		// `withBudget` settles `undefined` when the budget lapses; boxing the
 		// runner's value tells that apart from a runner that resolved nothing.
 		// The message keeps the words `failureKind` is classified from below.
+		// #5413: every spawn the runner reaches arms ITS cooldown on a timeout.
 		const outcome = await withBudget(
-			runner.run(ctx).then((value) => ({ value })),
+			spawnCooldownScope
+				.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
+					runner.run(ctx),
+				)
+				.then((value) => ({ value })),
 			timeoutMs,
 		);
 		if (outcome === undefined) {

@@ -9,16 +9,11 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveToolCommandWithInstallFallback,
-} from "./utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const mypy = createAvailabilityChecker("mypy", "");
 
 // mypy exit codes: 0 = no type errors, 1 = type errors found, 2 = a blocking
 // error. 2 is NOT a rejected invocation on its own — mypy reports a source
@@ -91,12 +86,7 @@ const mypyRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		let cmd: string | null = null;
-		if (await mypy.isAvailableAsync(cwd)) {
-			cmd = mypy.getCommand(cwd);
-		} else {
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");
-		}
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 

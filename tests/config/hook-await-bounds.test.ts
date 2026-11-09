@@ -2357,7 +2357,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// unbounded awaits (two spawns in `probeAstGrepCommandAsync`, four of its
 	// call sites and `findGlobalBinary` in `isSgAvailableAsync`); the worklist
 	// shrinks with the sweep, nothing new is unbounded.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
+	// #5410: 30 -> 31 — a project shim whose probe says it is broken falls
+	// through to the managed and PATH rungs (`findBeyondProject`), at most
+	// once per probe; those rungs stat and verify under their own probe
+	// budget, unbounded from the hook signal like the first resolution.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -2712,7 +2716,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/review-graph/builder.ts": 42,
 	// #5289: 9 -> 8. `safeSpawnBatch` (deleted, no caller) held the module's
 	// `await Promise.all(...)`; the other eight awaits are unchanged.
-	"clients/safe-spawn.ts": 8,
+	// #5413: 8 -> 9. `safeSpawnAsync` awaits its own spawn promise to arm the
+	// timeout cooldown after the child settles; that promise is bounded by the
+	// spawn's own timeout, the same budget it already carried.
+	"clients/safe-spawn.ts": 9,
 	// #3612: `adoptHandoff` awaits the own and parent sidecar loads and each
 	// store's restore: the session_start sidecar I/O that read-guard-branch.ts
 	// and index.ts held before.

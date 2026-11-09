@@ -137,6 +137,15 @@ concurrency:
 permissions: {}
 
 env:
+  # #5420: one transient registry 5xx must not red npm ci or npx (npm's
+  # default is 2 retries). Gate: tests/config/release-download-helper-workflow
+  # .test.ts.
+  npm_config_fetch_retries: 5
+  npm_config_fetch_retry_maxtimeout: 120000
+  # pnpm ignores the npm_config_ keys above (pnpm 11.15.1 and 11.21.0 against
+  # a 503 registry: 2 retries left under npm_config_, 5 under pnpm_config_).
+  pnpm_config_fetch_retries: 5
+  pnpm_config_fetch_retry_maxtimeout: 120000
   # Single source of truth for "the oldest host we promise" (#731, raised to
   # 0.86.1 by #4688) -- both the existing pi-load/mise-repro pins below AND
   # host-range-smoke's floor matrix cell read this ONE value, so the pin can
@@ -262,10 +271,15 @@ jobs:
         with:
           version: 11.21.0
 
+      # #5420: `oven-sh/setup-bun` with `latest` listed tags through the GitHub
+      # API and downloaded bun from a release, uncached and unretried (a 504
+      # redded `pi-load bun-global`). `bun@latest` from the npm registry is the
+      # same version (the `latest` dist-tag) with the platform binary shipped as
+      # an @oven/bun-<os>-<arch> package, so the workflow's npm fetch retries
+      # apply and a 404 is not retried. All four bun sites use this form.
       - name: Setup bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
+        shell: bash
+        run: npm install --global bun@latest
 
       - name: Setup yarn (classic — hoists to node_modules like npm)
         if: matrix.pm == 'yarn'
@@ -497,9 +511,8 @@ jobs:
 
       - name: Setup bun
         if: matrix.pi_install == 'bun-global'
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
+        shell: bash
+        run: npm install --global bun@latest
 
       - name: Install pi (${{ matrix.pi_install }})
         shell: bash
@@ -960,9 +973,8 @@ jobs:
           node-version: "22"
 
       - name: Setup bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
+        shell: bash
+        run: npm install --global bun@latest
 
       # --ignore-scripts: this bootstrap install exists only so the resolver
       # script below can `import "semver"` — the committed lockfile's tree,
@@ -1160,9 +1172,8 @@ jobs:
           node-version: "22"
 
       - name: Setup bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        with:
-          bun-version: latest
+        shell: bash
+        run: npm install --global bun@latest
 
       # Retried (review S3a): a registry 429/5xx here must not silently mark
       # the nightly lane "clean" or blow up before it can even alert.
