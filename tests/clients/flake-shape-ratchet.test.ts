@@ -577,6 +577,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the interrupt witness must hold a real child open until SIGINT; replacing the wait with a settled promise would erase the lifecycle under test",
 	},
+	// #5452 r2 F2: the abort lands 200 ms into a real child's run, the one
+	// timed wait the abort case needs. Sorted before clients/lsp/.
+	"raw-timer-wait:clients/dispatch/runner-spawn-timeout-cooldown.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the abort must land while a real child is mid-run; a fake clock cannot stop a spawned process, and no double reproduces a child killed mid-run",
+	},
 	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
 	// only observable through Node's `unhandledRejection` event, which fires
 	// on a real macrotask; the file drains one real `setImmediate` tick.
@@ -734,6 +741,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"a clean-tree HEAD move is a real git checkout; a stubbed git cannot produce the delta the look publishes",
+	},
+	// #5413: the cooldown is armed by safeSpawnAsync's own timeout, so the
+	// child that uses up its budget is real.
+	"real-process-spawn:clients/dispatch/runner-spawn-timeout-cooldown.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a real child must use up its own spawn budget, be aborted mid-run, fail to launch, or exit non-zero: the cooldown is armed by safeSpawnAsync's own result, which no double reproduces",
 	},
 	"real-process-spawn:clients/dispatch/runners/ast-grep-playground-verify.test.ts":
 		{

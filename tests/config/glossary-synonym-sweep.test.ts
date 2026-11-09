@@ -1781,7 +1781,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/child-unref.ts": 6,
 		"clients/config-resolve.ts": 11,
 		"clients/dead-code-client.ts": 3,
-		"clients/dispatch/dispatcher.ts": 34,
+		// #5413: the reset-dropped rerun's answer is a `status: "skipped"`
+		// `RunnerResult`, the same member sense as every row here.
+		"clients/dispatch/collect-later-tier.ts": 1,
+		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
+		"clients/dispatch/dispatcher.ts": 35,
 		"clients/dispatch/integration.ts": 1,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 2,
@@ -1815,7 +1819,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// returns `status: "skipped"` instead of `succeeded` — the same
 		// `RunnerResult.status` member sense as every other row here.
 		"clients/dispatch/runners/lsp.ts": 11,
-		"clients/dispatch/runners/markdownlint.ts": 4,
+		// 4 -> 3 (#5413): the local cooldown skip moved to the dispatcher.
+		"clients/dispatch/runners/markdownlint.ts": 3,
 		"clients/dispatch/runners/mypy.ts": 2,
 		"clients/dispatch/runners/oxlint.ts": 11,
 		"clients/dispatch/runners/php-lint.ts": 2,

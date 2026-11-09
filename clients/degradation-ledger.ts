@@ -1855,6 +1855,14 @@ export type DegradationKind =
 	 */
 	| "runner-parsed-nothing"
 	/**
+	 * `runner-spawn-timeout-cooldown`: #5413: a runner was skipped without
+	 * running because one of its spawns used up its own timeout earlier this
+	 * session (`spawn-timeout-cooldown.ts`). Subject is the runner id, once per
+	 * session: every later edit takes the same skip, so the record states the
+	 * coverage gap once instead of once per edit.
+	 */
+	| "runner-spawn-timeout-cooldown"
+	/**
 	 * `safe-spawn-signal-reraise-unsupported`: The self-signal re-raise at the end of `installLifetimeCleanup`'s signal
 	 * handler did not happen, so the host exits without the signal's default
 	 * disposition. Two metadata `reason`s: `unsupported` — declined in advance,

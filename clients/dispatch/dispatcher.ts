@@ -44,6 +44,8 @@ import {
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { withBudget } from "../deadline-utils.js";
+import { spawnCooldownScope } from "../spawn-abort-scope.js";
+import { isInSpawnTimeoutCooldown } from "../spawn-timeout-cooldown.js";
 import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import { createAvailabilityChecker } from "./runners/utils/runner-helpers.js";
@@ -56,6 +58,7 @@ import {
 	classifyObservedRunner,
 	COLLECT_LATER_THRESHOLD_MS,
 	observeRunnerLatency,
+	runCollectLater,
 } from "./collect-later-tier.js";
 import { deferRunnerFindings } from "./pending-runner-findings.js";
 import {
@@ -1285,8 +1288,13 @@ async function runGroup(
 				: classifyObservedRunner(projectRoot, runner.id);
 		if (observedTier === "collect-later") {
 			const markedAtMs = Date.now();
-			const deferred = runRunner(runnerCtx, runner, semantic).then((result) => {
-				const durationMs = Date.now() - markedAtMs;
+			// #5413: at most one run of this runner in flight per project; a
+			// write meanwhile owes one rerun for its file. The run's latency is
+			// measured from its own start, never from a queued write's mark.
+			const run = async (): Promise<RunnerResult> => {
+				const startedAtMs = Date.now();
+				const result = await runRunner(runnerCtx, runner, semantic);
+				const durationMs = Date.now() - startedAtMs;
 				const tier = observeRunnerLatency({
 					projectRoot,
 					runnerId: runner.id,
@@ -1318,7 +1326,7 @@ async function runGroup(
 					type: "runner",
 					filePath: ctx.filePath,
 					runnerId: runner.id,
-					startedAt: new Date(markedAtMs).toISOString(),
+					startedAt: new Date(startedAtMs).toISOString(),
 					durationMs,
 					status: result.status,
 					diagnosticCount: result.diagnostics.length,
@@ -1330,6 +1338,12 @@ async function runGroup(
 					},
 				});
 				return result;
+			};
+			const { promise: deferred, coalesced } = runCollectLater({
+				projectRoot,
+				runnerId: runner.id,
+				filePath: ctx.filePath,
+				start: run,
 			});
 			deferRunnerFindings({
 				filePath: ctx.filePath,
@@ -1366,7 +1380,11 @@ async function runGroup(
 				status: "pending",
 				diagnosticCount: 0,
 				semantic,
-				metadata: { tier: "collect-later", delivered: "turn_end" },
+				metadata: {
+					tier: "collect-later",
+					delivered: "turn_end",
+					...(coalesced && { coalesced: true }),
+				},
 			});
 			continue;
 		}
@@ -2204,6 +2222,17 @@ async function runRunner(
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
 ): Promise<RunnerResult> {
+	// #5413: a runner whose own spawn timed out this session is not run again,
+	// not even for its availability probe: a wedged binary does not heal between
+	// edits. "Not checked", never clean; the skip is recorded once per session.
+	if (isInSpawnTimeoutCooldown(runner.id)) {
+		recordDegradationOnce({
+			kind: "runner-spawn-timeout-cooldown",
+			subject: runner.id,
+			reason: "skipped: its spawn timed out earlier this session",
+		});
+		return { status: "skipped", diagnostics: [], semantic: "none" };
+	}
 	const timeoutMs = Math.max(
 		runner.timeoutMs ?? RUNNER_TIMEOUT_MS,
 		getRunnerTimeoutFloorMs(),
@@ -2222,8 +2251,13 @@ async function runRunner(
 		// `withBudget` settles `undefined` when the budget lapses; boxing the
 		// runner's value tells that apart from a runner that resolved nothing.
 		// The message keeps the words `failureKind` is classified from below.
+		// #5413: every spawn the runner reaches arms ITS cooldown on a timeout.
 		const outcome = await withBudget(
-			runner.run(ctx).then((value) => ({ value })),
+			spawnCooldownScope
+				.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
+					runner.run(ctx),
+				)
+				.then((value) => ({ value })),
 			timeoutMs,
 		);
 		if (outcome === undefined) {
