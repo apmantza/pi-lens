@@ -1,5 +1,4 @@
 import "./clients/console-guard-install.js";
-import { setHostProjectTrustLoader } from "./clients/project-trust.js";
 import { BoundedSet } from "./clients/bounded-cache.js";
 import {
 	bounded,
@@ -29,6 +28,7 @@ import {
 	adoptProjectTrustFromPorts,
 	assertInstallAllowed,
 	readProjectTrustFromContext,
+	setHostProjectTrustLoader,
 } from "./clients/project-trust.js";
 import {
 	type ExtensionRunMode,
