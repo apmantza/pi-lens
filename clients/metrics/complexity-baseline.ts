@@ -433,16 +433,19 @@ export interface EditComplexityVerdict {
  * with its baseline (taken at first touch), and store the new table as the
  * file's `last` through `session`, so the next edit is judged on its own
  * change. A file with no stored baseline only stores its table. `undefined`
- * when the file cannot be measured, or the edit is aborted (nothing stored).
+ * when the file cannot be measured, the edit is aborted (nothing stored), or
+ * there are no thresholds (nothing judged or stored).
  */
 export async function adviseOnEdit(args: {
 	filePath: string;
 	store: BoundedLruCache<string, ComplexityBaseline>;
 	session: Pick<GenerationHandle, "guardedWrite">;
-	thresholds: Thresholds;
+	/** Undefined when the file's rule policy switches the line off. */
+	thresholds: Thresholds | undefined;
 	signal?: AbortSignal | undefined;
 }): Promise<EditComplexityVerdict | undefined> {
 	const { filePath, store, session, thresholds, signal } = args;
+	if (!thresholds) return undefined;
 	const startedAt = Date.now();
 	let content: string;
 	try {

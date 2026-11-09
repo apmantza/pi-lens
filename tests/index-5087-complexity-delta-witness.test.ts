@@ -51,7 +51,7 @@ function fn(name: string, branches: number): string {
 async function editTo(
 	slug: string,
 	next: string,
-	projectConfig?: object,
+	projectConfig?: Record<string, unknown>,
 ): Promise<{ out: string; rows: Array<Record<string, unknown>> }> {
 	await installLspServiceDouble({
 		supportsLSP: () => false,
