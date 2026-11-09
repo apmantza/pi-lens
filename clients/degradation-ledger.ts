@@ -665,6 +665,14 @@ export type DegradationKind =
 	 * autofix is declined for that scan rather than guessed at.
 	 */
 	| "gradle-ktlint-scan-budget-exceeded"
+	/**
+	 * `grammar-blocked`: a tree-sitter grammar could not be fetched or loaded,
+	 * so the rules that need that grammar do not run (#1536, #1548, #4224).
+	 * Subject is the grammar file; counted, so one retrying grammar keeps one
+	 * ring slot. The PowerShell `-File` run failure used to share this kind and
+	 * records `powershell-run-failed` now, because a blocked grammar download
+	 * and a blocked PowerShell analysis need different user actions (#5400).
+	 */
 	| "grammar-blocked"
 	/**
 	 * `held-own-pid-evicted`: #3096: `holdOwnChildPid` found the held-pid set full of still-live
@@ -1406,6 +1414,15 @@ export type DegradationKind =
 	 * group count is the exact number of such calls, the reason the latest keys.
 	 */
 	| "mcp-ignored-arguments"
+	/**
+	 * `mode-suppression`: #5400 narrows this to its one remaining meaning: a
+	 * user-facing notice the host mode cannot render, so it is logged instead of
+	 * shown in print/json mode (#1334, #1366). Subject is the notice surface
+	 * (`ctx.ui.notify`, `user degradation notice`) and the reason names the
+	 * mode, so a headless operator still sees what was suppressed. zizmor
+	 * running offline used to share this kind and records `zizmor-offline`
+	 * now.
+	 */
 	| "mode-suppression"
 	/**
 	 * `mutation-bridge-invalid-branch-epoch`: #3677: the mutation bridge received a foreign `readGuardBranchEpoch` that
@@ -1592,6 +1609,17 @@ export type DegradationKind =
 	 * itself already landed; only the hash is missing. Subject is the file path.
 	 */
 	| "pipeline-post-write-hash-unavailable"
+	/**
+	 * `powershell-run-failed`: #5400 (the #1540 and #1598 records, split out of
+	 * `grammar-blocked`): a PowerShell `-File` analysis run produced nothing
+	 * usable. Three causes, named in the reason: the child died with no exit
+	 * status (crash or signal), it exited nonzero, most often because the
+	 * execution policy refused to load the script, or it exited 0 with empty or
+	 * unparseable stdout. Subject is `psscriptanalyzer`; counted, so every
+	 * affected save raises the exact tally while one retained entry holds the
+	 * latest reason. Only the execution-policy cause latches analysis off.
+	 */
+	| "powershell-run-failed"
 	/** `pre-edit-capture-incomplete`: #4543: first-write capture exceeded its deadline or capacity (once/session). */
 	| "pre-edit-capture-incomplete"
 	/** `process-bridge-unavailable`: A mounted process bridge refused calls during a primary-session gap. */
@@ -2289,7 +2317,18 @@ export type DegradationKind =
 	 * the per-kind entry bound is reached.
 	 */
 	| "word-index-orphan-file-id"
-	| "workspace-glob-cap";
+	| "workspace-glob-cap"
+	/**
+	 * `zizmor-offline`: #5400 (the #1535 record, split out of
+	 * `mode-suppression`): zizmor starts without a GitHub token because the
+	 * `gh auth token` probe never got a fair hearing, or is cooling down from
+	 * one, so its online audits (`known-vulnerable-actions`, `unpinned-uses`,
+	 * `impostor-commit`) are skipped while the scan still looks clean (#1459's
+	 * security-silence shape). Subject is `zizmor`; counted per cooldown cycle,
+	 * so a recurring offline start is one row with an exact tally. A genuine
+	 * "not authenticated" answer records nothing: nothing unexpected happened.
+	 */
+	| "zizmor-offline";
 
 export interface DegradationRecord {
 	kind: unknown;
