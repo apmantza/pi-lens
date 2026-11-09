@@ -18,6 +18,7 @@ vi.mock("../../clients/pipeline.js", () => ({
 }));
 
 import { CacheManager } from "../../clients/cache-manager.js";
+import { ComplexityClient } from "../../clients/complexity-client.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -78,8 +79,11 @@ afterEach(() => {
  * stored, then the file changes to `next`, as the edit tool does.
  */
 async function touchThenWrite(next: string): Promise<void> {
-	const baseline = await captureComplexityBaseline(filePath);
-	runtime.complexityBaselines.set(complexityBaselineKey(filePath), baseline!);
+	const analysis = await new ComplexityClient().analyzeFile(filePath);
+	runtime.complexityBaselines.set(
+		complexityBaselineKey(filePath),
+		captureComplexityBaseline(analysis?.measuredFunctions),
+	);
 	fs.writeFileSync(filePath, next);
 }
 

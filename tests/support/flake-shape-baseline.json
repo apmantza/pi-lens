@@ -1044,7 +1044,6 @@
 		"clients/runtime-tool-call-2939-baseline-escape.test.ts::clients/bootstrap": 1,
 		"clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/bootstrap": 1,
 		"clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/metrics-history": 1,
-		"clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/metrics/complexity-baseline": 1,
 		"clients/runtime-tool-call.test.ts::clients/bootstrap": 1,
 		"clients/runtime-tool-call.test.ts::clients/pipeline": 1,
 		"clients/runtime-tool-result-5087-complexity-delta.test.ts::clients/pipeline": 1,

@@ -1218,16 +1218,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:021bed00~ad8f1d0b": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:0c4f0c61~51275360": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
@@ -1256,6 +1246,16 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"#2523 AC4's dead-signal site: `setAmbientAbortSignal` is only " +
 			"ever called from tool_result, so the signal read here is " +
 			"ALWAYS undefined. Fixing it is AC4's job, not slice 1's.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-tool-call.ts#handleToolCallImpl:58e74e03~28736675": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:6845dabe~79a8d019": {
@@ -2362,13 +2362,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// once per probe; those rungs stat and verify under their own probe
 	// budget, unbounded from the hook signal like the first resolution.
 	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
-	// #5087: the first-touch measure and the edit's re-measure plus its one
-	// default-branch read (10 in all). Its awaits are
-	// the shared parser (init, parse) and two leaf-bounded `git` spawns
-	// (GIT_TIMEOUT_MS); both hook callers hold the whole capture under bounded()
-	// with the hook's signal, so a second bound here would add a timer for the
-	// same deadline.
-	"clients/metrics/complexity-baseline.ts": 10,
+	// #5087: the edit's re-measure plus its one default-branch read (9 in
+	// all; 10 -> 9 when the first touch took its table from the analyzer's
+	// own measure, #5443 review F6). Its awaits are the shared parser (init,
+	// parse) and two leaf-bounded `git` spawns (GIT_TIMEOUT_MS); its hook
+	// caller holds the whole delta under bounded() with the hook's signal, so
+	// a second bound here would add a timer for the same deadline.
+	"clients/metrics/complexity-baseline.ts": 9,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -2973,12 +2973,6 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The document-symbol enrichment uses the tool_call's ctx.signal, absent " +
 		"only in a harness. Its inner LSP budget and the outer EXPANSION_BUDGET_MS " +
 		"wall bound are both live; the outer bound also releases the hook on Escape.",
-	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~bae397dc":
-		"The first-touch complexity baseline (#5087) uses the tool_call's " +
-		"ctx.signal, absent only in a harness. #2523 gives tool_call no budget " +
-		"of its own, so the capture carries COMPLEXITY_BASELINE_BUDGET_MS " +
-		"(500 ms); that wall bound is always live, and a capture it abandons " +
-		"writes nothing (the next touch tries again).",
 	"call:clients/runtime-tool-call.ts#handleToolCallImpl:2dc2d1e2~ce33f035":
 		"The pre-edit linter capture (#4483) uses the tool_call's ctx.signal, " +
 		"absent only in a harness. #2523 gives tool_call no budget of its own, " +

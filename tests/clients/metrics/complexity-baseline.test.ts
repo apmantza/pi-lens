@@ -51,6 +51,7 @@ vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => {
 	};
 });
 import { BoundedLruCache } from "../../../clients/bounded-cache.js";
+import { ComplexityClient } from "../../../clients/complexity-client.js";
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -73,6 +74,16 @@ import {
 	installGitFixtureEnv,
 } from "../../support/git-fixture-env.js";
 import { removeTempDirSync } from "../test-utils.js";
+
+/**
+ * A file's first-touch baseline as the `tool_call` takes it: from the rows the
+ * analyzer's own measure keyed (`analyzeFile`'s `measuredFunctions`).
+ */
+async function firstTouch(file: string) {
+	return captureComplexityBaseline(
+		(await new ComplexityClient().analyzeFile(file))?.measuredFunctions,
+	);
+}
 
 const THRESHOLDS = { cyclomatic: 15, nesting: 6 };
 
@@ -417,9 +428,9 @@ describe("the default-branch baseline in a real repository (#5087)", () => {
 			},
 		};
 		// First touch measures the bytes on disk only; main waits for an edit.
-		const baseline = await captureComplexityBaseline(file);
+		const baseline = await firstTouch(file);
 		expect(baseline?.main).toBeUndefined();
-		store.set(complexityBaselineKey(file), baseline!);
+		store.set(complexityBaselineKey(file), baseline);
 
 		fs.writeFileSync(file, fn("handle", 17) + fn("other", 1));
 		const first = await adviseOnEdit({
@@ -448,8 +459,8 @@ describe("the default-branch baseline in a real repository (#5087)", () => {
 		const file = write("svc.ts", fn("handle", 3));
 		commit();
 		const store = new BoundedLruCache<string, ComplexityBaseline>(4);
-		const baseline = await captureComplexityBaseline(file);
-		store.set(complexityBaselineKey(file), baseline!);
+		const baseline = await firstTouch(file);
+		store.set(complexityBaselineKey(file), baseline);
 		fs.writeFileSync(file, fn("handle", 17));
 		const retired = { guardedWrite: () => undefined };
 		await adviseOnEdit({
@@ -468,9 +479,9 @@ describe("the default-branch baseline in a real repository (#5087)", () => {
 	/** A store holding `file`'s first-touch table, as the `tool_call` leaves it. */
 	async function touched(file: string) {
 		const store = new BoundedLruCache<string, ComplexityBaseline>(4);
-		const baseline = await captureComplexityBaseline(file);
-		store.set(complexityBaselineKey(file), baseline!);
-		return { store, baseline: baseline! };
+		const baseline = await firstTouch(file);
+		store.set(complexityBaselineKey(file), baseline);
+		return { store, baseline };
 	}
 
 	/** An anonymous route handler of cyclomatic complexity `1 + branches`. */

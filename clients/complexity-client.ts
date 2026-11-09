@@ -14,7 +14,10 @@
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { measureFile } from "./metrics/function-metrics.js";
+import {
+	measureFile,
+	type NamedFunctionMetrics,
+} from "./metrics/function-metrics.js";
 import {
 	withTreeSitterRoot,
 	type ComplexityLanguageId,
@@ -47,6 +50,11 @@ export interface FileComplexity {
 	tryCatchCount: number;
 	/** Per-function metrics used by advisory reports and model diagnostics. */
 	functions: FunctionMetrics[];
+	/**
+	 * `measureFile`'s own rows, keyed (#5087): a file's first-touch complexity
+	 * baseline is taken from them, so the first touch measures the file once.
+	 */
+	measuredFunctions: readonly NamedFunctionMetrics[];
 }
 
 export interface FunctionMetrics {
@@ -267,6 +275,7 @@ export class ComplexityClient {
 			singleUseFunctions: countSingleUseFunctions(functions),
 			tryCatchCount: countTryCatch(root),
 			functions,
+			measuredFunctions: file.functions,
 		};
 	}
 

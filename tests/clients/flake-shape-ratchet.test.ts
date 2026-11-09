@@ -506,12 +506,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the metrics-history writer is recorded rather than run, so the case can see whether a replaced session's snapshot write happened; its own I/O is not under test",
 		},
-	"in-process-mock:clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/metrics/complexity-baseline":
-		{
-			detector: "in-process-mock",
-			reason:
-				"the first-touch capture is passed through to the real one and only held open, so a session replacement lands inside its await (#5087 S2a)",
-		},
 	"in-process-mock:clients/runtime-tool-result-5087-complexity-delta.test.ts::clients/pipeline":
 		{
 			detector: "in-process-mock",

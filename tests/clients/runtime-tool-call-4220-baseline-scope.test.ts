@@ -1,4 +1,4 @@
-// flake-shape: in-process-mock — the analyzer bootstrap (the shared seam double), the metrics-history writer and the baseline capture are held open so a session replacement can land inside each await; the coordinator, its scope and the store are real.
+// flake-shape: in-process-mock — the analyzer bootstrap (the shared seam double), its analysis and the metrics-history writer are held open so a session replacement can land inside each await; the coordinator, its scope and the store are real.
 /**
  * #4220 / #5087 S2a: the `tool_call` complexity baseline is written in the
  * session that took it, or not at all.
@@ -12,10 +12,12 @@
  * its own baseline for that file.
  *
  * The bootstrap module is the shared `bootstrapSeamMock`, its load held open
- * until a case releases it; the baseline capture is held the same way in the
- * second case. The coordinator, its scope and the store are real.
+ * until a case releases it; the analysis the baseline is taken from is held
+ * the same way in the second case, and the LSP config init in the third. The
+ * coordinator, its scope and the store are real.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NamedFunctionMetrics } from "../../clients/metrics/function-metrics.js";
 
 const pendingLoad: {
 	resolve?: (value: unknown) => void;
@@ -29,20 +31,38 @@ function loadStarted(): Promise<void> {
 	});
 }
 
+/** When set, the next analysis waits for `release`. */
+const heldCapture: {
+	hold: boolean;
+	started?: () => void;
+	release?: () => void;
+} = { hold: false };
+
 const LOADED_CLIENTS = {
 	complexityClient: {
 		isSupportedFile: () => true,
-		analyzeFile: async () => ({
-			maintainabilityIndex: 70,
-			cognitiveComplexity: 1,
-			maxNestingDepth: 1,
-			linesOfCode: 1,
-			maxCyclomaticComplexity: 1,
-			codeEntropy: 0,
-		}),
+		analyzeFile: async () => {
+			if (heldCapture.hold) {
+				await new Promise<void>((resolve) => {
+					heldCapture.release = resolve;
+					heldCapture.started?.();
+				});
+			}
+			return ANALYSIS;
+		},
 	},
 	biomeClient: {},
 	ruffClient: {},
+};
+
+const ANALYSIS = {
+	maintainabilityIndex: 70,
+	cognitiveComplexity: 1,
+	maxNestingDepth: 1,
+	linesOfCode: 1,
+	maxCyclomaticComplexity: 1,
+	codeEntropy: 0,
+	measuredFunctions: [] as NamedFunctionMetrics[],
 };
 
 vi.mock("../../clients/bootstrap.js", async () => {
@@ -63,38 +83,8 @@ vi.mock("../../clients/metrics-history.js", () => ({
 	},
 }));
 
-/** When set, the next baseline capture waits for `release`. */
-const heldCapture: {
-	hold: boolean;
-	started?: () => void;
-	release?: () => void;
-} = { hold: false };
-
-vi.mock(
-	"../../clients/metrics/complexity-baseline.js",
-	async (importActual) => {
-		const actual =
-			await importActual<
-				typeof import("../../clients/metrics/complexity-baseline.js")
-			>();
-		return {
-			...actual,
-			captureComplexityBaseline: async (
-				...args: Parameters<typeof actual.captureComplexityBaseline>
-			) => {
-				if (heldCapture.hold) {
-					await new Promise<void>((resolve) => {
-						heldCapture.release = resolve;
-						heldCapture.started?.();
-					});
-				}
-				return actual.captureComplexityBaseline(...args);
-			},
-		};
-	},
-);
-
 import { CacheManager } from "../../clients/cache-manager.js";
+import { complexityBaselineKey } from "../../clients/metrics/complexity-baseline.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -155,17 +145,16 @@ describe("#4220 — the tool_call complexity baseline stays in its own session",
 		expect(snapshots).toEqual([]);
 	});
 
-	it("drops a baseline whose capture finishes after the session was replaced", async () => {
+	it("drops a baseline whose analysis finishes after the session was replaced", async () => {
 		heldCapture.hold = true;
 		const captureStarted = new Promise<void>((resolve) => {
 			heldCapture.started = resolve;
 		});
+		pendingLoad.onStart = () => pendingLoad.resolve?.(LOADED_CLIENTS);
 		const call = runHandlerExpectingNoThrow(() => handleToolCall(deps()));
 		await captureStarted;
 		runtime.resetForSession();
 		heldCapture.release?.();
-		pendingLoad.onStart = () => pendingLoad.resolve?.(LOADED_CLIENTS);
-		if (pendingLoad.resolve) pendingLoad.resolve(LOADED_CLIENTS);
 		await call;
 
 		expect(runtime.complexityBaselines.size).toBe(0);
@@ -209,5 +198,37 @@ describe("#4220 — the tool_call complexity baseline stays in its own session",
 
 		expect(runtime.complexityBaselines.size).toBe(1);
 		expect(snapshots).toEqual([filePath]);
+	});
+
+	it("takes the first-touch table from the analysis, not from a second measure of the file", async () => {
+		// #5443 review F6: the first touch measured the file twice, once for
+		// the table and once in `analyzeFile` (12k lines: 356 -> 536-600 ms).
+		// The file on disk declares `f`; the analysis names `measured`, so only
+		// a table taken from the analysis holds `measured` and not `f`.
+		const measured: NamedFunctionMetrics = {
+			name: "measured",
+			key: "measured",
+			line: 1,
+			endLine: 3,
+			cyclomatic: 7,
+			cognitive: 4,
+			nesting: 2,
+			length: 3,
+			parameters: 1,
+		};
+		ANALYSIS.measuredFunctions = [measured];
+		try {
+			pendingLoad.onStart = () => pendingLoad.resolve?.(LOADED_CLIENTS);
+			await runHandlerExpectingNoThrow(() => handleToolCall(deps()));
+		} finally {
+			ANALYSIS.measuredFunctions = [];
+		}
+
+		const held = runtime.complexityBaselines.get(
+			complexityBaselineKey(filePath),
+		);
+		expect([...(held?.last?.entries() ?? [])]).toEqual([
+			["measured", { name: "measured", cyclomatic: 7, nesting: 2 }],
+		]);
 	});
 });

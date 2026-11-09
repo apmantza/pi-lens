@@ -23,7 +23,11 @@ import type { BoundedLruCache } from "../bounded-cache.js";
 import type { GenerationHandle } from "../generation-guard.js";
 import { logLatency } from "../latency-logger.js";
 import { recordDegradationOnce } from "../degradation-ledger.js";
-import { ANONYMOUS_KEY, measureFile } from "./function-metrics.js";
+import {
+	ANONYMOUS_KEY,
+	measureFile,
+	type NamedFunctionMetrics,
+} from "./function-metrics.js";
 import {
 	normalizeMapKey,
 	realpathOrResolve,
@@ -98,6 +102,29 @@ function overMeasureCap(content: string): boolean {
 }
 
 /**
+ * The baseline table of functions `measureFile` measured: named functions
+ * only, at most {@link MAX_TABLE_FUNCTIONS}, in source order.
+ */
+function functionTableOf(
+	functions: readonly NamedFunctionMetrics[],
+): FunctionTable {
+	const table = new Map<string, FunctionValues>();
+	for (const fn of functions) {
+		// An anonymous function's key is its position among its siblings: an edit
+		// that adds a callback above shifts it, and the agent cannot act on
+		// `<anonymous>#2`. Test-suite organizers (#577) are anonymous too.
+		if (fn.key.includes(ANONYMOUS_KEY)) continue;
+		if (table.size >= MAX_TABLE_FUNCTIONS) break;
+		table.set(fn.key, {
+			name: fn.name,
+			cyclomatic: fn.cyclomatic,
+			nesting: fn.nesting,
+		});
+	}
+	return table;
+}
+
+/**
  * Measure `content` as `filePath`'s language. `treeKey` keys the shared
  * parser's tree cache: a default-branch blob passes its own, so measuring it
  * never evicts the hot tree of the file on disk.
@@ -119,21 +146,7 @@ export async function measureFunctionTable(
 		(tree) => measureFile(tree.rootNode as TsNode, languageId).functions,
 		"complexity-baseline",
 	);
-	if (!parsed.parsed) return undefined;
-	const table = new Map<string, FunctionValues>();
-	for (const fn of parsed.value) {
-		// An anonymous function's key is its position among its siblings: an edit
-		// that adds a callback above shifts it, and the agent cannot act on
-		// `<anonymous>#2`. Test-suite organizers (#577) are anonymous too.
-		if (fn.key.includes(ANONYMOUS_KEY)) continue;
-		if (table.size >= MAX_TABLE_FUNCTIONS) break;
-		table.set(fn.key, {
-			name: fn.name,
-			cyclomatic: fn.cyclomatic,
-			nesting: fn.nesting,
-		});
-	}
-	return table;
+	return parsed.parsed ? functionTableOf(parsed.value) : undefined;
 }
 
 /** Why a git spawn gave no answer: its failure kind, else `fallback`. */
@@ -247,30 +260,21 @@ export async function readAtDefaultBranch(
 }
 
 /**
- * The first-touch baseline of `filePath`: the file on disk now, before the
- * tool runs. The default branch's copy waits for the first edit
- * ({@link adviseOnEdit}). A file that cannot be measured still gets an
- * entry, so the session asks once.
+ * The first-touch baseline of a file: the functions the `tool_call` measured
+ * on disk, before the tool runs (`ComplexityClient.analyzeFile`'s
+ * `measuredFunctions`, so the first touch measures the file once, #5443
+ * review F6). The default branch's copy waits for the first edit
+ * ({@link adviseOnEdit}). A file that could not be measured (`undefined`: no
+ * bytes yet, unreadable or unparsable) still gets an entry, so the session
+ * asks once.
  */
-export async function captureComplexityBaseline(
-	filePath: string,
-	signal?: AbortSignal,
-): Promise<ComplexityBaseline | undefined> {
-	if (signal?.aborted) return undefined;
-	let onDisk: string | undefined;
-	try {
-		onDisk = fs.readFileSync(filePath, "utf-8");
-	} catch {
-		// none: a file a write is about to create has no bytes yet, and an
-		// unreadable one has none to measure; `last: undefined` is the answer.
-		onDisk = undefined;
-	}
-	const last =
-		onDisk === undefined
-			? undefined
-			: await measureFunctionTable(filePath, onDisk);
-	if (signal?.aborted) return undefined;
-	return { main: undefined, last };
+export function captureComplexityBaseline(
+	measured: readonly NamedFunctionMetrics[] | undefined,
+): ComplexityBaseline {
+	return {
+		main: undefined,
+		last: measured ? functionTableOf(measured) : undefined,
+	};
 }
 
 async function mainBaselineOf(
