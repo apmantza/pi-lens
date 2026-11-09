@@ -201,7 +201,8 @@ describe("quick-mode warmup survives a superseded word-index build (#1197)", () 
 			// worker, and the test returns once the pre-warm touch lands, before
 			// that write does. Removing the root first let the late write recreate
 			// `<root>/data/...` and race the sweep's own removal. Join the writer,
-			// then remove.
+			// then remove. The drain polls the in-flight writes for about 2 s, so
+			// a persist slower than that can still land after cleanup.
 			await drainBackgroundWritesForTests();
 			env.cleanup();
 		}
