@@ -18,7 +18,11 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	createTempFile,
+	drainBackgroundWritesForTests,
+	setupTestEnvironment,
+} from "./test-utils.js";
 
 const touchFileSpy = vi.hoisted(() => vi.fn());
 const logLatencySpy = vi.hoisted(() => vi.fn());
@@ -190,7 +194,19 @@ describe("quick-mode warmup survives a superseded word-index build (#1197)", () 
 				}),
 			);
 		} finally {
+			// Recurrence this prevents: tmp-fixture-hygiene reds on CI runs
+			// 42070566507, 42423970044, 42522786481 and 42528909888, each a
+			// leaked `pi-lens-warmup-superseded-*` root with a `data` child. The
+			// warmup's scan-context step hands the project snapshot to the persist
+			// worker, and the test returns once the pre-warm touch lands, before
+			// that write does. Removing the root first let the late write recreate
+			// `<root>/data/...` and race the sweep's own removal. Join the writer,
+			// then remove.
+			await drainBackgroundWritesForTests();
 			env.cleanup();
 		}
+		// Nothing recreates the removed root once the writer is joined.
+		await drainBackgroundWritesForTests();
+		expect(fs.existsSync(env.tmpDir)).toBe(false);
 	});
 });
