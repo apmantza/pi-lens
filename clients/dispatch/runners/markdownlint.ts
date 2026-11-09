@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs,
@@ -17,10 +17,6 @@ import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { markdownlintNoFixInvocation } from "./utils/markdownlint-api.js";
 import { parseToolRun } from "./utils/tool-failure.js";
-import {
-	isInSpawnTimeoutCooldown,
-	noteSpawnTimeout,
-} from "../../spawn-timeout-cooldown.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 
 // EXIT TABLE (markdownlint-cli2 0.17 README https://github.com/DavidAnson/markdownlint-cli2#exit-codes): 0 = no
@@ -135,19 +131,6 @@ const markdownlintRunner: RunnerDefinition = {
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
-		// #1995: a command cooling down after a spawn timeout already consumed
-		// its budget in another lane (availability verify, autofix --fix). Skip
-		// without spawning — "not checked", never re-reported as clean.
-		if (isInSpawnTimeoutCooldown(cmd)) {
-			logRunnerAdvisoryOnce(
-				ctx,
-				"markdownlint",
-				cwd,
-				`markdownlint: ${cmd} is cooling down after a spawn timeout — skipping (one bounded failure budget per edit)`,
-			);
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
-
 		// Shared config-args seam (#1247): the autofix path consumes the same
 		// builder, so the package-owned fallback config can never drift.
 		const configArgs = markdownlintConfigArgs(cwd);
@@ -158,23 +141,13 @@ const markdownlintRunner: RunnerDefinition = {
 		// package-owned child, under the same spawn budget and kill; the bare
 		// command is spawned (never with --fix) only when no package is found.
 		const invocation = markdownlintNoFixInvocation({ command: cmd, cwd, args });
+		// #5413: a timeout arms the cooldown in `safeSpawnAsync`, keyed by this
+		// runner's id (the dispatcher's runner scope), and the dispatcher skips
+		// the runner before it runs again this session.
 		const result = await safeSpawnAsync(invocation.command, invocation.args, {
 			timeout: 15000,
 			cwd,
 		});
-
-		// #1995: a timeout is negative runtime evidence. Arm the cooldown so
-		// the autofix and availability lanes cannot hand this command a second
-		// budget within the same session.
-		if (result.failure === "timeout") {
-			noteSpawnTimeout({
-				tool: "markdownlint",
-				command: cmd,
-				phase: "lint",
-				durationMs: 15000,
-				teardown: result.timeoutTeardown,
-			});
-		}
 
 		// #1816: this runner read `result.status` zero times, so an exit-2
 		// config error with an empty stdout parsed to zero diagnostics and was
