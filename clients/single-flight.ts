@@ -42,7 +42,7 @@
  * it rather than absorbing it.
  */
 
-import { spawnAbortScope } from "./spawn-abort-scope.js";
+import { spawnAbortScope, spawnCooldownScope } from "./spawn-abort-scope.js";
 
 /** Options for one {@link SingleFlight} instance. */
 export interface SingleFlightOptions {
@@ -191,7 +191,11 @@ export function createSingleFlight<T>(
 		// #5097: the flight serves every caller that joins it, so no one caller's
 		// abort scope (a tool call's Esc) may cancel its spawns. An aborted
 		// availability probe left the tool reported missing for the cooldown.
-		const pass = (): Promise<T> => spawnAbortScope.exit(fn);
+		// #5413: for the same reason no one caller's runner is charged when a
+		// shared spawn times out; availability probes run here and never arm
+		// a runner's spawn-timeout cooldown (#1467: a slow probe is transient).
+		const pass = (): Promise<T> =>
+			spawnAbortScope.exit(() => spawnCooldownScope.exit(fn));
 		const chain = async (): Promise<T> => {
 			let result = await pass();
 			// KNOWN INTERACTION, `coalesceTrailing` + `generation`: a flight that

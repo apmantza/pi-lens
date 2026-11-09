@@ -180,6 +180,29 @@
 				}
 			]
 		},
+		"collect-later-flight": {
+			"pins": {
+				"Identity": {
+					"value": "\"check\"",
+					"test": "tests/clients/dispatch/runner-collect-later.test.ts",
+					"title": "a session reset drops the queued rerun and the next write starts at once"
+				},
+				"Mode": {
+					"value": "\"flight\"",
+					"test": "tests/clients/dispatch/runner-collect-later.test.ts",
+					"title": "three quick writes start one run while the first is in flight, then one rerun for the latest bytes"
+				}
+			},
+			"notCodeChoice": [
+				{
+					"reason": "Scenario bound or actor set: it sizes the state space or picks which actors, inputs and steps TLC explores; no code branch reads it.",
+					"constants": [
+						"Files",
+						"MaxV"
+					]
+				}
+			]
+		},
 		"finding-delivery": {
 			"pins": {
 				"StampAt": {

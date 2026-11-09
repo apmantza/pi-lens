@@ -27,13 +27,20 @@ import {
 	toPosix,
 } from "./path-utils.js";
 import { getJscpdMaxEntriesDerived } from "./project-scale.js";
+import { isJstsFactFile } from "./file-kinds.js";
+import { isDeclarationFile } from "./generated-artifacts.js";
+
+// Non-JS/TS source extensions jscpd's tokenizers cover; the JS/TS family
+// answers through the registry seam (`isJstsFactFile`) (#5446).
+const JSCPD_WALK_OTHER_SOURCE =
+	/\.(py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/;
 import {
 	createAvailabilityChecker,
 	findManagedNodeToolBinary,
 	resolveAvailableOrInstall,
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
-import { runReportScan } from "./report-scan.js";
+import { parseReportJson, runReportScan } from "./report-scan.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
@@ -251,11 +258,10 @@ export class JscpdClient {
 				// per-call; isIgnored recompiles minimatch patterns per ancestor dir
 				// and should only run for files that already look like source.
 				if (
-					/\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/.test(
-						entry.name,
-					)
+					isJstsFactFile(entry.name) ||
+					JSCPD_WALK_OTHER_SOURCE.test(entry.name)
 				) {
-					if (entry.name.endsWith(".d.ts")) return "skip";
+					if (isDeclarationFile(entry.name)) return "skip";
 					if (ignoreMatcher.isIgnored(fullPath, false)) return "skip";
 					return "stop";
 				}
@@ -527,16 +533,7 @@ export class JscpdClient {
 	 * (#5411). #1736: `statistics.total` holds the stats, not `statistics.clones`.
 	 */
 	private parseReport(raw: string): JscpdResult {
-		let data: any;
-		try {
-			data = JSON.parse(raw);
-		} catch (err) {
-			// The throw is the point: a report this client cannot read is a failed
-			// scan, and `runReportScan`'s guard records it (#5411). Naming it here is
-			// what the guard's row and the log line carry.
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`unreadable jscpd report: ${message}`);
-		}
+		const data: any = parseReportJson("jscpd", raw);
 		// Stats live in statistics.total, not statistics.clones
 		const total = data.statistics?.total ?? {};
 

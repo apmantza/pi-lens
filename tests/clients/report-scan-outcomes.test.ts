@@ -111,7 +111,13 @@ const JSCPD_REPORT = JSON.stringify({
 
 /** What the faked CLI does with the report path it was handed. */
 type Cli = {
-	write: "report" | "nothing" | "directory" | "unreadable";
+	write:
+		| "report"
+		| "nothing"
+		| "directory"
+		| "unreadable"
+		| "truncated"
+		| "empty";
 	status: number | null;
 	signal?: NodeJS.Signals | null;
 	stderr?: string;
@@ -131,6 +137,8 @@ type Scanner = {
 	report: string;
 	/** The ledger lane this client records its own scan failures in. */
 	recordKind: string;
+	/** What the one ledger row of an unreadable report must name (#5447). */
+	unreadableReason: string;
 	/** A client whose missing-report reason names the command it ran (#1816). */
 	namesCommandInReason?: boolean;
 	/**
@@ -154,6 +162,7 @@ const SCANNERS: Scanner[] = [
 		reportFileInArgvValue: false,
 		report: GITLEAKS_REPORT,
 		recordKind: "security-scan-report-failed",
+		unreadableReason: "unreadable gitleaks report",
 		failedResultKeys: ["findings", "scannedAt", "success", "summary"],
 		scan: async (root) => {
 			const client = new GitleaksClient(false);
@@ -167,6 +176,7 @@ const SCANNERS: Scanner[] = [
 		reportFileInArgvValue: false,
 		report: TRIVY_REPORT,
 		recordKind: "security-scan-report-failed",
+		unreadableReason: "unreadable trivy report",
 		failedResultKeys: [
 			"findings",
 			"licenses",
@@ -193,6 +203,7 @@ const SCANNERS: Scanner[] = [
 		reportFileInArgvValue: false,
 		report: OPENGREP_REPORT,
 		recordKind: "opengrep-scan-refused",
+		unreadableReason: "unparseable opengrep report",
 		scan: async (root) => {
 			const client = new OpengrepClient(false);
 			vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
@@ -205,6 +216,7 @@ const SCANNERS: Scanner[] = [
 		reportFileInArgvValue: true,
 		report: JSCPD_REPORT,
 		recordKind: "runner-empty-result",
+		unreadableReason: "unreadable jscpd report",
 		namesCommandInReason: true,
 		scan: async (root) => {
 			const client = new JscpdClient(false);
@@ -270,6 +282,8 @@ const CELLS: Array<{
 	parsed?: boolean;
 	/** Text the one ledger row of a failed cell must name (#31: the row says WHY). */
 	expectReason?: string;
+	/** The row must name this scanner's own unreadable-report wording (#5447). */
+	expectUnreadableReason?: true;
 	/** A missing-report row, the one kind that carries #1816's `fields`. */
 	missingReportRow?: boolean;
 	/** Run the cell for these scanners only; the others have no such arm. */
@@ -333,16 +347,33 @@ const CELLS: Array<{
 		verdict: "failed",
 	},
 	{
-		// The report is there but is not JSON. jscpd's parser throws, and the guard
-		// records it as one failed scan with a `runner-empty-result` row naming the
-		// unreadable report (round-1 review of #5440, F4: the throw was unpinned).
-		// gitleaks and trivy parse the same bytes as zero findings; that is a
-		// separate finding and this cell does not pin it.
+		// The report is there but is not JSON. Every scanner records one failed scan
+		// whose row names the unreadable report; none reads it as a scan that ran
+		// and found nothing. gitleaks and trivy parsed these bytes as zero findings
+		// and an analysed success (#5447).
 		name: "report present but unreadable",
 		cli: { write: "unreadable", status: 0, stderr: "" },
 		verdict: "failed",
-		expectReason: "unreadable jscpd report",
-		only: ["jscpd"],
+		expectUnreadableReason: true,
+	},
+	{
+		// The shape the gitleaks parser's doc comment names: a report cut short
+		// (a CLI killed mid-write leaves its prefix on disk, and the file exists
+		// so the missing-report arm does not apply). A prefix of a real report is
+		// the unreadable report, whatever the exit status says (#5447).
+		name: "truncated report, CLI killed",
+		cli: { write: "truncated", status: null, signal: "SIGKILL", stderr: "" },
+		verdict: "failed",
+		expectUnreadableReason: true,
+	},
+	{
+		// The `!raw.trim()` arm stays an empty run for the two parsers that have
+		// it (#5447 acceptance); jscpd and opengrep read an empty file as
+		// unparseable, which is their own pinned behaviour.
+		name: "report present but empty",
+		cli: { write: "empty", status: 0, stderr: "" },
+		verdict: "analysed",
+		only: ["gitleaks", "trivy"],
 	},
 ];
 
@@ -399,6 +430,12 @@ describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
 			else if (cli.write === "directory") fs.mkdirSync(reportPath);
 			else if (cli.write === "unreadable")
 				fs.writeFileSync(reportPath, "not json {");
+			else if (cli.write === "truncated")
+				fs.writeFileSync(
+					reportPath,
+					scanner.report.slice(0, Math.floor(scanner.report.length / 2)),
+				);
+			else if (cli.write === "empty") fs.writeFileSync(reportPath, "");
 			return {
 				error: cli.error,
 				status: cli.status,
@@ -433,6 +470,9 @@ describe.each(SCANNERS)("the shared report scan through $name", (scanner) => {
 		);
 		if (cell.expectReason) {
 			expect(reasonText()).toContain(cell.expectReason);
+		}
+		if (cell.expectUnreadableReason) {
+			expect(reasonText()).toContain(scanner.unreadableReason);
 		}
 		if (scanner.namesCommandInReason && cell.missingReportRow) {
 			// #1816's discriminating identity survives the shared reason builder:
