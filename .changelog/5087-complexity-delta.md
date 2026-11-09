@@ -13,4 +13,5 @@ area: rules
   named; neither is an anonymous callback, and the line waits while the edit
   has blockers. Outside a repository the file as the session first read it
   stands in for main. `--no-complexity` or disabling `high-complexity` turns it
-  off, and a file over 256 KiB is not judged. (refs #5087)
+  off, and a file over 256 KiB is not judged. Owner matching is linear,
+  and reads skip it above that size. (refs #5087)

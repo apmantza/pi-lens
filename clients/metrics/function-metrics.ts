@@ -5,7 +5,7 @@
  * provider (and through it `high-complexity`, `unsafe-boundary` and the review
  * graph) and `ComplexityClient` both read their numbers here.
  */
-import { buildQualifiedName, findOwnerName } from "../symbol-containment.js";
+import { buildQualifiedName } from "../symbol-containment.js";
 import {
 	type ComplexityLanguageId,
 	firstChildOfType,
@@ -428,6 +428,7 @@ function containerName(node: TsNode): string | undefined {
 }
 
 interface Span {
+	priority?: number;
 	name: string;
 	startLine: number;
 	endLine: number;
@@ -436,11 +437,14 @@ interface Span {
 /** The base of an unnamed function's key (see {@link NamedFunctionMetrics.key}). */
 export const ANONYMOUS_KEY = "<anonymous>";
 
+/** Shared first-touch and edit keying byte cap (#5087). */
+export const MAX_MEASURED_BYTES = 256 * 1024;
+
 /**
  * Give each function its {@link NamedFunctionMetrics.key}: the shared
- * containment rule (`findOwnerName`, the one `function-facts.ts`, the review
- * graph and module_report use) finds the nearest owning class, impl or named
- * function, and same-key siblings are numbered in source order.
+ * containment rule (strict line ranges, smallest span, first owner on ties)
+ * finds the nearest owning class, impl or named function in linear work over
+ * owners and source lines. Same-key siblings are numbered in source order.
  */
 function assignKeys(
 	functions: Array<Omit<NamedFunctionMetrics, "key">>,
@@ -455,6 +459,72 @@ function assignKeys(
 		if (name !== undefined)
 			owners.push({ name, startLine: fn.line, endLine: fn.endLine });
 	});
+	owners.forEach((owner, priority) => {
+		owner.priority = priority;
+	});
+	// Stable counting passes order line intervals by start ascending, end
+	// descending. Container-first input preserves findOwnerName's tie rule.
+	// Sorting by lines also includes later declarations on a shared boundary
+	// line; an AST-parent stack alone would change their existing keys.
+	const entries = [
+		...owners.map((owner) => ({ ...owner, index: -1 })),
+		...functions.map((fn, index) => ({
+			name: undefined as string | undefined,
+			startLine: fn.line,
+			endLine: fn.endLine,
+			index,
+		})),
+	];
+	const byEnd: (typeof entries)[] = [];
+	let lastLine = 0;
+	for (const entry of entries) {
+		(byEnd[entry.endLine] ??= []).push(entry);
+		lastLine = Math.max(lastLine, entry.endLine);
+	}
+	const byStart: (typeof entries)[] = [];
+	for (let line = lastLine; line >= 0; line--) {
+		for (const entry of byEnd[line] ?? []) {
+			(byStart[entry.startLine] ??= []).push(entry);
+		}
+	}
+	// Distinct syntax siblings can touch on one line. A preceding owner's
+	// last line can still strictly contain a one-line target on that boundary.
+	const ending: Array<Span | undefined> = [];
+	for (const owner of owners) {
+		const prior = ending[owner.endLine];
+		const span = owner.endLine - owner.startLine;
+		if (span > 0 && (!prior || span < prior.endLine - prior.startLine))
+			ending[owner.endLine] = owner;
+	}
+	const open: Span[] = [];
+	const ownerNames: Array<string | undefined> = [];
+	for (let line = 0; line <= lastLine; line++) {
+		for (const entry of byStart[line] ?? []) {
+			while (open.length && open[open.length - 1]!.endLine < entry.endLine)
+				open.pop();
+			const top = open[open.length - 1];
+			const equal =
+				top?.startLine === entry.startLine && top.endLine === entry.endLine;
+			if (entry.index >= 0) {
+				let owner = equal ? open[open.length - 2] : top;
+				const boundary = ending[entry.endLine];
+				if (
+					entry.startLine === entry.endLine &&
+					boundary &&
+					(!owner ||
+						boundary.endLine - boundary.startLine <
+							owner.endLine - owner.startLine ||
+						(boundary.endLine - boundary.startLine ===
+							owner.endLine - owner.startLine &&
+							boundary.priority! < owner.priority!))
+				)
+					owner = boundary;
+				ownerNames[entry.index] = owner?.name;
+			}
+			if (entry.name !== undefined && !equal)
+				open.push({ ...entry, name: entry.name });
+		}
+	}
 	const seen = new Map<string, number>();
 	return functions.map((fn, i) => {
 		const node = nodes[i]!;
@@ -462,7 +532,7 @@ function assignKeys(
 		const owner =
 			languageId === "go" && node.type === "method_declaration"
 				? receiverType(node)
-				: findOwnerName(owners, fn.line, fn.endLine);
+				: ownerNames[i];
 		const qualified = buildQualifiedName(owner, base) ?? base;
 		const count = (seen.get(qualified) ?? 0) + 1;
 		seen.set(qualified, count);
@@ -474,13 +544,14 @@ function assignKeys(
 export function measureFile(
 	root: TsNode,
 	languageId: ComplexityLanguageId,
+	keyFunctions = true,
 ): FileMetrics {
 	const table = TABLES[languageId];
 	const functions: Array<Omit<NamedFunctionMetrics, "key">> = [];
 	const nodes: TsNode[] = [];
 	const containers: Span[] = [];
 	const { cognitive, nesting } = tally(root, table, false, (node, type) => {
-		if (table.containers.has(type)) {
+		if (keyFunctions && table.containers.has(type)) {
 			const name = containerName(node);
 			if (name !== undefined)
 				containers.push({
@@ -493,7 +564,7 @@ export function measureFile(
 		// Python's `lambda` keyword token shares its node's type name.
 		if (!table.functions.has(type) || !node.isNamed) return;
 		const line = node.startPosition.row + 1;
-		nodes.push(node);
+		if (keyFunctions) nodes.push(node);
 		functions.push({
 			name: functionName(node) ?? `<anonymous@L${line}>`,
 			line,
@@ -504,6 +575,8 @@ export function measureFile(
 	return {
 		cognitive,
 		nesting,
-		functions: assignKeys(functions, nodes, containers, languageId),
+		functions: keyFunctions
+			? assignKeys(functions, nodes, containers, languageId)
+			: functions.map((fn) => ({ ...fn, key: ANONYMOUS_KEY })),
 	};
 }

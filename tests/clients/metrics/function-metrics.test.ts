@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import * as containment from "../../../clients/symbol-containment.js";
+import { describe, expect, it, vi } from "vitest";
 import {
 	measureFile,
 	type NamedFunctionMetrics,
@@ -380,6 +381,67 @@ async function keysFor(fileName: string, content: string): Promise<string[]> {
 // #5087: the complexity delta pairs a function before and after an edit by
 // this key, so it carries the owner and never the line.
 describe("measureFile function keys (#5087)", () => {
+	it.each([
+		[
+			"shared boundary",
+			"class A {\n a() {}\n} class B { b() {}\n c() { const f = () => 1; }\n}\nfunction outer() { class C { x() {} } }\n",
+			["A.a", "A.b", "B.c", "B.f", "outer", "x"],
+		],
+		[
+			"container priority",
+			"function outer() {\n return 1;\n} class B { b() {}\n c() {}\n}\n",
+			["outer", "B.b", "B.c"],
+		],
+		[
+			"smaller boundary",
+			"class A {\n a() {}\n} class B { b() {}\n c() {}\n d() {}\n}\n",
+			["A.a", "A.b", "B.c", "B.d"],
+		],
+		[
+			"later smaller owner",
+			"class A {\n a() {}\n aa() {}\n aaa() {}\n} class B { b() {}\n}\n",
+			["A.a", "A.aa", "A.aaa", "B.b"],
+		],
+		[
+			"smallest ending owner",
+			"function outer() {\n function inner() { return 0;\n} } class B { b() {}\n c() {}\n d() {}\n}\n",
+			["outer", "outer.inner", "inner.b", "B.c", "B.d"],
+		],
+		[
+			"shared start",
+			"function outer() { class Inner { run() {}\n}\n return 0;\n}\n",
+			["outer", "Inner.run"],
+		],
+		["equal spans", "class A { run() { const f = () => 1; } }\n", ["run", "f"]],
+		[
+			"expired owners",
+			"class A {\n run() {}\n}\nfunction next() {}\n",
+			["A.run", "next"],
+		],
+	])("preserves line containment for %s", async (_label, content, expected) => {
+		// V1: a faster owner lookup must retain strict spans and first-owner ties.
+		expect(await keysFor("spans.ts", content as string)).toEqual(expected);
+	});
+
+	it("keys a wide file without scanning all owners for each function", async () => {
+		// V1: the old first-touch keying scanned every owner for every row.
+		const scan = vi.spyOn(containment, "findOwnerName");
+		try {
+			const keys = await keysFor(
+				"wide.ts",
+				Array.from(
+					{ length: 512 },
+					(_, i) => `class C${i} {\n run() {}\n}\n`,
+				).join(""),
+			);
+			expect(keys).toHaveLength(512);
+			expect(keys[511]).toBe("C511.run");
+			expect(scan).toHaveBeenCalledTimes(0);
+		} finally {
+			scan.mockRestore();
+		}
+	});
+
 	it("qualifies a method by its class, and numbers same-key siblings", async () => {
 		const keys = await keysFor(
 			"keys.ts",

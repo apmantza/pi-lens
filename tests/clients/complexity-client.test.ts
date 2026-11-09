@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import * as containment from "../../clients/symbol-containment.js";
+import { MAX_MEASURED_BYTES } from "../../clients/metrics/complexity-baseline.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ComplexityClient } from "../../clients/complexity-client.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
@@ -28,6 +30,26 @@ describe("ComplexityClient.isSupportedFile", () => {
 });
 
 describe("ComplexityClient.analyzeFile — JS/TS", () => {
+	it("keeps first-touch keys at the byte cap and skips them above it", async () => {
+		// V1: read first touches used to key files beyond the edit-path cap.
+		const body = "function f() { return 1; }\n//";
+		const atCap =
+			body + "x".repeat(MAX_MEASURED_BYTES - Buffer.byteLength(body));
+		const measured = await analyze("at-cap.ts", atCap);
+		const keying = vi.spyOn(containment, "buildQualifiedName");
+		let skipped;
+		try {
+			skipped = await analyze("above-cap.ts", atCap.slice(0, -1) + "é");
+			expect(keying).toHaveBeenCalledTimes(0);
+		} finally {
+			keying.mockRestore();
+		}
+		expect(measured?.measuredFunctions?.map((f) => f.key)).toEqual(["f"]);
+		expect(skipped?.functionCount).toBe(1);
+		expect(skipped?.maxCyclomaticComplexity).toBe(1);
+		expect(skipped?.measuredFunctions).toBeUndefined();
+	});
+
 	it("keeps JS/TS cyclomatic contributions zero-based", async () => {
 		const noDecision = await analyze(
 			"no-decision.ts",

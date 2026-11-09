@@ -16,6 +16,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	measureFile,
+	MAX_MEASURED_BYTES,
 	type NamedFunctionMetrics,
 } from "./metrics/function-metrics.js";
 import {
@@ -53,8 +54,9 @@ export interface FileComplexity {
 	/**
 	 * `measureFile`'s own rows, keyed (#5087): a file's first-touch complexity
 	 * baseline is taken from them, so the first touch measures the file once.
+	 * Undefined above MAX_MEASURED_BYTES; aggregate metrics still run.
 	 */
-	measuredFunctions: readonly NamedFunctionMetrics[];
+	measuredFunctions: readonly NamedFunctionMetrics[] | undefined;
 }
 
 export interface FunctionMetrics {
@@ -236,7 +238,9 @@ export class ComplexityClient {
 		languageId: ComplexityLanguageId,
 	): FileComplexity {
 		const { codeLines, commentLines } = countLines(content, root);
-		const file = measureFile(root, languageId);
+		const keyFunctions =
+			Buffer.byteLength(content, "utf-8") <= MAX_MEASURED_BYTES;
+		const file = measureFile(root, languageId, keyFunctions);
 		const functions: FunctionMetrics[] = file.functions.map((f) => ({
 			name: f.name,
 			line: f.line,
@@ -275,7 +279,7 @@ export class ComplexityClient {
 			singleUseFunctions: countSingleUseFunctions(functions),
 			tryCatchCount: countTryCatch(root),
 			functions,
-			measuredFunctions: file.functions,
+			measuredFunctions: keyFunctions ? file.functions : undefined,
 		};
 	}
 

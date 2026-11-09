@@ -25,6 +25,7 @@ import { logLatency } from "../latency-logger.js";
 import { recordDegradationOnce } from "../degradation-ledger.js";
 import {
 	ANONYMOUS_KEY,
+	MAX_MEASURED_BYTES,
 	measureFile,
 	type NamedFunctionMetrics,
 } from "./function-metrics.js";
@@ -87,7 +88,7 @@ const MAX_BLOB_BYTES = 2 * 1024 * 1024;
  * 256 KiB keeps the worst case near 500 ms and is far above a hand-written
  * source file.
  */
-export const MAX_MEASURED_BYTES = 256 * 1024;
+export { MAX_MEASURED_BYTES } from "./function-metrics.js";
 /** The advisory names a baseline and a function at most this many bytes long. */
 const MAX_LABEL_BYTES = 40;
 const MAX_NAME_BYTES = 80;
