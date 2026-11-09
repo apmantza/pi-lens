@@ -84,6 +84,7 @@ migrate-*.js
 !tests/fixtures/lsp-nightly/*.md
 !tests/support/scheduler-properties.md
 !.changelog/*.md
+!.changelog/highlights/*.md
 !AGENTS.md
 !HISTORY.md
 !README.md
