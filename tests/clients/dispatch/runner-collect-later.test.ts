@@ -135,7 +135,13 @@ describe("observed runner collect-later tier (#2116)", () => {
 		 * for the file it was given.
 		 */
 		function gatedRunner(runnerId: string) {
-			const state = { starts: 0, inFlight: 0, peak: 0 };
+			const state = {
+				starts: 0,
+				inFlight: 0,
+				peak: 0,
+				/** The writeIndex each start ran for, in start order. */
+				writes: [] as Array<number | undefined>,
+			};
 			const gates: Array<() => void> = [];
 			const files: string[] = [];
 			const registry = new RunnerRegistry();
@@ -146,6 +152,7 @@ describe("observed runner collect-later tier (#2116)", () => {
 				run: async (runCtx) => {
 					state.starts += 1;
 					const n = state.starts;
+					state.writes.push(runCtx.writeIndex);
 					files.push(runCtx.filePath);
 					state.inFlight += 1;
 					state.peak = Math.max(state.peak, state.inFlight);
@@ -238,6 +245,9 @@ describe("observed runner collect-later tier (#2116)", () => {
 			// Writes 2 and 3 coalesce into ONE rerun, started only after the
 			// first run settled.
 			expect(state.starts).toBe(2);
+			// The rerun answers for the latest write (3), not the write that queued
+			// it (2): a later write to the file replaces the queued start.
+			expect(state.writes).toEqual([1, 3]);
 			expect(state.peak).toBe(1);
 			gates[1]?.();
 			await settlePendingRunnerFindingsForTests();

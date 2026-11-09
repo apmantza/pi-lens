@@ -255,5 +255,41 @@ describe("which runner spawns arm the cooldown (#5413)", () => {
 		expect(runs).toBe(2);
 		expect(isInSpawnTimeoutCooldown("deadline-runner")).toBe(false);
 	}, 30_000);
+
+	// Recurrence: #5452 r1 F2. The arm condition `result.failure === "timeout"`
+	// mutated to `!== undefined` survived every case above, because none pinned
+	// that a failure other than the tool's own timeout arms nothing.
+	it("an aborted spawn arms nothing: the caller gave up, the tool did not time out", async () => {
+		const runs = await dispatchTwice("aborted-runner", () => {
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 200);
+			return safeSpawnAsync(process.execPath, HANG, {
+				timeout: 30_000,
+				signal: controller.signal,
+			});
+		});
+		expect(runs).toBe(2);
+		expect(isInSpawnTimeoutCooldown("aborted-runner")).toBe(false);
+	}, 30_000);
+
+	it("a missing binary (ENOENT) arms nothing: no child ever ran", async () => {
+		const runs = await dispatchTwice("missing-runner", () =>
+			safeSpawnAsync(path.join(env.tmpDir, "no-such-binary-5413"), [], {
+				timeout: 300,
+			}),
+		);
+		expect(runs).toBe(2);
+		expect(isInSpawnTimeoutCooldown("missing-runner")).toBe(false);
+	}, 30_000);
+
+	it("a non-zero exit arms nothing: the tool answered, it did not time out", async () => {
+		const runs = await dispatchTwice("failing-runner", () =>
+			safeSpawnAsync(process.execPath, ["-e", "process.exit(3)"], {
+				timeout: 30_000,
+			}),
+		);
+		expect(runs).toBe(2);
+		expect(isInSpawnTimeoutCooldown("failing-runner")).toBe(false);
+	}, 30_000);
 });
 // flake-shape: real-process-spawn — a real child must use up its own spawn budget: the cooldown is armed by safeSpawnAsync's own timeout and teardown, which no double reproduces
