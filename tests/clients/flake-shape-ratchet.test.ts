@@ -479,6 +479,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"createLSPClient spawns a language-server process; the double it returns runs the real clientWaitForDiagnostics, publish handler and clearDiagnosticsForPath, and a real server cannot be made to publish twice and receive a refresh clear inside one quiet window on demand",
 		},
+	"in-process-mock:clients/lsp/touch-debounce-zero.test.ts::clients/lsp/client":
+		{
+			detector: "in-process-mock",
+			reason:
+				"createLSPClient spawns a language-server process; the double it returns runs the real handleNotifyOpen and reads content identity through the real sentContentFor and hasNotifyInFlightFor, and a real server cannot be made to report whether it holds exactly the debounce gate's bytes on demand",
+		},
 	// 2026-10-20 (#4638): tool availability is resolved so the spawn seam records the
 	// real argv (cwd + config args) without probing or installing ruff; only that
 	// resolver is doubled, and resolveToolCwd, ruffConfigArgs, safe-spawn stay real.
@@ -1840,6 +1846,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"a language-server client is a spawned process; this client's wait, store and clear are the real ones over a real state, and only the publish order and the mid-wait clear are scripted",
 		},
+	"service-double:clients/lsp/touch-debounce-zero.test.ts::LSPClientInfo": {
+		detector: "service-double",
+		reason:
+			"a language-server client is a spawned process; the client it returns runs the real handleNotifyOpen, sentContentFor and hasNotifyInFlightFor over a real state, and only the alive-answers are scripted",
+	},
 	// 2026-10-15 (#4485): see the cascade entries above.
 	"service-double:clients/quiet-window-session-straddle.test.ts::LSPClientInfo":
 		{

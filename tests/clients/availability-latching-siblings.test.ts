@@ -460,20 +460,59 @@ describe("dispatch hasTool availability (#1476)", () => {
 	/** The generic seam every CLI runner gates on: `ctx.hasTool(command)`. */
 	async function load() {
 		const dispatcher = await import("../../clients/dispatch/dispatcher.js");
-		const { FactStore } = await import("../../clients/dispatch/fact-store.js");
-		return {
-			checkToolAvailability: dispatcher.checkToolAvailability,
-			facts: new FactStore(),
-		};
+		return { checkToolAvailability: dispatcher.checkToolAvailability };
 	}
+
+	// #5410: `hasTool` callers (shellcheck, the covering-lane gate) spawn the
+	// BARE command, so a managed-only binary must not read as present: the
+	// runner would then spawn a name PATH cannot find.
+	it("answers for PATH only: a managed-only binary reads unavailable", async () => {
+		const fs = await import("node:fs");
+		const os = await import("node:os");
+		const path = await import("node:path");
+		// A managed release binary that exists and answers its probe.
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5410-managed-"));
+		const managed = path.join(dir, "sometool");
+		fs.writeFileSync(managed, "#!/bin/sh\n");
+		try {
+			const installer = await import("../../clients/installer/index.js");
+			vi.mocked(installer.findManagedToolBinary).mockResolvedValue(managed);
+			safeSpawnAsync.mockImplementation(async (cmd: string) =>
+				cmd === "sometool" ? missingResult : okResult("1.2.3"),
+			);
+			const { checkToolAvailability } = await load();
+
+			expect(await checkToolAvailability("sometool")).toBe(false);
+			expect(safeSpawnAsync.mock.calls.map((call) => call[0])).toEqual([
+				"sometool",
+			]);
+		} finally {
+			fs.rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// #5410: the dispatcher's own copy caught a thrown probe and wrote a durable
+	// `false` session fact, so one host hiccup disabled the tool for the session.
+	// The throw now reaches the caller (a runner failure, not a silent skip).
+	it("a probe that throws latches nothing, and the next call asks again", async () => {
+		safeSpawnAsync.mockRejectedValueOnce(new Error("spawn hiccup"));
+		const { checkToolAvailability } = await load();
+
+		await expect(checkToolAvailability("sometool")).rejects.toThrow(
+			"spawn hiccup",
+		);
+		safeSpawnAsync.mockResolvedValue(okResult("1.2.3"));
+		expect(await checkToolAvailability("sometool")).toBe(true);
+		expect(safeSpawnAsync).toHaveBeenCalledTimes(2);
+	});
 
 	it("pins a successful probe: available, and cached for the session", async () => {
 		safeSpawnAsync.mockResolvedValue(okResult("1.2.3"));
-		const { checkToolAvailability, facts } = await load();
+		const { checkToolAvailability } = await load();
 
-		expect(await checkToolAvailability("sometool", facts)).toBe(true);
+		expect(await checkToolAvailability("sometool")).toBe(true);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
-		expect(await checkToolAvailability("sometool", facts)).toBe(true);
+		expect(await checkToolAvailability("sometool")).toBe(true);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 	});
 
@@ -484,28 +523,28 @@ describe("dispatch hasTool availability (#1476)", () => {
 			status: 1,
 			error: undefined,
 		});
-		const { checkToolAvailability, facts } = await load();
+		const { checkToolAvailability } = await load();
 
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
+		expect(await checkToolAvailability("sometool")).toBe(false);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
+		expect(await checkToolAvailability("sometool")).toBe(false);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 	});
 
 	it("a timed-out probe does not latch, and the tool comes back", async () => {
 		safeSpawnAsync.mockResolvedValue(timeoutResult);
-		const { checkToolAvailability, facts } = await load();
+		const { checkToolAvailability } = await load();
 
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
+		expect(await checkToolAvailability("sometool")).toBe(false);
 		// Held for the cooldown: a stalling host is not re-probed every dispatch.
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
+		expect(await checkToolAvailability("sometool")).toBe(false);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 
 		// Pre-fix, this false was a session fact and every later dispatch in the
 		// session skipped the tool.
 		advancePastCooldown();
 		safeSpawnAsync.mockResolvedValue(okResult("1.2.3"));
-		expect(await checkToolAvailability("sometool", facts)).toBe(true);
+		expect(await checkToolAvailability("sometool")).toBe(true);
 	});
 
 	it("the cooldown ESCALATES across repeated transients (#1489 review)", async () => {
@@ -514,46 +553,25 @@ describe("dispatch hasTool availability (#1476)", () => {
 		// command for the whole session — ten times the storm the policy bounds,
 		// at the highest-traffic consumer in the product.
 		safeSpawnAsync.mockResolvedValue(timeoutResult);
-		const { checkToolAvailability, facts } = await load();
+		const { checkToolAvailability } = await load();
 
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
+		expect(await checkToolAvailability("sometool")).toBe(false);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 
 		// First cooldown: 30 s. Second verdict is attempt 2, so 60 s.
 		vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
+		expect(await checkToolAvailability("sometool")).toBe(false);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(2);
 
 		// 30 s later is still inside the second cooldown: no third probe.
 		vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
+		expect(await checkToolAvailability("sometool")).toBe(false);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(2);
 
 		// 60 s after the second verdict, it re-probes and the tool comes back.
 		vi.setSystemTime(new Date(Date.now() + TRANSIENT_BASE_COOLDOWN_MS + 1));
 		safeSpawnAsync.mockResolvedValue(okResult("1.2.3"));
-		expect(await checkToolAvailability("sometool", facts)).toBe(true);
+		expect(await checkToolAvailability("sometool")).toBe(true);
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(3);
-	});
-
-	it("a later success retires the cooldown facts (#1489 review)", async () => {
-		safeSpawnAsync.mockResolvedValue(timeoutResult);
-		const { checkToolAvailability, facts } = await load();
-		expect(await checkToolAvailability("sometool", facts)).toBe(false);
-		expect(
-			facts.getSessionFact<number>("session.toolCache.sometool.retryAt"),
-		).toBeGreaterThan(0);
-
-		advancePastCooldown();
-		safeSpawnAsync.mockResolvedValue(okResult("1.2.3"));
-		expect(await checkToolAvailability("sometool", facts)).toBe(true);
-		expect(
-			facts.getSessionFact<number>("session.toolCache.sometool.retryAt"),
-		).toBe(0);
-		expect(
-			facts.getSessionFact<number>(
-				"session.toolCache.sometool.transientAttempts",
-			),
-		).toBe(0);
 	});
 });

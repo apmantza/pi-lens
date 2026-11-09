@@ -200,8 +200,6 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/dispatch/runners/utils/lazy-installer.ts:performInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
 	"clients/dispatch/runners/utils/lazy-installer.ts:runLazyInstall",
-	"clients/dispatch/runners/utils/runner-helpers.ts:resolveCommandWithInstallFallback",
-	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
 	"clients/dispatch/runners/utils/runner-helpers.ts:verifyOrInstallCommand",
 	"clients/git-tracked-ignore.ts:fetchUntrackedIgnoredIds",
 	"clients/git-tracked-ignore.ts:fetchTrackedFiles",
@@ -544,16 +542,12 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"tryLazyInstallForFormatter forwards its own `cwd` parameter into runLazyInstall",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:8b06bf2f~d99d2124",
+		"clients/dispatch/runners/utils/runner-helpers.ts#createAvailabilityChecker.isAvailableAsync:1fe0ada7~d99d2124",
 		"cwd is `resolvedCwd`, the availability checker's own cwd argument; the checker is the seam every runner probes through",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveToolCommandWithInstallFallback:e313e2e7~dbf27697",
-		"resolveToolCommandWithInstallFallback forwards its own `cwd` parameter into resolveCommandWithInstallFallback",
-	],
-	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand:d80f1e68~dbf27697",
-		"cwd is verifyOrInstallCommand's own `cwd` parameter; its two call sites in this file are the checked ones",
+		"cwd is verifyOrInstallCommand's own `cwd` parameter; its one call site in this file is the checked one",
 	],
 	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:0dcab07a~cb93074a",
@@ -562,10 +556,6 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:105fdbcb~dbf27697",
 		"resolveCommandArgsWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
-	],
-	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandWithInstallFallback:4a5cc9b1~4a5cc9b1",
-		"resolveCommandWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
 	],
 	[
 		"clients/file-utils.ts#detectFileChangedAfterCommand:9a4b1a12~dbf27697",
@@ -628,8 +618,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
 	],
 	[
-		"clients/jscpd-client.ts#JscpdClient.runScan:b6c89033~dbf27697",
-		"cwd is runScan's own `cwd` parameter, and `readProjectJscpdConfig(cwd)` decides the flags from the same directory",
+		"clients/jscpd-client.ts#JscpdClient.runScan.spawn:fb78f8be~dbf27697",
+		"cwd is runScan's own `cwd` parameter, captured by the spec's `spawn` callback (#5411 moved the call into it), and `readProjectJscpdConfig(cwd)` decides the flags from the same directory",
 	],
 	[
 		"clients/knip-client.ts#KnipClient.runAnalyze:b959739e~f5c0e305",
@@ -684,8 +674,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes the realpath-canonicalized `targetDir` from the scan API's own argument",
 	],
 	[
-		"clients/opengrep-client.ts#OpengrepClient.runScan:6ed13398~353ea442",
-		"cwd is runScan's own `cwd` parameter, from which OpengrepClient.resolveConfig(cwd) already chose the rule config",
+		"clients/opengrep-client.ts#OpengrepClient.runScan.spawn:9bdaabb4~353ea442",
+		"cwd is runScan's own `cwd` parameter, captured by the spec's `spawn` callback (#5411 moved the call into it), from which OpengrepClient.resolveConfig(cwd) already chose the rule config",
 	],
 	[
 		"clients/installer/managed-tool-refresh.ts#validateOpengrepPack:c4cbdb3a~1f7c40b0",

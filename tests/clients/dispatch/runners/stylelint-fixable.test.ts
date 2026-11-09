@@ -17,11 +17,6 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailable: () => true,
-			isAvailableAsync: async () => true,
-			getCommand: () => "stylelint",
-		}),
 		resolveToolCommandWithInstallFallback: vi.fn(async () => "stylelint"),
 	}),
 );

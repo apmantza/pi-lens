@@ -2436,7 +2436,11 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"dispatch/collect-later-tier.ts": 1,
 	// #2346 added `generatedSkipRecorded` beside `coverageNoticeSeen` (1 → 2);
 	// both are cleared by the same session-start reset seam.
-	"dispatch/dispatcher.ts": 3,
+	// #5410: 3 -> 4. `commandCheckers` holds one PATH-only checker per
+	// `hasTool` command (a closed vocabulary); the checkers' per-cwd latches
+	// clear at the availability generation bump resetDispatchAvailabilityState
+	// makes at session_start. (`dispatcherProbeFlights` left with the copy.)
+	"dispatch/dispatcher.ts": 4,
 	"dispatch/fact-store.ts": 5,
 	// #1899 removed the dead `neighborTouchCache` (10 → 9); #2282 removed the
 	// redundant `cascadeDiagnosticBaselines` shadow map (9 → 8).
@@ -2490,7 +2494,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"dispatch/runners/spotbugs.ts": 1,
 	"dispatch/runners/tree-sitter.ts": 1,
 	"dispatch/runners/utils/lazy-installer.ts": 2,
-	"dispatch/runners/utils/runner-helpers.ts": 7,
+	// #5410: 7 -> 8. `toolBinaryCheckers`, one resolver checker per registry
+	// tool id; its per-cwd latches clear at the same generation bump.
+	"dispatch/runners/utils/runner-helpers.ts": 8,
 	"dispatch/runners/yaml-rule-parser.ts": 4,
 	"disposition-publish.ts": 0,
 	"ephemeral-root.ts": 1,

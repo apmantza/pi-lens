@@ -31,8 +31,8 @@ vi.mock("../../clients/installer/index.js", () => ({
 	ensureTool: vi.fn(async () => undefined),
 	findManagedToolBinary: vi.fn(async () => undefined),
 	resetResolvedPathCache: vi.fn(),
-	// Not spawnable — forces resolveCommandWithInstallFallback down the
-	// install-fallback path (rather than the --version probe path) where
+	// Not spawnable: no cached command survives, and the probe below answers
+	// tool-not-found, so the resolver reaches the install path where
 	// noteInstallFailure/suppression lives.
 	isSpawnableCommand: vi.fn(async () => false),
 	resetPathWalkMemo: vi.fn(),
@@ -133,28 +133,36 @@ describe("dispatch availability suppression is reset at session start (#1266)", 
 	});
 
 	it("retries a suppressed tool's install after handleSessionStart, not just after calling the reset helper directly", async () => {
-		const { resolveCommandWithInstallFallback } =
+		const { resolveToolCommandWithInstallFallback } =
 			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
 		const installerMod = await import("../../clients/installer/index.js");
 		const ensureToolMock = vi.mocked(installerMod.ensureTool);
 		ensureToolMock.mockResolvedValue(undefined);
+		// A typed tool-not-found probe: the only verdict an install may repair.
+		vi.mocked(safeSpawnAsync).mockResolvedValue({
+			stdout: "",
+			stderr: "",
+			status: null,
+			error: Object.assign(new Error("spawn stylelint ENOENT"), {
+				code: "ENOENT",
+			}),
+			spawnFailure: { kind: "tool-not-found" },
+		} as never);
 
 		// stylelint is autoInstall-eligible per tool-policy.ts, so the
 		// install-fallback branch (not the config-first early return) runs.
-		const first = await resolveCommandWithInstallFallback(
-			"stylelint",
-			"stylelint",
+		const first = await resolveToolCommandWithInstallFallback(
 			tmpDir,
+			"stylelint",
 		);
 		expect(first).toBeNull();
 		expect(ensureToolMock).toHaveBeenCalledTimes(1);
 
 		// Same-session retry must stay suppressed: the failed install must not
 		// become an install attempt again until the session boundary.
-		const second = await resolveCommandWithInstallFallback(
-			"stylelint",
-			"stylelint",
+		const second = await resolveToolCommandWithInstallFallback(
 			tmpDir,
+			"stylelint",
 		);
 		expect(second).toBeNull();
 		expect(ensureToolMock).toHaveBeenCalledTimes(1);
@@ -162,10 +170,9 @@ describe("dispatch availability suppression is reset at session start (#1266)", 
 		await handleSessionStart(makeDeps(tmpDir));
 
 		// A new session must clear the suppression and retry the install.
-		const third = await resolveCommandWithInstallFallback(
-			"stylelint",
-			"stylelint",
+		const third = await resolveToolCommandWithInstallFallback(
 			tmpDir,
+			"stylelint",
 		);
 		expect(third).toBeNull();
 		expect(ensureToolMock).toHaveBeenCalledTimes(2);

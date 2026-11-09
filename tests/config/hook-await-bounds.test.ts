@@ -2357,7 +2357,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// unbounded awaits (two spawns in `probeAstGrepCommandAsync`, four of its
 	// call sites and `findGlobalBinary` in `isSgAvailableAsync`); the worklist
 	// shrinks with the sweep, nothing new is unbounded.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 30,
+	// #5410: 30 -> 31 — a project shim whose probe says it is broken falls
+	// through to the managed and PATH rungs (`findBeyondProject`), at most
+	// once per probe; those rungs stat and verify under their own probe
+	// budget, unbounded from the hook signal like the first resolution.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
 	// #5087: the first-touch measure and the edit's re-measure plus its one
 	// default-branch read (10 in all). Its awaits are
 	// the shared parser (init, parse) and two leaf-bounded `git` spawns
