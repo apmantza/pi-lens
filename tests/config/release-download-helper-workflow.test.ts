@@ -366,10 +366,23 @@ const NPM_RETRY_FLOORS: Record<string, number> = {
 	npm_config_fetch_retries: 3,
 	npm_config_fetch_retry_maxtimeout: 60000,
 };
+/**
+ * pnpm reads its own prefix and ignores the npm keys (review r1 F1: pnpm
+ * 11.15.1 and 11.21.0 against a 503 registry kept "2 retries left" under
+ * `npm_config_` and showed "5 retries left" under `pnpm_config_`).
+ */
+const PNPM_RETRY_FLOORS: Record<string, number> = {
+	pnpm_config_fetch_retries: 3,
+	pnpm_config_fetch_retry_maxtimeout: 60000,
+};
+/** Every spelling npm or pnpm read as config from the environment, any case. */
+const CONFIG_ENV_KEY = /^(?:npm|pnpm)_config_/i;
 // A package-manager command word anywhere in the shell text (a path prefix, a
 // quoted spelling or an `echo` mention over-reports, which only adds the env).
 const REGISTRY_CLIENT =
 	/(?<![\w.-])(?:npm|npx|pnpm|pnpx|yarn|bun|bunx|corepack)(?![\w-])/i;
+// The subset that reads the pnpm retry keys (corepack runs pnpm).
+const PNPM_CLIENT = /(?<![\w.-])(?:pnpm|pnpx|corepack)(?![\w-])/i;
 const KNOWN_SHELLS = new Set(["bash", "sh", "pwsh", "powershell"]);
 const LOCAL_ACTION = /^\.\/\.github\/actions\/[\w.-]+(?:\/[\w.-]+)*$/;
 
@@ -441,7 +454,7 @@ const ACTION_VERDICTS: Record<string, { registry?: true; why: string }> = {
 		why: "downloads OTP and Elixir from builds.hex.pm and gleam from github.com releases, unretried by us; both sites (tool-smoke, install-smoke) are continue-on-error, so an outage degrades the lane and does not red it",
 	},
 	"shivammathur/setup-php": {
-		why: "installs php from the runner's apt or the ondrej PPA, not a GitHub release asset; its one site is continue-on-error",
+		why: "on a hosted runner it downloads its php-ubuntu build scripts and binaries from github.com/shivammathur releases (jsdelivr fallback), unretried by us; its one site is continue-on-error, so an outage degrades the lane and does not red it (p3 residual of #5420)",
 	},
 	"mlugg/setup-zig": {
 		why: "downloads zig from the ziglang.org mirror list, not a GitHub release asset; its one site is continue-on-error",
@@ -523,21 +536,42 @@ const COMPUTED_INSTALL =
 	/(?<![\w.-])\$\{?\w+\}?[^\s/]*\s+(?:ci|install|i|add|update|upgrade|dlx|exec|publish)(?![\w-])/;
 
 /**
- * Why a workflow reaches the npm registry, one string per site: a
+ * A command word that is a value, not a literal (review r1 F2: `${{
+ * matrix.pm }} install`, `${{ matrix.cmd }}` and a bare `$INSTALL_CMD` all
+ * passed): the first word of a command, after a separator, a wrapper such as
+ * `sudo` or `eval`, `sh -c` and leading `VAR=value` words, that starts with a
+ * variable or an expression. An unresolved word is a hit, never a pass. It
+ * runs on the quote-preserving text, so a quoted assignment value (`names="a:
+ * $(x)"`) is one word. `$DIR/literal-name` is a path whose basename is
+ * visible to the client scan, so it is not a hit.
+ */
+const COMPUTED_COMMAND = new RegExp(
+	String.raw`(?:^|[;&|\n]|\$?\(|\b(?:then|do|else|elif|if|while|until|exec|sudo|env|command|time|nohup|xargs|eval)\b|\b(?:ba)?sh\s+-c)` +
+		String.raw`[ \t]*(?:\w+=(?:"[^"]*"|'[^']*'|[^\s"'()])*[ \t]+)*!?[ \t]*["']*` +
+		String.raw`\$(?!(?:\{\{[^}]*\}\}|\{?[\w@*]+\}?)["']?(?:/[\w.-]+)+["']?(?:\s|$))(?:\{\{|\{?[\w@*])`,
+	"m",
+);
+
+type RegistrySite = { where: string; pnpm: boolean };
+
+/**
+ * Why a workflow reaches the npm registry, one site per cause: a
  * package-manager command word, a command word the text does not spell, an
  * action marked `registry`, and everything the scan cannot read (a shell it
  * does not know, a reusable workflow, a docker or unresolvable local action,
- * an action with no recorded verdict). An unreadable site is a hit.
+ * an action with no recorded verdict). An unreadable site is a hit. `pnpm`
+ * marks a site that may run pnpm, which owes the pnpm retry keys too: a named
+ * pnpm or corepack, the pnpm setup action, and every site that cannot be read.
  */
 export function registryUseSites(
 	source: string,
 	readLocal: (usesPath: string) => string | undefined,
 	seen: Set<string> = new Set(),
-): string[] {
+): RegistrySite[] {
 	const doc = workflowDocument(source) as Document & {
 		defaults?: { run?: { shell?: unknown } };
 	};
-	const sites: string[] = [];
+	const sites: RegistrySite[] = [];
 	const scanSteps = (
 		scope: string,
 		steps: Step[] | undefined,
@@ -547,37 +581,59 @@ export function registryUseSites(
 			const at = `${scope}.steps[${index}]`;
 			if (typeof step.run === "string") {
 				const shell = (step as { shell?: unknown }).shell ?? defaultShell;
-				const code = shellCode(step.run.replace(/\\\n/g, " "));
+				const joined = step.run.replace(/\\\n/g, " ");
+				const code = shellCode(joined);
 				const word =
 					shell === undefined ? "bash" : String(shell).split(/\s/)[0];
 				if (!KNOWN_SHELLS.has(word))
-					sites.push(`${at}: shell ${String(shell)} cannot be read`);
+					sites.push({
+						where: `${at}: shell ${String(shell)} cannot be read`,
+						pnpm: true,
+					});
 				else if (REGISTRY_CLIENT.test(code))
-					sites.push(`${at}: package-manager command`);
-				else if (COMPUTED_INSTALL.test(code))
-					sites.push(`${at}: computed command word`);
+					sites.push({
+						where: `${at}: package-manager command`,
+						pnpm: PNPM_CLIENT.test(code),
+					});
+				else if (
+					COMPUTED_INSTALL.test(code) ||
+					COMPUTED_COMMAND.test(codeLines(joined))
+				)
+					sites.push({ where: `${at}: computed command word`, pnpm: true });
 			}
 			if (step.uses === undefined) continue;
 			const uses = String(step.uses);
 			if (uses.startsWith("./")) {
 				const local = LOCAL_ACTION.test(uses) ? readLocal(uses) : undefined;
 				if (local === undefined || seen.has(uses))
-					sites.push(`${at}: local action ${uses} cannot be read`);
+					sites.push({
+						where: `${at}: local action ${uses} cannot be read`,
+						pnpm: true,
+					});
 				else
 					sites.push(
 						...registryUseSites(local, readLocal, new Set(seen).add(uses)).map(
-							(site) => `${at} -> ${site}`,
+							(site) => ({ ...site, where: `${at} -> ${site.where}` }),
 						),
 					);
 			} else if (ACTION_VERDICTS[actionKey(uses)]?.registry)
-				sites.push(`${at}: ${actionKey(uses)} installs from the npm registry`);
+				sites.push({
+					where: `${at}: ${actionKey(uses)} installs from the npm registry`,
+					pnpm: actionKey(uses) === "pnpm/action-setup",
+				});
 			else if (!(actionKey(uses) in ACTION_VERDICTS))
-				sites.push(`${at}: ${actionKey(uses)} cannot be classified`);
+				sites.push({
+					where: `${at}: ${actionKey(uses)} cannot be classified`,
+					pnpm: true,
+				});
 		}
 	};
 	for (const [job, body] of Object.entries(doc.jobs ?? {})) {
 		if ((body as { uses?: unknown }).uses !== undefined)
-			sites.push(`jobs.${job}: reusable workflow cannot be read`);
+			sites.push({
+				where: `jobs.${job}: reusable workflow cannot be read`,
+				pnpm: true,
+			});
 		const jobShell = (body as { defaults?: { run?: { shell?: unknown } } })
 			.defaults?.run?.shell;
 		scanSteps(`jobs.${job}`, body.steps, jobShell ?? doc.defaults?.run?.shell);
@@ -587,10 +643,49 @@ export function registryUseSites(
 }
 
 /**
- * A workflow that reaches the npm registry sets both retry keys once, in its
- * top-level `env:`, as literals at or above the floors. A job or step `env:`
- * that sets either key is refused whether or not the workflow installs: the
- * contract is one value per workflow.
+ * The retry keys are set once, in a workflow's top-level `env:`. Any other
+ * `npm_config_*` or `pnpm_config_*` key, in any case, in a job env, a step env
+ * or a composite action's step env is refused, install or not: npm takes the
+ * later spelling, so `NPM_CONFIG_FETCH_RETRIES: 0` beats the lowercase key
+ * (review r1 F3). A top-level key in another case than the pinned lowercase
+ * spelling is refused for the same reason.
+ */
+export function envOverrideViolations(file: string, source: string): string[] {
+	const doc = workflowDocument(source) as Document;
+	const violations: string[] = [];
+	const overrides = (
+		scope: string,
+		env: Record<string, unknown> | undefined,
+	) => {
+		for (const key of Object.keys(env ?? {}))
+			if (CONFIG_ENV_KEY.test(key))
+				violations.push(
+					`${file}: ${scope} sets ${key}; set the retry keys once at the workflow level`,
+				);
+	};
+	for (const key of Object.keys(doc.env ?? {}))
+		if (
+			CONFIG_ENV_KEY.test(key) &&
+			!(key in NPM_RETRY_FLOORS) &&
+			!(key in PNPM_RETRY_FLOORS)
+		)
+			violations.push(
+				`${file}: env sets ${key}; only the pinned lowercase retry keys belong there`,
+			);
+	for (const [job, body] of Object.entries(doc.jobs ?? {})) {
+		overrides(`jobs.${job}.env`, body.env);
+		for (const [index, step] of (body.steps ?? []).entries())
+			overrides(`jobs.${job}.steps[${index}].env`, step.env);
+	}
+	for (const [index, step] of (doc.runs?.steps ?? []).entries())
+		overrides(`runs.steps[${index}].env`, step.env);
+	return violations;
+}
+
+/**
+ * A workflow that reaches the npm registry sets the npm retry keys in its
+ * top-level `env:` as literals at or above the floors; one that may run pnpm
+ * sets the pnpm pair the same way.
  */
 export function registryEnvViolations(
 	file: string,
@@ -599,29 +694,18 @@ export function registryEnvViolations(
 ): string[] {
 	const doc = workflowDocument(source) as Document;
 	const violations: string[] = [];
-	const overrides = (
-		scope: string,
-		env: Record<string, unknown> | undefined,
-	) => {
-		for (const key of Object.keys(NPM_RETRY_FLOORS))
-			if (env && key in env)
-				violations.push(
-					`${file}: ${scope} sets ${key}; set it once at the workflow level`,
-				);
-	};
-	for (const [job, body] of Object.entries(doc.jobs ?? {})) {
-		overrides(`jobs.${job}.env`, body.env);
-		for (const [index, step] of (body.steps ?? []).entries())
-			overrides(`jobs.${job}.steps[${index}].env`, step.env);
-	}
 	const sites = registryUseSites(source, readLocal);
 	if (sites.length === 0) return violations;
-	for (const [key, floor] of Object.entries(NPM_RETRY_FLOORS)) {
+	const required = {
+		...NPM_RETRY_FLOORS,
+		...(sites.some((site) => site.pnpm) ? PNPM_RETRY_FLOORS : {}),
+	};
+	for (const [key, floor] of Object.entries(required)) {
 		const value = doc.env?.[key];
 		const literal = typeof value === "number" ? String(value) : value;
 		if (typeof literal !== "string" || !/^\d+$/.test(literal))
 			violations.push(
-				`${file}: reaches the npm registry (${sites[0]}) but workflow env.${key} is not a literal number`,
+				`${file}: reaches the npm registry (${sites[0].where}) but workflow env.${key} is not a literal number`,
 			);
 		else if (Number(literal) < floor)
 			violations.push(
@@ -900,6 +984,10 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		"  npm_config_fetch_retries: 5",
 		"  npm_config_fetch_retry_maxtimeout: 120000",
 	];
+	const PNPM_ENV = [
+		"  pnpm_config_fetch_retries: 5",
+		"  pnpm_config_fetch_retry_maxtimeout: 120000",
+	];
 	const workflow = (opts: {
 		env?: string[];
 		jobEnv?: string[];
@@ -945,6 +1033,16 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 			).length,
 			15,
 		);
+	});
+
+	it("no job, step or composite-step env sets an npm or pnpm config key in any case", () => {
+		// Recurrence #5420 r1 F3: the override check read two lowercase spellings,
+		// and npm takes the later spelling, so `NPM_CONFIG_FETCH_RETRIES: 0`
+		// beat the pinned key.
+		const violations = githubSources().flatMap(({ file, source }) =>
+			envOverrideViolations(file, source),
+		);
+		expect(violations).toEqual([]);
 	});
 
 	it("every uses: is a resolvable local action or has a recorded verdict", () => {
@@ -1019,6 +1117,26 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		);
 	});
 
+	it("the workflows that may run pnpm are derived and set the pnpm pair", () => {
+		// Recurrence #5420 r1 F1: pnpm ignores npm_config_fetch_retries, so
+		// install-smoke's pnpm cells kept pnpm's default retries under a gate
+		// that read as covered. The pnpm population is derived, not listed.
+		const pnpmWorkflows = workflowSources()
+			.filter(({ source }) =>
+				registryUseSites(source, readLocalAction).some((site) => site.pnpm),
+			)
+			.map(({ file }) => file);
+		expect(pnpmWorkflows).toContain(".github/workflows/install-smoke.yml");
+		for (const file of pnpmWorkflows) {
+			const doc = workflowDocument(
+				readFileSync(join(ROOT, file), "utf8"),
+			) as Document;
+			expect(Number(doc.env?.pnpm_config_fetch_retries)).toBeGreaterThanOrEqual(
+				3,
+			);
+		}
+	});
+
 	it("a workflow that never reaches the registry needs no retry env", () => {
 		const planted = workflow({ steps: runStep("echo hello") });
 		expect(registryEnvViolations("planted.yml", planted, stubLocal)).toEqual(
@@ -1040,6 +1158,15 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		["quoted command word", runStep('"np""m" ci')],
 		["computed command word", runStep('c=np; "${c}m" ci')],
 		["variable package manager", runStep('"$PM" install')],
+		// Recurrence #5420 r1 F2: a command word nothing resolves is a hit.
+		["templated package manager", runStep("${{ matrix.pm }} install")],
+		["templated command", runStep("${{ matrix.cmd }}")],
+		["bare variable command", runStep("$INSTALL_CMD")],
+		["variable command after a separator", runStep("cd x && $INSTALL_CMD")],
+		["variable command behind a wrapper", runStep("sudo $INSTALL_CMD")],
+		["variable command behind an assignment", runStep("A=b $INSTALL_CMD")],
+		["variable command inside sh -c", runStep('sh -c "$INSTALL_CMD"')],
+		["variable command after then", runStep("if true; then $INSTALL_CMD; fi")],
 		["unknown shell", runStep("x", ["shell: python {0}"])],
 		[
 			"unlisted remote action",
@@ -1167,24 +1294,127 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		).toBeGreaterThan(0);
 	});
 
-	it("a job or step env that overrides a retry key reds the gate", () => {
-		const job = workflow({
-			env: RETRY_ENV,
-			jobEnv: ["npm_config_fetch_retries: 0"],
+	type Plant = { env?: string[]; jobEnv?: string[]; stepEnv?: string[] };
+	it.each<[string, Plant, number]>([
+		["job env, lowercase", { jobEnv: ["npm_config_fetch_retries: 0"] }, 1],
+		["job env, uppercase", { jobEnv: ["NPM_CONFIG_FETCH_RETRIES: 0"] }, 1],
+		["job env, pnpm prefix", { jobEnv: ["PNPM_CONFIG_FETCH_RETRIES: 0"] }, 1],
+		[
+			"job env, any other npm config key",
+			{ jobEnv: ["npm_config_registry: x"] },
+			1,
+		],
+		[
+			"step env, lowercase",
+			{ stepEnv: ["env:", "  npm_config_fetch_retry_maxtimeout: 1"] },
+			1,
+		],
+		[
+			"step env, mixed case",
+			{ stepEnv: ["env:", "  Npm_Config_Fetch_Retries: 0"] },
+			1,
+		],
+		[
+			"top-level env, uppercase twin of a pinned key",
+			{ env: [...RETRY_ENV, "  NPM_CONFIG_FETCH_RETRIES: 0"] },
+			1,
+		],
+	])(
+		"a %s that overrides a config key reds the override gate",
+		(_name, opts, count) => {
+			// Recurrence #5420 r1 F3: only the two lowercase spellings were read.
+			const planted = workflow({
+				env: opts.env ?? RETRY_ENV,
+				jobEnv: opts.jobEnv,
+				steps: runStep("npm ci", opts.stepEnv ?? []),
+			});
+			expect(envOverrideViolations("planted.yml", planted)).toHaveLength(count);
+		},
+	);
+
+	it("an override in a composite action's step env reds the override gate", () => {
+		const action = [
+			"runs:",
+			"  using: composite",
+			"  steps:",
+			"    - shell: bash",
+			"      env:",
+			"        NPM_CONFIG_FETCH_RETRIES: '0'",
+			"      run: npm ci",
+			"",
+		].join("\n");
+		expect(
+			envOverrideViolations(".github/actions/x/action.yml", action),
+		).toHaveLength(1);
+	});
+
+	it("the pinned lowercase keys at the top level are not an override", () => {
+		const planted = workflow({
+			env: [...RETRY_ENV, ...PNPM_ENV],
 			steps: runStep("npm ci"),
 		});
-		expect(registryEnvViolations("planted.yml", job, stubLocal)).toHaveLength(
-			1,
-		);
-		const step = workflow({
-			env: RETRY_ENV,
-			steps: runStep("npm ci", [
-				"env:",
-				"  npm_config_fetch_retry_maxtimeout: 1",
-			]),
+		expect(envOverrideViolations("planted.yml", planted)).toEqual([]);
+	});
+
+	it.each([
+		["pnpm", runStep("pnpm add x")],
+		["corepack", runStep("corepack enable")],
+		[
+			"the pnpm setup action",
+			[
+				"      - uses: pnpm/action-setup@0000000000000000000000000000000000000000",
+			],
+		],
+		["a computed command word", runStep("$PM install")],
+		["an unknown shell", runStep("x", ["shell: python {0}"])],
+	])(
+		"%s owes the pnpm retry pair, which the npm pair does not satisfy",
+		(_name, steps) => {
+			// Recurrence #5420 r1 F1: pnpm ignores npm_config_fetch_retries.
+			const npmOnly = workflow({ env: RETRY_ENV, steps });
+			expect(registryEnvViolations("planted.yml", npmOnly, stubLocal)).toEqual([
+				expect.stringContaining(
+					"env.pnpm_config_fetch_retries is not a literal",
+				),
+				expect.stringContaining(
+					"env.pnpm_config_fetch_retry_maxtimeout is not a literal",
+				),
+			]);
+			const both = workflow({ env: [...RETRY_ENV, ...PNPM_ENV], steps });
+			expect(registryEnvViolations("planted.yml", both, stubLocal)).toEqual([]);
+		},
+	);
+
+	it("a pnpm retry value below its floor reds the gate", () => {
+		const planted = workflow({
+			env: [...RETRY_ENV, "  pnpm_config_fetch_retries: 1", PNPM_ENV[1]],
+			steps: runStep("pnpm add x"),
 		});
-		expect(registryEnvViolations("planted.yml", step, stubLocal)).toHaveLength(
-			1,
+		expect(registryEnvViolations("planted.yml", planted, stubLocal)).toEqual([
+			"planted.yml: workflow env.pnpm_config_fetch_retries is 1, below the floor 3",
+		]);
+	});
+
+	it("an npm-only workflow does not owe the pnpm pair", () => {
+		const planted = workflow({ env: RETRY_ENV, steps: runStep("npm ci") });
+		expect(registryEnvViolations("planted.yml", planted, stubLocal)).toEqual(
+			[],
+		);
+	});
+
+	it.each([
+		[
+			"an expression that is not a command word",
+			'echo "${{ github.sha }}${{ github.run_id }}"',
+		],
+		["a variable argument", 'echo "$HOME" "$(date)" > "$GITHUB_STEP_SUMMARY"'],
+		["a variable assignment", 'x=$(git rev-parse HEAD); echo "$x"'],
+		["a for loop over a variable", 'for f in $FILES; do echo "$f"; done'],
+	])("%s is not a computed command word", (_name, run) => {
+		// The rule must not turn every `$` into a hit, or every workflow owes the env.
+		const planted = workflow({ steps: runStep(run) });
+		expect(registryEnvViolations("planted.yml", planted, stubLocal)).toEqual(
+			[],
 		);
 	});
 

@@ -142,6 +142,10 @@ env:
   # .test.ts.
   npm_config_fetch_retries: 5
   npm_config_fetch_retry_maxtimeout: 120000
+  # pnpm ignores the npm_config_ keys above (pnpm 11.15.1 and 11.21.0 against
+  # a 503 registry: 2 retries left under npm_config_, 5 under pnpm_config_).
+  pnpm_config_fetch_retries: 5
+  pnpm_config_fetch_retry_maxtimeout: 120000
   # Single source of truth for "the oldest host we promise" (#731, raised to
   # 0.86.1 by #4688) -- both the existing pi-load/mise-repro pins below AND
   # host-range-smoke's floor matrix cell read this ONE value, so the pin can
