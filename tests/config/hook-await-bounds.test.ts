@@ -1228,16 +1228,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:171055f5~9e0a2421": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:1f887b0e~81c1d77f": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
@@ -1256,6 +1246,16 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"#2523 AC4's dead-signal site: `setAmbientAbortSignal` is only " +
 			"ever called from tool_result, so the signal read here is " +
 			"ALWAYS undefined. Fixing it is AC4's job, not slice 1's.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-tool-call.ts#handleToolCallImpl:58e74e03~28736675": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:6845dabe~79a8d019": {
@@ -1289,7 +1289,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~eab210c1": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~630803e2": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -2362,6 +2362,13 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// once per probe; those rungs stat and verify under their own probe
 	// budget, unbounded from the hook signal like the first resolution.
 	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
+	// #5087: the edit's re-measure plus its one default-branch read (9 in
+	// all; 10 -> 9 when the first touch took its table from the analyzer's
+	// own measure, #5443 review F6). Its awaits are the shared parser (init,
+	// parse) and two leaf-bounded `git` spawns (GIT_TIMEOUT_MS); its hook
+	// caller holds the whole delta under bounded() with the hook's signal, so
+	// a second bound here would add a timer for the same deadline.
+	"clients/metrics/complexity-baseline.ts": 9,
 	// #4238 R8: the shutdown drain is intentionally owned by the shared NDJSON
 	// writer registry. Its per-writer awaits cannot receive pi's hook signal;
 	// the caller applies the session_shutdown wall bound around the whole drain.
@@ -2983,6 +2990,11 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 	"call:clients/runtime-tool-result.ts#handleToolResult:19412575~b4f8a98d":
 		"Observed tool analysis uses ToolResultDeps.signal and the edit budget; " +
 		"a missing signal is an explicit standalone-harness case.",
+	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~51bbeb13":
+		"The edit's complexity delta (#5087) uses the tool_result signal, " +
+		"threaded from ctx.signal and absent only in a harness; the edit " +
+		"budget (HOOK_WALL_BUDGET_MS.tool_result_edit) stays live without it, " +
+		"and a delta it abandons appends nothing to the result.",
 	"call:clients/runtime-tool-result.ts#handleToolResult:2b57f8b9~b4f8a98d":
 		"The classified bootstrap demand uses ToolResultDeps.signal and the " +
 		"edit budget; a missing signal is an explicit harness case.",

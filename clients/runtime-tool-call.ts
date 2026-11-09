@@ -41,6 +41,10 @@ import {
 	resolveTreeSitterLanguage,
 } from "./tree-sitter-shared.js";
 import {
+	captureComplexityBaseline,
+	complexityBaselineKey,
+} from "./metrics/complexity-baseline.js";
+import {
 	classifyMutatingTool,
 	isProviderReplayCall,
 	readMutationPathField,
@@ -557,6 +561,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// #4943: the calling session, which this call's read-guard log rows name
 	// (an in-process subagent's call is its own, not the coordinator's).
 	const callSessionId = deps.sessionId ?? runtime.telemetrySessionId;
+	// #4220, #5443 review F5: the session this call belongs to, captured before
+	// its first await. A `/new` inside any await below retires it; the
+	// successor's session_start clears the stores, and a write taken under a
+	// handle captured after that await would land this session's file in the
+	// successor's store, which then never takes its own baseline.
+	const callSession = runtime.captureSessionGeneration();
 
 	// #2423 review round 4, finding F5: the hashline anchor memo is keyed by
 	// mtime+size, which a same-size rewrite inside one mtime tick cannot
@@ -1332,8 +1342,11 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		);
 	}
 
-	// Record complexity baseline for historical tracking (booboo/tdi).
-	// Not shown inline - just captured for delta analysis.
+	// Record the file's complexity baseline at its first touch (#5087): the
+	// function table of the bytes on disk before this tool runs. The edit's
+	// `tool_result` judges its delta against it and the default branch. The
+	// metrics-history snapshot (`/lens-tdi`) is taken from the same measure,
+	// until #5090 retires it.
 	//
 	// #2467: every client-free guard runs FIRST, so a tool call that cannot
 	// produce a baseline never loads the analyzer graph. This await used to sit
@@ -1354,12 +1367,13 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		!getFlag("no-complexity") &&
 		!isExternalOrVendor &&
 		filePath &&
-		!runtime.complexityBaselines.has(filePath) &&
+		!runtime.complexityBaselines.has(complexityBaselineKey(filePath)) &&
 		isComplexitySupportedFile(filePath)
 	) {
 		// Fail open: no clients means no baseline for this call, counted once in
-		// the ledger. A complexity baseline is delta-analysis bookkeeping — it
-		// must never be the reason a user's tool call fails or stalls.
+		// the ledger, and the next touch asks again. A complexity baseline is
+		// delta-analysis bookkeeping — it must never be the reason a user's tool
+		// call fails or stalls.
 		const complexityClient = (
 			await requestBootstrapClients({
 				reason: "tool-call-complexity-baseline",
@@ -1380,18 +1394,33 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				signal: deps.ctx.signal,
 			})
 		)?.complexityClient;
-		const baseline = await complexityClient?.analyzeFile(filePath);
-		if (baseline) {
-			runtime.complexityBaselines.add(filePath);
+		// #5443 review F6: one measure per first touch. The baseline table is
+		// the analysis' own keyed rows, not a second parse and walk of the file.
+		const analysis = complexityClient
+			? await complexityClient.analyzeFile(filePath)
+			: undefined;
+		// #4220: every write below lands in the call's session (`callSession`,
+		// captured at entry) or nowhere.
+		if (complexityClient) {
+			callSession.guardedWrite(filePath, () =>
+				runtime.complexityBaselines.set(
+					complexityBaselineKey(filePath),
+					captureComplexityBaseline(analysis?.measuredFunctions),
+				),
+			);
+		}
+		if (analysis && callSession.isCurrent()) {
 			const { captureSnapshot } = await import("./metrics-history.js");
-			captureSnapshot(filePath, {
-				maintainabilityIndex: baseline.maintainabilityIndex,
-				cognitiveComplexity: baseline.cognitiveComplexity,
-				maxNestingDepth: baseline.maxNestingDepth,
-				linesOfCode: baseline.linesOfCode,
-				maxCyclomatic: baseline.maxCyclomaticComplexity,
-				entropy: baseline.codeEntropy,
-			});
+			callSession.guardedWrite(filePath, () =>
+				captureSnapshot(filePath, {
+					maintainabilityIndex: analysis.maintainabilityIndex,
+					cognitiveComplexity: analysis.cognitiveComplexity,
+					maxNestingDepth: analysis.maxNestingDepth,
+					linesOfCode: analysis.linesOfCode,
+					maxCyclomatic: analysis.maxCyclomaticComplexity,
+					entropy: analysis.codeEntropy,
+				}),
+			);
 		}
 	} else if (
 		getFlag("no-complexity") &&
