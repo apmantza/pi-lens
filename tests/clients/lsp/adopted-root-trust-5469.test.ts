@@ -14,7 +14,7 @@ import {
 } from "../../../clients/latency-logger.js";
 import { _setServersForFileForTests } from "../../../clients/lsp/config.js";
 import { LSPService } from "../../../clients/lsp/index.js";
-import { LSP_SERVERS } from "../../../clients/lsp/server.js";
+import { CppServer, RustServer } from "../../../clients/lsp/server.js";
 import {
 	registerSessionRoot,
 	resetSessionRootsForTests,
@@ -71,9 +71,7 @@ function saved(root: string, decision: boolean) {
 	);
 }
 function setup(projectCode = true) {
-	const original = LSP_SERVERS.find(
-		(s) => s.id === (projectCode ? "rust" : "cpp"),
-	)!;
+	const original = projectCode ? RustServer : CppServer;
 	const spawn = vi.fn(async () => undefined);
 	_setServersForFileForTests(() => [
 		{ ...original, trustAllowed: true, root: async () => B, spawn },
@@ -145,7 +143,7 @@ describe("adopted root start decision (#5469)", () => {
 						// Recurrence: #5469 let a trusted A authorize Rust on saved-false B.
 						setProjectTrustState(trust);
 						if (c.resources) resources();
-						if (c.entry) saved(c.entry === "B" ? B : base, c.saved!);
+						if (c.entry) saved(c.entry === "B" ? B : base, c.saved === true);
 						fs.writeFileSync(
 							path.join(agent, "settings.json"),
 							JSON.stringify({ defaultProjectTrust: c.policy ?? "ask" }),
@@ -209,6 +207,7 @@ describe("adopted root start decision (#5469)", () => {
 
 	it("refuses missing settings export even with a saved trusted decision", async () => {
 		// Recurrence: unsupported pi SDK shapes must fail closed before spawning.
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
 		saved(B, true);
 		setProjectTrustState("trusted");
 		setHostProjectTrustLoader(async () => ({
@@ -218,6 +217,18 @@ describe("adopted root start decision (#5469)", () => {
 		const { touch, spawn } = setup();
 		await touch();
 		expect(spawn).not.toHaveBeenCalled();
+		await flushLatencyLog();
+		const { rows, skipped } = readNdjsonRows(getLatencyLogPath());
+		expect(skipped).toBe(0);
+		expect(
+			rows.some(
+				(row) =>
+					row.phase === "degradation_ledger" &&
+					row.filePath === `adopted-trust:${B}` &&
+					(row.metadata as { kind?: unknown })?.kind ===
+						"lsp-registry-decision",
+			),
+		).toBe(true);
 	});
 
 	it("reads a root once per turn and observes a new decision next turn", async () => {

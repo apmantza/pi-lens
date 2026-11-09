@@ -4,9 +4,9 @@
  * #4257).
  *
  * An adopted root is NOT the session project. pi's trust decision describes the
- * session's project only, so an adopted root never runs project-local binaries,
- * project config, project plugins, or test runners, whatever the session trust
- * (#4242 trust rules). Only a runner that reads no project config and cannot
+ * session's project only. CLI admission refuses project-local binaries,
+ * project config, project plugins, and test runners, whatever the session trust
+ * (#4242 trust rules). Only a CLI runner that reads no project config and cannot
  * execute project code may run there, and only from a global or pi-lens-managed
  * binary.
  *
