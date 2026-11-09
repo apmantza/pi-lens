@@ -11,4 +11,4 @@ area: rules
   `high-complexity` thresholds. A function the edit did not change, or
   improved, is never named, and the line waits while the edit has blockers.
   Outside a repository the file as the session first read it stands in for
-  main. `--no-complexity` turns it off. (refs #5087)
+  main. `--no-complexity` turns it off.
