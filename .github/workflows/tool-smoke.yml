@@ -324,7 +324,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94 # v1
+      - uses: ruby/setup-ruby@b3aaceaef7e0ee231b499e7b5f49c03fc1d32199 # v1
         continue-on-error: true
         with:
           ruby-version: '3.3'
@@ -1005,7 +1005,7 @@ jobs:
         id: refresh_pr
         if: needs.tool-smoke.outputs.docs_changed == 'true' && needs.tool-smoke.outputs.census == 'success'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8 # v8.1.2
         with:
           token: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}
           branch: bot/lsp-docs-refresh
@@ -1063,7 +1063,7 @@ jobs:
         id: promote_pr
         if: needs.tool-smoke.outputs.promoted == 'true'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8 # v8.1.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: bot/lsp-idle-evict-promote
