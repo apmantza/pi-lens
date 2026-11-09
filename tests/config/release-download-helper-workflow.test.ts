@@ -638,6 +638,13 @@ export function registryUseSites(
 			.defaults?.run?.shell;
 		scanSteps(`jobs.${job}`, body.steps, jobShell ?? doc.defaults?.run?.shell);
 	}
+	// A JavaScript or Docker action keeps its commands outside the YAML, so
+	// only a composite action's steps are read; any other `runs:` is a hit.
+	if (doc.runs !== undefined && doc.runs.using !== "composite")
+		sites.push({
+			where: `runs.using ${String(doc.runs.using)} cannot be read`,
+			pnpm: true,
+		});
 	scanSteps("runs", doc.runs?.steps, undefined);
 	return sites;
 }
@@ -1254,6 +1261,29 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 			path === "./.github/actions/x" ? action : undefined;
 		expect(registryEnvViolations("planted.yml", planted, read)).toEqual([]);
 	});
+
+	it.each(["node20", "docker"])(
+		"a readable local %s action is a hit",
+		(using) => {
+			// Recurrence #5457 Qodo F1: a readable action with no composite steps
+			// read as scanned and clean, though its entrypoint may run npm.
+			const action = [
+				"runs:",
+				`  using: ${using}`,
+				"  main: index.js",
+				"  image: Dockerfile",
+				"",
+			].join("\n");
+			const planted = workflow({
+				steps: ["      - uses: ./.github/actions/x"],
+			});
+			const read = (path: string) =>
+				path === "./.github/actions/x" ? action : undefined;
+			expect(
+				registryEnvViolations("planted.yml", planted, read).length,
+			).toBeGreaterThan(0);
+		},
+	);
 
 	it("a local composite action that calls itself is a hit, not a loop", () => {
 		// The scan recurses into local actions; a cycle must end as an unreadable
