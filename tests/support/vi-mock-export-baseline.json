@@ -176,7 +176,6 @@
 	"tests/clients/review-graph-logger.test.ts:../../clients/ndjson-logger.js:[\"createNdjsonLogger\"]": 1,
 	"tests/clients/ruff-client-dedupe.test.ts:../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"getInstallAttempt\",\"getLastEnsureResolutionSource\",\"getToolInstallStrategy\",\"isSpawnableCommand\",\"resetPathWalkMemo\"]": 46,
 	"tests/clients/ruff-client-dedupe.test.ts:../../clients/safe-spawn.js:[\"safeSpawn\",\"safeSpawnAsync\"]": 13,
-	"tests/clients/runtime-session-cascade-tier-reset.test.ts:../../clients/installer/index.js:[\"ensureTool\",\"isSpawnableCommand\",\"resetPathWalkMemo\",\"resetResolvedPathCache\"]": 49,
 	"tests/clients/runtime-session-cascade-tier-reset.test.ts:../../clients/safe-spawn.js:[\"resetSafeSpawnWindowsCommandCache\",\"safeSpawn\",\"safeSpawnAsync\"]": 14,
 	"tests/clients/runtime-session-dispatch-reset.test.ts:../../clients/installer/index.js:[\"ensureTool\",\"findManagedToolBinary\",\"isSpawnableCommand\",\"resetPathWalkMemo\",\"resetResolvedPathCache\"]": 48,
 	"tests/clients/runtime-session-dispatch-reset.test.ts:../../clients/safe-spawn.js:[\"resetSafeSpawnWindowsCommandCache\",\"safeSpawn\",\"safeSpawnAsync\"]": 23,
