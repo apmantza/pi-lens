@@ -275,7 +275,12 @@ Per-rule threshold overrides and policy filters. Currently honored:
 
 - `high-complexity.threshold` — cyclomatic complexity (default `15`). The
   same number judges the per-edit complexity line (`⚠ complexity vs main: …`),
-  which names a function an edit made worse than the default branch has it.
+  which names a function an edit made worse than the default branch has it,
+  and `disable`/`select`/`ignorePaths` of `high-complexity` switch the line off
+  too. The line uses the JS/TS thresholds (cyclomatic `15`, nesting `6`) for
+  every language it covers (Python, Go and Rust included) until #5089 sets
+  per-language ones. It never names an anonymous function, and a file over
+  256 KiB is not judged.
 - `high-fan-out.threshold` — distinct function calls (default `20`)
 - `<id>.disable` — disable diagnostics for the listed rule ids (output-only
   filter). Same rule-id normalization as `pi-lens-ignore`: a user lists
