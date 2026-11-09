@@ -13,6 +13,7 @@
  */
 
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -201,9 +202,11 @@ describe("quick-mode warmup survives a superseded word-index build (#1197)", () 
 			// worker, and the test returns once the pre-warm touch lands, before
 			// that write does. Removing the root first let the late write recreate
 			// `<root>/data/...` and race the sweep's own removal. Join the writer,
-			// then remove. The drain polls the in-flight writes for about 2 s, so
-			// a persist slower than that can still land after cleanup.
+			// then remove. The polling drain gives up after about 2 s, so the
+			// strict registered drain follows it and fails the test, naming the
+			// writer, instead of removing the root under a persist still running.
 			await drainBackgroundWritesForTests();
+			await drainRegisteredBackgroundWritesForTests();
 			env.cleanup();
 		}
 		// Nothing recreates the removed root once the writer is joined.
