@@ -156,8 +156,9 @@ function hasKindExtension(filePath: string, kind: FileKind): boolean {
 // The ordinary JS/TS source family: the jsts kinds minus Vue/Svelte.
 // Vue/Svelte files are classified as jsts for project-wide discovery, but
 // their embedded-language contents are neither valid inputs for the
-// tree-sitter fact providers nor source for the bulk scanners (jscpd,
-// madge, the startup count, the review-graph walk). #5446: this is the ONE
+// tree-sitter fact providers nor source for the bulk scanners (jscpd, the
+// startup count, the review-graph walk). madge keeps its own list
+// (`MADGE_EXTENSIONS`, dependency-checker.ts): it reads what madge reads. #5446: this is the ONE
 // answer to "is this a JS/TS source file" — a scanner that spells
 // `ts|tsx|js|jsx` by hand leaves `.mts`/`.cts` (and `.mjs`/`.cjs`) out.
 // Keep that one policy decision here so every provider and scanner agrees.
@@ -170,16 +171,6 @@ const JSTS_FACT_EXTENSIONS = new Set(
 /** Whether `filePath` is JS/TS source, by the registry's jsts extensions. */
 export function isJstsFactFile(filePath: string): boolean {
 	return JSTS_FACT_EXTENSIONS.has(extname(filePath).toLowerCase());
-}
-
-// The ambient-declaration twins of the JS/TS source family. A scanner that
-// skips `.d.ts` must skip the twins too, or `isJstsFactFile` (#5446) makes
-// a declarations-only root look scannable.
-const JSTS_DECLARATION_PATTERN = /\.d\.[cm]?ts$/i;
-
-/** Whether `filePath` is a JS/TS ambient declaration (`.d.*ts`). */
-export function isJstsDeclarationFile(filePath: string): boolean {
-	return JSTS_DECLARATION_PATTERN.test(filePath);
 }
 
 // Bash access tracking also accepts common text/config files which do not have

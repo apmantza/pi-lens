@@ -27,7 +27,8 @@ import {
 	toPosix,
 } from "./path-utils.js";
 import { getJscpdMaxEntriesDerived } from "./project-scale.js";
-import { isJstsDeclarationFile, isJstsFactFile } from "./file-kinds.js";
+import { isJstsFactFile } from "./file-kinds.js";
+import { isDeclarationFile } from "./generated-artifacts.js";
 
 // Non-JS/TS source extensions jscpd's tokenizers cover; the JS/TS family
 // answers through the registry seam (`isJstsFactFile`) (#5446).
@@ -260,7 +261,7 @@ export class JscpdClient {
 					isJstsFactFile(entry.name) ||
 					JSCPD_WALK_OTHER_SOURCE.test(entry.name)
 				) {
-					if (isJstsDeclarationFile(entry.name)) return "skip";
+					if (isDeclarationFile(entry.name)) return "skip";
 					if (ignoreMatcher.isIgnored(fullPath, false)) return "skip";
 					return "stop";
 				}
