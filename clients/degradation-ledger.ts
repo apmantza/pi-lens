@@ -2326,7 +2326,7 @@ export type DegradationKind =
 	 * `gh auth token` probe never got a fair hearing, or is cooling down from
 	 * one, so its online audits (`known-vulnerable-actions`, `unpinned-uses`,
 	 * `impostor-commit`) are skipped while the scan still looks clean (#1459's
-	 * security-silence shape). Subject is `zizmor`; counted per cooldown cycle,
+	 * security-silence shape). Subject is `zizmor`; counted per offline start,
 	 * so a recurring offline start is one row with an exact tally. A genuine
 	 * "not authenticated" answer records nothing: nothing unexpected happened.
 	 */
