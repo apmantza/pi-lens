@@ -540,15 +540,15 @@ const COMPUTED_INSTALL =
  * matrix.pm }} install`, `${{ matrix.cmd }}` and a bare `$INSTALL_CMD` all
  * passed): the first word of a command, after a separator, a wrapper such as
  * `sudo` or `eval`, `sh -c` and leading `VAR=value` words, that starts with a
- * variable or an expression. An unresolved word is a hit, never a pass. It
+ * variable, an expression or a command substitution. An unresolved word is a hit, never a pass. It
  * runs on the quote-preserving text, so a quoted assignment value (`names="a:
  * $(x)"`) is one word. `$DIR/literal-name` is a path whose basename is
  * visible to the client scan, so it is not a hit.
  */
 const COMPUTED_COMMAND = new RegExp(
-	String.raw`(?:^|[;&|\n]|\$?\(|\b(?:then|do|else|elif|if|while|until|exec|sudo|env|command|time|nohup|xargs|eval)\b|\b(?:ba)?sh\s+-c)` +
+	String.raw`(?:^|[;&|\n]|(?<!\()\$?\((?!\()|\b(?:then|do|else|elif|if|while|until|exec|sudo|env|command|time|nohup|xargs|eval)\b|\b(?:ba)?sh\s+-c)` +
 		String.raw`[ \t]*(?:\w+=(?:"[^"]*"|'[^']*'|[^\s"'()])*[ \t]+)*!?[ \t]*["']*` +
-		String.raw`\$(?!(?:\{\{[^}]*\}\}|\{?[\w@*]+\}?)["']?(?:/[\w.-]+)+["']?(?:\s|$))(?:\{\{|\{?[\w@*])`,
+		String.raw`(?:\$(?!(?:\{\{[^}]*\}\}|\{?[\w@*]+\}?)["']?(?:/[\w.-]+)+["']?(?:\s|$))(?:\{\{|\{?[\w@*]|\()|\x60)`,
 	"m",
 );
 
@@ -1166,6 +1166,11 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		["variable command behind a wrapper", runStep("sudo $INSTALL_CMD")],
 		["variable command behind an assignment", runStep("A=b $INSTALL_CMD")],
 		["variable command inside sh -c", runStep('sh -c "$INSTALL_CMD"')],
+		["defaulted variable command", runStep("${PM:-x} ci")],
+		["command substitution command word", runStep("$(printf np%s m) ci")],
+		["backtick command word", runStep("`printf np%s m` ci")],
+		["eval of a variable", runStep('eval "$INSTALL_CMD"')],
+		["variable command in a subshell", runStep("( $INSTALL_CMD )")],
 		["variable command after then", runStep("if true; then $INSTALL_CMD; fi")],
 		["unknown shell", runStep("x", ["shell: python {0}"])],
 		[
@@ -1410,6 +1415,8 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 		["a variable argument", 'echo "$HOME" "$(date)" > "$GITHUB_STEP_SUMMARY"'],
 		["a variable assignment", 'x=$(git rev-parse HEAD); echo "$x"'],
 		["a for loop over a variable", 'for f in $FILES; do echo "$f"; done'],
+		["arithmetic expansion", 'echo "s=$(( $(date +%s) - START ))"'],
+		["a literal path under a variable directory", '"$RUNNER_TEMP/tool" --flag'],
 	])("%s is not a computed command word", (_name, run) => {
 		// The rule must not turn every `$` into a hit, or every workflow owes the env.
 		const planted = workflow({ steps: runStep(run) });
