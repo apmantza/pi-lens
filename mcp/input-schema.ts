@@ -8,6 +8,8 @@
  * against the very function production calls.
  */
 
+import { translateGuidanceToolNames } from "../clients/tool-config.js";
+
 // Wrapped pi tools already declare their params as typebox (which IS JSON
 // Schema). Emit that directly as the MCP inputSchema (+ the MCP-only `cwd`)
 // instead of hand-restating it — no drift between the tool and its schema.
@@ -16,10 +18,27 @@ export function schemaWithCwd(parameters: unknown): Record<string, unknown> {
 		properties?: Record<string, unknown>;
 		required?: string[];
 	};
+	// Property descriptions name pi tools too (`ast_grep_search's`,
+	// `module_report`); route each through the MCP name translator, like the
+	// tool's own description, so the list never cites a tool MCP does not serve.
+	const properties: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(p.properties ?? {})) {
+		const property = value as { description?: unknown };
+		properties[key] =
+			typeof property.description === "string"
+				? {
+						...property,
+						description: translateGuidanceToolNames(
+							property.description,
+							"mcp",
+						),
+					}
+				: value;
+	}
 	return {
 		type: "object",
 		properties: {
-			...p.properties,
+			...properties,
 			cwd: {
 				type: "string",
 				description: "Project root (defaults to the server workspace).",

@@ -166,8 +166,19 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 				required?: string[];
 			};
 			expect(wire.required ?? []).toEqual(piParams.required ?? []);
+			// Recurrence this prevents: the MCP catalog advertising pi-only tool
+			// names (`ast_grep_search's`, bare `module_report`) inside property
+			// descriptions, which MCP does not serve; only the top-level text went
+			// through the translator at first (#5438 review F2).
 			for (const [key, value] of Object.entries(piParams.properties ?? {})) {
-				expect(wire.properties?.[key], `${mcpName}.${key}`).toEqual(value);
+				const expected = { ...(value as Record<string, unknown>) };
+				if (typeof expected.description === "string") {
+					expected.description = translateGuidanceToolNames(
+						expected.description,
+						"mcp",
+					);
+				}
+				expect(wire.properties?.[key], `${mcpName}.${key}`).toEqual(expected);
 			}
 			expect(
 				Object.keys(wire.properties ?? {}).filter(
@@ -186,6 +197,21 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 			}
 		});
 	}
+
+	it("names no pi-only tool in the two property descriptions that cited one", () => {
+		const properties = (name: string, key: string) => {
+			const props = (mcpByName().get(name)?.inputSchema ?? {}) as {
+				properties?: Record<string, { description?: string }>;
+			};
+			return props.properties?.[key]?.description ?? "";
+		};
+		const lang = properties("pilens_symbol_search", "lang");
+		expect(lang).toContain("pilens_ast_grep_search's");
+		expect(lang).not.toMatch(/(?<!pilens_)ast_grep_search/);
+		const symbol = properties("pilens_read_symbol", "symbol");
+		expect(symbol).toContain("pilens_module_report");
+		expect(symbol).not.toMatch(/(?<!pilens_)module_report/);
+	});
 
 	it("declares constrainedSampling on exactly the enum-bearing tools", () => {
 		const carriers = piDefinitions
