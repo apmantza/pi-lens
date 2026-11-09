@@ -235,7 +235,7 @@ export async function readAdoptedProjectTrust(
 		const sdk = await bounded(loadProjectTrustSdk(), {
 			ms: HOOK_WALL_BUDGET_MS.tool_result_read_only,
 			signal: undefined,
-			shutdownSignal,
+			...(shutdownSignal ? { shutdownSignal } : {}),
 			hook: "off_hook",
 			label: "adopted-project-trust-sdk",
 		});
