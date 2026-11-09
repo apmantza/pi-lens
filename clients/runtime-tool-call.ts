@@ -561,6 +561,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// #4943: the calling session, which this call's read-guard log rows name
 	// (an in-process subagent's call is its own, not the coordinator's).
 	const callSessionId = deps.sessionId ?? runtime.telemetrySessionId;
+	// #4220, #5443 review F5: the session this call belongs to, captured before
+	// its first await. A `/new` inside any await below retires it; the
+	// successor's session_start clears the stores, and a write taken under a
+	// handle captured after that await would land this session's file in the
+	// successor's store, which then never takes its own baseline.
+	const callSession = runtime.captureSessionGeneration();
 
 	// #2423 review round 4, finding F5: the hashline anchor memo is keyed by
 	// mtime+size, which a same-size rewrite inside one mtime tick cannot
@@ -1364,12 +1370,8 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		!runtime.complexityBaselines.has(complexityBaselineKey(filePath)) &&
 		isComplexitySupportedFile(filePath)
 	) {
-		// #4220: the session is captured before the first await, and every
-		// write below lands in it or nowhere. A `/new` inside these awaits
-		// retires it; the successor's session_start clears the store, and a
-		// late write would otherwise put this session's file in the
-		// successor's store, which then never takes its own baseline.
-		const baselineSession = runtime.captureSessionGeneration();
+		// #4220: every write below lands in the call's session (`callSession`,
+		// captured at entry) or nowhere.
 		const firstTouch = await bounded(
 			captureComplexityBaseline(filePath, deps.ctx.signal),
 			{
@@ -1380,7 +1382,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			},
 		);
 		if (firstTouch) {
-			baselineSession.guardedWrite(filePath, () =>
+			callSession.guardedWrite(filePath, () =>
 				runtime.complexityBaselines.set(
 					complexityBaselineKey(filePath),
 					firstTouch,
@@ -1413,9 +1415,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		const analysis = firstTouch
 			? await complexityClient?.analyzeFile(filePath)
 			: undefined;
-		if (analysis && baselineSession.isCurrent()) {
+		if (analysis && callSession.isCurrent()) {
 			const { captureSnapshot } = await import("./metrics-history.js");
-			baselineSession.guardedWrite(filePath, () =>
+			callSession.guardedWrite(filePath, () =>
 				captureSnapshot(filePath, {
 					maintainabilityIndex: analysis.maintainabilityIndex,
 					cognitiveComplexity: analysis.cognitiveComplexity,

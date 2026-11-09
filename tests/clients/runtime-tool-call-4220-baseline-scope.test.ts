@@ -172,6 +172,35 @@ describe("#4220 — the tool_call complexity baseline stays in its own session",
 		expect(snapshots).toEqual([]);
 	});
 
+	it("writes nothing into the successor when the session is replaced during the LSP config init", async () => {
+		// #5443 review F5: `ensureLSPConfigInitialized` is awaited on every
+		// tool_call without --no-lsp, long before the baseline block. A handle
+		// captured at the block named the successor, so the old session's file
+		// landed in the successor's store.
+		let initStarted: () => void = () => {};
+		const started = new Promise<void>((resolve) => {
+			initStarted = resolve;
+		});
+		let releaseInit: () => void = () => {};
+		const held = {
+			...deps(),
+			ensureLSPConfigInitialized: () =>
+				new Promise<void>((resolve) => {
+					releaseInit = resolve;
+					initStarted();
+				}),
+		};
+		pendingLoad.onStart = () => pendingLoad.resolve?.(LOADED_CLIENTS);
+		const call = runHandlerExpectingNoThrow(() => handleToolCall(held));
+		await started;
+		runtime.resetForSession();
+		releaseInit();
+		await call;
+
+		expect(runtime.complexityBaselines.size).toBe(0);
+		expect(snapshots).toEqual([]);
+	});
+
 	it("keeps the baseline in a session that stays live", async () => {
 		const call = runHandlerExpectingNoThrow(() => handleToolCall(deps()));
 		await loadStarted();

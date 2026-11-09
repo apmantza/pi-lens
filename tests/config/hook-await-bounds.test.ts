@@ -1289,7 +1289,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~fa835faa": {
+	"clients/runtime-tool-call.ts#handleToolCallImpl:d7b23cdc~630803e2": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
