@@ -653,17 +653,24 @@ export function registryUseSites(
 export function envOverrideViolations(file: string, source: string): string[] {
 	const doc = workflowDocument(source) as Document;
 	const violations: string[] = [];
-	const overrides = (
-		scope: string,
-		env: Record<string, unknown> | undefined,
-	) => {
-		for (const key of Object.keys(env ?? {}))
+	// An env the scan cannot read as a mapping (`env: ${{ fromJSON(..) }}`)
+	// counts as a hit: its keys are unknown, so it may set any of them.
+	const envKeys = (scope: string, env: unknown): string[] => {
+		if (env === undefined || env === null) return [];
+		if (typeof env === "object" && !Array.isArray(env)) return Object.keys(env);
+		violations.push(
+			`${file}: ${scope} is not a mapping the scan can read; list its keys literally`,
+		);
+		return [];
+	};
+	const overrides = (scope: string, env: unknown) => {
+		for (const key of envKeys(scope, env))
 			if (CONFIG_ENV_KEY.test(key))
 				violations.push(
 					`${file}: ${scope} sets ${key}; set the retry keys once at the workflow level`,
 				);
 	};
-	for (const key of Object.keys(doc.env ?? {}))
+	for (const key of envKeys("env", doc.env))
 		if (
 			CONFIG_ENV_KEY.test(key) &&
 			!(key in NPM_RETRY_FLOORS) &&
@@ -1334,6 +1341,30 @@ describe("CI registry and setup-action fetches (#5420)", () => {
 				steps: runStep("npm ci", opts.stepEnv ?? []),
 			});
 			expect(envOverrideViolations("planted.yml", planted)).toHaveLength(count);
+		},
+	);
+
+	it.each([
+		[
+			"top-level",
+			"env: ${{ fromJSON(vars.E) }}\njobs:\n  j:\n    runs-on: x\n    steps:\n      - run: npm ci\n",
+		],
+		[
+			"job",
+			"jobs:\n  j:\n    runs-on: x\n    env: ${{ fromJSON(vars.E) }}\n    steps:\n      - run: npm ci\n",
+		],
+		[
+			"step",
+			"jobs:\n  j:\n    runs-on: x\n    steps:\n      - run: npm ci\n        env: ${{ fromJSON(vars.E) }}\n",
+		],
+	])(
+		"a %s env that is not a mapping reds the override gate",
+		(_scope, body) => {
+			// Recurrence #5457 verify r2 G1: a computed env passed silently, so it
+			// could set any config key unseen.
+			expect(
+				envOverrideViolations("planted.yml", `on: push\n${body}`),
+			).toHaveLength(1);
 		},
 	);
 
