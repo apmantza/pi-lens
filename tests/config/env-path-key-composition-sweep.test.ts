@@ -216,7 +216,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Lang, parse } from "@ast-grep/napi";
+import { Lang, parse, type NapiConfig } from "@ast-grep/napi";
 import { describe, expect, it } from "vitest";
 import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 import { setupTestEnvironment } from "../clients/test-utils.js";
@@ -391,8 +391,23 @@ interface Declaration {
 	envTyped: boolean;
 	/** The node the binding is initialized to, when it has one. */
 	initializer?: SgNode;
-	/** The binding cannot be rebound (`const`), so its initializer is a proof. */
-	immutable?: boolean;
+	/**
+	 * The `variable_declarator` whose declaration keyword decides `const`. Read
+	 * on demand by {@link isImmutable}: only a binding a `const` chain hops
+	 * through needs the keyword, and asking every declarator in the file for its
+	 * parent's children cost more than the rest of the table.
+	 */
+	declarator?: SgNode;
+}
+
+/** The binding cannot be rebound (`const`), so its initializer is a proof. */
+function isImmutable(declaration: Declaration): boolean {
+	return (
+		declaration.declarator
+			?.parent()
+			?.children()
+			.some((child) => child.text() === "const") === true
+	);
 }
 
 interface ScanContext {
@@ -427,7 +442,7 @@ function proveChain(
 		const initializer = declaration?.initializer;
 		if (
 			declaration === undefined ||
-			declaration.immutable !== true ||
+			!isImmutable(declaration) ||
 			initializer === undefined ||
 			visited.has(declaration.index)
 		)
@@ -478,10 +493,10 @@ function buildContext(root: SgNode): ScanContext {
 			owner: SgNode,
 			envTyped: boolean,
 			initializer?: SgNode,
-			immutable = false,
+			declarator?: SgNode,
 		): void => {
 			const scope =
-				nearestIn(chainOf(owner), SCOPE_KINDS)?.range().start.index ?? 0;
+				nearestAncestorIn(owner, SCOPE_KINDS)?.range().start.index ?? 0;
 			const scoped = byScope.get(scope) ?? new Map<string, Declaration[]>();
 			const list = scoped.get(name) ?? [];
 			const declaration: Declaration = {
@@ -493,7 +508,7 @@ function buildContext(root: SgNode): ScanContext {
 			// table: a same-named constant in another scope must not rewrite how a
 			// reference here resolves (#4600 R2).
 			declaration.initializer = initializer;
-			declaration.immutable = immutable;
+			declaration.declarator = declarator;
 			list.push(declaration);
 			scoped.set(name, list);
 			byScope.set(scope, scoped);
@@ -502,28 +517,44 @@ function buildContext(root: SgNode): ScanContext {
 			byName.set(name, namedList);
 		};
 
-		for (const declarator of root.findAll({
-			rule: { kind: "variable_declarator" },
+		// ONE walk for the four kinds the table reads (a `findAll` costs a full
+		// tree traversal however few nodes it returns; four of them were the
+		// table's whole cost). Each kind keeps its tree order and is consumed in
+		// the order the separate walks ran: declarators, parameters, assignments.
+		const declarators: SgNode[] = [];
+		const parameters = new Map<string, SgNode[]>(
+			[...PARAMETER_KINDS].map((kind) => [kind, []]),
+		);
+		const assignments: SgNode[] = [];
+		for (const node of root.findAll({
+			rule: {
+				any: [
+					{ kind: "variable_declarator" },
+					...[...PARAMETER_KINDS].map((kind) => ({ kind })),
+					{ kind: "assignment_expression" },
+				],
+			},
 		})) {
+			const kind = kindName(node);
+			if (kind === "variable_declarator") declarators.push(node);
+			else if (kind === "assignment_expression") assignments.push(node);
+			else parameters.get(kind)?.push(node);
+		}
+		for (const declarator of declarators) {
 			const nameNode = firstOfKind(declarator, "identifier");
 			if (nameNode === undefined) continue;
 			const value = declarator.field("value") ?? undefined;
-			const immutable =
-				declarator
-					.parent()
-					?.children()
-					.some((child) => child.text() === "const") === true;
 			declare(
 				nameNode.text(),
 				nameNode,
 				declarator,
 				annotatedAsEnv(declarator),
 				value,
-				immutable,
+				declarator,
 			);
 		}
 		for (const kind of PARAMETER_KINDS) {
-			for (const parameter of root.findAll({ rule: { kind } })) {
+			for (const parameter of parameters.get(kind) ?? []) {
 				const nameNode = firstOfKind(parameter, "identifier");
 				if (nameNode === undefined) continue;
 				declare(
@@ -535,7 +566,11 @@ function buildContext(root: SgNode): ScanContext {
 			}
 		}
 		const lookup = (reference: SgNode, name: string) => {
-			for (const ancestor of chainOf(reference)) {
+			for (
+				let ancestor = reference.parent();
+				ancestor !== null;
+				ancestor = ancestor.parent()
+			) {
 				if (!SCOPE_KINDS.has(kindName(ancestor))) continue;
 				const list = byScope.get(ancestor.range().start.index)?.get(name);
 				let chosen: Declaration | undefined;
@@ -581,9 +616,7 @@ function buildContext(root: SgNode): ScanContext {
 		// A mutable binding carries no proof, but an assignment that writes a
 		// quoted path spelling is still evidence this name may be the variable
 		// (#4600 F4: `let K = "other"; K = "Path"`).
-		for (const assignment of root.findAll({
-			rule: { kind: "assignment_expression" },
-		})) {
+		for (const assignment of assignments) {
 			const left = assignment.field("left");
 			const right = assignment.field("right");
 			if (left?.kind() === "identifier" && right !== null) {
@@ -596,7 +629,11 @@ function buildContext(root: SgNode): ScanContext {
 	return {
 		resolve: (reference, name) => {
 			const { byScope } = (tables ??= load());
-			for (const ancestor of chainOf(reference)) {
+			for (
+				let ancestor = reference.parent();
+				ancestor !== null;
+				ancestor = ancestor.parent()
+			) {
 				if (!SCOPE_KINDS.has(kindName(ancestor))) continue;
 				const list = byScope.get(ancestor.range().start.index)?.get(name);
 				let chosen: Declaration | undefined;
@@ -609,7 +646,7 @@ function buildContext(root: SgNode): ScanContext {
 		},
 		pathAbout: (name) => (tables ??= load()).pathAbout.has(name),
 		ownerStart: (reference) => {
-			const owner = nearestIn(chainOf(reference), OWNER_KINDS);
+			const owner = nearestAncestorIn(reference, OWNER_KINDS);
 			return owner === undefined ? 0 : owner.range().start.index;
 		},
 	};
@@ -783,28 +820,28 @@ interface Composition {
 	kind: "literal" | "member";
 }
 
-/**
- * A node's ancestors, nearest first. Each `parent()` call crosses into the
- * addon, so a walk that asks five questions about one node takes ONE chain, not
- * five climbs: the census parses ~15 MB of source and the per-node walks were
- * most of its cost (#4600 F3).
- */
-type Chain = readonly SgNode[];
-
-function chainOf(node: SgNode): Chain {
-	return node.ancestors();
-}
-
 /** The node kind as a string (`kind()` is typed as the whole Kinds union). */
 function kindName(node: SgNode): string {
 	return String(node.kind());
 }
 
-function nearestIn(
-	chain: Chain,
+/**
+ * The nearest ancestor of `node` (itself excluded) whose kind is in `kinds`.
+ * Climbs with `parent()` and stops at the first hit, where `ancestors()` would
+ * allocate the whole chain to the root for a scope that is usually 1-3 hops up.
+ */
+function nearestAncestorIn(
+	node: SgNode,
 	kinds: ReadonlySet<string>,
 ): SgNode | undefined {
-	return chain.find((node) => kinds.has(kindName(node)));
+	for (
+		let ancestor = node.parent();
+		ancestor !== null;
+		ancestor = ancestor.parent()
+	) {
+		if (kinds.has(kindName(ancestor))) return ancestor;
+	}
+	return undefined;
 }
 
 /**
@@ -1265,19 +1302,18 @@ export function findPathKeyFindings(
 	const root = parse(Lang.TypeScript, source).root();
 	const context = buildContext(root);
 	const writes: RawWrite[] = [];
-	const callNodes = root.findAll({
-		rule: {
-			kind: "call_expression",
+	// Calls with a writer-shaped callee (`Object.assign`, `.set`, `.keys`, …).
+	const calleeRule: NapiConfig["rule"] = {
+		kind: "call_expression",
+		has: {
+			kind: "member_expression",
 			has: {
-				kind: "member_expression",
-				has: {
-					kind: "property_identifier",
-					regex:
-						"^(?:fromEntries|set|write|define|assign|update|mutate|keys|entries|values|hasOwn)$",
-				},
+				kind: "property_identifier",
+				regex:
+					"^(?:fromEntries|set|write|define|assign|update|mutate|keys|entries|values|hasOwn)$",
 			},
 		},
-	});
+	};
 	// Bare or aliased writers have no callee spelling to admit. Add only calls
 	// whose arguments structurally contain the ambient env or a declaration-
 	// proven ProcessEnv alias; the old all-call fallback materialised 173,642
@@ -1288,38 +1324,44 @@ export function findPathKeyFindings(
 		),
 	].map((match) => match[1]);
 	const aliasPattern = aliases.length > 0 ? `^(?:${aliases.join("|")})$` : "^$";
-	const seen = new Set(callNodes.map((node) => node.range().start.index));
-	for (const node of root.findAll({
-		rule: {
-			kind: "call_expression",
+	const envArgumentRule: NapiConfig["rule"] = {
+		kind: "call_expression",
+		has: {
+			kind: "arguments",
 			has: {
-				kind: "arguments",
-				has: {
-					any: [
-						{
-							kind: "member_expression",
-							has: {
-								kind: "property_identifier",
-								regex: "^env$",
-							},
+				any: [
+					{
+						kind: "member_expression",
+						has: {
+							kind: "property_identifier",
+							regex: "^env$",
 						},
-						{ kind: "identifier", regex: aliasPattern },
-					],
-				},
+					},
+					{ kind: "identifier", regex: aliasPattern },
+				],
 			},
 		},
-	})) {
-		if (!seen.has(node.range().start.index)) callNodes.push(node);
-	}
+	};
 
 	// One parser pass over the node kinds that can WRITE a path key: the four
 	// key forms an object literal has, a member write (dotted or subscript), and
 	// the `Object.fromEntries` call that builds an env entry by entry. Every
 	// admission is a node kind, never a text pattern, and each visitor reads the
 	// key from the node it was handed.
+	//
+	// The two call rules above ride the same walk (a `findAll` is a full tree
+	// traversal however few nodes it returns; three walks per file were the
+	// census's largest cost). A call node is then sorted back into the two lists
+	// the separate walks produced: the callee-shaped calls, then the env-argument
+	// calls they did not already hold, so the visit order is unchanged.
+	const keyNodes: SgNode[] = [];
+	const callNodes: SgNode[] = [];
+	const envArgumentCalls: SgNode[] = [];
 	for (const node of root.findAll({
 		rule: {
 			any: [
+				calleeRule,
+				envArgumentRule,
 				{
 					kind: "pair",
 					has: { kind: "property_identifier", regex: PATH_SPELLING },
@@ -1341,12 +1383,17 @@ export function findPathKeyFindings(
 			],
 		},
 	})) {
-		const kind = node.kind();
-		if (kind === "assignment_expression") {
+		if (node.kind() !== "call_expression") keyNodes.push(node);
+		else if (node.matches({ rule: calleeRule })) callNodes.push(node);
+		else envArgumentCalls.push(node);
+	}
+	const seen = new Set(callNodes.map((node) => node.range().start.index));
+	for (const node of envArgumentCalls) {
+		if (!seen.has(node.range().start.index)) callNodes.push(node);
+	}
+	for (const node of keyNodes) {
+		if (node.kind() === "assignment_expression") {
 			collectMemberWrite(node, context, writes);
-		} else if (kind === "call_expression") {
-			collectFromEntries(node, context, writes);
-			collectEnvCall(node, context, writes);
 		} else {
 			collectKeyNode(node, context, writes);
 		}

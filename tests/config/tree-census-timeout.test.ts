@@ -738,40 +738,69 @@ function scopeOf(root: SgNode, helpers?: HelperScope): Scope {
 			if (table !== undefined) scope.helperNamespaces.set(local, table ?? null);
 		}
 	}
-	const declarators = root.findAll({ rule: { kind: "variable_declarator" } });
+	// What the fixed point reads off each declarator never changes between
+	// passes (only `scope` grows), so read it from the tree once: its value,
+	// and for a destructuring pattern the keys and locals it binds.
+	const bindings: Array<{
+		value: SgNode;
+		identifier: string | undefined;
+		pairs: Array<{ key: string; local: string }>;
+		shorts: string[];
+	}> = [];
+	for (const declarator of root.findAll({
+		rule: { kind: "variable_declarator" },
+	})) {
+		const name = declarator.field("name");
+		const value = declarator.field("value");
+		if (!name || !value) continue;
+		if (name.kind() === "identifier") {
+			bindings.push({
+				value,
+				identifier: name.text(),
+				pairs: [],
+				shorts: [],
+			});
+		} else if (name.kind() === "object_pattern") {
+			// `const { listSourceFiles: walk } = kit;`, and #4967 the shorthand
+			// spelling `const { testSourceFiles } = kit;` of the same binding.
+			bindings.push({
+				value,
+				identifier: undefined,
+				pairs: name.findAll({ rule: { kind: "pair_pattern" } }).map((pair) => ({
+					key: unquote(pair.field("key")?.text() ?? ""),
+					local: pair.field("value")?.text() ?? "",
+				})),
+				shorts: name
+					.findAll({
+						rule: { kind: "shorthand_property_identifier_pattern" },
+					})
+					.map((short) => short.text()),
+			});
+		}
+	}
 	let grown = true;
 	while (grown) {
 		grown = false;
-		for (const declarator of declarators) {
-			const name = declarator.field("name");
-			const value = declarator.field("value");
-			if (!name || !value) continue;
+		for (const { value, identifier, pairs, shorts } of bindings) {
 			const add = (set: Set<string>, local: string) => {
 				if (local && !set.has(local)) {
 					set.add(local);
 					grown = true;
 				}
 			};
-			if (name.kind() === "identifier") {
-				if (walkerRef(value, scope)) add(scope.walkers, name.text());
-				if (spawnerRef(value, scope)) add(scope.spawners, name.text());
-				if (mentionsLsFiles(value, scope)) add(scope.lsFiles, name.text());
-			} else if (name.kind() === "object_pattern") {
-				// `const { listSourceFiles: walk } = kit;`, and #4967 the shorthand
-				// spelling `const { testSourceFiles } = kit;` of the same binding.
-				for (const pair of name.findAll({ rule: { kind: "pair_pattern" } })) {
-					const key = unquote(pair.field("key")?.text() ?? "");
-					const local = pair.field("value")?.text() ?? "";
+			if (identifier !== undefined) {
+				if (walkerRef(value, scope)) add(scope.walkers, identifier);
+				if (spawnerRef(value, scope)) add(scope.spawners, identifier);
+				if (mentionsLsFiles(value, scope)) add(scope.lsFiles, identifier);
+			} else {
+				for (const { key, local } of pairs) {
 					if (WALKERS.has(key)) add(scope.walkers, local);
 					if (SPAWNERS.has(key)) add(scope.spawners, local);
 					const verdict = helperMemberVerdict(value, key, scope);
 					if (verdict === "walks") add(scope.walkers, local);
 					if (verdict === "unknown") add(scope.unresolved, local);
 				}
-				for (const short of name.findAll({
-					rule: { kind: "shorthand_property_identifier_pattern" },
-				})) {
-					const local = short.text();
+				for (const local of shorts) {
 					if (WALKERS.has(local)) add(scope.walkers, local);
 					if (SPAWNERS.has(local)) add(scope.spawners, local);
 					const verdict = helperMemberVerdict(value, local, scope);
@@ -936,34 +965,51 @@ function recursiveDirectoryWalk(node: SgNode): boolean {
 /** Does this subtree call a whole-tree walker, or spawn `git ls-files`? */
 function walksTree(node: SgNode, scope: Scope): boolean {
 	const calls = node.findAll({ rule: { kind: "call_expression" } });
+	// One pass over the calls: a walker call decides at once, and a spawner call
+	// is the only thing that can make a wrapper (below) mean anything.
+	const callees: Array<SgNode | null> = [];
+	let spawns = false;
+	for (const call of calls) {
+		const fn = call.field("function");
+		callees.push(fn);
+		if (!fn) continue;
+		if (walkerRef(fn, scope)) return true;
+		if (spawnerRef(fn, scope)) spawns = true;
+	}
 	// A module-local wrapper that hands its own arguments to a spawner: the
 	// `ls-files` literal sits at the call, the spawn sits inside the wrapper, so
 	// neither the call alone nor the wrapper alone reads as a walk (#4967:
 	// `tests/support/vitest-setup.ts` runs every git command, `ls-files` included,
 	// through `run`). A wrapper that spawns for another reason is not in the set.
+	// A wrapper's body lies inside `node`, so with no spawner call anywhere in
+	// `node` there is no wrapper to find.
 	const spawnWrappers = new Set<string>();
-	for (const holder of node.findAll({
-		rule: {
-			any: [{ kind: "variable_declarator" }, { kind: "function_declaration" }],
-		},
-	})) {
-		const body = holder.field("value") ?? holder;
-		const names = holder.field("name");
-		if (
-			!names ||
-			!body.findAll({ rule: { kind: "call_expression" } }).some((call) => {
-				const fn = call.field("function");
-				return fn !== null && spawnerRef(fn, scope);
-			})
-		)
-			continue;
-		for (const bound of boundNames(names)) spawnWrappers.add(bound);
+	if (spawns) {
+		for (const holder of node.findAll({
+			rule: {
+				any: [
+					{ kind: "variable_declarator" },
+					{ kind: "function_declaration" },
+				],
+			},
+		})) {
+			const body = holder.field("value") ?? holder;
+			const names = holder.field("name");
+			if (
+				!names ||
+				!body.findAll({ rule: { kind: "call_expression" } }).some((call) => {
+					const fn = call.field("function");
+					return fn !== null && spawnerRef(fn, scope);
+				})
+			)
+				continue;
+			for (const bound of boundNames(names)) spawnWrappers.add(bound);
+		}
 	}
 	return (
-		calls.some((call) => {
-			const fn = call.field("function");
+		calls.some((call, index) => {
+			const fn = callees[index];
 			if (!fn) return false;
-			if (walkerRef(fn, scope)) return true;
 			// `git ls-files` only as an argument of a recognised spawn call, never
 			// as a literal in an expectation or a fixture.
 			return (
@@ -1124,6 +1170,8 @@ function bindingScopes(node: SgNode): Map<string, Array<[number, number]>> {
 }
 
 function readsWalked(node: SgNode, walked: ReadonlySet<string>): boolean {
+	// Nothing walked yet, so nothing can be read: skip the identifier scan.
+	if (walked.size === 0) return false;
 	const reads = node
 		.findAll({ rule: { kind: "identifier" } })
 		.filter((id) => walked.has(id.text()));
@@ -1160,12 +1208,20 @@ function censuses(source: string, helpers?: HelperScope): Census[] {
 	// case that merely MENTIONS the name is a census too: the file cannot show
 	// the call does not walk.
 	const walked = new Set<string>(scope.unresolved);
+	// `walksTree` reads only `scope`, which is final here, so a declaration's
+	// verdict is the same on every pass of the fixed point below.
+	const declWalks = new Map<SgNode, boolean>();
 	let grown = true;
 	while (grown) {
 		grown = false;
 		for (const { names, decl } of decls) {
 			if (names.every((name) => walked.has(name))) continue;
-			if (walksTree(decl, scope) || readsWalked(decl, walked)) {
+			let walksItself = declWalks.get(decl);
+			if (walksItself === undefined) {
+				walksItself = walksTree(decl, scope);
+				declWalks.set(decl, walksItself);
+			}
+			if (walksItself || readsWalked(decl, walked)) {
 				for (const name of names) walked.add(name);
 				grown = true;
 			}
@@ -1180,8 +1236,10 @@ function censuses(source: string, helpers?: HelperScope): Census[] {
 		const args = namedArgs(call);
 		if (args.length < 2) continue;
 		const calleeRoot = rootOf(callee, scope);
+		const declaration = isDeclarationRoot(calleeRoot, scope);
+		if (!declaration && isSuiteRoot(calleeRoot, scope)) continue;
 		const { body, budget } = bodyAndBudget(args);
-		if (isDeclarationRoot(calleeRoot, scope)) {
+		if (declaration) {
 			// `it.each(table)(title, fn)`: the table is walked even when the case
 			// never names it (its rows are the walked population).
 			if (walks(body) || tableArguments(callee).some(walks))
@@ -1196,7 +1254,6 @@ function censuses(source: string, helpers?: HelperScope): Census[] {
 		// Fail closed: a test-shaped call the detector cannot trace to a vitest
 		// binding that walks the tree is a census, not a skip.
 		if (
-			!isSuiteRoot(calleeRoot, scope) &&
 			FUNCTION_KINDS.has(String(body.kind())) &&
 			atSuiteScope(call, scope) &&
 			walks(body)
