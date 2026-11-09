@@ -44,6 +44,12 @@
   fail-closed for those project fields with one bounded notice; installs keep
   their existing compatibility policy. `tests/clients/lsp/lsp-registry-trust.test.ts`
   and the LSP config/service suites pin the boundary.
+  Adopted roots resolve their own pi decision through the host's exported
+  `ProjectTrustStore.get`, resource classifier and global `defaultProjectTrust`;
+  missing exports refuse project-code servers. The registry reads each root once
+  per turn, and never answers or writes pi trust. Inert servers keep their
+  existing adopted-root admission. `tests/clients/lsp/adopted-root-trust-5469.test.ts`
+  pins the host/session/root matrix.
   Non-pi process entry points (`mcp/server.ts`, `mcp/worker.ts`,
   `mcp/analyze-cli.ts`, and `mcp/cli.ts`) declare trusted execution once at
   startup through `setProjectTrustState`: workspace trust belongs to their

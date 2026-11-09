@@ -15,7 +15,8 @@
  * root until this population is deliberately extended with the same evidence.
  * The per-runner evidence table lives in the #4242 hand-back/PR body.
  *
- * Admitted today, each because it only parses one file and reads no project
+ * The LSP transport delegates server execution admission to ClientRegistry.
+ * Other admitted runners, each because it only parses one file and reads no project
  * config or plugin:
  *   - `php-lint` — `php -l <file>` is syntax-check only; `php.ini` is
  *     machine/global config, never the project's. The runner resolves `php`
@@ -34,13 +35,14 @@
  * tflint, terragrunt, trivy/config, actionlint), compilers and build drivers
  * that execute project code (go-vet, golangci-lint, rust-clippy, dotnet-build,
  * javac, cpp-check, zig-check, gleam-check, dart-analyze, elixir-check, credo,
- * cue-vet, prisma-validate, helm, spotbugs), and the LSP/tree-sitter/fact/
+ * cue-vet, prisma-validate, helm, spotbugs), and the tree-sitter/fact/
  * ast-grep runners plus every whole-project scanner.
  */
 
 import type { RunnerGroup } from "./types.js";
 
 export const ADOPTED_ROOT_RUNNER_ALLOWLIST = [
+	"lsp",
 	"fish-indent",
 	"php-lint",
 ] as const;

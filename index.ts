@@ -1,3 +1,4 @@
+import { setHostProjectTrustLoader } from "./clients/project-trust.js";
 import "./clients/console-guard-install.js";
 import { BoundedSet } from "./clients/bounded-cache.js";
 import {
@@ -816,6 +817,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// on the host-provided static imports) and can reach a second copy where
 	// those resolve natively; clients/file-mutation-queue.ts checks which, and
 	// a host without the export records a degradation.
+	setHostProjectTrustLoader(() => import("@earendil-works/pi-coding-agent"));
 	setHostFileMutationQueueLoader(
 		() => import("@earendil-works/pi-coding-agent"),
 	);

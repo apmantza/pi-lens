@@ -553,8 +553,8 @@ function recordUntrustedLspExecution(
 /** Refuse project-code servers and project-local binaries through one trust seam. */
 export function refuseUntrustedLspExecution(
 	request: LspExecutionTrustRequest,
+	trust = getProjectTrustState(),
 ): void {
-	const trust = getProjectTrustState();
 	const needsTrust =
 		request.kind === "project-code-server"
 			? trust !== "trusted"

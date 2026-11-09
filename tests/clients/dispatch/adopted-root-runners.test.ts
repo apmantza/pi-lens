@@ -753,7 +753,7 @@ describe("#4242 adopted-root runner allowlist", () => {
 					},
 				);
 				expect(result.output, name).toContain(
-					`${label} unconfirmed — not analyzed (adopted analysis root`,
+					`${label} unconfirmed — not analyzed (`,
 				);
 				expect(result.output, name).not.toContain("clean");
 			}

@@ -1,3 +1,4 @@
+import { getTurnId } from "../turn-context.js";
 /**
  * ClientRegistry: LSP client identity and lifecycle, extracted from
  * LSPService (#2372 slice 3, #277 R3). It owns the client map and its key
@@ -30,6 +31,8 @@ import {
 import { isWithinForm, normalizeMapKey } from "../path-utils.js";
 import {
 	assertInstallAllowed,
+	readAdoptedProjectTrust,
+	type ProjectTrustState,
 	isLspSpawnAllowedByTrust,
 	projectTrustDenialReason,
 } from "../project-trust.js";
@@ -1372,9 +1375,24 @@ export class ClientRegistry {
 		return !isLspInstallDisabled();
 	}
 
-	/**
-	 * Internal: spawn a client for a server/root combination
-	 */
+	/** Per-turn reads belong to this registry, never to a workspace store. */
+	private adoptedTrustTurn: string | undefined;
+	private readonly adoptedTrust = new Map<string, Promise<ProjectTrustState>>();
+
+	private trustForAdoptedRoot(root: string): Promise<ProjectTrustState> {
+		const turn = getTurnId();
+		if (this.adoptedTrustTurn !== turn) {
+			this.adoptedTrust.clear();
+			this.adoptedTrustTurn = turn;
+		}
+		const key = normalizeMapKey(root);
+		const prior = this.adoptedTrust.get(key);
+		if (prior) return prior;
+		const pending = readAdoptedProjectTrust(root);
+		this.adoptedTrust.set(key, pending);
+		return pending;
+	}
+
 	private async spawnClient(
 		server: LSPServerInfo,
 		root: string,
@@ -1382,13 +1400,17 @@ export class ClientRegistry {
 		filePath: string,
 		allowInstall: boolean,
 	): Promise<SpawnedServer | undefined> {
+		const adopted = this.analysisRootModeForFile(filePath) === "adopted";
 		try {
 			if (server.executesProjectCode === true) {
-				refuseUntrustedLspExecution({
-					kind: "project-code-server",
-					serverId: server.id,
-					root,
-				});
+				refuseUntrustedLspExecution(
+					{
+						kind: "project-code-server",
+						serverId: server.id,
+						root,
+					},
+					adopted ? await this.trustForAdoptedRoot(root) : undefined,
+				);
 			}
 		} catch (error) {
 			logSessionStart(
