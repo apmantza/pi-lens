@@ -292,4 +292,5 @@ describe("which runner spawns arm the cooldown (#5413)", () => {
 		expect(isInSpawnTimeoutCooldown("failing-runner")).toBe(false);
 	}, 30_000);
 });
-// flake-shape: real-process-spawn — a real child must use up its own spawn budget: the cooldown is armed by safeSpawnAsync's own timeout and teardown, which no double reproduces
+// flake-shape: real-process-spawn — a real child must use up its own spawn budget, be aborted mid-run, fail to launch, or exit non-zero: the cooldown is armed by safeSpawnAsync's own result, which no double reproduces
+// flake-shape: raw-timer-wait — the abort must land while a real child is mid-run; a fake clock cannot stop a spawned process, and no double reproduces a child killed mid-run
