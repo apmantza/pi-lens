@@ -668,8 +668,10 @@ export type DegradationKind =
 	/**
 	 * `grammar-blocked`: a tree-sitter grammar could not be fetched or loaded,
 	 * so the rules that need that grammar do not run (#1536, #1548, #4224).
-	 * Subject is the grammar file; counted, so one retrying grammar keeps one
-	 * ring slot. The PowerShell `-File` run failure used to share this kind and
+	 * Subject is usually the grammar file, and most sites count, so one
+	 * retrying grammar keeps one ring slot. grammar-source.ts records
+	 * `grammars.lock.json` when it falls back to a weaker-integrity check and
+	 * the download still proceeds. The PowerShell `-File` run failure used to share this kind and
 	 * records `powershell-run-failed` now, because a blocked grammar download
 	 * and a blocked PowerShell analysis need different user actions (#5400).
 	 */
