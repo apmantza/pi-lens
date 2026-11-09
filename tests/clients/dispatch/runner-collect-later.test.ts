@@ -767,4 +767,167 @@ describe("observed runner collect-later tier (#2116)", () => {
 			(await drainPendingRunnerFindings(0)).map((entry) => entry.filePath),
 		).toEqual([filePath]);
 	});
+
+	// Recurrence: the tier-flip row and the `runner-collect-later` record were
+	// spelled twice in dispatcher.ts (the collect-later run and the inline run);
+	// a copy edited alone would flip a runner's tier without its row, or count a
+	// slow run on one path only. Each cell drives one former copy through
+	// dispatchForFile and reads the rows back.
+	describe("one tier observation for every runner run (fold of two copies)", () => {
+		afterEach(() => {
+			vi.unstubAllEnvs();
+		});
+
+		const SLOW: RunnerResult = {
+			status: "failed",
+			diagnostics: [],
+			semantic: "warning",
+			failureKind: "timeout",
+		};
+		const FAST: RunnerResult = {
+			status: "succeeded",
+			diagnostics: [],
+			semantic: "none",
+		};
+
+		async function runOnce(
+			runnerId: string,
+			result: RunnerResult,
+			writeIndex: number | undefined,
+		) {
+			vi.stubEnv("PI_LENS_TEST_MODE", "0");
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: runnerId,
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async () => result,
+			});
+			const ctx = createDispatchContext(
+				filePath,
+				projectRoot,
+				{ getFlag: () => false },
+				new FactStore(),
+			);
+			if (writeIndex !== undefined) {
+				Object.defineProperty(ctx, "writeIndex", { value: writeIndex });
+			}
+			await dispatchForFile(
+				ctx,
+				[{ mode: "all", runnerIds: [runnerId] }],
+				registry,
+			);
+			await drainPendingRunnerFindings(100);
+			await flushLatencyLog();
+			const flips = readFileSync(getLatencyLogPath(), "utf-8")
+				.trim()
+				.split("\n")
+				.map(
+					(line) =>
+						JSON.parse(line) as {
+							type?: string;
+							phase?: string;
+							filePath?: string;
+							metadata?: Record<string, unknown>;
+						},
+				)
+				.filter(
+					(row) =>
+						row.type === "phase" &&
+						row.phase === "runner_collect_later_tier_flip" &&
+						row.filePath === filePath &&
+						row.metadata?.runnerId === runnerId,
+				)
+				.map((row) => row.metadata);
+			const counted = getDegradationSummary().find(
+				(entry) => entry.kind === "runner-collect-later",
+			);
+			return { flips, counted };
+		}
+
+		it("an inline post-write run that times out flips the runner to collect-later, with its row and one count", async () => {
+			const { flips, counted } = await runOnce("flip-down-runner", SLOW, 1);
+			expect(flips).toEqual([
+				{
+					runnerId: "flip-down-runner",
+					from: "inline",
+					to: "collect-later",
+					projectRoot,
+				},
+			]);
+			expect(counted?.count).toBe(1);
+			expect(counted?.latestReasons[0]?.subject).toBe(
+				`${projectRoot}:flip-down-runner`,
+			);
+			expect(counted?.latestReasons[0]?.reason).toMatch(
+				/^observed \d+ms, threshold 5000ms \(count: 1\)$/,
+			);
+			expect(classifyObservedRunner(projectRoot, "flip-down-runner")).toBe(
+				"collect-later",
+			);
+		});
+
+		it("an inline post-write run that stays fast leaves no flip row and no count", async () => {
+			const { flips, counted } = await runOnce("steady-runner", FAST, 1);
+			expect(flips).toEqual([]);
+			expect(counted).toBeUndefined();
+			expect(classifyObservedRunner(projectRoot, "steady-runner")).toBe(
+				"inline",
+			);
+		});
+
+		it("a collect-later run that finishes fast recovers the runner with its flip row and no count", async () => {
+			observeRunnerLatency({
+				projectRoot,
+				runnerId: "recovering-runner",
+				durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
+			});
+			const { flips, counted } = await runOnce("recovering-runner", FAST, 1);
+			expect(flips).toEqual([
+				{
+					runnerId: "recovering-runner",
+					from: "collect-later",
+					to: "inline",
+					projectRoot,
+				},
+			]);
+			expect(counted).toBeUndefined();
+			expect(classifyObservedRunner(projectRoot, "recovering-runner")).toBe(
+				"inline",
+			);
+		});
+
+		it("a collect-later run that is slow again counts once and writes no flip row", async () => {
+			observeRunnerLatency({
+				projectRoot,
+				runnerId: "still-slow-runner",
+				durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
+			});
+			const { flips, counted } = await runOnce("still-slow-runner", SLOW, 1);
+			expect(flips).toEqual([]);
+			expect(counted?.count).toBe(1);
+			expect(counted?.latestReasons[0]?.subject).toBe(
+				`${projectRoot}:still-slow-runner`,
+			);
+			expect(counted?.latestReasons[0]?.reason).toMatch(
+				/^observed \d+ms, threshold 5000ms \(count: 1\)$/,
+			);
+			expect(classifyObservedRunner(projectRoot, "still-slow-runner")).toBe(
+				"collect-later",
+			);
+		});
+
+		it("a dispatch with no write index observes nothing: no tier, no flip row, no count", async () => {
+			const { flips, counted } = await runOnce(
+				"direct-slow-runner",
+				SLOW,
+				undefined,
+			);
+			expect(flips).toEqual([]);
+			expect(counted).toBeUndefined();
+			expect(classifyObservedRunner(projectRoot, "direct-slow-runner")).toBe(
+				"inline",
+			);
+		});
+	});
 });

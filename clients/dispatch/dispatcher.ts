@@ -59,6 +59,7 @@ import {
 	COLLECT_LATER_THRESHOLD_MS,
 	observeRunnerLatency,
 	runCollectLater,
+	type CollectLaterTier,
 } from "./collect-later-tier.js";
 import { deferRunnerFindings } from "./pending-runner-findings.js";
 import {
@@ -1295,33 +1296,14 @@ async function runGroup(
 				const startedAtMs = Date.now();
 				const result = await runRunner(runnerCtx, runner, semantic);
 				const durationMs = Date.now() - startedAtMs;
-				const tier = observeRunnerLatency({
+				observeRunnerTier({
+					filePath: ctx.filePath,
 					projectRoot,
 					runnerId: runner.id,
+					observedTier,
 					durationMs,
-					timedOut: result.failureKind === "timeout",
+					result,
 				});
-				if (tier !== observedTier) {
-					logLatency({
-						type: "phase",
-						filePath: ctx.filePath,
-						phase: "runner_collect_later_tier_flip",
-						durationMs: 0,
-						metadata: {
-							runnerId: runner.id,
-							from: observedTier,
-							to: tier,
-							projectRoot,
-						},
-					});
-				}
-				if (tier === "collect-later") {
-					incrementDegradationCount({
-						kind: "runner-collect-later",
-						subject: `${projectRoot}:${runner.id}`,
-						reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
-					});
-				}
 				logLatency({
 					type: "runner",
 					filePath: ctx.filePath,
@@ -1393,34 +1375,16 @@ async function runGroup(
 		onRunnerResult?.(runnerId, result);
 		const runnerEnd = Date.now();
 		const duration = runnerEnd - runnerStart;
-		const tier =
-			ctx.writeIndex === undefined
-				? "inline"
-				: observeRunnerLatency({
-						projectRoot,
-						runnerId: runner.id,
-						durationMs: duration,
-						timedOut: result.failureKind === "timeout",
-					});
-		if (tier !== observedTier) {
-			logLatency({
-				type: "phase",
+		// Only post-write dispatches observe: a project scan or direct API call
+		// has no tier to flip (`observedTier` is "inline" for it).
+		if (ctx.writeIndex !== undefined) {
+			observeRunnerTier({
 				filePath: ctx.filePath,
-				phase: "runner_collect_later_tier_flip",
-				durationMs: 0,
-				metadata: {
-					runnerId: runner.id,
-					from: observedTier,
-					to: tier,
-					projectRoot,
-				},
-			});
-		}
-		if (tier === "collect-later") {
-			incrementDegradationCount({
-				kind: "runner-collect-later",
-				subject: `${projectRoot}:${runner.id}`,
-				reason: `observed ${duration}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+				projectRoot,
+				runnerId: runner.id,
+				observedTier,
+				durationMs: duration,
+				result,
 			});
 		}
 		// Runner definitions are a typed API, but embedders/plugins can still
@@ -2215,6 +2179,45 @@ function failureRowMetadata(result: RunnerResult):
 		};
 	}
 	return result.inconclusive === true ? inconclusive : undefined;
+}
+
+/**
+ * Record one finished runner run against the observed tier: the latency
+ * observation itself, one `runner_collect_later_tier_flip` row when it moved
+ * the runner's tier, and one `runner-collect-later` count while it is (still)
+ * slow. Shared by the collect-later run and the inline run.
+ */
+function observeRunnerTier(options: {
+	filePath: string;
+	projectRoot: string;
+	runnerId: string;
+	observedTier: CollectLaterTier;
+	durationMs: number;
+	result: RunnerResult;
+}): void {
+	const { filePath, projectRoot, runnerId, observedTier, durationMs } = options;
+	const tier = observeRunnerLatency({
+		projectRoot,
+		runnerId,
+		durationMs,
+		timedOut: options.result.failureKind === "timeout",
+	});
+	if (tier !== observedTier) {
+		logLatency({
+			type: "phase",
+			filePath,
+			phase: "runner_collect_later_tier_flip",
+			durationMs: 0,
+			metadata: { runnerId, from: observedTier, to: tier, projectRoot },
+		});
+	}
+	if (tier === "collect-later") {
+		incrementDegradationCount({
+			kind: "runner-collect-later",
+			subject: `${projectRoot}:${runnerId}`,
+			reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+		});
+	}
 }
 
 async function runRunner(
