@@ -418,7 +418,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 					hostStallMs,
 				});
 				incrementDegradationCount({
-					kind: "grammar-blocked",
+					kind: "powershell-run-failed",
 					subject: "psscriptanalyzer",
 					reason: `PowerShell (${cmd}) -File analysis exited with no status -- crash or signal-killed process`,
 				});
@@ -462,7 +462,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 					hostStallMs,
 				});
 				incrementDegradationCount({
-					kind: "grammar-blocked",
+					kind: "powershell-run-failed",
 					subject: "psscriptanalyzer",
 					reason: policyDenied
 						? `PowerShell execution policy blocked -File analysis for ${cmd}: ${stderrText.trim().split("\n")[0] || "SecurityError"}`
@@ -506,7 +506,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 					classifiedBy: "caller",
 				});
 				incrementDegradationCount({
-					kind: "grammar-blocked",
+					kind: "powershell-run-failed",
 					subject: "psscriptanalyzer",
 					reason: `PowerShell -File analysis for ${cmd} exited 0 but stdout was ${unreadableReason}`,
 				});

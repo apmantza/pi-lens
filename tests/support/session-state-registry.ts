@@ -2433,7 +2433,11 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"diagnostics-publish.ts": 1,
 	"disk-changes.ts": 0,
 	"dispatch/auxiliary-lsp.ts": 1,
-	"dispatch/collect-later-tier.ts": 1,
+	// #5413: 1 -> 2. `flights`, the collect-later run in flight per (project,
+	// runner), is cleared by the same resetObservedRunnerLatency as
+	// `slowRunners`; runner-collect-later.test.ts "a session reset drops the
+	// queued rerun..." proves the reset.
+	"dispatch/collect-later-tier.ts": 2,
 	// #2346 added `generatedSkipRecorded` beside `coverageNoticeSeen` (1 → 2);
 	// both are cleared by the same session-start reset seam.
 	// #5410: 3 -> 4. `commandCheckers` holds one PATH-only checker per

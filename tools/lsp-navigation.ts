@@ -70,7 +70,7 @@ import {
 	PYTHON_DECLARATION_CONCURRENCY,
 } from "../clients/python-environment.js";
 import { mapWithConcurrency } from "../clients/map-with-concurrency.js";
-import { readFilePath } from "./shared.js";
+import { CONSTRAINED_JSON_SCHEMA_SAMPLING, readFilePath } from "./shared.js";
 const VALID_OPERATIONS = [
 	"definition",
 	"typeDefinition",
@@ -874,6 +874,7 @@ export function createLspNavigationTool(
 			}
 			return `lsp_navigation ${op} — ${n} result${n === 1 ? "" : "s"}`;
 		}),
+		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			operation: Type.String({
 				enum: [...VALID_OPERATIONS],

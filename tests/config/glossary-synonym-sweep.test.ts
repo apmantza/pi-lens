@@ -1301,8 +1301,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// before launching, one filesystem path use in the reviewed fix.
 		// 111 -> 112 (#5335): `TypeScriptRoot` takes the agent directory's real
 		// path for an explicit agent tsconfig, one `path.dirname` use.
-		"clients/lsp/server.ts": 112,
-		"clients/lsp/session-roots.ts": 8,
+		"clients/lsp/server.ts": 111,
+		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
 		// 12 -> 11 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
@@ -1437,7 +1437,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 33 -> 36 (#4346): the importer pass names a created file by its stem
 		// and directory; 36 -> 33 (#4346 final lane): that name test moved to
 		// import-resolvers.ts `fileAnswerNames`, shared with the LSP cache.
-		"clients/review-graph/builder.ts": 32,
+		"clients/review-graph/builder.ts": 31,
 		"clients/review-graph/format.ts": 4,
 		// 10 -> 11 (#4508): the walk joins the `.git` entry and its HEAD.
 		"clients/review-graph/git-identity.ts": 11,
@@ -1564,7 +1564,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/tree-sitter-logger.ts": 2,
 		// 11 -> 18 (#3930 r2): the loader's complete rule fingerprint walks
 		// language rule directories and normalizes their paths.
-		"clients/tree-sitter-query-loader.ts": 18,
+		"clients/tree-sitter-query-loader.ts": 17,
 		"clients/tree-sitter-shared.ts": 2,
 		"clients/tree-sitter-symbol-extractor.ts": 3,
 		// 4 -> 5 (#4617 review F1): a rendered trivy report cites its own rows'
@@ -1640,7 +1640,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 38 -> 33 (#5137): the module_report handler stops building its own
 		// `path.relative` summary and delegates the rendering.
 		// 33 -> 34 (#5138): the read_symbol error branch names `path.basename(file)`.
-		"mcp/server.ts": 34,
+		// 34 -> 30 (#5138 PR 3): four hand-written schema blocks leave the catalog
+		// for the projected pi definitions, so their `path:` keys stop being spelled
+		// here.
+		"mcp/server.ts": 30,
 		"index.ts": 20,
 		"clients/command-path.ts": 5,
 	},
@@ -1783,7 +1786,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/child-unref.ts": 6,
 		"clients/config-resolve.ts": 11,
 		"clients/dead-code-client.ts": 3,
-		"clients/dispatch/dispatcher.ts": 34,
+		// #5413: the reset-dropped rerun's answer is a `status: "skipped"`
+		// `RunnerResult`, the same member sense as every row here.
+		"clients/dispatch/collect-later-tier.ts": 1,
+		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
+		"clients/dispatch/dispatcher.ts": 35,
 		"clients/dispatch/integration.ts": 1,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 2,
@@ -1817,7 +1824,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// returns `status: "skipped"` instead of `succeeded` — the same
 		// `RunnerResult.status` member sense as every other row here.
 		"clients/dispatch/runners/lsp.ts": 11,
-		"clients/dispatch/runners/markdownlint.ts": 4,
+		// 4 -> 3 (#5413): the local cooldown skip moved to the dispatcher.
+		"clients/dispatch/runners/markdownlint.ts": 3,
 		"clients/dispatch/runners/mypy.ts": 2,
 		"clients/dispatch/runners/oxlint.ts": 11,
 		"clients/dispatch/runners/php-lint.ts": 2,

@@ -1738,9 +1738,13 @@ export class TreeSitterClient {
 		// #1536 review F1: incrementDegradationCount keeps ONE ring-buffer slot
 		// per subject (bumping its count in place) instead of recordDegradation's
 		// one-new-entry-per-call — a grammar retrying every cooldown window would
-		// otherwise flood the shared "grammar-blocked" kind's 20-slot ring and
-		// evict unrelated entries (e.g. a different grammar's V8-crash block
-		// reason from loadLanguage/grammarBlockReason) after ~20 cycles.
+		// otherwise flood the "grammar-blocked" kind's 20-slot ring and evict
+		// unrelated entries (e.g. a different grammar's V8-crash block reason from
+		// loadLanguage/grammarBlockReason) after ~20 cycles. #5400 moved the
+		// PowerShell `-File` run failures (the one non-grammar producer this kind
+		// had) to `powershell-run-failed`, so the ring's population is grammars
+		// again: an eviction can only displace another grammar's reason, never an
+		// unrelated tool's, and the bound itself is unchanged.
 		incrementDegradationCount({
 			kind: "grammar-blocked",
 			subject: grammarFile,

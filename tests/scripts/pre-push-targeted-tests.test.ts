@@ -616,6 +616,28 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		expect(result.stdout).toContain("falling back to the remote-tip range");
 	});
 
+	// Drift this prevents: the fallback maps a new branch's zero remote sha to
+	// `origin/master` (its range is `origin/master...HEAD`). Without that map the
+	// record names the zero sha, a base no diff ever used, and the skip rule
+	// binds a pass to it. The update-push fallback tests above never reach the
+	// zero-sha arm (the mutation `base: head.base` stayed green on them).
+	it("records origin/master as the base of a new branch that fell back to the remote-tip range (#4724)", () => {
+		const { git, commit, hook } = gitFixture();
+		const head = commit("clients/first.ts", "export const first = false;\n");
+		const emptyTree = git(["hash-object", "-t", "tree", "--stdin"]);
+		const unrelated = git(["commit-tree", emptyTree, "-m", "unrelated"]);
+		git(["update-ref", "refs/remotes/upstream/master", unrelated]);
+		expect(resolveBaseRef()).toBe("upstream/master");
+		const result = hook(`refs/heads/main ${head} refs/heads/main ${zero}\n`);
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("falling back to the remote-tip range");
+		const record = readPrePushRecord(
+			path.join(fixtureDir as string, ".git"),
+			head,
+		);
+		expect(record?.base).toBe("origin/master");
+	});
+
 	// F3: the record names the base the selection actually diffed.
 	it("records the comparison base the selection used (#4724)", () => {
 		const { commit, hook } = gitFixture();

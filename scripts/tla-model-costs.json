@@ -3,7 +3,8 @@
 	"sources": [
 		"40147263648",
 		"local-4715",
-		"local-5333"
+		"local-5333",
+		"local-5413"
 	],
 	"note": "Per-config TLC seconds (median over the source runs), read from `ok|FAIL formal/<family>/<Model>.cfg: ... (Ns)` lines the checker prints. scripts/tla-model-costs.json packs the TLA+ shards with these; a config with no row costs the table's MAX so an unmeasured config can never quietly become the tail.",
 	"files": {
@@ -70,6 +71,10 @@
 		"formal/cascade-delivery/MutReserve.cfg": 8.4,
 		"formal/cascade-delivery/MutTierPath.cfg": 5,
 		"formal/cascade-delivery/MutUnconfirmedMarker.cfg": 3,
+		"formal/collect-later-flight/JoinRunning.cfg": 0.8,
+		"formal/collect-later-flight/NoIdentity.cfg": 0.8,
+		"formal/collect-later-flight/Parallel.cfg": 0.8,
+		"formal/collect-later-flight/Shipped.cfg": 0.9,
 		"formal/disk-change-publisher/AsBuilt.cfg": 5.1,
 		"formal/disk-change-publisher/AsBuiltWide.cfg": 12,
 		"formal/disk-change-publisher/B2aEvictedDeclaration.cfg": 0.7,
@@ -962,6 +967,10 @@
 		"formal/cascade-delivery/MutReserve.cfg": 28693,
 		"formal/cascade-delivery/MutTierPath.cfg": 4538,
 		"formal/cascade-delivery/MutUnconfirmedMarker.cfg": 4778,
+		"formal/collect-later-flight/JoinRunning.cfg": 16,
+		"formal/collect-later-flight/NoIdentity.cfg": 80,
+		"formal/collect-later-flight/Parallel.cfg": 5,
+		"formal/collect-later-flight/Shipped.cfg": 306,
 		"formal/disk-change-publisher/AsBuilt.cfg": 217040,
 		"formal/disk-change-publisher/AsBuiltWide.cfg": 562560,
 		"formal/disk-change-publisher/B2aEvictedDeclaration.cfg": 359,

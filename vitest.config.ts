@@ -572,6 +572,9 @@ export const wallClockBudgetInclude = [
 	// #4535 slice 2: the HEAD look and the bash write path drive a real git
 	// repository through their real entry points (flake-shape admission).
 	"tests/clients/disk-change-detectors-4535.test.ts",
+	// #5413: a real child uses up its own spawn budget to arm the runner
+	// cooldown (flake-shape admission).
+	"tests/clients/dispatch/runner-spawn-timeout-cooldown.test.ts",
 	"tests/clients/dispatch/runners/ast-grep-playground-verify.test.ts",
 	"tests/clients/dispatch/runners/ast-grep-rule-ignores.test.ts",
 	// #4522: the git-ignored census reads git's own tracked-versus-ignored

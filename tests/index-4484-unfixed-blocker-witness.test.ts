@@ -1109,6 +1109,12 @@ describe("#4484 witness, round 2: only evidence retires a recorded blocker", () 
 		expect(await s.commitBlocked()).toBe(true);
 		expect(await s.endTurn()).not.toContain("Resolved this turn");
 		// Both held runs answer; only the one about the current bytes counts.
+		// Coalescing starts the queued rerun only once the first run settles, so
+		// release the first, let the rerun start and hold, then release it.
+		for (const release of boundary.lsp.held.splice(0)) release();
+		for (let i = 0; i < 5; i++)
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		expect(boundary.lsp.held).toHaveLength(1);
 		for (const release of boundary.lsp.held.splice(0)) release();
 		await settlePendingRunnerFindingsForTests();
 		expect(peekSettledRunnerFindings().length).toBeGreaterThanOrEqual(2);

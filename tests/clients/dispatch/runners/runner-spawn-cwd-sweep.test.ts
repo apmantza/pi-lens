@@ -408,7 +408,7 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"`which pytest` / `where pytest` PATH lookup for the global-pytest fallback",
 	],
 	[
-		"clients/tool-probe.ts#probeToolAsync:2d247383",
+		"clients/tool-probe.ts#probeToolAsync:4fc4430b",
 		'THE probe seam (#2894): `probeToolAsync` spawns a tool\'s own presence/version invocation and STRIPS whatever `cwd` reached it, because "does this binary exist, and what does it call itself" has the same answer from every directory. The 23 sites that each decided that for themselves now call it, so this is the one row a reviewer re-reads for the whole class',
 	],
 	[
@@ -546,11 +546,11 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is `resolvedCwd`, the availability checker's own cwd argument; the checker is the seam every runner probes through",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand:d80f1e68~dbf27697",
+		"clients/dispatch/runners/utils/runner-helpers.ts#verifyOrInstallCommand:d8e8ec06~dbf27697",
 		"cwd is verifyOrInstallCommand's own `cwd` parameter; its one call site in this file is the checked one",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:0dcab07a~cb93074a",
+		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:9c80ba48~20ebaba4",
 		"cwd is resolveCommandArgsWithInstallFallback's own `cwd` parameter, used for the `--version` verification spawn",
 	],
 	[
@@ -558,7 +558,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"resolveCommandArgsWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
 	],
 	[
-		"clients/file-utils.ts#detectFileChangedAfterCommand:9a4b1a12~dbf27697",
+		"clients/file-utils.ts#detectFileChangedAfterCommand:04d17168~dbf27697",
 		"cwd is detectFileChangedAfterCommand's own `cwd` parameter; its callers live in other files, which a per-file scan cannot follow",
 	],
 	[

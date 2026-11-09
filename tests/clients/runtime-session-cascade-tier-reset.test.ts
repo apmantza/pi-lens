@@ -17,57 +17,21 @@
 
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 import { resetLSPConfigStateForTests } from "../../clients/lsp/config.js";
 import { pinFixtureHome } from "./test-utils.js";
+import { withEnv } from "../support/with-env.js";
 
-// Dynamically imported below (never a static top-level import): a static
-// `import ... from "../../clients/runtime-session.js"` pulls in
-// clients/lsp/cascade-tier.js as part of the SAME module-graph evaluation
-// that runs BEFORE this file's own top-level `const logCascade = vi.fn()`
-// below executes, which is a TDZ crash the moment the hoisted
-// `vi.mock("../../clients/cascade-logger.js", ...)` factory tries to read it.
 type HandleSessionStart =
 	typeof import("../../clients/runtime-session.js").handleSessionStart;
-
-const registerQuietWindowTask = vi.fn();
-const logCascade = vi.fn();
-
-vi.mock("../../clients/quiet-window.js", () => ({
-	registerQuietWindowTask,
-}));
-vi.mock("../../clients/cascade-logger.js", () => ({
-	logCascade,
-}));
 
 vi.mock("../../clients/safe-spawn.js", () => ({
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
 	safeSpawnAsync: vi.fn(async () => ({ stdout: "", stderr: "", status: 1 })),
 	resetSafeSpawnWindowsCommandCache: vi.fn(),
 }));
-
-vi.mock("../../clients/installer/index.js", () => ({
-	ensureTool: vi.fn(async () => undefined),
-	resetResolvedPathCache: vi.fn(),
-	isSpawnableCommand: vi.fn(async () => false),
-	resetPathWalkMemo: vi.fn(),
-}));
-
-function makeDefaultRuntime() {
-	return {
-		sessionGeneration: 1,
-		isCurrentSession: () => true,
-		markStartupScanInFlight: () => {},
-		clearStartupScanInFlight: () => {},
-		complexityBaselines: new Set(),
-		resetForSession: () => {},
-		projectRoot: "",
-		projectRulesScan: { hasCustomRules: false, rules: [] },
-		cachedExports: new Map(),
-		errorDebtBaseline: { testsPassed: true, buildPassed: true },
-	};
-}
 
 function makeDeps(ctxCwd: string) {
 	return withResidentBootstrap({
@@ -76,7 +40,7 @@ function makeDeps(ctxCwd: string) {
 		notify: vi.fn(),
 		dbg: () => {},
 		log: () => {},
-		runtime: makeDefaultRuntime(),
+		runtime: new RuntimeCoordinator(),
 		cacheManager: { writeCache: () => {}, readCache: () => null },
 		todoScanner: { scanDirectory: () => ({ items: [] }) },
 		astGrepClient: {
@@ -123,24 +87,19 @@ const CAP = 256;
 /** Mirrors `OUTSTANDING_TOUCH_MAX_AGE_MS` in clients/lsp/cascade-tier.ts. */
 const MAX_AGE_MS = 15 * 60_000;
 
-function sweepGauge(): { phase: string; metadata: Record<string, unknown> } {
-	const row = logCascade.mock.calls
-		.map((call) => call[0])
-		.find((candidate) => candidate?.phase === "cascade_tier3_reconcile");
-	if (!row) throw new Error("no cascade_tier3_reconcile record was written");
-	return row;
-}
-
 describe("cascade tier-3 registry is reset at session_start (#1910)", () => {
 	let tmpDir: string;
 	let handleSessionStart: HandleSessionStart;
+	let restoreEnv: (() => void) | undefined;
 
 	beforeEach(async () => {
 		// The real config loader walks up from the session cwd to HOME (#4709);
 		// a pinned fixture HOME keeps that read off the maintainer's home.
 		pinFixtureHome("runtime-session-cascade-tier-reset");
+		// The real installer is no longer mocked: no session-start path may
+		// reach a download from this case.
+		restoreEnv = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: "1" });
 		await installLspServiceDouble();
-		vi.clearAllMocks();
 		tmpDir = setupTestEnvironment("pi-lens-cascade-tier-reset-").tmpDir;
 		const cascadeTier = await import("../../clients/lsp/cascade-tier.js");
 		cascadeTier._resetOutstandingCascadeTouchesForTests();
@@ -149,6 +108,8 @@ describe("cascade tier-3 registry is reset at session_start (#1910)", () => {
 	});
 
 	afterEach(() => {
+		restoreEnv?.();
+		restoreEnv = undefined;
 		resetLSPConfigStateForTests();
 		removeTempDirSync(tmpDir);
 	});
@@ -175,6 +136,13 @@ describe("cascade tier-3 registry is reset at session_start (#1910)", () => {
 		expect(
 			cascadeTier._getOutstandingCascadeTouchesForTests().length,
 		).toBeGreaterThan(0);
+		// Precondition: both counters armed, so the zero check below can only
+		// pass if session start cleared them (review r1 F1: without this line a
+		// disabled eviction arm stayed green).
+		expect(cascadeTier._getCascadeTierSweepCountersForTests()).toEqual({
+			expired: 1,
+			evicted: 1,
+		});
 
 		// Never call resetCascadeTierSessionState directly — the whole point is
 		// to prove handleSessionStart itself reaches it.
@@ -183,18 +151,8 @@ describe("cascade tier-3 registry is reset at session_start (#1910)", () => {
 		expect(cascadeTier._getOutstandingCascadeTouchesForTests()).toEqual([]);
 
 		// Confirm the SWEEP-SCOPED counters were cleared too, not just the map:
-		// register the reconcile task and run one sweep, and read what it wrote.
-		cascadeTier.registerCascadeTierReconcileTask(
-			() =>
-				({
-					getWarmClientForFile: vi.fn().mockResolvedValue(undefined),
-				}) as never,
-		);
-		const task = registerQuietWindowTask.mock
-			.calls[0][1] as () => Promise<void>;
-		await task();
-		expect(sweepGauge().metadata).toMatchObject({
-			count: 0,
+		// read them where the next sweep's reconcile gauge reads them.
+		expect(cascadeTier._getCascadeTierSweepCountersForTests()).toEqual({
 			expired: 0,
 			evicted: 0,
 		});

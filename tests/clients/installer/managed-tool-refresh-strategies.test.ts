@@ -421,15 +421,14 @@ function githubRateLimitCount(): number {
 
 function zizmorSuppressionCount(): number {
 	return (
-		getDegradationSummary().find((g) => g.kind === "mode-suppression")?.count ??
-		0
+		getDegradationSummary().find((g) => g.kind === "zizmor-offline")?.count ?? 0
 	);
 }
 
 function zizmorSuppressionSubjects(): string[] {
 	return (
 		getDegradationSummary()
-			.find((g) => g.kind === "mode-suppression")
+			.find((g) => g.kind === "zizmor-offline")
 			?.latestReasons.map((reason) => reason.subject) ?? []
 	);
 }

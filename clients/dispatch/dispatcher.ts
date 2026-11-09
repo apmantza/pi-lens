@@ -44,6 +44,8 @@ import {
 } from "../path-utils.js";
 import { loadPiLensProjectConfig } from "../project-lens-config.js";
 import { withBudget } from "../deadline-utils.js";
+import { spawnCooldownScope } from "../spawn-abort-scope.js";
+import { isInSpawnTimeoutCooldown } from "../spawn-timeout-cooldown.js";
 import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import { createAvailabilityChecker } from "./runners/utils/runner-helpers.js";
@@ -56,6 +58,8 @@ import {
 	classifyObservedRunner,
 	COLLECT_LATER_THRESHOLD_MS,
 	observeRunnerLatency,
+	runCollectLater,
+	type CollectLaterTier,
 } from "./collect-later-tier.js";
 import { deferRunnerFindings } from "./pending-runner-findings.js";
 import {
@@ -1285,40 +1289,26 @@ async function runGroup(
 				: classifyObservedRunner(projectRoot, runner.id);
 		if (observedTier === "collect-later") {
 			const markedAtMs = Date.now();
-			const deferred = runRunner(runnerCtx, runner, semantic).then((result) => {
-				const durationMs = Date.now() - markedAtMs;
-				const tier = observeRunnerLatency({
+			// #5413: at most one run of this runner in flight per project; a
+			// write meanwhile owes one rerun for its file. The run's latency is
+			// measured from its own start, never from a queued write's mark.
+			const run = async (): Promise<RunnerResult> => {
+				const startedAtMs = Date.now();
+				const result = await runRunner(runnerCtx, runner, semantic);
+				const durationMs = Date.now() - startedAtMs;
+				observeRunnerTier({
+					filePath: ctx.filePath,
 					projectRoot,
 					runnerId: runner.id,
+					observedTier,
 					durationMs,
-					timedOut: result.failureKind === "timeout",
+					result,
 				});
-				if (tier !== observedTier) {
-					logLatency({
-						type: "phase",
-						filePath: ctx.filePath,
-						phase: "runner_collect_later_tier_flip",
-						durationMs: 0,
-						metadata: {
-							runnerId: runner.id,
-							from: observedTier,
-							to: tier,
-							projectRoot,
-						},
-					});
-				}
-				if (tier === "collect-later") {
-					incrementDegradationCount({
-						kind: "runner-collect-later",
-						subject: `${projectRoot}:${runner.id}`,
-						reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
-					});
-				}
 				logLatency({
 					type: "runner",
 					filePath: ctx.filePath,
 					runnerId: runner.id,
-					startedAt: new Date(markedAtMs).toISOString(),
+					startedAt: new Date(startedAtMs).toISOString(),
 					durationMs,
 					status: result.status,
 					diagnosticCount: result.diagnostics.length,
@@ -1330,6 +1320,12 @@ async function runGroup(
 					},
 				});
 				return result;
+			};
+			const { promise: deferred, coalesced } = runCollectLater({
+				projectRoot,
+				runnerId: runner.id,
+				filePath: ctx.filePath,
+				start: run,
 			});
 			deferRunnerFindings({
 				filePath: ctx.filePath,
@@ -1366,7 +1362,11 @@ async function runGroup(
 				status: "pending",
 				diagnosticCount: 0,
 				semantic,
-				metadata: { tier: "collect-later", delivered: "turn_end" },
+				metadata: {
+					tier: "collect-later",
+					delivered: "turn_end",
+					...(coalesced && { coalesced: true }),
+				},
 			});
 			continue;
 		}
@@ -1375,34 +1375,16 @@ async function runGroup(
 		onRunnerResult?.(runnerId, result);
 		const runnerEnd = Date.now();
 		const duration = runnerEnd - runnerStart;
-		const tier =
-			ctx.writeIndex === undefined
-				? "inline"
-				: observeRunnerLatency({
-						projectRoot,
-						runnerId: runner.id,
-						durationMs: duration,
-						timedOut: result.failureKind === "timeout",
-					});
-		if (tier !== observedTier) {
-			logLatency({
-				type: "phase",
+		// Only post-write dispatches observe: a project scan or direct API call
+		// has no tier to flip (`observedTier` is "inline" for it).
+		if (ctx.writeIndex !== undefined) {
+			observeRunnerTier({
 				filePath: ctx.filePath,
-				phase: "runner_collect_later_tier_flip",
-				durationMs: 0,
-				metadata: {
-					runnerId: runner.id,
-					from: observedTier,
-					to: tier,
-					projectRoot,
-				},
-			});
-		}
-		if (tier === "collect-later") {
-			incrementDegradationCount({
-				kind: "runner-collect-later",
-				subject: `${projectRoot}:${runner.id}`,
-				reason: `observed ${duration}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+				projectRoot,
+				runnerId: runner.id,
+				observedTier,
+				durationMs: duration,
+				result,
 			});
 		}
 		// Runner definitions are a typed API, but embedders/plugins can still
@@ -2199,11 +2181,61 @@ function failureRowMetadata(result: RunnerResult):
 	return result.inconclusive === true ? inconclusive : undefined;
 }
 
+/**
+ * Record one finished runner run against the observed tier: the latency
+ * observation itself, one `runner_collect_later_tier_flip` row when it moved
+ * the runner's tier, and one `runner-collect-later` count while it is (still)
+ * slow. Shared by the collect-later run and the inline run.
+ */
+function observeRunnerTier(options: {
+	filePath: string;
+	projectRoot: string;
+	runnerId: string;
+	observedTier: CollectLaterTier;
+	durationMs: number;
+	result: RunnerResult;
+}): void {
+	const { filePath, projectRoot, runnerId, observedTier, durationMs } = options;
+	const tier = observeRunnerLatency({
+		projectRoot,
+		runnerId,
+		durationMs,
+		timedOut: options.result.failureKind === "timeout",
+	});
+	if (tier !== observedTier) {
+		logLatency({
+			type: "phase",
+			filePath,
+			phase: "runner_collect_later_tier_flip",
+			durationMs: 0,
+			metadata: { runnerId, from: observedTier, to: tier, projectRoot },
+		});
+	}
+	if (tier === "collect-later") {
+		incrementDegradationCount({
+			kind: "runner-collect-later",
+			subject: `${projectRoot}:${runnerId}`,
+			reason: `observed ${durationMs}ms, threshold ${COLLECT_LATER_THRESHOLD_MS}ms`,
+		});
+	}
+}
+
 async function runRunner(
 	ctx: DispatchContext,
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
 ): Promise<RunnerResult> {
+	// #5413: a runner whose own spawn timed out this session is not run again,
+	// not even for its availability probe: a wedged binary does not heal between
+	// edits. "Not checked", never clean; the skip is recorded once per session.
+	if (isInSpawnTimeoutCooldown(runner.id)) {
+		recordDegradationOnce({
+			kind: "runner-spawn-timeout-cooldown",
+			subject: runner.id,
+			reason: "skipped: its spawn timed out earlier this session",
+		});
+		return { status: "skipped", diagnostics: [], semantic: "none" };
+	}
 	const timeoutMs = Math.max(
 		runner.timeoutMs ?? RUNNER_TIMEOUT_MS,
 		getRunnerTimeoutFloorMs(),
@@ -2222,8 +2254,13 @@ async function runRunner(
 		// `withBudget` settles `undefined` when the budget lapses; boxing the
 		// runner's value tells that apart from a runner that resolved nothing.
 		// The message keeps the words `failureKind` is classified from below.
+		// #5413: every spawn the runner reaches arms ITS cooldown on a timeout.
 		const outcome = await withBudget(
-			runner.run(ctx).then((value) => ({ value })),
+			spawnCooldownScope
+				.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
+					runner.run(ctx),
+				)
+				.then((value) => ({ value })),
 			timeoutMs,
 		);
 		if (outcome === undefined) {

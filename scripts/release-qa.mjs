@@ -2537,7 +2537,7 @@ const ROW_PROBES = {
 		const mcp = ctx.mcp;
 		if (!mcp) return { status: "fail", detail: "no MCP session" };
 		const result = await mcp.callToolText("pilens_effective_config", {
-			file: "a.ts",
+			path: "a.ts",
 		});
 		const configPath = path.join(ctx.projectDir, ".pi-lens.json");
 		const named = result.text.includes(configPath);
@@ -2595,7 +2595,7 @@ const ROW_PROBES = {
 				env,
 			);
 			const result = await session.callToolText("pilens_effective_config", {
-				file: "a.ts",
+				path: "a.ts",
 			});
 			const judged = classifyGlobalConfigLocation(result.text, agentConfigPath);
 			return {
@@ -2636,7 +2636,7 @@ const ROW_PROBES = {
 			);
 			// A config query loads the global tier (and so fires the reporter);
 			// health then renders the ledger it recorded.
-			await session.callToolText("pilens_effective_config", { file: "a.ts" });
+			await session.callToolText("pilens_effective_config", { path: "a.ts" });
 			const first = await session.callToolText("pilens_health", {});
 			const second = await session.callToolText("pilens_health", {});
 			const shadowLine = (text) =>

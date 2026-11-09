@@ -6,6 +6,11 @@
  * runner all consult this seam, so a timeout recorded by any one lane cools
  * the command down for all of them within the session.
  *
+ * #5413 moved every write into `safeSpawnAsync`, so a case that doubles the
+ * spawn cannot observe one: the autofix arm is proven on the real spawn in
+ * `autofix-timeout-cooldown-real-shape.test.ts`, and the runner lane through
+ * the real dispatcher in `dispatch/runner-spawn-timeout-cooldown.test.ts`.
+ *
  * IMPORTANT (shape 14): every test obtains the seam via DYNAMIC IMPORT after
  * any `vi.resetModules()`, and the code under test resolves its own import in
  * the same epoch — module instances re-evaluate across resets, so a
@@ -25,43 +30,8 @@ vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawnAsync,
 }));
 
-vi.mock(
-	"../../clients/dispatch/runners/utils/runner-helpers.js",
-	async (importOriginal) => ({
-		...(await importOriginal<Record<string, unknown>>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailable: () => true,
-			isAvailableAsync: async () => true,
-			getCommand: () => command,
-		}),
-		// The resolver answers with the registry COMMAND, which is what the
-		// cooldown map is keyed by (markdownlint's is `markdownlint-cli2`).
-		resolveToolCommandWithInstallFallback: async (
-			_cwd: string,
-			toolId: string,
-		) => (toolId === "markdownlint" ? "markdownlint-cli2" : toolId),
-	}),
-);
-
-vi.mock("../../clients/tool-policy.js", async (importOriginal) => ({
-	...(await importOriginal<Record<string, unknown>>()),
-	getLinterPolicyForCwd: () => null,
-	markdownlintConfigArgs: () => [],
-}));
-
 import { detectFileChangedAfterCommand } from "../../clients/file-utils.js";
-import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { setupTestEnvironment } from "./test-utils.js";
-
-// The shape `safeSpawnAsync` returns on a real timeout: BOTH `error` and
-// `failure` (#5376; `error: null` here hid the autofix ordering defect).
-const TIMEOUT_RESULT = {
-	error: new Error("Process timed out after 30000ms (killed with SIGTERM)"),
-	status: null,
-	stdout: "",
-	stderr: "",
-	failure: "timeout" as const,
-};
 
 async function seam() {
 	return await import("../../clients/spawn-timeout-cooldown.js");
@@ -136,28 +106,6 @@ describe("detectFileChangedAfterCommand consults the seam", () => {
 			env.cleanup();
 		}
 	});
-
-	it("records a timeout when the autofix spawn times out", async () => {
-		const env = setupTestEnvironment("pi-lens-timeout-autofix-note-");
-		try {
-			const filePath = path.join(env.tmpDir, "notes.md");
-			fs.writeFileSync(filePath, "# hello\n");
-			const cmd = path.join(env.tmpDir, "markdownlint-cli2.cmd");
-			safeSpawnAsync.mockResolvedValue(TIMEOUT_RESULT);
-
-			await detectFileChangedAfterCommand(
-				filePath,
-				cmd,
-				["--fix", filePath],
-				env.tmpDir,
-			);
-
-			const { isInSpawnTimeoutCooldown } = await seam();
-			expect(isInSpawnTimeoutCooldown(cmd)).toBe(true);
-		} finally {
-			env.cleanup();
-		}
-	});
 });
 
 describe("cross-lane key sharing (review P2)", () => {
@@ -181,62 +129,6 @@ describe("cross-lane key sharing (review P2)", () => {
 			isInSpawnTimeoutCooldown("C:/ws/node_modules/markdownlint-cli2"),
 		).toBe(true);
 		void resetSpawnTimeoutCooldowns;
-	});
-});
-
-describe("markdownlint runner consults the seam", () => {
-	function createCtx(filePath: string, cwd: string) {
-		return makeRunnerCtx(filePath, cwd);
-	}
-
-	beforeEach(() => {
-		vi.resetModules();
-		safeSpawnAsync.mockReset();
-	});
-
-	it("skips WITHOUT spawning when the resolved command is cooling down", async () => {
-		const env = setupTestEnvironment("pi-lens-timeout-lint-guard-");
-		try {
-			const filePath = path.join(env.tmpDir, "notes.md");
-			fs.writeFileSync(filePath, "# hello\n");
-			const { noteSpawnTimeout } = await seam();
-			noteSpawnTimeout({
-				tool: "markdownlint",
-				command: "markdownlint-cli2",
-				phase: "autofix",
-			});
-
-			const runner = (
-				await import("../../clients/dispatch/runners/markdownlint.js")
-			).default;
-			const result = await runner.run(createCtx(filePath, env.tmpDir) as never);
-
-			expect(result.status).toBe("skipped");
-			expect(result.semantic).toBe("none");
-			expect(result.diagnostics).toHaveLength(0);
-			expect(safeSpawnAsync).not.toHaveBeenCalled();
-		} finally {
-			env.cleanup();
-		}
-	});
-
-	it("arms the cooldown when its own lint spawn times out", async () => {
-		const env = setupTestEnvironment("pi-lens-timeout-lint-note-");
-		try {
-			const filePath = path.join(env.tmpDir, "notes.md");
-			fs.writeFileSync(filePath, "# hello\n");
-			safeSpawnAsync.mockResolvedValue(TIMEOUT_RESULT);
-
-			const runner = (
-				await import("../../clients/dispatch/runners/markdownlint.js")
-			).default;
-			await runner.run(createCtx(filePath, env.tmpDir) as never);
-
-			const { isInSpawnTimeoutCooldown } = await seam();
-			expect(isInSpawnTimeoutCooldown("markdownlint-cli2")).toBe(true);
-		} finally {
-			env.cleanup();
-		}
 	});
 });
 
