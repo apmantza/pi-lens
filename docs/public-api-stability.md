@@ -404,7 +404,7 @@ wrong scope — a tool that only declares an older name refuses or ignores the
 canonical one, and an ignored file parameter leaves the call running on its
 default scope, whose answer then reads as if it were about the named file.
 
-The three hand-written MCP entries (`pilens_analyze`, `pilens_diagnostics`,
+Three MCP entries (`pilens_analyze`, `pilens_diagnostics`,
 `pilens_lsp_navigation`) keep declaring **`file`** and **`filePath`**, and
 `lens_diagnostic_mark` keeps accepting **`filePath`**, as aliases of `path`, so
 no caller written against an older spelling breaks. A call may send any one of
@@ -417,11 +417,13 @@ this contract through section 4.
 `pilens_module_report`, `pilens_read_symbol`, `pilens_read_enclosing` and
 `pilens_effective_config` take their `inputSchema` from the pi tool definition
 (#5138 PR 3), so they advertise exactly what the pi tool declares — `path`, and
-no `file` or `filePath` alias. This is a change to the MCP input contract,
-approved by the maintainer on 2026-11-08, and it is recorded here rather than
-carried as a deprecation window: a window exists to let callers migrate off a
-*config source*, and these are call arguments that the runtime reader still
-understands.
+no `file` or `filePath` alias. This is a change to the MCP input contract. The
+maintainer approved it as Option A (drop `file` and `filePath` on the projected
+tools in this arc) in [the #5438
+approval comment](https://github.com/apmantza/pi-lens/pull/5438#issuecomment-6727074808),
+and it is recorded here rather than carried as a deprecation window: a window
+exists to let callers migrate off a *config source*, and these are call
+arguments that the runtime reader still understands.
 
 What a caller sees:
 
@@ -441,7 +443,7 @@ Impact evidence from the review corpus behind the decision: of 471
 schema-following calls, 471 used `path`; 9 sends used `file`, every one of them
 on a tool whose schema advertised `file`; no call omitted `path` where it was
 required. No hardcoded client spelling is assumed. The pinned refusal corpus in
-`tests/mcp/server.smoke.test.ts` moves with this change (431 → 337 rows: 100
+`tests/mcp/server.smoke.test.ts` moves with this change (431 → 337 rows: 96
 alias rows leave, 2 `filePath`/`file_path` → `path` rows arrive).
 
 ### The MCP tool result block contract

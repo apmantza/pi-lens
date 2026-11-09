@@ -1750,7 +1750,7 @@ describe("pi-lens MCP canonical `path` parameter (#5041)", { retry: 2 }, () => {
 		// #5138 PR 3: `path` is the one advertised spelling everywhere. The four
 		// tools whose schema is projected from the pi tool no longer declare the
 		// `file`/`filePath` aliases (the accepted contract change); the three
-		// hand-written entries still do.
+		// other entries still do.
 		const projected = [
 			"pilens_module_report",
 			"pilens_read_symbol",

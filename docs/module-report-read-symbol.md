@@ -250,8 +250,8 @@ member's own `exported` rides on its container's section), and lands at about
 
 Both tools are also exposed via the pi-lens MCP server:
 
-- `pilens_module_report({file, cwd?, maxRefsPerSymbol?, focus?, view?, blastRadius?, blastRadiusDepth?})`
-- `pilens_read_symbol({file, symbol, kind?, cwd?})`
+- `pilens_module_report({path, cwd?, maxRefsPerSymbol?, focus?, view?, blastRadius?, blastRadiusDepth?})`
+- `pilens_read_symbol({path, symbol, kind?, cwd?})`
 
 The MCP wrappers return the same text or JSON payload the pi tools emit for
 the same preset — `pilens_module_report` default text equals `module_report`
