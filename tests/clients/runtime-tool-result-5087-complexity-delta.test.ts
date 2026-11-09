@@ -7,10 +7,11 @@
  * rule 2), honours `--no-complexity`, and a held-back edit leaves the file's
  * stored table alone, so the next clean edit still reports the change.
  * `runPipeline` is the one double (it spawns every linter); the handler, the
- * coordinator, its store and the re-measure are real. The fixture is no
- * repository, so the session's first table stands in for main.
+ * coordinator, its store and the re-measure are real. The fixture repository
+ * has no default-branch commit, so the session's first table stands in for main.
  */
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../clients/pipeline.js", () => ({
@@ -65,6 +66,14 @@ let filePath: string;
 beforeEach(async () => {
 	await installLspServiceDouble();
 	env = setupTestEnvironment("pi-lens-5087-tool-result-");
+	// V5: the empty .git marker is no repository boundary, so with TMPDIR
+	// inside a checkout Git found that checkout's main. Write the layout of an
+	// unborn repository (HEAD, objects, refs) so Git stops here and finds no
+	// default-branch commit, without spawning `git init`.
+	const gitDir = path.join(env.tmpDir, ".git");
+	fs.mkdirSync(path.join(gitDir, "objects"), { recursive: true });
+	fs.mkdirSync(path.join(gitDir, "refs", "heads"), { recursive: true });
+	fs.writeFileSync(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n");
 	runtime = new RuntimeCoordinator();
 	runtime.projectRoot = env.tmpDir;
 	filePath = createTempFile(env.tmpDir, "svc.ts", fn("handle", 3));
