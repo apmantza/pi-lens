@@ -68,6 +68,7 @@ import {
 	relativeInside,
 	walkUpDirs,
 } from "./path-utils.js";
+import { parseReportJson } from "./report-scan.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
 import {
@@ -552,18 +553,13 @@ export async function classifyAndFilterFindings(
  * Map gitleaks's JSON report (a flat array of finding objects) to our
  * structured `GitleaksFinding[]` shape. Exported for unit tests.
  *
- * Gitleaks emits `null` (or `[]`) when no findings are present. Malformed
- * input returns `[]` rather than throwing — gitleaks itself is occasionally
- * truncated by upstream pipe failures.
+ * Gitleaks emits `null` (or `[]`) when no findings are present. Input that is
+ * not JSON throws (`parseReportJson`): a truncated report is not a clean scan,
+ * and `runReportScan` records the throw as a failed scan (#5447).
  */
 export function parseGitleaksReport(raw: string): GitleaksFinding[] {
 	if (!raw.trim()) return [];
-	let parsed: unknown;
-	try {
-		parsed = JSON.parse(raw);
-	} catch {
-		return [];
-	}
+	const parsed = parseReportJson("gitleaks", raw);
 	if (!Array.isArray(parsed)) return [];
 	const findings: GitleaksFinding[] = [];
 	for (const entry of parsed) {

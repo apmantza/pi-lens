@@ -33,7 +33,7 @@ import {
 	resolveAvailableOrInstall,
 } from "./dispatch/runners/utils/runner-helpers.js";
 import { nestedWorktreeOffsets } from "./scratch-tree-policy.js";
-import { runReportScan } from "./report-scan.js";
+import { parseReportJson, runReportScan } from "./report-scan.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
@@ -527,16 +527,7 @@ export class JscpdClient {
 	 * (#5411). #1736: `statistics.total` holds the stats, not `statistics.clones`.
 	 */
 	private parseReport(raw: string): JscpdResult {
-		let data: any;
-		try {
-			data = JSON.parse(raw);
-		} catch (err) {
-			// The throw is the point: a report this client cannot read is a failed
-			// scan, and `runReportScan`'s guard records it (#5411). Naming it here is
-			// what the guard's row and the log line carry.
-			const message = err instanceof Error ? err.message : String(err);
-			throw new Error(`unreadable jscpd report: ${message}`);
-		}
+		const data: any = parseReportJson("jscpd", raw);
 		// Stats live in statistics.total, not statistics.clones
 		const total = data.statistics?.total ?? {};
 
