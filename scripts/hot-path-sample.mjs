@@ -35,7 +35,12 @@
  *                    42-line TypeScript file the process has not seen (the
  *                    first touch, where the complexity baseline is taken,
  *                    #5087), and the `tool_result` of an edit to it after
- *                    the bytes change on disk. The row checks that a
+ *                    the bytes change on disk. The project is a real git
+ *                    repository with the file committed on `main`, and the
+ *                    edit raises one function past the `high-complexity`
+ *                    threshold, so the edit pays the default-branch read
+ *                    (two `git` spawns and a parse of `main`'s copy) and the
+ *                    advisory (#5443 review F6). The row checks that a
  *                    `tool_result` latency row for the file reached the log.
  *   tool_call_bash_home_overcap
  *                    three consecutive `bash` calls through the registered
@@ -59,6 +64,7 @@
  * `PI_LENS_HOME` and `PILENS_DATA_DIR` are pinned under `--scratch` before the
  * first import, so nothing reaches the real home.
  */
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -92,6 +98,54 @@ function fixtureSource(lines) {
 		n++;
 	}
 	return `${out.join("\n")}\n`;
+}
+
+/**
+ * Make `project` a git repository whose `main` holds every file in it, so the
+ * edit row reads the default branch for real. `GIT_CEILING_DIRECTORIES` keeps
+ * git inside `--scratch`, and the identity is passed per command, so no
+ * config outside the pinned home is read or written.
+ */
+function commitFixture(project) {
+	const env = {
+		...process.env,
+		GIT_CEILING_DIRECTORIES: path.dirname(project),
+		GIT_CONFIG_NOSYSTEM: "1",
+	};
+	for (const args of [
+		["init", "-q", "-b", "main"],
+		["add", "-A"],
+		[
+			"-c",
+			"user.name=hot-path",
+			"-c",
+			"user.email=hot-path@example.invalid",
+			"-c",
+			"commit.gpgsign=false",
+			"commit",
+			"-q",
+			"-m",
+			"fixture",
+		],
+	]) {
+		const git = spawnSync("git", args, { cwd: project, env, encoding: "utf8" });
+		if (git.status !== 0)
+			throw new Error(`git ${args.at(-1)} failed: ${git.stderr ?? git.error}`);
+	}
+}
+
+/**
+ * An edit that gives the first function of a fixture file (`f0`) fifteen more
+ * branches: its cyclomatic complexity goes from 2 to 17, past
+ * `high-complexity`'s 15.
+ */
+function crossThreshold() {
+	const anchor = "\treturn b;\n}";
+	const branches = Array.from(
+		{ length: 15 },
+		(_, i) => `\tif (b === "${i}") return b + ${i};`,
+	).join("\n");
+	return { oldText: anchor, newText: `${branches}\n${anchor}` };
 }
 
 /** A recording stand-in for pi's ExtensionAPI: the host boundary. */
@@ -164,7 +218,6 @@ async function sample(tree, scratch) {
 	const imp = (rel) => import(pathToFileURL(path.join(tree, rel)).href);
 	const project = path.join(scratch, "project");
 	fs.mkdirSync(path.join(project, "src"), { recursive: true });
-	fs.writeFileSync(path.join(project, ".git"), "");
 	fs.writeFileSync(
 		path.join(project, "package.json"),
 		'{"name":"hot-path-fixture","version":"1.0.0","type":"module"}\n',
@@ -173,6 +226,11 @@ async function sample(tree, scratch) {
 	const largeFile = path.join(project, "src", "large.ts");
 	fs.writeFileSync(smallFile, fixtureSource(SMALL_LINES));
 	fs.writeFileSync(largeFile, fixtureSource(LARGE_LINES));
+	fs.writeFileSync(
+		path.join(project, "src", "edited.ts"),
+		fixtureSource(SMALL_LINES),
+	);
+	commitFixture(project);
 
 	const result = {};
 	const { pi, handlers, flags } = makeHost();
@@ -278,8 +336,7 @@ async function timeEditRoundTrip(imp, handlers, project) {
 	if (!toolCall || !toolResult)
 		throw new Error("no tool_call or tool_result handler registered");
 	const file = path.join(project, "src", "edited.ts");
-	const before = fixtureSource(SMALL_LINES);
-	fs.writeFileSync(file, before);
+	const before = fs.readFileSync(file, "utf8");
 	const ctx = makeCtx(project);
 	const latency = await imp("clients/latency-logger.js");
 	await latency.flushLatencyLog();
@@ -307,7 +364,7 @@ async function timeEditRoundTrip(imp, handlers, project) {
 		},
 		ctx,
 	);
-	const edit = { oldText: "\treturn b;\n}", newText: "\treturn b + a;\n}" };
+	const edit = crossThreshold();
 	await toolCall(
 		{
 			type: "tool_call",
