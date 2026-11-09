@@ -57,11 +57,13 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	realpathSync,
 	renameSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { parseVitestSummary } from "./lib/vitest-summary.mjs";
 import { getLockPath, getSlotPath } from "./lib/suite-lock.mjs";
@@ -446,6 +448,27 @@ export function resolveDiffRange(
 	}
 	// Unreadable stdin: diff HEAD against the base, as CI does.
 	return [`${base}...HEAD`];
+}
+
+// The gate's own temp root (#5439). Inheriting the caller's TMPDIR is what reds
+// path-sensitive tests on a macOS default root, whose `/private/var/folders/...`
+// spelling is long and reaches fixtures through a `/var` symlink. The root sits
+// under the machine-state convention (`PI_LENS_HOME`, else `~/.pi-lens`) because
+// the test lock is machine-wide, persists across pushes (fixtures `mkdtemp`
+// inside it), and is resolved so the symlinked spelling cannot recur.
+// `PI_LENS_PREPUSH_TMPDIR` is the operator escape hatch, and the lever a probe
+// uses to reproduce the unpinned behaviour.
+export function resolvePrePushTmpRoot(env = process.env) {
+	const explicit = env.PI_LENS_PREPUSH_TMPDIR?.trim();
+	if (explicit) return path.resolve(explicit);
+	const base = env.PI_LENS_HOME?.trim() || path.join(os.homedir(), ".pi-lens");
+	return path.join(base, "prepush-tmp");
+}
+
+/** Create the temp root and answer its kernel-real path. */
+export function ensurePrePushTmpRoot(root) {
+	mkdirSync(root, { recursive: true });
+	return realpathSync(root);
 }
 
 /**
@@ -1024,6 +1047,17 @@ function unionChanged(ranges) {
 }
 
 export async function main() {
+	const prePushTmpRoot = ensurePrePushTmpRoot(
+		resolvePrePushTmpRoot(process.env),
+	);
+	const callerTmp = process.env.TMPDIR ?? "(unset)";
+	process.env.TMPDIR = prePushTmpRoot;
+	process.env.TEMP = prePushTmpRoot;
+	process.env.TMP = prePushTmpRoot;
+	console.log(
+		`[pre-push] tmp root: ${prePushTmpRoot} (caller TMPDIR was ${callerTmp})`,
+	);
+
 	const input = readStdin();
 	const base = resolveBaseRef();
 	let ranges = resolveDiffRange(input, base);

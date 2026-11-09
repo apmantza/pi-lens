@@ -51,6 +51,8 @@ import {
 	selectTargetedTests,
 	resolveBaseRef,
 	resolveDiffRange,
+	ensurePrePushTmpRoot,
+	resolvePrePushTmpRoot,
 	readPrePushRecord,
 	writePrePushRecord,
 } from "../../scripts/pre-push-targeted-tests.mjs";
@@ -673,6 +675,88 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		expect(withTree.status).toBe(0);
 		expect(withTree.stdout).toContain("  - tests/clients/first.test.ts");
 		expect(withTree.stdout).toContain("  - tests/clients/third.test.ts");
+	});
+
+	it("hands the pinned temp root to the test run, not the caller's TMPDIR (#5439)", () => {
+		// #5439 recurrence: the hook inherited the caller's TMPDIR, so the tests
+		// it spawned read macOS's long, symlinked `/private/var/folders/...`
+		// root. The spawned test reads back every var the pin sets, so dropping
+		// one assignment reds here.
+		const { hook } = gitFixture();
+		const hatch = path.join(fixtureDir as string, "pinned-tmp");
+		fs.mkdirSync(hatch, { recursive: true });
+		const expected = fs.realpathSync(hatch);
+		write("clients/first.ts", "export const first = false;\n");
+		write(
+			"tests/clients/first.test.ts",
+			'import { expect, it } from "vitest";\n' +
+				'it("reads the pinned temp root", () => {\n' +
+				"  expect(process.env.TMPDIR).toBe(process.env.PREPUSH_TMP_EXPECTED);\n" +
+				"  expect(process.env.TEMP).toBe(process.env.PREPUSH_TMP_EXPECTED);\n" +
+				"  expect(process.env.TMP).toBe(process.env.PREPUSH_TMP_EXPECTED);\n" +
+				"});\n",
+		);
+		const caller = "/var/folders/caller-only/T";
+		const result = hook("", ["--include-worktree"], {
+			TMPDIR: caller,
+			TEMP: caller,
+			TMP: caller,
+			PI_LENS_PREPUSH_TMPDIR: hatch,
+			PREPUSH_TMP_EXPECTED: expected,
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(
+			`[pre-push] tmp root: ${expected} (caller TMPDIR was ${caller})`,
+		);
+		expect(result.stdout).toContain("1 passed");
+	});
+});
+
+describe("pre-push temp root pin (#5439)", () => {
+	// Recurrence: the gate inherited the caller's TMPDIR, so macOS's long,
+	// symlinked `/private/var/folders/...` root redded path-sensitive tests on
+	// the same commit that passed under a short real root.
+
+	it("defaults under the machine-state home, never the caller's TMPDIR", () => {
+		const caller = "/var/folders/caller-only/T";
+		const root = resolvePrePushTmpRoot({
+			TMPDIR: caller,
+			TEMP: caller,
+			TMP: caller,
+		});
+		expect(root).toBe(path.join(os.homedir(), ".pi-lens", "prepush-tmp"));
+	});
+
+	it("honours PI_LENS_HOME as the machine-state parent", () => {
+		expect(resolvePrePushTmpRoot({ PI_LENS_HOME: "/machine/home " })).toBe(
+			path.join("/machine/home", "prepush-tmp"),
+		);
+	});
+
+	it("gives PI_LENS_PREPUSH_TMPDIR precedence over PI_LENS_HOME, resolved", () => {
+		const root = resolvePrePushTmpRoot({
+			PI_LENS_HOME: "/machine/home",
+			PI_LENS_PREPUSH_TMPDIR: "relative/hatch",
+		});
+		expect(root).toBe(path.resolve("relative/hatch"));
+		expect(path.isAbsolute(root)).toBe(true);
+	});
+
+	it("creates a missing root and answers its kernel-real path", () => {
+		fixtureDir = fixtureRoot("prepush-tmp-create-");
+		const root = path.join(fixtureDir, "nested", "prepush-tmp");
+		expect(fs.existsSync(root)).toBe(false);
+		expect(ensurePrePushTmpRoot(root)).toBe(fs.realpathSync(root));
+		expect(fs.statSync(root).isDirectory()).toBe(true);
+	});
+
+	it("resolves a symlinked root, so the /var spelling cannot recur", () => {
+		fixtureDir = fixtureRoot("prepush-tmp-link-");
+		const real = path.join(fixtureDir, "real");
+		const linked = path.join(fixtureDir, "linked");
+		fs.mkdirSync(real);
+		fs.symlinkSync(real, linked, "dir");
+		expect(ensurePrePushTmpRoot(linked)).toBe(fs.realpathSync(real));
 	});
 });
 
