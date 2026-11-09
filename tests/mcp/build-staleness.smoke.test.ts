@@ -173,7 +173,7 @@ describe("warm build-staleness guard (real spawn)", { retry: 2 }, () => {
 		const res = await harness.request(11, "tools/call", {
 			name: "pilens_module_report",
 			arguments: {
-				file: path.join(workspace, "big-source.ts"),
+				path: path.join(workspace, "big-source.ts"),
 				view: "full-json",
 			},
 		});

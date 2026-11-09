@@ -19,10 +19,7 @@ import {
 	serializeWordIndex,
 } from "../../clients/word-index.js";
 import { SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL } from "../../clients/lens-engine.js";
-import {
-	SYMBOL_SEARCH_DESCRIPTION,
-	SYMBOL_SEARCH_QUERY_DESCRIPTION,
-} from "../../tools/symbol-search.js";
+import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import {
 	flushProjectSnapshotPersistsForTests,
 	PROJECT_SNAPSHOT_VERSION,
@@ -139,7 +136,10 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		).tools;
 		const entry = tools.find((tool) => tool.name === "pilens_symbol_search");
 		expect(entry?.description).toBe(
-			translateGuidanceToolNames(SYMBOL_SEARCH_DESCRIPTION, "mcp"),
+			translateGuidanceToolNames(
+				createSymbolSearchTool(() => "/").description,
+				"mcp",
+			),
 		);
 		expect(entry?.description).toContain("ext:test.ts");
 		// MCP registers pilens_module_report; a bare module_report names no MCP
@@ -192,7 +192,12 @@ describe("pilens_symbol_search over MCP (tiny project, pre-seeded index)", () =>
 		).tools;
 		const entry = tools.find((t) => t.name === "pilens_symbol_search");
 		expect(entry?.inputSchema.properties?.query?.description).toBe(
-			SYMBOL_SEARCH_QUERY_DESCRIPTION,
+			(
+				createSymbolSearchTool(() => "/").parameters.properties
+					.query as unknown as {
+					description?: string;
+				}
+			).description,
 		);
 	}, 30_000);
 

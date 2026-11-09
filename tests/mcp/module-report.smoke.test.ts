@@ -120,7 +120,7 @@ describe("pilens_module_report on an old, warm review graph (#5137)", () => {
 	it("appends the graph-age line to the default text cell", async () => {
 		const res = await harness.request(20, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: path.join(projectDir, "a.ts") },
+			arguments: { path: path.join(projectDir, "a.ts") },
 		});
 		expect(textOf(res)).toContain(
 			"Review graph last updated 1h ago; run pilens_analyze",
@@ -136,7 +136,7 @@ describe("pilens_module_report on an old, warm review graph (#5137)", () => {
 		const text = textOf(
 			await harness.request(21, "tools/call", {
 				name: "pilens_module_report",
-				arguments: { file, maxRefsPerSymbol: 3 },
+				arguments: { path: file, maxRefsPerSymbol: 3 },
 			}),
 		);
 		// The default format is text, and the promoted cell carries the cx: metric
@@ -146,7 +146,7 @@ describe("pilens_module_report on an old, warm review graph (#5137)", () => {
 		const json = textOf(
 			await harness.request(22, "tools/call", {
 				name: "pilens_module_report",
-				arguments: { file, maxRefsPerSymbol: 3, view: "summary-json" },
+				arguments: { path: file, maxRefsPerSymbol: 3, view: "summary-json" },
 			}),
 		);
 		// The promotion keeps the requested JSON format and the full fields.
@@ -194,7 +194,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 	it("answers pilens_module_report with a navigable report (read-only, source none)", async () => {
 		const res = await harness.request(10, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: path.join(projectDir, "a.ts"), view: "full-json" },
+			arguments: { path: path.join(projectDir, "a.ts"), view: "full-json" },
 		});
 		const report = parseReport(res);
 		expect(report.available).toBe(true);
@@ -209,7 +209,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 	it("answers pilens_module_report with the JSON cell for the json alias (#5372)", async () => {
 		const res = await harness.request(18, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: path.join(projectDir, "a.ts"), view: "json" },
+			arguments: { path: path.join(projectDir, "a.ts"), view: "json" },
 		});
 		// The alias serves the parseable JSON document, not the text cell:
 		// parseReport throws on the text cell's non-JSON payload.
@@ -221,7 +221,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 	it("MCP default text matches pi byte for byte (no JSON fence)", async () => {
 		const res = await harness.request(15, "tools/call", {
 			name: "pilens_module_report",
-			arguments: { file: path.join(projectDir, "a.ts") },
+			arguments: { path: path.join(projectDir, "a.ts") },
 		});
 		const mcpText = textOf(res);
 		expect(mcpText).not.toContain("```json");
@@ -243,7 +243,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 	it("answers pilens_read_symbol with the verbatim body", async () => {
 		const res = await harness.request(11, "tools/call", {
 			name: "pilens_read_symbol",
-			arguments: { file: path.join(projectDir, "a.ts"), symbol: "foo" },
+			arguments: { path: path.join(projectDir, "a.ts"), symbol: "foo" },
 		});
 		expect((res.result as { isError?: boolean }).isError).toBeFalsy();
 		const text = textOf(res);
@@ -254,7 +254,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 	it("embeds did-you-mean suggestions on a near-miss (#523)", async () => {
 		const res = await harness.request(12, "tools/call", {
 			name: "pilens_read_symbol",
-			arguments: { file: path.join(projectDir, "a.ts"), symbol: "fooo" },
+			arguments: { path: path.join(projectDir, "a.ts"), symbol: "fooo" },
 		});
 		expect((res.result as { isError?: boolean }).isError).toBe(true);
 		expect(textOf(res)).toContain("foo");
@@ -267,7 +267,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 		const mismatch = await harness.request(16, "tools/call", {
 			name: "pilens_read_symbol",
 			arguments: {
-				file: path.join(projectDir, "a.ts"),
+				path: path.join(projectDir, "a.ts"),
 				symbol: "foo",
 				kind: "class",
 			},
@@ -279,7 +279,7 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 		mkdirSync(path.join(projectDir, "dir.ts"));
 		const unreadable = await harness.request(17, "tools/call", {
 			name: "pilens_read_symbol",
-			arguments: { file: path.join(projectDir, "dir.ts"), symbol: "foo" },
+			arguments: { path: path.join(projectDir, "dir.ts"), symbol: "foo" },
 		});
 		expect((unreadable.result as { isError?: boolean }).isError).toBe(true);
 		expect(textOf(unreadable)).toContain("Could not inspect dir.ts:");
@@ -295,14 +295,14 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 		);
 		const miss = await harness.request(13, "tools/call", {
 			name: "pilens_read_symbol",
-			arguments: { file: path.join(projectDir, "bad.py"), symbol: "after" },
+			arguments: { path: path.join(projectDir, "bad.py"), symbol: "after" },
 		});
 		expect(textOf(miss)).toContain(
 			"tree-sitter could not parse part of this file",
 		);
 		const hit = await harness.request(14, "tools/call", {
 			name: "pilens_read_symbol",
-			arguments: { file: path.join(projectDir, "bad.py"), symbol: "good" },
+			arguments: { path: path.join(projectDir, "bad.py"), symbol: "good" },
 		});
 		expect(textOf(hit)).not.toContain("could not parse part");
 	}, 30_000);

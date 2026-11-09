@@ -6,9 +6,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
 import * as path from "node:path";
-import { stripSource } from "../support/sweep-kit.js";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { toPosix } from "../../clients/path-utils.js";
 import {
@@ -36,11 +34,7 @@ import {
 	SYMBOL_SEARCH_EMPTY_QUERY_REFUSAL,
 	type SymbolSearchResult,
 } from "../../clients/lens-engine.js";
-import {
-	createSymbolSearchTool,
-	SYMBOL_SEARCH_DESCRIPTION,
-	SYMBOL_SEARCH_QUERY_DESCRIPTION,
-} from "../../tools/symbol-search.js";
+import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
 /** One rendered ranked row: `  1. <path>[ <line>] (score ...)`. */
@@ -115,34 +109,16 @@ function warmWordIndexSnapshot(
 describe("symbol_search tool", () => {
 	it("describes the compound-suffix ext: contract, and the tool owns the sentence (#5136)", () => {
 		const tool = createSymbolSearchTool(() => "/tmp");
-		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);
+		expect(tool.description).toContain(
+			"Find relevant files by ranked identifier search.",
+		);
 		expect(tool.description).toContain("ext:test.ts");
 		expect(tool.description).toMatch(/path suffix/i);
 	});
 
-	it("the MCP pilens_symbol_search description is the imported pi constant (#5136)", () => {
-		const serverSource = readFileSync(
-			new URL("../../mcp/server.ts", import.meta.url),
-			"utf8",
-		);
-		// Comment-blanked code, string contents kept: the specifier is itself a
-		// string literal. A commented-out import or call must not pass (Greptile,
-		// #5282: the raw-source regex accepted `// import { ... }`).
-		const serverCode = stripSource(serverSource, { strings: "keep" });
-		expect(serverCode).toMatch(
-			/import \{[^}]*SYMBOL_SEARCH_DESCRIPTION[^}]*\} from "\.\.\/tools\/symbol-search\.js";/,
-		);
-		// The MCP description is the pi constant routed through the MCP name
-		// translator, so it names pilens_* tools (#5136 F1).
-		expect(serverCode).toMatch(
-			/translateGuidanceToolNames\(\s*SYMBOL_SEARCH_DESCRIPTION\s*,\s*"mcp"\s*\)/,
-		);
-		// No second literal of the sentence: the MCP surface resolves to the same
-		// exported constant the pi tool uses, so the two cannot drift.
-		expect(serverSource).not.toContain(
-			"Find relevant files by ranked identifier search.",
-		);
-	});
+	// #5138 PR 3: the MCP mirror no longer imports a description constant. It
+	// projects the pi tool's own `description` through the MCP name translator,
+	// which `tests/mcp/schema-projection.test.ts` asserts over the live wire.
 
 	it("zero-hit output warns when the index is capped and exposes coverage (#928)", async () => {
 		const env = setupTestEnvironment("pi-lens-symbolsearch-capped-");
@@ -1411,17 +1387,26 @@ describe("symbol_search term-less calls (#5135)", () => {
 			"an unknown lang value refuses with the supported list",
 			"A scope with no terms lists the scoped files.",
 		]) {
-			expect(SYMBOL_SEARCH_QUERY_DESCRIPTION).toContain(needle);
+			const queryDescription = (
+				createSymbolSearchTool(() => ".").parameters.properties
+					.query as unknown as { description?: string }
+			).description;
+			expect(queryDescription).toContain(needle);
 		}
 	});
 
-	it("the tool's own description is the exported constant", () => {
+	it("the tool's own description carries the ranking and query contracts", () => {
 		const tool = createSymbolSearchTool(() => ".");
-		expect(tool.description).toBe(SYMBOL_SEARCH_DESCRIPTION);
+		expect(tool.description).toContain(
+			"Find relevant files by ranked identifier search.",
+		);
 		const querySchema = tool.parameters.properties.query as unknown as {
 			description?: string;
 		};
-		expect(querySchema.description).toBe(SYMBOL_SEARCH_QUERY_DESCRIPTION);
+		expect(querySchema.description).toContain("composable prefix filters");
+		expect(querySchema.description).toContain(
+			"A scope with no terms lists the scoped files.",
+		);
 	});
 });
 

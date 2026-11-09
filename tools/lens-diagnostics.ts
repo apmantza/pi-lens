@@ -60,6 +60,7 @@ import {
 } from "../clients/dispatch/rule-policy.js";
 import { compactRenderResult } from "./render-compact.js";
 import {
+	CONSTRAINED_JSON_SCHEMA_SAMPLING,
 	MAX_PATHS_ENTRIES,
 	PATHS_GLOB_CLAUSE,
 	readFilePath,
@@ -551,6 +552,7 @@ export function createLensDiagnosticsTool(
 			parts.push(`${w} warnings`);
 			return `lens_diagnostics ${mode} — ${parts.join(" · ")}${cacheVerdict === "inconclusive" || cacheVerdict === "unverified" ? ` · ${cacheVerdict}` : ""}${uncheckedSuffix} (${files} files)${coldSuffix}${failedSuffix}`;
 		}),
+		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			source: Type.Optional(
 				Type.String({

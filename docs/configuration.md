@@ -252,7 +252,7 @@ denied server, the tier that contributed it.
 
 ```console
 $ # which servers run for this file, and why
-$ pilens_effective_config file=src/main.rs
+$ pilens_effective_config path=src/main.rs
   ✗ typos — disabled-by-config (global ~/.pi-lens/config.json → /lsp/disabledServers/0)
 ```
 
@@ -329,11 +329,11 @@ Two rules make the rest of the table unambiguous:
   timed out, or failed as well, the notice says so and names the denial beside
   it.
 
-`pilens_effective_config file=Program.cs` reports the runner as denied, with the
+`pilens_effective_config path=Program.cs` reports the runner as denied, with the
 tier and file that denied it, while the language server stays selected:
 
 ```console
-$ pilens_effective_config file=src/Program.cs
+$ pilens_effective_config path=src/Program.cs
   tools:
     lsp          selected
     dotnet-build ✗ disabled-by-config (global ~/.pi-lens/config.json → /dispatch/disabledRunners/0)
