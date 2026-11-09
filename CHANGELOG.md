@@ -16,6 +16,187 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.4.11] - 2026-11-09
+
+### Changed
+
+#### Configuration and flags
+
+- **Numeric knobs now treat 0 as a value and blank as unset.** A blank `PI_LENS_*` number now falls back to its default, and an explicit `0` disables the knobs documented as "0 disables", such as `PI_LENS_LSP_TOUCH_DEBOUNCE_MS` and `PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS`; `PI_LENS_LSP_NAV_CLIENT_WAIT_MS` keeps 0 as its default. A non-numeric or negative value also falls back to the default. The switches `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH` and `PI_LENS_READ_GUARD_LOG_SNAPSHOTS` now read only the exact `0` or `1`, so `false` and `off` stop switching them off. `PI_LENS_SNAPSHOT_PERSIST_SYNC` accepted `1` and `true` before and now accepts only `1`, so `true` stops switching it to sync persistence. (refs #5419)
+
+#### Hosts and integrations
+
+- **`path` is now the only file argument four MCP tools advertise.** `pilens_module_report`, `pilens_read_symbol`, `pilens_read_enclosing` and `pilens_effective_config` take their schema and description from the pi tool definition, which names `path` alone, so a model reading the tool list is never sent to `file` or `filePath`. A `file`-only call to the three read tools is now refused as a missing `path`; `pilens_effective_config` still answers one, with the ignored-argument notice. `pilens_analyze`, `pilens_diagnostics` and `pilens_lsp_navigation` keep both aliases. (refs #5138)
+
+### Fixed
+
+#### Language servers
+
+- **A session rooted at `/` keeps its `lsp.disabledServers` denial.** The LSP session-root registry answered "no config" for every file under a root whose path is the filesystem root (a container's `WORKDIR /`), so a language server the operator had turned off could still attach. It now uses the containment check the rest of that module already used. Four other inline containment checks (C/C++ include resolution, the bundled query root, the LSP root-walk stop directory and the live-peer root match) now go through the shared path helpers. Their answers change only where the old inline check was wrong: a root at `/`, Windows drive and UNC roots, and case-insensitive spellings. (refs #4907)
+
+#### Blockers and sessions
+
+- **A dismissed cascade error stops coming back.** Mark a neighbour's reported error as a false positive and the "still unresolved until a cascade or an edit shows them gone" line drops it on the next turn, instead of repeating at blocker tier until some later check re-reads that file. (refs #5344)
+
+- **A mark copied from a cascade line now hides that error.** The cascade line
+  prints only the first line of an error message, cut at 100 characters, so a
+  false-positive or suppress mark spelled from what the agent was shown hid
+  nothing for a long or multiline error; the error kept reporting every turn.
+  A mark that quotes text two live errors share still hides neither, so naming
+  one message exactly drops that one alone. (refs #5367)
+
+- **Cross-process autoformat nudges keep every file.** Two writes landing in
+  the same tick previously dropped one batch, so an agent could miss the
+  "these files were autoformatted" note about one of them. (refs #5377)
+
+- **An LSP rename no longer costs an extra read after /tree or /fork.** On OpenAI Responses sessions the tool-call id carries a pipe, and the write record of an `lsp_navigation` rename or code action kept that raw id, so a branch move dropped it. The record now keeps the same sanitized id the branch holds, and the next edit of the renamed file is allowed. (refs #5405)
+
+#### Runners and scanners
+
+- **Linters now find a project venv tool once pi trusts the project.** A
+  linter that was skipped because pi had not yet trusted the project now
+  checks again after trust is granted, so a project `.venv` ruff runs in the
+  same session. In a trusted project, the project's own `.venv` or
+  `node_modules/.bin` copy of a linter now runs ahead of pi-lens's managed
+  copy and the one on PATH; a project copy that cannot start falls back to
+  them. Twelve linters (yamllint, markdownlint, stylelint and others) also
+  stop re-running their version check on every edit when the tool is present
+  but broken. (refs #5410)
+
+- **A linter that hangs now costs one timeout per session, not one per edit.**
+  Any linter whose run times out is skipped for the rest of the session
+  before it spawns or checks its version again, and the skip is reported
+  once. A slow linter that runs after the edit no longer starts a second copy
+  while one is still running: edits made meanwhile get one rerun per file
+  once the first run ends. (refs #5413)
+
+- **A truncated gitleaks or trivy report now reports a failed scan, not a clean one.** A report the scanner could not read used to read as "no secrets or vulnerabilities found"; it now leaves a failed result and a `security-scan-report-failed` health row that names the unreadable report, as jscpd and opengrep already did. An empty report file still reads as an empty run. (refs #5447)
+
+- **Autofix now skips a tool that timed out for the rest of the session.** Later edits no longer wait out another 30 second budget on that tool.
+  (refs #5376)
+
+- **Config-gated linters now agree on whether your project has config.** The detekt runner now finds a config at the repo root from a Gradle module, and tflint receives a `.tflint.hcl` that sits in your home directory. Black and ruff config is read from TOML table headings and requirement names, so a commented `[tool.ruff]` or a `flake8-black` entry no longer counts. The `effective_config` tool reports `no-project-config` for a linter that declares it needs project config and would skip (eslint, mypy, detekt, golangci-lint, phpstan, credo, vale), and the SQL lint policy no longer claims it needs config. (refs #5408)
+
+- **A failed jscpd run is recorded, and an opengrep run with no report is empty.** Opengrep and jscpd each ran their
+  own copy of the report file rules, so the same run read differently per
+  scanner. An opengrep scan that exited 0 and wrote no report read as a
+  failure, and a jscpd run that never started, or wrote a report it could not
+  read, came back empty and left no record. All four scanners now share one
+  verdict: a clean run with no report is an empty scan that claims no files,
+  and every other outcome is a failure with its reason on the record. (refs #5411)
+
+- **Unreadable output and timeouts now read the same across linters.** A nonzero exit with output its parser cannot parse at all is a parse error for vale, SwiftLint, spellcheck, taplo and detekt, as it already was for ruff, and a nonzero prisma exit that printed nothing is a skip. A timeout in helm or clippy is a run that did not finish, as it is for SwiftLint. For vale, SwiftLint, spellcheck, taplo and detekt, a valid report that names only other files still reads clean. Ruff, credo and shellcheck no longer lose their findings to a warning printed on stderr, and opengrep reads a complete report whatever its exit status. (refs #5411)
+
+- **Information-level findings now count as advisory warnings on every path.** Pyright information findings were warnings through the CLI and `none` through the language server, so the copy the dispatcher kept depended on which lane answered. A finding with no rule also took its identity from its line alone, so a second finding on the same line could drop out of the report. (refs #5412)
+
+- **An unused variable, an unused import or an undefined name now blocks whichever linter reports it.** The same finding from two tools is listed once, and a disabled rule or a pre-existing finding in one tool no longer hides or blocks another tool's copy. (refs #5416)
+
+- **A fixer that rewrites a file and then exits nonzero is now recorded as a change.** The autofix and formatter paths compare the bytes, not the exit code, so the rewritten file is refreshed and resynced to the language server. `ast_grep_replace`, language-server workspace edits and `lens_diagnostic_mark` refuse files outside the session's writable roots and record the files an interrupted `ast_grep_replace` already rewrote. Under `no-autofix`, `ast_grep_replace` previews but refuses `apply: true`, and a language-server rename that touches a vendor path such as `node_modules` is refused whole. (refs #5417)
+
+- **`.mts` and `.cts` files now count as source.** The startup source count, the duplicate-code (jscpd) re-scan and walk gate, and the review-graph module walk each kept a hand-written extension list that left out ES-module and CommonJS-module TypeScript; they now answer through the language registry's JS/TS source check. `.mjs` and `.cjs` files also now count at the startup file-limit count, in the review-graph walk and at the circular-dependency root gate. Circular-dependency scanning of `.mts` and `.cts` still waits on madge reading those extensions. (refs #5446)
+
+#### Rules
+
+- **The ast-grep rules pi-lens dispatches load on ast-grep 0.51.1 and later.** Those versions refuse a rule file with a top-level key outside the rule schema, which stopped the whole rule set from loading. The 218 rules that carried `tags`, `examples`, `has_fix` or the vendored CodeRabbit `ast-grep-essentials` marker at top level now keep them under `metadata:`, and what each rule matches is unchanged. (refs #5424)
+
+#### Tools and reports
+
+- **A mark on a finding's own file now hides it in cached reports.** A chart-level finding recorded under the edited file's session record (helm-lint reporting `Chart.yaml`) honored marks made on the edited file's path and ignored its own; `lens_diagnostics mode=all`/`delta` and the footer's tags now anchor on the file each finding names. A cited file that moved after the finding was observed, or that sits outside the project or cannot be read, no longer suppresses that row. (refs #5044)
+
+- **Esc now stops the child processes a pi-lens tool call started.** `ast_grep_outline` and `ast_grep_replace` kill their ast-grep run when the call is aborted instead of running it to the end. An aborted `ast_grep_replace` apply changes no file when the abort lands before the write starts, and finishes the write when it lands during it. Tool installs and shared availability checks still run to completion. (refs #5097)
+
+- **`symbol_search` now lists the files that a term-less filter matches.** A call with `paths`, `lang`, or an inline `lang:`, `file:` or `ext:` filter and no search terms lists the matching files instead of answering that nothing matched. A call with neither terms nor scope is now an error that says so, on the pi tool and over MCP alike. An unknown `lang` value is refused with the accepted file kinds and language ids, even when no term has hits or the index is still building. Inline `lang:` also accepts language ids such as `typescript` and `dockerfile`, and `lang:css`, `lang:json` and `lang:terraform` still match `.scss`, `.jsonc` and `.tfvars` files. (refs #5135)
+
+- **A file no check completed on is no longer reported as clean.** `lens_diagnostics` now names such files as not checked instead of opening with "No issues ✓", the footer stops counting kinds nothing can check, and `pi-lens-analyze` and `pilens_analyze` print the reason instead of exiting silent. The default cold hook pass over TypeScript now prints a not-checked line, because it runs without a language server. One wording now covers a file no language server handles, and the mode=full sweep names an enabled opt-in server as not run. (refs #5287)
+
+- **A second distinct warning is no longer dropped.** Two notices whose text shared their first 200 characters were treated as one event, so the second was never shown; a long checkout, fixture or `TMPDIR` path made that likely, and the shown notice stays the same length as before. (refs #5359)
+
+- **A `paths` glob now finds the same files in every tool.** `paths: ["src/**/*.ts"]` searched the workspace in `symbol_search`, reached the ast-grep CLI as a file name and answered "No matches found", and on `source=lsp` reported `path not found`. A glob now expands once against the call's own root. A path that exists is always a literal, so `app/[id]/page.tsx` keeps working. A glob that matches nothing says `no file matches`, one rooted outside the workspace is refused, and an entry starting with `!` is refused. (refs #5371)
+
+- **Tool view and maxLines parameters now answer the same on pi and MCP.** `view:"json"` returns JSON on `module_report`, `project_report` accepts the known JSON preset names (`json`, `summary-json`, `full-json`) as its JSON hatch, and `read_enclosing` clamps `maxLines` to a floored minimum of 1 in the engine, so pi and MCP report the same number.
+  (refs #5372)
+
+- **Every file a `mv -t` move renames stays tracked.** `mv -t DIR a b` and `mv --target-directory=DIR a b` reported only the first moved file, so a later edit of the others was refused as a file never read and the paths they moved to were not recorded as written; both argument orders now report every source and every destination. (refs #5378)
+
+- **The performance report no longer ranks waiting time as slow work.** Phases that record how long ago something happened, such as a document drift age or the time since process start, now write that value as `ageMs` and are left out of the slowest-phase ranking, including in older logs. (refs #5379)
+
+- **`pilens_health` now gives offline zizmor scans and failed PowerShell runs their own names.** Two report groups each mixed two unrelated causes: zizmor running without a GitHub token shared a group with a notice the terminal mode could not show, and a refused grammar download shared one with a blocked PowerShell analysis run. Each cause has its own name now, so the group a reader sees says which one happened. Rows written before the split keep their earlier names and still appear. (refs #5400)
+
+- **Three successful edits to one file no longer warn as thrashing.** The 🔴 THRASHING line means the same call keeps repeating with no progress, and it now checks the call itself: a successful call that ran with the same arguments as the call before it counts as no progress. Edits that each change the file, and reads at different offsets, are progress, so a working sequence stays quiet while identical successful retries still warn. (refs #5429)
+
+- **A stuck retry loop now shows the THRASHING warning.** Repeating the same failing edit three times renders 🔴 THRASHING on that failing result, instead of only when a later retry happens to succeed. (refs #5434)
+
+#### Configuration and flags
+
+- **A session started in a package directory keeps the repo root's project settings.**
+  `.pi-lens.json` layers upward field by field now: a package config that sets
+  one key no longer drops the root's `autofix.enabled`, `maxProjectFiles`,
+  `tools.*.enabled`, `trivy.enabled` or any other field, and the nearest file
+  still wins each key it sets. The turn-off lists (`rules.<id>.disable`,
+  `lsp.disabledServers`, `dispatch.disabledRunners`) merge as the union of
+  every file, so a nested config can add a denial but never re-enable one.
+  The layering stops at the git root: a `.pi-lens.json` in a folder above the
+  repository is never merged in. (refs #5291)
+
+#### Install and updates
+
+- **A failed `which` or `where` no longer marks pnpm, yarn, bun, npm or Java as absent.** The package-manager and Java probes now read a finder that could not spawn (EACCES, EMFILE) as a transient rejection and re-probe after the cooldown, as the formatter probe already did; before, one such failure latched the tool as not installed until the next session. (refs #4907)
+
+#### Hosts and integrations
+
+- **The deferred-tools log field now states how the host sends this model's tools.**
+  The `tool_set_mutation` row in `latency.log` reported that capability as
+  false on every supported pi host, because it read a compat flag only the
+  long-unsupported pi 0.80.10 build shipped. It now reports true exactly when
+  pi's own transport leaves the request's tool list empty or partial — the
+  Responses-family tool-search gate, the Responses-family additional-tools
+  gate, the Anthropic mid-conversation tool-change gate, and the
+  chat-completions tool-additions gate — and false when the host resends the
+  full tool list on every turn. (refs #5361)
+
+### Internal
+
+<details>
+<summary>18 internal changes: tests, CI, tooling, and refactors</summary>
+
+- The two refusal vocabularies in `clients/language-registry.ts` now sort with `compareOrdinal`, clearing master's SonarCloud S2871 red; the order of today's kinds and language ids is unchanged (refs #5135).
+
+- Ledger-subject assertions in the #4530 trust suite, the #4760 auxiliary-root decline, the bare-`tsc` trust refusal, the pi-agent staging-root decline, and the two #4535 disk-change rows now compare the `degradation-ledger`'s bounded subject instead of the raw `kind:path` key, so a long checkout or TMPDIR no longer reddens them in the pre-push hook (refs #5246).
+
+- The release roll (`release-roll.sh`) now runs `node scripts/rollup-changelog.mjs --duplicates <version>` and adds its checklist of likely duplicate entry pairs (one section and area, similar headlines or shared code spans) to the release PR body; it edits nothing. A release can also carry `.changelog/highlights/<version>.md`, which `changelog-extract.mjs --summary` puts on top of the release body (refs #5351).
+
+- Retired ci.yml's `heavy-gate` job (`Heavy advisory gate (advisory)`), `scripts/ci-heavy-gate.mjs` and ci-verdict's deferred-row list. No job had waited on the gate since #5275, and it was never a required check; an older head's gate row still classifies as advisory. (refs #3801)
+
+- CI npm installs retry a transient registry 5xx: every workflow that reaches the npm registry sets `npm_config_fetch_retries` and `npm_config_fetch_retry_maxtimeout` once at its top level (install-smoke adds the `pnpm_config_` pair, which pnpm reads instead), and the four `oven-sh/setup-bun` steps in install-smoke now install `bun@latest` from the npm registry. The fetch gate fails closed on a workflow that installs from npm without the env, on an install step it cannot classify, on a command word it cannot resolve, on any `npm_config_` or `pnpm_config_` override in any case, and on any `uses:` action with no recorded verdict (refs #5420).
+
+- Restores the DegradationKind doc blocks above their own kinds (misplaced by the #2671 sort), pins that each kind's doc names it, and corrects the sha256 comments, the `PI_LENS_LSP_NAV_REQUEST_TIMEOUT_MS` reference row and the shape verdicts (refs #5401).
+
+- The tmp-fixture-hygiene owner-population case no longer asserts on directories it creates. It created `<prefix>population-` for every row of `tests/config/tmp-fixture-hygiene-baseline.json` and checked that the census saw each prefix, so the setup supplied the value the assertion read. A row whose producer had been deleted always passed. Liveness now comes from the owner's source, and a row with no live producer reds with "remove the admission". The census's owner index reads files through the same scan. (refs #5072)
+
+- `scripts/analyze-pi-lens-logs.mjs` now reports a per-(tool, phase) and per-runner latency distribution in both the text and `--json` outputs. Percentiles are the clamped floor-rank index `clamp(floor(p * n), 0, n - 1)` over the ascending sample, so every reported number is an observed row and, for any group of 20 rows or fewer, p95 equals max. Each group carries count, p50, p95, max and its share of the summed recorded phase spans (nested spans overlap); age rows (the shared span-or-age rule of #5379) are left out of the samples, parent `total` rows and runner skip or pending rows are left out and counted, and a section that truncates says "showing N of M groups". `--limit` below 1 is refused at parse. A ranking of performance work can therefore be read from real sessions' `latency.log` instead of only from the synthetic hot-path sampler (refs #5263).
+
+- One generic packaging gate now reads the published file list: `packedImportResolutionViolations` (`scripts/lib/packed-layout.mjs`) checks every relative `import`, dynamic `import()` and `require` in each packed `.js`/`.mjs`/`.cjs` file against that same list, and `tests/packaging-pack-manifest.test.ts` runs it over the real `npm pack` tarball. A published script that imports a file `files[]` omits fails in the Unit tests shards instead of CI's install leg, so the per-file pins it subsumes (#1926, #2626, #3409, #4314, #4789) are deleted. (refs #5365)
+
+- CI downloads of the pinned release binaries and the TLA+ jar go through one fetch-verified helper: restored from actions/cache by tool, version and sha256, fetched with `--fail` and retries on a miss, and verified before use. A GitHub 504 now names an HTTP error instead of a checksum mismatch. The helper deletes a rejected cache file before it downloads. A governance test refuses any other CI network fetch that has no named admission (refs #5409).
+
+- **The tool registries and the docs now name the same tools.** A parity guard compares the runner registry, `TOOL_EXECUTION_POLICY`, `TOOL_COMMAND_SPECS`, `AUTO_INSTALLABLE_DEFAULT_FORMATTERS` and the installer table with each other, and with the docs lists that name runners and autofix tools. It reds a dangling id, a policy row for a tool no registry has, and a docs name that is not a registered runner. The drift it found was live: two command specs pointed their install pointer at installer entries that never existed, `typstyle` was an auto-installable formatter with no policy row, and `typos`, `phpstan` and `detekt` were probed with neither an installer entry nor a written reason. `docs/language-coverage.md` named `ts-lsp`, `type-safety` and `similarity` as JS/TS dispatch runners, and `docs/features.md` called the Dart autofix `dart-fix`. `TOOL_EXECUTION_POLICY`'s `gate` became `configEligibility`, so the word `gate` means only the per-file policy gate it used to disagree with. The LSP/linter coverage guard's hand list of smart-default linters is derived from that table now, so a new smart-default runner lands in the guard without anyone editing a list. (refs #5418)
+
+- The four path-sensitive test files (`effective-config`, `lens-diagnostic-mark`, `lens-diagnostics`, `lsp-navigation`) now build their temp roots by realpath at each fixture site, as `setupTestEnvironment` does, so a symlinked `TMPDIR` (macOS `/var` to `/private/var`) passes them the way the real root does (refs #5439).
+
+- Routes the last raw separator fold in `index.ts` (the `lens-health` sample path) through `toPosix`, and empties the shape-A census pin in `tests/config/path-key-fold-sweep.test.ts`. The output is byte-identical (refs #5401).
+
+- **A `symbol_search` query-metrics instrument measures the D8 acceptance signal over recorded pi sessions (refs #5138)** — `scripts/symbol-search-query-metrics.mjs` reports `emptyRate`, `listedReadRate`, `repeatReadRate`, `drilldownRate` and `unscannableRate` per time window, so each PR in the #5138 sequence can quote a before/after from the append-only session JSONL instead of "metric absent". No runtime path changes; no CI gate.
+
+- Twelve production sites that spelled their own whole-content sha256 of a byte buffer (partial-edit records, review-graph content fingerprints, fix-run restore, read-guard edit snapshots, observed and opaque mutation scans, the opengrep pack refresh, the archive installer integrity check and the grammar pin comparison) now call `hashContentBytes` / `hashFileBytes` in `clients/content-stamp.ts`; digests are unchanged (refs #4907).
+
+- **The dispatcher records a runner's tier observation in one place (refs #4907)** — the collect-later run and the inline run in `clients/dispatch/dispatcher.ts` shared a spelled-twice block (latency observation, `runner_collect_later_tier_flip` row, `runner-collect-later` count); one local `observeRunnerTier` now does it. Rows, counts and tiers are unchanged for every probed project root.
+
+- **The tree-walk census now follows helper modules.** A test that pays a whole-tree walk inside an imported `tests/` helper kept vitest's 5 s default and timed out on the Windows unit leg. The census now derives each helper module's verdicts from its source, fails an unresolvable call closed as a walk, and reads the `it(title, { timeout }, fn)` form; on one tree it counts 399 members where it counted 259, all budgeted (#4967).
+
+- **Four fast-check tests turn the 2026-11-07 property-based probes into regression tests (refs #3995)** — a two-session model for the per-repository commit gate and the per-session change-log stamp (#4952, #4953), a generated-K session-root eviction property (#4734), a generated venv-install property (#5009), and a concurrent-publisher property for the recent-touches record (#5385). Each runs a bounded `numRuns` under seed 5370 and is red on its bug's parent commit. No runtime path changes.
+
+</details>
+
 ## [4.4.10] - 2026-11-06
 
 ### Added
