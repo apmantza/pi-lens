@@ -153,17 +153,22 @@ function hasKindExtension(filePath: string, kind: FileKind): boolean {
 	return KIND_EXTENSIONS[kind].some((candidate) => candidate === extension);
 }
 
-// Fact providers intentionally stay on the ordinary JS/TS source extensions.
-// Vue/Svelte files are classified as jsts for project-wide discovery, but their
-// embedded-language contents are not valid inputs for these tree-sitter facts.
-// Keep that one policy decision here so the function and import providers agree.
+// The ordinary JS/TS source family: the jsts kinds minus Vue/Svelte.
+// Vue/Svelte files are classified as jsts for project-wide discovery, but
+// their embedded-language contents are neither valid inputs for the
+// tree-sitter fact providers nor source for the bulk scanners (jscpd, the
+// startup count, the review-graph walk). madge keeps its own list
+// (`MADGE_EXTENSIONS`, dependency-checker.ts): it reads what madge reads. #5446: this is the ONE
+// answer to "is this a JS/TS source file" — a scanner that spells
+// `ts|tsx|js|jsx` by hand leaves `.mts`/`.cts` (and `.mjs`/`.cjs`) out.
+// Keep that one policy decision here so every provider and scanner agrees.
 const JSTS_FACT_EXTENSIONS = new Set(
 	KIND_EXTENSIONS.jsts.filter(
 		(extension) => ![".vue", ".svelte"].includes(extension),
 	),
 );
 
-/** Whether the JS/TS fact providers should parse this path. */
+/** Whether `filePath` is JS/TS source, by the registry's jsts extensions. */
 export function isJstsFactFile(filePath: string): boolean {
 	return JSTS_FACT_EXTENSIONS.has(extname(filePath).toLowerCase());
 }

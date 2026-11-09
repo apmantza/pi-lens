@@ -1068,7 +1068,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 29 -> 30 (#3435): the single-file lane now derives its base with
 		// `path.dirname(target)` instead of passing `projectRoot` through — one
 		// more `path` use, same sense (a path operation).
-		"clients/dependency-checker.ts": 28,
+		// 28 -> 29 (#5446): the root gate reads the extension with `path.extname`.
+		"clients/dependency-checker.ts": 29,
 		"clients/diagnostic-dispositions.ts": 10,
 		"clients/diagnostic-logger.ts": 3,
 		"clients/diagnostics-publish.ts": 6,
