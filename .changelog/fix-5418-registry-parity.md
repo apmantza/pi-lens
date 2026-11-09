@@ -1,0 +1,6 @@
+---
+section: Fixed
+audience: internal
+---
+
+- **The tool registries and the docs now name the same tools.** A parity guard compares the runner registry, `TOOL_EXECUTION_POLICY`, `TOOL_COMMAND_SPECS`, `AUTO_INSTALLABLE_DEFAULT_FORMATTERS` and the installer table with each other, and with the docs lists that name runners and autofix tools. It reds a dangling id, a policy row for a tool no registry has, and a docs name that is not a registered runner. The drift it found was live: two command specs pointed their install pointer at installer entries that never existed, `typstyle` was an auto-installable formatter with no policy row, and `typos`, `phpstan` and `detekt` were probed with neither an installer entry nor a written reason. `docs/language-coverage.md` named `ts-lsp`, `type-safety` and `similarity` as JS/TS dispatch runners, and `docs/features.md` called the Dart autofix `dart-fix`. `TOOL_EXECUTION_POLICY`'s `gate` became `configEligibility`, so the word `gate` means only the per-file policy gate it used to disagree with. The LSP/linter coverage guard's hand list of smart-default linters is derived from that table now, so a new smart-default runner lands in the guard without anyone editing a list. (refs #5418)

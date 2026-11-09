@@ -167,6 +167,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	"tests/config/glossary-synonym-sweep.test.ts",
 	// #4312: literal runner references must resolve after registry renames.
 	"tests/config/runner-group-id-census.test.ts",
+	// #5418: walks clients/dispatch/runners for every CLI a runner probes through
+	// `createAvailabilityChecker`, so a probe with no installer entry and no
+	// written reason reds (the same registry-parity guard also reads the docs).
+	"tests/config/registry-parity.test.ts",
 	// #5408: walks clients/dispatch/runners for modules that read the
 	// filesystem or climb directories instead of asking the config-presence seam.
 	"tests/config/runner-config-presence-census.test.ts",
