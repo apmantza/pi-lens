@@ -1298,8 +1298,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// before launching, one filesystem path use in the reviewed fix.
 		// 111 -> 112 (#5335): `TypeScriptRoot` takes the agent directory's real
 		// path for an explicit agent tsconfig, one `path.dirname` use.
-		"clients/lsp/server.ts": 112,
-		"clients/lsp/session-roots.ts": 8,
+		"clients/lsp/server.ts": 111,
+		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
 		// 12 -> 11 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
@@ -1434,7 +1434,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 33 -> 36 (#4346): the importer pass names a created file by its stem
 		// and directory; 36 -> 33 (#4346 final lane): that name test moved to
 		// import-resolvers.ts `fileAnswerNames`, shared with the LSP cache.
-		"clients/review-graph/builder.ts": 32,
+		"clients/review-graph/builder.ts": 31,
 		"clients/review-graph/format.ts": 4,
 		// 10 -> 11 (#4508): the walk joins the `.git` entry and its HEAD.
 		"clients/review-graph/git-identity.ts": 11,
@@ -1561,7 +1561,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/tree-sitter-logger.ts": 2,
 		// 11 -> 18 (#3930 r2): the loader's complete rule fingerprint walks
 		// language rule directories and normalizes their paths.
-		"clients/tree-sitter-query-loader.ts": 18,
+		"clients/tree-sitter-query-loader.ts": 17,
 		"clients/tree-sitter-shared.ts": 2,
 		"clients/tree-sitter-symbol-extractor.ts": 3,
 		// 4 -> 5 (#4617 review F1): a rendered trivy report cites its own rows'
