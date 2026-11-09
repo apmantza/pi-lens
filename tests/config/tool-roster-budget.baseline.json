@@ -59,9 +59,9 @@
 		}
 	},
 	"mcp": {
-		"budget": 20819,
+		"budget": 20842,
 		"descriptionTotal": 3878,
-		"schemaTotal": 15048,
+		"schemaTotal": 15069,
 		"tools": {
 			"pilens_analyze": {
 				"description": 98,
@@ -97,7 +97,7 @@
 			},
 			"pilens_module_report": {
 				"description": 554,
-				"schema": 1766
+				"schema": 1773
 			},
 			"pilens_project_report": {
 				"description": 491,
@@ -113,7 +113,7 @@
 			},
 			"pilens_read_symbol": {
 				"description": 288,
-				"schema": 682
+				"schema": 689
 			},
 			"pilens_rebuild": {
 				"description": 102,
@@ -129,7 +129,7 @@
 			},
 			"pilens_symbol_search": {
 				"description": 467,
-				"schema": 1241
+				"schema": 1248
 			},
 			"pilens_turn_end": {
 				"description": 91,
