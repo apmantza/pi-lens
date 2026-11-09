@@ -152,7 +152,7 @@ describe("result contract across registered tool surfaces", () => {
 					symbol: "enclosing",
 				},
 				read_enclosing: { path: path.join(cwd, "fixture.ts"), line: 2 },
-				effective_config: { file: "fixture.ts" },
+				effective_config: { path: "fixture.ts" },
 			};
 
 			// #3749: the MCP dispatcher reports any argument key a tool's schema does
@@ -379,7 +379,7 @@ describe("result contract across registered tool surfaces", () => {
 		expect(piFigures.bytes).toBe(piFigures.measured);
 		const mcpResult = await mcp.request(150, "tools/call", {
 			name: "pilens_read_symbol",
-			arguments: { ...args, file: args.path },
+			arguments: args,
 		});
 		const mcpFigures = readByteFigures(
 			(mcpResult.result as ToolResult).content?.[0]?.text,
