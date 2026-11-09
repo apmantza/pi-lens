@@ -33,7 +33,7 @@
  * process across a real cooldown, unlike lane 1's session-durable latches):
  *   1. Fixture `gh` HANGS past the probe budget -> `resolveZizmorGitHubToken()`
  *      times out -> assert transient/latched-false decision AND a degradation
- *      recorded via `incrementDegradationCount` (kind "mode-suppression",
+ *      recorded via `incrementDegradationCount` (kind "zizmor-offline",
  *      subject "zizmor").
  *   2. Immediate second call, still inside the cooldown -> assert it is
  *      served from cache (no new probe) and the SAME degradation entry's
@@ -351,11 +351,11 @@ async function main() {
 			assertEq("phase1 decision.latched", d1.metadata.latched, false);
 		}
 		let summary = getDegradationSummary();
-		let group = summary.find((g) => g.kind === "mode-suppression");
+		let group = summary.find((g) => g.kind === "zizmor-offline");
 		assertTrue(
 			"phase1 degradation group exists",
 			!!group,
-			"no mode-suppression group in the ledger",
+			"no zizmor-offline group in the ledger",
 		);
 		if (group) {
 			assertEq("phase1 degradation count", group.count, 1);
@@ -369,7 +369,7 @@ async function main() {
 		const t2 = await resolveZizmorGitHubToken();
 		assertEq("phase2 token (still cached-unavailable)", t2, undefined);
 		summary = getDegradationSummary();
-		group = summary.find((g) => g.kind === "mode-suppression");
+		group = summary.find((g) => g.kind === "zizmor-offline");
 		assertTrue("phase2 degradation group still exists", !!group);
 		if (group) {
 			// recordDegradationOnce/incrementDegradationCount semantics: ONE
@@ -408,7 +408,7 @@ async function main() {
 		let countBeforeSuccess;
 		do {
 			summary = getDegradationSummary();
-			group = summary.find((g) => g.kind === "mode-suppression");
+			group = summary.find((g) => g.kind === "zizmor-offline");
 			countBeforeSuccess = group?.count ?? 0;
 			t3 = await resolveZizmorGitHubToken();
 			if (t3 !== undefined) break;
@@ -437,7 +437,7 @@ async function main() {
 			`count before the successful call: ${countBeforeSuccess}`,
 		);
 		summary = getDegradationSummary();
-		group = summary.find((g) => g.kind === "mode-suppression");
+		group = summary.find((g) => g.kind === "zizmor-offline");
 		assertEq(
 			"phase4 the successful re-probe call itself added no degradation",
 			group?.count ?? 0,
