@@ -22,7 +22,7 @@ All notable changes to pi-lens will be documented in this file.
 
 #### Configuration and flags
 
-- **Numeric knobs now treat 0 as a value and blank as unset.** A blank `PI_LENS_*` number now falls back to its default, and an explicit `0` disables the knobs documented as "0 disables", such as `PI_LENS_LSP_TOUCH_DEBOUNCE_MS` and `PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS`; `PI_LENS_LSP_NAV_CLIENT_WAIT_MS` keeps 0 as its default. A non-numeric or negative value also falls back to the default. The switches `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH` and `PI_LENS_READ_GUARD_LOG_SNAPSHOTS` now read only the exact `0` or `1`, so `false` and `off` stop switching them off. `PI_LENS_SNAPSHOT_PERSIST_SYNC` accepted `1` and `true` before and now accepts only `1`, so `true` stops switching it to sync persistence. (refs #5419)
+- **Numeric knobs now treat 0 as a value and blank as unset.** A blank `PI_LENS_*` number now falls back to its default, and an explicit `0` disables the knobs documented as "0 disables", such as `PI_LENS_LSP_TOUCH_DEBOUNCE_MS` and `PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS`; `PI_LENS_LSP_NAV_CLIENT_WAIT_MS` keeps its 1500 ms default, and an explicit `0` also waits 1500 ms. A non-numeric or negative value also falls back to the default. The switches `PI_LENS_REVERSE_DEPS_REUSE`, `PI_LENS_GRAPH_SEQ_FASTPATH` and `PI_LENS_READ_GUARD_LOG_SNAPSHOTS` now read only the exact `0` or `1`, so `false` and `off` stop switching them off. `PI_LENS_SNAPSHOT_PERSIST_SYNC` accepted `1` and `true` before and now accepts only `1`, so `true` stops switching it to sync persistence. (refs #5419)
 
 #### Hosts and integrations
 
@@ -83,13 +83,14 @@ All notable changes to pi-lens will be documented in this file.
   failure, and a jscpd run that never started, or wrote a report it could not
   read, came back empty and left no record. All four scanners now share one
   verdict: a clean run with no report is an empty scan that claims no files,
-  and every other outcome is a failure with its reason on the record. (refs #5411)
+  and a missing or unreadable report in any other case is a failure with its
+  reason on the record; a readable report still goes to the parser. (refs #5411)
 
 - **Unreadable output and timeouts now read the same across linters.** A nonzero exit with output its parser cannot parse at all is a parse error for vale, SwiftLint, spellcheck, taplo and detekt, as it already was for ruff, and a nonzero prisma exit that printed nothing is a skip. A timeout in helm or clippy is a run that did not finish, as it is for SwiftLint. For vale, SwiftLint, spellcheck, taplo and detekt, a valid report that names only other files still reads clean. Ruff, credo and shellcheck no longer lose their findings to a warning printed on stderr, and opengrep reads a complete report whatever its exit status. (refs #5411)
 
 - **Information-level findings now count as advisory warnings on every path.** Pyright information findings were warnings through the CLI and `none` through the language server, so the copy the dispatcher kept depended on which lane answered. A finding with no rule also took its identity from its line alone, so a second finding on the same line could drop out of the report. (refs #5412)
 
-- **An unused variable, an unused import or an undefined name now blocks whichever linter reports it.** The same finding from two tools is listed once, and a disabled rule or a pre-existing finding in one tool no longer hides or blocks another tool's copy. (refs #5416)
+- **A new unused variable, unused import or undefined name now blocks whichever linter reports it.** The same finding from two tools is listed once, and a disabled rule or a pre-existing finding in one tool no longer hides or blocks another tool's copy. (refs #5416)
 
 - **A fixer that rewrites a file and then exits nonzero is now recorded as a change.** The autofix and formatter paths compare the bytes, not the exit code, so the rewritten file is refreshed and resynced to the language server. `ast_grep_replace`, language-server workspace edits and `lens_diagnostic_mark` refuse files outside the session's writable roots and record the files an interrupted `ast_grep_replace` already rewrote. Under `no-autofix`, `ast_grep_replace` previews but refuses `apply: true`, and a language-server rename that touches a vendor path such as `node_modules` is refused whole. (refs #5417)
 
