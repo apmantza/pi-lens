@@ -27,6 +27,13 @@ import {
 	toPosix,
 } from "./path-utils.js";
 import { getJscpdMaxEntriesDerived } from "./project-scale.js";
+import { isJstsFactFile } from "./file-kinds.js";
+import { isDeclarationFile } from "./generated-artifacts.js";
+
+// Non-JS/TS source extensions jscpd's tokenizers cover; the JS/TS family
+// answers through the registry seam (`isJstsFactFile`) (#5446).
+const JSCPD_WALK_OTHER_SOURCE =
+	/\.(py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/;
 import {
 	createAvailabilityChecker,
 	findManagedNodeToolBinary,
@@ -251,11 +258,10 @@ export class JscpdClient {
 				// per-call; isIgnored recompiles minimatch patterns per ancestor dir
 				// and should only run for files that already look like source.
 				if (
-					/\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/.test(
-						entry.name,
-					)
+					isJstsFactFile(entry.name) ||
+					JSCPD_WALK_OTHER_SOURCE.test(entry.name)
 				) {
-					if (entry.name.endsWith(".d.ts")) return "skip";
+					if (isDeclarationFile(entry.name)) return "skip";
 					if (ignoreMatcher.isIgnored(fullPath, false)) return "skip";
 					return "stop";
 				}

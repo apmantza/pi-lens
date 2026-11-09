@@ -315,3 +315,105 @@ describe("DependencyChecker.scanProject reads madge's cycle array (#3428)", () =
 		}
 	});
 });
+
+/**
+ * #5446: the `scanProject` root gate answered "does this root hold source
+ * madge reads?" with its own hand-spelled `/\.(ts|tsx|js|jsx)$/`, a second
+ * list beside `buildMadgeArgs`'s `--extensions`. Widening the gate to
+ * `.mts`/`.cts` (round 1) made it admit roots madge 8.0.0 cannot read: a
+ * genuine `a.mts` <-> `b.mts` cycle came back `{circular: [], count: 0,
+ * analyzed: true}`, a false clean that retires saved madge findings
+ * (project-diagnostics/fresh-fetch.ts). One `MADGE_EXTENSIONS` constant now
+ * feeds both the argv and the gate; this suite pins that the gate admits
+ * exactly the extensions the argv hands madge, and that declarations stay
+ * out. Shares this file's availability/spawn mocks (process boundaries
+ * only); the gate itself is the real `scanProject`.
+ */
+describe("DependencyChecker.scanProject root gate admits exactly what madge reads (#5446)", () => {
+	let tmp: string;
+
+	beforeEach(() => {
+		vi.resetAllMocks();
+		tmp = fs.realpathSync(
+			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5446-root-gate-")),
+		);
+		findNodeToolBinary.mockResolvedValue("madge");
+		ensureTool.mockResolvedValue(undefined);
+		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
+			if (args[0] === "--version") return VERSION_OK;
+			return { status: 0, error: null, stdout: "[]", stderr: "" };
+		});
+	});
+
+	afterEach(() => {
+		removeTempDirSync(tmp);
+	});
+
+	function writeRootFiles(names: string[]): void {
+		for (const name of names) {
+			fs.writeFileSync(path.join(tmp, name), "export const a = 1;\n");
+		}
+	}
+
+	function scanSpawns(): unknown[] {
+		return safeSpawnAsync.mock.calls.filter(
+			(c) => (c[1] as string[])[0] !== "--version",
+		);
+	}
+
+	it("does NOT analyse a root whose only sources are .mts/.cts (#5446)", async () => {
+		const { DependencyChecker } =
+			await import("../../clients/dependency-checker.js");
+		writeRootFiles(["index.mts", "dep.mts", "types.cts"]);
+
+		const result = await new DependencyChecker().scanProject(tmp);
+
+		// madge 8.0.0 finds no cycle in .mts/.cts, so `analyzed: true` would
+		// be a false clean. The gate returns the un-analysed empty shape and
+		// never pays the probe or the scan.
+		expect(result.analyzed).toBeFalsy();
+		expect(result.count).toBe(0);
+		expect(safeSpawnAsync).not.toHaveBeenCalled();
+	});
+
+	it("analyses a root whose only source is .mjs (#5446)", async () => {
+		const { DependencyChecker } =
+			await import("../../clients/dependency-checker.js");
+		writeRootFiles(["index.mjs", "dep.mjs"]);
+
+		const result = await new DependencyChecker().scanProject(tmp);
+
+		expect(result.analyzed).toBe(true);
+		expect(scanSpawns()).toHaveLength(1);
+	});
+
+	it("gate admits every extension buildMadgeArgs hands madge, and nothing else (#5446)", async () => {
+		const { DependencyChecker, buildMadgeArgs } =
+			await import("../../clients/dependency-checker.js");
+		const argv = buildMadgeArgs(tmp, tmp);
+		const handed = argv[argv.indexOf("--extensions") + 1].split(",");
+		expect(handed.length).toBeGreaterThan(0);
+
+		for (const ext of new Set([...handed, "mjs", "cjs", "mts", "cts", "py"])) {
+			safeSpawnAsync.mockClear();
+			const root = path.join(tmp, `root-${ext}`);
+			fs.mkdirSync(root);
+			fs.writeFileSync(path.join(root, `index.${ext}`), "x\n");
+			const result = await new DependencyChecker().scanProject(root);
+			expect(result.analyzed === true, `.${ext}`).toBe(handed.includes(ext));
+		}
+	});
+
+	it("skips a root whose only JS/TS files are ambient declarations (#5446)", async () => {
+		const { DependencyChecker } =
+			await import("../../clients/dependency-checker.js");
+		writeRootFiles(["types.d.ts", "types.d.mts", "types.d.cts"]);
+
+		const result = await new DependencyChecker().scanProject(tmp);
+
+		expect(result.analyzed).toBeFalsy();
+		expect(result.count).toBe(0);
+		// No scan spawn: a gated root must not even pay the probe.
+		expect(scanSpawns()).toHaveLength(0);
+	});
+});

@@ -1068,7 +1068,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 29 -> 30 (#3435): the single-file lane now derives its base with
 		// `path.dirname(target)` instead of passing `projectRoot` through — one
 		// more `path` use, same sense (a path operation).
-		"clients/dependency-checker.ts": 28,
+		// 28 -> 29 (#5446): the root gate reads the extension with `path.extname`.
+		"clients/dependency-checker.ts": 29,
 		"clients/diagnostic-dispositions.ts": 10,
 		"clients/diagnostic-logger.ts": 3,
 		"clients/diagnostics-publish.ts": 6,
@@ -1780,7 +1781,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/child-unref.ts": 6,
 		"clients/config-resolve.ts": 11,
 		"clients/dead-code-client.ts": 3,
-		"clients/dispatch/dispatcher.ts": 34,
+		// #5413: the reset-dropped rerun's answer is a `status: "skipped"`
+		// `RunnerResult`, the same member sense as every row here.
+		"clients/dispatch/collect-later-tier.ts": 1,
+		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
+		"clients/dispatch/dispatcher.ts": 35,
 		"clients/dispatch/integration.ts": 1,
 		"clients/dispatch/pending-runner-findings.ts": 1,
 		"clients/dispatch/runners/actionlint.ts": 2,
@@ -1814,7 +1819,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// returns `status: "skipped"` instead of `succeeded` — the same
 		// `RunnerResult.status` member sense as every other row here.
 		"clients/dispatch/runners/lsp.ts": 11,
-		"clients/dispatch/runners/markdownlint.ts": 4,
+		// 4 -> 3 (#5413): the local cooldown skip moved to the dispatcher.
+		"clients/dispatch/runners/markdownlint.ts": 3,
 		"clients/dispatch/runners/mypy.ts": 2,
 		"clients/dispatch/runners/oxlint.ts": 11,
 		"clients/dispatch/runners/php-lint.ts": 2,

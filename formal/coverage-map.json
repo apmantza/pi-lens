@@ -33,7 +33,8 @@
     "blocker-pending",
     "cascade-delivery",
     "test-runner-delivery",
-    "finding-delivery"
+    "finding-delivery",
+    "collect-later-flight"
   ],
   "map": {
     "clients/read-guard.ts": [
@@ -160,6 +161,9 @@
     "mcp/server.ts": "unmodelled",
     "clients/dispatch/dispatcher.ts": [
       "blocker-pending"
+    ],
+    "clients/dispatch/collect-later-tier.ts": [
+      "collect-later-flight"
     ],
     "clients/dispatch/pending-runner-findings.ts": [
       "pending-runner-store"

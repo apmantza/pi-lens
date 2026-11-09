@@ -2716,7 +2716,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/review-graph/builder.ts": 42,
 	// #5289: 9 -> 8. `safeSpawnBatch` (deleted, no caller) held the module's
 	// `await Promise.all(...)`; the other eight awaits are unchanged.
-	"clients/safe-spawn.ts": 8,
+	// #5413: 8 -> 9. `safeSpawnAsync` awaits its own spawn promise to arm the
+	// timeout cooldown after the child settles; that promise is bounded by the
+	// spawn's own timeout, the same budget it already carried.
+	"clients/safe-spawn.ts": 9,
 	// #3612: `adoptHandoff` awaits the own and parent sidecar loads and each
 	// store's restore: the session_start sidecar I/O that read-guard-branch.ts
 	// and index.ts held before.

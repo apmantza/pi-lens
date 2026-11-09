@@ -11,6 +11,7 @@
 
 import type { AnalysedRootSignal } from "./analysed-root.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { isDeclarationFile } from "./generated-artifacts.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -40,6 +41,16 @@ export interface CircularDep {
 }
 
 /**
+ * The extensions madge 8 is told to read. The one list feeding both
+ * `buildMadgeArgs`'s `--extensions` and the `scanProject` root gate, so the
+ * gate admits exactly what madge reads: a root madge cannot read must come
+ * back un-analysed, never `analyzed: true` with an empty cycle list (#5446).
+ * `.mts`/`.cts` stay out: madge 8.0.0 finds no cycle in them even when
+ * listed.
+ */
+const MADGE_EXTENSIONS = ["ts", "tsx", "js", "jsx", "mjs", "cjs"] as const;
+
+/**
  * Build madge's argv for a circular-dependency scan.
  *
  * Two correctness levers beyond the bare `--circular`:
@@ -52,7 +63,7 @@ export interface CircularDep {
  *     non-TS / alias-free projects are unaffected.
  */
 export function buildMadgeArgs(target: string, projectRoot: string): string[] {
-	const args = ["--circular", "--extensions", "ts,tsx,js,jsx,mjs,cjs"];
+	const args = ["--circular", "--extensions", MADGE_EXTENSIONS.join(",")];
 	const tsConfig = path.join(projectRoot, "tsconfig.json");
 	if (fs.existsSync(tsConfig)) {
 		args.push("--ts-config", tsConfig);
@@ -1073,8 +1084,13 @@ export class DependencyChecker {
 			return { circular: [], count: 0 };
 		}
 		const entries = fs.readdirSync(projectRoot);
+		// #5446: admit exactly the extensions madge reads (`MADGE_EXTENSIONS`);
+		// declarations stay out.
 		const hasSourceFiles = entries.some(
-			(e) => /\.(ts|tsx|js|jsx)$/.test(e) && !e.endsWith(".d.ts"),
+			(e) =>
+				(MADGE_EXTENSIONS as readonly string[]).includes(
+					path.extname(e).slice(1),
+				) && !isDeclarationFile(e),
 		);
 		if (!hasSourceFiles) {
 			return { circular: [], count: 0 };
