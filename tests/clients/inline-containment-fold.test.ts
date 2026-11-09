@@ -16,10 +16,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-	getPiLensGlobalConfigPath,
-	resetGlobalConfigLocationCache,
-} from "../../clients/config-locations.js";
+import { resetGlobalConfigLocationCache } from "../../clients/config-locations.js";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { selectLivePeerInstances } from "../../clients/instance-registry.js";
 import {
@@ -43,16 +40,12 @@ import {
 	BUNDLED_QUERIES_ROOT,
 	computeRuleFilesFingerprint,
 } from "../../clients/tree-sitter-query-loader.js";
-import {
-	createTempFile,
-	pinFixtureHome,
-	setupTestEnvironment,
-} from "./test-utils.js";
+import { useGlobalConfig } from "../support/global-config.js";
+import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 const FS_ROOT = path.parse(process.cwd()).root;
 
 let env: { tmpDir: string; cleanup: () => void };
-let restoreHome: (() => void) | undefined;
 
 beforeEach(() => {
 	env = setupTestEnvironment("pi-lens-containment-fold-");
@@ -61,8 +54,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	restoreHome?.();
-	restoreHome = undefined;
 	resetGlobalConfigLocationCache();
 	resetSessionRootsForTests();
 	resetLSPConfigStateForTests();
@@ -71,16 +62,10 @@ afterEach(() => {
 });
 
 describe("session-root registry (clients/lsp/session-roots.ts)", () => {
+	const setGlobalConfig = useGlobalConfig();
+
 	it("a session rooted at the filesystem root still applies the operator's lsp.disabledServers denial", async () => {
-		const pinned = pinFixtureHome("containment-fold");
-		restoreHome = pinned.restore;
-		resetGlobalConfigLocationCache();
-		const globalConfig = getPiLensGlobalConfigPath();
-		fs.mkdirSync(path.dirname(globalConfig), { recursive: true });
-		fs.writeFileSync(
-			globalConfig,
-			JSON.stringify({ lsp: { disabledServers: ["typos"] } }),
-		);
+		setGlobalConfig({ lsp: { disabledServers: ["typos"] } });
 
 		await initLSPConfig(FS_ROOT);
 
