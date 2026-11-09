@@ -86,6 +86,10 @@ const CONSUMERS = [
 	"tests/config/flag-read-registry-sweep.test.ts",
 	"tests/config/install-kill-switch-census.test.ts",
 	"tests/config/lsp-override-copy-census.test.ts",
+	// #5418: classifies every `createAvailabilityChecker` reference in
+	// clients/dispatch/runners, so a CLI probe that is not a literal call, a
+	// plain import or the bound command-spec form reaches the census as unclassified.
+	"tests/config/registry-parity.test.ts",
 	"tests/config/runner-group-id-census.test.ts",
 	"tests/config/spawn-chokepoint-sweep.test.ts",
 	"tests/config/tree-census-timeout.test.ts",
@@ -194,6 +198,13 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 		count: 1,
 		reason:
 			"#4946: `parameterNames` reads one function's parameter list; nothing is visited",
+	},
+	{
+		file: "tests/config/registry-parity.test.ts",
+		text: "?.children()",
+		count: 1,
+		reason:
+			"#5418: reads ONE call's own argument list to classify its first argument; nothing is visited",
 	},
 	{
 		file: "tests/clients/abort-listener-release-sweep.test.ts",

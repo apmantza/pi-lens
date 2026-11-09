@@ -760,6 +760,9 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/clients/session-state-conformance.test.ts",
 			"tests/config/glossary-synonym-sweep.test.ts",
 			"tests/config/runner-group-id-census.test.ts",
+			// #5418: walks clients/dispatch/runners for every CLI a runner probes,
+			// and docs for the dispatch-runner tables and the autofix list.
+			"tests/config/registry-parity.test.ts",
 			"tests/config/runner-config-presence-census.test.ts",
 			"tests/config/covers-config-claim-sweep.test.ts",
 			"tests/config/shell-dialect-ownership-sweep.test.ts",
