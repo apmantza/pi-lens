@@ -40,6 +40,7 @@ vi.mock("../../clients/safe-spawn.js", () => ({
 
 import {
 	getDegradationSummary,
+	recordDegradation,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import {
@@ -225,12 +226,37 @@ describe("offline-mode degradation observability (#1535, #1459)", () => {
 		expect(await resolveZizmorGitHubToken()).toBeUndefined();
 
 		const summary = getDegradationSummary();
-		const zizmorGroup = summary.find((g) => g.kind === "mode-suppression");
+		const zizmorGroup = summary.find((g) => g.kind === "zizmor-offline");
 		expect(zizmorGroup).toBeDefined();
 		expect(zizmorGroup?.latestReasons.at(-1)?.subject).toBe("zizmor");
 		expect(zizmorGroup?.latestReasons.at(-1)?.reason).toMatch(
 			/probe-timeout|host-stall/,
 		);
+	});
+
+	it("gives the offline fallback its own group, not the UI-suppression one (#5400)", async () => {
+		// Pre-split shape: this record went out as "mode-suppression", the kind
+		// index.ts uses for a `ctx.ui.notify` notice a print/json host cannot
+		// render, so one `pilens_health` group mixed a cosmetic headless notice
+		// with an offline scan whose GitHub-aware audits silently did not run.
+		// The kept site (a suppressed notice) and this split site must land in
+		// two groups a reader can tell apart.
+		recordDegradation({
+			kind: "mode-suppression",
+			subject: "ctx.ui.notify",
+			reason: "notify suppressed (json mode)",
+		});
+		safeSpawnAsync.mockResolvedValue(timeoutResult);
+
+		expect(await resolveZizmorGitHubToken()).toBeUndefined();
+
+		const summary = getDegradationSummary();
+		const offline = summary.find((g) => g.kind === "zizmor-offline");
+		expect(offline?.latestReasons.at(-1)?.subject).toBe("zizmor");
+		expect(offline?.latestReasons.at(-1)?.reason).toMatch(/offline/);
+		expect(
+			summary.find((g) => g.kind === "mode-suppression")?.latestReasons,
+		).toEqual([expect.objectContaining({ subject: "ctx.ui.notify" })]);
 	});
 
 	it("does NOT record a degradation for a durable 'not authenticated' answer", async () => {
@@ -241,7 +267,7 @@ describe("offline-mode degradation observability (#1535, #1459)", () => {
 		// A user who genuinely never logged in isn't a degradation — nothing
 		// unexpected happened, so nothing should be recorded for it.
 		const summary = getDegradationSummary();
-		expect(summary.find((g) => g.kind === "mode-suppression")).toBeUndefined();
+		expect(summary.find((g) => g.kind === "zizmor-offline")).toBeUndefined();
 	});
 
 	it("bounds repeated transient degradations to one updated entry (AGENTS.md:144-150)", async () => {
@@ -259,7 +285,7 @@ describe("offline-mode degradation observability (#1535, #1459)", () => {
 		}
 
 		const summary = getDegradationSummary();
-		const group = summary.find((g) => g.kind === "mode-suppression");
+		const group = summary.find((g) => g.kind === "zizmor-offline");
 		expect(group).toBeDefined();
 		// Every cycle contributed to the count...
 		expect(group?.count).toBe(5);
@@ -347,7 +373,7 @@ describe("the silent-cooldown path is now visible (#1535 P2)", () => {
 		expect(await resolveZizmorGitHubToken()).toBeUndefined();
 		expect(tokenDecisions()).toHaveLength(1);
 		const afterProbe = getDegradationSummary().find(
-			(g) => g.kind === "mode-suppression",
+			(g) => g.kind === "zizmor-offline",
 		)?.count;
 		expect(afterProbe).toBe(1);
 
@@ -367,7 +393,7 @@ describe("the silent-cooldown path is now visible (#1535 P2)", () => {
 		});
 
 		const afterCacheHit = getDegradationSummary().find(
-			(g) => g.kind === "mode-suppression",
+			(g) => g.kind === "zizmor-offline",
 		)?.count;
 		expect(afterCacheHit).toBe(2);
 	});

@@ -7,6 +7,12 @@
  * available" for the session. Two changes, asserted here: the spawn goes
  * through `safeSpawnAsync`, and the verdict goes through the availability
  * policy.
+ *
+ * #5400: the three `-File` run-failure records used to go out as
+ * "grammar-blocked", the kind `clients/tree-sitter-client.ts` and
+ * `clients/grammar-source.ts` use for a refused grammar fetch or load, so a
+ * `pilens_health` group mixed a PowerShell execution-policy block with a
+ * blocked grammar download. They now emit their own kind.
  */
 
 import * as fs from "node:fs";
@@ -360,7 +366,7 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 			cause: "policy-denied",
 			latched: true,
 		});
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",
@@ -368,6 +374,9 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 				}),
 			]),
 		);
+		// #5400: this runner shares nothing with a refused tree-sitter grammar
+		// fetch, so it must not write the grammar kind any more.
+		expect(await ledgerReasons("grammar-blocked")).toEqual([]);
 	});
 
 	it("latches the policy block so a later save does not re-spawn -File", async () => {
@@ -396,7 +405,7 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 		);
 		expect(execDecision).toBeDefined();
 		expect(execDecision?.metadata).toMatchObject({ outcome: "transient" });
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",
@@ -545,7 +554,7 @@ describe("psscriptanalyzer exit-0 with unreadable stdout (#1598)", () => {
 		// The pre-fix bug: empty stdout parses to `[]`, and the runner reports
 		// "succeeded" with zero diagnostics -- identical to a real clean file.
 		expect(result.status).not.toBe("succeeded");
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",
@@ -569,7 +578,7 @@ describe("psscriptanalyzer exit-0 with unreadable stdout (#1598)", () => {
 
 		const result = await runner.run(ctx());
 		expect(result.status).not.toBe("succeeded");
-		expect(await ledgerReasons("grammar-blocked")).toEqual(
+		expect(await ledgerReasons("powershell-run-failed")).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
 					subject: "psscriptanalyzer",
