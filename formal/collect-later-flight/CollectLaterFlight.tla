@@ -8,7 +8,7 @@
 (*    a run and claims the key; with a flight it owes one rerun for f,     *)
 (*    replacing any rerun already owed for f (the latest write wins);      *)
 (*  - Settle(r): a run ends (success, failure, timeout and abort are one   *)
-(*    transition here). Its continuation (`drainQueue`) starts the next    *)
+(*    transition here). Its continuation (`startQueued`) starts the next   *)
 (*    owed rerun, or releases the key, but only while its flight still     *)
 (*    owns the key;                                                        *)
 (*  - Reset: session_start (`resetObservedRunnerLatency`). It drops the    *)
@@ -30,7 +30,7 @@ CONSTANTS
     MaxV,      \* writes per file per session
     Mode,      \* "flight" (shipped) | "parallel" (pre-#5413: a run per write)
                \* | "join" (a write shares the running run's answer)
-    Identity   \* "check" (shipped: drainQueue compares its flight with the map)
+    Identity   \* "check" (shipped: startQueued and chain compare the flight with the map)
                \* | "none" (a settling run releases whatever claim it finds)
 
 VARIABLES

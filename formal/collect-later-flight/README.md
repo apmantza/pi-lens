@@ -10,7 +10,7 @@ job (`node scripts/check-tla-models.mjs`) checks them all.
 - **A write** (`runGroup`'s collect-later branch). With no flight it starts a
   run and claims the key; with a flight it owes one rerun for its file, and a
   later write to the same file replaces the owed version.
-- **A settle** (`drainQueue`). Success, failure, timeout and abort are one
+- **A settle** (`startQueued` and `chain`). Success, failure, timeout and abort are one
   transition: the run's answer covers its version, and the continuation starts
   the next owed rerun or releases the key, only while its flight still owns
   the key.
