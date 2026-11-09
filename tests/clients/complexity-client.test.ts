@@ -1,3 +1,4 @@
+import { captureComplexityBaseline } from "../../clients/metrics/complexity-baseline.js";
 import * as containment from "../../clients/symbol-containment.js";
 import { MAX_MEASURED_BYTES } from "../../clients/metrics/complexity-baseline.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +31,25 @@ describe("ComplexityClient.isSupportedFile", () => {
 });
 
 describe("ComplexityClient.analyzeFile — JS/TS", () => {
+	it("assigns first-touch keys only when the delta baseline is read", async () => {
+		const keying = vi.spyOn(containment, "buildQualifiedName");
+		try {
+			const measured = await analyze(
+				"lazy.ts",
+				"class A {\n f() { return 1; }\n}\n",
+			);
+			const baseline = captureComplexityBaseline(measured?.measuredFunctions);
+			expect(measured?.functionCount).toBe(1);
+			expect(keying).toHaveBeenCalledTimes(0);
+			expect([...baseline.last!.keys()]).toEqual(["A.f"]);
+			expect(keying).toHaveBeenCalledTimes(1);
+			expect([...baseline.last!.keys()]).toEqual(["A.f"]);
+			expect(keying).toHaveBeenCalledTimes(1);
+		} finally {
+			keying.mockRestore();
+		}
+	});
+
 	it("keeps first-touch keys at the byte cap and skips them above it", async () => {
 		// V1: read first touches used to key files beyond the edit-path cap.
 		const body = "function f() { return 1; }\n//";

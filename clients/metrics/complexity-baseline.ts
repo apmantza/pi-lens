@@ -269,7 +269,8 @@ export async function readAtDefaultBranch(
  * The first-touch baseline of a file: the functions the `tool_call` measured
  * on disk, before the tool runs (`ComplexityClient.analyzeFile`'s
  * `measuredFunctions`, so the first touch measures the file once, #5443
- * review F6). The default branch's copy waits for the first edit
+ * review F6). Keys and the table wait until a delta reads `last`; capture
+ * retains the measurement without assigning keys. The default branch's copy waits for the first edit
  * ({@link adviseOnEdit}). A file that could not be measured (`undefined`: no
  * bytes yet, unreadable or unparsable) still gets an entry, so the session
  * asks once.
@@ -277,9 +278,12 @@ export async function readAtDefaultBranch(
 export function captureComplexityBaseline(
 	measured: readonly NamedFunctionMetrics[] | undefined,
 ): ComplexityBaseline {
+	let last: FunctionTable | undefined;
 	return {
 		main: undefined,
-		last: measured ? functionTableOf(measured) : undefined,
+		get last() {
+			return (last ??= measured ? functionTableOf(measured) : undefined);
+		},
 	};
 }
 

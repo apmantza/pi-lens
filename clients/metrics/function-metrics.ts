@@ -448,12 +448,12 @@ export const MAX_MEASURED_BYTES = 256 * 1024;
  */
 function assignKeys(
 	functions: Array<Omit<NamedFunctionMetrics, "key">>,
-	nodes: TsNode[],
+	declared: Array<string | undefined>,
+	receivers: Array<string | undefined | null>,
 	containers: Span[],
 	languageId: ComplexityLanguageId,
 ): NamedFunctionMetrics[] {
 	const owners: Span[] = [...containers];
-	const declared = nodes.map((node) => functionName(node));
 	functions.forEach((fn, i) => {
 		const name = declared[i];
 		if (name !== undefined)
@@ -527,11 +527,10 @@ function assignKeys(
 	}
 	const seen = new Map<string, number>();
 	return functions.map((fn, i) => {
-		const node = nodes[i]!;
 		const base = declared[i] ?? ANONYMOUS_KEY;
 		const owner =
-			languageId === "go" && node.type === "method_declaration"
-				? receiverType(node)
+			languageId === "go" && receivers[i] !== null
+				? receivers[i]
 				: ownerNames[i];
 		const qualified = buildQualifiedName(owner, base) ?? base;
 		const count = (seen.get(qualified) ?? 0) + 1;
@@ -548,7 +547,8 @@ export function measureFile(
 ): FileMetrics {
 	const table = TABLES[languageId];
 	const functions: Array<Omit<NamedFunctionMetrics, "key">> = [];
-	const nodes: TsNode[] = [];
+	const declared: Array<string | undefined> = [];
+	const receivers: Array<string | undefined | null> = [];
 	const containers: Span[] = [];
 	const { cognitive, nesting } = tally(root, table, false, (node, type) => {
 		if (keyFunctions && table.containers.has(type)) {
@@ -564,7 +564,14 @@ export function measureFile(
 		// Python's `lambda` keyword token shares its node's type name.
 		if (!table.functions.has(type) || !node.isNamed) return;
 		const line = node.startPosition.row + 1;
-		if (keyFunctions) nodes.push(node);
+		if (keyFunctions) {
+			declared.push(functionName(node));
+			receivers.push(
+				languageId === "go" && type === "method_declaration"
+					? receiverType(node)
+					: null,
+			);
+		}
 		functions.push({
 			name: functionName(node) ?? `<anonymous@L${line}>`,
 			line,
@@ -572,11 +579,26 @@ export function measureFile(
 			...measureFunction(node, languageId),
 		});
 	});
+	// Only plain data escapes the parser lifetime. The first key read runs the
+	// owner pass once for this measurement; aggregate metrics never trigger it.
+	let keyed: NamedFunctionMetrics[] | undefined;
 	return {
 		cognitive,
 		nesting,
-		functions: keyFunctions
-			? assignKeys(functions, nodes, containers, languageId)
-			: functions.map((fn) => ({ ...fn, key: ANONYMOUS_KEY })),
+		functions: !keyFunctions
+			? functions.map((fn) => ({ ...fn, key: ANONYMOUS_KEY }))
+			: functions.map((fn, index) => ({
+					...fn,
+					get key() {
+						keyed ??= assignKeys(
+							functions,
+							declared,
+							receivers,
+							containers,
+							languageId,
+						);
+						return keyed[index]!.key;
+					},
+				})),
 	};
 }
