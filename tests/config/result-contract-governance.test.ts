@@ -541,12 +541,12 @@ describe("result contract across registered tool surfaces", () => {
 			CENSUS = [
 				{
 					mcpName: "pilens_module_report",
-					args: { file: "fixture.ts" },
+					args: { path: "fixture.ts" },
 					shape: "text",
 				},
 				{
 					mcpName: "pilens_module_report",
-					args: { file: "fixture.ts", view: "full-json" },
+					args: { path: "fixture.ts", view: "full-json" },
 					shape: "json",
 				},
 				{ mcpName: "pilens_project_report", args: { limit: 1 }, shape: "text" },
@@ -611,7 +611,7 @@ describe("result contract across registered tool surfaces", () => {
 				},
 				{
 					mcpName: "pilens_effective_config",
-					args: { file: "fixture.ts" },
+					args: { path: "fixture.ts" },
 					shape: "text",
 				},
 			];

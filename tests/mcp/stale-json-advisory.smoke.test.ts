@@ -114,7 +114,7 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 	it("fresh control: a full-json cell parses after the owner footer strip", async () => {
 		await initialize(freshHarness, 1, "fresh-control");
 		const result = await callModuleReport(freshHarness, 2, {
-			file: path.join(freshWorkspace, "small.ts"),
+			path: path.join(freshWorkspace, "small.ts"),
 			view: "full-json",
 		});
 		expect(result.isError).toBeFalsy();
@@ -127,7 +127,7 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		await initialize(staleHarness, 10, "stale-cell");
 		await armStale();
 		const result = await callModuleReport(staleHarness, 11, {
-			file: path.join(staleWorkspace, "small.ts"),
+			path: path.join(staleWorkspace, "small.ts"),
 			view: "full-json",
 		});
 		expect(result.isError).toBeFalsy();
@@ -139,7 +139,7 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		// block; stripping the footer must give back the stale payload block
 		// byte-for-byte. The advisory is the only difference.
 		const freshResult = await callModuleReport(freshHarness, 12, {
-			file: path.join(freshWorkspace, "small.ts"),
+			path: path.join(freshWorkspace, "small.ts"),
 			view: "full-json",
 		});
 		expect(freshResult.isError).toBeFalsy();
@@ -159,7 +159,7 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		await initialize(staleHarness, 20, "stale-ignored");
 		await armStale();
 		const result = await callModuleReport(staleHarness, 21, {
-			file: path.join(staleWorkspace, "small.ts"),
+			path: path.join(staleWorkspace, "small.ts"),
 			view: "full-json",
 			bogusArgument: 1,
 		});
@@ -179,7 +179,7 @@ describe("stale JSON-cell advisory (#5159, real spawn)", { retry: 2 }, () => {
 		await initialize(staleHarness, 30, "stale-truncated");
 		await armStale();
 		const result = await callModuleReport(staleHarness, 31, {
-			file: path.join(staleWorkspace, "big-source.ts"),
+			path: path.join(staleWorkspace, "big-source.ts"),
 			view: "full-json",
 		});
 		expect(result.isError).toBeFalsy();
