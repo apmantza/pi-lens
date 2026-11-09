@@ -5,11 +5,14 @@
 		"local-4715",
 		"local-5333",
 		"local-5413",
-		"local-5469-r2"
+		"local-5469-r2",
+		"local-5469-r3"
 	],
 	"note": "Per-config TLC seconds (median over the source runs), read from `ok|FAIL formal/<family>/<Model>.cfg: ... (Ns)` lines the checker prints. scripts/tla-model-costs.json packs the TLA+ shards with these; a config with no row costs the table's MAX so an unmeasured config can never quietly become the tail.",
 	"files": {
 		"formal/adopted-root-trust/AsBuilt.cfg": 0.918,
+		"formal/adopted-root-trust/LifetimeAsBuilt.cfg": 0.642,
+		"formal/adopted-root-trust/LifetimePreFix.cfg": 0.646,
 		"formal/adopted-root-trust/PreFix.cfg": 0.627,
 		"formal/availability-latch/ClientInstallGenGuard.cfg": 0.8,
 		"formal/availability-latch/ClientInstallStale.cfg": 0.7,

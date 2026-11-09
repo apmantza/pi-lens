@@ -404,6 +404,7 @@ export class ClientRegistry {
 	private clientSpawnGate: Promise<void> = Promise.resolve();
 	/** True after shutdown() has been called; blocks new operations */
 	private isDestroyed = false;
+	private readonly trustShutdown = new AbortController();
 	/**
 	 * #850: teardown completion for every singleton generation retired before
 	 * this service was published. Only replacement services receive one; direct
@@ -432,6 +433,8 @@ export class ClientRegistry {
 	/** The first step of `LSPService.shutdown`: block new operations. */
 	markDestroyed(): void {
 		this.isDestroyed = true;
+		this.trustShutdown.abort();
+		this.adoptedTrust.clear();
 	}
 
 	/** The notify-stall demotion's breaker cooldown (`LSPService.demoteForNotifyStall`). */
@@ -1381,6 +1384,9 @@ export class ClientRegistry {
 
 	private trustForAdoptedRoot(root: string): Promise<ProjectTrustState> {
 		const turn = getTurnId();
+		// Detached tools/background work have no turn that can expire a memo.
+		if (turn === "turn:0")
+			return readAdoptedProjectTrust(root, this.trustShutdown.signal);
 		if (this.adoptedTrustTurn !== turn) {
 			this.adoptedTrust.clear();
 			this.adoptedTrustTurn = turn;
@@ -1388,7 +1394,7 @@ export class ClientRegistry {
 		const key = normalizeMapKey(root);
 		const prior = this.adoptedTrust.get(key);
 		if (prior) return prior;
-		const pending = readAdoptedProjectTrust(root);
+		const pending = readAdoptedProjectTrust(root, this.trustShutdown.signal);
 		this.adoptedTrust.set(key, pending);
 		return pending;
 	}

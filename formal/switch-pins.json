@@ -2832,6 +2832,21 @@
 					"value": "TRUE",
 					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
 					"title": "refuses saved-false adopted Rust under trusted A"
+				},
+				"BoundSdkLoad": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "bounds a held SDK load and retries on the next owning turn"
+				},
+				"RetirementAbort": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "retires a held SDK load before shutdown joins starts"
+				},
+				"DetachedMemoGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "detached diagnostics rereads saved trust after the host turn changes"
 				}
 			}
 		}

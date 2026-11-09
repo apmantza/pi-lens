@@ -47,7 +47,8 @@
   Adopted roots resolve their own pi decision through the host's exported
   `ProjectTrustStore.get`, resource classifier and global `defaultProjectTrust`;
   missing exports refuse project-code servers. The registry reads each root once
-  per turn, and never answers or writes pi trust. Inert servers keep their
+  per owning turn; detached acquisitions reread. SDK loading is deadline-bound
+  and abandoned on registry retirement. It never answers or writes pi trust. Inert servers keep their
   existing adopted-root admission. `tests/clients/lsp/adopted-root-trust-5469.test.ts`
   pins the host/session/root matrix.
   Non-pi process entry points (`mcp/server.ts`, `mcp/worker.ts`,

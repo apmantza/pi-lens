@@ -8,4 +8,8 @@ capability gate. Binary provenance and capacity remain separate existing gates.
 
 AsBuilt checks OwnTrust; PreFix demonstrates borrowing session trust violates it.
 The model abstracts pi's store get and resource detection into input values; it
-does not model filesystem locks, cache lifetime, client reuse or host SDK loading.
+does not model filesystem locks or client reuse. TrustLifetime models a held SDK
+load, rejection/resolution, deadline, registry retirement, and detached rereads
+after saved trust changes. LifetimeAsBuilt checks all three lifetime invariants;
+LifetimePreFix exposes the held-load violation. Owning-turn memo reuse is covered
+by the runtime suite; the lifetime model focuses on the detached cell.

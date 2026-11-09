@@ -29,6 +29,7 @@ import {
 	beginTurnContext,
 	runWithTurnContext,
 } from "../../../clients/turn-context.js";
+import { createLspDiagnosticsTool } from "../../../tools/lsp-diagnostics.js";
 import { readNdjsonRows } from "../../support/ndjson-rows.js";
 
 let base: string, A: string, B: string, agent: string;
@@ -56,6 +57,7 @@ afterEach(async () => {
 	setHostProjectTrustLoader(undefined);
 	resetProjectTrust();
 	resetSessionRootsForTests();
+	vi.useRealTimers();
 	vi.restoreAllMocks();
 	vi.unstubAllEnvs();
 	fs.rmSync(base, { recursive: true, force: true });
@@ -252,6 +254,118 @@ describe("adopted root start decision (#5469)", () => {
 			expect(spawn).toHaveBeenCalledTimes(1);
 		});
 	});
+	it("bounds a held SDK load and retries on the next owning turn", async () => {
+		// Recurrence F1: a pending host import retained the root's in-flight start.
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		saved(B, true);
+		setProjectTrustState("trusted");
+		let release!: (value: typeof sdk) => void;
+		const held = new Promise<typeof sdk>((resolve) => {
+			release = resolve;
+		});
+		const load = vi.fn().mockReturnValueOnce(held).mockResolvedValue(sdk);
+		setHostProjectTrustLoader(load);
+		const { touch, spawn } = setup();
+		await runWithTurnContext("held-5469", async () => {
+			beginTurnContext("held-5469");
+			let settled = false;
+			const first = touch().then(() => {
+				settled = true;
+			});
+			await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+			await vi.advanceTimersByTimeAsync(500);
+			const bounded = settled;
+			// Release even on the old implementation so a red cannot strand teardown.
+			release(sdk);
+			await first;
+			expect(bounded).toBe(true);
+			expect(spawn).not.toHaveBeenCalled();
+			await flushLatencyLog();
+			const { rows, skipped } = readNdjsonRows(getLatencyLogPath());
+			expect(skipped).toBe(0);
+			expect(
+				rows.some(
+					(row) =>
+						row.phase === "degradation_ledger" &&
+						row.filePath === `adopted-trust:${B}` &&
+						(row.metadata as { kind?: unknown })?.kind ===
+							"lsp-registry-decision",
+				),
+			).toBe(true);
+			beginTurnContext("held-5469");
+			await touch();
+			expect(load).toHaveBeenCalledTimes(2);
+			expect(spawn).toHaveBeenCalledTimes(1);
+		});
+	});
+
+	it("retires a held SDK load before shutdown joins starts", async () => {
+		// Recurrence F1: shutdown and generation handoff waited for host import.
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		saved(B, true);
+		setProjectTrustState("trusted");
+		let release!: (value: typeof sdk) => void;
+		const held = new Promise<typeof sdk>((resolve) => {
+			release = resolve;
+		});
+		const load = vi.fn().mockReturnValueOnce(held).mockResolvedValue(sdk);
+		setHostProjectTrustLoader(load);
+		const { service, touch, spawn } = setup();
+		const first = touch();
+		await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+		let retired = false;
+		const stop = service.shutdown().then(() => {
+			retired = true;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		const abandoned = retired;
+		// The singleton passes this same teardown promise to its successor.
+		const replacement = new LSPService(stop, A);
+		services.push(replacement);
+		const next = replacement.getClientForFile(path.join(B, "main.rs"));
+		await vi.advanceTimersByTimeAsync(0);
+		const replacementStarted = spawn.mock.calls.length;
+		release(sdk);
+		await Promise.all([first, stop, next]);
+		expect(abandoned).toBe(true);
+		expect(replacementStarted).toBe(1);
+		expect(load).toHaveBeenCalledTimes(2);
+		expect(spawn).toHaveBeenCalledTimes(1);
+	});
+
+	it("detached diagnostics rereads saved trust after the host turn changes", async () => {
+		// Recurrence F2: direct tool calls retained a refusal under turn:0 forever.
+		resources();
+		saved(B, false);
+		setProjectTrustState("trusted");
+		const load = vi.fn(async () => sdk);
+		setHostProjectTrustLoader(load);
+		const { service, spawn } = setup();
+		const tool = createLspDiagnosticsTool(
+			undefined,
+			undefined,
+			() => service,
+			() => false,
+		);
+		const call = () =>
+			tool.execute(
+				"detached",
+				{ path: path.join(B, "main.rs") },
+				undefined,
+				undefined,
+				{ cwd: A },
+			);
+		await call();
+		expect(spawn).not.toHaveBeenCalled();
+		const reads = load.mock.calls.length;
+		saved(B, true);
+		beginTurnContext("detached-host-5469");
+		await call();
+		expect(load.mock.calls.length).toBeGreaterThan(reads);
+		expect(spawn).toHaveBeenCalled();
+	});
+
 	it("admits LSP transport and refuses compiler fallback", () => {
 		// Recurrence: #5469 stripped the transport before the registry could answer.
 		expect(

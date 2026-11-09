@@ -37,6 +37,8 @@
  * refreshed on each `session_start` and `turn_start`.
  */
 
+import { bounded } from "./deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import { logExtension } from "./extension-log.js";
 import {
 	recordDegradation,
@@ -226,12 +228,19 @@ export function setHostProjectTrustLoader(
 /** Read pi's decision for a foreign cwd without answering or remembering a prompt. */
 export async function readAdoptedProjectTrust(
 	root: string,
+	shutdownSignal?: AbortSignal,
 ): Promise<ProjectTrustState> {
 	if (!loadProjectTrustSdk) return getProjectTrustState();
 	try {
-		const sdk = await loadProjectTrustSdk();
+		const sdk = await bounded(loadProjectTrustSdk(), {
+			ms: HOOK_WALL_BUDGET_MS.tool_result_read_only,
+			signal: undefined,
+			shutdownSignal,
+			hook: "off_hook",
+			label: "adopted-project-trust-sdk",
+		});
 		if (
-			!sdk.ProjectTrustStore ||
+			!sdk?.ProjectTrustStore ||
 			!sdk.getAgentDir ||
 			!sdk.hasTrustRequiringProjectResources ||
 			!sdk.SettingsManager
