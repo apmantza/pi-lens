@@ -10,6 +10,7 @@
  * coordinator, its store and the re-measure are real. The fixture is no
  * repository, so the session's first table stands in for main.
  */
+import * as fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../clients/pipeline.js", () => ({
@@ -21,7 +22,10 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import { complexityBaselineKey } from "../../clients/metrics/complexity-baseline.js";
+import {
+	captureComplexityBaseline,
+	complexityBaselineKey,
+} from "../../clients/metrics/complexity-baseline.js";
 import { runPipeline } from "../../clients/pipeline.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import {
@@ -62,12 +66,22 @@ beforeEach(async () => {
 	env = setupTestEnvironment("pi-lens-5087-tool-result-");
 	runtime = new RuntimeCoordinator();
 	runtime.projectRoot = env.tmpDir;
-	filePath = createTempFile(env.tmpDir, "svc.ts", fn("handle", 17));
+	filePath = createTempFile(env.tmpDir, "svc.ts", fn("handle", 3));
 });
 
 afterEach(() => {
 	env.cleanup();
 });
+
+/**
+ * The `tool_call` of the file's first touch: the table of the bytes on disk is
+ * stored, then the file changes to `next`, as the edit tool does.
+ */
+async function touchThenWrite(next: string): Promise<void> {
+	const baseline = await captureComplexityBaseline(filePath);
+	runtime.complexityBaselines.set(complexityBaselineKey(filePath), baseline!);
+	fs.writeFileSync(filePath, next);
+}
 
 async function edit(
 	result: Record<string, unknown>,
@@ -98,20 +112,38 @@ async function edit(
 
 describe("#5087 the tool_result complexity delta", () => {
 	it("adds the delta to a clean edit", async () => {
+		await touchThenWrite(fn("handle", 17));
 		expect(await edit(CLEAN)).toContain(
-			"⚠ complexity vs session start: handle cc new→18 (≥15)",
+			"⚠ complexity vs session start: handle cc 4→18 (≥15)",
 		);
 	});
 
-	it("waits behind blockers, and keeps no table for the held-back edit", async () => {
+	// A file with no stored entry (evicted, or first written by a bash command)
+	// has no `last`: the edit stores its table and names nothing, even a
+	// function past the threshold that it did not touch.
+	it("names nothing for a file with no stored entry, then judges the next edit", async () => {
+		fs.writeFileSync(filePath, fn("handle", 17));
+		expect(await edit(CLEAN)).not.toContain("complexity vs");
+		expect(
+			runtime.complexityBaselines.has(complexityBaselineKey(filePath)),
+		).toBe(true);
+		fs.writeFileSync(filePath, fn("handle", 18));
+		expect(await edit(CLEAN)).toContain("handle cc 18→19 (≥15)");
+	});
+
+	it("waits behind blockers, and keeps the stored table for the held-back edit", async () => {
+		await touchThenWrite(fn("handle", 17));
+		const stored = runtime.complexityBaselines.get(
+			complexityBaselineKey(filePath),
+		);
 		const text = await edit(BLOCKING);
 		expect(text).toContain("must be fixed");
 		expect(text).not.toContain("complexity vs");
 		expect(
-			runtime.complexityBaselines.has(complexityBaselineKey(filePath)),
-		).toBe(false);
+			runtime.complexityBaselines.get(complexityBaselineKey(filePath)),
+		).toBe(stored);
 		// The next clean edit still reports the function.
-		expect(await edit(CLEAN)).toContain("handle cc new→18 (≥15)");
+		expect(await edit(CLEAN)).toContain("handle cc 4→18 (≥15)");
 	});
 
 	it("records a delta that throws, and keeps the edit's own output", async () => {
@@ -130,6 +162,7 @@ describe("#5087 the tool_result complexity delta", () => {
 	});
 
 	it("honours --no-complexity", async () => {
+		await touchThenWrite(fn("handle", 17));
 		expect(await edit(CLEAN, ["no-complexity"])).not.toContain("complexity vs");
 	});
 });

@@ -22,13 +22,14 @@ import * as nodePath from "node:path";
 import type { BoundedLruCache } from "../bounded-cache.js";
 import type { GenerationHandle } from "../generation-guard.js";
 import { logLatency } from "../latency-logger.js";
-import { measureFile } from "./function-metrics.js";
+import { recordDegradationOnce } from "../degradation-ledger.js";
+import { ANONYMOUS_KEY, measureFile } from "./function-metrics.js";
 import {
 	normalizeMapKey,
 	realpathOrResolve,
 	walkUpDirs,
 } from "../path-utils.js";
-import { safeSpawnAsync } from "../safe-spawn.js";
+import { safeSpawnAsync, type SpawnResult } from "../safe-spawn.js";
 import {
 	getSharedTreeSitterClient,
 	isComplexityLanguageId,
@@ -70,13 +71,30 @@ export const MAX_BASELINE_FILES = 256;
 export const MAX_TABLE_FUNCTIONS = 512;
 /** The advisory's byte budget on the tool result (#5087 acceptance). */
 export const MAX_ADVISORY_BYTES = 240;
-/** A default-branch blob larger than this is not measured. */
+/** A default-branch blob larger than this is not read. */
 const MAX_BLOB_BYTES = 2 * 1024 * 1024;
+/**
+ * Input over this many bytes is not measured. Keying a file's functions is
+ * superlinear in their count, and a parse cannot be interrupted. Measured
+ * with `measureFunctionTable` on the built twin, dense one-line functions
+ * (`function aN(){}`), after a warm-up call: 128 KiB 267 ms, 256 KiB 430 ms,
+ * 512 KiB 1401 ms, 1 MiB 5006 ms. 256 KiB keeps the worst case near the
+ * first touch's 500 ms budget and is far above a hand-written source file.
+ */
+export const MAX_MEASURED_BYTES = 256 * 1024;
+/** The advisory names a baseline and a function at most this many bytes long. */
+const MAX_LABEL_BYTES = 40;
+const MAX_NAME_BYTES = 80;
 const GIT_TIMEOUT_MS = 2_000;
 
 /** The key a session's baseline store uses for `filePath`. */
 export function complexityBaselineKey(filePath: string): string {
 	return normalizeMapKey(nodePath.resolve(filePath));
+}
+
+/** Whether `content` is too large to measure ({@link MAX_MEASURED_BYTES}). */
+function overMeasureCap(content: string): boolean {
+	return Buffer.byteLength(content, "utf-8") > MAX_MEASURED_BYTES;
 }
 
 /**
@@ -91,6 +109,7 @@ export async function measureFunctionTable(
 ): Promise<FunctionTable | undefined> {
 	const languageId = resolveTreeSitterLanguage(filePath);
 	if (!languageId || !isComplexityLanguageId(languageId)) return undefined;
+	if (overMeasureCap(content)) return undefined;
 	const client = getSharedTreeSitterClient();
 	if (!client || !(await client.init())) return undefined;
 	const parsed = await client.withParsedTree(
@@ -103,6 +122,10 @@ export async function measureFunctionTable(
 	if (!parsed.parsed) return undefined;
 	const table = new Map<string, FunctionValues>();
 	for (const fn of parsed.value) {
+		// An anonymous function's key is its position among its siblings: an edit
+		// that adds a callback above shifts it, and the agent cannot act on
+		// `<anonymous>#2`. Test-suite organizers (#577) are anonymous too.
+		if (fn.key.includes(ANONYMOUS_KEY)) continue;
 		if (table.size >= MAX_TABLE_FUNCTIONS) break;
 		table.set(fn.key, {
 			name: fn.name,
@@ -111,6 +134,11 @@ export async function measureFunctionTable(
 		});
 	}
 	return table;
+}
+
+/** Why a git spawn gave no answer: its failure kind, else `fallback`. */
+function gitFailureReason(result: SpawnResult, fallback: string): string {
+	return result.failure ? `git-${result.failure}` : fallback;
 }
 
 /**
@@ -159,7 +187,8 @@ async function resolveDefaultBranch(
 			resourceLabel: "complexity-main",
 		},
 	);
-	if (result.status !== 0) return { unavailable: "not-a-git-repository" };
+	if (result.status !== 0)
+		return { unavailable: gitFailureReason(result, "not-a-git-repository") };
 	const rows = new Map<string, string>();
 	for (const line of result.stdout.split("\n")) {
 		const [ref, symref] = line.split("\t");
@@ -208,6 +237,8 @@ export async function readAtDefaultBranch(
 			return { kind: "unavailable", reason: "blob-too-large" };
 		return { kind: "file", ref, content: shown.stdout };
 	}
+	if (shown.failure)
+		return { kind: "unavailable", reason: `git-${shown.failure}` };
 	// git names a missing path two ways: absent from the tree, or present on
 	// disk but not in the ref.
 	if (/does not exist|exists on disk, but not in/.test(shown.stderr))
@@ -334,12 +365,29 @@ export function baselineLabel(entry: ComplexityBaseline | undefined): string {
 	return "session start";
 }
 
+/**
+ * `text` on one line and at most `maxBytes` UTF-8 bytes, ending in `…` where
+ * it was cut. A name is source text: it can hold a newline or run long.
+ */
+function oneLine(text: string, maxBytes: number): string {
+	const flat = text.replace(/\s+/g, " ");
+	if (Buffer.byteLength(flat, "utf-8") <= maxBytes) return flat;
+	let out = "";
+	let bytes = Buffer.byteLength("…", "utf-8");
+	for (const char of flat) {
+		bytes += Buffer.byteLength(char, "utf-8");
+		if (bytes > maxBytes) break;
+		out += char;
+	}
+	return `${out}…`;
+}
+
 function renderFunction(fn: WorsenedFunction): string {
 	const parts = fn.changes.map(
 		(c) =>
 			`${METRIC_LABEL[c.metric]} ${c.before === undefined ? "new" : c.before}→${c.after} (≥${c.threshold})`,
 	);
-	return `${fn.key} ${parts.join(", ")}`;
+	return `${oneLine(fn.key, MAX_NAME_BYTES)} ${parts.join(", ")}`;
 }
 
 /**
@@ -352,7 +400,7 @@ export function formatComplexityAdvisory(
 	maxBytes: number = MAX_ADVISORY_BYTES,
 ): string | undefined {
 	if (worsened.length === 0) return undefined;
-	const head = `⚠ complexity vs ${label}: `;
+	const head = `⚠ complexity vs ${oneLine(label, MAX_LABEL_BYTES)}: `;
 	const bytes = (s: string) => Buffer.byteLength(s, "utf-8");
 	const shown: string[] = [];
 	for (let i = 0; i < worsened.length; i++) {
@@ -382,10 +430,10 @@ export interface EditComplexityVerdict {
 
 /**
  * Judge an edit that has landed on disk: measure `filePath` now, compare it
- * with its baseline (taken at first touch, or now for a file the session
- * never touched before), and store the new table as the file's `last`
- * through `session`, so the next edit is judged on its own change.
- * `undefined` when the file cannot be measured.
+ * with its baseline (taken at first touch), and store the new table as the
+ * file's `last` through `session`, so the next edit is judged on its own
+ * change. A file with no stored baseline only stores its table. `undefined`
+ * when the file cannot be measured, or the edit is aborted (nothing stored).
  */
 export async function adviseOnEdit(args: {
 	filePath: string;
@@ -404,15 +452,29 @@ export async function adviseOnEdit(args: {
 		// no function left to judge, and the next edit of it measures afresh.
 		return undefined;
 	}
+	if (overMeasureCap(content)) {
+		recordDegradationOnce({
+			kind: "complexity-delta-failed",
+			subject: filePath,
+			reason: `the file is over ${MAX_MEASURED_BYTES} bytes; its functions are not judged`,
+		});
+		return undefined;
+	}
 	const after = await measureFunctionTable(filePath, content);
 	if (!after || signal?.aborted) return undefined;
 	const key = complexityBaselineKey(filePath);
 	const held = store.get(key);
-	const entry: ComplexityBaseline = {
-		main: held?.main ?? (await mainBaselineOf(filePath, signal)),
-		last: held?.last,
-	};
-	const worsened = worsenedFunctions(entry, after, thresholds);
+	// No stored entry (evicted, or the file's first touch was not a tool_call
+	// the session saw): there is no `last` to tell what this edit changed, so
+	// it stores the table, runs no git and advises nothing.
+	const main = held
+		? (held.main ?? (await mainBaselineOf(filePath, signal)))
+		: undefined;
+	// An abort mid-read says nothing about the repository: store nothing, so
+	// the next edit reads main afresh.
+	if (signal?.aborted) return undefined;
+	const entry: ComplexityBaseline = { main, last: held?.last };
+	const worsened = held ? worsenedFunctions(entry, after, thresholds) : [];
 	const label = baselineLabel(entry);
 	const advisory = formatComplexityAdvisory(worsened, label);
 	session.guardedWrite(filePath, () =>

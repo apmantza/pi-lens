@@ -51,6 +51,7 @@ function fn(name: string, branches: number): string {
 async function editTo(
 	slug: string,
 	next: string,
+	projectConfig?: object,
 ): Promise<{ out: string; rows: Array<Record<string, unknown>> }> {
 	await installLspServiceDouble({
 		supportsLSP: () => false,
@@ -64,6 +65,12 @@ async function editTo(
 	git("init", "-q", "-b", "main");
 	git("config", "user.email", "t@t.local");
 	git("config", "user.name", "t");
+	if (projectConfig) {
+		fs.writeFileSync(
+			path.join(cwd, ".pi-lens.json"),
+			JSON.stringify(projectConfig),
+		);
+	}
 	const target = path.join(cwd, "svc.ts");
 	const before = fn("handle", 3);
 	fs.writeFileSync(target, before);
@@ -129,5 +136,23 @@ describe("#5087 witness: the edit's tool result names a function it made worse t
 				advised: false,
 			},
 		]);
+	});
+
+	// #5087 F1: only `rules["high-complexity"].threshold` was read, so a project
+	// that disabled the rule still got the line. The disable list is the
+	// dispatcher's own policy, read through the same resolution.
+	it("says nothing when the project disables high-complexity", async () => {
+		const { out, rows } = await editTo("disabled", fn("handle", 17), {
+			rules: { quality: { disable: ["high-complexity"] } },
+		});
+		expect(out).not.toContain("complexity vs");
+		expect(rows).toEqual([]);
+	});
+
+	it("still names the function when the project disables another rule", async () => {
+		const { out } = await editTo("other-rule", fn("handle", 17), {
+			rules: { quality: { disable: ["long-method"] } },
+		});
+		expect(out).toContain("⚠ complexity vs main: handle cc 4→18 (≥15)");
 	});
 });

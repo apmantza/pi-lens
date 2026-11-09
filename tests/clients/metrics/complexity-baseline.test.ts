@@ -10,8 +10,51 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * The process boundary the default-branch read crosses: every `safeSpawnAsync`
+ * call is recorded and delegates to the real spawn, unless a case installs
+ * `before` (to act at the moment git is about to run) or `answer` (to stand in
+ * for a git that timed out).
+ */
+const spawnProbe = vi.hoisted(() => ({
+	calls: [] as string[][],
+	before: undefined as (() => void) | undefined,
+	answer: undefined as
+		| ((args: readonly string[]) => Record<string, unknown> | undefined)
+		| undefined,
+}));
+
+vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../../clients/safe-spawn.js")>();
+	return {
+		...actual,
+		safeSpawnAsync: ((
+			command: string,
+			args: readonly string[],
+			options: { resourceLabel?: string },
+		) => {
+			if (command === "git" && options.resourceLabel === "complexity-main") {
+				spawnProbe.calls.push([...args]);
+				spawnProbe.before?.();
+				const answered = spawnProbe.answer?.(args);
+				if (answered) return Promise.resolve(answered);
+			}
+			return (actual.safeSpawnAsync as (...a: unknown[]) => unknown)(
+				command,
+				args,
+				options,
+			);
+		}) as unknown as typeof actual.safeSpawnAsync,
+	};
+});
 import { BoundedLruCache } from "../../../clients/bounded-cache.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../../clients/degradation-ledger.js";
 import {
 	adviseOnEdit,
 	captureComplexityBaseline,
@@ -20,6 +63,7 @@ import {
 	type FunctionTable,
 	formatComplexityAdvisory,
 	MAX_ADVISORY_BYTES,
+	measureFunctionTable,
 	readAtDefaultBranch,
 	worsenedFunctions,
 	type WorsenedFunction,
@@ -199,12 +243,65 @@ describe("formatComplexityAdvisory (#5087)", () => {
 	});
 });
 
+describe("formatComplexityAdvisory keeps one short line (#5087)", () => {
+	const one = (key: string): WorsenedFunction[] => [
+		{
+			key,
+			name: key,
+			changes: [{ metric: "cyclomatic", before: 10, after: 21, threshold: 15 }],
+		},
+	];
+
+	// F9: a computed method name can hold a newline; the advisory is one line.
+	it("collapses whitespace in a function's name", () => {
+		const line = formatComplexityAdvisory(one("A.[`a\nb\t c`]"), "main");
+		expect(line).toBe("⚠ complexity vs main: A.[`a b c`] cc 10→21 (≥15)");
+	});
+
+	// A 260-byte branch name used to drop the advisory; a 300-byte name left
+	// only "1 function worse".
+	it("truncates a long baseline label instead of dropping the advisory", () => {
+		const line = formatComplexityAdvisory(
+			one("f"),
+			`origin/${"b".repeat(260)}`,
+		);
+		expect(line ?? "").toContain("f cc 10→21 (≥15)");
+		expect(line ?? "").toMatch(/^⚠ complexity vs origin\/b+…: f cc/);
+		expect(Buffer.byteLength(line ?? "", "utf-8")).toBeLessThanOrEqual(
+			MAX_ADVISORY_BYTES,
+		);
+	});
+
+	it("truncates a long function name instead of reporting a bare count", () => {
+		const line = formatComplexityAdvisory(one("g".repeat(300)), "main");
+		expect(line ?? "").toMatch(/^⚠ complexity vs main: g+… cc 10→21 \(≥15\)$/);
+		expect(Buffer.byteLength(line ?? "", "utf-8")).toBeLessThanOrEqual(
+			MAX_ADVISORY_BYTES,
+		);
+	});
+
+	it("truncates multi-byte names by bytes", () => {
+		const line = formatComplexityAdvisory(
+			one("é".repeat(300)),
+			"ü".repeat(300),
+		);
+		expect(line ?? "").toContain(" cc 10→21 (≥15)");
+		expect(Buffer.byteLength(line ?? "", "utf-8")).toBeLessThanOrEqual(
+			MAX_ADVISORY_BYTES,
+		);
+	});
+});
+
 describe("the default-branch baseline in a real repository (#5087)", () => {
 	let root: string;
 	const git = (...args: string[]) =>
 		gitExecFileSync("git", args, { cwd: root, encoding: "utf8" });
 
 	beforeEach(() => {
+		spawnProbe.calls.length = 0;
+		spawnProbe.before = undefined;
+		spawnProbe.answer = undefined;
+		resetDegradationLedger();
 		root = fs.realpathSync(
 			fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-5087-main-")),
 		);
@@ -362,5 +459,217 @@ describe("the default-branch baseline in a real repository (#5087)", () => {
 			thresholds: THRESHOLDS,
 		});
 		expect(store.get(complexityBaselineKey(file))).toBe(baseline);
+	});
+
+	const writes = {
+		guardedWrite: <T>(_subject: string, write: () => T) => write(),
+	};
+
+	/** A store holding `file`'s first-touch table, as the `tool_call` leaves it. */
+	async function touched(file: string) {
+		const store = new BoundedLruCache<string, ComplexityBaseline>(4);
+		const baseline = await captureComplexityBaseline(file);
+		store.set(complexityBaselineKey(file), baseline!);
+		return { store, baseline: baseline! };
+	}
+
+	/** An anonymous route handler of cyclomatic complexity `1 + branches`. */
+	function handler(route: string, branches: number): string {
+		const body = Array.from(
+			{ length: branches },
+			(_, i) => `\tif (req === ${i}) return ${i};`,
+		).join("\n");
+		return `app.get("${route}", (req: number) => {\n${body}\n\treturn -1;\n});\n`;
+	}
+
+	// #5087 F2: keys number same-name siblings by source order, so a small
+	// anonymous callback inserted above an unchanged cc-20 handler shifts the
+	// handler to `<anonymous>#2`, a key main lacks: it read as new and worse.
+	it("never names an anonymous callback an edit only shifted", async () => {
+		const file = write("src/routes.ts", handler("/a", 19));
+		commit();
+		const { store } = await touched(file);
+		fs.writeFileSync(
+			file,
+			`app.get("/b", (req: number) => {\n\treturn req;\n});\n${handler("/a", 19)}`,
+		);
+		const verdict = await adviseOnEdit({
+			filePath: file,
+			store,
+			session: writes,
+			thresholds: THRESHOLDS,
+		});
+		expect(verdict?.advisory).toBeUndefined();
+	});
+
+	// #5087 F3: `high-complexity` exempts test-suite organizers (#577); adding
+	// one it() to a describe past the threshold must not be named either.
+	it("never names a test-suite organizer that grew by one it()", async () => {
+		const suite = (its: number) =>
+			`describe("suite", () => {\n${Array.from(
+				{ length: its },
+				(_, i) => `\tit("t${i}", () => {\n\t\tif (a) b();\n\t});`,
+			).join("\n")}\n});\n`;
+		const file = write("src/suite.test.ts", suite(16));
+		commit();
+		const { store } = await touched(file);
+		fs.writeFileSync(file, suite(17));
+		const verdict = await adviseOnEdit({
+			filePath: file,
+			store,
+			session: writes,
+			thresholds: THRESHOLDS,
+		});
+		expect(verdict?.advisory).toBeUndefined();
+	});
+
+	// #5087 F11: a file with no stored entry (evicted, or first written by a
+	// bash command) has no `last`, so every function past the threshold looked
+	// worse than main. The edit stores the table and says nothing.
+	it("advises nothing for an edit with no stored entry, then judges the next", async () => {
+		const file = write("src/svc.ts", fn("handle", 3));
+		commit();
+		fs.writeFileSync(file, fn("handle", 17));
+		const store = new BoundedLruCache<string, ComplexityBaseline>(4);
+		const first = await adviseOnEdit({
+			filePath: file,
+			store,
+			session: writes,
+			thresholds: THRESHOLDS,
+		});
+		expect(first?.advisory).toBeUndefined();
+		expect(store.get(complexityBaselineKey(file))?.last?.get("handle")).toEqual(
+			{ name: "handle", cyclomatic: 18, nesting: 1 },
+		);
+		// No git was run for an edit that judged nothing.
+		expect(spawnProbe.calls).toEqual([]);
+		fs.writeFileSync(file, fn("handle", 18));
+		const second = await adviseOnEdit({
+			filePath: file,
+			store,
+			session: writes,
+			thresholds: THRESHOLDS,
+		});
+		expect(second?.advisory).toBe("⚠ complexity vs main: handle cc 4→19 (≥15)");
+	});
+
+	// #5087 F7: the once-per-file read of main is the hot-path bound. Two
+	// edits of one file run `for-each-ref` and `git show` once between them.
+	it("reads main once per file across edits", async () => {
+		const file = write("src/svc.ts", fn("handle", 3));
+		commit();
+		const { store } = await touched(file);
+		fs.writeFileSync(file, fn("handle", 17));
+		await adviseOnEdit({
+			filePath: file,
+			store,
+			session: writes,
+			thresholds: THRESHOLDS,
+		});
+		expect(spawnProbe.calls.map((c) => c[0])).toEqual(["for-each-ref", "show"]);
+		fs.writeFileSync(file, fn("handle", 18));
+		await adviseOnEdit({
+			filePath: file,
+			store,
+			session: writes,
+			thresholds: THRESHOLDS,
+		});
+		expect(spawnProbe.calls.map((c) => c[0])).toEqual(["for-each-ref", "show"]);
+	});
+
+	// #5087 F7: the table cap, as a literal. 513 functions keep 512, in
+	// source order.
+	it("keeps the first 512 functions of a table", async () => {
+		const source = Array.from(
+			{ length: 513 },
+			(_, i) => `export function f${i}(): number {\n\treturn ${i};\n}\n`,
+		).join("");
+		const table = await measureFunctionTable("/virtual/many.ts", source);
+		expect(table?.size).toBe(512);
+		expect(table?.has("f0")).toBe(true);
+		expect(table?.has("f511")).toBe(true);
+		expect(table?.has("f512")).toBe(false);
+	});
+
+	// #5087 Qodo: keying is superlinear in the function count (dense 26k
+	// functions: 256 KiB 430 ms, 512 KiB 1.4 s, 1 MiB 5 s, no event-loop tick),
+	// so input over 256 KiB is not measured.
+	it("measures a file at the 262144-byte cap and not one byte over", async () => {
+		const pad = (bytes: number) => {
+			const body = "export function f(): number {\n\treturn 1;\n}\n";
+			return `${body}// ${"x".repeat(bytes - body.length - 4)}\n`;
+		};
+		expect(pad(262144).length).toBe(262144);
+		expect(
+			(await measureFunctionTable("/virtual/at.ts", pad(262144)))?.size,
+		).toBe(1);
+		expect(
+			await measureFunctionTable("/virtual/over.ts", pad(262145)),
+		).toBeUndefined();
+	});
+
+	it("records an over-cap file once, and judges nothing", async () => {
+		const file = write("src/big.ts", fn("handle", 3));
+		commit();
+		const { store, baseline } = await touched(file);
+		fs.writeFileSync(file, `${fn("handle", 17)}// ${"x".repeat(262144)}\n`);
+		for (let i = 0; i < 2; i++) {
+			const verdict = await adviseOnEdit({
+				filePath: file,
+				store,
+				session: writes,
+				thresholds: THRESHOLDS,
+			});
+			expect(verdict).toBeUndefined();
+		}
+		expect(store.get(complexityBaselineKey(file))).toBe(baseline);
+		expect(
+			getDegradationSummary().filter(
+				(entry) => entry.kind === "complexity-delta-failed",
+			),
+		).toHaveLength(1);
+	});
+
+	// #5087 F8: an abort during the git read was cached as
+	// `not-a-git-repository`, so the file was judged "vs session start" for the
+	// rest of the session and the line still rendered.
+	it("stores nothing and says nothing when the edit is aborted during the git read", async () => {
+		const file = write("src/svc.ts", fn("handle", 3));
+		commit();
+		const { store, baseline } = await touched(file);
+		fs.writeFileSync(file, fn("handle", 17));
+		const controller = new AbortController();
+		spawnProbe.before = () => controller.abort();
+		const verdict = await adviseOnEdit({
+			filePath: file,
+			store,
+			session: writes,
+			thresholds: THRESHOLDS,
+			signal: controller.signal,
+		});
+		expect(verdict).toBeUndefined();
+		expect(store.get(complexityBaselineKey(file))).toBe(baseline);
+	});
+
+	it("names a git that timed out or could not start, not a missing repository", async () => {
+		const file = write("src/svc.ts", fn("handle", 3));
+		commit();
+		const answer = (failure: string) => () => ({
+			stdout: "",
+			stderr: "",
+			status: null,
+			failure,
+		});
+		spawnProbe.answer = answer("timeout");
+		expect(await readAtDefaultBranch(file)).toEqual({
+			kind: "unavailable",
+			reason: "git-timeout",
+		});
+		spawnProbe.answer = (args) =>
+			args[0] === "show" ? answer("spawn")() : undefined;
+		expect(await readAtDefaultBranch(file)).toEqual({
+			kind: "unavailable",
+			reason: "git-spawn",
+		});
 	});
 });

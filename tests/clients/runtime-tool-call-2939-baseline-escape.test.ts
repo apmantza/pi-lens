@@ -23,6 +23,7 @@
  * coordinator, the cache manager, the baseline map — is real.
  */
 
+import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -84,10 +85,7 @@ vi.mock("../../clients/bootstrap.js", async () => {
 
 import { CacheManager } from "../../clients/cache-manager.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import {
-	complexityBaselineKey,
-	MAX_BASELINE_FILES,
-} from "../../clients/metrics/complexity-baseline.js";
+import { complexityBaselineKey } from "../../clients/metrics/complexity-baseline.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { runHandlerExpectingNoThrow } from "../support/handler-verdict.js";
@@ -195,8 +193,29 @@ describe("#4125 S3 — the baseline store analyzes each file once, under a bound
 		expect(
 			runtime.complexityBaselines.has(complexityBaselineKey(filePath)),
 		).toBe(true);
-		expect(runtime.complexityBaselines.getMaxEntries()).toBe(
-			MAX_BASELINE_FILES,
-		);
+	});
+
+	// #5087 F7: the file cap as a literal. The first cap test compared
+	// `getMaxEntries()` with the constant it was built from and survived
+	// `MAX_BASELINE_FILES = 100000`.
+	it("evicts the least recently used file past 256", () => {
+		const entry = { main: undefined, last: undefined };
+		for (let i = 0; i < 257; i++) {
+			runtime.complexityBaselines.set(
+				complexityBaselineKey(path.join(env.tmpDir, `f${i}.ts`)),
+				entry,
+			);
+		}
+		expect(runtime.complexityBaselines.size).toBe(256);
+		expect(
+			runtime.complexityBaselines.has(
+				complexityBaselineKey(path.join(env.tmpDir, "f0.ts")),
+			),
+		).toBe(false);
+		expect(
+			runtime.complexityBaselines.has(
+				complexityBaselineKey(path.join(env.tmpDir, "f1.ts")),
+			),
+		).toBe(true);
 	});
 });

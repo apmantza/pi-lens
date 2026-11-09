@@ -433,6 +433,9 @@ interface Span {
 	endLine: number;
 }
 
+/** The base of an unnamed function's key (see {@link NamedFunctionMetrics.key}). */
+export const ANONYMOUS_KEY = "<anonymous>";
+
 /**
  * Give each function its {@link NamedFunctionMetrics.key}: the shared
  * containment rule (`findOwnerName`, the one `function-facts.ts`, the review
@@ -455,7 +458,7 @@ function assignKeys(
 	const seen = new Map<string, number>();
 	return functions.map((fn, i) => {
 		const node = nodes[i]!;
-		const base = declared[i] ?? "<anonymous>";
+		const base = declared[i] ?? ANONYMOUS_KEY;
 		const owner =
 			languageId === "go" && node.type === "method_declaration"
 				? receiverType(node)
