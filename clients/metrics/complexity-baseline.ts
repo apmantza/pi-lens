@@ -233,6 +233,8 @@ export async function readAtDefaultBranch(
 	if ("unavailable" in branch)
 		return { kind: "unavailable", reason: branch.unavailable };
 	const relative = nodePath.relative(cwd, target).split(nodePath.sep).join("/");
+	// `LC_ALL=C`: the absent-path check below reads git's English message, and
+	// a translated git would turn "absent" into `git-show-failed`.
 	const shown = await safeSpawnAsync(
 		"git",
 		["show", `${branch.ref}:./${relative}`],
@@ -241,6 +243,7 @@ export async function readAtDefaultBranch(
 			timeout: GIT_TIMEOUT_MS,
 			...(signal && { signal }),
 			maxOutputBytes: MAX_BLOB_BYTES,
+			env: { LC_ALL: "C" },
 			resourceLabel: "complexity-main",
 		},
 	);

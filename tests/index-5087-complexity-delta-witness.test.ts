@@ -18,6 +18,7 @@ import {
 	flushLatencyLog,
 	getLatencyLogPath,
 } from "../clients/latency-logger.js";
+import { normalizeLoggedPath } from "../clients/path-utils.js";
 import { installLspServiceDouble } from "./support/lsp-service-seam.js";
 import { readNdjsonRows } from "./support/ndjson-rows.js";
 import { gitExecFileSync } from "./support/git-fixture-env.js";
@@ -103,7 +104,11 @@ async function editTo(
 	const read = readNdjsonRows(getLatencyLogPath());
 	expect(read.skipped).toBe(0);
 	const rows = read.rows.filter(
-		(r) => r.filePath === target && r.phase === "complexity_delta",
+		// The logger writes `normalizeLoggedPath(filePath)`, which folds `\` to
+		// `/` on Windows; the raw target would match no row there.
+		(r) =>
+			r.filePath === normalizeLoggedPath(target) &&
+			r.phase === "complexity_delta",
 	);
 	return { out: edits[0]?.text ?? "", rows };
 }
