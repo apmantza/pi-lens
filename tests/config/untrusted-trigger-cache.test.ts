@@ -453,6 +453,7 @@ describe("npm auto-cache writers across workflows", () => {
 
 	it("requires every no-install setup-node job to opt out", () => {
 		// #5182 remainder: opt-outs land after merge, checked on first scheduled master run
+		// (these jobs are master/schedule-only, so a branch dispatch skips them)
 		const deferredOptOutBaseline = new Set([
 			"release.yml:prepare",
 			"release.yml:publish-npm",
@@ -463,6 +464,8 @@ describe("npm auto-cache writers across workflows", () => {
 			"tool-smoke.yml:tool-smoke-prs",
 			"tool-smoke.yml:snapshot-persist-notify",
 			"stryker-nightly.yml:publish-issue",
+			"compat-smoke.yml:compat-smoke-alert",
+			"shuffle-census-nightly.yml:publish-issue",
 		]);
 		const offenders: string[] = [];
 		let scanned = 0;
