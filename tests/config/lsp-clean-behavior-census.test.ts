@@ -140,7 +140,7 @@ const UNMEASURED_PULL_ADMISSIONS = new Map<string, string>([
 	],
 	[
 		"rust",
-		"rust-analyzer: the registry id is `rust` but the strategy row is keyed `rust-analyzer`, so the row never applies and rust waits on the default; re-keying it changes rust's budget, pull retry and second-push expectation and is its own measured change",
+		"rust-analyzer: cold touches measured in tests/fixtures/lsp-wait-measurements/rust-5485.json (#5485); the old `rust-analyzer` row was keyed by display name and dead, re-keyed at its 3000/500 it caught the type error in 0 of 5 cold touches, and a pull retry long enough to catch it (7000/6000) charges every clean touch 6.7-6.9 s, so rust stays on the default until a maintainer picks that trade",
 	],
 ]);
 
