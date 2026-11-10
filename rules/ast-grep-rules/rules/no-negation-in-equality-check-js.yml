@@ -16,10 +16,6 @@ rule:
         - pattern: "!$A !== $B"
         - pattern: "!$A == $B"
         - pattern: "!$A != $B"
-    # #5466: exempt the double-negation comparison (`!a === !b` and its three
-    # sibling operators). Fresh metavariables ($X/$Y) so no cross-clause
-    # binding constrains the exclusion; the guard's mutation cell is `!a === b`
-    # staying invalid.
     - not:
         any:
           - pattern: "!$X === !$Y"

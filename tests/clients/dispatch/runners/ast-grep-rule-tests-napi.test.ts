@@ -141,6 +141,12 @@ describe("shipped rule-test fixtures through the napi evaluator", () => {
 				false,
 			],
 			[
+				"array-callback-return",
+				"snippet.ts",
+				"arr.map(async function callback(x) { await g(x) });",
+				false,
+			],
+			[
 				"array-callback-return-js",
 				"snippet.js",
 				"arr.map(x => { g(x) });",
@@ -152,10 +158,28 @@ describe("shipped rule-test fixtures through the napi evaluator", () => {
 				"arr.map(async x => { await f(x) });",
 				false,
 			],
+			[
+				"array-callback-return-js",
+				"snippet.js",
+				"arr.map(async function (x) { await g(x) });",
+				false,
+			],
+			[
+				"array-callback-return-js",
+				"snippet.js",
+				"arr.map(async function callback(x) { await g(x) });",
+				false,
+			],
 			["no-negation-in-equality-check", "snippet.ts", "!a === b;", true],
 			["no-negation-in-equality-check", "snippet.ts", "!a === !b;", false],
+			["no-negation-in-equality-check", "snippet.ts", "!a !== !b;", false],
+			["no-negation-in-equality-check", "snippet.ts", "!a == !b;", false],
+			["no-negation-in-equality-check", "snippet.ts", "!a != !b;", false],
 			["no-negation-in-equality-check-js", "snippet.js", "!a !== b;", true],
 			["no-negation-in-equality-check-js", "snippet.js", "!a !== !b;", false],
+			["no-negation-in-equality-check-js", "snippet.js", "!a === !b;", false],
+			["no-negation-in-equality-check-js", "snippet.js", "!a == !b;", false],
+			["no-negation-in-equality-check-js", "snippet.js", "!a != !b;", false],
 		];
 		for (const [rule, name, content, mustFire] of cases) {
 			const filePath = path.join(cwd, name);
