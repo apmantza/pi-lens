@@ -85,6 +85,93 @@ describe("shipped rule-test fixtures through the napi evaluator", () => {
 		// About 2.8 s here; 706 whole-catalog evaluations need headroom under load.
 	}, 30_000);
 
+	// #5466: the issue demotes both unchecked-throwing-call twins below
+	// `error` (only `error` maps to blocking) because the lexical-try check is
+	// intra-function — a caller's try/catch or a safe(() => …) wrapper is
+	// invisible to it. Red-first: pre-fix these diagnostics report `error`.
+	it("ships unchecked-throwing-call below the blocking tier", () => {
+		const cases: Array<[string, string]> = [
+			["unchecked-throwing-call", "snippet.ts"],
+			["unchecked-throwing-call-js", "snippet.js"],
+		];
+		for (const [rule, name] of cases) {
+			const content = "const data = JSON.parse(raw);";
+			const filePath = path.join(cwd, name);
+			const root = getLang(filePath, sgModule)?.parse(content).root();
+			if (!root) throw new Error(`parse failed for ${name}`);
+			const hit = evaluateAstGrepRules(
+				filePath,
+				root,
+				cwd,
+				detectFileKind(filePath),
+				{
+					content,
+					sgModule,
+				},
+			).find((d) => d.rule === rule);
+			expect(hit?.severity, rule).toBe("warning");
+			expect(hit?.semantic, rule).not.toBe("blocking");
+		}
+	});
+
+	// #5466: the CLI and napi engines can differ (a rejected rule silently
+	// matches nothing), so the exemptions get their own napi witnesses — with
+	// a live-rule control per family, so a dead rule cannot pass them
+	// vacuously.
+	it("napi honors the async and double-negation exemptions", () => {
+		// [rule, file, content, mustFire] — mustFire rows are the controls.
+		const cases: Array<[string, string, string, boolean]> = [
+			["array-callback-return", "snippet.ts", "arr.map(x => { g(x) });", true],
+			[
+				"array-callback-return",
+				"snippet.ts",
+				"arr.map(async x => { await f(x) });",
+				false,
+			],
+			[
+				"array-callback-return",
+				"snippet.ts",
+				"arr.map(async()=>{ await f(1) });",
+				false,
+			],
+			[
+				"array-callback-return",
+				"snippet.ts",
+				"arr.map(async function (x) { await g(x) });",
+				false,
+			],
+			[
+				"array-callback-return-js",
+				"snippet.js",
+				"arr.map(x => { g(x) });",
+				true,
+			],
+			[
+				"array-callback-return-js",
+				"snippet.js",
+				"arr.map(async x => { await f(x) });",
+				false,
+			],
+			["no-negation-in-equality-check", "snippet.ts", "!a === b;", true],
+			["no-negation-in-equality-check", "snippet.ts", "!a === !b;", false],
+			["no-negation-in-equality-check-js", "snippet.js", "!a !== b;", true],
+			["no-negation-in-equality-check-js", "snippet.js", "!a !== !b;", false],
+		];
+		for (const [rule, name, content, mustFire] of cases) {
+			const filePath = path.join(cwd, name);
+			const root = getLang(filePath, sgModule)?.parse(content).root();
+			if (!root) throw new Error(`parse failed for ${content}`);
+			const fired = evaluateAstGrepRules(
+				filePath,
+				root,
+				cwd,
+				detectFileKind(filePath),
+				{ content, sgModule },
+			).some((d) => d.rule === rule);
+			expect(fired, `${rule}: ${content}`).toBe(mustFire);
+		}
+	});
+
 	it("skips the native call for a rule whose required literal is absent", () => {
 		const target = buildEffectiveAstGrepCatalog(cwd).effectiveRules.get(
 			"no-insecure-randomness",

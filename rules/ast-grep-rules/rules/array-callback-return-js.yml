@@ -18,6 +18,15 @@ rule:
           - pattern: $$$ => $R
           - not:
               pattern: $$$ => { $$$ }
+    # #5466: async callbacks always return a promise. Structural exemption
+    # in require-await's pattern vocabulary — no regex lookaround: napi's
+    # native engine rejects it and skips the whole rule. A sync callback
+    # whose PARAMETER is named `async` has no async token and still fires.
+    - not:
+        any:
+          - pattern: "async $$$ => { $$$ }"
+          - pattern: "async function $NAME($$$) { $$$ }"
+          - pattern: "async function ($$$) { $$$ }"
     # The original used `Array.from($, $FUNC)` with an anonymous `$`
     # metavariable for the first arg — ast-grep 0.42.0's `inside`
     # matcher treats `$` (anonymous) and `$FUNC` (named) inconsistently

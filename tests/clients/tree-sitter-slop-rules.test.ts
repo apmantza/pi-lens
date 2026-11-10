@@ -231,12 +231,16 @@ describe("slop detection rules", () => {
 	});
 
 	describe("ts-react-antipatterns", () => {
-		it("flags setState inside a for-of loop", async () => {
+		// #5466: the rule fires only in React context — a module importing a
+		// React/React-like hook source, or containing JSX. A plain module's
+		// `setFoo` loop stays silent, and prose mentioning react is not
+		// context (the gate is structural).
+		it("flags setState inside a for-of loop in a module that imports React", async () => {
 			const client = getSharedTreeSitterClient()!;
 			const query = await getQuery("ts-react-antipatterns");
 			const filePath = writeTempFile(
 				"ts",
-				`for (const item of items) {\n  setCount(count + 1);\n}\n`,
+				`import { useState } from "react";\nfor (const item of items) {\n  setCount(count + 1);\n}\n`,
 			);
 			const matches = await client.runQueryOnFile(
 				query,
@@ -246,12 +250,12 @@ describe("slop detection rules", () => {
 			expect(matches.length).toBeGreaterThan(0);
 		});
 
-		it("flags setState inside a while loop", async () => {
+		it("flags setState inside a while loop in a module that imports a React-like hook source", async () => {
 			const client = getSharedTreeSitterClient()!;
 			const query = await getQuery("ts-react-antipatterns");
 			const filePath = writeTempFile(
 				"ts",
-				`while (i < items.length) {\n  setItems([...items, i]);\n  i++;\n}\n`,
+				`import { useState } from "preact/hooks";\nwhile (i < items.length) {\n  setItems([...items, i]);\n  i++;\n}\n`,
 			);
 			const matches = await client.runQueryOnFile(
 				query,
@@ -259,12 +263,100 @@ describe("slop detection rules", () => {
 				"typescript",
 			);
 			expect(matches.length).toBeGreaterThan(0);
+		});
+
+		// #5466 review: the gate is SOURCE-keyed. A `use*` name from a
+		// non-React module is not React context — an unrelated use* API must
+		// not open the gate.
+		it("does not flag a use* hook import from a non-React source", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("ts-react-antipatterns");
+			const filePath = writeTempFile(
+				"ts",
+				`import { useStore } from "zustand";\nwhile (i < items.length) {\n  setItems([...items, i]);\n  i++;\n}\n`,
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches.length).toBe(0);
+		});
+
+		it("flags setState inside a loop in a JSX module", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("ts-react-antipatterns");
+			const filePath = writeTempFile(
+				"tsx",
+				`const view = <div className="c">{items.length}</div>;\nfor (const item of items) {\n  setCount(count + 1);\n}\n`,
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "tsx");
+			expect(matches.length).toBeGreaterThan(0);
+		});
+
+		// #5466 red-first cell (red pre-fix): a plain module's setFoo loop.
+		it("does not flag a setFoo loop in a plain TypeScript module", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("ts-react-antipatterns");
+			const filePath = writeTempFile(
+				"ts",
+				`for (const item of items) {\n  setRows(rows + 1);\n}\n`,
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches.length).toBe(0);
+		});
+
+		// #5466 mutation guard: react as prose (comment, string, identifier)
+		// is not import/JSX context — a text-based gate reds this.
+		it("does not flag a setFoo loop when react appears only as prose", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("ts-react-antipatterns");
+			const filePath = writeTempFile(
+				"ts",
+				`// react setState helper\nconst reactSetState = 1;\nwhile (i < items.length) {\n  setItems([...items, i]);\n  i++;\n}\n`,
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches.length).toBe(0);
+		});
+
+		// #5466 leak regression (parent scan: 18→6): a large plain module must
+		// be judged like any other file — the old size-capped fail-open kept
+		// findings on modules past the cap. ~4k statements push this tree well
+		// past it.
+		it("does not flag a setFoo loop in a large plain module", async () => {
+			const client = getSharedTreeSitterClient()!;
+			const query = await getQuery("ts-react-antipatterns");
+			const filler = Array.from(
+				{ length: 4000 },
+				(_, i) => `const v${i} = ${i};`,
+			).join("\n");
+			const filePath = writeTempFile(
+				"ts",
+				`${filler}\nfor (const item of items) {\n  setRows(rows + 1);\n}\n`,
+			);
+			const matches = await client.runQueryOnFile(
+				query,
+				filePath,
+				"typescript",
+			);
+			expect(matches.length).toBe(0);
 		});
 
 		it("does not flag setState outside a loop", async () => {
 			const client = getSharedTreeSitterClient()!;
 			const query = await getQuery("ts-react-antipatterns");
-			const filePath = writeTempFile("ts", `setCount(items.length);\n`);
+			const filePath = writeTempFile(
+				"ts",
+				`import { useState } from "react";\nsetCount(items.length);\n`,
+			);
 			const matches = await client.runQueryOnFile(
 				query,
 				filePath,
@@ -278,7 +370,7 @@ describe("slop detection rules", () => {
 			const query = await getQuery("ts-react-antipatterns");
 			const filePath = writeTempFile(
 				"ts",
-				`while (writing) { await new Promise(r => setTimeout(r, 10)); }`,
+				`import { useState } from "react";\nwhile (writing) { await new Promise(r => setTimeout(r, 10)); }`,
 			);
 			const matches = await client.runQueryOnFile(
 				query,
@@ -293,7 +385,7 @@ describe("slop detection rules", () => {
 			const query = await getQuery("ts-react-antipatterns");
 			const filePath = writeTempFile(
 				"ts",
-				`for (const x of items) { setInterval(() => {}, 100); }`,
+				`import { useState } from "react";\nfor (const x of items) { setInterval(() => {}, 100); }`,
 			);
 			const matches = await client.runQueryOnFile(
 				query,
