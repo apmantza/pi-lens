@@ -1234,8 +1234,8 @@ describe("tool-policy", () => {
 
 	// Recurrence (shape 6): the memo keyed on mtime alone served the old
 	// formatter after a length-changing rewrite that kept the mtime (`cp -p`,
-	// `rsync -t`, tar extract, a write inside one coarse mtime tick). Every
-	// sibling file cache in clients/ stamps size beside mtime (#1105).
+	// `rsync -t`, tar extract, a write inside one coarse mtime tick). The config
+	// caches in clients/ stamp size beside mtime (#1105).
 	it("re-reads Spotless detection after a length-changing rewrite with the same mtime (shape 6)", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-spotless-same-tick-");
 		const gradlePath = createTempFile(
