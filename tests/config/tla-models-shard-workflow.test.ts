@@ -521,20 +521,3 @@ function resolveCostsFixture() {
 	delete files[Object.keys(files)[0]];
 	return { root: ROOT, files, max: table.max };
 }
-
-// #5468: new configs otherwise take the maximum fallback cost and unbalance
-// shards; keep each local measurement beside its model and table row.
-it.each(["AsBuilt", "ImmediateExit"])(
-	"pins the prepush-drain %s cost to its TLC measurement (#5468)",
-	(name) => {
-		const raw = readFileSync(
-			resolve(ROOT, `formal/prepush-drain/${name}.txt`),
-			"utf8",
-		);
-		const seconds = raw.match(/WALL_SECONDS ([\d.]+)/)?.[1];
-		expect(seconds).toBeDefined();
-		expect(loadModelCosts(ROOT).files[`formal/prepush-drain/${name}.cfg`]).toBe(
-			Number(seconds),
-		);
-	},
-);

@@ -902,9 +902,7 @@
 		"formal/turn-end-late-scan/SettleWritesPoison.cfg": 2.3,
 		"formal/turn-end-late-scan/SettledNeverTaken.cfg": 2.4,
 		"formal/turn-end-late-scan/StampAtTurn.cfg": 2.4,
-		"formal/turn-end-late-scan/TakeUnblocked.cfg": 1.6,
-		"formal/prepush-drain/AsBuilt.cfg": 0.64,
-		"formal/prepush-drain/ImmediateExit.cfg": 0.61
+		"formal/turn-end-late-scan/TakeUnblocked.cfg": 1.6
 	},
 	"states": {
 		"formal/availability-latch/ClientInstallGenGuard.cfg": 4869,
@@ -1789,8 +1787,6 @@
 		"formal/turn-end-late-scan/SettleWritesPoison.cfg": 649,
 		"formal/turn-end-late-scan/SettledNeverTaken.cfg": 13170,
 		"formal/turn-end-late-scan/StampAtTurn.cfg": 2996,
-		"formal/turn-end-late-scan/TakeUnblocked.cfg": 3768,
-		"formal/prepush-drain/AsBuilt.cfg": 14,
-		"formal/prepush-drain/ImmediateExit.cfg": 8
+		"formal/turn-end-late-scan/TakeUnblocked.cfg": 3768
 	}
 }

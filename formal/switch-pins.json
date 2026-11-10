@@ -2825,15 +2825,6 @@
 					]
 				}
 			]
-		},
-		"prepush-drain": {
-			"pins": {
-				"DrainBeforeCleanup": {
-					"value": "TRUE",
-					"test": "tests/scripts/pre-push-targeted-tests.test.ts",
-					"title": "drains the child on %s (drain failure=%s) (#5439)"
-				}
-			}
 		}
 	}
 }
