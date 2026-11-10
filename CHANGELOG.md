@@ -24,21 +24,23 @@ All notable changes to pi-lens will be documented in this file.
 
 - **Edits now name functions they made more complex than main.**
   An edit's result gains one short line, such as
-  `⚠ complexity vs main: Store.get cc 12→19 (≥15)`, for each named function the
-  edit itself made worse than the default branch has it, at or past the
+  `⚠ complexity vs main: Store.get cc 12→19 (≥15)`, naming the functions the
+  edit itself made worse than the default branch has them, at or past the
   `high-complexity` thresholds (15 and 6 for every language until per-language
   ones exist). A function the edit did not change, or improved, is never
   named; neither is an anonymous callback, and the line waits while the edit
-  has blockers. Outside a repository the file as the session first read it
-  stands in for main. `--no-complexity` or disabling `high-complexity` turns it
-  off, and a file over 256 KiB is not judged. Owner matching is linear,
+  has blockers. The line is bounded: past its length budget the remaining
+  names collapse into `+N more`, and only a file's first 512 functions are
+  judged. Outside a repository it compares with the file as it was before the
+  edit. `--no-complexity` or disabling `high-complexity` turns it off, and a
+  file over 256 KiB is not judged. Owner matching is linear,
   and first touches defer it until an edit reads the baseline. (refs #5087)
 
 ### Fixed
 
 #### Language servers
 
-- **Edits to a project outside the session folder now get language server diagnostics.** An edit to a file in a sibling project (an adopted root) used to report "not analyzed" even while its language server ran. Language servers that run project code, such as rust-analyzer, now start there only when pi itself would trust that project: a saved decision on it or a parent folder, pi's default for a folder without `.pi` resources, or `defaultProjectTrust`. They no longer borrow the session's trust. (refs #5469)
+- **Edits to a project outside the session folder now get language server diagnostics.** An edit to a file in a sibling project (an adopted root) used to report "not analyzed" even while its language server ran. In pi, language servers that run project code, such as rust-analyzer, now start there only when pi itself would trust that project: a saved decision on it or a parent folder, pi's default for a folder without `.pi` resources, or `defaultProjectTrust`. They no longer borrow the session's trust. Under MCP, pi's trust is not read; the MCP client owns workspace trust. (refs #5469)
 
 #### Hosts and integrations
 
