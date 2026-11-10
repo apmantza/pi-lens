@@ -256,14 +256,21 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 			input: string,
 			extra: string[] = [],
 			env: NodeJS.ProcessEnv = {},
+			probeMain = false,
 		) =>
 			spawnSync(
 				process.execPath,
-				[
-					path.join(scriptDir, "pre-push-targeted-tests.mjs"),
-					"--skip-build",
-					...extra,
-				],
+				probeMain
+					? [
+							"--input-type=module",
+							"-e",
+							`import { main } from ${JSON.stringify(pathToFileURL(path.join(scriptDir, "pre-push-targeted-tests.mjs")).href)}; process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...${JSON.stringify(extra)}); process.exitCode = await main();`,
+						]
+					: [
+							path.join(scriptDir, "pre-push-targeted-tests.mjs"),
+							"--skip-build",
+							...extra,
+						],
 				{
 					cwd: fixtureDir,
 					encoding: "utf8",
@@ -720,29 +727,19 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 	it.each(["SIGINT", "SIGTERM"] as const)(
 		"removes the run directory on %s (#5439)",
 		(signal) => {
-			gitFixture();
+			const { hook } = gitFixture();
 			const base = path.join(fixtureDir as string, "interrupt-base");
 			write(
 				"tests/clients/first.test.ts",
 				`import { it } from 'vitest'; it('interrupt', () => { process.kill(Number(process.env.GATE_PID), '${signal}'); });\n`,
 			);
-			const script = pathToFileURL(
-				path.join(repoRoot, "scripts/pre-push-targeted-tests.mjs"),
-			).href;
-			const result = spawnSync(
-				process.execPath,
-				[
-					"--input-type=module",
-					"-e",
-					`import { main } from ${JSON.stringify(script)}; process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', '--include-worktree'); process.exitCode = await main();`,
-				],
+			const result = hook(
+				"",
+				["--include-worktree"],
 				{
-					cwd: fixtureDir,
-					encoding: "utf8",
-					input: "",
-					timeout: 30000,
-					env: { ...process.env, PI_LENS_PREPUSH_TMPDIR: base },
+					PI_LENS_PREPUSH_TMPDIR: base,
 				},
+				true,
 			);
 			expect(result.error).toBeUndefined();
 			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
@@ -765,8 +762,9 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		write(
 			"tests/clients/first.test.ts",
 			'import { expect, it } from "vitest";\n' +
+				'import path from "node:path";\n' +
 				'it("reads the pinned temp root", () => {\n' +
-				"  expect(process.env.TMPDIR?.startsWith(process.env.PREPUSH_TMP_EXPECTED + '/run-')).toBe(true);\n" +
+				"  expect(process.env.TMPDIR?.startsWith(process.env.PREPUSH_TMP_EXPECTED + path.sep + 'run-')).toBe(true);\n" +
 				"  expect(process.env.TEMP).toBe(process.env.TMPDIR);\n" +
 				"  expect(process.env.TMP).toBe(process.env.TMPDIR);\n" +
 				"});\n",
