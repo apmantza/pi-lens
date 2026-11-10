@@ -6,12 +6,13 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
-permissions:
-  issues: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   stale:
+    permissions:
+      issues: write
+      pull-requests: write
     # #4053: closes and labels issues and PRs, so a branch dispatch must
     # not run it.
     if: github.event_name == 'schedule' || github.ref == 'refs/heads/master'

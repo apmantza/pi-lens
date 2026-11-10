@@ -7,9 +7,7 @@ on:
   issues:
     types: [opened]
 
-permissions:
-  issues: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   # #5112: 1,446 runner minutes in 30 days, almost all for an action that found
@@ -22,6 +20,9 @@ jobs:
   # (scripts/lib/ci-checks.mjs lists it as advisory). The job has no checkout
   # and runs no repository code.
   greeting:
+    permissions:
+      issues: write
+      pull-requests: write
     if: >-
       github.event_name == 'issues' ||
       github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' ||

@@ -17,6 +17,10 @@ env:
   npm_config_fetch_retries: 5
   npm_config_fetch_retry_maxtimeout: 120000
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: Action pin comments

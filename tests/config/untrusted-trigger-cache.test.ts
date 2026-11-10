@@ -14,6 +14,8 @@
 // commented-out step is not a step, a `run:` echoing the name is not a use).
 // A local composite action or reusable workflow is followed, because
 // `uses: ./.github/actions/x` hides its steps from the caller's own file.
+import { decodeShellWords } from "../../clients/bash-file-access.js";
+import yaml from "../../clients/deps/js-yaml.js";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -414,4 +416,123 @@ describe("untrusted triggers never restore or save a cache (#4358)", () => {
 			expect(untrustedCacheFindings(workflow, "p.yml")).toHaveLength(1);
 		});
 	});
+});
+
+function jobsOf(
+	file: string,
+): Record<
+	string,
+	{ steps?: { uses?: string; run?: string; with?: Record<string, unknown> }[] }
+> {
+	return (
+		yaml.load(readFileSync(resolve(ROOT, file), "utf8")) as {
+			jobs: Record<
+				string,
+				{
+					steps?: {
+						uses?: string;
+						run?: string;
+						with?: Record<string, unknown>;
+					}[];
+				}
+			>;
+		}
+	).jobs;
+}
+// #5082 / #5182 recurrence: no-install jobs won the shared Linux npm cache
+// key with an empty ~/.npm. Unknown install wrappers must opt out too.
+describe("npm auto-cache writers across workflows", () => {
+	const installs = (run: string) =>
+		decodeShellWords(run).some(
+			({ words }) =>
+				words[0]?.text === "npm" &&
+				!words[0].hidden &&
+				["ci", "install", "i"].includes(words[1]?.text) &&
+				!words[1]?.hidden,
+		);
+
+	it("requires every no-install setup-node job to opt out", () => {
+		const offenders: string[] = [];
+		let scanned = 0;
+		for (const file of readdirSync(resolve(ROOT, ".github/workflows"))) {
+			if (!/\.ya?ml$/.test(file)) continue;
+			for (const [id, job] of Object.entries(
+				jobsOf(`.github/workflows/${file}`),
+			)) {
+				scanned +=
+					job.steps?.filter((entry) =>
+						String((entry as { uses?: string }).uses).startsWith(
+							"actions/setup-node@",
+						),
+					).length ?? 0;
+				if (job.steps?.some((entry) => installs(entry.run ?? ""))) continue;
+				for (const entry of job.steps ?? []) {
+					const setup = entry as {
+						uses?: string;
+						with?: Record<string, unknown>;
+					};
+					if (
+						setup.uses?.startsWith("actions/setup-node@") &&
+						setup.with?.["package-manager-cache"] !== false
+					)
+						offenders.push(`${file}:${id}`);
+				}
+			}
+		}
+		assertNonEmptyScan("setup-node cache writers", scanned);
+		expect(offenders).toEqual([]);
+	});
+
+	it.each(["npm ci", "npm install --ignore-scripts", "npm i -g tool"])(
+		"recognizes literal installer %s",
+		(run) => expect(installs(run)).toBe(true),
+	);
+	it.each([
+		"# npm ci",
+		"echo 'npm ci'",
+		"installer=npm; $installer ci",
+		"alias installer='npm ci'; installer",
+		"./install-dependencies.sh",
+		"cat <<'EOF'\nnpm ci\nEOF",
+		"command npm ci",
+		"npx npm@latest ci",
+	])("requires an opt-out for unknown installer %s", (run) => {
+		expect(installs(run)).toBe(false);
+	});
+});
+
+// #5182: retain each writer's scopes while removing workflow-wide writes.
+it("scopes bot write permissions to their sole job", () => {
+	for (const [file, id, permissions] of [
+		[
+			"close-keyword-verification",
+			"verify",
+			{ contents: "read", issues: "read", "pull-requests": "write" },
+		],
+		["greetings", "greeting", { issues: "write", "pull-requests": "write" }],
+		["stale", "stale", { issues: "write", "pull-requests": "write" }],
+	] as const) {
+		const workflow = yaml.load(
+			readFileSync(resolve(ROOT, `.github/workflows/${file}.yml`), "utf8"),
+		) as {
+			permissions: unknown;
+			jobs: Record<string, { permissions?: Record<string, string> }>;
+		};
+		expect(workflow.permissions).toEqual({});
+		expect(workflow.jobs[id].permissions).toEqual(permissions);
+	}
+});
+
+// #5182: a newer PR must never cancel a scheduled dependency scan.
+it("cancels only PR runs within an event and ref concurrency group", () => {
+	for (const file of ["action-pins", "osv-scan"]) {
+		const workflow = yaml.load(
+			readFileSync(resolve(ROOT, `.github/workflows/${file}.yml`), "utf8"),
+		) as { concurrency: unknown };
+		expect(workflow.concurrency).toEqual({
+			group:
+				"${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}",
+			"cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+		});
+	}
 });
