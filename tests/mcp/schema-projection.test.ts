@@ -21,11 +21,9 @@
  * Requires `npm run build` first (both tiers load the compiled twins).
  */
 
-import type { Tool } from "@earendil-works/pi-ai";
-import {
-	getJsonSchemaToolParameters,
-	resolveJsonSchemaStrictSampling,
-} from "@earendil-works/pi-ai/api/constrained-sampling";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	TOOL_REGISTRY,
@@ -147,6 +145,52 @@ function unsafeStrictSchema(node: unknown, inUnion = false): boolean {
 	});
 }
 
+/** The pi-ai surface the guard drives; pi-ai's own `Tool` is a host type. */
+type SamplingTool = { name: string; parameters: unknown };
+type ConstrainedSamplingModule = {
+	getJsonSchemaToolParameters(
+		tool: SamplingTool,
+		strict: boolean | undefined,
+	): unknown;
+	resolveJsonSchemaStrictSampling(
+		tool: SamplingTool,
+		supportsStrictMode: boolean,
+	): boolean | undefined;
+};
+
+/**
+ * `@earendil-works/pi-ai` is not a dependency of this repo (#4664 F1): it ships
+ * inside the host install. The conversion module is loaded at runtime from the
+ * host's node_modules, as `tests/support/pi-session.ts` loads pi-ai, never
+ * through a static specifier the dependency graph (and knip) would read. A
+ * `PI_LENS_PI_HOST_PACKAGE` override is searched from that host's directory.
+ */
+async function hostConstrainedSampling(): Promise<ConstrainedSamplingModule> {
+	const override = process.env.PI_LENS_PI_HOST_PACKAGE;
+	const start = override
+		? path.resolve(override)
+		: path.dirname(fileURLToPath(import.meta.url));
+	for (let dir = start; ; dir = path.dirname(dir)) {
+		const candidate = path.join(
+			dir,
+			"node_modules",
+			"@earendil-works",
+			"pi-ai",
+			"dist",
+			"api",
+			"constrained-sampling.js",
+		);
+		if (fs.existsSync(candidate))
+			return (await import(
+				pathToFileURL(candidate).href
+			)) as ConstrainedSamplingModule;
+		if (path.dirname(dir) === dir)
+			throw new Error(
+				`no @earendil-works/pi-ai constrained-sampling module is reachable from ${start} (#5471)`,
+			);
+	}
+}
+
 function carriesConstrainedSampling(definition: PiDefinition): boolean {
 	return (
 		definition.constrainedSampling !== undefined &&
@@ -165,7 +209,10 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 	let mcpTools: ListedMcpTool[];
 	let harness: McpHarness;
 
+	let sampling: ConstrainedSamplingModule;
+
 	beforeAll(async () => {
+		sampling = await hostConstrainedSampling();
 		const pi = await startPiRunner();
 		piDefinitions = pi
 			.getAllRegisteredTools()
@@ -283,6 +330,8 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 			{ anyOf: [{ type: "string" }, { type: "null" }], enum: ["a"] },
 			{ type: ["string", "null"], const: "a" },
 			{ anyOf: [{ type: "object", properties: { nested: alias } }] },
+			// Review F1: an enum union reached only through array `items`.
+			{ type: "array", items: indirect() },
 			{ $ref: "#/unknown" },
 			{ not: alias },
 			null,
@@ -301,11 +350,11 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 		expect(carriers.length).toBeGreaterThan(0);
 		const hits = carriers
 			.filter((definition) => {
-				const tool = definition as Tool;
-				const strict = resolveJsonSchemaStrictSampling(tool, true);
+				const tool = definition as SamplingTool;
+				const strict = sampling.resolveJsonSchemaStrictSampling(tool, true);
 				return (
 					strict !== true ||
-					unsafeStrictSchema(getJsonSchemaToolParameters(tool, strict))
+					unsafeStrictSchema(sampling.getJsonSchemaToolParameters(tool, strict))
 				);
 			})
 			.map((definition) => definition.name);
