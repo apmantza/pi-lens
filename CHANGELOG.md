@@ -42,7 +42,7 @@ All notable changes to pi-lens will be documented in this file.
 
 #### Hosts and integrations
 
-- **Models that reject strict enum unions work again.** Providers including opencode-go beam-free no longer fail with “Invalid request” when pi-lens tools are present. (refs #5471)
+- **Providers that rejected pi-lens's strict tool schemas work again.** With 4.4.11, opencode-go beam-free failed every turn with “Invalid request” and Amazon Bedrock's Anthropic models with “For 'array' type, property 'maxItems' is not supported”; pi-lens tools no longer request strict schemas. (refs #5471, #5480)
 
 ## [4.4.11] - 2026-11-09
 
