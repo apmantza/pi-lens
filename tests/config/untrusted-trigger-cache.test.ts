@@ -438,28 +438,37 @@ function jobsOf(
 describe("npm auto-cache writers across workflows", () => {
 	const scan = (ciSource?: string, overrideFile = "ci.yml") => {
 		// #5182: preserve deferred workflow bytes until scheduled master validation.
-		// Includes nine former implicit installer admissions; each row admits one step.
+		// 29 exact-step admissions preserve workflows awaiting hosted validation.
 		const deferredOptOutBaseline = new Set([
-			"compat-smoke.yml:compat-smoke:0",
 			"compat-smoke.yml:compat-smoke-alert:0",
+			"compat-smoke.yml:compat-smoke:0",
+			"grammar-health.yml:guard:0",
+			"grammar-health.yml:swift-crash-watch:0",
+			"lifecycle-smoke.yml:availability-lifecycle:0",
+			"lifecycle-smoke.yml:gitleaks-scratch-exclusion:0",
+			"lifecycle-smoke.yml:psscriptanalyzer-classification:0",
+			"parser-smoke.yml:parser-smoke:0",
 			"release.yml:prepare:0",
 			"release.yml:publish-npm:0",
 			"shuffle-census-nightly.yml:census:0",
 			"shuffle-census-nightly.yml:confirm-report:0",
 			"shuffle-census-nightly.yml:publish-issue:0",
 			"stale-open-issues.yml:detect:0",
-			"stryker-nightly.yml:prepare:0",
 			"stryker-nightly.yml:mutate:0",
-			"stryker-nightly.yml:publish:0",
+			"stryker-nightly.yml:prepare:0",
 			"stryker-nightly.yml:publish-issue:0",
-			"tool-smoke.yml:test-history-rollup:0",
-			"tool-smoke.yml:test-history-publish:0",
-			"tool-smoke.yml:test-history-notify:0",
-			"tool-smoke.yml:tool-smoke:0",
-			"tool-smoke.yml:tool-smoke-prs:0",
-			"tool-smoke.yml:tool-smoke-notify:0",
+			"stryker-nightly.yml:publish:0",
+			"stryker-pertest.yml:mutate:0",
 			"tool-smoke.yml:snapshot-persist-bench:0",
 			"tool-smoke.yml:snapshot-persist-notify:0",
+			"tool-smoke.yml:test-history-notify:0",
+			"tool-smoke.yml:test-history-publish:0",
+			"tool-smoke.yml:test-history-rollup:0",
+			"tool-smoke.yml:tool-smoke-notify:0",
+			"tool-smoke.yml:tool-smoke-prs:0",
+			"tool-smoke.yml:tool-smoke:0",
+			"untriaged-issues.yml:detect:0",
+			"windows-repeat-probe.yml:repeat:0",
 		]);
 		const offenders: string[] = [];
 		let scanned = 0;

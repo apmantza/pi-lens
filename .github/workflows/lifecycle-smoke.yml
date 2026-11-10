@@ -52,7 +52,6 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          package-manager-cache: true
           node-version: "22"
       # --ignore-scripts is safe here (unlike install-smoke.yml's tarball-pack
       # case, S6505's noted exception): this job runs `npm run build:dist`
@@ -100,7 +99,6 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          package-manager-cache: true
           node-version: "22"
       # --ignore-scripts is safe here (unlike install-smoke.yml's tarball-pack
       # case, S6505's noted exception): this job runs `npm run build:dist`
@@ -130,7 +128,6 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          package-manager-cache: true
           node-version: "22"
       # --ignore-scripts is safe here (unlike install-smoke.yml's tarball-pack
       # case, S6505's noted exception): this job runs `npm run build:dist`
