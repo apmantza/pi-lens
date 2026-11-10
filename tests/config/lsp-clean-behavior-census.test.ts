@@ -27,6 +27,14 @@
  * registry entry (3). Deliberately a two-source governance test — it parses the
  * checked-in matrix with the same parser the nightly generator uses and reads the
  * real registry the LSP client imports; it recreates neither.
+ *
+ * ## The pull-strategy census (#5464), same file on purpose
+ *
+ * A third matrix reader would join the two that already exist; the pull census
+ * reads the same `matrixRows()` and judges the same strategy table, so it lives
+ * beside the push census rather than as a fourth parser (rival interface
+ * considered: a standalone `lsp-pull-strategy-census.test.ts`; it lost because
+ * it would re-parse the matrix a third time).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -99,6 +107,64 @@ function matrixRows(): MatrixRow[] {
 		mode: cells[mode] ?? "",
 		cleanBehavior: cells[cleanBehavior] ?? "",
 	}));
+}
+
+/**
+ * Named admissions for a `mode=pull` matrix row whose strategy key has NO row in
+ * SERVER_DIAGNOSTIC_STRATEGIES, so it waits on DEFAULT_STRATEGY (1500 ms): key →
+ * why. A pull server answers authoritatively, so a cold answer slower than the
+ * budget is abandoned as `touched=0` (#5464: deno, 4.15 s and 4.60 s on the
+ * nightly runner against 1500 ms). The matrix says WHICH servers pull; only a
+ * measured cold touch says what budget they need, so an unmeasured pull server
+ * is admitted here BY NAME until a run records one, and an unlisted pull row
+ * fails closed. Shrink-only: `stalePullAdmissions` reds when the key gains a
+ * strategy row or leaves the pull population. The reason string is documentation
+ * ONLY and is never read (see UNMEASURED_PUSH_ADMISSIONS).
+ */
+const UNMEASURED_PULL_ADMISSIONS = new Map<string, string>([
+	["json", "vscode-json-language-server: no cold-touch measurement recorded"],
+	["css", "vscode-css-language-server: no cold-touch measurement recorded"],
+	["html", "vscode-html-language-server: no cold-touch measurement recorded"],
+	["ruby", "ruby-lsp: no cold-touch measurement recorded"],
+	[
+		"rust",
+		"rust-analyzer: the registry id is `rust` but the strategy row is keyed `rust-analyzer`, so the row never applies and rust waits on the default; re-keying it changes rust's budget, pull retry and second-push expectation and is its own measured change",
+	],
+]);
+
+/** Pull rows whose strategy key has no row and no named admission. */
+function unaccountedPullRows(
+	pullRows: MatrixRow[],
+	strategyKeys: ReadonlySet<string>,
+	admissions: Map<string, string>,
+): string[] {
+	return pullRows
+		.filter((row) => {
+			const key = strategyKeyForLang(row.lang);
+			return !strategyKeys.has(key) && !admissions.has(key);
+		})
+		.map(
+			(row) =>
+				`${row.lang} (${row.server}): mode=pull with no SERVER_DIAGNOSTIC_STRATEGIES row for ${strategyKeyForLang(row.lang)} and no named admission — it waits on the 1500 ms default, which abandons a cold pull slower than that as touched=0 (#5464)`,
+		);
+}
+
+/** Admissions whose justification is gone: TOTAL over the reason text. */
+function stalePullAdmissions(
+	pullRows: MatrixRow[],
+	strategyKeys: ReadonlySet<string>,
+	admissions: Map<string, string>,
+): string[] {
+	return [...admissions.keys()]
+		.filter(
+			(key) =>
+				strategyKeys.has(key) ||
+				!pullRows.some((row) => strategyKeyForLang(row.lang) === key),
+		)
+		.map(
+			(key) =>
+				`${key}: stale unmeasured-pull admission — the key has a strategy row or no pull matrix row, so the admission must be deleted`,
+		);
 }
 
 function markedServers(): string[] {
@@ -270,5 +336,75 @@ describe("#3347 clean-behavior marker census", () => {
 					`${row.lang} (${row.server}): mode=${row.mode} carries clean-behavior=${row.cleanBehavior} — clean-behavior is a push-wait measurement, so this row is evidence for neither direction of its silentOnClean marker`,
 			);
 		expect(offenders).toEqual([]);
+	});
+});
+
+describe("#5464 pull-strategy census", () => {
+	const strategyKeys = new Set(Object.keys(SERVER_DIAGNOSTIC_STRATEGIES));
+	const pullRows = () => matrixRows().filter((row) => row.mode === "pull");
+
+	// Recurrence: deno was a measured pull server (matrix `mode=pull`) with no
+	// strategy row; it took the 1500 ms default and the nightly flipped red when
+	// the runner slowed (#5464). The matrix is the instrument that says a server
+	// pulls, so every pull row is judged against the strategy table.
+	it("gives every pull row a strategy row or a named admission", () => {
+		const rows = pullRows();
+		// A floor, not a ratchet: the census must never pass by comparing nothing.
+		expect(rows.length).toBeGreaterThanOrEqual(6);
+		expect(
+			unaccountedPullRows(rows, strategyKeys, UNMEASURED_PULL_ADMISSIONS),
+		).toEqual([]);
+		expect(
+			stalePullAdmissions(rows, strategyKeys, UNMEASURED_PULL_ADMISSIONS),
+		).toEqual([]);
+	});
+
+	// State table: row population × strategy row × admission. Every cell other
+	// than "has a row" or "admitted" is a report, whatever the reason says.
+	it("reports an unlisted pull row and expires an admission whatever its reason says", () => {
+		const row = (lang: string): MatrixRow => ({
+			lang,
+			server: `${lang}-language-server`,
+			mode: "pull",
+			cleanBehavior: "—",
+		});
+		const withRow = new Set(["fixturelang"]);
+		const noRow = new Set<string>();
+		const none = new Map<string, string>();
+		for (const reason of [
+			"plain reason",
+			"awaits the nightly measurement after run 1",
+		]) {
+			const admitted = new Map<string, string>([["fixturelang", reason]]);
+			// has a row, no admission → clean.
+			expect(unaccountedPullRows([row("fixturelang")], withRow, none)).toEqual(
+				[],
+			);
+			// no row, no admission → reported (the deno-on-master state).
+			expect(
+				unaccountedPullRows([row("fixturelang")], noRow, none),
+				reason,
+			).toHaveLength(1);
+			// no row, admitted → accepted, not stale.
+			expect(
+				unaccountedPullRows([row("fixturelang")], noRow, admitted),
+				reason,
+			).toEqual([]);
+			expect(
+				stalePullAdmissions([row("fixturelang")], noRow, admitted),
+				reason,
+			).toEqual([]);
+			// the row was added but the admission stayed → stale.
+			expect(
+				stalePullAdmissions([row("fixturelang")], withRow, admitted),
+				reason,
+			).toHaveLength(1);
+			// the server left the pull population → stale.
+			expect(stalePullAdmissions([], noRow, admitted), reason).toHaveLength(1);
+			// an alias key resolves through strategyKeyForLang like the live rows.
+			expect(
+				unaccountedPullRows([row("jedi")], new Set(["python-jedi"]), none),
+			).toEqual([]);
+		}
 	});
 });
