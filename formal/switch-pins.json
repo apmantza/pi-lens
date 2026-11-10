@@ -282,7 +282,7 @@
 				"CachedGate": {
 					"value": "\"freshness\"",
 					"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
-					"title": "DEMOTES a finding whose file was edited after the scan — kept, no line",
+					"title": "DEMOTES a finding whose file was edited after the scan \u2014 kept, no line",
 					"also": [
 						{
 							"test": "tests/clients/runtime-turn-finding-freshness.test.ts",
@@ -2825,6 +2825,30 @@
 					]
 				}
 			]
+		},
+		"adopted-root-trust": {
+			"pins": {
+				"RootTrustGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "refuses saved-false adopted Rust under trusted A"
+				},
+				"BoundSdkLoad": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "bounds a held SDK load and retries on the next owning turn"
+				},
+				"RetirementAbort": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "retires a held SDK load before shutdown joins starts"
+				},
+				"DetachedMemoGuard": {
+					"value": "TRUE",
+					"test": "tests/clients/lsp/adopted-root-trust-5469.test.ts",
+					"title": "detached diagnostics rereads saved trust after the host turn changes"
+				}
+			}
 		}
 	}
 }
