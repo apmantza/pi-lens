@@ -122,10 +122,22 @@ function matrixRows(): MatrixRow[] {
  * ONLY and is never read (see UNMEASURED_PUSH_ADMISSIONS).
  */
 const UNMEASURED_PULL_ADMISSIONS = new Map<string, string>([
-	["json", "vscode-json-language-server: no cold-touch measurement recorded"],
-	["css", "vscode-css-language-server: no cold-touch measurement recorded"],
-	["html", "vscode-html-language-server: no cold-touch measurement recorded"],
-	["ruby", "ruby-lsp: no cold-touch measurement recorded"],
+	[
+		"json",
+		"vscode-json-language-server: nightly handshake touch 1.04-1.17 s in 7 runs (2026-11-06..10), spawn and initialize included, all answered on the default; no cold-pull budget measured",
+	],
+	[
+		"css",
+		"vscode-css-language-server: nightly handshake touch 1.08-1.31 s in 7 runs (2026-11-06..10), spawn and initialize included, all answered on the default; no cold-pull budget measured",
+	],
+	[
+		"html",
+		"vscode-html-language-server: nightly handshake touch 1.21-1.53 s in 7 runs (2026-11-06..10), spawn and initialize included, all answered on the default; no cold-pull budget measured",
+	],
+	[
+		"ruby",
+		"ruby-lsp: the nightly handshake log reads ensureTool(ruby-lsp) UNAVAILABLE, so no cold pull was ever measured",
+	],
 	[
 		"rust",
 		"rust-analyzer: the registry id is `rust` but the strategy row is keyed `rust-analyzer`, so the row never applies and rust waits on the default; re-keying it changes rust's budget, pull retry and second-push expectation and is its own measured change",
