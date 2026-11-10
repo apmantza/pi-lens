@@ -32,6 +32,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { copyFixtureGitHelper } from "../support/fixture-git-copy.js";
 import { readNdjsonRows } from "../support/ndjson-rows.js";
+import { isProcessAlive } from "../support/process-tree.js";
+import { waitFor } from "../clients/interleaving-kit.js";
 import {
 	loadHistorySelection,
 	resolveHeadPaths,
@@ -733,9 +735,10 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		async (signal, undrained) => {
 			const { hook } = gitFixture();
 			const base = path.join(fixtureDir as string, "interrupt-base");
+			const workerPidFile = path.join(fixtureDir as string, "worker.pid");
 			write(
 				"tests/clients/first.test.ts",
-				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(base, "late-writer"))}, 'wrote'); });\n`,
+				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { fs.writeFileSync(${JSON.stringify(workerPidFile)}, String(process.pid)); process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(base, "late-writer"))}, 'wrote'); });\n`,
 			);
 			const result = hook(
 				"",
@@ -745,8 +748,15 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 				},
 				undrained ? "undrained" : true,
 			);
-			// Let the real worker attempt its delayed write after the gate exits.
-			await new Promise((resolve) => setTimeout(resolve, 600));
+			// #5468: observe the writer exiting, so a slow worker cannot write
+			// after the assertion and make the cleanup witness falsely pass.
+			const workerPid = Number(fs.readFileSync(workerPidFile, "utf8"));
+			expect(workerPid).toBeGreaterThan(0);
+			await waitFor(
+				() => isProcessAlive(workerPid),
+				(alive) => !alive,
+				{ timeoutMs: 5_000 },
+			);
 			expect(result.error).toBeUndefined();
 			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
 			expect(dir).toBeDefined();
