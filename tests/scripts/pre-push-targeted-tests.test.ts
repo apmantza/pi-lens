@@ -84,11 +84,6 @@ function fixtureRoot(prefix: string): string {
 	return fs.mkdtempSync(path.join(repoRoot, ".probe-home", prefix));
 }
 
-function enterFixture() {
-	fixtureDir = fixtureRoot("pre-push-test-");
-	process.chdir(fixtureDir);
-}
-
 // A PI_LENS_HOME beside the fixture checkout, never inside it: the gate moves
 // a base at or inside the checkout to the default one (#5468 M1).
 const outsideRoots: string[] = [];
@@ -96,6 +91,11 @@ function outsideHome(): string {
 	const root = fixtureRoot("pre-push-home-");
 	outsideRoots.push(root);
 	return root;
+}
+
+function enterFixture() {
+	fixtureDir = fixtureRoot("pre-push-test-");
+	process.chdir(fixtureDir);
 }
 
 afterEach(() => {
