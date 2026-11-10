@@ -461,7 +461,10 @@ export function resolveDiffRange(
 export function resolvePrePushTmpRoot(env = process.env) {
 	const explicit = env.PI_LENS_PREPUSH_TMPDIR?.trim();
 	if (explicit) return path.resolve(explicit);
-	const base = env.PI_LENS_HOME?.trim() || path.join(os.homedir(), ".pi-lens");
+	const override = env.PI_LENS_HOME?.trim();
+	const base = override
+		? path.resolve(override)
+		: path.join(os.homedir(), ".pi-lens");
 	return path.join(base, "prepush-tmp");
 }
 

@@ -733,6 +733,12 @@ describe("pre-push temp root pin (#5439)", () => {
 		);
 	});
 
+	it("resolves a relative PI_LENS_HOME, like getLockPath", () => {
+		const root = resolvePrePushTmpRoot({ PI_LENS_HOME: "rel-home-5439" });
+		expect(root).toBe(path.join(path.resolve("rel-home-5439"), "prepush-tmp"));
+		expect(path.isAbsolute(root)).toBe(true);
+	});
+
 	it("gives PI_LENS_PREPUSH_TMPDIR precedence over PI_LENS_HOME, resolved", () => {
 		const root = resolvePrePushTmpRoot({
 			PI_LENS_HOME: "/machine/home",
