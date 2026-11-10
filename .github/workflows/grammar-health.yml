@@ -44,6 +44,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "24" # the version where #423 reproduces
       - name: Install dependencies (downloads core grammars via prepare)
         run: npm install --no-audit --no-fund
@@ -75,6 +76,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "24" # the version where #423 reproduces
       - name: Install dependencies (downloads the prebuilt swift grammar)
         run: npm install --no-audit --no-fund

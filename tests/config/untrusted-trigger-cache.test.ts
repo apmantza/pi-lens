@@ -14,7 +14,6 @@
 // commented-out step is not a step, a `run:` echoing the name is not a use).
 // A local composite action or reusable workflow is followed, because
 // `uses: ./.github/actions/x` hides its steps from the caller's own file.
-import { decodeShellWords } from "../../clients/bash-file-access.js";
 import yaml from "../../clients/deps/js-yaml.js";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -423,78 +422,44 @@ function jobsOf(
 	source = readFileSync(resolve(ROOT, file), "utf8"),
 ): Record<
 	string,
-	{
-		steps?: {
-			uses?: string;
-			run?: string;
-			with?: Record<string, unknown>;
-			if?: unknown;
-			"continue-on-error"?: unknown;
-		}[];
-	}
+	{ steps?: { uses?: string; with?: Record<string, unknown> }[] }
 > {
 	return (
 		yaml.load(source) as {
 			jobs: Record<
 				string,
-				{
-					steps?: {
-						uses?: string;
-						run?: string;
-						if?: unknown;
-						"continue-on-error"?: unknown;
-						with?: Record<string, unknown>;
-					}[];
-				}
+				{ steps?: { uses?: string; with?: Record<string, unknown> }[] }
 			>;
 		}
 	).jobs;
 }
 // #5082 / #5182 recurrence: no-install jobs won the shared Linux npm cache
-// key with an empty ~/.npm. Unknown install wrappers must opt out too.
+// key with an empty ~/.npm. Every writer must now declare its cache intent.
 describe("npm auto-cache writers across workflows", () => {
-	const installs = (run: string) => {
-		for (const source of run.split("\n")) {
-			const line = source.trim();
-			if (!line || line.startsWith("#")) continue;
-			// Known-good single command lines only; no shell evaluation or chains.
-			if (!/^[\w./:@%+,= \t-]+$/.test(line)) return false;
-			const words = decodeShellWords(line)[0]?.words ?? [];
-			if (
-				words[0]?.text === "npm" &&
-				["ci", "install", "i"].includes(words[1]?.text)
-			)
-				return true;
-			if (words[0]?.text === "set") {
-				if (!/^set[ \t]+-[eux]+(?:o[ \t]+pipefail)?$/.test(line)) return false;
-				continue;
-			}
-			// Only known plain prefixes: shell keywords, bindings and aliases refuse.
-			if (
-				!["echo", "printf", "pwd", "cd", "mkdir", "rm", "git", "node"].includes(
-					words[0]?.text,
-				)
-			)
-				return false;
-		}
-		return false;
-	};
-
-	const scan = (ciSource?: string) => {
-		// #5182 remainder: opt-outs land after merge, checked on first scheduled master run
-		// (these jobs are master/schedule-only, so a branch dispatch skips them)
+	const scan = (ciSource?: string, overrideFile = "ci.yml") => {
+		// #5182: preserve deferred workflow bytes until scheduled master validation.
+		// Includes nine former implicit installer admissions; each row admits one step.
 		const deferredOptOutBaseline = new Set([
-			"release.yml:prepare",
-			"release.yml:publish-npm",
-			"stale-open-issues.yml:detect",
-			"tool-smoke.yml:test-history-rollup",
-			"tool-smoke.yml:test-history-publish",
-			"tool-smoke.yml:test-history-notify",
-			"tool-smoke.yml:tool-smoke-prs",
-			"tool-smoke.yml:snapshot-persist-notify",
-			"stryker-nightly.yml:publish-issue",
-			"compat-smoke.yml:compat-smoke-alert",
-			"shuffle-census-nightly.yml:publish-issue",
+			"compat-smoke.yml:compat-smoke:0",
+			"compat-smoke.yml:compat-smoke-alert:0",
+			"release.yml:prepare:0",
+			"release.yml:publish-npm:0",
+			"shuffle-census-nightly.yml:census:0",
+			"shuffle-census-nightly.yml:confirm-report:0",
+			"shuffle-census-nightly.yml:publish-issue:0",
+			"stale-open-issues.yml:detect:0",
+			"stryker-nightly.yml:prepare:0",
+			"stryker-nightly.yml:mutate:0",
+			"stryker-nightly.yml:publish:0",
+			"stryker-nightly.yml:publish-issue:0",
+			"tool-smoke.yml:test-history-rollup:0",
+			"tool-smoke.yml:test-history-publish:0",
+			"tool-smoke.yml:test-history-notify:0",
+			"tool-smoke.yml:tool-smoke:0",
+			"tool-smoke.yml:tool-smoke-prs:0",
+			"tool-smoke.yml:tool-smoke-notify:0",
+			"tool-smoke.yml:snapshot-persist-bench:0",
+			"tool-smoke.yml:snapshot-persist-notify:0",
 		]);
 		const offenders: string[] = [];
 		let scanned = 0;
@@ -503,33 +468,17 @@ describe("npm auto-cache writers across workflows", () => {
 			for (const [id, job] of Object.entries(
 				jobsOf(
 					`.github/workflows/${file}`,
-					file === "ci.yml" ? ciSource : undefined,
+					file === overrideFile ? ciSource : undefined,
 				),
 			)) {
-				scanned +=
-					job.steps?.filter((entry) =>
-						String((entry as { uses?: string }).uses)
-							.toLowerCase()
-							.startsWith("actions/setup-node@"),
-					).length ?? 0;
-				for (const [index, entry] of (job.steps ?? []).entries()) {
-					const setup = entry as {
-						uses?: string;
-						with?: Record<string, unknown>;
-					};
-					if (
-						setup.uses?.toLowerCase().startsWith("actions/setup-node@") &&
-						setup.with?.["package-manager-cache"] !== false &&
-						!job.steps
-							?.slice(index + 1)
-							.some(
-								(step) =>
-									step.if === undefined &&
-									step["continue-on-error"] === undefined &&
-									installs(step.run ?? ""),
-							)
-					)
-						offenders.push(`${file}:${id}`);
+				let setupIndex = 0;
+				for (const setup of job.steps ?? []) {
+					if (!setup.uses?.toLowerCase().startsWith("actions/setup-node@"))
+						continue;
+					const key = `${file}:${id}:${setupIndex++}`;
+					scanned++;
+					const intent = setup.with?.["package-manager-cache"];
+					if (intent !== true && intent !== false) offenders.push(key);
 				}
 			}
 		}
@@ -542,95 +491,75 @@ describe("npm auto-cache writers across workflows", () => {
 		).toEqual([]);
 		return scanned;
 	};
-	it("requires every no-install setup-node job to opt out", () => scan());
+	it("requires every setup-node step to declare boolean cache intent", () =>
+		scan());
 
-	// F1: plant unreachable installers in the actual ci.yml:changes scan.
+	// F2: author intent replaces guesses about shell reachability and location.
 	it.each([
-		["skipped step", "      - run: npm ci\n        if: ${{ false }}\n"],
-		[
-			"unreachable chain",
-			"      - run: false && npm ci\n        continue-on-error: true\n",
-		],
-		["chain without continue-on-error", "      - run: false && npm ci\n"],
-		[
-			"continue-on-error step",
-			"      - run: npm ci\n        continue-on-error: true\n",
-		],
-		[
-			"exit before install",
-			"      - run: |\n          exit 0\n          npm ci\n",
-		],
-		["installer before setup", "      - run: npm ci\n"],
-	])("requires an opt-out for %s in the workflow scan", (name, plant) => {
-		const file = resolve(WORKFLOWS, "ci.yml");
-		const original = readFileSync(file, "utf8");
-		const withoutOptOut = original.replace(
-			"package-manager-cache: false",
-			"package-manager-cache: true",
-		);
-		const anchor =
-			name === "installer before setup"
-				? "      - uses: actions/setup-node@"
-				: "      - name: Classify the changed files";
-		expect(withoutOptOut).toContain(anchor);
-		// Same repository scan and baseline assertions, with only ci.yml's bytes planted.
-		expect(() => scan(withoutOptOut.replace(anchor, plant + anchor))).toThrow();
+		["missing key", ""],
+		["expression", "package-manager-cache: ${{ true }}"],
+		["string false", "package-manager-cache: 'false'"],
+		["string true", "package-manager-cache: 'true'"],
+		["null", "package-manager-cache: null"],
+		["number", "package-manager-cache: 0"],
+		["string alias", "package-manager-cache: *intent"],
+		["mixed-case missing key", ""],
+	])("rejects %s in the workflow scan", (name, input) => {
+		let source =
+			"x-intent: &intent 'false'\n" +
+			readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8")
+				.replace("package-manager-cache: false", input)
+				.replace(
+					"      - name: Classify the changed files",
+					"      - run: npm ci --dry-run\n      - name: Classify the changed files",
+				);
+		if (name === "mixed-case missing key")
+			source = source.replace("actions/setup-node@", "Actions/Setup-Node@");
+		expect(() => scan(source)).toThrow();
 	});
 
-	// Q1: spelling alone must not remove an opted-out writer from the census.
-	it("counts mixed-case setup-node with an explicit opt-out in the workflow scan", () => {
+	// F3: a job-level admission must never admit another cache writer.
+	it("rejects a second writer in a baselined job", () => {
+		const source = readFileSync(
+			resolve(WORKFLOWS, "release.yml"),
+			"utf8",
+		).replace(
+			"      - uses: actions/setup-node@",
+			"      - uses: actions/setup-node@v7\n      - uses: actions/setup-node@",
+		);
+		expect(() => scan(source, "release.yml")).toThrow();
+	});
+
+	it("rejects a stale baseline row", () => {
+		const source = readFileSync(
+			resolve(WORKFLOWS, "release.yml"),
+			"utf8",
+		).replace(
+			"        with:\n          node-version:",
+			"        with:\n          package-manager-cache: false\n          node-version:",
+		);
+		expect(() => scan(source, "release.yml")).toThrow();
+	});
+
+	it.each(["true", "false", "*intent"])(
+		"accepts boolean %s in the workflow scan",
+		(input) => {
+			const source =
+				"x-intent: &intent true\n" +
+				readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8").replace(
+					"package-manager-cache: false",
+					`package-manager-cache: ${input}`,
+				);
+			expect(() => scan(source)).not.toThrow();
+		},
+	);
+
+	// Q1: a mixed-case writer with declared intent remains in the census.
+	it("counts mixed-case setup-node with explicit intent", () => {
 		const source = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8");
 		expect(
 			scan(source.replace("actions/setup-node@", "Actions/Setup-Node@")),
 		).toBe(scan(source));
-	});
-
-	// Q1: GitHub resolves mixed-case action names to the same cache writer.
-	it("requires an opt-out for mixed-case setup-node in the workflow scan", () => {
-		const source = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8")
-			.replace("package-manager-cache: false", "package-manager-cache: true")
-			.replace("actions/setup-node@", "Actions/Setup-Node@");
-		expect(source).toContain("Actions/Setup-Node@");
-		expect(() => scan(source)).toThrow();
-	});
-
-	it("keeps caching for a reachable plain installer in the workflow scan", () => {
-		const source = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8")
-			.replace("package-manager-cache: false", "package-manager-cache: true")
-			.replace(
-				"      - name: Classify the changed files",
-				"      - run: |\n          set -eu\n          echo before\n          npm ci\n      - name: Classify the changed files",
-			);
-		expect(() => scan(source)).not.toThrow();
-	});
-
-	it.each([
-		"npm ci",
-		"npm install --ignore-scripts",
-		"npm i -g tool",
-		"set -euxo pipefail\necho before\nnpm ci",
-	])("recognizes literal installer %s", (run) =>
-		expect(installs(run)).toBe(true),
-	);
-	it.each([
-		"# npm ci",
-		"echo 'npm ci'",
-		"installer=npm; $installer ci",
-		"alias installer='npm ci'; installer",
-		"./install-dependencies.sh",
-		"cat <<'EOF'\nnpm ci\nEOF",
-		"command npm ci",
-		"npx npm@latest ci",
-		"alias npm=true\nnpm ci",
-		"set -n\nnpm ci",
-		"npm ci || true",
-		"installer=npm\n$installer ci",
-		"npm_command=npm\ncommand $npm_command ci",
-		"if true; then\nnpm ci\nfi",
-		"install() { npm ci; }\ninstall",
-		"echo before || true\nnpm ci",
-	])("requires an opt-out for unknown installer %s", (run) => {
-		expect(installs(run)).toBe(false);
 	});
 });
 
