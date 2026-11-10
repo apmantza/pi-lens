@@ -55,6 +55,8 @@ import {
 	appendFileSync,
 	existsSync,
 	mkdirSync,
+	mkdtempSync,
+	rmSync,
 	readFileSync,
 	readdirSync,
 	realpathSync,
@@ -454,8 +456,8 @@ export function resolveDiffRange(
 // path-sensitive tests on a macOS default root, whose `/private/var/folders/...`
 // spelling is long and reaches fixtures through a `/var` symlink. The root sits
 // under the machine-state convention (`PI_LENS_HOME`, else `~/.pi-lens`) because
-// the test lock is machine-wide, persists across pushes (fixtures `mkdtemp`
-// inside it), and is resolved so the symlinked spelling cannot recur.
+// each run creates its own disposable directory beneath this base,
+// resolved so the symlinked spelling cannot recur.
 // `PI_LENS_PREPUSH_TMPDIR` is the operator escape hatch, and the lever a probe
 // uses to reproduce the unpinned behaviour.
 export function resolvePrePushTmpRoot(env = process.env) {
@@ -1050,9 +1052,32 @@ function unionChanged(ranges) {
 }
 
 export async function main() {
-	const prePushTmpRoot = ensurePrePushTmpRoot(
-		resolvePrePushTmpRoot(process.env),
-	);
+	const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));
+	const runDir = mkdtempSync(path.join(base, "run-"));
+	const cleanup = () => {
+		try {
+			rmSync(runDir, { recursive: true, force: true });
+		} catch (error) {
+			console.warn(
+				`[pre-push] could not remove temp directory: ${String(error).replace(/[\r\n]+/g, " ")}`,
+			);
+		}
+	};
+	const interrupt = (signal) => process.exit(signal === "SIGINT" ? 130 : 143);
+	process.once("exit", cleanup);
+	process.once("SIGINT", interrupt);
+	process.once("SIGTERM", interrupt);
+	try {
+		return await runGate(realpathSync(runDir));
+	} finally {
+		process.removeListener("exit", cleanup);
+		process.removeListener("SIGINT", interrupt);
+		process.removeListener("SIGTERM", interrupt);
+		cleanup();
+	}
+}
+
+async function runGate(prePushTmpRoot) {
 	const callerTmp = process.env.TMPDIR ?? "(unset)";
 	process.env.TMPDIR = prePushTmpRoot;
 	process.env.TEMP = prePushTmpRoot;

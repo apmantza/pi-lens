@@ -179,6 +179,15 @@ function mkdtempSiteEscapes(
 			/mkdtempSync\(\s*path\.join\(\s*([A-Za-z_$][\w$]*)\s*,/,
 		)?.[1];
 		if (parentId) {
+			// The gate owns a disposable child of its machine-state base (#5439).
+			// Admit that exact resolver chain only in its owning script.
+			if (
+				file === "scripts/pre-push-targeted-tests.mjs" &&
+				new RegExp(
+					`const ${parentId} = ensurePrePushTmpRoot\\(\\s*resolvePrePushTmpRoot\\(process\\.env\\)\\s*\\)\\s*;`,
+				).test(code)
+			)
+				return false;
 			const decl = new RegExp(
 				`const ${parentId} = [^;]*mkdtemp[^;]*tmpdir\\s*\\(`,
 				"s",
@@ -827,6 +836,30 @@ describe("tmp-fixture-hygiene", () => {
 		},
 		scaledTestTimeout(60_000),
 	);
+
+	it("admits only the pre-push owner's resolved base (#5439)", () => {
+		const owner = "scripts/pre-push-targeted-tests.mjs";
+		const call = ["const dir = mkdtemp", "Sync(path.join(base, 'run-'));"].join(
+			"",
+		);
+		const declaration =
+			"const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));";
+		expect(mkdtempSiteEscapes(owner, `${declaration}\n${call}`)(2)).toBe(false);
+		for (const raw of [
+			call,
+			`// ${declaration}\n${call}`,
+			`const note = ${JSON.stringify(declaration)};\n${call}`,
+			`const base = arbitraryRoot();\n${call}`,
+			`const resolve = resolvePrePushTmpRoot; const base = ensurePrePushTmpRoot(resolve(process.env));\n${call}`,
+			`const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot.call(null, process.env));\n${call}`,
+			`const resolved = resolvePrePushTmpRoot(process.env); const base = ensurePrePushTmpRoot(resolved);\n${call}`,
+		]) {
+			expect(mkdtempSiteEscapes(owner, raw)(raw.split("\n").length)).toBe(true);
+		}
+		expect(mkdtempSiteEscapes("fixture.ts", `${declaration}\n${call}`)(2)).toBe(
+			true,
+		);
+	});
 
 	it("exempts a mkdtemp site only for code, never for a comment or a string", () => {
 		// #4347: the exemption regexes read the raw call window, so a comment or

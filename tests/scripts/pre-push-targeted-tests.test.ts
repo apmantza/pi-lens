@@ -677,6 +677,81 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		expect(withTree.stdout).toContain("  - tests/clients/third.test.ts");
 	});
 
+	it("allocates distinct run directories under the override base (#5439)", () => {
+		const { hook } = gitFixture();
+		const base = path.join(fixtureDir as string, "run-base");
+		const dirs = [0, 1].map(() => {
+			const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
+				PI_LENS_PREPUSH_TMPDIR: base,
+			});
+			expect(result.status).toBe(0);
+			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+			expect(dir).toBeDefined();
+			return dir as string;
+		});
+		expect(dirs[0]).not.toBe(dirs[1]);
+		for (const dir of dirs) {
+			expect(path.dirname(dir)).toBe(fs.realpathSync(base));
+			expect(path.basename(dir)).toMatch(/^run-/);
+		}
+	});
+
+	it.each([true, false])(
+		"removes the run directory after a passing=%s test run (#5439)",
+		(passing) => {
+			const { hook } = gitFixture();
+			const base = path.join(fixtureDir as string, "cleanup-base");
+			write(
+				"tests/clients/first.test.ts",
+				`import { expect, it } from 'vitest'; it('cleanup witness', () => { expect(${passing}).toBe(true); });\n`,
+			);
+			const result = hook("", ["--include-worktree"], {
+				PI_LENS_PREPUSH_TMPDIR: base,
+			});
+			expect(result.status).toBe(passing ? 0 : 1);
+			expect(result.stdout).toContain(passing ? "1 passed" : "1 failed");
+			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+			expect(dir).toBeDefined();
+			expect(fs.existsSync(dir as string)).toBe(false);
+			expect(fs.existsSync(base)).toBe(true);
+		},
+	);
+
+	it.each(["SIGINT", "SIGTERM"] as const)(
+		"removes the run directory on %s (#5439)",
+		(signal) => {
+			gitFixture();
+			const base = path.join(fixtureDir as string, "interrupt-base");
+			write(
+				"tests/clients/first.test.ts",
+				`import { it } from 'vitest'; it('interrupt', () => { process.kill(Number(process.env.GATE_PID), '${signal}'); });\n`,
+			);
+			const script = pathToFileURL(
+				path.join(repoRoot, "scripts/pre-push-targeted-tests.mjs"),
+			).href;
+			const result = spawnSync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"-e",
+					`import { main } from ${JSON.stringify(script)}; process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', '--include-worktree'); process.exitCode = await main();`,
+				],
+				{
+					cwd: fixtureDir,
+					encoding: "utf8",
+					input: "",
+					timeout: 30000,
+					env: { ...process.env, PI_LENS_PREPUSH_TMPDIR: base },
+				},
+			);
+			expect(result.error).toBeUndefined();
+			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+			expect(dir).toBeDefined();
+			expect(fs.existsSync(dir as string)).toBe(false);
+			expect(result.status).toBe(signal === "SIGINT" ? 130 : 143);
+		},
+	);
+
 	it("hands the pinned temp root to the test run, not the caller's TMPDIR (#5439)", () => {
 		// #5439 recurrence: the hook inherited the caller's TMPDIR, so the tests
 		// it spawned read macOS's long, symlinked `/private/var/folders/...`
@@ -691,9 +766,9 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 			"tests/clients/first.test.ts",
 			'import { expect, it } from "vitest";\n' +
 				'it("reads the pinned temp root", () => {\n' +
-				"  expect(process.env.TMPDIR).toBe(process.env.PREPUSH_TMP_EXPECTED);\n" +
-				"  expect(process.env.TEMP).toBe(process.env.PREPUSH_TMP_EXPECTED);\n" +
-				"  expect(process.env.TMP).toBe(process.env.PREPUSH_TMP_EXPECTED);\n" +
+				"  expect(process.env.TMPDIR?.startsWith(process.env.PREPUSH_TMP_EXPECTED + '/run-')).toBe(true);\n" +
+				"  expect(process.env.TEMP).toBe(process.env.TMPDIR);\n" +
+				"  expect(process.env.TMP).toBe(process.env.TMPDIR);\n" +
 				"});\n",
 		);
 		const caller = "/var/folders/caller-only/T";
@@ -706,7 +781,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		});
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain(
-			`[pre-push] tmp root: ${expected} (caller TMPDIR was ${caller})`,
+			`[pre-push] tmp root: ${expected}${path.sep}run-`,
 		);
 		expect(result.stdout).toContain("1 passed");
 	});
