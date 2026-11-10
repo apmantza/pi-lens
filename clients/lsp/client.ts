@@ -855,7 +855,10 @@ export const CLIENT_CAPABILITIES = {
 		typeDefinition: { dynamicRegistration: false },
 		implementation: { dynamicRegistration: false },
 		references: { dynamicRegistration: false },
-		documentSymbol: { dynamicRegistration: false },
+		documentSymbol: {
+			dynamicRegistration: false,
+			hierarchicalDocumentSymbolSupport: true,
+		},
 		codeAction: {
 			dynamicRegistration: false,
 			dataSupport: true,
