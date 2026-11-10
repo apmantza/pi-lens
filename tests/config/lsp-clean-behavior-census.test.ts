@@ -149,6 +149,21 @@ function unaccountedPullRows(
 		);
 }
 
+/**
+ * Rows whose `mode` is neither `pull` nor `push-only`. The census filters on
+ * those two spellings, so a third spelling ("Pull", "pull+push", an
+ * `error: …` cell) would drop its row out of both censuses silently: it is
+ * unrecognized, so it is reported.
+ */
+function unrecognizedModeRows(rows: MatrixRow[]): string[] {
+	return rows
+		.filter((row) => row.mode !== "pull" && row.mode !== "push-only")
+		.map(
+			(row) =>
+				`${row.lang} (${row.server}): mode=${JSON.stringify(row.mode)} is neither pull nor push-only, so no census judges its wait budget`,
+		);
+}
+
 /** Admissions whose justification is gone: TOTAL over the reason text. */
 function stalePullAdmissions(
 	pullRows: MatrixRow[],
@@ -348,6 +363,7 @@ describe("#5464 pull-strategy census", () => {
 	// the runner slowed (#5464). The matrix is the instrument that says a server
 	// pulls, so every pull row is judged against the strategy table.
 	it("gives every pull row a strategy row or a named admission", () => {
+		expect(unrecognizedModeRows(matrixRows())).toEqual([]);
 		const rows = pullRows();
 		// A floor, not a ratchet: the census must never pass by comparing nothing.
 		expect(rows.length).toBeGreaterThanOrEqual(6);
@@ -405,6 +421,23 @@ describe("#5464 pull-strategy census", () => {
 			expect(
 				unaccountedPullRows([row("jedi")], new Set(["python-jedi"]), none),
 			).toEqual([]);
+			// planted spellings nobody designed for: a re-cased lang is a different
+			// key (reported, not matched), and a re-cased or compound mode is
+			// unrecognized (reported, not dropped from the population).
+			expect(
+				unaccountedPullRows([row("Fixturelang")], withRow, none),
+				reason,
+			).toHaveLength(1);
+			expect(
+				unrecognizedModeRows([
+					{ ...row("fixturelang"), mode: "Pull" },
+					{ ...row("fixturelang"), mode: "pull+push-only" },
+					{ ...row("fixturelang"), mode: "error: spawn failed" },
+					row("fixturelang"),
+					{ ...row("fixturelang"), mode: "push-only" },
+				]),
+				reason,
+			).toHaveLength(3);
 		}
 	});
 });
