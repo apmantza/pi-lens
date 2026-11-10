@@ -56,6 +56,7 @@ import {
 	ownerAlive,
 	SCRATCH_OWNER_FILE,
 } from "./lib/scratch-dir.mjs";
+import { nestedDestinationError } from "./lib/pr-worktree.mjs";
 import { windowsExe } from "./lib/process-scan.mjs";
 import {
 	appendFileSync,
@@ -1104,12 +1105,31 @@ function unionChanged(ranges) {
 }
 
 export async function main() {
-	const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));
+	let base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));
 	// The default base belongs exclusively to the gate: detached late writers
 	// can recreate run-* without owner.pid after cleanup. Sweep before claiming
 	// ours. A PI_LENS_PREPUSH_TMPDIR base is the operator's and may be shared
 	// (e.g. /tmp), so there only a run-* carrying our dead owner.pid is ours.
 	const exclusiveBase = !process.env.PI_LENS_PREPUSH_TMPDIR?.trim();
+	// #5468 M1: Vitest claims each worker HOME under TMPDIR, and a HOME under
+	// the checkout (every test's cwd) trips the home-ceiling guard. A
+	// PI_LENS_HOME at or inside the checkout therefore falls back to the default
+	// base. An explicit PI_LENS_PREPUSH_TMPDIR is the operator's and is honoured.
+	const checkout = realpathSync.native(process.cwd());
+	if (
+		exclusiveBase &&
+		nestedDestinationError({
+			destination: realpathSync.native(base),
+			checkouts: [checkout],
+			mainCheckout: checkout,
+		})
+	) {
+		const inside = base;
+		base = ensurePrePushTmpRoot(resolvePrePushTmpRoot({}));
+		console.warn(
+			`[pre-push] temp root ${inside} is inside the checkout; using ${base}`,
+		);
+	}
 	let unsafe = false;
 	try {
 		for (const entry of readdirSync(base, { withFileTypes: true })) {

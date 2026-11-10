@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { copyFixtureGitHelper } from "../support/fixture-git-copy.js";
 import { readNdjsonRows } from "../support/ndjson-rows.js";
+import { relativeInside } from "../../clients/path-utils.js";
 import { isProcessAlive } from "../support/process-tree.js";
 import { waitFor } from "../clients/interleaving-kit.js";
 import {
@@ -88,12 +89,23 @@ function enterFixture() {
 	process.chdir(fixtureDir);
 }
 
+// A PI_LENS_HOME beside the fixture checkout, never inside it: the gate moves
+// a base at or inside the checkout to the default one (#5468 M1).
+const outsideRoots: string[] = [];
+function outsideHome(): string {
+	const root = fixtureRoot("pre-push-home-");
+	outsideRoots.push(root);
+	return root;
+}
+
 afterEach(() => {
 	process.chdir(originalCwd);
 	if (fixtureDir) {
 		fs.rmSync(fixtureDir, { recursive: true, force: true });
 		fixtureDir = undefined;
 	}
+	for (const root of outsideRoots.splice(0))
+		fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("resolveDiffRange — pre-push ref population (#3661)", () => {
@@ -689,7 +701,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 	it("sweeps stale run directories while preserving live and foreign entries (#5468 F3)", () => {
 		// Detached late writers recreate markerless run directories after cleanup.
 		const { hook } = gitFixture();
-		const home = path.join(fixtureDir as string, "sweep-home");
+		const home = path.join(outsideHome(), "sweep-home");
 		const base = path.join(home, "prepush-tmp");
 		const stale = path.join(base, "run-stale");
 		const live = path.join(base, "run-live");
@@ -749,7 +761,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		// mkdtemp, before each write and rename), so any order that exposes a
 		// prefixed name before its marker reds; B stops at its own allocation.
 		const { hook } = gitFixture();
-		const home = path.join(fixtureDir as string, "race-home");
+		const home = path.join(outsideHome(), "race-home");
 		const preload = path.join(fixtureDir as string, "race-preload.mjs");
 		const bStatus = path.join(fixtureDir as string, "race-b.txt");
 		const input = `(delete) ${zero} refs/heads/removed abc123\n`;
@@ -926,6 +938,76 @@ syncBuiltinESMExports();
 			`[pre-push] tmp root: ${expected}${path.sep}run-`,
 		);
 		expect(result.stdout).toContain("1 passed");
+	});
+
+	// #5468 Qodo M1 recurrence: a PI_LENS_HOME pinned inside the checkout put
+	// the gate's TMPDIR there, Vitest's worker HOME followed it, and the
+	// home-ceiling guard (`isAtOrAboveHomeDir`) refused 85 tests on one push.
+	// The spawned test records the TMPDIR it saw; the run dir is removed when
+	// the gate exits, so the assertions read its parent base.
+	const runRoot = (homeFor: (checkout: string, outside: string) => string) => {
+		const { hook } = gitFixture();
+		const outside = outsideHome();
+		const seen = path.join(fixtureDir as string, "seen-tmpdir.txt");
+		write("clients/first.ts", "export const first = false;\n");
+		write(
+			"tests/clients/first.test.ts",
+			'import fs from "node:fs";\nimport { it } from "vitest";\n' +
+				'it("records its temp root", () => { fs.writeFileSync(process.env.PREPUSH_TMP_SEEN as string, process.env.TMPDIR ?? ""); });\n',
+		);
+		const result = hook("", ["--include-worktree"], {
+			PI_LENS_HOME: homeFor(fixtureDir as string, outside),
+			PI_LENS_PREPUSH_TMPDIR: "",
+			PREPUSH_TMP_SEEN: seen,
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain("1 passed");
+		const root = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+		expect(root).toBeDefined();
+		return {
+			stderr: result.stderr,
+			checkout: fs.realpathSync(fixtureDir as string),
+			outside: fs.realpathSync(outside),
+			base: path.dirname(root as string),
+			children: fs.realpathSync(path.dirname(fs.readFileSync(seen, "utf8"))),
+		};
+	};
+	const notice = /\[pre-push\] temp root .* is inside the checkout; using /g;
+
+	it.each([
+		[
+			"a .probe-home inside the checkout",
+			(c: string) => path.join(c, ".probe-home"),
+		],
+		["the checkout itself", (c: string) => c],
+		[
+			"a link outside the checkout to a directory inside it",
+			(c: string, o: string) => {
+				fs.mkdirSync(path.join(c, ".probe-home"), { recursive: true });
+				const link = path.join(o, "link");
+				fs.symlinkSync(path.join(c, ".probe-home"), link, "dir");
+				return link;
+			},
+		],
+	] as const)(
+		"keeps the temp root outside the checkout when PI_LENS_HOME is %s (#5468 M1)",
+		(_name, homeFor) => {
+			const seen = runRoot(homeFor);
+			expect(relativeInside(seen.checkout, seen.base)).toBeUndefined();
+			expect(relativeInside(seen.checkout, seen.children)).toBeUndefined();
+			expect(seen.base).toBe(
+				fs.realpathSync(path.join(os.homedir(), ".pi-lens", "prepush-tmp")),
+			);
+			expect(seen.stderr.match(notice)).toHaveLength(1);
+		},
+	);
+
+	it("honours a PI_LENS_HOME outside the checkout without a notice (#5468 M1)", () => {
+		// The control: only a base at or inside the checkout falls back.
+		const seen = runRoot((_c, o) => path.join(o, "home"));
+		expect(seen.base).toBe(path.join(seen.outside, "home", "prepush-tmp"));
+		expect(seen.children).toBe(seen.base);
+		expect(seen.stderr.match(notice)).toBeNull();
 	});
 });
 
@@ -1927,6 +2009,7 @@ describe("pre-push ast-grep self-scan (#3886)", () => {
 			"scripts/lib/suite-lock.mjs",
 			"scripts/lib/scratch-dir.mjs",
 			"scripts/lib/process-scan.mjs",
+			"scripts/lib/pr-worktree.mjs",
 			"scripts/lib/test-history-selection.mjs",
 			"scripts/lib/vitest-summary.mjs",
 		])
@@ -2067,6 +2150,7 @@ describe("pre-push ast-grep self-scan (#3886)", () => {
 			"scripts/lib/suite-lock.mjs",
 			"scripts/lib/scratch-dir.mjs",
 			"scripts/lib/process-scan.mjs",
+			"scripts/lib/pr-worktree.mjs",
 			"scripts/lib/test-history-selection.mjs",
 			"scripts/lib/vitest-summary.mjs",
 			"scripts/run-astgrep-pi-lens.mjs",

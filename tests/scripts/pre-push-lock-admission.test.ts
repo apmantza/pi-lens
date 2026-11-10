@@ -77,6 +77,7 @@ if (isEntryPoint(import.meta.url)) process.kill(process.pid, "SIGKILL");
 			"scripts/lib/suite-lock.mjs",
 			"scripts/lib/scratch-dir.mjs",
 			"scripts/lib/process-scan.mjs",
+			"scripts/lib/pr-worktree.mjs",
 			"scripts/lib/test-history-selection.mjs",
 			"scripts/lib/vitest-summary.mjs",
 		])
