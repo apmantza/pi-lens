@@ -614,6 +614,35 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			aggregateWaitMs: 6000,
 			expectSemanticSecondPush: false,
 		},
+		// deno (the typescript alternate) is a PULL server (`mode=pull`,
+		// docs/lsp-capability-matrix.md) that answers every cold touch, but the
+		// answer can take longer than DEFAULT_STRATEGY's 1500ms: the pull is
+		// abandoned and the touch reads `touched=0` (#5464). MEASURED over the
+		// nightly tool-smoke `LSP handshake layer` row, spawn + initialize + pull:
+		//   * green 1.27, 1.59, 1.57, 3.80, 3.42s (five runs, 2026-11-06..08);
+		//   * red at the 1500 default: 4.60s (d8bd7a331) and 4.15s (242b2e3d2) —
+		//     same runner image and deno 2.9.8 on both sides, so the touch time
+		//     moved, not the code.
+		// A CPU-starved local host (one core shared with 4 busy loops, cold HOME)
+		// reproduced the red 3 of 3 at the default and completed in 3.86, 4.02 and
+		// 5.49s once the cap was lifted (two further runs ran past an 8000ms pull
+		// and are not covered by any budget under the gate's ceiling). Raw numbers:
+		// tests/fixtures/lsp-wait-measurements/deno-5464.json, pinned by
+		// tests/clients/lsp/server-strategies.test.ts. 7000 = 1.25 x the slowest
+		// COMPLETED touch (5.49s). It is a ceiling, not a delay: a pull server that
+		// answers returns at once, so a warm or fast touch pays nothing, and the
+		// budget is only paid in full when deno never answers an uncapped call.
+		// The CI runner was not instrumented for this row: the CI figures are
+		// run-log timestamps, the starved ones are this host's.
+		// Every other field is DEFAULT_STRATEGY's on purpose: nothing measured
+		// deno's pull retry or debounce, so this entry moves the one field that was.
+		deno: {
+			seedFirstPush: false,
+			pullRetryBudgetMs: 250,
+			debounceMs: 150,
+			aggregateWaitMs: 7000,
+			expectSemanticSecondPush: false,
+		},
 		cue: {
 			seedFirstPush: true,
 			pullRetryBudgetMs: 0,

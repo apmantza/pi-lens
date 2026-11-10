@@ -1,0 +1,60 @@
+{
+	"issue": 5464,
+	"server": "deno",
+	"what": "Wall time from the start of a cold deno touch to its answer: the whole textDocument/diagnostic path including spawn and initialize, so it bounds the pull time from above. The nightly tool-smoke LSP handshake row `deno (alternate of typescript)` reads touched=0 when the touch is shorter than the strategy budget.",
+	"ci": {
+		"command": "tool-smoke.yml step `LSP handshake layer` (node scripts/smoke-tools.mjs --lsp --install --verbose --min-pass=40): from the `[deno] disabled [typescript] via .pi-lens/lsp.json` log line to the `[deno] touched=N` line of the same run. Runner image 20261101.360.1, deno 2.9.8.",
+		"runs": [
+			{
+				"run": "job 42226913186 (2026-11-06)",
+				"verdict": "green",
+				"startedAt": "2026-11-06T13:43:50.6529065Z",
+				"touchedAt": "2026-11-06T13:43:51.9227131Z"
+			},
+			{
+				"run": "job 42371801558 (2026-11-07)",
+				"verdict": "green",
+				"startedAt": "2026-11-07T12:23:01.4319938Z",
+				"touchedAt": "2026-11-07T12:23:03.0150344Z"
+			},
+			{
+				"run": "job 42472508637 (2026-11-08)",
+				"verdict": "green",
+				"startedAt": "2026-11-08T11:17:25.5586653Z",
+				"touchedAt": "2026-11-08T11:17:27.1234989Z"
+			},
+			{
+				"run": "job 42481123229 (2026-11-08)",
+				"verdict": "green",
+				"startedAt": "2026-11-08T12:45:18.1492217Z",
+				"touchedAt": "2026-11-08T12:45:21.9379389Z"
+			},
+			{
+				"run": "04fa3cb14 (2026-11-08)",
+				"verdict": "green",
+				"startedAt": "2026-11-08T23:36:10.4374098Z",
+				"touchedAt": "2026-11-08T23:36:13.8415508Z"
+			}
+		],
+		"redRuns": [
+			{
+				"run": "d8bd7a331 (2026-11-09)",
+				"verdict": "red, touched=0: abandoned at the 1500 ms default, the touch itself ran past it",
+				"startedAt": "2026-11-09T15:03:56.7858038Z",
+				"touchedAt": "2026-11-09T15:04:01.3626642Z"
+			},
+			{
+				"run": "242b2e3d2 (2026-11-10)",
+				"verdict": "red, touched=0: abandoned at the 1500 ms default, the touch itself ran past it",
+				"startedAt": "2026-11-10T14:16:39.9799368Z",
+				"touchedAt": "2026-11-10T14:16:44.1199931Z"
+			}
+		]
+	},
+	"localCpuStarved": {
+		"command": "taskset -c <core> node scripts/smoke-tools.mjs --lsp --install --verbose deno, run on a core shared with 4 busy loops (taskset -c <core> bash -c 'while :; do :; done'), a cold HOME per run, deno 2.9.8; the latency.log `lsp_touch_file` durationMs is the touch time. Default budget (1500 ms): touched=0 in 3 of 3 runs. With PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS=8000 the runs below completed. Two further runs (touch 10078 and 9966 ms) abandoned the pull at the 8000 ms cap and were answered by the push backstop: they are beyond any budget under the gate ceiling and are not used.",
+		"defaultBudgetTouchMs": [3441, 3444, 3466],
+		"cap8000CompletedTouchMs": [3863, 4018, 5491],
+		"unstarvedColdTouchMs": [637, 622]
+	}
+}
