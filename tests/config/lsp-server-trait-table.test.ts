@@ -292,3 +292,53 @@ describe("#1756 stage 1 — declared server trait table", () => {
 		expect(isAuxiliary({ role: 1 })).toBe(false);
 	});
 });
+
+/**
+ * Strategy keys that name no registry server (#5485). Pure, so the live table
+ * and the state-table fixture below run the SAME predicate. Admission is the
+ * runtime registry's exact ids and nothing else: every other string is
+ * reported, whatever it resembles (a display name, a runner id, a re-cased id).
+ */
+function unregisteredStrategyKeys(
+	keys: readonly string[],
+	registeredIds: ReadonlySet<string>,
+): string[] {
+	return keys.filter((key) => !registeredIds.has(key));
+}
+
+describe("#5485 — every wait-strategy key is a registry server id", () => {
+	// Recurrence: the 2026-05-04 table was keyed by display name (`rust-analyzer`)
+	// and a runner id (`eslint`) while the registry ids are `rust` and no
+	// server `eslint`, so both rows were dead for 6 months and rust, a
+	// mode=pull server, waited on DEFAULT_STRATEGY (#5485, found by #5464).
+	it("keys no strategy row by a name the registry does not know", () => {
+		const keys = Object.keys(SERVER_DIAGNOSTIC_STRATEGIES);
+		const ids = new Set(LSP_SERVERS.map((server) => server.id));
+		// Floors: an emptied table or registry would satisfy `toEqual([])`.
+		assertNonEmptyScan("strategy keys", keys.length, 15);
+		assertNonEmptyScan("registry ids", ids.size, 30);
+		expect(
+			unregisteredStrategyKeys(keys, ids),
+			"A SERVER_DIAGNOSTIC_STRATEGIES key matches no LSP_SERVERS id, so " +
+				"getStrategy never returns its row and that server waits on " +
+				"DEFAULT_STRATEGY. Re-key it to the registry id (with a measurement), " +
+				"or delete it.",
+		).toEqual([]);
+	});
+
+	// State table: key form × verdict. One admitted form (an exact id), every
+	// other spelling reported, including the ones nobody designed for.
+	it("admits an exact registry id and reports every other spelling", () => {
+		const ids = new Set(["rust", "python-jedi", "typescript"]);
+		expect(unregisteredStrategyKeys(["rust", "python-jedi"], ids)).toEqual([]);
+		const planted = [
+			"rust-analyzer", // the server's display name, the live defect
+			"eslint", // a runner id from another registry
+			"Rust", // re-cased
+			"rust ", // padded
+			"toString", // an inherited name, not a registered id
+			"",
+		];
+		expect(unregisteredStrategyKeys(planted, ids)).toEqual(planted);
+	});
+});

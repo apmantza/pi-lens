@@ -1,0 +1,26 @@
+{
+	"issue": 5485,
+	"server": "rust",
+	"what": "Cold rust-analyzer 1.99.1 (58cf8f9 2026-10-13) on the tool-smoke rust fixture (tests/fixtures/tool-smoke/rust, one deliberate E0308 type mismatch). Every figure is the wall time of ONE cold touch through the production path (spawn + initialize + didOpen + pull), a fresh scratch project and a fresh PI_LENS_HOME per run, on an idle 32-core host (load ~4.6). The CI runner and a CPU-starved host were NOT measured for rust.",
+	"toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13), cargo 1.99.1 (5f94df478 2026-08-27), rust-analyzer 1.99.1 (58cf8f9 2026-10-13) from the rustup `rust-analyzer` component (minimal profile, stable), found on PATH by the server's cargoBinCandidates rung; ensureTool's managed download was not used.",
+	"rowProvenance": "The `rust-analyzer` row (3000 / 500 / expectSemanticSecondPush) came in with commit 3bf9ff93b (2026-05-04), whose message lists it as a design value (`TS=1000ms/0ms/no, rust-analyzer=3000ms/500ms/yes`) with no measurement. The key never matched the registry id `rust`, so it never applied.",
+	"rawPull": {
+		"command": "JSON-RPC probe (not shipped): spawn rust-analyzer in a fresh copy of the fixture, initialize, didOpen, then textDocument/diagnostic every 100 ms until a report with items. Times are ms from spawn.",
+		"reportsSeen": "items:[] (an authoritative empty report) at 24-365 ms, then a null reply (ContentModified-style) at ~0.7-3.2 s, then the finding",
+		"firstNonEmptyPullMs": [3600, 3927, 3892],
+		"publishDiagnosticsPushMs": [3068, 3396, 3352]
+	},
+	"productPath": {
+		"command": "node scripts/smoke-tools.mjs --lsp --verbose rust (dist built from the head under test); touchMs is `lsp_touch_file` durationMs in latency.log, collected is metadata.collectedDiagnostics. A row is the strategy the build carried: aggregateWaitMs / pullRetryBudgetMs.",
+		"dirtyFixture": {
+			"default1500_250": { "touchMs": [841, 919, 880, 886, 914], "collected": [0, 0, 0, 0, 0] },
+			"rekeyedOriginal3000_500": { "touchMs": [1027, 848, 994, 1078, 989], "collected": [0, 0, 0, 0, 0] },
+			"candidate7000_6000": { "touchMs": [4680, 4673, 4689], "collected": [1, 1, 1] }
+		},
+		"cleanFixture": {
+			"default1500_250": { "touchMs": [919, 866, 882], "collected": [0, 0, 0] },
+			"rekeyedOriginal3000_500": { "touchMs": [1131, 1159, 1103], "collected": [0, 0, 0] },
+			"candidate7000_6000": { "touchMs": [6806, 6865, 6731], "collected": [0, 0, 0] }
+		}
+	}
+}

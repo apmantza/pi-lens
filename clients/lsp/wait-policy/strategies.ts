@@ -304,13 +304,19 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			// applies this flag to a native-ts7 instance.
 			silentOnClean: true,
 		},
-		"rust-analyzer": {
-			seedFirstPush: false,
-			pullRetryBudgetMs: 500,
-			debounceMs: 150,
-			aggregateWaitMs: 3000,
-			expectSemanticSecondPush: true,
-		},
+		// rust (rust-analyzer) has NO row on purpose (#5485). The row that stood
+		// here was keyed `rust-analyzer`, the display name, not the registry id, so
+		// it never applied and rust (a `mode=pull` server) waited on
+		// DEFAULT_STRATEGY; its 3000 / 500 / second-push values were a design
+		// guess (commit 3bf9ff93b), never measured. Re-keyed as they were, a cold
+		// touch still reads clean: 0 of 5 cold touches returned the fixture's type
+		// error at 3000 / 500 (and 0 of 5 on the default), because rust-analyzer
+		// answers an EMPTY authoritative report for ~0.4 s and the finding lands
+		// at 3.6-3.9 s. Only a pull-retry budget above that catches it (7000 /
+		// 6000: 3 of 3), and the retry loop cannot tell a clean file from a
+		// loading one, so every clean touch then pays the whole budget (6.7-6.9 s
+		// vs 0.9 s). That trade is a maintainer decision, not a key rename.
+		// Raw numbers: tests/fixtures/lsp-wait-measurements/rust-5485.json.
 		// PythonServer (pyright / basedpyright) — openFilesOnly mode: lazy per-file
 		// analysis, startup similar to jedi. seedFirstPush: true because pyright's
 		// first publishDiagnostics after didOpen is the complete result for that file.
@@ -331,13 +337,6 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			pullRetryBudgetMs: 0,
 			debounceMs: 100,
 			aggregateWaitMs: 3000,
-			expectSemanticSecondPush: false,
-		},
-		eslint: {
-			seedFirstPush: true,
-			pullRetryBudgetMs: 0,
-			debounceMs: 200,
-			aggregateWaitMs: 2000,
 			expectSemanticSecondPush: false,
 		},
 		// Opengrep security scanner (cross-language LSP). It pushes an EMPTY result
