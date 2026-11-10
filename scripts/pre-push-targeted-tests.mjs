@@ -51,10 +51,15 @@
 // covering test), this builds only and skips the test run — never silently
 // skips the build too.
 import { execFileSync, spawn } from "node:child_process";
-import { claimScratchDir } from "./lib/scratch-dir.mjs";
+import {
+	claimScratchDir,
+	ownerAlive,
+	SCRATCH_OWNER_FILE,
+} from "./lib/scratch-dir.mjs";
 import { windowsExe } from "./lib/process-scan.mjs";
 import {
 	appendFileSync,
+	lstatSync,
 	existsSync,
 	mkdirSync,
 	rmSync,
@@ -1100,6 +1105,44 @@ function unionChanged(ranges) {
 
 export async function main() {
 	const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));
+	// This base belongs exclusively to the gate: detached late writers can
+	// recreate run-* without owner.pid after cleanup. Sweep before claiming ours.
+	let unsafe = false;
+	try {
+		for (const entry of readdirSync(base, { withFileTypes: true })) {
+			if (!entry.name.startsWith("run-")) continue;
+			try {
+				const dir = path.join(base, entry.name);
+				if (!lstatSync(dir).isDirectory()) {
+					unsafe = true;
+					continue;
+				}
+				readdirSync(dir); // An unreadable entry cannot establish ownership.
+				let markerless = false;
+				try {
+					const marker = path.join(dir, SCRATCH_OWNER_FILE);
+					if (!lstatSync(marker).isFile())
+						throw new Error("unsafe owner marker");
+					readFileSync(marker, "utf8");
+				} catch (error) {
+					if (error?.code !== "ENOENT") throw error;
+					markerless = true;
+				}
+				const alive = markerless ? false : ownerAlive(dir);
+				if (alive === true) continue;
+				if (alive === undefined) {
+					unsafe = true;
+					continue;
+				}
+				rmSync(dir, { recursive: true, force: true });
+			} catch {
+				unsafe = true;
+			}
+		}
+	} catch {
+		unsafe = true;
+	}
+	if (unsafe) console.warn("[pre-push] temp sweep skipped unsafe entries");
 	const runDir = claimScratchDir(base, "run");
 	const lifecycle = { controller: new AbortController(), drained: true };
 	let interrupted;

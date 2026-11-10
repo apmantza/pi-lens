@@ -686,6 +686,33 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		expect(withTree.stdout).toContain("  - tests/clients/third.test.ts");
 	});
 
+	it("sweeps stale run directories while preserving live and foreign entries (#5468 F3)", () => {
+		// Detached late writers recreate markerless run directories after cleanup.
+		const { hook } = gitFixture();
+		const base = path.join(fixtureDir as string, "sweep-base");
+		const stale = path.join(base, "run-stale");
+		const live = path.join(base, "run-live");
+		const sibling = path.join(base, "sibling");
+		const link = path.join(base, "run-link");
+		for (const dir of [stale, live, sibling])
+			fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(live, "owner.pid"), String(process.pid));
+		fs.writeFileSync(path.join(sibling, "witness"), "keep");
+		fs.symlinkSync(sibling, link, "dir");
+		fs.symlinkSync(sibling, path.join(base, "run-link-two"), "dir");
+		const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
+			PI_LENS_PREPUSH_TMPDIR: base,
+		});
+		expect(result.status).toBe(0);
+		expect(fs.existsSync(live)).toBe(true);
+		expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+		expect(fs.readFileSync(path.join(sibling, "witness"), "utf8")).toBe("keep");
+		expect(fs.existsSync(stale)).toBe(false);
+		expect(
+			result.stderr.match(/\[pre-push\] temp sweep skipped unsafe entries/g),
+		).toHaveLength(1);
+	});
+
 	it("allocates distinct run directories under the override base (#5439)", () => {
 		const { hook } = gitFixture();
 		const base = path.join(fixtureDir as string, "run-base");
