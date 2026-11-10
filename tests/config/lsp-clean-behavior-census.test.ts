@@ -140,7 +140,7 @@ const UNMEASURED_PULL_ADMISSIONS = new Map<string, string>([
 	],
 	[
 		"rust",
-		"rust-analyzer: cold touches measured in tests/fixtures/lsp-wait-measurements/rust-5485.json (#5485); the old `rust-analyzer` row was keyed by display name and dead, re-keyed at its 3000/500 it caught the type error in 0 of 5 cold touches, and a pull retry long enough to catch it (7000/6000) charges every clean touch 6.7-6.9 s, so rust stays on the default until a maintainer picks that trade",
+		"rust-analyzer: cold touches measured in tests/fixtures/lsp-wait-measurements/rust-5485.json (#5485); the old `rust-analyzer` row was keyed by display name and dead, re-keyed at its 3000/500 it caught the type error in 0 of 5 cold lsp_touch_file calls (the lsp_diagnostics route found it in 3 of 5 on the default), and a pull retry long enough to catch it (7000/6000) charges every clean touch 6.7-6.9 s, so rust stays on the default until a maintainer picks that trade",
 	],
 ]);
 

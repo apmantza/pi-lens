@@ -215,27 +215,27 @@ describe("rust diagnostic strategy (#5485) — measured against the real rust-an
 			dirtyFixture: Record<string, { touchMs: number[]; collected: number[] }>;
 		};
 	};
-	const dirty = measured.productPath.dirtyFixture;
+	const slowestCatchMs = Math.max(
+		...measured.productPath.dirtyFixture.candidate7000_6000!.touchMs,
+	);
 
 	// Recurrence (#5485): the table carried a `rust-analyzer` row (3000 / 500)
 	// keyed by display name, so it never applied; re-keying it to `rust` "fixes"
 	// the key and changes nothing a user sees, because rust-analyzer answers an
 	// empty authoritative report for ~0.4 s and the type error lands at ~3.6-3.9 s
-	// (0 of 5 cold touches caught it at 3000 / 500, artifact `rekeyedOriginal`).
-	// A rust row therefore has to clear the slowest cold touch that DID catch the
-	// finding, on the pull-retry budget that governs the answer, or it is the
-	// same key-only edit the census exists to refuse.
-	it("accepts a rust row only if its pull retry clears the measured cold finding", () => {
-		const row = SERVER_DIAGNOSTIC_STRATEGIES.rust;
-		// The artifact must still say what this guard relies on: the old values
-		// caught nothing and a long retry caught everything.
-		expect(dirty.rekeyedOriginal3000_500!.collected).toEqual([0, 0, 0, 0, 0]);
-		expect(dirty.default1500_250!.collected).toEqual([0, 0, 0, 0, 0]);
-		expect(dirty.candidate7000_6000!.collected).toEqual([1, 1, 1]);
-		const slowestCatch = Math.max(...dirty.candidate7000_6000!.touchMs);
-		if (row === undefined) return; // rust waits on the default today
-		expect(row.pullRetryBudgetMs).toBeGreaterThanOrEqual(
-			Math.ceil(slowestCatch * 1.25),
-		);
+	// (0 of 5 cold lsp_touch_file calls caught it at 3000 / 500, artifact
+	// `rekeyedOriginal3000_500`). ANY `rust` row is the same key-only edit the
+	// census exists to refuse until the readiness signal (#5487) or a maintainer
+	// budget decision (#5485) replaces this guard, so the guard refuses the row,
+	// not one field of it: a 6000 / 1500 row clears a pull-retry-only check and
+	// still ends the touch at 1500 ms.
+	it("has no rust row until the cold-touch trade is decided", () => {
+		expect(
+			SERVER_DIAGNOSTIC_STRATEGIES.rust,
+			`A rust row needs a measured cold-touch trade (#5485, #5487). The slowest ` +
+				`cold touch that caught the finding took ${slowestCatchMs} ms ` +
+				`(tests/fixtures/lsp-wait-measurements/rust-5485.json); a row that ends ` +
+				`the touch earlier keeps reading a loading rust-analyzer as clean.`,
+		).toBeUndefined();
 	});
 });

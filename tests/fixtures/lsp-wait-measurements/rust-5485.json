@@ -1,7 +1,7 @@
 {
 	"issue": 5485,
 	"server": "rust",
-	"what": "Cold rust-analyzer 1.99.1 (58cf8f9 2026-10-13) on the tool-smoke rust fixture (tests/fixtures/tool-smoke/rust, one deliberate E0308 type mismatch). Every figure is the wall time of ONE cold touch through the production path (spawn + initialize + didOpen + pull), a fresh scratch project and a fresh PI_LENS_HOME per run, on an idle 32-core host (load ~4.6). The CI runner and a CPU-starved host were NOT measured for rust.",
+	"what": "Cold rust-analyzer 1.99.1 (58cf8f9 2026-10-13) on the tool-smoke rust fixture (tests/fixtures/tool-smoke/rust, one deliberate E0308 type mismatch). Every figure under productPath is the wall time of ONE cold lsp_touch_file through the production path (the smoke seam; the lsp_diagnostics route is under lspDiagnosticsRoute and caught the error more often) (spawn + initialize + didOpen + pull), a fresh scratch project and a fresh PI_LENS_HOME per run, on an idle 32-core host (load ~4.6). The CI runner and a CPU-starved host were NOT measured for rust.",
 	"toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13), cargo 1.99.1 (5f94df478 2026-08-27), rust-analyzer 1.99.1 (58cf8f9 2026-10-13) from the rustup `rust-analyzer` component (minimal profile, stable), found on PATH by the server's cargoBinCandidates rung; ensureTool's managed download was not used.",
 	"rowProvenance": "The `rust-analyzer` row (3000 / 500 / expectSemanticSecondPush) came in with commit 3bf9ff93b (2026-05-04), whose message lists it as a design value (`TS=1000ms/0ms/no, rust-analyzer=3000ms/500ms/yes`) with no measurement. The key never matched the registry id `rust`, so it never applied.",
 	"rawPull": {
@@ -9,6 +9,11 @@
 		"reportsSeen": "items:[] (an authoritative empty report) at 24-365 ms, then a null reply (ContentModified-style) at ~0.7-3.2 s, then the finding",
 		"firstNonEmptyPullMs": [3600, 3927, 3892],
 		"publishDiagnosticsPushMs": [3068, 3396, 3352]
+	},
+	"lspDiagnosticsRoute": {
+		"source": "PR #5486 review r1 (not the fixer's runs): pilens_diagnostics {source:\"lsp\", scope:\"paths\"} through the built MCP server (the lsp_diagnostics agent tool), rust-analyzer 1.99.1, a fresh project copy and a fresh pinned HOME per run, same idle host.",
+		"default": { "coldRuns": 5, "found": 3, "returnedClean": 2, "findingMs": "2260-2608", "cleanMs": "1075-1668" },
+		"candidate7000_6000": { "dirtyFound": "3 of 3", "dirtyMs": "2306-2730", "cleanFileMs": "12558-12777" }
 	},
 	"productPath": {
 		"command": "node scripts/smoke-tools.mjs --lsp --verbose rust (dist built from the head under test); touchMs is `lsp_touch_file` durationMs in latency.log, collected is metadata.collectedDiagnostics. A row is the strategy the build carried: aggregateWaitMs / pullRetryBudgetMs.",
