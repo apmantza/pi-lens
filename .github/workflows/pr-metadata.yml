@@ -58,6 +58,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       - name: Validate PR title (conventional prefix + issue ref)
@@ -113,6 +114,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # #4717: the body lint reads markdown through `marked`

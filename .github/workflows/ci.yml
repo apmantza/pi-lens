@@ -71,6 +71,7 @@ jobs:
             scripts
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: '22'
       - name: Classify the changed files
         id: classify
@@ -109,6 +110,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # The `runner` context is not available in job-level `env:` (GitHub
@@ -247,6 +249,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: '22'
 
       # #5409: the jar comes through the fetch-verified helper (cache, --fail,
@@ -354,6 +357,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: '22'
 
       - name: Lockfile complete under the CI npm pin
@@ -454,6 +458,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: '22'
 
       # Lockfile-locked and script-free (SonarCloud githubactions:S8543 /
@@ -865,6 +870,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: '22'
 
       - name: Install dependencies
@@ -957,6 +963,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: '22'
 
       # npm 11.11 restored libc descriptors in lockfile v3 (#9025). Older npm
@@ -1167,6 +1174,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: '22'
 
       # `shell: bash` on every leg: the Windows default is pwsh, which does not
