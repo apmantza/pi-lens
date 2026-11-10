@@ -61,10 +61,15 @@ object argument such as `callHierarchyItem`, `rule` or `flags` are not checked):
   send, written another way: a case or punctuation variant (`Path` for `path`),
   a plural (`paths` for `path`), or a key whose last word is a declared
   parameter (`file_path` for the declared `filePath`). The single-file
-  parameter is `path`, and the MCP tools declare `file` and `filePath` beside it
-  as accepted aliases since #5041, so those spellings run instead of being
-  reported (``Not run: `Path` looks like a mistyped `path`, which was not
-  sent.``). The exact predicate is named in
+  parameter is `path`. Three MCP tools (`pilens_analyze`, `pilens_diagnostics`
+  and `pilens_lsp_navigation`) also declare `file` and `filePath` beside it as
+  accepted aliases (#5041), so those spellings run on them. The four tools whose
+  schema comes from the pi tool definition (`pilens_module_report`,
+  `pilens_read_symbol`, `pilens_read_enclosing` and `pilens_effective_config`)
+  declare `path` alone (#5138): a `file`-only call to the first three is not
+  run, as a missing `path`, and a `filePath` or `file_path` send to any of the
+  four is reported as a mistyped `path` (``Not run: `Path` looks like a mistyped
+  `path`, which was not sent.``). The exact predicate is named in
   [public-api-stability.md](public-api-stability.md). Anything looser (a typo,
   an abbreviation, `files` for `maxLspFiles`, or a count, flag or output key
   such as `maxFiles`, `includeFiles`, `outFile` or `cwdPath` where `cwd` is
@@ -85,6 +90,22 @@ retired `pilens_lsp_diagnostics` name is checked against `pilens_diagnostics`'s
 schema; the retired `pilens_ast_grep_dump` name has no schema and is not
 checked. A non-object `arguments` is a JSON-RPC `-32602` error; absent, `null`
 and `[]` mean no arguments.
+
+**The `paths` argument.** `ast_grep_search`, `ast_grep_replace`,
+`ast_grep_outline`, `lens_diagnostics` and `symbol_search` read `paths` through
+one reader (`readPathsArgument`, `tools/shared.ts`), so an entry means the same
+in each. An entry that exists on disk is always a literal, so
+`app/[id]/page.tsx` works as written. Any other entry with a glob character
+(`src/**/*.ts`) expands once, against the call's own root, into the files it
+matches. A glob that matches nothing answers `no file matches`, and a glob that
+reaches outside the workspace is refused, as is an entry that starts with `!`
+(`paths` names what to include; leave files out through the project ignore
+config). The argument holds at most 100 entries, and the file list a tool
+receives after expansion is capped at the same 100 (`MAX_PATHS_ENTRIES`); a
+tool that is handed a list and not a filter refuses a larger scope rather than
+narrowing it. `symbol_search` filters an index, so the file cap is lifted for
+it and only the walk bound applies. A literal outside the workspace is left
+alone.
 
 ## Per-edit
 
@@ -122,7 +143,9 @@ and `[]` mean no arguments.
   (never dropped outright); this is what makes save-triggered servers like
   Expert (Elixir) re-diagnose an edit made through pi-lens (refs #3405,
   #3408). Legacy `mode`: `delta` (current turn), `all` (resurfaces stale
-  blockers dropped from turn context), `full` (project-wide scan).
+  blockers dropped from turn context), `full` (project-wide scan). A file no
+  check completed on is named as not checked (`⚠ N files not checked, so no
+  findings is not a clean result`) instead of reading as "No issues ✓".
 - **`lens_diagnostic_mark`** — Triage a diagnostic: `false-positive` /
   `suppress` (writes an inline `pi-lens-ignore` comment) / `defer`
   (session-only) / `flagged` (persists, rendered `📌 flagged-to-fix`).
@@ -172,7 +195,11 @@ and `[]` mean no arguments.
   results include a `suggestedDump` hint pointing at `ast_grep_search` with `dump=true`.
 - **`ast_grep_replace`** — AST-aware structural replace. Re-validates the pattern
   against the current file before writing and reports a clear error if the
-  file changed since the preview.
+  file changed since the preview. Under `--no-autofix` (`autofix.enabled:
+  false`) a preview with `apply: false` still runs and `apply: true` is
+  refused before any scan (`tools/ast-grep-replace.ts`). An apply also refuses
+  a file outside the session's writable roots, as `lens_diagnostic_mark` and a
+  language-server workspace edit do (#5417).
 - **`ast_grep_search` with `dump=true`** — Dumps the raw tree-sitter AST for a source snippet. Use
   this when an `ast_grep_search` or `ast_grep_replace` pattern returns zero
   matches and the correct node kind or field name is unknown. `includeAnonymous`
@@ -199,7 +226,10 @@ and `[]` mean no arguments.
   self-builds in the background and never blocks the call. The answer is one
   ranked table: a `symbol` row per file with its path, best-matching line,
   score, hit count and any graph annotations, or a `file` listing row with just
-  its path when the query carries a scope but no terms; then a footer with
+  its path when the query carries a scope (`paths`, `lang`, or an inline
+  `lang:`, `file:` or `ext:` filter) but no terms. A call with neither terms nor
+  scope is an error on the pi tool and over MCP alike, and an unknown `lang`
+  value is refused with the accepted file kinds and language ids. Then a footer with
   index coverage and a
   next-step line naming the top-ranked hit (`module_report <path>`) — read that
   line with `offset=<line>, limit=1`. Both surfaces render it through
@@ -219,11 +249,14 @@ and `[]` mean no arguments.
   size-skip verdict; later calls name the cap and start no build, so raise it
   in `.pi-lens.json` instead of retrying.
 - **`effective_config`** — Explains the resolved configuration and its
-  provenance. Pass `file` to add that file's language and the per-server and
-  per-runner selection decisions. The result holds no environment values and
-  no command arguments beyond the binary, and it shows paths under the home
-  folder home-relative (a path outside it stays absolute). `file` must resolve
-  inside `cwd`. See
+  provenance. Pass `path` to add that file's language and the per-server and
+  per-runner selection decisions. A runner's decision is `selected`,
+  `disabled-by-config`, `no-project-config` (a runner that declares it needs
+  project config and would skip without it), `not-registered-for-kind` or
+  `no-dispatch-plan`. The result holds no
+  environment values and no command arguments beyond the binary, and it shows
+  paths under the home folder home-relative (a path outside it stays absolute).
+  `path` must resolve inside `cwd`. See
   [configuration.md](configuration.md#asking-what-is-actually-in-effect).
 - **`module_report`** — Navigable outline of a file: every symbol's name/kind/
   startLine/endLine/signature, exported vs internal split, class/interface
