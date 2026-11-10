@@ -512,6 +512,7 @@ const lspSpawnHeavyInclude = [
 // two children deliberately share one project root and one PI_LENS_HOME and
 // the TEST owns the tree's lifetime.
 export const realHarnessInclude = [
+	// #4133: the real pi child environment is the subject of fixture-shape.
 	"tests/real-harness/fixture-shape.test.ts",
 	"tests/real-harness/scenario-1.test.ts",
 	"tests/real-harness/scenario-3.test.ts",
@@ -526,6 +527,8 @@ export const realHarnessInclude = [
 	"tests/real-harness/provider-compatibility.test.ts",
 	"tests/real-harness/read-guard-moves.test.ts",
 	"tests/real-harness/lifecycle.test.ts",
+	// #4218/#4230: the real pi host must deliver the out-of-root advisory and
+	// ledger record, including the second edit and the pi-owned path exemptions.
 	"tests/real-harness/outside-root.test.ts",
 	"tests/real-harness/scenario-2.test.ts",
 ];
@@ -868,12 +871,10 @@ export const wallClockBudgetInclude = [
 	"tests/mcp/stale-json-advisory.smoke.test.ts",
 	// published-manifest guard runs the real `npm pack` (flake-shape admission).
 	"tests/packaging-pack-manifest.test.ts",
-	// #4133: the real pi child environment is the subject of this boundary test;
-	// keep it in the serialized real-harness lane.
-	"tests/real-harness/fixture-shape.test.ts",
-	// #4218/#4230: the real pi host must deliver the out-of-root advisory and
-	// ledger record, including the second edit and the pi-owned path exemptions.
-	"tests/real-harness/outside-root.test.ts",
+	// tests/real-harness/fixture-shape.test.ts (#4133) and outside-root.test.ts
+	// (#4218/#4230) are NOT listed here: they belong to the serialized
+	// real-harness project (realHarnessInclude, maxWorkers 1). Listing a file in
+	// both include lists made vitest collect and run it once per project.
 	// #3870: every detector test drives the analyzer's real CLI entry point
 	// (a real node subprocess) over redacted fixture logs (flake-shape admission).
 	"tests/scripts/analyze-pi-lens-logs-detectors.test.ts",
