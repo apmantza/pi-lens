@@ -703,6 +703,8 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		fs.symlinkSync(sibling, path.join(base, "run-link-two"), "dir");
 		const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
 			PI_LENS_HOME: home,
+			// The default base, even when the caller exports the override.
+			PI_LENS_PREPUSH_TMPDIR: "",
 		});
 		expect(result.status).toBe(0);
 		expect(fs.existsSync(live)).toBe(true);
