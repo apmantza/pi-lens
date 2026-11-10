@@ -31,12 +31,11 @@ export const MAX_PATHS_ENTRIES = 100;
 export const FILE_PATH_KEYS = ["path", "file", "filePath"] as const;
 
 /**
- * Provider-side JSON-Schema constrained sampling, declared only by tools whose
- * `parameters` carry an `enum` (#5138 PR 3). The value is typed against the
- * host's own `ToolDefinition` field, so the seam that consumes it is the
- * compiler's argument: if the installed host stops accepting the key, this line
- * stops type-checking instead of silently dropping the flag. `strict: "prefer"`
- * lets a provider that cannot express the schema fall back to plain sampling.
+ * Provider-side JSON-Schema constrained sampling for strict-safe enum tools.
+ * The registered-tool guard runs pi-ai's real conversion (#5471); optional
+ * enums become nullable unions that some providers reject. `strict: "prefer"`
+ * permits local conversion fallback, not a retry after a remote rejection.
+ * The host's ToolDefinition type checks the metadata field.
  */
 export const CONSTRAINED_JSON_SCHEMA_SAMPLING: Exclude<
 	NonNullable<ToolDefinition["constrainedSampling"]>,

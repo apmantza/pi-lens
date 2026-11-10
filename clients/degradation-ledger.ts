@@ -294,6 +294,13 @@ export type DegradationKind =
 	 */
 	| "change-log-lock-unavailable"
 	/**
+	 * `complexity-delta-failed`: #5087: an edit's complexity delta threw (a
+	 * parser or store failure), so its tool result carries no delta; the
+	 * edit's own output is unaffected. Subject is the edited file; once per
+	 * file per session.
+	 */
+	| "complexity-delta-failed"
+	/**
 	 * `config-deprecated`: A config file location or root key the user wrote is DEPRECATED and was
 	 * still honored (#2426). The deliberate opposite of `config-ignored`: the
 	 * setting applied exactly as written, and the location it was written in is

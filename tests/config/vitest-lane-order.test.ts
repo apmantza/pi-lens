@@ -34,4 +34,28 @@ describe("Vitest lane registries (#2671)", () => {
 			assertSortedRegistry(name, laneEntries(name));
 		}
 	});
+	it("keeps every test file in at most one lane registry (#5182)", () => {
+		// Recurrence: fixture-shape and outside-root sat in both
+		// realHarnessInclude and wallClockBudgetInclude, so vitest collected and
+		// ran each twice, once per maxWorkers-1 project.
+		// integrationInclude is omitted: it only feeds unitOnlyExclude (a
+		// subtraction from the wall-clock lane), not a project of its own.
+		const owners = new Map<string, string[]>();
+		for (const name of [
+			"realHarnessInclude",
+			"grammarHeavyInclude",
+			"timingSensitiveInclude",
+			"lspSpawnHeavyInclude",
+			"wallClockBudgetInclude",
+			"tmpFixtureHygieneInclude",
+		]) {
+			for (const file of laneEntries(name)) {
+				owners.set(file, [...(owners.get(file) ?? []), name]);
+			}
+		}
+		const duplicated = [...owners]
+			.filter(([, lanes]) => lanes.length > 1)
+			.map(([file, lanes]) => `${file}: ${lanes.join(" + ")}`);
+		expect(duplicated, "a file in two lanes runs once per project").toEqual([]);
+	});
 });

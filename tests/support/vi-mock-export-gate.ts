@@ -502,8 +502,16 @@ function exportedValues(source: string): Set<string> {
 	return names;
 }
 
-function importedValues(root: SgNode, specifier: string): Set<string> {
-	const names = new Set<string>();
+function importedValuesBySpecifier(root: SgNode): Map<string, Set<string>> {
+	const all = new Map<string, Set<string>>();
+	const namesFor = (specifier: string): Set<string> => {
+		let names = all.get(specifier);
+		if (!names) {
+			names = new Set<string>();
+			all.set(specifier, names);
+		}
+		return names;
+	};
 	for (const statement of root.findAll({
 		rule: { kind: "import_statement" },
 	})) {
@@ -511,7 +519,9 @@ function importedValues(root: SgNode, specifier: string): Set<string> {
 		const source = statement
 			.namedChildren()
 			.find((child) => child.kind() === "string");
-		if (!source || unquote(source.text()) !== specifier) continue;
+		const specifier = source ? unquote(source.text()) : undefined;
+		if (!source || specifier === undefined) continue;
+		const names = namesFor(specifier);
 		const clause = statement
 			.namedChildren()
 			.find((child) => child.kind() === "import_clause");
@@ -540,7 +550,9 @@ function importedValues(root: SgNode, specifier: string): Set<string> {
 		const call = importNode.parent();
 		if (call?.kind() !== "call_expression") continue;
 		const argument = call.field("arguments")?.namedChildren()[0];
-		if (!argument || unquote(argument.text()) !== specifier) continue;
+		const specifier = argument ? unquote(argument.text()) : undefined;
+		if (!argument || specifier === undefined) continue;
+		const names = namesFor(specifier);
 		const declarator = call.parent()?.parent();
 		const binding =
 			declarator?.kind() === "variable_declarator"
@@ -559,7 +571,7 @@ function importedValues(root: SgNode, specifier: string): Set<string> {
 			names.add("*");
 		}
 	}
-	return names;
+	return all;
 }
 
 interface ModuleImport {
@@ -596,6 +608,7 @@ function moduleImports(file: string, source?: string): ModuleImport[] {
 		source ?? fs.readFileSync(file, "utf8"),
 	).root();
 	const imports: ModuleImport[] = [];
+	const valuesBySpecifier = importedValuesBySpecifier(root);
 	for (const statement of root.findAll({
 		rule: { kind: "import_statement" },
 	})) {
@@ -609,7 +622,7 @@ function moduleImports(file: string, source?: string): ModuleImport[] {
 		const resolved = resolveProduction(file, specifier);
 		imports.push({
 			specifier,
-			values: importedValues(root, specifier),
+			values: new Set(valuesBySpecifier.get(specifier) ?? []),
 			resolved: resolved && isProductionModule(resolved) ? resolved : undefined,
 		});
 	}
@@ -622,7 +635,7 @@ function moduleImports(file: string, source?: string): ModuleImport[] {
 		const resolved = resolveProduction(file, specifier);
 		imports.push({
 			specifier,
-			values: importedValues(root, specifier),
+			values: new Set(valuesBySpecifier.get(specifier) ?? []),
 			resolved: resolved && isProductionModule(resolved) ? resolved : undefined,
 		});
 	}
@@ -645,9 +658,14 @@ function parsedSource(source: string): { root: SgNode; calls: SgNode[] } {
 	const cached = parsedSourceCache.get(source);
 	if (cached) return cached;
 	const root = parse(Lang.TypeScript, source).root();
+	// Only the `vi.mock` calls: `isViMockCall` is a pure function of the
+	// callee, so the `imported` and `all` passes (and `mockedSpecifiers`) share
+	// one answer per call instead of each re-walking every call expression.
 	const entry = {
 		root,
-		calls: root.findAll({ rule: { kind: "call_expression" } }),
+		calls: root
+			.findAll({ rule: { kind: "call_expression" } })
+			.filter((call) => isViMockCall(call.field("function"))),
 	};
 	parsedSourceCache.set(source, entry);
 	return entry;
@@ -662,8 +680,6 @@ function parsedSource(source: string): { root: SgNode; calls: SgNode[] } {
 function mockedSpecifiers(calls: readonly SgNode[]): Set<string> {
 	const specifiers = new Set<string>();
 	for (const call of calls) {
-		const callee = call.field("function");
-		if (!isViMockCall(callee)) continue;
 		const mocked = call.field("arguments")?.namedChildren()[0];
 		const mockedSpecifier = mockSpecifier(mocked);
 		if (mockedSpecifier) specifiers.add(mockedSpecifier);
@@ -720,8 +736,6 @@ export function findViMockExportGaps(
 	const mocked = () => (mockedOnce ??= mockedSpecifiers(calls));
 	const findings: ViMockExportFinding[] = [];
 	for (const call of calls) {
-		const callee = call.field("function");
-		if (!isViMockCall(callee)) continue;
 		const args = call.field("arguments")?.namedChildren() ?? [];
 		const specifier = mockSpecifier(args[0]);
 		const rawFactory = args[1];

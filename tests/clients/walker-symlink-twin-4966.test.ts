@@ -563,6 +563,11 @@ const EXEMPT: Readonly<Record<string, { reason: string; pinnedBy: string }>> = {
 			"`getCurrentCommit` looks up a git repo for a spawn cwd and is private; its file-link start is pinned through `captureSnapshots` with a real repository beside the link",
 		pinnedBy: "tests/clients/metrics-history-stderr.test.ts",
 	},
+	"clients/metrics/complexity-baseline.ts": {
+		reason:
+			"`existingDir` finds the nearest existing directory of a file's real path as the cwd of its default-branch git read (#5087); it answers a spawn cwd, not a root, and its file-link start is pinned with a link outside the repository",
+		pinnedBy: "tests/clients/metrics/complexity-baseline.test.ts",
+	},
 	"clients/tree-sitter-client.ts": {
 		reason:
 			"`grammarWriteBlockedReason` probes the nearest existing ancestor of a data dir for writability; it answers an errno, not a root",

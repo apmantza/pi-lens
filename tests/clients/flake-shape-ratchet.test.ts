@@ -494,6 +494,24 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the argv case must not probe or install ruff: the resolver stands in for the availability probe and the spawn boundary is doubled to record argv, while resolveToolCwd and ruffConfigArgs run for real",
 		},
+	"in-process-mock:clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/bootstrap":
+		{
+			detector: "in-process-mock",
+			reason:
+				"the analyzer load is held open through the shared bootstrapSeamMock so a session replacement lands inside it (#4220); the coordinator, scope and store are real",
+		},
+	"in-process-mock:clients/runtime-tool-call-4220-baseline-scope.test.ts::clients/metrics-history":
+		{
+			detector: "in-process-mock",
+			reason:
+				"the metrics-history writer is recorded rather than run, so the case can see whether a replaced session's snapshot write happened; its own I/O is not under test",
+		},
+	"in-process-mock:clients/runtime-tool-result-5087-complexity-delta.test.ts::clients/pipeline":
+		{
+			detector: "in-process-mock",
+			reason:
+				"runPipeline spawns every configured linter; the double decides only the blocker axis, and the handler, the complexity store and the re-measure are real",
+		},
 	// 2026-10-17 (#4504): the witness runs the real session_start / tool_call /
 	// tool_result handlers and only the per-file dispatch is stood in for, so
 	// the run observes what the opaque prescan recorded and recovered, not a
@@ -1046,6 +1064,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real git children emit stderr bytes whose metrics classification cannot be observed in-process",
 	},
+	"real-process-spawn:clients/metrics/complexity-baseline.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the default-branch read is real git for-each-ref and git show against a real repository; a stub cannot show which ref and blob it resolves",
+	},
 	// 2026-10-22 (#4732): the cost under test is how many real `git status`
 	// children each tool call spawns; a stubbed git answers the count it is
 	// told.
@@ -1191,6 +1214,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the subject is what a real non-bash tool writes into a real git checkout, detected by git's own status; a stubbed git answers only what it was told",
+	},
+	"real-process-spawn:index-5087-complexity-delta-witness.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the tier-2 witness builds its repository with real git, and the edit's default-branch read runs real git children",
 	},
 	// 2026-10-31 (#5108): a script-written file's blocker must reach the model
 	// through a real bash tool call, and the abandonment is a real 500 ms wall

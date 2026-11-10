@@ -905,15 +905,20 @@ function buildCoverageNotice(
 			r.primaryUnavailableCause === "disabled" ||
 			r.primaryUnavailableCause === "disabledFallback",
 	);
-	const verdict = unchecked(
-		cause
-			? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
-			: deniedRunnerIds.length > 0
-				? onlySwitchedOff
-					? `not checked (${deniedNote})`
-					: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
-				: "not fully checked (a language tool is missing, timed out, or failed to run)",
-	);
+	const unavailableReason = cause
+		? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
+		: deniedRunnerIds.length > 0
+			? onlySwitchedOff
+				? `not checked (${deniedNote})`
+				: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
+			: "not fully checked (a language tool is missing, timed out, or failed to run)";
+
+	const verdict = unchecked(unavailableReason);
+	// #5469: no checker answered this adopted edit; keep its unanswered status
+	// visible on every edit instead of hiding it behind a deduplicated notice.
+	if (ctx.analysisRootMode === "adopted") {
+		return { verdict: unchecked(`not analyzed (${unavailableReason})`) };
+	}
 
 	if (
 		onlySwitchedOff &&
@@ -1584,7 +1589,8 @@ export async function dispatchForFile(
 	if (generated) return generated;
 	if (ctx.analysisRootMode === "adopted") {
 		// #4242 phase A (per-file linters): an adopted root runs ONLY the explicit
-		// admission list of config-free, code-free runners, and only from global or
+		// admission list. LSP delegates execution trust to the client registry;
+		// CLI runners are config-free and code-free, and only use global or
 		// pi-lens-managed binaries. The default is refused, so a newly registered
 		// runner stays off an adopted root until `ADOPTED_ROOT_RUNNER_ALLOWLIST`
 		// admits it. Whole-project scanners and test runners are not in the plan

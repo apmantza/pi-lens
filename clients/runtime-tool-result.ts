@@ -171,6 +171,21 @@ import {
 } from "./out-of-band-changes.js";
 import { HOOK_WALL_BUDGET_MS } from "./hook-budgets.js";
 import {
+	DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD,
+	DEFAULT_HIGH_COMPLEXITY_THRESHOLD,
+} from "./dispatch/rules/high-complexity.js";
+import {
+	applyRulePolicy,
+	resolveDispatchPolicyConfigForFile,
+	rulePolicyMapFromResolution,
+	ruleThresholdFromResolution,
+} from "./dispatch/rule-policy.js";
+import {
+	adviseOnEdit,
+	type Thresholds,
+} from "./metrics/complexity-baseline.js";
+import { isComplexitySupportedFile } from "./tree-sitter-shared.js";
+import {
 	incrementDegradationCount,
 	recordDegradationOnce,
 } from "./degradation-ledger.js";
@@ -2202,6 +2217,33 @@ export function handleToolExecutionEnd(
 	return toolCallId !== undefined
 		? readGuard.dropProvisionalReadByCall(toolCallId)
 		: false;
+}
+
+/**
+ * #5087: the thresholds an edit's complexity delta is judged at: the
+ * `high-complexity` rule's, with the cyclomatic one from the file's config
+ * owner (`rules["high-complexity"].threshold`, #5338) when it sets one.
+ * `undefined` when that owner's rule policy drops the rule for this file
+ * (`rules.*.disable`, `select`, `ignorePaths`): the line is the rule's verdict
+ * and follows the rule's switch, as the dispatcher's findings do.
+ */
+function complexityThresholdsFor(
+	filePath: string,
+	root: string,
+): Thresholds | undefined {
+	const resolution = resolveDispatchPolicyConfigForFile(filePath, root);
+	const kept = applyRulePolicy(
+		[{ rule: "high-complexity" }],
+		rulePolicyMapFromResolution(resolution, root),
+		{ root, filePath },
+	);
+	if (kept.length === 0) return undefined;
+	return {
+		cyclomatic:
+			ruleThresholdFromResolution(resolution, "high-complexity") ??
+			DEFAULT_HIGH_COMPLEXITY_THRESHOLD,
+		nesting: DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD,
+	};
 }
 
 /**
@@ -4824,6 +4866,45 @@ export async function handleToolResult(
 	// which serves the failed-result and pipeline-crash returns (#5434).
 	if (behaviorWarnings.length > 0 && !result.hasBlockers) {
 		output += `\n\n${formatBehaviorWarnings(behaviorWarnings)}`;
+	}
+	// #5087: the per-edit complexity delta, against the file on the default
+	// branch. Secondary output, so it waits behind blockers like the behaviour
+	// warnings above (INLINE-CONTRACT.txt rule 2); a suppressed edit keeps the
+	// file's last table, so the next clean edit reports the change.
+	if (
+		!result.hasBlockers &&
+		resultLive &&
+		!getFlag("no-complexity") &&
+		isComplexitySupportedFile(filePath)
+	) {
+		const verdict = await bounded(
+			adviseOnEdit({
+				filePath,
+				store: runtime.complexityBaselines,
+				session: writeSession,
+				thresholds: complexityThresholdsFor(filePath, turnStateCwd),
+				signal: deps.signal,
+			}).catch((err: unknown) => {
+				// The delta is advice: its failure must never cost the edit's
+				// own output, so it is recorded and the result goes without it.
+				recordDegradationOnce({
+					kind: "complexity-delta-failed",
+					subject: filePath,
+					// The error name only: a parser message can quote file text (shape 27).
+					reason: `the complexity delta threw ${err instanceof Error ? err.name : typeof err}`,
+				});
+				return undefined;
+			}),
+			{
+				ms: HOOK_WALL_BUDGET_MS.tool_result_edit,
+				signal: deps.signal,
+				hook: "tool_result_edit",
+				label: "complexity-delta",
+			},
+		);
+		if (verdict?.advisory) {
+			output = output ? `${output}\n\n${verdict.advisory}` : verdict.advisory;
+		}
 	}
 
 	const totalMs = Date.now() - toolResultStart;

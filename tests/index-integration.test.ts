@@ -2175,7 +2175,7 @@ describe("index.ts integration", () => {
 				RuntimeCoordinator: class {
 					projectRoot = tmpDir;
 					turnIndex = 0;
-					complexityBaselines = new Set();
+					complexityBaselines = new Map();
 					cachedExports = new Map();
 					readGuard = mockReadGuard;
 					// #4942: the session's guard; one session here, so the one guard.
@@ -2201,7 +2201,11 @@ describe("index.ts integration", () => {
 					resetForSession() {}
 					// #4483: the tool_call's pre-edit linter capture asks for it.
 					captureSessionGeneration() {
-						return { isCurrent: () => true };
+						return {
+							isCurrent: () => true,
+							// #5087: the first-touch complexity baseline writes through it.
+							guardedWrite: <T>(_subject: string, write: () => T) => write(),
+						};
 					}
 					setTelemetryIdentity() {}
 					telemetrySessionId = "test-session";
@@ -2282,7 +2286,7 @@ describe("index.ts integration", () => {
 				RuntimeCoordinator: class {
 					projectRoot = tmpDir;
 					turnIndex = 0;
-					complexityBaselines = new Set();
+					complexityBaselines = new Map();
 					cachedExports = new Map();
 					readGuard = {
 						recordRead: () => {},
@@ -2316,7 +2320,11 @@ describe("index.ts integration", () => {
 					resetForSession() {}
 					// #4483: the tool_call's pre-edit linter capture asks for it.
 					captureSessionGeneration() {
-						return { isCurrent: () => true };
+						return {
+							isCurrent: () => true,
+							// #5087: the first-touch complexity baseline writes through it.
+							guardedWrite: <T>(_subject: string, write: () => T) => write(),
+						};
 					}
 					setTelemetryIdentity() {}
 					telemetrySessionId = "test-session";
@@ -2401,7 +2409,7 @@ describe("index.ts integration", () => {
 				RuntimeCoordinator: class {
 					projectRoot = tmpDir;
 					turnIndex = 0;
-					complexityBaselines = new Set();
+					complexityBaselines = new Map();
 					cachedExports = new Map();
 					readGuard = {
 						recordRead: () => {},
@@ -2435,7 +2443,11 @@ describe("index.ts integration", () => {
 					resetForSession() {}
 					// #4483: the tool_call's pre-edit linter capture asks for it.
 					captureSessionGeneration() {
-						return { isCurrent: () => true };
+						return {
+							isCurrent: () => true,
+							// #5087: the first-touch complexity baseline writes through it.
+							guardedWrite: <T>(_subject: string, write: () => T) => write(),
+						};
 					}
 					setTelemetryIdentity() {}
 					telemetrySessionId = "test-session";
@@ -2535,7 +2547,7 @@ describe("index.ts integration", () => {
 				RuntimeCoordinator: class {
 					projectRoot = tmpDir;
 					turnIndex = 0;
-					complexityBaselines = new Set();
+					complexityBaselines = new Map();
 					cachedExports = new Map();
 					readGuard = {
 						recordRead: () => {},
@@ -2567,7 +2579,11 @@ describe("index.ts integration", () => {
 					resetForSession() {}
 					// #4483: the tool_call's pre-edit linter capture asks for it.
 					captureSessionGeneration() {
-						return { isCurrent: () => true };
+						return {
+							isCurrent: () => true,
+							// #5087: the first-touch complexity baseline writes through it.
+							guardedWrite: <T>(_subject: string, write: () => T) => write(),
+						};
 					}
 					setTelemetryIdentity() {}
 					telemetrySessionId = "test-session";
@@ -2648,7 +2664,7 @@ describe("index.ts integration", () => {
 				RuntimeCoordinator: class {
 					projectRoot = tmpDir;
 					turnIndex = 0;
-					complexityBaselines = new Set();
+					complexityBaselines = new Map();
 					cachedExports = new Map();
 					readGuard = {
 						recordRead: () => {},
@@ -2680,7 +2696,11 @@ describe("index.ts integration", () => {
 					resetForSession() {}
 					// #4483: the tool_call's pre-edit linter capture asks for it.
 					captureSessionGeneration() {
-						return { isCurrent: () => true };
+						return {
+							isCurrent: () => true,
+							// #5087: the first-touch complexity baseline writes through it.
+							guardedWrite: <T>(_subject: string, write: () => T) => write(),
+						};
 					}
 					setTelemetryIdentity() {}
 					telemetrySessionId = "test-session";
@@ -2756,7 +2776,7 @@ describe("index.ts integration", () => {
 				RuntimeCoordinator: class {
 					projectRoot = tmpDir;
 					turnIndex = 0;
-					complexityBaselines = new Set();
+					complexityBaselines = new Map();
 					cachedExports = new Map();
 					readGuard = {
 						recordRead: () => {},
@@ -2788,7 +2808,11 @@ describe("index.ts integration", () => {
 					resetForSession() {}
 					// #4483: the tool_call's pre-edit linter capture asks for it.
 					captureSessionGeneration() {
-						return { isCurrent: () => true };
+						return {
+							isCurrent: () => true,
+							// #5087: the first-touch complexity baseline writes through it.
+							guardedWrite: <T>(_subject: string, write: () => T) => write(),
+						};
 					}
 					setTelemetryIdentity() {}
 					telemetrySessionId = "test-session";
@@ -2867,9 +2891,13 @@ describe("index.ts integration", () => {
 					resetForSession() {}
 					// #4483: the tool_call's pre-edit linter capture asks for it.
 					captureSessionGeneration() {
-						return { isCurrent: () => true };
+						return {
+							isCurrent: () => true,
+							// #5087: the first-touch complexity baseline writes through it.
+							guardedWrite: <T>(_subject: string, write: () => T) => write(),
+						};
 					}
-					complexityBaselines = new Set();
+					complexityBaselines = new Map();
 					projectRulesScan = { hasCustomRules: false, rules: [] };
 					cachedExports = new Map();
 					errorDebtBaseline = null;

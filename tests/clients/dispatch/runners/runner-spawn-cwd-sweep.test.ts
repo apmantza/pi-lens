@@ -147,7 +147,8 @@ const POPULATION_FILES = [
  * when the files git keeps cannot answer) and the `git diff` in
  * listGitHeadDelta (opaque-mutation-scan.ts, already counted).
  */
-const EXPECTED_FILES = 79;
+// #5087: 79 -> 80, clients/metrics/complexity-baseline.ts (two git reads).
+const EXPECTED_FILES = 80;
 // 135 -> 134 (#4532 round 3): `findBinaryOnPath` stopped spawning
 // `which`/`where` — the bare-command probe resolved its own binary through the
 // path and cwd it was asked to judge, so a project-supplied `which` ran. It is
@@ -162,7 +163,9 @@ const EXPECTED_FILES = 79;
 // caller; each held one direct spawn site, and both are deleted.
 // 129 -> 128 (#5345): the unused module-level ast-grep sweep is deleted; its
 // `probeAstGrepCommandAsync` direct `safeSpawnAsync` site goes with it.
-const EXPECTED_DIRECT_SITES = 128;
+// 128 -> 130 (#5087): the complexity baseline's `git for-each-ref` and
+// `git show` reads of the default branch.
+const EXPECTED_DIRECT_SITES = 130;
 /**
  * Every same-file spawn-routing wrapper call site the scan discovers. Pinned
  * as a LIST, not a count, because the list is the part round 2 got wrong: it
@@ -209,6 +212,7 @@ const EXPECTED_WRAPPER_SITES = [
 	"clients/knip-client.ts:runAnalyze",
 	"clients/lsp/launch.ts:trySpawn",
 	"clients/lsp/launch.ts:trySpawn",
+	"clients/metrics/complexity-baseline.ts:resolveDefaultBranch",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
 	"clients/opaque-mutation-scan.ts:readGitStatusEntries",
@@ -274,6 +278,10 @@ const NO_CWD_EXEMPTION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/safe-spawn.ts#safeSpawn:b6046d06",
 		"forwards the caller's SafeSpawnOptions object unchanged before adding safe-spawn defaults; the sole test-runner caller supplies no cwd",
+	],
+	[
+		"clients/metrics/complexity-baseline.ts#readAtDefaultBranch:166fb4b8~7330fe93",
+		"resolveDefaultBranch runs `git for-each-ref` with cwd = existingDir(path.dirname(realpathOrResolve(filePath))), the nearest existing directory of the file's own identity, so a file link answers its target's repository (#4966); it reads ref names only and resolves no project configuration from the dispatch cwd (#5087)",
 	],
 	[
 		"clients/metrics-history.ts#getCurrentCommit:b46d4221~df24802d",
@@ -620,6 +628,14 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	[
 		"clients/mcp/review.ts#runRebuild:f93df254~9f5ecf07",
 		"cwd is `repoRoot`, the repository the rebuild script belongs to",
+	],
+	[
+		"clients/metrics/complexity-baseline.ts#readAtDefaultBranch:b56a9663~d9394988",
+		"cwd is the nearest existing directory of the file's own identity, and `git show <ref>:./<path>` names the path relative to it, so the blob resolves in the repository that holds the file (#4966); a dispatch tool-cwd would answer for another checkout (#5087)",
+	],
+	[
+		"clients/metrics/complexity-baseline.ts#resolveDefaultBranch:e0d96155~dbf27697",
+		"cwd is resolveDefaultBranch's own `cwd` parameter, the file's own directory: `git for-each-ref` lists the default branch of the repository that directory is in (#5087)",
 	],
 	[
 		"clients/opaque-mutation-scan.ts#isGitWorktree:7e6a8cd3~edb3d44f",

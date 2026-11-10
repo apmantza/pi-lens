@@ -2,7 +2,8 @@ name: Hot-path latency
 
 # #4363: times session_start, dispatch and the diagnostics-cache replay, and
 # (#4905) three bash tool_calls at a non-git home over the opaque file cap
-# (row tool_call_bash_home_overcap), on the
+# (row tool_call_bash_home_overcap), and (#5087) a first-read tool_call and an
+# edit's tool_result (rows tool_call_first_touch, tool_result_edit), on the
 # checked-out commit and on its first parent, and fails only on a regression
 # that is both statistically significant and above a stated threshold. A pull
 # request checks out GitHub's merge of its head into master's tip, so the first
