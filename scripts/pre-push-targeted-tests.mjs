@@ -1105,8 +1105,11 @@ function unionChanged(ranges) {
 
 export async function main() {
 	const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));
-	// This base belongs exclusively to the gate: detached late writers can
-	// recreate run-* without owner.pid after cleanup. Sweep before claiming ours.
+	// The default base belongs exclusively to the gate: detached late writers
+	// can recreate run-* without owner.pid after cleanup. Sweep before claiming
+	// ours. A PI_LENS_PREPUSH_TMPDIR base is the operator's and may be shared
+	// (e.g. /tmp), so there only a run-* carrying our dead owner.pid is ours.
+	const exclusiveBase = !process.env.PI_LENS_PREPUSH_TMPDIR?.trim();
 	let unsafe = false;
 	try {
 		for (const entry of readdirSync(base, { withFileTypes: true })) {
@@ -1128,6 +1131,7 @@ export async function main() {
 					if (error?.code !== "ENOENT") throw error;
 					markerless = true;
 				}
+				if (markerless && !exclusiveBase) continue;
 				const alive = markerless ? false : ownerAlive(dir);
 				if (alive === true) continue;
 				if (alive === undefined) {

@@ -689,7 +689,8 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 	it("sweeps stale run directories while preserving live and foreign entries (#5468 F3)", () => {
 		// Detached late writers recreate markerless run directories after cleanup.
 		const { hook } = gitFixture();
-		const base = path.join(fixtureDir as string, "sweep-base");
+		const home = path.join(fixtureDir as string, "sweep-home");
+		const base = path.join(home, "prepush-tmp");
 		const stale = path.join(base, "run-stale");
 		const live = path.join(base, "run-live");
 		const sibling = path.join(base, "sibling");
@@ -701,7 +702,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		fs.symlinkSync(sibling, link, "dir");
 		fs.symlinkSync(sibling, path.join(base, "run-link-two"), "dir");
 		const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
-			PI_LENS_PREPUSH_TMPDIR: base,
+			PI_LENS_HOME: home,
 		});
 		expect(result.status).toBe(0);
 		expect(fs.existsSync(live)).toBe(true);
@@ -711,6 +712,25 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		expect(
 			result.stderr.match(/\[pre-push\] temp sweep skipped unsafe entries/g),
 		).toHaveLength(1);
+	});
+
+	it("keeps a markerless run directory under an operator override base (#5468 r3)", () => {
+		// PI_LENS_PREPUSH_TMPDIR may name a shared directory such as /tmp, where a
+		// markerless run-* is someone else's; only our dead owner.pid is ours.
+		const { hook } = gitFixture();
+		const base = path.join(fixtureDir as string, "shared-base");
+		const foreign = path.join(base, "run-foreign");
+		const dead = path.join(base, "run-dead");
+		fs.mkdirSync(foreign, { recursive: true });
+		fs.mkdirSync(dead, { recursive: true });
+		fs.writeFileSync(path.join(foreign, "data"), "keep");
+		fs.writeFileSync(path.join(dead, "owner.pid"), "2147483646");
+		const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
+			PI_LENS_PREPUSH_TMPDIR: base,
+		});
+		expect(result.status).toBe(0);
+		expect(fs.readFileSync(path.join(foreign, "data"), "utf8")).toBe("keep");
+		expect(fs.existsSync(dead)).toBe(false);
 	});
 
 	it("allocates distinct run directories under the override base (#5439)", () => {
