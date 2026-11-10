@@ -66,10 +66,15 @@ object argument such as `callHierarchyItem`, `rule` or `flags` are not checked):
   accepted aliases (#5041), so those spellings run on them. The four tools whose
   schema comes from the pi tool definition (`pilens_module_report`,
   `pilens_read_symbol`, `pilens_read_enclosing` and `pilens_effective_config`)
-  declare `path` alone (#5138): a `file`-only call to the first three is not
-  run, as a missing `path`, and a `filePath` or `file_path` send to any of the
-  four is reported as a mistyped `path` (``Not run: `Path` looks like a mistyped
-  `path`, which was not sent.``). The exact predicate is named in
+  declare `path` alone (#5138). Without `path`, a `file`, `filePath` or
+  `file_path` send to the first three is refused for missing required arguments
+  (``Not run: required argument(s) `path` missing.`` for `pilens_module_report`;
+  `read_symbol` also requires `symbol`, and `read_enclosing` requires `line`).
+  For `pilens_effective_config`, a `filePath` or `file_path` send without `path`
+  is reported as a mistyped `path`, naming the sent key (``Not run: `filePath`
+  looks like a mistyped `path`, which was not sent.``). Sending `path` avoids
+  that refusal, but conflicting `filePath` values still refuse with
+  `name different files — send one spelling`. The exact predicate is named in
   [public-api-stability.md](public-api-stability.md). Anything looser (a typo,
   an abbreviation, `files` for `maxLspFiles`, or a count, flag or output key
   such as `maxFiles`, `includeFiles`, `outFile` or `cwdPath` where `cwd` is
@@ -96,12 +101,15 @@ and `[]` mean no arguments.
 one reader (`readPathsArgument`, `tools/shared.ts`), so an entry means the same
 in each. An entry that exists on disk is always a literal, so
 `app/[id]/page.tsx` works as written. Any other entry with a glob character
-(`src/**/*.ts`) expands once, against the call's own root, into the files it
-matches. A glob that matches nothing answers `no file matches`, and a glob that
-reaches outside the workspace is refused, as is an entry that starts with `!`
+(`src/**/*.ts`) expands once, against the call's own root, into the files and
+directories it matches. A matched directory scopes its whole subtree: `src/*` can include
+`src/pkg/nested.ts` through `src/pkg`, even though the file itself does not
+match the glob. A glob that matches nothing answers `no file matches`, and a
+glob that reaches outside the workspace is refused, as is an entry that starts with `!`
 (`paths` names what to include; leave files out through the project ignore
-config). The argument holds at most 100 entries, and the file list a tool
-receives after expansion is capped at the same 100 (`MAX_PATHS_ENTRIES`); a
+config). The argument holds at most 100 entries, and the list a tool
+receives after expansion is capped at the same 100 (`MAX_PATHS_ENTRIES`), counting
+a matched directory once rather than counting its descendants; a
 tool that is handed a list and not a filter refuses a larger scope rather than
 narrowing it. `symbol_search` filters an index, so the file cap is lifted for
 it and only the walk bound applies. A literal outside the workspace is left
@@ -143,9 +151,10 @@ alone.
   (never dropped outright); this is what makes save-triggered servers like
   Expert (Elixir) re-diagnose an edit made through pi-lens (refs #3405,
   #3408). Legacy `mode`: `delta` (current turn), `all` (resurfaces stale
-  blockers dropped from turn context), `full` (project-wide scan). A file no
-  check completed on is named as not checked (`⚠ N files not checked, so no
-  findings is not a clean result`) instead of reading as "No issues ✓".
+  blockers dropped from turn context), `full` (project-wide scan). When the delta
+  has no findings, files no check completed on are reported as not checked (`⚠ N files not checked, so no
+  findings is not a clean result`), naming at most five files and counting
+  the rest (`+2 more`, for example). A delta with findings omits this line.
 - **`lens_diagnostic_mark`** — Triage a diagnostic: `false-positive` /
   `suppress` (writes an inline `pi-lens-ignore` comment) / `defer`
   (session-only) / `flagged` (persists, rendered `📌 flagged-to-fix`).
