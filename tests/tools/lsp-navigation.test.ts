@@ -3198,8 +3198,8 @@ describe("lsp_navigation default text view", () => {
 	});
 
 	it("keeps the line:col for a flat SymbolInformation findSymbol answer", async () => {
-		// Recurrence: #5224 review F1. pi-lens never declares
-		// hierarchicalDocumentSymbolSupport, so servers answer flat
+		// Recurrence: #5224 review F1. Even with hierarchical support
+		// declared, servers may still answer flat
 		// SymbolInformation (position only in `location.range`) and the text
 		// printed `path  function helper` with no line:col. The hierarchical
 		// fixture above never saw that shape.
