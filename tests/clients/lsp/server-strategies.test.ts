@@ -133,6 +133,11 @@ describe("deno diagnostic strategy (#5464) — measured against the real deno 2.
 		expect(getStrategy("deno").aggregateWaitMs).toBeGreaterThanOrEqual(
 			Math.ceil(slowest * 1.25),
 		);
+		// Recurrence (#5464 review F6, Qodo C2): the lower bound alone let a 7000 ->
+		// 8000 edit pass, and 8000 adds a second to every uncapped call that deno
+		// never answers. 7000 is the measured 1.25 x 5491 (6864) rounded up, so the
+		// exact value is pinned; moving it needs a new measurement, not a silent edit.
+		expect(getStrategy("deno").aggregateWaitMs).toBe(7000);
 	});
 
 	// Recurrence (#3402 r3): a row that moves an unmeasured field with the one
