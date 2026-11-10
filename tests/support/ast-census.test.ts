@@ -208,13 +208,6 @@ const ADMITTED_ACCESSOR_SITES: readonly AccessorAdmission[] = [
 	},
 	{
 		file: "tests/clients/abort-listener-release-sweep.test.ts",
-		text: "if (node.children().length > 0) return undefined;",
-		count: 1,
-		reason:
-			"a leaf test on one node (no children means a token); nothing is visited",
-	},
-	{
-		file: "tests/clients/abort-listener-release-sweep.test.ts",
 		text: 'const args: SgNode[] = node.field("arguments")?.namedChildren() ?? [];',
 		count: 1,
 		reason: "reads one call's argument list; nothing is visited",

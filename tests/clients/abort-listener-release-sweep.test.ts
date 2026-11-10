@@ -106,9 +106,9 @@ interface AbortListenerSite {
 }
 
 /** The text of a leaf that is a token or the content of a string literal. */
-function tokenOf(node: SgNode): string | undefined {
-	if (node.children().length > 0) return undefined;
-	const kind: string = node.kind();
+function tokenOf(node: SgNode, kind: string): string | undefined {
+	// `isLeaf()` is "no children" without materialising a handle per child.
+	if (!node.isLeaf()) return undefined;
 	if (kind === "comment") return undefined;
 	return node.text();
 }
@@ -130,8 +130,10 @@ function outermostFunction(node: SgNode): SgNode | undefined {
 function holdsCodeToken(scope: SgNode, token: string): boolean {
 	let found = false;
 	walkAst(scope, (node: SgNode) => {
-		if (found || node.kind() === "string_fragment") return;
-		if (tokenOf(node) === token) found = true;
+		if (found) return;
+		const kind: string = node.kind();
+		if (kind === "string_fragment") return;
+		if (tokenOf(node, kind) === token) found = true;
 	});
 	return found;
 }
@@ -185,14 +187,14 @@ function calleeName(fn: SgNode | undefined): string | undefined {
  *     literal first argument names the event and a non-literal one sends us to
  *     the second.
  */
-function isUnreadableListenerSite(node: SgNode): boolean {
-	if (node.kind() === "identifier" || node.kind() === "property_identifier") {
+function isUnreadableListenerSite(node: SgNode, kind: string): boolean {
+	if (kind === "identifier" || kind === "property_identifier") {
 		return node.text().includes("\\");
 	}
-	if (node.kind() === "subscript_expression") {
+	if (kind === "subscript_expression") {
 		return isEscapedString(node.field("index"));
 	}
-	if (node.kind() !== "call_expression") return false;
+	if (kind !== "call_expression") return false;
 	const fn = node.field("function");
 	if (fn?.kind() === "subscript_expression" && calleeName(fn) === undefined) {
 		// `x[Symbol.iterator]()` is the one admitted computed form: a well-known
@@ -233,9 +235,10 @@ export function scanAbortListenerSites(
 	const seen = new Map<string, number>();
 	const sites: AbortListenerSite[] = [];
 	walkAst(parseRoot(source), (node: SgNode) => {
-		const token = tokenOf(node);
+		const kind: string = node.kind();
+		const token = tokenOf(node, kind);
 		const isToken = token !== undefined && ADD_TOKENS.has(token);
-		if (!isToken && !isUnreadableListenerSite(node)) return;
+		if (!isToken && !isUnreadableListenerSite(node, kind)) return;
 		const label = isToken ? token : "events-abort";
 		const line = node.range().start.line;
 		const symbol = findEnclosingSymbol(lines, line) ?? `line-${line + 1}`;
