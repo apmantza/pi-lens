@@ -2828,6 +2828,73 @@ describe("lsp_navigation default text view", () => {
 		expect(text.startsWith("{")).toBe(false);
 	});
 
+	it.each(["hierarchical", "range-only", "flat"] as const)(
+		"definition fallback uses the name location and read credit for %s symbols (#5482 F1)",
+		async (shape) => {
+			// F1: a hierarchical body must not become name-only search coverage.
+			const dir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-nav-fallback-"),
+			);
+			const file = path.join(dir, "symbols.py");
+			fs.writeFileSync(file, "foo()\n" + "\n".repeat(220));
+			const nameRange = span(12, 4);
+			const bodyRange = {
+				start: { line: 9, character: 0 },
+				end: { line: 209, character: 1 },
+			};
+			const range = shape === "range-only" ? bodyRange : nameRange;
+			const symbol =
+				shape === "flat"
+					? {
+							name: "foo",
+							kind: 6,
+							location: { uri: pathToFileURL(file).href, range: nameRange },
+						}
+					: {
+							name: "foo",
+							kind: 6,
+							range: bodyRange,
+							...(shape === "hierarchical"
+								? { selectionRange: nameRange }
+								: {}),
+						};
+			Object.assign(mocked.service as object, {
+				definition: vi.fn().mockResolvedValue([]),
+				documentSymbol: vi.fn().mockResolvedValue([symbol]),
+			});
+			try {
+				const tool = createRawLspNavigationTool((flag) => flag === "lens-lsp");
+				const result = await tool.execute(
+					"fallback-name",
+					{
+						operation: "definition",
+						path: file,
+						line: 1,
+						character: 1,
+					},
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+				expect(result.details?.failureKind).toBe("fallback_success");
+				expect
+					.soft(String(result.content[0]?.text))
+					.toContain(
+						`${file}:${range.start.line + 1}:${range.start.character + 1}`,
+					);
+				expect(result.details?.searchReads).toEqual([
+					{
+						file,
+						startLine: range.start.line + 1,
+						endLine: range.end.line + 1,
+					},
+				]);
+			} finally {
+				removeTempDirSync(dir);
+			}
+		},
+	);
+
 	it("prints a location inside the project relative to it", async () => {
 		// The Neovim shape is a project-relative path; only a hit under the cwd
 		// can show that the display resolver runs at all (a tmp fixture is

@@ -524,7 +524,7 @@ function pickLocalSymbolLocation(
 				return { uri: symbol.location.uri, range: symbol.location.range };
 			}
 			if (symbol.range) {
-				return { uri, range: symbol.range };
+				return { uri, range: symbol.selectionRange ?? symbol.range };
 			}
 			return undefined;
 		})
