@@ -2469,6 +2469,8 @@ export type GradleKtlintOwnership =
 
 interface SpotlessKotlinConfigCacheEntry {
 	mtime: number;
+	/** Byte length from the same stat: mtime alone misses a same-tick rewrite (#1105). */
+	size: number;
 	ktlintConfig: boolean;
 	ktfmtConfig: boolean;
 }
@@ -2671,9 +2673,9 @@ export function getSpotlessKotlinFormatter(
 			const filePath = path.join(dir, gradle);
 			if (!fs.existsSync(filePath)) continue;
 			try {
-				const mtime = fs.statSync(filePath).mtimeMs;
+				const { mtimeMs: mtime, size } = fs.statSync(filePath);
 				let config = spotlessKotlinConfigCache.get(filePath);
-				if (!config || config.mtime !== mtime) {
+				if (!config || config.mtime !== mtime || config.size !== size) {
 					const source = stripGradleCommentsAndStrings(
 						fs.readFileSync(filePath, "utf-8"),
 					);
@@ -2684,6 +2686,7 @@ export function getSpotlessKotlinFormatter(
 					).flatMap((spotless) => namedGradleBlockBodies(spotless, "kotlin"));
 					config = {
 						mtime,
+						size,
 						ktlintConfig: kotlinBodies.some((body) =>
 							/\bktlint\s*\(/.test(body),
 						),

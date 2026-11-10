@@ -554,6 +554,7 @@ Thanks goes to these wonderful people:
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/aprudkin"><img src="https://avatars.githubusercontent.com/u/126267327?v=4" width="100px;" alt=""/><br /><sub><b>aprudkin</b></sub></a><br /><a href="#bug-aprudkin" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ProphetOfDoom-PoD"><img src="https://avatars.githubusercontent.com/u/260035065?v=4" width="100px;" alt=""/><br /><sub><b>Prophet Of Doom</b></sub></a><br /><a href="#ideas-ProphetOfDoom-PoD" title="Ideas & Planning">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://www.apostolapostolov.com/"><img src="https://avatars.githubusercontent.com/u/4083812?v=4" width="100px;" alt=""/><br /><sub><b>Apostol Apostolov</b></sub></a><br /><a href="#bug-apoapostolov" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/spearmootz"><img src="https://avatars.githubusercontent.com/u/19737290?v=4" width="100px;" alt=""/><br /><sub><b>Ricardo Spear</b></sub></a><br /><a href="#bug-spearmootz" title="Bug reports">🐛</a></td>
     </tr>
   </tbody>
 </table>

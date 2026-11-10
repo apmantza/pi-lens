@@ -7,13 +7,14 @@ on:
     branches: [master]
     types: [closed]
 
-permissions:
-  contents: read
-  issues: read
-  pull-requests: write
+permissions: {}
 
 jobs:
   verify:
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: write
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     # refs #3123: bounds a hang against GitHub's 360-min default. This job runs

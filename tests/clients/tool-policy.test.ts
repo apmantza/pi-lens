@@ -1232,6 +1232,38 @@ describe("tool-policy", () => {
 		}
 	});
 
+	// Recurrence (shape 6): the memo keyed on mtime alone served the old
+	// formatter after a length-changing rewrite that kept the mtime (`cp -p`,
+	// `rsync -t`, tar extract, a write inside one coarse mtime tick). The config
+	// caches in clients/ stamp size beside mtime (#1105).
+	it("re-reads Spotless detection after a length-changing rewrite with the same mtime (shape 6)", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-spotless-same-tick-");
+		const gradlePath = createTempFile(
+			env.tmpDir,
+			"build.gradle.kts",
+			"spotless {\n  kotlin {\n    ktlint()\n  }\n}\n",
+		);
+		try {
+			// Whole seconds are exact in both utimes and stat, so the two
+			// stamps below compare equal on every filesystem that keeps them.
+			const tick = new Date(1_700_000_000_000);
+			fs.utimesSync(gradlePath, tick, tick);
+			expect(getSpotlessKotlinFormatter(env.tmpDir)).toBe("ktlint");
+
+			const rewritten = "spotless {\n  kotlin {\n    ktfmt()\n  }\n}\n";
+			expect(Buffer.byteLength(rewritten)).not.toBe(
+				fs.statSync(gradlePath).size,
+			);
+			fs.writeFileSync(gradlePath, rewritten);
+			fs.utimesSync(gradlePath, tick, tick);
+			expect(fs.statSync(gradlePath).mtimeMs).toBe(tick.getTime());
+
+			expect(getSpotlessKotlinFormatter(env.tmpDir)).toBe("ktfmt");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("hasKtfmtConfig is false for a plain Kotlin project (ktlint stays default)", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-ktfmt-absent-");
 		try {

@@ -83,6 +83,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: ${{ !cancelled() }}
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # SonarCloud S6505 (#1917 review, deferred; fixed here): `npx` can
@@ -117,6 +118,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # The version comes from the `oxfmt` devDependency, which package.json
@@ -168,6 +170,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # Same pattern as the oxfmt/markdownlint jobs above: install just the
@@ -219,6 +222,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "22"
 
       # `npm ci` (not `npm install`) + `--ignore-scripts` (SonarCloud S6505 /
@@ -368,6 +372,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: ${{ !cancelled() }}
         with:
+          package-manager-cache: true
           node-version: "22"
           cache: npm
       - name: Install dependencies

@@ -196,6 +196,7 @@ jobs:
             scripts
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
       - name: Classify the changed files
         id: classify
@@ -263,6 +264,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "22"
 
       - name: Setup pnpm
@@ -379,6 +381,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       - name: Build + pack the current repo (pinned npm, strict policy)
@@ -501,6 +504,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       - name: Setup pnpm
@@ -641,6 +645,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "22"
 
       # yamllint disable-line rule:line-length
@@ -970,6 +975,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "22"
 
       - name: Setup bun
@@ -1169,6 +1175,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: true
           node-version: "22"
 
       - name: Setup bun
@@ -1278,6 +1285,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: "22"
 
       # Runs every time (always()), success or failure: on drift it files or
