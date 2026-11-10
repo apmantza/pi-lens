@@ -961,6 +961,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: '22'
 
       # npm 11.11 restored libc descriptors in lockfile v3 (#9025). Older npm
@@ -1171,6 +1172,7 @@ jobs:
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
+          package-manager-cache: false
           node-version: '22'
 
       # `shell: bash` on every leg: the Windows default is pwsh, which does not

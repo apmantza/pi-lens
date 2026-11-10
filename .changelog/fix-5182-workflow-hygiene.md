@@ -3,4 +3,4 @@ section: Fixed
 audience: internal
 ---
 
-- Prevent empty automatic npm cache writers, scope workflow writes to jobs, and cancel superseded PR scans. (refs #5182)
+- Require reachable unconditional installers after setup-node for automatic npm cache writers, scope workflow writes to jobs, and cancel superseded PR scans. (refs #5182)

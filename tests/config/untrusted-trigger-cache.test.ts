@@ -420,18 +420,29 @@ describe("untrusted triggers never restore or save a cache (#4358)", () => {
 
 function jobsOf(
 	file: string,
+	source = readFileSync(resolve(ROOT, file), "utf8"),
 ): Record<
 	string,
-	{ steps?: { uses?: string; run?: string; with?: Record<string, unknown> }[] }
+	{
+		steps?: {
+			uses?: string;
+			run?: string;
+			with?: Record<string, unknown>;
+			if?: unknown;
+			"continue-on-error"?: unknown;
+		}[];
+	}
 > {
 	return (
-		yaml.load(readFileSync(resolve(ROOT, file), "utf8")) as {
+		yaml.load(source) as {
 			jobs: Record<
 				string,
 				{
 					steps?: {
 						uses?: string;
 						run?: string;
+						if?: unknown;
+						"continue-on-error"?: unknown;
 						with?: Record<string, unknown>;
 					}[];
 				}
@@ -442,16 +453,34 @@ function jobsOf(
 // #5082 / #5182 recurrence: no-install jobs won the shared Linux npm cache
 // key with an empty ~/.npm. Unknown install wrappers must opt out too.
 describe("npm auto-cache writers across workflows", () => {
-	const installs = (run: string) =>
-		decodeShellWords(run).some(
-			({ words }) =>
+	const installs = (run: string) => {
+		for (const source of run.split("\n")) {
+			const line = source.trim();
+			if (!line || line.startsWith("#")) continue;
+			// Known-good single command lines only; no shell evaluation or chains.
+			if (!/^[\w./:@%+,= \t-]+$/.test(line)) return false;
+			const words = decodeShellWords(line)[0]?.words ?? [];
+			if (
 				words[0]?.text === "npm" &&
-				!words[0].hidden &&
-				["ci", "install", "i"].includes(words[1]?.text) &&
-				!words[1]?.hidden,
-		);
+				["ci", "install", "i"].includes(words[1]?.text)
+			)
+				return true;
+			if (words[0]?.text === "set") {
+				if (!/^set[ \t]+-[eux]+(?:o[ \t]+pipefail)?$/.test(line)) return false;
+				continue;
+			}
+			// Only known plain prefixes: shell keywords, bindings and aliases refuse.
+			if (
+				!["echo", "printf", "pwd", "cd", "mkdir", "rm", "git", "node"].includes(
+					words[0]?.text,
+				)
+			)
+				return false;
+		}
+		return false;
+	};
 
-	it("requires every no-install setup-node job to opt out", () => {
+	const scan = (ciSource?: string) => {
 		// #5182 remainder: opt-outs land after merge, checked on first scheduled master run
 		// (these jobs are master/schedule-only, so a branch dispatch skips them)
 		const deferredOptOutBaseline = new Set([
@@ -472,7 +501,10 @@ describe("npm auto-cache writers across workflows", () => {
 		for (const file of readdirSync(resolve(ROOT, ".github/workflows"))) {
 			if (!/\.ya?ml$/.test(file)) continue;
 			for (const [id, job] of Object.entries(
-				jobsOf(`.github/workflows/${file}`),
+				jobsOf(
+					`.github/workflows/${file}`,
+					file === "ci.yml" ? ciSource : undefined,
+				),
 			)) {
 				scanned +=
 					job.steps?.filter((entry) =>
@@ -480,15 +512,22 @@ describe("npm auto-cache writers across workflows", () => {
 							"actions/setup-node@",
 						),
 					).length ?? 0;
-				if (job.steps?.some((entry) => installs(entry.run ?? ""))) continue;
-				for (const entry of job.steps ?? []) {
+				for (const [index, entry] of (job.steps ?? []).entries()) {
 					const setup = entry as {
 						uses?: string;
 						with?: Record<string, unknown>;
 					};
 					if (
 						setup.uses?.startsWith("actions/setup-node@") &&
-						setup.with?.["package-manager-cache"] !== false
+						setup.with?.["package-manager-cache"] !== false &&
+						!job.steps
+							?.slice(index + 1)
+							.some(
+								(step) =>
+									step.if === undefined &&
+									step["continue-on-error"] === undefined &&
+									installs(step.run ?? ""),
+							)
 					)
 						offenders.push(`${file}:${id}`);
 				}
@@ -501,11 +540,59 @@ describe("npm auto-cache writers across workflows", () => {
 		expect(
 			[...deferredOptOutBaseline].filter((key) => !offenders.includes(key)),
 		).toEqual([]);
+	};
+	it("requires every no-install setup-node job to opt out", () => scan());
+
+	// F1: plant unreachable installers in the actual ci.yml:changes scan.
+	it.each([
+		["skipped step", "      - run: npm ci\n        if: ${{ false }}\n"],
+		[
+			"unreachable chain",
+			"      - run: false && npm ci\n        continue-on-error: true\n",
+		],
+		["chain without continue-on-error", "      - run: false && npm ci\n"],
+		[
+			"continue-on-error step",
+			"      - run: npm ci\n        continue-on-error: true\n",
+		],
+		[
+			"exit before install",
+			"      - run: |\n          exit 0\n          npm ci\n",
+		],
+		["installer before setup", "      - run: npm ci\n"],
+	])("requires an opt-out for %s in the workflow scan", (name, plant) => {
+		const file = resolve(WORKFLOWS, "ci.yml");
+		const original = readFileSync(file, "utf8");
+		const withoutOptOut = original.replace(
+			"package-manager-cache: false",
+			"package-manager-cache: true",
+		);
+		const anchor =
+			name === "installer before setup"
+				? "      - uses: actions/setup-node@"
+				: "      - name: Classify the changed files";
+		expect(withoutOptOut).toContain(anchor);
+		// Same repository scan and baseline assertions, with only ci.yml's bytes planted.
+		expect(() => scan(withoutOptOut.replace(anchor, plant + anchor))).toThrow();
 	});
 
-	it.each(["npm ci", "npm install --ignore-scripts", "npm i -g tool"])(
-		"recognizes literal installer %s",
-		(run) => expect(installs(run)).toBe(true),
+	it("keeps caching for a reachable plain installer in the workflow scan", () => {
+		const source = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8")
+			.replace("package-manager-cache: false", "package-manager-cache: true")
+			.replace(
+				"      - name: Classify the changed files",
+				"      - run: |\n          set -eu\n          echo before\n          npm ci\n      - name: Classify the changed files",
+			);
+		expect(() => scan(source)).not.toThrow();
+	});
+
+	it.each([
+		"npm ci",
+		"npm install --ignore-scripts",
+		"npm i -g tool",
+		"set -euxo pipefail\necho before\nnpm ci",
+	])("recognizes literal installer %s", (run) =>
+		expect(installs(run)).toBe(true),
 	);
 	it.each([
 		"# npm ci",
@@ -516,6 +603,14 @@ describe("npm auto-cache writers across workflows", () => {
 		"cat <<'EOF'\nnpm ci\nEOF",
 		"command npm ci",
 		"npx npm@latest ci",
+		"alias npm=true\nnpm ci",
+		"set -n\nnpm ci",
+		"npm ci || true",
+		"installer=npm\n$installer ci",
+		"npm_command=npm\ncommand $npm_command ci",
+		"if true; then\nnpm ci\nfi",
+		"install() { npm ci; }\ninstall",
+		"echo before || true\nnpm ci",
 	])("requires an opt-out for unknown installer %s", (run) => {
 		expect(installs(run)).toBe(false);
 	});
