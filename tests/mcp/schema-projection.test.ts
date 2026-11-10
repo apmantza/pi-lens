@@ -16,11 +16,16 @@
  *    sentence through the translator. Three pre-PR-3 entries still hand-write
  *    their prose; each is admitted with its reason and reds once it joins.
  * 3. **constrained-only-on-declared-set** — a tool carries `constrainedSampling`
- *    iff its own `parameters` declare an `enum`, asserted in both directions.
+ *    only when the real strict conversion has no enum unions (#5471).
  *
  * Requires `npm run build` first (both tiers load the compiled twins).
  */
 
+import type { Tool } from "@earendil-works/pi-ai";
+import {
+	getJsonSchemaToolParameters,
+	resolveJsonSchemaStrictSampling,
+} from "@earendil-works/pi-ai/api/constrained-sampling";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	TOOL_REGISTRY,
@@ -30,23 +35,14 @@ import { schemaWithCwd } from "../../mcp/input-schema.js";
 import { McpHarness } from "./harness.js";
 import { startPiRunner } from "../support/pi-runner.js";
 
-/** The constrained-sampling value every enum-bearing tool declares. */
+/** The constrained-sampling value retained by strict-safe tools. */
 const CONSTRAINED = { type: "json_schema", strict: "prefer" };
 
-/**
- * The pi-side tools whose schemas carry an `enum` (#5138 PR 3, item 3). Listed
- * explicitly as well as derived from the schemas: if the derivation itself
- * broke, a derived-vs-derived cell would still pass.
- */
+/** Strict-safe carriers; required enums remain constrained (#5471). */
 const EXPECTED_CONSTRAINED_TOOLS = [
-	"ast_grep_outline",
-	"ast_grep_replace",
-	"ast_grep_search",
 	"lens_diagnostic_mark",
-	"lens_diagnostics",
 	"lsp_navigation",
 	"pi_lens_activate_tools",
-	"read_enclosing",
 ];
 
 /**
@@ -79,13 +75,76 @@ type ListedMcpTool = {
 	inputSchema?: unknown;
 };
 
-/** Does this schema declare a non-empty `enum` anywhere in its tree? */
-function declaresEnum(node: unknown): boolean {
-	if (Array.isArray(node)) return node.some(declaresEnum);
-	if (node === null || typeof node !== "object") return false;
-	const record = node as Record<string, unknown>;
-	if (Array.isArray(record.enum) && record.enum.length > 0) return true;
-	return Object.values(record).some(declaresEnum);
+// #5471: beam-free rejects enum/const unions after pi-ai strict conversion.
+// Known schema vocabulary only: an unclassified form is a hit, never a pass.
+function unsafeStrictSchema(node: unknown, inUnion = false): boolean {
+	if (!node || typeof node !== "object" || Array.isArray(node)) return true;
+	const schema = node as Record<string, unknown>;
+	const union =
+		inUnion ||
+		"anyOf" in schema ||
+		"oneOf" in schema ||
+		Array.isArray(schema.type);
+	if (union && ("enum" in schema || "const" in schema)) return true;
+	return Object.entries(schema).some(([key, value]) => {
+		if (["anyOf", "oneOf", "allOf"].includes(key)) {
+			return (
+				!Array.isArray(value) ||
+				value.length === 0 ||
+				value.some((child) => unsafeStrictSchema(child, union))
+			);
+		}
+		if (key === "properties") {
+			return (
+				!value ||
+				typeof value !== "object" ||
+				Array.isArray(value) ||
+				Object.values(value).some((child) => unsafeStrictSchema(child, union))
+			);
+		}
+		if (key === "items") return unsafeStrictSchema(value, union);
+		if (key === "additionalProperties") return value !== false;
+		if (key === "type") {
+			const types = Array.isArray(value) ? value : [value];
+			return (
+				types.length === 0 ||
+				types.some(
+					(type) =>
+						![
+							"object",
+							"array",
+							"string",
+							"number",
+							"integer",
+							"boolean",
+							"null",
+						].includes(type),
+				)
+			);
+		}
+		return ![
+			"enum",
+			"const",
+			"required",
+			"description",
+			"title",
+			"default",
+			"minimum",
+			"maximum",
+			"exclusiveMinimum",
+			"exclusiveMaximum",
+			"multipleOf",
+			"minLength",
+			"maxLength",
+			"pattern",
+			"format",
+			"minItems",
+			"maxItems",
+			"uniqueItems",
+			"minProperties",
+			"maxProperties",
+		].includes(key);
+	});
 }
 
 function carriesConstrainedSampling(definition: PiDefinition): boolean {
@@ -213,20 +272,51 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 		expect(symbol).not.toMatch(/(?<!pilens_)module_report/);
 	});
 
-	it("declares constrainedSampling on exactly the enum-bearing tools", () => {
+	it("classifies union spellings and refuses unknown schema forms (#5471)", () => {
+		const alias = { type: "string", enum: ["a", "b"] };
+		const indirect = () => ({ anyOf: [alias, { type: "null" }] });
+		const binding = indirect();
+		for (const schema of [
+			{ oneOf: [alias, { type: "null" }] },
+			indirect(),
+			binding,
+			{ anyOf: [{ type: "string" }, { type: "null" }], enum: ["a"] },
+			{ type: ["string", "null"], const: "a" },
+			{ anyOf: [{ type: "object", properties: { nested: alias } }] },
+			{ $ref: "#/unknown" },
+			{ not: alias },
+			null,
+		])
+			expect(unsafeStrictSchema(schema), JSON.stringify(schema)).toBe(true);
+		for (const schema of [
+			alias,
+			{ type: "array", items: alias },
+			{ anyOf: [{ type: "boolean" }, { type: "null" }] },
+		])
+			expect(unsafeStrictSchema(schema), JSON.stringify(schema)).toBe(false);
+	});
+
+	it("registered constrained tools have no enum or const unions after real pi-ai conversion (#5471)", () => {
+		const carriers = piDefinitions.filter(carriesConstrainedSampling);
+		expect(carriers.length).toBeGreaterThan(0);
+		const hits = carriers
+			.filter((definition) => {
+				const tool = definition as Tool;
+				const strict = resolveJsonSchemaStrictSampling(tool, true);
+				return (
+					strict !== true ||
+					unsafeStrictSchema(getJsonSchemaToolParameters(tool, strict))
+				);
+			})
+			.map((definition) => definition.name);
+		expect(hits).toEqual([]);
+	});
+
+	it("retains constrainedSampling on exactly the strict-safe tools", () => {
 		const carriers = piDefinitions
 			.filter(carriesConstrainedSampling)
 			.map((definition) => definition.name)
 			.sort();
-		const enumBearing = piDefinitions
-			.filter((definition) => declaresEnum(definition.parameters))
-			.map((definition) => definition.name)
-			.sort();
-
-		// Both directions in one comparison: an unlisted carrier and a missing
-		// listed tool each red the same cell.
-		expect(carriers).toEqual(enumBearing);
-		// Pinned against the item-3 list independently of the derivation above.
 		expect(carriers).toEqual(EXPECTED_CONSTRAINED_TOOLS);
 		for (const definition of piDefinitions.filter(carriesConstrainedSampling)) {
 			expect(definition.constrainedSampling, definition.name).toEqual(

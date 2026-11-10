@@ -26,7 +26,6 @@ import {
 	JSON_CELL_DETAILS_KEY,
 } from "./render-compact.js";
 import { resolveHostToolPath } from "../clients/path-utils.js";
-import { CONSTRAINED_JSON_SCHEMA_SAMPLING } from "./shared.js";
 
 /**
  * A `path` argument is a host-supplied tool path, so it resolves through the
@@ -417,7 +416,6 @@ export function createReadEnclosingTool(
 				" ",
 			);
 		}),
-		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			path: Type.String({
 				description: "Absolute or workspace-relative path to the source file.",
