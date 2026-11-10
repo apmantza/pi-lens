@@ -492,16 +492,16 @@ server with the reason it was selected or denied, and the runners that would
 dispatch. That is the answer to "why is this running" and to "why is this *not*
 running", without reading a log.
 
-Naming a `file` resolves the configuration **at that file's own directory**,
+Naming a file (the `path` argument) resolves the configuration **at that file's own directory**,
 which is where the runtime decides from — so a nested `repo/sub/.pi-lens.json`
 layer contributes to the answer, appears in the reported document list, and is
 named as the file behind any decision it made. The walk runs upward and is
-**confined to `cwd`**: a `file` that resolves outside `cwd` — including a
+**confined to `cwd`**: a `path` that resolves outside `cwd` — including a
 sibling package in the same monorepo — is rejected rather than answered from
 its own unrelated tree, because the per-file answer is only ever correct when
 it is a superset of the workspace's own; the rejection names the `cwd` it was
 measured against and the remedy is to re-query with `cwd` set to that file's
-own workspace. A confined `file` always passes back through the workspace's
+own workspace. A confined `path` always passes back through the workspace's
 own documents on its way up, so they are always included too.
 
 It reports **sources, never values**. Environment values never appear, a custom
