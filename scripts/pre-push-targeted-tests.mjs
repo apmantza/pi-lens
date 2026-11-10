@@ -51,11 +51,12 @@
 // covering test), this builds only and skips the test run — never silently
 // skips the build too.
 import { execFileSync, spawn } from "node:child_process";
+import { claimScratchDir } from "./lib/scratch-dir.mjs";
+import { windowsExe } from "./lib/process-scan.mjs";
 import {
 	appendFileSync,
 	existsSync,
 	mkdirSync,
-	mkdtempSync,
 	rmSync,
 	readFileSync,
 	readdirSync,
@@ -989,7 +990,7 @@ function matchLockTimeout(stderr) {
 // .husky/pre-push) apart from "the tests actually failed". A lock timeout
 // fails the push unless the named opt-out is explicit; a real test failure
 // always blocks the push.
-function runTargetedTests(selected) {
+function runTargetedTests(selected, lifecycle) {
 	return new Promise((resolve) => {
 		const started = performance.now();
 		const child = spawn(
@@ -1004,8 +1005,52 @@ function runTargetedTests(selected) {
 			],
 			{
 				stdio: ["ignore", "pipe", "pipe"],
+				detached: process.platform !== "win32",
 			},
 		);
+		let drainTimer;
+		const stop = () => {
+			// The wrapper and Vitest share this owned process group. Killing only
+			// the wrapper leaves a worker able to recreate the removed run root.
+			try {
+				if (process.platform === "win32") {
+					execFileSync(
+						windowsExe("taskkill.exe"),
+						["/F", "/T", "/PID", String(child.pid)],
+						{
+							timeout: 3000,
+							stdio: "ignore",
+						},
+					);
+				} else {
+					process.kill(-child.pid, "SIGKILL");
+				}
+			} catch (error) {
+				if (error.code !== "ESRCH")
+					console.warn(
+						`[pre-push] child termination failed: ${String(error).replace(/[\r\n]+/g, " ")}`,
+					);
+			}
+			drainTimer = setTimeout(() => {
+				lifecycle.drained = false;
+				console.warn(
+					"[pre-push] child drain timed out; preserving temp directory",
+				);
+				child.stdout.destroy();
+				child.stderr.destroy();
+				child.unref();
+				resolve({
+					code: 1,
+					lockTimeout: null,
+					wallTimeMs: performance.now() - started,
+				});
+			}, 5000);
+		};
+		lifecycle.controller.signal.addEventListener("abort", stop, { once: true });
+		const settled = () => {
+			clearTimeout(drainTimer);
+			lifecycle.controller.signal.removeEventListener("abort", stop);
+		};
 		let stdoutBuffer = "";
 		let stderrBuffer = "";
 		child.stdout.on("data", (chunk) => {
@@ -1017,6 +1062,7 @@ function runTargetedTests(selected) {
 			stderrBuffer += chunk.toString();
 		});
 		child.on("error", (error) => {
+			settled();
 			resolve({
 				code: 1,
 				lockTimeout: null,
@@ -1026,6 +1072,7 @@ function runTargetedTests(selected) {
 			});
 		});
 		child.on("close", (code) => {
+			settled();
 			const lockTimeout = code !== 0 ? matchLockTimeout(stderrBuffer) : null;
 			resolve({
 				code: code ?? 1,
@@ -1053,8 +1100,11 @@ function unionChanged(ranges) {
 
 export async function main() {
 	const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));
-	const runDir = mkdtempSync(path.join(base, "run-"));
+	const runDir = claimScratchDir(base, "run");
+	const lifecycle = { controller: new AbortController(), drained: true };
+	let interrupted;
 	const cleanup = () => {
+		if (!lifecycle.drained) return;
 		try {
 			rmSync(runDir, { recursive: true, force: true });
 		} catch (error) {
@@ -1063,12 +1113,17 @@ export async function main() {
 			);
 		}
 	};
-	const interrupt = (signal) => process.exit(signal === "SIGINT" ? 130 : 143);
+	const interrupt = (signal) => {
+		if (interrupted) return;
+		interrupted = signal === "SIGINT" ? 130 : 143;
+		lifecycle.controller.abort();
+	};
 	process.once("exit", cleanup);
-	process.once("SIGINT", interrupt);
-	process.once("SIGTERM", interrupt);
+	process.on("SIGINT", interrupt);
+	process.on("SIGTERM", interrupt);
 	try {
-		return await runGate(realpathSync(runDir));
+		const code = await runGate(realpathSync(runDir), lifecycle);
+		return interrupted ?? code;
 	} finally {
 		process.removeListener("exit", cleanup);
 		process.removeListener("SIGINT", interrupt);
@@ -1077,7 +1132,7 @@ export async function main() {
 	}
 }
 
-async function runGate(prePushTmpRoot) {
+async function runGate(prePushTmpRoot, lifecycle) {
 	const callerTmp = process.env.TMPDIR ?? "(unset)";
 	process.env.TMPDIR = prePushTmpRoot;
 	process.env.TEMP = prePushTmpRoot;
@@ -1310,7 +1365,8 @@ async function runGate(prePushTmpRoot) {
 	for (const test of selected) console.log(`  - ${test}`);
 
 	const before = treeSnapshot();
-	const result = await runTargetedTests(selected);
+	if (lifecycle.controller.signal.aborted) return 1;
+	const result = await runTargetedTests(selected, lifecycle);
 	const { code, lockTimeout, error } = result;
 	const outcome = error
 		? "tests-runner-failed"

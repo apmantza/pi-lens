@@ -256,7 +256,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 			input: string,
 			extra: string[] = [],
 			env: NodeJS.ProcessEnv = {},
-			probeMain = false,
+			probeMain: boolean | "undrained" = false,
 		) =>
 			spawnSync(
 				process.execPath,
@@ -264,7 +264,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 					? [
 							"--input-type=module",
 							"-e",
-							`import { main } from ${JSON.stringify(pathToFileURL(path.join(scriptDir, "pre-push-targeted-tests.mjs")).href)}; process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...${JSON.stringify(extra)}); process.exitCode = await main();`,
+							`import { main } from ${JSON.stringify(pathToFileURL(path.join(scriptDir, "pre-push-targeted-tests.mjs")).href)}; ${probeMain === "undrained" ? "process.kill = () => { throw Object.assign(new Error('denied'), {code: 'EPERM'}); }; const realTimer = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 5000 ? 50 : ms, ...args);" : ""} process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...${JSON.stringify(extra)}); process.exitCode = await main();`,
 						]
 					: [
 							path.join(scriptDir, "pre-push-targeted-tests.mjs"),
@@ -724,14 +724,18 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		},
 	);
 
-	it.each(["SIGINT", "SIGTERM"] as const)(
-		"removes the run directory on %s (#5439)",
-		(signal) => {
+	it.each([
+		["SIGINT", false],
+		["SIGTERM", false],
+		["SIGTERM", true],
+	] as const)(
+		"drains the child on %s (drain failure=%s) (#5439)",
+		async (signal, undrained) => {
 			const { hook } = gitFixture();
 			const base = path.join(fixtureDir as string, "interrupt-base");
 			write(
 				"tests/clients/first.test.ts",
-				`import { it } from 'vitest'; it('interrupt', () => { process.kill(Number(process.env.GATE_PID), '${signal}'); });\n`,
+				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(base, "late-writer"))}, 'wrote'); });\n`,
 			);
 			const result = hook(
 				"",
@@ -739,13 +743,28 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 				{
 					PI_LENS_PREPUSH_TMPDIR: base,
 				},
-				true,
+				undrained ? "undrained" : true,
 			);
+			// Let the real worker attempt its delayed write after the gate exits.
+			await new Promise((resolve) => setTimeout(resolve, 600));
 			expect(result.error).toBeUndefined();
 			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
 			expect(dir).toBeDefined();
-			expect(fs.existsSync(dir as string)).toBe(false);
+			expect(fs.existsSync(dir as string)).toBe(undrained);
+			// A recreated root loses the original owner marker.
+			expect(fs.existsSync(path.join(dir as string, "owner.pid"))).toBe(
+				undrained,
+			);
+			expect(
+				result.stderr.includes(
+					"child drain timed out; preserving temp directory",
+				),
+			).toBe(undrained);
+			expect(result.stderr.includes("child termination failed:")).toBe(
+				undrained,
+			);
 			expect(result.status).toBe(signal === "SIGINT" ? 130 : 143);
+			expect(fs.existsSync(path.join(base, "late-writer"))).toBe(undrained);
 		},
 	);
 
@@ -1781,6 +1800,8 @@ describe("pre-push ast-grep self-scan (#3886)", () => {
 			"scripts/with-test-lock.mjs",
 			"scripts/lib/is-main-module.mjs",
 			"scripts/lib/suite-lock.mjs",
+			"scripts/lib/scratch-dir.mjs",
+			"scripts/lib/process-scan.mjs",
 			"scripts/lib/test-history-selection.mjs",
 			"scripts/lib/vitest-summary.mjs",
 		])
@@ -1919,6 +1940,8 @@ describe("pre-push ast-grep self-scan (#3886)", () => {
 			"scripts/with-test-lock.mjs",
 			"scripts/lib/is-main-module.mjs",
 			"scripts/lib/suite-lock.mjs",
+			"scripts/lib/scratch-dir.mjs",
+			"scripts/lib/process-scan.mjs",
 			"scripts/lib/test-history-selection.mjs",
 			"scripts/lib/vitest-summary.mjs",
 			"scripts/run-astgrep-pi-lens.mjs",

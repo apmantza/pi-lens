@@ -1,0 +1,37 @@
+TLC2 Version 2.19 of 08 August 2024 (rev: 5a47802)
+Warning: Please run the Java VM which executes TLC with a throughput optimized garbage collector by passing the "-XX:+UseParallelGC" property.
+(Use the -nowarning option to disable this warning.)
+Running breadth-first search Model-Checking with fp 115 and seed -6571816573102106251 with 1 worker on 32 cores with 12288MB heap and 64MB offheap memory [pid: 60] (Linux 7.0.0-38-generic amd64, Eclipse Adoptium 17.0.21 x86_64, MSBDiskFPSet, DiskStateQueue).
+Parsing file /home/akis/.plegma/work/sub-mwad76pt-236/formal/prepush-drain/PrepushDrain.tla
+Parsing file /tmp/Naturals.tla
+Semantic processing of module Naturals
+Semantic processing of module PrepushDrain
+Starting... (2026-11-10 09:39:24)
+Computing initial states...
+Finished computing initial states: 1 distinct state generated at 2026-11-10 09:39:25.
+Error: Invariant NoLiveWriterAtCleanup is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ interrupt = "none"
+/\ phase = "running"
+/\ childAlive = TRUE
+/\ directory = TRUE
+
+State 2: <Signal line 11, col 11 to line 14, col 48 of module PrepushDrain>
+/\ interrupt = "SIGINT"
+/\ phase = "cleanup"
+/\ childAlive = TRUE
+/\ directory = TRUE
+
+State 3: <Cleanup line 24, col 12 to line 26, col 49 of module PrepushDrain>
+/\ interrupt = "SIGINT"
+/\ phase = "done"
+/\ childAlive = TRUE
+/\ directory = FALSE
+
+8 states generated, 8 distinct states found, 4 states left on queue.
+The depth of the complete state graph search is 3.
+The average outdegree of the complete state graph is 3 (minimum is 3, the maximum 3 and the 95th percentile is 3).
+Finished in 00s at (2026-11-10 09:39:25)
+Command exited with non-zero status 12
+WALL_SECONDS 0.61

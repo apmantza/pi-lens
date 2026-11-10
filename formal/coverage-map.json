@@ -2,6 +2,7 @@
   "$comment": "Checked-in coverage map for #3802 rule 2, produced by the #3803 phase-1 audit (2026-09-30, master 1f41157ca), landed by #3802. Key = source glob relative to the repo root. Value = the formal/ families whose spec models behaviour in that file, or the string \"unmodelled\" for a lifecycle/timing/identity/concurrency file that no family models yet. A row is ANY-OF: a PR touching a mapped file must also touch a formal/<family>/*.tla or *.cfg file for ANY ONE of the row's families, or carry a `TLA+ unaffected: <family> — <reason>` line in the PR body for any one of them. A row listing 4 or more families (a hub file such as the LSP client) is too coarse for file-level matching, so an unmet hub row prints a note and never fails; a row written as {families, anchors} (index.ts) instead gates only on the families of a lifecycle hook handler a changed hunk lands in, and prints a note for a change outside every handler (#3878). `unmodelled` entries print an advisory and never gate; they keep the gap visible. Every formal/<dir> must be listed in `families` and named by at least one row; a TLA lane that adds a family adds its row in the same PR. `notes` explains the non-obvious rows and the hot files deliberately left out. Paths were checked to exist on master at audit time.",
   "version": 0,
   "families": [
+    "prepush-drain",
     "availability-latch",
     "dispatch-pipeline",
     "disk-change-publisher",
@@ -37,6 +38,7 @@
     "collect-later-flight"
   ],
   "map": {
+    "scripts/pre-push-targeted-tests.mjs": ["prepush-drain"],
     "clients/read-guard.ts": [
       "read-guard",
       "session-lifecycle"

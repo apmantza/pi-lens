@@ -4,7 +4,8 @@
 		"40147263648",
 		"local-4715",
 		"local-5333",
-		"local-5413"
+		"local-5413",
+		"local-5468"
 	],
 	"note": "Per-config TLC seconds (median over the source runs), read from `ok|FAIL formal/<family>/<Model>.cfg: ... (Ns)` lines the checker prints. scripts/tla-model-costs.json packs the TLA+ shards with these; a config with no row costs the table's MAX so an unmeasured config can never quietly become the tail.",
 	"files": {
@@ -901,7 +902,9 @@
 		"formal/turn-end-late-scan/SettleWritesPoison.cfg": 2.3,
 		"formal/turn-end-late-scan/SettledNeverTaken.cfg": 2.4,
 		"formal/turn-end-late-scan/StampAtTurn.cfg": 2.4,
-		"formal/turn-end-late-scan/TakeUnblocked.cfg": 1.6
+		"formal/turn-end-late-scan/TakeUnblocked.cfg": 1.6,
+		"formal/prepush-drain/AsBuilt.cfg": 0.64,
+		"formal/prepush-drain/ImmediateExit.cfg": 0.61
 	},
 	"states": {
 		"formal/availability-latch/ClientInstallGenGuard.cfg": 4869,
@@ -1786,6 +1789,8 @@
 		"formal/turn-end-late-scan/SettleWritesPoison.cfg": 649,
 		"formal/turn-end-late-scan/SettledNeverTaken.cfg": 13170,
 		"formal/turn-end-late-scan/StampAtTurn.cfg": 2996,
-		"formal/turn-end-late-scan/TakeUnblocked.cfg": 3768
+		"formal/turn-end-late-scan/TakeUnblocked.cfg": 3768,
+		"formal/prepush-drain/AsBuilt.cfg": 14,
+		"formal/prepush-drain/ImmediateExit.cfg": 8
 	}
 }
