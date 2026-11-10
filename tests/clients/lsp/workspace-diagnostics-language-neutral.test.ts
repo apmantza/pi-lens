@@ -1,5 +1,15 @@
 // #2817 F7/F8: exercise cache admission through a real LSP process. The
 // facts and no-facts rows are selected from the production provider predicate.
+//
+// The FIXTURE owns its extensions. `typescript` has a documented fallback
+// (`deno`, same `.js`/`.ts` extension set), so denying only `typescript` handed
+// `.js` to a real `deno lsp` on any machine where that binary starts; the fake
+// server's trace — the subject of this file — then saw no `.js` traffic at all,
+// and the case failed with a missing `didChange`. The denial list below is
+// therefore DERIVED from the registry: every LANGUAGE-role server claiming one
+// of the two extensions, so a future fallback cannot silently take the
+// extension back. `lsp.disabledServers` is the documented lever for this
+// ("the denied server has a fallback (`deno` for `typescript`)").
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,10 +28,24 @@ import {
 import { CacheManager } from "../../../clients/cache-manager.js";
 import { importFactsApplyTo } from "../../../clients/dispatch/facts/import-facts.js";
 import { LANGUAGES } from "../../../clients/language-registry.js";
+import { LSP_SERVERS } from "../../../clients/lsp/server.js";
+import { isAuxiliary } from "../../../clients/lsp/server-traits.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../clients/project-trust.js";
+
+/**
+ * Registry LANGUAGE servers that claim `extension`, oldest first. Auxiliary
+ * scanners are excluded: they attach to every file and never take the language
+ * role, so denying them would change the fixture's runners for no reason.
+ */
+function languageClaimants(extension: string): string[] {
+	return LSP_SERVERS.filter(
+		(server) =>
+			!isAuxiliary(server) && (server.extensions ?? []).includes(extension),
+	).map((server) => server.id);
+}
 
 const probe = setupTestEnvironment("pi-lens-lsp-language-");
 const root = probe.tmpDir;
@@ -51,6 +75,7 @@ describe("language-neutral workspace resync (#2817)", () => {
 	const fallbackExtension = fallbackLanguage.extensions[0];
 	if (!factsExtension || !fallbackExtension)
 		throw new Error("language registry matrix entries need extensions");
+
 	const factsDependency = path.join(workspace, `dependency${factsExtension}`);
 	const factsImporter = path.join(workspace, `consumer${factsExtension}`);
 	const fallbackImporter = path.join(workspace, `consumer${fallbackExtension}`);
@@ -76,7 +101,14 @@ describe("language-neutral workspace resync (#2817)", () => {
 			path.join(workspace, ".pi-lens.json"),
 			JSON.stringify({
 				lsp: {
-					disabledServers: ["typescript"],
+					// Derived, not hand-listed: see the header. Denies `typescript` and its
+					// `deno` fallback today, and any later provider of these extensions.
+					disabledServers: [
+						...new Set([
+							...languageClaimants(factsExtension),
+							...languageClaimants(fallbackExtension),
+						]),
+					],
 					servers: {
 						"fake-language-neutral": {
 							name: "fake language-neutral server",
@@ -122,8 +154,17 @@ describe("language-neutral workspace resync (#2817)", () => {
 		process.env.PI_LENS_HOME = path.join(root, ".pi-lens-home");
 		process.env.FAKE_LSP_TRACE_FILE = traceFile;
 		fs.writeFileSync(traceFile, "");
-		const { initLSPConfig } = await import("../../../clients/lsp/config.js");
+		const { initLSPConfig, primaryServerId } =
+			await import("../../../clients/lsp/config.js");
 		await initLSPConfig(workspace);
+		// Premise, not a subject: the fake server must be the language server for
+		// these files. If a registry change hands an extension to another server,
+		// this fails with the reason instead of a missing trace line downstream.
+		for (const file of [factsDependency, factsImporter, fallbackImporter]) {
+			expect(primaryServerId(file), path.basename(file)).toBe(
+				"fake-language-neutral",
+			);
+		}
 	});
 
 	afterAll(async () => {
