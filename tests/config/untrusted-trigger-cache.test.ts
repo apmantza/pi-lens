@@ -508,9 +508,9 @@ describe("npm auto-cache writers across workflows", () => {
 			)) {
 				scanned +=
 					job.steps?.filter((entry) =>
-						String((entry as { uses?: string }).uses).startsWith(
-							"actions/setup-node@",
-						),
+						String((entry as { uses?: string }).uses)
+							.toLowerCase()
+							.startsWith("actions/setup-node@"),
 					).length ?? 0;
 				for (const [index, entry] of (job.steps ?? []).entries()) {
 					const setup = entry as {
@@ -518,7 +518,7 @@ describe("npm auto-cache writers across workflows", () => {
 						with?: Record<string, unknown>;
 					};
 					if (
-						setup.uses?.startsWith("actions/setup-node@") &&
+						setup.uses?.toLowerCase().startsWith("actions/setup-node@") &&
 						setup.with?.["package-manager-cache"] !== false &&
 						!job.steps
 							?.slice(index + 1)
@@ -540,6 +540,7 @@ describe("npm auto-cache writers across workflows", () => {
 		expect(
 			[...deferredOptOutBaseline].filter((key) => !offenders.includes(key)),
 		).toEqual([]);
+		return scanned;
 	};
 	it("requires every no-install setup-node job to opt out", () => scan());
 
@@ -574,6 +575,23 @@ describe("npm auto-cache writers across workflows", () => {
 		expect(withoutOptOut).toContain(anchor);
 		// Same repository scan and baseline assertions, with only ci.yml's bytes planted.
 		expect(() => scan(withoutOptOut.replace(anchor, plant + anchor))).toThrow();
+	});
+
+	// Q1: spelling alone must not remove an opted-out writer from the census.
+	it("counts mixed-case setup-node with an explicit opt-out in the workflow scan", () => {
+		const source = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8");
+		expect(
+			scan(source.replace("actions/setup-node@", "Actions/Setup-Node@")),
+		).toBe(scan(source));
+	});
+
+	// Q1: GitHub resolves mixed-case action names to the same cache writer.
+	it("requires an opt-out for mixed-case setup-node in the workflow scan", () => {
+		const source = readFileSync(resolve(WORKFLOWS, "ci.yml"), "utf8")
+			.replace("package-manager-cache: false", "package-manager-cache: true")
+			.replace("actions/setup-node@", "Actions/Setup-Node@");
+		expect(source).toContain("Actions/Setup-Node@");
+		expect(() => scan(source)).toThrow();
 	});
 
 	it("keeps caching for a reachable plain installer in the workflow scan", () => {
