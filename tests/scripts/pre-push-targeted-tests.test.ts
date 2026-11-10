@@ -727,12 +727,78 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		fs.mkdirSync(dead, { recursive: true });
 		fs.writeFileSync(path.join(foreign, "data"), "keep");
 		fs.writeFileSync(path.join(dead, "owner.pid"), "2147483646");
+		// #5468 r3 F5: parseInt read this as the dead pid 2147483646, and the
+		// sweep deleted a foreign directory on a numeric-prefix marker.
+		const malformed = path.join(base, "run-malformed");
+		fs.mkdirSync(malformed);
+		fs.writeFileSync(path.join(malformed, "owner.pid"), "2147483646not-a-pid");
 		const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
 			PI_LENS_PREPUSH_TMPDIR: base,
 		});
 		expect(result.status).toBe(0);
 		expect(fs.readFileSync(path.join(foreign, "data"), "utf8")).toBe("keep");
 		expect(fs.existsSync(dead)).toBe(false);
+		expect(fs.existsSync(malformed)).toBe(true);
+	});
+
+	it("keeps a live gate's allocation from a concurrent startup sweep (#5468 r3 F4)", () => {
+		// Recurrence: claimScratchDir created run-* before writing owner.pid, so a
+		// second gate starting inside that window swept the live, still markerless
+		// allocation as a late writer's, and the first gate died on ENOENT. The
+		// preload runs gate B's real sweep at every step of gate A's claim (after
+		// mkdtemp, before each write and rename), so any order that exposes a
+		// prefixed name before its marker reds; B stops at its own allocation.
+		const { hook } = gitFixture();
+		const home = path.join(fixtureDir as string, "race-home");
+		const preload = path.join(fixtureDir as string, "race-preload.mjs");
+		const bStatus = path.join(fixtureDir as string, "race-b.txt");
+		const input = `(delete) ${zero} refs/heads/removed abc123\n`;
+		fs.writeFileSync(
+			preload,
+			`import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const inBase = (p) => String(p).includes("prepush-tmp");
+let sweeps = 0;
+const sweepB = () => {
+	if (sweeps++ >= 3) return;
+	const b = spawnSync(process.execPath, process.argv.slice(1), {
+		input: ${JSON.stringify(input)},
+		encoding: "utf8",
+		env: { ...process.env, RACE_ROLE: "B" },
+	});
+	realWrite(${JSON.stringify(bStatus)}, b.stderr);
+};
+const realTemp = fs.mkdtempSync;
+const realWrite = fs.writeFileSync;
+const realRename = fs.renameSync;
+fs.mkdtempSync = (prefix, ...rest) => {
+	if (!inBase(prefix)) return realTemp(prefix, ...rest);
+	if (process.env.RACE_ROLE === "B") throw new Error("STOP_AFTER_SWEEP");
+	const dir = realTemp(prefix, ...rest);
+	sweepB();
+	return dir;
+};
+fs.writeFileSync = (file, ...rest) => {
+	if (process.env.RACE_ROLE !== "B" && inBase(file)) sweepB();
+	return realWrite(file, ...rest);
+};
+fs.renameSync = (from, ...rest) => {
+	if (process.env.RACE_ROLE !== "B" && inBase(from)) sweepB();
+	return realRename(from, ...rest);
+};
+syncBuiltinESMExports();
+`,
+		);
+		const result = hook(input, [], {
+			PI_LENS_HOME: home,
+			PI_LENS_PREPUSH_TMPDIR: "",
+			NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+		});
+		// B swept before stopping, so the race window was really exercised.
+		expect(fs.readFileSync(bStatus, "utf8")).toContain("STOP_AFTER_SWEEP");
+		expect(result.stderr).not.toContain("ENOENT");
+		expect(result.status).toBe(0);
 	});
 
 	it("allocates distinct run directories under the override base (#5439)", () => {
