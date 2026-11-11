@@ -830,14 +830,14 @@ type ServerNotReady = {
 function serverNotReadyOf(
 	touched: TouchFileResult | undefined,
 ): ServerNotReady | undefined {
-	if (touched?.inconclusive !== true) return undefined;
-	const reason = touched.inconclusiveReason;
+	// Only an inconclusive touch carries a reason.
+	const reason = touched?.inconclusiveReason;
 	if (reason !== "server-loading" && reason !== "server-load-failed") {
 		return undefined;
 	}
 	return {
 		reason,
-		...(touched.inconclusiveDetail !== undefined && {
+		...(touched?.inconclusiveDetail !== undefined && {
 			detail: touched.inconclusiveDetail,
 		}),
 	};

@@ -23,14 +23,10 @@ import { McpHarness } from "./harness.js";
 
 const fake = new URL("../fixtures/fake-lsp-server.mjs", import.meta.url).href;
 
-/** A Cargo project whose `rust` server is the fixture with `fixtureEnv`. */
-function rustProject(fixtureEnv: Record<string, string>) {
-	const env = setupTestEnvironment("readiness5487-");
-	const home = path.join(env.tmpDir, "home");
-	fs.mkdirSync(home);
-	const server = path.join(env.tmpDir, "rust-server.mjs");
+/** A fixture-server entry point with `fixtureEnv`. */
+function fixtureServer(file: string, fixtureEnv: Record<string, string>) {
 	fs.writeFileSync(
-		server,
+		file,
 		`${Object.entries(fixtureEnv)
 			.map(
 				([key, value]) =>
@@ -38,11 +34,37 @@ function rustProject(fixtureEnv: Record<string, string>) {
 			)
 			.join("")}await import(${JSON.stringify(fake)});\n`,
 	);
+	return [process.execPath, file];
+}
+
+/**
+ * A Cargo project whose `rust` server is the fixture with `fixtureEnv`, plus a
+ * Python file whose server announces nothing and never answers a pull: a
+ * plain diagnostics-wait lapse beside the Rust cause in one batch.
+ */
+function rustProject(fixtureEnv: Record<string, string>) {
+	const env = setupTestEnvironment("readiness5487-");
+	const home = path.join(env.tmpDir, "home");
+	fs.mkdirSync(home);
 	fs.writeFileSync(
 		path.join(home, "lsp.json"),
 		JSON.stringify({
-			serverOverrides: { rust: { command: [process.execPath, server] } },
-			disabledServers: ["ast-grep", "typos", "opengrep"],
+			serverOverrides: {
+				rust: {
+					command: fixtureServer(
+						path.join(env.tmpDir, "rust-server.mjs"),
+						fixtureEnv,
+					),
+				},
+				python: {
+					command: fixtureServer(path.join(env.tmpDir, "py-server.mjs"), {
+						FAKE_LSP_LOADING_MS: "600000",
+						FAKE_LSP_LOADING_NO_STATUS: "1",
+						FAKE_LSP_IGNORE_PULL: "1",
+					}),
+				},
+			},
+			disabledServers: ["ast-grep", "typos", "opengrep", "python-jedi"],
 		}),
 	);
 	const project = path.join(env.tmpDir, "proj");
@@ -53,13 +75,20 @@ function rustProject(fixtureEnv: Record<string, string>) {
 	);
 	const file = path.join(project, "src", "main.rs");
 	fs.writeFileSync(file, "fn main() {\n    let v: Vec<i32> = 1;\n}\n");
-	return { env, home, project, file };
+	fs.writeFileSync(path.join(project, "pyproject.toml"), "[project]\n");
+	const pyFile = path.join(project, "probe.py");
+	fs.writeFileSync(pyFile, "x = 1\n");
+	return { env, home, project, file, pyFile };
 }
 
-/** The file route (`path`), then the paths route (`paths`), on one server. */
+/**
+ * The file route (`path`), then the paths route (`paths`), on one server; with
+ * `mixed`, a batch of the Rust file and the silent Python file too.
+ */
 async function bothRoutes(
 	ws: ReturnType<typeof rustProject>,
-): Promise<{ fileText: string; pathsText: string }> {
+	mixed = false,
+): Promise<{ fileText: string; pathsText: string; mixedText?: string }> {
 	const child = new McpHarness({
 		cwd: ws.project,
 		env: {
@@ -93,7 +122,9 @@ async function bothRoutes(
 		};
 		const fileText = await call(54871, { path: ws.file });
 		const pathsText = await call(54872, { paths: [ws.file] });
-		return { fileText, pathsText };
+		if (!mixed) return { fileText, pathsText };
+		const mixedText = await call(54873, { paths: [ws.file, ws.pyFile] });
+		return { fileText, pathsText, mixedText };
 	} finally {
 		child.dispose();
 	}
@@ -103,10 +134,14 @@ describe("pilens_diagnostics names why a Rust server gave no verdict (#5487)", (
 	it("pilens_diagnostics names a server that is still loading", async () => {
 		const ws = rustProject({ FAKE_LSP_LOADING_MS: "600000" });
 		try {
-			const { fileText, pathsText } = await bothRoutes(ws);
+			const { fileText, pathsText, mixedText } = await bothRoutes(ws, true);
 
 			expect(fileText).toContain(
 				"Primary LSP (rust): unconfirmed — server still loading the workspace; retry shortly.",
+			);
+			// The cause is named once per file it covers; the other file keeps its own.
+			expect(mixedText).toContain(
+				"2 unconfirmed: 1 not checked: server still loading the workspace; retry shortly. The other 1: 1 timed out (check didn't complete within the wait budget). NOT the same as 0 diagnostics.",
 			);
 			expect(pathsText).toContain(
 				"1 not checked: server still loading the workspace; retry shortly.",
