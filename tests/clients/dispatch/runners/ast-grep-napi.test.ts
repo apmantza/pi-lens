@@ -6,7 +6,8 @@ import {
 	type RunnerCtxOverrides,
 } from "../../../support/runner-ctx.js";
 import { installLspServiceDouble } from "../../../support/lsp-service-seam.js";
-import { setupTestEnvironment } from "../../test-utils.js";
+import { pinFixtureHome, setupTestEnvironment } from "../../test-utils.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 
 const { mockAuxiliaryLspPublished, fsSyncOverrides } = vi.hoisted(() => ({
 	mockAuxiliaryLspPublished: vi.fn().mockResolvedValue(false),
@@ -405,6 +406,45 @@ describe("ast-grep-napi rule-policy scan admission", () => {
 		);
 		expect(result).toEqual([]);
 		expect(findAll).not.toHaveBeenCalled();
+	});
+
+	// Recurrence (#5408 slice 2): the linter-overlap suppression asked a private
+	// `hasEslintConfig` climb; it now asks the seam, so an ESLint config the seam
+	// sees is the only thing that suppresses a rule ESLint also covers.
+	it.each([
+		["with an eslint config the overlapping rule is not evaluated", true],
+		["without one the overlapping rule is evaluated", false],
+	])("%s", async (_name, planted) => {
+		await resetModulesWithAuxiliaryPublished();
+		const { home } = pinFixtureHome("5408-s2-ast-overlap");
+		const proj = path.join(home, "proj");
+		fs.mkdirSync(proj, { recursive: true });
+		if (planted) plantGateConfig("eslint", proj);
+		const findAll = vi.fn().mockReturnValue([]);
+		vi.doMock("../../../../clients/dispatch/ast-grep-catalog.js", () => ({
+			buildEffectiveAstGrepCatalog: () => {
+				const rule = {
+					id: "no-cond-assign",
+					language: "typescript",
+					severity: "warning",
+					rule: { pattern: "if ($A = $B) {}" },
+				};
+				return {
+					sources: [{ source: "test", rules: [rule] }],
+					effectiveRules: new Map([[rule.id, { rule }]]),
+				};
+			},
+		}));
+		const mod =
+			await import("../../../../clients/dispatch/runners/ast-grep-napi.js");
+		mod.evaluateAstGrepRules(
+			path.join(proj, "a.ts"),
+			{ findAll } as any,
+			proj,
+			"jsts",
+			{ projectRoot: proj },
+		);
+		expect(findAll).toHaveBeenCalledTimes(planted ? 0 : 1);
 	});
 });
 

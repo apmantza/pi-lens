@@ -41,6 +41,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { hasTomlTable, normalizeToml } from "./cargo-manifest.js";
 import { readFileContent } from "./dispatch/runners/utils.js";
+import { readJsonCache } from "./json-cache-read.js";
 import { pathsEqual, realpathOrResolve, walkUpDirs } from "./path-utils.js";
 
 export type ToolConfigId =
@@ -418,23 +419,18 @@ function pipfileNames(content: string): string[] {
 	);
 }
 
-/** The parsed `package.json` object, or `undefined` for anything else. */
-function parsePackageJson(
-	content: string,
-): Record<string, unknown> | undefined {
-	try {
-		const parsed: unknown = JSON.parse(content);
-		return typeof parsed === "object" && parsed !== null
+/** The parsed `package.json` object, or `undefined` for a missing, unreadable or non-object file. */
+function readPackageJson(file: string): Record<string, unknown> | undefined {
+	return readJsonCache(file, (parsed) =>
+		typeof parsed === "object" && parsed !== null
 			? (parsed as Record<string, unknown>)
-			: undefined;
-	} catch {
-		return undefined;
-	}
+			: undefined,
+	);
 }
 
 /** `package.json` `dependencies` and `devDependencies` keys with a value, names as written. */
-function packageJsonNames(content: string): string[] {
-	const pkg = parsePackageJson(content);
+function packageJsonNames(file: string): string[] {
+	const pkg = readPackageJson(file);
 	if (!pkg) return [];
 	return ["dependencies", "devDependencies"].flatMap((group) => {
 		const table = pkg[group];
@@ -478,10 +474,11 @@ function importsModule(source: string, module: string): boolean {
 	).test(blankJsComments(source));
 }
 
-function dependencyNames(file: DependencyFile, content: string): string[] {
+function dependencyNames(file: DependencyFile, candidate: string): string[] {
+	if (file === "package.json") return packageJsonNames(candidate);
+	const content = readFileContent(candidate);
+	if (content === undefined) return [];
 	switch (file) {
-		case "package.json":
-			return packageJsonNames(content);
 		case "requirements.txt":
 			return requirementsNames(content);
 		case "Pipfile":
@@ -523,8 +520,7 @@ function findInDir(
 	}
 	for (const { file, field } of spec.jsonFields ?? []) {
 		const candidate = path.join(dir, file);
-		const content = readFileContent(candidate);
-		if (content !== undefined && parsePackageJson(content)?.[field]) {
+		if (readPackageJson(candidate)?.[field]) {
 			return { file: candidate, dir, source: "json-field" };
 		}
 	}
@@ -534,10 +530,8 @@ function findInDir(
 			// PEP 503 name for the Python files, the exact key for `package.json`.
 			const wanted = spec.dependency.names;
 			const candidate = path.join(dir, file);
-			const content = readFileContent(candidate);
 			if (
-				content !== undefined &&
-				dependencyNames(file, content).some((name) => wanted.includes(name))
+				dependencyNames(file, candidate).some((name) => wanted.includes(name))
 			) {
 				return { file: candidate, dir, source: "dependency" };
 			}
