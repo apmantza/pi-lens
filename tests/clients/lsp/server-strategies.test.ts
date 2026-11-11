@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
 	getStrategy,
 	resolveAstGrepNativeExe,
+	SERVER_DIAGNOSTIC_STRATEGIES,
 } from "../../../clients/lsp/wait-policy/strategies.js";
 
 describe("TypeScript diagnostic strategies (#1412)", () => {
@@ -197,5 +198,44 @@ describe("resolveAstGrepNativeExe", () => {
 		] as const) {
 			expect(() => resolveAstGrepNativeExe(platform, arch)).not.toThrow();
 		}
+	});
+});
+
+describe("rust diagnostic strategy (#5485) — measured against the real rust-analyzer 1.99.1", () => {
+	const measured = JSON.parse(
+		fs.readFileSync(
+			new URL(
+				"../../fixtures/lsp-wait-measurements/rust-5485.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	) as {
+		productPath: {
+			dirtyFixture: Record<string, { touchMs: number[]; collected: number[] }>;
+		};
+	};
+	const slowestCatchMs = Math.max(
+		...measured.productPath.dirtyFixture.candidate7000_6000!.touchMs,
+	);
+
+	// Recurrence (#5485): the table carried a `rust-analyzer` row (3000 / 500)
+	// keyed by display name, so it never applied; re-keying it to `rust` "fixes"
+	// the key and changes nothing a user sees, because rust-analyzer answers an
+	// empty authoritative report for ~0.4 s and the type error lands at ~3.6-3.9 s
+	// (0 of 5 cold lsp_touch_file calls caught it at 3000 / 500, artifact
+	// `rekeyedOriginal3000_500`). ANY `rust` row is the same key-only edit the
+	// census exists to refuse until the readiness signal (#5487) or a maintainer
+	// budget decision (#5485) replaces this guard, so the guard refuses the row,
+	// not one field of it: a 6000 / 1500 row clears a pull-retry-only check and
+	// still ends the touch at 1500 ms.
+	it("has no rust row until the cold-touch trade is decided", () => {
+		expect(
+			SERVER_DIAGNOSTIC_STRATEGIES.rust,
+			`A rust row needs a measured cold-touch trade (#5485, #5487). The slowest ` +
+				`cold touch that caught the finding took ${slowestCatchMs} ms ` +
+				`(tests/fixtures/lsp-wait-measurements/rust-5485.json); a row that ends ` +
+				`the touch earlier keeps reading a loading rust-analyzer as clean.`,
+		).toBeUndefined();
 	});
 });

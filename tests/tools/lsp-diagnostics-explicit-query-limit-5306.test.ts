@@ -82,8 +82,14 @@ interface Lang {
 const CLANGD: Lang = { id: "clangd", ext: ".cpp" };
 /** lua is push-only and `silentOnClean` (wait-policy/strategies.ts). */
 const LUA: Lang = { id: "lua", ext: ".lua" };
-/** rust-analyzer is pull-capable (wait-policy/strategies.ts, 3000 ms aggregate). */
-const RUST: Lang = { id: "rust-analyzer", ext: ".rs" };
+/**
+ * csharp-ls is a pull-mode server with its own row (wait-policy/strategies.ts:
+ * 6000 ms aggregate, 250 ms pull retry). The fake is keyed by the REGISTRY id
+ * because `getStrategy` looks the row up by it (#5485: this suite first used
+ * `rust-analyzer`, a display name the registry never matched, so its 3000 ms
+ * row was dead and the budgets below moved when the row was deleted).
+ */
+const PULL_SERVER: Lang = { id: "csharp", ext: ".cs" };
 /** The real client's pull request cap (`PULL_REQUEST_TIMEOUT_MS`, client.ts). */
 const PULL_CAP_MS = 10_000;
 const FINDING = {
@@ -324,7 +330,7 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 						lspChildren: [
 							{
 								pid: 43,
-								serverId: "rust-analyzer",
+								serverId: "rust",
 								command: "rust-analyzer",
 								spawnedAt: new Date().toISOString(),
 							},
@@ -536,7 +542,7 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 
 	describe("a pull-only wait that expired", () => {
 		// Recurrence this prevents: under machine-wide LSP pressure a pull-capable
-		// server (rust-analyzer) is asked pullOnly. With waitMs=30000 the service
+		// server (csharp-ls) is asked pullOnly. With waitMs=30000 the service
 		// budget is 30 s while the pull request stops at 10 s and the client returns
 		// "deadline-expired"; the touch judged timed-out from elapsed time alone
 		// (10 s + 20 ms < 30 s), answered "confirmed", and the tool printed a clean
@@ -544,8 +550,8 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 		// PRRT_kwDORt8rec60OLnk.
 		it("reads a pull that stopped at its own cap inside waitMs as timed out, never clean", async () => {
 			await underPressure();
-			useServer(Number.POSITIVE_INFINITY, RUST, PULL_CAP_MS);
-			const file = path.join(tmp, "lib.rs");
+			useServer(Number.POSITIVE_INFINITY, PULL_SERVER, PULL_CAP_MS);
+			const file = path.join(tmp, "lib.cs");
 			fs.writeFileSync(file, cppLines(50));
 
 			const result = await runTool({ path: file, waitMs: 30_000 }, tmp);
@@ -567,7 +573,7 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 		// "deadline-expired" is a timeout even when a larger budget beside it was
 		// still running, unless the primary is silent-on-clean, whose silence is
 		// its clean answer.
-		// Recurrences: master read a lapsed clangd or a failed rust-analyzer pull
+		// Recurrences: master read a lapsed clangd or a failed csharp pull
 		// beside opengrep as confirmed clean (rows 7, 12, 14, 15, 18, 21), and the
 		// r3 clause read a clean TypeScript, Markdown or Lua edit in the dispatch
 		// runner as inconclusive (rows 16, 19; review r3 F6).
@@ -577,8 +583,8 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			publishAtMs: Number.POSITIVE_INFINITY,
 		};
 		const NEVER = Number.POSITIVE_INFINITY;
-		/** A rust-analyzer pull that failed (no reply) stops after its 500 ms retry budget. */
-		const FAILED_PULL_MS = 500;
+		/** A csharp-ls pull that failed (no reply) stops after its 250 ms retry budget. */
+		const FAILED_PULL_MS = 250;
 		const EXPLICIT = {
 			diagnostics: "document",
 			collectDiagnostics: true,
@@ -636,13 +642,13 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			expect(result.inconclusiveServerIds).toEqual(["clangd"]);
 		});
 
-		it("row 14: batch query, a failed rust-analyzer pull reads timed out", async () => {
+		it("row 14: batch query, a failed csharp pull reads timed out", async () => {
 			await underPressure();
-			useServer(NEVER, RUST, FAILED_PULL_MS);
-			const result = await touch(RUST, BATCH);
-			expect(server.budgets).toEqual([3000]);
+			useServer(NEVER, PULL_SERVER, FAILED_PULL_MS);
+			const result = await touch(PULL_SERVER, BATCH);
+			expect(server.budgets).toEqual([6000]);
 			expect(result.inconclusive).toBe(true);
-			expect(result.inconclusiveServerIds).toEqual(["rust-analyzer"]);
+			expect(result.inconclusiveServerIds).toEqual(["csharp"]);
 		});
 
 		it("row 15: dispatch runner, clangd lapsed beside opengrep, reads timed out", async () => {
@@ -674,15 +680,15 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			},
 		);
 
-		it("row 18: dispatch runner, a failed rust-analyzer pull beside opengrep reads timed out", async () => {
+		it("row 18: dispatch runner, a failed csharp pull beside opengrep reads timed out", async () => {
 			await underPressure();
-			useServers(NEVER, RUST, [OPENGREP], FAILED_PULL_MS);
-			const result = await touch(RUST, {
+			useServers(NEVER, PULL_SERVER, [OPENGREP], FAILED_PULL_MS);
+			const result = await touch(PULL_SERVER, {
 				...DISPATCH,
 				auxiliaryServerIds: ["opengrep"],
 			});
 			expect(result.inconclusive).toBe(true);
-			expect(result.inconclusiveServerIds).toEqual(["rust-analyzer"]);
+			expect(result.inconclusiveServerIds).toEqual(["csharp"]);
 		});
 
 		it("row 19: dispatch runner, a lapsed auxiliary does not time out a silent-on-clean primary", async () => {
@@ -700,13 +706,13 @@ describe("#5306 explicit single-file lens_diagnostics query", () => {
 			expect(result.inconclusive).toBeFalsy();
 		});
 
-		it("row 21: cascade touch, a failed rust-analyzer pull reads timed out", async () => {
+		it("row 21: cascade touch, a failed csharp pull reads timed out", async () => {
 			await underPressure();
-			useServer(NEVER, RUST, FAILED_PULL_MS);
-			const result = await touch(RUST, CASCADE);
+			useServer(NEVER, PULL_SERVER, FAILED_PULL_MS);
+			const result = await touch(PULL_SERVER, CASCADE);
 			expect(server.budgets).toEqual([2000]);
 			expect(result.inconclusive).toBe(true);
-			expect(result.inconclusiveServerIds).toEqual(["rust-analyzer"]);
+			expect(result.inconclusiveServerIds).toEqual(["csharp"]);
 		});
 	});
 });
