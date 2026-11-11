@@ -22,3 +22,33 @@ gate covers diagnostics, code actions, analyze, and turn-end.
 another owner. `PreFixServer.cfg` removes workspace admission and reproduces
 replacement. `PreFixClients.cfg` removes client admission and reproduces a
 cross-session answer through a shared PID name.
+
+## Local cost measurement
+
+Run on November 11, 2026, with the pinned TLC 2.19 jar, one worker, and an
+isolated metadir per config. The command shape, from this model directory:
+
+```text
+time --format 'TLC elapsed: %e s' java -Djava.io.tmpdir=<metadir> -XX:+UseParallelGC -cp ../../.cache/tla2tools.jar tlc2.TLC -workers 1 -metadir <metadir> -config <config> IpcEndpointIdentity
+```
+
+Raw output excerpts, used by `local-5488` in `scripts/tla-model-costs.json`:
+
+```text
+Fixed.cfg
+Model checking completed. No error has been found.
+1989 states generated, 147 distinct states found, 0 states left on queue.
+TLC elapsed: 0.62 s
+
+PreFixServer.cfg
+Error: Invariant NoForeignReplacement is violated.
+35 states generated, 10 distinct states found, 7 states left on queue.
+Command exited with non-zero status 12
+TLC elapsed: 0.58 s
+
+PreFixClients.cfg
+Error: Invariant NoForeignAnswer is violated.
+33 states generated, 13 distinct states found, 10 states left on queue.
+Command exited with non-zero status 12
+TLC elapsed: 0.59 s
+```

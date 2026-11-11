@@ -4,7 +4,8 @@
 		"40147263648",
 		"local-4715",
 		"local-5333",
-		"local-5413"
+		"local-5413",
+		"local-5488 (formal/ipc-endpoint-identity/README.md)"
 	],
 	"note": "Per-config TLC seconds (median over the source runs), read from `ok|FAIL formal/<family>/<Model>.cfg: ... (Ns)` lines the checker prints. scripts/tla-model-costs.json packs the TLA+ shards with these; a config with no row costs the table's MAX so an unmeasured config can never quietly become the tail.",
 	"files": {
@@ -246,6 +247,9 @@
 		"formal/instance-reaper/WindowsFootprint.cfg": 2.8,
 		"formal/instance-reaper/WindowsLateRecord.cfg": 1.8,
 		"formal/instance-reaper/WindowsPpidReuse.cfg": 22.4,
+		"formal/ipc-endpoint-identity/Fixed.cfg": 0.6,
+		"formal/ipc-endpoint-identity/PreFixClients.cfg": 0.6,
+		"formal/ipc-endpoint-identity/PreFixServer.cfg": 0.6,
 		"formal/late-aux-drain/CancelWithholds.cfg": 1.5,
 		"formal/late-aux-drain/ClosePublishExempt.cfg": 1.2,
 		"formal/late-aux-drain/ClosePublishUncounted.cfg": 3.8,
@@ -1142,6 +1146,9 @@
 		"formal/instance-reaper/WindowsFootprint.cfg": 3190,
 		"formal/instance-reaper/WindowsLateRecord.cfg": 3049,
 		"formal/instance-reaper/WindowsPpidReuse.cfg": 673477,
+		"formal/ipc-endpoint-identity/Fixed.cfg": 147,
+		"formal/ipc-endpoint-identity/PreFixClients.cfg": 13,
+		"formal/ipc-endpoint-identity/PreFixServer.cfg": 10,
 		"formal/late-aux-drain/CancelWithholds.cfg": 80,
 		"formal/late-aux-drain/ClosePublishExempt.cfg": 611,
 		"formal/late-aux-drain/ClosePublishUncounted.cfg": 40688,
