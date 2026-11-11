@@ -205,6 +205,21 @@ describe("formatter ancestor venv (#5410 run-a)", () => {
 		).toHaveLength(1);
 	});
 
+	it("sqlfluff: the project's own .venv binary runs, found from the project root", async () => {
+		const app = path.join(root, "app");
+		const ownBin = plant(path.join(app, ".venv", "bin", "sqlfluff"), GOOD);
+		fs.writeFileSync(path.join(app, ".sqlfluff"), "[sqlfluff]\n");
+		const nested = path.join(app, "models");
+		fs.mkdirSync(nested, { recursive: true });
+		const file = path.join(nested, "q.sql");
+		fs.writeFileSync(file, "select 1\n");
+		const { sqlfluffFormatter } = await import("../../clients/formatters.js");
+
+		const cmd = await sqlfluffFormatter.resolveCommand!(file, nested);
+
+		expect(cmd).toEqual([ownBin, "fix", "--force", file]);
+	});
+
 	it.each([
 		["black", "blackFormatter", "unavailable"],
 		["sqlfluff", "sqlfluffFormatter", null],
