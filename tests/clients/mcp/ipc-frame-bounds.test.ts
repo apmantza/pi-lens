@@ -44,6 +44,7 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../../clients/degradation-ledger.js";
+import { ambientSocketNameIsShared } from "../../support/socket-identity.js";
 
 const MiB = 1024 * 1024;
 
@@ -208,83 +209,88 @@ describe("createWarmIpcLineReader bound (#3383)", () => {
 	});
 });
 
-describe("requestWarmAnalyze against an unframed peer (#3383)", () => {
-	const sockets: net.Server[] = [];
-	const cwd = `/pi-lens-3383/${process.pid}`;
+// lane: Unit tests (CI's short TMPDIR); where the cut makes the workspace
+// endpoint a shared name, the client never dials it, so these cases skip.
+describe.skipIf(ambientSocketNameIsShared())(
+	"requestWarmAnalyze against an unframed peer (#3383)",
+	() => {
+		const sockets: net.Server[] = [];
+		const cwd = `/pi-lens-3383/${process.pid}`;
 
-	afterEach(async () => {
-		for (const server of sockets.splice(0)) {
-			await new Promise<void>((resolve) => server.close(() => resolve()));
-		}
-		try {
-			fs.unlinkSync(ipcPathForCwd(cwd));
-		} catch {
-			// no socket file on Windows, and an already-removed one is fine
-		}
-	});
-
-	it("discards a single-write over-limit framed reply", async () => {
-		// H3388-1 through the production client over a real socket: ONE write
-		// carrying the whole over-limit frame, newline included.
-		const endpoint = ipcPathForCwd(cwd);
-		try {
-			fs.unlinkSync(endpoint);
-		} catch {
-			// no stale socket
-		}
-		let peer: net.Socket | undefined;
-		const server = net.createServer((socket) => {
-			peer = socket;
-			socket.on("error", () => {});
-			socket.write(`${"x".repeat(MAX_FRAMED_LINE_BYTES + 1)}\n`);
+		afterEach(async () => {
+			for (const server of sockets.splice(0)) {
+				await new Promise<void>((resolve) => server.close(() => resolve()));
+			}
+			try {
+				fs.unlinkSync(ipcPathForCwd(cwd));
+			} catch {
+				// no socket file on Windows, and an already-removed one is fine
+			}
 		});
-		sockets.push(server);
-		await new Promise<void>((resolve) =>
-			server.listen(boundUnixSocketPath(endpoint), resolve),
-		);
-		const result = await requestWarmAnalyze(cwd, "/w/a.ts", 600_000);
-		peer?.destroy();
-		expect(result).toBeUndefined();
-		const row = overflowRow();
-		expect(row?.count).toBe(1);
-		expect(row?.latestReasons[0]?.subject).toBe("warm-analyze-reply");
-		expect(row?.latestReasons[0]?.reason).toContain(
-			"discarded a complete line",
-		);
-	});
 
-	it("gives up on the bound rather than on the timeout when the reply never frames", async () => {
-		const endpoint = ipcPathForCwd(cwd);
-		try {
-			fs.unlinkSync(endpoint);
-		} catch {
-			// no stale socket
-		}
-		const chunk = "x".repeat(4 * MiB);
-		const server = net.createServer((socket) => {
-			// The client destroys the connection the moment the bound fires, which
-			// resets this write — the peer's problem, not the reader's.
-			socket.on("error", () => {});
-			let sent = 0;
-			const pump = () => {
-				if (sent > MAX_FRAMED_LINE_BYTES + 4 * MiB) return;
-				sent += chunk.length;
-				if (socket.write(chunk)) setImmediate(pump);
-				else socket.once("drain", pump);
-			};
-			pump();
+		it("discards a single-write over-limit framed reply", async () => {
+			// H3388-1 through the production client over a real socket: ONE write
+			// carrying the whole over-limit frame, newline included.
+			const endpoint = ipcPathForCwd(cwd);
+			try {
+				fs.unlinkSync(endpoint);
+			} catch {
+				// no stale socket
+			}
+			let peer: net.Socket | undefined;
+			const server = net.createServer((socket) => {
+				peer = socket;
+				socket.on("error", () => {});
+				socket.write(`${"x".repeat(MAX_FRAMED_LINE_BYTES + 1)}\n`);
+			});
+			sockets.push(server);
+			await new Promise<void>((resolve) =>
+				server.listen(boundUnixSocketPath(endpoint), resolve),
+			);
+			const result = await requestWarmAnalyze(cwd, "/w/a.ts", 600_000);
+			peer?.destroy();
+			expect(result).toBeUndefined();
+			const row = overflowRow();
+			expect(row?.count).toBe(1);
+			expect(row?.latestReasons[0]?.subject).toBe("warm-analyze-reply");
+			expect(row?.latestReasons[0]?.reason).toContain(
+				"discarded a complete line",
+			);
 		});
-		sockets.push(server);
-		await new Promise<void>((resolve) =>
-			server.listen(boundUnixSocketPath(endpoint), resolve),
-		);
 
-		// The timeout is 10 minutes: if the bound does not fire, this test hangs
-		// until vitest kills it rather than passing on a timeout that hid the bug.
-		const result = await requestWarmAnalyze(cwd, "/w/a.ts", 600_000);
-		expect(result).toBeUndefined();
-		const row = overflowRow();
-		expect(row?.count).toBe(1);
-		expect(row?.latestReasons[0]?.subject).toBe("warm-analyze-reply");
-	});
-});
+		it("gives up on the bound rather than on the timeout when the reply never frames", async () => {
+			const endpoint = ipcPathForCwd(cwd);
+			try {
+				fs.unlinkSync(endpoint);
+			} catch {
+				// no stale socket
+			}
+			const chunk = "x".repeat(4 * MiB);
+			const server = net.createServer((socket) => {
+				// The client destroys the connection the moment the bound fires, which
+				// resets this write — the peer's problem, not the reader's.
+				socket.on("error", () => {});
+				let sent = 0;
+				const pump = () => {
+					if (sent > MAX_FRAMED_LINE_BYTES + 4 * MiB) return;
+					sent += chunk.length;
+					if (socket.write(chunk)) setImmediate(pump);
+					else socket.once("drain", pump);
+				};
+				pump();
+			});
+			sockets.push(server);
+			await new Promise<void>((resolve) =>
+				server.listen(boundUnixSocketPath(endpoint), resolve),
+			);
+
+			// The timeout is 10 minutes: if the bound does not fire, this test hangs
+			// until vitest kills it rather than passing on a timeout that hid the bug.
+			const result = await requestWarmAnalyze(cwd, "/w/a.ts", 600_000);
+			expect(result).toBeUndefined();
+			const row = overflowRow();
+			expect(row?.count).toBe(1);
+			expect(row?.latestReasons[0]?.subject).toBe("warm-analyze-reply");
+		});
+	},
+);

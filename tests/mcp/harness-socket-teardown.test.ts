@@ -55,14 +55,13 @@ function sockOnlyRoot(): { longTmp: string; workspace: string } {
 	return { longTmp: tmpRootOfLength(SOCK_ONLY_ROOT), workspace };
 }
 
-/** A root padded to 100 characters: the cut then lands inside the workspace
- *  hash, so every workspace derives the same bound name. */
+/** A root of exactly 100 bytes: the cut then lands inside the workspace hash,
+ *  so every workspace derives the same bound name, and the root's own random
+ *  part keeps that name apart from other cases. */
+const SHARED_NAME_ROOT = 100;
 function sharedNameRoot(): { tmpDir: string; longTmp: string } {
 	const { tmpDir } = setupTestEnvironment("pi-lens-hs-");
-	const componentBytes = Math.max(0, 100 - tmpDir.length - 1);
-	const longTmp = path.join(tmpDir, "p".repeat(componentBytes));
-	fs.mkdirSync(longTmp, { recursive: true });
-	return { tmpDir, longTmp };
+	return { tmpDir, longTmp: tmpRootOfLength(SHARED_NAME_ROOT) };
 }
 
 async function initialize(harness: McpHarness): Promise<void> {
@@ -181,61 +180,69 @@ describe.skipIf(process.platform === "win32")(
 			60_000,
 		);
 
-		it("servers for two workspaces that share a bound name neither bind it nor serve each other", async () => {
-			const { tmpDir, longTmp } = sharedNameRoot();
-			const wsA = path.join(tmpDir, "wsA");
-			const wsB = path.join(tmpDir, "wsB");
-			fs.mkdirSync(wsA, { recursive: true });
-			fs.mkdirSync(wsB, { recursive: true });
-			const file = path.join(wsA, "x.ts");
-			fs.writeFileSync(file, "export const x = 1;\n");
-			vi.stubEnv("TMPDIR", longTmp);
-			const shared = boundUnixSocketPath(ipcPathForCwd(wsA));
-			expect(shared, "the cut removed the workspace hash").toBe(
-				boundUnixSocketPath(ipcPathForCwd(wsB)),
-			);
-			// A live listener already at the shared name: whatever owns it, a
-			// server for either workspace must leave it in place.
-			let reached = 0;
-			const owner = net.createServer((socket) => {
-				reached += 1;
-				socket.destroy();
-			});
-			await new Promise<void>((resolve) => owner.listen(shared, resolve));
-			const ownerInode = fs.lstatSync(shared).ino;
-			const harnesses: McpHarness[] = [];
-			try {
-				for (const cwd of [wsA, wsB]) {
-					const harness = new McpHarness({ cwd });
-					harnesses.push(harness);
-					await initialize(harness);
-					await harness.waitForStderr("[pi-lens-mcp] warm side-channel ");
-				}
-				const [serverA, serverB] = harnesses;
-				expect(fs.lstatSync(shared).ino, "the live socket was replaced").toBe(
-					ownerInode,
+		// lane: Unit tests (CI's short TMPDIR); a TMPDIR too long for a 100-byte
+		// root skips this case.
+		it.skipIf(minTmpRootLength() > SHARED_NAME_ROOT)(
+			"servers for two workspaces that share a bound name neither bind it nor serve each other",
+			async () => {
+				const { tmpDir, longTmp } = sharedNameRoot();
+				const wsA = path.join(tmpDir, "wsA");
+				const wsB = path.join(tmpDir, "wsB");
+				fs.mkdirSync(wsA, { recursive: true });
+				fs.mkdirSync(wsB, { recursive: true });
+				const file = path.join(wsA, "x.ts");
+				fs.writeFileSync(file, "export const x = 1;\n");
+				vi.stubEnv("TMPDIR", longTmp);
+				const shared = boundUnixSocketPath(ipcPathForCwd(wsA));
+				expect(shared, "the cut removed the workspace hash").toBe(
+					boundUnixSocketPath(ipcPathForCwd(wsB)),
 				);
-				expect(await connectOutcome(shared)).toBe("connected");
-				expect(reached).toBe(1);
-
-				// A's hook does not dial the shared name: no listener there can be
-				// told apart from another workspace's.
-				expect(await requestWarmAnalyze(wsA, file, 2000)).toBeUndefined();
-				expect(reached, "the hook dialed the shared name").toBe(1);
-				for (const harness of [serverA, serverB]) {
-					expect(harness?.stderrText()).not.toContain(`warm analyze: ${file}`);
-					expect(harness?.stderrText()).toContain(
-						`warm side-channel unavailable: socket path exceeds the platform limit; bound name ${shared} no longer identifies this workspace\n`,
+				// A live listener already at the shared name: whatever owns it, a
+				// server for either workspace must leave it in place.
+				let reached = 0;
+				const owner = net.createServer((socket) => {
+					reached += 1;
+					socket.destroy();
+				});
+				await new Promise<void>((resolve) => owner.listen(shared, resolve));
+				const ownerInode = fs.lstatSync(shared).ino;
+				const harnesses: McpHarness[] = [];
+				try {
+					for (const cwd of [wsA, wsB]) {
+						const harness = new McpHarness({ cwd });
+						harnesses.push(harness);
+						await initialize(harness);
+						await harness.waitForStderr("[pi-lens-mcp] warm side-channel ");
+					}
+					const [serverA, serverB] = harnesses;
+					expect(fs.lstatSync(shared).ino, "the live socket was replaced").toBe(
+						ownerInode,
 					);
+					expect(await connectOutcome(shared)).toBe("connected");
+					expect(reached).toBe(1);
+
+					// A's hook does not dial the shared name: no listener there can be
+					// told apart from another workspace's.
+					expect(await requestWarmAnalyze(wsA, file, 2000)).toBeUndefined();
+					expect(reached, "the hook dialed the shared name").toBe(1);
+					for (const harness of [serverA, serverB]) {
+						expect(harness?.stderrText()).not.toContain(
+							`warm analyze: ${file}`,
+						);
+						expect(harness?.stderrText()).toContain(
+							`warm side-channel unavailable: socket path exceeds the platform limit; bound name ${shared} no longer identifies this workspace\n`,
+						);
+					}
+				} finally {
+					for (const harness of harnesses) harness.dispose();
+					(
+						owner as net.Server & { closeAllConnections?: () => void }
+					).closeAllConnections?.();
+					await new Promise<void>((resolve) => owner.close(() => resolve()));
+					vi.unstubAllEnvs();
 				}
-			} finally {
-				for (const harness of harnesses) harness.dispose();
-				(
-					owner as net.Server & { closeAllConnections?: () => void }
-				).closeAllConnections?.();
-				await new Promise<void>((resolve) => owner.close(() => resolve()));
-				vi.unstubAllEnvs();
-			}
-		}, 60_000);
+			},
+			60_000,
+		);
 	},
 );

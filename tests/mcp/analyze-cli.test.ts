@@ -31,6 +31,7 @@ import {
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import { AUTOMATION_FRAMING } from "../../clients/runtime-context.js";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { ambientSocketNameIsShared } from "../support/socket-identity.js";
 import { McpHarness } from "./harness.js";
 
 const repoRoot = path.resolve(
@@ -692,6 +693,11 @@ function startWarmAnalyzeStub(
 
 // Built from the producer's real constant so a wording change in
 // runtime-context.ts cannot silently diverge from what the bin strips.
+// lane: Unit tests (CI's short TMPDIR). A case that needs a warm stub at the
+// workspace endpoint skips where the cut makes that endpoint a shared name,
+// which the bin never dials.
+const WORKSPACE_NAME_SHARED = ambientSocketNameIsShared();
+
 const FRAMED_ADVISORY = `${AUTOMATION_FRAMING}Address 🔴 blockers before continuing; ℹ️ advisories are informational only.
 
 🔴 knip: 2 unused exports in clients/thing.ts`;
@@ -717,7 +723,7 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 	});
 
 	// #3922: exercise the real bin, failing only the external peer or IPC boundary.
-	it.each([
+	it.skipIf(WORKSPACE_NAME_SHARED).each([
 		{ name: "plain CLI", args: "file", event: undefined, code: 2, json: false },
 		{
 			name: "explicit hook",
@@ -828,56 +834,60 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 	);
 
 	// #3922: a later Stop must not erase failures from the separate hook process.
-	it("keeps repeated failures through Stop writes and reports them through health", async () => {
-		const preload = new URL(
-			"../fixtures/mcp/analyze-cli-failure.mjs",
-			import.meta.url,
-		);
-		const args = [`--cwd=${turnDir}`, `--file=${cleanFile}`];
-		await runBin(args, undefined, ["--import", preload.href]);
-		await runBin(args, undefined, ["--import", preload.href]);
-		await runBin(["--turn-end", `--cwd=${turnDir}`]);
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-		});
-		await runBin(["--turn-end", `--cwd=${turnDir}`]);
-		await stub.close();
-		stub = undefined;
-		expect(readTurnEndStatus(turnDir)).toMatchObject({
-			ran: 1,
-			skipped: 1,
-			failed: 2,
-		});
-
-		const harness = new McpHarness({
-			cwd: turnDir,
-			env: { HOME: path.join(testIsolationDir, "home") },
-		});
-		try {
-			const response = await harness.request(3922, "tools/call", {
-				name: "pilens_health",
-				arguments: {},
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"keeps repeated failures through Stop writes and reports them through health",
+		async () => {
+			const preload = new URL(
+				"../fixtures/mcp/analyze-cli-failure.mjs",
+				import.meta.url,
+			);
+			const args = [`--cwd=${turnDir}`, `--file=${cleanFile}`];
+			await runBin(args, undefined, ["--import", preload.href]);
+			await runBin(args, undefined, ["--import", preload.href]);
+			await runBin(["--turn-end", `--cwd=${turnDir}`]);
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
 			});
-			const text = (response.result as { content: { text: string }[] })
-				.content[0].text;
-			expect(text).toContain(
-				"Analyzer invocations: 2 failed; last analyze failure at",
-			);
-			expect(text).toContain("@earendil-works/pi-tui");
-			const json = JSON.parse(
-				text.match(/```json\n([\s\S]*)\n```/)?.[1] ?? "{}",
-			);
-			expect(json.turnEnd).toMatchObject({
+			await runBin(["--turn-end", `--cwd=${turnDir}`]);
+			await stub.close();
+			stub = undefined;
+			expect(readTurnEndStatus(turnDir)).toMatchObject({
 				ran: 1,
 				skipped: 1,
 				failed: 2,
-				lastFailureOperation: "analyze",
 			});
-		} finally {
-			harness.dispose();
-		}
-	}, 30_000);
+
+			const harness = new McpHarness({
+				cwd: turnDir,
+				env: { HOME: path.join(testIsolationDir, "home") },
+			});
+			try {
+				const response = await harness.request(3922, "tools/call", {
+					name: "pilens_health",
+					arguments: {},
+				});
+				const text = (response.result as { content: { text: string }[] })
+					.content[0].text;
+				expect(text).toContain(
+					"Analyzer invocations: 2 failed; last analyze failure at",
+				);
+				expect(text).toContain("@earendil-works/pi-tui");
+				const json = JSON.parse(
+					text.match(/```json\n([\s\S]*)\n```/)?.[1] ?? "{}",
+				);
+				expect(json.turnEnd).toMatchObject({
+					ran: 1,
+					skipped: 1,
+					failed: 2,
+					lastFailureOperation: "analyze",
+				});
+			} finally {
+				harness.dispose();
+			}
+		},
+		30_000,
+	);
 
 	// #3922: surfaced exception text must be bounded, redacted, and one line.
 	it("redacts and bounds failures before stdout, stderr, and persistence", async () => {
@@ -985,57 +995,69 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 		expect(fs.statSync(logPath).isDirectory()).toBe(true);
 	}, 20_000);
 
-	it("renders the warm server's report without the injection framing", async () => {
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			turnEnd: FRAMED_ADVISORY,
-		});
-		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"renders the warm server's report without the injection framing",
+		async () => {
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				turnEnd: FRAMED_ADVISORY,
+			});
+			const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 
-		expect(code).toBe(0);
-		expect(stdout).toContain("🔎 pi-lens turn-end");
-		expect(stdout).toContain("🔴 knip: 2 unused exports");
-		expect(stdout).toContain("Address 🔴 blockers before continuing");
-		expect(stdout).not.toContain("not a user request");
-		expect(stub.requests[0]).toEqual({
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd: turnDir,
-		});
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout).toContain("🔎 pi-lens turn-end");
+			expect(stdout).toContain("🔴 knip: 2 unused exports");
+			expect(stdout).toContain("Address 🔴 blockers before continuing");
+			expect(stdout).not.toContain("not a user request");
+			expect(stub.requests[0]).toEqual({
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				cwd: turnDir,
+			});
+		},
+		20_000,
+	);
 
-	it("describes deferred LSP diagnostics as deferred in the warm analyze report", async () => {
-		const file = path.join(turnDir, "deferred.ts");
-		fs.writeFileSync(file, "export const value = 1;\n");
-		stub = await startTurnEndStub(turnDir, {
-			filePath: file,
-			counts: { blockers: 0, warnings: 0, advisories: 0 },
-			diagnostics: [],
-			lsp: { status: "deferred", diagnosticCount: 0, durationMs: 1 },
-		});
-		const { stdout, code } = await runBin([
-			`--file=${file}`,
-			`--cwd=${turnDir}`,
-		]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"describes deferred LSP diagnostics as deferred in the warm analyze report",
+		async () => {
+			const file = path.join(turnDir, "deferred.ts");
+			fs.writeFileSync(file, "export const value = 1;\n");
+			stub = await startTurnEndStub(turnDir, {
+				filePath: file,
+				counts: { blockers: 0, warnings: 0, advisories: 0 },
+				diagnostics: [],
+				lsp: { status: "deferred", diagnosticCount: 0, durationMs: 1 },
+			});
+			const { stdout, code } = await runBin([
+				`--file=${file}`,
+				`--cwd=${turnDir}`,
+			]);
 
-		expect(code).toBe(0);
-		expect(stdout).toContain("LSP diagnostics were skipped or deferred");
-		expect(stdout).not.toContain("LSP type-check skipped");
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout).toContain("LSP diagnostics were skipped or deferred");
+			expect(stdout).not.toContain("LSP type-check skipped");
+		},
+		20_000,
+	);
 
-	it("stays silent when the warm pass found nothing", async () => {
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-		});
-		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"stays silent when the warm pass found nothing",
+		async () => {
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+			});
+			const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 
-		expect(code).toBe(0);
-		expect(stdout.trim()).toBe("");
-		// Silence must mean "clean turn", not "never dialed" or "reply rejected".
-		expect(stub.requests).toHaveLength(1);
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout.trim()).toBe("");
+			// Silence must mean "clean turn", not "never dialed" or "reply rejected".
+			expect(stub.requests).toHaveLength(1);
+		},
+		20_000,
+	);
 
 	// No cold fallback: a cold pass has empty cascade runs and accumulators, so a
 	// skip is honest where a local run would report a false clean. But #1272: the
@@ -1060,171 +1082,205 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 	// failure mode, including the ones where the server was warm and answering.
 	// Absent server / slow pass / schema skew have different remedies, so the
 	// wire reason must reach the transcript.
-	it("names the reason a skip happened", async () => {
-		// #3255 H1: "nothing is listening" is now its OWN reason, split out of
-		// `ipc-error` the same way #1272 split schema skew out of it. After the
-		// case-fold narrowing this is also what an upgrade-stranded server looks
-		// like from a fresh hook, so the remedy line has to name the restart.
-		const noServer = await runBin(["--turn-end", `--cwd=${turnDir}`]);
-		expect(noServer.stdout).toContain("(no-listener)");
-		expect(noServer.stdout).toMatch(/restart it|start the MCP server/);
-		expect(noServer.stdout).toContain("upgraded");
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"names the reason a skip happened",
+		async () => {
+			// #3255 H1: "nothing is listening" is now its OWN reason, split out of
+			// `ipc-error` the same way #1272 split schema skew out of it. After the
+			// case-fold narrowing this is also what an upgrade-stranded server looks
+			// like from a fresh hook, so the remedy line has to name the restart.
+			const noServer = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+			expect(noServer.stdout).toContain("(no-listener)");
+			expect(noServer.stdout).toMatch(/restart it|start the MCP server/);
+			expect(noServer.stdout).toContain("upgraded");
 
-		// A server that answers with the WRONG schema version: warm, reachable,
-		// and still unusable — the pre-fix message called this an absent server.
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION + 1,
-		});
-		const skewed = await runBin(["--turn-end", `--cwd=${turnDir}`]);
-		expect(skewed.stdout).toContain("(schema-mismatch)");
-		expect(skewed.stdout).toContain("different turn-end schema");
-		expect(skewed.stdout).not.toContain("no warm pi-lens MCP server answered");
-	}, 25_000);
+			// A server that answers with the WRONG schema version: warm, reachable,
+			// and still unusable — the pre-fix message called this an absent server.
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION + 1,
+			});
+			const skewed = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+			expect(skewed.stdout).toContain("(schema-mismatch)");
+			expect(skewed.stdout).toContain("different turn-end schema");
+			expect(skewed.stdout).not.toContain(
+				"no warm pi-lens MCP server answered",
+			);
+		},
+		25_000,
+	);
 
 	// #1272, the #544 precedent: the hook is a separate short-lived process, so
 	// without a recorded surface `pilens_health` had no way to report that
 	// turn-end had been dead all session.
-	it("records the skip and the run for pilens_health to report", async () => {
-		await runBin(["--turn-end", `--cwd=${turnDir}`]);
-		const afterSkip = readTurnEndStatus(turnDir);
-		expect(afterSkip?.skipped).toBe(1);
-		expect(afterSkip?.ran).toBe(0);
-		// #3255 H1: this field IS the `pilens_health` surface for a hook-process
-		// skip (rendered as "last skip: …"), so the discriminating reason has to
-		// land here and not just on stdout.
-		expect(afterSkip?.lastSkipReason).toBe("no-listener");
-		expect(afterSkip?.lastSkipAt).toBeTypeOf("string");
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"records the skip and the run for pilens_health to report",
+		async () => {
+			await runBin(["--turn-end", `--cwd=${turnDir}`]);
+			const afterSkip = readTurnEndStatus(turnDir);
+			expect(afterSkip?.skipped).toBe(1);
+			expect(afterSkip?.ran).toBe(0);
+			// #3255 H1: this field IS the `pilens_health` surface for a hook-process
+			// skip (rendered as "last skip: …"), so the discriminating reason has to
+			// land here and not just on stdout.
+			expect(afterSkip?.lastSkipReason).toBe("no-listener");
+			expect(afterSkip?.lastSkipAt).toBeTypeOf("string");
 
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-		});
-		await runBin(["--turn-end", `--cwd=${turnDir}`]);
-		const afterRun = readTurnEndStatus(turnDir);
-		expect(afterRun?.ran).toBe(1);
-		expect(afterRun?.skipped).toBe(1);
-		expect(afterRun?.lastRunAt).toBeTypeOf("string");
-	}, 25_000);
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+			});
+			await runBin(["--turn-end", `--cwd=${turnDir}`]);
+			const afterRun = readTurnEndStatus(turnDir);
+			expect(afterRun?.ran).toBe(1);
+			expect(afterRun?.skipped).toBe(1);
+			expect(afterRun?.lastRunAt).toBeTypeOf("string");
+		},
+		25_000,
+	);
 
-	it("detects a Stop payload on stdin without the flag", async () => {
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			tests: `${AUTOMATION_FRAMING}Test failures detected last turn — fix before continuing:\n\nsuite/thing.test.ts > it works`,
-		});
-		const { stdout, code } = await runBin(
-			[],
-			JSON.stringify({ cwd: turnDir, hook_event_name: "Stop" }),
-		);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"detects a Stop payload on stdin without the flag",
+		async () => {
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				tests: `${AUTOMATION_FRAMING}Test failures detected last turn — fix before continuing:\n\nsuite/thing.test.ts > it works`,
+			});
+			const { stdout, code } = await runBin(
+				[],
+				JSON.stringify({ cwd: turnDir, hook_event_name: "Stop" }),
+			);
 
-		expect(code).toBe(0);
-		expect(stdout).toContain("🔎 pi-lens turn-end");
-		expect(stdout).toContain("suite/thing.test.ts > it works");
-		expect(stdout).not.toContain("not a user request");
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout).toContain("🔎 pi-lens turn-end");
+			expect(stdout).toContain("suite/thing.test.ts > it works");
+			expect(stdout).not.toContain("not a user request");
+		},
+		20_000,
+	);
 
 	// `turnEnd` arrives server-capped at 20 lines, but `tests` does not — a vitest
 	// failure dump (runtime-turn.ts) is unbounded, and this render lands straight
 	// in the Claude Code transcript. Two independent guards, so two inputs: this
 	// one trips ONLY the line cap (81 lines, well under 2000 chars), which a
 	// combined over-long payload would hide behind the character cap.
-	it("caps a long report at 40 lines", async () => {
-		const manyLines = `Test failures detected last turn:\n${Array.from(
-			{ length: 80 },
-			(_, i) => `  FAIL suite/case-${i}`,
-		).join("\n")}`;
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			tests: manyLines,
-		});
-		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"caps a long report at 40 lines",
+		async () => {
+			const manyLines = `Test failures detected last turn:\n${Array.from(
+				{ length: 80 },
+				(_, i) => `  FAIL suite/case-${i}`,
+			).join("\n")}`;
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				tests: manyLines,
+			});
+			const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 
-		expect(code).toBe(0);
-		const lines = stdout.trimEnd().split("\n");
-		expect(lines).toHaveLength(41); // 40 kept + the truncation marker
-		expect(lines.at(-1)).toContain("… (truncated)");
-		expect(stdout).toContain("  FAIL suite/case-0");
-		expect(stdout).not.toContain("  FAIL suite/case-79");
-	}, 20_000);
+			expect(code).toBe(0);
+			const lines = stdout.trimEnd().split("\n");
+			expect(lines).toHaveLength(41); // 40 kept + the truncation marker
+			expect(lines.at(-1)).toContain("… (truncated)");
+			expect(stdout).toContain("  FAIL suite/case-0");
+			expect(stdout).not.toContain("  FAIL suite/case-79");
+		},
+		20_000,
+	);
 
 	// The companion guard: 11 lines, so the line cap never fires, and only the
 	// 2000-character ceiling stands between a wide dump and the transcript.
-	it("caps a long report at 2000 characters", async () => {
-		const wideLines = `Test failures detected last turn:\n${Array.from(
-			{ length: 10 },
-			(_, i) => `  FAIL suite/case-${i}: ${"detail ".repeat(45)}`,
-		).join("\n")}`;
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			tests: wideLines,
-		});
-		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"caps a long report at 2000 characters",
+		async () => {
+			const wideLines = `Test failures detected last turn:\n${Array.from(
+				{ length: 10 },
+				(_, i) => `  FAIL suite/case-${i}: ${"detail ".repeat(45)}`,
+			).join("\n")}`;
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				tests: wideLines,
+			});
+			const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 
-		const out = stdout.trimEnd();
-		expect(code).toBe(0);
-		expect(out.split("\n").length).toBeLessThanOrEqual(40);
-		expect(out).toContain("… (truncated)");
-		// 2000 kept + the "\n  … (truncated)" marker.
-		expect(out).toHaveLength(2016);
-	}, 20_000);
+			const out = stdout.trimEnd();
+			expect(code).toBe(0);
+			expect(out.split("\n").length).toBeLessThanOrEqual(40);
+			expect(out).toContain("… (truncated)");
+			// 2000 kept + the "\n  … (truncated)" marker.
+			expect(out).toHaveLength(2016);
+		},
+		20_000,
+	);
 
 	// #1275: `slice` counts UTF-16 code units. Findings are dense with emoji, and
 	// a cut that lands between the halves of a surrogate pair is written to the
 	// pipe as U+FFFD — a replacement character in the transcript where a marker
 	// should be. The payload below is sized so the 2000-char cut falls exactly
 	// inside the 🔴.
-	it("never splits a surrogate pair at the character cap", async () => {
-		const header = "🔎 pi-lens turn-end\n";
-		const pad = "x".repeat(2000 - header.length - 1);
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			tests: `${pad}🔴 knip: unused export`,
-		});
-		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"never splits a surrogate pair at the character cap",
+		async () => {
+			const header = "🔎 pi-lens turn-end\n";
+			const pad = "x".repeat(2000 - header.length - 1);
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				tests: `${pad}🔴 knip: unused export`,
+			});
+			const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 
-		expect(code).toBe(0);
-		expect(stdout).not.toContain("�");
-		// Backed off by one unit rather than cutting the pair.
-		expect(stdout.trimEnd()).toHaveLength(1999 + "\n  … (truncated)".length);
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout).not.toContain("�");
+			// Backed off by one unit rather than cutting the pair.
+			expect(stdout.trimEnd()).toHaveLength(1999 + "\n  … (truncated)".length);
+		},
+		20_000,
+	);
 
 	// #1275: the `tests` section is the RAW vitest dump, which carries SGR colour
 	// codes; nothing stripped them, and the character cap could slice an escape
 	// sequence in half and leak its tail as literal text.
-	it("strips ANSI escapes and control characters from the report", async () => {
-		const esc = String.fromCharCode(0x1b);
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			tests: `${esc}[31mFAIL${esc}[0m suite/thing.test.ts${esc}[2K\u0007\u0000 done`,
-		});
-		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"strips ANSI escapes and control characters from the report",
+		async () => {
+			const esc = String.fromCharCode(0x1b);
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				tests: `${esc}[31mFAIL${esc}[0m suite/thing.test.ts${esc}[2K\u0007\u0000 done`,
+			});
+			const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 
-		expect(code).toBe(0);
-		expect(stdout).not.toContain(esc);
-		expect(stdout).not.toContain("[31m");
-		expect(stdout).not.toContain("[2K");
-		expect(stdout).toContain("FAIL suite/thing.test.ts");
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout).not.toContain(esc);
+			expect(stdout).not.toContain("[31m");
+			expect(stdout).not.toContain("[2K");
+			expect(stdout).toContain("FAIL suite/thing.test.ts");
+		},
+		20_000,
+	);
 
 	// #1275: the framing strip was `startsWith`-only, so a token carried into the
 	// middle of a joined section survived into the transcript.
-	it("strips injection framing that is not at the start of a section", async () => {
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			turnEnd: `🔴 knip: 2 unused exports\n\n${AUTOMATION_FRAMING}🔴 madge: a cycle`,
-		});
-		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"strips injection framing that is not at the start of a section",
+		async () => {
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				turnEnd: `🔴 knip: 2 unused exports\n\n${AUTOMATION_FRAMING}🔴 madge: a cycle`,
+			});
+			const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 
-		expect(code).toBe(0);
-		expect(stdout).toContain("🔴 madge: a cycle");
-		expect(stdout).not.toContain("not a user request");
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout).toContain("🔴 madge: a cycle");
+			expect(stdout).not.toContain("not a user request");
+		},
+		20_000,
+	);
 
 	it("never dials the server on SubagentStop", async () => {
 		stub = await startTurnEndStub(turnDir, {
@@ -1243,146 +1299,168 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 		expect(stub.sockets).toHaveLength(0);
 	}, 20_000);
 
-	it("still runs when another hook kept the agent active and more edits may exist", async () => {
-		stub = await startTurnEndStub(turnDir, {
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			turnEnd: FRAMED_ADVISORY,
-		});
-		const { stdout, code } = await runBin(
-			[],
-			JSON.stringify({
-				cwd: turnDir,
-				hook_event_name: "Stop",
-				stop_hook_active: true,
-			}),
-		);
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"still runs when another hook kept the agent active and more edits may exist",
+		async () => {
+			stub = await startTurnEndStub(turnDir, {
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				turnEnd: FRAMED_ADVISORY,
+			});
+			const { stdout, code } = await runBin(
+				[],
+				JSON.stringify({
+					cwd: turnDir,
+					hook_event_name: "Stop",
+					stop_hook_active: true,
+				}),
+			);
 
-		expect(code).toBe(0);
-		expect(stdout).toContain("🔎 pi-lens turn-end");
-		expect(stub.requests).toHaveLength(1);
-	}, 20_000);
+			expect(code).toBe(0);
+			expect(stdout).toContain("🔎 pi-lens turn-end");
+			expect(stub.requests).toHaveLength(1);
+		},
+		20_000,
+	);
 });
 
-describe("pi-lens-analyze warm hook route", { retry: 2 }, () => {
-	it("repeats the warm coverage notice on every PostToolUse hook (#3791 F1)", async () => {
-		const cwd = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-cli-warm-hook-"),
-		);
-		const file = path.join(cwd, "main.go");
-		fs.writeFileSync(file, "package main\n");
-		const stub = await startWarmAnalyzeStub(cwd, {
-			filePath: file,
-			cwd,
-			counts: {
-				diagnostics: 1,
-				blockers: 0,
-				warnings: 1,
-				advisories: 0,
-				fixed: 0,
-			},
-			diagnostics: [
-				{
-					line: 1,
-					semantic: "warning",
-					tool: "coverage",
-					message: "coverage: go scanner silent",
+describe.skipIf(WORKSPACE_NAME_SHARED)(
+	"pi-lens-analyze warm hook route",
+	{ retry: 2 },
+	() => {
+		it("repeats the warm coverage notice on every PostToolUse hook (#3791 F1)", async () => {
+			const cwd = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-cli-warm-hook-"),
+			);
+			const file = path.join(cwd, "main.go");
+			fs.writeFileSync(file, "package main\n");
+			const stub = await startWarmAnalyzeStub(cwd, {
+				filePath: file,
+				cwd,
+				counts: {
+					diagnostics: 1,
+					blockers: 0,
+					warnings: 1,
+					advisories: 0,
+					fixed: 0,
 				},
-			],
-		});
-		try {
-			const first = await runBin([`--file=${file}`, `--cwd=${cwd}`, "--hook"]);
-			const second = await runBin([`--file=${file}`, `--cwd=${cwd}`, "--hook"]);
-			for (const run of [first, second]) {
-				expect(run.code).toBe(0);
-				const parsed = JSON.parse(run.stdout) as {
-					hookSpecificOutput?: { additionalContext?: string };
-				};
-				expect(parsed.hookSpecificOutput?.additionalContext).toContain(
-					"coverage: go scanner silent",
-				);
+				diagnostics: [
+					{
+						line: 1,
+						semantic: "warning",
+						tool: "coverage",
+						message: "coverage: go scanner silent",
+					},
+				],
+			});
+			try {
+				const first = await runBin([
+					`--file=${file}`,
+					`--cwd=${cwd}`,
+					"--hook",
+				]);
+				const second = await runBin([
+					`--file=${file}`,
+					`--cwd=${cwd}`,
+					"--hook",
+				]);
+				for (const run of [first, second]) {
+					expect(run.code).toBe(0);
+					const parsed = JSON.parse(run.stdout) as {
+						hookSpecificOutput?: { additionalContext?: string };
+					};
+					expect(parsed.hookSpecificOutput?.additionalContext).toContain(
+						"coverage: go scanner silent",
+					);
+				}
+				expect(stub.requests).toHaveLength(2);
+			} finally {
+				await stub.close();
+				removeTempDirSync(cwd);
 			}
-			expect(stub.requests).toHaveLength(2);
-		} finally {
-			await stub.close();
-			removeTempDirSync(cwd);
-		}
-	}, 45_000);
-});
+		}, 45_000);
+	},
+);
 
 // Recurrence prevented: #5287. The CLI exited silent on `counts.diagnostics ===
 // 0` alone. The verdict is the only thing that makes zero findings a clean file:
 // a completed check is silent, an unchecked one is named, and a reply from a
 // warm server built before the field (no verdict at all) is named too.
-describe("pi-lens-analyze warm route: silence needs a completed check (#5287)", () => {
-	const noFindings = {
-		counts: {
-			diagnostics: 0,
-			blockers: 0,
-			warnings: 0,
-			advisories: 0,
-			fixed: 0,
-		},
-		diagnostics: [],
-	};
-	const rows = [
-		{
-			name: "a completed check is silent",
-			verdict: { checked: true, tier: "primary", runnerIds: ["lsp"] },
-			expected: undefined,
-		},
-		{
-			name: "an unchecked verdict is named with its reason",
-			verdict: { checked: false, reason: "no analyzer handles this file type" },
-			expected: "not checked: no analyzer handles this file type",
-		},
-		{
-			name: "a reply with no verdict is not clean",
-			verdict: undefined,
-			expected: "did not report whether a check completed",
-		},
-	] as const;
+describe.skipIf(WORKSPACE_NAME_SHARED)(
+	"pi-lens-analyze warm route: silence needs a completed check (#5287)",
+	() => {
+		const noFindings = {
+			counts: {
+				diagnostics: 0,
+				blockers: 0,
+				warnings: 0,
+				advisories: 0,
+				fixed: 0,
+			},
+			diagnostics: [],
+		};
+		const rows = [
+			{
+				name: "a completed check is silent",
+				verdict: { checked: true, tier: "primary", runnerIds: ["lsp"] },
+				expected: undefined,
+			},
+			{
+				name: "an unchecked verdict is named with its reason",
+				verdict: {
+					checked: false,
+					reason: "no analyzer handles this file type",
+				},
+				expected: "not checked: no analyzer handles this file type",
+			},
+			{
+				name: "a reply with no verdict is not clean",
+				verdict: undefined,
+				expected: "did not report whether a check completed",
+			},
+		] as const;
 
-	it.each(rows)(
-		"$name",
-		async (row) => {
-			const cwd = fs.mkdtempSync(
-				path.join(os.tmpdir(), "pi-lens-cli-verdict-"),
-			);
-			const file = path.join(cwd, "notes.zzz");
-			fs.writeFileSync(file, "plain notes\n");
-			const stub = await startWarmAnalyzeStub(cwd, {
-				filePath: file,
-				cwd,
-				...noFindings,
-				...(row.verdict !== undefined && { verdict: row.verdict }),
-			});
-			try {
-				const { stdout, code } = await runBin([
-					`--file=${file}`,
-					`--cwd=${cwd}`,
-					"--hook",
-				]);
-				expect(code).toBe(0);
-				expect(stub.requests).toHaveLength(1);
-				if (row.expected === undefined) {
-					expect(stdout.trim()).toBe("");
-					return;
-				}
-				const parsed = JSON.parse(stdout) as {
-					hookSpecificOutput?: { additionalContext?: string };
-				};
-				expect(parsed.hookSpecificOutput?.additionalContext).toContain(
-					row.expected,
+		it.each(rows)(
+			"$name",
+			async (row) => {
+				const cwd = fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-cli-verdict-"),
 				);
-			} finally {
-				await stub.close();
-				removeTempDirSync(cwd);
-			}
-		},
-		45_000,
-	);
-});
+				const file = path.join(cwd, "notes.zzz");
+				fs.writeFileSync(file, "plain notes\n");
+				const stub = await startWarmAnalyzeStub(cwd, {
+					filePath: file,
+					cwd,
+					...noFindings,
+					...(row.verdict !== undefined && { verdict: row.verdict }),
+				});
+				try {
+					const { stdout, code } = await runBin([
+						`--file=${file}`,
+						`--cwd=${cwd}`,
+						"--hook",
+					]);
+					expect(code).toBe(0);
+					expect(stub.requests).toHaveLength(1);
+					if (row.expected === undefined) {
+						expect(stdout.trim()).toBe("");
+						return;
+					}
+					const parsed = JSON.parse(stdout) as {
+						hookSpecificOutput?: { additionalContext?: string };
+					};
+					expect(parsed.hookSpecificOutput?.additionalContext).toContain(
+						row.expected,
+					);
+				} finally {
+					await stub.close();
+					removeTempDirSync(cwd);
+				}
+			},
+			45_000,
+		);
+	},
+);
 
 // #4300: invalid input still crosses the real standalone host startup policy.
 // Reuse the bounded bin harness; the preload observes real trust consumers.

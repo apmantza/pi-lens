@@ -40,6 +40,7 @@ import {
 	setupTestEnvironment,
 	tmpRootOfLength,
 } from "../test-utils.js";
+import { ambientSocketNameIsShared } from "../../support/socket-identity.js";
 
 const SENTINEL = {
 	filePath: "/x/app.ts",
@@ -74,6 +75,11 @@ const SHARED_NAME_ROOT = 100;
 // TMPDIR is too long for the root skips the case.
 const lacksRoomFor = (rootBytes: number): boolean =>
 	process.platform === "win32" || minTmpRootLength() > rootBytes;
+// lane: Unit tests (CI's short TMPDIR). A case that needs a live listener at an
+// endpoint under the ambient temp root skips where the cut makes it a shared
+// name, which production neither binds nor dials. The pids below are 5 digits.
+const WORKSPACE_NAME_SHARED = ambientSocketNameIsShared();
+const PID_NAME_SHARED = ambientSocketNameIsShared(99001);
 
 async function withLongSocketTmpdir(
 	rootBytes: number,
@@ -152,47 +158,50 @@ describe("unrunnable invocation status", () => {
 
 describe("requestWarmDiagnostics", () => {
 	// lane: default on Linux and macOS; Windows exercises named pipes.
-	it("round-trips a versioned, content-bound response", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-diag-"));
-		const pid = 99001;
-		activeServer = net.createServer((socket) => {
-			socket.setEncoding("utf8");
-			socket.once("data", (chunk: string) => {
-				const request = JSON.parse(chunk.trim()) as { contentHash: string };
-				socket.end(
-					`${JSON.stringify({
-						result: {
-							route: "diagnostics",
-							version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
-							diagnostics: [],
-							contentHash: request.contentHash,
-							servedAt: Date.now(),
-							fresh: true,
-							inconclusive: false,
-						},
-					})}\n`,
-				);
+	it.skipIf(PID_NAME_SHARED)(
+		"round-trips a versioned, content-bound response",
+		async () => {
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-diag-"));
+			const pid = 99001;
+			activeServer = net.createServer((socket) => {
+				socket.setEncoding("utf8");
+				socket.once("data", (chunk: string) => {
+					const request = JSON.parse(chunk.trim()) as { contentHash: string };
+					socket.end(
+						`${JSON.stringify({
+							result: {
+								route: "diagnostics",
+								version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
+								diagnostics: [],
+								contentHash: request.contentHash,
+								servedAt: Date.now(),
+								fresh: true,
+								inconclusive: false,
+							},
+						})}\n`,
+					);
+				});
 			});
-		});
-		await new Promise<void>((resolve) =>
-			activeServer?.listen(
-				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
-				resolve,
-			),
-		);
-		const result = await requestWarmDiagnostics(
-			cwd,
-			pid,
-			"/x/app.ts",
-			"const x = 1;",
-			1000,
-		);
-		expect(result.available).toBe(true);
-		expect(result.available && result.response.contentHash).toBe(
-			contentHash("const x = 1;"),
-		);
-		removeTempDirSync(cwd);
-	});
+			await new Promise<void>((resolve) =>
+				activeServer?.listen(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+					resolve,
+				),
+			);
+			const result = await requestWarmDiagnostics(
+				cwd,
+				pid,
+				"/x/app.ts",
+				"const x = 1;",
+				1000,
+			);
+			expect(result.available).toBe(true);
+			expect(result.available && result.response.contentHash).toBe(
+				contentHash("const x = 1;"),
+			);
+			removeTempDirSync(cwd);
+		},
+	);
 
 	it.skipIf(lacksRoomFor(SHARED_NAME_ROOT))(
 		"does not dial a pid-scoped name the cut stripped of its pid",
@@ -286,7 +295,9 @@ describe("requestWarmDiagnostics", () => {
 			boundToCurrentDisk: false,
 		},
 	} as const;
-	it.each(Object.keys(READ_AS) as (keyof typeof READ_AS)[])(
+	it
+		.skipIf(PID_NAME_SHARED)
+		.each(Object.keys(READ_AS) as (keyof typeof READ_AS)[])(
 		"parses the %s response and reads its binding (#5030)",
 		async (name) => {
 			const fixture = JSON.parse(
@@ -366,141 +377,157 @@ describe("requestWarmDiagnostics", () => {
 	// answer is not a confirmed clean, #571/#1093). Fail-then-pass: drop the
 	// `result.inconclusive` disqualifier in ipc.ts and this passes an inconclusive
 	// answer through as available.
-	it("rejects an inconclusive answer carried as an enumerable IPC field", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-inconc-"));
-		const pid = 99011;
-		activeServer = net.createServer((socket) => {
-			socket.setEncoding("utf8");
-			socket.once("data", (chunk: string) => {
-				const request = JSON.parse(chunk.trim()) as { contentHash: string };
-				socket.end(
-					`${JSON.stringify({
-						result: {
-							route: "diagnostics",
-							version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
-							diagnostics: [],
-							contentHash: request.contentHash,
-							servedAt: Date.now(),
-							fresh: true,
-							inconclusive: true,
-						},
-					})}\n`,
-				);
+	it.skipIf(PID_NAME_SHARED)(
+		"rejects an inconclusive answer carried as an enumerable IPC field",
+		async () => {
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-inconc-"));
+			const pid = 99011;
+			activeServer = net.createServer((socket) => {
+				socket.setEncoding("utf8");
+				socket.once("data", (chunk: string) => {
+					const request = JSON.parse(chunk.trim()) as { contentHash: string };
+					socket.end(
+						`${JSON.stringify({
+							result: {
+								route: "diagnostics",
+								version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
+								diagnostics: [],
+								contentHash: request.contentHash,
+								servedAt: Date.now(),
+								fresh: true,
+								inconclusive: true,
+							},
+						})}\n`,
+					);
+				});
 			});
-		});
-		await new Promise<void>((resolve) =>
-			activeServer?.listen(
-				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
-				resolve,
-			),
-		);
-		await expect(
-			requestWarmDiagnostics(cwd, pid, "/x/app.ts", "const x = 1;", 1000),
-		).resolves.toEqual({ available: false, reason: "stale-answer" });
-		removeTempDirSync(cwd);
-	});
-
-	it("rejects schema skew and fails open on errors", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-skew-"));
-		const pid = 99002;
-		activeServer = net.createServer((socket) => {
-			socket.once("data", () =>
-				socket.end(
-					`${JSON.stringify({
-						result: {
-							route: "diagnostics",
-							version: WARM_DIAGNOSTICS_SCHEMA_VERSION + 1,
-						},
-					})}\n`,
+			await new Promise<void>((resolve) =>
+				activeServer?.listen(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+					resolve,
 				),
 			);
-		});
-		await new Promise<void>((resolve) =>
-			activeServer?.listen(
-				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
-				resolve,
-			),
-		);
-		await expect(
-			requestWarmDiagnostics(cwd, pid, "/x/app.ts", "x", 1000),
-		).resolves.toEqual({ available: false, reason: "schema-mismatch" });
-		removeTempDirSync(cwd);
-	});
+			await expect(
+				requestWarmDiagnostics(cwd, pid, "/x/app.ts", "const x = 1;", 1000),
+			).resolves.toEqual({ available: false, reason: "stale-answer" });
+			removeTempDirSync(cwd);
+		},
+	);
 
-	it("fails open when the incumbent misses the deadline", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-timeout-"));
-		const pid = 99003;
-		activeServer = net.createServer(() => {
-			// Deliberately leave the request unanswered.
-		});
-		await new Promise<void>((resolve) =>
-			activeServer?.listen(
-				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
-				resolve,
-			),
-		);
-		await expect(
-			requestWarmDiagnostics(cwd, pid, "/x/app.ts", "x", 20),
-		).resolves.toEqual({ available: false, reason: "timeout" });
-		removeTempDirSync(cwd);
-	});
+	it.skipIf(PID_NAME_SHARED)(
+		"rejects schema skew and fails open on errors",
+		async () => {
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-skew-"));
+			const pid = 99002;
+			activeServer = net.createServer((socket) => {
+				socket.once("data", () =>
+					socket.end(
+						`${JSON.stringify({
+							result: {
+								route: "diagnostics",
+								version: WARM_DIAGNOSTICS_SCHEMA_VERSION + 1,
+							},
+						})}\n`,
+					),
+				);
+			});
+			await new Promise<void>((resolve) =>
+				activeServer?.listen(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+					resolve,
+				),
+			);
+			await expect(
+				requestWarmDiagnostics(cwd, pid, "/x/app.ts", "x", 1000),
+			).resolves.toEqual({ available: false, reason: "schema-mismatch" });
+			removeTempDirSync(cwd);
+		},
+	);
+
+	it.skipIf(PID_NAME_SHARED)(
+		"fails open when the incumbent misses the deadline",
+		async () => {
+			const cwd = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-ipc-timeout-"),
+			);
+			const pid = 99003;
+			activeServer = net.createServer(() => {
+				// Deliberately leave the request unanswered.
+			});
+			await new Promise<void>((resolve) =>
+				activeServer?.listen(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+					resolve,
+				),
+			);
+			await expect(
+				requestWarmDiagnostics(cwd, pid, "/x/app.ts", "x", 20),
+			).resolves.toEqual({ available: false, reason: "timeout" });
+			removeTempDirSync(cwd);
+		},
+	);
 });
 
 describe("requestWarmCodeActions", () => {
-	it("round-trips versioned code actions bound to the diagnostics hash", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-actions-"));
-		const pid = 99004;
-		const expectedHash = contentHash("const x = 1;");
-		activeServer = net.createServer((socket) => {
-			socket.setEncoding("utf8");
-			socket.once("data", (chunk: string) => {
-				const request = JSON.parse(chunk.trim()) as {
-					route: string;
-					contentHash: string;
-					ranges: unknown[];
-				};
-				expect(request.route).toBe("code-actions");
-				expect(request.ranges).toHaveLength(1);
-				socket.end(
-					`${JSON.stringify({
-						result: {
-							route: "code-actions",
-							version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
-							contentHash: request.contentHash,
-							servedAt: Date.now(),
-							actions: [[{ title: "Fix it", kind: "quickfix" }]],
-						},
-					})}\n`,
-				);
+	it.skipIf(PID_NAME_SHARED)(
+		"round-trips versioned code actions bound to the diagnostics hash",
+		async () => {
+			const cwd = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-ipc-actions-"),
+			);
+			const pid = 99004;
+			const expectedHash = contentHash("const x = 1;");
+			activeServer = net.createServer((socket) => {
+				socket.setEncoding("utf8");
+				socket.once("data", (chunk: string) => {
+					const request = JSON.parse(chunk.trim()) as {
+						route: string;
+						contentHash: string;
+						ranges: unknown[];
+					};
+					expect(request.route).toBe("code-actions");
+					expect(request.ranges).toHaveLength(1);
+					socket.end(
+						`${JSON.stringify({
+							result: {
+								route: "code-actions",
+								version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
+								contentHash: request.contentHash,
+								servedAt: Date.now(),
+								actions: [[{ title: "Fix it", kind: "quickfix" }]],
+							},
+						})}\n`,
+					);
+				});
 			});
-		});
-		await new Promise<void>((resolve) =>
-			activeServer?.listen(
-				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
-				resolve,
-			),
-		);
-		const result = await requestWarmCodeActions(
-			cwd,
-			pid,
-			"/x/app.ts",
-			expectedHash,
-			[
-				{
-					start: { line: 0, character: 0 },
-					end: { line: 0, character: 1 },
-				},
-			],
-			1000,
-		);
-		expect(result.available).toBe(true);
-		expect(result.available && result.response.actions[0]?.[0]?.title).toBe(
-			"Fix it",
-		);
-		removeTempDirSync(cwd);
-	});
+			await new Promise<void>((resolve) =>
+				activeServer?.listen(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+					resolve,
+				),
+			);
+			const result = await requestWarmCodeActions(
+				cwd,
+				pid,
+				"/x/app.ts",
+				expectedHash,
+				[
+					{
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+				],
+				1000,
+			);
+			expect(result.available).toBe(true);
+			expect(result.available && result.response.actions[0]?.[0]?.title).toBe(
+				"Fix it",
+			);
+			removeTempDirSync(cwd);
+		},
+	);
 
-	it("rejects code-action schema skew", async () => {
+	it.skipIf(PID_NAME_SHARED)("rejects code-action schema skew", async () => {
 		const cwd = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-ipc-actions-skew-"),
 		);
@@ -678,18 +705,16 @@ describe("pid-scoped endpoint survives the sun_path cut (#4376 review r1, F1)", 
 	});
 });
 
-describe.skipIf(process.platform === "win32")(
+// lane: Unit tests (CI's short TMPDIR); a TMPDIR too long for a 100-byte root
+// would put the cut in the directory, so the case skips there.
+describe.skipIf(lacksRoomFor(100))(
 	"unlinkStaleUnixSocket (#4376 review r1, F2)",
 	() => {
 		// Recurrence prevented: the stale unlink deleted whatever file the
-		// truncated path named, a user's regular file included.
+		// truncated path named, a user's regular file included. A 100-byte
+		// root puts the cut inside the file name whatever the host's TMPDIR.
 		const make = (): { root: string; endpoint: string; bound: string } => {
-			const { tmpDir } = setupTestEnvironment("pi-lens-ss-");
-			const root =
-				tmpDir.length >= 100
-					? tmpDir
-					: path.join(tmpDir, "p".repeat(100 - tmpDir.length - 1));
-			fs.mkdirSync(root, { recursive: true });
+			const root = tmpRootOfLength(100);
 			const endpoint = path.join(root, "pi-lens-mcp-0123456789abcdef.sock");
 			return { root, endpoint, bound: boundUnixSocketPath(endpoint) };
 		};
@@ -785,35 +810,38 @@ function caseVariantSibling(dir: string, prefix: string): string {
 describe.skipIf(!TMPDIR_IS_CASE_SENSITIVE)(
 	"case-distinct workspaces on a case-sensitive host (#3255)",
 	() => {
-		it("does not serve one workspace's warm analysis to its case-variant sibling", async () => {
-			const served = fs.mkdtempSync(
-				path.join(os.tmpdir(), "pi-lens-ipc-Leak-"),
-			);
-			const sibling = caseVariantSibling(served, "pi-lens-ipc-Leak-");
-			try {
-				await listenOnWorkspaceEndpoint(served, (socket) => {
-					socket.setEncoding("utf8");
-					socket.once("data", () =>
-						socket.end(`${JSON.stringify({ result: SENTINEL })}\n`),
-					);
-				});
+		it.skipIf(WORKSPACE_NAME_SHARED)(
+			"does not serve one workspace's warm analysis to its case-variant sibling",
+			async () => {
+				const served = fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-ipc-Leak-"),
+				);
+				const sibling = caseVariantSibling(served, "pi-lens-ipc-Leak-");
+				try {
+					await listenOnWorkspaceEndpoint(served, (socket) => {
+						socket.setEncoding("utf8");
+						socket.once("data", () =>
+							socket.end(`${JSON.stringify({ result: SENTINEL })}\n`),
+						);
+					});
 
-				// Control: the stub really is reachable from the workspace it serves.
-				await expect(
-					requestWarmAnalyze(served, "/x/app.ts", 2000),
-				).resolves.toEqual(SENTINEL);
+					// Control: the stub really is reachable from the workspace it serves.
+					await expect(
+						requestWarmAnalyze(served, "/x/app.ts", 2000),
+					).resolves.toEqual(SENTINEL);
 
-				// The defect: the sibling workspace must NOT reach that server. Cold
-				// fallback (`undefined`) is the correct answer for a workspace with no
-				// warm server of its own.
-				await expect(
-					requestWarmAnalyze(sibling, "/x/app.ts", 2000),
-				).resolves.toBeUndefined();
-			} finally {
-				removeTempDirSync(sibling);
-				removeTempDirSync(served);
-			}
-		});
+					// The defect: the sibling workspace must NOT reach that server. Cold
+					// fallback (`undefined`) is the correct answer for a workspace with no
+					// warm server of its own.
+					await expect(
+						requestWarmAnalyze(sibling, "/x/app.ts", 2000),
+					).resolves.toBeUndefined();
+				} finally {
+					removeTempDirSync(sibling);
+					removeTempDirSync(served);
+				}
+			},
+		);
 
 		it("does not merge two case-variant workspaces into one turn-end status file", () => {
 			const recorded = fs.mkdtempSync(
@@ -1022,39 +1050,42 @@ describe("workspace id property (#4928)", () => {
 
 describe("requestWarmAnalyze", () => {
 	// lane: default on Linux and macOS; Windows exercises named pipes.
-	it("round-trips the request and returns the server's result", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-"));
-		const endpoint = ipcPathForCwd(cwd);
-		if (process.platform !== "win32") {
-			try {
-				fs.unlinkSync(endpoint);
-			} catch {
-				/* none */
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"round-trips the request and returns the server's result",
+		async () => {
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-"));
+			const endpoint = ipcPathForCwd(cwd);
+			if (process.platform !== "win32") {
+				try {
+					fs.unlinkSync(endpoint);
+				} catch {
+					/* none */
+				}
 			}
-		}
 
-		let received: unknown;
-		activeServer = net.createServer((socket) => {
-			socket.setEncoding("utf8");
-			let buffer = "";
-			socket.on("data", (chunk: string) => {
-				buffer += chunk;
-				const nl = buffer.indexOf("\n");
-				if (nl === -1) return;
-				received = JSON.parse(buffer.slice(0, nl));
-				socket.end(`${JSON.stringify({ result: SENTINEL })}\n`);
+			let received: unknown;
+			activeServer = net.createServer((socket) => {
+				socket.setEncoding("utf8");
+				let buffer = "";
+				socket.on("data", (chunk: string) => {
+					buffer += chunk;
+					const nl = buffer.indexOf("\n");
+					if (nl === -1) return;
+					received = JSON.parse(buffer.slice(0, nl));
+					socket.end(`${JSON.stringify({ result: SENTINEL })}\n`);
+				});
 			});
-		});
-		await new Promise<void>((resolve) =>
-			activeServer?.listen(boundUnixSocketPath(endpoint), resolve),
-		);
+			await new Promise<void>((resolve) =>
+				activeServer?.listen(boundUnixSocketPath(endpoint), resolve),
+			);
 
-		const result = await requestWarmAnalyze(cwd, "/x/app.ts");
-		expect(result).toEqual(SENTINEL);
-		expect(received).toEqual({ file: "/x/app.ts", cwd });
+			const result = await requestWarmAnalyze(cwd, "/x/app.ts");
+			expect(result).toEqual(SENTINEL);
+			expect(received).toEqual({ file: "/x/app.ts", cwd });
 
-		removeTempDirSync(cwd);
-	});
+			removeTempDirSync(cwd);
+		},
+	);
 
 	it.skipIf(lacksRoomFor(SHARED_NAME_ROOT))(
 		"does not dial a workspace name the cut stripped of its hash",
@@ -1112,29 +1143,32 @@ describe("requestWarmAnalyze", () => {
 		removeTempDirSync(cwd);
 	});
 
-	it("resolves undefined when the server returns an error", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-err-"));
-		const endpoint = ipcPathForCwd(cwd);
-		if (process.platform !== "win32") {
-			try {
-				fs.unlinkSync(endpoint);
-			} catch {
-				/* none */
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"resolves undefined when the server returns an error",
+		async () => {
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-err-"));
+			const endpoint = ipcPathForCwd(cwd);
+			if (process.platform !== "win32") {
+				try {
+					fs.unlinkSync(endpoint);
+				} catch {
+					/* none */
+				}
 			}
-		}
-		activeServer = net.createServer((socket) => {
-			socket.on("data", () =>
-				socket.end(`${JSON.stringify({ error: "boom" })}\n`),
+			activeServer = net.createServer((socket) => {
+				socket.on("data", () =>
+					socket.end(`${JSON.stringify({ error: "boom" })}\n`),
+				);
+			});
+			await new Promise<void>((resolve) =>
+				activeServer?.listen(boundUnixSocketPath(endpoint), resolve),
 			);
-		});
-		await new Promise<void>((resolve) =>
-			activeServer?.listen(boundUnixSocketPath(endpoint), resolve),
-		);
 
-		const result = await requestWarmAnalyze(cwd, "/x/app.ts");
-		expect(result).toBeUndefined();
-		removeTempDirSync(cwd);
-	});
+			const result = await requestWarmAnalyze(cwd, "/x/app.ts");
+			expect(result).toBeUndefined();
+			removeTempDirSync(cwd);
+		},
+	);
 });
 
 function listenOnWorkspaceEndpoint(
@@ -1158,88 +1192,94 @@ function listenOnWorkspaceEndpoint(
 }
 
 describe("requestWarmTurnEnd", () => {
-	it("round-trips a versioned turn-end response over the workspace endpoint", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-turn-"));
-		let received: unknown;
-		let connections = 0;
-		await listenOnWorkspaceEndpoint(cwd, (socket) => {
-			connections++;
-			socket.setEncoding("utf8");
-			socket.once("data", (chunk: string) => {
-				const request = JSON.parse(chunk.trim()) as { route?: string };
-				if (connections === 1) {
-					received = request;
-					socket.end(
-						`${JSON.stringify({
-							result: {
-								route: "turn-end",
-								version: WARM_TURN_END_SCHEMA_VERSION,
-								turnEnd: "TURN ADVISORY",
-								tests: "TESTS FAILED",
-								deliveryId: "delivery-1",
-							},
-						})}\n`,
-					);
-				} else {
-					expect(request).toMatchObject({
-						route: "turn-end-ack",
-						deliveryId: "delivery-1",
-					});
-					socket.end(
-						`${JSON.stringify({
-							result: {
-								route: "turn-end-ack",
-								version: WARM_TURN_END_SCHEMA_VERSION,
-								acknowledged: true,
-							},
-						})}\n`,
-					);
-				}
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"round-trips a versioned turn-end response over the workspace endpoint",
+		async () => {
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-turn-"));
+			let received: unknown;
+			let connections = 0;
+			await listenOnWorkspaceEndpoint(cwd, (socket) => {
+				connections++;
+				socket.setEncoding("utf8");
+				socket.once("data", (chunk: string) => {
+					const request = JSON.parse(chunk.trim()) as { route?: string };
+					if (connections === 1) {
+						received = request;
+						socket.end(
+							`${JSON.stringify({
+								result: {
+									route: "turn-end",
+									version: WARM_TURN_END_SCHEMA_VERSION,
+									turnEnd: "TURN ADVISORY",
+									tests: "TESTS FAILED",
+									deliveryId: "delivery-1",
+								},
+							})}\n`,
+						);
+					} else {
+						expect(request).toMatchObject({
+							route: "turn-end-ack",
+							deliveryId: "delivery-1",
+						});
+						socket.end(
+							`${JSON.stringify({
+								result: {
+									route: "turn-end-ack",
+									version: WARM_TURN_END_SCHEMA_VERSION,
+									acknowledged: true,
+								},
+							})}\n`,
+						);
+					}
+				});
 			});
-		});
 
-		const result = await requestWarmTurnEnd(cwd, 2000);
-		expect(result.available).toBe(true);
-		expect(result.available && result.response.turnEnd).toBe("TURN ADVISORY");
-		expect(received).toEqual({
-			route: "turn-end",
-			version: WARM_TURN_END_SCHEMA_VERSION,
-			cwd,
-		});
-		removeTempDirSync(cwd);
-	});
-
-	it("does not report delivery success when the receipt acknowledgement times out (#1218)", async () => {
-		const cwd = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-ipc-turn-ack-timeout-"),
-		);
-		let connections = 0;
-		await listenOnWorkspaceEndpoint(cwd, (socket) => {
-			connections++;
-			socket.setEncoding("utf8");
-			socket.once("data", () => {
-				if (connections === 1) {
-					socket.end(
-						`${JSON.stringify({
-							result: {
-								route: "turn-end",
-								version: WARM_TURN_END_SCHEMA_VERSION,
-								turnEnd: "DURABLE FINDING",
-								deliveryId: "delivery-timeout",
-							},
-						})}\n`,
-					);
-				}
-				// Never answer the acknowledgement connection: the client deadline
-				// must report timeout while the server retains its delivery.
+			const result = await requestWarmTurnEnd(cwd, 2000);
+			expect(result.available).toBe(true);
+			expect(result.available && result.response.turnEnd).toBe("TURN ADVISORY");
+			expect(received).toEqual({
+				route: "turn-end",
+				version: WARM_TURN_END_SCHEMA_VERSION,
+				cwd,
 			});
-		});
-		await expect(requestWarmTurnEnd(cwd, 20)).resolves.toEqual({
-			available: false,
-			reason: "timeout",
-		});
-		removeTempDirSync(cwd);
-	});
+			removeTempDirSync(cwd);
+		},
+	);
+
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"does not report delivery success when the receipt acknowledgement times out (#1218)",
+		async () => {
+			const cwd = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-ipc-turn-ack-timeout-"),
+			);
+			let connections = 0;
+			await listenOnWorkspaceEndpoint(cwd, (socket) => {
+				connections++;
+				socket.setEncoding("utf8");
+				socket.once("data", () => {
+					if (connections === 1) {
+						socket.end(
+							`${JSON.stringify({
+								result: {
+									route: "turn-end",
+									version: WARM_TURN_END_SCHEMA_VERSION,
+									turnEnd: "DURABLE FINDING",
+									deliveryId: "delivery-timeout",
+								},
+							})}\n`,
+						);
+					}
+					// Never answer the acknowledgement connection: the client deadline
+					// must report timeout while the server retains its delivery.
+				});
+			});
+			await expect(requestWarmTurnEnd(cwd, 20)).resolves.toEqual({
+				available: false,
+				reason: "timeout",
+			});
+			removeTempDirSync(cwd);
+		},
+	);
 
 	it.skipIf(lacksRoomFor(SHARED_NAME_ROOT))(
 		"does not dial a workspace name the cut stripped of its hash",
@@ -1277,21 +1317,26 @@ describe("requestWarmTurnEnd", () => {
 	// Old server + new client: the tagged request is blind-cast to an analyze
 	// request, `analyzeFile(undefined, …)` throws, and the reply is `{error}`.
 	// The bin must read that as "no usable warm server", not as a clean turn.
-	it("degrades to ipc-error against a server that predates the route", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-turn-old-"));
-		await listenOnWorkspaceEndpoint(cwd, (socket) => {
-			socket.on("data", () =>
-				socket.end(`${JSON.stringify({ error: "boom" })}\n`),
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"degrades to ipc-error against a server that predates the route",
+		async () => {
+			const cwd = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-ipc-turn-old-"),
 			);
-		});
-		await expect(requestWarmTurnEnd(cwd, 2000)).resolves.toEqual({
-			available: false,
-			reason: "ipc-error",
-		});
-		removeTempDirSync(cwd);
-	});
+			await listenOnWorkspaceEndpoint(cwd, (socket) => {
+				socket.on("data", () =>
+					socket.end(`${JSON.stringify({ error: "boom" })}\n`),
+				);
+			});
+			await expect(requestWarmTurnEnd(cwd, 2000)).resolves.toEqual({
+				available: false,
+				reason: "ipc-error",
+			});
+			removeTempDirSync(cwd);
+		},
+	);
 
-	it("rejects turn-end schema skew", async () => {
+	it.skipIf(WORKSPACE_NAME_SHARED)("rejects turn-end schema skew", async () => {
 		const cwd = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-ipc-turn-skew-"),
 		);
@@ -1445,73 +1490,81 @@ function legacyWorkspaceId(cwd: string): string {
 }
 
 describe("upgrade transition after the case-fold narrowing (#3255)", () => {
-	it("does not reach a pre-upgrade server still listening on the legacy endpoint", async () => {
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-Stranded-"));
-		const legacySocket = path.join(
-			os.tmpdir(),
-			`pi-lens-mcp-${legacyWorkspaceId(cwd)}.sock`,
-		);
-		if (process.platform !== "win32") {
-			try {
-				fs.unlinkSync(legacySocket);
-			} catch {
-				/* none */
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"does not reach a pre-upgrade server still listening on the legacy endpoint",
+		async () => {
+			const cwd = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-ipc-Stranded-"),
+			);
+			const legacySocket = path.join(
+				os.tmpdir(),
+				`pi-lens-mcp-${legacyWorkspaceId(cwd)}.sock`,
+			);
+			if (process.platform !== "win32") {
+				try {
+					fs.unlinkSync(legacySocket);
+				} catch {
+					/* none */
+				}
 			}
-		}
-		let dialed = 0;
-		activeServer = net.createServer((socket) => {
-			dialed++;
-			socket.setEncoding("utf8");
-			socket.once("data", () =>
-				socket.end(
-					`${JSON.stringify({
-						result: {
-							route: "turn-end",
-							version: WARM_TURN_END_SCHEMA_VERSION,
-							turnEnd: "STALE SERVER ANSWER",
-							deliveryId: "d1",
-						},
-					})}\n`,
-				),
-			);
-		});
-		try {
-			await new Promise<void>((resolve) =>
-				activeServer?.listen(boundUnixSocketPath(legacySocket), resolve),
-			);
-			// The new hook must NOT be served by the old server (its answer is for
-			// whatever workspace the folded id named), and the miss must carry the
-			// discriminating reason rather than the generic transport error.
-			await expect(requestWarmTurnEnd(cwd, 2000)).resolves.toEqual({
-				available: false,
-				reason: "no-listener",
+			let dialed = 0;
+			activeServer = net.createServer((socket) => {
+				dialed++;
+				socket.setEncoding("utf8");
+				socket.once("data", () =>
+					socket.end(
+						`${JSON.stringify({
+							result: {
+								route: "turn-end",
+								version: WARM_TURN_END_SCHEMA_VERSION,
+								turnEnd: "STALE SERVER ANSWER",
+								deliveryId: "d1",
+							},
+						})}\n`,
+					),
+				);
 			});
-			expect(dialed).toBe(0);
-		} finally {
-			removeTempDirSync(cwd);
-		}
-	});
+			try {
+				await new Promise<void>((resolve) =>
+					activeServer?.listen(boundUnixSocketPath(legacySocket), resolve),
+				);
+				// The new hook must NOT be served by the old server (its answer is for
+				// whatever workspace the folded id named), and the miss must carry the
+				// discriminating reason rather than the generic transport error.
+				await expect(requestWarmTurnEnd(cwd, 2000)).resolves.toEqual({
+					available: false,
+					reason: "no-listener",
+				});
+				expect(dialed).toBe(0);
+			} finally {
+				removeTempDirSync(cwd);
+			}
+		},
+	);
 
-	it("keeps ipc-error when the connection opened and then failed", async () => {
-		// The other direction of the same classifier. A server that ACCEPTS and
-		// then drops the connection is present and broken, not absent — telling
-		// its user to start a server, or blaming an upgrade, is wrong advice.
-		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-Reset-"));
-		await listenOnWorkspaceEndpoint(cwd, (socket) => {
-			socket.on("error", () => {
-				/* the peer reset is the point */
+	it.skipIf(WORKSPACE_NAME_SHARED)(
+		"keeps ipc-error when the connection opened and then failed",
+		async () => {
+			// The other direction of the same classifier. A server that ACCEPTS and
+			// then drops the connection is present and broken, not absent — telling
+			// its user to start a server, or blaming an upgrade, is wrong advice.
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-Reset-"));
+			await listenOnWorkspaceEndpoint(cwd, (socket) => {
+				socket.on("error", () => {
+					/* the peer reset is the point */
+				});
+				socket.destroy(new Error("incumbent crashed mid-reply"));
 			});
-			socket.destroy(new Error("incumbent crashed mid-reply"));
-		});
-		try {
-			await expect(requestWarmTurnEnd(cwd, 2000)).resolves.toEqual({
-				available: false,
-				reason: "ipc-error",
-			});
-		} finally {
-			removeTempDirSync(cwd);
-		}
-	});
+			try {
+				await expect(requestWarmTurnEnd(cwd, 2000)).resolves.toEqual({
+					available: false,
+					reason: "ipc-error",
+				});
+			} finally {
+				removeTempDirSync(cwd);
+			}
+		},
+	);
 
 	// #3255 round 3 (H2): the two status-file cases are about CROSS-WORKSPACE
 	// isolation, and both drive the platform through the same injected argument
