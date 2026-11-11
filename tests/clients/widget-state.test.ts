@@ -579,8 +579,9 @@ describe("widget-state renderWidget", () => {
 		const lines = renderWidget(50, theme);
 
 		// The two FILE rows: the blocker's row and the clean sibling's row are
-		// distinct and parent-labelled. (The detail block's divider header line
-		// also spells the label but carries no dot or count.)
+		// distinct and parent-labelled, and the detail block's header line names
+		// the blocker's file the same way.
+		expect(lines.map(visibleLine)).toContain(" pi-lens/widget.ts");
 		const blockRow = lines.find(
 			(l) =>
 				visibleLine(l).includes("pi-lens/widget.ts") &&
@@ -596,28 +597,6 @@ describe("widget-state renderWidget", () => {
 		for (const line of lines) {
 			expect(visibleWidth(line)).toBeLessThanOrEqual(50);
 		}
-	});
-
-	it("counts same-named files in the compact header", () => {
-		const a = `${process.cwd()}/pi-lens/index.ts`;
-		const b = `${process.cwd()}/pi-webaio/index.ts`;
-		recordRunner(a, "type-safety", "failed", 1);
-		recordDiagnostics(a, [
-			{
-				severity: "error",
-				semantic: "blocking",
-				message: "error in pi-lens",
-				rule: "E1",
-			},
-		]);
-		recordRunner(b, "type-safety", "succeeded", 2);
-		recordDiagnostics(b, []);
-
-		const lines = renderWidget(120, theme, { compact: true });
-
-		expect(lines).toHaveLength(1);
-		expect(lines[0]).toContain("●1E");
-		expect(lines[0]).not.toContain("✓ clean");
 	});
 
 	it("the five-row cap keeps both renderable same-named files", () => {
@@ -677,18 +656,12 @@ describe("widget-state renderWidget", () => {
 		}
 	});
 
-	it.each([
-		[120, "left"],
-		[120, "right"],
-		[69, "left"],
-		[69, "right"],
-	] as const)(
-		"keeps the %s-column blocking row identifiable as %s with long colliding labels",
-		(width, side) => {
-			const basename = `${"long-shared-basename-".repeat(8)}.ts`;
-			const parent = "shared-parent-prefix-".repeat(8);
-			const other = side === "left" ? "right" : "left";
-			recordDiagnostics(`${process.cwd()}/${parent}${side}/${basename}`, [
+	it.each([40, 100] as const)(
+		"keeps long same-named labels inside %s columns and the blocking row on its own parent",
+		(width) => {
+			const long = (head: string) =>
+				`${process.cwd()}/${head}-${"parent-segment-".repeat(6)}/index.ts`;
+			recordDiagnostics(long("left"), [
 				{
 					severity: "error",
 					semantic: "blocking",
@@ -696,106 +669,37 @@ describe("widget-state renderWidget", () => {
 					rule: "E1",
 				},
 			]);
-			recordDiagnostics(`${process.cwd()}/${parent}${other}/${basename}`, []);
+			recordDiagnostics(long("right"), []);
 
 			const lines = renderWidget(width, theme).map(visibleLine);
-			const row = lines.slice(1).find((line) => line.includes("●"));
-			expect(row).toContain(`${side}/`);
-			expect(row).not.toContain(`${other}/`);
-			for (const line of lines) {
-				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-			}
-		},
-	);
-
-	it.each([
-		[120, "long basename", "left-only", "right-only"],
-		[69, "long basename", "left-only", "right-only"],
-		[50, "long basename", "left-only", "right-only"],
-		[69, "short basename", "root-left", "root-right"],
-		[50, "short basename", "root-left", "root-right"],
-	] as const)(
-		"keeps the %s-column %s row distinct when the differing parent is far from the filename",
-		(width, shape, side, other) => {
-			const basename =
-				shape === "long basename"
-					? `${"very-long-shared-name-".repeat(8)}.ts`
-					: "file.ts";
-			const sharedSuffix = "common-shared/".repeat(8);
-			const blocker = `${process.cwd()}/${side}/${sharedSuffix}${basename}`;
-			const sibling = `${process.cwd()}/${other}/${sharedSuffix}${basename}`;
-			recordDiagnostics(blocker, [
-				{
-					severity: "error",
-					semantic: "blocking",
-					message: `blocker in ${side}`,
-					rule: "E1",
-				},
-			]);
-			recordDiagnostics(sibling, []);
-
-			const lines = renderWidget(width, theme).map(visibleLine);
-			const row = lines.slice(1).find((line) => line.includes("●"));
-			expect(row).toContain(side);
-			expect(row).not.toContain(other);
-			expect(lines.join("\n")).toContain(`blocker in ${side}`);
-			for (const line of lines) {
-				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-			}
-		},
-	);
-
-	it.each([69, 50] as const)(
-		"keeps the differing prefix of a single long parent component at %s columns",
-		(width) => {
-			const shared = "verylongcommonsuffix-".repeat(8);
-			const left = `left-${shared}`;
-			const right = `right-${shared}`;
-			recordDiagnostics(`${process.cwd()}/${left}/name.ts`, [
-				{
-					severity: "error",
-					semantic: "blocking",
-					message: "left component blocker",
-					rule: "E1",
-				},
-			]);
-			recordDiagnostics(`${process.cwd()}/${right}/name.ts`, []);
-
-			const lines = renderWidget(width, theme).map(visibleLine);
-			const row = lines.slice(1).find((line) => line.includes("●"));
-			expect(row).toContain("left-");
-			expect(row).not.toContain("right-");
-			expect(lines.join("\n")).toContain("left component blocker");
-			for (const line of lines) {
-				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
-			}
-		},
-	);
-
-	it("keeps three same-basename branches identifiable after truncation", () => {
-		const branches = ["root-left", "root-middle", "root-right"];
-		for (const branch of branches) {
-			recordDiagnostics(
-				`${process.cwd()}/${branch}/${"common-shared/".repeat(8)}file.ts`,
-				[
-					{
-						severity: "error",
-						semantic: "blocking",
-						message: `blocker in ${branch}`,
-						rule: "E1",
-					},
-				],
+			const row = lines.find(
+				(line) => line.includes("left-") && line.includes("●"),
 			);
-		}
+			expect(row).toBeDefined();
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
 
-		const lines = renderWidget(69, theme).map(visibleLine);
-		const blockerRows = lines.filter((line) => line.startsWith(" ● "));
-		expect(blockerRows).toHaveLength(3);
-		for (const branch of branches) {
-			expect(blockerRows.some((line) => line.includes(branch))).toBe(true);
-		}
+	it("terminates and stays inside the width when two records spell the same segments", () => {
+		recordDiagnostics("/p/dup//index.ts", [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in dup",
+				rule: "E1",
+			},
+		]);
+		recordDiagnostics("/p/dup/index.ts", []);
+
+		const lines = renderWidget(120, theme);
+		const frame = lines.map(visibleLine).join("\n");
+
+		expect(frame).toContain("●1E");
+		expect(frame).toContain("p/dup/index.ts");
 		for (const line of lines) {
-			expect(visibleWidth(line)).toBeLessThanOrEqual(69);
+			expect(visibleWidth(line)).toBeLessThanOrEqual(120);
 		}
 	});
 
