@@ -1265,6 +1265,31 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			managedToolId: "prettier",
 		},
 	],
+	// The formatter binaries (#5410): the formatters resolve these through the
+	// same ladder as the runners, so one version-checked answer per cwd serves
+	// both. Each id is also its installer entry and its binary name.
+	...(
+		[
+			["shfmt", ".exe"],
+			["typstyle", ".exe"],
+			["ktfmt"],
+			["black", ".exe"],
+			["google-java-format"],
+			["cljfmt", ".exe"],
+			["cmake-format", ".exe"],
+			["stylua", ".cmd"],
+			["oxfmt", ".cmd"],
+			["php-cs-fixer", ".bat"],
+		] as ReadonlyArray<readonly [string, string?]>
+	).map(([id, windowsExt]): [string, ToolCommandSpec] => [
+		id,
+		{
+			command: id,
+			...(windowsExt !== undefined && { windowsExt }),
+			versionArgs: ["--version"],
+			managedToolId: id,
+		},
+	]),
 ]);
 
 const STYLELINT_CONFIGS = [

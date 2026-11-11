@@ -535,9 +535,9 @@ export function resolveAdoptedRootCommand(
  * a literal filename that ENOENTs on every platform (#1508).
  *
  * The venv directory list is `VENV_BIN_DIRS` (`package-manager.ts`), shared
- * with `formatters.ts`'s `findInVenv` and `dead-code-client.ts`'s vulture
- * candidates — three independent spellings of the same four directories before
- * #2544 review F1.
+ * with `dead-code-client.ts`'s vulture candidates and, through
+ * `resolveInstalledToolCommand`, every formatter — three independent spellings
+ * of the same four directories before #2544 review F1.
  *
  * Resolution is a fixed lookup at `cwd` ONLY (`findLocalBinAt`, no ancestor
  * walk). #2544 review round 3 folded this onto the shared ANCESTOR walker,
@@ -1817,6 +1817,21 @@ export async function resolveToolCommandWithInstallFallback(
 		getToolCommandSpec(toolId)?.managedToolId ?? toolId,
 		cwd,
 	);
+}
+
+/**
+ * The same ladder and the same latch without the install (#5410): the binary
+ * the tool resolves to here, or `null`. A formatter calls this where its own
+ * install opt-in (`AUTO_INSTALLABLE_DEFAULT_FORMATTERS`) stays a separate
+ * decision; the runners keep `resolveToolCommandWithInstallFallback`.
+ */
+export async function resolveInstalledToolCommand(
+	cwd: string,
+	toolId: string,
+): Promise<string | null> {
+	const checker = toolBinaryChecker(toolId);
+	if (!checker || !(await checker.isAvailableAsync(cwd))) return null;
+	return checker.getCommand(cwd);
 }
 
 async function verifyOrInstallCommand(
