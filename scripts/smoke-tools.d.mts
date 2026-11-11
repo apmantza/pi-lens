@@ -468,6 +468,8 @@ export interface ResolutionCase {
 	tool: string;
 	bin: string;
 	file?: string;
+	/** A file at the root that makes it the formatter's project root. */
+	marker?: string;
 }
 /** The production modules the resolution layer drives (dist in the nightly). */
 export interface ResolutionDeps {
