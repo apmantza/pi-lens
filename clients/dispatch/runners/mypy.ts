@@ -1,9 +1,9 @@
 import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
-import { hasMypyConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -78,7 +78,7 @@ const mypyRunner: RunnerDefinition = {
 	appliesTo: ["python"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
-	requiresConfig: (cwd) => hasMypyConfig(cwd),
+	requiresConfig: (cwd) => hasToolConfig("mypy", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "mypy");

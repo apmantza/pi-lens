@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RunnerGroup } from "../../../../clients/dispatch/types.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
@@ -34,15 +35,12 @@ vi.mock(
 	}),
 );
 
-// hasEslintConfig walks the real filesystem for config files; the tests plant
-// their own workspaces without one. Force the gate open — config discovery is
-// not what this suite tests.
-vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
-	...(await importOriginal<Record<string, unknown>>()),
-	hasEslintConfig: vi.fn(() => true),
-}));
+// The eslint gate asks `tool-config-presence.ts`, which reads the real filesystem;
+// these tests plant their own workspaces, so each plants the eslint config the
+// gate needs. Config discovery is not what this suite tests.
 
 function createCtx(filePath: string, cwd: string) {
+	plantGateConfig("eslint", cwd);
 	return makeRunnerCtx(filePath, cwd);
 }
 

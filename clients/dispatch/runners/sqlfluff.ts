@@ -1,10 +1,11 @@
 import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
-import { getLinterPolicyForCwd, hasSqlfluffConfig } from "../../tool-policy.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -27,8 +28,6 @@ import { finishParsedRun } from "./utils/tool-failure.js";
 // dialect prints the error there), so stdout is non-empty and the fallback
 // rule would read the failed run as a run that found nothing.
 const SQLFLUFF_EXIT_CODES: ToolExitCodes = { ran: [1] };
-
-export { hasSqlfluffConfig };
 
 type SqlfluffJson = Array<{
 	filepath?: string;
@@ -160,7 +159,7 @@ const sqlfluffRunner: RunnerDefinition = {
 		if (policy && !policy.preferredRunners.includes("sqlfluff")) {
 			return skipped("not-preferred");
 		}
-		const hasConfig = hasSqlfluffConfig(cwd);
+		const hasConfig = hasToolConfig("sqlfluff", cwd);
 		if (!hasConfig) {
 			logRunnerAdvisoryOnce(
 				ctx,

@@ -878,8 +878,8 @@ describe("runner-helpers availability checker", () => {
 			// This fixture plants BOTH venv layouts, which no real virtualenv
 			// does, so it also pins the candidate ORDER. Since #2544 review F1
 			// folded `createVenvFinder` onto the shared walker, that order is
-			// EXT-OUTER / DIR-INNER — the same order `formatters.ts`'s
-			// `findInVenv` always used, and the right one on Windows, where the
+			// EXT-OUTER / DIR-INNER — the order the formatters' venv walk used
+			// before #5410, and the right one on Windows, where the
 			// `Scripts/*.exe` is the binary `shell: false` can actually spawn and
 			// `bin/ruff` would be an unrunnable shell script. The two resolvers
 			// used to disagree here; now they cannot.

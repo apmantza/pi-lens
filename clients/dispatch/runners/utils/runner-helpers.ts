@@ -145,7 +145,9 @@ export function toolAbsentSkip(
 ): RunnerResult {
 	const checker =
 		tool.checker ??
-		(tool.id ? (toolBinaryChecker(tool.id) ?? undefined) : undefined);
+		(tool.id
+			? (toolBinaryChecker(tool.id, "managed-first") ?? undefined)
+			: undefined);
 	const verdict = checker?.getVerdict(cwd);
 	if (verdict?.outcome === "transient" || verdict?.cause === "bad-cwd")
 		return skipped("probe-incomplete");
@@ -611,9 +613,9 @@ export function resolveAdoptedRootCommand(
  * a literal filename that ENOENTs on every platform (#1508).
  *
  * The venv directory list is `VENV_BIN_DIRS` (`package-manager.ts`), shared
- * with `formatters.ts`'s `findInVenv` and `dead-code-client.ts`'s vulture
- * candidates — three independent spellings of the same four directories before
- * #2544 review F1.
+ * with `dead-code-client.ts`'s vulture candidates and, through
+ * `resolveInstalledToolCommand`, every formatter — three independent spellings
+ * of the same four directories before #2544 review F1.
  *
  * Resolution is a fixed lookup at `cwd` ONLY (`findLocalBinAt`, no ancestor
  * walk). #2544 review round 3 folded this onto the shared ANCESTOR walker,
@@ -654,28 +656,41 @@ export function createVenvFinder(
 			if (venvBin) return { path: venvBin, rung: "venv" };
 		}
 
-		// Managed-dir install (~/.pi-lens/tools/node_modules/.bin/<command>) — the
-		// same shim `ensureTool()` installs npm-strategy tools into. Checked BEFORE
-		// the bare-name PATH fallback (#1638): without this, a tool that only
-		// exists in the managed dir never resolves here, so `resolveAvailableOrInstall`
-		// clears the checker's cache on every install recovery for nothing — the
-		// very next probe misses PATH again, spawns a doomed `--version` process,
-		// and only THEN falls through to `ensureTool`'s own cache. One managed-dir
-		// check settles it without a spawn — after one verification per shim per
-		// session, so a shim that cannot run falls through to PATH instead of
-		// shadowing a working binary (#1657).
-		const managed = await findManagedNodeToolBinary(command, verificationArgs);
-		if (managed) return { path: managed, rung: "managed-dir" };
-
-		// Release-managed install (`~/.pi-lens/bin/<command>`) — where `ensureTool`
-		// puts every github/maven/archive-strategy tool. Same rung, same reason as
-		// the npm shim above, for the other half of the managed families (#2140).
-		const release = await findManagedReleaseBinary(command, verificationArgs);
-		if (release) return { path: release, rung: "managed-release" };
+		const managed = await findManagedRung(command, verificationArgs);
+		if (managed) return managed;
 
 		// Fall back to global
 		return { path: command, rung: "path" };
 	};
+}
+
+/**
+ * The managed rungs of the ladder: the npm shim, then the release binary.
+ *
+ * Managed-dir install (~/.pi-lens/tools/node_modules/.bin/<command>) — the
+ * same shim `ensureTool()` installs npm-strategy tools into. Checked BEFORE
+ * the bare-name PATH fallback (#1638): without this, a tool that only
+ * exists in the managed dir never resolves here, so `resolveAvailableOrInstall`
+ * clears the checker's cache on every install recovery for nothing — the
+ * very next probe misses PATH again, spawns a doomed `--version` process,
+ * and only THEN falls through to `ensureTool`'s own cache. One managed-dir
+ * check settles it without a spawn — after one verification per shim per
+ * session, so a shim that cannot run falls through to PATH instead of
+ * shadowing a working binary (#1657).
+ *
+ * Release-managed install (`~/.pi-lens/bin/<command>`) — where `ensureTool`
+ * puts every github/maven/archive-strategy tool. Same rung, same reason as
+ * the npm shim above, for the other half of the managed families (#2140).
+ */
+async function findManagedRung(
+	command: string,
+	verificationArgs: string[],
+): Promise<VenvResolution | null> {
+	const managed = await findManagedNodeToolBinary(command, verificationArgs);
+	if (managed) return { path: managed, rung: "managed-dir" };
+	const release = await findManagedReleaseBinary(command, verificationArgs);
+	if (release) return { path: release, rung: "managed-release" };
+	return null;
 }
 
 // =============================================================================
@@ -723,7 +738,16 @@ type AvailabilityCache = {
 	command: string | null;
 	/** How long the last probe took, ms — surfaced in the unavailable message. */
 	elapsedMs: number;
+	/**
+	 * Bounded output of the probe that rejected a present binary (cause
+	 * `probe-rejected`), so a consumer can say the tool is present but failed
+	 * its version check, with the evidence; unset for any other verdict.
+	 */
+	rejectedOutput?: string | undefined;
 };
+
+/** Longest probe output kept for a rejected binary, chars from the end. */
+const REJECTED_OUTPUT_CHARS = 2000;
 
 export interface AvailabilityCheckerOptions {
 	probeTimeout?: number;
@@ -745,6 +769,14 @@ export interface AvailabilityCheckerOptions {
 	 * answer would pass a binary the caller then cannot find.
 	 */
 	pathOnly?: boolean;
+	/**
+	 * Rung order after the project (#5492 r2). `managed-first` (the default,
+	 * every runner): managed installs, then PATH. `path-first` (formatters): the
+	 * version of a formatter decides the bytes it writes, so a PATH binary that
+	 * passes its version check outranks the managed copy; one that fails falls
+	 * through to managed.
+	 */
+	order?: "managed-first" | "path-first";
 }
 
 /**
@@ -1181,6 +1213,8 @@ export interface AvailabilityVerdict {
 	latched: boolean;
 	/** Epoch ms after which a transient verdict may be re-probed; 0 = latched. */
 	retryAtMs: number;
+	/** Probe output of a present binary that rejected its version check. */
+	rejectedOutput?: string;
 }
 
 /**
@@ -1221,15 +1255,30 @@ export function createAvailabilityChecker(
 	let checkerGeneration = availabilityGeneration.current();
 	let checkerFlightGeneration = 0;
 
+	const pathFirst = options.order === "path-first";
+	const allowProjectLocal = options.allowProjectLocal !== false;
+	const pathRung = (): VenvResolution => ({ path: command, rung: "path" });
 	const findCommand = options.pathOnly
-		? async (): Promise<VenvResolution> => ({ path: command, rung: "path" })
-		: createVenvFinder(
-				command,
-				windowsExt,
-				versionArgs,
-				options.allowProjectLocal !== false,
-				options.projectBinDirs,
-			);
+		? async (): Promise<VenvResolution> => pathRung()
+		: pathFirst
+			? async (cwd: string): Promise<VenvResolution> => {
+					const project = allowProjectLocal
+						? localBinPath(
+								findLocalBinAt(command, cwd, {
+									windowsExt,
+									binDirs: options.projectBinDirs ?? VENV_BIN_DIRS,
+								}),
+							)
+						: undefined;
+					return project ? { path: project, rung: "venv" } : pathRung();
+				}
+			: createVenvFinder(
+					command,
+					windowsExt,
+					versionArgs,
+					allowProjectLocal,
+					options.projectBinDirs,
+				);
 	// The rungs beyond the project: where a broken project shim falls through.
 	const findBeyondProject = createVenvFinder(
 		command,
@@ -1237,6 +1286,20 @@ export function createAvailabilityChecker(
 		versionArgs,
 		false,
 	);
+	/**
+	 * Where a rung that failed for good falls through to, or `null` when the
+	 * ladder is spent. Managed-first: a project shim falls to managed then PATH.
+	 * Path-first: project, then PATH, then managed.
+	 */
+	async function nextRung(
+		from: VenvResolution["rung"],
+		cwd: string,
+	): Promise<VenvResolution | null> {
+		if (!pathFirst) return from === "venv" ? findBeyondProject(cwd) : null;
+		if (from === "venv") return pathRung();
+		if (from === "path") return findManagedRung(command, versionArgs);
+		return null;
+	}
 
 	function ensureCurrentGeneration(): void {
 		if (checkerGeneration === availabilityGeneration.current()) return;
@@ -1280,9 +1343,14 @@ export function createAvailabilityChecker(
 			/** How the outcome was reached, and the facts behind it (#1500). */
 			classifiedBy?: "probe" | "caller" | "joined";
 			evidence?: ProbeEvidence;
+			/** Probe output of a present binary that failed its version check. */
+			rejectedOutput?: string;
 		},
 	): void {
 		cache.elapsedMs = verdict.elapsedMs;
+		cache.rejectedOutput = verdict.available
+			? undefined
+			: verdict.rejectedOutput;
 		let retryAfterMs: number | undefined;
 		if (verdict.available) {
 			cache.latch.noteAvailable(verdict.cause);
@@ -1408,12 +1476,14 @@ export function createAvailabilityChecker(
 			const resolveStartedAt = Date.now();
 			let resolution = await findCommand(resolvedCwd);
 			let resolveMs = Date.now() - resolveStartedAt;
-			// A project shim whose probe says it is broken for good (missing or
-			// non-installable: a stale venv interpreter) falls through to the
-			// rungs beyond the project, managed then PATH, as a managed shim
-			// does (#1657, #5437 F1). A transient answer stays on the project
-			// rung and retries. Those rungs never answer "venv", so the loop
-			// runs at most twice and still writes one verdict and one row.
+			// A rung whose probe says it is broken for good (missing or
+			// non-installable: a stale venv interpreter, a PATH tool whose
+			// interpreter is gone) falls through to the next rung, as a managed
+			// shim does (#1657, #5437 F1): managed-first, a project shim goes to
+			// managed then PATH; path-first, project to PATH to managed. A
+			// transient answer stays on its rung and retries. No rung is
+			// revisited, so the loop is bounded by the ladder and still writes
+			// one verdict and one row.
 			for (;;) {
 				const cmd = resolution.path;
 				// #1995: a command cooling down after a RUNTIME timeout (lint or
@@ -1501,11 +1571,14 @@ export function createAvailabilityChecker(
 					hostStallMs,
 					unclassifiedFailureOutcome: options.unclassifiedFailureOutcome,
 				});
-				if (resolution.rung === "venv" && isLatchingOutcome(outcome)) {
+				if (isLatchingOutcome(outcome)) {
 					const fallStartedAt = Date.now();
-					resolution = await findBeyondProject(resolvedCwd);
+					const next = await nextRung(resolution.rung, resolvedCwd);
 					resolveMs += Date.now() - fallStartedAt;
-					continue;
+					if (next) {
+						resolution = next;
+						continue;
+					}
 				}
 				// Only a TYPED tool-not-found invalidates the PATH walk memo; an
 				// `unclassifiedFailureOutcome: "missing"` compatibility verdict is a
@@ -1519,6 +1592,11 @@ export function createAvailabilityChecker(
 					hostStallMs,
 					classifiedBy: probeJoined ? "joined" : "probe",
 					evidence,
+					...(cause === "probe-rejected" && {
+						rejectedOutput: (result.stderr || result.stdout || "").slice(
+							-REJECTED_OUTPUT_CHARS,
+						),
+					}),
 				});
 				return false;
 			}
@@ -1550,7 +1628,7 @@ export function createAvailabilityChecker(
 
 	function getVerdict(cwd?: string): AvailabilityVerdict {
 		ensureCurrentGeneration();
-		const { latch, elapsedMs } = getCache(cwd || process.cwd());
+		const { latch, elapsedMs, rejectedOutput } = getCache(cwd || process.cwd());
 		const outcome = latch.getOutcome();
 		return {
 			outcome,
@@ -1558,6 +1636,7 @@ export function createAvailabilityChecker(
 			elapsedMs,
 			latched: outcome === null || isLatchingOutcome(outcome),
 			retryAtMs: latch.getRetryAtMs(),
+			...(rejectedOutput !== undefined && { rejectedOutput }),
 		};
 	}
 
@@ -1858,8 +1937,19 @@ type AvailabilityChecker = ReturnType<typeof createAvailabilityChecker>;
  */
 const toolBinaryCheckers = new Map<string, AvailabilityChecker>();
 
-function toolBinaryChecker(toolId: string): AvailabilityChecker | null {
-	const existing = toolBinaryCheckers.get(toolId);
+type ToolBinaryOrder = NonNullable<AvailabilityCheckerOptions["order"]>;
+
+/**
+ * One checker per (tool id, order): a runner (managed before PATH) and a
+ * formatter (PATH before managed) can reach different answers for the same
+ * tool, so they must not share a cached one (#5492 r2).
+ */
+function toolBinaryChecker(
+	toolId: string,
+	order: ToolBinaryOrder,
+): AvailabilityChecker | null {
+	const key = `${toolId}|${order}`;
+	const existing = toolBinaryCheckers.get(key);
 	if (existing) return existing;
 	const spec = getToolCommandSpec(toolId);
 	if (!spec) return null;
@@ -1867,9 +1957,12 @@ function toolBinaryChecker(toolId: string): AvailabilityChecker | null {
 		spec.command,
 		spec.windowsExt ?? "",
 		spec.versionArgs ?? ["--version"],
-		{ projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS] },
+		{
+			projectBinDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
+			order,
+		},
 	);
-	toolBinaryCheckers.set(toolId, checker);
+	toolBinaryCheckers.set(key, checker);
 	return checker;
 }
 
@@ -1886,13 +1979,49 @@ export async function resolveToolCommandWithInstallFallback(
 	cwd: string,
 	toolId: string,
 ): Promise<string | null> {
-	const checker = toolBinaryChecker(toolId);
+	const checker = toolBinaryChecker(toolId, "managed-first");
 	if (!checker) return null;
 	return resolveAvailableOrInstall(
 		checker,
 		getToolCommandSpec(toolId)?.managedToolId ?? toolId,
 		cwd,
 	);
+}
+
+/**
+ * What a formatter's lookup of a tool found: the binary, or `null`. When the
+ * tool is present but failed its version check and no later rung replaced it,
+ * `rejected` carries the probe's bounded output (possibly empty), so the
+ * caller can report "present but failed" with its evidence instead of "not
+ * found".
+ */
+export interface InstalledToolResolution {
+	command: string | null;
+	rejected?: string;
+}
+
+/**
+ * The formatter ladder without the install (#5410, #5492 r2): the project's
+ * own venv or `node_modules/.bin` at exactly `cwd`, then PATH with a version
+ * check, then the managed installs. The formatter's version decides the bytes
+ * it writes, so a working PATH binary outranks the managed copy; the runners
+ * keep managed before PATH in `resolveToolCommandWithInstallFallback`. A
+ * formatter calls this where its own install opt-in
+ * (`AUTO_INSTALLABLE_DEFAULT_FORMATTERS`) stays a separate decision.
+ */
+export async function resolveInstalledToolCommand(
+	cwd: string,
+	toolId: string,
+): Promise<InstalledToolResolution> {
+	const checker = toolBinaryChecker(toolId, "path-first");
+	if (!checker) return { command: null };
+	if (await checker.isAvailableAsync(cwd)) {
+		return { command: checker.getCommand(cwd) };
+	}
+	const { cause, rejectedOutput } = checker.getVerdict(cwd);
+	return cause === "probe-rejected"
+		? { command: null, rejected: rejectedOutput ?? "" }
+		: { command: null };
 }
 
 async function verifyOrInstallCommand(

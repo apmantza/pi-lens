@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
-import { hasJavaBuildDescriptor } from "../../tool-policy.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -79,7 +79,9 @@ const javacRunner: RunnerDefinition = {
 		// runner keeps its value for standalone files with no build descriptor.
 		// Same shared descriptor walk the SpotBugs gate uses.
 		if (
-			hasJavaBuildDescriptor(path.dirname(absPath), ctx.projectRoot ?? ctx.cwd)
+			hasToolConfig("javaBuild", path.dirname(absPath), {
+				ceiling: ctx.projectRoot ?? ctx.cwd,
+			})
 		) {
 			ctx.log?.(
 				"javac: skipped — file is inside a Maven/Gradle project; a classpath-less compile would emit false positives",
