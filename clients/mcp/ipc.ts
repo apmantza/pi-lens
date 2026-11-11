@@ -178,11 +178,12 @@ export function boundUnixSocketKeepsIdentity(
 ): boolean {
 	const bound = boundUnixSocketPath(endpoint, options.platform);
 	if (bound === endpoint) return true;
+	// Windows pipes returned above; names that can be cut use POSIX spelling.
 	const token =
 		options.ownerPid === undefined
-			? path.basename(endpoint, ".sock")
+			? path.posix.basename(endpoint, ".sock")
 			: `pi-lens-mcp-${options.ownerPid}-`;
-	return bound.startsWith(path.join(path.dirname(endpoint), token));
+	return bound.startsWith(path.posix.join(path.posix.dirname(endpoint), token));
 }
 
 export type StaleSocketOutcome =

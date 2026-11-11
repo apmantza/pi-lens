@@ -34,7 +34,8 @@
     "cascade-delivery",
     "test-runner-delivery",
     "finding-delivery",
-    "collect-later-flight"
+    "collect-later-flight",
+    "ipc-endpoint-identity"
   ],
   "map": {
     "clients/read-guard.ts": [
@@ -158,7 +159,12 @@
     "clients/deferred-lsp-work.ts": "unmodelled",
     "clients/event-loop-hold.ts": "unmodelled",
     "clients/recent-touches.ts": "unmodelled",
-    "mcp/server.ts": "unmodelled",
+    "mcp/server.ts": [
+      "ipc-endpoint-identity"
+    ],
+    "clients/mcp/ipc.ts": [
+      "ipc-endpoint-identity"
+    ],
     "clients/dispatch/dispatcher.ts": [
       "blocker-pending"
     ],
@@ -531,7 +537,8 @@
     "clients/deferred-lsp-work.ts": "One deferred LSP work slot moves idle to armed or aborted; turn_end, work settlement, session start/shutdown and idle reset are its actors.",
     "clients/event-loop-hold.ts": "A process-singleton hold map and re-armed timer change on hold/release, deadline reap, session reset and timer failure; the liveness machine is unmodelled.",
     "clients/recent-touches.ts": "Cross-process recent-touch append/read state combines a global mtime/size watermark with a per-CWD cursor; turn/session readers and concurrent producers are unmodelled.",
-    "mcp/server.ts": "MCP auto-session state and its in-flight self-heal change on tool calls, successful session start and failed retry; the host lifecycle is unmodelled.",
+    "mcp/server.ts": "ipc-endpoint-identity models startup endpoint admission and shared-name replacement. MCP auto-session state and its in-flight self-heal remain unmodelled.",
+    "clients/mcp/ipc.ts": "ipc-endpoint-identity models keeping versus shared endpoint names, client admission, and the workspace server's pre-unlink gate. Byte cuts, framing, and request deadlines remain runtime-test concerns.",
     "clients/lsp/workspace-sweep-hold.ts": "Workspace sweep holds, idle waiters and age-based reap change on LSP work completion, idle reads and session reset; modelled by lsp-idle-reset.",
     "clients/lsp/workspace-diagnostics-session.ts": "The diagnostics session clock (`_sessionStartedAt`), the bounded file-creation map (`_fileCreations`) and the all-files-changed watermark (`_allFilesChangedAt`) change on session start, file creation and eviction. The nearest family is store-freshness, which models a cache entry stamped against its file's mtime, size and dependency `scannedAt`; it does not model these three, so the file is unmodelled.",
     "clients/lsp/aggregation.ts": "Language and auxiliary completion counts plus grace timers change as LSP promises settle, in `raceToCompletion`, the result-aware race over multi-client diagnostics collection. The nearest family is late-aux-drain, which models `touchFile`'s aux-grace wait and the `turn_end` drain of late publishes; it does not model this race or its counts.",

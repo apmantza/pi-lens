@@ -203,6 +203,20 @@
 				}
 			]
 		},
+		"ipc-endpoint-identity": {
+			"notCodeChoice": [
+				{
+					"reason": "Owners bounds the two actors whose cut endpoint names can collide; no runtime branch reads this model population.",
+					"constants": ["Owners"]
+				}
+			],
+			"deferred": [
+				{
+					"reason": "The real bind and client witnesses in tests/mcp/harness-socket-teardown.test.ts and tests/clients/mcp/ipc.test.ts are conditional on Unix socket support and fixture path room. Their mutation proofs cover both guards, but the live-declaration pin reader intentionally excludes conditional cases.",
+					"constants": ["GuardWorkspaceBind", "GuardClients"]
+				}
+			]
+		},
 		"finding-delivery": {
 			"pins": {
 				"StampAt": {

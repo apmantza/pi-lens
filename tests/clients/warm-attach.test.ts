@@ -9,6 +9,7 @@ import {
 } from "../../clients/degradation-ledger.js";
 import type { InstanceEntry } from "../../clients/instance-registry.js";
 import {
+	boundUnixSocketKeepsIdentity,
 	boundUnixSocketPath,
 	diagnosticsIpcPathForCwd,
 } from "../../clients/mcp/ipc.js";
@@ -241,13 +242,6 @@ describe.skipIf(
 		}
 	}
 
-	/** Does B's pid survive the cut, so B's bound name is its own? */
-	function ownNameSurvives(cwd: string): boolean {
-		return boundUnixSocketPath(
-			diagnosticsIpcPathForCwd(cwd, process.pid),
-		).includes(`pi-lens-mcp-${process.pid}-`);
-	}
-
 	it("never replaces a live listener of another session in the workspace", async () => {
 		await withLongTmp(async ({ cwd }) => {
 			let reached = 0;
@@ -287,7 +281,9 @@ describe.skipIf(
 			// stale socket and listens. Without it the name is shared, B cannot
 			// tell whose socket it is, and it stays refused (cold fallback).
 			expect(await connectOutcome(boundUnixSocketPath(endpoint))).toBe(
-				ownNameSurvives(cwd) ? "connected" : "ECONNREFUSED",
+				boundUnixSocketKeepsIdentity(endpoint, { ownerPid: process.pid })
+					? "connected"
+					: "ECONNREFUSED",
 			);
 		});
 	});
