@@ -77,9 +77,6 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 		resetDegradationLedger();
 		const registry = new RunnerRegistry();
 		registry.register(runner);
-		const { resetDispatchAvailabilityState } =
-			await import("../../../../clients/dispatch/runners/utils/runner-helpers.js");
-		resetDispatchAvailabilityState();
 		let status = "";
 		const output = await dispatchForFile(
 			createDispatchContext(

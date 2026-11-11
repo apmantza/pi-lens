@@ -4,4 +4,4 @@ audience: user
 area: host
 ---
 
-- **Warm IPC connections now use explicitly bounded Unix socket paths.** Bind and connect operations no longer rely on Node implicitly truncating the socket-name portion of a long temporary-directory path. (refs #4353)
+- **Warm IPC never crosses workspaces under a long temporary directory.** Bind and connect use the bounded Unix socket path, so a `TMPDIR` that cuts only the `.sock` suffix keeps the warm side channel instead of failing with `EINVAL`. A longer `TMPDIR` cuts the workspace identity out of the name: the MCP server does not bind it, no hook dials it, the server logs that the warm side channel is unavailable, and hooks fall back to cold analysis. (refs #4353)

@@ -45,6 +45,7 @@ import {
 	acknowledgeTurnEnd,
 	analyzeFile,
 	analyzeFileFresh,
+	boundUnixSocketKeepsIdentity,
 	boundUnixSocketPath,
 	canRebuildPiLens,
 	createMcpHost,
@@ -357,6 +358,16 @@ function isWithinServerWorkspace(cwd: string): boolean {
 }
 
 function startIpcServer(): void {
+	const bound = boundUnixSocketPath(IPC_PATH);
+	// A cut into the workspace hash leaves a name every long-TMPDIR workspace
+	// derives: binding it would replace another workspace's live server and
+	// answer its hooks. The hooks see no listener and analyze cold.
+	if (!boundUnixSocketKeepsIdentity(IPC_PATH)) {
+		console.error(
+			`[pi-lens-mcp] warm side-channel unavailable: socket path exceeds the platform limit; bound name ${bound} no longer identifies this workspace`,
+		);
+		return;
+	}
 	// POSIX: a stale socket file blocks listen; remove it first. (Named pipes on
 	// Windows don't need this; the helper is a no-op there.) It names the bound
 	// file and removes only a socket, never an unrelated file the cut lands on.
@@ -492,8 +503,8 @@ function startIpcServer(): void {
 		console.error(`[pi-lens-mcp] IPC listener unavailable: ${err}`);
 	});
 
-	ipc.listen(boundUnixSocketPath(IPC_PATH), () => {
-		console.error(`[pi-lens-mcp] warm side-channel listening at ${IPC_PATH}`);
+	ipc.listen(bound, () => {
+		console.error(`[pi-lens-mcp] warm side-channel listening at ${bound}`);
 	});
 
 	const cleanup = () => {

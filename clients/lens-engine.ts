@@ -58,6 +58,7 @@ import {
 export { analyzeFile, type McpAnalyzeResult } from "./mcp/analyze.js";
 export { createMcpHost } from "./mcp/host-shim.js";
 export {
+	boundUnixSocketKeepsIdentity,
 	boundUnixSocketPath,
 	createWarmIpcLineReader,
 	createWarmIpcRequestQueue,

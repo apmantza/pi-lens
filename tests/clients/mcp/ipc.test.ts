@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { warmAnswerBinding } from "../../../clients/lsp/diagnostic-binding.js";
 import type { McpAnalyzeResult } from "../../../clients/mcp/analyze.js";
 import {
+	boundUnixSocketKeepsIdentity,
 	boundUnixSocketPath,
 	contentHash,
 	createWarmIpcLineReader,
@@ -33,9 +34,11 @@ import {
 	WARM_TURN_END_SCHEMA_VERSION,
 } from "../../../clients/mcp/ipc.js";
 import {
+	minTmpRootLength,
 	plantStaleUnixSocket,
 	removeTempDirSync,
 	setupTestEnvironment,
+	tmpRootOfLength,
 } from "../test-utils.js";
 
 const SENTINEL = {
@@ -60,17 +63,24 @@ afterEach(() => {
 	}
 });
 
+const SUN_PATH_LIMIT = process.platform === "darwin" ? 104 : 108;
+/** A root whose cut drops only `.sock` from `pi-lens-mcp-<16 hex>.sock`. */
+const SOCK_ONLY_ROOT = SUN_PATH_LIMIT - "/pi-lens-mcp-".length - 16;
+/** A root whose cut ends right after `pi-lens-mcp-99001-`: the pid is kept. */
+const PID_KEPT_ROOT = SUN_PATH_LIMIT - "/pi-lens-mcp-99001-".length;
+/** A root whose cut removes the hash and every pid: one name for all. */
+const SHARED_NAME_ROOT = 100;
+// lane: Unit tests (a short CI TMPDIR always has room); a dev box whose
+// TMPDIR is too long for the root skips the case.
+const lacksRoomFor = (rootBytes: number): boolean =>
+	process.platform === "win32" || minTmpRootLength() > rootBytes;
+
 async function withLongSocketTmpdir(
+	rootBytes: number,
 	body: (cwd: string) => Promise<void>,
 ): Promise<void> {
 	const fixture = setupTestEnvironment("pi-lens-ipc-long-socket-");
-	const tmpPathBytes = 90;
-	const componentBytes = Math.max(
-		0,
-		tmpPathBytes - Buffer.byteLength(fixture.tmpDir) - 1,
-	);
-	const socketTmpDir = path.join(fixture.tmpDir, "r".repeat(componentBytes));
-	fs.mkdirSync(socketTmpDir, { recursive: true });
+	const socketTmpDir = tmpRootOfLength(rootBytes);
 	vi.stubEnv("TMPDIR", socketTmpDir);
 	try {
 		await body(fixture.tmpDir);
@@ -82,7 +92,19 @@ async function withLongSocketTmpdir(
 		}
 		vi.unstubAllEnvs();
 		fixture.cleanup();
+		removeTempDirSync(socketTmpDir);
 	}
+}
+
+/** Listen at `bound` and count every connection that reaches it. */
+async function countingListener(bound: string): Promise<() => number> {
+	let reached = 0;
+	activeServer = net.createServer((socket) => {
+		reached += 1;
+		socket.destroy();
+	});
+	await new Promise<void>((resolve) => activeServer?.listen(bound, resolve));
+	return () => reached;
 }
 
 // #3922: records written before failure tracking remain readable and writable.
@@ -172,16 +194,40 @@ describe("requestWarmDiagnostics", () => {
 		removeTempDirSync(cwd);
 	});
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(lacksRoomFor(SHARED_NAME_ROOT))(
+		"does not dial a pid-scoped name the cut stripped of its pid",
+		async () => {
+			// Recurrence prevented (#5488 review, F1 probe): the client for one
+			// incumbent reached another session's listener at the shared name.
+			await withLongSocketTmpdir(SHARED_NAME_ROOT, async (cwd) => {
+				const shared = boundUnixSocketPath(
+					diagnosticsIpcPathForCwd(cwd, 99001),
+				);
+				expect(shared).toBe(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(`${cwd}-b`, 99002)),
+				);
+				const reached = await countingListener(shared);
+				await expect(
+					requestWarmDiagnostics(cwd, 99001, "/x/app.ts", "x", 1000),
+				).resolves.toEqual({ available: false, reason: "no-listener" });
+				await expect(
+					requestWarmCodeActions(cwd, 99001, "/x/app.ts", "hash", [], 1000),
+				).resolves.toEqual({ available: false, reason: "no-listener" });
+				expect(reached()).toBe(0);
+			});
+		},
+	);
+
+	it.skipIf(lacksRoomFor(PID_KEPT_ROOT))(
 		"round-trips over a long TMPDIR using the bounded Unix socket path",
 		async () => {
-			await withLongSocketTmpdir(async (cwd) => {
+			await withLongSocketTmpdir(PID_KEPT_ROOT, async (cwd) => {
 				const pid = 99001;
 				const endpoint = diagnosticsIpcPathForCwd(cwd, pid);
 				const boundEndpoint = boundUnixSocketPath(endpoint);
-				expect(Buffer.byteLength(endpoint)).toBeGreaterThan(108);
-				expect(Buffer.byteLength(boundEndpoint)).toBe(
-					process.platform === "darwin" ? 104 : 108,
+				expect(Buffer.byteLength(endpoint)).toBeGreaterThan(SUN_PATH_LIMIT);
+				expect(boundEndpoint).toBe(
+					path.join(os.tmpdir(), `pi-lens-mcp-${pid}-`),
 				);
 
 				activeServer = net.createServer((socket) => {
@@ -521,6 +567,78 @@ describe("boundUnixSocketPath (#4353)", () => {
 		const short = "/tmp/pi-lens-mcp-0123456789abcdef.sock";
 		expect(boundUnixSocketPath(short, "linux")).toBe(short);
 		expect(boundUnixSocketPath(long, "win32")).toBe(long);
+	});
+});
+
+describe("boundUnixSocketKeepsIdentity (#5488 review, F1)", () => {
+	// Recurrence prevented: a cut into the workspace hash gave every workspace
+	// one bound name, and a second server unlinked the first one's live socket
+	// and answered its hook requests.
+	const workspaceName = "pi-lens-mcp-0123456789abcdef.sock";
+	const pidName = "pi-lens-mcp-4242-diagnostics-0123456789abcdef.sock";
+	const under = (rootBytes: number, name: string): string =>
+		`/${"r".repeat(rootBytes - 1)}/${name}`;
+
+	it.each<[string, number, boolean]>([
+		["fits", 60, true],
+		["loses only .sock", 76, true],
+		["ends right after the hash", 79, true],
+		["cuts the hash's last character", 80, false],
+		["cuts into the name prefix", 100, false],
+	])(
+		"a workspace endpoint whose cut %s (root %i) keeps its identity: %s",
+		(_case, rootBytes, keeps) => {
+			expect(
+				boundUnixSocketKeepsIdentity(under(rootBytes, workspaceName), {
+					platform: "linux",
+				}),
+			).toBe(keeps);
+		},
+	);
+
+	it.each<[number, boolean]>([
+		[90, true],
+		[91, false],
+	])(
+		"a pid-scoped endpoint under root %i keeps its pid marker: %s",
+		(rootBytes, keeps) => {
+			// `pi-lens-mcp-4242-` is 17 bytes, so a root of 90 ends the cut on the dash.
+			expect(
+				boundUnixSocketKeepsIdentity(under(rootBytes, pidName), {
+					ownerPid: 4242,
+					platform: "linux",
+				}),
+			).toBe(keeps);
+		},
+	);
+
+	it("reads the token from the file name, not from a directory that repeats it", () => {
+		const decoy = `/${"r".repeat(50)}/pi-lens-mcp-0123456789abcdef/${"s".repeat(30)}/${workspaceName}`;
+		expect(Buffer.byteLength(decoy)).toBeGreaterThan(108);
+		expect(boundUnixSocketKeepsIdentity(decoy, { platform: "linux" })).toBe(
+			false,
+		);
+	});
+
+	it("uses the darwin limit and treats every Windows pipe as its own", () => {
+		expect(
+			boundUnixSocketKeepsIdentity(under(76, workspaceName), {
+				platform: "darwin",
+			}),
+		).toBe(false);
+		expect(
+			boundUnixSocketKeepsIdentity(under(200, workspaceName), {
+				platform: "win32",
+			}),
+		).toBe(true);
+		// A pid-scoped pipe puts the pid last, so it is no token prefix: a pipe
+		// is never cut, and that alone keeps it.
+		expect(
+			boundUnixSocketKeepsIdentity(
+				diagnosticsIpcPathForCwd("C:\\work", 4242, "win32"),
+				{ ownerPid: 4242, platform: "win32" },
+			),
+		).toBe(true);
 	});
 });
 
@@ -938,16 +1056,31 @@ describe("requestWarmAnalyze", () => {
 		removeTempDirSync(cwd);
 	});
 
-	it.skipIf(process.platform === "win32")(
+	it.skipIf(lacksRoomFor(SHARED_NAME_ROOT))(
+		"does not dial a workspace name the cut stripped of its hash",
+		async () => {
+			// Recurrence prevented (#5488 review, F1): a hook in one workspace was
+			// answered by another workspace's server at the shared name.
+			await withLongSocketTmpdir(SHARED_NAME_ROOT, async (cwd) => {
+				const shared = boundUnixSocketPath(ipcPathForCwd(cwd));
+				expect(shared).toBe(boundUnixSocketPath(ipcPathForCwd(`${cwd}-b`)));
+				const reached = await countingListener(shared);
+				expect(
+					await requestWarmAnalyze(cwd, "/x/app.ts", 1000),
+				).toBeUndefined();
+				expect(reached()).toBe(0);
+			});
+		},
+	);
+
+	it.skipIf(lacksRoomFor(SOCK_ONLY_ROOT))(
 		"round-trips over a long TMPDIR using the bounded Unix socket path",
 		async () => {
-			await withLongSocketTmpdir(async (cwd) => {
+			await withLongSocketTmpdir(SOCK_ONLY_ROOT, async (cwd) => {
 				const endpoint = ipcPathForCwd(cwd);
 				const boundEndpoint = boundUnixSocketPath(endpoint);
-				expect(Buffer.byteLength(endpoint)).toBeGreaterThan(108);
-				expect(Buffer.byteLength(boundEndpoint)).toBe(
-					process.platform === "darwin" ? 104 : 108,
-				);
+				expect(Buffer.byteLength(endpoint)).toBeGreaterThan(SUN_PATH_LIMIT);
+				expect(boundEndpoint).toBe(endpoint.slice(0, -".sock".length));
 
 				let received: unknown;
 				activeServer = net.createServer((socket) => {
@@ -1107,6 +1240,24 @@ describe("requestWarmTurnEnd", () => {
 		});
 		removeTempDirSync(cwd);
 	});
+
+	it.skipIf(lacksRoomFor(SHARED_NAME_ROOT))(
+		"does not dial a workspace name the cut stripped of its hash",
+		async () => {
+			// Recurrence prevented (#5488 review, F1): another workspace's server
+			// at the shared name would run its turn-end pass for this hook.
+			await withLongSocketTmpdir(SHARED_NAME_ROOT, async (cwd) => {
+				const reached = await countingListener(
+					boundUnixSocketPath(ipcPathForCwd(cwd)),
+				);
+				await expect(requestWarmTurnEnd(cwd, 1000)).resolves.toEqual({
+					available: false,
+					reason: "no-listener",
+				});
+				expect(reached()).toBe(0);
+			});
+		},
+	);
 
 	// #3255 H1: "nothing is listening" is its OWN reason. It used to arrive as
 	// `ipc-error`, indistinguishable from the answering-but-broken server two
