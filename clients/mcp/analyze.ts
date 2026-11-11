@@ -32,7 +32,7 @@ import { detectFileKind } from "../file-kinds.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getLSPService } from "../lsp/capabilities.js";
 import { PathKeyedMap } from "../path-keyed-map.js";
-import { normalizeMapKey } from "../path-utils.js";
+import { normalizeMapKey, resolveHostToolPath } from "../path-utils.js";
 import { loadProjectSnapshot } from "../project-snapshot.js";
 import { buildOrUpdateGraph } from "../review-graph/service.js";
 import { classifyDiagnosticTier, recordDiagnostics } from "../widget-state.js";
@@ -536,9 +536,10 @@ export async function analyzeFile(
 	cwd: string,
 	options: AnalyzeFileOptions = {},
 ): Promise<McpAnalyzeResult> {
-	const absPath = path.isAbsolute(filePath)
-		? filePath
-		: path.resolve(cwd, filePath);
+	// Shape 74: `filePath` is a host tool argument, so a `~`, an `@` prefix or a
+	// `file://` URL resolves as it does for every sibling tool, never as a name
+	// under `cwd`.
+	const absPath = resolveHostToolPath(filePath, cwd);
 	// no-delta by default → a full snapshot every call (not delta-filtered);
 	// caller flags win over the default.
 	const host = createMcpHost({ "no-delta": true, ...options.flags }, cwd);

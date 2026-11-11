@@ -64,7 +64,7 @@ import {
 import { analyzeFile } from "../../../clients/mcp/analyze.js";
 import { verdictUncheckedReason } from "../../../clients/dispatch/types.js";
 import { createLensDiagnosticMarkTool } from "../../../tools/lens-diagnostic-mark.js";
-import { createCaseAliasFixture } from "../test-utils.js";
+import { createCaseAliasFixture, pinFixtureHome } from "../test-utils.js";
 
 const warningDiagnostic = {
 	id: "warn-1",
@@ -870,6 +870,29 @@ describe("analyzeFile", () => {
 		const result = await analyzeFile(tsFile, tmpDir, { updateGraph: true });
 		expect(result.counts.diagnostics).toBe(0);
 	});
+
+	// RECURRENCE GUARDED: shape 74. `pilens_analyze` joined its `path` argument
+	// onto the cwd with a bare `path.resolve`, so `@app.ts` and `~/app.ts` named
+	// `<cwd>/@app.ts` and `<cwd>/~/app.ts`, files that cannot exist, while the
+	// sibling MCP tools resolve the same argument through `resolveHostToolPath`.
+	it.each(["@app.ts", "~/app.ts"])(
+		"analyzes the file a host spelling names: %s (shape 74)",
+		async (spelling) => {
+			vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+			const { home, restore } = pinFixtureHome("mcp-analyze-host-path");
+			try {
+				const homeFile = path.join(home, "app.ts");
+				fs.writeFileSync(homeFile, "export const a = 1;\n");
+				const result = await analyzeFile(spelling, tmpDir);
+				// `@` strips to a cwd-relative name; `~/` is the pinned home.
+				expect(result.filePath).toBe(
+					spelling === "@app.ts" ? tsFile : homeFile,
+				);
+			} finally {
+				restore();
+			}
+		},
+	);
 });
 
 // #3160 F1: `analyzeFile` records into widget-state with the RAW absPath it

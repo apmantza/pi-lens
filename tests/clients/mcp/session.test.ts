@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../../clients/cache-manager.js";
 import { installLspServiceDouble } from "../../support/lsp-service-seam.js";
 import { gatedPromise } from "../../support/fault-injection.js";
-import { removeTempDirSync } from "../test-utils.js";
+import { pinFixtureHome, removeTempDirSync } from "../test-utils.js";
 
 const handleSessionStart = vi.hoisted(() =>
 	vi.fn(async (_deps: unknown) => undefined),
@@ -186,6 +186,29 @@ describe("runTurnEnd", () => {
 		expect(outcome.filesRegistered).toBe(0);
 		expect(handleTurnEnd).toHaveBeenCalledTimes(1);
 	});
+
+	// RECURRENCE GUARDED: shape 74. The `files` argument of the MCP turn-end
+	// tool was joined onto the cwd with a bare `path.resolve`, so `@edited.ts`
+	// and `~/edited.ts` named `<cwd>/@edited.ts` and `<cwd>/~/edited.ts`, read
+	// as unreadable and dropped without a trace. The sibling MCP tools resolve
+	// the same argument through `resolveHostToolPath`.
+	it.each(["@edited.ts", "~/edited.ts"])(
+		"registers the file a host spelling names: %s (shape 74)",
+		async (spelling) => {
+			const { home, restore } = pinFixtureHome("mcp-turn-end-host-path");
+			try {
+				fs.writeFileSync(
+					path.join(tmpDir, "edited.ts"),
+					"export const a = 1;\n",
+				);
+				fs.writeFileSync(path.join(home, "edited.ts"), "export const a = 1;\n");
+				const outcome = await runTurnEnd(tmpDir, [spelling]);
+				expect(outcome.filesRegistered).toBe(1);
+			} finally {
+				restore();
+			}
+		},
+	);
 
 	// #2535 F2: both MCP entry points share runTurnEndNowImpl, so both must
 	// carry host:"mcp" into handleTurnEnd — the Stop-hook IPC route included.

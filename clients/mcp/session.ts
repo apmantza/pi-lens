@@ -19,7 +19,6 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { AstGrepClient } from "../ast-grep-client.js";
 import { BoundedFifoMap } from "../bounded-cache.js";
 import {
@@ -35,6 +34,7 @@ import {
 import { resetDispatchBaselines } from "../dispatch/integration.js";
 import { resetFormatService } from "../format-service.js";
 import { getLSPService, resetLSPService } from "../lsp/capabilities.js";
+import { resolveHostToolPath } from "../path-utils.js";
 import {
 	acknowledgeTestFindings,
 	acknowledgeTurnEndFindings,
@@ -326,7 +326,8 @@ async function runTurnEndNowImpl(
 
 	let registered = 0;
 	for (const file of files) {
-		const abs = path.isAbsolute(file) ? file : path.resolve(cwd, file);
+		// Shape 74: `file` is a host tool argument (`~`, `@`, `file://`).
+		const abs = resolveHostToolPath(file, cwd);
 		let lineCount = 1;
 		try {
 			lineCount = fs.readFileSync(abs, "utf8").split("\n").length;
