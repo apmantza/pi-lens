@@ -80,6 +80,7 @@ async function dispatchMarkdown(
 	spellcheck: RunnerResult,
 	vale: RunnerResult,
 	name = "a.md",
+	groups: RunnerGroup[] = GROUP,
 ) {
 	const registry = new RunnerRegistry();
 	for (const [id, result] of [
@@ -105,7 +106,7 @@ async function dispatchMarkdown(
 		new FactStore(),
 		false,
 	);
-	return dispatchForFile(ctx, GROUP, registry);
+	return dispatchForFile(ctx, groups, registry);
 }
 
 describe("a file every applicable check skipped is named not checked (#5258)", () => {
@@ -163,6 +164,28 @@ describe("a file every applicable check skipped is named not checked (#5258)", (
 		expect(result.output).not.toContain("Stated:");
 	});
 
+	// #5258 r3 (verify N5): ruby lists rubocop in its primary and its fallback
+	// group, so one missing rubocop read "rubocop: <cause>; rubocop: <cause>".
+	it("states a runner's cause once when the kind lists it in two groups", async () => {
+		const result = await dispatchMarkdown(
+			skipped("probe-rejected"),
+			skipped("not-configured"),
+			"a.md",
+			[
+				...GROUP,
+				{
+					mode: "fallback",
+					runnerIds: ["spellcheck"],
+					filterKinds: ["markdown"],
+				},
+			],
+		);
+
+		expect(uncheckedReason(result)).toBe(
+			"not checked (spellcheck: a binary it runs was found but rejected its version probe; vale: not configured)",
+		);
+	});
+
 	it("keeps the generic sentence when the other primary timed out", async () => {
 		const result = await dispatchMarkdown(skipped("not-installed"), TIMED_OUT);
 
@@ -207,11 +230,11 @@ describe("a missing tool is recorded once per (runner, reason) per session (#525
 	});
 
 	it.each([
+		["probe-incomplete", "its availability probe did not finish"],
 		[
-			"probe-incomplete",
-			"its availability probe did not finish, so it is not reported missing",
+			"probe-rejected",
+			"a binary it runs was found but rejected its version probe",
 		],
-		["probe-rejected", "found, but it rejected its version probe"],
 		[
 			"trust-refused",
 			"the project's own binary was refused (pi project trust is not granted)",

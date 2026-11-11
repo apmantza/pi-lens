@@ -914,16 +914,24 @@ function buildCoverageNotice(
 	const statedRows = relevant.filter(
 		(r) => r.status === "skipped" && r.skipReason !== undefined,
 	);
-	const causeOf = (r: (typeof relevant)[number]): string =>
-		`${r.runnerId}: ${SKIP_REASON_PHRASE[r.skipReason as RunnerSkipReason]}`;
-	const statedCauses = statedRows.map(causeOf);
+	// One cause per runner and reason: a runner in two of the kind's groups
+	// (rubocop is ruby's primary and its fallback) skips once per group.
+	const causesOf = (rows: typeof relevant): string[] => [
+		...new Set(
+			rows.map(
+				(r) =>
+					`${r.runnerId}: ${SKIP_REASON_PHRASE[r.skipReason as RunnerSkipReason]}`,
+			),
+		),
+	];
+	const statedCauses = causesOf(statedRows);
 	const everyRowStated = statedRows.length === relevant.length;
 	// Beside a bare skip the notice adds only the causes that explain the gap: a
 	// runner that had nothing to check (an opt-in left off, no config) is not
 	// why the file went unchecked, and listing it grew every edit's status line.
-	const unexplainedCauses = statedRows
-		.filter((r) => !isNotApplicableSkipReason(r.skipReason))
-		.map(causeOf);
+	const unexplainedCauses = causesOf(
+		statedRows.filter((r) => !isNotApplicableSkipReason(r.skipReason)),
+	);
 	const unavailableReason = cause
 		? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
 		: deniedRunnerIds.length > 0

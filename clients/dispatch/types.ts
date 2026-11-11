@@ -461,7 +461,8 @@ export interface RunnerDefinition {
  * `not-preferred` (the project's lint policy picks another tool). Four more
  * name why a tool that may well be installed was not usable: `probe-incomplete`
  * (its availability probe timed out or could not finish, so it is not reported
- * missing), `probe-rejected` (it was found and rejected its version probe),
+ * missing), `probe-rejected` (a binary it runs, the tool or a runtime it needs,
+ * was found and rejected its version probe),
  * `trust-refused` (the project's own binary was refused by pi project trust)
  * and `runtime-missing` (a runtime it needs, such as Java, is absent). None of
  * them is a verdict on the file ({@link VERDICT_SKIP_REASONS}). */
@@ -531,9 +532,10 @@ export const SKIP_REASON_PHRASE: Record<RunnerSkipReason, string> = {
 		"not installed, and the managed install is off (PI_LENS_DISABLE_TOOL_INSTALL=1)",
 	"not-configured": "not configured",
 	"not-preferred": "the project's lint policy prefers another tool",
-	"probe-incomplete":
-		"its availability probe did not finish, so it is not reported missing",
-	"probe-rejected": "found, but it rejected its version probe",
+	"probe-incomplete": "its availability probe did not finish",
+	// The binary may be a runtime the tool needs (Java for SpotBugs), not the
+	// tool itself, so the phrase does not say the tool was found.
+	"probe-rejected": "a binary it runs was found but rejected its version probe",
 	"trust-refused":
 		"the project's own binary was refused (pi project trust is not granted)",
 	"runtime-missing": "a runtime it needs is not installed",

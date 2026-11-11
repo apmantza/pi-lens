@@ -137,6 +137,7 @@ describe("real pi: a skip names the true cause of an unusable tool (#5258)", () 
 	const textFor = async (
 		script: string,
 		prepare: (project: string, shimDir: string) => void,
+		args: readonly string[] = ["--no-lsp"],
 	): Promise<WriteResult> => {
 		const project = createRealPiProject("clean-verdict", scratchRoot);
 		// Outside the project: pi project trust refuses a PATH entry inside it.
@@ -145,7 +146,7 @@ describe("real pi: a skip names the true cause of an unusable tool (#5258)", () 
 			prepare(project, shimDir);
 			return await writeResult(
 				script,
-				["--no-lsp"],
+				args,
 				{ PATH: shimDir, PI_LENS_DISABLE_TOOL_INSTALL: "1" },
 				project,
 			);
@@ -170,20 +171,35 @@ describe("real pi: a skip names the true cause of an unusable tool (#5258)", () 
 		expect(text).not.toContain("✓");
 	}, 60_000);
 
+	// #5258 r3 (verify N1b): the row read "✓ HTML clean" on CI. pi trusts a
+	// project with no trust-requiring resources, and the maintainer host has a
+	// `~/.agents/skills` above the scratch root, which pi counts as one, so the
+	// row passed there on the host's ambient trust. `--no-approve` pins the state.
 	it("says the project's own binary was refused, not that the tool is missing", async () => {
-		const { text, causes } = await textFor("html.json", (project) => {
-			const bin = path.join(project, "node_modules", ".bin");
-			mkdirSync(bin, { recursive: true });
-			shim(bin, "htmlhint", "exit 0");
-		});
+		const { text, causes } = await textFor(
+			"html.json",
+			(project) => {
+				const bin = path.join(project, "node_modules", ".bin");
+				mkdirSync(bin, { recursive: true });
+				shim(bin, "htmlhint", "exit 0");
+			},
+			["--no-lsp", "--no-approve"],
+		);
 		expect(text).toContain("htmlhint: the project's own binary was refused");
 		expect(text).not.toContain("htmlhint: not installed");
 		expect(JSON.stringify(causes)).toContain("htmlhint:trust-refused");
 	}, 60_000);
 
+	// #5258 r3 (verify N1a): the hang was `exec sleep 40`, and CI's PATH here
+	// (the shim dir and node's dir) has no `sleep`, so the shim exited 127 and
+	// read as a rejected probe. Node is the one binary this PATH must hold.
 	it("says the version probe did not finish when it hangs, not that the tool is missing", async () => {
 		const { text, causes } = await textFor("shell.json", (_project, dir) =>
-			shim(dir, "shellcheck", "exec sleep 40"),
+			shim(
+				dir,
+				"shellcheck",
+				`exec "${process.execPath}" -e "setTimeout(() => {}, 40000)"`,
+			),
 		);
 		expect(text).toContain("shellcheck: its availability probe did not finish");
 		expect(text).not.toContain("shellcheck: not installed");
@@ -195,9 +211,27 @@ describe("real pi: a skip names the true cause of an unusable tool (#5258)", () 
 			shim(dir, "shellcheck", "exit 3"),
 		);
 		expect(text).toContain(
-			"shellcheck: found, but it rejected its version probe",
+			"shellcheck: a binary it runs was found but rejected its version probe",
 		);
 		expect(text).not.toContain("shellcheck: not installed");
 		expect(JSON.stringify(causes)).toContain("shellcheck:probe-rejected");
+	}, 60_000);
+
+	// #5258 r3 (verify N2, N5): rubocop resolves by its own `--version` spawn,
+	// not a checker, and its skip read the registry ladder it never probed:
+	// "not installed, and the managed install is off", twice, because ruby
+	// lists it in two groups.
+	it("reads rubocop's own probe, once, when its --version exits non-zero", async () => {
+		const { text, causes } = await textFor("ruby.json", (project, dir) => {
+			writeFileSync(path.join(project, ".rubocop.yml"), "AllCops: {}\n");
+			shim(dir, "rubocop", "exit 3");
+		});
+		const cause =
+			"rubocop: a binary it runs was found but rejected its version probe";
+		expect(text).toContain(cause);
+		expect(text).not.toContain(`${cause}; rubocop:`);
+		expect(text).not.toContain("rubocop: not installed");
+		expect(JSON.stringify(causes)).toContain("rubocop:probe-rejected");
+		expect(JSON.stringify(causes)).not.toContain("rubocop:install-disabled");
 	}, 60_000);
 });

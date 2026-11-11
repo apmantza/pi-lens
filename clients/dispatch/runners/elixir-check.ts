@@ -166,7 +166,8 @@ const elixirCheckRunner: RunnerDefinition = {
 
 		let command: string | undefined;
 		let args: string[] = [];
-		if (hasToolConfig("mix", cwd) && (await mix.isAvailableAsync(cwd))) {
+		const mixProject = hasToolConfig("mix", cwd);
+		if (mixProject && (await mix.isAvailableAsync(cwd))) {
 			command = "mix";
 			args = ["compile", "--warnings-as-errors"];
 		} else if (await elixirc.isAvailableAsync(cwd)) {
@@ -176,8 +177,10 @@ const elixirCheckRunner: RunnerDefinition = {
 			args = ["-o", outDir, absPath];
 		}
 
+		// #5258: mix is probed only in a mix project; elsewhere the skip reads
+		// the elixirc probe that decided it.
 		if (!command) {
-			return toolAbsentSkip(cwd, { checker: mix });
+			return toolAbsentSkip(cwd, { checker: mixProject ? mix : elixirc });
 		}
 
 		const result = await safeSpawnAsync(command, args, {

@@ -8,13 +8,12 @@ import { scannerReportParentDir } from "../../scanner-temp-root.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { findCompiledClassesDir } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
-import {
-	skipped,
-	type DefectClass,
-	type Diagnostic,
-	type DispatchContext,
-	type RunnerDefinition,
-	type RunnerResult,
+import type {
+	DefectClass,
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
 } from "../types.js";
 import {
 	createAvailabilityChecker,
@@ -231,7 +230,9 @@ const spotbugsRunner: RunnerDefinition = {
 
 		// JRE required — skip silently if absent (SpotBugs needs JDK 11+).
 		if (!(await java.isAvailableAsync(cwd))) {
-			return skipped("runtime-missing");
+			// #5258: Java's own verdict, so a hung or rejecting Java is not
+			// worded as an absent one.
+			return toolAbsentSkip(cwd, { checker: java, runtime: true });
 		}
 
 		// Cache gate: re-run only when the .class tree changed since last scan.

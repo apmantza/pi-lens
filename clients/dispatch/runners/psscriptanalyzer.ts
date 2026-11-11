@@ -365,9 +365,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 		if (!cmd) return toolAbsentSkip(ctx.cwd);
 
 		if (!(await checkModuleAvailable(cmd))) {
-			return toolAbsentSkip(ctx.cwd, {
-				checker: { getVerdict: () => moduleVerdict(cmd) },
-			});
+			return toolAbsentSkip(ctx.cwd, { verdict: moduleVerdict(cmd) });
 		}
 
 		let execLatch = psExecLatchByCmd.get(cmd);

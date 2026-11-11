@@ -6,7 +6,13 @@ import { setupTestEnvironment, useTrackedTempDirs } from "../../test-utils.js";
 
 const { safeSpawnAsync, runtime } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
-	runtime: { javaPresent: true },
+	runtime: {
+		javaPresent: true,
+		javaVerdict: { outcome: "missing", cause: "not-found" } as {
+			outcome: string;
+			cause: string;
+		},
+	},
 }));
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
@@ -22,8 +28,9 @@ vi.mock(
 			isAvailableAsync: async () => command !== "java" || runtime.javaPresent,
 			getCommand: () => null,
 			getVerdict: () => ({
-				outcome: "missing" as const,
-				cause: "not-found" as const,
+				...(command === "java"
+					? runtime.javaVerdict
+					: { outcome: "missing", cause: "not-found" }),
 				elapsedMs: 0,
 				latched: true,
 				retryAtMs: 0,
@@ -66,6 +73,7 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
 		runtime.javaPresent = true;
+		runtime.javaVerdict = { outcome: "missing", cause: "not-found" };
 		// The runner reads SpotBugs' -output file; the real CLI writes it, so the
 		// mock writes the fixture XML to that path.
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
@@ -114,6 +122,27 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 			env.cleanup();
 		}
 	});
+
+	// Recurrence (#5258 r2 verify N3): every false Java probe read
+	// runtime-missing, so a Java whose `-version` hung or failed was worded as
+	// not installed.
+	it.each([
+		["transient", "probe-timeout", "probe-incomplete"],
+		["non-installable", "probe-rejected", "probe-rejected"],
+	])(
+		"reads a %s Java verdict as %s, not as a missing runtime",
+		async (outcome, cause, reason) => {
+			try {
+				runtime.javaPresent = false;
+				runtime.javaVerdict = { outcome, cause };
+				const res = await run(env.tmpDir);
+				expect(res.skipReason).toBe(reason);
+				expect(safeSpawnAsync).not.toHaveBeenCalled();
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 
 	it("returns cached diagnostics without re-invoking SpotBugs when .class tree is unchanged", async () => {
 		try {

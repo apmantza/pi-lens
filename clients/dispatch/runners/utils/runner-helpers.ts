@@ -50,6 +50,7 @@ import {
 	findLocalBinAt,
 	findLocalBinUpwards,
 	isLocalBinTrustRefusal,
+	type LocalBinLookup,
 	localBinPath,
 	NODE_MODULES_BIN_DIRS,
 	VENDOR_BIN_DIRS,
@@ -105,74 +106,100 @@ export {
 	startHostStallSampler,
 } from "./availability-policy.js";
 
-/** What a runner read to learn its tool was unusable (#5258). */
+/** The part of a verdict a tool-unusable skip reads (#5258). */
+export type ToolVerdict = Pick<AvailabilityVerdict, "outcome" | "cause">;
+
+/** What a runner's resolution of its tool decided, for its skip (#5258). */
+export interface ToolVerdictSource {
+	getVerdict(cwd: string): AvailabilityVerdict;
+	/**
+	 * Whether pi project trust refused the project-local binary this checker's
+	 * own ladder looks up at `cwd` (its command, extension and bin dirs). Only a
+	 * checker with a project rung has one.
+	 */
+	projectBinaryRefused?(cwd: string): boolean;
+}
+
+/**
+ * What a runner read to learn its tool was unusable (#5258). The skip reads
+ * only the resolution the runner used: a checker it did not probe says nothing
+ * about why its own lookup failed.
+ */
 export interface ToolSkipSource {
 	/**
-	 * The registry tool id. It names the managed install (so `install-disabled`
-	 * is said only of a tool the installer could have supplied) and the
-	 * project-local binary a refused trust answer would have used. Omit it for
-	 * a PATH-only toolchain.
+	 * The registry tool id. It names the managed install, so `install-disabled`
+	 * is said only of a tool the installer could have supplied. Omit it for a
+	 * PATH-only toolchain.
 	 */
 	id?: string;
 	/**
-	 * The checker or cwd probe whose verdict the runner read. Defaults to the
-	 * registry checker for `id`. Omit both for a finder that returns only a
-	 * path: its null is a plain absence.
+	 * The checker or cwd probe the runner resolved its tool through. With `id`
+	 * alone it is the registry ladder, so `{ id }` means the runner called
+	 * `resolveToolCommandWithInstallFallback(cwd, id)`. Omit both for a finder
+	 * that returns only a path: its null is a plain absence.
 	 */
-	checker?: { getVerdict(cwd: string): AvailabilityVerdict };
+	checker?: ToolVerdictSource;
+	/**
+	 * The verdict of a resolution made outside any checker (rubocop's own
+	 * `--version` spawn, the PowerShell module probe), `null` when it reached
+	 * none. When present it is the only verdict read, never a checker's.
+	 */
+	verdict?: ToolVerdict | null;
+	/**
+	 * A project-binary lookup the runner made outside its checker (taplo's
+	 * upward walk, phpstan's `vendor/bin` walk) was refused by trust.
+	 */
+	trustRefused?: boolean;
+	/**
+	 * The checker probes a runtime the tool needs (Java for SpotBugs), so its
+	 * absence reads `runtime-missing`, never as the tool's own.
+	 */
+	runtime?: boolean;
 }
 
 /**
  * The skip a runner returns when its tool could not be used (#5258), worded
- * by the typed verdict of the checker the runner already holds, so the cause
- * the notice and the `runner-skip-cause` record state is the one the probe
- * found, never "not installed" for a tool that merely timed out or was refused:
+ * by the typed verdict of the resolution the runner used, so the cause the
+ * notice and the `runner-skip-cause` record state is the one the probe found,
+ * never "not installed" for a tool that merely timed out or was refused:
  *
  * | verdict | reason |
  * | --- | --- |
  * | transient (probe timeout, host stall, unspawnable finder, retries spent), or a bad workspace | `probe-incomplete` |
  * | non-installable (found, rejected its version probe) | `probe-rejected` |
- * | missing, cause `policy-denied`, or a project-local binary exists and trust refuses it | `trust-refused` |
- * | missing otherwise, or no verdict (a finder), the managed install is off and the installer owns the tool | `install-disabled` |
+ * | cause `policy-denied`, or trust refused the project binary the runner's own lookup found | `trust-refused` |
+ * | missing otherwise, or no verdict, for a runtime the tool needs | `runtime-missing` |
+ * | missing otherwise, or no verdict, the managed install is off and the installer would install the tool | `install-disabled` |
  * | missing otherwise, or no verdict (a finder) | `not-installed` |
- *
- * A needed runtime (Java for SpotBugs) is not a verdict of this tool's
- * checker: that site returns `skipped("runtime-missing")` itself.
  */
 export function toolAbsentSkip(
 	cwd: string,
 	tool: ToolSkipSource = {},
 ): RunnerResult {
-	const checker =
-		tool.checker ??
-		(tool.id
-			? (toolBinaryChecker(tool.id, "managed-first") ?? undefined)
-			: undefined);
-	const verdict = checker?.getVerdict(cwd);
+	const ownVerdict = "verdict" in tool;
+	const checker = ownVerdict
+		? undefined
+		: (tool.checker ??
+			(tool.id
+				? (toolBinaryChecker(tool.id, "managed-first") ?? undefined)
+				: undefined));
+	const verdict = ownVerdict ? tool.verdict : checker?.getVerdict(cwd);
 	if (verdict?.outcome === "transient" || verdict?.cause === "bad-cwd")
 		return skipped("probe-incomplete");
 	if (verdict?.outcome === "non-installable") return skipped("probe-rejected");
-	if (verdict?.cause === "policy-denied") return skipped("trust-refused");
-	if (tool.id !== undefined && projectBinaryRefusedByTrust(tool.id, cwd))
+	if (
+		verdict?.cause === "policy-denied" ||
+		tool.trustRefused === true ||
+		checker?.projectBinaryRefused?.(cwd) === true
+	)
 		return skipped("trust-refused");
+	if (tool.runtime === true) return skipped("runtime-missing");
 	return skipped(
 		isToolInstallDisabled() &&
 			tool.id !== undefined &&
 			shouldAutoInstallTool(tool.id)
 			? "install-disabled"
 			: "not-installed",
-	);
-}
-
-/** Whether the project carries a binary for this registry tool that trust refused. */
-function projectBinaryRefusedByTrust(toolId: string, cwd: string): boolean {
-	const spec = getToolCommandSpec(toolId);
-	if (!spec) return false;
-	return isLocalBinTrustRefusal(
-		findLocalBinAt(spec.command, cwd, {
-			windowsExt: spec.windowsExt ?? "",
-			binDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
-		}),
 	);
 }
 
@@ -1244,6 +1271,7 @@ export function createAvailabilityChecker(
 	getCommand: (cwd?: string) => string | null;
 	getOutcome: (cwd?: string) => AvailabilityOutcome | null;
 	getVerdict: (cwd?: string) => AvailabilityVerdict;
+	projectBinaryRefused: (cwd: string) => boolean;
 	reset: () => void;
 } {
 	const cacheByCwd = new PathKeyedMap<AvailabilityCache>(
@@ -1258,17 +1286,18 @@ export function createAvailabilityChecker(
 	const pathFirst = options.order === "path-first";
 	const allowProjectLocal = options.allowProjectLocal !== false;
 	const pathRung = (): VenvResolution => ({ path: command, rung: "path" });
+	// The project rung at exactly `cwd`, the same lookup `createVenvFinder` makes.
+	const projectRung = (cwd: string) =>
+		findLocalBinAt(command, cwd, {
+			windowsExt,
+			binDirs: options.projectBinDirs ?? VENV_BIN_DIRS,
+		});
 	const findCommand = options.pathOnly
 		? async (): Promise<VenvResolution> => pathRung()
 		: pathFirst
 			? async (cwd: string): Promise<VenvResolution> => {
 					const project = allowProjectLocal
-						? localBinPath(
-								findLocalBinAt(command, cwd, {
-									windowsExt,
-									binDirs: options.projectBinDirs ?? VENV_BIN_DIRS,
-								}),
-							)
+						? localBinPath(projectRung(cwd))
 						: undefined;
 					return project ? { path: project, rung: "venv" } : pathRung();
 				}
@@ -1640,7 +1669,27 @@ export function createAvailabilityChecker(
 		};
 	}
 
-	return { isAvailableAsync, getCommand, getOutcome, getVerdict, reset };
+	/**
+	 * #5258: whether trust refused the project binary this ladder's own project
+	 * rung looks up, so a skip states the refusal and not an absence. A ladder
+	 * without that rung (PATH only, or no project rung) refused nothing.
+	 */
+	function projectBinaryRefused(cwd: string): boolean {
+		return (
+			!options.pathOnly &&
+			allowProjectLocal &&
+			isLocalBinTrustRefusal(projectRung(cwd))
+		);
+	}
+
+	return {
+		isAvailableAsync,
+		getCommand,
+		getOutcome,
+		getVerdict,
+		projectBinaryRefused,
+		reset,
+	};
 }
 
 /** What a `createCwdCachedProbe` probe hands back for classification (#1494). */
@@ -1911,20 +1960,19 @@ export function resolveToolCommand(cwd: string, toolId: string): string | null {
  * private copy of that climb, unceilinged, so a `vendor/bin` at or above
  * `$HOME` — which can never be this project's own Composer install — was
  * resolved as the project's tool (#2514, same class as `findInVendorBin`,
- * which had already been folded).
+ * which had already been folded). Returns the lookup, so a trust refusal
+ * stays distinct from an absence (#5258).
  */
 export function resolveVendorToolCommand(
 	cwd: string,
 	toolName: string,
 	windowsExt = ".bat",
-): string | null {
+): LocalBinLookup | null {
 	return (
-		localBinPath(
-			findLocalBinUpwards(toolName, cwd, {
-				windowsExt,
-				binDirs: VENDOR_BIN_DIRS,
-			}),
-		) ?? null
+		findLocalBinUpwards(toolName, cwd, {
+			windowsExt,
+			binDirs: VENDOR_BIN_DIRS,
+		}) ?? null
 	);
 }
 
@@ -2024,12 +2072,18 @@ export async function resolveInstalledToolCommand(
 		: { command: null };
 }
 
+const NOT_FOUND_VERDICT: ToolVerdict = {
+	outcome: "missing",
+	cause: "not-found",
+};
+
 async function verifyOrInstallCommand(
 	command: string,
 	toolId: string,
 	cwd: string,
 	versionArgs: string[] = ["--version"],
 	timeout = 5000,
+	onUnusable: (verdict: ToolVerdict) => void = () => {},
 ): Promise<string | null> {
 	// Skip the --version spawn when the command isn't even on disk — the ~μs
 	// stat/PATH walk beats a guaranteed-to-fail spawn round-trip.
@@ -2045,13 +2099,23 @@ async function verifyOrInstallCommand(
 			return command;
 		}
 		// A command that was found but rejected its probe is not fixed by a
-		// reinstall. This also covers permissions and malformed shims.
+		// reinstall. This also covers permissions and malformed shims; a probe
+		// that timed out or that trust refused is classified as what it is.
+		const { outcome, cause } = classifyProbeFailure(versionCheck, { command });
+		onUnusable({ outcome, cause });
 		return null;
 	}
-	if (!shouldAutoInstallTool(toolId)) return null;
+	// Not on disk: an absence, whether or not the install below may repair it.
+	if (!shouldAutoInstallTool(toolId)) {
+		onUnusable(NOT_FOUND_VERDICT);
+		return null;
+	}
 
 	const state = installStateFor(cwd, toolId);
-	if (state.suppressed) return null;
+	if (state.suppressed) {
+		onUnusable(NOT_FOUND_VERDICT);
+		return null;
+	}
 	const installStartedAt = Date.now();
 	const installed = await ensureTool(toolId);
 	if (installed) {
@@ -2075,15 +2139,23 @@ async function verifyOrInstallCommand(
 		return installed;
 	}
 	noteInstallFailure(toolId, cwd);
+	onUnusable(NOT_FOUND_VERDICT);
 	return null;
 }
 
+/**
+ * The bundler-form resolver (`bundle exec rubocop`): a `--version` spawn of the
+ * argv, then the on-disk verify or install of its command. It holds no
+ * checker, so a caller that must say why it got `null` reads `onUnusable`,
+ * called once with the verdict of the probe that decided it (#5258).
+ */
 export async function resolveCommandArgsWithInstallFallback(
 	command: { cmd: string; args: string[] },
 	toolId: string,
 	cwd: string,
 	versionArgs: string[] = ["--version"],
 	timeout = 5000,
+	onUnusable?: (verdict: ToolVerdict) => void,
 ): Promise<{ cmd: string; args: string[] } | null> {
 	const versionCheck = await safeSpawnAsync(
 		command.cmd,
@@ -2099,6 +2171,7 @@ export async function resolveCommandArgsWithInstallFallback(
 		cwd,
 		versionArgs,
 		timeout,
+		onUnusable,
 	);
 	if (!installed) {
 		return null;
