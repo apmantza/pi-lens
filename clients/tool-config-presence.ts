@@ -115,11 +115,11 @@ interface ToolConfigSpec {
 	/** The tool's own package named as a dependency of the project. */
 	dependency?: { names: readonly string[]; files: readonly DependencyFile[] };
 	/**
-	 * A source config file that imports the tool's package (`from "x"`,
+	 * A source config file that imports one of the tool's packages (`from "x"`,
 	 * `import "x"`, `require("x")`, `import("x")`, subpaths included). Comments
 	 * are blanked first; a bare mention never counts.
 	 */
-	sourceImports?: { files: readonly string[]; module: string };
+	sourceImports?: { files: readonly string[]; modules: readonly string[] };
 	/**
 	 * Evidence that only counts from `startDir` up to and including the nearest
 	 * `package.json`: ESLint's legacy `.eslintrc.*` / `eslintConfig` keep the
@@ -209,7 +209,8 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 			jsonFields: [{ file: "package.json", field: "eslintConfig" }],
 		},
 	},
-	// `biome.jsonc` before `biome.json`: the nearest file is the one handed over.
+	// `biome.jsonc` is probed first, so it wins where both names sit in one
+	// directory. No caller reads the biome match's file; presence is the answer.
 	biome: { files: ["biome.jsonc", "biome.json"] },
 	stylelint: {
 		files: [
@@ -274,7 +275,8 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 				"vite.config.mjs",
 				"vite.config.cjs",
 			],
-			module: "vite-plus",
+			// The core package is Vite+ too: master matched it by substring.
+			modules: ["vite-plus", "@voidzero-dev/vite-plus-core"],
 		},
 	},
 	// SpotBugs and javac ask whether a Maven/Gradle descriptor is in scope.
@@ -466,11 +468,13 @@ function blankJsComments(source: string): string {
 	return out;
 }
 
-/** Whether `source` imports `module` (or a subpath of it) in a form the runtime resolves. */
-function importsModule(source: string, module: string): boolean {
-	const escaped = module.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+/** Whether `source` imports one of `modules` (or a subpath of it) in a form the runtime resolves. */
+function importsModule(source: string, modules: readonly string[]): boolean {
+	const alternation = modules
+		.map((module) => module.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&"))
+		.join("|");
 	return new RegExp(
-		String.raw`(?:\bfrom|\bimport|\brequire)\s*\(?\s*["']${escaped}(?:/[^"']*)?["']`,
+		String.raw`(?:\bfrom|\bimport|\brequire)\s*\(?\s*["'](?:${alternation})(?:/[^"']*)?["']`,
 	).test(blankJsComments(source));
 }
 
@@ -542,7 +546,7 @@ function findInDir(
 		const content = readFileContent(candidate);
 		if (
 			content !== undefined &&
-			importsModule(content, spec.sourceImports?.module ?? "")
+			importsModule(content, spec.sourceImports?.modules ?? [])
 		) {
 			return { file: candidate, dir, source: "import" };
 		}

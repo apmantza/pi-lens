@@ -221,6 +221,10 @@ describe("Vite+ is a declared import or dependency, never a mention (#5408 accep
 		],
 		["a side-effect import", 'import "vite-plus";\nexport default {};\n'],
 		[
+			"an import of the core package (#5408 F1: master selected it)",
+			'import { defineConfig } from "@voidzero-dev/vite-plus-core";\nexport default defineConfig({});\n',
+		],
+		[
 			"require",
 			'const { defineConfig } = require("vite-plus");\nmodule.exports = defineConfig({});\n',
 		],

@@ -1907,7 +1907,6 @@ export function hasOxfmtConfig(cwd: string): boolean {
 	for (const dir of walkUpDirs(cwd)) {
 		if (fs.existsSync(path.join(dir, "oxfmt.toml"))) return true;
 		if (fs.existsSync(path.join(dir, ".oxfmtrc.json"))) return true;
-		if (hasToolConfig("vitePlus", dir)) return true;
 		const pkgPath = path.join(dir, "package.json");
 		if (fs.existsSync(pkgPath)) {
 			try {
@@ -1924,7 +1923,9 @@ export function hasOxfmtConfig(cwd: string): boolean {
 			} catch {}
 		}
 	}
-	return false;
+	// Vite+ is asked once, from cwd: the seam stops at $HOME, and asking it per
+	// ancestor of this unbounded walk found a vite-plus.json above $HOME (#5408 F6).
+	return hasToolConfig("vitePlus", cwd);
 }
 
 // Empirically verified against the real `oxfmt` npm package (0.62.0), a

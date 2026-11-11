@@ -4,7 +4,8 @@ import {
 } from "../../clients/tool-config-presence.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { oxfmtFormatter } from "../../clients/formatters.js";
 import {
 	getAutofixCapability,
 	getAutofixPolicyForFile,
@@ -800,7 +801,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasEslintConfig detects config file in a parent directory", () => {
+	it("eslint: a flat config in a parent directory is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-eslint-walkup-");
 		try {
 			createTempFile(env.tmpDir, "eslint.config.js", "export default [];\n");
@@ -812,7 +813,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasEslintConfig detects eslintConfig field in parent package.json", () => {
+	it("eslint: an eslintConfig field in a parent package.json is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-eslint-pkg-walkup-");
 		try {
 			createTempFile(
@@ -828,7 +829,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasBiomeConfig / getBiomeConfigPath detects biome.json in a parent directory", () => {
+	it("biome: a biome.json in a parent directory is found by findToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-biome-walkup-");
 		try {
 			createTempFile(env.tmpDir, "biome.json", "{}\n");
@@ -841,7 +842,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasStylelintConfig detects config file in a parent directory", () => {
+	it("stylelint: a config file in a parent directory is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-stylelint-walkup-");
 		try {
 			createTempFile(env.tmpDir, ".stylelintrc", "{}\n");
@@ -935,6 +936,32 @@ describe("tool-policy", () => {
 			expect(hasOxfmtConfig(subDir)).toBe(true);
 			expect(hasOxlintConfig(subDir)).toBe(true);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5408 F6 (review of #5493): `hasOxfmtConfig` asked the Vite+ seam once per
+	// ancestor of an unbounded walk, so a vite-plus.json above $HOME made oxfmt
+	// configured while the Vite+ gate that `resolveCommand` consults (bounded at
+	// $HOME) said no. The home is pinned with vi.stubEnv: the fixture home root
+	// sits inside this repo, whose own package.json pins oxfmt, so only a
+	// tmpdir-rooted home keeps the oxfmt package.json clause out of the answer.
+	it("a vite-plus.json above $HOME leaves oxfmt unconfigured, as its Vite+ gate says", async () => {
+		const env = setupTestEnvironment(
+			"pi-lens-tool-policy-oxfmt-viteplus-home-",
+		);
+		try {
+			createTempFile(env.tmpDir, "vite-plus.json", "{}\n");
+			const home = path.join(env.tmpDir, "home");
+			const proj = path.join(home, "proj");
+			fs.mkdirSync(proj, { recursive: true });
+			vi.stubEnv("HOME", home);
+
+			expect(hasToolConfig("vitePlus", proj)).toBe(false);
+			expect(hasOxfmtConfig(proj)).toBe(false);
+			expect(await oxfmtFormatter.detect(proj)).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
 			env.cleanup();
 		}
 	});
@@ -1075,7 +1102,7 @@ describe("tool-policy", () => {
 		});
 	});
 
-	it("hasMypyConfig detects [tool.mypy] in a parent directory pyproject.toml", () => {
+	it("mypy: [tool.mypy] in a parent directory pyproject.toml is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-mypy-walkup-");
 		try {
 			createTempFile(
