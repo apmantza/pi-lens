@@ -144,11 +144,7 @@ function queryBatchIdentity(queryDefs: readonly TreeSitterQuery[]): string {
 // must not stall the batched query walk; the filter fails open when this cap
 // is reached so unrelated diagnostics and the current match are preserved.
 const NO_NESTED_ANCHOR_VISIT_CAP = 10_000;
-// #5466: `has_react_context` shapes, hoisted so the post-filter does not
-// rebuild them per match (the PYTHON_SQL_SINK_METHODS precedent). The
-// module-segment regex is the React/React-like hook-source test — SOURCE-
-// keyed on purpose: a `use*` import name from any other module is not React
-// context. The node kinds are the JSX context arm.
+// #5466: `has_react_context` is keyed on the import source, never a `use*` name.
 const REACT_FAMILY_MODULE_SEGMENT = /^(react|preact)(-[a-z0-9-]+)?$/;
 const REACT_JSX_NODE_TYPES: ReadonlySet<string> = new Set([
 	"jsx_element",
@@ -3920,12 +3916,8 @@ export class TreeSitterClient {
 				}
 			}
 			case "has_react_context": {
-				// #5466: a set[A-Z] loop is a React anti-pattern only in a React
-				// file. Context = a top-level React/React-like hook-source import
-				// (source-keyed), or a JSX node anywhere. Uncapped stack walk in the
-				// status_204_with_value_return shape: the old size-capped walk
-				// failed open and leaked findings on large plain modules.
-				// Unjudgeable keeps the finding (never suppress unknowns).
+				// #5466: React context = a top-level React-family import or any JSX
+				// node; a failed probe keeps the finding.
 				if (invocationState?.reactContext !== undefined) {
 					return invocationState.reactContext;
 				}

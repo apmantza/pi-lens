@@ -6,7 +6,7 @@ note: |
   Use !== instead of !a === b. Or write !(a === b) if you meant negated equality.
 
   #5466: both operands negated (`!a === !b`) is a deliberate boolean
-  comparison of two negations, not a mispelled negated equality — the
+  comparison of two negations, not a misspelled negated equality — the
   double-negation form is exempt on every equality operator. A single
   negated operand is still reported.
 rule:
