@@ -171,6 +171,34 @@ describe("a fixer that rewrites then exits nonzero is recorded as changed (#5417
 		},
 	);
 
+	// Recurrence (#5408 slice 2): the `--dialect ansi` fallback was keyed on a
+	// private sqlfluff finder; it is keyed on the seam now. A project that has a
+	// sqlfluff config states its own dialect, so the fixer must not be handed one.
+	it.each(RUNNABLE_ROWS.filter((r) => r.tool === "sqlfluff"))(
+		"$tool: a project with a sqlfluff config is not handed a fallback dialect (#5408)",
+		async (row) => {
+			const filePath = project(row);
+			const calls: string[][] = [];
+			safeSpawnAsync.mockImplementation(
+				async (_cmd: string, args: string[]) => {
+					if (args.includes(filePath)) calls.push(args);
+					return { error: null, status: 0, stdout: "1.0.0", stderr: "" };
+				},
+			);
+
+			await runAutofix(
+				filePath,
+				env.tmpDir,
+				() => undefined,
+				() => {},
+				deps() as never,
+			);
+
+			expect(calls).toHaveLength(1);
+			expect(calls[0]).not.toContain("--dialect");
+		},
+	);
+
 	// The whole-package fixers (`cargo clippy --fix`, `dart fix --apply`) read
 	// the project diff, and gated that diff on exit code 0: the same shape.
 	it("rust-clippy: the files a nonzero cargo clippy --fix rewrote are recorded", async () => {

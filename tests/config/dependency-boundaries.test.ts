@@ -104,6 +104,28 @@ describe("dependency boundary governance", () => {
 		expect(unexpectedViolations()).toEqual([]);
 	}, 60_000);
 
+	// Recurrence: a known-violations row whose cycle was fixed stayed admitted,
+	// so the same cycle returning would pass silently. The count pin below only
+	// sees an added row, never a stale one (planted: a row no cruise reports,
+	// pin bumped to 6, stayed green).
+	it("lists no known violation the cruise no longer reports", () => {
+		const live = new Set(
+			cruiseBuiltGraph().summary.violations.map(
+				(v) => `${v.rule.name}: ${v.from} -> ${v.to}`,
+			),
+		);
+		const known = parseJson5(
+			readFileSync(
+				resolve(repoRoot, ".dependency-cruiser-known-violations.json"),
+				"utf8",
+			),
+		) as Array<{ from: string; to: string; rule: { name: string } }>;
+		const stale = known
+			.map((v) => `${v.rule.name}: ${v.from} -> ${v.to}`)
+			.filter((key) => !live.has(key));
+		expect(stale).toEqual([]);
+	}, 60_000);
+
 	it("keeps the configured boundary rules present", () => {
 		const config = require(resolve(repoRoot, ".dependency-cruiser.cjs")) as {
 			forbidden: Array<{ name?: string }>;

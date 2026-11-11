@@ -70,8 +70,15 @@ const PURE_PATH_HELPERS = [
 	"isUnderDir",
 	"toProjectRelativePath",
 ];
-/** The policy layer's own lookups: they answer from the policy table. */
+/**
+ * The policy layer's own lookups: they answer from the policy table. The three
+ * `*ConfigArgs` builders keep the arg-building and take the config presence
+ * from the seam (#5408 slice 2), so a runner importing one reads no config.
+ */
 const POLICY_LOOKUPS = [
+	"biomeConfigArgs",
+	"markdownlintConfigArgs",
+	"ruffConfigArgs",
 	"getLinterPolicyForCwd",
 	"getAutofixCapability",
 	"getJstsLintPolicyForCwd",

@@ -6,10 +6,12 @@
  * unsupported combos and when require.resolve can't find the package.
  */
 
+import * as fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
 	getStrategy,
 	resolveAstGrepNativeExe,
+	SERVER_DIAGNOSTIC_STRATEGIES,
 } from "../../../clients/lsp/wait-policy/strategies.js";
 
 describe("TypeScript diagnostic strategies (#1412)", () => {
@@ -98,6 +100,61 @@ describe("lane B project-loading diagnostic strategies (#3402)", () => {
 	});
 });
 
+describe("deno diagnostic strategy (#5464) — measured against the real deno 2.9.8 binary", () => {
+	/** DEFAULT_STRATEGY is not exported; this is it, through the real seam. */
+	const defaults = getStrategy("__no_such_server_id__");
+	const measured = JSON.parse(
+		fs.readFileSync(
+			new URL(
+				"../../fixtures/lsp-wait-measurements/deno-5464.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	) as {
+		ci: { runs: Array<{ startedAt: string; touchedAt: string }> };
+		localCpuStarved: { cap8000CompletedTouchMs: number[] };
+	};
+
+	// Recurrence (#5464): deno sat on the 1500 ms default, a cold touch on a slow
+	// runner took 4.15 s and 4.60 s, and the nightly handshake row read
+	// `touched=0` while the same commit was green at 3.4 s. The budget is a
+	// CEILING over a pull deno always answers, so it must clear the slowest
+	// COMPLETED touch the artifact records (CI and a CPU-starved host), with the
+	// margin csharp's row carries (6000 over 4860).
+	it("clears the slowest completed cold touch the artifact records", () => {
+		const completedMs = [
+			...measured.ci.runs.map(
+				(run) => Date.parse(run.touchedAt) - Date.parse(run.startedAt),
+			),
+			...measured.localCpuStarved.cap8000CompletedTouchMs,
+		];
+		expect(completedMs.length).toBeGreaterThanOrEqual(8);
+		const slowest = Math.max(...completedMs);
+		expect(getStrategy("deno").aggregateWaitMs).toBeGreaterThanOrEqual(
+			Math.ceil(slowest * 1.25),
+		);
+		// Recurrence (#5464 review F6, Qodo C2): the lower bound alone let a 7000 ->
+		// 8000 edit pass, and 8000 adds a second to every uncapped call that deno
+		// never answers. 7000 is the measured 1.25 x 5491 (6864) rounded up, so the
+		// exact value is pinned; moving it needs a new measurement, not a silent edit.
+		expect(getStrategy("deno").aggregateWaitMs).toBe(7000);
+	});
+
+	// Recurrence (#3402 r3): a row that moves an unmeasured field with the one
+	// that was measured. Only the budget was measured; deno is a pull server and
+	// nothing measured its retry or debounce.
+	it("moves the measured aggregate budget and no other field", () => {
+		expect(getStrategy("deno")).toEqual({
+			...defaults,
+			aggregateWaitMs: getStrategy("deno").aggregateWaitMs,
+		});
+		expect(getStrategy("deno").aggregateWaitMs).toBeGreaterThan(
+			defaults.aggregateWaitMs,
+		);
+	});
+});
+
 describe("resolveAstGrepNativeExe", () => {
 	it("resolves the real native exe for the CURRENT platform/arch (installed in this repo's node_modules)", () => {
 		// This repo has @ast-grep/cli-win32-x64-msvc (or the platform-appropriate
@@ -141,5 +198,44 @@ describe("resolveAstGrepNativeExe", () => {
 		] as const) {
 			expect(() => resolveAstGrepNativeExe(platform, arch)).not.toThrow();
 		}
+	});
+});
+
+describe("rust diagnostic strategy (#5485) — measured against the real rust-analyzer 1.99.1", () => {
+	const measured = JSON.parse(
+		fs.readFileSync(
+			new URL(
+				"../../fixtures/lsp-wait-measurements/rust-5485.json",
+				import.meta.url,
+			),
+			"utf8",
+		),
+	) as {
+		productPath: {
+			dirtyFixture: Record<string, { touchMs: number[]; collected: number[] }>;
+		};
+	};
+	const slowestCatchMs = Math.max(
+		...measured.productPath.dirtyFixture.candidate7000_6000!.touchMs,
+	);
+
+	// Recurrence (#5485): the table carried a `rust-analyzer` row (3000 / 500)
+	// keyed by display name, so it never applied; re-keying it to `rust` "fixes"
+	// the key and changes nothing a user sees, because rust-analyzer answers an
+	// empty authoritative report for ~0.4 s and the type error lands at ~3.6-3.9 s
+	// (0 of 5 cold lsp_touch_file calls caught it at 3000 / 500, artifact
+	// `rekeyedOriginal3000_500`). ANY `rust` row is the same key-only edit the
+	// census exists to refuse until the readiness signal (#5487) or a maintainer
+	// budget decision (#5485) replaces this guard, so the guard refuses the row,
+	// not one field of it: a 6000 / 1500 row clears a pull-retry-only check and
+	// still ends the touch at 1500 ms.
+	it("has no rust row until the cold-touch trade is decided", () => {
+		expect(
+			SERVER_DIAGNOSTIC_STRATEGIES.rust,
+			`A rust row needs a measured cold-touch trade (#5485, #5487). The slowest ` +
+				`cold touch that caught the finding took ${slowestCatchMs} ms ` +
+				`(tests/fixtures/lsp-wait-measurements/rust-5485.json); a row that ends ` +
+				`the touch earlier keeps reading a loading rust-analyzer as clean.`,
+		).toBeUndefined();
 	});
 });

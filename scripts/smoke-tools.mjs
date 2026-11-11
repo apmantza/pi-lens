@@ -4448,9 +4448,10 @@ export async function runFormatSmoke({ langs, install, verbose, deps }) {
  *
  * The three rungs are the shared `findLocalBinUpwards` walker's three bin-dir
  * shapes (`clients/package-manager.ts` `VENV_BIN_DIRS`, `VENDOR_BIN_DIRS`,
- * `NODE_MODULES_BIN_DIRS`) seen through formatters (ancestor walk, file in a
- * nested dir) plus the dispatch-runner venv rung (`createVenvFinder`, fixed at
- * `cwd`, reports `rung: "venv"`). Each chosen formatter's resolver returns
+ * `NODE_MODULES_BIN_DIRS`) seen through formatters (the venv at the project
+ * root the formatter spawns in, #5410; the other two by ancestor walk, file in
+ * a nested dir) plus the dispatch-runner venv rung (`createVenvFinder`, fixed
+ * at `cwd`, reports `rung: "venv"`). Each chosen formatter's resolver returns
  * `null` / `FORMATTER_UNAVAILABLE` / a different path when its rung is
  * disabled and never auto-installs, so a red here is a resolution defect and
  * never a network failure.
@@ -4466,7 +4467,7 @@ export async function runFormatSmoke({ langs, install, verbose, deps }) {
 const RESOLUTION_STUB = "#!/bin/sh\nexit 0\n";
 const RESOLUTION_CASE_BUDGET_MS = 30_000;
 
-/** @type {ReadonlyArray<{id: string, source: string, seam: "formatter" | "runner", tool: string, bin: string, file?: string}>} */
+/** @type {ReadonlyArray<{id: string, source: string, seam: "formatter" | "runner", tool: string, bin: string, file?: string, marker?: string}>} */
 export const RESOLUTION_CASES = [
 	{
 		id: "formatter-venv",
@@ -4475,6 +4476,9 @@ export const RESOLUTION_CASES = [
 		tool: "sqlfluff",
 		bin: path.join(".venv", "bin", "sqlfluff"),
 		file: path.join("src", "deep", "query.sql"),
+		// A formatter finds a `.venv` only at the project root it spawns in
+		// (#5410), so the root carries sqlfluff's own marker.
+		marker: ".sqlfluff",
 	},
 	{
 		id: "formatter-vendor-bin",
@@ -4509,6 +4513,7 @@ export function plantResolutionFixture(root, cases = RESOLUTION_CASES) {
 		fs.writeFileSync(bin, RESOLUTION_STUB, { mode: 0o755 });
 		if (c.file)
 			fs.mkdirSync(path.dirname(path.join(root, c.file)), { recursive: true });
+		if (c.marker) fs.writeFileSync(path.join(root, c.marker), "");
 	}
 }
 

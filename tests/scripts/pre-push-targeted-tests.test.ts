@@ -32,6 +32,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { copyFixtureGitHelper } from "../support/fixture-git-copy.js";
 import { readNdjsonRows } from "../support/ndjson-rows.js";
+import { relativeInside } from "../../clients/path-utils.js";
+import { isProcessAlive } from "../support/process-tree.js";
+import { waitFor } from "../clients/interleaving-kit.js";
 import {
 	loadHistorySelection,
 	resolveHeadPaths,
@@ -51,6 +54,8 @@ import {
 	selectTargetedTests,
 	resolveBaseRef,
 	resolveDiffRange,
+	ensurePrePushTmpRoot,
+	resolvePrePushTmpRoot,
 	readPrePushRecord,
 	writePrePushRecord,
 } from "../../scripts/pre-push-targeted-tests.mjs";
@@ -79,6 +84,15 @@ function fixtureRoot(prefix: string): string {
 	return fs.mkdtempSync(path.join(repoRoot, ".probe-home", prefix));
 }
 
+// A PI_LENS_HOME beside the fixture checkout, never inside it: the gate moves
+// a base at or inside the checkout to the default one (#5468 M1).
+const outsideRoots: string[] = [];
+function outsideHome(): string {
+	const root = fixtureRoot("pre-push-home-");
+	outsideRoots.push(root);
+	return root;
+}
+
 function enterFixture() {
 	fixtureDir = fixtureRoot("pre-push-test-");
 	process.chdir(fixtureDir);
@@ -90,6 +104,8 @@ afterEach(() => {
 		fs.rmSync(fixtureDir, { recursive: true, force: true });
 		fixtureDir = undefined;
 	}
+	for (const root of outsideRoots.splice(0))
+		fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("resolveDiffRange — pre-push ref population (#3661)", () => {
@@ -254,14 +270,21 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 			input: string,
 			extra: string[] = [],
 			env: NodeJS.ProcessEnv = {},
+			probeMain: boolean | "undrained" = false,
 		) =>
 			spawnSync(
 				process.execPath,
-				[
-					path.join(scriptDir, "pre-push-targeted-tests.mjs"),
-					"--skip-build",
-					...extra,
-				],
+				probeMain
+					? [
+							"--input-type=module",
+							"-e",
+							`import { main } from ${JSON.stringify(pathToFileURL(path.join(scriptDir, "pre-push-targeted-tests.mjs")).href)}; ${probeMain === "undrained" ? "process.kill = () => { throw Object.assign(new Error('denied'), {code: 'EPERM'}); }; const realTimer = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 5000 ? 50 : ms, ...args);" : ""} process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...${JSON.stringify(extra)}); process.exitCode = await main();`,
+						]
+					: [
+							path.join(scriptDir, "pre-push-targeted-tests.mjs"),
+							"--skip-build",
+							...extra,
+						],
 				{
 					cwd: fixtureDir,
 					encoding: "utf8",
@@ -673,6 +696,372 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 		expect(withTree.status).toBe(0);
 		expect(withTree.stdout).toContain("  - tests/clients/first.test.ts");
 		expect(withTree.stdout).toContain("  - tests/clients/third.test.ts");
+	});
+
+	it("sweeps stale run directories while preserving live and foreign entries (#5468 F3)", () => {
+		// Detached late writers recreate markerless run directories after cleanup.
+		const { hook } = gitFixture();
+		const home = path.join(outsideHome(), "sweep-home");
+		const base = path.join(home, "prepush-tmp");
+		const stale = path.join(base, "run-stale");
+		const live = path.join(base, "run-live");
+		const sibling = path.join(base, "sibling");
+		const link = path.join(base, "run-link");
+		for (const dir of [stale, live, sibling])
+			fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(live, "owner.pid"), String(process.pid));
+		fs.writeFileSync(path.join(sibling, "witness"), "keep");
+		fs.symlinkSync(sibling, link, "dir");
+		fs.symlinkSync(sibling, path.join(base, "run-link-two"), "dir");
+		const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
+			PI_LENS_HOME: home,
+			// The default base, even when the caller exports the override.
+			PI_LENS_PREPUSH_TMPDIR: "",
+		});
+		expect(result.status).toBe(0);
+		expect(fs.existsSync(live)).toBe(true);
+		expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+		expect(fs.readFileSync(path.join(sibling, "witness"), "utf8")).toBe("keep");
+		expect(fs.existsSync(stale)).toBe(false);
+		expect(
+			result.stderr.match(/\[pre-push\] temp sweep skipped unsafe entries/g),
+		).toHaveLength(1);
+	});
+
+	it("keeps a markerless run directory under an operator override base (#5468 r3)", () => {
+		// PI_LENS_PREPUSH_TMPDIR may name a shared directory such as /tmp, where a
+		// markerless run-* is someone else's; only our dead owner.pid is ours.
+		const { hook } = gitFixture();
+		const base = path.join(fixtureDir as string, "shared-base");
+		const foreign = path.join(base, "run-foreign");
+		const dead = path.join(base, "run-dead");
+		fs.mkdirSync(foreign, { recursive: true });
+		fs.mkdirSync(dead, { recursive: true });
+		fs.writeFileSync(path.join(foreign, "data"), "keep");
+		fs.writeFileSync(path.join(dead, "owner.pid"), "2147483646");
+		// #5468 r3 F5: parseInt read this as the dead pid 2147483646, and the
+		// sweep deleted a foreign directory on a numeric-prefix marker.
+		const malformed = path.join(base, "run-malformed");
+		fs.mkdirSync(malformed);
+		fs.writeFileSync(path.join(malformed, "owner.pid"), "2147483646not-a-pid");
+		const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
+			PI_LENS_PREPUSH_TMPDIR: base,
+		});
+		expect(result.status).toBe(0);
+		expect(fs.readFileSync(path.join(foreign, "data"), "utf8")).toBe("keep");
+		expect(fs.existsSync(dead)).toBe(false);
+		expect(fs.existsSync(malformed)).toBe(true);
+	});
+
+	it("keeps a live gate's allocation from a concurrent startup sweep (#5468 r3 F4)", () => {
+		// Recurrence: claimScratchDir created run-* before writing owner.pid, so a
+		// second gate starting inside that window swept the live, still markerless
+		// allocation as a late writer's, and the first gate died on ENOENT. The
+		// preload runs gate B's real sweep at every step of gate A's claim (after
+		// mkdtemp, before each write and rename), so any order that exposes a
+		// prefixed name before its marker reds; B stops at its own allocation.
+		const { hook } = gitFixture();
+		const home = path.join(outsideHome(), "race-home");
+		const preload = path.join(fixtureDir as string, "race-preload.mjs");
+		const bStatus = path.join(fixtureDir as string, "race-b.txt");
+		const input = `(delete) ${zero} refs/heads/removed abc123\n`;
+		fs.writeFileSync(
+			preload,
+			`import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
+const inBase = (p) => String(p).includes("prepush-tmp");
+let sweeps = 0;
+const sweepB = () => {
+	if (sweeps++ >= 3) return;
+	const b = spawnSync(process.execPath, process.argv.slice(1), {
+		input: ${JSON.stringify(input)},
+		encoding: "utf8",
+		env: { ...process.env, RACE_ROLE: "B" },
+	});
+	realWrite(${JSON.stringify(bStatus)}, b.stderr);
+};
+const realTemp = fs.mkdtempSync;
+const realWrite = fs.writeFileSync;
+const realRename = fs.renameSync;
+fs.mkdtempSync = (prefix, ...rest) => {
+	if (!inBase(prefix)) return realTemp(prefix, ...rest);
+	if (process.env.RACE_ROLE === "B") throw new Error("STOP_AFTER_SWEEP");
+	const dir = realTemp(prefix, ...rest);
+	sweepB();
+	return dir;
+};
+fs.writeFileSync = (file, ...rest) => {
+	if (process.env.RACE_ROLE !== "B" && inBase(file)) sweepB();
+	return realWrite(file, ...rest);
+};
+fs.renameSync = (from, ...rest) => {
+	if (process.env.RACE_ROLE !== "B" && inBase(from)) sweepB();
+	return realRename(from, ...rest);
+};
+syncBuiltinESMExports();
+`,
+		);
+		const result = hook(input, [], {
+			PI_LENS_HOME: home,
+			PI_LENS_PREPUSH_TMPDIR: "",
+			NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+		});
+		// B swept before stopping, so the race window was really exercised.
+		expect(fs.readFileSync(bStatus, "utf8")).toContain("STOP_AFTER_SWEEP");
+		expect(result.stderr).not.toContain("ENOENT");
+		expect(result.status).toBe(0);
+	});
+
+	it("allocates distinct run directories under the override base (#5439)", () => {
+		const { hook } = gitFixture();
+		const base = path.join(fixtureDir as string, "run-base");
+		const dirs = [0, 1].map(() => {
+			const result = hook(`(delete) ${zero} refs/heads/removed abc123\n`, [], {
+				PI_LENS_PREPUSH_TMPDIR: base,
+			});
+			expect(result.status).toBe(0);
+			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+			expect(dir).toBeDefined();
+			return dir as string;
+		});
+		expect(dirs[0]).not.toBe(dirs[1]);
+		for (const dir of dirs) {
+			expect(path.dirname(dir)).toBe(fs.realpathSync(base));
+			expect(path.basename(dir)).toMatch(/^run-/);
+		}
+	});
+
+	it.each([true, false])(
+		"removes the run directory after a passing=%s test run (#5439)",
+		(passing) => {
+			const { hook } = gitFixture();
+			const base = path.join(fixtureDir as string, "cleanup-base");
+			write(
+				"tests/clients/first.test.ts",
+				`import { expect, it } from 'vitest'; it('cleanup witness', () => { expect(${passing}).toBe(true); });\n`,
+			);
+			const result = hook("", ["--include-worktree"], {
+				PI_LENS_PREPUSH_TMPDIR: base,
+			});
+			expect(result.status).toBe(passing ? 0 : 1);
+			expect(result.stdout).toContain(passing ? "1 passed" : "1 failed");
+			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+			expect(dir).toBeDefined();
+			expect(fs.existsSync(dir as string)).toBe(false);
+			expect(fs.existsSync(base)).toBe(true);
+		},
+	);
+
+	it.each([
+		["SIGINT", false],
+		["SIGTERM", false],
+		["SIGTERM", true],
+	] as const)(
+		"drains the child on %s (drain failure=%s) (#5439)",
+		async (signal, undrained) => {
+			const { hook } = gitFixture();
+			const base = path.join(fixtureDir as string, "interrupt-base");
+			const workerPidFile = path.join(fixtureDir as string, "worker.pid");
+			write(
+				"tests/clients/first.test.ts",
+				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { fs.writeFileSync(${JSON.stringify(workerPidFile)}, String(process.pid)); process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(base, "late-writer"))}, 'wrote'); });\n`,
+			);
+			const result = hook(
+				"",
+				["--include-worktree"],
+				{
+					PI_LENS_PREPUSH_TMPDIR: base,
+				},
+				undrained ? "undrained" : true,
+			);
+			// #5468: observe the writer exiting, so a slow worker cannot write
+			// after the assertion and make the cleanup witness falsely pass.
+			const workerPid = Number(fs.readFileSync(workerPidFile, "utf8"));
+			expect(workerPid).toBeGreaterThan(0);
+			await waitFor(
+				() => isProcessAlive(workerPid),
+				(alive) => !alive,
+				{ timeoutMs: 5_000 },
+			);
+			expect(result.error).toBeUndefined();
+			const dir = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+			expect(dir).toBeDefined();
+			expect(fs.existsSync(dir as string)).toBe(undrained);
+			// A recreated root loses the original owner marker.
+			expect(fs.existsSync(path.join(dir as string, "owner.pid"))).toBe(
+				undrained,
+			);
+			expect(
+				result.stderr.includes(
+					"child drain timed out; preserving temp directory",
+				),
+			).toBe(undrained);
+			expect(result.stderr.includes("child termination failed:")).toBe(
+				undrained,
+			);
+			expect(result.status).toBe(signal === "SIGINT" ? 130 : 143);
+			expect(fs.existsSync(path.join(base, "late-writer"))).toBe(undrained);
+		},
+	);
+
+	it("hands the pinned temp root to the test run, not the caller's TMPDIR (#5439)", () => {
+		// #5439 recurrence: the hook inherited the caller's TMPDIR, so the tests
+		// it spawned read macOS's long, symlinked `/private/var/folders/...`
+		// root. The spawned test reads back every var the pin sets, so dropping
+		// one assignment reds here.
+		const { hook } = gitFixture();
+		const hatch = path.join(fixtureDir as string, "pinned-tmp");
+		fs.mkdirSync(hatch, { recursive: true });
+		const expected = fs.realpathSync(hatch);
+		write("clients/first.ts", "export const first = false;\n");
+		write(
+			"tests/clients/first.test.ts",
+			'import { expect, it } from "vitest";\n' +
+				'import path from "node:path";\n' +
+				'it("reads the pinned temp root", () => {\n' +
+				"  expect(process.env.TMPDIR?.startsWith(process.env.PREPUSH_TMP_EXPECTED + path.sep + 'run-')).toBe(true);\n" +
+				"  expect(process.env.TEMP).toBe(process.env.TMPDIR);\n" +
+				"  expect(process.env.TMP).toBe(process.env.TMPDIR);\n" +
+				"});\n",
+		);
+		const caller = "/var/folders/caller-only/T";
+		const result = hook("", ["--include-worktree"], {
+			TMPDIR: caller,
+			TEMP: caller,
+			TMP: caller,
+			PI_LENS_PREPUSH_TMPDIR: hatch,
+			PREPUSH_TMP_EXPECTED: expected,
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(
+			`[pre-push] tmp root: ${expected}${path.sep}run-`,
+		);
+		expect(result.stdout).toContain("1 passed");
+	});
+
+	// #5468 Qodo M1 recurrence: a PI_LENS_HOME pinned inside the checkout put
+	// the gate's TMPDIR there, Vitest's worker HOME followed it, and the
+	// home-ceiling guard (`isAtOrAboveHomeDir`) refused 85 tests on one push.
+	// The spawned test records the TMPDIR it saw; the run dir is removed when
+	// the gate exits, so the assertions read its parent base.
+	const runRoot = (homeFor: (checkout: string, outside: string) => string) => {
+		const { hook } = gitFixture();
+		const outside = outsideHome();
+		const seen = path.join(fixtureDir as string, "seen-tmpdir.txt");
+		write("clients/first.ts", "export const first = false;\n");
+		write(
+			"tests/clients/first.test.ts",
+			'import fs from "node:fs";\nimport { it } from "vitest";\n' +
+				'it("records its temp root", () => { fs.writeFileSync(process.env.PREPUSH_TMP_SEEN as string, process.env.TMPDIR ?? ""); });\n',
+		);
+		const result = hook("", ["--include-worktree"], {
+			PI_LENS_HOME: homeFor(fixtureDir as string, outside),
+			PI_LENS_PREPUSH_TMPDIR: "",
+			PREPUSH_TMP_SEEN: seen,
+		});
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain("1 passed");
+		const root = result.stdout.match(/tmp root: (.*?) \(caller TMPDIR/)?.[1];
+		expect(root).toBeDefined();
+		return {
+			stderr: result.stderr,
+			checkout: fs.realpathSync(fixtureDir as string),
+			outside: fs.realpathSync(outside),
+			base: path.dirname(root as string),
+			children: fs.realpathSync(path.dirname(fs.readFileSync(seen, "utf8"))),
+		};
+	};
+	const notice = /\[pre-push\] temp root .* is inside the checkout; using /g;
+
+	it.each([
+		[
+			"a .probe-home inside the checkout",
+			(c: string) => path.join(c, ".probe-home"),
+		],
+		["the checkout itself", (c: string) => c],
+		[
+			"a link outside the checkout to a directory inside it",
+			(c: string, o: string) => {
+				fs.mkdirSync(path.join(c, ".probe-home"), { recursive: true });
+				const link = path.join(o, "link");
+				fs.symlinkSync(path.join(c, ".probe-home"), link, "dir");
+				return link;
+			},
+		],
+	] as const)(
+		"keeps the temp root outside the checkout when PI_LENS_HOME is %s (#5468 M1)",
+		(_name, homeFor) => {
+			const seen = runRoot(homeFor);
+			expect(relativeInside(seen.checkout, seen.base)).toBeUndefined();
+			expect(relativeInside(seen.checkout, seen.children)).toBeUndefined();
+			expect(seen.base).toBe(
+				fs.realpathSync(path.join(os.homedir(), ".pi-lens", "prepush-tmp")),
+			);
+			expect(seen.stderr.match(notice)).toHaveLength(1);
+		},
+	);
+
+	it("honours a PI_LENS_HOME outside the checkout without a notice (#5468 M1)", () => {
+		// The control: only a base at or inside the checkout falls back.
+		const seen = runRoot((_c, o) => path.join(o, "home"));
+		expect(seen.base).toBe(path.join(seen.outside, "home", "prepush-tmp"));
+		expect(seen.children).toBe(seen.base);
+		expect(seen.stderr.match(notice)).toBeNull();
+	});
+});
+
+describe("pre-push temp root pin (#5439)", () => {
+	// Recurrence: the gate inherited the caller's TMPDIR, so macOS's long,
+	// symlinked `/private/var/folders/...` root redded path-sensitive tests on
+	// the same commit that passed under a short real root.
+
+	it("defaults under the machine-state home, never the caller's TMPDIR", () => {
+		const caller = "/var/folders/caller-only/T";
+		const root = resolvePrePushTmpRoot({
+			TMPDIR: caller,
+			TEMP: caller,
+			TMP: caller,
+		});
+		expect(root).toBe(path.join(os.homedir(), ".pi-lens", "prepush-tmp"));
+	});
+
+	it("honours PI_LENS_HOME as the machine-state parent", () => {
+		expect(resolvePrePushTmpRoot({ PI_LENS_HOME: "/machine/home " })).toBe(
+			path.join("/machine/home", "prepush-tmp"),
+		);
+	});
+
+	it("resolves a relative PI_LENS_HOME, like getLockPath", () => {
+		const root = resolvePrePushTmpRoot({ PI_LENS_HOME: "rel-home-5439" });
+		expect(root).toBe(path.join(path.resolve("rel-home-5439"), "prepush-tmp"));
+		expect(path.isAbsolute(root)).toBe(true);
+	});
+
+	it("gives PI_LENS_PREPUSH_TMPDIR precedence over PI_LENS_HOME, resolved", () => {
+		const root = resolvePrePushTmpRoot({
+			PI_LENS_HOME: "/machine/home",
+			PI_LENS_PREPUSH_TMPDIR: "relative/hatch",
+		});
+		expect(root).toBe(path.resolve("relative/hatch"));
+		expect(path.isAbsolute(root)).toBe(true);
+	});
+
+	it("creates a missing root and answers its kernel-real path", () => {
+		fixtureDir = fixtureRoot("prepush-tmp-create-");
+		const root = path.join(fixtureDir, "nested", "prepush-tmp");
+		expect(fs.existsSync(root)).toBe(false);
+		expect(ensurePrePushTmpRoot(root)).toBe(fs.realpathSync(root));
+		expect(fs.statSync(root).isDirectory()).toBe(true);
+	});
+
+	it("resolves a symlinked root, so the /var spelling cannot recur", () => {
+		fixtureDir = fixtureRoot("prepush-tmp-link-");
+		const real = path.join(fixtureDir, "real");
+		const linked = path.join(fixtureDir, "linked");
+		fs.mkdirSync(real);
+		fs.symlinkSync(real, linked, "dir");
+		expect(ensurePrePushTmpRoot(linked)).toBe(fs.realpathSync(real));
 	});
 });
 
@@ -1618,6 +2007,9 @@ describe("pre-push ast-grep self-scan (#3886)", () => {
 			"scripts/with-test-lock.mjs",
 			"scripts/lib/is-main-module.mjs",
 			"scripts/lib/suite-lock.mjs",
+			"scripts/lib/scratch-dir.mjs",
+			"scripts/lib/process-scan.mjs",
+			"scripts/lib/pr-worktree.mjs",
 			"scripts/lib/test-history-selection.mjs",
 			"scripts/lib/vitest-summary.mjs",
 		])
@@ -1756,6 +2148,9 @@ describe("pre-push ast-grep self-scan (#3886)", () => {
 			"scripts/with-test-lock.mjs",
 			"scripts/lib/is-main-module.mjs",
 			"scripts/lib/suite-lock.mjs",
+			"scripts/lib/scratch-dir.mjs",
+			"scripts/lib/process-scan.mjs",
+			"scripts/lib/pr-worktree.mjs",
 			"scripts/lib/test-history-selection.mjs",
 			"scripts/lib/vitest-summary.mjs",
 			"scripts/run-astgrep-pi-lens.mjs",

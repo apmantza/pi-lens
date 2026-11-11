@@ -197,6 +197,11 @@ const DISPOSITIONS: Record<string, Disposition> = {
 		kind: "modifier",
 		of: "textDocument/documentSymbol",
 	},
+	// #5476: this changes the response shape of the existing request.
+	"textDocument.documentSymbol.hierarchicalDocumentSymbolSupport": {
+		kind: "modifier",
+		of: "textDocument/documentSymbol",
+	},
 	"textDocument.documentSymbol": {
 		kind: "sends",
 		method: "textDocument/documentSymbol",

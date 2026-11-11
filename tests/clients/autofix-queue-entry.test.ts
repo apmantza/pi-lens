@@ -23,6 +23,7 @@ import {
 	holdFileMutationQueue,
 	setHostFileMutationQueueLoader,
 } from "../../clients/file-mutation-queue.js";
+import { plantGateConfig } from "../support/gate-config-fixtures.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 function gate() {
@@ -66,8 +67,6 @@ vi.mock("../../clients/tool-policy.js", async (importOriginal) => {
 		...actual,
 		getAutofixPolicyForFile: policy,
 		getPreferredAutofixTools: () => [fixer.tool],
-		// tryEslintFix's own config gate.
-		hasEslintConfig: () => true,
 	};
 });
 vi.mock("../../clients/tool-agreement.js", async (importOriginal) => ({
@@ -208,6 +207,8 @@ describe("each autofix branch enters pi's queue between its resolver and its wri
 				fs.writeFileSync(path.join(env.tmpDir, "pubspec.yaml"), "");
 				// detekt's autofix needs the project's own config file.
 				fs.writeFileSync(path.join(env.tmpDir, "detekt.yml"), "");
+				// tryEslintFix's own config gate.
+				plantGateConfig("eslint", env.tmpDir);
 				const filePath = path.join(env.tmpDir, "a.src");
 				fs.writeFileSync(filePath, "a\n");
 				const agentAppend = (line: string) => {

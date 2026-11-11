@@ -828,6 +828,41 @@ describe("tmp-fixture-hygiene", () => {
 		scaledTestTimeout(60_000),
 	);
 
+	it("refuses direct pre-push base allocation in every scope (#5439)", () => {
+		const owner = "scripts/pre-push-targeted-tests.mjs";
+		const call = ["const dir = mkdtemp", "Sync(path.join(base, 'run-'));"].join(
+			"",
+		);
+		const declaration =
+			"const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot(process.env));";
+		expect
+			.soft(mkdtempSiteEscapes(owner, `${declaration}\n${call}`)(2))
+			.toBe(true);
+		for (const raw of [
+			`function decoy() { ${declaration} }\nfunction unsafe() { const base = arbitraryRoot();\n${call}\n}`,
+			`${declaration}\nfunction unsafe(base) {\n${call}\n}`,
+			call,
+			`// ${declaration}\n${call}`,
+			`const note = ${JSON.stringify(declaration)};\n${call}`,
+			`const base = arbitraryRoot();\n${call}`,
+			`const resolve = resolvePrePushTmpRoot; const base = ensurePrePushTmpRoot(resolve(process.env));\n${call}`,
+			`const base = ensurePrePushTmpRoot(resolvePrePushTmpRoot.call(null, process.env));\n${call}`,
+			`const resolved = resolvePrePushTmpRoot(process.env); const base = ensurePrePushTmpRoot(resolved);\n${call}`,
+		]) {
+			expect
+				.soft(
+					mkdtempSiteEscapes(
+						owner,
+						raw,
+					)(raw.split("\n").findIndex((line) => line.includes(call)) + 1),
+				)
+				.toBe(true);
+		}
+		expect(mkdtempSiteEscapes("fixture.ts", `${declaration}\n${call}`)(2)).toBe(
+			true,
+		);
+	});
+
 	it("exempts a mkdtemp site only for code, never for a comment or a string", () => {
 		// #4347: the exemption regexes read the raw call window, so a comment or
 		// a string naming os.tmpdir() or REPO_ROOT beside a stray parent excused

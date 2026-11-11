@@ -69,17 +69,19 @@ describe("strict lifecycle-script policy in CI installs (#1185)", () => {
 	// install whose lifecycle script the strict policy was meant to inspect.
 	//
 	// #5112: the job left the pull_request trigger (1,410 runner minutes, 0 real
-	// catches in 30 days, #3995 slice A). It keeps every other event: a master
-	// push, a dispatch and the merge_group trigger, so the cold cache install
-	// still runs on every commit that reaches master (after the merge; no
-	// nightly schedule exists for it). A PR that
-	// changes the manifests keeps a strict install through `npm-strict`, pinned
-	// by the next test; this one reds if that substitute ever drops out.
-	it("ci.yml has a cold-cache strict-install fast-fail on every event but a pull request", () => {
-		const workflow = load("ci.yml");
+	// catches in 30 days, #3995 slice A). #5002: it moved to its own workflow
+	// file, strict-install.yml, with no pull_request trigger, so a pull request
+	// shows no skipped row for it. It runs on a master push and a manual
+	// dispatch (not merge_group), so the cold cache install still runs on every
+	// commit that reaches master (after the merge; no nightly schedule exists
+	// for it). A PR that changes the manifests keeps a strict install through
+	// `npm-strict`, pinned by the next test; this one reds if that substitute
+	// ever drops out.
+	it("strict-install.yml has a cold-cache strict-install fast-fail on a master push and a dispatch", () => {
+		const workflow = load("strict-install.yml");
 		const job = workflow.jobs?.["strict-install-cold-cache"];
 		expect(job, "strict-install-cold-cache").toBeDefined();
-		expect(job?.if).toBe("github.event_name != 'pull_request'");
+		expect(job?.if).toBeUndefined();
 		expect(job?.["continue-on-error"]).toBeUndefined();
 		// Recurrence (2026-10-07, #4067 r2): `${{ runner.temp }}` in job-level
 		// `env:` made GitHub reject the whole ci.yml, so no pull_request run

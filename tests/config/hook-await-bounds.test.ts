@@ -2361,7 +2361,14 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// through to the managed and PATH rungs (`findBeyondProject`), at most
 	// once per probe; those rungs stat and verify under their own probe
 	// budget, unbounded from the hook signal like the first resolution.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 31,
+	// #5410 slice 2: 31 -> 32 — `resolveInstalledToolCommand` awaits the
+	// checker's probe (`isAvailableAsync`), the formatters' no-install ladder.
+	// Unbounded from the hook signal like `resolveToolCommandWithInstallFallback`.
+	// #5492 r2: 32 -> 33 — the formatter ladder's PATH-before-managed order
+	// splits the managed rungs into `findManagedRung` and routes the fall-through
+	// through `nextRung`; one more await, under the same probe budget and
+	// equally unbounded from the hook signal.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 33,
 	// #5087: the edit's re-measure plus its one default-branch read (9 in
 	// all; 10 -> 9 when the first touch took its table from the analyzer's
 	// own measure, #5443 review F6). Its awaits are the shared parser (init,
@@ -2428,7 +2435,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// import and `ensureTool`. Neither can take a hook signal: the resolver runs
 	// inside the format service's own `bounded()` call, and the formatter seam
 	// carries no `AbortSignal` until #2523 AC4 threads it through.
-	"clients/formatters.ts": 118,
+	// 118 -> 113 (#5410 slice 2): not a bound. The PATH-first
+	// `await which(...)` / `await findInVenv(...)` lines in `resolveCommand`
+	// bodies are gone; the ladder call that replaces them sits once in
+	// `resolveManagedSmartDefaultCommand` / `resolveFormatterToolCommand`.
+	"clients/formatters.ts": 113,
 	// 4 -> 3 and 2 -> 1 (#4984): not a bound. The two `await safeSpawnAsync`
 	// calls moved into `SecurityScanClient.runReportScan`, which the one-hop set
 	// does not walk, so the hook path's unbounded awaits are unchanged.
@@ -2944,6 +2955,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The AMBIENT turn abort signal, set for the whole tool_result path and " +
 		"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 		"bound that is always live.",
+	"call:clients/project-trust.ts#readAdoptedProjectTrust:8d9498e9~136c8ea4":
+		"#5469 F1: no owning hook signal at registry; explicit undefined plus " +
+		"registry retirement shutdownSignal and the read-only analysis wall bound host SDK loading.",
 	"call:clients/runtime-agent-end.ts#handleAgentEnd:6ec6083f~93eae0ad":
 		"AgentEndDeps.signal is the agent_settled ctx.signal passed by index.ts; " +
 		"it can be absent in a standalone harness. The shared agent_settled " +

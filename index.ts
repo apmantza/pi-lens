@@ -28,6 +28,7 @@ import {
 	adoptProjectTrustFromPorts,
 	assertInstallAllowed,
 	readProjectTrustFromContext,
+	setHostProjectTrustLoader,
 } from "./clients/project-trust.js";
 import {
 	type ExtensionRunMode,
@@ -815,10 +816,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// copy of the package when jiti transpiles pi-lens (its native import fails
 	// on the host-provided static imports) and can reach a second copy where
 	// those resolve natively; clients/file-mutation-queue.ts checks which, and
-	// a host without the export records a degradation.
-	setHostFileMutationQueueLoader(
-		() => import("@earendil-works/pi-coding-agent"),
-	);
+	// a host without the export records a degradation. #5469: adopted-root
+	// trust reads pi's trust store through the same single lazy lookup.
+	const loadHostSdk = () => import("@earendil-works/pi-coding-agent");
+	setHostProjectTrustLoader(loadHostSdk);
+	setHostFileMutationQueueLoader(loadHostSdk);
 	const testRunnerDeliveryOwnerId = `activation-${++_nextTestRunnerDeliveryOwnerId}`;
 	// Event contexts belong to the activation that owns this factory closure.
 	// The process-global latest ctx remains only a boot-window fallback.

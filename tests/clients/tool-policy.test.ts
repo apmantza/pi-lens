@@ -1,11 +1,15 @@
+import {
+	findToolConfig,
+	hasToolConfig,
+} from "../../clients/tool-config-presence.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { oxfmtFormatter } from "../../clients/formatters.js";
 import {
 	getAutofixCapability,
 	getAutofixPolicyForFile,
 	getAutoInstallToolIdForFormatter,
-	getBiomeConfigPath,
 	getFormatterPolicyForFile,
 	getJstsLintPolicy,
 	getLinterPolicyForCwd,
@@ -16,22 +20,16 @@ import {
 	getSmartDefaultFormatterName,
 	getToolCommandSpec,
 	getToolExecutionPolicy,
-	hasBiomeConfig,
 	hasBlackConfig,
 	hasClangFormatConfig,
 	hasCljfmtConfig,
 	hasCmakeFormatConfig,
 	findCompiledClassesDir,
 	hasDetektConfig,
-	hasJavaBuildDescriptor,
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	getSpotlessKotlinFormatter,
-	hasEslintConfig,
-	hasGolangciConfig,
 	hasGoogleJavaFormatConfig,
-	hasMarkdownlintConfig,
-	hasMypyConfig,
 	hasNearestPackageJsonDependency,
 	hasNearestPackageJsonField,
 	hasOcamlformatConfig,
@@ -39,17 +37,12 @@ import {
 	hasOxfmtSvelteConfig,
 	hasOxlintConfig,
 	hasPhpCsFixerConfig,
-	hasPhpstanConfig,
 	hasPrettierConfig,
 	hasRubocopConfig,
 	hasRuffConfig,
-	hasSqlfluffConfig,
 	hasStandardrbConfig,
-	hasStylelintConfig,
 	hasStyluaConfig,
 	hasTflintConfig,
-	hasVitePlusConfig,
-	hasYamllintConfig,
 	shouldAutoInstallTool,
 	_getSpotlessGradleReadCountForTests,
 } from "../../clients/tool-policy.js";
@@ -473,8 +466,8 @@ describe("tool-policy", () => {
 			);
 			createTempFile(env.tmpDir, "Gemfile", "gem 'rubocop'\n");
 
-			expect(hasStylelintConfig(env.tmpDir)).toBe(true);
-			expect(hasSqlfluffConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("stylelint", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("sqlfluff", env.tmpDir)).toBe(true);
 			expect(hasRubocopConfig(env.tmpDir)).toBe(true);
 			expect(getRubocopCommand(env.tmpDir)).toEqual({
 				cmd: "bundle",
@@ -514,20 +507,22 @@ describe("tool-policy", () => {
 				JSON.stringify({ prettier: { semi: false } }),
 			);
 
-			expect(hasMypyConfig(env.tmpDir)).toBe(true);
-			expect(hasYamllintConfig(env.tmpDir)).toBe(true);
-			expect(hasMarkdownlintConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("mypy", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("yamllint", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("markdownlint", env.tmpDir)).toBe(true);
 			expect(hasPrettierConfig(env.tmpDir)).toBe(true);
 			expect(hasBlackConfig(env.tmpDir)).toBe(true);
-			expect(hasGolangciConfig(env.tmpDir)).toBe(true);
-			expect(hasPhpstanConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("golangci-lint", env.tmpDir)).toBe(true);
+			expect(hasToolConfig("phpstan", env.tmpDir)).toBe(true);
 			expect(hasRuffConfig(env.tmpDir)).toBe(true);
 			expect(hasStandardrbConfig(env.tmpDir)).toBe(true);
 			expect(hasClangFormatConfig(env.tmpDir)).toBe(true);
 			expect(hasPhpCsFixerConfig(env.tmpDir)).toBe(true);
 			expect(hasStyluaConfig(env.tmpDir)).toBe(true);
 			expect(hasOcamlformatConfig(env.tmpDir)).toBe(true);
-			expect(getBiomeConfigPath(env.tmpDir)).toMatch(/biome\.jsonc$/);
+			expect(findToolConfig("biome", env.tmpDir)?.file).toMatch(
+				/biome\.jsonc$/,
+			);
 		} finally {
 			env.cleanup();
 		}
@@ -547,7 +542,7 @@ describe("tool-policy", () => {
 		);
 		try {
 			createTempFile(env.tmpDir, configName, "{}\n");
-			expect(hasMarkdownlintConfig(env.tmpDir)).toBe(true);
+			expect(hasToolConfig("markdownlint", env.tmpDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -565,14 +560,19 @@ describe("tool-policy", () => {
 			fs.mkdirSync(nestedDir, { recursive: true });
 
 			const cases: Array<[string, string, string, () => boolean]> = [
-				["biome", "biome.json", "{}\n", () => hasBiomeConfig(nestedDir)],
+				[
+					"biome",
+					"biome.json",
+					"{}\n",
+					() => hasToolConfig("biome", nestedDir),
+				],
 				["oxfmt", ".oxfmtrc.json", "{}\n", () => hasOxfmtConfig(nestedDir)],
 				["prettier", ".prettierrc", "{}\n", () => hasPrettierConfig(nestedDir)],
 				[
 					"stylelint",
 					".stylelintrc",
 					"{}\n",
-					() => hasStylelintConfig(nestedDir),
+					() => hasToolConfig("stylelint", nestedDir),
 				],
 				[
 					"black",
@@ -590,25 +590,25 @@ describe("tool-policy", () => {
 					"mypy",
 					"mypy.ini",
 					"[mypy]\nstrict = true\n",
-					() => hasMypyConfig(nestedDir),
+					() => hasToolConfig("mypy", nestedDir),
 				],
 				[
 					"sqlfluff",
 					".sqlfluff",
 					"[sqlfluff]\ndialect = ansi\n",
-					() => hasSqlfluffConfig(nestedDir),
+					() => hasToolConfig("sqlfluff", nestedDir),
 				],
 				[
 					"yamllint",
 					".yamllint",
 					"extends: default\n",
-					() => hasYamllintConfig(nestedDir),
+					() => hasToolConfig("yamllint", nestedDir),
 				],
 				[
 					"markdownlint",
 					".markdownlint.json",
 					"{}\n",
-					() => hasMarkdownlintConfig(nestedDir),
+					() => hasToolConfig("markdownlint", nestedDir),
 				],
 				[
 					"rubocop",
@@ -626,13 +626,13 @@ describe("tool-policy", () => {
 					"golangci",
 					".golangci.yml",
 					"run:\n  timeout: 1m\n",
-					() => hasGolangciConfig(nestedDir),
+					() => hasToolConfig("golangci-lint", nestedDir),
 				],
 				[
 					"phpstan",
 					"phpstan.neon",
 					"parameters:\n  level: 5\n",
-					() => hasPhpstanConfig(nestedDir),
+					() => hasToolConfig("phpstan", nestedDir),
 				],
 				[
 					"detekt",
@@ -801,19 +801,19 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasEslintConfig detects config file in a parent directory", () => {
+	it("eslint: a flat config in a parent directory is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-eslint-walkup-");
 		try {
 			createTempFile(env.tmpDir, "eslint.config.js", "export default [];\n");
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasEslintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("eslint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasEslintConfig detects eslintConfig field in parent package.json", () => {
+	it("eslint: an eslintConfig field in a parent package.json is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-eslint-pkg-walkup-");
 		try {
 			createTempFile(
@@ -823,26 +823,26 @@ describe("tool-policy", () => {
 			);
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasEslintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("eslint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasBiomeConfig / getBiomeConfigPath detects biome.json in a parent directory", () => {
+	it("biome: a biome.json in a parent directory is found by findToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-biome-walkup-");
 		try {
 			createTempFile(env.tmpDir, "biome.json", "{}\n");
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasBiomeConfig(subDir)).toBe(true);
-			expect(getBiomeConfigPath(subDir)).toMatch(/biome\.json$/);
+			expect(hasToolConfig("biome", subDir)).toBe(true);
+			expect(findToolConfig("biome", subDir)?.file).toMatch(/biome\.json$/);
 		} finally {
 			env.cleanup();
 		}
 	});
 
-	it("hasStylelintConfig detects config file in a parent directory", () => {
+	it("stylelint: a config file in a parent directory is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-stylelint-walkup-");
 		try {
 			createTempFile(env.tmpDir, ".stylelintrc", "{}\n");
@@ -853,7 +853,7 @@ describe("tool-policy", () => {
 			);
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasStylelintConfig(subDir)).toBe(true);
+			expect(hasToolConfig("stylelint", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -932,10 +932,36 @@ describe("tool-policy", () => {
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
 
-			expect(hasVitePlusConfig(subDir)).toBe(true);
+			expect(hasToolConfig("vitePlus", subDir)).toBe(true);
 			expect(hasOxfmtConfig(subDir)).toBe(true);
 			expect(hasOxlintConfig(subDir)).toBe(true);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5408 F6 (review of #5493): `hasOxfmtConfig` asked the Vite+ seam once per
+	// ancestor of an unbounded walk, so a vite-plus.json above $HOME made oxfmt
+	// configured while the Vite+ gate that `resolveCommand` consults (bounded at
+	// $HOME) said no. The home is pinned with vi.stubEnv: the fixture home root
+	// sits inside this repo, whose own package.json pins oxfmt, so only a
+	// tmpdir-rooted home keeps the oxfmt package.json clause out of the answer.
+	it("a vite-plus.json above $HOME leaves oxfmt unconfigured, as its Vite+ gate says", async () => {
+		const env = setupTestEnvironment(
+			"pi-lens-tool-policy-oxfmt-viteplus-home-",
+		);
+		try {
+			createTempFile(env.tmpDir, "vite-plus.json", "{}\n");
+			const home = path.join(env.tmpDir, "home");
+			const proj = path.join(home, "proj");
+			fs.mkdirSync(proj, { recursive: true });
+			vi.stubEnv("HOME", home);
+
+			expect(hasToolConfig("vitePlus", proj)).toBe(false);
+			expect(hasOxfmtConfig(proj)).toBe(false);
+			expect(await oxfmtFormatter.detect(proj)).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
 			env.cleanup();
 		}
 	});
@@ -1076,7 +1102,7 @@ describe("tool-policy", () => {
 		});
 	});
 
-	it("hasMypyConfig detects [tool.mypy] in a parent directory pyproject.toml", () => {
+	it("mypy: [tool.mypy] in a parent directory pyproject.toml is found by hasToolConfig", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-mypy-walkup-");
 		try {
 			createTempFile(
@@ -1086,7 +1112,7 @@ describe("tool-policy", () => {
 			);
 			const subDir = path.join(env.tmpDir, "src");
 			fs.mkdirSync(subDir, { recursive: true });
-			expect(hasMypyConfig(subDir)).toBe(true);
+			expect(hasToolConfig("mypy", subDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -1232,6 +1258,38 @@ describe("tool-policy", () => {
 		}
 	});
 
+	// Recurrence (shape 6): the memo keyed on mtime alone served the old
+	// formatter after a length-changing rewrite that kept the mtime (`cp -p`,
+	// `rsync -t`, tar extract, a write inside one coarse mtime tick). The config
+	// caches in clients/ stamp size beside mtime (#1105).
+	it("re-reads Spotless detection after a length-changing rewrite with the same mtime (shape 6)", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-spotless-same-tick-");
+		const gradlePath = createTempFile(
+			env.tmpDir,
+			"build.gradle.kts",
+			"spotless {\n  kotlin {\n    ktlint()\n  }\n}\n",
+		);
+		try {
+			// Whole seconds are exact in both utimes and stat, so the two
+			// stamps below compare equal on every filesystem that keeps them.
+			const tick = new Date(1_700_000_000_000);
+			fs.utimesSync(gradlePath, tick, tick);
+			expect(getSpotlessKotlinFormatter(env.tmpDir)).toBe("ktlint");
+
+			const rewritten = "spotless {\n  kotlin {\n    ktfmt()\n  }\n}\n";
+			expect(Buffer.byteLength(rewritten)).not.toBe(
+				fs.statSync(gradlePath).size,
+			);
+			fs.writeFileSync(gradlePath, rewritten);
+			fs.utimesSync(gradlePath, tick, tick);
+			expect(fs.statSync(gradlePath).mtimeMs).toBe(tick.getTime());
+
+			expect(getSpotlessKotlinFormatter(env.tmpDir)).toBe("ktfmt");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("hasKtfmtConfig is false for a plain Kotlin project (ktlint stays default)", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-ktfmt-absent-");
 		try {
@@ -1242,25 +1300,25 @@ describe("tool-policy", () => {
 		}
 	});
 
-	it("hasJavaBuildDescriptor detects pom.xml / build.gradle{.kts} walking up (#133)", () => {
+	it("the javaBuild config detects pom.xml / build.gradle{.kts} walking up (#133)", () => {
 		for (const descriptor of ["pom.xml", "build.gradle", "build.gradle.kts"]) {
 			const env = setupTestEnvironment("pi-lens-java-descriptor-");
 			try {
 				createTempFile(env.tmpDir, descriptor, "");
 				const subDir = path.join(env.tmpDir, "src", "main", "java");
 				fs.mkdirSync(subDir, { recursive: true });
-				expect(hasJavaBuildDescriptor(subDir), descriptor).toBe(true);
+				expect(hasToolConfig("javaBuild", subDir), descriptor).toBe(true);
 			} finally {
 				env.cleanup();
 			}
 		}
 	});
 
-	it("hasJavaBuildDescriptor is false for a non-Java project (#133)", () => {
+	it("the javaBuild config is false for a non-Java project (#133)", () => {
 		const env = setupTestEnvironment("pi-lens-java-none-");
 		try {
 			createTempFile(env.tmpDir, "package.json", "{}");
-			expect(hasJavaBuildDescriptor(env.tmpDir)).toBe(false);
+			expect(hasToolConfig("javaBuild", env.tmpDir)).toBe(false);
 		} finally {
 			env.cleanup();
 		}

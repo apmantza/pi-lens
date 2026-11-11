@@ -236,10 +236,10 @@ describe("classifyCascadeWaitTier", () => {
 	});
 
 	it("classifies a pull-mode server as pull-capable", () => {
-		getServersForFileWithConfig.mockReturnValue([server("rust-analyzer")]);
+		getServersForFileWithConfig.mockReturnValue([server("rust")]);
 		const snapshots = [
 			{
-				serverId: "rust-analyzer",
+				serverId: "rust",
 				root: "C:/repo",
 				operationSupport: {} as any,
 				workspaceDiagnosticsSupport: { mode: "pull" as const },
