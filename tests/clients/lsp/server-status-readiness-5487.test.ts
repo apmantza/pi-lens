@@ -296,7 +296,9 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 	}, 30_000);
 
 	// The server dies while the wait is held on its quiescence: the wait ends
-	// with the connection, not at its budget, and the touch is not clean.
+	// with the connection, not at its budget, and the touch is not clean. Nor is
+	// it "still loading" (state table of #5495 r3): the last notice a dead server
+	// sent says nothing now, and "retry shortly" is the wrong advice for a crash.
 	it("ends the wait when the server dies while loading", async () => {
 		// The flat env cap is the touch budget (a strategy row's 1500 ms would end
 		// the wait first and hide the dead-connection exit).
@@ -319,6 +321,8 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 		await waitFor(() => settled, Boolean, { timeoutMs: 10_000 });
 		expect(result?.confirmation).not.toBe("confirmed");
 		expect(result?.diags).toEqual([]);
+		expect(result?.inconclusive).toBe(true);
+		expect(result?.inconclusiveReason).toBe("diagnostics-wait");
 	}, 40_000);
 
 	// Recurrence (review of #5495, F1): rust-analyzer reports a workspace it
@@ -366,27 +370,62 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 	}, 40_000);
 
 	// `health:"warning"` is a ready server (rust-analyzer says so for proc-macro
-	// and build-script problems): its answers stay verdicts.
-	it("treats health warning as ready", async () => {
+	// and build-script problems): its answers stay verdicts. Recurrence (verify
+	// of #5495 r2, M13): reading `warning` as a failed load passed with an error
+	// file, because a finding passes any gate; only a CLEAN file shows it, as an
+	// unconfirmed touch where the server confirmed clean.
+	it("treats health warning as ready, so a clean file confirms clean", async () => {
 		const filePath = register({
 			FAKE_LSP_LOADING_MS: "200",
 			FAKE_LSP_LOADING_HEALTH: "warning",
 		});
-		const result = await touch(filePath, DIRTY);
+		const clean = await touch(filePath, CLEAN);
 
-		expect(result?.diags).toEqual([
+		expect(clean?.diags).toEqual([]);
+		expect(clean?.inconclusive).not.toBe(true);
+		expect(clean?.confirmation).toBe("confirmed");
+
+		const dirty = await touch(filePath, DIRTY);
+		expect(dirty?.diags).toEqual([
 			expect.objectContaining({ code: "FAKE1001" }),
 		]);
-		expect(result?.inconclusive).not.toBe(true);
-		expect(result?.confirmation).toBe("confirmed");
+	}, 30_000);
+
+	// Recurrence (verify of #5495 r2, M14): a server can go from a failed load
+	// straight to a healthy one with `quiescent` true throughout. A handler that
+	// treated that notice as a repeat kept the failed state, and every later
+	// clean file read as a failed load until a restart.
+	it("clears a failed load when the server reports healthy without a loading phase", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "200",
+			FAKE_LSP_LOADING_HEALTH: "error",
+			FAKE_LSP_LOADING_HEALTH_RECOVERS: "1",
+		});
+		const failed = await touch(filePath, CLEAN);
+		expect(failed?.inconclusiveReason).toBe("server-load-failed");
+
+		const fixed = await touch(
+			filePath,
+			`${CLEAN}// fake-lsp-workspace-fixed
+`,
+		);
+		expect(fixed?.inconclusive).not.toBe(true);
+		expect(fixed?.diags).toEqual([]);
+		expect(fixed?.confirmation).toBe("confirmed");
 	}, 30_000);
 
 	// Recurrence (review of #5495, F6): a loading server's empty report that
 	// carries a finding for ANOTHER document (`relatedDocuments`) was stored as
-	// the answer and the file read clean while the server was loading.
+	// the answer and the file read clean while the server was loading. The gate
+	// only sees such a reply when the request left before the client read any
+	// notice, which is rust-analyzer's real cold order: the fixture holds its
+	// `quiescent:false` until the first pull and sends it just before the reply.
+	// With the notice sent at `initialized` instead, the client usually read it
+	// first and never asked, so the test passed on the bug (verify of r2, R2-2).
 	it("does not confirm a loading server's empty report because it carries a related finding", async () => {
 		const filePath = register({
 			FAKE_LSP_LOADING_MS: "20000",
+			FAKE_LSP_LOADING_ANNOUNCE_AT_FIRST_PULL: "1",
 			FAKE_LSP_LOADING_RELATED: "1",
 		});
 		const result = await touch(filePath, DIRTY, { maxDiagnosticsWaitMs: 600 });

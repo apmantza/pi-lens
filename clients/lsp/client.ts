@@ -4886,6 +4886,9 @@ function serverNotReady(state: LSPClientState): boolean {
 function readinessBlockOf(
 	state: LSPClientState,
 ): ServerReadinessBlock | undefined {
+	// A dead server's last notice says nothing now: its lapse is a plain one,
+	// never "still loading, retry shortly".
+	if (!isClientAlive(state)) return undefined;
 	const announced = state.serverStatus;
 	if (announced?.quiescent === false) return { reason: "server-loading" };
 	if (announced?.failed) {

@@ -231,6 +231,9 @@
   wait fixes it; `health: "warning"` stays ready. A server that announces
   nothing, or a notice without a boolean `quiescent`, is unchanged: the gate
   keys on what the server announced, never on a server id or a strategy row.
+  The diagnostics tool names either cause and its next step, never a timeout
+  (`serverNotReadyText`, `tools/lsp-diagnostics.ts`); a server that died while
+  loading lapses as a plain diagnostics wait (`readinessBlockOf`).
 - Document line addressing has one owner, `clients/lsp/content-scan.ts`: the
   `\n` count behind the `lsp_document_send` record's `contentLineCount` and the
   LSP sync bound (`countLfNewlines`), the last LSP-addressable line an

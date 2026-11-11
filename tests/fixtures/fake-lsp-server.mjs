@@ -783,6 +783,14 @@ function send(msg) {
 // `FAKE_LSP_LOADING_PUSH_FINDING=1` draws a NON-empty publish on each didOpen
 // during loading; `FAKE_LSP_LOADING_IGNORE_PULL_AFTER=1` answers no pull once
 // loading has ended.
+// `FAKE_LSP_LOADING_ANNOUNCE_AT_FIRST_PULL=1` holds the quiescent:false notice
+// until the first pull arrives and sends it just before that pull's reply, the
+// order rust-analyzer 1.99.1 produced on every recorded cold start (the request
+// left before any notice, then `quiescent:false`, then the empty reply), so the
+// client can never have read the notice before it sent the request.
+// `FAKE_LSP_LOADING_HEALTH_RECOVERS=1` (with `HEALTH=error`): a document whose
+// text holds `fake-lsp-workspace-fixed` turns the health to `ok` and announces
+// it with `quiescent` still true, with no loading phase between.
 // `FAKE_LSP_LOADING_REFRESH=1` also sends `workspace/diagnostic/refresh` when
 // loading starts, as rust-analyzer does. Off by default.
 const LOADING_MS = Number.parseInt(process.env.FAKE_LSP_LOADING_MS ?? "0", 10);
@@ -791,8 +799,12 @@ let loadingUntil = 0;
 let clientAsksServerStatus = false;
 let loadingFlipSpent = false;
 let loadingCancelSpent = false;
+let loadingAnnounceSpent = false;
+let workspaceHealth = process.env.FAKE_LSP_LOADING_HEALTH ?? "ok";
 const isLoading = () => Date.now() < loadingUntil;
-const workspaceFailed = () => process.env.FAKE_LSP_LOADING_HEALTH === "error";
+const workspaceFailed = () => workspaceHealth === "error";
+const announceAtFirstPull = () =>
+	process.env.FAKE_LSP_LOADING_ANNOUNCE_AT_FIRST_PULL === "1";
 // "1" garbles every notice; "done" garbles only the quiescent:true one, so the
 // server stays loading as far as a client that ignores garbage can tell.
 const malformedStatusFor = (quiescent) =>
@@ -804,12 +816,9 @@ function announceStatus(quiescent) {
 		jsonrpc: "2.0",
 		method: "experimental/serverStatus",
 		params: {
-			health: process.env.FAKE_LSP_LOADING_HEALTH ?? "ok",
+			health: workspaceHealth,
 			quiescent: malformedStatusFor(quiescent) ? "no" : quiescent,
-			message:
-				process.env.FAKE_LSP_LOADING_HEALTH === "error"
-					? "Failed to load workspaces."
-					: null,
+			message: workspaceFailed() ? "Failed to load workspaces." : null,
 		},
 	});
 }
@@ -821,11 +830,33 @@ function startLoading() {
 	// reply it computed while loading), so no status is loading when the reply
 	// is read, yet the reply describes a workspace that was not loaded.
 	if (process.env.FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL === "1") return;
+	if (announceAtFirstPull()) {
+		setTimeout(() => announceStatus(true), LOADING_MS).unref?.();
+		return;
+	}
 	announceStatus(false);
 	if (process.env.FAKE_LSP_LOADING_REFRESH === "1") {
 		send({ jsonrpc: "2.0", id: LOADING_REFRESH_ID, method: "workspace/diagnostic/refresh" });
 	}
 	setTimeout(() => announceStatus(true), LOADING_MS).unref?.();
+}
+/** `FAKE_LSP_LOADING_ANNOUNCE_AT_FIRST_PULL`: the held notice, once, before a reply. */
+function announceHeldLoading() {
+	if (!announceAtFirstPull() || loadingAnnounceSpent || !isLoading()) return;
+	loadingAnnounceSpent = true;
+	announceStatus(false);
+}
+/** `FAKE_LSP_LOADING_HEALTH_RECOVERS`: the manifest was fixed in place. */
+function recoverHealthOn(text) {
+	if (
+		process.env.FAKE_LSP_LOADING_HEALTH_RECOVERS !== "1" ||
+		!workspaceFailed() ||
+		typeof text !== "string" ||
+		!text.includes("fake-lsp-workspace-fixed")
+	)
+		return;
+	workspaceHealth = "ok";
+	announceStatus(true);
 }
 /** True when this pull is answered with the flip above; ends the loading window. */
 function flipAroundPull() {
@@ -1277,6 +1308,7 @@ function handle(raw) {
 			data.params?.textDocument?.uri,
 			data.params?.textDocument?.text ?? "",
 		);
+		recoverHealthOn(data.params?.textDocument?.text);
 		if (isLoading() && process.env.FAKE_LSP_LOADING_PUSH_EMPTY === "1") {
 			send({
 				jsonrpc: "2.0",
@@ -1361,6 +1393,7 @@ function handle(raw) {
 		if (typeof text === "string") {
 			openDocuments.set(data.params?.textDocument?.uri, text);
 		}
+		recoverHealthOn(text);
 		// #4782: a dependency whose change takes the checker long to analyze.
 		// The work runs BEFORE the republish below, so the dependents' previous
 		// answers (checked against the old bytes) are the latest the client
@@ -1635,6 +1668,7 @@ function handle(raw) {
 			return;
 		}
 		const flipped = flipAroundPull();
+		announceHeldLoading();
 		// `FAKE_LSP_LOADING_REPEAT_STATUS=1`: a ready server repeats its quiescent
 		// notice before every answer (rust-analyzer re-sends its status on health
 		// and message changes). The value does not change, so nothing is loading.
