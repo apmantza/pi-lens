@@ -225,6 +225,11 @@ describe("runner config-read detector: plants it was not designed around", () =>
 			true,
 		);
 		expect(flagged('export * from "../../tool-policy.js";')).toBe(true);
+		// Indirect reach to the same module: require and dynamic import.
+		expect(flagged('const tp = require("../../tool-policy.js");')).toBe(true);
+		expect(flagged('const tp = await import("../../tool-policy.js");')).toBe(
+			true,
+		);
 	});
 
 	it("flags a module it was never told about, and admits one it was", () => {
