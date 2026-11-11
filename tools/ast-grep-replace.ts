@@ -32,7 +32,6 @@ function errorTextWithHint(raw: string): string {
 	return hint ? `Error: ${raw}\n\n${hint}` : `Error: ${raw}`;
 }
 import {
-	CONSTRAINED_JSON_SCHEMA_SAMPLING,
 	defaultedCwdHomeRefusal,
 	PATHS_GLOB_CLAUSE,
 	readAstGrepLang,
@@ -84,7 +83,6 @@ export function createAstGrepReplaceTool(
 			const state = details?.applied ? "applied" : "preview";
 			return `ast_grep_replace — ${n} match${n === 1 ? "" : "es"}, ${state}`;
 		}),
-		constrainedSampling: CONSTRAINED_JSON_SCHEMA_SAMPLING,
 		parameters: Type.Object({
 			pattern: Type.String({
 				description: "AST pattern to match (be specific with context)",

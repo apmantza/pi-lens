@@ -210,15 +210,30 @@ export function stripSource(
 	options: StripOptions = {},
 ): string {
 	const blankStrings = (options.strings ?? "blank") === "blank";
-	const out = source.split("");
+	// The output as UTF-16 code units in a typed array: one native copy in and
+	// one out, instead of a one-string-per-character array and a join.
+	const length = source.length;
+	const outBytes = Buffer.alloc(length * 2);
+	outBytes.write(source, "utf16le");
+	const out = new Uint16Array(outBytes.buffer, outBytes.byteOffset, length);
+	// A backslash as the very last character asks to blank the position past
+	// the end; the array this replaced grew by one space there, so keep that.
+	let pastEnd = false;
 	const blank = (index: number) => {
-		if (out[index] !== "\n") out[index] = " ";
+		if (index >= length) pastEnd = true;
+		else if (out[index] !== 10) out[index] = 32;
 	};
+	const isWordCode = (code: number): boolean =>
+		(code >= 48 && code <= 57) ||
+		(code >= 65 && code <= 90) ||
+		(code >= 97 && code <= 122) ||
+		code === 95 ||
+		code === 36;
 	const regexMayStart = (index: number): boolean => {
 		let end = -1;
 		for (let j = index - 1; j >= 0; j--) {
 			const prev = out[j];
-			if (prev === " " || prev === "\t" || prev === "\n" || prev === "\r") {
+			if (prev === 32 || prev === 9 || prev === 10 || prev === 13) {
 				continue;
 			}
 			end = j;
@@ -226,10 +241,14 @@ export function stripSource(
 		}
 		if (end < 0) return true; // start of file
 		const prev = out[end];
-		if (!/[\w$]/.test(prev)) return !/[)\]"'`]/.test(prev);
+		if (!isWordCode(prev)) {
+			return !/[)\]"'`]/.test(String.fromCharCode(prev));
+		}
 		let start = end;
-		while (start > 0 && /[\w$]/.test(out[start - 1])) start--;
-		return KEYWORDS_BEFORE_REGEX.has(out.slice(start, end + 1).join(""));
+		while (start > 0 && isWordCode(out[start - 1])) start--;
+		return KEYWORDS_BEFORE_REGEX.has(
+			outBytes.toString("utf16le", start * 2, (end + 1) * 2),
+		);
 	};
 	let quote: string | undefined;
 	let lineComment = false;
@@ -252,7 +271,23 @@ export function stripSource(
 	// remaining text, including this nested template's own stray delimiters,
 	// to fall through as ordinary unmasked code.
 	const templateStack: { braceDepth: number }[] = [];
+	// Plain code outside every template: only a `/` or a quote opens another
+	// state, and every other character falls through all the branches below
+	// untouched, so the loop jumps to the next one.
+	const plainCodeStop = /["'`/]/g;
 	for (let i = 0; i < source.length; i++) {
+		if (
+			!regex &&
+			!lineComment &&
+			!blockComment &&
+			quote === undefined &&
+			templateStack.length === 0
+		) {
+			plainCodeStop.lastIndex = i;
+			const stop = plainCodeStop.exec(source);
+			if (stop === null) break;
+			i = stop.index;
+		}
 		const ch = source[i];
 		const next = source[i + 1];
 		if (regex) {
@@ -368,7 +403,7 @@ export function stripSource(
 			}
 		}
 	}
-	return out.join("");
+	return outBytes.toString("utf16le") + (pastEnd ? " " : "");
 }
 
 function matchIsCode(

@@ -94,7 +94,9 @@ export interface DiagnosticStrategy {
 	 *  Overrides the global DIAGNOSTICS_AGGREGATE_WAIT_MS in the service layer. */
 	aggregateWaitMs: number;
 	/** Whether this server benefits from a second pull after an empty fast first
-	 *  pull. TypeScript: no (rely on push). rust-analyzer: yes (incremental). */
+	 *  pull. TypeScript: no (rely on push). No row sets it today (#5485 deleted
+	 *  the only `true` row, which never applied); `clients/lsp/index.ts` still
+	 *  honours it. */
 	expectSemanticSecondPush: boolean;
 	/** Re-sync a re-edited document with didClose+didOpen instead of didChange.
 	 *  Default false (language servers re-analyze on didChange). True for scanners
@@ -304,13 +306,22 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			// applies this flag to a native-ts7 instance.
 			silentOnClean: true,
 		},
-		"rust-analyzer": {
-			seedFirstPush: false,
-			pullRetryBudgetMs: 500,
-			debounceMs: 150,
-			aggregateWaitMs: 3000,
-			expectSemanticSecondPush: true,
-		},
+		// rust (rust-analyzer) has NO row on purpose (#5485). The row that stood
+		// here was keyed `rust-analyzer`, the display name, not the registry id, so
+		// it never applied and rust (a `mode=pull` server) waited on
+		// DEFAULT_STRATEGY; its 3000 / 500 / second-push values were a design
+		// guess (commit 3bf9ff93b), never measured. Re-keyed as they were, a cold
+		// `lsp_touch_file` still reads clean: 0 of 5 cold touches returned the
+		// fixture's type error at 3000 / 500 (and 0 of 5 on the default), because
+		// rust-analyzer answers an EMPTY authoritative report for ~0.4 s and the
+		// finding lands at 3.6-3.9 s. The `lsp_diagnostics` route differs only in
+		// degree (review r1, default: 3 of 5 cold runs found it, 2 returned clean).
+		// Only a pull-retry budget above that catches it (7000 / 6000: 3 of 3 on the
+		// touch seam), and the retry loop cannot tell a clean file from a loading
+		// one, so every clean touch then pays the whole budget (6.7-6.9 s vs 0.9 s
+		// on the touch seam; 12.6-12.8 s vs 1.1-1.7 s on `lsp_diagnostics`). That
+		// trade is a maintainer decision, not a key rename; the readiness-signal fix
+		// is #5487. Raw numbers: tests/fixtures/lsp-wait-measurements/rust-5485.json.
 		// PythonServer (pyright / basedpyright) — openFilesOnly mode: lazy per-file
 		// analysis, startup similar to jedi. seedFirstPush: true because pyright's
 		// first publishDiagnostics after didOpen is the complete result for that file.
@@ -331,13 +342,6 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			pullRetryBudgetMs: 0,
 			debounceMs: 100,
 			aggregateWaitMs: 3000,
-			expectSemanticSecondPush: false,
-		},
-		eslint: {
-			seedFirstPush: true,
-			pullRetryBudgetMs: 0,
-			debounceMs: 200,
-			aggregateWaitMs: 2000,
 			expectSemanticSecondPush: false,
 		},
 		// Opengrep security scanner (cross-language LSP). It pushes an EMPTY result
@@ -612,6 +616,35 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			pullRetryBudgetMs: 250,
 			debounceMs: 150,
 			aggregateWaitMs: 6000,
+			expectSemanticSecondPush: false,
+		},
+		// deno (the typescript alternate) is a PULL server (`mode=pull`,
+		// docs/lsp-capability-matrix.md) that answers every cold touch, but the
+		// answer can take longer than DEFAULT_STRATEGY's 1500ms: the pull is
+		// abandoned and the touch reads `touched=0` (#5464). MEASURED over the
+		// nightly tool-smoke `LSP handshake layer` row, spawn + initialize + pull:
+		//   * green 1.27, 1.59, 1.57, 3.80, 3.42s (five runs, 2026-11-06..08);
+		//   * red at the 1500 default: 4.60s (d8bd7a331) and 4.15s (242b2e3d2) —
+		//     same runner image and deno 2.9.8 on both sides, so the touch time
+		//     moved, not the code.
+		// A CPU-starved local host (one core shared with 4 busy loops, cold HOME)
+		// reproduced the red 3 of 3 at the default and completed in 3.86, 4.02 and
+		// 5.49s once the cap was lifted (two further runs ran past an 8000ms pull
+		// and are not covered by any budget under the gate's ceiling). Raw numbers:
+		// tests/fixtures/lsp-wait-measurements/deno-5464.json, pinned by
+		// tests/clients/lsp/server-strategies.test.ts. 7000 = 1.25 x the slowest
+		// COMPLETED touch (5.49s). It is a ceiling, not a delay: a pull server that
+		// answers returns at once, so a warm or fast touch pays nothing, and the
+		// budget is only paid in full when deno never answers an uncapped call.
+		// The CI runner was not instrumented for this row: the CI figures are
+		// run-log timestamps, the starved ones are this host's.
+		// Every other field is DEFAULT_STRATEGY's on purpose: nothing measured
+		// deno's pull retry or debounce, so this entry moves the one field that was.
+		deno: {
+			seedFirstPush: false,
+			pullRetryBudgetMs: 250,
+			debounceMs: 150,
+			aggregateWaitMs: 7000,
 			expectSemanticSecondPush: false,
 		},
 		cue: {

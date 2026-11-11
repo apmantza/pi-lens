@@ -2975,9 +2975,11 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 
 	it("case 2 — a fast silent aux beside a slower primary narrows to partial, not confirmed", async () => {
 		// The counter-case to the test above, and the honest half of the blast radius.
-		// rust-analyzer declares 3000 and typos 1500, so under a 2000ms cap:
-		//   timeoutFor(rust-analyzer) = min(2000, 3000) = 2000
-		//   timeoutFor(typos)         = min(2000, 1500) = 1500
+		// (This case first used `rust-analyzer`, a display name whose row never
+		// applied to the registry id `rust`; it moved to a registry id, #5485.)
+		// python-jedi declares 3000 and typos 1500, so under a 2000ms cap:
+		//   timeoutFor(python-jedi) = min(2000, 3000) = 2000
+		//   timeoutFor(typos)       = min(2000, 1500) = 1500
 		//   timeoutMs                 = max(2000, 1500) = 2000
 		// The primary answers at 800ms and typos settles silently at 1500ms, so the
 		// wait ends at 1500 — comfortably inside `timeoutMs`, which is why
@@ -2990,20 +2992,20 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 		// is the INEQUALITY (aux budget < timeoutMs), not the specific milliseconds.
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
-		const file = "C:/repo/main.rs";
-		const primaryClient = makeClient(800, [makeDiagnostic("borrow error")], {
-			serverId: "rust-analyzer",
+		const file = "C:/repo/main.py";
+		const primaryClient = makeClient(800, [makeDiagnostic("name error")], {
+			serverId: "python-jedi",
 		});
 		const auxClient = makeClient(1500, [], { serverId: "typos" });
 		getServersForFileWithConfig.mockReturnValue([
-			makePrimaryServer("rust-analyzer", ".rs"),
-			makeAuxServer("typos", ".rs"),
+			makePrimaryServer("python-jedi", ".py"),
+			makeAuxServer("typos", ".py"),
 		]);
 		createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
 			options?.serverId === "typos" ? auxClient : primaryClient,
 		);
 
-		const touch = service.touchFile(file, "fn main() {}", {
+		const touch = service.touchFile(file, "x = 1", {
 			// The cascade neighbour fan-out's own shape, non-cold-snapshot lane.
 			clientScope: "all",
 			collectDiagnostics: true,
@@ -3034,7 +3036,7 @@ describe('#1533 — silent auxiliary honesty on clientScope "all"', () => {
 		expect(result?.unconfirmedServerIds).toEqual(["typos"]);
 		expect(
 			(result?.diags ?? []).map((d: { message: string }) => d.message),
-		).toContain("borrow error");
+		).toContain("name error");
 	});
 
 	// #1531, now CLOSED and live rather than pending. The client-global

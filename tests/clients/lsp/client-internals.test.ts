@@ -74,6 +74,14 @@ const TEST_FILE = "/project/app.ts";
 const TEST_KEY = normalizeMapKey(TEST_FILE);
 
 describe("CLIENT_CAPABILITIES (#278 regression)", () => {
+	it("explicitly advertises hierarchical document symbols (#5476)", () => {
+		// ElixirLS 0.31.1 treats an omitted boolean as nil and crashes.
+		expect(CLIENT_CAPABILITIES.textDocument.documentSymbol).toHaveProperty(
+			"hierarchicalDocumentSymbolSupport",
+			true,
+		);
+	});
+
 	// PowerShell Editor Services (OmniSharp.Extensions.LanguageServer) NPEs during
 	// `initialize` when textDocument sub-capabilities it dereferences are absent —
 	// a partial object hangs the handshake. Keep the set COMPLETE so PSES (and any

@@ -2944,6 +2944,9 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The AMBIENT turn abort signal, set for the whole tool_result path and " +
 		"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 		"bound that is always live.",
+	"call:clients/project-trust.ts#readAdoptedProjectTrust:8d9498e9~136c8ea4":
+		"#5469 F1: no owning hook signal at registry; explicit undefined plus " +
+		"registry retirement shutdownSignal and the read-only analysis wall bound host SDK loading.",
 	"call:clients/runtime-agent-end.ts#handleAgentEnd:6ec6083f~93eae0ad":
 		"AgentEndDeps.signal is the agent_settled ctx.signal passed by index.ts; " +
 		"it can be absent in a standalone harness. The shared agent_settled " +
