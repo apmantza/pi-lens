@@ -673,7 +673,7 @@ export interface LocalBinWalkOptions {
  *
  * `binDirs` makes this the ONLY such walker in the repo. Before #2544 there
  * were SIX copies of this loop — `formatters.ts`'s `findInNodeModules` /
- * `findInVendorBin` / the venv walk, `oxlint.ts`'s `resolveLocalVp`,
+ * `findInVendorBin` / `findInVenv`, `oxlint.ts`'s `resolveLocalVp`,
  * `runner-helpers.ts`'s `findNodeBinRoots` and `resolveVendorToolCommand` —
  * and they had drifted apart: only this one resolved a relative `startDir`,
  * only this one had the #2514 HOME ceiling, and `vp` was resolved with
