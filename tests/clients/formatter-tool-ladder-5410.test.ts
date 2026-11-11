@@ -425,6 +425,26 @@ describe("pip-managed formatters (#5410, #5492 r2 F4)", () => {
 		},
 	);
 
+	// The spec rows are what give these two tools the project rung: without a
+	// row the formatter would only see PATH and the pip prefix.
+	it.each(PIP)(
+		"%s: the project's own .venv binary outranks PATH and the pip-managed one",
+		async (tool, exportName, fileName, body) => {
+			plant(path.join(pathDir, tool), GOOD);
+			plant(path.join(home, "pip-tools", "bin", tool), GOOD);
+			const project = path.join(root, "proj");
+			const own = plant(path.join(project, ".venv", "bin", tool), GOOD);
+			fs.writeFileSync(path.join(project, ".gitignore"), ".venv\n");
+			const file = path.join(project, fileName);
+			fs.writeFileSync(file, body);
+			const formatters = await import("../../clients/formatters.js");
+
+			const cmd = await formatters[exportName].resolveCommand!(file, project);
+
+			expect(Array.isArray(cmd) ? cmd[0] : cmd).toBe(own);
+		},
+	);
+
 	it.each(PIP)(
 		"%s: a working PATH binary outranks the pip-managed one",
 		async (tool, exportName, fileName, body) => {
