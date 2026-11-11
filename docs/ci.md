@@ -64,8 +64,12 @@ trust) makes `install-smoke.yml` run all four pi-load cells and an advisory LSP
 handshake job on a pull request; any other PR that reaches that workflow keeps
 the one pnpm-global cell (`tests/config/pr-smoke-paths.test.ts`).
 The Unit shards are packed by the per-file seconds in
-`scripts/test-shard-weights.json`; regenerate it from the shards' uploaded
-`vitest-results.json` when `tests/config/test-shard-assignment.test.ts` reds.
+`scripts/test-shard-weights.json`; regenerate it when
+`tests/config/test-shard-assignment.test.ts` reds, or when new tests leave
+files unknown, with `node scripts/gen-test-shard-weights.mjs` from either the
+shards' uploaded `vitest-results.json` (`--run <dir>`) or the nightly journal
+(`--journal <file> [--days 5]`, no GitHub API: `git fetch <remote>
+data/test-history`, then `git show FETCH_HEAD:history/test-daily.ndjson`).
 
 ## Actions cache
 
