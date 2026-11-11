@@ -924,6 +924,7 @@ function recordLocationsFromRuntimeSource(source, blankedText) {
 		// the honest section was refused and the only passing wording was the
 		// false "no record added." sentence.
 		["logCascade", ["phase"]],
+		["logTreeSitter", ["phase"]],
 		["emitBounded", ["kind", "event", "eventName"]],
 		// #3721: a read-time fold row (`getDegradationSummary()`'s
 		// `summary.push({ kind: ... })`, the `log-sink-*` and
