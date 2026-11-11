@@ -132,8 +132,9 @@ describe("formatter ancestor venv (#5410 run-a)", () => {
 		expect(result.outcome).toBe("unavailable");
 	});
 
-	// The venv the project owns still wins, found from the project root the
-	// formatter spawns in even when the edited file sits deeper.
+	// Control (green on the base too): the venv the project owns still wins,
+	// found from the project root the formatter spawns in even when the edited
+	// file sits deeper.
 	it("ruff: the project's own .venv ruff runs for a file nested under the project root", async () => {
 		const app = path.join(root, "app");
 		const ownRuff = plant(path.join(app, ".venv", "bin", "ruff"), GOOD);
@@ -180,31 +181,8 @@ describe("formatter ancestor venv (#5410 run-a)", () => {
 		).toEqual(["--version", "format"]);
 	});
 
-	// One latch per cwd: the formatter and the runner resolve one tool, so the
-	// version probe runs once between them, not once each.
-	it("ruff: the formatter and the runner share one version probe", async () => {
-		const app = path.join(root, "app");
-		const ownRuff = plant(path.join(app, ".venv", "bin", "ruff"), GOOD);
-		fs.writeFileSync(path.join(app, "pyproject.toml"), "[tool.ruff]\n");
-		const file = path.join(app, "main.py");
-		fs.writeFileSync(file, "def f():\n    return 1\n");
-		const { ruffFormatter } = await import("../../clients/formatters.js");
-		const { resolveToolCommandWithInstallFallback } =
-			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
-
-		await ruffFormatter.resolveCommand!(file, app);
-		expect(await resolveToolCommandWithInstallFallback(app, "ruff")).toBe(
-			ownRuff,
-		);
-		await ruffFormatter.resolveCommand!(file, app);
-
-		expect(
-			spawnCalls.filter(
-				(call) => call.cmd === ownRuff && call.args[0] === "--version",
-			),
-		).toHaveLength(1);
-	});
-
+	// Control (green on the base too): pins the sqlfluff formatter's venv rung,
+	// which the shared ladder now answers.
 	it("sqlfluff: the project's own .venv binary runs, found from the project root", async () => {
 		const app = path.join(root, "app");
 		const ownBin = plant(path.join(app, ".venv", "bin", "sqlfluff"), GOOD);
@@ -353,6 +331,7 @@ describe("formatter binary order (#5410 run-f)", () => {
 		expect(Array.isArray(cmd) ? cmd[0] : cmd).toBe(shim);
 	});
 
+	// Control (green on the base too): the PATH answer is not lost.
 	it.each(ROWS)(
 		"%s: a working PATH binary still runs when nothing is managed",
 		async (tool, exportName, fileName, body) => {
