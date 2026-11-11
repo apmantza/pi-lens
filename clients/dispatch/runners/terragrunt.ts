@@ -173,7 +173,8 @@ const terragruntRunner: RunnerDefinition = {
 			if (managed) cmd = managed;
 		}
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd)
+			return toolAbsentSkip(cwd, { id: "terragrunt", checker: terragrunt });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

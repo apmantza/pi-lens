@@ -152,6 +152,17 @@ describe("a file every applicable check skipped is named not checked (#5258)", (
 		expect(mixed.output).toContain("Stated: spellcheck: not installed.");
 	});
 
+	// Review F3 (#5258 r2): beside a bare skip the notice named every opt-in or
+	// unconfigured runner too (`trivy-config: not enabled; helm-render: not
+	// enabled`), growing the per-edit status line from ~100 to ~230 characters.
+	it("does not list a runner that had nothing to check beside a bare skip", async () => {
+		const result = await dispatchMarkdown(BARE, skipped("not-configured"));
+
+		expect(uncheckedReason(result)).toBe(`not fully checked (${GENERIC})`);
+		expect(result.output).not.toContain("not configured");
+		expect(result.output).not.toContain("Stated:");
+	});
+
 	it("keeps the generic sentence when the other primary timed out", async () => {
 		const result = await dispatchMarkdown(skipped("not-installed"), TIMED_OUT);
 
@@ -194,6 +205,34 @@ describe("a missing tool is recorded once per (runner, reason) per session (#525
 		]);
 		expect(_getDegradationLedgerStateForTests().onceKeys).toBe(1);
 	});
+
+	it.each([
+		[
+			"probe-incomplete",
+			"its availability probe did not finish, so it is not reported missing",
+		],
+		["probe-rejected", "found, but it rejected its version probe"],
+		[
+			"trust-refused",
+			"the project's own binary was refused (pi project trust is not granted)",
+		],
+		["runtime-missing", "a runtime it needs is not installed"],
+	] as const)(
+		"records %s as its own cause, never as a missing tool",
+		async (reason, phrase) => {
+			await dispatchMarkdown(skipped(reason), skipped("not-configured"));
+
+			const group = getDegradationSummary().find(
+				(entry) => entry.kind === "runner-skip-cause",
+			);
+			expect(group?.latestReasons).toEqual([
+				{
+					subject: `spellcheck:${reason}`,
+					reason: `spellcheck did not run: ${phrase}`,
+				},
+			]);
+		},
+	);
 
 	it("keeps install-disabled a distinct subject from not-installed", async () => {
 		await dispatchMarkdown(skipped("not-installed"), skipped("not-configured"));

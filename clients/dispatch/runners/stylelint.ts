@@ -181,7 +181,7 @@ const stylelintRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "stylelint" });
 
 		const result = await safeSpawnAsync(
 			cmd,

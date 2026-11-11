@@ -23,6 +23,13 @@ vi.mock(
 		createAvailabilityChecker: (command: string) => ({
 			isAvailable: () => availabilityCheck(command),
 			isAvailableAsync: async () => availabilityCheck(command),
+			getVerdict: () => ({
+				outcome: "missing",
+				cause: "not-found",
+				elapsedMs: 0,
+				latched: true,
+				retryAtMs: 0,
+			}),
 			getCommand: () => command,
 		}),
 	}),

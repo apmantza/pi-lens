@@ -191,7 +191,7 @@ const taploRunner: RunnerDefinition = {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");
 		}
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "taplo" });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		// #1937: `--output=json` is not a taplo flag. taplo rejected it with a

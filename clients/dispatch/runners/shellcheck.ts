@@ -211,7 +211,8 @@ const shellcheckRunner: RunnerDefinition = {
 			);
 			if (managed) cmd = managed;
 		}
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd)
+			return toolAbsentSkip(cwd, { id: "shellcheck", checker: shellcheck });
 
 		// Build args
 		// --format json: JSON output

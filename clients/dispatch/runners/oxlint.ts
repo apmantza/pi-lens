@@ -129,7 +129,7 @@ const oxlintRunner: RunnerDefinition = {
 			args = ["--format", "json", ctx.filePath];
 		}
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "oxlint" });
 		}
 
 		// Run oxlint (or Vite+'s vp lint wrapper) on the file.

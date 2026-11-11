@@ -148,7 +148,7 @@ const phpstanRunner: RunnerDefinition = {
 		}
 
 		const cmd = await resolvePhpstan(cwd);
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { checker: phpstan });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(

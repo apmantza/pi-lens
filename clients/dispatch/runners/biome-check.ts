@@ -295,7 +295,7 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "biome");
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "biome" });
 		}
 
 		// Shared config-args seam (#1247): `biomeClient.fixFileAsync` consumes

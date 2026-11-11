@@ -63,7 +63,7 @@ const zigCheckRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "zig-check");
 		if (!(await zig.isAvailableAsync(cwd))) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: zig });
 		}
 
 		const cmd = zig.getCommand(cwd)!;

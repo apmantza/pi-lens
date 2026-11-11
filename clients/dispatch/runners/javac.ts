@@ -88,12 +88,12 @@ const javacRunner: RunnerDefinition = {
 		}
 
 		if (!(await javac.isAvailableAsync(cwd))) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: javac });
 		}
 
 		const cmd = javac.getCommand(cwd);
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: javac });
 		}
 		const result = await safeSpawnAsync(
 			cmd,

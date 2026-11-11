@@ -229,7 +229,7 @@ const cppCheckRunner: RunnerDefinition = {
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const compiler = await resolveCompiler(absPath, cwd);
 		if (!compiler) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd);
 		}
 
 		const result = await safeSpawnAsync(compiler.command, compiler.args, {

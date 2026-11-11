@@ -122,7 +122,7 @@ const rubocopRunner: RunnerDefinition = {
 			10000,
 		);
 		if (!resolved) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "rubocop" });
 		}
 		const { cmd, args } = resolved;
 

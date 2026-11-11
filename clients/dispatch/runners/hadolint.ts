@@ -78,7 +78,7 @@ const hadolintRunner: RunnerDefinition = {
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "hadolint");
 
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "hadolint" });
 		}
 
 		const result = await safeSpawnAsync(

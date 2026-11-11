@@ -81,7 +81,7 @@ const phpLintRunner: RunnerDefinition = {
 				: (await php.isAvailableAsync(cwd))
 					? php.getCommand(cwd)
 					: null;
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { checker: php });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(cmd, ["-l", absPath], {

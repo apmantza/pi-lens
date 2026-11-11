@@ -107,7 +107,7 @@ const actionlintRunner: RunnerDefinition = {
 
 		cmd = await resolveToolCommandWithInstallFallback(cwd, "actionlint");
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "actionlint" });
 
 		const relativeFilePath = path.relative(cwd, ctx.filePath) || ctx.filePath;
 		const result = await safeSpawnAsync(

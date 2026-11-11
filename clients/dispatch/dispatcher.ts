@@ -98,7 +98,7 @@ import {
 	noPrimaryCheckerReason,
 	reachedNoVerdict,
 	SKIP_REASON_PHRASE,
-	TOOL_ABSENT_SKIP_REASONS,
+	TOOL_UNUSABLE_SKIP_REASONS,
 	unchecked,
 } from "./types.js";
 
@@ -911,12 +911,19 @@ function buildCoverageNotice(
 	// every primary row states one reads "not checked (<runner>: <cause>)"; a
 	// mix with a bare skip, a timeout or a failure keeps the generic sentence
 	// and adds the stated causes beside it.
-	const statedCauses = relevant.flatMap((r) =>
-		r.status === "skipped" && r.skipReason !== undefined
-			? [`${r.runnerId}: ${SKIP_REASON_PHRASE[r.skipReason]}`]
-			: [],
+	const statedRows = relevant.filter(
+		(r) => r.status === "skipped" && r.skipReason !== undefined,
 	);
-	const everyRowStated = statedCauses.length === relevant.length;
+	const causeOf = (r: (typeof relevant)[number]): string =>
+		`${r.runnerId}: ${SKIP_REASON_PHRASE[r.skipReason as RunnerSkipReason]}`;
+	const statedCauses = statedRows.map(causeOf);
+	const everyRowStated = statedRows.length === relevant.length;
+	// Beside a bare skip the notice adds only the causes that explain the gap: a
+	// runner that had nothing to check (an opt-in left off, no config) is not
+	// why the file went unchecked, and listing it grew every edit's status line.
+	const unexplainedCauses = statedRows
+		.filter((r) => !isNotApplicableSkipReason(r.skipReason))
+		.map(causeOf);
 	const unavailableReason = cause
 		? `no primary language server answered (${PRIMARY_UNAVAILABLE_CAUSE[cause]})${deniedRunnerIds.length > 0 ? `; ${deniedNote}` : ""}`
 		: deniedRunnerIds.length > 0
@@ -925,7 +932,7 @@ function buildCoverageNotice(
 				: `not fully checked (a language tool is missing, timed out, or failed to run; ${deniedNote})`
 			: everyRowStated
 				? `not checked (${statedCauses.join("; ")})`
-				: `not fully checked (a language tool is missing, timed out, or failed to run${statedCauses.length > 0 ? `; ${statedCauses.join("; ")}` : ""})`;
+				: `not fully checked (a language tool is missing, timed out, or failed to run${unexplainedCauses.length > 0 ? `; ${unexplainedCauses.join("; ")}` : ""})`;
 
 	const verdict = unchecked(unavailableReason);
 	// #5469: no checker answered this adopted edit; keep its unanswered status
@@ -989,7 +996,7 @@ function buildCoverageNotice(
 			message:
 				everyRowStated && deniedRunnerIds.length === 0
 					? `Pi-lens ${ctx.kind} analysis unavailable — ${statedCauses.join("; ")}, so this file was not checked (not a clean result).`
-					: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).${statedCauses.length > 0 ? ` Stated: ${statedCauses.join("; ")}.` : ""}${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
+					: `Pi-lens ${ctx.kind} analysis unavailable — a language tool is missing, timed out, or failed to run, or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).${unexplainedCauses.length > 0 ? ` Stated: ${unexplainedCauses.join("; ")}.` : ""}${deniedRunnerIds.length > 0 ? ` Runner (${deniedRunnerIds.join(", ")}) is also disabled in config by dispatch.disabledRunners.` : ""}`,
 			filePath: ctx.filePath,
 			severity: "warning",
 			semantic: "warning",
@@ -1430,7 +1437,7 @@ async function runGroup(
 		// row's `skipReason` instead.
 		if (
 			skipReason !== undefined &&
-			TOOL_ABSENT_SKIP_REASONS.some((reason) => reason === skipReason)
+			TOOL_UNUSABLE_SKIP_REASONS.some((reason) => reason === skipReason)
 		)
 			recordDegradationOnce({
 				kind: "runner-skip-cause",

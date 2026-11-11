@@ -1,5 +1,14 @@
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withRealPi } from "../support/real-pi-harness.js";
+import {
+	claimScratchDir,
+	SCRATCH_DIR_ROOT,
+} from "../../scripts/lib/scratch-dir.mjs";
+import { removeTempDirSync } from "../clients/test-utils.js";
+import { createRealPiProject, withRealPi } from "../support/real-pi-harness.js";
+
+type JsonObject = Record<string, unknown>;
 
 // flake-shape: real-process-spawn — the per-edit tool result is built by the real host's tool_result handler, which no in-process double reaches
 //
@@ -11,25 +20,40 @@ import { withRealPi } from "../support/real-pi-harness.js";
 // answer of a runner that completed. Each row writes a file that really holds
 // an error and reads the line the host hands the model.
 
-const writeResultText = async (
+type WriteResult = { text: string; causes: ReadonlyArray<JsonObject> };
+
+const writeResult = async (
 	script: string,
 	args: readonly string[],
 	extraEnv: Record<string, string> = {},
-): Promise<string> =>
+	project?: string,
+): Promise<WriteResult> =>
 	withRealPi(
 		{
 			fixture: "clean-verdict",
 			script,
 			args,
+			...(project !== undefined && { project }),
 			env: { ...extraEnv, PI_LENS_TEST_MODE: "0" },
 		},
 		async (pi) => {
 			await pi.prompt("write the file");
 			const result = await pi.awaitToolResult("write");
 			await pi.events("agent_end");
-			return JSON.stringify(result);
+			return {
+				text: JSON.stringify(result),
+				causes: pi.lens
+					.degradations()
+					.filter((row) => row.kind === "runner-skip-cause"),
+			};
 		},
 	);
+
+const writeResultText = async (
+	script: string,
+	args: readonly string[],
+	extraEnv: Record<string, string> = {},
+): Promise<string> => (await writeResult(script, args, extraEnv)).text;
 
 describe("real pi: a write no check covered never reads clean (#5258)", () => {
 	it.each([
@@ -92,20 +116,88 @@ describe("real pi: a skipped check names why the file was not checked (#5258)", 
 
 	it("says which runner is not installed and which is not configured", async () => {
 		const text = await writeResultText("markdown.json", ["--no-lsp"], hidden);
-		expect(text).toContain("spellcheck: not installed");
+		// typos has no managed install, so the kill switch is not its cause.
+		expect(text).toContain("spellcheck: not installed;");
 		expect(text).toContain("vale: not configured");
 		expect(text).not.toContain("a language tool is missing, timed out");
 		expect(text).not.toContain("✓");
 	}, 60_000);
+});
 
-	it("names the install kill switch when it is what kept the tool away", async () => {
-		const text = await writeResultText("markdown.json", ["--no-lsp"], {
-			...hidden,
-			PI_LENS_DISABLE_TOOL_INSTALL: "1",
-		});
-		expect(text).toContain("spellcheck: not installed");
-		expect(text).toContain("PI_LENS_DISABLE_TOOL_INSTALL=1");
-		expect(text).toContain("vale: not configured");
+// Recurrence prevented: #5258 r2 (review F1): `toolAbsentSkip()` worded every
+// unusable command as "not installed, and the managed install is off", so a
+// trust-refused project binary, a `--version` that hangs and one that exits
+// non-zero told the user to install a tool that was installed, and the
+// session-long `runner-skip-cause` record kept the wrong cause. Each row puts
+// the real outcome on disk (a project shim, a PATH shim) and reads the line the
+// host hands the model.
+describe("real pi: a skip names the true cause of an unusable tool (#5258)", () => {
+	const scratchRoot = SCRATCH_DIR_ROOT;
+
+	const textFor = async (
+		script: string,
+		prepare: (project: string, shimDir: string) => void,
+	): Promise<WriteResult> => {
+		const project = createRealPiProject("clean-verdict", scratchRoot);
+		// Outside the project: pi project trust refuses a PATH entry inside it.
+		const shimDir = claimScratchDir(scratchRoot, "real-pi-shims");
+		try {
+			prepare(project, shimDir);
+			return await writeResult(
+				script,
+				["--no-lsp"],
+				{ PATH: shimDir, PI_LENS_DISABLE_TOOL_INSTALL: "1" },
+				project,
+			);
+		} finally {
+			removeTempDirSync(project);
+			removeTempDirSync(shimDir);
+		}
+	};
+
+	const shim = (dir: string, name: string, body: string): void => {
+		const file = path.join(dir, name);
+		writeFileSync(file, `#!/bin/sh\n${body}\n`);
+		chmodSync(file, 0o755);
+	};
+
+	it("names the install kill switch when it is what kept an installable tool away", async () => {
+		const { text, causes } = await textFor("shell.json", () => {});
+		expect(text).toContain(
+			"shellcheck: not installed, and the managed install is off (PI_LENS_DISABLE_TOOL_INSTALL=1)",
+		);
+		expect(JSON.stringify(causes)).toContain("shellcheck:install-disabled");
 		expect(text).not.toContain("✓");
+	}, 60_000);
+
+	it("says the project's own binary was refused, not that the tool is missing", async () => {
+		const { text, causes } = await textFor("html.json", (project) => {
+			const bin = path.join(project, "node_modules", ".bin");
+			mkdirSync(bin, { recursive: true });
+			shim(bin, "htmlhint", "exit 0");
+		});
+		expect(text).toContain("htmlhint: the project's own binary was refused");
+		expect(text).not.toContain("htmlhint: not installed");
+		expect(JSON.stringify(causes)).toContain("htmlhint:trust-refused");
+	}, 60_000);
+
+	it("says the version probe did not finish when it hangs, not that the tool is missing", async () => {
+		const { text, causes } = await textFor("shell.json", (_project, dir) =>
+			shim(dir, "shellcheck", "exec sleep 40"),
+		);
+		expect(text).toContain("shellcheck: its availability probe did not finish");
+		expect(text).not.toContain("shellcheck: not installed");
+		expect(JSON.stringify(causes)).toContain("shellcheck:probe-incomplete");
+	}, 90_000);
+
+	it("says the tool rejected its version probe when it exits non-zero", async () => {
+		const { text, causes } = await textFor("shell.json", (_project, dir) =>
+			shim(dir, "shellcheck", "exit 3"),
+		);
+		expect(text).toContain(
+			"shellcheck: found, but it rejected its version probe",
+		);
+		expect(text).not.toContain("shellcheck: not installed");
+		expect(JSON.stringify(causes)).toContain("shellcheck:probe-rejected");
 	}, 60_000);
 });

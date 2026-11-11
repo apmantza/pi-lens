@@ -173,7 +173,7 @@ const swiftlintRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "swiftlint");
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "swiftlint" });
 
 		const result = await safeSpawnAsync(
 			cmd,

@@ -49,6 +49,7 @@ import {
 	findGlobalBinary,
 	findLocalBinAt,
 	findLocalBinUpwards,
+	isLocalBinTrustRefusal,
 	localBinPath,
 	NODE_MODULES_BIN_DIRS,
 	VENDOR_BIN_DIRS,
@@ -104,16 +105,72 @@ export {
 	startHostStallSampler,
 } from "./availability-policy.js";
 
+/** What a runner read to learn its tool was unusable (#5258). */
+export interface ToolSkipSource {
+	/**
+	 * The registry tool id. It names the managed install (so `install-disabled`
+	 * is said only of a tool the installer could have supplied) and the
+	 * project-local binary a refused trust answer would have used. Omit it for
+	 * a PATH-only toolchain.
+	 */
+	id?: string;
+	/**
+	 * The checker or cwd probe whose verdict the runner read. Defaults to the
+	 * registry checker for `id`. Omit both for a finder that returns only a
+	 * path: its null is a plain absence.
+	 */
+	checker?: { getVerdict(cwd: string): AvailabilityVerdict };
+}
+
 /**
- * The skip a runner returns when its tool could not be resolved (#5258):
- * `install-disabled` when the managed install is off by
- * `PI_LENS_DISABLE_TOOL_INSTALL=1` (the user's remedy is the switch or a
- * hand install), else `not-installed`. One site decides, so the sixty runners
- * that used to return a bare skip here cannot each spell it differently.
+ * The skip a runner returns when its tool could not be used (#5258), worded
+ * by the typed verdict of the checker the runner already holds, so the cause
+ * the notice and the `runner-skip-cause` record state is the one the probe
+ * found, never "not installed" for a tool that merely timed out or was refused:
+ *
+ * | verdict | reason |
+ * | --- | --- |
+ * | transient (probe timeout, host stall, unspawnable finder, retries spent), or a bad workspace | `probe-incomplete` |
+ * | non-installable (found, rejected its version probe) | `probe-rejected` |
+ * | missing, cause `policy-denied`, or a project-local binary exists and trust refuses it | `trust-refused` |
+ * | missing otherwise, or no verdict (a finder), the managed install is off and the installer owns the tool | `install-disabled` |
+ * | missing otherwise, or no verdict (a finder) | `not-installed` |
+ *
+ * A needed runtime (Java for SpotBugs) is not a verdict of this tool's
+ * checker: that site returns `skipped("runtime-missing")` itself.
  */
-export function toolAbsentSkip(): RunnerResult {
+export function toolAbsentSkip(
+	cwd: string,
+	tool: ToolSkipSource = {},
+): RunnerResult {
+	const checker =
+		tool.checker ??
+		(tool.id ? (toolBinaryChecker(tool.id) ?? undefined) : undefined);
+	const verdict = checker?.getVerdict(cwd);
+	if (verdict?.outcome === "transient" || verdict?.cause === "bad-cwd")
+		return skipped("probe-incomplete");
+	if (verdict?.outcome === "non-installable") return skipped("probe-rejected");
+	if (verdict?.cause === "policy-denied") return skipped("trust-refused");
+	if (tool.id !== undefined && projectBinaryRefusedByTrust(tool.id, cwd))
+		return skipped("trust-refused");
 	return skipped(
-		isToolInstallDisabled() ? "install-disabled" : "not-installed",
+		isToolInstallDisabled() &&
+			tool.id !== undefined &&
+			shouldAutoInstallTool(tool.id)
+			? "install-disabled"
+			: "not-installed",
+	);
+}
+
+/** Whether the project carries a binary for this registry tool that trust refused. */
+function projectBinaryRefusedByTrust(toolId: string, cwd: string): boolean {
+	const spec = getToolCommandSpec(toolId);
+	if (!spec) return false;
+	return isLocalBinTrustRefusal(
+		findLocalBinAt(spec.command, cwd, {
+			windowsExt: spec.windowsExt ?? "",
+			binDirs: [...VENV_BIN_DIRS, ...NODE_MODULES_BIN_DIRS],
+		}),
 	);
 }
 

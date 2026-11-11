@@ -1,4 +1,7 @@
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import {
+	toolAbsentSkip,
+	type AvailabilityVerdict,
+} from "./utils/runner-helpers.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
@@ -230,6 +233,19 @@ async function resolvePowerShellCmd(): Promise<string | null> {
 	return null;
 }
 
+/** The typed verdict of the module probe for `cmd`, for the skip's stated cause (#5258). */
+function moduleVerdict(cmd: string): AvailabilityVerdict {
+	const latch = psAnalyzerLatchByCmd.get(cmd);
+	const outcome = latch?.getOutcome() ?? null;
+	return {
+		outcome,
+		cause: latch?.getCause() ?? null,
+		elapsedMs: 0,
+		latched: outcome !== null,
+		retryAtMs: latch?.getRetryAtMs() ?? 0,
+	};
+}
+
 async function checkModuleAvailable(cmd: string): Promise<boolean> {
 	let latch = psAnalyzerLatchByCmd.get(cmd);
 	if (!latch) {
@@ -346,10 +362,12 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cmd = await resolvePowerShellCmd();
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(ctx.cwd);
 
 		if (!(await checkModuleAvailable(cmd))) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(ctx.cwd, {
+				checker: { getVerdict: () => moduleVerdict(cmd) },
+			});
 		}
 
 		let execLatch = psExecLatchByCmd.get(cmd);

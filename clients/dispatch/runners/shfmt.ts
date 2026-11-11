@@ -43,12 +43,12 @@ const shfmtRunner: RunnerDefinition = {
 		} else {
 			const installed = await resolveAvailableOrInstall(shfmt, "shfmt", cwd);
 			if (!installed) {
-				return toolAbsentSkip();
+				return toolAbsentSkip(cwd, { id: "shfmt", checker: shfmt });
 			}
 			cmd = installed;
 		}
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "shfmt", checker: shfmt });
 
 		// --diff exits 1 and prints a unified diff if the file needs formatting
 		const result = await safeSpawnAsync(cmd, ["--diff", ctx.filePath], {

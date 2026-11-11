@@ -179,7 +179,9 @@ const ROOT = path.join(REPO, "clients", "dispatch");
 
 /**
  * The named remainder of #5258, by `stableOccurrenceKey` (`~n` is the nth
- * occurrence of an identical line under one symbol). Each group stays bare for
+ * occurrence of an identical line under one symbol). 40 keys: 34 bare
+ * `RunnerResult` skip returns (the remainder), 4 tree-sitter log rows
+ * (`TS_LOG`) and the 2 constructors (`CTOR`), which are not skips. Each group stays bare for
  * one reason: the reason it needs is a verdict decision of its own
  * (`reachedNoVerdict`: a bare skip reads no verdict, and a stated reason can
  * flip that), not a tool-absent or config-absent cause.

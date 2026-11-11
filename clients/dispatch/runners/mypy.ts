@@ -90,7 +90,7 @@ const mypyRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "mypy" });
 
 		const result = await safeSpawnAsync(
 			cmd,

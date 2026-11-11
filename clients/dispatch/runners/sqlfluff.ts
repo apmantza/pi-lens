@@ -172,7 +172,7 @@ const sqlfluffRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "sqlfluff" });
 
 		// #1937: this used to be `args.splice(2, 0, "--dialect", "ansi")` on
 		// `["lint", "--format", "json", file]`, which inserts BETWEEN the flag

@@ -4,7 +4,10 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment, useTrackedTempDirs } from "../../test-utils.js";
 
-const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
+const { safeSpawnAsync, runtime } = vi.hoisted(() => ({
+	safeSpawnAsync: vi.fn(),
+	runtime: { javaPresent: true },
+}));
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
 // java present + spotbugs resolves to a stub command. createAvailabilityChecker
@@ -15,9 +18,16 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
+		createAvailabilityChecker: (command: string) => ({
+			isAvailableAsync: async () => command !== "java" || runtime.javaPresent,
 			getCommand: () => null,
+			getVerdict: () => ({
+				outcome: "missing" as const,
+				cause: "not-found" as const,
+				elapsedMs: 0,
+				latched: true,
+				retryAtMs: 0,
+			}),
 		}),
 		resolveAvailableOrInstall: async () => "spotbugs-stub",
 	}),
@@ -55,6 +65,7 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
+		runtime.javaPresent = true;
 		// The runner reads SpotBugs' -output file; the real CLI writes it, so the
 		// mock writes the fixture XML to that path.
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
@@ -85,6 +96,20 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 			expect(res.diagnostics[0].rule).toBe("NP_ALWAYS_NULL");
 			expect(res.diagnostics[0].line).toBe(7);
 			expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5258 r2 review F1, Qodo #4): an absent Java runtime was worded
+	// `spotbugs: not installed`, blaming SpotBugs for the missing JRE it needs.
+	it("names the missing Java runtime, not SpotBugs, when Java is absent", async () => {
+		try {
+			runtime.javaPresent = false;
+			const res = await run(env.tmpDir);
+			expect(res.status).toBe("skipped");
+			expect(res.skipReason).toBe("runtime-missing");
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
 		} finally {
 			env.cleanup();
 		}

@@ -612,7 +612,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 22 -> 23 (#5258): the coverage rule reads the rows the dispatcher
 		// kept for the primary group, an `Array.prototype.filter` call, not a
 		// delivery filter.
-		"clients/dispatch/dispatcher.ts": 23,
+		// 23 -> 25 (#5258 r2): the stated-cause rows and the unexplained subset
+		// the mixed notice names, `Array.prototype.filter` calls, not a
+		// delivery filter.
+		"clients/dispatch/dispatcher.ts": 25,
 		"clients/dispatch/fact-runner.ts": 1,
 		"clients/dispatch/fact-scheduler.ts": 2,
 		"clients/dispatch/facts/function-facts.ts": 2,

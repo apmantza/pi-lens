@@ -144,7 +144,7 @@ const valeRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "vale" });
 
 		// Vale exits 1 when a run reports an error-level alert and 0 for
 		// warning or suggestion alerts alone (exit table below).

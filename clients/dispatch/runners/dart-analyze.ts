@@ -172,7 +172,7 @@ const dartAnalyzeRunner: RunnerDefinition = {
 		const flutterAvailable =
 			!dartAvailable && (await flutter.isAvailableAsync(cwd));
 		if (!dartAvailable && !flutterAvailable) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: dart });
 		}
 		const cmd = dartAvailable
 			? dart.getCommand(cwd)!

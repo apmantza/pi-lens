@@ -147,8 +147,9 @@ const eslintRunner: RunnerDefinition = {
 		const cmd = resolveToolCommand(cwd, "eslint") ?? "eslint";
 
 		// Verify ESLint is actually executable (cached per cwd, see getEslintProbe).
-		if (!(await getEslintProbe(cmd)(cwd))) {
-			return toolAbsentSkip();
+		const eslintProbe = getEslintProbe(cmd);
+		if (!(await eslintProbe(cwd))) {
+			return toolAbsentSkip(cwd, { checker: eslintProbe });
 		}
 
 		const result = await safeSpawnAsync(

@@ -96,7 +96,7 @@ const credoRunner: RunnerDefinition = {
 
 		// Credo ships as a mix dependency — cached per-cwd probe (see probeCredo).
 		if (!(await probeCredo(cwd))) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: probeCredo });
 		}
 
 		const absPath = path.resolve(cwd, ctx.filePath);

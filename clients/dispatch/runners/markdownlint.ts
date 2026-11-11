@@ -131,7 +131,7 @@ const markdownlintRunner: RunnerDefinition = {
 			"markdownlint",
 		);
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "markdownlint" });
 
 		// Shared config-args seam (#1247): the autofix path consumes the same
 		// builder, so the package-owned fallback config can never drift.

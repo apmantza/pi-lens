@@ -32,7 +32,7 @@ const goVetRunner: RunnerDefinition = {
 		// Resolve go path using platform-aware lookup (handles system install paths on Windows)
 		const goExe = await goClient.findGoPathAsync();
 		if (!goExe) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(ctx.cwd);
 		}
 
 		// Vet the package containing the file from the module root.

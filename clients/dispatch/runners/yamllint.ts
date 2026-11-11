@@ -77,7 +77,7 @@ const yamllintRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "yamllint" });
 
 		const result = await safeSpawnAsync(cmd, ["-f", "parsable", ctx.filePath], {
 			cwd,

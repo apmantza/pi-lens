@@ -78,7 +78,7 @@ const pyrightRunner: RunnerDefinition = {
 
 		// If still no pyright, skip this runner
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "pyright", checker: pyright });
 		}
 
 		// Pyright's Node CLI falls back to `python` on PATH when the project has no

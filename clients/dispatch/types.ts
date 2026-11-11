@@ -458,8 +458,13 @@ export interface RunnerDefinition {
  * `not-installed` (its tool was not found), `install-disabled` (not found, and
  * the managed install is off by `PI_LENS_DISABLE_TOOL_INSTALL=1`),
  * `not-configured` (it runs only where the project carries its config) and
- * `not-preferred` (the project's lint policy picks another tool). None of them
- * is a verdict on the file ({@link VERDICT_SKIP_REASONS}). */
+ * `not-preferred` (the project's lint policy picks another tool). Four more
+ * name why a tool that may well be installed was not usable: `probe-incomplete`
+ * (its availability probe timed out or could not finish, so it is not reported
+ * missing), `probe-rejected` (it was found and rejected its version probe),
+ * `trust-refused` (the project's own binary was refused by pi project trust)
+ * and `runtime-missing` (a runtime it needs, such as Java, is absent). None of
+ * them is a verdict on the file ({@link VERDICT_SKIP_REASONS}). */
 export const RUNNER_SKIP_REASONS = [
 	"no-files-matched",
 	"configured-non-biome-linter",
@@ -471,6 +476,10 @@ export const RUNNER_SKIP_REASONS = [
 	"install-disabled",
 	"not-configured",
 	"not-preferred",
+	"probe-incomplete",
+	"probe-rejected",
+	"trust-refused",
+	"runtime-missing",
 ] as const;
 export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
 
@@ -491,13 +500,18 @@ export const VERDICT_SKIP_REASONS: readonly RunnerSkipReason[] = [
 ];
 
 /**
- * The skip reasons that say the runner's tool could not be found. They are the
- * ones the session records once per (runner, reason) (`runner-skip-cause`);
- * `not-configured` and `not-preferred` are the project's own choices.
+ * The skip reasons that say the runner's tool could not be used here, each
+ * with its own true cause. They are the ones the session records once per
+ * (runner, reason) (`runner-skip-cause`); `not-configured` and
+ * `not-preferred` are the project's own choices.
  */
-export const TOOL_ABSENT_SKIP_REASONS: readonly RunnerSkipReason[] = [
+export const TOOL_UNUSABLE_SKIP_REASONS: readonly RunnerSkipReason[] = [
 	"not-installed",
 	"install-disabled",
+	"probe-incomplete",
+	"probe-rejected",
+	"trust-refused",
+	"runtime-missing",
 ];
 
 /**
@@ -517,6 +531,12 @@ export const SKIP_REASON_PHRASE: Record<RunnerSkipReason, string> = {
 		"not installed, and the managed install is off (PI_LENS_DISABLE_TOOL_INSTALL=1)",
 	"not-configured": "not configured",
 	"not-preferred": "the project's lint policy prefers another tool",
+	"probe-incomplete":
+		"its availability probe did not finish, so it is not reported missing",
+	"probe-rejected": "found, but it rejected its version probe",
+	"trust-refused":
+		"the project's own binary was refused (pi project trust is not granted)",
+	"runtime-missing": "a runtime it needs is not installed",
 };
 
 /**
@@ -526,8 +546,8 @@ export const SKIP_REASON_PHRASE: Record<RunnerSkipReason, string> = {
  * a reason added to the taxonomy reads as a failure until it is listed here.
  * `covered-by-primary` is left out on purpose: it defers to a lane whose answer
  * is what the denial may have removed. `disabled-by-config` is the denial
- * itself and the caller handles it. {@link reachedNoVerdict} admits the
- * taxonomy as a verdict except `not-enabled`; this is the narrower "not a tool
+ * itself and the caller handles it. {@link reachedNoVerdict} is an allow-list
+ * over {@link VERDICT_SKIP_REASONS}; this is a different, narrower "not a tool
  * failure" subset, and `not-enabled` is in it (#5042): an opt-in runner left
  * off failed at nothing.
  */

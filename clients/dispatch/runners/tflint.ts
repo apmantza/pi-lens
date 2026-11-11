@@ -99,7 +99,7 @@ const tflintRunner: RunnerDefinition = {
 			if (managed) cmd = managed;
 		}
 
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "tflint", checker: tflint });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

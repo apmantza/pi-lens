@@ -222,7 +222,7 @@ const trivyConfigRunner: RunnerDefinition = {
 			const managed = await resolveAvailableOrInstall(trivy, "trivy", cwd);
 			if (managed) cmd = managed;
 		}
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "trivy", checker: trivy });
 
 		const severities = resolveSeverityFloor(cwd).join(",");
 		const result = await safeSpawnAsync(

@@ -154,6 +154,11 @@ describe("oxlint runner", () => {
 			"install-disabled",
 			"not-configured",
 			"not-preferred",
+			// #5258 r2: a tool that may be installed but was not usable says why.
+			"probe-incomplete",
+			"probe-rejected",
+			"trust-refused",
+			"runtime-missing",
 		]);
 		const valid: RunnerResult = {
 			status: "skipped",

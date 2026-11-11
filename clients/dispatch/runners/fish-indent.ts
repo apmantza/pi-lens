@@ -98,7 +98,7 @@ const fishIndentRunner: RunnerDefinition = {
 				: (await fishIndent.isAvailableAsync(cwd))
 					? fishIndent.getCommand(cwd)
 					: null;
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { checker: fishIndent });
 
 		// Syntax first: fish_indent --check cannot see a syntax error. `--no-execute`
 		// parses only, never runs a command or a command substitution, and

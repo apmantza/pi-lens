@@ -8,12 +8,13 @@ import { scannerReportParentDir } from "../../scanner-temp-root.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { findCompiledClassesDir } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
-import type {
-	DefectClass,
-	Diagnostic,
-	DispatchContext,
-	RunnerDefinition,
-	RunnerResult,
+import {
+	skipped,
+	type DefectClass,
+	type Diagnostic,
+	type DispatchContext,
+	type RunnerDefinition,
+	type RunnerResult,
 } from "../types.js";
 import {
 	createAvailabilityChecker,
@@ -230,7 +231,7 @@ const spotbugsRunner: RunnerDefinition = {
 
 		// JRE required — skip silently if absent (SpotBugs needs JDK 11+).
 		if (!(await java.isAvailableAsync(cwd))) {
-			return toolAbsentSkip();
+			return skipped("runtime-missing");
 		}
 
 		// Cache gate: re-run only when the .class tree changed since last scan.
@@ -245,7 +246,7 @@ const spotbugsRunner: RunnerDefinition = {
 		}
 
 		const cmd = await resolveAvailableOrInstall(spotbugs, "spotbugs", cwd);
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "spotbugs", checker: spotbugs });
 
 		// One file per RUN: pid and millisecond are shared by two cold starts of
 		// one process, and a shared file lets one run read or delete the other's.

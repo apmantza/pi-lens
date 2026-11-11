@@ -81,7 +81,7 @@ const htmlhintRunner: RunnerDefinition = {
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "htmlhint");
 
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "htmlhint" });
 		}
 
 		// htmlhint's --rules flag takes a comma-separated ruleid list

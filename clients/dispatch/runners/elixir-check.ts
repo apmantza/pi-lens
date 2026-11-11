@@ -177,7 +177,7 @@ const elixirCheckRunner: RunnerDefinition = {
 		}
 
 		if (!command) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: mix });
 		}
 
 		const result = await safeSpawnAsync(command, args, {

@@ -88,7 +88,7 @@ const ruffRunner: RunnerDefinition = {
 		}
 		const cmd = await resolveAvailableOrInstall(ruff, "ruff", cwd);
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "ruff", checker: ruff });
 		}
 
 		// Shared config-args seam (#1247): the autofix path consumes the same

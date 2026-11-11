@@ -77,7 +77,6 @@
 	"tests/clients/dispatch/runners/terraform-kotlin-runners.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
 	"tests/clients/dispatch/runners/terragrunt.test.ts:../../../../clients/installer/index.js:[\"ensureTool\"]": 52,
 	"tests/clients/dispatch/runners/terragrunt.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
-	"tests/clients/dispatch/runners/terragrunt.test.ts:../../../../clients/tool-policy.js:[\"getLinterPolicyForCwd\"]": 2,
 	"tests/clients/dispatch/runners/tflint-policy.test.ts:../../../../clients/installer/index.js:[\"ensureTool\"]": 52,
 	"tests/clients/dispatch/runners/tflint-policy.test.ts:../../../../clients/safe-spawn.js:[\"safeSpawnAsync\"]": 14,
 	"tests/clients/dispatch/runners/tflint-policy.test.ts:../../../../clients/tool-policy.js:[\"getLinterPolicyForCwd\"]": 2,

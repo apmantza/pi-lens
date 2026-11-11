@@ -166,7 +166,7 @@ const detektRunner: RunnerDefinition = {
 		const cmd = (await detekt.isAvailableAsync(cwd))
 			? detekt.getCommand(cwd)
 			: null;
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { checker: detekt });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(

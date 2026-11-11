@@ -377,7 +377,7 @@ const cueVetRunner: RunnerDefinition = {
 		// `createAvailabilityChecker`/`resolveAvailableOrInstall` already route
 		// through the shared classify/latch policy, so a probe timeout or host
 		// stall re-arms on its own cooldown instead of latching here.
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd) return toolAbsentSkip(cwd, { id: "cue", checker: cue });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

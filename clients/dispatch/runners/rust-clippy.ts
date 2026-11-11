@@ -90,7 +90,7 @@ const rustClippyRunner: RunnerDefinition = {
 		// Resolve cargo path using platform-aware lookup (handles ~/.cargo/bin on Windows)
 		const cargoExe = await rustClient.findCargoPathAsync();
 		if (!cargoExe) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(ctx.cwd);
 		}
 
 		const clippyProbe = getClippyProbe(cargoExe);
@@ -126,7 +126,7 @@ const rustClippyRunner: RunnerDefinition = {
 					elapsedMs: 0,
 					latched: false,
 				});
-				return toolAbsentSkip();
+				return toolAbsentSkip(ctx.cwd, { checker: refreshedProbe });
 			}
 		}
 

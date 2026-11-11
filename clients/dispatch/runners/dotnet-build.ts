@@ -167,12 +167,12 @@ const dotnetBuildRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "dotnet-build");
 		if (!(await dotnet.isAvailableAsync(cwd))) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: dotnet });
 		}
 
 		const cmd = dotnet.getCommand(cwd);
 		if (!cmd) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: dotnet });
 		}
 
 		const target = findProjectTarget(cwd);

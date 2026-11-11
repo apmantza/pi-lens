@@ -147,7 +147,7 @@ const gleamCheckRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "gleam-check");
 		if (!(await gleam.isAvailableAsync(cwd))) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { checker: gleam });
 		}
 
 		const cmd = gleam.getCommand(cwd)!;

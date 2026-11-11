@@ -170,7 +170,8 @@ const golangciRunner: RunnerDefinition = {
 		}
 
 		const cmd = await resolveAvailableOrInstall(golangci, "golangci-lint", cwd);
-		if (!cmd) return toolAbsentSkip();
+		if (!cmd)
+			return toolAbsentSkip(cwd, { id: "golangci-lint", checker: golangci });
 
 		// Run on the specific file. golangci-lint accepts file paths directly.
 		// v2 (the major the installer downloads) removed `--out-format`: it exits

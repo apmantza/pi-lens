@@ -132,7 +132,7 @@ const spellcheckRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "spellcheck/typos");
 		// Skip if typos-cli is not installed
 		if (!(await typos.isAvailableAsync(cwd))) {
-			return toolAbsentSkip();
+			return toolAbsentSkip(cwd, { id: "typos", checker: typos });
 		}
 
 		// Run typos-cli with JSON output
