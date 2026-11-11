@@ -773,7 +773,8 @@ function send(msg) {
 // `experimental/serverStatus` quiescent:false at `initialized` and quiescent:true
 // when loading ends. `FAKE_LSP_LOADING_NO_STATUS=1` withholds the announcements
 // (a server that loads without announcing, the pre-#5487 shape) and
-// `FAKE_LSP_LOADING_MALFORMED_STATUS=1` sends them without a boolean `quiescent`.
+// `FAKE_LSP_LOADING_MALFORMED_STATUS=1` sends them without a boolean `quiescent`
+// (`done`: only the completion notice).
 // `FAKE_LSP_LOADING_REFRESH=1` also sends `workspace/diagnostic/refresh` when
 // loading starts, as rust-analyzer does. Off by default.
 const LOADING_MS = Number.parseInt(process.env.FAKE_LSP_LOADING_MS ?? "0", 10);
@@ -783,6 +784,11 @@ let clientAsksServerStatus = false;
 let loadingFlipSpent = false;
 let loadingCancelSpent = false;
 const isLoading = () => Date.now() < loadingUntil;
+// "1" garbles every notice; "done" garbles only the quiescent:true one, so the
+// server stays loading as far as a client that ignores garbage can tell.
+const malformedStatusFor = (quiescent) =>
+	process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "1" ||
+	(process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "done" && quiescent === true);
 function announceStatus(quiescent) {
 	if (!clientAsksServerStatus || process.env.FAKE_LSP_LOADING_NO_STATUS === "1") return;
 	send({
@@ -790,8 +796,7 @@ function announceStatus(quiescent) {
 		method: "experimental/serverStatus",
 		params: {
 			health: "ok",
-			quiescent:
-				process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "1" ? "no" : quiescent,
+			quiescent: malformedStatusFor(quiescent) ? "no" : quiescent,
 			message: null,
 		},
 	});

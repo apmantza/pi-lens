@@ -286,6 +286,21 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 		expect(await gatedRows()).toHaveLength(0);
 	}, 30_000);
 
+	// Recurrence: a handler that took any notice at face value would let a garbled
+	// completion notice replace the real `quiescent:false` and read the server
+	// as ready while it is still loading (a false clean).
+	it("does not let a garbled notice replace a real loading status", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "500",
+			FAKE_LSP_LOADING_MALFORMED_STATUS: "done",
+		});
+		const result = await touch(filePath, DIRTY, { maxDiagnosticsWaitMs: 1500 });
+
+		expect(result?.inconclusive).toBe(true);
+		expect(result?.inconclusiveReason).toBe("server-loading");
+		expect(result?.confirmation).not.toBe("confirmed");
+	}, 30_000);
+
 	// The server dies while the wait is held on its quiescence: the wait ends
 	// with the connection, not at its budget, and the touch is not clean.
 	it("ends the wait when the server dies while loading", async () => {
