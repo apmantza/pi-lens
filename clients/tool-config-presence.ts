@@ -530,10 +530,9 @@ function findInDir(
 	}
 	if (spec.dependency) {
 		for (const file of spec.dependency.files) {
-			// npm names are exact; the Python files compare on the PEP 503 name.
-			const wanted = spec.dependency.names.map((name) =>
-				file === "package.json" ? name : normalizeDistributionName(name),
-			);
+			// A spec writes its names in the form the file is compared in: the
+			// PEP 503 name for the Python files, the exact key for `package.json`.
+			const wanted = spec.dependency.names;
 			const candidate = path.join(dir, file);
 			const content = readFileContent(candidate);
 			if (
