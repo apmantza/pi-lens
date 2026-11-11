@@ -60,6 +60,31 @@ afterEach(() => {
 	}
 });
 
+async function withLongSocketTmpdir(
+	body: (cwd: string) => Promise<void>,
+): Promise<void> {
+	const fixture = setupTestEnvironment("pi-lens-ipc-long-socket-");
+	const tmpPathBytes = 90;
+	const componentBytes = Math.max(
+		0,
+		tmpPathBytes - Buffer.byteLength(fixture.tmpDir) - 1,
+	);
+	const socketTmpDir = path.join(fixture.tmpDir, "r".repeat(componentBytes));
+	fs.mkdirSync(socketTmpDir, { recursive: true });
+	vi.stubEnv("TMPDIR", socketTmpDir);
+	try {
+		await body(fixture.tmpDir);
+	} finally {
+		const server = activeServer;
+		if (server) {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			if (activeServer === server) activeServer = undefined;
+		}
+		vi.unstubAllEnvs();
+		fixture.cleanup();
+	}
+}
+
 // #3922: records written before failure tracking remain readable and writable.
 describe("unrunnable invocation status", () => {
 	it("extends a released turn-end record without losing its counters", () => {
@@ -104,6 +129,7 @@ describe("unrunnable invocation status", () => {
 });
 
 describe("requestWarmDiagnostics", () => {
+	// lane: default on Linux and macOS; Windows exercises named pipes.
 	it("round-trips a versioned, content-bound response", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-diag-"));
 		const pid = 99001;
@@ -127,7 +153,10 @@ describe("requestWarmDiagnostics", () => {
 			});
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(diagnosticsIpcPathForCwd(cwd, pid), resolve),
+			activeServer?.listen(
+				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+				resolve,
+			),
 		);
 		const result = await requestWarmDiagnostics(
 			cwd,
@@ -142,6 +171,58 @@ describe("requestWarmDiagnostics", () => {
 		);
 		removeTempDirSync(cwd);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"round-trips over a long TMPDIR using the bounded Unix socket path",
+		async () => {
+			await withLongSocketTmpdir(async (cwd) => {
+				const pid = 99001;
+				const endpoint = diagnosticsIpcPathForCwd(cwd, pid);
+				const boundEndpoint = boundUnixSocketPath(endpoint);
+				expect(Buffer.byteLength(endpoint)).toBeGreaterThan(108);
+				expect(Buffer.byteLength(boundEndpoint)).toBe(
+					process.platform === "darwin" ? 104 : 108,
+				);
+
+				activeServer = net.createServer((socket) => {
+					socket.setEncoding("utf8");
+					socket.once("data", (chunk: string) => {
+						const request = JSON.parse(chunk.trim()) as {
+							contentHash: string;
+						};
+						socket.end(
+							`${JSON.stringify({
+								result: {
+									route: "diagnostics",
+									version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
+									diagnostics: [],
+									contentHash: request.contentHash,
+									servedAt: Date.now(),
+									fresh: true,
+									inconclusive: false,
+								},
+							})}\n`,
+						);
+					});
+				});
+				await new Promise<void>((resolve) =>
+					activeServer?.listen(boundEndpoint, resolve),
+				);
+
+				const result = await requestWarmDiagnostics(
+					cwd,
+					pid,
+					"/x/app.ts",
+					"const x = 1;",
+					1000,
+				);
+				expect(result.available).toBe(true);
+				expect(result.available && result.response.contentHash).toBe(
+					contentHash("const x = 1;"),
+				);
+			});
+		},
+	);
 
 	// #5030 corpus: every diagnostics response shape a released build has put on
 	// the socket (`tests/fixtures/warm-attach/`) still parses on the current
@@ -183,7 +264,10 @@ describe("requestWarmDiagnostics", () => {
 				});
 			});
 			await new Promise<void>((resolve) =>
-				activeServer?.listen(diagnosticsIpcPathForCwd(cwd, pid), resolve),
+				activeServer?.listen(
+					boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+					resolve,
+				),
 			);
 			try {
 				const result = await requestWarmDiagnostics(
@@ -259,7 +343,10 @@ describe("requestWarmDiagnostics", () => {
 			});
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(diagnosticsIpcPathForCwd(cwd, pid), resolve),
+			activeServer?.listen(
+				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+				resolve,
+			),
 		);
 		await expect(
 			requestWarmDiagnostics(cwd, pid, "/x/app.ts", "const x = 1;", 1000),
@@ -283,7 +370,10 @@ describe("requestWarmDiagnostics", () => {
 			);
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(diagnosticsIpcPathForCwd(cwd, pid), resolve),
+			activeServer?.listen(
+				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+				resolve,
+			),
 		);
 		await expect(
 			requestWarmDiagnostics(cwd, pid, "/x/app.ts", "x", 1000),
@@ -298,7 +388,10 @@ describe("requestWarmDiagnostics", () => {
 			// Deliberately leave the request unanswered.
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(diagnosticsIpcPathForCwd(cwd, pid), resolve),
+			activeServer?.listen(
+				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+				resolve,
+			),
 		);
 		await expect(
 			requestWarmDiagnostics(cwd, pid, "/x/app.ts", "x", 20),
@@ -336,7 +429,10 @@ describe("requestWarmCodeActions", () => {
 			});
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(diagnosticsIpcPathForCwd(cwd, pid), resolve),
+			activeServer?.listen(
+				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+				resolve,
+			),
 		);
 		const result = await requestWarmCodeActions(
 			cwd,
@@ -377,7 +473,10 @@ describe("requestWarmCodeActions", () => {
 			);
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(diagnosticsIpcPathForCwd(cwd, pid), resolve),
+			activeServer?.listen(
+				boundUnixSocketPath(diagnosticsIpcPathForCwd(cwd, pid)),
+				resolve,
+			),
 		);
 		await expect(
 			requestWarmCodeActions(cwd, pid, "/x/app.ts", "hash", [], 1000),
@@ -403,9 +502,9 @@ describe("ipcPathForCwd", () => {
 });
 
 describe("boundUnixSocketPath (#4353)", () => {
-	// Recurrence prevented: the server unlinked the untruncated endpoint, so a
-	// killed server's socket (bound under a name Node had cut to `sun_path`)
-	// survived and the next `listen` failed EADDRINUSE.
+	// Recurrence prevented: cleanup or a network operation used a different
+	// spelling from the explicitly bounded socket name, leaving a stale socket
+	// behind or making the listener unavailable under a long TMPDIR.
 	const long = `/${"a".repeat(120)}/pi-lens-mcp-0123456789abcdef.sock`;
 
 	it("cuts a Linux path to the 108 bytes sun_path holds", () => {
@@ -804,6 +903,7 @@ describe("workspace id property (#4928)", () => {
 });
 
 describe("requestWarmAnalyze", () => {
+	// lane: default on Linux and macOS; Windows exercises named pipes.
 	it("round-trips the request and returns the server's result", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-"));
 		const endpoint = ipcPathForCwd(cwd);
@@ -828,7 +928,7 @@ describe("requestWarmAnalyze", () => {
 			});
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(endpoint, resolve),
+			activeServer?.listen(boundUnixSocketPath(endpoint), resolve),
 		);
 
 		const result = await requestWarmAnalyze(cwd, "/x/app.ts");
@@ -837,6 +937,40 @@ describe("requestWarmAnalyze", () => {
 
 		removeTempDirSync(cwd);
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"round-trips over a long TMPDIR using the bounded Unix socket path",
+		async () => {
+			await withLongSocketTmpdir(async (cwd) => {
+				const endpoint = ipcPathForCwd(cwd);
+				const boundEndpoint = boundUnixSocketPath(endpoint);
+				expect(Buffer.byteLength(endpoint)).toBeGreaterThan(108);
+				expect(Buffer.byteLength(boundEndpoint)).toBe(
+					process.platform === "darwin" ? 104 : 108,
+				);
+
+				let received: unknown;
+				activeServer = net.createServer((socket) => {
+					socket.setEncoding("utf8");
+					let buffer = "";
+					socket.on("data", (chunk: string) => {
+						buffer += chunk;
+						const nl = buffer.indexOf("\n");
+						if (nl === -1) return;
+						received = JSON.parse(buffer.slice(0, nl));
+						socket.end(`${JSON.stringify({ result: SENTINEL })}\n`);
+					});
+				});
+				await new Promise<void>((resolve) =>
+					activeServer?.listen(boundEndpoint, resolve),
+				);
+
+				const result = await requestWarmAnalyze(cwd, "/x/app.ts");
+				expect(result).toEqual(SENTINEL);
+				expect(received).toEqual({ file: "/x/app.ts", cwd });
+			});
+		},
+	);
 
 	it("resolves undefined when no server is listening (cold fallback)", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ipc-none-"));
@@ -861,7 +995,7 @@ describe("requestWarmAnalyze", () => {
 			);
 		});
 		await new Promise<void>((resolve) =>
-			activeServer?.listen(endpoint, resolve),
+			activeServer?.listen(boundUnixSocketPath(endpoint), resolve),
 		);
 
 		const result = await requestWarmAnalyze(cwd, "/x/app.ts");
@@ -884,7 +1018,9 @@ function listenOnWorkspaceEndpoint(
 	}
 	activeServer = net.createServer(handler);
 	return new Promise<string>((resolve) =>
-		activeServer?.listen(endpoint, () => resolve(endpoint)),
+		activeServer?.listen(boundUnixSocketPath(endpoint), () =>
+			resolve(endpoint),
+		),
 	);
 }
 
@@ -949,18 +1085,18 @@ describe("requestWarmTurnEnd", () => {
 			connections++;
 			socket.setEncoding("utf8");
 			socket.once("data", () => {
-				connections === 1
-					? socket.end(
-							`${JSON.stringify({
-								result: {
-									route: "turn-end",
-									version: WARM_TURN_END_SCHEMA_VERSION,
-									turnEnd: "DURABLE FINDING",
-									deliveryId: "delivery-timeout",
-								},
-							})}\n`,
-						)
-					: undefined;
+				if (connections === 1) {
+					socket.end(
+						`${JSON.stringify({
+							result: {
+								route: "turn-end",
+								version: WARM_TURN_END_SCHEMA_VERSION,
+								turnEnd: "DURABLE FINDING",
+								deliveryId: "delivery-timeout",
+							},
+						})}\n`,
+					);
+				}
 				// Never answer the acknowledgement connection: the client deadline
 				// must report timeout while the server retains its delivery.
 			});
@@ -1190,7 +1326,7 @@ describe("upgrade transition after the case-fold narrowing (#3255)", () => {
 		});
 		try {
 			await new Promise<void>((resolve) =>
-				activeServer?.listen(legacySocket, resolve),
+				activeServer?.listen(boundUnixSocketPath(legacySocket), resolve),
 			);
 			// The new hook must NOT be served by the old server (its answer is for
 			// whatever workspace the folded id named), and the miss must carry the

@@ -34,6 +34,7 @@ import * as net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+	boundUnixSocketPath,
 	createWarmIpcLineReader,
 	ipcPathForCwd,
 	MAX_FRAMED_LINE_BYTES,
@@ -238,7 +239,9 @@ describe("requestWarmAnalyze against an unframed peer (#3383)", () => {
 			socket.write(`${"x".repeat(MAX_FRAMED_LINE_BYTES + 1)}\n`);
 		});
 		sockets.push(server);
-		await new Promise<void>((resolve) => server.listen(endpoint, resolve));
+		await new Promise<void>((resolve) =>
+			server.listen(boundUnixSocketPath(endpoint), resolve),
+		);
 		const result = await requestWarmAnalyze(cwd, "/w/a.ts", 600_000);
 		peer?.destroy();
 		expect(result).toBeUndefined();
@@ -272,7 +275,9 @@ describe("requestWarmAnalyze against an unframed peer (#3383)", () => {
 			pump();
 		});
 		sockets.push(server);
-		await new Promise<void>((resolve) => server.listen(endpoint, resolve));
+		await new Promise<void>((resolve) =>
+			server.listen(boundUnixSocketPath(endpoint), resolve),
+		);
 
 		// The timeout is 10 minutes: if the bound does not fire, this test hangs
 		// until vitest kills it rather than passing on a timeout that hid the bug.

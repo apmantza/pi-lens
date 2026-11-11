@@ -26,6 +26,7 @@ import {
 import { removeTempDirSync } from "../clients/test-utils.js";
 import { INFERRED_PROJECT_MARKER } from "../../clients/lsp/inferred-project.js";
 import {
+	boundUnixSocketPath,
 	createWarmIpcLineReader,
 	diagnosticsIpcPathForCwd,
 } from "../../clients/mcp/ipc.js";
@@ -957,7 +958,9 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 					),
 				);
 			});
-			await new Promise<void>((resolve) => incumbent.listen(endpoint, resolve));
+			await new Promise<void>((resolve) =>
+				incumbent.listen(boundUnixSocketPath(endpoint), resolve),
+			);
 			_setWarmAttachForTests(tmpDir, process.ppid);
 		});
 

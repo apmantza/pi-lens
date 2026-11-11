@@ -145,15 +145,10 @@ export function diagnosticsIpcPathForCwd(
 }
 
 /**
- * The file name Node actually binds for a Unix socket path (#4353). A path past
- * the `sun_path` size is cut to its first 108 bytes (104 on darwin) without an
- * error, so under a long TMPDIR (a 79-character root already reaches it for
- * the 33-character socket name) the bound file has lost its `.sock` tail.
- * Every stale-socket `unlink` of an endpoint must name THIS path: unlinking the
- * untruncated one misses the file, the next `listen` then fails `EADDRINUSE`,
- * and the warm channel stays down until the file is removed by hand. Connects
- * need no change, because `net.createConnection` truncates the same way.
- * Windows pipes and paths that fit come back unchanged.
+ * The explicit Unix socket path used at each `listen` and `createConnection`
+ * boundary (#4353). Kernel path limits vary: some overlong paths are rejected
+ * rather than truncated, so every network operation must use this bounded
+ * spelling. Windows pipes and paths that fit come back unchanged.
  *
  * Decision: unlink the bound name rather than move long paths to a short
  * directory. A relocation would change where the server and the hook meet and
@@ -374,7 +369,7 @@ function requestOverWarmIpc<TResponse, TRequest extends object = object>(
 			resolve(value);
 		};
 		const deadlineAt = Date.now() + timeoutMs;
-		const socket = net.createConnection(endpoint);
+		const socket = net.createConnection(boundUnixSocketPath(endpoint));
 		socket.setEncoding("utf8");
 		const timer = setTimeout(
 			() => finish({ available: false, reason: "timeout" }),
@@ -742,7 +737,9 @@ export function requestWarmAnalyze(
 			resolve(value);
 		};
 
-		const socket = net.createConnection(ipcPathForCwd(cwd));
+		const socket = net.createConnection(
+			boundUnixSocketPath(ipcPathForCwd(cwd)),
+		);
 		socket.setEncoding("utf8");
 
 		const timer = setTimeout(() => {

@@ -45,6 +45,15 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 			filePath,
 			tool === "actionlint" ? "name: CI\n" : "defmodule Example do\nend\n",
 		);
+		if (!toolAvailable) {
+			// The unavailable case must not inherit a host PATH binary or a managed
+			// copy from another test/process. Keep both discovery roots fixture-local.
+			const emptyPath = path.join(env.tmpDir, "empty-path");
+			fs.mkdirSync(emptyPath);
+			vi.stubEnv("PATH", emptyPath);
+			vi.stubEnv("PI_LENS_HOME", path.join(env.tmpDir, "pi-lens-home"));
+			vi.stubEnv("PI_LENS_DISABLE_TOOL_INSTALL", "1");
+		}
 		if (tool === "credo")
 			fs.writeFileSync(
 				path.join(env.tmpDir, "mix.exs"),
@@ -68,6 +77,9 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 		resetDegradationLedger();
 		const registry = new RunnerRegistry();
 		registry.register(runner);
+		const { resetDispatchAvailabilityState } =
+			await import("../../../../clients/dispatch/runners/utils/runner-helpers.js");
+		resetDispatchAvailabilityState();
 		let status = "";
 		const output = await dispatchForFile(
 			createDispatchContext(
@@ -84,6 +96,7 @@ async function dispatchOutcome(tool: Tool, result: SpawnResult) {
 		);
 		return { status, output: output.output, ledger: getDegradationSummary() };
 	} finally {
+		vi.unstubAllEnvs();
 		env.cleanup();
 	}
 }

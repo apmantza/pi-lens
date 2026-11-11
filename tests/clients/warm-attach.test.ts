@@ -170,7 +170,9 @@ describe("warm-attach records a missing incumbent endpoint (#3255)", () => {
 		const silent = net.createServer(() => {
 			// Accept and never answer.
 		});
-		await new Promise<void>((resolve) => silent.listen(endpoint, resolve));
+		await new Promise<void>((resolve) =>
+			silent.listen(boundUnixSocketPath(endpoint), resolve),
+		);
 		try {
 			await tryWarmAttachedDiagnostics("app.ts", "x", 30);
 			expect(
@@ -247,11 +249,13 @@ describe.skipIf(process.platform === "win32")(
 				});
 				const endpointA = diagnosticsIpcPathForCwd(cwd, OTHER_PID);
 				await new Promise<void>((resolve) =>
-					sessionA.listen(endpointA, resolve),
+					sessionA.listen(boundUnixSocketPath(endpointA), resolve),
 				);
 				try {
 					await configureWarmAttach(cwd);
-					expect(await connectOutcome(endpointA)).toBe("connected");
+					expect(await connectOutcome(boundUnixSocketPath(endpointA))).toBe(
+						"connected",
+					);
 					expect(reached, "session A still owns its endpoint").toBe(1);
 				} finally {
 					(
@@ -274,7 +278,7 @@ describe.skipIf(process.platform === "win32")(
 				// A pid inside the bound name makes the name B's own, so B clears the
 				// stale socket and listens. Without it the name is shared, B cannot
 				// tell whose socket it is, and it stays refused (cold fallback).
-				expect(await connectOutcome(endpoint)).toBe(
+				expect(await connectOutcome(boundUnixSocketPath(endpoint))).toBe(
 					ownNameSurvives(cwd) ? "connected" : "ECONNREFUSED",
 				);
 			});
@@ -287,7 +291,9 @@ describe.skipIf(process.platform === "win32")(
 				fs.writeFileSync(bound, "user data");
 				await configureWarmAttach(cwd);
 				expect(fs.readFileSync(bound, "utf8")).toBe("user data");
-				expect(await connectOutcome(endpoint)).not.toBe("connected");
+				expect(await connectOutcome(boundUnixSocketPath(endpoint))).not.toBe(
+					"connected",
+				);
 			});
 		});
 	},

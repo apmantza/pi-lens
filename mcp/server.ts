@@ -45,6 +45,7 @@ import {
 	acknowledgeTurnEnd,
 	analyzeFile,
 	analyzeFileFresh,
+	boundUnixSocketPath,
 	canRebuildPiLens,
 	createMcpHost,
 	createWarmIpcLineReader,
@@ -491,7 +492,7 @@ function startIpcServer(): void {
 		console.error(`[pi-lens-mcp] IPC listener unavailable: ${err}`);
 	});
 
-	ipc.listen(IPC_PATH, () => {
+	ipc.listen(boundUnixSocketPath(IPC_PATH), () => {
 		console.error(`[pi-lens-mcp] warm side-channel listening at ${IPC_PATH}`);
 	});
 

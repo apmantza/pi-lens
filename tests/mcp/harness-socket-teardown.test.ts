@@ -34,10 +34,8 @@ function socketsIn(dir: string): string[] {
  *  already past 100 is used as is. */
 function longTmpRoot(): { tmpDir: string; longTmp: string } {
 	const { tmpDir } = setupTestEnvironment("pi-lens-hs-");
-	const longTmp =
-		tmpDir.length >= 100
-			? tmpDir
-			: path.join(tmpDir, "p".repeat(100 - tmpDir.length - 1));
+	const componentBytes = Math.max(0, 100 - tmpDir.length - 1);
+	const longTmp = path.join(tmpDir, "p".repeat(componentBytes));
 	fs.mkdirSync(longTmp, { recursive: true });
 	return { tmpDir, longTmp };
 }
@@ -96,7 +94,9 @@ describe.skipIf(process.platform === "win32")(
 				await first.kill();
 				expect(socketsIn(longTmp)).toHaveLength(1);
 				const endpoint = ipcPathForCwd(workspace);
-				expect(await connectOutcome(endpoint)).toBe("ECONNREFUSED");
+				expect(await connectOutcome(boundUnixSocketPath(endpoint))).toBe(
+					"ECONNREFUSED",
+				);
 
 				// The restart must unlink the BOUND name. Before #4353 it unlinked
 				// the untruncated name, missed the file, and `listen` failed
@@ -104,7 +104,9 @@ describe.skipIf(process.platform === "win32")(
 				const second = new McpHarness({ cwd: workspace });
 				harnesses.push(second);
 				await initialize(second);
-				expect(await connectOutcome(endpoint)).toBe("connected");
+				expect(await connectOutcome(boundUnixSocketPath(endpoint))).toBe(
+					"connected",
+				);
 
 				// A graceful end (stdin closed) leaves nothing behind.
 				await second.closeInput();
@@ -134,9 +136,7 @@ describe.skipIf(process.platform === "win32")(
 				harnesses.push(harness);
 				await initialize(harness);
 				expect(fs.readFileSync(bound, "utf8")).toBe("user data");
-				expect(await connectOutcome(ipcPathForCwd(workspace))).not.toBe(
-					"connected",
-				);
+				expect(await connectOutcome(bound)).not.toBe("connected");
 			} finally {
 				for (const harness of harnesses) harness.dispose();
 				vi.unstubAllEnvs();

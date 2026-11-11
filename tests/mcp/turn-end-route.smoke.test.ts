@@ -25,6 +25,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+	boundUnixSocketPath,
 	ipcPathForCwd,
 	WARM_TURN_END_SCHEMA_VERSION,
 } from "../../clients/mcp/ipc.js";
@@ -43,7 +44,7 @@ function askLine(
 	timeoutMs = 30_000,
 ): Promise<RouteReply> {
 	return new Promise((resolve, reject) => {
-		const socket = net.createConnection(endpoint);
+		const socket = net.createConnection(boundUnixSocketPath(endpoint));
 		socket.setEncoding("utf8");
 		let buffer = "";
 		let settled = false;
@@ -97,7 +98,7 @@ function invertPathCase(p: string): string {
 
 function connects(endpoint: string): Promise<boolean> {
 	return new Promise((resolve) => {
-		const probe = net.createConnection(endpoint);
+		const probe = net.createConnection(boundUnixSocketPath(endpoint));
 		probe.on("connect", () => {
 			probe.destroy();
 			resolve(true);

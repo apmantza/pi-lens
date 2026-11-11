@@ -41,7 +41,10 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
-import { diagnosticsIpcPathForCwd } from "../../clients/mcp/ipc.js";
+import {
+	boundUnixSocketPath,
+	diagnosticsIpcPathForCwd,
+} from "../../clients/mcp/ipc.js";
 import {
 	_resetWarmAttachForTests,
 	_warmAttachServerForTests,
@@ -115,7 +118,7 @@ describe("warm diagnostics server: an accepted socket's error event (#3389)", ()
 	it("survives a client that disconnects mid-reply, and counts the errno", async () => {
 		await configureWarmAttach(root);
 		const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
-		const client = net.createConnection(endpoint);
+		const client = net.createConnection(boundUnixSocketPath(endpoint));
 		// The peer half is not under test: the client is the side that walks away.
 		client.on("error", () => {});
 		await new Promise<void>((resolve, reject) => {
@@ -166,7 +169,7 @@ describe("warm diagnostics server: an accepted socket's error event (#3389)", ()
 				accepted.push(socket);
 			});
 			const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
-			const client = net.createConnection(endpoint);
+			const client = net.createConnection(boundUnixSocketPath(endpoint));
 			client.setEncoding("utf8");
 			client.on("error", () => {});
 			await new Promise<void>((resolve, reject) => {
@@ -222,7 +225,7 @@ describe("warm diagnostics server: an accepted socket's error event (#3389)", ()
 				accepted.push(socket);
 			});
 			const client = net.createConnection(
-				diagnosticsIpcPathForCwd(root, process.pid),
+				boundUnixSocketPath(diagnosticsIpcPathForCwd(root, process.pid)),
 			);
 			client.on("error", () => {});
 			await new Promise<void>((resolve, reject) => {
@@ -258,7 +261,7 @@ describe("warm diagnostics server: an accepted socket's error event (#3389)", ()
 		// every abandoned edit.
 		await configureWarmAttach(root);
 		const endpoint = diagnosticsIpcPathForCwd(root, process.pid);
-		const client = net.createConnection(endpoint);
+		const client = net.createConnection(boundUnixSocketPath(endpoint));
 		client.on("error", () => {});
 		await new Promise<void>((resolve, reject) => {
 			client.once("connect", resolve);

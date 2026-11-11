@@ -22,6 +22,7 @@ import {
 	vi,
 } from "vitest";
 import {
+	boundUnixSocketPath,
 	ipcPathForCwd,
 	readTurnEndStatus,
 	turnEndStatusPathForCwd,
@@ -631,7 +632,7 @@ function startTurnEndStub(
 		});
 	});
 	return new Promise((resolve) =>
-		server.listen(endpoint, () =>
+		server.listen(boundUnixSocketPath(endpoint), () =>
 			resolve({
 				sockets,
 				requests,
@@ -673,7 +674,7 @@ function startWarmAnalyzeStub(
 		});
 	});
 	return new Promise((resolve) =>
-		server.listen(endpoint, () =>
+		server.listen(boundUnixSocketPath(endpoint), () =>
 			resolve({
 				sockets,
 				requests,
