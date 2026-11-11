@@ -4,6 +4,8 @@ import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { pathsEqual } from "../../path-utils.js";
 import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
+import { skipped } from "../types.js";
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -115,12 +117,6 @@ export function parseTerragruntOutput(
 	return diagnostics;
 }
 
-const SKIPPED: RunnerResult = {
-	status: "skipped",
-	diagnostics: [],
-	semantic: "none",
-};
-
 /**
  * Runner for `terragrunt hcl validate --json`, the linter for terragrunt units.
  *
@@ -163,7 +159,7 @@ const terragruntRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "terragrunt");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("terragrunt"))
-			return SKIPPED;
+			return skipped("not-preferred");
 
 		let cmd: string | null = null;
 		if (await terragrunt.isAvailableAsync(cwd)) {
@@ -177,7 +173,7 @@ const terragruntRunner: RunnerDefinition = {
 			if (managed) cmd = managed;
 		}
 
-		if (!cmd) return SKIPPED;
+		if (!cmd) return toolAbsentSkip();
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

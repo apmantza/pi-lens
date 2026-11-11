@@ -10,6 +10,8 @@
  * that haven't opted in.
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { pathsEqual } from "../../path-utils.js";
@@ -159,16 +161,16 @@ const golangciRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "golangci-lint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("golangci-lint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		// Only run if project has opted in via config file
 		if (!golangciRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		const cmd = await resolveAvailableOrInstall(golangci, "golangci-lint", cwd);
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		// Run on the specific file. golangci-lint accepts file paths directly.
 		// v2 (the major the installer downloads) removed `--out-format`: it exits

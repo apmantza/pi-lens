@@ -4,6 +4,7 @@
  * Runs `go vet` for Go files to catch common mistakes.
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { resolve } from "node:path";
 
 import { goClient } from "../../go-client.js";
@@ -31,7 +32,7 @@ const goVetRunner: RunnerDefinition = {
 		// Resolve go path using platform-aware lookup (handles system install paths on Windows)
 		const goExe = await goClient.findGoPathAsync();
 		if (!goExe) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		// Vet the package containing the file from the module root.

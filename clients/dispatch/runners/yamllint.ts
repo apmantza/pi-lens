@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -61,7 +63,7 @@ const yamllintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "yamllint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("yamllint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 		const hasConfig = hasYamllintConfig(cwd);
 		if (!hasConfig) {
@@ -75,7 +77,7 @@ const yamllintRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		const result = await safeSpawnAsync(cmd, ["-f", "parsable", ctx.filePath], {
 			cwd,

@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -164,7 +166,7 @@ const stylelintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "stylelint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("stylelint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 		const fileDir = path.dirname(path.resolve(cwd, ctx.filePath));
 		const hasConfig = hasStylelintConfig(fileDir) || hasStylelintConfig(cwd);
@@ -179,7 +181,7 @@ const stylelintRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		const result = await safeSpawnAsync(
 			cmd,

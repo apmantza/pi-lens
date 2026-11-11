@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -229,7 +230,7 @@ const spotbugsRunner: RunnerDefinition = {
 
 		// JRE required — skip silently if absent (SpotBugs needs JDK 11+).
 		if (!(await java.isAvailableAsync(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		// Cache gate: re-run only when the .class tree changed since last scan.
@@ -244,7 +245,7 @@ const spotbugsRunner: RunnerDefinition = {
 		}
 
 		const cmd = await resolveAvailableOrInstall(spotbugs, "spotbugs", cwd);
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		// One file per RUN: pid and millisecond are shared by two cold starts of
 		// one process, and a shared file lets one run read or delete the other's.

@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
@@ -137,16 +139,16 @@ const phpstanRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "phpstan");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("phpstan")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		// Only run if phpstan config present — avoids noisy defaults on unconfigured projects
 		if (!phpstanRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		const cmd = await resolvePhpstan(cwd);
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(

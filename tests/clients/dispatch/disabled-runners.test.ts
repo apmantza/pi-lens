@@ -625,6 +625,11 @@ describe("dispatch.disabledRunners — dispatch", () => {
 		"configured-non-biome-linter",
 		"dialect-unsupported",
 		"not-enabled",
+		// #5258: both state that there was nothing for the runner to check (no
+		// config of its own, or a policy that picks another tool), not that a
+		// tool failed. `not-installed` and `install-disabled` stay failures.
+		"not-configured",
+		"not-preferred",
 	];
 	it.each(
 		RUNNER_SKIP_REASONS.filter(

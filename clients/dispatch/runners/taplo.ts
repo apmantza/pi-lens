@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
@@ -146,7 +148,7 @@ const taploRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "taplo");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("taplo")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		// #233, generalized (#3968): the `toml` LSP server IS `taplo lsp` (same
@@ -189,7 +191,7 @@ const taploRunner: RunnerDefinition = {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");
 		}
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		// #1937: `--output=json` is not a taplo flag. taplo rejected it with a

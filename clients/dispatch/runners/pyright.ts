@@ -7,6 +7,7 @@
  * Requires: pyright (pip install pyright or npm install -g pyright)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { logExtension } from "../../extension-log.js";
 import { getLSPService } from "../../lsp/capabilities.js";
 import {
@@ -77,7 +78,7 @@ const pyrightRunner: RunnerDefinition = {
 
 		// If still no pyright, skip this runner
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		// Pyright's Node CLI falls back to `python` on PATH when the project has no

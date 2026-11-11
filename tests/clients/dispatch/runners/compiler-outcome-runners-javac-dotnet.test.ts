@@ -243,7 +243,11 @@ describe("compiler runner outcome seam (#1816)", () => {
 				stderr: "",
 			});
 			expect(observed.status).toBe("skipped");
-			expect(observed.ledger).toEqual([]);
+			// #5258: an absent tool states its cause once, as a `runner-skip-cause`
+			// row, and nothing else; it is still not a fault record.
+			expect(observed.ledger.map((group) => group.kind)).toEqual([
+				"runner-skip-cause",
+			]);
 		});
 
 		it(`${tool}: rejected invocation is a parse error`, async () => {

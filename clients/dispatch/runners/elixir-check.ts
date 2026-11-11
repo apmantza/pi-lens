@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "../../file-utils.js";
@@ -176,7 +177,7 @@ const elixirCheckRunner: RunnerDefinition = {
 		}
 
 		if (!command) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		const result = await safeSpawnAsync(command, args, {

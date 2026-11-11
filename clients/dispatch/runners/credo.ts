@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
@@ -89,12 +91,12 @@ const credoRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "credo");
 
 		if (!credoRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		// Credo ships as a mix dependency — cached per-cwd probe (see probeCredo).
 		if (!(await probeCredo(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		const absPath = path.resolve(cwd, ctx.filePath);

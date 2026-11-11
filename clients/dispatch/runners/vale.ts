@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { findLocalToolConfig, pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -137,12 +139,12 @@ const valeRunner: RunnerDefinition = {
 
 		// Config-gated: skip unless a .vale.ini is found
 		if (!valeRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		// Vale exits 1 when a run reports an error-level alert and 0 for
 		// warning or suggestion alerts alone (exit table below).

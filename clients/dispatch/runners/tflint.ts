@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -86,7 +88,7 @@ const tflintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "tflint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("tflint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		let cmd: string | null = null;
@@ -97,7 +99,7 @@ const tflintRunner: RunnerDefinition = {
 			if (managed) cmd = managed;
 		}
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
@@ -11,7 +12,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { findingsResult } from "../types.js";
+import { faultSkip, findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 import {
 	type AvailabilityCause,
@@ -345,10 +346,10 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cmd = await resolvePowerShellCmd();
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		if (!(await checkModuleAvailable(cmd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		let execLatch = psExecLatchByCmd.get(cmd);
@@ -422,7 +423,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 					subject: "psscriptanalyzer",
 					reason: `PowerShell (${cmd}) -File analysis exited with no status -- crash or signal-killed process`,
 				});
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return faultSkip("did-not-run");
 			}
 
 			if (result.status !== 0) {
@@ -468,7 +469,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 						? `PowerShell execution policy blocked -File analysis for ${cmd}: ${stderrText.trim().split("\n")[0] || "SecurityError"}`
 						: `PowerShell -File analysis for ${cmd} exited ${result.status}: ${stderrText.trim().slice(0, 200) || "no stderr"}`,
 				});
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return faultSkip("rejected-invocation");
 			}
 
 			// `-File` ran and exited 0: direct proof it works. Log the decision
@@ -510,7 +511,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 					subject: "psscriptanalyzer",
 					reason: `PowerShell -File analysis for ${cmd} exited 0 but stdout was ${unreadableReason}`,
 				});
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return faultSkip("report-missing");
 			}
 
 			if (diagnostics.length === 0) {

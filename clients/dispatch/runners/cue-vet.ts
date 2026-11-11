@@ -102,6 +102,7 @@
  * two-different-packages shape).
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -376,7 +377,7 @@ const cueVetRunner: RunnerDefinition = {
 		// `createAvailabilityChecker`/`resolveAvailableOrInstall` already route
 		// through the shared classify/latch policy, so a probe timeout or host
 		// stall re-arms on its own cooldown instead of latching here.
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const fileDir = path.dirname(absPath);

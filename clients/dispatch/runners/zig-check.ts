@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -62,7 +63,7 @@ const zigCheckRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "zig-check");
 		if (!(await zig.isAvailableAsync(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		const cmd = zig.getCommand(cwd)!;

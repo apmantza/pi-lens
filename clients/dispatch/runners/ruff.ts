@@ -7,6 +7,8 @@
  * Supports venv-local installations.
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { stripAnsi } from "../../sanitize.js";
 import {
@@ -82,11 +84,11 @@ const ruffRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "ruff");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("ruff-lint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 		const cmd = await resolveAvailableOrInstall(ruff, "ruff", cwd);
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		// Shared config-args seam (#1247): the autofix path consumes the same

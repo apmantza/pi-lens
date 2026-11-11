@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { delimiter, resolve as resolveCommandPath } from "node:path";
 import { logSessionStart } from "../../../sessionstart-logger.js";
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
+import { isToolInstallDisabled } from "../../../env-utils.js";
 import { getGlobalPiLensDir } from "../../../file-utils.js";
 import { getProjectTrustState } from "../../../project-trust.js";
 import {
@@ -63,7 +64,12 @@ import {
 	getToolCommandSpec,
 	shouldAutoInstallTool,
 } from "../../../tool-policy.js";
-import type { DispatchContext, RunnerClaimSource } from "../../types.js";
+import {
+	skipped,
+	type DispatchContext,
+	type RunnerClaimSource,
+	type RunnerResult,
+} from "../../types.js";
 import { isInSpawnTimeoutCooldown } from "../../../spawn-timeout-cooldown.js";
 import { resolveToolCwd } from "../../../tool-cwd.js";
 import { createAvailabilityProbeFlight } from "../../../availability-probe-flight.js";
@@ -97,6 +103,19 @@ export {
 	logAvailabilityDecision,
 	startHostStallSampler,
 } from "./availability-policy.js";
+
+/**
+ * The skip a runner returns when its tool could not be resolved (#5258):
+ * `install-disabled` when the managed install is off by
+ * `PI_LENS_DISABLE_TOOL_INSTALL=1` (the user's remedy is the switch or a
+ * hand install), else `not-installed`. One site decides, so the sixty runners
+ * that used to return a bare skip here cannot each spell it differently.
+ */
+export function toolAbsentSkip(): RunnerResult {
+	return skipped(
+		isToolInstallDisabled() ? "install-disabled" : "not-installed",
+	);
+}
 
 /**
  * The covering lane a runner should defer to: the file's SELECTED PRIMARY

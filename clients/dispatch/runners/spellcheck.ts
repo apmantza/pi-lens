@@ -19,6 +19,7 @@
  * Or: npm install -g typos-cli (if wrapped)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -131,7 +132,7 @@ const spellcheckRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "spellcheck/typos");
 		// Skip if typos-cli is not installed
 		if (!(await typos.isAvailableAsync(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		// Run typos-cli with JSON output

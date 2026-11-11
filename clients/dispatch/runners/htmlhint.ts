@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -73,13 +75,13 @@ const htmlhintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "htmlhint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("htmlhint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "htmlhint");
 
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		// htmlhint's --rules flag takes a comma-separated ruleid list

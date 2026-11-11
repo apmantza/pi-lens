@@ -1,3 +1,4 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -87,12 +88,12 @@ const javacRunner: RunnerDefinition = {
 		}
 
 		if (!(await javac.isAvailableAsync(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		const cmd = javac.getCommand(cwd);
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 		const result = await safeSpawnAsync(
 			cmd,

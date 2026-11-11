@@ -20,6 +20,7 @@
  * Config: .shellcheckrc (optional, zero-config works)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
 import { findLocalToolConfig, pathsEqual } from "../../path-utils.js";
 import {
@@ -210,7 +211,7 @@ const shellcheckRunner: RunnerDefinition = {
 			);
 			if (managed) cmd = managed;
 		}
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip();
 
 		// Build args
 		// --format json: JSON output

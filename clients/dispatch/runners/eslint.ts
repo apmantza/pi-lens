@@ -7,6 +7,8 @@
  * Gate: skips when no ESLint config is detected (project uses Biome/OxLint instead).
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -139,14 +141,14 @@ const eslintRunner: RunnerDefinition = {
 
 		// Only run if project has an ESLint config.
 		if (!eslintRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		const cmd = resolveToolCommand(cwd, "eslint") ?? "eslint";
 
 		// Verify ESLint is actually executable (cached per cwd, see getEslintProbe).
 		if (!(await getEslintProbe(cmd)(cwd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip();
 		}
 
 		const result = await safeSpawnAsync(
