@@ -1841,10 +1841,10 @@ function hasNoRecordReason(content, files) {
 // camelCase symbol, a path, a command and a one-word value fail the shape. The
 // registry, not the body's formatting, decides: the harvest reads the call
 // sites `recordLocationsFromRuntimeSource` names (the
-// `logLatency`/`logCascade`/`logBusEvent`/`emitBounded` object forms, the
-// ledger's Once/Count/`recordDegradation` kinds, and `summary.push`), so a
-// record written through another wrapper — `logReviewGraph`, `logTreeSitter`,
-// the `logActionableWarningsEvent` NDJSON row — is outside this rule until that
+// `logLatency`/`logCascade`/`logTreeSitter`/`logBusEvent`/`emitBounded` object
+// forms, the ledger's Once/Count/`recordDegradation` kinds, and `summary.push`),
+// so a record written through `logReviewGraph` or the
+// `logActionableWarningsEvent` NDJSON row stays outside this rule until that
 // wrapper joins the harvest (#3168's `logCascade` precedent). A one-word record
 // value (a bare `autofix`) fails the two-segment shape on purpose, so it stays
 // outside the rule even where a sink emits it.
