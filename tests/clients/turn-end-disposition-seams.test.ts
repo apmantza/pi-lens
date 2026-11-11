@@ -654,19 +654,18 @@ describe("actionable-warnings turn-end advisory honors dispositions (#3248)", ()
 			const cacheManager = new CacheManager(false);
 			registerEdit(cacheManager, cwd, filePath);
 			cacheManager.writeCache(
-				"trivy",
+				"gitleaks",
 				{
 					success: true,
 					scannedAt: "",
-					findings: [],
-					secrets: [
+					findings: [
 						{
-							ruleId: "aws-access-key-id",
-							file: path.relative(cwd, filePath),
-							line: 1,
+							ruleId: "aws-access-token",
+							file: filePath,
+							startLine: 1,
+							description: "AWS key",
 						},
 					],
-					licenses: [],
 				},
 				cwd,
 			);
@@ -687,10 +686,103 @@ describe("actionable-warnings turn-end advisory honors dispositions (#3248)", ()
 				}),
 			);
 			const text = turnEndText(cacheManager, cwd, runtime);
-			expect(text).toContain("STOP — hardcoded secrets detected");
-			expect(text).toContain("[trivy + ast-grep]");
 			expect(text).toContain("Fixable warnings introduced this turn: 1");
 			expect(text).toContain("secret.ts: 1");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #5459: trivy cites the file relative to its scan root, ast-grep absolute.
+	function trivySecretCache(cwd: string, filePath: string) {
+		return {
+			success: true,
+			scannedAt: "",
+			findings: [],
+			secrets: [
+				{
+					ruleId: "aws-access-key-id",
+					file: path.relative(cwd, filePath),
+					line: 1,
+				},
+			],
+			licenses: [],
+		};
+	}
+
+	it("does not repeat an ast-grep secret at a trivy-only blocker location (#5459)", async () => {
+		const env = setupTestEnvironment("pi-lens-5459-trivy-location-");
+		try {
+			const { tmpDir: cwd } = env;
+			const filePath = path.join(cwd, "src", "secret.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(
+				filePath,
+				"const token = 'AKIA...';\nconst other = 'secret';\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: SESSION_ID });
+			const cacheManager = new CacheManager(false);
+			registerEdit(cacheManager, cwd, filePath);
+			cacheManager.writeCache("trivy", trivySecretCache(cwd, filePath), cwd);
+			runtime.recordActionableWarnings([
+				{
+					...warning(filePath, 1, "hardcoded secret"),
+					rule: "no-hardcoded-secret-js",
+				},
+				{
+					...warning(filePath, 2, "other secret"),
+					rule: "no-hardcoded-secret-js",
+				},
+			]);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, cwd, {
+					getFlag: (name: string) => name === "lens-actionable-warnings",
+				}),
+			);
+			const text = turnEndText(cacheManager, cwd, runtime);
+			expect(text).toContain("aws-access-key-id [trivy + ast-grep]");
+			expect(text).toContain("Fixable warnings introduced this turn: 1");
+			expect(text).toContain("secret.ts: 1");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("renders one row for a secret gitleaks cites absolute and trivy relative (#5459)", async () => {
+		const env = setupTestEnvironment("pi-lens-5459-two-scanner-row-");
+		try {
+			const { tmpDir: cwd } = env;
+			const filePath = path.join(cwd, "src", "secret.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "const token = 'AKIA...';\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: SESSION_ID });
+			const cacheManager = new CacheManager(false);
+			registerEdit(cacheManager, cwd, filePath);
+			cacheManager.writeCache(
+				"gitleaks",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [
+						{
+							ruleId: "aws-access-token",
+							file: filePath,
+							startLine: 1,
+							description: "AWS key",
+						},
+					],
+				},
+				cwd,
+			);
+			cacheManager.writeCache("trivy", trivySecretCache(cwd, filePath), cwd);
+
+			await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, cwd));
+			const text = turnEndText(cacheManager, cwd, runtime);
+			expect(text).toContain("aws-access-token [gitleaks + trivy]");
+			expect(text.match(/src\/secret\.ts:1 — /g)).toHaveLength(1);
 		} finally {
 			env.cleanup();
 		}

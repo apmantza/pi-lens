@@ -20,11 +20,9 @@
  * Refs: #131 (Mode 3), #130
  */
 
-import { win32 } from "node:path";
 import type { ActionableWarningRecord } from "./actionable-warnings.js";
 import type { GitleaksFinding } from "./gitleaks-client.js";
 import { resolveRunnerPath } from "./dispatch/runner-context.js";
-import { isWindowsPath, normalizeFilePath } from "./path-utils.js";
 
 /** The scanners that can flag a secret, in display/priority order. */
 type SecretSource = "gitleaks" | "trivy" | "ast-grep";
@@ -64,17 +62,17 @@ export function isSecretWarning(warning: ActionableWarningRecord): boolean {
 	return SECRET_RULE_PATTERN.test(id);
 }
 
-/** Location key resolves scanner-relative paths against that scan's cwd. */
+/**
+ * Location key used to collapse the same secret across sources. gitleaks
+ * reports an absolute path and trivy one relative to its scan root (#5459), so
+ * the file is keyed on its identity resolved against the scan cwd.
+ */
 export function secretLocationKey(
 	file: string,
 	line: number,
 	cwd: string,
 ): string {
-	const fileKey =
-		process.platform !== "win32" && (isWindowsPath(cwd) || isWindowsPath(file))
-			? normalizeFilePath(win32.resolve(cwd, file))
-			: resolveRunnerPath(cwd, file);
-	return `${fileKey}:${line}`;
+	return `${resolveRunnerPath(cwd, file)}:${line}`;
 }
 
 export function fromGitleaks(findings: GitleaksFinding[]): SecretFinding[] {
