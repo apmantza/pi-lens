@@ -287,6 +287,38 @@ describe("formatter binary order (#5410 run-f)", () => {
 		},
 	);
 
+	// The ladder's first rung: the trusted project's own shim, found at exactly
+	// the project root the formatter spawns in (the marker is `.gitignore`).
+	// Only the ladder looks in the project; the installer lookups do not.
+	it.each([
+		["shfmt", "shfmtFormatter", "script.sh", "if true; then\n  echo hi\nfi\n"],
+		["taplo", "taploFormatter", "Cargo.toml", "[package]\nname = 'x'\n"],
+		["ktlint", "ktlintFormatter", "Main.kt", "fun main() {}\n"],
+		["typstyle", "typstyleFormatter", "doc.typ", "= Title\n"],
+		["ktfmt", "ktfmtFormatter", "Main.kt", "fun main() {}\n"],
+	] as const)(
+		"%s: the trusted project's own node_modules shim outranks managed and PATH",
+		async (tool, exportName, fileName, body) => {
+			plant(path.join(pathDir, tool), GOOD);
+			plant(path.join(home, "bin", tool), GOOD);
+			const project = path.join(root, "proj");
+			const shim = plant(
+				path.join(project, "node_modules", ".bin", tool),
+				GOOD,
+			);
+			fs.writeFileSync(path.join(project, ".gitignore"), "node_modules\n");
+			const nested = path.join(project, "src");
+			fs.mkdirSync(nested, { recursive: true });
+			const file = path.join(nested, fileName);
+			fs.writeFileSync(file, body);
+			const formatters = await import("../../clients/formatters.js");
+
+			const cmd = await formatters[exportName].resolveCommand!(file, nested);
+
+			expect(Array.isArray(cmd) ? cmd[0] : cmd).toBe(shim);
+		},
+	);
+
 	// oxfmt is an npm tool: its managed copy is a shim under the tools tree,
 	// not a release binary, so the row sits outside the table above.
 	it("oxfmt: a broken PATH binary does not shadow the working managed shim", async () => {
