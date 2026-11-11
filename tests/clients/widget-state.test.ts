@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	IN_FLIGHT_REASON,
@@ -43,6 +43,13 @@ const e = String.fromCharCode(27);
 const theme = {
 	fg: (_color: string, s: string) => `${e}[38;2;102;102;102m${s}${e}[39m`,
 };
+
+// Row labels travel inside styled text and OSC-8 hyperlinks; assertions on a
+// label's spelling read the stripped, visible frame (so a URI target can never
+// satisfy a label check).
+const visibleFrame = (lines: string[]): string =>
+	stripTerminalSequences(lines.join("\n"));
+const visibleLine = (line: string): string => stripTerminalSequences(line);
 
 afterEach(() => {
 	clearWidgetState();
@@ -522,29 +529,352 @@ describe("widget-state renderWidget", () => {
 		}
 	});
 
-	it("deduplicates files by basename — last write wins at most 5 entries", () => {
+	// #5460: rows key on the widget store's path identity, so a clean edit to one
+	// same-named file must never hide a second one that holds findings. The old
+	// basename dedupe was last-write-wins and let the header read ✓ clean while a
+	// blocker was still open.
+	it("never hides a blocking file behind a clean same-named file", () => {
 		const a = `${process.cwd()}/pi-lens/index.ts`;
 		const b = `${process.cwd()}/pi-webaio/index.ts`;
 		recordRunner(a, "type-safety", "failed", 1);
 		recordDiagnostics(a, [
-			{ severity: "error", message: "error in pi-lens", rule: "E1" },
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "error in pi-lens",
+				rule: "E1",
+			},
 		]);
 		recordRunner(b, "eslint", "succeeded", 3);
-		recordDiagnostics(b, [
-			{ severity: "error", message: "warning in pi-webaio", rule: "W1" },
+		recordDiagnostics(b, []);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Both rows draw, distinguished by enough parent path.
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).toContain("pi-webaio/index.ts");
+		// The blocker's detail still renders.
+		expect(allLines).toContain("error in pi-lens");
+		// The header counts the full population: a blocking finding is open,
+		// so the frame never answers ✓ clean.
+		expect(allLines).toContain("●1E");
+		expect(allLines).not.toContain("✓ clean");
+	});
+
+	it("shows same-named rows on separate lines in the vertical layout", () => {
+		const a = `${process.cwd()}/pi-lens/widget.ts`;
+		const b = `${process.cwd()}/pi-webaio/widget.ts`;
+		recordRunner(a, "tsc", "succeeded", 1);
+		recordDiagnostics(a, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in pi-lens",
+				rule: "E1",
+			},
 		]);
+		recordRunner(b, "tsc", "succeeded", 2);
+		recordDiagnostics(b, []);
 
-		const lines = renderWidget(120, theme);
+		const lines = renderWidget(50, theme);
 
-		const fileRows = lines.filter((l) => l.includes("index.ts"));
-		// Dedup: only one index.ts entry in the file list
-		expect(fileRows.length).toBeGreaterThanOrEqual(1);
-		expect(fileRows.length).toBeLessThanOrEqual(4);
+		// The two FILE rows: the blocker's row and the clean sibling's row are
+		// distinct and parent-labelled. (The detail block's divider header line
+		// also spells the label but carries no dot or count.)
+		const blockRow = lines.find(
+			(l) =>
+				visibleLine(l).includes("pi-lens/widget.ts") &&
+				visibleLine(l).includes("●"),
+		);
+		const cleanRow = lines.find(
+			(l) =>
+				visibleLine(l).includes("pi-webaio/widget.ts") &&
+				visibleLine(l).includes("✓"),
+		);
+		expect(blockRow).toBeDefined();
+		expect(cleanRow).toBeDefined();
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(50);
+		}
+	});
 
-		// Later file's diagnostics supersede earlier
-		const allLines = lines.join("");
-		expect(allLines).toContain("warning in pi-webaio");
-		expect(allLines).not.toContain("error in pi-lens");
+	it("counts same-named files in the compact header", () => {
+		const a = `${process.cwd()}/pi-lens/index.ts`;
+		const b = `${process.cwd()}/pi-webaio/index.ts`;
+		recordRunner(a, "type-safety", "failed", 1);
+		recordDiagnostics(a, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "error in pi-lens",
+				rule: "E1",
+			},
+		]);
+		recordRunner(b, "type-safety", "succeeded", 2);
+		recordDiagnostics(b, []);
+
+		const lines = renderWidget(120, theme, { compact: true });
+
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("●1E");
+		expect(lines[0]).not.toContain("✓ clean");
+	});
+
+	it("the five-row cap keeps both renderable same-named files", () => {
+		const observed = Date.now() - 5_000;
+		const a = `${process.cwd()}/pi-lens/index.ts`;
+		const b = `${process.cwd()}/pi-webaio/index.ts`;
+		recordDiagnostics(
+			a,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker a",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed,
+		);
+		recordDiagnostics(
+			b,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker b",
+					rule: "E2",
+				},
+			],
+			undefined,
+			observed + 100,
+		);
+		for (let i = 0; i < 3; i++) {
+			recordDiagnostics(
+				`${process.cwd()}/unique-file-${i}.ts`,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: `blocker ${i}`,
+						rule: "E1",
+					},
+				],
+				undefined,
+				observed + 200 + i * 100,
+			);
+		}
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Five tier-0 (blocking) renderables: every slot is a blocker, including
+		// both same-named members — the cap governs slots, not file identity.
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).toContain("pi-webaio/index.ts");
+		for (let i = 0; i < 3; i++) {
+			expect(allLines).toContain(`unique-file-${i}.ts`);
+		}
+	});
+
+	it.each([
+		[120, "left"],
+		[120, "right"],
+		[69, "left"],
+		[69, "right"],
+	] as const)(
+		"keeps the %s-column blocking row identifiable as %s with long colliding labels",
+		(width, side) => {
+			const basename = `${"long-shared-basename-".repeat(8)}.ts`;
+			const parent = "shared-parent-prefix-".repeat(8);
+			const other = side === "left" ? "right" : "left";
+			recordDiagnostics(`${process.cwd()}/${parent}${side}/${basename}`, [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker",
+					rule: "E1",
+				},
+			]);
+			recordDiagnostics(`${process.cwd()}/${parent}${other}/${basename}`, []);
+
+			const lines = renderWidget(width, theme).map(visibleLine);
+			const row = lines.slice(1).find((line) => line.includes("●"));
+			expect(row).toContain(`${side}/`);
+			expect(row).not.toContain(`${other}/`);
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
+	it.each([
+		[120, "long basename", "left-only", "right-only"],
+		[69, "long basename", "left-only", "right-only"],
+		[50, "long basename", "left-only", "right-only"],
+		[69, "short basename", "root-left", "root-right"],
+		[50, "short basename", "root-left", "root-right"],
+	] as const)(
+		"keeps the %s-column %s row distinct when the differing parent is far from the filename",
+		(width, shape, side, other) => {
+			const basename =
+				shape === "long basename"
+					? `${"very-long-shared-name-".repeat(8)}.ts`
+					: "file.ts";
+			const sharedSuffix = "common-shared/".repeat(8);
+			const blocker = `${process.cwd()}/${side}/${sharedSuffix}${basename}`;
+			const sibling = `${process.cwd()}/${other}/${sharedSuffix}${basename}`;
+			recordDiagnostics(blocker, [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: `blocker in ${side}`,
+					rule: "E1",
+				},
+			]);
+			recordDiagnostics(sibling, []);
+
+			const lines = renderWidget(width, theme).map(visibleLine);
+			const row = lines.slice(1).find((line) => line.includes("●"));
+			expect(row).toContain(side);
+			expect(row).not.toContain(other);
+			expect(lines.join("\n")).toContain(`blocker in ${side}`);
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
+	it.each([69, 50] as const)(
+		"keeps the differing prefix of a single long parent component at %s columns",
+		(width) => {
+			const shared = "verylongcommonsuffix-".repeat(8);
+			const left = `left-${shared}`;
+			const right = `right-${shared}`;
+			recordDiagnostics(`${process.cwd()}/${left}/name.ts`, [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "left component blocker",
+					rule: "E1",
+				},
+			]);
+			recordDiagnostics(`${process.cwd()}/${right}/name.ts`, []);
+
+			const lines = renderWidget(width, theme).map(visibleLine);
+			const row = lines.slice(1).find((line) => line.includes("●"));
+			expect(row).toContain("left-");
+			expect(row).not.toContain("right-");
+			expect(lines.join("\n")).toContain("left component blocker");
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
+	it("keeps three same-basename branches identifiable after truncation", () => {
+		const branches = ["root-left", "root-middle", "root-right"];
+		for (const branch of branches) {
+			recordDiagnostics(
+				`${process.cwd()}/${branch}/${"common-shared/".repeat(8)}file.ts`,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: `blocker in ${branch}`,
+						rule: "E1",
+					},
+				],
+			);
+		}
+
+		const lines = renderWidget(69, theme).map(visibleLine);
+		const blockerRows = lines.filter((line) => line.startsWith(" ● "));
+		expect(blockerRows).toHaveLength(3);
+		for (const branch of branches) {
+			expect(blockerRows.some((line) => line.includes(branch))).toBe(true);
+		}
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(69);
+		}
+	});
+
+	it("grows the parent hint only as far as needed to separate same-named rows", () => {
+		const a = `${process.cwd()}/app/src/leaf.ts`;
+		const b = `${process.cwd()}/lib/src/leaf.ts`;
+		recordRunner(a, "tsc", "succeeded", 1);
+		recordDiagnostics(a, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				message: "blocker in app",
+				rule: "E1",
+			},
+		]);
+		recordRunner(b, "tsc", "succeeded", 2);
+		recordDiagnostics(b, []);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		// Shared `src` parent: one more segment is enough.
+		expect(allLines).toContain("app/src/leaf.ts");
+		expect(allLines).toContain("lib/src/leaf.ts");
+		// Minimal hint — never the whole absolute display path.
+		expect(allLines).not.toContain(`${process.cwd()}/app/src/leaf.ts`);
+		expect(allLines).not.toContain(`${process.cwd()}/lib/src/leaf.ts`);
+	});
+
+	it("disambiguates a drawn row against a same-named sibling the cap did not draw", () => {
+		const observed = Date.now() - 5_000;
+		const drawn = `${process.cwd()}/pi-lens/index.ts`;
+		recordDiagnostics(
+			drawn,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "newest blocker",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed + 400,
+		);
+		for (let i = 0; i < 4; i++) {
+			recordDiagnostics(
+				`${process.cwd()}/filler-${i}.ts`,
+				[
+					{
+						severity: "error",
+						semantic: "blocking",
+						message: `filler ${i}`,
+						rule: "E1",
+					},
+				],
+				undefined,
+				observed + 300 - i * 100,
+			);
+		}
+		// Same basename as `drawn`, oldest blocker: tier ties go to recency, so
+		// the five-row cap keeps `drawn` plus the fillers and leaves this out.
+		recordDiagnostics(
+			`${process.cwd()}/pi-webaio/index.ts`,
+			[
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "oldest blocker",
+					rule: "E1",
+				},
+			],
+			undefined,
+			observed,
+		);
+
+		const allLines = visibleFrame(renderWidget(120, theme));
+
+		expect(allLines).toContain("pi-lens/index.ts");
+		expect(allLines).not.toContain("oldest blocker");
 	});
 
 	it("paints the file row red when any diagnostic carries semantic=blocking, even if severity is warning", () => {

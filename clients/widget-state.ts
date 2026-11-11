@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
+import { basename, dirname, extname } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BoundedFifoMap } from "./bounded-cache.js";
 import {
@@ -8,7 +9,11 @@ import {
 	type LineCountCache,
 } from "./diagnostic-line-freshness.js";
 import { visibleWidth } from "./deps/pi-tui.js";
-import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
+import {
+	normalizeEphemeralMapKey,
+	normalizeMapKey,
+	splitPathSegments,
+} from "./path-utils.js";
 import { fitLine } from "./tui-fit.js";
 import { WriteOrderingGuard } from "./write-ordering-guard.js";
 import { collectForwardImportMtimes } from "./blocker-freshness.js";
@@ -2400,24 +2405,27 @@ export function renderWidget(
 
 	const lines: string[] = [];
 
-	// Header — counts from deduplicated files only
-	const deduped = dedupeByBasename([...files.values()]);
+	// #5460: counts read the store's FULL population. `files` is one record per
+	// path key (`fileMapKey`), so no display-name dedupe is needed or wanted:
+	// the removed `dedupeByBasename` was last-write-wins per basename and let a
+	// clean same-named edit hide a blocking file and read ✓ clean.
+	const records = [...files.values()];
 	// The five row slots go to the highest tiers first (#4625 round 3): a retained
 	// record's `touchedAt` is its sweep time, so capping by recency alone let it
 	// take a slot from a blocking file and the header counted a row the frame
 	// never drew. The chosen rows are then drawn in the recency order both
 	// layouts showed before the cap.
-	const renderable = deduped.filter(shouldRenderFile);
+	const renderable = records.filter(shouldRenderFile);
 	const recencySorted = sortByTierThenRecency(renderable)
 		.slice(0, 5)
 		.sort((a, b) => b.touchedAt - a.touchedAt);
 	const langStr = sessionLanguages.slice(0, 6).join(" ");
-	const totalBlocking = countBlockingIn(deduped);
-	const totalErrors = countTotalIn("error", deduped);
-	const totalWarnings = countTotalIn("warning", deduped);
-	const totalSuppressed = countSuppressedIn(deduped);
-	const hasPendingAnalysis = deduped.some(isPendingAnalysis);
-	const uncheckedFiles = deduped.filter(isUncheckedClean);
+	const totalBlocking = countBlockingIn(records);
+	const totalErrors = countTotalIn("error", records);
+	const totalWarnings = countTotalIn("warning", records);
+	const totalSuppressed = countSuppressedIn(records);
+	const hasPendingAnalysis = records.some(isPendingAnalysis);
+	const uncheckedFiles = records.filter(isUncheckedClean);
 	const errorChunk =
 		totalErrors > 0
 			? (totalBlocking > 0 ? red : yellow)(`●${totalErrors}E`)
@@ -2468,14 +2476,28 @@ export function renderWidget(
 		lines.push(fitLine(` ${dim(`suppressed: ${totalSuppressed}`)}`, w));
 	}
 
+	// #5460: row labels. Rows are keyed by path identity, so two records can
+	// share a display basename. Each record's label is its basename, or enough
+	// trailing parent segments to keep same-named records apart. Computed over
+	// the whole population, so a row stays unambiguous even when its same-named
+	// sibling is not drawn under the cap.
+	const labels = computeCollisionLabels(records);
+	const showLabel = (rec: FileRecord): string =>
+		labels.get(rec) ?? path.basename(rec.filePath);
+
 	// File list — display order varies by mode
 	if (useHorizontal) {
 		const displayOrder = sortByTierThenRecency(recencySorted);
-		const rowLine = packHorizontalRow(displayOrder, w, theme);
+		const rowLine = packHorizontalRow(displayOrder, labels, w, theme);
 		if (rowLine.length > 0) lines.push(rowLine);
 	} else {
 		for (const rec of recencySorted) {
-			lines.push(fitLine(formatFileRowVertical(rec, theme), w));
+			lines.push(
+				fitLine(
+					formatFileRowVertical(rec, showLabel(rec), w, theme, labels),
+					w,
+				),
+			);
 		}
 	}
 
@@ -2487,7 +2509,7 @@ export function renderWidget(
 	if (lastUnchecked?.uncheckedReason !== undefined) {
 		lines.push(
 			fitLine(
-				` ${yellow("⚠")} ${dim(`${path.basename(lastUnchecked.filePath)}: ${lastUnchecked.uncheckedReason}`)}`,
+				` ${yellow("⚠")} ${dim(`${showLabel(lastUnchecked)}: ${lastUnchecked.uncheckedReason}`)}`,
 				w,
 			),
 		);
@@ -2517,7 +2539,7 @@ export function renderWidget(
 	if (withBlocking.length > 0) {
 		const rec = withBlocking[0];
 		// #1641: gate only the ONE record whose line numbers are about to be
-		// rendered, not the whole (potentially session-long) `deduped` list the
+		// rendered, not the whole (potentially session-long) `records` list the
 		// header counts read — one memoized stat per redraw, never a per-file
 		// scan of every file pi-lens has touched this session. A past-EOF
 		// citation demoted here can leave the header's aggregate blocking count
@@ -2527,7 +2549,7 @@ export function renderWidget(
 		applyPastEofGate(rec);
 		if (!useHorizontal) {
 			lines.push(fitLine(dim("─".repeat(Math.min(w, 60))), w));
-			lines.push(fitLine(` ${dim(path.basename(rec.filePath))}`, w));
+			lines.push(fitLine(` ${dim(showLabel(rec))}`, w));
 		}
 		const blockers = rec.diagnostics.filter(isBlockingOrDemoted).slice(0, 5);
 		// #2275 review F1: THIS is the point where a demoted row is delivered to
@@ -2602,14 +2624,18 @@ function sortByTierThenRecency(recs: FileRecord[]): FileRecord[] {
 
 function formatFileRowVertical(
 	rec: FileRecord,
+	// #5460: the row label — basename, or a parent-disambiguated same-named
+	// spelling; every call passes it, basename being the no-collision spelling.
+	label: string,
+	maxWidth: number,
 	theme: { fg: (color: string, s: string) => string },
+	labels: ReadonlyMap<FileRecord, string>,
 ): string {
 	const dim = (s: string) => theme.fg("dim", s);
 	const red = (s: string) => theme.fg("error", s);
 	const yellow = (s: string) => theme.fg("warning", s);
 	const green = (s: string) => theme.fg("success", s);
 
-	const base = path.basename(rec.filePath);
 	const blocking = rec.diagnosticCounts.blocking;
 	const errors = rec.diagnosticCounts.errors;
 	const warnings = rec.diagnosticCounts.warnings;
@@ -2657,11 +2683,16 @@ function formatFileRowVertical(
 		(changedFormatters.length > 0
 			? dim(` fmt:${changedFormatters.join(",")}`)
 			: "");
-	return ` ${dot} ${base}  ${dim(runnerNames)}${formatMark}${counts}`;
+	const prefix = ` ${dot} `;
+	const suffix = `  ${dim(runnerNames)}${formatMark}${counts}`;
+	const labelBudget = Math.max(1, maxWidth - visibleWidth(prefix));
+	return `${prefix}${truncateFileLabel(label, labelBudget, labels)}${suffix}`;
 }
 
 function packHorizontalRow(
 	recs: FileRecord[],
+	// #5460: per-record row labels (basename or disambiguated spelling).
+	labels: ReadonlyMap<FileRecord, string>,
 	totalWidth: number,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
@@ -2685,7 +2716,7 @@ function packHorizontalRow(
 			droppedAt = i;
 			break;
 		}
-		const token = formatFileTokenHorizontal(recs[i], remaining, theme);
+		const token = formatFileTokenHorizontal(recs[i], labels, remaining, theme);
 		const tokenWidth = visibleWidth(token);
 		if (token.length === 0 || used + sepWidth + tokenWidth > totalWidth) {
 			droppedAt = i;
@@ -2724,6 +2755,8 @@ function packHorizontalRow(
 
 function formatFileTokenHorizontal(
 	rec: FileRecord,
+	// #5460: per-record row label (basename or parent-disambiguated spelling).
+	labels: ReadonlyMap<FileRecord, string>,
 	remainingWidth: number,
 	theme: { fg: (color: string, s: string) => string },
 ): string {
@@ -2759,29 +2792,16 @@ function formatFileTokenHorizontal(
 		countsStyled = " " + yellow(`${warnings}W`);
 	}
 
-	const fullBasename = path.basename(rec.filePath);
+	const label = labels.get(rec) ?? path.basename(rec.filePath);
 	const fixedWidth = visibleWidth(dotChar) + 1 + visibleWidth(countsStyled);
 	const basenameBudget = remainingWidth - fixedWidth;
 	if (basenameBudget < 3) return "";
-	const truncated = truncateBasename(fullBasename, basenameBudget);
+	const truncated = truncateFileLabel(label, basenameBudget, labels);
 	const linked = osc8(pathToFileURL(rec.filePath).href, truncated);
 	return `${dotChar} ${linked}${countsStyled}`;
 }
 
-function truncateBasename(name: string, maxWidth: number): string {
-	if (visibleWidth(name) <= maxWidth) return name;
-	if (maxWidth < 2) return "…";
-	const ext = path.extname(name);
-	const stem = name.slice(0, name.length - ext.length);
-	const keep = maxWidth - ext.length - 1;
-	if (keep < 1) {
-		// Extension alone wouldn't fit; truncate the whole name.
-		return name.slice(0, maxWidth - 1) + "…";
-	}
-	return stem.slice(0, keep) + "…" + ext;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────
 
 function getOrCreate(filePath: string, key = fileMapKey(filePath)): FileRecord {
 	maybePruneInactiveFileRecords();
@@ -2917,10 +2937,153 @@ function osc8(uri: string, label: string): string {
 // turn-summary message renderer, which learned the hard way that pi-tui crashes
 // the host on over-width lines — #513).
 
-function dedupeByBasename(recs: FileRecord[]): FileRecord[] {
-	const seen = new Map<string, FileRecord>();
-	for (const r of [...recs].sort((a, b) => a.touchedAt - b.touchedAt)) {
-		seen.set(path.basename(r.filePath), r);
+/**
+ * #5460: per-record row labels for one render. Each label is the display
+ * basename; for same-named records it grows trailing parent segments until the
+ * group's labels differ. The walk is bounded by the record's display path:
+ * identical spellings resolve to one record through `fileMapKey`, so distinct
+ * records always spell distinct full paths, which is the exhausted fallback.
+ */
+function computeCollisionLabels(
+	records: FileRecord[],
+): Map<FileRecord, string> {
+	const labels = new Map<FileRecord, string>();
+	const groups = new Map<string, FileRecord[]>();
+	for (const rec of records) {
+		const base = basename(rec.filePath);
+		const group = groups.get(base);
+		if (group) group.push(rec);
+		else groups.set(base, [rec]);
 	}
-	return [...seen.values()].sort((a, b) => b.touchedAt - a.touchedAt);
+	for (const [base, group] of groups) {
+		if (group.length === 1) {
+			for (const rec of group) labels.set(rec, base);
+			continue;
+		}
+		const chains = group.map((rec) => ({
+			rec,
+			segments: splitPathSegments(dirname(rec.filePath)).reverse(),
+		}));
+		const maxDepth = Math.max(...chains.map((c) => c.segments.length));
+		// `segments` is nearest-first; a label spells outermost-first, so the
+		// kept slice reverses before the join. Uniqueness is order-invariant.
+		for (let depth = 1; depth <= maxDepth; depth++) {
+			const spellings = new Set(
+				chains.map((c) => c.segments.slice(0, depth).join("/")),
+			);
+			if (spellings.size !== chains.length) continue;
+			for (const chain of chains) {
+				labels.set(
+					chain.rec,
+					`${chain.segments.slice(0, depth).reverse().join("/")}/${base}`,
+				);
+			}
+			break;
+		}
+		for (const chain of chains) {
+			if (!labels.has(chain.rec)) labels.set(chain.rec, chain.rec.filePath);
+		}
+	}
+	return labels;
+}
+
+function truncateFileLabel(
+	label: string,
+	maxWidth: number,
+	collisionLabels?: ReadonlyMap<FileRecord, string>,
+): string {
+	if (visibleWidth(label) <= maxWidth) return label;
+	if (maxWidth < 2) return "…";
+
+	const compacted = compactCollisionLabel(label, maxWidth, collisionLabels);
+	if (compacted !== undefined) {
+		return truncateFileLabel(compacted, maxWidth);
+	}
+
+	const base = basename(label);
+	if (base !== label && visibleWidth(base) >= maxWidth - 1) {
+		// Keep the already group-compacted parent identity while abbreviating a
+		// basename too long to fit beside it.
+		const parent = dirname(label);
+		const parentBudget = Math.max(0, maxWidth - 5);
+		const parentDisplay =
+			visibleWidth(parent) <= parentBudget
+				? parent
+				: `…${parent.slice(-parentBudget)}`;
+		const basenameBudget = Math.max(
+			1,
+			maxWidth - visibleWidth(parentDisplay) - 1,
+		);
+		return `${parentDisplay}/${truncateFileLabel(base, basenameBudget)}`;
+	}
+	if (base === label) {
+		// A bare basename keeps the existing stem-prefix, ellipsis, extension.
+		const ext = extname(label);
+		const stem = label.slice(0, label.length - ext.length);
+		const keep = maxWidth - ext.length - 1;
+		if (keep < 1) {
+			// Extension alone wouldn't fit; truncate the whole name.
+			return label.slice(0, maxWidth - 1) + "…";
+		}
+		return stem.slice(0, keep) + "…" + ext;
+	}
+	// A parent hint carries the disambiguation nearest the file, so the label
+	// truncates from its far side into a leading "…".
+	let width = 1;
+	let end = label.length;
+	while (end > 0) {
+		const w = visibleWidth(label.charAt(end - 1));
+		if (width + w > maxWidth) break;
+		width += w;
+		end--;
+	}
+	return `…${label.slice(end)}`;
+}
+
+function compactCollisionLabel(
+	label: string,
+	maxWidth: number,
+	collisionLabels?: ReadonlyMap<FileRecord, string>,
+): string | undefined {
+	if (!collisionLabels) return undefined;
+	const base = basename(label);
+	const peers: string[] = [];
+	for (const candidate of collisionLabels.values()) {
+		if (basename(candidate) === base) peers.push(candidate);
+	}
+	if (peers.length < 2) return undefined;
+
+	const parent = dirname(label);
+	const parents = peers.map((candidate) => dirname(candidate));
+	const shortestParent = Math.min(...parents.map((parent) => parent.length));
+	let sharedSuffix = 0;
+	while (
+		sharedSuffix < shortestParent &&
+		parents.every(
+			(peer) =>
+				peer[peer.length - sharedSuffix - 1] ===
+				parent[parent.length - sharedSuffix - 1],
+		)
+	) {
+		sharedSuffix++;
+	}
+
+	const parentLabel = (value: string, suffix: number): string =>
+		`${value.slice(0, value.length - suffix)}${suffix > 0 ? "…" : ""}`;
+	const parentWidth = (suffix: number): number =>
+		Math.max(
+			...parents.map((value) => visibleWidth(parentLabel(value, suffix))),
+		);
+	const basenameIsLong = visibleWidth(base) >= maxWidth - 1;
+	const parentBudget = basenameIsLong
+		? Math.max(0, maxWidth - 5)
+		: maxWidth - visibleWidth(base) - 1;
+
+	let suffix = 0;
+	while (suffix < sharedSuffix) {
+		suffix++;
+		if (parentWidth(suffix) <= parentBudget) break;
+	}
+	if (parentWidth(suffix) >= parentWidth(0)) return undefined;
+	return `${parentLabel(parent, suffix)}/${base}`;
 }
