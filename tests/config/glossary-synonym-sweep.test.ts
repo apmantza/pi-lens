@@ -1575,7 +1575,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
 		// filesystem path operation. 8 -> 9 (#5301): the restored state is
 		// published with each file's `path`, the bus payload's own field name.
-		"clients/widget-state.ts": 9,
+		// 9 -> 5 (#5460): remove basename dedupe and use named path imports.
+		"clients/widget-state.ts": 5,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.
@@ -2198,7 +2199,7 @@ describe("glossary synonym-retirement sweep (#3259)", () => {
 
 	it("ignores comments, strings, and template text but counts interpolation code", () => {
 		const source = stripSource(
-			"// warning\n/* warning */ const a = 'warning'; const b = `warning`; const c = `\${warning}`;",
+			"// warning\n/* warning */ const a = 'warning'; const b = `warning`; const c = `${warning}`;",
 			{ strings: "blank" },
 		);
 		expect(countIdentifier(source, "warning")).toBe(1);
