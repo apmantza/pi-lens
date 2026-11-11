@@ -14,11 +14,9 @@
  *
  * The wait is `fs.watchFile` on the marker the fake writes — a poll on the
  * real condition, not a raw `setTimeout`. #5105: the poll settles the wait on
- * the marker's CONTENT, never bare existence. A produced marker can exist as
- * an interim before its content lands; an exists-only settle reads `""`,
- * whose `existsSync` is false, failing the witness's first report-dir assert
- * while the scan is still parked — which is where the master red #5105
- * failed (`existsSync(reportDir)` → false).
+ * the marker's CONTENT, never bare existence. An empty marker can release an
+ * exists-only waiter, which then reads `""` as the report directory and fails
+ * the witness's first report-dir assert.
  */
 
 import * as fs from "node:fs";
@@ -56,7 +54,7 @@ function writeFakeScanner(binDir: string, name: string): void {
  * registration, and later callbacks cover creation after it.
  *
  * The watcher is released on success or timeout through one `finish`.
- * An absent or unreadable file keeps polling. The round-3
+ * An absent file keeps polling; any other read error rejects. The round-3
  * helper unwatched only in the success branch, so a marker that never appears
  * (the jscpd case after #4268) left a `persistent` StatWatcher holding the
  * worker until the whole 90 s test budget elapsed. The deadline is an
@@ -82,8 +80,10 @@ function waitForFile(file: string, timeoutMs: number): Promise<void> {
 				// Creation can precede the marker's content.
 				if (fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0)
 					finish();
-			} catch {
+			} catch (err) {
 				// Removed between the exists-check and the read; keep polling.
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT")
+					finish(err as Error);
 			}
 		};
 		deadline.addEventListener("abort", onTimeout);

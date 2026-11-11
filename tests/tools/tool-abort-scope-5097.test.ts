@@ -177,8 +177,10 @@ function waitForFile(file: string, timeoutMs = 20_000): Promise<void> {
 			try {
 				if (fs.existsSync(file) && fs.readFileSync(file, "utf8").length > 0)
 					finish();
-			} catch {
+			} catch (err) {
 				// A marker removed before the read is not ready yet.
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT")
+					finish(err as Error);
 			}
 		};
 		deadline.addEventListener("abort", onTimeout);

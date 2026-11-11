@@ -4,8 +4,7 @@ audience: internal
 ---
 
 - **The scanner witness waits for marker content, not existence.**
-  A produced marker can exist briefly before its content lands; an
-  existence-only settle can read an empty marker and fail the witness's
-  first assertion. Scanner and tool-abort witnesses now wait for nonempty
-  marker content.
+  An empty marker can release a waiter that reads a report path or PID
+  from it. The scanner and tool-abort witnesses, and the madge abort
+  witness, now wait for nonempty marker content.
   (refs #5105)

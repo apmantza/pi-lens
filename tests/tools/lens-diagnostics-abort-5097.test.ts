@@ -117,16 +117,30 @@ describe.skipIf(process.platform === "win32")(
 			);
 		};
 
+		// The pid the parked scan wrote; 0 until the file carries content, because
+		// `echo $$ > scan.pid` creates the file before it writes.
+		const pidOf = (file: string): number => {
+			try {
+				return Number(fs.readFileSync(file, "utf8").trim());
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+				return 0;
+			}
+		};
+
 		it("kills madge in 2 s and keeps the saved row", async () => {
+			// An empty scan.pid in place before the parked scan writes its pid, as
+			// the producer's create-then-write leaves it.
+			const pidFile = path.join(ctl, "scan.pid");
+			fs.writeFileSync(pidFile, "");
 			await call(new AbortController().signal);
 			const saved = madgeRow();
 			expect(saved).toContain("a.ts");
 
 			const ac = new AbortController();
 			const pending = call(ac.signal);
-			const pidFile = path.join(ctl, "scan.pid");
-			expect(await pollFor(() => fs.existsSync(pidFile), 20_000)).toBe(true);
-			const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+			expect(await pollFor(() => pidOf(pidFile) > 0, 20_000)).toBe(true);
+			const pid = pidOf(pidFile);
 			ac.abort();
 			await pending;
 			// Acceptance (d): no scan child 2 s after the abort.
