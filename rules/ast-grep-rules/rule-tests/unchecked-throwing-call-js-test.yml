@@ -11,3 +11,14 @@ invalid:
   - 'new URL(s)'
   - 'execSync(cmd)'
   - 'execSync(cmd, opts)'
+  # #5466 documented limit (why this rule ships below `error`): the check is
+  # intra-function and lexical. The caller below wraps parse() in try/catch,
+  # and `safe(() => …)`-style wrappers exist, but neither is visible inside
+  # parse() — so this still reports, at warning severity.
+  - |
+    function parse(raw) {
+      return JSON.parse(raw);
+    }
+    try {
+      parse(raw);
+    } catch (e) {}
