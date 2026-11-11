@@ -34,10 +34,11 @@
 import * as path from "node:path";
 import { Lang, parse, type SgNode } from "@ast-grep/napi";
 import { describe, expect, it } from "vitest";
+import { TREE_WALK_TIMEOUT_MS } from "../../support/test-timeout-scale.js";
 import { RUNNER_SKIP_REASONS } from "../../../clients/dispatch/types.js";
-import { censusSourceFiles } from "../../support/ast-census.js";
 import {
 	auditRegistry,
+	listSourceFiles,
 	readWalkedFile,
 	relativePosix,
 	stableOccurrenceKey,
@@ -270,7 +271,7 @@ const EXEMPT: Record<string, string> = {
 
 function liveHits(): Array<{ key: string; detail: string }> {
 	const out: Array<{ key: string; detail: string }> = [];
-	for (const file of censusSourceFiles([ROOT], { skipTests: true })) {
+	for (const file of listSourceFiles(ROOT, { skipTests: true })) {
 		const source = readWalkedFile(file);
 		if (source === undefined) continue;
 		const lines = source.split("\n");
@@ -290,21 +291,25 @@ function liveHits(): Array<{ key: string; detail: string }> {
 }
 
 describe("a runner's skip states why (#5258)", () => {
-	it("admits only stated skips under clients/dispatch, except the named remainder", () => {
-		const files = censusSourceFiles([ROOT], { skipTests: true });
-		const audit = auditRegistry({
-			sweepName: "bare-skip census",
-			flagged: liveHits(),
-			registered: [],
-			exemptions: EXEMPT,
-			minFlagged: 0,
-			scannedCount: files.length,
-			minScanned: 50,
-			remediation:
-				"give the skip a reason: `skipped(reason)`, `toolAbsentSkip()` or `faultSkip(fault)` (clients/dispatch/types.ts); a new reason also needs SKIP_REASON_PHRASE and, if it is a verdict, VERDICT_SKIP_REASONS",
-		});
-		expect(audit.problems).toEqual([]);
-	});
+	it(
+		"admits only stated skips under clients/dispatch, except the named remainder",
+		() => {
+			const files = listSourceFiles(ROOT, { skipTests: true });
+			const audit = auditRegistry({
+				sweepName: "bare-skip census",
+				flagged: liveHits(),
+				registered: [],
+				exemptions: EXEMPT,
+				minFlagged: 0,
+				scannedCount: files.length,
+				minScanned: 50,
+				remediation:
+					"give the skip a reason: `skipped(reason)`, `toolAbsentSkip()` or `faultSkip(fault)` (clients/dispatch/types.ts); a new reason also needs SKIP_REASON_PHRASE and, if it is a verdict, VERDICT_SKIP_REASONS",
+			});
+			expect(audit.problems).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	describe("plants (spellings the census author did not design for)", () => {
 		const wrap = (literal: string) => `export const r = ${literal};\n`;

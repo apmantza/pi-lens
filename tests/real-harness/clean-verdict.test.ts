@@ -14,9 +14,15 @@ import { withRealPi } from "../support/real-pi-harness.js";
 const writeResultText = async (
 	script: string,
 	args: readonly string[],
+	extraEnv: Record<string, string> = {},
 ): Promise<string> =>
 	withRealPi(
-		{ fixture: "clean-verdict", script, args, env: { PI_LENS_TEST_MODE: "0" } },
+		{
+			fixture: "clean-verdict",
+			script,
+			args,
+			env: { ...extraEnv, PI_LENS_TEST_MODE: "0" },
+		},
 		async (pi) => {
 			await pi.prompt("write the file");
 			const result = await pi.awaitToolResult("write");
@@ -71,4 +77,35 @@ describe("real pi: a write no check covered never reads clean (#5258)", () => {
 		},
 		60_000,
 	);
+});
+
+// Recurrence prevented: #5258 (the 2026-11-08 tool-alignment audit): 119 runner
+// returns were a bare `skipped`, so the write notice worded a runner that needs
+// a config the project lacks, a runner whose tool is missing and a runner the
+// install kill switch kept away with one sentence ("a language tool is missing,
+// timed out, or failed to run"). A markdown file under `--no-lsp` has two
+// primary runners: spellcheck (typos is absent) and vale (no `.vale.ini`).
+describe("real pi: a skipped check names why the file was not checked (#5258)", () => {
+	// An unreachable PATH tail hides host-installed typos and vale; the harness
+	// keeps the repo bin and node's own directory ahead of it.
+	const hidden = { PATH: "/nonexistent-path-5258" };
+
+	it("says which runner is not installed and which is not configured", async () => {
+		const text = await writeResultText("markdown.json", ["--no-lsp"], hidden);
+		expect(text).toContain("spellcheck: not installed");
+		expect(text).toContain("vale: not configured");
+		expect(text).not.toContain("a language tool is missing, timed out");
+		expect(text).not.toContain("✓");
+	}, 60_000);
+
+	it("names the install kill switch when it is what kept the tool away", async () => {
+		const text = await writeResultText("markdown.json", ["--no-lsp"], {
+			...hidden,
+			PI_LENS_DISABLE_TOOL_INSTALL: "1",
+		});
+		expect(text).toContain("spellcheck: not installed");
+		expect(text).toContain("PI_LENS_DISABLE_TOOL_INSTALL=1");
+		expect(text).toContain("vale: not configured");
+		expect(text).not.toContain("✓");
+	}, 60_000);
 });
