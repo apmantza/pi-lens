@@ -345,15 +345,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the post-write lane must receive a controlled server answer; the service is seeded from the shared double and only getLSPService is replaced",
 		},
-	// 2026-11-09 (#5466): the rule-context regression runs the real runner,
-	// loader and post-filter; only the review-graph enrichment stands in, as
-	// real-runner-ctx.ts requires of every tree-sitter suite it builds.
-	"in-process-mock:clients/dispatch/runners/tree-sitter-react-context.test.ts::clients/review-graph/service":
-		{
-			detector: "in-process-mock",
-			reason:
-				"makeRealRunnerEnv requires the review-graph mock: unmocked, the fire-and-forget blast-radius enrichment is wall-clock-dependent and races cleanup(); the runner, loader, query cache and post-filter under test are real",
-		},
 	// 2026-10-16 (#4476): the same fake auxiliary, seen from the role lookup
 	// the registry's dependency restart asks; getServerById knows only the
 	// built-in catalog, so the auxiliary added above answers there too.

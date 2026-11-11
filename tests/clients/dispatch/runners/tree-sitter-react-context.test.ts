@@ -1,14 +1,11 @@
-// flake-shape: in-process-mock — real-runner-ctx.ts requires every tree-sitter
-// suite it builds to mock clients/review-graph/service.js: unmocked, the
-// fire-and-forget blast-radius enrichment makes the run wall-clock-dependent
-// and races cleanup(). Only recordEntitySnapshotDiff is stubbed to an empty
-// diff; the runner, loader, query cache and post-filter under test are real.
 /**
  * #5466 — `ts-react-antipatterns` fires only in React context (a module that
  * imports a React/React-like hook source, or contains JSX). Exercised through
  * the REAL runner (real client + real query loader + the `has_react_context`
  * post-filter) so the loader and cache path is under test, not just
- * `runQueryOnFile`.
+ * `runQueryOnFile`. The one-line `modifiedRanges` keeps the runner under its
+ * entity-extraction threshold, so the review-graph enrichment never runs and
+ * needs no mock; without `blockingOnly` the range does not filter findings.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import treeSitterRunner from "../../../../clients/dispatch/runners/tree-sitter.js";
@@ -22,16 +19,6 @@ import {
 } from "../../../../clients/tree-sitter-logger.js";
 import { readNdjsonRows } from "../../../support/ndjson-rows.js";
 
-// Keep unrelated fire-and-forget review-graph enrichment out of real-runner tests.
-vi.mock(
-	"../../../../clients/review-graph/service.js",
-	async (importOriginal) => ({
-		...(await importOriginal<
-			typeof import("../../../../clients/review-graph/service.js")
-		>()),
-		recordEntitySnapshotDiff: () => ({ added: [], removed: [], modified: [] }),
-	}),
-);
 import {
 	assertGrammarAvailable,
 	firedRuleIds,
@@ -102,7 +89,7 @@ async function countRootChildrenReads<T>(
 
 describe("tree-sitter runner — ts-react-antipatterns context gate (#5466)", () => {
 	beforeAll(async () => {
-		env = makeRealRunnerEnv();
+		env = makeRealRunnerEnv({ modifiedRanges: [{ start: 1, end: 1 }] });
 		await assertGrammarAvailable("typescript");
 	});
 

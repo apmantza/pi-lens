@@ -673,7 +673,6 @@
 		"clients/dispatch/runners/tflint-policy.test.ts::clients/tool-policy": 1,
 		"clients/dispatch/runners/tree-sitter-dispatch-behavior.test.ts::clients/review-graph/service": 1,
 		"clients/dispatch/runners/tree-sitter-python-rule-regressions.test.ts::clients/review-graph/service": 1,
-		"clients/dispatch/runners/tree-sitter-react-context.test.ts::clients/review-graph/service": 1,
 		"clients/dispatch/runners/tree-sitter-rule-cache-warm.test.ts::clients/review-graph/service": 1,
 		"clients/dispatch/runners/tree-sitter-rule-cache-warm.test.ts::clients/tree-sitter-logger": 1,
 		"clients/dispatch/runners/tree-sitter-runner.test.ts::clients/cache/rule-cache": 1,
