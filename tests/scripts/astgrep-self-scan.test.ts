@@ -439,6 +439,23 @@ d("pi-lens self-scan (#1718)", () => {
 			});
 		});
 	});
+
+	// Recurrence: a self-scan baseline row whose finding was fixed stayed
+	// admitted, so a new hit with the same signature would pass silently. Only
+	// the governance suite asserted this (planted row: the wrapper printed
+	// "46 finding(s) ... (47 allowed entries)" and exited 0).
+	it("every self-scan baseline row has a live finding", () => {
+		const result = runSelfScan({});
+		const tracked = trackedSelfScanFileSet(
+			repoRoot(),
+			suiteByName("self-scan").scanPaths,
+		);
+		const live = new Set(
+			findingSignatures(findingsInTrackedFiles(result.findings, tracked)),
+		);
+		expect([...loadBaseline()].filter((sig) => !live.has(sig))).toEqual([]);
+		expect(result.scannedFileCount).toBeGreaterThan(1000);
+	});
 });
 
 // #3886 r3: the wrapper passes the directory roots CI uses -- never a file
