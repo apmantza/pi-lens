@@ -23,6 +23,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { plantGateConfig } from "../support/gate-config-fixtures.js";
 import { makeRunnerCtx } from "../support/runner-ctx.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -31,12 +32,6 @@ const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
 vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	safeSpawnAsync,
-}));
-
-// Config discovery is not what these cases witness; open the eslint gate.
-vi.mock("../../clients/tool-policy.js", async (importOriginal) => ({
-	...(await importOriginal<Record<string, unknown>>()),
-	hasEslintConfig: () => true,
 }));
 
 import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
@@ -73,6 +68,8 @@ describe("#4268 project-local binary trust gate", () => {
 	it("eslintRunner.run never executes the project's eslint under unknown or untrusted trust", async () => {
 		const env = setupTestEnvironment("pi-lens-trust-eslint-");
 		try {
+			// Config discovery is not what this case witnesses; open the eslint gate.
+			plantGateConfig("eslint", env.tmpDir);
 			const local = plantNodeBin(env.tmpDir, "eslint");
 			const filePath = path.join(env.tmpDir, "sample.ts");
 			fs.writeFileSync(filePath, "const a = 1;\n");

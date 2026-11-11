@@ -39,15 +39,6 @@ vi.mock("node:fs", async () => {
 });
 
 // Mock heavy dependencies before importing the runner
-vi.mock(
-	"../../../../clients/tool-config-presence.js",
-	async (importOriginal) => ({
-		...(await importOriginal<
-			typeof import("../../../../clients/tool-config-presence.js")
-		>()),
-		hasToolConfig: vi.fn().mockReturnValue(false),
-	}),
-);
 
 vi.mock("../../../../clients/dispatch/runners/yaml-rule-parser.js", () => ({
 	loadYamlRules: vi.fn().mockReturnValue([]),
