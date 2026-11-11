@@ -654,18 +654,19 @@ describe("actionable-warnings turn-end advisory honors dispositions (#3248)", ()
 			const cacheManager = new CacheManager(false);
 			registerEdit(cacheManager, cwd, filePath);
 			cacheManager.writeCache(
-				"gitleaks",
+				"trivy",
 				{
 					success: true,
 					scannedAt: "",
-					findings: [
+					findings: [],
+					secrets: [
 						{
-							ruleId: "aws-access-token",
-							file: filePath,
-							startLine: 1,
-							description: "AWS key",
+							ruleId: "aws-access-key-id",
+							file: path.relative(cwd, filePath),
+							line: 1,
 						},
 					],
+					licenses: [],
 				},
 				cwd,
 			);
@@ -686,6 +687,8 @@ describe("actionable-warnings turn-end advisory honors dispositions (#3248)", ()
 				}),
 			);
 			const text = turnEndText(cacheManager, cwd, runtime);
+			expect(text).toContain("STOP — hardcoded secrets detected");
+			expect(text).toContain("[trivy + ast-grep]");
 			expect(text).toContain("Fixable warnings introduced this turn: 1");
 			expect(text).toContain("secret.ts: 1");
 		} finally {
