@@ -764,6 +764,46 @@ function send(msg) {
 	process.stdout.write(encode(msg));
 }
 
+// #5487: rust-analyzer's cold start. `FAKE_LSP_LOADING_MS=N` models a server that
+// is still loading its workspace for N ms after `initialized`: every pull is
+// answered with an EMPTY authoritative report (whatever the document holds),
+// and, with `FAKE_LSP_LOADING_PUSH_EMPTY=1`, each didOpen draws an empty publish.
+// When the client asked for it (`capabilities.experimental.serverStatusNotification`,
+// as rust-analyzer requires) the server also announces
+// `experimental/serverStatus` quiescent:false at `initialized` and quiescent:true
+// when loading ends. `FAKE_LSP_LOADING_NO_STATUS=1` withholds the announcements
+// (a server that loads without announcing, the pre-#5487 shape) and
+// `FAKE_LSP_LOADING_MALFORMED_STATUS=1` sends them without a boolean `quiescent`.
+// `FAKE_LSP_LOADING_REFRESH=1` also sends `workspace/diagnostic/refresh` when
+// loading starts, as rust-analyzer does. Off by default.
+const LOADING_MS = Number.parseInt(process.env.FAKE_LSP_LOADING_MS ?? "0", 10);
+const LOADING_REFRESH_ID = "fake-loading-refresh";
+let loadingUntil = 0;
+let clientAsksServerStatus = false;
+const isLoading = () => Date.now() < loadingUntil;
+function startLoading() {
+	if (!(LOADING_MS > 0)) return;
+	loadingUntil = Date.now() + LOADING_MS;
+	const announce = (quiescent) => {
+		if (!clientAsksServerStatus || process.env.FAKE_LSP_LOADING_NO_STATUS === "1") return;
+		send({
+			jsonrpc: "2.0",
+			method: "experimental/serverStatus",
+			params: {
+				health: "ok",
+				quiescent:
+					process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "1" ? "no" : quiescent,
+				message: null,
+			},
+		});
+	};
+	announce(false);
+	if (process.env.FAKE_LSP_LOADING_REFRESH === "1") {
+		send({ jsonrpc: "2.0", id: LOADING_REFRESH_ID, method: "workspace/diagnostic/refresh" });
+	}
+	setTimeout(() => announce(true), LOADING_MS).unref?.();
+}
+
 // #4758: the settings a client delivers, read off the wire. With
 // FAKE_LSP_TRACE_CONFIG=1 the trace file gets one line each for the
 // initializationOptions, a didChangeConfiguration payload, and (when
@@ -785,6 +825,8 @@ function handle(raw) {
 	} catch {
 		return;
 	}
+	// The client's reply to our loading-time refresh request: nothing to answer.
+	if (data.id === LOADING_REFRESH_ID && data.method === undefined) return;
 	if (data.id === CONFIG_PULL_ID && data.method === undefined) {
 		traceConfig(`config-pull-answer ${JSON.stringify(data.result ?? null)}`);
 		return;
@@ -883,6 +925,8 @@ function handle(raw) {
 			walkAmbient(checkerRoot);
 		}
 		const clientCapabilities = data.params?.capabilities;
+		clientAsksServerStatus =
+			clientCapabilities?.experimental?.serverStatusNotification === true;
 		const clientCodeAction = clientCapabilities?.textDocument?.codeAction;
 		const clientSupportsCodeActionResolve =
 			clientCodeAction?.dataSupport === true &&
@@ -1084,6 +1128,7 @@ function handle(raw) {
 
 	// Ignore notifications without id
 	if (data.method === "initialized") {
+		startLoading();
 		if (process.env.FAKE_LSP_PULL_SECTIONS) {
 			send({
 				jsonrpc: "2.0",
@@ -1190,6 +1235,13 @@ function handle(raw) {
 			data.params?.textDocument?.uri,
 			data.params?.textDocument?.text ?? "",
 		);
+		if (isLoading() && process.env.FAKE_LSP_LOADING_PUSH_EMPTY === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: { uri: data.params?.textDocument?.uri, diagnostics: [] },
+			});
+		}
 		publishSequenceFor(data.params?.textDocument?.uri);
 		if (RECOMPILE_CLEARS_MS >= 0) {
 			recompileVersions.set(
@@ -1526,7 +1578,8 @@ function handle(raw) {
 			}
 			const items = CLOSED_FILE_CACHE
 				? checkerDiagnostics(uri)
-				: PULL_RESPONSE === "empty" ||
+				: isLoading() ||
+				PULL_RESPONSE === "empty" ||
 				(text.includes("fake-lsp-clean") && PULL_RESPONSE !== "items")
 					? []
 					: [

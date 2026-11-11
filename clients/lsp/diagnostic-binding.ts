@@ -222,10 +222,14 @@ export interface TouchFileResult {
  * primary's notify write and the diagnostics wait lapsed on this touch.
  * #4322: `"primary-unavailable"` means no language server was acquired for a
  * file that has one, so only auxiliaries (if any) answered.
+ * #5487: `"server-loading"` means the diagnostics wait lapsed on a primary that
+ * had announced it was still loading its workspace (rust-analyzer's
+ * `experimental/serverStatus`), so no answer it gave was a verdict.
  */
 type TouchInconclusiveReason =
 	| "notify-write"
 	| "diagnostics-wait"
+	| "server-loading"
 	| "mixed"
 	| "primary-unavailable";
 
@@ -261,6 +265,12 @@ export interface TouchVerdictInput {
 	 * stands on `diagnosticsTimedOut`, just unattributed.
 	 */
 	diagnosticsUnansweredServerIds: readonly string[];
+	/**
+	 * #5487: PRIMARY-role servers whose diagnostics wait lapsed while they still
+	 * announced they were loading. Names the cause only; whether the touch is
+	 * inconclusive stays decided by `diagnosticsTimedOut` and the unanswered ids.
+	 */
+	loadingServerIds?: readonly string[];
 }
 
 /** The verdict fields {@link resolveTouchVerdict} produces. */
@@ -318,12 +328,17 @@ export function resolveTouchVerdict(input: TouchVerdictInput): TouchVerdict {
 		return { inconclusive: false };
 	}
 	const serverIds = [...new Set([...notifyIds, ...waitIds])];
+	const loadingIds = new Set(input.loadingServerIds ?? []);
+	const lapsedWhileLoading =
+		waitIds.length > 0 && waitIds.every((id) => loadingIds.has(id));
 	const reason: TouchInconclusiveReason =
 		notifyIds.length > 0 && input.diagnosticsTimedOut
 			? "mixed"
 			: notifyIds.length > 0
 				? "notify-write"
-				: "diagnostics-wait";
+				: lapsedWhileLoading
+					? "server-loading"
+					: "diagnostics-wait";
 	return {
 		inconclusive: true,
 		...(serverIds.length > 0 && { inconclusiveServerIds: serverIds }),

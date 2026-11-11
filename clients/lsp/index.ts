@@ -5207,6 +5207,9 @@ export class LSPService {
 			// #1549: the primary subset of the list above, captured when the wait lapsed
 			// so the attribution survives the silent-clean/sync gates clearing the flag.
 			let diagnosticsUnansweredPrimaryServerIds: string[] = [];
+			// #5487: the primaries whose wait lapsed while they still announced they
+			// were loading (a subset of the lapsed waits).
+			const loadingExpiredServerIds = new Set<string>();
 			// #1549: a gate that certifies silence AS the answer (the tsserver sync
 			// confirm, either silent-clean gate) retracts the primary attribution with it —
 			// those servers answered, in the only way their capabilities allow, so they
@@ -5718,6 +5721,11 @@ export class LSPService {
 								!isSilentOnCleanServer(entry)
 							) {
 								expiredWaitServerIds.add(entry.info.id);
+								// #5487: it lapsed while the server still announced it was
+								// loading, so the verdict names that, not a silent server.
+								if (entry.client.isServerLoading?.() === true) {
+									loadingExpiredServerIds.add(entry.info.id);
+								}
 							}
 							return outcome;
 						});
@@ -6800,6 +6808,7 @@ export class LSPService {
 				primaryNotifyWriteTimedOutServerIds,
 				diagnosticsTimedOut,
 				diagnosticsUnansweredServerIds: diagnosticsUnansweredPrimaryServerIds,
+				loadingServerIds: [...loadingExpiredServerIds],
 			});
 			const inconclusive = verdict.inconclusive;
 
