@@ -1,4 +1,5 @@
 // flake-shape: real-process-spawn — the order of the readiness notice, the empty pull and the empty publish comes from a real server over stdio; a stub cannot send that sequence
+// flake-shape: elapsed-time-assertion — two cases assert a real touch ends well inside its budget (a failed workspace load must not spend the 60 s budget; a silent server must not hold the touch for loading time plus a whole budget); the bound is the behaviour under test and the margin is several seconds against a 900 ms fixture window
 /**
  * #5487: a cold rust-analyzer touch read clean while the server was still
  * loading.
