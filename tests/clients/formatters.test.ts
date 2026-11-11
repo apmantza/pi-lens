@@ -171,7 +171,10 @@ it("retains the bounded formatter traceback tail (#3312)", async () => {
 		const executable = path.join(tmpDir, "shims", "cmake-format");
 		fs.writeFileSync(
 			executable,
-			`#!/bin/sh\nprintf '%s\\n' 'Traceback (most recent call last):' '  File "cmake-format", line 5, in <module>' '    from cmakelang.format.__main__ import main' "ModuleNotFoundError: No module named 'cmakelang'" '${longDiagnostic}' >&2\nexit 1\n`,
+			// The #3312 shape: the install answers `--version` and dies on the first
+			// real run (a missing PyYAML). A shim that failed `--version` too would
+			// be a broken tool, which the ladder reports as unavailable (#5410).
+			`#!/bin/sh\n[ "$1" = "--version" ] && exit 0\nprintf '%s\\n' 'Traceback (most recent call last):' '  File "cmake-format", line 5, in <module>' '    from cmakelang.format.__main__ import main' "ModuleNotFoundError: No module named 'cmakelang'" '${longDiagnostic}' >&2\nexit 1\n`,
 		);
 		fs.chmodSync(executable, 0o755);
 		const filePath = fileIn(tmpDir, "CMakeLists.cmake");
@@ -326,7 +329,10 @@ describe("resolveCommand — node_modules/.bin", () => {
 	});
 });
 
-describe("resolveCommand — PATH precedes managed formatter (#2767)", () => {
+// #5410: a working PATH binary needs no managed lookup, but PATH no longer
+// outranks a managed binary: the ladder asks managed first, as the runners do
+// (`tests/clients/formatter-tool-ladder-5410.test.ts` pins that order).
+describe("resolveCommand — a working PATH binary needs no managed lookup (#2767, #5410)", () => {
 	it.each([
 		["black", blackFormatter, "main.py"],
 		["cmake-format", cmakeFormatFormatter, "CMakeLists.cmake"],
@@ -336,7 +342,7 @@ describe("resolveCommand — PATH precedes managed formatter (#2767)", () => {
 		["oxfmt", oxfmtFormatter, "main.ts"],
 		["php-cs-fixer", phpCsFixerFormatter, "main.php"],
 	] as const)(
-		"uses PATH %s before a managed copy",
+		"uses PATH %s without consulting getToolPath",
 		async (toolId, formatter, fileName) => {
 			const pathDir = path.join(tmpDir, "path-bin");
 			const pathBinary = path.join(pathDir, isWin ? `${toolId}.cmd` : toolId);
@@ -358,7 +364,9 @@ describe("resolveCommand — PATH precedes managed formatter (#2767)", () => {
 					fileIn(tmpDir, fileName),
 					tmpDir,
 				);
-				expect(command?.[0]).toBe(pathBinary);
+				expect(path.basename(String(command?.[0]))).toMatch(
+					new RegExp(`^${toolId}(\\.cmd)?$`),
+				);
 				expect(managedSpy).not.toHaveBeenCalledWith(toolId);
 			} finally {
 				managedSpy.mockRestore();
@@ -728,9 +736,13 @@ describe("resolveCommand — vendor/bin", () => {
 // ---------------------------------------------------------------------------
 
 describe("resolveCommand — walk-up from subdirectory", () => {
-	it("ruff venv at root is found when editing file in src/utils/", async () => {
+	// The venv is found from the project root (its `pyproject.toml`), not by
+	// climbing from the file: a parent directory's venv is never the project's
+	// (#5410, #2544 r4 F2).
+	it("ruff venv at the project root is found when editing file in src/utils/", async () => {
 		const rootVenvBin = venvBin(tmpDir, "ruff");
 		makeFakeExe(rootVenvBin);
+		fs.writeFileSync(path.join(tmpDir, "pyproject.toml"), "[tool.ruff]\n");
 
 		const subdir = path.join(tmpDir, "src", "utils");
 		fs.mkdirSync(subdir, { recursive: true });

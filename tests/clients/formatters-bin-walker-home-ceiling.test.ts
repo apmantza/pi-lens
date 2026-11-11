@@ -3,22 +3,23 @@
  * HOME ceiling, so a stray `~/node_modules/.bin/oxfmt.cmd` (the home-level
  * pi-extensions manifest installs its own bins) was picked up as the
  * project's formatter on any box with a home-level `node_modules`. The same
- * unceilinged shape existed in `findInVendorBin` (`vendor/bin`) and
- * `findInVenv` (`.venv`/`venv`).
+ * unceilinged shape existed in `findInVendorBin` (`vendor/bin`) and the
+ * formatter venv walk, which #5410 then removed: a formatter finds a `.venv`
+ * only at exactly the project root, through the runner's ladder.
  *
- * #2544 review F2 folded all three onto the single shared walker,
+ * #2544 review F2 folded the walks onto the single shared walker,
  * `findLocalBinUpwards` (`clients/package-manager.ts`, also behind stylua,
  * taplo, knip, jscpd and madge): the ONLY thing that differs per ecosystem is
  * the `binDirs`/`windowsExt` options each `formatters.ts` delegation passes.
  * These cases therefore drive `findLocalBinUpwards` directly with exactly
  * those option sets — the ceiling has one implementation to test. That the
  * delegations pass the RIGHT options is covered through the production
- * `resolveCommand` seam by `formatters.test.ts` ("resolveCommand — .venv",
- * "resolveCommand — vendor/bin") and `formatter-unavailable-outcome.test.ts`.
+ * `resolveCommand` seam by `formatters.test.ts` ("resolveCommand — vendor/bin")
+ * and `formatter-unavailable-outcome.test.ts`.
  *
  * Per #2517's per-walker policy: these are TOOL-RESOLUTION walkers, not
  * config-file lookups — escaping the project upward past HOME must mean
- * STOP, not keep reading. A `node_modules/.bin`/`vendor/bin`/`.venv` match
+ * STOP, not keep reading. A `node_modules/.bin`/`vendor/bin` match
  * found at or above HOME can never be the project's own installed dependency.
  *
  * Every case here pins a FAKE `homeDir` explicitly (never the real
@@ -62,14 +63,6 @@ const WALKERS: WalkerCase[] = [
 		options: { windowsExt: ".bat", binDirs: [path.join("vendor", "bin")] },
 		binSubpath: (binary) =>
 			path.join("vendor", "bin", isWin ? `${binary}.bat` : binary),
-	},
-	{
-		name: ".venv/venv — findInVenv / createVenvFinder / vulture (Python)",
-		options: { windowsExt: ".exe", binDirs: VENV_BIN_DIRS },
-		binSubpath: (binary) =>
-			isWin
-				? path.join(".venv", "Scripts", `${binary}.exe`)
-				: path.join(".venv", "bin", binary),
 	},
 ];
 
@@ -208,7 +201,7 @@ describe.each(WALKERS)(
 				plantBin(project, binSubpath("oxfmt"));
 				process.chdir(project);
 
-				// Pre-fold, `findInVendorBin`/`findInVenv` walked the literal string
+				// Pre-fold, `findInVendorBin` and the venv walk read the literal string
 				// and `path.parse("src").root` is "", so a relative start directory
 				// never matched anything; only `findLocalBinUpwards` resolved it.
 				expect(walk("oxfmt", "src", fakeHome)).toBe(
