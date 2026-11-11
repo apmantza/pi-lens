@@ -1516,6 +1516,7 @@ export const phpCsFixerFormatter: FormatterInfo = {
 		// re-observe the ENOENT already known. Report the proven-missing
 		// state instead so `formatFile` skips the wasted spawn.
 		const resolved = managed[0];
+		if (!resolved) return FORMATTER_UNAVAILABLE;
 		return configPath
 			? [resolved, "fix", "--config", configPath, filePath]
 			: [resolved, "fix", filePath];
