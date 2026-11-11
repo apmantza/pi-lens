@@ -464,4 +464,104 @@ describe("#5408 config presence: policy and runner agree", () => {
 			expect(names).toEqual(["ruff"]);
 		});
 	});
+	describe("vale and shellcheck ask the seam for their config (#5408 slice 2)", () => {
+		// Recurrence: both runners wrapped `findLocalToolConfig`, an UNBOUNDED climb,
+		// so a `.vale.ini` / `.shellcheckrc` above $HOME counted as project config
+		// (the tflint shape, divergence 3); shellcheck also started the climb at
+		// `ctx.cwd`, so a `.shellcheckrc` beside the script (below the cwd) was
+		// never seen and the runner forced `--severity info` over the project's own.
+		function homeLayout(slug: string) {
+			const { home } = pinFixtureHome(slug);
+			return { home, proj: path.join(home, "proj"), above: path.dirname(home) };
+		}
+		const valeRan = () => spawnedArgs().some((argv) => argv.includes("JSON"));
+
+		it("vale: a .vale.ini above $HOME does not run vale", async () => {
+			const { proj, above } = homeLayout("5408-vale-above");
+			const stray = write(path.join(above, ".vale.ini"), "");
+			try {
+				const md = write(path.join(proj, "a.md"), "# t\n");
+				const mod = await load<{
+					default: Runner & { requiresConfig?: (cwd: string) => boolean };
+				}>("../../../../clients/dispatch/runners/vale.js");
+				expect(mod.default.requiresConfig?.(proj)).toBe(false);
+				const { dispatchLintDetailed } = await load<
+					typeof import("../../../../clients/dispatch/integration.js")
+				>("../../../../clients/dispatch/integration.js");
+				await dispatchLintDetailed(
+					md,
+					proj,
+					{
+						getFlag: (flag: string) =>
+							flag === "no-lsp" || flag === "no-ast-grep",
+					} as never,
+					{ blockingOnly: false },
+				);
+				expect(valeRan()).toBe(false);
+			} finally {
+				fs.rmSync(stray, { force: true });
+			}
+		});
+
+		it("vale: a .vale.ini in $HOME itself runs vale", async () => {
+			const { home, proj } = homeLayout("5408-vale-home");
+			write(path.join(home, ".vale.ini"), "");
+			const md = write(path.join(proj, "a.md"), "# t\n");
+			await runRunner("vale", md, proj, "markdown");
+			expect(valeRan()).toBe(true);
+		});
+
+		const severityFlag = () =>
+			spawnedArgs()
+				.find((argv) => argv.includes("--format"))
+				?.includes("--severity");
+		// The bash LSP is absent, so the CLI lane is not covered-by-primary.
+		async function runShellcheck(file: string, cwd: string) {
+			const mod = await load<{ default: Runner }>(
+				"../../../../clients/dispatch/runners/shellcheck.js",
+			);
+			return mod.default.run(
+				makeRunnerCtx(file, cwd, {
+					kind: "shell",
+					hasTool: async (t: string) => t !== "bash-language-server",
+				} as never) as never,
+			);
+		}
+
+		it("shellcheck: a .shellcheckrc beside the script, below the cwd, is the project's config", async () => {
+			const { proj } = homeLayout("5408-shellcheck-below");
+			write(path.join(proj, "scripts", ".shellcheckrc"), "severity=style\n");
+			const sh = write(
+				path.join(proj, "scripts", "a.sh"),
+				"#!/bin/sh\necho $x\n",
+			);
+			await runShellcheck(sh, proj);
+			// Red on master: the climb started at ctx.cwd and missed the file's directory.
+			expect(severityFlag()).toBe(false);
+		});
+
+		it("shellcheck: a .shellcheckrc above $HOME is not project config", async () => {
+			const { proj, above } = homeLayout("5408-shellcheck-above");
+			const stray = write(
+				path.join(above, ".shellcheckrc"),
+				"severity=style\n",
+			);
+			try {
+				const sh = write(path.join(proj, "a.sh"), "#!/bin/sh\necho $x\n");
+				await runShellcheck(sh, proj);
+				// Red on master: the unbounded climb found the stray file.
+				expect(severityFlag()).toBe(true);
+			} finally {
+				fs.rmSync(stray, { force: true });
+			}
+		});
+
+		it("shellcheck: a .shellcheckrc in the project root still suppresses the info floor", async () => {
+			const { proj } = homeLayout("5408-shellcheck-root");
+			write(path.join(proj, ".shellcheckrc"), "severity=style\n");
+			const sh = write(path.join(proj, "a.sh"), "#!/bin/sh\necho $x\n");
+			await runShellcheck(sh, proj);
+			expect(severityFlag()).toBe(false);
+		});
+	});
 });

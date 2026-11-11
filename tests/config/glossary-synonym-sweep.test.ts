@@ -340,7 +340,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	cache: {
 		"clients/diagnostic-line-freshness.ts": 5,
 		"clients/dispatch/runners/tree-sitter.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 21,
+		// 21 -> 22 (#5492 r2): `noteDecision` stores the rejected probe's output
+		// on the same per-cwd availability entry as the rest of the verdict
+		// (`rejectedOutput`); the entry is the checker's own state, not a cache of
+		// a derived answer.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 22,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 6,
 		"clients/installer/index.ts": 8,
 		"clients/lsp/inferred-project.ts": 4,
@@ -433,7 +437,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/file-utils.ts": 4,
 		"clients/format-service.ts": 11,
 		// 25 -> 24 (#5417): the changed-on-failure compare shed an error branch.
-		"clients/formatters.ts": 24,
+		// 24 -> 25 (#5492 r2): the present-but-failed-its-version-check result
+		// carries the probe's output in `FormatterResult.error`.
+		"clients/formatters.ts": 25,
 		"clients/generation-lock.ts": 5,
 		"clients/git-tracked-ignore.ts": 2,
 		"clients/govulncheck-client.ts": 6,
@@ -1117,7 +1123,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `findLocalToolConfig`, dropping its `path.join` / `path.resolve` /
 		// `path.dirname` loop and the `fs` pre-check.
 		// 4 -> 3: dialect extension resolution moved to clients/shell-dialect.ts.
-		"clients/dispatch/runners/shellcheck.ts": 3,
+		"clients/dispatch/runners/shellcheck.ts": 5,
 		"clients/dispatch/runners/spellcheck.ts": 6,
 		"clients/dispatch/runners/spotbugs.ts": 4,
 		"clients/dispatch/runners/sqlfluff.ts": 3,
@@ -1138,7 +1144,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// stop building `.bin` paths by hand and route through the shared lookup.
 		// #5410: 18 -> 19, the PATH-only resolution's `{ path, rung }` value
 		// (the existing VenvResolution shape).
-		"clients/dispatch/runners/utils/runner-helpers.ts": 19,
+		// 19 -> 20 (#5492 r2): the path-first project rung's `{ path, rung }`
+		// value, the same VenvResolution shape.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 20,
 		// 7 -> 3 (#4689 item 6): `findValeConfig` delegates to
 		// `findLocalToolConfig`, dropping its hand-rolled `path` loop.
 		"clients/dispatch/runners/vale.ts": 3,
@@ -1551,13 +1559,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (a path operation).
 		"clients/tool-agreement.ts": 10,
 		// New in #5408: the config-presence seam's path joins and walks.
-		"clients/tool-config-presence.ts": 7,
+		"clients/tool-config-presence.ts": 10,
 		// 13 -> 12 (#4689 item 6): the file is resolved by `realpathOrResolve`.
 		// 12 -> 10 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		"clients/tool-cwd.ts": 10,
 		// 64 -> 62 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 62 -> 50 (#5408): the seven bespoke config walks leave for the config-presence seam.
-		"clients/tool-policy.ts": 50,
+		"clients/tool-policy.ts": 36,
 		// 19 -> 18 (#4689 batch 7): the grammar write probe climbs `walkUpDirs`, so
 		// its own `path.dirname` step is the seam's.
 		"clients/tree-sitter-client.ts": 18,
