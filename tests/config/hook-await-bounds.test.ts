@@ -2364,7 +2364,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// #5410 slice 2: 31 -> 32 — `resolveInstalledToolCommand` awaits the
 	// checker's probe (`isAvailableAsync`), the formatters' no-install ladder.
 	// Unbounded from the hook signal like `resolveToolCommandWithInstallFallback`.
-	"clients/dispatch/runners/utils/runner-helpers.ts": 32,
+	// #5492 r2: 32 -> 33 — the formatter ladder's PATH-before-managed order
+	// splits the managed rungs into `findManagedRung` and routes the fall-through
+	// through `nextRung`; one more await, under the same probe budget and
+	// equally unbounded from the hook signal.
+	"clients/dispatch/runners/utils/runner-helpers.ts": 33,
 	// #5087: the edit's re-measure plus its one default-branch read (9 in
 	// all; 10 -> 9 when the first touch took its table from the analyzer's
 	// own measure, #5443 review F6). Its awaits are the shared parser (init,

@@ -1266,8 +1266,9 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	// The formatter binaries (#5410): the formatters resolve these through the
-	// same ladder as the runners, so one version-checked answer per cwd serves
-	// both. Each id is also its installer entry and its binary name.
+	// runners' ladder machinery (version-checked, one latch per cwd), in their
+	// own order, PATH before managed (#5492 r2). Each id is also its installer
+	// entry and its binary name.
 	...(
 		[
 			["shfmt", ".exe"],

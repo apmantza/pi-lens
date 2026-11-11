@@ -14,10 +14,15 @@
  *   `~/code/.venv/bin/ruff` present and the project `~/code/app` carrying no
  *   venv, the ruff runner skipped (exactly-cwd rule, #2544 r4 F2) and the
  *   formatter ran the parent's ruff.
- * - run-f: the formatter asked `which("shfmt")` before the managed binary
+ * - run-f: the formatter asked `which("shfmt")` and ran whatever it named
  *   (and the same for taplo, ktlint, ktfmt, typstyle and the managed-resolver
  *   family), so a broken PATH shfmt beside a working managed one failed the
  *   formatter while the runner's ladder succeeded.
+ * - order (user decision, #5492 r2): a formatter's version decides the bytes
+ *   it writes, so a working PATH binary wins over the managed copy. A PATH
+ *   binary that fails its version check falls through to managed; a present
+ *   tool nothing else replaces reads "failed its version check" with the
+ *   probe's stderr, never "executable not found".
  */
 
 import * as fs from "node:fs";
@@ -199,11 +204,11 @@ describe("formatter ancestor venv (#5410 run-a)", () => {
 	});
 
 	it.each([
-		["black", "blackFormatter", "unavailable"],
-		["sqlfluff", "sqlfluffFormatter", null],
+		["black", "blackFormatter"],
+		["sqlfluff", "sqlfluffFormatter"],
 	] as const)(
 		"%s: a parent directory's .venv binary is not resolved",
-		async (tool, exportName, expected) => {
+		async (tool, exportName) => {
 			const parentBin = plant(path.join(root, ".venv", "bin", tool), GOOD);
 			const app = path.join(root, "app");
 			fs.mkdirSync(app, { recursive: true });
@@ -216,9 +221,7 @@ describe("formatter ancestor venv (#5410 run-a)", () => {
 			const cmd = await formatter.resolveCommand!(file, app);
 
 			expect(JSON.stringify(cmd)).not.toContain(parentBin);
-			expect(cmd).toBe(
-				expected === "unavailable" ? formatters.FORMATTER_UNAVAILABLE : null,
-			);
+			expect(cmd).toBe(formatters.FORMATTER_UNAVAILABLE);
 		},
 	);
 });
@@ -241,6 +244,7 @@ describe("formatter binary order (#5410 run-f)", () => {
 		],
 		["cljfmt", "cljfmtFormatter", "core.clj", "(ns core)\n"],
 		["php-cs-fixer", "phpCsFixerFormatter", "main.php", "<?php\n"],
+		["stylua", "styluaFormatter", "main.lua", "local x = 1\n"],
 	] as const;
 
 	async function resolve(
@@ -268,10 +272,51 @@ describe("formatter binary order (#5410 run-f)", () => {
 		},
 	);
 
+	// Order rule (#5492 r2, user decision): the formatter's version decides its
+	// output bytes, so a working PATH binary is the one that runs even when a
+	// managed copy exists. Runners keep managed before PATH.
 	it.each(ROWS)(
-		"%s: the managed binary outranks a working PATH one",
+		"%s: a working PATH binary outranks the managed one",
 		async (tool, exportName, fileName, body) => {
 			plant(path.join(pathDir, tool), GOOD);
+			const managed = plant(path.join(home, "bin", tool), GOOD);
+
+			const cmd = await resolve(exportName, fileName, body);
+			const ran = String(Array.isArray(cmd) ? cmd[0] : cmd);
+
+			expect(ran).not.toBe(managed);
+			expect(path.basename(ran)).toBe(tool);
+		},
+	);
+
+	// A project shim that cannot run falls through to PATH, not to managed.
+	it.each([
+		["shfmt", "shfmtFormatter", "script.sh", "if true; then\n  echo hi\nfi\n"],
+		["taplo", "taploFormatter", "Cargo.toml", "[package]\nname = 'x'\n"],
+	] as const)(
+		"%s: a broken project shim falls through to a working PATH binary before managed",
+		async (tool, exportName, fileName, body) => {
+			plant(path.join(pathDir, tool), GOOD);
+			const managed = plant(path.join(home, "bin", tool), GOOD);
+			const project = path.join(root, "proj");
+			plant(path.join(project, "node_modules", ".bin", tool), BROKEN);
+			fs.writeFileSync(path.join(project, ".gitignore"), "node_modules\n");
+			const file = path.join(project, fileName);
+			fs.writeFileSync(file, body);
+			const formatters = await import("../../clients/formatters.js");
+
+			const cmd = await formatters[exportName].resolveCommand!(file, project);
+			const ran = String(Array.isArray(cmd) ? cmd[0] : cmd);
+
+			expect(ran).not.toBe(managed);
+			expect(path.basename(ran)).toBe(tool);
+		},
+	);
+
+	// Nothing on PATH: the managed copy is the formatter.
+	it.each(ROWS)(
+		"%s: the managed binary runs when PATH has none",
+		async (tool, exportName, fileName, body) => {
 			const managed = plant(path.join(home, "bin", tool), GOOD);
 
 			const cmd = await resolve(exportName, fileName, body);
@@ -342,6 +387,172 @@ describe("formatter binary order (#5410 run-f)", () => {
 			expect(Array.isArray(cmd) ? path.basename(String(cmd[0])) : cmd).toBe(
 				tool,
 			);
+		},
+	);
+});
+
+describe("pip-managed formatters (#5410, #5492 r2 F4)", () => {
+	// black and cmake-format have no release binary: the managed copy is the
+	// pi-lens pip prefix. A broken PATH copy falls through to it; a working
+	// PATH copy outranks it.
+	const PIP = [
+		["black", "blackFormatter", "main.py", "x = 1\n"],
+		["cmake-format", "cmakeFormatFormatter", "CMakeLists.txt", "project(x)\n"],
+	] as const;
+
+	async function resolvePip(
+		exportName: (typeof PIP)[number][1],
+		fileName: string,
+		body: string,
+	) {
+		const project = path.join(root, "proj");
+		fs.mkdirSync(project, { recursive: true });
+		const file = path.join(project, fileName);
+		fs.writeFileSync(file, body);
+		const formatters = await import("../../clients/formatters.js");
+		return formatters[exportName].resolveCommand!(file, project);
+	}
+
+	it.each(PIP)(
+		"%s: a broken PATH binary falls through to the pip-managed one",
+		async (tool, exportName, fileName, body) => {
+			plant(path.join(pathDir, tool), BROKEN);
+			const managed = plant(path.join(home, "pip-tools", "bin", tool), GOOD);
+
+			const cmd = await resolvePip(exportName, fileName, body);
+
+			expect(Array.isArray(cmd) ? cmd[0] : cmd).toBe(managed);
+		},
+	);
+
+	it.each(PIP)(
+		"%s: a working PATH binary outranks the pip-managed one",
+		async (tool, exportName, fileName, body) => {
+			plant(path.join(pathDir, tool), GOOD);
+			const managed = plant(path.join(home, "pip-tools", "bin", tool), GOOD);
+
+			const cmd = await resolvePip(exportName, fileName, body);
+			const ran = String(Array.isArray(cmd) ? cmd[0] : cmd);
+
+			expect(ran).not.toBe(managed);
+			expect(path.basename(ran)).toBe(tool);
+		},
+	);
+});
+
+describe("a present tool that fails its version check (#5492 r2 F2, F6)", () => {
+	// Recurrence: r1 read a black that tracebacks on every call as "formatter
+	// executable not found" and dropped the traceback (master said "failed"
+	// with it, #3312). Present-but-rejected stays a failed outcome carrying
+	// the probe's stderr; only a tool nothing resolves reads "not found".
+	it("black: a PATH binary that fails --version is a failed outcome carrying its stderr", async () => {
+		plant(path.join(pathDir, "black"), BROKEN);
+		const project = path.join(root, "proj");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, "pyproject.toml"), "[tool.black]\n");
+		const file = path.join(project, "main.py");
+		fs.writeFileSync(file, "x = 1\n");
+		const { formatFile, blackFormatter } =
+			await import("../../clients/formatters.js");
+
+		const result = await formatFile(file, blackFormatter);
+
+		expect(result.outcome).toBe("failed");
+		expect(result.success).toBe(false);
+		expect(result.error).toContain("failed its version check");
+		expect(result.error).toContain("Traceback");
+		expect(result.error).not.toContain("not found");
+	});
+
+	it("black: a tool nothing resolves still reads executable not found", async () => {
+		const project = path.join(root, "proj");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, "pyproject.toml"), "[tool.black]\n");
+		const file = path.join(project, "main.py");
+		fs.writeFileSync(file, "x = 1\n");
+		const { formatFile, blackFormatter } =
+			await import("../../clients/formatters.js");
+
+		const result = await formatFile(file, blackFormatter);
+
+		expect(result.outcome).toBe("unavailable");
+		expect(result.error).toContain("not found");
+	});
+
+	// Recurrence (CodeRabbit on #5492, formatters.ts sqlfluff): the resolver
+	// returned `null` when the ladder rejected the PATH sqlfluff, so the
+	// static bare `sqlfluff fix --force` ran the REJECTED binary; its status 1
+	// is lenient for sqlfluff, so the file read "unchanged", a clean verdict
+	// from a tool that failed its probe.
+	it("sqlfluff: a PATH binary that fails --version is never run, and is not unchanged", async () => {
+		plant(path.join(pathDir, "sqlfluff"), BROKEN);
+		const project = path.join(root, "proj");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, ".sqlfluff"), "[sqlfluff]\n");
+		const file = path.join(project, "q.sql");
+		fs.writeFileSync(file, "select 1\n");
+		const { formatFile, sqlfluffFormatter } =
+			await import("../../clients/formatters.js");
+
+		const result = await formatFile(file, sqlfluffFormatter);
+
+		expect(spawnCalls.some((call) => call.args[0] === "fix")).toBe(false);
+		expect(result.outcome).toBe("failed");
+		expect(result.error).toContain("failed its version check");
+	});
+
+	it("sqlfluff: no binary anywhere is unavailable without a spawn", async () => {
+		const project = path.join(root, "proj");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, ".sqlfluff"), "[sqlfluff]\n");
+		const file = path.join(project, "q.sql");
+		fs.writeFileSync(file, "select 1\n");
+		const { formatFile, sqlfluffFormatter } =
+			await import("../../clients/formatters.js");
+
+		const result = await formatFile(file, sqlfluffFormatter);
+
+		expect(spawnCalls.some((call) => call.args[0] === "fix")).toBe(false);
+		expect(result.outcome).toBe("unavailable");
+	});
+});
+
+describe("runner and formatter keep separate answers for one tool (#5492 r2)", () => {
+	// Recurrence it prevents: one checker per tool id shared by both orders
+	// would hand the first caller's answer to the second. The runner prefers
+	// managed, the formatter PATH, so a shared latch makes one of them run the
+	// wrong binary depending on who asked first.
+	it.each([
+		["runner first", true],
+		["formatter first", false],
+	] as const)(
+		"shfmt with PATH and managed both working: %s",
+		async (_label, runnerFirst) => {
+			plant(path.join(pathDir, "shfmt"), GOOD);
+			const managed = plant(path.join(home, "bin", "shfmt"), GOOD);
+			const project = path.join(root, "proj");
+			fs.mkdirSync(project, { recursive: true });
+			const helpers =
+				await import("../../clients/dispatch/runners/utils/runner-helpers.js");
+
+			const order: Array<"runner" | "formatter"> = runnerFirst
+				? ["runner", "formatter"]
+				: ["formatter", "runner"];
+			const answers: Record<string, string | null> = {};
+			for (const who of order) {
+				answers[who] =
+					who === "runner"
+						? await helpers.resolveToolCommandWithInstallFallback(
+								project,
+								"shfmt",
+							)
+						: (await helpers.resolveInstalledToolCommand(project, "shfmt"))
+								.command;
+			}
+
+			expect(answers.runner).toBe(managed);
+			expect(answers.formatter).not.toBe(managed);
+			expect(path.basename(String(answers.formatter))).toBe("shfmt");
 		},
 	);
 });
