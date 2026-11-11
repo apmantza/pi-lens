@@ -6817,7 +6817,7 @@ export class LSPService {
 				diagnosticsUnansweredServerIds: diagnosticsUnansweredPrimaryServerIds,
 				loadingServerIds: [...loadingExpiredServerIds],
 				loadFailedServerIds: [...loadFailedExpiredServerIds],
-				loadFailureDetail,
+				...(loadFailureDetail !== undefined && { loadFailureDetail }),
 			});
 			const inconclusive = verdict.inconclusive;
 

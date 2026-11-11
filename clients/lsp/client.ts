@@ -4886,12 +4886,12 @@ function serverNotReady(state: LSPClientState): boolean {
 function readinessBlockOf(
 	state: LSPClientState,
 ): ServerReadinessBlock | undefined {
-	const status = state.serverStatus;
-	if (status?.quiescent === false) return { reason: "server-loading" };
-	if (status?.failed) {
+	const announced = state.serverStatus;
+	if (announced?.quiescent === false) return { reason: "server-loading" };
+	if (announced?.failed) {
 		return {
 			reason: "server-load-failed",
-			...(status.message !== undefined && { detail: status.message }),
+			...(announced.message !== undefined && { detail: announced.message }),
 		};
 	}
 	return undefined;
@@ -4983,8 +4983,9 @@ async function pullDiagnosticsWhenReady(
  * without a record per touch.
  */
 function noteReadinessGate(state: LSPClientState): void {
-	const status = state.serverStatus;
-	const loadFailed = status?.failed === true && status.quiescent !== false;
+	const announced = state.serverStatus;
+	const loadFailed =
+		announced?.failed === true && announced.quiescent !== false;
 	emitBounded(
 		"lsp_server_loading_gated",
 		// A failed load is its own rising edge: a server that failed after it
@@ -4995,18 +4996,20 @@ function noteReadinessGate(state: LSPClientState): void {
 			durationMs: 0,
 			metadata: {
 				serverId: state.serverId,
-				quiescent: status?.quiescent,
-				revision: status?.revision,
+				quiescent: announced?.quiescent,
+				revision: announced?.revision,
 				...(loadFailed && {
 					loadFailed: true,
-					...(status?.message !== undefined && { message: status.message }),
+					...(announced?.message !== undefined && {
+						message: announced.message,
+					}),
 				}),
 			},
 		},
 		{
 			ledgerKind: "lsp-server-loading-gated",
 			reason: loadFailed
-				? `${state.serverId}: workspace failed to load${status?.message ? ` (${status.message})` : ""}`
+				? `${state.serverId}: workspace failed to load${announced?.message ? ` (${announced.message})` : ""}`
 				: `${state.serverId}: pull held to the server's announced readiness`,
 			risingEdgePer: "identity",
 		},
