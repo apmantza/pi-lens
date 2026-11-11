@@ -556,3 +556,47 @@ describe("runner and formatter keep separate answers for one tool (#5492 r2)", (
 		},
 	);
 });
+
+describe("resolveInstalledToolCommand answers (#5492 r2)", () => {
+	// Recurrence it prevents: the formatter bodies fall back to the installer
+	// lookups on a null, so a ladder that stopped at a rejected PATH binary
+	// (no fall-through to the managed rungs) stayed green behind them while the
+	// latched verdict said "rejected" for a tool whose managed copy works.
+	async function ask(toolId: string) {
+		const helpers =
+			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
+		const project = path.join(root, "proj");
+		fs.mkdirSync(project, { recursive: true });
+		return helpers.resolveInstalledToolCommand(project, toolId);
+	}
+
+	it("a broken PATH release tool falls through to the managed release binary", async () => {
+		plant(path.join(pathDir, "shfmt"), BROKEN);
+		const managed = plant(path.join(home, "bin", "shfmt"), GOOD);
+
+		expect(await ask("shfmt")).toEqual({ command: managed });
+	});
+
+	it("a broken PATH npm tool falls through to the managed npm shim", async () => {
+		plant(path.join(pathDir, "oxfmt"), BROKEN);
+		const shim = plant(
+			path.join(home, "tools", "node_modules", ".bin", "oxfmt"),
+			GOOD,
+		);
+
+		expect(await ask("oxfmt")).toEqual({ command: shim });
+	});
+
+	it("a present tool that fails its version check reports the probe output", async () => {
+		plant(path.join(pathDir, "shfmt"), BROKEN);
+
+		expect(await ask("shfmt")).toEqual({
+			command: null,
+			rejected: "Traceback\n",
+		});
+	});
+
+	it("a tool nothing provides reports no rejection", async () => {
+		expect(await ask("shfmt")).toEqual({ command: null });
+	});
+});
