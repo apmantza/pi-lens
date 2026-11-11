@@ -28,11 +28,13 @@
  *
  * ## What counts as config
  *
- * Only the forms a spec names. A file, a TOML table, an INI section, or a
- * declared dependency (a requirements entry NAME, a `Pipfile` / pyproject
- * dependency key). Comments, look-alike names (`flake8-black`,
- * `sqlfluff-templater-dbt`) and every form a spec does not name read as "not
- * configured": the gate admits known-good forms and refuses the rest.
+ * Only the forms a spec names. A file, a TOML table, an INI section, a
+ * `package.json` field, a declared dependency (a requirements entry NAME, a
+ * `Pipfile` / pyproject / `package.json` dependency key) or an import of the
+ * tool's package from a config source file. Comments, look-alike names
+ * (`flake8-black`, `sqlfluff-templater-dbt`, `vite-plus-extras`) and every form
+ * a spec does not name read as "not configured": the gate admits known-good
+ * forms and refuses the rest.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -50,7 +52,17 @@ export type ToolConfigId =
 	| "yamllint"
 	| "mypy"
 	| "mix"
-	| "editorconfig";
+	| "editorconfig"
+	| "eslint"
+	| "biome"
+	| "stylelint"
+	| "markdownlint"
+	| "golangci-lint"
+	| "phpstan"
+	| "vitePlus"
+	| "javaBuild"
+	| "vale"
+	| "shellcheck";
 
 /** Where the config was found, and what kind of evidence it is. */
 export interface ToolConfigHit {
@@ -58,15 +70,31 @@ export interface ToolConfigHit {
 	file: string;
 	/** The directory it was found in. */
 	dir: string;
-	source: "file" | "toml-table" | "ini-section" | "dependency";
+	source:
+		| "file"
+		| "toml-table"
+		| "ini-section"
+		| "json-field"
+		| "dependency"
+		| "import";
 }
 
 export interface ToolConfigOptions {
 	/** Overrides `os.homedir()`, for tests. */
 	homeDir?: string;
+	/**
+	 * A directory the climb visits and does not pass: the caller's project root
+	 * (the Java descriptor gate asks "inside THIS project"). The home stop still
+	 * applies below it.
+	 */
+	ceiling?: string;
 }
 
-type DependencyFile = "requirements.txt" | "Pipfile" | "pyproject.toml";
+type DependencyFile =
+	| "requirements.txt"
+	| "Pipfile"
+	| "pyproject.toml"
+	| "package.json";
 
 interface ToolConfigSpec {
 	/** File names (sub-paths allowed): the file existing is the evidence. */
@@ -81,8 +109,22 @@ interface ToolConfigSpec {
 	 * counts. A climb here would report a project the tool cannot open.
 	 */
 	exactDir?: true;
+	/** A `package.json` field holding a value (`stylelint`, `eslintConfig`). */
+	jsonFields?: readonly { file: "package.json"; field: string }[];
 	/** The tool's own package named as a dependency of the project. */
-	dependency?: { name: string; files: readonly DependencyFile[] };
+	dependency?: { names: readonly string[]; files: readonly DependencyFile[] };
+	/**
+	 * A source config file that imports the tool's package (`from "x"`,
+	 * `import "x"`, `require("x")`, `import("x")`, subpaths included). Comments
+	 * are blanked first; a bare mention never counts.
+	 */
+	sourceImports?: { files: readonly string[]; module: string };
+	/**
+	 * Evidence that only counts from `startDir` up to and including the nearest
+	 * `package.json`: ESLint's legacy `.eslintrc.*` / `eslintConfig` keep the
+	 * historic per-package boundary (#3017), while the rest of the spec climbs on.
+	 */
+	withinNearestPackage?: ToolConfigSpec;
 }
 
 const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
@@ -101,7 +143,7 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 	tflint: { files: [".tflint.hcl"] },
 	black: {
 		tomlTables: [{ file: "pyproject.toml", table: String.raw`tool\.black` }],
-		dependency: { name: "black", files: ["requirements.txt", "Pipfile"] },
+		dependency: { names: ["black"], files: ["requirements.txt", "Pipfile"] },
 	},
 	// Ruff ignores a `pyproject.toml` without `[tool.ruff]` (measured, see
 	// `python-environment.ts`), so the table is the evidence.
@@ -117,7 +159,7 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 			{ file: "tox.ini", section: "sqlfluff" },
 		],
 		dependency: {
-			name: "sqlfluff",
+			names: ["sqlfluff"],
 			files: ["requirements.txt", "Pipfile", "pyproject.toml"],
 		},
 	},
@@ -129,7 +171,7 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 			{ file: "tox.ini", section: "yamllint" },
 		],
 		dependency: {
-			name: "yamllint",
+			names: ["yamllint"],
 			files: ["requirements.txt", "Pipfile", "pyproject.toml"],
 		},
 	},
@@ -142,6 +184,110 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 	mix: { files: ["mix.exs"], exactDir: true },
 	// shfmt's only config source, and the formatters' indentation opt-out.
 	editorconfig: { files: [".editorconfig"] },
+	// Flat configs resolve like ESLint itself: every ancestor, past an
+	// intermediate package.json (#3017, shape 39); the legacy forms keep the
+	// per-package boundary.
+	eslint: {
+		files: [
+			"eslint.config.js",
+			"eslint.config.mjs",
+			"eslint.config.cjs",
+			"eslint.config.ts",
+			"eslint.config.mts",
+			"eslint.config.cts",
+		],
+		withinNearestPackage: {
+			files: [
+				".eslintrc",
+				".eslintrc.js",
+				".eslintrc.cjs",
+				".eslintrc.json",
+				".eslintrc.yaml",
+				".eslintrc.yml",
+			],
+			jsonFields: [{ file: "package.json", field: "eslintConfig" }],
+		},
+	},
+	// `biome.jsonc` before `biome.json`: the nearest file is the one handed over.
+	biome: { files: ["biome.jsonc", "biome.json"] },
+	stylelint: {
+		files: [
+			".stylelintrc",
+			".stylelintrc.json",
+			".stylelintrc.jsonc",
+			".stylelintrc.yaml",
+			".stylelintrc.yml",
+			".stylelintrc.js",
+			".stylelintrc.cjs",
+			"stylelint.config.js",
+			"stylelint.config.cjs",
+			"stylelint.config.mjs",
+		],
+		jsonFields: [{ file: "package.json", field: "stylelint" }],
+	},
+	markdownlint: {
+		files: [
+			// markdownlint-cli2's built-in config names (keep in sync with the
+			// installed CLI's supported configuration file names).
+			".markdownlint-cli2.jsonc",
+			".markdownlint-cli2.yaml",
+			".markdownlint-cli2.yml",
+			".markdownlint-cli2.cjs",
+			".markdownlint-cli2.mjs",
+			".markdownlint.jsonc",
+			".markdownlint.json",
+			".markdownlint.yaml",
+			".markdownlint.yml",
+			".markdownlint.cjs",
+			".markdownlint.mjs",
+			// The legacy name, retained for existing policy behaviour even though
+			// current markdownlint-cli2 versions do not prefer it.
+			".markdownlintrc",
+		],
+	},
+	"golangci-lint": {
+		files: [
+			".golangci.yml",
+			".golangci.yaml",
+			".golangci.toml",
+			".golangci.json",
+		],
+	},
+	phpstan: {
+		files: ["phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"],
+	},
+	// Vite+ (oxfmt / oxlint through `vp`): its own file, the package as a
+	// dependency, or a Vite config importing it.
+	vitePlus: {
+		files: ["vite-plus.json"],
+		dependency: {
+			names: ["vite-plus", "@voidzero-dev/vite-plus-core"],
+			files: ["package.json"],
+		},
+		sourceImports: {
+			files: [
+				"vite.config.ts",
+				"vite.config.mts",
+				"vite.config.cts",
+				"vite.config.js",
+				"vite.config.mjs",
+				"vite.config.cjs",
+			],
+			module: "vite-plus",
+		},
+	},
+	// SpotBugs and javac ask whether a Maven/Gradle descriptor is in scope.
+	javaBuild: {
+		files: [
+			"pom.xml",
+			"build.gradle",
+			"build.gradle.kts",
+			"settings.gradle",
+			"settings.gradle.kts",
+		],
+	},
+	vale: { files: [".vale.ini"] },
+	shellcheck: { files: [".shellcheckrc"] },
 };
 
 /** PEP 503 name: case-insensitive, runs of `-`, `_`, `.` are one. */
@@ -272,8 +418,70 @@ function pipfileNames(content: string): string[] {
 	);
 }
 
+/** The parsed `package.json` object, or `undefined` for anything else. */
+function parsePackageJson(
+	content: string,
+): Record<string, unknown> | undefined {
+	try {
+		const parsed: unknown = JSON.parse(content);
+		return typeof parsed === "object" && parsed !== null
+			? (parsed as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** `package.json` `dependencies` and `devDependencies` keys with a value, names as written. */
+function packageJsonNames(content: string): string[] {
+	const pkg = parsePackageJson(content);
+	if (!pkg) return [];
+	return ["dependencies", "devDependencies"].flatMap((group) => {
+		const table = pkg[group];
+		return typeof table === "object" && table !== null
+			? Object.entries(table).flatMap(([name, spec]) => (spec ? [name] : []))
+			: [];
+	});
+}
+
+/** `source` with line and block comments blanked; string contents are kept. */
+function blankJsComments(source: string): string {
+	let out = "";
+	let quote: string | undefined;
+	for (let i = 0; i < source.length; i++) {
+		const ch = source[i] ?? "";
+		const next = source[i + 1];
+		if (quote) {
+			out += ch;
+			if (ch === "\\") out += source[++i] ?? "";
+			else if (ch === quote) quote = undefined;
+		} else if (ch === '"' || ch === "'" || ch === "`") {
+			quote = ch;
+			out += ch;
+		} else if (ch === "/" && next === "/") {
+			while (i < source.length && source[i] !== "\n") i++;
+			out += "\n";
+		} else if (ch === "/" && next === "*") {
+			const end = source.indexOf("*/", i + 2);
+			i = end === -1 ? source.length : end + 1;
+			out += " ";
+		} else out += ch;
+	}
+	return out;
+}
+
+/** Whether `source` imports `module` (or a subpath of it) in a form the runtime resolves. */
+function importsModule(source: string, module: string): boolean {
+	const escaped = module.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+	return new RegExp(
+		String.raw`(?:\bfrom|\bimport|\brequire)\s*\(?\s*["']${escaped}(?:/[^"']*)?["']`,
+	).test(blankJsComments(source));
+}
+
 function dependencyNames(file: DependencyFile, content: string): string[] {
 	switch (file) {
+		case "package.json":
+			return packageJsonNames(content);
 		case "requirements.txt":
 			return requirementsNames(content);
 		case "Pipfile":
@@ -313,17 +521,37 @@ function findInDir(
 			return { file: candidate, dir, source: "ini-section" };
 		}
 	}
+	for (const { file, field } of spec.jsonFields ?? []) {
+		const candidate = path.join(dir, file);
+		const content = readFileContent(candidate);
+		if (content !== undefined && parsePackageJson(content)?.[field]) {
+			return { file: candidate, dir, source: "json-field" };
+		}
+	}
 	if (spec.dependency) {
-		const wanted = normalizeDistributionName(spec.dependency.name);
 		for (const file of spec.dependency.files) {
+			// npm names are exact; the Python files compare on the PEP 503 name.
+			const wanted = spec.dependency.names.map((name) =>
+				file === "package.json" ? name : normalizeDistributionName(name),
+			);
 			const candidate = path.join(dir, file);
 			const content = readFileContent(candidate);
 			if (
 				content !== undefined &&
-				dependencyNames(file, content).includes(wanted)
+				dependencyNames(file, content).some((name) => wanted.includes(name))
 			) {
 				return { file: candidate, dir, source: "dependency" };
 			}
+		}
+	}
+	for (const file of spec.sourceImports?.files ?? []) {
+		const candidate = path.join(dir, file);
+		const content = readFileContent(candidate);
+		if (
+			content !== undefined &&
+			importsModule(content, spec.sourceImports?.module ?? "")
+		) {
+			return { file: candidate, dir, source: "import" };
 		}
 	}
 	return undefined;
@@ -342,10 +570,21 @@ export function findToolConfig(
 	const spec = TOOL_CONFIG_SPECS[tool];
 	if (spec.exactDir) return findInDir(spec, realpathOrResolve(startDir));
 	const home = realpathOrResolve(options.homeDir ?? os.homedir());
+	const ceiling =
+		options.ceiling === undefined
+			? undefined
+			: realpathOrResolve(options.ceiling);
+	let pastPackage = false;
 	for (const dir of walkUpDirs(startDir)) {
-		const hit = findInDir(spec, dir);
+		const hit =
+			findInDir(spec, dir) ??
+			(spec.withinNearestPackage && !pastPackage
+				? findInDir(spec.withinNearestPackage, dir)
+				: undefined);
 		if (hit) return hit;
 		if (pathsEqual(dir, home)) return undefined;
+		if (ceiling !== undefined && pathsEqual(dir, ceiling)) return undefined;
+		if (fs.existsSync(path.join(dir, "package.json"))) pastPackage = true;
 	}
 	return undefined;
 }

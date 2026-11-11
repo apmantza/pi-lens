@@ -30,60 +30,35 @@ const RUNNERS_ROOT = path.join(REPO_ROOT, "clients/dispatch/runners");
 
 /**
  * Runner modules that touch the filesystem or a walker, with the reason.
- * `not config:` rows read the edited file, a tool binary, a build output or a
- * temp file and never decide "is this tool configured". `remainder:` rows do
- * decide a project descriptor or config and are the named remainder of #5408
- * (Refs): each still owes a move onto the seam.
+ * `not config:` rows read the edited file, a tool binary, a build output, a
+ * temp file or locate the target the tool is pointed at (a chart directory, a
+ * solution file, a classes directory) and never decide "is this tool
+ * configured". A `remainder:` row would decide a config and owe a move onto the
+ * seam; none is left (#5408 slice 2), and the pattern below still admits one
+ * for a future runner that cannot move at once.
  */
 const MEMBERS: Readonly<Record<string, string>> = {
-	"biome-check.ts":
-		"remainder: biomeConfigArgs from tool-policy picks the config args (policy-owned finder)",
-	"eslint.ts":
-		"remainder: hasEslintConfig from tool-policy; the gate is the declared requiresConfig (policy-owned finder)",
-	"golangci-lint.ts":
-		"remainder: hasGolangciConfig from tool-policy; the gate is the declared requiresConfig (policy-owned finder)",
-	"javac.ts":
-		"remainder: hasJavaBuildDescriptor from tool-policy decides the build descriptor (policy-owned finder)",
 	"lsp.ts":
 		"not config: readFileContent of the edited file; detectPythonTargetVersion reads the target version, not a tool's config",
-	"markdownlint.ts":
-		"remainder: markdownlintConfigArgs from tool-policy picks the config args (policy-owned finder)",
-	"mypy.ts":
-		"remainder: hasMypyConfig from tool-policy; the gate is the declared requiresConfig (policy-owned finder)",
-	"oxlint.ts":
-		"remainder: hasVitePlusConfig from tool-policy decides the binary (policy-owned finder)",
-	"phpstan.ts":
-		"remainder: hasPhpstanConfig from tool-policy; the gate is the declared requiresConfig (policy-owned finder)",
-	"ruff.ts":
-		"remainder: ruffConfigArgs from tool-policy picks the config args (policy-owned finder)",
-	"sqlfluff.ts":
-		"remainder: hasSqlfluffConfig from tool-policy; the seam answers it, the import stays a policy helper",
-	"stylelint.ts":
-		"remainder: hasStylelintConfig from tool-policy (policy-owned finder)",
-	"yamllint.ts":
-		"remainder: hasYamllintConfig from tool-policy gates the advisory only; the seam answers it",
 	"ast-grep-napi.ts": "not config: reads the edited file's content and stat",
 	"cpp-check.ts": "not config: reads the edited file's content",
 	"cue-vet.ts": "not config: reads the edited file's content",
 	"dotnet-build.ts":
-		"remainder: readdirSync(cwd) for .sln/.csproj marker globs (project descriptor)",
+		"not config: readdirSync(cwd) finds the .sln/.csproj the build is pointed at (a target locator, nothing to run without one)",
 	"elixir-check.ts": "not config: mkdirSync of the compile output directory",
 	"helm-lint.ts":
-		"remainder: Chart.yaml via findNearestDirWithMarker (marker walker, home-bounded)",
+		"not config: Chart.yaml via findNearestDirWithMarker locates the chart directory the tool is run in (a target locator)",
 	"helm-render.ts":
-		"remainder: Chart.yaml via findNearestDirWithMarker, chart-tree readdir",
+		"not config: Chart.yaml via findNearestDirWithMarker locates the chart directory, plus the chart-tree readdir (a target locator)",
 	"psscriptanalyzer.ts": "not config: writes and removes a temp script",
-	"shellcheck.ts":
-		"remainder: findLocalToolConfig(.shellcheckrc) selects args only, starts at ctx.cwd",
-	"spotbugs.ts": "remainder: compiled-classes dir discovery by readdirSync",
+	"spotbugs.ts":
+		"not config: compiled-classes dir discovery by readdirSync (a build artifact the scan is pointed at)",
 	"trivy-config.ts": "not config: reads the edited file's content",
 	"utils.ts": "not config: reads the edited file's content",
 	"utils/candidate-probe.ts": "not config: tool binary candidate probe",
 	"utils/markdownlint-api.ts":
 		"not config: resolves the markdownlint package from node_modules",
 	"utils/runner-helpers.ts": "not config: tool binary availability probe",
-	"vale.ts":
-		"remainder: findLocalToolConfig(.vale.ini), unbounded walk (local wrapper)",
 	"yaml-rule-parser.ts": "not config: reads ast-grep rule files",
 };
 
@@ -127,7 +102,26 @@ describe("runner config-read census (#5408)", () => {
 	});
 
 	it("the runners moved onto the seam are off the table", () => {
-		for (const file of ["detekt.ts", "tflint.ts", "credo.ts", "shfmt.ts"]) {
+		for (const file of [
+			"detekt.ts",
+			"tflint.ts",
+			"credo.ts",
+			"shfmt.ts",
+			"biome-check.ts",
+			"eslint.ts",
+			"golangci-lint.ts",
+			"javac.ts",
+			"markdownlint.ts",
+			"mypy.ts",
+			"oxlint.ts",
+			"phpstan.ts",
+			"ruff.ts",
+			"shellcheck.ts",
+			"sqlfluff.ts",
+			"stylelint.ts",
+			"vale.ts",
+			"yamllint.ts",
+		]) {
 			expect(Object.keys(MEMBERS), file).not.toContain(file);
 		}
 	});
@@ -196,6 +190,41 @@ describe("runner config-read detector: plants it was not designed around", () =>
 		// A property of process that is not on the short list reaches fs too.
 		expect(flagged('const b = process.binding("fs");')).toBe(true);
 		expect(flagged("const r = process.mainModule?.require;")).toBe(true);
+	});
+
+	it("admits the three config-args builders and refuses the retired finders", () => {
+		// Recurrence: #5408 slice 2 moved every policy-owned finder onto the seam.
+		// The builders stay in tool-policy and only build argv; a finder name
+		// that no longer exists, or a namespace/default reach to the module, is
+		// still a member, so a runner cannot read config through them again.
+		for (const name of [
+			"ruffConfigArgs",
+			"biomeConfigArgs",
+			"markdownlintConfigArgs",
+		]) {
+			expect(
+				flagged(`import { ${name} } from "../../tool-policy.js";`),
+				name,
+			).toBe(false);
+			expect(
+				flagged(`import { ${name} as args } from "../../tool-policy.js";`),
+				`${name} aliased`,
+			).toBe(false);
+		}
+		for (const name of [
+			"hasEslintConfig",
+			"hasStylelintConfig",
+			"hasMypyConfig",
+		]) {
+			expect(
+				flagged(`import { ${name} } from "../../tool-policy.js";`),
+				name,
+			).toBe(true);
+		}
+		expect(flagged('import * as policy from "../../tool-policy.js";')).toBe(
+			true,
+		);
+		expect(flagged('export * from "../../tool-policy.js";')).toBe(true);
 	});
 
 	it("flags a module it was never told about, and admits one it was", () => {

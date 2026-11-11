@@ -47,6 +47,7 @@ import {
 	probeCommandNames,
 	WORKSPACE_TOKEN,
 } from "../../../helpers/captured-runner-output.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const repoRoot = path.resolve(
@@ -72,16 +73,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs: () => [],
-	hasEslintConfig: () => true,
-	hasMypyConfig: () => true,
-	hasPhpstanConfig: () => true,
-	// Left real: sqlfluff's config presence CHANGES its argv (an unconfigured
-	// project gets `--dialect ansi`), so forcing it open would make the argv
-	// tie assert against an invocation the fixture never captured.
-	hasSqlfluffConfig: (cwd: string) =>
-		fs.existsSync(path.join(cwd, ".sqlfluff")),
-	hasStylelintConfig: () => true,
-	hasYamllintConfig: () => true,
 	getAutofixCapability: () => ({
 		toolSupportsFix: false,
 		safePipelineAutofix: false,
@@ -627,6 +618,11 @@ describe("captured real-binary output", () => {
 		try {
 			const source = path.join(repoRoot, options.fixture.provenance.workspace);
 			fs.cpSync(source, env.tmpDir, { recursive: true });
+			// sqlfluff stays as the fixture shipped it: its config CHANGES its argv
+			// (an unconfigured project gets `--dialect ansi`).
+			if (options.runnerId !== "sqlfluff") {
+				plantGateConfig(options.runnerId, env.tmpDir);
+			}
 			options.plant?.(env.tmpDir);
 			const filePath = path.join(env.tmpDir, options.file);
 			const tokens = fileTokens(options.file);

@@ -4,6 +4,7 @@ import { BoundedFifoMap } from "./bounded-cache.js";
 import { load as loadYaml } from "./deps/js-yaml.js";
 import { findNearestMarkerRoot, toPosix } from "./path-utils.js";
 import { getDegradationLedgerGeneration } from "./degradation-ledger.js";
+import { hasToolConfig } from "./tool-config-presence.js";
 import {
 	hasBlackConfig,
 	hasClangFormatConfig,
@@ -14,17 +15,14 @@ import {
 	hasFantomasConfig,
 	hasGoogleJavaFormatConfig,
 	hasGradleKtlintPlugin,
-	hasGolangciConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasMarkdownlintConfig,
 	hasMixFormatConfig,
 	hasOcamlformatConfig,
 	hasOrmoluConfig,
 	hasPhpCsFixerConfig,
 	hasRubocopConfig,
 	hasRuffConfig,
-	hasSqlfluffConfig,
 	hasStandardrbConfig,
 	hasStyluaConfig,
 	hasSwiftformatConfig,
@@ -109,7 +107,7 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	markdownlint: {
 		bucket: "node-lockfile",
 		withoutEvidence: "decline",
-		check: hasMarkdownlintConfig,
+		check: (cwd) => hasToolConfig("markdownlint", cwd),
 	},
 	oxfmt: { bucket: "node-lockfile", withoutEvidence: "decline" },
 	oxlint: { bucket: "node-lockfile", withoutEvidence: "decline" },
@@ -128,7 +126,7 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	sqlfluff: {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasSqlfluffConfig,
+		check: (cwd) => hasToolConfig("sqlfluff", cwd),
 	},
 	rubocop: {
 		bucket: "project-config",
@@ -163,7 +161,7 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	"golangci-lint": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: hasGolangciConfig,
+		check: (cwd) => hasToolConfig("golangci-lint", cwd),
 	},
 	detekt: {
 		bucket: "project-config",

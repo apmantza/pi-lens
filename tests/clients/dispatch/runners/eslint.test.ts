@@ -34,7 +34,7 @@ vi.mock(
 	}),
 );
 
-// hasEslintConfig walks the real filesystem for config files; the tests plant
+// the eslint config check (`tool-config-presence.ts`) walks the real filesystem for config files; the tests plant
 // their own workspaces without one. Force the gate open — config discovery is
 // not what this suite tests.
 vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({

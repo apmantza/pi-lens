@@ -25,6 +25,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const { safeSpawnAsync, getLinterPolicyForCwd } = vi.hoisted(() => ({
@@ -41,14 +42,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs: () => [],
-	hasEslintConfig: () => true,
-	hasMypyConfig: () => true,
-	hasPhpstanConfig: () => true,
-	// Deliberately false on EVERY platform (not a /dev/null accident): the
-	// no-config branch is what the battery must exercise, stated as intent.
-	hasSqlfluffConfig: () => false,
-	hasStylelintConfig: () => true,
-	hasYamllintConfig: () => true,
 	getAutofixCapability: () => ({
 		toolSupportsFix: false,
 		safePipelineAutofix: false,
@@ -328,6 +321,10 @@ describe("runner-parser garbage battery (#1839)", () => {
 					try {
 						const filePath = path.join(env.tmpDir, "victim.txt");
 						fs.writeFileSync(filePath, "whatever the tool was pointed at\n");
+						// sqlfluff is deliberately left UNCONFIGURED on every platform (not a
+						// /dev/null accident): the no-config branch is what the battery must
+						// exercise, stated as intent.
+						if (runnerId !== "sqlfluff") plantGateConfig(runnerId, env.tmpDir);
 
 						safeSpawnAsync.mockResolvedValue({
 							error: null,

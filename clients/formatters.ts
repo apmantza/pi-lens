@@ -66,7 +66,6 @@ import {
 	getAutoInstallToolIdForFormatter,
 	getFormatterPolicyForFile,
 	getSmartDefaultFormatterName,
-	hasBiomeConfig,
 	hasBlackConfig,
 	hasClangFormatConfig,
 	hasCljfmtConfig,
@@ -88,13 +87,11 @@ import {
 	hasPSScriptAnalyzerConfig,
 	hasRubocopConfig,
 	hasRuffConfig,
-	hasSqlfluffConfig,
 	hasStandardrbConfig,
 	hasStyluaConfig,
 	hasSwiftformatConfig,
 	hasTaploConfig,
 	hasTerraformConfig,
-	hasVitePlusConfig,
 	OXFMT_SUPPORTED_EXTENSIONS,
 } from "./tool-policy.js";
 
@@ -785,7 +782,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 	string,
 	(cwd: string, ext: string) => boolean
 >([
-	["biome", (cwd) => hasBiomeConfig(cwd)],
+	["biome", (cwd) => hasToolConfig("biome", cwd)],
 	[
 		"prettier",
 		(cwd) =>
@@ -803,7 +800,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 			ext === ".svelte"
 				? hasOxfmtSvelteConfig(cwd)
 				: hasOxfmtConfig(cwd) ||
-					hasVitePlusConfig(cwd) ||
+					hasToolConfig("vitePlus", cwd) ||
 					// The published package is `oxfmt`; `@oxc-project/oxfmt` does not
 					// exist on npm. Accept both (scoped kept for forward-compat).
 					hasNearestPackageJsonDependency(cwd, "oxfmt") ||
@@ -811,7 +808,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 	],
 	["ruff", (cwd) => hasRuffConfig(cwd)],
 	["black", (cwd) => hasBlackConfig(cwd)],
-	["sqlfluff", (cwd) => hasSqlfluffConfig(cwd)],
+	["sqlfluff", (cwd) => hasToolConfig("sqlfluff", cwd)],
 	["rubocop", (cwd) => hasRubocopConfig(cwd)],
 	["standardrb", (cwd) => hasStandardrbConfig(cwd)],
 	["clang-format", (cwd) => hasClangFormatConfig(cwd)],
@@ -1016,7 +1013,7 @@ export const biomeFormatter: FormatterInfo = {
 	],
 	async detect(cwd: string) {
 		return (
-			hasBiomeConfig(cwd) ||
+			hasToolConfig("biome", cwd) ||
 			hasNearestPackageJsonDependency(cwd, "@biomejs/biome")
 		);
 	},
@@ -1107,7 +1104,7 @@ export const oxfmtFormatter: FormatterInfo = {
 	// benign-nonzero mode, it stays strict — the safe direction, since the failure
 	// mode of guessing wrong the other way is a silent no-op (#1336).
 	async resolveCommand(filePath, cwd) {
-		if (hasVitePlusConfig(cwd)) {
+		if (hasToolConfig("vitePlus", cwd)) {
 			// No unmatched-pattern flag here: this is `vp`, a different CLI with
 			// its own arguments. Whether `vp fmt` has the same empty-target
 			// behavior is unverified, so nothing is claimed about it.
@@ -1137,7 +1134,7 @@ export const oxfmtFormatter: FormatterInfo = {
 	async detect(cwd: string) {
 		return (
 			hasOxfmtConfig(cwd) ||
-			hasVitePlusConfig(cwd) ||
+			hasToolConfig("vitePlus", cwd) ||
 			// Published package is `oxfmt` (the scoped name does not exist on npm).
 			hasNearestPackageJsonDependency(cwd, "oxfmt") ||
 			hasNearestPackageJsonDependency(cwd, "@oxc-project/oxfmt")
@@ -1205,7 +1202,7 @@ export const sqlfluffFormatter: FormatterInfo = {
 		return null;
 	},
 	async detect(cwd: string) {
-		return hasSqlfluffConfig(cwd);
+		return hasToolConfig("sqlfluff", cwd);
 	},
 };
 

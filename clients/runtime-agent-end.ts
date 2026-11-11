@@ -1,3 +1,4 @@
+import { hasToolConfig } from "./tool-config-presence.js";
 import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
@@ -53,16 +54,11 @@ import {
 } from "./session-scope.js";
 import {
 	getAutofixPolicyForFile,
-	hasBiomeConfig,
 	hasDetektConfig,
-	hasEslintConfig,
-	hasGolangciConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	hasOxlintConfig,
 	hasRubocopConfig,
-	hasSqlfluffConfig,
-	hasStylelintConfig,
 } from "./tool-policy.js";
 
 /**
@@ -545,12 +541,12 @@ export async function handleAgentEnd({
 			continue;
 		}
 		const policy = getAutofixPolicyForFile(filePath, {
-			hasEslintConfig: hasEslintConfig(record.cwd),
-			hasStylelintConfig: hasStylelintConfig(record.cwd),
-			hasSqlfluffConfig: hasSqlfluffConfig(record.cwd),
+			hasEslintConfig: hasToolConfig("eslint", record.cwd),
+			hasStylelintConfig: hasToolConfig("stylelint", record.cwd),
+			hasSqlfluffConfig: hasToolConfig("sqlfluff", record.cwd),
 			hasRubocopConfig: hasRubocopConfig(record.cwd),
-			hasBiomeConfig: hasBiomeConfig(record.cwd),
-			hasGolangciConfig: hasGolangciConfig(record.cwd),
+			hasBiomeConfig: hasToolConfig("biome", record.cwd),
+			hasGolangciConfig: hasToolConfig("golangci-lint", record.cwd),
 			hasDetektConfig: hasDetektConfig(record.cwd),
 			hasOxlintConfig: hasOxlintConfig(record.cwd),
 			hasKtfmtConfig: hasKtfmtConfig(record.cwd),
