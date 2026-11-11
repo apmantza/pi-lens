@@ -54,6 +54,7 @@
 		"clients/lsp/partial-message-timer.test.ts": 1,
 		"clients/lsp/powershell-bom-wire-5151.integration.test.ts": 2,
 		"clients/lsp/refresh-and-sync-kind.test.ts": 4,
+		"clients/lsp/server-status-readiness-5487.test.ts": 2,
 		"clients/lsp/service-notify-cpu-liveness.test.ts": 2,
 		"clients/lsp/service-notify-inflight-throttle-real-stream.test.ts": 2,
 		"clients/lsp/service-rename-file.test.ts": 2,

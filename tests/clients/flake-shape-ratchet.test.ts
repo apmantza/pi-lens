@@ -978,6 +978,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/server-status-readiness-5487.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
 	"real-process-spawn:clients/lsp/service-notify-cpu-liveness.test.ts": {
 		detector: "real-process-spawn",
 		reason:

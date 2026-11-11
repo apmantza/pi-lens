@@ -29,39 +29,33 @@ import {
 	getDegradationSummary,
 	resetDegradationLedger,
 } from "../../../clients/degradation-ledger.js";
+import {
+	clearLatencyLog,
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../../../clients/latency-logger.js";
 import { _setServersForFileForTests } from "../../../clients/lsp/config.js";
 import { LSPService } from "../../../clients/lsp/index.js";
 import type { LSPProcess } from "../../../clients/lsp/launch.js";
 import { spawnFakeLspServer } from "../../support/fake-lsp-server.js";
+import { readNdjsonRows } from "../../support/ndjson-rows.js";
+import { waitFor } from "../interleaving-kit.js";
 import { removeTempDirSync } from "../test-utils.js";
 
-const { getServersForFileWithConfig, latencyEvents } = vi.hoisted(() => ({
+const { getServersForFileWithConfig } = vi.hoisted(() => ({
 	getServersForFileWithConfig: vi.fn(),
-	latencyEvents: [] as Array<Record<string, unknown>>,
 }));
-// Observe the rows the runtime writes; `getRecentLoggedPhases` keeps only the
-// last five, which a touch's own rows push the gated row out of.
-vi.mock("../../../clients/latency-logger.js", async (importOriginal) => {
-	const actual =
-		await importOriginal<typeof import("../../../clients/latency-logger.js")>();
-	return {
-		...actual,
-		logLatency: vi.fn((event: Record<string, unknown>) => {
-			latencyEvents.push(event);
-		}),
-	};
-});
 
 /** The fixture finds an error in any document without this marker. */
 const DIRTY = "let v: Vec<i32> = 1;\n";
 const CLEAN = "// fake-lsp-clean\nfn main() {}\n";
 
-function gatedRows() {
-	return latencyEvents.filter(
-		(entry) => entry.phase === "lsp_server_loading_gated",
-	) as Array<{
-		metadata?: Record<string, unknown>;
-	}>;
+/** The durable `latency.log` rows of the gated phase, drained first (shape 67). */
+async function gatedRows() {
+	await flushLatencyLog();
+	return readNdjsonRows<{ phase?: string; metadata?: Record<string, unknown> }>(
+		getLatencyLogPath(),
+	).rows.filter((row) => row.phase === "lsp_server_loading_gated");
 }
 
 function gatedLedgerCount(): number {
@@ -76,6 +70,17 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 	let tmp: string;
 	let service: LSPService;
 	const procs: LSPProcess[] = [];
+	// The durable sink is off in test mode; the rows case turns it on.
+	let restoreTestMode = () => {};
+	const writeDurableLatencyRows = () => {
+		const previous = process.env.PI_LENS_TEST_MODE;
+		process.env.PI_LENS_TEST_MODE = "0";
+		restoreTestMode = () => {
+			if (previous === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = previous;
+			restoreTestMode = () => {};
+		};
+	};
 
 	beforeEach(() => {
 		_setServersForFileForTests(getServersForFileWithConfig);
@@ -84,10 +89,12 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 		);
 		resetDegradationLedger();
 		resetBoundedTelemetry();
-		latencyEvents.length = 0;
+		clearLatencyLog();
 		service = new LSPService();
 	});
 	afterEach(async () => {
+		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		restoreTestMode();
 		await service.shutdown();
 		procs.length = 0;
 		removeTempDirSync(tmp);
@@ -183,6 +190,8 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 	// The recurrence guard for observability: many gated pulls, one record per
 	// server per session, every occurrence counted in the ledger.
 	it("writes one gated record per server per session while the ledger counts every occurrence", async () => {
+		writeDurableLatencyRows();
+		clearLatencyLog();
 		const filePath = register({
 			FAKE_LSP_LOADING_MS: "20000",
 			FAKE_LSP_LOADING_REFRESH: "1",
@@ -191,8 +200,9 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 		await touch(filePath, DIRTY, { maxDiagnosticsWaitMs: 400 });
 		await touch(filePath, `${DIRTY}// again\n`, { maxDiagnosticsWaitMs: 400 });
 
-		expect(gatedRows()).toHaveLength(1);
-		expect(gatedRows()[0]?.metadata).toMatchObject({
+		const rows = await gatedRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.metadata).toMatchObject({
 			serverId: "fake-rust",
 			quiescent: false,
 		});
@@ -259,7 +269,7 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 
 		expect(result?.diags).toEqual([]);
 		expect(result?.confirmation).toBe("confirmed");
-		expect(gatedRows()).toHaveLength(0);
+		expect(await gatedRows()).toHaveLength(0);
 		expect(gatedLedgerCount()).toBe(0);
 	}, 30_000);
 
@@ -273,29 +283,31 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 		const result = await touch(filePath, DIRTY);
 
 		expect(result?.confirmation).toBe("confirmed");
-		expect(gatedRows()).toHaveLength(0);
+		expect(await gatedRows()).toHaveLength(0);
 	}, 30_000);
 
 	// The server dies while the wait is held on its quiescence: the wait ends
 	// with the connection, not at its budget, and the touch is not clean.
 	it("ends the wait when the server dies while loading", async () => {
+		// The flat env cap is the touch budget (a strategy row's 1500 ms would end
+		// the wait first and hide the dead-connection exit).
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "60000";
 		const filePath = register({ FAKE_LSP_LOADING_MS: "20000" });
-		const pending = touch(filePath, DIRTY, { maxDiagnosticsWaitMs: 15_000 });
-		await vi.waitFor(() => expect(procs).toHaveLength(1), { timeout: 10_000 });
-		await vi.waitFor(() => expect(gatedLedgerCount()).toBeGreaterThan(0), {
-			timeout: 10_000,
+		let result: Awaited<ReturnType<typeof touch>> | undefined;
+		let settled = false;
+		const pending = touch(filePath, DIRTY);
+		void pending.then((value) => {
+			result = value;
+			settled = true;
 		});
+		await waitFor(() => procs.length === 1 && gatedLedgerCount() > 0, Boolean, {
+			timeoutMs: 10_000,
+		});
+		expect(settled).toBe(false);
 		procs[0].process.kill("SIGKILL");
 
-		const outcome = await Promise.race([
-			pending.then((result) => ({ result })),
-			new Promise<{ result: "budget" }>((resolve) =>
-				setTimeout(() => resolve({ result: "budget" }), 12_000),
-			),
-		]);
-
-		expect(outcome.result).not.toBe("budget");
-		const result = outcome.result as Awaited<typeof pending>;
+		// The touch budget is 60 s; the wait must end with the connection.
+		await waitFor(() => settled, Boolean, { timeoutMs: 10_000 });
 		expect(result?.confirmation).not.toBe("confirmed");
 		expect(result?.diags).toEqual([]);
 	}, 40_000);

@@ -670,6 +670,8 @@ export const wallClockBudgetInclude = [
 	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
 	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
 	"tests/clients/lsp/refresh-and-sync-kind.test.ts",
+	// #5487: the readiness notice, the empty pull and the empty publish of a loading server arrive over a real fixture-server stdio stream; the same #1022/#2332 handshake contention class as its lane siblings.
+	"tests/clients/lsp/server-status-readiness-5487.test.ts",
 	// #2765 round 3: fake timers exercise the live hook remainder after delayed
 	// pre-snapshot work; keep the admission beside the timer-based regression.
 	"tests/clients/lsp/service-inconclusive-per-server.test.ts",
