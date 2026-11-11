@@ -328,6 +328,9 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 	// server's message.
 	it("reports a failed workspace load as inconclusive with the server's message, at once", async () => {
 		writeDurableLatencyRows();
+		// The flat env cap is the touch budget (a strategy row's 1500 ms would
+		// end the wait first and hide whether a failed load is waited on).
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "60000";
 		const filePath = register({
 			FAKE_LSP_LOADING_MS: "200",
 			FAKE_LSP_LOADING_HEALTH: "error",
