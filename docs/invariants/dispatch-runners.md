@@ -67,7 +67,13 @@
 - The one exception to that boundary is a linked worktree of the session's own repository (same git commondir, different top level, `resolveLinkedWorktreeOwner` in `clients/review-graph/git-identity.ts`, #3871): turn_end selects and runs its tests with that worktree's root as the project root (`clients/test-target-roots.ts`), so config, `node_modules` and the failed-first state are the worktree's own. A worktree root without its own runner install (no `node_modules/.bin`, venv or `vendor/bin`) is skipped with a counted `turn-end-test-root-skipped` row rather than run through `npx` or a bare interpreter; a reported location is rebased through `displayRoot` using the runner cwd first, then the dispatch root, only when that file exists, and otherwise remains as printed. A sibling worktree's file is still foreign to every other root. Python's ambient `VIRTUAL_ENV`, `CONDA_PREFIX`, or absolute `UV_PROJECT_ENVIRONMENT` is accepted for the session checkout, and for a linked worktree only when the environment root is inside that checkout; a skipped pytest row says that ambient environments were not borrowed when one is set. The edit worklist is the session's project worklist (#2504), so a session whose cwd is itself a linked worktree never sees an edit in the main checkout or a sibling and runs only its own tests. Each turn that edited files writes one `turn_end_test_selection` record to `latency.log` (candidates, selected, why not, and selected/candidates per owning root; first 8 roots, the rest in `rootsOmitted`; `selected` includes carried deferred targets, which no candidate bucket counts, so per-root `selected` can sum below it; one row of about 570 B per edit turn with candidates, bounded by log rotation only), so a turn with 0 tests is explained without the dbg lines the MCP route drops.
 - Managed tools resolve through the registry and sanctioned availability seams.
   Do not hand-roll install, PATH, or package-manager discovery. Use typed
-  `SpawnFailure.kind`; repair only `tool-not-found`.
+  `SpawnFailure.kind`; repair only `tool-not-found`. A tool that has a
+  `TOOL_COMMAND_SPECS` row resolves for runners and formatters alike through one
+  ladder (`resolveToolCommandWithInstallFallback`, or
+  `resolveInstalledToolCommand` where the caller owns the install decision): the
+  trusted project's `.venv` or `node_modules/.bin` at exactly the project root,
+  never a parent directory's, then the managed install, then PATH with a
+  version check, one latch per root (#5410).
 - Windows LSP startup exit-code-1 failures are repairable only when the shared
   command resolver finds no command or an npm shim target is absent; present
   binaries that exit 1 remain runtime failures (#4263, #1199). The launch and
