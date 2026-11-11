@@ -154,6 +154,57 @@ describe("formatter ancestor venv (#5410 run-a)", () => {
 		).toContain("format");
 	});
 
+	// The formatter rides the checker's latch, so a trust grant mid-session
+	// reaches it as it reaches the runners (#4530, #5437): the project's own
+	// venv is refused while pi has not trusted the project and used after.
+	it("ruff: the project's own .venv ruff runs once pi trusts the project mid-session", async () => {
+		const app = path.join(root, "app");
+		const ownRuff = plant(path.join(app, ".venv", "bin", "ruff"), GOOD);
+		fs.writeFileSync(path.join(app, "pyproject.toml"), "[tool.ruff]\n");
+		const file = path.join(app, "main.py");
+		fs.writeFileSync(file, "def f():\n    return 1\n");
+		const trust = await import("../../clients/project-trust.js");
+		const { formatFile, ruffFormatter } =
+			await import("../../clients/formatters.js");
+
+		trust.setProjectTrustState("untrusted");
+		await formatFile(file, ruffFormatter);
+		expect(spawnCalls.some((call) => call.cmd === ownRuff)).toBe(false);
+
+		trust.setProjectTrustState("trusted");
+		await formatFile(file, ruffFormatter);
+		expect(
+			spawnCalls
+				.filter((call) => call.cmd === ownRuff)
+				.map((call) => call.args[0]),
+		).toEqual(["--version", "format"]);
+	});
+
+	// One latch per cwd: the formatter and the runner resolve one tool, so the
+	// version probe runs once between them, not once each.
+	it("ruff: the formatter and the runner share one version probe", async () => {
+		const app = path.join(root, "app");
+		const ownRuff = plant(path.join(app, ".venv", "bin", "ruff"), GOOD);
+		fs.writeFileSync(path.join(app, "pyproject.toml"), "[tool.ruff]\n");
+		const file = path.join(app, "main.py");
+		fs.writeFileSync(file, "def f():\n    return 1\n");
+		const { ruffFormatter } = await import("../../clients/formatters.js");
+		const { resolveToolCommandWithInstallFallback } =
+			await import("../../clients/dispatch/runners/utils/runner-helpers.js");
+
+		await ruffFormatter.resolveCommand!(file, app);
+		expect(await resolveToolCommandWithInstallFallback(app, "ruff")).toBe(
+			ownRuff,
+		);
+		await ruffFormatter.resolveCommand!(file, app);
+
+		expect(
+			spawnCalls.filter(
+				(call) => call.cmd === ownRuff && call.args[0] === "--version",
+			),
+		).toHaveLength(1);
+	});
+
 	it.each([
 		["black", "blackFormatter", "unavailable"],
 		["sqlfluff", "sqlfluffFormatter", null],
@@ -196,6 +247,7 @@ describe("formatter binary order (#5410 run-f)", () => {
 			"class A {}\n",
 		],
 		["cljfmt", "cljfmtFormatter", "core.clj", "(ns core)\n"],
+		["php-cs-fixer", "phpCsFixerFormatter", "main.php", "<?php\n"],
 	] as const;
 
 	async function resolve(
@@ -234,6 +286,25 @@ describe("formatter binary order (#5410 run-f)", () => {
 			expect(Array.isArray(cmd) ? cmd[0] : cmd).toBe(managed);
 		},
 	);
+
+	// oxfmt is an npm tool: its managed copy is a shim under the tools tree,
+	// not a release binary, so the row sits outside the table above.
+	it("oxfmt: a broken PATH binary does not shadow the working managed shim", async () => {
+		plant(path.join(pathDir, "oxfmt"), BROKEN);
+		const shim = plant(
+			path.join(home, "tools", "node_modules", ".bin", "oxfmt"),
+			GOOD,
+		);
+		const project = path.join(root, "proj");
+		fs.mkdirSync(project, { recursive: true });
+		const file = path.join(project, "main.ts");
+		fs.writeFileSync(file, "const x = 1;\n");
+		const { oxfmtFormatter } = await import("../../clients/formatters.js");
+
+		const cmd = await oxfmtFormatter.resolveCommand!(file, project);
+
+		expect(Array.isArray(cmd) ? cmd[0] : cmd).toBe(shim);
+	});
 
 	it.each(ROWS)(
 		"%s: a working PATH binary still runs when nothing is managed",
