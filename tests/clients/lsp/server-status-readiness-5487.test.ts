@@ -71,15 +71,8 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 	let service: LSPService;
 	const procs: LSPProcess[] = [];
 	// The durable sink is off in test mode; the rows case turns it on.
-	let restoreTestMode = () => {};
 	const writeDurableLatencyRows = () => {
-		const previous = process.env.PI_LENS_TEST_MODE;
-		process.env.PI_LENS_TEST_MODE = "0";
-		restoreTestMode = () => {
-			if (previous === undefined) delete process.env.PI_LENS_TEST_MODE;
-			else process.env.PI_LENS_TEST_MODE = previous;
-			restoreTestMode = () => {};
-		};
+		vi.stubEnv("PI_LENS_TEST_MODE", "0");
 	};
 
 	beforeEach(() => {
@@ -94,7 +87,7 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 	});
 	afterEach(async () => {
 		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
-		restoreTestMode();
+		vi.unstubAllEnvs();
 		await service.shutdown();
 		procs.length = 0;
 		removeTempDirSync(tmp);
@@ -227,7 +220,7 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 
 	// The whole loading window passes inside one pull's flight: status false,
 	// status true, then the empty reply it computed while loading. No status reads
-	// loading when the reply is processed, so only the changed epoch tells the
+	// loading when the reply is processed, so only the changed revision tells the
 	// reply was not given by a ready server.
 	it("distrusts an empty reply that was in flight across a status change", async () => {
 		const filePath = register({

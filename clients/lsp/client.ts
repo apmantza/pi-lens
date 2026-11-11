@@ -1333,12 +1333,12 @@ export interface LSPClientState {
 	 * `experimental/serverStatus` (rust-analyzer), or `undefined` when it has
 	 * announced none: every other server, and rust-analyzer before its first
 	 * notice. `quiescent: false` is "still loading the workspace": its pull
-	 * replies are empty authoritative reports, not verdicts. `epoch` counts the
-	 * changes (the first notice is epoch 1), so a pull that was in flight across
+	 * replies are empty authoritative reports, not verdicts. `revision` counts the
+	 * changes (the first notice is revision 1), so a pull that was in flight across
 	 * a change is told apart from one that was not. Per client session: a
 	 * respawned server announces its own.
 	 */
-	serverStatus?: { quiescent: boolean; epoch: number };
+	serverStatus?: { quiescent: boolean; revision: number };
 	/**
 	 * #3310: whether this client's ONE-SHOT empty-first-publish hold has been
 	 * spent. Only ever set for a server the matrix measures as
@@ -3705,7 +3705,10 @@ export function setupIncomingHandlers(
 			if (typeof quiescent !== "boolean") return;
 			const previous = state.serverStatus;
 			if (previous?.quiescent === quiescent) return;
-			state.serverStatus = { quiescent, epoch: (previous?.epoch ?? 0) + 1 };
+			state.serverStatus = {
+				quiescent,
+				revision: (previous?.revision ?? 0) + 1,
+			};
 			state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
 		},
 	);
@@ -4830,7 +4833,7 @@ function pullAnswerIsSettled(
 	sentAt: LSPClientState["serverStatus"],
 ): boolean {
 	const now = state.serverStatus;
-	return sentAt?.epoch === now?.epoch && now?.quiescent !== false;
+	return sentAt?.revision === now?.revision && now?.quiescent !== false;
 }
 
 /** #5487: a full pull report with no finding anywhere in it. */
@@ -4925,7 +4928,7 @@ function noteReadinessGate(state: LSPClientState): void {
 			metadata: {
 				serverId: state.serverId,
 				quiescent: state.serverStatus?.quiescent,
-				epoch: state.serverStatus?.epoch,
+				revision: state.serverStatus?.revision,
 			},
 		},
 		{

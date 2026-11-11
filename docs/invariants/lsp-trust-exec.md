@@ -215,6 +215,19 @@
   confirm, or a server that republished for the file after the edit) keeps its
   verdict. A client that cannot date its cache reports no reuse and keeps the
   pre-#5040 verdict.
+- A server that announces its readiness is not asked for a verdict before it
+  is ready. The client advertises `experimental.serverStatusNotification` and
+  records the `quiescent` flag with a change revision (`LSPClientState.serverStatus`,
+  `clients/lsp/client.ts`). An empty pull report from a server that was loading
+  when the request left, or whose readiness changed while it was in flight, is
+  never stored as an answer (`pullDiagnosticSource`, the one primitive touch,
+  refresh re-pulls and sweeps share); an empty `publishDiagnostics` received
+  while `quiescent` is false is dropped; the touch's first pull waits for
+  quiescence inside the touch budget (`pullDiagnosticsWhenReady`). A touch whose
+  budget lapses on a loading server is inconclusive with reason `server-loading`
+  (`resolveTouchVerdict`), never clean. A server that announces nothing, or a
+  notice without a boolean `quiescent`, is unchanged: the gate keys on what the
+  server announced, never on a server id or a strategy row.
 - Document line addressing has one owner, `clients/lsp/content-scan.ts`: the
   `\n` count behind the `lsp_document_send` record's `contentLineCount` and the
   LSP sync bound (`countLfNewlines`), the last LSP-addressable line an

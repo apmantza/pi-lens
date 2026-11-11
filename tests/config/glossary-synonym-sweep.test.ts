@@ -1896,7 +1896,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lens-engine.ts": 4,
 		"clients/lsp-mutation.ts": 7,
 		"clients/lsp/client-registry.ts": 1,
-		"clients/lsp/client.ts": 31,
+		// 31 -> 34 (#5487): the readiness gate reads and returns the existing
+		// `PullDiagnosticsOutcome.status` member (found / unavailable) at three
+		// sites; same member sense as every row here.
+		"clients/lsp/client.ts": 34,
 		"clients/lsp/edits.ts": 1,
 		"clients/lsp/index.ts": 4,
 		"clients/lsp/jvm-runtime.ts": 1,
