@@ -153,8 +153,8 @@ export const FORMATTER_AGREEMENT_UNAVAILABLE =
  * failed outcome that carries the probe's stderr (#3312), never "not found".
  * A string sentinel like its siblings, with the message after the prefix.
  */
-export const FORMATTER_REJECTED_PREFIX = "formatter-rejected:" as const;
-export type FormatterRejected = `${typeof FORMATTER_REJECTED_PREFIX}${string}`;
+const FORMATTER_REJECTED_PREFIX = "formatter-rejected:" as const;
+export type FormatterRejected = `formatter-rejected:${string}`;
 export type ResolvedFormatterCommand =
 	| string[]
 	| null
