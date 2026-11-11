@@ -27,8 +27,18 @@ full suite) skips no test job: the Unit shards and every
 other test job always run, because a docs edit can red tests outside tests/config
 (`docs/public-api-stability.md`, `docs/*_rules_catalog.md`). The one exception
 is the three `Install test` legs: outside `INSTALL_PATHS` in that script
-they report success without installing, and `Strict install` and the macOS APFS
-step run on non-pull_request events only. On a pull request, `TLA+ models`
+they report success without installing, and the macOS APFS step runs on
+non-pull_request events only. `Strict install (cold npm cache) (fast-fail)` is
+its own workflow, `strict-install.yml` (#5002), triggered by a push to `master`
+and `workflow_dispatch` and by nothing else: no `pull_request`, so a pull
+request shows no skipped row for it, and no `merge_group`, so the merge queue and
+the bot-PR dispatch of `ci.yml` (docs/ci-bot-pr-checks.md) do not run it. A
+pull request that changes the manifests still gets a strict install through
+`install-smoke.yml`'s `npm-strict`. ci-verdict reads the row as a non-required,
+non-advisory row: absent on a pull request, and a manual dispatch on a branch
+reads as advisory unless the PR author is a bot (#4090, #5062).
+
+On a pull request, `TLA+ models`
 model-checks only when `formal/` (or its checker or ci.yml) changed: its shards
 skip at job level and the aggregate still reports. Push and merge-queue runs
 always model-check (`changes` sets `formal=true` for every non-PR event). A REQUIRED job never skips at
