@@ -297,6 +297,13 @@ export interface LSPCallHierarchyOutgoingCall {
 	fromRanges: LSPLocation["range"][];
 }
 
+/** #5487: what a server's own readiness announcement says blocks a verdict. */
+export interface ServerReadinessBlock {
+	reason: "server-loading" | "server-load-failed";
+	/** The server's status message for a failed load, when it sent one. */
+	detail?: string;
+}
+
 export interface LSPClientInfo {
 	serverId: string;
 	root: string;
@@ -345,12 +352,14 @@ export interface LSPClientInfo {
 	 */
 	pingLiveness?: (timeoutMs?: number) => Promise<boolean>;
 	/**
-	 * #5487: true while the server has announced it is still loading
-	 * (`experimental/serverStatus` with `quiescent: false`). Optional for the
-	 * same reason as {@link pingLiveness}: a double that omits it reads as "not
-	 * loading", which is today's behaviour.
+	 * #5487: why the server has announced it cannot give a verdict right now
+	 * (`experimental/serverStatus`): still loading (`quiescent: false`) or its
+	 * workspace failed to load (`health: "error"`, with the server's message).
+	 * `undefined` when it announced nothing or is ready. Optional for the same
+	 * reason as {@link pingLiveness}: a double that omits it reads as "ready",
+	 * which is today's behaviour.
 	 */
-	isServerLoading?: () => boolean;
+	readinessBlock?: () => ServerReadinessBlock | undefined;
 	/**
 	 * #2358: the OS pid of the server's live process tree (the direct child;
 	 * on Windows a `cmd`/`.cmd` shim's pid, whose real descendant does the
@@ -1338,7 +1347,14 @@ export interface LSPClientState {
 	 * a change is told apart from one that was not. Per client session: a
 	 * respawned server announces its own.
 	 */
-	serverStatus?: { quiescent: boolean; revision: number };
+	serverStatus?: {
+		quiescent: boolean;
+		/** `health: "error"`: the workspace failed to load (`warning` is ready). */
+		failed: boolean;
+		/** The server's message for a failed load, bounded. */
+		message?: string;
+		revision: number;
+	};
 	/**
 	 * #3310: whether this client's ONE-SHOT empty-first-publish hold has been
 	 * spent. Only ever set for a server the matrix measures as
@@ -2261,6 +2277,8 @@ const PENDING_RECEIPT_DROPPED = "pending-receipt-dropped";
  * a pull gated on quiescence ({@link pullDiagnosticsWhenReady}) decides again.
  */
 const SERVER_STATUS_CHANGED = "server-status-changed";
+/** Bound on a server's failed-load message kept on the client and echoed. */
+const SERVER_STATUS_MESSAGE_MAX_CHARS = 200;
 
 /** #5131: see {@link LSPClientState.ownNoticeEchoes}. */
 export interface OwnNoticeEcho {
@@ -3137,7 +3155,7 @@ export function setupIncomingHandlers(
 			// analyzed yet). Refused before storage like the case above, so the wait
 			// and the touch's evidence check never see a clean answer; the findings
 			// it publishes once quiescent are stored as usual.
-			if (newDiags.length === 0 && state.serverStatus?.quiescent === false) {
+			if (newDiags.length === 0 && serverNotReady(state)) {
 				noteReadinessGate(state);
 				return;
 			}
@@ -3697,16 +3715,33 @@ export function setupIncomingHandlers(
 	});
 	// #5487: the readiness announcement (see CLIENT_CAPABILITIES.experimental).
 	// Only a boolean `quiescent` is a status; anything else is ignored, so a
-	// malformed notice never reads as ready or as loading.
+	// malformed notice never reads as ready or as loading. `health: "error"` is
+	// a workspace that failed to load (a broken manifest): its pull answers are
+	// as empty as a loading server's, so it is not ready either. `warning` and
+	// `ok` are ready.
 	state.connection.onNotification(
 		"experimental/serverStatus",
-		(params: { quiescent?: unknown } | undefined) => {
+		(
+			params:
+				| { quiescent?: unknown; health?: unknown; message?: unknown }
+				| undefined,
+		) => {
 			const quiescent = params?.quiescent;
 			if (typeof quiescent !== "boolean") return;
+			const failed = params?.health === "error";
+			const message =
+				failed && typeof params?.message === "string"
+					? params.message.slice(0, SERVER_STATUS_MESSAGE_MAX_CHARS)
+					: undefined;
 			const previous = state.serverStatus;
-			if (previous?.quiescent === quiescent) return;
+			if (previous?.quiescent === quiescent && previous.failed === failed) {
+				if (message !== undefined) previous.message = message;
+				return;
+			}
 			state.serverStatus = {
 				quiescent,
+				failed,
+				...(message !== undefined && { message }),
 				revision: (previous?.revision ?? 0) + 1,
 			};
 			state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
@@ -4833,22 +4868,44 @@ function pullAnswerIsSettled(
 	sentAt: LSPClientState["serverStatus"],
 ): boolean {
 	const now = state.serverStatus;
-	return sentAt?.revision === now?.revision && now?.quiescent !== false;
+	return (
+		sentAt?.revision === now?.revision &&
+		now?.quiescent !== false &&
+		now?.failed !== true
+	);
 }
 
-/** #5487: a full pull report with no finding anywhere in it. */
-function reportCarriesNothing(report: {
-	kind?: string;
-	items?: unknown[];
-	relatedDocuments?: Record<string, { items?: unknown[] }>;
-}): boolean {
+/** #5487: loading or failed to load: no pull answer is a verdict yet. */
+function serverNotReady(state: LSPClientState): boolean {
 	return (
-		report.kind !== "unchanged" &&
-		(report.items?.length ?? 0) === 0 &&
-		Object.values(report.relatedDocuments ?? {}).every(
-			(related) => (related?.items?.length ?? 0) === 0,
-		)
+		state.serverStatus?.quiescent === false || !!state.serverStatus?.failed
 	);
+}
+
+/** #5487: the {@link LSPClientInfo.readinessBlock} answer for one client. */
+function readinessBlockOf(
+	state: LSPClientState,
+): ServerReadinessBlock | undefined {
+	const status = state.serverStatus;
+	if (status?.quiescent === false) return { reason: "server-loading" };
+	if (status?.failed) {
+		return {
+			reason: "server-load-failed",
+			...(status.message !== undefined && { detail: status.message }),
+		};
+	}
+	return undefined;
+}
+
+/**
+ * #5487: a pull report with no finding for the requested document. Decided on
+ * that document's `items` alone: a loading server's `relatedDocuments` entry
+ * says nothing about the file asked about, and an `unchanged` report (no
+ * `items`) from an unsettled server is no answer either, so both are refused
+ * with the empty ones and asked again once the server is ready.
+ */
+function reportCarriesNothing(report: { items?: unknown[] }): boolean {
+	return (report.items?.length ?? 0) === 0;
 }
 
 /**
@@ -4898,6 +4955,13 @@ async function pullDiagnosticsWhenReady(
 			outcome.status === "unavailable" &&
 			isClientAlive(state);
 		if (settled && !retryAfterBeat) return outcome;
+		// A workspace that failed to load stays failed until the user fixes it:
+		// waiting out the budget for it would charge every touch the whole wait
+		// for nothing. The caller reports it at once (`readinessBlock`).
+		if (state.serverStatus?.failed && state.serverStatus.quiescent !== false) {
+			noteReadinessGate(state);
+			return PULL_UNSETTLED;
+		}
 		const remainingMs = deadlineAt - Date.now();
 		if (remainingMs <= 0) return PULL_UNSETTLED;
 		if (retryAfterBeat) {
@@ -4919,21 +4983,31 @@ async function pullDiagnosticsWhenReady(
  * without a record per touch.
  */
 function noteReadinessGate(state: LSPClientState): void {
+	const status = state.serverStatus;
+	const loadFailed = status?.failed === true && status.quiescent !== false;
 	emitBounded(
 		"lsp_server_loading_gated",
-		state.serverId,
+		// A failed load is its own rising edge: a server that failed after it
+		// finished loading still gets its record.
+		loadFailed ? `${state.serverId}:load-failed` : state.serverId,
 		{
 			filePath: state.root,
 			durationMs: 0,
 			metadata: {
 				serverId: state.serverId,
-				quiescent: state.serverStatus?.quiescent,
-				revision: state.serverStatus?.revision,
+				quiescent: status?.quiescent,
+				revision: status?.revision,
+				...(loadFailed && {
+					loadFailed: true,
+					...(status?.message !== undefined && { message: status.message }),
+				}),
 			},
 		},
 		{
 			ledgerKind: "lsp-server-loading-gated",
-			reason: `${state.serverId}: pull held to the server's announced readiness`,
+			reason: loadFailed
+				? `${state.serverId}: workspace failed to load${status?.message ? ` (${status.message})` : ""}`
+				: `${state.serverId}: pull held to the server's announced readiness`,
 			risingEdgePer: "identity",
 		},
 	);
@@ -6219,6 +6293,10 @@ async function clientShutdownOnce(
 	// #271: drop any pending watched-files batch + its timer (a dying client's
 	// queued FS changes are moot, and the timer must not outlive the connection).
 	state.watchQueue?.cancel();
+	// #5487: wake a wait held on this server's readiness before the listeners
+	// go (it re-reads `isClientAlive`, now false), or a touch outlives the
+	// shutdown by its whole budget.
+	state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
 	state.diagnosticEmitter.removeAllListeners();
 	let shutdownRequestTimedOut = false;
 	let exitNotifyTimedOut = false;
@@ -7589,7 +7667,7 @@ export async function createLSPClient(options: {
 		pingLiveness: (timeoutMs?: number) => clientPingLiveness(state, timeoutMs),
 
 		/** #5487: the server announced it is still loading (see interface doc). */
-		isServerLoading: () => state.serverStatus?.quiescent === false,
+		readinessBlock: () => readinessBlockOf(state),
 
 		/** #2358: the OS pid of the live server process (see interface doc). */
 		getProcessPid: () => lspProcess.pid,

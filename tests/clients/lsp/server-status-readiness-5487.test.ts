@@ -319,4 +319,166 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 		expect(result?.confirmation).not.toBe("confirmed");
 		expect(result?.diags).toEqual([]);
 	}, 40_000);
+
+	// Recurrence (review of #5495, F1): rust-analyzer reports a workspace it
+	// could not load (a broken Cargo.toml) as `health:"error"` with
+	// `quiescent:true`, and answers every pull empty. The client read that as a
+	// ready server's clean file. The failure is its own reason, reported at
+	// once (no budget is spent waiting for a manifest nobody is fixing), with the
+	// server's message.
+	it("reports a failed workspace load as inconclusive with the server's message, at once", async () => {
+		writeDurableLatencyRows();
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "200",
+			FAKE_LSP_LOADING_HEALTH: "error",
+		});
+		const started = Date.now();
+		const first = await touch(filePath, DIRTY, {
+			maxDiagnosticsWaitMs: 20_000,
+		});
+		const elapsedMs = Date.now() - started;
+
+		expect(first?.diags).toEqual([]);
+		expect(first?.inconclusive).toBe(true);
+		expect(first?.inconclusiveReason).toBe("server-load-failed");
+		expect(first?.inconclusiveDetail).toBe("Failed to load workspaces.");
+		expect(first?.confirmation).not.toBe("confirmed");
+		// Loading takes 200 ms; the 20 s budget is not spent on a failed load.
+		expect(elapsedMs).toBeLessThan(8_000);
+
+		// A second touch is as inconclusive, and the session has ONE failure record.
+		const second = await touch(filePath, CLEAN, {
+			maxDiagnosticsWaitMs: 20_000,
+		});
+		expect(second?.inconclusiveReason).toBe("server-load-failed");
+		const failedRows = (await gatedRows()).filter(
+			(row) => row.metadata?.loadFailed === true,
+		);
+		expect(failedRows).toHaveLength(1);
+		expect(failedRows[0]?.metadata).toMatchObject({
+			serverId: "fake-rust",
+			message: "Failed to load workspaces.",
+		});
+	}, 40_000);
+
+	// `health:"warning"` is a ready server (rust-analyzer says so for proc-macro
+	// and build-script problems): its answers stay verdicts.
+	it("treats health warning as ready", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "200",
+			FAKE_LSP_LOADING_HEALTH: "warning",
+		});
+		const result = await touch(filePath, DIRTY);
+
+		expect(result?.diags).toEqual([
+			expect.objectContaining({ code: "FAKE1001" }),
+		]);
+		expect(result?.inconclusive).not.toBe(true);
+		expect(result?.confirmation).toBe("confirmed");
+	}, 30_000);
+
+	// Recurrence (review of #5495, F6): a loading server's empty report that
+	// carries a finding for ANOTHER document (`relatedDocuments`) was stored as
+	// the answer and the file read clean while the server was loading.
+	it("does not confirm a loading server's empty report because it carries a related finding", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "20000",
+			FAKE_LSP_LOADING_RELATED: "1",
+		});
+		const result = await touch(filePath, DIRTY, { maxDiagnosticsWaitMs: 600 });
+
+		expect(result?.inconclusive).toBe(true);
+		expect(result?.inconclusiveReason).toBe("server-loading");
+		expect(result?.confirmation).not.toBe("confirmed");
+	}, 30_000);
+
+	// Recurrence (review of #5495, F2, mutation M3): only EMPTY publishes from a
+	// loading server are refused. A finding it pushes while loading is evidence
+	// and must reach the touch; dropping every publish would hide it.
+	it("keeps a finding a loading server pushes", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "20000",
+			FAKE_LSP_LOADING_PUSH_FINDING: "1",
+		});
+		const result = await touch(filePath, DIRTY, { maxDiagnosticsWaitMs: 600 });
+
+		expect(result?.diags).toEqual([
+			expect.objectContaining({ code: "LOADPUSH1" }),
+		]);
+	}, 30_000);
+
+	// Recurrence (review of #5495, F2, mutation M5): a lapse is named
+	// `server-loading` only for a server that announced loading. A non-announcer
+	// that never answers is a plain diagnostics-wait lapse.
+	it("does not call a silent non-announcer's lapse a loading one", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "20000",
+			FAKE_LSP_LOADING_NO_STATUS: "1",
+			FAKE_LSP_IGNORE_PULL: "1",
+		});
+		const result = await touch(filePath, DIRTY, { maxDiagnosticsWaitMs: 600 });
+
+		expect(result?.inconclusive).toBe(true);
+		expect(result?.inconclusiveReason).toBe("diagnostics-wait");
+	}, 30_000);
+
+	// Recurrence (review of #5495, F2, mutation M7): a pull that was in flight
+	// across the first status change is unsettled, so the pull after it is part
+	// of a readiness wait; when that one is cancelled (-32802) it is asked again
+	// like any cancelled post-quiescence pull, not read as a silent server.
+	it("asks again when the pull after an unsettled one is cancelled", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "20000",
+			FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL: "1",
+			FAKE_LSP_LOADING_CANCEL_FIRST_PULL_AFTER: "1",
+		});
+		const result = await touch(filePath, DIRTY);
+
+		expect(result?.diags).toEqual([
+			expect.objectContaining({ code: "FAKE1001" }),
+		]);
+		expect(result?.confirmation).toBe("confirmed");
+	}, 30_000);
+
+	// Recurrence (review of #5495, F2, mutation M11): the pull sent after the
+	// readiness wait gets the budget that is LEFT, not the whole call's budget,
+	// or a server that then goes silent holds the touch for loading time plus a
+	// whole budget.
+	it("spends no more than the touch budget when the server goes silent after loading", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "900",
+			FAKE_LSP_LOADING_IGNORE_PULL_AFTER: "1",
+		});
+		const started = Date.now();
+		const result = await touch(filePath, DIRTY, {
+			maxDiagnosticsWaitMs: 1_000,
+		});
+		const elapsedMs = Date.now() - started;
+
+		expect(result?.confirmation).not.toBe("confirmed");
+		// Budget 1000 ms plus process start; the unfixed pull ran 900 + 1000 ms.
+		expect(elapsedMs).toBeLessThan(1_900);
+	}, 30_000);
+
+	// Recurrence (review of #5495, F3): `clientShutdownOnce` removed the emitter's
+	// listeners before the dispose event, so a graceful shutdown never woke a wait
+	// held on a loading server and the touch outlived it by its whole budget.
+	it("ends a held wait when the service shuts down", async () => {
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "60000";
+		const filePath = register({ FAKE_LSP_LOADING_MS: "20000" });
+		let settled = false;
+		const pending = touch(filePath, DIRTY).then((value) => {
+			settled = true;
+			return value;
+		});
+		await waitFor(() => procs.length === 1 && gatedLedgerCount() > 0, Boolean, {
+			timeoutMs: 10_000,
+		});
+		expect(settled).toBe(false);
+		void service.shutdown();
+
+		// The budget is 60 s; the shutdown, not the budget, ends the touch.
+		await waitFor(() => settled, Boolean, { timeoutMs: 10_000 });
+		expect((await pending)?.confirmation).not.toBe("confirmed");
+	}, 40_000);
 });

@@ -5210,6 +5210,9 @@ export class LSPService {
 			// #5487: the primaries whose wait lapsed while they still announced they
 			// were loading (a subset of the lapsed waits).
 			const loadingExpiredServerIds = new Set<string>();
+			// #5487: and those whose workspace failed to load, with the first message.
+			const loadFailedExpiredServerIds = new Set<string>();
+			let loadFailureDetail: string | undefined;
 			// #1549: a gate that certifies silence AS the answer (the tsserver sync
 			// confirm, either silent-clean gate) retracts the primary attribution with it —
 			// those servers answered, in the only way their capabilities allow, so they
@@ -5723,8 +5726,12 @@ export class LSPService {
 								expiredWaitServerIds.add(entry.info.id);
 								// #5487: it lapsed while the server still announced it was
 								// loading, so the verdict names that, not a silent server.
-								if (entry.client.isServerLoading?.() === true) {
+								const block = entry.client.readinessBlock?.();
+								if (block?.reason === "server-loading") {
 									loadingExpiredServerIds.add(entry.info.id);
+								} else if (block?.reason === "server-load-failed") {
+									loadFailedExpiredServerIds.add(entry.info.id);
+									loadFailureDetail ??= block.detail;
 								}
 							}
 							return outcome;
@@ -6809,6 +6816,8 @@ export class LSPService {
 				diagnosticsTimedOut,
 				diagnosticsUnansweredServerIds: diagnosticsUnansweredPrimaryServerIds,
 				loadingServerIds: [...loadingExpiredServerIds],
+				loadFailedServerIds: [...loadFailedExpiredServerIds],
+				loadFailureDetail,
 			});
 			const inconclusive = verdict.inconclusive;
 
@@ -7064,6 +7073,9 @@ export class LSPService {
 					result.inconclusiveServerIds = verdict.inconclusiveServerIds;
 				}
 				result.inconclusiveReason = verdict.inconclusiveReason;
+				if (verdict.inconclusiveDetail !== undefined) {
+					result.inconclusiveDetail = verdict.inconclusiveDetail;
+				}
 				if (verdict.disabledPrimaryServerIds) {
 					result.disabledPrimaryServerIds = verdict.disabledPrimaryServerIds;
 				}
@@ -7246,6 +7258,9 @@ export class LSPService {
 					}),
 					...(verdict.inconclusiveReason && {
 						inconclusiveReason: verdict.inconclusiveReason,
+					}),
+					...(verdict.inconclusiveDetail !== undefined && {
+						inconclusiveDetail: verdict.inconclusiveDetail,
 					}),
 					// #1470: the touch's own honesty verdict, so a `cut_off` row in
 					// `lsp_aux_wait_outcome` can be joined to the touch that produced it and

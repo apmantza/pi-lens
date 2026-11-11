@@ -1369,4 +1369,39 @@ describe("#5128 — a publish after the first-contact latch clears it", () => {
 		expect(result?.diagnosticsUnsupportedServerIds).toBeUndefined();
 		expect(result?.inconclusive).toBe(true);
 	});
+
+	// #5487 (review of #5495, F1): a failed workspace load is its own reason and
+	// carries the server's message; a loading primary beside it does not hide it.
+	it("names a failed load, with the server's message, ahead of a loading one", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust", "go"],
+				loadingServerIds: ["go"],
+				loadFailedServerIds: ["rust"],
+				loadFailureDetail: "Failed to load workspaces.",
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust", "go"],
+			inconclusiveReason: "server-load-failed",
+			inconclusiveDetail: "Failed to load workspaces.",
+		});
+	});
+
+	it("keeps diagnostics-wait when a lapsed primary neither loaded nor failed", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust", "typescript"],
+				loadFailedServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust", "typescript"],
+			inconclusiveReason: "diagnostics-wait",
+		});
+	});
 });

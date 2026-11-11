@@ -775,6 +775,14 @@ function send(msg) {
 // (a server that loads without announcing, the pre-#5487 shape) and
 // `FAKE_LSP_LOADING_MALFORMED_STATUS=1` sends them without a boolean `quiescent`
 // (`done`: only the completion notice).
+// Further #5487 knobs: `FAKE_LSP_LOADING_HEALTH=error|warning` sets the status
+// `health` (`error` is a workspace that failed to load: message "Failed to load
+// workspaces." and every pull stays empty after loading ends, as rust-analyzer's
+// does; `warning` is ready); `FAKE_LSP_LOADING_RELATED=1` adds a finding for
+// ANOTHER document to every pull reply as `relatedDocuments`;
+// `FAKE_LSP_LOADING_PUSH_FINDING=1` draws a NON-empty publish on each didOpen
+// during loading; `FAKE_LSP_LOADING_IGNORE_PULL_AFTER=1` answers no pull once
+// loading has ended.
 // `FAKE_LSP_LOADING_REFRESH=1` also sends `workspace/diagnostic/refresh` when
 // loading starts, as rust-analyzer does. Off by default.
 const LOADING_MS = Number.parseInt(process.env.FAKE_LSP_LOADING_MS ?? "0", 10);
@@ -784,6 +792,7 @@ let clientAsksServerStatus = false;
 let loadingFlipSpent = false;
 let loadingCancelSpent = false;
 const isLoading = () => Date.now() < loadingUntil;
+const workspaceFailed = () => process.env.FAKE_LSP_LOADING_HEALTH === "error";
 // "1" garbles every notice; "done" garbles only the quiescent:true one, so the
 // server stays loading as far as a client that ignores garbage can tell.
 const malformedStatusFor = (quiescent) =>
@@ -795,9 +804,12 @@ function announceStatus(quiescent) {
 		jsonrpc: "2.0",
 		method: "experimental/serverStatus",
 		params: {
-			health: "ok",
+			health: process.env.FAKE_LSP_LOADING_HEALTH ?? "ok",
 			quiescent: malformedStatusFor(quiescent) ? "no" : quiescent,
-			message: null,
+			message:
+				process.env.FAKE_LSP_LOADING_HEALTH === "error"
+					? "Failed to load workspaces."
+					: null,
 		},
 	});
 }
@@ -1272,6 +1284,23 @@ function handle(raw) {
 				params: { uri: data.params?.textDocument?.uri, diagnostics: [] },
 			});
 		}
+		if (isLoading() && process.env.FAKE_LSP_LOADING_PUSH_FINDING === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: {
+					uri: data.params?.textDocument?.uri,
+					diagnostics: [
+						{
+							severity: 1,
+							code: "LOADPUSH1",
+							message: "finding pushed while loading",
+							range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+						},
+					],
+				},
+			});
+		}
 		publishSequenceFor(data.params?.textDocument?.uri);
 		if (RECOMPILE_CLEARS_MS >= 0) {
 			recompileVersions.set(
@@ -1596,6 +1625,7 @@ function handle(raw) {
 		if (process.env.FAKE_LSP_IGNORE_PULL === "1") return;
 		const text = openDocuments.get(data.params?.textDocument?.uri) ?? "";
 		const uri = data.params?.textDocument?.uri;
+		if (process.env.FAKE_LSP_LOADING_IGNORE_PULL_AFTER === "1" && LOADING_MS > 0 && !isLoading()) return;
 		if (cancelPullAfterLoading()) {
 			send({
 				jsonrpc: "2.0",
@@ -1624,6 +1654,7 @@ function handle(raw) {
 			const items = CLOSED_FILE_CACHE
 				? checkerDiagnostics(uri)
 				: isLoading() ||
+				workspaceFailed() ||
 				PULL_RESPONSE === "empty" ||
 				(text.includes("fake-lsp-clean") && PULL_RESPONSE !== "items")
 					? []
@@ -1642,7 +1673,25 @@ function handle(raw) {
 			send({
 				jsonrpc: "2.0",
 				id: data.id,
-				result: { kind: "full", items },
+				result: {
+					kind: "full",
+					items,
+					...(process.env.FAKE_LSP_LOADING_RELATED === "1" && {
+						relatedDocuments: {
+							"file:///elsewhere/other.fkr": {
+								kind: "full",
+								items: [
+									{
+										severity: 1,
+										code: "RELATED1",
+										message: "a finding for another document",
+										range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+									},
+								],
+							},
+						},
+					}),
+				},
 			});
 			if (flipped) loadingUntil = 0;
 		};

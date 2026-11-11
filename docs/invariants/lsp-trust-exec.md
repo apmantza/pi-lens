@@ -225,9 +225,12 @@
   while `quiescent` is false is dropped; the touch's first pull waits for
   quiescence inside the touch budget (`pullDiagnosticsWhenReady`). A touch whose
   budget lapses on a loading server is inconclusive with reason `server-loading`
-  (`resolveTouchVerdict`), never clean. A server that announces nothing, or a
-  notice without a boolean `quiescent`, is unchanged: the gate keys on what the
-  server announced, never on a server id or a strategy row.
+  (`resolveTouchVerdict`), never clean. A workspace the server says failed to
+  load (`health: "error"`) is not ready either: its touch is inconclusive with
+  reason `server-load-failed` and the server's message, at once, because no
+  wait fixes it; `health: "warning"` stays ready. A server that announces
+  nothing, or a notice without a boolean `quiescent`, is unchanged: the gate
+  keys on what the server announced, never on a server id or a strategy row.
 - Document line addressing has one owner, `clients/lsp/content-scan.ts`: the
   `\n` count behind the `lsp_document_send` record's `contentLineCount` and the
   LSP sync bound (`countLfNewlines`), the last LSP-addressable line an
