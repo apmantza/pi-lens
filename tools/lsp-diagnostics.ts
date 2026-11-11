@@ -851,7 +851,7 @@ function serverNotReadyText(notReady: ServerNotReady): string {
 	if (notReady.reason === "server-loading") {
 		return "server still loading the workspace; retry shortly";
 	}
-	const detail = notReady.detail?.replace(/\s+/g, " ").trim();
+	const detail = notReady.detail;
 	return `workspace failed to load${detail ? ` (${detail})` : ""}; fix the project manifest`;
 }
 
