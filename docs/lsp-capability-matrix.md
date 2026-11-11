@@ -269,7 +269,7 @@ carries the named admission until then.
 | json | vscode-json-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | css | vscode-css-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | html | vscode-html-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
-| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3105-standalone | global-path | — |
+| rust | rust-analyzer | pull | — | n/a (pull) | 1 | dev+ci | 0.3.3113-standalone | global-path | — |
 | svelte | svelte-language-server | pull | — | n/a (pull) | 1 | dev+ci | — | pi-lens-auto | — |
 | deno | deno (alt of typescript) | pull | — | n/a (pull) | 1 | dev+ci | 2.9.8 | global-path | — |
 | ruby | ruby-lsp | pull | — | n/a (pull) | 1 | ci | — | — | — |
