@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ActionableWarningRecord } from "../../clients/actionable-warnings.js";
 import type { GitleaksFinding } from "../../clients/gitleaks-client.js";
@@ -7,6 +8,7 @@ import {
 	fromGitleaks,
 	fromTrivySecrets,
 	isSecretWarning,
+	secretLocationKey,
 	type SecretFinding,
 	type TrivySecretFinding,
 } from "../../clients/secret-findings.js";
@@ -61,7 +63,7 @@ describe("dedupeSecretFindings — cross-source collapse (#131 acceptance gate)"
 			]),
 		];
 
-		const deduped = dedupeSecretFindings(all);
+		const deduped = dedupeSecretFindings(all, "/workspace/project");
 
 		// One surfaced finding, not three.
 		expect(deduped).toHaveLength(1);
@@ -72,39 +74,93 @@ describe("dedupeSecretFindings — cross-source collapse (#131 acceptance gate)"
 		expect(deduped[0].line).toBe(42);
 	});
 
-	it("collapses across path separators (\\ vs /) at the same line", () => {
-		const deduped = dedupeSecretFindings([
-			...fromGitleaks([gitleaks("src\\config.ts", 42, "aws-access-token")]),
-			...fromTrivySecrets([trivySecret("src/config.ts", 42, "aws-key")]),
-		]);
+	it("collapses an absolute gitleaks path with a cwd-relative trivy path", () => {
+		const cwd = path.resolve("/workspace/project");
+		const deduped = dedupeSecretFindings(
+			[
+				...fromGitleaks([
+					gitleaks(path.join(cwd, "src", "config.ts"), 42, "aws-access-token"),
+				]),
+				...fromTrivySecrets([trivySecret("src/config.ts", 42, "aws-key")]),
+			],
+			cwd,
+		);
 		expect(deduped).toHaveLength(1);
 		expect(deduped[0].sources).toEqual(["gitleaks", "trivy"]);
 	});
 
-	it("keeps DISTINCT secrets at different lines / files separate", () => {
-		const deduped = dedupeSecretFindings([
-			...fromGitleaks([
-				gitleaks("a.ts", 10, "rule-a"),
-				gitleaks("a.ts", 20, "rule-b"),
-			]),
-			...fromTrivySecrets([trivySecret("b.ts", 10, "rule-c")]),
-		]);
+	it("collapses across path separators (\\ vs /) at the same line", () => {
+		const deduped = dedupeSecretFindings(
+			[
+				...fromGitleaks([gitleaks("src\\config.ts", 42, "aws-access-token")]),
+				...fromTrivySecrets([trivySecret("src/config.ts", 42, "aws-key")]),
+			],
+			"/workspace/project",
+		);
+		expect(deduped).toHaveLength(1);
+		expect(deduped[0].sources).toEqual(["gitleaks", "trivy"]);
+	});
+
+	it("keeps different roots and lines separate after resolving relative paths", () => {
+		const cwd = "/workspace/project";
+		const deduped = dedupeSecretFindings(
+			[
+				...fromGitleaks([
+					gitleaks("/workspace/project/src/config.ts", 42, "inside"),
+					gitleaks("/workspace/other/src/config.ts", 42, "other-root"),
+					gitleaks("/workspace/project/src/config.ts", 43, "other-line"),
+				]),
+			],
+			cwd,
+		);
+		expect(deduped).toHaveLength(3);
+	});
+
+	it("uses Windows path semantics for a Windows cwd on every host", () => {
+		const cwd = "C:\\workspace\\project";
+		const absolute = secretLocationKey(
+			"C:\\workspace\\project\\src\\config.ts",
+			42,
+			cwd,
+		);
+		const relative = secretLocationKey("src/config.ts", 42, cwd);
+		expect(absolute).toBe(relative);
+		expect(secretLocationKey("src/config.ts", 43, cwd)).not.toBe(relative);
+	});
+
+	it("keeps DISTINCT secrets at different lines / files", () => {
+		const deduped = dedupeSecretFindings(
+			[
+				...fromGitleaks([
+					gitleaks("a.ts", 10, "rule-a"),
+					gitleaks("a.ts", 20, "rule-b"),
+				]),
+				...fromTrivySecrets([trivySecret("b.ts", 10, "rule-c")]),
+			],
+			"/workspace/project",
+		);
 		expect(deduped).toHaveLength(3);
 	});
 
 	it("preserves first-appearance order", () => {
-		const deduped = dedupeSecretFindings([
-			...fromGitleaks([gitleaks("z.ts", 1, "r1")]),
-			...fromTrivySecrets([trivySecret("a.ts", 1, "r2")]),
-		]);
+		const deduped = dedupeSecretFindings(
+			[
+				...fromGitleaks([gitleaks("z.ts", 1, "r1")]),
+				...fromTrivySecrets([trivySecret("a.ts", 1, "r2")]),
+			],
+			"/workspace/project",
+		);
 		expect(deduped.map((f) => f.file)).toEqual(["z.ts", "a.ts"]);
 	});
 
 	it("a trivy-only secret keeps the trivy rule when gitleaks is absent", () => {
-		const deduped = dedupeSecretFindings([
-			...fromTrivySecrets([trivySecret("x.ts", 5, "generic-api-key")]),
-			...fromAstGrepWarnings([astGrepWarning("x.ts", 5, "hardcoded-key")]),
-		]);
+		const deduped = dedupeSecretFindings(
+			[
+				...fromTrivySecrets([trivySecret("x.ts", 5, "generic-api-key")]),
+				...fromAstGrepWarnings([astGrepWarning("x.ts", 5, "hardcoded-key")]),
+			],
+			"/workspace/project",
+		);
 		expect(deduped).toHaveLength(1);
 		expect(deduped[0].sources).toEqual(["trivy", "ast-grep"]);
 		expect(deduped[0].rule).toBe("generic-api-key");
