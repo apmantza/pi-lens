@@ -48,6 +48,7 @@ const PACK_COPY_SKIP = new Set([
 	"dist",
 	".pack-backup",
 	".probe-home",
+	".vitest-cache",
 	".claude",
 	".tmp",
 	"reports",
@@ -57,11 +58,11 @@ const PACK_COPY_SKIP = new Set([
 	"release-qa-evidence",
 ]);
 
-function copyPackSource(dest: string): string {
-	fs.cpSync(root, dest, {
+function copyPackSource(dest: string, source = root): string {
+	fs.cpSync(source, dest, {
 		recursive: true,
 		filter: (src) => {
-			const rel = path.relative(root, src);
+			const rel = path.relative(source, src);
 			return rel === "" || !PACK_COPY_SKIP.has(rel.split(path.sep)[0] ?? "");
 		},
 	});
@@ -287,6 +288,21 @@ describe("published manifest carries no devDependencies", () => {
 
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-pack-"));
 	afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
+
+	it("copies package source without the worktree's derived Vitest cache (#5488)", () => {
+		const source = path.join(tmp, "cache-source");
+		fs.mkdirSync(path.join(source, ".vitest-cache"), { recursive: true });
+		fs.writeFileSync(path.join(source, ".vitest-cache", "result"), "derived");
+		fs.writeFileSync(
+			path.join(source, "package.json"),
+			'{"name":"pack-fixture"}',
+		);
+		const copy = copyPackSource(path.join(tmp, "cache-copy"), source);
+		expect(fs.readFileSync(path.join(copy, "package.json"), "utf8")).toBe(
+			'{"name":"pack-fixture"}',
+		);
+		expect(fs.existsSync(path.join(copy, ".vitest-cache"))).toBe(false);
+	});
 
 	/**
 	 * #4561 (shuffle seed 424): both cases below observe the SAME tarball, and one
