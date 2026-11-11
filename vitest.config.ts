@@ -402,11 +402,11 @@ const lspSpawnHeavyInclude = [
 	// verdicts the multi-file dispatch publishes.
 	"tests/index-5248-lsp-navigation-apply-dispatch.test.ts",
 	"tests/mcp/analyze-cli.test.ts",
-	// #4300: the MCP witness crosses Lean's real initialize handshake.
-	"tests/mcp/server.smoke-fallback-5014.test.ts",
 	// #5487: pilens_diagnostics through a real MCP child over a fake-LSP rust
 	// server that announces loading and a failed workspace load.
 	"tests/mcp/server.readiness-5487.test.ts",
+	// #4300: the MCP witness crosses Lean's real initialize handshake.
+	"tests/mcp/server.smoke-fallback-5014.test.ts",
 	"tests/mcp/server.smoke.test.ts",
 	// #4521: the nightly born-after-start phase run through the production
 	// lsp_diagnostics handler and LSPService over real stdio fake-server
