@@ -2072,11 +2072,6 @@ export async function resolveInstalledToolCommand(
 		: { command: null };
 }
 
-const NOT_FOUND_VERDICT: ToolVerdict = {
-	outcome: "missing",
-	cause: "not-found",
-};
-
 async function verifyOrInstallCommand(
 	command: string,
 	toolId: string,
@@ -2105,17 +2100,10 @@ async function verifyOrInstallCommand(
 		onUnusable({ outcome, cause });
 		return null;
 	}
-	// Not on disk: an absence, whether or not the install below may repair it.
-	if (!shouldAutoInstallTool(toolId)) {
-		onUnusable(NOT_FOUND_VERDICT);
-		return null;
-	}
+	if (!shouldAutoInstallTool(toolId)) return null;
 
 	const state = installStateFor(cwd, toolId);
-	if (state.suppressed) {
-		onUnusable(NOT_FOUND_VERDICT);
-		return null;
-	}
+	if (state.suppressed) return null;
 	const installStartedAt = Date.now();
 	const installed = await ensureTool(toolId);
 	if (installed) {
@@ -2139,15 +2127,16 @@ async function verifyOrInstallCommand(
 		return installed;
 	}
 	noteInstallFailure(toolId, cwd);
-	onUnusable(NOT_FOUND_VERDICT);
 	return null;
 }
 
 /**
  * The bundler-form resolver (`bundle exec rubocop`): a `--version` spawn of the
  * argv, then the on-disk verify or install of its command. It holds no
- * checker, so a caller that must say why it got `null` reads `onUnusable`,
- * called once with the verdict of the probe that decided it (#5258).
+ * checker, so a caller that must say why it got `null` reads `onUnusable`: it
+ * is called with the verdict of a command that is on disk and failed its
+ * probe, and not called for a command that is not on disk, an absence
+ * (#5258).
  */
 export async function resolveCommandArgsWithInstallFallback(
 	command: { cmd: string; args: string[] },

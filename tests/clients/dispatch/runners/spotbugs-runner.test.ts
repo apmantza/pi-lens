@@ -130,7 +130,7 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 		["transient", "probe-timeout", "probe-incomplete"],
 		["non-installable", "probe-rejected", "probe-rejected"],
 	])(
-		"reads a %s Java verdict as %s, not as a missing runtime",
+		"reads a Java verdict %s / %s as %s, not as a missing runtime",
 		async (outcome, cause, reason) => {
 			try {
 				runtime.javaPresent = false;

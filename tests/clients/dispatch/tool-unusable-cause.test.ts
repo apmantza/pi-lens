@@ -159,7 +159,7 @@ describe("the skip reads only the resolution the runner used (#5258 r3)", () => 
 		);
 	});
 
-	it("reads no refusal for a trusted project or a PATH-only checker", () => {
+	it("reads no refusal for a trusted project or a ladder without a project rung", () => {
 		const cwd = plant(VENV_BIN_DIRS[0], "ruff");
 		restore = withEnv({ PI_LENS_DISABLE_TOOL_INSTALL: undefined });
 		setProjectTrustState("trusted");
@@ -171,6 +171,16 @@ describe("the skip reads only the resolution the runner used (#5258 r3)", () => 
 			pathOnly: true,
 		});
 		expect(toolAbsentSkip(cwd, { checker: pathOnly }).skipReason).toBe(
+			"not-installed",
+		);
+		// An adopted root's checker skips the project rung (#4242).
+		const noProjectRung = createAvailabilityChecker(
+			"ruff",
+			".exe",
+			["--version"],
+			{ allowProjectLocal: false },
+		);
+		expect(toolAbsentSkip(cwd, { checker: noProjectRung }).skipReason).toBe(
 			"not-installed",
 		);
 	});
@@ -206,7 +216,7 @@ describe("the skip reads only the resolution the runner used (#5258 r3)", () => 
 		["transient", "probe-timeout", "probe-incomplete"],
 		["non-installable", "probe-rejected", "probe-rejected"],
 	] as const)(
-		"reads a needed runtime's %s verdict as %s",
+		"reads a needed runtime's %s / %s verdict as %s",
 		(outcome, cause, reason) => {
 			expect(
 				toolAbsentSkip(cwd, { checker: verdict(outcome, cause), runtime: true })
