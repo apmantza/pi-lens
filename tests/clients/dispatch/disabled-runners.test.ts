@@ -571,6 +571,24 @@ describe("dispatch.disabledRunners — dispatch", () => {
 				"not checked (lsp disabled in config by dispatch.disabledRunners)",
 		},
 		{
+			// #5258: a sibling that needs a config the project lacks, or whose project
+			// policy picks another tool, had nothing to check; it is not a tool failure.
+			row: "no cause, denied, a sibling not configured",
+			lsp: SUCCEEDED,
+			build: { ...SKIPPED, skipReason: "not-configured" as const },
+			denied: "lsp",
+			status:
+				"not checked (lsp disabled in config by dispatch.disabledRunners)",
+		},
+		{
+			row: "no cause, denied, a sibling whose tool is not installed",
+			lsp: SUCCEEDED,
+			build: { ...SKIPPED, skipReason: "not-installed" as const },
+			denied: "lsp",
+			status:
+				"not fully checked (a language tool is missing, timed out, or failed to run; lsp disabled in config by dispatch.disabledRunners)",
+		},
+		{
 			row: "no cause, denied, a tool failed",
 			lsp: SUCCEEDED,
 			build: SKIPPED,
