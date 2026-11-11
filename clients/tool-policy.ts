@@ -4,11 +4,7 @@ import { isJstsFactFile, TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
-import {
-	findNearestContaining,
-	normalizeMapKey,
-	walkUpDirs,
-} from "./path-utils.js";
+import { findNearestContaining, walkUpDirs } from "./path-utils.js";
 import { hasToolConfig } from "./tool-config-presence.js";
 import type { ProjectConventions } from "./project-conventions.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
@@ -1293,39 +1289,7 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 	]),
 ]);
 
-const STYLELINT_CONFIGS = [
-	".stylelintrc",
-	".stylelintrc.json",
-	".stylelintrc.jsonc",
-	".stylelintrc.yaml",
-	".stylelintrc.yml",
-	".stylelintrc.js",
-	".stylelintrc.cjs",
-	"stylelint.config.js",
-	"stylelint.config.cjs",
-	"stylelint.config.mjs",
-];
-
 const RUBOCOP_CONFIGS = [".rubocop.yml", ".rubocop.yaml"];
-
-const MARKDOWNLINT_CONFIGS = [
-	// markdownlint-cli2's built-in config names (keep this list in sync with
-	// the installed CLI's supported configuration file names).
-	".markdownlint-cli2.jsonc",
-	".markdownlint-cli2.yaml",
-	".markdownlint-cli2.yml",
-	".markdownlint-cli2.cjs",
-	".markdownlint-cli2.mjs",
-	".markdownlint.jsonc",
-	".markdownlint.json",
-	".markdownlint.yaml",
-	".markdownlint.yml",
-	".markdownlint.cjs",
-	".markdownlint.mjs",
-	// Retain the legacy detector name for compatibility with existing policy
-	// behavior, even though current markdownlint-cli2 versions do not prefer it.
-	".markdownlintrc",
-];
 
 const PRETTIER_CONFIGS = [
 	".prettierrc",
@@ -1339,28 +1303,6 @@ const PRETTIER_CONFIGS = [
 	"prettier.config.cjs",
 	"prettier.config.mjs",
 	"prettier.config.ts",
-];
-
-const GOLANGCI_CONFIGS = [
-	".golangci.yml",
-	".golangci.yaml",
-	".golangci.toml",
-	".golangci.json",
-];
-
-const PHPSTAN_CONFIGS = [
-	"phpstan.neon",
-	"phpstan.neon.dist",
-	"phpstan.dist.neon",
-];
-
-const VITE_CONFIGS = [
-	"vite.config.ts",
-	"vite.config.mts",
-	"vite.config.cts",
-	"vite.config.js",
-	"vite.config.mjs",
-	"vite.config.cjs",
 ];
 
 export type JstsLintRunnerName = "eslint" | "oxlint" | "biome-check-json";
@@ -1699,17 +1641,17 @@ export function getLinterPolicyForCwd(
 	cwd: string,
 ): LinterPolicy | undefined {
 	const context: LinterPolicyContext = {
-		hasEslintConfig: hasEslintConfig(cwd),
+		hasEslintConfig: hasToolConfig("eslint", cwd),
 		hasOxlintConfig: hasOxlintConfig(cwd),
-		hasBiomeConfig: hasBiomeConfig(cwd),
-		hasStylelintConfig: hasStylelintConfig(cwd),
-		hasSqlfluffConfig: hasSqlfluffConfig(cwd),
+		hasBiomeConfig: hasToolConfig("biome", cwd),
+		hasStylelintConfig: hasToolConfig("stylelint", cwd),
+		hasSqlfluffConfig: hasToolConfig("sqlfluff", cwd),
 		hasRubocopConfig: hasRubocopConfig(cwd),
-		hasYamllintConfig: hasYamllintConfig(cwd),
-		hasMarkdownlintConfig: hasMarkdownlintConfig(cwd),
-		hasGolangciConfig: hasGolangciConfig(cwd),
-		hasPhpstanConfig: hasPhpstanConfig(cwd),
-		hasMypyConfig: hasMypyConfig(cwd),
+		hasYamllintConfig: hasToolConfig("yamllint", cwd),
+		hasMarkdownlintConfig: hasToolConfig("markdownlint", cwd),
+		hasGolangciConfig: hasToolConfig("golangci-lint", cwd),
+		hasPhpstanConfig: hasToolConfig("phpstan", cwd),
+		hasMypyConfig: hasToolConfig("mypy", cwd),
 		hasDetektConfig: hasDetektConfig(cwd),
 		hasKtfmtConfig: hasKtfmtConfig(cwd),
 		// From the file's directory, not cwd: a `.tflint.hcl` in a terraform
@@ -1944,35 +1886,6 @@ export function getPreferredAutofixTools(
 	return getAutofixPolicyForFile(filePath, context)?.preferredTools ?? [];
 }
 
-// Flat-config filenames resolve like ESLint itself: upward from cwd without
-// stopping at an intermediate package.json (#3017, shape 39). Legacy
-// `.eslintrc.*` names and the `package.json#eslintConfig` field keep the
-// historic per-package boundary below.
-const ESLINT_FLAT_CONFIGS = [
-	"eslint.config.js",
-	"eslint.config.mjs",
-	"eslint.config.cjs",
-	"eslint.config.ts",
-	"eslint.config.mts",
-	"eslint.config.cts",
-];
-
-const ESLINT_LEGACY_CONFIGS = [
-	".eslintrc",
-	".eslintrc.js",
-	".eslintrc.cjs",
-	".eslintrc.json",
-	".eslintrc.yaml",
-	".eslintrc.yml",
-];
-
-function* walkUpDirsUntilPackageJson(cwd: string): Generator<string> {
-	for (const dir of walkUpDirs(cwd)) {
-		yield dir;
-		if (fs.existsSync(path.join(dir, "package.json"))) return;
-	}
-}
-
 function findNearestPackageJsonPath(cwd: string): string | undefined {
 	for (const dir of walkUpDirs(cwd)) {
 		const pkgPath = path.join(dir, "package.json");
@@ -2016,51 +1929,10 @@ export function hasNearestPackageJsonField(
 	return false;
 }
 
-export function hasEslintConfig(cwd: string): boolean {
-	// Flat configs mirror ESLint's own discovery: every ancestor dir up to
-	// the filesystem root, ignoring intermediate package.json boundaries, so
-	// a monorepo root config stays visible from inside a nested package.
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of ESLINT_FLAT_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-	}
-	// Legacy `.eslintrc.*` and `package.json#eslintConfig` keep per-package
-	// semantics: the walk stops at the nearest package.json.
-	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
-		for (const cfg of ESLINT_LEGACY_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				if (JSON.parse(fs.readFileSync(pkgPath, "utf-8")).eslintConfig)
-					return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasBiomeConfig(cwd: string): boolean {
-	return getBiomeConfigPath(cwd) !== undefined;
-}
-
-export function getBiomeConfigPath(cwd: string): string | undefined {
-	for (const dir of walkUpDirs(cwd)) {
-		const jsoncPath = path.join(dir, "biome.jsonc");
-		if (fs.existsSync(jsoncPath)) return jsoncPath;
-		const jsonPath = path.join(dir, "biome.json");
-		if (fs.existsSync(jsonPath)) return jsonPath;
-	}
-	return undefined;
-}
-
 export function hasOxfmtConfig(cwd: string): boolean {
 	for (const dir of walkUpDirs(cwd)) {
 		if (fs.existsSync(path.join(dir, "oxfmt.toml"))) return true;
 		if (fs.existsSync(path.join(dir, ".oxfmtrc.json"))) return true;
-		if (hasVitePlusConfig(dir)) return true;
 		const pkgPath = path.join(dir, "package.json");
 		if (fs.existsSync(pkgPath)) {
 			try {
@@ -2077,7 +1949,9 @@ export function hasOxfmtConfig(cwd: string): boolean {
 			} catch {}
 		}
 	}
-	return false;
+	// Vite+ is asked once, from cwd: the seam stops at $HOME, and asking it per
+	// ancestor of this unbounded walk found a vite-plus.json above $HOME (#5408 F6).
+	return hasToolConfig("vitePlus", cwd);
 }
 
 // Empirically verified against the real `oxfmt` npm package (0.62.0), a
@@ -2144,26 +2018,6 @@ export function hasOxfmtSvelteConfig(cwd: string): boolean {
 	return false;
 }
 
-export function hasStylelintConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (STYLELINT_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg)))) {
-			return true;
-		}
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-				if (pkg.stylelint) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasSqlfluffConfig(cwd: string): boolean {
-	return hasToolConfig("sqlfluff", cwd);
-}
-
 export function hasRubocopConfig(cwd: string): boolean {
 	for (const dir of walkUpDirs(cwd)) {
 		for (const cfg of RUBOCOP_CONFIGS) {
@@ -2178,18 +2032,6 @@ export function hasRubocopConfig(cwd: string): boolean {
 		}
 	}
 	return false;
-}
-
-export function hasMypyConfig(cwd: string): boolean {
-	return hasToolConfig("mypy", cwd);
-}
-
-export function hasYamllintConfig(cwd: string): boolean {
-	return hasToolConfig("yamllint", cwd);
-}
-
-export function hasMarkdownlintConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, MARKDOWNLINT_CONFIGS) !== undefined;
 }
 
 export function hasPrettierConfig(cwd: string): boolean {
@@ -2241,7 +2083,7 @@ function configArgsWithFallback(
 
 export function markdownlintConfigArgs(cwd: string): string[] {
 	return configArgsWithFallback(
-		hasMarkdownlintConfig(cwd),
+		hasToolConfig("markdownlint", cwd),
 		["--config"],
 		"config/markdownlint/core.json",
 	);
@@ -2254,7 +2096,7 @@ export function markdownlintConfigArgs(cwd: string): string[] {
  */
 export function ruffConfigArgs(cwd: string): string[] {
 	return configArgsWithFallback(
-		hasRuffConfig(cwd),
+		hasToolConfig("ruff", cwd),
 		["--config"],
 		"config/ruff/core.toml",
 	);
@@ -2274,15 +2116,11 @@ export function biomeConfigArgs(cwd: string): string[] {
 	// the root config the way biome's own nested-config resolution allows. No
 	// flag at all lets biome discover it unaided, exactly like the ruff/
 	// markdownlint fallbacks above skip `--config` under the same condition.
-	if (getBiomeConfigPath(cwd)) return [];
+	if (hasToolConfig("biome", cwd)) return [];
 	return [
 		"--config-path=" +
 			resolvePackagePath(import.meta.url, "config/biome/core.jsonc"),
 	];
-}
-
-export function hasGolangciConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, GOLANGCI_CONFIGS) !== undefined;
 }
 
 // tflint ships built-in rules and runs without config, so `.tflint.hcl` is not
@@ -2449,10 +2287,6 @@ export function hasFantomasConfig(cwd: string): boolean {
 // (inputs, line_length, plugins) — universal in Elixir projects that use it.
 export function hasMixFormatConfig(cwd: string): boolean {
 	return findNearestContaining(cwd, [".formatter.exs"]) !== undefined;
-}
-
-export function hasPhpstanConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, PHPSTAN_CONFIGS) !== undefined;
 }
 
 export function hasDetektConfig(cwd: string): boolean {
@@ -2868,16 +2702,8 @@ export function hasKtfmtConfig(cwd: string): boolean {
 }
 
 // SpotBugs (#133) analyzes compiled bytecode, so it needs BOTH a Java build
-// descriptor AND a compiled-classes dir. These two helpers gate the runner.
-const JAVA_BUILD_DESCRIPTORS = [
-	"pom.xml",
-	"build.gradle",
-	"build.gradle.kts",
-	"settings.gradle",
-	"settings.gradle.kts",
-];
-
-// Common compiled-output dirs: Maven (target/classes), Gradle (build/classes),
+// descriptor (`javaBuild` in `tool-config-presence.ts`) AND a compiled-classes
+// dir (this helper). Common compiled-output dirs: Maven (target/classes), Gradle (build/classes),
 // IntelliJ (out/production), Eclipse (bin/main).
 const COMPILED_CLASSES_DIRS = [
 	path.join("target", "classes"),
@@ -2885,22 +2711,6 @@ const COMPILED_CLASSES_DIRS = [
 	path.join("out", "production"),
 	path.join("bin", "main"),
 ];
-
-export function hasJavaBuildDescriptor(cwd: string, ceiling?: string): boolean {
-	const normalizedCeiling = ceiling
-		? normalizeMapKey(path.resolve(ceiling))
-		: undefined;
-	for (const dir of walkUpDirs(cwd)) {
-		if (JAVA_BUILD_DESCRIPTORS.some((d) => fs.existsSync(path.join(dir, d))))
-			return true;
-		if (
-			normalizedCeiling &&
-			normalizeMapKey(path.resolve(dir)) === normalizedCeiling
-		)
-			break;
-	}
-	return false;
-}
 
 /** First existing compiled-classes dir at/above cwd, or undefined. */
 export function findCompiledClassesDir(cwd: string): string | undefined {
@@ -2941,34 +2751,6 @@ export function getRubocopCommand(cwd: string): {
 	return { cmd: "rubocop", args: [] };
 }
 
-export function hasVitePlusConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (fs.existsSync(path.join(dir, "vite-plus.json"))) return true;
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
-					dependencies?: Record<string, string>;
-					devDependencies?: Record<string, string>;
-				};
-				const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-				if (deps["vite-plus"] || deps["@voidzero-dev/vite-plus-core"]) {
-					return true;
-				}
-			} catch {}
-		}
-		for (const cfg of VITE_CONFIGS) {
-			const cfgPath = path.join(dir, cfg);
-			if (!fs.existsSync(cfgPath)) continue;
-			try {
-				const content = fs.readFileSync(cfgPath, "utf-8");
-				if (content.includes("vite-plus")) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
 // Per https://oxc.rs/docs/guide/usage/linter/config.html, oxlint auto-discovers
 // `.oxlintrc.json`, `.oxlintrc.jsonc`, `oxlint.config.ts`, and `oxlint.config.mts`
 // (in addition to the legacy `oxlint.json` name pi-lens already recognized).
@@ -2989,7 +2771,7 @@ export function hasOxlintConfig(cwd: string): boolean {
 			if (fs.existsSync(path.join(dir, cfg))) return true;
 		}
 	}
-	return hasVitePlusConfig(cwd);
+	return hasToolConfig("vitePlus", cwd);
 }
 
 export function getPreferredJstsLintRunners(
@@ -3022,8 +2804,8 @@ export function getJstsLintPolicy(
 
 export function getJstsLintPolicyForCwd(cwd: string): JstsLintPolicy {
 	return getJstsLintPolicy({
-		hasEslintConfig: hasEslintConfig(cwd),
+		hasEslintConfig: hasToolConfig("eslint", cwd),
 		hasOxlintConfig: hasOxlintConfig(cwd),
-		hasBiomeConfig: hasBiomeConfig(cwd),
+		hasBiomeConfig: hasToolConfig("biome", cwd),
 	});
 }

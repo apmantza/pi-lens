@@ -1608,7 +1608,7 @@ describe("getFormattersForFile — policy selection", () => {
 		it("oxfmt: vite-plus.json created after the first call is picked up", async () => {
 			// .css's policy smart-defaults to biome when nothing has explicit
 			// config; oxfmt only outranks it once oxfmt's OWN explicit-config
-			// check (hasVitePlusConfig) goes true. So the observable signal here
+			// check (the vitePlus spec) goes true. So the observable signal here
 			// isn't "was anything selected" (biome always is) but "did the WINNER
 			// change" — which only happens if the cache actually re-reads
 			// vite-plus.json after it's created.

@@ -72,16 +72,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs: () => [],
-	hasEslintConfig: () => true,
-	hasMypyConfig: () => true,
-	hasPhpstanConfig: () => true,
-	// Left real: sqlfluff's config presence CHANGES its argv (an unconfigured
-	// project gets `--dialect ansi`), so forcing it open would make the argv
-	// tie assert against an invocation the fixture never captured.
-	hasSqlfluffConfig: (cwd: string) =>
-		fs.existsSync(path.join(cwd, ".sqlfluff")),
-	hasStylelintConfig: () => true,
-	hasYamllintConfig: () => true,
 	getAutofixCapability: () => ({
 		toolSupportsFix: false,
 		safePipelineAutofix: false,

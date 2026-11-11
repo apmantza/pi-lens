@@ -7,11 +7,12 @@
  * Gate: skips when no ESLint config is detected (project uses Biome/OxLint instead).
  */
 
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
-import { getAutofixCapability, hasEslintConfig } from "../../tool-policy.js";
+import { getAutofixCapability } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -132,7 +133,7 @@ const eslintRunner: RunnerDefinition = {
 	id: "eslint",
 	appliesTo: ["jsts"],
 	priority: PRIORITY.LINT_SECONDARY,
-	requiresConfig: (cwd) => hasEslintConfig(cwd),
+	requiresConfig: (cwd) => hasToolConfig("eslint", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "eslint");
