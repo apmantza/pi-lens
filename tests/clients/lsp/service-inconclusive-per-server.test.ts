@@ -1194,6 +1194,61 @@ describe("#1549 — resolveTouchVerdict (the merge rule, in isolation)", () => {
 			}),
 		).toEqual({ inconclusive: true, inconclusiveReason: "diagnostics-wait" });
 	});
+
+	// #5487: a wait that lapsed on a primary still announcing it was loading is
+	// named for that, so a cold rust-analyzer does not read as a silent server.
+	it("names the loading cause when every lapsed primary announced it was loading", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust"],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust"],
+			inconclusiveReason: "server-loading",
+		});
+	});
+
+	it("keeps diagnostics-wait when a lapsed primary was not loading", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: ["rust", "typescript"],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust", "typescript"],
+			inconclusiveReason: "diagnostics-wait",
+		});
+	});
+
+	it("does not call an unattributed lapse a loading one, nor lets loading hide a write timeout", () => {
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: [],
+				diagnosticsTimedOut: true,
+				diagnosticsUnansweredServerIds: [],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({ inconclusive: true, inconclusiveReason: "diagnostics-wait" });
+		expect(
+			resolveTouchVerdict({
+				primaryNotifyWriteTimedOutServerIds: ["rust"],
+				diagnosticsTimedOut: false,
+				diagnosticsUnansweredServerIds: [],
+				loadingServerIds: ["rust"],
+			}),
+		).toEqual({
+			inconclusive: true,
+			inconclusiveServerIds: ["rust"],
+			inconclusiveReason: "notify-write",
+		});
+	});
 });
 
 /**

@@ -5028,14 +5028,11 @@ export async function clientWaitForDiagnostics(
 			await new Promise((resolve) =>
 				setTimeout(resolve, PULL_DIAGNOSTICS_RETRY_INTERVAL_MS),
 			);
-			const retried = await pullDiagnosticsWhenReady(
+			outcome = await clientRequestPullDiagnostics(
 				state,
 				filePath,
 				Math.max(0, retryBudgetMs - (Date.now() - startedAt)),
-				pullDeadlineAt,
 			);
-			if (retried === PULL_UNSETTLED) return "deadline-expired";
-			outcome = retried;
 			if (outcome.status === "clean") sawClean = true;
 		}
 		if (options.pullOnly) {

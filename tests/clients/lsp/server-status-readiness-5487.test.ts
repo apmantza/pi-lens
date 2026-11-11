@@ -199,6 +199,54 @@ describe("a server that is still loading is not a clean file (#5487)", () => {
 		expect(gatedLedgerCount()).toBeGreaterThan(1);
 	}, 30_000);
 
+	// rust-analyzer cancels the pulls it had queued when it goes quiescent
+	// (-32802, measured on 1.99.1). The first pull after the wait is such a pull:
+	// it must be asked again, not read as a server that went silent.
+	it("asks again when the first pull after quiescence is cancelled", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "500",
+			FAKE_LSP_LOADING_CANCEL_FIRST_PULL_AFTER: "1",
+		});
+		const result = await touch(filePath, DIRTY);
+
+		expect(result?.diags).toEqual([
+			expect.objectContaining({ code: "FAKE1001" }),
+		]);
+		expect(result?.confirmation).toBe("confirmed");
+	}, 30_000);
+
+	// The whole loading window passes inside one pull's flight: status false,
+	// status true, then the empty reply it computed while loading. No status reads
+	// loading when the reply is processed, so only the changed epoch tells the
+	// reply was not given by a ready server.
+	it("distrusts an empty reply that was in flight across a status change", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "20000",
+			FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL: "1",
+		});
+		const result = await touch(filePath, DIRTY);
+
+		expect(result?.diags).toEqual([
+			expect.objectContaining({ code: "FAKE1001" }),
+		]);
+		expect(result?.confirmation).toBe("confirmed");
+	}, 30_000);
+
+	// A ready server that repeats its unchanged notice before each answer is not
+	// changing readiness: a repeat must not read as a status change, or every pull
+	// in flight across one is asked again and a warm touch never settles.
+	it("does not treat a repeated quiescent notice as a status change", async () => {
+		const filePath = register({
+			FAKE_LSP_LOADING_MS: "300",
+			FAKE_LSP_LOADING_REPEAT_STATUS: "1",
+		});
+		const result = await touch(filePath, CLEAN);
+
+		expect(result?.diags).toEqual([]);
+		expect(result?.inconclusive).not.toBe(true);
+		expect(result?.confirmation).toBe("confirmed");
+	}, 30_000);
+
 	// The gate applies only to a server that announces. This shape (loads, answers
 	// empty, announces nothing) is today's behaviour and must not move: it is the
 	// "every other server keeps its behaviour" half of the acceptance.

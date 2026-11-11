@@ -780,28 +780,53 @@ const LOADING_MS = Number.parseInt(process.env.FAKE_LSP_LOADING_MS ?? "0", 10);
 const LOADING_REFRESH_ID = "fake-loading-refresh";
 let loadingUntil = 0;
 let clientAsksServerStatus = false;
+let loadingFlipSpent = false;
+let loadingCancelSpent = false;
 const isLoading = () => Date.now() < loadingUntil;
+function announceStatus(quiescent) {
+	if (!clientAsksServerStatus || process.env.FAKE_LSP_LOADING_NO_STATUS === "1") return;
+	send({
+		jsonrpc: "2.0",
+		method: "experimental/serverStatus",
+		params: {
+			health: "ok",
+			quiescent:
+				process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "1" ? "no" : quiescent,
+			message: null,
+		},
+	});
+}
 function startLoading() {
 	if (!(LOADING_MS > 0)) return;
 	loadingUntil = Date.now() + LOADING_MS;
-	const announce = (quiescent) => {
-		if (!clientAsksServerStatus || process.env.FAKE_LSP_LOADING_NO_STATUS === "1") return;
-		send({
-			jsonrpc: "2.0",
-			method: "experimental/serverStatus",
-			params: {
-				health: "ok",
-				quiescent:
-					process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "1" ? "no" : quiescent,
-				message: null,
-			},
-		});
-	};
-	announce(false);
+	// `FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL=1`: the whole loading window passes
+	// inside the first pull's flight (status false, status true, then the empty
+	// reply it computed while loading), so no status is loading when the reply
+	// is read, yet the reply describes a workspace that was not loaded.
+	if (process.env.FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL === "1") return;
+	announceStatus(false);
 	if (process.env.FAKE_LSP_LOADING_REFRESH === "1") {
 		send({ jsonrpc: "2.0", id: LOADING_REFRESH_ID, method: "workspace/diagnostic/refresh" });
 	}
-	setTimeout(() => announce(true), LOADING_MS).unref?.();
+	setTimeout(() => announceStatus(true), LOADING_MS).unref?.();
+}
+/** True when this pull is answered with the flip above; ends the loading window. */
+function flipAroundPull() {
+	if (process.env.FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL !== "1" || loadingFlipSpent) return false;
+	loadingFlipSpent = true;
+	announceStatus(false);
+	announceStatus(true);
+	return true;
+}
+/**
+ * `FAKE_LSP_LOADING_CANCEL_FIRST_PULL_AFTER=1`: the first pull received once
+ * loading has ended is cancelled with -32802 (rust-analyzer's retrigger), as
+ * the pulls it had queued were when it went quiescent.
+ */
+function cancelPullAfterLoading() {
+	if (process.env.FAKE_LSP_LOADING_CANCEL_FIRST_PULL_AFTER !== "1" || loadingCancelSpent || isLoading()) return false;
+	loadingCancelSpent = true;
+	return true;
 }
 
 // #4758: the settings a client delivers, read off the wire. With
@@ -1566,6 +1591,21 @@ function handle(raw) {
 		if (process.env.FAKE_LSP_IGNORE_PULL === "1") return;
 		const text = openDocuments.get(data.params?.textDocument?.uri) ?? "";
 		const uri = data.params?.textDocument?.uri;
+		if (cancelPullAfterLoading()) {
+			send({
+				jsonrpc: "2.0",
+				id: data.id,
+				error: { code: -32802, message: "server cancelled the request (retriggerRequest)" },
+			});
+			return;
+		}
+		const flipped = flipAroundPull();
+		// `FAKE_LSP_LOADING_REPEAT_STATUS=1`: a ready server repeats its quiescent
+		// notice before every answer (rust-analyzer re-sends its status on health
+		// and message changes). The value does not change, so nothing is loading.
+		if (process.env.FAKE_LSP_LOADING_REPEAT_STATUS === "1" && !isLoading()) {
+			announceStatus(true);
+		}
 		const sendPullResponse = () => {
 			if (PULL_RESPONSE === "timeout") return;
 			if (PULL_RESPONSE === "-32601") {
@@ -1599,6 +1639,7 @@ function handle(raw) {
 				id: data.id,
 				result: { kind: "full", items },
 			});
+			if (flipped) loadingUntil = 0;
 		};
 		pullCount += 1;
 		if (pullCount > 1 && DELAY_AFTER_FIRST_PULL_MS > 0) {
