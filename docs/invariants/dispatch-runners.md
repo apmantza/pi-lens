@@ -68,12 +68,18 @@
 - Managed tools resolve through the registry and sanctioned availability seams.
   Do not hand-roll install, PATH, or package-manager discovery. Use typed
   `SpawnFailure.kind`; repair only `tool-not-found`. A tool that has a
-  `TOOL_COMMAND_SPECS` row resolves for runners and formatters alike through one
-  ladder (`resolveToolCommandWithInstallFallback`, or
-  `resolveInstalledToolCommand` where the caller owns the install decision): the
-  trusted project's `.venv` or `node_modules/.bin` at exactly the project root,
-  never a parent directory's, then the managed install, then PATH with a
-  version check, one latch per root (#5410).
+  `TOOL_COMMAND_SPECS` row resolves through one ladder machinery, in two
+  orders. Runners (`resolveToolCommandWithInstallFallback`): the trusted
+  project's `.venv` or `node_modules/.bin` at exactly the project root, never a
+  parent directory's, then the managed install, then PATH with a version check.
+  Formatters (`resolveInstalledToolCommand`, where the caller owns the install
+  decision): the same project rung, then PATH with a version check, then the
+  managed install, because a formatter's version decides the bytes it writes, so
+  a working PATH binary is never replaced by a managed copy; a PATH binary that
+  fails its version check falls through to managed. One latch per (tool, order,
+  root), so the two never share an answer (#5410). A present tool that fails its
+  version check and has no later rung is a failed formatter outcome carrying the
+  probe's stderr, not "executable not found".
 - Windows LSP startup exit-code-1 failures are repairable only when the shared
   command resolver finds no command or an npm shim target is absent; present
   binaries that exit 1 remain runtime failures (#4263, #1199). The launch and

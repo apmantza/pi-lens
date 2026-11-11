@@ -340,7 +340,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	cache: {
 		"clients/diagnostic-line-freshness.ts": 5,
 		"clients/dispatch/runners/tree-sitter.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 21,
+		// 21 -> 22 (#5492 r2): `noteDecision` stores the rejected probe's output
+		// on the same per-cwd availability entry as the rest of the verdict
+		// (`rejectedOutput`); the entry is the checker's own state, not a cache of
+		// a derived answer.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 22,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 6,
 		"clients/installer/index.ts": 8,
 		"clients/lsp/inferred-project.ts": 4,
@@ -433,7 +437,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/file-utils.ts": 4,
 		"clients/format-service.ts": 11,
 		// 25 -> 24 (#5417): the changed-on-failure compare shed an error branch.
-		"clients/formatters.ts": 24,
+		// 24 -> 25 (#5492 r2): the present-but-failed-its-version-check result
+		// carries the probe's output in `FormatterResult.error`.
+		"clients/formatters.ts": 25,
 		"clients/generation-lock.ts": 5,
 		"clients/git-tracked-ignore.ts": 2,
 		"clients/govulncheck-client.ts": 6,
@@ -1138,7 +1144,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// stop building `.bin` paths by hand and route through the shared lookup.
 		// #5410: 18 -> 19, the PATH-only resolution's `{ path, rung }` value
 		// (the existing VenvResolution shape).
-		"clients/dispatch/runners/utils/runner-helpers.ts": 19,
+		// 19 -> 20 (#5492 r2): the path-first project rung's `{ path, rung }`
+		// value, the same VenvResolution shape.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 20,
 		// 7 -> 3 (#4689 item 6): `findValeConfig` delegates to
 		// `findLocalToolConfig`, dropping its hand-rolled `path` loop.
 		"clients/dispatch/runners/vale.ts": 3,

@@ -353,7 +353,7 @@ const WHICH_BUDGET_MS = 5000;
  *
  * `which()` answers "is it on PATH", the `detect()` prefilter. It does not
  * choose the binary a formatter RUNS: that is `resolveFormatterToolCommand`,
- * the runner's ladder (#5410). A tool with no other rung (zig, dart, nixfmt,
+ * the formatter ladder (#5410, project, PATH, managed). A tool with no other rung (zig, dart, nixfmt,
  * terraform, ...) has PATH as its whole ladder, so its `which` is the answer.
  */
 const whichLatchByCommand = new Map<
