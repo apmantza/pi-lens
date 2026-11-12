@@ -211,7 +211,7 @@ describe("#5182 weights from the test-history journal", () => {
 	});
 
 	it("throws naming the day and file for a non-finite duration, keeping runs 0 a skip", () => {
-		const bad = (stat: object) =>
+		const bad = (stat: Record<string, unknown>) =>
 			day("2026-11-08", { [A]: stat as Stat, "tests/b.test.ts": ok1 });
 		const ok1 = { runs: 1, durationMs: 1000 };
 		const msg =
