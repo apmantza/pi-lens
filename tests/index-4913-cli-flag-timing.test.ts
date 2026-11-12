@@ -39,6 +39,27 @@ import {
 
 const fixture = piSessionFixture();
 
+/**
+ * #5399: the fixture home holds one file — the orphan-backstop cooldown stamp,
+ * the shape the #5294 rejected variant seeded — BEFORE this file's first
+ * `session_start`, in every case order. The cloud flaky-test routine reported
+ * the `/lens-toggle` case red 4/4 in exactly this state (`lsp_touch_file`
+ * absent for the post-toggle edit); the routine, two reviewers, the pi 1.5.0 /
+ * Node 24 control host and 20+ runs on the dev host (load-saturated, cold
+ * jiti cache, `--sequence.shuffle`) never turned the red, and no consumer in
+ * `session_start` lists the home's entries — the shipped harness itself holds
+ * `orphan-backstop.json` in the home at every later `session_start`. So the
+ * premise is not reproducible, and this plant pins the claim as behaviour:
+ * every case below, and the named `#5399` cell in particular, must register
+ * the lens seams with a file in the home from the first start. If an
+ * environment ever proves the claim, this file reddens naming it.
+ */
+{
+	const stamp = path.join(fixture.root, "home", "orphan-backstop.json");
+	fs.mkdirSync(path.dirname(stamp), { recursive: true });
+	fs.writeFileSync(stamp, JSON.stringify({ lastSweepAt: Date.now() }));
+}
+
 /** The bundled `debugger-statement` rule's message, as `write` reports it. */
 const BLOCKER_TEXT = "debugger_statement";
 
@@ -171,6 +192,36 @@ describe("#4913: --no-lens reaches the lens decision pi makes after the factory"
 		});
 		const before = (await lensWorkRows(handle)).length;
 		// pi runs the registered command; the toggle flips the session's state.
+		await handle.prompt("/lens-toggle");
+		await handle.prompt("edit b.ts");
+		expect(handle.errors).toEqual([]);
+		expect(await lensWorkRows(handle, before)).toEqual(
+			expect.arrayContaining(LENS_WORK_PHASES),
+		);
+		expect(writeResult(handle)).toContain(BLOCKER_TEXT);
+	});
+
+	// #5399: the same toggle cycle with the home planted before the file's
+	// first `session_start` (plant at the file head). The claimed cloud red was
+	// this edit registering no `lsp_touch_file`; the cell pins the acceptance —
+	// `/lens-toggle` registers the dispatch and language-server seams whatever
+	// the home holds at the first start.
+	it("lets /lens-toggle register the lens seams with the home planted before the first start (#5399)", async () => {
+		const proj = lspProject("lens-off-toggled-home-planted");
+		const target = path.join(proj, "b.ts");
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: proj,
+			flags: new Map<string, boolean>([
+				["no-lsp", false],
+				["no-lens", true],
+			]),
+			responses: [
+				step(writeTarget(target, BLOCKING_FILE), "writing"),
+				endTurn("done"),
+			],
+		});
+		const before = (await lensWorkRows(handle)).length;
 		await handle.prompt("/lens-toggle");
 		await handle.prompt("edit b.ts");
 		expect(handle.errors).toEqual([]);
