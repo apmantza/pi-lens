@@ -124,7 +124,11 @@ import {
 	rebindableProcessBridgeDeps,
 	type BridgeActivation,
 } from "./clients/process-bridge.js";
-import { isExternalOrVendorFile, toPosix } from "./clients/path-utils.js";
+import {
+	isExternalOrVendorFile,
+	resolveToolCallFilePath,
+	toPosix,
+} from "./clients/path-utils.js";
 import {
 	isPathIgnoredByProject,
 	isRecordableProjectPath,
@@ -2049,14 +2053,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 			"Allow one edit to a file without a prior read. Usage: /lens-allow-edit <path>",
 		handler: async (args, ctx) => {
 			const [rawTarget] = normalizeCommandArgs(args);
-			if (!rawTarget) {
+			// Shape 74: the exemption is keyed like the edit's own tool call, so the
+			// path resolves through the same host seam (`~`, `@`, `file://`).
+			const target = resolveToolCallFilePath(
+				rawTarget,
+				ctx.cwd,
+				runtime.projectRoot,
+			);
+			if (!target) {
 				notifyUi(ctx, "Usage: /lens-allow-edit <path>", "warning");
 				return;
 			}
-
-			const targetPath = path.isAbsolute(rawTarget)
-				? rawTarget
-				: path.resolve(ctx.cwd ?? runtime.projectRoot, rawTarget);
+			const targetPath = target.path;
 			runtime.readGuardFor(getStableSessionId(ctx)).addExemption(targetPath);
 			notifyUi(
 				ctx,

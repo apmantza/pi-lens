@@ -1162,7 +1162,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/suppress-writer.ts": 2,
 		"clients/disposition-logger.ts": 3,
 		"clients/durable-store.ts": 13,
-		"clients/effective-config.ts": 5,
+		// 5 -> 4 (#4907): the queried `path` resolves through `resolveHostToolPath`,
+		// so its `path.resolve(cwd, file)` leaves the module.
+		"clients/effective-config.ts": 4,
 		"clients/extension-log.ts": 2,
 		"clients/file-kinds.ts": 2,
 		"clients/file-time.ts": 6,
@@ -1328,13 +1330,14 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 5 -> 6 (#4583): the adopted warm entry keys its map lookup through
 		// `path.resolve(cwd)`, the same sense (a path operation) the entry's own
 		// creation site already uses.
-		"clients/mcp/analyze.ts": 6,
+		// 6 -> 4 (#4907): the file argument resolves through `resolveHostToolPath`,
+		// so the `path.isAbsolute` / `path.resolve` pair leaves the module.
+		"clients/mcp/analyze.ts": 4,
 		// 4 -> 7 (#4376): OS path namespace calls build the pid-first endpoint
 		// name and the stale-socket owner marker. No path-key owner changes.
 		// 7 -> 9 (#4353): the bound-name identity check anchors its token on the
 		// endpoint's own directory and file name.
 		"clients/mcp/ipc.ts": 9,
-		"clients/mcp/session.ts": 3,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
@@ -1663,7 +1666,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// for the projected pi definitions, so their `path:` keys stop being spelled
 		// here.
 		"mcp/server.ts": 30,
-		"index.ts": 20,
+		// 20 -> 19 (#4907): `/lens-allow-edit` resolves through
+		// `resolveToolCallFilePath` instead of `path.isAbsolute` / `path.resolve`.
+		"index.ts": 19,
 		"clients/command-path.ts": 5,
 	},
 	record: {

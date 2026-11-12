@@ -71,7 +71,7 @@ import {
 // hand-rolled `path.relative`/prefix check here is how the two would drift
 // apart on a Windows-shaped path (AGENTS.md defect shape 2).
 import { isSameOrWithin } from "./lsp/server.js";
-import { homeRelativePath } from "./path-utils.js";
+import { homeRelativePath, resolveHostToolPath } from "./path-utils.js";
 import { resolveToolCwd } from "./tool-cwd.js";
 import { compareOrdinal } from "./string-utils.js";
 import { LENS_TOOL_NAMES, resolveLensToolEnabled } from "./tool-config.js";
@@ -434,9 +434,12 @@ export async function effectiveConfig(
 	// caller that names a workspace and then a file inside it means that file,
 	// and a bare `path.resolve` would silently answer for a same-named path
 	// under the host process's own directory — a wrong answer wearing a
-	// confident shape.
+	// confident shape. The host spelling (`~`, `@`, `file://`) resolves first,
+	// as pi opens it (shape 74, #4907).
 	const requestedFile =
-		options.file === undefined ? undefined : path.resolve(cwd, options.file);
+		options.file === undefined
+			? undefined
+			: resolveHostToolPath(options.file, cwd);
 
 	// CONFINED, not assumed (#2520). A `file` that resolves outside `cwd` has
 	// no containment relationship to the workspace this view is `cwd`-labelled
