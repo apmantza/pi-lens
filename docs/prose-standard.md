@@ -12,7 +12,7 @@ Lead with the outcome. Remove words that do no work. Use active voice and presen
 
 ## What the checker covers
 
-`scripts/check-prose.mjs` checks the mechanical rules. The checker ignores fenced code, inline code, URLs, quoted log lines, blockquotes, and tables. It warns on long sentences, filler, and passive voice, and it blocks title-case headings (#5110). The CLI accepts a body file or standard input and supports `--json`.
+`scripts/check-prose.mjs` checks the mechanical rules. The checker ignores fenced code, inline code, URLs, quoted log lines, blockquotes, and tables. It warns on long sentences, filler, and passive voice, and it blocks title-case headings (#5110). The heading check reads inline code too, so a capitalised name in backticks counts toward title case. The CLI accepts a body file or standard input and supports `--json`.
 
 ```
 node scripts/check-prose.mjs --body-file docs/prose-standard.md
