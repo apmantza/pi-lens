@@ -108,46 +108,56 @@ afterEach(() => {
 	fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-describe.each(["pyrightconfig.json", "pyproject.toml"])(
-	"a %s changed outside pi-lens",
-	(name) => {
-		const config = () => path.join(tmp, name);
+// Recurrence (#5501): `Cargo.toml` and `go.mod` were not on the list, so a
+// manifest fixed after rust-analyzer's workspace failed to load never reached
+// it (every touch read `server-load-failed` until restart), and a `go.mod`
+// raised from go 1.17 to 1.21 left gopls's "requires go1.18" finding in place
+// through six touches. `go.work` was not either: a `use` member added to it
+// left gopls's "no required module provides package" finding in place through
+// five touches. The servers were measured; see server-config-files.ts.
+describe.each([
+	"pyrightconfig.json",
+	"pyproject.toml",
+	"Cargo.toml",
+	"go.mod",
+	"go.work",
+])("a %s changed outside pi-lens", (name) => {
+	const config = () => path.join(tmp, name);
 
-		it("is forwarded as Created when born after the baseline look", async () => {
-			const seen = await lookAfter(() => fs.writeFileSync(config(), "{}\n"));
-			expect(seen).toHaveLength(1);
-			expect(seen[0].sources).toEqual(["config"]);
-			expect(seen[0].pathChanges).toEqual([
-				{ filePath: config(), type: "created" },
-			]);
-			expect(notified).toEqual([{ filePath: config(), type: 1 }]);
-			// A config changes the analysis of every file under its root.
-			expect(seen[0].paths).toBe("unknown");
-			expect(cacheRefusedAt()).toBe(seen[0].at);
-			// A config is not an install: no server restarts for it.
-			expect(restarted).toEqual([]);
-		});
+	it("is forwarded as Created when born after the baseline look", async () => {
+		const seen = await lookAfter(() => fs.writeFileSync(config(), "{}\n"));
+		expect(seen).toHaveLength(1);
+		expect(seen[0].sources).toEqual(["config"]);
+		expect(seen[0].pathChanges).toEqual([
+			{ filePath: config(), type: "created" },
+		]);
+		expect(notified).toEqual([{ filePath: config(), type: 1 }]);
+		// A config changes the analysis of every file under its root.
+		expect(seen[0].paths).toBe("unknown");
+		expect(cacheRefusedAt()).toBe(seen[0].at);
+		// A config is not an install: no server restarts for it.
+		expect(restarted).toEqual([]);
+	});
 
-		it("is forwarded as Changed when edited and as Deleted when removed", async () => {
-			fs.writeFileSync(config(), '{"a":1}\n');
-			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
-			fs.writeFileSync(config(), '{"a":22}\n');
-			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
-			fs.rmSync(config());
-			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
-			expect(notified).toEqual([
-				{ filePath: config(), type: 2 },
-				{ filePath: config(), type: 3 },
-			]);
-		});
+	it("is forwarded as Changed when edited and as Deleted when removed", async () => {
+		fs.writeFileSync(config(), '{"a":1}\n');
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+		fs.writeFileSync(config(), '{"a":22}\n');
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+		fs.rmSync(config());
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+		expect(notified).toEqual([
+			{ filePath: config(), type: 2 },
+			{ filePath: config(), type: 3 },
+		]);
+	});
 
-		it("is only recorded, not forwarded, by the root's first look", async () => {
-			fs.writeFileSync(config(), "{}\n");
-			await lookForOutOfBandChanges(tmp, "tool_result", runtime);
-			expect(notified).toEqual([]);
-		});
-	},
-);
+	it("is only recorded, not forwarded, by the root's first look", async () => {
+		fs.writeFileSync(config(), "{}\n");
+		await lookForOutOfBandChanges(tmp, "tool_result", runtime);
+		expect(notified).toEqual([]);
+	});
+});
 
 describe("a file that is not on the closed config list", () => {
 	// Recurrence: a gate that enumerates names it knows to be bad passes the
@@ -160,6 +170,11 @@ describe("a file that is not on the closed config list", () => {
 		"package.json",
 		"setup.py",
 		"PyProject.toml",
+		// Spelled as the servers do not read them (#5501): the list is exact and
+		// case-sensitive.
+		"cargo.toml",
+		"Cargo.toml.orig",
+		"Go.mod",
 		"pyrightconfig.json.bak",
 		"my-pyrightconfig.json",
 	])("%s publishes nothing", async (name) => {

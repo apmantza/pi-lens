@@ -1,6 +1,6 @@
 /**
- * #4532 gap 12: the project config files a language server reads once and
- * keeps, and the servers that keep them.
+ * #4532 gap 12, #5501: the project config files a language server reads once
+ * and keeps, and the servers that keep them.
  *
  * pyright reads `pyrightconfig.json` and `pyproject.toml` (`[tool.pyright]`)
  * when it starts and registers client watchers for them (a `pyrightconfig.json`
@@ -20,6 +20,31 @@
  * created after ready took effect on its own: tsserver watches it), so
  * `tsconfig*.json` is not listed. A name is added with its measurement.
  *
+ * #5501: rust-analyzer and gopls hold the manifest the same way, and a manifest
+ * fixed after the workspace failed to load stayed unread until the server
+ * restarted. Measured with rust-analyzer 1.99.1: a broken `Cargo.toml` reports
+ * `Failed to load workspaces.` and registers no watcher at all, so the event
+ * cannot wait for a registration; once the event names `Cargo.toml` the status
+ * goes error, loading, ok and the next touch finds the type error. Measured
+ * with gopls 0.17.1: a `go.mod` raised from `go 1.17` to `go 1.21` left the
+ * "requires go1.18" finding in place through six touches over 18 s, and
+ * cleared on the first touch once the event named it. A `go.work` that gained
+ * a `use` member (`use ./a` to `use (./a ./b)`) left "no required module
+ * provides package" in place through five touches without the entry, and
+ * cleared on the first touch with it listed.
+ *
+ * `Cargo.lock` and `go.sum` are not listed: they are install stamps
+ * (`INSTALL_LOCKFILES` in `clients/out-of-band-changes.ts`), and an edit to
+ * either restarts the server as an install.
+ *
+ * Not yet forwarded (#5501 remainder): a workspace member's `Cargo.toml` below
+ * the root (rust-analyzer 6 of 6 touches stale) and a nested `go.mod` under a
+ * `go.work` (gopls 5 of 5 stale), because the look stats the root's names only.
+ * The first look at a live client root publishes none of the three names edited
+ * after spawn (0 of 3: `Cargo.toml`, `go.mod`, `pyproject.toml`). Over the MCP
+ * route a rust project in a monorepo subdir was 6 of 6 stale, since that route
+ * looks at the cwd only.
+ *
  * Imports nothing: `clients/out-of-band-changes.ts` (the detector) and the LSP
  * service (the delivery) both read it.
  */
@@ -29,6 +54,9 @@ import { basename } from "node:path";
 const CONFIG_FILE_SERVERS: ReadonlyMap<string, readonly string[]> = new Map([
 	["pyrightconfig.json", ["python"]],
 	["pyproject.toml", ["python"]],
+	["Cargo.toml", ["rust"]],
+	["go.mod", ["go"]],
+	["go.work", ["go"]],
 ]);
 
 /** The config file names the detector looks for at a root. */
