@@ -780,6 +780,8 @@ Commit subjects use the repository conventional prefix, imperative mood, issue
 reference, and no trailing period. Non-trivial commits explain what and why
 in a wrapped body. Keep user-facing prose active, present-tense, concise, and
 consistent. Use sentence-case headings, Oxford commas, and no em-dash chains.
+The full standard, with its judgement-only rules and the comment layout, is
+`docs/prose-standard.md`.
 
 Issue bodies, labels, and priorities follow "Issue and PR design contract" and
 "Issue triage & labels". A PR body follows `.github/PULL_REQUEST_TEMPLATE.md`
