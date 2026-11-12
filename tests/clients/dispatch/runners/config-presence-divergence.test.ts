@@ -324,10 +324,10 @@ describe("#5408 config presence: policy and runner agree", () => {
 				write(path.join(home, ".tflint.hcl"), "");
 				vi.stubEnv("TFLINT_CONFIG_FILE", "");
 
-				const { hasTflintConfig } = await load<
-					typeof import("../../../../clients/tool-policy.js")
-				>("../../../../clients/tool-policy.js");
-				expect(hasTflintConfig(path.dirname(tf))).toBe(true);
+				const { hasToolConfig } = await load<
+					typeof import("../../../../clients/tool-config-presence.js")
+				>("../../../../clients/tool-config-presence.js");
+				expect(hasToolConfig("tflint", path.dirname(tf))).toBe(true);
 
 				await runRunner("tflint", tf, path.dirname(tf), "terraform");
 
@@ -344,11 +344,11 @@ describe("#5408 config presence: policy and runner agree", () => {
 			try {
 				vi.stubEnv("TFLINT_CONFIG_FILE", "");
 
-				const { hasTflintConfig } = await load<
-					typeof import("../../../../clients/tool-policy.js")
-				>("../../../../clients/tool-policy.js");
+				const { hasToolConfig } = await load<
+					typeof import("../../../../clients/tool-config-presence.js")
+				>("../../../../clients/tool-config-presence.js");
 				// Red on master: the policy walk is unbounded.
-				expect(hasTflintConfig(path.dirname(tf))).toBe(false);
+				expect(hasToolConfig("tflint", path.dirname(tf))).toBe(false);
 
 				await runRunner("tflint", tf, path.dirname(tf), "terraform");
 				const argv = spawnedArgs()[0] ?? [];
@@ -418,17 +418,17 @@ describe("#5408 config presence: policy and runner agree", () => {
 
 	describe("divergence 2: Python gates read structure, not substrings", () => {
 		it("a pyproject with [tool.ruff] only in a comment is not ruff config", async () => {
-			const policy = await load<
-				typeof import("../../../../clients/tool-policy.js")
-			>("../../../../clients/tool-policy.js");
+			const seam = await load<
+				typeof import("../../../../clients/tool-config-presence.js")
+			>("../../../../clients/tool-config-presence.js");
 			await withDirP((dir) => {
 				write(
 					path.join(dir, "pyproject.toml"),
 					"# [tool.ruff]\n# line-length = 100\n[tool.black]\nline-length = 88\n",
 				);
 				// Red on master: `content.includes("[tool.ruff]")` matched the comment.
-				expect(policy.hasRuffConfig(dir)).toBe(false);
-				expect(policy.hasBlackConfig(dir)).toBe(true);
+				expect(seam.hasToolConfig("ruff", dir)).toBe(false);
+				expect(seam.hasToolConfig("black", dir)).toBe(true);
 			});
 		});
 

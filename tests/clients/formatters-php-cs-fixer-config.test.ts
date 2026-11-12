@@ -38,7 +38,7 @@ vi.mock("node:os", async (importOriginal) => {
 import { phpCsFixerFormatter } from "../../clients/formatters.js";
 import { setProjectTrustState } from "../../clients/project-trust.js";
 import { resolvePhpCsFixerConfig } from "../../clients/php-cs-fixer-config.js";
-import { hasPhpCsFixerConfig } from "../../clients/tool-policy.js";
+import { hasToolConfig } from "../../clients/tool-config-presence.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
 
 const isWin = process.platform === "win32";
@@ -217,7 +217,7 @@ describe("phpCsFixerFormatter — ancestor config carriage (#2472)", () => {
 
 			// The gate: does detection say a config exists starting from the
 			// project directory?
-			expect(hasPhpCsFixerConfig(path.dirname(filePath))).toBe(true);
+			expect(hasToolConfig("php-cs-fixer", path.dirname(filePath))).toBe(true);
 
 			// The carriage: does the resolver find the SAME file starting from
 			// the formatted file's own directory?

@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { findLocalTyposConfig } from "../../clients/typos-config.js";
-import { hasOxlintConfig, hasTaploConfig } from "../../clients/tool-policy.js";
 
 // This repo's own root config files activate dispatch runner lanes for
 // pi-lens's own dogfood sessions (refs #1844): .oxlintrc.json, typos.toml,
@@ -22,7 +21,7 @@ const REPO_ROOT = path.resolve(
 
 describe("dogfood runner config activation (#1844)", () => {
 	it("hasOxlintConfig detects the repo's own .oxlintrc.json", () => {
-		expect(hasOxlintConfig(REPO_ROOT)).toBe(true);
+		expect(hasToolConfig("oxlint", REPO_ROOT)).toBe(true);
 	});
 
 	it("findLocalTyposConfig detects the repo's own typos.toml", () => {
@@ -36,6 +35,6 @@ describe("dogfood runner config activation (#1844)", () => {
 	});
 
 	it("hasTaploConfig detects the repo's own taplo.toml", () => {
-		expect(hasTaploConfig(REPO_ROOT)).toBe(true);
+		expect(hasToolConfig("taplo", REPO_ROOT)).toBe(true);
 	});
 });

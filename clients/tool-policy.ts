@@ -4,7 +4,7 @@ import { isJstsFactFile, TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
-import { findNearestContaining, walkUpDirs } from "./path-utils.js";
+import { walkUpDirs } from "./path-utils.js";
 import { hasToolConfig } from "./tool-config-presence.js";
 import type { ProjectConventions } from "./project-conventions.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
@@ -1289,22 +1289,6 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 	]),
 ]);
 
-const RUBOCOP_CONFIGS = [".rubocop.yml", ".rubocop.yaml"];
-
-const PRETTIER_CONFIGS = [
-	".prettierrc",
-	".prettierrc.json",
-	".prettierrc.yml",
-	".prettierrc.yaml",
-	".prettierrc.js",
-	".prettierrc.cjs",
-	".prettierrc.mjs",
-	"prettier.config.js",
-	"prettier.config.cjs",
-	"prettier.config.mjs",
-	"prettier.config.ts",
-];
-
 export type JstsLintRunnerName = "eslint" | "oxlint" | "biome-check-json";
 
 export interface JstsLintPolicyContext {
@@ -1642,21 +1626,24 @@ export function getLinterPolicyForCwd(
 ): LinterPolicy | undefined {
 	const context: LinterPolicyContext = {
 		hasEslintConfig: hasToolConfig("eslint", cwd),
-		hasOxlintConfig: hasOxlintConfig(cwd),
+		hasOxlintConfig: hasToolConfig("oxlint", cwd),
 		hasBiomeConfig: hasToolConfig("biome", cwd),
 		hasStylelintConfig: hasToolConfig("stylelint", cwd),
 		hasSqlfluffConfig: hasToolConfig("sqlfluff", cwd),
-		hasRubocopConfig: hasRubocopConfig(cwd),
+		hasRubocopConfig: hasToolConfig("rubocop", cwd),
 		hasYamllintConfig: hasToolConfig("yamllint", cwd),
 		hasMarkdownlintConfig: hasToolConfig("markdownlint", cwd),
 		hasGolangciConfig: hasToolConfig("golangci-lint", cwd),
 		hasPhpstanConfig: hasToolConfig("phpstan", cwd),
 		hasMypyConfig: hasToolConfig("mypy", cwd),
-		hasDetektConfig: hasDetektConfig(cwd),
+		hasDetektConfig: hasToolConfig("detekt", cwd),
 		hasKtfmtConfig: hasKtfmtConfig(cwd),
 		// From the file's directory, not cwd: a `.tflint.hcl` in a terraform
 		// subdirectory is invisible to an upward walk that starts at the repo root.
-		hasTflintConfig: hasTflintConfig(path.dirname(path.resolve(cwd, filePath))),
+		hasTflintConfig: hasToolConfig(
+			"tflint",
+			path.dirname(path.resolve(cwd, filePath)),
+		),
 	};
 	const policy = getLinterPolicyForFile(filePath, context);
 	if (policy) {
@@ -1913,47 +1900,6 @@ export function hasNearestPackageJsonDependency(
 	return false;
 }
 
-export function hasNearestPackageJsonField(
-	cwd: string,
-	fieldName: string,
-): boolean {
-	const pkgPath = findNearestPackageJsonPath(cwd);
-	if (!pkgPath) return false;
-	try {
-		const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as Record<
-			string,
-			unknown
-		>;
-		return pkg[fieldName] !== undefined;
-	} catch {}
-	return false;
-}
-
-export function hasOxfmtConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (fs.existsSync(path.join(dir, "oxfmt.toml"))) return true;
-		if (fs.existsSync(path.join(dir, ".oxfmtrc.json"))) return true;
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as Record<
-					string,
-					unknown
-				>;
-				const deps = {
-					...(pkg.dependencies as Record<string, unknown> | undefined),
-					...(pkg.devDependencies as Record<string, unknown> | undefined),
-				};
-				// Published package is `oxfmt`; the scoped name does not exist on npm.
-				if (deps["oxfmt"] || deps["@oxc-project/oxfmt"]) return true;
-			} catch {}
-		}
-	}
-	// Vite+ is asked once, from cwd: the seam stops at $HOME, and asking it per
-	// ancestor of this unbounded walk found a vite-plus.json above $HOME (#5408 F6).
-	return hasToolConfig("vitePlus", cwd);
-}
-
 // Empirically verified against the real `oxfmt` npm package (0.62.0), a
 // scratch fixture, and a plain `Component.svelte` — see PR body for the full
 // four-cell matrix. Both conditions are required; either alone always fails:
@@ -2016,45 +1962,6 @@ export function hasOxfmtSvelteConfig(cwd: string): boolean {
 		}
 	}
 	return false;
-}
-
-export function hasRubocopConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of RUBOCOP_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-		const gemfile = path.join(dir, "Gemfile");
-		if (fs.existsSync(gemfile)) {
-			try {
-				const content = fs.readFileSync(gemfile, "utf-8");
-				if (content.includes("rubocop")) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasPrettierConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		if (PRETTIER_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg))))
-			return true;
-		const pkgPath = path.join(dir, "package.json");
-		if (fs.existsSync(pkgPath)) {
-			try {
-				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-				if (Object.hasOwn(pkg, "prettier")) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
-export function hasBlackConfig(cwd: string): boolean {
-	return hasToolConfig("black", cwd);
-}
-
-export function hasRuffConfig(cwd: string): boolean {
-	return hasToolConfig("ruff", cwd);
 }
 
 /**
@@ -2123,107 +2030,6 @@ export function biomeConfigArgs(cwd: string): string[] {
 	];
 }
 
-// tflint ships built-in rules and runs without config, so `.tflint.hcl` is not
-// a prerequisite — it is the project electing tflint as its terraform linter,
-// which promotes the policy from smart-default to config-first. Takes a start
-// directory rather than the project cwd because tflint resolves config
-// per-directory: callers pass the EDITED FILE's directory so this agrees with
-// what the runner will actually hand tflint via `--config`.
-export function hasTflintConfig(startDir: string): boolean {
-	return hasToolConfig("tflint", startDir);
-}
-
-export function hasClangFormatConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [".clang-format", "_clang-format"]) !== undefined
-	);
-}
-
-export function hasPhpCsFixerConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [
-			".php-cs-fixer.php",
-			".php-cs-fixer.dist.php",
-		]) !== undefined
-	);
-}
-
-export function hasStyluaConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, ["stylua.toml", ".stylua.toml"]) !== undefined
-	);
-}
-
-export function hasOcamlformatConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".ocamlformat"]) !== undefined;
-}
-
-export function hasGoogleJavaFormatConfig(cwd: string): boolean {
-	// google-java-format has no standard config file — gate on .editorconfig
-	// with indent_size defined (common Java project signal) or explicit opt-in marker.
-	return (
-		findNearestContaining(cwd, [".google-java-format", ".editorconfig"]) !==
-		undefined
-	);
-}
-
-export function hasCljfmtConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [".cljfmt.edn", "cljfmt.edn", ".cljfmt"]) !==
-		undefined
-	);
-}
-
-export function hasCmakeFormatConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [
-			".cmake-format",
-			".cmake-format.yaml",
-			".cmake-format.yml",
-			".cmake-format.json",
-			".cmake-format.py",
-			"cmake-format.yaml",
-			"cmake-format.yml",
-		]) !== undefined
-	);
-}
-
-// PSScriptAnalyzerSettings.psd1 is the conventional settings file PowerShell
-// projects use to configure `Invoke-Formatter`/`Invoke-ScriptAnalyzer` (passed
-// via `-Settings`); `ScriptAnalyzerSettings.psd1` is the same convention minus
-// the "PS" prefix and shows up in some repos too. Either one opting a project
-// into explicit PSScriptAnalyzer config is enough to select the formatter
-// (#1572 — `psscriptanalyzer-format` had no case here at all, so it could
-// never be selected regardless of project config).
-const PSSCRIPTANALYZER_SETTINGS_FILES = [
-	"PSScriptAnalyzerSettings.psd1",
-	"ScriptAnalyzerSettings.psd1",
-];
-
-/**
- * The nearest PSScriptAnalyzer settings file's full path, or `undefined`.
- * `formatters.ts`'s `resolveCommand` passes this straight to
- * `Invoke-Formatter -Settings` (#1572 review F2) — gating on the file's
- * PRESENCE without ever reading its RULES would run the project's file
- * through the stock `CodeFormatting` ruleset regardless of what it declared,
- * the same stock-style imposition #1144 banned for the other formatters.
- */
-export function findPSScriptAnalyzerConfigPath(
-	cwd: string,
-): string | undefined {
-	for (const dir of walkUpDirs(cwd)) {
-		for (const name of PSSCRIPTANALYZER_SETTINGS_FILES) {
-			const candidate = path.join(dir, name);
-			if (fs.existsSync(candidate)) return candidate;
-		}
-	}
-	return undefined;
-}
-
-export function hasPSScriptAnalyzerConfig(cwd: string): boolean {
-	return findPSScriptAnalyzerConfigPath(cwd) !== undefined;
-}
-
 // #1595 sweep — 7 of the 8 formatters #1572 left unreachable (038cd1df flipped
 // defaultWhenUnconfigured to false for these without adding an explicit-config
 // check; see EXPLICIT_FORMATTER_CONFIG_CHECKS in formatters.ts). nixfmt is the
@@ -2232,66 +2038,6 @@ export function hasPSScriptAnalyzerConfig(cwd: string): boolean {
 // `terraform init`'s lock file, so there is no honest "explicit opt-in" signal
 // to gate on — see the KNOWN_UNREACHABLE_FORMATTERS comment in
 // formatter-policy-consistency.test.ts.
-
-export function hasCsharpierConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [
-			".csharpierrc",
-			".csharpierrc.json",
-			".csharpierrc.yaml",
-			".csharpierrc.yml",
-		]) !== undefined
-	);
-}
-
-// Ormolu has no general settings file, but it does read a project `.ormolu`
-// file for custom operator fixity declarations (the only file-based config
-// surface Ormolu supports) — real, if narrow, per its own docs.
-export function hasOrmoluConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".ormolu"]) !== undefined;
-}
-
-export function hasTaploConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, ["taplo.toml", ".taplo.toml"]) !== undefined
-	);
-}
-
-// `terraform fmt` itself is deliberately unconfigurable (no rc file, no
-// per-project options — HashiCorp's own docs call this out). The nearest
-// thing to an explicit per-project opt-in is `.terraform.lock.hcl`, written
-// only by `terraform init`: it marks a directory the user has deliberately
-// set up as a Terraform root, as opposed to a stray `.tf`/`.tfvars` file
-// dropped into an unrelated repo. A manifest marker, per #1595's own guidance
-// for formatters with no dedicated config-file convention.
-export function hasTerraformConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".terraform.lock.hcl"]) !== undefined;
-}
-
-export function hasSwiftformatConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".swiftformat"]) !== undefined;
-}
-
-// Fantomas has no dedicated rc file; its documented config surface is
-// `.editorconfig` (fsharp_*-prefixed keys) or a `.fantomasignore` file (the
-// one Fantomas-specific marker it does ship). Mirrors hasGoogleJavaFormatConfig's
-// precedent for formatters whose only config surface is .editorconfig.
-export function hasFantomasConfig(cwd: string): boolean {
-	return (
-		findNearestContaining(cwd, [".fantomasignore", ".editorconfig"]) !==
-		undefined
-	);
-}
-
-// `.formatter.exs` is THE convention `mix format` reads project config from
-// (inputs, line_length, plugins) — universal in Elixir projects that use it.
-export function hasMixFormatConfig(cwd: string): boolean {
-	return findNearestContaining(cwd, [".formatter.exs"]) !== undefined;
-}
-
-export function hasDetektConfig(cwd: string): boolean {
-	return hasToolConfig("detekt", cwd);
-}
 
 // ktfmt has no native config file format; these are pi-lens opt-in markers plus
 // the gradle-plugin signal, so a project that uses ktfmt elects it as its Kotlin
@@ -2723,18 +2469,6 @@ export function findCompiledClassesDir(cwd: string): string | undefined {
 	return undefined;
 }
 
-export function hasStandardrbConfig(cwd: string): boolean {
-	for (const dir of walkUpDirs(cwd)) {
-		const gemfile = path.join(dir, "Gemfile");
-		if (fs.existsSync(gemfile)) {
-			try {
-				if (fs.readFileSync(gemfile, "utf-8").includes("standard")) return true;
-			} catch {}
-		}
-	}
-	return false;
-}
-
 export function getRubocopCommand(cwd: string): {
 	cmd: string;
 	args: string[];
@@ -2749,29 +2483,6 @@ export function getRubocopCommand(cwd: string): {
 		} catch {}
 	}
 	return { cmd: "rubocop", args: [] };
-}
-
-// Per https://oxc.rs/docs/guide/usage/linter/config.html, oxlint auto-discovers
-// `.oxlintrc.json`, `.oxlintrc.jsonc`, `oxlint.config.ts`, and `oxlint.config.mts`
-// (in addition to the legacy `oxlint.json` name pi-lens already recognized).
-const OXLINT_CONFIGS = [
-	".oxlintrc.json",
-	".oxlintrc.jsonc",
-	"oxlint.json",
-	"oxlint.config.ts",
-	"oxlint.config.mts",
-];
-
-export function hasOxlintConfig(cwd: string): boolean {
-	// Oxlint auto-discovers the nearest config by file location, so the walk
-	// ignores intermediate package.json boundaries just like the flat
-	// ESLint branch above (#3017).
-	for (const dir of walkUpDirs(cwd)) {
-		for (const cfg of OXLINT_CONFIGS) {
-			if (fs.existsSync(path.join(dir, cfg))) return true;
-		}
-	}
-	return hasToolConfig("vitePlus", cwd);
 }
 
 export function getPreferredJstsLintRunners(
@@ -2805,7 +2516,7 @@ export function getJstsLintPolicy(
 export function getJstsLintPolicyForCwd(cwd: string): JstsLintPolicy {
 	return getJstsLintPolicy({
 		hasEslintConfig: hasToolConfig("eslint", cwd),
-		hasOxlintConfig: hasOxlintConfig(cwd),
+		hasOxlintConfig: hasToolConfig("oxlint", cwd),
 		hasBiomeConfig: hasToolConfig("biome", cwd),
 	});
 }
