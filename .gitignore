@@ -118,6 +118,7 @@ migrate-*.js
 !docs/real-harness.md
 !docs/audit1.md
 !docs/agent-guide.md
+!docs/architecture.md
 !docs/agent-tools.md
 !docs/ast-grep_rules_catalog.md
 !docs/tree-sitter_rules_catalog.md

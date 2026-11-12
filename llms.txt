@@ -1,0 +1,23 @@
+# pi-lens
+
+> pi-lens is an extension for the pi coding agent that runs language servers, linters, formatters, and structural rules on every file an agent writes or edits, and feeds the findings back to the agent.
+
+## Using pi-lens
+
+- [Agent guide](docs/agent-guide.md): how an agent reads and responds to pi-lens findings, honesty labels, and blockers
+- [Agent tools](docs/agent-tools.md): tool names, scopes, and arguments
+- [Usage guide](docs/usage.md): lifecycle, on-write pipeline, runtime flags, MCP notes, and troubleshooting
+- [Settings](docs/settings.md): defaults, environment variables, flags, and global versus project config
+- [Features](docs/features.md): the detailed feature reference
+- [Tools and commands](docs/tools.md): slash commands and the standalone CLI
+- [Diagnostic dispositions](docs/dispositions.md): mark a finding false-positive, suppressed, deferred, or flagged-to-fix
+- [Language coverage](docs/language-coverage.md): supported languages, runners, and formatters
+- [Word index](docs/word-index.md): identifier search and the discovery funnel
+- [Custom rules](docs/custom-rules.md): project ast-grep and tree-sitter rules
+- [MCP server](docs/mcp.md): the experimental server for Claude Code and other MCP clients
+- [Architecture](docs/architecture.md): how host events reach the findings the agent sees
+
+## Contributing
+
+- [AGENTS.md](AGENTS.md): the contributor contract for agents that change pi-lens itself
+- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow, checklists, and issue and PR conventions
