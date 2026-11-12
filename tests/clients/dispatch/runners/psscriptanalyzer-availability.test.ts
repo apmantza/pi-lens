@@ -26,7 +26,10 @@ const { safeSpawnAsync, logLatencySpy } = vi.hoisted(() => ({
 	logLatencySpy: vi.fn(),
 }));
 
-vi.mock("../../../../clients/safe-spawn.js", () => ({
+vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/safe-spawn.js")
+	>()),
 	safeSpawnAsync,
 	safeSpawn: vi.fn(),
 }));
@@ -59,7 +62,9 @@ async function ledgerReasons(
  * run fails on the latch, not on missing test scaffolding.
  */
 async function loadRunner(): Promise<{
-	run: (ctx: never) => Promise<{ status: string; diagnostics: unknown[] }>;
+	run: (
+		ctx: never,
+	) => Promise<{ status: string; diagnostics: unknown[]; skipReason?: string }>;
 }> {
 	vi.resetModules();
 	const mod =
@@ -277,7 +282,8 @@ describe("psscriptanalyzer availability (#1490)", () => {
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
 			args.some((arg) => arg.includes("Get-Module")) ? timeoutResult : ok(),
 		);
-		expect((await runner.run(ctx())).status).toBe("skipped");
+		// #5258 r3: the module probe's own verdict, not an absent module.
+		expect((await runner.run(ctx())).skipReason).toBe("probe-incomplete");
 		expect(callsMatching("Get-Module")).toHaveLength(1);
 		expect(
 			decisions().find((entry) => entry.metadata?.tool === "psscriptanalyzer")
@@ -335,7 +341,7 @@ describe("psscriptanalyzer availability (#1490)", () => {
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) =>
 			args.some((arg) => arg.includes("Get-Module")) ? moduleMissing : ok(),
 		);
-		expect((await runner.run(ctx())).status).toBe("skipped");
+		expect((await runner.run(ctx())).skipReason).toBe("not-installed");
 		expect(
 			decisions().find((entry) => entry.metadata?.tool === "psscriptanalyzer")
 				?.metadata,

@@ -17,17 +17,24 @@ import {
 } from "../../../clients/dispatch/types.js";
 
 describe("reachedNoVerdict (#4484 round 3)", () => {
-	it("reads a stated not-applicable skip as a verdict, not-enabled excepted (#5042)", () => {
-		// #5042 (option A): `not-enabled` is the one stated reason that stays no
-		// verdict, because admitting it would retire recorded helm-render blockers
-		// and stop their owed ranges. Every other taxonomy entry reads as a verdict
-		// unless it is named here.
-		const noVerdictReasons: readonly string[] = ["not-enabled"];
+	it("reads only the admitted skip reasons as a verdict (#5042, #5258)", () => {
+		// #5042 (option A): `not-enabled` stays no verdict, because admitting it
+		// would retire recorded helm-render blockers and stop their owed ranges.
+		// #5258: so do the four reasons a runner states for reading none of the
+		// file. The list is an admission, not an exclusion: a reason added to the
+		// taxonomy and not named here reads no verdict, so it fails closed.
+		const verdictReasons: readonly string[] = [
+			"no-files-matched",
+			"configured-non-biome-linter",
+			"dialect-unsupported",
+			"covered-by-primary",
+			"disabled-by-config",
+		];
 		for (const skipReason of RUNNER_SKIP_REASONS) {
 			expect(
 				reachedNoVerdict({ status: "skipped", skipReason }),
 				skipReason,
-			).toBe(noVerdictReasons.includes(skipReason));
+			).toBe(!verdictReasons.includes(skipReason));
 		}
 	});
 

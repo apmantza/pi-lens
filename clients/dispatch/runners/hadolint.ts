@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -70,13 +72,13 @@ const hadolintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "hadolint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("hadolint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "hadolint");
 
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd, { id: "hadolint" });
 		}
 
 		const result = await safeSpawnAsync(

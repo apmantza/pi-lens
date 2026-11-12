@@ -1,3 +1,7 @@
+import {
+	toolAbsentSkip,
+	type AvailabilityVerdict,
+} from "./utils/runner-helpers.js";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { incrementDegradationCount } from "../../degradation-ledger.js";
@@ -11,7 +15,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { findingsResult } from "../types.js";
+import { faultSkip, findingsResult } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 import {
 	type AvailabilityCause,
@@ -229,6 +233,19 @@ async function resolvePowerShellCmd(): Promise<string | null> {
 	return null;
 }
 
+/** The typed verdict of the module probe for `cmd`, for the skip's stated cause (#5258). */
+function moduleVerdict(cmd: string): AvailabilityVerdict {
+	const latch = psAnalyzerLatchByCmd.get(cmd);
+	const outcome = latch?.getOutcome() ?? null;
+	return {
+		outcome,
+		cause: latch?.getCause() ?? null,
+		elapsedMs: 0,
+		latched: outcome !== null,
+		retryAtMs: latch?.getRetryAtMs() ?? 0,
+	};
+}
+
 async function checkModuleAvailable(cmd: string): Promise<boolean> {
 	let latch = psAnalyzerLatchByCmd.get(cmd);
 	if (!latch) {
@@ -345,10 +362,10 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cmd = await resolvePowerShellCmd();
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(ctx.cwd);
 
 		if (!(await checkModuleAvailable(cmd))) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(ctx.cwd, { verdict: moduleVerdict(cmd) });
 		}
 
 		let execLatch = psExecLatchByCmd.get(cmd);
@@ -422,7 +439,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 					subject: "psscriptanalyzer",
 					reason: `PowerShell (${cmd}) -File analysis exited with no status -- crash or signal-killed process`,
 				});
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return faultSkip("did-not-run");
 			}
 
 			if (result.status !== 0) {
@@ -468,7 +485,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 						? `PowerShell execution policy blocked -File analysis for ${cmd}: ${stderrText.trim().split("\n")[0] || "SecurityError"}`
 						: `PowerShell -File analysis for ${cmd} exited ${result.status}: ${stderrText.trim().slice(0, 200) || "no stderr"}`,
 				});
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return faultSkip("rejected-invocation");
 			}
 
 			// `-File` ran and exited 0: direct proof it works. Log the decision
@@ -510,7 +527,7 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 					subject: "psscriptanalyzer",
 					reason: `PowerShell -File analysis for ${cmd} exited 0 but stdout was ${unreadableReason}`,
 				});
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return faultSkip("report-missing");
 			}
 
 			if (diagnostics.length === 0) {

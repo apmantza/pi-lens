@@ -7,6 +7,8 @@
  * Requires: oxlint (npm install -g oxlint)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
@@ -108,7 +110,7 @@ const oxlintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "oxlint");
 		const policy = getJstsLintPolicyForCwd(cwd);
 		if (!policy.preferredRunners.includes("oxlint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		let cmd: string | null = null;
@@ -125,7 +127,7 @@ const oxlintRunner: RunnerDefinition = {
 			args = ["--format", "json", ctx.filePath];
 		}
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd, { id: "oxlint" });
 		}
 
 		// Run oxlint (or Vite+'s vp lint wrapper) on the file.

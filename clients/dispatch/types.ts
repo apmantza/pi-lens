@@ -453,7 +453,19 @@ export interface RunnerDefinition {
  * operator's own decision (`dispatch.disabledRunners`): the runner never ran,
  * which is neither a failure nor a verdict on the file. `not-enabled` is the
  * same for an opt-in runner left off (#5042): nothing failed, and nothing was
- * checked either. */
+ * checked either. The four reasons of #5258 say why a runner read none of the
+ * file, so the coverage notice names the cause instead of one sentence for all:
+ * `not-installed` (its tool was not found), `install-disabled` (not found, and
+ * the managed install is off by `PI_LENS_DISABLE_TOOL_INSTALL=1`),
+ * `not-configured` (it runs only where the project carries its config) and
+ * `not-preferred` (the project's lint policy picks another tool). Four more
+ * name why a tool that may well be installed was not usable: `probe-incomplete`
+ * (its availability probe timed out or could not finish, so it is not reported
+ * missing), `probe-rejected` (a binary it runs, the tool or a runtime it needs,
+ * was found and rejected its version probe),
+ * `trust-refused` (the project's own binary was refused by pi project trust)
+ * and `runtime-missing` (a runtime it needs, such as Java, is absent). None of
+ * them is a verdict on the file ({@link VERDICT_SKIP_REASONS}). */
 export const RUNNER_SKIP_REASONS = [
 	"no-files-matched",
 	"configured-non-biome-linter",
@@ -461,8 +473,73 @@ export const RUNNER_SKIP_REASONS = [
 	"covered-by-primary",
 	"disabled-by-config",
 	"not-enabled",
+	"not-installed",
+	"install-disabled",
+	"not-configured",
+	"not-preferred",
+	"probe-incomplete",
+	"probe-rejected",
+	"trust-refused",
+	"runtime-missing",
 ] as const;
 export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
+
+/**
+ * The skip reasons that are a verdict about the file: the runner reached a
+ * conclusion without reading it (nothing matched, another lane owns it, the
+ * operator denied it). The one admission list {@link reachedNoVerdict} reads;
+ * every other reason, and any skip that states none, reads no verdict, so a
+ * reason added to {@link RUNNER_SKIP_REASONS} fails closed until it is listed
+ * here (#5258).
+ */
+export const VERDICT_SKIP_REASONS: readonly RunnerSkipReason[] = [
+	"no-files-matched",
+	"configured-non-biome-linter",
+	"dialect-unsupported",
+	"covered-by-primary",
+	"disabled-by-config",
+];
+
+/**
+ * The skip reasons that say the runner's tool could not be used here, each
+ * with its own true cause. They are the ones the session records once per
+ * (runner, reason) (`runner-skip-cause`); `not-configured` and
+ * `not-preferred` are the project's own choices.
+ */
+export const TOOL_UNUSABLE_SKIP_REASONS: readonly RunnerSkipReason[] = [
+	"not-installed",
+	"install-disabled",
+	"probe-incomplete",
+	"probe-rejected",
+	"trust-refused",
+	"runtime-missing",
+];
+
+/**
+ * The cause a coverage notice states for a runner that skipped with this
+ * reason (#5258). A `Record` over the closed set, so a reason added without a
+ * sentence does not compile.
+ */
+export const SKIP_REASON_PHRASE: Record<RunnerSkipReason, string> = {
+	"no-files-matched": "no file matched",
+	"configured-non-biome-linter": "the project is configured for another linter",
+	"dialect-unsupported": "its tool does not support this file's dialect",
+	"covered-by-primary": "the primary language server covers this file",
+	"disabled-by-config": "disabled in config by dispatch.disabledRunners",
+	"not-enabled": "not enabled",
+	"not-installed": "not installed",
+	"install-disabled":
+		"not installed, and the managed install is off (PI_LENS_DISABLE_TOOL_INSTALL=1)",
+	"not-configured": "not configured",
+	"not-preferred": "the project's lint policy prefers another tool",
+	"probe-incomplete": "its availability probe did not finish",
+	// The binary may be a runtime the tool needs (Java for SpotBugs), not the
+	// tool itself, so the phrase does not say the tool was found.
+	"probe-rejected": "a binary it runs was found but rejected its version probe",
+	"trust-refused":
+		"the project's own binary was refused (pi project trust is not granted)",
+	"runtime-missing": "a runtime it needs is not installed",
+};
 
 /**
  * The skip reasons that say a runner had nothing to check, so beside a
@@ -471,8 +548,8 @@ export type RunnerSkipReason = (typeof RUNNER_SKIP_REASONS)[number];
  * a reason added to the taxonomy reads as a failure until it is listed here.
  * `covered-by-primary` is left out on purpose: it defers to a lane whose answer
  * is what the denial may have removed. `disabled-by-config` is the denial
- * itself and the caller handles it. {@link reachedNoVerdict} admits the
- * taxonomy as a verdict except `not-enabled`; this is the narrower "not a tool
+ * itself and the caller handles it. {@link reachedNoVerdict} is an allow-list
+ * over {@link VERDICT_SKIP_REASONS}; this is a different, narrower "not a tool
  * failure" subset, and `not-enabled` is in it (#5042): an opt-in runner left
  * off failed at nothing.
  */
@@ -481,6 +558,8 @@ export const NOT_APPLICABLE_SKIP_REASONS: readonly RunnerSkipReason[] = [
 	"configured-non-biome-linter",
 	"dialect-unsupported",
 	"not-enabled",
+	"not-configured",
+	"not-preferred",
 ];
 
 /** Whether a skip reason states the runner had nothing to check. */
@@ -704,6 +783,22 @@ export function faultSkip(fault: RunnerSkipFault): RunnerResult {
 }
 
 /**
+ * The one skip a runner returns when it states why it read none of the file
+ * (#5258). A skip with neither this, {@link faultSkip} nor an inline
+ * `skipReason` is a bare skip, which the coverage notice can only word as "a
+ * language tool is missing, timed out, or failed to run"
+ * (`tests/clients/dispatch/bare-skip-census.test.ts` bounds those).
+ */
+export function skipped(reason: RunnerSkipReason): RunnerResult {
+	return {
+		status: "skipped",
+		diagnostics: [],
+		semantic: "none",
+		skipReason: reason,
+	};
+}
+
+/**
  * Whether a runner result is usable coverage of the bytes it ran on (#3867).
  *
  * A `succeeded` run reached a verdict about the file. A `failed` run reached
@@ -757,14 +852,15 @@ export function reachedNoVerdict(
 		case "deferred":
 			return true;
 		case "skipped":
-			// #5042: an opt-in runner left off states why it did not run, which
-			// changes the notice's wording and nothing else. It still read nothing
-			// of the file, so it stays out of the verdicts exactly as its bare skip
-			// was: a recorded blocker of that runner is kept and its edited lines
-			// stay owed, not retired by a run that never happened.
-			return (
-				!isRunnerSkipReason(result.skipReason) ||
-				result.skipReason === "not-enabled"
+			// #5042, #5258: a skip that states why it did not run changes the
+			// notice's wording and nothing else. A reason outside
+			// {@link VERDICT_SKIP_REASONS} (`not-enabled`, a missing tool, a missing
+			// config) read nothing of the file, so it stays out of the verdicts
+			// exactly as its bare skip was: a recorded blocker of that runner is
+			// kept and its edited lines stay owed, not retired by a run that never
+			// happened.
+			return !VERDICT_SKIP_REASONS.some(
+				(reason) => reason === result.skipReason,
 			);
 		case "succeeded":
 		default:

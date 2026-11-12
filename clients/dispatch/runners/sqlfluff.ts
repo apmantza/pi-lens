@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
@@ -155,7 +157,7 @@ const sqlfluffRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "sqlfluff");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("sqlfluff")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 		const hasConfig = hasToolConfig("sqlfluff", cwd);
 		if (!hasConfig) {
@@ -169,7 +171,7 @@ const sqlfluffRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "sqlfluff" });
 
 		// #1937: this used to be `args.splice(2, 0, "--dialect", "ansi")` on
 		// `["lint", "--format", "json", file]`, which inserts BETWEEN the flag

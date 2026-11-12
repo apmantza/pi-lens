@@ -1306,6 +1306,15 @@ export type DegradationKind =
 	 */
 	| "lsp-server-config-load-failed"
 	/**
+	 * `lsp-server-loading-gated`: #5487: a diagnostics pull was held to the readiness the server announced
+	 * (`experimental/serverStatus`, rust-analyzer): its empty answer came while
+	 * the server was still loading, so it was retracted and asked again after
+	 * quiescence instead of reading as a clean file. Subject is the server id;
+	 * one `lsp_server_loading_gated` record per server per session, every
+	 * occurrence counted here.
+	 */
+	| "lsp-server-loading-gated"
+	/**
 	 * `lsp-server-message`: #4764: any other `window/showMessage` text, recorded once per distinct
 	 * message per session (`lsp_server_message`). Subject
 	 * `<serverId>:message:<digest>`, reason the message itself (truncated at the
@@ -1891,6 +1900,15 @@ export type DegradationKind =
 	 * file clean, or did the parser fail to read it?".
 	 */
 	| "runner-parsed-nothing"
+	/**
+	 * `runner-skip-cause`: #5258: a runner skipped because its tool could not be
+	 * found (`not-installed`) or the managed install is off
+	 * (`install-disabled`, `PI_LENS_DISABLE_TOOL_INSTALL=1`), so the files it
+	 * serves read "not checked" with a named cause. Subject is
+	 * `<runnerId>:<reason>`, once per session: every later edit takes the same
+	 * skip, so the record states the coverage gap once instead of once per edit.
+	 */
+	| "runner-skip-cause"
 	/**
 	 * `runner-spawn-timeout-cooldown`: #5413: a runner was skipped without
 	 * running because one of its spawns used up its own timeout earlier this
