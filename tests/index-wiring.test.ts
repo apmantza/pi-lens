@@ -164,6 +164,11 @@ import {
 } from "../clients/degradation-ledger.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import { _settleRegistryMutationsForTests } from "../clients/instance-registry.js";
+import { trustScopedSearchPath } from "../clients/safe-spawn.js";
+import {
+	getProjectTrustState,
+	setProjectTrustState,
+} from "../clients/project-trust.js";
 import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
@@ -1037,6 +1042,23 @@ describe("index.ts extension wiring", () => {
 			// Join the tail first so this test's exact-list assertion only sees
 			// what it records itself.
 			await _settleRegistryMutationsForTests();
+			// #5509: the reset below also clears the ledger's once-keys, so the
+			// exact-list assertion is only exact while NOTHING ELSE records in
+			// the window between that reset and the `/lens-perf` handler's own
+			// `getDegradationSummary()`. What landed in that window on master CI
+			// is the project-trust arm of the spawn seam: under the default
+			// `unknown` trust, `trustScopedSearchPath` (`clients/safe-spawn.ts`)
+			// records a once-per-generation `trust-refusal` for a spawn whose
+			// PATH carries the repository's own `node_modules/.bin`, which is
+			// where `npm test` puts it, so one spawn left in flight by extension
+			// wiring or an earlier test restrikes the row. Pin the trust state
+			// this test assumes for the whole window rather than loosen the
+			// assertion: `trusted` short-circuits `trustScopedSearchPath`, and
+			// `isUntrustedProjectPath`, the gate in every caller of
+			// `recordProjectCommandRefusal`, so no spawn can write a
+			// `trust-refusal` row here.
+			const trustBefore = getProjectTrustState();
+			setProjectTrustState("trusted");
 			resetDegradationLedger();
 			try {
 				// `log-sink-rotated` is an INFORMATIONAL kind (see
@@ -1052,6 +1074,17 @@ describe("index.ts extension wiring", () => {
 					subject: "test.log",
 					reason: "rotated",
 				});
+				// The witness that the pin above is what holds. Scope a search path
+				// that names the repository's own `node_modules/.bin`, the entry
+				// `npm test` hands every child, through the arm that wrote the CI
+				// row. Unpinned, that call records the `trust-refusal` for the
+				// entry, so this cell reds with the CI diff instead of waiting for
+				// a stray spawn. Its value is asserted after the ledger checks, so
+				// the list keeps failing first.
+				const projectBin = path.join(process.cwd(), "node_modules", ".bin");
+				const scopedWitnessPath = trustScopedSearchPath(
+					[projectBin, path.sep].join(path.delimiter),
+				);
 
 				const pi = createPiMock();
 				extension(pi.asExtensionAPI());
@@ -1069,8 +1102,16 @@ describe("index.ts extension wiring", () => {
 					expect(out).toContain(line);
 				}
 				expect(out).not.toContain("log-sink-rotated: 1 (test.log: rotated)");
+				// The isolation itself: the window's rendering carries no row from
+				// the spawn, whatever its search-path scoping decided.
+				expect(out).not.toContain("trust-refusal");
+				// The witness reached the scoping arm with trust pinned: under
+				// `unknown` or `untrusted` the project entry is dropped from the
+				// scoped path, so this cannot pass with the pin removed.
+				expect(scopedWitnessPath).toContain(projectBin);
 			} finally {
 				resetDegradationLedger();
+				setProjectTrustState(trustBefore);
 			}
 		});
 	});
