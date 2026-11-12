@@ -18,7 +18,9 @@ pi-lens gives AI coding agents fast, language-aware feedback while they write an
 pi install npm:pi-lens
 ```
 
-Requirements: Node.js >=22.19.0 and a pi host of 0.86.1 or newer. See [Troubleshooting](#troubleshooting) for npm v12, Android, and skills-manifest notes.
+Or from git: `pi install git:github.com/apmantza/pi-lens`.
+
+Requirements: Node.js >=22.19.0 and a pi host of 0.86.1 or newer. On pi 0.80–0.85, pi-lens gives no findings, because those hosts keep the prompt where the extension cannot write to it. [Release QA baseline](docs/release-qa-baseline.md) lists the certified hosts. See [Troubleshooting](#troubleshooting) for npm v12, Android, and skills-manifest notes.
 
 Install it and start a session. The language servers and many linters start with no setup. Some tools need your project's config, and a few are opt-in. See [What runs by default](#what-runs-by-default) and [Settings](docs/settings.md).
 
