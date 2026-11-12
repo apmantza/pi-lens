@@ -884,7 +884,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `Array.prototype.filter` calls, not delivery filters.
 		// 18 -> 19 (#5301): another intrinsic Array.prototype.filter selects the
 		// restored files eligible for the existing bus publisher's clean gate.
-		"clients/widget-state.ts": 19,
+		// 19 -> 20 (#5460): `rowLabel` selects the records that share a drawn row's
+		// basename, an intrinsic Array.prototype.filter.
+		"clients/widget-state.ts": 20,
 		"clients/word-index.ts": 14,
 		"clients/workspace-topology.ts": 1,
 		// #5417: `refuseOutOfRootWrites` keeps the paths whose class refuses a write.
@@ -1592,7 +1594,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
 		// filesystem path operation. 8 -> 9 (#5301): the restored state is
 		// published with each file's `path`, the bus payload's own field name.
-		"clients/widget-state.ts": 9,
+		// 9 -> 7 (#5460): `dedupeByBasename` and three per-row basename reads are
+		// gone; `rowLabel` adds two `path.basename` calls. 7 -> 6 (#5460 review
+		// F1): the unchecked line names its row's label, not its basename.
+		"clients/widget-state.ts": 6,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.

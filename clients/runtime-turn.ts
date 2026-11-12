@@ -5748,7 +5748,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 										isSecretWarning(warning) &&
 										typeof warning.line === "number" &&
 										secretBlockedLocations.has(
-											secretLocationKey(warning.filePath, warning.line),
+											secretLocationKey(warning.filePath, warning.line, cwd),
 										)
 									),
 							);

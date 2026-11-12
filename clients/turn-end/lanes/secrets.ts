@@ -203,15 +203,15 @@ function render(
 	kept: SecretsLaneKept,
 	ctx: TurnEndLaneContext,
 ): TurnEndLaneParts {
-	const sessionSecrets = dedupeSecretFindings([
-		...fromGitleaks(kept.gitleaksLive),
-		...fromTrivySecrets(kept.trivyLive),
-	]);
+	const sessionSecrets = dedupeSecretFindings(
+		[...fromGitleaks(kept.gitleaksLive), ...fromTrivySecrets(kept.trivyLive)],
+		ctx.cwd,
+	);
 	// Locations already surfaced as session-scan secret blockers — used to
 	// enrich provenance where ast-grep agrees, and handed back so the
 	// actionable-warnings advisory can suppress its duplicate ast-grep copy.
 	const deliveredLocationKeys = new Set(
-		sessionSecrets.map((f) => secretLocationKey(f.file, f.line)),
+		sessionSecrets.map((f) => secretLocationKey(f.file, f.line, ctx.cwd)),
 	);
 	// Lane-local accumulators, deliberately NOT named after the turn's tiers:
 	// `blockerParts`/`staleSecretParts` are the composer's arrays, and a lane
@@ -222,14 +222,17 @@ function render(
 		// Fold in ast-grep provenance ONLY where it coincides with a session
 		// secret — don't promote ast-grep-only findings out of their advisory
 		// tier.
-		const enriched = dedupeSecretFindings([
-			...sessionSecrets,
-			...fromAstGrepWarnings(
-				ctx.peekActionableWarnings().filter(isSecretWarning),
-			).filter((a) =>
-				deliveredLocationKeys.has(secretLocationKey(a.file, a.line)),
-			),
-		]);
+		const enriched = dedupeSecretFindings(
+			[
+				...sessionSecrets,
+				...fromAstGrepWarnings(
+					ctx.peekActionableWarnings().filter(isSecretWarning),
+				).filter((a) =>
+					deliveredLocationKeys.has(secretLocationKey(a.file, a.line, ctx.cwd)),
+				),
+			],
+			ctx.cwd,
+		);
 		const shown = enriched.slice(0, 5);
 		let report =
 			"🔴 STOP — hardcoded secrets detected. Rotate the credentials and remove them from source:\n";
