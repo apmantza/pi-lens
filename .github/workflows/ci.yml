@@ -626,6 +626,18 @@ jobs:
           PI_LENS_DEAD_OWNER_CENSUS_FILE: ${{ matrix.shard == 5 && format('{0}/dead-owner-census.log', runner.temp) || '' }}
         run: npm test -- tests/config/tmp-fixture-hygiene.test.ts
 
+      # #5528: proof the census ran. A clean shard prints no `[dead-owner-census]`
+      # line, so this counts the workers that named themselves and the dead-owner
+      # pids the run saw. `Run tests` carries the per-pid lines.
+      - name: Dead-owner census summary
+        if: always() && matrix.shard == 5
+        run: |
+          log="${RUNNER_TEMP}/dead-owner-census.log"
+          files=$(grep -c '^owner ' "$log" 2>/dev/null || true)
+          leaks=$(grep -c '^leak ' "$log" 2>/dev/null || true)
+          echo "dead-owner census: ${files:-0} test files recorded, ${leaks:-0} dead-owner pids"
+          grep '^leak ' "$log" 2>/dev/null || true
+
       # Listener input for #3215. The default reporter remains explicit above,
       # so this adds a file reporter in the same invocation and preserves the
       # existing result sections and npm/vitest exit status. Vitest also emits
