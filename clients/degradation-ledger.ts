@@ -1306,6 +1306,15 @@ export type DegradationKind =
 	 */
 	| "lsp-server-config-load-failed"
 	/**
+	 * `lsp-server-loading-gated`: #5487: a diagnostics pull was held to the readiness the server announced
+	 * (`experimental/serverStatus`, rust-analyzer): its empty answer came while
+	 * the server was still loading, so it was retracted and asked again after
+	 * quiescence instead of reading as a clean file. Subject is the server id;
+	 * one `lsp_server_loading_gated` record per server per session, every
+	 * occurrence counted here.
+	 */
+	| "lsp-server-loading-gated"
+	/**
 	 * `lsp-server-message`: #4764: any other `window/showMessage` text, recorded once per distinct
 	 * message per session (`lsp_server_message`). Subject
 	 * `<serverId>:message:<digest>`, reason the message itself (truncated at the
