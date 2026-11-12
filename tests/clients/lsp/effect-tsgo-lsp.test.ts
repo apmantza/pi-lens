@@ -73,6 +73,33 @@ function addTypeScript(dir: string, version: string): string {
 	return tsc;
 }
 
+/** `<dir>/node_modules/@typescript/native`: TypeScript 7.0.2 under the alias. */
+function addNativeAlias(dir: string): string {
+	const pkg = path.join(dir, "node_modules", "@typescript", "native");
+	fs.mkdirSync(path.join(pkg, "bin"), { recursive: true });
+	fs.writeFileSync(
+		path.join(pkg, "package.json"),
+		JSON.stringify({
+			name: "typescript",
+			version: "7.0.2",
+			bin: { tsc: "./bin/tsc" },
+		}),
+	);
+	const bin = path.join(pkg, "bin", "tsc");
+	fs.writeFileSync(bin, "#!/usr/bin/env node\n");
+	return bin;
+}
+
+/** The ledger's `effect-tsgo-launch` rows. */
+async function effectTsgoLaunchRows() {
+	const ledger = await import("../../../clients/degradation-ledger.js");
+	return ledger
+		.getDegradationSummary()
+		.filter((group) => group.kind === "lsp-registry-decision")
+		.flatMap((group) => group.latestReasons)
+		.filter((row) => /^effect-tsgo-launch:g\d+:/.test(row.subject ?? ""));
+}
+
 /** `<dir>/node_modules/@effect/tsgo` with a manifest, and its `.bin` link. */
 function addEffectTsgo(
 	dir: string,
@@ -153,6 +180,7 @@ describe("effect-tsgo selection (#4914)", () => {
 			process: fakeProcess,
 			source: "direct",
 			launchVariant: "effect-tsgo",
+			initializeFallback: expect.any(Function),
 		});
 	});
 
@@ -268,6 +296,58 @@ describe("effect-tsgo fallback (#4914)", () => {
 	});
 });
 
+describe("effect-tsgo under the alias, and its initialize fallback (#5504)", () => {
+	it("launches effect-tsgo beside an aliased TypeScript 7", async () => {
+		const root = makeRoot("alias");
+		addTypeScript(root, "6.0.3");
+		addNativeAlias(root);
+		const effect = addEffectTsgo(root);
+
+		const spawned = await trustedSpawn(root);
+
+		expect(launchLSPMock).toHaveBeenCalledTimes(1);
+		expect(launchLSPMock).toHaveBeenCalledWith(
+			effect,
+			["tsc", "--lsp", "--stdio"],
+			{ cwd: root, env: {} },
+		);
+		expect(spawned?.launchVariant).toBe("effect-tsgo");
+	});
+
+	it("initializeFallback launches native and records one row", async () => {
+		const root = makeRoot("init-fallback");
+		const tsc = addTypeScript(root, "7.0.2");
+		addEffectTsgo(root);
+		const { withLspProjectCodePermission } =
+			await import("../../../clients/lsp/launch.js");
+		const ledger = await import("../../../clients/degradation-ledger.js");
+		const spawned = await trustedSpawn(root);
+		launchLSPMock.mockClear();
+		ledger.resetDegradationLedger();
+
+		const fallback = spawned?.initializeFallback;
+		if (!fallback) throw new Error("effect-tsgo spawn has no fallback");
+		const results = [
+			await withLspProjectCodePermission(true, () => fallback(new Error("x"))),
+			await withLspProjectCodePermission(true, () => fallback(new Error("x"))),
+		];
+
+		expect(results.map((result) => result?.launchVariant)).toEqual([
+			"native-ts7",
+			"native-ts7",
+		]);
+		expect(launchLSPMock.mock.calls).toEqual([
+			[tsc, ["--lsp", "--stdio"], { cwd: root, env: {} }],
+			[tsc, ["--lsp", "--stdio"], { cwd: root, env: {} }],
+		]);
+		const rows = await effectTsgoLaunchRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.reason).toMatch(
+			/^effect-tsgo failed to initialize, using the native launch/,
+		);
+	});
+});
+
 describe("effect-tsgo trust gate (#4914)", () => {
 	it.for(["unknown", "untrusted"] as const)(
 		"refuses the project's effect-tsgo under %s trust and records the refusal",
@@ -374,11 +454,7 @@ describe("effect-tsgo launch failure (#4914)", () => {
 				effect,
 				tsc,
 			]);
-			const rows = ledger
-				.getDegradationSummary()
-				.filter((group) => group.kind === "lsp-registry-decision")
-				.flatMap((group) => group.latestReasons)
-				.filter((row) => /^effect-tsgo-launch:g\d+:/.test(row.subject ?? ""));
+			const rows = await effectTsgoLaunchRows();
 			expect(rows).toHaveLength(1);
 			expect(rows[0]?.subject).toContain(root);
 			expect(rows[0]?.reason).toMatch(/effect-tsgo launch failed/);

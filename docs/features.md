@@ -28,11 +28,11 @@ LSP servers for: TypeScript, Deno, Python (pyright/basedpyright + jedi), Go, Rus
 
 pi-lens picks the launch for JS/TS files in this order. The first two steps use only the project's own `node_modules`:
 
-1. **Effect language service** — when the nearest `node_modules/typescript` is version 7 or newer and the same `node_modules` holds `@effect/tsgo`, pi-lens runs the project's `effect-tsgo tsc --lsp --stdio`. Installing the package is the opt-in; there is no pi-lens setting. A malformed `@effect/tsgo` (no readable version, no `bin`) or a failure to start the process falls back to the next step; a server that starts and then fails to initialize does not fall back, and pi-lens never installs `@effect/tsgo`.
-2. **Native TypeScript 7** — the project's `node_modules/.bin/tsc --lsp --stdio`.
+1. **Effect language service** — when the nearest TypeScript 7 (step 2) is found and the same `node_modules` holds `@effect/tsgo`, pi-lens runs the project's `effect-tsgo tsc --lsp --stdio`. Installing the package is the opt-in; there is no pi-lens setting. A malformed `@effect/tsgo` (no readable version, no `bin`) or a failure to start the process falls back to the next step. A server that starts and then exits or fails before it finishes initializing falls back to step 2 once. pi-lens never installs `@effect/tsgo`.
+2. **Native TypeScript 7** — the project's `node_modules/.bin/tsc --lsp --stdio`. When `node_modules/typescript` is version 6 or older and the same `node_modules` holds TypeScript 7 or newer installed as `@typescript/native` (an `npm:typescript@7` alias), pi-lens runs that package's own `bin/tsc --lsp --stdio` with Node instead.
 3. **Classic** — `typescript-language-server` with a `tsserver.js`, when the nearest TypeScript is version 6 or older or no step above applies. This step can also use a server and TypeScript found on `PATH` or installed by pi-lens.
 
-The nearest installed `typescript` decides: an ancestor's TypeScript 7 never replaces a nearer, older or malformed install. The project's own compiler and launcher run only when pi has marked the project trusted (see [Configuring pi-lens](configuration.md)); otherwise the launch falls through to the next step.
+The nearest installed `typescript` decides: an ancestor's TypeScript 7, or an ancestor's `@typescript/native`, never replaces a nearer, older or malformed install. The project's own compiler and launcher run only when pi has marked the project trusted (see [Configuring pi-lens](configuration.md)); otherwise the launch falls through to the next step.
 
 ### Python: interpreter and syntax level
 

@@ -2613,7 +2613,12 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// the PATH launcher's `resolveAndLaunch` and the `java -jar` `launchLSP`. All
 	// sit on the same spawn path as the jdtls and Kotlin rows, which no hook
 	// awaits; hook-signal threading stays #2523 AC4.
-	"clients/lsp/server.ts": 132,
+	// #5504: 132 -> 137. The `@typescript/native` alias read awaits its manifest
+	// and bin `access`, `launchNativeTypeScript` awaits `getToolEnvironment` and
+	// the launch, and the effect-tsgo initialize fallback awaits that helper. All
+	// sit on the TypeScript spawn path, which no hook awaits; hook-signal
+	// threading stays #2523 AC4.
+	"clients/lsp/server.ts": 137,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
 	// #4493: 10 -> 12, the `git rev-parse` in readGitHead and the `git diff`

@@ -35,6 +35,7 @@ vi.mock("../../../clients/installer/index.js", () => ({
 
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 

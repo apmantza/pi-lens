@@ -38,6 +38,7 @@ const { findManagedToolBinary, ensureTool, getInstallAttempt } = vi.hoisted(
 );
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 vi.mock("../../../clients/safe-spawn.js", async (importOriginal) => ({

@@ -63,6 +63,7 @@ import {
 	isSameOrWithin,
 	resolveLspServerCwd,
 	type LSPServerInfo,
+	type LSPSpawnResult,
 } from "./server.js";
 import { isAuxiliary } from "./server-traits.js";
 import {
@@ -1457,22 +1458,21 @@ export class ClientRegistry {
 		try {
 			const projectCodeAllowed =
 				this.analysisRootModeForFile(filePath) !== "adopted";
-			const spawned = await withLspProjectCodePermission(
-				projectCodeAllowed,
-				() =>
+			let spawned: LSPSpawnResult | undefined =
+				await withLspProjectCodePermission(projectCodeAllowed, () =>
 					server.spawn(root, {
 						allowInstall,
 						projectCodeAllowed,
 						sessionRoot: this.sessionCwd ?? process.cwd(),
 					}),
-			);
+				);
 
-			// Guard 1: service was shut down while we were waiting for the spawn.
-			// Kill the raw process — no LSPClient exists yet — and bail out without
-			// marking the key broken (this is not a server failure).
-			if (this.isDestroyed) {
+			// The service was shut down while a launch was in flight. Kill the raw
+			// process — no LSPClient exists yet — and bail out without marking the
+			// key broken (this is not a server failure).
+			const abortSpawn = (launched: LSPSpawnResult | undefined): undefined => {
 				try {
-					spawned?.process?.process?.kill();
+					launched?.process?.process?.kill();
 				} catch {
 					// pi-lens-ignore: missing-error-propagation — best-effort kill on aborted spawn
 				}
@@ -1481,7 +1481,10 @@ export class ClientRegistry {
 				);
 				this.noteSpawnVerdict(key, "declined");
 				return undefined;
-			}
+			};
+
+			// Guard 1: service was shut down while we were waiting for the spawn.
+			if (this.isDestroyed) return abortSpawn(spawned);
 
 			if (!spawned) {
 				logSessionStart(
@@ -1536,44 +1539,66 @@ export class ClientRegistry {
 				return undefined;
 			}
 
-			const override = getServerInitOverride(server.id, filePath);
-			// #4299: the compiler owner's admitted path must survive config
-			// merging; otherwise the wrapper can fork a different compiler.
-			const mergedInit =
-				spawned.launchVariant === "classic"
-					? mergeInitializationOptions(
-							override?.initializationOptions,
-							spawned.initialization,
-						)
-					: mergeInitializationOptions(
-							spawned.initialization,
-							override?.initializationOptions,
-						);
-			// A replacement process is a new first-contact identity even when the
-			// configured server id is unchanged. Re-arm both capability latches before
-			// the replacement can publish a snapshot.
-			this.hooks.rearmFirstContact(server.id);
+			const connect = (launched: LSPSpawnResult) => {
+				const override = getServerInitOverride(server.id, filePath);
+				// #4299: the compiler owner's admitted path must survive config
+				// merging; otherwise the wrapper can fork a different compiler.
+				const mergedInit =
+					launched.launchVariant === "classic"
+						? mergeInitializationOptions(
+								override?.initializationOptions,
+								launched.initialization,
+							)
+						: mergeInitializationOptions(
+								launched.initialization,
+								override?.initializationOptions,
+							);
+				// A replacement process is a new first-contact identity even when the
+				// configured server id is unchanged. Re-arm both capability latches before
+				// the replacement can publish a snapshot.
+				this.hooks.rearmFirstContact(server.id);
 
-			const client = await createLSPClient({
-				serverId: server.id,
-				process: spawned.process,
-				root,
-				sessionCwd: this.sessionCwd,
-				initialization: mergedInit,
-				initializeTimeoutMs: server.initializeTimeoutMs,
-				launchVariant: spawned.launchVariant,
-				settingsSection: server.settingsSection,
-				// #4764: the declared role travels with the client, so a failed server
-				// config can gate an auxiliary scanner's empty publications only.
-				role: server.role,
-				// #5131 round 2: the config-declared flag gates the echo hold; a
-				// built-in row with the same behaviour declares `echoesOwnNotice`.
-				custom: server.custom,
-				echoesOwnNotice: server.echoesOwnNotice,
-				onDiagnosticsPublished: (serverId) => {
-					this.hooks.noteDiagnosticsPublished(serverId);
-				},
-			});
+				return createLSPClient({
+					serverId: server.id,
+					process: launched.process,
+					root,
+					sessionCwd: this.sessionCwd,
+					initialization: mergedInit,
+					initializeTimeoutMs: server.initializeTimeoutMs,
+					launchVariant: launched.launchVariant,
+					settingsSection: server.settingsSection,
+					// #4764: the declared role travels with the client, so a failed server
+					// config can gate an auxiliary scanner's empty publications only.
+					role: server.role,
+					// #5131 round 2: the config-declared flag gates the echo hold; a
+					// built-in row with the same behaviour declares `echoesOwnNotice`.
+					custom: server.custom,
+					echoesOwnNotice: server.echoesOwnNotice,
+					onDiagnosticsPublished: (serverId) => {
+						this.hooks.noteDiagnosticsPublished(serverId);
+					},
+				});
+			};
+
+			let client: Awaited<ReturnType<typeof createLSPClient>>;
+			try {
+				client = await connect(spawned);
+			} catch (err) {
+				// none: #5504, a launch with a known-good sibling (effect-tsgo ->
+				// native) exited or failed `initialize`; its fallback writes the
+				// record and runs once, inside the spawn's project-code permission.
+				// No fallback, or one that answers nothing, rethrows into the ladder.
+				const fallback = spawned.initializeFallback;
+				if (!fallback) throw err;
+				const replacement = await withLspProjectCodePermission(
+					projectCodeAllowed,
+					() => fallback(err),
+				);
+				if (!replacement) throw err;
+				if (this.isDestroyed) return abortSpawn(replacement);
+				spawned = replacement;
+				client = await connect(spawned);
+			}
 
 			// Guard 2: service was shut down while we were completing the initialize
 			// handshake. Shut down the live client best-effort and do not register it.

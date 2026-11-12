@@ -635,6 +635,8 @@ export const wallClockBudgetInclude = [
 	// asserting which notifications reached the server — the same #1022/#2332
 	// contention class as its lane siblings.
 	"tests/clients/lsp/did-save-notification.test.ts",
+	// #5504: real effect-tsgo stub + fake-LSP native child through ClientRegistry.spawnClient (real-process-spawn admission); waits on two initialize handshakes.
+	"tests/clients/lsp/effect-tsgo-initialize-fallback-5504.test.ts",
 	"tests/clients/lsp/fake-lsp-server-parent-watchdog.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it
 	// must not drain mid `lsp_diagnostics`, and must still exit by itself

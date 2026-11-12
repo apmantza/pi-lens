@@ -911,6 +911,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 	},
+	"real-process-spawn:clients/lsp/effect-tsgo-initialize-fallback-5504.test.ts":
+		{
+			detector: "real-process-spawn",
+			reason:
+				"#5504: only a real child that exits after the launcher's startup window and before initialize answers reaches the registry's initialize fallback; a launcher double never exits that way.",
+		},
 	["real-process-spawn:clients/lsp/fake-lsp-" +
 	"server-parent-watchdog.test.ts"]: {
 		detector: "real-process-spawn",

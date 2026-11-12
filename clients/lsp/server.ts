@@ -120,6 +120,7 @@ import {
 	type LSPProcess,
 	admitProjectSuppliedTsserver,
 	launchLSP,
+	launchViaNode,
 } from "./launch.js";
 import { ephemeralStagingRoot } from "../ephemeral-root.js";
 import { createLombokJdtlsArgs } from "./lombok.js";
@@ -598,6 +599,35 @@ async function nearestNonExcludedFallbackRoot(
 	return nearestAllowed ?? fsRoot;
 }
 
+export interface LSPSpawnResult {
+	process: LSPProcess;
+	initialization?: Record<string, unknown>;
+	source?: "direct" | "managed" | "package-manager" | "interactive";
+	/**
+	 * Which concrete binary/protocol variant was launched for this server
+	 * id, when a single `LSPServerInfo.id` can mean more than one actual
+	 * server (e.g. "typescript" = classic typescript-language-server OR
+	 * TS7's native `tsc --lsp --stdio`). Per-server behavioral knowledge
+	 * keyed by server id (`wait-policy/strategies.ts`'s `silentOnClean` etc.)
+	 * is only proven for the variant it was measured against — this lets
+	 * such knowledge-consumers (the #458 cascade tier classifier) tell
+	 * the variants apart. Undefined = single-variant server, or a
+	 * variant-carrying server that hasn't been updated to report one yet;
+	 * treat as the classic/default behavior (fail-safe).
+	 */
+	launchVariant?: LspLaunchVariant;
+	/**
+	 * A replacement launch the registry takes at most once when this process
+	 * fails before `initialize` completes (`createLSPClient` throws). Only a
+	 * launch with a known-good sibling sets it (#5504: effect-tsgo -> native).
+	 * The callback writes its own record; a fallback result's own
+	 * `initializeFallback` is ignored.
+	 */
+	initializeFallback?: (
+		failure: unknown,
+	) => Promise<LSPSpawnResult | undefined>;
+}
+
 export interface LSPSpawnOptions {
 	allowInstall?: boolean;
 	/** Session trust does not authorize adopted project code. */
@@ -799,27 +829,7 @@ export interface LSPServerInfo {
 	spawn(
 		root: string,
 		options?: LSPSpawnOptions,
-	): Promise<
-		| {
-				process: LSPProcess;
-				initialization?: Record<string, unknown>;
-				source?: "direct" | "managed" | "package-manager" | "interactive";
-				/**
-				 * Which concrete binary/protocol variant was launched for this server
-				 * id, when a single `LSPServerInfo.id` can mean more than one actual
-				 * server (e.g. "typescript" = classic typescript-language-server OR
-				 * TS7's native `tsc --lsp --stdio`). Per-server behavioral knowledge
-				 * keyed by server id (`wait-policy/strategies.ts`'s `silentOnClean` etc.)
-				 * is only proven for the variant it was measured against — this lets
-				 * such knowledge-consumers (the #458 cascade tier classifier) tell
-				 * the variants apart. Undefined = single-variant server, or a
-				 * variant-carrying server that hasn't been updated to report one yet;
-				 * treat as the classic/default behavior (fail-safe).
-				 */
-				launchVariant?: LspLaunchVariant;
-		  }
-		| undefined
-	>;
+	): Promise<LSPSpawnResult | undefined>;
 	autoInstall?: () => Promise<boolean>;
 }
 
@@ -2580,10 +2590,65 @@ async function findTsserverPath(
 }
 
 interface NativeTypeScriptLsp {
+	/**
+	 * The project file the trust gate admits and the log names: the
+	 * `.bin/tsc[.cmd|.exe]` link for `bin-link`, the `@typescript/native`
+	 * alias's own bin script for `node-script`.
+	 */
 	command: string;
 	version: string;
-	/** The `node_modules` directory the nearest TypeScript 7+ package sits in. */
+	entry: "bin-link" | "node-script";
+	/**
+	 * The `node_modules` directory the compiler was found at; for the alias,
+	 * the level holding `@typescript/`, not the alias directory.
+	 */
 	nodeModulesDir: string;
+}
+
+function typeScriptMajor(version: string): number {
+	const majorText = version.split(".", 1)[0] ?? "";
+	return /^\d+$/.test(majorText) ? Number(majorText) : Number.NaN;
+}
+
+/**
+ * #5504: TypeScript 7 installed as `@typescript/native` (`npm:typescript@7`)
+ * beside a TypeScript 6 `typescript`. Accepted only with a manifest named
+ * `typescript`, major >= 7 and a `bin.tsc` file that exists; the answer is that
+ * bin script, which the caller runs with Node (never `.bin/tsc`, which may
+ * link the TypeScript 6 package).
+ */
+async function findTypeScriptNativeAlias(
+	nodeModulesDir: string,
+): Promise<{ command: string; version: string } | undefined> {
+	const aliasDir = path.join(nodeModulesDir, "@typescript", "native");
+	let manifest: unknown;
+	try {
+		manifest = JSON.parse(
+			await readFile(path.join(aliasDir, "package.json"), "utf8"),
+		);
+	} catch {
+		// none: an absent or unreadable alias is the common layout; classic answers.
+		return undefined;
+	}
+	if (typeof manifest !== "object" || manifest === null) return undefined;
+	const { name, version, bin } = manifest as Record<string, unknown>;
+	if (name !== "typescript") return undefined;
+	if (typeof version !== "string" || !(typeScriptMajor(version) >= 7)) {
+		return undefined;
+	}
+	const tsc =
+		typeof bin === "object" && bin !== null
+			? (bin as Record<string, unknown>).tsc
+			: undefined;
+	if (typeof tsc !== "string" || !tsc) return undefined;
+	const command = path.resolve(aliasDir, tsc);
+	try {
+		await access(command);
+	} catch {
+		// none: a manifest whose bin file is absent is not a usable alias; classic answers.
+		return undefined;
+	}
+	return { command, version };
 }
 
 /**
@@ -2592,6 +2657,10 @@ interface NativeTypeScriptLsp {
  * `lib/tsserver.js`. Resolve the nearest TypeScript package using normal
  * node_modules ancestor semantics so a monorepo package can use its hoisted
  * compiler, while never falling through to a PATH/global `tsc`.
+ *
+ * #5504: a level whose `node_modules/typescript` is version 6 or older also
+ * checks `node_modules/@typescript/native` at that same level (same-level
+ * only, never an ancestor's) and answers its own `bin/tsc`, run with Node.
  */
 async function findNativeTypeScriptLsp(
 	root: string,
@@ -2601,7 +2670,8 @@ async function findNativeTypeScriptLsp(
 
 	for (const currentDir of walkUpDirs(root, { spelling: true })) {
 		if (isAtOrAboveHomeDir(realpathOrResolve(currentDir), home)) break;
-		const typescriptDir = path.join(currentDir, "node_modules", "typescript");
+		const nodeModulesDir = path.join(currentDir, "node_modules");
+		const typescriptDir = path.join(nodeModulesDir, "typescript");
 		const packageJsonPath = path.join(typescriptDir, "package.json");
 
 		let packageJsonText: string;
@@ -2644,11 +2714,14 @@ async function findNativeTypeScriptLsp(
 		// The nearest installed package shadows any ancestor TypeScript package,
 		// matching Node/package-manager resolution. Never skip a local TS <=6 or
 		// malformed install just to select an unrelated ancestor TS 7 binary.
-		const majorText = version.split(".", 1)[0] ?? "";
-		const major = /^\d+$/.test(majorText) ? Number(majorText) : Number.NaN;
-		if (!Number.isFinite(major) || major < 7) return undefined;
+		const major = typeScriptMajor(version);
+		if (!Number.isFinite(major)) return undefined;
+		if (major < 7) {
+			const alias = await findTypeScriptNativeAlias(nodeModulesDir);
+			return alias && { ...alias, entry: "node-script", nodeModulesDir };
+		}
 
-		const localTsc = path.join(currentDir, "node_modules", ".bin", "tsc");
+		const localTsc = path.join(nodeModulesDir, ".bin", "tsc");
 		const candidates =
 			process.platform === "win32"
 				? [`${localTsc}.cmd`, `${localTsc}.exe`, localTsc]
@@ -2660,7 +2733,8 @@ async function findNativeTypeScriptLsp(
 				return {
 					command,
 					version,
-					nodeModulesDir: path.join(currentDir, "node_modules"),
+					entry: "bin-link",
+					nodeModulesDir,
 				};
 			} catch {
 				/* not found */
@@ -2669,6 +2743,56 @@ async function findNativeTypeScriptLsp(
 		return undefined;
 	}
 	return undefined;
+}
+
+/**
+ * Launch the native TypeScript server found by `findNativeTypeScriptLsp`.
+ * The trust gate admits the project file (`command`), which for the alias is
+ * the script `launchLSP` would not see behind `process.execPath`. A refusal
+ * answers `undefined`; a launch throw propagates.
+ */
+async function launchNativeTypeScript(
+	nativeLsp: NativeTypeScriptLsp,
+	root: string,
+	options?: LSPSpawnOptions,
+): Promise<LSPSpawnResult | undefined> {
+	if (
+		!admitProjectSuppliedTsserver(
+			nativeLsp.command,
+			root,
+			true,
+			options?.projectCodeAllowed,
+		)
+	) {
+		return undefined;
+	}
+	const env = await getToolEnvironment();
+	logSessionStart(
+		`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command} entry=${nativeLsp.entry}`,
+	);
+	const args = ["--lsp", "--stdio"];
+	const proc =
+		nativeLsp.entry === "node-script"
+			? await launchViaNode(nativeLsp.command, args, { cwd: root, env })
+			: await launchLSP(nativeLsp.command, args, { cwd: root, env });
+	return { process: proc, source: "direct", launchVariant: "native-ts7" };
+}
+
+/** The `effect-tsgo-launch` record, written by the launch and initialize fallbacks. */
+function recordEffectTsgoFallback(
+	root: string,
+	reason: string,
+	failure: unknown,
+): void {
+	recordDegradationOnce({
+		kind: "lsp-registry-decision",
+		subject: `effect-tsgo-launch:g${getDegradationLedgerGeneration()}:${root}`,
+		reason: `${reason}: ${failure instanceof Error ? failure.message : String(failure)}`,
+		metadata: {
+			field: "effect-tsgo-launch",
+			launchVariant: "effect-tsgo",
+		},
+	});
 }
 
 interface EffectTsgoLsp {
@@ -2682,7 +2806,8 @@ interface EffectTsgoLsp {
  * wrapper (`effect-tsgo tsc --lsp --stdio`). Opting in is the install itself.
  *
  * `nodeModulesDir` is the level `findNativeTypeScriptLsp` found the nearest
- * TypeScript 7+ at, and only that level is read: a TypeScript 7 package with
+ * TypeScript 7+ at (for a `@typescript/native` alias, the level holding
+ * `@typescript/`), and only that level is read: a TypeScript 7 package with
  * no `@effect/tsgo` beside it, or a malformed one (no readable manifest
  * version, no bin), answers `undefined` and the caller keeps the native
  * launch. Never an ancestor's `@effect/tsgo`, which the nearer TypeScript does
@@ -3072,6 +3197,17 @@ export const TypeScriptServer: LSPServerInfo = {
 					process: proc,
 					source: "direct",
 					launchVariant: "effect-tsgo",
+					initializeFallback: async (failure) => {
+						recordEffectTsgoFallback(
+							root,
+							"effect-tsgo failed to initialize, using the native launch",
+							failure,
+						);
+						logSessionStart(
+							`lsp typescript-effect-tsgo: initialize failed, falling back to native: ${failure instanceof Error ? failure.message : String(failure)}`,
+						);
+						return launchNativeTypeScript(nativeLsp, root, options);
+					},
 				};
 			} catch (launchFailure) {
 				// Existence is not launchability: a shim without the exec bit or a
@@ -3079,36 +3215,18 @@ export const TypeScriptServer: LSPServerInfo = {
 				// project worked on the native launch before it installed
 				// `@effect/tsgo`, so it keeps that launch instead of losing the
 				// TypeScript server to the registry's spawn cooldown. A process that
-				// starts and then fails `initialize` is not covered (client.ts).
-				recordDegradationOnce({
-					kind: "lsp-registry-decision",
-					subject: `effect-tsgo-launch:g${getDegradationLedgerGeneration()}:${root}`,
-					reason: `effect-tsgo launch failed, using the native launch: ${launchFailure instanceof Error ? launchFailure.message : String(launchFailure)}`,
-					metadata: {
-						field: "effect-tsgo-launch",
-						launchVariant: "effect-tsgo",
-					},
-				});
+				// starts and then exits or fails `initialize` is covered by
+				// `initializeFallback`, which the registry takes (#5504).
+				recordEffectTsgoFallback(
+					root,
+					"effect-tsgo launch failed, using the native launch",
+					launchFailure,
+				);
 			}
 		}
-		if (
-			nativeLsp &&
-			admitProjectSuppliedTsserver(
-				nativeLsp.command,
-				root,
-				true,
-				options?.projectCodeAllowed,
-			)
-		) {
-			const env = await getToolEnvironment();
-			logSessionStart(
-				`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command}`,
-			);
-			const proc = await launchLSP(nativeLsp.command, ["--lsp", "--stdio"], {
-				cwd: root,
-				env,
-			});
-			return { process: proc, source: "direct", launchVariant: "native-ts7" };
+		if (nativeLsp) {
+			const native = await launchNativeTypeScript(nativeLsp, root, options);
+			if (native) return native;
 		}
 
 		let source: "direct" | "managed" = "direct";

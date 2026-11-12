@@ -1317,7 +1317,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// before launching, one filesystem path use in the reviewed fix.
 		// 111 -> 112 (#5335): `TypeScriptRoot` takes the agent directory's real
 		// path for an explicit agent tsconfig, one `path.dirname` use.
-		"clients/lsp/server.ts": 111,
+		// 111 -> 114 (#5504): `findTypeScriptNativeAlias` joins the alias
+		// directory and its manifest and resolves its `bin.tsc` against it:
+		// three filesystem path uses on the same probe.
+		"clients/lsp/server.ts": 114,
 		"clients/lsp/session-roots.ts": 7,
 		// 13 -> 15 (#4346): a creation's path joins the entry's dependency
 		// scope test (Go package directory, created-file stem/directory names).
@@ -2017,7 +2020,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// manifest's literal version field, not a pi-lens generation identity.
 		// 18 -> 20 (#4914): the same read of `@effect/tsgo`'s manifest field, and
 		// the session-start line that prints the TypeScript package version.
-		"clients/lsp/server.ts": 20,
+		// 20 -> 27 (#5504): the external `@typescript/native` manifest's version
+		// field (read, type-checked, major-parsed), the `NativeTypeScriptLsp` and
+		// alias result `version` members, and the native launch's session-start
+		// line; none is a pi-lens generation identity.
+		"clients/lsp/server.ts": 27,
 		"clients/lsp/workspace-diagnostics-cache.ts": 6,
 		"clients/mcp/ipc.ts": 15,
 		"clients/metrics-history.ts": 3,

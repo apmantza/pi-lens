@@ -3,12 +3,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pinFixtureHome, removeTempDirSync } from "../test-utils.js";
+import { setPlatform } from "../../support/platform-stub.js";
 
-const { ensureTool, getToolEnvironment, launchLSP } = vi.hoisted(() => ({
-	ensureTool: vi.fn(),
-	getToolEnvironment: vi.fn(async () => ({ PI_LENS_TEST_TOOLCHAIN: "1" })),
-	launchLSP: vi.fn(),
-}));
+const { ensureTool, getToolEnvironment, launchLSP, launchViaNode } = vi.hoisted(
+	() => ({
+		ensureTool: vi.fn(),
+		getToolEnvironment: vi.fn(async () => ({ PI_LENS_TEST_TOOLCHAIN: "1" })),
+		launchLSP: vi.fn(),
+		launchViaNode: vi.fn(),
+	}),
+);
 
 vi.mock("../../../clients/installer/index.js", () => ({
 	ensureTool,
@@ -17,6 +21,7 @@ vi.mock("../../../clients/installer/index.js", () => ({
 }));
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode,
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 
@@ -65,6 +70,39 @@ function addNativeTsc(root: string): string {
 	return command;
 }
 
+/** `<root>/node_modules/@typescript/native` (an `npm:typescript@7` alias). */
+function addNativeAlias(
+	root: string,
+	opts: {
+		name?: string;
+		version?: string;
+		bin?: unknown;
+		writeBin?: boolean;
+		manifestText?: string;
+	} = {},
+): string {
+	const {
+		name = "typescript",
+		version = "7.0.2",
+		writeBin = true,
+		manifestText,
+	} = opts;
+	// `bin: undefined` omits the key; an absent option takes the real layout.
+	const bin = "bin" in opts ? opts.bin : { tsc: "./bin/tsc" };
+	const aliasDir = path.join(root, "node_modules", "@typescript", "native");
+	fs.mkdirSync(aliasDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(aliasDir, "package.json"),
+		manifestText ?? JSON.stringify({ name, version, bin }),
+	);
+	const aliasBin = path.join(aliasDir, "bin", "tsc");
+	if (writeBin && typeof (bin as { tsc?: unknown })?.tsc === "string") {
+		fs.mkdirSync(path.dirname(aliasBin), { recursive: true });
+		fs.writeFileSync(aliasBin, "#!/usr/bin/env node\n");
+	}
+	return aliasBin;
+}
+
 function addClassicWrapper(root: string): string {
 	const binDir = path.join(root, "node_modules", ".bin");
 	fs.mkdirSync(binDir, { recursive: true });
@@ -94,6 +132,8 @@ describe("TypeScript native LSP selection", () => {
 		getToolEnvironment.mockClear();
 		launchLSP.mockReset();
 		launchLSP.mockResolvedValue(fakeProcess);
+		launchViaNode.mockReset();
+		launchViaNode.mockResolvedValue(fakeProcess);
 	});
 
 	afterEach(() => {
@@ -251,6 +291,160 @@ describe("TypeScript native LSP selection", () => {
 		// and the nearer install still shadows the ancestor native compiler.
 		expect(launchLSP).not.toHaveBeenCalled();
 		expect(result).toBeUndefined();
+	});
+});
+
+describe("TypeScript 7 under the @typescript/native alias (#5504)", () => {
+	beforeEach(() => {
+		ensureTool.mockReset();
+		ensureTool.mockResolvedValue(undefined);
+		launchLSP.mockReset();
+		launchLSP.mockResolvedValue(fakeProcess);
+		launchViaNode.mockReset();
+		launchViaNode.mockResolvedValue(fakeProcess);
+	});
+
+	afterEach(() => {
+		for (const dir of dirs.splice(0)) removeTempDirSync(dir);
+	});
+
+	it("launches the alias's own bin/tsc with Node beside a TypeScript 6", async () => {
+		const root = makeProject("6.0.3");
+		addNativeTsc(root); // the `.bin/tsc` link that may point at TypeScript 6
+		const aliasBin = addNativeAlias(root);
+
+		const result = await TypeScriptServer.spawn(root, { allowInstall: false });
+
+		expect(launchViaNode).toHaveBeenCalledTimes(1);
+		expect(launchViaNode).toHaveBeenCalledWith(aliasBin, ["--lsp", "--stdio"], {
+			cwd: root,
+			env: { PI_LENS_TEST_TOOLCHAIN: "1" },
+		});
+		expect(launchLSP).not.toHaveBeenCalled();
+		expect(result).toEqual({
+			process: fakeProcess,
+			source: "direct",
+			launchVariant: "native-ts7",
+		});
+	});
+
+	it("keeps TypeScript 7 at node_modules/typescript ahead of an alias", async () => {
+		const root = makeProject("7.0.2");
+		const command = addNativeTsc(root);
+		addNativeAlias(root, { version: "7.1.0" });
+
+		const result = await TypeScriptServer.spawn(root, { allowInstall: false });
+
+		expect(launchLSP).toHaveBeenCalledWith(command, ["--lsp", "--stdio"], {
+			cwd: root,
+			env: { PI_LENS_TEST_TOOLCHAIN: "1" },
+		});
+		expect(launchViaNode).not.toHaveBeenCalled();
+		expect(result?.launchVariant).toBe("native-ts7");
+	});
+
+	it.each(["6.0.3", "7.0.2"])(
+		"does not let an ancestor alias shadow a nearer TypeScript 6 (ancestor TypeScript %s)",
+		async (ancestorVersion) => {
+			const workspaceRoot = makeProject(ancestorVersion);
+			addNativeAlias(workspaceRoot);
+			if (ancestorVersion === "7.0.2") addNativeTsc(workspaceRoot);
+			const { packageRoot } = addWorkspacePackage(workspaceRoot);
+			addTypeScriptPackage(packageRoot, "6.0.3");
+			addClassicServer(packageRoot);
+
+			const result = await TypeScriptServer.spawn(packageRoot, {
+				allowInstall: false,
+			});
+
+			expect(launchViaNode).not.toHaveBeenCalled();
+			expect(result?.launchVariant).toBe("classic");
+		},
+	);
+
+	// Every row must end on classic with the alias never launched.
+	async function expectClassicDespiteAlias(
+		opts: Parameters<typeof addNativeAlias>[1],
+	): Promise<void> {
+		const root = makeProject("6.0.3");
+		addClassicServer(root);
+		addNativeAlias(root, opts);
+
+		const result = await TypeScriptServer.spawn(root, { allowInstall: false });
+
+		expect(launchViaNode).not.toHaveBeenCalled();
+		expect(result?.launchVariant).toBe("classic");
+	}
+
+	it("stays on classic for an alias named @typescript/native-preview", () =>
+		expectClassicDespiteAlias({ name: "@typescript/native-preview" }));
+
+	it("stays on classic for an alias at version 6.0.3", () =>
+		expectClassicDespiteAlias({ version: "6.0.3" }));
+
+	it("stays on classic for an alias at version latest", () =>
+		expectClassicDespiteAlias({ version: "latest" }));
+
+	it("stays on classic for a string bin", () =>
+		expectClassicDespiteAlias({ bin: "./bin/tsc" }));
+
+	it("stays on classic for a bin without tsc", () =>
+		expectClassicDespiteAlias({ bin: { tsgo: "./bin/tsgo" } }));
+
+	it("stays on classic for a manifest with no bin", () =>
+		expectClassicDespiteAlias({ bin: undefined }));
+
+	it("stays on classic for a null bin", () =>
+		expectClassicDespiteAlias({ bin: null }));
+
+	it("stays on classic for a manifest whose bin file is missing", () =>
+		expectClassicDespiteAlias({ writeBin: false }));
+
+	it("stays on classic for a malformed manifest", () =>
+		expectClassicDespiteAlias({ manifestText: "{" }));
+
+	it("stays on classic for a null manifest", () =>
+		expectClassicDespiteAlias({ manifestText: "null" }));
+
+	it("stays on classic for an empty bin.tsc", () =>
+		expectClassicDespiteAlias({ bin: { tsc: "" } }));
+
+	it("keeps an unparsable TypeScript version on classic", async () => {
+		const root = makeProject("latest");
+		addNativeTsc(root);
+		addNativeAlias(root);
+		addClassicServer(root);
+
+		const result = await TypeScriptServer.spawn(root, { allowInstall: false });
+
+		expect(launchViaNode).not.toHaveBeenCalled();
+		expect(result?.launchVariant).toBe("classic");
+	});
+
+	it("launches the alias with Node on Windows, never the .bin/tsc.cmd shim", async () => {
+		const original = process.platform;
+		setPlatform("win32");
+		try {
+			const root = makeProject("6.0.3");
+			const binDir = path.join(root, "node_modules", ".bin");
+			fs.mkdirSync(binDir, { recursive: true });
+			fs.writeFileSync(path.join(binDir, "tsc.cmd"), "");
+			const aliasBin = addNativeAlias(root);
+
+			const result = await TypeScriptServer.spawn(root, {
+				allowInstall: false,
+			});
+
+			expect(launchViaNode).toHaveBeenCalledWith(
+				aliasBin,
+				["--lsp", "--stdio"],
+				{ cwd: root, env: { PI_LENS_TEST_TOOLCHAIN: "1" } },
+			);
+			expect(launchLSP).not.toHaveBeenCalled();
+			expect(result?.launchVariant).toBe("native-ts7");
+		} finally {
+			setPlatform(original);
+		}
 	});
 });
 
