@@ -258,6 +258,9 @@ afterAll(async () => {
 	process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS = String(
 		PLANTED_PERSIST_DELAY_MS,
 	);
+	// Set once the strict join below has returned, i.e. no deferred writer is
+	// pending. The `finally` removes the root only then (#5098).
+	let joined = false;
 	try {
 		// The planted project lives inside the witness home, so it adds no tmp-root
 		// entry. `saveProjectSnapshot` hands the body to the persist worker and
@@ -265,7 +268,7 @@ afterAll(async () => {
 		// the removal used to fall into.
 		const plantedCwd = path.join(witnessHome.home, "teardown-project");
 		saveProjectSnapshot(plantedCwd, PLANTED_SNAPSHOT);
-		// The plant planted, read synchronously: JS runs one task at a time, so no
+		// The planted row, read synchronously: JS runs one task at a time, so no
 		// part of the dispatch above has reached the worker yet and the row must
 		// still name the persist (the same single-threaded fact the hygiene owner's
 		// drain case rests on). A teardown guard that never had a writer in front of
@@ -276,13 +279,20 @@ afterAll(async () => {
 		// Join every deferred writer while the home is still pinned, so the bytes it
 		// has queued land inside the root that is about to go. The runner is strict:
 		// a drain that reports work still landing throws here. That error reds this
-		// file and is not swallowed; the `finally` below still restores
-		// `PI_LENS_HOME` and removes the root, so a failed join leaves no pinned home.
+		// file and is not swallowed. The `finally` below still restores the env, but
+		// it keeps the root: a writer is still pending, so removing the root would
+		// destroy the files the run-end census needs to judge it.
 		await drainRegisteredBackgroundWritesForTests();
-		// The join above has to let the planted write land: the persist records a
-		// successful fingerprint for this project only when its write completes, so
-		// a join that was deleted or stopped short leaves it unset and reds here.
-		// Without this read-back the file stayed green with both joins deleted (#5098).
+		joined = true;
+		// The join above has to let the planted write land. The persist records a
+		// successful fingerprint when its write completes, and also when a durable
+		// record is seeded (`seedSnapshotPersistBaselineFromDurable`,
+		// `clients/project-snapshot.ts`) or a test seeds one
+		// (`_seedSuccessfulSnapshotPersistForTests`). The read-back is sound here
+		// because the witness home and the planted cwd are fresh per run, so no
+		// durable record exists to seed it: a join that was deleted or stopped short
+		// leaves the fingerprint unset and reds here. Without this read-back the file
+		// stayed green with both joins deleted (#5098).
 		expect(
 			getProjectSnapshotPersistStateForTests(plantedCwd).successfulFingerprint,
 			"the planted persist had not landed when the teardown joined its writers",
@@ -294,19 +304,22 @@ afterAll(async () => {
 		else
 			process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS =
 				previousPersistDelay;
-		if (witnessHome.previous === undefined) delete process.env.PI_LENS_HOME;
-		else process.env.PI_LENS_HOME = witnessHome.previous;
-		// Restore `PI_LENS_HOME` before the removal: a tail writer that resolves the
-		// machine-state directory when it lands
+		// Always restore `PI_LENS_HOME`, joined or not, and before the removal: a
+		// tail writer that resolves the machine-state directory when it lands
 		// (`clients/instance-registry.ts`'s `registryPath`) then cannot re-create this
 		// path, whichever home it last saw (#5024).
-		removeTempDirSync(witnessHome.home);
+		if (witnessHome.previous === undefined) delete process.env.PI_LENS_HOME;
+		else process.env.PI_LENS_HOME = witnessHome.previous;
+		// Remove the root only after the strict join returned. A join that threw
+		// leaves a writer pending; the root stays for the run-end census to judge.
+		// A read-back failure happens after the join, so it still removes the root.
+		if (joined) removeTempDirSync(witnessHome.home);
 	}
 	// Then join again and read the path back. This settle is a backstop, not the
 	// fix: the join above lands the planted write before the removal, so with that
 	// join in place the settle observes nothing (deleting it keeps the file green).
-	// It catches a write that lands during this window and re-creates the home, from
-	// a writer the join above did not wait for.
+	// The #5098 shape was this join missing (CI run 41191317503); this settle
+	// catches a write from a writer the join above did not wait for.
 	await drainRegisteredBackgroundWritesForTests();
 	expect(
 		fs.existsSync(witnessHome.home),
