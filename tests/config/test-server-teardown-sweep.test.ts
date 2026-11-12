@@ -104,9 +104,9 @@ const ROW_RE = /^tests\/[\w./-]+\.ts:[^\s]+$/;
  * admitted-file population, and that population grows as rows are admitted, so
  * vitest's 5 s default is a flake the next admission row re-arms. Measured
  * through the built seam: 1.07 s for 4 rows over 3 files when every row
- * classified the file itself, 0.36 s now (Linux); the same file measured 1.41 s
- * on the Windows leg and timed out once at 5000 ms there under runner
- * contention. 20 s is about 14x the calm Windows figure and 4x the worst
+ * classified the file itself, about 0.2 s now (Linux). The Windows leg did not
+ * get faster: 1.05-1.77 s before and 1.48 s after, with one 5000 ms timeout
+ * under runner contention. 20 s is about 14x the calm Windows figure and 4x the worst
  * observation, and the lane's `PI_LENS_TEST_TIMEOUT_SCALE` widens it there.
  */
 const ADMISSION_RECHECK_TIMEOUT_MS = scaledTestTimeout(20_000);
