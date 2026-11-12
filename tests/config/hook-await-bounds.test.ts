@@ -2617,8 +2617,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// and bin `access`, `launchNativeTypeScript` awaits `getToolEnvironment` and
 	// the launch, and the effect-tsgo initialize fallback awaits that helper. All
 	// sit on the TypeScript spawn path, which no hook awaits; hook-signal
-	// threading stays #2523 AC4.
-	"clients/lsp/server.ts": 137,
+	// threading stays #2523 AC4. 137 -> 139 (#5522 F2): the alias launch awaits
+	// the classic fallback (`launchClassicTypeScript` and its caller) on the same
+	// spawn path.
+	"clients/lsp/server.ts": 139,
 	"clients/map-with-concurrency.ts": 2,
 	"clients/observed-mutation.ts": 18,
 	// #4493: 10 -> 12, the `git rev-parse` in readGitHead and the `git diff`

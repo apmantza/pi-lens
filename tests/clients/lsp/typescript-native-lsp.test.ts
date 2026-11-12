@@ -325,7 +325,58 @@ describe("TypeScript 7 under the @typescript/native alias (#5504)", () => {
 			process: fakeProcess,
 			source: "direct",
 			launchVariant: "native-ts7",
+			initializeFallback: expect.any(Function),
 		});
+	});
+
+	// RECURRENCE GUARDED: #5522 review F2. An alias that cannot start used to
+	// cost the project the classic server master ran. The launcher is doubled
+	// here; the real child cells are in effect-tsgo-initialize-fallback-5504.
+	it("launches the classic server when the alias launch throws", async () => {
+		const root = makeProject("6.0.3");
+		const { lspPath } = addClassicServer(root);
+		addNativeAlias(root);
+		launchViaNode.mockRejectedValue(new Error("alias exited"));
+
+		const result = await TypeScriptServer.spawn(root, { allowInstall: false });
+
+		expect(launchLSP).toHaveBeenCalledTimes(1);
+		expect(launchLSP.mock.calls[0]?.[0]).toBe(lspPath);
+		expect(result?.launchVariant).toBe("classic");
+	});
+
+	it("rethrows the alias launch failure when no classic server exists", async () => {
+		const root = makeProject("6.0.3");
+		addNativeAlias(root);
+		launchViaNode.mockRejectedValue(new Error("alias exited"));
+
+		await expect(
+			TypeScriptServer.spawn(root, { allowInstall: false }),
+		).rejects.toThrow("alias exited");
+		expect(launchLSP).not.toHaveBeenCalled();
+	});
+
+	it("hands the registry a classic initialize fallback, or nothing without one", async () => {
+		const withClassic = makeProject("6.0.3");
+		const { lspPath } = addClassicServer(withClassic);
+		addNativeAlias(withClassic);
+		const without = makeProject("6.0.3");
+		addNativeAlias(without);
+
+		const first = await TypeScriptServer.spawn(withClassic, {
+			allowInstall: false,
+		});
+		const second = await TypeScriptServer.spawn(without, {
+			allowInstall: false,
+		});
+
+		expect(launchLSP).not.toHaveBeenCalled();
+		expect(
+			(await first?.initializeFallback?.(new Error("x")))?.launchVariant,
+		).toBe("classic");
+		expect(launchLSP.mock.calls[0]?.[0]).toBe(lspPath);
+		expect(await second?.initializeFallback?.(new Error("x"))).toBeUndefined();
+		expect(launchLSP).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps TypeScript 7 at node_modules/typescript ahead of an alias", async () => {

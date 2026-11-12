@@ -71,7 +71,10 @@ TypeScript 7+ decides first: with `@effect/tsgo` installed beside it (the same
 (`launchVariant: "effect-tsgo"`, #4914); otherwise the native `tsc --lsp --stdio`
 (`"native-ts7"`). With TypeScript 6 or older and a TypeScript 7+
 `@typescript/native` alias at the same level, the alias's own `bin/tsc` runs
-with Node (`"native-ts7"`, #5504). Otherwise, with TypeScript 6 or older, or
+with Node (`"native-ts7"`, #5504); an alias that exits at launch or fails
+`initialize` falls back once to the classic launch below and records one
+`lsp-registry-decision` row (`typescript-native-alias`) per root per generation.
+Otherwise, with TypeScript 6 or older, or
 none, the launch is the classic `typescript-language-server` (`"classic"`). Installing `@effect/tsgo` is the
 only opt-in. pi-lens never installs it, adds no setting for it, and runs the
 binary only when pi trusts the project, like the project's compiler. A

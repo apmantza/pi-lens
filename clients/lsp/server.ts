@@ -2772,11 +2772,48 @@ async function launchNativeTypeScript(
 		`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command} entry=${nativeLsp.entry}`,
 	);
 	const args = ["--lsp", "--stdio"];
-	const proc =
-		nativeLsp.entry === "node-script"
-			? await launchViaNode(nativeLsp.command, args, { cwd: root, env })
-			: await launchLSP(nativeLsp.command, args, { cwd: root, env });
-	return { process: proc, source: "direct", launchVariant: "native-ts7" };
+	if (nativeLsp.entry !== "node-script") {
+		const proc = await launchLSP(nativeLsp.command, args, { cwd: root, env });
+		return { process: proc, source: "direct", launchVariant: "native-ts7" };
+	}
+	// #5504 F2: the alias is chosen beside a TypeScript <=6, whose classic
+	// server master ran for the project. An alias that cannot start (its
+	// `bin/tsc` exits inside the startup window, or before `initialize`
+	// answers) falls back once to that launch. No classic candidate answers
+	// nothing, and the original failure goes on to the registry's ladder.
+	const classicInstead = async (
+		failure: unknown,
+		why: string,
+	): Promise<LSPSpawnResult | undefined> => {
+		const classic = await launchClassicTypeScript(root, options);
+		if (!classic) return undefined;
+		const detail = failure instanceof Error ? failure.message : String(failure);
+		recordDegradationOnce({
+			kind: "lsp-registry-decision",
+			subject: `typescript-native-alias:g${getDegradationLedgerGeneration()}:${root}`,
+			reason: `the @typescript/native alias failed to start, using the classic launch: ${detail}`,
+			metadata: { field: "typescript-native-alias", launchVariant: "classic" },
+		});
+		logSessionStart(
+			`lsp typescript-native: alias ${why}, falling back to classic: ${detail}`,
+		);
+		return classic;
+	};
+	let proc: LSPProcess;
+	try {
+		proc = await launchViaNode(nativeLsp.command, args, { cwd: root, env });
+	} catch (launchFailure) {
+		const classic = await classicInstead(launchFailure, "failed to launch");
+		if (classic) return classic;
+		throw launchFailure;
+	}
+	return {
+		process: proc,
+		source: "direct",
+		launchVariant: "native-ts7",
+		initializeFallback: (failure) =>
+			classicInstead(failure, "failed to initialize"),
+	};
 }
 
 /** The `effect-tsgo-launch` record, written by the launch and initialize fallbacks. */

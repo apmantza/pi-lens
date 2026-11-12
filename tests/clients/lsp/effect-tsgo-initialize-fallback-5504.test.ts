@@ -328,3 +328,140 @@ it(
 		expect(rows).toHaveLength(0);
 	},
 );
+
+// RECURRENCE GUARDED: #5522 review F2 (maintainer decision). A TypeScript 6
+// project whose `@typescript/native` alias cannot start lost the classic
+// server master ran: `spawned false broken 1` against `spawned true classic`.
+// The alias launch now falls back once to the classic launch, whether its
+// `bin/tsc` dies inside the launcher's startup window (the launch throws) or
+// after it and before `initialize` answers (the registry's initializeFallback).
+// The classic wrapper is a shell stub that writes `classic-ran` before it runs
+// the fake LSP server, so a launch that must not happen is visible.
+const ALIAS_EXITS_AT_ONCE = "process.exit(1);\n";
+const ALIAS_EXITS_ON_INITIALIZE =
+	"process.stdin.once('data', () => process.exit(1));\n";
+
+function makeAliasFixture(aliasBody: string): {
+	root: string;
+	file: string;
+	classicRan: string;
+} {
+	const env = setupTestEnvironment("pi-lens-5504-alias-");
+	cleanup = env.cleanup;
+	const root = env.tmpDir;
+	fs.writeFileSync(path.join(root, "package.json"), "{}\n");
+	fs.writeFileSync(path.join(root, "tsconfig.json"), "{}\n");
+	const file = path.join(root, "src", "index.ts");
+	fs.mkdirSync(path.dirname(file), { recursive: true });
+	fs.writeFileSync(file, "export const value = 1;\n");
+	const nm = path.join(root, "node_modules");
+	fs.mkdirSync(path.join(nm, "typescript", "lib"), { recursive: true });
+	fs.writeFileSync(
+		path.join(nm, "typescript", "package.json"),
+		JSON.stringify({ name: "typescript", version: "6.0.3" }),
+	);
+	fs.writeFileSync(path.join(nm, "typescript", "lib", "tsserver.js"), "");
+	const alias = path.join(nm, "@typescript", "native");
+	fs.mkdirSync(path.join(alias, "bin"), { recursive: true });
+	fs.writeFileSync(
+		path.join(alias, "package.json"),
+		JSON.stringify({
+			name: "typescript",
+			version: "7.0.2",
+			bin: { tsc: "./bin/tsc" },
+		}),
+	);
+	fs.writeFileSync(path.join(alias, "bin", "tsc"), aliasBody);
+	const classicRan = path.join(root, "classic-ran");
+	writeExecutable(
+		path.join(nm, ".bin", "typescript-language-server"),
+		`#!/bin/sh\n: > "${classicRan}"\nexec "${process.execPath}" "${FAKE_LSP_SERVER_PATH}" "$@"\n`,
+	);
+	return { root, file, classicRan };
+}
+
+const HEALTHY_ALIAS = `import(${JSON.stringify(FAKE_LSP_SERVER_PATH)});\n`;
+
+function aliasRows() {
+	return getDegradationSummary()
+		.filter((group) => group.kind === "lsp-registry-decision")
+		.flatMap((group) => group.latestReasons)
+		.filter((row) => /^typescript-native-alias:g\d+:/.test(row.subject ?? ""));
+}
+
+it.for([
+	["its bin/tsc exits at once", ALIAS_EXITS_AT_ONCE],
+	["its bin/tsc exits on initialize", ALIAS_EXITS_ON_INITIALIZE],
+] as const)(
+	"falls back once to the classic server when %s",
+	POSIX_REAL_PROCESS,
+	async ([, aliasBody]) => {
+		const { root, file, classicRan } = makeAliasFixture(aliasBody);
+
+		const first = await acquire(file);
+
+		expect(first.spawned?.client.getLaunchVariant()).toBe("classic");
+		expect(first.spawned?.client.isAlive()).toBe(true);
+		expect(fs.existsSync(classicRan)).toBe(true);
+		expect(first.registry.broken.size).toBe(0);
+		expect(first.registry.permanentlyBroken.size).toBe(0);
+		const rows = aliasRows();
+		expect(rows).toHaveLength(1);
+		expect(rows[0]?.subject).toContain(truncateForLedger(root));
+		expect(rows[0]?.reason).toMatch(
+			/^the @typescript\/native alias failed to start, using the classic launch/,
+		);
+	},
+);
+
+it(
+	"keeps the alias and starts no classic server when the alias is healthy",
+	POSIX_REAL_PROCESS,
+	async () => {
+		const { file, classicRan } = makeAliasFixture(HEALTHY_ALIAS);
+
+		const { registry, spawned } = await acquire(file);
+
+		expect(spawned?.client.getLaunchVariant()).toBe("native-ts7");
+		expect(fs.existsSync(classicRan)).toBe(false);
+		expect(registry.broken.size).toBe(0);
+		expect(aliasRows()).toHaveLength(0);
+	},
+);
+
+it(
+	"takes no classic fallback when the service shuts down during the alias handshake",
+	POSIX_REAL_PROCESS,
+	async () => {
+		const { file, classicRan } = makeAliasFixture(ALIAS_EXITS_ON_INITIALIZE);
+		let fallbackCalls = 0;
+
+		const { registry, spawned } = await acquire(file, (owner) => {
+			const production = wrapFallback((fallback) => async (failure) => {
+				fallbackCalls += 1;
+				return fallback(failure);
+			});
+			return {
+				...production,
+				async spawn(root, options) {
+					const result = await production.spawn(root, options);
+					const stdin = result?.process.process.stdin;
+					if (!stdin) throw new Error("the alias launch has no stdin");
+					const write = stdin.write.bind(stdin) as typeof stdin.write;
+					stdin.write = ((...args: Parameters<typeof stdin.write>) => {
+						owner.markDestroyed();
+						return write(...args);
+					}) as typeof stdin.write;
+					return result;
+				},
+			};
+		});
+
+		expect(spawned).toBeUndefined();
+		expect(fallbackCalls).toBe(0);
+		expect(fs.existsSync(classicRan)).toBe(false);
+		expect(registry.broken.size).toBe(0);
+		expect(registry.getAliveClientCount()).toBe(0);
+		expect(aliasRows()).toHaveLength(0);
+	},
+);
