@@ -66,17 +66,12 @@ export class RuffClient {
 
 	/** Resolve the command and cwd a file's runner will use, before any write hold. */
 	async resolveCommandForFile(
-		filePath: string,
+		absolutePath: string,
 		cwd?: string,
 	): Promise<{ cwd: string; command: string | null }> {
-		const resolvedCwd = resolveToolCwd(
-			"runner",
-			"ruff",
-			path.resolve(filePath),
-			{
-				...(cwd !== undefined && { cwd }),
-			},
-		).cwd;
+		const resolvedCwd = resolveToolCwd("runner", "ruff", absolutePath, {
+			...(cwd !== undefined && { cwd }),
+		}).cwd;
 		return {
 			cwd: resolvedCwd,
 			command: await resolveToolCommandWithInstallFallback(resolvedCwd, "ruff"),
@@ -100,8 +95,7 @@ export class RuffClient {
 	 */
 	async fixFileAsync(
 		filePath: string,
-		cwd?: string,
-		ruffCommand?: string | null,
+		...args: [cwd?: string] | [cwd: string, ruffCommand: string | null]
 	): Promise<{
 		success: boolean;
 		changed: boolean;
@@ -118,9 +112,9 @@ export class RuffClient {
 		// The binary is asked at that same root (#5410), so the fix runs the
 		// ruff the lint ran.
 		const resolution =
-			ruffCommand === undefined
-				? await this.resolveCommandForFile(absolutePath, cwd)
-				: { cwd: cwd ?? path.dirname(absolutePath), command: ruffCommand };
+			args.length === 2
+				? { cwd: args[0], command: args[1] }
+				: await this.resolveCommandForFile(absolutePath, args[0]);
 		const ruffCwd = resolution.cwd;
 		const resolvedRuffCommand = resolution.command;
 		if (resolvedRuffCommand === null) {
