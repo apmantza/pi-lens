@@ -303,9 +303,15 @@ it(
 				...production,
 				async spawn(root, options) {
 					const result = await production.spawn(root, options);
-					// The stub exits once `initialize` is sent, so the shutdown lands
-					// before the first connect rejects.
-					setTimeout(() => owner.markDestroyed(), 0);
+					// Shut down when the client first writes to the child, which is the
+					// `initialize` request: after Guard 1, before the stub can exit.
+					const stdin = result?.process.process.stdin;
+					if (!stdin) throw new Error("the effect-tsgo launch has no stdin");
+					const write = stdin.write.bind(stdin) as typeof stdin.write;
+					stdin.write = ((...args: Parameters<typeof stdin.write>) => {
+						owner.markDestroyed();
+						return write(...args);
+					}) as typeof stdin.write;
 					return result;
 				},
 			};
