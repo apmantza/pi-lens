@@ -176,7 +176,11 @@ describe("#5182 weights from the test-history journal", () => {
 	});
 
 	it("accepts already parsed records", () => {
-		const record = { day: "2026-11-08", lane: "linux", tests: {} } as const;
+		const record = {
+			day: "2026-11-08",
+			lane: "linux",
+			tests: { [A]: { runs: 1, durationMs: 1000 } },
+		};
 		expect(buildWeightsFromJournal([record], 1).days).toEqual(["2026-11-08"]);
 	});
 
@@ -194,6 +198,55 @@ describe("#5182 weights from the test-history journal", () => {
 				/--days must be a positive integer/,
 			);
 		}
+	});
+
+	it("throws when the newest linux days hold no test durations", () => {
+		const lines = [
+			day("2026-11-07", { "scripts/x.test.ts": { runs: 1, durationMs: 1000 } }),
+			day("2026-11-08", { [A]: { runs: 0, durationMs: 5000 } }),
+		];
+		expect(() => buildWeightsFromJournal(lines, 2)).toThrow(
+			/journal's newest 2 linux day\(s\) hold no test durations/,
+		);
+	});
+
+	it("throws naming the day and file for a non-finite duration, keeping runs 0 a skip", () => {
+		const bad = (stat: object) =>
+			day("2026-11-08", { [A]: stat as Stat, "tests/b.test.ts": ok1 });
+		const ok1 = { runs: 1, durationMs: 1000 };
+		const msg =
+			/journal day 2026-11-08: tests\/a\.test\.ts has a non-finite duration/;
+		for (const stat of [
+			{ runs: 1 },
+			{ runs: 1, durationMs: "7" },
+			{ runs: 1, durationMs: Number.POSITIVE_INFINITY },
+			{ runs: Number.POSITIVE_INFINITY, durationMs: 1000 },
+			{ durationMs: 1000 },
+			{ runs: -1, durationMs: 1000 },
+		]) {
+			// JSON.stringify turns Infinity into null; parsed records keep it.
+			expect(() => buildWeightsFromJournal([JSON.parse(bad(stat))], 1)).toThrow(
+				msg,
+			);
+		}
+		const inf = {
+			day: "2026-11-08",
+			lane: "linux",
+			tests: { [A]: { runs: 1, durationMs: Number.POSITIVE_INFINITY } },
+		};
+		expect(() => buildWeightsFromJournal([inf], 1)).toThrow(msg);
+		expect(
+			buildWeightsFromJournal([bad({ runs: 0, durationMs: Number.NaN })], 1)
+				.files,
+		).toEqual({ "tests/b.test.ts": 1 });
+	});
+
+	it("throws naming the index of a linux record without a string day", () => {
+		const good = day("2026-11-08", { [A]: { runs: 1, durationMs: 1000 } });
+		const noDay = JSON.stringify({ lane: "linux", tests: {} });
+		expect(() => buildWeightsFromJournal([good, "", noDay], 5)).toThrow(
+			/journal record 3 \(linux\) has no string day/,
+		);
 	});
 
 	describe("the CLI, called in-process", () => {
@@ -229,6 +282,18 @@ describe("#5182 weights from the test-history journal", () => {
 				days: ["2026-11-07", "2026-11-08"],
 				files: { [A]: 3 },
 			});
+		});
+
+		it("writes no file when the journal holds no test durations", () => {
+			// env.cleanup() in afterEach removed the dir the first case used.
+			fs.mkdirSync(env.tmpDir, { recursive: true });
+			const journal = path.join(env.tmpDir, "empty.ndjson");
+			fs.writeFileSync(journal, `${day("2026-11-08", {})}\n`);
+			const out = path.join(env.tmpDir, "empty-out.json");
+			expect(() => main(["--journal", journal, "--out", out])).toThrow(
+				/journal's newest 1 linux day\(s\) hold no test durations/,
+			);
+			expect(fs.existsSync(out)).toBe(false);
 		});
 
 		it("refuses --journal with --run, an unreadable journal and a bad --days", () => {

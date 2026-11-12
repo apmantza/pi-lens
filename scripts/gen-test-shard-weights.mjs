@@ -86,18 +86,25 @@ const DEFAULT_JOURNAL_DAYS = 5;
 export function buildWeightsFromJournal(lines, days) {
 	if (!Number.isInteger(days) || days < 1)
 		throw new Error(`--days must be a positive integer, got ${days}`);
+	/** @type {Array<{ record: any, at: number }>} */
 	const records = [];
 	lines.forEach((line, i) => {
-		if (typeof line !== "string") return records.push(line);
+		if (typeof line !== "string")
+			return records.push({ record: line, at: i + 1 });
 		if (line.trim() === "") return;
 		try {
-			records.push(JSON.parse(line));
+			records.push({ record: JSON.parse(line), at: i + 1 });
 		} catch (err) {
 			throw new Error(`journal line ${i + 1} is not JSON: ${err.message}`);
 		}
 	});
-	const newest = records
-		.filter((r) => r && r.lane === "linux")
+	const linux = records.filter((r) => r.record && r.record.lane === "linux");
+	for (const { record, at } of linux) {
+		if (typeof record.day !== "string")
+			throw new Error(`journal record ${at} (linux) has no string day`);
+	}
+	const newest = linux
+		.map((r) => r.record)
 		.sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
 		.slice(-days);
 	if (newest.length === 0) throw new Error("journal has no linux record");
@@ -105,12 +112,27 @@ export function buildWeightsFromJournal(lines, days) {
 	const samples = new Map();
 	for (const record of newest) {
 		for (const [id, stat] of Object.entries(record.tests ?? {})) {
-			if (!id.startsWith("tests/") || !(stat.runs > 0)) continue;
+			if (!id.startsWith("tests/") || stat?.runs === 0) continue;
+			if (
+				!Number.isFinite(stat?.runs) ||
+				!(stat.runs > 0) ||
+				!Number.isFinite(stat.durationMs)
+			)
+				throw new Error(
+					`journal day ${record.day}: ${id} has a non-finite duration`,
+				);
 			const list = samples.get(id) ?? [];
 			list.push(stat.durationMs / stat.runs / 1000);
 			samples.set(id, list);
 		}
 	}
+	// Same rule as the --run path: no durations is an error, never a snapshot
+	// that prices every file at a zero median. Here, not in main, so a direct
+	// caller and the CLI get it once, before anything is written.
+	if (samples.size === 0)
+		throw new Error(
+			`journal's newest ${newest.length} linux day(s) hold no test durations`,
+		);
 	return {
 		files: filesFromSamples(samples),
 		days: newest.map((r) => r.day),
