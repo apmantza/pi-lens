@@ -1046,17 +1046,18 @@ describe("index.ts extension wiring", () => {
 			// exact-list assertion is only exact while NOTHING ELSE records in
 			// the window between that reset and the `/lens-perf` handler's own
 			// `getDegradationSummary()`. What landed in that window on master CI
-			// is the project-trust arm of the spawn seam: under the default
-			// `unknown` trust, `trustScopedSearchPath` (`clients/safe-spawn.ts`)
-			// records a once-per-generation `trust-refusal` for a spawn whose
-			// PATH carries the repository's own `node_modules/.bin`, which is
-			// where `npm test` puts it, so one spawn left in flight by extension
-			// wiring or an earlier test restrikes the row. Pin the trust state
-			// this test assumes for the whole window rather than loosen the
-			// assertion: `trusted` short-circuits `trustScopedSearchPath`, and
-			// `isUntrustedProjectPath`, the gate in every caller of
-			// `recordProjectCommandRefusal`, so no spawn can write a
-			// `trust-refusal` row here.
+			// is a `trust-refusal` row from the project-trust arm of the spawn
+			// seam: under the default `unknown` trust, `trustScopedSearchPath`
+			// (`clients/safe-spawn.ts`) records one for a spawn whose PATH
+			// carries the repository's own `node_modules/.bin`. Locally it takes
+			// two conditions together, that PATH and a spawn inside this window;
+			// which spawn did it on CI is not identified, and the pin does not
+			// depend on it. Pin the trust state this test assumes for the whole
+			// window rather than loosen the assertion: `trusted` short-circuits
+			// `trustScopedSearchPath` and `isUntrustedProjectPath`, the gate in
+			// every production caller of `recordProjectCommandRefusal`. The
+			// config-core `toSpawnArgs` gate still records under `trusted`, but
+			// nothing in production calls it.
 			const trustBefore = getProjectTrustState();
 			setProjectTrustState("trusted");
 			resetDegradationLedger();
