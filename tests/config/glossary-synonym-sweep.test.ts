@@ -619,7 +619,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 22 -> 23 (#5258): the coverage rule reads the rows the dispatcher
 		// kept for the primary group, an `Array.prototype.filter` call, not a
 		// delivery filter.
-		"clients/dispatch/dispatcher.ts": 23,
+		// 23 -> 25 (#5258 r2): the stated-cause rows and the unexplained subset
+		// the mixed notice names, `Array.prototype.filter` calls, not a
+		// delivery filter.
+		"clients/dispatch/dispatcher.ts": 25,
 		"clients/dispatch/fact-runner.ts": 1,
 		"clients/dispatch/fact-scheduler.ts": 2,
 		"clients/dispatch/facts/function-facts.ts": 2,
@@ -1786,6 +1789,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the claimSource admission guard (#3968 F2) reads it once more (32 -> 33).
 		// The `dispatch.disabledRunners` skip names the field twice, in the latency
 		// row and in its log row, as the applies_to skip beside it does (33 -> 35).
+		// #5258: 67 runner sites that spelled `status: "skipped"` as a bare literal
+		// now return `skipped(reason)` or `toolAbsentSkip()`, so their rows shrink;
+		// dispatcher.ts gains one read of `r.status` for the stated skip causes.
 		"clients/actionable-warnings.ts": 5,
 		"clients/advisory-provenance.ts": 5,
 		"clients/ast-grep-client.ts": 7,
@@ -1801,73 +1807,63 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `RunnerResult`, the same member sense as every row here.
 		"clients/dispatch/collect-later-tier.ts": 1,
 		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
-		"clients/dispatch/dispatcher.ts": 35,
+		"clients/dispatch/dispatcher.ts": 36,
 		"clients/dispatch/integration.ts": 1,
 		"clients/dispatch/pending-runner-findings.ts": 1,
-		"clients/dispatch/runners/actionlint.ts": 2,
+		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,
-		"clients/dispatch/runners/biome-check.ts": 8,
-		"clients/dispatch/runners/cpp-check.ts": 3,
-		"clients/dispatch/runners/credo.ts": 2,
-		"clients/dispatch/runners/cue-vet.ts": 6,
-		"clients/dispatch/runners/dart-analyze.ts": 1,
+		"clients/dispatch/runners/biome-check.ts": 7,
+		"clients/dispatch/runners/cpp-check.ts": 2,
+		"clients/dispatch/runners/cue-vet.ts": 5,
 		// 6 -> 5 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/detekt.ts": 5,
-		"clients/dispatch/runners/dotnet-build.ts": 4,
-		"clients/dispatch/runners/elixir-check.ts": 2,
+		"clients/dispatch/runners/detekt.ts": 2,
+		"clients/dispatch/runners/dotnet-build.ts": 2,
+		"clients/dispatch/runners/elixir-check.ts": 1,
 		// 3 -> 2 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
-		"clients/dispatch/runners/eslint.ts": 2,
 		"clients/dispatch/runners/fact-rules.ts": 2,
 		// #4309: folded unavailable/absent-command exits remove one status use.
 		// 5 -> 6 (#4522): the exitless-run guard reads the exit status once.
-		"clients/dispatch/runners/fish-indent.ts": 6,
-		"clients/dispatch/runners/gleam-check.ts": 5,
-		"clients/dispatch/runners/go-vet.ts": 5,
+		"clients/dispatch/runners/fish-indent.ts": 5,
+		"clients/dispatch/runners/gleam-check.ts": 4,
+		"clients/dispatch/runners/go-vet.ts": 4,
 		// 4 -> 3 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
-		"clients/dispatch/runners/golangci-lint.ts": 3,
-		"clients/dispatch/runners/hadolint.ts": 3,
+		"clients/dispatch/runners/hadolint.ts": 1,
 		"clients/dispatch/runners/helm-lint.ts": 5,
 		"clients/dispatch/runners/helm-render.ts": 7,
-		"clients/dispatch/runners/htmlhint.ts": 3,
-		"clients/dispatch/runners/javac.ts": 4,
-		"clients/dispatch/runners/ktlint.ts": 2,
+		"clients/dispatch/runners/htmlhint.ts": 1,
+		"clients/dispatch/runners/javac.ts": 2,
 		// 10 -> 11 (#5008 review r2): the all-clear arm's stale-bound answer
 		// returns `status: "skipped"` instead of `succeeded` — the same
 		// `RunnerResult.status` member sense as every other row here.
 		"clients/dispatch/runners/lsp.ts": 11,
 		// 4 -> 3 (#5413): the local cooldown skip moved to the dispatcher.
-		"clients/dispatch/runners/markdownlint.ts": 3,
-		"clients/dispatch/runners/mypy.ts": 2,
-		"clients/dispatch/runners/oxlint.ts": 11,
-		"clients/dispatch/runners/php-lint.ts": 2,
-		"clients/dispatch/runners/phpstan.ts": 4,
+		"clients/dispatch/runners/markdownlint.ts": 1,
+		"clients/dispatch/runners/oxlint.ts": 9,
+		"clients/dispatch/runners/php-lint.ts": 1,
+		"clients/dispatch/runners/phpstan.ts": 1,
 		// 4 -> 3 (#5411): the plain skip leaves; `finishParsedRun` owns that verdict.
 		"clients/dispatch/runners/prisma-validate.ts": 3,
-		"clients/dispatch/runners/psscriptanalyzer.ts": 14,
-		"clients/dispatch/runners/pyright.ts": 3,
-		"clients/dispatch/runners/rubocop.ts": 2,
-		"clients/dispatch/runners/ruff.ts": 2,
-		"clients/dispatch/runners/rust-clippy.ts": 10,
+		"clients/dispatch/runners/psscriptanalyzer.ts": 9,
+		"clients/dispatch/runners/pyright.ts": 2,
+		"clients/dispatch/runners/rust-clippy.ts": 8,
 		// 4 -> 5 (#3968): one more skip branch (`covered-by-primary`) beside the
 		// existing skipped/no-cmd returns — the same `status:` member sense.
-		"clients/dispatch/runners/shellcheck.ts": 5,
-		"clients/dispatch/runners/shfmt.ts": 8,
+		"clients/dispatch/runners/shellcheck.ts": 4,
+		"clients/dispatch/runners/shfmt.ts": 5,
 		// 3 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/spellcheck.ts": 2,
-		"clients/dispatch/runners/spotbugs.ts": 8,
-		"clients/dispatch/runners/sqlfluff.ts": 3,
-		"clients/dispatch/runners/stylelint.ts": 2,
+		"clients/dispatch/runners/spellcheck.ts": 1,
+		"clients/dispatch/runners/spotbugs.ts": 6,
+		"clients/dispatch/runners/sqlfluff.ts": 1,
 		// 3 -> 1 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/swiftlint.ts": 1,
 		// 5 -> 4 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/taplo.ts": 4,
-		"clients/dispatch/runners/terragrunt.ts": 2,
-		"clients/dispatch/runners/tflint.ts": 3,
+		"clients/dispatch/runners/taplo.ts": 2,
+		"clients/dispatch/runners/terragrunt.ts": 1,
+		"clients/dispatch/runners/tflint.ts": 1,
 		// 14 -> 15 (#4226): the early-return runner result preserves the existing
 		// status field while disclosing a fully path-excluded query set.
 		"clients/dispatch/runners/tree-sitter.ts": 15,
 		// 10 -> 9 (#4130 r2): the shared classifier replaces a status test.
-		"clients/dispatch/runners/trivy-config.ts": 9,
+		"clients/dispatch/runners/trivy-config.ts": 8,
 		"clients/dispatch/runners/utils/availability-policy.ts": 5,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
@@ -1877,15 +1873,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.
 		"clients/dispatch/runners/utils/tool-failure.ts": 20,
 		// 4 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/vale.ts": 2,
-		"clients/dispatch/runners/yamllint.ts": 2,
-		"clients/dispatch/runners/zig-check.ts": 2,
+		"clients/dispatch/runners/zig-check.ts": 1,
 		// 5 -> 6 (#4484 r2): `reachedNoVerdict` reads the runner result's status.
 		// 6 -> 7 (#4733 r2): `checkedWholeFile` reads each latency row's status.
 		// 7 -> 8 (#4130): `faultResult` builds the one `failed` runner result.
 		// 9 -> 10 (#5258): `checkedVerdict` reads each row's runner status through
 		// `hasUsableResult`.
-		"clients/dispatch/types.ts": 10,
+		"clients/dispatch/types.ts": 11,
 		"clients/file-utils.ts": 3,
 		"clients/finding-delivery-gate.ts": 3,
 		"clients/formatters.ts": 5,
@@ -1907,7 +1901,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lens-engine.ts": 4,
 		"clients/lsp-mutation.ts": 7,
 		"clients/lsp/client-registry.ts": 1,
-		"clients/lsp/client.ts": 31,
+		// 31 -> 34 (#5487): the readiness gate reads and returns the existing
+		// `PullDiagnosticsOutcome.status` member (found / unavailable) at three
+		// sites; same member sense as every row here.
+		"clients/lsp/client.ts": 34,
 		"clients/lsp/edits.ts": 1,
 		"clients/lsp/index.ts": 4,
 		"clients/lsp/jvm-runtime.ts": 1,

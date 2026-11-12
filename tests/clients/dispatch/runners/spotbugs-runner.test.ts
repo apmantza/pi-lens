@@ -4,7 +4,16 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTestEnvironment, useTrackedTempDirs } from "../../test-utils.js";
 
-const { safeSpawnAsync } = vi.hoisted(() => ({ safeSpawnAsync: vi.fn() }));
+const { safeSpawnAsync, runtime } = vi.hoisted(() => ({
+	safeSpawnAsync: vi.fn(),
+	runtime: {
+		javaPresent: true,
+		javaVerdict: { outcome: "missing", cause: "not-found" } as {
+			outcome: string;
+			cause: string;
+		},
+	},
+}));
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
 // java present + spotbugs resolves to a stub command. createAvailabilityChecker
@@ -15,9 +24,17 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: () => ({
-			isAvailableAsync: async () => true,
+		createAvailabilityChecker: (command: string) => ({
+			isAvailableAsync: async () => command !== "java" || runtime.javaPresent,
 			getCommand: () => null,
+			getVerdict: () => ({
+				...(command === "java"
+					? runtime.javaVerdict
+					: { outcome: "missing", cause: "not-found" }),
+				elapsedMs: 0,
+				latched: true,
+				retryAtMs: 0,
+			}),
 		}),
 		resolveAvailableOrInstall: async () => "spotbugs-stub",
 	}),
@@ -55,6 +72,8 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 
 	beforeEach(() => {
 		safeSpawnAsync.mockReset();
+		runtime.javaPresent = true;
+		runtime.javaVerdict = { outcome: "missing", cause: "not-found" };
 		// The runner reads SpotBugs' -output file; the real CLI writes it, so the
 		// mock writes the fixture XML to that path.
 		safeSpawnAsync.mockImplementation(async (_cmd: string, args: string[]) => {
@@ -89,6 +108,41 @@ describe("spotbugs runner — cache + skip (#133)", () => {
 			env.cleanup();
 		}
 	});
+
+	// Recurrence (#5258 r2 review F1, Qodo #4): an absent Java runtime was worded
+	// `spotbugs: not installed`, blaming SpotBugs for the missing JRE it needs.
+	it("names the missing Java runtime, not SpotBugs, when Java is absent", async () => {
+		try {
+			runtime.javaPresent = false;
+			const res = await run(env.tmpDir);
+			expect(res.status).toBe("skipped");
+			expect(res.skipReason).toBe("runtime-missing");
+			expect(safeSpawnAsync).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// Recurrence (#5258 r2 verify N3): every false Java probe read
+	// runtime-missing, so a Java whose `-version` hung or failed was worded as
+	// not installed.
+	it.each([
+		["transient", "probe-timeout", "probe-incomplete"],
+		["non-installable", "probe-rejected", "probe-rejected"],
+	])(
+		"reads a Java verdict %s / %s as %s, not as a missing runtime",
+		async (outcome, cause, reason) => {
+			try {
+				runtime.javaPresent = false;
+				runtime.javaVerdict = { outcome, cause };
+				const res = await run(env.tmpDir);
+				expect(res.skipReason).toBe(reason);
+				expect(safeSpawnAsync).not.toHaveBeenCalled();
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 
 	it("returns cached diagnostics without re-invoking SpotBugs when .class tree is unchanged", async () => {
 		try {

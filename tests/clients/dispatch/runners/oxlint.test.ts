@@ -147,6 +147,18 @@ describe("oxlint runner", () => {
 			"disabled-by-config",
 			// #5042: an opt-in runner left off, a stated skip and no failed tool.
 			"not-enabled",
+			// #5258: why a runner read none of the file, so the notice names the
+			// cause: its tool was not found, the managed install is off, it needs a
+			// config the project lacks, or the project's policy picks another tool.
+			"not-installed",
+			"install-disabled",
+			"not-configured",
+			"not-preferred",
+			// #5258 r2: a tool that may be installed but was not usable says why.
+			"probe-incomplete",
+			"probe-rejected",
+			"trust-refused",
+			"runtime-missing",
 		]);
 		const valid: RunnerResult = {
 			status: "skipped",

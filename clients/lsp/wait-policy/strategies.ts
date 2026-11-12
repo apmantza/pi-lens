@@ -320,8 +320,11 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 		// touch seam), and the retry loop cannot tell a clean file from a loading
 		// one, so every clean touch then pays the whole budget (6.7-6.9 s vs 0.9 s
 		// on the touch seam; 12.6-12.8 s vs 1.1-1.7 s on `lsp_diagnostics`). That
-		// trade is a maintainer decision, not a key rename; the readiness-signal fix
-		// is #5487. Raw numbers: tests/fixtures/lsp-wait-measurements/rust-5485.json.
+		// trade is a maintainer decision, not a key rename. #5487 closed the false
+		// clean without it: the client asks rust-analyzer for
+		// `experimental/serverStatus` and holds a pull to its `quiescent` flag, so
+		// a cold touch is inconclusive (`server-loading`), never clean. Raw numbers:
+		// tests/fixtures/lsp-wait-measurements/rust-5485.json.
 		// PythonServer (pyright / basedpyright) — openFilesOnly mode: lazy per-file
 		// analysis, startup similar to jedi. seedFirstPush: true because pyright's
 		// first publishDiagnostics after didOpen is the complete result for that file.
