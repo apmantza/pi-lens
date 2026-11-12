@@ -1579,7 +1579,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/tool-cwd.ts": 10,
 		// 64 -> 62 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 62 -> 50 (#5408): the seven bespoke config walks leave for the config-presence seam.
-		"clients/tool-policy.ts": 36,
+		// 36 -> 26 (#5408 slice 3): the formatter-family finders leave for the same seam.
+		"clients/tool-policy.ts": 26,
 		// 19 -> 18 (#4689 batch 7): the grammar write probe climbs `walkUpDirs`, so
 		// its own `path.dirname` step is the seam's.
 		"clients/tree-sitter-client.ts": 18,

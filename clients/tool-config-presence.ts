@@ -1,7 +1,7 @@
 /**
  * The one config-presence seam (#5408): "does the project carry config for
  * tool X, starting at this directory". The policy layer (`tool-policy.ts`
- * `hasXConfig`, `getLinterPolicyForCwd`), the runners' own gates and the
+ * `getLinterPolicyForCwd`), the runners' own gates and the
  * formatter selector all ask THIS module, so they cannot disagree on where to
  * look, how far to climb, or what counts as config.
  *
@@ -63,7 +63,27 @@ export type ToolConfigId =
 	| "vitePlus"
 	| "javaBuild"
 	| "vale"
-	| "shellcheck";
+	| "shellcheck"
+	| "prettier"
+	| "rubocop"
+	| "standardrb"
+	| "oxfmt"
+	| "oxlint"
+	| "clang-format"
+	| "php-cs-fixer"
+	| "stylua"
+	| "ocamlformat"
+	| "google-java-format"
+	| "cljfmt"
+	| "cmake-format"
+	| "psscriptanalyzer"
+	| "csharpier"
+	| "ormolu"
+	| "taplo"
+	| "terraform"
+	| "swiftformat"
+	| "fantomas"
+	| "mixFormat";
 
 /** Where the config was found, and what kind of evidence it is. */
 export interface ToolConfigHit {
@@ -95,7 +115,8 @@ type DependencyFile =
 	| "requirements.txt"
 	| "Pipfile"
 	| "pyproject.toml"
-	| "package.json";
+	| "package.json"
+	| "Gemfile";
 
 interface ToolConfigSpec {
 	/** File names (sub-paths allowed): the file existing is the evidence. */
@@ -110,8 +131,22 @@ interface ToolConfigSpec {
 	 * counts. A climb here would report a project the tool cannot open.
 	 */
 	exactDir?: true;
-	/** A `package.json` field holding a value (`stylelint`, `eslintConfig`). */
-	jsonFields?: readonly { file: "package.json"; field: string }[];
+	/**
+	 * A `package.json` field holding a value (`stylelint`, `eslintConfig`).
+	 * `anyValue` counts the key being present whatever it holds (prettier reads
+	 * `"prettier": false` as the project electing prettier).
+	 */
+	jsonFields?: readonly {
+		file: "package.json";
+		field: string;
+		anyValue?: true;
+	}[];
+	/**
+	 * Other tools whose evidence also configures this one, asked with the same
+	 * stop rule (oxfmt and oxlint run through Vite+). Asking the other spec from
+	 * here, not per ancestor of a private climb, is what keeps one stop rule.
+	 */
+	also?: readonly ToolConfigId[];
 	/** The tool's own package named as a dependency of the project. */
 	dependency?: { names: readonly string[]; files: readonly DependencyFile[] };
 	/**
@@ -291,6 +326,95 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 	},
 	vale: { files: [".vale.ini"] },
 	shellcheck: { files: [".shellcheckrc"] },
+	prettier: {
+		files: [
+			".prettierrc",
+			".prettierrc.json",
+			".prettierrc.yml",
+			".prettierrc.yaml",
+			".prettierrc.js",
+			".prettierrc.cjs",
+			".prettierrc.mjs",
+			"prettier.config.js",
+			"prettier.config.cjs",
+			"prettier.config.mjs",
+			"prettier.config.ts",
+		],
+		// The key being there is the election, even as `false` or `null`.
+		jsonFields: [{ file: "package.json", field: "prettier", anyValue: true }],
+	},
+	rubocop: {
+		files: [".rubocop.yml", ".rubocop.yaml"],
+		dependency: { names: ["rubocop"], files: ["Gemfile"] },
+	},
+	// `standard` is the gem standardrb ships as.
+	standardrb: { dependency: { names: ["standard"], files: ["Gemfile"] } },
+	// The published package is `oxfmt`; the scoped name does not exist on npm,
+	// and stays for forward-compat.
+	oxfmt: {
+		files: ["oxfmt.toml", ".oxfmtrc.json"],
+		dependency: {
+			names: ["oxfmt", "@oxc-project/oxfmt"],
+			files: ["package.json"],
+		},
+		also: ["vitePlus"],
+	},
+	// Per https://oxc.rs/docs/guide/usage/linter/config.html, oxlint
+	// auto-discovers these names (`oxlint.json` is the legacy one). Nearest
+	// config by location, so a package.json never bounds the walk (#3017).
+	oxlint: {
+		files: [
+			".oxlintrc.json",
+			".oxlintrc.jsonc",
+			"oxlint.json",
+			"oxlint.config.ts",
+			"oxlint.config.mts",
+		],
+		also: ["vitePlus"],
+	},
+	"clang-format": { files: [".clang-format", "_clang-format"] },
+	"php-cs-fixer": { files: [".php-cs-fixer.php", ".php-cs-fixer.dist.php"] },
+	stylua: { files: ["stylua.toml", ".stylua.toml"] },
+	ocamlformat: { files: [".ocamlformat"] },
+	// google-java-format has no config file of its own: `.editorconfig` is the
+	// common Java project signal, `.google-java-format` the explicit marker.
+	"google-java-format": { files: [".google-java-format", ".editorconfig"] },
+	cljfmt: { files: [".cljfmt.edn", "cljfmt.edn", ".cljfmt"] },
+	"cmake-format": {
+		files: [
+			".cmake-format",
+			".cmake-format.yaml",
+			".cmake-format.yml",
+			".cmake-format.json",
+			".cmake-format.py",
+			"cmake-format.yaml",
+			"cmake-format.yml",
+		],
+	},
+	// The settings file `Invoke-Formatter -Settings` takes (#1572); the runner
+	// hands the found file over, so the hit's `file` is the path.
+	psscriptanalyzer: {
+		files: ["PSScriptAnalyzerSettings.psd1", "ScriptAnalyzerSettings.psd1"],
+	},
+	csharpier: {
+		files: [
+			".csharpierrc",
+			".csharpierrc.json",
+			".csharpierrc.yaml",
+			".csharpierrc.yml",
+		],
+	},
+	// Ormolu has no general settings file; `.ormolu` carries fixity declarations.
+	ormolu: { files: [".ormolu"] },
+	taplo: { files: ["taplo.toml", ".taplo.toml"] },
+	// `terraform fmt` is unconfigurable; `.terraform.lock.hcl` (written only by
+	// `terraform init`) marks a directory the user set up as a Terraform root.
+	terraform: { files: [".terraform.lock.hcl"] },
+	swiftformat: { files: [".swiftformat"] },
+	// Fantomas reads `.editorconfig` (`fsharp_*` keys) and `.fantomasignore`.
+	fantomas: { files: [".fantomasignore", ".editorconfig"] },
+	// `.formatter.exs` is what `mix format` reads project config from.
+	mixFormat: { files: [".formatter.exs"] },
 };
 
 /** PEP 503 name: case-insensitive, runs of `-`, `_`, `.` are one. */
@@ -412,6 +536,14 @@ function pyprojectDependencyNames(content: string): string[] {
 	return names;
 }
 
+/** `Gemfile`: the first string of a line-leading `gem` call, so a comment names nothing. */
+function gemfileNames(content: string): string[] {
+	return content.split(/\r?\n/).flatMap((line) => {
+		const match = /^\s*gem\s*\(?\s*["']([^"']+)["']/.exec(line);
+		return match?.[1] ? [match[1]] : [];
+	});
+}
+
 /** `Pipfile` package tables: the dependency is the key. */
 function pipfileNames(content: string): string[] {
 	return tomlEntries(content).flatMap(({ table, key }) =>
@@ -489,6 +621,8 @@ function dependencyNames(file: DependencyFile, candidate: string): string[] {
 			return pipfileNames(content);
 		case "pyproject.toml":
 			return pyprojectDependencyNames(content);
+		case "Gemfile":
+			return gemfileNames(content);
 	}
 }
 
@@ -522,9 +656,10 @@ function findInDir(
 			return { file: candidate, dir, source: "ini-section" };
 		}
 	}
-	for (const { file, field } of spec.jsonFields ?? []) {
+	for (const { file, field, anyValue } of spec.jsonFields ?? []) {
 		const candidate = path.join(dir, file);
-		if (readPackageJson(candidate)?.[field]) {
+		const pkg = readPackageJson(candidate);
+		if (anyValue ? pkg && Object.hasOwn(pkg, field) : pkg?.[field]) {
 			return { file: candidate, dir, source: "json-field" };
 		}
 	}
@@ -565,6 +700,20 @@ export function findToolConfig(
 	options: ToolConfigOptions = {},
 ): ToolConfigHit | undefined {
 	const spec = TOOL_CONFIG_SPECS[tool];
+	const own = climbForSpec(spec, startDir, options);
+	if (own) return own;
+	for (const other of spec.also ?? []) {
+		const hit = findToolConfig(other, startDir, options);
+		if (hit) return hit;
+	}
+	return undefined;
+}
+
+function climbForSpec(
+	spec: ToolConfigSpec,
+	startDir: string,
+	options: ToolConfigOptions,
+): ToolConfigHit | undefined {
 	if (spec.exactDir) return findInDir(spec, realpathOrResolve(startDir));
 	const home = realpathOrResolve(options.homeDir ?? os.homedir());
 	const ceiling =

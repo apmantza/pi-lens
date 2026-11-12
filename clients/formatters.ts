@@ -22,7 +22,7 @@ import {
 	walkUpDirs,
 } from "./path-utils.js";
 import { resolveToolCwd } from "./tool-cwd.js";
-import { hasToolConfig } from "./tool-config-presence.js";
+import { findToolConfig, hasToolConfig } from "./tool-config-presence.js";
 import { resolveCargoPackageEdition } from "./cargo-manifest.js";
 import { resolveKtfmtGradleStyle } from "./gradle-ktfmt-style.js";
 import { resolvePhpCsFixerConfig } from "./php-cs-fixer-config.js";
@@ -65,36 +65,13 @@ import { tryLazyInstallForFormatter } from "./dispatch/runners/utils/lazy-instal
 import { getToolPath } from "./installer/index.js";
 import { getIsolatedNpxSpawnOptions } from "./tool-probe.js";
 import {
-	findPSScriptAnalyzerConfigPath,
 	getAutoInstallToolIdForFormatter,
 	getFormatterPolicyForFile,
 	getSmartDefaultFormatterName,
-	hasBlackConfig,
-	hasClangFormatConfig,
-	hasCljfmtConfig,
-	hasCmakeFormatConfig,
-	hasCsharpierConfig,
-	hasFantomasConfig,
-	hasGoogleJavaFormatConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasMixFormatConfig,
 	hasNearestPackageJsonDependency,
-	hasNearestPackageJsonField,
-	hasOcamlformatConfig,
-	hasOrmoluConfig,
-	hasOxfmtConfig,
 	hasOxfmtSvelteConfig,
-	hasPhpCsFixerConfig,
-	hasPrettierConfig,
-	hasPSScriptAnalyzerConfig,
-	hasRubocopConfig,
-	hasRuffConfig,
-	hasStandardrbConfig,
-	hasStyluaConfig,
-	hasSwiftformatConfig,
-	hasTaploConfig,
-	hasTerraformConfig,
 	OXFMT_SUPPORTED_EXTENSIONS,
 } from "./tool-policy.js";
 
@@ -821,11 +798,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 	(cwd: string, ext: string) => boolean
 >([
 	["biome", (cwd) => hasToolConfig("biome", cwd)],
-	[
-		"prettier",
-		(cwd) =>
-			hasPrettierConfig(cwd) || hasNearestPackageJsonField(cwd, "prettier"),
-	],
+	["prettier", (cwd) => hasToolConfig("prettier", cwd)],
 	// .svelte is conditional beyond "an oxfmt config exists": oxfmt requires the
 	// `svelte` package installed AND the config's `svelte` flag enabled
 	// (verified empirically — see hasOxfmtSvelteConfig). The generic checks
@@ -837,39 +810,34 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 		(cwd, ext) =>
 			ext === ".svelte"
 				? hasOxfmtSvelteConfig(cwd)
-				: hasOxfmtConfig(cwd) ||
-					hasToolConfig("vitePlus", cwd) ||
-					// The published package is `oxfmt`; `@oxc-project/oxfmt` does not
-					// exist on npm. Accept both (scoped kept for forward-compat).
-					hasNearestPackageJsonDependency(cwd, "oxfmt") ||
-					hasNearestPackageJsonDependency(cwd, "@oxc-project/oxfmt"),
+				: hasToolConfig("oxfmt", cwd),
 	],
-	["ruff", (cwd) => hasRuffConfig(cwd)],
-	["black", (cwd) => hasBlackConfig(cwd)],
+	["ruff", (cwd) => hasToolConfig("ruff", cwd)],
+	["black", (cwd) => hasToolConfig("black", cwd)],
 	["sqlfluff", (cwd) => hasToolConfig("sqlfluff", cwd)],
-	["rubocop", (cwd) => hasRubocopConfig(cwd)],
-	["standardrb", (cwd) => hasStandardrbConfig(cwd)],
-	["clang-format", (cwd) => hasClangFormatConfig(cwd)],
-	["php-cs-fixer", (cwd) => hasPhpCsFixerConfig(cwd)],
-	["stylua", (cwd) => hasStyluaConfig(cwd)],
-	["ocamlformat", (cwd) => hasOcamlformatConfig(cwd)],
-	["google-java-format", (cwd) => hasGoogleJavaFormatConfig(cwd)],
+	["rubocop", (cwd) => hasToolConfig("rubocop", cwd)],
+	["standardrb", (cwd) => hasToolConfig("standardrb", cwd)],
+	["clang-format", (cwd) => hasToolConfig("clang-format", cwd)],
+	["php-cs-fixer", (cwd) => hasToolConfig("php-cs-fixer", cwd)],
+	["stylua", (cwd) => hasToolConfig("stylua", cwd)],
+	["ocamlformat", (cwd) => hasToolConfig("ocamlformat", cwd)],
+	["google-java-format", (cwd) => hasToolConfig("google-java-format", cwd)],
 	["ktfmt", (cwd) => hasKtfmtConfig(cwd)],
 	["ktlint", (cwd) => hasKtlintConfig(cwd)],
-	["cljfmt", (cwd) => hasCljfmtConfig(cwd)],
-	["cmake-format", (cwd) => hasCmakeFormatConfig(cwd)],
-	["psscriptanalyzer-format", (cwd) => hasPSScriptAnalyzerConfig(cwd)],
-	// #1595 sweep — see the comment above hasCsharpierConfig et al. in
+	["cljfmt", (cwd) => hasToolConfig("cljfmt", cwd)],
+	["cmake-format", (cwd) => hasToolConfig("cmake-format", cwd)],
+	["psscriptanalyzer-format", (cwd) => hasToolConfig("psscriptanalyzer", cwd)],
+	// #1595 sweep — see the note above FORMATTER_POLICY_BY_EXTENSION in
 	// tool-policy.ts for why nixfmt (the 8th formatter #1572 flagged) is NOT
 	// wired here: it has no config-file convention and no manifest-marker
 	// equivalent to `.terraform.lock.hcl`, so there is no honest opt-in signal.
-	["csharpier", (cwd) => hasCsharpierConfig(cwd)],
-	["ormolu", (cwd) => hasOrmoluConfig(cwd)],
-	["taplo", (cwd) => hasTaploConfig(cwd)],
-	["terraform", (cwd) => hasTerraformConfig(cwd)],
-	["swiftformat", (cwd) => hasSwiftformatConfig(cwd)],
-	["fantomas", (cwd) => hasFantomasConfig(cwd)],
-	["mix", (cwd) => hasMixFormatConfig(cwd)],
+	["csharpier", (cwd) => hasToolConfig("csharpier", cwd)],
+	["ormolu", (cwd) => hasToolConfig("ormolu", cwd)],
+	["taplo", (cwd) => hasToolConfig("taplo", cwd)],
+	["terraform", (cwd) => hasToolConfig("terraform", cwd)],
+	["swiftformat", (cwd) => hasToolConfig("swiftformat", cwd)],
+	["fantomas", (cwd) => hasToolConfig("fantomas", cwd)],
+	["mix", (cwd) => hasToolConfig("mixFormat", cwd)],
 ]);
 
 function hasExplicitFormatterConfig(
@@ -1099,9 +1067,8 @@ export const prettierFormatter: FormatterInfo = {
 	],
 	async detect(cwd: string) {
 		return (
-			hasPrettierConfig(cwd) ||
-			hasNearestPackageJsonDependency(cwd, "prettier") ||
-			hasNearestPackageJsonField(cwd, "prettier")
+			hasToolConfig("prettier", cwd) ||
+			hasNearestPackageJsonDependency(cwd, "prettier")
 		);
 	},
 };
@@ -1168,13 +1135,7 @@ export const oxfmtFormatter: FormatterInfo = {
 	// parallel hand-maintained lists, the #883 single-source-of-truth class).
 	extensions: [...OXFMT_SUPPORTED_EXTENSIONS],
 	async detect(cwd: string) {
-		return (
-			hasOxfmtConfig(cwd) ||
-			hasToolConfig("vitePlus", cwd) ||
-			// Published package is `oxfmt` (the scoped name does not exist on npm).
-			hasNearestPackageJsonDependency(cwd, "oxfmt") ||
-			hasNearestPackageJsonDependency(cwd, "@oxc-project/oxfmt")
-		);
+		return hasToolConfig("oxfmt", cwd);
 	},
 };
 
@@ -1199,13 +1160,13 @@ export const ruffFormatter: FormatterInfo = {
 		if (installed) return [installed, ...args, filePath];
 		// #2413: `ensureTool` already resolves PATH, global bins and the managed
 		// dir (and attempts an install) before returning falsy, so reaching here
-		// means ruff is genuinely nowhere. `detect()`'s `hasRuffConfig` branch has
+		// means ruff is genuinely nowhere. the config branch of ruff's `detect()` has
 		// no binary check, so a config-only project selects ruff with nothing
 		// installed; the static bare `ruff` would then ENOENT. Prove it unavailable.
 		return ladderMiss(found, "ruff");
 	},
 	async detect(cwd: string) {
-		if (hasRuffConfig(cwd)) return true;
+		if (hasToolConfig("ruff", cwd)) return true;
 		// No-config fallback: if Ruff is already available, allow formatter usage.
 		// This keeps Python default behavior consistent with startup defaults.
 		return Boolean(await getToolPath("ruff"));
@@ -1218,7 +1179,7 @@ export const blackFormatter: FormatterInfo = {
 	extensions: [".py", ".pyi"],
 	resolveCommand: managedFormatterResolver("black", []),
 	async detect(cwd: string) {
-		return hasBlackConfig(cwd);
+		return hasToolConfig("black", cwd);
 	},
 };
 
@@ -1418,8 +1379,9 @@ export const ktfmtFormatter: FormatterInfo = {
 		return styleFlag ? [installed, styleFlag, filePath] : [installed, filePath];
 	},
 	async detect(cwd: string) {
-		// Opt-in only: ktfmt becomes the formatter when the project elects it,
-		// otherwise ktlint stays the Kotlin smart-default (#129).
+		// Opt-in only: ktfmt becomes the formatter when the project elects it.
+		// Otherwise ktlint is the default formatter name, but it too runs only
+		// with a ktlint config (its lint policy is the smart default, #129).
 		return hasKtfmtConfig(cwd);
 	},
 };
@@ -1441,7 +1403,7 @@ export const rubocopFormatter: FormatterInfo = {
 		return null;
 	},
 	async detect(cwd: string) {
-		if (!hasRubocopConfig(cwd)) return false;
+		if (!hasToolConfig("rubocop", cwd)) return false;
 		if ((await which("rubocop")) !== null) return true;
 		await tryLazyInstallFormatterTool("rubocop", cwd);
 		return (await which("rubocop")) !== null;
@@ -1462,7 +1424,7 @@ export const standardrbFormatter: FormatterInfo = {
 		return null;
 	},
 	async detect(cwd: string) {
-		if (!hasStandardrbConfig(cwd)) return false;
+		if (!hasToolConfig("standardrb", cwd)) return false;
 		return (await which("standardrb")) !== null;
 	},
 };
@@ -1671,7 +1633,7 @@ export const googleJavaFormatFormatter: FormatterInfo = {
 	resolveCommand: managedFormatterResolver("google-java-format", ["--replace"]),
 	detect: managedToolDetect(
 		"google-java-format",
-		hasGoogleJavaFormatConfig,
+		(cwd) => hasToolConfig("google-java-format", cwd),
 		async () => (await which("google-java-format")) !== null,
 	),
 };
@@ -1683,7 +1645,7 @@ export const cljfmtFormatter: FormatterInfo = {
 	resolveCommand: managedFormatterResolver("cljfmt", ["fix"]),
 	detect: managedToolDetect(
 		"cljfmt",
-		hasCljfmtConfig,
+		(cwd) => hasToolConfig("cljfmt", cwd),
 		async () => (await which("cljfmt")) !== null,
 	),
 };
@@ -1695,7 +1657,7 @@ export const cmakeFormatFormatter: FormatterInfo = {
 	resolveCommand: managedFormatterResolver("cmake-format", ["-i"]),
 	detect: managedToolDetect(
 		"cmake-format",
-		hasCmakeFormatConfig,
+		(cwd) => hasToolConfig("cmake-format", cwd),
 		async () => (await which("cmake-format")) !== null,
 	),
 };
@@ -1762,7 +1724,7 @@ export const psscriptanalyzerFormatFormatter: FormatterInfo = {
 	async resolveCommand(filePath, cwd) {
 		const pwsh = (await which("pwsh")) ?? (await which("powershell"));
 		if (!pwsh) return null;
-		const settingsPath = findPSScriptAnalyzerConfigPath(cwd);
+		const settingsPath = findToolConfig("psscriptanalyzer", cwd)?.file;
 		return [
 			pwsh,
 			"-NoProfile",

@@ -1276,7 +1276,7 @@ describe("getFormattersForFile — policy selection", () => {
 			// #1595: same shape as #1572 for 7 more formatters left unreachable by
 			// 038cd1df (defaultWhenUnconfigured flipped to false, no explicit-config
 			// check added). nixfmt (the 8th) has no config surface at all and stays
-			// unreachable — see tool-policy.ts's comment above hasCsharpierConfig.
+			// unreachable — see the #1595 note above FORMATTER_POLICY_BY_EXTENSION in tool-policy.ts.
 			{
 				name: "csharpier",
 				ext: ".cs",

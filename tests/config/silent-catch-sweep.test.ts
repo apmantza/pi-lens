@@ -1212,10 +1212,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :162
 	"clients/tool-policy.ts": {
-		silent: 14,
-		identities: "f2513b3890ca9567",
+		silent: 9,
+		identities: "d7643e90f6364361",
 		reason: PRE_RULE,
-	}, // :1886, :1902, :1924, :1976, :1988, :2004, :2019, :2532, :2588, :2614, :2634, :2670, :2705, :2722
+	}, // :1903, :1953, :1965, :2309, :2365, :2391, :2411, :2447, :2487
 	"clients/tool-render.ts": {
 		silent: 2,
 		identities: "bf1a83100ccaa695",

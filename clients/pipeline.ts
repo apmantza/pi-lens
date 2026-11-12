@@ -140,11 +140,8 @@ import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
 	getRubocopCommand,
-	hasDetektConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
-	hasOxlintConfig,
-	hasRubocopConfig,
 	markdownlintConfigArgs,
 } from "./tool-policy.js";
 import type { PathSetLike } from "./runtime-coordinator.js";
@@ -1080,13 +1077,13 @@ export async function runAutofix(
 		hasEslintConfig: hasToolConfig("eslint", cwd),
 		hasStylelintConfig: hasToolConfig("stylelint", cwd),
 		hasSqlfluffConfig: hasToolConfig("sqlfluff", cwd),
-		hasRubocopConfig: hasRubocopConfig(cwd),
+		hasRubocopConfig: hasToolConfig("rubocop", cwd),
 		hasBiomeConfig: hasToolConfig("biome", cwd),
 		hasGolangciConfig: hasToolConfig("golangci-lint", cwd),
-		hasDetektConfig: hasDetektConfig(cwd),
+		hasDetektConfig: hasToolConfig("detekt", cwd),
 		hasKtfmtConfig: hasKtfmtConfig(cwd),
 		hasKtlintConfig: hasKtlintConfig(cwd),
-		hasOxlintConfig: hasOxlintConfig(cwd),
+		hasOxlintConfig: hasToolConfig("oxlint", cwd),
 	};
 	const autofixPolicy = getAutofixPolicyForFile(filePath, autofixContext);
 	const preferredAutofixTools = autofixPolicy?.safe
