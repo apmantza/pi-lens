@@ -1,7 +1,6 @@
 ---
 section: Fixed
-audience: user
-area: lsp
+audience: internal
 ---
 
-- **Nightly capability reports keep section introductions above server bullets.** A temporarily unavailable language server no longer moves the raw capability explanation below the carried server list. (refs #5526)
+- The nightly capability doc keeps the raw-capability intro above carried server bullets (refs #5526).
