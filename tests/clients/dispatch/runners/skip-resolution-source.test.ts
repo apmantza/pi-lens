@@ -10,9 +10,9 @@
  * never looks up, and the skip read an absence; elixir-check read the mix
  * probe in a project that is not a mix project, where only elixirc ran.
  *
- * Doubles sit at the process boundary (the spawn and the installer) and at the
- * runners' module-level checkers, which have no setter; `toolAbsentSkip`, the
- * registry ladder and the bin walks are real.
+ * The one double is the spawn (a process boundary): every checker, the
+ * registry ladder, the bin walks and the installer are real, with the managed
+ * install off and `PI_LENS_HOME` pinned by the Vitest setup.
  */
 
 import * as fs from "node:fs";
@@ -24,14 +24,14 @@ import {
 	resetProjectTrust,
 	setProjectTrustState,
 } from "../../../../clients/project-trust.js";
+import { withEnv } from "../../../support/with-env.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
-type Verdict = { outcome: string | null; cause: string | null };
+type SpawnResult = Record<string, unknown>;
 
-const { safeSpawnAsync, isSpawnableCommand, verdicts } = vi.hoisted(() => ({
+const { safeSpawnAsync, results } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
-	isSpawnableCommand: vi.fn(),
-	verdicts: new Map<string, Verdict>(),
+	results: new Map<string, SpawnResult>(),
 }));
 
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
@@ -41,35 +41,16 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => ({
 	safeSpawnAsync,
 }));
 
-vi.mock("../../../../clients/installer/index.js", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("../../../../clients/installer/index.js")
-	>()),
-	isSpawnableCommand,
-	ensureTool: async () => null,
-}));
+const MISSING: SpawnResult = {
+	error: Object.assign(new Error("missing"), { code: "ENOENT" }),
+	status: null,
+	failure: "spawn",
+	spawnFailure: { kind: "tool-not-found" },
+	stdout: "",
+	stderr: "",
+};
 
-vi.mock(
-	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
-	async (importOriginal) => ({
-		...(await importOriginal<
-			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
-		>()),
-		createAvailabilityChecker: (command: string) => ({
-			isAvailableAsync: async () => false,
-			getCommand: () => null,
-			getVerdict: () => ({
-				...(verdicts.get(command) ?? { outcome: null, cause: null }),
-				elapsedMs: 0,
-				latched: false,
-				retryAtMs: 0,
-			}),
-		}),
-		resolveToolCommandWithInstallFallback: async () => null,
-	}),
-);
-
-const TIMED_OUT = {
+const TIMED_OUT: SpawnResult = {
 	error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
 	status: null,
 	failure: "timeout",
@@ -78,16 +59,23 @@ const TIMED_OUT = {
 };
 
 let env: ReturnType<typeof setupTestEnvironment>;
+let restoreEnv: (() => void) | undefined;
 
 beforeEach(() => {
 	env = setupTestEnvironment("pi-lens-5258-resolution-");
+	results.clear();
 	safeSpawnAsync.mockReset();
-	isSpawnableCommand.mockReset();
-	isSpawnableCommand.mockResolvedValue(true);
-	verdicts.clear();
+	// Answer by the spawned command's name; anything unlisted is absent.
+	safeSpawnAsync.mockImplementation(
+		async (command: string) =>
+			results.get(path.basename(command).replace(/\.(exe|cmd|bat)$/i, "")) ??
+			MISSING,
+	);
 });
 
 afterEach(() => {
+	restoreEnv?.();
+	restoreEnv = undefined;
 	resetProjectTrust();
 	env.cleanup();
 });
@@ -101,12 +89,13 @@ function project(file: string, extra: Record<string, string> = {}) {
 	return dir;
 }
 
-/** A project binary under the temp root, an ancestor of the package. */
-function ancestorBin(binDir: string, name: string): void {
-	const dir = path.join(env.tmpDir, binDir);
+/** Executable files named `name` in `dir`, which the spawn double answers for. */
+function binaries(dir: string, name: string): void {
 	fs.mkdirSync(dir, { recursive: true });
-	for (const file of [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`])
+	for (const file of [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`]) {
 		fs.writeFileSync(path.join(dir, file), "#!/bin/sh\nexit 0\n");
+		fs.chmodSync(path.join(dir, file), 0o755);
+	}
 }
 
 function ctxFor(dir: string, file: string, kind: string): DispatchContext {
@@ -130,7 +119,7 @@ async function run(runner: string, ctx: DispatchContext) {
 
 describe("a skip reads the resolution its runner used (#5258 r3)", () => {
 	it("taplo: reads the trust refusal of its own upward walk", async () => {
-		ancestorBin(path.join("node_modules", ".bin"), "taplo");
+		binaries(path.join(env.tmpDir, "node_modules", ".bin"), "taplo");
 		const dir = project("a.toml");
 		setProjectTrustState("untrusted");
 		expect(await run("taplo", ctxFor(dir, "a.toml", "toml"))).toBe(
@@ -139,9 +128,8 @@ describe("a skip reads the resolution its runner used (#5258 r3)", () => {
 	});
 
 	it("phpstan: reads the trust refusal of its own vendor/bin walk", async () => {
-		ancestorBin(path.join("vendor", "bin"), "phpstan");
+		binaries(path.join(env.tmpDir, "vendor", "bin"), "phpstan");
 		const dir = project("a.php", { "phpstan.neon": "parameters: {}\n" });
-		verdicts.set("phpstan", { outcome: "missing", cause: "not-found" });
 		setProjectTrustState("untrusted");
 		expect(await run("phpstan", ctxFor(dir, "a.php", "php"))).toBe(
 			"trust-refused",
@@ -150,18 +138,17 @@ describe("a skip reads the resolution its runner used (#5258 r3)", () => {
 
 	it("elixir-check: reads the elixirc probe outside a mix project", async () => {
 		const dir = project("a.ex");
-		verdicts.set("elixirc", { outcome: "transient", cause: "probe-timeout" });
+		results.set("elixirc", TIMED_OUT);
 		expect(await run("elixir-check", ctxFor(dir, "a.ex", "elixir"))).toBe(
 			"probe-incomplete",
 		);
 	});
 
 	it.each([
-		["timed out", TIMED_OUT, true, "probe-incomplete"],
+		["timed out", TIMED_OUT, "probe-incomplete"],
 		[
 			"exited 3",
 			{ error: null, status: 3, stdout: "", stderr: "" },
-			true,
 			"probe-rejected",
 		],
 		[
@@ -174,27 +161,16 @@ describe("a skip reads the resolution its runner used (#5258 r3)", () => {
 				stdout: "",
 				stderr: "",
 			},
-			true,
 			"trust-refused",
-		],
-		[
-			"is not on disk and the install is off",
-			{
-				error: Object.assign(new Error("missing"), { code: "ENOENT" }),
-				status: null,
-				failure: "spawn",
-				spawnFailure: { kind: "tool-not-found" },
-				stdout: "",
-				stderr: "",
-			},
-			false,
-			"install-disabled",
 		],
 	] as const)(
 		"rubocop: reads its own --version spawn when it %s",
-		async (_name, result, spawnable, reason) => {
-			safeSpawnAsync.mockResolvedValue(result);
-			isSpawnableCommand.mockResolvedValue(spawnable);
+		async (_name, result, reason) => {
+			// On disk, so the verify spawns it again instead of installing it.
+			const bin = path.join(env.tmpDir, "bin");
+			binaries(bin, "rubocop");
+			restoreEnv = withEnv({ PATH: bin });
+			results.set("rubocop", result);
 			const dir = project("a.rb");
 			expect(await run("rubocop", ctxFor(dir, "a.rb", "ruby"))).toBe(reason);
 		},
