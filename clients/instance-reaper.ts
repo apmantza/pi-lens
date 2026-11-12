@@ -1094,7 +1094,7 @@ export async function terminateScannerChild(
 export const BACKSTOP_SCAN_TIMEOUT_MS = 5_000;
 
 /** The one command-line match rule, shared by both platforms' parsers. */
-function matchesManagedBinary(command: string): boolean {
+export function matchesManagedBinary(command: string): boolean {
 	const lower = command.toLowerCase();
 	return MANAGED_BINARY_NAMES.some((name) =>
 		lower.includes(name.toLowerCase()),
