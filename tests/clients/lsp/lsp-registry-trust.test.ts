@@ -14,6 +14,7 @@ vi.mock("../../../clients/extension-log.js", async (importOriginal) => ({
 const launchLSP = vi.fn(async () => ({}));
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 

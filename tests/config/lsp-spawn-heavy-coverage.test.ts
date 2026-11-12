@@ -168,6 +168,8 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/crash-respawn-debounce-wire.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/effect-tsgo-initialize-fallback-5504.test.ts":
+		"#5504: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/config-section-answers-4758.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/clangd-lazy-indexing.test.ts":

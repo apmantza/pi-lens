@@ -6,6 +6,7 @@ const { launchLSP } = vi.hoisted(() => ({ launchLSP: vi.fn() }));
 const { logLatency } = vi.hoisted(() => ({ logLatency: vi.fn() }));
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
+	launchViaNode: vi.fn(),
 	admitProjectSuppliedTsserver: (tsserverPath: string) => tsserverPath,
 }));
 vi.mock("../../../clients/latency-logger.js", async (importActual) => ({
