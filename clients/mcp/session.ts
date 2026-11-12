@@ -334,7 +334,7 @@ async function runTurnEndNowImpl(
 		} catch {
 			continue; // unreadable / deleted — skip
 		}
-		ctx.cacheManager.addModifiedRange(
+		const worklist = ctx.cacheManager.addModifiedRange(
 			abs,
 			{ start: 1, end: lineCount },
 			true,
@@ -342,7 +342,9 @@ async function runTurnEndNowImpl(
 			MCP_TURN_STATE_OWNER_ID,
 			"mcp",
 		);
-		registered++;
+		// The worklist declines a file outside the project (#2504) or under a
+		// live foreign owner, so only a file it now holds counts as registered.
+		if (worklist.files[ctx.cacheManager.toTurnStateKey(abs, cwd)]) registered++;
 	}
 
 	const owner: TurnStateOwner = {

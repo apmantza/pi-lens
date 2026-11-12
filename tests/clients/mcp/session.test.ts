@@ -191,24 +191,48 @@ describe("runTurnEnd", () => {
 	// tool was joined onto the cwd with a bare `path.resolve`, so `@edited.ts`
 	// and `~/edited.ts` named `<cwd>/@edited.ts` and `<cwd>/~/edited.ts`, read
 	// as unreadable and dropped without a trace. The sibling MCP tools resolve
-	// the same argument through `resolveHostToolPath`.
+	// the same argument through `resolveHostToolPath`. The success case asserts
+	// the worklist, not only the count, and keeps the file INSIDE the workspace:
+	// `~/edited.ts` names the pinned home, so the workspace is that home.
 	it.each(["@edited.ts", "~/edited.ts"])(
 		"registers the file a host spelling names: %s (shape 74)",
 		async (spelling) => {
 			const { home, restore } = pinFixtureHome("mcp-turn-end-host-path");
 			try {
-				fs.writeFileSync(
-					path.join(tmpDir, "edited.ts"),
-					"export const a = 1;\n",
-				);
 				fs.writeFileSync(path.join(home, "edited.ts"), "export const a = 1;\n");
-				const outcome = await runTurnEnd(tmpDir, [spelling]);
+				const outcome = await runTurnEnd(home, [spelling]);
 				expect(outcome.filesRegistered).toBe(1);
+				const deps = handleTurnEnd.mock.calls[0][0] as {
+					cacheManager: CacheManager;
+				};
+				expect(
+					Object.keys(deps.cacheManager.readTurnState(home).files),
+				).toEqual(["edited.ts"]);
 			} finally {
 				restore();
 			}
 		},
 	);
+
+	// RECURRENCE GUARDED: Qodo MEDIUM on #5494 b599493fb. `registered++` ran
+	// after `addModifiedRange` whether or not it kept the file, so a
+	// `~/edited.ts` outside the workspace was reported as registered while the
+	// cache manager's containment check (#2504) had dropped it from the
+	// worklist: the count said 1, turn_end saw 0 files.
+	it("does not count a host-spelled file outside the workspace (Qodo, #5494)", async () => {
+		const { home, restore } = pinFixtureHome("mcp-turn-end-outside-cwd");
+		try {
+			fs.writeFileSync(path.join(home, "edited.ts"), "export const a = 1;\n");
+			const outcome = await runTurnEnd(tmpDir, ["~/edited.ts"]);
+			expect(outcome.filesRegistered).toBe(0);
+			const deps = handleTurnEnd.mock.calls[0][0] as {
+				cacheManager: CacheManager;
+			};
+			expect(deps.cacheManager.readTurnState(tmpDir).files).toEqual({});
+		} finally {
+			restore();
+		}
+	});
 
 	// #2535 F2: both MCP entry points share runTurnEndNowImpl, so both must
 	// carry host:"mcp" into handleTurnEnd — the Stop-hook IPC route included.

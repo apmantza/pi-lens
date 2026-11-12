@@ -533,9 +533,14 @@ async function warmLspForFile(
  */
 export async function analyzeFile(
 	filePath: string,
-	cwd: string,
+	workspaceCwd: string,
 	options: AnalyzeFileOptions = {},
 ): Promise<McpAnalyzeResult> {
+	// `cwd` is a free string on the MCP tool (a `~` is legal), so the root is
+	// resolved once, here, and every seam below (host, root class, dispatch,
+	// turn state, graph, word index) gets that one absolute path.
+	// `.` against the base dir is the seam's own `~` / `file://` base expansion.
+	const cwd = resolveHostToolPath(".", workspaceCwd);
 	// Shape 74: `filePath` is a host tool argument, so a `~`, an `@` prefix or a
 	// `file://` URL resolves as it does for every sibling tool, never as a name
 	// under `cwd`.
