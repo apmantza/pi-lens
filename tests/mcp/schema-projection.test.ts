@@ -80,6 +80,10 @@ type ListedMcpTool = {
 function unsafeStrictSchema(node: unknown, inUnion = false): boolean {
 	if (!node || typeof node !== "object" || Array.isArray(node)) return true;
 	const schema = node as Record<string, unknown>;
+	// #5506: lsp_navigation's `items: {}` is an untyped node. Every known form
+	// names one of these keys, so a node that names none is unsafe (fail closed).
+	const KNOWN_FORM_KEYS = ["type", "anyOf", "oneOf", "enum", "const", "$ref"];
+	if (!KNOWN_FORM_KEYS.some((key) => key in schema)) return true;
 	const types = Array.isArray(schema.type) ? schema.type : [schema.type];
 	if (types.includes("object") && schema.additionalProperties !== false)
 		return true;
@@ -340,6 +344,15 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 			{ type: "array", items: indirect() },
 			{ $ref: "#/unknown" },
 			{ not: alias },
+			// #5506: lsp_navigation's untyped `items: {}` was passed by the walker.
+			{},
+			{ description: "x" },
+			// Each clause below has its own unsafe plant (#5506): deleting the
+			// object, array, or type-array clause must red this test.
+			{ type: "object" },
+			{ type: ["string", "object"] },
+			{ type: "array" },
+			{ type: ["array", "null"] },
 			null,
 		])
 			expect(unsafeStrictSchema(schema), JSON.stringify(schema)).toBe(true);
