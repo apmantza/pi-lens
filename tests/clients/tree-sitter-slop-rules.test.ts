@@ -328,9 +328,9 @@ describe("slop detection rules", () => {
 		});
 
 		// #5466 leak regression (parent scan: 18→6): a large plain module must
-		// be judged like any other file — the old size-capped fail-open kept
-		// findings on modules past the cap. ~4k statements push this tree well
-		// past it.
+		// be judged like any other file. The gate has no size cap. A size-capped
+		// fail-open keeps findings on modules past its cap, so a cap under the
+		// 4000-statement filler below reds this case.
 		it("does not flag a setFoo loop in a large plain module", async () => {
 			const client = getSharedTreeSitterClient()!;
 			const query = await getQuery("ts-react-antipatterns");

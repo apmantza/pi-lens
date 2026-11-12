@@ -105,6 +105,44 @@ describe("tree-sitter runner — ts-react-antipatterns context gate (#5466)", ()
 		);
 	}, 30_000);
 
+	// #5466 branch guard (the review found this arm untested; its mutant
+	// survived the suite): `@preact/hooks` has no bare `preact` segment, so only
+	// the `startsWith("@preact/")` arm admits it. Dropping the arm loses context.
+	it("flags a setCount loop in a module that imports a scoped @preact package", async () => {
+		expect(
+			await rulesFor(
+				"scoped-preact.ts",
+				'import { useState } from "@preact/hooks";\nfor (const item of items) {\n  setCount(count + 1);\n}\n',
+			),
+		).toContain("ts-react-antipatterns");
+	}, 30_000);
+
+	// #5466 branch guard (the review found this arm untested; its mutant
+	// survived the suite): `react-query` matches the family only through the
+	// `-suffix` arm of the segment regex, since `@tanstack` is not a family
+	// segment. A regex reduced to bare `react|preact` loses this context.
+	it("flags a setCount loop in a module that imports a react-suffixed package", async () => {
+		expect(
+			await rulesFor(
+				"suffixed-react.ts",
+				'import { useQuery } from "@tanstack/react-query";\nfor (const item of items) {\n  setCount(count + 1);\n}\n',
+			),
+		).toContain("ts-react-antipatterns");
+	}, 30_000);
+
+	// #5466 review (F4): the file's only JSX is a fragment (`<>…</>`). The tsx
+	// grammar parses a fragment as `jsx_element` (no grammar emits a
+	// `jsx_fragment` node), so this case pins the element arm for a
+	// fragment-only file.
+	it("flags a setCount loop in a .tsx file whose only JSX is a fragment", async () => {
+		expect(
+			await rulesFor(
+				"fragment-only.tsx",
+				"const view = <>{items.length}</>;\nfor (const item of items) {\n  setCount(count + 1);\n}\n",
+			),
+		).toContain("ts-react-antipatterns");
+	}, 30_000);
+
 	it("walks a large plain file once for many matching loops in the batched caller", async () => {
 		const { value, reads } = await countRootChildrenReads(() =>
 			rulesFor("many-plain.ts", MULTI_LOOP_SRC),

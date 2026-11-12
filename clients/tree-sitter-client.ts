@@ -149,7 +149,6 @@ const REACT_FAMILY_MODULE_SEGMENT = /^(react|preact)(-[a-z0-9-]+)?$/;
 const REACT_JSX_NODE_TYPES: ReadonlySet<string> = new Set([
 	"jsx_element",
 	"jsx_self_closing_element",
-	"jsx_fragment",
 ]);
 // The execute-style Python DB-API/ORM methods this rule treats as SQL sinks.
 // Hoisted so the post-filter does not rebuild the set per match.
@@ -3916,8 +3915,10 @@ export class TreeSitterClient {
 				}
 			}
 			case "has_react_context": {
-				// #5466: React context = a top-level React-family import or any JSX
-				// node; a failed probe keeps the finding.
+				// #5466: React context = a top-level ES `import` from the react/preact
+				// family, or any JSX node. `require("react")`,
+				// `import X = require("react")`, `export ... from "react"` and dynamic
+				// `import()` do not count; a failed probe keeps the finding.
 				if (invocationState?.reactContext !== undefined) {
 					return invocationState.reactContext;
 				}

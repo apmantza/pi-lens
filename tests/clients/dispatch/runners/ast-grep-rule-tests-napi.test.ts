@@ -86,9 +86,9 @@ describe("shipped rule-test fixtures through the napi evaluator", () => {
 	}, 30_000);
 
 	// #5466: the issue demotes both unchecked-throwing-call twins below
-	// `error` (only `error` maps to blocking) because the lexical-try check is
-	// intra-function — a caller's try/catch or a safe(() => …) wrapper is
-	// invisible to it. Red-first: pre-fix these diagnostics report `error`.
+	// `error` (only `error` maps to blocking) because the try check is lexical:
+	// a caller's try/catch or a safe(() => …) wrapper is invisible to it.
+	// Red-first: pre-fix these diagnostics report `error`.
 	it("ships unchecked-throwing-call below the blocking tier", () => {
 		const cases: Array<[string, string]> = [
 			["unchecked-throwing-call", "snippet.ts"],

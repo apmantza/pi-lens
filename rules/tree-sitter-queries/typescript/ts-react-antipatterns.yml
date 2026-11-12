@@ -16,9 +16,11 @@ description: |
 
   ✅ FIX: compute the new state value in the loop, then call setState once after.
 
-  #5466: reported only for React context — a file that imports a React or
-  React-like hook source (react/preact family), or contains JSX. A plain
-  module's `setFoo` loop is a different idiom and stays silent.
+  #5466: reported only for React context — a top-level ES `import` from the
+  react/preact family, or any JSX node. `require("react")`,
+  `import X = require("react")`, `export ... from "react"` and dynamic
+  `import()` do not count. A plain module's `setFoo` loop is a different idiom
+  and stays silent.
 
 query: |
   [
