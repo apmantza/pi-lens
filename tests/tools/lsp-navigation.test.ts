@@ -528,6 +528,31 @@ describe("lsp_navigation tool", () => {
 		});
 	});
 
+	it("executeCommand preserves object-valued LSPAny arguments", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const commandArguments = [
+			{ uri: "file:///x.ts", options: { organizeImports: true } },
+		];
+
+		await tool.execute(
+			"exec-object-args",
+			{
+				operation: "executeCommand",
+				command: "_typescript.organizeImports",
+				commandArguments,
+				apply: true,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		const executeCall = (
+			mocked.service as { executeCommand: ReturnType<typeof vi.fn> }
+		).executeCommand.mock.calls[0];
+		expect(executeCall?.[2]).toEqual(commandArguments);
+	});
+
 	// #2450 fix round 5 (F1): pin the PRODUCTION `isRecordable` closure built
 	// at tools/lsp-navigation.ts:1126-1131 — not a hand-mirrored stand-in.
 	// `runtime.projectRoot` is the parent of the request `cwd` (a sub-package),
