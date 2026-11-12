@@ -3150,6 +3150,83 @@ const TypeScriptRoot: RootFunction = withRootMarkers(
 	[...TS_CONFIG_MARKERS, ...TS_TOOLING_MARKERS],
 );
 
+/**
+ * The classic launch: `typescript-language-server` over the admitted
+ * `tsserver.js`. It is what a TypeScript <=6 project ran before the native
+ * launches existed, and the sibling the alias launch falls back to (#5504).
+ */
+async function launchClassicTypeScript(
+	root: string,
+	options?: LSPSpawnOptions,
+): Promise<LSPSpawnResult | undefined> {
+	let source: "direct" | "managed" = "direct";
+
+	// TypeScript <=6 uses typescript-language-server + tsserver.js. Prefer a
+	// project-local wrapper, then fall back to discovered/managed tooling.
+	// #1412 M1: walk up from root (Windows .cmd first, then Unix at each
+	// level) — a nested config root's node_modules/.bin lives at an ancestor,
+	// not necessarily directly under the LSP root.
+	let lspPath: string | undefined = await findAncestorFileAmong(root, [
+		["node_modules", ".bin", "typescript-language-server.cmd"],
+		["node_modules", ".bin", "typescript-language-server"],
+	]);
+
+	// Fall back to a discovered or managed install. ensureTool() runs PATH /
+	// npm-global discovery even when install is disabled (only the download is
+	// gated by canInstall), so a globally-installed typescript-language-server
+	// resolves even without a per-project node_modules/.bin entry.
+	if (!lspPath) {
+		lspPath = await ensureTool("typescript-language-server", {
+			allowInstall: canInstall(options?.allowInstall),
+		});
+		if (lspPath) source = "managed";
+		if (!lspPath) {
+			return undefined;
+		}
+	}
+
+	// An unset/invalid hint lets the wrapper select project bytes itself.
+	// Require an admitted compiler before launching the classic wrapper.
+	const tsserverPath = await findTsserverPath(
+		root,
+		options?.allowInstall,
+		options,
+	);
+	if (!tsserverPath) {
+		admitProjectSuppliedTsserver(
+			undefined,
+			root,
+			true,
+			options?.projectCodeAllowed,
+		);
+		return undefined;
+	}
+	if (tsserverPath) source = "managed";
+
+	// The installed wrapper selects its child from the
+	// `initialization.tsserver.path` returned below; the legacy
+	// `TSSERVER_PATH` variable is set too, but this wrapper version does not
+	// read it. Both name the same admitted path, so neither an older wrapper
+	// that reads the variable nor this one can fork a different compiler.
+	const env = await getToolEnvironment();
+	const proc = await launchLSP(lspPath, ["--stdio"], {
+		cwd: root,
+		env: {
+			...env,
+			TSSERVER_PATH: tsserverPath,
+		},
+	});
+
+	return {
+		process: proc,
+		source,
+		initialization: tsserverPath
+			? { tsserver: { path: tsserverPath } }
+			: undefined,
+		launchVariant: "classic",
+	};
+}
+
 export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
 	idleEviction: "transparent",
@@ -3230,72 +3307,7 @@ export const TypeScriptServer: LSPServerInfo = {
 			if (native) return native;
 		}
 
-		let source: "direct" | "managed" = "direct";
-
-		// TypeScript <=6 uses typescript-language-server + tsserver.js. Prefer a
-		// project-local wrapper, then fall back to discovered/managed tooling.
-		// #1412 M1: walk up from root (Windows .cmd first, then Unix at each
-		// level) — a nested config root's node_modules/.bin lives at an ancestor,
-		// not necessarily directly under the LSP root.
-		let lspPath: string | undefined = await findAncestorFileAmong(root, [
-			["node_modules", ".bin", "typescript-language-server.cmd"],
-			["node_modules", ".bin", "typescript-language-server"],
-		]);
-
-		// Fall back to a discovered or managed install. ensureTool() runs PATH /
-		// npm-global discovery even when install is disabled (only the download is
-		// gated by canInstall), so a globally-installed typescript-language-server
-		// resolves even without a per-project node_modules/.bin entry.
-		if (!lspPath) {
-			lspPath = await ensureTool("typescript-language-server", {
-				allowInstall: canInstall(options?.allowInstall),
-			});
-			if (lspPath) source = "managed";
-			if (!lspPath) {
-				return undefined;
-			}
-		}
-
-		// An unset/invalid hint lets the wrapper select project bytes itself.
-		// Require an admitted compiler before launching the classic wrapper.
-		const tsserverPath = await findTsserverPath(
-			root,
-			options?.allowInstall,
-			options,
-		);
-		if (!tsserverPath) {
-			admitProjectSuppliedTsserver(
-				undefined,
-				root,
-				true,
-				options?.projectCodeAllowed,
-			);
-			return undefined;
-		}
-		if (tsserverPath) source = "managed";
-
-		// The installed wrapper selects its child from the
-		// `initialization.tsserver.path` returned below; the legacy
-		// `TSSERVER_PATH` variable is set too, but this wrapper version does not
-		// read it. Both name the same admitted path, so neither an older wrapper
-		// that reads the variable nor this one can fork a different compiler.
-		const env = await getToolEnvironment();
-		const proc = await launchLSP(lspPath, ["--stdio"], {
-			cwd: root,
-			env: {
-				...env,
-				TSSERVER_PATH: tsserverPath,
-			},
-		});
-
-		return {
-			process: proc,
-			source,
-			initialization: tsserverPath
-				? { tsserver: { path: tsserverPath } }
-				: undefined,
-			launchVariant: "classic",
-		};
+		return launchClassicTypeScript(root, options);
 	},
 };
 
