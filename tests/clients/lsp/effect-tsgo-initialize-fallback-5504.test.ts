@@ -281,3 +281,44 @@ it(
 		expect(registry.getAliveClientCount()).toBe(0);
 	},
 );
+
+// RECURRENCE GUARDED: #5522 review F3. The catch around the first `connect`
+// took `initializeFallback` without reading `isDestroyed`, so a registry shut
+// down during the first handshake launched native after shutdown (killed at
+// once by `abortSpawn`) and wrote a ledger row blaming effect-tsgo for a
+// teardown.
+it(
+	"takes no fallback when the service shuts down during the first handshake",
+	POSIX_REAL_PROCESS,
+	async () => {
+		const { file } = makeFixture();
+		let fallbackCalls = 0;
+
+		const { registry, spawned } = await acquire(file, (owner) => {
+			const production = wrapFallback((fallback) => async (failure) => {
+				fallbackCalls += 1;
+				return fallback(failure);
+			});
+			return {
+				...production,
+				async spawn(root, options) {
+					const result = await production.spawn(root, options);
+					// The stub exits once `initialize` is sent, so the shutdown lands
+					// before the first connect rejects.
+					setTimeout(() => owner.markDestroyed(), 0);
+					return result;
+				},
+			};
+		});
+
+		expect(spawned).toBeUndefined();
+		expect(fallbackCalls).toBe(0);
+		expect(registry.broken.size).toBe(0);
+		expect(registry.getAliveClientCount()).toBe(0);
+		const rows = getDegradationSummary()
+			.filter((group) => group.kind === "lsp-registry-decision")
+			.flatMap((group) => group.latestReasons)
+			.filter((row) => /^effect-tsgo-launch:g\d+:/.test(row.subject ?? ""));
+		expect(rows).toHaveLength(0);
+	},
+);

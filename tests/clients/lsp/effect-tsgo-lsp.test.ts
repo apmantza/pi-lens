@@ -27,12 +27,14 @@ import { removeTempDirSync } from "../test-utils.js";
 import { setPlatform } from "../../support/platform-stub.js";
 
 const launchLSPMock = vi.hoisted(() => vi.fn());
+const launchViaNodeMock = vi.hoisted(() => vi.fn());
 const ensureToolMock = vi.hoisted(() => vi.fn());
 const getToolEnvironmentMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("../../../clients/lsp/launch.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../../clients/lsp/launch.js")>()),
 	launchLSP: launchLSPMock,
+	launchViaNode: launchViaNodeMock,
 }));
 vi.mock("../../../clients/installer/index.js", async (importOriginal) => ({
 	...(await importOriginal<
@@ -151,6 +153,8 @@ async function trustedSpawn(root: string) {
 beforeEach(() => {
 	launchLSPMock.mockReset();
 	launchLSPMock.mockResolvedValue(fakeProcess);
+	launchViaNodeMock.mockReset();
+	launchViaNodeMock.mockResolvedValue(fakeProcess);
 	ensureToolMock.mockReset();
 	ensureToolMock.mockResolvedValue(undefined);
 	getToolEnvironmentMock.mockClear();
@@ -292,6 +296,59 @@ describe("effect-tsgo fallback (#4914)", () => {
 		expect(launchLSPMock).toHaveBeenCalledTimes(1);
 		expect(launchLSPMock.mock.calls[0]?.[0]).toBe(nearTsc);
 		expect(launchLSPMock.mock.calls[0]?.[0]).not.toBe(ancestorEffect);
+		expect(spawned?.launchVariant).toBe("native-ts7");
+	});
+});
+
+// RECURRENCE GUARDED: #5522 review F1. The alias's `bin/tsc` is project code
+// that `launchNativeTypeScript` runs through `launchViaNode`, a path the
+// `process.execPath` launcher hides from `launchLSP`'s own gate. Skipping the
+// gate for the alias entry alone survived every other cell, because
+// `typescript-native-lsp.test.ts` doubles `admitProjectSuppliedTsserver` as a
+// pass-through. The real gate runs here; only the two launchers are doubled.
+describe("the @typescript/native alias entry's trust gate (#5504)", () => {
+	function aliasProject(label: string): { root: string; aliasBin: string } {
+		const root = makeRoot(label);
+		addTypeScript(root, "6.0.3");
+		return { root, aliasBin: addNativeAlias(root) };
+	}
+
+	it.for([
+		["unknown trust", "unknown", true],
+		["untrusted trust", "untrusted", true],
+		["trusted but project code denied", "trusted", false],
+	] as const)(
+		"launches nothing under %s",
+		async ([, trust, projectCodeAllowed]) => {
+			const { root } = aliasProject(`alias-trust-${trust}`);
+			const { setProjectTrustState } =
+				await import("../../../clients/project-trust.js");
+			setProjectTrustState(trust);
+			const { TypeScriptServer } =
+				await import("../../../clients/lsp/server.js");
+
+			const spawned = await TypeScriptServer.spawn(root, {
+				allowInstall: false,
+				projectCodeAllowed,
+			});
+
+			expect(spawned).toBeUndefined();
+			expect(launchViaNodeMock).not.toHaveBeenCalled();
+			expect(launchLSPMock).not.toHaveBeenCalled();
+		},
+	);
+
+	it("runs node on the alias's bin/tsc once the project is trusted and allowed", async () => {
+		const { root, aliasBin } = aliasProject("alias-trust-granted");
+
+		const spawned = await trustedSpawn(root);
+
+		expect(launchViaNodeMock).toHaveBeenCalledTimes(1);
+		expect(launchViaNodeMock).toHaveBeenCalledWith(
+			aliasBin,
+			["--lsp", "--stdio"],
+			{ cwd: root, env: {} },
+		);
 		expect(spawned?.launchVariant).toBe("native-ts7");
 	});
 });

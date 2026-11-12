@@ -400,6 +400,21 @@ describe("TypeScript 7 under the @typescript/native alias (#5504)", () => {
 	it("stays on classic for a manifest whose bin file is missing", () =>
 		expectClassicDespiteAlias({ writeBin: false }));
 
+	// RECURRENCE GUARDED: #5522 Qodo Q1. `access()` accepts a directory, so a
+	// manifest whose `bin.tsc` names one launched Node on it and dropped the
+	// classic server the project ran before the alias check existed.
+	it("stays on classic for a bin.tsc that is a directory", async () => {
+		const root = makeProject("6.0.3");
+		addClassicServer(root);
+		const aliasBin = addNativeAlias(root, { writeBin: false });
+		fs.mkdirSync(aliasBin, { recursive: true });
+
+		const result = await TypeScriptServer.spawn(root, { allowInstall: false });
+
+		expect(launchViaNode).not.toHaveBeenCalled();
+		expect(result?.launchVariant).toBe("classic");
+	});
+
 	it("stays on classic for a malformed manifest", () =>
 		expectClassicDespiteAlias({ manifestText: "{" }));
 

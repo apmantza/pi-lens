@@ -1590,6 +1590,9 @@ export class ClientRegistry {
 				// No fallback, or one that answers nothing, rethrows into the ladder.
 				const fallback = spawned.initializeFallback;
 				if (!fallback) throw err;
+				// Shut down during the first handshake: nothing to fall back for, and
+				// no launch after shutdown (the first child is already killed).
+				if (this.isDestroyed) return abortSpawn(undefined);
 				const replacement = await withLspProjectCodePermission(
 					projectCodeAllowed,
 					() => fallback(err),

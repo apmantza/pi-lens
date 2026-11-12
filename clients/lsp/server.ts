@@ -2643,7 +2643,8 @@ async function findTypeScriptNativeAlias(
 	if (typeof tsc !== "string" || !tsc) return undefined;
 	const command = path.resolve(aliasDir, tsc);
 	try {
-		await access(command);
+		// A directory at `bin.tsc` is no launcher; `access` alone accepts one.
+		if (!(await stat(command)).isFile()) return undefined;
 	} catch {
 		// none: a manifest whose bin file is absent is not a usable alias; classic answers.
 		return undefined;
