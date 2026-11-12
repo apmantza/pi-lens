@@ -1142,7 +1142,7 @@ export async function runAutofix(
 
 		if (toolName === "ruff") {
 			const ruffReady = ruffClient.isPythonFile(filePath)
-				? await ruffClient.ensureAvailable()
+				? await ruffClient.ensureAvailable(cwd)
 				: false;
 			if (!ruffReady) {
 				dbg(`autofix: ruff unavailable for ${filePath}`);

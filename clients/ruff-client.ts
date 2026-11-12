@@ -11,10 +11,7 @@
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
-} from "./dispatch/runners/utils/runner-helpers.js";
+import { resolveToolCommandWithInstallFallback } from "./dispatch/runners/utils/runner-helpers.js";
 import { isFileKind } from "./file-kinds.js";
 import { pathsEqual } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
@@ -47,10 +44,7 @@ interface RuffJsonDiagnostic {
 
 // --- Client ---
 
-const ruffAvailability = createAvailabilityChecker("ruff", ".exe");
-
 export class RuffClient {
-	private ruffCommand = "ruff";
 	private log: (msg: string) => void;
 
 	constructor(verbose = false) {
@@ -58,21 +52,16 @@ export class RuffClient {
 	}
 
 	/**
-	 * Check if ruff CLI is available, auto-install if not.
+	 * Check if ruff CLI is available for `cwd`, auto-install if not.
 	 *
-	 * Re-entrancy safe: the shared availability seam deduplicates the complete
-	 * probe/auto-install transaction per cwd and tool, so concurrent callers do
-	 * not duplicate installation attempts.
+	 * The answer is the shared per-tool resolver's (#5410), the one the
+	 * `ruff-lint` runner asks, so the lint and the fix run the same binary:
+	 * the project's own venv at exactly `cwd`, then managed, then PATH. The
+	 * default `process.cwd()` is for the session-start warm-up, which has no
+	 * file; a fix names the cwd its file runs in.
 	 */
-	async ensureAvailable(): Promise<boolean> {
-		const resolved = await resolveAvailableOrInstall(
-			ruffAvailability,
-			"ruff",
-			process.cwd(),
-		);
-		if (!resolved) return false;
-		this.ruffCommand = resolved;
-		return true;
+	async ensureAvailable(cwd: string = process.cwd()): Promise<boolean> {
+		return (await resolveToolCommandWithInstallFallback(cwd, "ruff")) !== null;
 	}
 
 	/**
@@ -99,7 +88,23 @@ export class RuffClient {
 		fixed: number;
 		error?: string;
 	}> {
-		if (!(await this.ensureAvailable())) {
+		const absolutePath = path.resolve(filePath);
+		// #2894: the root ruff resolves its config from comes from the shared
+		// seam, not a local `cwd ?? path.dirname(file)`. `tool-policy.ts`
+		// requires the lint runner (`ruff.ts`, on `resolveRunnerCwd`) and this
+		// autofix path to consume the SAME policy; deriving the root two
+		// different ways is how they drift, and the hand-rolled form ignored a
+		// nested `pyproject.toml` whenever the caller passed a workspace root.
+		// The binary is asked at that same root (#5410), so the fix runs the
+		// ruff the lint ran.
+		const ruffCwd = resolveToolCwd("runner", "ruff", absolutePath, {
+			...(cwd !== undefined && { cwd }),
+		}).cwd;
+		const ruffCommand = await resolveToolCommandWithInstallFallback(
+			ruffCwd,
+			"ruff",
+		);
+		if (ruffCommand === null) {
 			return {
 				success: false,
 				changed: false,
@@ -108,7 +113,6 @@ export class RuffClient {
 			};
 		}
 
-		const absolutePath = path.resolve(filePath);
 		if (!fs.existsSync(absolutePath)) {
 			return {
 				success: false,
@@ -121,15 +125,6 @@ export class RuffClient {
 		try {
 			const before = await fs.promises.readFile(absolutePath, "utf-8");
 
-			// #2894: the root ruff resolves its config from now comes from the
-			// shared seam, not a local `cwd ?? path.dirname(file)`. `tool-policy.ts`
-			// requires the lint runner (`ruff.ts`, on `resolveRunnerCwd`) and this
-			// autofix path to consume the SAME policy; deriving the root two
-			// different ways is how they drift, and the hand-rolled form ignored a
-			// nested `pyproject.toml` whenever the caller passed a workspace root.
-			const ruffCwd = resolveToolCwd("runner", "ruff", absolutePath, {
-				...(cwd !== undefined && { cwd }),
-			}).cwd;
 			// Shared config-args seam (#1247): the lint runner consumes the same
 			// builder, so `check --fix` can never drift to ruff's default rule
 			// set when the project lacks its own config and the package-owned
@@ -137,7 +132,7 @@ export class RuffClient {
 			const configArgs = ruffConfigArgs(ruffCwd);
 
 			const pre = await safeSpawnAsync(
-				this.ruffCommand,
+				ruffCommand,
 				[
 					"check",
 					// `--no-fix --no-fix-only` (#5119): the count below must see the
@@ -164,7 +159,7 @@ export class RuffClient {
 			const fixableCount = beforeDiags.filter((d) => d.fixable).length;
 
 			const fix = await safeSpawnAsync(
-				this.ruffCommand,
+				ruffCommand,
 				["check", "--fix", ...configArgs, absolutePath],
 				{ timeout: 15000, cwd: ruffCwd },
 			);
