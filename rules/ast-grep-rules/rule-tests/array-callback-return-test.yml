@@ -4,7 +4,30 @@ valid:
   - "arr.map(x => x + 1)"
   - "arr.forEach(x => console.log(x))"
   - "arr.reduce((acc, x) => { return acc + x })"
+  # #5466: an async callback always returns a promise, so the missing-return
+  # heuristic cannot fire on it.
+  - "arr.map(async x => { await f(x) })"
+  - "Array.from(set, async x => { await f(x) })"
+  # #5466: async modifier forms without spaces/parens and async function
+  # expressions are exempt too.
+  - "arr.map(async()=>{ await f(1) })"
+  - "arr.map(async function (x) { await g(x) })"
+  # #5466: own async token with a parameter named `async`, and a comment
+  # between the modifier and the parameter — both exempt.
+  - "arr.map(async async => { await f(async) })"
+  - "arr.map(async /* m */ x => { await f(x) })"
 invalid:
   - "arr.map(x => { x + 1 })"
   - "arr.filter(function (x) { console.log(x) })"
   - "Array.from(set, x => { x + 1 })"
+  # #5466 mutation guards: the async exemption keys on the callback's OWN
+  # async token. An async ANCESTOR must not exempt a sync callback (wrong
+  # scope upward), and an async DESCENDANT must not either (wrong scope
+  # downward).
+  - "async function run() { arr.map(x => { g(x) }) }"
+  - "arr.map(x => { const f = async () => {}; g(x) })"
+  # #5466 guard: a sync callback whose PARAMETER is named `async` is not an
+  # async callback — must still fire, including with a comment before `=>`.
+  - "arr.map(async => { g(async) })"
+  - "arr.filter(function (async) { g(async) })"
+  - "arr.map(async /* keep */ => { g(async) })"

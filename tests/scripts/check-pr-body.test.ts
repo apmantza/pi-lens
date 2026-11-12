@@ -2947,27 +2947,43 @@ describe("PR body lint (#1844)", () => {
 		});
 	});
 
-	it("accepts an existing record named with its source location", () => {
-		const source = join(process.cwd(), "clients", "existing-record.ts");
-		mkdirSync(join(process.cwd(), "clients"), { recursive: true });
-		writeFileSync(
-			source,
+	it.each([
+		[
+			"degradation",
 			'recordDegradationOnce({ kind: "tool-cwd-resolution" });\n',
-		);
-		const result = lintLocalPrBody(
-			withMutationProof(
-				body.replace(
-					"The advisory check run is the record.",
-					"covered by existing record `tool-cwd-resolution` at `clients/existing-record.ts:1`",
-				),
-				"clients/new-path.ts",
+			"tool-cwd-resolution",
+			1,
+		],
+		[
+			"tree-sitter (#5466)",
+			readFileSync(
+				join(repositoryRoot, "clients/tree-sitter-logger.ts"),
+				"utf8",
 			),
-			process.cwd(),
-			stubWithRealCheckIgnoreAndLsFiles(() => NEW_PATH_RUNTIME_DIFF),
-			{ headFiles: NEW_PATH_HEAD_FILES },
-		);
-		expect(result.valid).toBe(true);
-	});
+			"diagnostic",
+			151,
+		],
+	])(
+		"accepts an existing %s record named with its source location",
+		(_name, contents, kind, line) => {
+			const source = join(process.cwd(), "clients", "existing-record.ts");
+			mkdirSync(join(process.cwd(), "clients"), { recursive: true });
+			writeFileSync(source, contents);
+			const result = lintLocalPrBody(
+				withMutationProof(
+					body.replace(
+						"The advisory check run is the record.",
+						`covered by existing record \`${kind}\` at \`clients/existing-record.ts:${line}\``,
+					),
+					"clients/new-path.ts",
+				),
+				process.cwd(),
+				stubWithRealCheckIgnoreAndLsFiles(() => NEW_PATH_RUNTIME_DIFF),
+				{ headFiles: NEW_PATH_HEAD_FILES },
+			);
+			expect(result).toEqual({ valid: true, errors: [] });
+		},
+	);
 
 	it("rejects an existing-record claim pointing to a test file", () => {
 		const source = join(process.cwd(), "tests", "existing-record.test.ts");

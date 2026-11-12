@@ -144,6 +144,12 @@ function queryBatchIdentity(queryDefs: readonly TreeSitterQuery[]): string {
 // must not stall the batched query walk; the filter fails open when this cap
 // is reached so unrelated diagnostics and the current match are preserved.
 const NO_NESTED_ANCHOR_VISIT_CAP = 10_000;
+// #5466: `has_react_context` is keyed on the import source, never a `use*` name.
+const REACT_FAMILY_MODULE_SEGMENT = /^(react|preact)(-[a-z0-9-]+)?$/;
+const REACT_JSX_NODE_TYPES: ReadonlySet<string> = new Set([
+	"jsx_element",
+	"jsx_self_closing_element",
+]);
 // The execute-style Python DB-API/ORM methods this rule treats as SQL sinks.
 // Hoisted so the post-filter does not rebuild the set per match.
 const PYTHON_SQL_SINK_METHODS: ReadonlySet<string> = new Set([
@@ -2527,6 +2533,7 @@ export class TreeSitterClient {
 			(tree) => {
 				try {
 					const rootNode = tree.rootNode;
+					const invocationState: { reactContext?: boolean } = {};
 					for (const match of batch.query.matches(rootNode)) {
 						const owner = batch.ownerOfPattern[match.patternIndex];
 						if (owner === undefined) continue;
@@ -2547,6 +2554,7 @@ export class TreeSitterClient {
 								entry.postFilterParams,
 								captures,
 								rootNode,
+								invocationState,
 							)
 						) {
 							continue;
@@ -3760,6 +3768,7 @@ export class TreeSitterClient {
 		postFilterParams: any,
 		captures: Record<string, TreeSitterNode>,
 		rootNode?: TreeSitterNode,
+		invocationState?: { reactContext?: boolean },
 	): boolean {
 		/**
 		 * Extract the list of declared slot names from a class_definition's
@@ -3902,6 +3911,58 @@ export class TreeSitterClient {
 						(node) => node.type === "package_declaration",
 					);
 				} catch {
+					return true;
+				}
+			}
+			case "has_react_context": {
+				// #5466: React context = a top-level ES `import` from the react/preact
+				// family, or any JSX node. `require("react")`,
+				// `import X = require("react")`, `export ... from "react"` and dynamic
+				// `import()` do not count; a failed probe keeps the finding.
+				if (invocationState?.reactContext !== undefined) {
+					return invocationState.reactContext;
+				}
+				try {
+					if (!rootNode) return true;
+					for (const child of rootNode.children ?? []) {
+						if (child.type !== "import_statement") continue;
+						const source =
+							child.childForFieldName?.("source")?.text ??
+							child.children?.find((node) => node.type === "string")?.text ??
+							"";
+						const spec = source.replace(/^["'`]|["'`]$/g, "");
+						const reactFamily =
+							spec.startsWith("@preact/") ||
+							spec
+								.split("/")
+								.some((segment) => REACT_FAMILY_MODULE_SEGMENT.test(segment));
+						if (reactFamily) {
+							if (invocationState) invocationState.reactContext = true;
+							return true;
+						}
+					}
+					const pending: TreeSitterNode[] = [...(rootNode.children ?? [])];
+					while (pending.length > 0) {
+						const node = pending.pop();
+						if (!node) continue;
+						if (REACT_JSX_NODE_TYPES.has(node.type)) {
+							if (invocationState) invocationState.reactContext = true;
+							return true;
+						}
+						pending.push(...node.children);
+					}
+					if (invocationState) invocationState.reactContext = false;
+					return false;
+				} catch (thrown) {
+					// none: reportPostFilterFailure records once per filter and client.
+					this.reportWasmAbort(thrown);
+					const reason =
+						thrown instanceof Error ? thrown.message : String(thrown);
+					this.reportPostFilterFailure(
+						postFilter,
+						`context probe failed${reason ? `: ${reason}` : ""}`,
+					);
+					if (invocationState) invocationState.reactContext = true;
 					return true;
 				}
 			}
@@ -5420,6 +5481,7 @@ export class TreeSitterClient {
 			(tree) => {
 				try {
 					const rootNode = tree.rootNode;
+					const invocationState: { reactContext?: boolean } = {};
 					const queryMatches = query.matches(rootNode);
 
 					for (const match of queryMatches) {
@@ -5445,6 +5507,7 @@ export class TreeSitterClient {
 								postFilterParams,
 								captures,
 								rootNode,
+								invocationState,
 							)
 						) {
 							continue;
