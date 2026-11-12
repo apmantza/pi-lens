@@ -93,6 +93,15 @@ const VALID_OPERATIONS = [
 	"capabilities",
 ] as const;
 
+// JSON-RPC command arguments are LSPAny: servers use primitives, arrays, and
+// objects with command-specific keys. A Type.Unknown item becomes `{}` and is
+// rejected by strict Responses schemas; a structured `anyOf` union is also not
+// supported by pi-ai strict conversion. JSON Schema's type array preserves the
+// complete JSON value space while giving strict providers an explicit type.
+const LSP_ANY_SCHEMA = Type.Unsafe<unknown>({
+	type: ["string", "number", "boolean", "object", "array", "null"],
+});
+
 const NAVIGABLE_SYMBOL_KINDS = new Set([
 	5, // Class
 	6, // Method
@@ -935,7 +944,7 @@ export function createLspNavigationTool(
 				}),
 			),
 			commandArguments: Type.Optional(
-				Type.Array(Type.Unknown(), {
+				Type.Array(LSP_ANY_SCHEMA, {
 					description: "Arguments for the server command.",
 				}),
 			),
