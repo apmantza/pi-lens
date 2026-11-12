@@ -165,7 +165,7 @@ A tool counts as available when the binary exists in the project (`node_modules/
 | No project config | oxlint, Biome (JS and TS lint) | The default pair when the project has no ESLint, oxlint, or Biome config; one project config selects its tool | `getPreferredJstsLintRunners`, `biome-check.ts` |
 | No project config | swiftlint, go vet, ast-grep rules, tree-sitter rules | No linter-policy entry; the runner has no config skip. go vet needs the Go toolchain. | `swiftlint.ts`, `go-vet.ts`, `ast-grep-napi.ts`, `tree-sitter.ts` |
 | No project config | javac | No policy entry; skips files inside a Maven or Gradle project | `javac.ts` |
-| No project config | Formatters: Biome (`.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass`), shfmt, gofmt, rustfmt, ruff, typstyle (`.typ .typc`), prettier (`.less .graphql .gql` only), gleam, dart, zig, cue | Formatter policy `defaultWhenUnconfigured: true`; explicit project config wins | `FORMATTER_POLICY_BY_EXTENSION`, `getFormattersForFile` |
+| No project config | Formatters: Biome (`.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass`), shfmt, gofmt, rustfmt, ruff, typstyle (`.typ .typc`), prettier (`.less .graphql .gql` only), dart, zig, cue | Formatter policy `defaultWhenUnconfigured: true`; explicit project config wins | `FORMATTER_POLICY_BY_EXTENSION`, `getFormattersForFile` |
 | Project config | ESLint | Needs an ESLint config; policy `config-first` | `eslint.ts` |
 | Project config | golangci-lint | Needs a golangci config; policy `config-first` | `golangci-lint.ts` |
 | Project config | mypy | Needs a mypy config; ruff covers Python without it | `mypy.ts` |
@@ -173,7 +173,7 @@ A tool counts as available when the binary exists in the project (`node_modules/
 | Project config | vale | Needs `.vale.ini` | `vale.ts` |
 | Project config | detekt | Needs a detekt config file | `detekt.ts` |
 | Project config | credo | Needs `mix.exs` in the project directory | `credo.ts` |
-| Project config | Formatters: taplo, clang-format, php-cs-fixer, stylua, and other `config-first` rows; ktfmt; ktlint (format) | Run only when the project has their config | `FORMATTER_POLICY_BY_EXTENSION`, `hasExplicitFormatterConfig` |
+| Project config | Formatters: taplo, clang-format, php-cs-fixer, stylua, gleam, and other `config-first` rows; ktfmt; ktlint (format) | Run only when the project has their config | `FORMATTER_POLICY_BY_EXTENSION`, `hasExplicitFormatterConfig` |
 | Opt-in | trivy (IaC scans and session scan) | `trivy.enabled: true` in `.pi-lens.json` | `isTrivyEnabled` in `clients/trivy-client.ts` |
 | Opt-in | SpotBugs | `--lens-spotbugs`, a Java build descriptor, and compiled `.class` files | `withSpotbugsGroup` in `clients/dispatch/integration.ts` |
 | Opt-in | Helm render validation | `helm.renderValidation.enabled: true`, plus pi project trust | `helm-render.ts` |
@@ -184,6 +184,7 @@ Notes on rows where the two layers differ:
 - taplo lints with no config but formats only with config. The same split holds for ktlint.
 - prettier is a smart default for the formatter policy only on `.less`, `.graphql`, and `.gql`. Other prettier rows wait for config.
 - credo's file policy is `smart-default` with `defaultWhenUnconfigured: true`, but its runner skips a project without `mix.exs`. The table follows the runner.
+- gleam's formatter `detect` needs `gleam.toml` in the project, so a bare `.gleam` file is not formatted. The table follows the detect, not the policy's `defaultWhenUnconfigured` flag.
 - mypy's per-tool row is `config-first`, while the Python file policy is `smart-default` because ruff is the default runner.
 - The background scans (gitleaks, govulncheck, trivy) have their own gates; see [features](features.md).
 

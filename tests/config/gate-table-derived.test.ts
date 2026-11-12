@@ -181,6 +181,22 @@ const TIER_EXCEPTIONS: Record<string, { docTier: Tier; note: RegExp }> = {
 	trivy: { docTier: "Opt-in", note: /trivy\.enabled/ },
 };
 
+/**
+ * Formatters whose policy row derives "No project config" while their `detect`
+ * needs a project file, so the doc puts them in "Project config". gleam's
+ * `detect` calls `findUp(["gleam.toml"])` before the binary check; dart, zig
+ * and cue detect with the binary alone and stay "No project config".
+ */
+const FORMATTER_TIER_EXCEPTIONS: Record<
+	string,
+	{ docTier: Tier; note: RegExp }
+> = {
+	gleam: {
+		docTier: "Project config",
+		note: /gleam's formatter `detect` needs `gleam\.toml`/,
+	},
+};
+
 function lintTier(name: string): Tier | undefined {
 	const sample = LINT_SAMPLES[name];
 	if (sample) {
@@ -273,8 +289,25 @@ describe("docs/language-coverage.md 'What runs by default' agrees with tool-poli
 	it("every formatter token sits in the tier the policy derives, with the extension list the policy has", () => {
 		const violations: string[] = [];
 		let compared = 0;
+		const seenFormatExceptions = new Set<string>();
 		for (const row of rows.filter((r) => r.scope === "format")) {
 			for (const { name, exts } of row.tokens) {
+				const exception = FORMATTER_TIER_EXCEPTIONS[name];
+				if (exception) {
+					seenFormatExceptions.add(name);
+					compared += 1;
+					if (row.tier !== exception.docTier) {
+						violations.push(
+							`${name}: exempt as ${exception.docTier}, doc has ${row.tier}`,
+						);
+					}
+					if (!exception.note.test(read("docs/language-coverage.md"))) {
+						violations.push(
+							`${name}: the doc no longer carries its exception note`,
+						);
+					}
+					continue;
+				}
 				const derived = formatTier(name);
 				if (derived === undefined) {
 					violations.push(
@@ -298,6 +331,11 @@ describe("docs/language-coverage.md 'What runs by default' agrees with tool-poli
 				}
 			}
 		}
+		for (const name of Object.keys(FORMATTER_TIER_EXCEPTIONS)) {
+			if (!seenFormatExceptions.has(name)) {
+				violations.push(`stale exemption: ${name}`);
+			}
+		}
 		assertNonEmptyScan(
 			"formatter tokens compared with the policy",
 			compared,
@@ -317,7 +355,10 @@ describe("docs/language-coverage.md 'What runs by default' agrees with tool-poli
 				(policy) => policy.defaultWhenUnconfigured && policy.defaultFormatter,
 			)
 			.map((policy) => policy.defaultFormatter as string)
-			.filter((name) => !documented.has(name));
+			// An exempt formatter is named in its own tier; the tier test checks it.
+			.filter(
+				(name) => !documented.has(name) && !(name in FORMATTER_TIER_EXCEPTIONS),
+			);
 		expect([...new Set(missing)]).toEqual([]);
 	});
 
