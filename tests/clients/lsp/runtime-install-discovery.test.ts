@@ -91,11 +91,16 @@ describe("canonical-bin candidates (#241)", () => {
 
 describe("runtime-install / discovery server wiring (#241)", () => {
 	beforeEach(() => {
+		vi.stubEnv("CARGO_HOME", undefined);
 		launchLSP.mockReset();
 		logLatency.mockReset();
 		// Reject every candidate so resolveAndLaunch exhausts the list; we only
 		// inspect WHICH commands it tried. allowInstall:false keeps installs off.
 		launchLSP.mockRejectedValue(toolNotFound());
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
 	});
 
 	const triedCommands = () => launchLSP.mock.calls.map((c) => String(c[0]));

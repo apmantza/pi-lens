@@ -548,7 +548,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"mcp/analyze-cli.ts": 1,
 		// 32 -> 36 (#5138): the read_symbol handler renders `result.error` as the
 		// pi tool does (condition test, message, structured `error` field).
-		"mcp/server.ts": 36,
+		// 36 -> 37 (#4353): the warm side-channel's shared-name skip line.
+		"mcp/server.ts": 37,
 	},
 	filter: {
 		"clients/actionable-warnings.ts": 10,
@@ -1328,7 +1329,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/analyze.ts": 6,
 		// 4 -> 7 (#4376): OS path namespace calls build the pid-first endpoint
 		// name and the stale-socket owner marker. No path-key owner changes.
-		"clients/mcp/ipc.ts": 7,
+		// 7 -> 9 (#4353): the bound-name identity check anchors its token on the
+		// endpoint's own directory and file name.
+		"clients/mcp/ipc.ts": 9,
 		"clients/mcp/session.ts": 3,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,

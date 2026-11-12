@@ -34,6 +34,7 @@ import type { WarmDiagnosticsResponse } from "../../clients/mcp/ipc.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 import { ENVIRONMENT_GAP_MARKER } from "../../clients/lsp/environment-gap.js";
 import { removeTempDirSync } from "./test-utils.js";
+import { ambientSocketNameIsShared } from "../support/socket-identity.js";
 
 const touchFile = vi.fn();
 const projectInfo = vi.fn();
@@ -392,48 +393,55 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 		// The probe never settles until the case ends. Before the reserve, every
 		// reply landed at the deadline and read `timeout` or `stale-answer`, which
 		// `tryWarmAttachedDiagnostics` answers with a permanent `promoteToLocal`.
-		it("answers a slow probe in time through the real socket and client timer", async () => {
-			const home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-warm-e2e-"));
-			const cwd = path.join(home, "ws");
-			fs.mkdirSync(cwd);
-			vi.stubEnv("PI_LENS_HOME", home);
-			vi.stubEnv("PI_LENS_WARM_ATTACH", "1");
-			const pendingProbes: Array<(answer: typeof inferred) => void> = [];
-			projectInfo.mockImplementation(
-				() =>
-					new Promise((resolve) => {
-						pendingProbes.push(resolve);
-					}),
-			);
-			const warm = await import("../../clients/warm-attach.js");
-			const ipc = await import("../../clients/mcp/ipc.js");
-			try {
-				await warm.configureWarmAttach(cwd);
-				const replies = [];
-				for (let run = 0; run < 3; run++) {
-					replies.push(
-						await ipc.requestWarmDiagnostics(
-							cwd,
-							process.pid,
-							path.join(cwd, "orphan.ts"),
-							CONTENT,
-							300,
-						),
-					);
+		// lane: Unit tests (CI's short TMPDIR); the client never dials a shared
+		// pid-scoped name, so this case skips where the cut makes one.
+		it.skipIf(ambientSocketNameIsShared(process.pid))(
+			"answers a slow probe in time through the real socket and client timer",
+			async () => {
+				const home = fs.mkdtempSync(
+					path.join(os.tmpdir(), "pi-lens-warm-e2e-"),
+				);
+				const cwd = path.join(home, "ws");
+				fs.mkdirSync(cwd);
+				vi.stubEnv("PI_LENS_HOME", home);
+				vi.stubEnv("PI_LENS_WARM_ATTACH", "1");
+				const pendingProbes: Array<(answer: typeof inferred) => void> = [];
+				projectInfo.mockImplementation(
+					() =>
+						new Promise((resolve) => {
+							pendingProbes.push(resolve);
+						}),
+				);
+				const warm = await import("../../clients/warm-attach.js");
+				const ipc = await import("../../clients/mcp/ipc.js");
+				try {
+					await warm.configureWarmAttach(cwd);
+					const replies = [];
+					for (let run = 0; run < 3; run++) {
+						replies.push(
+							await ipc.requestWarmDiagnostics(
+								cwd,
+								process.pid,
+								path.join(cwd, "orphan.ts"),
+								CONTENT,
+								300,
+							),
+						);
+					}
+					for (const reply of replies) {
+						expect(reply.available).toBe(true);
+						if (!reply.available) continue;
+						expect(reply.response.diagnostics).toEqual([diagnostic]);
+						expect("projectIdentity" in reply.response).toBe(false);
+					}
+				} finally {
+					for (const release of pendingProbes) release(inferred);
+					warm._resetWarmAttachForTests();
+					vi.unstubAllEnvs();
+					removeTempDirSync(home);
 				}
-				for (const reply of replies) {
-					expect(reply.available).toBe(true);
-					if (!reply.available) continue;
-					expect(reply.response.diagnostics).toEqual([diagnostic]);
-					expect("projectIdentity" in reply.response).toBe(false);
-				}
-			} finally {
-				for (const release of pendingProbes) release(inferred);
-				warm._resetWarmAttachForTests();
-				vi.unstubAllEnvs();
-				removeTempDirSync(home);
-			}
-		});
+			},
+		);
 
 		it("sends no probe when the touch left no time before the send reserve", async () => {
 			await serve(file); // load the lazy service modules before the clock is faked
