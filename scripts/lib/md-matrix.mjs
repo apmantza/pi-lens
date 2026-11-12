@@ -401,16 +401,14 @@ export function mergeBulletSection(
 	const bulletRe = /^- \*\*(.+?)\*\*(?:\s*\([^)]*\))?:\s*(.*)$/;
 	const byKey = new Map();
 	// Keep the section's non-bullet prefix (for example the raw-capability
-	// introduction) above the sorted bullets. Only content after the last bullet
-	// is trailing; treating every non-bullet line as trailing moves the intro
-	// below carried bullets (#5526).
+	// introduction) above the sorted bullets. Non-bullet lines after the first
+	// bullet trail the sorted bullets, as they did before the split, so a line
+	// between two bullets is kept (#5526).
 	let firstBullet = bodyEnd;
-	let lastBullet = bodyStart - 1;
 	for (let i = bodyStart; i < bodyEnd; i++) {
 		const m = bulletRe.exec(lines[i]);
 		if (!m) continue;
 		if (firstBullet === bodyEnd) firstBullet = i;
-		lastBullet = i;
 		byKey.set(m[1], lines[i]);
 	}
 	let added = false;
@@ -426,7 +424,9 @@ export function mergeBulletSection(
 		.sort(compareStableStrings)
 		.map((k) => byKey.get(k));
 	const before = lines.slice(0, firstBullet);
-	const trailing = lines.slice(Math.max(lastBullet + 1, firstBullet), bodyEnd);
+	const trailing = lines
+		.slice(firstBullet, bodyEnd)
+		.filter((line) => !bulletRe.test(line));
 	const after = lines.slice(bodyEnd);
 	return [...before, ...sortedLines, ...trailing, ...after].join("\n");
 }

@@ -365,6 +365,9 @@ describe("mergeServerCapabilitiesDoc (#469)", () => {
 	it("keeps the raw capability intro above carried bullets", () => {
 		// Recurrence #5526: when a prior server is carried into a fresh nightly
 		// document, the section intro must not trail the re-sorted bullet list.
+		// The fresh section has two bullets and a following heading, so the intro,
+		// the sort, the blank line before the heading and the heading each have a
+		// position a mutation can get wrong.
 		const prior = makeDoc(
 			OLD_HEADER,
 			[
@@ -373,16 +376,63 @@ describe("mergeServerCapabilitiesDoc (#469)", () => {
 			],
 			{ cmake: "definitionProvider", zizmor: "hoverProvider" },
 		);
-		const fresh = makeDoc(NEW_HEADER, [["zizmor", "pull", "✓", "✓", "0"]], {
-			zizmor: "hoverProvider",
-		});
+		const fresh = `${makeDoc(
+			NEW_HEADER,
+			[
+				["rust", "pull", "✓", "✓", "0"],
+				["zizmor", "pull", "✓", "✓", "0"],
+			],
+			{ rust: "completionProvider", zizmor: "hoverProvider" },
+		)}\n## Advertised executeCommand allowlists\n\nAllowlist body.\n`;
 
 		const { text } = mergeServerCapabilitiesDoc(prior, fresh);
-		const intro = text.indexOf("Top-level keys.");
-		const firstBullet = text.indexOf("- **cmake**: definitionProvider");
-		expect(intro).toBeGreaterThan(-1);
-		expect(firstBullet).toBeGreaterThan(-1);
-		expect(intro).toBeLessThan(firstBullet);
+		expect(text.slice(text.indexOf("## Raw advertised capability keys"))).toBe(
+			[
+				"## Raw advertised capability keys",
+				"",
+				"Top-level keys.",
+				"",
+				"- **cmake**: definitionProvider",
+				"- **rust**: completionProvider",
+				"- **zizmor**: hoverProvider",
+				"",
+				"## Advertised executeCommand allowlists",
+				"",
+				"Allowlist body.",
+				"",
+			].join("\n"),
+		);
+	});
+
+	it("keeps a non-bullet line between carried bullets after the sorted bullets", () => {
+		// Recurrence #5526 (Qodo C1.1): the prefix split dropped a line that sat
+		// between two bullets. The pre-split merge kept it after the bullets.
+		const prior = makeDoc(OLD_HEADER, [["cmake", "pull", "✓", "0"]], {
+			cmake: "definitionProvider",
+		});
+		const fresh = makeDoc(
+			NEW_HEADER,
+			[
+				["rust", "pull", "✓", "✓", "0"],
+				["zizmor", "pull", "✓", "✓", "0"],
+			],
+			{ rust: "completionProvider", zizmor: "hoverProvider" },
+		).replace("- **zizmor**", "note between\n- **zizmor**");
+
+		const { text } = mergeServerCapabilitiesDoc(prior, fresh);
+		expect(text.slice(text.indexOf("## Raw advertised capability keys"))).toBe(
+			[
+				"## Raw advertised capability keys",
+				"",
+				"Top-level keys.",
+				"",
+				"- **cmake**: definitionProvider",
+				"- **rust**: completionProvider",
+				"- **zizmor**: hoverProvider",
+				"note between",
+				"",
+			].join("\n"),
+		);
 	});
 
 	it("keeps preserved rows and bullets in locale-independent order", () => {
