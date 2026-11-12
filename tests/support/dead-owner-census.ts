@@ -148,14 +148,18 @@ export async function loadActualCensusSeams(): Promise<CensusSeams> {
 
 /**
  * The live managed processes whose owner tag names a dead pid. A scan that did
- * not run (`ps` failed or timed out) is `{ unavailable: <status> }`, not an
- * empty list.
+ * not run is `{ unavailable: <reason> }`, not an empty list: `ps` failed or
+ * timed out, or the table holds no row for this worker. A real `ps` always
+ * lists the calling worker, so a table without it is a test double's empty
+ * answer (#5528 review r1 F1), and the census must not read it as clean.
  */
 export async function findDeadOwnerLeaks(
 	seams: CensusSeams,
 ): Promise<DeadOwnerLeak[] | { unavailable: string }> {
 	const table = await seams.listProcesses();
 	if (table.status !== "ok") return { unavailable: `ps ${table.status}` };
+	if (!table.rows.some((row) => row.pid === process.pid))
+		return { unavailable: "ps table without this worker" };
 	const managed = table.rows.filter(
 		(row) => row.pid !== process.pid && seams.isManaged(row.command),
 	);

@@ -30,6 +30,9 @@ const START = "123@00000000-0000-0000-0000-000000000000";
 
 type Row = { pid: number; ppid: number; ageMs?: number; command: string };
 
+/** This worker's own row: a real `ps` table always lists the calling worker. */
+const SELF_ROW: Row = { pid: process.pid, ppid: 1, command: "vitest-worker" };
+
 async function seamsOver(
 	rows: Row[],
 	owners: Record<number, number>,
@@ -51,6 +54,15 @@ async function seamsOver(
 	};
 }
 
+/** The `scanfail` lines the log holds; none when no scan wrote one. */
+function scanfailLines(log: string): string[] {
+	if (!fs.existsSync(log)) return [];
+	return fs
+		.readFileSync(log, "utf8")
+		.split("\n")
+		.filter((line) => line.startsWith("scanfail "));
+}
+
 describe("#5528 dead-owner census", () => {
 	let dir: string;
 	let log: string;
@@ -70,6 +82,7 @@ describe("#5528 dead-owner census", () => {
 		recordCensusWorker("clients/lsp/leaky.test.ts", DEAD_PID, log);
 		const seams = await seamsOver(
 			[
+				SELF_ROW,
 				{
 					pid: 7001,
 					ppid: 1,
@@ -92,6 +105,7 @@ describe("#5528 dead-owner census", () => {
 	it("spares a live owner, an untagged process, and an unmanaged one", async () => {
 		const seams = await seamsOver(
 			[
+				SELF_ROW,
 				{ pid: 7001, ppid: 1, ageMs: 9_000, command: "ast-grep lsp" },
 				{ pid: 7002, ppid: 1, ageMs: 9_000, command: "ast-grep lsp" },
 				{ pid: 7003, ppid: 1, ageMs: 9_000, command: "sleep 100" },
@@ -107,7 +121,7 @@ describe("#5528 dead-owner census", () => {
 
 	it("reports an owner that is no recorded worker as unknown", async () => {
 		const seams = await seamsOver(
-			[{ pid: 7001, ppid: 1, command: "ast-grep lsp" }],
+			[SELF_ROW, { pid: 7001, ppid: 1, command: "ast-grep lsp" }],
 			{ 7001: DEAD_PID },
 		);
 		const [line] = await runDeadOwnerCensus("a.test.ts", { log, seams, write });
@@ -117,7 +131,7 @@ describe("#5528 dead-owner census", () => {
 
 	it("prints each leaked pid once per run, however many files see it", async () => {
 		const seams = await seamsOver(
-			[{ pid: 7001, ppid: 1, command: "ast-grep lsp" }],
+			[SELF_ROW, { pid: 7001, ppid: 1, command: "ast-grep lsp" }],
 			{ 7001: DEAD_PID },
 		);
 		const first = await runDeadOwnerCensus("a.test.ts", { log, seams, write });
@@ -136,7 +150,7 @@ describe("#5528 dead-owner census", () => {
 			command: "ast-grep lsp",
 		}));
 		const owners = Object.fromEntries(rows.map((row) => [row.pid, DEAD_PID]));
-		const seams = await seamsOver(rows, owners);
+		const seams = await seamsOver([SELF_ROW, ...rows], owners);
 		const printed = await runDeadOwnerCensus("a.test.ts", {
 			log,
 			seams,
@@ -223,6 +237,78 @@ describe("#5528 dead-owner census", () => {
 			b: resolveOwnerFile(text, 111),
 			none: resolveOwnerFile(text, 1),
 		}).toEqual({ a: "a.test.ts", b: "b.test.ts", none: "unknown" });
+	});
+
+	// #5528 review r1 F1: seven test files that mock the process table answered
+	// `ok` with no row for this worker, and the census read that as a clean scan
+	// (CI shard 5 among them: `process-snapshot-owner-tags`,
+	// `instance-reaper-registry-scan-escalation`). A real `ps` always lists the
+	// calling worker, so a table without its row is not a scan that ran.
+	it("counts a process table with no row for this worker as a failed scan, not a clean one", async () => {
+		const emptyTable = await seamsOver([], {});
+		const otherRowsOnly = await seamsOver(
+			[{ pid: 7001, ppid: 1, command: "ast-grep lsp" }],
+			{ 7001: DEAD_PID },
+		);
+		expect({
+			printed: [
+				await runDeadOwnerCensus("a.test.ts", {
+					log,
+					seams: emptyTable,
+					write,
+				}),
+				await runDeadOwnerCensus("b.test.ts", {
+					log,
+					seams: otherRowsOnly,
+					write,
+				}),
+			],
+			stderr: lines,
+			scanfail: scanfailLines(log),
+		}).toEqual({
+			printed: [[], []],
+			stderr: [
+				"[dead-owner-census] scan did not run: ps table without this worker (first after a.test.ts)",
+			],
+			scanfail: [
+				"scanfail ps table without this worker after a.test.ts",
+				"scanfail ps table without this worker after b.test.ts",
+			],
+		});
+	});
+
+	// #5528 review r1 F2: a failed owner-tag read must read as a failed scan, not
+	// as untagged processes. Neutering this branch passed all ten cases.
+	it("counts a failed owner-tag read as a failed scan, not as untagged processes", async () => {
+		const base = await seamsOver(
+			[SELF_ROW, { pid: 7001, ppid: 1, command: "ast-grep lsp" }],
+			{ 7001: DEAD_PID },
+		);
+		const seams: CensusSeams = {
+			...base,
+			readOwnerTags: async () => ({ tags: new Map(), status: "timeout" }),
+		};
+		expect({
+			printed: await runDeadOwnerCensus("a.test.ts", { log, seams, write }),
+			scanfail: scanfailLines(log),
+		}).toEqual({
+			printed: [],
+			scanfail: ["scanfail owner tags timeout after a.test.ts"],
+		});
+	});
+
+	// #5528 review r1 F2: this worker's own process is never its own leak. The
+	// row is managed and tagged with a dead owner, so only the self exclusion
+	// keeps it out. Neutering that clause passed all ten cases.
+	it("never reports this worker's own process as a leak", async () => {
+		const seams = await seamsOver(
+			[{ pid: process.pid, ppid: 1, command: "ast-grep lsp" }],
+			{ [process.pid]: DEAD_PID },
+		);
+		expect(
+			await runDeadOwnerCensus("a.test.ts", { log, seams, write }),
+		).toEqual([]);
+		expect(lines).toEqual([]);
 	});
 
 	// The setup answers every `Name`-filtered table query with an empty table
