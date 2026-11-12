@@ -1892,6 +1892,15 @@ export type DegradationKind =
 	 */
 	| "runner-parsed-nothing"
 	/**
+	 * `runner-skip-cause`: #5258: a runner skipped because its tool could not be
+	 * found (`not-installed`) or the managed install is off
+	 * (`install-disabled`, `PI_LENS_DISABLE_TOOL_INSTALL=1`), so the files it
+	 * serves read "not checked" with a named cause. Subject is
+	 * `<runnerId>:<reason>`, once per session: every later edit takes the same
+	 * skip, so the record states the coverage gap once instead of once per edit.
+	 */
+	| "runner-skip-cause"
+	/**
 	 * `runner-spawn-timeout-cooldown`: #5413: a runner was skipped without
 	 * running because one of its spawns used up its own timeout earlier this
 	 * session (`spawn-timeout-cooldown.ts`). Subject is the runner id, once per

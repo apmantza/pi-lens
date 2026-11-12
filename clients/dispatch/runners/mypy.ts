@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -83,12 +85,12 @@ const mypyRunner: RunnerDefinition = {
 
 		// Only run if mypy config exists — avoids false positives in untyped projects
 		if (!mypyRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "mypy" });
 
 		const result = await safeSpawnAsync(
 			cmd,

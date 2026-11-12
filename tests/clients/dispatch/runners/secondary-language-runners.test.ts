@@ -23,6 +23,13 @@ vi.mock(
 		createAvailabilityChecker: (command: string) => ({
 			isAvailable: () => availabilityCheck(command),
 			isAvailableAsync: async () => availabilityCheck(command),
+			getVerdict: () => ({
+				outcome: "missing",
+				cause: "not-found",
+				elapsedMs: 0,
+				latched: true,
+				retryAtMs: 0,
+			}),
 			getCommand: () => command,
 		}),
 	}),
@@ -351,7 +358,11 @@ describe("secondary language fallback runners", () => {
 		expect(observed.status).toBe("skipped");
 		expect(observed.output).toContain("not a clean result");
 		expect(observed.spawnCalls).toBe(0);
-		expect(observed.ledger).toEqual([]);
+		// #5258: an absent tool states its cause once, as a `runner-skip-cause`
+		// row, and nothing else; it is still not a fault record.
+		expect(observed.ledger.map((group) => group.kind)).toEqual([
+			"runner-skip-cause",
+		]);
 		// #4130: nothing was invoked, so an absent tool stays a plain skip.
 		expect(observed.skipFault).toBeUndefined();
 	});
@@ -892,7 +903,11 @@ describe("secondary language fallback runners", () => {
 		expect(observed.status).toBe("skipped");
 		expect(observed.output).toContain("not a clean result");
 		expect(observed.spawnCalls).toBe(0);
-		expect(observed.ledger).toEqual([]);
+		// #5258: an absent tool states its cause once, as a `runner-skip-cause`
+		// row, and nothing else; it is still not a fault record.
+		expect(observed.ledger.map((group) => group.kind)).toEqual([
+			"runner-skip-cause",
+		]);
 	});
 
 	it("real dispatcher renders an elixir nonzero finding (#1816)", async () => {

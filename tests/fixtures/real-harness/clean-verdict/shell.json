@@ -1,0 +1,19 @@
+[
+	[
+		{
+			"type": "toolCall",
+			"name": "write",
+			"id": "w1",
+			"arguments": {
+				"path": "a.sh",
+				"content": "#!/bin/sh\necho $unquoted\n"
+			}
+		}
+	],
+	[
+		{
+			"type": "text",
+			"text": "written"
+		}
+	]
+]
