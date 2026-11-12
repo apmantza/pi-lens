@@ -1379,8 +1379,9 @@ export const ktfmtFormatter: FormatterInfo = {
 		return styleFlag ? [installed, styleFlag, filePath] : [installed, filePath];
 	},
 	async detect(cwd: string) {
-		// Opt-in only: ktfmt becomes the formatter when the project elects it,
-		// otherwise ktlint stays the Kotlin smart-default (#129).
+		// Opt-in only: ktfmt becomes the formatter when the project elects it.
+		// Otherwise ktlint is the default formatter name, but it too runs only
+		// with a ktlint config (its lint policy is the smart default, #129).
 		return hasKtfmtConfig(cwd);
 	},
 };

@@ -2,29 +2,29 @@
 
 Auto-install behavior depends on gate type:
 
-- **Config-gated**: installs only when project config/deps indicate usage
+- **Config-gated**: installs only when project config/deps indicate usage (a `config-first` row in `TOOL_EXECUTION_POLICY`; `tests/config/gate-table-derived.test.ts` pins this)
 - **Flow/language-gated**: installs when the runtime path needs it for the current file/session flow
 - **Operational prewarm**: installs during session warm scans / turn-end analysis paths
 - **GitHub release**: platform-specific binary downloaded from GitHub releases to `~/.pi-lens/bin/`
 
 | Tool                                | Purpose                          | Auto-installed | Gate                               |
 | ----------------------------------- | -------------------------------- | -------------- | ---------------------------------- |
-| `@biomejs/biome`                    | JS/TS lint/format/autofix        | Yes            | Config-gated                       |
-| `prettier`                          | Formatting fallback              | Yes            | Config-gated                       |
-| `yamllint`                          | YAML linting                     | Yes            | Config-gated                       |
+| `@biomejs/biome`                    | JS/TS lint/format/autofix        | Yes            | Language-default                                         |
+| `prettier`                          | Formatting fallback              | Yes            | Language-default for `.less`, `.graphql`, `.gql`; other types need prettier config |
+| `yamllint`                          | YAML linting                     | Yes            | Language-default                                         |
 | `actionlint`                        | GitHub Actions workflow linting  | Yes            | GitHub release                     |
-| `sqlfluff`                          | SQL linting/formatting           | Yes            | Config-gated                       |
+| `sqlfluff`                          | SQL linting/formatting           | Yes            | Language-default                                         |
 | `ruff`                              | Python lint/format/autofix       | Yes            | Language-default + flow-gated      |
 | `typescript-language-server`        | Unified LSP diagnostics          | Yes            | Language-default                   |
 | `typescript`                        | TypeScript compiler              | Yes            | Language-default                   |
 | `pyright`                           | Python type diagnostics fallback | Yes            | Flow/language-gated                |
 | `@ast-grep/cli` (sg)                | AST scans/search/replace         | Yes            | Operational prewarm                |
-| `knip`                              | Dead code analysis               | Yes            | Operational prewarm + config-gated |
-| `jscpd`                             | Duplicate code detection         | Yes            | Operational prewarm + config-gated |
+| `knip`                              | Dead code analysis               | Yes            | Operational prewarm                |
+| `jscpd`                             | Duplicate code detection         | Yes            | Operational prewarm                |
 | `madge`                             | Circular dependency analysis     | Yes            | Turn-end analysis flow             |
 | `mypy`                              | Python type checking             | Yes            | Flow-gated                         |
-| `stylelint`                         | CSS/SCSS/Less linting            | Yes            | Config-gated                       |
-| `markdownlint-cli2`                 | Markdown linting                 | Yes            | Config-gated                       |
+| `stylelint`                         | CSS/SCSS/Less linting            | Yes            | Language-default                                         |
+| `markdownlint-cli2`                 | Markdown linting                 | Yes            | Language-default                                         |
 | `shellcheck`                        | Shell script linting             | Yes            | GitHub release                     |
 | `shfmt`                             | Shell script formatting          | Yes            | GitHub release                     |
 | `rust-analyzer`                     | Rust LSP                         | Yes            | GitHub release                     |
@@ -35,7 +35,7 @@ Auto-install behavior depends on gate type:
 | `tflint`                            | Terraform linting                | Yes            | GitHub release                     |
 | `taplo`                             | TOML linting/formatting          | Yes            | GitHub release                     |
 | `terraform-ls`                      | Terraform LSP                    | Yes            | GitHub release                     |
-| `htmlhint`                          | HTML linting                     | Yes            | Config-gated                       |
+| `htmlhint`                          | HTML linting                     | Yes            | Language-default                                         |
 | `@prisma/language-server`           | Prisma LSP                       | Yes            | Flow-gated                         |
 | `dockerfile-language-server-nodejs` | Dockerfile LSP                   | Yes            | Flow-gated                         |
 | `intelephense`                      | PHP LSP                          | Yes            | Flow-gated                         |

@@ -266,8 +266,10 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	],
 	[
 		// ktfmt is offered alongside ktlint but only wins when the project opts in
-		// (hasExplicitFormatterConfig("ktfmt")); otherwise ktlint stays the
-		// smart-default. #129
+		// (hasExplicitFormatterConfig("ktfmt")). ktlint is the default formatter
+		// name, yet as a FORMATTER it also waits for its own Spotless config
+		// (`defaultWhenUnconfigured: false`): only ktlint's LINT policy is a
+		// smart default. #129, #5408
 		".kt",
 		{
 			formatterNames: ["ktfmt", "ktlint"],
@@ -1542,6 +1544,8 @@ export function getLinterPolicyForFile(
 	}
 
 	if ([".ex", ".exs", ".eex", ".heex", ".leex"].includes(ext)) {
+		// The policy selects credo without config; the runner (`credo.ts`) still
+		// skips a directory with no `mix.exs` (a Mix project is the gate there).
 		return {
 			runnerNames: ["credo"],
 			preferredRunners: ["credo"],
