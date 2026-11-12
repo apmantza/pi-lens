@@ -34,10 +34,18 @@ import { RuffClient } from "../../clients/ruff-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const { safeSpawnAsync, spawnCalls } = vi.hoisted(() => {
-	const spawnCalls: Array<{ cmd: string; args: readonly string[] }> = [];
+	const spawnCalls: Array<{
+		cmd: string;
+		args: readonly string[];
+		cwd: string | undefined;
+	}> = [];
 	const safeSpawnAsync = vi.fn(
-		async (cmd: string, args: readonly string[] = []) => {
-			spawnCalls.push({ cmd: String(cmd), args });
+		async (
+			cmd: string,
+			args: readonly string[] = [],
+			opts: { cwd?: string } = {},
+		) => {
+			spawnCalls.push({ cmd: String(cmd), args, cwd: opts.cwd });
 			const fs = await import("node:fs");
 			const path = await import("node:path");
 			const onDisk = path.isAbsolute(cmd)
@@ -147,6 +155,14 @@ describe("ruff autofix resolves its binary at the runner's cwd (#5410)", () => {
 				.filter((call) => call.cmd === pkg.ruff)
 				.map((call) => call.args.slice(0, 2).join(" ")),
 		).toContain("check --fix");
+		// The fix spawns at the package root resolveToolCwd selects, not at the
+		// dispatch cwd it was handed: a fix run at the workspace root reads the
+		// root config and `ruffConfigArgs` of the wrong tree (#2894 shape, review
+		// V2, #5519 r2). The pre-resolved command path carries the dispatch cwd.
+		const fixCwds = spawnCalls
+			.filter((call) => call.cmd === pkg.ruff && call.args.includes("--fix"))
+			.map((call) => call.cwd);
+		expect(fixCwds).toEqual([path.dirname(pkg.file)]);
 	});
 
 	// Keep the unavailable branch observable: a missing command must skip the

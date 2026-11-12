@@ -1151,7 +1151,7 @@ export async function runAutofix(
 			if (writeHold) await writeHold.acquire();
 			const result = await ruffClient.fixFileAsync(
 				filePath,
-				ruffResolution.cwd,
+				cwd,
 				ruffResolution.command,
 			);
 			if (result.success && result.fixed > 0) {

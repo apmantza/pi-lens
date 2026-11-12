@@ -92,6 +92,9 @@ export class RuffClient {
 	 * `pyproject.toml`/`ruff.toml`/`.ruff.toml` at or above it, capped inside
 	 * `cwd` (and at `$HOME` when there is none), so a file in a nested package
 	 * gets that package's config rather than the workspace-root one.
+	 * `ruffCommand` is the answer `resolveCommandForFile` gave before the
+	 * caller's write hold; it is resolved from the same inputs, so the spawn
+	 * root here always equals the root that answer was resolved at.
 	 */
 	async fixFileAsync(
 		filePath: string,
@@ -111,12 +114,13 @@ export class RuffClient {
 		// nested `pyproject.toml` whenever the caller passed a workspace root.
 		// The binary is asked at that same root (#5410), so the fix runs the
 		// ruff the lint ran.
-		const resolution =
+		const ruffCwd = resolveToolCwd("runner", "ruff", absolutePath, {
+			...(args[0] !== undefined && { cwd: args[0] }),
+		}).cwd;
+		const resolvedRuffCommand =
 			args.length === 2
-				? { cwd: args[0], command: args[1] }
-				: await this.resolveCommandForFile(absolutePath, args[0]);
-		const ruffCwd = resolution.cwd;
-		const resolvedRuffCommand = resolution.command;
+				? args[1]
+				: await resolveToolCommandWithInstallFallback(ruffCwd, "ruff");
 		if (resolvedRuffCommand === null) {
 			return {
 				success: false,
