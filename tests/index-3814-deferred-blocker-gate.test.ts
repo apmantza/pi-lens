@@ -234,8 +234,6 @@ afterEach(async () => {
  * on every run.
  */
 const PLANTED_PERSIST_DELAY_MS = 750;
-/** How long after the removal the hook watches for a re-created home. */
-const POST_REMOVAL_WATCH_MS = 2500;
 /** A released snapshot body, for the persist planted in `afterAll` (#5098). */
 const PLANTED_SNAPSHOT = JSON.parse(
 	fs.readFileSync(
@@ -266,19 +264,13 @@ afterAll(async () => {
 		// the removal used to fall into.
 		const plantedCwd = path.join(witnessHome.home, "teardown-project");
 		saveProjectSnapshot(plantedCwd, PLANTED_SNAPSHOT);
-		// The plant planted: prove the persist is still held by the worker BEFORE
-		// joining it, so the settle below has the work it claims to join (an
-		// afterAll guard that never had a writer in front of it proves nothing).
-		let persistState = getProjectSnapshotPersistStateForTests(plantedCwd);
-		for (
-			let i = 0;
-			i < 40 && !(persistState.active || persistState.queued);
-			i++
-		) {
-			await new Promise((resolve) => setTimeout(resolve, 25));
-			persistState = getProjectSnapshotPersistStateForTests(plantedCwd);
-		}
-		expect(persistState.active || persistState.queued).toBe(true);
+		// The plant planted, read synchronously: JS runs one task at a time, so no
+		// part of the dispatch above has reached the worker yet and the row must
+		// still name the persist (the same single-threaded fact the hygiene owner's
+		// drain case rests on). A teardown guard that never had a writer in front of
+		// it would prove nothing.
+		const plantedState = getProjectSnapshotPersistStateForTests(plantedCwd);
+		expect(plantedState.active || plantedState.queued).toBe(true);
 
 		// Join every deferred writer while the home is still pinned, so the bytes it
 		// has queued land inside the root that is about to go. The runner is strict:
@@ -300,14 +292,15 @@ afterAll(async () => {
 	// (`clients/instance-registry.ts`'s `registryPath`) then cannot re-create this
 	// path, whichever home it last saw (#5024).
 	removeTempDirSync(witnessHome.home);
-	// Then watch the removed path for longer than the planted writer holds a write.
-	// A teardown that removed the home under a live writer shows up here, rather
-	// than as a run-end hygiene red on a shard minutes later.
-	const watchUntil = Date.now() + POST_REMOVAL_WATCH_MS;
-	while (Date.now() < watchUntil && !fs.existsSync(witnessHome.home)) {
-		await new Promise((resolve) => setTimeout(resolve, 50));
-	}
-	expect(fs.existsSync(witnessHome.home)).toBe(false);
+	// Then join again and read the path back. The removal above is where a leaked
+	// write used to land, and this settle — not a pause — is the join that spans
+	// it: a writer the join above missed re-creates the home while this one runs,
+	// and the read-back reddens this file instead of a census shard later.
+	await drainRegisteredBackgroundWritesForTests();
+	expect(
+		fs.existsSync(witnessHome.home),
+		"a deferred writer re-created the witness home the teardown removed",
+	).toBe(false);
 });
 
 /** The fields of a latency row these cases read. */
