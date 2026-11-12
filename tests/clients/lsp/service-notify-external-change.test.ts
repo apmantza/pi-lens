@@ -315,6 +315,7 @@ describe("LSPService.notifyOutOfBandFileChanges manifest routing (#5501)", () =>
 	it.each([
 		["Cargo.toml", "rust"],
 		["go.mod", "go"],
+		["go.work", "go"],
 	])(
 		"sends %s to the live %s client and to no other language server",
 		async (name, serverId) => {
