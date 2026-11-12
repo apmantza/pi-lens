@@ -3,3 +3,4 @@ export declare function buildWeightsFromJournal(
 	lines: Array<string | object>,
 	days: number,
 ): { files: Record<string, number>; days: string[] };
+export declare function main(argv: string[]): void;

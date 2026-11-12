@@ -1,12 +1,21 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { spawnSync } from "node:child_process";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import {
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	type MockInstance,
+	it,
+	vi,
+} from "vitest";
 import {
 	buildWeights,
 	buildWeightsFromJournal,
+	main,
 } from "../../scripts/gen-test-shard-weights.mjs";
+import { setupTestEnvironment } from "../clients/test-utils.js";
 
 // #3771: the weights snapshot is regenerated from CI's per-shard vitest JSON.
 // Recurrence: a regeneration that keys on the CI checkout's absolute prefix
@@ -187,47 +196,53 @@ describe("#5182 weights from the test-history journal", () => {
 		}
 	});
 
-	describe("the CLI", () => {
-		const script = path.resolve("scripts/gen-test-shard-weights.mjs");
-		const run = (args: string[]) =>
-			spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+	describe("the CLI, called in-process", () => {
+		const env = setupTestEnvironment("pi-lens-shard-gen-cli-");
+		let logSpy: MockInstance<typeof console.log>;
+		beforeEach(() => {
+			logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		});
+		afterEach(() => {
+			logSpy.mockRestore();
+			env.cleanup();
+		});
 
 		it("writes the header naming the journal and is byte-identical on rerun", () => {
-			const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-shard-gen-"));
-			try {
-				const journal = path.join(dir, "j.ndjson");
-				fs.writeFileSync(
-					journal,
-					`${[
-						day("2026-11-07", { [A]: { runs: 1, durationMs: 2000 } }),
-						day("2026-11-08", { [A]: { runs: 1, durationMs: 4000 } }),
-					].join("\n")}\n`,
-				);
-				const out1 = path.join(dir, "o1.json");
-				const out2 = path.join(dir, "o2.json");
-				expect(run(["--journal", journal, "--out", out1]).status).toBe(0);
-				expect(run(["--journal", journal, "--out", out2]).status).toBe(0);
-				const text = fs.readFileSync(out1, "utf8");
-				expect(text).toBe(fs.readFileSync(out2, "utf8"));
-				expect(JSON.parse(text)).toEqual({
-					generatedBy: "node scripts/gen-test-shard-weights.mjs --journal",
-					runs: 2,
-					days: ["2026-11-07", "2026-11-08"],
-					files: { [A]: 3 },
-				});
-			} finally {
-				fs.rmSync(dir, { recursive: true, force: true });
-			}
+			const journal = path.join(env.tmpDir, "j.ndjson");
+			fs.writeFileSync(
+				journal,
+				`${[
+					day("2026-11-07", { [A]: { runs: 1, durationMs: 2000 } }),
+					day("2026-11-08", { [A]: { runs: 1, durationMs: 4000 } }),
+				].join("\n")}\n`,
+			);
+			const out1 = path.join(env.tmpDir, "o1.json");
+			const out2 = path.join(env.tmpDir, "o2.json");
+			main(["--journal", journal, "--out", out1]);
+			main(["--journal", journal, "--out", out2]);
+			expect(logSpy).toHaveBeenCalledWith(`${out1}: 1 files from 2 days`);
+			const text = fs.readFileSync(out1, "utf8");
+			expect(text).toBe(fs.readFileSync(out2, "utf8"));
+			expect(JSON.parse(text)).toEqual({
+				generatedBy: "node scripts/gen-test-shard-weights.mjs --journal",
+				runs: 2,
+				days: ["2026-11-07", "2026-11-08"],
+				files: { [A]: 3 },
+			});
 		});
 
 		it("refuses --journal with --run, an unreadable journal and a bad --days", () => {
-			const both = run(["--journal", "x", "--run", "y"]);
-			expect(both.status).not.toBe(0);
-			expect(both.stderr).toMatch(/--journal and --run are mutually exclusive/);
-			const missing = run(["--journal", "/nonexistent/j.ndjson"]);
-			expect(missing.stderr).toMatch(/cannot read journal/);
-			const days = run(["--journal", "x", "--days", "0"]);
-			expect(days.stderr).toMatch(/--days must be a positive integer/);
+			expect(() => main(["--journal", "x", "--run", "y"])).toThrow(
+				/--journal and --run are mutually exclusive/,
+			);
+			const out = path.join(env.tmpDir, "never.json");
+			expect(() =>
+				main(["--journal", "/nonexistent/j.ndjson", "--out", out]),
+			).toThrow(/cannot read journal/);
+			expect(() =>
+				main(["--journal", "x", "--days", "0", "--out", out]),
+			).toThrow(/--days must be a positive integer/);
+			expect(fs.existsSync(out)).toBe(false);
 		});
 	});
 });

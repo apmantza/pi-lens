@@ -117,7 +117,7 @@ export function buildWeightsFromJournal(lines, days) {
 	};
 }
 
-function main(argv) {
+export function main(argv) {
 	const runDirs = [];
 	let journal = null;
 	let days = DEFAULT_JOURNAL_DAYS;
