@@ -48,9 +48,23 @@ vi.mock("../clients/pipeline.js", () => pipeline);
 // the OS fallback, so the parent is never the checkout.
 const witnessHome = await vi.hoisted(async () => {
 	const previous = process.env.PI_LENS_HOME;
+	const { mkdtempSync } = await import("node:fs");
 	const { tmpdir } = await import("node:os");
 	const { join } = await import("node:path");
-	const home = join(tmpdir(), `pi-lens-3814-witness-home-${process.pid}`);
+	// #5098: the family is spelled at an `mkdtempSync` call, not assembled with
+	// `join(tmpdir(), ...pid)`. The serialized tmp-fixture hygiene owner maps a
+	// census entry to its owner by the declared prefix of a tmp-root `mkdtemp`
+	// (AGENTS.md shape 8: a name-only skip has no observable owner), and the pid
+	// spelling made this home `owner: tests/unknown`: the owner could neither
+	// spare it as a sibling invocation's live root nor blame it, so any sighting
+	// of it redded a shard. The same call lets the shared setup's tmp-root
+	// interposer see the creation, and the harness claim below makes the root
+	// harness-owned: whatever re-creates it after this file's teardown is removed
+	// by the worker's own sweep, not by the run-end census (`#2912`).
+	const home = mkdtempSync(join(tmpdir(), "pi-lens-3814-witness-home-"));
+	const { getTmpRootRegistry, registerTmpRoot } =
+		await import("./support/tmp-root-registry.js");
+	registerTmpRoot(getTmpRootRegistry(), home, "registered");
 	process.env.PI_LENS_HOME = home;
 	return { home, previous };
 });
@@ -70,6 +84,11 @@ import { formatDiagnostics } from "../clients/dispatch/utils/format-utils.js";
 import { resetPendingRunnerFindings } from "../clients/dispatch/pending-runner-findings.js";
 import type { Diagnostic, RunnerResult } from "../clients/dispatch/types.js";
 import { markDisposition } from "../clients/diagnostic-dispositions.js";
+import {
+	getProjectSnapshotPersistStateForTests,
+	saveProjectSnapshot,
+} from "../clients/project-snapshot.js";
+import type { ProjectSnapshot } from "../clients/project-snapshot.js";
 import { BLOCKER_REPEAT_HEADING } from "../clients/runtime-context.js";
 import {
 	clearLatencyLog,
@@ -79,6 +98,7 @@ import {
 import extension from "../index.js";
 import { _resetSessionLifecycleForTests } from "../clients/session-lifecycle.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
+import { drainRegisteredBackgroundWritesForTests } from "./support/background-write-drains.js";
 import {
 	makeContextWithSystemEvent,
 	makeSessionStartEvent,
@@ -194,11 +214,100 @@ afterEach(async () => {
 	removeTempDirSync(tmpDir);
 });
 
+/**
+ * #5098 — the teardown the leak needs, and the guard that pins it.
+ *
+ * Recurrence this prevents: CI run 41191317503 (shard 2/5) redded
+ * tmp-fixture-hygiene on `pi-lens-3814-witness-home-5495` (owner:
+ * tests/unknown), on a PR that never touched this file. A project-snapshot
+ * persist was still in flight when this hook removed the home: `session_start`
+ * resolves long before the persist worker writes, and the worker holds the
+ * project-data root it was handed, so the write re-created
+ * `<home>/projects/<slug>/cache/project-snapshot.json.gz` after the removal and
+ * minutes before the run-end sweep judged the root.
+ *
+ * The persist worker's own delay seam holds one write open over the teardown,
+ * so the settle is what the file relies on instead of a race with the worker's
+ * timing (the seam `tests/index-lsp-config-root-eviction.test.ts` uses for the
+ * same reason, and `tests/clients/background-write-drains.test.ts` pins at the
+ * seam). Deleting the settle below reddens the assertion at the end of this hook
+ * on every run.
+ */
+const PLANTED_PERSIST_DELAY_MS = 750;
+/** How long after the removal the hook watches for a re-created home. */
+const POST_REMOVAL_WATCH_MS = 2500;
+/** A released snapshot body, for the persist planted in `afterAll` (#5098). */
+const PLANTED_SNAPSHOT = JSON.parse(
+	fs.readFileSync(
+		path.join(
+			import.meta.dirname,
+			"fixtures/snapshot-persist/released-4.3.0/snapshot.json",
+		),
+		"utf-8",
+	),
+) as ProjectSnapshot;
+
 afterAll(async () => {
-	await flushLatencyLog();
-	removeTempDirSync(witnessHome.home);
+	// Plant the writer this teardown has to survive before joining it, so the hook
+	// proves it joins a live persist instead of passing because the machine was
+	// fast. The persist entry is the production one, and the delay is the persist
+	// module's own test seam; a `session_start` plant would work too but re-arms
+	// the global-bin-dir prime (#5261), which is a different writer with its own
+	// bounded settle and nothing to do with this file's gate.
+	const previousPersistDelay =
+		process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS;
+	process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS = String(
+		PLANTED_PERSIST_DELAY_MS,
+	);
+	try {
+		// The planted project lives inside the witness home, so it adds no tmp-root
+		// entry. `saveProjectSnapshot` hands the body to the persist worker and
+		// returns, so with the delay above the write lands ~750 ms later: the window
+		// the removal used to fall into.
+		const plantedCwd = path.join(witnessHome.home, "teardown-project");
+		saveProjectSnapshot(plantedCwd, PLANTED_SNAPSHOT);
+		// The plant planted: prove the persist is still held by the worker BEFORE
+		// joining it, so the settle below has the work it claims to join (an
+		// afterAll guard that never had a writer in front of it proves nothing).
+		let persistState = getProjectSnapshotPersistStateForTests(plantedCwd);
+		for (
+			let i = 0;
+			i < 40 && !(persistState.active || persistState.queued);
+			i++
+		) {
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			persistState = getProjectSnapshotPersistStateForTests(plantedCwd);
+		}
+		expect(persistState.active || persistState.queued).toBe(true);
+
+		// Join every deferred writer while the home is still pinned, so the bytes it
+		// has queued land inside the root that is about to go. The runner is strict:
+		// a drain that reports work still landing throws here rather than letting
+		// this hook remove a root from under a live writer.
+		await drainRegisteredBackgroundWritesForTests();
+		await flushLatencyLog();
+	} finally {
+		if (previousPersistDelay === undefined)
+			delete process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS;
+		else
+			process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS =
+				previousPersistDelay;
+	}
 	if (witnessHome.previous === undefined) delete process.env.PI_LENS_HOME;
 	else process.env.PI_LENS_HOME = witnessHome.previous;
+	// Restore `PI_LENS_HOME` before the removal: a tail writer that resolves the
+	// machine-state directory when it lands
+	// (`clients/instance-registry.ts`'s `registryPath`) then cannot re-create this
+	// path, whichever home it last saw (#5024).
+	removeTempDirSync(witnessHome.home);
+	// Then watch the removed path for longer than the planted writer holds a write.
+	// A teardown that removed the home under a live writer shows up here, rather
+	// than as a run-end hygiene red on a shard minutes later.
+	const watchUntil = Date.now() + POST_REMOVAL_WATCH_MS;
+	while (Date.now() < watchUntil && !fs.existsSync(witnessHome.home)) {
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	expect(fs.existsSync(witnessHome.home)).toBe(false);
 });
 
 /** The fields of a latency row these cases read. */
