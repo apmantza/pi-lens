@@ -788,6 +788,53 @@ describe("actionable-warnings turn-end advisory honors dispositions (#3248)", ()
 		}
 	});
 
+	// #5459 review F1 (PR #5497): with cwd `<tmp>/app`, trivy's Target
+	// `app/secret.ts` names the NESTED file. `resolveRunnerPath` trimmed the cwd
+	// basename and keyed it onto the top-level `secret.ts`, so the two files'
+	// secrets merged into one gitleaks row and the nested row was hidden.
+	it("keeps a trivy Target that repeats the cwd basename on its own file (#5459)", async () => {
+		const env = setupTestEnvironment("pi-lens-5459-nested-target-");
+		try {
+			const cwd = path.join(env.tmpDir, "app");
+			const topFile = path.join(cwd, "secret.ts");
+			const nestedFile = path.join(cwd, "app", "secret.ts");
+			fs.mkdirSync(path.dirname(nestedFile), { recursive: true });
+			fs.writeFileSync(topFile, "const token = 'AKIA...';\n");
+			fs.writeFileSync(nestedFile, "const token = 'AKIA...';\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: SESSION_ID });
+			const cacheManager = new CacheManager(false);
+			registerEdit(cacheManager, cwd, topFile);
+			cacheManager.writeCache(
+				"gitleaks",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [
+						{
+							ruleId: "aws-access-token",
+							file: topFile,
+							startLine: 1,
+							description: "AWS key",
+						},
+					],
+				},
+				cwd,
+			);
+			cacheManager.writeCache("trivy", trivySecretCache(cwd, nestedFile), cwd);
+
+			await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, cwd));
+			const text = turnEndText(cacheManager, cwd, runtime);
+			// Two rows, one per file: the merged `[gitleaks + trivy]` row is the
+			// defect, and each file keeps its own scanner's row.
+			expect(text).not.toContain("[gitleaks + trivy]");
+			expect(text).toContain("  secret.ts:1 — aws-access-token [gitleaks]");
+			expect(text).toContain("  secret.ts:1 — aws-access-key-id [trivy]");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("filters a marked warning added by the real LSP builder seam (#3248)", async () => {
 		// Prevents the round-1 bypass: an input-only filter or an `origin=lsp`
 		// escape hatch must not let a disposition-marked builder-added row reach

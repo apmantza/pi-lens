@@ -20,9 +20,10 @@
  * Refs: #131 (Mode 3), #130
  */
 
+import { isAbsolute } from "node:path";
 import type { ActionableWarningRecord } from "./actionable-warnings.js";
 import type { GitleaksFinding } from "./gitleaks-client.js";
-import { resolveRunnerPath } from "./dispatch/runner-context.js";
+import { normalizeHostToolPath, normalizeMapKey } from "./path-utils.js";
 
 /** The scanners that can flag a secret, in display/priority order. */
 type SecretSource = "gitleaks" | "trivy" | "ast-grep";
@@ -65,14 +66,17 @@ export function isSecretWarning(warning: ActionableWarningRecord): boolean {
 /**
  * Location key used to collapse the same secret across sources. gitleaks
  * reports an absolute path and trivy one relative to its scan root (#5459), so
- * the file is keyed on its identity resolved against the scan cwd.
+ * a relative file is joined to the scan cwd before its identity is taken. The
+ * cwd's basename and its ancestors never re-anchor it (#5459 review F1).
  */
 export function secretLocationKey(
 	file: string,
 	line: number,
 	cwd: string,
 ): string {
-	return `${resolveRunnerPath(cwd, file)}:${line}`;
+	const spelled = normalizeHostToolPath(file);
+	const identity = isAbsolute(spelled) ? spelled : `${cwd}/${spelled}`;
+	return `${normalizeMapKey(identity)}:${line}`;
 }
 
 export function fromGitleaks(findings: GitleaksFinding[]): SecretFinding[] {
