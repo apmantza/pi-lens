@@ -1,7 +1,7 @@
 /**
  * The one config-presence seam (#5408): "does the project carry config for
  * tool X, starting at this directory". The policy layer (`tool-policy.ts`
- * `hasXConfig`, `getLinterPolicyForCwd`), the runners' own gates and the
+ * `getLinterPolicyForCwd`), the runners' own gates and the
  * formatter selector all ask THIS module, so they cannot disagree on where to
  * look, how far to climb, or what counts as config.
  *

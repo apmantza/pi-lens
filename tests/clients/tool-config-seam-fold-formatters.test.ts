@@ -9,7 +9,7 @@
  *   filesystem root, so a `.clang-format` or `.oxlintrc.json` ABOVE `$HOME`
  *   counted as project config (the #5408 divergence 3 shape, tflint). The seam
  *   stops at `$HOME`.
- * - `hasRubocopConfig` / `hasStandardrbConfig` matched a substring anywhere in
+ * - the rubocop and standardrb finders matched a substring anywhere in
  *   a Gemfile (a comment, `standardize`): the #5408 divergence 2 shape.
  */
 import * as fs from "node:fs";

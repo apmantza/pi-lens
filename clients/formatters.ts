@@ -827,7 +827,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 	["cljfmt", (cwd) => hasToolConfig("cljfmt", cwd)],
 	["cmake-format", (cwd) => hasToolConfig("cmake-format", cwd)],
 	["psscriptanalyzer-format", (cwd) => hasToolConfig("psscriptanalyzer", cwd)],
-	// #1595 sweep — see the comment above hasCsharpierConfig et al. in
+	// #1595 sweep — see the note above FORMATTER_POLICY_BY_EXTENSION in
 	// tool-policy.ts for why nixfmt (the 8th formatter #1572 flagged) is NOT
 	// wired here: it has no config-file convention and no manifest-marker
 	// equivalent to `.terraform.lock.hcl`, so there is no honest opt-in signal.
@@ -1160,7 +1160,7 @@ export const ruffFormatter: FormatterInfo = {
 		if (installed) return [installed, ...args, filePath];
 		// #2413: `ensureTool` already resolves PATH, global bins and the managed
 		// dir (and attempts an install) before returning falsy, so reaching here
-		// means ruff is genuinely nowhere. `detect()`'s `hasRuffConfig` branch has
+		// means ruff is genuinely nowhere. the config branch of ruff's `detect()` has
 		// no binary check, so a config-only project selects ruff with nothing
 		// installed; the static bare `ruff` would then ENOENT. Prove it unavailable.
 		return ladderMiss(found, "ruff");

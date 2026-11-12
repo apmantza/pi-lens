@@ -937,7 +937,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	// #5408 F6 (review of #5493): `hasOxfmtConfig` asked the Vite+ seam once per
+	// #5408 F6 (review of #5493): the oxfmt config check asked the Vite+ seam once per
 	// ancestor of an unbounded walk, so a vite-plus.json above $HOME made oxfmt
 	// configured while the Vite+ gate that `resolveCommand` consults (bounded at
 	// $HOME) said no. The home is pinned with vi.stubEnv: the fixture home root
@@ -963,7 +963,7 @@ describe("tool-policy", () => {
 		}
 	});
 
-	// oxfmt's .svelte support is conditional beyond the generic hasOxfmtConfig
+	// oxfmt's .svelte support is conditional beyond the generic oxfmt config
 	// check — verified empirically against the real oxfmt npm binary (see
 	// PR #1134 body for the full four-cell matrix). Both the `svelte` package
 	// AND the config's `svelte` flag are required; either alone always fails.

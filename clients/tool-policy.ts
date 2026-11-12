@@ -38,6 +38,15 @@ export interface FormatterPolicy {
 //     (getLinterPolicyForFile), not a FormatterInfo — a formatter policy naming
 //     it was a dead, unsatisfiable entry; fish reformatting runs via the
 //     linter/autofix path. Removed to keep extension→formatter consistent.
+//
+// #1595 sweep — 7 of the 8 formatters #1572 left unreachable (038cd1df flipped
+// defaultWhenUnconfigured to false for these without adding an explicit-config
+// check; see EXPLICIT_FORMATTER_CONFIG_CHECKS in formatters.ts). nixfmt is the
+// 8th and stays unreachable: it is deliberately unconfigurable (no rc file,
+// no CLI flag surface) and has no project-level manifest marker analogous to
+// `terraform init`'s lock file, so there is no honest "explicit opt-in" signal
+// to gate on — see the KNOWN_UNREACHABLE_FORMATTERS comment in
+// formatter-policy-consistency.test.ts.
 const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".js",
@@ -2033,15 +2042,6 @@ export function biomeConfigArgs(cwd: string): string[] {
 			resolvePackagePath(import.meta.url, "config/biome/core.jsonc"),
 	];
 }
-
-// #1595 sweep — 7 of the 8 formatters #1572 left unreachable (038cd1df flipped
-// defaultWhenUnconfigured to false for these without adding an explicit-config
-// check; see EXPLICIT_FORMATTER_CONFIG_CHECKS in formatters.ts). nixfmt is the
-// 8th and stays unreachable: it is deliberately unconfigurable (no rc file,
-// no CLI flag surface) and has no project-level manifest marker analogous to
-// `terraform init`'s lock file, so there is no honest "explicit opt-in" signal
-// to gate on — see the KNOWN_UNREACHABLE_FORMATTERS comment in
-// formatter-policy-consistency.test.ts.
 
 // ktfmt has no native config file format; these are pi-lens opt-in markers plus
 // the gradle-plugin signal, so a project that uses ktfmt elects it as its Kotlin

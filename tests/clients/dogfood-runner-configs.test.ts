@@ -20,7 +20,7 @@ const REPO_ROOT = path.resolve(
 );
 
 describe("dogfood runner config activation (#1844)", () => {
-	it("hasOxlintConfig detects the repo's own .oxlintrc.json", () => {
+	it("the oxlint config check detects the repo's own .oxlintrc.json", () => {
 		expect(hasToolConfig("oxlint", REPO_ROOT)).toBe(true);
 	});
 
@@ -34,7 +34,7 @@ describe("dogfood runner config activation (#1844)", () => {
 		expect(hasToolConfig("yamllint", REPO_ROOT)).toBe(true);
 	});
 
-	it("hasTaploConfig detects the repo's own taplo.toml", () => {
+	it("the taplo config check detects the repo's own taplo.toml", () => {
 		expect(hasToolConfig("taplo", REPO_ROOT)).toBe(true);
 	});
 });

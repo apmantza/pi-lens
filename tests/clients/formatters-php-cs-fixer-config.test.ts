@@ -195,7 +195,7 @@ describe("phpCsFixerFormatter — ancestor config carriage (#2472)", () => {
 
 	// #2472 review round 3, F1/F3 (maintainer-decision reversal): a round-2
 	// fold ceilinged `resolvePhpCsFixerConfig` (the carriage) at $HOME by
-	// default while its own detection gates — `hasPhpCsFixerConfig` (since
+	// default while its own detection gates — the php-cs-fixer config finder (since
 	// folded onto the seam, which visits $HOME and stops there; #5408)
 	// and `phpCsFixerFormatter.detect` (via its own unceilinged `findUp`) —
 	// stayed unceilinged. That disagreement re-created #2472 for any project
