@@ -260,11 +260,7 @@ export const TOOL_AGREEMENT_POLICIES: Readonly<
 	"psscriptanalyzer-format": {
 		bucket: "project-config",
 		withoutEvidence: "decline",
-		check: (cwd) =>
-			hasMarker(cwd, [
-				"PSScriptAnalyzerSettings.psd1",
-				"ScriptAnalyzerSettings.psd1",
-			]),
+		check: (cwd) => hasToolConfig("psscriptanalyzer", cwd),
 	},
 	cue: {
 		bucket: "project-config",

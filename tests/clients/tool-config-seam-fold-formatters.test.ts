@@ -60,6 +60,7 @@ const FORMATTER_MARKERS: ReadonlyArray<readonly [string, string]> = [
 	["fantomas", ".fantomasignore"],
 	["mix", ".formatter.exs"],
 	["rubocop", ".rubocop.yml"],
+	["psscriptanalyzer-format", "PSScriptAnalyzerSettings.psd1"],
 ];
 
 describe("a formatter-family marker above $HOME is not project config (#5408 divergence 3 shape)", () => {
@@ -88,6 +89,18 @@ describe("a formatter-family marker above $HOME is not project config (#5408 div
 		expect(establishToolAgreement("clang-format", proj).decision).toBe(
 			"established",
 		);
+	});
+
+	// Recurrence: psscriptanalyzer-format's agreement walked to the VCS root, so
+	// a settings file at $HOME never counted for a repo under it, while the
+	// formatter's own detect (the seam) selected the tool. Both now read one answer.
+	it("a PSScriptAnalyzer settings file at $HOME counts for a repo under it", () => {
+		const { home, proj } = layout("5408-s3-psa-home-repo");
+		fs.mkdirSync(path.join(proj, ".git"));
+		plant(path.join(home, "PSScriptAnalyzerSettings.psd1"), "@{}\n");
+		expect(
+			establishToolAgreement("psscriptanalyzer-format", proj).decision,
+		).toBe("established");
 	});
 });
 
