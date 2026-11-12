@@ -58,14 +58,24 @@ describe("fetchOpenIssues (#3563)", () => {
 		).rejects.toThrow(/403/);
 	});
 
-	it("sends the bearer token on every request", async () => {
-		let seenAuth: string | undefined;
+	// Recurrence this prevents: a request site that built the header block once
+	// for page 1 (or only on the first call) and sent pages 2..N anonymously.
+	// GitHub then answers an unauthenticated listing from the 60/h rate limit, so
+	// the issue list read 403s mid-pagination. The test pages twice and reads the
+	// header of every request, not of the last one.
+	it("sends the bearer token on every page request", async () => {
+		const fullPage = Array.from({ length: PAGE_SIZE }, (_, i) => ({
+			number: i,
+		}));
+		const pages = [fullPage, fullPage, [{ number: 999 }]];
+		const seen: Array<string | undefined> = [];
+		let page = 0;
 		const fetchImpl = async (_url: string, init?: RequestInit) => {
 			const headers = init?.headers as Record<string, string> | undefined;
-			seenAuth = headers?.Authorization;
-			return { ok: true, status: 200, json: async () => [] };
+			seen.push(headers?.Authorization);
+			return { ok: true, status: 200, json: async () => pages[page++] ?? [] };
 		};
 		await fetchOpenIssues("acme/repo", "sekrit", fetchImpl);
-		expect(seenAuth).toBe("Bearer sekrit");
+		expect(seen).toEqual(["Bearer sekrit", "Bearer sekrit", "Bearer sekrit"]);
 	});
 });
