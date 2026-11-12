@@ -108,7 +108,12 @@ afterEach(() => {
 	fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-describe.each(["pyrightconfig.json", "pyproject.toml"])(
+// Recurrence (#5501): `Cargo.toml` and `go.mod` were not on the list, so a
+// manifest fixed after rust-analyzer's workspace failed to load never reached
+// it (every touch read `server-load-failed` until restart), and a `go.mod`
+// raised from go 1.17 to 1.21 left gopls's "requires go1.18" finding in place
+// through six touches. Both servers were measured; see server-config-files.ts.
+describe.each(["pyrightconfig.json", "pyproject.toml", "Cargo.toml", "go.mod"])(
 	"a %s changed outside pi-lens",
 	(name) => {
 		const config = () => path.join(tmp, name);
@@ -160,6 +165,12 @@ describe("a file that is not on the closed config list", () => {
 		"package.json",
 		"setup.py",
 		"PyProject.toml",
+		// Spelled as the servers do not read them (#5501): the list is exact and
+		// case-sensitive, and the lock/sum/work companions are unmeasured.
+		"cargo.toml",
+		"Cargo.toml.orig",
+		"Go.mod",
+		"go.work",
 		"pyrightconfig.json.bak",
 		"my-pyrightconfig.json",
 	])("%s publishes nothing", async (name) => {

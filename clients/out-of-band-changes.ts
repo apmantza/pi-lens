@@ -24,8 +24,8 @@
  * an install are refused. This module names no consumer.
  *
  * The same look compares the config files a server reads once and keeps
- * (`pyrightconfig.json`, `pyproject.toml`: the closed list in
- * `clients/lsp/server-config-files.ts`) at the root only (a config below it is
+ * (`pyrightconfig.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`: the closed
+ * list in `clients/lsp/server-config-files.ts`) at the root only (a config below it is
  * a declared p3 residual: the look stats the root's names, it does not walk),
  * and publishes a created, edited or deleted one as a `config` change (#4532
  * gap 12). A config born after the server answered never reached it before:
