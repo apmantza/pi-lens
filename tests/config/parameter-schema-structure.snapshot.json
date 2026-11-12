@@ -236,7 +236,16 @@
 				},
 				"commandArguments": {
 					"type": "array",
-					"items": {}
+					"items": {
+						"type": [
+							"string",
+							"number",
+							"boolean",
+							"object",
+							"array",
+							"null"
+						]
+					}
 				},
 				"query": {
 					"type": "string"
@@ -506,7 +515,16 @@
 				},
 				"commandArguments": {
 					"type": "array",
-					"items": {}
+					"items": {
+						"type": [
+							"string",
+							"number",
+							"boolean",
+							"object",
+							"array",
+							"null"
+						]
+					}
 				},
 				"query": {
 					"type": "string"

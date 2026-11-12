@@ -8,7 +8,7 @@ holds the pi-lens rules every role shares, for every runner and model. The
 principles apply throughout and are not restated; project files win on
 conflict.
 
-User-facing prose follows the live standard in `docs/pi-lens-reviewer.md`.
+User-facing prose follows the live standard in `docs/prose-standard.md`.
 
 ## Worktree and Git
 
