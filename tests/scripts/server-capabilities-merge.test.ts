@@ -362,6 +362,29 @@ describe("mergeServerCapabilitiesDoc (#469)", () => {
 		expect(text).not.toContain("- clangd");
 	});
 
+	it("keeps the raw capability intro above carried bullets", () => {
+		// Recurrence #5526: when a prior server is carried into a fresh nightly
+		// document, the section intro must not trail the re-sorted bullet list.
+		const prior = makeDoc(
+			OLD_HEADER,
+			[
+				["cmake", "pull", "✓", "0"],
+				["zizmor", "pull", "✓", "0"],
+			],
+			{ cmake: "definitionProvider", zizmor: "hoverProvider" },
+		);
+		const fresh = makeDoc(NEW_HEADER, [["zizmor", "pull", "✓", "✓", "0"]], {
+			zizmor: "hoverProvider",
+		});
+
+		const { text } = mergeServerCapabilitiesDoc(prior, fresh);
+		const intro = text.indexOf("Top-level keys.");
+		const firstBullet = text.indexOf("- **cmake**: definitionProvider");
+		expect(intro).toBeGreaterThan(-1);
+		expect(firstBullet).toBeGreaterThan(-1);
+		expect(intro).toBeLessThan(firstBullet);
+	});
+
 	it("keeps preserved rows and bullets in locale-independent order", () => {
 		// Recurrence #3342/#390: locale-sensitive preserved-value sorting made
 		// identical nightly inputs produce different documentation bytes.
