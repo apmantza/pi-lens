@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
 	CENSUS_MAX_LINES_PER_FILE,
@@ -23,20 +23,6 @@ import {
 	resolveOwnerFile,
 	runDeadOwnerCensus,
 } from "./dead-owner-census.js";
-
-// This file stubs the table seam outright (an empty table), the way
-// `vitest-setup.ts` does for a `Name` filter: the census must still read the
-// real one, which the last case pins.
-vi.mock("../../clients/process-snapshot.js", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("../../clients/process-snapshot.js")
-	>()),
-	queryProcessTable: async () => ({
-		rows: [],
-		status: "ok" as const,
-		serverSideFiltered: true,
-	}),
-}));
 
 /** A pid no process holds: above any Linux/macOS pid_max. */
 const DEAD_PID = 2_147_483_000;
@@ -213,11 +199,11 @@ describe("#5528 dead-owner census", () => {
 		}).toEqual({ a: "a.test.ts", b: "b.test.ts", none: "unknown" });
 	});
 
-	// A mocked or scoped table seam (the setup's #3917 scope, a file's own mock)
-	// must not blind the census: an empty table would report nothing on every
-	// run and look clean.
+	// The setup answers every `Name`-filtered table query with an empty table
+	// (#3917); the census must still reach the real `ps`, or it would report
+	// nothing on every run and look clean.
 	it.skipIf(process.platform === "win32")(
-		"reads the real process table even where the file mocks the seam",
+		"reads the real process table through the setup's table scope",
 		async () => {
 			const seams = await loadActualCensusSeams();
 			const table = await seams.listProcesses();

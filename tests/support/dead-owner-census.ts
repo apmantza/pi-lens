@@ -21,10 +21,10 @@
  * and the dead-owner rule the backstop sweep applies
  * (`partitionBackstopCandidates` over an empty registry and no spawn grace).
  *
- * The seams are loaded with `vi.importActual`: `vitest-setup.ts` answers every
- * `Name`-filtered table query with an empty table (#3917) and a test file may
- * mock the reaper or the snapshot module outright; either would blind the
- * census to the host table it exists to read.
+ * The table query carries no `Name` filter on purpose: `vitest-setup.ts`
+ * answers every `Name`-filtered query with an empty table (#3917) so no test
+ * reaches the host through the orphan backstop, and this census needs the real
+ * table. POSIX `ps` cannot filter by name anyway, so the query is the same one.
  *
  * Off unless the env var names a file, and off on Windows, where no owner tag
  * is written. Known limit, stated rather than implied: a dead owner whose pid
@@ -32,8 +32,6 @@
  * per file), so the census can miss a leak, never invent one.
  */
 import * as fs from "node:fs";
-
-import { vi } from "vitest";
 
 export const DEAD_OWNER_CENSUS_FILE_ENV = "PI_LENS_DEAD_OWNER_CENSUS_FILE";
 
@@ -127,14 +125,13 @@ export function formatLeakLine(
 	return `[dead-owner-census] pid=${leak.pid} owner=${leak.ownerPid} age=${age} owner_file=${ownerFile} seen_after=${seenAfter} cmd=${command}`;
 }
 
-/** The production readers, bypassing the file's own mocks of them. */
+/**
+ * The production readers. Imported when the teardown runs, never at setup
+ * load: `vitest-setup.ts` loads before a test file's `vi.mock` registers.
+ */
 export async function loadActualCensusSeams(): Promise<CensusSeams> {
-	const snapshot = await vi.importActual<
-		typeof import("../../clients/process-snapshot.js")
-	>("../../clients/process-snapshot.js");
-	const reaper = await vi.importActual<
-		typeof import("../../clients/instance-reaper.js")
-	>("../../clients/instance-reaper.js");
+	const snapshot = await import("../../clients/process-snapshot.js");
+	const reaper = await import("../../clients/instance-reaper.js");
 	return {
 		listProcesses: () =>
 			snapshot.queryProcessTable(

@@ -630,9 +630,15 @@ jobs:
       # line, so this counts the workers that named themselves and the dead-owner
       # pids the run saw. `Run tests` carries the per-pid lines.
       - name: Dead-owner census summary
-        if: always() && matrix.shard == 5
+        if: always()
+        env:
+          PI_LENS_DEAD_OWNER_CENSUS_FILE: ${{ matrix.shard == 5 && format('{0}/dead-owner-census.log', runner.temp) || '' }}
         run: |
-          log="${RUNNER_TEMP}/dead-owner-census.log"
+          log="${PI_LENS_DEAD_OWNER_CENSUS_FILE}"
+          if [ -z "$log" ]; then
+            echo "dead-owner census: off on this shard"
+            exit 0
+          fi
           files=$(grep -c '^owner ' "$log" 2>/dev/null || true)
           leaks=$(grep -c '^leak ' "$log" 2>/dev/null || true)
           echo "dead-owner census: ${files:-0} test files recorded, ${leaks:-0} dead-owner pids"
