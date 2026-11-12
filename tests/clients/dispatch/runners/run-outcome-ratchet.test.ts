@@ -8,6 +8,7 @@ import {
 	NODE_SPAWN_NAMES,
 	SPAWN_NAMES as SEAM_SPAWN_NAMES,
 } from "../../../support/spawn-cwd-scan.js";
+import { TREE_WALK_TIMEOUT_MS } from "../../../support/test-timeout-scale.js";
 import {
 	auditRegistry,
 	codeMatches,
@@ -1151,112 +1152,132 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 	// not red, but one root dropping out of the flagged population does.
 	const FLAGGED_FLOOR = 70;
 
-	it("censuses every source file under both roots (#5308)", () => {
-		console.log(
-			"SCANNED " +
-				SPAWN_CENSUS_ROOTS.map(
-					(r) => `${r}=${censusSourceFiles(r).length}`,
-				).join(" "),
-		);
-		const thin = SPAWN_CENSUS_ROOTS.filter(
-			(root) => censusSourceFiles(root).length < SCANNED_FLOOR[root],
-		);
-		expect(
-			thin,
-			`the census walk lost a root (${SPAWN_CENSUS_ROOTS.join(", ")}): ` +
-				`${thin.join(", ")} scanned below its floor`,
-		).toEqual([]);
-	});
+	// Every census below walks two whole subtrees, so each carries the shared
+	// tree-walk budget (`tests/config/tree-census-timeout.test.ts` #4828).
+	it(
+		"censuses every source file under both roots (#5308)",
+		() => {
+			const thin = SPAWN_CENSUS_ROOTS.filter(
+				(root) => censusSourceFiles(root).length < SCANNED_FLOOR[root],
+			);
+			expect(
+				thin,
+				`the census walk lost a root (${SPAWN_CENSUS_ROOTS.join(", ")}): ` +
+					`${thin.join(", ")} scanned below its floor`,
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("every spawn site outside the runners is classified or carries a reason (#5308)", () => {
-		const rows = census();
-		const audit = auditRegistry({
-			sweepName: "run-outcome ratchet, out-of-tree spawn sites (#5308)",
-			flagged: rows
+	it(
+		"every spawn site outside the runners is classified or carries a reason (#5308)",
+		() => {
+			const rows = census();
+			const audit = auditRegistry({
+				sweepName: "run-outcome ratchet, out-of-tree spawn sites (#5308)",
+				flagged: rows
+					.filter((row) => !row.usesPrimitive)
+					.map((row) => ({
+						key: row.file,
+						detail: `${row.sites.length} site(s): ${row.sites
+							.map((site) => `${site.name}@${site.line}`)
+							.join(", ")}`,
+					})),
+				registered: rows
+					.filter((row) => row.usesPrimitive)
+					.map((row) => row.file),
+				exemptions: OUT_OF_TREE_SPAWN_BASELINE,
+				scannedCount: SPAWN_CENSUS_ROOTS.reduce(
+					(total, root) => total + censusSourceFiles(root).length,
+					0,
+				),
+				minScanned: Object.values(SCANNED_FLOOR).reduce((a, b) => a + b, 0),
+				minFlagged: FLAGGED_FLOOR,
+				minReasonLength: 40,
+			});
+			expect(audit.problems, audit.problems.join("\n")).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"does not exempt a spawn file that has migrated onto the primitive (#5308)",
+		() => {
+			// The live census has no migrated file yet, so the rule is proven with a
+			// planted migration: a row that routes through the primitive while still
+			// carrying a baseline entry. The fix there is to delete the row and keep
+			// the migration, not to re-baseline the primitive user.
+			const planted: CensusRow[] = [
+				{
+					file: "scripts/planted.mjs",
+					dir: "scripts",
+					source: "",
+					sites: [{ line: 1, name: "spawnSync", via: "call" }],
+					unclassified: [],
+					usesPrimitive: true,
+				},
+			];
+			expect(
+				migratedSpawnRows(planted, {
+					"scripts/planted.mjs": "planted row; #1737",
+				}),
+			).toEqual(["scripts/planted.mjs"]);
+			// A migrated row is reported whether or not it still spawns: the table
+			// entry, not the scan, is what goes stale.
+			expect(
+				migratedSpawnRows([{ ...planted[0], sites: [] }], {
+					"scripts/planted.mjs": "planted row; #1737",
+				}),
+			).toEqual(["scripts/planted.mjs"]);
+			expect(migratedSpawnRows(census(), OUT_OF_TREE_SPAWN_BASELINE)).toEqual(
+				[],
+			);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"every baselined spawn site can see its own failure (#5308)",
+		() => {
+			// The fault channel per form. `execFile`, `execFileSync`, and `execSync`
+			// raise on a nonzero exit, on a signal kill, and on a spawn error, so the
+			// failure travels to the caller as an exception. `spawn`, `spawnSync`,
+			// `fork`, and the `safeSpawn*` wrappers RETURN, so the file has to read
+			// status/exitCode/signal/killed/error off the result or nothing shows the
+			// child failed at all. A file that neither throws nor reads is the
+			// original defect: a dead child that reads as an empty clean run.
+			// A catch that returns a sentinel (`null`, `ok: false`) is a deliberate
+			// second channel, so this gate does not judge catch bodies; a site that
+			// swallows into a bare empty value is a #1737 migration, not this ratchet.
+			const blind = census()
+				.filter((row) => row.sites.length > 0)
+				// A file that routes the child through the primitive has its fault
+				// channel there: `classifyRunOutcome` reads the status, the signal,
+				// and the spawn error, so a migrated file is not blind.
 				.filter((row) => !row.usesPrimitive)
-				.map((row) => ({
-					key: row.file,
-					detail: `${row.sites.length} site(s): ${row.sites
-						.map((site) => `${site.name}@${site.line}`)
-						.join(", ")}`,
-				})),
-			registered: rows
-				.filter((row) => row.usesPrimitive)
-				.map((row) => row.file),
-			exemptions: OUT_OF_TREE_SPAWN_BASELINE,
-			scannedCount: SPAWN_CENSUS_ROOTS.reduce(
-				(total, root) => total + censusSourceFiles(root).length,
-				0,
-			),
-			minScanned: Object.values(SCANNED_FLOOR).reduce((a, b) => a + b, 0),
-			minFlagged: FLAGGED_FLOOR,
-			minReasonLength: 40,
-		});
-		expect(audit.problems, audit.problems.join("\n")).toEqual([]);
-	});
+				.filter(
+					(row) =>
+						row.sites.some((site) => !THROWING_SPAWN_NAMES.has(site.name)) &&
+						outcomeFieldsRead(row.source).length === 0,
+				)
+				.map(
+					(row) => `${row.file}: ${row.sites.map((s) => s.name).join(", ")}`,
+				);
+			expect(blind, "these files cannot see a failed child").toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
-	it("does not exempt a spawn file that has migrated onto the primitive (#5308)", () => {
-		// The live census has no migrated file yet, so the rule is proven with a
-		// planted migration: a row that routes through the primitive while still
-		// carrying a baseline entry. The fix there is to delete the row and keep
-		// the migration, not to re-baseline the primitive user.
-		const planted: CensusRow[] = [
-			{
-				file: "scripts/planted.mjs",
-				dir: "scripts",
-				source: "",
-				sites: [{ line: 1, name: "spawnSync", via: "call" }],
-				unclassified: [],
-				usesPrimitive: true,
-			},
-		];
-		expect(
-			migratedSpawnRows(planted, {
-				"scripts/planted.mjs": "planted row; #1737",
-			}),
-		).toEqual(["scripts/planted.mjs"]);
-		// A migrated row is reported whether or not it still spawns: the table
-		// entry, not the scan, is what goes stale.
-		expect(
-			migratedSpawnRows([{ ...planted[0], sites: [] }], {
-				"scripts/planted.mjs": "planted row; #1737",
-			}),
-		).toEqual(["scripts/planted.mjs"]);
-		expect(migratedSpawnRows(census(), OUT_OF_TREE_SPAWN_BASELINE)).toEqual([]);
-	});
-
-	it("every baselined spawn site can see its own failure (#5308)", () => {
-		// The fault channel per form. `execFile`, `execFileSync`, and `execSync`
-		// raise on a nonzero exit, on a signal kill, and on a spawn error, so the
-		// failure travels to the caller as an exception. `spawn`, `spawnSync`,
-		// `fork`, and the `safeSpawn*` wrappers RETURN, so the file has to read
-		// status/exitCode/signal/killed/error off the result or nothing shows the
-		// child failed at all. A file that neither throws nor reads is the
-		// original defect: a dead child that reads as an empty clean run.
-		// A catch that returns a sentinel (`null`, `ok: false`) is a deliberate
-		// second channel, so this gate does not judge catch bodies; a site that
-		// swallows into a bare empty value is a #1737 migration, not this ratchet.
-		const blind = census()
-			.filter((row) => row.sites.length > 0)
-			// A file that routes the child through the primitive has its fault
-			// channel there: `classifyRunOutcome` reads the status, the signal,
-			// and the spawn error, so a migrated file is not blind.
-			.filter((row) => !row.usesPrimitive)
-			.filter(
-				(row) =>
-					row.sites.some((site) => !THROWING_SPAWN_NAMES.has(site.name)) &&
-					outcomeFieldsRead(row.source).length === 0,
-			)
-			.map((row) => `${row.file}: ${row.sites.map((s) => s.name).join(", ")}`);
-		expect(blind, "these files cannot see a failed child").toEqual([]);
-	});
-
-	it("classifies every spawn-capable reference in both roots (#5308)", () => {
-		// Fail closed (#4429's rule for a population scanner): a spawn-module
-		// import the scanner cannot follow reds with its file and line.
-		const unclassified = census().flatMap((row) => row.unclassified);
-		expect(unclassified).toEqual([]);
-	});
+	it(
+		"classifies every spawn-capable reference in both roots (#5308)",
+		() => {
+			// Fail closed (#4429's rule for a population scanner): a spawn-module
+			// import the scanner cannot follow reds with its file and line.
+			const unclassified = census().flatMap((row) => row.unclassified);
+			expect(unclassified).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 
 	it("counts an alias, an injected default, and a namespace member as a site (#5308)", () => {
 		// Shape 69: a detector is proven against the spellings it does not get
