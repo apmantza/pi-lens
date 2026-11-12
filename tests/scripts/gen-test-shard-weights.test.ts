@@ -250,9 +250,12 @@ describe("#5182 weights from the test-history journal", () => {
 	});
 
 	describe("the CLI, called in-process", () => {
-		const env = setupTestEnvironment("pi-lens-shard-gen-cli-");
+		// A fresh fixture per case: one made per describe and removed after each
+		// case left later cases on a deleted dir under --sequence.shuffle.
+		let env: ReturnType<typeof setupTestEnvironment>;
 		let logSpy: MockInstance<typeof console.log>;
 		beforeEach(() => {
+			env = setupTestEnvironment("pi-lens-shard-gen-cli-");
 			logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		});
 		afterEach(() => {
@@ -285,8 +288,6 @@ describe("#5182 weights from the test-history journal", () => {
 		});
 
 		it("writes no file when the journal holds no test durations", () => {
-			// env.cleanup() in afterEach removed the dir the first case used.
-			fs.mkdirSync(env.tmpDir, { recursive: true });
 			const journal = path.join(env.tmpDir, "empty.ndjson");
 			fs.writeFileSync(journal, `${day("2026-11-08", {})}\n`);
 			const out = path.join(env.tmpDir, "empty-out.json");

@@ -113,11 +113,7 @@ export function buildWeightsFromJournal(lines, days) {
 	for (const record of newest) {
 		for (const [id, stat] of Object.entries(record.tests ?? {})) {
 			if (!id.startsWith("tests/") || stat?.runs === 0) continue;
-			if (
-				!Number.isFinite(stat?.runs) ||
-				!(stat.runs > 0) ||
-				!Number.isFinite(stat.durationMs)
-			)
+			if (!(stat?.runs > 0) || !Number.isFinite(stat.durationMs))
 				throw new Error(
 					`journal day ${record.day}: ${id} has a non-finite duration`,
 				);
