@@ -141,8 +141,12 @@ export function primitiveUse(
 	file: string,
 	source: string,
 	resolveDir = RUNNER_IMPORT_ROOT,
-): { uses: boolean; unclassified: string[] } {
-	const result = { uses: false, unclassified: [] as string[] };
+): { uses: boolean; unclassified: string[]; locals: string[] } {
+	const result = {
+		uses: false,
+		unclassified: [] as string[],
+		locals: [] as string[],
+	};
 	const lines = source.split("\n");
 	const root = parse(Lang.TypeScript, source).root();
 	const valueLocals = new Set<string>();
@@ -181,6 +185,9 @@ export function primitiveUse(
 				!call.ancestors().some((up) => NON_USE_CONTEXTS.has(String(up.kind())))
 			);
 		});
+	// The value names the file imported: a spawn call handed to one of them has
+	// its outcome read by the primitive, which is what makes a site classified.
+	result.locals = [...valueLocals];
 	return result;
 }
 
@@ -389,6 +396,8 @@ describe("run-outcome primitive ratchet", () => {
 		].join("\n");
 		expect(primitiveUse("fake.ts", source)).toEqual({
 			uses: true,
+			// Only the value the file imported as a named, resolving import.
+			locals: ["finishParsedRun"],
 			unclassified: [
 				'unclassified spelling at fake.ts:2: import * as outcome from "./utils/spawn-outcome.js";',
 				'unclassified spelling at fake.ts:3: export { parseToolRun } from "./utils/tool-failure.js";',
@@ -411,7 +420,8 @@ describe("run-outcome primitive ratchet", () => {
 			'import { type classifyRunOutcome } from "./utils/spawn-outcome.js";\ntype Classify = typeof classifyRunOutcome;',
 			'import { classifyRunOutcome } from "./utils/spawn-outcome.js";\nlet c: typeof classifyRunOutcome;',
 		]) {
-			expect(primitiveUse("fake.ts", source), source).toEqual({
+			const { uses, unclassified } = primitiveUse("fake.ts", source);
+			expect({ uses, unclassified }, source).toEqual({
 				uses: false,
 				unclassified: [],
 			});
@@ -450,7 +460,7 @@ describe("run-outcome primitive ratchet", () => {
 					"const prose = `import * as outcome from './utils/spawn-outcome.js'`;",
 				].join("\n"),
 			),
-		).toEqual({ uses: false, unclassified: [] });
+		).toEqual({ uses: false, unclassified: [], locals: [] });
 	});
 
 	it("does not count a commented-out primitive import", () => {
@@ -505,7 +515,6 @@ describe("shared cascade TTL", () => {
 		expect(declarations).toEqual(["cascade-types.ts"]);
 	});
 });
-
 /* ------------------------------------------------------------------ *
  * Spawn sites outside the dispatch runners (#5308)
  * ------------------------------------------------------------------ */
@@ -528,7 +537,8 @@ const SEAM_MODULE = '"../clients/safe-spawn.js"';
  * through). Neither asked whether a failed child is read as a failure or as an
  * empty result, and no layer enumerated `scripts/` at all (#5308).
  */
-const SPAWN_CENSUS_ROOTS = ["clients/lsp", "scripts"] as const;
+const SCAN_ROOTS = ["clients/lsp", "scripts"] as const;
+type CensusRoot = (typeof SCAN_ROOTS)[number];
 
 /** Modules whose exports start child processes, by basename stem. */
 const CHILD_MODULE_STEMS = new Set(["child_process"]);
@@ -542,10 +552,42 @@ const SPAWN_NAMES: Record<"child" | "safe", ReadonlySet<string>> = {
 	child: new Set<string>(NODE_SPAWN_NAMES),
 	safe: new Set<string>(SEAM_SPAWN_NAMES),
 };
-/** The forms that throw on a nonzero exit or a signal instead of returning. */
+
+/**
+ * The spawn forms whose failed child reaches the caller as a throw (#5308 F3).
+ *
+ * `execSync` and `execFileSync` raise on a nonzero exit, on a signal kill, and
+ * on a spawn error. `execFile` raises only when no callback is handed to it:
+ * the callback form returns a ChildProcess and reports the failure through that
+ * callback, so it is a quiet site and its file has to read the callback's
+ * error. `spawn`, `spawnSync`, `fork`, and the `safeSpawn*` wrappers always
+ * return, so those files have to read the outcome at all.
+ */
 const THROWING_SPAWN_NAMES = new Set(["execFile", "execFileSync", "execSync"]);
-/** Reading any of these means a failure cannot read as an empty result. */
-const OUTCOME_FIELD = /\.(status|exitCode|killed|signal|error|code)\b/;
+
+/** The node kinds that carry a callback a spawn call invokes with its outcome. */
+const CALLBACK_KINDS = new Set([
+	"arrow_function",
+	"function_expression",
+	"function",
+]);
+
+/**
+ * Reading one of these off a spawn result means a failed child cannot read as
+ * an empty one (#5308 F3). `stdout`/`stderr` are deliberately absent: an empty
+ * buffer is what a dead child produces, so reading them proves nothing.
+ */
+const OUTCOME_FIELDS = new Set([
+	"status",
+	"exitCode",
+	"killed",
+	"signal",
+	"error",
+	"code",
+]);
+
+/** `child.on("error" | "exit" | "close", …)` is a detached child's outcome channel. */
+const OUTCOME_EVENTS = new Set(["error", "exit", "close"]);
 
 interface SpawnSite {
 	line: number;
@@ -553,11 +595,30 @@ interface SpawnSite {
 	name: string;
 	/** How the name reaches the call: direct, through an alias, or a hand-off. */
 	via: "call" | "hand-off" | "namespace";
+	/** True when a failed child reaches this caller as a throw (#5308 F3). */
+	throws: boolean;
+	/**
+	 * True when that throw lands in a `catch` that neither rethrows nor exits,
+	 * so the failure becomes whatever that catch produces (#5308 F4).
+	 */
+	swallowed: boolean;
+	/**
+	 * True when the call is handed to a classifier the file imported from the
+	 * primitive, which reads the status, the signal, and the spawn error for it
+	 * (#5308 B3). An open site is one this file still owns.
+	 */
+	classified: boolean;
 }
 
 interface SpawnScan {
 	sites: SpawnSite[];
 	unclassified: string[];
+	/**
+	 * The outcome fields this file reads off ITS OWN spawn results, as
+	 * `field@line` (#5308 F3). Empty means nothing in the file can tell a dead
+	 * child from a clean empty run.
+	 */
+	outcomeReads: string[];
 }
 
 /** The local spelling of a module specifier's quoted source. */
@@ -575,33 +636,57 @@ function sameNode(
 	return a != null && b != null && a.id() === b.id();
 }
 
-/** Which spawn family a module specifier names, or undefined. */
+/**
+ * Which spawn family a module specifier names, or undefined.
+ *
+ * `node:child_process` and a relative `../safe-spawn.js` name the same modules,
+ * so strip the URL scheme and the extension before the stem. A `safe-spawn`
+ * basename inside a longer path that is not a relative specifier — the
+ * `dist/clients/safe-spawn.js` component a bundling script builds — is a file
+ * path, not a module id, and cannot start a child by itself, so only a
+ * `.`-, `/`-, or `file:`-prefixed spelling names the seam module.
+ */
 function spawnModuleFamily(value: string): "child" | "safe" | undefined {
-	// `node:child_process` and a relative `../safe-spawn.js` name the same
-	// modules, so strip the URL scheme and the extension before the stem.
-	const stem = path.posix
-		.basename(value)
-		.replace(/^[A-Za-z][A-Za-z0-9+.-]*:/, "")
-		.replace(/\.[cm]?[jt]s$/, "");
+	const trimmed = value.trim();
+	const schemeless = trimmed.replace(/^[A-Za-z][A-Za-z0-9+.-]*:/, "");
+	const stem = path.posix.basename(schemeless).replace(/\.[cm]?[jt]s$/, "");
 	if (CHILD_MODULE_STEMS.has(stem)) return "child";
-	if (SAFE_SPAWN_MODULE_STEMS.has(stem)) return "safe";
-	return undefined;
+	if (!SAFE_SPAWN_MODULE_STEMS.has(stem)) return undefined;
+	return /^\.{1,2}[\\/]|^[\\/]|^file:/.test(trimmed) ? "safe" : undefined;
 }
 
 /**
- * Every place a file can start a child process (#5308).
- *
- * `safeSpawn` is not one name: a site reaches a child through `spawn`,
- * `spawnSync`, `exec`, `execFile`, `execFileSync`, `execSync`, `fork`, or the
- * `safeSpawn*` wrappers, under any local spelling. The scan resolves the
- * import binding, the alias an injected default binds (`function run({ spawn
- * = spawnSync })`, `const run = deps.spawn ?? spawnSync`), the namespace
- * member (`cp.spawn(...)`), and a hand-off that passes the function into
- * another function in the same file. A spawn value it can see but cannot
- * follow — `require("node:child_process")`, a dynamic `import()`, a re-export
- * from a spawn module, a spawn value stored in an object literal — is an
- * UNCLASSIFIED spelling with its file and line, never a pass.
+ * The module id a literal spells, with a `${}` hole deleted rather than the
+ * literal skipped (#5308 F2): a specifier the file builds at runtime still
+ * names the module through the text the scan can see, and that is exactly the
+ * spelling a fail-closed scan must not walk past.
  */
+function moduleLiteralText(literal: SgNode): string | undefined {
+	const kind = String(literal.kind());
+	if (kind === "string") return literal.text().slice(1, -1);
+	if (kind !== "template_string") return undefined;
+	return literal
+		.text()
+		.slice(1, -1)
+		.replace(/\$\{[\s\S]*?\}/g, "");
+}
+
+/**
+ * Which spawn family a string or template literal names, failing closed on a
+ * specifier the scan cannot resolve (#5308 F2).
+ *
+ * `import("node:" + "child_process")` and `` require(`node:child_proc${"ess"}`) ``
+ * carry only a fragment of the id in any one literal, so a literal that holds
+ * the OS module's name anywhere in it is a spawn-module reference even when no
+ * resolution succeeds. The seam module keeps the exact-specifier rule, because
+ * CI scripts spell its path in build strings that are not module loads.
+ */
+function spawnModuleReference(value: string): "child" | "safe" | undefined {
+	const family = spawnModuleFamily(value);
+	if (family) return family;
+	return value.includes("child_process") ? "child" : undefined;
+}
+
 /** Per-file scan state: the spawn bindings the scanner has resolved. */
 interface SpawnBindings {
 	/** Local name -> the spawn export it reaches. */
@@ -660,34 +745,68 @@ function collectSpawnBindings(
 }
 
 /**
- * Spawn-module spellings the scan cannot open: `require`, a dynamic `import()`,
- * and a re-export. Each is reported, never skipped (#5308).
+ * Every reference to a spawn module the scan did not open, reported with its
+ * line (#5308 F2).
+ *
+ * A static `import … from` is the one form the scan reads bindings from, so it
+ * is the one form this pass passes. Every other spelling that names a spawn
+ * module — `require`, a dynamic `import()` whose specifier may be built at
+ * runtime, `createRequire(...)(…)`, `process.getBuiltinModule`, an
+ * `export … from`, a module id parked in a variable, a template-literal
+ * specifier — is reported, never skipped. `process.getBuiltinModule(…)` and a
+ * `createRequire` result called with the id land in the "loaded by" branch
+ * because their callee is not the module load the scan can follow.
+ *
+ * The one shape this pass does not report is the RELATIVE seam module named in
+ * a position that is not a module load: `createRequire(x)("./safe-spawn.js")`
+ * and the `path.join(repoRoot, "dist", "clients", "safe-spawn.js")` a bundling
+ * script builds are the same string, and the second is not a spawn. A
+ * `child_process` id in ANY position reds, which is the family that can start a
+ * child the scan cannot attribute. No census file loads the seam through a call
+ * today (`grep -rn "createRequire" scripts clients/lsp` answers six module-load
+ * sites, none of them a spawn module).
  */
-function reportOpaqueSpawnModules(
+function reportUnopenedSpawnModules(
 	root: SgNode,
 	report: (node: SgNode, what: string) => void,
 ): void {
-	for (const call of root.findAll({ rule: { kind: "call_expression" } })) {
-		const args = call.children().find((child) => child.kind() === "arguments");
-		const argument = args?.namedChildren()[0];
-		if (argument?.kind() !== "string") continue;
-		if (!spawnModuleFamily(specifierValue(argument))) continue;
-		// `require` is an ordinary identifier; the dynamic `import()` keyword is
-		// its own node kind.
-		const callee = call.field("function");
-		if (callee?.kind() === "identifier" && callee.text() === "require")
-			report(call, "require of a spawn module");
-		else if (callee?.kind() === "import" || callee?.text() === "import")
-			report(call, "dynamic import of a spawn module");
-	}
-	for (const statement of root.findAll({
-		rule: { kind: "export_statement" },
+	for (const literal of root.findAll({
+		rule: { any: [{ kind: "string" }, { kind: "template_string" }] },
 	})) {
-		const literal = statement
-			.children()
-			.find((child) => child.kind() === "string");
-		if (literal && spawnModuleFamily(specifierValue(literal)))
-			report(statement, "re-export from a spawn module");
+		const value = moduleLiteralText(literal);
+		if (value === undefined || spawnModuleReference(value) === undefined)
+			continue;
+		// A specifier built by concatenation lives under a binary expression; climb
+		// it so the report names the load the parts build, not the `+`.
+		let holder: SgNode = literal;
+		while (String(holder.parent()?.kind()) === "binary_expression")
+			holder = holder.parent() as SgNode;
+		const parent = holder.parent();
+		const parentKind = String(parent?.kind());
+		// The static import is the form collectSpawnBindings follows; a default
+		// import of it is reported there, where the clause says so.
+		if (parentKind === "import_statement") continue;
+		if (parentKind === "export_statement") {
+			report(literal, "re-export from a spawn module");
+			continue;
+		}
+		if (parentKind === "arguments") {
+			const call = parent?.parent();
+			const callee = call?.field("function");
+			const calleeText = callee ? callee.text().replace(/\s+/g, " ") : "?";
+			if (callee?.kind() === "identifier" && callee.text() === "require") {
+				report(literal, "require of a spawn module");
+			} else if (callee?.kind() === "import" || calleeText === "import") {
+				report(literal, "dynamic import of a spawn module");
+			} else {
+				report(
+					literal,
+					`spawn module loaded by ${calleeText}(...), which the scan cannot follow`,
+				);
+			}
+			continue;
+		}
+		report(literal, `spawn module id held in a "${parentKind}" position`);
 	}
 }
 
@@ -781,6 +900,62 @@ function isBindingPosition(node: SgNode): boolean {
 }
 
 /**
+ * Whether this call's failed child reaches the caller as a throw (#5308 F3).
+ *
+ * `execFile` with a callback argument is the async form: the child is returned
+ * and the failure arrives as the callback's `error`, so the site is quiet and
+ * the file is on the hook for reading it.
+ */
+function throwsOnFailure(name: string, call: SgNode): boolean {
+	if (!THROWING_SPAWN_NAMES.has(name)) return false;
+	const args = call.field("arguments");
+	return !(args?.namedChildren() ?? []).some((child) =>
+		CALLBACK_KINDS.has(String(child.kind())),
+	);
+}
+
+/**
+ * Does a throwing call land in a `catch` that neither rethrows nor exits? Then
+ * the failed child does not abort anything: the catch body's own value is what
+ * the caller continues with, and an empty list is the usual one. This is the
+ * shape #5308's defect title names — a nonzero exit read as an empty result —
+ * reached through an exec call rather than through an unread status.
+ */
+function failureCaughtNotRethrown(call: SgNode): boolean {
+	let tryStatement: SgNode | undefined;
+	for (const up of call.ancestors()) {
+		if (String(up.kind()) === "try_statement") {
+			tryStatement = up;
+			break;
+		}
+	}
+	const handler = tryStatement?.field("handler");
+	if (!handler) return false;
+	return !/\bthrow\b|\bprocess\.exit\b|\bexitProcess\b/.test(handler.text());
+}
+
+/**
+ * Whether the call sits inside a call to a classifier the file imported from
+ * the primitive (#5308 B3). A classified site's outcome is read by
+ * `classifyRunOutcome`/`finishParsedRun`, so the file no longer owns the
+ * question of whether its child failed.
+ */
+function classifiedBy(
+	call: SgNode,
+	classifierLocals: ReadonlySet<string>,
+): boolean {
+	if (classifierLocals.size === 0) return false;
+	for (const up of call.ancestors()) {
+		if (String(up.kind()) !== "call_expression") continue;
+		const callee = up.field("function");
+		if (!callee) continue;
+		if (callee.kind() === "identifier" && classifierLocals.has(callee.text()))
+			return true;
+	}
+	return false;
+}
+
+/**
  * Every place a file can start a child process (#5308).
  *
  * `safeSpawn` is not one name: a site reaches a child through `spawn`,
@@ -789,12 +964,24 @@ function isBindingPosition(node: SgNode): boolean {
  * import binding, the alias an injected default binds (`function run({ spawn
  * = spawnSync })`, `const run = deps.spawn ?? spawnSync`), the namespace
  * member (`cp.spawn(...)`), and a hand-off that passes the function to
- * another function in the same file. A spawn value it can see but cannot
- * follow — stored in an object literal or an array, returned, or reached
- * through `require`, a dynamic `import()`, or a re-export — is an
- * UNCLASSIFIED spelling with its file and line, never a pass.
+ * another function in the same file.
+ *
+ * It fails closed on what it cannot follow (#5308 F2): a spawn-module spelling
+ * (`require`, a dynamic `import()`, `createRequire`, a module id held in a
+ * variable, a re-export), and a spawn namespace or bound value reaching a child
+ * through a position that starts nothing the scan can attribute — destructured
+ * (`const { spawnSync } = cp`), rebound (`const cp2 = cp`), computed
+ * (`cp["spawnSync"](…)`), extracted without a call (`const f = cp.spawn`), or
+ * stored in an object (`{ cp }`). Each is a report with its file and line.
+ *
+ * `classifierLocals` are the value names the file imported from the primitive;
+ * a spawn call handed to one is classified rather than open.
  */
-function spawnOutcomeScan(file: string, source: string): SpawnScan {
+function spawnOutcomeScan(
+	file: string,
+	source: string,
+	classifierLocals: ReadonlySet<string> = new Set(),
+): SpawnScan {
 	const lang: Lang = /\.m?ts$/.test(file) ? Lang.TypeScript : Lang.JavaScript;
 	const root = parse(lang, source).root();
 	const lines = source.split("\n");
@@ -807,15 +994,57 @@ function spawnOutcomeScan(file: string, source: string): SpawnScan {
 		);
 	};
 	const bindings = collectSpawnBindings(root, report);
-	reportOpaqueSpawnModules(root, report);
+	reportUnopenedSpawnModules(root, report);
 	closeSpawnAliasLoop(root, bindings.spawnable);
 
-	const sites: SpawnSite[] = [];
-	for (const id of root.findAll({ rule: { kind: "identifier" } })) {
+	const references = spawnSitesOf(root, bindings, report);
+	return {
+		sites: references.map((site) => ({
+			line: site.call.range().start.line + 1,
+			name: site.name,
+			via: site.via,
+			throws: throwsOnFailure(site.name, site.call),
+			swallowed:
+				throwsOnFailure(site.name, site.call) &&
+				failureCaughtNotRethrown(site.call),
+			classified: classifiedBy(site.call, classifierLocals),
+		})),
+		unclassified,
+		outcomeReads: outcomeReadsOf(
+			root,
+			references.map((site) => site.call),
+		),
+	};
+}
+
+/** A reference to a spawn binding, resolved to the child it starts. */
+interface SpawnSiteRef {
+	call: SgNode;
+	name: string;
+	via: SpawnSite["via"];
+}
+
+/**
+ * Resolve every reference to a spawn binding in the file into the child process
+ * it starts: a direct call, a hand-off to a callee of this file, or a namespace
+ * member call. A reference the scan cannot place is reported, so it reaches the
+ * census as an unclassified spelling rather than a site it did not see (#5308 F2).
+ */
+function spawnSitesOf(
+	root: SgNode,
+	bindings: SpawnBindings,
+	report: (node: SgNode, what: string) => void,
+): SpawnSiteRef[] {
+	const found: SpawnSiteRef[] = [];
+	for (const id of root.findAll({
+		rule: {
+			any: [{ kind: "identifier" }, { kind: "shorthand_property_identifier" }],
+		},
+	})) {
 		const text = id.text();
-		const bound = bindings.spawnable.get(text);
-		const isNamespace = bindings.namespaces.has(text);
-		if (!bound && !isNamespace) continue;
+		const reference = spawnReferenceTo(text, bindings);
+		if (!reference) continue;
+		const isNamespace = reference.kind === "namespace";
 		const parent = id.parent();
 		const kind = String(parent?.kind());
 		// The import declaration itself, and a `typeof safeSpawnAsync` type
@@ -824,74 +1053,425 @@ function spawnOutcomeScan(file: string, source: string): SpawnScan {
 		// parameter is an `identifier` directly under `formal_parameters`, so a
 		// function's `exec` parameter is a fresh local, not the `exec` another
 		// function defaults to `execFileSync`. Only its CALL counts.
-		if (
-			kind === "import_specifier" ||
-			kind === "import_statement" ||
-			kind === "formal_parameters" ||
-			kind === "type_query"
-		)
-			continue;
-		if (isBindingPosition(id)) continue;
-		const namespaceSite = namespaceMemberCall(id, isNamespace, report);
-		if (namespaceSite !== undefined) {
-			if (namespaceSite) sites.push(namespaceSite);
+		if (NON_SPAWN_REFERENCE_KINDS.has(kind)) continue;
+		if (isBindingPosition(id)) {
+			// The alias loop resolves a spawn VALUE. A namespace handed to a new
+			// name or destructured is not one: `{ spawnSync } = cp` and
+			// `const cp2 = cp` reach children no binding of this scan owns.
+			if (isNamespace)
+				report(id, `spawn namespace ${text} rebound without a spawn call`);
 			continue;
 		}
-		if (!bound) {
-			report(id, "spawn namespace import outside a spawn call");
+		if (isNamespace) {
+			const site = namespaceSpawnCall(id, report);
+			if (site)
+				found.push({ call: site.call, name: site.name, via: "namespace" });
 			continue;
 		}
 		if (kind === "call_expression" && sameNode(parent?.field("function"), id)) {
-			sites.push({ line: id.range().start.line + 1, name: bound, via: "call" });
+			found.push({ call: parent as SgNode, name: reference.name, via: "call" });
 			continue;
 		}
-		if (kind === "arguments") {
-			// The function is handed to a callee that invokes it in this file.
-			sites.push({
-				line: id.range().start.line + 1,
-				name: bound,
-				via: "hand-off",
-			});
+		// The function is handed to a callee that invokes it in this file: as a
+		// positional argument, or packed in an options object literal that a call
+		// of this file receives (`watchOpenPrs({ ghExec, gitExec })`).
+		const handOff = handOffCall(id, kind);
+		if (handOff && handOff.kind() === "call_expression") {
+			found.push({ call: handOff, name: reference.name, via: "hand-off" });
+			continue;
+		}
+		if (kind === "export_specifier") {
+			report(id, "spawn value re-exported by name");
 			continue;
 		}
 		report(id, `spawn value reached through a "${kind}" position`);
 	}
-	return { sites, unclassified };
+	return found;
 }
 
 /**
- * Classify a namespace-import reference (`cp.spawn(...)`). Returns a site,
- * `undefined` when the node is not a namespace member at all, or `null` when
- * it is one the scan has reported.
+ * Classify a namespace-import reference (`cp.spawn(...)`), reporting every use
+ * of the namespace the scan cannot turn into a site (#5308 F2): a computed
+ * member, a member extracted without a call, and any other use of the namespace
+ * object all reach a child the scan would otherwise never see.
  */
-function namespaceMemberCall(
+function namespaceSpawnCall(
 	id: SgNode,
-	isNamespace: boolean,
 	report: (node: SgNode, what: string) => void,
-): SpawnSite | undefined | null {
-	if (!isNamespace) return undefined;
+): { call: SgNode; name: string } | undefined {
 	const member = id.parent();
 	if (
 		!member ||
 		String(member.kind()) !== "member_expression" ||
 		!sameNode(member.field("object"), id)
-	)
-		return null;
-	const call = member.parent();
+	) {
+		report(
+			id,
+			String(member?.kind()) === "subscript_expression"
+				? "spawn namespace member reached through a computed subscript"
+				: `spawn namespace ${id.text()} used outside a spawn call`,
+		);
+		return undefined;
+	}
 	const methodName = member.field("property")?.text() ?? "";
+	const call = member.parent();
 	if (
-		call?.kind() !== "call_expression" ||
+		!call ||
+		String(call.kind()) !== "call_expression" ||
 		!sameNode(call.field("function"), member)
 	) {
-		report(id, "namespace spawn import outside a call");
-		return null;
+		report(id, `namespace spawn member ${methodName} extracted without a call`);
+		return undefined;
 	}
-	const line = call.range().start.line + 1;
 	if (!SPAWN_NAMES.child.has(methodName)) {
 		report(id, `namespace member call of "${methodName}"`);
-		return null;
+		return undefined;
 	}
-	return { line, name: methodName, via: "namespace" };
+	return { call, name: methodName };
+}
+
+/** How a reference names a child-process primitive: a bound call, or a namespace. */
+type SpawnReference = { kind: "bound"; name: string } | { kind: "namespace" };
+
+/** What a local spelling reaches: a spawn function, a spawn namespace, or nothing. */
+function spawnReferenceTo(
+	text: string,
+	bindings: SpawnBindings,
+): SpawnReference | undefined {
+	if (bindings.namespaces.has(text)) return { kind: "namespace" };
+	const name = bindings.spawnable.get(text);
+	return name === undefined ? undefined : { kind: "bound", name };
+}
+
+/**
+ * Positions where a spawn name or bound value binds or names a type instead of
+ * starting a child process.
+ */
+const NON_SPAWN_REFERENCE_KINDS = new Set([
+	"import_specifier",
+	"namespace_import",
+	"import_statement",
+	"formal_parameters",
+	"type_query",
+]);
+
+/**
+ * The call a spawn value is handed to: as a positional argument, or packed in an
+ * object literal that some call of the file receives. Undefined when the
+ * position holds no such call, which is the report case.
+ */
+function handOffCall(id: SgNode, parentKind: string): SgNode | undefined {
+	if (parentKind === "arguments") return id.parent()?.parent() ?? undefined;
+	if (parentKind === "object" || parentKind === "pair")
+		return nearestCallAncestor(id);
+	return undefined;
+}
+
+/**
+ * The nearest enclosing call, for a spawn value handed through an object bag.
+ */
+function nearestCallAncestor(node: SgNode): SgNode | undefined {
+	for (const up of node.ancestors()) {
+		if (String(up.kind()) === "call_expression") return up;
+	}
+	return undefined;
+}
+
+/**
+ * The node a binding or a member read sees in place of a call.
+ *
+ * `await`, parens, and the branches of a conditional or a `??` fallback all
+ * stand for the same call to the code that reads them, so a result bound out of
+ * one of them (`const child = ready ? spawn(a) : spawn(b)`) is still that
+ * call's result.
+ */
+function wrappedCall(call: SgNode): SgNode {
+	let node = call;
+	for (;;) {
+		const parent = node.parent();
+		const kind = String(parent?.kind());
+		if (kind === "await_expression" || kind === "parenthesized_expression") {
+			node = parent as SgNode;
+			continue;
+		}
+		if (kind === "ternary_expression") {
+			node = parent as SgNode;
+			continue;
+		}
+		if (kind === "binary_expression" && hasFallbackOperator(parent as SgNode)) {
+			node = parent as SgNode;
+			continue;
+		}
+		return node;
+	}
+}
+
+/** Whether a binary expression combines its operands with `??` or `||`. */
+function hasFallbackOperator(binary: SgNode): boolean {
+	return binary
+		.children()
+		.some((child) => ["??", "||"].includes(String(child.kind())));
+}
+
+/** Whether any call below this node is one of the tracked spawn calls. */
+function subtreeHasCallId(node: SgNode, callIds: ReadonlySet<number>): boolean {
+	if (callIds.has(node.id())) return true;
+	return node.children().some((child) => subtreeHasCallId(child, callIds));
+}
+
+/** The local name a function is reachable by, for a helper that returns a result. */
+function functionBindingName(fn: SgNode): string | undefined {
+	if (fn.kind() === "function_declaration") return fn.field("name")?.text();
+	const declarator = fn.parent();
+	if (
+		declarator &&
+		String(declarator.kind()) === "variable_declarator" &&
+		sameNode(declarator.field("value"), fn)
+	)
+		return declarator.field("name")?.text();
+	return undefined;
+}
+
+/**
+ * The file-local functions that hand a spawn result back to their caller.
+ *
+ * `const result = spawnAstGrep(args, root)` then `if (result.error) throw` reads
+ * a child's outcome as surely as the `safeSpawn` call inside the helper does, so
+ * a function that returns a spawn result — or returns the result of another such
+ * helper — makes its OWN calls results, and the reads on those count (#5308 F3).
+ * Without this, a script that hides its spawn behind one wrapper of its own reads
+ * blind even though it aborts on a nonzero exit.
+ */
+function spawnResultHelpers(
+	root: SgNode,
+	callIds: ReadonlySet<number>,
+): Set<string> {
+	const functions = new Map<string, SgNode>();
+	for (const fn of root.findAll({
+		rule: {
+			any: [
+				{ kind: "function_declaration" },
+				{ kind: "function_expression" },
+				{ kind: "arrow_function" },
+				{ kind: "generator_function_declaration" },
+				{ kind: "method_definition" },
+			],
+		},
+	})) {
+		const name = functionBindingName(fn);
+		if (name) functions.set(name, fn);
+	}
+	const producers = new Set<string>();
+	for (let round = 0; round < 4; round++) {
+		let added = false;
+		for (const [name, fn] of functions) {
+			if (producers.has(name)) continue;
+			for (const ret of fn.findAll({ rule: { kind: "return_statement" } })) {
+				const value = ret.field("argument") ?? ret.namedChildren()[0];
+				if (!value) continue;
+				const returned =
+					callIds.has(wrappedCall(value).id()) ||
+					subtreeHasCallId(value, callIds);
+				const calleeName =
+					wrappedCall(value).kind() === "call_expression"
+						? wrappedCall(value).field("function")?.text()
+						: undefined;
+				if (returned || (calleeName && producers.has(calleeName))) {
+					producers.add(name);
+					added = true;
+					break;
+				}
+			}
+		}
+		if (!added) break;
+	}
+	return producers;
+}
+
+/**
+ * Every node whose value is a spawn result: the spawn calls themselves plus the
+ * calls of this file's result-returning helpers.
+ */
+function resultNodes(root: SgNode, spawnCalls: readonly SgNode[]): SgNode[] {
+	const producers = spawnResultHelpers(
+		root,
+		new Set(spawnCalls.map((call) => call.id())),
+	);
+	if (producers.size === 0) return [...spawnCalls];
+	const extra: SgNode[] = [];
+	for (const call of root.findAll({ rule: { kind: "call_expression" } })) {
+		const callee = call.field("function");
+		if (callee?.kind() === "identifier" && producers.has(callee.text()))
+			extra.push(call);
+	}
+	return [...spawnCalls, ...extra];
+}
+
+/** The name a call result is bound to, or the pattern it is destructured into. */
+function bindingTargetOf(call: SgNode): SgNode | undefined {
+	const wrapped = wrappedCall(call);
+	const declarator = wrapped.parent();
+	if (!declarator) return undefined;
+	if (
+		String(declarator.kind()) === "variable_declarator" &&
+		sameNode(declarator.field("value"), wrapped)
+	)
+		return declarator.field("name") ?? undefined;
+	if (
+		String(declarator.kind()) === "assignment_expression" &&
+		sameNode(declarator.field("right"), wrapped)
+	)
+		return declarator.field("left") ?? undefined;
+	return undefined;
+}
+
+/** The key a destructured pattern entry reads (`{ status }` and `{ status: s }`). */
+function destructuredKey(entry: SgNode): string | undefined {
+	const kind = String(entry.kind());
+	if (kind === "shorthand_property_identifier_pattern") return entry.text();
+	if (kind === "pair_pattern") return entry.field("left")?.text();
+	return undefined;
+}
+
+/** The field a member read names, for `r.status`, `r?.status`, and `r["code"]`. */
+function outcomeFieldOf(member: SgNode): string | undefined {
+	if (member.kind() === "member_expression")
+		return member.field("property")?.text();
+	if (member.kind() === "subscript_expression") {
+		const index = member.field("index");
+		return index ? literalContent(index) : undefined;
+	}
+	return undefined;
+}
+
+/** A string node's contents, quotes stripped. */
+function literalContent(node: SgNode | undefined): string | undefined {
+	return node !== undefined && String(node.kind()) === "string"
+		? node.text().slice(1, -1)
+		: undefined;
+}
+
+/** A callback parameter's name, without its type annotation. */
+function parameterNames(callback: SgNode): string[] {
+	const parameters = callback.field("parameters");
+	return (parameters?.namedChildren() ?? []).map(
+		(parameter) => parameter.field("pattern")?.text() ?? parameter.text(),
+	);
+}
+/**
+ * The names this file's spawn results are reachable under: the locals (or
+ * `this.child`-style members) bound from a result, and the parameters of the
+ * callbacks a spawn call was handed. Matched by text, which is how a member read
+ * on `this.child` reaches the `this.child = spawn(...)` that made it.
+ */
+function resultValueNames(results: readonly SgNode[]): Set<string> {
+	const names = new Set<string>();
+	for (const call of results) {
+		// An async spawn hands its outcome to the callback it was given.
+		const args = call.field("arguments");
+		for (const argument of args?.namedChildren() ?? []) {
+			if (!CALLBACK_KINDS.has(String(argument.kind()))) continue;
+			for (const name of parameterNames(argument)) names.add(name);
+		}
+		const target = bindingTargetOf(call);
+		if (target && String(target.kind()) !== "object_pattern")
+			names.add(target.text());
+	}
+	return names;
+}
+
+/** The outcome fields pulled straight out of a destructured spawn result. */
+function destructuredOutcomeFields(results: readonly SgNode[]): string[] {
+	const reads: string[] = [];
+	for (const call of results) {
+		const target = bindingTargetOf(call);
+		if (!target || String(target.kind()) !== "object_pattern") continue;
+		for (const entry of target.namedChildren()) {
+			const key = destructuredKey(entry);
+			if (key && OUTCOME_FIELDS.has(key))
+				reads.push(`${key}@${entry.range().start.line + 1}`);
+		}
+	}
+	return reads;
+}
+
+/** `child.on("error" | "exit" | "close", …)`: a detached child's outcome channel. */
+function outcomeListenerOf(member: SgNode): string | undefined {
+	const call = member.parent();
+	if (
+		!call ||
+		String(call.kind()) !== "call_expression" ||
+		!sameNode(call.field("function"), member)
+	)
+		return undefined;
+	const method = member.field("property")?.text();
+	if (method !== "on" && method !== "once") return undefined;
+	const event = literalContent(call.field("arguments")?.namedChildren()[0]);
+	return event && OUTCOME_EVENTS.has(event) ? `on:${event}` : undefined;
+}
+
+/**
+ * The outcome fields this file reads off ITS OWN spawn results (#5308 F3).
+ *
+ * `\.error` in the source is not evidence. `console.error(...)` names the
+ * console and `process.exitCode` names the process, so neither tells a caller
+ * anything about a child; reading them is what let a fire-and-forget child pass
+ * as a read outcome. A read counts only when its object is
+ *  - a spawn call (or that call `await`ed, parenthesised, or branched on),
+ *  - a local or member bound from one, including a this-file helper that
+ *    returns one (`const result = spawnAstGrep(args)` then `result.status`),
+ *  - the parameter of a callback the spawn call was handed,
+ *  - or the target of `child.on("error" | "exit" | "close", …)`.
+ * A destructured result counts when the field it pulls is an outcome field.
+ *
+ * The verdict is per file and names are matched by text, so a file that shadows
+ * a result name in another scope can read as non-blind; the `[blind]` claim on
+ * its baseline row is what pins the verdict either way.
+ */
+function outcomeReadsOf(root: SgNode, spawnCalls: readonly SgNode[]): string[] {
+	const results = resultNodes(root, spawnCalls);
+	const callIds = new Set<number>();
+	for (const call of results) {
+		callIds.add(call.id());
+		callIds.add(wrappedCall(call).id());
+	}
+	const names = resultValueNames(results);
+	const reads = destructuredOutcomeFields(results);
+	for (const member of root.findAll({
+		rule: {
+			any: [{ kind: "member_expression" }, { kind: "subscript_expression" }],
+		},
+	})) {
+		const object = member.field("object");
+		if (!object || !(callIds.has(object.id()) || names.has(object.text())))
+			continue;
+		const field = outcomeFieldOf(member);
+		if (field && OUTCOME_FIELDS.has(field)) {
+			reads.push(`${field}@${member.range().start.line + 1}`);
+			continue;
+		}
+		const listener = outcomeListenerOf(member);
+		if (listener) reads.push(`${listener}@${member.range().start.line + 1}`);
+	}
+	return [...new Set(reads)].sort();
+}
+
+/** The open sites of a row: the ones the file still owns (#5308 B3). */
+function openSites(row: CensusRow): SpawnSite[] {
+	return row.scan.sites.filter((site) => !site.classified);
+}
+
+/**
+ * The open sites of a file that cannot see a failed child (#5308 F3): no open
+ * site throws, and nothing in the file reads an outcome field off its own spawn
+ * results, so a dead child looks exactly like a clean empty run. A throw that a
+ * `catch` swallows is the same result by another road, and the scan names it on
+ * the site (`[swallowed]`, #5308 F4). A quiet site's sentinel catch (`null`,
+ * `ok: false`) is the channel left unjudged; the blind row describes it.
+ */
+function blindOpenSites(scan: SpawnScan): SpawnSite[] {
+	const quiet = scan.sites.filter((site) => !site.classified && !site.throws);
+	return quiet.length > 0 && scan.outcomeReads.length === 0 ? quiet : [];
 }
 
 /** Every census-root source file, repo-relative, compiled twins excluded. */
@@ -908,235 +1488,400 @@ function censusSourceFiles(rootRelative: string): string[] {
 
 interface CensusRow {
 	file: string;
-	dir: string;
-	source: string;
-	sites: SpawnSite[];
-	unclassified: string[];
+	scan: SpawnScan;
 	usesPrimitive: boolean;
 }
 
-let censusCache: CensusRow[] | undefined;
-
-/** The census is a read-only scan of the tree, so one walk per worker fork. */
-function census(): CensusRow[] {
-	censusCache ??= censusRows();
-	return censusCache;
+/** One census row from the real detectors: used by the census and by plants. */
+function scanCensusRow(file: string, source: string): CensusRow {
+	const use = primitiveUse(file, source, path.posix.dirname(file));
+	const scan = spawnOutcomeScan(file, source, new Set(use.locals));
+	// A spawn-outcome spelling this file reaches in a form the scan cannot
+	// classify is a finding of the same census, not of a separate one.
+	scan.unclassified.push(...use.unclassified);
+	return { file, scan, usesPrimitive: use.uses };
 }
 
-function censusRows(): CensusRow[] {
+const censusCache = new Map<CensusRoot, CensusRow[]>();
+
+/** The census is a read-only scan of the tree, so one walk per root per fork. */
+function census(root: CensusRoot): CensusRow[] {
+	const cached = censusCache.get(root);
+	if (cached) return cached;
 	const rows: CensusRow[] = [];
-	for (const root of SPAWN_CENSUS_ROOTS) {
-		for (const file of censusSourceFiles(root)) {
-			const dir = path.posix.dirname(file);
-			const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
-			const scan = spawnOutcomeScan(file, source);
-			const use = primitiveUse(file, source, dir);
-			if (scan.sites.length === 0 && scan.unclassified.length === 0) continue;
-			rows.push({
-				file,
-				dir,
-				source,
-				sites: scan.sites,
-				unclassified: scan.unclassified,
-				usesPrimitive: use.uses,
-			});
+	for (const file of censusSourceFiles(root)) {
+		const row = scanCensusRow(
+			file,
+			fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
+		);
+		if (row.scan.sites.length === 0 && row.scan.unclassified.length === 0)
+			continue;
+		rows.push(row);
+	}
+	const sorted = rows.sort((a, b) => a.file.localeCompare(b.file));
+	censusCache.set(root, sorted);
+	return sorted;
+}
+
+/** Every census row, both roots, in file order. */
+let censusRows: CensusRow[] | undefined;
+
+/** Every census row, scanned once: the tree is static for the run. */
+function allCensusRows(): CensusRow[] {
+	censusRows ??= SCAN_ROOTS.flatMap((root) => census(root));
+	return censusRows;
+}
+
+/** What a baseline row claims about its file (#5308 B1, B3). */
+interface RowClaim {
+	openSites: number | undefined;
+	blind: boolean;
+	swallowed: boolean;
+}
+
+/**
+ * The two claims a row makes about the file it excuses. `[open-sites:N]` is
+ * required in every row; `[blind]` states that the file has a site that does not
+ * throw and reads no outcome field, so a dead child reads as a clean empty run.
+ */
+function rowClaim(reason: string): RowClaim {
+	const pinned = /\[open-sites:(\d+)\]/.exec(reason);
+	return {
+		openSites: pinned ? Number(pinned[1]) : undefined,
+		blind: /\[blind\]/.test(reason),
+		swallowed: /\[swallowed\]/.test(reason),
+	};
+}
+
+/**
+ * Rows whose pinned site count disagrees with the scan (#5308 B1).
+ *
+ * A new site — however it is written, and including one that reads an outcome
+ * field elsewhere in the file — moves the count, so the row cannot be left
+ * behind. A file with no baseline row is not a problem here: `auditRegistry`
+ * reports an unaccounted flagged file.
+ */
+function siteCountMismatches(
+	rows: CensusRow[],
+	baseline: Record<string, string>,
+): string[] {
+	const problems: string[] = [];
+	for (const row of rows) {
+		const reason = baseline[row.file];
+		if (reason === undefined) continue;
+		const claim = rowClaim(reason);
+		const sites = openSites(row);
+		if (claim.openSites === undefined) {
+			problems.push(
+				`${row.file}: baseline row pins no [open-sites:N]; the scan finds ` +
+					`${sites.length} open site(s)`,
+			);
+		} else if (claim.openSites !== sites.length) {
+			problems.push(
+				`${row.file}: baseline row pins [open-sites:${claim.openSites}], the ` +
+					`scan finds ${sites.length} open site(s): ` +
+					`${sites.map((site) => `${site.name}@${site.line}`).join(", ")}`,
+			);
 		}
 	}
-	return rows.sort((a, b) => a.file.localeCompare(b.file));
+	return problems;
 }
 
 /**
- * Every census site outside the dispatch runners that does not route through
- * `classifyRunOutcome`, with why its failure still cannot read as clean.
- * `auditRegistry` keeps the table honest: a new spawn file that is neither
- * migrated nor listed fails, and a row whose file has migrated or gone away
- * fails as a stale exemption.
+ * Rows whose `[blind]` claim disagrees with the scan, in either direction
+ * (#5308 F3). A file that cannot see a failed child must say so, and a row that
+ * still claims blindness for a file that now reads its outcome is stale.
  */
-const OUT_OF_TREE_SPAWN_BASELINE: Record<string, string> = {
-	// clients/lsp: 4 spawn-capable files, 10 sites. Each row is the population
-	// #5308 brought in from outside the dispatch runners: none routes through
-	// the primitive yet, so each states the channel through which a failed
-	// child still reaches the file.
-	"clients/lsp/client.ts":
-		"the Windows taskkill tree-killer: reads exitCode/signal/killed/status on the killer, never treats absence of a result as a kill; #1737",
-	"clients/lsp/jvm-runtime.ts":
-		"java locator: reads error/status on safeSpawnAsync, so a failed locator is not a usable JVM; #1737",
-	"clients/lsp/launch.ts":
-		"probes each candidate server and reads status/error/killed/exitCode before choosing one, so a dead probe is not a working server; #1737",
-	"clients/lsp/server.ts":
-		"reads code/error on each safeSpawnAsync outcome before it treats an update as applied; #1737",
-	// scripts: 73 spawn-capable files, 142 sites. Same population and same
-	// requirement as the `clients/lsp` rows above.
-	"scripts/audit-prod-deps.mjs":
-		"reads code,error,exitCode on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/backfill-github-releases.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/backfill-release-thanks.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/bench-snapshot-persist.mjs":
-		"reads status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/benchmark-biome.ts":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/build-dist-tsc.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/bundle-dist.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/capture-runner-fixtures.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/capture-runner-output.mjs":
-		"reads error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/check-ci-job-p90.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/check-close-keywords.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 (its catch returns a sentinel or an ok:false pair at lines 155,170,299)",
-	"scripts/check-extensions.mjs":
-		"execSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/check-grammar-corpus.mjs":
-		"reads error,exitCode,signal,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/check-grammar-load.mjs":
-		"reads error,signal,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/check-hot-path-latency.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/check-pr-body.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/check-tla-models.mjs":
-		"reads error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/ci-changed-files.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/ci-shuffle-changed-tests.mjs":
-		"reads code,error,exitCode,signal,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/ci-test-diff.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/ci-verdict.mjs":
-		"reads code,error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/compat-contracts.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/compat-smoke-behavioral.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/download-test-history-artifacts.mjs":
-		"reads error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/guard-bash-probe.mjs":
-		"reads error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/install-selftest.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/lane-check.mjs":
-		"reads error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/lib/astgrep-self-scan.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/lib/git-fixture-env.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/lib/knip-runner.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/lib/knip-sibling-purge.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/lib/lockfile-completeness.mjs":
-		"reads status/error and maps ETIMEDOUT to its own failure reason, so the lockfile probe cannot report complete on a dead child; #1737",
-	"scripts/lib/mcp-stdio-client.mjs":
-		"reads error on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/lib/mutation-test-selection.mjs":
-		"reads status and turns a nonzero probe into an explicit { unknown } reason, so an unrunnable probe is not a clean selection; #1737",
-	"scripts/lib/process-scan.mjs":
-		"reads code on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 (its catch returns a sentinel or an ok:false pair at line 754)",
-	"scripts/lib/server-provenance.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 (its catch returns a sentinel or an ok:false pair at line 71)",
-	"scripts/lib/test-history-selection.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/lib/test-runner-smoke.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/lint-js-advisory.mjs":
-		"reads status/exitCode/error on the advisory lint run, so a lint child that dies is not a clean lint; #1737",
-	"scripts/mutate.mjs":
-		"reads code,error,exitCode,signal,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/notify-clean-signal-drift.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/notify-install-smoke-drift.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/notify-tool-smoke-red.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/npm-retry.mjs":
-		"reads code,error,exitCode on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/playground-chrome.mjs":
-		"reads error on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 (its catch returns a sentinel or an ok:false pair at lines 86,132,152,264)",
-	"scripts/playground-verify-rule.mjs":
-		"reads code,error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/pr-worktree.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/pre-push-targeted-tests.mjs":
-		"reads code,error,exitCode,signal,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 (its catch returns a sentinel or an ok:false pair at line 902)",
-	"scripts/probe-pi-host-tiers.mjs":
-		"reads code,error,exitCode,signal,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/pr-preflight.mjs":
-		"maps a check status to pass/inconclusive/FAIL and a missing status to 1, so a child that dies fails the preflight; #1737",
-	"scripts/prune-actions-cache.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/prune-agent-worktrees.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 (its catch returns a sentinel or an ok:false pair at line 766)",
-	"scripts/red-on-base.mjs":
-		"reads error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/regen-test-baseline.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/release-qa.mjs":
-		"reads error,exitCode,killed,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/resolve-newest-in-range-host.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/rpc-load-check.mjs":
-		"reads code,error,signal on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/run-all-ts-rules-posthog.mjs":
-		"execSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 (its catch returns a sentinel or an ok:false pair at line 43)",
-	"scripts/run-harness.mjs":
-		"reads error,exitCode,signal,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/run-ts-rules-pi-lens.mjs":
-		"execSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/setup-git-hooks.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/smoke-availability-lifecycle.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/smoke-gitleaks-scratch-exclusion.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 (its catch returns a sentinel or an ok:false pair at line 102)",
-	"scripts/smoke-psscriptanalyzer-classification.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/smoke-tools.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 (its catch returns a sentinel or an ok:false pair at lines 229,2126,2148)",
-	"scripts/strictness-report.mjs":
-		"reads error,exitCode,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/stryker-diff.mjs":
-		"reads error,status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 (its catch returns a sentinel or an ok:false pair at line 271)",
-	"scripts/trace-validate-session-lifecycle.mjs":
-		"reads status on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/update-contributors.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/upsert-tracking-issue.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-	"scripts/with-memory-watch.mjs":
-		"reads code on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/with-test-lock.mjs":
-		"reads error,exitCode,killed on the spawn outcome, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737",
-	"scripts/worktree-remove.mjs":
-		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737",
-};
-
-/** The outcome fields a file reads, from its code (comments excluded). */
-function outcomeFieldsRead(source: string): string[] {
-	const matched = new Set<string>();
-	for (const match of codeMatches(source, OUTCOME_FIELD))
-		matched.add(match[0].slice(1));
-	return [...matched].sort();
+function blindClaimMismatches(
+	rows: CensusRow[],
+	baseline: Record<string, string>,
+): string[] {
+	const problems: string[] = [];
+	for (const row of rows) {
+		const reason = baseline[row.file];
+		if (reason === undefined) continue;
+		const blind = blindOpenSites(row.scan);
+		const claims = rowClaim(reason).blind;
+		if (blind.length > 0 && !claims) {
+			problems.push(
+				`${row.file}: no open site throws and nothing reads an outcome field ` +
+					`off its own spawn result, so a dead child reads as a clean empty ` +
+					`run (${blind.map((site) => `${site.name}@${site.line}`).join(", ")}); ` +
+					`the row must declare [blind] and say what the code does instead`,
+			);
+		} else if (blind.length === 0 && claims) {
+			problems.push(
+				`${row.file}: row claims [blind], but the file throws on its open ` +
+					`sites or reads an outcome field off its own spawn result ` +
+					`(${row.scan.outcomeReads.join(", ") || "no open quiet site"})`,
+			);
+		}
+	}
+	return problems;
 }
 
 /**
- * Baseline rows whose file now routes through `classifyRunOutcome` (#5308):
- * the exemption is stale the moment the migration lands, whether or not the
- * file still spawns anything.
+ * Rows whose `[swallowed]` claim disagrees with the scan, in either direction
+ * (#5308 F4). A file whose throwing site lands in a `catch` that does not
+ * rethrow may not be excused with "the child failure aborts the caller": the
+ * failure becomes the catch's own value, and an empty result is what a script
+ * usually returns there. The claim is checked both ways, so a row cannot keep
+ * the strong wording after the catch starts swallowing, and cannot drop the
+ * marker while the swallow is still there.
+ */
+function swallowClaimMismatches(
+	rows: CensusRow[],
+	baseline: Record<string, string>,
+): string[] {
+	const problems: string[] = [];
+	for (const row of rows) {
+		const reason = baseline[row.file];
+		if (reason === undefined) continue;
+		const swallowed = openSites(row).filter((site) => site.swallowed);
+		const claims = rowClaim(reason).swallowed;
+		if (swallowed.length > 0 && !claims) {
+			problems.push(
+				`${row.file}: ${swallowed.map((site) => `${site.name}@${site.line}`).join(", ")} ` +
+					`throws, but the failure lands in a catch that neither rethrows nor ` +
+					`exits, so a failed child becomes that catch's own value; the row must ` +
+					`declare [swallowed] rather than say the caller aborts`,
+			);
+		} else if (swallowed.length === 0 && claims) {
+			problems.push(
+				`${row.file}: row claims [swallowed], but no open site throws into a ` +
+					`catch that keeps going (it reads ` +
+					`${row.scan.outcomeReads.join(", ") || "no swallowing site"})`,
+			);
+		}
+	}
+	return problems;
+}
+
+/**
+ * Split census rows for `auditRegistry` (#5308 B3). A file is FLAGGED while it
+ * has an open site — one that does not route through the primitive — and
+ * REGISTERED (so it must carry no row) once every site does. Deciding it on the
+ * count rather than on `usesPrimitive` is what keeps a file that routes one of
+ * two sites through the classifier flagged.
+ */
+function spawnAuditInput(rows: CensusRow[]): {
+	flagged: { key: string; detail: string }[];
+	registered: string[];
+} {
+	return {
+		flagged: rows
+			.filter((row) => openSites(row).length > 0)
+			.map((row) => ({
+				key: row.file,
+				detail: `${row.scan.sites.length} site(s): ${row.scan.sites
+					.map((site) => `${site.name}@${site.line}`)
+					.join(", ")}`,
+			})),
+		registered: rows
+			.filter((row) => openSites(row).length === 0)
+			.map((row) => row.file),
+	};
+}
+
+/**
+ * Baseline rows whose file now has no open site (#5308 B3): the exemption is
+ * stale the moment the last site routes through the primitive, whether or not
+ * the file still spawns anything.
  */
 function migratedSpawnRows(
 	rows: CensusRow[],
 	baseline: Record<string, string>,
 ): string[] {
-	const primitiveFiles = new Set(
-		rows.filter((row) => row.usesPrimitive).map((row) => row.file),
+	const migratedFiles = new Set(
+		rows.filter((row) => openSites(row).length === 0).map((row) => row.file),
 	);
-	return Object.keys(baseline).filter((file) => primitiveFiles.has(file));
+	return Object.keys(baseline).filter((file) => migratedFiles.has(file));
 }
+
+/**
+ * Every census file with a spawn site this file does not route through the
+ * primitive, with what its code does instead of classifying the outcome.
+ *
+ * Each row pins its site count with `[open-sites:N]` (#5308 B1): a new spawn in
+ * one of these files moves the count and fails the census, so a row excuses the
+ * sites it counted and not the file forever, and a file that reads its outcome
+ * elsewhere cannot hide a new blind site behind that read.
+ *
+ * A row says one of three things, and the second carries a `[swallowed]` marker
+ * when a `catch` takes the failure back:
+ *  - `reads … on its own spawn result` — the file looks at the status, signal,
+ *    or error of the child it started (#5308 F3),
+ *  - `throws on a nonzero exit` — the site is `execSync`/`execFileSync`, so a
+ *    failed child aborts the caller instead of returning an empty result. With
+ *    `[swallowed]` the throw lands in a `catch` that neither rethrows nor exits,
+ *    so what the caller continues with is that catch's own value (#5308 F4),
+ *  - `[blind]` — no site throws and nothing reads an outcome field off its own
+ *    result, so a dead child reads as a clean empty run: the original defect,
+ *    declared rather than excused. `scripts/playground-chrome.mjs` is that file;
+ *    it spawns Chrome detached with `stdio: "ignore"`, `unref()`s it, and finds
+ *    out whether it came up by polling its debug port, so the port poll is the
+ *    only failure channel and a spawn error never reaches a decision (#5308 F4).
+ *
+ * The last form is accepted for now, not blessed: a blind script that starts a
+ * required child can be repaired by reading its result or by routing through
+ * `safeSpawnAsync`, and its row then goes stale in the good direction.
+ */
+export const OUT_OF_TREE_SPAWN_BASELINE: Record<string, string> = {
+	"clients/lsp/client.ts":
+		"spawn reads close,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"clients/lsp/jvm-runtime.ts":
+		"safeSpawnAsync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"clients/lsp/launch.ts":
+		"safeSpawn, spawn reads close,error,exit,exitCode,killed,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:4]",
+	"clients/lsp/server.ts":
+		"safeSpawnAsync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:4]",
+	"scripts/audit-prod-deps.mjs":
+		"spawn reads close,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:2]",
+	"scripts/backfill-github-releases.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/backfill-release-thanks.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/bench-snapshot-persist.mjs":
+		"spawnSync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/benchmark-biome.ts":
+		"safeSpawnAsync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/build-dist-tsc.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@234 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:1]",
+	"scripts/bundle-dist.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@225 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:1]",
+	"scripts/capture-runner-fixtures.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@664, execFileSync@702 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:2]",
+	"scripts/capture-runner-output.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/check-ci-job-p90.mjs":
+		"spawnSync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/check-close-keywords.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@136, execFileSync@162, execFileSync@283 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:4]",
+	"scripts/check-extensions.mjs":
+		"execSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/check-grammar-corpus.mjs":
+		"spawnSync reads error,signal,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/check-grammar-load.mjs":
+		"spawnSync reads error,signal,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/check-hot-path-latency.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/check-pr-body.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:6]",
+	"scripts/check-tla-models.mjs":
+		"spawn reads close,error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/ci-changed-files.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/ci-shuffle-changed-tests.mjs":
+		"spawnSync reads error,signal,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/ci-test-diff.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:2]",
+	"scripts/ci-verdict.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@3065, execFileSync@3123 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:7]",
+	"scripts/compat-contracts.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/compat-smoke-behavioral.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:2]",
+	"scripts/download-test-history-artifacts.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/guard-bash-probe.mjs":
+		"spawn reads close,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/install-selftest.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@199 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:1]",
+	"scripts/lane-check.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/astgrep-self-scan.mjs":
+		"safeSpawn reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/git-fixture-env.mjs":
+		"execFileSync, execSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:2]",
+	"scripts/lib/knip-runner.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/knip-sibling-purge.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/lib/lockfile-completeness.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/mcp-stdio-client.mjs":
+		"spawn reads exit on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/mutation-test-selection.mjs":
+		"safeSpawnAsync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/process-scan.mjs":
+		"spawn reads close,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/server-provenance.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/lib/test-history-selection.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/lib/test-runner-smoke.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:4]",
+	"scripts/lint-js-advisory.mjs":
+		"spawnSync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/mutate.mjs":
+		"spawn, spawnSync reads close,code,error,signal,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:3]",
+	"scripts/notify-clean-signal-drift.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/notify-install-smoke-drift.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/notify-tool-smoke-red.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/npm-retry.mjs":
+		"spawn reads close,code,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/playground-chrome.mjs":
+		"execSync throws on a nonzero exit, and at execSync@80, execSync@120, execSync@127, execSync@263 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [blind] [open-sites:6]",
+	"scripts/playground-verify-rule.mjs":
+		"safeSpawnAsync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:2]",
+	"scripts/pr-preflight.mjs":
+		"spawnSync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:2]",
+	"scripts/pr-worktree.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:2]",
+	"scripts/pre-push-targeted-tests.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@414, execFileSync@499, execFileSync@529, execFileSync@900, execFileSync@1026 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:9]",
+	"scripts/probe-pi-host-tiers.mjs":
+		"spawnSync reads error,signal,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/prune-actions-cache.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/prune-agent-worktrees.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@757 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:1]",
+	"scripts/red-on-base.mjs":
+		"execFileSync, spawn reads close,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:2]",
+	"scripts/regen-test-baseline.mjs":
+		"spawnSync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/release-qa.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@1502, execFileSync@2339, execFileSync@2706, execFileSync@2961, execFileSync@3000, execFileSync@3193 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:11]",
+	"scripts/resolve-newest-in-range-host.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@64 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:1]",
+	"scripts/rpc-load-check.mjs":
+		"spawn reads exit on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/run-all-ts-rules-posthog.mjs":
+		"execSync throws on a nonzero exit, and at execSync@35 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:1]",
+	"scripts/run-harness.mjs":
+		"spawnSync reads error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/run-ts-rules-pi-lens.mjs":
+		"execSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/setup-git-hooks.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@141, execFileSync@147 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:3]",
+	"scripts/smoke-availability-lifecycle.mjs":
+		"spawnSync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/smoke-gitleaks-scratch-exclusion.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@100 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:1]",
+	"scripts/smoke-psscriptanalyzer-classification.mjs":
+		"spawnSync reads error,status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:3]",
+	"scripts/smoke-tools.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@224, execFileSync@2027, execFileSync@2124, execFileSync@2146 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:4]",
+	"scripts/strictness-report.mjs":
+		"spawnSync reads status on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/stryker-diff.mjs":
+		"execFileSync throws on a nonzero exit, and at execFileSync@268 the throw lands in a catch that neither rethrows nor exits, so a failed child there becomes that catch's own value (an empty list is the usual one); #1737 [swallowed] [open-sites:9]",
+	"scripts/trace-validate-session-lifecycle.mjs":
+		"spawn reads close,error on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/update-contributors.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:3]",
+	"scripts/upsert-tracking-issue.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+	"scripts/with-memory-watch.mjs":
+		"spawn reads error,exit on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:1]",
+	"scripts/with-test-lock.mjs":
+		"spawn reads error,exit,killed on its own spawn result, so a nonzero exit, a signal, or a spawn error is not a clean run; #1737 [open-sites:3]",
+	"scripts/worktree-remove.mjs":
+		"execFileSync throws on a nonzero exit, a signal, or a spawn error, so the caller aborts rather than reading an empty result; #1737 [open-sites:1]",
+};
 
 describe("spawn sites outside the dispatch runners (#5308)", () => {
 	// The floors sit under the measured walk (clients/lsp and scripts each scan
@@ -1146,10 +1891,11 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 		"clients/lsp": 20,
 		scripts: 150,
 	};
-	// Measured 2026-11-12 through this seam: 77 files with 152 spawn sites
-	// (clients/lsp 4 files / 10 sites, scripts 73 files / 142 sites), none on
-	// the primitive. The floor sits under that so a file losing its spawn does
-	// not red, but one root dropping out of the flagged population does.
+	// Measured 2026-11-13 through this seam: 77 files with 153 open spawn sites
+	// (clients/lsp 4 files / 10 sites, scripts 73 files / 143 sites), none of
+	// them routed through the primitive. The floor sits under that so a file
+	// losing a site does not red the population check, while one root dropping
+	// out of the walk does.
 	const FLAGGED_FLOOR = 70;
 
 	// Every census below walks two whole subtrees, so each carries the shared
@@ -1157,12 +1903,12 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 	it(
 		"censuses every source file under both roots (#5308)",
 		() => {
-			const thin = SPAWN_CENSUS_ROOTS.filter(
+			const thin = SCAN_ROOTS.filter(
 				(root) => censusSourceFiles(root).length < SCANNED_FLOOR[root],
 			);
 			expect(
 				thin,
-				`the census walk lost a root (${SPAWN_CENSUS_ROOTS.join(", ")}): ` +
+				`the census walk lost a root (${SCAN_ROOTS.join(", ")}): ` +
 					`${thin.join(", ")} scanned below its floor`,
 			).toEqual([]);
 		},
@@ -1172,22 +1918,11 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 	it(
 		"every spawn site outside the runners is classified or carries a reason (#5308)",
 		() => {
-			const rows = census();
 			const audit = auditRegistry({
 				sweepName: "run-outcome ratchet, out-of-tree spawn sites (#5308)",
-				flagged: rows
-					.filter((row) => !row.usesPrimitive)
-					.map((row) => ({
-						key: row.file,
-						detail: `${row.sites.length} site(s): ${row.sites
-							.map((site) => `${site.name}@${site.line}`)
-							.join(", ")}`,
-					})),
-				registered: rows
-					.filter((row) => row.usesPrimitive)
-					.map((row) => row.file),
+				...spawnAuditInput(allCensusRows()),
 				exemptions: OUT_OF_TREE_SPAWN_BASELINE,
-				scannedCount: SPAWN_CENSUS_ROOTS.reduce(
+				scannedCount: SCAN_ROOTS.reduce(
 					(total, root) => total + censusSourceFiles(root).length,
 					0,
 				),
@@ -1201,69 +1936,372 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 	);
 
 	it(
-		"does not exempt a spawn file that has migrated onto the primitive (#5308)",
+		"pins the open-site count every baseline row claims (#5308)",
 		() => {
-			// The live census has no migrated file yet, so the rule is proven with a
-			// planted migration: a row that routes through the primitive while still
-			// carrying a baseline entry. The fix there is to delete the row and keep
-			// the migration, not to re-baseline the primitive user.
-			const planted: CensusRow[] = [
-				{
-					file: "scripts/planted.mjs",
-					dir: "scripts",
-					source: "",
-					sites: [{ line: 1, name: "spawnSync", via: "call" }],
-					unclassified: [],
-					usesPrimitive: true,
-				},
-			];
+			// B1: a row excuses the sites it counted, not the file forever. The
+			// count is per file, so a new spawn in a baselined file reds even when
+			// the file reads an outcome field somewhere else and the flagged/
+			// registered split is unchanged.
 			expect(
-				migratedSpawnRows(planted, {
-					"scripts/planted.mjs": "planted row; #1737",
-				}),
-			).toEqual(["scripts/planted.mjs"]);
-			// A migrated row is reported whether or not it still spawns: the table
-			// entry, not the scan, is what goes stale.
-			expect(
-				migratedSpawnRows([{ ...planted[0], sites: [] }], {
-					"scripts/planted.mjs": "planted row; #1737",
-				}),
-			).toEqual(["scripts/planted.mjs"]);
-			expect(migratedSpawnRows(census(), OUT_OF_TREE_SPAWN_BASELINE)).toEqual(
-				[],
-			);
+				siteCountMismatches(allCensusRows(), OUT_OF_TREE_SPAWN_BASELINE),
+			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
 
 	it(
-		"every baselined spawn site can see its own failure (#5308)",
+		"a file that cannot see a failed child declares itself blind (#5308)",
 		() => {
-			// The fault channel per form. `execFile`, `execFileSync`, and `execSync`
-			// raise on a nonzero exit, on a signal kill, and on a spawn error, so the
-			// failure travels to the caller as an exception. `spawn`, `spawnSync`,
-			// `fork`, and the `safeSpawn*` wrappers RETURN, so the file has to read
-			// status/exitCode/signal/killed/error off the result or nothing shows the
-			// child failed at all. A file that neither throws nor reads is the
-			// original defect: a dead child that reads as an empty clean run.
-			// A catch that returns a sentinel (`null`, `ok: false`) is a deliberate
-			// second channel, so this gate does not judge catch bodies; a site that
-			// swallows into a bare empty value is a #1737 migration, not this ratchet.
-			const blind = census()
-				.filter((row) => row.sites.length > 0)
-				// A file that routes the child through the primitive has its fault
-				// channel there: `classifyRunOutcome` reads the status, the signal,
-				// and the spawn error, so a migrated file is not blind.
-				.filter((row) => !row.usesPrimitive)
-				.filter(
-					(row) =>
-						row.sites.some((site) => !THROWING_SPAWN_NAMES.has(site.name)) &&
-						outcomeFieldsRead(row.source).length === 0,
-				)
-				.map(
-					(row) => `${row.file}: ${row.sites.map((s) => s.name).join(", ")}`,
-				);
-			expect(blind, "these files cannot see a failed child").toEqual([]);
+			// F3, in both directions. `execSync` and `execFileSync` raise, so their
+			// files abort; `spawn`, `spawnSync`, `fork`, the `safeSpawn*` wrappers,
+			// and an async `execFile` return, so the file has to read
+			// status/exitCode/signal/killed/error/code off ITS OWN RESULT — not
+			// `console.error` and not `process.exitCode`, which name the console and
+			// the process. A file that neither throws nor reads is the original
+			// defect; the row says so with `[blind]` and a description of what the
+			// code does instead. A row that still claims blindness after the file
+			// learned to read its outcome is stale.
+			expect(
+				blindClaimMismatches(allCensusRows(), OUT_OF_TREE_SPAWN_BASELINE),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"a row for a swallowed child failure says so (#5308 F4)",
+		() => {
+			// An `execSync` whose throw lands in a `catch` that neither rethrows nor
+			// exits does not abort the caller, so a row for such a file may not
+			// excuse it with "the child failure aborts". The scan finds the shape
+			// and the row carries `[swallowed]`; both directions are checked.
+			expect(
+				swallowClaimMismatches(allCensusRows(), OUT_OF_TREE_SPAWN_BASELINE),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"tells a swallowed child failure from an aborting one (#5308 F4)",
+		() => {
+			// The two exec shapes the vocabulary separates, planted rather than
+			// inferred from the tree: one aborts, one keeps going on the catch's
+			// own value, and a rethrow or an exit is not a swallow.
+			const file = "scripts/zzplant-swallow.mjs";
+			const head = `import { execFileSync } from ${CHILD_MODULE};\n`;
+			const swallowing = scanCensusRow(
+				file,
+				head +
+					"function found() {\n" +
+					"  try { return execFileSync('probe', ['find']).toString(); }\n" +
+					"  catch { return []; }\n}\n",
+			);
+			const aborting = scanCensusRow(
+				file,
+				head + "const found = execFileSync('probe', ['find']).toString();\n",
+			);
+			const rethrowing = scanCensusRow(
+				file,
+				head +
+					"function found() {\n" +
+					"  try { return execFileSync('probe', ['find']).toString(); }\n" +
+					"  catch (e) { throw e; }\n}\n",
+			);
+			expect(openSites(swallowing).map((site) => site.swallowed)).toEqual([
+				true,
+			]);
+			expect(openSites(aborting).map((site) => site.swallowed)).toEqual([
+				false,
+			]);
+			expect(openSites(rethrowing).map((site) => site.swallowed)).toEqual([
+				false,
+			]);
+			// A swallowing file cannot be excused by the abort wording, and its row
+			// with the marker is accepted; the reverse pair checks the other way.
+			expect(
+				swallowClaimMismatches([swallowing], {
+					[file]: "execFileSync throws; #1737 [open-sites:1]",
+				}),
+			).toHaveLength(1);
+			expect(
+				swallowClaimMismatches([aborting], {
+					[file]:
+						"execFileSync throws, but a catch keeps going; #1737 [open-sites:1] [swallowed]",
+				}),
+			).toHaveLength(1);
+			expect(
+				swallowClaimMismatches([swallowing], {
+					[file]:
+						"execFileSync throws into a catch; #1737 [open-sites:1] [swallowed]",
+				}),
+			).toEqual([]);
+			// A swallowing file is not `[blind]`: it does look at the child, it just
+			// throws the answer away into an empty list.
+			expect(blindOpenSites(swallowing.scan)).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"reads only a spawn result as an outcome read (#5308 F3)",
+		() => {
+			// The gate's own vocabulary, planted rather than inferred from the tree.
+			// `console.error` and `process.exitCode` are the spellings that let a
+			// fire-and-forget child pass, and `stdout` is what a dead child produces.
+			const plants: { source: string; blind: boolean; why: string }[] = [
+				{
+					why: "a console line says nothing about the child",
+					source:
+						"import { spawn } from " +
+						CHILD_MODULE +
+						';\nconst child = spawn("probe");\nconsole.error("done");\nconsole.log(child.pid);',
+					blind: true,
+				},
+				{
+					why: "process.exitCode is the process's own, not the child's",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nconst r = spawnSync("probe");\nprocess.exitCode = 1;\nreturn r.stdout;',
+					blind: true,
+				},
+				{
+					why: "reading stdout alone is what a dead child also produces",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nconst r = spawnSync("probe");\nreturn r.stdout + r.stderr;',
+					blind: true,
+				},
+				{
+					why: "an async execFile whose callback ignores the error",
+					source:
+						"import { execFile } from " +
+						CHILD_MODULE +
+						';\nexecFile("probe", () => {});',
+					blind: true,
+				},
+				{
+					why: "a listener for an event that is not an outcome",
+					source:
+						"import { spawn } from " +
+						CHILD_MODULE +
+						';\nconst child = spawn("probe");\nchild.on("foo", () => {});',
+					blind: true,
+				},
+				{
+					why: "status read off the result local",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nconst r = spawnSync("probe");\nif (r.status !== 0) throw new Error("dead");',
+					blind: false,
+				},
+				{
+					why: "status read straight off the call",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nif (spawnSync("probe").status !== 0) process.exit(1);',
+					blind: false,
+				},
+				{
+					why: "status destructured out of the result",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nconst { status } = spawnSync("probe");\nreturn status;',
+					blind: false,
+				},
+				{
+					why: "the async execFile callback reads its error",
+					source:
+						"import { execFile } from " +
+						CHILD_MODULE +
+						';\nexecFile("probe", (err) => { if (err?.code) process.exit(1); });',
+					blind: false,
+				},
+				{
+					why: "a detached child listening for its exit",
+					source:
+						"import { spawn } from " +
+						CHILD_MODULE +
+						';\nconst child = spawn("probe");\nchild.on("exit", (code) => { if (code) process.exit(1); });',
+					blind: false,
+				},
+				{
+					why: "the awaited result read through a subscript",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nconst r = await (spawnSync("probe"));\nreturn r["error"];',
+					blind: false,
+				},
+				{
+					why: "a throwing child aborts the caller",
+					source:
+						"import { execFileSync } from " +
+						CHILD_MODULE +
+						';\nexecFileSync("probe");',
+					blind: false,
+				},
+				{
+					why: "status read off an awaited call in place",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nreturn (await spawnSync("probe")).status;',
+					blind: false,
+				},
+				{
+					why: "exitCode read off a `??` fallback between two spawns",
+					source:
+						"import { spawnSync } from " +
+						CHILD_MODULE +
+						';\nreturn (spawnSync("probe") ?? spawnSync("other")).exitCode;',
+					blind: false,
+				},
+				{
+					why: "an error listener on a ternary of two spawns",
+					source:
+						"import { spawn } from " +
+						CHILD_MODULE +
+						';\nconst ready = true;\n(ready ? spawn("probe") : spawn("other")).on("error", () => process.exit(1));',
+					blind: false,
+				},
+			];
+			for (const plant of plants) {
+				const scan = spawnOutcomeScan("fixture.mjs", plant.source);
+				expect(
+					scan.sites.length,
+					`${plant.why}\n${plant.source}`,
+				).toBeGreaterThan(0);
+				expect(
+					blindOpenSites(scan).length > 0,
+					`${plant.why}\n${plant.source}\nreads=${scan.outcomeReads.join(",")}`,
+				).toBe(plant.blind);
+			}
+			// A classified site is the primitive's question, not the file's.
+			const classified = spawnOutcomeScan(
+				"fixture.mjs",
+				"import { spawnSync } from " +
+					CHILD_MODULE +
+					';\nimport { classifyRunOutcome } from "./utils/spawn-outcome.js";\nclassifyRunOutcome(spawnSync("probe"));',
+				new Set(["classifyRunOutcome"]),
+			);
+			expect(classified.sites.every((site) => site.classified)).toBe(true);
+			expect(blindOpenSites(classified)).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"a new spawn site in a baselined file moves its pinned count (#5308 B1)",
+		() => {
+			// The plant is the reviewer's B1 shape: one spawn in a file the table
+			// already excuses, reading an outcome field elsewhere so the old gate
+			// stayed green. Rows keyed to the plant are exact, then the file grows.
+			const file = "scripts/planted-site.mjs";
+			const before = scanCensusRow(
+				file,
+				"import { spawnSync } from " +
+					CHILD_MODULE +
+					';\nimport { classifyRunOutcome } from "../clients/dispatch/runners/utils/spawn-outcome.js";\nif (classifyRunOutcome(spawnSync("probe")).status !== 0) process.exit(1);\nspawnSync("extra");',
+			);
+			const baseline: Record<string, string> = {
+				[file]: "reads status on its own spawn result; #1737 [open-sites:1]",
+			};
+			expect(siteCountMismatches([before], baseline)).toEqual([]);
+			const after = scanCensusRow(
+				file,
+				"import { spawn, spawnSync } from " +
+					CHILD_MODULE +
+					';\nimport { classifyRunOutcome } from "../clients/dispatch/runners/utils/spawn-outcome.js";\nif (classifyRunOutcome(spawnSync("probe")).status !== 0) process.exit(1);\nspawnSync("extra");\nspawn("late");',
+			);
+			const problems = siteCountMismatches([after], baseline);
+			expect(problems.length, problems.join("\n")).toBe(1);
+			expect(problems[0]).toContain("[open-sites:1]");
+			expect(problems[0]).toContain("2 open site(s)");
+			// The blind claim carries the same weight in the other direction: a file
+			// that becomes blind must move from no claim to `[blind]`.
+			const readsOutcomes = scanCensusRow(
+				file,
+				"import { spawn } from " +
+					CHILD_MODULE +
+					';\nconst c = spawn("probe");\nc.on("exit", () => {});',
+			);
+			expect(
+				blindClaimMismatches([readsOutcomes], {
+					[file]: "blind row; #1737 [blind]",
+				}),
+			).toEqual([expect.stringContaining(file)]);
+			const goesBlind = scanCensusRow(
+				file,
+				"import { spawn } from " +
+					CHILD_MODULE +
+					';\nconst c = spawn("probe");\nconsole.error(c.pid);',
+			);
+			expect(
+				blindClaimMismatches([goesBlind], { [file]: "blind row; #1737" }),
+			).toEqual([expect.stringContaining(file)]);
+			expect(
+				blindClaimMismatches([goesBlind], {
+					[file]: "declared blind; #5308 [blind]",
+				}),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
+
+	it(
+		"registers only a file whose every site routes through the primitive (#5308 B3)",
+		() => {
+			// A file that classifies one of two sites is still flagged, with its one
+			// open site counted; only a fully routed file drops out of the table,
+			// and its row then reads as stale.
+			const imported =
+				'import { spawnSync } from "node:child_process";\n' +
+				'import { classifyRunOutcome } from "../clients/dispatch/runners/utils/spawn-outcome.js";\n';
+			const fully = scanCensusRow(
+				"src/all-migrated.mjs",
+				imported + 'classifyRunOutcome(spawnSync("probe"));',
+			);
+			const partially = scanCensusRow(
+				"src/partial-migrated.mjs",
+				imported +
+					'classifyRunOutcome(spawnSync("probe"));\nspawnSync("late");',
+			);
+			expect(fully.usesPrimitive, "the plant must reach the primitive").toBe(
+				true,
+			);
+			const audit = spawnAuditInput([fully, partially]);
+			expect(audit.flagged.map((entry) => entry.key)).toEqual([
+				"src/partial-migrated.mjs",
+			]);
+			expect(audit.registered).toEqual(["src/all-migrated.mjs"]);
+			expect(openSites(partially).map((site) => site.line)).toEqual([4]);
+			// The stale direction: the row of a file that has finished migrating.
+			expect(
+				migratedSpawnRows([fully], {
+					"src/all-migrated.mjs": "planted; #1737",
+				}),
+			).toEqual(["src/all-migrated.mjs"]);
+			expect(
+				migratedSpawnRows([partially], {
+					"src/partial-migrated.mjs": "planted; #1737",
+				}),
+			).toEqual([]);
+			// A migrated row is reported whether or not the file still spawns: the
+			// table entry, not the scan, is what goes stale.
+			expect(
+				migratedSpawnRows([{ ...fully, scan: { ...fully.scan, sites: [] } }], {
+					"src/all-migrated.mjs": "planted; #1737",
+				}),
+			).toEqual(["src/all-migrated.mjs"]);
+			expect(
+				migratedSpawnRows(allCensusRows(), OUT_OF_TREE_SPAWN_BASELINE),
+			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
@@ -1273,7 +2311,9 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 		() => {
 			// Fail closed (#4429's rule for a population scanner): a spawn-module
 			// import the scanner cannot follow reds with its file and line.
-			const unclassified = census().flatMap((row) => row.unclassified);
+			const unclassified = allCensusRows().flatMap(
+				(row) => row.scan.unclassified,
+			);
 			expect(unclassified).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
@@ -1342,25 +2382,83 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 		}
 	});
 
-	it("reports a spawn-module spelling it cannot open (#5308)", () => {
+	it("reports a spawn reference it cannot open (#5308 F2)", () => {
 		// Each spelling reaches a child process through a form the scan cannot
-		// resolve, so it reds instead of passing as classified-or-baselined.
-		const plants = [
-			"const { spawnSync } = require(" +
-				CHILD_MODULE +
-				');\nspawnSync("probe", ["run"]);',
-			"const cp = await import(" +
-				CHILD_MODULE +
-				');\ncp.spawnSync("probe", ["run"]);',
-			"export { execFileSync } from " + CHILD_MODULE + ";",
-			"import { spawnSync } from " +
-				CHILD_MODULE +
-				';\nconst toolkit = { run: spawnSync };\ntoolkit.run("probe", ["run"]);',
-			"import { safeSpawn } from " + SEAM_MODULE + ";\nexport { safeSpawn };",
+		// resolve, so it reds instead of passing as classified-or-baselined. The
+		// expected phrase pins WHICH branch reports it, so a widened or removed
+		// check turns this table red rather than re-routing the plant silently.
+		const plants: [string, string][] = [
+			[
+				"const { spawnSync } = require(" +
+					CHILD_MODULE +
+					');\nspawnSync("probe", ["run"]);',
+				"require of a spawn module",
+			],
+			[
+				"const cp = await import(" +
+					CHILD_MODULE +
+					');\ncp.spawnSync("probe", ["run"]);',
+				"dynamic import of a spawn module",
+			],
+			[
+				"export { execFileSync } from " + CHILD_MODULE + ";",
+				"re-export from a spawn module",
+			],
+			[
+				"import { spawnSync } from " +
+					CHILD_MODULE +
+					';\nconst toolkit = { run: spawnSync };\ntoolkit.run("probe", ["run"]);',
+				'"pair" position',
+			],
+			[
+				"import { safeSpawn } from " + SEAM_MODULE + ";\nexport { safeSpawn };",
+				"re-exported by name",
+			],
+			// The module id built at runtime: neither half resolves, and the scan
+			// still reports the half that names the OS module.
+			[
+				'const cp = await import("node:" + "child_process");\ncp.spawnSync("probe");',
+				"dynamic import of a spawn module",
+			],
+			[
+				'const cp = process.getBuiltinModule("node:child_process");\ncp.spawn("probe");',
+				"the scan cannot follow",
+			],
+			[
+				'const MOD = "node:child_process";\nconst cp = await import(MOD);\ncp.spawn("probe");',
+				'"variable_declarator" position',
+			],
+			// A namespace the scan opened, then lost track of.
+			[
+				"import * as cp from " + CHILD_MODULE + ";\nconst { spawnSync } = cp;",
+				"rebound without a spawn call",
+			],
+			[
+				"import * as cp from " + CHILD_MODULE + ';\ncp["spawnSync"]("probe");',
+				"computed subscript",
+			],
+			[
+				"import * as cp from " + CHILD_MODULE + ";\nconst run = cp.spawn;",
+				"extracted without a call",
+			],
+			[
+				"import * as cp from " +
+					CHILD_MODULE +
+					';\nconst cp2 = cp;\ncp2.spawn("probe");',
+				"rebound without a spawn call",
+			],
+			[
+				"import * as cp from " + CHILD_MODULE + ";\nstart({ cp });",
+				"used outside a spawn call",
+			],
+			[
+				"import cp from " + CHILD_MODULE + ';cp.spawn("probe");',
+				"default import",
+			],
 		];
-		for (const source of plants) {
+		for (const [source, phrase] of plants) {
 			const scan = spawnOutcomeScan("fixture.mjs", source);
-			expect(scan.unclassified, source).not.toEqual([]);
+			expect(scan.unclassified.join("\n"), source).toContain(phrase);
 		}
 	});
 });
