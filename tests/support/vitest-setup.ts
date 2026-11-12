@@ -97,6 +97,13 @@ process.env.PI_LENS_CONFIG_PATH = "/nonexistent-pi-lens-tests/config.json";
 // block). Tests that exercise a mode set it themselves.
 delete process.env.PI_LENS_STARTUP_MODE;
 
+// Same class (#5267): scheduleUntrackedOrphanSweep reads
+// PI_LENS_DISABLE_ORPHAN_BACKSTOP at arm time, so a shell exporting the key
+// turned every in-test arm into a no-op and reddened the backstop's own
+// scheduler tests on an undefined timer. Tests that exercise the opt-out set
+// it themselves (tests/support/pi-session.ts arms it per session start).
+delete process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP;
+
 // Hermeticity (#525, same class as #515 above): never let a test write into
 // the developer's REAL machine-global ~/.pi-lens (instances.json, logs,
 // probe-cache.json, managed tool/bin dirs, ...). Dogfooded live 2026-07-11: a

@@ -148,9 +148,21 @@ describe("#3917 the default scope keeps the orphan sweep off the host process ta
 	let env: ReturnType<typeof setupTestEnvironment>;
 	let previousHome: string | undefined;
 	let previousDataDir: string | undefined;
+	let previousOptOut: string | undefined;
 
 	beforeEach(() => {
 		_resetSessionLifecycleForTests();
+		// The #5267 case below arms the harness opt-out through `startPiSession`,
+		// and that pin outlives its case until the harness's `afterAll`. In a
+		// shuffled file an early #5267 run would hand THIS case an opted-out
+		// process, `original.scheduleUntrackedOrphanSweep(0, …)` would return
+		// undefined, `onComplete` would never fire and the case would time out
+		// (CI "Changed tests shuffled (advisory)", seed 202 — the recurrence).
+		// This case arms the sweep in-process and needs the key unset; save it,
+		// delete it, and hand it back so the harness pin stays intact for the
+		// rest of the worker.
+		previousOptOut = process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP;
+		delete process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP;
 		env = setupTestEnvironment(TMP_PREFIX);
 		// The stamp, lock and registry of this file's sweep live in its own home:
 		// a sibling's fresh stamp would answer `cooldown` with no scan at all.
@@ -163,6 +175,9 @@ describe("#3917 the default scope keeps the orphan sweep off the host process ta
 	afterEach(async () => {
 		// #5146: end the session before the lifecycle state and the root go.
 		await endMockSessions();
+		if (previousOptOut === undefined)
+			delete process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP;
+		else process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP = previousOptOut;
 		if (previousHome === undefined) delete process.env.PI_LENS_HOME;
 		else process.env.PI_LENS_HOME = previousHome;
 		if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;

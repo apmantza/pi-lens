@@ -1469,9 +1469,11 @@ const BACKSTOP_LOCK_STALE_MS = 120_000;
 /**
  * Opt-out knob for ARMING the machine-wide orphan backstop. The literal `"1"`
  * keeps the arming timer off and every other value — including `true`, `off`
- * and blank — leaves the default, per `docs/environment-variables.md`
- * "Boolean-style variables". It is read when the backstop is armed, not at
- * module load, so a harness can hold it for one start and restore it after.
+ * and blank — leaves the default, the boolean-knob literal rule of #5419,
+ * pinned for this key by `tests/clients/env-boolean-knob-literals.test.ts`.
+ * It is a test-harness knob, not a documented user setting. It is read when
+ * the backstop is armed, not at module load, so a harness can hold it for
+ * one start and restore it after.
  *
  * The reason a harness wants it: the backstop's one job is to reap processes
  * whose owning pi-lens instance died, and it judges that from the machine's
