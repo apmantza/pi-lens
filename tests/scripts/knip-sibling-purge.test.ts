@@ -100,6 +100,11 @@ describe("purgeCompiledSiblings (#2698)", () => {
 	it("F3/R2-F3: throws (real ETIMEDOUT/SIGKILL) when a git call exceeds timeout", () => {
 		const root = fixtureRepo();
 
-		expect(() => purgeCompiledSiblings(root, { timeout: 1 })).toThrow();
+		// The thrown error names the kill signal: a runner that dropped the
+		// `killSignal: "SIGKILL"` option still times out, but with Node's default
+		// SIGTERM, which a wedged git can ignore.
+		expect(() => purgeCompiledSiblings(root, { timeout: 1 })).toThrow(
+			expect.objectContaining({ code: "ETIMEDOUT", signal: "SIGKILL" }),
+		);
 	});
 });

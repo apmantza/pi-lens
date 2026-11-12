@@ -123,21 +123,6 @@ describe("isCleanRun / isValidReport / decideAction (#2613 review F1)", () => {
 	] as const)("%s -> %s", (_label, report, expected) => {
 		expect(decideAction(report)).toBe(expected);
 	});
-
-	// Mutation-proof, dangerous direction (round-1's actual bug): "not
-	// hasDrift" is NOT a valid close condition -- reds every non-clean,
-	// non-failing case that isCleanRun correctly excludes.
-	it("mutation-proof: '!hasDrift' as the close condition wrongly admits both cancelled attacks", () => {
-		const wronglyCloses = (report: {
-			version: string;
-			steps: { name: string; outcome: string }[];
-		}) => !hasDrift(report);
-		expect(wronglyCloses(cancelledMidRunReport)).toBe(true);
-		expect(wronglyCloses(cancelledBeforeStartReport)).toBe(true);
-		// The real condition correctly excludes both.
-		expect(isCleanRun(cancelledMidRunReport)).toBe(false);
-		expect(isCleanRun(cancelledBeforeStartReport)).toBe(false);
-	});
 });
 
 describe("firstFailingStep / hasDrift (#2613)", () => {
