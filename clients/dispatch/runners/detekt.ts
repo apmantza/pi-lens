@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { pathsEqual } from "../../path-utils.js";
@@ -153,18 +155,18 @@ const detektRunner: RunnerDefinition = {
 
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("detekt")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		const configPath = findToolConfig("detekt", cwd)?.file;
 		if (!configPath) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		const cmd = (await detekt.isAvailableAsync(cwd))
 			? detekt.getCommand(cwd)
 			: null;
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { checker: detekt });
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(

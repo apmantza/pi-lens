@@ -290,6 +290,11 @@ const ADMITTED_SITES: Readonly<
 		reason:
 			"the diagnostics emitter's named-constant event (PENDING_RECEIPT_DROPPED), not the abort event; an emitter of ours, not a signal",
 	},
+	"clients/lsp/client.ts#waitForQuiescence events-abort": {
+		release: "none",
+		reason:
+			"the diagnostics emitter's SERVER_STATUS_CHANGED event, not an abort signal; the listener is removed in finish() on every exit (ready, budget, death)",
+	},
 	"clients/lsp/client.ts#safeSendRequest addEventListener": {
 		release: "paired",
 		reason:

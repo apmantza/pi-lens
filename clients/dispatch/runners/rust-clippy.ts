@@ -4,6 +4,7 @@
  * Runs `cargo clippy` for Rust files to catch common mistakes.
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { isAbsolute, resolve } from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { rustClient } from "../../rust-client.js";
@@ -89,7 +90,7 @@ const rustClippyRunner: RunnerDefinition = {
 		// Resolve cargo path using platform-aware lookup (handles ~/.cargo/bin on Windows)
 		const cargoExe = await rustClient.findCargoPathAsync();
 		if (!cargoExe) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(ctx.cwd);
 		}
 
 		const clippyProbe = getClippyProbe(cargoExe);
@@ -125,7 +126,7 @@ const rustClippyRunner: RunnerDefinition = {
 					elapsedMs: 0,
 					latched: false,
 				});
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return toolAbsentSkip(ctx.cwd, { checker: refreshedProbe });
 			}
 		}
 

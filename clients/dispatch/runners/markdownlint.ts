@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -122,14 +124,14 @@ const markdownlintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "markdownlint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("markdownlint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 		const cmd = await resolveToolCommandWithInstallFallback(
 			cwd,
 			"markdownlint",
 		);
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "markdownlint" });
 
 		// Shared config-args seam (#1247): the autofix path consumes the same
 		// builder, so the package-owned fallback config can never drift.

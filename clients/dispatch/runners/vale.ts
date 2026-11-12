@@ -1,6 +1,9 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
-import { findLocalToolConfig, pathsEqual } from "../../path-utils.js";
+import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -12,13 +15,6 @@ import type {
 import { resolveToolCommandWithInstallFallback } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-/**
- * Check for a .vale.ini config file in cwd or parent dirs.
- */
-function findValeConfig(cwd: string): string | undefined {
-	return findLocalToolConfig(cwd, [".vale.ini"]);
-}
 
 /**
  * Parse Vale JSON output.
@@ -130,19 +126,19 @@ const valeRunner: RunnerDefinition = {
 	appliesTo: ["markdown"],
 	priority: PRIORITY.DOC_QUALITY,
 	skipTestFiles: false,
-	requiresConfig: (cwd) => findValeConfig(cwd) !== undefined,
+	requiresConfig: (cwd) => hasToolConfig("vale", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "vale");
 
 		// Config-gated: skip unless a .vale.ini is found
 		if (!valeRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "vale" });
 
 		// Vale exits 1 when a run reports an error-level alert and 0 for
 		// warning or suggestion alerts alone (exit table below).

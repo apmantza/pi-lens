@@ -38,6 +38,7 @@ import {
 	type RunnerResult,
 } from "../../../../clients/dispatch/types.js";
 import { installLspServiceDouble } from "../../../support/lsp-service-seam.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const { safeSpawnAsync, lspTouch, logLatency } = vi.hoisted(() => ({
@@ -113,11 +114,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	>()),
 	getLinterPolicyForCwd: () => null,
 	markdownlintConfigArgs: () => [],
-	hasEslintConfig: () => true,
-	hasMypyConfig: () => true,
-	hasPhpstanConfig: () => true,
-	hasStylelintConfig: () => true,
-	hasYamllintConfig: () => true,
 }));
 
 vi.mock("../../../../clients/rust-client.js", async (importOriginal) => ({
@@ -1066,6 +1062,7 @@ async function drive(runnerId: string, driver: Driver): Promise<Observed> {
 		const absFile = path.join(root, ...driver.file.split("/"));
 		fs.mkdirSync(path.dirname(absFile), { recursive: true });
 		fs.writeFileSync(absFile, driver.content);
+		plantGateConfig(runnerId, root);
 		driver.prepare?.(root);
 
 		const registry = new RunnerRegistry();

@@ -28,6 +28,13 @@ vi.mock(
 		>()),
 		createAvailabilityChecker: (command: string) => ({
 			isAvailableAsync: async () => available,
+			getVerdict: () => ({
+				outcome: "missing",
+				cause: "not-found",
+				elapsedMs: 0,
+				latched: true,
+				retryAtMs: 0,
+			}),
 			getCommand: () => command,
 		}),
 		resolveToolCommandWithInstallFallback: async () =>

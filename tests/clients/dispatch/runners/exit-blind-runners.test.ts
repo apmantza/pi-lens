@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const { safeSpawnAsync, getLinterPolicyForCwd } = vi.hoisted(() => ({
@@ -11,13 +12,12 @@ const { safeSpawnAsync, getLinterPolicyForCwd } = vi.hoisted(() => ({
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 
-vi.mock("../../../../clients/tool-policy.js", () => ({
+vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/tool-policy.js")
+	>()),
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs: () => [],
-	hasMypyConfig: () => true,
-	hasSqlfluffConfig: () => true,
-	hasStylelintConfig: () => true,
-	hasYamllintConfig: () => true,
 	getAutofixCapability: () => ({
 		toolSupportsFix: false,
 		safePipelineAutofix: false,
@@ -244,6 +244,7 @@ describe("exit-blind runners no longer report a clean file after a failed run", 
 			const env = setupTestEnvironment(`pi-lens-${testCase.tool}-`);
 			try {
 				const summary = await ledger();
+				plantGateConfig(testCase.tool, env.tmpDir);
 				for (const [name, body] of Object.entries(testCase.extraFiles ?? {})) {
 					fs.writeFileSync(path.join(env.tmpDir, name), body);
 				}
@@ -289,6 +290,7 @@ describe("exit-blind runners no longer report a clean file after a failed run", 
 			const env = setupTestEnvironment(`pi-lens-${testCase.tool}-`);
 			try {
 				await ledger();
+				plantGateConfig(testCase.tool, env.tmpDir);
 				for (const [name, body] of Object.entries(testCase.extraFiles ?? {})) {
 					fs.writeFileSync(path.join(env.tmpDir, name), body);
 				}
@@ -320,6 +322,7 @@ describe("exit-blind runners no longer report a clean file after a failed run", 
 			const env = setupTestEnvironment(`pi-lens-${testCase.tool}-`);
 			try {
 				const summary = await ledger();
+				plantGateConfig(testCase.tool, env.tmpDir);
 				for (const [name, body] of Object.entries(testCase.extraFiles ?? {})) {
 					fs.writeFileSync(path.join(env.tmpDir, name), body);
 				}
@@ -401,6 +404,7 @@ describe("exit-blind runners no longer report a clean file after a failed run", 
 			await ledger();
 			const filePath = path.join(env.tmpDir, "syn.py");
 			fs.writeFileSync(filePath, "def (:\n");
+			plantGateConfig("mypy", env.tmpDir);
 			safeSpawnAsync.mockResolvedValue({
 				// Verbatim live mypy 2.3.1 output for a source syntax error.
 				stdout: "syn.py:1: error: Invalid syntax  [syntax]\n",
