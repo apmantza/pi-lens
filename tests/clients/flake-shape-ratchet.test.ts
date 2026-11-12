@@ -650,6 +650,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the census polls the real MCP child's background review-graph build before classifying the project_report JSON cell; a fake clock cannot advance that child's build",
 	},
+	// 2026-11-12 (#5267): the sweep's window is the loaded copy's real 30 s arm
+	// delay and real 60 s spawn grace; no fake clock can advance another
+	// process's timer.
+	"raw-timer-wait:index-3917-orphan-sweep-scope.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the witness times the extension copy's OWN setTimeout, which a fake clock in the harness graph cannot move; the observation window is the production arm delay plus the spawn grace",
+	},
 	// 2026-10-31 (#5108): the read-only bound is a live wall deadline.
 	"raw-timer-wait:index-5108-opaque-blocker-disclosure-witness.test.ts": {
 		detector: "raw-timer-wait",
@@ -1212,6 +1220,17 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the subject is what a real bash command does to a real linked worktree, detected by git's own status; a stubbed shell or git answers neither",
+	},
+	// 2026-11-12 (#5267): the candidate rule reads the real OS process table, so
+	// the population must be real processes with a real dead owner and a real OS
+	// start spelling; a fabricated table would only test the mock.
+	"real-process-spawn:index-3917-orphan-sweep-scope.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the backstop's candidate rule is " +
+			"managed-binary + dead-owner-tag + older-than-grace over the real " +
+			"process table, and the #2042 guard only records a violation at a pid " +
+			"it can prove unowned; a stubbed snapshot answers both with what it was told",
 	},
 	"real-process-spawn:index-4504-opaque-prescan-root-witness.test.ts": {
 		detector: "real-process-spawn",

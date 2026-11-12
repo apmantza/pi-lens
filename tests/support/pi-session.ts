@@ -858,6 +858,10 @@ const PINNED_KEYS = [
 	"PI_LENS_TEST_SCANNER_HARNESS",
 	"PI_LENS_STARTUP_MODE",
 	"PI_LENS_COLD_START_QUICK",
+	// The loaded copy's orphan-backstop arming opt-out, spelled by
+	// `armOrphanBackstopOptOut` below and pinned to the production constant in
+	// `pi-session.test.ts` (#5267).
+	"PI_LENS_DISABLE_ORPHAN_BACKSTOP",
 ] as const;
 
 /** The one-root rule (see `startPiSession`): a second root cannot be observed. */
@@ -1300,6 +1304,7 @@ export async function startPiSession(
 	// start branch — the skipped work and the `mode: "quick"` row — still runs.
 	if (startupMode === "quick") process.env.PI_LENS_COLD_START_QUICK = "0";
 	else delete process.env.PI_LENS_COLD_START_QUICK;
+	armOrphanBackstopOptOut();
 	if (options.extraExtensions && options.inlineFactory)
 		throw new Error(
 			"startPiSession: extraExtensions is path mode only; this helper does not pin an inline factory's place in pi's load order",
@@ -1355,6 +1360,38 @@ function armBackstopCooldown(): void {
 		path.join(home, "orphan-backstop.json"),
 		JSON.stringify({ lastSweepAt: Date.now() }),
 	);
+}
+
+/**
+ * Keep the loaded copy from arming the machine-wide orphan backstop.
+ *
+ * The copy arms `scheduleUntrackedOrphanSweep` 30 s after its `session_start`,
+ * on jiti's module graph, where the setup file's empty-table scope (#3917)
+ * does not reach: the sweep enumerates the REAL process table of whoever runs
+ * the suite. `armBackstopCooldown` above is the primary defense, and it holds
+ * only while its stamp does — the production cooldown is 30 minutes, so a
+ * session in a home whose stamp is older than that (a long-lived host, a home
+ * restored from a fixture) arms a sweep that reads every fixture process
+ * carrying an owner tag whose pid the harness has already reaped as a foreign
+ * orphan whose owner is dead, and SIGKILLs it. That is defect shape 50, the
+ * #2042 kill-guard shape: the signal belongs to nobody running the suite, and
+ * the guard records it and fails the file at teardown.
+ *
+ * This is the narrow backstop the primary cannot be: it names the arming timer
+ * in this one process, read at arm time, and nothing else. `sweepUntrackedOrphans`
+ * stays callable and a `force` still sweeps, so the reaper's own tests that
+ * drive the body directly are untouched.
+ *
+ * The key is spelled literally, as every other pin in `startPiSession` spells
+ * its own (`armBackstopCooldown` above is a file for the same reason: naming
+ * `clients/instance-reaper.js` in this module's graph reshaped what the loaded
+ * copy's host sees, and it reddened
+ * `tests/index-4913-cli-flag-timing.test.ts`). `pi-session.test.ts` pins the
+ * spelling to `ORPHAN_BACKSTOP_SCHEDULING_ENV`, so a rename on either side reds
+ * there instead of silently leaving the harness armed again (#5267).
+ */
+function armOrphanBackstopOptOut(): void {
+	process.env.PI_LENS_DISABLE_ORPHAN_BACKSTOP = "1";
 }
 
 /**

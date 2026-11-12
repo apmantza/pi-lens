@@ -228,6 +228,20 @@ Set to `0` to disable the concurrent-session guard. The guard is **on** by
 default; it prevents a newly starting same-workspace session from resetting the
 warm LSP of a live incumbent session.
 
+## Orphan process reaping
+
+### `PI_LENS_DISABLE_ORPHAN_BACKSTOP`
+
+`1` stops this process arming the registry-independent orphan sweep, which runs
+30 seconds after a session start and kills pi-lens-managed binaries whose owner
+tag names a dead pid (`clients/instance-reaper.ts`). The knob removes the
+arming timer only: `sweepUntrackedOrphans` stays callable and a forced sweep
+still sweeps. The backstop is otherwise bounded by a machine-wide 30-minute
+cooldown stamp, so a host that lives past one arms again. The test harness sets
+it while it starts a session, so a session started under a harness cannot reap
+a process the harness owns (#5267); set it yourself only where nothing may
+reap orphans.
+
 ## LSP warm attach
 
 ### `PI_LENS_WARM_ATTACH`

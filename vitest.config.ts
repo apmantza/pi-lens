@@ -839,6 +839,11 @@ export const wallClockBudgetInclude = [
 	// shutdown is still exiting (flake-shape admission, lane proof for the
 	// helper through this importer).
 	"tests/index-3748-advisory-scope-witness.test.ts",
+	// #5267: the decoy witness holds the backstop's real 30 s arm delay and its
+	// real 60 s spawn grace against a population of real fixture processes, so
+	// the sweep's window is measured in wall clock and not in turn counts
+	// (flake-shape admission).
+	"tests/index-3917-orphan-sweep-scope.test.ts",
 	// #4316: the session-start LSP warm is fire-and-forget inside the loaded
 	// extension copy, so the witness joins its log record with vi.waitFor
 	// (flake-shape admission).
