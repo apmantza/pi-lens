@@ -85,7 +85,7 @@ The full list of commands and runtime flags is in [Tools and commands](docs/tool
 
 ## Documentation
 
-**Use**
+### Use
 
 - [Agent guide](docs/agent-guide.md): how an agent reads and responds to pi-lens
 - [Agent tools](docs/agent-tools.md): tool names, scopes, and arguments
@@ -94,7 +94,7 @@ The full list of commands and runtime flags is in [Tools and commands](docs/tool
 - [Diagnostic dispositions](docs/dispositions.md): triage with false-positive, suppress, defer, and flagged-to-fix
 - [Word index](docs/word-index.md): identifier search and the discovery funnel
 
-**Configure**
+### Configure
 
 - [Settings](docs/settings.md): defaults, environment variables, flags, and global versus project config
 - [Configuration](docs/globalconfig.md): global and project config files
@@ -102,7 +102,7 @@ The full list of commands and runtime flags is in [Tools and commands](docs/tool
 - [Language coverage](docs/language-coverage.md): supported languages, runners, and formatters
 - [Dependencies](docs/dependencies.md): auto-install policy and external tools
 
-**Extend**
+### Extend
 
 - [Custom rules](docs/custom-rules.md): project ast-grep and tree-sitter rules
 - [MCP server](docs/mcp.md): the experimental server for Claude Code and other MCP clients
