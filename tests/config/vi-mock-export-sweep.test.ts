@@ -3,7 +3,10 @@
  * production exports. Recurrences: #2272 and #2782.
  *
  * The sweep uses transitive importer-use reachability over the test's
- * non-mocked production imports. The admission contains 358 findings.
+ * non-mocked production imports, over both registration spellings: hoisted
+ * `vi.mock` and the un-hoisted `vi.doMock` twin (#5256). The admission holds
+ * one row per (file, specifier, factory shape); read its live count from
+ * `tests/support/vi-mock-export-baseline.json`.
  *
  * The latency surface (`scanLatencyLoggerSurface`) selects through
  * `isLatencyLoggerSpecifier` (the single source in
@@ -465,6 +468,130 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 			fs.writeFileSync(testFile, source);
 			expect(findViMockExportGaps(testFile, source)).toMatchObject([
 				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("flags a vi.doMock double that drops an export a platform-gated production importer uses (#5256)", () => {
+		// Recurrence guard for #5256: PR #5241 added `isToolInstallDisabled`
+		// to `clients/safe-spawn.ts`, whose only reader sits in the win32
+		// registry-PATH branch, and the `vi.doMock` double of
+		// `clients/env-utils.js` at `tests/clients/lsp/launch.test.ts` kept
+		// only `isTestMode`. Unit tests Windows threw
+		// `No "isToolInstallDisabled" export is defined on the ... mock` while
+		// this sweep stayed green: the detector read only `vi.mock`, and
+		// `vi.doMock` is the un-hoisted twin the dynamic-import tests use.
+		// The win32 branch is in the fixture because that is what hid the gap
+		// from the Linux lane: reachability is a static import, so the sweep
+		// must see through a platform branch.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			fs.writeFileSync(
+				path.join(root, "env-utils.ts"),
+				"export const isTestMode = () => false;\nexport const isToolInstallDisabled = () => false;\n",
+			);
+			fs.writeFileSync(
+				path.join(root, "safe-spawn.ts"),
+				'import { isToolInstallDisabled } from "./env-utils.js";\nexport function probePath(): string {\n  if (process.platform === "win32") return String(isToolInstallDisabled());\n  return "";\n}\n',
+			);
+			const source =
+				'import "./safe-spawn.js";\nvi.doMock("./env-utils.js", () => ({ isTestMode: () => false }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ specifier: "./env-utils.js", missing: ["isToolInstallDisabled"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it('flags a bracket-access vi["doMock"] double that drops an importer-used export (#5256)', () => {
+		// Shape 34 twin of the dotted #5256 case: the extension must be
+		// semantic over the callee, not keyed on the `vi.doMock` surface text.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export const x = b;\n',
+			);
+			const source =
+				'import "./importer.js";\nvi["doMock"]("./module.js", () => ({ a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a vi.doMock importOriginal pass-through (#5231 shape)", () => {
+		// Accept side of the #5256 extension: the corrected launch.test.ts
+		// double (#5231) spreads `importOriginal()` inside a `vi.doMock`, so
+		// admitting doMock into the population must not flag the fixed shape.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export const x = b;\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.doMock("./module.js", async (importOriginal) => ({ ...(await importOriginal()), a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not skip an importer that only vi.doMock replaces (#5256)", () => {
+		// Recurrence guard for #5256 F1: `vi.doMock` runs per test, after the
+		// static import has already loaded the real importer, so that importer's
+		// import of `module.js` still needs `b`. Only hoisted `vi.mock` replaces
+		// a module for the whole file, so only it may skip an importer.
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export const x = b;\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.doMock("./importer.js", () => ({ x: 1 }));\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ specifier: "./module.js", missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not skip an importer that vi.doUnmock names (#5256)", () => {
+		// Recurrence guard for #5256 F3: `vi.doUnmock` restores the real module
+		// and replaces none, so it must never join the importer-skip names. It
+		// reds if `doUnmock` joins HOISTED_MOCK_NAMES (mutation M2).
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export const x = b;\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.doUnmock("./importer.js");\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ specifier: "./module.js", missing: ["b"] },
 			]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });

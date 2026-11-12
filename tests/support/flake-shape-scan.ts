@@ -106,7 +106,12 @@ import { Lang, parse } from "@ast-grep/napi";
 
 import { bareIdentifier } from "./lsp-double-gate.js";
 import { unwrapParens } from "./spawn-cwd-scan.js";
-import { isViMockCall, mockSpecifier, unquote } from "./vi-mock-export-gate.js";
+import {
+	isViMockCall,
+	MOCK_REGISTRATION_NAMES,
+	mockSpecifier,
+	unquote,
+} from "./vi-mock-export-gate.js";
 import {
 	createCallSiteScanner,
 	codeMatches,
@@ -993,7 +998,8 @@ export function scanInProcessMock(
 	for (const call of syntaxRoot(scan).findAll({
 		rule: { kind: "call_expression" },
 	})) {
-		if (!isViMockCall(call.field("function"), ["mock", "doMock"])) continue;
+		if (!isViMockCall(call.field("function"), MOCK_REGISTRATION_NAMES))
+			continue;
 		const specifier = mockSpecifier(
 			call.field("arguments")?.namedChildren()[0],
 		);

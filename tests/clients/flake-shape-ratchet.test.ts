@@ -3779,6 +3779,13 @@ describe("flake-shape scan — in-process-mock (#4362)", () => {
 		expect(targetsIn(source)).toEqual(["clients/x"]);
 	});
 
+	it("does not count vi.doUnmock as an in-process mock (#5256 F3)", () => {
+		// Recurrence guard for #5256 F3: `doUnmock` restores the real module and
+		// replaces none. It reds if `doUnmock` joins the shared
+		// MOCK_REGISTRATION_NAMES list this scan reads (mutation M3).
+		expect(targetsIn('vi.doUnmock("../../clients/x.js");')).toEqual([]);
+	});
+
 	it("counts each mocked module once, however many times it is mocked", () => {
 		const source = [
 			'vi.mock("../../clients/x.js");',
