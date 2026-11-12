@@ -682,6 +682,40 @@ describe("widget-state renderWidget", () => {
 		},
 	);
 
+	// #5460 review F2: `truncateBasename` cut the stem by UTF-16 units but
+	// measured the label in columns. A wide-character parent overran the row
+	// budget, so `packHorizontalRow` dropped the blocker's token and drew `+2`.
+	it.each([70, 100] as const)(
+		"draws a same-named wide-character row's file token inside %s columns",
+		(width) => {
+			// Each parent is 40 CJK characters (80 columns), so the depth-1 label
+			// overruns the horizontal budget at both widths.
+			const a = `${process.cwd()}/${"甲".repeat(40)}/index.ts`;
+			const b = `${process.cwd()}/${"乙".repeat(40)}/index.ts`;
+			recordRunner(a, "tsc", "succeeded", 1);
+			recordDiagnostics(a, [
+				{
+					severity: "error",
+					semantic: "blocking",
+					message: "blocker in cjk",
+					rule: "E1",
+				},
+			]);
+			recordRunner(b, "tsc", "succeeded", 2);
+			recordDiagnostics(b, []);
+
+			const lines = renderWidget(width, theme);
+			const frame = visibleFrame(lines);
+
+			// The blocker's token: its dot, a truncated label ending in its
+			// extension, and its error count.
+			expect(frame).toMatch(/● \S*\.ts 1E/);
+			for (const line of lines) {
+				expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+			}
+		},
+	);
+
 	it("terminates and stays inside the width when two records spell the same segments", () => {
 		recordDiagnostics("/p/dup//index.ts", [
 			{
@@ -2948,6 +2982,22 @@ describe("a file no check completed on is not clean in the footer (#5258)", () =
 
 		recordDiagnostics("/repo/open.ts", []);
 		expect(renderWidget(120, theme).join("\n")).toContain("✓ clean");
+	});
+
+	// #5460 review F1: the unchecked line named its file by basename, so two
+	// same-named unchecked files read `⚠ index.ts: …` above rows labelled
+	// `a/index.ts` and `b/index.ts`. The line names the row its reason belongs to.
+	it("names the unchecked file by its row label when a same-named file shares its basename", () => {
+		const observed = Date.now() - 5_000;
+		recordDiagnostics("/repo/a/index.ts", [], undefined, observed, { reason });
+		recordDiagnostics("/repo/b/index.ts", [], undefined, observed + 100, {
+			reason,
+		});
+
+		const frame = visibleFrame(renderWidget(120, theme));
+
+		expect(frame).toContain(`⚠ b/index.ts: ${reason}`);
+		expect(frame).not.toContain(`⚠ index.ts: ${reason}`);
 	});
 
 	it("keeps a file's findings ahead of its unchecked mark", () => {

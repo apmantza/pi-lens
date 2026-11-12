@@ -1589,8 +1589,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// filesystem path operation. 8 -> 9 (#5301): the restored state is
 		// published with each file's `path`, the bus payload's own field name.
 		// 9 -> 7 (#5460): `dedupeByBasename` and three per-row basename reads are
-		// gone; `rowLabel` adds two `path.basename` calls.
-		"clients/widget-state.ts": 7,
+		// gone; `rowLabel` adds two `path.basename` calls. 7 -> 6 (#5460 review
+		// F1): the unchecked line names its row's label, not its basename.
+		"clients/widget-state.ts": 6,
 		"clients/word-index-logger.ts": 2,
 		// 51 -> 52 (#5235): the `lang:` predicate also matches a named kind's
 		// basename (`path.basename`), so `lang:groovy` selects a Jenkinsfile.

@@ -2494,7 +2494,7 @@ export function renderWidget(
 	if (lastUnchecked?.uncheckedReason !== undefined) {
 		lines.push(
 			fitLine(
-				` ${yellow("⚠")} ${dim(`${path.basename(lastUnchecked.filePath)}: ${lastUnchecked.uncheckedReason}`)}`,
+				` ${yellow("⚠")} ${dim(`${labelOf(lastUnchecked)}: ${lastUnchecked.uncheckedReason}`)}`,
 				w,
 			),
 		);
@@ -2781,12 +2781,12 @@ function truncateBasename(name: string, maxWidth: number): string {
 	if (maxWidth < 2) return "…";
 	const ext = path.extname(name);
 	const stem = name.slice(0, name.length - ext.length);
-	const keep = maxWidth - ext.length - 1;
+	const keep = maxWidth - visibleWidth(ext) - 1;
 	if (keep < 1) {
 		// Extension alone wouldn't fit; truncate the whole name.
-		return name.slice(0, maxWidth - 1) + "…";
+		return fitLine(name, maxWidth - 1, "") + "…";
 	}
-	return stem.slice(0, keep) + "…" + ext;
+	return fitLine(stem, keep, "") + "…" + ext;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
