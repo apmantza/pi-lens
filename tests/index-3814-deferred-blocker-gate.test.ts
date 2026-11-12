@@ -59,8 +59,9 @@ const witnessHome = await vi.hoisted(async () => {
 	// spare it as a sibling invocation's live root nor blame it, so any sighting
 	// of it redded a shard. The same call lets the shared setup's tmp-root
 	// interposer see the creation, and the harness claim below makes the root
-	// harness-owned: whatever re-creates it after this file's teardown is removed
-	// by the worker's own sweep, not by the run-end census (`#2912`).
+	// harness-owned, so the worker's own sweep records it at its teardown. A write
+	// that re-creates the home after this file's teardown survives that sweep and
+	// is left for the run-end census to judge (`#2912`).
 	const home = mkdtempSync(join(tmpdir(), "pi-lens-3814-witness-home-"));
 	const { getTmpRootRegistry, registerTmpRoot } =
 		await import("./support/tmp-root-registry.js");
@@ -227,11 +228,11 @@ afterEach(async () => {
  * minutes before the run-end sweep judged the root.
  *
  * The persist worker's own delay seam holds one write open over the teardown,
- * so the settle is what the file relies on instead of a race with the worker's
+ * so the join is what the file relies on instead of a race with the worker's
  * timing (the seam `tests/index-lsp-config-root-eviction.test.ts` uses for the
  * same reason, and `tests/clients/background-write-drains.test.ts` pins at the
- * seam). Deleting the settle below reddens the assertion at the end of this hook
- * on every run.
+ * seam). Deleting the join before the removal reddens the fingerprint assertion
+ * after it on every run.
  */
 const PLANTED_PERSIST_DELAY_MS = 750;
 /** A released snapshot body, for the persist planted in `afterAll` (#5098). */
@@ -274,9 +275,18 @@ afterAll(async () => {
 
 		// Join every deferred writer while the home is still pinned, so the bytes it
 		// has queued land inside the root that is about to go. The runner is strict:
-		// a drain that reports work still landing throws here rather than letting
-		// this hook remove a root from under a live writer.
+		// a drain that reports work still landing throws here. That error reds this
+		// file and is not swallowed; the `finally` below still restores
+		// `PI_LENS_HOME` and removes the root, so a failed join leaves no pinned home.
 		await drainRegisteredBackgroundWritesForTests();
+		// The join above has to let the planted write land: the persist records a
+		// successful fingerprint for this project only when its write completes, so
+		// a join that was deleted or stopped short leaves it unset and reds here.
+		// Without this read-back the file stayed green with both joins deleted (#5098).
+		expect(
+			getProjectSnapshotPersistStateForTests(plantedCwd).successfulFingerprint,
+			"the planted persist had not landed when the teardown joined its writers",
+		).toBeDefined();
 		await flushLatencyLog();
 	} finally {
 		if (previousPersistDelay === undefined)
@@ -284,18 +294,19 @@ afterAll(async () => {
 		else
 			process.env.PI_LENS_TEST_SNAPSHOT_PERSIST_WORKER_DELAY_MS =
 				previousPersistDelay;
+		if (witnessHome.previous === undefined) delete process.env.PI_LENS_HOME;
+		else process.env.PI_LENS_HOME = witnessHome.previous;
+		// Restore `PI_LENS_HOME` before the removal: a tail writer that resolves the
+		// machine-state directory when it lands
+		// (`clients/instance-registry.ts`'s `registryPath`) then cannot re-create this
+		// path, whichever home it last saw (#5024).
+		removeTempDirSync(witnessHome.home);
 	}
-	if (witnessHome.previous === undefined) delete process.env.PI_LENS_HOME;
-	else process.env.PI_LENS_HOME = witnessHome.previous;
-	// Restore `PI_LENS_HOME` before the removal: a tail writer that resolves the
-	// machine-state directory when it lands
-	// (`clients/instance-registry.ts`'s `registryPath`) then cannot re-create this
-	// path, whichever home it last saw (#5024).
-	removeTempDirSync(witnessHome.home);
-	// Then join again and read the path back. The removal above is where a leaked
-	// write used to land, and this settle — not a pause — is the join that spans
-	// it: a writer the join above missed re-creates the home while this one runs,
-	// and the read-back reddens this file instead of a census shard later.
+	// Then join again and read the path back. This settle is a backstop, not the
+	// fix: the join above lands the planted write before the removal, so with that
+	// join in place the settle observes nothing (deleting it keeps the file green).
+	// It catches a write that lands during this window and re-creates the home, from
+	// a writer the join above did not wait for.
 	await drainRegisteredBackgroundWritesForTests();
 	expect(
 		fs.existsSync(witnessHome.home),
