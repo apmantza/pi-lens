@@ -1,3 +1,5 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
@@ -41,12 +43,12 @@ const shfmtRunner: RunnerDefinition = {
 		} else {
 			const installed = await resolveAvailableOrInstall(shfmt, "shfmt", cwd);
 			if (!installed) {
-				return { status: "skipped", diagnostics: [], semantic: "none" };
+				return toolAbsentSkip(cwd, { id: "shfmt", checker: shfmt });
 			}
 			cmd = installed;
 		}
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "shfmt", checker: shfmt });
 
 		// --diff exits 1 and prints a unified diff if the file needs formatting
 		const result = await safeSpawnAsync(cmd, ["--diff", ctx.filePath], {
@@ -100,7 +102,7 @@ const shfmtRunner: RunnerDefinition = {
 			// #211: without project opt-in, do not nag about formatting. But
 			// shfmt DID exit 1 — differences exist — so this is "chose not to
 			// check", reported as skipped, never as a clean result (#1839).
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
 		// Extract first changed line from diff if possible

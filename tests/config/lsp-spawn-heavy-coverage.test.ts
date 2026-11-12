@@ -150,6 +150,8 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/powershell-bom-wire-5151.integration.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
+	"tests/clients/lsp/server-status-readiness-5487.test.ts":
+		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/opengrep-offline-config-failure.test.ts":
 		"#5100: phased in the fully serialized wall-clock-budget lane for the real-process-spawn admission; cannot run in two projects.",
 	"tests/clients/lsp/opengrep-new-file-4787.test.ts":

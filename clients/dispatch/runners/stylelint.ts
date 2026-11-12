@@ -1,11 +1,11 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce, resolveRunnerCwd } from "../../tool-cwd.js";
-import {
-	getLinterPolicyForCwd,
-	hasStylelintConfig,
-} from "../../tool-policy.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -164,10 +164,11 @@ const stylelintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "stylelint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("stylelint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 		const fileDir = path.dirname(path.resolve(cwd, ctx.filePath));
-		const hasConfig = hasStylelintConfig(fileDir) || hasStylelintConfig(cwd);
+		const hasConfig =
+			hasToolConfig("stylelint", fileDir) || hasToolConfig("stylelint", cwd);
 		if (!hasConfig) {
 			logRunnerAdvisoryOnce(
 				ctx,
@@ -179,7 +180,7 @@ const stylelintRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "stylelint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "stylelint" });
 
 		const result = await safeSpawnAsync(
 			cmd,

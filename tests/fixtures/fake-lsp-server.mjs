@@ -764,6 +764,119 @@ function send(msg) {
 	process.stdout.write(encode(msg));
 }
 
+// #5487: rust-analyzer's cold start. `FAKE_LSP_LOADING_MS=N` models a server that
+// is still loading its workspace for N ms after `initialized`: every pull is
+// answered with an EMPTY authoritative report (whatever the document holds),
+// and, with `FAKE_LSP_LOADING_PUSH_EMPTY=1`, each didOpen draws an empty publish.
+// When the client asked for it (`capabilities.experimental.serverStatusNotification`,
+// as rust-analyzer requires) the server also announces
+// `experimental/serverStatus` quiescent:false at `initialized` and quiescent:true
+// when loading ends. `FAKE_LSP_LOADING_NO_STATUS=1` withholds the announcements
+// (a server that loads without announcing, the pre-#5487 shape) and
+// `FAKE_LSP_LOADING_MALFORMED_STATUS=1` sends them without a boolean `quiescent`
+// (`done`: only the completion notice).
+// Further #5487 knobs: `FAKE_LSP_LOADING_HEALTH=error|warning` sets the status
+// `health` (`error` is a workspace that failed to load: message "Failed to load
+// workspaces." and every pull stays empty after loading ends, as rust-analyzer's
+// does; `warning` is ready); `FAKE_LSP_LOADING_RELATED=1` adds a finding for
+// ANOTHER document to every pull reply as `relatedDocuments`;
+// `FAKE_LSP_LOADING_PUSH_FINDING=1` draws a NON-empty publish on each didOpen
+// during loading; `FAKE_LSP_LOADING_IGNORE_PULL_AFTER=1` answers no pull once
+// loading has ended.
+// `FAKE_LSP_LOADING_ANNOUNCE_AT_FIRST_PULL=1` holds the quiescent:false notice
+// until the first pull arrives and sends it just before that pull's reply, the
+// order rust-analyzer 1.99.1 produced on every recorded cold start (the request
+// left before any notice, then `quiescent:false`, then the empty reply), so the
+// client can never have read the notice before it sent the request.
+// `FAKE_LSP_LOADING_HEALTH_RECOVERS=1` (with `HEALTH=error`): a document whose
+// text holds `fake-lsp-workspace-fixed` turns the health to `ok` and announces
+// it with `quiescent` still true, with no loading phase between.
+// `FAKE_LSP_LOADING_REFRESH=1` also sends `workspace/diagnostic/refresh` when
+// loading starts, as rust-analyzer does. Off by default.
+const LOADING_MS = Number.parseInt(process.env.FAKE_LSP_LOADING_MS ?? "0", 10);
+const LOADING_REFRESH_ID = "fake-loading-refresh";
+let loadingUntil = 0;
+let clientAsksServerStatus = false;
+let loadingFlipSpent = false;
+let loadingCancelSpent = false;
+let loadingAnnounceSpent = false;
+let workspaceHealth = process.env.FAKE_LSP_LOADING_HEALTH ?? "ok";
+const isLoading = () => Date.now() < loadingUntil;
+const workspaceFailed = () => workspaceHealth === "error";
+const announceAtFirstPull = () =>
+	process.env.FAKE_LSP_LOADING_ANNOUNCE_AT_FIRST_PULL === "1";
+// "1" garbles every notice; "done" garbles only the quiescent:true one, so the
+// server stays loading as far as a client that ignores garbage can tell.
+const malformedStatusFor = (quiescent) =>
+	process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "1" ||
+	(process.env.FAKE_LSP_LOADING_MALFORMED_STATUS === "done" && quiescent === true);
+function announceStatus(quiescent) {
+	if (!clientAsksServerStatus || process.env.FAKE_LSP_LOADING_NO_STATUS === "1") return;
+	send({
+		jsonrpc: "2.0",
+		method: "experimental/serverStatus",
+		params: {
+			health: workspaceHealth,
+			quiescent: malformedStatusFor(quiescent) ? "no" : quiescent,
+			message: workspaceFailed() ? "Failed to load workspaces." : null,
+		},
+	});
+}
+function startLoading() {
+	if (!(LOADING_MS > 0)) return;
+	loadingUntil = Date.now() + LOADING_MS;
+	// `FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL=1`: the whole loading window passes
+	// inside the first pull's flight (status false, status true, then the empty
+	// reply it computed while loading), so no status is loading when the reply
+	// is read, yet the reply describes a workspace that was not loaded.
+	if (process.env.FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL === "1") return;
+	if (announceAtFirstPull()) {
+		setTimeout(() => announceStatus(true), LOADING_MS).unref?.();
+		return;
+	}
+	announceStatus(false);
+	if (process.env.FAKE_LSP_LOADING_REFRESH === "1") {
+		send({ jsonrpc: "2.0", id: LOADING_REFRESH_ID, method: "workspace/diagnostic/refresh" });
+	}
+	setTimeout(() => announceStatus(true), LOADING_MS).unref?.();
+}
+/** `FAKE_LSP_LOADING_ANNOUNCE_AT_FIRST_PULL`: the held notice, once, before a reply. */
+function announceHeldLoading() {
+	if (!announceAtFirstPull() || loadingAnnounceSpent || !isLoading()) return;
+	loadingAnnounceSpent = true;
+	announceStatus(false);
+}
+/** `FAKE_LSP_LOADING_HEALTH_RECOVERS`: the manifest was fixed in place. */
+function recoverHealthOn(text) {
+	if (
+		process.env.FAKE_LSP_LOADING_HEALTH_RECOVERS !== "1" ||
+		!workspaceFailed() ||
+		typeof text !== "string" ||
+		!text.includes("fake-lsp-workspace-fixed")
+	)
+		return;
+	workspaceHealth = "ok";
+	announceStatus(true);
+}
+/** True when this pull is answered with the flip above; ends the loading window. */
+function flipAroundPull() {
+	if (process.env.FAKE_LSP_LOADING_FLIP_AROUND_FIRST_PULL !== "1" || loadingFlipSpent) return false;
+	loadingFlipSpent = true;
+	announceStatus(false);
+	announceStatus(true);
+	return true;
+}
+/**
+ * `FAKE_LSP_LOADING_CANCEL_FIRST_PULL_AFTER=1`: the first pull received once
+ * loading has ended is cancelled with -32802 (rust-analyzer's retrigger), as
+ * the pulls it had queued were when it went quiescent.
+ */
+function cancelPullAfterLoading() {
+	if (process.env.FAKE_LSP_LOADING_CANCEL_FIRST_PULL_AFTER !== "1" || loadingCancelSpent || isLoading()) return false;
+	loadingCancelSpent = true;
+	return true;
+}
+
 // #4758: the settings a client delivers, read off the wire. With
 // FAKE_LSP_TRACE_CONFIG=1 the trace file gets one line each for the
 // initializationOptions, a didChangeConfiguration payload, and (when
@@ -785,6 +898,8 @@ function handle(raw) {
 	} catch {
 		return;
 	}
+	// The client's reply to our loading-time refresh request: nothing to answer.
+	if (data.id === LOADING_REFRESH_ID && data.method === undefined) return;
 	if (data.id === CONFIG_PULL_ID && data.method === undefined) {
 		traceConfig(`config-pull-answer ${JSON.stringify(data.result ?? null)}`);
 		return;
@@ -883,6 +998,8 @@ function handle(raw) {
 			walkAmbient(checkerRoot);
 		}
 		const clientCapabilities = data.params?.capabilities;
+		clientAsksServerStatus =
+			clientCapabilities?.experimental?.serverStatusNotification === true;
 		const clientCodeAction = clientCapabilities?.textDocument?.codeAction;
 		const clientSupportsCodeActionResolve =
 			clientCodeAction?.dataSupport === true &&
@@ -1084,6 +1201,7 @@ function handle(raw) {
 
 	// Ignore notifications without id
 	if (data.method === "initialized") {
+		startLoading();
 		if (process.env.FAKE_LSP_PULL_SECTIONS) {
 			send({
 				jsonrpc: "2.0",
@@ -1190,6 +1308,31 @@ function handle(raw) {
 			data.params?.textDocument?.uri,
 			data.params?.textDocument?.text ?? "",
 		);
+		recoverHealthOn(data.params?.textDocument?.text);
+		if (isLoading() && process.env.FAKE_LSP_LOADING_PUSH_EMPTY === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: { uri: data.params?.textDocument?.uri, diagnostics: [] },
+			});
+		}
+		if (isLoading() && process.env.FAKE_LSP_LOADING_PUSH_FINDING === "1") {
+			send({
+				jsonrpc: "2.0",
+				method: "textDocument/publishDiagnostics",
+				params: {
+					uri: data.params?.textDocument?.uri,
+					diagnostics: [
+						{
+							severity: 1,
+							code: "LOADPUSH1",
+							message: "finding pushed while loading",
+							range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+						},
+					],
+				},
+			});
+		}
 		publishSequenceFor(data.params?.textDocument?.uri);
 		if (RECOMPILE_CLEARS_MS >= 0) {
 			recompileVersions.set(
@@ -1250,6 +1393,7 @@ function handle(raw) {
 		if (typeof text === "string") {
 			openDocuments.set(data.params?.textDocument?.uri, text);
 		}
+		recoverHealthOn(text);
 		// #4782: a dependency whose change takes the checker long to analyze.
 		// The work runs BEFORE the republish below, so the dependents' previous
 		// answers (checked against the old bytes) are the latest the client
@@ -1514,6 +1658,23 @@ function handle(raw) {
 		if (process.env.FAKE_LSP_IGNORE_PULL === "1") return;
 		const text = openDocuments.get(data.params?.textDocument?.uri) ?? "";
 		const uri = data.params?.textDocument?.uri;
+		if (process.env.FAKE_LSP_LOADING_IGNORE_PULL_AFTER === "1" && LOADING_MS > 0 && !isLoading()) return;
+		if (cancelPullAfterLoading()) {
+			send({
+				jsonrpc: "2.0",
+				id: data.id,
+				error: { code: -32802, message: "server cancelled the request (retriggerRequest)" },
+			});
+			return;
+		}
+		const flipped = flipAroundPull();
+		announceHeldLoading();
+		// `FAKE_LSP_LOADING_REPEAT_STATUS=1`: a ready server repeats its quiescent
+		// notice before every answer (rust-analyzer re-sends its status on health
+		// and message changes). The value does not change, so nothing is loading.
+		if (process.env.FAKE_LSP_LOADING_REPEAT_STATUS === "1" && !isLoading()) {
+			announceStatus(true);
+		}
 		const sendPullResponse = () => {
 			if (PULL_RESPONSE === "timeout") return;
 			if (PULL_RESPONSE === "-32601") {
@@ -1526,7 +1687,9 @@ function handle(raw) {
 			}
 			const items = CLOSED_FILE_CACHE
 				? checkerDiagnostics(uri)
-				: PULL_RESPONSE === "empty" ||
+				: isLoading() ||
+				workspaceFailed() ||
+				PULL_RESPONSE === "empty" ||
 				(text.includes("fake-lsp-clean") && PULL_RESPONSE !== "items")
 					? []
 					: [
@@ -1544,8 +1707,27 @@ function handle(raw) {
 			send({
 				jsonrpc: "2.0",
 				id: data.id,
-				result: { kind: "full", items },
+				result: {
+					kind: "full",
+					items,
+					...(process.env.FAKE_LSP_LOADING_RELATED === "1" && {
+						relatedDocuments: {
+							"file:///elsewhere/other.fkr": {
+								kind: "full",
+								items: [
+									{
+										severity: 1,
+										code: "RELATED1",
+										message: "a finding for another document",
+										range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+									},
+								],
+							},
+						},
+					}),
+				},
 			});
+			if (flipped) loadingUntil = 0;
 		};
 		pullCount += 1;
 		if (pullCount > 1 && DELAY_AFTER_FIRST_PULL_MS > 0) {

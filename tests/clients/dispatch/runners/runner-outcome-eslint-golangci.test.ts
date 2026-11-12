@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
+import { plantGateConfig } from "../../../support/gate-config-fixtures.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawnAsync = vi.hoisted(() => vi.fn());
@@ -17,10 +18,9 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	...(await importOriginal<
 		typeof import("../../../../clients/tool-policy.js")
 	>()),
-	hasEslintConfig: () => true,
-	hasGolangciConfig: () => true,
 	getLinterPolicyForCwd: () => undefined,
 }));
+
 vi.mock(
 	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
 	async (importOriginal) => ({
@@ -30,9 +30,25 @@ vi.mock(
 		createAvailabilityChecker: (command: string) => ({
 			isAvailable: () => available,
 			isAvailableAsync: async () => available,
+			getVerdict: () => ({
+				outcome: "missing",
+				cause: "not-found",
+				elapsedMs: 0,
+				latched: true,
+				retryAtMs: 0,
+			}),
 			getCommand: () => command,
 		}),
-		createCwdCachedProbe: () => async () => available,
+		createCwdCachedProbe: () =>
+			Object.assign(async () => available, {
+				getVerdict: () => ({
+					outcome: "missing",
+					cause: "not-found",
+					elapsedMs: 0,
+					latched: true,
+					retryAtMs: 0,
+				}),
+			}),
 		resolveToolCommand: () => "eslint",
 		resolveAvailableOrInstall: async (checker: { getCommand: () => string }) =>
 			available ? checker.getCommand() : null,
@@ -98,8 +114,7 @@ async function dispatchOutcome(
 			tool === "eslint" ? "main.js" : "main.go",
 		);
 		fs.writeFileSync(filePath, "package main\n");
-		if (tool === "golangci-lint")
-			fs.writeFileSync(path.join(env.tmpDir, ".golangci.yml"), "run: {}\n");
+		plantGateConfig(tool, env.tmpDir);
 		const actualResult =
 			tool === "golangci-lint" && !keepReportedSpelling
 				? {
@@ -176,8 +191,7 @@ async function dispatchTwoEmptyFiles(tool: Tool) {
 				`${name}.${tool === "eslint" ? "js" : "go"}`,
 			);
 			fs.writeFileSync(filePath, "package main\n");
-			if (tool === "golangci-lint")
-				fs.writeFileSync(path.join(env.tmpDir, ".golangci.yml"), "run: {}\n");
+			plantGateConfig(tool, env.tmpDir);
 			await dispatchForFile(
 				createDispatchContext(
 					filePath,

@@ -36,6 +36,7 @@
  * Refs: #131 (Mode 2)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { processCutShort } from "./utils/spawn-outcome.js";
 import { formatToolFailure } from "./utils/tool-failure.js";
 import * as fs from "node:fs";
@@ -221,7 +222,7 @@ const trivyConfigRunner: RunnerDefinition = {
 			const managed = await resolveAvailableOrInstall(trivy, "trivy", cwd);
 			if (managed) cmd = managed;
 		}
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "trivy", checker: trivy });
 
 		const severities = resolveSeverityFloor(cwd).join(",");
 		const result = await safeSpawnAsync(

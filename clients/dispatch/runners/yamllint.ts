@@ -1,8 +1,11 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce } from "../../tool-cwd.js";
-import { getLinterPolicyForCwd, hasYamllintConfig } from "../../tool-policy.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -17,8 +20,6 @@ import {
 import { parseToolRun } from "./utils/tool-failure.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-export { hasYamllintConfig };
 
 function parseYamllintParsable(
 	raw: string,
@@ -61,9 +62,9 @@ const yamllintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "yamllint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("yamllint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
-		const hasConfig = hasYamllintConfig(cwd);
+		const hasConfig = hasToolConfig("yamllint", cwd);
 		if (!hasConfig) {
 			logRunnerAdvisoryOnce(
 				ctx,
@@ -75,7 +76,7 @@ const yamllintRunner: RunnerDefinition = {
 
 		const cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd) return toolAbsentSkip(cwd, { id: "yamllint" });
 
 		const result = await safeSpawnAsync(cmd, ["-f", "parsable", ctx.filePath], {
 			cwd,
