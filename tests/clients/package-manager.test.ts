@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "./test-utils.js";
 import { waitFor } from "./interleaving-kit.js";
 import { gatedPromise } from "../support/fault-injection.js";
+import { drainRegisteredBackgroundWritesForTests } from "../support/background-write-drains.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
@@ -752,6 +753,80 @@ describe("primeGlobalBinDirs", () => {
 			expect(escaped).toEqual([]);
 		} finally {
 			process.off("unhandledRejection", onEscape);
+		}
+	});
+
+	// Recurrence: tmp-fixture-hygiene reds on `pi-lens-pi-session-*` left by
+	// tests/index-session-start-classification-wiring.test.ts (ci.yml runs
+	// 42472349050, 42546880166 and, on master, 42968481812: each attempt 1
+	// failed, the re-run passed). The tier-2 session's `session_start` starts this prime in
+	// the loaded copy; its child logs a `spawn_resource_usage` row after the
+	// fixture root is removed and the NDJSON writer re-creates the home. The
+	// harness can reach the loaded copy only through the registered drains, so
+	// a prime that registers none lets the row land late.
+	it("holds the harness's registered drains until a primed lookup has settled", async () => {
+		const { binDir } = prefixWith("prisma");
+		const prefix = path.dirname(binDir);
+		const gate = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		setQueryResponder(() => gate.promise);
+		let drained = false;
+		try {
+			primeGlobalBinDirs();
+			await waitFor(
+				() => queryCalls.filter((c) => c.cmd === "npm").length,
+				(count) => count === 1,
+			);
+			const drain = drainRegisteredBackgroundWritesForTests().then(() => {
+				drained = true;
+			});
+			// Pre-fix the drain settles in microtasks; a few macrotask turns are
+			// ample for it to have resolved, so `false` here means it is held.
+			for (let turn = 0; turn < 5; turn++)
+				await new Promise((resolve) => setImmediate(resolve));
+			expect(drained).toBe(false);
+
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+			await drain;
+			expect(drained).toBe(true);
+		} finally {
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+		}
+	});
+
+	// Recurrence: same leak. A drain that returned "settled" after a bounded
+	// wait with the prime still running would let the child's row land after the
+	// root was removed, so a prime that outlives the bound must reject the
+	// harness's drain instead of reading as done.
+	it("rejects the registered drains when a primed lookup outlives the bound", async () => {
+		const { binDir } = prefixWith("prisma");
+		const prefix = path.dirname(binDir);
+		const gate = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		setQueryResponder(() => gate.promise);
+		try {
+			primeGlobalBinDirs();
+			await waitFor(
+				() => queryCalls.filter((c) => c.cmd === "npm").length,
+				(count) => count === 1,
+			);
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+			const outcome = drainRegisteredBackgroundWritesForTests().then(
+				() => "settled",
+				(error: Error) => error.message,
+			);
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(await outcome).toMatch(/global-bin-dir prime still running/);
+		} finally {
+			vi.useRealTimers();
+			gate.resolve({ stdout: `${prefix}\n`, stderr: "", status: 0 });
+			await drainRegisteredBackgroundWritesForTests();
 		}
 	});
 

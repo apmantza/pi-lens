@@ -48,6 +48,8 @@ import {
 } from "./session-repository.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logExtension } from "./extension-log.js";
+import { registerBackgroundWriteDrain } from "./background-write-drains.js";
+import { withDeadline } from "./deadline-utils.js";
 
 // The project-local bin layouts moved to `session-repository.ts` (#4530),
 // which the spawn seam can import; existing importers keep this seam.
@@ -485,11 +487,60 @@ export async function allAvailableGlobalBinDirs(
  * spawn, no new cache, and nothing here changes what a tool resolves to.
  */
 export function primeGlobalBinDirs(): void {
-	allAvailableGlobalBinDirs().catch(() => {
-		// none: a head start only. A failed probe is not memoized, so the first
-		// consumer runs its own lookup and sees the failure itself.
-	});
+	primesRunning += 1;
+	const flight = allAvailableGlobalBinDirs()
+		.then(
+			() => undefined,
+			() => {
+				// none: a head start only. A failed probe is not memoized, so the first
+				// consumer runs its own lookup and sees the failure itself.
+			},
+		)
+		.finally(() => {
+			primesRunning -= 1;
+		});
+	primesSettled = Promise.all([primesSettled, flight]).then(() => undefined);
 }
+
+/**
+ * The primes still running in this evaluation of the module, and a promise that
+ * settles once every prime started so far has. Neither is cleared by
+ * `_resetPackageManagerCache`: a reset drops the memo, not the child the prime
+ * already spawned, and that child's resource row is a write a fixture can
+ * outlive (see {@link settlePrimedGlobalBinDirsForTests}).
+ */
+let primesRunning = 0;
+let primesSettled: Promise<void> = Promise.resolve();
+
+/** Longest {@link settlePrimedGlobalBinDirsForTests} waits for a prime. */
+const PRIME_SETTLE_BOUND_MS = 10_000;
+
+/**
+ * Test-only strict drain for the fire-and-forget prime. Every `safeSpawnAsync`
+ * the prime makes logs a `spawn_resource_usage` row when its child ends; a
+ * tier-2 session's `session_start` starts the prime in the loaded extension
+ * copy, which a test's own import cannot reach, so a fixture removed right
+ * after `dispose()` got its home re-created by that row (the NDJSON writer
+ * re-creates a missing directory) and `tmp-fixture-hygiene` read it as a leak.
+ * Settled only when no prime is left; otherwise it names what remains. No
+ * `await`: this module is a one-hop helper of the `session_start` handler, and
+ * `tests/config/hook-await-bounds.test.ts` pins its unbounded awaits.
+ */
+function settlePrimedGlobalBinDirsForTests(): Promise<string | undefined> {
+	return withDeadline(primesSettled, {
+		ms: PRIME_SETTLE_BOUND_MS,
+		onTimeout: "undefined",
+	}).then(() =>
+		primesRunning > 0
+			? "global-bin-dir prime still running after the bounded wait"
+			: undefined,
+	);
+}
+
+// The prime runs in whichever copy of this module `session_start` loaded; the
+// tier-2 harness joins every copy's prime through the registry
+// (`clients/background-write-drains.ts`).
+registerBackgroundWriteDrain(settlePrimedGlobalBinDirsForTests);
 
 /**
  * Locate a globally-installed tool binary across every installed manager's
