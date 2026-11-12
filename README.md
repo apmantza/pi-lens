@@ -57,7 +57,7 @@ The agent must clear a 🔴 blocker before it reports the task as done. A result
 - **Safe formatting and autofix.** pi-lens formats and fixes files with the tools you configure or it confidently detects.
 - **Structural rules.** ast-grep and tree-sitter rules flag correctness and security smells, and you can add [custom rules](docs/custom-rules.md).
 - **Code navigation for the agent.** Tools cover LSP navigation, ranked identifier search, module reports, and symbol reads, so the agent reads less code. See [agent tools](docs/agent-tools.md).
-- **Guards and triage.** Read-before-edit blocks blind edits, an optional git guard holds `git commit` while blockers stand, and you can mark a finding false-positive, suppressed, or deferred. See [dispositions](docs/dispositions.md).
+- **Guards and triage.** Read-before-edit blocks blind edits, an optional git guard holds `git commit` while blockers stand, and on pi you can mark a finding false-positive, suppressed, or deferred. The marking tool has no MCP endpoint, and under pi's lazy tool loading the agent activates it first. See [dispositions](docs/dispositions.md) and [agent tools](docs/agent-tools.md).
 - **Health and scans.** `/lens-health` reports runtime health, and opted-in projects get background security and dependency scans.
 
 The [feature reference](docs/features.md) covers everything.

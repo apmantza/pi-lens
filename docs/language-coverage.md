@@ -153,7 +153,7 @@ Consequences:
 
 Each tool falls in one of three tiers. The gate comes from two layers in the code: the policy in `clients/tool-policy.ts` (`gate`, `defaultWhenUnconfigured`, and the per-tool `configEligibility`), and the skip inside each runner's `run` function. The table lists the tools the README names, plus the other runners that have no policy entry. Where the runner's skip is stricter than the policy, the table follows the runner and the notes below say so.
 
-A tool counts as available when the binary exists in the project (`node_modules/.bin`, `.venv/bin`, or `vendor/bin`), in pi-lens's managed install, or on `PATH`. The project rung runs only when pi trusts the project (`resolveToolCommandWithInstallFallback` in `clients/dispatch/runners/utils/runner-helpers.ts`, `refuseLocalBin` in `clients/package-manager.ts`). pi-lens installs a missing tool only when its `autoInstall` is true in `TOOL_EXECUTION_POLICY`; ESLint, phpstan, and vale are never auto-installed.
+A tool counts as available when the binary exists in the project (`node_modules/.bin`, `.venv/bin`, or `vendor/bin`), in pi-lens's managed install, or on `PATH`. The project rung runs only when pi trusts the project (`resolveToolCommandWithInstallFallback` in `clients/dispatch/runners/utils/runner-helpers.ts`, `refuseLocalBin` in `clients/package-manager.ts`). pi-lens installs a missing linter or formatter only when its `autoInstall` is true in `TOOL_EXECUTION_POLICY`; ESLint, phpstan, and vale are never auto-installed. Language servers have no policy row: `ensureTool` in `clients/lsp/server.ts` installs a missing server, such as the TypeScript language server. Every install also needs pi project trust (`assertInstallAllowed` in `clients/project-trust.ts`).
 
 | Tier | Tool | Gate | Source |
 |---|---|---|---|
@@ -165,7 +165,7 @@ A tool counts as available when the binary exists in the project (`node_modules/
 | No project config | oxlint, Biome (JS and TS lint) | The default pair when the project has no ESLint, oxlint, or Biome config; one project config selects its tool | `getPreferredJstsLintRunners`, `biome-check.ts` |
 | No project config | swiftlint, go vet, ast-grep rules, tree-sitter rules | No linter-policy entry; the runner has no config skip. go vet needs the Go toolchain. | `swiftlint.ts`, `go-vet.ts`, `ast-grep-napi.ts`, `tree-sitter.ts` |
 | No project config | javac | No policy entry; skips files inside a Maven or Gradle project | `javac.ts` |
-| No project config | Formatters: Biome (`.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss`), shfmt, gofmt, rustfmt, ruff, prettier (`.less .graphql .gql` only) | Formatter policy `defaultWhenUnconfigured: true`; explicit project config wins | `FORMATTER_POLICY_BY_EXTENSION`, `getFormattersForFile` |
+| No project config | Formatters: Biome (`.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss`), shfmt, gofmt, rustfmt, ruff, typstyle (`.typ .typc`), prettier (`.less .graphql .gql` only) | Formatter policy `defaultWhenUnconfigured: true`; explicit project config wins | `FORMATTER_POLICY_BY_EXTENSION`, `getFormattersForFile` |
 | Project config | ESLint | Needs an ESLint config; policy `config-first` | `eslint.ts` |
 | Project config | golangci-lint | Needs a golangci config; policy `config-first` | `golangci-lint.ts` |
 | Project config | mypy | Needs a mypy config; ruff covers Python without it | `mypy.ts` |

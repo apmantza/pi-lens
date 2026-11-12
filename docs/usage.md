@@ -225,9 +225,10 @@ loads no pi-lens skills. To install from git, run
 > **npm v12 users:** dependency lifecycle scripts (e.g. `@ast-grep/cli`'s
 > `postinstall`) now require explicit approval — if `npm install` warns about
 > unreviewed install scripts, review and allow them with
-> `npm approve-scripts`, or trust the `allowScripts` entries already declared
-> in this package's `package.json` (maintainers: see CONTRIBUTING.md
-> "Lifecycle-script approvals"). Installing from a git source (`pi install
+> `npm approve-scripts` in pi's install root. The `allowScripts` entries in
+> pi-lens's own `package.json` do not apply when pi-lens is installed as a
+> dependency: copy them into the install root's `package.json` instead
+> (maintainers: see CONTRIBUTING.md "Lifecycle-script approvals"). Installing from a git source (`pi install
 > git:...` / `pi update --extension git:...`) may similarly prompt for
 > git-dependency approval; accept it to let the `prepare` build step run.
 
