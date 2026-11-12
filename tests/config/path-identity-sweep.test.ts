@@ -262,26 +262,11 @@ const PINS: Readonly<Record<string, Pin>> = {
 		identities: "f25de8a73a269e45",
 		reason: PRE_4689,
 	}, // :215, :1054
-	"clients/probe-home-state.ts#raw-realpath": {
-		sites: 1,
-		identities: "480c8b119f83ad12",
-		reason: PRE_4689,
-	}, // :280
-	"clients/project-diagnostics/fresh-fetch.ts#raw-realpath": {
-		sites: 1,
-		identities: "00f55ad56f820bcc",
-		reason: PRE_4689,
-	}, // :300
 	"clients/project-lens-config.ts#path-resolve-keyed": {
 		sites: 2,
 		identities: "f196f38821d9305c",
 		reason: SPELLING_MEMO,
 	}, // :469, :472
-	"clients/review-graph/git-identity.ts#raw-realpath": {
-		sites: 1,
-		identities: "10303ca5ad9cc1c8",
-		reason: PRE_4689,
-	}, // :142
 	"clients/review-graph/import-resolvers.ts#path-resolve-keyed": {
 		sites: 1,
 		identities: "6be0c6b8129bfb47",

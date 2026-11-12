@@ -56,10 +56,8 @@
 
 import { relative } from "node:path";
 import { EXCLUDED_DIRS, getExcludedDirGlobs } from "./file-utils.js";
-import {
-	canonicalDirectory,
-	listNestedLinkedWorktreeRoots,
-} from "./review-graph/git-identity.js";
+import { realpathOrResolve } from "./path-utils.js";
+import { listNestedLinkedWorktreeRoots } from "./review-graph/git-identity.js";
 import { escapeRegExp } from "./string-utils.js";
 
 /**
@@ -70,7 +68,7 @@ import { escapeRegExp } from "./string-utils.js";
  * the caller joins it back onto its own spelling of `cwd`.
  */
 export function nestedWorktreeOffsets(cwd: string): string[] {
-	const base = canonicalDirectory(cwd);
+	const base = realpathOrResolve(cwd);
 	return listNestedLinkedWorktreeRoots(cwd).map((root) => relative(base, root));
 }
 

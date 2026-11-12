@@ -21,11 +21,9 @@ import {
 	isUnderDir,
 	normalizeEphemeralMapKey,
 	normalizeFilePath,
+	realpathOrResolve,
 } from "./path-utils.js";
-import {
-	canonicalDirectory,
-	listNestedLinkedWorktreeRoots,
-} from "./review-graph/git-identity.js";
+import { listNestedLinkedWorktreeRoots } from "./review-graph/git-identity.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import {
 	createAvailabilityChecker,
@@ -302,7 +300,7 @@ function nestedWorktreeScope(targetDir: string): NestedWorktreeScope {
 		prefixes.push(`${normalizeEphemeralMapKey(normalizeFilePath(root))}/`);
 	}
 	if (prefixes.length === 0) return NO_NESTED_WORKTREES;
-	const base = normalizeFilePath(canonicalDirectory(targetDir));
+	const base = normalizeFilePath(realpathOrResolve(targetDir));
 	return {
 		count: prefixes.length,
 		contains: (file) => {
