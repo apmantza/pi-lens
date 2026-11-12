@@ -7,7 +7,9 @@ import { setupTestEnvironment } from "../../test-utils.js";
 const safeSpawn = vi.fn();
 const safeSpawnAsync = vi.fn();
 const ensureTool = vi.fn(async (_toolId: string) => "ruff");
-const resolveAvailableOrInstall = vi.fn(async () => ensureTool("ruff"));
+const resolveToolCommandWithInstallFallback = vi.fn(async () =>
+	ensureTool("ruff"),
+);
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawn,
@@ -24,11 +26,7 @@ vi.mock(
 		...(await importOriginal<
 			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
 		>()),
-		createAvailabilityChecker: vi.fn(() => ({
-			isAvailableAsync: vi.fn(async () => false),
-			getCommand: vi.fn(() => null),
-		})),
-		resolveAvailableOrInstall,
+		resolveToolCommandWithInstallFallback,
 	}),
 );
 

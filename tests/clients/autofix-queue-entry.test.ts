@@ -153,9 +153,9 @@ const clients = {
 	},
 	ruffClient: {
 		isPythonFile: () => true,
-		ensureAvailable: async () => {
+		resolveCommandForFile: async (_filePath: string, cwd: string) => {
 			await fixer.resolve();
-			return true;
+			return { cwd, command: "ruff" };
 		},
 		fixFileAsync: async () => {
 			await fixer.write();

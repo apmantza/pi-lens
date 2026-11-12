@@ -26,13 +26,10 @@ import type {
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { parseRuffOutput } from "./utils/diagnostic-parsers.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
 	resolveRunnerCwd,
 } from "./utils/runner-helpers.js";
 import { semanticFor } from "../types.js";
-
-const ruff = createAvailabilityChecker("ruff", ".exe");
 
 export function parseRuffJson(raw: string, filePath: string): Diagnostic[] {
 	try {
@@ -86,9 +83,9 @@ const ruffRunner: RunnerDefinition = {
 		if (policy && !policy.preferredRunners.includes("ruff-lint")) {
 			return skipped("not-preferred");
 		}
-		const cmd = await resolveAvailableOrInstall(ruff, "ruff", cwd);
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "ruff");
 		if (!cmd) {
-			return toolAbsentSkip(cwd, { id: "ruff", checker: ruff });
+			return toolAbsentSkip(cwd, { id: "ruff" });
 		}
 
 		// Shared config-args seam (#1247): the autofix path consumes the same
