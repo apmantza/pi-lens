@@ -61,9 +61,9 @@ describe("tests-tree write guard — real cross-process race (#3179)", () => {
 			// Bounded by the shell's own `timeout`, not by a raw setTimeout in
 			// this process: the churner's real exit is the synchronization
 			// point this test waits on, so it needs no timer of its own.
-			// No `-p` on the churner's mkdir (#5527): <root>/support exists
-			// for the whole loop, so a mkdir that outlives the join below
-			// fails with ENOENT instead of recreating the root rmSync removes.
+			// No `-p` on the churner's mkdir (#5527): once rmSync has removed
+			// <root>/support, a mkdir that outlives the join below fails with
+			// ENOENT instead of recreating <root>.
 			const churner = spawn(
 				"timeout",
 				[
