@@ -340,7 +340,11 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 	cache: {
 		"clients/diagnostic-line-freshness.ts": 5,
 		"clients/dispatch/runners/tree-sitter.ts": 3,
-		"clients/dispatch/runners/utils/runner-helpers.ts": 21,
+		// 21 -> 22 (#5492 r2): `noteDecision` stores the rejected probe's output
+		// on the same per-cwd availability entry as the rest of the verdict
+		// (`rejectedOutput`); the entry is the checker's own state, not a cache of
+		// a derived answer.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 22,
 		"clients/dispatch/runners/yaml-rule-parser.ts": 6,
 		"clients/installer/index.ts": 8,
 		"clients/lsp/inferred-project.ts": 4,
@@ -433,7 +437,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/file-utils.ts": 4,
 		"clients/format-service.ts": 11,
 		// 25 -> 24 (#5417): the changed-on-failure compare shed an error branch.
-		"clients/formatters.ts": 24,
+		// 24 -> 25 (#5492 r2): the present-but-failed-its-version-check result
+		// carries the probe's output in `FormatterResult.error`.
+		"clients/formatters.ts": 25,
 		"clients/generation-lock.ts": 5,
 		"clients/git-tracked-ignore.ts": 2,
 		"clients/govulncheck-client.ts": 6,
@@ -542,7 +548,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"mcp/analyze-cli.ts": 1,
 		// 32 -> 36 (#5138): the read_symbol handler renders `result.error` as the
 		// pi tool does (condition test, message, structured `error` field).
-		"mcp/server.ts": 36,
+		// 36 -> 37 (#4353): the warm side-channel's shared-name skip line.
+		"mcp/server.ts": 37,
 	},
 	filter: {
 		"clients/actionable-warnings.ts": 10,
@@ -612,7 +619,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 22 -> 23 (#5258): the coverage rule reads the rows the dispatcher
 		// kept for the primary group, an `Array.prototype.filter` call, not a
 		// delivery filter.
-		"clients/dispatch/dispatcher.ts": 23,
+		// 23 -> 25 (#5258 r2): the stated-cause rows and the unexplained subset
+		// the mixed notice names, `Array.prototype.filter` calls, not a
+		// delivery filter.
+		"clients/dispatch/dispatcher.ts": 25,
 		"clients/dispatch/fact-runner.ts": 1,
 		"clients/dispatch/fact-scheduler.ts": 2,
 		"clients/dispatch/facts/function-facts.ts": 2,
@@ -1117,7 +1127,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `findLocalToolConfig`, dropping its `path.join` / `path.resolve` /
 		// `path.dirname` loop and the `fs` pre-check.
 		// 4 -> 3: dialect extension resolution moved to clients/shell-dialect.ts.
-		"clients/dispatch/runners/shellcheck.ts": 3,
+		"clients/dispatch/runners/shellcheck.ts": 5,
 		"clients/dispatch/runners/spellcheck.ts": 6,
 		"clients/dispatch/runners/spotbugs.ts": 4,
 		"clients/dispatch/runners/sqlfluff.ts": 3,
@@ -1138,7 +1148,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// stop building `.bin` paths by hand and route through the shared lookup.
 		// #5410: 18 -> 19, the PATH-only resolution's `{ path, rung }` value
 		// (the existing VenvResolution shape).
-		"clients/dispatch/runners/utils/runner-helpers.ts": 19,
+		// 19 -> 20 (#5492 r2): the path-first project rung's `{ path, rung }`
+		// value, the same VenvResolution shape.
+		"clients/dispatch/runners/utils/runner-helpers.ts": 20,
 		// 7 -> 3 (#4689 item 6): `findValeConfig` delegates to
 		// `findLocalToolConfig`, dropping its hand-rolled `path` loop.
 		"clients/dispatch/runners/vale.ts": 3,
@@ -1319,9 +1331,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/mcp/analyze.ts": 4,
 		// 4 -> 7 (#4376): OS path namespace calls build the pid-first endpoint
 		// name and the stale-socket owner marker. No path-key owner changes.
-		"clients/mcp/ipc.ts": 7,
-		// 3 -> 0 (#4907): the turn-end `files` argument resolves through
-		// `resolveHostToolPath` and the module drops its `node:path` import.
+		// 7 -> 9 (#4353): the bound-name identity check anchors its token on the
+		// endpoint's own directory and file name.
+		"clients/mcp/ipc.ts": 9,
 		// 7 -> 6 (#4966): the two `path.dirname(filePath)` starts of the commit lookup become one inside `getCurrentCommit`.
 		"clients/metrics-history.ts": 6,
 		// 30 -> 31 (#5137): the text header prints the report's own `path`.
@@ -1554,13 +1566,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (a path operation).
 		"clients/tool-agreement.ts": 10,
 		// New in #5408: the config-presence seam's path joins and walks.
-		"clients/tool-config-presence.ts": 7,
+		"clients/tool-config-presence.ts": 10,
 		// 13 -> 12 (#4689 item 6): the file is resolved by `realpathOrResolve`.
 		// 12 -> 10 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		"clients/tool-cwd.ts": 10,
 		// 64 -> 62 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
 		// 62 -> 50 (#5408): the seven bespoke config walks leave for the config-presence seam.
-		"clients/tool-policy.ts": 50,
+		"clients/tool-policy.ts": 36,
 		// 19 -> 18 (#4689 batch 7): the grammar write probe climbs `walkUpDirs`, so
 		// its own `path.dirname` step is the seam's.
 		"clients/tree-sitter-client.ts": 18,
@@ -1780,6 +1792,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// the claimSource admission guard (#3968 F2) reads it once more (32 -> 33).
 		// The `dispatch.disabledRunners` skip names the field twice, in the latency
 		// row and in its log row, as the applies_to skip beside it does (33 -> 35).
+		// #5258: 67 runner sites that spelled `status: "skipped"` as a bare literal
+		// now return `skipped(reason)` or `toolAbsentSkip()`, so their rows shrink;
+		// dispatcher.ts gains one read of `r.status` for the stated skip causes.
 		"clients/actionable-warnings.ts": 5,
 		"clients/advisory-provenance.ts": 5,
 		"clients/ast-grep-client.ts": 7,
@@ -1795,73 +1810,63 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `RunnerResult`, the same member sense as every row here.
 		"clients/dispatch/collect-later-tier.ts": 1,
 		// 34 -> 35 (#5413): the spawn-timeout cooldown skip in `runRunner`.
-		"clients/dispatch/dispatcher.ts": 35,
+		"clients/dispatch/dispatcher.ts": 36,
 		"clients/dispatch/integration.ts": 1,
 		"clients/dispatch/pending-runner-findings.ts": 1,
-		"clients/dispatch/runners/actionlint.ts": 2,
+		"clients/dispatch/runners/actionlint.ts": 1,
 		"clients/dispatch/runners/ast-grep-napi.ts": 11,
-		"clients/dispatch/runners/biome-check.ts": 8,
-		"clients/dispatch/runners/cpp-check.ts": 3,
-		"clients/dispatch/runners/credo.ts": 2,
-		"clients/dispatch/runners/cue-vet.ts": 6,
-		"clients/dispatch/runners/dart-analyze.ts": 1,
+		"clients/dispatch/runners/biome-check.ts": 7,
+		"clients/dispatch/runners/cpp-check.ts": 2,
+		"clients/dispatch/runners/cue-vet.ts": 5,
 		// 6 -> 5 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/detekt.ts": 5,
-		"clients/dispatch/runners/dotnet-build.ts": 4,
-		"clients/dispatch/runners/elixir-check.ts": 2,
+		"clients/dispatch/runners/detekt.ts": 2,
+		"clients/dispatch/runners/dotnet-build.ts": 2,
+		"clients/dispatch/runners/elixir-check.ts": 1,
 		// 3 -> 2 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
-		"clients/dispatch/runners/eslint.ts": 2,
 		"clients/dispatch/runners/fact-rules.ts": 2,
 		// #4309: folded unavailable/absent-command exits remove one status use.
 		// 5 -> 6 (#4522): the exitless-run guard reads the exit status once.
-		"clients/dispatch/runners/fish-indent.ts": 6,
-		"clients/dispatch/runners/gleam-check.ts": 5,
-		"clients/dispatch/runners/go-vet.ts": 5,
+		"clients/dispatch/runners/fish-indent.ts": 5,
+		"clients/dispatch/runners/gleam-check.ts": 4,
+		"clients/dispatch/runners/go-vet.ts": 4,
 		// 4 -> 3 (#5411): `parseStreams` replaces the stdout-else-stderr status test.
-		"clients/dispatch/runners/golangci-lint.ts": 3,
-		"clients/dispatch/runners/hadolint.ts": 3,
+		"clients/dispatch/runners/hadolint.ts": 1,
 		"clients/dispatch/runners/helm-lint.ts": 5,
 		"clients/dispatch/runners/helm-render.ts": 7,
-		"clients/dispatch/runners/htmlhint.ts": 3,
-		"clients/dispatch/runners/javac.ts": 4,
-		"clients/dispatch/runners/ktlint.ts": 2,
+		"clients/dispatch/runners/htmlhint.ts": 1,
+		"clients/dispatch/runners/javac.ts": 2,
 		// 10 -> 11 (#5008 review r2): the all-clear arm's stale-bound answer
 		// returns `status: "skipped"` instead of `succeeded` — the same
 		// `RunnerResult.status` member sense as every other row here.
 		"clients/dispatch/runners/lsp.ts": 11,
 		// 4 -> 3 (#5413): the local cooldown skip moved to the dispatcher.
-		"clients/dispatch/runners/markdownlint.ts": 3,
-		"clients/dispatch/runners/mypy.ts": 2,
-		"clients/dispatch/runners/oxlint.ts": 11,
-		"clients/dispatch/runners/php-lint.ts": 2,
-		"clients/dispatch/runners/phpstan.ts": 4,
+		"clients/dispatch/runners/markdownlint.ts": 1,
+		"clients/dispatch/runners/oxlint.ts": 9,
+		"clients/dispatch/runners/php-lint.ts": 1,
+		"clients/dispatch/runners/phpstan.ts": 1,
 		// 4 -> 3 (#5411): the plain skip leaves; `finishParsedRun` owns that verdict.
 		"clients/dispatch/runners/prisma-validate.ts": 3,
-		"clients/dispatch/runners/psscriptanalyzer.ts": 14,
-		"clients/dispatch/runners/pyright.ts": 3,
-		"clients/dispatch/runners/rubocop.ts": 2,
-		"clients/dispatch/runners/ruff.ts": 2,
-		"clients/dispatch/runners/rust-clippy.ts": 10,
+		"clients/dispatch/runners/psscriptanalyzer.ts": 9,
+		"clients/dispatch/runners/pyright.ts": 2,
+		"clients/dispatch/runners/rust-clippy.ts": 8,
 		// 4 -> 5 (#3968): one more skip branch (`covered-by-primary`) beside the
 		// existing skipped/no-cmd returns — the same `status:` member sense.
-		"clients/dispatch/runners/shellcheck.ts": 5,
-		"clients/dispatch/runners/shfmt.ts": 8,
+		"clients/dispatch/runners/shellcheck.ts": 4,
+		"clients/dispatch/runners/shfmt.ts": 5,
 		// 3 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/spellcheck.ts": 2,
-		"clients/dispatch/runners/spotbugs.ts": 8,
-		"clients/dispatch/runners/sqlfluff.ts": 3,
-		"clients/dispatch/runners/stylelint.ts": 2,
+		"clients/dispatch/runners/spellcheck.ts": 1,
+		"clients/dispatch/runners/spotbugs.ts": 6,
+		"clients/dispatch/runners/sqlfluff.ts": 1,
 		// 3 -> 1 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/swiftlint.ts": 1,
 		// 5 -> 4 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/taplo.ts": 4,
-		"clients/dispatch/runners/terragrunt.ts": 2,
-		"clients/dispatch/runners/tflint.ts": 3,
+		"clients/dispatch/runners/taplo.ts": 2,
+		"clients/dispatch/runners/terragrunt.ts": 1,
+		"clients/dispatch/runners/tflint.ts": 1,
 		// 14 -> 15 (#4226): the early-return runner result preserves the existing
 		// status field while disclosing a fully path-excluded query set.
 		"clients/dispatch/runners/tree-sitter.ts": 15,
 		// 10 -> 9 (#4130 r2): the shared classifier replaces a status test.
-		"clients/dispatch/runners/trivy-config.ts": 9,
+		"clients/dispatch/runners/trivy-config.ts": 8,
 		"clients/dispatch/runners/utils/availability-policy.ts": 5,
 		"clients/dispatch/runners/utils/candidate-probe.ts": 1,
 		"clients/dispatch/runners/utils/lazy-installer.ts": 3,
@@ -1871,15 +1876,13 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 19 -> 20 (#4130 r2): `faultIfCutShort` builds the one partial-findings `failed` result.
 		"clients/dispatch/runners/utils/tool-failure.ts": 20,
 		// 4 -> 2 (#5411): `finishParsedRun` replaces the inline clean/findings branch.
-		"clients/dispatch/runners/vale.ts": 2,
-		"clients/dispatch/runners/yamllint.ts": 2,
-		"clients/dispatch/runners/zig-check.ts": 2,
+		"clients/dispatch/runners/zig-check.ts": 1,
 		// 5 -> 6 (#4484 r2): `reachedNoVerdict` reads the runner result's status.
 		// 6 -> 7 (#4733 r2): `checkedWholeFile` reads each latency row's status.
 		// 7 -> 8 (#4130): `faultResult` builds the one `failed` runner result.
 		// 9 -> 10 (#5258): `checkedVerdict` reads each row's runner status through
 		// `hasUsableResult`.
-		"clients/dispatch/types.ts": 10,
+		"clients/dispatch/types.ts": 11,
 		"clients/file-utils.ts": 3,
 		"clients/finding-delivery-gate.ts": 3,
 		"clients/formatters.ts": 5,
@@ -1901,7 +1904,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/lens-engine.ts": 4,
 		"clients/lsp-mutation.ts": 7,
 		"clients/lsp/client-registry.ts": 1,
-		"clients/lsp/client.ts": 31,
+		// 31 -> 34 (#5487): the readiness gate reads and returns the existing
+		// `PullDiagnosticsOutcome.status` member (found / unavailable) at three
+		// sites; same member sense as every row here.
+		"clients/lsp/client.ts": 34,
 		"clients/lsp/edits.ts": 1,
 		"clients/lsp/index.ts": 4,
 		"clients/lsp/jvm-runtime.ts": 1,

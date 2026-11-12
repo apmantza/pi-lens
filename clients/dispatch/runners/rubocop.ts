@@ -8,6 +8,8 @@
  * Supports bundle exec (preferred in Bundler projects).
  */
 
+import { toolAbsentSkip, type ToolVerdict } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -110,17 +112,23 @@ const rubocopRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "rubocop");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("rubocop")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
+		// #5258: rubocop resolves by its own spawn, not a checker, so its skip
+		// reads the verdict of that spawn and never another ladder's.
+		let verdict: ToolVerdict | null = null;
 		const resolved = await resolveCommandArgsWithInstallFallback(
 			getRubocopCommand(cwd),
 			"rubocop",
 			cwd,
 			["--version"],
 			10000,
+			(found) => {
+				verdict = found;
+			},
 		);
 		if (!resolved) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd, { id: "rubocop", verdict });
 		}
 		const { cmd, args } = resolved;
 

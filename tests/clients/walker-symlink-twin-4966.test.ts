@@ -608,16 +608,6 @@ const EXEMPT: Readonly<Record<string, { reason: string; pinnedBy: string }>> = {
 			"the checkout-ownership walks start at the file's `realTarget` and the `realCwd` through `findNearestMarkerRootDetailed` (registered)",
 		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
 	},
-	"clients/dispatch/runners/shellcheck.ts": {
-		reason:
-			"`findLocalToolConfig` (registered) from the dispatch context's cwd, an identity",
-		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
-	},
-	"clients/dispatch/runners/vale.ts": {
-		reason:
-			"`findLocalToolConfig` (registered) from the dispatch context's cwd, an identity",
-		pinnedBy: "tests/clients/walk-identity-4689.test.ts",
-	},
 };
 
 /**

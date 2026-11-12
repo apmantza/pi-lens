@@ -7,16 +7,16 @@
  * Requires: oxlint (npm install -g oxlint)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
-import {
-	getJstsLintPolicyForCwd,
-	hasVitePlusConfig,
-} from "../../tool-policy.js";
+import { getJstsLintPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -110,12 +110,12 @@ const oxlintRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "oxlint");
 		const policy = getJstsLintPolicyForCwd(cwd);
 		if (!policy.preferredRunners.includes("oxlint")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		let cmd: string | null = null;
 		let args: string[];
-		if (hasVitePlusConfig(cwd)) {
+		if (hasToolConfig("vitePlus", cwd)) {
 			cmd = await resolveVitePlusCommand(cwd);
 		}
 		if (cmd) {
@@ -127,7 +127,7 @@ const oxlintRunner: RunnerDefinition = {
 			args = ["--format", "json", ctx.filePath];
 		}
 		if (!cmd) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return toolAbsentSkip(cwd, { id: "oxlint" });
 		}
 
 		// Run oxlint (or Vite+'s vp lint wrapper) on the file.

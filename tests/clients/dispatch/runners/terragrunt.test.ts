@@ -16,7 +16,10 @@ vi.mock("../../../../clients/installer/index.js", () => ({
 	ensureTool,
 }));
 
-vi.mock("../../../../clients/tool-policy.js", () => ({
+vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("../../../../clients/tool-policy.js")
+	>()),
 	getLinterPolicyForCwd,
 }));
 
@@ -33,6 +36,13 @@ vi.mock(
 		>()),
 		createAvailabilityChecker: (command: string) => ({
 			isAvailableAsync: async () => toolState.available,
+			getVerdict: () => ({
+				outcome: "missing",
+				cause: "not-found",
+				elapsedMs: 0,
+				latched: true,
+				retryAtMs: 0,
+			}),
 			getCommand: () => (toolState.available ? command : null),
 		}),
 		resolveAvailableOrInstall: async (_checker: unknown, toolId: string) =>

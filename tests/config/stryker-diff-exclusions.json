@@ -20,6 +20,9 @@
   "tests/mcp/server.smoke-fallback-5014.test.ts": {
     "reason": "real stdio child plus fake-LSP shims, split out of server.smoke.test.ts and scheduling-sensitive"
   },
+  "tests/mcp/server.readiness-5487.test.ts": {
+    "reason": "real stdio child plus a fake-LSP rust server; the loading and failed-load wording is scheduling-sensitive"
+  },
   "tests/mcp/module-report.smoke.test.ts": {
     "reason": "real stdio child starts the built MCP entry and is scheduling-sensitive"
   },

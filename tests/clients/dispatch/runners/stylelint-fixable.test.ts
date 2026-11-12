@@ -27,7 +27,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => {
 	return {
 		...actual,
 		getLinterPolicyForCwd: () => null,
-		hasStylelintConfig: () => true,
 	};
 });
 

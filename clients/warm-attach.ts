@@ -18,6 +18,7 @@ import {
 } from "./lsp/tsserver-sync.js";
 import { loadLspService } from "./lsp-lazy.js";
 import {
+	boundUnixSocketPath,
 	contentHash,
 	createWarmIpcLineReader,
 	diagnosticsIpcPathForCwd,
@@ -272,7 +273,7 @@ async function serveRequest(
 function startServer(cwd: string): void {
 	state.server?.close();
 	const endpoint = diagnosticsIpcPathForCwd(cwd, process.pid);
-	// Only a stale socket at a name that still carries OUR pid: a truncated
+	// Only a stale socket at a name that still carries OUR pid: a bounded
 	// shared name may be another live session's endpoint (#4376 review r1, F1).
 	unlinkStaleUnixSocket(endpoint, { ownerPid: process.pid });
 	const server = net.createServer((socket) => {
@@ -339,7 +340,7 @@ function startServer(cwd: string): void {
 	server.on("error", (error) => {
 		record("listener-error", cwd, String(error));
 	});
-	server.listen(endpoint);
+	server.listen(boundUnixSocketPath(endpoint));
 	server.unref();
 	state.server = server;
 }

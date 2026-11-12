@@ -75,7 +75,7 @@ import {
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
 } from "./dispatch/runners/utils/runner-helpers.js";
-import { findToolConfig } from "./tool-config-presence.js";
+import { findToolConfig, hasToolConfig } from "./tool-config-presence.js";
 import {
 	verdictRunnerIds,
 	checkedWholeFile,
@@ -140,16 +140,11 @@ import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
 	getRubocopCommand,
-	hasBiomeConfig,
 	hasDetektConfig,
-	hasEslintConfig,
-	hasGolangciConfig,
 	hasKtfmtConfig,
 	hasKtlintConfig,
 	hasOxlintConfig,
 	hasRubocopConfig,
-	hasSqlfluffConfig,
-	hasStylelintConfig,
 	markdownlintConfigArgs,
 } from "./tool-policy.js";
 import type { PathSetLike } from "./runtime-coordinator.js";
@@ -589,8 +584,6 @@ function createPhaseTracker(toolName: string, filePath: string): PhaseTracker {
 
 // --- ESLint autofix helpers ---
 
-export { hasEslintConfig, hasSqlfluffConfig, hasStylelintConfig };
-
 /**
  * eslint autofix availability, per cwd + PATH. The verdict is owned by the
  * shared availability latch (#1494): a `missing` / `non-installable` outcome
@@ -617,7 +610,7 @@ async function tryEslintFix(
 	cwd: string,
 	writeHold?: FileMutationHold,
 ): Promise<number> {
-	const userHasConfig = hasEslintConfig(cwd);
+	const userHasConfig = hasToolConfig("eslint", cwd);
 	if (!userHasConfig) return 0;
 	// PATH is part of command resolution; include it so an install or PATH
 	// refresh cannot leave a negative eslint result live for the session.
@@ -730,7 +723,7 @@ async function trySqlfluffFix(
 	if (writeHold) await writeHold.acquire();
 
 	const args = ["fix", "--force", filePath];
-	if (!hasSqlfluffConfig(cwd)) {
+	if (!hasToolConfig("sqlfluff", cwd)) {
 		args.splice(2, 0, "--dialect", "ansi");
 	}
 	return detectFileChangedAfterCommand(filePath, cmd, args, cwd);
@@ -1084,12 +1077,12 @@ export async function runAutofix(
 	}
 
 	const autofixContext = {
-		hasEslintConfig: hasEslintConfig(cwd),
-		hasStylelintConfig: hasStylelintConfig(cwd),
-		hasSqlfluffConfig: hasSqlfluffConfig(cwd),
+		hasEslintConfig: hasToolConfig("eslint", cwd),
+		hasStylelintConfig: hasToolConfig("stylelint", cwd),
+		hasSqlfluffConfig: hasToolConfig("sqlfluff", cwd),
 		hasRubocopConfig: hasRubocopConfig(cwd),
-		hasBiomeConfig: hasBiomeConfig(cwd),
-		hasGolangciConfig: hasGolangciConfig(cwd),
+		hasBiomeConfig: hasToolConfig("biome", cwd),
+		hasGolangciConfig: hasToolConfig("golangci-lint", cwd),
 		hasDetektConfig: hasDetektConfig(cwd),
 		hasKtfmtConfig: hasKtfmtConfig(cwd),
 		hasKtlintConfig: hasKtlintConfig(cwd),

@@ -26,6 +26,7 @@ import {
 import { removeTempDirSync } from "../clients/test-utils.js";
 import { INFERRED_PROJECT_MARKER } from "../../clients/lsp/inferred-project.js";
 import {
+	boundUnixSocketPath,
 	createWarmIpcLineReader,
 	diagnosticsIpcPathForCwd,
 } from "../../clients/mcp/ipc.js";
@@ -55,6 +56,7 @@ vi.mock("../../clients/widget-state.js", () => ({
 
 import { createLspDiagnosticsTool } from "../../tools/lsp-diagnostics.js";
 import { installLspService } from "../support/lsp-service-seam.js";
+import { ambientSocketNameIsShared } from "../support/socket-identity.js";
 import { _setServersForFileForTests } from "../../clients/lsp/config.js";
 
 function serverIdForFile(file: string): string {
@@ -847,243 +849,258 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 	// the one pipeline, so the entry holds the replayable form a local read
 	// stores. Real path: the batch tool, the real IPC client over a real socket,
 	// and the real incumbent handler serving from the same service double.
-	describe("warm-attached batch cache (#4645)", () => {
-		const declaredGap = {
-			severity: 1,
-			message:
-				"Cannot find module 'left-pad' or its corresponding type declarations.",
-			code: 2307,
-			range: {
-				start: { line: 0, character: 0 },
-				end: { line: 0, character: 1 },
-			},
-			source: "typescript",
-			serverId: "typescript",
-		};
-		const configured = (root: string) => ({
-			executed: true,
-			result: {
-				success: true,
-				body: { configFileName: path.join(root, "tsconfig.json") },
-			},
-		});
-		const inferred = {
-			executed: true,
-			result: {
-				success: true,
-				body: { configFileName: "/dev/null/inferredProject1*" },
-			},
-		};
-		let home: string;
-		let priorHome: string | undefined;
-		let incumbent: net.Server;
-		let probe: ReturnType<typeof vi.fn>;
-		// Set while the in-process incumbent serves a request: only it has a live
-		// tsserver to ask, so only its probe is answered.
-		let incumbentServing = false;
-		let incumbentProbes = 0;
-
-		function writtenFor(
-			file: string,
-		): Array<{ semantic: string; message: string }> {
-			const call = reconcileScanDiagnostics.mock.calls
-				.filter((c) => c[0] === file)
-				.at(-1);
-			return (call?.[1] ?? []) as Array<{ semantic: string; message: string }>;
-		}
-
-		beforeEach(async () => {
-			fs.writeFileSync(
-				path.join(tmpDir, "package.json"),
-				JSON.stringify({ dependencies: { "left-pad": "1.3.0" } }),
-			);
-			// Shape 73: an install above the fixture would make the gap cells vacuous.
-			expect(hasResolvableNodeModules(tmpDir)).toBe(false);
-			probe = vi.fn();
-			touchFile.mockResolvedValue({
-				diags: [{ ...declaredGap }],
-				confirmation: "confirmed",
+	// lane: Unit tests (CI's short TMPDIR); the stand-in incumbent listens at a
+	// pid-scoped name the client never dials once the cut makes it shared.
+	describe.skipIf(ambientSocketNameIsShared(process.ppid))(
+		"warm-attached batch cache (#4645)",
+		() => {
+			const declaredGap = {
+				severity: 1,
+				message:
+					"Cannot find module 'left-pad' or its corresponding type declarations.",
+				code: 2307,
+				range: {
+					start: { line: 0, character: 0 },
+					end: { line: 0, character: 1 },
+				},
+				source: "typescript",
+				serverId: "typescript",
+			};
+			const configured = (root: string) => ({
+				executed: true,
+				result: {
+					success: true,
+					body: { configFileName: path.join(root, "tsconfig.json") },
+				},
 			});
-			mocked.service = installLspService(
-				makeLspServiceDouble({
-					touchFile,
-					getDiagnostics: vi.fn().mockResolvedValue([]),
-					getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
-					getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-					ensureWarmForSweep: vi
-						.fn()
-						.mockResolvedValue({ performedWarmup: false }),
-					executeReadOnlyCommandOnLiveClient: probe,
-				}),
-			);
-			// A live incumbent the registry confirms: the parent pid, since the
-			// liveness rule excludes this process by definition.
-			home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-warm-cache-"));
-			priorHome = process.env.PI_LENS_HOME;
-			process.env.PI_LENS_HOME = home;
-			const now = new Date().toISOString();
-			fs.writeFileSync(
-				path.join(home, "instances.json"),
-				JSON.stringify({
-					instances: [
+			const inferred = {
+				executed: true,
+				result: {
+					success: true,
+					body: { configFileName: "/dev/null/inferredProject1*" },
+				},
+			};
+			let home: string;
+			let priorHome: string | undefined;
+			let incumbent: net.Server;
+			let probe: ReturnType<typeof vi.fn>;
+			// Set while the in-process incumbent serves a request: only it has a live
+			// tsserver to ask, so only its probe is answered.
+			let incumbentServing = false;
+			let incumbentProbes = 0;
+
+			function writtenFor(
+				file: string,
+			): Array<{ semantic: string; message: string }> {
+				const call = reconcileScanDiagnostics.mock.calls
+					.filter((c) => c[0] === file)
+					.at(-1);
+				return (call?.[1] ?? []) as Array<{
+					semantic: string;
+					message: string;
+				}>;
+			}
+
+			beforeEach(async () => {
+				fs.writeFileSync(
+					path.join(tmpDir, "package.json"),
+					JSON.stringify({ dependencies: { "left-pad": "1.3.0" } }),
+				);
+				// Shape 73: an install above the fixture would make the gap cells vacuous.
+				expect(hasResolvableNodeModules(tmpDir)).toBe(false);
+				probe = vi.fn();
+				touchFile.mockResolvedValue({
+					diags: [{ ...declaredGap }],
+					confirmation: "confirmed",
+				});
+				mocked.service = installLspService(
+					makeLspServiceDouble({
+						touchFile,
+						getDiagnostics: vi.fn().mockResolvedValue([]),
+						getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
+						getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
+						ensureWarmForSweep: vi
+							.fn()
+							.mockResolvedValue({ performedWarmup: false }),
+						executeReadOnlyCommandOnLiveClient: probe,
+					}),
+				);
+				// A live incumbent the registry confirms: the parent pid, since the
+				// liveness rule excludes this process by definition.
+				home = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-warm-cache-"));
+				priorHome = process.env.PI_LENS_HOME;
+				process.env.PI_LENS_HOME = home;
+				const now = new Date().toISOString();
+				fs.writeFileSync(
+					path.join(home, "instances.json"),
+					JSON.stringify({
+						instances: [
+							{
+								pid: process.ppid,
+								startedAt: now,
+								projectRoot: normalizeFilePath(tmpDir),
+								lspChildren: [],
+								lspChildCount: 0,
+								rssBytes: 1,
+								heartbeatAt: now,
+							},
+						],
+					}),
+				);
+				const endpoint = diagnosticsIpcPathForCwd(tmpDir, process.ppid);
+				if (process.platform !== "win32") fs.rmSync(endpoint, { force: true });
+				incumbent = net.createServer((socket) => {
+					socket.setEncoding("utf8");
+					socket.on("error", () => undefined);
+					socket.on(
+						"data",
+						createWarmIpcLineReader(
+							(line) => {
+								incumbentServing = true;
+								void _serveWarmRequestForTests(JSON.parse(line)).then(
+									(reply) => {
+										incumbentServing = false;
+										socket.end(`${JSON.stringify(reply)}\n`);
+									},
+								);
+							},
+							{ label: "test-incumbent", onOverflow: () => socket.end() },
+						),
+					);
+				});
+				await new Promise<void>((resolve) =>
+					incumbent.listen(boundUnixSocketPath(endpoint), resolve),
+				);
+				_setWarmAttachForTests(tmpDir, process.ppid);
+			});
+
+			afterEach(async () => {
+				_resetWarmAttachForTests();
+				(
+					incumbent as net.Server & { closeAllConnections?: () => void }
+				).closeAllConnections?.();
+				await new Promise<void>((resolve) => incumbent.close(() => resolve()));
+				if (priorHome === undefined) delete process.env.PI_LENS_HOME;
+				else process.env.PI_LENS_HOME = priorHome;
+				removeTempDirSync(home);
+			});
+
+			/**
+			 * One attached serve, an install landing from outside, one replay. The
+			 * double serves both processes' calls, so it answers the probe only while
+			 * the incumbent serves, and otherwise reports what an attached process
+			 * always finds: no live client. A reader that probed for itself would see
+			 * that answer. The budget is the production default (15 s) because the
+			 * file's 50 ms leaves the incumbent no time before its send reserve, and
+			 * then no answer is asked or carried.
+			 *
+			 * #5005 F1: the install lands in the FILE's own package directory, not at
+			 * the root the answer route's pre-answer look stamps. That keeps this
+			 * helper's replay a replay (the root-stamp case is the sibling cell in the
+			 * environment-gap suite) while still exercising the re-promotion rule.
+			 */
+			async function serveInstallReplay(
+				file: string,
+				incumbentAnswer: unknown,
+			) {
+				incumbentProbes = 0;
+				probe.mockImplementation(async () => {
+					if (!incumbentServing)
+						return { executed: false, reason: "no live client" };
+					incumbentProbes += 1;
+					return incumbentAnswer;
+				});
+				await runBatch([file], 15_000);
+				expect(isWarmAttached()).toBe(true);
+				expect(touchFile).toHaveBeenCalledTimes(1);
+				const probeCallsOnServe = incumbentProbes;
+				const fresh = writtenFor(file)[0];
+				fs.mkdirSync(path.join(path.dirname(file), "node_modules", "other"), {
+					recursive: true,
+				});
+				reconcileScanDiagnostics.mockClear();
+				touchFile.mockClear();
+				await runBatch([file]);
+				// A replay, never a second touch.
+				expect(touchFile).not.toHaveBeenCalled();
+				return { fresh, replayed: writtenFor(file)[0], probeCallsOnServe };
+			}
+
+			it("re-promotes an attached gap row once an install resolves (configured project)", async () => {
+				fs.mkdirSync(path.join(tmpDir, "pkg"), { recursive: true });
+				const [file] = writeFiles(["pkg/a.ts"]);
+
+				const { fresh, replayed, probeCallsOnServe } = await serveInstallReplay(
+					file!,
+					configured(tmpDir),
+				);
+
+				expect(fresh).toMatchObject({ semantic: "warning" });
+				expect(fresh?.message).toContain(ENVIRONMENT_GAP_MARKER);
+				expect(replayed).toMatchObject({ semantic: "blocking" });
+				expect(replayed?.message).not.toContain(ENVIRONMENT_GAP_MARKER);
+				// The incumbent asked once; a reader's own probe finds no live client,
+				// so the verdicts above came from the carried answer.
+				expect(probeCallsOnServe).toBe(1);
+			});
+
+			// The single-`path` entry reads the attached reply through its own
+			// demotion call (`runFileDiagnostics`), so it seeds the carried answer
+			// separately from the batch.
+			it("renders the incumbent's membership verdict for a single path (inferred project)", async () => {
+				const [file] = writeFiles(["a.ts"]);
+				touchFile.mockResolvedValue({
+					diags: [
 						{
-							pid: process.ppid,
-							startedAt: now,
-							projectRoot: normalizeFilePath(tmpDir),
-							lspChildren: [],
-							lspChildCount: 0,
-							rssBytes: 1,
-							heartbeatAt: now,
+							...declaredGap,
+							message: "Type 'number' is not assignable to type 'string'.",
+							code: 2322,
 						},
 					],
-				}),
-			);
-			const endpoint = diagnosticsIpcPathForCwd(tmpDir, process.ppid);
-			if (process.platform !== "win32") fs.rmSync(endpoint, { force: true });
-			incumbent = net.createServer((socket) => {
-				socket.setEncoding("utf8");
-				socket.on("error", () => undefined);
-				socket.on(
-					"data",
-					createWarmIpcLineReader(
-						(line) => {
-							incumbentServing = true;
-							void _serveWarmRequestForTests(JSON.parse(line)).then((reply) => {
-								incumbentServing = false;
-								socket.end(`${JSON.stringify(reply)}\n`);
-							});
-						},
-						{ label: "test-incumbent", onOverflow: () => socket.end() },
-					),
+					confirmation: "confirmed",
+				});
+				incumbentProbes = 0;
+				probe.mockImplementation(async () => {
+					if (!incumbentServing)
+						return { executed: false, reason: "no live client" };
+					incumbentProbes += 1;
+					return inferred;
+				});
+
+				await createLspDiagnosticsTool().execute(
+					"diag-cache-test",
+					{ path: file!, severity: "all", waitMs: 15_000 },
+					new AbortController().signal,
+					null,
+					{ cwd: tmpDir },
 				);
-			});
-			await new Promise<void>((resolve) => incumbent.listen(endpoint, resolve));
-			_setWarmAttachForTests(tmpDir, process.ppid);
-		});
 
-		afterEach(async () => {
-			_resetWarmAttachForTests();
-			(
-				incumbent as net.Server & { closeAllConnections?: () => void }
-			).closeAllConnections?.();
-			await new Promise<void>((resolve) => incumbent.close(() => resolve()));
-			if (priorHome === undefined) delete process.env.PI_LENS_HOME;
-			else process.env.PI_LENS_HOME = priorHome;
-			removeTempDirSync(home);
-		});
-
-		/**
-		 * One attached serve, an install landing from outside, one replay. The
-		 * double serves both processes' calls, so it answers the probe only while
-		 * the incumbent serves, and otherwise reports what an attached process
-		 * always finds: no live client. A reader that probed for itself would see
-		 * that answer. The budget is the production default (15 s) because the
-		 * file's 50 ms leaves the incumbent no time before its send reserve, and
-		 * then no answer is asked or carried.
-		 *
-		 * #5005 F1: the install lands in the FILE's own package directory, not at
-		 * the root the answer route's pre-answer look stamps. That keeps this
-		 * helper's replay a replay (the root-stamp case is the sibling cell in the
-		 * environment-gap suite) while still exercising the re-promotion rule.
-		 */
-		async function serveInstallReplay(file: string, incumbentAnswer: unknown) {
-			incumbentProbes = 0;
-			probe.mockImplementation(async () => {
-				if (!incumbentServing)
-					return { executed: false, reason: "no live client" };
-				incumbentProbes += 1;
-				return incumbentAnswer;
-			});
-			await runBatch([file], 15_000);
-			expect(isWarmAttached()).toBe(true);
-			expect(touchFile).toHaveBeenCalledTimes(1);
-			const probeCallsOnServe = incumbentProbes;
-			const fresh = writtenFor(file)[0];
-			fs.mkdirSync(path.join(path.dirname(file), "node_modules", "other"), {
-				recursive: true,
-			});
-			reconcileScanDiagnostics.mockClear();
-			touchFile.mockClear();
-			await runBatch([file]);
-			// A replay, never a second touch.
-			expect(touchFile).not.toHaveBeenCalled();
-			return { fresh, replayed: writtenFor(file)[0], probeCallsOnServe };
-		}
-
-		it("re-promotes an attached gap row once an install resolves (configured project)", async () => {
-			fs.mkdirSync(path.join(tmpDir, "pkg"), { recursive: true });
-			const [file] = writeFiles(["pkg/a.ts"]);
-
-			const { fresh, replayed, probeCallsOnServe } = await serveInstallReplay(
-				file!,
-				configured(tmpDir),
-			);
-
-			expect(fresh).toMatchObject({ semantic: "warning" });
-			expect(fresh?.message).toContain(ENVIRONMENT_GAP_MARKER);
-			expect(replayed).toMatchObject({ semantic: "blocking" });
-			expect(replayed?.message).not.toContain(ENVIRONMENT_GAP_MARKER);
-			// The incumbent asked once; a reader's own probe finds no live client,
-			// so the verdicts above came from the carried answer.
-			expect(probeCallsOnServe).toBe(1);
-		});
-
-		// The single-`path` entry reads the attached reply through its own
-		// demotion call (`runFileDiagnostics`), so it seeds the carried answer
-		// separately from the batch.
-		it("renders the incumbent's membership verdict for a single path (inferred project)", async () => {
-			const [file] = writeFiles(["a.ts"]);
-			touchFile.mockResolvedValue({
-				diags: [
-					{
-						...declaredGap,
-						message: "Type 'number' is not assignable to type 'string'.",
-						code: 2322,
-					},
-				],
-				confirmation: "confirmed",
-			});
-			incumbentProbes = 0;
-			probe.mockImplementation(async () => {
-				if (!incumbentServing)
-					return { executed: false, reason: "no live client" };
-				incumbentProbes += 1;
-				return inferred;
+				expect(isWarmAttached()).toBe(true);
+				const [written] = writtenFor(file!);
+				expect(written).toMatchObject({ semantic: "warning" });
+				expect(written?.message).toContain(INFERRED_PROJECT_MARKER);
+				expect(incumbentProbes).toBe(1);
 			});
 
-			await createLspDiagnosticsTool().execute(
-				"diag-cache-test",
-				{ path: file!, severity: "all", waitMs: 15_000 },
-				new AbortController().signal,
-				null,
-				{ cwd: tmpDir },
-			);
+			it("keeps the incumbent's membership verdict on the replay after an install (inferred project)", async () => {
+				fs.mkdirSync(path.join(tmpDir, "pkg"), { recursive: true });
+				const [file] = writeFiles(["pkg/a.ts"]);
 
-			expect(isWarmAttached()).toBe(true);
-			const [written] = writtenFor(file!);
-			expect(written).toMatchObject({ semantic: "warning" });
-			expect(written?.message).toContain(INFERRED_PROJECT_MARKER);
-			expect(incumbentProbes).toBe(1);
-		});
+				const { fresh, replayed, probeCallsOnServe } = await serveInstallReplay(
+					file!,
+					inferred,
+				);
 
-		it("keeps the incumbent's membership verdict on the replay after an install (inferred project)", async () => {
-			fs.mkdirSync(path.join(tmpDir, "pkg"), { recursive: true });
-			const [file] = writeFiles(["pkg/a.ts"]);
-
-			const { fresh, replayed, probeCallsOnServe } = await serveInstallReplay(
-				file!,
-				inferred,
-			);
-
-			// Environment rule first on the serve, as a local read gives it…
-			expect(fresh?.message).toContain(ENVIRONMENT_GAP_MARKER);
-			expect(fresh?.message).not.toContain(INFERRED_PROJECT_MARKER);
-			// …and the replay keeps the membership verdict it cannot re-ask, with
-			// no stale install advice.
-			expect(replayed).toMatchObject({ semantic: "warning" });
-			expect(replayed?.message).toContain(INFERRED_PROJECT_MARKER);
-			expect(replayed?.message).not.toContain(ENVIRONMENT_GAP_MARKER);
-			expect(probeCallsOnServe).toBe(1);
-		});
-	});
+				// Environment rule first on the serve, as a local read gives it…
+				expect(fresh?.message).toContain(ENVIRONMENT_GAP_MARKER);
+				expect(fresh?.message).not.toContain(INFERRED_PROJECT_MARKER);
+				// …and the replay keeps the membership verdict it cannot re-ask, with
+				// no stale install advice.
+				expect(replayed).toMatchObject({ semantic: "warning" });
+				expect(replayed?.message).toContain(INFERRED_PROJECT_MARKER);
+				expect(replayed?.message).not.toContain(ENVIRONMENT_GAP_MARKER);
+				expect(probeCallsOnServe).toBe(1);
+			});
+		},
+	);
 });

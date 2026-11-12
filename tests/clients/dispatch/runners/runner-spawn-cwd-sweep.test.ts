@@ -554,7 +554,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is resolveCommandArgsWithInstallFallback's own `cwd` parameter, used for the `--version` verification spawn",
 	],
 	[
-		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:105fdbcb~dbf27697",
+		"clients/dispatch/runners/utils/runner-helpers.ts#resolveCommandArgsWithInstallFallback:3cdfdce7~dbf27697",
 		"resolveCommandArgsWithInstallFallback forwards its own `cwd` parameter into verifyOrInstallCommand",
 	],
 	[

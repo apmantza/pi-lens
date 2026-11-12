@@ -226,6 +226,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"#5173 must distinguish natural host exit within 3 seconds from the dependency’s pending 10-second tick; fake clocks cannot measure another process’s exit",
 	},
+	"elapsed-time-assertion:clients/lsp/server-status-readiness-5487.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"#5487 (review of #5495): a failed workspace load and a server silent after loading must end a real touch inside its budget; the bound is the behavior and a fake clock cannot time a child process's replies",
+	},
 	// 2026-09-11 (#2886 round 2): the /lens-perf occupancy row keeps one
 	// real-clock sampler assertion alongside its deterministic yield count —
 	// event-loop occupancy has no deterministic proxy; the yield count is
@@ -974,6 +979,11 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 				"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
 		},
 	"real-process-spawn:clients/lsp/refresh-and-sync-kind.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
+	},
+	"real-process-spawn:clients/lsp/server-status-readiness-5487.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"Real child transport and lifecycle are the subject; a process stub cannot exercise the wire and teardown behavior.",
