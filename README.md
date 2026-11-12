@@ -6,251 +6,131 @@
 
 [![omp status](https://omppackages.com/badge/pi-lens.svg)](https://omppackages.com/packages/pi-lens)
 
-pi-lens gives AI coding agents fast, language-aware feedback while they write/edit.
+pi-lens gives AI coding agents fast, language-aware feedback while they write and edit code. It is an extension for the pi coding agent, with an experimental [MCP server](docs/mcp.md) for other hosts.
 
-> **Working in this project as an AI agent?** Read the [agent guide](docs/agent-guide.md)
-> for how pi-lens surfaces diagnostics (honesty labels, blockers, read-before-edit)
-> and how to respond.
+> **An AI agent working with pi-lens?** Read the [agent guide](docs/agent-guide.md). It explains the findings you will see and how to respond.
+>
+> **An AI agent changing pi-lens itself?** Read [`AGENTS.md`](AGENTS.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md). A one-line-per-doc index for agents is in [`llms.txt`](llms.txt).
 
-## What It Does
-
-- LSP diagnostics and navigation across supported languages
-- Impact cascade diagnostics that show which related files were affected and run LSP diagnostics on them
-- Language-specific linters, type-checkers, and scanners on every write/edit
-- Safe formatting/autofix where tools are configured or confidently detected
-- ast-grep and tree-sitter structural rules for correctness/security smells
-- Agent-facing tools for LSP navigation/diagnostics, AST search/replace,
-  diagnostics state, and project intelligence
-- Review-graph intelligence for supported languages via bundled tree-sitter WASMs
-- Ranked identifier search (`symbol_search`) over an always-warm word index,
-  feeding the discovery funnel (symbol_search → module_report → read_symbol)
-- Diagnostic triage (`lens_diagnostic_mark`): findings can be marked
-  false-positive, suppressed in source, deferred, or flagged-to-fix — honored
-  across all surfaces
-- `/lens-map` — interactive HTML dependency map of the project
-- Read-guard and edit-autopatch support to reduce bad edits
-- Background security/dependency scans for opted-in projects
-- Runtime health telemetry (`/lens-health`) including a bounded degradation
-  ledger for silently-degraded behavior (LSP breakers, formatter
-  skips/failures, idle evictions, timeouts)
-- MCP server (experimental) so Claude Code or any MCP client can drive the
-  same diagnostics/read-substitute tools pi-lens exposes to pi
-
-## Architecture
-
-Most lifecycle events enter through one wrapper, which drops and counts events
-that arrive on a replaced session. `tool_call` registers raw: it delegates
-straight to a handler that owns its own total guard. Events fan out into the
-edit-time lane and the LSP lane. Both lanes write into the findings stores.
-Nothing reaches the agent from those stores until a freshness gate or an
-explicit age label clears it.
-
-```mermaid
-flowchart TD
-    subgraph host["pi host"]
-        HOST["Host events<br/>tool_call, tool_result, turn_start/end,<br/>session_start/shutdown, agent_end, context"]
-        WRAP["Stale-ctx wrapper<br/>skips and counts events on a replaced session<br/>tool_result, turn_start, turn_end, agent_end,<br/>agent_settled, session_start, context"]
-    end
-
-    subgraph guards["Guards"]
-        RG["Read-guard<br/>blocks edits that lack prior reading"]
-        GG["Git-guard<br/>holds commit/push while findings stay unresolved"]
-    end
-
-    subgraph edit["Edit-time lane"]
-        PIPE["Post-write pipeline<br/>secrets, format, autofix, sync, lint, tests"]
-        PLAN["Dispatch plan<br/>per file kind, per capability group"]
-        RUN["Runners<br/>format, lint, types, security, smells, docs"]
-        STRUCT["Structural rules<br/>tree-sitter queries and ast-grep"]
-        BUS["files-touched bus<br/>tells extensions which paths moved"]
-    end
-
-    subgraph lsp["LSP lane"]
-        POOL["Client pool<br/>warm reuse, idle eviction"]
-        DIAGS["File and workspace diagnostics"]
-        CASC["Impact cascade<br/>tiered wait policy"]
-    end
-
-    STORES["Findings stores<br/>widget state, warning caches, project snapshot"]
-
-    subgraph gate["Freshness gating"]
-        FRESH["Path freshness<br/>mtime vs scan time, past-EOF, dependency drift"]
-        DISPO["Dispositions<br/>false-positive, suppress, defer, flagged"]
-        LABEL["Explicit age label<br/>for findings no path gate can check"]
-    end
-
-    subgraph deliver["Delivery surfaces"]
-        TURN["Turn-end findings injection"]
-        WIDGET["Widget and footer tally"]
-        TOOLS["lens_diagnostics tool"]
-        NUDGE["Agent nudges"]
-    end
-
-    SESSION["Session lifecycle<br/>primary, sequential replacement, concurrent secondary"]
-    SINKS["Observability sinks<br/>latency.log, degradation ledger, bounded telemetry,<br/>cache observability, cascade and tree-sitter logs"]
-    CONFIG["Config-core<br/>resolve, merge, deny"]
-    REVIEWGRAPH["Review-graph intelligence<br/>call graph, reverse deps, import resolution"]
-
-    HOST --> WRAP
-    HOST -->|tool_call, raw| RG
-    HOST -->|tool_call, raw| GG
-    WRAP -->|session_start| SESSION
-    WRAP -->|tool_result| PIPE
-    WRAP -->|tool_result, records reads and writes| RG
-    SESSION --> POOL
-    SESSION --> STORES
-    PIPE --> PLAN
-    PLAN --> RUN
-    PLAN --> STRUCT
-    PIPE --> POOL
-    PIPE --> BUS
-    CONFIG --> PIPE
-    CONFIG --> PLAN
-    STRUCT --> REVIEWGRAPH
-    REVIEWGRAPH --> CASC
-    POOL --> DIAGS
-    DIAGS --> CASC
-    RUN --> STORES
-    STRUCT --> STORES
-    DIAGS --> STORES
-    CASC --> STORES
-    BUS --> NUDGE
-    RG -->|read and edit history filter| NUDGE
-    STORES --> FRESH
-    STORES --> LABEL
-    FRESH --> DISPO
-    DISPO --> TURN
-    DISPO --> WIDGET
-    DISPO --> TOOLS
-    LABEL --> TURN
-    TURN --> GG
-    WRAP --> SINKS
-    PIPE --> SINKS
-    RUN --> SINKS
-    STRUCT --> SINKS
-    POOL --> SINKS
-    CASC --> SINKS
-    RG --> SINKS
-    GG --> SINKS
-    FRESH --> SINKS
-```
-
-Architecture-level view, updated when a lane changes. Per-tool inventories live
-in [features](docs/features.md) and
-[language coverage](docs/language-coverage.md). Today the edit-time lane carries
-45+ runner modules over 35+ file kinds, and the LSP lane speaks to 50
-language server definitions.
-
-The gating box is an abstraction, not a call order. Freshness covers several
-independent mechanisms: path freshness against scan time, past-EOF line checks,
-and forward-import dependency drift. Dispositions are one more filter alongside
-them, not a second stage every finding walks through. Read the box as "a finding
-passes the gates that apply to it", and see `clients/finding-delivery-gate.ts`
-for the per-surface contract.
-
-## Install
+## Quick start
 
 ```bash
 pi install npm:pi-lens
 ```
 
-Or from git:
+Or from git: `pi install git:github.com/apmantza/pi-lens`.
 
-```bash
-pi install git:github.com/apmantza/pi-lens
-```
+Requirements: Node.js >=22.19.0 and a pi host of 0.86.1 or newer. On pi 0.80–0.85, pi-lens gives no findings, because those hosts keep the prompt where the extension cannot write to it. [Release QA baseline](docs/release-qa-baseline.md) lists the certified hosts. See [Troubleshooting](#troubleshooting) for npm v12, Android, and skills-manifest notes.
 
-pi-lens delivers its four skills through the `pi.skills` package manifest, so
-install it as a package (`npm:`, `git:`, or a local path); a package install
-honours the host's `packages[].skills` filters (for example `[]`,
-`!skills/<name>/SKILL.md`, or `-skills/<name>/SKILL.md`). Loading the extension
-file directly (`pi --extension ./index.js`) does not read that manifest and
-loads no pi-lens skills.
+Install it and start a session. The language servers and many linters start with no setup. Some tools need your project's config, and a few are opt-in. See [What runs by default](#what-runs-by-default) and [Settings](docs/settings.md).
 
-Requires Node.js >=22.19.0 (matches the pi host's own floor — see `engines`
-in `package.json`), and a pi host of 0.86.1 or newer. pi 0.80–0.85 keep the
-prompt outside the request the extension can write to, so pi-lens delivers no
-findings there; `docs/release-qa-baseline.md` lists the certified hosts.
-
-Letting a coding agent do it: paste this into its prompt.
+To let a coding agent install it, paste this into its prompt:
 
 ```text
-Install pi-lens (npm:pi-lens) into pi, then read AGENTS.md in
-https://github.com/apmantza/pi-lens for how the extension works and how it
-expects to be operated.
+Install pi-lens (npm:pi-lens) into pi, then read docs/agent-guide.md in
+https://github.com/apmantza/pi-lens for how to read and respond to its findings.
 ```
 
-> **npm v12 users:** dependency lifecycle scripts (e.g. `@ast-grep/cli`'s
-> `postinstall`) now require explicit approval — if `npm install` warns about
-> unreviewed install scripts, review and allow them with
-> `npm approve-scripts`, or trust the `allowScripts` entries already declared
-> in this package's `package.json` (maintainers: see CONTRIBUTING.md
-> "Lifecycle-script approvals"). Installing from a git source (`pi install
-> git:...` / `pi update --extension git:...`) may similarly prompt for
-> git-dependency approval; accept it to let the `prepare` build step run.
+## What the agent sees
 
-### Android/Termux fallback
+After an edit, the tool result carries any blocking findings, with the offending line. At the end of the turn, pi-lens injects the findings that remain. The text below follows the real renderers: the `STOP` block from `clients/pipeline.ts`, and the turn-end framing, `Advisory` label, and warnings summary from `clients/runtime-context.ts` and `clients/runtime-turn.ts`.
 
-Try the normal install first. If it fails in `@ast-grep/cli`'s
-`postinstall.js` with `Failed to locate @ast-grep/cli native binary`, the
-fallback below has worked in one Termux environment:
+```text
+🔴 STOP — 1 issue(s) must be fixed:
+  L4: 'randomInt' is declared but its value is never read.
+      → const randomInt = Math.floor(result);
 
-```bash
-pkg install rust clang
-cargo install ast-grep --locked
-ast-grep --version
-npm_config_ignore_scripts=true pi install npm:pi-lens
+[pi-lens automated check — not a user request] Address 🔴 blockers before continuing; ℹ️ advisories are informational only.
+
+ℹ️ Advisory — no action required this turn:
+🟡 Fixable warnings introduced this turn: 1.
+Use lens_diagnostics with mode=delta to inspect these warnings.
+Files:
+  src/app.ts: 1
 ```
 
-`npm_config_ignore_scripts=true` skips every dependency lifecycle script for
-that `pi install` command, not only the failing `@ast-grep/cli` script. Use it
-only for this fallback after installing and checking the Rust-built `ast-grep`
-binary separately. `pi update` runs the same postinstall, so set the variable
-for it too. `ast-grep --version` must succeed from a new shell, which means
-`~/.cargo/bin` is on your `PATH`.
+The agent must clear a 🔴 blocker before it reports the task as done. A result marked partial, stale, or unconfirmed is never reported as clean.
 
-In the verified environment, `/lens-health` reported zero pipeline crashes and
-listed the `ast-grep` and `bash` LSP servers as available. This confirms startup
-and server discovery only; `ast_grep_search` was not tested end to end.
+## What you get
 
-pi-lens only looks for an `ast-grep` on `PATH` (such as Cargo's
-`~/.cargo/bin/ast-grep`) when pi trusts the project, so in an untrusted
-project this fallback leaves `ast_grep_search` unavailable. The in-process
-ast-grep rules (`@ast-grep/napi`) and Biome have no Android build, so they stay
-unavailable either way.
+- **Real diagnostics on every edit.** Language servers, linters, type-checkers, and scanners check each written file, and an impact cascade checks the files that depend on it. See [language coverage](docs/language-coverage.md).
+- **Safe formatting and autofix.** pi-lens formats and fixes files with the tools you configure or it confidently detects.
+- **Structural rules.** ast-grep and tree-sitter rules flag correctness and security smells, and you can add [custom rules](docs/custom-rules.md).
+- **Code navigation for the agent.** Tools cover LSP navigation, ranked identifier search, module reports, and symbol reads, so the agent reads less code. See [agent tools](docs/agent-tools.md).
+- **Guards and triage.** Read-before-edit blocks blind edits, an optional git guard holds `git commit` while blockers stand, and on pi you can mark a finding false-positive, suppressed, or deferred. The marking tool has no MCP endpoint, and under pi's lazy tool loading the agent activates it first. See [dispositions](docs/dispositions.md) and [agent tools](docs/agent-tools.md).
+- **Health and scans.** `/lens-health` reports runtime health, and opted-in projects get background security and dependency scans.
+
+The [feature reference](docs/features.md) covers everything.
+
+## What runs by default
+
+pi-lens runs tools in three tiers. The [per-tool table](docs/language-coverage.md#what-runs-by-default) lists every gate and where it lives in the code.
+
+- **No project config.** Language servers start by default, and `--no-lsp` turns them off. Many linters and formatters also run when the tool is available. Examples: ruff, shellcheck, hadolint, and ktlint for linting; oxlint or Biome for JS and TS when the project has no ESLint config; Biome and shfmt for formatting.
+- **Your project's config.** ESLint, golangci-lint, mypy, phpstan, and vale skip a project that lacks their config. detekt needs a detekt config file, credo needs `mix.exs`, and the taplo and clang-format formatters wait for config.
+- **Opt-in.** trivy (`trivy.enabled`), SpotBugs (`--lens-spotbugs`), Helm render validation (`helm.renderValidation.enabled`), and the commit guard (`--lens-guard`) stay off until you enable them.
+
+Project-local binaries, such as `node_modules/.bin/eslint` or `.venv/bin/ruff`, run only when pi trusts the project.
+
+## Commands you'll use
+
+| Command | What it does |
+|---|---|
+| `/lens-health` | Show runtime health, latency, and degradation counts |
+| `/lens-widget-toggle` | Show or hide the diagnostics widget below the editor |
+| `/lens-toggle` | Turn pi-lens on or off for the session |
+| `/lens-map` | Build an interactive HTML dependency map of the project |
+| `/lens-allow-edit <path>` | Override the read-before-edit guard for one edit |
+| `/lens-tools` | Show which tools are installed, auto-installed, or fall back to `npx` |
+
+The full list of commands and runtime flags is in [Tools and commands](docs/tools.md).
 
 ## Documentation
 
-- [Agent guide](docs/agent-guide.md) — how an AI agent should consume and respond to pi-lens
-- [Agent tools](docs/agent-tools.md) — pi tool names, scopes, and arguments
-- [Usage guide](docs/usage.md) — lifecycle, tool behavior, MCP notes, and
-  troubleshooting
-- [Features](docs/features.md) — detailed feature reference
-- [Word index](docs/word-index.md) — identifier search (`symbol_search`) and
-  the discovery funnel
-- [Tools and commands](docs/tools.md) — runtime flags and slash commands
-- [Diagnostic dispositions](docs/dispositions.md) — triage: false-positive,
-  suppress, defer, flagged-to-fix
-- [Settings](docs/settings.md) — the configuration hub: defaults, env vars, CLI
-  flags, and global vs project config at a glance
-- [Configuration](docs/globalconfig.md) — global and project config files
-- [Environment variables](docs/environment-variables.md) — common env vars and
-  full reference
-- [Language coverage](docs/language-coverage.md) — supported languages, runners,
-  and formatters
-- [Dependencies](docs/dependencies.md) — auto-install policy and external tools
-- [Custom rules](docs/custom-rules.md) — project ast-grep and tree-sitter rules
-- [MCP server](docs/mcp.md) — experimental MCP server for Claude Code and
-  other MCP clients
-- [Architecture decision records](docs/adr/README.md) — settled design
-  decisions, linked from the engineering-defect catalog
+### Use
+
+- [Agent guide](docs/agent-guide.md): how an agent reads and responds to pi-lens
+- [Agent tools](docs/agent-tools.md): tool names, scopes, and arguments
+- [Usage guide](docs/usage.md): lifecycle, tool behavior, MCP notes, and troubleshooting
+- [Features](docs/features.md): the detailed feature reference
+- [Diagnostic dispositions](docs/dispositions.md): triage with false-positive, suppress, defer, and flagged-to-fix
+- [Word index](docs/word-index.md): identifier search and the discovery funnel
+
+### Configure
+
+- [Settings](docs/settings.md): defaults, environment variables, flags, and global versus project config
+- [Configuration](docs/globalconfig.md): global and project config files
+- [Environment variables](docs/environment-variables.md): the full reference
+- [Language coverage](docs/language-coverage.md): supported languages, runners, and formatters
+- [Dependencies](docs/dependencies.md): auto-install policy and external tools
+
+### Extend
+
+- [Custom rules](docs/custom-rules.md): project ast-grep and tree-sitter rules
+- [MCP server](docs/mcp.md): the experimental server for Claude Code and other MCP clients
+- [Architecture](docs/architecture.md): how events reach the findings the agent sees
+- [Architecture decision records](docs/adr/README.md): settled design decisions
+
+## Troubleshooting
+
+<details>
+<summary>Install problems</summary>
+
+The install notes in the [usage guide](docs/usage.md#install-notes) cover three cases:
+
+- **npm v12** asks you to approve dependency install scripts such as the `@ast-grep/cli` postinstall.
+- **Android and Termux** can fail to find the `@ast-grep/cli` native binary. The notes give a verified fallback.
+- **Skills** arrive through the package manifest. Loading the extension file directly (`pi --extension ./index.js`) loads no pi-lens skills.
+
+</details>
+
+For runtime problems, run `/lens-health` and read the [usage guide troubleshooting section](docs/usage.md#troubleshooting).
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, runner,
-LSP, formatter, and rule checklists, and issue/PR conventions.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, runner, LSP, formatter, and rule checklists, and for issue and PR conventions.
 
-Security issues should be reported privately; see [`SECURITY.md`](SECURITY.md).
+Report security issues privately; see [`SECURITY.md`](SECURITY.md).
 pi-lens is released under the [MIT License](LICENSE).
 
 ## Contributors
@@ -555,6 +435,7 @@ Thanks goes to these wonderful people:
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ProphetOfDoom-PoD"><img src="https://avatars.githubusercontent.com/u/260035065?v=4" width="100px;" alt=""/><br /><sub><b>Prophet Of Doom</b></sub></a><br /><a href="#ideas-ProphetOfDoom-PoD" title="Ideas & Planning">🤔</a></td>
       <td align="center" valign="top" width="14.28%"><a href="http://www.apostolapostolov.com/"><img src="https://avatars.githubusercontent.com/u/4083812?v=4" width="100px;" alt=""/><br /><sub><b>Apostol Apostolov</b></sub></a><br /><a href="#bug-apoapostolov" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/spearmootz"><img src="https://avatars.githubusercontent.com/u/19737290?v=4" width="100px;" alt=""/><br /><sub><b>Ricardo Spear</b></sub></a><br /><a href="#bug-spearmootz" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/lluppi"><img src="https://avatars.githubusercontent.com/u/88203649?v=4" width="100px;" alt=""/><br /><sub><b>Lee Luppi</b></sub></a><br /><a href="#ideas-lluppi" title="Ideas & Planning">🤔</a></td>
     </tr>
   </tbody>
 </table>
