@@ -229,8 +229,6 @@ function repoWorkflowFiles(): WorkflowFile[] {
 const EXEMPTIONS: Readonly<Record<string, string>> = {
 	".github/workflows/cache-prune.yml::prune":
 		"the deleting job of the cache cleanup (#4358): it removes shared repository state, so it runs on the nightly schedule or a push to master only. The pull_request run executes the same script and the same listing in the `plan` job, as a dry run with a read-only token, so the edited lines still run pre-merge",
-	".github/workflows/ci.yml::strict-install-cold-cache":
-		"left the pull_request trigger (#5112): 1,410 runner minutes in 30 days and no real catch (#3995 slice A). A pull request that changes the manifests still runs the same pinned-npm strict install through install-smoke.yml's `npm-strict`, pinned by tests/config/allow-scripts-ci-gate.test.ts; master pushes and dispatches keep this job (it runs after the merge)",
 	".github/workflows/close-keyword-verification.yml::verify":
 		"pull_request_target gated on github.event.pull_request.merged == true: it verifies what the close keywords DID once the PR is merged, which cannot be observed before the merge",
 	".github/workflows/install-smoke.yml::host-latest-notify":

@@ -46,8 +46,11 @@ import {
 	findLocalBinUpwards,
 	localBinPath,
 	VENDOR_BIN_DIRS,
-	VENV_BIN_DIRS,
 } from "./package-manager.js";
+import {
+	type InstalledToolResolution,
+	resolveInstalledToolCommand,
+} from "./dispatch/runners/utils/runner-helpers.js";
 import { resolveWriteResult } from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { admittedLookupAnswer } from "./session-repository.js";
@@ -66,7 +69,6 @@ import {
 	getAutoInstallToolIdForFormatter,
 	getFormatterPolicyForFile,
 	getSmartDefaultFormatterName,
-	hasBiomeConfig,
 	hasBlackConfig,
 	hasClangFormatConfig,
 	hasCljfmtConfig,
@@ -88,13 +90,11 @@ import {
 	hasPSScriptAnalyzerConfig,
 	hasRubocopConfig,
 	hasRuffConfig,
-	hasSqlfluffConfig,
 	hasStandardrbConfig,
 	hasStyluaConfig,
 	hasSwiftformatConfig,
 	hasTaploConfig,
 	hasTerraformConfig,
-	hasVitePlusConfig,
 	OXFMT_SUPPORTED_EXTENSIONS,
 } from "./tool-policy.js";
 
@@ -143,12 +143,22 @@ export const SKIP_FORMATTING = "skip-formatting" as const;
 export const FORMATTER_UNAVAILABLE = "formatter-unavailable" as const;
 export const FORMATTER_AGREEMENT_UNAVAILABLE =
 	"formatter-agreement-unavailable" as const;
+/**
+ * A tool the ladder found but could not run: it failed its version check and
+ * no later rung replaced it (#5492 r2). Distinct from `FORMATTER_UNAVAILABLE`
+ * ("nothing found"): the tool is present and broken, so `formatFile` reports a
+ * failed outcome that carries the probe's stderr (#3312), never "not found".
+ * A string sentinel like its siblings, with the message after the prefix.
+ */
+const FORMATTER_REJECTED_PREFIX = "formatter-rejected:" as const;
+export type FormatterRejected = `formatter-rejected:${string}`;
 export type ResolvedFormatterCommand =
 	| string[]
 	| null
 	| typeof SKIP_FORMATTING
 	| typeof FORMATTER_UNAVAILABLE
-	| typeof FORMATTER_AGREEMENT_UNAVAILABLE;
+	| typeof FORMATTER_AGREEMENT_UNAVAILABLE
+	| FormatterRejected;
 
 /**
  * #1940: what formatter selection actually did to answer one file.
@@ -337,6 +347,11 @@ const WHICH_BUDGET_MS = 5000;
  *
  * Now: only a genuine absence latches, a stall expires on a cooldown, and the
  * detection pass refuses to cache an empty result a stall caused.
+ *
+ * `which()` answers "is it on PATH", the `detect()` prefilter. It does not
+ * choose the binary a formatter RUNS: that is `resolveFormatterToolCommand`,
+ * the formatter ladder (#5410, project, PATH, managed). A tool with no other rung (zig, dart, nixfmt,
+ * terraform, ...) has PATH as its whole ladder, so its `which` is the answer.
  */
 const whichLatchByCommand = new Map<
 	string,
@@ -615,29 +630,42 @@ async function resolveGoFmtBinary(): Promise<string | null> {
 // --- Venv / Local Binary Helpers ---
 
 /**
- * Walk up from cwd looking for a binary in .venv or venv.
- * Returns the absolute path if found, null otherwise.
- *
- * Tool-resolution walker, not a config lookup (#2514/#2517 policy): escaping
- * the project upward past HOME means STOP, not keep reading — a `.venv`/`venv`
- * bin found at or above HOME can never be THIS project's own virtualenv. The
- * ceiling lives in `findLocalBinUpwards` and is default-on there; the tests
- * that pin a fake HOME drive that walker directly rather than threading a
- * `homeDir` no production caller ever passed (#2544 review F3).
- *
- * On Windows the candidate order is EXT-OUTER, DIR-INNER — `.venv/Scripts/x.exe`,
- * `venv/Scripts/x.exe`, then the bare names — which is what the pre-fold copy
- * did and what `findLocalBinUpwards` preserves.
+ * The binary a formatter runs for `toolId` (#5410, #5492 r2): the formatter
+ * ladder (the project's own `.venv` or `node_modules/.bin` at exactly the
+ * project root, then PATH with a version check, then managed), asked at the
+ * root the formatter spawns in. A parent directory's `.venv` is another
+ * project's interpreter and is never walked to (#2544 r4 F2). PATH outranks
+ * managed here, unlike the runners, because the formatter's version decides
+ * the bytes it writes. No install: the formatter's own opt-in
+ * (`AUTO_INSTALLABLE_DEFAULT_FORMATTERS`) decides that.
  */
-async function findInVenv(binary: string, cwd: string): Promise<string | null> {
-	return (
-		localBinPath(
-			findLocalBinUpwards(binary, cwd, {
-				windowsExt: ".exe",
-				binDirs: VENV_BIN_DIRS,
-			}),
-		) ?? null
+function resolveFormatterToolCommand(
+	toolId: string,
+	filePath: string,
+	formatterName: string = toolId,
+): Promise<InstalledToolResolution> {
+	return resolveInstalledToolCommand(
+		resolveFormatterCwd(filePath, formatterName),
+		toolId,
 	);
+}
+
+function isFormatterRejected(cmd: unknown): cmd is FormatterRejected {
+	return typeof cmd === "string" && cmd.startsWith(FORMATTER_REJECTED_PREFIX);
+}
+
+/**
+ * What a formatter returns when the ladder (and any install) found no binary:
+ * a present tool that failed its version check reports itself with the
+ * probe's stderr tail, anything else is plainly unavailable.
+ */
+function ladderMiss(
+	found: InstalledToolResolution,
+	formatterName: string,
+): typeof FORMATTER_UNAVAILABLE | FormatterRejected {
+	if (found.rejected === undefined) return FORMATTER_UNAVAILABLE;
+	const tail = diagnosticTail(found.rejected);
+	return `${FORMATTER_REJECTED_PREFIX}${formatterName}: present but failed its version check${tail ? `:\n${tail}` : ""}`;
 }
 
 /**
@@ -647,7 +675,7 @@ async function findInVenv(binary: string, cwd: string): Promise<string | null> {
  * Tool-resolution walker, not a config lookup (#2514/#2517 policy): escaping
  * the project upward past HOME means STOP, not keep reading — a `vendor/bin`
  * match found at or above HOME can never be THIS project's own Composer
- * install. Same single walker as `findInVenv` above; only `binDirs` and the
+ * install. Same single walker as `findInNodeModules` below; only `binDirs` and the
  * Windows extension differ.
  */
 async function findInVendorBin(
@@ -701,9 +729,15 @@ async function resolveManagedSmartDefaultCommand(
 	formatterName: string,
 	filePath: string,
 	args: string[],
-): Promise<string[] | typeof FORMATTER_UNAVAILABLE> {
+): Promise<string[] | typeof FORMATTER_UNAVAILABLE | FormatterRejected> {
 	const toolId = getAutoInstallToolIdForFormatter(formatterName);
 	if (!toolId) return FORMATTER_UNAVAILABLE;
+	const found = await resolveFormatterToolCommand(
+		toolId,
+		filePath,
+		formatterName,
+	);
+	if (found.command) return [found.command, ...args, filePath];
 	const { ensureTool } = await import("./installer/index.js");
 	const installed = await ensureTool(toolId);
 	if (!installed) {
@@ -713,7 +747,7 @@ async function resolveManagedSmartDefaultCommand(
 			reason:
 				"managed formatter lookup and installation returned no executable",
 		});
-		return FORMATTER_UNAVAILABLE;
+		return ladderMiss(found, formatterName);
 	}
 	return [installed, ...args, filePath];
 }
@@ -728,11 +762,12 @@ async function resolveManagedFormatterCommand(
 		cwd: string,
 	) => string | null | undefined | Promise<string | null | undefined>,
 	cwd?: string,
-): Promise<string[] | typeof FORMATTER_UNAVAILABLE> {
+): Promise<string[] | typeof FORMATTER_UNAVAILABLE | FormatterRejected> {
 	const local = findLocal && cwd ? await findLocal(toolId, cwd) : null;
-	const installed =
-		local ?? (await which(toolId)) ?? (await getToolPath(toolId));
-	return installed ? [installed, ...args, filePath] : FORMATTER_UNAVAILABLE;
+	if (local) return [local, ...args, filePath];
+	const found = await resolveFormatterToolCommand(toolId, filePath);
+	const installed = found.command ?? (await getToolPath(toolId));
+	return installed ? [installed, ...args, filePath] : ladderMiss(found, toolId);
 }
 
 function managedFormatterResolver(
@@ -785,7 +820,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 	string,
 	(cwd: string, ext: string) => boolean
 >([
-	["biome", (cwd) => hasBiomeConfig(cwd)],
+	["biome", (cwd) => hasToolConfig("biome", cwd)],
 	[
 		"prettier",
 		(cwd) =>
@@ -803,7 +838,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 			ext === ".svelte"
 				? hasOxfmtSvelteConfig(cwd)
 				: hasOxfmtConfig(cwd) ||
-					hasVitePlusConfig(cwd) ||
+					hasToolConfig("vitePlus", cwd) ||
 					// The published package is `oxfmt`; `@oxc-project/oxfmt` does not
 					// exist on npm. Accept both (scoped kept for forward-compat).
 					hasNearestPackageJsonDependency(cwd, "oxfmt") ||
@@ -811,7 +846,7 @@ const EXPLICIT_FORMATTER_CONFIG_CHECKS = new Map<
 	],
 	["ruff", (cwd) => hasRuffConfig(cwd)],
 	["black", (cwd) => hasBlackConfig(cwd)],
-	["sqlfluff", (cwd) => hasSqlfluffConfig(cwd)],
+	["sqlfluff", (cwd) => hasToolConfig("sqlfluff", cwd)],
 	["rubocop", (cwd) => hasRubocopConfig(cwd)],
 	["standardrb", (cwd) => hasStandardrbConfig(cwd)],
 	["clang-format", (cwd) => hasClangFormatConfig(cwd)],
@@ -1016,7 +1051,7 @@ export const biomeFormatter: FormatterInfo = {
 	],
 	async detect(cwd: string) {
 		return (
-			hasBiomeConfig(cwd) ||
+			hasToolConfig("biome", cwd) ||
 			hasNearestPackageJsonDependency(cwd, "@biomejs/biome")
 		);
 	},
@@ -1107,7 +1142,7 @@ export const oxfmtFormatter: FormatterInfo = {
 	// benign-nonzero mode, it stays strict — the safe direction, since the failure
 	// mode of guessing wrong the other way is a silent no-op (#1336).
 	async resolveCommand(filePath, cwd) {
-		if (hasVitePlusConfig(cwd)) {
+		if (hasToolConfig("vitePlus", cwd)) {
 			// No unmatched-pattern flag here: this is `vp`, a different CLI with
 			// its own arguments. Whether `vp fmt` has the same empty-target
 			// behavior is unverified, so nothing is claimed about it.
@@ -1118,8 +1153,6 @@ export const oxfmtFormatter: FormatterInfo = {
 		}
 		const local = await findInNodeModules("oxfmt", cwd);
 		if (local) return [local, OXFMT_NO_ERROR_ON_UNMATCHED, filePath];
-		const found = await which("oxfmt");
-		if (found) return [found, OXFMT_NO_ERROR_ON_UNMATCHED, filePath];
 		return (
 			(await resolveManagedFormatterCommand(
 				"oxfmt",
@@ -1137,7 +1170,7 @@ export const oxfmtFormatter: FormatterInfo = {
 	async detect(cwd: string) {
 		return (
 			hasOxfmtConfig(cwd) ||
-			hasVitePlusConfig(cwd) ||
+			hasToolConfig("vitePlus", cwd) ||
 			// Published package is `oxfmt` (the scoped name does not exist on npm).
 			hasNearestPackageJsonDependency(cwd, "oxfmt") ||
 			hasNearestPackageJsonDependency(cwd, "@oxc-project/oxfmt")
@@ -1157,8 +1190,8 @@ export const ruffFormatter: FormatterInfo = {
 		const styleArgs = await indentationArgs(filePath, "ruff", cwd);
 		if (styleArgs === null) return SKIP_FORMATTING;
 		const args = ["format", ...styleArgs];
-		const venv = await findInVenv("ruff", cwd);
-		if (venv) return [venv, ...args, filePath];
+		const found = await resolveFormatterToolCommand("ruff", filePath);
+		if (found.command) return [found.command, ...args, filePath];
 		const toolId = getAutoInstallToolIdForFormatter("ruff");
 		if (!toolId) return null;
 		const { ensureTool } = await import("./installer/index.js");
@@ -1169,7 +1202,7 @@ export const ruffFormatter: FormatterInfo = {
 		// means ruff is genuinely nowhere. `detect()`'s `hasRuffConfig` branch has
 		// no binary check, so a config-only project selects ruff with nothing
 		// installed; the static bare `ruff` would then ENOENT. Prove it unavailable.
-		return FORMATTER_UNAVAILABLE;
+		return ladderMiss(found, "ruff");
 	},
 	async detect(cwd: string) {
 		if (hasRuffConfig(cwd)) return true;
@@ -1183,7 +1216,7 @@ export const blackFormatter: FormatterInfo = {
 	name: "black",
 	command: ["black", "$FILE"],
 	extensions: [".py", ".pyi"],
-	resolveCommand: managedFormatterResolver("black", [], findInVenv),
+	resolveCommand: managedFormatterResolver("black", []),
 	async detect(cwd: string) {
 		return hasBlackConfig(cwd);
 	},
@@ -1199,13 +1232,16 @@ export const sqlfluffFormatter: FormatterInfo = {
 		"clean, 1 = violations remain, 2 = command/config failure), so a nonzero " +
 		"exit routinely accompanies a successful rewrite.",
 	lenientStatuses: [1],
-	async resolveCommand(filePath, cwd) {
-		const venv = await findInVenv("sqlfluff", cwd);
-		if (venv) return [venv, "fix", "--force", filePath];
-		return null;
+	async resolveCommand(filePath, _cwd) {
+		const found = await resolveFormatterToolCommand("sqlfluff", filePath);
+		if (found.command) return [found.command, "fix", "--force", filePath];
+		// Never the static bare `sqlfluff`: it is the binary the ladder just
+		// proved absent or rejected, and a rejected run exits 1, which is lenient
+		// for sqlfluff and would read as an unchanged file (#5492 r2 F6).
+		return ladderMiss(found, "sqlfluff");
 	},
 	async detect(cwd: string) {
-		return hasSqlfluffConfig(cwd);
+		return hasToolConfig("sqlfluff", cwd);
 	},
 };
 
@@ -1274,8 +1310,6 @@ export const shfmtFormatter: FormatterInfo = {
 	async resolveCommand(filePath, cwd) {
 		const styleArgs = await indentationArgs(filePath, "shfmt", cwd);
 		if (styleArgs === null) return SKIP_FORMATTING;
-		const inPath = await which("shfmt");
-		if (inPath) return [inPath, "-w", ...styleArgs, filePath];
 		return resolveManagedSmartDefaultCommand("shfmt", filePath, [
 			"-w",
 			...styleArgs,
@@ -1346,8 +1380,6 @@ export const ktlintFormatter: FormatterInfo = {
 		"the ones it cannot correct).",
 	lenientStatuses: [1],
 	async resolveCommand(filePath, _cwd) {
-		const inPath = await which("ktlint");
-		if (inPath) return [inPath, "-F", filePath];
 		return resolveManagedSmartDefaultCommand("ktlint", filePath, ["-F"]);
 	},
 	detect: managedToolDetect(
@@ -1371,16 +1403,18 @@ export const ktfmtFormatter: FormatterInfo = {
 	// bare invocation, unchanged from pre-#2468 behavior.
 	async resolveCommand(filePath, _cwd) {
 		const styleFlag = await resolveKtfmtGradleStyle(filePath);
-		const inPath = await which("ktfmt");
-		if (inPath)
-			return styleFlag ? [inPath, styleFlag, filePath] : [inPath, filePath];
+		const found = await resolveFormatterToolCommand("ktfmt", filePath);
+		if (found.command)
+			return styleFlag
+				? [found.command, styleFlag, filePath]
+				: [found.command, filePath];
 		const { ensureTool } = await import("./installer/index.js");
 		const installed = await ensureTool("ktfmt");
-		// #2413: which() and ensureTool (PATH/global/managed + install) both
+		// #2413: the ladder and ensureTool (PATH/global/managed + install) both
 		// failed, and `detect()` gates only on hasKtfmtConfig — no binary probe —
 		// so a config-only project reaches here with ktfmt absent. The static
 		// command is bare `ktfmt`; spawning it reproduces the ENOENT class.
-		if (!installed) return FORMATTER_UNAVAILABLE;
+		if (!installed) return ladderMiss(found, "ktfmt");
 		return styleFlag ? [installed, styleFlag, filePath] : [installed, filePath];
 	},
 	async detect(cwd: string) {
@@ -1450,8 +1484,6 @@ export const typstyleFormatter: FormatterInfo = {
 	command: ["typstyle", "-i", "$FILE"],
 	extensions: [".typ", ".typc"],
 	async resolveCommand(filePath) {
-		const inPath = await which("typstyle");
-		if (inPath) return [inPath, "-i", filePath];
 		return resolveManagedSmartDefaultCommand("typstyle", filePath, ["-i"]);
 	},
 	detect: managedToolDetect(
@@ -1502,9 +1534,6 @@ export const phpCsFixerFormatter: FormatterInfo = {
 	// depends on php-cs-fixer's own (nonexistent) upward search.
 	async resolveCommand(filePath, cwd) {
 		const configPath = resolvePhpCsFixerConfig(filePath);
-		const binary =
-			(await findInVendorBin("php-cs-fixer", cwd)) ??
-			(await which("php-cs-fixer"));
 		const managed = await resolveManagedFormatterCommand(
 			"php-cs-fixer",
 			filePath,
@@ -1512,14 +1541,14 @@ export const phpCsFixerFormatter: FormatterInfo = {
 			findInVendorBin,
 			cwd,
 		);
-		if (managed === FORMATTER_UNAVAILABLE) return FORMATTER_UNAVAILABLE;
-		const resolved = binary ?? managed[0];
-		// #2413/#2472 review F4: both probes (vendor/bin, then PATH) have
-		// PROVEN the binary is absent — returning `null` here would fall back
-		// to the static `command` above, which is the SAME bare
+		if (!Array.isArray(managed)) return managed;
+		// #2413/#2472 review F4: vendor/bin, the ladder and the managed lookup
+		// have PROVEN the binary is absent — returning `null` here would fall
+		// back to the static `command` above, which is the SAME bare
 		// `php-cs-fixer` this just failed to find, spawning it only to
 		// re-observe the ENOENT already known. Report the proven-missing
 		// state instead so `formatFile` skips the wasted spawn.
+		const resolved = managed[0];
 		if (!resolved) return FORMATTER_UNAVAILABLE;
 		return configPath
 			? [resolved, "fix", "--config", configPath, filePath]
@@ -1626,8 +1655,6 @@ export const taploFormatter: FormatterInfo = {
 	command: ["taplo", "fmt", "$FILE"],
 	extensions: [".toml"],
 	async resolveCommand(filePath, _cwd) {
-		const inPath = await which("taplo");
-		if (inPath) return [inPath, "fmt", filePath];
 		return resolveManagedSmartDefaultCommand("taplo", filePath, ["fmt"]);
 	},
 	detect: managedToolDetect(
@@ -2382,6 +2409,7 @@ async function resolveFormatterCommand(
 	| typeof SKIP_FORMATTING
 	| typeof FORMATTER_UNAVAILABLE
 	| typeof FORMATTER_AGREEMENT_UNAVAILABLE
+	| FormatterRejected
 > {
 	const agreement = establishToolAgreement(formatter.name, cwd);
 	if (agreement.decision === "decline") {
@@ -2463,6 +2491,17 @@ export async function formatFile(
 				changed: false,
 				outcome: "unavailable",
 				error: `${formatter.name}: formatter executable not found`,
+			};
+		}
+		if (isFormatterRejected(cmd)) {
+			// A tool that is present and failed its version check is an errored
+			// run, not an absent one (#5492 r2 F2): the stderr tail rides along
+			// so the cause is not lost (#3312).
+			return {
+				success: false,
+				changed: false,
+				outcome: "failed",
+				error: cmd.slice(FORMATTER_REJECTED_PREFIX.length),
 			};
 		}
 		if (cmd === FORMATTER_AGREEMENT_UNAVAILABLE) {

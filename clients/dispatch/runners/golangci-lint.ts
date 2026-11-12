@@ -10,11 +10,12 @@
  * that haven't opted in.
  */
 
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { pathsEqual } from "../../path-utils.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
-import { getLinterPolicyForCwd, hasGolangciConfig } from "../../tool-policy.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -153,7 +154,7 @@ const golangciRunner: RunnerDefinition = {
 	appliesTo: ["go"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	timeoutMs: 90_000,
-	requiresConfig: (cwd) => hasGolangciConfig(cwd),
+	requiresConfig: (cwd) => hasToolConfig("golangci-lint", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "golangci-lint");

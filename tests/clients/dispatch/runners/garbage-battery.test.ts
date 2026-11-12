@@ -41,14 +41,6 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => ({
 	...(await importOriginal<Record<string, unknown>>()),
 	getLinterPolicyForCwd,
 	markdownlintConfigArgs: () => [],
-	hasEslintConfig: () => true,
-	hasMypyConfig: () => true,
-	hasPhpstanConfig: () => true,
-	// Deliberately false on EVERY platform (not a /dev/null accident): the
-	// no-config branch is what the battery must exercise, stated as intent.
-	hasSqlfluffConfig: () => false,
-	hasStylelintConfig: () => true,
-	hasYamllintConfig: () => true,
 	getAutofixCapability: () => ({
 		toolSupportsFix: false,
 		safePipelineAutofix: false,
