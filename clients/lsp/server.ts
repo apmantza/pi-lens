@@ -2803,6 +2803,9 @@ async function launchNativeTypeScript(
 	try {
 		proc = await launchViaNode(nativeLsp.command, args, { cwd: root, env });
 	} catch (launchFailure) {
+		logSessionStart(
+			`lsp typescript-native: alias failed to launch: ${launchFailure instanceof Error ? launchFailure.message : String(launchFailure)}`,
+		);
 		const classic = await classicInstead(launchFailure, "failed to launch");
 		if (classic) return classic;
 		throw launchFailure;
@@ -3257,9 +3260,7 @@ async function launchClassicTypeScript(
 	return {
 		process: proc,
 		source,
-		initialization: tsserverPath
-			? { tsserver: { path: tsserverPath } }
-			: undefined,
+		initialization: { tsserver: { path: tsserverPath } },
 		launchVariant: "classic",
 	};
 }
