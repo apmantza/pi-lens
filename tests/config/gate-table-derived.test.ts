@@ -323,7 +323,7 @@ describe("docs/language-coverage.md 'What runs by default' agrees with tool-poli
 
 	// Recurrence: credo's policy row selects it with no config while the runner
 	// skips a directory with no mix.exs; the doc follows the runner and says so.
-	it("the credo exception holds in the runner: no mix.exs is a skip", async () => {
+	it("the credo exception holds in the runner: no mix.exs is a not-configured skip", async () => {
 		const env = setupTestEnvironment("pi-lens-gate-table-credo-");
 		try {
 			const file = path.join(env.tmpDir, "lib", "a.ex");
@@ -332,7 +332,10 @@ describe("docs/language-coverage.md 'What runs by default' agrees with tool-poli
 			const result = await credoRunner.run(
 				makeRunnerCtx(file, env.tmpDir, { kind: "elixir" }) as never,
 			);
-			expect(result.status).toBe("skipped");
+			expect(result).toMatchObject({
+				status: "skipped",
+				skipReason: "not-configured",
+			});
 		} finally {
 			env.cleanup();
 		}

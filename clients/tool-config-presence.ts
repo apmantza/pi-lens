@@ -536,10 +536,9 @@ function pyprojectDependencyNames(content: string): string[] {
 	return names;
 }
 
-/** `Gemfile`: the first string of a `gem` call; `#` comments are skipped. */
+/** `Gemfile`: the first string of a line-leading `gem` call, so a comment names nothing. */
 function gemfileNames(content: string): string[] {
-	return content.split(/\r?\n/).flatMap((raw) => {
-		const line = raw.replace(/(^|\s)#.*$/, "");
+	return content.split(/\r?\n/).flatMap((line) => {
 		const match = /^\s*gem\s*\(?\s*["']([^"']+)["']/.exec(line);
 		return match?.[1] ? [match[1]] : [];
 	});

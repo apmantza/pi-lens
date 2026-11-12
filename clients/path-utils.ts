@@ -997,12 +997,12 @@ export function findNearestContaining(
  * to read on its own, so pi-lens silently fell back to (or, for typos,
  * injected and let its own shipped `_typos.toml` merge over) the user's
  * config where the tool's own resolver would have honored it. `php-cs-fixer`
- * makes the same mismatch concrete: its detection gates
- * (`hasPhpCsFixerConfig` via `findNearestContaining`, `phpCsFixerFormatter
- * .detect` via its own `findUp`) are both unceilinged, so a ceilinged
- * carriage here disagreed with its own gate — "config exists" from the gate,
- * "config not found" from the resolver — and dropped the very `--config`
- * argv #2472 exists to carry. Pass `options.homeDir` only when a caller
+ * makes the same mismatch concrete: its detection gate (`hasToolConfig(
+ * "php-cs-fixer")`, which visits `$HOME` and stops there since #5408) must
+ * agree with the carriage for a config AT `$HOME`, so a ceilinged carriage
+ * disagreed with its own gate — "config exists" from the gate, "config not
+ * found" from the resolver — and dropped the very `--config` argv #2472
+ * exists to carry. Pass `options.homeDir` only when a caller
  * affirmatively wants the ceiling (a config found at or above THAT directory
  * is never returned); omitting it walks all the way to the filesystem root,
  * matching `findNearestContaining`'s unceilinged behavior and every

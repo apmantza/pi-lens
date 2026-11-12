@@ -195,15 +195,15 @@ describe("phpCsFixerFormatter — ancestor config carriage (#2472)", () => {
 
 	// #2472 review round 3, F1/F3 (maintainer-decision reversal): a round-2
 	// fold ceilinged `resolvePhpCsFixerConfig` (the carriage) at $HOME by
-	// default while its own detection gates — `hasPhpCsFixerConfig`
-	// (`clients/tool-policy.ts`, via the unceilinged `findNearestContaining`)
+	// default while its own detection gates — `hasPhpCsFixerConfig` (since
+	// folded onto the seam, which visits $HOME and stops there; #5408)
 	// and `phpCsFixerFormatter.detect` (via its own unceilinged `findUp`) —
 	// stayed unceilinged. That disagreement re-created #2472 for any project
 	// rooted at or above $HOME: the gate said "config exists", the carriage
 	// said "not found", and `--config` was silently dropped. The carriage is
 	// unceilinged again; this proves gate and carriage now AGREE for a config
 	// sitting exactly AT (a mocked, never-real) $HOME.
-	it("gate (hasPhpCsFixerConfig) and carriage (resolvePhpCsFixerConfig) agree for a config AT HOME (#2472 review round 3 F1)", () => {
+	it("gate (hasToolConfig php-cs-fixer) and carriage (resolvePhpCsFixerConfig) agree for a config AT HOME (#2472 review round 3 F1)", () => {
 		const tmpDir = newTmpDir("pi-lens-phpcsfixer-homeagree-");
 		const mockedHome = path.join(tmpDir, "mocked-home");
 		fs.mkdirSync(mockedHome, { recursive: true });

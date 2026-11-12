@@ -43,8 +43,8 @@ function write(file: string, content = ""): string {
 /**
  * Whether the oxlint runner probed the Vite+ `vp` binary: it does so exactly
  * when `hasToolConfig("vitePlus", cwd)` holds (`oxlint.ts`). The policy's own
- * `hasOxlintConfig` cannot be the witness: it also climbs for `.oxlintrc.json`
- * unbounded and finds this repository's own (a remaining #5408 helper).
+ * `getJstsLintPolicyForCwd` cannot be the witness: its oxlint answer also
+ * covers `.oxlintrc.json`, so it does not isolate the Vite+ branch.
  */
 async function probesVp(proj: string): Promise<boolean> {
 	safeSpawnAsync.mockResolvedValue({
