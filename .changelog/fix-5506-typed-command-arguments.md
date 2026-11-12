@@ -4,4 +4,4 @@ audience: user
 area: lsp
 ---
 
-- **LSP command arguments now work with strict-schema providers.** `lsp_navigation` advertises the full JSON value space for `commandArguments`, so strict Responses tools no longer reject the tool while LSP servers still receive object arguments unchanged. (refs #5506)
+- **LSP command arguments opt out of strict schema conversion.** `lsp_navigation` advertises the full JSON value space for `commandArguments` without a strict opt-in, so providers can receive object arguments unchanged. Live confirmation on a strict-schema provider remains outstanding. (refs #5506)

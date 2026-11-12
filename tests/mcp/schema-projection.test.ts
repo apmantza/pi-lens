@@ -39,9 +39,11 @@ const CONSTRAINED = { type: "json_schema", strict: "prefer" };
 /** Strict-safe carriers; required enums remain constrained (#5471). */
 const EXPECTED_CONSTRAINED_TOOLS = [
 	"lens_diagnostic_mark",
-	"lsp_navigation",
 	"pi_lens_activate_tools",
 ];
+
+// #5506: lsp_navigation keeps object-valued command arguments that pi-ai's
+// strict conversion cannot represent, so it deliberately opts out of strict.
 
 /**
  * Entries whose `inputSchema` already projects but whose `description` still
@@ -78,6 +80,10 @@ type ListedMcpTool = {
 function unsafeStrictSchema(node: unknown, inUnion = false): boolean {
 	if (!node || typeof node !== "object" || Array.isArray(node)) return true;
 	const schema = node as Record<string, unknown>;
+	const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+	if (types.includes("object") && schema.additionalProperties !== false)
+		return true;
+	if (types.includes("array") && !("items" in schema)) return true;
 	const union =
 		inUnion ||
 		"anyOf" in schema ||
@@ -341,6 +347,7 @@ describe("MCP schema projection (#5138 PR 3)", () => {
 			alias,
 			{ type: "array", items: alias },
 			{ anyOf: [{ type: "boolean" }, { type: "null" }] },
+			{ type: "object", additionalProperties: false },
 		])
 			expect(unsafeStrictSchema(schema), JSON.stringify(schema)).toBe(false);
 	});
