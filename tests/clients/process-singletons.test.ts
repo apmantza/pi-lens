@@ -550,3 +550,63 @@ describe("#2146 F2 — the reset log's own family cannot recurse", () => {
 		expect(families).toEqual(["fam"]);
 	});
 });
+
+// #5182 / #5413: an entered AsyncLocalStorage is never disabled and Node
+// propagates every enabled one into every new async resource, so one storage
+// per module evaluation makes each reload tax every later promise.
+describe("#5182 — spawn scopes are one storage per process, not per evaluation", () => {
+	type SpawnScopeModule = typeof import("../../clients/spawn-abort-scope.js");
+	const SCOPE_MODULE = "../../clients/spawn-abort-scope.js";
+
+	beforeEach(async () => {
+		const singletons = await import("../../clients/process-singletons.js");
+		singletons._resetProcessSingletonsForTests();
+	});
+
+	afterEach(async () => {
+		const singletons = await import("../../clients/process-singletons.js");
+		singletons._resetProcessSingletonsForTests();
+	});
+
+	it("a second evaluation exports the first evaluation's abort storage", async () => {
+		const first = await freshEvaluation<SpawnScopeModule>(SCOPE_MODULE);
+		const second = await freshEvaluation<SpawnScopeModule>(SCOPE_MODULE);
+		expect(second).not.toBe(first);
+		expect(second.spawnAbortScope).toBe(first.spawnAbortScope);
+
+		const signal = new AbortController().signal;
+		const seen = first.spawnAbortScope.run(signal, () =>
+			second.spawnAbortScope.getStore(),
+		);
+		expect(seen).toBe(signal);
+	});
+
+	it("a second evaluation exports the first evaluation's cooldown storage", async () => {
+		const first = await freshEvaluation<SpawnScopeModule>(SCOPE_MODULE);
+		const second = await freshEvaluation<SpawnScopeModule>(SCOPE_MODULE);
+		expect(second.spawnCooldownScope).toBe(first.spawnCooldownScope);
+
+		const identity = { tool: "t", subject: "s", phase: "lint" };
+		const seen = first.spawnCooldownScope.run(identity, () =>
+			second.spawnCooldownScope.getStore(),
+		);
+		expect(seen).toBe(identity);
+	});
+
+	it("N evaluations that each enter the scope leave one storage instance", async () => {
+		const abortStorages = new Set<unknown>();
+		const cooldownStorages = new Set<unknown>();
+		for (let i = 0; i < 5; i++) {
+			const scope = await freshEvaluation<SpawnScopeModule>(SCOPE_MODULE);
+			scope.spawnCooldownScope.run(
+				{ tool: "t", subject: `s${i}`, phase: "lint" },
+				() => undefined,
+			);
+			scope.spawnAbortScope.run(new AbortController().signal, () => undefined);
+			abortStorages.add(scope.spawnAbortScope);
+			cooldownStorages.add(scope.spawnCooldownScope);
+		}
+		expect(abortStorages.size).toBe(1);
+		expect(cooldownStorages.size).toBe(1);
+	});
+});

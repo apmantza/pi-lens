@@ -20,14 +20,16 @@
  * Config: .shellcheckrc (optional, zero-config works)
  */
 
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import * as path from "node:path";
-import { findLocalToolConfig, pathsEqual } from "../../path-utils.js";
+import { pathsEqual } from "../../path-utils.js";
 import {
 	isShellcheckDialectSupported,
 	resolveShellFileDialect,
 } from "../../shell-dialect.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -53,10 +55,6 @@ const shellcheck = createAvailabilityChecker("shellcheck", ".exe");
 // 3 = invoked with bad syntax, 4 = invoked with bad options. Only 1 is a run
 // that carries findings; 2, 3 and 4 are rejected invocations, never a scan.
 const SHELLCHECK_EXIT_CODES: ToolExitCodes = { ran: [1] };
-
-function findShellcheckConfig(cwd: string): string | undefined {
-	return findLocalToolConfig(cwd, [".shellcheckrc"]);
-}
 
 /**
  * Parse shellcheck JSON output
@@ -210,7 +208,8 @@ const shellcheckRunner: RunnerDefinition = {
 			);
 			if (managed) cmd = managed;
 		}
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		if (!cmd)
+			return toolAbsentSkip(cwd, { id: "shellcheck", checker: shellcheck });
 
 		// Build args
 		// --format json: JSON output
@@ -227,8 +226,10 @@ const shellcheckRunner: RunnerDefinition = {
 		}
 
 		// Check for config file
-		const configPath = findShellcheckConfig(ctx.cwd);
-		if (!configPath) {
+		// From the script's directory, as shellcheck itself searches: a
+		// `.shellcheckrc` beside the script sits below `ctx.cwd`.
+		const configDir = path.dirname(path.resolve(cwd, ctx.filePath));
+		if (!hasToolConfig("shellcheck", configDir)) {
 			// No config file: surface `info`-level findings (e.g. SC2086
 			// double-quote-to-prevent-globbing — a high-value, commonly-relevant
 			// check that was previously dropped, #213) while still excluding pure

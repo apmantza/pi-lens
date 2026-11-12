@@ -110,6 +110,14 @@ export const BOUNDED_TELEMETRY_PHASES = [
 	 */
 	"lsp_server_message",
 	/**
+	 * #5487: a pull was held to the readiness the server announced
+	 * (`experimental/serverStatus`): its empty answer came while it was still
+	 * loading, so it was retracted and asked again after quiescence. Rising edge
+	 * per server; the ledger counts every occurrence under
+	 * `lsp-server-loading-gated`.
+	 */
+	"lsp_server_loading_gated",
+	/**
 	 * #4764: an empty publication refused as clean-scan evidence because the
 	 * auxiliary server reported its config failed to load — dropped at receipt or
 	 * debounce store time, or retracted from the stored cache. Rising edge per

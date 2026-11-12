@@ -33,10 +33,12 @@ vi.mock(
 	}),
 );
 
-async function runJavac(filePath: string, cwd: string) {
+async function runJavac(filePath: string, cwd: string, projectRoot?: string) {
 	const runner = (await import("../../../../clients/dispatch/runners/javac.js"))
 		.default;
-	return runner.run(makeRunnerCtx(filePath, cwd, { kind: "java" }) as never);
+	return runner.run(
+		makeRunnerCtx(filePath, cwd, { kind: "java", projectRoot }) as never,
+	);
 }
 
 describe("javac build-descriptor gate (#1877)", () => {
@@ -93,6 +95,27 @@ describe("javac build-descriptor gate (#1877)", () => {
 			expect(result.status).toBe("skipped");
 			expect(result.diagnostics).toEqual([]);
 			expect(safeSpawn).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not climb past the project root: a pom.xml above it is another project's (#5408)", async () => {
+		// Recurrence: the Java descriptor walk was a policy-owned copy with its own
+		// ceiling; it is the seam's `ceiling` option now, and this cell is the
+		// production caller's contract for it.
+		const env = setupTestEnvironment("pi-lens-javac-gate-ceiling-");
+		try {
+			const project = path.join(env.tmpDir, "work", "app");
+			const filePath = path.join(project, "src", "App.java");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "class App {}\n");
+			fs.writeFileSync(path.join(env.tmpDir, "pom.xml"), "<project />\n");
+
+			const result = await runJavac(filePath, project, project);
+
+			expect(result.status).not.toBe("skipped");
+			expect(safeSpawn).toHaveBeenCalledTimes(1);
 		} finally {
 			env.cleanup();
 		}

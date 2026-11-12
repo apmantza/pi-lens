@@ -1,6 +1,12 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
-import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
+import {
+	findLocalBinUpwards,
+	isLocalBinTrustRefusal,
+	localBinPath,
+} from "../../package-manager.js";
 import { stripAnsi } from "../../sanitize.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
@@ -146,7 +152,7 @@ const taploRunner: RunnerDefinition = {
 		const cwd = resolveRunnerCwd(ctx, "taplo");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("taplo")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		// #233, generalized (#3968): the `toml` LSP server IS `taplo lsp` (same
@@ -183,13 +189,18 @@ const taploRunner: RunnerDefinition = {
 		// install, then PATH. Its `.exe` (the registry spec) matches pi-lens's
 		// OWN managed install, a GitHub-release binary
 		// (`clients/installer/index.ts` taplo entry), a different artifact.
-		let cmd: string | null =
-			localBinPath(findLocalBinUpwards("taplo", cwd)) ?? null;
+		const projectTaplo = findLocalBinUpwards("taplo", cwd);
+		let cmd: string | null = localBinPath(projectTaplo) ?? null;
 		if (!cmd) {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");
 		}
 
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		// #5258: the walk can refuse an ancestor's taplo the ladder never sees.
+		if (!cmd)
+			return toolAbsentSkip(cwd, {
+				id: "taplo",
+				trustRefused: isLocalBinTrustRefusal(projectTaplo),
+			});
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		// #1937: `--output=json` is not a taplo flag. taplo rejected it with a

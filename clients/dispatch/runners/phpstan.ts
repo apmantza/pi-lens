@@ -1,7 +1,15 @@
+import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import { skipped } from "../types.js";
+import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
+import {
+	isLocalBinTrustRefusal,
+	type LocalBinLookup,
+	localBinPath,
+} from "../../package-manager.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
-import { getLinterPolicyForCwd, hasPhpstanConfig } from "../../tool-policy.js";
+import { getLinterPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -121,7 +129,7 @@ export function parsePhpstanJson(
 	}
 }
 
-async function resolvePhpstan(cwd: string): Promise<string | null> {
+async function resolvePhpstan(cwd: string): Promise<LocalBinLookup | null> {
 	if (await phpstan.isAvailableAsync(cwd)) return phpstan.getCommand(cwd);
 	return resolveVendorToolCommand(cwd, "phpstan", ".bat");
 }
@@ -131,22 +139,29 @@ const phpstanRunner: RunnerDefinition = {
 	appliesTo: ["php"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	skipTestFiles: false,
-	requiresConfig: (cwd) => hasPhpstanConfig(cwd),
+	requiresConfig: (cwd) => hasToolConfig("phpstan", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = resolveRunnerCwd(ctx, "phpstan");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("phpstan")) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-preferred");
 		}
 
 		// Only run if phpstan config present — avoids noisy defaults on unconfigured projects
 		if (!phpstanRunner.requiresConfig?.(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+			return skipped("not-configured");
 		}
 
-		const cmd = await resolvePhpstan(cwd);
-		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
+		const lookup = (await resolvePhpstan(cwd)) ?? undefined;
+		const cmd = localBinPath(lookup);
+		// #5258: the vendor walk can refuse a `vendor/bin/phpstan` the checker
+		// never looks up.
+		if (!cmd)
+			return toolAbsentSkip(cwd, {
+				checker: phpstan,
+				trustRefused: isLocalBinTrustRefusal(lookup),
+			});
 
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const result = await safeSpawnAsync(

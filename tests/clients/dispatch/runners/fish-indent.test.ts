@@ -32,6 +32,13 @@ vi.mock(
 			return {
 				isAvailable: () => present(),
 				isAvailableAsync: async () => present(),
+				getVerdict: () => ({
+					outcome: "missing",
+					cause: "not-found",
+					elapsedMs: 0,
+					latched: true,
+					retryAtMs: 0,
+				}),
 				getCommand: () => (present() ? command : null),
 			};
 		},

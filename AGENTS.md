@@ -523,7 +523,8 @@ npm run changelog:check               rollup check: fragment area and shape (.ch
 npm run docs:rule-catalogs            regenerate rule catalogs
 npm run hygiene -- --dry-run          inspect worktree/process hygiene
 node scripts/ci-verdict.mjs <pr|sha>  exact-head CI verdict
-node scripts/gen-test-shard-weights.mjs --run <dir>...  regenerate the Unit tests shard weights
+node scripts/gen-test-shard-weights.mjs (--run <dir>... | --journal <test-daily.ndjson> [--days n])  regenerate the Unit tests shard weights
+                                        (journal: `git fetch <remote> data/test-history`, `git show FETCH_HEAD:history/test-daily.ndjson`)
 node scripts/guard-bash-probe.mjs <matrix.jsonl> [--head <ref|file>] [--base <ref|file>]
                                   [--lane linked|real|both]
                                         real-hook corpus probe (#4071): per-row verdicts

@@ -297,6 +297,13 @@ export interface LSPCallHierarchyOutgoingCall {
 	fromRanges: LSPLocation["range"][];
 }
 
+/** #5487: what a server's own readiness announcement says blocks a verdict. */
+export interface ServerReadinessBlock {
+	reason: "server-loading" | "server-load-failed";
+	/** The server's status message for a failed load, when it sent one. */
+	detail?: string;
+}
+
 export interface LSPClientInfo {
 	serverId: string;
 	root: string;
@@ -344,6 +351,15 @@ export interface LSPClientInfo {
 	 * capability-accessor pattern (`getRawCapabilityKeys`, `getLaunchVariant`).
 	 */
 	pingLiveness?: (timeoutMs?: number) => Promise<boolean>;
+	/**
+	 * #5487: why the server has announced it cannot give a verdict right now
+	 * (`experimental/serverStatus`): still loading (`quiescent: false`) or its
+	 * workspace failed to load (`health: "error"`, with the server's message).
+	 * `undefined` when it announced nothing or is ready. Optional for the same
+	 * reason as {@link pingLiveness}: a double that omits it reads as "ready",
+	 * which is today's behaviour.
+	 */
+	readinessBlock?: () => ServerReadinessBlock | undefined;
 	/**
 	 * #2358: the OS pid of the server's live process tree (the direct child;
 	 * on Windows a `cmd`/`.cmd` shim's pid, whose real descendant does the
@@ -827,6 +843,14 @@ export const CLIENT_CAPABILITIES = {
 	// implement" — the `window/workDoneProgress/create` handler below stays as
 	// a defensive no-op in case a server ignores capabilities and asks anyway.
 	window: {},
+	// #5487: rust-analyzer announces `experimental/serverStatus` (health plus
+	// `quiescent`) only to a client that asks for it here, and answers a pull
+	// with an empty authoritative report while it is still loading. This is the
+	// readiness signal `$/progress` would also carry, without the
+	// `window.workDoneProgress` advertisement #974 withdrew. A server that does
+	// not know the key ignores it (LSP `experimental` is opaque); the gate only
+	// acts on a server that then sends the notification.
+	experimental: { serverStatusNotification: true },
 	workspace: {
 		workspaceFolders: true,
 		configuration: true,
@@ -1314,6 +1338,24 @@ export interface LSPClientState {
 	 */
 	serverMessages?: Map<string, number>;
 	/**
+	 * #5487: the readiness the server last announced through
+	 * `experimental/serverStatus` (rust-analyzer), or `undefined` when it has
+	 * announced none: every other server, and rust-analyzer before its first
+	 * notice. `quiescent: false` is "still loading the workspace": its pull
+	 * replies are empty authoritative reports, not verdicts. `revision` counts the
+	 * changes (the first notice is revision 1), so a pull that was in flight across
+	 * a change is told apart from one that was not. Per client session: a
+	 * respawned server announces its own.
+	 */
+	serverStatus?: {
+		quiescent: boolean;
+		/** `health: "error"`: the workspace failed to load (`warning` is ready). */
+		failed: boolean;
+		/** The server's message for a failed load, bounded. */
+		message?: string;
+		revision: number;
+	};
+	/**
 	 * #3310: whether this client's ONE-SHOT empty-first-publish hold has been
 	 * spent. Only ever set for a server the matrix measures as
 	 * `emptyFirstPublish: "indexing"`. The cold whole-workspace index builds once
@@ -1603,6 +1645,9 @@ function disposeClientConnection(state: LSPClientState): void {
 	} catch {
 		// ignore
 	}
+	// #5487: a pull gated on quiescence must not wait out its budget on a dead
+	// server; it re-reads `isClientAlive` on this event.
+	state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
 }
 
 export async function killProcessTree(
@@ -2225,6 +2270,15 @@ export function diagnosticsPublishedAtForPath(
  * that read it as a store would settle on an empty cache.
  */
 const PENDING_RECEIPT_DROPPED = "pending-receipt-dropped";
+
+/**
+ * #5487: emitted on `diagnosticEmitter` when the readiness the server announced
+ * (`experimental/serverStatus`) changes, and when the connection is disposed, so
+ * a pull gated on quiescence ({@link pullDiagnosticsWhenReady}) decides again.
+ */
+const SERVER_STATUS_CHANGED = "server-status-changed";
+/** Bound on a server's failed-load message kept on the client and echoed. */
+const SERVER_STATUS_MESSAGE_MAX_CHARS = 200;
 
 /** #5131: see {@link LSPClientState.ownNoticeEchoes}. */
 export interface OwnNoticeEcho {
@@ -3096,6 +3150,15 @@ export function setupIncomingHandlers(
 			) {
 				return;
 			}
+			// #5487: nor is an empty publication from a server that announced it is
+			// still loading (rust-analyzer publishes `n=0` for a document it has not
+			// analyzed yet). Refused before storage like the case above, so the wait
+			// and the touch's evidence check never see a clean answer; the findings
+			// it publishes once quiescent are stored as usual.
+			if (newDiags.length === 0 && serverNotReady(state)) {
+				noteReadinessGate(state);
+				return;
+			}
 			onDiagnosticsPublished?.(state.serverId);
 			// #3484: a version-less publish received before the fence's reply may
 			// be for the content before the latest send; it cannot say which.
@@ -3650,6 +3713,40 @@ export function setupIncomingHandlers(
 		delete state.configLoadFailure;
 		rebaselineForRulesRefresh(state);
 	});
+	// #5487: the readiness announcement (see CLIENT_CAPABILITIES.experimental).
+	// Only a boolean `quiescent` is a status; anything else is ignored, so a
+	// malformed notice never reads as ready or as loading. `health: "error"` is
+	// a workspace that failed to load (a broken manifest): its pull answers are
+	// as empty as a loading server's, so it is not ready either. `warning` and
+	// `ok` are ready.
+	state.connection.onNotification(
+		"experimental/serverStatus",
+		(
+			params:
+				| { quiescent?: unknown; health?: unknown; message?: unknown }
+				| undefined,
+		) => {
+			const quiescent = params?.quiescent;
+			if (typeof quiescent !== "boolean") return;
+			const failed = params?.health === "error";
+			const message =
+				failed && typeof params?.message === "string"
+					? params.message.slice(0, SERVER_STATUS_MESSAGE_MAX_CHARS)
+					: undefined;
+			const previous = state.serverStatus;
+			if (previous?.quiescent === quiescent && previous.failed === failed) {
+				if (message !== undefined) previous.message = message;
+				return;
+			}
+			state.serverStatus = {
+				quiescent,
+				failed,
+				...(message !== undefined && { message }),
+				revision: (previous?.revision ?? 0) + 1,
+			};
+			state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
+		},
+	);
 	// #1669: a server can send `workspace/diagnostic/refresh` (typically after a
 	// project-wide config change) to say every pull result it has already
 	// reported may be stale. Left unhandled, vscode-jsonrpc replies
@@ -4069,6 +4166,8 @@ async function pullDiagnosticSource(
 	// its await; aborting in the timeout branch below also sends `$/cancelRequest`
 	// so repeated touches cannot leave an aging backlog inside the server.
 	const requestStartedAt = Date.now();
+	// #5487: the readiness the server had announced when this request left.
+	const statusAtSend = state.serverStatus;
 	const effectiveTimeoutMs = Math.max(
 		1,
 		Math.min(PULL_REQUEST_TIMEOUT_MS, budgetMs),
@@ -4133,6 +4232,20 @@ async function pullDiagnosticSource(
 			pullGenerationFor(state, normalizedPath) !== generation ||
 			!isNewestPullRequest(state, sourceKey, requestSequence)
 		) {
+			return { status: "unavailable" };
+		}
+		// #5487: an EMPTY report from a server that was still loading (or whose
+		// readiness changed while this request was in flight) describes a workspace
+		// it had not finished reading, so it is no answer: nothing is stored, and
+		// every pull consumer (the touch wait, the `workspace/diagnostic/refresh`
+		// re-pull, the sweeps) sees `unavailable`, never a clean file. Findings in
+		// the report are findings whatever the status. See
+		// {@link pullDiagnosticsWhenReady} for the wait that asks again.
+		if (
+			reportCarriesNothing(report) &&
+			!pullAnswerIsSettled(state, statusAtSend)
+		) {
+			noteReadinessGate(state);
 			return { status: "unavailable" };
 		}
 		let primaryCount: number;
@@ -4715,6 +4828,197 @@ export async function clientRequestWorkspaceDiagnostics(
 	}
 }
 
+/**
+ * #5487: resolves true once the server is not (or no longer) loading, false when
+ * `budgetMs` lapses first or the client dies. A server that announced nothing is
+ * not loading. Listener and timer are removed on every exit.
+ */
+function waitForQuiescence(
+	state: LSPClientState,
+	budgetMs: number,
+): Promise<boolean> {
+	if (state.serverStatus?.quiescent !== false) return Promise.resolve(true);
+	if (budgetMs <= 0 || !isClientAlive(state)) return Promise.resolve(false);
+	return new Promise<boolean>((resolve) => {
+		const finish = (ready: boolean): void => {
+			clearTimeout(timer);
+			state.diagnosticEmitter.off(SERVER_STATUS_CHANGED, onChange);
+			resolve(ready);
+		};
+		const onChange = (): void => {
+			if (!isClientAlive(state)) finish(false);
+			else if (state.serverStatus?.quiescent !== false) finish(true);
+		};
+		const timer = setTimeout(() => finish(false), budgetMs);
+		state.diagnosticEmitter.on(SERVER_STATUS_CHANGED, onChange);
+	});
+}
+
+/** {@link pullDiagnosticsWhenReady}: no settled answer before the deadline. */
+const PULL_UNSETTLED = Symbol("pull-unsettled");
+
+/**
+ * #5487: was the server ready for the whole of a request that left when it had
+ * announced `sentAt`? A server that announced nothing is, as today. One that
+ * announced loading, or whose readiness changed in flight (its first notice
+ * included), is not.
+ */
+function pullAnswerIsSettled(
+	state: LSPClientState,
+	sentAt: LSPClientState["serverStatus"],
+): boolean {
+	const now = state.serverStatus;
+	return (
+		sentAt?.revision === now?.revision &&
+		now?.quiescent !== false &&
+		now?.failed !== true
+	);
+}
+
+/** #5487: loading or failed to load: no pull answer is a verdict yet. */
+function serverNotReady(state: LSPClientState): boolean {
+	return (
+		state.serverStatus?.quiescent === false || !!state.serverStatus?.failed
+	);
+}
+
+/** #5487: the {@link LSPClientInfo.readinessBlock} answer for one client. */
+function readinessBlockOf(
+	state: LSPClientState,
+): ServerReadinessBlock | undefined {
+	// A dead server's last notice says nothing now: its lapse is a plain one,
+	// never "still loading, retry shortly".
+	if (!isClientAlive(state)) return undefined;
+	const announced = state.serverStatus;
+	if (announced?.quiescent === false) return { reason: "server-loading" };
+	if (announced?.failed) {
+		return {
+			reason: "server-load-failed",
+			...(announced.message !== undefined && { detail: announced.message }),
+		};
+	}
+	return undefined;
+}
+
+/**
+ * #5487: a pull report with no finding for the requested document. Decided on
+ * that document's `items` alone: a loading server's `relatedDocuments` entry
+ * says nothing about the file asked about, and an `unchanged` report (no
+ * `items`) from an unsettled server is no answer either, so both are refused
+ * with the empty ones and asked again once the server is ready.
+ */
+function reportCarriesNothing(report: { items?: unknown[] }): boolean {
+	return (report.items?.length ?? 0) === 0;
+}
+
+/**
+ * #5487: one pull that waits for the readiness the server announced. A server
+ * that announced `experimental/serverStatus` answers an empty report while it
+ * is still loading, which {@link pullDiagnosticSource} refuses to store: the
+ * pull comes back `unavailable`. This asks again after quiescence, so the
+ * answer the caller finally gets was given by a ready server. A server that
+ * announced nothing passes straight through: one pull, two property reads.
+ *
+ * Returns {@link PULL_UNSETTLED} when `deadlineAt` passes first (or the client
+ * dies): the caller reports a lapsed wait, never a clean one.
+ */
+async function pullDiagnosticsWhenReady(
+	state: LSPClientState,
+	filePath: string,
+	budgetMs: number,
+	deadlineAt: number,
+): Promise<PullDiagnosticsOutcome | typeof PULL_UNSETTLED> {
+	let requestBudgetMs = budgetMs;
+	let waitedForReadiness = false;
+	for (;;) {
+		if (state.serverStatus?.quiescent === false) {
+			waitedForReadiness = true;
+			noteReadinessGate(state);
+			if (!(await waitForQuiescence(state, deadlineAt - Date.now()))) {
+				return PULL_UNSETTLED;
+			}
+			requestBudgetMs = deadlineAt - Date.now();
+		}
+		const sentAt = state.serverStatus;
+		const outcome = await clientRequestPullDiagnostics(
+			state,
+			filePath,
+			requestBudgetMs,
+		);
+		if (outcome.status === "found") return outcome;
+		const settled = pullAnswerIsSettled(state, sentAt);
+		if (!settled) waitedForReadiness = true;
+		// A server that has just finished loading cancels the pulls it queued
+		// (-32802, measured on rust-analyzer 1.99.1) and answers the next one, so
+		// "unavailable" after a readiness wait is asked again, not read as a
+		// silent server. Any other unavailable pull keeps today's handling.
+		const retryAfterBeat =
+			settled &&
+			waitedForReadiness &&
+			outcome.status === "unavailable" &&
+			isClientAlive(state);
+		if (settled && !retryAfterBeat) return outcome;
+		// A workspace that failed to load stays failed until the user fixes it:
+		// waiting out the budget for it would charge every touch the whole wait
+		// for nothing. The caller reports it at once (`readinessBlock`).
+		if (state.serverStatus?.failed && state.serverStatus.quiescent !== false) {
+			noteReadinessGate(state);
+			return PULL_UNSETTLED;
+		}
+		const remainingMs = deadlineAt - Date.now();
+		if (remainingMs <= 0) return PULL_UNSETTLED;
+		if (retryAfterBeat) {
+			await new Promise((resolve) =>
+				setTimeout(
+					resolve,
+					Math.min(PULL_DIAGNOSTICS_RETRY_INTERVAL_MS, remainingMs),
+				),
+			);
+		}
+		requestBudgetMs = deadlineAt - Date.now();
+	}
+}
+
+/**
+ * #5487: one `latency.log` record per server per session when a pull is held
+ * to the server's announced readiness; the ledger counts every occurrence under
+ * `lsp-server-loading-gated`, so a server that keeps reloading is visible
+ * without a record per touch.
+ */
+function noteReadinessGate(state: LSPClientState): void {
+	const announced = state.serverStatus;
+	const loadFailed =
+		announced?.failed === true && announced.quiescent !== false;
+	emitBounded(
+		"lsp_server_loading_gated",
+		// A failed load is its own rising edge: a server that failed after it
+		// finished loading still gets its record.
+		loadFailed ? `${state.serverId}:load-failed` : state.serverId,
+		{
+			filePath: state.root,
+			durationMs: 0,
+			metadata: {
+				serverId: state.serverId,
+				quiescent: announced?.quiescent,
+				revision: announced?.revision,
+				...(loadFailed && {
+					loadFailed: true,
+					...(announced?.message !== undefined && {
+						message: announced.message,
+					}),
+				}),
+			},
+		},
+		{
+			ledgerKind: "lsp-server-loading-gated",
+			reason: loadFailed
+				? `${state.serverId}: workspace failed to load${announced?.message ? ` (${announced.message})` : ""}`
+				: `${state.serverId}: pull held to the server's announced readiness`,
+			risingEdgePer: "identity",
+		},
+	);
+}
+
 export async function clientWaitForDiagnostics(
 	state: LSPClientState,
 	filePath: string,
@@ -4767,11 +5071,18 @@ export async function clientWaitForDiagnostics(
 		// log record measures from here, never from didOpen (that stays in
 		// metadata.elapsedSinceDidOpenMs, computed separately below).
 		const pullSettleStartedAt = Date.now();
-		let outcome = await clientRequestPullDiagnostics(
+		// #5487: the whole call's budget, for the readiness gate below.
+		const pullDeadlineAt = pullSettleStartedAt + timeoutMs;
+		const firstPull = await pullDiagnosticsWhenReady(
 			state,
 			filePath,
 			timeoutMs,
+			pullDeadlineAt,
 		);
+		// Still loading (or unsettled) when the budget lapsed: a lapsed wait, so
+		// the touch reads inconclusive, never clean.
+		if (firstPull === PULL_UNSETTLED) return "deadline-expired";
+		let outcome = firstPull;
 		if (outcome.status === "found") {
 			logTypeScriptPullSettle(
 				state,
@@ -5988,6 +6299,10 @@ async function clientShutdownOnce(
 	// #271: drop any pending watched-files batch + its timer (a dying client's
 	// queued FS changes are moot, and the timer must not outlive the connection).
 	state.watchQueue?.cancel();
+	// #5487: wake a wait held on this server's readiness before the listeners
+	// go (it re-reads `isClientAlive`, now false), or a touch outlives the
+	// shutdown by its whole budget.
+	state.diagnosticEmitter.emit(SERVER_STATUS_CHANGED);
 	state.diagnosticEmitter.removeAllListeners();
 	let shutdownRequestTimedOut = false;
 	let exitNotifyTimedOut = false;
@@ -7356,6 +7671,9 @@ export async function createLSPClient(options: {
 
 		/** #1277: cheap request round-trip proving the server still responds. */
 		pingLiveness: (timeoutMs?: number) => clientPingLiveness(state, timeoutMs),
+
+		/** #5487: the server announced it is still loading (see interface doc). */
+		readinessBlock: () => readinessBlockOf(state),
 
 		/** #2358: the OS pid of the live server process (see interface doc). */
 		getProcessPid: () => lspProcess.pid,

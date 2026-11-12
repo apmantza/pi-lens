@@ -144,6 +144,11 @@ export interface TouchFileResult {
 	 */
 	inconclusiveReason?: TouchInconclusiveReason;
 	/**
+	 * #5487: the server's own message for a failed workspace load, present only
+	 * on a `"server-load-failed"` touch whose server sent one.
+	 */
+	inconclusiveDetail?: string;
+	/**
 	 * #4403: the subset of {@link inconclusiveServerIds} the operator turned off
 	 * in `lsp.disabledServers`, present only on a `"primary-unavailable"`
 	 * touch. The rest could not be started, or were still starting.
@@ -222,10 +227,17 @@ export interface TouchFileResult {
  * primary's notify write and the diagnostics wait lapsed on this touch.
  * #4322: `"primary-unavailable"` means no language server was acquired for a
  * file that has one, so only auxiliaries (if any) answered.
+ * #5487: `"server-loading"` means the diagnostics wait lapsed on a primary that
+ * had announced it was still loading its workspace (rust-analyzer's
+ * `experimental/serverStatus`), so no answer it gave was a verdict;
+ * `"server-load-failed"` is the same for a workspace that failed to load
+ * (`health: "error"`), which no wait fixes.
  */
 type TouchInconclusiveReason =
 	| "notify-write"
 	| "diagnostics-wait"
+	| "server-loading"
+	| "server-load-failed"
 	| "mixed"
 	| "primary-unavailable";
 
@@ -261,6 +273,18 @@ export interface TouchVerdictInput {
 	 * stands on `diagnosticsTimedOut`, just unattributed.
 	 */
 	diagnosticsUnansweredServerIds: readonly string[];
+	/**
+	 * #5487: PRIMARY-role servers whose diagnostics wait lapsed while they still
+	 * announced they were loading. Names the cause only; whether the touch is
+	 * inconclusive stays decided by `diagnosticsTimedOut` and the unanswered ids.
+	 */
+	loadingServerIds?: readonly string[];
+	/**
+	 * #5487: the subset whose workspace failed to load (`health: "error"`), and
+	 * the first server message among them.
+	 */
+	loadFailedServerIds?: readonly string[];
+	loadFailureDetail?: string;
 }
 
 /** The verdict fields {@link resolveTouchVerdict} produces. */
@@ -268,6 +292,7 @@ export interface TouchVerdict {
 	inconclusive: boolean;
 	inconclusiveServerIds?: string[];
 	inconclusiveReason?: TouchInconclusiveReason;
+	inconclusiveDetail?: string;
 	disabledPrimaryServerIds?: string[];
 	primaryUnavailableCause?: PrimaryUnavailableCause;
 }
@@ -318,16 +343,31 @@ export function resolveTouchVerdict(input: TouchVerdictInput): TouchVerdict {
 		return { inconclusive: false };
 	}
 	const serverIds = [...new Set([...notifyIds, ...waitIds])];
+	const loadingIds = new Set(input.loadingServerIds ?? []);
+	const failedIds = new Set(input.loadFailedServerIds ?? []);
+	const lapsedNotReady =
+		waitIds.length > 0 &&
+		waitIds.every((id) => loadingIds.has(id) || failedIds.has(id));
+	const lapsedLoadFailed =
+		lapsedNotReady && waitIds.some((id) => failedIds.has(id));
 	const reason: TouchInconclusiveReason =
 		notifyIds.length > 0 && input.diagnosticsTimedOut
 			? "mixed"
 			: notifyIds.length > 0
 				? "notify-write"
-				: "diagnostics-wait";
+				: lapsedLoadFailed
+					? "server-load-failed"
+					: lapsedNotReady
+						? "server-loading"
+						: "diagnostics-wait";
 	return {
 		inconclusive: true,
 		...(serverIds.length > 0 && { inconclusiveServerIds: serverIds }),
 		inconclusiveReason: reason,
+		...(reason === "server-load-failed" &&
+			input.loadFailureDetail !== undefined && {
+				inconclusiveDetail: input.loadFailureDetail,
+			}),
 	};
 }
 
