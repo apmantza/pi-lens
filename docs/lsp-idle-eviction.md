@@ -15,7 +15,7 @@ respawned server reports every finding it reported before eviction; the
 content-bound coverage check the auxiliary freeze depends on. A server that
 cannot demonstrate it is never proposed for eviction on perf grounds alone.
 
-_Last generated: 2026-11-11 on linux; 51 registry servers: 38 eligible, 0 vetoed, 3 inconclusive, 10 unavailable (0 not reached: budget)._
+_Last generated: 2026-11-12 on linux; 51 registry servers: 38 eligible, 0 vetoed, 2 inconclusive, 11 unavailable (0 not reached: budget)._
 
 ## Per-server rows
 
@@ -38,7 +38,7 @@ step log only, because it flaps.
 | ast-grep | auxiliary | unmeasured | eligible | · | ok | preserved |
 | bash | primary | transparent | eligible | · | ok | preserved |
 | clojure | primary | transparent | eligible | · | ok | preserved |
-| cmake | primary | unmeasured | inconclusive | no-baseline | n/a | unproven |
+| cmake | primary | unmeasured | unavailable | server-not-started | n/a | n/a |
 | cpp | primary | transparent | eligible | · | ok | preserved |
 | csharp | primary | unmeasured | eligible | · | ok | preserved |
 | css | primary | transparent | eligible | · | ok | preserved |
