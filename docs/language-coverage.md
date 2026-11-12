@@ -165,7 +165,7 @@ A tool counts as available when the binary exists in the project (`node_modules/
 | No project config | oxlint, Biome (JS and TS lint) | The default pair when the project has no ESLint, oxlint, or Biome config; one project config selects its tool | `getPreferredJstsLintRunners`, `biome-check.ts` |
 | No project config | swiftlint, go vet, ast-grep rules, tree-sitter rules | No linter-policy entry; the runner has no config skip. go vet needs the Go toolchain. | `swiftlint.ts`, `go-vet.ts`, `ast-grep-napi.ts`, `tree-sitter.ts` |
 | No project config | javac | No policy entry; skips files inside a Maven or Gradle project | `javac.ts` |
-| No project config | Formatters: Biome (`.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass`), shfmt, gofmt, rustfmt, ruff, typstyle (`.typ .typc`), prettier (`.less .graphql .gql` only), dart, zig, cue | Formatter policy `defaultWhenUnconfigured: true`; explicit project config wins | `FORMATTER_POLICY_BY_EXTENSION`, `getFormattersForFile` |
+| No project config | Formatters: Biome (`.js .jsx .mjs .cjs .ts .tsx .mts .cts .css .scss .sass`), shfmt (`.sh .bash`), gofmt, rustfmt, ruff (`.py .pyi`), typstyle (`.typ .typc`), prettier (`.less .graphql .gql` only), dart, zig (`.zig .zon`), cue | Formatter policy `defaultWhenUnconfigured: true`; explicit project config wins | `FORMATTER_POLICY_BY_EXTENSION`, `getFormattersForFile` |
 | Project config | ESLint | Needs an ESLint config; policy `config-first` | `eslint.ts` |
 | Project config | golangci-lint | Needs a golangci config; policy `config-first` | `golangci-lint.ts` |
 | Project config | mypy | Needs a mypy config; ruff covers Python without it | `mypy.ts` |

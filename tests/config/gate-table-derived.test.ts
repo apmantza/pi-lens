@@ -236,6 +236,9 @@ function formatTier(name: string): Tier | undefined {
 	return known ? "Project config" : undefined;
 }
 
+/** Code-unit order: the sorted lists are compared for equality, not shown to a reader. */
+const byCodeUnit = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
 const rows = parseGateTable();
 
 describe("docs/language-coverage.md 'What runs by default' agrees with tool-policy.ts", () => {
@@ -321,13 +324,22 @@ describe("docs/language-coverage.md 'What runs by default' agrees with tool-poli
 						`${name}: policy derives "${derived}", doc row says "${row.tier}"`,
 					);
 				}
+				const policyExts = smartDefaultExtensions(name).sort(byCodeUnit);
 				if (exts.length > 0) {
-					const policyExts = smartDefaultExtensions(name).sort();
-					if (JSON.stringify([...exts].sort()) !== JSON.stringify(policyExts)) {
+					if (
+						JSON.stringify([...exts].sort(byCodeUnit)) !==
+						JSON.stringify(policyExts)
+					) {
 						violations.push(
 							`${name}: doc lists ${exts.join(" ")}, policy default extensions are ${policyExts.join(" ")}`,
 						);
 					}
+				} else if (policyExts.length > 1) {
+					// Recurrence: deleting Biome's extension list from the doc passed
+					// this test. ruff, shfmt and zig had the same gap.
+					violations.push(
+						`${name}: the doc row lists no extensions, policy default extensions are ${policyExts.join(" ")}`,
+					);
 				}
 			}
 		}
@@ -414,6 +426,32 @@ describe("docs/dependencies.md does not call a smart-default tool config-gated",
 			"dependencies.md rows mapped to a policy row",
 			mapped,
 			10,
+		);
+		expect(violations).toEqual([]);
+	});
+
+	// Recurrence this guard names: the inverse drift. A policy row turned
+	// config-first while the doc still calls it Language-default passed the
+	// forward test above. Flipping htmlhint or yamllint to config-first reds here.
+	it("a Language-default row names a smart-default policy row", () => {
+		const table = tableRows(read("docs/dependencies.md"));
+		const violations: string[] = [];
+		let compared = 0;
+		for (const cells of table) {
+			const tool = (cells[0] ?? "").replace(/`/g, "");
+			const policy = TOOL_EXECUTION_POLICY.get(ALIASES[tool] ?? tool);
+			if (!policy || !/language-default/i.test(cells[3] ?? "")) continue;
+			compared += 1;
+			if (policy.configEligibility !== "smart-default") {
+				violations.push(
+					`${tool}: the Gate column says "${cells[3]}", policy is ${policy.configEligibility}`,
+				);
+			}
+		}
+		assertNonEmptyScan(
+			"Language-default rows compared with the policy",
+			compared,
+			5,
 		);
 		expect(violations).toEqual([]);
 	});
