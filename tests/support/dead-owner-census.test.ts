@@ -152,7 +152,7 @@ describe("#5528 dead-owner census", () => {
 		).toEqual([]);
 	});
 
-	it("says once, not per file, that the scan could not run", async () => {
+	it("counts every failed scan in the log but says so on stderr once", async () => {
 		const actual = await loadActualCensusSeams();
 		const seams: CensusSeams = {
 			...actual,
@@ -160,9 +160,35 @@ describe("#5528 dead-owner census", () => {
 		};
 		await runDeadOwnerCensus("a.test.ts", { log, seams, write });
 		await runDeadOwnerCensus("b.test.ts", { log, seams, write });
-		expect(lines).toEqual([
-			"[dead-owner-census] scan did not run (first after a.test.ts)",
-		]);
+		expect({
+			stderr: lines,
+			scanfail: fs
+				.readFileSync(log, "utf8")
+				.split("\n")
+				.filter((line) => line.startsWith("scanfail ")),
+		}).toEqual({
+			stderr: [
+				"[dead-owner-census] scan did not run: ps timeout (first after a.test.ts)",
+			],
+			scanfail: [
+				"scanfail ps timeout after a.test.ts",
+				"scanfail ps timeout after b.test.ts",
+			],
+		});
+	});
+
+	it("records a scan that threw as a failed scan, not a clean one", async () => {
+		const actual = await loadActualCensusSeams();
+		const seams: CensusSeams = {
+			...actual,
+			listProcesses: async () => {
+				throw new Error("spawn ps ENOENT");
+			},
+		};
+		await runDeadOwnerCensus("a.test.ts", { log, seams, write });
+		expect(fs.readFileSync(log, "utf8")).toContain(
+			"scanfail threw spawn ps ENOENT after a.test.ts",
+		);
 	});
 
 	it("is off without its env var and off on Windows", async () => {

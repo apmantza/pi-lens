@@ -148,19 +148,21 @@ export async function loadActualCensusSeams(): Promise<CensusSeams> {
 
 /**
  * The live managed processes whose owner tag names a dead pid. A scan that did
- * not run (`ps` failed or timed out) is `undefined`, not an empty list.
+ * not run (`ps` failed or timed out) is `{ unavailable: <status> }`, not an
+ * empty list.
  */
 export async function findDeadOwnerLeaks(
 	seams: CensusSeams,
-): Promise<DeadOwnerLeak[] | undefined> {
+): Promise<DeadOwnerLeak[] | { unavailable: string }> {
 	const table = await seams.listProcesses();
-	if (table.status !== "ok") return undefined;
+	if (table.status !== "ok") return { unavailable: `ps ${table.status}` };
 	const managed = table.rows.filter(
 		(row) => row.pid !== process.pid && seams.isManaged(row.command),
 	);
 	if (managed.length === 0) return [];
 	const tagScan = await seams.readOwnerTags(managed.map((row) => row.pid));
-	if (tagScan.status !== "ok") return undefined;
+	if (tagScan.status !== "ok")
+		return { unavailable: `owner tags ${tagScan.status}` };
 	const processes = managed.map((row) => ({
 		pid: row.pid,
 		parentPid: row.ppid,
@@ -201,9 +203,32 @@ function noteOnce(log: string, kind: string, emit: () => void): void {
 }
 
 /**
+ * A scan that could not run: one `scanfail` log line per file (the CI summary
+ * step counts them) and one stderr line per run, so a failing census never
+ * reads as a clean one.
+ */
+function recordScanFailure(
+	log: string,
+	reason: string,
+	seenAfter: string,
+	write: (line: string) => void,
+): void {
+	try {
+		fs.appendFileSync(log, `scanfail ${reason} after ${seenAfter}\n`);
+	} catch {
+		// An unwritable log loses the count; the stderr line below still prints.
+	}
+	noteOnce(log, "scan-unavailable", () =>
+		write(
+			`[dead-owner-census] scan did not run: ${reason} (first after ${seenAfter})`,
+		),
+	);
+}
+
+/**
  * Teardown hook: scan once, print one line per leak not yet in the log, record
- * it. Returns the printed lines. Never throws, and prints one `skipped` line
- * (not one per file) when the scan could not run.
+ * it. Returns the printed lines. Never throws, and records a `scanfail` line
+ * (stderr once per run) when the scan could not run.
  */
 export async function runDeadOwnerCensus(
 	seenAfter: string,
@@ -220,12 +245,8 @@ export async function runDeadOwnerCensus(
 		const leaks = await findDeadOwnerLeaks(
 			options.seams ?? (await loadActualCensusSeams()),
 		);
-		if (leaks === undefined) {
-			noteOnce(log, "scan-unavailable", () =>
-				write(
-					`[dead-owner-census] scan did not run (first after ${seenAfter})`,
-				),
-			);
+		if (!Array.isArray(leaks)) {
+			recordScanFailure(log, leaks.unavailable, seenAfter, write);
 			return [];
 		}
 		if (leaks.length === 0) return [];
@@ -257,10 +278,11 @@ export async function runDeadOwnerCensus(
 		}
 		return lines;
 	} catch (error) {
-		noteOnce(log, "failed", () =>
-			write(
-				`[dead-owner-census] failed (first after ${seenAfter}): ${error instanceof Error ? error.message : String(error)}`,
-			),
+		recordScanFailure(
+			log,
+			`threw ${error instanceof Error ? error.message : String(error)}`,
+			seenAfter,
+			write,
 		);
 		return [];
 	}

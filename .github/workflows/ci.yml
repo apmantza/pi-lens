@@ -643,6 +643,12 @@ jobs:
           leaks=$(grep -c '^leak ' "$log" 2>/dev/null || true)
           echo "dead-owner census: ${files:-0} test files recorded, ${leaks:-0} dead-owner pids"
           grep '^leak ' "$log" 2>/dev/null || true
+          # A scan that could not run (`ps` failed or timed out) logs one
+          # `scanfail` line per file; without this count a failing census reads
+          # as a clean one.
+          fails=$(grep -c '^scanfail ' "$log" 2>/dev/null || true)
+          echo "dead-owner census: ${fails:-0} scans did not run"
+          grep -m3 '^scanfail ' "$log" 2>/dev/null || true
 
       # Listener input for #3215. The default reporter remains explicit above,
       # so this adds a file reporter in the same invocation and preserves the
