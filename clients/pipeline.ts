@@ -1141,15 +1141,19 @@ export async function runAutofix(
 		}
 
 		if (toolName === "ruff") {
-			const ruffReady = ruffClient.isPythonFile(filePath)
-				? await ruffClient.ensureAvailable(cwd)
-				: false;
-			if (!ruffReady) {
+			const ruffResolution = ruffClient.isPythonFile(filePath)
+				? await ruffClient.resolveCommandForFile(filePath, cwd)
+				: undefined;
+			if (!ruffResolution || ruffResolution.command === null) {
 				dbg(`autofix: ruff unavailable for ${filePath}`);
 				continue;
 			}
 			if (writeHold) await writeHold.acquire();
-			const result = await ruffClient.fixFileAsync(filePath, cwd);
+			const result = await ruffClient.fixFileAsync(
+				filePath,
+				ruffResolution.cwd,
+				ruffResolution.command,
+			);
 			if (result.success && result.fixed > 0) {
 				fixedCount += result.fixed;
 				autofixTools.push(`ruff:${result.fixed}`);

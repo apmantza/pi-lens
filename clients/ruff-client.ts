@@ -64,6 +64,25 @@ export class RuffClient {
 		return (await resolveToolCommandWithInstallFallback(cwd, "ruff")) !== null;
 	}
 
+	/** Resolve the command and cwd a file's runner will use, before any write hold. */
+	async resolveCommandForFile(
+		filePath: string,
+		cwd?: string,
+	): Promise<{ cwd: string; command: string | null }> {
+		const resolvedCwd = resolveToolCwd(
+			"runner",
+			"ruff",
+			path.resolve(filePath),
+			{
+				...(cwd !== undefined && { cwd }),
+			},
+		).cwd;
+		return {
+			cwd: resolvedCwd,
+			command: await resolveToolCommandWithInstallFallback(resolvedCwd, "ruff"),
+		};
+	}
+
 	/**
 	 * Check if a file is a Python file
 	 */
@@ -82,6 +101,7 @@ export class RuffClient {
 	async fixFileAsync(
 		filePath: string,
 		cwd?: string,
+		ruffCommand?: string | null,
 	): Promise<{
 		success: boolean;
 		changed: boolean;
@@ -97,14 +117,13 @@ export class RuffClient {
 		// nested `pyproject.toml` whenever the caller passed a workspace root.
 		// The binary is asked at that same root (#5410), so the fix runs the
 		// ruff the lint ran.
-		const ruffCwd = resolveToolCwd("runner", "ruff", absolutePath, {
-			...(cwd !== undefined && { cwd }),
-		}).cwd;
-		const ruffCommand = await resolveToolCommandWithInstallFallback(
-			ruffCwd,
-			"ruff",
-		);
-		if (ruffCommand === null) {
+		const resolution =
+			ruffCommand === undefined
+				? await this.resolveCommandForFile(absolutePath, cwd)
+				: { cwd: cwd ?? path.dirname(absolutePath), command: ruffCommand };
+		const ruffCwd = resolution.cwd;
+		const resolvedRuffCommand = resolution.command;
+		if (resolvedRuffCommand === null) {
 			return {
 				success: false,
 				changed: false,
@@ -132,7 +151,7 @@ export class RuffClient {
 			const configArgs = ruffConfigArgs(ruffCwd);
 
 			const pre = await safeSpawnAsync(
-				ruffCommand,
+				resolvedRuffCommand,
 				[
 					"check",
 					// `--no-fix --no-fix-only` (#5119): the count below must see the
@@ -159,7 +178,7 @@ export class RuffClient {
 			const fixableCount = beforeDiags.filter((d) => d.fixable).length;
 
 			const fix = await safeSpawnAsync(
-				ruffCommand,
+				resolvedRuffCommand,
 				["check", "--fix", ...configArgs, absolutePath],
 				{ timeout: 15000, cwd: ruffCwd },
 			);

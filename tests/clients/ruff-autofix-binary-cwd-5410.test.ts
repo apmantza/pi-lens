@@ -131,6 +131,46 @@ describe("ruff autofix resolves its binary at the runner's cwd (#5410)", () => {
 		).toContain("check --fix");
 	});
 
+	// The dispatch cwd can be the workspace root while resolveToolCwd selects a
+	// nested package. The pre-check must use the latter or autofix skips a ruff
+	// that the lint runner can execute (review probe A, #5519).
+	it("uses the nested package ruff when dispatch starts at the workspace root", async () => {
+		fs.writeFileSync(
+			path.join(workspace.tmpDir, "pyproject.toml"),
+			"[tool.ruff]\n",
+		);
+		const pkg = plantPackage(workspace.tmpDir, "pkg-a");
+		await autofix(pkg.file, workspace.tmpDir, new RuffClient());
+		expect(dbgLines.join("\n")).not.toContain("ruff unavailable");
+		expect(
+			spawnCalls
+				.filter((call) => call.cmd === pkg.ruff)
+				.map((call) => call.args.slice(0, 2).join(" ")),
+		).toContain("check --fix");
+	});
+
+	// Keep the unavailable branch observable: a missing command must skip the
+	// write and report the bounded debug record, not reach the fixer with null.
+	it("records and skips when no Ruff command resolves", async () => {
+		fs.writeFileSync(
+			path.join(workspace.tmpDir, "pyproject.toml"),
+			"[tool.ruff]\n",
+		);
+		const pkg = path.join(workspace.tmpDir, "pkg-a");
+		fs.mkdirSync(pkg, { recursive: true });
+		fs.writeFileSync(path.join(pkg, "pyproject.toml"), "[tool.ruff]\n");
+		const file = path.join(pkg, "main.py");
+		fs.writeFileSync(file, "x = 1\n");
+		await autofix(file, workspace.tmpDir, new RuffClient());
+		expect(dbgLines.join("\n")).toContain("ruff unavailable");
+		expect(
+			spawnCalls.filter((call) => call.args.includes("--fix")),
+		).toHaveLength(0);
+		expect(
+			await new RuffClient().fixFileAsync(file, workspace.tmpDir, null),
+		).toMatchObject({ success: false, error: "Ruff not available" });
+	});
+
 	// One RuffClient serves every package of a session, and a ruff on PATH is
 	// what `process.cwd()` resolves to: it must not stand in for the venv ruff
 	// each package's lint runs.
@@ -168,6 +208,11 @@ describe("ruff autofix resolves its binary at the runner's cwd (#5410)", () => {
 			[{ mode: "all", runnerIds: ["ruff-lint"] }],
 			registry,
 		);
+		expect(
+			spawnCalls.filter(
+				(call) => call.cmd === pkg.ruff && call.args.includes("--version"),
+			),
+		).toHaveLength(1);
 		await autofix(pkg.file, cwd, new RuffClient());
 		const probes = spawnCalls.filter(
 			(call) => call.cmd === pkg.ruff && call.args.includes("--version"),
