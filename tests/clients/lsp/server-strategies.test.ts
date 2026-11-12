@@ -225,8 +225,9 @@ describe("rust diagnostic strategy (#5485) — measured against the real rust-an
 	// empty authoritative report for ~0.4 s and the type error lands at ~3.6-3.9 s
 	// (0 of 5 cold lsp_touch_file calls caught it at 3000 / 500, artifact
 	// `rekeyedOriginal3000_500`). ANY `rust` row is the same key-only edit the
-	// census exists to refuse until the readiness signal (#5487) or a maintainer
-	// budget decision (#5485) replaces this guard, so the guard refuses the row,
+	// census exists to refuse until a maintainer budget decision (#5485) replaces
+	// this guard (the readiness gate of #5487 already keeps a loading server from
+	// reading clean, so a row now only buys speed, at a per-touch cost), so the guard refuses the row,
 	// not one field of it: a 6000 / 1500 row clears a pull-retry-only check and
 	// still ends the touch at 1500 ms.
 	it("has no rust row until the cold-touch trade is decided", () => {

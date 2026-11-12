@@ -243,6 +243,12 @@ const DISPOSITIONS: Record<string, Disposition> = {
 		kind: "consumes",
 		method: "textDocument/publishDiagnostics",
 	},
+	// #5487: the readiness notice rust-analyzer sends only to a client that asks.
+	experimental: { kind: "namespace" },
+	"experimental.serverStatusNotification": {
+		kind: "consumes",
+		method: "experimental/serverStatus",
+	},
 };
 
 /**

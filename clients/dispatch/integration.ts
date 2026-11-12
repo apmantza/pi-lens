@@ -156,10 +156,8 @@ import {
 import { clearModuleGraphCache } from "../review-graph/workspace-modules.js";
 import { releaseWorkspaceTopologyIdleTimers } from "../workspace-topology.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
-import {
-	findCompiledClassesDir,
-	hasJavaBuildDescriptor,
-} from "../tool-policy.js";
+import { hasToolConfig } from "../tool-config-presence.js";
+import { findCompiledClassesDir } from "../tool-policy.js";
 import {
 	removeWordIndexDocumentAsync,
 	updateWordIndexDocumentForEdit,
@@ -490,7 +488,10 @@ function withSpotbugsGroup(
 ): RunnerGroup[] {
 	if (!SPOTBUGS_SUPPORTED_KINDS.has(kind)) return groups;
 	if (!ctx.pi.getFlag("lens-spotbugs")) return groups;
-	if (!hasJavaBuildDescriptor(ctx.cwd) || !findCompiledClassesDir(ctx.cwd)) {
+	if (
+		!hasToolConfig("javaBuild", ctx.cwd) ||
+		!findCompiledClassesDir(ctx.cwd)
+	) {
 		return groups;
 	}
 	if (groups.some((group) => group.runnerIds.includes("spotbugs")))
