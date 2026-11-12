@@ -21,12 +21,10 @@
  * and the dead-owner rule the backstop sweep applies
  * (`partitionBackstopCandidates` over an empty registry and no spawn grace).
  *
- * The table query carries no `Name` filter on purpose: `vitest-setup.ts`
- * answers every `Name`-filtered query with an empty table (#3917) so no test
- * reaches the host through the orphan backstop, and this census needs the real
- * table. POSIX `ps` cannot filter by name anyway, so the query is the same one.
- * The seams are loaded with `vi.importActual` so a test file's own
- * `vi.mock("…/instance-reaper.js")` cannot blind the census.
+ * The seams are loaded with `vi.importActual`: `vitest-setup.ts` answers every
+ * `Name`-filtered table query with an empty table (#3917) and a test file may
+ * mock the reaper or the snapshot module outright; either would blind the
+ * census to the host table it exists to read.
  *
  * Off unless the env var names a file, and off on Windows, where no owner tag
  * is written. Known limit, stated rather than implied: a dead owner whose pid
