@@ -671,9 +671,10 @@ function parsedSource(source: string): { root: SgNode; calls: SgNode[] } {
 	const cached = parsedSourceCache.get(source);
 	if (cached) return cached;
 	const root = parse(Lang.TypeScript, source).root();
-	// Only the `vi.mock` calls: `isViMockCall` is a pure function of the
+	// Only the mock registrations: `isViMockCall` is a pure function of the
 	// callee, so the `imported` and `all` passes (and `mockedSpecifiers`) share
-	// one answer per call instead of each re-walking every call expression.
+	// one answer per call instead of each re-walking every call expression. The
+	// names cover `vi.mock` and the un-hoisted `vi.doMock` twin (#5256).
 	const entry = {
 		root,
 		calls: root
