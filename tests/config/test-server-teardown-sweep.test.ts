@@ -83,7 +83,10 @@ import {
 	serverTeardownKey,
 	serverTeardownMechanisms,
 } from "../support/test-server-teardown-gate.js";
-import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import {
+	scaledTestTimeout,
+	TREE_WALK_TIMEOUT_MS,
+} from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const TESTS_ROOT = path.join(REPO_ROOT, "tests");
@@ -95,6 +98,18 @@ const BASELINE_HEADER =
 	"#4589 baseline: the started servers already unproven on master, admitted so the sweep is a ratchet, not a mass edit.";
 /** The admission guard's row spelling; a regenerated row must pass it. */
 const ROW_RE = /^tests\/[\w./-]+\.ts:[^\s]+$/;
+/**
+ * #5508: the budget for the admission re-check, which classifies every
+ * distinct admitted file with the detector's own parser. Its cost is the
+ * admitted-file population, and that population grows as rows are admitted, so
+ * vitest's 5 s default is a flake the next admission row re-arms. Measured
+ * through the built seam: 1.07 s for 4 rows over 3 files when every row
+ * classified the file itself, 0.36 s now (Linux); the same file measured 1.41 s
+ * on the Windows leg and timed out once at 5000 ms there under runner
+ * contention. 20 s is about 14x the calm Windows figure and 4x the worst
+ * observation, and the lane's `PI_LENS_TEST_TIMEOUT_SCALE` widens it there.
+ */
+const ADMISSION_RECHECK_TIMEOUT_MS = scaledTestTimeout(20_000);
 const BASELINE: ReadonlySet<string> = new Set(TEST_SERVER_TEARDOWN_BASELINE);
 
 function detectAcrossFiles(files: string[]): ServerTeardownFinding[] {
@@ -1152,35 +1167,99 @@ describe("#4589 server-teardown admission guard", () => {
 			).toBeGreaterThan(80);
 	});
 
-	it("re-checks every admission's mechanism against the file it names", () => {
-		// The reason's mechanism is a claim about the file's source, re-derived
-		// here by the detector's own classifier: a row admitted as `teardown`
-		// must have a close in a teardown hook, not merely a `finally` or a
-		// returned closure somewhere in the file.
-		const problems: string[] = [];
-		for (const [row, admission] of Object.entries(
-			TEST_SERVER_TEARDOWN_ADMISSIONS,
-		)) {
-			const file = row.slice(0, row.indexOf(":"));
-			const source = readWalkedFile(path.join(REPO_ROOT, file));
-			if (source === undefined) {
-				problems.push(`${row}: admission names a file the walk skips`);
-				continue;
+	it(
+		"re-checks every admission's mechanism against the file it names",
+		() => {
+			// The reason's mechanism is a claim about the file's source, re-derived
+			// here by the detector's own classifier: a row admitted as `teardown`
+			// must have a close in a teardown hook, not merely a `finally` or a
+			// returned closure somewhere in the file.
+			//
+			// #5508: several rows name the same file, so the guard classifies each
+			// DISTINCT file once and checks every row of that file against that one
+			// classification. The cost then follows the admitted-file population and
+			// not the row population, and an extra row in an admitted file costs a
+			// key filter rather than a second parse of a 1,600-line file. `checked`
+			// pins that grouping kept every row: a fold that handed one row per file
+			// the guard would run green on a subset of the admissions.
+			const problems: string[] = [];
+			const rowsByFile = new Map<string, string[]>();
+			for (const row of Object.keys(TEST_SERVER_TEARDOWN_ADMISSIONS)) {
+				const file = row.slice(0, row.indexOf(":"));
+				rowsByFile.set(file, [...(rowsByFile.get(file) ?? []), row]);
 			}
-			const findings = findUnclosedServerStarts(file, source).filter(
-				(finding) => serverTeardownKey(finding) === row,
+			let checked = 0;
+			for (const [file, rows] of rowsByFile) {
+				const source = readWalkedFile(path.join(REPO_ROOT, file));
+				if (source === undefined) {
+					for (const row of rows) {
+						problems.push(`${row}: admission names a file the walk skips`);
+						checked++;
+					}
+					continue;
+				}
+				const classification = findUnclosedServerStarts(file, source);
+				for (const row of rows) {
+					checked++;
+					const findings = classification.filter(
+						(finding) => serverTeardownKey(finding) === row,
+					);
+					if (findings.length === 0) {
+						problems.push(
+							`${row}: admitted, but the detector reports no finding`,
+						);
+						continue;
+					}
+					const mechanisms = serverTeardownMechanisms(
+						classification,
+						findings.map((finding) => finding.server),
+					);
+					const admitted = TEST_SERVER_TEARDOWN_ADMISSIONS[row].mechanism;
+					if (!mechanisms.includes(admitted))
+						problems.push(
+							`${row}: admitted as ${admitted}, but the file shows [${mechanisms.join(", ")}]`,
+						);
+				}
+			}
+			expect(checked, "every admission row must be re-checked").toBe(
+				Object.keys(TEST_SERVER_TEARDOWN_ADMISSIONS).length,
 			);
-			if (findings.length === 0) {
-				problems.push(`${row}: admitted, but the detector reports no finding`);
-				continue;
-			}
-			const mechanisms = serverTeardownMechanisms(source, findings);
-			if (!mechanisms.includes(admission.mechanism))
-				problems.push(
-					`${row}: admitted as ${admission.mechanism}, but the file shows [${mechanisms.join(", ")}]`,
-				);
-		}
-		expect(problems, problems.join("\n")).toEqual([]);
+			expect(problems, problems.join("\n")).toEqual([]);
+		},
+		ADMISSION_RECHECK_TIMEOUT_MS,
+	);
+
+	it("takes one server's mechanisms, not the file's union", () => {
+		// The per-server filter the guard re-check relies on. A file with two
+		// admitted bindings must not let one binding's teardown evidence carry
+		// the other's row, so the mechanism set is asked per started binding.
+		const source = [
+			"const serverA = net.createServer(() => {});",
+			"await new Promise((resolve) => serverA.listen(endpoint, resolve));",
+			"const serverB = net.createServer(() => {});",
+			"await new Promise((resolve) => serverB.listen(endpoint, resolve));",
+			"afterEach(() => {",
+			"\tserverA.close();",
+			"});",
+		].join("\n");
+		const classification = findUnclosedServerStarts(
+			"tests/config/probe.test.ts",
+			source,
+		);
+		expect(classification.map((finding) => finding.server)).toEqual([
+			"serverA",
+			"serverB",
+		]);
+		expect(serverTeardownMechanisms(classification, ["serverA"])).toEqual([
+			"teardown",
+		]);
+		expect(serverTeardownMechanisms(classification, ["serverB"])).toEqual([
+			"none",
+		]);
+		expect(
+			serverTeardownMechanisms(classification, ["serverA", "serverB"]),
+		).toEqual(["none", "teardown"]);
+		expect(serverTeardownMechanisms(classification, ["nothing"])).toEqual([]);
 	});
 
 	it("crosses the boundary: a teardown hook elsewhere cannot launder a returned close", () => {
@@ -1203,6 +1282,6 @@ describe("#4589 server-teardown admission guard", () => {
 			source,
 		);
 		expect(findings.map((finding) => finding.verdict)).toEqual(["helper"]);
-		expect(serverTeardownMechanisms(source, findings)).toEqual(["helper"]);
+		expect(serverTeardownMechanisms(findings, ["server"])).toEqual(["helper"]);
 	});
 });
