@@ -551,11 +551,11 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		}
 	});
 
-	it("skips an importer mocked through vi.doMock (#5256)", () => {
-		// The mocked-specifier set is shared with the walk that skips mocked
-		// importers, so extending it to doMock must extend both sides: a
-		// transitively imported module replaced by a non-hoisted double has
-		// no real imports to demand from the mocked module.
+	it("does not skip an importer that only vi.doMock replaces (#5256)", () => {
+		// Recurrence guard for #5256 F1: `vi.doMock` runs per test, after the
+		// static import has already loaded the real importer, so that importer's
+		// import of `module.js` still needs `b`. Only hoisted `vi.mock` replaces
+		// a module for the whole file, so only it may skip an importer.
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
 		try {
 			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
@@ -567,7 +567,32 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 				'import "./importer.js";\nvi.doMock("./importer.js", () => ({ x: 1 }));\nvi.mock("./module.js", () => ({ a: 1 }));\n';
 			const testFile = path.join(root, "case.test.ts");
 			fs.writeFileSync(testFile, source);
-			expect(findViMockExportGaps(testFile, source)).toEqual([]);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ specifier: "./module.js", missing: ["b"] },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not skip an importer that vi.doUnmock names (#5256)", () => {
+		// Recurrence guard for #5256 F3: `vi.doUnmock` restores the real module
+		// and replaces none, so it must never join the importer-skip names. It
+		// reds if `doUnmock` joins HOISTED_MOCK_NAMES (mutation M2).
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-vi-mock-"));
+		try {
+			fs.writeFileSync(path.join(root, "module.ts"), "export const b = 1;\n");
+			fs.writeFileSync(
+				path.join(root, "importer.ts"),
+				'import { b } from "./module.js"; export const x = b;\n',
+			);
+			const source =
+				'import "./importer.js";\nvi.doUnmock("./importer.js");\nvi.mock("./module.js", () => ({ a: 1 }));\n';
+			const testFile = path.join(root, "case.test.ts");
+			fs.writeFileSync(testFile, source);
+			expect(findViMockExportGaps(testFile, source)).toMatchObject([
+				{ specifier: "./module.js", missing: ["b"] },
+			]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
