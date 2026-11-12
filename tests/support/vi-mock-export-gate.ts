@@ -84,6 +84,19 @@ export function mockSpecifier(arg: SgNode | undefined): string | undefined {
 const VITEST_UTILS: ReadonlySet<string> = new Set(["vi", "vitest"]);
 
 /**
+ * Vitest's module-double registrations: `mock` is hoisted, `doMock` is its
+ * un-hoisted twin (`registerConsoleMockers` in `@vitest/mocker` exposes both
+ * on the utils object), and both take the same `(specifier, factory)` shape,
+ * so a whole-module `doMock` double drops a production export exactly the way
+ * a `mock` double does. #5256: the export gate read only `mock`, so the
+ * `vi.doMock` of `clients/env-utils.js` in `tests/clients/lsp/launch.test.ts`
+ * stayed green while the Windows unit lane threw on the export a static
+ * `clients/safe-spawn.ts` import needed. `doUnmock` is excluded: it names no
+ * factory, so it replaces no export surface.
+ */
+const MOCK_REGISTRATION_NAMES: readonly string[] = ["mock", "doMock"];
+
+/**
  * Semantic mock-call check: the callee is one of `names` on vitest's utils
  * object written directly, `vi` or `vitest` (through parentheses, `as`,
  * `satisfies` or `!`), with a dot, spaced or literal bracket key
@@ -665,7 +678,9 @@ function parsedSource(source: string): { root: SgNode; calls: SgNode[] } {
 		root,
 		calls: root
 			.findAll({ rule: { kind: "call_expression" } })
-			.filter((call) => isViMockCall(call.field("function"))),
+			.filter((call) =>
+				isViMockCall(call.field("function"), MOCK_REGISTRATION_NAMES),
+			),
 	};
 	parsedSourceCache.set(source, entry);
 	return entry;
