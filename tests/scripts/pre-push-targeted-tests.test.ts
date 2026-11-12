@@ -278,7 +278,7 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 					? [
 							"--input-type=module",
 							"-e",
-							`import { main } from ${JSON.stringify(pathToFileURL(path.join(scriptDir, "pre-push-targeted-tests.mjs")).href)}; ${probeMain === "undrained" ? "process.kill = () => { throw Object.assign(new Error('denied'), {code: 'EPERM'}); }; const realTimer = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 5000 ? 50 : ms, ...args);" : ""} process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...${JSON.stringify(extra)}); process.exitCode = await main();`,
+							`const { main } = await import(process.env.PI_LENS_PROBE_MAIN_URL); ${probeMain === "undrained" ? "process.kill = () => { throw Object.assign(new Error('denied'), {code: 'EPERM'}); }; const realTimer = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...args) => realTimer(fn, ms === 5000 ? 50 : ms, ...args);" : ""} process.env.GATE_PID = String(process.pid); process.argv.push('--skip-build', ...JSON.parse(process.env.PI_LENS_PROBE_MAIN_ARGS)); process.exitCode = await main();`,
 						]
 					: [
 							path.join(scriptDir, "pre-push-targeted-tests.mjs"),
@@ -289,7 +289,20 @@ describe("resolveDiffRange — pre-push ref population (#3661)", () => {
 					cwd: fixtureDir,
 					encoding: "utf8",
 					input,
-					env: { ...process.env, ...env },
+					// Paths and argv reach the probe through the environment, never
+					// through its source text (CodeQL js/bad-code-sanitization).
+					env: {
+						...process.env,
+						...(probeMain
+							? {
+									PI_LENS_PROBE_MAIN_URL: pathToFileURL(
+										path.join(scriptDir, "pre-push-targeted-tests.mjs"),
+									).href,
+									PI_LENS_PROBE_MAIN_ARGS: JSON.stringify(extra),
+								}
+							: {}),
+						...env,
+					},
 				},
 			);
 		return { git, base, commit, hook };
@@ -775,11 +788,11 @@ let sweeps = 0;
 const sweepB = () => {
 	if (sweeps++ >= 3) return;
 	const b = spawnSync(process.execPath, process.argv.slice(1), {
-		input: ${JSON.stringify(input)},
+		input: process.env.PI_LENS_RACE_INPUT,
 		encoding: "utf8",
 		env: { ...process.env, RACE_ROLE: "B" },
 	});
-	realWrite(${JSON.stringify(bStatus)}, b.stderr);
+	realWrite(process.env.PI_LENS_RACE_B_STATUS, b.stderr);
 };
 const realTemp = fs.mkdtempSync;
 const realWrite = fs.writeFileSync;
@@ -806,6 +819,8 @@ syncBuiltinESMExports();
 			PI_LENS_HOME: home,
 			PI_LENS_PREPUSH_TMPDIR: "",
 			NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
+			PI_LENS_RACE_INPUT: input,
+			PI_LENS_RACE_B_STATUS: bStatus,
 		});
 		// B swept before stopping, so the race window was really exercised.
 		expect(fs.readFileSync(bStatus, "utf8")).toContain("STOP_AFTER_SWEEP");
@@ -865,13 +880,15 @@ syncBuiltinESMExports();
 			const workerPidFile = path.join(fixtureDir as string, "worker.pid");
 			write(
 				"tests/clients/first.test.ts",
-				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { fs.writeFileSync(${JSON.stringify(workerPidFile)}, String(process.pid)); process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(${JSON.stringify(path.join(base, "late-writer"))}, 'wrote'); });\n`,
+				`import { it } from 'vitest'; import fs from 'node:fs'; it('interrupt', async () => { fs.writeFileSync(process.env.PI_LENS_WORKER_PID_FILE, String(process.pid)); process.kill(Number(process.env.GATE_PID), '${signal}'); await new Promise(r => setTimeout(r, 300)); fs.mkdirSync(process.env.TMPDIR, { recursive: true }); fs.writeFileSync(process.env.PI_LENS_LATE_WRITER_FILE, 'wrote'); });\n`,
 			);
 			const result = hook(
 				"",
 				["--include-worktree"],
 				{
 					PI_LENS_PREPUSH_TMPDIR: base,
+					PI_LENS_WORKER_PID_FILE: workerPidFile,
+					PI_LENS_LATE_WRITER_FILE: path.join(base, "late-writer"),
 				},
 				undrained ? "undrained" : true,
 			);
@@ -1071,21 +1088,25 @@ describe("entry-point guard through the real CLIs (#4086)", () => {
 		repoRoot,
 		"scripts/pre-push-targeted-tests.mjs",
 	);
-	const importProbe = (script: string) =>
-		`import(${JSON.stringify(pathToFileURL(script).href)}).then(() => console.log("IMPORT-OK"));`;
-	const run = (args: string[], input?: string, cwd = repoRoot) =>
+	const importProbe = `import(process.env.PI_LENS_IMPORT_PROBE_URL).then(() => console.log("IMPORT-OK"));`;
+	const run = (
+		args: string[],
+		input?: string,
+		cwd = repoRoot,
+		env: NodeJS.ProcessEnv = {},
+	) =>
 		spawnSync(process.execPath, args, {
 			cwd,
 			encoding: "utf8",
 			input,
 			timeout: 30_000,
-			env: { ...process.env, PI_LENS_TEST_NO_LOCK: "1" },
+			env: { ...process.env, PI_LENS_TEST_NO_LOCK: "1", ...env },
 		});
 
 	// Outside any repo: a guard that wrongly runs the selector's main() on import
 	// then fails fast on git instead of running the real hook over this checkout.
-	const runAway = (args: string[], input?: string) =>
-		run(args, input, os.tmpdir());
+	const runAway = (args: string[], input?: string, env?: NodeJS.ProcessEnv) =>
+		run(args, input, os.tmpdir(), env);
 
 	it.each([
 		["with-test-lock", lockScript],
@@ -1098,26 +1119,29 @@ describe("entry-point guard through the real CLIs (#4086)", () => {
 			// `node -e foo` (argv[1] = "foo") or stdin (argv[1] = "-"). The negative
 			// direction too: a guard that is always true would run main() on import
 			// (with-test-lock prints its usage and exits 2).
-			const bare = runAway(["-e", importProbe(script)]);
+			const probeEnv = {
+				PI_LENS_IMPORT_PROBE_URL: pathToFileURL(script).href,
+			};
+			const bare = runAway(["-e", importProbe], undefined, probeEnv);
 			expect(bare.stderr).toBe("");
 			expect(bare.stdout).toBe("IMPORT-OK\n");
 			expect(bare.status).toBe(0);
 			// A real file that is not this script: the only shape that reaches the
 			// compare with a resolvable argv[1], so it is the one an always-true
 			// guard cannot hide behind a failed realpath.
-			const otherFile = runAway([
-				"-e",
-				importProbe(script),
-				path.join(repoRoot, "package.json"),
-			]);
+			const otherFile = runAway(
+				["-e", importProbe, path.join(repoRoot, "package.json")],
+				undefined,
+				probeEnv,
+			);
 			expect(otherFile.stderr).toBe("");
 			expect(otherFile.stdout).toBe("IMPORT-OK\n");
 			expect(otherFile.status).toBe(0);
-			const viaEval = runAway(["-e", importProbe(script), "foo"]);
+			const viaEval = runAway(["-e", importProbe, "foo"], undefined, probeEnv);
 			expect(viaEval.stderr).toBe("");
 			expect(viaEval.stdout).toBe("IMPORT-OK\n");
 			expect(viaEval.status).toBe(0);
-			const viaStdin = runAway(["-"], importProbe(script));
+			const viaStdin = runAway(["-"], importProbe, probeEnv);
 			expect(viaStdin.stderr).toBe("");
 			expect(viaStdin.stdout).toBe("IMPORT-OK\n");
 			expect(viaStdin.status).toBe(0);

@@ -468,11 +468,18 @@ describe("pytest project environment", () => {
 		process.env.PI_LENS_TEST_MODE = "0";
 		clearLatencyLog();
 		await flushLatencyLog();
-		const makeWorkspace = (partCount: number) => {
+		// #5521: the cap is (steps + 1) x (path length + 1) > 2,000,000 cells. The
+		// old fixture nested 708 directories (a 1,415-character member path), which
+		// macOS PATH_MAX (1024) rejects with ENAMETOOLONG. A `**` component costs
+		// four steps and still matches the plain path, so 5,000 of them reach the
+		// cap from a 60-directory (119-character) member.
+		const makeWorkspace = (globstars: number) => {
 			const workspace = createProject(false);
-			const parts = Array.from({ length: partCount }, () => "a");
-			const relative = parts.join("/");
+			const parts = Array.from({ length: 60 }, () => "a");
+			const pattern = `a/${"**/".repeat(globstars)}a`;
 			const member = path.join(workspace.root, ...parts);
+			// Recurrence prevented: #5521, a fixture path past macOS PATH_MAX.
+			expect(path.join(member, "pyproject.toml").length).toBeLessThan(1024);
 			fs.mkdirSync(member, { recursive: true });
 			fs.writeFileSync(
 				path.join(member, "pyproject.toml"),
@@ -480,13 +487,13 @@ describe("pytest project environment", () => {
 			);
 			fs.writeFileSync(
 				path.join(workspace.root, "pyproject.toml"),
-				`[tool.uv.workspace]\nmembers = ['${relative}']\n`,
+				`[tool.uv.workspace]\nmembers = ['${pattern}']\n`,
 			);
 			createEnvironment(path.join(workspace.root, ".venv"));
-			return { member, relative };
+			return { member, pattern };
 		};
-		const first = makeWorkspace(708);
-		const second = makeWorkspace(709);
+		const first = makeWorkspace(5_000);
+		const second = makeWorkspace(5_001);
 
 		try {
 			await detectPythonEnvironment(first.member, os.tmpdir());
@@ -519,20 +526,20 @@ describe("pytest project environment", () => {
 				expect.arrayContaining([
 					expect.objectContaining({
 						kind: "workspace-glob-cap",
-						subject: String(first.relative.length),
+						subject: String(first.pattern.length),
 						count: 1,
 					}),
 					expect.objectContaining({
 						kind: "workspace-glob-cap",
-						subject: String(second.relative.length),
+						subject: String(second.pattern.length),
 						count: 1,
 					}),
 				]),
 			);
 			expect(rows.map((row) => row.metadata?.subject)).toEqual([
-				String(first.relative.length),
-				String(second.relative.length),
-				String(first.relative.length),
+				String(first.pattern.length),
+				String(second.pattern.length),
+				String(first.pattern.length),
 			]);
 			expect(rows.every((row) => row.metadata?.count === 1)).toBe(true);
 			expect(rows.every((row) => row.filePath === row.metadata?.subject)).toBe(
