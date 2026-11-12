@@ -1160,7 +1160,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/dispatch/suppress-writer.ts": 2,
 		"clients/disposition-logger.ts": 3,
 		"clients/durable-store.ts": 13,
-		"clients/effective-config.ts": 5,
+		// 5 -> 4 (#4907): the queried `path` resolves through `resolveHostToolPath`,
+		// so its `path.resolve(cwd, file)` leaves the module.
+		"clients/effective-config.ts": 4,
 		"clients/extension-log.ts": 2,
 		"clients/file-kinds.ts": 2,
 		"clients/file-time.ts": 6,

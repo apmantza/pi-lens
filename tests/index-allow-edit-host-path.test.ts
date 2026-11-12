@@ -76,6 +76,50 @@ describe("/lens-allow-edit path spelling (shape 74)", () => {
 	);
 
 	it(
+		"keys the exemption to the file a curly-quote spelling names, as the edit's own call does",
+		{ timeout: 60_000 },
+		async () => {
+			// RECURRENCE GUARDED (shape 74, #5494 review F4): the file on disk is
+			// `shared\u2019s.ts` (U+2019). The user types the straight apostrophe,
+			// which names no file, so the command's resolution must take the
+			// ladder's curly-quote variant to key the file the edit names. Plain
+			// `resolveHostToolPath` keys the naive `shared's.ts`, the edit's
+			// `shared\u2019s.ts` never matches, and the edit is refused "Edit without
+			// read". pi's own edit tool does not run the ladder: the straight
+			// spelling reads ENOENT there, so the edit names the on-disk file.
+			const { home } = pinFixtureHome("allow-edit-host-path");
+			const proj = path.join(home, "proj");
+			fs.mkdirSync(path.join(proj, "src"), { recursive: true });
+			fs.writeFileSync(path.join(proj, "src", "seed.ts"), CLEAN_FILE);
+			const curly = path.join(proj, "src", "shared\u2019s.ts");
+			fs.writeFileSync(curly, "export function shared() {\n\treturn 1;\n}\n");
+			const session = await startPiSession({
+				root: fixture.root,
+				cwd: proj,
+				responses: [
+					step(
+						fauxToolCall("edit", {
+							path: "src/shared\u2019s.ts",
+							edits: [{ oldText: "return 1;", newText: "return 2;" }],
+						}),
+						"editing",
+					),
+					endTurn("edited"),
+				],
+			});
+			await session.prompt("/lens-allow-edit src/shared's.ts");
+			await session.prompt("edit it");
+			const last = session.requests.at(-1) ?? [];
+			expect(toolResults(last, "edit")[0]?.text ?? "").not.toContain(
+				EDIT_WITHOUT_READ,
+			);
+			expect(fs.readFileSync(curly, "utf8")).toContain("return 2;");
+			expect(session.errors).toEqual([]);
+			await session.dispose();
+		},
+	);
+
+	it(
 		"arms nothing and fails nothing when the command names no path",
 		{ timeout: 60_000 },
 		async () => {
