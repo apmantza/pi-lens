@@ -203,7 +203,7 @@ describe("#5528 dead-owner census", () => {
 	// (#3917); the census must still reach the real `ps`, or it would report
 	// nothing on every run and look clean.
 	it.skipIf(process.platform === "win32")(
-		"reads the real process table through the setup's table scope",
+		"reads the real process table through the scope the setup installs",
 		async () => {
 			const seams = await loadActualCensusSeams();
 			const table = await seams.listProcesses();
