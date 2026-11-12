@@ -118,6 +118,7 @@ export const TEST_ENV_RESTORE_BASELINE: readonly string[] = [
 	"tests/support/vitest-setup.ts:JITI_FS_CACHE",
 	"tests/support/vitest-setup.ts:PI_CODING_AGENT_DIR",
 	"tests/support/vitest-setup.ts:PI_LENS_CONFIG_PATH",
+	"tests/support/vitest-setup.ts:PI_LENS_DISABLE_ORPHAN_BACKSTOP",
 	"tests/support/vitest-setup.ts:PI_LENS_DISABLE_TOOL_INSTALL",
 	"tests/support/vitest-setup.ts:PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS",
 	"tests/support/vitest-setup.ts:PI_LENS_HOME",
