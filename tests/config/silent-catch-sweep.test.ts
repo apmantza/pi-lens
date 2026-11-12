@@ -974,11 +974,6 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		identities: "c6617487a0244394",
 		reason: PRE_RULE,
 	}, // :194, :216, :877, :1520, :1550, :1621, :1847, :2203, :2357, :2767
-	"clients/probe-home-state.ts": {
-		silent: 1,
-		identities: "0c038fd772637ccb",
-		reason: PRE_RULE,
-	}, // :281
 	"clients/process-snapshot.ts": {
 		silent: 1,
 		identities: "d86d2439be475af1",
@@ -1081,10 +1076,10 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 		reason: PRE_RULE,
 	}, // :1254, :1303, :1399, :1989, :2019, :2025, :2040, :2046, :2138, :2503, :2601, :2727, :2769, :3200, :4676, :5529, :5608, :6031, :6363
 	"clients/review-graph/git-identity.ts": {
-		silent: 10,
-		identities: "719b257b5989f9db",
+		silent: 9,
+		identities: "b7a627187ea9629a",
 		reason: PRE_RULE,
-	}, // :67, :82, :107, :122, :137, :204, :217, :247, :261, :292
+	}, // :68, :88, :117, :132, :216, :229, :259, :273, :304
 	"clients/review-graph/import-resolvers.ts": {
 		silent: 5,
 		identities: "11acf9263a41f8fa",
@@ -1417,7 +1412,9 @@ const BASELINE: Readonly<Record<string, Admission>> = {
 // admits one of its own.
 // 1166 -> 1165 (#5440 r2): that crash guard records at its own top level now,
 // so the sweep reads it as recorded and `report-scan.ts` admits no row.
-const PINNED_TOTAL = 1165;
+// 1165 -> 1163 (refs #4907): the raw-realpath fold deleted `toRealPath`'s handler
+// in `probe-home-state.ts` and `canonicalDirectory`'s in `git-identity.ts`.
+const PINNED_TOTAL = 1163;
 
 interface Census {
 	byFile: Map<string, CatchSite[]>;

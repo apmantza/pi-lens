@@ -55,7 +55,7 @@ function git(args: string[], cwd: string): string {
  * A committed repository at `dir` with `seed.ts`, so `git status` has a HEAD to
  * compare against. The return value is the REAL path: a linked worktree's
  * `.git` file names the real common dir, and checkout identity is compared by
- * real location (`canonicalDirectory`).
+ * real location (`realpathOrResolve`).
  */
 function initRepo(dir: string): string {
 	fs.mkdirSync(dir, { recursive: true });
