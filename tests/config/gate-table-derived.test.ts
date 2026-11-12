@@ -309,6 +309,15 @@ describe("docs/language-coverage.md 'What runs by default' agrees with tool-poli
 							`${name}: the doc no longer carries its exception note`,
 						);
 					}
+					// Recurrence (#5535 verify r2, V1): flipping gleam's
+					// defaultWhenUnconfigured to false left this exemption green. It
+					// holds only while the policy derives "No project config" for it.
+					const policyTier = formatTier(name);
+					if (policyTier !== "No project config") {
+						violations.push(
+							`${name}: exempt only while the policy derives "No project config", policy derives "${policyTier}"`,
+						);
+					}
 					continue;
 				}
 				const derived = formatTier(name);
