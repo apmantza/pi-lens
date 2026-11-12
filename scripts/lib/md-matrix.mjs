@@ -400,14 +400,16 @@ export function mergeBulletSection(
 	// tolerate both so a single parser/merger works for both sections.
 	const bulletRe = /^- \*\*(.+?)\*\*(?:\s*\([^)]*\))?:\s*(.*)$/;
 	const byKey = new Map();
-	// Trailing non-bullet lines within the body (e.g. a blank line at EOF when
-	// this is the last section) — preserved after the sorted bullets rather than
-	// dropped.
-	const trailing = [];
+	// Keep the section's non-bullet prefix (for example the raw-capability
+	// introduction) above the sorted bullets. Non-bullet lines after the first
+	// bullet trail the sorted bullets, as they did before the split, so a line
+	// between two bullets is kept (#5526).
+	let firstBullet = bodyEnd;
 	for (let i = bodyStart; i < bodyEnd; i++) {
 		const m = bulletRe.exec(lines[i]);
-		if (m) byKey.set(m[1], lines[i]);
-		else trailing.push(lines[i]);
+		if (!m) continue;
+		if (firstBullet === bodyEnd) firstBullet = i;
+		byKey.set(m[1], lines[i]);
 	}
 	let added = false;
 	for (const k of keysToCarry) {
@@ -421,7 +423,10 @@ export function mergeBulletSection(
 	const sortedLines = [...byKey.keys()]
 		.sort(compareStableStrings)
 		.map((k) => byKey.get(k));
-	const before = lines.slice(0, bodyStart);
+	const before = lines.slice(0, firstBullet);
+	const trailing = lines
+		.slice(firstBullet, bodyEnd)
+		.filter((line) => !bulletRe.test(line));
 	const after = lines.slice(bodyEnd);
 	return [...before, ...sortedLines, ...trailing, ...after].join("\n");
 }
