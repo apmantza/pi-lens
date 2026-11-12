@@ -202,15 +202,14 @@ describe("#5528 dead-owner census", () => {
 	// The setup answers every `Name`-filtered table query with an empty table
 	// (#3917); the census must still reach the real `ps`, or it would report
 	// nothing on every run and look clean.
-	it.skipIf(process.platform === "win32")(
-		"reads the real process table through the scope the setup installs",
-		async () => {
-			const seams = await loadActualCensusSeams();
-			const table = await seams.listProcesses();
-			expect({
-				status: table.status,
-				hasThisWorker: table.rows.some((row) => row.pid === process.pid),
-			}).toEqual({ status: "ok", hasThisWorker: true });
-		},
-	);
+	it("reads the real process table through the scope the setup installs", async (ctx) => {
+		// The census is off on Windows (no owner tag is written there).
+		if (process.platform === "win32") ctx.skip();
+		const seams = await loadActualCensusSeams();
+		const table = await seams.listProcesses();
+		expect({
+			status: table.status,
+			hasThisWorker: table.rows.some((row) => row.pid === process.pid),
+		}).toEqual({ status: "ok", hasThisWorker: true });
+	});
 });
