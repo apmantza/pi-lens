@@ -157,13 +157,13 @@
 			"reason": "each round awaits the scheduler's real waitIdle() (a settled promise per round, not a yield); the count caps re-armed rounds of a property run. Drive loop, false positive."
 		},
 		{
-			"signature": "turn-count-wait::tests/clients/turn-end-cap-consumed-state.test.ts::32925ac0f1dd#0",
-			"head": "while (pendingAuxiliaryCoverageSize() > 0 && turns < 20) {",
+			"signature": "turn-count-wait::tests/clients/turn-end-cap-consumed-state.test.ts::7a8cfcae984d#0",
+			"head": "for (let turn = 2; turn <= 4 && !done(); turn++) {",
 			"reason": "drive loop, not a wait: each iteration runs the work under test (a turn, a cycle, a build or a run) and the exit is the outcome under test; the count caps the rounds. False positive of the fail-closed rule, which does not classify what a loop awaits."
 		},
 		{
-			"signature": "turn-count-wait::tests/clients/turn-end-cap-consumed-state.test.ts::7a8cfcae984d#0",
-			"head": "for (let turn = 2; turn <= 4 && !done(); turn++) {",
+			"signature": "turn-count-wait::tests/clients/turn-end-cap-consumed-state.test.ts::c0b2bc0f99cb#0",
+			"head": "while (pendingAuxiliaryCoverageSize() > 0 && turns < 20) {",
 			"reason": "drive loop, not a wait: each iteration runs the work under test (a turn, a cycle, a build or a run) and the exit is the outcome under test; the count caps the rounds. False positive of the fail-closed rule, which does not classify what a loop awaits."
 		},
 		{

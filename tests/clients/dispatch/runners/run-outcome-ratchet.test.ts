@@ -15,6 +15,7 @@ import {
 	listSourceFiles,
 	relativePosix,
 } from "../../../support/sweep-kit.js";
+import { expectPlantedStaleRow } from "../../../support/baseline-staleness.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../..", import.meta.url));
 const RUNNERS_DIR = fileURLToPath(
@@ -1978,6 +1979,31 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	it("reds a planted baseline row no open spawn site backs (#5072)", () => {
+		// The B1 direction on a row this cell invents: a file with one open spawn
+		// site, excused by a row that pins nine. The pin count is the ledger's
+		// whole claim about the file, so the mismatch names the row.
+		const planted = "scripts/5072-planted-spawn.mjs";
+		const row = scanCensusRow(
+			planted,
+			[
+				'import { spawn } from "node:child_process";',
+				'const child = spawn("true");',
+				"void child;",
+			].join("\n"),
+		);
+		const stale = siteCountMismatches([row], {
+			[planted]: "a planted row for the cell; #5072 [open-sites:9]",
+		});
+		expect(stale, stale.join("\n")).toHaveLength(1);
+		expectPlantedStaleRow({
+			baseline:
+				"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts#OUT_OF_TREE_SPAWN_BASELINE",
+			rowKey: planted,
+			verdict: stale,
+		});
+	});
 
 	it(
 		"a file that cannot see a failed child declares itself blind (#5308)",

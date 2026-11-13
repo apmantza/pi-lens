@@ -10,4 +10,5 @@ description: Load the pi-lens prose standard before writing any comment, issue, 
 
 Read `docs/prose-standard.md` (the sources, the house rules, the
 judgement-only rules, and the comment layout), then write. Check the result
-with `node scripts/check-prose.mjs --body-file <file>`.
+with `node scripts/check-prose.mjs --body-file <file>`; add `--comment` for a
+posted issue or PR comment.

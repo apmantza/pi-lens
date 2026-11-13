@@ -55,6 +55,9 @@ extend-exclude = [
   # word globally, which would defeat typos' own purpose on real "recieve"
   # typos elsewhere.
   "clients/dispatch/runners/spellcheck.ts",
+  # Keyed by the source text of every literal in the census files, so it
+  # quotes code fragments such as the ordinal suffix `${n}nd`, not prose (#5554).
+  "tests/clients/clean-claim-census.json",
 ]
 
 [default]

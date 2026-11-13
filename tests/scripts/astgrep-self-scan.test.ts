@@ -37,6 +37,10 @@ import {
 	writeBaseline,
 } from "../../scripts/lib/astgrep-self-scan.mjs";
 import { setProjectTrustState } from "../../clients/project-trust.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 // #4530: the ast-grep CLI under test is this checkout's own devDependency, found
 // through the test runner's `node_modules/.bin` PATH entry. That entry is the
@@ -453,7 +457,7 @@ d("pi-lens self-scan (#1718)", () => {
 		const live = new Set(
 			findingSignatures(findingsInTrackedFiles(result.findings, tracked)),
 		);
-		expect([...loadBaseline()].filter((sig) => !live.has(sig))).toEqual([]);
+		expect(rowsWithoutLiveMember(loadBaseline(), live)).toEqual([]);
 		expect(result.scannedFileCount).toBeGreaterThan(1000);
 	});
 });
@@ -728,7 +732,7 @@ d("governance suite: turn-count-wait (#4865)", () => {
 		const untriaged = findings.filter((_f, i) => !baseline.has(signatures[i]));
 		expect(untriaged, JSON.stringify(untriaged, null, 2)).toEqual([]);
 		const live = new Set(signatures);
-		expect([...baseline].filter((sig) => !live.has(sig))).toEqual([]);
+		expect(rowsWithoutLiveMember(baseline, live)).toEqual([]);
 		expect(result.scannedFileCount).toBeGreaterThan(1000);
 	});
 
@@ -820,6 +824,34 @@ d("governance suite: turn-count-wait (#4865)", () => {
 		} finally {
 			removeTempDirSync(root);
 		}
+	});
+});
+
+// #5072: the row-without-producer direction of both ledgers, on a row each
+// cell plants. The two live-finding cases above run the same comparison over
+// the real scan; these run without the CLI, so the CI job that skips the
+// binary still checks the direction.
+describe("ast-grep baselines red on a planted row with no live finding (#5072)", () => {
+	it("self-scan: a planted row no finding produces is reported", () => {
+		const rows = loadBaseline();
+		const planted = "5072-gone-rule:tests/clients/5072-gone.test.ts:1";
+		expectPlantedStaleRow({
+			baseline: "rules/ast-grep-rules/self-scan-baseline.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember([...rows, planted], rows),
+		});
+	});
+
+	it("governance: a planted row no finding produces is reported", () => {
+		const governance = suiteByName("governance");
+		const rows = loadBaseline(repoRoot(), governance);
+		const planted =
+			"turn-count-wait::tests/clients/5072-gone.test.ts::000000000000#0";
+		expectPlantedStaleRow({
+			baseline: "scripts/governance-rules/baseline.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember([...rows, planted], rows),
+		});
 	});
 });
 

@@ -1347,7 +1347,7 @@ describe("lens_diagnostics mode=delta", () => {
 		const result = await run(tool, { mode: "delta", severity: "error" });
 		const text = String(result.content[0].text);
 		// No actionable warnings (they're warnings, not errors)
-		expect(text).toContain("No error");
+		expect(text).toContain("No new error findings");
 	});
 
 	it("severity=error excludes the cached warning in delta mode", async () => {
@@ -1373,7 +1373,7 @@ describe("lens_diagnostics mode=delta", () => {
 			}),
 			{ mode: "delta", severity: "error" },
 		);
-		expect(String(result.content[0].text)).toContain("No error issues");
+		expect(String(result.content[0].text)).toContain("No new error findings");
 	});
 
 	it.each([
@@ -3316,6 +3316,51 @@ describe("lens_diagnostics mode=full", () => {
 			(result.details as { failedAnalyzers?: unknown[] }).failedAnalyzers,
 		).toEqual([{ id: "knip", summary: "knip timed out" }]);
 	});
+
+	// #5554 r2 F2: a failed, partial or aborted analyzer lane is part of what
+	// the report's clean claim speaks for. The review's probe pA read
+	// `full — clean (1 files) (1 failed: knip)` with a ✓ above it.
+	it.each([
+		["no", {}, true],
+		[
+			"a failed",
+			{ failed: [{ id: "knip", summary: "knip timed out" }] },
+			false,
+		],
+		[
+			"a partial",
+			{ partial: ["opengrep"], partialReasons: { opengrep: "x" } },
+			false,
+		],
+		["an aborted", { aborted: true, abortedIds: ["knip"] }, false],
+	])(
+		"mode=full with %s analyzer lane gives the ✓ and details.clean only when every lane completed (#5554)",
+		async (_label, lane, clean) => {
+			const widget = await vi.importActual<
+				typeof import("../../clients/widget-state.js")
+			>("../../clients/widget-state.js");
+			widget.clearWidgetState();
+			widget.recordDiagnostics("/proj/src/a.ts", []);
+			mockSummaries.push(...widget.getFileDiagnosticSummaries());
+			freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+				diagnostics: [],
+				runners: [],
+				cold: [],
+				timings: {},
+				...lane,
+			});
+			const result = await run(
+				makeTool(
+					{},
+					{ runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) },
+				),
+				{ mode: "full", refreshRunners: "cached" },
+			);
+			const text = String(result.content[0].text);
+			expect(text.includes("✓")).toBe(clean);
+			expect((result.details as { clean?: boolean }).clean).toBe(clean);
+		},
+	);
 
 	// #1004 review follow-up (honesty gap, #533): unlike every other
 	// fresh-fetch analyzer (a FRESH whole-project scan each call), test-runner

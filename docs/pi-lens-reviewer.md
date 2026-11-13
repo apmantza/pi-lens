@@ -425,4 +425,7 @@ Use short, active, plain prose.
 
 ## Documentation and prose standard
 
-The standard lives in `docs/prose-standard.md`. Judge prose against it.
+The standard lives in `docs/prose-standard.md`. Judge prose against it. A
+review or verify text that will be posted as an issue or PR comment over 12
+lines follows its "Comment layout" and passes
+`node scripts/check-prose.mjs --comment --body-file <f>` first.

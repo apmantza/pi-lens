@@ -33,6 +33,7 @@ import {
 	loadProjectRulePolicy,
 } from "../clients/dispatch/finding-policy.js";
 import { readFileContent } from "../clients/dispatch/runners/utils.js";
+import { cleanVerdict } from "../clients/dispatch/types.js";
 import {
 	gateFindingsByPathFreshness,
 	parseScannedAtMs,
@@ -410,6 +411,8 @@ export function createLensDiagnosticsTool(
 			totalDiagnostics?: number;
 			cleanFiles?: number;
 			uncheckedFileCount?: number;
+			clean?: boolean;
+			provenFiles?: number;
 			unconfirmedFiles?: number;
 			timedOutFiles?: number;
 			outcomeCounts?: Record<string, number>;
@@ -498,7 +501,9 @@ export function createLensDiagnosticsTool(
 				const pd = details?.projectDiagnostics ?? 0;
 				if (aw + cq + pd === 0) {
 					const uncheckedDelta = details?.uncheckedFileCount ?? 0;
-					return `lens_diagnostics delta — clean${uncheckedDelta > 0 ? ` · ${uncheckedDelta} unchecked` : ""}${coldSuffix}${failedSuffix}`;
+					// #5258: a delta re-reads cached rows and checks no file, so it has
+					// no proof to call anything clean; it says what it read.
+					return `lens_diagnostics delta — no new findings${uncheckedDelta > 0 ? ` · ${uncheckedDelta} unchecked` : ""}${coldSuffix}${failedSuffix}`;
 				}
 				return `lens_diagnostics delta — ${aw} actionable · ${cq} quality · ${pd} project${coldSuffix}${failedSuffix}`;
 			}
@@ -544,7 +549,11 @@ export function createLensDiagnosticsTool(
 					unchecked >= (details?.filesChecked ?? files)
 				)
 					return `lens_diagnostics ${mode} — unchecked${advisorySuffix} (${files} files)${coldSuffix}${failedSuffix}`;
-				return `lens_diagnostics ${mode} — ${cacheVerdict ?? "clean"}${advisorySuffix}${uncheckedSuffix} (${files} files)${coldSuffix}${failedSuffix}`;
+				// #5258: `clean` only where the report proved it (`details.clean`,
+				// from `cleanVerdict`), counted over the files it proved; anything
+				// else with no finding is unconfirmed, never clean by default.
+				const proven = details?.clean === true;
+				return `lens_diagnostics ${mode} — ${cacheVerdict ?? (proven ? "clean" : "unconfirmed")}${advisorySuffix}${uncheckedSuffix} (${proven ? (details?.provenFiles ?? files) : files} files)${coldSuffix}${failedSuffix}`;
 			}
 			const parts = [`${b} blocking`];
 			if (b === 0 && e > 0) parts.push(`${e} errors`);
@@ -1572,7 +1581,7 @@ function formatDeltaMode(
 	);
 
 	if (lines.length === 0) {
-		let text = `No ${severity === "all" ? "" : severity + " "}issues in the current turn delta.`;
+		let text = `No new ${severity === "all" ? "" : severity + " "}findings in the current turn delta.`;
 		// Discoverability (#190): `delta` is current-turn-scoped, so it's empty
 		// right after a resume even when prior findings were rehydrated into the
 		// session-wide view. Point the agent at `mode=all` when that's the case.
@@ -3152,6 +3161,21 @@ async function formatFullMode(
 			analyzers: extracted.dispositionSuppressed ?? 0,
 			analyzersByLane: extracted.dispositionSuppressedByLane ?? {},
 		},
+		undefined,
+		// #5258: the sweep's part of the report's clean claim. A swept file is
+		// proven only by a fully covered row; any other row, and the whole sweep
+		// when the abort or the time budget cut it short, proves nothing.
+		{
+			proven: fullyCoveredLspResults.map((result) => result.filePath),
+			swept: lspResults.map((result) => result.filePath),
+			stopped: aborted,
+			incompleteLanes: [
+				...(extracted.failed ?? []).map((item) => item.id),
+				...(extracted.partial ?? []),
+				...(extracted.abortedIds ?? []),
+				...(extracted.aborted ? ["aborted"] : []),
+			],
+		},
 	);
 	// #4638 r3 (N2): every return below builds on `result`, so the disclosure of
 	// rows the declaration withheld is added once, here, to text and details.
@@ -3694,6 +3718,19 @@ async function formatAllMode(
 		analyzersByLane: Record<string, number>;
 	} = { dropped: [], analyzers: 0, analyzersByLane: {} },
 	sessionEvidence?: { stalePaths: readonly string[]; host: LensToolHost },
+	/**
+	 * mode=full only (#5258): the files this call's sweep fully confirmed, every
+	 * file it swept, and whether it was cut short. The report's clean claim
+	 * speaks for the swept files too, so one the sweep did not prove withholds
+	 * it even when the session cache held the file as checked.
+	 */
+	fullModeSweep?: {
+		proven: readonly string[];
+		swept: readonly string[];
+		stopped: boolean;
+		/** Analyzer lanes that failed, ran partially or were aborted. */
+		incompleteLanes: readonly string[];
+	},
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
 	// mode=full already actively scanned exactly the requested paths, so a zero
 	// result there IS a legitimate clean read — the cache-only note only applies
@@ -3964,16 +4001,55 @@ async function formatAllMode(
 	const suppressedNote = suppressedLine ? `\n${suppressedLine}` : "";
 	const suppressedDetails =
 		dispositionSuppressed > 0 ? { dispositionSuppressed } : {};
+	// #5258: what the report's clean claim speaks for, and what proved it. The
+	// session's checked files are proven by validated cache evidence (mode=all)
+	// and, in mode=full, every file the sweep reached is proven only by a fully
+	// covered row of a sweep that was not cut short. A file nobody counted here
+	// withholds the claim (`cleanVerdict`), whatever note it did or did not get.
+	const sweptKeys = new Set((fullModeSweep?.swept ?? []).map(normalizeMapKey));
+	const sweepProvenKeys = new Set(
+		(fullModeSweep?.proven ?? []).map(normalizeMapKey),
+	);
+	const claimKeys = new Set([
+		...visibleSummaries
+			.filter((s) => s.uncheckedReason === undefined)
+			.map((s) => normalizeMapKey(s.filePath)),
+		...sweptKeys,
+	]);
+	// mode=full (#5554 r2): a file the sweep reached is proven by its fully
+	// covered row; one it did not reach only by a final snapshot, the mode=all
+	// rule (`reconcileStaleWidgetFiles` clears it for a file edited since). A
+	// stale finding on either withholds it, and a lane that failed, ran
+	// partially or was aborted withholds the whole claim.
+	const summaryByKey = new Map(
+		visibleSummaries.map((s) => [normalizeMapKey(s.filePath), s]),
+	);
+	const fullModeProven = (key: string): boolean => {
+		const summary = summaryByKey.get(key);
+		if ((summary?.diagnostics ?? []).some((d) => d.stale)) return false;
+		if (sweptKeys.has(key)) return sweepProvenKeys.has(key);
+		return summary?.hasFinalSnapshot === true;
+	};
+	const provenCount = isFullMode
+		? fullModeSweep?.stopped ||
+			(fullModeSweep?.incompleteLanes ?? []).length > 0
+			? 0
+			: [...claimKeys].filter(fullModeProven).length
+		: validationStatus === "findings" ||
+			  validationStatus === "no-matching-findings"
+			? claimKeys.size
+			: 0;
+	const cleanEvidence = { scope: claimKeys.size, proven: provenCount };
+	const proofDetails = isFullMode ? { provenFiles: provenCount } : {};
 
 	if (withIssues.length === 0) {
+		const clean = cleanVerdict({ ...cleanEvidence, findings: 0 });
 		const text =
 			(visibleSummaries.length === 0
 				? "No files diagnosed yet this session.\n"
-				: validationStatus === "inconclusive" ||
-					  validationStatus === "unverified" ||
-					  checkedCount === 0
+				: !clean
 					? ""
-					: `No ${severity === "all" ? "" : severity + " "}issues across ${checkedCount} file${checkedCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
+					: `No ${severity === "all" ? "" : severity + " "}issues across ${provenCount} file${provenCount === 1 ? "" : "s"} diagnosed this session. ✓\n`) +
 			(uncheckedLine ? `${uncheckedLine}\n` : "") +
 			validationNote +
 			staleNote +
@@ -3988,6 +4064,8 @@ async function formatAllMode(
 				staleDropped,
 				...suppressedDetails,
 				...uncheckedDetails,
+				clean,
+				...proofDetails,
 			},
 		};
 	}
@@ -4132,6 +4210,13 @@ async function formatAllMode(
 			staleDropped,
 			...suppressedDetails,
 			...uncheckedDetails,
+			// #2414: hints alone keep the summary's `clean, N hints`, and only
+			// with the same proof as the line above.
+			clean: cleanVerdict({
+				...cleanEvidence,
+				findings: totalBlocking + totalErrors + totalWarnings,
+			}),
+			...proofDetails,
 		},
 	};
 }

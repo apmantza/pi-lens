@@ -40,7 +40,7 @@ export function resolveDiffRange(
 	options?: { remoteTip?: boolean },
 ): string[] | null;
 
-/** The gate's temp root: `PI_LENS_PREPUSH_TMPDIR`, else `<PI_LENS_HOME or ~/.pi-lens>/prepush-tmp` (#5439). */
+/** The gate's temp root: `PI_LENS_PREPUSH_TMPDIR`, else `<PI_LENS_HOME>/prepush-tmp`, else `~/.local/share/pi-lens-prepush` (#5439, #5536). */
 export function resolvePrePushTmpRoot(env?: NodeJS.ProcessEnv): string;
 
 /** Create the root and answer its kernel-real path (#5439). */

@@ -156,7 +156,8 @@ async function serveRequest(
 							range.start.character,
 							range.end.line,
 							range.end.character,
-						);
+						)
+						.then((actions) => actions ?? []);
 				}),
 			);
 			const servedAt = Date.now();

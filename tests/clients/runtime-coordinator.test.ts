@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import {
+	BLOCKER_FULL_DELIVERY_CAP,
 	MAX_OWED_ANCHORS,
 	RuntimeCoordinator,
 } from "../../clients/runtime-coordinator.js";
@@ -1373,5 +1374,146 @@ describe("RuntimeCoordinator", () => {
 				),
 			).toEqual([subagentFile]);
 		});
+	});
+});
+
+describe("RuntimeCoordinator per-blocker delivery cap (#5532)", () => {
+	let dir: string;
+	const blocking = (filePath: string, code: number): Diagnostic => ({
+		id: `lsp:${code}:1`,
+		message: `Problem ${code}.`,
+		filePath,
+		line: 1,
+		column: 1,
+		severity: "error",
+		semantic: "blocking",
+		tool: "lsp",
+		rule: `ts:${code}`,
+	});
+	const raise = (
+		runtime: RuntimeCoordinator,
+		name: string,
+		code = 1,
+	): string => {
+		const filePath = path.join(dir, name);
+		writeFileSync(filePath, "alpha();\n");
+		runtime.recordInlineBlockers(
+			filePath,
+			"blocker",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			[blocking(filePath, code)],
+		);
+		return filePath;
+	};
+	/** Deliver `filePath` in full `times` times, as the turn end does. */
+	const deliver = (
+		runtime: RuntimeCoordinator,
+		filePath: string,
+		times: number,
+	): void => {
+		for (let i = 0; i < times; i++)
+			runtime.recordBlockerDelivery(filePath, "full", path.basename(filePath));
+	};
+	const capRows = (): number =>
+		getDegradationSummary().find(
+			(group) => group.kind === "blocker-repeat-capped",
+		)?.count ?? 0;
+
+	beforeEach(() => {
+		dir = mkdtempSync(path.join(tmpdir(), "pi-lens-5532-"));
+		resetDegradationLedger();
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("caps a blocker after BLOCKER_FULL_DELIVERY_CAP full deliveries", () => {
+		// RECURRENCE GUARDED: #5532. A live blocker was re-delivered in full for
+		// the rest of the session.
+		const runtime = new RuntimeCoordinator();
+		const filePath = raise(runtime, "a.ts");
+		const verdicts: boolean[] = [];
+		for (let i = 0; i < 4; i++) {
+			verdicts.push(runtime.blockerFullDeliveryCapped(filePath));
+			deliver(runtime, filePath, 1);
+		}
+		expect(BLOCKER_FULL_DELIVERY_CAP).toBe(3);
+		expect(verdicts).toEqual([false, false, false, true]);
+	});
+
+	it("keeps each blocker's count to itself: a joiner starts at zero and a leaver moves nothing", () => {
+		// RECURRENCE GUARDED: #5532 review r1 Q1/F1. A per-set count let a new
+		// blocker lift the cap from one the model had been told three times.
+		const runtime = new RuntimeCoordinator();
+		const first = raise(runtime, "a.ts");
+		deliver(runtime, first, 3);
+		const second = raise(runtime, "b.ts");
+		expect(runtime.blockerFullDeliveryCapped(first)).toBe(true);
+		expect(runtime.blockerFullDeliveryCapped(second)).toBe(false);
+		deliver(runtime, second, 2);
+		runtime.clearInlineBlockers(second);
+		expect(runtime.blockerFullDeliveryCapped(first)).toBe(true);
+		// A cleared blocker has no record left to count against: a no-op.
+		deliver(runtime, second, 1);
+		expect(runtime.blockerFullDeliveryCapped(second)).toBe(false);
+	});
+
+	it("restarts a blocker's count when it is re-raised", () => {
+		// RECURRENCE GUARDED: #5532. A cap that outlived its blocker's content
+		// would pointer a blocker the model has never been told about.
+		const runtime = new RuntimeCoordinator();
+		const filePath = raise(runtime, "a.ts");
+		deliver(runtime, filePath, 3);
+		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(true);
+		raise(runtime, "a.ts", 2);
+		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(false);
+	});
+
+	it("restarts the count when a late runner adds findings to the record", () => {
+		// RECURRENCE GUARDED: #5532. The merge keeps the record, so a count that
+		// survived it would pointer findings the model was never told about.
+		const runtime = new RuntimeCoordinator();
+		const filePath = raise(runtime, "a.ts");
+		deliver(runtime, filePath, 3);
+		runtime.recordBlockerDelivery(filePath, "collapsed", "a.ts");
+		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(true);
+		runtime.recordDeferredInlineBlockers(filePath, [blocking(filePath, 2)], {
+			recordedAtMs: 2,
+		});
+		expect(runtime.blockerFullDeliveryCapped(filePath)).toBe(false);
+		// The row flag restarts with it: the next cap writes its own row.
+		deliver(runtime, filePath, 3);
+		runtime.recordBlockerDelivery(filePath, "collapsed", "a.ts");
+		expect(capRows()).toBe(2);
+	});
+
+	it("writes the cap row once per blocker, on its first collapsed delivery", () => {
+		// RECURRENCE GUARDED: #5532 review r1 F2. A row keyed on a set's smallest
+		// count was missed when a member left; a row per collapsed delivery would
+		// write one per prompt.
+		const runtime = new RuntimeCoordinator();
+		const filePath = raise(runtime, "a.ts");
+		const other = raise(runtime, "b.ts");
+		deliver(runtime, filePath, 3);
+		expect(capRows()).toBe(0);
+		for (let i = 0; i < 4; i++)
+			runtime.recordBlockerDelivery(filePath, "collapsed", "a.ts");
+		expect(capRows()).toBe(1);
+		// Another blocker's own cap is its own row, whoever else is present.
+		deliver(runtime, other, 3);
+		runtime.recordBlockerDelivery(other, "collapsed", "b.ts");
+		expect(capRows()).toBe(2);
+	});
+
+	it("leaves a demoted record's drift count untouched", () => {
+		// RECURRENCE GUARDED: #5532. The delivery count is not the drift cap's
+		// `staleDeliveryCount`; sharing it would retire a freshly demoted record on
+		// its first stale delivery.
+		const runtime = new RuntimeCoordinator();
+		const filePath = raise(runtime, "a.ts");
+		deliver(runtime, filePath, 3);
+		expect(runtime.markInlineBlockerStale(filePath)).toBe(true);
+		expect(runtime.peekInlineBlockerStaleDeliveryCount(filePath)).toBe(0);
 	});
 });

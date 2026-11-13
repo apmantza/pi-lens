@@ -134,7 +134,10 @@ the brief gives.
     write `PR_BODY.md` and `COMMIT_MSG.txt` at the worktree root
     ("Worktree and Git"). A reviewer is always `none` and read-only.
   GitHub comments and issue edits are separate: only a brief that grants them
-  allows them.
+  allows them. Before any `gh issue comment`, `gh pr comment` or thread reply
+  over 12 lines, run `node scripts/check-prose.mjs --comment --body-file <f>`
+  (`docs/prose-standard.md` "Comment layout"); never post a hand-back as a
+  comment.
 - **Deliverable.** The report opens with an `ORCHESTRATOR SUMMARY`. Its cap
   follows the lane kind: at most 6 lines for a mechanical lane (trailing fold,
   pin or allowlist move, merge-and-resolve), 20 for a locate or investigation

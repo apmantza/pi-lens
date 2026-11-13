@@ -257,8 +257,12 @@ describe("opengrep report outcomes (#2943)", () => {
 			const scanRoot = row.symlinkRoot ? `${root}-link` : root;
 			if (row.symlinkRoot) fs.symlinkSync(root, scanRoot, "dir");
 			vi.spyOn(safeSpawn, "safeSpawnAsync").mockImplementationOnce(
-				async (_command, args: string[]) => {
-					if (row.symlinkRoot) expect(args.at(-1)).toBe(root);
+				async (_command, args: string[], options) => {
+					// The target is the relative `.` (#5500) and the spawn cwd the real root.
+					if (row.symlinkRoot) {
+						expect(args.at(-1)).toBe(".");
+						expect(options?.cwd).toBe(root);
+					}
 					const reportPath = args[args.indexOf("--json-output") + 1];
 					if (row.report === "directory") fs.mkdirSync(reportPath);
 					else if (row.report) fs.writeFileSync(reportPath, row.report);
