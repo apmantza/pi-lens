@@ -607,6 +607,43 @@ describe.each([
 			},
 			LONG_SESSION_TIMEOUT_MS,
 		);
+
+		it(
+			"writes no cap row for a blocker the model marks at its cap",
+			async () => {
+				// RECURRENCE GUARDED: the consume loop that counts a repeat read every
+				// record of the session, so a marked blocker (policy-suppressed) at its
+				// 3rd delivery was counted collapsed and wrote a cap row for a blocker
+				// the agent is no longer told about.
+				const bad = path.join("src", "bad.ts");
+				const { handle } = await openCell(
+					`capmarkrow-${tag}`,
+					flags,
+					(proj) => [
+						...write(proj, "bad.ts", BLOCKING_FILE),
+						step(
+							writeTarget(path.join(proj, "src", "target.ts"), MARKED_FILE),
+							"writing",
+						),
+						endTurn("turn done"),
+						...listen(),
+						step(activateMarkTool()),
+						step(markFalsePositive(path.join(proj, "src", "target.ts"))),
+						endTurn("marked"),
+						...listen(),
+						...listen(),
+					],
+				);
+				const rowsBefore = (await cappedRows(handle)).length;
+				await run(handle, 7);
+				const rows = await cappedRows(handle, rowsBefore);
+				expect(rows.map((row) => row.subject)).toEqual([
+					`inline-blocker-repeat:${bad}`,
+				]);
+				expect(handle.errors).toEqual([]);
+			},
+			LONG_SESSION_TIMEOUT_MS,
+		);
 	},
 );
 

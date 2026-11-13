@@ -2463,6 +2463,31 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		});
 	}
 
+	it("counts a delivery only for a blocker the turn end showed, not one it held back", async () => {
+		// RECURRENCE GUARDED: #5532 count site. A blocker cut whole by the turn-end
+		// cap was counted as delivered, so a blocker the model never saw collapsed
+		// to a pointer the first turn it had room.
+		const rig = makeRig("pi-lens-5532-held-");
+		try {
+			fillerBlocker(rig, 1000);
+			linesBlocker(rig, "second.ts", 400, 4);
+			const texts: string[] = [];
+			for (let turn = 1; turn <= 4; turn++) {
+				if (turn > 1) nextTurn(rig, turn);
+				texts.push(await endTurn(rig));
+			}
+			// The filler fills the cap: the second blocker is held for 3 turns.
+			for (const text of texts.slice(0, 3))
+				expect(text).not.toContain("second.ts");
+			// The filler collapses after its 3rd delivery; the second is now shown in
+			// full, its own count never having moved.
+			expect(texts[3]).toContain("Unresolved from this turn — second.ts");
+			expect(texts[3]).toContain(`filler.ts: ${BLOCKER_CAPPED_MARK}`);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
 	for (const mcp of [false, true]) {
 		it(`collapses a blocker delivered in full 3 times by a fresh turn end only on the pi host (${mcp ? "MCP address" : "pi"})`, async () => {
 			// RECURRENCE GUARDED: #5532 review r1 F1. A fresh turn end (the set
