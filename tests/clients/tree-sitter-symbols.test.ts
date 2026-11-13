@@ -9,6 +9,12 @@
  */
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { FactStore } from "../../clients/dispatch/fact-store.js";
+import {
+	buildOrUpdateGraph,
+	flushReviewGraphPersistsForTests,
+	waitForReviewGraphPersistsForTests,
+} from "../../clients/review-graph/builder.js";
 import {
 	grammarBlockReason,
 	LANGUAGE_TO_GRAMMAR,
@@ -489,6 +495,8 @@ describe("Python docstrings fill Symbol.doc (#4948)", () => {
 // captures the identifier at a different node than the one the position is
 // read from, or a new language whose modifier-prefixed declaration regresses.
 interface PositionCase {
+	/** The grammar when the row's key names a second shape of it (`java-interface`). */
+	lang?: string;
 	file: string;
 	/** Modifier-prefixed declarations: the declaration start is not the name. */
 	src: string;
@@ -596,13 +604,39 @@ const POSITION_CASES: Record<string, PositionCase> = {
 		src: "package a\n\n#Service: {\n\tname: string\n}\n\nlet helper = 1\n",
 		names: ["#Service", "name", "helper"],
 	},
+	// The three capture branches the rows above never reach. Recurrence: a branch
+	// that drops its `nameNode` line falls back to the declaration start, and no
+	// row would see it. `public interface` puts the name at column 18, behind the
+	// modifier.
+	"java-interface": {
+		lang: "java",
+		file: "Shape.java",
+		src: "public interface Shape {\n    void area();\n}\n",
+		names: ["Shape"],
+	},
+	// `struct S` as a type: the name sits at column 8, behind the keyword.
+	"c-struct": {
+		lang: "c",
+		file: "a.c",
+		src: "struct S { int a; };\n",
+		names: ["S"],
+	},
+	// The declarator starts at its name, so the position equals the declaration
+	// start here; the row pins that the arrow branch records the identifier.
+	"typescript-arrow": {
+		lang: "typescript",
+		file: "a.ts",
+		src: "export const alpha = () => 1;\n",
+		names: ["alpha"],
+	},
 };
 
 describe("symbol identifier position (#5559) — per supported grammar", () => {
-	for (const [lang, c] of Object.entries(POSITION_CASES)) {
+	for (const [label, c] of Object.entries(POSITION_CASES)) {
+		const lang = c.lang ?? label;
 		const blocked = Boolean(grammarBlockReason(LANGUAGE_TO_GRAMMAR[lang]));
 		it.skipIf(blocked)(
-			`nameLine/nameColumn land on the identifier for ${lang}`,
+			`nameLine/nameColumn land on the identifier for ${label}`,
 			async () => {
 				const env = setupTestEnvironment(`pi-lens-sympos-${lang}-`);
 				try {
@@ -656,6 +690,44 @@ describe("symbol identifier position (#5559) — per supported grammar", () => {
 			expect([toStr?.line, toStr?.column]).toEqual([2, 5]);
 			expect([toStr?.nameLine, toStr?.nameColumn]).toEqual([3, 19]);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	// The builder copies nameLine/nameColumn into the graph node, and the cascade
+	// reads them back from there. The rust-analyzer test that covers this end to
+	// end skips on CI (ci.yml has no Rust step), so this cell is the CI guard for
+	// the copy. Recurrence: the builder passthrough at
+	// clients/review-graph/builder.ts drops the two keys, and the cascade asks
+	// at `pub` again.
+	it("stores the identifier beside the declaration start in the graph node, no server (#5559)", async () => {
+		const env = setupTestEnvironment("pi-lens-sympos-graph-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"a.rs",
+				"pub fn alpha() {}\npub(crate) async fn beta() {}\n",
+			);
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			const metaOf = (name: string) =>
+				[...graph.nodes.values()].find(
+					(n) => n.kind === "symbol" && n.symbolName === name,
+				)?.metadata;
+			expect(metaOf("alpha")).toMatchObject({
+				line: 1,
+				column: 1,
+				nameLine: 1,
+				nameColumn: 8,
+			});
+			expect(metaOf("beta")).toMatchObject({
+				line: 2,
+				column: 1,
+				nameLine: 2,
+				nameColumn: 21,
+			});
+		} finally {
+			flushReviewGraphPersistsForTests();
+			await waitForReviewGraphPersistsForTests();
 			env.cleanup();
 		}
 	});
