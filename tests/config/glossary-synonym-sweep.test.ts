@@ -448,7 +448,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// protocol's own field name, not a delivery tier).
 		"clients/gzip-stage-write.ts": 4,
 		"clients/install-diagnostics.ts": 4,
-		// 28 -> 30 (#5561), and the new launch.ts row:
+		// 26 -> 28 (#4530), and the new launch.ts row:
 		// starts that moved onto the spawn seam read the spawn result's `error`
 		// field (SpawnResult.error), not a delivery tier.
 		"clients/installer/index.ts": 28,

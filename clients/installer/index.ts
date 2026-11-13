@@ -5751,8 +5751,8 @@ async function installArchiveTool(
 }
 
 /**
- * Record a genuine package-manager install exception against `toolId` and
- * log it — the one place `installNpmTool`/`installPipTool`/`installGemTool`'s
+ * Record a genuine pip package-manager install exception against `toolId` and
+ * log it — the one place `installPipTool`'s
  * catch blocks funnel through (#2661 review F3/Sonar: the three catches were
  * byte-identical but for the strategy label, a duplication SonarCloud's new-
  * code gate correctly flagged). The real error (registry E404, EBADENGINE, a
@@ -5766,13 +5766,15 @@ function recordPackageManagerInstallException(
 	strategyLabel: string,
 	packageName: string,
 	err: unknown,
+	recordManagedToolInstall = true,
 ): undefined {
 	const message = boundInstallError((err as Error).message);
-	recordDegradationOnce({
-		kind: "managed-tool-install",
-		subject: toolId,
-		reason: message,
-	});
+	if (recordManagedToolInstall && !(err instanceof InstallLockLostError))
+		recordDegradationOnce({
+			kind: "managed-tool-install",
+			subject: toolId,
+			reason: message,
+		});
 	logSessionStart(
 		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
 	);
@@ -6033,6 +6035,7 @@ async function installNpmTool(
 			"npm",
 			packageName,
 			err,
+			false,
 		);
 	}
 }
@@ -6214,6 +6217,41 @@ async function installPipTool(
 				...(spawnEnv ? { env: spawnEnv } : {}),
 			});
 		};
+		const pythonReleaseFor = async (
+			command: string,
+		): Promise<string | undefined> => {
+			const interpreter =
+				command === "pip3" ? "python3" : command === "pip" ? "python" : command;
+			const probe = await run(interpreter, ["--version"]);
+			const output = `${probe.stdout}\n${probe.stderr}`;
+			const parsed = output.match(/^Python\s+([0-9]+(?:\.[0-9]+){1,2})/m)?.[1];
+			if (parsed || interpreter === command) return parsed;
+			const pipProbe = await run(command, ["--version"]);
+			return `${pipProbe.stdout}\n${pipProbe.stderr}`.match(
+				/(?:python|Python)\s+([0-9]+(?:\.[0-9]+){1,2})/,
+			)?.[1];
+		};
+		const candidateFailure = async (
+			command: string,
+			args: string[],
+			failureText: string,
+		): Promise<string> => {
+			const pythonRelease = await pythonReleaseFor(command);
+			const error = failureText;
+			const requiresPython = error.match(
+				/ERROR:\s+Ignored[^\r\n]*Requires-Python[^\r\n]*/i,
+			)?.[0];
+			const evidence: string[] = [];
+			if (pythonRelease) evidence.push(`Python ${pythonRelease}`);
+			if (requiresPython)
+				evidence.push(
+					boundInstallError(requiresPython, INSTALL_CANDIDATE_ERROR_LIMIT),
+				);
+			evidence.push(
+				boundInstallError(failureText, INSTALL_CANDIDATE_ERROR_LIMIT),
+			);
+			return `${command} ${args.join(" ")}: ${evidence.join(" | ")}`;
+		};
 		const addBinToPath = async (
 			binDir: string,
 		): Promise<string | undefined> => {
@@ -6264,7 +6302,7 @@ async function installPipTool(
 					? ["upgrade", packageName]
 					: ["install", "--force", packageName],
 			);
-			const error = (result.stderr || result.error?.message || "").trim();
+			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status === 0) {
 				const location = await run("pipx", [
 					"environment",
@@ -6319,7 +6357,7 @@ async function installPipTool(
 				}
 			}
 			const result = await run(venvPip, [...verb, packageName]);
-			const error = (result.stderr || result.error?.message || "").trim();
+			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status === 0) {
 				const binaryPath = await addBinToPath(venvBin);
 				if (binaryPath) return succeeded("venv", binaryPath);
@@ -6338,7 +6376,7 @@ async function installPipTool(
 					? [...verb, "--user", packageName]
 					: ["-m", "pip", ...verb, "--user", packageName];
 			const result = await run(candidate.command, args);
-			const error = (result.stderr || result.error?.message || "").trim();
+			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status === 0) {
 				const base = await probeUserBase(candidate.command);
 				const binaryPath = base
@@ -6349,14 +6387,9 @@ async function installPipTool(
 				// resolution through PATH and its user-base candidates.
 				return succeeded("user", binaryPath ?? packageName);
 			}
-			const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-			const pythonVersion = error.match(
-				/requires a different Python:\s*([0-9][^\s]*)/i,
-			)?.[1];
-			const candidateErrorWithPython = pythonVersion
-				? `${candidateError} (Python ${pythonVersion})`
-				: candidateError;
-			candidateErrors.push(candidateErrorWithPython);
+			candidateErrors.push(
+				await candidateFailure(candidate.command, args, error),
+			);
 			if (pep668.test(error)) {
 				userRefused = true;
 				refuse("user", error);
@@ -6382,16 +6415,10 @@ async function installPipTool(
 							packageName,
 						];
 			const result = await run(candidate.command, args, privateEnv);
-			const error = (result.stderr || result.error?.message || "").trim();
+			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status !== 0) {
-				const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-				const pythonVersion = error.match(
-					/requires a different Python:\s*([0-9][^\s]*)/i,
-				)?.[1];
 				candidateErrors.push(
-					pythonVersion
-						? `${candidateError} (Python ${pythonVersion})`
-						: candidateError,
+					await candidateFailure(candidate.command, args, error),
 				);
 				continue;
 			}
@@ -6449,6 +6476,7 @@ async function installGemTool(
 			"gem",
 			packageName,
 			err,
+			false,
 		);
 	}
 }

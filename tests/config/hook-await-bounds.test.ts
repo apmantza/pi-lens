@@ -2525,7 +2525,9 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// 221 → 222 (#4937 review F1): `settleProbeCacheForTests` awaits one
 	// `flushProbeCache` so the tier-2 teardown can reject on a flush that did not
 	// land. Only the test helper registry calls it; no hook handler reaches it.
-	"clients/installer/index.ts": 222,
+	// #5561: 222 -> 227. The pip ladder now probes the selected interpreter's
+	// release after each failed candidate so the refusal names the real runtime.
+	"clients/installer/index.ts": 227,
 	// 29 -> 56 (#4765): refreshOpengrepRulePack (the background registry-pack
 	// refresh) awaits the pack download, its temp-file write, the
 	// `opengrep --validate` spawn, a stat/read/rename of the cached file and a

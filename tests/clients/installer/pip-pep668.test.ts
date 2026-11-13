@@ -120,6 +120,10 @@ function writeFakePython314(binDir: string): void {
 	writeExecutable(
 		path.join(binDir, "python3"),
 		`#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "Python 3.14.4"
+  exit 0
+fi
 exit 1
 `,
 	);
@@ -128,8 +132,10 @@ exit 1
 		`#!/bin/sh
 case "$*" in
   *"cmake-language-server>=0.1.11"*)
-    echo "ERROR: Could not find a version for Python 3.14.4 that satisfies cmake-language-server>=0.1.11 (from versions: 0.1.5)" >&2
-    echo "ERROR: Package 'cmake-language-server' requires a different Python: 3.14.4 not in '<3.14,>=3.8.0'" >&2
+    # Real pip 25.1.1 output: it names the candidate's Requires-Python, not
+    # the interpreter that ran pip. The installer queries that interpreter.
+    echo "ERROR: Could not find a version that satisfies the requirement cmake-language-server>=0.1.11 (from versions: 0.1.0 ... 0.1.5)" >&2
+    echo "ERROR: Ignored the following versions that require a different python version: 0.1.11 Requires-Python <3.14,>=3.8.0" >&2
     exit 1
     ;;
 esac
