@@ -72,6 +72,20 @@ describe("expectPlantedStaleRow (#5072)", () => {
 		).toThrow(/no verdict line names/);
 	});
 
+	it("rejects a verdict that names the planted row only after a longer prefix", () => {
+		// Recurrence (#5546 N4, S1b): a verdict about `xtests/x.test.ts` names a
+		// different row than `tests/x.test.ts`. Only the before-character check
+		// tells them apart; with it dropped, this case passed.
+		const ledger = writeLedger("before.json", '{"tests/live.test.ts": 1}');
+		expect(() =>
+			expectPlantedStaleRow({
+				baseline: ledger,
+				rowKey: "tests/x.test.ts",
+				verdict: ["xtests/x.test.ts: count drifted from 1 to 2"],
+			}),
+		).toThrow(/no verdict line names/);
+	});
+
 	it("reads the committed rows parsed, so an escaped or a longer row is told apart", () => {
 		// Recurrence (#5546 F7): the raw-text check missed a JSON-escaped row the
 		// ledger really carried, and called a row committed because a longer one
