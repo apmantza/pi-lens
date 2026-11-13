@@ -561,6 +561,10 @@ export const wallClockBudgetInclude = [
 	// #4148: a 199K-blank-line rule is a real event-loop occupancy witness for
 	// validateRule's synchronous language extraction, so it runs serialized.
 	"tests/clients/ast-grep-rule-regex-budget.test.ts",
+	// #5545: the scan-root exclude defect lives in how the real `ast-grep` CLI
+	// relativizes candidates, so the witness is a real spawn per cell (flake-shape
+	// admission); the file pins its own match lists, which bounds the cost.
+	"tests/clients/ast-grep-scan-ancestor-exclude.test.ts",
 	// #4713 R11, R12: real `bash -c` is the oracle for 2 625 generated cd,
 	// empty-word and redirect-target spellings (flake-shape admission); about
 	// 5 s of serial spawns. No wall-clock budget assertion: the file pins its

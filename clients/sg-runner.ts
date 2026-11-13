@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { resolveManagedToolClient } from "./dispatch/runners/utils/runner-helpers.js";
 import { getProjectIgnoreGlobs } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
-import { walkUpDirs } from "./path-utils.js";
+import { findNearestContaining, walkUpDirs } from "./path-utils.js";
 import { getProjectTrustState } from "./project-trust.js";
 import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { safeSpawnAsync, type SpawnResult } from "./safe-spawn.js";
@@ -43,12 +43,56 @@ export function buildBashRunArgs(cmd: string, allArgs: string[]): string[] {
 	return ["-c", '"$0" "$@"', cmd, ...allArgs];
 }
 
+/**
+ * `--globs` exclude arguments for the project at `rootDir`.
+ *
+ * ast-grep matches every `--globs` pattern against the path of each file
+ * RELATIVE TO THE CHILD PROCESS'S WORKING DIRECTORY, so the recursive `**`
+ * expansions reach the path components ABOVE `rootDir` as well. The caller has
+ * to start the child at the scan root — {@link SgRunner.sgScanAnchor} — or pass
+ * none of these (#5545).
+ */
 function sgExcludeArgsForProject(rootDir: string): string[] {
 	return getProjectIgnoreGlobs(rootDir).flatMap((glob) => [
 		"--globs",
 		`!${glob}`,
 	]);
 }
+
+/**
+ * Where a rule-scan child runs, the scan path spelled for that directory, and
+ * the exclude globs it may carry (#5545).
+ *
+ * ast-grep matches `--globs` against each file's path relative to the child's
+ * working directory, so a child started ABOVE the scanned tree lets a
+ * `.gitignore`-derived recursive exclude pattern match that tree whole when one
+ * of its ancestors happens to be named like one of its own ignored dirs —
+ * `/work/.claude/worktrees/<lane>` with `.claude/` in the lane's `.gitignore`,
+ * which is the shape a worktree lane takes. Such a scan answers an empty match
+ * list for a tree full of matches, and `ast_grep_replace` reports every preview
+ * file as changed. Starting the child at the scan root makes the path ast-grep
+ * matches start there: the excludes cannot reach above the scan root and stay
+ * exactly as effective inside it. jscpd anchors the same way (#4117).
+ *
+ * The cache-only npx fallback is the one command that cannot be anchored: it
+ * runs from the pi-lens-owned npm-isolation directory so a hostile project
+ * `.npmrc` never reaches it (#4233 V3-HIGH-02), and no glob spelling roots a
+ * pattern at a scan tree outside that directory: an absolute prefix
+ * (`!<scan-root>/node_modules/**`) matches nothing at all. ast-grep's own VCS
+ * ignore handling reads the SCANNED tree (measured: a repository under an
+ * ancestor its own `.gitignore` names keeps `node_modules` out with the child
+ * started elsewhere), which covers the same patterns there. A tree with no
+ * `.git` marker keeps the pre-anchor argv so its project globs still exclude the
+ * project's ignored paths.
+ */
+type SgScanAnchor = {
+	/** The directory the scan child runs in. */
+	cwd: string;
+	/** The scan argument spelled relative to {@link SgScanAnchor.cwd}. */
+	scanArg: string;
+	/** The `--globs` excludes, empty when this child cannot be anchored. */
+	excludeArgs: string[];
+};
 
 interface SgMetaVarNode {
 	text: string;
@@ -203,6 +247,20 @@ function tryParseNonZeroSgMatches(
 	// Trimmed on purpose: a leading BOM survives JSON.parse's whitespace
 	// tolerance but String.trim() strips it (matches the pre-refactor guard).
 	return tryParseSgMatches(result.stdout.trim());
+}
+
+/**
+ * Fold the scan child's working directory back onto the match paths (#5545).
+ * The scan path is spelled relative to the anchored directory (see the
+ * `sgScanAnchor` method), so what the CLI prints is relative to it, while
+ * `matchedFilePath`, the replace root guard and the mutation bridge all consume
+ * absolute paths.
+ */
+function sgMatchesAtScanRoot(matches: SgMatch[], scanCwd: string): SgMatch[] {
+	return matches.map((match) => ({
+		...match,
+		file: path.resolve(scanCwd, match.file),
+	}));
 }
 
 export class SgRunner {
@@ -942,9 +1000,53 @@ export class SgRunner {
 		}
 	}
 
+	/** The scan anchor for one `dir` argument; see {@link SgScanAnchor}. */
+	private sgScanAnchor(dir: string): SgScanAnchor {
+		const absolute = path.resolve(dir);
+		// A missing path is not a directory: it anchors at its parent, and the walk
+		// below moves that up to the nearest directory that exists (#5545).
+		const isDirectory =
+			fs.existsSync(absolute) && fs.statSync(absolute).isDirectory();
+		let treeRoot = isDirectory ? absolute : path.dirname(absolute);
+		if (!fs.existsSync(treeRoot)) {
+			treeRoot =
+				[...walkUpDirs(treeRoot)].find((dir) => fs.existsSync(dir)) ?? treeRoot;
+		}
+		const isolationCwd = this.sgSpawnOptions?.cwd;
+		if (isolationCwd !== undefined) {
+			// This tier cannot be anchored, so a tree with no repository marker keeps
+			// its project globs, which then match from the isolation cwd. Under an
+			// ancestor named like one of the tree's ignored directories they exclude
+			// the whole tree and the answer is `[]`: the price of keeping the globs
+			// (#5545 N1). A worktree lane always has a `.git` file, so it never gets here.
+			return {
+				cwd: isolationCwd,
+				scanArg: absolute,
+				excludeArgs: findNearestContaining(treeRoot, [".git"])
+					? []
+					: sgExcludeArgsForProject(absolute),
+			};
+		}
+		// The scan path is spelled RELATIVE to that directory, because a CLI that
+		// matches a `--globs` pattern against the path as the caller wrote it
+		// (ast-grep 0.20.x, the shape a PATH `ast-grep` on a dev box has) over-
+		// excludes the same way a child started above the tree does. Relative to
+		// the scan root both CLI generations see the same candidate path, and
+		// match paths come back relative to it, folded back below.
+		// Both sides are absolute and `treeRoot` derives from `absolute`, so
+		// `path.relative` cannot fail here; a guard would only hide a bad anchor.
+		const relative = path.relative(treeRoot, absolute) || ".";
+		return {
+			cwd: treeRoot,
+			scanArg: relative,
+			excludeArgs: sgExcludeArgsForProject(absolute),
+		};
+	}
+
 	private interpretScanResult(
 		result: SpawnResult,
 		args: string[],
+		scanCwd: string,
 	): SgScanResult {
 		// FIRST (#2100): same reason as `exec` above — the cap kill is our own
 		// SIGTERM, so `failureForSpawnResult` answers "cli-failure" for it and
@@ -978,7 +1080,10 @@ export class SgRunner {
 			if (result.status === 1 && stdout) {
 				const matches = tryParseNonZeroSgMatches(result);
 				if (matches) {
-					return { matches, status: result.status };
+					return {
+						matches: sgMatchesAtScanRoot(matches, scanCwd),
+						status: result.status,
+					};
 				}
 			}
 			// Preserve ast-grep's status-1/no-output no-match convention. A
@@ -1000,7 +1105,10 @@ export class SgRunner {
 		{
 			const matches = tryParseSgMatches(result.stdout);
 			if (matches) {
-				return { matches, status: result.status };
+				return {
+					matches: sgMatchesAtScanRoot(matches, scanCwd),
+					status: result.status,
+				};
 			}
 			return {
 				matches: [],
@@ -1022,6 +1130,7 @@ export class SgRunner {
 		try {
 			({ sessionDir } = this.prepareTempScan(ruleId, ruleYaml));
 			const configFile = path.join(sessionDir, ".sgconfig.yml");
+			const anchor = this.sgScanAnchor(dir);
 			const result = await this.spawnResolved(
 				this.getSgCommand(),
 				[
@@ -1029,17 +1138,18 @@ export class SgRunner {
 					"--config",
 					configFile,
 					"--json",
-					...sgExcludeArgsForProject(dir),
-					dir,
+					...anchor.excludeArgs,
+					anchor.scanArg,
 				],
 				{
 					timeout,
 					deadlineAt: options.deadlineAt,
 					signal: options.signal,
 					maxOutputBytes: MAX_SG_OUTPUT_BYTES,
+					cwd: anchor.cwd,
 				},
 			);
-			return this.interpretScanResult(result, ["scan"]);
+			return this.interpretScanResult(result, ["scan"], anchor.cwd);
 		} finally {
 			if (sessionDir) this.cleanupTempScan(sessionDir);
 		}
@@ -1088,19 +1198,21 @@ export class SgRunner {
 			({ sessionDir } = this.prepareTempScan(ruleId, ruleYaml));
 			const configFile = path.join(sessionDir, ".sgconfig.yml");
 			const command = this.getSgCommand();
+			const anchor = this.sgScanAnchor(dir);
 			const scanArgs = [
 				"scan",
 				"--config",
 				configFile,
 				"--json",
-				...sgExcludeArgsForProject(dir),
-				dir,
+				...anchor.excludeArgs,
+				anchor.scanArg,
 			];
 			const spawnOptions = {
 				timeout,
 				deadlineAt: options.deadlineAt,
 				signal: options.signal,
 				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
+				cwd: anchor.cwd,
 			};
 			if (!applyFixes) {
 				const result = await this.spawnResolved(
@@ -1108,7 +1220,7 @@ export class SgRunner {
 					scanArgs,
 					spawnOptions,
 				);
-				const scan = this.interpretScanResult(result, ["scan"]);
+				const scan = this.interpretScanResult(result, ["scan"], anchor.cwd);
 				return scan.failure || scan.error
 					? {
 							matches: [],
@@ -1125,7 +1237,7 @@ export class SgRunner {
 				scanArgs,
 				spawnOptions,
 			);
-			const scan = this.interpretScanResult(jsonResult, ["scan"]);
+			const scan = this.interpretScanResult(jsonResult, ["scan"], anchor.cwd);
 			if (scan.failure || scan.error) {
 				return {
 					matches: [],
@@ -1146,8 +1258,8 @@ export class SgRunner {
 					"--config",
 					configFile,
 					"--update-all",
-					...sgExcludeArgsForProject(dir),
-					dir,
+					...anchor.excludeArgs,
+					anchor.scanArg,
 				],
 				{ ...spawnOptions, signal: undefined, ignoreAmbientSignal: true },
 			);
