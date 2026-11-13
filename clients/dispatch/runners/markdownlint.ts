@@ -145,9 +145,10 @@ const markdownlintRunner: RunnerDefinition = {
 		// spawn cwd is the project, so the argument is the project-relative path,
 		// actionlint's form (clients/dispatch/runners/actionlint.ts); a dispatched
 		// file outside the project keeps today's absolute form, as it has no
-		// project-relative spelling. The builder also `./`-prefixes a root-level name
-		// cli2 reads as a glob modifier (#5544 round 2) and is shared with the autofix
-		// surface, so the two cannot drift.
+		// project-relative spelling. The builder also `./`-prefixes a relative name
+		// whose first character is outside a known-safe class, so cli2 cannot read it
+		// as a modifier (#5544 rounds 2-3), and is shared with the autofix surface,
+		// so the two cannot drift.
 		const args = [...configArgs, markdownlintTargetArg(cwd, ctx.filePath)];
 		// #5119: cli2's own `fix` option cannot be turned off from the CLI, and a
 		// project `"fix": true` rewrote the file on a diagnostics pass. Lint

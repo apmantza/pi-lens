@@ -177,9 +177,18 @@ describe("markdownlint runner — fixable metadata", () => {
 
 	// #5544 round 2: a root-level name that starts with `#` or `!` is cli2's own
 	// ignore/negation glob syntax, so the bare relative target selected nothing and
-	// the run answered a clean file. This argv pin runs on every host, where the
-	// real-spawn case in ignore-glob-relative-argv-real.test.ts needs the binary.
-	it.each(["#a.md", "!a.md"])(
+	// the run answered a clean file. Round 3: `:` is cli2's literal-file modifier,
+	// so `:a.md` linted (and `--fix` rewrote) a sibling `a.md`. The prefix now
+	// fails closed: `-a.md` and `~a.md` stand for the spellings nobody listed, and
+	// get `./` because their first character is outside the known-safe class.
+	// This argv pin runs on every host, where the real-spawn case in
+	// ignore-glob-relative-argv-real.test.ts needs the binary. `:` is not a legal
+	// Windows file-name character, so that cell runs on POSIX only.
+	it.each(
+		["#a.md", "!a.md", ":a.md", "-a.md", "~a.md"].filter(
+			(name) => process.platform !== "win32" || !name.includes(":"),
+		),
+	)(
 		"prefixes a root-level %s target so cli2 reads it as a path",
 		async (name) => {
 			const env = setupTestEnvironment("pi-lens-markdownlint-modifier-name-");

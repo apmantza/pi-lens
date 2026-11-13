@@ -2068,17 +2068,21 @@ export function markdownlintConfigArgs(cwd: string): string[] {
  * (#5544). cli2 matches its `ignores` globs against the string it is handed, so
  * both surfaces name the file relative to the dispatch cwd (an absolute path in
  * a lane under `.claude/` matched a glob naming its own ancestor and answered a
- * clean file for lint, and `Linting: 0 files / 0 fixes` for `--fix`); a file the
- * project does
- * not hold keeps the absolute path, because a `../` climb would move config
- * discovery too. A root-level name that cli2's glob parser reads as a modifier
- * (`#` ignore, `!` negation) gets a `./` prefix: the bare name selected nothing
- * and exited 0, so the run reported a silent clean; a nested path never reaches
- * that parser state, so only the root-level name is prefixed.
+ * clean file for lint, and `Linting: 0 files / 0 fixes` for `--fix`). A file
+ * the project does not hold keeps the absolute path, because a `../` climb would
+ * move config discovery too, and that path is never prefixed: `.//x/a.md` names
+ * `x/a.md` under the cwd, a different file.
+ * cli2 reads the FIRST character of each argument as syntax: `#` ignore, `!`
+ * negation, `:` literal file (`:a.md` opened a sibling `a.md`), `\` escape, `-`
+ * stdin or option. So the relative target stays bare only when it starts with a
+ * known-safe character (letter, digit, `_`, `.`), and every other first
+ * character gets a `./` prefix, which selects the same file through the same
+ * ignores (#5544 round 3: the enumerated `#`/`!` list missed `:`).
  */
 export function markdownlintTargetArg(cwd: string, filePath: string): string {
-	const target = relativeInside(cwd, filePath) ?? filePath;
-	return /^[#!]/.test(target) ? `./${target}` : target;
+	const relative = relativeInside(cwd, filePath);
+	if (relative === undefined) return filePath;
+	return /^[A-Za-z0-9_.]/.test(relative) ? relative : `./${relative}`;
 }
 
 /**

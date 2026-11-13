@@ -223,6 +223,9 @@ describe.each(RUNNERS)(
  * - markdownlint-cli2 reads a leading `#`/`!` as an ignore/negation glob, so
  *   `#a.md` selected nothing (`Linting: 0 files`), exited 0, and the runner
  *   reported a silent clean; `./#a.md` lints it.
+ * - markdownlint-cli2 reads a leading `:` as a literal-file modifier, so `:a.md`
+ *   opened `a.md`: a missing sibling made the run a skipped one, and a present
+ *   sibling's findings were reported against `:a.md`; `./:a.md` lints the file.
  * - yamllint reads a leading `-` as an option: `yamllint -f parsable -a.yml`
  *   answers `one of the arguments FILE_OR_DIR - is required` and exits 2, while
  *   `yamllint -f parsable -- -a.yml` lints it. That one is visible (the runner
@@ -273,6 +276,25 @@ const LEADING_NAME_CASES = [
 				makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
 			),
 	},
+	// `:` is not a legal Windows file-name character, so this cell is POSIX only.
+	...(process.platform === "win32"
+		? []
+		: [
+				{
+					runnerId: "markdownlint",
+					binary: "markdownlint-cli2",
+					name: ":a.md",
+					sibling: "plain.md",
+					content: "# Title\n\n\ntext\n",
+					expectedRules: ["MD012"],
+					expectedTarget: "./:a.md",
+					separator: undefined,
+					run: (filePath: string, project: string) =>
+						markdownlintRunner.run(
+							makeRunnerCtx(filePath, project, { kind: "markdown" }) as never,
+						),
+				},
+			]),
 ];
 
 describe.each(LEADING_NAME_CASES)(
