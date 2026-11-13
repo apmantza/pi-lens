@@ -89,16 +89,22 @@ describe("seedFromCapture", () => {
 			);
 		const answered = new Set(["shellcheck", "tree-sitter"]);
 
-		it("classifies a dispatch that read the whole file", () => {
-			const { preExisting, nextSeed } = classifyPreExisting(
-				seeded(["tree-sitter"]),
-				[finding(1, "tree-sitter")],
-				content,
-				answered,
-			);
-			expect(preExisting.map((d) => d.runnerId)).toEqual(["tree-sitter"]);
-			expect(nextSeed).toHaveLength(1);
-		});
+		// No span and an empty one both mean the whole file
+		// (`spanOverlapsModifiedRanges`).
+		it.each([undefined, []])(
+			"classifies a dispatch that read the whole file (span %j)",
+			(span) => {
+				const { preExisting, nextSeed } = classifyPreExisting(
+					seeded(["tree-sitter"]),
+					[finding(1, "tree-sitter")],
+					content,
+					answered,
+					span,
+				);
+				expect(preExisting.map((d) => d.runnerId)).toEqual(["tree-sitter"]);
+				expect(nextSeed).toHaveLength(1);
+			},
+		);
 
 		// A write's span is the whole file: the lane reports every finding.
 		it("classifies a dispatch whose span covers every line", () => {
