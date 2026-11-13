@@ -107,6 +107,10 @@ import { testSourceFiles as allTestSourceFiles } from "../support/module-instanc
 import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedRegistry } from "../support/sweep-kit.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -1192,6 +1196,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the claim is what a CHILD process sees of the worker's environment, the inheritance the #4780 opengrep writes into the real home depended on; an in-process read of process.env proves the worker, not the child, and the probe child only prints its environment",
 	},
+	// 2026-11-13 (#5072): the baseline census takes its population from git's
+	// tracked list, which only a real git answers.
+	"real-process-spawn:config/baseline-owner-governance.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the census population is git's own tracked list (dot-files and every extension included), which only a real git ls-files child answers; a hand-built list would restate the population the census is meant to find",
+	},
 	"real-process-spawn:config/gitignore-tracked-shadow.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2071,6 +2082,15 @@ interface RatchetProblem {
 	after: number;
 }
 
+/** One `detector:file` key per row of a per-detector table (#5072). */
+function detectorRows(
+	table: Partial<Record<DetectorName, Readonly<Record<string, number>>>>,
+): string[] {
+	return DETECTOR_NAMES.flatMap((detector) =>
+		Object.keys(table[detector] ?? {}).map((file) => `${detector}:${file}`),
+	);
+}
+
 /**
  * Compare today's live counts against the pinned baseline for one detector.
  * Three directions are problems: a file the baseline has never seen, an
@@ -2196,17 +2216,64 @@ describe("flake-shape ratchet (#2547)", () => {
 			// not a failure above, but a baseline entry for a file the scan no
 			// longer touches AT ALL is dead weight worth flagging here, same as
 			// `auditRegistry`'s stale-exemption check one layer up.
-			const stale: string[] = [];
-			for (const detector of DETECTOR_NAMES) {
-				const live = await countsByDetector(detector);
-				for (const file of Object.keys(FLAKE_SHAPE_BASELINE[detector] ?? {})) {
-					if (!(file in live)) stale.push(`${detector}:${file}`);
-				}
-			}
-			expect(stale).toEqual([]);
+			const live: Partial<
+				Record<DetectorName, Readonly<Record<string, number>>>
+			> = {};
+			for (const detector of DETECTOR_NAMES)
+				live[detector] = await countsByDetector(detector);
+			expect(
+				rowsWithoutLiveMember(
+					detectorRows(FLAKE_SHAPE_BASELINE),
+					new Set(detectorRows(live)),
+				),
+			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
+
+	it("reds a planted baseline row the live scan never touches (#5072)", () => {
+		// The dead-weight direction on a row this cell invents, over an empty live
+		// population: the scan touches nothing, so the row has to report itself.
+		const planted = "tests/clients/5072-gone-shape.test.ts";
+		const noLive: Partial<
+			Record<DetectorName, Readonly<Record<string, number>>>
+		> = {};
+		for (const detector of DETECTOR_NAMES) noLive[detector] = {};
+		const plantedBaseline = Object.fromEntries(
+			DETECTOR_NAMES.map((detector) => [
+				detector,
+				detector === "raw-timer-wait" ? { [planted]: 1 } : {},
+			]),
+		) as Baseline;
+		const stale = rowsWithoutLiveMember(
+			detectorRows(plantedBaseline),
+			new Set(detectorRows(noLive)),
+		);
+		expect(stale).toEqual([`raw-timer-wait:${planted}`]);
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline.json",
+			rowKey: planted,
+			verdict: stale,
+		});
+	});
+
+	it("reds a frozen mint whose bytes are not the pinned ones (#5072)", () => {
+		// The mint is digest-pinned, so its row identity is its content hash: a
+		// planted row changes the hash, and the digest verdict has to name the
+		// hash of the planted content, not only the file.
+		const drifted = JSON.stringify({
+			...FROZEN_BASELINE,
+			"raw-timer-wait": {
+				...FROZEN_BASELINE["raw-timer-wait"],
+				"tests/clients/5072-drift-row.test.ts": 1,
+			},
+		});
+		expectPlantedStaleRow({
+			baseline: "tests/support/flake-shape-baseline-frozen.json",
+			rowKey: createHash("sha256").update(drifted).digest("hex"),
+			verdict: frozenDigestProblems(drifted),
+		});
+	});
 
 	it("carries the three counts in this header (informational, kept in sync)", () => {
 		// Not asserted against a hardcoded number — this test's job is only to

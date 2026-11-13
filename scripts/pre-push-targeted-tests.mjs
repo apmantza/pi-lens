@@ -247,6 +247,10 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// identity writes (its own walkFiles helper), so it is registered in both
 	// lists, as the #4590 rule requires for a both-tree scanner.
 	"tests/config/git-fixture-governance.test.ts",
+	// #5072: takes every tracked path (`git ls-files`) for baseline ledgers in
+	// clients/, scripts/ AND tests/, and their owner tests and cells, so it is
+	// a both-tree scanner registered in both lists.
+	"tests/config/baseline-owner-governance.test.ts",
 	// #4946: walks clients/, tools/, mcp/ and index.ts for flag names the code
 	// reads, against the flag registry; a production change arms it.
 	"tests/config/flag-read-registry-sweep.test.ts",
@@ -304,6 +308,9 @@ export const TEST_TREE_GOVERNANCE_TESTS = [
 	// #4104 F4 fold: the both-tree scanner (tests/ and scripts/), armed by a
 	// tests/ change here as well as by a production change above.
 	"tests/config/git-fixture-governance.test.ts",
+	// #5072: the tests/ half of the baseline census; its production half is the
+	// same file, registered in TREE_SCANNING_GOVERNANCE_TESTS above.
+	"tests/config/baseline-owner-governance.test.ts",
 	// #4789: walks tests/ for files that read the real home outside the named
 	// opt-out registry.
 	"tests/config/real-home-reader-registry.test.ts",
