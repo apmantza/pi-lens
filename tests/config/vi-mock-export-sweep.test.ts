@@ -1556,7 +1556,6 @@ describe("#2281 whole-module vi.mock export ratchet", () => {
 		expectPlantedStaleRow({
 			baseline: "tests/support/vi-mock-export-baseline.json",
 			rowKey: planted,
-			direction: "extra-row",
 			verdict: stale,
 		});
 	});

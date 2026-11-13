@@ -5,25 +5,22 @@ import * as path from "node:path";
 import {
 	expectPlantedStaleRow,
 	plantedStaleRowRegistrations,
+	rowsWithoutLiveMember,
 } from "./baseline-staleness.js";
 
 /**
  * Direct tests of the seam every planted-stale-row cell drives (#5072).
  *
- * The cells are the coverage of the baselines; this file is the coverage of the
- * seam itself. It matters because a seam that stops throwing turns every cell in
- * the repository into a comment: the governance check reads the CALL, so only
- * these assertions prove the call means anything. Each case drives the real
- * function against a real ledger file on disk — the committed bytes the seam
- * reads are the same bytes the owner ratchet reads — and asserts the throw's
- * message, not only that it threw.
+ * A seam that stops throwing turns every cell in the repository into a
+ * comment: the census reads the CALL, so only these assertions prove the call
+ * means anything. Each case drives the real function against a ledger file on
+ * disk and asserts the throw's message, not only that it threw.
  */
 
 let dir: string;
-const ledgerPath = (name: string): string => path.join(dir, name);
 
 function writeLedger(name: string, content: string): string {
-	const target = ledgerPath(name);
+	const target = path.join(dir, name);
 	fs.writeFileSync(target, content, "utf-8");
 	return target;
 }
@@ -38,212 +35,150 @@ afterAll(() => {
 
 describe("expectPlantedStaleRow (#5072)", () => {
 	it("keeps a planted row the committed ledger does not carry and the verdict names", () => {
-		const ledger = writeLedger(
-			"rows.json",
-			JSON.stringify({ "tests/live.test.ts": 1 }),
-		);
+		const ledger = writeLedger("rows.json", '{"tests/live.test.ts": 1}');
 		expect(() =>
 			expectPlantedStaleRow({
 				baseline: ledger,
 				rowKey: "tests/planted.test.ts",
-				direction: "extra-row",
 				verdict: ["tests/planted.test.ts: no live member"],
 			}),
 		).not.toThrow();
 	});
 
-	it("rejects a plant that leaves the ratchet green", () => {
-		const ledger = writeLedger(
-			"green.json",
-			JSON.stringify({ "tests/live.test.ts": 1 }),
-		);
+	it("rejects a plant that leaves the ratchet green, or a blank row", () => {
+		const ledger = writeLedger("green.json", '{"tests/live.test.ts": 1}');
 		expect(() =>
 			expectPlantedStaleRow({
 				baseline: ledger,
 				rowKey: "tests/planted.test.ts",
-				direction: "extra-row",
-				verdict: [],
+				verdict: ["", undefined],
 			}),
 		).toThrow(/returned no verdict/);
+		expect(() =>
+			expectPlantedStaleRow({ baseline: ledger, rowKey: " ", verdict: ["x"] }),
+		).toThrow(/names no row/);
 	});
 
-	it("rejects a verdict that never names the planted row", () => {
-		const ledger = writeLedger(
-			"other.json",
-			JSON.stringify({ "tests/live.test.ts": 1 }),
-		);
+	it("rejects a verdict that names the planted row only inside a longer identity", () => {
+		// Recurrence (#5546 B3): a substring check accepted a verdict about
+		// `tests/x.test.tsx` as naming the planted `tests/x.test.ts`.
+		const ledger = writeLedger("other.json", '{"tests/live.test.ts": 1}');
 		expect(() =>
 			expectPlantedStaleRow({
 				baseline: ledger,
-				rowKey: "tests/planted.test.ts",
-				direction: "extra-row",
-				// Something red, but about a different row: an unrelated failure would
-				// certify a plant that never entered the corpus.
-				verdict: ["tests/live.test.ts: count drifted from 1 to 2"],
+				rowKey: "tests/x.test.ts",
+				verdict: ["tests/x.test.tsx: count drifted from 1 to 2"],
 			}),
 		).toThrow(/no verdict line names/);
 	});
 
-	it("rejects an extra-row plant whose row the committed ledger already lists", () => {
+	it("reads the committed rows parsed, so an escaped or a longer row is told apart", () => {
+		// Recurrence (#5546 F7): the raw-text check missed a JSON-escaped row the
+		// ledger really carried, and called a row committed because a longer one
+		// contained it.
 		const ledger = writeLedger(
-			"member.json",
-			JSON.stringify({ "tests/real.test.ts": 1 }),
+			"escaped.json",
+			'// header\n[{"file": "tests/x.test.tsx", "title": "\\"c\\""}]',
 		);
 		expect(() =>
 			expectPlantedStaleRow({
 				baseline: ledger,
-				rowKey: "tests/real.test.ts",
-				direction: "extra-row",
-				verdict: ["tests/real.test.ts"],
+				rowKey: '"c"',
+				verdict: ['tests/x.test.tsx: "c"'],
 			}),
 		).toThrow(/already carries/);
-	});
-
-	it("rejects a withheld-member plant the committed ledger does not hold", () => {
-		const ledger = writeLedger("withheld.json", JSON.stringify({ a: 1 }));
 		expect(() =>
 			expectPlantedStaleRow({
 				baseline: ledger,
-				rowKey: "tests/absent.test.ts",
-				direction: "withheld-member",
-				verdict: ["tests/absent.test.ts: the run no longer reports it"],
-			}),
-		).toThrow(/not a row of the committed ledger/);
-	});
-
-	it("keeps a withheld-member plant the ledger does hold", () => {
-		const ledger = writeLedger(
-			"held.json",
-			JSON.stringify({ "tests/gone.test.ts": 1 }),
-		);
-		expect(() =>
-			expectPlantedStaleRow({
-				baseline: ledger,
-				rowKey: "tests/gone.test.ts",
-				direction: "withheld-member",
-				verdict: ["tests/gone.test.ts: no live member"],
+				rowKey: "tests/x.test.ts",
+				verdict: ["tests/x.test.ts: no live member"],
 			}),
 		).not.toThrow();
 	});
 
-	it("reads a row of a TypeScript table, and a member of an export list", () => {
+	it("reads the rows of the named table only, following an alias, and never a comment", () => {
 		const table = writeLedger(
 			"table.ts",
-			'export const TABLE = {\n\t"live.ts": 1,\n};\nexport const OTHER = {\n\t"other.ts": 1,\n};\n',
+			[
+				'const ROWS = { "live.ts": 1 };',
+				"export const TABLE: Record<string, number> = ROWS;",
+				'export const OTHER = { "other.ts": 1 };',
+				'// "commented.ts" was retired here',
+				"",
+			].join("\n"),
 		);
-		// A row of the named table is a member; a row of the sibling export is not,
-		// which is what stops a plant being certified against any text in the file.
-		expect(() =>
+		const plant = (rowKey: string) => () =>
 			expectPlantedStaleRow({
 				baseline: `${table}#TABLE`,
-				rowKey: "live.ts",
-				direction: "withheld-member",
-				verdict: ["live.ts"],
-			}),
-		).not.toThrow();
+				rowKey,
+				verdict: [`${rowKey}: no live member`],
+			});
+		expect(plant("live.ts")).toThrow(/already carries/);
+		expect(plant("other.ts")).not.toThrow();
+		expect(plant("commented.ts")).not.toThrow();
 		expect(() =>
 			expectPlantedStaleRow({
-				baseline: `${table}#TABLE`,
-				rowKey: "other.ts",
-				direction: "extra-row",
-				verdict: ["other.ts"],
-			}),
-		).not.toThrow();
-		expect(() =>
-			expectPlantedStaleRow({
-				baseline: `${table}#TABLE`,
-				rowKey: "other.ts",
-				direction: "withheld-member",
-				verdict: ["other.ts"],
-			}),
-		).toThrow(/not a row of the committed ledger/);
-
-		const list = writeLedger(
-			"list.ts",
-			'export const NAMES = ["one.ts", "two.ts"];\n',
-		);
-		expect(() =>
-			expectPlantedStaleRow({
-				baseline: `${list}#NAMES`,
-				rowKey: "one.ts",
-				direction: "withheld-member",
-				verdict: ["one.ts"],
-			}),
-		).not.toThrow();
-	});
-
-	it("treats a row that lives only in a comment as absent", () => {
-		// The ledger is a table and the row appears only in prose: a plant keyed on
-		// a sentence would certify itself against text no scan reads.
-		const ledger = writeLedger(
-			"prose.ts",
-			'export const TABLE = {\n\t"live.ts": 1,\n};\n// "tests/commented.ts" was retired here\n',
-		);
-		expect(() =>
-			expectPlantedStaleRow({
-				baseline: `${ledger}#TABLE`,
-				rowKey: "tests/commented.ts",
-				direction: "withheld-member",
-				verdict: ["tests/commented.ts"],
-			}),
-		).toThrow(/not a row of the committed ledger/);
-	});
-
-	it("reports the ledger file it could not read rather than passing", () => {
-		expect(() =>
-			expectPlantedStaleRow({
-				baseline: ledgerPath("missing.json"),
+				baseline: `${table}#MISSING`,
 				rowKey: "x",
-				direction: "extra-row",
+				verdict: ["x"],
+			}),
+		).toThrow(/declares no MISSING/);
+	});
+
+	it("reports a ledger it cannot read rather than passing", () => {
+		expect(() =>
+			expectPlantedStaleRow({
+				baseline: path.join(dir, "missing.json"),
+				rowKey: "x",
 				verdict: ["x"],
 			}),
 		).toThrow(/not in the tree/);
+		const notJson = writeLedger("rows.csv", "file\ntests/a.test.ts\n");
+		expect(() =>
+			expectPlantedStaleRow({ baseline: notJson, rowKey: "x", verdict: ["x"] }),
+		).toThrow(/not a JSON document/);
+	});
+});
+
+describe("rowsWithoutLiveMember (#5072)", () => {
+	it("returns the rows no live member produces, in code-unit order", () => {
+		expect(
+			rowsWithoutLiveMember(["b", "a", "B", "live"], new Set(["live"])),
+		).toEqual(["B", "a", "b"]);
 	});
 });
 
 describe("plantedStaleRowRegistrations (#5072)", () => {
-	it("reads the literals of a call and skips one inside a comment", () => {
+	it("reads a call's baseline literal and rowKey, and skips a call in a comment or a string", () => {
 		const source = [
 			'it("plants a row", () => {',
 			"  expectPlantedStaleRow({",
 			'    baseline: "a/b.json",',
-			'    rowKey: "x",',
-			'    direction: "extra-row",',
+			"    rowKey,",
 			"    verdict: [],",
 			"  });",
 			"});",
-			'// expectPlantedStaleRow({ baseline: "c/d.json", rowKey: "x", direction: "extra-row" })',
+			'// expectPlantedStaleRow({ baseline: "c/d.json", rowKey: "x" })',
+			'const s = "expectPlantedStaleRow({ baseline: \\"e/f.json\\", rowKey: 1 })";',
 			"",
 		].join("\n");
-		const registrations = plantedStaleRowRegistrations(source);
-		expect(registrations).toHaveLength(1);
-		expect(registrations[0]).toMatchObject({
-			baseline: "a/b.json",
-			hasRowKey: true,
-			direction: "extra-row",
-		});
+		expect(plantedStaleRowRegistrations(source)).toMatchObject([
+			{ baseline: "a/b.json", hasRowKey: true, line: 2 },
+		]);
 	});
 
-	it("reports a rowKey written as an expression as present without a value", () => {
+	it("reads properties only inside the call's own parentheses", () => {
+		// Recurrence (#5546 B7): a fixed window credited a later object's
+		// literals to a call whose claim was a variable.
 		const source = [
-			"const planted = computeName();",
-			'it("plants", () => {',
-			"  expectPlantedStaleRow({",
-			'    baseline: "a/b.json",',
-			"    rowKey: planted,",
-			'    direction: "withheld-member",',
-			"    verdict: [],",
-			"  });",
-			"});",
+			"expectPlantedStaleRow(claim);",
+			'const other = { baseline: "a/b.json", rowKey: "x" };',
+			'expectPlantedStaleRow({ baseline: name, rowKey: "x" });',
 			"",
 		].join("\n");
-		expect(plantedStaleRowRegistrations(source)).toEqual([
-			{
-				baseline: "a/b.json",
-				hasRowKey: true,
-				direction: "withheld-member",
-				line: 3,
-			},
+		expect(plantedStaleRowRegistrations(source)).toMatchObject([
+			{ baseline: undefined, hasRowKey: false },
+			{ baseline: undefined, hasRowKey: true },
 		]);
 	});
 });

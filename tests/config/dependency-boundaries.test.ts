@@ -4,6 +4,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
@@ -120,10 +124,19 @@ describe("dependency boundary governance", () => {
 				"utf8",
 			),
 		) as Array<{ from: string; to: string; rule: { name: string } }>;
-		const stale = known
-			.map((v) => `${v.rule.name}: ${v.from} -> ${v.to}`)
-			.filter((key) => !live.has(key));
-		expect(stale).toEqual([]);
+		const rows = known.map((v) => `${v.rule.name}: ${v.from} -> ${v.to}`);
+		expect(rowsWithoutLiveMember(rows, live)).toEqual([]);
+		// #5072: a planted row for a cycle the cruise never reports reds through
+		// the same comparison.
+		const planted = "clients/5072-gone-cycle.js";
+		expectPlantedStaleRow({
+			baseline: ".dependency-cruiser-known-violations.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember(
+				[...rows, `no-client-cycles: ${planted} -> clients/file-utils.js`],
+				live,
+			),
+		});
 	}, 60_000);
 
 	it("keeps the configured boundary rules present", () => {
@@ -162,7 +175,21 @@ describe("dependency boundary governance", () => {
 			),
 		) as string[];
 
-		expect(eagerAllowlist).toEqual(resolvedStaticImports);
+		// Both directions: a listed module index.ts no longer imports eagerly,
+		// and an eager import the allowlist does not list.
+		const imported = new Set(resolvedStaticImports);
+		expect(rowsWithoutLiveMember(eagerAllowlist, imported)).toEqual([]);
+		expect(
+			rowsWithoutLiveMember(resolvedStaticImports, new Set(eagerAllowlist)),
+		).toEqual([]);
+		// #5072: a planted row for a module index.ts never imports reds through
+		// the same comparison.
+		const planted = "./clients/5072-gone-eager.js";
+		expectPlantedStaleRow({
+			baseline: "config/dependency-cruiser-eager-allowlist.json",
+			rowKey: planted,
+			verdict: rowsWithoutLiveMember([...eagerAllowlist, planted], imported),
+		});
 	}, 30_000);
 
 	it("pins the reviewed static-cycle baseline size", () => {

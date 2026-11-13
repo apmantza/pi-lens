@@ -813,6 +813,9 @@ export const wallClockBudgetInclude = [
 	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved
 	// `**` chain), so a fake clock measures nothing.
 	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
+	// #5072: the baseline census reads its population from a real `git ls-files`
+	// child, so dot-files and every extension are in it (flake-shape admission).
+	"tests/config/baseline-owner-governance.test.ts",
 	"tests/config/gitignore-tracked-shadow.test.ts",
 	// #3926: the real `Record Windows Vitest outcome` bash block is executed at
 	// its true process boundary under GitHub's bash flags (a fixture Node

@@ -108,12 +108,11 @@ import {
 	relativePosix,
 } from "../support/sweep-kit.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
-
 import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 
 const ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const TESTS_DIR = path.join(ROOT, "tests");
-
+/** #4967: the admitted members outside `tests/config`, one row per identity. */
 const BASELINE_PATH = path.join(
 	ROOT,
 	"tests",
@@ -2066,8 +2065,7 @@ describe("tree census timeout (#4828)", () => {
 		// no committed ledger, and the verdict names it.
 		expectPlantedStaleRow({
 			baseline: "tests/config/tree-census-timeout.baseline.json",
-			rowKey: KEY,
-			direction: "extra-row",
+			rowKey: ROW.file,
 			verdict: gone,
 		});
 	});

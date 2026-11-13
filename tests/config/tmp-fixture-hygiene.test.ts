@@ -1422,7 +1422,6 @@ describe("tmp-fixture-hygiene", () => {
 		expectPlantedStaleRow({
 			baseline: "tests/config/tmp-fixture-hygiene-baseline.json",
 			rowKey: String(planted.prefix),
-			direction: "extra-row",
 			verdict: stale ?? "",
 		});
 		// The rule is not vacuously red: the owner of a checked-in row still

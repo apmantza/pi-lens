@@ -134,7 +134,6 @@ describe("TypeScript strictness spike ratchets", () => {
 		expectPlantedStaleRow({
 			baseline: "tests/config/strictness-baseline.json",
 			rowKey: planted,
-			direction: "extra-row",
 			verdict: stale,
 		});
 	});

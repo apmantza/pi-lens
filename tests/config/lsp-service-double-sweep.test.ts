@@ -441,7 +441,6 @@ describe("#2582 live-vs-pin ratchet — the four directions", () => {
 		expectPlantedStaleRow({
 			baseline: "tests/support/lsp-double-baseline.json",
 			rowKey: planted,
-			direction: "extra-row",
 			verdict: stale,
 		});
 	});

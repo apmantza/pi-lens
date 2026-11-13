@@ -76,7 +76,10 @@ import {
 } from "../support/sweep-kit.js";
 import { TEST_SERVER_TEARDOWN_ADMISSIONS } from "../support/test-server-teardown-admissions.js";
 import { TEST_SERVER_TEARDOWN_BASELINE } from "../support/test-server-teardown-baseline.js";
-import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 import {
 	escapeRowKey,
 	findUnclosedServerStarts,
@@ -135,15 +138,6 @@ function sweepOnce(): ServerTeardownFinding[] {
 	assertNonEmptyScan("#4589 server-teardown sweep", files.length, 1500);
 	sweepPromise = detectAcrossFiles(files);
 	return sweepPromise;
-}
-
-/** Baseline rows the live tree no longer reports, so the list only shrinks. */
-function staleBaselineRows(
-	findings: readonly ServerTeardownFinding[],
-	baseline: ReadonlySet<string>,
-): string[] {
-	const live = new Set(findings.map(serverTeardownKey));
-	return [...baseline].filter((entry) => !live.has(entry)).sort();
 }
 
 /**
@@ -1028,12 +1022,15 @@ describe("#4589 server-teardown detector — the shapes that must red and green"
 			].join("\n"),
 		);
 		expect(
-			staleBaselineRows(live, new Set(["tests/config/case.test.ts:server"])),
+			rowsWithoutLiveMember(
+				new Set(["tests/config/case.test.ts:server"]),
+				new Set(live.map(serverTeardownKey)),
+			),
 		).toEqual([]);
 		const plantedRow = "tests/config/gone.test.ts:server";
-		const stale = staleBaselineRows(
-			live,
+		const stale = rowsWithoutLiveMember(
 			new Set(["tests/config/case.test.ts:server", plantedRow]),
+			new Set(live.map(serverTeardownKey)),
 		);
 		expect(stale).toEqual([plantedRow]);
 		// The registration for this ratchet's ledger (#5072): a row no live tree
@@ -1042,7 +1039,6 @@ describe("#4589 server-teardown detector — the shapes that must red and green"
 			baseline:
 				"tests/support/test-server-teardown-baseline.ts#TEST_SERVER_TEARDOWN_BASELINE",
 			rowKey: plantedRow,
-			direction: "extra-row",
 			verdict: stale,
 		});
 	});
@@ -1069,7 +1065,12 @@ describe("#4589 server-teardown ratchet", () => {
 		() => {
 			// The shrink-only direction: closing a server anywhere makes its row
 			// stale, and a stale row reds until it is deleted.
-			expect(staleBaselineRows(sweepOnce(), BASELINE)).toEqual([]);
+			expect(
+				rowsWithoutLiveMember(
+					BASELINE,
+					new Set(sweepOnce().map(serverTeardownKey)),
+				),
+			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);

@@ -2001,7 +2001,6 @@ describe("spawn sites outside the dispatch runners (#5308)", () => {
 			baseline:
 				"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts#OUT_OF_TREE_SPAWN_BASELINE",
 			rowKey: planted,
-			direction: "extra-row",
 			verdict: stale,
 		});
 	});

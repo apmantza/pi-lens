@@ -3,7 +3,10 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { McpHarness } from "../mcp/harness.js";
 import { startPiRunner } from "../support/pi-runner.js";
-import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 type ListedTool = {
 	name: string;
@@ -106,6 +109,31 @@ function measure(tools: ListedTool[]) {
 	return { measured, descriptionTotal, schemaTotal };
 }
 
+type ToolRows = Record<string, { description: number; schema: number }>;
+
+/**
+ * The roster's two-sided comparison: a ledger row the live roster does not
+ * measure (the row-without-producer direction), and a measured tool the
+ * ledger does not carry. A row is the tool with both of its byte counts.
+ */
+function rosterDrift(ledger: ToolRows, measured: ToolRows): string[] {
+	const rows = (tools: ToolRows) =>
+		new Set(
+			Object.entries(tools).map(
+				([name, bytes]) =>
+					`${name} description=${bytes.description} schema=${bytes.schema}`,
+			),
+		);
+	return [
+		...rowsWithoutLiveMember(rows(ledger), rows(measured)).map(
+			(row) => `ledger row the roster does not measure: ${row}`,
+		),
+		...rowsWithoutLiveMember(rows(measured), rows(ledger)).map(
+			(row) => `measured tool the ledger does not carry: ${row}`,
+		),
+	];
+}
+
 function expectUniqueNames(tools: ListedTool[]): void {
 	const names = tools.map((tool) => tool.name);
 	expect(new Set(names).size, `duplicate tool names: ${names.join(", ")}`).toBe(
@@ -156,34 +184,21 @@ describe("tool roster description budget", () => {
 		);
 		expect(descriptionTotal, detail).toBe(baseline.pi.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.pi.schemaTotal);
-		expect(measured, detail).toEqual(baseline.pi.tools);
+		expect(rosterDrift(baseline.pi.tools, measured), detail).toEqual([]);
 	});
 
-	it("reds a planted baseline row the live roster never listed (#5072)", () => {
-		// The ratchet pins the file with a two-sided equality, so its staleness
-		// direction is a row on one side that the other side lacks. The plant is a
-		// roster carrying a tool the committed ledger has never listed; the stale set
-		// is computed from the ledger, and the seam checks the row is really absent
-		// from the checked-in file rather than present in the live tool list.
+	it("reds a planted baseline row the live roster never measured (#5072)", () => {
+		// The row-without-producer direction of the pi ledger: a tool row no
+		// registered tool measures, judged by the comparison the case above runs
+		// against the live roster.
 		const planted = "pilens_5072_ghost_tool";
-		const ledger = baseline.pi.tools as Record<
-			string,
-			{ description: number; schema: number }
-		>;
-		expect(ledger).not.toHaveProperty(planted);
-		const withGhost = { ...ledger, [planted]: { description: 1, schema: 1 } };
-		let verdict = "";
-		try {
-			expect(withGhost).toEqual(ledger);
-		} catch (error) {
-			verdict = (error as Error).message;
-		}
-		expect(verdict).not.toBe("");
 		expectPlantedStaleRow({
 			baseline: "tests/config/tool-roster-budget.baseline.json",
 			rowKey: planted,
-			direction: "extra-row",
-			verdict: Object.keys(withGhost).filter((name) => !(name in ledger)),
+			verdict: rosterDrift(
+				{ ...baseline.pi.tools, [planted]: { description: 1, schema: 1 } },
+				measure(piTools).measured,
+			),
 		});
 	});
 
@@ -210,6 +225,6 @@ describe("tool roster description budget", () => {
 		);
 		expect(descriptionTotal, detail).toBe(baseline.mcp.descriptionTotal);
 		expect(schemaTotal, detail).toBe(baseline.mcp.schemaTotal);
-		expect(measured, detail).toEqual(baseline.mcp.tools);
+		expect(rosterDrift(baseline.mcp.tools, measured), detail).toEqual([]);
 	});
 });

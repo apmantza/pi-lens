@@ -1,36 +1,27 @@
+// flake-shape: real-process-spawn — the census population is git's own tracked list, which only a real `git ls-files` answers (dot-files and every extension included)
 /**
- * #5072 bullet 3: every checked-in baseline has an owner test that can prove it
+ * #5072 bullet 3: every tracked baseline has an owner test that can prove it
  * fails on a stale row.
  *
- * The check itself lives in `tests/support/baseline-owner-check.ts`: it
- * discovers the baseline-shaped population, classifies it, and reports every
- * ledger with no owner test or no planted-stale-row cell. This file is that
- * check's owner. It runs the check over the repo and holds the cells that prove
- * the check reddens when its own rows go stale — including this file's own
- * ledger, the admission map in
- * `tests/support/baseline-owner-admissions.ts`.
- *
- * The shape a cell has to take, and why a comment does not count, are documented
- * at `expectPlantedStaleRow` in `tests/support/baseline-staleness.ts`.
+ * The census lives in `tests/support/baseline-owner-check.ts`. This file runs
+ * it over the tracked tree, and holds one cell per rule that proves the rule
+ * reds: each cell drives `baselineGovernanceReport` over a planted source map,
+ * the same entry the tree census calls. The shape a planted-stale-row cell has
+ * to take is documented at `expectPlantedStaleRow` in
+ * `tests/support/baseline-staleness.ts`.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { walkFiles } from "../../scripts/lib/walk-files.mjs";
-import { assertNonEmptyScan, relativePosix } from "../support/sweep-kit.js";
+import { gitExecFileSync } from "../support/git-fixture-env.js";
+import { assertNonEmptyScan } from "../support/sweep-kit.js";
 import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import {
-	BASELINE_OWNER_ADMISSIONS,
-	type BaselineOwnerAdmission,
-	SEAM_TEST_CALL_FILES,
-} from "../support/baseline-owner-admissions.js";
-import {
-	baselineGovernanceFindings,
-	baselineGovernanceReport,
-	classifyBaselines,
 	type BaselineCandidate,
+	baselineGovernanceReport,
+	NOT_A_BASELINE,
 } from "../support/baseline-owner-check.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
@@ -40,547 +31,444 @@ const REPO_ROOT = path.resolve(
 	"..",
 );
 
-interface TreeSources {
-	readonly sources: Map<string, string>;
-	readonly walkedTestFiles: number;
-}
-
-let tree: TreeSources | undefined;
-
-/** Top-level entries the census never walks: dependencies and build output. */
-const UNWALKED_TOP_LEVEL = new Set(["node_modules", "dist"]);
+let tree: Map<string, string> | undefined;
 
 /**
- * Read the repo once: every file the census can classify, plus every
- * `*.test.ts` the owner search reads. The population is the whole repository —
- * a ledger can sit anywhere, and an exported row table can sit in a file with no
- * "baseline" in its name — so the entry filter drops only what cannot be either.
- * Descent is entered one top-level directory at a time because `walkFiles`
- * recurses every directory it is not told to skip a file in: handed the repo
- * root, it would walk a real `node_modules` (a symlink here, so this checkout
- * would not show it) and call a third party's `*-baseline.json` ours.
+ * Every tracked path with its text. The population is git's tracked list, so
+ * a dot-file, a dot-directory and a file of any extension are all in it, and
+ * build output and dependencies are not (#5546 B10). A path git lists but the
+ * checkout lacks (a sparse checkout, a submodule) is out of the population.
  */
-function readRepoSources(): TreeSources {
+function trackedSources(): Map<string, string> {
 	if (tree) return tree;
-	const isCandidate = (name: string): boolean => {
-		const ext = path.extname(name);
-		return ext === ".ts" || ext === ".tsx" || ext === ".json";
-	};
-	const walked: string[] = [];
-	for (const entry of fs.readdirSync(REPO_ROOT, { withFileTypes: true })) {
-		if (
-			entry.name.startsWith(".") ||
-			UNWALKED_TOP_LEVEL.has(entry.name) ||
-			entry.isSymbolicLink()
-		)
-			continue;
-		const absolute = path.join(REPO_ROOT, entry.name);
-		if (entry.isDirectory()) {
-			for (const found of walkFiles(
-				absolute,
-				(file) => isCandidate(file.name),
-				() => {
-					// A directory that vanished mid-walk is out of the population (#3082).
-				},
-			)) {
-				walked.push(relativePosix(REPO_ROOT, found));
-			}
-		} else if (isCandidate(entry.name)) {
-			walked.push(entry.name);
-		}
-	}
-	const sources = new Map<string, string>();
-	for (const repoPath of walked) {
+	const listed = String(
+		gitExecFileSync("git", ["ls-files", "-z"], {
+			cwd: REPO_ROOT,
+			encoding: "utf8",
+		}),
+	)
+		.split("\0")
+		.filter((entry) => entry.length > 0);
+	tree = new Map();
+	for (const repoPath of listed) {
 		try {
-			sources.set(
+			tree.set(
 				repoPath,
 				fs.readFileSync(path.join(REPO_ROOT, repoPath), "utf-8"),
 			);
 		} catch {
-			// A file a concurrent worker removed is out of the population (#3082).
+			// Not a readable file in this checkout; not a member.
 		}
 	}
-	tree = {
-		sources,
-		walkedTestFiles: walked.filter((repoPath) =>
-			/\.test\.[cm]?ts$/.test(repoPath),
-		).length,
-	};
 	return tree;
 }
 
-function censusLines(candidates: readonly BaselineCandidate[]): string[] {
-	const byClass = new Map<string, BaselineCandidate[]>();
-	for (const candidate of candidates) {
-		const list = byClass.get(candidate.cls) ?? [];
-		list.push(candidate);
-		byClass.set(candidate.cls, list);
+function censusLines(candidates: readonly BaselineCandidate[]): string {
+	const byClass = new Map<string, string[]>();
+	for (const c of candidates) {
+		byClass.set(c.cls, [...(byClass.get(c.cls) ?? []), c.id]);
 	}
-	return [...byClass.entries()]
-		.sort((a, b) => a[0].localeCompare(b[0]))
-		.map(
-			([cls, list]) =>
-				`${cls} (${list.length}): ${list.map((c) => c.id).join(", ")}`,
-		);
+	return [...byClass]
+		.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+		.map(([cls, ids]) => `${cls} (${ids.length}): ${ids.join(", ")}`)
+		.join("\n");
 }
 
-/** A test file whose only content is one planted cell naming `baseline`. */
-function cellOwner(baseline: string): string {
+/** The census over a planted tree, with no NOT_A_BASELINE rows unless given. */
+function census(
+	files: Record<string, string>,
+	notABaseline: Record<string, string> = {},
+) {
+	return baselineGovernanceReport(new Map(Object.entries(files)), notABaseline);
+}
+
+/** `id: problem` lines, the form every cell reads. */
+function problems(files: Record<string, string>, notABaseline = {}): string[] {
+	return census(files, notABaseline).findings.map(
+		(f) => `${f.id}: ${f.problem}`,
+	);
+}
+
+/** A member a content-claimed ledger's rows can name. */
+const MEMBER = {
+	"tests/clients/live.test.ts": 'import { it } from "vitest";\n',
+};
+
+/** A test that reads `ledger` through a relative import and plants one cell for `id`. */
+function ownerWithCell(
+	ledger: string,
+	id = ledger,
+	testPath = "tests/config/owner.test.ts",
+): string {
+	const spec = path.posix.relative(path.posix.dirname(testPath), ledger);
 	return [
 		'import { it } from "vitest";',
 		'import { expectPlantedStaleRow } from "../support/baseline-staleness.js";',
+		`import rows from "${spec.startsWith(".") ? spec : `./${spec}`}";`,
 		'it("plants a row no scan produces", () => {',
 		"  expectPlantedStaleRow({",
-		`    baseline: ${JSON.stringify(baseline)},`,
+		`    baseline: ${JSON.stringify(id)},`,
 		'    rowKey: "tests/clients/ghost.test.ts",',
-		'    direction: "extra-row",',
-		'    verdict: ["tests/clients/ghost.test.ts: no live member"],',
+		"    verdict: compare(rows),",
 		"  });",
 		"});",
 		"",
 	].join("\n");
 }
 
-describe("every checked-in baseline has an owner test with a planted-stale-row cell (#5072)", () => {
-	it(
-		"discovers the repo's baselines and classifies every one of them",
-		() => {
-			const { sources, walkedTestFiles } = readRepoSources();
-			const candidates = classifyBaselines(sources);
-			assertNonEmptyScan("baseline-shaped files", candidates.length, 25);
-			assertNonEmptyScan("test files read for owners", walkedTestFiles, 500);
-			expect(
-				candidates.filter((c) => c.cls === "unclassified").map((c) => c.id),
-				censusLines(candidates).join("\n"),
-			).toEqual([]);
-			// The census floor per class, so a walk that lost a whole class reds
-			// instead of narrowing the population silently.
-			const count = (cls: string) =>
-				candidates.filter((c) => c.cls === cls).length;
-			expect(
-				count("ledger"),
-				censusLines(candidates).join("\n"),
-			).toBeGreaterThanOrEqual(12);
-			expect(count("fixture-input")).toBeGreaterThanOrEqual(1);
-		},
-		TREE_WALK_TIMEOUT_MS,
-	);
+describe("every tracked baseline has an owner test with a planted-stale-row cell (#5072)", () => {
+	// ── Population: which entries are candidates, and their class ─────────────
 
-	it("reds for a baseline no test file reads", () => {
-		const findings = baselineGovernanceFindings(
-			new Map([
-				["tests/config/orphan-baseline.json", '{"tests/clients/a.test.ts": 1}'],
-			]),
-			{},
-		);
+	it("holds a baseline-named file it cannot read rows from as unclassified, whatever its extension", () => {
+		// Recurrence (#5546 B10): a .yml, a .csv and a dot-directory entry never
+		// reached the r1 class rules, so the census stayed clean with them in it.
 		expect(
-			findings.map((f) => `${f.id}: ${f.problem}`),
-			JSON.stringify(findings),
-		).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining(
-					"orphan-baseline.json: no *.test.ts file reads it",
-				),
-			]),
-		);
-		// A file nothing reads also has no cell, and the check says both.
-		expect(findings).toHaveLength(2);
+			problems({
+				"tests/support/zz-baseline.yml": "- tests/clients/live.test.ts\n",
+				"tests/support/zz-baseline.csv":
+					"file,count\ntests/clients/live.test.ts,1\n",
+				".zzdir/zz-baseline.toml": 'rows = ["tests/clients/live.test.ts"]\n',
+			}),
+		).toEqual([
+			".zzdir/zz-baseline.toml: a baseline-named file the census cannot read rows from; add a class rule, or a NOT_A_BASELINE row with the reason",
+			"tests/support/zz-baseline.csv: a baseline-named file the census cannot read rows from; add a class rule, or a NOT_A_BASELINE row with the reason",
+			"tests/support/zz-baseline.yml: a baseline-named file the census cannot read rows from; add a class rule, or a NOT_A_BASELINE row with the reason",
+		]);
 	});
 
-	it("counts a planted-stale-row cell for the ledger its baseline literal names", () => {
-		const findings = baselineGovernanceFindings(
-			new Map([
-				["tests/config/owned-baseline.json", '{"tests/clients/a.test.ts": 1}'],
-				[
-					"tests/config/owned-baseline.test.ts",
-					cellOwner("tests/config/owned-baseline.json"),
-				],
-			]),
-			{},
-		);
+	it("holds a JSON document under a dot-directory as a ledger that needs an owner and a cell", () => {
+		// Recurrence (#5546 B6): the r1 walk skipped every dot entry.
+		const ledger = ".zzdir/zz-baseline.json";
+		expect(
+			problems({ [ledger]: '{"tests/clients/gone.test.ts": 1}' }).map(
+				(p) => p.split(" (")[0],
+			),
+		).toEqual([
+			`${ledger}: no planted-stale-row cell`,
+			`${ledger}: no test file reads it`,
+		]);
+		expect(
+			problems({
+				[ledger]: '{"tests/clients/gone.test.ts": 1}',
+				"tests/config/owner.test.ts": ownerWithCell(ledger),
+			}),
+		).toEqual([]);
+	});
+
+	it("holds an unnamed JSON row table keyed by tracked members as a ledger", () => {
+		// Recurrence (#5546 F2): .dependency-cruiser-known-violations.json and
+		// scripts/shuffle-census-ratchet.json carry no baseline name, so the r1
+		// census never saw them. Content decides: rows of one kind, at least one
+		// naming a tracked member (here through a compiled .js twin and a
+		// tests/-relative tail).
+		const { candidates } = census({
+			...MEMBER,
+			".known-violations.json":
+				'// header comment\n[{"from": "tests/clients/live.test.js", "rule": "cycle"}]',
+			"scripts/ratchet.json":
+				'{"about": "prose", "files": {"clients/live.test.ts": 1}}',
+			"config/tools.json": '{"tools": {"ast_grep_search": 1}}',
+			"config/mixed.json": '{"rows": ["tests/clients/live.test.ts", 1]}',
+		});
+		expect(candidates.map((c) => `${c.id}=${c.cls}`)).toEqual([
+			".known-violations.json=ledger",
+			"scripts/ratchet.json=ledger",
+		]);
+	});
+
+	it("holds every exported baseline binding whose value is not a scalar literal as a ledger", () => {
+		// Recurrence (#5546 F3): a computed table, an alias, an export clause, a
+		// camelCase name, a function-typed annotation and a .mjs module were each
+		// silent in r1 (no candidate, no finding).
+		const module = [
+			'export const A_BASELINE = Object.fromEntries([["tests/clients/live.test.ts", 1]]);',
+			'const ROWS = { "tests/clients/live.test.ts": 1 };',
+			"export const B_BASELINE = ROWS;",
+			"export const cBaseline: () => Rows = load;",
+			'const OTHER = new Map([["k", 1]]);',
+			"export { OTHER as D_BASELINE };",
+			'export let E_BASELINE = new Set(["tests/clients/live.test.ts"]);',
+			"",
+		].join("\n");
+		const { candidates } = census({ "scripts/zz-tables.mjs": module });
+		expect(candidates.map((c) => `${c.id}=${c.cls}`)).toEqual([
+			"scripts/zz-tables.mjs#A_BASELINE=ledger",
+			"scripts/zz-tables.mjs#B_BASELINE=ledger",
+			"scripts/zz-tables.mjs#D_BASELINE=ledger",
+			"scripts/zz-tables.mjs#E_BASELINE=ledger",
+			"scripts/zz-tables.mjs#cBaseline=ledger",
+		]);
+	});
+
+	it("keeps scalar bounds, functions, classes and types out of the ledger population", () => {
+		const module = [
+			"export const MAX_BASELINE_FILES = 256;",
+			'export const BASELINE_MARKER = "| row id |" as const;',
+			"export function loadBaseline() { return []; }",
+			"export class BaselineStore {}",
+			"export type BaselineRow = { file: string };",
+			"export const makeBaseline = (rows: string[]) => rows;",
+			"",
+		].join("\n");
+		const { candidates, findings } = census({ "clients/zz-store.ts": module });
+		expect(candidates.map((c) => `${c.id}=${c.cls}`)).toEqual([
+			"clients/zz-store.ts#BASELINE_MARKER=bound",
+			"clients/zz-store.ts#MAX_BASELINE_FILES=bound",
+		]);
 		expect(findings).toEqual([]);
 	});
 
-	it("reds for a ledger whose owner reads it but never falsifies a row", () => {
-		const owner = [
-			'import { it } from "vitest";',
-			'import baseline from "../support/unplanted-baseline.json";',
-			'it("keeps the live scan inside the ledger", () => {',
-			"  expect(liveScan().length).toBeLessThanOrEqual(Object.keys(baseline).length);",
-			"});",
-			"",
-		].join("\n");
-		const findings = baselineGovernanceFindings(
-			new Map([
-				[
-					"tests/support/unplanted-baseline.json",
-					'{"tests/clients/a.test.ts": 1}',
-				],
-				["tests/config/unplanted-baseline.test.ts", owner],
-			]),
-			{},
-		);
+	it("reds an exported baseline binding with no initializer it can read", () => {
 		expect(
-			findings.map((f) => `${f.id}: ${f.problem}`),
-			JSON.stringify(findings),
-		).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining(
-					"unplanted-baseline.json: no planted-stale-row cell",
-				),
-			]),
-		);
-		// The file has no reader at all, so the unowned finding rides with the
-		// unowned-cell one: one row for a file nobody reads, both reasons.
-		expect(findings).toHaveLength(2);
-	});
-
-	it("reds a cell that names a baseline the check does not discover", () => {
-		const findings = baselineGovernanceFindings(
-			new Map([
-				[
-					"tests/config/stray-cell.test.ts",
-					cellOwner("tests/support/made-up-baseline.json"),
-				],
-			]),
-			{},
-		);
-		expect(
-			findings.map((f) => `${f.id}: ${f.problem}`),
-			JSON.stringify(findings),
+			problems({ "scripts/zz-late.mjs": "export let F_BASELINE;\n" }),
 		).toEqual([
-			expect.stringContaining("names a baseline the check does not discover"),
+			"scripts/zz-late.mjs#F_BASELINE: an exported binding with no initializer the census can read (F_BASELINE); add a class rule, or a NOT_A_BASELINE row with the reason",
 		]);
 	});
 
-	it("reds a registration that is not inside a live it() or test()", () => {
-		const owner = [
-			'import { expectPlantedStaleRow } from "../support/baseline-staleness.js";',
-			"expectPlantedStaleRow({",
-			'  baseline: "tests/support/module-scope-baseline.json",',
-			'  rowKey: "x",',
-			'  direction: "extra-row",',
-			'  verdict: "x",',
-			"});",
+	it("reads a baseline-named module's default export, and places a module with none as code", () => {
+		const { candidates } = census({
+			"tests/support/y-baseline.mjs":
+				'export default { "tests/clients/live.test.ts": 1 };\n',
+			"tests/support/z-baseline.ts": "export function rows() { return []; }\n",
+		});
+		expect(candidates.map((c) => `${c.id}=${c.cls}`)).toEqual([
+			"tests/support/y-baseline.mjs#default=ledger",
+			"tests/support/z-baseline.ts=code",
+		]);
+	});
+
+	it("places Markdown, TLA+ configs and fixture inputs by their own rule", () => {
+		const { candidates, findings } = census({
+			"docs/x-baseline.md": "| row id | feature |\n",
+			"formal/fam/XBaseline.cfg": "CONSTANTS N = 2\n",
+			"tests/fixtures/x/todo-baseline.json": '{"a": 1}',
+			"tests/fixtures/x/rows.json": '["tests/fixtures/x/todo-baseline.json"]',
+		});
+		expect(candidates.map((c) => `${c.id}=${c.cls}`)).toEqual([
+			"docs/x-baseline.md=prose",
+			"formal/fam/XBaseline.cfg=model",
+			"tests/fixtures/x/rows.json=fixture-input",
+			"tests/fixtures/x/todo-baseline.json=fixture-input",
+		]);
+		expect(findings).toEqual([]);
+	});
+
+	// ── Owners: what counts as reading a ledger ──────────────────────────────
+
+	it("credits a relative import, a repo-path literal and a basename literal as reads", () => {
+		// Recurrence (#5546 B8): a relative import of a ledger was not a read in r1.
+		const cell = (id: string) =>
+			`it("plants", () => { expectPlantedStaleRow({ baseline: "${id}", rowKey: "x", verdict: compare() }); });\n`;
+		expect(
+			problems({
+				"tests/support/a-baseline.json": "{}",
+				"tests/support/b-baseline.json": "{}",
+				"tests/support/c-baseline.json": "{}",
+				"tests/config/a.test.ts": `import rows from "../support/a-baseline.json";\n${cell("tests/support/a-baseline.json")}`,
+				"tests/config/b.test.ts": `const p = path.join(ROOT, "tests/support/b-baseline.json");\n${cell("tests/support/b-baseline.json")}`,
+				"tests/config/c.test.ts": `const p = path.join(ROOT, "tests", "support", "c-baseline.json");\n${cell("tests/support/c-baseline.json")}`,
+			}),
+		).toEqual([]);
+	});
+
+	it("does not credit a comment, a sentence, or the cell's own baseline literal as a read", () => {
+		// Recurrence (#5546 F6/B1): r1 read raw text, so a comment, an unused
+		// sentence, or a stub holding only a cell made a test the owner.
+		const ledger = "tests/support/a-baseline.json";
+		const stub = [
+			`// reads ${ledger}`,
+			`const note = "see ${ledger} for the rows";`,
+			`it("plants", () => { expectPlantedStaleRow({ baseline: "${ledger}", rowKey: "x", verdict: compare() }); });`,
 			"",
 		].join("\n");
-		const findings = baselineGovernanceFindings(
-			new Map([
-				["tests/support/module-scope-baseline.json", "{}"],
-				["tests/config/module-scope-baseline.test.ts", owner],
-			]),
-			{},
-		);
 		expect(
-			findings.map((f) => `${f.id}: ${f.problem}`),
-			JSON.stringify(findings),
-		).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining("is not inside a live it()/test()"),
-				expect.stringContaining("no planted-stale-row cell"),
-			]),
-		);
-		expect(findings).toHaveLength(2);
-	});
-
-	it("does not count a registration inside a comment or a string", () => {
-		const owner = [
-			'import { it } from "vitest";',
-			'// expectPlantedStaleRow({ baseline: "tests/support/commented-baseline.json", rowKey: "x", direction: "extra-row", verdict: "x" })',
-			'it("documents a commented plant", () => {',
-			'  expect(typeof expectPlantedStaleRowPlaceholder).toBe("function");',
-			"});",
-			"",
-		].join("\n");
-		const findings = baselineGovernanceFindings(
-			new Map([
-				["tests/support/commented-baseline.json", "{}"],
-				["tests/config/commented-baseline.test.ts", owner],
-			]),
-			{},
-		);
-		expect(
-			findings
-				.filter((f) => f.problem.includes("no planted-stale-row cell"))
-				.map((f) => f.id),
-			JSON.stringify(findings),
-		).toEqual(["tests/support/commented-baseline.json"]);
-	});
-
-	it("bounds the seam-test allowance to a file that really calls the seam", () => {
-		// The seam's own unit points at ledgers outside the repository, so it is
-		// allowed a call with no baseline literal. The allowance must not leak: the
-		// same call in any other file is still reported, and a file on the list that
-		// stopped calling the seam is dead weight.
-		const call = (baselineExpr: string): string =>
-			[
-				'import { it } from "vitest";',
-				'import { expectPlantedStaleRow } from "../support/baseline-staleness.js";',
-				'const LEDGER = "tests/support/allowance-baseline.json";',
-				'it("falsifies a temporary ledger", () => {',
-				`  expectPlantedStaleRow({ baseline: ${baselineExpr}, rowKey: "x", direction: "extra-row", verdict: ["x"] });`,
-				"});",
-				"",
-			].join("\n");
-		const ledger = "tests/support/allowance-baseline.json";
-		const exempt = SEAM_TEST_CALL_FILES[0]!;
-		const exemptFindings = baselineGovernanceFindings(
-			new Map([
-				[ledger, "{}"],
-				[exempt, call('fsTempLedger("rows.json")')],
-			]),
-			{},
-		);
-		expect(exemptFindings, JSON.stringify(exemptFindings)).toHaveLength(1);
-		expect(exemptFindings[0]!.id).toBe(ledger);
-		expect(exemptFindings[0]!.problem).toContain("no planted-stale-row cell");
-
-		const ordinary = baselineGovernanceFindings(
-			new Map([
-				[ledger, "{}"],
-				[
-					"tests/config/allowance-baseline.test.ts",
-					call('fsTempLedger("rows.json")'),
-				],
-			]),
-			{},
-		);
-		expect(
-			ordinary.map((f) => f.problem).join("\n"),
-			JSON.stringify(ordinary),
-		).toContain("omits its baseline literal");
-	});
-
-	it("keeps every seam-test allowance a file the repo has that calls the seam", () => {
-		const { sources } = readRepoSources();
-		expect(SEAM_TEST_CALL_FILES.length).toBeGreaterThan(0);
-		for (const repoPath of SEAM_TEST_CALL_FILES) {
-			const raw = sources.get(repoPath);
-			expect(
-				raw,
-				`${repoPath} is allowed but the census never reads it`,
-			).toBeDefined();
-			expect(raw ?? "", repoPath).toContain("expectPlantedStaleRow({");
-		}
-	});
-
-	it("reds an unclassifiable baseline-shaped file", () => {
-		const findings = baselineGovernanceFindings(
-			new Map([["tests/support/mystery-baseline.csv", "a,b\n1,2\n"]]),
-			{},
-		);
-		expect(
-			findings.map((f) => `${f.id}: ${f.problem}`),
-			JSON.stringify(findings),
-		).toEqual([
-			expect.stringContaining(
-				"mystery-baseline.csv: baseline-shaped file the check cannot classify",
+			problems({ [ledger]: "{}", "tests/config/stub.test.ts": stub }).map(
+				(p) => p.split(" (")[0],
 			),
-		]);
+		).toEqual([`${ledger}: no test file reads it`]);
 	});
 
-	it("reds a dead admission and an admission whose owner does not read the ledger", () => {
-		const admissions: Record<string, BaselineOwnerAdmission> = {
-			"tests/support/golden-baseline.json": {
-				owner: "tests/config/other.test.ts",
-				reason:
-					"a golden output compared with toEqual, so a row that no longer matches reds on its own",
-			},
-			"tests/support/gone-baseline.json": {
-				owner: "tests/config/gone.test.ts",
-				reason:
-					"the ledger was deleted and nobody dropped the row that excused it from the census",
-			},
+	it("credits an exported table to a test that imports its module and uses the name", () => {
+		const table = "tests/support/t-baseline.ts";
+		const declared = `export const T_BASELINE = ["tests/clients/live.test.ts"];\n`;
+		const cell = `it("plants", () => { expectPlantedStaleRow({ baseline: "${table}#T_BASELINE", rowKey: "x", verdict: compare() }); });\n`;
+		expect(
+			problems({
+				[table]: declared,
+				"tests/config/t.test.ts": `import { T_BASELINE } from "../support/t-baseline.js";\nvoid T_BASELINE;\n${cell}`,
+			}),
+		).toEqual([]);
+		// Importing the module without the name, or declaring the table in a test
+		// that never uses it, reads nothing.
+		expect(
+			problems({
+				[table]: declared,
+				"tests/config/t.test.ts": `import { other } from "../support/t-baseline.js";\n${cell}`,
+			}).map((p) => p.split(" (")[0]),
+		).toEqual([`${table}#T_BASELINE: no test file reads it`]);
+		expect(
+			problems({
+				"tests/config/self.test.ts": `export const S_BASELINE = ["tests/clients/live.test.ts"];\n${cell}`,
+			}).map((p) => p.split(" (")[0]),
+		).toEqual(
+			expect.arrayContaining([
+				"tests/config/self.test.ts#S_BASELINE: no test file reads it",
+			]),
+		);
+	});
+
+	// ── Cells: what counts as a planted-stale-row cell ───────────────────────
+
+	it("counts only a live it() call that spells its baseline and a rowKey", () => {
+		// Each file below holds a call the census must not count, for its own
+		// ledger; the last one is the real cell. Plants: comment, string, alias,
+		// member call, module scope, skipped test, aliased describe, an
+		// expression baseline, no rowKey, and a helper the it() calls.
+		const call = (n: number) =>
+			`expectPlantedStaleRow({ baseline: "tests/support/n${n}-baseline.json", rowKey: "x", verdict: v })`;
+		const files: Record<string, string> = {
+			"tests/config/n1.test.ts": `it("c", () => { /* ${call(1)} */ });`,
+			"tests/config/n2.test.ts": `it("s", () => { const t = '${call(2)}'; });`,
+			"tests/config/n3.test.ts": `const e = expectPlantedStaleRow;\nit("a", () => { ${call(3).replace("expectPlantedStaleRow", "e")} });`,
+			"tests/config/n4.test.ts": `it("m", () => { seam.${call(4)}; });`,
+			"tests/config/n5.test.ts": `${call(5)};\nit("x", () => {});`,
+			"tests/config/n6.test.ts": `it.skip("k", () => { ${call(6)}; });`,
+			"tests/config/n7.test.ts": `const d = ok ? describe : describe.skip;\nd("s", () => { it("i", () => { ${call(7)}; }); });`,
+			"tests/config/n8.test.ts": `const L = "tests/support/n8-baseline.json";\nit("e", () => { expectPlantedStaleRow({ baseline: L, rowKey: "x", verdict: v }); });`,
+			"tests/config/n9.test.ts": `it("r", () => { expectPlantedStaleRow({ baseline: "tests/support/n9-baseline.json", verdict: v }); });`,
+			"tests/config/n10.test.ts": `function plant() { ${call(10)}; }\nit("h", () => { plant(); });`,
+			"tests/config/n11.test.ts": `it("ok", () => { ${call(11)}; });`,
 		};
-		const findings = baselineGovernanceFindings(
-			new Map([
-				["tests/support/golden-baseline.json", '{"q": [1]}'],
-				[
-					"tests/config/golden-baseline.test.ts",
-					'import b from "../support/golden-baseline.json";',
-				],
-			]),
-			admissions,
+		for (let n = 1; n <= 11; n++) {
+			files[`tests/support/n${n}-baseline.json`] = "{}";
+			files[`tests/config/n${n}.test.ts`] =
+				`import rows from "../support/n${n}-baseline.json";\n${files[`tests/config/n${n}.test.ts`]}`;
+		}
+		const { findings, counts } = census(files);
+		expect(
+			findings.map((f) => f.id),
+			JSON.stringify(findings),
+		).toEqual(
+			[1, 10, 2, 3, 4, 5, 6, 7, 8, 9].map(
+				(n) => `tests/support/n${n}-baseline.json`,
+			),
 		);
-		const problems = findings.map((f) => `${f.id}: ${f.problem}`);
-		expect(
-			problems.some((p) =>
-				p.includes("admission names a baseline the check does not discover"),
-			),
-			JSON.stringify(findings),
-		).toBe(true);
-		expect(
-			problems.some((p) =>
-				p.includes("as its owner, but that test does not read the ledger"),
-			),
-			JSON.stringify(findings),
-		).toBe(true);
+		expect(counts.planted).toBe(1);
 	});
 
-	it("reds an admission whose reason is a label rather than a sentence", () => {
-		const findings = baselineGovernanceFindings(
-			new Map([
-				["tests/support/short-reason-baseline.json", '{"q": [1]}'],
-				[
-					"tests/config/short-reason-baseline.test.ts",
-					'import b from "../support/short-reason-baseline.json";',
-				],
-			]),
-			{
-				"tests/support/short-reason-baseline.json": {
-					owner: "tests/config/short-reason-baseline.test.ts",
-					reason: "golden",
-				},
-			},
-		);
-		expect(
-			findings.map((f) => f.problem).join("\n"),
-			JSON.stringify(findings),
-		).toContain("carries a sentence of at least");
-	});
-
-	// ── The check's own ledger ───────────────────────────────────────────────
-
-	// A test that reads a ledger and carries no plant: the shape an admission must
-	// point at, since an admission excuses a missing cell.
-	function readerOwner(baseline: string, id = "owned"): string {
-		return [
-			`import rows from "./${baseline.split("/").pop()}";`,
-			`import { it } from "vitest";`,
-			`it("${id} reads the rows it is pinned to", () => {`,
-			`  expect(rows).toBeDefined();`,
-			`});`,
+	it("reads a cell's properties only inside its own call", () => {
+		// Recurrence (#5546 B7): a fixed 4000-character window credited a later
+		// object's literals to a call whose claim was a variable.
+		const ledger = "tests/support/w-baseline.json";
+		const owner = [
+			`import rows from "../support/w-baseline.json";`,
+			`it("w", () => {`,
+			"  expectPlantedStaleRow(claim);",
+			`  const other = { baseline: "${ledger}", rowKey: "x" };`,
+			"});",
 			"",
 		].join("\n");
-	}
-
-	it("reds its own admission map on a row whose owner never reads the ledger (#5072)", () => {
-		// The admission map is a ledger like any other: a row that stops being
-		// checked is a silent free pass. The plant is an admission naming an owner
-		// test that never opens the file — over a tree that is otherwise clean, so
-		// the only thing the check can be reporting is the planted row.
-		const plantedLedger = "tests/support/5072-admission-drift-baseline.json";
-		const plantedOwner = "tests/config/5072-nonowner.test.ts";
-		const sources = new Map([
-			[plantedLedger, '{"rows": []}'],
-			["tests/config/5072-owner.test.ts", readerOwner(plantedLedger)],
-		]);
-		// With no admission the ledger reports its missing cell; with a correct one
-		// it is clean; with the planted one it reports the dead owner.
 		expect(
-			baselineGovernanceFindings(sources, {})
-				.map((f) => f.problem)
-				.join("\n"),
-		).toContain("no planted-stale-row cell");
-		const verdict = baselineGovernanceFindings(sources, {
-			[plantedLedger]: {
-				owner: plantedOwner,
-				reason:
-					"a two-sided golden comparison reddens a row the run no longer produces",
-			},
-		});
-		const problems = verdict.map((f) => `${f.id}: ${f.problem}`);
-		expect(
-			problems.some(
-				(p) =>
-					p.includes(plantedLedger) && p.includes("does not read the ledger"),
+			problems({ [ledger]: "{}", "tests/config/w.test.ts": owner }).map(
+				(p) => p.split(" (")[0],
 			),
-			JSON.stringify(verdict),
-		).toBe(true);
-		expectPlantedStaleRow({
-			baseline:
-				"tests/support/baseline-owner-admissions.ts#BASELINE_OWNER_ADMISSIONS",
-			rowKey: plantedLedger,
-			direction: "extra-row",
-			verdict: problems,
-		});
+		).toEqual([`${ledger}: no planted-stale-row cell`]);
 	});
 
-	it("keeps every checked-in admission a live row of its own census", () => {
-		// The admissions map has no owner test reading it except this one, so its
-		// rows are checked here: an admission whose ledger the census does not
-		// discover is dead weight, and the ratchet says so with no plant needed.
-		const { sources } = readRepoSources();
-		const census = classifyBaselines(sources);
-		const ledgerIds = new Set(
-			census.filter((c) => c.cls === "ledger").map((c) => c.id),
-		);
-		const dead = Object.keys(BASELINE_OWNER_ADMISSIONS).filter(
-			(id) => !ledgerIds.has(id),
-		);
-		expect(dead, censusLines(census).join("\n")).toEqual([]);
+	it("reds a cell that names a baseline the census does not hold as a ledger", () => {
+		expect(
+			problems({
+				"tests/fixtures/f/fix-baseline.json": "{}",
+				"tests/config/stray.test.ts": [
+					`it("a", () => { expectPlantedStaleRow({ baseline: "tests/support/made-up-baseline.json", rowKey: "x", verdict: v }); });`,
+					`it("b", () => { expectPlantedStaleRow({ baseline: "tests/fixtures/f/fix-baseline.json", rowKey: "x", verdict: v }); });`,
+				].join("\n"),
+			}).map((p) => p.split(" names ")[0]),
+		).toEqual([
+			"tests/fixtures/f/fix-baseline.json: the expectPlantedStaleRow cell at tests/config/stray.test.ts:2",
+			"tests/support/made-up-baseline.json: the expectPlantedStaleRow cell at tests/config/stray.test.ts:1",
+		]);
 	});
 
-	it("reds a planted admission row whose ledger the census does not discover (#5072)", () => {
-		// The admission map is a ledger like any other and this file is its owner: a
-		// row naming no ledger is a free pass with a sentence of justification
-		// attached, so the plant here is a row kept past the file it excused.
-		const planted = "tests/support/5072-unapproved-baseline.json";
-		const findings = baselineGovernanceFindings(
-			new Map([
-				[
-					"tests/config/5072-reader.test.ts",
-					'import rows from "../support/x.json";\nit("reads", () => expect(rows).toEqual({}));\n',
-				],
-			]),
-			{
-				[planted]: {
-					owner: "tests/config/5072-reader.test.ts",
-					reason:
-						"an admission row kept after the ledger it excused was renamed away",
-				},
-			},
-		);
+	// ── NOT_A_BASELINE, the census's own ledger ──────────────────────────────
+
+	it("excuses a registered row table, and reds a NOT_A_BASELINE row that excuses nothing (#5072)", () => {
+		const table = "config/tool-config.json";
+		const planted = "config/5072-gone-config.json";
+		const files = {
+			...MEMBER,
+			[table]: '{"ignore": ["tests/clients/live.test.ts"]}',
+			"clients/zz.ts": "export const MAX_BASELINE = 3;\n",
+		};
+		const registry = {
+			[table]: "a tool's own configuration, read by the tool",
+			[planted]: "a row kept after the file it excused was deleted",
+			"clients/zz.ts#MAX_BASELINE": "a bound the class rules already place",
+		};
+		const { findings, candidates } = census(files, registry);
+		expect(candidates.find((c) => c.id === table)?.cls).toBe("registered");
 		const verdict = findings.map((f) => `${f.id}: ${f.problem}`);
-		expect(verdict).toEqual(
-			expect.arrayContaining([expect.stringContaining(planted)]),
-		);
+		expect(verdict.map((v) => v.split(":")[0])).toEqual([
+			"clients/zz.ts#MAX_BASELINE",
+			planted,
+		]);
 		expectPlantedStaleRow({
-			baseline:
-				"tests/support/baseline-owner-admissions.ts#BASELINE_OWNER_ADMISSIONS",
+			baseline: "tests/support/baseline-owner-check.ts#NOT_A_BASELINE",
 			rowKey: planted,
-			direction: "extra-row",
 			verdict,
 		});
 	});
 
-	// ── The repo ─────────────────────────────────────────────────────────────
+	// ── The tracked tree ─────────────────────────────────────────────────────
 
 	it(
-		"keeps the repo's baselines owned, planted, or admitted with a reason",
+		"reads git's tracked list: dot-files, dot-dirs and every extension",
 		() => {
-			const { sources } = readRepoSources();
-			const { findings, counts } = baselineGovernanceReport(sources);
-			console.log(
-				`[baseline-owners] ledgers=${counts.ledgers} planted=${counts.planted} ` +
-					`admitted=${counts.admitted} unplanted=${counts.unplanted} ` +
-					`unowned=${counts.unowned} unclassified=${counts.unclassified} ` +
-					`verdict=${findings.length === 0 ? "clean" : `${findings.length} findings`}`,
+			const sources = trackedSources();
+			assertNonEmptyScan("tracked files", sources.size, 5000);
+			// Recurrence (#5546 B10): the r1 walk skipped dot entries and kept
+			// only .ts/.tsx/.json, so these never reached the class rules.
+			expect(sources.has(".dependency-cruiser-known-violations.json")).toBe(
+				true,
 			);
-			// Every ledger lands in exactly one state, so none escapes the census.
-			expect(counts.planted + counts.admitted + counts.unplanted).toBe(
-				counts.ledgers,
-			);
-			expect(
-				findings.map((f) => `${f.id}: ${f.problem}`),
-				censusLines(classifyBaselines(sources)).join("\n"),
-			).toEqual([]);
+			expect(sources.has(".github/workflows/ci.yml")).toBe(true);
+			expect([...sources.keys()].some((p) => p.endsWith(".mjs"))).toBe(true);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
 
-	it("reds the admitted ledgers when their admissions are withdrawn", () => {
-		// Proves the admissions are what keep those ledgers green rather than the
-		// census quietly missing them: drop the rows and the check names each one.
-		const { sources } = readRepoSources();
-		const admitted = Object.keys(BASELINE_OWNER_ADMISSIONS);
-		expect(admitted.length).toBeGreaterThan(0);
-		const stripped = baselineGovernanceFindings(sources, {});
-		const named = admitted.filter((id) =>
-			stripped.some(
-				(f) => f.id === id && f.problem.includes("no planted-stale-row cell"),
-			),
-		);
-		expect(named, JSON.stringify(stripped)).toEqual(admitted);
-	});
+	it(
+		"keeps the repo's baselines owned and planted",
+		() => {
+			const sources = trackedSources();
+			const { findings, counts, candidates } = baselineGovernanceReport(
+				sources,
+				NOT_A_BASELINE,
+			);
+			console.log(
+				`[baseline-owners] ledgers=${counts.ledgers} planted=${counts.planted} ` +
+					`unplanted=${counts.unplanted} unowned=${counts.unowned} ` +
+					`unclassified=${counts.unclassified} registered=${counts.registered} ` +
+					`verdict=${findings.length === 0 ? "clean" : `${findings.length} findings`}`,
+			);
+			assertNonEmptyScan("ledgers", counts.ledgers, 15);
+			// Recurrence (#5546 F2): two live ledgers carried no baseline name and
+			// stayed outside the r1 census.
+			const ledgerIds = candidates
+				.filter((c) => c.cls === "ledger")
+				.map((c) => c.id);
+			expect(ledgerIds).toEqual(
+				expect.arrayContaining([
+					".dependency-cruiser-known-violations.json",
+					"scripts/shuffle-census-ratchet.json",
+				]),
+			);
+			expect(
+				findings.map((f) => `${f.id}: ${f.problem}`),
+				censusLines(candidates),
+			).toEqual([]);
+		},
+		TREE_WALK_TIMEOUT_MS,
+	);
 });

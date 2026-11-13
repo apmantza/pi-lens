@@ -107,7 +107,10 @@ import { testSourceFiles as allTestSourceFiles } from "../support/module-instanc
 import { localImportTargets } from "../support/hook-await-scan.js";
 import { assertSortedRegistry } from "../support/sweep-kit.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
-import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -1193,6 +1196,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the claim is what a CHILD process sees of the worker's environment, the inheritance the #4780 opengrep writes into the real home depended on; an in-process read of process.env proves the worker, not the child, and the probe child only prints its environment",
 	},
+	// 2026-11-13 (#5072): the baseline census takes its population from git's
+	// tracked list, which only a real git answers.
+	"real-process-spawn:config/baseline-owner-governance.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the census population is git's own tracked list (dot-files and every extension included), which only a real git ls-files child answers; a hand-built list would restate the population the census is meant to find",
+	},
 	"real-process-spawn:config/gitignore-tracked-shadow.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -2065,6 +2075,15 @@ interface RatchetProblem {
 	after: number;
 }
 
+/** One `detector:file` key per row of a per-detector table (#5072). */
+function detectorRows(
+	table: Partial<Record<DetectorName, Readonly<Record<string, number>>>>,
+): string[] {
+	return DETECTOR_NAMES.flatMap((detector) =>
+		Object.keys(table[detector] ?? {}).map((file) => `${detector}:${file}`),
+	);
+}
+
 /**
  * Compare today's live counts against the pinned baseline for one detector.
  * Three directions are problems: a file the baseline has never seen, an
@@ -2076,26 +2095,6 @@ interface RatchetProblem {
  * vanished" below); this function only walks `live`, so a file no longer
  * flagged at all is not iterated here.
  */
-/**
- * The baseline rows the live scan no longer touches at all (#5072): the row's
- * producer is gone, so the row is a free pass. Extracted from the whole-
- * baseline cell below so the planted cell drives the same call, and the two
- * cannot drift apart.
- */
-function vanishedBaselineRows(
-	baseline: Readonly<Baseline>,
-	live: Partial<Record<DetectorName, Readonly<Record<string, number>>>>,
-): string[] {
-	const stale: string[] = [];
-	for (const detector of DETECTOR_NAMES) {
-		const counts = live[detector] ?? {};
-		for (const file of Object.keys(baseline[detector] ?? {})) {
-			if (!(file in counts)) stale.push(`${detector}:${file}`);
-		}
-	}
-	return stale;
-}
-
 function auditAgainstBaseline(
 	detector: DetectorName,
 	live: Readonly<Record<string, number>>,
@@ -2215,7 +2214,12 @@ describe("flake-shape ratchet (#2547)", () => {
 			> = {};
 			for (const detector of DETECTOR_NAMES)
 				live[detector] = await countsByDetector(detector);
-			expect(vanishedBaselineRows(FLAKE_SHAPE_BASELINE, live)).toEqual([]);
+			expect(
+				rowsWithoutLiveMember(
+					detectorRows(FLAKE_SHAPE_BASELINE),
+					new Set(detectorRows(live)),
+				),
+			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
@@ -2234,20 +2238,22 @@ describe("flake-shape ratchet (#2547)", () => {
 				detector === "raw-timer-wait" ? { [planted]: 1 } : {},
 			]),
 		) as Baseline;
-		const stale = vanishedBaselineRows(plantedBaseline, noLive);
+		const stale = rowsWithoutLiveMember(
+			detectorRows(plantedBaseline),
+			new Set(detectorRows(noLive)),
+		);
 		expect(stale).toEqual([`raw-timer-wait:${planted}`]);
 		expectPlantedStaleRow({
 			baseline: "tests/support/flake-shape-baseline.json",
 			rowKey: planted,
-			direction: "extra-row",
 			verdict: stale,
 		});
 	});
 
 	it("reds a frozen mint whose bytes are not the pinned ones (#5072)", () => {
-		// The mint is one pinned document: its staleness axis is that its content
-		// no longer matches what was written once. A planted extra row is the drift,
-		// and the digest verdict names the mint it is talking about.
+		// The mint is digest-pinned, so its row identity is its content hash: a
+		// planted row changes the hash, and the digest verdict has to name the
+		// hash of the planted content, not only the file.
 		const drifted = JSON.stringify({
 			...FROZEN_BASELINE,
 			"raw-timer-wait": {
@@ -2255,14 +2261,10 @@ describe("flake-shape ratchet (#2547)", () => {
 				"tests/clients/5072-drift-row.test.ts": 1,
 			},
 		});
-		const drift = frozenDigestProblems(drifted);
-		expect(drift).toHaveLength(1);
-		expect(drift[0]).toContain(FROZEN_BASELINE_PATH);
 		expectPlantedStaleRow({
 			baseline: "tests/support/flake-shape-baseline-frozen.json",
-			rowKey: FROZEN_BASELINE_PATH,
-			direction: "extra-row",
-			verdict: drift,
+			rowKey: createHash("sha256").update(drifted).digest("hex"),
+			verdict: frozenDigestProblems(drifted),
 		});
 	});
 

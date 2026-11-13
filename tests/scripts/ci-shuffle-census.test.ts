@@ -36,6 +36,7 @@ import {
 } from "../../scripts/ci-shuffle-changed-tests.mjs";
 import { setupTestEnvironment } from "../clients/test-utils.js";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import { scaledTestTimeout } from "../support/test-timeout-scale.js";
 import {
 	auditShuffleOptOuts,
@@ -749,6 +750,13 @@ describe("judgeCensus", () => {
 		expect(verdict.lines).toContain(
 			"warning: ratchet entry clean under every seed tonight (delete it if it stays clean): tests/a.test.ts",
 		);
+		// #5072: the planted row is the ratchet file's own row-without-producer
+		// direction, judged by the census's real comparison.
+		expectPlantedStaleRow({
+			baseline: "scripts/shuffle-census-ratchet.json",
+			rowKey: A,
+			verdict: verdict.lines,
+		});
 	});
 
 	// Recurrence: a timing-seam row (a 5 s timeout) can pass on one night. The

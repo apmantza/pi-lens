@@ -25,7 +25,10 @@ import {
 	updateWordIndexDocument,
 	updateWordIndexDocumentForEdit,
 } from "../../clients/word-index.js";
-import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
+import {
+	expectPlantedStaleRow,
+	rowsWithoutLiveMember,
+} from "../support/baseline-staleness.js";
 
 const WORDS = [
 	"renderWidget",
@@ -119,6 +122,27 @@ function record(index: ReturnType<typeof buildWordIndex>): RecordedQuery[] {
 	]);
 }
 
+/**
+ * The baseline's two-sided comparison: a recorded query row the run does not
+ * reproduce exactly (the row-without-producer direction), and a run row the
+ * baseline does not record. A row is the query with its whole ranked list.
+ */
+function rankDrift(
+	recorded: readonly RecordedQuery[],
+	actual: readonly RecordedQuery[],
+): string[] {
+	const rows = (queries: readonly RecordedQuery[]) =>
+		new Set(queries.map((row) => JSON.stringify(row)));
+	return [
+		...rowsWithoutLiveMember(rows(recorded), rows(actual)).map(
+			(row) => `recorded row the run does not reproduce: ${row}`,
+		),
+		...rowsWithoutLiveMember(rows(actual), rows(recorded)).map(
+			(row) => `run row the baseline does not record: ${row}`,
+		),
+	];
+}
+
 function readBaseline(): RecordedQuery[] {
 	const baseline = JSON.parse(
 		fs.readFileSync(baselinePath, "utf-8"),
@@ -139,7 +163,7 @@ describe("word-index ranking is unchanged by replacement and packing (#2067/#206
 		const index = buildWordIndex(corpus);
 		const actual = record(index);
 
-		expect(actual).toEqual(baseline);
+		expect(rankDrift(baseline, actual)).toEqual([]);
 		expect(
 			updateWordIndexDocument(index, {
 				path: corpus[0].path,
@@ -149,34 +173,21 @@ describe("word-index ranking is unchanged by replacement and packing (#2067/#206
 		expect(record(index)).toEqual(actual);
 	});
 
-	it("redds a planted baseline row the ranking run never produces (#5072)", () => {
-		// A characterization baseline is worthless if its rows can outlive the
-		// ranking that minted them. A row this cell invents -- a query the recorded
-		// set never ran -- has to break the real comparison, and the failure has to
-		// name the row it is complaining about.
+	it("reds a planted baseline row the ranking run never produces (#5072)", () => {
+		// The row-without-producer direction: a recorded query the run never
+		// ran, judged by the comparison the case above runs against a real build.
 		const plantedQuery = "5072-ghost-query";
-		const index = buildWordIndex(makeCorpus());
-		const actual = record(index);
-		const withGhost: RecordedQuery[] = [
-			...readBaseline(),
-			[plantedQuery, [["src/module0/file0.ts", 1, 1, [0]]]],
-		];
-		let verdict = "";
-		try {
-			expect(actual).toEqual(withGhost);
-		} catch (e) {
-			verdict = (e as Error).message;
-		}
-		expect(verdict, "the planted row left the comparison green").not.toBe("");
+		const actual = record(buildWordIndex(makeCorpus()));
 		expectPlantedStaleRow({
 			baseline: "tests/support/word-index-rank-baseline.json",
 			rowKey: plantedQuery,
-			direction: "extra-row",
-			// The rows the recorded run never produced, which is the planted query
-			// alone: the same set the diff above is complaining about.
-			verdict: withGhost
-				.map(([query]) => query)
-				.filter((query) => !actual.some(([recorded]) => recorded === query)),
+			verdict: rankDrift(
+				[
+					...readBaseline(),
+					[plantedQuery, [["src/module0/file0.ts", 1, 1, [0]]]],
+				],
+				actual,
+			),
 		});
 	});
 
