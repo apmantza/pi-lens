@@ -115,6 +115,16 @@ describe("#5545 ast-grep scan root under an ancestor its .gitignore names", () =
 			expect(path.isAbsolute(result.matches[0]!.file)).toBe(true);
 		});
 
+		it("scans an explicitly named single file through the anchored branch (#5545)", async () => {
+			const target = path.join(lane, "src", "a.js");
+			const result = await (
+				await newClient()
+			).searchWithRule(RULE_YAML, [target]);
+
+			expect(result.error).toBeUndefined();
+			expect(result.matches.map((match) => match.file)).toEqual([target]);
+		});
+
 		it("still excludes the directories the project's .gitignore names", async () => {
 			const result = await (
 				await newClient()

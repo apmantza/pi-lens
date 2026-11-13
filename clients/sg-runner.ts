@@ -5,14 +5,13 @@
  * Handles: spawn, spawnSync, temp dir management, JSON parsing.
  */
 
-import { incrementDegradationCount } from "./degradation-ledger.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolveManagedToolClient } from "./dispatch/runners/utils/runner-helpers.js";
-import { displayProjectDataPath, getProjectIgnoreGlobs } from "./file-utils.js";
+import { getProjectIgnoreGlobs } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
-import { walkUpDirs } from "./path-utils.js";
+import { findNearestContaining, walkUpDirs } from "./path-utils.js";
 import { getProjectTrustState } from "./project-trust.js";
 import { scannerReportParentDir } from "./scanner-temp-root.js";
 import { safeSpawnAsync, type SpawnResult } from "./safe-spawn.js";
@@ -61,22 +60,6 @@ function sgExcludeArgsForProject(rootDir: string): string[] {
 }
 
 /**
- * How far {@link sgHasGitRepository} climbs for a `.git` marker. Bounded
- * because the start is a project-controlled path.
- */
-const GIT_MARKER_WALK_MAX_DEPTH = 8;
-
-/** True when `dir` is at or below a directory holding a `.git` marker. */
-function sgHasGitRepository(dir: string): boolean {
-	for (const candidate of walkUpDirs(dir, {
-		maxDepth: GIT_MARKER_WALK_MAX_DEPTH,
-	})) {
-		if (fs.existsSync(path.join(candidate, ".git"))) return true;
-	}
-	return false;
-}
-
-/**
  * Where a rule-scan child runs, the scan path spelled for that directory, and
  * the exclude globs it may carry (#5545).
  *
@@ -99,9 +82,8 @@ function sgHasGitRepository(dir: string): boolean {
  * no exclude globs. ast-grep's own VCS ignore handling reads the SCANNED tree
  * (measured: a repository under an ancestor its own `.gitignore` names keeps
  * `node_modules` out with the child started elsewhere), which covers the same
- * patterns there; over a tree with no `.git` anywhere above it the scan walks
- * what the project ignored — slower and noisier, never missing a match — and an
- * `ast-grep-excludes-unanchored` ledger row says so.
+ * patterns there. A tree with no `.git` marker keeps the pre-anchor argv so its
+ * project globs still exclude the project's ignored paths.
  */
 type SgScanAnchor = {
 	/** The directory the scan child runs in. */
@@ -1025,21 +1007,23 @@ export class SgRunner {
 		try {
 			isDirectory = fs.statSync(absolute).isDirectory();
 		} catch {
-			// none: an absent or unreadable argument anchors at its parent directory,
-			// and the CLI's own missing-path message still reaches the caller's
-			// failure classification.
+			// none: anchor at the nearest directory that exists so the child itself
+			// can start. The relative missing path still reaches the CLI.
 		}
-		const treeRoot = isDirectory ? absolute : path.dirname(absolute);
+		let treeRoot = isDirectory ? absolute : path.dirname(absolute);
+		if (!fs.existsSync(treeRoot)) {
+			treeRoot =
+				[...walkUpDirs(treeRoot)].find((dir) => fs.existsSync(dir)) ?? treeRoot;
+		}
 		const isolationCwd = this.sgSpawnOptions?.cwd;
 		if (isolationCwd !== undefined) {
-			if (!sgHasGitRepository(treeRoot)) {
-				incrementDegradationCount({
-					kind: "ast-grep-excludes-unanchored",
-					subject: "ast-grep",
-					reason: `${displayProjectDataPath(absolute)}: the npx fallback runs outside the scanned tree, so no exclude glob can be rooted at the scan root and no ignore file applies`,
-				});
-			}
-			return { cwd: isolationCwd, scanArg: absolute, excludeArgs: [] };
+			return {
+				cwd: isolationCwd,
+				scanArg: absolute,
+				excludeArgs: findNearestContaining(treeRoot, [".git"])
+					? []
+					: sgExcludeArgsForProject(absolute),
+			};
 		}
 		// The scan path is spelled RELATIVE to that directory, because a CLI that
 		// matches a `--globs` pattern against the path as the caller wrote it

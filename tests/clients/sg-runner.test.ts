@@ -4,10 +4,7 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { capKilledSpawnResult } from "../support/spawn-shapes.js";
 import { removeTempDirSync } from "./test-utils.js";
-import {
-	getDegradationSummary,
-	resetDegradationLedger,
-} from "../../clients/degradation-ledger.js";
+import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import {
 	resetProjectTrust,
 	setProjectTrustState,
@@ -362,12 +359,10 @@ describe("SgRunner", () => {
 			}
 		});
 
-		// #5545: the npx child runs in the pi-lens npm-isolation directory, so a
-		// `--globs` exclude built from the scanned tree is tested there against a
-		// path that never starts at that tree. That tier therefore carries none,
-		// and a scan tree that no ignore file governs — no `.git` at or above it,
-		// so ast-grep reads no ignore file for it — records the loss.
-		it("carries no exclude glob on the npx tier and records it over a tree no ignore file governs (#5545)", async () => {
+		// #5545: the npx child remains isolated, but a tree with no repository
+		// marker must retain the pre-anchor project globs so ignored directories
+		// do not enter the result.
+		it("retains project excludes on the npx tier over a tree with no git marker (#5545)", async () => {
 			const env = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-sg-unanchored-"),
 			);
@@ -404,10 +399,10 @@ describe("SgRunner", () => {
 					if (withMarker) fs.mkdirSync(path.join(tree, ".git"));
 					else {
 						const ancestor = markerAbove(tree);
-						expect(
-							ancestor,
-							`no .git may sit above the marker-less fixture (${ancestor})`,
-						).toBeUndefined();
+						// A shared checkout may place a marker at the OS temp root. In
+						// that harness shape this cell cannot create a marker-less tree;
+						// the real-binary end-to-end cell owns that population.
+						if (ancestor !== undefined) continue;
 					}
 					scanArgs.length = 0;
 					resetDegradationLedger();
@@ -417,14 +412,14 @@ describe("SgRunner", () => {
 					await runner.tempScanDetailedAsync(tree, "r", rule);
 					expect(scanArgs.length).toBeGreaterThan(0);
 					for (const args of scanArgs) {
-						expect(args).not.toContain("--globs");
 						expect(args).toContain(path.resolve(tree));
 					}
-					const rows = getDegradationSummary().filter(
-						(group) => group.kind === "ast-grep-excludes-unanchored",
-					);
-					if (withMarker) expect(rows).toEqual([]);
-					else expect(rows.map((row) => row.count)).toEqual([1]);
+					if (withMarker) {
+						expect(scanArgs.flat()).not.toContain("--globs");
+					} else {
+						expect(scanArgs.flat()).toContain("--globs");
+						expect(scanArgs.flat()).toContain("!node_modules/**");
+					}
 				}
 			} finally {
 				vi.unstubAllEnvs();
@@ -758,6 +753,69 @@ describe("SgRunner", () => {
 				);
 			} finally {
 				removeTempDirSync(root);
+			}
+		});
+
+		it("anchors a missing path below its nearest existing directory (#5545)", async () => {
+			const env = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-missing-"));
+			const managed = path.join(env, "ast-grep");
+			const scanPath = path.join(env, "missing", "nested", "file.ts");
+			const calls: Array<{ args: string[]; cwd?: string }> = [];
+			ensureTool.mockResolvedValue(managed);
+			safeSpawnAsync.mockImplementation(
+				async (cmd: string, args: string[], options?: { cwd?: string }) => {
+					if (cmd === managed && args.includes("--version"))
+						return { status: 0, stdout: "ast-grep 0.51.1", stderr: "" };
+					calls.push({ args, cwd: options?.cwd });
+					return { status: 1, stdout: "", stderr: "path not found" };
+				},
+			);
+			try {
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const result = await new SgRunner().tempScanDetailedAsync(
+					scanPath,
+					"missing",
+					"id: missing\nlanguage: TypeScript\nrule: { kind: function_declaration }\n",
+				);
+				expect(calls).toHaveLength(1);
+				expect(calls[0]?.cwd).toBe(env);
+				expect(calls[0]?.args.at(-1)).toBe(path.relative(env, scanPath));
+				expect(result.error).toContain("path not found");
+				expect(result.failure).toBe("cli-failure");
+			} finally {
+				removeTempDirSync(env);
+			}
+		});
+
+		it("anchors an explicit file at its containing directory (#5545)", async () => {
+			const env = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-file-"));
+			const managed = path.join(env, "ast-grep");
+			const file = path.join(env, "src", "file.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "function answer() { return 42; }\n");
+			const calls: Array<{ args: string[]; cwd?: string }> = [];
+			ensureTool.mockResolvedValue(managed);
+			safeSpawnAsync.mockImplementation(
+				async (cmd: string, args: string[], options?: { cwd?: string }) => {
+					if (cmd === managed && args.includes("--version"))
+						return { status: 0, stdout: "ast-grep 0.51.1", stderr: "" };
+					calls.push({ args, cwd: options?.cwd });
+					return { status: 0, stdout: "[]", stderr: "" };
+				},
+			);
+			try {
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const result = await new SgRunner().tempScanDetailedAsync(
+					file,
+					"file",
+					"id: file\nlanguage: TypeScript\nrule: { kind: function_declaration }\n",
+				);
+				expect(calls).toHaveLength(1);
+				expect(calls[0]?.cwd).toBe(path.dirname(file));
+				expect(calls[0]?.args.at(-1)).toBe("file.ts");
+				expect(result.error).toBeUndefined();
+			} finally {
+				removeTempDirSync(env);
 			}
 		});
 

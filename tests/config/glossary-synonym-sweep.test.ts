@@ -1543,7 +1543,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// exclude globs for the child's working directory, so it resolves and
 		// relativizes the scanned tree (`path.resolve`, `path.relative`,
 		// `path.dirname`, `path.join`) and names the field in its doc comments.
-		"clients/sg-runner.ts": 16,
+		"clients/sg-runner.ts": 15,
 		// 26 -> 25 (#3930 r2): the shared user rule-root seam removes one
 		// duplicated path construction.
 		// 25 -> 26 (#3930 r4): the cycle-memo key is derived with
