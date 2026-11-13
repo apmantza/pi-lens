@@ -548,6 +548,23 @@ describe("clean-claim census (#5258)", () => {
 		]);
 	});
 
+	it("reds a checkedVerdict claim guarded by anything but .checked", () => {
+		// The write-route ✓ line is proven by the dispatch verdict's `checked`;
+		// a row naming another binding its statement reads would not be.
+		const file = "clients/pipeline.ts";
+		const rows = loadCensus()[file]!;
+		const [key, row] = Object.entries(rows.claim).find(
+			([, row]) => row.producer === "checkedVerdict",
+		)!;
+		const relabelled: FileRows = {
+			...rows,
+			claim: { ...rows.claim, [key]: { ...row, guard: "elapsed" } },
+		};
+		expect(producerProblems(file, readCensusSource(file), relabelled)).toEqual([
+			expect.stringMatching(/guard elapsed is not a verdict's \.checked/),
+		]);
+	});
+
 	it("reds an own claim relabelled to a producer it does not read", () => {
 		const file = "tools/lens-diagnostics.ts";
 		const rows = loadCensus()[file]!;
