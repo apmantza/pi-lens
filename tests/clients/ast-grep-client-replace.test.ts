@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AstGrepClient } from "../../clients/ast-grep-client.js";
 
 /** Build a client whose private SgRunner is replaced with a stubbed exec. */
-function clientWithExec(exec: (args: string[]) => unknown): AstGrepClient {
+function clientWithExec(
+	exec: (args: string[], options?: { signal?: AbortSignal }) => unknown,
+): AstGrepClient {
 	const client = new AstGrepClient();
 	(client as unknown as { runner: { exec: typeof exec } }).runner = { exec };
 	return client;
@@ -94,6 +96,95 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			(c[0] as string[]).includes("--update-all"),
 		);
 		expect(wrote).toBe(false);
+	});
+
+	it("cancels a raw apply child when the call aborts", async () => {
+		const controller = new AbortController();
+		let abortWrite!: () => void;
+		const writeStopped = new Promise<void>((resolve) => {
+			abortWrite = resolve;
+		});
+		const exec = vi.fn(
+			async (args: string[], options?: { signal?: AbortSignal }) => {
+				if (args.includes("--update-all")) {
+					options?.signal?.addEventListener("abort", abortWrite, {
+						once: true,
+					});
+					await writeStopped;
+					return {
+						matches: [],
+						totalMatches: 0,
+						truncated: false,
+						error: "operation aborted",
+						failure: "aborted" as const,
+					};
+				}
+				return {
+					matches: [SAMPLE_MATCH],
+					totalMatches: 1,
+					truncated: false,
+				};
+			},
+		);
+		const client = clientWithExec(exec);
+		const pending = client.replace(
+			"var $X",
+			"let $X",
+			"typescript",
+			["a.ts"],
+			true,
+			{ sessionRoot: process.cwd(), signal: controller.signal },
+		);
+
+		await vi.waitFor(() => expect(exec).toHaveBeenCalledTimes(2));
+		controller.abort();
+		const result = await pending;
+
+		expect(result.error).toBe("operation aborted");
+		expect(exec.mock.calls[1]?.[1]).toEqual({ signal: controller.signal });
+	});
+
+	it("cancels a structural-rule apply child when the call aborts", async () => {
+		const controller = new AbortController();
+		let abortWrite!: () => void;
+		const writeStopped = new Promise<void>((resolve) => {
+			abortWrite = resolve;
+		});
+		const tempScanDetailedAsync = vi
+			.fn()
+			.mockResolvedValue({ matches: [SAMPLE_MATCH], status: 0 });
+		const tempScanWithFixAsync = vi.fn(async (...args: unknown[]) => {
+			const options = args.at(-1) as { signal?: AbortSignal };
+			options.signal?.addEventListener("abort", abortWrite, { once: true });
+			await writeStopped;
+			return {
+				matches: [],
+				error: "operation aborted",
+				aborted: true,
+			};
+		});
+		const client = clientWithValidationRunner({
+			tempScanDetailedAsync,
+			tempScanWithFixAsync,
+		});
+		const pending = client.replaceWithRule(
+			"id: rule\nlanguage: TypeScript\nrule: { kind: variable_declarator }",
+			["a.ts"],
+			true,
+			{ sessionRoot: process.cwd(), signal: controller.signal },
+		);
+
+		await vi.waitFor(() => expect(tempScanWithFixAsync).toHaveBeenCalledOnce());
+		controller.abort();
+		const result = await pending;
+
+		expect(result.error).toBe("operation aborted");
+		expect(tempScanDetailedAsync.mock.calls[0]?.[4]).toEqual({
+			signal: controller.signal,
+		});
+		expect(tempScanWithFixAsync.mock.calls[0]?.at(-1)).toEqual({
+			signal: controller.signal,
+		});
 	});
 
 	it("does not classify an invalid raw-rule preview as stale", async () => {

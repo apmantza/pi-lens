@@ -501,9 +501,9 @@ export class AstGrepClient {
 			if (apply) {
 				// Stale-preview check: dry-run first. Preserve CLI failures instead of
 				// treating an invalid rule as a stale, no-match preview.
-				// No explicit signal: the tool call's scope already kills it, and
-				// the count scan right after carries `sg` and refuses (#5097 F5).
-				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml);
+				// The call signal is carried by `sg` for both preview and count scans
+				// so Esc cannot leave this writer's child behind (#5097).
+				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml, sg);
 				if (preCheck.failure || preCheck.error) {
 					return {
 						matches: allMatches,
@@ -525,8 +525,8 @@ export class AstGrepClient {
 				}
 				previewed = preCheck.matches;
 			}
-			// #5097: the runner re-checks `signal` before its `--update-all` and
-			// runs that write to completion.
+			// #5097: the runner cancels the child when the call aborts. A late
+			// answer is handled by the caller's separate hook, never this call.
 			const scan = () =>
 				this.runner.tempScanWithFixAsync(
 					scanPath,
@@ -991,9 +991,8 @@ export class AstGrepClient {
 		// metavariable substitutions don't round-trip into a valid search
 		// pattern, yielding a false "0 matches" even on a successful apply).
 		// preCheck above already captured exactly what matched and was rewritten.
-		// #5097: an abort lands before the write or not at all. A killed
-		// `--update-all` leaves part of the files rewritten, so the write runs to
-		// completion once started. `aborted` keeps the pattern hint off the reply.
+		// #5097: the write child is owned by this call, so abort cancels it before
+		// it can produce a late answer for the aborted call.
 		if (signal?.aborted) {
 			return {
 				matches: [],
@@ -1012,9 +1011,7 @@ export class AstGrepClient {
 		// (#5417). Fire-and-forget: the bridge never throws, and a missing bridge
 		// (pi-lens not activated, guard disabled) is a silent no-op.
 		const applied = await applyRewrite(preCheck.matches, options, () =>
-			this.runner.exec([...baseArgs, "--update-all", ...paths], {
-				ignoreAmbientSignal: true,
-			}),
+			this.runner.exec([...baseArgs, "--update-all", ...paths], sg),
 		);
 		if ("refused" in applied) {
 			return {
@@ -1033,6 +1030,7 @@ export class AstGrepClient {
 				truncated: false,
 				applied: false,
 				error: applied.result.error,
+				...(applied.result.aborted ? { aborted: true } : {}),
 				writeStarted: true,
 				appliedFiles,
 			};
