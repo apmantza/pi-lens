@@ -742,6 +742,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"Real sg execution proves CLI match behavior; a runner stub cannot exercise the binary.",
 	},
+	// 2026-11-13 (#5545): the defect is how the real `ast-grep` CLI relativizes
+	// candidate paths against the child's working directory, so only a real spawn
+	// over-excludes; a stubbed runner cannot reproduce an empty match list.
+	"real-process-spawn:clients/ast-grep-scan-ancestor-exclude.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the real `ast-grep` CLI decides which candidates its `--globs` excludes drop; a stubbed runner answers a match list of the test's choosing and cannot over-exclude anything",
+	},
 	// 2026-10-21 (#4713 R11): real `bash -c` is the oracle for which
 	// directory each generated spelling enters and where its redirect lands;
 	// the generator exists because hand-written expectations missed spellings.

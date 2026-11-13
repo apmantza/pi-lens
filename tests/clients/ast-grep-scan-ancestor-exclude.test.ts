@@ -1,3 +1,4 @@
+// flake-shape: real-process-spawn — the defect is how the real `ast-grep` CLI relativizes candidates, so only a real spawn answers it; a stubbed runner cannot over-exclude anything (#5545).
 /**
  * #5545 — an ast-grep scan of a tree that sits under an ancestor directory the
  * tree's own `.gitignore` names returned an empty match list.
