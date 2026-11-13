@@ -207,7 +207,11 @@ export class OpengrepClient extends SecurityScanClient<OpengrepResult> {
 							"--exclude",
 							pattern,
 						]),
-						cwd,
+						// A relative target: opengrep matches `--exclude` against the
+						// path as scanned, so an absolute `cwd` made a scratch-named
+						// ANCESTOR of the project exclude every file (#5500). The spawn
+						// `cwd` below is the root, so `.` is the same tree.
+						".",
 					],
 					{ cwd, timeout: SCAN_TIMEOUT_MS },
 				),
