@@ -28,11 +28,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { envFor, gitExecFileSync } from "../../scripts/lib/git-fixture-env.mjs";
 import { copyFixtureGitHelper } from "../support/fixture-git-copy.js";
 import { readNdjsonRows } from "../support/ndjson-rows.js";
 import { relativeInside } from "../../clients/path-utils.js";
+import {
+	EXCLUDED_DIRS,
+	isPiLensInternalPath,
+} from "../../clients/file-utils.js";
 import { isProcessAlive } from "../support/process-tree.js";
 import { waitFor } from "../clients/interleaving-kit.js";
 import {
@@ -61,6 +65,14 @@ import {
 } from "../../scripts/pre-push-targeted-tests.mjs";
 
 const repoRoot = path.resolve(__dirname, "..", "..");
+
+// The gate's default temp root, when PI_LENS_HOME is unset (#5536).
+const DEFAULT_ROOT = path.join(
+	os.homedir(),
+	".local",
+	"share",
+	"pi-lens-prepush",
+);
 
 // What the local hook runs of a registry: its CI-only members run in CI (#4724).
 const local = (tests: string[]) =>
@@ -1012,9 +1024,7 @@ syncBuiltinESMExports();
 			const seen = runRoot(homeFor);
 			expect(relativeInside(seen.checkout, seen.base)).toBeUndefined();
 			expect(relativeInside(seen.checkout, seen.children)).toBeUndefined();
-			expect(seen.base).toBe(
-				fs.realpathSync(path.join(os.homedir(), ".pi-lens", "prepush-tmp")),
-			);
+			expect(seen.base).toBe(fs.realpathSync(DEFAULT_ROOT));
 			expect(seen.stderr.match(notice)).toHaveLength(1);
 		},
 	);
@@ -1040,7 +1050,48 @@ describe("pre-push temp root pin (#5439)", () => {
 			TEMP: caller,
 			TMP: caller,
 		});
-		expect(root).toBe(path.join(os.homedir(), ".pi-lens", "prepush-tmp"));
+		expect(root).toBe(DEFAULT_ROOT);
+	});
+
+	// Recurrence (#5536): the default root sat under `~/.pi-lens`, which
+	// `isPiLensInternalPath` treats as pi-lens-owned, so every fixture built
+	// under `os.tmpdir()` (this root) was dropped and the turn-scenarios gitleaks
+	// cell reddened on every push that selected it. The internal set comes from
+	// the production predicate and its exported excluded-directory list; this
+	// test restates no list of its own.
+	it("defaults to a root no pi-lens-internal predicate claims (#5536)", () => {
+		// The vitest worker's HOME sits under its PI_LENS_HOME and its TMPDIR, both
+		// of which the predicate owns; point them elsewhere so only the root's own
+		// spelling is judged, as on a host whose HOME is under neither.
+		const neutral = path.join(path.parse(os.homedir()).root, "neutral-5536");
+		for (const key of ["PI_LENS_HOME", "TMPDIR", "TEMP", "TMP"])
+			vi.stubEnv(key, neutral);
+		try {
+			const root = resolvePrePushTmpRoot({});
+			const project = path.join(root, "run-x", "project");
+			const walked: string[] = [];
+			for (
+				let dir = root;
+				dir !== path.dirname(dir) && dir !== os.homedir();
+				dir = path.dirname(dir)
+			) {
+				walked.push(dir);
+				expect(isPiLensInternalPath(dir, project), dir).toBe(false);
+				expect(isPiLensInternalPath(path.join(dir, "a.ts"), project), dir).toBe(
+					false,
+				);
+			}
+			expect(walked.length).toBeGreaterThan(0);
+			const below = path.relative(os.homedir(), root).split(path.sep);
+			expect(
+				below.filter((segment) => EXCLUDED_DIRS.includes(segment)),
+			).toEqual([]);
+			expect(
+				isPiLensInternalPath(path.join(project, "src", "app.ts"), project),
+			).toBe(false);
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 
 	it("honours PI_LENS_HOME as the machine-state parent", () => {
