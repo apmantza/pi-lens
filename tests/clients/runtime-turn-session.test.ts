@@ -1788,6 +1788,70 @@ describe("turn_end unified secret surfacing", () => {
 		}
 	});
 
+	// #5500: the secrets lane classified gitleaks's ABSOLUTE `File` against the
+	// scratch-name list, so a project checked out under Claude Code's own
+	// `.claude/worktrees/<lane>` layout (or a `.pi-lens/prepush-tmp` temp root)
+	// had every finding demoted to "scratch" and the blocker never fired.
+	// Recurrence prevented: the scratch judgement reading ancestors of the root.
+	it("fires the secrets blocker for a project under a .claude/worktrees ancestor, and still skips scratch inside it", async () => {
+		const env = setupTestEnvironment("pi-lens-secret-ancestor-");
+		try {
+			const root = path.join(env.tmpDir, ".claude/worktrees/lane");
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "ancestor-session" });
+			const cacheManager = new CacheManager(false);
+			const secretFile = path.join(root, "src/config.ts");
+			const scratchFile = path.join(root, ".pi/notes/leak.md");
+			for (const file of [secretFile, scratchFile]) {
+				fs.mkdirSync(path.dirname(file), { recursive: true });
+				fs.writeFileSync(file, "const k = 'AKIA...';\n");
+			}
+			cacheManager.addModifiedRange(
+				secretFile,
+				{ start: 1, end: 1 },
+				false,
+				root,
+				"ancestor-session",
+			);
+			cacheManager.writeCache(
+				"gitleaks",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [
+						{
+							ruleId: "aws-access-token",
+							file: secretFile,
+							startLine: 42,
+							description: "AWS key",
+						},
+						{
+							ruleId: "generic-api-key",
+							file: scratchFile,
+							startLine: 1,
+							description: "Generic key",
+						},
+					],
+				},
+				root,
+			);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, { ctxCwd: root }),
+			);
+
+			const content =
+				consumeTurnEndFindings(cacheManager, root)?.messages?.[0]?.content ??
+				"";
+			expect(content).toContain("hardcoded secrets detected");
+			expect(content).toContain("src/config.ts:42");
+			expect(content).toContain("aws-access-token");
+			expect(content).not.toContain("generic-api-key");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it.each(["ignored", "nested-repository", "scratch"] as const)(
 		"does not inject a %s gitleaks finding into turn context",
 		async (pathStatus) => {

@@ -70,8 +70,17 @@ function git(cwd, args) {
 	gitExecFileSync(args, { cwd, stdio: "ignore" });
 }
 
+// The fixture project sits under a scratch-named ANCESTOR, Claude Code's own
+// worktree layout: the scratch exclusion must judge paths below the scan root
+// only, so every tracked finding here must still surface (#5500: the absolute
+// `File` matched `.claude` and dropped them all, at gitleaks and in the TS
+// backstop).
 function buildFixtureRepo() {
-	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-gitleaks-smoke-"));
+	const base = fs.mkdtempSync(
+		path.join(os.tmpdir(), "pi-lens-gitleaks-smoke-"),
+	);
+	const cwd = path.join(base, ".claude", "worktrees", "smoke-lane");
+	fs.mkdirSync(cwd, { recursive: true });
 	git(cwd, ["init", "-q"]);
 	git(cwd, ["config", "user.email", "smoke@pi-lens.test"]);
 	git(cwd, ["config", "user.name", "pi-lens smoke"]);
@@ -91,7 +100,7 @@ function buildFixtureRepo() {
 		'cached research note: token = "ghp_Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"\n',
 	);
 
-	return cwd;
+	return { base, cwd };
 }
 
 function findGitleaks() {
@@ -132,7 +141,7 @@ async function main() {
 		process.exit(2);
 	}
 
-	const cwd = buildFixtureRepo();
+	const { base, cwd } = buildFixtureRepo();
 	try {
 		const { GitleaksClient } = await import(pathToFileURL(distEntry).href);
 		const { gitleaksFindingToProjectDiagnostic } = await import(
@@ -232,7 +241,7 @@ async function main() {
 			);
 		}
 	} finally {
-		fs.rmSync(cwd, { recursive: true, force: true });
+		fs.rmSync(base, { recursive: true, force: true });
 	}
 
 	console.log(
