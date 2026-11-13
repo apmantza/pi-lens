@@ -2455,8 +2455,10 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 				await readOnlyTurn(rig);
 				expect(take(rig, false)).toBeUndefined();
 				const repeat = take(rig, true);
-				expect(repeat).toContain(BLOCKER_REPEAT_HEADING);
-				expect(repeat).toContain("Unresolved from this turn — filler.ts");
+				// One blank line under the heading (#5532 review r2 N5: it had two).
+				expect(repeat).toContain(
+					`${BLOCKER_REPEAT_HEADING}\n\nUnresolved from this turn — filler.ts`,
+				);
 				// The wording of "the workspace changed" is not borrowed.
 				expect(repeat).not.toContain("Historical finding");
 				expect(take(rig, true)).toBeUndefined();
