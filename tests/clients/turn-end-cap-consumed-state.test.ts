@@ -2572,35 +2572,37 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		return { file, section: `${prefix}${body}` };
 	}
 
-	for (const count of [12, 300]) {
-		it(`caps a repeat of ${count} collapsed blockers like any turn-end message`, async () => {
-			// RECURRENCE GUARDED: #5532 review r2 N1. The repeat joined the pointer
-			// lines of collapsed blockers outside `capTurnEndMessage`: 12 stuck
-			// blockers made a 2016-char repeat and 300 a 49,736-char one, on every
-			// prompt (master's repeat: 1000 chars).
-			const rig = makeRig("pi-lens-5532-n1-");
-			try {
-				for (let index = 0; index < count; index++) {
-					const name = `stuck-${index}.ts`;
-					const { file } = namedBlocker(rig, name, 120);
-					for (let n = 0; n < BLOCKER_FULL_DELIVERY_CAP; n++)
-						rig.runtime.recordBlockerDelivery(file, "full", name);
-				}
-				await endTurn(rig);
-				await readOnlyTurn(rig);
-				const repeat = take(rig, true) ?? "";
-				expect(repeat).toContain(`stuck-0.ts: ${BLOCKER_CAPPED_MARK}`);
-				const text = repeat.slice(AUTOMATION_FRAMING.length);
-				const { maxChars, maxLines } = RUNTIME_CONFIG.turnEnd;
-				expect(text.length).toBeLessThanOrEqual(
-					maxChars + "\n... (truncated)".length,
-				);
-				expect(text.split("\n").length).toBeLessThanOrEqual(maxLines + 1);
-			} finally {
-				rig.cleanup();
+	const cappedRepeat = async (count: number): Promise<void> => {
+		// RECURRENCE GUARDED: #5532 review r2 N1. The repeat joined the pointer
+		// lines of collapsed blockers outside `capTurnEndMessage`: 12 stuck
+		// blockers made a 2016-char repeat and 300 a 49,736-char one, on every
+		// prompt (master's repeat: 1000 chars).
+		const rig = makeRig("pi-lens-5532-n1-");
+		try {
+			for (let index = 0; index < count; index++) {
+				const name = `stuck-${index}.ts`;
+				const { file } = namedBlocker(rig, name, 120);
+				for (let n = 0; n < BLOCKER_FULL_DELIVERY_CAP; n++)
+					rig.runtime.recordBlockerDelivery(file, "full", name);
 			}
-		});
-	}
+			await endTurn(rig);
+			await readOnlyTurn(rig);
+			const repeat = take(rig, true) ?? "";
+			expect(repeat).toContain(`stuck-0.ts: ${BLOCKER_CAPPED_MARK}`);
+			const text = repeat.slice(AUTOMATION_FRAMING.length);
+			const { maxChars, maxLines } = RUNTIME_CONFIG.turnEnd;
+			expect(text.length).toBeLessThanOrEqual(
+				maxChars + "\n... (truncated)".length,
+			);
+			expect(text.split("\n").length).toBeLessThanOrEqual(maxLines + 1);
+		} finally {
+			rig.cleanup();
+		}
+	};
+	it("caps a repeat of 12 collapsed blockers like any turn-end message", () =>
+		cappedRepeat(12));
+	it("caps a repeat of 300 collapsed blockers like any turn-end message", () =>
+		cappedRepeat(300));
 
 	it("counts a repeat only for the blockers its text carried in full", async () => {
 		// RECURRENCE GUARDED: #5532 review r2 N2. The repeat's consume counted
