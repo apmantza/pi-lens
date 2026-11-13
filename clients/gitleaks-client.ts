@@ -75,8 +75,8 @@ import {
 	getSecretsLaneAllowlistPaths,
 	isUnderSecretsLaneScratchTree,
 	nestedWorktreeOffsets,
+	rootPathRegexSource,
 } from "./scratch-tree-policy.js";
-import { escapeRegExp } from "./string-utils.js";
 
 // --- Types ---
 
@@ -196,8 +196,7 @@ export const PLACEHOLDER_SECRET_REGEXES = [
  * ends; either separator is accepted for the same reason as the name entries.
  */
 function worktreeAllowlistPath(worktree: string): string {
-	const segments = worktree.split(/[/\\]/).map(escapeRegExp);
-	return `^${segments.join("[/\\\\]")}(?:[/\\\\].*)?$`;
+	return `^${rootPathRegexSource(worktree)}(?:[/\\\\].*)?$`;
 }
 
 /**
@@ -229,7 +228,7 @@ export function writeScopedGitleaksConfig(outDir: string, cwd: string): string {
 		? `path = ${JSON.stringify(localConfig)}`
 		: "useDefault = true";
 	const pathPatterns = [
-		...getSecretsLaneAllowlistPaths(),
+		...getSecretsLaneAllowlistPaths(cwd),
 		...nestedWorktreeOffsets(cwd).map((offset) =>
 			worktreeAllowlistPath(path.join(cwd, offset)),
 		),
@@ -518,7 +517,7 @@ export async function classifyAndFilterFindings(
 
 	const classified: GitleaksFinding[] = [];
 	for (const finding of findings) {
-		if (isUnderSecretsLaneScratchTree(finding.file)) {
+		if (isUnderSecretsLaneScratchTree(finding.file, cwd)) {
 			classified.push({ ...finding, pathStatus: "scratch" });
 			continue;
 		}

@@ -264,6 +264,46 @@ describe("classifyAndFilterFindings — secrets-lane scratch exclusion (#1562)",
 	});
 });
 
+// #5500: `classifyAndFilterFindings` handed gitleaks's ABSOLUTE `File` to the
+// segment-name scratch test, so a scratch-named directory ABOVE the project
+// (`.claude/worktrees/<lane>`, a `.pi-lens/prepush-tmp` temp root) demoted every
+// finding to "scratch" and the turn-end secrets blocker never fired. Recurrence
+// prevented: the scratch judgement reading the ancestors of the scan root.
+describe("classifyAndFilterFindings — the scan root bounds the scratch judgement (#5500)", () => {
+	it.each([
+		".claude/worktrees/lane",
+		".pi-lens/prepush-tmp",
+		".worktrees/lane",
+	])(
+		"keeps a finding in a project under a %s ancestor and still demotes scratch inside it",
+		async (ancestor) => {
+			const env = setupTestEnvironment("pi-lens-gitleaks-ancestor-");
+			try {
+				const root = path.join(env.tmpDir, ancestor, "project");
+				fs.mkdirSync(root, { recursive: true });
+				initGitRepo(root);
+				const result = await classifyAndFilterFindings(
+					[
+						finding({ file: path.join(root, "src/config.ts") }),
+						finding({ file: "src/relative.ts" }),
+						finding({ file: path.join(root, ".pi/notes.md") }),
+						finding({ file: path.join(root, "pkg/.claude/notes.md") }),
+					],
+					root,
+				);
+				expect(result.map((f) => f.pathStatus)).toEqual([
+					"untracked",
+					"untracked",
+					"scratch",
+					"scratch",
+				]);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
+});
+
 describe("gitleaksFindingToProjectDiagnostic — pathStatus observability (#1562)", () => {
 	it("appends the git status to the diagnostic message when pathStatus is set", () => {
 		const diag = gitleaksFindingToProjectDiagnostic(
@@ -362,7 +402,7 @@ describe("writeScopedGitleaksConfig — placeholder allowlist + secrets-lane pat
 			const toml = fs.readFileSync(configPath, "utf-8");
 			expect(toml).toContain("[allowlist]");
 			expect(toml).toContain("paths = [");
-			for (const pattern of getSecretsLaneAllowlistPaths()) {
+			for (const pattern of getSecretsLaneAllowlistPaths(env.tmpDir)) {
 				expect(toml).toContain(JSON.stringify(pattern));
 			}
 		} finally {
@@ -438,8 +478,10 @@ describe("writeScopedGitleaksConfig — placeholder allowlist + secrets-lane pat
 		const env = setupTestEnvironment("pi-lens-gitleaks-cfg-winsep-");
 		try {
 			writeScopedGitleaksConfig(outDir, env.tmpDir);
-			const patterns = getSecretsLaneAllowlistPaths().map((p) => new RegExp(p));
-			const winPath = ".pi\\greedysearch-sources\\cline-api-docs.md";
+			const patterns = getSecretsLaneAllowlistPaths(env.tmpDir).map(
+				(p) => new RegExp(p),
+			);
+			const winPath = `${env.tmpDir.replace(/\//g, "\\")}\\.pi\\greedysearch-sources\\cline-api-docs.md`;
 			expect(patterns.some((r) => r.test(winPath))).toBe(true);
 		} finally {
 			env.cleanup();
