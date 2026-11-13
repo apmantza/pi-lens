@@ -6654,8 +6654,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// frees goes to blockers the cap cut before; collapsed lines alone are one
 		// line each.
 		const repeatParts: ComposedPart[] = [
-			...blockerParts.filter((part) => !cappedBlockerText.has(part)),
-			...blockerParts.filter((part) => cappedBlockerText.has(part)),
+			...blockerParts.flatMap((part) =>
+				cappedBlockerText.has(part) ? [] : [part],
+			),
+			...blockerParts.flatMap((part) =>
+				cappedBlockerText.has(part) ? [part] : [],
+			),
 		].map((raw) => ({ raw, text: cappedBlockerText.get(raw) ?? raw }));
 		const pointerOnly = repeatParts.every((part) => part.raw !== part.text);
 		const repeatSeparator = pointerOnly ? "\n" : "\n\n";
