@@ -65,6 +65,7 @@ import {
 import {
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
+	realpathOrResolve,
 	relativeInside,
 	walkUpDirs,
 } from "./path-utils.js";
@@ -375,7 +376,7 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 		cwd: string,
 		options?: { requireSignal?: boolean },
 	): Promise<GitleaksResult> {
-		const targetDir = path.resolve(cwd);
+		const targetDir = realpathOrResolve(cwd);
 		const scannedAt = new Date().toISOString();
 		const requireSignal = options?.requireSignal ?? true;
 

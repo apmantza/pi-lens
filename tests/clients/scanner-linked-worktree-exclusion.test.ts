@@ -73,6 +73,7 @@ import {
 	type GitleaksFinding,
 } from "../../clients/gitleaks-client.js";
 import { JscpdClient } from "../../clients/jscpd-client.js";
+import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 import { gitleaksFindingToProjectDiagnostic } from "../../clients/project-diagnostics/runner-adapters/gitleaks.js";
 import { SECRETS_LANE_SCRATCH_DIR_NAMES } from "../../clients/scratch-tree-policy.js";
 import { OpengrepClient } from "../../clients/opengrep-client.js";
@@ -812,5 +813,81 @@ describe("#5500 a scratch-named ancestor of the scanned root does not touch the 
 			true,
 		);
 		expect(exclude).toContain(`${anchor}/.pi/*`);
+	});
+
+	// The path-boundary audit of #5500: gitleaks and trivy took `path.resolve`
+	// of the root where opengrep takes `realpathOrResolve`, so a symlinked root
+	// reached `gitleaks detect --source <link>`, which walked ~0 bytes and said
+	// "no leaks found" while the real path reports its findings (measured,
+	// gitleaks 8.30.1). Recurrence prevented: a scanner scanning the spelling of
+	// the root the caller used rather than the directory it names.
+	function linkTo(target: string): string {
+		const link = `${target}-link`;
+		fs.symlinkSync(target, link, "dir");
+		return link;
+	}
+
+	it("gitleaks: scan(<symlink>) spawns on the real root, the same source as scan(<real>)", async () => {
+		const sources: string[] = [];
+		safeSpawnAsync.mockImplementation(async (...call: unknown[]) => {
+			const args = call[1] as string[];
+			if (args[0] === "detect")
+				sources.push(args[args.indexOf("--source") + 1]);
+			return { error: undefined, status: 0, stdout: "", stderr: "" };
+		});
+		const client = new GitleaksClient(false) as unknown as {
+			ensureAvailable: () => Promise<boolean>;
+			scan: (cwd: string, o: { requireSignal: boolean }) => Promise<unknown>;
+		};
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		await client.scan(root, { requireSignal: false });
+		await client.scan(linkTo(root), { requireSignal: false });
+
+		expect(sources).toEqual([realPath(root), realPath(root)]);
+	});
+
+	it("trivy: scan(<symlink>) spawns on the real root, the same target as scan(<real>)", async () => {
+		write(root, ".pi-lens.json", JSON.stringify({ trivy: { enabled: true } }));
+		write(root, "package.json", "{}");
+		resetProjectLensConfigCache();
+		const targets: string[] = [];
+		safeSpawnAsync.mockImplementation(async (...call: unknown[]) => {
+			const args = call[1] as string[];
+			if (args[0] === "fs") targets.push(args.at(-1) as string);
+			return { error: undefined, status: 0, stdout: "", stderr: "" };
+		});
+		const client = new TrivyClient(false) as unknown as {
+			ensureAvailable: () => Promise<boolean>;
+			scan: (cwd: string) => Promise<unknown>;
+		};
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		await client.scan(root);
+		await client.scan(linkTo(root));
+
+		expect(targets).toEqual([realPath(root), realPath(root)]);
+	});
+
+	it("gitleaks: a finding in the real spelling of a symlinked root still judges scratch below the root only", async () => {
+		const link = linkTo(root);
+		const [kept, scratch] = await classifyAndFilterFindings(
+			[
+				{
+					ruleId: "r",
+					file: path.join(realPath(root), "src/a.js"),
+					startLine: 1,
+				},
+				{
+					ruleId: "r",
+					file: path.join(realPath(root), ".pi/x.md"),
+					startLine: 1,
+				},
+			],
+			link,
+		);
+
+		expect(kept?.pathStatus).not.toBe("scratch");
+		expect(scratch?.pathStatus).toBe("scratch");
 	});
 });

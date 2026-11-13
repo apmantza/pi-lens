@@ -231,7 +231,13 @@ export function isUnderSecretsLaneScratchTree(
 	file: string,
 	root: string,
 ): boolean {
-	const rel = relativeInside(root, resolve(root, file));
+	const absolute = resolve(root, file);
+	// The lexical answer first (a link inside the project stays inside it), the
+	// real identities second: gitleaks reports the real spelling of a root that
+	// the caller spelled through a symlink.
+	const rel =
+		relativeInside(root, absolute) ??
+		relativeInside(realpathOrResolve(root), realpathOrResolve(absolute));
 	if (rel === undefined) return false;
 	const names = new Set(
 		SECRETS_LANE_SCRATCH_DIR_NAMES.map((n) => n.toLowerCase()),

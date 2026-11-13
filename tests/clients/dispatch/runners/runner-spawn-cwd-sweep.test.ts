@@ -578,8 +578,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"collectTrackedFiles forwards its own `cwd` parameter, the repository root its callers pass — `git ls-files` REPORTS ON that directory rather than resolving config from it, so moving it to a marker root would answer about a different repository (#2894)",
 	],
 	[
-		"clients/gitleaks-client.ts#GitleaksClient.scan:c23b1b18~4bd5cc03",
-		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument; the security clients are driven by the MCP surface, not by dispatch",
+		"clients/gitleaks-client.ts#GitleaksClient.scan:c23b1b18~74b63300",
+		"passes `targetDir` = realpathOrResolve(cwd) from the scan API's own argument; the security clients are driven by the MCP surface, not by dispatch",
 	],
 	[
 		"clients/gitleaks-client.ts#GitleaksClient.runScan.spawn:937d6f21~353ea442",
@@ -615,7 +615,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/jscpd-client.ts#JscpdClient.scan:d8e5a0b6~86b35ae4",
-		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
+		"passes `targetDir` = realpathOrResolve(cwd) from the scan API's own argument",
 	],
 	[
 		"clients/jscpd-client.ts#JscpdClient.runScan.spawn:fb78f8be~dbf27697",
@@ -674,7 +674,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"passes the realpath-canonicalized `targetDir` from the scan API's own argument",
 	],
 	[
-		"clients/opengrep-client.ts#OpengrepClient.runScan.spawn:9bdaabb4~353ea442",
+		"clients/opengrep-client.ts#OpengrepClient.runScan.spawn:0a57c5d6~353ea442",
 		"cwd is runScan's own `cwd` parameter, captured by the spec's `spawn` callback (#5411 moved the call into it), from which OpengrepClient.resolveConfig(cwd) already chose the rule config",
 	],
 	[
@@ -710,8 +710,8 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 		"cwd is probeWorkingTreeState's own `root` parameter — `git status` reports the worktree at that root. Not a tool probe in #2894's sense: it asks about a directory, so it cannot use the cwd-less probe seam",
 	],
 	[
-		"clients/trivy-client.ts#TrivyClient.scan:c23b1b18~4bd5cc03",
-		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
+		"clients/trivy-client.ts#TrivyClient.scan:c23b1b18~74b63300",
+		"passes `targetDir` = realpathOrResolve(cwd) from the scan API's own argument",
 	],
 	[
 		"clients/trivy-client.ts#TrivyClient.runScan.spawn:89fa15ad~353ea442",
