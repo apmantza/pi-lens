@@ -114,9 +114,10 @@ Shape 94 entered the catalog from the #5556 audit. Incident: #5544 found that
 argument string, so an absolute dispatched path under `.claude/worktrees/<lane>`
 reported a silent clean for a file the tool never linted. #5557 fixed those two
 with a project-relative argv. #5578 probed the rest of the census: oxlint was
-affected in lint and autofix and now takes the same relative argv; ruff, Biome
-and htmlhint were cleared. Open on #5556: ESLint (no flat-config probe ran) and
-the cpp-check argv.
+affected in lint and autofix and now takes the same relative argv, `./`-prefixed
+when the name starts with `-` (`--fix -D.ts` rewrote an undispatched file); ruff,
+Biome, htmlhint and taplo were cleared. Open on #5556: ESLint (no flat-config
+probe ran) and the cpp-check argv.
 
 ## 2026-11-08 — a walk the census could not see through a helper (shape 85)
 

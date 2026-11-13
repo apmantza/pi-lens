@@ -342,12 +342,16 @@ file-scoped worklist and receives no project-wide scanner output.
 94. **Ignore-glob path spelling:** a runner hands a tool an absolute dispatched
     path even though the tool matches its ignore globs against the argument
     string, so an ignored ancestor can turn a real file into a silent clean.
-    Screen with `grep -rnE 'ctx\\.filePath|absPath|path\\.resolve\\(cwd,
-    ctx\\.filePath\\)' clients/dispatch/runners/*.ts`; probe each installed
-    tool with the same file and config under `<root>/.claude/worktrees/<lane>`
-    and a neutral ancestor, comparing relative and absolute argv. A fix uses
-    `relativeInside` at the runner's existing spawn cwd and preserves the
-    absolute dispatched path for attribution and files outside that cwd.
+    Candidate list, not a census: `grep -rnE
+    'ctx\.filePath|absPath|path\.resolve\(cwd, ctx\.filePath\)'
+    clients/dispatch/runners/*.ts`; probe each installed tool with the same
+    file and config under `<root>/.claude/worktrees/<lane>` and a neutral
+    ancestor, comparing relative and absolute argv. A fix hands the tool `optionSafeTargetArg`
+    (`clients/tool-policy.ts`) at the runner's existing spawn cwd: the
+    project-relative path, `./`-prefixed unless it starts with a letter, digit,
+    `_` or `.`, because a bare `-D.ts` is an option and `--fix` then rewrites
+    files nobody dispatched. The absolute dispatched path stays for attribution
+    and for files outside that cwd.
     Screen: does the runner hand the tool the absolute dispatched path while
     the tool matches its ignore globs against the argument string (probe the
     same file under `<root>/.claude/worktrees/<lane>` and a neutral ancestor,
