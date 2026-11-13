@@ -142,7 +142,9 @@ const eslintRunner: RunnerDefinition = {
 		// package the file lives in still answers the install lookup. The gate
 		// stays at `cwd`: an anchor is an ESLint config, so it cannot disagree
 		// with the package's own answer, and `effective-config.ts` asks it there.
-		const { cwd, packageDir = cwd } = resolveRunnerCwdWithReason(ctx, "eslint");
+		const resolution = resolveRunnerCwdWithReason(ctx, "eslint");
+		const cwd = resolution.cwd;
+		const packageDir = resolution.packageDir ?? cwd;
 
 		// Only run if project has an ESLint config.
 		if (!eslintRunner.requiresConfig?.(cwd)) {

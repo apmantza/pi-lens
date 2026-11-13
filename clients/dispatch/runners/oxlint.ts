@@ -90,8 +90,13 @@ function resolveLocalVp(cwd: string): string | null {
 	return localBinPath(findLocalBinUpwards("vp", cwd)) ?? null;
 }
 
-async function resolveVitePlusCommand(cwd: string): Promise<string | null> {
-	const local = resolveLocalVp(cwd);
+// `packageDir` is where the project's own `vp` is looked up; `cwd` is where the
+// PATH probe (like the lint it gates) starts.
+async function resolveVitePlusCommand(
+	packageDir: string,
+	cwd: string,
+): Promise<string | null> {
+	const local = resolveLocalVp(packageDir);
 	if (local) return local;
 	const version = await safeSpawnAsync("vp", ["--version"], {
 		timeout: 5000,
@@ -110,7 +115,9 @@ const oxlintRunner: RunnerDefinition = {
 		// `cwd` is where the child starts (the config's directory, #5541); the
 		// package the file lives in still answers every package-scoped question
 		// below, so a root config moves the spawn and nothing else.
-		const { cwd, packageDir = cwd } = resolveRunnerCwdWithReason(ctx, "oxlint");
+		const resolution = resolveRunnerCwdWithReason(ctx, "oxlint");
+		const cwd = resolution.cwd;
+		const packageDir = resolution.packageDir ?? cwd;
 		const policy = getJstsLintPolicyForCwd(packageDir);
 		if (!policy.preferredRunners.includes("oxlint")) {
 			return skipped("not-preferred");
@@ -119,7 +126,7 @@ const oxlintRunner: RunnerDefinition = {
 		let cmd: string | null = null;
 		let args: string[];
 		if (hasToolConfig("vitePlus", packageDir)) {
-			cmd = await resolveVitePlusCommand(packageDir);
+			cmd = await resolveVitePlusCommand(packageDir, cwd);
 		}
 		if (cmd) {
 			args = ["lint", "--format", "json", ctx.filePath];
