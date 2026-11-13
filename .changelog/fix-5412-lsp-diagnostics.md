@@ -4,4 +4,4 @@ audience: user
 area: lsp
 ---
 
-- **LSP hints now show as advisory warnings, like CLI hints.** Full diagnostics also preserve findings with the same rule and line at different columns. (refs #5412)
+- **`lens_diagnostics` in full mode now keeps one rule's findings apart when their columns differ.** Findings that share a rule and line now stay separate by column. LSP hints were already listed as warnings; only their semantic label now matches the CLI advisory tier. (refs #5412)
