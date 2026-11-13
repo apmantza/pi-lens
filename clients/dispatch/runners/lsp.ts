@@ -115,10 +115,11 @@ function normalizeActionTitle(title: string): string {
 	return title.replace(/\s+/g, " ").trim();
 }
 
+/** No suggestion from an empty list or from a lookup with no client to ask. */
 function buildCodeActionSuggestion(
-	actions: import("../../lsp/client.js").LSPCodeAction[],
+	actions: import("../../lsp/client.js").LSPCodeAction[] | undefined,
 ): string | undefined {
-	if (!actions.length) return undefined;
+	if (!actions?.length) return undefined;
 	const quickFixes = actions.filter((action) =>
 		action.kind?.startsWith("quickfix"),
 	);
@@ -606,14 +607,13 @@ const lspRunner: RunnerDefinition = {
 					try {
 						const start = d.range.start;
 						const end = d.range.end ?? d.range.start;
-						const actions =
-							(await lspService.codeAction(
-								ctx.filePath,
-								start.line,
-								start.character,
-								end.line,
-								end.character,
-							)) ?? [];
+						const actions = await lspService.codeAction(
+							ctx.filePath,
+							start.line,
+							start.character,
+							end.line,
+							end.character,
+						);
 						const suggestion = buildCodeActionSuggestion(actions);
 						if (suggestion) {
 							fixSuggestionByIndex.set(idx, suggestion);
