@@ -436,6 +436,15 @@ describe("comment layout gate (#5558)", () => {
 		expect(r.err).toContain("unclosed");
 	});
 
+	// Recurrence: text on the closing line is visible text that a count of
+	// whole-line tags would miss.
+	it("refuses text on the </details> line", () => {
+		const body = `${lines(5).join("\n")}\n${fold(SUMMARY, lines(10)).replace("</details>", "</details> and a visible tail")}\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("line of its own");
+	});
+
 	// Recurrence: a stray close tag is a half-pasted fold.
 	it("refuses a </details> with no opener", () => {
 		const r = run(`${lines(13).join("\n")}\n</details>\n`);
@@ -484,6 +493,18 @@ describe("comment layout gate (#5558)", () => {
 	it("does not read a <details> inside a code fence as a fold", () => {
 		const body = `${lines(3).join("\n")}\n\`\`\`html\n<details>\n<summary>${SUMMARY}</summary>\n\n${lines(10).join("\n")}\n</details>\n\`\`\`\n`;
 		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence: Markdown renders a four-space-indented tag as a code block,
+	// so a fold written that way is 20 visible lines, not a fold.
+	it("does not read an indented <details> as a fold", () => {
+		const indented = fold(SUMMARY, lines(10))
+			.split("\n")
+			.map((line) => `    ${line}`)
+			.join("\n");
+		const r = run(`${lines(3).join("\n")}\n\n${indented}\n`);
 		expect(r.status).toBe(1);
 		expect(r.err).toContain("no <details> fold");
 	});

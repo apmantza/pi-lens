@@ -289,7 +289,10 @@ export function checkCommentLayout(text = "", options = {}) {
 			if (!open) visible += 1;
 			continue;
 		}
-		if (/^<\/details/i.test(trimmed)) {
+		// Four spaces or a tab make an indented code block, so an indented tag is
+		// text and counts as visible.
+		const tagLine = /^ {0,3}</.test(lines[index]) ? trimmed : "";
+		if (/^<\/details/i.test(tagLine)) {
 			if (!/^<\/details>$/i.test(trimmed))
 				errors.push(
 					`comment-layout (line ${at}): put </details> on a line of its own`,
@@ -301,8 +304,8 @@ export function checkCommentLayout(text = "", options = {}) {
 			open = 0;
 			continue;
 		}
-		if (/^<details/i.test(trimmed)) {
-			const tag = /^<details(?:\s+open)?\s*>(.*)$/i.exec(trimmed);
+		if (/^<details/i.test(tagLine)) {
+			const tag = /^<details(?:\s+open)?\s*>(.*)$/i.exec(tagLine);
 			if (!tag) {
 				errors.push(
 					`comment-layout (line ${at}): unrecognised <details> tag; write <details> or <details open>`,
