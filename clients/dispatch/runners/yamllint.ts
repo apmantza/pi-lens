@@ -2,7 +2,7 @@ import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
-import { pathsEqual } from "../../path-utils.js";
+import { pathsEqual, relativeInside } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { logRunnerAdvisoryOnce } from "../../tool-cwd.js";
 import { getLinterPolicyForCwd } from "../../tool-policy.js";
@@ -78,7 +78,18 @@ const yamllintRunner: RunnerDefinition = {
 
 		if (!cmd) return toolAbsentSkip(cwd, { id: "yamllint" });
 
-		const result = await safeSpawnAsync(cmd, ["-f", "parsable", ctx.filePath], {
+		// #5544: the CLI matches its config's `ignore` globs against the path string
+		// it is handed, so an absolute argument lets a glob that names an ANCESTOR of
+		// the file exclude the file from its own lint — a lane under
+		// `<scratch>/.claude/worktrees/lane1` with a `.yamllint` of `ignore: .claude/`
+		// answered "no files selected", exit 0, and the runner reported a silent
+		// clean. The spawn cwd is the project, so the argument is the
+		// project-relative path, actionlint's form
+		// (clients/dispatch/runners/actionlint.ts); a dispatched file outside the
+		// project keeps today's absolute form, as it has no project-relative spelling.
+		const targetRel = relativeInside(cwd, ctx.filePath) ?? ctx.filePath;
+
+		const result = await safeSpawnAsync(cmd, ["-f", "parsable", targetRel], {
 			cwd,
 			timeout: 15000,
 		});
@@ -103,6 +114,8 @@ const yamllintRunner: RunnerDefinition = {
 				// EXIT TABLE (yamllint 1.35 docs https://yamllint.readthedocs.io/en/stable/): 0 clean; 1 findings; 2 error; other nonzero rejected.
 				exitCodes: { ran: [1, 2] },
 			},
+			// ADR 0009: the finding is attributed to the dispatched path; the parser
+			// resolves the tool's project-relative report against the spawn cwd.
 			(out) => parseYamllintParsable(out, ctx.filePath, cwd),
 			{ parseOutput: raw },
 		);

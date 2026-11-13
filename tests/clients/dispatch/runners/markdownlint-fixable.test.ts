@@ -112,9 +112,12 @@ describe("markdownlint runner — fixable metadata", () => {
 
 			// #5119 review r1 F1: the 15 s kill is what bounds a spinning rule now
 			// that cli2 runs in a child, so the runner's budget is pinned.
+			// #5544: the path cli2 is handed is the one relative to that cwd — its
+			// `ignores` globs match against that string, and an absolute one lets a
+			// glob naming an ancestor of the file exclude the file from its own lint.
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"markdownlint-cli2",
-				[filePath],
+				["README.md"],
 				expect.objectContaining({ cwd: env.tmpDir, timeout: 15000 }),
 			);
 			expect(result.diagnostics.length).toBeGreaterThanOrEqual(2);
@@ -155,7 +158,9 @@ describe("markdownlint runner — fixable metadata", () => {
 			expect(args[0]).toBe("--config");
 			expect(args).not.toContain("--disable");
 			expect(args).not.toContain("MD013");
-			expect(args.at(-1)).toBe(filePath);
+			// #5544: the target is the project-relative path, never the absolute one.
+			expect(args.at(-1)).toBe("README.md");
+			expect(args).not.toContain(filePath);
 			expect(args[1]).toMatch(/config[\\/]markdownlint[\\/]core\.json$/);
 			expect(fs.existsSync(args[1])).toBe(true);
 			expect(path.resolve(args[1])).not.toContain(path.basename(env.tmpDir));

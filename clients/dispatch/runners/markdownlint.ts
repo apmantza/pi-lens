@@ -1,7 +1,7 @@
 import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import * as path from "node:path";
-import { pathsEqual } from "../../path-utils.js";
+import { pathsEqual, relativeInside } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
@@ -136,7 +136,17 @@ const markdownlintRunner: RunnerDefinition = {
 		// Shared config-args seam (#1247): the autofix path consumes the same
 		// builder, so the package-owned fallback config can never drift.
 		const configArgs = markdownlintConfigArgs(cwd);
-		const args = [...configArgs, ctx.filePath];
+		// #5544: cli2 matches its config's `ignores` globs against the path string it
+		// is handed, so an absolute argument lets a glob that names an ANCESTOR of the
+		// file exclude the file from its own lint — a lane under
+		// `<scratch>/.claude/worktrees/lane1` with `ignores: ["**/.claude/**"]`
+		// selected no file, exited 0, and the runner reported a silent clean. The
+		// spawn cwd is the project, so the argument is the project-relative path,
+		// actionlint's form (clients/dispatch/runners/actionlint.ts); a dispatched
+		// file outside the project keeps today's absolute form, as it has no
+		// project-relative spelling.
+		const targetRel = relativeInside(cwd, ctx.filePath) ?? ctx.filePath;
+		const args = [...configArgs, targetRel];
 		// #5119: cli2's own `fix` option cannot be turned off from the CLI, and a
 		// project `"fix": true` rewrote the file on a diagnostics pass. Lint
 		// through its exported `main` with `optionsOverride: { fix: false }` in a
@@ -161,6 +171,8 @@ const markdownlintRunner: RunnerDefinition = {
 		const run = parseToolRun(
 			"markdownlint",
 			{ result, output: raw, exitCodes: MARKDOWNLINT_EXIT_CODES },
+			// ADR 0009: the finding is attributed to the dispatched path; the parser
+			// resolves the tool's project-relative report against the spawn cwd.
 			(out) => parseMarkdownlintOutput(out, ctx.filePath, cwd),
 		);
 		if (run.skipped) return run.skipped;

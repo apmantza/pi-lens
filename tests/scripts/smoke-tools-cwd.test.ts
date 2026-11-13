@@ -224,7 +224,16 @@ describe("tool-smoke cwd-sensitive rows (#2697)", () => {
 				);
 			}
 			expect(toolSpawn[2]?.cwd).toBe(dispatchCwd);
-			expect(toolSpawn[1]).toEqual(["-f", "parsable", filePath]);
+			// #5544: the file argument is the dispatch-cwd-relative path. The CLI
+			// matches its config's `ignore` globs against the string it is handed, so
+			// an absolute one lets a glob that names an ancestor of the file exclude
+			// the file from its own lint. The cwd pin above stays this row's subject.
+			expect(toolSpawn[1]).toEqual([
+				"-f",
+				"parsable",
+				path.relative(dispatchCwd, filePath),
+			]);
+			expect(toolSpawn[1]?.at(-1)).not.toBe(filePath);
 			expect(diagnostics.map((diagnostic) => diagnostic.rule)).toContain(
 				"key-ordering",
 			);
