@@ -373,6 +373,37 @@ export function checkedVerdict(
 }
 
 /**
+ * #5258: what a surface knows when it would claim "clean" for more than one
+ * file or lane. `scope` is how many units the claim speaks for; `proven` how
+ * many of them a check completed on, counted from completions only (a
+ * `checked` verdict, a fully confirmed server answer), never by subtracting
+ * the failures a surface happened to list; `findings` is what the claim would
+ * deny.
+ */
+export interface CleanEvidence {
+	scope: number;
+	proven: number;
+	findings: number;
+}
+
+/**
+ * #5258: the one clean predicate. A surface says clean, `No issues` or `✓`
+ * only when every unit it speaks for was proven and it shows no finding. An
+ * empty scope proves nothing, so `clean (0 files)` cannot be built, and a
+ * unit nobody counted as proven (a timed-out server, a cut-short scan, a state
+ * no one listed) withholds the claim without being named here. The per-file
+ * proof is {@link checkedVerdict}; `tests/clients/delivery-surface-ratchet.test.ts`
+ * registers every other emitter of a clean claim.
+ */
+export function cleanVerdict(evidence: CleanEvidence): boolean {
+	return (
+		evidence.findings === 0 &&
+		evidence.scope > 0 &&
+		evidence.proven === evidence.scope
+	);
+}
+
+/**
  * A dispatch that ran nothing: no findings, the given verdict. The one
  * literal for the five early returns (#5258: no kind, no runner group, an
  * adopted root that admits none, a generated file, `dispatchLintDetailed`'s

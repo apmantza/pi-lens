@@ -347,6 +347,48 @@ describe("persistent reverify (#3170)", () => {
 		expect(replacement?.reVerifyIncomplete).toBe(true);
 	});
 
+	// Recurrence prevented: the #5258 clean-emitter matrix (probe P4). The touch
+	// re-confirmed the warning, but its code-action lookup never answered, so the
+	// enrichment returned no record; that silence read as "clean" and retired a
+	// finding the server had just reported again.
+	it("C3b: a code-action lookup that never answers is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const service = makeService({
+			diags: [makeDiag()],
+			confirmation: "confirmed",
+		});
+		(service as unknown as { codeAction: unknown }).codeAction = vi.fn(
+			() => new Promise(() => {}),
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: service,
+			budgetMs: 300,
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		const replacement = result.replacementFiles[0];
+		expect(replacement?.warnings).toEqual(carried.files[0]?.warnings);
+		expect(replacement?.reVerifyIncomplete).toBe(true);
+	});
+
+	// The control for C3b: an answer with no fix action is an answer, so the
+	// warning leaves the actionable report exactly as before.
+	it("C3c: a code-action lookup that answers with no action still retires the warning (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService(
+				{ diags: [makeDiag()], confirmation: "confirmed" },
+				0,
+				[],
+			),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("clean");
+		expect(result.replacementFiles[0]?.warnings).toEqual([]);
+	});
+
 	it("#3205: repeated incomplete re-verifies stay visible but do not grow observed history", async () => {
 		// Recurrence: a failed re-verify is carried, not observed; publishing it
 		// on successive turns must not append duplicate history rows.

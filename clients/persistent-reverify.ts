@@ -277,27 +277,45 @@ export async function runPersistentReverify(args: {
 		// F4: the outer await is bound-wrapped too — the module carries ZERO
 		// syntactic unbounded awaits (#2523 slice-3 worklist), and the hard
 		// ceiling composes with enrichFileFromLsp's own internal deadline.
-		const freshRecords =
-			(await bounded(
-				enrichFileFromLsp(
-					args.cwd,
-					buildArgs,
-					{ filePath: entry.filePath, cached: touchedResult.diags },
-					{
-						lspService: args.lspService,
-						pullTimeoutMs: 2000,
-						deadlineAt,
-						...(args.signal !== undefined ? { signal: args.signal } : {}),
-						site: { hook: "turn_end", label: "persistent_reverify" },
-					},
-				),
+		const unanswered = { count: 0 };
+		const enriched = await bounded(
+			enrichFileFromLsp(
+				args.cwd,
+				buildArgs,
+				{ filePath: entry.filePath, cached: touchedResult.diags },
 				{
-					ms: Math.max(250, deadlineAt - Date.now()),
-					signal: args.signal,
-					hook: "turn_end",
-					label: "persistent_reverify_enrich",
+					lspService: args.lspService,
+					pullTimeoutMs: 2000,
+					deadlineAt,
+					...(args.signal !== undefined ? { signal: args.signal } : {}),
+					site: { hook: "turn_end", label: "persistent_reverify" },
+					unanswered,
 				},
-			)) ?? [];
+			),
+			{
+				ms: Math.max(250, deadlineAt - Date.now()),
+				signal: args.signal,
+				hook: "turn_end",
+				label: "persistent_reverify_enrich",
+			},
+		);
+		// #5258: the outcome below retires every carried warning the enrichment
+		// did not return, so it needs the enrichment's answer for every warning
+		// the touch reported. A lapsed bound or a code-action lookup that never
+		// answered is no answer, not an empty one: the entry stays as carried,
+		// labelled, exactly like a touch that did not complete.
+		if (enriched === undefined || unanswered.count > 0) {
+			outcomes.push({
+				filePath: entry.filePath,
+				displayPath: entry.displayPath,
+				outcome: "unconfirmed",
+				dropped: 0,
+				kept: entry.warnings.length,
+			});
+			replacementFiles.push({ ...entry, reVerifyIncomplete: true });
+			continue;
+		}
+		const freshRecords = enriched;
 		let dropped = 0;
 		let kept = 0;
 		for (const warning of entry.warnings) {

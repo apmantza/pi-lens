@@ -805,10 +805,12 @@ export class KnipClient {
 			// against a future knip release that changes this. Deliberately NOT
 			// `analyzed` (#2154): nothing was parsed, so this shape must not
 			// retire a retained knip finding — it is reported cold instead.
+			// #5258: and its summary, which the cold note prints, says nothing was
+			// read rather than claiming a clean result it has no report for.
 			return {
 				...EMPTY_RESULT,
 				success: true,
-				summary: "No issues found",
+				summary: "Knip exited 0 with no output, so no report was read",
 			};
 		}
 

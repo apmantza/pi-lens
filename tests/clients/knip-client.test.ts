@@ -708,6 +708,45 @@ describe("knip-client", () => {
 		}
 	});
 
+	it("names an exit 0 with no report as unread, never 'No issues found' (#5258)", async () => {
+		// Recurrence prevented: the #5258 clean-emitter matrix (probe P3). An
+		// exit 0 with empty stdout parsed nothing (`analyzed` stays unset, so it
+		// retires no finding), yet its summary read "No issues found", which
+		// lens_diagnostics mode=full prints as knip's not-run reason.
+		const { tmpDir, cleanup } = setupTestEnvironment(
+			"pi-lens-knip-empty-exit0-",
+		);
+		try {
+			fs.writeFileSync(path.join(tmpDir, "package.json"), '{"name":"demo"}');
+
+			const safeSpawnMod = await import("../../clients/safe-spawn.js");
+			vi.mocked(safeSpawnMod.safeSpawnAsync).mockResolvedValueOnce({
+				error: null,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			} as never);
+
+			const client = new KnipClient(false) as unknown as {
+				runAnalyze: (d: string) => Promise<{
+					success: boolean;
+					summary: string;
+					analyzed?: boolean;
+				}>;
+			};
+			const result = await client.runAnalyze(tmpDir);
+
+			expect(result.analyzed).not.toBe(true);
+			expect(result.summary).not.toMatch(/no issues/i);
+			expect(result.summary).toBe(
+				"Knip exited 0 with no output, so no report was read",
+			);
+		} finally {
+			cleanup();
+			vi.restoreAllMocks();
+		}
+	});
+
 	it("still parses a genuine findings run that exits nonzero (knip exits 1 when it finds issues) (#1736)", async () => {
 		const { tmpDir, cleanup } = setupTestEnvironment(
 			"pi-lens-knip-genuine-findings-",

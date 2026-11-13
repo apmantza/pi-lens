@@ -742,6 +742,14 @@ interface LspEnrichmentDeps {
 	 */
 	deadlineAt?: number;
 	/**
+	 * #5258: a caller that must tell "no fix action" from "no answer" passes a
+	 * counter. Each warning this file got no code-action answer for adds one: a
+	 * round trip that a bound cut, that threw, or that never started because
+	 * the per-file cap or the wall budget stopped the loop. The in-band and
+	 * deferred loops pass none and behave as before.
+	 */
+	unanswered?: { count: number };
+	/**
 	 * The loop's live abort signal — the SECOND bound every round trip races.
 	 *
 	 * Optional only because the in-band caller may have none; `bounded()` reads
@@ -1341,8 +1349,10 @@ export async function enrichFileFromLsp(
 					),
 				deps,
 			);
+			if (actions === undefined && deps.unanswered) deps.unanswered.count++;
 			record.actions = (actions ?? []).map(serializeAction).slice(0, 5);
 		} catch (err) {
+			if (deps.unanswered) deps.unanswered.count++;
 			args.dbg?.(
 				`actionable_warnings: LSP codeAction failed for ${filePath}: ${err}`,
 			);
@@ -1352,6 +1362,7 @@ export async function enrichFileFromLsp(
 			enriched++;
 		}
 	}
+	if (deps.unanswered) deps.unanswered.count += actionCapped + budgetStopped;
 	if (actionCapped > 0) {
 		incrementDegradationCount({
 			kind: "actionable-warnings-cap",
