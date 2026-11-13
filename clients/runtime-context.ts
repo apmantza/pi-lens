@@ -8,7 +8,6 @@ import {
 } from "./advisory-provenance.js";
 import type { TestRunnerFindingsCache } from "./project-diagnostics/runner-adapters/runner-findings.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
-import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { logLatency } from "./latency-logger.js";
 import {
 	resolveLensToolName,
@@ -38,18 +37,14 @@ export const BLOCKER_REPEAT_HEADING =
 	"Still unresolved (already reported on an earlier turn, not new):";
 
 /**
- * #5240: a repeat message, from the blocker sections it carries (`full`) and
- * the lines of blockers the cap collapsed (`capped`, #5532). A repeat of
- * collapsed lines alone is just those lines: nothing in it is a repeat of
- * text, so the heading would lie.
+ * #5240: a repeat message from its capped blocker text. A repeat of collapsed
+ * lines alone (#5532) is just those lines: one line per blocker, as capped.
  */
 export function blockerRepeatContent(
-	full: readonly string[],
-	capped: readonly string[],
+	blockers: string,
+	pointerOnly: boolean,
 ): string {
-	return full.length === 0
-		? capped.join("\n")
-		: [`${BLOCKER_REPEAT_HEADING}\n`, ...full, ...capped].join("\n\n");
+	return pointerOnly ? blockers : `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
 }
 
 /** #5532: how a blocker past its delivery cap reads; `cappedBlockerLine` builds it. */
@@ -257,25 +252,23 @@ export function consumeTurnEndFindings(
 	const lines = (content: string): ContextResult["messages"] => [
 		{ role: "user", content: `${AUTOMATION_FRAMING}${content}` },
 	];
+	// #5532: the one count site. The message reaches the model now, so each
+	// blocker it renders within the cap counts: in full toward the cap, as its
+	// pointer line toward the cap's one row. A record from before #5532, or an
+	// MCP turn end's, lists none.
+	if (Array.isArray(findings.data.blockerDeliveries))
+		for (const delivery of findings.data.blockerDeliveries)
+			runtime?.recordBlockerDelivery(
+				delivery.filePath,
+				delivery.shown,
+				delivery.displayPath,
+			);
 	if (findings.data.repeat !== true)
 		return {
 			messages: onlyCappedLines
 				? lines(staged)
 				: [turnEndMessage(staged, current, findings.data.provenance)],
 		};
-	// #5532: this repeat is one more delivery of every live blocker it renders in
-	// full, and the first of the capped ones it renders as a pointer (the same
-	// counts the turn end read when it staged the text, so it renders what it
-	// counted). Only a pi reader has a coordinator; the MCP host never stages a
-	// repeat.
-	for (const entry of runtime?.getInlineBlockersSnapshot({ sessionId }) ?? []) {
-		if (entry.stale === true || entry.policySuppressed === true) continue;
-		runtime?.recordBlockerDelivery(
-			entry.filePath,
-			runtime.blockerFullDeliveryCapped(entry.filePath) ? "collapsed" : "full",
-			toRunnerDisplayPath(cwd, entry.filePath),
-		);
-	}
 	const repeatBodies = Array.isArray(findings.data.repeatBodies)
 		? { repeatBodies: findings.data.repeatBodies }
 		: {};

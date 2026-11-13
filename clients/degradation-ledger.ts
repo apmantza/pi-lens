@@ -243,12 +243,12 @@ export type DegradationKind =
 	 */
 	| "blocker-position-unaligned"
 	/**
-	 * `blocker-repeat-capped`: #5532: a live inline blocker the session did not clear was repeated in full on
-	 * `BLOCKER_REPEAT_MAX_DELIVERIES` prompts, so later prompts get a one-line
+	 * `blocker-repeat-capped`: #5532: a live inline blocker the session did not clear was delivered in full
+	 * `BLOCKER_FULL_DELIVERY_CAP` times, so later deliveries get a one-line
 	 * pointer instead (`consumeTurnEndFindings`). The blocker stays in
 	 * `lens_diagnostics` and the commit gate. Subject is
-	 * `inline-blocker-repeat:<files of the set>`; counted, one tally per blocker
-	 * set, written on the first pointer of the set only.
+	 * `inline-blocker-repeat:<file>`; counted, written on the blocker's first
+	 * delivered pointer only.
 	 */
 	| "blocker-repeat-capped"
 	/**

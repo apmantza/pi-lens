@@ -73,11 +73,16 @@ import {
 } from "../../clients/git-guard.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import {
+	AUTOMATION_FRAMING,
 	BLOCKER_CAPPED_MARK,
 	BLOCKER_REPEAT_HEADING,
 	consumeTurnEndFindings,
 } from "../../clients/runtime-context.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { RUNTIME_CONFIG } from "../../clients/runtime-config.js";
+import {
+	BLOCKER_FULL_DELIVERY_CAP,
+	RuntimeCoordinator,
+} from "../../clients/runtime-coordinator.js";
 import { beginScope, retireScope } from "../../clients/session-scope.js";
 import {
 	cancelLSPIdleReset,
@@ -2549,6 +2554,85 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 		freshTurnEnds(false));
 	it("keeps a blocker whole on a fresh turn end under the MCP address", () =>
 		freshTurnEnds(true));
+
+	/** A live blocker whose section is `Unresolved from this turn — <name>:\n<body>`, its body unique. */
+	function namedBlocker(rig: Rig, name: string, chars: number) {
+		const file = touch(rig, name);
+		const prefix = `Unresolved from this turn — ${name}:\n`;
+		const body = `${name} `.padEnd(chars - prefix.length, "z");
+		rig.runtime.recordInlineBlockers(
+			file,
+			body,
+			rig.runtime.nextWriteIndex(),
+			["eslint"],
+			[1],
+		);
+		return { file, section: `${prefix}${body}` };
+	}
+
+	for (const count of [12, 300]) {
+		it(`caps a repeat of ${count} collapsed blockers like any turn-end message`, async () => {
+			// RECURRENCE GUARDED: #5532 review r2 N1. The repeat joined the pointer
+			// lines of collapsed blockers outside `capTurnEndMessage`: 12 stuck
+			// blockers made a 2016-char repeat and 300 a 49,736-char one, on every
+			// prompt (master's repeat: 1000 chars).
+			const rig = makeRig("pi-lens-5532-n1-");
+			try {
+				for (let index = 0; index < count; index++) {
+					const name = `stuck-${index}.ts`;
+					const { file } = namedBlocker(rig, name, 120);
+					for (let n = 0; n < BLOCKER_FULL_DELIVERY_CAP; n++)
+						rig.runtime.recordBlockerDelivery(file, "full", name);
+				}
+				await endTurn(rig);
+				await readOnlyTurn(rig);
+				const repeat = take(rig, true) ?? "";
+				expect(repeat).toContain(`stuck-0.ts: ${BLOCKER_CAPPED_MARK}`);
+				const text = repeat.slice(AUTOMATION_FRAMING.length);
+				const { maxChars, maxLines } = RUNTIME_CONFIG.turnEnd;
+				expect(text.length).toBeLessThanOrEqual(
+					maxChars + "\n... (truncated)".length,
+				);
+				expect(text.split("\n").length).toBeLessThanOrEqual(maxLines + 1);
+			} finally {
+				rig.cleanup();
+			}
+		});
+	}
+
+	it("counts a repeat only for the blockers its text carried in full", async () => {
+		// RECURRENCE GUARDED: #5532 review r2 N2. The repeat's consume counted
+		// every live blocker of the session, so with 12 stuck blockers the ones
+		// the capped text never carried reached the cap unseen and read "already
+		// reported".
+		const rig = makeRig("pi-lens-5532-n2-");
+		try {
+			const blockers = Array.from({ length: 12 }, (_, index) =>
+				namedBlocker(rig, `stuck-${index}.ts`, 150),
+			);
+			const texts = [await endTurn(rig)];
+			for (let prompt = 0; prompt < 5; prompt++) {
+				await readOnlyTurn(rig);
+				texts.push(take(rig, true) ?? "");
+			}
+			for (const [index, { file, section }] of blockers.entries()) {
+				let shown = 0;
+				for (const text of texts) {
+					// A pointer only after its 3 full deliveries.
+					if (text.includes(`stuck-${index}.ts: ${BLOCKER_CAPPED_MARK}`))
+						expect(shown, `stuck-${index}.ts`).toBe(BLOCKER_FULL_DELIVERY_CAP);
+					if (text.includes(section)) shown += 1;
+				}
+				expect(rig.runtime.blockerFullDeliveryCapped(file)).toBe(
+					shown >= BLOCKER_FULL_DELIVERY_CAP,
+				);
+			}
+			// The cap freed room: the blockers the first deliveries cut were shown.
+			expect(texts.at(-1)).toContain(blockers[11]?.section);
+		} finally {
+			rig.cleanup();
+		}
+	});
 
 	it("stages no repeat for a duplicate turn that holds no blocker", async () => {
 		// RECURRENCE GUARDED: #5240. A drift-demoted blocker is an advisory, not a

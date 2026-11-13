@@ -487,6 +487,17 @@ describe.each([
 				expect(fullDeliveries(handle, "bad.ts")).toHaveLength(3);
 				expect(fullDeliveries(handle, "second.ts")).toHaveLength(3);
 				expect(repeats(handle).map(openedBy)).toEqual(prompted(2, 3, 7, 8));
+				// RECURRENCE GUARDED: #5532 review r2 N3 (v13, v13b). The repeats at p7
+				// and p8 carry second.ts in full beside bad.ts's pointer line: framed as
+				// blockers to address, and the pull named once (the line carries it).
+				for (const request of repeats(handle).slice(2)) {
+					const [text] = injections(request).filter((injected) =>
+						injected.includes(BLOCKER_REPEAT_HEADING),
+					);
+					expect(text).toContain("Address 🔴 blockers before continuing");
+					expect(text).toContain(`${path.join("src", "bad.ts")}: ${POINTER}`);
+					expect(text?.split("lens_diagnostics {").length).toBe(2);
+				}
 				expect(handle.errors).toEqual([]);
 			},
 			LONG_SESSION_TIMEOUT_MS,
@@ -685,6 +696,70 @@ describe("#5240: retained injections (--lens-retain-injections)", () => {
 			const last = handle.requests.at(-1) as PiProviderRequest;
 			expect(JSON.stringify(last)).toContain(second);
 			expect(JSON.stringify(last)).toContain(bad);
+			expect(handle.errors).toEqual([]);
+		},
+		LONG_SESSION_TIMEOUT_MS,
+	);
+
+	it(
+		"repeats a blocker the retained entries hold only cut short",
+		async () => {
+			// RECURRENCE GUARDED: #5532 review r2 N3 (v14). A retain check that let
+			// ANY retained blocker section stand for the repeat would skip one whose
+			// blocker the turn-end cap cut from every delivery, so nothing ever
+			// showed that blocker again.
+			const { handle } = await openCell("retain-part", RETAIN, (proj) => [
+				step(
+					writeTarget(path.join(proj, "src", "bad.ts"), BLOCKING_FILE),
+					"writing",
+				),
+				step(
+					writeTarget(path.join(proj, "src", "long.ts"), LONG_BLOCKING_FILE),
+					"writing",
+				),
+				endTurn("turn done"),
+				...listen(),
+			]);
+			await run(handle, 2);
+			expect(repeats(handle).map(openedBy)).toEqual(prompted(2));
+			expect(handle.errors).toEqual([]);
+		},
+		LONG_SESSION_TIMEOUT_MS,
+	);
+});
+
+/** A file with more debugger statements than one turn-end message has lines for. */
+const LONG_BLOCKING_FILE = `export function f() {\n${"\tdebugger;\n".repeat(30)}}\n`;
+
+describe("#5532: context injection toggled off", () => {
+	it(
+		"counts no delivery while /lens-context-toggle holds the findings back",
+		async () => {
+			// RECURRENCE GUARDED: #5532 review r2 hypothesis, reproduced in r3. A
+			// fresh turn end counted its blockers when it staged them, so with
+			// injection off three set changes capped a blocker the model never saw,
+			// and the first request after the toggle carried only its pointer.
+			const { handle } = await openCell(
+				"toggle-off",
+				[...UNGUARDED_FLAGS, ["no-lens-context", true]],
+				(proj) => [
+					...write(proj, "bad.ts", BLOCKING_FILE),
+					...write(proj, "a.ts", BLOCKING_FILE),
+					...write(proj, "a.ts", CLEAN_FILE),
+					...write(proj, "a.ts", BLOCKING_FILE),
+					...write(proj, "a.ts", CLEAN_FILE),
+					...listen(),
+				],
+			);
+			await run(handle, 5);
+			const before = handle.requests.length;
+			await handle.prompt("/lens-context-toggle");
+			await handle.prompt("p6");
+			const after = handle.requests.slice(before).flatMap(injections);
+			expect(after.join("\n")).toContain(
+				`${SECTION}${path.join("src", "bad.ts")}`,
+			);
+			expect(after.join("\n")).not.toContain(POINTER);
 			expect(handle.errors).toEqual([]);
 		},
 		LONG_SESSION_TIMEOUT_MS,

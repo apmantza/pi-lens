@@ -1457,15 +1457,14 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const turnEndStart = Date.now();
 	const blockerParts: string[] = [];
 	/**
-	 * #5532: the inline-blocker replay parts of this turn, and the pointer line
-	 * each capped one reads as in the message (`blockerParts` keeps the section).
+	 * #5532: the inline-blocker replay parts of this turn by part, and the
+	 * pointer line each capped one reads as in the message (`blockerParts` keeps
+	 * the section).
 	 */
-	const replayedBlockers: Array<{
-		part: string;
-		filePath: string;
-		displayPath: string;
-		capped: boolean;
-	}> = [];
+	const replayedBlockers = new Map<
+		string,
+		{ filePath: string; displayPath: string }
+	>();
 	const cappedBlockerText = new Map<string, string>();
 	/**
 	 * #1622 review M2: findings the freshness gate demoted. A third tier between
@@ -2060,19 +2059,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			// #4617: the replay is about this file, which a no-write turn did not
 			// edit; a late runner's blocking survivor is pending, not resolved.
 			citePart(replayPart, [bPath]);
-			// #5532: a pi turn renders a blocker the model has had in full 3 times as
-			// one pointer line. The part stays in `blockerParts` as pushed: it is the
-			// commit gate's blocker text and the key of the stamp's citations.
-			const capped =
-				deps.deliveryAddress === undefined &&
-				runtime.blockerFullDeliveryCapped(bPath);
-			replayedBlockers.push({
-				part: replayPart,
-				filePath: bPath,
-				displayPath,
-				capped,
-			});
-			if (capped)
+			// #5532: a blocker the model has had in full 3 times renders as one
+			// pointer line. The part stays in `blockerParts` as pushed: it is the
+			// commit gate's blocker text and the key of the stamp's citations. Only
+			// a pi delivery counts (`blockerDeliveries`), so an MCP count stays 0.
+			replayedBlockers.set(replayPart, { filePath: bPath, displayPath });
+			if (runtime.blockerFullDeliveryCapped(bPath))
 				cappedBlockerText.set(replayPart, cappedBlockerLine(displayPath));
 		}
 	}
@@ -6657,20 +6649,25 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const waiting = duplicate
 			? readTurnEndGuardRecord(cacheManager, runtime, cwd, sessionId).stored
 			: undefined;
-		const repeatFull = blockerParts.flatMap((part) =>
-			cappedBlockerText.has(part) ? [] : [part],
-		);
+		// #5532: a repeat is capped like any turn-end message, pointer lines
+		// included (review r2 N1). Full sections lead, so the room a collapse
+		// frees goes to blockers the cap cut before; collapsed lines alone are one
+		// line each.
+		const repeatParts: ComposedPart[] = [
+			...blockerParts.filter((part) => !cappedBlockerText.has(part)),
+			...blockerParts.filter((part) => cappedBlockerText.has(part)),
+		].map((raw) => ({ raw, text: cappedBlockerText.get(raw) ?? raw }));
+		const pointerOnly = repeatParts.every((part) => part.raw !== part.text);
+		const repeatSeparator = pointerOnly ? "\n" : "\n\n";
+		const repeatJoined = repeatParts
+			.map((part) => part.text)
+			.join(repeatSeparator);
 		const repeatContent =
 			duplicate &&
 			blockerParts.length > 0 &&
 			deps.deliveryAddress === undefined &&
 			!(waiting && waiting.consumed !== true && waiting.repeat !== true)
-				? blockerRepeatContent(
-						repeatFull.length === 0
-							? []
-							: [capTurnEndMessage(repeatFull.join("\n\n"))],
-						blockerParts.flatMap((part) => cappedBlockerText.get(part) ?? []),
-					)
+				? blockerRepeatContent(capTurnEndMessage(repeatJoined), pointerOnly)
 				: undefined;
 		// #5532: the blocker sections' own text, for the retained-injection check
 		// whatever the repeat renders for them.
@@ -6747,22 +6744,36 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		// computed, and hand back whatever the cap cut (#3813). A repeat carries
 		// the blockers only, so no one-shot part reached the agent through it.
 		settleHolds(repeatContent !== undefined);
-		// #5532: this message reaches the model (the duplicate check above did not
-		// suppress it), so each blocker it renders counts: in full toward the cap,
-		// collapsed toward the cap's one row. A repeat counts when it is consumed
-		// (`consumeTurnEndFindings`), because a prompt stages one at every turn end.
-		// The MCP host (`deliveryAddress`) keeps its blockers whole, as for repeats.
-		if (repeatContent === undefined && deps.deliveryAddress === undefined) {
-			for (const replayed of replayedBlockers) {
-				if (!holdPlan.reachedParts.some((part) => part.raw === replayed.part))
-					continue;
-				runtime.recordBlockerDelivery(
-					replayed.filePath,
-					replayed.capped ? "collapsed" : "full",
-					replayed.displayPath,
-				);
-			}
-		}
+		// #5532: how this message renders each blocker the cap lets through. The
+		// request that takes it counts them (`consumeTurnEndFindings`), never this
+		// staging: a staged message may never reach the model (injection toggled
+		// off, overwritten first). A pi delivery only: the MCP host keeps its
+		// blockers whole on every delivery.
+		const reachedParts =
+			repeatContent === undefined
+				? holdPlan.reachedParts
+				: planDeliveryHolds({
+						holds: [],
+						parts: repeatParts,
+						keptChars: turnEndKeptChars(repeatJoined),
+						separatorLength: repeatSeparator.length,
+					}).reachedParts;
+		const blockerDeliveries =
+			deps.deliveryAddress === undefined
+				? reachedParts.flatMap((part) => {
+						const replayed = replayedBlockers.get(part.raw);
+						return replayed === undefined
+							? []
+							: [
+									{
+										...replayed,
+										shown: cappedBlockerText.has(part.raw)
+											? ("collapsed" as const)
+											: ("full" as const),
+									},
+								];
+					})
+				: undefined;
 		const stagedContent = repeatContent ?? content;
 		repeatStaged = repeatContent !== undefined;
 		const fileSeqByPath: Record<string, number> = {};
@@ -6893,6 +6904,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				fileContentHashes: {},
 				consumed: false,
 				...(repeatContent === undefined ? {} : { repeat: true, repeatBodies }),
+				...(blockerDeliveries === undefined ? {} : { blockerDeliveries }),
 				testFailures: existingGuard?.testFailures,
 				testFailureContent: existingGuard?.testFailureContent,
 				testFailureFiles: existingGuard?.testFailureFiles,
@@ -6919,6 +6931,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					...(repeatContent === undefined
 						? {}
 						: { repeat: true, repeatBodies }),
+					...(blockerDeliveries === undefined ? {} : { blockerDeliveries }),
 					affectedFiles,
 					affectedFilesTruncated,
 					provenance: stampProvenance(affectedFiles, affectedFilesTruncated),
