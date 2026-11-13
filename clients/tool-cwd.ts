@@ -27,6 +27,7 @@ import {
 	findToolConfig,
 	type ToolConfigHit,
 	type ToolConfigId,
+	type ToolConfigOptions,
 } from "./tool-config-presence.js";
 
 export type ToolCwdKind = "runner" | "formatter" | "lsp";
@@ -262,7 +263,7 @@ const CONFIG_ANCHORED_RUNNERS = [
 function configAnchorOf(
 	tool: string,
 	fromDir: string,
-	options: { homeDir: string; ceiling: string | undefined },
+	options: ToolConfigOptions,
 ): ToolConfigHit | undefined {
 	const anchored = CONFIG_ANCHORED_RUNNERS.find((id) => id === tool);
 	return anchored ? findToolConfig(anchored, fromDir, options) : undefined;
@@ -314,7 +315,7 @@ export function resolveToolCwd(
 			kind === "runner" && !ctx.rootMarkers
 				? configAnchorOf(tool, markerRoot, {
 						homeDir,
-						ceiling: insideDispatch ? dispatchRoot : undefined,
+						...(insideDispatch ? { ceiling: dispatchRoot } : {}),
 					})
 				: undefined;
 		if (
