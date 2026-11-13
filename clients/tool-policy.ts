@@ -5,7 +5,7 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { logLatency } from "./latency-logger.js";
 import { resolvePackagePath } from "./package-root.js";
 import { walkUpDirs } from "./path-utils.js";
-import { hasToolConfig } from "./tool-config-presence.js";
+import { hasToolConfig, toolConfigDirs } from "./tool-config-presence.js";
 import type { ProjectConventions } from "./project-conventions.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
 
@@ -1991,7 +1991,7 @@ const OXFMT_SVELTE_TOML_TRUE =
 export function hasOxfmtSvelteConfig(cwd: string): boolean {
 	// Monorepo asymmetry (#1134 P3 tail 2): this dependency check stops at the
 	// NEAREST package.json (`hasNearestPackageJsonDependency`), while the
-	// config walk below (`walkUpDirs`) continues all the way to the repo root.
+	// config walk below (`toolConfigDirs`) continues up to the seam's stop rule.
 	// A root-level `svelte` dependency combined with an oxfmt config at the
 	// root, but invoked with a sub-package `cwd` that has its own
 	// (svelte-less) package.json, under-offers oxfmt for that sub-package —
@@ -2000,7 +2000,7 @@ export function hasOxfmtSvelteConfig(cwd: string): boolean {
 	// failing to offer a valid formatter is safe (never mis-offers one that
 	// then fails at runtime), unlike the inverse.
 	if (!hasNearestPackageJsonDependency(cwd, "svelte")) return false;
-	for (const dir of walkUpDirs(cwd)) {
+	for (const dir of toolConfigDirs(cwd)) {
 		const rcPath = path.join(dir, ".oxfmtrc.json");
 		if (fs.existsSync(rcPath)) {
 			try {
@@ -2093,17 +2093,9 @@ export function biomeConfigArgs(cwd: string): string[] {
 	];
 }
 
-// ktfmt has no native config file format; these are pi-lens opt-in markers plus
-// the gradle-plugin signal, so a project that uses ktfmt elects it as its Kotlin
-// formatter instead of the ktlint smart-default (#129).
-const KTFMT_CONFIG_FILES = [".ktfmt", ".ktfmt.kts"];
-const KTFMT_GRADLE_FILES = [
-	"build.gradle.kts",
-	"build.gradle",
-	"settings.gradle.kts",
-	"settings.gradle",
-];
-
+// A project that uses ktfmt elects it as its Kotlin formatter instead of the
+// ktlint smart-default (#129): the pi-lens opt-in markers (`hasToolConfig
+// ("ktfmt")`), a Spotless block, or a mention in these Gradle files.
 const KOTLIN_GRADLE_FILES = [
 	"build.gradle.kts",
 	"build.gradle",
@@ -2328,7 +2320,7 @@ export type SpotlessKotlinFormatter = "ktlint" | "ktfmt";
 export function getSpotlessKotlinFormatter(
 	cwd: string,
 ): SpotlessKotlinFormatter | undefined {
-	for (const dir of walkUpDirs(cwd)) {
+	for (const dir of toolConfigDirs(cwd)) {
 		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const filePath = path.join(dir, gradle);
 			if (!fs.existsSync(filePath)) continue;
@@ -2374,7 +2366,7 @@ export function hasKtlintConfig(cwd: string): boolean {
 export function hasGradleKtlintPlugin(cwd: string): GradleKtlintOwnership {
 	const files = new Set<string>();
 	const scan = { entries: 0, exceeded: false, indeterminate: false };
-	for (const dir of walkUpDirs(cwd)) {
+	for (const dir of toolConfigDirs(cwd)) {
 		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const filePath = path.join(dir, gradle);
 			if (fs.existsSync(filePath)) files.add(filePath);
@@ -2484,10 +2476,9 @@ function addGradleBuildLogicFiles(
 export function hasKtfmtConfig(cwd: string): boolean {
 	const spotlessFormatter = getSpotlessKotlinFormatter(cwd);
 	if (spotlessFormatter) return spotlessFormatter === "ktfmt";
-	for (const dir of walkUpDirs(cwd)) {
-		if (KTFMT_CONFIG_FILES.some((cfg) => fs.existsSync(path.join(dir, cfg))))
-			return true;
-		for (const gradle of KTFMT_GRADLE_FILES) {
+	if (hasToolConfig("ktfmt", cwd)) return true;
+	for (const dir of toolConfigDirs(cwd)) {
+		for (const gradle of KOTLIN_GRADLE_FILES) {
 			const p = path.join(dir, gradle);
 			if (fs.existsSync(p)) {
 				try {
