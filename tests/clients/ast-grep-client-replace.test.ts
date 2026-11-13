@@ -142,6 +142,9 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 		releasePrecheck();
 		const result = await pending;
 
+		// The re-check before the write refuses either way; only the signal on the
+		// precheck child itself stops that child in a host with no tool scope.
+		expect(exec.mock.calls[0]?.[1]).toEqual({ signal: controller.signal });
 		expect(result.aborted).toBe(true);
 		expect(result.error).toBe("operation aborted");
 		expect(result.writeStarted).toBeUndefined();
