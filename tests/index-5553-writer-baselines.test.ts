@@ -14,7 +14,6 @@
  * committed blocker, the real ast-grep CLI, `sed`, and the fake language
  * server's real rename. Scripted is the model only, at the provider boundary.
  */
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +28,7 @@ import { CLEAN_OBSERVATION_ARM_LIMIT } from "../clients/mutation-attribution.js"
 import { normalizeMapKey } from "../clients/path-utils.js";
 import { useGlobalConfig } from "./support/global-config.js";
 import { readNdjsonRows } from "./support/ndjson-rows.js";
-import { gitFixtureEnv } from "./support/git-fixture-env.js";
+import { execFileSync } from "./support/git-fixture-env.js";
 import {
 	GATE_BLOCK,
 	GUARDED_FLAGS,
@@ -113,7 +112,6 @@ function seedRepo(name: string) {
 	const git = (...args: string[]) =>
 		execFileSync("git", args, {
 			cwd: proj,
-			env: gitFixtureEnv(proj),
 			stdio: "ignore",
 		});
 	git("init", "-q");
@@ -504,13 +502,12 @@ describe("#5553 every path-naming writer is judged on its delta", () => {
 			fs.writeFileSync(third, COMMITTED);
 			execFileSync("git", ["add", "-A"], {
 				cwd: proj,
-				env: gitFixtureEnv(proj),
 				stdio: "ignore",
 			});
 			execFileSync(
 				"git",
 				["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "two"],
-				{ cwd: proj, env: gitFixtureEnv(proj), stdio: "ignore" },
+				{ cwd: proj, stdio: "ignore" },
 			);
 			const handle = await startPiSession({
 				root: fixture.root,

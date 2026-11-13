@@ -826,8 +826,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 3 -> 5 -> 3 (#4187): round 4's tool-call authorship retirement filtered
 		// the owned in-process mutation paths; round 5 folds two of its three
 		// branches onto the observational net's arm, and the surviving ast-grep
-		// site walks its `paths` array instead of filtering it.
-		"clients/runtime-tool-call.ts": 2,
+		// site walks its `paths` array instead of filtering it. 2 -> 3 (#5553):
+		// `namedWriterTargets` keeps the named paths that are existing, analysed
+		// files, an `Array.prototype.filter` call, not a delivery filter.
+		"clients/runtime-tool-call.ts": 3,
 		// #4535 slice 2: the LSP consumer narrows a publish's population to the
 		// documents a live client holds and keeps the stale ones among them —
 		// two `Array.prototype.filter` calls that moved here from
@@ -1512,7 +1514,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// `path.dirname(filePath)`; `resolveSessionConfigRoot` answers it.
 		// 21 -> 23 (#3650): the `lsp_navigation` branch reads the `path` field
 		// the tool declares, in its condition and its return.
-		"clients/runtime-tool-call.ts": 22,
+		// 22 -> 23 (#5553): `namedWriterPaths` resolves the `path` field of an
+		// unclassified foreign tool the net arms for.
+		"clients/runtime-tool-call.ts": 23,
 		// 22 -> 20 (#3650): the tool_result path read is routed through
 		// readToolResultPathField; the open-coded input.path cast is gone.
 		// 19 -> 18 (#4576): the tool_result path resolves through

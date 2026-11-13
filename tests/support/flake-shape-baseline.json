@@ -112,6 +112,7 @@
 		"index-4732-opaque-any-tool-witness.test.ts": 1,
 		"index-5087-complexity-delta-witness.test.ts": 1,
 		"index-5108-opaque-blocker-disclosure-witness.test.ts": 1,
+		"index-5553-writer-baselines.test.ts": 3,
 		"mcp/analyze-cli.test.ts": 1,
 		"mcp/build-graph-cli.test.ts": 1,
 		"packaging-pack-manifest.test.ts": 6,

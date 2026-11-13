@@ -42,8 +42,7 @@ import { canWriteAnalysisRoot, resolveAnalysisRoot } from "../analysis-root.js";
 import { resolveLanguageRootForFile } from "../language-profile.js";
 import { classifyObservedRunner } from "./collect-later-tier.js";
 import {
-	PRE_EDIT_SEED_RUNNER_IDS,
-	PRE_EDIT_SEED_SPANLESS_RUNNER_IDS,
+	isPreEditSeedRunner,
 	preEditSeedFactKey,
 	seedFromCapture,
 } from "./pre-edit-seed.js";
@@ -3561,9 +3560,6 @@ export async function capturePreEditLinterFindings(
 	if (!kind) return { outcome: "skipped", reason: "no-kind" };
 	if (ctx.fileRole === "generated")
 		return { outcome: "skipped", reason: "generated" };
-	const seeded = spanless
-		? PRE_EDIT_SEED_SPANLESS_RUNNER_IDS
-		: PRE_EDIT_SEED_RUNNER_IDS;
 	const groups = withSpotbugsGroup(
 		kind,
 		getDispatchGroupsForKind(kind, pi),
@@ -3571,7 +3567,8 @@ export async function capturePreEditLinterFindings(
 	).flatMap((group) => {
 		const runnerIds = group.runnerIds.filter(
 			(id) =>
-				seeded.has(id) && classifyObservedRunner(projectRoot, id) === "inline",
+				isPreEditSeedRunner(id, spanless) &&
+				classifyObservedRunner(projectRoot, id) === "inline",
 		);
 		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
 	});
@@ -3610,7 +3607,7 @@ export async function capturePreEditLinterFindings(
 		}
 		if (!now?.equals(before))
 			return { outcome: "discarded", reason: "bytes-changed" };
-		const seed = seedFromCapture(result.blockers, content);
+		const seed = seedFromCapture(result.blockers, content, spanless);
 		sessionFacts.setBoundedSessionFact(seedKey, seed);
 		return {
 			outcome: "seeded",

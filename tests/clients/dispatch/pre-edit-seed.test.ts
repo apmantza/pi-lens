@@ -52,4 +52,25 @@ describe("seedFromCapture", () => {
 		);
 		expect(seed.map((d) => d.runnerId)).toEqual(["shellcheck"]);
 	});
+
+	// Recurrence prevented (#5553): a writer that names no edit span leaves the
+	// edit-gated lanes reading the whole file, so their findings join the seed;
+	// language servers still do not.
+	it("seeds the edit-gated lanes too for a writer with no edit span", () => {
+		const seed = seedFromCapture(
+			[
+				finding(1, "shellcheck"),
+				finding(1, "lsp"),
+				finding(1, "ast-grep-napi"),
+				finding(1, "tree-sitter"),
+			],
+			"BAD_SH\n",
+			true,
+		);
+		expect(seed.map((d) => d.runnerId)).toEqual([
+			"shellcheck",
+			"ast-grep-napi",
+			"tree-sitter",
+		]);
+	});
 });

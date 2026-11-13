@@ -1296,6 +1296,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the subject is what a real bash tool call writes into a real git checkout and what the model receives for it, detected by git's own status; a stubbed shell answers only what it was told",
 	},
+	// 2026-11-14 (#5553): every writer that names a path must reach the commit
+	// gate with the inherited blocker already in its baseline; the writers are
+	// real `sed`, ast-grep and fake-LSP children and the gate reads a real repo.
+	"real-process-spawn:index-5553-writer-baselines.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the subject is whether the bytes a real sed, ast-grep, language-server rename or foreign tool wrote reach git's own commit with the inherited blocker still counted; a stub answers only what it was told",
+	},
 	// 2026-09-03: the published-manifest guard must run the real `npm pack`
 	// (prepack/postpack are npm lifecycle hooks); header on the file states why.
 	"real-process-spawn:packaging-pack-manifest.test.ts": {

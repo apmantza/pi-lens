@@ -83,6 +83,16 @@ export const PRE_EDIT_SEED_SPANLESS_RUNNER_IDS: ReadonlySet<string> = new Set([
 	"tree-sitter",
 ]);
 
+/** Whether `runnerId`'s findings are seeded for a writer with or without a span. */
+export function isPreEditSeedRunner(
+	runnerId: string,
+	spanless: boolean,
+): boolean {
+	return spanless
+		? PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(runnerId)
+		: PRE_EDIT_SEED_RUNNER_IDS.has(runnerId);
+}
+
 /**
  * Seeded entries kept per file. Past it the rest are not seeded, so they
  * block as they did before the seed (the direction of today's behaviour).
@@ -101,12 +111,13 @@ export function preEditSeedFactKey(filePath: string): string {
 export function seedFromCapture(
 	findings: readonly Diagnostic[],
 	content: string,
+	spanless = false,
 ): Diagnostic[] {
 	const seeded = findings.filter(
 		(d) =>
 			d.semantic === "blocking" &&
 			d.runnerId !== undefined &&
-			PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(d.runnerId) &&
+			isPreEditSeedRunner(d.runnerId, spanless) &&
 			d.line !== undefined,
 	);
 	return stampLineHashes(
