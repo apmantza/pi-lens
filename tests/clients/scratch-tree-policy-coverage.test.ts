@@ -56,6 +56,7 @@ import {
 	SECRETS_LANE_SCRATCH_DIR_NAMES,
 } from "../../clients/scratch-tree-policy.js";
 import { EXCLUDED_DIRS } from "../../clients/file-utils.js";
+import { escapeRegExp } from "../../clients/string-utils.js";
 
 const { safeSpawnAsync, safeSpawn } = vi.hoisted(() => ({
 	safeSpawnAsync: vi.fn(),
@@ -183,18 +184,17 @@ describe("scratch-tree-policy — the scan root bounds every name match (#5500)"
 	// form the policy emits). Vulture is not a CI dependency, so its rule is
 	// restated here; the real-binary transcript is in the PR body.
 	function fnmatch(pattern: string, name: string): boolean {
-		const literal = (ch: string) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 		// Windows folds `\` to `/` before matching (`ntpath.normcase`).
 		const source = pattern
 			.replace(/\\/g, "/")
 			.replace(/\[(.)\]|\*|\?|./g, (token, ch?: string) =>
 				ch !== undefined
-					? literal(ch)
+					? escapeRegExp(ch)
 					: token === "*"
 						? ".*"
 						: token === "?"
 							? "."
-							: literal(token),
+							: escapeRegExp(token),
 			);
 		return new RegExp(`^${source}$`, "i").test(name.replace(/\\/g, "/"));
 	}
