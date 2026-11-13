@@ -642,6 +642,28 @@ describe("clean-claim census (#5258)", () => {
 		});
 	});
 
+	it("reds a claim row for a site that no longer exists (#5072)", () => {
+		// Recurrence: a stale-row loop that reads only some census classes. The
+		// #5563 review skipped the claim rows in the loop and the neutral-only cell
+		// stayed green, so 32 live claim rows went unchecked for stale.
+		const file = "tools/lens-diagnostics.ts";
+		const census = loadCensus();
+		const planted = "5072-gone-claim";
+		const rows = census[file]!;
+		const problems = censusProblems(file, readCensusSource(file), {
+			...rows,
+			claim: {
+				...rows.claim,
+				[planted]: { count: 1, producer: "own", why: "planted" },
+			},
+		});
+		expectPlantedStaleRow({
+			baseline: "tests/clients/clean-claim-census.json",
+			rowKey: planted,
+			verdict: problems,
+		});
+	});
+
 	it("reds a clean field written without cleanVerdict", () => {
 		// The review's `clean: true` plant: the header reads details.clean, so a
 		// literal true there would say clean without proof.
