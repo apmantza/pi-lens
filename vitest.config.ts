@@ -349,6 +349,11 @@ const lspSpawnHeavyInclude = [
 	// diagnostics publish, one didChange round trip). Real child + real wire,
 	// same #1022/#2332 contention class as its lane siblings.
 	"tests/clients/dispatch/runners/shuck-lsp-smoke.test.ts",
+	// #5559: a real rust-analyzer child (skipped, with a named reason, when none
+	// is runnable) loads a Cargo workspace, answers a control references call
+	// (up to 90 s) and then the graph-position call — the #1022/#2332 shape of
+	// its lane siblings.
+	"tests/clients/lsp/cascade-rust-references-position-5559.integration.test.ts",
 	// #4322: the production LSPService over two real stdio fake-server children
 	// (a JSON primary and a typos auxiliary); waits on real handshakes and a
 	// diagnostics round, the same #1022/#2332 shape as its lane siblings.

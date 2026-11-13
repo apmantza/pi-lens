@@ -591,6 +591,11 @@ const POSITION_CASES: Record<string, PositionCase> = {
 		src: "class A {\n    public void foo() { }\n}\n",
 		names: ["A", "foo"],
 	},
+	cue: {
+		file: "a.cue",
+		src: "package a\n\n#Service: {\n\tname: string\n}\n\nlet helper = 1\n",
+		names: ["#Service", "name", "helper"],
+	},
 };
 
 describe("symbol identifier position (#5559) — per supported grammar", () => {

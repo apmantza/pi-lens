@@ -24,10 +24,10 @@
  * answers with the consumers. A graph position that then answers empty is the
  * defect, not a server that is still starting.
  *
- * Skipped, with a named reason, when `rust-analyzer` is not runnable (the unit
- * lanes install no Rust toolchain): it must answer `--version` on PATH.
+ * Skipped, with a named reason, when no `rust-analyzer` is on PATH or the one
+ * there is a rustup proxy with no toolchain component (the unit lanes install no
+ * Rust toolchain).
  */
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -43,22 +43,47 @@ import { normalizeMapKey } from "../../../clients/path-utils.js";
 import { buildOrUpdateGraph } from "../../../clients/review-graph/service.js";
 import { REAL_HOME } from "../../support/vitest-setup.js";
 import { withEnv } from "../../support/with-env.js";
+import { waitFor } from "../interleaving-kit.js";
 import { pinFixtureHome, setupTestEnvironment } from "../test-utils.js";
 
 const RUSTUP_HOME = process.env.RUSTUP_HOME ?? path.join(REAL_HOME, ".rustup");
 
-function runnableRustAnalyzer(): string | undefined {
-	const probe = spawnSync("rust-analyzer", ["--version"], {
-		encoding: "utf8",
-		env: { ...process.env, RUSTUP_HOME },
-		timeout: 20_000,
-	});
-	return probe.status === 0 ? probe.stdout.trim() : undefined;
+function executableOnPath(name: string): string | undefined {
+	for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+		if (!dir) continue;
+		const candidate = path.join(dir, name);
+		try {
+			fs.accessSync(candidate, fs.constants.X_OK);
+			return candidate;
+		} catch {
+			// not here
+		}
+	}
+	return undefined;
 }
 
-const VERSION = runnableRustAnalyzer();
-const SKIP_REASON =
-	VERSION === undefined ? "no runnable rust-analyzer on PATH" : "";
+/**
+ * rustup installs a `rust-analyzer` proxy on PATH whether or not any toolchain
+ * carries the component; a proxy with no component behind it is not a server.
+ */
+function rustAnalyzerSkipReason(): string {
+	const found = executableOnPath("rust-analyzer");
+	if (found === undefined) return "no rust-analyzer on PATH";
+	if (!found.includes(`${path.sep}.cargo${path.sep}bin${path.sep}`)) return "";
+	const toolchains = path.join(RUSTUP_HOME, "toolchains");
+	const hasComponent = fs.existsSync(toolchains)
+		? fs
+				.readdirSync(toolchains)
+				.some((t) =>
+					fs.existsSync(path.join(toolchains, t, "bin", "rust-analyzer")),
+				)
+		: false;
+	return hasComponent
+		? ""
+		: "the rust-analyzer on PATH is a rustup proxy with no toolchain component";
+}
+
+const SKIP_REASON = rustAnalyzerSkipReason();
 
 const API = [
 	"pub fn alpha(x: i32) -> i32 {",
@@ -160,15 +185,29 @@ describe.skipIf(SKIP_REASON !== "")(
 			const identifierCol = API.split("\n")[0].indexOf("alpha");
 			const uris = async (l: number, c: number) =>
 				(await lsp.references(api, l, c, false)).map((r) => r.uri);
-			const deadline = Date.now() + 90_000;
-			let control: string[] = [];
-			while (Date.now() < deadline) {
-				control = await uris(0, identifierCol).catch(() => [] as string[]);
-				if (control.includes(aUri) && control.includes(bUri)) break;
-				await new Promise((resolve) => setTimeout(resolve, 500));
-			}
-			expect(control, "control: identifier position answers").toEqual(
-				expect.arrayContaining([aUri, bUri]),
+			// `waitFor` reads synchronously, so each read starts one request (never two
+			// at once) and returns the latest settled answer.
+			let latest: string[] = [];
+			let inFlight = false;
+			await waitFor(
+				() => {
+					if (!inFlight) {
+						inFlight = true;
+						uris(0, identifierCol)
+							.then((found) => {
+								latest = found;
+							})
+							.catch(() => {
+								latest = [];
+							})
+							.finally(() => {
+								inFlight = false;
+							});
+					}
+					return latest;
+				},
+				(found) => found.includes(aUri) && found.includes(bUri),
+				{ timeoutMs: 90_000, intervalMs: 500 },
 			);
 
 			// The cascade's call, at the graph's position (`line - 1, column - 1`).

@@ -440,9 +440,12 @@ describe("computeCascadeForFile", () => {
 	it("asks the server at the identifier, not the declaration start (#5559)", async () => {
 		const env = setupTestEnvironment("cascade-lsp-refs-name-");
 		try {
-			const primary = path.join(env.tmpDir, "src", "api.rs");
+			const primary = path.join(env.tmpDir, "src", "A.java");
 			fs.mkdirSync(path.dirname(primary), { recursive: true });
-			fs.writeFileSync(primary, "\n\npub fn alpha() {}\n");
+			fs.writeFileSync(
+				primary,
+				'class A {\n    @Override\n    public String alpha() { return ""; }\n}\n',
+			);
 
 			const graph = emptyGraph();
 			const normalizedPrimary = primary.split(path.sep).join("/");
@@ -451,12 +454,13 @@ describe("computeCascadeForFile", () => {
 			graph.nodes.set(symbolId, {
 				id: symbolId,
 				kind: "symbol",
-				language: "rust",
+				language: "java",
 				filePath: normalizedPrimary,
 				symbolName: "alpha",
 				symbolKind: "function",
-				// Declaration start 3:1 (`pub`); identifier 3:8 (`alpha`).
-				metadata: { line: 3, column: 1, nameLine: 3, nameColumn: 8 },
+				// Declaration start 2:5 (the annotation); identifier 3:19 (`alpha`),
+				// one line below: a column-only fix would still ask the wrong line.
+				metadata: { line: 2, column: 5, nameLine: 3, nameColumn: 19 },
 			});
 			mocks.buildOrUpdateGraph.mockResolvedValue(graph);
 			mocks.computeImpactCascade.mockReturnValue({
@@ -480,7 +484,7 @@ describe("computeCascadeForFile", () => {
 			});
 
 			expect(references).toHaveBeenCalledTimes(1);
-			expect(references).toHaveBeenCalledWith(normalizedPrimary, 2, 7, false);
+			expect(references).toHaveBeenCalledWith(normalizedPrimary, 2, 18, false);
 		} finally {
 			env.cleanup();
 		}
