@@ -115,11 +115,14 @@ function normalizeActionTitle(title: string): string {
 	return title.replace(/\s+/g, " ").trim();
 }
 
-/** No suggestion from an empty list or from a lookup with no client to ask. */
+/**
+ * A lookup with no client to ask (`undefined`, #5554) suggests nothing, as an
+ * empty list does; the call's catch would give the same result.
+ */
 function buildCodeActionSuggestion(
-	actions: import("../../lsp/client.js").LSPCodeAction[] | undefined,
+	actions: import("../../lsp/client.js").LSPCodeAction[] = [],
 ): string | undefined {
-	if (!actions?.length) return undefined;
+	if (!actions.length) return undefined;
 	const quickFixes = actions.filter((action) =>
 		action.kind?.startsWith("quickfix"),
 	);
