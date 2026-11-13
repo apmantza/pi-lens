@@ -231,8 +231,10 @@ describe("resolveToolCwd (#2777)", () => {
 				.split("\n")
 				.filter((line) => line.includes("cwd runner oxlint"));
 			expect(lines).toHaveLength(1);
-			expect(lines[0]).toContain(`cwd=${workspace()}`);
-			expect(lines[0]).toContain("reason=marker:.oxlintrc.json");
+			// One exact span: `cwd=<root>` alone is a prefix of `cwd=<root>/apps/web`.
+			expect(lines[0]).toContain(
+				`cwd=${workspace()} reason=marker:.oxlintrc.json`,
+			);
 		});
 
 		it("keeps a nested package's own config as the anchor", () => {
