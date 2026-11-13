@@ -1376,9 +1376,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 9 -> 12 (#2050): resolveOpaqueRecoveryRoots resolves each candidate
 		// (a `cd` target, and a recognised write's `path.dirname`) before asking
 		// which checkout owns it, and keys the admission set on the resolved root.
-		// 12 -> 13 (#5552): `differsFromHeadOrIndex` relativizes a named
-		// destination against the checkout top with `path.relative`.
-		"clients/opaque-mutation-scan.ts": 13,
+		"clients/opaque-mutation-scan.ts": 12,
 		"clients/opengrep-client.ts": 6,
 		"clients/opengrep-config.ts": 3,
 		// New (#4765): the cached pack path and the CLI id-prefix strip.
@@ -1954,10 +1952,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// result's exit `status`, not a delivery status.
 		// 26 -> 27 (#4502): readGitStatusEntries checks the spawn result's exit
 		// `status` once for every porcelain read it now serves.
-		// 27 -> 29 (#5552): `differsFromHeadOrIndex` reads the `git diff` exit
-		// `status`, and `isChanged` reads the porcelain entry's `status` to tell
-		// an untracked destination from a tracked one.
-		"clients/opaque-mutation-scan.ts": 29,
+		"clients/opaque-mutation-scan.ts": 27,
 		// 9 -> 7 (#5411): a report is judged by its content, not the exit status.
 		"clients/opengrep-client.ts": 6,
 		"clients/package-manager.ts": 2,

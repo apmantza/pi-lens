@@ -881,10 +881,9 @@ const ROWS: Readonly<Record<string, Row>> = {
 			],
 		},
 		"clients/opaque-mutation-scan.ts#safeSpawnAsync": {
-			sites: 2,
+			sites: 1,
 			pins: [
 				`"git" ["diff", "--name-only", "--no-renames", "-z", from, to] {cwd: root, timeout: 5000, maxOutputBytes: MAX_GIT_STATUS_OUTPUT_BYTES}`,
-				`"git" args {cwd: root, timeout: 3000}`,
 			],
 		},
 	}),

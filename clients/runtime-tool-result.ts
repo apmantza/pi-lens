@@ -2841,6 +2841,7 @@ export async function handleToolResult(
 							pending.startedAt,
 							{
 								namedPaths: recognizedWritten,
+								dirtyBefore: pending.dirtyPaths,
 								excludeIndexOnlyWhenUnmerged: isFailedGitIntegrationCommand(
 									command,
 									event.isError,

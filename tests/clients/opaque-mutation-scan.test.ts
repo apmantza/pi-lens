@@ -316,7 +316,7 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		);
 	});
 
-	it("recovers a named tracked overwrite by content when its mtime is old", async () => {
+	it("recovers a named tracked overwrite that was clean before, whatever its mtime (#5552)", async () => {
 		const target = path.join(repoDir, "src", "base.ts");
 		const startedAt = Date.now();
 		writeViaNodeChild(target, "named overwrite\n");
@@ -326,6 +326,7 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		await expect(
 			recoverOpaqueChangesViaGit(repoDir, startedAt, {
 				namedPaths: [target],
+				dirtyBefore: [],
 			}),
 		).resolves.toMatchObject({
 			verdict: "recovered",
@@ -334,12 +335,39 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		await expect(
 			recoverOpaqueChangesViaGit(repoDir, startedAt, {
 				namedPaths: [],
+				dirtyBefore: [],
 			}),
 		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
 	});
 
+	// #5552 r2 F3: `cp -n` is recognized as a write but may write nothing. A
+	// named path that was already dirty before the command (the user's edit)
+	// keeps the mtime rule, and so does every named path when the baseline has
+	// no dirty set (git could not answer, or a root that takes no capture).
+	it.each([
+		{ name: "dirty before the command", dirtyBefore: "target" as const },
+		{ name: "no dirty set captured", dirtyBefore: undefined },
+	])(
+		"leaves a named old-mtime path on the mtime rule when $name (#5552)",
+		async ({ dirtyBefore }) => {
+			const target = path.join(repoDir, "src", "base.ts");
+			const startedAt = Date.now();
+			writeViaNodeChild(target, "user edit\n");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(target, old, old);
+
+			await expect(
+				recoverOpaqueChangesViaGit(repoDir, startedAt, {
+					namedPaths: [target],
+					dirtyBefore:
+						dirtyBefore === "target" ? [normalizeMapKey(target)] : undefined,
+				}),
+			).resolves.toMatchObject({ verdict: "recovered", paths: [] });
+		},
+	);
+
 	// #5552: `mv ../old.ts src/new.ts` into a path git does not track keeps the
-	// old mtime too; with no HEAD or index copy, the named file is the write.
+	// old mtime too; git lists it as untracked, and the named file is the write.
 	it("recovers a named untracked destination with an old mtime, and leaves an unnamed one", async () => {
 		const named = path.join(repoDir, "src", "moved-in.ts");
 		const other = path.join(repoDir, "src", "other-old.ts");
@@ -353,49 +381,13 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		await expect(
 			recoverOpaqueChangesViaGit(repoDir, startedAt, {
 				namedPaths: [named],
+				dirtyBefore: [],
 			}),
 		).resolves.toMatchObject({
 			verdict: "recovered",
 			paths: [normalizeMapKey(named)],
 		});
 	});
-
-	// #5552: the content compare reads HEAD and the index, so each side needs its
-	// own case. `mv` over a file whose bytes already sit in the index differs from
-	// HEAD only; `mv` that restores HEAD's bytes over a staged change differs from
-	// the index only. A compare against one side alone drops one of the two.
-	it.each([
-		{
-			name: "staged bytes (differs from HEAD only)",
-			staged: "staged\n",
-			worktree: "staged\n",
-		},
-		{
-			name: "HEAD bytes over a staged change (differs from the index only)",
-			staged: "staged\n",
-			worktree: "base\n",
-		},
-	])(
-		"recovers a named overwrite by content against HEAD and the index: $name",
-		async ({ staged, worktree }) => {
-			const target = path.join(repoDir, "src", "base.ts");
-			const startedAt = Date.now();
-			fs.writeFileSync(target, staged, "utf8");
-			execSync("git add -- src/base.ts", { cwd: repoDir });
-			fs.writeFileSync(target, worktree, "utf8");
-			const old = new Date(startedAt - 10_000);
-			fs.utimesSync(target, old, old);
-
-			await expect(
-				recoverOpaqueChangesViaGit(repoDir, startedAt, {
-					namedPaths: [target],
-				}),
-			).resolves.toMatchObject({
-				verdict: "recovered",
-				paths: [normalizeMapKey(target)],
-			});
-		},
-	);
 
 	it("recovers a fresh intent-to-add entry from git add -N", async () => {
 		const intentPath = path.join(repoDir, "src", "intent.ts");

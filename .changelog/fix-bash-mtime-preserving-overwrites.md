@@ -4,4 +4,4 @@ audience: user
 area: host
 ---
 
-- **Bash overwrites with preserved mtimes are recovered by content.** Recognized `mv`, `cp -p`, and similar writes now reach the normal dispatch path even when the destination keeps an old modification time. (refs #5552)
+- **Bash overwrites that keep an old mtime are now seen.** A recognized `mv` or `cp -p` into a file that was clean before the command now reaches the normal dispatch path, including from a package-subdirectory session, even when the destination keeps its source's old modification time. A file you had already edited is still judged by mtime. (refs #5552)
