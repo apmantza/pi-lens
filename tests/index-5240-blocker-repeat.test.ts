@@ -345,13 +345,12 @@ function pointers(handle: PiSession): PiProviderRequest[] {
 }
 
 /**
- * The `degradation_ledger` rows of one kind, as their metadata. The latency log
- * is shared by every case of this file, so a case reads the rows it added:
- * those after the `before` it took ahead of its first prompt.
+ * The `blocker-repeat-capped` `degradation_ledger` rows, as their metadata.
+ * The latency log is shared by every case of this file, so a case reads the
+ * rows it added: those after the `before` it took ahead of its first prompt.
  */
-async function degradationRows(
+async function cappedRows(
 	handle: PiSession,
-	kind: string,
 	before = 0,
 ): Promise<Array<Record<string, unknown>>> {
 	const read = await handle.latencyRows();
@@ -359,11 +358,9 @@ async function degradationRows(
 	return read.rows
 		.filter((row) => row.phase === "degradation_ledger")
 		.map((row) => row.metadata as Record<string, unknown>)
-		.filter((metadata) => metadata.kind === kind)
+		.filter((metadata) => metadata.kind === "blocker-repeat-capped")
 		.slice(before);
 }
-
-const CAPPED_KIND = "blocker-repeat-capped";
 
 describe.each([
 	{ tag: "guard", flags: undefined },
@@ -392,7 +389,7 @@ describe.each([
 					endTurn("p6 done"),
 					...Array.from({ length: 3 }, listen).flat(),
 				]);
-				const rowsBefore = (await degradationRows(handle, CAPPED_KIND)).length;
+				const rowsBefore = (await cappedRows(handle)).length;
 				await run(handle, 9);
 				// p2, p3 and p4 repeat in full; every later prompt gets the pointer.
 				expect(repeats(handle).map(openedBy)).toEqual([
@@ -431,7 +428,7 @@ describe.each([
 					expect(commit?.text).toContain(RAN_MARKER);
 				}
 				// Retiring a full repeat leaves ONE counted row, not one per prompt.
-				const rows = await degradationRows(handle, CAPPED_KIND, rowsBefore);
+				const rows = await cappedRows(handle, rowsBefore);
 				expect(rows).toHaveLength(1);
 				expect(rows[0]?.count).toBe(1);
 				expect(String(rows[0]?.subject)).toContain(path.join("src", "bad.ts"));
@@ -451,7 +448,7 @@ describe.each([
 					...write(proj, "bad.ts", CHANGED_BLOCKING_FILE),
 					...Array.from({ length: 4 }, listen).flat(),
 				]);
-				const rowsBefore = (await degradationRows(handle, CAPPED_KIND)).length;
+				const rowsBefore = (await cappedRows(handle)).length;
 				await run(handle, 11);
 				// p2-p4 repeat; p5, p6 and p7 (which re-raises) open on the pointer;
 				// the changed content repeats at p8-p10, then the pointer returns.
@@ -466,7 +463,7 @@ describe.each([
 					),
 				);
 				// Each set's cap is its own event: two rows, counted 1 then 2.
-				const rows = await degradationRows(handle, CAPPED_KIND, rowsBefore);
+				const rows = await cappedRows(handle, rowsBefore);
 				expect(rows.map((row) => row.count)).toEqual([1, 2]);
 				expect(handle.errors).toEqual([]);
 			},
