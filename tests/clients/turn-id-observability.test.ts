@@ -10,6 +10,7 @@ import {
 	expect,
 	it,
 } from "vitest";
+import { flushAllNdjsonWriters } from "../../clients/ndjson-logger.js";
 
 function rows(filePath: string): Record<string, unknown>[] {
 	if (!fs.existsSync(filePath)) return [];
@@ -51,7 +52,14 @@ describe("turn identity across observability sinks (#2815)", () => {
 		else process.env.PI_LENS_TEST_MODE = previous.testMode;
 	});
 
-	afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
+	// #5569: drain every sink before the removal. A row still queued here
+	// recreates the home when its append runs after the rm.
+	async function removeHome(): Promise<void> {
+		await flushAllNdjsonWriters();
+		fs.rmSync(home, { recursive: true, force: true });
+	}
+
+	afterAll(removeHome);
 
 	it("stamps every real sink line with the turn that emitted it", async () => {
 		const [
@@ -292,5 +300,25 @@ describe("turn identity across observability sinks (#2815)", () => {
 		expect(
 			runWithTurnContext?.("reset-2815", () => turnContext.getTurnId()),
 		).toBe("reset-2815:1");
+	});
+
+	// Recurrence: run 43444864971 (Unit tests shard 5/5). The last case above
+	// leaves session_scope_transition rows queued; the teardown removed the
+	// home under them and pi-lens-turn-id-2ub0sQ came back with latency.log.
+	it("removes the home only after rows queued at teardown land (#5569)", async () => {
+		const { logLatency } = await import("../../clients/latency-logger.js");
+		logLatency({
+			type: "phase",
+			phase: "queued_at_teardown",
+			filePath: "<test>",
+			durationMs: 0,
+		});
+		await removeHome();
+		// Barrier: a row the teardown left queued lands here, before the check.
+		await flushAllNdjsonWriters();
+		expect(
+			fs.existsSync(home),
+			"a row queued at teardown recreated the removed home",
+		).toBe(false);
 	});
 });
