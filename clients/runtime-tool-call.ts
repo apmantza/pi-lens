@@ -2069,8 +2069,6 @@ function namedWriterPaths(
 			? resolve(getToolCallRawFilePath(toolName, event))
 			: [];
 	return !classified &&
-		!isProviderReplayCall(event) &&
-		!deps.getFlag("no-read-guard") &&
 		shouldRunOpaqueRecovery(
 			toolName,
 			opaquePrescanRoot(ctx.cwd, runtime.projectRoot),

@@ -186,6 +186,20 @@ async function capturedFiles(proj: string): Promise<string[]> {
 		.sort();
 }
 
+/** The `runners` a capture row of `file` names, as ids. */
+async function capturedRunners(file: string): Promise<string[]> {
+	await flushLatencyLog();
+	const rows = readNdjsonRows(getLatencyLogPath()).rows.filter(
+		(row) =>
+			row.phase === "pre_edit_capture" &&
+			normalizeMapKey(String(row.filePath)) === normalizeMapKey(file),
+	);
+	expect(rows).toHaveLength(1);
+	const runners = (rows[0]?.metadata as { runners?: string } | undefined)
+		?.runners;
+	return (runners ?? "").split(",");
+}
+
 const activate = (tool: string) =>
 	fauxToolCall("pi_lens_activate_tools", { tools: [tool] });
 
@@ -321,7 +335,73 @@ describe("#5553 every path-naming writer is judged on its delta", () => {
 		expect(fs.readFileSync(target, "utf8")).toBe(UNRELATED);
 		expect(commit?.text).not.toContain(GATE_BLOCK);
 		expect(commit?.text).toContain(RAN_MARKER);
+		// Recurrence prevented: a host edit carries its touched lines, so the two
+		// edit-gated lanes judge only those and need no seed; seeding them would
+		// run tree-sitter and ast-grep before every file's first edit.
+		const runners = await capturedRunners(target);
+		expect(runners).toContain("oxlint");
+		expect(runners).not.toContain("tree-sitter");
+		expect(runners).not.toContain("ast-grep-napi");
 	});
+
+	// Recurrence prevented: a preview writes nothing, and an applied replace
+	// over a folder writes files its `paths` never named. The first has nothing
+	// to seed; the second is the named-versus-written gap the PR body records
+	// (shape 64), and a folder is no file to read.
+	it(
+		"seeds nothing for a preview or a folder",
+		{ timeout: 120_000 },
+		async () => {
+			const { proj, target } = seedRepo("preview-folder");
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: proj,
+				flags: flagsFor(true),
+				inlineFactory: async () => (await import("../index.js")).default,
+				responses: [
+					step(activate("ast_grep_replace"), "activating"),
+					step(activate("lsp_navigation"), "activating"),
+					step(readTarget(target), "reading"),
+					step(
+						fauxToolCall("ast_grep_replace", {
+							pattern: "return alpha;",
+							rewrite: "return alpha + 1;",
+							lang: "typescript",
+							paths: [target],
+							apply: false,
+						}),
+						"previewing",
+					),
+					step(
+						fauxToolCall("lsp_navigation", {
+							operation: "rename",
+							path: target,
+							line: 2,
+							character: 8,
+							newName: "beta",
+							apply: false,
+						}),
+						"previewing",
+					),
+					step(
+						fauxToolCall("ast_grep_replace", {
+							pattern: "return alpha;",
+							rewrite: "return alpha + 1;",
+							lang: "typescript",
+							paths: [path.dirname(target)],
+							apply: true,
+						}),
+						"applying over the folder",
+					),
+					endTurn("done"),
+				],
+			});
+			await handle.prompt("preview, then apply over the folder");
+			// The folder apply really rewrote the file the seed never named.
+			expect(fs.readFileSync(target, "utf8")).toBe(UNRELATED);
+			expect(await capturedFiles(proj)).toEqual([]);
+		},
+	);
 
 	// Recurrence prevented: the observed-write route arms for every tool pi-lens
 	// does not classify, and a `read` names a path like a writer does. A first
