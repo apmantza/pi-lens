@@ -28,6 +28,7 @@ import {
 } from "../clients/test-utils.js";
 import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
+import { cleanVerdict } from "../../clients/dispatch/types.js";
 
 type SweepRow = Record<string, unknown>;
 
@@ -191,5 +192,16 @@ describe("lens_diagnostics claims clean only with proof (#5258)", () => {
 		const { text, summary } = await run({ mode: "delta" }, sweepOf([]));
 		expect(text).toContain("carried over from earlier this session");
 		expect(summary).not.toContain("clean");
+	});
+
+	// The producer each clean claim reads. Its findings clause is not yet
+	// decisive on this tool's rendered surface (the header branch already
+	// requires zero findings), so the producer is pinned here for the callers
+	// slice 2 moves onto it (#5258).
+	it("cleanVerdict refuses findings, an empty scope and a partial proof", () => {
+		expect(cleanVerdict({ scope: 2, proven: 2, findings: 0 })).toBe(true);
+		expect(cleanVerdict({ scope: 2, proven: 2, findings: 1 })).toBe(false);
+		expect(cleanVerdict({ scope: 0, proven: 0, findings: 0 })).toBe(false);
+		expect(cleanVerdict({ scope: 2, proven: 1, findings: 0 })).toBe(false);
 	});
 });

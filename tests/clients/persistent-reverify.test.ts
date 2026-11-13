@@ -1,4 +1,5 @@
 // flake-shape: raw-timer-wait — the budget test's contract is real elapsed time: bounded() races the touch against a live wall deadline, and fake timers would settle the bound instantly, making the budget semantics unmeasurable. The assertions are on outcomes and counts, never elapsed ms.
+// flake-shape: never-settling-wait — C3b's code-action lookup must never answer, so only the re-verify's own wall bound can end it; that unanswered lookup is the cell under test (#5258).
 /**
  * #3170 — the bounded persistent-reverify pass.
  *
@@ -40,6 +41,7 @@ import {
 import type { TouchFileResult } from "../../clients/lsp/diagnostic-binding.js";
 import type { LSPDiagnostic } from "../../clients/lsp/client.js";
 import {
+	ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE,
 	formatActionableWarningsAdvisory,
 	getActionableWarningsHistoryPath,
 	publishActionableWarningsReport,
@@ -387,6 +389,80 @@ describe("persistent reverify (#3170)", () => {
 		});
 		expect(result.outcomes[0]?.outcome).toBe("clean");
 		expect(result.replacementFiles[0]?.warnings).toEqual([]);
+	});
+
+	it("C3d: a code-action lookup that throws is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const service = makeService({
+			diags: [makeDiag()],
+			confirmation: "confirmed",
+		});
+		(service as unknown as { codeAction: unknown }).codeAction = vi.fn(
+			async () => {
+				throw new Error("server crashed mid-request");
+			},
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: service,
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		expect(result.replacementFiles[0]?.warnings).toEqual(
+			carried.files[0]?.warnings,
+		);
+	});
+
+	// A warning past the per-file code-action cap was never asked about, so it
+	// is no answer either (#5258).
+	it("C3e: a warning past the code-action cap is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const diags = Array.from(
+			{ length: ACTIONABLE_WARNINGS_MAX_CODE_ACTIONS_PER_FILE + 1 },
+			() => makeDiag(),
+		);
+		const result = await runPersistentReverify({
+			report: carried,
+			cwd,
+			lspService: makeService({ diags, confirmation: "confirmed" }, 0, []),
+		});
+		expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+	});
+
+	// A warning the loop reached after its deadline was never asked about.
+	// The clock moves inside the first answer, so the deadline passes between
+	// two lookups and no lookup itself times out (#5258).
+	it("C3f: a warning left when the enrichment deadline passed is unconfirmed, not clean (#5258)", async () => {
+		const carried = makeCarriedReport(filePath);
+		const service = makeService(
+			{ diags: [makeDiag(), makeDiag()], confirmation: "confirmed" },
+			0,
+			[],
+		);
+		const realNow = Date.now.bind(Date);
+		let skew = 0;
+		const clock = vi
+			.spyOn(Date, "now")
+			.mockImplementation(() => realNow() + skew);
+		(service as unknown as { codeAction: unknown }).codeAction = vi.fn(
+			async () => {
+				// After a tick: the lookup's own bound has armed, so this answer
+				// lands in time and only the loop's next deadline check sees it.
+				await Promise.resolve();
+				skew = 600_000;
+				return [];
+			},
+		);
+		try {
+			const result = await runPersistentReverify({
+				report: carried,
+				cwd,
+				lspService: service,
+			});
+			expect(result.outcomes[0]?.outcome).toBe("unconfirmed");
+		} finally {
+			clock.mockRestore();
+		}
 	});
 
 	it("#3205: repeated incomplete re-verifies stay visible but do not grow observed history", async () => {

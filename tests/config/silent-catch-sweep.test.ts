@@ -138,11 +138,13 @@ const SHARP_HOST =
  * count and by the content identity of its admitted set. Shrink only.
  */
 const BASELINE: Readonly<Record<string, Admission>> = {
+	// #5258 re-pins the identity, count unchanged: the codeAction catch (:1354)
+	// now counts the lookup as unanswered, which the persistent re-verify reads.
 	"clients/actionable-warnings.ts": {
 		silent: 6,
-		identities: "e926d3cd1c334a07",
+		identities: "b189a51b2ed65bd2",
 		reason: PRE_RULE,
-	}, // :347, :360, :1169, :1340, :2061, :2272
+	}, // :352, :365, :1182, :1354, :2077, :2290
 	"clients/advisory-provenance.ts": {
 		silent: 4,
 		identities: "4be1802a08b42400",

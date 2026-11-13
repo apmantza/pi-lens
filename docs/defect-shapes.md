@@ -191,6 +191,17 @@ file-scoped worklist and receives no project-wide scanner output.
     only in `latency.log` is not disclosure. Removing a false "unavailable"
     notice never turns the file clean: a file no analyzer applies to reads
     "not analyzed". Instances: `HISTORY.md`.
+    A clean claim ("clean", "✓", "No issues", "all passed") renders only
+    from a producer that proves its scope was checked: `cleanVerdict` (no
+    findings, a non-empty scope, every file in it proven) or the dispatch
+    verdict's `checkedVerdict`, both in `clients/dispatch/types.ts`. An empty
+    answer, a stopped sweep, a lookup that never answered and a report that
+    was never read are not proof. Every clean needle in `clients/`, `tools/`,
+    `mcp/` and `index.ts` is a `CLEAN_EMITTERS` row naming its producer, or a
+    counted non-claim, in `tests/clients/delivery-surface-ratchet.test.ts`.
+    Rows still decided by local logic (`own`) are the instance list: pinned
+    by count, they may only fall. Screen: can this line say clean when no
+    check completed on a file it speaks for?
     An out-of-session-root project edit records one bounded degradation and
     uses the existing advisory notice seam; intended vendor skips and pi-owned
     OS-temp artifacts stay silent (`clients/runtime-tool-result.ts`,
@@ -233,8 +244,10 @@ file-scoped worklist and receives no project-wide scanner output.
     registered `fallbackFor` alternate).
     Enforced by `tests/clients/dispatch/runners/run-outcome-ratchet.test.ts`,
     `tests/clients/dispatch/runners/parsed-nothing-sweep.test.ts` and
-    `tests/clients/delivery-surface-ratchet.test.ts` (partial: no detector
-    for an agent-facing bound that omits its truncation line).
+    `tests/clients/delivery-surface-ratchet.test.ts` (the clean-claim
+    registry; partial: no detector for an agent-facing bound that omits its
+    truncation line, nor for a needle split across lines or assembled at
+    runtime from fragments).
 
 26. **Old-role filter on a substitute:** compare fallback output with the
     substituted surface's contract, including non-blocking findings.

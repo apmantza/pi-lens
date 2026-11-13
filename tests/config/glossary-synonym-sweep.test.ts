@@ -905,7 +905,10 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// (`uncheckedFilesLine`, the unchecked tally, the coverable subset, the
 		// empty delta's unchecked set), four `Array.prototype.filter` calls, not
 		// delivery filters.
-		"tools/lens-diagnostics.ts": 47,
+		// 47 -> 49 (#5258): the clean claim's scope keeps the checked summaries,
+		// and its proof keeps the swept files the sweep proved; two
+		// `Array.prototype.filter` calls, not delivery filters.
+		"tools/lens-diagnostics.ts": 49,
 		// 12 -> 13 (#4346): the batch selects its finding-bearing files to resolve.
 		// 13 -> 14 (#4322): the batch counts its files with auxiliary findings
 		// only, one `Array.prototype.filter` use, not a delivery filter.
