@@ -1203,7 +1203,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		"clients/git-guard.ts": 7,
 		"clients/git-tracked-ignore.ts": 3,
 		// 20 -> 19 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
-		"clients/gitleaks-client.ts": 19,
+		"clients/gitleaks-client.ts": 18,
 		"clients/go-client.ts": 2,
 		"clients/govulncheck-client.ts": 7,
 		// 5 -> 4 (#4966): the upward climb folds onto `walkUpDirs`, so a `path.dirname` / `path.resolve` use leaves the module.
@@ -1594,7 +1594,7 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 4 -> 5 (#4617 review F1): a rendered trivy report cites its own rows'
 		// `target` resolved against the scan root, one more `path` operation, same
 		// sense as the four above (a filesystem path operation).
-		"clients/trivy-client.ts": 5,
+		"clients/trivy-client.ts": 4,
 		"clients/warm-attach.ts": 3,
 		// 7 -> 8 (#5258): the footer names the unchecked file by its basename, a
 		// filesystem path operation. 8 -> 9 (#5301): the restored state is
