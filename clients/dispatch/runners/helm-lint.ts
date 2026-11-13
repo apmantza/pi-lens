@@ -122,8 +122,10 @@ async function lintChart(
 ): Promise<RunnerResult> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "helm");
 	if (!cmd) {
-		const outcome: AvailabilityOutcome | null =
-			toolBinaryVerdict("helm", cwd)?.outcome ?? null;
+		const outcome: AvailabilityOutcome | null = toolBinaryVerdict(
+			"helm",
+			cwd,
+		).outcome;
 		return {
 			status: "failed",
 			diagnostics: [],

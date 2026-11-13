@@ -2206,7 +2206,8 @@ export function stripGradleCommentsAndStrings(
 			continue;
 		}
 
-		const blank = (kept: string) => (keep === "strings" ? kept : " ");
+		const blank = (kept: string | undefined) =>
+			keep === "strings" ? (kept ?? "") : " ";
 		if (char === "\\") {
 			result += blank(char);
 			if (index + 1 < source.length) {

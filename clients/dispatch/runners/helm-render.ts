@@ -532,10 +532,10 @@ function helmUnavailableResult(cwd: string): RunnerResult {
 		failureMessage: describeUnavailability({
 			tool: "helm",
 			installHint: HELM_INSTALL_HINT,
-			outcome: verdict?.outcome,
-			cause: verdict?.cause,
-			elapsedMs: verdict?.elapsedMs,
-			retryAfterMs: verdict?.retryAtMs
+			outcome: verdict.outcome,
+			cause: verdict.cause,
+			elapsedMs: verdict.elapsedMs,
+			retryAfterMs: verdict.retryAtMs
 				? Math.max(0, verdict.retryAtMs - Date.now())
 				: undefined,
 		}).slice(0, 300),
@@ -777,9 +777,9 @@ export async function runIacPass(options: {
 				`Rendered-manifest IaC checks did not run: ${describeUnavailability({
 					tool: "trivy",
 					installHint: TRIVY_INSTALL_HINT,
-					outcome: verdict?.outcome,
-					cause: verdict?.cause,
-					elapsedMs: verdict?.elapsedMs,
+					outcome: verdict.outcome,
+					cause: verdict.cause,
+					elapsedMs: verdict.elapsedMs,
 				})}`,
 			),
 		];

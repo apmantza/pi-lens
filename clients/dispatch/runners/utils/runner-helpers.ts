@@ -2036,18 +2036,30 @@ export async function resolveToolCommandWithInstallFallback(
 	);
 }
 
+/** What a ladder that never probed (or an id with no spec) reports. */
+const UNPROBED_VERDICT: AvailabilityVerdict = {
+	outcome: null,
+	cause: null,
+	elapsedMs: 0,
+	latched: false,
+	retryAtMs: 0,
+};
+
 /**
  * What the registry ladder last decided for `toolId` at `cwd`, for a runner
  * that words its own failure from the typed verdict (the helm and trivy
- * passes) instead of returning `toolAbsentSkip`. `undefined` for an id with no
- * spec. Reads the checker `resolveToolCommandWithInstallFallback` probed
- * through, so it never triggers a probe of its own (#5410).
+ * passes) instead of returning `toolAbsentSkip`. Reads the checker
+ * `resolveToolCommandWithInstallFallback` probed through, so it never triggers
+ * a probe of its own; an id with no spec reads as never probed (#5410).
  */
 export function toolBinaryVerdict(
 	toolId: string,
 	cwd: string,
-): AvailabilityVerdict | undefined {
-	return toolBinaryChecker(toolId, "managed-first")?.getVerdict(cwd);
+): AvailabilityVerdict {
+	return (
+		toolBinaryChecker(toolId, "managed-first")?.getVerdict(cwd) ??
+		UNPROBED_VERDICT
+	);
 }
 
 /**
