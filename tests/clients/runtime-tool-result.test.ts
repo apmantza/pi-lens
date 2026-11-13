@@ -7036,7 +7036,8 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 					},
 					ctx: { cwd: worktreeDir },
 					lensEnabled: true,
-					getFlag: (name: string) => name === "no-lsp",
+					getFlag: (name: string) =>
+						name === "no-lsp" || name === "no-complexity",
 					dbg,
 					runtime,
 					cacheManager: new CacheManager(false),
@@ -7126,7 +7127,8 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 					},
 					ctx: { cwd: parentRoot },
 					lensEnabled: true,
-					getFlag: (name: string) => name === "no-lsp",
+					getFlag: (name: string) =>
+						name === "no-lsp" || name === "no-complexity",
 					dbg: () => {},
 					runtime,
 					cacheManager: new CacheManager(false),
@@ -7201,7 +7203,8 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 					},
 					ctx: { cwd: env.tmpDir },
 					lensEnabled: true,
-					getFlag: (name: string) => name === "no-lsp",
+					getFlag: (name: string) =>
+						name === "no-lsp" || name === "no-complexity",
 					dbg: () => {},
 					runtime,
 					cacheManager: new CacheManager(false),
@@ -7342,7 +7345,8 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 					},
 					ctx: { cwd: worktreeDir },
 					lensEnabled: true,
-					getFlag: (name: string) => name === "no-lsp",
+					getFlag: (name: string) =>
+						name === "no-lsp" || name === "no-complexity",
 					dbg: () => {},
 					runtime,
 					cacheManager: new CacheManager(false),
@@ -7420,7 +7424,8 @@ describe("path attribution across tool_call/tool_result (#1642)", () => {
 				},
 				ctx: { cwd },
 				lensEnabled: true,
-				getFlag: (name: string) => name === "no-lsp",
+				getFlag: (name: string) =>
+					name === "no-lsp" || name === "no-complexity",
 				dbg: () => {},
 				runtime,
 				cacheManager: new CacheManager(false),
