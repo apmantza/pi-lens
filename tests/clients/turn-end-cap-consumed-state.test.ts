@@ -73,6 +73,7 @@ import {
 } from "../../clients/git-guard.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import {
+	BLOCKER_CAPPED_MARK,
 	BLOCKER_REPEAT_HEADING,
 	consumeTurnEndFindings,
 } from "../../clients/runtime-context.js";
@@ -2456,6 +2457,68 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 				expect(take(rig, true)).toBeUndefined();
 				await readOnlyTurn(rig);
 				expect(take(rig, true)).toContain(BLOCKER_REPEAT_HEADING);
+			} finally {
+				rig.cleanup();
+			}
+		});
+	}
+
+	for (const mcp of [false, true]) {
+		it(`collapses a blocker delivered in full 3 times by a fresh turn end only on the pi host (${mcp ? "MCP address" : "pi"})`, async () => {
+			// RECURRENCE GUARDED: #5532 review r1 F1. A fresh turn end (the set
+			// changed) re-sent every live blocker in full, so the cap on the repeat
+			// alone left a stuck blocker at 28 full deliveries in 21 prompts. The MCP
+			// host (`deliveryAddress`) keeps its blockers whole, as for repeats.
+			const rig = makeRig("pi-lens-5532-fresh-");
+			try {
+				fillerBlocker(rig, 300);
+				const delivered: string[] = [];
+				for (let turn = 1; turn <= 5; turn++) {
+					// A different side blocker each turn changes the set, so the turn end
+					// is fresh, never a duplicate.
+					const side = touch(rig, `side-${turn}.ts`);
+					rig.runtime.recordInlineBlockers(
+						side,
+						`side blocker ${turn}`,
+						rig.runtime.nextWriteIndex(),
+						["eslint"],
+						[1],
+					);
+					rig.runtime.beginTurn();
+					await handleTurnEnd({
+						...makeDeps(
+							rig.runtime,
+							rig.cacheManager,
+							rig.cwd,
+							undefined,
+							rig.lensGuard,
+						),
+						...(mcp ? { deliveryAddress: "host-address" } : {}),
+					});
+					delivered.push(
+						consumeTurnEndFindings(rig.cacheManager, rig.cwd, rig.runtime)
+							?.messages?.[0]?.content ?? "",
+					);
+					rig.runtime.clearInlineBlockers(side, rig.runtime.nextWriteIndex());
+				}
+				// A turn end can stay silent (it dedupes against the last one); judge
+				// the deliveries that reached the agent.
+				const reached = delivered.flatMap((text) =>
+					text === "" ? [] : [text],
+				);
+				expect(reached.length).toBeGreaterThanOrEqual(4);
+				const full = reached.map((text) =>
+					text.includes("Unresolved from this turn — filler.ts"),
+				);
+				const collapsed = reached.map((text) =>
+					text.includes(BLOCKER_CAPPED_MARK),
+				);
+				expect(full.slice(0, 4)).toEqual(
+					mcp ? [true, true, true, true] : [true, true, true, false],
+				);
+				expect(collapsed.slice(0, 4)).toEqual(
+					mcp ? [false, false, false, false] : [false, false, false, true],
+				);
 			} finally {
 				rig.cleanup();
 			}
