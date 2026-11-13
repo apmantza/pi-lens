@@ -40,9 +40,10 @@ function writeFakePip(
 		mode === "pep668"
 			? `${pep668Body}; exit 1`
 			: mode === "pep668-long"
-				? // PEP 668 literal first, then ~900 chars of retry preamble so the
+				? // Requires-Python evidence comes first, then the PEP 668 body and
+					// ~900 chars of retry preamble so the
 					// flattened reason exceeds the 1,000-char bound (N1 exercises it).
-					`${pep668Body}; printf "WARNING: Retrying (Retry(total=4)) %850s\\n" x >&2; exit 1`
+					`printf "ERROR: Ignored the following versions that require a different python version: 0.1.11 Requires-Python <3.14,>=3.8.0\\n" >&2; ${pep668Body}; printf "WARNING: Retrying (Retry(total=4)) %850s\\n" x >&2; exit 1`
 				: mode === "genuine"
 					? 'echo "No matching distribution found" >&2; exit 1'
 					: mode === "long-genuine"
@@ -121,7 +122,7 @@ function writeFakePython314(binDir: string): void {
 		path.join(binDir, "python3"),
 		`#!/bin/sh
 if [ "$1" = "--version" ]; then
-  echo "Python 3.14.4"
+  echo "Python 3.12.14"
   exit 0
 fi
 exit 1
@@ -131,6 +132,10 @@ exit 1
 		path.join(binDir, "pip3"),
 		`#!/bin/sh
 case "$*" in
+	--version)
+	  echo "pip 25.1.1 from /fake/lib/python3.14/site-packages/pip (python 3.14.4)"
+	  exit 0
+	  ;;
   *"cmake-language-server>=0.1.11"*)
     # Real pip 25.1.1 output: it names the candidate's Requires-Python, not
     # the interpreter that ran pip. The installer queries that interpreter.
@@ -242,6 +247,7 @@ describe("real pip installer PEP 668 strategy selection (#2916)", () => {
 		expect(result.result.installed).toBe(false);
 		expect(result.result.resolved).toBeUndefined();
 		expect(result.result.reason).toContain("3.14.4");
+		expect(result.result.reason.split(" | ")[0]).not.toContain("3.12.14");
 		const installRows = result.result.summary.filter(
 			(entry: { kind: string }) => entry.kind === "managed-tool-install",
 		);
@@ -457,7 +463,27 @@ fi
 			"",
 		);
 		expect(diagnostic.length).toBeLessThanOrEqual(200);
-		expect(reason.length).toBeLessThanOrEqual(1000);
+		expect(reason.length).toBeLessThanOrEqual(5000);
+	});
+
+	it("keeps a late Requires-Python cause ahead of a long PEP 668 preamble", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePip(bin, "pep668-long");
+		writeFakePythonWithoutVenv(bin, "pep668");
+		const result = await runInstaller(root, bin, "ruff", {
+			FAKE_PIP_LOG: path.join(root, "pip.log"),
+		});
+
+		expect(result.result.installed).toBe(false);
+		expect(result.result.reason).toContain("Requires-Python <3.14,>=3.8.0");
+		const requiresPythonCount = (
+			result.result.reason.match(/Requires-Python <3\.14,>=3\.8\.0/g) ?? []
+		).length;
+		// Each available candidate contributes the cause once; the tail must not
+		// repeat it. pip and python3 are available in this fixture.
+		expect(requiresPythonCount).toBe(2);
 	});
 
 	it("bounds a long diagnostic on the private-prefix rung", async () => {
