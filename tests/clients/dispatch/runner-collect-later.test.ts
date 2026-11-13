@@ -269,47 +269,100 @@ describe("observed runner collect-later tier (#2116)", () => {
 			]);
 		});
 
-		it("keeps a timed-out budget flight occupied until the runner settles (#5547)", async () => {
-			vi.stubEnv("PI_LENS_TEST_MODE", "0");
-			const state = { starts: 0, inFlight: 0, peak: 0 };
-			const gates: Array<() => void> = [];
-			observeRunnerLatency({
-				projectRoot,
-				runnerId: "budget-flight-runner",
-				durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
-			});
-			const registry = new RunnerRegistry();
-			registry.register({
-				id: "budget-flight-runner",
-				appliesTo: ["jsts"],
-				priority: 1,
-				timeoutMs: 400,
-				run: async () => {
-					state.starts += 1;
-					state.inFlight += 1;
-					state.peak = Math.max(state.peak, state.inFlight);
-					await new Promise<void>((resolve) => gates.push(resolve));
-					state.inFlight -= 1;
-					return { status: "succeeded", diagnostics: [], semantic: "none" };
-				},
-			});
-			await Promise.all([
-				write(registry, "budget-flight-runner", filePath, 1),
-				write(registry, "budget-flight-runner", filePath, 2),
-				write(registry, "budget-flight-runner", filePath, 3),
-			]);
-			await delay(600);
-			// Recurrence: the budget raced the live child and released the flight,
-			// so each later write started another child (#5547).
-			expect(state.peak).toBe(1);
-			gates[0]?.();
-			await settleTicks();
-			expect(state.starts).toBe(2);
-			expect(state.peak).toBe(1);
-			gates[1]?.();
-			await settleTicks();
-			expect(state.inFlight).toBe(0);
-		});
+		it.each(["sequential", "concurrent", "preset"])(
+			"keeps a %s timed-out budget flight occupied until settlement (#5547)",
+			async (mode) => {
+				vi.stubEnv("PI_LENS_TEST_MODE", "0");
+				await flushLatencyLog();
+				const logStart = existsSync(getLatencyLogPath())
+					? statSync(getLatencyLogPath()).size
+					: 0;
+				if (mode === "preset")
+					observeRunnerLatency({
+						projectRoot,
+						runnerId: "budget-flight-runner",
+						durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
+					});
+				const state = { starts: 0, inFlight: 0, peak: 0 };
+				const gates: Array<() => void> = [];
+				const registry = new RunnerRegistry();
+				registry.register({
+					id: "budget-flight-runner",
+					appliesTo: ["jsts"],
+					priority: 1,
+					timeoutMs: 400,
+					run: async () => {
+						state.starts += 1;
+						state.inFlight += 1;
+						state.peak = Math.max(state.peak, state.inFlight);
+						await new Promise<void>((resolve) => gates.push(resolve));
+						state.inFlight -= 1;
+						return { status: "succeeded", diagnostics: [], semantic: "none" };
+					},
+				});
+				try {
+					if (mode === "sequential") {
+						for (let index = 1; index <= 3; index++)
+							await write(registry, "budget-flight-runner", filePath, index);
+					} else {
+						await Promise.all(
+							[1, 2, 3].map((index) =>
+								write(registry, "budget-flight-runner", filePath, index),
+							),
+						);
+					}
+					await delay(600);
+					// Recurrence: the budget raced the live child and released the flight,
+					// so each later write started another child (#5547).
+					expect(state.peak).toBe(1);
+					gates[0]?.();
+					await settleTicks();
+					expect(state.starts).toBe(2);
+					expect(state.peak).toBe(1);
+					gates[1]?.();
+					await settleTicks();
+					expect(state.inFlight).toBe(0);
+					await settlePendingRunnerFindingsForTests();
+					const late = await drainPendingRunnerFindings(0);
+					expect(
+						late.map((entry) => [
+							entry.writeIndex,
+							entry.result?.status,
+							entry.result?.failureKind,
+						]),
+					).toEqual(
+						mode === "preset"
+							? [
+									[1, "failed", "timeout"],
+									[2, "succeeded", undefined],
+									[3, "succeeded", undefined],
+								]
+							: [
+									[2, "succeeded", undefined],
+									[3, "succeeded", undefined],
+								],
+					);
+					await flushLatencyLog();
+					const rows = readNdjsonRows<{
+						runnerId?: string;
+						status?: string;
+						metadata?: { failureKind?: string };
+					}>(getLatencyLogPath(), logStart);
+					expect(rows.skipped).toBe(0);
+					expect(rows.rows).toContainEqual(
+						expect.objectContaining({
+							runnerId: "budget-flight-runner",
+							status: "failed",
+							metadata: expect.objectContaining({ failureKind: "timeout" }),
+						}),
+					);
+				} finally {
+					resetObservedRunnerLatency();
+					for (const release of gates) release();
+					await settleTicks();
+				}
+			},
+		);
 
 		it("queues each file once and runs the queue one at a time", async () => {
 			const { state, gates, files, registry } = gatedRunner("queue-runner");

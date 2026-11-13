@@ -56,6 +56,8 @@ import { getToolPlan } from "./plan.js";
 import { resolveRunnerPath } from "./runner-context.js";
 import {
 	classifyObservedRunner,
+	holdFlight,
+	runnerFlightKey,
 	COLLECT_LATER_THRESHOLD_MS,
 	observeRunnerLatency,
 	runCollectLater,
@@ -2315,6 +2317,14 @@ async function runRunner(
 				runner.run(ctx),
 			)
 			.then((value) => ({ value }));
+		// Claim before the first await: concurrent first writes must see this run,
+		// even before its budget observation promotes it to collect-later (#5547).
+		if (ctx.writeIndex !== undefined && !options.holdFlightUntilSettled) {
+			holdFlight(
+				runnerFlightKey(ctx.projectRoot ?? ctx.cwd, runner.id),
+				runnerPromise,
+			);
+		}
 		const outcome = await withBudget(runnerPromise, timeoutMs);
 		if (outcome === undefined) {
 			// A collect-later flight must remain occupied while its child is still

@@ -4,4 +4,4 @@ audience: user
 area: runners
 ---
 
-- **Collect-later runners no longer overlap children after budget expiry.** SpotBugs and Trivy Config now also declare their existing spawn timeouts. (refs #5547)
+- **Runner flights include the first inline run through child settlement.** SpotBugs and Trivy Config now also declare their existing spawn timeouts. (refs #5547)

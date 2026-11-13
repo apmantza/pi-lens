@@ -16,6 +16,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import spotbugsRunner from "../../../clients/dispatch/runners/spotbugs.js";
 import { dispatchLintDetailed } from "../../../clients/dispatch/integration.js";
 import { resolvePiLensFlag } from "../../../clients/lens-config.js";
 import { getLensFlagSpec } from "../../../clients/lens-flag-registry.js";
@@ -33,6 +34,8 @@ describe("lens-spotbugs reaches the SpotBugs runner (#4946)", () => {
 	useTrackedTempDirs("pi-lens-spotbugs-route-");
 
 	beforeEach(() => {
+		// #5547: dispatcher budget must cover the runner-owned 120s spawn.
+		expect(spotbugsRunner.timeoutMs).toBe(120_000);
 		safeSpawnAsync.mockReset();
 		safeSpawnAsync.mockResolvedValue({
 			error: null,
