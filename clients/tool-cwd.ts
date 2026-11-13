@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import { existsSync, readdirSync } from "node:fs";
 import * as path from "node:path";
+import { basename } from "node:path";
 import { type ExtensionLogLevel, logExtension } from "./extension-log.js";
 import {
 	isRealGitMarker,
@@ -321,7 +322,7 @@ export function resolveToolCwd(
 			!pathsEqual(anchor.dir, markerRoot) &&
 			!pathsEqual(anchor.dir, homeCeiling)
 		) {
-			const anchorMarker = path.basename(anchor.file);
+			const anchorMarker = basename(anchor.file);
 			if (!ctx.suppressTelemetry)
 				emitResolution(kind, tool, anchor.dir, `marker:${anchorMarker}`);
 			return { cwd: anchor.dir, marker: anchorMarker };

@@ -8,14 +8,23 @@
  * directory, so a repo-root config resolved those paths from the wrong
  * place for every file under a nested workspace package.
  *
- * Every cell runs the real runner and the shipped oxlint binary on a real
- * filesystem fixture. A local JS plugin reads one cwd-relative `settings`
- * path, so the observed effect is oxlint's own diagnostic, not the argument
- * the runner passed to the spawn.
+ * Every cell runs the real runner, the real binary ladder and the shipped
+ * oxlint on a real filesystem fixture. Only the child-process boundary is
+ * doubled, and only to run the shipped entry under Node. A local JS plugin
+ * reads one cwd-relative `settings` path, so the observed effect is oxlint's
+ * own diagnostic, not the argument the runner passed to the spawn.
  */
+import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetDispatchAvailabilityState } from "../../../../clients/dispatch/runners/utils/runner-helpers.js";
+import { resetProjectLensConfigCache } from "../../../../clients/project-lens-config.js";
+import {
+	resetProjectTrust,
+	setProjectTrustState,
+} from "../../../../clients/project-trust.js";
+import { resetWorkspaceTopology } from "../../../../clients/workspace-topology.js";
 import { makeRunnerCtx } from "../../../support/runner-ctx.js";
 import { createTempFile, setupTestEnvironment } from "../../test-utils.js";
 
@@ -27,40 +36,35 @@ const OXLINT_ENTRY = path.join(
 	"oxlint",
 );
 
-// The runner resolves its binary through the shared ladder. Hand it the
-// shipped entry and run that entry under Node, so the cell needs neither a
-// PATH shim nor an install and behaves the same on Windows. The cwd and the
-// options still reach the real `safeSpawnAsync` untouched.
-const { runThroughNode } = vi.hoisted(() => ({
-	runThroughNode: { entry: "" },
-}));
-runThroughNode.entry = OXLINT_ENTRY;
+// Hoisted so the factory below can read it while the imports above still load.
+const shippedOxlint = vi.hoisted(() => ({ entry: "" }));
+shippedOxlint.entry = OXLINT_ENTRY;
 
-vi.mock(
-	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
-	async (importOriginal) => ({
-		...(await importOriginal<
-			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
-		>()),
-		resolveToolCommandWithInstallFallback: vi.fn(
-			async () => runThroughNode.entry,
-		),
-	}),
-);
-
+// The availability ladder proves a binary with `--version`, and the lint run
+// goes to the shipped entry under Node, so the cell needs no installed shim
+// content and behaves the same on Windows.
 vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => {
 	const actual =
 		await importOriginal<typeof import("../../../../clients/safe-spawn.js")>();
 	return {
 		...actual,
 		safeSpawnAsync: (
-			command: string,
-			args: string[],
+			_command: string,
+			args: string[] = [],
 			options?: Parameters<typeof actual.safeSpawnAsync>[2],
 		) =>
-			command === runThroughNode.entry
-				? actual.safeSpawnAsync(process.execPath, [command, ...args], options)
-				: actual.safeSpawnAsync(command, args, options),
+			args.includes("--version")
+				? Promise.resolve({
+						error: null,
+						status: 0,
+						stdout: "1.91.0\n",
+						stderr: "",
+					})
+				: actual.safeSpawnAsync(
+						process.execPath,
+						[shippedOxlint.entry, ...args],
+						options,
+					),
 	};
 });
 
@@ -93,6 +97,22 @@ function probeConfig(pluginSpecifier: string, entryPoint: string): string {
 	});
 }
 
+/**
+ * A project-local `node_modules/.bin/oxlint` at exactly `dir`, the rung the
+ * ladder reads first. Planted at the root and the package so the cell does not
+ * depend on which of them the runner asks.
+ */
+function plantOxlint(dir: string): void {
+	const bin = path.join(dir, "node_modules", ".bin");
+	fs.mkdirSync(bin, { recursive: true });
+	const file = path.join(
+		bin,
+		process.platform === "win32" ? "oxlint.cmd" : "oxlint",
+	);
+	fs.writeFileSync(file, "#!/bin/sh\n");
+	fs.chmodSync(file, 0o755);
+}
+
 async function runOxlint(filePath: string, dispatchRoot: string) {
 	const runner = (
 		await import("../../../../clients/dispatch/runners/oxlint.js")
@@ -104,6 +124,19 @@ async function runOxlint(filePath: string, dispatchRoot: string) {
 }
 
 describe("oxlint runner cwd follows the config (#5541)", () => {
+	beforeEach(() => {
+		setProjectTrustState("trusted");
+		resetDispatchAvailabilityState();
+		resetProjectLensConfigCache();
+		resetWorkspaceTopology();
+	});
+	afterEach(() => {
+		resetProjectTrust();
+		resetProjectLensConfigCache();
+		resetWorkspaceTopology();
+		resetDispatchAvailabilityState();
+	});
+
 	it("resolves a root config's cwd-relative setting for a file under a nested package", async () => {
 		const env = setupTestEnvironment("pi-lens-oxlint-config-cwd-");
 		try {
@@ -121,6 +154,8 @@ describe("oxlint runner cwd follows the config (#5541)", () => {
 				"apps/web/src/x.js",
 				"const a = 1;\nconsole.log(a);\n",
 			);
+			plantOxlint(env.tmpDir);
+			plantOxlint(path.join(env.tmpDir, "apps", "web"));
 
 			expect(await runOxlint(filePath, env.tmpDir)).not.toContain(
 				"entry-exists",
@@ -152,6 +187,8 @@ describe("oxlint runner cwd follows the config (#5541)", () => {
 				"apps/web/src/x.js",
 				"const a = 1;\nconsole.log(a);\n",
 			);
+			plantOxlint(env.tmpDir);
+			plantOxlint(path.join(env.tmpDir, "apps", "web"));
 
 			expect(await runOxlint(filePath, env.tmpDir)).not.toContain(
 				"entry-exists",
