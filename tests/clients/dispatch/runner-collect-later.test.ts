@@ -1,3 +1,5 @@
+// flake-shape: raw-timer-wait — #5547's production dispatcher regression keeps a simulated child alive past its 400ms dispatcher budget and observes the one-child peak before its 4000ms spawn-shaped settlement.
+
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -48,6 +50,10 @@ import {
 	setupTestEnvironment,
 } from "../test-utils.js";
 
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 describe("observed runner collect-later tier (#2116)", () => {
 	const projectRoot = setupTestEnvironment("pi-lens-runner-tier-").tmpDir;
 	const filePath = join(projectRoot, "fixture.ts");
@@ -95,12 +101,9 @@ describe("observed runner collect-later tier (#2116)", () => {
 				[{ mode: "all", runnerIds: ["fixture-runner"] }],
 				registry,
 			),
-			new Promise<never>((_, reject) =>
-				setTimeout(
-					() => reject(new Error("edit waited for deferred runner")),
-					100,
-				),
-			),
+			delay(100).then(() => {
+				throw new Error("edit waited for deferred runner");
+			}),
 		]);
 		expect(edit.diagnostics).toEqual([]);
 
@@ -264,6 +267,48 @@ describe("observed runner collect-later tier (#2116)", () => {
 				[2, "run-2"],
 				[3, "run-2"],
 			]);
+		});
+
+		it("keeps a timed-out budget flight occupied until the runner settles (#5547)", async () => {
+			vi.stubEnv("PI_LENS_TEST_MODE", "0");
+			const state = { starts: 0, inFlight: 0, peak: 0 };
+			const gates: Array<() => void> = [];
+			observeRunnerLatency({
+				projectRoot,
+				runnerId: "budget-flight-runner",
+				durationMs: COLLECT_LATER_THRESHOLD_MS + 1,
+			});
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: "budget-flight-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				timeoutMs: 400,
+				run: async () => {
+					state.starts += 1;
+					state.inFlight += 1;
+					state.peak = Math.max(state.peak, state.inFlight);
+					await new Promise<void>((resolve) => gates.push(resolve));
+					state.inFlight -= 1;
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			await Promise.all([
+				write(registry, "budget-flight-runner", filePath, 1),
+				write(registry, "budget-flight-runner", filePath, 2),
+				write(registry, "budget-flight-runner", filePath, 3),
+			]);
+			await delay(600);
+			// Recurrence: the budget raced the live child and released the flight,
+			// so each later write started another child (#5547).
+			expect(state.peak).toBe(1);
+			gates[0]?.();
+			await settleTicks();
+			expect(state.starts).toBe(2);
+			expect(state.peak).toBe(1);
+			gates[1]?.();
+			await settleTicks();
+			expect(state.inFlight).toBe(0);
 		});
 
 		it("queues each file once and runs the queue one at a time", async () => {

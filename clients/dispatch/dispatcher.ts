@@ -1331,7 +1331,9 @@ async function runGroup(
 			// measured from its own start, never from a queued write's mark.
 			const run = async (): Promise<RunnerResult> => {
 				const startedAtMs = Date.now();
-				const result = await runRunner(runnerCtx, runner, semantic);
+				const result = await runRunner(runnerCtx, runner, semantic, {
+					holdFlightUntilSettled: true,
+				});
 				const durationMs = Date.now() - startedAtMs;
 				observeRunnerTier({
 					filePath: ctx.filePath,
@@ -2276,6 +2278,7 @@ async function runRunner(
 	ctx: DispatchContext,
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
+	options: { holdFlightUntilSettled?: boolean } = {},
 ): Promise<RunnerResult> {
 	// #5413: a runner whose own spawn timed out this session is not run again,
 	// not even for its availability probe: a wedged binary does not heal between
@@ -2307,15 +2310,20 @@ async function runRunner(
 		// runner's value tells that apart from a runner that resolved nothing.
 		// The message keeps the words `failureKind` is classified from below.
 		// #5413: every spawn the runner reaches arms ITS cooldown on a timeout.
-		const outcome = await withBudget(
-			spawnCooldownScope
-				.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
-					runner.run(ctx),
-				)
-				.then((value) => ({ value })),
-			timeoutMs,
-		);
+		const runnerPromise = spawnCooldownScope
+			.run({ tool: runner.id, subject: runner.id, phase: "lint" }, () =>
+				runner.run(ctx),
+			)
+			.then((value) => ({ value }));
+		const outcome = await withBudget(runnerPromise, timeoutMs);
 		if (outcome === undefined) {
+			// A collect-later flight must remain occupied while its child is still
+			// alive. The budget still determines the timeout result, but releasing
+			// the flight at that point starts a second child on the next write
+			// (#5547). Runner-owned spawn timeouts bound this wait and settle the
+			// same cooldown transition as a successful runner.
+			if (options.holdFlightUntilSettled)
+				await Promise.allSettled([runnerPromise]);
 			throw new Error(`Runner ${runner.id} timed out after ${timeoutMs}ms`);
 		}
 		const result = outcome.value;
