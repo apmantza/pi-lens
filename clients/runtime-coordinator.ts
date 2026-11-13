@@ -2525,8 +2525,8 @@ export class RuntimeCoordinator {
 		of: { sessionId: string | undefined },
 		cap: number,
 	): { files: string[]; capped: boolean; capReached: boolean } {
-		const live = this.getInlineBlockersSnapshot(of).filter(
-			(entry) => !entry.stale && entry.policySuppressed !== true,
+		const live = this.getInlineBlockersSnapshot(of).flatMap((entry) =>
+			!entry.stale && entry.policySuppressed !== true ? [entry] : [],
 		);
 		if (live.length === 0)
 			return { files: [], capped: false, capReached: false };
