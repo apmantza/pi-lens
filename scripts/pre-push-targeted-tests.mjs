@@ -254,6 +254,9 @@ export const TREE_SCANNING_GOVERNANCE_TESTS = [
 	// callers, so a production change that passes the option to another walk
 	// consumer arms it.
 	"tests/clients/source-filter-named-files.test.ts",
+	// #5308: walks scripts/ and clients/lsp/ for child-process spawn sites, so a
+	// production change that adds or re-routes a spawn there arms it.
+	"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts",
 ];
 
 // Suites that scan the TESTS tree for a test shape (a real spawn, a raw timer
