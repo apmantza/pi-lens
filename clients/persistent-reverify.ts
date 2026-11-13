@@ -42,6 +42,7 @@
 import * as fs from "node:fs";
 import { freshnessFromMtime } from "./freshness.js";
 import type {
+	ActionableWarningRecord,
 	ActionableWarningsReport,
 	ActionableWarningsReportFile,
 	BuildActionableWarningsArgs,
@@ -277,37 +278,71 @@ export async function runPersistentReverify(args: {
 		// F4: the outer await is bound-wrapped too — the module carries ZERO
 		// syntactic unbounded awaits (#2523 slice-3 worklist), and the hard
 		// ceiling composes with enrichFileFromLsp's own internal deadline.
-		const freshRecords =
-			(await bounded(
-				enrichFileFromLsp(
-					args.cwd,
-					buildArgs,
-					{ filePath: entry.filePath, cached: touchedResult.diags },
-					{
-						lspService: args.lspService,
-						pullTimeoutMs: 2000,
-						deadlineAt,
-						...(args.signal !== undefined ? { signal: args.signal } : {}),
-						site: { hook: "turn_end", label: "persistent_reverify" },
-					},
-				),
+		const unanswered: ActionableWarningRecord[] = [];
+		const enriched = await bounded(
+			enrichFileFromLsp(
+				args.cwd,
+				buildArgs,
+				{ filePath: entry.filePath, cached: touchedResult.diags },
 				{
-					ms: Math.max(250, deadlineAt - Date.now()),
-					signal: args.signal,
-					hook: "turn_end",
-					label: "persistent_reverify_enrich",
+					lspService: args.lspService,
+					pullTimeoutMs: 2000,
+					deadlineAt,
+					...(args.signal !== undefined ? { signal: args.signal } : {}),
+					site: { hook: "turn_end", label: "persistent_reverify" },
+					unanswered,
 				},
-			)) ?? [];
-		let dropped = 0;
-		let kept = 0;
-		for (const warning of entry.warnings) {
-			const stillThere = freshRecords.some(
-				(record) =>
-					record.rule === warning.rule && record.message === warning.message,
-			);
-			if (stillThere) kept += 1;
-			else dropped += 1;
+			),
+			{
+				ms: Math.max(250, deadlineAt - Date.now()),
+				signal: args.signal,
+				hook: "turn_end",
+				label: "persistent_reverify_enrich",
+			},
+		);
+		// #5258: the outcome below retires each carried warning the enrichment
+		// did not return, so it needs the enrichment's answer for that warning.
+		// A lapsed bound is no answer for any of them; a code-action lookup that
+		// never answered, threw, or was never asked (cap, budget) is no answer
+		// for its own warning only (#5554 r2 B8). An unanswered carried warning
+		// stays as carried, labelled; nothing is retired while every one is.
+		const sameWarning = (
+			a: ActionableWarningRecord,
+			b: ActionableWarningRecord,
+		) => a.rule === b.rule && a.message === b.message;
+		const carriedUnanswered =
+			enriched === undefined
+				? entry.warnings
+				: entry.warnings.filter(
+						(carried) =>
+							!enriched.some((fresh) => sameWarning(fresh, carried)) &&
+							unanswered.some((open) => sameWarning(open, carried)),
+					);
+		const retirable =
+			enriched === undefined
+				? 0
+				: entry.warnings.filter(
+						(carried) =>
+							!enriched.some((fresh) => sameWarning(fresh, carried)) &&
+							!carriedUnanswered.includes(carried),
+					).length;
+		if (
+			enriched === undefined ||
+			(carriedUnanswered.length > 0 && retirable === 0)
+		) {
+			outcomes.push({
+				filePath: entry.filePath,
+				displayPath: entry.displayPath,
+				outcome: "unconfirmed",
+				dropped: 0,
+				kept: entry.warnings.length,
+			});
+			replacementFiles.push({ ...entry, reVerifyIncomplete: true });
+			continue;
 		}
+		const freshRecords = [...enriched, ...carriedUnanswered];
+		const dropped = retirable;
+		const kept = entry.warnings.length - dropped;
 		const outcome: PersistentReverifyOutcome["outcome"] =
 			freshRecords.length === 0
 				? "clean"
@@ -330,6 +365,7 @@ export async function runPersistentReverify(args: {
 			warnings: freshRecords,
 			reVerified: true,
 			generatedAt: new Date(nowMs).toISOString(),
+			...(carriedUnanswered.length > 0 ? { reVerifyIncomplete: true } : {}),
 		});
 	}
 

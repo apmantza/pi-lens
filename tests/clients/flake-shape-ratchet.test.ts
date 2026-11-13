@@ -599,6 +599,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			"the real export still answers each call; the wrapper exists to prove a file without jedi's row is never walked",
 	},
 
+	// #5258: the re-verify's code-action lookup never answers, so only the
+	// pass's own wall bound ends it; that unanswered lookup is the cell.
+	"never-settling-wait:clients/persistent-reverify.test.ts": {
+		detector: "never-settling-wait",
+		reason:
+			"the cell under test is a code-action lookup that never answers; a settled promise would be an answer and erase it",
+	},
 	"never-settling-wait:scripts/mutate-fixture.test.ts": {
 		detector: "never-settling-wait",
 		reason:

@@ -191,6 +191,21 @@ file-scoped worklist and receives no project-wide scanner output.
     only in `latency.log` is not disclosure. Removing a false "unavailable"
     notice never turns the file clean: a file no analyzer applies to reads
     "not analyzed". Instances: `HISTORY.md`.
+    A clean claim ("clean", "✓", "No issues", "all passed") renders only
+    from a producer that proves its scope was checked: `cleanVerdict` (no
+    findings, a non-empty scope, every file in it proven) or the dispatch
+    verdict's `checkedVerdict`, both in `clients/dispatch/types.ts`. An empty
+    answer, a stopped sweep, a lookup that never answered and a report that
+    was never read are not proof. In the census files (8 files: the
+    clean-verdict surfaces of `DELIVERY_SURFACES` plus
+    `clients/runtime-tool-result.ts`) every emitted literal, whatever its
+    words, is a claim, finding or neutral row of
+    `tests/clients/clean-claim-census.json`, keyed by its source text; a
+    claim row names its producer, and its statement must read a guard that
+    producer set. Every other `DELIVERY_SURFACES` file is exempt only with a
+    reason in the test, and a new surface with neither reds. A clean literal in a helper module that a census file calls is outside the gate (an accepted residual). Claims still decided by local logic (`own`) are the
+    instance list: pinned by count, they may only fall. Screen: can this line
+    say clean when no check completed on a file it speaks for?
     An out-of-session-root project edit records one bounded degradation and
     uses the existing advisory notice seam; intended vendor skips and pi-owned
     OS-temp artifacts stay silent (`clients/runtime-tool-result.ts`,
@@ -233,8 +248,10 @@ file-scoped worklist and receives no project-wide scanner output.
     registered `fallbackFor` alternate).
     Enforced by `tests/clients/dispatch/runners/run-outcome-ratchet.test.ts`,
     `tests/clients/dispatch/runners/parsed-nothing-sweep.test.ts` and
-    `tests/clients/delivery-surface-ratchet.test.ts` (partial: no detector
-    for an agent-facing bound that omits its truncation line).
+    `tests/clients/delivery-surface-ratchet.test.ts` (the clean-claim
+    census; partial: no detector for an agent-facing bound that omits its
+    truncation line, for a claim assembled at runtime from neutral literals,
+    or for a clean claim added to an exempt surface).
 
 26. **Old-role filter on a substitute:** compare fallback output with the
     substituted surface's contract, including non-blocking findings.

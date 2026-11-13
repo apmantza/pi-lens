@@ -447,6 +447,7 @@
 		"clients/lsp/sweep-warmup-silent-clean.test.ts": 1,
 		"clients/lsp/sweep-warmup.test.ts": 1,
 		"clients/lsp/workspace-diagnostics-sweep-batch-open.test.ts": 2,
+		"clients/persistent-reverify.test.ts": 1,
 		"clients/pipeline-lsp-sync.test.ts": 8,
 		"clients/read-expansion-enrichment.test.ts": 1,
 		"clients/resource-sampler.test.ts": 2,

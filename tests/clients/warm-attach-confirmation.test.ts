@@ -30,7 +30,10 @@ import {
 	contentHash,
 	WARM_DIAGNOSTICS_SCHEMA_VERSION,
 } from "../../clients/mcp/ipc.js";
-import type { WarmDiagnosticsResponse } from "../../clients/mcp/ipc.js";
+import type {
+	WarmCodeActionsResponse,
+	WarmDiagnosticsResponse,
+} from "../../clients/mcp/ipc.js";
 import { installLspServiceDouble } from "../support/lsp-service-seam.js";
 import { ENVIRONMENT_GAP_MARKER } from "../../clients/lsp/environment-gap.js";
 import { removeTempDirSync } from "./test-utils.js";
@@ -38,6 +41,7 @@ import { ambientSocketNameIsShared } from "../support/socket-identity.js";
 
 const touchFile = vi.fn();
 const projectInfo = vi.fn();
+const codeAction = vi.fn();
 
 const FILE = "C:/repo/notes.md";
 const CONTENT = "# hi\n";
@@ -75,6 +79,7 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 		vi.resetModules();
 		touchFile.mockReset();
 		projectInfo.mockReset();
+		codeAction.mockReset();
 		projectInfo.mockResolvedValue({
 			executed: false,
 			reason: "no live client",
@@ -84,6 +89,7 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 		await installLspServiceDouble({
 			touchFile,
 			executeReadOnlyCommandOnLiveClient: projectInfo,
+			codeAction,
 		});
 	});
 	afterEach(() => {
@@ -493,5 +499,36 @@ describe("#1253 — warm-attach serves the touch confirmation", () => {
 
 		expect(overTheWire.confirmation).toBe("confirmed");
 		expect(overTheWire.version).toBe(WARM_DIAGNOSTICS_SCHEMA_VERSION);
+	});
+
+	it("serves an empty action list for a range with no client to ask (#5554)", async () => {
+		// #5554 r2 F6: `LSPService.codeAction` answers undefined when no client
+		// can be asked. The warm reply's schema needs one array per range, so an
+		// unmapped undefined would make the reader drop every range's quick fix
+		// as a schema mismatch.
+		touchFile.mockResolvedValue({ diags: [], confirmation: "confirmed" });
+		await serve();
+		const action = { title: "Fix it", kind: "quickfix" };
+		codeAction.mockResolvedValueOnce(undefined).mockResolvedValueOnce([action]);
+		const range = {
+			start: { line: 0, character: 0 },
+			end: { line: 0, character: 1 },
+		};
+		const { _serveWarmRequestForTests } =
+			await import("../../clients/warm-attach.js");
+		const served = await _serveWarmRequestForTests({
+			route: "code-actions",
+			version: WARM_DIAGNOSTICS_SCHEMA_VERSION,
+			file: FILE,
+			cwd: "C:/repo",
+			contentHash: contentHash(CONTENT),
+			ranges: [range, range],
+			deadlineAt: Date.now() + 60_000,
+		});
+		expect(served.error).toBeUndefined();
+		expect((served.result as WarmCodeActionsResponse).actions).toEqual([
+			[],
+			[action],
+		]);
 	});
 });
