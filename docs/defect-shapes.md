@@ -595,7 +595,7 @@ file-scoped worklist and receives no project-wide scanner output.
     helper. Enforced by `tests/config/sink-read-drain-sweep.test.ts`. The
     removal side is the same shape: drain the queue (await
     `flushAllNdjsonWriters`) before removing the directory a sink writes into,
-    or a queued row recreates it (#5569); enforcer none, judgment-only.
+    or a queued row recreates it; enforcer none, judgment-only.
 
 68. **Model switch drift:** a TLA+ config constant that mirrors a code choice
     (inject a read, retire on an unknown range) goes stale when the code
