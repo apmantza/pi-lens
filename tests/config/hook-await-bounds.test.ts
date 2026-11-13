@@ -2634,7 +2634,10 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	// tool_call and `readSameHeadDiscards` at tool_result. Each is one
 	// safeSpawnAsync with its own 5s timeout, and the look the second one feeds
 	// is bounded one frame up.
-	"clients/opaque-mutation-scan.ts": 15,
+	// #5552: 15 -> 16. `differsFromHeadOrIndex` awaits one `git diff --quiet`
+	// (HEAD, then the index) per prescan-named dirty file, with its own 3 s
+	// spawn timeout, inside the same recovery the hook caller bounds.
+	"clients/opaque-mutation-scan.ts": 16,
 	// #4476: new to the one-hop set. The out-of-band look: the root listing
 	// and the stat of each install stamp it holds, the declaration walk's
 	// directory reads and stats, the per-root chain, and the restart of a

@@ -1285,30 +1285,25 @@ export async function recoverOpaqueChangesViaGit(
 				cwd: root,
 				timeout: 3000,
 			});
-			if (result.error || (result.status !== 0 && result.status !== 1))
-				return true;
-			if (result.status === 1) return true;
+			// 0 = same, 1 = differs; anything else (error, timeout, signal) keeps
+			// the candidate rather than dropping a write nobody could compare.
+			if (result.status !== 0) return true;
 		}
 		return false;
 	}
 	// Kernel "stale" = modified AFTER the window floor - exactly the writes
 	// this command may have authored, so exactly the entries that would be
 	// dispatched absent any other filtering.
-	async function isChanged(absPath: string, status: string): Promise<boolean> {
-		if (namedPaths.has(normalizeMapKey(realpathOrResolve(absPath)))) {
-			try {
-				if (!(await fs.promises.stat(absPath)).isFile()) return false;
-			} catch {
-				return false;
-			}
-			// Untracked: no HEAD or index copy to compare, so a named file that
-			// exists is the write (`mv ../old.ts src/new.ts` keeps the old mtime).
-			return status === "??" || differsFromHeadOrIndex(absPath);
-		}
+	async function isChanged(entry: GitStatusEntry): Promise<boolean> {
+		const { absPath } = entry;
 		try {
 			const stat = await fs.promises.stat(absPath);
+			if (!stat.isFile()) return false;
+			if (namedPaths.has(normalizeMapKey(realpathOrResolve(absPath))))
+				// Untracked: no HEAD or index copy to compare, so a named file that
+				// exists is the write (`mv ../old.ts src/new.ts` keeps the old mtime).
+				return entry.status === "??" || differsFromHeadOrIndex(absPath);
 			return (
-				stat.isFile() &&
 				freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs: floorMs })
 					.verdict === "stale"
 			);
@@ -1343,14 +1338,13 @@ export async function recoverOpaqueChangesViaGit(
 			// #2081: only count entries the mtime window would otherwise have
 			// dispatched. A long-staged clean-index path outside the window was
 			// never going to be reported, so dropping it here is not suppression.
-			if (await isChanged(entry.absPath, entry.status))
-				excludedIncomingCount += 1;
+			if (await isChanged(entry)) excludedIncomingCount += 1;
 		}
 		candidates = kept;
 	}
 	const paths: string[] = [];
-	for (const { absPath, status } of candidates) {
-		if (await isChanged(absPath, status)) paths.push(normalizeMapKey(absPath));
+	for (const entry of candidates) {
+		if (await isChanged(entry)) paths.push(normalizeMapKey(entry.absPath));
 	}
 	return {
 		verdict: "recovered",

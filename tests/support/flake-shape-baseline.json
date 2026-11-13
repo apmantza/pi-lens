@@ -76,7 +76,7 @@
 		"clients/metrics-history-stderr.test.ts": 19,
 		"clients/metrics/complexity-baseline.test.ts": 1,
 		"clients/opaque-any-tool-4732.test.ts": 1,
-		"clients/opaque-mutation-scan.test.ts": 51,
+		"clients/opaque-mutation-scan.test.ts": 52,
 		"clients/persistence-worker-exit.test.ts": 1,
 		"clients/project-data-dir-slug.test.ts": 1,
 		"clients/project-snapshot-cross-process.test.ts": 2,
