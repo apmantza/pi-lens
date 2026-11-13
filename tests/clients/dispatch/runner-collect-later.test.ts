@@ -364,6 +364,167 @@ describe("observed runner collect-later tier (#2116)", () => {
 			},
 		);
 
+		/** One post-write dispatch of `file` over `groups` (each a runner id list). */
+		function dispatchGroups(
+			registry: RunnerRegistry,
+			groups: string[][],
+			file: string,
+			writeIndex: number,
+		) {
+			const ctx = createDispatchContext(
+				file,
+				projectRoot,
+				{ getFlag: () => false },
+				new FactStore(),
+			);
+			Object.defineProperty(ctx, "writeIndex", { value: writeIndex });
+			return dispatchForFile(
+				ctx,
+				groups.map((runnerIds) => ({ mode: "all" as const, runnerIds })),
+				registry,
+			);
+		}
+
+		it("runs a fast runner listed in two groups of one write inline in both (#5547 F7)", async () => {
+			let starts = 0;
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: "twice-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async () => {
+					starts += 1;
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			const result = await dispatchGroups(
+				registry,
+				[["twice-runner"], ["twice-runner"]],
+				filePath,
+				1,
+			);
+			// Recurrence: the second group saw the first group's claim on its own
+			// write and deferred the runner to turn end; ruby lists rubocop in two
+			// groups, so every .rb write lost rubocop's inline answer (#5547 F7).
+			expect(pendingRunnerFindingsSize()).toBe(0);
+			expect(result.inconclusiveSources?.collectLaterRunnerIds ?? []).toEqual(
+				[],
+			);
+			expect(starts).toBe(2);
+		});
+
+		it("a second group's run extends its write's claim, never replaces it (#5547 F7)", async () => {
+			const runGates: Array<() => void> = [];
+			let openOther!: () => void;
+			const otherGate = new Promise<void>((open) => (openOther = open));
+			const state = { writes: [] as Array<number | undefined> };
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: "held-twice-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async (runCtx) => {
+					state.writes.push(runCtx.writeIndex);
+					await new Promise<void>((open) => runGates.push(open));
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			registry.register({
+				id: "held-other-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async () => {
+					await otherGate;
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			const fileB = join(projectRoot, "b.ts");
+			const fileC = join(projectRoot, "c.ts");
+			writeFileSync(fileB, "const b = 1;\n");
+			writeFileSync(fileC, "const c = 1;\n");
+			try {
+				// Write 1 runs the runner in group 1 now and in group 2 after another
+				// runner; write 2 queues behind write 1's claim in between.
+				const first = dispatchGroups(
+					registry,
+					[["held-twice-runner"], ["held-other-runner", "held-twice-runner"]],
+					filePath,
+					1,
+				);
+				await settleTicks();
+				const second = dispatchGroups(
+					registry,
+					[["held-twice-runner"]],
+					fileB,
+					2,
+				);
+				openOther();
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1]);
+				// Recurrence: a replacing claim retired the flight write 2 queued on,
+				// so its rerun answered skipped as if a session reset dropped it.
+				runGates[0]?.();
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1, 2]);
+				// Write 1's second run is still alive: the key stays held, so write 3
+				// queues instead of starting a second child beside it.
+				runGates[2]?.();
+				await settleTicks();
+				const third = dispatchGroups(
+					registry,
+					[["held-twice-runner"]],
+					fileC,
+					3,
+				);
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1, 2]);
+				runGates[1]?.();
+				await settleTicks();
+				expect(state.writes).toEqual([1, 1, 2, 3]);
+				runGates[3]?.();
+				await Promise.all([first, second, third]);
+				await settlePendingRunnerFindingsForTests();
+				const late = await drainPendingRunnerFindings(0);
+				expect(
+					late.map((entry) => [entry.writeIndex, entry.result?.status]),
+				).toEqual([
+					[2, "succeeded"],
+					[3, "succeeded"],
+				]);
+			} finally {
+				openOther();
+				for (const open of runGates) open();
+				await settleTicks();
+			}
+		});
+
+		it("a recovered runner's queued rerun still defers a caller with no dispatch (#5547 F7)", async () => {
+			const { gates, registry } = gatedRunner("recovered-runner");
+			const fileB = join(projectRoot, "b.ts");
+			writeFileSync(fileB, "const b = 1;\n");
+			try {
+				await write(registry, "recovered-runner", filePath, 1);
+				await write(registry, "recovered-runner", fileB, 2);
+				// Run 1 finishes fast: the runner recovers while write 2's rerun runs.
+				gates[0]?.();
+				await settleTicks();
+				// Recurrence: an owner-less flight read as the caller's own, so the
+				// pre-edit capture (integration.ts, no dispatch) seeded the runner
+				// beside the rerun still holding its child.
+				expect(classifyObservedRunner(projectRoot, "recovered-runner")).toBe(
+					"collect-later",
+				);
+				gates[1]?.();
+				await settleTicks();
+				expect(classifyObservedRunner(projectRoot, "recovered-runner")).toBe(
+					"inline",
+				);
+			} finally {
+				for (const open of gates) open();
+				await settleTicks();
+			}
+		});
+
 		it("queues each file once and runs the queue one at a time", async () => {
 			const { state, gates, files, registry } = gatedRunner("queue-runner");
 			const fileB = join(projectRoot, "b.ts");

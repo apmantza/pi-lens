@@ -1,7 +1,7 @@
 /** Observed-latency classification shared by dispatch and LSP tier seams. */
 
 import { normalizeMapKey } from "../path-utils.js";
-import type { RunnerResult } from "./types.js";
+import type { DispatchContext, RunnerResult } from "./types.js";
 
 export type CollectLaterTier = "inline" | "collect-later";
 
@@ -19,13 +19,21 @@ export function runnerFlightKey(projectRoot: string, runnerId: string): string {
 	return `${normalizeMapKey(projectRoot)}\u0000${runnerId}`;
 }
 
-/** Read the observed tier; an active inline promise also defers later writes. */
+/**
+ * Read the observed tier. A run in flight also defers every dispatch but the
+ * one whose inline run claimed it: a runner listed in two of one write's groups
+ * (ruby's rubocop) runs inline in both (#5547 F7).
+ */
 export function classifyObservedRunner(
 	projectRoot: string,
 	runnerId: string,
+	dispatch?: DispatchContext,
 ): CollectLaterTier {
-	return slowRunners.has(runnerFlightKey(projectRoot, runnerId)) ||
-		flights.has(runnerFlightKey(projectRoot, runnerId))
+	const runnerKey = runnerFlightKey(projectRoot, runnerId);
+	const flight = flights.get(runnerKey);
+	return slowRunners.has(runnerKey) ||
+		(flight !== undefined &&
+			(flight.owner === undefined || flight.owner !== dispatch))
 		? "collect-later"
 		: "inline";
 }
@@ -66,6 +74,8 @@ interface QueuedRun {
 interface Flight {
 	tail: Promise<unknown>;
 	queued: Map<string, QueuedRun>;
+	/** The dispatch whose inline run claimed the key; none for collect-later. */
+	owner: DispatchContext | undefined;
 }
 
 /**
@@ -124,9 +134,22 @@ export function runCollectLater(options: {
 	return { promise, coalesced: false };
 }
 
-/** Claim an idle key until its promise settles, independently of caller budgets. */
-export function holdFlight(flightKey: string, promise: Promise<unknown>): void {
-	const started: Flight = { tail: promise, queued: new Map() };
+/**
+ * Hold the key until `promise` settles, independently of caller budgets. A key
+ * already held (its claiming dispatch's second group) is held until both
+ * settle; replacing its flight would drop the reruns queued on it (#5547 F7).
+ */
+export function holdFlight(
+	flightKey: string,
+	promise: Promise<unknown>,
+	owner?: DispatchContext,
+): void {
+	const held = flights.get(flightKey);
+	if (held) {
+		chain(flightKey, held, Promise.allSettled([held.tail, promise]));
+		return;
+	}
+	const started: Flight = { tail: promise, queued: new Map(), owner };
 	flights.set(flightKey, started);
 	chain(flightKey, started, promise);
 }

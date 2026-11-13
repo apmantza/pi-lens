@@ -1325,7 +1325,7 @@ async function runGroup(
 		const observedTier =
 			ctx.writeIndex === undefined
 				? "inline"
-				: classifyObservedRunner(projectRoot, runner.id);
+				: classifyObservedRunner(projectRoot, runner.id, ctx);
 		if (observedTier === "collect-later") {
 			const markedAtMs = Date.now();
 			// #5413: at most one run of this runner in flight per project; a
@@ -1412,7 +1412,9 @@ async function runGroup(
 			continue;
 		}
 
-		const result = await runRunner(runnerCtx, runner, semantic);
+		const result = await runRunner(runnerCtx, runner, semantic, {
+			dispatch: ctx,
+		});
 		onRunnerResult?.(runnerId, result);
 		const runnerEnd = Date.now();
 		const duration = runnerEnd - runnerStart;
@@ -2280,7 +2282,11 @@ async function runRunner(
 	ctx: DispatchContext,
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
-	options: { holdFlightUntilSettled?: boolean } = {},
+	options: {
+		holdFlightUntilSettled?: boolean;
+		/** The dispatch an inline claim belongs to (#5547 F7). */
+		dispatch?: DispatchContext;
+	} = {},
 ): Promise<RunnerResult> {
 	// #5413: a runner whose own spawn timed out this session is not run again,
 	// not even for its availability probe: a wedged binary does not heal between
@@ -2323,6 +2329,7 @@ async function runRunner(
 			holdFlight(
 				runnerFlightKey(ctx.projectRoot ?? ctx.cwd, runner.id),
 				runnerPromise,
+				options.dispatch,
 			);
 		}
 		const outcome = await withBudget(runnerPromise, timeoutMs);
