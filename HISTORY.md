@@ -107,6 +107,17 @@ on 2026-11-08 (40 `internal-seam`, 2 `process-boundary`, 4
 went and the reproducing command stayed. The double kept a `context` list as
 returned while pi rebuilt the system head, and every test passed (#4631).
 
+## 2026-11-13 — ignore-glob path spelling (shape 94)
+
+Shape 94 entered the catalog from the #5556 audit. Incident: #5544 found that
+`yamllint` and `markdownlint-cli2` match a project's ignore globs against the
+argument string, so an absolute dispatched path under `.claude/worktrees/<lane>`
+reported a silent clean for a file the tool never linted. #5557 fixed those two
+with a project-relative argv. #5578 probed the rest of the census: oxlint was
+affected in lint and autofix and now takes the same relative argv; ruff, Biome
+and htmlhint were cleared. Open on #5556: ESLint (no flat-config probe ran) and
+the cpp-check argv.
+
 ## 2026-11-08 — a walk the census could not see through a helper (shape 85)
 
 The #4828 census read a walker only where the test file named it, so a case that
