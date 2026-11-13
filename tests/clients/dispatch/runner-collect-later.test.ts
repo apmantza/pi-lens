@@ -498,6 +498,50 @@ describe("observed runner collect-later tier (#2116)", () => {
 			}
 		});
 
+		it("a second group's settlement keeps the flight its first group still holds (#5547 F8)", async () => {
+			const runGates: Array<() => void> = [];
+			const registry = new RunnerRegistry();
+			registry.register({
+				id: "tail-held-runner",
+				appliesTo: ["jsts"],
+				priority: 1,
+				run: async () => {
+					await new Promise<void>((open) => runGates.push(open));
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+			try {
+				// Group 1 claims the key inline; group 2 runs the same runner inline
+				// under the same dispatch and extends that claim, so gates[1] is the
+				// run that extends it.
+				const dispatch = dispatchGroups(
+					registry,
+					[["tail-held-runner"], ["tail-held-runner"]],
+					filePath,
+					1,
+				);
+				await settleTicks();
+				expect(runGates).toHaveLength(2);
+				// Group 2's run settles while group 1's child is still alive.
+				// Recurrence: the extend chained only group 2's run, so the flight
+				// released here and the next write saw no flight beside group 1's child.
+				runGates[1]?.();
+				await settleTicks();
+				expect(classifyObservedRunner(projectRoot, "tail-held-runner")).toBe(
+					"collect-later",
+				);
+				runGates[0]?.();
+				await settleTicks();
+				expect(classifyObservedRunner(projectRoot, "tail-held-runner")).toBe(
+					"inline",
+				);
+				await dispatch;
+			} finally {
+				for (const open of runGates) open();
+				await settleTicks();
+			}
+		});
+
 		it("a recovered runner's queued rerun still defers a caller with no dispatch (#5547 F7)", async () => {
 			const { gates, registry } = gatedRunner("recovered-runner");
 			const fileB = join(projectRoot, "b.ts");
