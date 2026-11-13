@@ -58,27 +58,27 @@ const setGlobalConfig = useGlobalConfig();
 
 beforeAll(() => warmGuardedSession(fixture.root));
 
-beforeEach(() => {
-	setGlobalConfig({
-		lsp: {
-			serverOverrides: {
-				typescript: {
-					command: [process.execPath, fakeServer],
-					env: { FAKE_LSP_RENAME: "1" },
-				},
+const baseConfig = {
+	lsp: {
+		serverOverrides: {
+			typescript: {
+				command: [process.execPath, fakeServer],
+				env: { FAKE_LSP_RENAME: "1" },
 			},
-			disabledServers: [
-				"deno",
-				"ast-grep",
-				"zizmor",
-				"typos",
-				"opengrep",
-				"fallow",
-			],
-			warmFiles: ["no-such-warm-file.ts"],
 		},
-	});
-});
+		disabledServers: [
+			"deno",
+			"ast-grep",
+			"zizmor",
+			"typos",
+			"opengrep",
+			"fallow",
+		],
+		warmFiles: ["no-such-warm-file.ts"],
+	},
+};
+
+beforeEach(() => setGlobalConfig(baseConfig));
 
 /**
  * The committed file: its `debugger;` is the inherited blocker. `placeholder;`
@@ -588,83 +588,96 @@ describe("#5553 every path-naming writer is judged on its delta", () => {
 		},
 	);
 
-	// Recurrence prevented (#5553 r2, review F1/F2): the seed of the two
-	// edit-gated lanes describes the whole file, so it may only classify a
-	// dispatch that reads the whole file. A host `edit` reads its touched lines
-	// alone; the `debugger;` it adds reads like the inherited one 40 lines away,
-	// and matched against a seed that no writer ever consumed it committed. The
-	// four seeders below leave such a seed: a writer that changed the file, a
-	// writer that matched nothing, and a read-only tool that named the file.
-	describe.each([
-		{
-			name: "a sed that changed the file",
-			steps: (t: string) => sed(t, "s/return alpha;/return alpha + 1;/"),
-			edited: ADDED_GAP.replace("return alpha;", "return alpha + 1;"),
-		},
-		{
-			name: "a sed that matched nothing",
-			steps: (t: string) => sed(t, "s/NO_SUCH_TEXT/x/"),
-			edited: ADDED_GAP,
-		},
-		{
-			name: "an ast_grep_replace that matched nothing",
-			steps: (t: string) => replace(t, "noSuchIdentifier()", "other()"),
-			edited: ADDED_GAP,
-		},
-		{
-			name: "a read-only foreign tool that named the file",
-			steps: (t: string) => [
-				step(fauxToolCall("foreign_peek", { path: t }), "peeking"),
-			],
-			edited: ADDED_GAP,
-		},
-	])("refuses the identical blocker a host edit adds after $name", (c) => {
-		it("commit is blocked", { timeout: 120_000 }, async () => {
-			const { target, commit } = await commitAfter(
-				`gap-${c.name.replace(/\W+/g, "-")}`,
-				{},
-				(t) => [
-					...c.steps(t),
-					step(readTarget(t), "reading again"),
-					step(
-						fauxToolCall("edit", {
-							path: t,
-							edits: [{ oldText: "placeholder;", newText: "debugger;" }],
-						}),
-						"editing",
-					),
-				],
-				COMMITTED_GAP,
-			);
-			expect(fs.readFileSync(target, "utf8")).toBe(c.edited);
-			expect(commit?.text).toContain(GATE_BLOCK);
-			expect(commit?.text).not.toContain(RAN_MARKER);
-		});
-	});
+	// The linters read the whole file and count each seeded entry once, so
+	// whichever of them is installed refuses the second `debugger;` on its own
+	// and hides the defect below (a run without `node_modules/.bin` on PATH has
+	// biome and reds nothing). Only the edit-gated lanes judge these cases.
+	describe("with the linters that flag a debugger statement disabled", () => {
+		beforeEach(() =>
+			setGlobalConfig({
+				...baseConfig,
+				dispatch: { disabledRunners: ["biome-check-json", "eslint", "oxlint"] },
+			}),
+		);
 
-	// Control for the four above: the same host edit with no earlier writer
-	// takes no seed and is refused, so the cases differ only by the seed.
-	it(
-		"control: a host edit alone that adds the identical blocker is refused",
-		{ timeout: 120_000 },
-		async () => {
-			const { commit } = await commitAfter(
-				"gap-control",
-				{},
-				(t) => [
-					step(
-						fauxToolCall("edit", {
-							path: t,
-							edits: [{ oldText: "placeholder;", newText: "debugger;" }],
-						}),
-						"editing",
-					),
+		// Recurrence prevented (#5553 r2, review F1/F2): the seed of the two
+		// edit-gated lanes describes the whole file, so it may only classify a
+		// dispatch that reads the whole file. A host `edit` reads its touched lines
+		// alone; the `debugger;` it adds reads like the inherited one 40 lines away,
+		// and matched against a seed that no writer ever consumed it committed. The
+		// four seeders below leave such a seed: a writer that changed the file, a
+		// writer that matched nothing, and a read-only tool that named the file.
+		describe.each([
+			{
+				name: "a sed that changed the file",
+				steps: (t: string) => sed(t, "s/return alpha;/return alpha + 1;/"),
+				edited: ADDED_GAP.replace("return alpha;", "return alpha + 1;"),
+			},
+			{
+				name: "a sed that matched nothing",
+				steps: (t: string) => sed(t, "s/NO_SUCH_TEXT/x/"),
+				edited: ADDED_GAP,
+			},
+			{
+				name: "an ast_grep_replace that matched nothing",
+				steps: (t: string) => replace(t, "noSuchIdentifier()", "other()"),
+				edited: ADDED_GAP,
+			},
+			{
+				name: "a read-only foreign tool that named the file",
+				steps: (t: string) => [
+					step(fauxToolCall("foreign_peek", { path: t }), "peeking"),
 				],
-				COMMITTED_GAP,
-			);
-			expect(commit?.text).toContain(GATE_BLOCK);
-		},
-	);
+				edited: ADDED_GAP,
+			},
+		])("refuses the identical blocker a host edit adds after $name", (c) => {
+			it("commit is blocked", { timeout: 120_000 }, async () => {
+				const { target, commit } = await commitAfter(
+					`gap-${c.name.replace(/\W+/g, "-")}`,
+					{},
+					(t) => [
+						...c.steps(t),
+						step(readTarget(t), "reading again"),
+						step(
+							fauxToolCall("edit", {
+								path: t,
+								edits: [{ oldText: "placeholder;", newText: "debugger;" }],
+							}),
+							"editing",
+						),
+					],
+					COMMITTED_GAP,
+				);
+				expect(fs.readFileSync(target, "utf8")).toBe(c.edited);
+				expect(commit?.text).toContain(GATE_BLOCK);
+				expect(commit?.text).not.toContain(RAN_MARKER);
+			});
+		});
+
+		// Control for the four above: the same host edit with no earlier writer
+		// takes no seed and is refused, so the cases differ only by the seed.
+		it(
+			"control: a host edit alone that adds the identical blocker is refused",
+			{ timeout: 120_000 },
+			async () => {
+				const { commit } = await commitAfter(
+					"gap-control",
+					{},
+					(t) => [
+						step(
+							fauxToolCall("edit", {
+								path: t,
+								edits: [{ oldText: "placeholder;", newText: "debugger;" }],
+							}),
+							"editing",
+						),
+					],
+					COMMITTED_GAP,
+				);
+				expect(commit?.text).toContain(GATE_BLOCK);
+			},
+		);
+	});
 
 	describe.each(WRITERS)("$name", (writer) => {
 		const slug = writer.name.replace(/\W+/g, "-");
