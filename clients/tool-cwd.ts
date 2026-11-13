@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import { existsSync, readdirSync } from "node:fs";
 import * as path from "node:path";
+import { basename } from "node:path";
 import { type ExtensionLogLevel, logExtension } from "./extension-log.js";
 import {
 	isRealGitMarker,
@@ -8,6 +9,7 @@ import {
 	isWindowsPath,
 	nameMatchesMarkerGlob,
 	normalizeEphemeralMapKey,
+	pathsEqual,
 	realpathOrResolve,
 	toPosix,
 	walkUpDirs,
@@ -21,6 +23,12 @@ import {
 	createGenerationSource,
 } from "./generation-guard.js";
 import { rootMarkersForFile } from "./language-profile.js";
+import {
+	findToolConfig,
+	type ToolConfigHit,
+	type ToolConfigId,
+	type ToolConfigOptions,
+} from "./tool-config-presence.js";
 
 export type ToolCwdKind = "runner" | "formatter" | "lsp";
 
@@ -40,6 +48,14 @@ export interface ToolCwdContext {
 export interface ToolCwdResolution {
 	cwd: string;
 	marker?: string;
+	/**
+	 * Set only when a config anchor moved `cwd` away from the directory the file's
+	 * marker climb found (#5541): that directory. `cwd` is where the child
+	 * starts and what its reported paths are relative to; every package-scoped
+	 * question (lint policy, Vite+ detection, which install is found) still asks
+	 * here, as it did before the anchor moved the spawn (#5543 review F1/F2).
+	 */
+	packageDir?: string;
 }
 
 export const FORMATTER_MARKERS: Readonly<Record<string, readonly string[]>> = {
@@ -240,6 +256,27 @@ export function logRunnerAdvisoryOnce(
 	ctx.log(message, "debug");
 }
 
+/**
+ * Runners whose config can sit above the nearest package manifest and holds a
+ * path the tool resolves from the process cwd (a plugin's `settings` entry), so
+ * the child runs in that config's directory (#5541). The tool-config seam owns
+ * where the config is, so the policy and this spawn cannot disagree (#5408).
+ * Biome is not listed: it resolves a config's paths from the config file.
+ */
+const CONFIG_ANCHORED_RUNNERS = [
+	"oxlint",
+	"eslint",
+] as const satisfies readonly ToolConfigId[];
+
+function configAnchorOf(
+	tool: string,
+	fromDir: string,
+	options: ToolConfigOptions,
+): ToolConfigHit | undefined {
+	const anchored = CONFIG_ANCHORED_RUNNERS.find((id) => id === tool);
+	return anchored ? findToolConfig(anchored, fromDir, options) : undefined;
+}
+
 /** Resolve every child process cwd/root through one bounded, synchronous seam. */
 export function resolveToolCwd(
 	kind: ToolCwdKind,
@@ -278,6 +315,27 @@ export function resolveToolCwd(
 		markerRoot &&
 		(insideDispatch ? isUnderDir(markerRoot, dispatchRoot) : true)
 	) {
+		// #5541: a caller-owned marker table still decides; a config outside the
+		// dispatch root is not the session's, so the climb stops at that root. The
+		// config seam climbs through `$HOME`, but the ceiling here is exclusive: a
+		// home-level config is the user's, never this project's.
+		const anchor =
+			kind === "runner" && !ctx.rootMarkers
+				? configAnchorOf(tool, markerRoot, {
+						homeDir,
+						...(insideDispatch ? { ceiling: dispatchRoot } : {}),
+					})
+				: undefined;
+		if (
+			anchor &&
+			!pathsEqual(anchor.dir, markerRoot) &&
+			!pathsEqual(anchor.dir, homeCeiling)
+		) {
+			const anchorMarker = basename(anchor.file);
+			if (!ctx.suppressTelemetry)
+				emitResolution(kind, tool, anchor.dir, `marker:${anchorMarker}`);
+			return { cwd: anchor.dir, marker: anchorMarker, packageDir: markerRoot };
+		}
 		const finalReason = `marker:${markerResult.marker ?? markers[0]}`;
 		if (!ctx.suppressTelemetry)
 			emitResolution(kind, tool, markerRoot, finalReason);

@@ -190,6 +190,239 @@ describe("resolveToolCwd (#2777)", () => {
 		},
 	);
 
+	// #5541: a path a config or plugin resolves from the process cwd (a
+	// plugin's `settings` entry) needs the cwd to be the config's own directory,
+	// not the nearest package manifest. oxlint and ESLint reproduce it; Biome
+	// resolves a config's paths from the config file, so it stays unlisted.
+	describe("config-anchored runner cwd (#5541)", () => {
+		const workspace = () => path.join(home, "repo");
+		const nested = () => path.join(workspace(), "apps", "web");
+		const fileAt = (dir: string) => {
+			const file = path.join(dir, "src", "index.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			return file;
+		};
+
+		it("anchors at a root config above the nearest package manifest", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: workspace(),
+				}),
+			).toEqual({
+				cwd: workspace(),
+				marker: ".oxlintrc.json",
+				packageDir: nested(),
+			});
+		});
+
+		it("logs the config directory and marker it anchored on, once", async () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+			const file = fileAt(nested());
+
+			toolCwd.resolveToolCwd("runner", "oxlint", file, { cwd: workspace() });
+			toolCwd.resolveToolCwd("runner", "oxlint", file, { cwd: workspace() });
+
+			await log.flushExtensionLog();
+			const lines = fs
+				.readFileSync(log.getExtensionLogPath(), "utf8")
+				.trim()
+				.split("\n")
+				.filter((line) => line.includes("cwd runner oxlint"));
+			expect(lines).toHaveLength(1);
+			// One exact span: `cwd=<root>` alone is a prefix of `cwd=<root>/apps/web`.
+			// The sink is NDJSON, so a Windows path's backslashes are escaped in the
+			// raw line (#5543 review): compare the parsed message.
+			expect((JSON.parse(lines[0]) as { message: string }).message).toContain(
+				`cwd=${workspace()} reason=marker:.oxlintrc.json`,
+			);
+		});
+
+		it("keeps a nested package's own config as the anchor", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("keeps the first-listed marker when the config shares the package directory", () => {
+			// Nothing moves, so the resolution is exactly what it was before #5541.
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(nested(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: workspace(),
+				}),
+			).toEqual({ cwd: nested(), marker: "package.json" });
+		});
+
+		it("ignores a config above the dispatch root", () => {
+			// A session started inside the package: the root config is outside the
+			// session, so the package manifest still anchors the child.
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: nested(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("does not anchor at a config in the home directory", () => {
+			// The seam's $HOME ceiling is exclusive: a home-level config is the
+			// user's, not this project's, even though the config seam climbs to it.
+			// The file sits outside the dispatch root, so only the ceiling stops it.
+			const pkg = path.join(home, "work", "pkg");
+			fs.mkdirSync(pkg, { recursive: true });
+			fs.writeFileSync(path.join(home, ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(pkg, "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(pkg), {
+					cwd: path.join(home, "elsewhere"),
+					homeDir: home,
+				}).cwd,
+			).toBe(pkg);
+		});
+
+		it("does not anchor a formatter lookup on a runner's config", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(
+				path.join(workspace(), "eslint.config.mjs"),
+				"export default [];\n",
+			);
+			fs.writeFileSync(path.join(nested(), ".gitignore"), "dist\n");
+
+			expect(
+				toolCwd.resolveToolCwd("formatter", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("lets a caller-owned marker table override the config anchor", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), ".oxlintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+					cwd: workspace(),
+					rootMarkers: ["package.json"],
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it.each([".oxlintrc.jsonc", "oxlint.json", "oxlint.config.ts"])(
+			"anchors at every oxlint config name the presence seam knows (%s)",
+			(configName) => {
+				fs.mkdirSync(nested(), { recursive: true });
+				fs.writeFileSync(path.join(workspace(), configName), "{}\n");
+				fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+				expect(
+					toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
+						cwd: workspace(),
+					}),
+				).toEqual({
+					cwd: workspace(),
+					marker: configName,
+					packageDir: nested(),
+				});
+			},
+		);
+
+		it("anchors ESLint at a root flat config above the nearest package manifest", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(
+				path.join(workspace(), "eslint.config.mjs"),
+				"export default [];\n",
+			);
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}),
+			).toEqual({
+				cwd: workspace(),
+				marker: "eslint.config.mjs",
+				packageDir: nested(),
+			});
+		});
+
+		it("keeps ESLint in the package when a flat config sits below its manifest", () => {
+			// ESLint 9 finds a flat config by climbing from the cwd, so a config in
+			// `src/` is not read from the package: the cwd must not move down.
+			fs.mkdirSync(path.join(nested(), "src"), { recursive: true });
+			fs.writeFileSync(
+				path.join(nested(), "src", "eslint.config.mjs"),
+				"export default [];\n",
+			);
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("keeps ESLint in the package for a legacy config that is the package's own", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), "package.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), ".eslintrc.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "eslint", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("leaves Biome, which resolves config paths from the config file, in the package", () => {
+			fs.mkdirSync(nested(), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), "biome.json"), "{}\n");
+			fs.writeFileSync(path.join(nested(), "package.json"), "{}\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "biome", fileAt(nested()), {
+					cwd: workspace(),
+				}).cwd,
+			).toBe(nested());
+		});
+
+		it("leaves another runner with tool-owned markers on the nearest directory", () => {
+			// Scope pin: only oxlint is anchored; ruff keeps the #2922 rule.
+			const pkg = path.join(workspace(), "packages", "py");
+			const file = path.join(pkg, "src", "main.py");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(path.join(workspace(), "ruff.toml"), "\n");
+			fs.writeFileSync(path.join(pkg, "pyproject.toml"), "[project]\n");
+
+			expect(
+				toolCwd.resolveToolCwd("runner", "ruff", file, { cwd: workspace() })
+					.cwd,
+			).toBe(pkg);
+		});
+	});
+
 	it("returns the marker that anchored the cwd (#2966)", () => {
 		const workspace = path.join(home, "repo");
 		const file = path.join(workspace, "src", "main.rs");

@@ -13,7 +13,7 @@ import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { getAutofixCapability } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -138,19 +138,25 @@ const eslintRunner: RunnerDefinition = {
 	requiresConfig: (cwd) => hasToolConfig("eslint", cwd),
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = resolveRunnerCwd(ctx, "eslint");
+		// `cwd` is where the child starts (the config's directory, #5541); the
+		// package the file lives in still answers the install lookup. The gate
+		// stays at `cwd`: an anchor is an ESLint config, so it cannot disagree
+		// with the package's own answer, and `effective-config.ts` asks it there.
+		const resolution = resolveRunnerCwdWithReason(ctx, "eslint");
+		const cwd = resolution.cwd;
+		const packageDir = resolution.packageDir ?? cwd;
 
 		// Only run if project has an ESLint config.
 		if (!eslintRunner.requiresConfig?.(cwd)) {
 			return skipped("not-configured");
 		}
 
-		const cmd = resolveToolCommand(cwd, "eslint") ?? "eslint";
+		const cmd = resolveToolCommand(packageDir, "eslint") ?? "eslint";
 
-		// Verify ESLint is actually executable (cached per cwd, see getEslintProbe).
+		// Verify ESLint is actually executable (cached per directory, see getEslintProbe).
 		const eslintProbe = getEslintProbe(cmd);
-		if (!(await eslintProbe(cwd))) {
-			return toolAbsentSkip(cwd, { checker: eslintProbe });
+		if (!(await eslintProbe(packageDir))) {
+			return toolAbsentSkip(packageDir, { checker: eslintProbe });
 		}
 
 		const result = await safeSpawnAsync(
