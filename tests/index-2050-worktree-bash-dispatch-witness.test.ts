@@ -135,6 +135,97 @@ async function runBash(session: PiSession): Promise<PiSession> {
 
 describe("a bash write in a linked worktree of the session repo (#2050)", () => {
 	it(
+		"recovers a recognized mv overwrite when the destination keeps an old mtime (#5552)",
+		{ timeout: 180_000 },
+		async () => {
+			const root = path.join(fixture.root, "mtime-mv");
+			const repo = initRepo(path.join(root, "proj"));
+			const scope = fs.realpathSync.native(root);
+			const target = path.join(repo, "seed.ts");
+			const source = path.join(repo, "old-source.ts");
+			fs.writeFileSync(source, BLOCKING);
+			const old = new Date(Date.now() - 60_000);
+			fs.utimesSync(source, old, old);
+
+			const session = await startPiSession({
+				root: fixture.root,
+				cwd: repo,
+				responses: [
+					step(
+						fauxToolCall("bash", {
+							command: `cd ${repo} && mv -f old-source.ts seed.ts`,
+						}),
+					),
+					endTurn(),
+				],
+			});
+			await runBash(session);
+
+			const read = await rows(session, scope);
+			expect(fs.readFileSync(target, "utf8")).toBe(BLOCKING);
+			expect(dispatchedRules(read, target)).toContain(DISPATCH_RULE);
+			expect(bashResults(session)).toContain(DISPATCHED_FINDING);
+			expect(
+				phases(read, "disk_change_published").some(
+					(row) =>
+						row.metadata?.sources === "bash-write" &&
+						row.metadata?.recorded === 1,
+				),
+			).toBe(true);
+		},
+	);
+
+	it(
+		"recovers a recognized cp -p overwrite when a non-TypeScript destination keeps an old mtime (#5552)",
+		{ timeout: 180_000 },
+		async () => {
+			const root = path.join(fixture.root, "mtime-cp");
+			const repo = initRepo(path.join(root, "proj"));
+			const scope = fs.realpathSync.native(root);
+			const target = path.join(repo, "seed.ts");
+			const source = path.join(repo, "old-source.md");
+			const destination = path.join(repo, "tracked.md");
+			fs.writeFileSync(destination, "before\n");
+			git(["add", "tracked.md"], repo);
+			git(["commit", "-qm", "tracked markdown"], repo);
+			fs.writeFileSync(source, "after\n");
+			const old = new Date(Date.now() - 60_000);
+			fs.utimesSync(source, old, old);
+
+			const session = await startPiSession({
+				root: fixture.root,
+				cwd: repo,
+				responses: [
+					step(
+						fauxToolCall("bash", {
+							command: `cd ${repo} && cp -p old-source.md tracked.md`,
+						}),
+					),
+					endTurn(),
+				],
+			});
+			await runBash(session);
+
+			const read = await rows(session, scope);
+			expect(fs.readFileSync(target, "utf8")).toContain("seed");
+			expect(fs.readFileSync(destination, "utf8")).toBe("after\n");
+			expect(
+				phases(read, "opaque_mutation_recovered").some((row) =>
+					String(row.filePath).includes("tracked.md"),
+				),
+			).toBe(true);
+			expect(dispatchedRules(read, destination)).toEqual([]);
+			expect(
+				phases(read, "disk_change_published").some(
+					(row) =>
+						row.metadata?.sources === "bash-write" &&
+						row.metadata?.recorded === 1,
+				),
+			).toBe(true);
+		},
+	);
+
+	it(
 		"recovers and dispatches a heredoc write in the session's own checkout (control)",
 		{ timeout: 180_000 },
 		async () => {

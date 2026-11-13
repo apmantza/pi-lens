@@ -2840,6 +2840,7 @@ export async function handleToolResult(
 							root,
 							pending.startedAt,
 							{
+								namedPaths: recognizedWritten,
 								excludeIndexOnlyWhenUnmerged: isFailedGitIntegrationCommand(
 									command,
 									event.isError,

@@ -976,6 +976,12 @@ export interface GitRecoveryOptions {
 	 * worktree status and every unmerged path remain eligible.
 	 */
 	excludeIndexOnlyWhenUnmerged?: boolean;
+	/**
+	 * Destinations resolved by the bash prescan. These paths are checked by
+	 * content against HEAD and the index because `mv`, `cp -p`, `rsync -a`,
+	 * and archive extraction can preserve an old mtime.
+	 */
+	namedPaths?: readonly string[];
 }
 
 interface GitStatusEntry {
@@ -1241,9 +1247,10 @@ export async function readSameHeadDiscards(
 
 /**
  * Files dirty in the working tree whose mtime falls inside
- * [startedAt - tolerance, now]. Porcelain -z parsing handles renames: the NEW
- * path is the one filtered, and the entry's source side (`renamedFrom`) is
- * ignored here.
+ * [startedAt - tolerance, now]. Destinations named by the bash prescan use a
+ * content comparison instead, so a preserved mtime does not hide a write.
+ * Porcelain -z parsing handles renames: the NEW path is the one filtered, and
+ * the entry's source side (`renamedFrom`) is ignored here.
  */
 export async function recoverOpaqueChangesViaGit(
 	root: string,
@@ -1263,10 +1270,43 @@ export async function recoverOpaqueChangesViaGit(
 
 	const hasUnmerged = entries.some((entry) => isUnmergedStatus(entry.status));
 	const floorMs = startedAt - OPAQUE_MTIME_TOLERANCE_MS;
+	const namedPaths = new Set(
+		(options.namedPaths ?? []).map((file) =>
+			normalizeMapKey(realpathOrResolve(file)),
+		),
+	);
+	async function differsFromHeadOrIndex(absPath: string): Promise<boolean> {
+		const relative = path.relative(gitPathBase(root), absPath);
+		for (const args of [
+			["diff", "--quiet", "HEAD", "--", relative],
+			["diff", "--quiet", "--", relative],
+		]) {
+			const result = await safeSpawnAsync("git", args, {
+				cwd: root,
+				timeout: 3000,
+			});
+			if (result.error || (result.status !== 0 && result.status !== 1))
+				return true;
+			if (result.status === 1) return true;
+		}
+		return false;
+	}
 	// Kernel "stale" = modified AFTER the window floor - exactly the writes
 	// this command may have authored, so exactly the entries that would be
 	// dispatched absent any other filtering.
-	async function isInWindow(absPath: string): Promise<boolean> {
+	async function isChanged(absPath: string, status: string): Promise<boolean> {
+		if (
+			namedPaths.has(normalizeMapKey(realpathOrResolve(absPath))) &&
+			status !== "??" &&
+			status !== "!!"
+		) {
+			try {
+				if (!(await fs.promises.stat(absPath)).isFile()) return false;
+			} catch {
+				return false;
+			}
+			return differsFromHeadOrIndex(absPath);
+		}
 		try {
 			const stat = await fs.promises.stat(absPath);
 			return (
@@ -1305,13 +1345,14 @@ export async function recoverOpaqueChangesViaGit(
 			// #2081: only count entries the mtime window would otherwise have
 			// dispatched. A long-staged clean-index path outside the window was
 			// never going to be reported, so dropping it here is not suppression.
-			if (await isInWindow(entry.absPath)) excludedIncomingCount += 1;
+			if (await isChanged(entry.absPath, entry.status))
+				excludedIncomingCount += 1;
 		}
 		candidates = kept;
 	}
 	const paths: string[] = [];
-	for (const { absPath } of candidates) {
-		if (await isInWindow(absPath)) paths.push(normalizeMapKey(absPath));
+	for (const { absPath, status } of candidates) {
+		if (await isChanged(absPath, status)) paths.push(normalizeMapKey(absPath));
 	}
 	return {
 		verdict: "recovered",

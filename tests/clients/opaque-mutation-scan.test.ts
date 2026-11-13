@@ -316,6 +316,28 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		);
 	});
 
+	it("recovers a named tracked overwrite by content when its mtime is old", async () => {
+		const target = path.join(repoDir, "src", "base.ts");
+		const startedAt = Date.now();
+		writeViaNodeChild(target, "named overwrite\n");
+		const old = new Date(startedAt - 10_000);
+		fs.utimesSync(target, old, old);
+
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [target],
+			}),
+		).resolves.toMatchObject({
+			verdict: "recovered",
+			paths: [normalizeMapKey(target)],
+		});
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [],
+			}),
+		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
+	});
+
 	it("recovers a fresh intent-to-add entry from git add -N", async () => {
 		const intentPath = path.join(repoDir, "src", "intent.ts");
 		const startedAt = Date.now();
