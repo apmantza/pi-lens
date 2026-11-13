@@ -21,8 +21,11 @@ export const AUTOMATION_FRAMING =
 
 type ContextResult = {
 	messages: Array<{ role: "user"; content: string }>;
-	/** #5240: the blocker text of a repeat message, for the retained-injection check. */
-	repeatBody?: string;
+	/**
+	 * #5240: each blocker section a repeat speaks for, in full, for the
+	 * retained-injection check (#5532: whatever the repeat renders for it).
+	 */
+	repeatBodies?: string[];
 };
 
 /**
@@ -33,14 +36,33 @@ type ContextResult = {
 export const BLOCKER_REPEAT_HEADING =
 	"Still unresolved (already reported on an earlier turn, not new):";
 
-export function blockerRepeatContent(blockers: string): string {
-	return `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+/**
+ * #5240: a repeat message from its capped blocker text. A repeat of collapsed
+ * lines alone (#5532) is just those lines: one line per blocker, as capped.
+ */
+export function blockerRepeatContent(
+	blockers: string,
+	pointerOnly: boolean,
+): string {
+	return pointerOnly ? blockers : `${BLOCKER_REPEAT_HEADING}\n\n${blockers}`;
+}
+
+/** #5532: how a blocker past its delivery cap reads; `cappedBlockerLine` builds it. */
+export const BLOCKER_CAPPED_MARK = "older blocker still open";
+
+/**
+ * #5532: the one line that replaces a capped blocker's section. It names the
+ * file and the pull that lists every blocker; the full text stays in
+ * `lens_diagnostics` and the commit gate.
+ */
+export function cappedBlockerLine(displayPath: string): string {
+	return `${displayPath}: ${BLOCKER_CAPPED_MARK} (already reported, not new). ${blockerRepeatPointer()}`;
 }
 
 /**
  * #5240: the last line of a delivered repeat. The staged blocker text is
  * capped (`capTurnEndMessage`), so the repeat names the pull that lists every
- * blocker. Added when the repeat is rendered, never staged: `repeatBody` must
+ * blocker. Added when the repeat is rendered, never staged: `repeatBodies` must
  * stay exactly the blocker text for the retained-injection check.
  */
 function blockerRepeatPointer(): string {
@@ -221,24 +243,48 @@ export function consumeTurnEndFindings(
 	if (validation.allFilesDeleted) return;
 	// Marked, fixed or retired since it was staged: nothing is left to repeat.
 	if (findings.data.repeat === true && !repeat.blockersLive) return;
+	const staged = findings.data.content;
+	const current = validation.status === "current";
+	// #5532: a message of collapsed lines alone is just those lines.
+	const onlyCappedLines = staged
+		.split("\n\n")
+		.every((paragraph) => paragraph.includes(BLOCKER_CAPPED_MARK));
+	const lines = (content: string): ContextResult["messages"] => [
+		{ role: "user", content: `${AUTOMATION_FRAMING}${content}` },
+	];
+	// #5532: the one count site. The message reaches the model now, so each
+	// blocker it renders within the cap counts: in full toward the cap, as its
+	// pointer line toward the cap's one row. A record from before #5532, or an
+	// MCP turn end's, lists none.
+	if (Array.isArray(findings.data.blockerDeliveries))
+		for (const delivery of findings.data.blockerDeliveries)
+			runtime?.recordBlockerDelivery(
+				delivery.filePath,
+				delivery.shown,
+				delivery.displayPath,
+			);
+	if (findings.data.repeat !== true)
+		return {
+			messages: onlyCappedLines
+				? lines(staged)
+				: [turnEndMessage(staged, current, findings.data.provenance)],
+		};
+	const repeatBodies = Array.isArray(findings.data.repeatBodies)
+		? { repeatBodies: findings.data.repeatBodies }
+		: {};
 	return {
-		messages: [
-			turnEndMessage(
-				findings.data.repeat === true
-					? `${findings.data.content}\n\n${blockerRepeatPointer()}`
-					: findings.data.content,
-				validation.status === "current",
-				findings.data.provenance,
-			),
-		],
-		...(findings.data.repeat === true &&
-		findings.data.content.startsWith(BLOCKER_REPEAT_HEADING)
-			? {
-					repeatBody: findings.data.content.slice(
-						BLOCKER_REPEAT_HEADING.length + 2,
+		messages: onlyCappedLines
+			? lines(staged)
+			: [
+					turnEndMessage(
+						staged.includes(BLOCKER_CAPPED_MARK)
+							? staged
+							: `${staged}\n\n${blockerRepeatPointer()}`,
+						current,
+						findings.data.provenance,
 					),
-				}
-			: {}),
+				],
+		...repeatBodies,
 	};
 }
 
