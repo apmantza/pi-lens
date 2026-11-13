@@ -142,6 +142,20 @@ const TOOL_MARKERS_BY_RUNNER: Readonly<Record<string, readonly string[]>> = {
 	prettier: [".prettierignore"],
 };
 
+// A runner listed here resolves paths in its own config from the process cwd
+// (an oxlint JS plugin's `settings` entry), so its child runs in the config's
+// directory instead of the nearest package manifest (#5541). The tool picks its
+// config per file whatever the cwd, so only those cwd-relative paths change.
+// Another runner joins when its config shows the same dependency on the cwd.
+const CONFIG_ANCHORED_RUNNERS: ReadonlySet<string> = new Set(["oxlint"]);
+
+/** Config markers a runner's child cwd anchors on before any language marker. */
+export function configAnchorMarkersFor(runner: string): readonly string[] {
+	return CONFIG_ANCHORED_RUNNERS.has(runner)
+		? (TOOL_MARKERS_BY_RUNNER[runner] ?? [])
+		: [];
+}
+
 /** Return the one shared marker vocabulary used to anchor this file kind. */
 export function rootMarkersForFile(
 	filePath: string,

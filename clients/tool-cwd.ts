@@ -20,7 +20,10 @@ import {
 	createGenerationMap,
 	createGenerationSource,
 } from "./generation-guard.js";
-import { rootMarkersForFile } from "./language-profile.js";
+import {
+	configAnchorMarkersFor,
+	rootMarkersForFile,
+} from "./language-profile.js";
 
 export type ToolCwdKind = "runner" | "formatter" | "lsp";
 
@@ -266,13 +269,26 @@ export function resolveToolCwd(
 	const homeCeiling = realpathOrResolve(homeDir);
 	const insideDispatch = isUnderDir(absoluteFile, dispatchRoot);
 	const markers = markersFor(kind, tool, absoluteFile, ctx);
-	const markerResult = markers.length
-		? findMarkerRoot(
-				fileDir,
-				markers,
-				ctx.allowHomeMarker ? path.parse(homeCeiling).root : homeCeiling,
-			)
+	const markerCeiling = ctx.allowHomeMarker
+		? path.parse(homeCeiling).root
+		: homeCeiling;
+	// #5541: a config-anchored runner starts from its own config's directory, a
+	// level the nearest-directory walk below would pass for a nearer package
+	// manifest. A caller-owned marker table still wins, and a config outside the
+	// dispatch root is not the session's, so the walk below decides.
+	const configMarkers =
+		kind === "runner" && !ctx.rootMarkers ? configAnchorMarkersFor(tool) : [];
+	const configAnchor = configMarkers.length
+		? findMarkerRoot(fileDir, configMarkers, markerCeiling)
 		: { root: null };
+	const configAnchored =
+		configAnchor.root !== null &&
+		(insideDispatch ? isUnderDir(configAnchor.root, dispatchRoot) : true);
+	const markerResult = configAnchored
+		? configAnchor
+		: markers.length
+			? findMarkerRoot(fileDir, markers, markerCeiling)
+			: { root: null };
 	const markerRoot = markerResult.root;
 	if (
 		markerRoot &&
