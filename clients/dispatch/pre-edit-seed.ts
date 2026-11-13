@@ -194,8 +194,7 @@ export function classifyPreExisting(
 	const candidates = current.filter(
 		(d) =>
 			d.runnerId !== undefined &&
-			PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(d.runnerId) &&
-			usable(d),
+			PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(d.runnerId),
 	);
 	const { kept } = retainRecordedFindings(seed.filter(usable), candidates, {
 		positionOf: () => ANY_POSITION,
