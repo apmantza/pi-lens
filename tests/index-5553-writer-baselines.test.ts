@@ -21,8 +21,14 @@ import { fileURLToPath } from "node:url";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Type } from "../clients/deps/typebox.js";
+import {
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../clients/latency-logger.js";
+import { CLEAN_OBSERVATION_ARM_LIMIT } from "../clients/mutation-attribution.js";
 import { normalizeMapKey } from "../clients/path-utils.js";
 import { useGlobalConfig } from "./support/global-config.js";
+import { readNdjsonRows } from "./support/ndjson-rows.js";
 import { gitFixtureEnv } from "./support/git-fixture-env.js";
 import {
 	GATE_BLOCK,
@@ -147,6 +153,39 @@ function foreignWriter(): ToolDefinition {
 	} as ToolDefinition;
 }
 
+/** A read-only extension tool: it names a path and writes nothing. */
+function foreignPeek(): ToolDefinition {
+	return {
+		name: "foreign_peek",
+		label: "Foreign peek",
+		description: "Read a file.",
+		parameters: Type.Object({ path: Type.String() }),
+		async execute(_id: string, params: { path: string }) {
+			return {
+				content: [{ type: "text", text: fs.readFileSync(params.path, "utf8") }],
+				details: {},
+			};
+		},
+	} as ToolDefinition;
+}
+
+/**
+ * The files of `proj` a pre-edit capture row names, as path keys. Inline
+ * mode shares the latency logger with the extension, whose queue the
+ * session's own flush does not reach, so the test drains it (the #5248
+ * witness reads rows the same way).
+ */
+async function capturedFiles(proj: string): Promise<string[]> {
+	await flushLatencyLog();
+	const read = readNdjsonRows(getLatencyLogPath());
+	expect(read.skipped).toBe(0);
+	return read.rows
+		.filter((row) => row.phase === "pre_edit_capture")
+		.map((row) => normalizeMapKey(String(row.filePath)))
+		.filter((file) => file.startsWith(normalizeMapKey(proj) + "/"))
+		.sort();
+}
+
 const activate = (tool: string) =>
 	fauxToolCall("pi_lens_activate_tools", { tools: [tool] });
 
@@ -176,10 +215,11 @@ const replace = (target: string, pattern: string, rewrite: string) => [
 // BSD `sed` takes the backup suffix as a separate argument, GNU `sed` attached.
 // Neither spelling with a suffix attached (`-i.bak`) is a named write to the
 // prescan, so the cases use the suffix-less GNU form and BSD's empty one.
+const SED_INPLACE = process.platform === "darwin" ? "sed -i ''" : "sed -i";
 const sed = (target: string, expression: string) => [
 	step(
 		fauxToolCall("bash", {
-			command: `sed -i ${process.platform === "darwin" ? "''" : ""} '${expression}' ${target}`,
+			command: `${SED_INPLACE} '${expression}' ${target}`,
 		}),
 		"sed",
 	),
@@ -297,16 +337,76 @@ describe("#5553 every path-naming writer is judged on its delta", () => {
 			responses: [step(readTarget(target), "reading"), endTurn("done")],
 		});
 		await handle.prompt("read it");
-		const read = await handle.latencyRows();
-		expect(read.skipped).toBe(0);
-		expect(
-			read.rows.filter(
-				(row) =>
-					(row as { phase?: string }).phase === "pre_edit_capture" &&
-					normalizeMapKey((row as { filePath?: string }).filePath ?? "") ===
-						normalizeMapKey(target),
-			),
-		).toEqual([]);
+		expect(await capturedFiles(proj)).toEqual([]);
+	});
+
+	// Recurrence prevented: the seed is worth a linter run only where the
+	// observational net will replay the tool's write. A read-only extension tool
+	// that names a path is armed for its first CLEAN_OBSERVATION_ARM_LIMIT calls
+	// and then not; a capture on every later call taxed it for good.
+	it("stops seeding the files of a foreign tool the net has seen clean", async () => {
+		const { proj, target } = seedRepo("foreign-peek");
+		const others = Array.from(
+			{ length: CLEAN_OBSERVATION_ARM_LIMIT },
+			(_, i) => {
+				const file = path.join(proj, "src", `peek${i}.ts`);
+				fs.writeFileSync(file, COMMITTED);
+				return file;
+			},
+		);
+		const peeked = [target, ...others];
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: proj,
+			flags: flagsFor(false),
+			inlineFactory: async () => (await import("../index.js")).default,
+			customTools: [foreignPeek()],
+			responses: [
+				...peeked.map((file) =>
+					step(fauxToolCall("foreign_peek", { path: file }), "peeking"),
+				),
+				endTurn("done"),
+			],
+		});
+		await handle.prompt("peek at each");
+		expect(await capturedFiles(proj)).toEqual(
+			peeked
+				.slice(0, CLEAN_OBSERVATION_ARM_LIMIT)
+				.map((file) => normalizeMapKey(file))
+				.sort(),
+		);
+	});
+
+	// Recurrence prevented: a command names files the host-edit site would
+	// skip (dispatch never analyses a gitignored or vendored file) and files the
+	// write creates; seeding them ran a linter, or logged a skipped row, for
+	// every redirect of a build script.
+	it("seeds the existing project file a command names and no other", async () => {
+		const { proj, target } = seedRepo("named-targets");
+		const ignored = path.join(proj, "src", "ignored.ts");
+		const vendored = path.join(proj, "vendor", "lib.ts");
+		const created = path.join(proj, "src", "created.ts");
+		fs.writeFileSync(path.join(proj, ".gitignore"), "ignored.ts\n");
+		fs.mkdirSync(path.dirname(vendored), { recursive: true });
+		fs.writeFileSync(ignored, COMMITTED);
+		fs.writeFileSync(vendored, COMMITTED);
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: proj,
+			flags: flagsFor(false),
+			inlineFactory: async () => (await import("../index.js")).default,
+			responses: [
+				step(
+					fauxToolCall("bash", {
+						command: `${SED_INPLACE} 's/return alpha;/return alpha + 1;/' ${target} ${ignored} ${vendored}; printf x > ${created}`,
+					}),
+					"writing",
+				),
+				endTurn("done"),
+			],
+		});
+		await handle.prompt("write several files");
+		expect(await capturedFiles(proj)).toEqual([normalizeMapKey(target)]);
 	});
 
 	// Recurrence prevented: the first call of an unclassified tool takes the

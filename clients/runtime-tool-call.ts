@@ -2081,10 +2081,11 @@ function namedWriterPaths(
 }
 
 /**
- * #5553: the named paths a capture can seed: existing regular files of the
- * project that its ignore rules and the external/vendor rule admit. A
- * directory, a file the write creates, and a path outside the session's
- * project are not seeded (the first has no bytes, the others no baseline).
+ * #5553: the named paths a capture is worth running for: existing regular
+ * files, each once, without the ones dispatch never analyses (a gitignored
+ * file, a vendor path, a file outside the project), as the host-edit site
+ * skips them. A file the write creates has no bytes to seed, and a skipped
+ * capture would log a row for every `echo > new.ts`.
  */
 function namedWriterTargets(
 	filePaths: readonly string[],
@@ -2098,6 +2099,7 @@ function namedWriterTargets(
 				!isPathIgnoredByProject(candidate, projectRoot, false)
 			);
 		} catch {
+			// none: a path that cannot be stat'd has no bytes to seed.
 			return false;
 		}
 	});

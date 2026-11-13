@@ -440,7 +440,7 @@ The four primary host hooks are:
   background work, and defer config/LSP discovery.
 - `tool_call`: classify mutations, apply read-guard preflight, register
   reads or pending writes, and capture a file's pre-edit linter seed (below)
-  before the host tool runs.
+  before the host tool, or any other writer that names the file, runs.
 - `tool_result`: record observed mutations through
   `RuntimeCoordinator.recordProjectMutation`, then run format, autofix, LSP,
   dispatch, and bounded deferred work.
