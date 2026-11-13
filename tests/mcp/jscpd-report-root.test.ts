@@ -259,4 +259,14 @@ describe("mcp harness scanner report root (#4133)", () => {
 		await expect(pending).rejects.toThrow(/timed out after 150ms/);
 		expect(statWatchers()).toBe(before);
 	});
+
+	// #5105 review F1: a read error other than ENOENT must reject with its own
+	// cause. A directory at the marker path reads as EISDIR on every poll; a
+	// helper that swallowed it would keep polling into a bare timeout.
+	it("rejects a marker path it cannot read as a file instead of polling", async () => {
+		const { tmpDir } = setupTestEnvironment("pi-lens-wait-for-file-dir-");
+		const dirMarker = path.join(tmpDir, "marker-is-a-directory");
+		fs.mkdirSync(dirMarker);
+		await expect(waitForFile(dirMarker, 150)).rejects.toThrow(/EISDIR/);
+	});
 });

@@ -118,15 +118,10 @@ describe.skipIf(process.platform === "win32")(
 		};
 
 		// The pid the parked scan wrote; 0 until the file carries content, because
-		// `echo $$ > scan.pid` creates the file before it writes.
-		const pidOf = (file: string): number => {
-			try {
-				return Number(fs.readFileSync(file, "utf8").trim());
-			} catch (err) {
-				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-				return 0;
-			}
-		};
+		// `echo $$ > scan.pid` creates the file before it writes. The kill test
+		// creates the file before its first read, so a missing file never gets here.
+		const pidOf = (file: string): number =>
+			Number(fs.readFileSync(file, "utf8").trim());
 
 		it("kills madge in 2 s and keeps the saved row", async () => {
 			// An empty scan.pid in place before the parked scan writes its pid, as
@@ -150,6 +145,15 @@ describe.skipIf(process.platform === "win32")(
 			// window, and the pre-fix code reds here with an empty row.
 			await pollFor(() => madgeRow() !== saved, 1_500);
 			expect(madgeRow()).toBe(saved);
+		});
+
+		// #5105 review F2: a read error other than a missing file reaches the
+		// caller. A catch that returned 0 for every error would read a fault as
+		// "no pid yet" and park the wait for its whole budget.
+		it("throws on a pid path it cannot read instead of reading it as 0", () => {
+			const notAFile = path.join(ctl, "pid-path-is-a-directory");
+			fs.mkdirSync(notAFile, { recursive: true });
+			expect(() => pidOf(notAFile)).toThrow(/EISDIR/);
 		});
 	},
 );
