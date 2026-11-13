@@ -1,4 +1,3 @@
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -18,11 +17,12 @@ import type {
 import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 
 // SpotBugs is a JVM tool installed via the archive strategy (#133); java gates
 // it (no JRE → skip). It analyzes the *bytecode tree*, not the edited source.
-const java = createAvailabilityChecker("java", ".exe", ["-version"]);
 const spotbugs = createAvailabilityChecker("spotbugs", ".bat", ["-version"]);
 
 const MAX_DIAGNOSTICS = 50;
@@ -229,10 +229,10 @@ const spotbugsRunner: RunnerDefinition = {
 		}
 
 		// JRE required — skip silently if absent (SpotBugs needs JDK 11+).
-		if (!(await java.isAvailableAsync(cwd))) {
+		if (!(await resolveToolCommandWithInstallFallback(cwd, "java"))) {
 			// #5258: Java's own verdict, so a hung or rejecting Java is not
 			// worded as an absent one.
-			return toolAbsentSkip(cwd, { checker: java, runtime: true });
+			return toolAbsentSkip(cwd, { id: "java", runtime: true });
 		}
 
 		// Cache gate: re-run only when the .class tree changed since last scan.

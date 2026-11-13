@@ -761,13 +761,9 @@ async function tryKtlintFix(
 	return detectFileChangedAfterCommand(filePath, cmd, ["-F", filePath], cwd);
 }
 
-// golangci-lint/detekt/ktfmt have no TOOL_COMMAND_SPEC; resolve via availability
-// checkers like their runners do.
-const golangciAutofixChecker = createAvailabilityChecker(
-	"golangci-lint",
-	".exe",
-);
-const detektAutofixChecker = createAvailabilityChecker("detekt", ".bat");
+// ktfmt's autofix keeps its own managed-first checker: the registry row for
+// ktfmt is the formatter ladder (PATH before managed, #5492 r2) and carries no
+// `.bat` Windows extension, so folding this one is not behaviour-preserving.
 const ktfmtAutofixChecker = createAvailabilityChecker("ktfmt", ".bat");
 
 async function tryKtfmtFix(
@@ -795,14 +791,10 @@ async function tryGolangciLintFix(
 	writeHold?: FileMutationHold,
 ): Promise<number> {
 	// Config-first: the autofix policy only reaches here when a .golangci.* config
-	// exists. resolveAvailableOrInstall honors that gate (won't auto-install a
+	// exists. The registry resolver honors that gate (won't auto-install a
 	// config-first tool). golangci-lint exits non-zero when issues remain after
 	// --fix, so allow its issue-found codes.
-	const cmd = await resolveAvailableOrInstall(
-		golangciAutofixChecker,
-		"golangci-lint",
-		cwd,
-	);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "golangci-lint");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	return detectFileChangedAfterCommand(
@@ -820,8 +812,7 @@ async function tryDetektFix(
 ): Promise<number> {
 	const configPath = findToolConfig("detekt", cwd)?.file;
 	if (!configPath) return 0;
-	if (!(await detektAutofixChecker.isAvailableAsync(cwd))) return 0;
-	const cmd = detektAutofixChecker.getCommand(cwd);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "detekt");
 	if (!cmd) return 0;
 	if (writeHold) await writeHold.acquire();
 	const absPath = path.resolve(cwd, filePath);

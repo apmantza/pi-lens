@@ -105,14 +105,9 @@ import { describeUnavailability } from "./utils/availability-policy.js";
 import { spawnTimedOut } from "./utils/spawn-outcome.js";
 import { skipUnlessToolRan } from "./utils/tool-failure.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolBinaryVerdict,
 } from "./utils/runner-helpers.js";
-
-// helm 4 has no --version flag ("Error: unknown flag: --version", exit 1);
-// the version lives under a subcommand.
-const helm = createAvailabilityChecker("helm", ".exe", ["version", "--short"]);
-const trivy = createAvailabilityChecker("trivy", ".exe");
 
 const inFlightByChartRoot = new PathKeyedMap<Promise<RunnerResult>>(
 	normalizeMapKey,
@@ -524,7 +519,7 @@ export function parseRenderedTrivyOutput(
  * gap instead, so there is no second arm to generalize for.
  */
 function helmUnavailableResult(cwd: string): RunnerResult {
-	const verdict = helm.getVerdict(cwd);
+	const verdict = toolBinaryVerdict("helm", cwd);
 	return {
 		status: "failed",
 		diagnostics: [],
@@ -537,10 +532,10 @@ function helmUnavailableResult(cwd: string): RunnerResult {
 		failureMessage: describeUnavailability({
 			tool: "helm",
 			installHint: HELM_INSTALL_HINT,
-			outcome: verdict.outcome,
-			cause: verdict.cause,
-			elapsedMs: verdict.elapsedMs,
-			retryAfterMs: verdict.retryAtMs
+			outcome: verdict?.outcome,
+			cause: verdict?.cause,
+			elapsedMs: verdict?.elapsedMs,
+			retryAfterMs: verdict?.retryAtMs
 				? Math.max(0, verdict.retryAtMs - Date.now())
 				: undefined,
 		}).slice(0, 300),
@@ -772,9 +767,9 @@ export async function runIacPass(options: {
 	manifests: RenderedManifest[];
 }): Promise<Diagnostic[]> {
 	const { chartRoot, cwd, outputDir } = options;
-	const trivyCmd = await resolveAvailableOrInstall(trivy, "trivy", cwd);
+	const trivyCmd = await resolveToolCommandWithInstallFallback(cwd, "trivy");
 	if (!trivyCmd) {
-		const verdict = trivy.getVerdict(cwd);
+		const verdict = toolBinaryVerdict("trivy", cwd);
 		return [
 			coverageGap(
 				chartRoot,
@@ -782,9 +777,9 @@ export async function runIacPass(options: {
 				`Rendered-manifest IaC checks did not run: ${describeUnavailability({
 					tool: "trivy",
 					installHint: TRIVY_INSTALL_HINT,
-					outcome: verdict.outcome,
-					cause: verdict.cause,
-					elapsedMs: verdict.elapsedMs,
+					outcome: verdict?.outcome,
+					cause: verdict?.cause,
+					elapsedMs: verdict?.elapsedMs,
 				})}`,
 			),
 		];
@@ -944,7 +939,7 @@ async function renderAndValidate(
 	filePath: string,
 ): Promise<RunnerResult> {
 	const startedAt = Date.now();
-	const helmCmd = await resolveAvailableOrInstall(helm, "helm", cwd);
+	const helmCmd = await resolveToolCommandWithInstallFallback(cwd, "helm");
 	if (!helmCmd) return helmUnavailableResult(cwd);
 
 	const outputDir = fs.mkdtempSync(

@@ -13,17 +13,14 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolBinaryVerdict,
 	type AvailabilityOutcome,
 } from "./utils/runner-helpers.js";
 import { spawnTimedOut } from "./utils/spawn-outcome.js";
 import { skipUnlessToolRan } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
 
-// helm 4 has no --version flag ("Error: unknown flag: --version", exit 1);
-// the version lives under a subcommand (#4453).
-const helm = createAvailabilityChecker("helm", ".exe", ["version", "--short"]);
 const inFlightByChartRoot = new PathKeyedMap<Promise<RunnerResult>>(
 	normalizeMapKey,
 );
@@ -123,9 +120,10 @@ async function lintChart(
 	chartRoot: string,
 	cwd: string,
 ): Promise<RunnerResult> {
-	const cmd = await resolveAvailableOrInstall(helm, "helm", cwd);
+	const cmd = await resolveToolCommandWithInstallFallback(cwd, "helm");
 	if (!cmd) {
-		const outcome: AvailabilityOutcome | null = helm.getOutcome(cwd);
+		const outcome: AvailabilityOutcome | null =
+			toolBinaryVerdict("helm", cwd)?.outcome ?? null;
 		return {
 			status: "failed",
 			diagnostics: [],

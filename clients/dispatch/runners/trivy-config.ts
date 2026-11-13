@@ -36,7 +36,10 @@
  * Refs: #131 (Mode 2)
  */
 
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
+import {
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
+} from "./utils/runner-helpers.js";
 import { processCutShort } from "./utils/spawn-outcome.js";
 import { formatToolFailure } from "./utils/tool-failure.js";
 import * as fs from "node:fs";
@@ -58,13 +61,6 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { faultSkip, findingsResult } from "../types.js";
-import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
-} from "./utils/runner-helpers.js";
-
-const trivy = createAvailabilityChecker("trivy", ".exe");
-
 /**
  * Heuristic: does this YAML look like a Kubernetes manifest (vs a CI workflow,
  * a Compose file, etc.)? A k8s object always declares a top-level `apiVersion:`
@@ -215,14 +211,8 @@ const trivyConfigRunner: RunnerDefinition = {
 			}
 		}
 
-		let cmd: string | null = null;
-		if (await trivy.isAvailableAsync(cwd)) {
-			cmd = trivy.getCommand(cwd);
-		} else {
-			const managed = await resolveAvailableOrInstall(trivy, "trivy", cwd);
-			if (managed) cmd = managed;
-		}
-		if (!cmd) return toolAbsentSkip(cwd, { id: "trivy", checker: trivy });
+		const cmd = await resolveToolCommandWithInstallFallback(cwd, "trivy");
+		if (!cmd) return toolAbsentSkip(cwd, { id: "trivy" });
 
 		const severities = resolveSeverityFloor(cwd).join(",");
 		const result = await safeSpawnAsync(

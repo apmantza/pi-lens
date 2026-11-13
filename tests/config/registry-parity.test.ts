@@ -328,7 +328,6 @@ const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
 	"g++": HOST_TOOLCHAIN,
 	"c++": HOST_TOOLCHAIN,
 	cc: HOST_TOOLCHAIN,
-	java: HOST_TOOLCHAIN,
 	javac: HOST_TOOLCHAIN,
 	dotnet: HOST_TOOLCHAIN,
 	dart: HOST_TOOLCHAIN,
@@ -339,8 +338,6 @@ const RUNNER_CLI_SKIP_REASONS: Record<string, string> = {
 	fish_indent: HOST_TOOLCHAIN,
 	mix: HOST_TOOLCHAIN,
 	elixirc: HOST_TOOLCHAIN,
-	detekt:
-		"Standalone detekt-cli the user installs (Homebrew, SDKMAN or the release archive); the installer registry has no detekt entry and the runner skips without it.",
 	// #5418's two rows: both runners skip while their CLI is absent, and the
 	// installer registry has no entry for either name (`typos-lsp` is the
 	// separate LSP server binary, not the `typos` CLI).
@@ -357,6 +354,11 @@ const COMMAND_SPEC_INSTALL_REASONS: Record<string, string> = {
 	"eslint->eslint":
 		"The runner resolves the project's own node_modules/.bin eslint first; pi-lens has no eslint installer entry, and whether it should is an open install-opt-in decision.",
 	"phpstan->phpstan": NO_INSTALLER_ENTRY,
+	// #5410 moved both runners' checkers onto the registry, so these two rows
+	// carry the reasons the runner-CLI table held for them.
+	"detekt->detekt":
+		"Standalone detekt-cli the user installs (Homebrew, SDKMAN or the release archive); the installer registry has no detekt entry and the runner skips without it.",
+	"java->java": HOST_TOOLCHAIN,
 };
 
 describe("Runner CLI scanner (#5418)", () => {

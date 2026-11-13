@@ -2037,6 +2037,20 @@ export async function resolveToolCommandWithInstallFallback(
 }
 
 /**
+ * What the registry ladder last decided for `toolId` at `cwd`, for a runner
+ * that words its own failure from the typed verdict (the helm and trivy
+ * passes) instead of returning `toolAbsentSkip`. `undefined` for an id with no
+ * spec. Reads the checker `resolveToolCommandWithInstallFallback` probed
+ * through, so it never triggers a probe of its own (#5410).
+ */
+export function toolBinaryVerdict(
+	toolId: string,
+	cwd: string,
+): AvailabilityVerdict | undefined {
+	return toolBinaryChecker(toolId, "managed-first")?.getVerdict(cwd);
+}
+
+/**
  * What a formatter's lookup of a tool found: the binary, or `null`. When the
  * tool is present but failed its version check and no later rung replaced it,
  * `rejected` carries the probe's bounded output (possibly empty), so the

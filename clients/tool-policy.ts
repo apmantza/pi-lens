@@ -1246,6 +1246,56 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 		},
 	],
 	[
+		// helm 4 has no --version flag ("Error: unknown flag: --version", exit 1);
+		// the version lives under a subcommand (#4453).
+		"helm",
+		{
+			command: "helm",
+			windowsExt: ".exe",
+			versionArgs: ["version", "--short"],
+			managedToolId: "helm",
+		},
+	],
+	[
+		"trivy",
+		{
+			command: "trivy",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "trivy",
+		},
+	],
+	[
+		"golangci-lint",
+		{
+			command: "golangci-lint",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "golangci-lint",
+		},
+	],
+	[
+		// No managedToolId: no installer entry for `detekt` exists, and it has no
+		// execution-policy row, so nothing installs it (#5410).
+		"detekt",
+		{
+			command: "detekt",
+			windowsExt: ".bat",
+			versionArgs: ["--version"],
+		},
+	],
+	[
+		// The runtime SpotBugs needs, not a lint tool. The JVM prints its version
+		// under `-version`; it has no `--version` flag. No managedToolId: pi-lens
+		// never installs a JRE.
+		"java",
+		{
+			command: "java",
+			windowsExt: ".exe",
+			versionArgs: ["-version"],
+		},
+	],
+	[
 		"htmlhint",
 		{
 			command: "htmlhint",
