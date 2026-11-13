@@ -161,7 +161,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 	"tests/clients/dispatch/runners/parsed-nothing-sweep.test.ts":
 		"runner outcome cases, not a production population sweep",
 	"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts":
-		"runner outcome cases, not a production population sweep",
+		"runner outcome cases; its out-of-tree spawn census (#5308) carries its " +
+		"own scanned/flagged floors in the same file",
 	"tests/clients/extension-terminal-silence.test.ts":
 		"terminal behavior cases, not a production population sweep",
 	"tests/clients/gzip-stage-write.test.ts":

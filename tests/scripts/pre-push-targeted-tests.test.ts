@@ -1287,6 +1287,8 @@ describe("selectTargetedTests — path-mirror pass", () => {
 			"tests/config/flag-read-registry-sweep.test.ts",
 			// #5273 r1 F1: walks clients/, tools/ and mcp/ for `includeNamedFiles` callers.
 			"tests/clients/source-filter-named-files.test.ts",
+			// #5308: walks scripts/ and clients/lsp/ for child-process spawn sites.
+			"tests/clients/dispatch/runners/run-outcome-ratchet.test.ts",
 		];
 		const testScanners = [
 			"tests/clients/flake-shape-ratchet.test.ts",
