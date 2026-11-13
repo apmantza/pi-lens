@@ -48,6 +48,14 @@ export interface ToolCwdContext {
 export interface ToolCwdResolution {
 	cwd: string;
 	marker?: string;
+	/**
+	 * Set only when a config anchor moved `cwd` away from the directory the file's
+	 * marker climb found (#5541): that directory. `cwd` is where the child
+	 * starts and what its reported paths are relative to; every package-scoped
+	 * question (lint policy, Vite+ detection, which install is found) still asks
+	 * here, as it did before the anchor moved the spawn (#5543 review F1/F2).
+	 */
+	packageDir?: string;
 }
 
 export const FORMATTER_MARKERS: Readonly<Record<string, readonly string[]>> = {
@@ -326,7 +334,7 @@ export function resolveToolCwd(
 			const anchorMarker = basename(anchor.file);
 			if (!ctx.suppressTelemetry)
 				emitResolution(kind, tool, anchor.dir, `marker:${anchorMarker}`);
-			return { cwd: anchor.dir, marker: anchorMarker };
+			return { cwd: anchor.dir, marker: anchorMarker, packageDir: markerRoot };
 		}
 		const finalReason = `marker:${markerResult.marker ?? markers[0]}`;
 		if (!ctx.suppressTelemetry)

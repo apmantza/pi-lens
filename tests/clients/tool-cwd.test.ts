@@ -212,7 +212,11 @@ describe("resolveToolCwd (#2777)", () => {
 				toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
 					cwd: workspace(),
 				}),
-			).toEqual({ cwd: workspace(), marker: ".oxlintrc.json" });
+			).toEqual({
+				cwd: workspace(),
+				marker: ".oxlintrc.json",
+				packageDir: nested(),
+			});
 		});
 
 		it("logs the config directory and marker it anchored on, once", async () => {
@@ -232,7 +236,9 @@ describe("resolveToolCwd (#2777)", () => {
 				.filter((line) => line.includes("cwd runner oxlint"));
 			expect(lines).toHaveLength(1);
 			// One exact span: `cwd=<root>` alone is a prefix of `cwd=<root>/apps/web`.
-			expect(lines[0]).toContain(
+			// The sink is NDJSON, so a Windows path's backslashes are escaped in the
+			// raw line (#5543 review): compare the parsed message.
+			expect((JSON.parse(lines[0]) as { message: string }).message).toContain(
 				`cwd=${workspace()} reason=marker:.oxlintrc.json`,
 			);
 		});
@@ -333,7 +339,11 @@ describe("resolveToolCwd (#2777)", () => {
 					toolCwd.resolveToolCwd("runner", "oxlint", fileAt(nested()), {
 						cwd: workspace(),
 					}),
-				).toEqual({ cwd: workspace(), marker: configName });
+				).toEqual({
+					cwd: workspace(),
+					marker: configName,
+					packageDir: nested(),
+				});
 			},
 		);
 
@@ -349,7 +359,11 @@ describe("resolveToolCwd (#2777)", () => {
 				toolCwd.resolveToolCwd("runner", "eslint", fileAt(nested()), {
 					cwd: workspace(),
 				}),
-			).toEqual({ cwd: workspace(), marker: "eslint.config.mjs" });
+			).toEqual({
+				cwd: workspace(),
+				marker: "eslint.config.mjs",
+				packageDir: nested(),
+			});
 		});
 
 		it("keeps ESLint in the package when a flat config sits below its manifest", () => {

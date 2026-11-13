@@ -14,7 +14,7 @@ import * as path from "node:path";
 import { findLocalBinUpwards, localBinPath } from "../../package-manager.js";
 import { pathsEqual } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { resolveRunnerCwd } from "../../tool-cwd.js";
+import { resolveRunnerCwdWithReason } from "../../tool-cwd.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
 import { getJstsLintPolicyForCwd } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
@@ -107,27 +107,30 @@ const oxlintRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = resolveRunnerCwd(ctx, "oxlint");
-		const policy = getJstsLintPolicyForCwd(cwd);
+		// `cwd` is where the child starts (the config's directory, #5541); the
+		// package the file lives in still answers every package-scoped question
+		// below, so a root config moves the spawn and nothing else.
+		const { cwd, packageDir = cwd } = resolveRunnerCwdWithReason(ctx, "oxlint");
+		const policy = getJstsLintPolicyForCwd(packageDir);
 		if (!policy.preferredRunners.includes("oxlint")) {
 			return skipped("not-preferred");
 		}
 
 		let cmd: string | null = null;
 		let args: string[];
-		if (hasToolConfig("vitePlus", cwd)) {
-			cmd = await resolveVitePlusCommand(cwd);
+		if (hasToolConfig("vitePlus", packageDir)) {
+			cmd = await resolveVitePlusCommand(packageDir);
 		}
 		if (cmd) {
 			args = ["lint", "--format", "json", ctx.filePath];
 		} else {
-			// One resolver (#5410): project shim at cwd, managed, then PATH, held
-			// in the shared latch, so a second PATH-only probe is not needed.
-			cmd = await resolveToolCommandWithInstallFallback(cwd, "oxlint");
+			// One resolver (#5410): project shim at the package, managed, then PATH,
+			// held in the shared latch, so a second PATH-only probe is not needed.
+			cmd = await resolveToolCommandWithInstallFallback(packageDir, "oxlint");
 			args = ["--format", "json", ctx.filePath];
 		}
 		if (!cmd) {
-			return toolAbsentSkip(cwd, { id: "oxlint" });
+			return toolAbsentSkip(packageDir, { id: "oxlint" });
 		}
 
 		// Run oxlint (or Vite+'s vp lint wrapper) on the file.

@@ -37,7 +37,12 @@ const OXLINT_ENTRY = path.join(
 );
 
 // Hoisted so the factory below can read it while the imports above still load.
-const shippedOxlint = vi.hoisted(() => ({ entry: "" }));
+// `lintSpawns` records the command and cwd each lint run was asked for, since
+// the double below swaps the command for the shipped entry.
+const shippedOxlint = vi.hoisted(() => ({
+	entry: "",
+	lintSpawns: [] as Array<{ command: string; args: string[]; cwd?: string }>,
+}));
 shippedOxlint.entry = OXLINT_ENTRY;
 
 // The availability ladder proves a binary with `--version`, and the lint run
@@ -49,22 +54,35 @@ vi.mock("../../../../clients/safe-spawn.js", async (importOriginal) => {
 	return {
 		...actual,
 		safeSpawnAsync: (
-			_command: string,
+			command: string,
 			args: string[] = [],
 			options?: Parameters<typeof actual.safeSpawnAsync>[2],
-		) =>
-			args.includes("--version")
-				? Promise.resolve({
-						error: null,
-						status: 0,
-						stdout: "1.91.0\n",
-						stderr: "",
-					})
-				: actual.safeSpawnAsync(
-						process.execPath,
-						[shippedOxlint.entry, ...args],
-						options,
-					),
+		) => {
+			if (args.includes("--version")) {
+				return Promise.resolve({
+					error: null,
+					status: 0,
+					stdout: "1.91.0\n",
+					stderr: "",
+				});
+			}
+			shippedOxlint.lintSpawns.push({ command, args, cwd: options?.cwd });
+			// `vp lint` is Vite+'s wrapper, not the shipped entry: answer a clean
+			// report so the cell observes only which `vp` ran and where.
+			if (path.basename(command).replace(/\.cmd$/, "") === "vp") {
+				return Promise.resolve({
+					error: null,
+					status: 0,
+					stdout: '{"diagnostics":[],"number_of_files":1}',
+					stderr: "",
+				});
+			}
+			return actual.safeSpawnAsync(
+				process.execPath,
+				[shippedOxlint.entry, ...args],
+				options,
+			);
+		},
 	};
 });
 
@@ -102,29 +120,33 @@ function probeConfig(pluginSpecifier: string, entryPoint: string): string {
  * ladder reads first. Planted at the root and the package so the cell does not
  * depend on which of them the runner asks.
  */
-function plantOxlint(dir: string): void {
+function plantOxlint(dir: string, tool = "oxlint"): string {
 	const bin = path.join(dir, "node_modules", ".bin");
 	fs.mkdirSync(bin, { recursive: true });
 	const file = path.join(
 		bin,
-		process.platform === "win32" ? "oxlint.cmd" : "oxlint",
+		process.platform === "win32" ? `${tool}.cmd` : tool,
 	);
 	fs.writeFileSync(file, "#!/bin/sh\n");
 	fs.chmodSync(file, 0o755);
+	return file;
 }
 
-async function runOxlint(filePath: string, dispatchRoot: string) {
+async function runOxlintResult(filePath: string, dispatchRoot: string) {
 	const runner = (
 		await import("../../../../clients/dispatch/runners/oxlint.js")
 	).default;
-	const result = await runner.run(
-		makeRunnerCtx(filePath, dispatchRoot) as never,
-	);
+	return runner.run(makeRunnerCtx(filePath, dispatchRoot) as never);
+}
+
+async function runOxlint(filePath: string, dispatchRoot: string) {
+	const result = await runOxlintResult(filePath, dispatchRoot);
 	return result.diagnostics.map((diagnostic) => diagnostic.rule);
 }
 
 describe("oxlint runner cwd follows the config (#5541)", () => {
 	beforeEach(() => {
+		shippedOxlint.lintSpawns.length = 0;
 		setProjectTrustState("trusted");
 		resetDispatchAvailabilityState();
 		resetProjectLensConfigCache();
@@ -197,4 +219,119 @@ describe("oxlint runner cwd follows the config (#5541)", () => {
 			env.cleanup();
 		}
 	}, 60_000);
+
+	// The config directory is only where the child starts. Every package-scoped
+	// question (lint policy, Vite+ detection, which binary is installed) still
+	// asks the package the file lives in, as before #5541's anchor (#5543 review
+	// F1/F2/F4). The cells above plant a binary at BOTH levels, which hides it.
+	describe("package-scoped decisions stay in the package", () => {
+		/** A root config over `apps/web`, with the plugin entry only at the root. */
+		function rootConfigOverPackage(env: { tmpDir: string }, pkgJson: string) {
+			createTempFile(env.tmpDir, "package.json", '{"name":"root"}');
+			createTempFile(env.tmpDir, "apps/web/package.json", pkgJson);
+			createTempFile(env.tmpDir, "shared/theme.css", "/* theme */\n");
+			createTempFile(env.tmpDir, "cwd-plugin.mjs", CWD_PROBE_PLUGIN);
+			createTempFile(
+				env.tmpDir,
+				".oxlintrc.json",
+				probeConfig("./cwd-plugin.mjs", "shared/theme.css"),
+			);
+			return createTempFile(
+				env.tmpDir,
+				"apps/web/src/x.js",
+				"const a = 1;\nconsole.log(a);\n",
+			);
+		}
+
+		it("runs the package's own oxlint, in the config directory, when only the package installs it", async () => {
+			// Recurrence: #5543 r1 F2. pnpm installs a package's binary under the
+			// package, so the lookup that moved to the config directory skipped it
+			// as not-installed (and started a managed install).
+			const env = setupTestEnvironment("pi-lens-oxlint-pkg-only-");
+			try {
+				const filePath = rootConfigOverPackage(env, '{"name":"web"}');
+				const shim = plantOxlint(path.join(env.tmpDir, "apps", "web"));
+
+				const result = await runOxlintResult(filePath, env.tmpDir);
+
+				expect(result.status).not.toBe("skipped");
+				expect(result.diagnostics.map((d) => d.rule)).not.toContain(
+					"entry-exists",
+				);
+				expect(shippedOxlint.lintSpawns).toHaveLength(1);
+				expect(shippedOxlint.lintSpawns[0]?.command).toBe(shim);
+				expect(fs.realpathSync(shippedOxlint.lintSpawns[0]?.cwd ?? "")).toBe(
+					fs.realpathSync(env.tmpDir),
+				);
+			} finally {
+				env.cleanup();
+			}
+		}, 60_000);
+
+		it("keeps the package's pinned oxlint over a root install", async () => {
+			// Recurrence: #5543 r1 F2 ("both" layout): the root install won.
+			const env = setupTestEnvironment("pi-lens-oxlint-pkg-pin-");
+			try {
+				const filePath = rootConfigOverPackage(env, '{"name":"web"}');
+				plantOxlint(env.tmpDir);
+				const shim = plantOxlint(path.join(env.tmpDir, "apps", "web"));
+
+				await runOxlintResult(filePath, env.tmpDir);
+
+				expect(shippedOxlint.lintSpawns.map((s) => s.command)).toEqual([shim]);
+			} finally {
+				env.cleanup();
+			}
+		}, 60_000);
+
+		it("skips as not-preferred when the package has its own ESLint config", async () => {
+			// Recurrence: #5543 r1 F1. The lint policy climbs UP from its cwd, so a
+			// package-level ESLint config was invisible from the config directory
+			// and oxlint ran on a package that chose ESLint.
+			const env = setupTestEnvironment("pi-lens-oxlint-pkg-eslint-");
+			try {
+				const filePath = rootConfigOverPackage(env, '{"name":"web"}');
+				createTempFile(
+					env.tmpDir,
+					"apps/web/eslint.config.mjs",
+					"export default [];\n",
+				);
+				plantOxlint(path.join(env.tmpDir, "apps", "web"));
+
+				const result = await runOxlintResult(filePath, env.tmpDir);
+
+				expect(result.status).toBe("skipped");
+				expect(result.skipReason).toBe("not-preferred");
+				expect(shippedOxlint.lintSpawns).toEqual([]);
+			} finally {
+				env.cleanup();
+			}
+		}, 60_000);
+
+		it("runs the package's vp when Vite+ is declared only in the package", async () => {
+			// Recurrence: #5543 r1 B4 (Qodo C3). `hasToolConfig("vitePlus", ...)` read
+			// from the config directory could not see the package manifest, so
+			// `vp lint` was bypassed and the lookup missed the package's `vp`.
+			const env = setupTestEnvironment("pi-lens-oxlint-pkg-vp-");
+			try {
+				const filePath = rootConfigOverPackage(
+					env,
+					'{"name":"web","devDependencies":{"vite-plus":"1.0.0"}}',
+				);
+				const vp = plantOxlint(path.join(env.tmpDir, "apps", "web"), "vp");
+				plantOxlint(path.join(env.tmpDir, "apps", "web"));
+
+				await runOxlintResult(filePath, env.tmpDir);
+
+				expect(shippedOxlint.lintSpawns).toHaveLength(1);
+				expect(shippedOxlint.lintSpawns[0]?.command).toBe(vp);
+				expect(shippedOxlint.lintSpawns[0]?.args[0]).toBe("lint");
+				expect(fs.realpathSync(shippedOxlint.lintSpawns[0]?.cwd ?? "")).toBe(
+					fs.realpathSync(env.tmpDir),
+				);
+			} finally {
+				env.cleanup();
+			}
+		}, 60_000);
+	});
 });
