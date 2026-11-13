@@ -750,6 +750,51 @@ describe("SgRunner", () => {
 				expect(args).toContain("--globs");
 				expect(args).toContain("!profiles/**");
 				expect(args).toContain("!**/*.snap");
+				// #5545: those patterns only mean what the project meant when the
+				// child runs AT the scanned tree with the scan path spelled for it.
+				expect(args.at(-1)).toBe(".");
+				expect((safeSpawnAsync.mock.calls[0][2] as { cwd?: string }).cwd).toBe(
+					root,
+				);
+			} finally {
+				removeTempDirSync(root);
+			}
+		});
+
+		// #5545: the anchored child prints each match path RELATIVE to the scan
+		// root, while `matchedFilePath`, the replace root guard and the mutation
+		// bridge all key the written set off an absolute path. The payload below is
+		// the real stdout of `ast-grep scan --json src` (0.51.1) started inside the
+		// scanned tree, not a hand-written shape.
+		it("folds the anchored child's relative match paths back to the scan root (#5545)", async () => {
+			const root = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-sg-relpath-"),
+			);
+			try {
+				fs.mkdirSync(path.join(root, "src"), { recursive: true });
+				fs.writeFileSync(
+					path.join(root, "src", "a.js"),
+					"const answer = 42;\nexport default answer;\n",
+				);
+				safeSpawnAsync.mockResolvedValueOnce({
+					status: 0,
+					error: null,
+					stdout:
+						'[{"text":"const answer = 42;","range":{"byteOffset":{"start":0,"end":18},"start":{"line":0,"column":0},"end":{"line":0,"column":18}},"file":"src/a.js","lines":"const answer = 42;","charCount":{"leading":0,"trailing":0},"language":"JavaScript","metaVariables":{"single":{"NAME":{"text":"answer","range":{"byteOffset":{"start":6,"end":12},"start":{"line":0,"column":6},"end":{"line":0,"column":12}}}},"multi":{},"transformed":{}},"ruleId":"fix5545","severity":"warning","note":null,"message":"Replace the 42 literal","labels":[{"text":"const answer = 42;","range":{"byteOffset":{"start":0,"end":18},"start":{"line":0,"column":0},"end":{"line":0,"column":18}},"style":"primary"}]}]',
+					stderr: "",
+				});
+
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				const scan = await runner.tempScanDetailedAsync(
+					root,
+					"fix5545",
+					'id: fix5545\nlanguage: javascript\nrule: { pattern: "const $NAME = 42" }\n',
+				);
+
+				expect(scan.matches.map((match) => match.file)).toEqual([
+					path.join(root, "src", "a.js"),
+				]);
 			} finally {
 				removeTempDirSync(root);
 			}
