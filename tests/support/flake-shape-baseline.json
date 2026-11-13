@@ -436,7 +436,6 @@
 		"clients/lsp/rename-notify-wedged.test.ts": 3,
 		"clients/lsp/server-policy.test.ts": 2,
 		"clients/lsp/service-aux-grace.test.ts": 2,
-		"clients/lsp/service-document-drift.test.ts": 1,
 		"clients/lsp/service-inconclusive-per-server.test.ts": 2,
 		"clients/lsp/service-notify-adaptive-budget.test.ts": 1,
 		"clients/lsp/service-notify-inflight-throttle.test.ts": 3,
