@@ -494,6 +494,9 @@ it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
 		const before = digest();
 		const dir = mkdtempSync(join(tmpdir(), "pi-lens-mutate-pid-"));
 		const pidFile = join(dir, "worker.pid");
+		// The fixture creates the pid file before it writes it (#5105). Plant
+		// that empty state first, so the wait must read content, not existence.
+		writeFileSync(pidFile, "");
 		const child = spawn(
 			process.execPath,
 			[
@@ -520,7 +523,7 @@ it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)(
 		const closed = new Promise((resolve) => child.once("close", resolve));
 		try {
 			await waitFor(
-				() => existsSync(pidFile),
+				() => existsSync(pidFile) && readFileSync(pidFile, "utf8").length > 0,
 				(found) => found,
 				{ timeoutMs: 60_000, intervalMs: 100 },
 			);
