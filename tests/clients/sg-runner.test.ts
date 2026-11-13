@@ -112,21 +112,6 @@ describe("SgRunner", () => {
 		ensureTool.mockResolvedValue(null);
 	});
 
-	it("preserves the aborted spawn classification for callers", async () => {
-		safeSpawnAsync.mockResolvedValue({
-			status: null,
-			stdout: "",
-			stderr: "",
-			error: new Error("Spawn aborted"),
-			failure: "aborted",
-		});
-		const { SgRunner } = await import("../../clients/sg-runner.js");
-		const result = await new SgRunner().exec(["run", "--pattern", "x"]);
-
-		expect(result.failure).toBe("aborted");
-		expect(result.aborted).toBe(true);
-	});
-
 	describe("spawn-failure taxonomy consumption (#1214/#1199)", () => {
 		it("cwd-unresolvable with an ENOENT cause is NOT unavailable and does NOT reinstall", async () => {
 			const enoent = Object.assign(new Error("spawn ast-grep ENOENT"), {

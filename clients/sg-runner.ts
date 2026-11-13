@@ -129,8 +129,6 @@ export interface SgResult {
 	totalMatches: number;
 	truncated: boolean;
 	error?: string;
-	/** The call signal stopped the child before it returned an answer. */
-	aborted?: boolean;
 	/** Why the spawn itself failed, when it did (#5097: `aborted` is the call's Esc). */
 	failure?: SgFailureKind;
 }
@@ -146,6 +144,11 @@ export interface SgExecutionOptions {
 	signal?: AbortSignal;
 	/** Absolute wall-clock deadline shared by a multi-path search. */
 	deadlineAt?: number;
+	/**
+	 * #5097: run to completion through Esc (safe-spawn's opt-out from the turn
+	 * signal and the tool scope). Set only for a spawn that writes files.
+	 */
+	ignoreAmbientSignal?: boolean;
 }
 
 export interface SgRawResult {
@@ -888,6 +891,7 @@ export class SgRunner {
 				timeout: DEFAULT_EXEC_TIMEOUT_MS,
 				deadlineAt: options.deadlineAt,
 				signal: options.signal,
+				ignoreAmbientSignal: options.ignoreAmbientSignal,
 				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
 			},
 		);
@@ -912,7 +916,6 @@ export class SgRunner {
 			return {
 				...empty(),
 				failure: spawnFailure,
-				...(spawnFailure === "aborted" ? { aborted: true } : {}),
 				error:
 					spawnFailure === "unavailable"
 						? "ast-grep CLI not found. Install: npm i -D @ast-grep/cli"
@@ -1242,8 +1245,9 @@ export class SgRunner {
 					...(scan.failure === "aborted" ? { aborted: true } : {}),
 				};
 			}
-			// #5097: the call owns the write child, so abort cancels it before a
-			// late answer can reach the aborted tool call.
+			// #5097: an abort lands before the write or not at all. A killed
+			// `--update-all` leaves part of the files rewritten. `aborted` keeps
+			// the pattern hint off the reply.
 			if (options.signal?.aborted) {
 				return { matches: [], error: "operation aborted", aborted: true };
 			}
@@ -1257,7 +1261,7 @@ export class SgRunner {
 					...anchor.excludeArgs,
 					anchor.scanArg,
 				],
-				spawnOptions,
+				{ ...spawnOptions, signal: undefined, ignoreAmbientSignal: true },
 			);
 			if (
 				applyResult.error ||
@@ -1267,7 +1271,6 @@ export class SgRunner {
 				return {
 					matches: [],
 					writeStarted: true,
-					...(applyResult.failure === "aborted" ? { aborted: true } : {}),
 					error:
 						applyResult.error?.message ||
 						`ast-grep apply failed with exit code ${applyResult.status}`,

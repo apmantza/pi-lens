@@ -4,4 +4,4 @@ audience: user
 area: tools
 ---
 
-- **Aborted ast-grep rewrites now stop their child process.** Pressing Esc no longer lets a late `--update-all` result complete after the tool call has been aborted. (refs #5097)
+- **Esc now stops an `ast_grep_replace` apply's precheck.** The structural-rule precheck carries the call's abort signal, so a host with no tool scope stops it too. Once the `--update-all` write starts it still runs to completion, so an apply leaves 0 or all matched files rewritten. (refs #5097)

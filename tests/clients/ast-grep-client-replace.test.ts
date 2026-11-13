@@ -98,41 +98,37 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 		expect(wrote).toBe(false);
 	});
 
-	it("cancels a raw apply child when the call aborts", async () => {
+	it("an abort during the raw apply's precheck cancels that child and starts no write", async () => {
+		// Recurrence: the precheck child outliving Esc (#5097). The stub stops the
+		// way a real child does, only when the signal it was handed fires.
 		const controller = new AbortController();
-		let abortWrite!: () => void;
-		const writeStopped = new Promise<void>((resolve) => {
-			abortWrite = resolve;
+		let markPrecheckBegun!: () => void;
+		const precheckBegun = new Promise<void>((resolve) => {
+			markPrecheckBegun = resolve;
 		});
-		let markWriteBegun!: () => void;
-		const writeBegun = new Promise<void>((resolve) => {
-			markWriteBegun = resolve;
+		let releasePrecheck!: () => void;
+		const precheckParked = new Promise<void>((resolve) => {
+			releasePrecheck = resolve;
 		});
 		const exec = vi.fn(
 			async (args: string[], options?: { signal?: AbortSignal }) => {
 				if (args.includes("--update-all")) {
-					options?.signal?.addEventListener("abort", abortWrite, {
-						once: true,
-					});
-					markWriteBegun();
-					await writeStopped;
-					return {
-						matches: [],
-						totalMatches: 0,
-						truncated: false,
-						error: "operation aborted",
-						failure: "aborted" as const,
-					};
+					return { matches: [], totalMatches: 0, truncated: false };
 				}
-				return {
-					matches: [SAMPLE_MATCH],
-					totalMatches: 1,
-					truncated: false,
-				};
+				markPrecheckBegun();
+				await precheckParked;
+				return options?.signal?.aborted
+					? {
+							matches: [],
+							totalMatches: 0,
+							truncated: false,
+							error: "operation aborted",
+							failure: "aborted" as const,
+						}
+					: { matches: [SAMPLE_MATCH], totalMatches: 1, truncated: false };
 			},
 		);
-		const client = clientWithExec(exec);
-		const pending = client.replace(
+		const pending = clientWithExec(exec).replace(
 			"var $X",
 			"let $X",
 			"typescript",
@@ -141,38 +137,46 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			{ sessionRoot: process.cwd(), signal: controller.signal },
 		);
 
-		await writeBegun;
+		await precheckBegun;
 		controller.abort();
+		releasePrecheck();
 		const result = await pending;
 
+		expect(result.aborted).toBe(true);
 		expect(result.error).toBe("operation aborted");
-		expect(exec.mock.calls[1]?.[1]).toEqual({ signal: controller.signal });
+		expect(result.writeStarted).toBeUndefined();
+		expect(
+			exec.mock.calls.some((c) => (c[0] as string[]).includes("--update-all")),
+		).toBe(false);
 	});
 
-	it("cancels a structural-rule apply child when the call aborts", async () => {
+	it("an abort during the structural apply's precheck cancels that child and starts no write", async () => {
+		// Recurrence: #5097. The structural precheck ran without the call signal
+		// (it relied on the pi tool scope), so a host with no scope left it
+		// running through Esc.
 		const controller = new AbortController();
-		let abortWrite!: () => void;
-		const writeStopped = new Promise<void>((resolve) => {
-			abortWrite = resolve;
+		let markPrecheckBegun!: () => void;
+		const precheckBegun = new Promise<void>((resolve) => {
+			markPrecheckBegun = resolve;
 		});
-		let markWriteBegun!: () => void;
-		const writeBegun = new Promise<void>((resolve) => {
-			markWriteBegun = resolve;
+		let releasePrecheck!: () => void;
+		const precheckParked = new Promise<void>((resolve) => {
+			releasePrecheck = resolve;
 		});
-		const tempScanDetailedAsync = vi
-			.fn()
-			.mockResolvedValue({ matches: [SAMPLE_MATCH], status: 0 });
-		const tempScanWithFixAsync = vi.fn(async (...args: unknown[]) => {
-			const options = args.at(-1) as { signal?: AbortSignal };
-			options.signal?.addEventListener("abort", abortWrite, { once: true });
-			markWriteBegun();
-			await writeStopped;
-			return {
-				matches: [],
-				error: "operation aborted",
-				aborted: true,
-			};
+		const tempScanDetailedAsync = vi.fn(async (...args: unknown[]) => {
+			const options = args[4] as { signal?: AbortSignal } | undefined;
+			markPrecheckBegun();
+			await precheckParked;
+			return options?.signal?.aborted
+				? {
+						matches: [],
+						status: null,
+						error: "operation aborted",
+						failure: "aborted" as const,
+					}
+				: { matches: [SAMPLE_MATCH], status: 0 };
 		});
+		const tempScanWithFixAsync = vi.fn();
 		const client = clientWithValidationRunner({
 			tempScanDetailedAsync,
 			tempScanWithFixAsync,
@@ -184,17 +188,14 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 			{ sessionRoot: process.cwd(), signal: controller.signal },
 		);
 
-		await writeBegun;
+		await precheckBegun;
 		controller.abort();
+		releasePrecheck();
 		const result = await pending;
 
+		expect(result.aborted).toBe(true);
 		expect(result.error).toBe("operation aborted");
-		expect(tempScanDetailedAsync.mock.calls[0]?.[4]).toEqual({
-			signal: controller.signal,
-		});
-		expect(tempScanWithFixAsync.mock.calls[0]?.at(-1)).toEqual({
-			signal: controller.signal,
-		});
+		expect(tempScanWithFixAsync).not.toHaveBeenCalled();
 	});
 
 	it("does not classify an invalid raw-rule preview as stale", async () => {
