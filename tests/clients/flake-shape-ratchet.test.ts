@@ -1439,6 +1439,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the exact local CLI, shallow checkout, `git check-ignore` (#2904) and the gh label read behind `--lint-local` (#4288, PATH stub) are the subjects; an in-process double cannot prove any of those command boundaries",
 	},
+	// 2026-11-13 (#5558): the `--comment` layout gate is the committed CLI; the
+	// exit status and stderr a posting role reads are the contract.
+	"real-process-spawn:scripts/check-prose.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the `--comment` CLI (argv parsing, exit status, stderr) is what a role runs before `gh issue comment`; an in-process call of the pure function would not prove either",
+	},
 	// 2026-10-14 (#4397): the changed-test shuffle job's exit code is the contract;
 	// only a real vitest start reorders the cases of a fixture that shares state.
 	"real-process-spawn:scripts/ci-shuffle-changed-tests-spawn.test.ts": {

@@ -1,3 +1,9 @@
+// flake-shape: real-process-spawn — the comment layout gate is the committed CLI (exit code and stderr of `--comment`); an in-process call of the pure function cannot prove the argument parsing, the stdin/file read or the exit status a posting role relies on.
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkProse } from "../../scripts/check-prose.mjs";
 import { lintPrBody } from "../../scripts/check-pr-body.mjs";
@@ -295,5 +301,483 @@ describe("prose rules warn, structural rules still fail (#5110)", () => {
 			lintPrBody(body(forty, false), { workingTree: true, proseMode: "warn" })
 				.valid,
 		).toBe(false);
+	});
+});
+
+describe("comment layout gate (#5558)", () => {
+	const REPO_ROOT = path.resolve(
+		path.dirname(fileURLToPath(import.meta.url)),
+		"../..",
+	);
+	const CLI = path.join(REPO_ROOT, "scripts/check-prose.mjs");
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const dir of dirs.splice(0))
+			fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	function run(body: string, ...extra: string[]) {
+		return runWith(body, ["--comment", ...extra]);
+	}
+
+	function runWith(body: string, flags: string[]) {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-comment-"));
+		dirs.push(dir);
+		const file = path.join(dir, "comment.md");
+		fs.writeFileSync(file, body);
+		const result = spawnSync(
+			process.execPath,
+			[CLI, ...flags, "--body-file", file],
+			{ encoding: "utf8" },
+		);
+		return { status: result.status, err: result.stderr };
+	}
+
+	const lines = (n: number, tag = "Line") =>
+		Array.from({ length: n }, (_, i) => `${tag} number ${i + 1} is here.`);
+	const fold = (summary: string, inner = ["Detail line."]) =>
+		[
+			"<details>",
+			`<summary>${summary}</summary>`,
+			"",
+			...inner,
+			"",
+			"</details>",
+		].join("\n");
+	const SUMMARY = "Claude Sonnet 5.5 (high): the detail";
+
+	// The #5394 review as posted: 40 lines, no fold, 2026-11 (predates #5510).
+	const REVIEW_5394 = [
+		"Thanks for the PR. Before going further, what do you want the digests to enable?",
+		"",
+		"## Review (head 1145734f3, merged with master 011b5420a)",
+		"",
+		"Verdict at that head: needs changes. Nothing high severity.",
+		"",
+		"**Premises**",
+		"",
+		"- **(a) MCP bootstrap reset race.** `_resetMcpSessionContext` has no production callers.",
+		"- **(b) Config digests.** No production code reads `contributingConfigSources`.",
+		"",
+		"**Findings**",
+		"",
+		"- **F1 (medium): the digests have no consumer.** The name clashes with its doc.",
+		"- **F2 (medium): a hand-rolled epoch counter.** It duplicated `createGenerationSource`.",
+		"- **F3 (medium): mutation survivors.** `session-context-eviction` stayed green for all four.",
+		"- **F4 (low): the body overstates coverage.** `retireScope` logs only for `superseded`.",
+		"",
+		"**What held up**",
+		"",
+		"- The digest hashes the exact buffer that gets parsed.",
+		"- Resolution matched master exactly.",
+	].join("\n");
+
+	// A worker hand-back posted as an issue comment, #5308 (117 and 143 lines).
+	const HANDBACK_5308 = [
+		"# Handback — #5308 run-outcome ratchet, round 1",
+		"",
+		"Branch deviation, and why: the brief named one branch, but the git guard refuses a commit there.",
+		"The work is on a second branch and the PR opens from it:",
+		"",
+		"## Two pre-push governance reds the first push hit",
+		"",
+		"- `git-fixture-governance.test.ts` read the plants as bare Git spawns.",
+		"- `flake-shape-ratchet.test.ts` flagged this file on one line.",
+		"",
+		"## Mutations",
+		"",
+		"- Neutered the census branch, and the new test went red.",
+		"- Neutered the unclassified branch, and the plant test went red.",
+		"- Restored both, and the suite is green.",
+		"",
+		"## Checks run",
+		"",
+		"- `npm run lane:check` printed a clean record.",
+		"- The body lint passed.",
+	].join("\n");
+
+	// Recurrence it prevents: the orchestrator wrapper accepted any `<details>`
+	// anywhere, so a long visible part before the fold passed (#5558).
+	it("refuses 14 visible lines before a fold", () => {
+		const r = run(`${lines(14).join("\n")}\n${fold(SUMMARY)}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("visible part");
+	});
+
+	const refusesWithNoFold = (body: string) => {
+		const r = run(`${body}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	};
+
+	// Recurrence: #5394 (a 20-line review, no fold, posted before #5510).
+	it("refuses the #5394 review as posted", () => {
+		refusesWithNoFold(REVIEW_5394);
+	});
+
+	// Recurrence: #5308 (a worker hand-back of 117 and 143 lines posted whole).
+	it("refuses the #5308 hand-back as posted", () => {
+		refusesWithNoFold(HANDBACK_5308);
+	});
+
+	// Recurrence: a fold that is not a layout fold (no summary renders as
+	// the bare word "Details" and names no model).
+	it("refuses a fold with no summary", () => {
+		const body = `${lines(5).join("\n")}\n<details>\n\n${lines(10).join("\n")}\n</details>\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("<summary>");
+	});
+
+	// Recurrence: without the blank line the Markdown inside the fold does not
+	// render (#5510).
+	it("refuses a summary with no blank line after it", () => {
+		const body = `${lines(5).join("\n")}\n<details>\n<summary>${SUMMARY}</summary>\n${lines(10).join("\n")}\n</details>\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("blank line");
+	});
+
+	// Recurrence: an unclosed fold swallows every later comment on the page.
+	it("refuses an unclosed details", () => {
+		const body = `${lines(5).join("\n")}\n<details>\n<summary>${SUMMARY}</summary>\n\n${lines(10).join("\n")}\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("unclosed");
+	});
+
+	// Recurrence: text on the closing line is visible text that a count of
+	// whole-line tags would miss.
+	it("refuses text on the </details> line", () => {
+		const body = `${lines(5).join("\n")}\n${fold(SUMMARY, lines(10)).replace("</details>", "</details> and a visible tail")}\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("line of its own");
+	});
+
+	// Recurrence: a stray close tag is a half-pasted fold.
+	it("refuses a </details> with no opener", () => {
+		const r = run(`${lines(13).join("\n")}\n</details>\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no opening <details>");
+	});
+
+	// Recurrence: the #5543 reply folded under "Suggested shape and the probe
+	// matrix", which names no model. Fail closed on a summary that is not a
+	// recognised form, not only on a missing one.
+	const refusesSummary = (summary: string) => {
+		const r = run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("summary");
+	};
+	it("refuses a summary that names no model", () => {
+		refusesSummary("Suggested shape and the probe matrix");
+	});
+	it("refuses a summary that opens with a label, not a model", () => {
+		refusesSummary("Full triage: the detail");
+	});
+	it("refuses a summary with an unknown effort", () => {
+		refusesSummary("Claude Opus 5.5 (extreme): the detail");
+	});
+	it("refuses a summary with nothing after the colon", () => {
+		refusesSummary("Claude Opus 5.5 (high):");
+	});
+	it("refuses a word that only starts like a model family", () => {
+		refusesSummary("Solution notes: the detail");
+	});
+
+	it.each([
+		"Claude Opus 5.5 (high): full triage",
+		"Sonnet 5.5: probes and what held up",
+		"DeepSeek V4.1 Flash (xhigh): findings",
+		"GPT-5 (thinking medium): the review detail",
+	])("accepts the summary %s", (summary) => {
+		const r = run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`);
+		expect(r).toEqual({ status: 0, err: "" });
+	});
+
+	// Recurrence: text after the last fold is visible too, so a short opener
+	// plus a 100-line tail would pass a check that reads only the text before
+	// the first fold.
+	it("counts visible text after a fold", () => {
+		const r = run(
+			`${lines(3).join("\n")}\n${fold(SUMMARY, lines(4))}\n${lines(10).join("\n")}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("visible part");
+	});
+
+	// Recurrence: a quoted tag in a code fence is text, not a fold, so a fenced
+	// `<details>` must neither satisfy the fold requirement nor close one.
+	it("does not read a <details> inside a code fence as a fold", () => {
+		const body = `${lines(3).join("\n")}\n\`\`\`html\n<details>\n<summary>${SUMMARY}</summary>\n\n${lines(10).join("\n")}\n</details>\n\`\`\`\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence: Markdown renders a four-space-indented tag as a code block,
+	// so a fold written that way is 20 visible lines, not a fold.
+	it("does not read an indented <details> as a fold", () => {
+		const indented = fold(SUMMARY, lines(10))
+			.split("\n")
+			.map((line) => `    ${line}`)
+			.join("\n");
+		const r = run(`${lines(3).join("\n")}\n\n${indented}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence: a nested fold is hidden twice and the second summary escapes
+	// the model rule; one fold per level, fail closed.
+	it("refuses a nested details", () => {
+		const inner = fold("Claude Opus 5.5 (high): inner", ["Inner."]);
+		const r = run(
+			`${lines(5).join("\n")}\n${fold(SUMMARY, [...lines(8), inner])}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("nested");
+	});
+
+	// Recurrence: an unrecognised `<details` form is unread, never a pass.
+	it("refuses a <details> tag form it does not recognise", () => {
+		const r = run(`${lines(13).join("\n")}\n<details class="x">\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("unrecognised");
+	});
+
+	it("accepts a short comment with no fold, and a short fold that is well formed", () => {
+		expect(run(`${lines(12).join("\n")}\n`)).toEqual({ status: 0, err: "" });
+		expect(run(`${lines(6).join("\n")}\n${fold(SUMMARY)}\n`)).toEqual({
+			status: 0,
+			err: "",
+		});
+	});
+
+	// Recurrence: a malformed fold in a short comment still breaks rendering.
+	it("checks fold structure in a short comment", () => {
+		const r = run("Short.\n<details>\nNo summary.\n</details>\n");
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("<summary>");
+	});
+
+	// Recurrence: #5510's rule was a wrapper accepting any fold. The worked
+	// example in the standard is the shape roles copy, so it must pass the gate
+	// it documents.
+	it("accepts the worked example in docs/prose-standard.md", () => {
+		const doc = fs.readFileSync(
+			path.join(REPO_ROOT, "docs/prose-standard.md"),
+			"utf8",
+		);
+		const example = doc
+			.split("### Worked example")[1]
+			?.match(/```markdown\n([\s\S]*?)\n```/)?.[1];
+		expect(example).toBeTruthy();
+		expect(run(`${example}\n`)).toEqual({ status: 0, err: "" });
+	});
+
+	// Recurrence: the #5543 reply, 4 visible items then a fold (summary shape
+	// as posted, with a model named as the standard asks).
+	it("accepts the #5543 reply shape", () => {
+		const reply = [
+			"Thanks for this. We reviewed it against master with real runners, and the anchoring does fix #5541 for the hoisted layout. Two regressions stop a merge for now, plus a Windows test fix.",
+			"",
+			"1. **Lint policy is read in the wrong directory (F1).** Master skips oxlint for `packages/a`, but this head runs it there.",
+			"2. **Binary lookup moves with the cwd (F2).** With a pnpm-style install, this head skips with `not-installed`.",
+			"3. **Windows red (F3).** `extension.log` is NDJSON, so parse the line before comparing.",
+			"",
+			"<details><summary>Claude Sonnet 5.5 (high): suggested shape and the probe matrix</summary>",
+			"",
+			"Keep the directory you had before anchoring on the resolution record. Use it for the package-scoped questions: policy, `requiresConfig`, Vite+ detection, binary lookup and availability.",
+			"",
+			"| tool | install | master | this head |",
+			"|---|---|---|---|",
+			"| oxlint | package only | runs package | skipped `not-installed` |",
+			"| oxlint | hoisted to root | skipped | runs root (improvement) |",
+			"| eslint | both | runs package | runs root |",
+			"",
+			"The 11 guard mutations we ran in the built output all fail as they should.",
+			"</details>",
+		].join("\n");
+		expect(run(`${reply}\n`)).toEqual({ status: 0, err: "" });
+	});
+
+	// Recurrence: the prose checks must keep running in --comment mode, so the
+	// layout gate does not replace them.
+	it("still blocks a title-case heading in comment mode", () => {
+		const r = run("## Some Title Case\n\nShort.\n");
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("heading-case");
+	});
+
+	// Recurrence: an escape hatch with no stated reason is the wrapper's bare
+	// override all over again.
+	it("waives the long-comment rules only with a stated reason, and prints it", () => {
+		const long = `${lines(20).join("\n")}\n`;
+		const bare = run(long, "--long-ok", "x");
+		expect(bare.status).toBe(1);
+		expect(bare.err).toContain("12 or more characters");
+		const ok = run(long, "--long-ok", "verbatim quote of the CI log");
+		expect(ok.status).toBe(0);
+		expect(ok.err).toContain("layout-waived: verbatim quote of the CI log");
+		// The waiver never excuses a broken fold.
+		const broken = run(
+			`${lines(20).join("\n")}\n<details>\n`,
+			"--long-ok",
+			"verbatim quote of the CI log",
+		);
+		expect(broken.status).toBe(1);
+	});
+
+	// Recurrence: a flag that does nothing without `--comment` would read as a
+	// waiver that was never applied.
+	it("refuses --long-ok without --comment", () => {
+		const r = runWith("Short.\n", ["--long-ok", "some reason here"]);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("--long-ok applies to --comment only");
+	});
+
+	// ---- Round 2 (#5560 review) ----
+	const accepted = { status: 0, err: "" };
+
+	// Recurrence (#5560 F1): GitHub renders `<details open>` as `<details
+	// open="">`, expanded, so a 40-line comment with an "open fold" shows 40
+	// lines and the gate counted them as hidden.
+	it("refuses an open fold, which renders expanded", () => {
+		const open = fold(SUMMARY, lines(10)).replace(
+			"<details>",
+			"<details open>",
+		);
+		const r = run(`${lines(5).join("\n")}\n${open}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("unrecognised");
+	});
+
+	// Recurrence (#5560 F5): a lone CR is one line to a `\r?\n` split, so 40
+	// unfolded lines joined with CR passed; CRLF input was refused.
+	it("reads a lone carriage return as a line break", () => {
+		const r = run(`${lines(40).join("\r")}\r`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence (#5560 F3): a long comment entirely inside one fold has no
+	// verdict line a reader sees without a click.
+	it("refuses a long comment with no visible line before its fold", () => {
+		const r = run(`${fold(SUMMARY, lines(14))}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no visible line before the first fold");
+	});
+
+	// Recurrence (#5560 review): our own tooling writes summaries such as
+	// "Claude Sonnet 5.5 (investigator): ...", which the effort-only form refused.
+	it("accepts a role word in the summary parenthesis", () => {
+		for (const role of ["investigator", "reviewer", "fixer", "verify"]) {
+			const summary = `Claude Sonnet 5.5 (${role}): the detail`;
+			expect(
+				run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`),
+			).toEqual(accepted);
+		}
+	});
+
+	it("refuses a parenthesis that is neither an effort nor a role", () => {
+		const r = run(
+			`${lines(5).join("\n")}\n${fold("Claude Sonnet 5.5 (auditor): the detail", lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("parenthesis");
+	});
+
+	// Recurrence (#5560 F2): the 8-line cap had a cell far from its boundary
+	// (14 lines); a cap moved to 9 stayed green.
+	it("refuses exactly 9 visible lines before a fold", () => {
+		const r = run(`${lines(9).join("\n")}\n${fold(SUMMARY, lines(10))}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("visible part has 9");
+	});
+
+	it("accepts exactly 8 visible lines before a fold", () => {
+		expect(
+			run(`${lines(8).join("\n")}\n${fold(SUMMARY, lines(10))}\n`),
+		).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): the 6-word limit on a model name had no cell.
+	it("refuses a model name of seven words", () => {
+		const r = run(
+			`${lines(5).join("\n")}\n${fold("Claude Opus 5.5 a b c d (high): the detail", lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("summary");
+	});
+
+	it("accepts a model name of six words", () => {
+		const summary = "Claude Opus 5.5 a b c (high): the detail";
+		expect(
+			run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`),
+		).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): the vendor-prefix loop had no cell.
+	it("accepts a vendor prefix before the family", () => {
+		const summary = "OpenAI GPT-5 (high): the detail";
+		expect(
+			run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`),
+		).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): the word-charset test had no cell.
+	it("refuses a model word with markup in it", () => {
+		const r = run(
+			`${lines(5).join("\n")}\n${fold("Claude Opus <b>big</b> (high): the detail", lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("summary");
+	});
+
+	// Recurrence (#5560 F2): a code fence outside a fold counts as visible, and
+	// both the fence lines and its body had no cell (2 lines + fence of 5 = 9).
+	it("counts a fenced block outside a fold as visible", () => {
+		const fenced = ["```text", ...lines(5), "```"].join("\n");
+		const r = run(
+			`${lines(2).join("\n")}\n${fenced}\n${fold(SUMMARY, lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("visible part has 9");
+	});
+
+	// Recurrence (#5560 F2): a shorter fence line does not close a longer fence,
+	// so the quoted `<details>` stays text.
+	it("keeps a four-backtick fence open past a three-backtick line", () => {
+		const body = `${lines(3).join("\n")}\n\`\`\`\`\n\`\`\`\n${fold(SUMMARY, lines(10))}\n\`\`\`\`\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence (#5560 F2): a fence line with an info string never closes a fence.
+	it("keeps a fence open past a fence line with an info string", () => {
+		const body = `${lines(3).join("\n")}\n\`\`\`\n\`\`\`js\n${fold(SUMMARY, lines(10))}\n\`\`\`\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence (#5560 F2): the standard says the summary may sit on the next
+	// non-blank line; the blank-line skip had no cell.
+	it("reads a summary that follows a blank line after <details>", () => {
+		const body = `${lines(5).join("\n")}\n<details>\n\n<summary>${SUMMARY}</summary>\n\n${lines(10).join("\n")}\n</details>\n`;
+		expect(run(body)).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): GitHub reads the tags in any case, so an uppercase
+	// fold is a fold; each of the three tag patterns had no uppercase cell.
+	it("reads uppercase <DETAILS>, <SUMMARY> and </DETAILS> tags", () => {
+		const upper = fold(SUMMARY, lines(10))
+			.replace("<details>", "<DETAILS>")
+			.replace("<summary>", "<SUMMARY>")
+			.replace("</summary>", "</SUMMARY>")
+			.replace("</details>", "</DETAILS>");
+		expect(run(`${lines(5).join("\n")}\n${upper}\n`)).toEqual(accepted);
 	});
 });

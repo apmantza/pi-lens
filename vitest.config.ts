@@ -913,6 +913,9 @@ export const wallClockBudgetInclude = [
 	// child in a fixture repository (flake-shape admission).
 	"tests/scripts/check-lockfile-sync.test.ts",
 	"tests/scripts/check-pr-body.test.ts",
+	// #5558: the `--comment` CLI (argv wiring, exit code, stderr) is the boundary a
+	// posting role relies on (flake-shape admission).
+	"tests/scripts/check-prose.test.ts",
 	// #4397: the changed-test shuffle job's exit code is the contract; only a
 	// real vitest start reorders cases under `--sequence.shuffle`.
 	"tests/scripts/ci-shuffle-changed-tests-spawn.test.ts",
