@@ -243,6 +243,15 @@ export type DegradationKind =
 	 */
 	| "blocker-position-unaligned"
 	/**
+	 * `blocker-repeat-capped`: #5532: a live inline blocker the session did not clear was delivered in full
+	 * `BLOCKER_FULL_DELIVERY_CAP` times, so later deliveries get a one-line
+	 * pointer instead (`consumeTurnEndFindings`). The blocker stays in
+	 * `lens_diagnostics` and the commit gate. Subject is
+	 * `inline-blocker-repeat:<file>`; counted, written on the blocker's first
+	 * delivered pointer only.
+	 */
+	| "blocker-repeat-capped"
+	/**
 	 * `bounded-pid-lock-wait-skipped`: #3594: `acquireBoundedPidFileLock`'s wait (the durable-store sync
 	 * waiter) was skipped because the same top-generation holder an earlier
 	 * wait ran out on is still there. The call falls back at once, same as

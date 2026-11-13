@@ -73,10 +73,16 @@ import {
 } from "../../clients/git-guard.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import {
+	AUTOMATION_FRAMING,
+	BLOCKER_CAPPED_MARK,
 	BLOCKER_REPEAT_HEADING,
 	consumeTurnEndFindings,
 } from "../../clients/runtime-context.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { RUNTIME_CONFIG } from "../../clients/runtime-config.js";
+import {
+	BLOCKER_FULL_DELIVERY_CAP,
+	RuntimeCoordinator,
+} from "../../clients/runtime-coordinator.js";
 import { beginScope, retireScope } from "../../clients/session-scope.js";
 import {
 	cancelLSPIdleReset,
@@ -1143,6 +1149,10 @@ describe("M3d: late auxiliary coverage vs the cap (#3813)", () => {
 			while (pendingAuxiliaryCoverageSize() > 0 && turns < 20) {
 				turns += 1;
 				nextTurn(rig, turns);
+				// A blocker delivered in full 3 times collapses to a one-line pointer
+				// (#5532), which would free the pair; raising it afresh each turn keeps
+				// the premise, a filler that fills the message on every turn.
+				fillerBlocker(rig, 1000);
 				const message = await endTurn(rig);
 				if (message) messages.push(message);
 			}
@@ -2445,8 +2455,10 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 				await readOnlyTurn(rig);
 				expect(take(rig, false)).toBeUndefined();
 				const repeat = take(rig, true);
-				expect(repeat).toContain(BLOCKER_REPEAT_HEADING);
-				expect(repeat).toContain("Unresolved from this turn — filler.ts");
+				// One blank line under the heading (#5532 review r2 N5: it had two).
+				expect(repeat).toContain(
+					`${BLOCKER_REPEAT_HEADING}\n\nUnresolved from this turn — filler.ts`,
+				);
 				// The wording of "the workspace changed" is not borrowed.
 				expect(repeat).not.toContain("Historical finding");
 				expect(take(rig, true)).toBeUndefined();
@@ -2457,6 +2469,174 @@ describe("#5240: a duplicate turn end stages a repeat of its live blockers", () 
 			}
 		});
 	}
+
+	it("counts a delivery only for a blocker the turn end showed, not one it held back", async () => {
+		// RECURRENCE GUARDED: #5532 count site. A blocker cut whole by the turn-end
+		// cap was counted as delivered, so a blocker the model never saw collapsed
+		// to a pointer the first turn it had room.
+		const rig = makeRig("pi-lens-5532-held-");
+		try {
+			fillerBlocker(rig, 1000);
+			linesBlocker(rig, "second.ts", 400, 4);
+			const texts: string[] = [];
+			for (let turn = 1; turn <= 4; turn++) {
+				if (turn > 1) nextTurn(rig, turn);
+				texts.push(await endTurn(rig));
+			}
+			// The filler fills the cap: the second blocker is held for 3 turns.
+			for (const text of texts.slice(0, 3))
+				expect(text).not.toContain("second.ts");
+			// The filler collapses after its 3rd delivery; the second is now shown in
+			// full, its own count never having moved.
+			expect(texts[3]).toContain("Unresolved from this turn — second.ts");
+			expect(texts[3]).toContain(`filler.ts: ${BLOCKER_CAPPED_MARK}`);
+		} finally {
+			rig.cleanup();
+		}
+	});
+
+	const freshTurnEnds = async (mcp: boolean): Promise<void> => {
+		// RECURRENCE GUARDED: #5532 review r1 F1. A fresh turn end (the set
+		// changed) re-sent every live blocker in full, so the cap on the repeat
+		// alone left a stuck blocker at 28 full deliveries in 21 prompts. The MCP
+		// host (`deliveryAddress`) keeps its blockers whole, as for repeats.
+		const rig = makeRig("pi-lens-5532-fresh-");
+		try {
+			fillerBlocker(rig, 300);
+			const delivered: string[] = [];
+			for (let turn = 1; turn <= 5; turn++) {
+				// A different side blocker each turn changes the set, so the turn end
+				// is fresh, never a duplicate.
+				const side = touch(rig, `side-${turn}.ts`);
+				rig.runtime.recordInlineBlockers(
+					side,
+					`side blocker ${turn}`,
+					rig.runtime.nextWriteIndex(),
+					["eslint"],
+					[1],
+				);
+				rig.runtime.beginTurn();
+				await handleTurnEnd({
+					...makeDeps(
+						rig.runtime,
+						rig.cacheManager,
+						rig.cwd,
+						undefined,
+						rig.lensGuard,
+					),
+					...(mcp ? { deliveryAddress: "host-address" } : {}),
+				});
+				delivered.push(
+					consumeTurnEndFindings(rig.cacheManager, rig.cwd, rig.runtime)
+						?.messages?.[0]?.content ?? "",
+				);
+				rig.runtime.clearInlineBlockers(side, rig.runtime.nextWriteIndex());
+			}
+			// A turn end can stay silent (it dedupes against the last one); judge
+			// the deliveries that reached the agent.
+			const reached = delivered.flatMap((text) => (text === "" ? [] : [text]));
+			expect(reached.length).toBeGreaterThanOrEqual(4);
+			const full = reached.map((text) =>
+				text.includes("Unresolved from this turn — filler.ts"),
+			);
+			const collapsed = reached.map((text) =>
+				text.includes(BLOCKER_CAPPED_MARK),
+			);
+			expect(full.slice(0, 4)).toEqual(
+				mcp ? [true, true, true, true] : [true, true, true, false],
+			);
+			expect(collapsed.slice(0, 4)).toEqual(
+				mcp ? [false, false, false, false] : [false, false, false, true],
+			);
+		} finally {
+			rig.cleanup();
+		}
+	};
+	it("collapses a blocker delivered in full 3 times by a fresh turn end", () =>
+		freshTurnEnds(false));
+	it("keeps a blocker whole on a fresh turn end under the MCP address", () =>
+		freshTurnEnds(true));
+
+	/** A live blocker whose section is `Unresolved from this turn — <name>:\n<body>`, its body unique. */
+	function namedBlocker(rig: Rig, name: string, chars: number) {
+		const file = touch(rig, name);
+		const prefix = `Unresolved from this turn — ${name}:\n`;
+		const body = `${name} `.padEnd(chars - prefix.length, "z");
+		rig.runtime.recordInlineBlockers(
+			file,
+			body,
+			rig.runtime.nextWriteIndex(),
+			["eslint"],
+			[1],
+		);
+		return { file, section: `${prefix}${body}` };
+	}
+
+	const cappedRepeat = async (count: number): Promise<void> => {
+		// RECURRENCE GUARDED: #5532 review r2 N1. The repeat joined the pointer
+		// lines of collapsed blockers outside `capTurnEndMessage`: 12 stuck
+		// blockers made a 2016-char repeat and 300 a 49,736-char one, on every
+		// prompt (master's repeat: 1000 chars).
+		const rig = makeRig("pi-lens-5532-n1-");
+		try {
+			for (let index = 0; index < count; index++) {
+				const name = `stuck-${index}.ts`;
+				const { file } = namedBlocker(rig, name, 120);
+				for (let n = 0; n < BLOCKER_FULL_DELIVERY_CAP; n++)
+					rig.runtime.recordBlockerDelivery(file, "full", name);
+			}
+			await endTurn(rig);
+			await readOnlyTurn(rig);
+			const repeat = take(rig, true) ?? "";
+			expect(repeat).toContain(`stuck-0.ts: ${BLOCKER_CAPPED_MARK}`);
+			const text = repeat.slice(AUTOMATION_FRAMING.length);
+			const { maxChars, maxLines } = RUNTIME_CONFIG.turnEnd;
+			expect(text.length).toBeLessThanOrEqual(
+				maxChars + "\n... (truncated)".length,
+			);
+			expect(text.split("\n").length).toBeLessThanOrEqual(maxLines + 1);
+		} finally {
+			rig.cleanup();
+		}
+	};
+	it("caps a repeat of 12 collapsed blockers like any turn-end message", () =>
+		cappedRepeat(12));
+	it("caps a repeat of 300 collapsed blockers like any turn-end message", () =>
+		cappedRepeat(300));
+
+	it("counts a repeat only for the blockers its text carried in full", async () => {
+		// RECURRENCE GUARDED: #5532 review r2 N2. The repeat's consume counted
+		// every live blocker of the session, so with 12 stuck blockers the ones
+		// the capped text never carried reached the cap unseen and read "already
+		// reported".
+		const rig = makeRig("pi-lens-5532-n2-");
+		try {
+			const blockers = Array.from({ length: 12 }, (_, index) =>
+				namedBlocker(rig, `stuck-${index}.ts`, 150),
+			);
+			const texts = [await endTurn(rig)];
+			for (let prompt = 0; prompt < 5; prompt++) {
+				await readOnlyTurn(rig);
+				texts.push(take(rig, true) ?? "");
+			}
+			for (const [index, { file, section }] of blockers.entries()) {
+				let shown = 0;
+				for (const text of texts) {
+					// A pointer only after its 3 full deliveries.
+					if (text.includes(`stuck-${index}.ts: ${BLOCKER_CAPPED_MARK}`))
+						expect(shown, `stuck-${index}.ts`).toBe(BLOCKER_FULL_DELIVERY_CAP);
+					if (text.includes(section)) shown += 1;
+				}
+				expect(rig.runtime.blockerFullDeliveryCapped(file)).toBe(
+					shown >= BLOCKER_FULL_DELIVERY_CAP,
+				);
+			}
+			// The cap freed room: the blockers the first deliveries cut were shown.
+			expect(texts.at(-1)).toContain(blockers[11]?.section);
+		} finally {
+			rig.cleanup();
+		}
+	});
 
 	it("stages no repeat for a duplicate turn that holds no blocker", async () => {
 		// RECURRENCE GUARDED: #5240. A drift-demoted blocker is an advisory, not a
