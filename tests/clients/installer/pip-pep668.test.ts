@@ -116,6 +116,32 @@ exit 1
 	);
 }
 
+function writeFakePython314(binDir: string): void {
+	writeExecutable(
+		path.join(binDir, "python3"),
+		`#!/bin/sh
+exit 1
+`,
+	);
+	writeExecutable(
+		path.join(binDir, "pip3"),
+		`#!/bin/sh
+case "$*" in
+  *"cmake-language-server>=0.1.11"*)
+    echo "ERROR: Could not find a version for Python 3.14.4 that satisfies cmake-language-server>=0.1.11 (from versions: 0.1.5)" >&2
+    echo "ERROR: Package 'cmake-language-server' requires a different Python: 3.14.4 not in '<3.14,>=3.8.0'" >&2
+    exit 1
+    ;;
+esac
+bin_dir="$FAKE_USER_BASE/bin"
+/bin/mkdir -p "$bin_dir"
+printf '#!/bin/sh\necho cmake-language-server 0.1.5\n' > "$bin_dir/cmake-language-server"
+/bin/chmod 750 "$bin_dir/cmake-language-server"
+exit 0
+`,
+	);
+}
+
 function writeFakePythonUserInstall(binDir: string): void {
 	writeExecutable(
 		path.join(binDir, "python3"),
@@ -197,6 +223,26 @@ afterEach(() => {
 });
 
 describe("real pip installer PEP 668 strategy selection (#2916)", () => {
+	it("refuses cmake-language-server on Python 3.14 with one visible degradation", async () => {
+		const root = scratchDir();
+		const bin = path.join(root, "bin");
+		fs.mkdirSync(bin, { recursive: true });
+		writeFakePython314(bin);
+
+		const result = await runInstaller(root, bin, "cmake-language-server", {
+			FAKE_USER_BASE: path.join(root, "user-base"),
+		});
+
+		expect(result.result.installed).toBe(false);
+		expect(result.result.resolved).toBeUndefined();
+		expect(result.result.reason).toContain("3.14.4");
+		const installRows = result.result.summary.filter(
+			(entry: { kind: string }) => entry.kind === "managed-tool-install",
+		);
+		expect(installRows).toHaveLength(1);
+		expect(installRows[0]?.latestReasons?.[0]?.reason).toContain("3.14.4");
+	});
+
 	it("uses pipx before other pip strategies", async () => {
 		const root = scratchDir();
 		const bin = path.join(root, "bin");

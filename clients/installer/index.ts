@@ -976,7 +976,7 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "cmake-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "pip",
-		packageName: "cmake-language-server",
+		packageName: "cmake-language-server>=0.1.11",
 		binaryName: "cmake-language-server",
 		// Upstream 0.1.11 (the latest release) imports `LanguageServer` from
 		// `pygls.server`, a symbol pygls 2 removed, while declaring only
@@ -5768,6 +5768,11 @@ function recordPackageManagerInstallException(
 	err: unknown,
 ): undefined {
 	const message = boundInstallError((err as Error).message);
+	recordDegradationOnce({
+		kind: "managed-tool-install",
+		subject: toolId,
+		reason: message,
+	});
 	logSessionStart(
 		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
 	);
@@ -6259,7 +6264,7 @@ async function installPipTool(
 					? ["upgrade", packageName]
 					: ["install", "--force", packageName],
 			);
-			const error = (result.error?.message ?? result.stderr).trim();
+			const error = (result.stderr || result.error?.message || "").trim();
 			if (result.status === 0) {
 				const location = await run("pipx", [
 					"environment",
@@ -6314,7 +6319,7 @@ async function installPipTool(
 				}
 			}
 			const result = await run(venvPip, [...verb, packageName]);
-			const error = (result.error?.message ?? result.stderr).trim();
+			const error = (result.stderr || result.error?.message || "").trim();
 			if (result.status === 0) {
 				const binaryPath = await addBinToPath(venvBin);
 				if (binaryPath) return succeeded("venv", binaryPath);
@@ -6333,7 +6338,7 @@ async function installPipTool(
 					? [...verb, "--user", packageName]
 					: ["-m", "pip", ...verb, "--user", packageName];
 			const result = await run(candidate.command, args);
-			const error = (result.error?.message ?? result.stderr).trim();
+			const error = (result.stderr || result.error?.message || "").trim();
 			if (result.status === 0) {
 				const base = await probeUserBase(candidate.command);
 				const binaryPath = base
@@ -6345,7 +6350,13 @@ async function installPipTool(
 				return succeeded("user", binaryPath ?? packageName);
 			}
 			const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-			candidateErrors.push(candidateError);
+			const pythonVersion = error.match(
+				/requires a different Python:\s*([0-9][^\s]*)/i,
+			)?.[1];
+			const candidateErrorWithPython = pythonVersion
+				? `${candidateError} (Python ${pythonVersion})`
+				: candidateError;
+			candidateErrors.push(candidateErrorWithPython);
 			if (pep668.test(error)) {
 				userRefused = true;
 				refuse("user", error);
@@ -6371,10 +6382,17 @@ async function installPipTool(
 							packageName,
 						];
 			const result = await run(candidate.command, args, privateEnv);
-			const error = (result.error?.message ?? result.stderr).trim();
+			const error = (result.stderr || result.error?.message || "").trim();
 			if (result.status !== 0) {
 				const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-				candidateErrors.push(candidateError);
+				const pythonVersion = error.match(
+					/requires a different Python:\s*([0-9][^\s]*)/i,
+				)?.[1];
+				candidateErrors.push(
+					pythonVersion
+						? `${candidateError} (Python ${pythonVersion})`
+						: candidateError,
+				);
 				continue;
 			}
 			const binaryPath = await addBinToPath(

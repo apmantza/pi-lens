@@ -46,7 +46,7 @@ jobs:
     # dispatch on any ref may run it; the data-branch push and the red-night
     # issue are the guarded writer jobs below (#4030 F1: a branch dispatch once
     # reached the push with unreviewed rollup code).
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # #4030: bounds a hang against GitHub's 360-min default. Measured from a
     # dev host: listing plus 194 ZIPs took 361 s (about 1.7 s a ZIP), and the
     # rollup of 191 new parts 3.4 s. At the nightly cap (100 shard-era runs,
