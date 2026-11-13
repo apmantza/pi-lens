@@ -1414,9 +1414,10 @@ export type DegradationKind =
 	 */
 	| "madge-skip-visibility-unavailable"
 	/**
-	 * `managed-tool-install`: #3071: a managed-tool archive extraction (tgz/zip) failed —
-	 * `clients/installer/index.ts`'s `recordArchiveExtractionDegradation`.
-	 * Subject is `<toolId>:<format>`, reason names the extraction failure.
+	 * `managed-tool-install`: #5561: a managed pip-tool install threw after
+	 * its strategy ladder was exhausted. `clients/installer/index.ts` records
+	 * the tool id and bounded install failure; npm/gem failures use their own
+	 * existing install logs and lock-loss has its dedicated kind.
 	 */
 	| "managed-tool-install"
 	/**

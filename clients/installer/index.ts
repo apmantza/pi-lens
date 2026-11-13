@@ -976,7 +976,7 @@ export const TOOLS: ToolDefinition[] = [
 		checkCommand: "cmake-language-server",
 		checkArgs: ["--version"],
 		installStrategy: "pip",
-		packageName: "cmake-language-server",
+		packageName: "cmake-language-server>=0.1.11",
 		binaryName: "cmake-language-server",
 		// Upstream 0.1.11 (the latest release) imports `LanguageServer` from
 		// `pygls.server`, a symbol pygls 2 removed, while declaring only
@@ -5751,8 +5751,8 @@ async function installArchiveTool(
 }
 
 /**
- * Record a genuine package-manager install exception against `toolId` and
- * log it — the one place `installNpmTool`/`installPipTool`/`installGemTool`'s
+ * Record a genuine pip package-manager install exception against `toolId` and
+ * log it — the one place `installPipTool`'s
  * catch blocks funnel through (#2661 review F3/Sonar: the three catches were
  * byte-identical but for the strategy label, a duplication SonarCloud's new-
  * code gate correctly flagged). The real error (registry E404, EBADENGINE, a
@@ -5766,8 +5766,15 @@ function recordPackageManagerInstallException(
 	strategyLabel: string,
 	packageName: string,
 	err: unknown,
+	recordManagedToolInstall = true,
 ): undefined {
 	const message = boundInstallError((err as Error).message);
+	if (recordManagedToolInstall && !(err instanceof InstallLockLostError))
+		recordDegradationOnce({
+			kind: "managed-tool-install",
+			subject: toolId,
+			reason: message,
+		});
 	logSessionStart(
 		`auto-install ${strategyLabel} ${packageName}: exception: ${message}`,
 	);
@@ -5775,8 +5782,9 @@ function recordPackageManagerInstallException(
 	return undefined;
 }
 
-const INSTALL_ERROR_LINE_LIMIT = 1000;
+const INSTALL_ERROR_LINE_LIMIT = 5000;
 const INSTALL_CANDIDATE_ERROR_LIMIT = 200;
+const PEP668_LOG_ERROR_LIMIT = 1000;
 
 function boundInstallError(
 	value: string,
@@ -6028,6 +6036,9 @@ async function installNpmTool(
 			"npm",
 			packageName,
 			err,
+			// Pass lock loss through the shared helper so its dedicated exclusion
+			// remains the single guard against a duplicate managed-install row.
+			err instanceof InstallLockLostError,
 		);
 	}
 }
@@ -6174,7 +6185,7 @@ async function installPipTool(
 			if (pipPep668LoggedRefusals.current(logKey) === 0) {
 				pipPep668LoggedRefusals.bump(logKey);
 				logSessionStart(
-					`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${boundInstallError(reason)})`,
+					`auto-install pip ${packageName}: ${strategy} refused by PEP 668 (${boundInstallError(reason, PEP668_LOG_ERROR_LIMIT)})`,
 				);
 			}
 		};
@@ -6208,6 +6219,44 @@ async function installPipTool(
 				}).cwd,
 				...(spawnEnv ? { env: spawnEnv } : {}),
 			});
+		};
+		const pythonReleaseFor = async (
+			command: string,
+		): Promise<string | undefined> => {
+			const interpreter =
+				command === "pip3" ? "python3" : command === "pip" ? "python" : command;
+			const pipProbe = await run(command, ["--version"]);
+			const pipRelease = `${pipProbe.stdout}\n${pipProbe.stderr}`.match(
+				/(?:python|Python)\s+([0-9]+(?:\.[0-9]+){1,2})/,
+			)?.[1];
+			if (pipRelease) return pipRelease;
+			if (interpreter === command) return undefined;
+			const interpreterProbe = await run(interpreter, ["--version"]);
+			return `${interpreterProbe.stdout}\n${interpreterProbe.stderr}`.match(
+				/^Python\s+([0-9]+(?:\.[0-9]+){1,2})/m,
+			)?.[1];
+		};
+		const candidateFailure = async (
+			command: string,
+			args: string[],
+			failureText: string,
+		): Promise<string> => {
+			const pythonRelease = await pythonReleaseFor(command);
+			const error = failureText;
+			const requiresPython = error.match(
+				/ERROR:\s+Ignored[^\r\n]*Requires-Python[^\r\n]*/i,
+			)?.[0];
+			const tail = requiresPython
+				? error.replace(requiresPython, "").trim()
+				: error;
+			const evidence: string[] = [];
+			if (pythonRelease) evidence.push(`Python ${pythonRelease}`);
+			if (requiresPython)
+				evidence.push(
+					boundInstallError(requiresPython, INSTALL_CANDIDATE_ERROR_LIMIT),
+				);
+			evidence.push(boundInstallError(tail, INSTALL_CANDIDATE_ERROR_LIMIT));
+			return `${command} ${args.join(" ")}: ${evidence.join(" | ")}`;
 		};
 		const addBinToPath = async (
 			binDir: string,
@@ -6344,8 +6393,9 @@ async function installPipTool(
 				// resolution through PATH and its user-base candidates.
 				return succeeded("user", binaryPath ?? packageName);
 			}
-			const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-			candidateErrors.push(candidateError);
+			candidateErrors.push(
+				await candidateFailure(candidate.command, args, error),
+			);
 			if (pep668.test(error)) {
 				userRefused = true;
 				refuse("user", error);
@@ -6373,8 +6423,9 @@ async function installPipTool(
 			const result = await run(candidate.command, args, privateEnv);
 			const error = (result.error?.message ?? result.stderr).trim();
 			if (result.status !== 0) {
-				const candidateError = `${candidate.command} ${args.join(" ")}: ${boundInstallError(error, INSTALL_CANDIDATE_ERROR_LIMIT)}`;
-				candidateErrors.push(candidateError);
+				candidateErrors.push(
+					await candidateFailure(candidate.command, args, error),
+				);
 				continue;
 			}
 			const binaryPath = await addBinToPath(
@@ -6431,6 +6482,7 @@ async function installGemTool(
 			"gem",
 			packageName,
 			err,
+			err instanceof InstallLockLostError,
 		);
 	}
 }

@@ -241,7 +241,7 @@ jobs:
   # publishes. `pull-requests: read` is the promotion step's `gh pr list`.
   tool-smoke:
     name: Live tool + LSP smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # refs #3123: bounds a hang against GitHub's 360-min default.
     # Measured max over last 10 successful master runs: 855s (14m15s); sized at
     # ~2x + margin.
