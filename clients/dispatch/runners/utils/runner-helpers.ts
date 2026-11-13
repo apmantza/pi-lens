@@ -2036,6 +2036,32 @@ export async function resolveToolCommandWithInstallFallback(
 	);
 }
 
+/** What a ladder that never probed (or an id with no spec) reports. */
+const UNPROBED_VERDICT: AvailabilityVerdict = {
+	outcome: null,
+	cause: null,
+	elapsedMs: 0,
+	latched: false,
+	retryAtMs: 0,
+};
+
+/**
+ * What the registry ladder last decided for `toolId` at `cwd`, for a runner
+ * that words its own failure from the typed verdict (the helm and trivy
+ * passes) instead of returning `toolAbsentSkip`. Reads the checker
+ * `resolveToolCommandWithInstallFallback` probed through, so it never triggers
+ * a probe of its own; an id with no spec reads as never probed (#5410).
+ */
+export function toolBinaryVerdict(
+	toolId: string,
+	cwd: string,
+): AvailabilityVerdict {
+	return (
+		toolBinaryChecker(toolId, "managed-first")?.getVerdict(cwd) ??
+		UNPROBED_VERDICT
+	);
+}
+
 /**
  * What a formatter's lookup of a tool found: the binary, or `null`. When the
  * tool is present but failed its version check and no later rung replaced it,

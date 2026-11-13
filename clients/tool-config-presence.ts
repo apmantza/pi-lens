@@ -83,7 +83,8 @@ export type ToolConfigId =
 	| "terraform"
 	| "swiftformat"
 	| "fantomas"
-	| "mixFormat";
+	| "mixFormat"
+	| "ktfmt";
 
 /** Where the config was found, and what kind of evidence it is. */
 export interface ToolConfigHit {
@@ -415,6 +416,10 @@ const TOOL_CONFIG_SPECS: Readonly<Record<ToolConfigId, ToolConfigSpec>> = {
 	fantomas: { files: [".fantomasignore", ".editorconfig"] },
 	// `.formatter.exs` is what `mix format` reads project config from.
 	mixFormat: { files: [".formatter.exs"] },
+	// ktfmt has no native config file; these are pi-lens opt-in markers. The
+	// other ktfmt evidence (a Spotless block, a Gradle mention) is a value read
+	// in `tool-policy.ts`, which climbs `toolConfigDirs`.
+	ktfmt: { files: [".ktfmt", ".ktfmt.kts"] },
 };
 
 /** PEP 503 name: case-insensitive, runs of `-`, `_`, `.` are one. */
@@ -709,27 +714,45 @@ export function findToolConfig(
 	return undefined;
 }
 
+/**
+ * The directories a config climb visits, nearest first, under the stop rule in
+ * the header: through `$HOME` inclusive (or the caller's `ceiling`), never past
+ * it. {@link findToolConfig} climbs it for the presence evidence a spec names;
+ * a reader that must read a VALUE out of the config (the oxfmt `svelte` flag,
+ * the Spotless block that elects ktlint or ktfmt, the ktfmt Gradle mention)
+ * climbs it for the directories and keeps its own read, so no reader owns a
+ * second stop rule (#5408).
+ */
+export function* toolConfigDirs(
+	startDir: string,
+	options: ToolConfigOptions = {},
+): Generator<string> {
+	const home = realpathOrResolve(options.homeDir ?? os.homedir());
+	const ceiling =
+		options.ceiling === undefined
+			? undefined
+			: realpathOrResolve(options.ceiling);
+	for (const dir of walkUpDirs(startDir)) {
+		yield dir;
+		if (pathsEqual(dir, home)) return;
+		if (ceiling !== undefined && pathsEqual(dir, ceiling)) return;
+	}
+}
+
 function climbForSpec(
 	spec: ToolConfigSpec,
 	startDir: string,
 	options: ToolConfigOptions,
 ): ToolConfigHit | undefined {
 	if (spec.exactDir) return findInDir(spec, realpathOrResolve(startDir));
-	const home = realpathOrResolve(options.homeDir ?? os.homedir());
-	const ceiling =
-		options.ceiling === undefined
-			? undefined
-			: realpathOrResolve(options.ceiling);
 	let pastPackage = false;
-	for (const dir of walkUpDirs(startDir)) {
+	for (const dir of toolConfigDirs(startDir, options)) {
 		const hit =
 			findInDir(spec, dir) ??
 			(spec.withinNearestPackage && !pastPackage
 				? findInDir(spec.withinNearestPackage, dir)
 				: undefined);
 		if (hit) return hit;
-		if (pathsEqual(dir, home)) return undefined;
-		if (ceiling !== undefined && pathsEqual(dir, ceiling)) return undefined;
 		if (fs.existsSync(path.join(dir, "package.json"))) pastPackage = true;
 	}
 	return undefined;

@@ -10,7 +10,6 @@
  * that haven't opted in.
  */
 
-import { toolAbsentSkip } from "./utils/runner-helpers.js";
 import { skipped } from "../types.js";
 import { hasToolConfig } from "../../tool-config-presence.js";
 import * as path from "node:path";
@@ -26,13 +25,11 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import {
-	createAvailabilityChecker,
-	resolveAvailableOrInstall,
+	resolveToolCommandWithInstallFallback,
+	toolAbsentSkip,
 } from "./utils/runner-helpers.js";
 import { finishParsedRun, parseToolRun } from "./utils/tool-failure.js";
 import { semanticFor } from "../types.js";
-
-const golangci = createAvailabilityChecker("golangci-lint", ".exe");
 
 /** Every `golangci-lint run` output format except json (2.14.0 `run --help`). */
 const OTHER_OUTPUT_FORMATS = [
@@ -170,9 +167,11 @@ const golangciRunner: RunnerDefinition = {
 			return skipped("not-configured");
 		}
 
-		const cmd = await resolveAvailableOrInstall(golangci, "golangci-lint", cwd);
-		if (!cmd)
-			return toolAbsentSkip(cwd, { id: "golangci-lint", checker: golangci });
+		const cmd = await resolveToolCommandWithInstallFallback(
+			cwd,
+			"golangci-lint",
+		);
+		if (!cmd) return toolAbsentSkip(cwd, { id: "golangci-lint" });
 
 		// Run on the specific file. golangci-lint accepts file paths directly.
 		// v2 (the major the installer downloads) removed `--out-format`: it exits
