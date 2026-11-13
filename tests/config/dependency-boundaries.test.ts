@@ -175,6 +175,9 @@ describe("dependency boundary governance", () => {
 			),
 		) as string[];
 
+		// The exact list: order and duplicates count, as they did before the
+		// row-comparison cells below (#5546 N2).
+		expect(eagerAllowlist).toEqual(resolvedStaticImports);
 		// Both directions: a listed module index.ts no longer imports eagerly,
 		// and an eager import the allowlist does not list.
 		const imported = new Set(resolvedStaticImports);
