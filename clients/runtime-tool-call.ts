@@ -671,7 +671,11 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// file it is about to change takes the pre-edit seed here, before the write
 	// and before the baselines below, so the files a capture may create (a
 	// rules cache) are not part of the diff those baselines are taken for.
-	const writerPaths = namedWriterPaths(deps, toolName);
+	// A provider's replay is a card for work already done (#5160): its file
+	// holds the post-write bytes, which no seed may describe.
+	const writerPaths = isProviderReplayCall(event)
+		? []
+		: namedWriterPaths(deps, toolName);
 	if (writerPaths.length > 0)
 		await captureWriterSeeds(
 			namedWriterTargets(writerPaths, runtime.projectRoot),

@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	MAX_PRE_EDIT_SEED_FINDINGS,
+	classifyPreExisting,
 	seedFromCapture,
 } from "../../../clients/dispatch/pre-edit-seed.js";
 import type { Diagnostic } from "../../../clients/dispatch/types.js";
@@ -72,5 +73,55 @@ describe("seedFromCapture", () => {
 			"ast-grep-napi",
 			"tree-sitter",
 		]);
+	});
+
+	// Recurrence prevented (#5583 review F1): a whole-file seed entry of an
+	// edit-gated lane excused an identical blocker a host `edit` added 30 lines
+	// away, because that edit's dispatch reports only its touched lines. Real
+	// `classifyPreExisting`, no double.
+	describe("classifyPreExisting for an edit-gated lane's whole-file entry", () => {
+		const content = "BAD_SH\nok\nBAD_SH\n";
+		const seeded = (runnerIds: string[]) =>
+			seedFromCapture(
+				runnerIds.map((id) => finding(1, id)),
+				content,
+				true,
+			);
+		const answered = new Set(["shellcheck", "tree-sitter"]);
+
+		it("classifies a dispatch that read the whole file", () => {
+			const { preExisting, nextSeed } = classifyPreExisting(
+				seeded(["tree-sitter"]),
+				[finding(1, "tree-sitter")],
+				content,
+				answered,
+			);
+			expect(preExisting.map((d) => d.runnerId)).toEqual(["tree-sitter"]);
+			expect(nextSeed).toHaveLength(1);
+		});
+
+		// A write's span is the whole file: the lane reports every finding.
+		it("classifies a dispatch whose span covers every line", () => {
+			const { preExisting } = classifyPreExisting(
+				seeded(["tree-sitter"]),
+				[finding(1, "tree-sitter")],
+				content,
+				answered,
+				[{ start: 1, end: 4 }],
+			);
+			expect(preExisting.map((d) => d.runnerId)).toEqual(["tree-sitter"]);
+		});
+
+		it("classifies nothing and keeps nothing of the lane for a dispatch with an edit span", () => {
+			const { preExisting, nextSeed } = classifyPreExisting(
+				seeded(["tree-sitter", "shellcheck"]),
+				[finding(3, "tree-sitter"), finding(1, "shellcheck")],
+				content,
+				answered,
+				[{ start: 3, end: 3 }],
+			);
+			expect(preExisting.map((d) => d.runnerId)).toEqual(["shellcheck"]);
+			expect(nextSeed.map((d) => d.runnerId)).toEqual(["shellcheck"]);
+		});
 	});
 });

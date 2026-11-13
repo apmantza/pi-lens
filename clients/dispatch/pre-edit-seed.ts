@@ -15,7 +15,8 @@
  * keep their first-write behaviour, so the seed is never captured from them
  * and never classifies their findings. One exception (#5553): a writer that
  * names no edit span (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`) also seeds the two
- * edit-gated lanes, because those lanes read its whole file.
+ * edit-gated lanes, because those lanes read its whole file; their entries
+ * classify only a dispatch that read the whole file too (`classifyPreExisting`).
  *
  * Identity: content, not position. A seeded finding matches a current one of
  * the same `foldedFindingIdentity` on a line with the seeded line's text
@@ -33,7 +34,7 @@
  */
 import { ANY_POSITION, retainRecordedFindings } from "../finding-identity.js";
 import { lineHashOf, stampLineHashes } from "../line-alignment.js";
-import type { Diagnostic } from "./types.js";
+import type { Diagnostic, ModifiedRange } from "./types.js";
 
 /**
  * The dispatch runners whose findings the seed covers: the lanes
@@ -67,6 +68,17 @@ export const PRE_EDIT_SEED_RUNNER_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * #5553 r2: the two lanes whose findings a dispatch with an edit span reports
+ * only near the touched lines. Their seed entries describe the whole file, so
+ * they classify a dispatch that read the whole file and no other
+ * (`classifyPreExisting`).
+ */
+const PRE_EDIT_EDIT_GATED_RUNNER_IDS: ReadonlySet<string> = new Set([
+	"ast-grep-napi",
+	"tree-sitter",
+]);
+
+/**
  * #5553: the lanes a writer with no edit span seeds. A host `edit` carries its
  * touched lines, so the two edit-span-gated lanes (ast-grep, tree-sitter) judge
  * only those lines and need no seed. `ast_grep_replace`, `sed -i`, an
@@ -79,8 +91,7 @@ export const PRE_EDIT_SEED_RUNNER_IDS: ReadonlySet<string> = new Set([
  */
 export const PRE_EDIT_SEED_SPANLESS_RUNNER_IDS: ReadonlySet<string> = new Set([
 	...PRE_EDIT_SEED_RUNNER_IDS,
-	"ast-grep-napi",
-	"tree-sitter",
+	...PRE_EDIT_EDIT_GATED_RUNNER_IDS,
 ]);
 
 /** Whether `runnerId`'s findings are seeded for a writer with or without a span. */
@@ -127,6 +138,19 @@ export function seedFromCapture(
 	).filter((d) => d.lineHash !== undefined);
 }
 
+/** Whether `ranges` together cover lines 1 to `lineCount`. */
+function coversEveryLine(
+	ranges: readonly ModifiedRange[],
+	lineCount: number,
+): boolean {
+	let next = 1;
+	for (const r of [...ranges].sort((a, b) => a.start - b.start)) {
+		if (r.start > next) return false;
+		next = Math.max(next, r.end + 1);
+	}
+	return next > lineCount;
+}
+
 /**
  * Split `current` (this dispatch's blocking findings) into the ones the seed
  * holds and the rest, and return the seed the next dispatch reads.
@@ -134,26 +158,46 @@ export function seedFromCapture(
  * `answered` is the set of runners that reached a verdict in this dispatch:
  * a seeded entry whose runner did not stays seeded. A matched entry is
  * replaced by its current copy, stamped with its line in `content`.
+ *
+ * `modifiedRanges` is the dispatch's edit span. A span that leaves lines of
+ * `content` out (a host `edit`) makes the edit-gated lanes report only the
+ * lines it touched, so the seed's whole-file entries of those lanes cannot
+ * tell an inherited finding from an identical one the edit added 30 lines
+ * away, and a stale entry (a no-op writer's, a read-only tool's, a line the
+ * edit fixed) would excuse it. Such a dispatch neither classifies by them nor
+ * keeps them; a later whole-file dispatch is judged without them, as before
+ * #5553 (fail closed, #5583 review F1). No span, or one that covers every line
+ * (a write's), is a whole-file dispatch: it reports every finding, so the
+ * count rule above refuses the extra one.
  */
 export function classifyPreExisting(
 	seed: readonly Diagnostic[],
 	current: readonly Diagnostic[],
 	content: string,
 	answered: ReadonlySet<string>,
+	modifiedRanges?: readonly ModifiedRange[],
 ): { preExisting: Diagnostic[]; nextSeed: Diagnostic[] } {
-	let lines: string[] | undefined;
+	const lines = content.split(/\r?\n/);
 	const hashAt = (line: number | undefined): number | undefined => {
 		if (line === undefined) return undefined;
-		lines ??= content.split(/\r?\n/);
 		const text = lines[line - 1];
 		return text === undefined ? undefined : lineHashOf(text);
 	};
+	const spanGated =
+		modifiedRanges !== undefined &&
+		modifiedRanges.length > 0 &&
+		!coversEveryLine(modifiedRanges, lines.length);
+	const usable = (d: Diagnostic): boolean =>
+		!spanGated ||
+		d.runnerId === undefined ||
+		!PRE_EDIT_EDIT_GATED_RUNNER_IDS.has(d.runnerId);
 	const candidates = current.filter(
 		(d) =>
 			d.runnerId !== undefined &&
-			PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(d.runnerId),
+			PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(d.runnerId) &&
+			usable(d),
 	);
-	const { kept } = retainRecordedFindings(seed, candidates, {
+	const { kept } = retainRecordedFindings(seed.filter(usable), candidates, {
 		positionOf: () => ANY_POSITION,
 		keepUnobserved: (d) =>
 			d.runnerId === undefined || !answered.has(d.runnerId),

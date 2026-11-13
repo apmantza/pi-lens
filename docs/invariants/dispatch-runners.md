@@ -168,7 +168,11 @@
   observational net still arms for it, and a tool learned from one observation.
   These give the dispatch no edit span, so the two edit-gated lanes (ast-grep,
   tree-sitter) read the whole file; their seed joins the linters'
-  (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`, tied to the edit-scope census). A
+  (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`, tied to the edit-scope census). Those
+  two lanes' entries classify only a dispatch that read the whole file: a
+  dispatch with an edit span (a host `edit`) reports the lines it touched, so it
+  neither classifies by them nor keeps them, and an identical blocker the edit
+  adds elsewhere blocks (`classifyPreExisting`, #5583 review F1). A
   writer's written set wider than its named one (a rename's importers, a replace
   over a folder, a rename_file's new path) is not seeded. Proven by
   `tests/index-5553-writer-baselines.test.ts`.
