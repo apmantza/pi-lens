@@ -1,0 +1,399 @@
+// flake-shape: real-process-spawn — the subject is a REAL ast-grep CLI, a real `sed`, a real language-server child and a real `git` repo under a real pi session; a stub could not say whether the bytes a writer changed reached the commit gate with the inherited blocker still counted.
+/**
+ * #5553 witness: a writer that changes a file already holding a committed
+ * blocker is judged on its delta, like a host `edit`.
+ *
+ * Recurrence prevented: only host `write` and `edit` took the pre-edit
+ * baseline (`capturePreEditSeed`, #4483), so an unrelated change through
+ * `ast_grep_replace`, `sed -i`, an unclassified foreign tool or an LSP rename
+ * was judged on the whole file, and `git commit` refused a `debugger;` the
+ * change never added (writer-route audit, 2026-11-13).
+ *
+ * REAL here: the BUILT extension's handlers inside a real pi `AgentSession`,
+ * the dispatcher, the commit gate, a real git repository holding the
+ * committed blocker, the real ast-grep CLI, `sed`, and the fake language
+ * server's real rename. Scripted is the model only, at the provider boundary.
+ */
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Type } from "../clients/deps/typebox.js";
+import { normalizeMapKey } from "../clients/path-utils.js";
+import { useGlobalConfig } from "./support/global-config.js";
+import { gitFixtureEnv } from "./support/git-fixture-env.js";
+import {
+	GATE_BLOCK,
+	GUARDED_FLAGS,
+	RAN_MARKER,
+	commitAttempt,
+	endTurn,
+	readTarget,
+	step,
+	toolResults,
+	warmGuardedSession,
+} from "./support/pi-session-commit-gate.js";
+import {
+	type PiFauxReply,
+	fauxToolCall,
+	piSessionFixture,
+	startPiSession,
+} from "./support/pi-session.js";
+
+const fakeServer = path.join(
+	path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+	"tests",
+	"fixtures",
+	"fake-lsp-server.mjs",
+);
+const fixture = piSessionFixture();
+const setGlobalConfig = useGlobalConfig();
+
+beforeAll(() => warmGuardedSession(fixture.root));
+
+beforeEach(() => {
+	setGlobalConfig({
+		lsp: {
+			serverOverrides: {
+				typescript: {
+					command: [process.execPath, fakeServer],
+					env: { FAKE_LSP_RENAME: "1" },
+				},
+			},
+			disabledServers: [
+				"deno",
+				"ast-grep",
+				"zizmor",
+				"typos",
+				"opengrep",
+				"fallow",
+			],
+			warmFiles: ["no-such-warm-file.ts"],
+		},
+	});
+});
+
+/**
+ * The committed file: its `debugger;` is the inherited blocker. `placeholder;`
+ * is a statement a writer can turn into a second, identical `debugger;`. The
+ * trailing marker is the fake language server's own "clean" switch, so its
+ * fixed diagnostic does not stand in for the blocker under test.
+ */
+const COMMITTED = [
+	"export function f(): number {",
+	"\tconst alpha = 1;",
+	"\tplaceholder;",
+	"\tdebugger;",
+	"\treturn alpha;",
+	"}",
+	"// fake-lsp-clean",
+	"",
+].join("\n");
+/** An unrelated change to a line that is not the blocker's. */
+const UNRELATED = COMMITTED.replace("return alpha;", "return alpha + 1;");
+const RENAMED = COMMITTED.replaceAll("alpha", "beta");
+/** The change that adds a second blocker, its line text equal to the first's. */
+const ADDED = COMMITTED.replace("placeholder;", "debugger;");
+
+/** A project whose `HEAD` holds the file with its blocker. */
+function seedRepo(name: string) {
+	const proj = path.join(fixture.root, name, "proj");
+	const target = path.join(proj, "src", "target.ts");
+	fs.mkdirSync(path.dirname(target), { recursive: true });
+	fs.writeFileSync(path.join(proj, "package.json"), "{}\n");
+	fs.writeFileSync(target, COMMITTED);
+	const git = (...args: string[]) =>
+		execFileSync("git", args, {
+			cwd: proj,
+			env: gitFixtureEnv(proj),
+			stdio: "ignore",
+		});
+	git("init", "-q");
+	git("add", "-A");
+	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base");
+	return { proj, target };
+}
+
+/**
+ * The guarded set with delta on, and autofix on only where a case applies. A
+ * `false` entry deletes the helper's default key (`flagMap` in
+ * support/pi-session.ts), which turns the analyzer back on.
+ */
+function flagsFor(lsp: boolean): Map<string, boolean> {
+	const on = new Set(["no-delta", "no-autofix", ...(lsp ? ["no-lsp"] : [])]);
+	return new Map(
+		GUARDED_FLAGS.map(([name, value]): [string, boolean] => [
+			name,
+			on.has(name) ? false : value,
+		]),
+	);
+}
+
+function foreignWriter(): ToolDefinition {
+	return {
+		name: "foreign_write",
+		label: "Foreign write",
+		description: "Rewrite a file with the bytes given.",
+		parameters: Type.Object({ path: Type.String(), content: Type.String() }),
+		async execute(_id: string, params: { path: string; content: string }) {
+			fs.writeFileSync(params.path, params.content);
+			return {
+				content: [{ type: "text", text: `wrote ${params.path}` }],
+				details: {},
+			};
+		},
+	} as ToolDefinition;
+}
+
+const activate = (tool: string) =>
+	fauxToolCall("pi_lens_activate_tools", { tools: [tool] });
+
+/** One writer: the steps that change the target, and what they leave on disk. */
+interface Writer {
+	readonly name: string;
+	readonly lsp?: true;
+	readonly unrelated: (target: string) => PiFauxReply[];
+	readonly adds: (target: string) => PiFauxReply[];
+	readonly unrelatedBytes: string;
+	readonly addsBytes: string;
+}
+
+const replace = (target: string, pattern: string, rewrite: string) => [
+	step(activate("ast_grep_replace"), "activating"),
+	step(
+		fauxToolCall("ast_grep_replace", {
+			pattern,
+			rewrite,
+			lang: "typescript",
+			paths: [target],
+			apply: true,
+		}),
+		"replacing",
+	),
+];
+// BSD `sed` takes the backup suffix as a separate argument, GNU `sed` attached.
+// Neither spelling with a suffix attached (`-i.bak`) is a named write to the
+// prescan, so the cases use the suffix-less GNU form and BSD's empty one.
+const sed = (target: string, expression: string) => [
+	step(
+		fauxToolCall("bash", {
+			command: `sed -i ${process.platform === "darwin" ? "''" : ""} '${expression}' ${target}`,
+		}),
+		"sed",
+	),
+];
+const foreign = (target: string, content: string) => [
+	step(fauxToolCall("foreign_write", { path: target, content }), "writing"),
+];
+const rename = (
+	target: string,
+	line: number,
+	character: number,
+	to: string,
+) => [
+	step(activate("lsp_navigation"), "activating"),
+	step(
+		fauxToolCall("lsp_navigation", {
+			operation: "rename",
+			path: target,
+			line,
+			character,
+			newName: to,
+			apply: true,
+		}),
+		"renaming",
+	),
+];
+
+const WRITERS: readonly Writer[] = [
+	{
+		name: "ast_grep_replace",
+		unrelated: (t) => replace(t, "return alpha;", "return alpha + 1;"),
+		adds: (t) => replace(t, "placeholder", "debugger"),
+		unrelatedBytes: UNRELATED,
+		addsBytes: ADDED,
+	},
+	{
+		name: "sed -i",
+		unrelated: (t) => sed(t, "s/return alpha;/return alpha + 1;/"),
+		adds: (t) => sed(t, "s/placeholder;/debugger;/"),
+		unrelatedBytes: UNRELATED,
+		addsBytes: ADDED,
+	},
+	{
+		name: "a foreign tool's write",
+		unrelated: (t) => foreign(t, UNRELATED),
+		adds: (t) => foreign(t, ADDED),
+		unrelatedBytes: UNRELATED,
+		addsBytes: ADDED,
+	},
+	{
+		name: "an LSP rename",
+		lsp: true,
+		unrelated: (t) => rename(t, 2, 8, "beta"),
+		adds: (t) => rename(t, 3, 2, "debugger"),
+		unrelatedBytes: RENAMED,
+		addsBytes: ADDED,
+	},
+];
+
+/** Run `steps` over a fresh committed repo, then try to commit. */
+async function commitAfter(
+	name: string,
+	writer: Pick<Writer, "lsp">,
+	steps: (target: string) => PiFauxReply[],
+) {
+	const { proj, target } = seedRepo(name);
+	const handle = await startPiSession({
+		root: fixture.root,
+		cwd: proj,
+		flags: flagsFor(writer.lsp === true),
+		inlineFactory: async () => (await import("../index.js")).default,
+		customTools: [foreignWriter()],
+		responses: [
+			step(readTarget(target), "reading"),
+			...steps(target),
+			step(commitAttempt(), "committing"),
+			endTurn("done"),
+		],
+	});
+	await handle.prompt("change the file and commit");
+	const commits = toolResults(handle.requests.at(-1) ?? [], "bash").filter(
+		(r) => r.text.includes(RAN_MARKER) || r.text.includes(GATE_BLOCK),
+	);
+	expect(commits).toHaveLength(1);
+	return { target, commit: commits[0], handle };
+}
+
+describe("#5553 every path-naming writer is judged on its delta", () => {
+	it("control: a host edit of an unrelated line commits", async () => {
+		const { target, commit } = await commitAfter("edit", {}, (t) => [
+			step(
+				fauxToolCall("edit", {
+					path: t,
+					edits: [{ oldText: "return alpha;", newText: "return alpha + 1;" }],
+				}),
+				"editing",
+			),
+		]);
+		expect(fs.readFileSync(target, "utf8")).toBe(UNRELATED);
+		expect(commit?.text).not.toContain(GATE_BLOCK);
+		expect(commit?.text).toContain(RAN_MARKER);
+	});
+
+	// Recurrence prevented: the observed-write route arms for every tool pi-lens
+	// does not classify, and a `read` names a path like a writer does. A first
+	// cut seeded the file of each such call, so every first read of a file paid
+	// a linter run and installed a seed no writer asked for.
+	it("takes no pre-edit seed for a read of the file", async () => {
+		const { proj, target } = seedRepo("read-only");
+		const handle = await startPiSession({
+			root: fixture.root,
+			cwd: proj,
+			flags: flagsFor(false),
+			inlineFactory: async () => (await import("../index.js")).default,
+			responses: [step(readTarget(target), "reading"), endTurn("done")],
+		});
+		await handle.prompt("read it");
+		const read = await handle.latencyRows();
+		expect(read.skipped).toBe(0);
+		expect(
+			read.rows.filter(
+				(row) =>
+					(row as { phase?: string }).phase === "pre_edit_capture" &&
+					normalizeMapKey((row as { filePath?: string }).filePath ?? "") ===
+						normalizeMapKey(target),
+			),
+		).toEqual([]);
+	});
+
+	// Recurrence prevented: the first call of an unclassified tool takes the
+	// observed-write route; every later call is classified by the name pi-lens
+	// learned (`provenance: "learned"`) and reaches the host-edit capture site,
+	// which seeded linters only, so the second call blocked where the first
+	// committed.
+	it(
+		"commits the second call of a foreign tool pi-lens learned from the first",
+		{ timeout: 120_000 },
+		async () => {
+			const { proj, target } = seedRepo("foreign-learned");
+			const second = path.join(proj, "src", "second.ts");
+			fs.writeFileSync(second, COMMITTED);
+			execFileSync("git", ["add", "-A"], {
+				cwd: proj,
+				env: gitFixtureEnv(proj),
+				stdio: "ignore",
+			});
+			execFileSync(
+				"git",
+				["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "two"],
+				{ cwd: proj, env: gitFixtureEnv(proj), stdio: "ignore" },
+			);
+			const handle = await startPiSession({
+				root: fixture.root,
+				cwd: proj,
+				flags: flagsFor(false),
+				inlineFactory: async () => (await import("../index.js")).default,
+				customTools: [foreignWriter()],
+				responses: [
+					step(readTarget(target), "reading"),
+					...foreign(target, UNRELATED),
+					step(readTarget(second), "reading"),
+					...foreign(second, UNRELATED),
+					step(commitAttempt(), "committing"),
+					endTurn("done"),
+				],
+			});
+			await handle.prompt("write twice and commit");
+			expect(fs.readFileSync(target, "utf8")).toBe(UNRELATED);
+			expect(fs.readFileSync(second, "utf8")).toBe(UNRELATED);
+			const commits = toolResults(handle.requests.at(-1) ?? [], "bash");
+			expect(commits).toHaveLength(1);
+			expect(commits[0]?.text).not.toContain(GATE_BLOCK);
+			expect(commits[0]?.text).toContain(RAN_MARKER);
+		},
+	);
+
+	describe.each(WRITERS)("$name", (writer) => {
+		const slug = writer.name.replace(/\W+/g, "-");
+
+		// Recurrence prevented: the writer-route audit (2026-11-13) found an
+		// unrelated change through each of these blocked at `git commit` over
+		// the `debugger;` HEAD already held, while the same change through a
+		// host `edit` committed (#5553).
+		it(
+			"commits an unrelated change to a file whose blocker is already in HEAD",
+			{ timeout: 120_000 },
+			async () => {
+				const { target, commit } = await commitAfter(
+					`${slug}-unrelated`,
+					writer,
+					writer.unrelated,
+				);
+				expect(fs.readFileSync(target, "utf8")).toBe(writer.unrelatedBytes);
+				expect(commit?.text).not.toContain(GATE_BLOCK);
+				expect(commit?.text).toContain(RAN_MARKER);
+			},
+		);
+
+		// Recurrence prevented: a baseline that hid the blocker the writer
+		// itself adds would let it commit. The added line reads exactly like the
+		// inherited one, so only counting each seeded entry once refuses it.
+		it(
+			"still refuses a second blocker the writer adds beside the inherited one",
+			{ timeout: 120_000 },
+			async () => {
+				const { target, commit } = await commitAfter(
+					`${slug}-adds`,
+					writer,
+					writer.adds,
+				);
+				expect(fs.readFileSync(target, "utf8")).toBe(writer.addsBytes);
+				expect(commit?.text).toContain(GATE_BLOCK);
+				expect(commit?.text).not.toContain(RAN_MARKER);
+			},
+		);
+	});
+});

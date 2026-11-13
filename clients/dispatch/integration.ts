@@ -43,6 +43,7 @@ import { resolveLanguageRootForFile } from "../language-profile.js";
 import { classifyObservedRunner } from "./collect-later-tier.js";
 import {
 	PRE_EDIT_SEED_RUNNER_IDS,
+	PRE_EDIT_SEED_SPANLESS_RUNNER_IDS,
 	preEditSeedFactKey,
 	seedFromCapture,
 } from "./pre-edit-seed.js";
@@ -3488,10 +3489,12 @@ export type PreEditCaptureOutcome =
  * its first edit this session, and install their blocking findings as the
  * file's pre-edit seed (clients/dispatch/pre-edit-seed.ts).
  *
- * Called from the `tool_call` of a classified write or edit, under the
- * caller's bound, before the host writes. Only linter runners run (no
- * language server, type checker, gated runner or scanner), and not one the
- * observed tier has moved to collect-later. The seed is installed only while
+ * Called from the `tool_call` of a classified write or edit, and (#5553) of
+ * each writer that names a file it is about to change, under the caller's
+ * bound, before the write. Only linter runners run (no language server, type
+ * checker or scanner), plus the edit-gated ast-grep and tree-sitter lanes
+ * when the writer is `spanless`, and not one the observed tier has moved to
+ * collect-later. The seed is installed only while
  * it still describes the file before its first dispatch: no delta baseline
  * or seed exists yet, the file still holds the bytes the runs read, and the
  * session is the one that started the capture. A capture the caller stopped
@@ -3503,6 +3506,9 @@ export async function capturePreEditLinterFindings(
 	pi: PiAgentAPI,
 	session: { isCurrent(): boolean },
 	signal?: AbortSignal,
+	/** #5553: the writer names no edit span, so the edit-gated lanes read the
+	 *  whole file and are seeded with the linters. */
+	spanless = false,
 ): Promise<PreEditCaptureOutcome> {
 	if (pi.getFlag("no-delta")) return { outcome: "skipped", reason: "no-delta" };
 	const analysisRootMode = resolveAnalysisRoot(filePath, workspaceRoot);
@@ -3555,6 +3561,9 @@ export async function capturePreEditLinterFindings(
 	if (!kind) return { outcome: "skipped", reason: "no-kind" };
 	if (ctx.fileRole === "generated")
 		return { outcome: "skipped", reason: "generated" };
+	const seeded = spanless
+		? PRE_EDIT_SEED_SPANLESS_RUNNER_IDS
+		: PRE_EDIT_SEED_RUNNER_IDS;
 	const groups = withSpotbugsGroup(
 		kind,
 		getDispatchGroupsForKind(kind, pi),
@@ -3562,8 +3571,7 @@ export async function capturePreEditLinterFindings(
 	).flatMap((group) => {
 		const runnerIds = group.runnerIds.filter(
 			(id) =>
-				PRE_EDIT_SEED_RUNNER_IDS.has(id) &&
-				classifyObservedRunner(projectRoot, id) === "inline",
+				seeded.has(id) && classifyObservedRunner(projectRoot, id) === "inline",
 		);
 		return runnerIds.length > 0 ? [{ ...group, runnerIds }] : [];
 	});

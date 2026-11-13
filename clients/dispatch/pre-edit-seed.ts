@@ -13,7 +13,9 @@
  * Scope (the maintainer, 2026-10-15): linters only. Language servers, type
  * checkers, the edit-range gated runners (ast-grep, tree-sitter) and scanners
  * keep their first-write behaviour, so the seed is never captured from them
- * and never classifies their findings.
+ * and never classifies their findings. One exception (#5553): a writer that
+ * names no edit span (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`) also seeds the two
+ * edit-gated lanes, because those lanes read its whole file.
  *
  * Identity: content, not position. A seeded finding matches a current one of
  * the same `foldedFindingIdentity` on a line with the seeded line's text
@@ -65,6 +67,23 @@ export const PRE_EDIT_SEED_RUNNER_IDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * #5553: the lanes a writer with no edit span seeds. A host `edit` carries its
+ * touched lines, so the two edit-span-gated lanes (ast-grep, tree-sitter) judge
+ * only those lines and need no seed. `ast_grep_replace`, `sed -i`, an
+ * unclassified tool and an LSP rename name no span, so those lanes read the
+ * whole file and report a blocker the file already held; they join the linters
+ * in the seed. Language servers and the other scanners stay out, as for an
+ * `edit` (the maintainer, 2026-10-15). `tests/clients/dispatch/edit-scope-census.test.ts`
+ * fails when this set differs from the linter lanes plus the span-gated
+ * registry lanes.
+ */
+export const PRE_EDIT_SEED_SPANLESS_RUNNER_IDS: ReadonlySet<string> = new Set([
+	...PRE_EDIT_SEED_RUNNER_IDS,
+	"ast-grep-napi",
+	"tree-sitter",
+]);
+
+/**
  * Seeded entries kept per file. Past it the rest are not seeded, so they
  * block as they did before the seed (the direction of today's behaviour).
  */
@@ -87,7 +106,7 @@ export function seedFromCapture(
 		(d) =>
 			d.semantic === "blocking" &&
 			d.runnerId !== undefined &&
-			PRE_EDIT_SEED_RUNNER_IDS.has(d.runnerId) &&
+			PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(d.runnerId) &&
 			d.line !== undefined,
 	);
 	return stampLineHashes(
@@ -119,7 +138,9 @@ export function classifyPreExisting(
 		return text === undefined ? undefined : lineHashOf(text);
 	};
 	const candidates = current.filter(
-		(d) => d.runnerId !== undefined && PRE_EDIT_SEED_RUNNER_IDS.has(d.runnerId),
+		(d) =>
+			d.runnerId !== undefined &&
+			PRE_EDIT_SEED_SPANLESS_RUNNER_IDS.has(d.runnerId),
 	);
 	const { kept } = retainRecordedFindings(seed, candidates, {
 		positionOf: () => ANY_POSITION,

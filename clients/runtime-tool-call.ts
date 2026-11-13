@@ -49,7 +49,10 @@ import {
 	isProviderReplayCall,
 	readMutationPathField,
 } from "./mutating-tool.js";
-import { isProvisionalLearnedAttribution } from "./mutation-attribution.js";
+import {
+	isProvisionalLearnedAttribution,
+	shouldArmObservationForTool,
+} from "./mutation-attribution.js";
 import { armObservedMutation } from "./observed-mutation.js";
 import { extractWrittenPathsFromCommand } from "./bash-file-access.js";
 import { getLSPService } from "./lsp/capabilities.js";
@@ -663,6 +666,17 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				hook: "tool_call",
 				label: "head-move-resync",
 			},
+		);
+	// #5553: every writer but a classified host `write` or `edit` that names a
+	// file it is about to change takes the pre-edit seed here, before the write
+	// and before the baselines below, so the files a capture may create (a
+	// rules cache) are not part of the diff those baselines are taken for.
+	const writerPaths = namedWriterPaths(deps, toolName, mutation !== undefined);
+	if (writerPaths.length > 0)
+		await captureWriterSeeds(
+			namedWriterTargets(writerPaths, runtime.projectRoot),
+			deps,
+			true,
 		);
 	// #2000 phase 2: opaque-command pre-snapshot. A bash command whose writes
 	// the extractor will not recognize gets a bounded stat snapshot of the
@@ -1957,19 +1971,51 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 		}
 	}
 
-	// #4483: last, so only a call every pi-lens guard allowed pays for it.
-	if (isWriteOrEdit && !isExternalOrVendor) {
+	// #4483: last, so only a call every pi-lens guard allowed pays for it. A
+	// tool pi-lens learned from one observation names no span either (#5553).
+	if (isWriteOrEdit && !isExternalOrVendor)
+		await captureWriterSeeds(
+			[filePath],
+			deps,
+			mutation.provenance === "learned",
+		);
+}
+
+/**
+ * #4483: how long a `tool_call` waits for the pre-edit linter capture.
+ * `tool_call` has no wall budget of its own (clients/hook-budgets.ts); this
+ * is the per-await bound. Measured in PR #4483's body.
+ */
+export const PRE_EDIT_CAPTURE_BUDGET_MS = 500;
+
+/**
+ * #4483, #5553: the one entry for a writer that names the files it will
+ * change: the capture's bound, abort, degradation record and latency row, one
+ * file after another, each under its own `PRE_EDIT_CAPTURE_BUDGET_MS`.
+ * `spanless` is a writer whose dispatch gets no edit span, so the edit-gated
+ * lanes read the whole file and are seeded too
+ * (`PRE_EDIT_SEED_SPANLESS_RUNNER_IDS`). Never rejects.
+ */
+async function captureWriterSeeds(
+	filePaths: readonly string[],
+	deps: ToolCallDeps,
+	spanless: boolean,
+): Promise<void> {
+	for (const filePath of filePaths) {
 		const started = Date.now();
 		const controller = new AbortController();
 		const signal = deps.ctx.signal
 			? AbortSignal.any([deps.ctx.signal, controller.signal])
 			: controller.signal;
-		const outcome = await bounded(capturePreEditSeed(filePath, deps, signal), {
-			ms: PRE_EDIT_CAPTURE_BUDGET_MS,
-			signal: deps.ctx.signal,
-			hook: "tool_call",
-			label: "pre-edit-linter-capture",
-		});
+		const outcome = await bounded(
+			capturePreEditSeed(filePath, deps, signal, spanless),
+			{
+				ms: PRE_EDIT_CAPTURE_BUDGET_MS,
+				signal: deps.ctx.signal,
+				hook: "tool_call",
+				label: "pre-edit-linter-capture",
+			},
+		);
 		controller.abort();
 		if (!outcome || outcome.outcome === "failed")
 			recordDegradationOnce({
@@ -1982,11 +2028,80 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 }
 
 /**
- * #4483: how long a `tool_call` waits for the pre-edit linter capture.
- * `tool_call` has no wall budget of its own (clients/hook-budgets.ts); this
- * is the per-await bound. Measured in PR #4483's body.
+ * #5553: the files a writer other than a classified host `write` or `edit`
+ * names before it changes them, as absolute paths (they may not exist):
+ * a bash command's written paths; an applied `ast_grep_replace`'s `paths`; the
+ * file an applied LSP rename's symbol sits in (its importers are not named,
+ * an accepted residual); and the one path an unclassified tool names, when
+ * the observational net would arm for it (a tool not known to be read-only
+ * and not yet seen clean: a `read` or `grep` names a path too).
  */
-export const PRE_EDIT_CAPTURE_BUDGET_MS = 500;
+function namedWriterPaths(
+	deps: ToolCallDeps,
+	toolName: string,
+	classified: boolean,
+): string[] {
+	const { event, ctx, runtime } = deps;
+	const input = ((event as { input?: unknown }).input ?? {}) as Record<
+		string,
+		unknown
+	>;
+	const resolve = (raw: unknown): string[] => {
+		const resolved =
+			typeof raw === "string"
+				? resolveToolCallFilePath(raw, ctx.cwd, runtime.projectRoot)?.path
+				: undefined;
+		return resolved === undefined ? [] : [resolved];
+	};
+	if (toolName === "bash")
+		return typeof input.command === "string"
+			? extractWrittenPathsFromCommand(
+					input.command,
+					runtime.projectRoot || process.cwd(),
+				)
+			: [];
+	if (toolName === "ast_grep_replace")
+		return input.apply === true && Array.isArray(input.paths)
+			? input.paths.flatMap(resolve)
+			: [];
+	if (toolName === "lsp_navigation")
+		return input.operation === "rename" && input.apply === true
+			? resolve(getToolCallRawFilePath(toolName, event))
+			: [];
+	return !classified &&
+		!isProviderReplayCall(event) &&
+		!deps.getFlag("no-read-guard") &&
+		shouldRunOpaqueRecovery(
+			toolName,
+			opaquePrescanRoot(ctx.cwd, runtime.projectRoot),
+		) &&
+		shouldArmObservationForTool(toolName)
+		? resolve(readMutationPathField(event))
+		: [];
+}
+
+/**
+ * #5553: the named paths a capture can seed: existing regular files of the
+ * project that its ignore rules and the external/vendor rule admit. A
+ * directory, a file the write creates, and a path outside the session's
+ * project are not seeded (the first has no bytes, the others no baseline).
+ */
+function namedWriterTargets(
+	filePaths: readonly string[],
+	projectRoot: string,
+): string[] {
+	return [...new Set(filePaths)].filter((candidate) => {
+		try {
+			return (
+				nodeFs.statSync(candidate).isFile() &&
+				!isExternalOrVendorFile(candidate, projectRoot) &&
+				!isPathIgnoredByProject(candidate, projectRoot, false)
+			);
+		} catch {
+			return false;
+		}
+	});
+}
 
 type PreEditCaptureResult =
 	| Awaited<
@@ -2008,6 +2123,7 @@ function capturePreEditSeed(
 	filePath: string,
 	deps: ToolCallDeps,
 	signal: AbortSignal,
+	spanless: boolean,
 ): Promise<PreEditCaptureResult> {
 	const session = deps.runtime.captureSessionGeneration();
 	const workspaceRoot = deps.runtime.projectRoot || process.cwd();
@@ -2020,6 +2136,7 @@ function capturePreEditSeed(
 				pi,
 				session,
 				signal,
+				spanless,
 			),
 		)
 		.catch((cause: unknown): PreEditCaptureResult => {
