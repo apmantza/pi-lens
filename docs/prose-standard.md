@@ -56,11 +56,11 @@ node scripts/check-prose.mjs --comment --body-file <file>
 
 A comment of 13 or more non-blank lines passes only when all of these hold:
 
-- At most 8 non-blank lines sit outside the folds (the visible part). A code fence outside a fold counts as visible.
-- Each `<details>` has a one-line `<summary>...</summary>` on the same line or the next non-blank line, with nothing after `</summary>`.
+- At least 1 and at most 8 non-blank lines sit outside the folds (the visible part). The first fold needs a visible line before it, the verdict. A code fence outside a fold counts as visible.
+- Each fold opens with a plain `<details>`. `<details open>` renders expanded, so the checker refuses it. Each `<details>` has a one-line `<summary>...</summary>` on the same line or the next non-blank line, with nothing after `</summary>`.
 - A blank line follows the `</summary>` line.
 - Each fold closes with `</details>` on its own line. Folds do not nest.
-- The summary names a model in one of two forms: `<Model name> (<effort>): <what is inside>` or `<Model name>: <what is inside>`. The model name starts with a known family (Claude, Opus, Sonnet, Haiku, GPT, Codex, Sol, Luna, DeepSeek, Qwen, GLM, Gemini, Muse, Kimi, Mistral, Llama, Grok). The effort is low, medium, high, xhigh, max, minimal, or default, and may follow `thinking`. Add a new family to `MODEL_FAMILIES` in `scripts/check-prose.mjs`.
+- The summary names a model in one of two forms: `<Model name> (<effort>): <what is inside>` or `<Model name>: <what is inside>`. The model name starts with a known family (Claude, Opus, Sonnet, Haiku, GPT, Codex, Sol, Luna, DeepSeek, Qwen, GLM, Gemini, Muse, Kimi, Mistral, Llama, Grok). The parenthesis holds an effort (low, medium, high, xhigh, max, minimal, or default, which may follow `thinking`) or a role word (investigator, reviewer, fixer, or verify), as in `Claude Sonnet 5.5 (investigator): probes`. The checker refuses anything else in the parenthesis. Add a new family to `MODEL_FAMILIES` in `scripts/check-prose.mjs`.
 
 A comment of 12 non-blank lines or fewer needs no fold. A fold in a short comment still follows the structure rules. The checker also runs the prose checks above in this mode.
 

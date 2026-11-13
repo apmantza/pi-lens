@@ -636,4 +636,148 @@ describe("comment layout gate (#5558)", () => {
 		expect(r.status).toBe(1);
 		expect(r.err).toContain("--long-ok applies to --comment only");
 	});
+
+	// ---- Round 2 (#5560 review) ----
+	const accepted = { status: 0, err: "" };
+
+	// Recurrence (#5560 F1): GitHub renders `<details open>` as `<details
+	// open="">`, expanded, so a 40-line comment with an "open fold" shows 40
+	// lines and the gate counted them as hidden.
+	it("refuses an open fold, which renders expanded", () => {
+		const open = fold(SUMMARY, lines(10)).replace(
+			"<details>",
+			"<details open>",
+		);
+		const r = run(`${lines(5).join("\n")}\n${open}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("unrecognised");
+	});
+
+	// Recurrence (#5560 F5): a lone CR is one line to a `\r?\n` split, so 40
+	// unfolded lines joined with CR passed; CRLF input was refused.
+	it("reads a lone carriage return as a line break", () => {
+		const r = run(`${lines(40).join("\r")}\r`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence (#5560 F3): a long comment entirely inside one fold has no
+	// verdict line a reader sees without a click.
+	it("refuses a long comment with no visible line before its fold", () => {
+		const r = run(`${fold(SUMMARY, lines(14))}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no visible line before the first fold");
+	});
+
+	// Recurrence (#5560 review): our own tooling writes summaries such as
+	// "Claude Sonnet 5.5 (investigator): ...", which the effort-only form refused.
+	it("accepts a role word in the summary parenthesis", () => {
+		for (const role of ["investigator", "reviewer", "fixer", "verify"]) {
+			const summary = `Claude Sonnet 5.5 (${role}): the detail`;
+			expect(
+				run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`),
+			).toEqual(accepted);
+		}
+	});
+
+	it("refuses a parenthesis that is neither an effort nor a role", () => {
+		const r = run(
+			`${lines(5).join("\n")}\n${fold("Claude Sonnet 5.5 (auditor): the detail", lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("parenthesis");
+	});
+
+	// Recurrence (#5560 F2): the 8-line cap had a cell far from its boundary
+	// (14 lines); a cap moved to 9 stayed green.
+	it("refuses exactly 9 visible lines before a fold", () => {
+		const r = run(`${lines(9).join("\n")}\n${fold(SUMMARY, lines(10))}\n`);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("visible part has 9");
+	});
+
+	it("accepts exactly 8 visible lines before a fold", () => {
+		expect(
+			run(`${lines(8).join("\n")}\n${fold(SUMMARY, lines(10))}\n`),
+		).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): the 6-word limit on a model name had no cell.
+	it("refuses a model name of seven words", () => {
+		const r = run(
+			`${lines(5).join("\n")}\n${fold("Claude Opus 5.5 a b c d (high): the detail", lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("summary");
+	});
+
+	it("accepts a model name of six words", () => {
+		const summary = "Claude Opus 5.5 a b c (high): the detail";
+		expect(
+			run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`),
+		).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): the vendor-prefix loop had no cell.
+	it("accepts a vendor prefix before the family", () => {
+		const summary = "OpenAI GPT-5 (high): the detail";
+		expect(
+			run(`${lines(5).join("\n")}\n${fold(summary, lines(10))}\n`),
+		).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): the word-charset test had no cell.
+	it("refuses a model word with markup in it", () => {
+		const r = run(
+			`${lines(5).join("\n")}\n${fold("Claude Opus <b>big</b> (high): the detail", lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("summary");
+	});
+
+	// Recurrence (#5560 F2): a code fence outside a fold counts as visible, and
+	// both the fence lines and its body had no cell (2 lines + fence of 5 = 9).
+	it("counts a fenced block outside a fold as visible", () => {
+		const fenced = ["```text", ...lines(5), "```"].join("\n");
+		const r = run(
+			`${lines(2).join("\n")}\n${fenced}\n${fold(SUMMARY, lines(10))}\n`,
+		);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("visible part has 9");
+	});
+
+	// Recurrence (#5560 F2): a shorter fence line does not close a longer fence,
+	// so the quoted `<details>` stays text.
+	it("keeps a four-backtick fence open past a three-backtick line", () => {
+		const body = `${lines(3).join("\n")}\n\`\`\`\`\n\`\`\`\n${fold(SUMMARY, lines(10))}\n\`\`\`\`\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence (#5560 F2): a fence line with an info string never closes a fence.
+	it("keeps a fence open past a fence line with an info string", () => {
+		const body = `${lines(3).join("\n")}\n\`\`\`\n\`\`\`js\n${fold(SUMMARY, lines(10))}\n\`\`\`\n`;
+		const r = run(body);
+		expect(r.status).toBe(1);
+		expect(r.err).toContain("no <details> fold");
+	});
+
+	// Recurrence (#5560 F2): the standard says the summary may sit on the next
+	// non-blank line; the blank-line skip had no cell.
+	it("reads a summary that follows a blank line after <details>", () => {
+		const body = `${lines(5).join("\n")}\n<details>\n\n<summary>${SUMMARY}</summary>\n\n${lines(10).join("\n")}\n</details>\n`;
+		expect(run(body)).toEqual(accepted);
+	});
+
+	// Recurrence (#5560 F2): GitHub reads the tags in any case, so an uppercase
+	// fold is a fold; each of the three tag patterns had no uppercase cell.
+	it("reads uppercase <DETAILS>, <SUMMARY> and </DETAILS> tags", () => {
+		const upper = fold(SUMMARY, lines(10))
+			.replace("<details>", "<DETAILS>")
+			.replace("<summary>", "<SUMMARY>")
+			.replace("</summary>", "</SUMMARY>")
+			.replace("</details>", "</DETAILS>");
+		expect(run(`${lines(5).join("\n")}\n${upper}\n`)).toEqual(accepted);
+	});
 });

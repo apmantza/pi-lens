@@ -226,8 +226,9 @@ const MODEL_FAMILIES = [
 	"grok",
 ];
 const VENDOR_PREFIXES = ["claude", "anthropic", "openai", "codex"];
-const EFFORT_RE =
-	/^(?:thinking\s+)?(?:low|medium|high|xhigh|max|minimal|default)$/i;
+// The parenthesis holds an effort level or a role word, nothing else.
+const PAREN_RE =
+	/^(?:(?:thinking\s+)?(?:low|medium|high|xhigh|max|minimal|default)|investigator|reviewer|fixer|verify)$/i;
 const SUMMARY_RE = /^<summary>(.+)<\/summary>$/i;
 const SUMMARY_FORM_RE =
 	/^(?<model>[^():]+?)(?:\s*\((?<effort>[^()]+)\))?\s*:\s*(?<what>\S.*)$/;
@@ -254,9 +255,9 @@ function summaryErrors(inner, at) {
 		return [
 			`comment-layout (line ${at}): the summary must name a model, as "<Model name> (<effort>): <what is inside>" or "<Model name>: <what is inside>" (found "${inner.trim()}")`,
 		];
-	if (form.groups.effort && !EFFORT_RE.test(form.groups.effort.trim()))
+	if (form.groups.effort && !PAREN_RE.test(form.groups.effort.trim()))
 		return [
-			`comment-layout (line ${at}): the summary effort "${form.groups.effort.trim()}" is not low, medium, high, xhigh, max, minimal or default`,
+			`comment-layout (line ${at}): the summary parenthesis "${form.groups.effort.trim()}" is not low, medium, high, xhigh, max, minimal, default, investigator, reviewer, fixer or verify`,
 		];
 	return [];
 }
@@ -264,12 +265,14 @@ function summaryErrors(inner, at) {
 export function checkCommentLayout(text = "", options = {}) {
 	const errors = [];
 	const warnings = [];
-	const lines = String(text ?? "").split(/\r?\n/);
+	// A lone CR is a line break too, so it cannot hide a long comment in one line.
+	const lines = String(text ?? "").split(/\r\n?|\n/);
 	const nonBlank = lines.filter((line) => line.trim()).length;
 	let fence = null;
 	let open = 0;
 	let visible = 0;
 	let folds = 0;
+	let visibleBeforeFold = 0;
 	for (let index = 0; index < lines.length; index += 1) {
 		const at = index + 1;
 		const trimmed = lines[index].trim();
@@ -305,10 +308,10 @@ export function checkCommentLayout(text = "", options = {}) {
 			continue;
 		}
 		if (/^<details/i.test(tagLine)) {
-			const tag = /^<details(?:\s+open)?\s*>(.*)$/i.exec(tagLine);
+			const tag = /^<details\s*>(.*)$/i.exec(tagLine);
 			if (!tag) {
 				errors.push(
-					`comment-layout (line ${at}): unrecognised <details> tag; write <details> or <details open>`,
+					`comment-layout (line ${at}): unrecognised <details> tag; write <details> (an open fold renders expanded, so it is not a fold)`,
 				);
 				continue;
 			}
@@ -320,6 +323,7 @@ export function checkCommentLayout(text = "", options = {}) {
 			}
 			open = at;
 			folds += 1;
+			if (folds === 1) visibleBeforeFold = visible;
 			let summaryAt = index;
 			let summaryText = tag[1].trim();
 			if (!summaryText) {
@@ -358,10 +362,14 @@ export function checkCommentLayout(text = "", options = {}) {
 	if (nonBlank > COMMENT_FOLD_OVER) {
 		const over = [];
 		if (!folds) over.push(`no <details> fold`);
-		else if (visible > COMMENT_VISIBLE_MAX)
-			over.push(
-				`the visible part has ${visible} non-blank lines (max ${COMMENT_VISIBLE_MAX})`,
-			);
+		else {
+			if (!visibleBeforeFold)
+				over.push(`no visible line before the first fold (the verdict)`);
+			if (visible > COMMENT_VISIBLE_MAX)
+				over.push(
+					`the visible part has ${visible} non-blank lines (max ${COMMENT_VISIBLE_MAX})`,
+				);
+		}
 		if (over.length && waived)
 			warnings.push(`layout-waived: ${reason} (${over.join("; ")})`);
 		else if (over.length)
