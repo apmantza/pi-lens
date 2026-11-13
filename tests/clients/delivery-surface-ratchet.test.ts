@@ -40,6 +40,7 @@ import {
 	literalValues,
 	outputSites,
 } from "../support/literal-sites.js";
+import { expectPlantedStaleRow } from "../support/baseline-staleness.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
@@ -620,6 +621,25 @@ describe("clean-claim census (#5258)", () => {
 			true,
 		);
 		expect(problems.some((p) => p.includes("stale row"))).toBe(true);
+	});
+
+	it("reds a census row for a site that no longer exists (#5072)", () => {
+		// Recurrence: merge skew of #5546 and #5554. The planted-stale-row
+		// governance landed while the census was in review, so master carried a
+		// keyed ledger with no cell proving a row whose literal is gone reds.
+		const file = "tools/lens-diagnostics.ts";
+		const census = loadCensus();
+		const planted = "5072-gone-literal";
+		const rows = census[file]!;
+		const problems = censusProblems(file, readCensusSource(file), {
+			...rows,
+			neutral: { ...rows.neutral, [planted]: 1 },
+		});
+		expectPlantedStaleRow({
+			baseline: "tests/clients/clean-claim-census.json",
+			rowKey: planted,
+			verdict: problems,
+		});
 	});
 
 	it("reds a clean field written without cleanVerdict", () => {
