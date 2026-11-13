@@ -618,6 +618,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the abort must land while a real child is mid-run; a fake clock cannot stop a spawned process, and no double reproduces a child killed mid-run",
 	},
+	// #5549: concurrent calls must be observed while one real formatter child is
+	// alive; a fake clock cannot reproduce the live-child flight recurrence.
+	"raw-timer-wait:clients/formatters-live-flight.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the real child must remain alive while concurrent format calls are admitted or skipped; a fake clock cannot reproduce the live-child flight recurrence",
+	},
 	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
 	// only observable through Node's `unhandledRejection` event, which fires
 	// on a real macrotask; the file drains one real `setImmediate` tick.

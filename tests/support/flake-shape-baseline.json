@@ -273,6 +273,7 @@
 		"clients/event-loop-monitor.test.ts": 1,
 		"clients/extension-log.test.ts": 2,
 		"clients/format-service.test.ts": 3,
+		"clients/formatters-live-flight.test.ts": 2,
 		"clients/global-ignore.test.ts": 1,
 		"clients/installer/installer-lifecycle.integration.test.ts": 1,
 		"clients/installer/posix-group-kill.test.ts": 1,

@@ -10,6 +10,8 @@ import {
 } from "../../clients/project-trust.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
+// flake-shape: raw-timer-wait — real child-flight recurrence requires bounded inter-call timing.
+
 describe("formatFile live child flight", () => {
 	afterEach(() => {
 		resetObservedRunnerLatency();

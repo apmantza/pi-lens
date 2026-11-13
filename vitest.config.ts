@@ -593,6 +593,9 @@ export const wallClockBudgetInclude = [
 	"tests/clients/dispatch/smoke-fixture-coverage.test.ts",
 	// #4321: the real Biome binary's 80-column wrapping is the subject (flake-shape admission).
 	"tests/clients/format-service-tab-width-real-biome.test.ts",
+	// #5549: the real formatter shim must remain alive while concurrent calls
+	// are admitted or skipped; the test has a bounded child-flight budget.
+	"tests/clients/formatters-live-flight.test.ts",
 	// #4739: real `bash -c` is the oracle for about 4 400 spellings of git and its
 	// verbs, bare and inside subshells, groups, `eval` strings and launchers (flake-shape
 	// admission); one spawn per row, about 11 s serial. No wall-clock assertion: the file pins its
