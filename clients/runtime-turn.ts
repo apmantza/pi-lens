@@ -2057,6 +2057,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			const replayPart = `Unresolved from this turn — ${displayPath}${suppressedByDispositionNote(policy.suppressed)}:\n${policy.body}`;
 			// @delivery-surface: runtime-turn:unresolved-inline-blocker
 			blockerParts.push(replayPart);
+			// #4617: the replay is about this file, which a no-write turn did not
+			// edit; a late runner's blocking survivor is pending, not resolved.
+			citePart(replayPart, [bPath]);
 			// #5532: a pi turn renders a blocker the model has had in full 3 times as
 			// one pointer line. The part stays in `blockerParts` as pushed: it is the
 			// commit gate's blocker text and the key of the stamp's citations.
@@ -2071,9 +2074,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			});
 			if (capped)
 				cappedBlockerText.set(replayPart, cappedBlockerLine(displayPath));
-			// #4617: the replay is about this file, which a no-write turn did not
-			// edit; a late runner's blocking survivor is pending, not resolved.
-			citePart(replayPart, [bPath]);
 		}
 	}
 	// #3248: the post-policy survivor set per file is FINAL here. The commit
