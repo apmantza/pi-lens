@@ -179,7 +179,9 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 					}
 				: { matches: [SAMPLE_MATCH], status: 0 };
 		});
-		const tempScanWithFixAsync = vi.fn();
+		const tempScanWithFixAsync = vi.fn(async () => ({
+			matches: [SAMPLE_MATCH],
+		}));
 		const client = clientWithValidationRunner({
 			tempScanDetailedAsync,
 			tempScanWithFixAsync,
