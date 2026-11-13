@@ -1390,6 +1390,16 @@ describe("widget-state renderWidget", () => {
 		expect(allLines).not.toContain("fmt-failed:");
 	});
 
+	it("keeps a formatter failure when a later run of it is skipped (#5549)", () => {
+		// RECURRENCE GUARDED: #5549 r2 F11. A cooled formatter answers a typed
+		// skip (success:true) on the next write, and that record replaced the
+		// failure, so the red marker vanished while the formatter stayed broken.
+		const filePath = `${process.cwd()}/cooled.ts`;
+		recordFormatter(filePath, "gofmt", false, false, "failed");
+		recordFormatter(filePath, "gofmt", false, true, "skipped");
+		expect(renderWidget(60, theme).join("")).toContain("fmt-failed:gofmt");
+	});
+
 	it("does not render an unchanged successful formatter", () => {
 		const filePath = `${process.cwd()}/unchanged.ts`;
 		recordFormatter(filePath, "prettier", false, true);

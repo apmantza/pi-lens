@@ -439,7 +439,9 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// 25 -> 24 (#5417): the changed-on-failure compare shed an error branch.
 		// 24 -> 25 (#5492 r2): the present-but-failed-its-version-check result
 		// carries the probe's output in `FormatterResult.error`.
-		"clients/formatters.ts": 25,
+		// 25 -> 26 (#5549): the cooled formatter's typed skip carries its
+		// reason in `FormatterResult.error`.
+		"clients/formatters.ts": 26,
 		"clients/generation-lock.ts": 5,
 		"clients/git-tracked-ignore.ts": 2,
 		"clients/govulncheck-client.ts": 6,
@@ -1751,7 +1753,8 @@ const PINS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
 		// record's owning session onto its Resolved note.
 		// 31 -> 33 (#4943): a secondary's owned-only claim reads the queued
 		// record's owner and leaves another session's record queued.
-		"clients/runtime-coordinator.ts": 33,
+		// 33 -> 35 (#5549): the deferred formatter retry cap reads its queued record.
+		"clients/runtime-coordinator.ts": 35,
 		"clients/runtime-tool-call.ts": 1,
 		"clients/runtime-tool-result.ts": 5,
 		// 6 -> 8 (#3218): the resolved-blocker filter keys each current blocker

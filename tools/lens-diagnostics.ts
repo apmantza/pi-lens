@@ -33,7 +33,11 @@ import {
 	loadProjectRulePolicy,
 } from "../clients/dispatch/finding-policy.js";
 import { readFileContent } from "../clients/dispatch/runners/utils.js";
-import { cleanVerdict } from "../clients/dispatch/types.js";
+import {
+	cleanVerdict,
+	semanticFor,
+	type Diagnostic,
+} from "../clients/dispatch/types.js";
 import {
 	gateFindingsByPathFreshness,
 	parseScannedAtMs,
@@ -1870,7 +1874,9 @@ function bySeverityThenLine(a: WidgetDiagnostic, b: WidgetDiagnostic): number {
 	return severityRank(a) - severityRank(b) || (a.line ?? 0) - (b.line ?? 0);
 }
 
-function lspSeverityName(severity: LSPDiagnostic["severity"]): string {
+function lspSeverityName(
+	severity: LSPDiagnostic["severity"],
+): Diagnostic["severity"] {
 	if (severity === 1) return "error";
 	if (severity === 2) return "warning";
 	if (severity === 3) return "info";
@@ -1889,7 +1895,7 @@ function lspDiagnosticToWidget(diagnostic: LSPDiagnostic): WidgetDiagnostic {
 	const rule = lspRuleId(diagnostic);
 	return {
 		severity,
-		semantic: diagnostic.severity === 1 ? "blocking" : "warning",
+		semantic: semanticFor(severity),
 		message: diagnostic.message,
 		line: diagnostic.range.start.line + 1,
 		col: diagnostic.range.start.character + 1,
@@ -1945,7 +1951,9 @@ function diagnosticDedupKey(
 	diagnostic: WidgetDiagnostic,
 ): string {
 	const ruleId = normalizeRuleId(diagnostic.rule ?? diagnostic.tool ?? "");
-	return [fileKey, diagnostic.line ?? "?", ruleId].join(":");
+	return [fileKey, diagnostic.line ?? "?", diagnostic.col ?? "?", ruleId].join(
+		":",
+	);
 }
 
 /**
