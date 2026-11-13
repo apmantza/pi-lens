@@ -314,7 +314,9 @@ describe("turn identity across observability sinks (#2815)", () => {
 			durationMs: 0,
 		});
 		await removeHome();
-		// Barrier: a row the teardown left queued lands here, before the check.
+		// Barrier: under the pre-fix teardown a queued row lands here and recreates
+		// the removed home; with removeHome()'s flush in place nothing is queued, so
+		// this check is what catches a dropped flush.
 		await flushAllNdjsonWriters();
 		expect(
 			fs.existsSync(home),

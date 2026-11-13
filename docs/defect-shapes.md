@@ -592,7 +592,10 @@ file-scoped worklist and receives no project-wide scanner output.
     its own writes is queued counts late bytes on the wrong side of its window,
     or misses them. Await that sink's flush (or `flushAllNdjsonWriters`) right
     before the read with no other await in between, or inside the reading
-    helper. Enforced by `tests/config/sink-read-drain-sweep.test.ts`.
+    helper. Enforced by `tests/config/sink-read-drain-sweep.test.ts`. The
+    removal side is the same shape: drain the queue (await
+    `flushAllNdjsonWriters`) before removing the directory a sink writes into,
+    or a queued row recreates it (#5569); enforcer none, judgment-only.
 
 68. **Model switch drift:** a TLA+ config constant that mirrors a code choice
     (inject a read, retire on an unknown range) goes stale when the code
