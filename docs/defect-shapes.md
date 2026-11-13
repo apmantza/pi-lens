@@ -203,7 +203,7 @@ file-scoped worklist and receives no project-wide scanner output.
     `tests/clients/clean-claim-census.json`, keyed by its source text; a
     claim row names its producer, and its statement must read a guard that
     producer set. Every other `DELIVERY_SURFACES` file is exempt only with a
-    reason in the test, and a new surface with neither reds. Claims still decided by local logic (`own`) are the
+    reason in the test, and a new surface with neither reds. A clean literal in a helper module that a census file calls is outside the gate (an accepted residual). Claims still decided by local logic (`own`) are the
     instance list: pinned by count, they may only fall. Screen: can this line
     say clean when no check completed on a file it speaks for?
     An out-of-session-root project edit records one bounded degradation and
