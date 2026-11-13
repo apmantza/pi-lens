@@ -484,14 +484,21 @@ export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
  * matching `git-tracked-ignore.ts`'s own contract). Exported for unit tests.
  */
 function isInsideNestedGitRepository(file: string, cwd: string): boolean {
-	const root = path.resolve(cwd);
-	const absoluteFile = path.isAbsolute(file)
+	let root = path.resolve(cwd);
+	let absoluteFile = path.isAbsolute(file)
 		? path.resolve(file)
 		: path.resolve(root, file);
-	if (relativeInside(root, absoluteFile) === undefined) return false;
+	if (relativeInside(root, absoluteFile) === undefined) {
+		// gitleaks reports the real spelling of a root the caller spelled through
+		// a symlink; judge such a finding on the real chain (#5500, as
+		// `isUnderSecretsLaneScratchTree` does).
+		root = realpathOrResolve(root);
+		absoluteFile = realpathOrResolve(absoluteFile);
+		if (relativeInside(root, absoluteFile) === undefined) return false;
+	}
 
-	// The ceiling is the caller's spelling of `cwd`, so the climb stays on the
-	// spelling too: a nested checkout is judged on the chain the finding names.
+	// The ceiling is the spelling the finding is judged in, so the climb stays
+	// on it too: a nested checkout is judged on the chain the finding names.
 	for (const directory of walkUpDirs(path.dirname(absoluteFile), {
 		spelling: true,
 	})) {

@@ -254,6 +254,19 @@ describe("scratch-tree-policy — the scan root bounds every name match (#5500)"
 		},
 	);
 
+	// Review of #5548 (F3): a filesystem or drive root splits into a trailing
+	// empty segment, and joining it unstripped demanded a doubled separator.
+	// Recurrence prevented: the anchor silently matching nothing for such a root.
+	it("getSecretsLaneAllowlistPaths anchors a filesystem root with one separator", () => {
+		const root = path.parse(path.resolve("x")).root;
+		const patterns = getSecretsLaneAllowlistPaths(root).map(
+			(p) => new RegExp(p),
+		);
+		const matches = (file: string) => patterns.some((r) => r.test(file));
+		expect(matches(`${root}.pi${path.sep}x.md`)).toBe(true);
+		expect(matches(`${root}src${path.sep}x.md`)).toBe(false);
+	});
+
 	it("getScratchTreeFnmatchPatterns keeps a root holding glob characters or a comma literal and comma-free", () => {
 		const root = path.resolve("scan-base", "we[ird]*?,dir");
 		const patterns = getScratchTreeFnmatchPatterns(root);

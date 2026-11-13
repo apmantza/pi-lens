@@ -615,7 +615,7 @@ const ORIGIN_ADMISSION_ROWS: ReadonlyArray<readonly [string, string]> = [
 	],
 	[
 		"clients/jscpd-client.ts#JscpdClient.scan:d8e5a0b6~86b35ae4",
-		"passes `targetDir` = realpathOrResolve(cwd) from the scan API's own argument",
+		"passes `targetDir` = path.resolve(cwd) from the scan API's own argument",
 	],
 	[
 		"clients/jscpd-client.ts#JscpdClient.runScan.spawn:fb78f8be~dbf27697",

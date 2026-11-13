@@ -302,6 +302,35 @@ describe("classifyAndFilterFindings — the scan root bounds the scratch judgeme
 			}
 		},
 	);
+
+	// Review of #5548 (F1): the turn-end lane re-classifies cached findings with
+	// the caller's spelling of the root while gitleaks reports the real one, so
+	// a nested repository's finding read as plain untracked, a blocker.
+	// Recurrence prevented: one of the lane's classification tests judging
+	// spelling where its siblings judge identity.
+	it("labels a nested repository's finding nested-repository when the root is spelled through a symlink", async () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-nested-link-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, "project/nested/sub"), {
+				recursive: true,
+			});
+			const root = fs.realpathSync.native(path.join(env.tmpDir, "project"));
+			initGitRepo(root);
+			initGitRepo(path.join(root, "nested/sub"));
+			fs.writeFileSync(path.join(root, "nested/sub/a.ts"), "x\n");
+			const link = `${root}-link`;
+			fs.symlinkSync(root, link, "dir");
+
+			const [classified] = await classifyAndFilterFindings(
+				[finding({ file: path.join(root, "nested/sub/a.ts") })],
+				link,
+			);
+
+			expect(classified?.pathStatus).toBe("nested-repository");
+		} finally {
+			env.cleanup();
+		}
+	});
 });
 
 describe("gitleaksFindingToProjectDiagnostic — pathStatus observability (#1562)", () => {

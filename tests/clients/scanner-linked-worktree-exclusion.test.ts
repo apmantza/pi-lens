@@ -813,6 +813,9 @@ describe("#5500 a scratch-named ancestor of the scanned root does not touch the 
 			true,
 		);
 		expect(exclude).toContain(`${anchor}/.pi/*`);
+		// The Python-only names ride the same anchored list.
+		expect(exclude).toContain(`${anchor}/*/site-packages/*`);
+		expect(exclude).toContain(`${anchor}/*/.eggs/*`);
 	});
 
 	// The path-boundary audit of #5500: gitleaks and trivy took `path.resolve`
