@@ -303,7 +303,7 @@ export async function handleAgentEnd({
 						),
 					},
 				});
-				runtime.requeueDeferredMutations(pending);
+				runtime.requeueDeferredMutations(pending, reason === "format-failed");
 			},
 		);
 	};

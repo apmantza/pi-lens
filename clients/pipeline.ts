@@ -1880,7 +1880,7 @@ export async function runFormatPhase(
 				});
 			}
 			formattersUsed = result.formatters
-				.filter((f) => f.outcome !== "unavailable")
+				.filter((f) => f.outcome !== "unavailable" && f.outcome !== "skipped")
 				.map((f) => f.name);
 			if (result.anyChanged) {
 				formatChanged = true;
