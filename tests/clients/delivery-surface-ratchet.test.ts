@@ -11,9 +11,9 @@
  * an EXEMPT entry with a reason.
  *
  * What the scan classifies (#4429: a population-deriving scanner fails
- * closed). It reads comment-blanked source with string contents kept, since
- * the marker's evidence is a string literal, so a marker in a comment is not
- * a delivery and never counts or satisfies an exemption. A file is a marker
+ * closed). It reads the parsed source (`tests/support/literal-sites.ts`), so
+ * a marker in a comment is not a delivery and never counts or satisfies an
+ * exemption. A file is a marker
  * file when its code holds a marker by VALUE, whatever the spelling: the
  * character itself, a `\u{…}` or surrogate-pair `\u…` escape, or a
  * `String.fromCodePoint`/`fromCharCode` call on numeric literals. Text the
@@ -34,7 +34,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { DELIVERY_SURFACES } from "../../clients/finding-delivery-gate.js";
-import { matchingCloseIndex, stripSource } from "../support/sweep-kit.js";
+import {
+	fieldWrites,
+	guardEvidence,
+	literalValues,
+	outputSites,
+} from "../support/literal-sites.js";
 import { TREE_WALK_TIMEOUT_MS } from "../support/test-timeout-scale.js";
 
 const REPO_ROOT = path.resolve(
@@ -66,123 +71,19 @@ interface MarkerScan {
 	unclassified: string[];
 }
 
-const NUMERIC_LITERAL =
-	/^(?:0[xX][\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\d[\d_]*)$/;
-const UNICODE_ESCAPE = /\\u\{([\da-fA-F]+)\}|\\u([\da-fA-F]{4})/g;
-const CODE_POINT_CALL = /\bfrom(?:CodePoint|CharCode)\b/g;
-const BRACKET_KEY = /\[\s*(["'`])[\w$]+\1\s*\]/g;
-const STRING_SUBSCRIPT = /\bString\s*\[/g;
-
-function isSurrogate(text: string): boolean {
-	return /[\uD800-\uDFFF]/.test(
-		text.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ""),
-	);
-}
-
-/** Classify every spelling of a needle (default: the markers) in one source. */
-function scanMarkers(
-	rel: string,
-	source: string,
-	needles: readonly string[] = MARKERS,
-): MarkerScan {
-	const kept = stripSource(source, { strings: "keep" });
-	const blanked = stripSource(source);
+/**
+ * Classify every marker spelling in one source (#4429), read by value from
+ * the parsed literals (`tests/support/literal-sites.ts`, #5554 r2 F8).
+ */
+function scanMarkers(rel: string, source: string): MarkerScan {
 	const lines = source.split("\n");
-	const lineAt = (index: number) => source.slice(0, index).split("\n").length;
 	const scan: MarkerScan = { markerLines: [], unclassified: [] };
-	const classify = (index: number, value: string | undefined) => {
-		const line = lineAt(index);
-		if (value === undefined || isSurrogate(value)) {
+	for (const { line, value } of literalValues(rel, source)) {
+		if (value === undefined)
 			scan.unclassified.push(`${rel}: ${lines[line - 1]?.trim() ?? ""}`);
-		} else if (needles.some((marker) => value.includes(marker))) {
-			scan.markerLines.push(line);
-		}
-	};
-	for (const marker of needles) {
-		for (
-			let at = kept.indexOf(marker);
-			at >= 0;
-			at = kept.indexOf(marker, at + 1)
-		) {
-			classify(at, marker);
-		}
+		else if (MARKERS.some((marker) => value.includes(marker)))
+			if (!scan.markerLines.includes(line)) scan.markerLines.push(line);
 	}
-	// A run of adjacent escapes decodes as one value, so a surrogate pair
-	// written `\uD83D\uDD34` is one marker and a lone half is unclassified.
-	let run: { start: number; end: number; text: string } | undefined;
-	const flush = () => {
-		if (run) classify(run.start, run.text);
-		run = undefined;
-	};
-	for (const match of kept.matchAll(UNICODE_ESCAPE)) {
-		const start = match.index ?? 0;
-		const backslashes = /\\*$/.exec(kept.slice(0, start))?.[0].length ?? 0;
-		if (backslashes % 2 === 1) continue; // `\\u…` is a literal backslash
-		const codePoint = Number.parseInt(match[1] ?? match[2], 16);
-		const text =
-			codePoint > 0x10ffff ? undefined : String.fromCodePoint(codePoint);
-		if (text === undefined) {
-			flush();
-			classify(start, undefined);
-			continue;
-		}
-		if (run && run.end === start)
-			run = { ...run, end: start + match[0].length, text: run.text + text };
-		else {
-			flush();
-			run = { start, end: start + match[0].length, text };
-		}
-	}
-	flush();
-	// A code-point constructor is a member of `String`, read by dot or by a
-	// literal bracket key (#4457 review F5); a `String[…]` key the scan cannot
-	// read may name one, so it is unclassified.
-	const sites: { name: string; start: number; after: number }[] = [];
-	for (const match of blanked.matchAll(CODE_POINT_CALL)) {
-		const start = match.index ?? 0;
-		sites.push({ name: match[0], start, after: start + match[0].length });
-	}
-	for (const match of kept.matchAll(BRACKET_KEY)) {
-		const start = match.index ?? 0;
-		if (blanked[start] !== "[") continue; // inside a string or regex
-		const key = /^\[\s*(["'`])([\w$]+)\1\s*\]$/.exec(match[0])?.[2];
-		if (key === "fromCodePoint" || key === "fromCharCode")
-			sites.push({ name: key, start, after: start + match[0].length });
-	}
-	for (const match of blanked.matchAll(STRING_SUBSCRIPT)) {
-		const openIndex = (match.index ?? 0) + match[0].length - 1;
-		const close = matchingCloseIndex(blanked, openIndex, "[", "]");
-		const key = close < 0 ? "" : kept.slice(openIndex + 1, close).trim();
-		if (!/^(["'`])[\w$]+\1$/.test(key)) classify(openIndex, undefined);
-	}
-	for (const { name, start, after } of sites) {
-		const open = /^\s*\(/.exec(blanked.slice(after));
-		if (!open) {
-			classify(start, undefined); // a reference: called somewhere unseen
-			continue;
-		}
-		const openIndex = after + open[0].length - 1;
-		const close = matchingCloseIndex(blanked, openIndex, "(", ")");
-		const args =
-			close < 0
-				? []
-				: kept
-						.slice(openIndex + 1, close)
-						.split(",")
-						.map((arg) => arg.trim());
-		if (close < 0 || !args.every((arg) => NUMERIC_LITERAL.test(arg))) {
-			classify(start, undefined);
-			continue;
-		}
-		const units = args.map((arg) => Number(arg.replace(/_/g, "")));
-		classify(
-			start,
-			name === "fromCodePoint"
-				? String.fromCodePoint(...units)
-				: String.fromCharCode(...units),
-		);
-	}
-	scan.markerLines.sort((a, b) => a - b);
 	return scan;
 }
 
@@ -346,9 +247,9 @@ describe("delivery-surface adoption ratchet (#2028/#2029)", () => {
 			markerLines: [],
 			unclassified: [
 				'fake.ts: const half = "\\uD83D" + tail;',
-				"fake.ts: const keyed = String[key](0x1f534);",
 				"fake.ts: const built = String.fromCodePoint(base + 0x534);",
 				"fake.ts: const make = String.fromCharCode;",
+				"fake.ts: const keyed = String[key](0x1f534);",
 				"fake.ts: const bracketRef = String['fromCharCode'];",
 			],
 		});
@@ -371,475 +272,302 @@ describe("delivery-surface adoption ratchet (#2028/#2029)", () => {
 });
 
 /**
- * #5258 — clean-claim registry (AGENTS.md shape 10, "silencing as fixing").
+ * #5258 clean-claim census. A clean verdict ("clean", "✓", "No diagnostics
+ * found.") must come from proof, so every literal a delivery surface can emit
+ * is classified, whatever its wording: `claim`, `finding` or `neutral`, in
+ * `tests/clients/clean-claim-census.json`, keyed by its source text
+ * (whitespace collapsed) with its count. A new or reworded literal reds until
+ * it is classified, so a claim cannot appear under a spelling nobody listed
+ * (#5554 review F1), and a swapped line changes its identity (F4/B5/B6).
  *
- * Every rendered "clean", "✓" or "No issues" claim must be backed by proof
- * that the scope was checked; a bare empty result never stands in. The
- * known-good form is a claim gated by a producer: `cleanVerdict` (zero
- * findings over a scope where every file was proven checked) or
- * `checkedVerdict` (a dispatch verdict, read as `verdict.checked`), both in
- * `clients/dispatch/types.ts`. A claim still decided by its own local logic
- * is an `own` row: the instance list this registry shrinks, pinned by count.
+ * A claim names its producer. `cleanVerdict` and `checkedVerdict`
+ * (`clients/dispatch/types.ts`) are the proof producers: the claim's own
+ * statement must read its `guard`, and for `cleanVerdict` the guard is
+ * initialised by a `cleanVerdict(` call or reads a `field` that every write
+ * in the file sets from one, so a relabelled row or a `clean: true` reds.
+ * `own` rows decide locally; OWN_CLAIM_CEILING pins their count, so a new
+ * one is a visible raise and a converted one lowers it.
  *
- * The scan reads every clients/, tools/, mcp/ and index.ts source and finds
- * each line whose string, template or regex text holds a clean needle (the
- * words below, case-insensitive, after decoding `\u`/`\x` escapes and joining
- * `"a" + "b"` on one line) or a ✓/✔ by value (the marker decoder above, so a
- * `String.fromCodePoint(0x2713)` counts). Comments never count. Every hit line
- * is a CLEAN_EMITTERS row or counted in its file's NOT_A_CLEAN_CLAIM entry, so
- * a new claim reds until someone names its producer. Residual (accepted):
- * a needle split across lines, or assembled at runtime from bindings that
- * each hold a fragment, is not read.
+ * Accepted residuals: a claim assembled at runtime from literals each
+ * classified neutral is read as neutral, and files outside CENSUS_FILES are
+ * not in the census.
  */
-const CLEAN_GLYPHS = ["✓", "✔"];
-const CLEAN_WORDS = /\bclean\b|\bno issues\b|\ball (?:passed|clear)\b/i;
-const TEXT_ESCAPE =
-	/\\u\{([\da-fA-F]+)\}|\\u([\da-fA-F]{4})|\\x([\da-fA-F]{2})/g;
-const CLEAN_SCAN_ROOTS = ["clients", "tools", "mcp"];
-const CLEAN_SCAN_FILES = ["index.ts"];
+const CENSUS_FILES = [
+	"tools/lens-diagnostics.ts",
+	"tools/lsp-diagnostics.ts",
+	"index.ts",
+	"clients/widget-state.ts",
+	"mcp/analyze-cli.ts",
+	"clients/pipeline.ts",
+];
+const OWN_CLAIM_CEILING = 26;
 
-type CleanProducer = "cleanVerdict" | "checkedVerdict" | "own";
+type Producer = "cleanVerdict" | "checkedVerdict" | "own";
+interface ClaimRow {
+	count: number;
+	producer: Producer;
+	guard?: string;
+	field?: string;
+	why: string;
+}
+interface FileRows {
+	claim: Record<string, ClaimRow>;
+	finding: Record<string, number>;
+	neutral: Record<string, number>;
+}
+type CensusRegistry = Record<string, FileRows>;
 
-/** How a producer shows in the emitting file's code. */
-const PRODUCER_CALL: Record<Exclude<CleanProducer, "own">, RegExp> = {
-	cleanVerdict: /\bcleanVerdict\s*\(/,
-	checkedVerdict: /\bverdict\.checked\b|\bcheckedVerdict\s*\(/,
-};
+const CENSUS_PATH = path.join(
+	REPO_ROOT,
+	"tests/clients/clean-claim-census.json",
+);
 
-/**
- * Lines that render or record a clean verdict, keyed `<file>: <trimmed line>`.
- * `proof` names what pins the row (a test, or the open question it carries);
- * `lines` counts identical lines one row covers.
- */
-const CLEAN_EMITTERS: Record<
-	string,
-	{ producer: CleanProducer; proof: string; lines?: number }
-> = {
-	"clients/pipeline.ts: ? `\\u2713 ${langLabel} clean · ${elapsed}ms`": {
-		producer: "checkedVerdict",
-		proof:
-			"the dispatch verdict (#5285); tests/clients/dispatch-pipeline-formal.test.ts",
-	},
-	'tools/lens-diagnostics.ts: return `lens_diagnostics ${mode} — ${cacheVerdict ?? (proven ? "clean" : "unconfirmed")}${advisorySuffix}${uncheckedSuffix} (${proven ? (details?.provenFiles ?? files) : files} files)${coldSuffix}${failedSuffix}`;':
-		{
-			producer: "cleanVerdict",
-			proof: "tests/tools/lens-diagnostics-clean-proof-5258.test.ts",
-		},
-	'tools/lens-diagnostics.ts: : `No ${severity === "all" ? "" : severity + " "}issues across ${provenCount} file${provenCount === 1 ? "" : "s"} diagnosed this session. ✓\\n`) +':
-		{
-			producer: "cleanVerdict",
-			proof: "tests/tools/lens-diagnostics-clean-proof-5258.test.ts",
-		},
-	'tools/lens-diagnostics.ts: return `lens_diagnostics${scope} — ${count} ${noun} · ${details.cleanFiles ?? 0} clean · ${details.unconfirmedFiles} unconfirmed${details.timedOutFiles ? ` (${details.timedOutFiles} timed out)` : ""}`;':
-		{
-			producer: "own",
-			proof:
-				"per-file count from classifyBatchFileOutcome (tools/lsp-diagnostics.ts)",
-		},
-	'clients/persistent-reverify.ts: ? "clean"': {
-		producer: "own",
-		proof:
-			"every carried warning re-checked and answered; tests/clients/persistent-reverify.test.ts C3b",
-	},
-	'clients/widget-state.ts: ? green("✓ clean")': {
-		producer: "own",
-		proof: "a completed check and no pending analysis (#5287)",
-	},
-	'clients/widget-state.ts: return "clean";': {
-		producer: "own",
-		proof:
-			"classifyFileTier: zero counts; the row renders through isUncheckedClean",
-	},
-	'clients/widget-state.ts: : green("✓");': {
-		producer: "own",
-		proof: "isUncheckedClean decides the per-file glyph",
-	},
-	'clients/widget-state.ts: : " " + dim("clean");': {
-		producer: "own",
-		proof: "isUncheckedClean decides the per-file word",
-	},
-	'clients/runtime-turn.ts: ? " confirmed clean"': {
-		producer: "own",
-		proof: "ResolvedBlockerFile.confirmedClean from the turn-end observation",
-	},
-	'clients/runtime-turn.ts: "clean";': {
-		producer: "own",
-		proof: "turn_end result before blocker parts are counted",
-	},
-	"clients/test-runner-client.ts: return `[Tests] ✓ ${result.passed}/${total} passed${durationStr} — ${result.runner}`;":
-		{
-			producer: "own",
-			proof:
-				"result.failed === 0 over a parsed run; tests/clients/test-runner-client.test.ts",
-		},
-	'tools/lsp-diagnostics.ts: return tier === "tier3-silent" ? "unconfirmed" : "clean";':
-		{
-			producer: "own",
-			proof: "classifyEmptyResult (#533); tests/tools/lsp-diagnostics.test.ts",
-		},
-	'tools/lsp-diagnostics.ts: return "clean";': {
-		producer: "own",
-		proof:
-			"classifyEmptyResult's catch and classifyBatchFileOutcome's fall-through: open hypotheses H1/H2 on #5258",
-		lines: 2,
-	},
-	'tools/lsp-diagnostics.ts: cached.diagnostics.length === 0 ? "clean" : undefined;':
-		{
-			producer: "own",
-			proof: "a cache replay bound to the current disk",
-		},
-	'tools/lsp-diagnostics.ts: confirmation = "clean";': {
-		producer: "own",
-		proof: "canTrustTouchConfirmation over the touch's answer",
-		lines: 2,
-	},
-	'tools/lsp-diagnostics.ts: ? "clean"': {
-		producer: "own",
-		proof: "a confirmed empty resolution",
-		lines: 2,
-	},
-	'tools/lsp-diagnostics.ts: return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: confirmed clean.`;':
-		{
-			producer: "own",
-			proof:
-				"the primary answered with no diagnostics; tests/tools/lsp-diagnostics-missing-primary-4322.test.ts",
-		},
-	'tools/lsp-diagnostics.ts: `${clean} file${clean === 1 ? "" : "s"} confirmed clean, ${unconfirmed} unconfirmed: ` +':
-		{
-			producer: "own",
-			proof: "batch count from classifyBatchFileOutcome",
-		},
-	"tools/lsp-diagnostics.ts: ? `${clean} clean · ${unconfirmed} unconfirmed: ` +":
-		{
-			producer: "own",
-			proof: "batch count from classifyBatchFileOutcome",
-		},
-	'tools/lsp-diagnostics.ts: `${clean} other file${clean === 1 ? "" : "s"} confirmed clean, ${unconfirmed} unconfirmed: ` +':
-		{
-			producer: "own",
-			proof: "batch count from classifyBatchFileOutcome",
-		},
-	'clients/lsp/client.ts: ? { status: "clean" }': {
-		producer: "own",
-		proof: "one client answered empty for the file",
-	},
-	'clients/lsp/client.ts: : { status: "clean" };': {
-		producer: "own",
-		proof: "a pull answered with zero diagnostics",
-	},
-	'clients/lsp/cascade-tier.ts: outcome: found ? "resolved-found" : "resolved-clean",':
-		{
-			producer: "own",
-			proof:
-				"a resolved neighbor with no errors; tests/index-cascade-resolved-clean-wiring.test.ts",
-			lines: 2,
-		},
-	'clients/dispatch/integration.ts: visibleNeighbors.length === 0 ? "no_neighbors" : "clean";':
-		{
-			producer: "own",
-			proof: "every selected neighbor answered, none with errors",
-		},
-	'clients/runtime-tool-result.ts: "cited-file-clean",': {
-		producer: "own",
-		proof:
-			"retires foreign rows when the cited file's analysis ran clean (#4137)",
-	},
-};
+function loadCensus(): CensusRegistry {
+	const raw = JSON.parse(fs.readFileSync(CENSUS_PATH, "utf8")) as Record<
+		string,
+		unknown
+	>;
+	return Object.fromEntries(
+		Object.entries(raw).filter(([key]) => !key.startsWith("$")),
+	) as CensusRegistry;
+}
 
-/**
- * The count of hit lines per file that are not a clean claim, with the reason.
- * A count that moves either way reds, so each new line is judged.
- */
-const NOT_A_CLEAN_CLAIM: Record<string, { lines: number; reason: string }> = {
-	"clients/cascade-format.ts": {
-		lines: 3,
-		reason: "warnings that a result is not clean",
-	},
-	"clients/cascade-types.ts": {
-		lines: 1,
-		reason: "the verdict's type member; integration.ts produces it",
-	},
-	"clients/complexity-client.ts": {
-		lines: 1,
-		reason: "a regex for 'Clean up' comments",
-	},
-	"clients/degradation-ledger.ts": {
-		lines: 1,
-		reason: "a git linked-worktree record kind",
-	},
-	"clients/dispatch/dispatcher.ts": {
-		lines: 7,
-		reason: "'not a clean result' disclosures",
-	},
-	"clients/dispatch/integration.ts": {
-		lines: 1,
-		reason: "a 'does NOT mean clean' bound disclosure",
-	},
-	"clients/dispatch/runners/helm-render.ts": {
-		lines: 5,
-		reason: "'rather than clean' disclosures",
-	},
-	"clients/finding-delivery-gate.ts": {
-		lines: 1,
-		reason: "a 'Not a clean verdict' disclosure",
-	},
-	"clients/formatters.ts": {
-		lines: 1,
-		reason: "an external tool's exit-code description",
-	},
-	"clients/generated-artifacts.ts": {
-		lines: 4,
-		reason: "a not-generated file classification, not a check",
-	},
-	"clients/git-guard.ts": {
-		lines: 1,
-		reason: "instructions naming a future clean check",
-	},
-	"clients/instance-reaper.ts": {
-		lines: 2,
-		reason: "a nothing-to-reap outcome, not a check",
-	},
-	"clients/lens-flag-registry.ts": {
-		lines: 1,
-		reason: "a flag description of the footer glyph",
-	},
-	"clients/lsp/cascade-tier.ts": {
-		lines: 3,
-		reason: "type members and comparisons",
-	},
-	"clients/lsp/client.ts": { lines: 5, reason: "type members and comparisons" },
-	"clients/lsp/wait-policy/strategies.ts": {
-		lines: 4,
-		reason: "wait-policy rationale text",
-	},
-	"clients/observed-mutation.ts": {
-		lines: 3,
-		reason: "a content-drift verdict, not a diagnostics check",
-	},
-	"clients/persistent-reverify.ts": {
-		lines: 2,
-		reason: "the outcome type and its count",
-	},
-	"clients/runtime-coordinator.ts": {
-		lines: 4,
-		reason: "a disclosure, a type and comparisons",
-	},
-	"clients/runtime-session.ts": {
-		lines: 1,
-		reason: "'empty cache ≠ clean' guidance",
-	},
-	"clients/runtime-tool-result.ts": {
-		lines: 1,
-		reason: "a git linked-worktree record kind",
-	},
-	"clients/runtime-turn.ts": {
-		lines: 11,
-		reason:
-			"'does not cover' and 'NOT recorded as a clean run' disclosures, a debug reason, a generation label and a type",
-	},
-	"clients/shared-checkout-guard.ts": {
-		lines: 4,
-		reason: "the git clean verb and working-tree state",
-	},
-	"clients/source-filter.ts": {
-		lines: 1,
-		reason: "a file-filter classification, not a check",
-	},
-	"clients/tool-render.ts": { lines: 1, reason: "a tool-call success glyph" },
-	"clients/widget-state.ts": {
-		lines: 3,
-		reason: "the tier type and comparisons",
-	},
-	"index.ts": { lines: 7, reason: "connection and installed-tool glyphs" },
-	"mcp/analyze-cli.ts": {
-		lines: 1,
-		reason: "a 'not a clean result' disclosure",
-	},
-	"mcp/server.ts": {
-		lines: 5,
-		reason: "selection, connection and rebuild glyphs and a refusal text",
-	},
-	"tools/lens-diagnostics.ts": {
-		lines: 17,
-		reason:
-			"'not proof of clean' guidance and 'NOT a clean verdict' disclosures",
-	},
-	"tools/lsp-diagnostics.ts": {
-		lines: 21,
-		reason:
-			"types, comparisons, the outcome key list and 'cannot confirm clean' disclosures",
-	},
-	"tools/lsp-navigation.ts": { lines: 2, reason: "capability-support glyphs" },
-};
-
-/** `own` rows may only fall; lower this as a row moves onto a producer. */
-const OWN_CLEAN_EMITTER_CEILING = 27;
-
-/** 1-based lines of `source` holding a clean needle in code text or by value. */
-function scanCleanClaims(rel: string, source: string): MarkerScan {
-	const kept = stripSource(source, { strings: "keep" });
-	const blanked = stripSource(source);
-	let text = "";
-	for (let i = 0; i < kept.length; i++) {
-		const ch = kept[i] ?? "";
-		if (ch === "\n" || ch !== blanked[i] || ch === " " || ch === "\t")
-			text += ch; // string, template or regex text, or whitespace
-		else if (ch === '"' || ch === "'" || ch === "`") text += "\0";
-		else if (ch === "+") text += "\x02";
-		else text += "\x01"; // code
+/** Every disagreement between one file's literals and its registry rows. */
+function censusProblems(
+	file: string,
+	source: string,
+	rows: FileRows,
+): string[] {
+	const registered = new Map<string, number>();
+	const problems: string[] = [];
+	for (const [cls, table] of Object.entries(rows) as [
+		keyof FileRows,
+		Record<string, number | ClaimRow>,
+	][])
+		for (const [key, value] of Object.entries(table)) {
+			if (registered.has(key))
+				problems.push(`${file}: ${key} is registered in two classes`);
+			registered.set(key, typeof value === "number" ? value : value.count);
+			if (!["claim", "finding", "neutral"].includes(cls))
+				problems.push(`${file}: unknown class ${cls}`);
+		}
+	const found = new Map<string, number[]>();
+	for (const site of outputSites(file, source))
+		found.set(site.key, [...(found.get(site.key) ?? []), site.line]);
+	for (const [key, lines] of found) {
+		const count = registered.get(key);
+		if (count === undefined)
+			problems.push(
+				`${file}:${lines.join(",")}: unclassified output site ${key} (add it under claim, finding or neutral)`,
+			);
+		else if (count !== lines.length)
+			problems.push(
+				`${file}:${lines.join(",")}: ${key} registered x${count}, found x${lines.length}`,
+			);
 	}
-	const glyphs = scanMarkers(rel, source, CLEAN_GLYPHS);
-	const lines = new Set(glyphs.markerLines);
-	text.split("\n").forEach((line, index) => {
-		const decoded = line
-			.replace(/\0[ \t]*\x02[ \t]*\0/g, "")
-			.replace(TEXT_ESCAPE, (_match, braced, four, two) => {
-				const codePoint = Number.parseInt(braced ?? four ?? two, 16);
-				return codePoint > 0x10ffff ? " " : String.fromCodePoint(codePoint);
-			})
-			.replace(/[\0\x01\x02]/g, " ");
-		if (
-			CLEAN_GLYPHS.some((glyph) => decoded.includes(glyph)) ||
-			CLEAN_WORDS.test(decoded)
-		)
-			lines.add(index + 1);
-	});
-	return {
-		markerLines: [...lines].sort((a, b) => a - b),
-		unclassified: glyphs.unclassified,
-	};
+	for (const key of registered.keys())
+		if (!found.has(key)) problems.push(`${file}: stale row ${key}`);
+	return problems;
 }
 
-function cleanScanSources(): { rel: string; source: string }[] {
-	const files = [
-		...CLEAN_SCAN_ROOTS.flatMap((root) =>
-			collectSourceFiles(path.join(REPO_ROOT, root)),
-		),
-		...CLEAN_SCAN_FILES.map((file) => path.join(REPO_ROOT, file)),
-	];
-	return files.map((full) => ({
-		rel: path.relative(REPO_ROOT, full).split(path.sep).join("/"),
-		source: fs.readFileSync(full, "utf8"),
-	}));
+const CLEAN_VERDICT_CALL = /^cleanVerdict\s*\(/;
+
+/**
+ * A value is a `cleanVerdict(` call, or a bare identifier whose nearest
+ * preceding declaration is initialised by one (a shorthand `{ clean }`).
+ */
+function fromCleanVerdict(
+	file: string,
+	source: string,
+	write: { value: string; start: number },
+): boolean {
+	if (CLEAN_VERDICT_CALL.test(write.value)) return true;
+	if (!/^[\w$]+$/.test(write.value)) return false;
+	const { init } = guardEvidence(file, source, write.start, write.value);
+	return CLEAN_VERDICT_CALL.test(init ?? "");
 }
 
-interface CleanCensus {
-	/** Every hit as `<file>: <trimmed line>`. */
-	hits: string[];
-	/** Hits outside CLEAN_EMITTERS, counted per file. */
-	others: Map<string, number>;
-	/** Unevaluable code-point spellings outside clients/ (covered above). */
-	unclassified: string[];
-	/** File sources by repo-relative path. */
-	sources: Map<string, string>;
-}
-
-function cleanCensus(): CleanCensus {
-	const census: CleanCensus = {
-		hits: [],
-		others: new Map(),
-		unclassified: [],
-		sources: new Map(),
-	};
-	for (const { rel, source } of cleanScanSources()) {
-		census.sources.set(rel, source);
-		const scan = scanCleanClaims(rel, source);
-		if (!rel.startsWith("clients/"))
-			census.unclassified.push(...scan.unclassified);
-		const lines = source.split("\n");
-		for (const line of scan.markerLines) {
-			const key = `${rel}: ${lines[line - 1]?.trim() ?? ""}`;
-			census.hits.push(key);
-			if (!Object.hasOwn(CLEAN_EMITTERS, key))
-				census.others.set(rel, (census.others.get(rel) ?? 0) + 1);
+/** Every claim row whose producer its code does not show. */
+function producerProblems(
+	file: string,
+	source: string,
+	rows: FileRows,
+): string[] {
+	const problems: string[] = [];
+	for (const [key, row] of Object.entries(rows.claim)) {
+		if (!row.why?.trim()) problems.push(`${file}: ${key} has no why`);
+		if (row.producer === "own") continue;
+		if (row.producer !== "cleanVerdict" && row.producer !== "checkedVerdict") {
+			problems.push(`${file}: ${key} names unknown producer ${row.producer}`);
+			continue;
+		}
+		const guard = row.guard ?? "";
+		const fieldValues =
+			row.field !== undefined ? fieldWrites(file, source, row.field) : [];
+		for (const site of outputSites(file, source).filter((s) => s.key === key)) {
+			const evidence = guardEvidence(file, source, site.start, guard);
+			const where = `${file}:${site.line}: ${row.producer} claim`;
+			if (!guard || !evidence.referenced) {
+				problems.push(`${where}: its statement does not read guard ${guard}`);
+				continue;
+			}
+			if (row.producer === "checkedVerdict") {
+				if (!/\.checked$/.test(guard))
+					problems.push(`${where}: guard ${guard} is not a verdict's .checked`);
+				continue;
+			}
+			const byCall = CLEAN_VERDICT_CALL.test(evidence.init ?? "");
+			const byField =
+				row.field !== undefined &&
+				new RegExp(`\\.${row.field}\\b`).test(evidence.init ?? "") &&
+				fieldValues.length > 0 &&
+				fieldValues.every((write) => fromCleanVerdict(file, source, write));
+			if (!byCall && !byField)
+				problems.push(
+					`${where}: guard ${guard} is not set by cleanVerdict (init ${evidence.init ?? "none"}; ${row.field ?? "no field"} writes ${fieldValues.map((write) => write.value).join(" | ") || "none"})`,
+				);
 		}
 	}
-	return census;
+	return problems;
 }
 
-describe("clean-claim registry (#5258)", () => {
-	it(
-		"every clean-needle line is a registered emitter or a counted non-claim",
-		() => {
-			// Recurrence: #5258, a "✓ No issues" line and a "clean" header that
-			// rendered over files no check had covered. A new needle line reds
-			// here until its producer or its non-claim reason is written down.
-			const census = cleanCensus();
-			const counted = Object.fromEntries(census.others);
-			const declared = Object.fromEntries(
-				Object.entries(NOT_A_CLEAN_CLAIM).map(([file, row]) => [
-					file,
-					row.lines,
-				]),
-			);
-			expect(counted).toEqual(declared);
-			expect(census.unclassified).toEqual([]);
-		},
-		TREE_WALK_TIMEOUT_MS,
-	);
+function readCensusSource(file: string): string {
+	return fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
+}
 
+describe("clean-claim census (#5258)", () => {
 	it(
-		"every emitter row still names a live line (no stale rows)",
+		"every emitted literal in the census files is classified",
 		() => {
-			const census = cleanCensus();
+			// Recurrence: #5554 review F1, "No diagnostics found." x4, the delta
+			// body and "✅ Codebase is healthy!" rendered clean under spellings a
+			// needle list never named. Also reds a stale or miscounted row.
+			const census = loadCensus();
+			expect(Object.keys(census).sort()).toEqual([...CENSUS_FILES].sort());
 			expect(
-				Object.entries(CLEAN_EMITTERS)
-					.filter(
-						([key, row]) =>
-							census.hits.filter((hit) => hit === key).length !==
-							(row.lines ?? 1),
-					)
-					.map(([key]) => key),
+				CENSUS_FILES.flatMap((file) =>
+					censusProblems(file, readCensusSource(file), census[file]!),
+				),
 			).toEqual([]);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
 
 	it(
-		"a producer row's file calls that producer; own rows only fall",
+		"a producer claim reads its guard and the guard comes from the producer",
 		() => {
-			// Recurrence: a row relabelled to a producer the file never calls
-			// would hide a local clean decision behind the registry.
-			const census = cleanCensus();
-			const missing: string[] = [];
-			let own = 0;
-			for (const [key, row] of Object.entries(CLEAN_EMITTERS)) {
-				expect(row.proof.trim(), key).not.toBe("");
-				if (row.producer === "own") {
-					own += row.lines ?? 1;
-					continue;
-				}
-				const file = key.slice(0, key.indexOf(": "));
-				const code = stripSource(census.sources.get(file) ?? "");
-				if (!PRODUCER_CALL[row.producer].test(code))
-					missing.push(`${key} (${row.producer})`);
-			}
-			expect(missing).toEqual([]);
-			expect(own, "lower OWN_CLEAN_EMITTER_CEILING with the row").toBe(
-				OWN_CLEAN_EMITTER_CEILING,
+			// Recurrence: #5554 review F4/B2, an own row relabelled to a producer
+			// its code never calls, laundering a local clean decision.
+			const census = loadCensus();
+			expect(
+				CENSUS_FILES.flatMap((file) =>
+					producerProblems(file, readCensusSource(file), census[file]!),
+				),
+			).toEqual([]);
+			const own = Object.values(census)
+				.flatMap((rows) => Object.values(rows.claim))
+				.filter((row) => row.producer === "own")
+				.reduce((sum, row) => sum + row.count, 0);
+			expect(own, "move OWN_CLAIM_CEILING with the rows").toBe(
+				OWN_CLAIM_CEILING,
 			);
 		},
 		TREE_WALK_TIMEOUT_MS,
 	);
 
-	it("reads a clean needle through every planted spelling (#5258)", () => {
-		// The detector state table's plants: each spelling a claim could hide
-		// behind, and the comment and identifier forms that must not count.
-		const source = [
-			'const OK = "clean";',
-			"const tick = String.fromCodePoint(0x2713);",
-			'const escaped = "\\u0063lean";',
-			'const joined = "cl" + "ean";',
-			"const heavy = `\\u{2714} ${n} files`;",
-			'const none = "No issues found";',
-			"// clean ✓ no issues in a comment",
-			"const isClean = cleanFiles > 0;",
-			'const word = "cleanup-dir";',
-			"const built = String.fromCodePoint(base + 1);",
-		].join("\n");
-		expect(scanCleanClaims("fake.ts", source)).toEqual({
-			markerLines: [1, 2, 3, 4, 5, 6],
-			unclassified: ["fake.ts: const built = String.fromCodePoint(base + 1);"],
-		});
+	it.each([
+		["a check-mark emoji", 'export const plant = "\u2705";'],
+		["No findings", 'export const plant = "No findings";'],
+		["All checks passed", "export const plant = `All checks passed`;"],
+		["healthy", 'export const plant = "healthy";'],
+		[
+			"an interpolated No ${x} issues",
+			"export const plant = `No ${x} issues`;",
+		],
+		[
+			"a second copy of a claim",
+			'export const plant = "No diagnostics found.";',
+		],
+	])("reds a planted %s in a census file", (_name, plant) => {
+		// The review's planted spellings (probe pC): each is unclassified, so it
+		// reds whatever words it uses.
+		const file = "tools/lsp-diagnostics.ts";
+		const source = `${readCensusSource(file)}\n${plant}\n`;
+		const problems = censusProblems(file, source, loadCensus()[file]!);
+		expect(problems).toHaveLength(1);
+		expect(problems[0]).toMatch(
+			/unclassified output site|registered x2, found x3/,
+		);
+	});
+
+	it("reds a negation line swapped for a clean one", () => {
+		// Recurrence: #5554 review B5/B6, a count-only registry passed a
+		// "not a clean verdict" line rewritten to claim clean.
+		const file = "tools/lens-diagnostics.ts";
+		const original = readCensusSource(file);
+		const source = original.replace(
+			"Absence of their findings is NOT a clean verdict.`",
+			"Absence of their findings is a clean verdict.`",
+		);
+		expect(source).not.toBe(original);
+		const problems = censusProblems(file, source, loadCensus()[file]!);
+		expect(problems.some((p) => p.includes("unclassified output site"))).toBe(
+			true,
+		);
+		expect(problems.some((p) => p.includes("stale row"))).toBe(true);
+	});
+
+	it("reds a clean field written without cleanVerdict", () => {
+		// The review's `clean: true` plant: the header reads details.clean, so a
+		// literal true there would say clean without proof.
+		const file = "tools/lens-diagnostics.ts";
+		const original = readCensusSource(file);
+		const source = original.replace(
+			"clean: cleanVerdict({",
+			"clean: true || cleanVerdict({",
+		);
+		expect(source).not.toBe(original);
+		expect(producerProblems(file, source, loadCensus()[file]!)).toEqual([
+			expect.stringMatching(/guard proven is not set by cleanVerdict/),
+		]);
+	});
+
+	it("reds a clean binding no longer set by cleanVerdict", () => {
+		// The ✓ line reads `clean` directly and the header reads it through the
+		// shorthand `{ clean }` field write, so both lose their proof.
+		const file = "tools/lens-diagnostics.ts";
+		const original = readCensusSource(file);
+		const source = original.replace(
+			"const clean = cleanVerdict({ ...cleanEvidence, findings: 0 });",
+			"const clean = visibleSummaries.length > 0;",
+		);
+		expect(source).not.toBe(original);
+		expect(producerProblems(file, source, loadCensus()[file]!)).toEqual([
+			expect.stringMatching(/:556: .*guard proven is not set by cleanVerdict/),
+			expect.stringMatching(/:4062: .*guard clean is not set by cleanVerdict/),
+		]);
+	});
+
+	it("reds an own claim relabelled to a producer it does not read", () => {
+		const file = "tools/lens-diagnostics.ts";
+		const rows = loadCensus()[file]!;
+		const [key, row] = Object.entries(rows.claim).find(([key]) =>
+			key.startsWith("`No new ${severity"),
+		)!;
+		const relabelled: FileRows = {
+			...rows,
+			claim: {
+				...rows.claim,
+				[key]: {
+					...row,
+					producer: "cleanVerdict",
+					guard: "proven",
+					field: "clean",
+				},
+			},
+		};
+		expect(producerProblems(file, readCensusSource(file), relabelled)).toEqual([
+			expect.stringMatching(/does not read guard proven/),
+		]);
 	});
 });
