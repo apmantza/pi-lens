@@ -338,6 +338,65 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 		).resolves.toMatchObject({ verdict: "recovered", paths: [] });
 	});
 
+	// #5552: `mv ../old.ts src/new.ts` into a path git does not track keeps the
+	// old mtime too; with no HEAD or index copy, the named file is the write.
+	it("recovers a named untracked destination with an old mtime, and leaves an unnamed one", async () => {
+		const named = path.join(repoDir, "src", "moved-in.ts");
+		const other = path.join(repoDir, "src", "other-old.ts");
+		const startedAt = Date.now();
+		for (const file of [named, other]) {
+			fs.writeFileSync(file, "moved\n", "utf8");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(file, old, old);
+		}
+
+		await expect(
+			recoverOpaqueChangesViaGit(repoDir, startedAt, {
+				namedPaths: [named],
+			}),
+		).resolves.toMatchObject({
+			verdict: "recovered",
+			paths: [normalizeMapKey(named)],
+		});
+	});
+
+	// #5552: the content compare reads HEAD and the index, so each side needs its
+	// own case. `mv` over a file whose bytes already sit in the index differs from
+	// HEAD only; `mv` that restores HEAD's bytes over a staged change differs from
+	// the index only. A compare against one side alone drops one of the two.
+	it.each([
+		{
+			name: "staged bytes (differs from HEAD only)",
+			staged: "staged\n",
+			worktree: "staged\n",
+		},
+		{
+			name: "HEAD bytes over a staged change (differs from the index only)",
+			staged: "staged\n",
+			worktree: "base\n",
+		},
+	])(
+		"recovers a named overwrite by content against HEAD and the index: $name",
+		async ({ staged, worktree }) => {
+			const target = path.join(repoDir, "src", "base.ts");
+			const startedAt = Date.now();
+			fs.writeFileSync(target, staged, "utf8");
+			execSync("git add -- src/base.ts", { cwd: repoDir });
+			fs.writeFileSync(target, worktree, "utf8");
+			const old = new Date(startedAt - 10_000);
+			fs.utimesSync(target, old, old);
+
+			await expect(
+				recoverOpaqueChangesViaGit(repoDir, startedAt, {
+					namedPaths: [target],
+				}),
+			).resolves.toMatchObject({
+				verdict: "recovered",
+				paths: [normalizeMapKey(target)],
+			});
+		},
+	);
+
 	it("recovers a fresh intent-to-add entry from git add -N", async () => {
 		const intentPath = path.join(repoDir, "src", "intent.ts");
 		const startedAt = Date.now();

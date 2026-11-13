@@ -1295,17 +1295,15 @@ export async function recoverOpaqueChangesViaGit(
 	// this command may have authored, so exactly the entries that would be
 	// dispatched absent any other filtering.
 	async function isChanged(absPath: string, status: string): Promise<boolean> {
-		if (
-			namedPaths.has(normalizeMapKey(realpathOrResolve(absPath))) &&
-			status !== "??" &&
-			status !== "!!"
-		) {
+		if (namedPaths.has(normalizeMapKey(realpathOrResolve(absPath)))) {
 			try {
 				if (!(await fs.promises.stat(absPath)).isFile()) return false;
 			} catch {
 				return false;
 			}
-			return differsFromHeadOrIndex(absPath);
+			// Untracked: no HEAD or index copy to compare, so a named file that
+			// exists is the write (`mv ../old.ts src/new.ts` keeps the old mtime).
+			return status === "??" || differsFromHeadOrIndex(absPath);
 		}
 		try {
 			const stat = await fs.promises.stat(absPath);
