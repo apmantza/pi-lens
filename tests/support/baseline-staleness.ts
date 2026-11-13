@@ -180,8 +180,7 @@ function committedIdentities(
 		}
 	}
 	const blanked = stripSource(text, { strings: "blank" });
-	const span =
-		exportName === "default" ? undefined : initializerSpan(blanked, exportName);
+	const span = initializerSpan(blanked, exportName);
 	if (span === undefined) {
 		throw new Error(
 			`planted-stale-row cell names ${baseline}, which declares no ${exportName} to hold its rows (#5072)`,
